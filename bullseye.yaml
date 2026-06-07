@@ -528,6 +528,7 @@ targets:
     - 'Each case TTSes a known utterance via macOS `say`, plays it into the voice loop at realtime cadence, captures the user transcript (Grok''s STT) and the response transcript (Grok''s TTS), and grades via either deterministic substring match or LLM judge (claude -p strict-JSON).'
     - 'Latency is measured as wall-clock from end-of-utterance audio to first-response-audio-byte and gated per case (the metric matches user perception including the VAD silence window).'
     - 'Suite covers: basic Q&A, greeting, factual lookup, intent confirmation, longer response, yes/no, noise overlay, polite refusal.'
+    - 'Per-case metrics: end-of-utterance latency, transcript fidelity (Levenshtein-based, normalised), response audio length, RMS in dBFS. Silent or sub-300 ms responses fail by default (catches TTS dropouts the LLM judge can''t see).'
     - 'Baseline mode (`--baseline-write` / `--baseline-read`) records per-case latencies and flags regressions on subsequent runs (>50% over baseline by default).'
     - 'JSON output mode (`--json`) and response-audio dump (`--dump-wavs`) keep the harness CI-compatible and audit-friendly.'
     - 'Exit code is non-zero on any failure so the suite slots into any commit hook / pipeline without bespoke parsing.'

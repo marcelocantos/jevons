@@ -29,6 +29,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,6 +139,9 @@ type result struct {
 	ResponseAudio   []byte // PCM16 24 kHz mono, what Grok TTSed
 	Latency         time.Duration
 	LatencyMeasured bool
+	Fidelity        float64 // 0–1, intended utterance vs heard transcript
+	AudioMs         int     // response audio length
+	AudioRMSDB      float64 // dBFS; <-50 → effectively silent
 	JudgeOK         bool
 	JudgeNotes      string
 	JudgeSkipped    bool
@@ -155,6 +159,16 @@ func (r result) passed() bool {
 		return false
 	}
 	if r.Regression {
+		return false
+	}
+	// Audio sanity: a "successful" round-trip whose response audio is
+	// silent or truncated isn't really success. Thresholds are loose
+	// (caught at 300 ms / -50 dBFS) — they exist to flag TTS drop-outs
+	// the LLM judge can't see, not to nitpick voice quality.
+	if r.AudioMs > 0 && r.AudioMs < 300 {
+		return false
+	}
+	if !math.IsInf(r.AudioRMSDB, -1) && r.AudioRMSDB < -50 && r.AudioMs > 0 {
 		return false
 	}
 	if len(r.Case.ExpectAny) > 0 {
@@ -246,6 +260,8 @@ func runCase(c Case, apiKey, scratch string, timeout time.Duration, claudeBin st
 	r.UserTranscript = strings.TrimSpace(userText.String())
 	r.ResponseText = strings.TrimSpace(response.String())
 	r.ResponseAudio = sink.PCM()
+	r.Fidelity = transcriptFidelity(c.Utterance, r.UserTranscript)
+	r.AudioMs, r.AudioRMSDB = audioSanity(r.ResponseAudio)
 
 	stampMu.Lock()
 	ue := utteranceEnd
@@ -310,6 +326,8 @@ func printShortResult(r result, useColor bool) {
 		}
 		fmt.Fprintf(os.Stderr, "  latency: %s (budget %s)%s\n", r.Latency.Round(time.Millisecond), r.Case.MaxLatency, extra)
 	}
+	fmt.Fprintf(os.Stderr, "  fidelity: %.0f%%   audio: %dms @ %.1fdBFS\n",
+		r.Fidelity*100, r.AudioMs, r.AudioRMSDB)
 	if r.Regression {
 		fmt.Fprintf(os.Stderr, "  %s\n", colorize("REGRESSION vs baseline", "31", useColor))
 	}
@@ -378,6 +396,9 @@ type jsonCase struct {
 	BudgetMs       int64   `json:"budget_ms,omitempty"`
 	BaselineMs     int64   `json:"baseline_ms,omitempty"`
 	Regression     bool    `json:"regression,omitempty"`
+	Fidelity       float64 `json:"fidelity"`
+	AudioMs        int     `json:"audio_ms"`
+	AudioRMSDB     float64 `json:"audio_rms_db"`
 	Mode           string  `json:"mode"` // "substring" | "judge"
 	SubstringHit   string  `json:"substring_hit,omitempty"`
 	JudgeOK        *bool   `json:"judge_ok,omitempty"`
@@ -398,6 +419,9 @@ func emitJSON(w *os.File, rs []result) error {
 			BudgetMs:       r.Case.MaxLatency.Milliseconds(),
 			BaselineMs:     r.BaselineLatency.Milliseconds(),
 			Regression:     r.Regression,
+			Fidelity:       r.Fidelity,
+			AudioMs:        r.AudioMs,
+			AudioRMSDB:     r.AudioRMSDB,
 			NoiseRMS:       r.Case.NoiseRMS,
 			SubstringHit:   r.SubstringHit,
 			JudgeNotes:     r.JudgeNotes,
