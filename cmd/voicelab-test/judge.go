@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // judgeVerdict is the strict-JSON shape the judge prompt asks for.
@@ -32,12 +33,31 @@ Voice-AI heard (its transcription of the audio): %q
 Voice-AI responded (its spoken reply, transcribed): %q`,
 		rubric, utterance, userTranscript, grokResponse,
 	)
-	cmd := exec.Command(claudeBin, "-p", prompt)
-	out, err := cmd.Output()
-	if err != nil {
-		return judgeVerdict{}, "", fmt.Errorf("claude -p failed: %w", err)
+	// One retry with backoff. Burst-firing N judges in close succession
+	// occasionally hits transient errors (rate limits, network blips);
+	// retrying once turns a flake into a pass without lying about real
+	// failures. Two attempts is the empirical sweet spot — three would
+	// just add latency for a vanishingly small additional pass rate.
+	var (
+		raw    string
+		lastErr error
+	)
+	for attempt := 1; attempt <= 2; attempt++ {
+		cmd := exec.Command(claudeBin, "-p", prompt)
+		out, err := cmd.Output()
+		if err == nil {
+			raw = strings.TrimSpace(string(out))
+			lastErr = nil
+			break
+		}
+		lastErr = err
+		if attempt < 2 {
+			time.Sleep(1500 * time.Millisecond)
+		}
 	}
-	raw := strings.TrimSpace(string(out))
+	if lastErr != nil {
+		return judgeVerdict{}, "", fmt.Errorf("claude -p failed after retry: %w", lastErr)
+	}
 
 	// Tolerate a model that drifts into markdown fences despite the
 	// instruction. Strip a leading ```json / ``` and trailing ```.

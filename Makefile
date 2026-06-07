@@ -66,6 +66,23 @@ bin/remote: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
 	go build $(LDFLAGS) -o bin/remote ./cmd/remote
 
+# ── voicelab (throwaway voice CLI + automated regression suite) ─────
+.PHONY: voicelab voicelab-test voicelab-baseline
+voicelab: bin/voicelab
+bin/voicelab: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/voicelab ./cmd/voicelab
+
+# Run the automated voice-loop regression suite (TTS → Grok → judge).
+# Requires `xai-api-key` in the macOS keychain and `claude` on PATH for
+# rubric cases. ~30s per full run; exits non-zero on any failure.
+voicelab-test:
+	go run ./cmd/voicelab-test --baseline-read=testdata/voicelab-baseline.json
+
+# Refresh the latency baseline (run after intentional perf changes).
+voicelab-baseline:
+	go run ./cmd/voicelab-test --baseline-write=testdata/voicelab-baseline.json --dump-wavs=testdata/voicelab-wavs
+
 # ── Run ──────────────────────────────────────────────
 .PHONY: run run-app run-jevonsd run-remote
 run-app: $(APP)

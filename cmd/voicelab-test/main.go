@@ -2,21 +2,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // voicelab-test runs an automated suite of voice round-trips against
-// Grok Realtime: each case TTSes a known utterance, plays it into the
-// voicelab.Loop at realtime cadence, records what Grok heard and what
-// it said back, then judges the result. Pass/fail per case + a metric
-// table at the end. Useful for catching regressions in the voice path
-// without having to drive every change manually.
+// Grok Realtime: each case TTSes a known utterance (optionally with
+// noise overlaid), plays it into the voicelab.Loop at realtime
+// cadence, records what Grok heard and what it said back, then judges
+// the result. Pass/fail per case + a metric table at the end. Useful
+// for catching regressions in the voice path without having to drive
+// every change manually.
 //
 // Two grading modes per case:
 //   - ExpectAny: case-insensitive substring match on the response
 //     transcript (cheap, deterministic).
 //   - JudgeRubric: claude -p reads the rubric + transcripts and
 //     returns {"ok": bool, "notes": str} (for open-ended answers).
+//
+// Modes:
+//   - default text output
+//   - --json: machine-readable result array on stdout
+//   - --baseline-write=PATH: after a run, dump latencies to PATH
+//   - --baseline-read=PATH: fail any case whose latency exceeds
+//     the baseline's by more than --baseline-tolerance (default 50%).
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -32,18 +41,30 @@ import (
 
 func main() {
 	verbose := flag.Bool("v", false, "verbose protocol logging")
-	silenceMs := flag.Int("silence", 1200, "post-utterance silence tail in ms (must exceed Grok's server-VAD silence_duration_ms)")
 	timeout := flag.Duration("timeout", 15*time.Second, "per-case hard timeout")
 	claudeBin := flag.String("claude", expandHome("~/.local/bin/claude"), "path to the claude CLI for the judge")
 	scratch := flag.String("scratch", "/tmp/voicelab-test", "scratch dir for TTS WAV files")
 	filterName := flag.String("only", "", "if set, run only the case with this name")
+	jsonOut := flag.Bool("json", false, "emit results as JSON on stdout (suppresses pretty text)")
+	noColor := flag.Bool("no-color", false, "disable ANSI colour in pretty text output")
+	baselineRead := flag.String("baseline-read", "", "compare latencies against this baseline JSON; fail on regression")
+	baselineWrite := flag.String("baseline-write", "", "after a run, write per-case latencies to this path")
+	baselineTol := flag.Float64("baseline-tolerance", 0.5, "regression threshold: fraction by which latency may exceed baseline (0.5 = 50%)")
+	dumpWAVs := flag.String("dump-wavs", "", "if set, write each case's response audio to <dir>/<case>.wav for manual audit")
 	flag.Parse()
 
 	logLevel := slog.LevelError
 	if *verbose {
 		logLevel = slog.LevelDebug
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	base := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
+	if *verbose {
+		// In verbose mode, surface everything — including the shutdown
+		// race log — so a real protocol problem isn't accidentally hidden.
+		slog.SetDefault(slog.New(base))
+	} else {
+		slog.SetDefault(slog.New(quietHandler{inner: base}))
+	}
 
 	apiKey, err := loadKeychainKey("xai-api-key")
 	if err != nil {
@@ -51,23 +72,57 @@ func main() {
 	}
 
 	if _, err := exec.LookPath(*claudeBin); err != nil {
-		// Tolerate missing claude — substring cases still run; rubric
-		// cases get marked skipped rather than failed.
 		fmt.Fprintf(os.Stderr, "warning: claude not found at %s — rubric cases will be skipped\n", *claudeBin)
 	}
+
+	baseline, err := readBaseline(*baselineRead)
+	if err != nil {
+		fatal("read baseline %s: %v", *baselineRead, err)
+	}
+
+	useColor := !*noColor && !*jsonOut && isTerminal(os.Stderr)
 
 	results := make([]result, 0, len(Cases))
 	for _, c := range Cases {
 		if *filterName != "" && c.Name != *filterName {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "=== %s\n", c.Name)
-		r := runCase(c, apiKey, *scratch, *silenceMs, *timeout, *claudeBin)
+		if !*jsonOut {
+			fmt.Fprintf(os.Stderr, "=== %s\n", c.Name)
+		}
+		r := runCase(c, apiKey, *scratch, *timeout, *claudeBin)
+		if base, ok := baseline[c.Name]; ok && r.LatencyMeasured {
+			budget := time.Duration(float64(base.LatencyMs) * (1 + *baselineTol) * float64(time.Millisecond))
+			r.BaselineLatency = time.Duration(base.LatencyMs) * time.Millisecond
+			if r.Latency > budget {
+				r.Regression = true
+			}
+		}
+		if *dumpWAVs != "" && len(r.ResponseAudio) > 0 {
+			wavPath := filepath.Join(*dumpWAVs, c.Name+".wav")
+			if err := dumpWAV(wavPath, r.ResponseAudio); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: dump-wav %s: %v\n", wavPath, err)
+			}
+		}
 		results = append(results, r)
-		printShortResult(r)
+		if !*jsonOut {
+			printShortResult(r, useColor)
+		}
 	}
 
-	printSummary(results)
+	if *baselineWrite != "" {
+		if err := writeBaseline(*baselineWrite, results); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write baseline %s: %v\n", *baselineWrite, err)
+		}
+	}
+
+	if *jsonOut {
+		if err := emitJSON(os.Stdout, results); err != nil {
+			fatal("emit json: %v", err)
+		}
+	} else {
+		printSummary(results, useColor)
+	}
 
 	for _, r := range results {
 		if !r.passed() {
@@ -78,14 +133,17 @@ func main() {
 
 type result struct {
 	Case            Case
-	UserTranscript  string // what Grok heard
-	ResponseText    string // what Grok said back
+	UserTranscript  string
+	ResponseText    string
+	ResponseAudio   []byte // PCM16 24 kHz mono, what Grok TTSed
 	Latency         time.Duration
 	LatencyMeasured bool
 	JudgeOK         bool
 	JudgeNotes      string
 	JudgeSkipped    bool
-	SubstringHit    string // first ExpectAny match
+	SubstringHit    string
+	BaselineLatency time.Duration
+	Regression      bool
 	Err             error
 }
 
@@ -94,6 +152,9 @@ func (r result) passed() bool {
 		return false
 	}
 	if r.LatencyMeasured && r.Case.MaxLatency > 0 && r.Latency > r.Case.MaxLatency {
+		return false
+	}
+	if r.Regression {
 		return false
 	}
 	if len(r.Case.ExpectAny) > 0 {
@@ -105,7 +166,7 @@ func (r result) passed() bool {
 	return true
 }
 
-func runCase(c Case, apiKey, scratch string, silenceMs int, timeout time.Duration, claudeBin string) result {
+func runCase(c Case, apiKey, scratch string, timeout time.Duration, claudeBin string) result {
 	r := result{Case: c}
 
 	caseScratch := filepath.Join(scratch, c.Name)
@@ -114,20 +175,23 @@ func runCase(c Case, apiKey, scratch string, silenceMs int, timeout time.Duratio
 		r.Err = fmt.Errorf("synth: %w", err)
 		return r
 	}
-	silence := silencePCM(silenceMs)
+	if c.NoiseRMS > 0 {
+		utterancePCM = mixNoise(utterancePCM, c.NoiseRMS)
+	}
+	silence := silencePCM(400) // small trailing silence; not VAD-critical in ManualCommit
 	combined := make([]byte, 0, len(utterancePCM)+len(silence))
 	combined = append(combined, utterancePCM...)
 	combined = append(combined, silence...)
 
 	var (
-		stampMu       sync.Mutex
-		utteranceEnd  time.Time
-		userTextMu    sync.Mutex
-		userText      strings.Builder
-		responseMu    sync.Mutex
-		response      strings.Builder
-		responseDone  = make(chan struct{})
-		responseOnce  sync.Once
+		stampMu      sync.Mutex
+		utteranceEnd time.Time
+		userTextMu   sync.Mutex
+		userText     strings.Builder
+		responseMu   sync.Mutex
+		response     strings.Builder
+		responseDone = make(chan struct{})
+		responseOnce sync.Once
 	)
 
 	source := &voicelab.BufferSource{
@@ -177,10 +241,11 @@ func runCase(c Case, apiKey, scratch string, silenceMs int, timeout time.Duratio
 	case <-ctx.Done():
 	}
 	cancel()
-	<-loopErr // wait for goroutine to settle
+	<-loopErr
 
 	r.UserTranscript = strings.TrimSpace(userText.String())
 	r.ResponseText = strings.TrimSpace(response.String())
+	r.ResponseAudio = sink.PCM()
 
 	stampMu.Lock()
 	ue := utteranceEnd
@@ -227,19 +292,26 @@ func runCase(c Case, apiKey, scratch string, silenceMs int, timeout time.Duratio
 	return r
 }
 
-func printShortResult(r result) {
-	tag := "PASS"
-	if !r.passed() {
-		tag = "FAIL"
-	}
+// printShortResult writes the per-case summary in human-readable form.
+// useColor enables ANSI codes for PASS/FAIL so failures pop in a busy
+// terminal; disable for piped/non-terminal output.
+func printShortResult(r result, useColor bool) {
+	tag := tagFor(r, useColor)
 	if r.Err != nil {
-		fmt.Fprintf(os.Stderr, "  %s — %s\n", tag, r.Err)
+		fmt.Fprintf(os.Stderr, "  %s — %s\n\n", tag, r.Err)
 		return
 	}
 	fmt.Fprintf(os.Stderr, "  heard: %q\n", r.UserTranscript)
 	fmt.Fprintf(os.Stderr, "  said:  %q\n", r.ResponseText)
 	if r.LatencyMeasured {
-		fmt.Fprintf(os.Stderr, "  latency: %s (budget %s)\n", r.Latency.Round(time.Millisecond), r.Case.MaxLatency)
+		extra := ""
+		if r.BaselineLatency > 0 {
+			extra = fmt.Sprintf(" (baseline %s)", r.BaselineLatency.Round(time.Millisecond))
+		}
+		fmt.Fprintf(os.Stderr, "  latency: %s (budget %s)%s\n", r.Latency.Round(time.Millisecond), r.Case.MaxLatency, extra)
+	}
+	if r.Regression {
+		fmt.Fprintf(os.Stderr, "  %s\n", colorize("REGRESSION vs baseline", "31", useColor))
 	}
 	switch {
 	case len(r.Case.ExpectAny) > 0:
@@ -261,7 +333,21 @@ func printShortResult(r result) {
 	fmt.Fprintf(os.Stderr, "  %s\n\n", tag)
 }
 
-func printSummary(rs []result) {
+func tagFor(r result, useColor bool) string {
+	if r.passed() {
+		return colorize("PASS", "32", useColor)
+	}
+	return colorize("FAIL", "31", useColor)
+}
+
+func colorize(s, code string, on bool) string {
+	if !on {
+		return s
+	}
+	return "\x1b[" + code + "m" + s + "\x1b[0m"
+}
+
+func printSummary(rs []result, useColor bool) {
 	pass, fail := 0, 0
 	for _, r := range rs {
 		if r.passed() {
@@ -270,8 +356,117 @@ func printSummary(rs []result) {
 			fail++
 		}
 	}
-	fmt.Fprintf(os.Stderr, "summary: %d passed, %d failed\n", pass, fail)
+	passStr := fmt.Sprintf("%d passed", pass)
+	failStr := fmt.Sprintf("%d failed", fail)
+	if useColor && pass > 0 {
+		passStr = colorize(passStr, "32", true)
+	}
+	if useColor && fail > 0 {
+		failStr = colorize(failStr, "31", true)
+	}
+	fmt.Fprintf(os.Stderr, "summary: %s, %s\n", passStr, failStr)
 }
+
+// --- JSON / baseline persistence ---
+
+type jsonCase struct {
+	Name           string  `json:"name"`
+	Utterance      string  `json:"utterance"`
+	UserTranscript string  `json:"user_transcript"`
+	ResponseText   string  `json:"response_text"`
+	LatencyMs      int64   `json:"latency_ms,omitempty"`
+	BudgetMs       int64   `json:"budget_ms,omitempty"`
+	BaselineMs     int64   `json:"baseline_ms,omitempty"`
+	Regression     bool    `json:"regression,omitempty"`
+	Mode           string  `json:"mode"` // "substring" | "judge"
+	SubstringHit   string  `json:"substring_hit,omitempty"`
+	JudgeOK        *bool   `json:"judge_ok,omitempty"`
+	JudgeNotes     string  `json:"judge_notes,omitempty"`
+	NoiseRMS       float64 `json:"noise_rms,omitempty"`
+	Error          string  `json:"error,omitempty"`
+	Passed         bool    `json:"passed"`
+}
+
+func emitJSON(w *os.File, rs []result) error {
+	out := make([]jsonCase, len(rs))
+	for i, r := range rs {
+		j := jsonCase{
+			Name:           r.Case.Name,
+			Utterance:      r.Case.Utterance,
+			UserTranscript: r.UserTranscript,
+			ResponseText:   r.ResponseText,
+			BudgetMs:       r.Case.MaxLatency.Milliseconds(),
+			BaselineMs:     r.BaselineLatency.Milliseconds(),
+			Regression:     r.Regression,
+			NoiseRMS:       r.Case.NoiseRMS,
+			SubstringHit:   r.SubstringHit,
+			JudgeNotes:     r.JudgeNotes,
+			Passed:         r.passed(),
+		}
+		if r.LatencyMeasured {
+			j.LatencyMs = r.Latency.Milliseconds()
+		}
+		if len(r.Case.ExpectAny) > 0 {
+			j.Mode = "substring"
+		} else if r.Case.JudgeRubric != "" {
+			j.Mode = "judge"
+			if !r.JudgeSkipped {
+				ok := r.JudgeOK
+				j.JudgeOK = &ok
+			}
+		}
+		if r.Err != nil {
+			j.Error = r.Err.Error()
+		}
+		out[i] = j
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+type baselineEntry struct {
+	LatencyMs int64 `json:"latency_ms"`
+}
+
+func readBaseline(path string) (map[string]baselineEntry, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var b map[string]baselineEntry
+	if err := json.Unmarshal(data, &b); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func writeBaseline(path string, rs []result) error {
+	b := make(map[string]baselineEntry, len(rs))
+	for _, r := range rs {
+		if r.passed() && r.LatencyMeasured {
+			b[r.Case.Name] = baselineEntry{LatencyMs: r.Latency.Milliseconds()}
+		}
+	}
+	data, err := json.MarshalIndent(b, "", "  ")
+	if err != nil {
+		return err
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+// --- helpers ---
 
 func loadKeychainKey(service string) (string, error) {
 	out, err := exec.Command("security", "find-generic-password",
@@ -287,6 +482,18 @@ func expandHome(p string) string {
 		return filepath.Join(os.Getenv("HOME"), p[2:])
 	}
 	return p
+}
+
+// isTerminal returns true when f looks like an interactive TTY. We
+// avoid pulling in golang.org/x/term just for this; the cheap check
+// (stat.Mode has CharDevice) is enough — a pipe / file / null device
+// all read as non-terminal.
+func isTerminal(f *os.File) bool {
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return stat.Mode()&os.ModeCharDevice != 0
 }
 
 func fatal(format string, args ...any) {

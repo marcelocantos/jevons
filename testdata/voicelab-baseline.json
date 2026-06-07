@@ -1,0 +1,26 @@
+{
+  "arithmetic": {
+    "latency_ms": 1816
+  },
+  "arithmetic_with_noise": {
+    "latency_ms": 1595
+  },
+  "follow_up_intent": {
+    "latency_ms": 1687
+  },
+  "greeting": {
+    "latency_ms": 1720
+  },
+  "longer_response": {
+    "latency_ms": 1797
+  },
+  "polite_refusal_intent": {
+    "latency_ms": 1568
+  },
+  "short_fact": {
+    "latency_ms": 1890
+  },
+  "yes_no_question": {
+    "latency_ms": 1712
+  }
+}

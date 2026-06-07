@@ -43,3 +43,4 @@ docs/*.svg
 # TLC model checker artifacts
 formal/*_TTrace_*
 formal/states/
+/testdata/voicelab-wavs/

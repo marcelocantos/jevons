@@ -518,6 +518,27 @@ targets:
       Trade-offs explicit: voice latency goes up by Claude's response time (often 2-5s for non-trivial turns vs Grok's 1-2s). Acceptable given the user prefers reliability over snappiness for an overseer agent. Per-turn cost may go up (Claude tokens) or down (no xAI conversation context being reprocessed every turn) — net effect TBD.
     origin: manual
     discovered: 2026-05-22
+  T26:
+    name: Voice loop quality is validated by an automated regression suite
+    status: converging
+    value: 5.0
+    cost: 3.0
+    acceptance:
+    - '`go run ./cmd/voicelab-test` (or `make voicelab-test`) runs end-to-end with zero human input given the standard developer environment (xai-api-key in keychain, claude CLI on PATH).'
+    - 'Each case TTSes a known utterance via macOS `say`, plays it into the voice loop at realtime cadence, captures the user transcript (Grok''s STT) and the response transcript (Grok''s TTS), and grades via either deterministic substring match or LLM judge (claude -p strict-JSON).'
+    - 'Latency is measured as wall-clock from end-of-utterance audio to first-response-audio-byte and gated per case (the metric matches user perception including the VAD silence window).'
+    - 'Suite covers: basic Q&A, greeting, factual lookup, intent confirmation, longer response, yes/no, noise overlay, polite refusal.'
+    - 'Baseline mode (`--baseline-write` / `--baseline-read`) records per-case latencies and flags regressions on subsequent runs (>50% over baseline by default).'
+    - 'JSON output mode (`--json`) and response-audio dump (`--dump-wavs`) keep the harness CI-compatible and audit-friendly.'
+    - 'Exit code is non-zero on any failure so the suite slots into any commit hook / pipeline without bespoke parsing.'
+    context: |-
+      Voice quality has three dimensions: latency (measurable on the wire), correctness (transcript accuracy + sensible response — LLM judge handles the open-ended case), and feel (the ineffable Tesla-like smoothness — still requires a human ear for the final call). voicelab-test fully automates the first two and gates against regressions in either.
+
+      Built on top of internal/voicelab (the loop core extracted from cmd/voicelab) behind AudioSource / AudioSink interfaces, so the same loop runs live (malgo) or in test (synthetic PCM in, recorded PCM out). Uses ManualCommit in test mode for determinism (server VAD timing varies by silence threshold; explicit commit on source drain doesn't).
+
+      Validates the Grok side in isolation before 🎯T25's Claude-overseer architecture lands on top. The Tesla baseline (vanilla Grok STT/TTS, ~2 s round-trip on the desk) is now a regression test rather than a vibe-check.
+    origin: manual
+    discovered: 2026-06-07
   T3:
     name: Test coverage exists for core packages
     status: achieved
