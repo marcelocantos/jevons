@@ -66,6 +66,23 @@ bin/remote: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
 	go build $(LDFLAGS) -o bin/remote ./cmd/remote
 
+# ── voicelab (Swift CLI — AVAudioEngine + Grok Realtime) ─────
+VOICELAB_SRC := $(shell find swift/voicelab/Sources -name '*.swift' 2>/dev/null) swift/voicelab/Package.swift
+
+.PHONY: voicelab voicelab-ptt voicelab-continuous
+voicelab: bin/voicelab
+
+bin/voicelab: $(VOICELAB_SRC)
+	@mkdir -p bin
+	cd swift/voicelab && swift build -c release
+	cp swift/voicelab/.build/release/voicelab bin/voicelab
+
+voicelab-ptt: bin/voicelab
+	bin/voicelab
+
+voicelab-continuous: bin/voicelab
+	bin/voicelab --continuous
+
 # ── Run ──────────────────────────────────────────────
 .PHONY: run run-app run-jevonsd run-remote
 run-app: $(APP)
