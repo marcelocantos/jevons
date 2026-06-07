@@ -3,13 +3,18 @@
 
 // voicelab is a throwaway desktop CLI for iterating on Grok Realtime
 // voice interaction quality. The loop core lives in
-// internal/voicelab — this main is the malgo-backed live host.
+// internal/voicelab — this main wires it to a live audio device.
 //
-// Default mode is push-to-talk: press Enter to start talking, Enter
-// to send. This sidesteps the acoustic-echo loop you'd hit otherwise
-// (speakers → mic → Grok thinks it's the user → talks to itself).
-// Pass --continuous to switch to always-on server VAD; only useful
-// with headphones or once we have real AEC.
+// On macOS the device is the system's VoiceProcessingIO audio unit
+// (the same one FaceTime uses), which means AEC, noise suppression,
+// and AGC come from the OS for free — including on the always-on
+// --continuous path.
+//
+// Default mode is push-to-talk anyway, because the AEC reference
+// signal still needs your speaker to be playing the unaltered
+// playback (no Bluetooth re-routing, no external mixers), and PTT
+// is a foolproof way to confirm the loop works regardless of audio
+// path. Pass --continuous for the Tesla-style always-on flow.
 package main
 
 import (
@@ -34,7 +39,7 @@ func main() {
 	systemPrompt := flag.String("system", "You are jevons, a voice-first assistant. Keep replies brief and conversational.", "system prompt sent to Grok")
 	voice := flag.String("voice", "Eve", "Grok TTS voice")
 	verbose := flag.Bool("v", false, "verbose protocol logging")
-	continuous := flag.Bool("continuous", false, "always-on server-VAD mode (use only with headphones — speakers will echo)")
+	continuous := flag.Bool("continuous", false, "always-on server-VAD mode (uses OS VoiceProcessingIO AEC on macOS)")
 	flag.Parse()
 
 	logLevel := slog.LevelWarn
@@ -51,7 +56,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	dev, err := voicelab.NewMalgoDevice()
+	dev, err := newAudioDevice()
 	if err != nil {
 		fatal("audio device: %v", err)
 	}
@@ -64,9 +69,17 @@ func main() {
 	}
 }
 
+// audioDevice is the minimal interface main needs from a device.
+// Both VoiceProcDevice (macOS) and MalgoDevice satisfy it.
+type audioDevice interface {
+	Source() voicelab.AudioSource
+	Sink() voicelab.AudioSink
+	Close() error
+}
+
 // runContinuous: always-on, server VAD detects utterance boundaries.
 // Beautiful when it works; loops on itself when speakers reach the mic.
-func runContinuous(ctx context.Context, apiKey, voice, systemPrompt string, dev *voicelab.MalgoDevice) {
+func runContinuous(ctx context.Context, apiKey, voice, systemPrompt string, dev audioDevice) {
 	loop := &voicelab.Loop{
 		APIKey:       apiKey,
 		Voice:        voice,
@@ -87,7 +100,7 @@ func runContinuous(ctx context.Context, apiKey, voice, systemPrompt string, dev 
 		},
 		OnSessionReady: func() {
 			fmt.Fprintln(os.Stderr, "voicelab (continuous): session ready — start talking. Ctrl-C to quit.")
-			fmt.Fprintln(os.Stderr, "  (heads-up: speakers will echo into the mic without headphones — use --ptt or default mode otherwise)")
+			fmt.Fprintln(os.Stderr, "  AEC + NS + AGC via the OS VoiceProcessingIO audio unit (same as FaceTime).")
 		},
 	}
 
@@ -102,7 +115,7 @@ func runContinuous(ctx context.Context, apiKey, voice, systemPrompt string, dev 
 // Barge-in is implicit: the first Enter clears any audio Grok is
 // still playing, so a half-finished sentence gets cut off and the
 // user takes the floor.
-func runPTT(ctx context.Context, apiKey, voice, systemPrompt string, dev *voicelab.MalgoDevice) {
+func runPTT(ctx context.Context, apiKey, voice, systemPrompt string, dev audioDevice) {
 	gated := newGatedSource(dev.Source())
 	commit := make(chan struct{}, 1)
 	respDone := make(chan struct{}, 1)
