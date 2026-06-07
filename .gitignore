@@ -43,3 +43,8 @@ docs/*.svg
 # TLC model checker artifacts
 formal/*_TTrace_*
 formal/states/
+
+# Swift Package Manager build artifacts
+/swift/voicelab/.build/
+/swift/voicelab/.swiftpm/
+/swift/voicelab/Package.resolved
