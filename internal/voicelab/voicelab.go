@@ -38,8 +38,14 @@ type AudioSource interface {
 // AudioSink receives PCM16 mono 24 kHz frames for playback or capture.
 // Write must be safe to call from arbitrary goroutines; the typical
 // caller is grok.Client's readLoop dispatching OnAudio.
+//
+// Clear drops any pending audio that hasn't yet been played out (the
+// jitter buffer in a live host, the recorded buffer in a test sink).
+// Used for barge-in: when the user starts a new utterance, anything
+// Grok is still mid-sentence on should stop immediately.
 type AudioSink interface {
 	Write(pcm []byte) error
+	Clear()
 	Close() error
 }
 
@@ -66,11 +72,17 @@ type Loop struct {
 
 	// ManualCommit disables server-side VAD. When true, Run() calls
 	// client.CommitAndRespond() automatically the moment the source
-	// drains, then waits for ctx cancel. Use this for the test harness
-	// where utterance boundaries are known up front (no need for VAD).
-	// Live hosts (mic input) want this false so server VAD detects
-	// pauses naturally.
+	// drains, OR when a value is received on CommitSignal. Use this
+	// for the test harness (utterance boundary known via drain) and
+	// for push-to-talk (utterance boundary known via key release).
+	// Live mic + server VAD wants this false.
 	ManualCommit bool
+
+	// CommitSignal triggers an explicit CommitAndRespond when a value
+	// arrives. Only meaningful in ManualCommit mode. The host loop
+	// sends to this channel when it knows the utterance is finished
+	// — e.g., user released the talk key. nil disables (the default).
+	CommitSignal <-chan struct{}
 }
 
 // Run connects to Grok, starts the pump, and blocks until the source
@@ -108,6 +120,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-l.CommitSignal:
+			if l.ManualCommit {
+				if err := client.CommitAndRespond(ctx); err != nil {
+					return fmt.Errorf("commit and respond: %w", err)
+				}
+			}
 		case buf, ok := <-frames:
 			if !ok {
 				// Source drained. In ManualCommit mode the caller

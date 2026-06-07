@@ -113,5 +113,15 @@ func (b *BufferSink) FirstFrameAt() time.Time {
 	return b.firstFrameAt
 }
 
+// Clear drops any audio that has arrived so far. Tests rarely use
+// this directly — the field exists to satisfy the AudioSink contract
+// the live host relies on for barge-in.
+func (b *BufferSink) Clear() {
+	b.mu.Lock()
+	b.pcm = b.pcm[:0]
+	b.firstFrameAt = time.Time{}
+	b.mu.Unlock()
+}
+
 // Close is a no-op (data lives in memory until the sink is GC'd).
 func (b *BufferSink) Close() error { return nil }

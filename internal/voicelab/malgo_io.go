@@ -140,4 +140,15 @@ func (s malgoSink) Write(pcm []byte) error {
 	s.m.pbMu.Unlock()
 	return nil
 }
+
+// Clear drops everything in the playback jitter buffer. Used for
+// barge-in: when the user starts a new utterance, whatever Grok is
+// still mid-sentence on stops immediately (instead of trickling out
+// over the user's next words).
+func (s malgoSink) Clear() {
+	s.m.pbMu.Lock()
+	s.m.pbBuf = s.m.pbBuf[:0]
+	s.m.pbMu.Unlock()
+}
+
 func (s malgoSink) Close() error { return nil }
