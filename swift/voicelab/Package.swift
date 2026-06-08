@@ -35,8 +35,22 @@ let package = Package(
             name: "voicelab",
             dependencies: ["VoicelabKit"],
             path: "Sources/voicelab",
+            exclude: ["Info.plist"],
             swiftSettings: [
                 .swiftLanguageMode(.v5),
+            ],
+            linkerSettings: [
+                // Embed the Info.plist into the binary's __TEXT,__info_plist
+                // section. macOS TCC checks this section for
+                // NSMicrophoneUsageDescription before granting mic access
+                // to a CLI binary; without it, AVAudioEngine's tap never
+                // fires and there's no permission dialog — silent denial.
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/voicelab/Info.plist",
+                ]),
             ]
         ),
     ]

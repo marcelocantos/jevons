@@ -74,6 +74,15 @@ public final class AudioEngine {
                 "no converter from \(captureFormat) to \(wire)"
             )
         }
+        // VoiceProcessingIO emits a 5-channel input: channel 0 is the
+        // AEC'd mic, the other channels carry reference / intermediate
+        // signals (mostly silence when no playback). Without an
+        // explicit channel map the converter downmixes (or averages),
+        // and the AEC'd mic gets diluted into silence. Pin output
+        // channel 0 to input channel 0 so we get the real mic.
+        if captureFormat.channelCount > 1 {
+            cc.channelMap = [NSNumber(value: 0)]
+        }
         self.captureConverter = cc
 
         self.playerFormat = engine.outputNode.outputFormat(forBus: 0)
