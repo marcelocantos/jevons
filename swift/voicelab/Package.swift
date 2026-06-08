@@ -16,6 +16,9 @@ let package = Package(
         .iOS(.v17),
     ],
     products: [
+        // VoicelabKit is the iOS-portable layer: AVAudioEngine + Grok
+        // Realtime client + Keychain. Used by both the macOS CLI
+        // (./Sources/voicelab) and the iPad shell (./ios/VoicelabApp).
         .library(name: "VoicelabKit", targets: ["VoicelabKit"]),
         .executable(name: "voicelab", targets: ["voicelab"]),
     ],

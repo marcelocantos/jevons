@@ -49,3 +49,7 @@ formal/states/
 /swift/voicelab/.swiftpm/
 /swift/voicelab/Package.resolved
 /testdata/voicelab-wavs/
+
+# Xcode-generated artifacts inside the voicelab swift package
+/swift/voicelab/ios/build/
+/swift/voicelab/ios/VoicelabApp.xcodeproj/

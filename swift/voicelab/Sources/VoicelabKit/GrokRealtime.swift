@@ -32,6 +32,11 @@ public final class GrokRealtimeClient {
 
     public struct Callbacks {
         public var onSessionReady: () -> Void
+        /// Server VAD detected the start of a user utterance. Hosts
+        /// use this for barge-in: stop the playback of whatever
+        /// Grok was mid-sentence on, so the old TTS doesn't overlap
+        /// the new exchange.
+        public var onUserSpeechStarted: () -> Void
         public var onUserTranscript: (String) -> Void
         public var onAssistantTranscriptDelta: (String) -> Void
         public var onAssistantTranscriptDone: () -> Void
@@ -41,6 +46,7 @@ public final class GrokRealtimeClient {
 
         public init(
             onSessionReady: @escaping () -> Void = {},
+            onUserSpeechStarted: @escaping () -> Void = {},
             onUserTranscript: @escaping (String) -> Void = { _ in },
             onAssistantTranscriptDelta: @escaping (String) -> Void = { _ in },
             onAssistantTranscriptDone: @escaping () -> Void = {},
@@ -49,6 +55,7 @@ public final class GrokRealtimeClient {
             onError: @escaping (Error) -> Void = { _ in }
         ) {
             self.onSessionReady = onSessionReady
+            self.onUserSpeechStarted = onUserSpeechStarted
             self.onUserTranscript = onUserTranscript
             self.onAssistantTranscriptDelta = onAssistantTranscriptDelta
             self.onAssistantTranscriptDone = onAssistantTranscriptDone
@@ -218,8 +225,9 @@ public final class GrokRealtimeClient {
             if let text = json["transcript"] as? String {
                 callbacks.onUserTranscript(text)
             }
-        case "input_audio_buffer.speech_started",
-             "input_audio_buffer.speech_stopped",
+        case "input_audio_buffer.speech_started":
+            callbacks.onUserSpeechStarted()
+        case "input_audio_buffer.speech_stopped",
              "input_audio_buffer.committed":
             break
         case "response.done":

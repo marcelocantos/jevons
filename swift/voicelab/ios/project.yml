@@ -1,0 +1,37 @@
+name: VoicelabApp
+options:
+  bundleIdPrefix: com.marcelocantos
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    # Swift 5 language mode matches what VoicelabKit's Package.swift
+    # uses. Swift 6 strict concurrency errors out on Sendable-cross
+    # for the VoiceLoop reference; not worth fighting in a throwaway.
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: WG8QTTL954
+
+packages:
+  VoicelabKit:
+    path: ..
+
+targets:
+  VoicelabApp:
+    type: application
+    platform: iOS
+    dependencies:
+      - package: VoicelabKit
+        product: VoicelabKit
+    sources:
+      - path: VoicelabApp
+    settings:
+      base:
+        INFOPLIST_FILE: VoicelabApp/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.marcelocantos.voicelab
+        # PRODUCT_NAME left default (= target name VoicelabApp). The
+        # SwiftPM CLI target is also called "voicelab"; sharing the
+        # name across both builds collides their swiftmodule paths.
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_STRICT_CONCURRENCY: minimal

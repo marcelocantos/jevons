@@ -125,6 +125,17 @@ public final class AudioEngine {
         playerNode.scheduleBuffer(buffer)
     }
 
+    /// Drop any audio still queued on the player. Used for barge-in:
+    /// when server VAD detects the user starting to talk, Grok
+    /// cancels its in-flight response server-side but the local
+    /// AVAudioPlayerNode still has scheduled buffers from the old
+    /// sentence — without this, the user hears Grok finish the
+    /// previous reply over the top of the new exchange.
+    public func stopPlayback() {
+        playerNode.stop()
+        playerNode.play()
+    }
+
     // MARK: - Capture pipeline
 
     private func handleCaptureBuffer(_ inputBuffer: AVAudioPCMBuffer) {

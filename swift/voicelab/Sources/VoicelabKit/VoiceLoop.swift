@@ -30,6 +30,7 @@ public final class VoiceLoop {
     }
 
     public var onSessionReady: () -> Void = {}
+    public var onUserSpeechStarted: () -> Void = {}
     public var onUserTranscript: (String) -> Void = { _ in }
     public var onAssistantTranscriptDelta: (String) -> Void = { _ in }
     public var onAssistantTranscriptDone: () -> Void = {}
@@ -58,6 +59,13 @@ public final class VoiceLoop {
 
         var grokCallbacks = GrokRealtimeClient.Callbacks()
         grokCallbacks.onSessionReady = { [unowned self] in self.onSessionReady() }
+        grokCallbacks.onUserSpeechStarted = { [unowned self] in
+            // Cut off whatever Grok was still mid-saying. Server-side
+            // Grok already abandons its in-flight response when VAD
+            // fires speech_started; this catches up the local queue.
+            self.engine.stopPlayback()
+            self.onUserSpeechStarted()
+        }
         grokCallbacks.onUserTranscript = { [unowned self] text in self.onUserTranscript(text) }
         grokCallbacks.onAssistantTranscriptDelta = { [unowned self] delta in
             self.onAssistantTranscriptDelta(delta)
