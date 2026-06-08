@@ -8,25 +8,21 @@ import Foundation
 /// over WebSocket, audio frames sent and received as base64-encoded
 /// PCM16 24 kHz mono.
 ///
-/// Designed so the same code path runs on macOS and iOS — only
-/// URLSession is used; no platform-specific dependencies.
+/// Server-side VAD drives utterance boundaries; we don't expose a
+/// manual commit path because the OS AEC means the mic can stay
+/// live and Grok's own VAD reliably detects end-of-utterance.
 public final class GrokRealtimeClient {
     public struct Config {
         public var apiKey: String
         public var voice: String
         public var systemPrompt: String
-        /// When true, server-side VAD is disabled; the caller drives
-        /// commit + response.create explicitly via `commitAndRespond`.
-        public var manualCommit: Bool
 
         public init(apiKey: String,
                     voice: String = "Eve",
-                    systemPrompt: String = "",
-                    manualCommit: Bool = false) {
+                    systemPrompt: String = "") {
             self.apiKey = apiKey
             self.voice = voice
             self.systemPrompt = systemPrompt
-            self.manualCommit = manualCommit
         }
     }
 
@@ -86,9 +82,9 @@ public final class GrokRealtimeClient {
         self.callbacks = callbacks
     }
 
-    /// Replace the event callbacks after construction. Hosts that
-    /// want to capture `self` in callbacks build the client first
-    /// (so `self` is fully initialised) and then wire the closures.
+    /// Replace event callbacks after construction. Hosts that want
+    /// to capture `self` in callbacks build the client first (so
+    /// `self` is fully initialised) then wire the closures.
     public func setCallbacks(_ callbacks: Callbacks) {
         self.callbacks = callbacks
     }
@@ -120,26 +116,6 @@ public final class GrokRealtimeClient {
         ])
     }
 
-    /// Commits the buffered audio. In ManualCommit mode the server
-    /// won't auto-respond — pair with `requestResponse` for that.
-    public func commit() async throws {
-        try await send(["type": "input_audio_buffer.commit"])
-    }
-
-    /// Convenience for ManualCommit mode: commit + immediately ask
-    /// for a text + audio response.
-    public func commitAndRespond() async throws {
-        try await commit()
-        try await requestResponse()
-    }
-
-    public func requestResponse() async throws {
-        try await send([
-            "type": "response.create",
-            "response": ["modalities": ["text", "audio"]],
-        ])
-    }
-
     public func close() {
         readLoopTask?.cancel()
         readLoopTask = nil
@@ -167,21 +143,15 @@ public final class GrokRealtimeClient {
                 "input": ["format": ["type": "audio/pcm", "rate": 24000]],
                 "output": ["format": ["type": "audio/pcm", "rate": 24000]],
             ],
-        ]
-        if !config.systemPrompt.isEmpty {
-            session["instructions"] = config.systemPrompt
-        }
-        if config.manualCommit {
-            // Explicit NSNull → JSON null → server-VAD off. Omitting
-            // the field would leave the API on its default.
-            session["turn_detection"] = NSNull()
-        } else {
-            session["turn_detection"] = [
+            "turn_detection": [
                 "type": "server_vad",
                 "threshold": 0.7,
                 "silence_duration_ms": 800,
                 "prefix_padding_ms": 300,
-            ]
+            ],
+        ]
+        if !config.systemPrompt.isEmpty {
+            session["instructions"] = config.systemPrompt
         }
         try await send(["type": "session.update", "session": session])
     }

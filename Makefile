@@ -69,7 +69,7 @@ bin/remote: $(GO_SRC) $(EMBED_GUIDE)
 # ── voicelab (Swift CLI — AVAudioEngine + Grok Realtime) ─────
 VOICELAB_SRC := $(shell find swift/voicelab/Sources -name '*.swift' 2>/dev/null) swift/voicelab/Package.swift
 
-.PHONY: voicelab voicelab-ptt voicelab-continuous
+.PHONY: voicelab run-voicelab
 voicelab: bin/voicelab
 
 bin/voicelab: $(VOICELAB_SRC)
@@ -77,11 +77,8 @@ bin/voicelab: $(VOICELAB_SRC)
 	cd swift/voicelab && swift build -c release
 	cp swift/voicelab/.build/release/voicelab bin/voicelab
 
-voicelab-ptt: bin/voicelab
+run-voicelab: bin/voicelab
 	bin/voicelab
-
-voicelab-continuous: bin/voicelab
-	bin/voicelab --continuous
 
 # ── Run ──────────────────────────────────────────────
 .PHONY: run run-app run-jevonsd run-remote
