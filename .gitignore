@@ -48,3 +48,4 @@ formal/states/
 /swift/voicelab/.build/
 /swift/voicelab/.swiftpm/
 /swift/voicelab/Package.resolved
+/testdata/voicelab-wavs/
