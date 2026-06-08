@@ -8,6 +8,7 @@ import VoicelabKit
 struct CLIArgs {
     var system: String = "You are jevons, a voice-first assistant. Keep replies brief and conversational."
     var voice: String = "Eve"
+    var verbose: Bool = false
 }
 
 func parseArgs() -> CLIArgs {
@@ -19,6 +20,8 @@ func parseArgs() -> CLIArgs {
             if let v = iter.next() { args.system = v }
         case "--voice":
             if let v = iter.next() { args.voice = v }
+        case "-v", "--verbose":
+            args.verbose = true
         case "--help", "-h":
             printUsage()
             exit(0)
@@ -65,7 +68,8 @@ do {
     loop = try VoiceLoop(config: .init(
         apiKey: apiKey,
         voice: args.voice,
-        systemPrompt: args.system
+        systemPrompt: args.system,
+        verbose: args.verbose
     ))
 } catch {
     fatal("\(error.localizedDescription)")

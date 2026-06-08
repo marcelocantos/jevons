@@ -14,13 +14,18 @@ public final class VoiceLoop {
         public var apiKey: String
         public var voice: String
         public var systemPrompt: String
+        /// Forwards to GrokRealtimeClient.Config.verbose and adds
+        /// periodic mic RMS lines so a silent mic is obvious.
+        public var verbose: Bool
 
         public init(apiKey: String,
                     voice: String = "Eve",
-                    systemPrompt: String = "") {
+                    systemPrompt: String = "",
+                    verbose: Bool = false) {
             self.apiKey = apiKey
             self.voice = voice
             self.systemPrompt = systemPrompt
+            self.verbose = verbose
         }
     }
 
@@ -34,13 +39,20 @@ public final class VoiceLoop {
     private let engine: AudioEngine
     private let grok: GrokRealtimeClient
     private let captureQueue = DispatchQueue(label: "voicelab.capture")
+    private let verbose: Bool
+    private var lastMicLogAt = Date.distantPast
+    private var micFrames = 0
+    private var micSumSquares: Double = 0
+    private let micLogLock = NSLock()
 
     public init(config: Config) throws {
+        self.verbose = config.verbose
         self.engine = try AudioEngine()
         let grokConfig = GrokRealtimeClient.Config(
             apiKey: config.apiKey,
             voice: config.voice,
-            systemPrompt: config.systemPrompt
+            systemPrompt: config.systemPrompt,
+            verbose: config.verbose
         )
         self.grok = GrokRealtimeClient(config: grokConfig)
 
@@ -66,6 +78,7 @@ public final class VoiceLoop {
         // internally; we just need to keep it off the audio thread.
         engine.onCapture = { [weak self] data in
             guard let self = self else { return }
+            if self.verbose { self.accumulateMicRMS(data) }
             self.captureQueue.async {
                 Task { [weak self] in
                     do {
@@ -75,6 +88,36 @@ public final class VoiceLoop {
                     }
                 }
             }
+        }
+    }
+
+    /// Periodically log mic RMS in dBFS so a silent or stuck mic is
+    /// obvious. Logs at most once per second; if the mic is dead the
+    /// dBFS line stops appearing entirely.
+    private func accumulateMicRMS(_ pcm: Data) {
+        var sum: Double = 0
+        var count = 0
+        pcm.withUnsafeBytes { raw in
+            let p = raw.bindMemory(to: Int16.self)
+            for v in p {
+                let f = Double(v)
+                sum += f * f
+                count += 1
+            }
+        }
+        micLogLock.lock()
+        defer { micLogLock.unlock() }
+        micFrames += count
+        micSumSquares += sum
+        let now = Date()
+        if now.timeIntervalSince(lastMicLogAt) >= 1.0, micFrames > 0 {
+            let rms = (micSumSquares / Double(micFrames)).squareRoot()
+            let dB = rms > 0 ? 20 * log10(rms / 32767.0) : -.infinity
+            let msg = String(format: "mic: %.1f dBFS (%d frames)\n", dB, micFrames)
+            FileHandle.standardError.write(Data(msg.utf8))
+            lastMicLogAt = now
+            micFrames = 0
+            micSumSquares = 0
         }
     }
 

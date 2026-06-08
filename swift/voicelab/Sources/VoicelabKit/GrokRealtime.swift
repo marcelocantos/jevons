@@ -16,13 +16,17 @@ public final class GrokRealtimeClient {
         public var apiKey: String
         public var voice: String
         public var systemPrompt: String
+        /// Logs every incoming event type + key fields to stderr.
+        public var verbose: Bool
 
         public init(apiKey: String,
                     voice: String = "Eve",
-                    systemPrompt: String = "") {
+                    systemPrompt: String = "",
+                    verbose: Bool = false) {
             self.apiKey = apiKey
             self.voice = voice
             self.systemPrompt = systemPrompt
+            self.verbose = verbose
         }
     }
 
@@ -188,6 +192,9 @@ public final class GrokRealtimeClient {
 
     private func handleEvent(_ json: [String: Any]) {
         guard let type = json["type"] as? String else { return }
+        if config.verbose {
+            FileHandle.standardError.write(Data("grok event: \(type)\n".utf8))
+        }
         switch type {
         case "session.created", "conversation.created", "ping":
             break
