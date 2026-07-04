@@ -156,6 +156,14 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #voice-status .voice-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: voice-blink 1s ease-in-out infinite; }
 @keyframes voice-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 .voice-indicator { font-size: 11px; color: var(--text-muted); padding: 4px 4px; align-self: center; font-style: italic; }
+/* "Working" indicator — order:1000 keeps it visually pinned below all
+   messages regardless of DOM insertion order while a turn is in flight. */
+.working-indicator { order: 1000; align-self: flex-start; display: flex; align-items: center; gap: 7px; padding: 8px 4px; color: var(--text-muted); font-size: 13px; font-style: italic; }
+.working-indicator .work-dots { display: inline-flex; gap: 4px; }
+.working-indicator .work-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: work-bounce 1.2s ease-in-out infinite; }
+.working-indicator .work-dots span:nth-child(2) { animation-delay: 0.16s; }
+.working-indicator .work-dots span:nth-child(3) { animation-delay: 0.32s; }
+@keyframes work-bounce { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 
 /* Collapsible turn details */
 .turn-details { align-self: flex-start; max-width: 85%; margin: 2px 0 0 0; }
@@ -243,12 +251,13 @@ let turnCount = 0;
 transport.onOpen = () => {
   const v = input.value;
   dot.className = 'dot on'; sTxt.textContent = 'connected'; sendBtn.disabled = false;
-  msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0;
+  msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
   input.value = v;
 };
 transport.onClose = () => {
   // Transport handles reconnect (backoff + version check) internally.
   dot.className = 'dot off'; sTxt.textContent = 'reconnecting'; sendBtn.disabled = true;
+  setWorking(false); // don't leave "working" hanging across a disconnect
 };
 transport.onMessage = m => handle(m);
 transport.onError = msg => console.error('transport error:', msg);
@@ -288,6 +297,7 @@ function handle(m) {
     });
     if (hasText) {
       closeTurn();
+      setWorking(false);
       content.forEach(c => {
         if (c.type==='text' && c.text) addMsg('jevons', c.text, msgTs);
       });
@@ -500,7 +510,28 @@ function send() {
   // Sending pins us to the bottom so the outgoing message and the reply
   // scroll into view, even if we'd scrolled up to read history.
   autoScroll = true;
+  setWorking(true);
   requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+}
+
+// "Working" indicator: shown from when the user sends until Jevons's
+// reply text arrives, so a long synchronous turn (e.g. directing a
+// worker that runs a test suite) doesn't look like a hang. Only driven
+// by live sends — never by history replay.
+let workingEl = null;
+function setWorking(on) {
+  if (on) {
+    if (!workingEl) {
+      workingEl = document.createElement('div');
+      workingEl.className = 'working-indicator';
+      workingEl.innerHTML = 'Jevons is working <span class="work-dots"><span></span><span></span><span></span></span>';
+    }
+    msgs.appendChild(workingEl);
+    scrollDown();
+  } else if (workingEl) {
+    workingEl.remove();
+    workingEl = null;
+  }
 }
 
 // Auto-grow the textarea: reset to one row, then expand to fit content
