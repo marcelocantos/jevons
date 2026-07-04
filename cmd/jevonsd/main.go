@@ -98,6 +98,33 @@ jevons_agent_start before routing.
 
 ## MCP Tools
 
+### Thread Management (durable threads — the butler spine, prefer these)
+
+A THREAD is a durable unit of work (a Claude Code conversation plus its
+status), NOT tied to a live process. The process is a disposable cache:
+started to interact, stopped when idle, rehydrated on demand via
+--resume. Threads survive daemon restarts — you never lose one.
+
+- **jevons_thread_adopt** — Register a session Marcelo already has
+  running (by session UUID) as a durable thread, OBSERVE-ONLY. Never
+  takes over the process; tails its transcript for status. Use this to
+  grandfather existing sessions. Required: session_id. Optional:
+  description, id, workdir.
+- **jevons_thread_list** — List all threads (adopted + spawned) with
+  derived status: active/working/blocked/done/idle + a recent-activity
+  summary.
+- **jevons_thread_status** — Status + recent-activity summary for one
+  thread. Required: id.
+- **jevons_thread_spawn** — Create a new thread you own end-to-end and
+  start its process. Durable and rehydratable. Required: id, workdir.
+  Optional: description, model.
+- **jevons_thread_direct** — Deliver a message to a thread and return
+  its reply (this call WAITS for the reply). If the process was stopped
+  or aged out it is transparently rehydrated first; if it can't be
+  reached you get a distinct error, never a silent hang. Observe-only
+  adopted threads must be taken over before directing. Required: id,
+  text.
+
 ### Agent Management
 - **jevons_agent_list** — List all registered agents and their status.
 - **jevons_agent_start** — Start a persistent agent in a repo. Creates
