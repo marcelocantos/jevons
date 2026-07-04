@@ -160,14 +160,29 @@ by track record. CEO authority is earned trust, continuously re-earned.
 
 - **Fleet lane** (services ↔ jevonsd/agents): MCP as the semantic
   layer; the push/async gap filled by a durable, sequence-numbered,
-  replayable **event log per service, implemented once in mcpbridge**,
-  tailed with cursors. jevonsd (attention) and mnemo (memory) are peer
-  consumers of the same log.
+  replayable **event feed that each service owns and exposes as a
+  provider-contract obligation** (see
+  [design/provider-contract.md](design/provider-contract.md)), which
+  jevonsd tails with per-feed cursors and aggregates. Durability lives
+  in the owning service — consistent with *Jevons never remembers*:
+  jevonsd holds only cursors and last-known aggregated state. jevonsd
+  (attention) and mnemo (memory) are peer consumers of each other's
+  feeds.
 - **The event lane is also the evidence lane** — oracle results, audit
   findings, verdict cards, computed-completion records, and Jevons's
   **decision log** (ruling, evidence refs, risk tier — the board
-  minutes) ride the same log. Durability gives replayable attestation
+  minutes) ride these feeds. Durability gives replayable attestation
   history and an appeal path for free.
+
+  > **Correction (2026-07-04).** An earlier draft placed this event log
+  > "implemented once in mcpbridge." That was a conflation: mcpbridge's
+  > `_filter` envelope (a query-ergonomics param + result cache,
+  > proposed 2026-05-28) is unrelated to a durable event substrate, and
+  > got welded to it by name during charter synthesis. mcpbridge stays
+  > the thin MCP-continuity shim it was designed to be; the durable feed
+  > is a provider obligation aggregated by jevonsd. The `_filter`
+  > envelope, if pursued, is an independent mcpbridge feature decided on
+  > its own merits.
 - **Client lane** (jevonsd ↔ TUI/phone/iPad): Jevons-owned end-to-end.
   The brain is portable across transports — terminal chat → menubar/TUI
   → iPad → voice. Transports are progressive enhancement of one brain.
@@ -185,11 +200,12 @@ spot-checks agree with rulings. The experiment's primary output is the
 
 ## Sequencing
 
-Constitution → coordinator-on-polling → event lane (mcpbridge
-extension) → verdict queue over the lane → transports. One surface at a
-time, each gated on the previous proving out. Audit-debt remediation
-(the fleet's open critical findings) precedes any autonomy raise, and
-doit's fail-open fix precedes doit gating anything.
+Constitution → coordinator-on-polling → event lane (provider-contract
+feeds, aggregated by jevonsd) → verdict queue over the lane →
+transports. One surface at a time, each gated on the previous proving
+out. Audit-debt remediation (the fleet's open critical findings)
+precedes any autonomy raise, and doit's fail-open fix precedes doit
+gating anything.
 
 **Go-live note:** the owner's global CLAUDE.md currently reserves merge
 confirmation and release initiation to the user; adopting the decision
