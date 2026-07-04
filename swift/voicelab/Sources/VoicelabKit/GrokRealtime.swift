@@ -18,15 +18,24 @@ public final class GrokRealtimeClient {
         public var systemPrompt: String
         /// Logs every incoming event type + key fields to stderr.
         public var verbose: Bool
+        /// Transcribe-only: server VAD still commits + transcribes the
+        /// user's audio, but Grok does NOT auto-generate a spoken
+        /// response (turn_detection.create_response = false). Used for
+        /// the overseer-bridge episodes: the Claude overseer answers,
+        /// and its reply is voiced later via `speak()`. Leave false for
+        /// standalone conversational use (the CLI, or Grok-only mode).
+        public var transcribeOnly: Bool
 
         public init(apiKey: String,
                     voice: String = "Eve",
                     systemPrompt: String = "",
-                    verbose: Bool = false) {
+                    verbose: Bool = false,
+                    transcribeOnly: Bool = false) {
             self.apiKey = apiKey
             self.voice = voice
             self.systemPrompt = systemPrompt
             self.verbose = verbose
+            self.transcribeOnly = transcribeOnly
         }
     }
 
@@ -127,6 +136,28 @@ public final class GrokRealtimeClient {
         ])
     }
 
+    /// Speak arbitrary text through this episode's TTS. Injects an
+    /// assistant-role conversation item, then asks Grok to render it
+    /// as audio. This is how the overseer's (Claude's) reply reaches
+    /// the user's ears: the reply text arrives over the jevonsd chat
+    /// link, and we push it into the still-open Grok episode here.
+    /// No new user turn is created, so Grok won't "respond" to it —
+    /// it just voices it.
+    public func speak(_ text: String) async throws {
+        try await send([
+            "type": "conversation.item.create",
+            "item": [
+                "type": "message",
+                "role": "assistant",
+                "content": [["type": "text", "text": text]],
+            ],
+        ])
+        try await send([
+            "type": "response.create",
+            "response": ["modalities": ["audio"], "instructions": "Read the previous assistant message aloud verbatim."],
+        ])
+    }
+
     public func close() {
         readLoopTask?.cancel()
         readLoopTask = nil
@@ -148,18 +179,23 @@ public final class GrokRealtimeClient {
     }
 
     private func sendSessionUpdate() async throws {
+        var turnDetection: [String: Any] = [
+            "type": "server_vad",
+            "threshold": 0.7,
+            "silence_duration_ms": 800,
+            "prefix_padding_ms": 300,
+        ]
+        if config.transcribeOnly {
+            // Commit + transcribe on silence, but don't let Grok answer.
+            turnDetection["create_response"] = false
+        }
         var session: [String: Any] = [
             "voice": config.voice,
             "audio": [
                 "input": ["format": ["type": "audio/pcm", "rate": 24000]],
                 "output": ["format": ["type": "audio/pcm", "rate": 24000]],
             ],
-            "turn_detection": [
-                "type": "server_vad",
-                "threshold": 0.7,
-                "silence_duration_ms": 800,
-                "prefix_padding_ms": 300,
-            ],
+            "turn_detection": turnDetection,
         ]
         if !config.systemPrompt.isEmpty {
             session["instructions"] = config.systemPrompt

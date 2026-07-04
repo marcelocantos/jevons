@@ -41,20 +41,31 @@ public final class VoiceLoop {
         /// Grok session. If the user starts a new utterance before
         /// this fires, the timer is cancelled and we stay active.
         public var postResponseSilenceMs: Int
+        /// jevonsd base URL (e.g. ws://192.168.1.217:13705). When set,
+        /// the loop runs in *bridge mode*: Grok transcribes only, the
+        /// user's transcript is forwarded to the Claude overseer over
+        /// /ws/chat, and the overseer's reply is voiced back through
+        /// the Grok episode. When nil, Grok answers directly
+        /// (standalone conversational mode).
+        public var overseerURL: URL?
 
         public init(apiKey: String,
                     voice: String = "Eve",
                     systemPrompt: String = "",
                     vad: LocalVAD = LocalVAD(),
                     preRollMs: Int = 500,
-                    postResponseSilenceMs: Int = 10_000) {
+                    postResponseSilenceMs: Int = 10_000,
+                    overseerURL: URL? = nil) {
             self.apiKey = apiKey
             self.voice = voice
             self.systemPrompt = systemPrompt
             self.vad = vad
             self.preRollMs = preRollMs
             self.postResponseSilenceMs = postResponseSilenceMs
+            self.overseerURL = overseerURL
         }
+
+        var bridgeMode: Bool { overseerURL != nil }
     }
 
     public var onSessionReady: () -> Void = {}
@@ -65,6 +76,15 @@ public final class VoiceLoop {
     public var onResponseDone: () -> Void = {}
     public var onError: (Error) -> Void = { _ in }
     public var onStateChange: (SessionState) -> Void = { _ in }
+    /// Bridge mode: the overseer's reply text (authoritative for the
+    /// transcript display — it's what actually gets voiced). Fires per
+    /// streamed assistant block.
+    public var onOverseerReply: (String) -> Void = { _ in }
+    /// Bridge mode: an async agent/worker completion arrived.
+    public var onWorkerNote: (OverseerLink.WorkerNote) -> Void = { _ in }
+    /// Bridge mode: overseer link connected / dropped.
+    public var onOverseerConnected: () -> Void = {}
+    public var onOverseerDisconnected: (Error?) -> Void = { _ in }
     /// Fires ~10×/s with the current mic level in dBFS (AEC-cleaned
     /// signal). For on-device VAD tuning — without terminal stderr on
     /// a GUI app, a live meter is the only way to pick `triggerDB`.
@@ -85,6 +105,13 @@ public final class VoiceLoop {
     private var silenceTask: Task<Void, Never>?
     private let stateLock = NSLock()
     private var levelAccumMs: Double = 0
+    /// Bridge mode: persistent link to the Claude overseer. Lives
+    /// across episodes (unlike the per-episode Grok session).
+    private var overseer: OverseerLink?
+    /// Bridge mode: true between forwarding a transcript and the
+    /// overseer's turn completing — the episode stays open (silence
+    /// timer suspended) while we wait for the reply.
+    private var awaitingOverseer = false
 
     public init(config: Config) throws {
         self.config = config
@@ -98,13 +125,48 @@ public final class VoiceLoop {
     }
 
     public func start() throws {
+        if let url = config.overseerURL {
+            connectOverseer(url)
+        }
         try engine.start()
+    }
+
+    // MARK: - Overseer link (bridge mode)
+
+    private func connectOverseer(_ url: URL) {
+        var cb = OverseerLink.Callbacks()
+        cb.onReplyText = { [weak self] text in
+            guard let self = self else { return }
+            self.onOverseerReply(text)
+            // Voice the overseer's reply through the open Grok episode.
+            if let g = self.grok {
+                Task { do { try await g.speak(text) } catch { self.onError(error) } }
+            }
+        }
+        cb.onTurnComplete = { [weak self] in
+            guard let self = self else { return }
+            // Reply delivered; let the episode wind down on silence.
+            self.awaitingOverseer = false
+            self.onResponseDone()
+            self.startSilenceTimer()
+        }
+        cb.onWorkerNote = { [weak self] note in
+            self?.onWorkerNote(note)
+        }
+        cb.onConnected = { [weak self] in self?.onOverseerConnected() }
+        cb.onDisconnected = { [weak self] err in self?.onOverseerDisconnected(err) }
+        cb.onError = { [weak self] err in self?.onError(err) }
+        let link = OverseerLink(baseURL: url, callbacks: cb)
+        overseer = link
+        link.connect()
     }
 
     public func stop() {
         silenceTask?.cancel()
         grok?.close()
         grok = nil
+        overseer?.close()
+        overseer = nil
         engine.stop()
         state = .idle
     }
@@ -134,6 +196,11 @@ public final class VoiceLoop {
         case .idle:
             stateLock.lock()
             let triggered = vad.ingest(pcm, sampleRate: AudioEngine.sampleRate)
+            if triggered {
+                // Stop the pre-roll evicting so every frame from here
+                // until the session is ready survives the WS handshake.
+                preRoll.seal()
+            }
             stateLock.unlock()
             if triggered {
                 openSession()
@@ -189,7 +256,8 @@ public final class VoiceLoop {
             let g = GrokRealtimeClient(config: .init(
                 apiKey: self.config.apiKey,
                 voice: self.config.voice,
-                systemPrompt: self.config.systemPrompt
+                systemPrompt: self.config.systemPrompt,
+                transcribeOnly: self.config.bridgeMode
             ))
 
             var cb = GrokRealtimeClient.Callbacks()
@@ -221,13 +289,33 @@ public final class VoiceLoop {
                 self.state = .active
                 self.onUserSpeechStarted()
             }
-            cb.onUserTranscript = { [weak self] t in self?.onUserTranscript(t) }
+            cb.onUserTranscript = { [weak self] t in
+                guard let self = self else { return }
+                self.onUserTranscript(t)
+                if self.config.bridgeMode {
+                    // Forward to the Claude overseer and hold the
+                    // episode open (suspend the close timer) until the
+                    // reply comes back and gets voiced.
+                    let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    self.awaitingOverseer = true
+                    self.cancelSilenceTimer()
+                    self.overseer?.sendTurn(trimmed)
+                }
+            }
             cb.onAssistantTranscriptDelta = { [weak self] d in self?.onAssistantTranscriptDelta(d) }
             cb.onAssistantTranscriptDone = { [weak self] in self?.onAssistantTranscriptDone() }
             cb.onAudio = { [weak self] data in self?.engine.play(data) }
             cb.onResponseDone = { [weak self] in
-                self?.onResponseDone()
-                self?.startSilenceTimer()
+                guard let self = self else { return }
+                self.onResponseDone()
+                // Standalone: Grok's own reply is done → wind down.
+                // Bridge: a single speak() block finished, but the
+                // overseer turn owns closing (onTurnComplete). Don't
+                // close mid-multi-block reply.
+                if !self.config.bridgeMode {
+                    self.startSilenceTimer()
+                }
             }
             cb.onError = { [weak self] err in self?.onError(err) }
             g.setCallbacks(cb)

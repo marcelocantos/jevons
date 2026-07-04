@@ -61,6 +61,13 @@ struct ContentView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.orange)
             }
+            if state.bridge && !state.debugLine.isEmpty {
+                Text(state.debugLine)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
@@ -74,6 +81,11 @@ struct ContentView: View {
             Text(state.status.label)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            if state.bridge {
+                Text(state.overseerConnected ? "· overseer ✓" : "· overseer …")
+                    .font(.caption)
+                    .foregroundStyle(state.overseerConnected ? .green : .orange)
+            }
             Spacer()
             if let err = state.lastError {
                 Text(err)
@@ -111,14 +123,31 @@ struct ContentView: View {
 private struct TurnView: View {
     let turn: AppState.Turn
 
+    private var glyph: String {
+        switch turn.speaker {
+        case .user: "›"
+        case .jevons: "‹"
+        case .worker: "⚙"
+        }
+    }
+
+    private var tint: Color {
+        switch turn.speaker {
+        case .user: .blue
+        case .jevons: .green
+        case .worker: .orange
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Text(turn.speaker == .user ? "›" : "‹")
+            Text(glyph)
                 .font(.system(.headline, design: .monospaced))
-                .foregroundStyle(turn.speaker == .user ? .blue : .green)
+                .foregroundStyle(tint)
                 .frame(width: 16)
             Text(turn.text)
                 .font(.body)
+                .foregroundStyle(turn.speaker == .worker ? .secondary : .primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

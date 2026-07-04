@@ -73,6 +73,13 @@ public struct LocalVAD {
 public struct PreRollBuffer {
     public let capacityBytes: Int
     private var buffer: Data = Data()
+    /// When sealed, `append` stops evicting — the buffer grows
+    /// unbounded. VoiceLoop seals the moment the VAD fires so that
+    /// *everything* from the trigger until the Grok session is ready
+    /// (the WS handshake can take 1s+) is preserved, not just the last
+    /// `capacityMs`. Before sealing, the ring keeps only the recent
+    /// lead-in so the syllable that fired the VAD survives.
+    private var sealed = false
 
     public init(capacityMs: Int = 500, sampleRate: Double = 24000) {
         self.capacityBytes = Int(Double(capacityMs) / 1000 * sampleRate) * MemoryLayout<Int16>.size
@@ -80,14 +87,20 @@ public struct PreRollBuffer {
 
     public mutating func append(_ pcm: Data) {
         buffer.append(pcm)
-        if buffer.count > capacityBytes {
+        if !sealed && buffer.count > capacityBytes {
             buffer.removeFirst(buffer.count - capacityBytes)
         }
     }
 
+    /// Stop evicting: capture all audio from now until `drain`.
+    public mutating func seal() { sealed = true }
+
+    /// Return the buffered audio and reset to the pre-trigger ring
+    /// behaviour for the next episode.
     public mutating func drain() -> Data {
         let out = buffer
         buffer = Data()
+        sealed = false
         return out
     }
 }

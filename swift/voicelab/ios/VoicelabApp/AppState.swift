@@ -41,7 +41,7 @@ final class AppState: ObservableObject {
     }
 
     struct Turn: Identifiable {
-        enum Speaker { case user, jevons }
+        enum Speaker { case user, jevons, worker }
         let id = UUID()
         let speaker: Speaker
         var text: String
@@ -56,6 +56,16 @@ final class AppState: ObservableObject {
     @Published var triggerDB: Double = -38 {
         didSet { loop?.setTriggerDB(triggerDB) }
     }
+
+    /// Diagnostic counters (bridge bring-up): user transcripts,
+    /// overseer replies, worker notes, and the last reply text seen.
+    @Published private(set) var debugLine: String = ""
+    private var nUser = 0, nReply = 0, nWorker = 0
+
+    /// True when routing through the Claude overseer (JEVONS_OVERSEER_URL set).
+    private(set) var bridge = false
+    /// Overseer link connectivity (bridge mode only).
+    @Published private(set) var overseerConnected = false
 
     private var loop: VoiceLoop?
     private var streamingTurnIndex: Int?
@@ -78,12 +88,20 @@ final class AppState: ObservableObject {
             }
         }
 
+        // Bridge mode: JEVONS_OVERSEER_URL (e.g. ws://192.168.1.217:13705)
+        // routes transcripts to the Claude overseer over jevonsd /ws/chat.
+        // Absent → standalone Grok conversational mode.
+        let env = ProcessInfo.processInfo.environment
+        let overseerURL = (env["JEVONS_OVERSEER_URL"]).flatMap(URL.init(string:))
+        self.bridge = overseerURL != nil
+
         do {
             let l = try VoiceLoop(config: .init(
                 apiKey: apiKey,
                 voice: "Eve",
                 systemPrompt: "You are jevons, a voice-first assistant. Keep replies brief and conversational.",
-                vad: LocalVAD(triggerDB: triggerDB)
+                vad: LocalVAD(triggerDB: triggerDB),
+                overseerURL: overseerURL
             ))
             l.onStateChange = { [weak self] s in
                 Task { @MainActor in self?.applyState(s) }
@@ -95,13 +113,11 @@ final class AppState: ObservableObject {
                 Task { @MainActor in self?.completeAssistantTurn() }
             }
             l.onUserTranscript = { [weak self] text in
-                Task { @MainActor in self?.appendUserTurn(text) }
-            }
-            l.onAssistantTranscriptDelta = { [weak self] delta in
-                Task { @MainActor in self?.appendAssistantDelta(delta) }
-            }
-            l.onAssistantTranscriptDone = { [weak self] in
-                Task { @MainActor in self?.completeAssistantTurn() }
+                Task { @MainActor in
+                    self?.nUser += 1
+                    self?.appendUserTurn(text)
+                    self?.refreshDebug()
+                }
             }
             l.onError = { [weak self] err in
                 Task { @MainActor in
@@ -109,6 +125,43 @@ final class AppState: ObservableObject {
                     self?.status = .error
                 }
             }
+
+            if self.bridge {
+                // Assistant turns come from the overseer's reply text
+                // (authoritative); Grok's TTS-echo transcript is ignored
+                // to avoid duplication.
+                l.onOverseerReply = { [weak self] text in
+                    Task { @MainActor in
+                        self?.nReply += 1
+                        self?.appendAssistantDelta(text)
+                        self?.refreshDebug(lastReply: text)
+                    }
+                }
+                l.onResponseDone = { [weak self] in
+                    Task { @MainActor in self?.completeAssistantTurn() }
+                }
+                l.onWorkerNote = { [weak self] note in
+                    Task { @MainActor in
+                        self?.nWorker += 1
+                        self?.appendWorkerNote(note)
+                        self?.refreshDebug()
+                    }
+                }
+                l.onOverseerConnected = { [weak self] in
+                    Task { @MainActor in self?.overseerConnected = true }
+                }
+                l.onOverseerDisconnected = { [weak self] _ in
+                    Task { @MainActor in self?.overseerConnected = false }
+                }
+            } else {
+                l.onAssistantTranscriptDelta = { [weak self] delta in
+                    Task { @MainActor in self?.appendAssistantDelta(delta) }
+                }
+                l.onAssistantTranscriptDone = { [weak self] in
+                    Task { @MainActor in self?.completeAssistantTurn() }
+                }
+            }
+
             self.loop = l
             try l.start()
             status = .idle
@@ -143,5 +196,20 @@ final class AppState: ObservableObject {
 
     private func completeAssistantTurn() {
         streamingTurnIndex = nil
+    }
+
+    private var lastReplyText = ""
+    private func refreshDebug(lastReply: String? = nil) {
+        if let r = lastReply { lastReplyText = r }
+        let tail = lastReplyText.isEmpty ? "" : " · «\(lastReplyText.prefix(40))»"
+        debugLine = "u:\(nUser) r:\(nReply) w:\(nWorker)\(tail)"
+    }
+
+    private func appendWorkerNote(_ note: OverseerLink.WorkerNote) {
+        // Close any in-flight assistant stream so the note stands alone.
+        streamingTurnIndex = nil
+        let tag = note.failed ? "⚠︎" : "✓"
+        let head = note.agent.isEmpty ? "" : "\(note.agent): "
+        turns.append(.init(speaker: .worker, text: "\(tag) \(head)\(note.content)"))
     }
 }
