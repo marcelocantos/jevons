@@ -811,6 +811,31 @@ targets:
     - T30
     origin: manual
     discovered: 2026-07-04
+  T32:
+    name: 'Jevons builds owner-requested capabilities itself — exemplar: it conjures a live GitHub PR-status hover popup (CI checks + outcomes) on demand, not a pre-built product feature'
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '[capability | decidable] From a conversational request (e.g. ''show me this PR''s status, CI on hover''), JEVONS ITSELF assembles and renders a working live widget on its generative surface (T29). We do not hand-build the widget and it is NOT shipped as a fixed product feature; it degrades to text on failure.'
+    - '[data access | decidable] Jevons''s capability toolchain can fetch the underlying data: GitHub PR + check-run status (via gh / GitHub API) is reachable from within Jevons, exposing live CI state per check (queued / in_progress / success / failure) with a refresh path.'
+    - '[exemplar oracle | class-2] The generated PR-status hover popup works end to end on a real owned PR: hovering a PR reference shows its current CI checks and outcomes, and reflects a state change (a check going pending → pass/fail) on refresh. This is the recorded demonstration that the self-build toolchain is real.'
+    - '[framing | load-bearing] The acceptance is that the CAPABILITY exists — Jevons can build this class of thing from conversation (charter ''only interface is Jevons / all UI generated on demand'') — with this widget as the proof, NOT that this specific PR dashboard ships in the product. If the graders find themselves shipping a bespoke PR panel, the target is being read wrong.'
+    - '[human gate | class 3 | isolated] Whether the generated widget is genuinely good/useful is a one-time owner accept/reject, kept separate from the decidable capability criteria above so the target does not inherit that judgment''s p.'
+    context: |-
+      Requested 2026-07-05. The owner wants, as an example, to hover a GitHub PR and see a popup of its current status — especially CI processes and their outcomes. Crucially this is NOT a feature to bake into Jevons the product: it is something Jevons the CEO builds FOR the owner, on demand. The real desired state is that Jevons HAS THE TOOLS to build such capabilities itself.
+
+      So this is a capability/showcase target, using the PR-status-with-CI hover popup as the concrete acceptance exemplar. It exercises three things end to end: (a) data access — GitHub PR + check-run status via gh/API from inside Jevons's toolchain (jevonsd already shells out to gh in internal/mcpserver/activework.go, so partial substrate exists); (b) the generative UI surface — Jevons authors + renders the widget itself ([[project_ui_philosophy]], charter 'Interaction' principle, 🎯T29's TypeScript-against-a-component-SDK generative canvas); (c) live/refreshing CI state.
+
+      Depends on 🎯T29 (the generative rich visual surface — currently DEFERRED), which is the enabling substrate; relates to 🎯T30 (the butler/CEO that operates it). The win is Jevons composing the widget from a conversation, proving the 'agent builds its own UI/tools' thesis — not us shipping a PR dashboard. See [[project_butler_mvp]].
+    depends_on:
+    - T29
+    tags:
+    - visual
+    - generative
+    - showcase
+    origin: manual
+    discovered: 2026-07-05
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
