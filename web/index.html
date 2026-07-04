@@ -30,6 +30,7 @@
   --accent-dim: rgba(239,68,68,0.18);
   --user-bg: rgba(239,68,68,0.16);
   --user-border: rgba(239,68,68,0.4);
+  --user-bg-editing: rgba(239,68,68,0.30);
   --green: #4ade80;
   --red: #ef4444;
   --amber: #fbbf24;
@@ -57,6 +58,7 @@
   --accent-dim: rgba(109,93,211,0.1);
   --user-bg: rgba(109,93,211,0.08);
   --user-border: rgba(109,93,211,0.2);
+  --user-bg-editing: rgba(109,93,211,0.18);
   --green: #10b981;
   --red: #ef4444;
   --amber: #d97706;
@@ -87,6 +89,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 .msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; }
 .msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: pre-wrap; word-wrap: break-word; }
+/* The message currently being edited via up/down recall. Brighter bg +
+   full-accent border (same 1px width → no reflow) + a box-shadow ring
+   to "thicken" the border without shifting geometry. */
+.msg.user.editing { background: var(--user-bg-editing); border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .msg.jevons { align-self: flex-start; background: transparent; color: var(--text); white-space: normal; padding: 10px 4px; }
 
 /* Markdown in agent responses */
@@ -252,7 +258,7 @@ transport.onOpen = () => {
   const v = input.value;
   dot.className = 'dot on'; sTxt.textContent = 'connected'; sendBtn.disabled = false;
   msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
-  msgHistory = []; histIdx = null; histDraft = '';
+  msgHistory = []; histIdx = null; histDraft = ''; editingEl = null;
   input.value = v;
 };
 transport.onClose = () => {
@@ -274,8 +280,8 @@ function handle(m) {
     const content = m.message?.content;
     if (typeof content === 'string') {
       closeTurn();
-      addMsg('user', content, msgTs);
-      if (content && msgHistory[msgHistory.length - 1] !== content) msgHistory.push(content);
+      const uEl = addMsg('user', content, msgTs);
+      if (content && msgHistory[msgHistory.length - 1]?.text !== content) msgHistory.push({ text: content, el: uEl });
       startTurn();
     } else if (Array.isArray(content)) {
       content.forEach(c => {
@@ -506,9 +512,21 @@ setInterval(() => {
 // Message-recall history (up/down arrow, shell-style). Populated from
 // user turns as they render (so it survives a reload from the replayed
 // transcript). histIdx === null means we're editing the live input.
-let msgHistory = [];
+let msgHistory = [];   // [{text, el}] — el is the rendered user bubble
 let histIdx = null;
 let histDraft = '';
+let editingEl = null;  // the bubble currently highlighted as "being edited"
+
+// setEditingHighlight moves the .editing highlight to el (or clears it),
+// scrolling it into view so you can see which message you're editing.
+function setEditingHighlight(el) {
+  if (editingEl && editingEl !== el) editingEl.classList.remove('editing');
+  editingEl = el || null;
+  if (editingEl) {
+    editingEl.classList.add('editing');
+    editingEl.scrollIntoView({ block: 'nearest' });
+  }
+}
 
 function send() {
   const t = input.value.trim();
@@ -519,7 +537,7 @@ function send() {
   if (workingEl) transport.send('{"type":"interrupt"}');
   transport.send(t);
   input.value = '';
-  histIdx = null; histDraft = '';
+  histIdx = null; histDraft = ''; setEditingHighlight(null);
   autoGrow();
   // Sending pins us to the bottom so the outgoing message and the reply
   // scroll into view, even if we'd scrolled up to read history.
@@ -542,9 +560,12 @@ function recallHistory(dir) {
   if (histIdx >= msgHistory.length) {  // walked back to the live draft
     histIdx = null;
     input.value = histDraft;
+    setEditingHighlight(null);
   } else {
     if (histIdx < 0) histIdx = 0;      // clamp at the oldest
-    input.value = msgHistory[histIdx];
+    const entry = msgHistory[histIdx];
+    input.value = entry.text;
+    setEditingHighlight(entry.el);
   }
   autoGrow();
   // Put the caret at the end of the recalled text.
