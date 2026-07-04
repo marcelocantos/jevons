@@ -307,20 +307,22 @@ targets:
     discovered: 2026-03-27
     achieved: 2026-04-13
   T16.2:
-    name: Session grandfathering
-    status: identified
+    name: Session grandfathering — adopt existing sessions as durable observe-only threads
+    status: converging
     value: 8.0
     cost: 8.0
     acceptance:
-    - A session from the memory DB can be linked to an agent definition with a name, repo association, and session ID
-    - Grandfathered agents appear in `jevons_agent_list` with their status
-    - Grandfathered agents can receive messages via `jevons_agent_send`
-    - A grandfathered session can be promoted to PO status or assigned under an existing PO
-    - Sessions idle beyond a configurable threshold are flagged for retirement
-    context: |
-      Desired state: a standalone Claude Code session can be registered
-      ("grandfathered") as an agent in Jevon's agent registry, making it
-      visible in `jevons_agent_list` and addressable via `jevons_agent_send`.
+    - '[decidable | ORACLE: internal/butler e2e test — DONE] ADOPT-OBSERVE: a Claude Code session is registered by session ID as a durable thread (id, workdir, claude session id, description) NON-INVASIVELY — no process is taken over or spawned; the session''s own transcript is tailed for status. Adopting a session with no transcript on disk fails cleanly.'
+    - '[decidable | ORACLE: e2e test — DONE] The thread appears in a unified thread list (jevons_thread_list) with a transcript-derived status: active/working/blocked/done/idle plus a recent-activity summary (jevons_thread_status).'
+    - '[decidable | ORACLE: e2e test — DONE] The thread set is durable across a jevonsd restart: records persist to ~/.jevons/threads.json via atomic write and a fresh butler recovers the full set.'
+    - '[decidable — DEFERRED to T24/T30 direct] TAKE-OVER: an adopted observe-only thread becomes directable via --resume once the owner stops driving it (two-writer handover), rather than being directed while another writer holds the session.'
+    - '[decidable — DEFERRED to T30 PROCESS-AS-CACHE GC] Sessions idle beyond a configurable threshold are stopped resumably and flagged; the thread persists and rehydrates on next interaction.'
+    context: |-
+      Reframed 2026-07-05 from the stale pre-butler acceptance (memory-DB linking, jevons_agent_send visibility, promotion to PO) to the adopt-observe slice T30 actually needs. A THREAD is a durable semantic unit (transcript + metadata + derived status), NOT tied to a live process — the spine of the butler/CEO model.
+
+      Landed (branch butler-threads): internal/thread (durable Store at ~/.jevons/threads.json with atomic write; State/Status DeriveStatus state machine over a transcript tail), internal/butler (CEO orchestrator: Adopt/List/Status over Store + discovery.Scanner + transcript.Reader), transcript.Tail/Entry, and jevons_thread_{adopt,list,status} MCP tools. Verified by internal/butler/butler_e2e_test.go (the butler-loop oracle) with JSONL fixtures — no live claude, deterministic, CI-runnable.
+
+      Remaining (converging, later commits/targets): take-over of an adopted thread for direction (needs T24's --resume handling) and process-as-cache GC (T30). Those flip the two DEFERRED criteria and complete the target.
     depends_on:
     - T16.1
     origin: manual
@@ -784,6 +786,63 @@ targets:
     origin: manual
     discovered: 2026-04-09
     achieved: 2026-04-09
+  T30:
+    name: 'Jevons runs production-worthy as a web-only butler/CEO: adopts, spawns, monitors, and directs agents on the owner''s behalf, and never loses a thread'
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '[decidable | ORACLE: e2e integration test] ADOPT-OBSERVE: given a list of session IDs in conversation (''adopt these: ...''), each is registered as a durable thread (id, workdir, claude session id, description) and appears in the thread list with readable status; adoption is non-invasive — no running process is taken over, the transcript is tailed for status. Test adopts a known session id and asserts the registry entry + readable status + that no process was spawned.'
+    - '[decidable | ORACLE: e2e integration test] SPAWN + DIRECT: Jevons spawns an agent for a stated piece of work; a directed message reaches that agent and its response round-trips back to the user over the web chat. Test spawns a (mock or real) agent, sends, asserts the response returns.'
+    - '[decidable | ORACLE: e2e integration test] STATUS: for any thread (adopted or spawned), current status (active/idle/working/blocked/done + a recent-activity summary derived from its transcript) is retrievable on demand.'
+    - '[decidable | ORACLE: e2e integration test — LOAD-BEARING, rule 11] NEVER LOSE A THREAD: after a jevonsd restart, the full thread set persists (durable registry), and any thread can be rehydrated on demand (idle transcript -> --resume -> continue the conversation). Test restarts the daemon and asserts the thread set is intact and a rehydrate succeeds with continuity.'
+    - '[decidable | ORACLE: e2e integration test — LOAD-BEARING, rule 11] NO SILENT-FAIL DIRECT: directing a thread whose process has aged out or been GC''d does not silently fail (the T24 wedge) — it transparently rehydrates and delivers, or returns a distinct actionable error. Test ages/kills a thread''s process, directs it, asserts delivery or a typed error, never a silent 30s timeout.'
+    - '[decidable | ORACLE: e2e integration test] PROCESS-AS-CACHE GC: an idle thread''s process is stopped resumably after a threshold (freeing resources); the thread persists and rehydrates on next interaction. Test asserts idle -> stopped -> registry intact -> rehydrate.'
+    - '[decidable | ORACLE: T19 checks] ALWAYS-ON: jevonsd runs under brew services (keep_alive, PATH-augmented), survives a reboot, and resolves the external tools it shells out to.'
+    - '[decidable] WEB-ONLY: the entire v1 interaction is the web chat over /ws/chat rendering plain markdown; no native app or other client is required to spawn/adopt/monitor/direct.'
+    - '[class-3 HUMAN GATE — isolated, once, rule 1] In real daily use over roughly a week, running the fleet by talking to Jevons in the web chat is satisfactory: spawn/adopt/status/direct feel natural in conversation, and its briefings are good enough that dropping into a raw session is rare. One owner accept/reject at the end; kept separate from the decidable criteria above so the target does not inherit this clause''s p.'
+    context: |-
+      The near-term focus (2026-07-04), narrowed hard from the broadened T27 hub scope. Jevons purely as the owner's butler/CEO: connect the owner to agents it spawns, watches, gets status from, and directs on their behalf — nothing else. T27 (provider hub), T29 (rich generative UI), and voice/iPad are all explicitly DEFERRED.
+
+      Product shape (v1): a WEB-ONLY chat where you talk to Jevons; it renders plain markdown now (T29 is the deferred rich-surface ambition). The only interface is Jevons — zero pre-built UI (charter 'Interaction' principle); any UI is generated on demand.
+
+      Threads model (the spine): a THREAD is a durable semantic unit (transcript + target + status), NOT tied to a process. The process is a disposable cache — spun up to interact, SIGINT'd/stopped when idle, rehydrated on demand via --resume. This is what kills the reboot fear ('remember where we were no matter what happens'). The CEO owns thread lifecycle (when to start/stop), and translates between the owner's work-language ('the multimaze2 rebuild') and the underlying threads — no thread-management UI.
+
+      Grandfathering is critical-path, not later: the owner has many active sessions to bring in. v1 = adopt-observe by session ID, conversationally. Two-writer constraint: a session actively driven in a terminal can be registered+observed (transcript tailed) but not directed until handed over (take-over = --resume, requires the owner to stop driving it). Adopt-observe now; take-over on demand.
+
+      Critical path: grandfathering adopt-observe (T16.2, the slice that matters) -> threads-durable + no-silent-fail direct (T24) -> always-on (T19), all under one e2e integration harness (the oracle, to be built — jevonsd has unit tests but no butler-loop integration test). Load-bearing properties (oracle-first rule 11): 'never lose a thread' (durability/rehydration) and 'no silent-fail direct' — if either breaks, the butler is worthless; both carry explicit decidable oracles above.
+
+      Verification note: the build loop runs against the integration harness, never against 'does the chat feel right' (rule 2). The conversational-quality judgment is the single isolated class-3 gate at the end.
+    depends_on:
+    - T16.2
+    - T24
+    - T19
+    origin: manual
+    discovered: 2026-07-04
+  T31:
+    name: Jevons enforces oracle-first as a system property and interactively co-develops oracles from intent for greenfield work
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'ENFORCEMENT (independent gate, oracle-first rule 9): no work item proceeds to production without either a declared executable oracle or an explicitly recorded accepted-risk / isolated class-3 gate. Jevons is that gate and it did not produce the work, so its judgement is structurally independent of the executor. Verifiable: every accepted work item carries an oracle reference or a logged risk acceptance; none is accepted on an agent''s bare ''done''.'
+    - 'GREENFIELD ELICITATION: for new software (no reference to extract from), Jevons runs an interactive design process that produces, ALONGSIDE the design, an oracle-coverage map — which parts of the intended behaviour are pinned by executable checks, which are still fuzzy, and the load-bearing concrete examples (''when X, expect Y'') elicited from the owner that seed those checks.'
+    - 'SPIRAL, not waterfall: the process supports design -> thin slice -> owner reacts -> intent sharpens -> new oracle, capturing each sharpened intent as an executable check; production work is refused on still-fuzzy parts until the intent is pinned enough to test.'
+    - 'DECIDABLE-FROM-TASTE SORT (rule 1): the process explicitly separates decidable criteria from irreducibly perceptual taste, making most functional intent decidable and flagging the residue as a single owner accept/reject — so nothing is built against ''feel'' by accident, and no decidable target inherits a perceptual clause''s p.'
+    - 'PROPORTIONALITY + GOODHART GUARDS: Jevons exercises judgement about when a thing is ripe for an oracle vs. still an exploratory spike (does not straitjacket exploration), and drives toward LOAD-BEARING examples so the elicited oracle pins the real intent rather than an incidental one (rule 6).'
+    - '[class-3 HUMAN GATE, isolated] The elicited oracles faithfully reproduce the owner''s intent — validated by the owner in real design sessions. One accept/reject on the process''s fidelity, kept separate from the decidable enforcement criteria above.'
+    context: |-
+      DEFERRED / future capability (filed 2026-07-04). Sits ON TOP of the butler MVP (T30) — Jevons must exist and reliably coordinate before it can oversee planning and act as final judge of outcomes. Must not re-expand T30.
+
+      The idea: /oracle-first is currently a per-invocation hack the owner types to force a testability bias. This target makes it a SYSTEM PROPERTY: Jevons oversees planning, ensures the verification-first principles are followed, and acts as the independent final judge of the outcome — the CEO's QA function from the charter ('drive p down without ever accepting unverified work'). Structurally stronger than putting it in CLAUDE.md, which is passive guidance checked by the same agent that has an incentive to declare done (oracle-first rule 9: attestation != execution). Jevons, as a party that did not do the work, is a real gate.
+
+      The novel, harder half is GREENFIELD ORACLE ELICITATION. The oracle-first doctrine is port-centric: extract the reference's behaviour into an executable oracle. For NEW software there is no reference — the 'reference' is the owner's intent, which is incomplete, evolving, and partly tacit. So the oracle must be MANUFACTURED from intent via an interactive process (like Claude's plan mode but far more detailed and, crucially, very interactive), converting intent to load-bearing concrete examples -> executable checks, progressively, in a design->slice->react spiral, sorting decidable behaviour from irreducible taste early. This is the enhancement to doctrine.md filed alongside this target.
+
+      Dogfoods T29: the interactive design process is itself a rich generated surface — Jevons renders the evolving design + its oracle-coverage map (pinned / fuzzy / examples), the owner manipulates it. Relates to charter.md (arbitration role, the four-role constitution: Jevons arbitrates but never produces or certifies the evidence it rules on) and the oracle-first skill/doctrine."
+    depends_on:
+    - T30
+    origin: manual
+    discovered: 2026-07-04
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
