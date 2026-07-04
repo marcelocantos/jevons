@@ -8,7 +8,8 @@ import VoicelabKit
 struct CLIArgs {
     var system: String = "You are jevons, a voice-first assistant. Keep replies brief and conversational."
     var voice: String = "Eve"
-    var verbose: Bool = false
+    var triggerDB: Double = -38
+    var silenceSec: Int = 10
 }
 
 func parseArgs() -> CLIArgs {
@@ -20,8 +21,10 @@ func parseArgs() -> CLIArgs {
             if let v = iter.next() { args.system = v }
         case "--voice":
             if let v = iter.next() { args.voice = v }
-        case "-v", "--verbose":
-            args.verbose = true
+        case "--trigger-db":
+            if let v = iter.next(), let d = Double(v) { args.triggerDB = d }
+        case "--silence-sec":
+            if let v = iter.next(), let n = Int(v) { args.silenceSec = n }
         case "--help", "-h":
             printUsage()
             exit(0)
@@ -36,12 +39,19 @@ func parseArgs() -> CLIArgs {
 
 func printUsage() {
     fputs("""
-voicelab — full-duplex Grok Realtime voice loop with OS-level AEC.
+voicelab — episodic Grok Realtime voice loop with OS-level AEC.
 
 Usage:
   voicelab [--voice <name>] [--system <prompt>]
+           [--trigger-db <dBFS>] [--silence-sec <N>]
 
-Talk freely; server VAD detects when you've stopped. Ctrl-C to quit.
+Idle until local VAD detects you speaking; opens a Grok session,
+holds it open while turns continue, closes it after a silent
+gap. Ctrl-C to quit.
+
+  --trigger-db   activation threshold in dBFS (default -38)
+  --silence-sec  silence after response.done before closing
+                 the Grok session (default 10s)
 
 Requires xai-api-key in the macOS keychain:
   security add-generic-password -a jevons -s xai-api-key -w <key>
@@ -69,14 +79,18 @@ do {
         apiKey: apiKey,
         voice: args.voice,
         systemPrompt: args.system,
-        verbose: args.verbose
+        vad: LocalVAD(triggerDB: args.triggerDB),
+        postResponseSilenceMs: args.silenceSec * 1000
     ))
 } catch {
     fatal("\(error.localizedDescription)")
 }
 
+loop.onStateChange = { state in
+    fputs("voicelab: state → \(state.rawValue)\n", stderr)
+}
 loop.onSessionReady = {
-    fputs("voicelab: session ready — start talking. Ctrl-C to quit.\n", stderr)
+    fputs("voicelab: session ready\n", stderr)
 }
 loop.onUserTranscript = { text in
     print("\n> \(text.trimmingCharacters(in: .whitespacesAndNewlines))")
@@ -98,12 +112,12 @@ signal(SIGINT) { _ in
 }
 signal(SIGTERM) { _ in exit(0) }
 
-Task {
-    do {
-        try await loop.start()
-    } catch {
-        fatal("start: \(error.localizedDescription)")
-    }
+do {
+    try loop.start()
+} catch {
+    fatal("start: \(error.localizedDescription)")
 }
+
+fputs("voicelab: listening. Talk to wake the session.\n", stderr)
 
 dispatchMain()

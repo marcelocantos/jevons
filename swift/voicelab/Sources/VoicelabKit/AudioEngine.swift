@@ -103,6 +103,9 @@ public final class AudioEngine {
     }
 
     public func start() throws {
+        // iOS needs an active .playAndRecord session before the input
+        // node delivers audio; no-op on macOS.
+        try AudioSessionConfig.activateVoiceChat()
         engine.prepare()
         do {
             try engine.start()

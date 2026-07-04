@@ -18,6 +18,7 @@ struct ContentView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 statusBar
+                tuningBar
                 Divider()
                 transcriptScroll
             }
@@ -25,6 +26,44 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .task { await state.start() }
+    }
+
+    /// Live VAD-tuning strip: a dBFS meter with the current trigger
+    /// threshold marked, plus a slider to move it. When the green
+    /// level bar crosses the threshold tick in .idle, a Grok episode
+    /// opens. Remove once the car threshold is dialled in.
+    private var tuningBar: some View {
+        VStack(spacing: 4) {
+            GeometryReader { geo in
+                let lo = -80.0, hi = 0.0
+                let frac = { (db: Double) in
+                    max(0, min(1, (db - lo) / (hi - lo)))
+                }
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(.quaternary)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(state.micDB >= state.triggerDB ? Color.green : Color.blue)
+                        .frame(width: geo.size.width * frac(state.micDB.isFinite ? state.micDB : lo))
+                    Rectangle()
+                        .fill(.orange)
+                        .frame(width: 2)
+                        .offset(x: geo.size.width * frac(state.triggerDB))
+                }
+            }
+            .frame(height: 12)
+            HStack {
+                Text(state.micDB.isFinite ? String(format: "%.0f dBFS", state.micDB) : "—")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                Slider(value: $state.triggerDB, in: -70 ... -20)
+                Text(String(format: "trig %.0f", state.triggerDB))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
 
     private var statusBar: some View {

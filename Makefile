@@ -80,6 +80,28 @@ bin/voicelab: $(VOICELAB_SRC)
 run-voicelab: bin/voicelab
 	bin/voicelab
 
+# ── voicelab iPad app ───────────────────────────────
+# JEVONS_DEVICE_ID: the iPad's devicectl identifier (Jevons mini).
+# -allowProvisioningDeviceRegistration self-heals the free-provisioning
+# weekly device de-registration that otherwise fails the build with
+# "your team has no devices". After a cert regen the app must be
+# re-trusted once on-device (Settings → General → VPN & Device Mgmt).
+JEVONS_DEVICE_ID ?= 53F85BAC-9B4A-5392-886A-DE30C2F764E3
+VOICELAB_APP := swift/voicelab/ios/build/Build/Products/Release-iphoneos/VoicelabApp.app
+
+.PHONY: voicelab-ios voicelab-deploy
+voicelab-ios:
+	cd swift/voicelab/ios && xcodegen generate
+	cd swift/voicelab/ios && xcodebuild -project VoicelabApp.xcodeproj -scheme VoicelabApp \
+		-configuration Release -destination 'id=$(JEVONS_DEVICE_ID)' -derivedDataPath build \
+		-allowProvisioningUpdates -allowProvisioningDeviceRegistration build
+
+voicelab-deploy: voicelab-ios
+	xcrun devicectl device install app --device $(JEVONS_DEVICE_ID) $(VOICELAB_APP)
+	@KEY=$$(security find-generic-password -a jevons -s xai-api-key -w 2>/dev/null | tr -d '\n'); \
+	xcrun devicectl device process launch --device $(JEVONS_DEVICE_ID) \
+		--environment-variables "{\"XAI_API_KEY\":\"$$KEY\"}" com.marcelocantos.voicelab
+
 # ── Run ──────────────────────────────────────────────
 .PHONY: run run-app run-jevonsd run-remote
 run-app: $(APP)

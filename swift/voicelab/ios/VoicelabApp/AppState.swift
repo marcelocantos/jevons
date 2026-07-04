@@ -7,30 +7,34 @@ import SwiftUI
 import VoicelabKit
 
 /// Observable state for the iPad shell: status indicator, scrolling
-/// transcript, last error. Owns the VoiceLoop and survives across
-/// the app's lifetime (recreated only on full process restart).
+/// transcript, last error. Owns the VoiceLoop (always-on locally,
+/// VAD-gated Grok sessions on top) and survives across the app's
+/// lifetime.
 @MainActor
 final class AppState: ObservableObject {
     enum Status {
+        case bootstrapping
         case idle
-        case connecting
-        case ready
+        case active
+        case closing
         case error
 
         var label: String {
             switch self {
-            case .idle: "idle"
-            case .connecting: "connecting…"
-            case .ready: "ready — talk freely"
+            case .bootstrapping: "starting…"
+            case .idle: "listening — talk to wake"
+            case .active: "live — talk freely"
+            case .closing: "wrapping up…"
             case .error: "error"
             }
         }
 
         var color: Color {
             switch self {
+            case .bootstrapping: .yellow
             case .idle: .secondary
-            case .connecting: .yellow
-            case .ready: .green
+            case .active: .green
+            case .closing: .orange
             case .error: .red
             }
         }
@@ -43,26 +47,26 @@ final class AppState: ObservableObject {
         var text: String
     }
 
-    @Published private(set) var status: Status = .idle
+    @Published private(set) var status: Status = .bootstrapping
     @Published private(set) var turns: [Turn] = []
     @Published private(set) var lastError: String?
+    /// Live mic level in dBFS for the tuning meter.
+    @Published private(set) var micDB: Double = -Double.infinity
+    /// VAD trigger threshold, adjustable from the UI while tuning.
+    @Published var triggerDB: Double = -38 {
+        didSet { loop?.setTriggerDB(triggerDB) }
+    }
 
     private var loop: VoiceLoop?
     private var streamingTurnIndex: Int?
 
     func start() async {
         guard loop == nil else { return }
-        status = .connecting
 
         let apiKey: String
         if let envKey = ProcessInfo.processInfo.environment["XAI_API_KEY"],
            !envKey.isEmpty {
-            // Persist whatever the launcher injected so subsequent
-            // launches don't need the env var (e.g. user double-taps
-            // the app after a manual restart).
-            do { try Keychain.save(envKey, service: "xai-api-key") } catch {
-                // Non-fatal — we still have the key in memory for this session.
-            }
+            do { try Keychain.save(envKey, service: "xai-api-key") } catch {}
             apiKey = envKey
         } else {
             do {
@@ -78,17 +82,16 @@ final class AppState: ObservableObject {
             let l = try VoiceLoop(config: .init(
                 apiKey: apiKey,
                 voice: "Eve",
-                systemPrompt: "You are jevons, a voice-first assistant. Keep replies brief and conversational."
+                systemPrompt: "You are jevons, a voice-first assistant. Keep replies brief and conversational.",
+                vad: LocalVAD(triggerDB: triggerDB)
             ))
-            l.onSessionReady = { [weak self] in
-                Task { @MainActor in self?.status = .ready }
+            l.onStateChange = { [weak self] s in
+                Task { @MainActor in self?.applyState(s) }
+            }
+            l.onMicLevel = { [weak self] db in
+                Task { @MainActor in self?.micDB = db }
             }
             l.onUserSpeechStarted = { [weak self] in
-                // Close any in-flight assistant turn. The audio cut-off
-                // already happened in VoiceLoop's hook; here we also
-                // need the transcript boundary to roll so the next
-                // response opens a new bubble instead of appending to
-                // the interrupted one.
                 Task { @MainActor in self?.completeAssistantTurn() }
             }
             l.onUserTranscript = { [weak self] text in
@@ -107,10 +110,19 @@ final class AppState: ObservableObject {
                 }
             }
             self.loop = l
-            try await l.start()
+            try l.start()
+            status = .idle
         } catch {
             lastError = error.localizedDescription
             status = .error
+        }
+    }
+
+    private func applyState(_ s: VoiceLoop.SessionState) {
+        switch s {
+        case .idle:    status = .idle
+        case .active:  status = .active
+        case .closing: status = .closing
         }
     }
 
