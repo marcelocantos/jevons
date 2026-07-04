@@ -14,19 +14,37 @@ Jevons** without jevonsd carrying any per-tool code.
 ## 1. Purpose & scope
 
 Jevons is the ecosystem aggregation hub. External tools — mnemo, doit,
-bullseye, ytt, … — register as **providers** and contribute up to three
+bullseye, ytt, … — register as **providers** and contribute up to two
 capabilities over one contract:
 
 - **feeds** — durable, replayable event streams (the fleet/evidence
   lane of the charter);
 - **ui** — a declarative view surface in the ViewNode vocabulary,
-  composed with other providers into one Jevons UI;
-- **mcp** — the provider's own MCP tools, re-exported into jevonsd's
-  `/mcp` surface.
+  composed with other providers into one Jevons UI.
 
-A provider declares which of the three it offers; none is mandatory. A
-feed-only provider (a sensor) and a tools-only provider (a pure
-capability) are both valid.
+A provider declares which it offers; neither is mandatory. A feed-only
+provider (a sensor) and a ui-only provider are both valid.
+
+### Not in scope: MCP tool aggregation
+An earlier draft added a third capability — providers re-export their
+MCP tools through jevonsd. **Cut (2026-07-04.)** That idea belonged to
+an era when the *aggregator was mnemo* (itself an MCP server), so a
+pass-through made local sense. As a jevonsd hub it is redundant: the
+fleet is **MCP-native by deliberate decision**, so the Jevons overseer
+agent (and every worker) already has **direct** MCP access to mnemo,
+doit, bullseye, spyder, … via its own config. Proxying a provider's
+tools through jevonsd (jevonsd-as-client → provider, then
+jevonsd-as-server → agent) is an extra hop buying nothing the agent
+lacks. Tools stay **direct agent↔provider**. The hub aggregates only
+what an agent tool-call *cannot* deliver: live push **data** and a
+composed **UI**.
+
+> jevonsd remains an MCP **server** for one unrelated reason — its own
+> managed agents discover it via a generated `~/.jevons/jevons/.mcp.json`
+> (`cmd/jevonsd/main.go`) and call its fleet-control tools
+> (`jwork`, `jevons_agent_*`, `jevons_active_work`). That is internal
+> agent-control plumbing, localhost-bound and single-user; it is **not**
+> part of this contract and providers never touch it.
 
 **The load-bearing non-goal:** jevonsd carries **no per-provider code**.
 Adding mnemo, or a tool that doesn't exist yet, is a registration — not
@@ -55,8 +73,9 @@ jevonsd aggregates.
    declares it in its manifest; jevonsd surfaces the capability and
    never grants it implicitly.
 4. **doit gates actuation, not observation.** Feeds and UI are
-   read/attention paths and are ungated. A provider MCP tool that
-   *acts* is subject to doit like any other executed capability.
+   read/attention paths and are ungated. When a UI surface triggers a
+   provider action (§6), the provider actuates under its own doit
+   policy — jevonsd relays intent, never executes.
 5. **Transport-agnostic.** A provider is either **launched** by jevonsd
    or **connected** to already-running; the contract is identical either
    way (§3).
@@ -98,8 +117,7 @@ The provider answers `describe` with:
     ],
     "ui":   [
       { "surface": "mnemo.status", "title": "mnemo", "feeds": ["health"] }
-    ],
-    "mcp":  { "endpoint": "http://127.0.0.1:7702/mcp", "tool_prefix": "mnemo_" }
+    ]
   },
   "egress": false                // declares external-network reach
 }
@@ -169,17 +187,15 @@ served HTML.**
   model → surface re-render**. A provider never pushes a view
   imperatively; it pushes feed state and the surface derives.
 
-## 7. Capability: mcp (tool re-export)
+## 7. Tools are out of scope (deliberately)
 
-The provider declares an MCP `endpoint`. jevonsd runs an **MCP client**
-(🎯T27.4; jevonsd is MCP-*producer*-only today) that connects, lists the
-provider's tools, and re-exports them into jevonsd's own `/mcp` surface
-under `tool_prefix`. Calls are proxied through; results pass back
-unaltered. The provider's tools thereby become available to the Jevons
-overseer agent and any MCP client of jevonsd, with no per-tool code.
-
-doit gates any re-exported tool that actuates, exactly as it gates a
-first-party tool (charter §2.4).
+See §1. A provider's own MCP tools remain reachable **directly** by the
+Jevons overseer agent through the agent's own MCP config — the fleet is
+MCP-native, so no hub proxying is needed or wanted. This contract adds
+no tool path. If a provider wants a capability invoked *from a UI
+surface* (e.g. a button), that action routes back to the provider as an
+`ActionMessage` (§6), and the provider actuates under its own doit
+policy — jevonsd relays intent, it does not execute.
 
 ## 8. Versioning & trust
 
@@ -198,17 +214,15 @@ first-party tool (charter §2.4).
 The contract ships with an **executable spec**, not just this prose:
 
 - **Reference mock provider** (`cmd/mockprovider` or `internal/provider/mock`)
-  that declares **exactly one** replay feed, **one** ViewNode surface,
-  and **one** MCP tool, all with known fixed content.
+  that declares **exactly one** replay feed and **one** ViewNode
+  surface, all with known fixed content.
 - **`go test` conformance suite** that registers the mock against a test
   jevonsd and asserts, through jevonsd's public surfaces:
   1. the feed's events appear in the aggregated model, in order, and
      resume from a cursor across a simulated restart with no gap and no
      re-ingest;
   2. the surface renders into the composed UI and an `ActionMessage`
-     round-trips to the mock;
-  3. the MCP tool is listed and callable through jevonsd's `/mcp` under
-     its prefix.
+     round-trips to the mock.
 - **No-per-provider-code check:** a test asserts (grep/build) that
   jevonsd contains no identifier naming a concrete provider (`mnemo`,
   etc.) in its provider-handling path.
@@ -229,10 +243,13 @@ fans into:
 |------|--------|
 | structured config + persistence (provider registry) | 🎯T27.2 |
 | generic supervisor (launch) + connect + reconcile | 🎯T27.3 |
-| MCP **client** aggregation into `/mcp` | 🎯T27.4 |
 | feed ingestion → aggregated live model | 🎯T27.5 |
 | server-side UI producer, multi-provider compose | 🎯T27.6 |
 | desktop menu-bar/tray head over the aggregate | 🎯T27.7 |
+
+**🎯T27.4 (MCP tool aggregation) is retired** — cut with the tools
+capability. jevonsd stays MCP-server-only for its own agents; it does
+not become an MCP client.
 
 ## 11. Open questions for sign-off
 
@@ -246,8 +263,6 @@ fans into:
 3. **UI composition authority** — does Jevons (layout owner) get to
    reorder/hide provider surfaces by policy, or is placement
    provider-declared? Affects whether the CEO can triage its own panel.
-4. **MCP re-export auth** — does jevonsd pass the caller's identity to
-   the provider, or call as itself? Bears on doit attribution.
-5. **`_filter` envelope** — pursue as an independent mcpbridge feature,
+4. **`_filter` envelope** — pursue as an independent mcpbridge feature,
    or drop? Orthogonal to this contract; listed only to close the
    conflation.
