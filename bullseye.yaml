@@ -756,7 +756,7 @@ targets:
     achieved: 2026-04-09
   T30:
     name: 'Jevons runs production-worthy as a web-only butler/CEO: adopts, spawns, monitors, and directs agents on the owner''s behalf, and never loses a thread'
-    status: identified
+    status: converging
     value: 0.0
     cost: 0.0
     acceptance:
