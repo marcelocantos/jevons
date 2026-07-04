@@ -6,7 +6,9 @@ Today that means remote control for [Claude Code](https://docs.anthropic.com/en/
 instances: talk to a coordinator that manages Claude Code workers — from a
 terminal, or (eventually) from your phone. The charter is wider: one cockpit
 that connects you to every AI service you run — status at a glance, events
-that need your attention, and an agent that can act on any of them.
+that need your attention, and an agent that can act on any of them. How
+Jevons governs — the owner/CEO model, arbitration on attested evidence, and
+risk-graded decision rights — is defined in [docs/charter.md](docs/charter.md).
 
 ## How it works
 
