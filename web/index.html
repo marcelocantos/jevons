@@ -252,6 +252,7 @@ transport.onOpen = () => {
   const v = input.value;
   dot.className = 'dot on'; sTxt.textContent = 'connected'; sendBtn.disabled = false;
   msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
+  msgHistory = []; histIdx = null; histDraft = '';
   input.value = v;
 };
 transport.onClose = () => {
@@ -274,6 +275,7 @@ function handle(m) {
     if (typeof content === 'string') {
       closeTurn();
       addMsg('user', content, msgTs);
+      if (content && msgHistory[msgHistory.length - 1] !== content) msgHistory.push(content);
       startTurn();
     } else if (Array.isArray(content)) {
       content.forEach(c => {
@@ -501,11 +503,23 @@ setInterval(() => {
   });
 }, 30000);
 
+// Message-recall history (up/down arrow, shell-style). Populated from
+// user turns as they render (so it survives a reload from the replayed
+// transcript). histIdx === null means we're editing the live input.
+let msgHistory = [];
+let histIdx = null;
+let histDraft = '';
+
 function send() {
   const t = input.value.trim();
   if (!t) return;
+  // If a turn is still in flight (no reply yet), cancel it and resubmit
+  // the edited message. Interrupt first; claudia's Send waits for the
+  // TUI to return to ready before it types, so the ordering is safe.
+  if (workingEl) transport.send('{"type":"interrupt"}');
   transport.send(t);
   input.value = '';
+  histIdx = null; histDraft = '';
   autoGrow();
   // Sending pins us to the bottom so the outgoing message and the reply
   // scroll into view, even if we'd scrolled up to read history.
@@ -513,6 +527,35 @@ function send() {
   setWorking(true);
   requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
 }
+
+// recallHistory walks msgHistory into the input. dir = -1 (older) or +1
+// (newer). Returns true if it handled the key (so the caller can
+// preventDefault), false to let the arrow move the cursor normally.
+function recallHistory(dir) {
+  if (msgHistory.length === 0) return false;
+  if (histIdx === null) {
+    if (dir > 0) return false;         // Down on live input: nothing to do
+    histDraft = input.value;           // save what we were typing
+    histIdx = msgHistory.length;
+  }
+  histIdx += dir;
+  if (histIdx >= msgHistory.length) {  // walked back to the live draft
+    histIdx = null;
+    input.value = histDraft;
+  } else {
+    if (histIdx < 0) histIdx = 0;      // clamp at the oldest
+    input.value = msgHistory[histIdx];
+  }
+  autoGrow();
+  // Put the caret at the end of the recalled text.
+  input.selectionStart = input.selectionEnd = input.value.length;
+  return true;
+}
+
+// Cursor helpers so arrow-history only triggers at the text edges — a
+// multi-line draft still navigates line-by-line in the middle.
+function caretOnFirstLine() { return input.value.slice(0, input.selectionStart).indexOf('\n') === -1; }
+function caretOnLastLine() { return input.value.slice(input.selectionEnd).indexOf('\n') === -1; }
 
 // "Working" indicator: shown from when the user sends until Jevons's
 // reply text arrives, so a long synchronous turn (e.g. directing a
@@ -542,7 +585,13 @@ function autoGrow() {
 }
 
 // Enter submits, Shift-Enter inserts a newline.
-input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return; }
+  // Up/Down recall previous messages, but only at the text edges so a
+  // multi-line draft still navigates line-by-line in the middle.
+  if (e.key === 'ArrowUp' && caretOnFirstLine()) { if (recallHistory(-1)) e.preventDefault(); return; }
+  if (e.key === 'ArrowDown' && histIdx !== null && caretOnLastLine()) { if (recallHistory(+1)) e.preventDefault(); return; }
+});
 input.addEventListener('input', autoGrow);
 sendBtn.addEventListener('click', send);
 
