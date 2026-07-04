@@ -216,7 +216,6 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
                 autocapitalize="sentences"></textarea>
       <span id="input-hint" class="sr-only">Type a prompt for the Jevons assistant. Use full sentences with punctuation.</span>
       <button id="send" disabled aria-label="Send message">Send</button>
-      <button id="voice-btn" aria-label="Voice input" title="Click to toggle. Hold Ctrl to push-to-talk.">&#127908;</button>
     </div>
   </div>
   <div id="activity-pane">
@@ -450,7 +449,13 @@ let autoScroll = true;
 msgs.addEventListener('scroll', () => {
   autoScroll = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - 30;
 });
-function scrollDown() { if (autoScroll) msgs.scrollTop = msgs.scrollHeight; }
+function scrollDown() {
+  if (!autoScroll) return;
+  msgs.scrollTop = msgs.scrollHeight;
+  // Re-pin after layout settles — markdown/timestamps can grow the
+  // content height after the synchronous append, leaving us short.
+  requestAnimationFrame(() => { if (autoScroll) msgs.scrollTop = msgs.scrollHeight; });
+}
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }
 function summariseInput(obj) {
@@ -492,6 +497,10 @@ function send() {
   transport.send(t);
   input.value = '';
   autoGrow();
+  // Sending pins us to the bottom so the outgoing message and the reply
+  // scroll into view, even if we'd scrolled up to read history.
+  autoScroll = true;
+  requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
 }
 
 // Auto-grow the textarea: reset to one row, then expand to fit content
@@ -509,6 +518,15 @@ sendBtn.addEventListener('click', send);
 autoGrow();
 input.focus();
 connect();
+
+// On first load the server replays history as a burst of messages and
+// layout settles asynchronously, which can leave the view slightly above
+// the true bottom — so a freshly-typed message wouldn't scroll into view.
+// Pin to the bottom over the first second so we start at the latest.
+[0, 100, 250, 500, 1000].forEach(d => setTimeout(() => {
+  msgs.scrollTop = msgs.scrollHeight;
+  autoScroll = true;
+}, d));
 
 document.addEventListener('keydown', e => {
   if (e.key === 'PageUp') { e.preventDefault(); msgs.scrollBy(0, -msgs.clientHeight * 0.8); }
@@ -626,7 +644,11 @@ const voiceStatus = document.getElementById('voice-status');
 const voiceStatusText = document.getElementById('voice-status-text');
 let voiceActive = false;
 
-voiceBtn.addEventListener('click', () => {
+// Built-in voice/mic removed from the web UI — dictation is done via
+// Wispr Flow into the text field. The voice machinery below is left
+// dormant (never engaged) rather than ripped out. Guard the (now
+// absent) button so the rest of the script still loads.
+voiceBtn?.addEventListener('click', () => {
   if (voiceActive) stopVoice(); else startVoice();
 });
 
@@ -658,6 +680,7 @@ let pttArmTimer = null;
 const pttHeldKeys = new Set();
 
 function pttArm() {
+  return; // Ctrl push-to-talk disabled — using Wispr Flow, not the built-in mic.
   if (pttArmTimer || pttActive) return;
   pttArmTimer = setTimeout(() => {
     pttArmTimer = null;
