@@ -174,7 +174,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			cancel()
 			continue
 		}
-		if strings.EqualFold(msg, "stop") {
+		// Interrupt control frame (sent by the client on Esc). A literal
+		// "stop" is NOT special — it's a normal thing to say to Jevons.
+		if msg == `{"type":"interrupt"}` {
 			slog.Info("chat: interrupt")
 			if err := proc.Interrupt(); err != nil {
 				slog.Error("chat: interrupt failed", "err", err)

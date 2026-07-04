@@ -562,6 +562,8 @@ connect();
 document.addEventListener('keydown', e => {
   if (e.key === 'PageUp') { e.preventDefault(); msgs.scrollBy(0, -msgs.clientHeight * 0.8); }
   if (e.key === 'PageDown') { e.preventDefault(); msgs.scrollBy(0, msgs.clientHeight * 0.8); }
+  // Esc interrupts Jevons's current turn (like the Claude Code TUI).
+  if (e.key === 'Escape') { transport.send('{"type":"interrupt"}'); setWorking(false); }
 });
 
 // Theme toggle.
