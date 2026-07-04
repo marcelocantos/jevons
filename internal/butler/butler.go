@@ -24,17 +24,34 @@ import (
 // of assistant/tool/user lines without loading whole transcripts.
 const defaultTailEntries = 40
 
+// Fleet manages the disposable processes behind spawned threads. It is
+// the mechanism seam the butler drives; production is backed by
+// claudia.Registry, tests by a fake. The butler owns the *policy*
+// (when to rehydrate, when to reap); the Fleet owns the *mechanism*
+// (launch/resume a claude process, deliver a turn, stop it).
+type Fleet interface {
+	// Launch ensures a live process exists for the thread, resuming its
+	// session (--resume) when one already exists. Idempotent when the
+	// process is already alive. It blocks until the process is ready to
+	// accept input or returns an actionable error.
+	Launch(t *thread.Thread) error
+	// Send delivers a directed turn to the thread's live process and
+	// returns its reply. It requires a live process (Launch first).
+	Send(id, text string) (string, error)
+	// Alive reports whether a live process currently exists for the thread.
+	Alive(id string) bool
+	// Stop stops the process resumably — the thread and its session
+	// persist, and a later Launch rehydrates it (process-as-cache).
+	Stop(id string)
+}
+
 // Butler orchestrates threads. It is safe for concurrent use (the Store
 // it wraps is concurrency-safe; the scanner and reader are read-only).
 type Butler struct {
 	store   *thread.Store
 	scanner *discovery.Scanner
 	reader  *transcript.Reader
-
-	// processUp reports whether the butler owns a live process for the
-	// given thread ID. Wired to the claudia registry in production; nil
-	// (always-false) until the spawn path lands.
-	processUp func(id string) bool
+	fleet   Fleet
 
 	now           func() time.Time
 	idleThreshold time.Duration
@@ -42,11 +59,13 @@ type Butler struct {
 }
 
 // Config parameterises New. Store, Scanner, and Reader are required.
+// Fleet is required for the spawn/direct/GC paths but may be nil for an
+// observe-only butler (adopt/list/status still work).
 type Config struct {
-	Store     *thread.Store
-	Scanner   *discovery.Scanner
-	Reader    *transcript.Reader
-	ProcessUp func(id string) bool
+	Store   *thread.Store
+	Scanner *discovery.Scanner
+	Reader  *transcript.Reader
+	Fleet   Fleet
 	// Now and IdleThreshold are injected for deterministic tests; both
 	// default sensibly when zero.
 	Now           func() time.Time
@@ -59,7 +78,7 @@ func New(cfg Config) *Butler {
 		store:         cfg.Store,
 		scanner:       cfg.Scanner,
 		reader:        cfg.Reader,
-		processUp:     cfg.ProcessUp,
+		fleet:         cfg.Fleet,
 		now:           cfg.Now,
 		idleThreshold: cfg.IdleThreshold,
 		tailN:         defaultTailEntries,
@@ -113,6 +132,110 @@ func (b *Butler) Adopt(args AdoptArgs) (*thread.Thread, error) {
 	})
 }
 
+// SpawnArgs parameterises Spawn.
+type SpawnArgs struct {
+	ID          string // stable thread handle (required)
+	WorkDir     string // required
+	Description string
+	Model       string
+}
+
+// Spawn creates a new thread the butler owns end-to-end and launches its
+// process. The thread record is persisted before the process starts, so
+// even a launch that dies leaves a durable, rehydratable thread.
+func (b *Butler) Spawn(args SpawnArgs) (*thread.Thread, error) {
+	if b.fleet == nil {
+		return nil, fmt.Errorf("spawn: no fleet configured")
+	}
+	if args.ID == "" || args.WorkDir == "" {
+		return nil, fmt.Errorf("spawn: id and workdir are required")
+	}
+	if _, exists := b.store.Get(args.ID); exists {
+		return nil, fmt.Errorf("spawn: thread %q already exists", args.ID)
+	}
+
+	t := &thread.Thread{
+		ID:          args.ID,
+		Kind:        thread.KindSpawned,
+		WorkDir:     args.WorkDir,
+		Description: args.Description,
+		Model:       args.Model,
+		CreatedAt:   b.now(),
+	}
+	if err := b.store.Put(t); err != nil {
+		return nil, err
+	}
+
+	if err := b.fleet.Launch(t); err != nil {
+		return nil, fmt.Errorf("spawn %q: launch failed: %w", args.ID, err)
+	}
+	// Launch populates t.SessionID with the session the fleet minted, so
+	// the thread can be rehydrated later. Persist the updated record.
+	if err := b.store.Put(t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// Direct delivers a turn to a thread and returns its reply. It upholds
+// the two load-bearing guarantees:
+//
+//   - NEVER LOSE A THREAD / PROCESS-AS-CACHE: if the thread's process
+//     has been stopped or aged out, Direct transparently rehydrates it
+//     (--resume) before sending.
+//   - NO SILENT-FAIL: a thread whose process cannot be (re)started
+//     returns a distinct, actionable error — never a silent timeout.
+//
+// Adopted (observe-only) threads are refused until taken over, since a
+// second writer must not drive a session the owner still holds.
+func (b *Butler) Direct(id, text string) (string, error) {
+	if b.fleet == nil {
+		return "", fmt.Errorf("direct: no fleet configured")
+	}
+	t, ok := b.store.Get(id)
+	if !ok {
+		return "", fmt.Errorf("direct: no thread %q", id)
+	}
+	if t.Kind == thread.KindAdopted {
+		return "", fmt.Errorf("direct: thread %q is observe-only; take it over before directing it", id)
+	}
+
+	if !b.fleet.Alive(id) {
+		// Process aged out or was GC'd — transparently rehydrate rather
+		// than fail. This is the T24 wedge's fix at the butler layer.
+		if err := b.fleet.Launch(t); err != nil {
+			return "", fmt.Errorf("direct %q: could not rehydrate its process: %w", id, err)
+		}
+	}
+
+	reply, err := b.fleet.Send(id, text)
+	if err != nil {
+		return "", fmt.Errorf("direct %q: %w", id, err)
+	}
+	return reply, nil
+}
+
+// ReapIdle stops the processes of spawned threads that have gone idle,
+// freeing resources while keeping the threads durable and rehydratable
+// (process-as-cache GC). It returns the IDs it reaped. Adopted threads
+// are never reaped — the butler does not own their processes.
+func (b *Butler) ReapIdle() []string {
+	if b.fleet == nil {
+		return nil
+	}
+	var reaped []string
+	for _, t := range b.store.List() {
+		if t.Kind != thread.KindSpawned || !b.fleet.Alive(t.ID) {
+			continue
+		}
+		if b.deriveStatus(t).State == thread.StateIdle {
+			b.fleet.Stop(t.ID)
+			reaped = append(reaped, t.ID)
+		}
+	}
+	return reaped
+}
+
 // ThreadStatus pairs a persisted thread record with its derived live
 // status.
 type ThreadStatus struct {
@@ -153,10 +276,7 @@ func (b *Butler) deriveStatus(t *thread.Thread) thread.Status {
 	if b.scanner != nil {
 		externallyActive = b.scanner.IsActive(t.SessionID)
 	}
-	processUp := false
-	if b.processUp != nil {
-		processUp = b.processUp(t.ID)
-	}
+	processUp := b.fleet != nil && b.fleet.Alive(t.ID)
 
 	return thread.DeriveStatus(thread.StatusInput{
 		Entries:          entries,

@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -43,6 +44,26 @@ func (s *Server) SetButler(b *butler.Butler) {
 			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID")),
 		),
 		s.handleThreadStatus,
+	)
+
+	s.mcpSrv.AddTool(
+		mcp.NewTool("jevons_thread_spawn",
+			mcp.WithDescription("Spawn a new thread the butler owns end-to-end and start its Claude Code process. The thread is durable — it survives restarts and its idle process is stopped resumably and rehydrated on demand."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Unique thread handle (e.g. 'tern-po', 'maze-rebuild')")),
+			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory (e.g. '~/work/github.com/marcelocantos/tern')")),
+			mcp.WithString("description", mcp.Description("The owner's work-language label")),
+			mcp.WithString("model", mcp.Description("Model override (e.g. 'opus', 'sonnet')")),
+		),
+		s.handleThreadSpawn,
+	)
+
+	s.mcpSrv.AddTool(
+		mcp.NewTool("jevons_thread_direct",
+			mcp.WithDescription("Direct a thread: deliver a message and return its reply. If the thread's process was stopped or aged out, it is transparently rehydrated first; if it cannot be reached, a distinct error is returned (never a silent timeout). Observe-only adopted threads must be taken over before they can be directed."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID")),
+			mcp.WithString("text", mcp.Required(), mcp.Description("Message to deliver")),
+		),
+		s.handleThreadDirect,
 	)
 }
 
@@ -105,8 +126,57 @@ func (s *Server) handleThreadStatus(_ context.Context, req mcp.CallToolRequest) 
 	return mcp.NewToolResultText(b.String()), nil
 }
 
+func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	id := str(args["id"])
+	workdir := str(args["workdir"])
+	if id == "" || workdir == "" {
+		return mcp.NewToolResultError("id and workdir are required"), nil
+	}
+	if strings.HasPrefix(workdir, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			workdir = home + workdir[1:]
+		}
+	}
+
+	th, err := s.butler.Spawn(butler.SpawnArgs{
+		ID:          id,
+		WorkDir:     workdir,
+		Description: str(args["description"]),
+		Model:       str(args["model"]),
+	})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf(
+		"Spawned thread %q (session %s) in %s.", th.ID, short(th.SessionID), th.WorkDir)), nil
+}
+
+func (s *Server) handleThreadDirect(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	id := str(args["id"])
+	text := str(args["text"])
+	if id == "" || text == "" {
+		return mcp.NewToolResultError("id and text are required"), nil
+	}
+
+	reply, err := s.butler.Direct(id, text)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return mcp.NewToolResultText(reply), nil
+}
+
 // str is a nil-safe cast of an MCP argument to string.
 func str(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// short renders the first 8 characters of a session id for display.
+func short(sessionID string) string {
+	if len(sessionID) > 8 {
+		return sessionID[:8]
+	}
+	return sessionID
 }

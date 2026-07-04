@@ -35,11 +35,12 @@ const (
 // identity plus the handle needed to rehydrate (SessionID → --resume).
 // Live status is derived on demand from the transcript, never stored.
 type Thread struct {
-	ID          string    `json:"id"`          // stable butler-level handle
-	Kind        Kind      `json:"kind"`        // adopted | spawned
-	WorkDir     string    `json:"workdir"`     // the session's working directory
-	SessionID   string    `json:"session_id"`  // Claude Code session UUID (for --resume)
-	Description string    `json:"description"` // owner's work-language label
+	ID          string    `json:"id"`              // stable butler-level handle
+	Kind        Kind      `json:"kind"`            // adopted | spawned
+	WorkDir     string    `json:"workdir"`         // the session's working directory
+	SessionID   string    `json:"session_id"`      // Claude Code session UUID (for --resume)
+	Description string    `json:"description"`     // owner's work-language label
+	Model       string    `json:"model,omitempty"` // model override for the process, if any
 	CreatedAt   time.Time `json:"created_at"`
 }
 

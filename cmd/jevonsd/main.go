@@ -24,6 +24,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
@@ -340,15 +341,18 @@ func main() {
 		slog.Error("thread store failed", "err", err)
 		os.Exit(1)
 	}
-	mcpSrv.SetButler(butler.New(butler.Config{
+	btlr := butler.New(butler.Config{
 		Store:   threadStore,
 		Scanner: scanner,
 		Reader:  transcript.NewReader(filepath.Join(homeDir, ".claude", "projects")),
-		ProcessUp: func(id string) bool {
-			p := registry.Get(id)
-			return p != nil && p.Alive()
-		},
-	}))
+		Fleet:   fleet.NewClaudia(registry),
+	})
+	mcpSrv.SetButler(btlr)
+
+	// Process-as-cache GC: periodically stop idle spawned threads'
+	// processes (resumably) to free resources. The threads persist and
+	// rehydrate on the next Direct.
+	go reapIdleThreads(ctx, btlr)
 
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
@@ -612,4 +616,24 @@ func loadKeychainKey(service string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// reapIdleGCInterval is how often the butler sweeps for idle spawned
+// threads whose processes can be stopped resumably.
+const reapIdleGCInterval = 2 * time.Minute
+
+// reapIdleThreads runs the process-as-cache GC sweep until ctx is done.
+func reapIdleThreads(ctx context.Context, btlr *butler.Butler) {
+	ticker := time.NewTicker(reapIdleGCInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if reaped := btlr.ReapIdle(); len(reaped) > 0 {
+				slog.Info("reaped idle thread processes", "threads", reaped)
+			}
+		}
+	}
 }
