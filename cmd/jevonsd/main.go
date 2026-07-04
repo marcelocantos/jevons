@@ -21,14 +21,15 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
+	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/cli"
-	
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
+	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
-	
+
 	"github.com/marcelocantos/pigeon"
 	"github.com/marcelocantos/pigeon/crypto"
 	"github.com/marcelocantos/pigeon/qr"
@@ -329,6 +330,25 @@ func main() {
 	// Wire registry and scanner into MCP server.
 	mcpSrv.SetRegistry(registry)
 	mcpSrv.SetScanner(scanner)
+
+	// Butler: durable-thread orchestrator over the thread store, the
+	// session scanner (non-invasive observation), and the transcript
+	// reader (status derivation). Threads persist across restarts so the
+	// full set is never lost.
+	threadStore, err := thread.NewStore(filepath.Join(homeDir, ".jevons", "threads.json"))
+	if err != nil {
+		slog.Error("thread store failed", "err", err)
+		os.Exit(1)
+	}
+	mcpSrv.SetButler(butler.New(butler.Config{
+		Store:   threadStore,
+		Scanner: scanner,
+		Reader:  transcript.NewReader(filepath.Join(homeDir, ".claude", "projects")),
+		ProcessUp: func(id string) bool {
+			p := registry.Get(id)
+			return p != nil && p.Alive()
+		},
+	}))
 
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
