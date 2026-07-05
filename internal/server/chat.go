@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,11 +18,82 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
+// overseerName is the registry name of the persistent Jevons overseer
+// process that backs the /ws/chat conversation.
+const overseerName = "jevons"
+
 // SetProcess attaches the persistent Claude process for the /ws/chat endpoint.
 func (s *Server) SetProcess(proc *claudia.Agent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.proc = proc
+}
+
+// CurrentProcess returns the live overseer process (nil if none).
+func (s *Server) CurrentProcess() *claudia.Agent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.proc
+}
+
+// AttachOverseer makes agent the current overseer and (re)subscribes its
+// event stream to the chat broadcast + status handler. It is called at
+// startup and again after a rewind swaps the process — so every overseer
+// reference resolves indirectly through s.proc and stays correct across
+// the swap, and no /ws/chat connection is left holding a dead handle.
+func (s *Server) AttachOverseer(agent *claudia.Agent) {
+	s.SetProcess(agent)
+	agent.SubscribeEvents(func(ev claudia.Event) {
+		s.BroadcastChat(string(ev.Raw))
+		s.HandleAgentEvent(ev)
+	})
+}
+
+// SendToOverseer delivers text to the current overseer process.
+func (s *Server) SendToOverseer(text string) error {
+	proc := s.CurrentProcess()
+	if proc == nil || !proc.Alive() {
+		return fmt.Errorf("overseer not running")
+	}
+	return proc.Send(text)
+}
+
+// RewindOverseer rolls the Jevons conversation back n user turns and
+// resumes it. claudia requires the live process be stopped first (a
+// running claude holds the conversation in memory and would re-append
+// the dropped turns), so this stops the overseer, truncates its
+// transcript at a turn boundary, relaunches with --resume, and
+// re-attaches the event stream. The rewind is undoable via the
+// .rewind-bak sidecar claudia leaves behind. The overseer is always
+// relaunched, even if the truncate fails, so the chat is never left dead.
+func (s *Server) RewindOverseer(n int) error {
+	if n < 1 {
+		return fmt.Errorf("rewind: turns must be >= 1")
+	}
+	s.mu.RLock()
+	reg := s.registry
+	s.mu.RUnlock()
+	if reg == nil {
+		return fmt.Errorf("rewind: no registry")
+	}
+	def := reg.Def(overseerName)
+	if def == nil {
+		return fmt.Errorf("rewind: overseer not registered")
+	}
+
+	reg.Stop(overseerName)
+	_, rerr := claudia.RewindSession(def.SessionID, def.WorkDir, n)
+
+	agent, lerr := reg.Launch(overseerName)
+	if lerr != nil {
+		return fmt.Errorf("rewind: relaunch failed: %w", lerr)
+	}
+	s.AttachOverseer(agent)
+
+	if rerr != nil {
+		return fmt.Errorf("rewind: %w", rerr)
+	}
+	return nil
 }
 
 // SetRegistry attaches the agent registry for the /api/agents endpoint.
@@ -176,16 +248,36 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		// Interrupt control frame (sent by the client on Esc). A literal
 		// "stop" is NOT special — it's a normal thing to say to Jevons.
+		// Use the CURRENT process, not the one captured at connect, so a
+		// rewind swap mid-connection is transparent.
 		if msg == `{"type":"interrupt"}` {
 			slog.Info("chat: interrupt")
-			if err := proc.Interrupt(); err != nil {
-				slog.Error("chat: interrupt failed", "err", err)
+			if cur := s.CurrentProcess(); cur != nil {
+				if err := cur.Interrupt(); err != nil {
+					slog.Error("chat: interrupt failed", "err", err)
+				}
 			}
 			continue
 		}
 
+		// Rewind control frame: roll the conversation back N user turns
+		// and resume. Tell all clients to trim their view to match.
+		if strings.HasPrefix(msg, `{"type":"rewind"`) {
+			var ctl struct {
+				Turns int `json:"turns"`
+			}
+			_ = json.Unmarshal([]byte(msg), &ctl)
+			slog.Info("chat: rewind", "turns", ctl.Turns)
+			if err := s.RewindOverseer(ctl.Turns); err != nil {
+				slog.Error("chat: rewind failed", "err", err)
+				continue
+			}
+			s.BroadcastChat(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
+			continue
+		}
+
 		slog.Info("chat: received", "msg", msg)
-		if err := proc.Send(msg); err != nil {
+		if err := s.SendToOverseer(msg); err != nil {
 			slog.Error("chat: send to claude failed", "err", err)
 		}
 	}

@@ -439,19 +439,16 @@ func main() {
 	defer registry.StopAll()
 
 	if jevonProc := registry.Get("jevons"); jevonProc != nil {
-		srv.SetProcess(jevonProc)
-		// Subscribe to Jevon's event stream:
-		// - forward raw JSONL to chat WS clients;
-		// - accumulate assistant turn text + emit thinking/idle status;
-		// - inject completed turns into the Grok voice bridge for TTS.
-		jevonProc.SubscribeEvents(func(ev claudia.Event) {
-			srv.BroadcastChat(string(ev.Raw))
-			srv.HandleAgentEvent(ev)
-		})
+		// AttachOverseer sets the process and subscribes its event stream
+		// (forward raw JSONL to chat WS clients; accumulate turn text +
+		// status; feed the Grok voice bridge). It is re-run after a rewind
+		// swaps the process, so all overseer references stay current.
+		srv.AttachOverseer(jevonProc)
 
 		// Wire MCP worker-completion + agent-reply notifications into Jevon.
+		// Route through the server so a rewind swap is transparent.
 		send := func(text string) {
-			if err := jevonProc.Send(text); err != nil {
+			if err := srv.SendToOverseer(text); err != nil {
 				slog.Error("notify jevon failed", "err", err)
 			}
 		}

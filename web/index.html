@@ -282,6 +282,22 @@ function connect() { transport.connect(); }
 function handle(m) {
   const typ = m.type;
 
+  // Server rewound the conversation N user turns — trim the view to
+  // match: remove the Nth-from-last user message and everything after it.
+  // The resent (edited) message then re-arrives as a fresh turn.
+  if (typ === 'rewound') {
+    const users = [...msgs.querySelectorAll('.msg.user')];
+    const n = m.turns || 0;
+    if (n > 0 && users.length >= n) {
+      closeTurn();
+      let node = users[users.length - n];
+      while (node) { const next = node.nextSibling; node.remove(); node = next; }
+      msgHistory = msgHistory.slice(0, Math.max(0, msgHistory.length - n));
+      setEditingHighlight(null);
+    }
+    return;
+  }
+
   const msgTs = m.timestamp ? new Date(m.timestamp).getTime() : Date.now();
 
   if (typ==='user') {
@@ -554,6 +570,27 @@ function send() {
   requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
 }
 
+// rewindAndResend performs the destructive "edit an earlier message"
+// path: roll the conversation back to the highlighted recalled message
+// and resend the edited text. Backed by claudia's session rewind (kill
+// process, truncate transcript at a turn boundary, --resume). Only valid
+// when a recalled message is highlighted.
+function rewindAndResend() {
+  const text = input.value.trim();
+  if (!text || !editingEl) return;
+  const users = [...msgs.querySelectorAll('.msg.user')];
+  const idx = users.indexOf(editingEl);
+  if (idx < 0) { send(); return; } // out of sync — fall back to append
+  const n = users.length - idx;    // turns to roll back: the edited msg + everything after
+  transport.send(JSON.stringify({ type: 'rewind', turns: n }));
+  transport.send(text);
+  input.value = '';
+  histIdx = null; histDraft = ''; setEditingHighlight(null);
+  autoGrow();
+  autoScroll = true; setWorking(true);
+  requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+}
+
 // recallHistory walks msgHistory into the input. dir = -1 (older) or +1
 // (newer). Returns true if it handled the key (so the caller can
 // preventDefault), false to let the arrow move the cursor normally.
@@ -610,7 +647,14 @@ function autoGrow() {
 
 // Enter submits, Shift-Enter inserts a newline.
 input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return; }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    // Cmd/Ctrl+Enter while editing a recalled message rewinds the
+    // conversation to it (destructive); plain Enter appends (safe).
+    if ((e.metaKey || e.ctrlKey) && editingEl) rewindAndResend();
+    else send();
+    return;
+  }
   // Alt+Up/Down recall previous messages. A dedicated modifier keeps
   // plain Up/Down free for line navigation in a multi-line draft.
   // preventDefault overrides macOS's Option+Arrow paragraph jump.
