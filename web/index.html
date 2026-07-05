@@ -573,11 +573,6 @@ function recallHistory(dir) {
   return true;
 }
 
-// Cursor helpers so arrow-history only triggers at the text edges — a
-// multi-line draft still navigates line-by-line in the middle.
-function caretOnFirstLine() { return input.value.slice(0, input.selectionStart).indexOf('\n') === -1; }
-function caretOnLastLine() { return input.value.slice(input.selectionEnd).indexOf('\n') === -1; }
-
 // "Working" indicator: shown from when the user sends until Jevons's
 // reply text arrives, so a long synchronous turn (e.g. directing a
 // worker that runs a test suite) doesn't look like a hang. Only driven
@@ -608,10 +603,11 @@ function autoGrow() {
 // Enter submits, Shift-Enter inserts a newline.
 input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return; }
-  // Up/Down recall previous messages, but only at the text edges so a
-  // multi-line draft still navigates line-by-line in the middle.
-  if (e.key === 'ArrowUp' && caretOnFirstLine()) { if (recallHistory(-1)) e.preventDefault(); return; }
-  if (e.key === 'ArrowDown' && histIdx !== null && caretOnLastLine()) { if (recallHistory(+1)) e.preventDefault(); return; }
+  // Alt+Up/Down recall previous messages. A dedicated modifier keeps
+  // plain Up/Down free for line navigation in a multi-line draft.
+  // preventDefault overrides macOS's Option+Arrow paragraph jump.
+  if (e.altKey && e.key === 'ArrowUp') { if (recallHistory(-1)) e.preventDefault(); return; }
+  if (e.altKey && e.key === 'ArrowDown') { if (recallHistory(+1)) e.preventDefault(); return; }
 });
 input.addEventListener('input', autoGrow);
 sendBtn.addEventListener('click', send);
