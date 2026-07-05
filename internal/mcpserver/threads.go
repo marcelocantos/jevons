@@ -58,6 +58,14 @@ func (s *Server) SetButler(b *butler.Butler) {
 	)
 
 	s.mcpSrv.AddTool(
+		mcp.NewTool("jevons_thread_takeover",
+			mcp.WithDescription("Take over an adopted (observe-only) thread so Jevons owns and can direct it: launches Jevons's own process resuming the session. Refuses if the session is still being driven in another terminal — the owner must stop driving it first (two claude processes on one session corrupt it). The session is preserved, so a taken-over thread can later be handed back."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID (an adopted thread)")),
+		),
+		s.handleThreadTakeover,
+	)
+
+	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_direct",
 			mcp.WithDescription("Direct a thread: deliver a message and return its reply. If the thread's process was stopped or aged out, it is transparently rehydrated first; if it cannot be reached, a distinct error is returned (never a silent timeout). Observe-only adopted threads must be taken over before they can be directed."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID")),
@@ -150,6 +158,20 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 	}
 	return mcp.NewToolResultText(fmt.Sprintf(
 		"Spawned thread %q (session %s) in %s.", th.ID, short(th.SessionID), th.WorkDir)), nil
+}
+
+func (s *Server) handleThreadTakeover(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := str(req.GetArguments()["id"])
+	if id == "" {
+		return mcp.NewToolResultError("id is required"), nil
+	}
+	th, err := s.butler.TakeOver(id)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf(
+		"Took over thread %q — now owned and directable (session %s in %s).",
+		th.ID, short(th.SessionID), th.WorkDir)), nil
 }
 
 func (s *Server) handleThreadDirect(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

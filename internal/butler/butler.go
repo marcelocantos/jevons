@@ -53,38 +53,53 @@ type Butler struct {
 	reader  *transcript.Reader
 	fleet   Fleet
 
+	// externallyActive reports whether a foreign process is currently
+	// driving the given session (the two-writer signal). Wired to the
+	// scanner in production; injectable for tests.
+	externallyActive func(sessionID string) bool
+
 	now           func() time.Time
 	idleThreshold time.Duration
 	tailN         int
 }
 
 // Config parameterises New. Store, Scanner, and Reader are required.
-// Fleet is required for the spawn/direct/GC paths but may be nil for an
-// observe-only butler (adopt/list/status still work).
+// Fleet is required for the spawn/direct/GC/take-over paths but may be
+// nil for an observe-only butler (adopt/list/status still work).
 type Config struct {
 	Store   *thread.Store
 	Scanner *discovery.Scanner
 	Reader  *transcript.Reader
 	Fleet   Fleet
-	// Now and IdleThreshold are injected for deterministic tests; both
-	// default sensibly when zero.
-	Now           func() time.Time
-	IdleThreshold time.Duration
+	// Now, IdleThreshold, and ExternallyActive are injected for
+	// deterministic tests; all default sensibly when nil/zero
+	// (ExternallyActive falls back to the scanner).
+	Now              func() time.Time
+	IdleThreshold    time.Duration
+	ExternallyActive func(sessionID string) bool
 }
 
 // New constructs a Butler.
 func New(cfg Config) *Butler {
 	b := &Butler{
-		store:         cfg.Store,
-		scanner:       cfg.Scanner,
-		reader:        cfg.Reader,
-		fleet:         cfg.Fleet,
-		now:           cfg.Now,
-		idleThreshold: cfg.IdleThreshold,
-		tailN:         defaultTailEntries,
+		store:            cfg.Store,
+		scanner:          cfg.Scanner,
+		reader:           cfg.Reader,
+		fleet:            cfg.Fleet,
+		externallyActive: cfg.ExternallyActive,
+		now:              cfg.Now,
+		idleThreshold:    cfg.IdleThreshold,
+		tailN:            defaultTailEntries,
 	}
 	if b.now == nil {
 		b.now = time.Now
+	}
+	if b.externallyActive == nil {
+		if b.scanner != nil {
+			b.externallyActive = func(sessionID string) bool { return b.scanner.IsActive(sessionID) }
+		} else {
+			b.externallyActive = func(string) bool { return false }
+		}
 	}
 	return b
 }
@@ -215,6 +230,44 @@ func (b *Butler) Direct(id, text string) (string, error) {
 	return reply, nil
 }
 
+// TakeOver promotes an adopted (observe-only) thread to one jevons owns
+// end to end: it launches jevons's own process resuming the session, and
+// flips the thread to spawned so it becomes directable, GC-able, and
+// rehydratable like any other owned thread. The session id is preserved,
+// so a taken-over thread can later be decoupled and handed back.
+//
+// It refuses if the session is still being driven elsewhere: two claude
+// processes on one session corrupt the transcript, so the owner must stop
+// driving it in its terminal first (the two-writer constraint).
+func (b *Butler) TakeOver(id string) (*thread.Thread, error) {
+	if b.fleet == nil {
+		return nil, fmt.Errorf("takeover: no fleet configured")
+	}
+	t, ok := b.store.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("takeover: no thread %q", id)
+	}
+	if t.Kind != thread.KindAdopted {
+		return nil, fmt.Errorf("takeover: thread %q is already owned", id)
+	}
+	if b.externallyActive(t.SessionID) {
+		return nil, fmt.Errorf("takeover %q: its session is still active in another process — stop driving it in its terminal, then take it over", id)
+	}
+
+	// Promote and persist first; then launch. On launch failure revert to
+	// observe-only rather than leaving a broken half-owned thread.
+	t.Kind = thread.KindSpawned
+	if err := b.store.Put(t); err != nil {
+		return nil, err
+	}
+	if err := b.fleet.Launch(t); err != nil {
+		t.Kind = thread.KindAdopted
+		_ = b.store.Put(t)
+		return nil, fmt.Errorf("takeover %q: %w", id, err)
+	}
+	return t, nil
+}
+
 // ReapIdle stops the processes of spawned threads that have gone idle,
 // freeing resources while keeping the threads durable and rehydratable
 // (process-as-cache GC). It returns the IDs it reaped. Adopted threads
@@ -272,16 +325,12 @@ func (b *Butler) deriveStatus(t *thread.Thread) thread.Status {
 		entries = e
 	}
 
-	externallyActive := false
-	if b.scanner != nil {
-		externallyActive = b.scanner.IsActive(t.SessionID)
-	}
 	processUp := b.fleet != nil && b.fleet.Alive(t.ID)
 
 	return thread.DeriveStatus(thread.StatusInput{
 		Entries:          entries,
 		Now:              b.now(),
-		ExternallyActive: externallyActive,
+		ExternallyActive: b.externallyActive(t.SessionID),
 		ProcessUp:        processUp,
 		IdleThreshold:    b.idleThreshold,
 	})

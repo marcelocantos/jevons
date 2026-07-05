@@ -208,6 +208,67 @@ func TestReapIdleStopsAndRehydrates(t *testing.T) {
 	}
 }
 
+// TestTakeOver covers promoting an adopted observe-only thread to an
+// owned, directable one — including the two-writer guard and that the
+// session is preserved so it can later be decoupled.
+func TestTakeOver(t *testing.T) {
+	dir := t.TempDir()
+	projectsDir := filepath.Join(dir, "projects")
+	writeOwnerTranscript(t, projectsDir) // the owner's existing session
+
+	f := newFakeFleet()
+	active := false
+	store, err := thread.NewStore(filepath.Join(dir, "threads.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	b := butler.New(butler.Config{
+		Store:            store,
+		Scanner:          discovery.NewScanner(projectsDir),
+		Reader:           transcript.NewReader(projectsDir),
+		Fleet:            f,
+		Now:              func() time.Time { return fixedNow },
+		ExternallyActive: func(string) bool { return active },
+	})
+
+	if _, err := b.Adopt(butler.AdoptArgs{SessionID: ownerSession, ID: "po"}); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	// Observe-only: directing is refused before take-over.
+	if _, err := b.Direct("po", "hi"); err == nil {
+		t.Fatal("expected direct on an adopted thread to be refused")
+	}
+	// Two-writer guard: refuse while the owner is still driving it.
+	active = true
+	if _, err := b.TakeOver("po"); err == nil {
+		t.Fatal("expected take-over to be refused while the session is active elsewhere")
+	}
+
+	// Owner stops driving; take-over succeeds and resumes THAT session.
+	active = false
+	th, err := b.TakeOver("po")
+	if err != nil {
+		t.Fatalf("TakeOver: %v", err)
+	}
+	if th.Kind != thread.KindSpawned {
+		t.Fatalf("kind = %q, want spawned after take-over", th.Kind)
+	}
+	if !f.Alive("po") {
+		t.Fatal("take-over did not launch a process")
+	}
+	if th.SessionID != ownerSession {
+		t.Fatalf("take-over lost the session id (%q) — decouple would be impossible", th.SessionID)
+	}
+	// Now directable.
+	reply, err := b.Direct("po", "continue")
+	if err != nil {
+		t.Fatalf("Direct after take-over: %v", err)
+	}
+	if !strings.Contains(reply, "continue") {
+		t.Fatalf("directed reply did not round-trip: %q", reply)
+	}
+}
+
 // writeSessionTranscript writes a minimal concluded-turn transcript for
 // an arbitrary session id, timestamped at `at`.
 func writeSessionTranscript(t *testing.T, projectsDir, sessionID string, at time.Time) {

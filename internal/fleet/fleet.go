@@ -45,8 +45,25 @@ func NewClaudia(reg *claudia.Registry) *Claudia {
 // (T24). It populates t.SessionID with the live process's session so
 // the thread can be rehydrated later.
 func (f *Claudia) Launch(t *thread.Thread) error {
-	if _, err := f.reg.EnsureAgent(t.ID, t.WorkDir, t.Model, true); err != nil {
-		return fmt.Errorf("register agent %q: %w", t.ID, err)
+	// Ensure a registry def. When the thread already carries a session id
+	// — a taken-over adopted session, or a rehydrate whose registry def
+	// was lost — register the def WITH that id so claudia resumes that
+	// exact conversation (--resume) rather than minting a fresh one. A
+	// brand-new spawn (no session id) lets claudia mint one.
+	if f.reg.Def(t.ID) == nil {
+		if t.SessionID != "" {
+			if err := f.reg.Register(claudia.AgentDef{
+				Name:      t.ID,
+				WorkDir:   t.WorkDir,
+				Model:     t.Model,
+				SessionID: t.SessionID,
+				AutoStart: true,
+			}); err != nil {
+				return fmt.Errorf("register agent %q: %w", t.ID, err)
+			}
+		} else if _, err := f.reg.EnsureAgent(t.ID, t.WorkDir, t.Model, true); err != nil {
+			return fmt.Errorf("register agent %q: %w", t.ID, err)
+		}
 	}
 	ag, err := f.reg.Launch(t.ID)
 	if err != nil {
