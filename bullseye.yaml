@@ -882,6 +882,35 @@ targets:
     - fleet
     origin: manual
     discovered: 2026-07-05
+  T35:
+    name: Jevons maintains a living engineering Operations Manual — seeded from the owner's outcome-validated convictions and review lenses, protecting contrarian priors against mean-regression — that drives and reviews fleet work
+    status: set_aside
+    value: 0.0
+    cost: 0.0
+    set_aside_reason: Deferred — not an MVP priority (owner, 2026-07-05). Revisit after the T30 butler loop is production-worthy. Design captured in docs/design/operations-manual.md.
+    acceptance:
+    - '[decidable | ORACLE: schema + provenance-resolution check] BOOTSTRAP: a one-shot pass over the distilled layer (mnemo memories/decisions/synthesis + auto-memory) produces a manual whose every doctrine entry validates against the entry schema (statement, rationale, class, provenance, evidence, confidence) and whose evidence pointers each resolve to a real session/memory. Test asserts schema-validity and that no entry has an unresolvable or empty evidence list.'
+    - '[decidable | ORACLE: regression test — LOAD-BEARING] CONTRARIAN PRESERVATION: the seed protected-contrarian priors (relational≫object-stores, sync≫messaging, monolith≫microservices) appear tagged class=protected-contrarian with non-empty rationale, and a synthesis/refresh pass driven by a conventional-wisdom prompt does NOT overwrite them or strip their rationale. Test runs the synthesizer against a mean-regressing prompt and asserts the protected entries survive intact.'
+    - '[decidable | ORACLE: labeled-sample check] WEAKNESS EXCLUSION: candidate principles are classified conviction-vs-habit and outcome-grounded against rework/revert signal (mnemo_rework_history); a principle whose pattern failed in outcomes is not elevated to doctrine without a flag. Test feeds a labeled sample (known conviction, known outcome-failed habit) and asserts correct classification/flagging.'
+    - '[decidable | ORACLE: e2e integration test] WORKER INJECTION: a worker spawned on a task in a domain with a protected prior receives the task-scoped manual slice in its effective context (via the claudia system-prompt seam), and the owner''s biography does NOT leak into it. Test spawns a worker and asserts the relevant doctrine is present and biography is absent.'
+    - '[decidable | ORACLE: seeded-defect fixture] REVIEW LENSES: given sub-agent output containing a known anti-pattern the owner has corrected before (e.g. a tautological/self-validating test à la north-star-not-moving-target), Jevons''s review flags it. Test asserts the seeded defect is caught by the review rubric.'
+    - '[decidable | ORACLE: gate test] LIVING + GATED: operating-preference deltas auto-capture from sessions; doctrine-class deltas require owner sign-off — an unacked doctrine delta stays in a proposed state and does not alter the active manual. Test submits both delta kinds and asserts only the acked/preference one lands.'
+    - '[class-3 HUMAN GATE — isolated, once] Over real use, the doctrine Jevons applies to drive and review fleet work reflects the owner''s engineering ethos and demonstrably improves output versus no manual (the contrarian priors percolate; the review lenses catch what the owner would catch). One owner accept/reject; kept separate so the target does not inherit this clause''s p.'
+    context: |-
+      Deferred post-MVP (2026-07-05). Full design: docs/design/operations-manual.md.
+
+      The deliverable is an Operations Manual for how engineering gets done, which Jevons consults to direct and review sub-agents — NOT a persona Jevons impersonates. A model of the owner is a filtered intermediate input: the manual is meant to be better than its owner (keep his taste and convictions, drop his biography and weaknesses). The owner's role in the pipeline is to be (a) a discriminator that filters signal from the low-SNR ambient engineering discourse, and (b) the source of protected contrarian priors (relational≫object-stores, sync-primitives≫messaging, monolith≫microservices) that a naive best-practice synthesizer would regress to the industry mean. Two persona slices feed different manual sections: engineering ethos → content; agent-direction style → fleet-operating review lenses (consider what the owner looks for, held in the back of the mind, not mirrored).
+
+      Successor to T30 (the butler loop must be production-worthy before doctrine-driven direction layers on top). Adjacent to T31 (oracle-first as a system property — the review-lens rubric is one vehicle for it). The one durable piece of new plumbing is a claudia system-prompt seam (AgentDef has no prompt field; Registry.Launch never populates the ExtraArgs its Config exposes) so a task-scoped manual slice can reach spawned workers.
+    depends_on:
+    - T30
+    tags:
+    - doctrine
+    - persona
+    - fleet
+    - design
+    origin: manual
+    discovered: 2026-07-05
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
