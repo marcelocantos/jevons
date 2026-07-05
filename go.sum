@@ -83,6 +83,8 @@ github.com/marcelocantos/claudia v0.12.0 h1:7uJn6QczlBu+pJbJgrz2pvqJeJV5OmII2Mz8
 github.com/marcelocantos/claudia v0.12.0/go.mod h1:L4z2r5xK3h2TJpdFAwAxLdv48WrwcF2e2buZ/1QIKeg=
 github.com/marcelocantos/claudia v0.13.0 h1:00OfBTHU2A+2e5tW9z+7NElHpopLivfQ85SImhVzsqg=
 github.com/marcelocantos/claudia v0.13.0/go.mod h1:L4z2r5xK3h2TJpdFAwAxLdv48WrwcF2e2buZ/1QIKeg=
+github.com/marcelocantos/claudia v0.14.0 h1:YLp8k9C99/GRHedr5P34njSHEJ+jtQFL4BOfbFlTVSc=
+github.com/marcelocantos/claudia v0.14.0/go.mod h1:L4z2r5xK3h2TJpdFAwAxLdv48WrwcF2e2buZ/1QIKeg=
 github.com/marcelocantos/pigeon v0.19.0 h1:1b2nPeZ7phQYmSeUrrFlqoNc4pnEtSh72Dq2KrVfgiU=
 github.com/marcelocantos/pigeon v0.19.0/go.mod h1:qcNuZm+Ub9UwEsKsxvJzH0Dh3VcZ+OuPH4d98lUDDXc=
 github.com/mark3labs/mcp-go v0.44.1 h1:2PKppYlT9X2fXnE8SNYQLAX4hNjfPB0oNLqQVcN6mE8=
