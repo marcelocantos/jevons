@@ -857,6 +857,31 @@ targets:
     - quality
     origin: manual
     discovered: 2026-07-05
+  T34:
+    name: 'Event-triggered push: when an event fires, a message is pushed straight into the relevant agent to trigger its next action'
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '[decidable | the useful modality] When an event fires (a dependency landed, CI went green, a worker finished, an upstream note arrived, a timer elapsed), a message is pushed directly into a target agent/thread to trigger its next action — rehydrating the agent first if it was idle/stopped (thread model), with no-silent-fail delivery (undeliverable → typed error). The trigger is an observed EVENT; the push tells the agent what to do next.'
+    - '[decidable | routed] The push is mediated by the butler (Jevons arbitrates; the owner can observe the flow), and event sources can be wired to it generically rather than each hard-coding a delivery path.'
+    - '[decidable | ORACLE: e2e] Deterministic butler-loop test: an event fires → the target agent (possibly stopped) receives the pushed message on rehydration and acts; a push to an unreachable agent returns a typed error. Runs against the fake fleet + thread store, no live claude.'
+    - '[OPEN QUESTION — do NOT build speculatively] Inbox-style PULL (an agent sits waiting for instructions, mnemo-style) is a SEPARATE modality whose value is uncertain once Jevons orchestrates the fleet directly. Decide explicitly whether it earns its keep before building anything; the default is to NOT build it. This clause exists to record the question, not to commit the work.'
+    context: |-
+      Revised per owner clarification 2026-07-05: push and pull are two INDEPENDENT modalities for sending messages, not two halves of one exchange.
+
+      PUSH is the clearly-useful one: some event triggers, and we push a message straight into an agent to let it know to do the next thing. This is event-driven notification into a (possibly dormant) agent, generalizing jevons_thread_direct (which already pushes owner→agent with transparent rehydrate + no-silent-fail from T30) so ANY event source can trigger a push.
+
+      PULL (mnemo-style inbox where an agent sits waiting for instructions) is a separate modality the owner is 'not even sure is useful once we have Jevons' — because Jevons the CEO orchestrates the fleet directly, an agent parked on an inbox may be redundant. Captured as an open question, explicitly NOT to be built speculatively.
+
+      Origin: surfaced 2026-07-05 while coordinating a claudia session and this jevons session via mnemo's note inbox. Relates to 🎯T30 (thread/butler spine; rehydrate + no-silent-fail carry over), the charter's async fire-and-forget comms, and [[project_agent_architecture]].
+    depends_on:
+    - T30
+    tags:
+    - comms
+    - fleet
+    origin: manual
+    discovered: 2026-07-05
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
