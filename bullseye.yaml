@@ -836,6 +836,27 @@ targets:
     - showcase
     origin: manual
     discovered: 2026-07-05
+  T33:
+    name: Message-integrity oracle guards the chat round-trip — corrupted turns are caught automatically, not by eyeball
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '[decidable | DONE] transcript.CheckUserTurns detects the two decidable corruption signatures — a user turn identical to the previous one (duplicate) and a turn that is (mostly) its own leading half repeated (self-concatenation) — with tests over the exact doubled message the owner hit plus negatives proving naturally-repetitive text is not flagged.'
+    - '[decidable] The butler surfaces integrity issues as a live thread-health signal: jevons_thread_status / jevons_thread_list flag a thread whose recent transcript trips CheckUserTurns (e.g. state or a ''corrupted'' note), so a mangled thread is visible without the owner spotting it.'
+    - '[decidable | ORACLE: e2e] A send-round-trip e2e test asserts sending "X" yields exactly one user turn "X" in the broadcast/transcript — no duplication, no concatenation. This is the regression guard that would have caught this class before the owner hit it; it runs against a stub/mock overseer so it needs no live claude.'
+    - '[note] The underlying send/PTY concatenation FIX lives in claudia (owner filed a separate claudia target in another session). THIS target is the DETECTION oracle — orthogonal to and independent of that fix.'
+    context: |-
+      Origin: the 2026-07-05 testing session. Editing a recalled message and re-sending it produced an obviously-corrupt result — a duplicated user bubble and a second bubble whose text was the original concatenated with itself (claudia typed the recalled text on top of residual PTY input). The owner asked, per oracle-first, whether 'stuff that's so obviously wrong' can be validated automatically.
+
+      Answer: yes — 'obviously wrong' is decidable, so it's a machine check, not an eyeball. Landed the detector (internal/transcript/integrity.go, CheckUserTurns) as a pure function so it doubles as a CI oracle over captured transcripts and a live thread-health signal. Remaining work: wire it into the butler's thread status and add the send-round-trip e2e guard.
+
+      Concrete instance of 🎯T31 (oracle-first as a system property); complements 🎯T30's 'never lose a thread' with 'never silently serve a corrupted thread'. The concatenation fix itself is claudia's, tracked separately.
+    tags:
+    - oracle-first
+    - quality
+    origin: manual
+    discovered: 2026-07-05
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
