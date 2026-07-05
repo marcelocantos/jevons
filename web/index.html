@@ -614,6 +614,9 @@ input.addEventListener('keydown', e => {
 });
 input.addEventListener('input', autoGrow);
 sendBtn.addEventListener('click', send);
+// Keep focus in the textarea when clicking toolbar buttons: preventing
+// the mousedown default blocks the focus shift while still firing click.
+sendBtn.addEventListener('mousedown', e => e.preventDefault());
 
 autoGrow();
 input.focus();
@@ -654,6 +657,8 @@ document.getElementById('theme-toggle').addEventListener('click', e => {
   document.cookie = 'theme='+btn.dataset.t+';path=/;max-age=31536000';
   applyTheme(btn.dataset.t);
 });
+// Don't let the theme buttons steal focus from the textarea.
+document.getElementById('theme-toggle').addEventListener('mousedown', e => e.preventDefault());
 applyTheme((document.cookie.match(/(?:^|; )theme=([^;]*)/)||[])[1] || 'system');
 
 // Terminal viewer.
