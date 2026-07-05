@@ -147,7 +147,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* Textarea (not <input>) so Wispr Flow and other STT tools detect a
    document-style input and produce full punctuated sentences. */
 #input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: calc(1.45em + 22px); max-height: 40vh; overflow-y: auto; }
-#input::placeholder { color: var(--text-muted); }
+/* Fade the placeholder well below entered text so it's obviously a
+   prompt, not typed content. Lower opacity blends it toward the input
+   background — darker in dark mode, lighter in light mode. */
+#input::placeholder { color: var(--text-muted); opacity: 0.45; }
 #input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 #send { padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
 #send:hover { opacity: 0.85; }
