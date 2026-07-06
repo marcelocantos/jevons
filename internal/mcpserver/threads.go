@@ -12,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/thread"
 )
 
 // SetButler attaches the butler orchestrator and registers the thread
@@ -22,13 +23,22 @@ func (s *Server) SetButler(b *butler.Butler) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_adopt",
-			mcp.WithDescription("Adopt an existing Claude Code session as a durable thread, observe-only. Non-invasive: the session's process is never taken over — its transcript is tailed for status. Use this to grandfather sessions the owner already has running."),
+			mcp.WithDescription("Adopt an existing Claude Code session in ONE call: it auto-names the thread after the session's repo, registers it, and TAKES IT OVER by default so it's immediately directable and shows in the agent panel. Just pass session_id — do not ask the owner for a name (rename later if needed). If the session is still open in its own terminal, take-over is refused with an actionable error (stop driving it first). Pass observe_only:true to only watch it without taking over."),
 			mcp.WithString("session_id", mcp.Required(), mcp.Description("Claude Code session UUID to adopt")),
-			mcp.WithString("description", mcp.Description("The owner's work-language label, e.g. 'the multimaze2 rebuild'")),
-			mcp.WithString("id", mcp.Description("Optional stable handle for the thread (defaults to the session id)")),
+			mcp.WithBoolean("observe_only", mcp.Description("Only observe (tail the transcript); do NOT take over. Default false — adoption takes over.")),
+			mcp.WithString("id", mcp.Description("Optional handle override (defaults to the repo/dir name)")),
+			mcp.WithString("description", mcp.Description("Optional label override (defaults to the repo/dir name)")),
 			mcp.WithString("workdir", mcp.Description("Optional working directory override (defaults to the session's own cwd)")),
 		),
 		s.handleThreadAdopt,
+	)
+
+	s.mcpSrv.AddTool(
+		mcp.NewTool("jevons_thread_remove",
+			mcp.WithDescription("Remove a thread: stop and deregister any owned process (the underlying Claude session on disk is left intact) and drop the record. Use to clean up duplicate or unwanted threads."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID to remove")),
+		),
+		s.handleThreadRemove,
 	)
 
 	s.mcpSrv.AddTool(
@@ -77,13 +87,15 @@ func (s *Server) SetButler(b *butler.Butler) {
 
 func (s *Server) handleThreadAdopt(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
-	sessionID, _ := args["session_id"].(string)
+	sessionID := str(args["session_id"])
 	if sessionID == "" {
 		return mcp.NewToolResultError("session_id is required"), nil
 	}
+	observeOnly, _ := args["observe_only"].(bool)
 
 	th, err := s.butler.Adopt(butler.AdoptArgs{
 		SessionID:   sessionID,
+		ObserveOnly: observeOnly,
 		ID:          str(args["id"]),
 		WorkDir:     str(args["workdir"]),
 		Description: str(args["description"]),
@@ -91,9 +103,24 @@ func (s *Server) handleThreadAdopt(_ context.Context, req mcp.CallToolRequest) (
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	verb := "took over (owned, directable)"
+	if th.Kind == thread.KindAdopted {
+		verb = "adopted observe-only"
+	}
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Adopted thread %q (observe-only) — session %s in %s.",
-		th.ID, th.SessionID[:8], th.WorkDir)), nil
+		"Thread %q %s — session %s in %s.",
+		th.ID, verb, short(th.SessionID), th.WorkDir)), nil
+}
+
+func (s *Server) handleThreadRemove(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := str(req.GetArguments()["id"])
+	if id == "" {
+		return mcp.NewToolResultError("id is required"), nil
+	}
+	if err := s.butler.Remove(id); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("Removed thread %q.", id)), nil
 }
 
 func (s *Server) handleThreadList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {

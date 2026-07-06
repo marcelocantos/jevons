@@ -55,6 +55,7 @@ func (f *fakeFleet) Send(id, text string) (string, error) {
 
 func (f *fakeFleet) Alive(id string) bool { return f.alive[id] }
 func (f *fakeFleet) Stop(id string)       { f.alive[id] = false }
+func (f *fakeFleet) Remove(id string)     { delete(f.alive, id) }
 
 func newLifecycleButler(t *testing.T, dir string, f butler.Fleet) *butler.Butler {
 	t.Helper()
@@ -157,7 +158,7 @@ func TestDirectRefusesAdoptedThread(t *testing.T) {
 	writeOwnerTranscript(t, projectsDir)
 	b := newLifecycleButler(t, dir, newFakeFleet())
 
-	if _, err := b.Adopt(butler.AdoptArgs{SessionID: ownerSession, ID: "po"}); err != nil {
+	if _, err := b.Adopt(butler.AdoptArgs{SessionID: ownerSession, ID: "po", ObserveOnly: true}); err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
 	if _, err := b.Direct("po", "do the thing"); err == nil {
@@ -231,7 +232,7 @@ func TestTakeOver(t *testing.T) {
 		ExternallyActive: func(string) bool { return active },
 	})
 
-	if _, err := b.Adopt(butler.AdoptArgs{SessionID: ownerSession, ID: "po"}); err != nil {
+	if _, err := b.Adopt(butler.AdoptArgs{SessionID: ownerSession, ID: "po", ObserveOnly: true}); err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
 	// Observe-only: directing is refused before take-over.
@@ -266,6 +267,66 @@ func TestTakeOver(t *testing.T) {
 	}
 	if !strings.Contains(reply, "continue") {
 		t.Fatalf("directed reply did not round-trip: %q", reply)
+	}
+}
+
+// TestAdoptTakesOverByDefault covers the one-call adoption: auto-name from
+// the repo, take over by default (owned + directable), idempotent per
+// session (no duplicates), and remove for cleanup.
+func TestAdoptTakesOverByDefault(t *testing.T) {
+	dir := t.TempDir()
+	projectsDir := filepath.Join(dir, "projects")
+	writeOwnerTranscript(t, projectsDir) // session workdir: /work/multimaze2
+
+	f := newFakeFleet()
+	store, err := thread.NewStore(filepath.Join(dir, "threads.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	b := butler.New(butler.Config{
+		Store:            store,
+		Scanner:          discovery.NewScanner(projectsDir),
+		Reader:           transcript.NewReader(projectsDir),
+		Fleet:            f,
+		Now:              func() time.Time { return fixedNow },
+		ExternallyActive: func(string) bool { return false },
+	})
+
+	// One call, no id, no observe_only.
+	th, err := b.Adopt(butler.AdoptArgs{SessionID: ownerSession})
+	if err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if th.ID != "multimaze2" {
+		t.Fatalf("auto-name = %q, want repo basename 'multimaze2'", th.ID)
+	}
+	if th.Kind != thread.KindSpawned {
+		t.Fatalf("kind = %q, want spawned (took over by default)", th.Kind)
+	}
+	if !f.Alive("multimaze2") {
+		t.Fatal("adopt did not take over / launch a process")
+	}
+	if _, err := b.Direct("multimaze2", "go"); err != nil {
+		t.Fatalf("should be directable straight after adopt: %v", err)
+	}
+
+	// Idempotent per session — re-adopting returns the same thread, no dup.
+	if _, err := b.Adopt(butler.AdoptArgs{SessionID: ownerSession}); err != nil {
+		t.Fatalf("re-Adopt: %v", err)
+	}
+	if n := len(b.List()); n != 1 {
+		t.Fatalf("re-adopt created duplicates: %d threads, want 1", n)
+	}
+
+	// Remove drops it and stops the process.
+	if err := b.Remove("multimaze2"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if n := len(b.List()); n != 0 {
+		t.Fatalf("after remove: %d threads, want 0", n)
+	}
+	if f.Alive("multimaze2") {
+		t.Fatal("remove left the process alive")
 	}
 }
 

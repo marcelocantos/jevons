@@ -154,6 +154,21 @@ func (s *Store) Put(t *Thread) error {
 	return nil
 }
 
+// FindBySession returns the thread that already tracks sessionID, if any.
+// It is what makes adoption idempotent — re-adopting a session returns the
+// existing thread instead of creating a duplicate.
+func (s *Store) FindBySession(sessionID string) (*Thread, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range s.threads {
+		if t.SessionID == sessionID {
+			c := *t
+			return &c, true
+		}
+	}
+	return nil, false
+}
+
 // Get returns a copy of the thread with the given ID.
 func (s *Store) Get(id string) (*Thread, bool) {
 	s.mu.Lock()

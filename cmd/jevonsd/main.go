@@ -105,11 +105,17 @@ status), NOT tied to a live process. The process is a disposable cache:
 started to interact, stopped when idle, rehydrated on demand via
 --resume. Threads survive daemon restarts — you never lose one.
 
-- **jevons_thread_adopt** — Register a session Marcelo already has
-  running (by session UUID) as a durable thread, OBSERVE-ONLY. Never
-  takes over the process; tails its transcript for status. Use this to
-  grandfather existing sessions. Required: session_id. Optional:
-  description, id, workdir.
+- **jevons_thread_adopt** — Adopt a session Marcelo already has running
+  (by session UUID) in ONE call: it auto-names the thread after the repo
+  and TAKES IT OVER by default, so it's immediately directable and shows
+  in the agent panel. Just pass session_id — do NOT ask Marcelo for a
+  name (he can rename later). If the session is still open in its own
+  terminal, take-over is refused — tell him to stop driving it, then
+  retry. Pass observe_only:true only if he explicitly wants to watch
+  without taking over. Required: session_id.
+- **jevons_thread_remove** — Remove a thread: stop + deregister its
+  process (the Claude session on disk is left intact) and drop the
+  record. Use to clean up duplicate/unwanted threads. Required: id.
 - **jevons_thread_list** — List all threads (adopted + spawned) with
   derived status: active/working/blocked/done/idle + a recent-activity
   summary.

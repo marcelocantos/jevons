@@ -12,6 +12,8 @@ package butler
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
@@ -43,6 +45,9 @@ type Fleet interface {
 	// Stop stops the process resumably — the thread and its session
 	// persist, and a later Launch rehydrates it (process-as-cache).
 	Stop(id string)
+	// Remove stops the process and deregisters the agent entirely, so it
+	// does not auto-restart. Used when a thread is deleted.
+	Remove(id string)
 }
 
 // Butler orchestrates threads. It is safe for concurrent use (the Store
@@ -104,27 +109,31 @@ func New(cfg Config) *Butler {
 	return b
 }
 
-// AdoptArgs parameterises Adopt. WorkDir and Description are optional;
-// WorkDir is resolved from the session's own transcript when omitted.
+// AdoptArgs parameterises Adopt. Only SessionID is required: the name is
+// derived from the session's repo, and adoption takes the session over by
+// default (ObserveOnly opts out). ID, WorkDir, and Description are
+// optional overrides.
 type AdoptArgs struct {
 	SessionID   string // Claude Code session UUID
-	ID          string // butler-level handle; defaults to SessionID
-	WorkDir     string
-	Description string
+	ID          string // optional handle; defaults to the repo/dir name
+	WorkDir     string // optional; resolved from the transcript when empty
+	Description string // optional; defaults to the repo/dir name
+	ObserveOnly bool   // opt out of the default take-over
 }
 
-// Adopt registers an existing Claude Code session as an observe-only
-// thread. It is non-invasive by construction: it only reads the
-// session's transcript (to validate it exists and resolve its workdir)
-// and never launches, resumes, or otherwise touches the process.
+// Adopt registers an existing Claude Code session as a thread and, by
+// default, takes it over so it is immediately directable and shows up as
+// an owned agent. It is a single low-friction call: it derives a
+// meaningful name from the session's repo, is idempotent per session (no
+// duplicates on re-adopt), and never questions the caller about naming.
+//
+// Observing the session (to validate it and resolve its workdir) is
+// non-invasive — only the transcript is read. The take-over itself
+// launches jevons's process and enforces the two-writer guard.
 func (b *Butler) Adopt(args AdoptArgs) (*thread.Thread, error) {
 	if !discovery.IsUUID(args.SessionID) {
 		return nil, fmt.Errorf("adopt: %q is not a valid session id", args.SessionID)
 	}
-
-	// Observe the session non-invasively to confirm it exists and learn
-	// its workdir. A session with no transcript on disk cannot be tailed
-	// for status, so adopting it would be meaningless.
 	info, err := b.scanner.Get(args.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("adopt: observe session %q: %w", args.SessionID, err)
@@ -132,19 +141,82 @@ func (b *Butler) Adopt(args AdoptArgs) (*thread.Thread, error) {
 	if info == nil {
 		return nil, fmt.Errorf("adopt: no transcript found for session %q — cannot observe it", args.SessionID)
 	}
-
 	workdir := args.WorkDir
 	if workdir == "" {
 		workdir = info.WorkDir
 	}
 
-	return b.store.Adopt(thread.AdoptArgs{
-		ID:          args.ID,
-		WorkDir:     workdir,
-		SessionID:   args.SessionID,
-		Description: args.Description,
-		Now:         b.now(),
-	})
+	// Idempotent per session: re-adopting returns the existing thread
+	// rather than creating a duplicate under a second name.
+	t, existed := b.store.FindBySession(args.SessionID)
+	if !existed {
+		id := args.ID
+		if id == "" {
+			id = b.uniqueName(deriveName(workdir), args.SessionID)
+		}
+		desc := args.Description
+		if desc == "" {
+			desc = deriveName(workdir)
+		}
+		t, err = b.store.Adopt(thread.AdoptArgs{
+			ID:          id,
+			WorkDir:     workdir,
+			SessionID:   args.SessionID,
+			Description: desc,
+			Now:         b.now(),
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Take over by default so the thread is directable and registers as an
+	// owned agent (which is what makes it appear in the UI panel). On the
+	// two-writer refusal the observe-only record persists and the error
+	// tells the caller to stop driving the session first.
+	if !args.ObserveOnly && t.Kind == thread.KindAdopted {
+		return b.TakeOver(t.ID)
+	}
+	return t, nil
+}
+
+// Remove deletes a thread: it stops and deregisters any owned process
+// (leaving the underlying Claude session on disk intact) and drops the
+// record. Used to clean up threads without leaving duplicates behind.
+func (b *Butler) Remove(id string) error {
+	if _, ok := b.store.Get(id); !ok {
+		return fmt.Errorf("remove: no thread %q", id)
+	}
+	if b.fleet != nil {
+		b.fleet.Remove(id)
+	}
+	return b.store.Remove(id)
+}
+
+// deriveName picks a meaningful default handle from a session's workdir —
+// the repo/directory basename (e.g. ".../marcelocantos/sawmill" → "sawmill").
+func deriveName(workdir string) string {
+	base := filepath.Base(strings.TrimRight(workdir, "/"))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "session"
+	}
+	return base
+}
+
+// uniqueName returns id if it's free (or already this session's), else a
+// numeric-suffixed variant, so two different sessions in same-named repos
+// don't collide.
+func (b *Butler) uniqueName(id, sessionID string) string {
+	for i := 0; ; i++ {
+		cand := id
+		if i > 0 {
+			cand = fmt.Sprintf("%s-%d", id, i+1)
+		}
+		existing, ok := b.store.Get(cand)
+		if !ok || existing.SessionID == sessionID {
+			return cand
+		}
+	}
 }
 
 // SpawnArgs parameterises Spawn.

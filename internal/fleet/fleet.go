@@ -113,3 +113,14 @@ func (f *Claudia) Alive(id string) bool {
 func (f *Claudia) Stop(id string) {
 	f.reg.Stop(id)
 }
+
+// Remove stops the process and drops the registry definition entirely, so
+// it won't auto-restart. The underlying Claude session on disk is left
+// intact (only jevons's ownership is dropped).
+func (f *Claudia) Remove(id string) {
+	f.reg.Stop(id)
+	if err := f.reg.Remove(id); err != nil {
+		// A thread with no registry def (observe-only) is a normal no-op.
+		return
+	}
+}

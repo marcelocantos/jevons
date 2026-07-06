@@ -89,6 +89,7 @@ func TestAdoptObserveAndStatus(t *testing.T) {
 	th, err := b.Adopt(butler.AdoptArgs{
 		SessionID:   ownerSession,
 		Description: "the multimaze2 rebuild",
+		ObserveOnly: true,
 	})
 	if err != nil {
 		t.Fatalf("Adopt: %v", err)
@@ -149,7 +150,7 @@ func TestNeverLoseThreadAcrossRestart(t *testing.T) {
 	writeOwnerTranscript(t, projectsDir)
 
 	b := newButler(t, storePath, projectsDir)
-	if _, err := b.Adopt(butler.AdoptArgs{SessionID: ownerSession, ID: "po", Description: "grandfathered"}); err != nil {
+	if _, err := b.Adopt(butler.AdoptArgs{SessionID: ownerSession, ID: "po", Description: "grandfathered", ObserveOnly: true}); err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
 
