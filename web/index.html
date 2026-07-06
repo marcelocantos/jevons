@@ -180,17 +180,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 @keyframes work-bounce { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 
 /* Collapsible turn details */
-.turn-details { align-self: flex-start; max-width: 85%; margin: 2px 0 0 0; }
-.turn-details summary { cursor: pointer; color: var(--text-muted); padding: 4px 4px; font-size: 16px; list-style: none; user-select: none; line-height: 1; }
-.turn-details summary::before { content: '\25b8'; margin-right: 3px; display: inline-block; transition: transform 0.15s; font-size: 16px; }
-.turn-details[open] summary::before { transform: rotate(90deg); }
-.turn-details summary::-webkit-details-marker { display: none; }
+/* Compact tool-activity marker — it does NOT expand; its detail is shown
+   as a hover tooltip. One small line, so it takes minimal vertical space. */
+.turn-marker { align-self: flex-start; position: relative; font-family: var(--mono); font-size: 11px; color: var(--text-muted); letter-spacing: -0.02em; user-select: none; cursor: default; line-height: 1.2; margin: 0; }
+.turn-marker:hover { color: var(--text-dim); }
+.turn-tip { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 30; min-width: 200px; max-width: 460px; max-height: 50vh; overflow-y: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 28px rgba(0,0,0,0.35); }
+.turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 1px; }
 .msg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; line-height: 1; }
 .msg.user .msg-time { text-align: right; }
-.turn-details summary:hover { color: var(--text-dim); }
-.turn-details[open] summary { margin-bottom: 4px; }
-.turn-details .turn-items { display: flex; flex-direction: column; gap: 1px; padding: 4px 10px; border-left: 1px solid var(--border); margin-left: 6px; }
-.turn-item { font-family: var(--mono); font-size: 11px; padding: 1px 0; letter-spacing: -0.02em; }
+.turn-item { font-family: var(--mono); font-size: 11px; padding: 1px 0; letter-spacing: -0.02em; white-space: pre-wrap; word-break: break-word; }
 .turn-item.tool-use { color: var(--amber); }
 .turn-item.tool-result { color: var(--text-dim); }
 
@@ -350,14 +348,16 @@ function handle(m) {
 }
 
 function startTurn() {
-  turnDetails = document.createElement('details');
-  turnDetails.className = 'turn-details';
-  turnDetails.open = true;
-  const summary = document.createElement('summary');
-  turnDetails.appendChild(summary);
+  // A compact, non-expanding marker: a one-line label whose tool detail
+  // lives in a .turn-tip that only appears on hover.
+  turnDetails = document.createElement('div');
+  turnDetails.className = 'turn-marker';
+  const label = document.createElement('span');
+  turnDetails.appendChild(label);
   turnItems = document.createElement('div');
-  turnItems.className = 'turn-items';
+  turnItems.className = 'turn-tip';
   turnDetails.appendChild(turnItems);
+  turnDetails._label = label;
   msgs.appendChild(turnDetails);
   turnCount++;
   scrollDown();
@@ -366,11 +366,8 @@ function startTurn() {
 function closeTurn() {
   if (!turnDetails) return;
   const n = turnItems ? turnItems.children.length : 0;
-  if (n === 0) {
-    turnDetails.remove();
-  } else {
-    turnDetails.open = false;
-  }
+  if (n === 0) turnDetails.remove(); // no tool activity → nothing to show
+  // else: leave the compact marker in place; hover reveals the detail.
   turnDetails = null;
   turnItems = null;
 }
@@ -381,6 +378,8 @@ function addTurnItem(cls, text) {
   d.className = 'turn-item ' + cls;
   d.textContent = text;
   turnItems.appendChild(d);
+  const n = turnItems.children.length;
+  turnDetails._label.textContent = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
   scrollDown();
 }
 
