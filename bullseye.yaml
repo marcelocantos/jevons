@@ -911,6 +911,33 @@ targets:
     - design
     origin: manual
     discovered: 2026-07-05
+  T36:
+    name: Jevons enforces token-spend limits with real-time monitoring and automated clamp-down; no fleet can burn runaway tokens undetected
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Post-mortem docs/analysis/postmortem-token-runaway-2026-07-06.md is written and its root causes each map to an acceptance item below or an explicit non-goal
+    - 'Layer 1 (collection): jevonsd records real-time per-worker token usage and cost in SQLite by tailing each managed worker''s JSONL (prefer costUSD, fall back to a pricing table); extends T8.2'
+    - 'Layer 2 (monitoring): jevonsd computes rolling burn-rate per worker, per fleet, and global, and exposes a live ''what is burning right now'' view answering that question in one query rather than manual ps/lsof/mnemo_usage'
+    - 'Layer 2 (anomaly detection): a runaway trips an alert on any of — global/fleet burn-rate over a configured ceiling, fleet session/agent count over a bound or spawned unattended, orphaned sessions whose owning cockpit is gone, or projected spend over budget'
+    - 'Layer 3 (clamp-down): per-worker/per-fleet/global budgets exist with warn→throttle→pause→kill escalation, a hard ceiling that hard-stops spawning, and a global kill-switch that provably terminates launchd-detached tmux fleet processes (the manual kill this incident required, automated)'
+    - 'Layer 3 (dead-man''s switch): a fleet with no attached owner/heartbeat self-terminates instead of running indefinitely'
+    - 'Auto-resume guard: unattended multi-agent Workflow/fan-out work is not auto-resumed after a crash without a liveness + budget check, and resume attempts are capped'
+    - A test/drill reproduces a synthetic runaway (spawn N headless bypassPermissions sessions exceeding a budget) and demonstrates the clamp-down detects and kills it automatically within a bounded time, with the kill reaching detached processes
+    context: 'Forcing function: the 2026-07-06 token-runaway incident (see docs/analysis/postmortem-token-runaway-2026-07-06.md). A headless Claudia worker fleet (47 sessions in a launchd-parented tmux `claudia-anchor`) burned tokens invisibly — surviving every closed tab — while ~2 days of spend reached ~$10.9k and a 5-hour block hit 100%. Jevons spawns token-spending workers but has no real-time cost accounting and no automated clamp-down; the design already exists in docs/cost-management.md but was filed as "idea, not scheduled". Observability alone would have diagnosed but not prevented this — automated clamp-down is the headline. Related: T8.2 (worker observability, collection layer), T8.3 (execution safety/doit), T30 (butler that monitors/directs agents), T24 (worker resume robustness).'
+    depends_on:
+    - T8.2
+    tags:
+    - cost
+    - safety
+    - monitoring
+    - clamp-down
+    - fleet
+    - resiliency
+    - incident
+    origin: manual
+    discovered: 2026-07-06
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
