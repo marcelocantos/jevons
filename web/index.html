@@ -195,6 +195,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* Right pane: agents */
 #activity-pane { width: 420px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--border); }
 #activity-header { padding: 10px 16px; font-size: 10px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.08em; }
+#cost-ticker { display: none; padding: 6px 16px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); letter-spacing: -0.02em; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#cost-ticker.cost-warn { color: var(--amber); }
+#cost-ticker.cost-kill { color: #fff; background: #b3261e; font-weight: 600; }
 
 /* Theme toggle */
 #theme-toggle { margin-left: auto; display: flex; gap: 2px; background: var(--surface-raised); border-radius: 5px; padding: 2px; }
@@ -239,6 +242,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     </div>
   </div>
   <div id="activity-pane">
+    <div id="cost-ticker" title="Token burn rate — click for detail"></div>
     <div id="activity-header">Agents</div>
     <div id="agents"></div>
     <div id="terminal-header"></div>
@@ -485,6 +489,30 @@ function shortDir(d) {
 }
 setInterval(refreshAgents, 3000);
 refreshAgents();
+
+// Live token-burn ticker — the "what is burning right now" glance,
+// polled on the same cadence. Goes amber/red when a runaway signal trips.
+const costEl = document.getElementById('cost-ticker');
+function refreshCost() {
+  fetch('/api/cost').then(r=>r.json()).then(c => {
+    if (!c || c.error) { costEl.style.display='none'; return; }
+    costEl.style.display='block';
+    const g = (c.global_usd_per_hour||0).toFixed(2);
+    const f = (c.fleet_usd_per_hour||0).toFixed(2);
+    const alerts = c.alerts||[];
+    const kill = alerts.some(a=>a.level==='kill');
+    const warn = alerts.length>0;
+    costEl.className = kill ? 'cost-kill' : (warn ? 'cost-warn' : '');
+    let s = `🔥 $${g}/hr global · $${f}/hr fleet`;
+    if (alerts.length) s += ` · ⚠ ${alerts.length}`;
+    costEl.textContent = s;
+    costEl.title = alerts.length
+      ? alerts.map(a=>`[${a.level}] ${a.kind}: ${a.detail}`).join('\n')
+      : 'No runaway signals';
+  }).catch(()=>{ costEl.style.display='none'; });
+}
+setInterval(refreshCost, 3000);
+refreshCost();
 
 let autoScroll = true;
 msgs.addEventListener('scroll', () => {
