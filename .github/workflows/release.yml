@@ -80,6 +80,23 @@ jobs:
           github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           formula_folder: Formula
           version: ${{ github.event.release.tag_name }}
+          # gh is the only brew-installable tool the daemon shells out to.
+          depends_on: |
+            gh
+          # Run jevonsd as a keep-alive brew service. formula_includes injects
+          # this verbatim inside the formula class (the formula is DO-NOT-EDIT
+          # generated, so the service block must come from the generator, not a
+          # hand-edit). launchd gives brew services a spartan PATH, so augment
+          # it here — otherwise the daemon can't resolve gh at runtime. The
+          # remote CLI is terminal-launched and unaffected.
+          formula_includes: |
+            service do
+              run [opt_bin/"jevonsd"]
+              environment_variables PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:#{Dir.home}/.cargo/bin:#{Dir.home}/.local/bin:#{Dir.home}/.py/bin:#{Dir.home}/go/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+              keep_alive true
+              log_path var/"log/jevonsd.log"
+              error_log_path var/"log/jevonsd.log"
+            end
           install: |
             bin.install "jevonsd" => "jevonsd"
             bin.install "remote" => "remote"

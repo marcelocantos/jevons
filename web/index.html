@@ -30,6 +30,7 @@
   --accent-dim: rgba(239,68,68,0.18);
   --user-bg: rgba(239,68,68,0.16);
   --user-border: rgba(239,68,68,0.4);
+  --user-bg-editing: rgba(239,68,68,0.30);
   --green: #4ade80;
   --red: #ef4444;
   --amber: #fbbf24;
@@ -57,6 +58,7 @@
   --accent-dim: rgba(109,93,211,0.1);
   --user-bg: rgba(109,93,211,0.08);
   --user-border: rgba(109,93,211,0.2);
+  --user-bg-editing: rgba(109,93,211,0.18);
   --green: #10b981;
   --red: #ef4444;
   --amber: #d97706;
@@ -87,6 +89,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 .msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; }
 .msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: pre-wrap; word-wrap: break-word; }
+/* The message currently being edited via up/down recall. Brighter bg +
+   full-accent border (same 1px width → no reflow) + a box-shadow ring
+   to "thicken" the border without shifting geometry. */
+.msg.user.editing { background: var(--user-bg-editing); border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .msg.jevons { align-self: flex-start; background: transparent; color: var(--text); white-space: normal; padding: 10px 4px; }
 
 /* Markdown in agent responses */
@@ -137,13 +143,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* Input bar */
-#input-bar { display: flex; gap: 10px; align-items: flex-end; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)) 20px; background: var(--surface); border-top: 1px solid var(--border); }
+#input-bar { display: flex; gap: 10px; align-items: flex-end; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)) 20px; background: var(--surface); border-top: 1px solid var(--border);
+  /* One-line control height, derived from the input's own metrics
+     (1 line at line-height 1.45 × its 14px font, + 11px×2 padding +
+     1px×2 border). The input and the send button both pin to this, so
+     they are the same height by construction and can't drift apart. */
+  --control-h: calc(1.45 * 14px + 24px); }
 /* Textarea (not <input>) so Wispr Flow and other STT tools detect a
    document-style input and produce full punctuated sentences. */
-#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: calc(1.45em + 22px); max-height: 40vh; overflow-y: auto; }
-#input::placeholder { color: var(--text-muted); }
+#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: var(--control-h); max-height: 40vh; overflow-y: auto; }
+/* Fade the placeholder well below entered text so it's obviously a
+   prompt, not typed content. Lower opacity blends it toward the input
+   background — darker in dark mode, lighter in light mode. */
+#input::placeholder { color: var(--text-muted); opacity: 0.45; }
 #input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
-#send { padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
+#send { min-height: var(--control-h); padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
 #send:hover { opacity: 0.85; }
 #send:disabled { opacity: 0.3; cursor: not-allowed; }
 #voice-btn { padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 16px; cursor: pointer; transition: all 0.15s; line-height: 1; position: relative; }
@@ -156,19 +170,25 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #voice-status .voice-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: voice-blink 1s ease-in-out infinite; }
 @keyframes voice-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 .voice-indicator { font-size: 11px; color: var(--text-muted); padding: 4px 4px; align-self: center; font-style: italic; }
+/* "Working" indicator — order:1000 keeps it visually pinned below all
+   messages regardless of DOM insertion order while a turn is in flight. */
+.working-indicator { order: 1000; align-self: flex-start; display: flex; align-items: center; gap: 7px; padding: 8px 4px; color: var(--text-muted); font-size: 13px; font-style: italic; }
+.working-indicator .work-dots { display: inline-flex; gap: 4px; }
+.working-indicator .work-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: work-bounce 1.2s ease-in-out infinite; }
+.working-indicator .work-dots span:nth-child(2) { animation-delay: 0.16s; }
+.working-indicator .work-dots span:nth-child(3) { animation-delay: 0.32s; }
+@keyframes work-bounce { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 
 /* Collapsible turn details */
-.turn-details { align-self: flex-start; max-width: 85%; margin: 2px 0 0 0; }
-.turn-details summary { cursor: pointer; color: var(--text-muted); padding: 4px 4px; font-size: 16px; list-style: none; user-select: none; line-height: 1; }
-.turn-details summary::before { content: '\25b8'; margin-right: 3px; display: inline-block; transition: transform 0.15s; font-size: 16px; }
-.turn-details[open] summary::before { transform: rotate(90deg); }
-.turn-details summary::-webkit-details-marker { display: none; }
+/* Compact tool-activity marker — it does NOT expand; its detail is shown
+   as a hover tooltip. One small line, so it takes minimal vertical space. */
+.turn-marker { align-self: flex-start; position: relative; font-family: var(--mono); font-size: 11px; color: var(--text-muted); letter-spacing: -0.02em; user-select: none; cursor: default; line-height: 1.2; margin: 0; }
+.turn-marker:hover { color: var(--text-dim); }
+.turn-tip { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 30; min-width: 200px; max-width: 460px; max-height: 50vh; overflow-y: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 28px rgba(0,0,0,0.35); }
+.turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 1px; }
 .msg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; line-height: 1; }
 .msg.user .msg-time { text-align: right; }
-.turn-details summary:hover { color: var(--text-dim); }
-.turn-details[open] summary { margin-bottom: 4px; }
-.turn-details .turn-items { display: flex; flex-direction: column; gap: 1px; padding: 4px 10px; border-left: 1px solid var(--border); margin-left: 6px; }
-.turn-item { font-family: var(--mono); font-size: 11px; padding: 1px 0; letter-spacing: -0.02em; }
+.turn-item { font-family: var(--mono); font-size: 11px; padding: 1px 0; letter-spacing: -0.02em; white-space: pre-wrap; word-break: break-word; }
 .turn-item.tool-use { color: var(--amber); }
 .turn-item.tool-result { color: var(--text-dim); }
 
@@ -216,7 +236,6 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
                 autocapitalize="sentences"></textarea>
       <span id="input-hint" class="sr-only">Type a prompt for the Jevons assistant. Use full sentences with punctuation.</span>
       <button id="send" disabled aria-label="Send message">Send</button>
-      <button id="voice-btn" aria-label="Voice input" title="Click to toggle. Hold Ctrl to push-to-talk.">&#127908;</button>
     </div>
   </div>
   <div id="activity-pane">
@@ -244,12 +263,14 @@ let turnCount = 0;
 transport.onOpen = () => {
   const v = input.value;
   dot.className = 'dot on'; sTxt.textContent = 'connected'; sendBtn.disabled = false;
-  msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0;
+  msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
+  msgHistory = []; histIdx = null; histDraft = ''; editingEl = null;
   input.value = v;
 };
 transport.onClose = () => {
   // Transport handles reconnect (backoff + version check) internally.
   dot.className = 'dot off'; sTxt.textContent = 'reconnecting'; sendBtn.disabled = true;
+  setWorking(false); // don't leave "working" hanging across a disconnect
 };
 transport.onMessage = m => handle(m);
 transport.onError = msg => console.error('transport error:', msg);
@@ -259,13 +280,30 @@ function connect() { transport.connect(); }
 function handle(m) {
   const typ = m.type;
 
+  // Server rewound the conversation N user turns — trim the view to
+  // match: remove the Nth-from-last user message and everything after it.
+  // The resent (edited) message then re-arrives as a fresh turn.
+  if (typ === 'rewound') {
+    const users = [...msgs.querySelectorAll('.msg.user')];
+    const n = m.turns || 0;
+    if (n > 0 && users.length >= n) {
+      closeTurn();
+      let node = users[users.length - n];
+      while (node) { const next = node.nextSibling; node.remove(); node = next; }
+      msgHistory = msgHistory.slice(0, Math.max(0, msgHistory.length - n));
+      setEditingHighlight(null);
+    }
+    return;
+  }
+
   const msgTs = m.timestamp ? new Date(m.timestamp).getTime() : Date.now();
 
   if (typ==='user') {
     const content = m.message?.content;
     if (typeof content === 'string') {
       closeTurn();
-      addMsg('user', content, msgTs);
+      const uEl = addMsg('user', content, msgTs);
+      if (content && msgHistory[msgHistory.length - 1]?.text !== content) msgHistory.push({ text: content, el: uEl });
       startTurn();
     } else if (Array.isArray(content)) {
       content.forEach(c => {
@@ -289,6 +327,7 @@ function handle(m) {
     });
     if (hasText) {
       closeTurn();
+      setWorking(false);
       content.forEach(c => {
         if (c.type==='text' && c.text) addMsg('jevons', c.text, msgTs);
       });
@@ -309,14 +348,16 @@ function handle(m) {
 }
 
 function startTurn() {
-  turnDetails = document.createElement('details');
-  turnDetails.className = 'turn-details';
-  turnDetails.open = true;
-  const summary = document.createElement('summary');
-  turnDetails.appendChild(summary);
+  // A compact, non-expanding marker: a one-line label whose tool detail
+  // lives in a .turn-tip that only appears on hover.
+  turnDetails = document.createElement('div');
+  turnDetails.className = 'turn-marker';
+  const label = document.createElement('span');
+  turnDetails.appendChild(label);
   turnItems = document.createElement('div');
-  turnItems.className = 'turn-items';
+  turnItems.className = 'turn-tip';
   turnDetails.appendChild(turnItems);
+  turnDetails._label = label;
   msgs.appendChild(turnDetails);
   turnCount++;
   scrollDown();
@@ -325,11 +366,8 @@ function startTurn() {
 function closeTurn() {
   if (!turnDetails) return;
   const n = turnItems ? turnItems.children.length : 0;
-  if (n === 0) {
-    turnDetails.remove();
-  } else {
-    turnDetails.open = false;
-  }
+  if (n === 0) turnDetails.remove(); // no tool activity → nothing to show
+  // else: leave the compact marker in place; hover reveals the detail.
   turnDetails = null;
   turnItems = null;
 }
@@ -340,6 +378,8 @@ function addTurnItem(cls, text) {
   d.className = 'turn-item ' + cls;
   d.textContent = text;
   turnItems.appendChild(d);
+  const n = turnItems.children.length;
+  turnDetails._label.textContent = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
   scrollDown();
 }
 
@@ -450,7 +490,13 @@ let autoScroll = true;
 msgs.addEventListener('scroll', () => {
   autoScroll = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - 30;
 });
-function scrollDown() { if (autoScroll) msgs.scrollTop = msgs.scrollHeight; }
+function scrollDown() {
+  if (!autoScroll) return;
+  msgs.scrollTop = msgs.scrollHeight;
+  // Re-pin after layout settles — markdown/timestamps can grow the
+  // content height after the synchronous append, leaving us short.
+  requestAnimationFrame(() => { if (autoScroll) msgs.scrollTop = msgs.scrollHeight; });
+}
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }
 function summariseInput(obj) {
@@ -486,12 +532,109 @@ setInterval(() => {
   });
 }, 30000);
 
+// Message-recall history (up/down arrow, shell-style). Populated from
+// user turns as they render (so it survives a reload from the replayed
+// transcript). histIdx === null means we're editing the live input.
+let msgHistory = [];   // [{text, el}] — el is the rendered user bubble
+let histIdx = null;
+let histDraft = '';
+let editingEl = null;  // the bubble currently highlighted as "being edited"
+
+// setEditingHighlight moves the .editing highlight to el (or clears it),
+// scrolling it into view so you can see which message you're editing.
+function setEditingHighlight(el) {
+  if (editingEl && editingEl !== el) editingEl.classList.remove('editing');
+  editingEl = el || null;
+  if (editingEl) {
+    editingEl.classList.add('editing');
+    editingEl.scrollIntoView({ block: 'nearest' });
+  }
+}
+
 function send() {
   const t = input.value.trim();
   if (!t) return;
+  // If a turn is still in flight (no reply yet), cancel it and resubmit
+  // the edited message. Interrupt first; claudia's Send waits for the
+  // TUI to return to ready before it types, so the ordering is safe.
+  if (workingEl) transport.send('{"type":"interrupt"}');
   transport.send(t);
   input.value = '';
+  histIdx = null; histDraft = ''; setEditingHighlight(null);
   autoGrow();
+  // Sending pins us to the bottom so the outgoing message and the reply
+  // scroll into view, even if we'd scrolled up to read history.
+  autoScroll = true;
+  setWorking(true);
+  requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+}
+
+// rewindAndResend performs the destructive "edit an earlier message"
+// path: roll the conversation back to the highlighted recalled message
+// and resend the edited text. Backed by claudia's session rewind (kill
+// process, truncate transcript at a turn boundary, --resume). Only valid
+// when a recalled message is highlighted.
+function rewindAndResend() {
+  const text = input.value.trim();
+  if (!text || !editingEl) return;
+  const users = [...msgs.querySelectorAll('.msg.user')];
+  const idx = users.indexOf(editingEl);
+  if (idx < 0) { send(); return; } // out of sync — fall back to append
+  const n = users.length - idx;    // turns to roll back: the edited msg + everything after
+  transport.send(JSON.stringify({ type: 'rewind', turns: n }));
+  transport.send(text);
+  input.value = '';
+  histIdx = null; histDraft = ''; setEditingHighlight(null);
+  autoGrow();
+  autoScroll = true; setWorking(true);
+  requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+}
+
+// recallHistory walks msgHistory into the input. dir = -1 (older) or +1
+// (newer). Returns true if it handled the key (so the caller can
+// preventDefault), false to let the arrow move the cursor normally.
+function recallHistory(dir) {
+  if (msgHistory.length === 0) return false;
+  if (histIdx === null) {
+    if (dir > 0) return false;         // Down on live input: nothing to do
+    histDraft = input.value;           // save what we were typing
+    histIdx = msgHistory.length;
+  }
+  histIdx += dir;
+  if (histIdx >= msgHistory.length) {  // walked back to the live draft
+    histIdx = null;
+    input.value = histDraft;
+    setEditingHighlight(null);
+  } else {
+    if (histIdx < 0) histIdx = 0;      // clamp at the oldest
+    const entry = msgHistory[histIdx];
+    input.value = entry.text;
+    setEditingHighlight(entry.el);
+  }
+  autoGrow();
+  // Put the caret at the end of the recalled text.
+  input.selectionStart = input.selectionEnd = input.value.length;
+  return true;
+}
+
+// "Working" indicator: shown from when the user sends until Jevons's
+// reply text arrives, so a long synchronous turn (e.g. directing a
+// worker that runs a test suite) doesn't look like a hang. Only driven
+// by live sends — never by history replay.
+let workingEl = null;
+function setWorking(on) {
+  if (on) {
+    if (!workingEl) {
+      workingEl = document.createElement('div');
+      workingEl.className = 'working-indicator';
+      workingEl.innerHTML = 'Jevons is working <span class="work-dots"><span></span><span></span><span></span></span>';
+    }
+    msgs.appendChild(workingEl);
+    scrollDown();
+  } else if (workingEl) {
+    workingEl.remove();
+    workingEl = null;
+  }
 }
 
 // Auto-grow the textarea: reset to one row, then expand to fit content
@@ -502,17 +645,45 @@ function autoGrow() {
 }
 
 // Enter submits, Shift-Enter inserts a newline.
-input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    // Cmd/Ctrl+Enter while editing a recalled message rewinds the
+    // conversation to it (destructive); plain Enter appends (safe).
+    if ((e.metaKey || e.ctrlKey) && editingEl) rewindAndResend();
+    else send();
+    return;
+  }
+  // Alt+Up/Down recall previous messages. A dedicated modifier keeps
+  // plain Up/Down free for line navigation in a multi-line draft.
+  // preventDefault overrides macOS's Option+Arrow paragraph jump.
+  if (e.altKey && e.key === 'ArrowUp') { if (recallHistory(-1)) e.preventDefault(); return; }
+  if (e.altKey && e.key === 'ArrowDown') { if (recallHistory(+1)) e.preventDefault(); return; }
+});
 input.addEventListener('input', autoGrow);
 sendBtn.addEventListener('click', send);
+// Keep focus in the textarea when clicking toolbar buttons: preventing
+// the mousedown default blocks the focus shift while still firing click.
+sendBtn.addEventListener('mousedown', e => e.preventDefault());
 
 autoGrow();
 input.focus();
 connect();
 
+// On first load the server replays history as a burst of messages and
+// layout settles asynchronously, which can leave the view slightly above
+// the true bottom — so a freshly-typed message wouldn't scroll into view.
+// Pin to the bottom over the first second so we start at the latest.
+[0, 100, 250, 500, 1000].forEach(d => setTimeout(() => {
+  msgs.scrollTop = msgs.scrollHeight;
+  autoScroll = true;
+}, d));
+
 document.addEventListener('keydown', e => {
   if (e.key === 'PageUp') { e.preventDefault(); msgs.scrollBy(0, -msgs.clientHeight * 0.8); }
   if (e.key === 'PageDown') { e.preventDefault(); msgs.scrollBy(0, msgs.clientHeight * 0.8); }
+  // Esc interrupts Jevons's current turn (like the Claude Code TUI).
+  if (e.key === 'Escape') { transport.send('{"type":"interrupt"}'); setWorking(false); }
 });
 
 // Theme toggle.
@@ -534,6 +705,8 @@ document.getElementById('theme-toggle').addEventListener('click', e => {
   document.cookie = 'theme='+btn.dataset.t+';path=/;max-age=31536000';
   applyTheme(btn.dataset.t);
 });
+// Don't let the theme buttons steal focus from the textarea.
+document.getElementById('theme-toggle').addEventListener('mousedown', e => e.preventDefault());
 applyTheme((document.cookie.match(/(?:^|; )theme=([^;]*)/)||[])[1] || 'system');
 
 // Terminal viewer.
@@ -626,7 +799,11 @@ const voiceStatus = document.getElementById('voice-status');
 const voiceStatusText = document.getElementById('voice-status-text');
 let voiceActive = false;
 
-voiceBtn.addEventListener('click', () => {
+// Built-in voice/mic removed from the web UI — dictation is done via
+// Wispr Flow into the text field. The voice machinery below is left
+// dormant (never engaged) rather than ripped out. Guard the (now
+// absent) button so the rest of the script still loads.
+voiceBtn?.addEventListener('click', () => {
   if (voiceActive) stopVoice(); else startVoice();
 });
 
@@ -658,6 +835,7 @@ let pttArmTimer = null;
 const pttHeldKeys = new Set();
 
 function pttArm() {
+  return; // Ctrl push-to-talk disabled — using Wispr Flow, not the built-in mic.
   if (pttArmTimer || pttActive) return;
   pttArmTimer = setTimeout(() => {
     pttArmTimer = null;

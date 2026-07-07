@@ -10,7 +10,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/claudia v0.12.0
+	github.com/marcelocantos/claudia v0.14.0
 	github.com/marcelocantos/pigeon v0.19.0
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/peterh/liner v1.2.2

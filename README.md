@@ -1,8 +1,14 @@
 # Jevons ([why?](#about-the-name))
 
-Remote control for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-instances. Talk to a coordinator that manages Claude Code workers — from a
-terminal, or (eventually) from your phone.
+Your one-stop shop to manage your AI life.
+
+Today that means remote control for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+instances: talk to a coordinator that manages Claude Code workers — from a
+terminal, or (eventually) from your phone. The charter is wider: one cockpit
+that connects you to every AI service you run — status at a glance, events
+that need your attention, and an agent that can act on any of them. How
+Jevons governs — the owner/CEO model, arbitration on attested evidence, and
+risk-graded decision rights — is defined in [docs/charter.md](docs/charter.md).
 
 ## How it works
 
@@ -12,7 +18,7 @@ terminal, or (eventually) from your phone.
                                    MCP ◄─────────────┘ (tool calls)
 ```
 
-**jevonsd** is the coordinator daemon. It runs *Jevon* — a Claude Code
+**jevonsd** is the coordinator daemon. It runs *Jevons* — a Claude Code
 session that receives your messages and decides whether to answer directly or
 delegate coding tasks to *worker* sessions. Jevons manages workers via
 an in-process MCP server (no separate binary needed). Multiple clients can

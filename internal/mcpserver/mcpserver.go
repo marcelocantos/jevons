@@ -17,10 +17,10 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/marcelocantos/claudia"
-	
+
+	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/manager"
-	
 )
 
 // EventCallback is called when a worker finishes a command.
@@ -38,30 +38,31 @@ type TranscriptOps struct {
 
 // Server wraps an MCP server that provides worker management tools.
 type Server struct {
-	mgr          *manager.Manager
-	registry     *claudia.Registry
-	scanner      *discovery.Scanner
-	workerWD     string
-	onDone       EventCallback
-	screenshot   ScreenshotFunc
-	transcript   *TranscriptOps
+	mgr        *manager.Manager
+	registry   *claudia.Registry
+	scanner    *discovery.Scanner
+	butler     *butler.Butler
+	workerWD   string
+	onDone     EventCallback
+	screenshot ScreenshotFunc
+	transcript *TranscriptOps
 
-	mcpSrv       *server.MCPServer
-	transport    *server.StreamableHTTPServer
+	mcpSrv    *server.MCPServer
+	transport *server.StreamableHTTPServer
 
-	mu           sync.Mutex
-	notifyJevon  NotifyFunc
+	mu          sync.Mutex
+	notifyJevon NotifyFunc
 }
 
 // New creates an MCP server with jevon tools wired to the given manager.
 // transcript may be nil if transcript ops are not available.
 func New(mgr *manager.Manager, workerWD string, onDone EventCallback, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
 	s := &Server{
-		mgr:         mgr,
-		workerWD:    workerWD,
-		onDone:      onDone,
-		screenshot:  screenshot,
-		transcript:  transcript,
+		mgr:        mgr,
+		workerWD:   workerWD,
+		onDone:     onDone,
+		screenshot: screenshot,
+		transcript: transcript,
 	}
 
 	mcpSrv := server.NewMCPServer("jevons", "1.0.0")

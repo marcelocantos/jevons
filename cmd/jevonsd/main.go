@@ -21,14 +21,16 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
+	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/cli"
-	
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
+	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
-	
+
 	"github.com/marcelocantos/pigeon"
 	"github.com/marcelocantos/pigeon/crypto"
 	"github.com/marcelocantos/pigeon/qr"
@@ -95,6 +97,39 @@ If no product owner exists for a repo, create one via
 jevons_agent_start before routing.
 
 ## MCP Tools
+
+### Thread Management (durable threads — the butler spine, prefer these)
+
+A THREAD is a durable unit of work (a Claude Code conversation plus its
+status), NOT tied to a live process. The process is a disposable cache:
+started to interact, stopped when idle, rehydrated on demand via
+--resume. Threads survive daemon restarts — you never lose one.
+
+- **jevons_thread_adopt** — Adopt a session Marcelo already has running
+  (by session UUID) in ONE call: it auto-names the thread after the repo
+  and TAKES IT OVER by default, so it's immediately directable and shows
+  in the agent panel. Just pass session_id — do NOT ask Marcelo for a
+  name (he can rename later). If the session is still open in its own
+  terminal, take-over is refused — tell him to stop driving it, then
+  retry. Pass observe_only:true only if he explicitly wants to watch
+  without taking over. Required: session_id.
+- **jevons_thread_remove** — Remove a thread: stop + deregister its
+  process (the Claude session on disk is left intact) and drop the
+  record. Use to clean up duplicate/unwanted threads. Required: id.
+- **jevons_thread_list** — List all threads (adopted + spawned) with
+  derived status: active/working/blocked/done/idle + a recent-activity
+  summary.
+- **jevons_thread_status** — Status + recent-activity summary for one
+  thread. Required: id.
+- **jevons_thread_spawn** — Create a new thread you own end-to-end and
+  start its process. Durable and rehydratable. Required: id, workdir.
+  Optional: description, model.
+- **jevons_thread_direct** — Deliver a message to a thread and return
+  its reply (this call WAITS for the reply). If the process was stopped
+  or aged out it is transparently rehydrated first; if it can't be
+  reached you get a distinct error, never a silent hang. Observe-only
+  adopted threads must be taken over before directing. Required: id,
+  text.
 
 ### Agent Management
 - **jevons_agent_list** — List all registered agents and their status.
@@ -330,6 +365,28 @@ func main() {
 	mcpSrv.SetRegistry(registry)
 	mcpSrv.SetScanner(scanner)
 
+	// Butler: durable-thread orchestrator over the thread store, the
+	// session scanner (non-invasive observation), and the transcript
+	// reader (status derivation). Threads persist across restarts so the
+	// full set is never lost.
+	threadStore, err := thread.NewStore(filepath.Join(homeDir, ".jevons", "threads.json"))
+	if err != nil {
+		slog.Error("thread store failed", "err", err)
+		os.Exit(1)
+	}
+	btlr := butler.New(butler.Config{
+		Store:   threadStore,
+		Scanner: scanner,
+		Reader:  transcript.NewReader(filepath.Join(homeDir, ".claude", "projects")),
+		Fleet:   fleet.NewClaudia(registry),
+	})
+	mcpSrv.SetButler(btlr)
+
+	// Process-as-cache GC: periodically stop idle spawned threads'
+	// processes (resumably) to free resources. The threads persist and
+	// rehydrate on the next Direct.
+	go reapIdleThreads(ctx, btlr)
+
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
 
@@ -388,19 +445,16 @@ func main() {
 	defer registry.StopAll()
 
 	if jevonProc := registry.Get("jevons"); jevonProc != nil {
-		srv.SetProcess(jevonProc)
-		// Subscribe to Jevon's event stream:
-		// - forward raw JSONL to chat WS clients;
-		// - accumulate assistant turn text + emit thinking/idle status;
-		// - inject completed turns into the Grok voice bridge for TTS.
-		jevonProc.SubscribeEvents(func(ev claudia.Event) {
-			srv.BroadcastChat(string(ev.Raw))
-			srv.HandleAgentEvent(ev)
-		})
+		// AttachOverseer sets the process and subscribes its event stream
+		// (forward raw JSONL to chat WS clients; accumulate turn text +
+		// status; feed the Grok voice bridge). It is re-run after a rewind
+		// swaps the process, so all overseer references stay current.
+		srv.AttachOverseer(jevonProc)
 
 		// Wire MCP worker-completion + agent-reply notifications into Jevon.
+		// Route through the server so a rewind swap is transparent.
 		send := func(text string) {
-			if err := jevonProc.Send(text); err != nil {
+			if err := srv.SendToOverseer(text); err != nil {
 				slog.Error("notify jevon failed", "err", err)
 			}
 		}
@@ -592,4 +646,24 @@ func loadKeychainKey(service string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// reapIdleGCInterval is how often the butler sweeps for idle spawned
+// threads whose processes can be stopped resumably.
+const reapIdleGCInterval = 2 * time.Minute
+
+// reapIdleThreads runs the process-as-cache GC sweep until ctx is done.
+func reapIdleThreads(ctx context.Context, btlr *butler.Butler) {
+	ticker := time.NewTicker(reapIdleGCInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if reaped := btlr.ReapIdle(); len(reaped) > 0 {
+				slog.Info("reaped idle thread processes", "threads", reaped)
+			}
+		}
+	}
 }
