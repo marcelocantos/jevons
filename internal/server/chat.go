@@ -51,11 +51,35 @@ func (s *Server) AttachOverseer(agent *claudia.Agent) {
 
 // SendToOverseer delivers text to the current overseer process.
 func (s *Server) SendToOverseer(text string) error {
+	// The owner talking to Jevons is the strongest owner-present signal —
+	// feed the budget dead-man's switch so it never stops a fleet the
+	// owner is actively directing.
+	if s.activityHook != nil {
+		s.activityHook()
+	}
 	proc := s.CurrentProcess()
 	if proc == nil || !proc.Alive() {
 		return fmt.Errorf("overseer not running")
 	}
 	return proc.Send(text)
+}
+
+// handleCost serves the live cost snapshot: burn-rates, the "what is
+// burning right now" view, and any tripped runaway signals.
+func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.costSource == nil {
+		w.Write([]byte(`{"error":"cost monitoring not enabled"}`))
+		return
+	}
+	snap := s.costSource()
+	if snap == nil {
+		w.Write([]byte(`{"error":"no snapshot yet"}`))
+		return
+	}
+	if err := json.NewEncoder(w).Encode(snap); err != nil {
+		slog.Warn("encode cost snapshot", "err", err)
+	}
 }
 
 // RewindOverseer rolls the Jevons conversation back n user turns and

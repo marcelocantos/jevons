@@ -19,6 +19,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/manager"
 )
@@ -50,8 +51,9 @@ type Server struct {
 	mcpSrv    *server.MCPServer
 	transport *server.StreamableHTTPServer
 
-	mu          sync.Mutex
-	notifyJevon NotifyFunc
+	mu           sync.Mutex
+	notifyJevon  NotifyFunc
+	costSnapshot func() (*cost.Snapshot, error)
 }
 
 // New creates an MCP server with jevon tools wired to the given manager.
