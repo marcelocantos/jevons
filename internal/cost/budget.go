@@ -89,6 +89,15 @@ type BudgetConfig struct {
 	// crosses it. This is the "no matter what" line.
 	HardCeilingUSDPerDay float64 `json:"hard_ceiling_usd_per_day"`
 
+	// ProtectedWorkers are never killed or deregistered by the enforcer
+	// — kill downgrades to pause. The overseer lives here by default:
+	// deregistering the butler's own brain would brick the cockpit, and
+	// the idle-context re-cache tax makes the overseer the most likely
+	// worker to trip its own ladder. (The global kill-switch may still
+	// kill a protected worker's PROCESS — that loses nothing durable;
+	// it rehydrates on next owner contact.)
+	ProtectedWorkers []string `json:"protected_workers"`
+
 	// DeadManIdle: if no owner heartbeat for this long while the fleet
 	// is burning, the fleet is stopped resumably.
 	DeadManIdle Duration `json:"dead_man_idle"`
@@ -111,6 +120,7 @@ func DefaultBudgetConfig() *BudgetConfig {
 		MaxSessions:          20,
 		DailyBudgetUSD:       200,
 		HardCeilingUSDPerDay: 300,
+		ProtectedWorkers:     []string{"jevons"},
 		DeadManIdle:          Duration(6 * time.Hour),
 		ResumeMaxAttempts:    3,
 		Window:               Duration(5 * time.Minute),

@@ -43,8 +43,19 @@ type Collector struct {
 	activeWindow time.Duration
 	now          func() time.Time
 
-	mu     sync.Mutex
-	active []string // JSONL paths from the last scan
+	mu       sync.Mutex
+	active   []string // JSONL paths from the last scan
+	lastPoll time.Time
+}
+
+// LastPoll reports when the collector last completed a poll pass. The
+// monitor alarms on staleness: a safety system whose failure mode is
+// silence would recreate the incident's invisibility inside the
+// monitoring itself.
+func (c *Collector) LastPoll() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastPoll
 }
 
 // NewCollector constructs a Collector.
@@ -122,6 +133,9 @@ func (c *Collector) PollOnce() (int, error) {
 			}
 		}
 	}
+	c.mu.Lock()
+	c.lastPoll = c.now()
+	c.mu.Unlock()
 	return total, firstErr
 }
 

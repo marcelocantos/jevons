@@ -137,6 +137,35 @@ func TestMonitorHardCeilingAndQuiet(t *testing.T) {
 	}
 }
 
+func TestMonitorCollectorStaleness(t *testing.T) {
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	s := seedStore(t, now)
+	cfg := &BudgetConfig{Window: Duration(5 * time.Minute)}
+
+	lastPoll := now.Add(-10 * time.Second)
+	m := NewMonitor(&MonitorArgs{
+		Store:             s,
+		Config:            func() *BudgetConfig { return cfg },
+		CollectorLastPoll: func() time.Time { return lastPoll },
+		Now:               func() time.Time { return now },
+	})
+
+	snap, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(snap.Alerts) != 0 {
+		t.Fatalf("fresh collector alerted: %+v", snap.Alerts)
+	}
+
+	// A collector that stops polling becomes an alarm, not silence.
+	lastPoll = now.Add(-5 * time.Minute)
+	snap, _ = m.Snapshot()
+	if len(snap.Alerts) != 1 || snap.Alerts[0].Kind != AlertCollectorStale {
+		t.Fatalf("stale collector did not alarm: %+v", snap.Alerts)
+	}
+}
+
 func TestBudgetConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/budget.json"

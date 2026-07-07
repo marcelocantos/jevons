@@ -48,7 +48,13 @@ const (
 	AlertOrphanSessions = "orphan-sessions"
 	AlertProjection     = "projected-overspend"
 	AlertHardCeiling    = "hard-ceiling"
+	AlertCollectorStale = "collector-stale"
 )
+
+// collectorStaleAfter: a collector that hasn't completed a poll pass in
+// this long means the monitor may be blind, which must itself be an
+// alarm — the incident's core failure was silent invisibility.
+const collectorStaleAfter = 2 * time.Minute
 
 // Alert is one tripped runaway signal.
 type Alert struct {
@@ -85,20 +91,26 @@ type MonitorArgs struct {
 	Store    *Store
 	Config   func() *BudgetConfig
 	IsOrphan func(BurnRow) bool
-	Now      func() time.Time
+	// CollectorLastPoll reports the collector's last completed poll, so
+	// a broken collector becomes an alarm rather than silent blindness.
+	// nil disables the staleness check (pure-store tests).
+	CollectorLastPoll func() time.Time
+	Now               func() time.Time
 }
 
 // Monitor computes burn-rates and runaway signals from the store.
 type Monitor struct {
-	store    *Store
-	config   func() *BudgetConfig
-	isOrphan func(BurnRow) bool
-	now      func() time.Time
+	store             *Store
+	config            func() *BudgetConfig
+	isOrphan          func(BurnRow) bool
+	collectorLastPoll func() time.Time
+	now               func() time.Time
 }
 
 // NewMonitor constructs a Monitor.
 func NewMonitor(args *MonitorArgs) *Monitor {
-	m := &Monitor{store: args.Store, config: args.Config, isOrphan: args.IsOrphan, now: args.Now}
+	m := &Monitor{store: args.Store, config: args.Config, isOrphan: args.IsOrphan,
+		collectorLastPoll: args.CollectorLastPoll, now: args.Now}
 	if m.isOrphan == nil {
 		m.isOrphan = func(BurnRow) bool { return false }
 	}
@@ -156,6 +168,15 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 	snap.ProjectedTodayUSD = snap.SpentTodayUSD + snap.GlobalUSDPerHour*remaining
 
 	snap.Alerts = m.evaluate(cfg, snap, orphans)
+
+	// The watchdog's own watchdog: a stale collector means everything
+	// above may be an undercount, and that must be loud.
+	if m.collectorLastPoll != nil {
+		if lp := m.collectorLastPoll(); lp.IsZero() || now.Sub(lp) > collectorStaleAfter {
+			snap.Alerts = append(snap.Alerts, Alert{Kind: AlertCollectorStale, Level: LevelWarn,
+				Detail: fmt.Sprintf("cost collector has not polled since %s — burn figures may be blind", lp.Format(time.RFC3339))})
+		}
+	}
 	return snap, nil
 }
 
