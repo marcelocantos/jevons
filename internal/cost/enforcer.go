@@ -59,10 +59,13 @@ type Enforcer struct {
 	// resumeAttempts counts unattended relaunches per worker since the
 	// last owner contact (the auto-resume amplifier guard).
 	resumeAttempts map[string]int
-	lastHeartbeat  time.Time
-	deadManFired   bool
-	spawnHalted    bool
-	lastSnap       *Snapshot
+	// killStreak counts consecutive kill-level ticks per target, so an
+	// irreversible action fires only on a sustained breach, not a spike.
+	killStreak    map[string]int
+	lastHeartbeat time.Time
+	deadManFired  bool
+	spawnHalted   bool
+	lastSnap      *Snapshot
 }
 
 // ThrottleCooldown is how long a throttled worker stays paused before
@@ -88,6 +91,7 @@ func NewEnforcer(args *EnforcerArgs) *Enforcer {
 		lastLevel:      map[string]Level{},
 		resumeAt:       map[string]time.Time{},
 		resumeAttempts: map[string]int{},
+		killStreak:     map[string]int{},
 	}
 	if e.now == nil {
 		e.now = time.Now
@@ -215,34 +219,51 @@ func (e *Enforcer) Act(snap *Snapshot) {
 		protected[w] = true
 	}
 
+	// Reset the kill-confirmation streak for any target no longer at
+	// kill level (a spike that decayed).
+	e.decayKillStreaks(workerLevel, fleetLevel, globalLevel)
+
 	// Per-worker escalation. Actions fire only when the level rises
 	// above what was already acted on; when the alert clears, the slate
-	// resets so a later breach re-escalates from scratch.
+	// resets so a later breach re-escalates from scratch. Kill is
+	// special: it applies pause immediately (stopping the burn
+	// reversibly) and only escalates to the irreversible kill once the
+	// breach has persisted KillConfirmTicks ticks.
 	for w, lvl := range workerLevel {
 		prev := e.lastLevel[w]
-		if lvl <= prev {
+		if lvl < LevelKill && lvl <= prev {
 			continue
 		}
-		e.lastLevel[w] = lvl
 		switch lvl {
 		case LevelWarn:
+			e.lastLevel[w] = lvl
 			e.notify(lvl, fmt.Sprintf("budget: worker %s over warn threshold", w))
 		case LevelThrottle:
+			e.lastLevel[w] = lvl
 			e.resumeAt[w] = e.now().Add(ThrottleCooldown)
 			e.act(lvl, fmt.Sprintf("budget: throttling worker %s (paused %s)", w, ThrottleCooldown),
 				func() error { return e.actions.PauseWorker(w) })
 		case LevelPause:
+			e.lastLevel[w] = lvl
 			e.act(lvl, fmt.Sprintf("budget: pausing worker %s until spend clears", w),
 				func() error { return e.actions.PauseWorker(w) })
 		case LevelKill:
+			key := "w:" + w
 			if protected[w] {
 				// Never deregister the butler's own brain — kill
 				// downgrades to pause for protected workers.
-				e.act(lvl, fmt.Sprintf("budget: worker %s over KILL threshold — protected, pausing instead", w),
+				e.lastLevel[w] = LevelPause
+				e.act(LevelKill, fmt.Sprintf("budget: worker %s over KILL threshold — protected, pausing instead", w),
 					func() error { return e.actions.PauseWorker(w) })
-			} else {
-				e.act(lvl, fmt.Sprintf("budget: KILLING worker %s", w),
+			} else if e.killReady(key) {
+				e.lastLevel[w] = LevelKill
+				e.act(LevelKill, fmt.Sprintf("budget: KILLING worker %s (kill breach confirmed)", w),
 					func() error { return e.actions.KillWorker(w) })
+			} else {
+				// Pending: stop the burn reversibly, keep re-evaluating.
+				e.lastLevel[w] = LevelPause
+				e.act(LevelPause, fmt.Sprintf("budget: worker %s at KILL threshold — pausing pending confirmation (%d/%d)", w, e.killStreak[key], e.confirmTicks()),
+					func() error { return e.actions.PauseWorker(w) })
 			}
 		}
 	}
@@ -269,7 +290,6 @@ func (e *Enforcer) Act(snap *Snapshot) {
 	e.escalateScope("@global", globalLevel,
 		func() error { return e.actions.StopFleet() },
 		func() error {
-			e.spawnHalted = true
 			if attended {
 				e.notify(LevelKill, "budget: global burn over KILL threshold — owner present, so fleet stopped resumably instead of firing the kill-switch; fire it manually if the burn is not yours")
 				return e.actions.StopFleet()
@@ -277,12 +297,15 @@ func (e *Enforcer) Act(snap *Snapshot) {
 			return e.actions.KillSwitch()
 		})
 
-	// Hard ceiling: spawning halts; clears when the alert clears (spend
-	// window rolls past, or the owner raises the ceiling).
-	if hardCeiling && !e.spawnHalted {
+	// Spawn halt: a cheap, reversible guard that engages the moment a
+	// global-kill breach or the hard daily ceiling is seen — including
+	// the pending-confirmation tick, since stopping NEW spend costs
+	// nothing and reverses freely. It clears when both conditions lift.
+	haltSpawning := hardCeiling || globalLevel == LevelKill
+	if haltSpawning && !e.spawnHalted {
 		e.spawnHalted = true
-		e.notify(LevelKill, "budget: hard daily ceiling crossed — spawning halted")
-	} else if !hardCeiling && e.spawnHalted && globalLevel < LevelKill {
+		e.notify(LevelKill, "budget: spawning halted (global kill breach or hard daily ceiling)")
+	} else if !haltSpawning && e.spawnHalted {
 		e.spawnHalted = false
 		e.notify(LevelWarn, "budget: clamp cleared — spawning re-enabled")
 	}
@@ -299,7 +322,9 @@ func (e *Enforcer) Act(snap *Snapshot) {
 }
 
 // escalateScope applies fleet/global-scope escalation with the same
-// only-upward semantics as workers.
+// only-upward semantics as workers. Kill applies a resumable fleet stop
+// immediately and only fires the irreversible kill (the switch) once the
+// breach has persisted KillConfirmTicks ticks.
 func (e *Enforcer) escalateScope(scope string, lvl Level, pause, kill func() error) {
 	prev := e.lastLevel[scope]
 	if lvl == LevelNone {
@@ -308,17 +333,63 @@ func (e *Enforcer) escalateScope(scope string, lvl Level, pause, kill func() err
 		}
 		return
 	}
-	if lvl <= prev {
+	if lvl < LevelKill && lvl <= prev {
 		return
 	}
-	e.lastLevel[scope] = lvl
 	switch lvl {
 	case LevelWarn:
+		e.lastLevel[scope] = lvl
 		e.notify(lvl, fmt.Sprintf("budget: %s burn over warn threshold", scope[1:]))
 	case LevelThrottle, LevelPause:
+		e.lastLevel[scope] = lvl
 		e.act(lvl, fmt.Sprintf("budget: %s burn over %s threshold — stopping fleet resumably", scope[1:], lvl), pause)
 	case LevelKill:
-		e.act(lvl, fmt.Sprintf("budget: %s burn over KILL threshold — firing kill-switch", scope[1:]), kill)
+		if e.killReady(scope) {
+			e.lastLevel[scope] = LevelKill
+			e.act(LevelKill, fmt.Sprintf("budget: %s burn over KILL threshold (confirmed) — firing kill-switch", scope[1:]), kill)
+		} else {
+			e.lastLevel[scope] = LevelPause
+			e.act(LevelPause, fmt.Sprintf("budget: %s burn over KILL threshold — stopping fleet resumably pending confirmation (%d/%d)", scope[1:], e.killStreak[scope], e.confirmTicks()), pause)
+		}
+	}
+}
+
+// confirmTicks is the number of consecutive kill-level ticks required
+// before an irreversible action fires (minimum 1).
+func (e *Enforcer) confirmTicks() int {
+	if n := e.config().KillConfirmTicks; n > 1 {
+		return n
+	}
+	return 1
+}
+
+// killReady increments target's kill-confirmation streak and reports
+// whether the irreversible action may now fire.
+func (e *Enforcer) killReady(target string) bool {
+	e.killStreak[target]++
+	return e.killStreak[target] >= e.confirmTicks()
+}
+
+// decayKillStreaks resets the confirmation streak for any target not
+// currently at kill level, so a spike that decays doesn't leave a worker
+// one tick from the nuke.
+func (e *Enforcer) decayKillStreaks(workerLevel map[string]Level, fleetLevel, globalLevel Level) {
+	atKill := map[string]bool{}
+	for w, lvl := range workerLevel {
+		if lvl == LevelKill {
+			atKill["w:"+w] = true
+		}
+	}
+	if fleetLevel == LevelKill {
+		atKill["@fleet"] = true
+	}
+	if globalLevel == LevelKill {
+		atKill["@global"] = true
+	}
+	for k := range e.killStreak {
+		if !atKill[k] {
+			delete(e.killStreak, k)
+		}
 	}
 }
 

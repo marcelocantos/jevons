@@ -106,6 +106,15 @@ type BudgetConfig struct {
 	ResumeMaxAttempts int `json:"resume_max_attempts"`
 	// Window is the rolling window burn-rates are computed over.
 	Window Duration `json:"window"`
+	// KillConfirmTicks requires a kill-level rate breach to persist for
+	// this many consecutive enforcement ticks before the irreversible
+	// action (kill worker / fire kill-switch) fires. A burn RATE from a
+	// single window can be a one-off spike — the 2026-07-06 incident was
+	// distinguished by PERSISTENCE (hours at ~$227/hr), not any single
+	// message (the ~$11 idle-context re-cache tax alone reads as
+	// ~$132/hr for one window). Warn/throttle/pause act immediately;
+	// only the nuke waits for confirmation. 0 = act immediately.
+	KillConfirmTicks int `json:"kill_confirm_ticks"`
 }
 
 // DefaultBudgetConfig returns the shipped defaults. They are set from
@@ -124,6 +133,7 @@ func DefaultBudgetConfig() *BudgetConfig {
 		DeadManIdle:          Duration(6 * time.Hour),
 		ResumeMaxAttempts:    3,
 		Window:               Duration(5 * time.Minute),
+		KillConfirmTicks:     2,
 	}
 }
 
