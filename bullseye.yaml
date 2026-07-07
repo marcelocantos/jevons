@@ -913,7 +913,7 @@ targets:
     discovered: 2026-07-05
   T36:
     name: Jevons enforces token-spend limits with real-time monitoring and automated clamp-down; no fleet can burn runaway tokens undetected
-    status: converging
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -936,6 +936,7 @@ targets:
     - incident
     origin: manual
     discovered: 2026-07-06
+    achieved: 2026-07-07
   T37:
     name: Decide whether to adopt xAI's Voice Agent Builder (Grok Voice) in place of Jevons's DIY voice stack
     status: identified
