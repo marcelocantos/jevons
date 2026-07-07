@@ -938,6 +938,24 @@ targets:
     - incident
     origin: manual
     discovered: 2026-07-06
+  T37:
+    name: Decide whether to adopt xAI's Voice Agent Builder (Grok Voice) in place of Jevons's DIY voice stack
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A research/decision note (docs/analysis/voice-agent-builder-eval.md) evaluates xAI Voice Agent Builder (beta, announced 2026-07) against the current client-side voice loop (T25) and the direct browser-to-Grok path (T22)
+    - 'Covers: whether the overseer can be wired in via ''connect MCP servers'' (Jevons''s /mcp) so Grok Voice becomes the front-end while Claude stays the brain; latency vs the current stack; the free phone-number/telephony angle and whether it fits the car-mounted iPad deployment; guardrails/observability; cost model; and lock-in to xAI'
+    - States which of T22/T25/T28 it would supersede, augment, or leave untouched, with a go / no-go / spike recommendation
+    - 'If go or spike: the follow-on target(s) are filed and this one retired; if no-go: the rationale is recorded so it isn''t re-litigated'
+    context: 'Forcing function: an xAI marketing email (2026-07) announcing Voice Agent Builder — a no-code platform for production voice agents on Grok Voice, with free phone number, telephony, knowledge retrieval, tools, guardrails, observability, and the ability to bring existing numbers / wire APIs / connect MCP servers. Directly relevant because Jevons''s voice direction (T25) spent ~ten days fighting Grok Realtime as an overseer before pivoting to Grok-as-STT/TTS + Claude-as-brain, and T22 wants browser-to-Grok direct. The MCP-connect feature is the interesting hook: Grok Voice could be the voice front-end while Jevons''s /mcp overseer stays the brain, potentially collapsing the DIY STT/LLM/TTS stitching the announcement calls out as the failure-prone status quo. Research only — decide before building.'
+    tags:
+    - voice
+    - research
+    - grok
+    - xai
+    origin: manual
+    discovered: 2026-07-07
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
