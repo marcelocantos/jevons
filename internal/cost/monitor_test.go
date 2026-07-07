@@ -11,7 +11,8 @@ import (
 )
 
 // seedStore fills an in-memory store with events inside the monitoring
-// window: two attributed workers and one unattributed session.
+// window: two attributed workers, one orphan (jevons's, lost in-fleet),
+// and one foreign session (the owner's own terminal).
 func seedStore(t *testing.T, now time.Time) *Store {
 	t.Helper()
 	s, err := OpenStore(":memory:")
@@ -20,35 +21,43 @@ func seedStore(t *testing.T, now time.Time) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	var events []*Event
+	n := 0
 	add := func(sess, worker string, cost float64) {
+		n++
 		events = append(events, &Event{
 			Timestamp: now.Add(-time.Minute), SessionID: sess, Worker: worker,
 			Model: "claude-opus-4-8", Usage: Usage{Output: 1}, CostUSD: cost,
-			RequestID: fmt.Sprintf("r-%s-%f", sess, cost),
+			RequestID: fmt.Sprintf("r-%d", n),
 		})
 	}
 	add("sess-po", "po", 0.50)   // po: $0.50 in a 5m window = $6/hr
 	add("sess-doc", "doc", 0.10) // doc: $1.20/hr
-	add("sess-ghost", "", 2.00)  // unattributed: $24/hr — the incident shape
-	add("sess-ghost", "", 1.00)  // same session, second event
+	add("sess-ghost", "", 2.00)  // orphan (IsOrphan true) — jevons's lost worker
+	add("sess-ghost", "", 1.00)  // same orphan session, second event
+	add("sess-owner", "", 5.00)  // foreign — the owner's own session
 	if _, err := s.InsertEvents(events); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return s
 }
 
+// onlyGhostOrphan classifies the ghost session as an orphan and the
+// owner session as foreign.
+func onlyGhostOrphan(r BurnRow) bool { return r.SessionID == "sess-ghost" }
+
 func TestMonitorSnapshotRatesAndSignals(t *testing.T) {
 	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
 	s := seedStore(t, now)
 
 	cfg := DefaultBudgetConfig()
-	cfg.MaxSessions = 2      // 3 burning sessions → session-count signal
-	cfg.DailyBudgetUSD = 100 // projection: 3.6 spent + 43.2*12h ≈ 522 → trips
+	cfg.MaxSessions = 3      // 4 burning sessions → session-count signal
+	cfg.DailyBudgetUSD = 100 // projection trips
+	cfg.MinEventsForKill = 0 // exercise raw rate levels here
 
 	m := NewMonitor(&MonitorArgs{
 		Store:    s,
 		Config:   func() *BudgetConfig { return cfg },
-		IsOrphan: func(r BurnRow) bool { return r.Worker == "" }, // ghost = orphan
+		IsOrphan: onlyGhostOrphan,
 		Now:      func() time.Time { return now },
 	})
 
@@ -57,19 +66,20 @@ func TestMonitorSnapshotRatesAndSignals(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 
-	// $3.60 total in a 5-minute window = $43.20/hr global.
-	if math.Abs(snap.GlobalUSDPerHour-43.2) > 1e-9 {
-		t.Fatalf("global rate = %v, want 43.2", snap.GlobalUSDPerHour)
+	// Global = everything = $8.60 in 5m = $103.20/hr.
+	if math.Abs(snap.GlobalUSDPerHour-103.2) > 1e-9 {
+		t.Fatalf("global rate = %v, want 103.2", snap.GlobalUSDPerHour)
 	}
-	// Fleet (attributed) = $0.60 → $7.20/hr.
-	if math.Abs(snap.FleetUSDPerHour-7.2) > 1e-9 {
-		t.Fatalf("fleet rate = %v, want 7.2", snap.FleetUSDPerHour)
+	// Fleet = attributed ($0.60) + orphan ($3.00), NOT the foreign owner
+	// session ($5.00) → $3.60 → $43.20/hr.
+	if math.Abs(snap.FleetUSDPerHour-43.2) > 1e-9 {
+		t.Fatalf("fleet rate = %v, want 43.2 (attributed+orphan, excl. foreign)", snap.FleetUSDPerHour)
 	}
 	if math.Abs(snap.WorkerUSDPerHour["po"]-6.0) > 1e-9 {
 		t.Fatalf("po rate = %v, want 6.0", snap.WorkerUSDPerHour["po"])
 	}
-	// The one-query burning view leads with the hottest session.
-	if len(snap.Sessions) != 3 || snap.Sessions[0].SessionID != "sess-ghost" {
+	// The one-query burning view leads with the hottest session (owner, $5).
+	if len(snap.Sessions) != 4 || snap.Sessions[0].SessionID != "sess-owner" {
 		t.Fatalf("burning view wrong: %+v", snap.Sessions)
 	}
 
@@ -77,13 +87,14 @@ func TestMonitorSnapshotRatesAndSignals(t *testing.T) {
 	for _, a := range snap.Alerts {
 		got[a.Kind+"/"+a.Worker] = a
 	}
-	// Global $43.20/hr crosses pause (40) but not kill (60).
-	if a, ok := got[AlertGlobalRate+"/"]; !ok || a.Level != LevelPause {
-		t.Fatalf("global-rate alert = %+v, want pause", got)
+	// Global $103.20/hr crosses global kill (60) — reported at true level
+	// (the enforcer treats global as informational; the monitor doesn't lie).
+	if a, ok := got[AlertGlobalRate+"/"]; !ok || a.Level != LevelKill {
+		t.Fatalf("global-rate alert = %+v, want kill", got)
 	}
-	// Fleet $7.20/hr crosses warn (5) but not throttle (10).
-	if a, ok := got[AlertFleetRate+"/"]; !ok || a.Level != LevelWarn {
-		t.Fatalf("fleet-rate alert = %+v, want warn", got)
+	// Fleet $43.20/hr crosses fleet kill (40).
+	if a, ok := got[AlertFleetRate+"/"]; !ok || a.Level != LevelKill {
+		t.Fatalf("fleet-rate alert = %+v, want kill", got)
 	}
 	// po at $6/hr crosses the per-worker throttle rung (5).
 	if a, ok := got[AlertWorkerRate+"/po"]; !ok || a.Level != LevelThrottle {
@@ -93,17 +104,59 @@ func TestMonitorSnapshotRatesAndSignals(t *testing.T) {
 	if _, ok := got[AlertWorkerRate+"/doc"]; ok {
 		t.Fatal("doc should not alert")
 	}
-	// 3 sessions > bound of 2.
+	// 4 sessions > bound of 3.
 	if _, ok := got[AlertSessionCount+"/"]; !ok {
 		t.Fatal("session-count signal missing")
 	}
-	// The unattributed burner is flagged as an orphan.
+	// The orphan (not the foreign owner session) is flagged.
 	if a, ok := got[AlertOrphanSessions+"/"]; !ok || len(a.Sessions) != 1 || a.Sessions[0] != "sess-ghost" {
-		t.Fatalf("orphan signal = %+v, want sess-ghost", got[AlertOrphanSessions+"/"])
+		t.Fatalf("orphan signal = %+v, want sess-ghost only", got[AlertOrphanSessions+"/"])
 	}
 	// Projected overspend trips against the daily budget.
 	if _, ok := got[AlertProjection+"/"]; !ok {
 		t.Fatal("projected-overspend signal missing")
+	}
+}
+
+// TestThinRateGuard: a kill-level rate backed by too few events is a
+// spike, capped at pause; the same rate with enough events kills.
+func TestThinRateGuard(t *testing.T) {
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	s, err := OpenStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	// One fat event: $6 in 5m = $72/hr, past the global kill rung (60).
+	if _, err := s.InsertEvents([]*Event{{
+		Timestamp: now.Add(-time.Minute), SessionID: "spike", Model: "claude-opus-4-8",
+		Usage: Usage{Output: 1}, CostUSD: 6.0, RequestID: "one",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultBudgetConfig() // MinEventsForKill 30
+	m := NewMonitor(&MonitorArgs{Store: s, Config: func() *BudgetConfig { return cfg },
+		Now: func() time.Time { return now }})
+
+	snap, _ := m.Snapshot()
+	var g *Alert
+	for i := range snap.Alerts {
+		if snap.Alerts[i].Kind == AlertGlobalRate {
+			g = &snap.Alerts[i]
+		}
+	}
+	if g == nil || g.Level != LevelPause {
+		t.Fatalf("thin kill-rate not capped at pause: %+v", g)
+	}
+
+	// Disable the guard: the same single event now reads kill.
+	cfg.MinEventsForKill = 0
+	snap, _ = m.Snapshot()
+	for i := range snap.Alerts {
+		if snap.Alerts[i].Kind == AlertGlobalRate && snap.Alerts[i].Level != LevelKill {
+			t.Fatalf("guard disabled but level = %s, want kill", snap.Alerts[i].Level)
+		}
 	}
 }
 

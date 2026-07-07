@@ -137,44 +137,52 @@ func TestProtectedWorkerNeverKilled(t *testing.T) {
 	}
 }
 
-func TestGlobalKillAttendedVsUnattended(t *testing.T) {
-	// Attended: owner heard from recently → fleet stop + scream, no switch.
+func TestFleetKillAttendedVsUnattended(t *testing.T) {
+	// Attended: owner heard from recently → fleet stop + scream, never the
+	// switch, even when confirmed.
 	h := newHarness(DefaultBudgetConfig())
 	h.e.Heartbeat()
-	h.e.Act(alertsOf(AlertGlobalRate, LevelKill, ""))
+	h.e.Act(alertsOf(AlertFleetRate, LevelKill, "")) // pending → fleet stop
+	h.e.Act(alertsOf(AlertFleetRate, LevelKill, "")) // confirmed, but attended
 	if h.acts.killSwitch != 0 {
-		t.Fatal("kill-switch fired while owner attended")
+		t.Fatalf("kill-switch fired while owner attended: %+v", h.acts)
 	}
-	if h.acts.fleetStops != 1 {
-		t.Fatalf("attended global kill did not stop fleet: %+v", h.acts)
+	if h.acts.fleetStops < 1 {
+		t.Fatal("attended fleet kill did not stop the fleet")
 	}
 	if err := h.e.AllowSpawn(); err == nil {
-		t.Fatal("global kill did not halt spawning")
+		t.Fatal("fleet kill did not halt spawning")
 	}
 
 	// Unattended: silence beyond the grace → the switch fires, once the
-	// breach is confirmed sustained.
+	// breach is confirmed sustained (pause first, then switch).
 	h2 := newHarness(DefaultBudgetConfig())
 	h2.now = h2.now.Add(2 * time.Hour) // heartbeat was at construction
-	h2.e.Act(alertsOf(AlertGlobalRate, LevelKill, ""))
+	h2.e.Act(alertsOf(AlertFleetRate, LevelKill, ""))
 	if h2.acts.killSwitch != 0 {
 		t.Fatalf("kill-switch fired before confirmation: %+v", h2.acts)
 	}
-	h2.e.Act(alertsOf(AlertGlobalRate, LevelKill, ""))
+	h2.e.Act(alertsOf(AlertFleetRate, LevelKill, ""))
 	if h2.acts.killSwitch != 1 {
-		t.Fatalf("confirmed unattended global kill did not fire the switch: %+v", h2.acts)
+		t.Fatalf("confirmed unattended fleet kill did not fire the switch: %+v", h2.acts)
 	}
 }
 
-func TestFleetKillFiresSwitch(t *testing.T) {
+// TestGlobalIsInformational: a global-rate kill (the owner's own foreign
+// spend) must NOT clamp jevons's fleet or halt its spawns — only inform.
+func TestGlobalIsInformational(t *testing.T) {
 	h := newHarness(DefaultBudgetConfig())
-	h.e.Act(alertsOf(AlertFleetRate, LevelKill, "")) // tick 1: pause pending
-	h.e.Act(alertsOf(AlertFleetRate, LevelKill, "")) // tick 2: confirmed
-	if h.acts.killSwitch != 1 {
-		t.Fatalf("confirmed fleet kill did not fire the switch: %+v", h.acts)
+	h.now = h.now.Add(2 * time.Hour) // unattended, to be strict
+	h.e.Act(alertsOf(AlertGlobalRate, LevelKill, ""))
+	h.e.Act(alertsOf(AlertGlobalRate, LevelKill, ""))
+	if h.acts.killSwitch != 0 || h.acts.fleetStops != 0 || len(h.acts.paused)+len(h.acts.killed) != 0 {
+		t.Fatalf("global-rate drove a destructive action: %+v", h.acts)
 	}
-	if h.acts.fleetStops < 1 {
-		t.Fatal("pending fleet kill did not stop the fleet reversibly first")
+	if err := h.e.AllowSpawn(); err != nil {
+		t.Fatalf("global-rate halted spawning: %v", err)
+	}
+	if len(h.notices) == 0 {
+		t.Fatal("global-rate produced no informational notice")
 	}
 }
 

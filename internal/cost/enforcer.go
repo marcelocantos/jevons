@@ -61,11 +61,12 @@ type Enforcer struct {
 	resumeAttempts map[string]int
 	// killStreak counts consecutive kill-level ticks per target, so an
 	// irreversible action fires only on a sustained breach, not a spike.
-	killStreak    map[string]int
-	lastHeartbeat time.Time
-	deadManFired  bool
-	spawnHalted   bool
-	lastSnap      *Snapshot
+	killStreak     map[string]int
+	lastHeartbeat  time.Time
+	deadManFired   bool
+	spawnHalted    bool
+	lastGlobalInfo Level // last-notified informational global level
+	lastSnap       *Snapshot
 }
 
 // ThrottleCooldown is how long a throttled worker stays paused before
@@ -276,32 +277,40 @@ func (e *Enforcer) Act(snap *Snapshot) {
 		}
 	}
 
-	// Fleet and global escalation. Throttle/pause at fleet scope stop
-	// the fleet resumably; kill reaches for the switch that also gets
-	// detached processes. At global scope, maximum force is reserved
-	// for the unattended case: with a recent owner heartbeat, kill
-	// stops the fleet and screams instead of auto-firing the switch —
-	// the burn may be the owner's own interactive session, and they
-	// are present to decide.
-	e.escalateScope("@fleet", fleetLevel,
-		func() error { return e.actions.StopFleet() },
-		func() error { return e.actions.KillSwitch() })
+	// Fleet escalation — this drives the destructive path, because the
+	// "fleet" scope is what jevons OWNS (attributed workers + orphans
+	// lost inside the fleet, which is the 2026-07-06 incident's form).
+	// Throttle/pause stop the fleet resumably; kill reaches the switch
+	// that also gets launchd-detached processes. Maximum force is for
+	// the unattended case: with a recent owner heartbeat, a fleet-kill
+	// breach stops the fleet and screams rather than auto-firing the
+	// switch, leaving that call to the demonstrably-present owner.
 	attended := e.now().Sub(e.lastHeartbeat) < attendedGrace
-	e.escalateScope("@global", globalLevel,
+	e.escalateScope("@fleet", fleetLevel,
 		func() error { return e.actions.StopFleet() },
 		func() error {
 			if attended {
-				e.notify(LevelKill, "budget: global burn over KILL threshold — owner present, so fleet stopped resumably instead of firing the kill-switch; fire it manually if the burn is not yours")
+				e.notify(LevelKill, "budget: fleet burn over KILL threshold — owner present, so fleet stopped resumably instead of firing the kill-switch; fire it manually if needed")
 				return e.actions.StopFleet()
 			}
 			return e.actions.KillSwitch()
 		})
 
-	// Spawn halt: a cheap, reversible guard that engages the moment a
-	// global-kill breach or the hard daily ceiling is seen — including
-	// the pending-confirmation tick, since stopping NEW spend costs
-	// nothing and reverses freely. It clears when both conditions lift.
-	haltSpawning := hardCeiling || globalLevel == LevelKill
+	// Global burn is INFORMATIONAL: jevons can neither kill the owner's
+	// own (foreign) sessions nor should it nuke its fleet over them. It
+	// surfaces total-machine burn for awareness only, on level changes.
+	if globalLevel != e.lastGlobalInfo {
+		e.lastGlobalInfo = globalLevel
+		if globalLevel != LevelNone {
+			e.notify(globalLevel, fmt.Sprintf("total machine burn is %s-level (%.2f USD/hr) — informational; jevons clamps its own fleet, not your sessions", globalLevel, snap.GlobalUSDPerHour))
+		}
+	}
+
+	// Spawn halt: a cheap, reversible guard that engages on a fleet-kill
+	// breach or the hard daily ceiling — including the pending tick,
+	// since stopping NEW spend costs nothing and reverses freely. Global
+	// (foreign) burn does NOT halt jevons's own spawns.
+	haltSpawning := hardCeiling || fleetLevel == LevelKill
 	if haltSpawning && !e.spawnHalted {
 		e.spawnHalted = true
 		e.notify(LevelKill, "budget: spawning halted (global kill breach or hard daily ceiling)")

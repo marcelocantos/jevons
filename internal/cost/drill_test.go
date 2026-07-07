@@ -100,6 +100,10 @@ func TestDrillSyntheticRunawayKilled(t *testing.T) {
 	monitor := NewMonitor(&MonitorArgs{
 		Store: store, Config: func() *BudgetConfig { return cfg },
 		CollectorLastPoll: collector.LastPoll,
+		// The burners are unattributed but live inside the fleet tmux
+		// server — i.e. orphans, which fold into the fleet signal that
+		// drives the kill-switch (global-only spend is informational).
+		IsOrphan: func(r BurnRow) bool { return strings.HasPrefix(r.SessionID, "burner-") },
 	})
 
 	var enfOffset time.Duration // 0 = attended; jumped later to go unattended
@@ -126,20 +130,21 @@ func TestDrillSyntheticRunawayKilled(t *testing.T) {
 		if _, err := collector.PollOnce(); err != nil {
 			t.Fatalf("poll: %v", err)
 		}
-		if collectedEnough(t, monitor) {
+		if snap, err := monitor.Snapshot(); err == nil && hasFleetKill(snap) {
 			break
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
 
-	// Confirm the monitor sees a runaway well past the kill threshold.
+	// Confirm the monitor sees a real fleet runaway: kill-level rate AND
+	// enough events to pass the thin-rate guard.
 	snap, err := monitor.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.GlobalUSDPerHour < cfg.Global.KillUSDPerHour {
-		t.Fatalf("drill did not produce a kill-level burn: %.2f USD/hr < %.2f",
-			snap.GlobalUSDPerHour, cfg.Global.KillUSDPerHour)
+	if !hasFleetKill(snap) {
+		t.Fatalf("drill did not produce a confirmed fleet kill-level burn: fleet=%.2f USD/hr, alerts=%+v",
+			snap.FleetUSDPerHour, snap.Alerts)
 	}
 
 	// Go unattended: no owner contact for longer than the grace.
@@ -167,14 +172,15 @@ func TestDrillSyntheticRunawayKilled(t *testing.T) {
 		len(survivors(panePIDs)), survivors(panePIDs))
 }
 
-// collectedEnough reports whether the store already holds a kill-level burn.
-func collectedEnough(t *testing.T, m *Monitor) bool {
-	t.Helper()
-	snap, err := m.Snapshot()
-	if err != nil {
-		t.Fatalf("snapshot: %v", err)
+// hasFleetKill reports whether the snapshot carries a confirmed fleet
+// kill-level runaway signal (past the thin-rate guard).
+func hasFleetKill(snap *Snapshot) bool {
+	for _, a := range snap.Alerts {
+		if a.Kind == AlertFleetRate && a.Level == LevelKill {
+			return true
+		}
 	}
-	return snap.GlobalUSDPerHour >= DefaultBudgetConfig().Global.KillUSDPerHour
+	return false
 }
 
 // drillActions routes every enforcement action to the same kill (the

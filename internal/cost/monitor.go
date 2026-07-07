@@ -135,15 +135,28 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 	snap := &Snapshot{At: now, Window: cfg.Window.Std(), Sessions: rows}
 
 	var globalCost, fleetCost float64
+	var globalEvents, fleetEvents int
 	workerCost := map[string]float64{}
+	workerEvents := map[string]int{}
 	var orphans []string
 	for _, r := range rows {
 		globalCost += r.CostUSD
-		if r.Worker != "" {
+		globalEvents += r.Events
+		orphan := m.isOrphan(r)
+		// The "fleet" clamp scope is what jevons OWNS: attributed workers
+		// plus orphans (lost workers still inside the fleet). Foreign
+		// spend (the owner's own sessions) lands in global only, which is
+		// informational — jevons can neither kill nor should nuke its
+		// fleet over it.
+		if r.Worker != "" || orphan {
 			fleetCost += r.CostUSD
-			workerCost[r.Worker] += r.CostUSD
+			fleetEvents += r.Events
 		}
-		if m.isOrphan(r) {
+		if r.Worker != "" {
+			workerCost[r.Worker] += r.CostUSD
+			workerEvents[r.Worker] += r.Events
+		}
+		if orphan {
 			orphans = append(orphans, r.SessionID)
 		}
 	}
@@ -167,7 +180,7 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 	remaining := midnight.Add(24 * time.Hour).Sub(now).Hours()
 	snap.ProjectedTodayUSD = snap.SpentTodayUSD + snap.GlobalUSDPerHour*remaining
 
-	snap.Alerts = m.evaluate(cfg, snap, orphans)
+	snap.Alerts = m.evaluate(cfg, snap, orphans, globalEvents, fleetEvents, workerEvents)
 
 	// The watchdog's own watchdog: a stale collector means everything
 	// above may be an undercount, and that must be loud.
@@ -181,24 +194,35 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 }
 
 // evaluate applies the budget policy to a computed snapshot. Split out
-// so tests can exercise the policy against synthetic snapshots too.
-func (m *Monitor) evaluate(cfg *BudgetConfig, snap *Snapshot, orphans []string) []Alert {
+// so tests can exercise the policy against synthetic snapshots too. The
+// event counts back the thin-rate guard: a kill-level rate from too few
+// events is a spike, not a runaway, and is capped at pause.
+func (m *Monitor) evaluate(cfg *BudgetConfig, snap *Snapshot, orphans []string, globalEvents, fleetEvents int, workerEvents map[string]int) []Alert {
 	var alerts []Alert
 
-	if lvl := cfg.Global.LevelFor(snap.GlobalUSDPerHour); lvl != LevelNone {
-		alerts = append(alerts, Alert{Kind: AlertGlobalRate, Level: lvl,
-			Detail: fmt.Sprintf("global burn %.2f USD/hr (%s ≥ %.2f)", snap.GlobalUSDPerHour, lvl, cfg.Global.thresholdFor(lvl))})
+	// capThin downgrades a kill-level rate to pause when the window holds
+	// fewer than MinEventsForKill events in that scope.
+	capThin := func(lvl Level, events int) Level {
+		if lvl == LevelKill && cfg.MinEventsForKill > 0 && events < cfg.MinEventsForKill {
+			return LevelPause
+		}
+		return lvl
 	}
-	if lvl := cfg.Fleet.LevelFor(snap.FleetUSDPerHour); lvl != LevelNone {
+
+	if lvl := capThin(cfg.Global.LevelFor(snap.GlobalUSDPerHour), globalEvents); lvl != LevelNone {
+		alerts = append(alerts, Alert{Kind: AlertGlobalRate, Level: lvl,
+			Detail: fmt.Sprintf("global burn %.2f USD/hr (%s ≥ %.2f); %d events", snap.GlobalUSDPerHour, lvl, cfg.Global.thresholdFor(lvl), globalEvents)})
+	}
+	if lvl := capThin(cfg.Fleet.LevelFor(snap.FleetUSDPerHour), fleetEvents); lvl != LevelNone {
 		alerts = append(alerts, Alert{Kind: AlertFleetRate, Level: lvl,
-			Detail: fmt.Sprintf("fleet burn %.2f USD/hr (%s ≥ %.2f)", snap.FleetUSDPerHour, lvl, cfg.Fleet.thresholdFor(lvl))})
+			Detail: fmt.Sprintf("fleet burn %.2f USD/hr (%s ≥ %.2f); %d events", snap.FleetUSDPerHour, lvl, cfg.Fleet.thresholdFor(lvl), fleetEvents)})
 	}
 	for w, rate := range snap.WorkerUSDPerHour {
 		limits := cfg.Worker
 		if o, ok := cfg.Workers[w]; ok {
 			limits = o
 		}
-		if lvl := limits.LevelFor(rate); lvl != LevelNone {
+		if lvl := capThin(limits.LevelFor(rate), workerEvents[w]); lvl != LevelNone {
 			alerts = append(alerts, Alert{Kind: AlertWorkerRate, Level: lvl, Worker: w,
 				Detail: fmt.Sprintf("worker %s burn %.2f USD/hr (%s ≥ %.2f)", w, rate, lvl, limits.thresholdFor(lvl))})
 		}

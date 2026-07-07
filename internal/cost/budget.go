@@ -106,6 +106,14 @@ type BudgetConfig struct {
 	ResumeMaxAttempts int `json:"resume_max_attempts"`
 	// Window is the rolling window burn-rates are computed over.
 	Window Duration `json:"window"`
+	// MinEventsForKill: a kill-level RATE must be backed by at least this
+	// many billable events in the window to escalate to an irreversible
+	// action; below it the rate is "thin" (a single expensive message —
+	// e.g. the ~$11 idle-context re-cache tax — that reads as a huge
+	// extrapolated rate) and caps at pause. The 2026-07-06 runaway was
+	// hundreds of events across 47 sessions; a spike is a handful. 0
+	// disables the guard.
+	MinEventsForKill int `json:"min_events_for_kill"`
 	// KillConfirmTicks requires a kill-level rate breach to persist for
 	// this many consecutive enforcement ticks before the irreversible
 	// action (kill worker / fire kill-switch) fires. A burn RATE from a
@@ -133,6 +141,7 @@ func DefaultBudgetConfig() *BudgetConfig {
 		DeadManIdle:          Duration(6 * time.Hour),
 		ResumeMaxAttempts:    3,
 		Window:               Duration(5 * time.Minute),
+		MinEventsForKill:     30,
 		KillConfirmTicks:     2,
 	}
 }
