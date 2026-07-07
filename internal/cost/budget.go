@@ -134,9 +134,13 @@ func DefaultBudgetConfig() *BudgetConfig {
 		Global:               Limits{WarnUSDPerHour: 10, ThrottleUSDPerHour: 20, PauseUSDPerHour: 40, KillUSDPerHour: 60},
 		Fleet:                Limits{WarnUSDPerHour: 5, ThrottleUSDPerHour: 10, PauseUSDPerHour: 20, KillUSDPerHour: 40},
 		Worker:               Limits{WarnUSDPerHour: 2, ThrottleUSDPerHour: 5, PauseUSDPerHour: 10, KillUSDPerHour: 20},
-		MaxSessions:          20,
-		DailyBudgetUSD:       200,
-		HardCeilingUSDPerDay: 300,
+		MaxSessions: 20,
+		// Daily figures track GLOBAL machine spend (incl. the owner's own
+		// sessions), so the defaults sit well above a heavy owner's
+		// baseline (~$300/day observed) yet far below the 2026-07-06
+		// incident (~$5.4k/day). Tune in budget.json to your reality.
+		DailyBudgetUSD:       500,
+		HardCeilingUSDPerDay: 1500,
 		ProtectedWorkers:     []string{"jevons"},
 		DeadManIdle:          Duration(6 * time.Hour),
 		ResumeMaxAttempts:    3,
