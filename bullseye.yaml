@@ -937,6 +937,22 @@ targets:
     origin: manual
     discovered: 2026-07-06
     achieved: 2026-07-07
+  T36.1:
+    name: T36's shipped clamp-down resists the two confirmed audit bypasses (cost-parse validation + spawn-halt enforcement)
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'F1: `internal/cost/parse.go` validates/clamps `costUSD` and token fields from untrusted worker transcripts (reject or clamp negatives; aggregates use `GREATEST(cost_usd,0)`); a fabricated negative-cost line cannot deflate global/today spend or blind the L2 monitor.'
+    - 'F2: every MCP worker-spawn/resume path (`jwork`/`create_session`/`agent_start`) consults the enforcer SpawnGuard/ResumeGuard; `spawnHalted` blocks all spawns over `/mcp` — the primary MCP spawn tools cannot bypass the clamp-down.'
+    context: 'Fable-5 audit 2026-07 two-lens-confirmed two bypasses IN the shipped T36 clamp-down: F1 (cost-parser accepts unvalidated/negative costUSD, deflating the spend accounting the monitor relies on) and F2 (budget spawn-halt bypassed by the primary MCP worker-spawn tools). T36 delivered the machinery; these are confirmed holes that defeat it. Report: docs/audit/fable-2026-07.md.'
+    tags:
+    - fable-audit
+    - security
+    - cost
+    - clamp-down
+    origin: manual
+    discovered: 2026-07-08
   T37:
     name: Decide whether to adopt xAI's Voice Agent Builder (Grok Voice) in place of Jevons's DIY voice stack
     status: identified
@@ -955,6 +971,21 @@ targets:
     - xai
     origin: manual
     discovered: 2026-07-07
+  T38:
+    name: jevons web endpoints are origin/auth-safe (no cross-site WS hijack, no unauth money-spending routes, no silent history truncation)
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'F3: all WS `Accept` sites enforce an Origin allowlist; cross-origin handshakes are rejected; no `InsecureSkipVerify` on `websocket.Accept`.'
+    - 'F4: state-changing/money-spending HTTP endpoints require auth even with TLS off and reject cross-site POSTs; the token-mint proxy is rate-limited.'
+    - 'F5: `sendHistory` replays the full overseer transcript regardless of line size (or surfaces an explicit error); no silent truncation at the first >1 MB JSONL line.'
+    context: 'Fable-5 audit 2026-07; 3 HIGH findings two-lens confirmed: F3 (cross-site WebSocket hijack — all WS endpoints disable Origin checking), F4 (unauthenticated, CSRF-able state-changing and money-spending HTTP endpoints), F5 (`sendHistory` silently truncates overseer history at the first >1 MB line). The other two confirmed jevons findings (F1/F2) are tracked under T36.1. Report: docs/audit/fable-2026-07.md.'
+    tags:
+    - fable-audit
+    - security
+    origin: manual
+    discovered: 2026-07-08
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
