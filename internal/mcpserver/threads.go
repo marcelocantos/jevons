@@ -58,11 +58,12 @@ func (s *Server) SetButler(b *butler.Butler) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_spawn",
-			mcp.WithDescription("Spawn a new thread the butler owns end-to-end and start its Claude Code process. The thread is durable — it survives restarts and its idle process is stopped resumably and rehydrated on demand."),
+			mcp.WithDescription("Spawn a new thread the butler owns end-to-end and start its agent process (Grok by default). The thread is durable — it survives restarts and its idle process is stopped resumably and rehydrated on demand."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Unique thread handle (e.g. 'tern-po', 'maze-rebuild')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory (e.g. '~/work/github.com/marcelocantos/tern')")),
 			mcp.WithString("description", mcp.Description("The owner's work-language label")),
-			mcp.WithString("model", mcp.Description("Model override (e.g. 'opus', 'sonnet')")),
+			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4', 'opus', 'sonnet')")),
+			mcp.WithString("provider", mcp.Description("Agent harness: grok (default), claude, or codex")),
 		),
 		s.handleThreadSpawn,
 	)
@@ -179,6 +180,7 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 		WorkDir:     workdir,
 		Description: str(args["description"]),
 		Model:       str(args["model"]),
+		Provider:    str(args["provider"]),
 	})
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil

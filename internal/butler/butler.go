@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -183,7 +185,9 @@ func (b *Butler) Adopt(args AdoptArgs) (*thread.Thread, error) {
 			WorkDir:     workdir,
 			SessionID:   args.SessionID,
 			Description: desc,
-			Now:         b.now(),
+			// Adopted sessions come from ~/.claude/projects — always Claude.
+			Provider: string(claudia.ProviderClaude),
+			Now:      b.now(),
 		})
 		if err != nil {
 			return nil, err
@@ -245,6 +249,7 @@ type SpawnArgs struct {
 	WorkDir     string // required
 	Description string
 	Model       string
+	Provider    string // claude | codex | grok (empty = fleet default)
 }
 
 // Spawn creates a new thread the butler owns end-to-end and launches its
@@ -270,6 +275,7 @@ func (b *Butler) Spawn(args SpawnArgs) (*thread.Thread, error) {
 		WorkDir:     args.WorkDir,
 		Description: args.Description,
 		Model:       args.Model,
+		Provider:    args.Provider,
 		CreatedAt:   b.now(),
 	}
 	if err := b.store.Put(t); err != nil {

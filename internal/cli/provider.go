@@ -9,11 +9,19 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// ParseProvider maps a free-form provider name (or empty) onto a claudia
-// Provider. Unknown non-empty values return ("", false).
+// DefaultProvider is the harness used when neither an explicit provider
+// nor a model name implies another. Grok is the product default after
+// claudia v0.16+ shipped Grok Session ACP.
+var DefaultProvider = claudia.ProviderGrok
+
+// ParseProvider maps a free-form provider name onto a claudia Provider.
+// Empty name means DefaultProvider. Unknown non-empty values return
+// ("", false).
 func ParseProvider(name string) (claudia.Provider, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", "claude", "anthropic":
+	case "":
+		return DefaultProvider, true
+	case "claude", "anthropic":
 		return claudia.ProviderClaude, true
 	case "codex", "openai":
 		return claudia.ProviderCodex, true
@@ -27,12 +35,13 @@ func ParseProvider(name string) (claudia.Provider, bool) {
 // InferProviderFromModel picks a provider when the caller only set a
 // model string. Explicit provider always wins (call ParseProvider first).
 // Heuristics: models starting with "grok" → Grok; "gpt-" / "codex" /
-// "o3" / "o4" → Codex; otherwise Claude.
+// "o3" / "o4" → Codex; empty → DefaultProvider; otherwise Claude
+// (sonnet/opus/haiku-style names).
 func InferProviderFromModel(model string) claudia.Provider {
 	m := strings.ToLower(strings.TrimSpace(model))
 	switch {
 	case m == "":
-		return claudia.ProviderClaude
+		return DefaultProvider
 	case strings.HasPrefix(m, "grok"):
 		return claudia.ProviderGrok
 	case strings.HasPrefix(m, "gpt-"),
@@ -45,8 +54,8 @@ func InferProviderFromModel(model string) claudia.Provider {
 	}
 }
 
-// ResolveProvider chooses the runtime for a Task: explicit provider if
-// valid, else infer from model, else Claude.
+// ResolveProvider chooses the runtime: explicit provider if valid, else
+// infer from model, else DefaultProvider.
 func ResolveProvider(provider, model string) (claudia.Provider, error) {
 	if provider != "" {
 		p, ok := ParseProvider(provider)

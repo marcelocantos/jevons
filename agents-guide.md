@@ -51,8 +51,9 @@ Generic MCP client config:
 ## Running manually
 
 ```bash
-# Start the coordinator (default port 13705)
-jevonsd --port 13705 --workdir ~/projects --model sonnet
+# Start the coordinator (default port 13705; default provider: grok)
+jevonsd --port 13705 --workdir ~/projects --provider grok
+# Claude overseer: jevonsd --provider claude --model sonnet
 
 # Connect a terminal client
 remote --addr localhost:13705
@@ -95,17 +96,14 @@ jevonsd exposes an in-process MCP server at `/mcp`. Key tools:
 
 - **`jevons_active_work`** — Cross-repo active-work dashboard.
 - **`jwork`** — On-demand worker dispatch (`text`, `cwd?`, `model?`,
-  `provider?`). Provider is `claude` (default), `codex`, or `grok`
-  (claudia v0.15+ Grok Build CLI Task harness). If `provider` is
-  omitted, models like `grok-4` infer `grok`. Grok/Codex are **Task
-  mode only** — persistent Session mode fails closed for those
-  providers until claudia ships it.
+  `provider?`). Default harness is **grok** (claudia v0.16+ Task +
+  Session). Also `claude` or `codex`. Model names like `grok-4` /
+  `sonnet` also infer the provider.
 - **`jevons_agent_list` / `_start` / `_send` / `_stop`** — Persistent
-  agents (Claude Session mode via claudia Registry). Not Grok-backed
-  yet (Session experimental).
+  agents via claudia Registry. Default provider is **grok** (ACP
+  Session). Pass `provider=claude` for Claude Code Session.
 - **`jevons_list_sessions` / `_create_session` / `_send_command` /
-  `_kill_session`** — Session-level worker management. Create accepts
-  `provider?` the same way as `jwork`.
+  `_kill_session`** — Task-mode workers; same `provider?` as `jwork`.
 
 Budget spawn-halt blocks `jwork`, `jevons_create_session`,
 `jevons_agent_start`, and butler spawn/direct when the hard ceiling or
