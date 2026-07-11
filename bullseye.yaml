@@ -376,9 +376,10 @@ targets:
     achieved: 2026-07-04
   T19:
     name: jevonsd runs cleanly under `brew services` with a service block, gh dependency, and PATH augmentation so launchd-spawned daemon resolves all external tools
-    status: converging
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 2.0
     acceptance:
     - '[decidable | DONE] The jevons release workflow (.github/workflows/release.yml, homebrew job) makes homebrew-releaser emit the service metadata via its `formula_includes` input (a `service do` block running opt_bin/"jevonsd" with keep_alive true and log paths) and its `depends_on` input (`gh`). This is the correct fix: the tap Formula is DO-NOT-EDIT generated, so a hand-edit would be clobbered on the next release — the block must come from the generator.'
     - '[decidable] The service block sets environment_variables PATH to the augmented list so the launchd-spawned daemon resolves gh (and other ~/.local, ~/go/bin tools) without manual PATH setup.'
@@ -392,6 +393,7 @@ targets:
       Remaining: RELEASE-GATED verification — the next `/release` regenerates Formula/jevons.rb with the block; then `brew services start jevons` is confirmed on the Mac. This is the ALWAYS-ON criterion of T30.
     origin: forked-from spyder PATH-bug investigation in ~/think on 2026-04-27 (homebrew-tap-wide audit)
     discovered: 2026-04-27
+    achieved: 2026-07-11
   T2:
     name: Conversational interaction model works end-to-end
     status: achieved
