@@ -49,6 +49,9 @@ func main() {
 
 	working := true
 	var summary []string
+	var bubbles []string
+	open := -1
+	asstChunks := 0
 	for working {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -76,15 +79,41 @@ func main() {
 		summary = append(summary, line)
 		fmt.Println("event:", line)
 
-		if shouldClear(typ, msg, text, stop) {
+		if typ == "assistant" && text != "" {
+			asstChunks++
+			if open >= 0 {
+				bubbles[open] += text
+			} else {
+				bubbles = append(bubbles, text)
+				open = len(bubbles) - 1
+			}
+			// Mid-stream must not clear.
+			if shouldClear(typ, msg, stop) {
+				fmt.Fprintf(os.Stderr, "FAIL: mid-stream clear on chunk %q\n", text)
+				os.Exit(1)
+			}
+		}
+		if shouldClear(typ, msg, stop) {
 			working = false
+			open = -1
 		}
 	}
-	fmt.Println("PASS working cleared")
-	fmt.Println("events:", strings.Join(summary, " | "))
+	if len(bubbles) != 1 {
+		fmt.Fprintf(os.Stderr, "FAIL: coalesce produced %d bubbles %q (chunks=%d); want 1\n",
+			len(bubbles), bubbles, asstChunks)
+		os.Exit(1)
+	}
+	if strings.TrimSpace(bubbles[0]) == "" {
+		fmt.Fprintf(os.Stderr, "FAIL: empty assistant bubble\n")
+		os.Exit(1)
+	}
+	// Multi-token replies must not arrive as one wire frame only when the
+	// model streams — but a single-frame reply is still one bubble (ok).
+	fmt.Println("PASS working cleared; one assistant bubble:", trim(bubbles[0], 80))
+	fmt.Println("chunks:", asstChunks, "events:", strings.Join(summary, " | "))
 }
 
-func shouldClear(typ string, msg map[string]any, text, stop string) bool {
+func shouldClear(typ string, msg map[string]any, stop string) bool {
 	if typ == "system" {
 		return true
 	}
@@ -97,8 +126,7 @@ func shouldClear(typ string, msg map[string]any, text, stop string) bool {
 	if _, ok := msg["content"].([]any); !ok {
 		return false
 	}
-	terminal := stop == "end_turn" || stop == "stop_sequence" || stop == "max_tokens"
-	return terminal || (text != "" && stop == "")
+	return stop == "end_turn" || stop == "stop_sequence" || stop == "max_tokens"
 }
 
 func assistantText(msg map[string]any) string {
