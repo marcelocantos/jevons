@@ -149,6 +149,7 @@ func TestChatWireRoundTripOverWebSocket(t *testing.T) {
 
 // shouldClearWorkingGo mirrors web/scripts/chat_events.js shouldClearWorking
 // so the round-trip test fails if wire shape drifts from the frontend rule.
+// Mid-stream text must NOT clear — only terminal stop_reason / system.
 func shouldClearWorkingGo(m map[string]any) bool {
 	typ, _ := m["type"].(string)
 	if typ == "system" {
@@ -161,23 +162,109 @@ func shouldClearWorkingGo(m map[string]any) bool {
 	if msg == nil {
 		return false
 	}
-	content, ok := msg["content"].([]any)
-	if !ok {
+	if _, ok := msg["content"].([]any); !ok {
 		return false
-	}
-	hasText := false
-	for _, c := range content {
-		cm, _ := c.(map[string]any)
-		if cm["type"] == "text" {
-			if t, _ := cm["text"].(string); t != "" {
-				hasText = true
-			}
-		}
 	}
 	stop, _ := msg["stop_reason"].(string)
 	if stop == "" {
 		stop, _ = msg["stopReason"].(string)
 	}
-	terminal := stop == "end_turn" || stop == "stop_sequence" || stop == "max_tokens"
-	return terminal || (hasText && stop == "")
+	return stop == "end_turn" || stop == "stop_sequence" || stop == "max_tokens"
+}
+
+// TestMultiChunkStreamWire is the server-side half of the token-per-bubble
+// regression: many ACP text chunks must become many Claude-shaped wire
+// lines that do not clear working until the terminal end_turn.
+func TestMultiChunkStreamWire(t *testing.T) {
+	s := New(nil, "test")
+	ch := make(chan string, 64)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.waiting = true
+	s.mu.Unlock()
+
+	tokens := []string{"Hello", ".", "What", "do", "you", "need", "?"}
+	for _, tok := range tokens {
+		s.DeliverOverseerEvent(claudia.Event{
+			Type: "assistant",
+			Text: tok,
+			Raw:  []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + tok + `"}}}`),
+		})
+	}
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		StopReason: "end_turn",
+		Raw:        []byte(`{"stopReason":"end_turn"}`),
+	})
+
+	var lines []string
+	deadline := time.After(2 * time.Second)
+	for len(lines) < len(tokens)+1 {
+		select {
+		case l := <-ch:
+			lines = append(lines, l)
+		case <-deadline:
+			t.Fatalf("timeout; got %d lines want %d", len(lines), len(tokens)+1)
+		}
+	}
+
+	// Simulate pure frontend coalesce rules on the wire.
+	working := true
+	var bubbles []string
+	open := -1
+	for i, line := range lines {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("line %d: %v", i, err)
+		}
+		if m["type"] != "assistant" {
+			t.Fatalf("line %d type=%v", i, m["type"])
+		}
+		msg, _ := m["message"].(map[string]any)
+		content, _ := msg["content"].([]any)
+		for _, c := range content {
+			cm, _ := c.(map[string]any)
+			if cm["type"] == "text" {
+				text, _ := cm["text"].(string)
+				if text == "" {
+					continue
+				}
+				// Mid-stream must not clear.
+				if shouldClearWorkingGo(m) {
+					t.Fatalf("chunk %d cleared working mid-stream: %s", i, line)
+				}
+				if open >= 0 {
+					bubbles[open] += text
+				} else {
+					bubbles = append(bubbles, text)
+					open = len(bubbles) - 1
+				}
+			}
+		}
+		if shouldClearWorkingGo(m) {
+			working = false
+			open = -1
+		}
+	}
+
+	if working {
+		t.Fatal("working still true after end_turn")
+	}
+	if len(bubbles) != 1 {
+		t.Fatalf("coalesce produced %d bubbles %q; want 1 full sentence", len(bubbles), bubbles)
+	}
+	want := ""
+	for _, tok := range tokens {
+		want += tok
+	}
+	if bubbles[0] != want {
+		t.Fatalf("bubble=%q want %q", bubbles[0], want)
+	}
+
+	s.mu.RLock()
+	stillWaiting := s.waiting
+	s.mu.RUnlock()
+	if stillWaiting {
+		t.Fatal("server waiting still true after terminal")
+	}
 }
