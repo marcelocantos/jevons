@@ -50,9 +50,15 @@ func TestClaudiaFleetLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	f := NewClaudia(reg)
-
-	th := &thread.Thread{ID: "jevons-live-smoke", Kind: thread.KindSpawned, WorkDir: t.TempDir()}
+	// Live smoke still exercises Claude Session (tmux); set Provider
+	// explicitly so the Grok fleet default does not apply.
+	f := NewClaudia(reg, claudia.ProviderClaude)
+	th := &thread.Thread{
+		ID:       "jevons-live-smoke",
+		Kind:     thread.KindSpawned,
+		WorkDir:  t.TempDir(),
+		Provider: string(claudia.ProviderClaude),
+	}
 	if err := f.Launch(th); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}

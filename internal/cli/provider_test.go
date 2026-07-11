@@ -15,8 +15,9 @@ func TestResolveProvider(t *testing.T) {
 		want            claudia.Provider
 		wantErr         bool
 	}{
-		{"", "", claudia.ProviderClaude, false},
+		{"", "", claudia.ProviderGrok, false}, // default harness
 		{"grok", "", claudia.ProviderGrok, false},
+		{"claude", "", claudia.ProviderClaude, false},
 		{"", "grok-4", claudia.ProviderGrok, false},
 		{"", "sonnet", claudia.ProviderClaude, false},
 		{"codex", "gpt-5", claudia.ProviderCodex, false},

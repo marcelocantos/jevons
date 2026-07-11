@@ -38,9 +38,10 @@ type Thread struct {
 	ID          string    `json:"id"`              // stable butler-level handle
 	Kind        Kind      `json:"kind"`            // adopted | spawned
 	WorkDir     string    `json:"workdir"`         // the session's working directory
-	SessionID   string    `json:"session_id"`      // Claude Code session UUID (for --resume)
-	Description string    `json:"description"`     // owner's work-language label
-	Model       string    `json:"model,omitempty"` // model override for the process, if any
+	SessionID   string    `json:"session_id"`         // provider session id (for --resume / ACP load)
+	Description string    `json:"description"`        // owner's work-language label
+	Model       string    `json:"model,omitempty"`    // model override for the process, if any
+	Provider    string    `json:"provider,omitempty"` // claude | codex | grok (empty = fleet default)
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -87,6 +88,7 @@ type AdoptArgs struct {
 	WorkDir     string
 	SessionID   string
 	Description string
+	Provider    string    // claude | codex | grok; empty = fleet default on take-over
 	Now         time.Time // injected for deterministic tests; defaults to time.Now
 }
 
@@ -122,6 +124,7 @@ func (s *Store) Adopt(args AdoptArgs) (*Thread, error) {
 		WorkDir:     args.WorkDir,
 		SessionID:   args.SessionID,
 		Description: args.Description,
+		Provider:    args.Provider,
 		CreatedAt:   now,
 	}
 	s.threads[id] = t

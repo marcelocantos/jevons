@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -25,17 +26,23 @@ const (
 
 // Claudia adapts a claudia.Registry to the butler.Fleet interface.
 type Claudia struct {
-	reg          *claudia.Registry
-	readyTimeout time.Duration
-	replyTimeout time.Duration
+	reg             *claudia.Registry
+	defaultProvider claudia.Provider
+	readyTimeout    time.Duration
+	replyTimeout    time.Duration
 }
 
-// NewClaudia wraps a registry as a Fleet.
-func NewClaudia(reg *claudia.Registry) *Claudia {
+// NewClaudia wraps a registry as a Fleet. defaultProvider is used when a
+// thread has no Provider set (typically claudia.ProviderGrok).
+func NewClaudia(reg *claudia.Registry, defaultProvider claudia.Provider) *Claudia {
+	if defaultProvider == "" {
+		defaultProvider = claudia.ProviderGrok
+	}
 	return &Claudia{
-		reg:          reg,
-		readyTimeout: defaultReadyTimeout,
-		replyTimeout: defaultReplyTimeout,
+		reg:             reg,
+		defaultProvider: defaultProvider,
+		readyTimeout:    defaultReadyTimeout,
+		replyTimeout:    defaultReplyTimeout,
 	}
 }
 
@@ -45,26 +52,39 @@ func NewClaudia(reg *claudia.Registry) *Claudia {
 // (T24). It populates t.SessionID with the live process's session so
 // the thread can be rehydrated later.
 func (f *Claudia) Launch(t *thread.Thread) error {
+	provider := claudia.Provider(t.Provider)
+	if provider == "" {
+		provider = f.defaultProvider
+	}
+
 	// Ensure a registry def. When the thread already carries a session id
 	// — a taken-over adopted session, or a rehydrate whose registry def
 	// was lost — register the def WITH that id so claudia resumes that
-	// exact conversation (--resume) rather than minting a fresh one. A
-	// brand-new spawn (no session id) lets claudia mint one.
+	// exact conversation rather than minting a fresh one. A brand-new
+	// spawn (no session id) still needs a stable id in the registry;
+	// Grok ACP may replace it with the id from session/new.
 	if f.reg.Def(t.ID) == nil {
-		if t.SessionID != "" {
-			if err := f.reg.Register(claudia.AgentDef{
-				Name:      t.ID,
-				WorkDir:   t.WorkDir,
-				Model:     t.Model,
-				SessionID: t.SessionID,
-				AutoStart: true,
-			}); err != nil {
-				return fmt.Errorf("register agent %q: %w", t.ID, err)
-			}
-		} else if _, err := f.reg.EnsureAgent(t.ID, t.WorkDir, t.Model, true); err != nil {
+		sid := t.SessionID
+		if sid == "" {
+			// Stable id for the registry; Grok ACP may replace it via session/new.
+			sid = uuid.New().String()
+		}
+		if err := f.reg.Register(claudia.AgentDef{
+			Name:      t.ID,
+			WorkDir:   t.WorkDir,
+			Model:     t.Model,
+			Provider:  provider,
+			SessionID: sid,
+			AutoStart: true,
+		}); err != nil {
 			return fmt.Errorf("register agent %q: %w", t.ID, err)
 		}
+	} else if def := f.reg.Def(t.ID); def != nil && def.Provider == "" && provider != "" {
+		// Upgrade defs created before Provider was persisted.
+		def.Provider = provider
+		_ = f.reg.Register(*def)
 	}
+
 	ag, err := f.reg.Launch(t.ID)
 	if err != nil {
 		return fmt.Errorf("launch agent %q: %w", t.ID, err)
@@ -76,8 +96,11 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 		return fmt.Errorf("agent %q not ready: %w", t.ID, err)
 	}
 
-	if t.SessionID == "" {
-		t.SessionID = ag.SessionID()
+	if sid := ag.SessionID(); sid != "" {
+		t.SessionID = sid
+	}
+	if t.Provider == "" {
+		t.Provider = string(provider)
 	}
 	return nil
 }
