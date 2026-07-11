@@ -36,7 +36,7 @@ import (
 	"github.com/marcelocantos/pigeon/qr"
 )
 
-// jevonsCLAUDEMD is the CLAUDE.md template written to Jevons's workdir.
+// jevonsCLAUDEMD is the overseer instructions template (written as AGENTS.md).
 const jevonsCLAUDEMD = `# Jevons
 
 You are Jevons — Marcelo's personal AI assistant and the sole interface
@@ -68,8 +68,7 @@ via your MCP tools). You delegate everything to agents.
 
 ## Agent Architecture
 
-You manage a hierarchy of persistent coding agents (Grok by default;
-Claude sessions can still be adopted):
+You manage a hierarchy of persistent Grok Build agents:
 
 ### Product Owners (Stratum 1)
 Long-running agents that own a repo/product. They maintain product
@@ -176,8 +175,7 @@ func main() {
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
 	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
-	model := flag.String("model", "", "default model for worker sessions")
-	providerFlag := flag.String("provider", "grok", "default agent harness: grok (default), claude, or codex")
+	model := flag.String("model", "", "default model for Grok workers (empty = Grok CLI default)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	enableTLS := flag.Bool("tls", false, "enable mTLS on the HTTP listener (requires client certs after provisioning)")
 	setOpenAIKey := flag.Bool("set-openai-key", false, "prompt for OpenAI API key, store in macOS Keychain, and exit")
@@ -219,7 +217,7 @@ func main() {
 		Level: logLevel,
 	})))
 
-	// Set up Jevons workdir with CLAUDE.md.
+	// Set up Jevons workdir with overseer instructions.
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		slog.Error("cannot determine home directory", "err", err)
@@ -230,16 +228,14 @@ func main() {
 		slog.Error("cannot create jevon workdir", "err", err)
 		os.Exit(1)
 	}
-	// Build Jevons CLAUDE.md, injecting managed-repos if available.
+	// Project instructions for the overseer (Grok reads AGENTS.md / Claude.md).
 	jevContent := jevonsCLAUDEMD
-	reposFile := filepath.Join(homeDir, ".claude", "managed-repos.md")
-	if data, err := os.ReadFile(reposFile); err == nil {
-		jevContent += "\n## User's Repositories\n\n" + string(data)
-	}
-	claudeMD := filepath.Join(jevDir, "CLAUDE.md")
-	if err := os.WriteFile(claudeMD, []byte(jevContent), 0o644); err != nil {
-		slog.Error("cannot write jevon CLAUDE.md", "err", err)
-		os.Exit(1)
+	for _, name := range []string{"AGENTS.md", "Claude.md"} {
+		path := filepath.Join(jevDir, name)
+		if err := os.WriteFile(path, []byte(jevContent), 0o644); err != nil {
+			slog.Error("cannot write overseer instructions", "path", path, "err", err)
+			os.Exit(1)
+		}
 	}
 
 	// Write .mcp.json for Jevons to discover the MCP server.
@@ -258,16 +254,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	defaultProvider, err := cli.ResolveProvider(*providerFlag, *model)
-	if err != nil {
-		slog.Error("invalid --provider", "err", err)
-		os.Exit(1)
-	}
-	cli.DefaultProvider = defaultProvider
-	slog.Info("default agent provider", "provider", defaultProvider, "model", *model)
-
-	// Create components.
-	scanner := discovery.NewScanner(filepath.Join(homeDir, ".claude", "projects"))
+	// Create components — Grok-only; sessions live under ~/.grok.
+	scanner := discovery.NewScanner(filepath.Join(homeDir, ".grok", "sessions"))
 	mgr := manager.New(*model, *workDir, scanner)
 
 	srv := server.New(mgr, cli.Version)
@@ -299,10 +287,8 @@ func main() {
 		slog.Info("no xAI API key — voice bridge disabled (set XAI_API_KEY or store via: security add-generic-password -a jevons -s xai-api-key -w YOUR_KEY)")
 	}
 
-	// Worker completion events are delivered to Jevon's persistent
-	// claude process by sending a structured message via the registry
-	// agent's PTY (wired below in SetNotify). The registry itself is
-	// constructed further down once the server's MCP socket exists.
+	// Worker completion events are delivered to the overseer via the
+	// registry agent's Send (wired below in SetNotify).
 	var (
 		notifyJevon func(text string)
 		registry    *claudia.Registry
@@ -320,11 +306,11 @@ func main() {
 		return srv.RequestScreenshot(10 * time.Second)
 	}, &mcpserver.TranscriptOps{
 		Read: func(sessionID string) ([]map[string]any, error) {
-			tr := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
+			tr := transcript.NewReader(filepath.Join(homeDir, ".grok", "sessions"))
 			return tr.Read(sessionID)
 		},
 		Truncate: func(sessionID string, keepTurns int) error {
-			tr := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
+			tr := transcript.NewReader(filepath.Join(homeDir, ".grok", "sessions"))
 			return tr.Truncate(sessionID, keepTurns)
 		},
 		GetID: func() string {
@@ -361,7 +347,7 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Agent registry — manages persistent Claude processes.
+	// Agent registry — manages persistent Grok ACP sessions.
 	registryPath := filepath.Join(homeDir, ".jevons", "agents.json")
 	{
 		r, err := claudia.NewRegistry(registryPath)
@@ -393,8 +379,8 @@ func main() {
 	btlrCfg := butler.Config{
 		Store:   threadStore,
 		Scanner: scanner,
-		Reader:  transcript.NewReader(filepath.Join(homeDir, ".claude", "projects")),
-		Fleet:   fleet.NewClaudia(registry, defaultProvider),
+		Reader:  transcript.NewReader(filepath.Join(homeDir, ".grok", "sessions")),
+		Fleet:   fleet.NewClaudia(registry),
 	}
 	if guard != nil {
 		btlrCfg.SpawnGuard = guard.enforcer.AllowSpawn
@@ -423,18 +409,13 @@ func main() {
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
 
-	// Ensure the primary overseer agent exists (Grok Session ACP by default).
+	// Overseer: Grok Session ACP only.
 	jevonDef, err := registry.EnsureAgent("jevons", jevDir, *model, true)
 	if err != nil {
 		slog.Error("jevon agent setup failed", "err", err)
 		os.Exit(1)
 	}
-	jevonDef.Provider = defaultProvider
-	// Claude overseer must not use local tools — it delegates via MCP.
-	// Grok ACP uses --always-approve; tool policy is provider-side.
-	if defaultProvider == claudia.ProviderClaude || defaultProvider == "" {
-		jevonDef.DisallowTools = []string{"Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"}
-	}
+	jevonDef.Provider = cli.Provider
 	if err := registry.Register(*jevonDef); err != nil {
 		slog.Error("jevon agent register failed", "err", err)
 		os.Exit(1)

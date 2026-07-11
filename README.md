@@ -2,8 +2,8 @@
 
 Your one-stop shop to manage your AI life.
 
-Today that means remote control for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-instances: talk to a coordinator that manages Claude Code workers — from a
+Today that means remote control for [Grok Build](https://docs.anthropic.com/en/docs/claude-code)
+instances: talk to a coordinator that manages Grok Build workers — from a
 terminal, or (eventually) from your phone. The charter is wider: one cockpit
 that connects you to every AI service you run — status at a glance, events
 that need your attention, and an agent that can act on any of them. How
@@ -13,12 +13,12 @@ risk-graded decision rights — is defined in [docs/charter.md](docs/charter.md)
 ## How it works
 
 ```
-  remote (TUI)  ──WebSocket──►  jevonsd  ──spawns──►  Jevons (Claude Code)
-                                        ──manages──►  workers  (Claude Code)
+  remote (TUI)  ──WebSocket──►  jevonsd  ──spawns──►  Jevons (Grok Build)
+                                        ──manages──►  workers  (Grok Build)
                                    MCP ◄─────────────┘ (tool calls)
 ```
 
-**jevonsd** is the coordinator daemon. It runs *Jevons* — a Claude Code
+**jevonsd** is the coordinator daemon. It runs *Jevons* — a Grok Build
 session that receives your messages and decides whether to answer directly or
 delegate coding tasks to *worker* sessions. Jevons manages workers via
 an in-process MCP server (no separate binary needed). Multiple clients can
@@ -68,7 +68,7 @@ remote --addr localhost:13705
 ```
 
 Talk to Jevons in the web chat. It adopts, spawns, monitors, and directs
-Claude Code agents on your behalf (thread model). Spend is metered in
+Grok Build agents on your behalf (thread model). Spend is metered in
 real time with an automated clamp-down if a fleet runaway starts.
 
 ### Flags
@@ -111,7 +111,7 @@ Jevons is named after [Jevons paradox](https://en.wikipedia.org/wiki/Jevons_para
 when technological progress makes a resource cheaper to use, total consumption
 of that resource tends to *increase* rather than decrease. AI coding assistants
 make development dramatically more efficient — so you end up doing more of it,
-not less. Jevons leans into this by letting you orchestrate multiple Claude Code
+not less. Jevons leans into this by letting you orchestrate multiple Grok Build
 sessions at once, multiplying the effect — so keep an eye on your AI bill at
 the end of the month.
 

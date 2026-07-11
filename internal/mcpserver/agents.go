@@ -36,11 +36,10 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent agent in a repo/directory. Creates and registers it if new. Default harness is Grok (claudia ProviderGrok ACP); pass provider=claude for Claude Code Session."),
+			mcp.WithDescription("Start a persistent Grok agent in a repo/directory. Creates and registers it if new."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (e.g. 'tern', 'jevon-frontend')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (e.g. '~/work/github.com/marcelocantos/pigeon')")),
-			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4', 'opus', 'sonnet')")),
-			mcp.WithString("provider", mcp.Description("Agent harness: grok (default), claude, or codex")),
+			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
 		),
 		s.handleAgentStart,
 	)
@@ -94,7 +93,6 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	name, _ := args["name"].(string)
 	workdir, _ := args["workdir"].(string)
 	model, _ := args["model"].(string)
-	providerArg, _ := args["provider"].(string)
 
 	if name == "" || workdir == "" {
 		return mcp.NewToolResultError("name and workdir are required"), nil
@@ -115,16 +113,11 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		workdir = home + workdir[1:]
 	}
 
-	provider, err := cli.ResolveProvider(providerArg, model)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
 	def, err := s.registry.EnsureAgent(name, workdir, model, true)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
-	def.Provider = provider
+	def.Provider = cli.Provider
 	if err := s.registry.Register(*def); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}

@@ -330,20 +330,21 @@ func TestAdoptTakesOverByDefault(t *testing.T) {
 	}
 }
 
-// writeSessionTranscript writes a minimal concluded-turn transcript for
-// an arbitrary session id, timestamped at `at`.
-func writeSessionTranscript(t *testing.T, projectsDir, sessionID string, at time.Time) {
+// writeSessionTranscript writes a minimal concluded-turn Grok chat_history
+// for an arbitrary session id, timestamped at `at`.
+func writeSessionTranscript(t *testing.T, sessionsDir, sessionID string, at time.Time) {
 	t.Helper()
 	ts := at.Format(time.RFC3339)
 	lines := []string{
-		fmt.Sprintf(`{"type":"user","cwd":"/work/idle","timestamp":%q,"message":{"role":"user","content":"go"}}`, ts),
+		fmt.Sprintf(`{"type":"user","timestamp":%q,"content":"go"}`, ts),
 		fmt.Sprintf(`{"type":"assistant","timestamp":%q,"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"finished"}]}}`, ts),
 	}
-	projDir := filepath.Join(projectsDir, "-work-idle")
-	if err := os.MkdirAll(projDir, 0o755); err != nil {
+	dir := filepath.Join(sessionsDir, discovery.EncodeCWDBucket("/work/idle"), sessionID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projDir, sessionID+".jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "chat_history.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
 }
+

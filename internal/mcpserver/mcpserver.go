@@ -98,8 +98,7 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, screenshot
 			mcp.WithDescription("Create a new worker session for a coding task."),
 			mcp.WithString("name", mcp.Description("Human-readable name for the session")),
 			mcp.WithString("workdir", mcp.Description("Working directory (defaults to the coordinator's default)")),
-			mcp.WithString("model", mcp.Description("Model override (e.g. 'opus', 'sonnet', 'grok-4')")),
-			mcp.WithString("provider", mcp.Description("Agent harness: claude (default), codex, or grok. If omitted, inferred from model.")),
+			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
 		),
 		s.handleCreateSession,
 	)
@@ -246,17 +245,15 @@ func (s *Server) handleCreateSession(_ context.Context, req mcp.CallToolRequest)
 	name, _ := args["name"].(string)
 	workdir, _ := args["workdir"].(string)
 	model, _ := args["model"].(string)
-	provider, _ := args["provider"].(string)
 
 	if workdir == "" {
 		workdir = s.workerWD
 	}
 
 	sess, err := s.mgr.Create(manager.CreateConfig{
-		Name:     name,
-		WorkDir:  workdir,
-		Model:    model,
-		Provider: provider,
+		Name:    name,
+		WorkDir: workdir,
+		Model:   model,
 	})
 	if err != nil {
 		slog.Error("MCP: failed to create session", "err", err)
@@ -284,7 +281,7 @@ func (s *Server) handleSendCommand(ctx context.Context, req mcp.CallToolRequest)
 	}
 
 	if s.mgr.IsExternallyActive(id) {
-		return mcp.NewToolResultError("session is in use by another claude process"), nil
+		return mcp.NewToolResultError("session is in use by another agent process"), nil
 	}
 
 	sess := s.mgr.Get(id)

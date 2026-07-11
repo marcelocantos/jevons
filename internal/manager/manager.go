@@ -1,5 +1,5 @@
 // Package manager provides multi-session lifecycle management,
-// creating and tracking concurrent Claude Code sessions.
+// creating and tracking concurrent Grok Task sessions.
 package manager
 
 import (
@@ -43,13 +43,12 @@ type SessionSummary struct {
 
 // CreateConfig holds parameters for creating a new session.
 type CreateConfig struct {
-	Name     string // human-readable name
-	WorkDir  string // working directory (default: ".")
-	Model    string // model override (empty = manager default)
-	Provider string // claude | codex | grok (empty = infer from Model)
+	Name    string // human-readable name
+	WorkDir string // working directory (default: ".")
+	Model   string // model override (empty = manager default)
 }
 
-// Manager manages multiple concurrent Claude Code sessions.
+// Manager manages multiple concurrent Grok Task sessions.
 type Manager struct {
 	defaultModel string
 	defaultDir   string
@@ -70,8 +69,7 @@ func New(defaultModel, defaultDir string, scanner *discovery.Scanner) *Manager {
 	}
 }
 
-// Create creates a new session by running claude to establish a session ID.
-// The JSONL file Claude creates becomes the persistent record.
+// Create creates a new Grok Task session ("Ready.") and records its session id.
 func (m *Manager) Create(cfg CreateConfig) (*claudia.Task, error) {
 	model := cfg.Model
 	if model == "" {
@@ -86,18 +84,13 @@ func (m *Manager) Create(cfg CreateConfig) (*claudia.Task, error) {
 		name = workDir
 	}
 
-	provider, err := cli.ResolveProvider(cfg.Provider, model)
-	if err != nil {
-		return nil, err
-	}
-
 	// Create a temporary session without a UUID — Run() will capture
 	// the session ID from the init event.
 	tmpID := fmt.Sprintf("creating-%d", time.Now().UnixNano())
 	s := claudia.NewTask(claudia.TaskConfig{
 		ID:       tmpID,
 		Name:     name,
-		Provider: provider,
+		Provider: cli.Provider,
 		WorkDir:  workDir,
 		Model:    model,
 	})
@@ -117,7 +110,7 @@ func (m *Manager) Create(cfg CreateConfig) (*claudia.Task, error) {
 	}
 
 	if uuid == "" {
-		return nil, fmt.Errorf("no session ID received from claude")
+		return nil, fmt.Errorf("no session ID received from grok")
 	}
 
 	// Re-register under the real UUID.
@@ -153,6 +146,7 @@ func (m *Manager) Get(id string) *claudia.Task {
 	s := claudia.NewTask(claudia.TaskConfig{
 		ID:       id,
 		Name:     info.WorkDir,
+		Provider: cli.Provider,
 		WorkDir:  info.WorkDir,
 		Model:    model,
 		ClaudeID: id,

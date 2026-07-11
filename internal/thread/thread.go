@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package thread is the durable spine of the butler: a thread is a
-// semantic unit of work (a Claude Code conversation plus its metadata
-// and derived status), NOT tied to a live process. The process is a
+// semantic unit of work (a Grok conversation plus its metadata and
+// derived status), NOT tied to a live process. The process is a
 // disposable cache — spun up to interact, stopped when idle, rehydrated
-// on demand via --resume. The Store persists thread records so the full
-// set survives a daemon restart ("never lose a thread").
+// on demand. The Store persists thread records so the full set survives
+// a daemon restart ("never lose a thread").
 package thread
 
 import (
@@ -38,10 +38,9 @@ type Thread struct {
 	ID          string    `json:"id"`              // stable butler-level handle
 	Kind        Kind      `json:"kind"`            // adopted | spawned
 	WorkDir     string    `json:"workdir"`         // the session's working directory
-	SessionID   string    `json:"session_id"`         // provider session id (for --resume / ACP load)
-	Description string    `json:"description"`        // owner's work-language label
-	Model       string    `json:"model,omitempty"`    // model override for the process, if any
-	Provider    string    `json:"provider,omitempty"` // claude | codex | grok (empty = fleet default)
+	SessionID   string    `json:"session_id"`      // Grok session id (ACP load / resume)
+	Description string    `json:"description"`     // owner's work-language label
+	Model       string    `json:"model,omitempty"` // model override, if any
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -88,7 +87,6 @@ type AdoptArgs struct {
 	WorkDir     string
 	SessionID   string
 	Description string
-	Provider    string    // claude | codex | grok; empty = fleet default on take-over
 	Now         time.Time // injected for deterministic tests; defaults to time.Now
 }
 
@@ -124,7 +122,6 @@ func (s *Store) Adopt(args AdoptArgs) (*Thread, error) {
 		WorkDir:     args.WorkDir,
 		SessionID:   args.SessionID,
 		Description: args.Description,
-		Provider:    args.Provider,
 		CreatedAt:   now,
 	}
 	s.threads[id] = t
