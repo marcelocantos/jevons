@@ -1027,6 +1027,25 @@ targets:
     origin: manual
     discovered: 2026-04-09
     achieved: 2026-04-09
+  T40:
+    name: Jevons can be upgraded without killing or draining running agents
+    status: identified
+    value: 8.0
+    cost: 13.0
+    acceptance:
+    - A running Grok ACP agent (overseer or worker) keeps its process and live session across a jevonsd binary upgrade/restart of the coordinator only
+    - 'In-flight or idle agents do not require a drain window: no "wait for turn to finish then stop all agents" step is mandatory for upgrade'
+    - After the new jevonsd is up, it reattaches/connects to the still-running agents (same session_id) and continues chat/control without minting a new conversation
+    - Documented upgrade path (brew services / launchd or equivalent) matches the acceptance behavior; regression test or drill proves coordinator restart does not SIGKILL/orphan-replace agent processes
+    - 'Out of scope for the initial conversation-durability work: this target is process/connect durability for zero-downtime upgrades, not "no conversation lost" alone'
+    context: 'Filed 2026-07-11. Near-term durability is conversation-only (stable session_id + jevons-owned transcript + fail-closed load). This target is a later goal: upgrade/redeploy jevonsd without killing or draining running ACP agents — requires supervisor/connect-mode (agents outlive the coordinator), not just session/load after process death. Leave out of scope until conversation durability lands.'
+    tags:
+    - durability
+    - upgrade
+    - acp
+    - supervisor
+    origin: manual
+    discovered: 2026-07-11
   T5:
     name: Authentication implemented
     status: converging
