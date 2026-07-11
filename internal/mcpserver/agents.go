@@ -96,6 +96,15 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError("name and workdir are required"), nil
 	}
 
+	// Budget clamp: both new spawn and re-launch of a pause/kill-clamped
+	// or spawn-halted agent must be refused before EnsureAgent/Launch.
+	if blocked := s.checkSpawnAllowed(); blocked != nil {
+		return blocked, nil
+	}
+	if blocked := s.checkResumeAllowed(name); blocked != nil {
+		return blocked, nil
+	}
+
 	// Expand ~ in workdir.
 	if strings.HasPrefix(workdir, "~/") {
 		home, _ := os.UserHomeDir()

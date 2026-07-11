@@ -63,6 +63,12 @@ type Butler struct {
 	// scanner in production; injectable for tests.
 	externallyActive func(sessionID string) bool
 
+	// spawnGuard gates new spawns; resumeGuard gates (re)launching a
+	// thread's process. Both default to permissive. They are the budget
+	// clamp-down's hooks into thread lifecycle.
+	spawnGuard  func() error
+	resumeGuard func(id string, auto bool) error
+
 	now           func() time.Time
 	idleThreshold time.Duration
 	tailN         int
@@ -82,6 +88,12 @@ type Config struct {
 	Now              func() time.Time
 	IdleThreshold    time.Duration
 	ExternallyActive func(sessionID string) bool
+	// SpawnGuard, if set, gates new spawns (the budget hard ceiling); a
+	// non-nil error refuses the spawn. ResumeGuard gates (re)launching a
+	// thread's process; auto marks unattended rehydrates. Both default
+	// to permissive.
+	SpawnGuard  func() error
+	ResumeGuard func(id string, auto bool) error
 }
 
 // New constructs a Butler.
@@ -92,12 +104,20 @@ func New(cfg Config) *Butler {
 		reader:           cfg.Reader,
 		fleet:            cfg.Fleet,
 		externallyActive: cfg.ExternallyActive,
+		spawnGuard:       cfg.SpawnGuard,
+		resumeGuard:      cfg.ResumeGuard,
 		now:              cfg.Now,
 		idleThreshold:    cfg.IdleThreshold,
 		tailN:            defaultTailEntries,
 	}
 	if b.now == nil {
 		b.now = time.Now
+	}
+	if b.spawnGuard == nil {
+		b.spawnGuard = func() error { return nil }
+	}
+	if b.resumeGuard == nil {
+		b.resumeGuard = func(string, bool) error { return nil }
 	}
 	if b.externallyActive == nil {
 		if b.scanner != nil {
@@ -240,6 +260,9 @@ func (b *Butler) Spawn(args SpawnArgs) (*thread.Thread, error) {
 	if _, exists := b.store.Get(args.ID); exists {
 		return nil, fmt.Errorf("spawn: thread %q already exists", args.ID)
 	}
+	if err := b.spawnGuard(); err != nil {
+		return nil, fmt.Errorf("spawn %q: %w", args.ID, err)
+	}
 
 	t := &thread.Thread{
 		ID:          args.ID,
@@ -289,7 +312,13 @@ func (b *Butler) Direct(id, text string) (string, error) {
 
 	if !b.fleet.Alive(id) {
 		// Process aged out or was GC'd — transparently rehydrate rather
-		// than fail. This is the T24 wedge's fix at the butler layer.
+		// than fail. This is the T24 wedge's fix at the butler layer. The
+		// resume is owner-driven (they are directing), so it is attended,
+		// not an unattended auto-resume — but the budget clamp can still
+		// refuse it if this worker is pause/kill-clamped for overspend.
+		if err := b.resumeGuard(id, false); err != nil {
+			return "", fmt.Errorf("direct %q: %w", id, err)
+		}
 		if err := b.fleet.Launch(t); err != nil {
 			return "", fmt.Errorf("direct %q: could not rehydrate its process: %w", id, err)
 		}

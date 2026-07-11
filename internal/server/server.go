@@ -24,9 +24,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
-	
+
 	"github.com/marcelocantos/jevons/internal/manager"
-	
 )
 
 // remoteWriter abstracts over WebSocket and tern relay connections.
@@ -73,7 +72,21 @@ type Server struct {
 	proc           *claudia.Agent
 	registry       *claudia.Registry
 	chatListeners  []chan string
+
+	// activityHook fires on owner activity (a chat message), feeding the
+	// budget dead-man's switch. costSource returns the latest cost
+	// snapshot for GET /api/cost. Both default to no-ops.
+	activityHook func()
+	costSource   func() any
 }
+
+// SetActivityHook registers a callback fired on owner activity — the
+// budget clamp-down's heartbeat.
+func (s *Server) SetActivityHook(f func()) { s.activityHook = f }
+
+// SetCostSource registers the provider of the live cost snapshot served
+// at GET /api/cost.
+func (s *Server) SetCostSource(f func() any) { s.costSource = f }
 
 // Credentials returns the server-side pairing credential store.
 func (s *Server) Credentials() *CredentialStore { return s.creds }
@@ -165,6 +178,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
@@ -566,7 +580,6 @@ func (s *Server) handleControl(conn *websocket.Conn, ctx context.Context, action
 			"action": "list_snapshots",
 			"error":  "sync not available",
 		})
-
 
 	case "screenshot":
 		// Forward screenshot request to all connected clients.

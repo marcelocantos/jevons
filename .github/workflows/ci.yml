@@ -17,6 +17,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install tmux (required by the T36 clamp-down drill)
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
       - name: Build
         env:
           CGO_CFLAGS: "-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5"

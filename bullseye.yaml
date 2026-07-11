@@ -913,7 +913,7 @@ targets:
     discovered: 2026-07-05
   T36:
     name: Jevons enforces token-spend limits with real-time monitoring and automated clamp-down; no fleet can burn runaway tokens undetected
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -925,9 +925,7 @@ targets:
     - 'Layer 3 (dead-man''s switch): a fleet with no attached owner/heartbeat self-terminates instead of running indefinitely'
     - 'Auto-resume guard: unattended multi-agent Workflow/fan-out work is not auto-resumed after a crash without a liveness + budget check, and resume attempts are capped'
     - A test/drill reproduces a synthetic runaway (spawn N headless bypassPermissions sessions exceeding a budget) and demonstrates the clamp-down detects and kills it automatically within a bounded time, with the kill reaching detached processes
-    context: 'Forcing function: the 2026-07-06 token-runaway incident (see docs/analysis/postmortem-token-runaway-2026-07-06.md). A headless Claudia worker fleet (47 sessions in a launchd-parented tmux `claudia-anchor`) burned tokens invisibly — surviving every closed tab — while ~2 days of spend reached ~$10.9k and a 5-hour block hit 100%. Jevons spawns token-spending workers but has no real-time cost accounting and no automated clamp-down; the design already exists in docs/cost-management.md but was filed as "idea, not scheduled". Observability alone would have diagnosed but not prevented this — automated clamp-down is the headline. Related: T8.2 (worker observability, collection layer), T8.3 (execution safety/doit), T30 (butler that monitors/directs agents), T24 (worker resume robustness).'
-    depends_on:
-    - T8.2
+    context: 'Forcing function: the 2026-07-06 token-runaway incident (docs/analysis/postmortem-token-runaway-2026-07-06.md). BUILT on branch cost-clampdown (internal/cost): L1 collector tails every active session JSONL into SQLite usage_events (modernc.org/sqlite, costUSD-or-pricing, request-id dedup, persisted tail offsets); L2 monitor computes rolling burn-rate per worker/fleet(=attributed+orphan)/global with the runaway signals (rate ladders, session-count, orphan=in-fleet-but-unregistered, projected/hard-ceiling), a thin-rate guard (kill needs >=N events, not one spike), and a collector-staleness watchdog; L3 enforcer escalates warn->throttle->pause->kill with kill-confirmation ticks, protects the overseer, a dead-man''s switch, an auto-resume guard, spawn/resume gates on the butler, and the TmuxKillSwitch that reaps the launchd-detached fleet server. Wired live into jevonsd: jevons_cost MCP tool + GET /api/cost + web ticker + cost_alert broadcast + owner-chat heartbeat. Global burn is INFORMATIONAL (the owner''s own sessions); the destructive path is fleet+orphan only. Criterion-8 drill (real detached burners in a private tmux server, detected and killed automatically) passes locally; CI installs tmux to run it. Dependency on T8.2 removed — T36 built its own collection layer and delivers T8.2''s ''per-worker token counts recorded'' criterion. Retire once the PR''s CI runs the drill green (the confirming oracle).'
     tags:
     - cost
     - safety
@@ -938,6 +936,58 @@ targets:
     - incident
     origin: manual
     discovered: 2026-07-06
+    achieved: 2026-07-07
+  T36.1:
+    name: T36's shipped clamp-down resists the two confirmed audit bypasses (cost-parse validation + spawn-halt enforcement)
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    actual_cost: 3.0
+    acceptance:
+    - 'F1: `internal/cost/parse.go` validates/clamps `costUSD` and token fields from untrusted worker transcripts (reject or clamp negatives; aggregates use `GREATEST(cost_usd,0)`); a fabricated negative-cost line cannot deflate global/today spend or blind the L2 monitor.'
+    - 'F2: every MCP worker-spawn/resume path (`jwork`/`create_session`/`agent_start`) consults the enforcer SpawnGuard/ResumeGuard; `spawnHalted` blocks all spawns over `/mcp` — the primary MCP spawn tools cannot bypass the clamp-down.'
+    context: 'Fable-5 audit 2026-07 two-lens-confirmed two bypasses IN the shipped T36 clamp-down: F1 (cost-parser accepts unvalidated/negative costUSD, deflating the spend accounting the monitor relies on) and F2 (budget spawn-halt bypassed by the primary MCP worker-spawn tools). T36 delivered the machinery; these are confirmed holes that defeat it. Report: docs/audit/fable-2026-07.md.'
+    tags:
+    - fable-audit
+    - security
+    - cost
+    - clamp-down
+    origin: manual
+    discovered: 2026-07-08
+    achieved: 2026-07-11
+  T37:
+    name: Decide whether to adopt xAI's Voice Agent Builder (Grok Voice) in place of Jevons's DIY voice stack
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A research/decision note (docs/analysis/voice-agent-builder-eval.md) evaluates xAI Voice Agent Builder (beta, announced 2026-07) against the current client-side voice loop (T25) and the direct browser-to-Grok path (T22)
+    - 'Covers: whether the overseer can be wired in via ''connect MCP servers'' (Jevons''s /mcp) so Grok Voice becomes the front-end while Claude stays the brain; latency vs the current stack; the free phone-number/telephony angle and whether it fits the car-mounted iPad deployment; guardrails/observability; cost model; and lock-in to xAI'
+    - States which of T22/T25/T28 it would supersede, augment, or leave untouched, with a go / no-go / spike recommendation
+    - 'If go or spike: the follow-on target(s) are filed and this one retired; if no-go: the rationale is recorded so it isn''t re-litigated'
+    context: 'Forcing function: an xAI marketing email (2026-07) announcing Voice Agent Builder — a no-code platform for production voice agents on Grok Voice, with free phone number, telephony, knowledge retrieval, tools, guardrails, observability, and the ability to bring existing numbers / wire APIs / connect MCP servers. Directly relevant because Jevons''s voice direction (T25) spent ~ten days fighting Grok Realtime as an overseer before pivoting to Grok-as-STT/TTS + Claude-as-brain, and T22 wants browser-to-Grok direct. The MCP-connect feature is the interesting hook: Grok Voice could be the voice front-end while Jevons''s /mcp overseer stays the brain, potentially collapsing the DIY STT/LLM/TTS stitching the announcement calls out as the failure-prone status quo. Research only — decide before building.'
+    tags:
+    - voice
+    - research
+    - grok
+    - xai
+    origin: manual
+    discovered: 2026-07-07
+  T38:
+    name: jevons web endpoints are origin/auth-safe (no cross-site WS hijack, no unauth money-spending routes, no silent history truncation)
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'F3: all WS `Accept` sites enforce an Origin allowlist; cross-origin handshakes are rejected; no `InsecureSkipVerify` on `websocket.Accept`.'
+    - 'F4: state-changing/money-spending HTTP endpoints require auth even with TLS off and reject cross-site POSTs; the token-mint proxy is rate-limited.'
+    - 'F5: `sendHistory` replays the full overseer transcript regardless of line size (or surfaces an explicit error); no silent truncation at the first >1 MB JSONL line.'
+    context: 'Fable-5 audit 2026-07; 3 HIGH findings two-lens confirmed: F3 (cross-site WebSocket hijack — all WS endpoints disable Origin checking), F4 (unauthenticated, CSRF-able state-changing and money-spending HTTP endpoints), F5 (`sendHistory` silently truncates overseer history at the first >1 MB line). The other two confirmed jevons findings (F1/F2) are tracked under T36.1. Report: docs/audit/fable-2026-07.md.'
+    tags:
+    - fable-audit
+    - security
+    origin: manual
+    discovered: 2026-07-08
   T4:
     name: Trust model defined for pre-1.0
     status: achieved

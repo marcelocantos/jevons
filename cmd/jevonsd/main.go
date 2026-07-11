@@ -374,13 +374,35 @@ func main() {
 		slog.Error("thread store failed", "err", err)
 		os.Exit(1)
 	}
-	btlr := butler.New(butler.Config{
+	// Token-spend clamp-down (🎯T36): start it before the butler so its
+	// spawn/resume guards feed the butler's lifecycle. Returns nil if the
+	// usage DB is unavailable — the cockpit still runs, just unguarded.
+	guard := startCostGuard(ctx, homeDir, registry, scanner, srv)
+
+	btlrCfg := butler.Config{
 		Store:   threadStore,
 		Scanner: scanner,
 		Reader:  transcript.NewReader(filepath.Join(homeDir, ".claude", "projects")),
 		Fleet:   fleet.NewClaudia(registry),
-	})
+	}
+	if guard != nil {
+		btlrCfg.SpawnGuard = guard.enforcer.AllowSpawn
+		btlrCfg.ResumeGuard = guard.enforcer.AllowResume
+	}
+	btlr := butler.New(btlrCfg)
 	mcpSrv.SetButler(btlr)
+
+	// Wire the live cost view into the MCP tool, the web /api/cost
+	// endpoint, and the owner-activity heartbeat that arms the dead-man.
+	// Budget guards also cover the primary MCP spawn tools (jwork /
+	// create_session / agent_start) so spawnHalted cannot be bypassed
+	// outside the butler (T36.1 / Fable F2).
+	if guard != nil {
+		mcpSrv.SetBudgetGuards(guard.enforcer.AllowSpawn, guard.enforcer.AllowResume)
+		mcpSrv.SetCostMonitor(guard.monitor.Snapshot)
+		srv.SetCostSource(mcpSrv.CostJSON)
+		srv.SetActivityHook(guard.enforcer.Heartbeat)
+	}
 
 	// Process-as-cache GC: periodically stop idle spawned threads'
 	// processes (resumably) to free resources. The threads persist and
