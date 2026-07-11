@@ -32,6 +32,14 @@ you scroll up.
 
 ```bash
 brew install marcelocantos/tap/jevons
+brew services start jevons   # always-on launchd service
+```
+
+Open the web chat at [http://localhost:13705/](http://localhost:13705/),
+or connect with the TUI:
+
+```bash
+remote --addr localhost:13705
 ```
 
 Or download a binary from the
@@ -49,16 +57,19 @@ Requires Go 1.22+ and a C compiler (CGo is needed for SQLite).
 ## Usage
 
 ```bash
-# Start the coordinator
+# Start the coordinator (if not using brew services)
 jevonsd --port 13705 --workdir ~/projects --model sonnet
 
-# Connect from another terminal
+# Browser chat (primary UI)
+open http://localhost:13705/
+
+# Or TUI client
 remote --addr localhost:13705
 ```
 
-Type a message and press Enter. Jevons will either answer directly or
-spin up a Claude Code worker to handle the task. Results stream back in real
-time.
+Talk to Jevons in the web chat. It adopts, spawns, monitors, and directs
+Claude Code agents on your behalf (thread model). Spend is metered in
+real time with an automated clamp-down if a fleet runaway starts.
 
 ### Flags
 

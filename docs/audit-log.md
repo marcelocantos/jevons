@@ -30,3 +30,9 @@ maintenance activities. Append-only — newest entries at the bottom.
 - **Outcome**: Released v0.4.0 (darwin-arm64, linux-amd64, linux-arm64). Homebrew formula added.
 - **Changes**: `jevons_active_work` MCP tool (cross-repo work dashboard), `jwork` MCP tool (on-demand worker dispatch), bullseye standing-invariants hook, targets.yaml → bullseye.yaml rename. Homebrew tap configured with homebrew-releaser CI job.
 - **STABILITY.md**: Updated to v0.4.0 snapshot — added 2 new MCP tools (`jevons_active_work`, `jwork`).
+
+## 2026-07-11 — /release v0.5.0
+
+- **Outcome**: Released v0.5.0 (darwin-arm64, linux-amd64, linux-arm64).
+- **Changes**: Butler/CEO thread model (adopt-observe, spawn/direct, process-as-cache GC); token-spend clamp-down (collector → monitor → enforcer + synthetic runaway drill); Fable audit hardening (cost-parse validation, MCP spawn-halt on all spawn paths, WS Origin validation, cross-site POST rejection, full history replay); Homebrew `brew services` block + `depends_on gh` via formula_includes.
+- **STABILITY.md**: Updated to v0.5.0 snapshot — thread/cost MCP tools, `/api/cost`, threads.json/usage.db/budget.json, security posture notes.

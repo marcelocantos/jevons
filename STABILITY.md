@@ -10,7 +10,7 @@ right before locking them in.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.4.0.
+Snapshot as of v0.5.0.
 
 ### CLI: `jevonsd`
 
@@ -56,6 +56,14 @@ Terminal UI client for jevonsd.
 | `jwork` | `task, repo?, model?` | Fluid — new in v0.4.0, on-demand worker dispatch |
 | `jevons_transcript_read` | `session?, limit?` | Fluid — new in v0.3.0, reads Jevon conversation history |
 | `jevons_transcript_rewind` | `session, n?` | Fluid — new in v0.3.0, trims Jevon history |
+| `jevons_thread_adopt` | `session_id, description?` | Fluid — new in v0.5.0, adopt-observe a session as a durable thread |
+| `jevons_thread_list` | (none) | Fluid — new in v0.5.0 |
+| `jevons_thread_status` | `id` | Fluid — new in v0.5.0 |
+| `jevons_thread_spawn` | `id, workdir, description?, model?` | Fluid — new in v0.5.0 |
+| `jevons_thread_direct` | `id, text` | Fluid — new in v0.5.0, rehydrates idle process on demand |
+| `jevons_thread_takeover` | `id` | Fluid — new in v0.5.0 |
+| `jevons_thread_remove` | `id` | Fluid — new in v0.5.0 |
+| `jevons_cost` | (none) | Fluid — new in v0.5.0, live burn-rate snapshot |
 | `jevons_reload_views` | (none) | Fluid |
 
 Transcript memory search has moved out-of-process. Global search across all
@@ -116,11 +124,12 @@ transcodes, applies adaptive local VAD, and relays audio and events.
 | `GET` | `/health` | Stable |
 | `GET` | `/` | Fluid — serves web UI from `web/` directory |
 | `GET` | `/api/agents` | Fluid |
+| `GET` | `/api/cost` | Fluid — new in v0.5.0, live spend snapshot for the web ticker |
 | `GET` | `/scripts/*` | Fluid — new in v0.3.0, serves JS modules (transport.js, etc.) from `web/scripts/` |
 | `GET` | `/api/sessions` | Stable |
 | `GET` | `/api/sessions/{id}` | Stable |
-| `POST` | `/api/sessions/{id}/kill` | Stable |
-| `POST` | `/api/realtime/token` | Fluid |
+| `POST` | `/api/sessions/{id}/kill` | Stable — rejects cross-site POSTs since v0.5.0 |
+| `POST` | `/api/realtime/token` | Fluid — rate-limited + cross-site rejected since v0.5.0 |
 
 ### Agent registry (`~/.jevons/agents.json`)
 
@@ -142,6 +151,9 @@ New in v0.2.0. JSON array of agent definitions.
 | `~/.jevons/` | Data directory | Stable |
 | `~/.jevons/jevons.db` | SQLite database | Stable |
 | `~/.jevons/agents.json` | Agent registry | Fluid |
+| `~/.jevons/threads.json` | Durable thread registry (butler/CEO) | Fluid — new in v0.5.0 |
+| `~/.jevons/usage.db` | Token-spend accounting (cost clamp-down) | Fluid — new in v0.5.0 |
+| `~/.jevons/budget.json` | Spend budgets / thresholds | Fluid — new in v0.5.0 |
 | `~/.jevons/jevons/CLAUDE.md` | Generated Jevons instructions | Fluid |
 | `~/.jevons/jevons/.mcp.json` | MCP server config for Jevons | Fluid |
 | `~/.jevons/lua/views/` | Lua view scripts | Fluid |
@@ -155,26 +167,31 @@ longer maintains its own transcript database.
 ## Gaps and prerequisites
 
 ### Security
-- No auth on any surface. Pairing ceremony verified but not wired.
+- WebSocket Origin is validated (no `InsecureSkipVerify`) since v0.5.0;
+  cross-site browser POSTs to mutating HTTP routes are rejected.
+- Default bind is still all-interfaces with mTLS off; LAN clients without
+  an Origin header are not fully authenticated. Pairing ceremony verified
+  but not the sole gate for every route.
 - Workers and Jevons run with permissions bypassed.
+- Cost clamp-down (L1–L3) and MCP spawn-halt guards ship in v0.5.0.
 
 ### Architecture
-- Claude Code session/agent management was extracted to the `claudia`
-  library in v0.3.0; remaining Grok realtime bridge still lives in-tree.
+- Claude Code session/agent management lives in `claudia`; butler/CEO
+  thread model (`internal/thread` + `internal/butler` + `internal/fleet`)
+  and token-spend clamp-down (`internal/cost`) ship in v0.5.0.
+- Grok realtime voice bridge still lives in-tree.
 - Lua view script runtime (🎯T9) is partially implemented — server-side
   rendering works; client-side Lua on iOS is not yet wired.
-- sqlpipe state sync (🎯T10) is incomplete — `internal/sync/` compiles
-  but WebSocket protocol has not been cut over.
-- Active work dashboard (🎯T16.1) complete — `jevons_active_work` tool cross-references sessions, git status, and PRs.
+- sqlpipe state sync (🎯T10) is incomplete.
+- Active work dashboard (🎯T16.1) complete.
 
 ### Testing
-- No integration tests for WebSocket, agent lifecycle, or voice bridge.
-- No automated test for the end-to-end voice path (browser mic → Grok
-  Realtime → TTS response).
+- Butler e2e oracles and cost clamp-down unit + synthetic runaway drill
+  ship in v0.5.0. WebSocket / voice e2e paths remain lightly covered.
 
 ### Documentation
-- NOTICES file missing for vendored dependencies.
-- README install section updated for Homebrew tap (`brew install marcelocantos/tap/jevons`) in v0.4.0.
+- NOTICES file missing for vendored iOS/ge dependencies.
+- Homebrew formula includes a `brew services` block since v0.5.0.
 
 ## Out of scope for 1.0
 
