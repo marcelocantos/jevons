@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -191,9 +192,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 // handleChat is a direct WebSocket ↔ Claude PTY bridge.
 // Client sends plain text messages, server sends raw JSONL lines.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	conn, err := websocket.Accept(w, r, wsAcceptOptions())
 	if err != nil {
 		slog.Error("chat: accept failed", "err", err)
 		return
@@ -307,7 +306,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sendHistory reads the JSONL file and sends each line as a raw WebSocket message.
+// sendHistory reads the JSONL file and sends each line as a raw WebSocket
+// message. Lines are read with bufio.Reader.ReadBytes so a multi-megabyte
+// tool_result line cannot silently truncate the rest of the transcript
+// (T38 / Fable F5). A line that cannot be written is logged and stops
+// the replay rather than dropping the remainder without notice.
 func sendHistory(conn *websocket.Conn, ctx context.Context, path string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -315,16 +318,42 @@ func sendHistory(conn *websocket.Conn, ctx context.Context, path string) {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1<<20), 1<<20)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	r := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := r.ReadBytes('\n')
+		if len(line) > 0 {
+			// Strip trailing newline; empty lines are skipped.
+			if line[len(line)-1] == '\n' {
+				line = line[:len(line)-1]
+			}
+			if len(line) > 0 && line[len(line)-1] == '\r' {
+				line = line[:len(line)-1]
+			}
+			if len(line) > 0 {
+				writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				werr := conn.Write(writeCtx, websocket.MessageText, line)
+				cancel()
+				if werr != nil {
+					slog.Warn("chat: history write failed", "path", path, "err", werr)
+					return
+				}
+			}
 		}
-		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		conn.Write(writeCtx, websocket.MessageText, line)
-		cancel()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			slog.Warn("chat: history read failed", "path", path, "err", err)
+			// Surface a structured error so the client knows replay was incomplete.
+			payload, _ := json.Marshal(map[string]string{
+				"type":  "error",
+				"error": "history replay incomplete: " + err.Error(),
+			})
+			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			_ = conn.Write(writeCtx, websocket.MessageText, payload)
+			cancel()
+			return
+		}
 	}
 }
 
