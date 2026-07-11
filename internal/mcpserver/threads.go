@@ -23,8 +23,8 @@ func (s *Server) SetButler(b *butler.Butler) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_adopt",
-			mcp.WithDescription("Adopt an existing Claude Code session in ONE call: it auto-names the thread after the session's repo, registers it, and TAKES IT OVER by default so it's immediately directable and shows in the agent panel. Just pass session_id — do not ask the owner for a name (rename later if needed). If the session is still open in its own terminal, take-over is refused with an actionable error (stop driving it first). Pass observe_only:true to only watch it without taking over."),
-			mcp.WithString("session_id", mcp.Required(), mcp.Description("Claude Code session UUID to adopt")),
+			mcp.WithDescription("Adopt an existing Grok Build session in ONE call: auto-names the thread after the session's repo, registers it, and TAKES IT OVER by default. Pass session_id only. If still open in another terminal, take-over is refused. Pass observe_only:true to watch without taking over."),
+			mcp.WithString("session_id", mcp.Required(), mcp.Description("Grok session id to adopt")),
 			mcp.WithBoolean("observe_only", mcp.Description("Only observe (tail the transcript); do NOT take over. Default false — adoption takes over.")),
 			mcp.WithString("id", mcp.Description("Optional handle override (defaults to the repo/dir name)")),
 			mcp.WithString("description", mcp.Description("Optional label override (defaults to the repo/dir name)")),
@@ -35,7 +35,7 @@ func (s *Server) SetButler(b *butler.Butler) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_remove",
-			mcp.WithDescription("Remove a thread: stop and deregister any owned process (the underlying Claude session on disk is left intact) and drop the record. Use to clean up duplicate or unwanted threads."),
+			mcp.WithDescription("Remove a thread: stop and deregister any owned process (the underlying Grok session on disk is left intact) and drop the record."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID to remove")),
 		),
 		s.handleThreadRemove,
@@ -58,19 +58,18 @@ func (s *Server) SetButler(b *butler.Butler) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_spawn",
-			mcp.WithDescription("Spawn a new thread the butler owns end-to-end and start its agent process (Grok by default). The thread is durable — it survives restarts and its idle process is stopped resumably and rehydrated on demand."),
+			mcp.WithDescription("Spawn a new Grok thread the butler owns end-to-end. Durable across restarts; idle process is stopped and rehydrated on demand."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Unique thread handle (e.g. 'tern-po', 'maze-rebuild')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory (e.g. '~/work/github.com/marcelocantos/tern')")),
 			mcp.WithString("description", mcp.Description("The owner's work-language label")),
-			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4', 'opus', 'sonnet')")),
-			mcp.WithString("provider", mcp.Description("Agent harness: grok (default), claude, or codex")),
+			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
 		),
 		s.handleThreadSpawn,
 	)
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_takeover",
-			mcp.WithDescription("Take over an adopted (observe-only) thread so Jevons owns and can direct it: launches Jevons's own process resuming the session. Refuses if the session is still being driven in another terminal — the owner must stop driving it first (two claude processes on one session corrupt it). The session is preserved, so a taken-over thread can later be handed back."),
+			mcp.WithDescription("Take over an adopted (observe-only) thread so Jevons owns and can direct it. Refuses if another process still holds the session. The session id is preserved."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID (an adopted thread)")),
 		),
 		s.handleThreadTakeover,
@@ -180,7 +179,6 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 		WorkDir:     workdir,
 		Description: str(args["description"]),
 		Model:       str(args["model"]),
-		Provider:    str(args["provider"]),
 	})
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil

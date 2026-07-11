@@ -16,8 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/marcelocantos/claudia"
-
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -136,24 +134,18 @@ func New(cfg Config) *Butler {
 // default (ObserveOnly opts out). ID, WorkDir, and Description are
 // optional overrides.
 type AdoptArgs struct {
-	SessionID   string // Claude Code session UUID
+	SessionID   string // Grok session id
 	ID          string // optional handle; defaults to the repo/dir name
 	WorkDir     string // optional; resolved from the transcript when empty
 	Description string // optional; defaults to the repo/dir name
 	ObserveOnly bool   // opt out of the default take-over
 }
 
-// Adopt registers an existing Claude Code session as a thread and, by
-// default, takes it over so it is immediately directable and shows up as
-// an owned agent. It is a single low-friction call: it derives a
-// meaningful name from the session's repo, is idempotent per session (no
-// duplicates on re-adopt), and never questions the caller about naming.
-//
-// Observing the session (to validate it and resolve its workdir) is
-// non-invasive — only the transcript is read. The take-over itself
-// launches jevons's process and enforces the two-writer guard.
+// Adopt registers an existing Grok session as a thread and, by default,
+// takes it over so it is immediately directable. Observing is
+// non-invasive (transcript only); take-over enforces the two-writer guard.
 func (b *Butler) Adopt(args AdoptArgs) (*thread.Thread, error) {
-	if !discovery.IsUUID(args.SessionID) {
+	if !discovery.IsSessionID(args.SessionID) {
 		return nil, fmt.Errorf("adopt: %q is not a valid session id", args.SessionID)
 	}
 	info, err := b.scanner.Get(args.SessionID)
@@ -185,9 +177,7 @@ func (b *Butler) Adopt(args AdoptArgs) (*thread.Thread, error) {
 			WorkDir:     workdir,
 			SessionID:   args.SessionID,
 			Description: desc,
-			// Adopted sessions come from ~/.claude/projects — always Claude.
-			Provider: string(claudia.ProviderClaude),
-			Now:      b.now(),
+			Now:         b.now(),
 		})
 		if err != nil {
 			return nil, err
@@ -249,7 +239,6 @@ type SpawnArgs struct {
 	WorkDir     string // required
 	Description string
 	Model       string
-	Provider    string // claude | codex | grok (empty = fleet default)
 }
 
 // Spawn creates a new thread the butler owns end-to-end and launches its
@@ -275,7 +264,6 @@ func (b *Butler) Spawn(args SpawnArgs) (*thread.Thread, error) {
 		WorkDir:     args.WorkDir,
 		Description: args.Description,
 		Model:       args.Model,
-		Provider:    args.Provider,
 		CreatedAt:   b.now(),
 	}
 	if err := b.store.Put(t); err != nil {

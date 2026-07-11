@@ -1,118 +1,70 @@
 # Jevons Agent Guide
 
-Jevons is a remote control system for Claude Code instances — a
+Jevons is a remote control system for **Grok Build** instances — a
 butler/CEO over a fleet of agents. It consists of a coordinator daemon
 (`jevonsd`), a browser chat UI, and a TUI client (`remote`).
+
+There is no Claude (or Codex) harness in jevons. The only provider is
+Grok via claudia (`ProviderGrok`: Task mode and Session ACP).
 
 ## Architecture
 
 ```
-  browser / remote  ──WebSocket──►  jevonsd  ──spawns──►  Jevons (Claude Code)
-                                        ──manages──►  workers / threads
+  browser / remote  ──WebSocket──►  jevonsd  ──spawns──►  Jevons (Grok Session ACP)
+                                        ──manages──►  workers / threads (Grok)
                                    MCP ◄─────────────┘ (tool calls)
 ```
 
-- **jevonsd**: HTTP/WebSocket server. Runs the overseer (Jevons) Claude
-  Code session, exposes an in-process MCP server for worker/thread
-  management, tails transcripts for cost accounting, and serves the web
-  UI from `web/`.
+- **jevonsd**: HTTP/WebSocket server. Runs the overseer as a Grok ACP
+  session, exposes an in-process MCP server for worker/thread management,
+  tails `~/.grok/sessions` for cost accounting, and serves the web UI.
 - **remote**: Terminal UI client over WebSocket.
 - **Primary UI**: browser at `http://localhost:13705/` (`/ws/chat`).
 
 ## Install (multi-step — not done until all succeed)
 
 1. **Binary**: `brew install marcelocantos/tap/jevons`
-2. **Service** (always-on): `brew services start jevons`
-3. **Verify listening** (do **not** use bare `curl` against `/mcp` —
+2. **Grok CLI**: install Grok Build and auth (`grok login` or `XAI_API_KEY`);
+   ensure `grok` is on `PATH` or at `~/.grok/bin/grok`.
+3. **Service** (always-on): `brew services start jevons`
+4. **Verify listening** (do **not** use bare `curl` against `/mcp` —
    MCP only answers JSON-RPC POSTs):
    ```bash
    lsof -iTCP:13705 -sTCP:LISTEN
    ```
-4. **Optional — register as an MCP client** (after restart of the agent
-   session that will call it):
+5. **Optional — register as an MCP client** after restarting the agent session:
    ```bash
+   # Example for Claude Code as an MCP *client* of jevons (jeons itself is Grok-only):
    claude mcp add --scope user --transport http jevons http://localhost:13705/mcp
    ```
-5. **Confirm tools** via a lightweight call (e.g. `jevons_thread_list`
-   or `jevons_cost`) after the agent session restarts.
-
-Generic MCP client config:
-
-```json
-{
-  "mcpServers": {
-    "jevons": {
-      "url": "http://localhost:13705/mcp"
-    }
-  }
-}
-```
+6. **Confirm tools** via `jevons_thread_list` or `jevons_cost`.
 
 ## Running manually
 
 ```bash
-# Start the coordinator (default port 13705; default provider: grok)
-jevonsd --port 13705 --workdir ~/projects --provider grok
-# Claude overseer: jevonsd --provider claude --model sonnet
-
-# Connect a terminal client
-remote --addr localhost:13705
-
-# Or open the web chat
+jevonsd --port 13705 --workdir ~/projects
 open http://localhost:13705/
+# or
+remote --addr localhost:13705
 ```
 
 ## Key concepts
 
-- **Jevons (overseer)**: Claude Code session managed by jevonsd that
-  coordinates work. Receives user messages; delegates via MCP tools.
-- **Thread**: Durable semantic unit (transcript + metadata + status),
-  **not** tied to a live process. Process = disposable cache (spawn /
-  idle-stop / rehydrate via `--resume`).
-- **Workers / agents**: Claude Code sessions that do coding work.
-- **Cost clamp-down**: Real-time spend monitoring with warn → throttle
-  → pause → kill escalation and a hard spawn-halt on budget breach.
+- **Jevons (overseer)**: Grok Session ACP process managed by jevonsd.
+- **Thread**: Durable semantic unit (transcript + metadata + status), not
+  tied to a live process. Process = disposable cache.
+- **Workers / agents**: Grok Task or Session workers.
+- **Sessions on disk**: `~/.grok/sessions/<encoded-cwd>/<session-id>/`
+  plus `~/.grok/active_sessions.json`.
 
 ## MCP tools
 
-jevonsd exposes an in-process MCP server at `/mcp`. Key tools:
-
-### Threads (butler/CEO)
-
-- **`jevons_thread_adopt`** — Register an existing Claude Code session
-  observe-only (non-invasive). Params: `session_id`, `description?`.
-- **`jevons_thread_list`** / **`jevons_thread_status`** — List / inspect
-  durable threads (`active` / `working` / `blocked` / `done` / `idle`).
-- **`jevons_thread_spawn`** — Create a thread and launch its process.
-- **`jevons_thread_direct`** — Send a turn; rehydrates an idle process.
-- **`jevons_thread_takeover`** — Promote adopt-observe → directable.
-- **`jevons_thread_remove`** — Drop a thread record.
-
-### Cost
-
-- **`jevons_cost`** — Live burn-rate snapshot (fleet / global / alerts).
-
-### Workers / agents
-
-- **`jevons_active_work`** — Cross-repo active-work dashboard.
-- **`jwork`** — On-demand worker dispatch (`text`, `cwd?`, `model?`,
-  `provider?`). Default harness is **grok** (claudia v0.16+ Task +
-  Session). Also `claude` or `codex`. Model names like `grok-4` /
-  `sonnet` also infer the provider.
-- **`jevons_agent_list` / `_start` / `_send` / `_stop`** — Persistent
-  agents via claudia Registry. Default provider is **grok** (ACP
-  Session). Pass `provider=claude` for Claude Code Session.
-- **`jevons_list_sessions` / `_create_session` / `_send_command` /
-  `_kill_session`** — Task-mode workers; same `provider?` as `jwork`.
-
-Budget spawn-halt blocks `jwork`, `jevons_create_session`,
-`jevons_agent_start`, and butler spawn/direct when the hard ceiling or
-fleet-kill level is in force.
-
-## WebSocket protocol
-
-Primary path is `/ws/chat` (raw Claude Code JSONL). Legacy structured
-JSON is on `/ws/remote`. Origin is validated on all upgrades.
+- **Threads**: `jevons_thread_adopt`, `_list`, `_status`, `_spawn`,
+  `_direct`, `_takeover`, `_remove` — Grok sessions only.
+- **Cost**: `jevons_cost` — burn-rate snapshot (collector tails
+  `~/.grok/sessions`).
+- **Workers**: `jwork`, `jevons_agent_*`, `jevons_list_sessions`,
+  `jevons_create_session`, …
 
 ## Configuration
 
@@ -123,14 +75,13 @@ JSON is on `/ws/remote`. Origin is validated on all upgrades.
 | `~/.jevons/usage.db` | Token-spend accounting |
 | `~/.jevons/budget.json` | Spend budgets / thresholds (optional) |
 | `~/.jevons/agents.json` | Agent registry |
-| `~/.claude/managed-repos.md` | Optional managed-repo list |
+| `~/.grok/sessions/` | Grok session store |
+| `~/.jevons/jevons/AGENTS.md` | Generated overseer instructions |
 
 ## Gotchas
 
-- The C++ app (`bin/jevons`) requires Git LFS objects and is not included
-  in release binaries. Only the Go binaries are distributed.
-- Jevons's CLAUDE.md and .mcp.json are generated at startup under
-  `~/.jevons/jevons/`. Do not edit them manually.
-- Cross-site browser POSTs to mutating HTTP routes are rejected; native
-  clients without an Origin header still work on the LAN.
+- Only Grok is supported. There is no `--provider` switch.
+- Cost events from Grok may not carry Claude-style `costUSD` yet; the
+  collector still tails session files for activity; pricing tables will
+  improve as Grok usage telemetry is understood.
 - Do not diagnose MCP readiness with bare `curl` — use `lsof` + a tool call.

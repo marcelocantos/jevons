@@ -26,7 +26,7 @@ const (
 // for deterministic tests.
 type CollectorArgs struct {
 	Store        *Store
-	ProjectsRoot string // ~/.claude/projects
+	ProjectsRoot string // ~/.grok/sessions
 	Attribute    func(sessionID string) string
 	ActiveWindow time.Duration
 	Now          func() time.Time

@@ -43,3 +43,9 @@ docs/*.svg
 # TLC model checker artifacts
 formal/*_TTrace_*
 formal/states/
+
+# Swift package builds
+swift/**/.build/
+**/.build/
+**/ModuleCache*/
+

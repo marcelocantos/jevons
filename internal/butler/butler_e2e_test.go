@@ -5,11 +5,8 @@ package butler_test
 
 // This is the butler-loop integration oracle for 🎯T30. It drives the
 // real Butler over the real thread store, session scanner, and
-// transcript reader against on-disk JSONL fixtures — no live claude, so
-// it is deterministic and CI-runnable. It exercises the adopt-observe
-// and status criteria end to end; the spawn/direct/GC/rehydrate criteria
-// (which need a live or mock claude) are added in later increments under
-// the same harness.
+// transcript reader against on-disk Grok session fixtures — no live
+// Grok, so it is deterministic and CI-runnable.
 
 import (
 	"fmt"
@@ -31,24 +28,24 @@ const ownerSession = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 // derivation agree deterministically.
 var fixedNow = time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
 
-// writeOwnerTranscript writes a realistic Claude Code session transcript
-// under projectsDir, simulating a session the owner already has running
-// that the butler will adopt observe-only. Returns the JSONL path.
-func writeOwnerTranscript(t *testing.T, projectsDir string) string {
+// writeOwnerTranscript writes a Grok-style session under sessionsDir
+// (chat_history.jsonl) that the butler will adopt observe-only.
+func writeOwnerTranscript(t *testing.T, sessionsDir string) string {
 	t.Helper()
 	recent := fixedNow.Add(-1 * time.Minute).Format(time.RFC3339)
 
 	lines := []string{
-		fmt.Sprintf(`{"type":"user","cwd":"/work/multimaze2","gitBranch":"master","timestamp":%q,"message":{"role":"user","content":"rebuild the maze generator"}}`, recent),
+		fmt.Sprintf(`{"type":"user","timestamp":%q,"content":"rebuild the maze generator"}`, recent),
 		fmt.Sprintf(`{"type":"assistant","timestamp":%q,"message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","name":"Edit","id":"t1"}]}}`, recent),
 		fmt.Sprintf(`{"type":"assistant","timestamp":%q,"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Done — the generator now uses recursive backtracking."}]}}`, recent),
 	}
 
-	projDir := filepath.Join(projectsDir, "-work-multimaze2")
-	if err := os.MkdirAll(projDir, 0o755); err != nil {
-		t.Fatalf("mkdir project dir: %v", err)
+	bucket := discovery.EncodeCWDBucket("/work/multimaze2")
+	dir := filepath.Join(sessionsDir, bucket, ownerSession)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
 	}
-	path := filepath.Join(projDir, ownerSession+".jsonl")
+	path := filepath.Join(dir, "chat_history.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatalf("write fixture transcript: %v", err)
 	}
@@ -56,8 +53,8 @@ func writeOwnerTranscript(t *testing.T, projectsDir string) string {
 }
 
 // newButler builds a butler over a temp store + a scanner/reader rooted
-// at projectsDir, with the harness clock.
-func newButler(t *testing.T, storePath, projectsDir string) *butler.Butler {
+// at sessionsDir, with the harness clock.
+func newButler(t *testing.T, storePath, sessionsDir string) *butler.Butler {
 	t.Helper()
 	store, err := thread.NewStore(storePath)
 	if err != nil {
@@ -65,8 +62,8 @@ func newButler(t *testing.T, storePath, projectsDir string) *butler.Butler {
 	}
 	return butler.New(butler.Config{
 		Store:   store,
-		Scanner: discovery.NewScanner(projectsDir),
-		Reader:  transcript.NewReader(projectsDir),
+		Scanner: discovery.NewScanner(sessionsDir),
+		Reader:  transcript.NewReader(sessionsDir),
 		Now:     func() time.Time { return fixedNow },
 	})
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package transcript provides read, truncate, and fork operations on
-// Claude Code session transcript JSONL files.
+// Grok Build session chat_history.jsonl files.
 package transcript
 
 import (
@@ -40,14 +40,14 @@ type Entry struct {
 	Timestamp  time.Time // line timestamp when present
 }
 
-// Reader provides transcript operations backed by the Claude Code projects directory.
+// Reader provides transcript operations backed by the Grok sessions tree.
 type Reader struct {
-	projectsDir string // ~/.claude/projects
+	sessionsDir string // ~/.grok/sessions
 }
 
-// NewReader creates a Reader rooted at the given Claude Code projects directory.
-func NewReader(projectsDir string) *Reader {
-	return &Reader{projectsDir: projectsDir}
+// NewReader creates a Reader rooted at the given Grok sessions directory.
+func NewReader(sessionsDir string) *Reader {
+	return &Reader{sessionsDir: sessionsDir}
 }
 
 // Read parses a session transcript and returns turns grouped by user message boundaries.
@@ -227,27 +227,19 @@ func (r *Reader) Fork(sessionID string, keepTurns int) (string, error) {
 	return newUUID, nil
 }
 
-// findJSONL locates the JSONL file for a session UUID by scanning project directories.
+// findJSONL locates chat_history.jsonl for a Grok session id.
 func (r *Reader) findJSONL(sessionID string) (string, error) {
-	if !discovery.IsUUID(sessionID) {
+	if !discovery.IsSessionID(sessionID) {
 		return "", fmt.Errorf("invalid session ID: %q", sessionID)
 	}
-
-	entries, err := os.ReadDir(r.projectsDir)
-	if err != nil {
-		return "", fmt.Errorf("read projects dir: %w", err)
+	path := discovery.ChatHistoryPath(r.sessionsDir, sessionID)
+	if path == "" {
+		return "", fmt.Errorf("transcript not found for session %q", sessionID)
 	}
-
-	for _, e := range entries {
-		if !e.IsDir() || e.Name() == "memory" {
-			continue
-		}
-		path := filepath.Join(r.projectsDir, e.Name(), sessionID+".jsonl")
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("transcript not found for session %q: %w", sessionID, err)
 	}
-	return "", fmt.Errorf("transcript not found for session %q", sessionID)
+	return path, nil
 }
 
 // jsonlLine holds the raw bytes and parsed type/role for a single JSONL line.

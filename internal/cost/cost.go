@@ -6,8 +6,8 @@
 // worker fleet burned ~$10.9k invisibly because nothing measured spend in
 // real time and nothing could stop it automatically.
 //
-// Layer 1 (this file + store/tail/collector): every active Claude Code
-// session JSONL under ~/.claude/projects is tailed in near-real-time —
+// Layer 1 (this file + store/tail/collector): every active Grok Build
+// session JSONL under ~/.grok/sessions is tailed in near-real-time —
 // not just jevons-registered workers, because the incident fleet was
 // exactly the kind of thing registration misses. Usage is priced
 // (costUSD preferred, pricing table fallback) and recorded in SQLite.

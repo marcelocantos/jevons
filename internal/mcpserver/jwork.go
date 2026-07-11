@@ -39,13 +39,12 @@ func (s *Server) registerJwork() {
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jwork",
 			mcp.WithDescription(
-				"Dispatch a task to an on-demand Claude Code worker. "+
+				"Dispatch a task to an on-demand Grok Build worker. "+
 					"The worker is a fresh subprocess that runs the task to completion and returns the result. "+
 					"Task description must be self-contained — no implicit context is injected."),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Task description. Must be self-contained — the worker has no prior context.")),
 			mcp.WithString("cwd", mcp.Description("Working directory for the worker (defaults to the coordinator's default)")),
-			mcp.WithString("model", mcp.Description("Model override (e.g. 'opus', 'sonnet', 'grok-4')")),
-			mcp.WithString("provider", mcp.Description("Agent harness: claude (default), codex, or grok. If omitted, inferred from model (grok-* → grok).")),
+			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
 			mcp.WithNumber("depth", mcp.Description("Current call depth (0 = top-level). Workers increment this when calling jwork themselves. Do not set manually.")),
 		),
 		s.handleJwork,
@@ -61,7 +60,6 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	text, _ := args["text"].(string)
 	cwd, _ := args["cwd"].(string)
 	model, _ := args["model"].(string)
-	providerArg, _ := args["provider"].(string)
 	depthF, _ := args["depth"].(float64)
 	depth := int(depthF)
 
@@ -83,11 +81,6 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		}
 	}
 
-	provider, err := cli.ResolveProvider(providerArg, model)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
 	workerID := uuid.New().String()[:8]
 	nextDepth := depth + 1
 
@@ -96,7 +89,7 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		"depth", depth,
 		"cwd", cwd,
 		"model", model,
-		"provider", provider,
+		"provider", cli.Provider,
 	)
 
 	// Build the prompt. At higher depths, inject delegation guidance.
@@ -108,12 +101,10 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	task := claudia.NewTask(claudia.TaskConfig{
 		ID:       workerID,
 		Name:     fmt.Sprintf("jwork-d%d-%s", depth, workerID),
-		Provider: provider,
+		Provider: cli.Provider,
 		WorkDir:  cwd,
 		Model:    model,
 	})
-	// Raw log persistence to SQLite is gone — Claude's JSONL session
-	// file at task.JSONLPath() is the canonical record.
 
 	events, err := task.Run(ctx, prompt)
 	if err != nil {

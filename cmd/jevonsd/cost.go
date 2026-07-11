@@ -60,7 +60,7 @@ func startCostGuard(ctx context.Context, homeDir string, registry *claudia.Regis
 
 	collector := cost.NewCollector(&cost.CollectorArgs{
 		Store:        store,
-		ProjectsRoot: filepath.Join(homeDir, ".claude", "projects"),
+		ProjectsRoot: filepath.Join(homeDir, ".grok", "sessions"),
 		Attribute:    attribute,
 	})
 
@@ -102,7 +102,7 @@ func startCostGuard(ctx context.Context, homeDir string, registry *claudia.Regis
 	return &costGuard{monitor: monitor, enforcer: enforcer}
 }
 
-// fleetSessionSet returns the set of Claude session ids currently hosted
+// fleetSessionSet returns the set of Grok session ids currently hosted
 // as windows in the fleet tmux server. Best-effort: if the server is
 // down or the option is absent, it returns empty, so orphan detection
 // degrades to a safe no-op rather than mis-flagging foreign sessions.
