@@ -94,11 +94,18 @@ jevonsd exposes an in-process MCP server at `/mcp`. Key tools:
 ### Workers / agents
 
 - **`jevons_active_work`** — Cross-repo active-work dashboard.
-- **`jwork`** — On-demand worker dispatch (`text`, `cwd?`, `model?`).
+- **`jwork`** — On-demand worker dispatch (`text`, `cwd?`, `model?`,
+  `provider?`). Provider is `claude` (default), `codex`, or `grok`
+  (claudia v0.15+ Grok Build CLI Task harness). If `provider` is
+  omitted, models like `grok-4` infer `grok`. Grok/Codex are **Task
+  mode only** — persistent Session mode fails closed for those
+  providers until claudia ships it.
 - **`jevons_agent_list` / `_start` / `_send` / `_stop`** — Persistent
-  agents (send is async fire-and-forget).
+  agents (Claude Session mode via claudia Registry). Not Grok-backed
+  yet (Session experimental).
 - **`jevons_list_sessions` / `_create_session` / `_send_command` /
-  `_kill_session`** — Session-level worker management.
+  `_kill_session`** — Session-level worker management. Create accepts
+  `provider?` the same way as `jwork`.
 
 Budget spawn-halt blocks `jwork`, `jevons_create_session`,
 `jevons_agent_start`, and butler spawn/direct when the hard ceiling or
