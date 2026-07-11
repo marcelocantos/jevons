@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
-	
+
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 )
 
@@ -42,9 +43,10 @@ type SessionSummary struct {
 
 // CreateConfig holds parameters for creating a new session.
 type CreateConfig struct {
-	Name    string // human-readable name
-	WorkDir string // working directory (default: ".")
-	Model   string // model override (empty = manager default)
+	Name     string // human-readable name
+	WorkDir  string // working directory (default: ".")
+	Model    string // model override (empty = manager default)
+	Provider string // claude | codex | grok (empty = infer from Model)
 }
 
 // Manager manages multiple concurrent Claude Code sessions.
@@ -84,14 +86,20 @@ func (m *Manager) Create(cfg CreateConfig) (*claudia.Task, error) {
 		name = workDir
 	}
 
+	provider, err := cli.ResolveProvider(cfg.Provider, model)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create a temporary session without a UUID — Run() will capture
 	// the session ID from the init event.
 	tmpID := fmt.Sprintf("creating-%d", time.Now().UnixNano())
 	s := claudia.NewTask(claudia.TaskConfig{
-		ID:      tmpID,
-		Name:    name,
-		WorkDir: workDir,
-		Model:   model,
+		ID:       tmpID,
+		Name:     name,
+		Provider: provider,
+		WorkDir:  workDir,
+		Model:    model,
 	})
 	s.SetRawLog(m.rawLogFunc(tmpID))
 

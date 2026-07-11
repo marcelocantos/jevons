@@ -10,11 +10,12 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/claudia v0.14.0
+	github.com/marcelocantos/claudia v0.15.0
 	github.com/marcelocantos/pigeon v0.19.0
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/peterh/liner v1.2.2
 	golang.org/x/term v0.41.0
+	modernc.org/sqlite v1.53.0
 )
 
 require (
@@ -70,5 +71,4 @@ require (
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.53.0 // indirect
 )
