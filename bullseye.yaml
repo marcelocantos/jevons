@@ -975,9 +975,10 @@ targets:
     discovered: 2026-07-07
   T38:
     name: jevons web endpoints are origin/auth-safe (no cross-site WS hijack, no unauth money-spending routes, no silent history truncation)
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 5.0
     acceptance:
     - 'F3: all WS `Accept` sites enforce an Origin allowlist; cross-origin handshakes are rejected; no `InsecureSkipVerify` on `websocket.Accept`.'
     - 'F4: state-changing/money-spending HTTP endpoints require auth even with TLS off and reject cross-site POSTs; the token-mint proxy is rate-limited.'
@@ -988,6 +989,7 @@ targets:
     - security
     origin: manual
     discovered: 2026-07-08
+    achieved: 2026-07-11
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
