@@ -306,9 +306,12 @@ function handle(m) {
   if (typ==='user') {
     const content = m.message?.content;
     if (typeof content === 'string') {
+      // Server synthesises a user echo on send; Grok ACP may also
+      // publish user_message_chunk for the same prompt. Drop the dupe.
+      if (content && msgHistory[msgHistory.length - 1]?.text === content) return;
       closeTurn();
       const uEl = addMsg('user', content, msgTs);
-      if (content && msgHistory[msgHistory.length - 1]?.text !== content) msgHistory.push({ text: content, el: uEl });
+      if (content) msgHistory.push({ text: content, el: uEl });
       startTurn();
     } else if (Array.isArray(content)) {
       content.forEach(c => {
