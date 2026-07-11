@@ -48,6 +48,13 @@ type Server struct {
 	screenshot ScreenshotFunc
 	transcript *TranscriptOps
 
+	// spawnGuard / resumeGuard are the budget clamp-down gates (T36.1):
+	// every MCP path that creates or re-launches a worker must consult
+	// them so spawnHalted cannot be bypassed via jwork / create_session
+	// / agent_start. Nil means unguarded (tests / cost DB unavailable).
+	spawnGuard  func() error
+	resumeGuard func(id string, auto bool) error
+
 	mcpSrv    *server.MCPServer
 	transport *server.StreamableHTTPServer
 
@@ -150,6 +157,38 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/mcp", s.transport)
 }
 
+// SetBudgetGuards wires the cost enforcer's AllowSpawn / AllowResume into
+// every MCP worker-launch path. Call with enforcer methods when the cost
+// guard is live; leave unset when the usage DB is unavailable.
+func (s *Server) SetBudgetGuards(spawn func() error, resume func(id string, auto bool) error) {
+	s.spawnGuard = spawn
+	s.resumeGuard = resume
+}
+
+// checkSpawnAllowed refuses new worker launch when the budget clamp has
+// halted spawning. Returns an MCP tool-error result when blocked.
+func (s *Server) checkSpawnAllowed() *mcp.CallToolResult {
+	if s.spawnGuard == nil {
+		return nil
+	}
+	if err := s.spawnGuard(); err != nil {
+		return mcp.NewToolResultError(err.Error())
+	}
+	return nil
+}
+
+// checkResumeAllowed refuses re-launch of a named worker when the budget
+// clamp blocks resume (spawn-halt, throttle window, pause/kill clamp).
+func (s *Server) checkResumeAllowed(id string) *mcp.CallToolResult {
+	if s.resumeGuard == nil {
+		return nil
+	}
+	if err := s.resumeGuard(id, false); err != nil {
+		return mcp.NewToolResultError(err.Error())
+	}
+	return nil
+}
+
 // --- tool handlers ---
 
 func (s *Server) handleListSessions(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -198,6 +237,10 @@ func (s *Server) handleSessionStatus(_ context.Context, req mcp.CallToolRequest)
 }
 
 func (s *Server) handleCreateSession(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if blocked := s.checkSpawnAllowed(); blocked != nil {
+		return blocked, nil
+	}
+
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	workdir, _ := args["workdir"].(string)

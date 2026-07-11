@@ -5,6 +5,7 @@ package cost
 
 import (
 	"encoding/json"
+	"math"
 	"time"
 )
 
@@ -28,6 +29,11 @@ type jsonlLine struct {
 // zero-usage synthetic messages). fallbackSession is used when the line
 // omits sessionId (derived from the filename by the caller). now stamps
 // lines with no timestamp.
+//
+// Transcript JSONL is untrusted-shaped (workers can write arbitrary
+// lines). Negative or non-finite costUSD/token fields are rejected so a
+// fabricated line cannot deflate SUM aggregates that drive the kill-
+// switch and spawn-halt (T36.1 / Fable F1).
 func ParseLine(line []byte, fallbackSession string, now time.Time) *Event {
 	var l jsonlLine
 	if err := json.Unmarshal(line, &l); err != nil {
@@ -37,6 +43,9 @@ func ParseLine(line []byte, fallbackSession string, now time.Time) *Event {
 		return nil
 	}
 	u := *l.Message.Usage
+	if !usageNonNegative(u) {
+		return nil
+	}
 	if u.IsZero() && l.CostUSD == nil {
 		return nil
 	}
@@ -58,9 +67,20 @@ func ParseLine(line []byte, fallbackSession string, now time.Time) *Event {
 		e.RequestID = l.Message.ID
 	}
 	if l.CostUSD != nil {
+		if !costNonNegative(*l.CostUSD) {
+			return nil
+		}
 		e.CostUSD = *l.CostUSD
 	} else {
 		e.CostUSD = EstimateCostUSD(e.Model, u)
 	}
 	return e
+}
+
+func usageNonNegative(u Usage) bool {
+	return u.Input >= 0 && u.Output >= 0 && u.CacheCreate >= 0 && u.CacheRead >= 0
+}
+
+func costNonNegative(c float64) bool {
+	return !math.IsNaN(c) && !math.IsInf(c, 0) && c >= 0
 }

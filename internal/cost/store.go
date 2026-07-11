@@ -93,11 +93,30 @@ func (s *Store) InsertEvents(events []*Event) (int, error) {
 	defer stmt.Close()
 	n := 0
 	for _, e := range events {
+		// Defence in depth for pre-parse or direct InsertEvents callers:
+		// never persist negative spend/tokens that could deflate sums.
+		cost := e.CostUSD
+		if cost < 0 || !costNonNegative(cost) {
+			cost = 0
+		}
+		in, out, cc, cr := e.Usage.Input, e.Usage.Output, e.Usage.CacheCreate, e.Usage.CacheRead
+		if in < 0 {
+			in = 0
+		}
+		if out < 0 {
+			out = 0
+		}
+		if cc < 0 {
+			cc = 0
+		}
+		if cr < 0 {
+			cr = 0
+		}
 		res, err := stmt.Exec(
 			e.Timestamp.UTC().Format(time.RFC3339Nano),
 			e.SessionID, e.Worker, e.Model,
-			e.Usage.Input, e.Usage.Output, e.Usage.CacheCreate, e.Usage.CacheRead,
-			e.CostUSD, e.RequestID)
+			in, out, cc, cr,
+			cost, e.RequestID)
 		if err != nil {
 			return 0, err
 		}
@@ -128,10 +147,11 @@ func (s *Store) SetTailOffset(path string, offset int64) error {
 }
 
 // SpentUSD returns the total cost of events in [from, to).
+// max(cost_usd,0) keeps a poisoned historical row from cancelling real spend.
 func (s *Store) SpentUSD(from, to time.Time) (float64, error) {
 	var spent sql.NullFloat64
 	err := s.db.QueryRow(
-		`SELECT SUM(cost_usd) FROM usage_events WHERE ts >= ? AND ts < ?`,
+		`SELECT SUM(max(cost_usd, 0)) FROM usage_events WHERE ts >= ? AND ts < ?`,
 		from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano)).Scan(&spent)
 	return spent.Float64, err
 }
@@ -140,7 +160,7 @@ func (s *Store) SpentUSD(from, to time.Time) (float64, error) {
 func (s *Store) WorkerSpentUSD(worker string, from, to time.Time) (float64, error) {
 	var spent sql.NullFloat64
 	err := s.db.QueryRow(
-		`SELECT SUM(cost_usd) FROM usage_events WHERE worker = ? AND ts >= ? AND ts < ?`,
+		`SELECT SUM(max(cost_usd, 0)) FROM usage_events WHERE worker = ? AND ts >= ? AND ts < ?`,
 		worker, from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano)).Scan(&spent)
 	return spent.Float64, err
 }
@@ -161,11 +181,11 @@ type BurnRow struct {
 // spend within [from, to), most expensive first.
 func (s *Store) Burning(from, to time.Time) ([]BurnRow, error) {
 	rows, err := s.db.Query(`
-		SELECT session_id, MAX(worker), MAX(model), SUM(cost_usd),
-		       SUM(input_tokens + output_tokens + cache_create_tokens + cache_read_tokens),
+		SELECT session_id, MAX(worker), MAX(model), SUM(max(cost_usd, 0)),
+		       SUM(max(input_tokens, 0) + max(output_tokens, 0) + max(cache_create_tokens, 0) + max(cache_read_tokens, 0)),
 		       COUNT(*), MAX(ts)
 		FROM usage_events WHERE ts >= ? AND ts < ?
-		GROUP BY session_id ORDER BY SUM(cost_usd) DESC`,
+		GROUP BY session_id ORDER BY SUM(max(cost_usd, 0)) DESC`,
 		from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err

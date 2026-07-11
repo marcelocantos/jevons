@@ -394,7 +394,11 @@ func main() {
 
 	// Wire the live cost view into the MCP tool, the web /api/cost
 	// endpoint, and the owner-activity heartbeat that arms the dead-man.
+	// Budget guards also cover the primary MCP spawn tools (jwork /
+	// create_session / agent_start) so spawnHalted cannot be bypassed
+	// outside the butler (T36.1 / Fable F2).
 	if guard != nil {
+		mcpSrv.SetBudgetGuards(guard.enforcer.AllowSpawn, guard.enforcer.AllowResume)
 		mcpSrv.SetCostMonitor(guard.monitor.Snapshot)
 		srv.SetCostSource(mcpSrv.CostJSON)
 		srv.SetActivityHook(guard.enforcer.Heartbeat)

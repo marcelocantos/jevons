@@ -50,6 +50,10 @@ func (s *Server) registerJwork() {
 }
 
 func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if blocked := s.checkSpawnAllowed(); blocked != nil {
+		return blocked, nil
+	}
+
 	args := req.GetArguments()
 	text, _ := args["text"].(string)
 	cwd, _ := args["cwd"].(string)

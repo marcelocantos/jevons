@@ -939,9 +939,10 @@ targets:
     achieved: 2026-07-07
   T36.1:
     name: T36's shipped clamp-down resists the two confirmed audit bypasses (cost-parse validation + spawn-halt enforcement)
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 3.0
     acceptance:
     - 'F1: `internal/cost/parse.go` validates/clamps `costUSD` and token fields from untrusted worker transcripts (reject or clamp negatives; aggregates use `GREATEST(cost_usd,0)`); a fabricated negative-cost line cannot deflate global/today spend or blind the L2 monitor.'
     - 'F2: every MCP worker-spawn/resume path (`jwork`/`create_session`/`agent_start`) consults the enforcer SpawnGuard/ResumeGuard; `spawnHalted` blocks all spawns over `/mcp` — the primary MCP spawn tools cannot bypass the clamp-down.'
@@ -953,6 +954,7 @@ targets:
     - clamp-down
     origin: manual
     discovered: 2026-07-08
+    achieved: 2026-07-11
   T37:
     name: Decide whether to adopt xAI's Voice Agent Builder (Grok Voice) in place of Jevons's DIY voice stack
     status: identified

@@ -58,10 +58,83 @@ func TestParseLine(t *testing.T) {
 		"user turn":  `{"type":"user","message":{"role":"user","content":"hi"}}`,
 		"zero usage": `{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
 		"corrupt":    `{"type":"assistant","message":{`,
+		// T36.1 / Fable F1: adversarial transcript values must not parse.
+		"neg costUSD": `{"type":"assistant","sessionId":"attacker","requestId":"x1","costUSD":-100000,"message":{"id":"m","model":"claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+		"neg tokens":  `{"type":"assistant","sessionId":"attacker","requestId":"x2","message":{"id":"m2","model":"claude-opus-4-8","usage":{"input_tokens":-1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
 	} {
 		if e := ParseLine([]byte(line), "fb", testNow); e != nil {
 			t.Fatalf("%s parsed as billable: %+v", name, e)
 		}
+	}
+}
+
+// TestNegativeCostCannotDeflateSpend is the T36.1 / Fable F1 oracle: a
+// fabricated negative-cost row must not cancel real attributed spend in
+// SpentUSD / Burning aggregates (belt-and-suspenders at the store layer
+// even if a pre-clamp Event is InsertEvents'd directly).
+func TestNegativeCostCannotDeflateSpend(t *testing.T) {
+	s, err := OpenStore(":memory:")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	// Real burn that must remain visible to the monitor/enforcer.
+	real := &Event{
+		Timestamp: testNow.Add(-time.Minute),
+		SessionID: "real-runaway",
+		Worker:    "fleet-w",
+		Model:     "claude-opus-4-8",
+		Usage:     Usage{Output: 1},
+		CostUSD:   50.0,
+		RequestID: "real-1",
+	}
+	// Adversarial unattributed line of the form the audit describes.
+	// ParseLine rejects it; InsertEvents also clamps if force-fed.
+	poisonLine := `{"type":"assistant","sessionId":"attacker","requestId":"x1","costUSD":-100000,"message":{"id":"m","model":"claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`
+	if e := ParseLine([]byte(poisonLine), "attacker", testNow); e != nil {
+		t.Fatalf("ParseLine accepted negative costUSD: %+v", e)
+	}
+	// Force-insert a poisoned Event the way a buggy path might have.
+	poison := &Event{
+		Timestamp: testNow.Add(-30 * time.Second),
+		SessionID: "attacker",
+		Model:     "claude-opus-4-8",
+		Usage:     Usage{Output: 1},
+		CostUSD:   -100000,
+		RequestID: "poison-1",
+	}
+	if _, err := s.InsertEvents([]*Event{real, poison}); err != nil {
+		t.Fatalf("InsertEvents: %v", err)
+	}
+
+	from, to := testNow.Add(-time.Hour), testNow.Add(time.Hour)
+	spent, err := s.SpentUSD(from, to)
+	if err != nil {
+		t.Fatalf("SpentUSD: %v", err)
+	}
+	if spent < 50.0-1e-9 {
+		t.Fatalf("SpentUSD deflated to %v; want ≥ 50 (poison must not cancel real spend)", spent)
+	}
+
+	burning, err := s.Burning(from, to)
+	if err != nil {
+		t.Fatalf("Burning: %v", err)
+	}
+	var realRow, poisonRow *BurnRow
+	for i := range burning {
+		switch burning[i].SessionID {
+		case "real-runaway":
+			realRow = &burning[i]
+		case "attacker":
+			poisonRow = &burning[i]
+		}
+	}
+	if realRow == nil || realRow.CostUSD < 50.0-1e-9 {
+		t.Fatalf("real session missing or deflated in Burning: %+v", burning)
+	}
+	if poisonRow != nil && poisonRow.CostUSD < 0 {
+		t.Fatalf("poison session still contributes negative cost in Burning: %+v", poisonRow)
 	}
 }
 
