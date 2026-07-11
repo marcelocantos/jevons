@@ -81,8 +81,9 @@ jobs:
           formula_folder: Formula
           version: ${{ github.event.release.tag_name }}
           # gh is the only brew-installable tool the daemon shells out to.
+          # Quoted formula names — bare `gh` is invalid Ruby (undefined local).
           depends_on: |
-            gh
+            "gh"
           # Run jevonsd as a keep-alive brew service. formula_includes injects
           # this verbatim inside the formula class (the formula is DO-NOT-EDIT
           # generated, so the service block must come from the generator, not a
