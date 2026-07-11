@@ -44,10 +44,22 @@ func (s *Server) CurrentProcess() *claudia.Agent {
 // the swap, and no /ws/chat connection is left holding a dead handle.
 func (s *Server) AttachOverseer(agent *claudia.Agent) {
 	s.SetProcess(agent)
-	agent.SubscribeEvents(func(ev claudia.Event) {
-		s.BroadcastChat(string(ev.Raw))
-		s.HandleAgentEvent(ev)
-	})
+	agent.SubscribeEvents(s.DeliverOverseerEvent)
+}
+
+// DeliverOverseerEvent is the live event path for the overseer: normalise
+// to the chat wire shape, broadcast to /ws/chat listeners, then update
+// turn/idle status. Extracted so tests can drive the same path without
+// a live claudia.Agent.
+func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
+	// Normalise ACP/raw provider events into the stable chat wire
+	// shape the web UI understands (🎯T39). Raw ACP payloads have
+	// no type/message.content, so a pass-through leaves the
+	// working indicator stuck forever.
+	if line, ok := chatWireLine(ev); ok {
+		s.BroadcastChat(line)
+	}
+	s.HandleAgentEvent(ev)
 }
 
 // SendToOverseer delivers text to the current overseer process.
@@ -300,8 +312,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 
 		slog.Info("chat: received", "msg", msg)
+		// Echo the user turn into the transcript. Grok ACP does not
+		// publish a user event for client prompts, and the browser
+		// only renders user bubbles from the wire (not optimistically).
+		s.BroadcastChat(chatUserEcho(msg))
 		if err := s.SendToOverseer(msg); err != nil {
-			slog.Error("chat: send to claude failed", "err", err)
+			slog.Error("chat: send to overseer failed", "err", err)
 		}
 	}
 }

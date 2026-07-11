@@ -992,6 +992,24 @@ targets:
     origin: manual
     discovered: 2026-07-08
     achieved: 2026-07-11
+  T39:
+    name: Chat UI clears "Jevons is working…" after every Grok overseer turn
+    status: identified
+    value: 13.0
+    cost: 3.0
+    acceptance:
+    - After a successful Grok overseer reply, the web chat working indicator is cleared without a page reload
+    - Assistant text from ACP session updates is rendered as jevons bubbles (not silently dropped)
+    - User-sent chat text is echoed into the transcript as a user bubble
+    - Empty-text end_turn (Grok ACP terminal event) still clears the working indicator
+    - Hermetic headless tests cover wire normalisation, BroadcastChat shape, and frontend handle() working-indicator lifecycle without a live Grok process
+    context: 'Root cause: AttachOverseer broadcasts claudia Event.Raw (ACP session/update params or stopReason result) which lacks Claude-shaped type/message.content; web/index.html only setWorking(false) on assistant text content arrays. Grok also does not echo user messages or emit system end events.'
+    tags:
+    - chat
+    - grok
+    - ux
+    origin: manual
+    discovered: 2026-07-11
   T4:
     name: Trust model defined for pre-1.0
     status: achieved

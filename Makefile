@@ -99,11 +99,15 @@ ios:
 	cd ios && xcodegen generate
 
 # ── Test ─────────────────────────────────────────────
-.PHONY: test test-go
+.PHONY: test test-go test-web
 test-go:
 	go test ./...
 
-test: test-go
+# Hermetic Node tests for chat working-indicator lifecycle (🎯T39).
+test-web:
+	node web/scripts/chat_events_test.js
+
+test: test-go test-web
 
 # ── Standing invariants (bullseye) ──────────────────
 .PHONY: bullseye
