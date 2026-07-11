@@ -27,6 +27,9 @@ import (
 // Always returns 204 — log delivery is best-effort, never blocking
 // the browser.
 func (s *Server) handleBrowserLog(w http.ResponseWriter, r *http.Request) {
+	if rejectCrossSite(w, r) {
+		return
+	}
 	var entry struct {
 		Level  string         `json:"level"`
 		Msg    string         `json:"msg"`

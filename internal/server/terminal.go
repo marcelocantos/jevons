@@ -38,9 +38,7 @@ func (s *Server) handleAgentTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	conn, err := websocket.Accept(w, r, wsAcceptOptions())
 	if err != nil {
 		slog.Error("terminal: accept failed", "err", err)
 		return

@@ -92,9 +92,7 @@ func (ds *DevServer) Watch() error {
 }
 
 func (ds *DevServer) handleReload(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	conn, err := websocket.Accept(w, r, wsAcceptOptions())
 	if err != nil {
 		return
 	}

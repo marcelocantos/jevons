@@ -78,6 +78,9 @@ type Server struct {
 	// snapshot for GET /api/cost. Both default to no-ops.
 	activityHook func()
 	costSource   func() any
+
+	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
+	tokenLimiter *tokenRateLimiter
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -99,6 +102,7 @@ func New(mgr *manager.Manager, version string) *Server {
 		remotes:       make(map[int]remoteConn),
 		creds:         NewCredentialStore(filepath.Join(os.Getenv("HOME"), ".jevons", "credential.json")),
 		chatListeners: make([]chan string, 0),
+		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
 	}
 
 	if rec, err := s.creds.Load(); err != nil {
@@ -195,9 +199,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	if vb == nil {
 		// Accept the WebSocket so the client gets a clear JSON error
 		// (failed upgrades don't surface error text to JavaScript).
-		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			InsecureSkipVerify: true,
-		})
+		conn, err := websocket.Accept(w, r, wsAcceptOptions())
 		if err != nil {
 			return
 		}
@@ -216,6 +218,13 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 // Realtime API. The API key stays on the server; the client gets a
 // short-lived token for direct WebSocket connection to OpenAI.
 func (s *Server) handleRealtimeToken(w http.ResponseWriter, r *http.Request) {
+	if rejectCrossSite(w, r) {
+		return
+	}
+	if s.tokenLimiter != nil && !s.tokenLimiter.allow(time.Now()) {
+		http.Error(w, `{"error":"token mint rate limit exceeded"}`, http.StatusTooManyRequests)
+		return
+	}
 	apiKey := s.openAIKey
 	if apiKey == "" {
 		http.Error(w, `{"error":"OPENAI_API_KEY not configured (set env var or store in macOS Keychain: security add-generic-password -a jevon -s openai-api-key -w YOUR_KEY)"}`, http.StatusServiceUnavailable)
@@ -275,8 +284,12 @@ type provisionResponse struct {
 
 // handleProvision issues a client certificate for a new device.
 // This endpoint is intentionally accessible without a client certificate —
-// it is the bootstrap step for provisioning new devices.
+// it is the bootstrap step for provisioning new devices — but cross-site
+// browser POSTs are still rejected (T38 / Fable F4).
 func (s *Server) handleProvision(w http.ResponseWriter, r *http.Request) {
+	if rejectCrossSite(w, r) {
+		return
+	}
 	if s.ca == nil {
 		http.Error(w, `{"error":"CA not configured"}`, http.StatusServiceUnavailable)
 		return
@@ -351,9 +364,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	conn, err := websocket.Accept(w, r, wsAcceptOptions())
 	if err != nil {
 		slog.Error("remote accept failed", "err", err)
 		return
@@ -479,7 +490,14 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKillSession(w http.ResponseWriter, r *http.Request) {
+	if rejectCrossSite(w, r) {
+		return
+	}
 	id := r.PathValue("id")
+	if s.mgr == nil {
+		http.Error(w, `{"error":"manager not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
 	if err := s.mgr.Kill(id); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)

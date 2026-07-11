@@ -135,9 +135,7 @@ func NewVoiceBridge(srv *Server, apiKey string) *VoiceBridge {
 //     - {"type":"assistant_transcript_done"}
 //     - {"type":"error", "error": ...}
 func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	conn, err := websocket.Accept(w, r, wsAcceptOptions())
 	if err != nil {
 		slog.Error("voice: accept failed", "err", err)
 		return
