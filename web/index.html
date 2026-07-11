@@ -251,6 +251,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 </div>
 <script src="scripts/jlog.js"></script>
 <script src="scripts/transport.js"></script>
+<script src="scripts/chat_events.js"></script>
 <script>
 const msgs = document.getElementById('messages');
 const input = document.getElementById('input');
@@ -323,7 +324,7 @@ function handle(m) {
   } else if (typ==='assistant') {
     const content = m.message?.content;
     if (!Array.isArray(content)) return;
-    const hasText = content.some(c => c.type==='text' && c.text);
+    const hasText = ChatEvents.hasAssistantText(m);
     content.forEach(c => {
       if (c.type==='tool_use') {
         addTurnItem('tool-use', c.name + (c.input ? ': ' + summariseInput(c.input) : ''));
@@ -331,12 +332,12 @@ function handle(m) {
     });
     if (hasText) {
       closeTurn();
-      setWorking(false);
-      content.forEach(c => {
-        if (c.type==='text' && c.text) addMsg('jevons', c.text, msgTs);
-      });
+      ChatEvents.assistantTextBlocks(m).forEach(c => appendOrAddJevons(c.text, msgTs));
       input.focus();
     }
+    // ChatEvents.shouldClearWorking covers text+end_turn, empty end_turn
+    // (Grok ACP), and legacy single-shot text without stop_reason.
+    if (ChatEvents.shouldClearWorking(m)) setWorking(false);
   } else if (typ==='tool_result' || typ==='result') {
     const content = m.content || m.message?.content;
     if (Array.isArray(content)) {
@@ -348,7 +349,29 @@ function handle(m) {
     }
   } else if (typ==='system') {
     closeTurn();
+    if (ChatEvents.shouldClearWorking(m)) setWorking(false);
   }
+}
+
+// appendOrAddJevons merges streaming assistant chunks into the last
+// jevons bubble while a turn is in flight; starts a new bubble otherwise.
+function appendOrAddJevons(text, ts) {
+  let target = msgs.lastElementChild;
+  // Skip the working indicator if it is the last child.
+  if (target && target.classList && target.classList.contains('working-indicator')) {
+    target = target.previousElementSibling;
+  }
+  if (workingEl && target && target.classList && target.classList.contains('msg')
+      && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
+    target._streamRaw += text;
+    const timeEl = target.querySelector('.msg-time');
+    target.innerHTML = marked.parse(target._streamRaw);
+    if (timeEl) target.appendChild(timeEl);
+    scrollDown();
+    return;
+  }
+  const el = addMsg('jevons', text, ts);
+  el._streamRaw = text;
 }
 
 function startTurn() {

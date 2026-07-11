@@ -122,14 +122,19 @@ func New(mgr *manager.Manager, version string) *Server {
 func (s *Server) HandleAgentEvent(ev claudia.Event) {
 	switch ev.Type {
 	case "assistant":
-		if ev.Text == "" {
+		if ev.Text != "" {
+			s.mu.Lock()
+			s.turnBuf += ev.Text
+			s.mu.Unlock()
+			s.Broadcast(map[string]any{"type": "text", "content": ev.Text})
+		}
+		// Grok ACP ends a turn with an empty-text assistant event and
+		// stop_reason=end_turn — there is no follow-up system event.
+		// Treat terminal stops like the legacy system idle signal.
+		if !ev.IsTerminalStop() {
 			return
 		}
-		s.mu.Lock()
-		s.turnBuf += ev.Text
-		s.mu.Unlock()
-		s.Broadcast(map[string]any{"type": "text", "content": ev.Text})
-
+		fallthrough
 	case "system":
 		s.mu.Lock()
 		wasWaiting := s.waiting
@@ -143,9 +148,8 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		s.Broadcast(map[string]any{"type": "status", "state": "idle"})
 		// Pre-🎯T18: voiceBridge.InjectResponse(turnText) used to be
 		// called here so Grok would speak Claude's turn aloud. Removed
-		// because Grok is now the overseer: it dispatches to Claude via
-		// the delegate() tool and receives completions through a
-		// goroutine that calls SendSystemNote directly. Re-invoking
+		// because Grok is now the overseer: it dispatches via tools and
+		// receives completions through SendSystemNote. Re-invoking
 		// InjectResponse here would double-handle every delegated turn.
 		_ = turnText
 	}
