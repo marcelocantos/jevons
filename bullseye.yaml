@@ -1130,7 +1130,7 @@ targets:
     achieved: 2026-07-18
   T44:
     name: Jevons carries no owner-specific identity in code — identity, prompts, paths, and models come from structured config
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1144,6 +1144,7 @@ targets:
     - de-hardcoding
     origin: manual
     discovered: 2026-07-16
+    achieved: 2026-07-18
   T45:
     name: claudia and pigeon are documented public dependencies, and butler.Fleet is the declared provider seam
     status: identified
