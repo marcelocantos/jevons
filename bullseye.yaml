@@ -1110,7 +1110,7 @@ targets:
     discovered: 2026-07-16
   T43:
     name: Dead client surfaces are gone from the tree and the build
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1125,6 +1125,7 @@ targets:
     - consolidation
     origin: manual
     discovered: 2026-07-16
+    achieved: 2026-07-18
   T44:
     name: Jevons carries no owner-specific identity in code — identity, prompts, paths, and models come from structured config
     status: identified
