@@ -1162,7 +1162,7 @@ targets:
     discovered: 2026-07-16
   T46:
     name: The CEO loop is oracle-attested end-to-end
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1178,6 +1178,7 @@ targets:
     - fleet
     origin: manual
     discovered: 2026-07-16
+    achieved: 2026-07-18
   T47:
     name: A second user can install and run jevons using only the docs
     status: identified
