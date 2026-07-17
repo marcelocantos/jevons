@@ -1077,7 +1077,7 @@ targets:
     discovered: 2026-07-11
   T41:
     name: The durable-thread path is the only agent lifecycle — the legacy manager generation is gone
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1090,6 +1090,7 @@ targets:
     - fleet
     origin: manual
     discovered: 2026-07-16
+    achieved: 2026-07-18
   T42:
     name: Documentation tells the truth about the Grok/thread/web reality
     status: achieved
