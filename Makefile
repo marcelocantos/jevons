@@ -99,7 +99,7 @@ ios:
 	cd ios && xcodegen generate
 
 # ── Test ─────────────────────────────────────────────
-.PHONY: test test-go test-web
+.PHONY: test test-go test-web test-ui
 test-go:
 	go test ./...
 
@@ -107,7 +107,16 @@ test-go:
 test-web:
 	node web/scripts/chat_events_test.js
 
-test: test-go test-web
+# Playwright perceptual chat UI (hermetic mocked WS; needs playwright
+# from scripts/browser-loop-test). Live: make test-ui-live.
+test-ui:
+	node scripts/chat-ui-test/test.js
+
+.PHONY: test-ui-live
+test-ui-live:
+	node scripts/chat-ui-test/test.js --live
+
+test: test-go test-web test-ui
 
 # ── Standing invariants (bullseye) ──────────────────
 .PHONY: bullseye

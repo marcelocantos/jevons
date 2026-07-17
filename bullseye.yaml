@@ -63,9 +63,10 @@ targets:
     discovered: 2026-03-15
   T11:
     name: Lua-controllable SwiftUI modifier surface
-    status: identified
+    status: set_aside
     value: 8.0
     cost: 5.0
+    set_aside_reason: Superseded with T9 — the Lua-controllable SwiftUI modifier surface belongs to the native server-driven UI generation displaced by WKWebView-over-web (T14.1) and T29. Phase 1 (T11.1) was achieved and remains on the record.
     acceptance:
     - All sub-targets achieved
     context: |
@@ -98,9 +99,10 @@ targets:
     achieved: 2026-03-22
   T11.2:
     name: Useful SwiftUI modifiers (Phase 2)
-    status: identified
+    status: set_aside
     value: 3.0
     cost: 3.0
+    set_aside_reason: Superseded with T11/T9 — SwiftUI modifier phase 2 has no consumer after the WKWebView collapse (T14.1) and the T29 direction.
     acceptance:
     - 25 additional props for richer interactions and visual polish
     - 'Input: secure, content_type, line_limit_min, line_limit_max'
@@ -118,9 +120,10 @@ targets:
     discovered: 2026-03-15
   T12:
     name: Script versioning and safe mode
-    status: identified
+    status: set_aside
     value: 8.0
     cost: 5.0
+    set_aside_reason: Superseded with T9/T11 — script versioning and safe mode guarded the Lua/server-driven-UI script surface, which the WKWebView-over-web architecture displaced. Reopen if the Lua membrane returns (owner to confirm this disposition).
     acceptance:
     - Script updates create versioned snapshots in SQLite
     - Two-finger chevron gesture triggers safe mode from any screen state
@@ -332,9 +335,10 @@ targets:
     discovered: 2026-03-27
   T17:
     name: Jevons UI renders via ge engine
-    status: identified
+    status: set_aside
     value: 3.0
     cost: 21.0
+    set_aside_reason: Superseded — the ge/WebGPU UI direction was abandoned; the web UI is canonical and iOS wraps it in a WKWebView (T14.1), with T29 as the forward UI direction. src/ removal tracked by 🎯T43.
     acceptance:
     - Jevon's UI runs as a C++ ge application alongside jevonsd
     - ge app renders UI and communicates with jevonsd over WebSocket/HTTP
@@ -431,6 +435,8 @@ targets:
     - Dictating into the empty Jevons UI input via Wispr Flow produces capitalised, punctuated sentences matching its behaviour in the Claude CLI
     - Behaviour is consistent regardless of whether the field is empty or has draft text
     context: "Wispr Flow currently outputs lowercase, unpunctuated fragments when dictating into the empty Jevons UI input (\"are you able to track jevons po progress\") but produces full sentences in the Claude CLI (\"Are you able to track Jevons PO progress?\"). \n\nDiagnostic finding: if the Jevons UI input contains ANY sentence-shaped text (even a single full stop), Wispr Flow flips to document mode and produces proper sentences. Empty field → chat-casual; non-empty sentence-shaped field → document. So Wispr Flow reads the focused field's accessibility context and matches its existing style.\n\nThis explains the CLI: terminal scrollback is one text buffer where prior turns (full sentences) form the visible context. The Jevons UI input is a DOM element separated from the message history, so empty-field dictation has no anchor.\n\nLikely fix shapes:\n1. Bridge the accessibility context — `aria-describedby` on the input pointing at the history, or render the input inside the same scrolling region. Native chat-UI pattern.\n2. Pre-seed the input with an invisible/zero-width sentence-shaped string Wispr Flow reads as continuation context. Hacky but trivial.\n\nEarlier hypothesis (single-line input vs. textarea) is NOT the dominant cause; can be evaluated separately for UX reasons but won't fix the dictation issue on its own."
+    depends_on:
+    - T37
     origin: manual
     discovered: 2026-05-14
   T22:
@@ -447,6 +453,8 @@ targets:
     - On the iPad-in-car deployment, voice audio does not transit the home ngrok tunnel — verified by inspecting bandwidth on the home uplink during a voice exchange
     - Server-side VoiceBridge can be deleted (or kept only as a debug-relay opt-in)
     context: 'Currently /ws/voice is proxied through jevonsd: browser to jevonsd to Grok via two WebSockets. For the laptop dev path that''s fine — jevonsd is on localhost and the only WAN hop is jevonsd-to-Grok. For the iPad-in-car deployment (the primary target, exposed via ngrok), audio bounces through the home Mac: phone to ngrok to home jevonsd to Grok and back, doubling residential uplink consumption (~64 KB/s × 2 = ~128 KB/s through home ISP per active voice session). Direct path lets the iPad talk to Grok over its own cellular/wifi; home ISP only carries small Claude/jevon control messages. Also reduces latency by avoiding the home network as an intermediate stop and makes voice resilient to home Wi-Fi flakiness. Approach: reimplement claudia/grok in JS (~200 lines: WS open, session config, audio framing, JSON event switch). Add ephemeral-token endpoint on jevonsd (or accept subprotocol-baked key for personal devices). Move send_to_jevons round-tripping to the browser, with the chat WS as the jevon/browser link. Not urgent — laptop dev path works fine via the proxy. Raise once iPad becomes the primary deployment again.'
+    depends_on:
+    - T37
     origin: manual
     discovered: 2026-05-14
   T23:
@@ -467,9 +475,10 @@ targets:
     achieved: 2026-05-20
   T24:
     name: Worker agents survive Claude Code's stale-session resume prompt
-    status: identified
+    status: set_aside
     value: 0.0
     cost: 0.0
+    set_aside_reason: Moot — the Grok-only harness pivot (#29) removed the Claude provider, so Claude Code's stale-session resume prompt can no longer occur. Reopen only if a Claude Fleet backend returns.
     acceptance:
     - When claudia.Registry.Launch resumes a long-lived session that Claude Code wants to summarise first, the launch path automatically selects the safe default (option 1 / Enter) rather than wedging at the menu.
     - The readiness pattern in claudia.Agent.WaitReady recognises this menu and either advances through it or surfaces a distinct, actionable error instead of the generic 'ready pattern did not match within 30s'.
@@ -480,9 +489,10 @@ targets:
     discovered: 2026-05-20
   T25:
     name: Grok used as voice I/O layer; overseer agent runs outside xAI's session model
-    status: converging
+    status: set_aside
     value: 0.0
     cost: 0.0
+    set_aside_reason: Premise invalidated — the shipped Grok-only harness makes the overseer itself a Grok ACP session, contradicting "overseer runs outside xAI's session model". The 🎯T37 decision will spawn a successor if the voice/brain split is still wanted.
     acceptance:
     - 'Voice runs entirely client-side on the iPad (swift/voicelab): AVAudioEngine + VoiceProcessingIO AEC, local-VAD-gated episodic Grok Realtime sessions, direct iPad->Grok with no audio through jevonsd. [DONE - Phase 0, device-validated 2026-07-04: episodic loop, barge-in, background-audio, VAD threshold -38 dBFS confirmed]'
     - 'Each Grok episode is stateless: opens on local-VAD trigger (with pre-roll so the trigger syllables survive), closes on post-response silence. No JSONL replay into Grok; Grok holds no cross-episode continuity. [DONE - Phase 0]'
@@ -574,6 +584,7 @@ targets:
     - Provider config is reloadable without a full daemon restart where practical.
     depends_on:
     - T27.1
+    - T44
     tags:
     - providers
     - config
@@ -720,6 +731,8 @@ targets:
     - 'Adaptation is genuinely online: entering a noisier environment (windows down, higher speed) degrades then recovers transcription as the profile re-trains, without an app restart.'
     - The suppressor sits as a stage in the VoicelabKit capture pipeline (AudioEngine → [suppressor] → VAD + Grok), platform-neutral where possible so it survives the iOS-first / future-platform split.
     context: 'Requested 2026-07-04. The car cabin is the primary deployment and road noise is the dominant threat to both the local VAD (false triggers on rumble) and Grok STT accuracy. VoiceProcessingIO already gives AEC + AGC + some NS, but its NS is tuned for echo/voice on a phone call, not sustained low-frequency road noise. The user''s framing: use idle periods (when not speaking) to learn the ambient noise, then subtract it adaptively while speaking — classic adaptive noise cancellation / spectral subtraction, with strong prior art. Leverage a library rather than rolling our own DSP: RNNoise is the leading real-time RNN suppressor (permissive licence, ~1 CPU-% per stream, designed exactly for this); WebRTC''s APM is the other proven option; first confirm whether VP''s built-in NS is already enough before adding a stage. Slots into the VoicelabKit capture pipeline ahead of the VAD and the Grok stream. Relates to the voice foundation in T25 (this cleans the input side of that loop).'
+    depends_on:
+    - T37
     origin: manual
     discovered: 2026-07-04
   T29:
@@ -792,6 +805,22 @@ targets:
     - T19
     origin: manual
     discovered: 2026-07-04
+  T30.1:
+    name: 'No agent conversation is ever lost: session identity is stable and history survives any restart'
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'Registry session_id never changes except by explicit owner action; a failed session/load fails closed and never silently mints a replacement id (hermetic test: fake ACP forces load failure, registry id and history untouched).'
+    - jevonsd owns an append-only per-thread transcript (fsynced on end_turn); after killing the agent process and restarting jevonsd, the UI replays all completed turns from the jevons-owned log, independent of the provider's private store.
+    - 'Live oracle: exchange ≥3 turns with the overseer, kill the ACP child, restart jevonsd — the next reply is coherent with prior context, or startup fails closed with the old id preserved and history still visible.'
+    context: The owner's single hard durability requirement ("no conversation ever gets lost"; in-flight work may be clobbered). Designed in full on 2026-07-11 (session 019f4f1b) but never filed. Today claudia's session/load silently falls back to session/new and the registry overwrites the id — the exact catastrophic loss mode. Child of T30 because "never loses a thread" is T30's own load-bearing claim.
+    tags:
+    - durability
+    - quality
+    - oracle-first
+    origin: manual
+    discovered: 2026-07-16
   T31:
     name: Jevons enforces oracle-first as a system property and interactively co-develops oracles from intent for greenfield work
     status: identified
@@ -1027,6 +1056,169 @@ targets:
     origin: manual
     discovered: 2026-04-09
     achieved: 2026-04-09
+  T40:
+    name: Jevons can be upgraded without killing or draining running agents
+    status: identified
+    value: 8.0
+    cost: 13.0
+    acceptance:
+    - A running Grok ACP agent (overseer or worker) keeps its process and live session across a jevonsd binary upgrade/restart of the coordinator only
+    - 'In-flight or idle agents do not require a drain window: no "wait for turn to finish then stop all agents" step is mandatory for upgrade'
+    - After the new jevonsd is up, it reattaches/connects to the still-running agents (same session_id) and continues chat/control without minting a new conversation
+    - Documented upgrade path (brew services / launchd or equivalent) matches the acceptance behavior; regression test or drill proves coordinator restart does not SIGKILL/orphan-replace agent processes
+    - 'Out of scope for the initial conversation-durability work: this target is process/connect durability for zero-downtime upgrades, not "no conversation lost" alone'
+    context: 'Filed 2026-07-11. Near-term durability is conversation-only (stable session_id + jevons-owned transcript + fail-closed load). This target is a later goal: upgrade/redeploy jevonsd without killing or draining running ACP agents — requires supervisor/connect-mode (agents outlive the coordinator), not just session/load after process death. Leave out of scope until conversation durability lands. Restored 2026-07-18 from preserve/post-merge-local (originally filed there as 14eb0f8).'
+    tags:
+    - durability
+    - upgrade
+    - acp
+    - supervisor
+    origin: manual
+    discovered: 2026-07-11
+  T41:
+    name: The durable-thread path is the only agent lifecycle — the legacy manager generation is gone
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - internal/manager and the legacy session MCP tools (jevons_create_session, jevons_send_command, jevons_kill_session, jevons_list_sessions) are deleted or reimplemented over butler/thread.
+    - jwork remains the sole ephemeral-worker primitive and is documented as such.
+    - internal/worker and internal/voice stub packages are deleted; go test ./... green.
+    context: 'Three spawn generations coexist (legacy manager with zero tests, jwork, butler/thread). Deep-dive 2026-07-16: consolidating onto the durable-thread path is a prerequisite for attesting the CEO loop and for any reuse story.'
+    tags:
+    - consolidation
+    - fleet
+    origin: manual
+    discovered: 2026-07-16
+  T42:
+    name: Documentation tells the truth about the Grok/thread/web reality
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Every superseded design doc carries a banner naming its successor (architecture.md, mobile-app.md, platoon-design.md, voice-fsm.md, trust-model.md, cost-management.md, convergence-report.md).
+    - Root CLAUDE.md / AGENTS.md describe the current build/run/architecture — no ge phone UI, no AssemblyAI pipeline, no ngrok claim.
+    - One current-architecture doc exists that a new contributor can read instead of union-ing README + agents-guide + STABILITY + bullseye; it includes a glossary (claudia, ACP, Task vs Session, pigeon, thread vs agent vs session).
+    - README's "Grok Build" link no longer points at Anthropic's Claude Code docs.
+    - docs/design/operations-manual.md is committed (currently untracked).
+    context: 'Deep-dive 2026-07-16: the Grok-only pivot landed in code, README, and agents-guide but in zero design docs; three UI generations sit unreconciled; convergence-report.md is frozen at 2026-03-29 and actively misleading. Doc drift is the dominant staleness axis blocking reuse.'
+    tags:
+    - docs
+    - truth-pass
+    - reusability
+    origin: manual
+    discovered: 2026-07-16
+  T43:
+    name: Dead client surfaces are gone from the tree and the build
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - src/ C++ ge app removed from the tree and Makefile (or explicitly parked with a banner explaining why it stays).
+    - Untracked swift/voicelab/ deleted (zero source files remain in it today).
+    - 'cmd/remote''s fate decided: deleted, or documented as debug-only and excluded from the product story.'
+    - 'Untracked stragglers resolved: agent-percept-final.png and scripts/chat-ui-test/ artifacts deleted or gitignored.'
+    - make all builds only living surfaces.
+    context: 'Deep-dive 2026-07-16: web UI is canonical and iOS wraps it; the C++ ge app (84 lines, two commits ever), the gutted voicelab experiment, and the Bubbletea TUI are legacy mass that misleads contributors and CLAUDE.md alike.'
+    tags:
+    - hygiene
+    - consolidation
+    origin: manual
+    discovered: 2026-07-16
+  T44:
+    name: Jevons carries no owner-specific identity in code — identity, prompts, paths, and models come from structured config
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A structured config file (e.g. ~/.jevons/config.yaml) provides overseer/CEO name, persona and voice system prompts (current embedded texts become default templates), state-dir and provider-store paths, port, and model choices; flags and env override file values.
+    - The ~130-line CEO prompt is externalized from cmd/jevonsd/main.go; no personal names, personal repo paths, or car-specific assumptions remain in compiled code (grep oracle over the binary's sources).
+    - jevonsd starts and works with the default config on a machine that is not the author's.
+    context: 'Deep-dive 2026-07-16: the single biggest reuse blocker is compile-time identity — overseer name, persona prompt (with owner name and personal repos), all ~/.jevons and ~/.grok paths, and provider constant are hardcoded; config today is four uncoordinated sources (flags, env, Keychain, budget.json). T27.2''s provider-registry config home builds on this, hence the block edge.'
+    tags:
+    - reusability
+    - config
+    - de-hardcoding
+    origin: manual
+    discovered: 2026-07-16
+  T45:
+    name: claudia and pigeon are documented public dependencies, and butler.Fleet is the declared provider seam
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - claudia and pigeon each have a README covering install, core concepts, and the APIs jevons uses; current versions are tagged.
+    - butler.Fleet is documented as the provider extension seam; cost collection (L1 tailing ~/.grok JSONL) and enforcement (L3 tmux kill-switch) reach the provider through a seam rather than hardwired paths, so a second Fleet backend would inherit cost governance.
+    - A stranger can build and run jevons from a clean checkout using only public instructions.
+    context: 'Deep-dive 2026-07-16: claudia v0.17 (agent harness) and pigeon v0.19 (relay/pairing) are the substrate and are undocumented in-repo; reuse means publishing them properly or making the Fleet interface the official boundary. Multi-provider is explicitly NOT the goal (Grok-only was a deliberate narrowing) — the seam just has to be honest.'
+    tags:
+    - reusability
+    - dependencies
+    - providers
+    origin: manual
+    discovered: 2026-07-16
+  T46:
+    name: The CEO loop is oracle-attested end-to-end
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A hermetic fleet test proves adopt → direct → async notify → reap-idle → rehydrate-with-history as one scenario (fake Fleet, no live provider), running in make test.
+    - 'The scenario asserts the two standing invariants: no silent-fail direct, and the two-writer guard holds throughout.'
+    - The strata/routing behaviour described in the CEO prompt is exercised by at least one test that would fail if the prompt's contract with the MCP tools broke (e.g. notify delivery into the overseer conversation).
+    context: 'Deep-dive 2026-07-16: the orchestration model (POs → bosses → workers) lives only in prompt text with no oracle proving the loop works end-to-end — per the attestation doctrine, the CEO''s core competency is unattested. Depends on T41 so the oracle covers the single surviving spawn path. Complements T33 (message integrity).'
+    depends_on:
+    - T41
+    tags:
+    - oracle-first
+    - quality
+    - fleet
+    origin: manual
+    discovered: 2026-07-16
+  T47:
+    name: A second user can install and run jevons using only the docs
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'On a clean macOS account (or a second person''s machine): brew install → write config → pair a device → adopt a session → direct an agent, using only published documentation.'
+    - No step requires reading source code or contacting the author.
+    - Friction encountered during the run is filed as targets, not fixed silently.
+    context: 'The reusability acceptance oracle from the 2026-07-16 deep dive: "reusable, mature tool" is decidable only by a stranger succeeding without the author. Gates on docs truth (T42), de-hardcoded config (T44), and published dependencies (T45).'
+    depends_on:
+    - T42
+    - T44
+    - T45
+    tags:
+    - reusability
+    - oracle-first
+    - milestone
+    origin: manual
+    discovered: 2026-07-16
+  T48:
+    name: 'Jevons is a production-ready product: a stranger can install, secure, and run a fleet under a CEO day-to-day without the author'
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - The butler spine is production-worthy (T30 achieved), including its no-conversation-loss guarantee (T30.1), sustained over ≥30 days of the owner's daily use with zero conversation-loss and zero runaway-cost incidents.
+    - The CEO loop is oracle-attested end-to-end in CI (T46 achieved).
+    - A second user has completed install → configure → pair → adopt → direct using only published docs (T47 achieved).
+    - 'The security floor holds: authentication (T5) and the charter''s enforced permission model (T6) are achieved; jevonsd is safe by default.'
+    - The owner has cut a release (via /release) and designated it the production release.
+    context: 'The single destination target from the 2026-07-16 deep dive: "production-ready, usable product" defined as the conjunction of durable fleet spine, attested orchestration, stranger-usability, and a security floor — each already tracked with its own oracle. Deliberately excludes the maturity-beyond-product layers (T27 hub, T31 oracle-first enforcement, T35 operations manual): those grow the CEO''s capability; this target marks the point where the product itself is done enough to trust and to hand to someone else. Versioning of the designated release is the owner''s call.'
+    depends_on:
+    - T30
+    - T46
+    - T47
+    - T5
+    - T6
+    tags:
+    - milestone
+    - destination
+    - product
+    origin: manual
+    discovered: 2026-07-18
   T5:
     name: Authentication implemented
     status: converging
@@ -1057,13 +1249,10 @@ targets:
     value: 5.0
     cost: 8.0
     acceptance:
-    - '`--permission-mode bypassPermissions` removed from Jevon''s invocation in internal/jevons/jevons.go'
-    - '`--dangerously-skip-permissions` removed from worker spawning'
-    - Confirmation requests from Claude Code are routed to the user via the WebSocket protocol
-    - Tests verify that permission-requiring actions trigger confirmation
-    context: |
-      Desired state: neither Jevons nor workers run with blanket permission
-      bypass. Permission tiers from the trust model (🎯T4) are enforced.
+    - The charter's risk-graded model (risk = un-oracled surface × blast radius; releases the only owner-gated act) is the single permission regime; docs/trust-model.md carries a superseded banner pointing at the charter.
+    - 'The model is enforced in code, not prose: workers no longer run permissions-bypassed by default, and risk-scaled gates fire on release-class actions.'
+    - 'Default network posture is safe: jevonsd binds localhost unless configured otherwise; remote access goes through the pigeon/mTLS path.'
+    context: 'Refreshed by the 2026-07-16 deep dive: two permission regimes coexisted on paper (trust-model.md three-tier confirm-flow vs the charter''s risk-graded ladder) while neither was enforced. This target now means: reconcile to the charter model and enforce it.'
     depends_on:
     - T4
     origin: manual
@@ -1093,9 +1282,10 @@ targets:
     discovered: 2026-03-08
   T8:
     name: Stateless worker dispatch
-    status: identified
+    status: set_aside
     value: 21.0
     cost: 18.0
+    set_aside_reason: Superseded — the vision-v2 stateless-dispatch substrate was replaced by the butler/thread model (T30) with jwork as the ephemeral primitive; consolidation onto that single path is 🎯T41. Observability survives as T8.2; execution safety (doit) survives as T8.3.
     acceptance:
     - All sub-targets achieved
     - cworkers repo archived after absorption complete
@@ -1181,9 +1371,10 @@ targets:
     discovered: 2026-03-14
   T9:
     name: Server-driven UI for mobile app
-    status: converging
+    status: set_aside
     value: 13.0
     cost: 13.0
+    set_aside_reason: Superseded — the native server-driven SwiftUI/ViewNode path was displaced by the WKWebView-over-web architecture (T14.1); the forward UI direction is the generative web surface (T29). Reopen only if a native surface returns.
     acceptance:
     - Lua runtime embedded in iOS app, running view scripts locally
     - jevonsd pushes script updates over WebSocket; client caches and executes them

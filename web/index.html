@@ -338,9 +338,12 @@ function handle(m) {
       ChatEvents.assistantTextBlocks(m).forEach(c => appendOrAddJevons(c.text, msgTs));
       input.focus();
     }
-    // ChatEvents.shouldClearWorking covers text+end_turn, empty end_turn
-    // (Grok ACP), and legacy single-shot text without stop_reason.
-    if (ChatEvents.shouldClearWorking(m)) setWorking(false);
+    // Only terminal stops clear working (not mid-stream text). Clearing
+    // early used to force one bubble per token.
+    if (ChatEvents.shouldClearWorking(m)) {
+      sealAssistantStream();
+      setWorking(false);
+    }
   } else if (typ==='tool_result' || typ==='result') {
     const content = m.content || m.message?.content;
     if (Array.isArray(content)) {
@@ -352,19 +355,23 @@ function handle(m) {
     }
   } else if (typ==='system') {
     closeTurn();
-    if (ChatEvents.shouldClearWorking(m)) setWorking(false);
+    if (ChatEvents.shouldClearWorking(m)) {
+      sealAssistantStream();
+      setWorking(false);
+    }
   }
 }
 
-// appendOrAddJevons merges streaming assistant chunks into the last
-// jevons bubble while a turn is in flight; starts a new bubble otherwise.
+// appendOrAddJevons merges streaming assistant chunks into the open
+// jevons bubble. Merge is keyed on _streamRaw (not workingEl): sealing
+// happens only on terminal stop so a mistaken early clear cannot split
+// the turn into one bubble per token.
 function appendOrAddJevons(text, ts) {
   let target = msgs.lastElementChild;
-  // Skip the working indicator if it is the last child.
-  if (target && target.classList && target.classList.contains('working-indicator')) {
+  while (target && target.classList && target.classList.contains('working-indicator')) {
     target = target.previousElementSibling;
   }
-  if (workingEl && target && target.classList && target.classList.contains('msg')
+  if (target && target.classList && target.classList.contains('msg')
       && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
     target._streamRaw += text;
     const timeEl = target.querySelector('.msg-time');
@@ -375,6 +382,18 @@ function appendOrAddJevons(text, ts) {
   }
   const el = addMsg('jevons', text, ts);
   el._streamRaw = text;
+}
+
+// sealAssistantStream closes the open coalesced bubble so the next
+// turn starts a new one.
+function sealAssistantStream() {
+  let el = msgs.lastElementChild;
+  while (el && el.classList && el.classList.contains('working-indicator')) {
+    el = el.previousElementSibling;
+  }
+  if (el && typeof el._streamRaw === 'string') {
+    delete el._streamRaw;
+  }
 }
 
 function startTurn() {
