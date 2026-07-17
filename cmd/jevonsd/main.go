@@ -25,7 +25,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleet"
-	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -146,14 +145,6 @@ survive daemon restarts — you never lose one.
 - **jevons_agent_stop** — Stop a running agent. It resumes later.
   Required: name.
 
-### Legacy Worker Tools (still available)
-- **jevons_list_sessions** — List old-style worker sessions.
-- **jevons_create_session** — Create an old-style worker.
-- **jevons_send_command** — Send a task to an old-style worker.
-- **jevons_kill_session** — Kill an old-style worker.
-
-Prefer the jevons_agent_* tools for new work.
-
 ## Directory Layout
 
 All repos live under ~/work/github.com/<org>/<repo>:
@@ -256,9 +247,8 @@ func main() {
 
 	// Create components — Grok-only; sessions live under ~/.grok.
 	scanner := discovery.NewScanner(filepath.Join(homeDir, ".grok", "sessions"))
-	mgr := manager.New(*model, *workDir, scanner)
 
-	srv := server.New(mgr, cli.Version)
+	srv := server.New(cli.Version)
 	srv.SetCA(ca)
 
 	// Load OpenAI API key from Keychain (fall back to env var).
@@ -289,20 +279,8 @@ func main() {
 
 	// Worker completion events are delivered to the overseer via the
 	// registry agent's Send (wired below in SetNotify).
-	var (
-		notifyJevon func(text string)
-		registry    *claudia.Registry
-	)
-	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
-		if notifyJevon == nil {
-			return
-		}
-		verb := "completed"
-		if failed {
-			verb = "failed"
-		}
-		notifyJevon(fmt.Sprintf("[worker %s (%s) %s]\n%s", workerName, workerID, verb, result))
-	}, func() (string, error) {
+	var registry *claudia.Registry
+	mcpSrv := mcpserver.New(*workDir, func() (string, error) {
 		return srv.RequestScreenshot(10 * time.Second)
 	}, &mcpserver.TranscriptOps{
 		Read: func(sessionID string) ([]map[string]any, error) {
@@ -479,7 +457,6 @@ func main() {
 				slog.Error("notify jevon failed", "err", err)
 			}
 		}
-		notifyJevon = send
 		mcpSrv.SetNotify(send)
 	}
 

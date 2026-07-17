@@ -73,13 +73,14 @@ func TestIsCrossSite(t *testing.T) {
 }
 
 func TestRejectCrossSiteOnMutatingHandlers(t *testing.T) {
-	s := New(nil, "test")
+	s := New("test")
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	// Cross-site kill must be 403 (and must not 500 on nil manager).
+	// The legacy /api/sessions kill route is gone (🎯T41) — a cross-site
+	// POST must not find anything to hit.
 	req, _ := http.NewRequest("POST", srv.URL+"/api/sessions/abc/kill", nil)
 	req.Header.Set("Origin", "https://evil.example")
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
@@ -88,8 +89,8 @@ func TestRejectCrossSiteOnMutatingHandlers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-site kill status = %d, want 403", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("removed kill route status = %d, want 404", resp.StatusCode)
 	}
 
 	// Cross-site token mint must be 403.

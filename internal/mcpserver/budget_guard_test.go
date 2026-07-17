@@ -42,23 +42,6 @@ func TestJworkBlockedWhenSpawnHalted(t *testing.T) {
 	}
 }
 
-func TestCreateSessionBlockedWhenSpawnHalted(t *testing.T) {
-	s := haltedSpawnServer(t)
-	// mgr is nil — if the guard is bypassed this panics. Guard must fire first.
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "w", "workdir": "/tmp"}
-	result, err := s.handleCreateSession(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.IsError {
-		t.Fatal("expected tool error when spawn halted")
-	}
-	if got := toolText(result); !strings.Contains(got, "spawning halted") {
-		t.Fatalf("error text = %q, want spawn-halt message", got)
-	}
-}
-
 func TestAgentStartBlockedWhenSpawnHalted(t *testing.T) {
 	s := haltedSpawnServer(t)
 	// registry is nil — panic if guard skipped.

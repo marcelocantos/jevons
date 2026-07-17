@@ -37,13 +37,13 @@ longer built or shipped in the Homebrew formula.
 
 ### MCP Server (`/mcp`)
 
+The legacy manager-backed session tools (`jevons_list_sessions`,
+`jevons_session_status`, `jevons_create_session`, `jevons_send_command`,
+`jevons_kill_session`) were removed post-v0.5.0 (🎯T41); the durable
+thread model and `jwork` are the only worker lifecycles.
+
 | Tool | Parameters | Stability |
 |---|---|---|
-| `jevons_list_sessions` | `all?: bool` | Stable |
-| `jevons_session_status` | `id: string` | Stable |
-| `jevons_create_session` | `name?, workdir?, model?` | Stable |
-| `jevons_send_command` | `id, text, wait?=true` | Stable |
-| `jevons_kill_session` | `id: string` | Stable |
 | `jevons_agent_list` | (none) | Fluid |
 | `jevons_agent_start` | `name, workdir, model?` | Fluid |
 | `jevons_agent_send` | `name, text` | Fluid — async fire-and-forget since v0.3.0 |
@@ -123,10 +123,10 @@ transcodes, applies adaptive local VAD, and relays audio and events.
 | `GET` | `/api/agents` | Fluid |
 | `GET` | `/api/cost` | Fluid — new in v0.5.0, live spend snapshot for the web ticker |
 | `GET` | `/scripts/*` | Fluid — new in v0.3.0, serves JS modules (transport.js, etc.) from `web/scripts/` |
-| `GET` | `/api/sessions` | Stable |
-| `GET` | `/api/sessions/{id}` | Stable |
-| `POST` | `/api/sessions/{id}/kill` | Stable — rejects cross-site POSTs since v0.5.0 |
 | `POST` | `/api/realtime/token` | Fluid — rate-limited + cross-site rejected since v0.5.0 |
+
+The `/api/sessions` REST endpoints (list/get/kill) were removed with the
+legacy manager (🎯T41); thread state is served through the MCP tools.
 
 ### Agent registry (`~/.jevons/agents.json`)
 
