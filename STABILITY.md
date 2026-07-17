@@ -72,7 +72,8 @@ Claude Code sessions is now provided by the standalone
 
 #### `/ws/chat` (new in v0.2.0)
 
-Raw JSONL passthrough — server sends Claude Code JSONL events directly.
+Server sends normalized provider chat events (Grok ACP via
+`internal/server/chat_wire.go`).
 Client interprets user, assistant, tool_use, tool_result, and system events.
 Client sends plain text messages (or "stop" to interrupt).
 
@@ -97,7 +98,7 @@ Dev-only hot reload signal. Server sends "reload" on file changes.
 #### `/ws/agent-terminal` (new in v0.3.0)
 
 Live PTY viewer for a running agent. Click an agent in the web UI to
-stream its Claude Code session output.
+stream its agent session output.
 
 | Direction | Format | Stability |
 |---|---|---|
@@ -150,7 +151,7 @@ New in v0.2.0. JSON array of agent definitions.
 | `~/.jevons/threads.json` | Durable thread registry (butler/CEO) | Fluid — new in v0.5.0 |
 | `~/.jevons/usage.db` | Token-spend accounting (cost clamp-down) | Fluid — new in v0.5.0 |
 | `~/.jevons/budget.json` | Spend budgets / thresholds | Fluid — new in v0.5.0 |
-| `~/.jevons/jevons/CLAUDE.md` | Generated Jevons instructions | Fluid |
+| `~/.jevons/jevons/AGENTS.md` | Generated overseer instructions | Fluid |
 | `~/.jevons/jevons/.mcp.json` | MCP server config for Jevons | Fluid |
 | `~/.jevons/lua/views/` | Lua view scripts | Fluid |
 | `~/.jevons/remote_history` | `remote` TUI input history (orphaned — client removed) | Deprecated |
@@ -172,7 +173,7 @@ longer maintains its own transcript database.
 - Cost clamp-down (L1–L3) and MCP spawn-halt guards ship in v0.5.0.
 
 ### Architecture
-- Claude Code session/agent management lives in `claudia`; butler/CEO
+- Agent session management lives in `claudia` (Grok-only); butler/CEO
   thread model (`internal/thread` + `internal/butler` + `internal/fleet`)
   and token-spend clamp-down (`internal/cost`) ship in v0.5.0.
 - Grok realtime voice bridge still lives in-tree.

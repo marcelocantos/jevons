@@ -1,3 +1,5 @@
+> **Superseded (2026-07-18)** by the charter's risk-graded model ([charter.md](charter.md)); enforcement is tracked by 🎯T6. The three-tier confirm-flow below was never enforced. Claude-era mechanism throughout.
+
 # Trust Model
 
 This document defines Jevon's permission model: what actions Jevons and

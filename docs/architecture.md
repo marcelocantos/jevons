@@ -1,3 +1,5 @@
+> **Superseded (2026-07-18).** Original Bun/TypeScript/Flutter "Claude Code Farm" design; nothing here reflects the shipped Go/Grok system. See [architecture-current.md](architecture-current.md). Kept as history.
+
 # Claude Code Farm — Architecture
 
 ## Context

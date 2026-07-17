@@ -1,3 +1,5 @@
+> **Superseded (2026-07-18).** The native SwiftUI client described here was collapsed into a WKWebView wrapper over the canonical web UI (🎯T14.1); `/ws/remote` is legacy. See [architecture-current.md](architecture-current.md).
+
 # Mobile App Architecture
 
 ## Overview

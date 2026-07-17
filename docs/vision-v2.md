@@ -1,3 +1,5 @@
+> **Foundational, partly superseded (2026-07-18).** Written for the Claude Code substrate; the shipped spine is the Grok-only butler/thread model (🎯T30). The concepts (every agent is a session, daemon as kernel, emergent hierarchy) remain load-bearing; the mechanisms (claude -p, JSONL layout) do not. See [architecture-current.md](architecture-current.md).
+
 # Jevon: Target-Driven Session Infrastructure
 
 ## Thesis
