@@ -22,9 +22,10 @@ Snapshot as of v0.5.0.
 | `--instance-id` | string | `""` | Fluid |
 | `--set-openai-key` | bool | `false` | Stable — interactive key prompt |
 | `--set-xai-key` | bool | `false` | Fluid — new in v0.3.0, interactive xAI key prompt for Grok voice bridge |
-| `--workdir` | string | `"."` | Needs review — semantics may evolve |
-| `--model` | string | `""` | Needs review — may consolidate with config |
-| `--jevons-model` | string | `""` | Needs review — same concern |
+| `--config` | string | `~/.jevons/config.yaml` | Fluid — new post-v0.5.0 (🎯T44 structured config) |
+| `--workdir` | string | `"."` | Fluid — overrides config file |
+| `--model` | string | `""` | Fluid — overrides config file |
+| `--jevons-model` | string | `""` | Fluid — overrides config file |
 | `--debug` | bool | `false` | Stable |
 | `--version` | bool | `false` | Stable |
 | `--help-agent` | bool | `false` | Stable |

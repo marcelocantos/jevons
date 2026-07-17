@@ -62,14 +62,36 @@ Talk to Jevons in the web chat. It adopts, spawns, monitors, and directs
 Grok Build agents on your behalf (thread model). Spend is metered in
 real time with an automated clamp-down if a fleet runaway starts.
 
+### Configuration
+
+jevonsd reads `~/.jevons/config.yaml` (or `--config <path>`); flags
+override the file. Everything has a working default — no config file is
+required. All fields:
+
+```yaml
+owner_name: Ada          # how the overseer refers to you (default: "the owner")
+overseer_name: jevons    # the CEO agent's name
+port: 13705
+workdir: "."             # default workdir for workers
+model: ""                # default worker model ("" = provider default)
+overseer_model: ""       # "" = same as model
+state_dir: ~/.jevons
+sessions_dir: ~/.grok/sessions
+repos_root: ~/work/github.com
+persona_file: ""         # optional replacement for the built-in persona template
+persona_notes: |         # freeform extras appended to the overseer's persona
+  sqlpipe is the state-sync repo; route DB questions there.
+```
+
 ### Flags
 
 ```
 jevonsd:
+  --config            Config file path (default ~/.jevons/config.yaml)
   --port              Listen port (default 13705)
   --workdir           Default working directory for workers (default ".")
   --model             Default model for workers
-  --jevons-model       Model for Jevons (default: same as --model)
+  --jevons-model      Model for the overseer (default: same as --model)
   --debug             Enable debug logging
   --version           Print version and exit
   --help-agent        Print agent guide and exit

@@ -60,7 +60,7 @@ func (s *Server) SetButler(b *butler.Butler) {
 		mcp.NewTool("jevons_thread_spawn",
 			mcp.WithDescription("Spawn a new Grok thread the butler owns end-to-end. Durable across restarts; idle process is stopped and rehydrated on demand."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Unique thread handle (e.g. 'tern-po', 'maze-rebuild')")),
-			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory (e.g. '~/work/github.com/marcelocantos/tern')")),
+			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory (absolute or ~-relative repo path)")),
 			mcp.WithString("description", mcp.Description("The owner's work-language label")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
 		),

@@ -146,7 +146,7 @@ func TestChatUserEcho(t *testing.T) {
 }
 
 func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
-	s := New("test")
+	s := New("test", t.TempDir())
 	ch := make(chan string, 16)
 	s.mu.Lock()
 	s.chatListeners = append(s.chatListeners, ch)
@@ -218,7 +218,7 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 }
 
 func TestHandleAgentEventTerminalStopClearsWaiting(t *testing.T) {
-	s := New("test")
+	s := New("test", t.TempDir())
 	s.mu.Lock()
 	s.waiting = true
 	s.turnBuf = "partial"
@@ -241,7 +241,7 @@ func TestHandleAgentEventTerminalStopClearsWaiting(t *testing.T) {
 }
 
 func TestHandleAgentEventToolUseDoesNotClearWaiting(t *testing.T) {
-	s := New("test")
+	s := New("test", t.TempDir())
 	s.mu.Lock()
 	s.waiting = true
 	s.mu.Unlock()

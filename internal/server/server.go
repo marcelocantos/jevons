@@ -52,8 +52,9 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	version string
-	ca      *auth.CA
+	version      string
+	overseerName string // registry name of the CEO agent (config-driven, 🎯T44)
+	ca           *auth.CA
 
 	mu        sync.RWMutex
 	remoteSeq int
@@ -92,12 +93,21 @@ func (s *Server) SetCostSource(f func() any) { s.costSource = f }
 // Credentials returns the server-side pairing credential store.
 func (s *Server) Credentials() *CredentialStore { return s.creds }
 
-// New creates a Server with the given version string.
-func New(version string) *Server {
+// SetOverseerName sets the registry name of the CEO agent (config-driven).
+func (s *Server) SetOverseerName(name string) {
+	if name != "" {
+		s.overseerName = name
+	}
+}
+
+// New creates a Server with the given version string, rooting its
+// credential store under stateDir (🎯T44 — no compiled-in paths).
+func New(version, stateDir string) *Server {
 	s := &Server{
 		version:       version,
+		overseerName:  defaultOverseerName,
 		remotes:       make(map[int]remoteConn),
-		creds:         NewCredentialStore(filepath.Join(os.Getenv("HOME"), ".jevons", "credential.json")),
+		creds:         NewCredentialStore(filepath.Join(stateDir, "credential.json")),
 		chatListeners: make([]chan string, 0),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
 	}

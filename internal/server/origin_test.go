@@ -73,7 +73,7 @@ func TestIsCrossSite(t *testing.T) {
 }
 
 func TestRejectCrossSiteOnMutatingHandlers(t *testing.T) {
-	s := New("test")
+	s := New("test", t.TempDir())
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)

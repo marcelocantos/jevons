@@ -26,7 +26,7 @@ import (
 // and a minimal WS server that mirrors handleChat's server→client side.
 
 func TestChatWireRoundTripOverWebSocket(t *testing.T) {
-	s := New("test")
+	s := New("test", t.TempDir())
 
 	// Mirror the live fan-out: DeliverOverseerEvent → BroadcastChat → WS write.
 	mux := http.NewServeMux()
@@ -176,7 +176,7 @@ func shouldClearWorkingGo(m map[string]any) bool {
 // regression: many ACP text chunks must become many Claude-shaped wire
 // lines that do not clear working until the terminal end_turn.
 func TestMultiChunkStreamWire(t *testing.T) {
-	s := New("test")
+	s := New("test", t.TempDir())
 	ch := make(chan string, 64)
 	s.mu.Lock()
 	s.chatListeners = append(s.chatListeners, ch)
