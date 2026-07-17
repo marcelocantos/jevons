@@ -29,15 +29,11 @@ Snapshot as of v0.5.0.
 | `--version` | bool | `false` | Stable |
 | `--help-agent` | bool | `false` | Stable |
 
-### CLI: `remote`
+### CLI: `remote` (removed)
 
-Terminal UI client for jevonsd.
-
-| Flag | Type | Default | Stability |
-|---|---|---|---|
-| `--addr` | string | `"localhost:13705"` | Stable |
-| `--version` | bool | `false` | Stable |
-| `--help-agent` | bool | `false` | Stable |
+The `remote` terminal UI client was removed post-v0.5.0 (🎯T43 dead-surface
+pruning); the web UI is the canonical interactive surface. The binary is no
+longer built or shipped in the Homebrew formula.
 
 ### MCP Server (`/mcp`)
 
@@ -157,7 +153,7 @@ New in v0.2.0. JSON array of agent definitions.
 | `~/.jevons/jevons/CLAUDE.md` | Generated Jevons instructions | Fluid |
 | `~/.jevons/jevons/.mcp.json` | MCP server config for Jevons | Fluid |
 | `~/.jevons/lua/views/` | Lua view scripts | Fluid |
-| `~/.jevons/remote_history` | `remote` TUI input history | Stable |
+| `~/.jevons/remote_history` | `remote` TUI input history (orphaned — client removed) | Deprecated |
 | `web/` | Web UI (served from disk, hot-reloaded) | Fluid |
 
 Transcript memory (`~/.jevons/memory.db`) was removed in v0.3.0. The
@@ -195,7 +191,7 @@ longer maintains its own transcript database.
 
 ## Out of scope for 1.0
 
-- Mobile UI via ge engine.
+- Mobile UI via ge engine (ge submodule and C++ app removed in 🎯T43).
 - Worker-to-worker communication.
 - Multi-user / multi-tenant support.
 - Plugin or extension system.

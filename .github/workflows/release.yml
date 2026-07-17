@@ -56,11 +56,9 @@ jobs:
 
           go build -tags "sqlite_preupdate_hook sqlite_fts5" \
             -ldflags "${LDFLAGS}" -o jevonsd ./cmd/jevonsd
-          go build -tags "sqlite_preupdate_hook sqlite_fts5" \
-            -ldflags "${LDFLAGS}" -o remote ./cmd/remote
 
           tar czf "jevons-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
-            jevonsd remote
+            jevonsd
 
       - name: Upload artifacts
         env:
@@ -88,8 +86,7 @@ jobs:
           # this verbatim inside the formula class (the formula is DO-NOT-EDIT
           # generated, so the service block must come from the generator, not a
           # hand-edit). launchd gives brew services a spartan PATH, so augment
-          # it here — otherwise the daemon can't resolve gh at runtime. The
-          # remote CLI is terminal-launched and unaffected.
+          # it here — otherwise the daemon can't resolve gh at runtime.
           formula_includes: |
             service do
               run [opt_bin/"jevonsd"]
@@ -100,7 +97,6 @@ jobs:
             end
           install: |
             bin.install "jevonsd" => "jevonsd"
-            bin.install "remote" => "remote"
           target_darwin_arm64: true
           target_linux_amd64: true
           target_linux_arm64: true
