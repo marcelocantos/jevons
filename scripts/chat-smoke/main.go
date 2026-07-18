@@ -39,8 +39,42 @@ func main() {
 	defer conn.CloseNow()
 	conn.SetReadLimit(4 << 20)
 
-	// Let history/subscribe settle.
-	time.Sleep(300 * time.Millisecond)
+	// Drain the journal replay (🎯T49): every connect replays full
+	// history, and asserting on replayed frames masks live failures
+	// (the T30.1 drill PASSed on a stale bubble while the real turn
+	// collided with an in-flight prompt). History arrives as a burst;
+	// treat 700ms of silence as end-of-replay, then assert only on
+	// frames after our own send. A dedicated reader goroutine feeds a
+	// channel — cancelling a coder/websocket Read kills the whole
+	// connection, so per-read timeouts are not an option.
+	frames := make(chan []byte, 256)
+	readErr := make(chan error, 1)
+	go func() {
+		for {
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				readErr <- err
+				close(frames)
+				return
+			}
+			frames <- data
+		}
+	}()
+	replayed := 0
+drain:
+	for {
+		select {
+		case _, ok := <-frames:
+			if !ok {
+				fmt.Fprintf(os.Stderr, "read during replay drain: %v\n", <-readErr)
+				os.Exit(1)
+			}
+			replayed++
+		case <-time.After(700 * time.Millisecond):
+			break drain
+		}
+	}
+	fmt.Println("drained replay frames:", replayed)
 	fmt.Println("send:", *prompt)
 	if err := conn.Write(ctx, websocket.MessageText, []byte(*prompt)); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %v\n", err)
@@ -53,9 +87,9 @@ func main() {
 	open := -1
 	asstChunks := 0
 	for working {
-		_, data, err := conn.Read(ctx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "read: %v\nsummary: %v\n", err, summary)
+		data, ok := <-frames
+		if !ok {
+			fmt.Fprintf(os.Stderr, "read: %v\nsummary: %v\n", <-readErr, summary)
 			os.Exit(1)
 		}
 		var m map[string]any

@@ -54,6 +54,7 @@ type remoteConn struct {
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
 	version      string
+	stateDir     string // jevons state root (config-driven, 🎯T44/T49)
 	overseerName string // registry name of the CEO agent (config-driven, 🎯T44)
 	ca           *auth.CA
 
@@ -116,6 +117,7 @@ func (s *Server) SetChatLog(l *chatlog.Log) {
 func New(version, stateDir string) *Server {
 	s := &Server{
 		version:       version,
+		stateDir:      stateDir,
 		overseerName:  defaultOverseerName,
 		remotes:       make(map[int]remoteConn),
 		creds:         NewCredentialStore(filepath.Join(stateDir, "credential.json")),
