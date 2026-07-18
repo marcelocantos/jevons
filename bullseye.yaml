@@ -807,14 +807,14 @@ targets:
     discovered: 2026-07-04
   T30.1:
     name: 'No agent conversation is ever lost: session identity is stable and history survives any restart'
-    status: identified
+    status: converging
     value: 0.0
     cost: 0.0
     acceptance:
     - 'Registry session_id never changes except by explicit owner action; a failed session/load fails closed and never silently mints a replacement id (hermetic test: fake ACP forces load failure, registry id and history untouched).'
     - jevonsd owns an append-only per-thread transcript (fsynced on end_turn); after killing the agent process and restarting jevonsd, the UI replays all completed turns from the jevons-owned log, independent of the provider's private store.
     - 'Live oracle: exchange ≥3 turns with the overseer, kill the ACP child, restart jevonsd — the next reply is coherent with prior context, or startup fails closed with the old id preserved and history still visible.'
-    context: The owner's single hard durability requirement ("no conversation ever gets lost"; in-flight work may be clobbered). Designed in full on 2026-07-11 (session 019f4f1b) but never filed. Today claudia's session/load silently falls back to session/new and the registry overwrites the id — the exact catastrophic loss mode. Child of T30 because "never loses a thread" is T30's own load-bearing claim.
+    context: 'Converging 2026-07-18 (PR #34): jevons-owned fsynced chat log + /ws/chat replay-before-liveness + claudia v0.18.0 fail-closed session/load (RequireResume/Materialized). Hermetic oracles green on both repos. Remaining before retire: the live restart drill — ≥3 turns with the overseer, kill the ACP child, restart the deployed daemon, confirm coherent continuation (or fail-closed with history visible) — rides the next deployed release.'
     tags:
     - durability
     - quality
