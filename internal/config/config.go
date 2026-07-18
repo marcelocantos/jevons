@@ -31,6 +31,12 @@ type Config struct {
 	// overseer's workdir under StateDir and its budget protection entry.
 	OverseerName string `yaml:"overseer_name"`
 
+	// BindAddr is the listen interface. The default is loopback-only
+	// (🎯T6 safe default): remote devices connect through the pigeon
+	// relay, not by exposing the daemon to the LAN. Set "0.0.0.0" to
+	// bind all interfaces deliberately.
+	BindAddr string `yaml:"bind_addr"`
+
 	Port          int    `yaml:"port"`
 	WorkDir       string `yaml:"workdir"`        // default workdir for workers
 	Model         string `yaml:"model"`          // default worker model ("" = provider default)
@@ -57,6 +63,7 @@ func Default() Config {
 	}
 	return Config{
 		OverseerName: "jevons",
+		BindAddr:     "127.0.0.1",
 		Port:         13705,
 		WorkDir:      ".",
 		StateDir:     filepath.Join(home, ".jevons"),
@@ -89,6 +96,9 @@ func Load(path string) (Config, error) {
 	def := Default()
 	if cfg.OverseerName == "" {
 		cfg.OverseerName = def.OverseerName
+	}
+	if cfg.BindAddr == "" {
+		cfg.BindAddr = def.BindAddr
 	}
 	if cfg.Port == 0 {
 		cfg.Port = def.Port

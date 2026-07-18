@@ -40,6 +40,7 @@ import (
 func main() {
 	configPath := flag.String("config", "", "config file (default ~/.jevons/config.yaml; missing file = built-in defaults)")
 	port := flag.Int("port", 13705, "listen port")
+	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 — loopback only; remote devices use the pigeon relay)")
 	relayURL := flag.String("relay", "", "relay URL to register with (e.g. wss://tern.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
 	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
@@ -101,6 +102,9 @@ func main() {
 	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 	if explicit["port"] {
 		cfg.Port = *port
+	}
+	if explicit["bind"] {
+		cfg.BindAddr = *bindAddr
 	}
 	if explicit["workdir"] {
 		cfg.WorkDir = *workDir
@@ -319,7 +323,7 @@ func main() {
 
 	srv.SetRegistry(registry)
 
-	listenAddr := fmt.Sprintf(":%d", cfg.Port)
+	listenAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.Port)
 
 	// Build the handler, optionally wrapping with mTLS middleware.
 	var handler http.Handler = mux

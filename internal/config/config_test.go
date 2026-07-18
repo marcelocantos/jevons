@@ -55,6 +55,9 @@ func TestLoadMissingFileYieldsDefaults(t *testing.T) {
 	if cfg.OverseerName != "jevons" || cfg.Port != 13705 {
 		t.Fatalf("defaults not applied: %+v", cfg)
 	}
+	if cfg.BindAddr != "127.0.0.1" {
+		t.Fatalf("default bind must be loopback-only (T6), got %q", cfg.BindAddr)
+	}
 }
 
 func TestLoadOverlaysAndBackfills(t *testing.T) {
