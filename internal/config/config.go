@@ -46,6 +46,13 @@ type Config struct {
 	SessionsDir string `yaml:"sessions_dir"` // provider session store the collector/scanner tail
 	ReposRoot   string `yaml:"repos_root"`   // where the owner's repos live
 
+	// MCPServerName is the name under which jevonsd's MCP server is
+	// registered in agent sessions; tools appear to the overseer as
+	// <name>__jevons_*. Configurable because the Grok stack keeps
+	// per-account, per-name server state: a name whose first contact
+	// failed can stay broken, and recovery is picking a fresh name.
+	MCPServerName string `yaml:"mcp_server_name"`
+
 	// PersonaFile optionally replaces the built-in persona template
 	// wholesale. PersonaNotes is appended to the rendered persona as an
 	// "Owner Notes" section — the place for owner-specific repos, style,
@@ -62,13 +69,14 @@ func Default() Config {
 		home = "."
 	}
 	return Config{
-		OverseerName: "jevons",
-		BindAddr:     "127.0.0.1",
-		Port:         13705,
-		WorkDir:      ".",
-		StateDir:     filepath.Join(home, ".jevons"),
-		SessionsDir:  filepath.Join(home, ".grok", "sessions"),
-		ReposRoot:    filepath.Join(home, "work", "github.com"),
+		OverseerName:  "jevons",
+		BindAddr:      "127.0.0.1",
+		Port:          13705,
+		WorkDir:       ".",
+		StateDir:      filepath.Join(home, ".jevons"),
+		SessionsDir:   filepath.Join(home, ".grok", "sessions"),
+		ReposRoot:     filepath.Join(home, "work", "github.com"),
+		MCPServerName: "jevonsmcp",
 	}
 }
 
@@ -108,6 +116,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.SessionsDir == "" {
 		cfg.SessionsDir = def.SessionsDir
+	}
+	if cfg.MCPServerName == "" {
+		cfg.MCPServerName = def.MCPServerName
 	}
 	return cfg, nil
 }
