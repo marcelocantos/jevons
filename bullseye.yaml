@@ -1225,7 +1225,7 @@ targets:
     discovered: 2026-07-18
   T49:
     name: 'Drill residue is cleaned up: chat-smoke is replay-aware and no compiled path escapes config'
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1239,6 +1239,7 @@ targets:
     - drill-findings
     origin: manual
     discovered: 2026-07-18
+    achieved: 2026-07-18
   T5:
     name: Authentication implemented
     status: set_aside
