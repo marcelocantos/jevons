@@ -217,15 +217,36 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	proc := s.proc
+	clog := s.chatLog
 	s.mu.Unlock()
+
+	// Replay history BEFORE the liveness check: the jevons-owned chat log
+	// is the durable record (🎯T30.1), and a dead overseer process must
+	// not blank the conversation — completed turns always come back.
+	if clog != nil {
+		if err := clog.Replay(func(line string) error {
+			writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			return conn.Write(writeCtx, websocket.MessageText, []byte(line))
+		}); err != nil {
+			slog.Warn("chat: chatlog replay failed", "err", err)
+			payload, _ := json.Marshal(map[string]string{
+				"type":  "error",
+				"error": "history replay incomplete: " + err.Error(),
+			})
+			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			_ = conn.Write(writeCtx, websocket.MessageText, payload)
+			cancel()
+		}
+	} else if proc != nil {
+		// Legacy fallback: provider JSONL (empty for Grok ACP).
+		sendHistory(conn, ctx, proc.JSONLPath())
+	}
 
 	if proc == nil || !proc.Alive() {
 		conn.Close(websocket.StatusInternalError, "claude not running")
 		return
 	}
-
-	// Send JSONL history as raw lines.
-	sendHistory(conn, ctx, proc.JSONLPath())
 
 	// Subscribe to live JSONL events from the Claude process.
 	ch := make(chan string, 256)
@@ -373,8 +394,20 @@ func sendHistory(conn *websocket.Conn, ctx context.Context, path string) {
 	}
 }
 
-// BroadcastChat sends a JSONL line to all /ws/chat listeners.
+// BroadcastChat sends a JSONL line to all /ws/chat listeners, appending
+// it first to the durable jevons-owned chat log (🎯T30.1) so the exact
+// stream clients render is what a reconnect replays. An append failure
+// is loud — losing durability silently is the failure mode this exists
+// to kill — but does not block the live broadcast.
 func (s *Server) BroadcastChat(line string) {
+	s.mu.Lock()
+	clog := s.chatLog
+	s.mu.Unlock()
+	if clog != nil {
+		if err := clog.Append(line); err != nil {
+			slog.Error("chat: DURABILITY FAILURE — chat log append failed", "err", err)
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ch := range s.chatListeners {
