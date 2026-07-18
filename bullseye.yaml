@@ -314,7 +314,7 @@ targets:
     achieved: 2026-04-13
   T16.2:
     name: Session grandfathering — adopt existing sessions as durable observe-only threads
-    status: converging
+    status: achieved
     value: 8.0
     cost: 8.0
     acceptance:
@@ -333,6 +333,7 @@ targets:
     - T16.1
     origin: manual
     discovered: 2026-03-27
+    achieved: 2026-07-18
   T17:
     name: Jevons UI renders via ge engine
     status: set_aside
@@ -807,7 +808,7 @@ targets:
     discovered: 2026-07-04
   T30.1:
     name: 'No agent conversation is ever lost: session identity is stable and history survives any restart'
-    status: converging
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -821,6 +822,7 @@ targets:
     - oracle-first
     origin: manual
     discovered: 2026-07-16
+    achieved: 2026-07-18
   T31:
     name: Jevons enforces oracle-first as a system property and interactively co-develops oracles from intent for greenfield work
     status: identified
@@ -880,12 +882,7 @@ targets:
     - '[decidable] The butler surfaces integrity issues as a live thread-health signal: jevons_thread_status / jevons_thread_list flag a thread whose recent transcript trips CheckUserTurns (e.g. state or a ''corrupted'' note), so a mangled thread is visible without the owner spotting it.'
     - '[decidable | ORACLE: e2e] A send-round-trip e2e test asserts sending "X" yields exactly one user turn "X" in the broadcast/transcript — no duplication, no concatenation. This is the regression guard that would have caught this class before the owner hit it; it runs against a stub/mock overseer so it needs no live claude.'
     - '[note] The underlying send/PTY concatenation FIX lives in claudia (owner filed a separate claudia target in another session). THIS target is the DETECTION oracle — orthogonal to and independent of that fix.'
-    context: |-
-      Origin: the 2026-07-05 testing session. Editing a recalled message and re-sending it produced an obviously-corrupt result — a duplicated user bubble and a second bubble whose text was the original concatenated with itself (claudia typed the recalled text on top of residual PTY input). The owner asked, per oracle-first, whether 'stuff that's so obviously wrong' can be validated automatically.
-
-      Answer: yes — 'obviously wrong' is decidable, so it's a machine check, not an eyeball. Landed the detector (internal/transcript/integrity.go, CheckUserTurns) as a pure function so it doubles as a CI oracle over captured transcripts and a live thread-health signal. Remaining work: wire it into the butler's thread status and add the send-round-trip e2e guard.
-
-      Concrete instance of 🎯T31 (oracle-first as a system property); complements 🎯T30's 'never lose a thread' with 'never silently serve a corrupted thread'. The concatenation fix itself is claudia's, tracked separately.
+    context: 'Live evidence 2026-07-18 (T30.1 drill): a prompt sent while another is in flight is refused server-side ("grok acp: prompt already in flight") and logged — but NO error frame reaches the client, so the user sees silence. Exactly the corrupted/lost-turn class this oracle must catch. Also: the chat journal records raw stream chunks; replay depends on client-side coalescing — the integrity oracle should assert the replayed view equals the live view.'
     tags:
     - oracle-first
     - quality
@@ -1026,7 +1023,7 @@ targets:
     achieved: 2026-07-11
   T39:
     name: Chat UI clears "Jevons is working…" after every Grok overseer turn
-    status: identified
+    status: achieved
     value: 13.0
     cost: 3.0
     acceptance:
@@ -1042,6 +1039,7 @@ targets:
     - ux
     origin: manual
     discovered: 2026-07-11
+    achieved: 2026-07-18
   T4:
     name: Trust model defined for pre-1.0
     status: achieved
@@ -1223,6 +1221,22 @@ targets:
     - milestone
     - destination
     - product
+    origin: manual
+    discovered: 2026-07-18
+  T49:
+    name: 'Drill residue is cleaned up: chat-smoke is replay-aware and no compiled path escapes config'
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - scripts/chat-smoke distinguishes replayed history from live turns (asserts on events after its own send, not the first matching bubble) and waits for turn completion, so back-to-back runs cannot collide with an in-flight prompt.
+    - internal/server/voice.go's ~/.jevons/grok/conversation.jsonl path comes from config (state_dir), closing the T44 leak the drill log exposed.
+    - In-flight prompt refusals surface to the sending client as a wire error frame, not just a server log (overlaps T33; either lands it here or T33 subsumes it).
+    context: 'Filed from the 2026-07-18 T30.1 live drill: the smoke tool PASSed on replayed history (masking a failed turn), turn 3 collided with an in-flight prompt invisibly, and the voice transcript path was still compiled-in.'
+    tags:
+    - hygiene
+    - quality
+    - drill-findings
     origin: manual
     discovered: 2026-07-18
   T5:
