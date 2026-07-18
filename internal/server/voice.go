@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -100,11 +99,12 @@ func newTaskID() string {
 }
 
 // NewVoiceBridge creates a voice bridge with the given xAI API key.
-// The Grok conversation log lives at ~/.jevons/grok/conversation.jsonl
-// and persists across server restarts; failure to open it is logged
-// but non-fatal — the bridge still functions, just without persistence.
+// The Grok conversation log lives under the configured state dir
+// (<state_dir>/grok/conversation.jsonl, 🎯T49) and persists across
+// server restarts; failure to open it is logged but non-fatal — the
+// bridge still functions, just without persistence.
 func NewVoiceBridge(srv *Server, apiKey string) *VoiceBridge {
-	logPath := filepath.Join(os.Getenv("HOME"), ".jevons", "grok", "conversation.jsonl")
+	logPath := filepath.Join(srv.stateDir, "grok", "conversation.jsonl")
 	log, err := NewGrokLog(logPath)
 	if err != nil {
 		slog.Warn("voice: grok log unavailable — running without persistence", "path", logPath, "err", err)

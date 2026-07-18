@@ -338,7 +338,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// only renders user bubbles from the wire (not optimistically).
 		s.BroadcastChat(chatUserEcho(msg))
 		if err := s.SendToOverseer(msg); err != nil {
+			// A refused/failed send must be visible on the wire, not just
+			// in the server log (🎯T49; live drill found "prompt already
+			// in flight" vanishing silently). Broadcast so every client —
+			// and the journal — records that this turn was not delivered.
 			slog.Error("chat: send to overseer failed", "err", err)
+			payload, _ := json.Marshal(map[string]string{
+				"type":  "error",
+				"error": "message not delivered: " + err.Error(),
+			})
+			s.BroadcastChat(string(payload))
 		}
 	}
 }
