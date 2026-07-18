@@ -1265,6 +1265,42 @@ targets:
     - T4
     origin: manual
     discovered: 2026-03-08
+  T50:
+    name: The overseer has working jevons MCP tools in daemon-launched sessions, proven by a live adopt through chat
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A daemon-launched overseer session executes jevons_thread_list via use_tool and a plain-language "adopt session <id>" chat request lands the thread in jevons_thread_list output.
+    - 'The failure is root-caused or worked around: externally-spawned ACP sessions with byte-identical initialize/session/new attach and execute tools; daemon(claudia)-spawned sessions get "Tool not found" — exonerated so far: server name history, underscores in names, handshake fields, notifications/initialized, timing, cwd, prompt shape, first-turn size/turn count, stderr disposition, env vars, bind family, endpoint health (handshake + tools/list + tools/call all succeed via curl and probes).'
+    - 'A regression oracle exists: a hermetic or live check that fails loudly when the overseer boots toolless (no more silent weeks of a toolless CEO).'
+    context: 'Found 2026-07-18 during the owner''s pre-release trial ("Jevons is unable to adopt a session I handed it"). Root-cause chain established live: grok agent stdio loads MCP only from ACP session params (claudia sent [] since the Grok pivot — the overseer has been toolless for a week); the CLI ignores mcpServers on session/load (hence boot-time session rotation + chatlog recap, owner-ratified); localhost resolved to ::1 against the v4-only bind; tool search does not index session-attached servers (persona must announce the namespace). After all fixes, externally-spawned sessions work repeatedly (vera1/2/3/5/6/7/8, jevonsw/x/z/q) while daemon-spawned ones never attach — the full probe matrix lives in this session''s transcript. Suspects remaining: something in the byte stream or process context claudia''s exec produces that python''s subprocess does not; consider capturing the CLI''s own debug logs (GROK_LOG_LEVEL?) or asking xAI. Blocks the v0.6.0 release: an adoptless CEO is not production-posture.'
+    tags:
+    - grok
+    - mcp
+    - overseer
+    - release-blocker
+    - forensics
+    origin: manual
+    discovered: 2026-07-18
+  T51:
+    name: A self-executing live scenario suite drives a running jevonsd through the owner flows and passes
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'scripts/live-suite (or equivalent) executes against a running daemon: chat round-trip, in-session context recall, restart durability (kill -9 → replay + coherent continuation), overseer tool availability (the 🎯T51 regression), adopt observe-only → status, spawn → direct → reply, in-flight collision → error frame, cost snapshot, rewind → journal-consistent replay.'
+    - Each scenario asserts on ground truth (chatlog, thread store, MCP responses), not on model prose.
+    - The suite distinguishes MCP-direct scenarios (deterministic) from overseer-mediated ones (prompt-contract), and reports per-scenario pass/fail.
+    - 'Documented as the pre-release drill: /release for jevons runs it against the candidate build.'
+    context: 'Owner directive 2026-07-18: "develop a comprehensive suite of scenarios to test against and execute them yourself." Tonight''s ad-hoc drills (T30.1 restart drill, ACP probe matrix, chat-smoke hardening) are the seed corpus; the suite institutionalizes them. Depends in practice on 🎯T51 for the overseer-tool scenarios to pass.'
+    tags:
+    - oracle-first
+    - quality
+    - live-suite
+    - release-drill
+    origin: manual
+    discovered: 2026-07-18
   T6:
     name: Permission model enforced
     status: achieved
