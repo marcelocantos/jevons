@@ -24,6 +24,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
+	"github.com/marcelocantos/jevons/internal/chatlog"
 
 )
 
@@ -71,6 +72,7 @@ type Server struct {
 	proc           *claudia.Agent
 	registry       *claudia.Registry
 	chatListeners  []chan string
+	chatLog        *chatlog.Log // durable conversation record (🎯T30.1)
 
 	// activityHook fires on owner activity (a chat message), feeding the
 	// budget dead-man's switch. costSource returns the latest cost
@@ -98,6 +100,15 @@ func (s *Server) SetOverseerName(name string) {
 	if name != "" {
 		s.overseerName = name
 	}
+}
+
+// SetChatLog attaches the durable jevons-owned conversation log
+// (🎯T30.1): every chat line broadcast is appended to it, and /ws/chat
+// clients replay history from it instead of the provider's store.
+func (s *Server) SetChatLog(l *chatlog.Log) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.chatLog = l
 }
 
 // New creates a Server with the given version string, rooting its

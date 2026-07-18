@@ -22,6 +22,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/discovery"
@@ -152,6 +153,15 @@ func main() {
 
 	srv := server.New(cli.Version, cfg.StateDir)
 	srv.SetOverseerName(cfg.OverseerName)
+
+	// Durable conversation log (🎯T30.1): every chat line is fsynced here
+	// and replayed to reconnecting clients — no conversation is ever lost.
+	clog, err := chatlog.Open(filepath.Join(cfg.StateDir, "chatlog", cfg.OverseerName+".jsonl"))
+	if err != nil {
+		slog.Error("cannot open chat log", "err", err)
+		os.Exit(1)
+	}
+	srv.SetChatLog(clog)
 	srv.SetCA(ca)
 
 	// Load OpenAI API key from Keychain (fall back to env var).

@@ -152,6 +152,7 @@ New in v0.2.0. JSON array of agent definitions.
 | `~/.jevons/threads.json` | Durable thread registry (butler/CEO) | Fluid — new in v0.5.0 |
 | `~/.jevons/usage.db` | Token-spend accounting (cost clamp-down) | Fluid — new in v0.5.0 |
 | `~/.jevons/budget.json` | Spend budgets / thresholds | Fluid — new in v0.5.0 |
+| `~/.jevons/chatlog/<overseer>.jsonl` | Durable jevons-owned conversation log (🎯T30.1) — replayed to chat clients | Fluid — new post-v0.5.0 |
 | `~/.jevons/jevons/AGENTS.md` | Generated overseer instructions | Fluid |
 | `~/.jevons/jevons/.mcp.json` | MCP server config for Jevons | Fluid |
 | `~/.jevons/lua/views/` | Lua view scripts | Fluid |
