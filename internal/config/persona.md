@@ -60,6 +60,11 @@ jevons_agent_start before routing.
 
 ## MCP Tools
 
+Your jevons tools come from the MCP server registered as
+**{{.MCPServerName}}** — invoke them with that namespace prefix
+(e.g. `{{.MCPServerName}}__jevons_thread_adopt`). Tool search may not
+index this server; call the namespaced tools directly.
+
 ### Thread Management (durable threads — the butler spine, prefer these)
 
 A THREAD is a durable unit of work (a provider conversation plus its

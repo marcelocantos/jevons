@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/term"
 
 	"github.com/marcelocantos/claudia"
@@ -136,9 +137,18 @@ func main() {
 		}
 	}
 
-	// Write .mcp.json for the overseer to discover the MCP server.
+	// Write .mcp.json for the overseer to discover the MCP server. Use
+	// the concrete bind address, never "localhost": with the loopback-only
+	// default (🎯T6) the daemon listens on IPv4 127.0.0.1 only, and an MCP
+	// client that resolves localhost to ::1 gets connection-refused — the
+	// overseer then runs with NO tools (found live in the v0.6.0 trial).
+	mcpHost := cfg.BindAddr
+	if mcpHost == "" || mcpHost == "0.0.0.0" || mcpHost == "::" {
+		mcpHost = "127.0.0.1"
+	}
 	mcpJSON := fmt.Sprintf(
-		`{"mcpServers":{"jevons":{"type":"http","url":"http://localhost:%d/mcp"}}}`, cfg.Port)
+		`{"mcpServers":{%q:{"type":"http","url":"http://%s:%d/mcp"}}}`,
+		cfg.MCPServerName, mcpHost, cfg.Port)
 	mcpJSONPath := filepath.Join(jevDir, ".mcp.json")
 	if err := os.WriteFile(mcpJSONPath, []byte(mcpJSON), 0o644); err != nil {
 		slog.Error("cannot write .mcp.json", "err", err)
@@ -315,11 +325,24 @@ func main() {
 		os.Exit(1)
 	}
 	jevonDef.Provider = cli.Provider
+
+	// OVERSEER SESSION ROTATION (owner-ratified 2026-07-18): the Grok CLI
+	// attaches ACP mcpServers on session/new but silently ignores them on
+	// session/load, so a resumed overseer would run with NO jevons tools.
+	// The overseer therefore mints a fresh session every boot — tools
+	// guaranteed — and continuity comes from the durable jevons chatlog
+	// (the UI record) plus a recap injected after attach. This is a
+	// designed, journaled migration, not silent conversation loss: the
+	// chatlog IS the conversation; the provider session is model memory.
+	oldOverseerSession := jevonDef.SessionID
+	jevonDef.SessionID = uuid.NewString()
+	jevonDef.Materialized = false
 	if err := registry.Register(*jevonDef); err != nil {
 		slog.Error("jevon agent register failed", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID)
+	slog.Info("jevon agent", "provider", jevonDef.Provider,
+		"session", jevonDef.SessionID, "rotated_from", oldOverseerSession)
 
 	srv.SetRegistry(registry)
 
@@ -379,6 +402,20 @@ func main() {
 			}
 		}
 		mcpSrv.SetNotify(send)
+
+		// Re-seed the rotated session with a recap of the durable
+		// conversation so the overseer picks up where it left off.
+		if recap := clog.Recap(30, 6<<10); recap != "" {
+			go func() {
+				if err := srv.SendToOverseer(
+					"[Daemon restart. Your session was rotated so your MCP tools attach " +
+						"(the CLI only wires them on fresh sessions). The durable conversation " +
+						"record below is your context — read it, then acknowledge in ONE short " +
+						"sentence.]\n\n" + recap); err != nil {
+					slog.Error("recap send failed", "err", err)
+				}
+			}()
+		}
 	}
 
 	// Graceful shutdown on signal.

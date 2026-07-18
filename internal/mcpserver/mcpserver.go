@@ -6,8 +6,12 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -101,9 +105,31 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	return s
 }
 
-// RegisterRoutes adds the MCP endpoint to the given mux.
+// RegisterRoutes adds the MCP endpoint to the given mux. Requests are
+// logged at debug level with the JSON-RPC method — MCP clients fail
+// silently (a server that never connects just means "no tools"), so
+// visibility here is the only way to diagnose tool-wiring gaps (🎯T50).
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
-	mux.Handle("/mcp", s.transport)
+	mux.Handle("/mcp", mcpRequestLogger(s.transport))
+}
+
+func mcpRequestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var method string
+		if r.Body != nil {
+			body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			if err == nil {
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				var m struct {
+					Method string `json:"method"`
+				}
+				_ = json.Unmarshal(body, &m)
+				method = m.Method
+			}
+		}
+		slog.Debug("mcp request", "http", r.Method, "rpc", method, "ua", r.UserAgent())
+		next.ServeHTTP(w, r)
+	})
 }
 
 // SetBudgetGuards wires the cost enforcer's AllowSpawn / AllowResume into

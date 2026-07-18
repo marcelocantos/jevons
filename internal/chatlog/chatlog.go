@@ -12,10 +12,12 @@ package chatlog
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -101,4 +103,72 @@ func (l *Log) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.f.Close()
+}
+
+// Recap distills the tail of the journal into a plain-text conversation
+// summary for re-seeding a rotated overseer session (the Grok CLI only
+// attaches MCP tools on session/new, so the daemon mints a fresh session
+// each boot and hands the model this recap for continuity). It coalesces
+// streamed assistant chunks, drops duplicate user echoes, and returns at
+// most maxTurns of the newest turns within maxBytes.
+func (l *Log) Recap(maxTurns, maxBytes int) string {
+	type turn struct {
+		role string
+		text string
+	}
+	var turns []turn
+	_ = l.Replay(func(line string) error {
+		var d struct {
+			Type    string `json:"type"`
+			Message struct {
+				StopReason string          `json:"stop_reason"`
+				Content    json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &d) != nil {
+			return nil
+		}
+		var text string
+		var s string
+		if json.Unmarshal(d.Message.Content, &s) == nil {
+			text = s
+		} else {
+			var parts []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(d.Message.Content, &parts) == nil {
+				for _, p := range parts {
+					text += p.Text
+				}
+			}
+		}
+		switch d.Type {
+		case "user":
+			if text != "" && (len(turns) == 0 || turns[len(turns)-1].role != "user" || turns[len(turns)-1].text != text) {
+				turns = append(turns, turn{"user", text})
+			}
+		case "assistant":
+			if text != "" {
+				if len(turns) > 0 && turns[len(turns)-1].role == "assistant" {
+					turns[len(turns)-1].text += text
+				} else {
+					turns = append(turns, turn{"assistant", text})
+				}
+			}
+		}
+		return nil
+	})
+	if len(turns) > maxTurns {
+		turns = turns[len(turns)-maxTurns:]
+	}
+	var b strings.Builder
+	for _, t := range turns {
+		fmt.Fprintf(&b, "%s: %s\n", t.role, t.text)
+	}
+	out := b.String()
+	if len(out) > maxBytes {
+		out = out[len(out)-maxBytes:]
+	}
+	return out
 }
