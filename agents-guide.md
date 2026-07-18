@@ -63,8 +63,9 @@ remote --addr localhost:13705
   `_direct`, `_takeover`, `_remove` — Grok sessions only.
 - **Cost**: `jevons_cost` — burn-rate snapshot (collector tails
   `~/.grok/sessions`).
-- **Workers**: `jwork`, `jevons_agent_*`, `jevons_list_sessions`,
-  `jevons_create_session`, …
+- **Workers**: `jwork` (sole ephemeral primitive — one self-contained
+  task, runs to completion) and `jevons_agent_*` (named durable agents).
+  The legacy `jevons_*_session` tools were removed (🎯T41).
 
 ## Configuration
 

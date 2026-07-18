@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/server"
@@ -30,18 +31,29 @@ type costGuard struct {
 // nil (with a logged warning) rather than failing the daemon if the
 // usage DB can't open — cost monitoring is important but must not be a
 // single point of failure for the whole cockpit.
-func startCostGuard(ctx context.Context, homeDir string, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server) *costGuard {
-	store, err := cost.OpenStore(filepath.Join(homeDir, ".jevons", "usage.db"))
+func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server) *costGuard {
+	store, err := cost.OpenStore(filepath.Join(jc.StateDir, "usage.db"))
 	if err != nil {
 		slog.Error("cost: usage db unavailable — clamp-down disabled", "err", err)
 		return nil
 	}
 
-	budgetPath := filepath.Join(homeDir, ".jevons", "budget.json")
+	budgetPath := filepath.Join(jc.StateDir, "budget.json")
 	cfg, err := cost.LoadBudgetConfig(budgetPath)
 	if err != nil {
 		slog.Error("cost: bad budget.json — using defaults", "err", err, "path", budgetPath)
 		cfg = cost.DefaultBudgetConfig()
+	}
+	// The configured overseer must always be protected — killing the CEO's
+	// own brain is never an acceptable enforcement outcome.
+	protected := false
+	for _, w := range cfg.ProtectedWorkers {
+		if w == jc.OverseerName {
+			protected = true
+		}
+	}
+	if !protected {
+		cfg.ProtectedWorkers = append(cfg.ProtectedWorkers, jc.OverseerName)
 	}
 	config := func() *cost.BudgetConfig { return cfg }
 
@@ -60,7 +72,7 @@ func startCostGuard(ctx context.Context, homeDir string, registry *claudia.Regis
 
 	collector := cost.NewCollector(&cost.CollectorArgs{
 		Store:        store,
-		ProjectsRoot: filepath.Join(homeDir, ".grok", "sessions"),
+		ProjectsRoot: jc.SessionsDir,
 		Attribute:    attribute,
 	})
 

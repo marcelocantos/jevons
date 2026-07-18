@@ -1,3 +1,5 @@
+> **Frozen snapshot (2026-03-29) — do not trust.** The live intent ledger is `bullseye.yaml`; query it with bullseye. This report predates the butler, provider, and cost eras and recommends work that is long done.
+
 # Convergence Report
 
 Standing invariants: all green.

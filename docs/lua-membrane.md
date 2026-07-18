@@ -1,3 +1,5 @@
+> **Partly superseded (2026-07-18).** The Lua/SwiftUI membrane was set aside with 🎯T9/T11/T12; the direction is the generative web surface (🎯T29). Layering ideas (repo defaults vs user scripts) may return there.
+
 # Lua as a Unified Programmable Membrane
 
 ## Observation

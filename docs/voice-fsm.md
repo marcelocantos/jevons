@@ -1,3 +1,5 @@
+> **Historical (2026-07-18).** Models the server-side voice bridge that was subsequently de-emphasized; the web mic was removed (dictation via Wispr Flow) and all further voice work is gated on the 🎯T37 decision.
+
 # Voice FSM (🎯T18 cleanup)
 
 ## Why this paper

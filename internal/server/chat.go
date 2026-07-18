@@ -19,9 +19,9 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// overseerName is the registry name of the persistent Jevons overseer
-// process that backs the /ws/chat conversation.
-const overseerName = "jevons"
+// defaultOverseerName is the fallback registry name of the persistent
+// overseer process backing /ws/chat; config overrides it (🎯T44).
+const defaultOverseerName = "jevons"
 
 // SetProcess attaches the persistent Claude process for the /ws/chat endpoint.
 func (s *Server) SetProcess(proc *claudia.Agent) {
@@ -113,15 +113,15 @@ func (s *Server) RewindOverseer(n int) error {
 	if reg == nil {
 		return fmt.Errorf("rewind: no registry")
 	}
-	def := reg.Def(overseerName)
+	def := reg.Def(s.overseerName)
 	if def == nil {
 		return fmt.Errorf("rewind: overseer not registered")
 	}
 
-	reg.Stop(overseerName)
+	reg.Stop(s.overseerName)
 	_, rerr := claudia.RewindSession(def.SessionID, def.WorkDir, n)
 
-	agent, lerr := reg.Launch(overseerName)
+	agent, lerr := reg.Launch(s.overseerName)
 	if lerr != nil {
 		return fmt.Errorf("rewind: relaunch failed: %w", lerr)
 	}

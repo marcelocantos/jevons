@@ -23,9 +23,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleet"
-	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -36,146 +36,15 @@ import (
 	"github.com/marcelocantos/pigeon/qr"
 )
 
-// jevonsCLAUDEMD is the overseer instructions template (written as AGENTS.md).
-const jevonsCLAUDEMD = `# Jevons
-
-You are Jevons — Marcelo's personal AI assistant and the sole interface
-between him and his agentic ecosystem. You run as a persistent Grok
-Build agent (claudia ProviderGrok / ACP) on his desktop. He talks to
-you via a web chat UI (mostly typing, sometimes via Wispr Flow
-speech-to-text).
-
-## Your Role
-
-You are an **overseer**, not a worker. You:
-- Receive instructions and questions from Marcelo in natural language.
-- Route work to the appropriate product owner agent (or answer directly
-  for simple questions).
-- Surface decisions, outcomes, and status updates.
-- Maintain awareness of all active work across all repos.
-
-You do NOT write code, read files, or run commands yourself (except
-via your MCP tools). You delegate everything to agents.
-
-## Communication Style
-
-- Be concise and conversational. Don't be verbose.
-- Use markdown for structure when helpful (lists, code blocks, headers).
-- Summarise agent results in plain English.
-- When something fails, explain simply and suggest next steps.
-- Use "I" for yourself. Use the agent/product name when referring to them.
-- Ask clarifying questions as natural conversation, not structured prompts.
-
-## Agent Architecture
-
-You manage a hierarchy of persistent Grok Build agents:
-
-### Product Owners (Stratum 1)
-Long-running agents that own a repo/product. They maintain product
-knowledge (roadmap, targets, current state, history). They don't do
-implementation work — they spawn bosses for that.
-
-### Bosses (Stratum 1.5)
-Temporary agents spawned by product owners for specific initiatives.
-They decompose work, coordinate teams, and report structured outcomes.
-
-### Workers (Stratum 2)
-Parallel workers under bosses. Can recurse to depth 4. Deep agents
-execute with minimal upward insight flow. Return structured artifacts
-(diffs, test results), not narratives.
-
-## Natural Language Routing
-
-When Marcelo says something, match his intent to the right agent:
-
-- "I have an idea about tern" → route to the tern product owner
-- "What's the current work on jevons?" → route to the jevons product owner
-- "Fix the build in sqlpipe" → route to sqlpipe product owner, which
-  spawns a boss for the fix
-- Simple questions → answer directly without spawning agents
-
-If no product owner exists for a repo, create one via
-jevons_agent_start before routing.
-
-## MCP Tools
-
-### Thread Management (durable threads — the butler spine, prefer these)
-
-A THREAD is a durable unit of work (a provider conversation plus its
-status), NOT tied to a live process. The process is a disposable cache:
-started to interact, stopped when idle, rehydrated on demand. Threads
-survive daemon restarts — you never lose one.
-
-- **jevons_thread_adopt** — Adopt a session Marcelo already has running
-  (by session UUID) in ONE call: it auto-names the thread after the repo
-  and TAKES IT OVER by default, so it's immediately directable and shows
-  in the agent panel. Just pass session_id — do NOT ask Marcelo for a
-  name (he can rename later). If the session is still open in its own
-  terminal, take-over is refused — tell him to stop driving it, then
-  retry. Pass observe_only:true only if he explicitly wants to watch
-  without taking over. Required: session_id.
-- **jevons_thread_remove** — Remove a thread: stop + deregister its
-  process (the Claude session on disk is left intact) and drop the
-  record. Use to clean up duplicate/unwanted threads. Required: id.
-- **jevons_thread_list** — List all threads (adopted + spawned) with
-  derived status: active/working/blocked/done/idle + a recent-activity
-  summary.
-- **jevons_thread_status** — Status + recent-activity summary for one
-  thread. Required: id.
-- **jevons_thread_spawn** — Create a new thread you own end-to-end and
-  start its process. Durable and rehydratable. Required: id, workdir.
-  Optional: description, model.
-- **jevons_thread_direct** — Deliver a message to a thread and return
-  its reply (this call WAITS for the reply). If the process was stopped
-  or aged out it is transparently rehydrated first; if it can't be
-  reached you get a distinct error, never a silent hang. Observe-only
-  adopted threads must be taken over before directing. Required: id,
-  text.
-
-### Agent Management
-- **jevons_agent_list** — List all registered agents and their status.
-- **jevons_agent_start** — Start a persistent agent in a repo. Creates
-  and registers it if new. Use this for product owners.
-  Required: name, workdir. Optional: model.
-- **jevons_agent_send** — Fire-and-forget: sends a message to a running
-  agent and returns immediately. The agent's response arrives
-  asynchronously as a notification pushed into your conversation —
-  don't poll or wait, just continue working and handle it when it
-  arrives. The agent retains full conversation history.
-  Required: name, text.
-- **jevons_agent_stop** — Stop a running agent. It resumes later.
-  Required: name.
-
-### Legacy Worker Tools (still available)
-- **jevons_list_sessions** — List old-style worker sessions.
-- **jevons_create_session** — Create an old-style worker.
-- **jevons_send_command** — Send a task to an old-style worker.
-- **jevons_kill_session** — Kill an old-style worker.
-
-Prefer the jevons_agent_* tools for new work.
-
-## Directory Layout
-
-All repos live under ~/work/github.com/<org>/<repo>:
-- ~/work/github.com/marcelocantos/jevons — this project
-- ~/work/github.com/marcelocantos/pigeon — relay/crypto library
-- ~/work/github.com/marcelocantos/sqlpipe — state sync
-- ~/work/github.com/squz/yourworld2 — game project
-
-## Self-Development
-
-You are the jevons project's own product. Your source code is at
-~/work/github.com/marcelocantos/jevons. When Marcelo asks you to
-improve yourself, spawn the jevons product owner to do the work.
-`
-
 func main() {
+	configPath := flag.String("config", "", "config file (default ~/.jevons/config.yaml; missing file = built-in defaults)")
 	port := flag.Int("port", 13705, "listen port")
 	relayURL := flag.String("relay", "", "relay URL to register with (e.g. wss://tern.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
 	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for Grok workers (empty = Grok CLI default)")
+	overseerModel := flag.String("jevons-model", "", "model for the overseer agent (empty = same as -model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	enableTLS := flag.Bool("tls", false, "enable mTLS on the HTTP listener (requires client certs after provisioning)")
 	setOpenAIKey := flag.Bool("set-openai-key", false, "prompt for OpenAI API key, store in macOS Keychain, and exit")
@@ -217,30 +86,54 @@ func main() {
 		Level: logLevel,
 	})))
 
-	// Set up Jevons workdir with overseer instructions.
-	homeDir, err := os.UserHomeDir()
+	// Structured config (🎯T44): built-in defaults ← config.yaml ← flags.
+	cfgPath := *configPath
+	if cfgPath == "" {
+		cfgPath = config.DefaultPath()
+	}
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		slog.Error("cannot determine home directory", "err", err)
+		slog.Error("cannot load config", "path", cfgPath, "err", err)
 		os.Exit(1)
 	}
-	jevDir := filepath.Join(homeDir, ".jevons", "jevons")
+	explicit := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	if explicit["port"] {
+		cfg.Port = *port
+	}
+	if explicit["workdir"] {
+		cfg.WorkDir = *workDir
+	}
+	if explicit["model"] {
+		cfg.Model = *model
+	}
+	if explicit["jevons-model"] {
+		cfg.OverseerModel = *overseerModel
+	}
+
+	// Set up the overseer workdir with rendered persona instructions.
+	jevDir := cfg.OverseerDir()
 	if err := os.MkdirAll(jevDir, 0o755); err != nil {
-		slog.Error("cannot create jevon workdir", "err", err)
+		slog.Error("cannot create overseer workdir", "err", err)
+		os.Exit(1)
+	}
+	persona, err := cfg.Persona()
+	if err != nil {
+		slog.Error("cannot render overseer persona", "err", err)
 		os.Exit(1)
 	}
 	// Project instructions for the overseer (Grok reads AGENTS.md / Claude.md).
-	jevContent := jevonsCLAUDEMD
 	for _, name := range []string{"AGENTS.md", "Claude.md"} {
 		path := filepath.Join(jevDir, name)
-		if err := os.WriteFile(path, []byte(jevContent), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(persona), 0o644); err != nil {
 			slog.Error("cannot write overseer instructions", "path", path, "err", err)
 			os.Exit(1)
 		}
 	}
 
-	// Write .mcp.json for Jevons to discover the MCP server.
+	// Write .mcp.json for the overseer to discover the MCP server.
 	mcpJSON := fmt.Sprintf(
-		`{"mcpServers":{"jevons":{"type":"http","url":"http://localhost:%d/mcp"}}}`, *port)
+		`{"mcpServers":{"jevons":{"type":"http","url":"http://localhost:%d/mcp"}}}`, cfg.Port)
 	mcpJSONPath := filepath.Join(jevDir, ".mcp.json")
 	if err := os.WriteFile(mcpJSONPath, []byte(mcpJSON), 0o644); err != nil {
 		slog.Error("cannot write .mcp.json", "err", err)
@@ -248,17 +141,17 @@ func main() {
 	}
 
 	// Initialize CA for mTLS device provisioning.
-	ca, err := auth.NewCA(filepath.Join(homeDir, ".jevons"))
+	ca, err := auth.NewCA(cfg.StateDir)
 	if err != nil {
 		slog.Error("cannot initialize CA", "err", err)
 		os.Exit(1)
 	}
 
-	// Create components — Grok-only; sessions live under ~/.grok.
-	scanner := discovery.NewScanner(filepath.Join(homeDir, ".grok", "sessions"))
-	mgr := manager.New(*model, *workDir, scanner)
+	// Create components — Grok-only; sessions live under cfg.SessionsDir.
+	scanner := discovery.NewScanner(cfg.SessionsDir)
 
-	srv := server.New(mgr, cli.Version)
+	srv := server.New(cli.Version, cfg.StateDir)
+	srv.SetOverseerName(cfg.OverseerName)
 	srv.SetCA(ca)
 
 	// Load OpenAI API key from Keychain (fall back to env var).
@@ -289,32 +182,20 @@ func main() {
 
 	// Worker completion events are delivered to the overseer via the
 	// registry agent's Send (wired below in SetNotify).
-	var (
-		notifyJevon func(text string)
-		registry    *claudia.Registry
-	)
-	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
-		if notifyJevon == nil {
-			return
-		}
-		verb := "completed"
-		if failed {
-			verb = "failed"
-		}
-		notifyJevon(fmt.Sprintf("[worker %s (%s) %s]\n%s", workerName, workerID, verb, result))
-	}, func() (string, error) {
+	var registry *claudia.Registry
+	mcpSrv := mcpserver.New(cfg.WorkDir, func() (string, error) {
 		return srv.RequestScreenshot(10 * time.Second)
 	}, &mcpserver.TranscriptOps{
 		Read: func(sessionID string) ([]map[string]any, error) {
-			tr := transcript.NewReader(filepath.Join(homeDir, ".grok", "sessions"))
+			tr := transcript.NewReader(cfg.SessionsDir)
 			return tr.Read(sessionID)
 		},
 		Truncate: func(sessionID string, keepTurns int) error {
-			tr := transcript.NewReader(filepath.Join(homeDir, ".grok", "sessions"))
+			tr := transcript.NewReader(cfg.SessionsDir)
 			return tr.Truncate(sessionID, keepTurns)
 		},
 		GetID: func() string {
-			if proc := registry.Get("jevons"); proc != nil {
+			if proc := registry.Get(cfg.OverseerName); proc != nil {
 				return proc.SessionID()
 			}
 			return ""
@@ -348,7 +229,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	// Agent registry — manages persistent Grok ACP sessions.
-	registryPath := filepath.Join(homeDir, ".jevons", "agents.json")
+	registryPath := filepath.Join(cfg.StateDir, "agents.json")
 	{
 		r, err := claudia.NewRegistry(registryPath)
 		if err != nil {
@@ -366,7 +247,7 @@ func main() {
 	// session scanner (non-invasive observation), and the transcript
 	// reader (status derivation). Threads persist across restarts so the
 	// full set is never lost.
-	threadStore, err := thread.NewStore(filepath.Join(homeDir, ".jevons", "threads.json"))
+	threadStore, err := thread.NewStore(filepath.Join(cfg.StateDir, "threads.json"))
 	if err != nil {
 		slog.Error("thread store failed", "err", err)
 		os.Exit(1)
@@ -374,12 +255,12 @@ func main() {
 	// Token-spend clamp-down (🎯T36): start it before the butler so its
 	// spawn/resume guards feed the butler's lifecycle. Returns nil if the
 	// usage DB is unavailable — the cockpit still runs, just unguarded.
-	guard := startCostGuard(ctx, homeDir, registry, scanner, srv)
+	guard := startCostGuard(ctx, cfg, registry, scanner, srv)
 
 	btlrCfg := butler.Config{
 		Store:   threadStore,
 		Scanner: scanner,
-		Reader:  transcript.NewReader(filepath.Join(homeDir, ".grok", "sessions")),
+		Reader:  transcript.NewReader(cfg.SessionsDir),
 		Fleet:   fleet.NewClaudia(registry),
 	}
 	if guard != nil {
@@ -410,7 +291,11 @@ func main() {
 	// See https://github.com/marcelocantos/mnemo
 
 	// Overseer: Grok Session ACP only.
-	jevonDef, err := registry.EnsureAgent("jevons", jevDir, *model, true)
+	overseerModelChoice := cfg.OverseerModel
+	if overseerModelChoice == "" {
+		overseerModelChoice = cfg.Model
+	}
+	jevonDef, err := registry.EnsureAgent(cfg.OverseerName, jevDir, overseerModelChoice, true)
 	if err != nil {
 		slog.Error("jevon agent setup failed", "err", err)
 		os.Exit(1)
@@ -424,7 +309,7 @@ func main() {
 
 	srv.SetRegistry(registry)
 
-	listenAddr := fmt.Sprintf(":%d", *port)
+	listenAddr := fmt.Sprintf(":%d", cfg.Port)
 
 	// Build the handler, optionally wrapping with mTLS middleware.
 	var handler http.Handler = mux
@@ -465,7 +350,7 @@ func main() {
 	registry.StartAll()
 	defer registry.StopAll()
 
-	if jevonProc := registry.Get("jevons"); jevonProc != nil {
+	if jevonProc := registry.Get(cfg.OverseerName); jevonProc != nil {
 		// AttachOverseer sets the process and subscribes its event stream
 		// (forward raw JSONL to chat WS clients; accumulate turn text +
 		// status; feed the Grok voice bridge). It is re-run after a rewind
@@ -479,7 +364,6 @@ func main() {
 				slog.Error("notify jevon failed", "err", err)
 			}
 		}
-		notifyJevon = send
 		mcpSrv.SetNotify(send)
 	}
 
@@ -492,7 +376,7 @@ func main() {
 	}()
 
 	slog.Info("jevonsd starting", "addr", listenAddr, "version", cli.Version,
-		"worker_model", *model)
+		"worker_model", cfg.Model)
 
 	// Connect to relay if specified.
 	if *relayURL != "" {

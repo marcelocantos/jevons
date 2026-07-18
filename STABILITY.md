@@ -22,32 +22,29 @@ Snapshot as of v0.5.0.
 | `--instance-id` | string | `""` | Fluid |
 | `--set-openai-key` | bool | `false` | Stable — interactive key prompt |
 | `--set-xai-key` | bool | `false` | Fluid — new in v0.3.0, interactive xAI key prompt for Grok voice bridge |
-| `--workdir` | string | `"."` | Needs review — semantics may evolve |
-| `--model` | string | `""` | Needs review — may consolidate with config |
-| `--jevons-model` | string | `""` | Needs review — same concern |
+| `--config` | string | `~/.jevons/config.yaml` | Fluid — new post-v0.5.0 (🎯T44 structured config) |
+| `--workdir` | string | `"."` | Fluid — overrides config file |
+| `--model` | string | `""` | Fluid — overrides config file |
+| `--jevons-model` | string | `""` | Fluid — overrides config file |
 | `--debug` | bool | `false` | Stable |
 | `--version` | bool | `false` | Stable |
 | `--help-agent` | bool | `false` | Stable |
 
-### CLI: `remote`
+### CLI: `remote` (removed)
 
-Terminal UI client for jevonsd.
-
-| Flag | Type | Default | Stability |
-|---|---|---|---|
-| `--addr` | string | `"localhost:13705"` | Stable |
-| `--version` | bool | `false` | Stable |
-| `--help-agent` | bool | `false` | Stable |
+The `remote` terminal UI client was removed post-v0.5.0 (🎯T43 dead-surface
+pruning); the web UI is the canonical interactive surface. The binary is no
+longer built or shipped in the Homebrew formula.
 
 ### MCP Server (`/mcp`)
 
+The legacy manager-backed session tools (`jevons_list_sessions`,
+`jevons_session_status`, `jevons_create_session`, `jevons_send_command`,
+`jevons_kill_session`) were removed post-v0.5.0 (🎯T41); the durable
+thread model and `jwork` are the only worker lifecycles.
+
 | Tool | Parameters | Stability |
 |---|---|---|
-| `jevons_list_sessions` | `all?: bool` | Stable |
-| `jevons_session_status` | `id: string` | Stable |
-| `jevons_create_session` | `name?, workdir?, model?` | Stable |
-| `jevons_send_command` | `id, text, wait?=true` | Stable |
-| `jevons_kill_session` | `id: string` | Stable |
 | `jevons_agent_list` | (none) | Fluid |
 | `jevons_agent_start` | `name, workdir, model?` | Fluid |
 | `jevons_agent_send` | `name, text` | Fluid — async fire-and-forget since v0.3.0 |
@@ -76,7 +73,8 @@ Claude Code sessions is now provided by the standalone
 
 #### `/ws/chat` (new in v0.2.0)
 
-Raw JSONL passthrough — server sends Claude Code JSONL events directly.
+Server sends normalized provider chat events (Grok ACP via
+`internal/server/chat_wire.go`).
 Client interprets user, assistant, tool_use, tool_result, and system events.
 Client sends plain text messages (or "stop" to interrupt).
 
@@ -101,7 +99,7 @@ Dev-only hot reload signal. Server sends "reload" on file changes.
 #### `/ws/agent-terminal` (new in v0.3.0)
 
 Live PTY viewer for a running agent. Click an agent in the web UI to
-stream its Claude Code session output.
+stream its agent session output.
 
 | Direction | Format | Stability |
 |---|---|---|
@@ -126,10 +124,10 @@ transcodes, applies adaptive local VAD, and relays audio and events.
 | `GET` | `/api/agents` | Fluid |
 | `GET` | `/api/cost` | Fluid — new in v0.5.0, live spend snapshot for the web ticker |
 | `GET` | `/scripts/*` | Fluid — new in v0.3.0, serves JS modules (transport.js, etc.) from `web/scripts/` |
-| `GET` | `/api/sessions` | Stable |
-| `GET` | `/api/sessions/{id}` | Stable |
-| `POST` | `/api/sessions/{id}/kill` | Stable — rejects cross-site POSTs since v0.5.0 |
 | `POST` | `/api/realtime/token` | Fluid — rate-limited + cross-site rejected since v0.5.0 |
+
+The `/api/sessions` REST endpoints (list/get/kill) were removed with the
+legacy manager (🎯T41); thread state is served through the MCP tools.
 
 ### Agent registry (`~/.jevons/agents.json`)
 
@@ -154,10 +152,10 @@ New in v0.2.0. JSON array of agent definitions.
 | `~/.jevons/threads.json` | Durable thread registry (butler/CEO) | Fluid — new in v0.5.0 |
 | `~/.jevons/usage.db` | Token-spend accounting (cost clamp-down) | Fluid — new in v0.5.0 |
 | `~/.jevons/budget.json` | Spend budgets / thresholds | Fluid — new in v0.5.0 |
-| `~/.jevons/jevons/CLAUDE.md` | Generated Jevons instructions | Fluid |
+| `~/.jevons/jevons/AGENTS.md` | Generated overseer instructions | Fluid |
 | `~/.jevons/jevons/.mcp.json` | MCP server config for Jevons | Fluid |
 | `~/.jevons/lua/views/` | Lua view scripts | Fluid |
-| `~/.jevons/remote_history` | `remote` TUI input history | Stable |
+| `~/.jevons/remote_history` | `remote` TUI input history (orphaned — client removed) | Deprecated |
 | `web/` | Web UI (served from disk, hot-reloaded) | Fluid |
 
 Transcript memory (`~/.jevons/memory.db`) was removed in v0.3.0. The
@@ -176,7 +174,7 @@ longer maintains its own transcript database.
 - Cost clamp-down (L1–L3) and MCP spawn-halt guards ship in v0.5.0.
 
 ### Architecture
-- Claude Code session/agent management lives in `claudia`; butler/CEO
+- Agent session management lives in `claudia` (Grok-only); butler/CEO
   thread model (`internal/thread` + `internal/butler` + `internal/fleet`)
   and token-spend clamp-down (`internal/cost`) ship in v0.5.0.
 - Grok realtime voice bridge still lives in-tree.
@@ -195,7 +193,7 @@ longer maintains its own transcript database.
 
 ## Out of scope for 1.0
 
-- Mobile UI via ge engine.
+- Mobile UI via ge engine (ge submodule and C++ app removed in 🎯T43).
 - Worker-to-worker communication.
 - Multi-user / multi-tenant support.
 - Plugin or extension system.

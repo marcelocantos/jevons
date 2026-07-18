@@ -1,3 +1,5 @@
+> **Superseded / unbuilt (2026-07-18).** Assumes the fixed overseer→PO→boss→worker hierarchy that vision-v2 dissolved and the butler/thread model (🎯T30) replaced. Kept for the 7-skill taxonomy.
+
 # Jevons Platoon System Design
 
 ## Overview

@@ -1,3 +1,5 @@
+> **Historical (2026-07-18).** The "idea (not scheduled)" status below is obsolete: this design shipped, evolved, as the 🎯T36 cost clamp-down (`internal/cost`, v0.5.0) — collector → monitor → enforcer over Grok session JSONL, not ccusage.
+
 # Cost Management — Design Note
 
 Status: idea (not scheduled)

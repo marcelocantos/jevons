@@ -25,7 +25,6 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
 
-	"github.com/marcelocantos/jevons/internal/manager"
 )
 
 // remoteWriter abstracts over WebSocket and tern relay connections.
@@ -53,9 +52,9 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	mgr     *manager.Manager
-	version string
-	ca      *auth.CA
+	version      string
+	overseerName string // registry name of the CEO agent (config-driven, 🎯T44)
+	ca           *auth.CA
 
 	mu        sync.RWMutex
 	remoteSeq int
@@ -94,13 +93,21 @@ func (s *Server) SetCostSource(f func() any) { s.costSource = f }
 // Credentials returns the server-side pairing credential store.
 func (s *Server) Credentials() *CredentialStore { return s.creds }
 
-// New creates a Server with the given manager and version string.
-func New(mgr *manager.Manager, version string) *Server {
+// SetOverseerName sets the registry name of the CEO agent (config-driven).
+func (s *Server) SetOverseerName(name string) {
+	if name != "" {
+		s.overseerName = name
+	}
+}
+
+// New creates a Server with the given version string, rooting its
+// credential store under stateDir (🎯T44 — no compiled-in paths).
+func New(version, stateDir string) *Server {
 	s := &Server{
-		mgr:           mgr,
 		version:       version,
+		overseerName:  defaultOverseerName,
 		remotes:       make(map[int]remoteConn),
-		creds:         NewCredentialStore(filepath.Join(os.Getenv("HOME"), ".jevons", "credential.json")),
+		creds:         NewCredentialStore(filepath.Join(stateDir, "credential.json")),
 		chatListeners: make([]chan string, 0),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
 	}
@@ -189,9 +196,6 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
-	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
-	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
-	mux.HandleFunc("POST /api/sessions/{id}/kill", s.handleKillSession)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
 	mux.HandleFunc("/ws/voice", s.handleVoice)
 }
@@ -467,51 +471,6 @@ func (s *Server) Broadcast(v any) {
 	}
 }
 
-func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	all := r.URL.Query().Get("all") == "true"
-	sessions := s.mgr.List(all)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sessions)
-}
-
-func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	sess := s.mgr.Get(id)
-	if sess == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"id":          sess.ID(),
-		"name":        sess.Name(),
-		"status":      sess.Status(),
-		"workdir":     sess.WorkDir(),
-		"last_result": sess.LastResult(),
-	})
-}
-
-func (s *Server) handleKillSession(w http.ResponseWriter, r *http.Request) {
-	if rejectCrossSite(w, r) {
-		return
-	}
-	id := r.PathValue("id")
-	if s.mgr == nil {
-		http.Error(w, `{"error":"manager not configured"}`, http.StatusServiceUnavailable)
-		return
-	}
-	if err := s.mgr.Kill(id); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": true})
-}
-
 // HandleUserMessage processes a text message from a remote client.
 func (s *Server) HandleUserMessage(text string) {
 	if text == "" {
@@ -553,22 +512,11 @@ func (s *Server) HandleAction(action, value string) {
 	case action == "send_message":
 		s.HandleUserMessage(value)
 
-	case action == "show_sessions":
-		s.PushSessions()
-
 	case action == "dismiss_sheet":
 		// Client handles dismiss locally.
 
 	case action == "disconnect":
 		slog.Info("disconnect requested via action")
-
-	case len(action) > 13 && action[:13] == "kill_session:":
-		sessionID := action[13:]
-		if err := s.mgr.Kill(sessionID); err != nil {
-			slog.Warn("kill session failed", "id", sessionID, "err", err)
-		} else {
-			s.PushSessions()
-		}
 
 	default:
 		slog.Warn("unknown action", "action", action)
@@ -675,32 +623,6 @@ func (s *Server) RequestScreenshot(timeout time.Duration) (string, error) {
 	case <-time.After(timeout):
 		return "", fmt.Errorf("screenshot timeout")
 	}
-}
-
-// PushSessions fetches the current session list and broadcasts it to all clients.
-func (s *Server) PushSessions() {
-	summaries := s.mgr.List(false)
-	type sessionJSON struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-		Status  string `json:"status"`
-		WorkDir string `json:"workdir"`
-		Active  bool   `json:"active"`
-	}
-	entries := make([]sessionJSON, len(summaries))
-	for i, sum := range summaries {
-		entries[i] = sessionJSON{
-			ID:      sum.ID,
-			Name:    sum.Name,
-			Status:  string(sum.Status),
-			WorkDir: sum.WorkDir,
-			Active:  sum.Active,
-		}
-	}
-	s.Broadcast(map[string]any{
-		"type":     "sessions",
-		"sessions": entries,
-	})
 }
 
 // writeJSON sends a JSON message to a single connection.
