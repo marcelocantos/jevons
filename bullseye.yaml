@@ -1209,7 +1209,7 @@ targets:
     - The butler spine is production-worthy (T30 achieved), including its no-conversation-loss guarantee (T30.1), sustained over ≥30 days of the owner's daily use with zero conversation-loss and zero runaway-cost incidents.
     - The CEO loop is oracle-attested end-to-end in CI (T46 achieved).
     - A second user has completed install → configure → pair → adopt → direct using only published docs (T47 achieved).
-    - 'The security floor holds: authentication (T5) and the charter''s enforced permission model (T6) are achieved; jevonsd is safe by default.'
+    - 'The security floor holds: the charter regime is reconciled and jevonsd is safe by default (T6 achieved); T5 authentication is owner-dispositioned (pigeon/iPad out of scope until iPad work resumes — 2026-07-18); worker execution gating is a recorded post-MVP follow-up (T8.3).'
     - The owner has cut a release (via /release) and designated it the production release.
     context: 'The single destination target from the 2026-07-16 deep dive: "production-ready, usable product" defined as the conjunction of durable fleet spine, attested orchestration, stranger-usability, and a security floor — each already tracked with its own oracle. Deliberately excludes the maturity-beyond-product layers (T27 hub, T31 oracle-first enforcement, T35 operations manual): those grow the CEO''s capability; this target marks the point where the product itself is done enough to trust and to hand to someone else. Versioning of the designated release is the owner''s call.'
     depends_on:
@@ -1226,9 +1226,10 @@ targets:
     discovered: 2026-07-18
   T5:
     name: Authentication implemented
-    status: converging
+    status: set_aside
     value: 8.0
     cost: 13.0
+    set_aside_reason: 'Owner disposition 2026-07-18: pigeon/iPad authentication is out of scope until iPad work resumes. Interim perimeter is the 🎯T6 loopback-only default bind (remote access only via the pigeon relay when re-engaged). The pre-pigeon mTLS-everywhere acceptance is stale; re-scope when reopened.'
     acceptance:
     - mTLS is enforced on all jevonsd endpoints (HTTP, WebSocket, MCP)
     - QR-based device provisioning flow works end-to-end (scan QR on phone, device gets a client certificate)
@@ -1250,18 +1251,19 @@ targets:
     discovered: 2026-03-08
   T6:
     name: Permission model enforced
-    status: identified
+    status: achieved
     value: 5.0
     cost: 8.0
     acceptance:
-    - The charter's risk-graded model (risk = un-oracled surface × blast radius; releases the only owner-gated act) is the single permission regime; docs/trust-model.md carries a superseded banner pointing at the charter.
-    - 'The model is enforced in code, not prose: workers no longer run permissions-bypassed by default, and risk-scaled gates fire on release-class actions.'
-    - 'Default network posture is safe: jevonsd binds localhost unless configured otherwise; remote access goes through the pigeon/mTLS path.'
-    context: 'Refreshed by the 2026-07-16 deep dive: two permission regimes coexisted on paper (trust-model.md three-tier confirm-flow vs the charter''s risk-graded ladder) while neither was enforced. This target now means: reconcile to the charter model and enforce it.'
+    - The charter's risk-graded model is the single documented permission regime; docs/trust-model.md carries a superseded banner pointing at the charter (landed in 🎯T42).
+    - 'Default network posture is safe: jevonsd binds 127.0.0.1 unless bind_addr/--bind widens it deliberately; remote devices go through the pigeon relay.'
+    - Worker/fleet execution gating (workers currently run --always-approve) is explicitly delegated to 🎯T8.3 (doit absorption) as a post-MVP follow-up — owner decision 2026-07-18, recorded there.
+    context: 'Narrowed 2026-07-18 by owner: mechanical worker-permission enforcement is doit''s job (T8.3), not MVP. What remains of T6 is regime reconciliation (T42''s banner) + safe default bind (t6-security-floor branch).'
     depends_on:
     - T4
     origin: manual
     discovered: 2026-03-08
+    achieved: 2026-07-18
   T7:
     name: Mobile app for Jevon
     status: converging
@@ -1367,9 +1369,7 @@ targets:
     - Hash-chained audit log integrated with worker tracking
     - Capability registry configured
     - '`jwork` results include policy decisions in metadata'
-    context: |
-      Desired state: doit's policy engine operates as an execution safety
-      layer between workers and the OS.
+    context: 'Inherits the charter''s risk-graded execution enforcement from T6''s narrowing (owner, 2026-07-18): workers keep --always-approve at the provider layer; doit is where risk-scaled gates fire on release-class actions while merges stay free. Post-MVP follow-up, not on the T48 critical path.'
     depends_on:
     - T8.1
     origin: manual
