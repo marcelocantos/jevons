@@ -1147,7 +1147,7 @@ targets:
     achieved: 2026-07-18
   T45:
     name: claudia and pigeon are documented public dependencies, and butler.Fleet is the declared provider seam
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1161,6 +1161,7 @@ targets:
     - providers
     origin: manual
     discovered: 2026-07-16
+    achieved: 2026-07-18
   T46:
     name: The CEO loop is oracle-attested end-to-end
     status: achieved
