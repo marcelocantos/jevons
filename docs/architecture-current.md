@@ -70,6 +70,35 @@ The CEO drives everything through the in-process **MCP server**
 (`internal/mcpserver`, `jevons_*` tools + `jwork`); the tool list and
 stability grades are in [../STABILITY.md](../STABILITY.md).
 
+## The provider seam (🎯T45)
+
+Jevons is deliberately single-provider (Grok via claudia), but the
+boundary is explicit so a second backend inherits the whole control
+plane rather than forking it:
+
+- **Lifecycle** — `butler.Fleet` (`internal/butler/butler.go`):
+  Launch / Send / Alive / Stop / Remove. The butler owns policy
+  (rehydrate, reap, two-writer guard); the Fleet owns mechanism.
+  Production implementation: `internal/fleet` over claudia's registry.
+- **Cost enforcement (L3)** — `cost.EnforcerArgs.Actions`
+  (PauseWorker / KillWorker / StopFleet / KillSwitch): the policy
+  engine never touches tmux or the registry directly;
+  `cmd/jevonsd/cost.go`'s `fleetActions` is the claudia binding.
+- **Cost collection (L1)** — `cost.CollectorArgs` (ProjectsRoot +
+  Attribute): the store/monitor/enforcer are format-agnostic; only the
+  collector's JSONL parser knows Grok's layout, and its root comes from
+  config (`sessions_dir`), not compiled paths.
+- **Resume safety** — claudia v0.18.0's `Config.RequireResume` +
+  `AgentDef.Materialized` make failed session loads fail closed; jevons
+  relies on the registry passing this automatically.
+
+claudia and pigeon are published, documented dependencies:
+[claudia](https://github.com/marcelocantos/claudia) (agent harness —
+README, agents-guide, STABILITY) and
+[pigeon](https://github.com/marcelocantos/pigeon) (relay/pairing/crypto
+— README with trust model). A clean checkout builds with only public
+module fetches.
+
 ## Cost governance
 
 `internal/cost` (🎯T36): L1 collector tails every active Grok session
