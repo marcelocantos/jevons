@@ -137,7 +137,10 @@ func main() {
 		}
 	}
 
-	// Write .mcp.json for the overseer to discover the MCP server. Use
+	// Write mcp.claudia.json for the overseer harness to discover the MCP
+	// server (claudia converts it to ACP session mcpServers). NOT .mcp.json:
+	// the Grok CLI scans that name and reclassifies matching ACP entries as
+	// repo-local, silently gating them behind folder trust. Use
 	// the concrete bind address, never "localhost": with the loopback-only
 	// default (🎯T6) the daemon listens on IPv4 127.0.0.1 only, and an MCP
 	// client that resolves localhost to ::1 gets connection-refused — the
@@ -149,7 +152,7 @@ func main() {
 	mcpJSON := fmt.Sprintf(
 		`{"mcpServers":{%q:{"type":"http","url":"http://%s:%d/mcp"}}}`,
 		cfg.MCPServerName, mcpHost, cfg.Port)
-	mcpJSONPath := filepath.Join(jevDir, ".mcp.json")
+	mcpJSONPath := filepath.Join(jevDir, "mcp.claudia.json")
 	if err := os.WriteFile(mcpJSONPath, []byte(mcpJSON), 0o644); err != nil {
 		slog.Error("cannot write .mcp.json", "err", err)
 		os.Exit(1)
@@ -402,6 +405,20 @@ func main() {
 			}
 		}
 		mcpSrv.SetNotify(send)
+
+		// 🎯T50 regression oracle: if no MCP client has listed our tools
+		// shortly after boot, the overseer is running toolless — the
+		// exact silent failure that went unnoticed for a week. Fail LOUD.
+		go func() {
+			time.Sleep(45 * time.Second)
+			if mcpSrv.ToolsListCount() == 0 {
+				slog.Error("OVERSEER TOOLLESS — no MCP tools/list since boot; jevons tools are not attached (see 🎯T50)")
+				srv.Broadcast(map[string]any{
+					"type":  "error",
+					"error": "overseer booted without jevons tools (MCP attach failed) — actions will not work",
+				})
+			}
+		}()
 
 		// Re-seed the rotated session with a recap of the durable
 		// conversation so the overseer picks up where it left off.

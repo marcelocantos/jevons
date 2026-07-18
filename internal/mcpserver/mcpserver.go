@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -54,6 +55,8 @@ type Server struct {
 
 	mcpSrv    *server.MCPServer
 	transport *server.StreamableHTTPServer
+
+	toolsListCount int64
 
 	mu           sync.Mutex
 	notifyJevon  NotifyFunc
@@ -110,10 +113,15 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 // silently (a server that never connects just means "no tools"), so
 // visibility here is the only way to diagnose tool-wiring gaps (🎯T50).
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
-	mux.Handle("/mcp", mcpRequestLogger(s.transport))
+	mux.Handle("/mcp", mcpRequestLogger(s.transport, &s.toolsListCount))
 }
 
-func mcpRequestLogger(next http.Handler) http.Handler {
+// ToolsListCount reports how many MCP tools/list requests have been
+// served since boot — the boot-time oracle for "did any agent actually
+// attach our tools?" (🎯T50: the Grok CLI drops servers silently).
+func (s *Server) ToolsListCount() int64 { return atomic.LoadInt64(&s.toolsListCount) }
+
+func mcpRequestLogger(next http.Handler, toolsList *int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var method string
 		if r.Body != nil {
@@ -126,6 +134,9 @@ func mcpRequestLogger(next http.Handler) http.Handler {
 				_ = json.Unmarshal(body, &m)
 				method = m.Method
 			}
+		}
+		if method == "tools/list" {
+			atomic.AddInt64(toolsList, 1)
 		}
 		slog.Debug("mcp request", "http", r.Method, "rpc", method, "ua", r.UserAgent())
 		next.ServeHTTP(w, r)
