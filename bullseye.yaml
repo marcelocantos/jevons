@@ -1267,7 +1267,7 @@ targets:
     discovered: 2026-03-08
   T50:
     name: The overseer has working jevons MCP tools in daemon-launched sessions, proven by a live adopt through chat
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1283,6 +1283,7 @@ targets:
     - forensics
     origin: manual
     discovered: 2026-07-18
+    achieved: 2026-07-18
   T51:
     name: A self-executing live scenario suite drives a running jevonsd through the owner flows and passes
     status: identified
