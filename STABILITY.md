@@ -168,9 +168,10 @@ longer maintains its own transcript database.
 ### Security
 - WebSocket Origin is validated (no `InsecureSkipVerify`) since v0.5.0;
   cross-site browser POSTs to mutating HTTP routes are rejected.
-- Default bind is still all-interfaces with mTLS off; LAN clients without
-  an Origin header are not fully authenticated. Pairing ceremony verified
-  but not the sole gate for every route.
+- Default bind is loopback-only since 🎯T6 (config `bind_addr` /
+  `--bind` opts into wider exposure); remote devices connect through the
+  pigeon relay. mTLS remains off by default; when `bind_addr` is widened,
+  LAN clients without an Origin header are not fully authenticated.
 - Workers and Jevons run with permissions bypassed.
 - Cost clamp-down (L1–L3) and MCP spawn-halt guards ship in v0.5.0.
 

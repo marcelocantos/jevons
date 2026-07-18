@@ -71,6 +71,7 @@ required. All fields:
 ```yaml
 owner_name: Ada          # how the overseer refers to you (default: "the owner")
 overseer_name: jevons    # the CEO agent's name
+bind_addr: 127.0.0.1     # loopback-only by default; remote devices use the pigeon relay
 port: 13705
 workdir: "."             # default workdir for workers
 model: ""                # default worker model ("" = provider default)
@@ -88,6 +89,7 @@ persona_notes: |         # freeform extras appended to the overseer's persona
 ```
 jevonsd:
   --config            Config file path (default ~/.jevons/config.yaml)
+  --bind              Listen interface (default 127.0.0.1)
   --port              Listen port (default 13705)
   --workdir           Default working directory for workers (default ".")
   --model             Default model for workers
