@@ -58,6 +58,13 @@ test-ui:
 test-ui-live:
 	node scripts/chat-ui-test/test.js --live
 
+# Live scenario suite (🎯T51): drives a RUNNING jevonsd through the
+# owner flows. Deterministic tier only by default; see scripts/live-suite
+# flags for the overseer/spawn/restart/rewind scenarios.
+.PHONY: test-live-suite
+test-live-suite:
+	go run ./scripts/live-suite -skip-overseer
+
 test: test-go test-web test-ui
 
 # ── Standing invariants (bullseye) ──────────────────

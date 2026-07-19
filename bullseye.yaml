@@ -1286,7 +1286,7 @@ targets:
     achieved: 2026-07-18
   T51:
     name: A self-executing live scenario suite drives a running jevonsd through the owner flows and passes
-    status: identified
+    status: converging
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1294,7 +1294,7 @@ targets:
     - Each scenario asserts on ground truth (chatlog, thread store, MCP responses), not on model prose.
     - The suite distinguishes MCP-direct scenarios (deterministic) from overseer-mediated ones (prompt-contract), and reports per-scenario pass/fail.
     - 'Documented as the pre-release drill: /release for jevons runs it against the candidate build.'
-    context: 'Owner directive 2026-07-18: "develop a comprehensive suite of scenarios to test against and execute them yourself." Tonight''s ad-hoc drills (T30.1 restart drill, ACP probe matrix, chat-smoke hardening) are the seed corpus; the suite institutionalizes them. Depends in practice on 🎯T51 for the overseer-tool scenarios to pass.'
+    context: 'Converging 2026-07-19: scripts/live-suite lands with 12 scenarios in two tiers (deterministic MCP-direct: health, tool surface, cost, adopt-observe-remove, journal-replay fidelity, spawn-direct-remove; overseer-mediated: chat round-trip, context recall, tools-live, in-flight collision frame; gated: rewind, restart-durability via -restart-cmd). First full drill: 11/12 pass including kill -9 restart with recap-coherent recall; the rewind scenario FAILS and exposed 🎯T52 (rewind still reads Claude-era transcripts — broken since the pivot). T51 retires when the full drill, rewind included, is green (blocked on T52).'
     tags:
     - oracle-first
     - quality
@@ -1302,6 +1302,23 @@ targets:
     - release-drill
     origin: manual
     discovered: 2026-07-18
+  T52:
+    name: Rewind works on the Grok ACP overseer
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A {"type":"rewind","turns":N} control frame on /ws/chat trims the overseer conversation and broadcasts a "rewound" frame (journaled, so replay re-trims the client view).
+    - The mechanism targets the Grok session store / a fresh rotated session seeded from the trimmed journal — not the Claude-era ~/.claude/projects JSONL path RewindOverseer still reads today.
+    - 'Oracle: scripts/live-suite -enable-rewind passes its rewind-journal-event scenario.'
+    context: 'Found 2026-07-19 by the first full live-suite run (🎯T51): rewind has been silently broken since the Grok-only pivot — "chat: rewind failed: open ~/.claude/projects/.../<session>.jsonl" because the rewind path predates ACP. Natural fix direction: with the chatlog journal + boot-time session rotation now in place, rewind = truncate the journal to N turns + rotate a fresh session seeded with a recap of the trimmed history.'
+    tags:
+    - grok
+    - rewind
+    - chat
+    - drill-findings
+    origin: manual
+    discovered: 2026-07-19
   T6:
     name: Permission model enforced
     status: achieved
