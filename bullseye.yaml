@@ -1340,7 +1340,7 @@ targets:
     achieved: 2026-07-19
   T54:
     name: A stranger's first run fails loud and legible when the grok CLI is missing, and the docs name the prerequisite
-    status: converging
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1356,6 +1356,45 @@ targets:
     - docs
     origin: manual
     discovered: 2026-07-19
+    achieved: 2026-07-19
+  T55:
+    name: Oversized chat content auto-collapses to a bounded height with expand-on-demand, so load doesn't thrash
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Any message bubble (user or assistant) whose rendered content exceeds a bounded height (~30em) is clamped with a fade and a 'Show more' toggle; clicking expands/re-collapses in place. The message timestamp stays visible below the clamp.
+    - 'Both offenders from real use are contracted: a multi-screen assistant markdown list (tool dump) and a multi-screen user recap block.'
+    - On history replay (page load), tall bubbles occupy bounded height immediately, so total document height is stable — no multi-screen reflow jumping.
+    - Hermetic chat_events tests + the Playwright perceptual suite still pass (bubble coalescing, working-indicator lifecycle unaffected); a screenshot shows a clamped tall bubble with the toggle.
+    - Live-verified against the running daemon on the owner's actual history.
+    context: 'Found 2026-07-26 in the owner''s first real use (T30 week-of-use gate): on a 6K monitor the chat jumps and shows unrendered sections on load because multi-screen tool dumps and recap blocks render in full. Owner: contract large content top-to-bottom, expand on demand; then consider virtualising the history view (successor 🎯T56).'
+    tags:
+    - visual
+    - web
+    - ux
+    - performance
+    - week-of-use
+    origin: manual
+    discovered: 2026-07-26
+  T56:
+    name: The chat history view is virtualised — only on-screen messages are in the DOM
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'The /ws/chat history renders via a virtualised list: off-screen messages are not materialised as DOM nodes (or are recycled), bounding DOM node count regardless of transcript length.'
+    - Scroll position, replay fidelity (🎯T30.1), and the working-indicator/coalescing behaviour are preserved.
+    - Load time and scroll smoothness on a long transcript measurably improve over the pre-virtualisation baseline.
+    context: 'Successor to 🎯T55 (owner''s explicit sequencing 2026-07-26: collapse large content first, then virtualise). The collapse bounds per-message height; virtualisation bounds total node count for very long transcripts. Deferred behind T55.'
+    depends_on:
+    - T55
+    tags:
+    - visual
+    - web
+    - performance
+    origin: manual
+    discovered: 2026-07-26
   T6:
     name: Permission model enforced
     status: achieved
