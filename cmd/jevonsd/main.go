@@ -238,16 +238,17 @@ func main() {
 	if abs, err := filepath.Abs(webDir); err == nil {
 		webDir = abs
 	}
-	devSrv := server.NewDevServer(webDir)
-	devSrv.RegisterRoutes(mux)
+	devSrv := server.RegisterUIRoutes(mux, webDir)
 
 	srv.RegisterRoutes(mux)
 	mcpSrv.RegisterRoutes(mux)
-	go func() {
-		if err := devSrv.Watch(); err != nil {
-			slog.Error("dev server watch failed", "err", err)
-		}
-	}()
+	if devSrv != nil {
+		go func() {
+			if err := devSrv.Watch(); err != nil {
+				slog.Error("dev server watch failed", "err", err)
+			}
+		}()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

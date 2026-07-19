@@ -4,13 +4,17 @@
 package server
 
 import (
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 
 	"github.com/coder/websocket"
 	"github.com/fsnotify/fsnotify"
+
+	"github.com/marcelocantos/jevons/web"
 )
 
 // DevServer serves static files from a directory and notifies
@@ -29,6 +33,34 @@ func NewDevServer(dir string) *DevServer {
 		dir:     dir,
 		handler: http.FileServer(http.Dir(dir)),
 	}
+}
+
+// RegisterUIRoutes serves the web UI: from dir (with hot reload) when it
+// exists on disk, else from the embedded copy — a released binary must
+// serve the UI standalone (🎯T53; brew installs ship no repo checkout).
+// Returns the DevServer when disk mode is active, nil in embedded mode.
+func RegisterUIRoutes(mux *http.ServeMux, dir string) *DevServer {
+	if st, err := os.Stat(filepath.Join(dir, "index.html")); err == nil && !st.IsDir() {
+		ds := NewDevServer(dir)
+		ds.RegisterRoutes(mux)
+		return ds
+	}
+	slog.Info("serving embedded web UI (no on-disk web/)", "checked", dir)
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		noCache(w)
+		http.ServeFileFS(w, r, web.FS, "index.html")
+	})
+	scriptsFS, err := fs.Sub(web.FS, "scripts")
+	if err != nil {
+		slog.Error("embedded scripts missing", "err", err)
+		return nil
+	}
+	scripts := http.StripPrefix("/scripts/", http.FileServerFS(scriptsFS))
+	mux.Handle("GET /scripts/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		noCache(w)
+		scripts.ServeHTTP(w, r)
+	}))
+	return nil
 }
 
 // RegisterRoutes adds the static file server and reload WebSocket to the mux.
