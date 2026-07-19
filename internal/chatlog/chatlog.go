@@ -98,6 +98,75 @@ func (l *Log) Replay(fn func(line string) error) error {
 	}
 }
 
+// TruncateTurns removes the last n user turns (and everything after
+// their start) from the journal — the rewind primitive (🎯T52). A turn
+// starts at a user line that does not directly follow another user line
+// (the wire carries duplicate user echoes). Atomic rewrite; the append
+// handle is reopened on the new file.
+func (l *Log) TruncateTurns(n int) error {
+	if n < 1 {
+		return fmt.Errorf("chatlog: truncate turns must be >= 1")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var lines []string
+	var starts []int
+	prevUser := false
+	f, err := os.Open(l.path)
+	if err != nil {
+		return fmt.Errorf("chatlog: truncate open: %w", err)
+	}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			continue
+		}
+		var d struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal([]byte(line), &d)
+		isUser := d.Type == "user"
+		if isUser && !prevUser {
+			starts = append(starts, len(lines))
+		}
+		prevUser = isUser
+		lines = append(lines, line)
+	}
+	f.Close()
+	if err := sc.Err(); err != nil {
+		return fmt.Errorf("chatlog: truncate scan: %w", err)
+	}
+	if n > len(starts) {
+		return fmt.Errorf("chatlog: only %d turns recorded, cannot rewind %d", len(starts), n)
+	}
+	cut := starts[len(starts)-n]
+
+	tmp := l.path + ".rewind.tmp"
+	var b strings.Builder
+	for _, line := range lines[:cut] {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil {
+		return fmt.Errorf("chatlog: truncate write: %w", err)
+	}
+	if err := l.f.Close(); err != nil {
+		return fmt.Errorf("chatlog: truncate close: %w", err)
+	}
+	if err := os.Rename(tmp, l.path); err != nil {
+		return fmt.Errorf("chatlog: truncate rename: %w", err)
+	}
+	nf, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("chatlog: truncate reopen: %w", err)
+	}
+	l.f = nf
+	return nil
+}
+
 // Close closes the underlying file.
 func (l *Log) Close() error {
 	l.mu.Lock()

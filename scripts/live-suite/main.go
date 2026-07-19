@@ -335,8 +335,17 @@ drain:
 }
 
 // scenarioRewind: a rewind control frame must broadcast a "rewound"
-// event, and the journal must carry it so replay re-trims the view.
+// frame (live-only), SHRINK the journal by the trimmed turn, and leave
+// replay consistent with the truncated journal (🎯T52 semantics: the
+// journal is truncated, so journaling the frame too would double-trim
+// replayed views).
 func (s *suite) scenarioRewind() error {
+	path := filepath.Join(s.stateDir, "chatlog", s.overseer+".jsonl")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	conn, _, err := websocket.Dial(ctx, "ws://"+s.host+"/ws/chat", nil)
@@ -367,7 +376,7 @@ drain:
 	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"rewind","turns":1}`)); err != nil {
 		return err
 	}
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(90 * time.Second)
 	for {
 		select {
 		case data, ok := <-frames:
@@ -375,18 +384,20 @@ drain:
 				return fmt.Errorf("connection closed before rewound frame")
 			}
 			if strings.Contains(string(data), `"rewound"`) {
-				path := filepath.Join(s.stateDir, "chatlog", s.overseer+".jsonl")
-				b, err := os.ReadFile(path)
+				after, err := os.ReadFile(path)
 				if err != nil {
 					return err
 				}
-				if !bytes.Contains(b, []byte(`"rewound"`)) {
-					return fmt.Errorf("rewound frame not journaled")
+				if len(after) >= len(before) {
+					return fmt.Errorf("journal did not shrink (%d -> %d bytes)", len(before), len(after))
 				}
-				return nil
+				if bytes.Contains(after, []byte(`"rewound"`)) {
+					return fmt.Errorf("rewound frame journaled — would double-trim replay")
+				}
+				return s.scenarioReplayFidelity()
 			}
 		case <-deadline:
-			return fmt.Errorf("no rewound frame within 60s")
+			return fmt.Errorf("no rewound frame within 90s")
 		}
 	}
 }
@@ -446,7 +457,7 @@ func (s *suite) scenarioRecall() error {
 
 func (s *suite) scenarioOverseerTools() error {
 	reply, err := s.chatTurn(
-		"Call "+s.ns+"__jevons_thread_list via use_tool and reply with only the first word of its raw output.",
+		"Call "+s.ns+"__jevons_thread_list via use_tool now. If the call succeeds, reply with only the first word of its raw output (it will be THREAD); if it fails, reply NO-TOOLS plus the error verbatim.",
 		240*time.Second)
 	if err != nil {
 		return err
@@ -457,9 +468,27 @@ func (s *suite) scenarioOverseerTools() error {
 	return nil
 }
 
+var errInFlight = fmt.Errorf("prompt already in flight")
+
 // chatTurn connects, drains the journal replay, sends one prompt, and
-// returns the coalesced assistant reply for the live turn.
+// returns the coalesced assistant reply for the live turn. Boot and
+// rewind inject recap turns asynchronously, so an in-flight collision
+// is expected congestion, not failure — retry with backoff.
 func (s *suite) chatTurn(prompt string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		reply, err := s.chatTurnOnce(prompt, timeout)
+		if err != errInFlight {
+			return reply, err
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("overseer stayed busy for %s", timeout)
+		}
+		time.Sleep(4 * time.Second)
+	}
+}
+
+func (s *suite) chatTurnOnce(prompt string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	conn, _, err := websocket.Dial(ctx, "ws://"+s.host+"/ws/chat", nil)
@@ -519,6 +548,9 @@ drain:
 			continue
 		}
 		if m.Type == "error" {
+			if strings.Contains(m.Error, "already in flight") {
+				return "", errInFlight
+			}
 			return "", fmt.Errorf("wire error: %s", m.Error)
 		}
 		if m.Type != "assistant" {

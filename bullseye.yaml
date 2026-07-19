@@ -1286,7 +1286,7 @@ targets:
     achieved: 2026-07-18
   T51:
     name: A self-executing live scenario suite drives a running jevonsd through the owner flows and passes
-    status: converging
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1302,9 +1302,10 @@ targets:
     - release-drill
     origin: manual
     discovered: 2026-07-18
+    achieved: 2026-07-19
   T52:
     name: Rewind works on the Grok ACP overseer
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1319,6 +1320,7 @@ targets:
     - drill-findings
     origin: manual
     discovered: 2026-07-19
+    achieved: 2026-07-19
   T6:
     name: Permission model enforced
     status: achieved
