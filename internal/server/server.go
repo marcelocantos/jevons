@@ -25,7 +25,6 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/chatlog"
-
 )
 
 // remoteWriter abstracts over WebSocket and tern relay connections.
@@ -53,10 +52,11 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	version      string
-	stateDir     string // jevons state root (config-driven, 🎯T44/T49)
-	overseerName string // registry name of the CEO agent (config-driven, 🎯T44)
-	ca           *auth.CA
+	version            string
+	stateDir           string // jevons state root (config-driven, 🎯T44/T49)
+	overseerName       string // registry name of the CEO agent (config-driven, 🎯T44)
+	overseerDownReason string // legible cause when the overseer isn't running (🎯T54); guarded by mu
+	ca                 *auth.CA
 
 	mu        sync.RWMutex
 	remoteSeq int
@@ -101,6 +101,16 @@ func (s *Server) SetOverseerName(name string) {
 	if name != "" {
 		s.overseerName = name
 	}
+}
+
+// SetOverseerDownReason records a legible, actionable explanation for why
+// the overseer is unavailable (e.g. the Grok CLI is missing). The chat
+// handler surfaces it to connecting clients so a first-run stranger sees
+// the cause instead of a silent, unresponsive chat (🎯T54).
+func (s *Server) SetOverseerDownReason(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.overseerDownReason = reason
 }
 
 // SetChatLog attaches the durable jevons-owned conversation log

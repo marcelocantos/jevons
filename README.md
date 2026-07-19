@@ -29,6 +29,12 @@ wraps the same UI in a WKWebView over a paired QUIC relay.
 
 ## Install
 
+Jevons runs its overseer and workers as **Grok** agents, so the
+[Grok CLI](https://docs.x.ai/) is a prerequisite: install it and sign in
+(`grok login`, or set `XAI_API_KEY`) so `grok` is on your `PATH` (or at
+`~/.grok/bin/grok`). Without it, jevonsd starts and serves the UI but the
+overseer cannot launch — it will tell you so.
+
 ```bash
 brew install marcelocantos/tap/jevons
 brew services start jevons   # always-on launchd service

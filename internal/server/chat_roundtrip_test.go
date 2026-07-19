@@ -268,3 +268,42 @@ func TestMultiChunkStreamWire(t *testing.T) {
 		t.Fatal("server waiting still true after terminal")
 	}
 }
+
+// 🎯T54: when the overseer is down (e.g. a fresh install with no Grok
+// CLI), a client connecting to /ws/chat must receive a legible error
+// frame carrying the configured reason BEFORE the socket closes — not a
+// bare, silent close a first-run stranger can't diagnose.
+func TestChatOverseerDownSendsLegibleErrorFrame(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.SetOverseerDownReason("the Grok CLI is not installed — install it and restart")
+	// No process attached and no chat log: handleChat hits the
+	// overseer-down path directly.
+
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/chat", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.CloseNow()
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("expected an error frame before close, got read error: %v", err)
+	}
+	var m struct {
+		Type  string `json:"type"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(data, &m) != nil || m.Type != "error" {
+		t.Fatalf("first frame = %q, want an error frame", string(data))
+	}
+	if !strings.Contains(m.Error, "Grok CLI is not installed") {
+		t.Fatalf("error frame %q does not carry the configured reason", m.Error)
+	}
+}
