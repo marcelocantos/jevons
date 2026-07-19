@@ -68,6 +68,30 @@ Talk to Jevons in the web chat. It adopts, spawns, monitors, and directs
 Grok Build agents on your behalf (thread model). Spend is metered in
 real time with an automated clamp-down if a fleet runaway starts.
 
+### Talking to Jevons
+
+Everything is plain language — Jevons is the overseer, and it routes your
+request to the right agent (or answers directly). A first conversation:
+
+- **Ask what it can do** — *"What are you working on right now?"* Jevons
+  answers directly; simple questions never spawn an agent.
+- **Delegate work** — *"Start an agent in `~/work/myrepo` and have it run
+  the tests and summarise failures."* Jevons spawns a worker there and
+  reports back when it's done (the reply arrives on its own; you don't
+  wait or poll).
+- **Check status** — *"What's the current work on myrepo?"* or *"List
+  your threads."*
+- **Adopt a session you already have open** — if you're running Grok in a
+  terminal, *"Adopt session `<uuid>`"* brings it under Jevons as a durable
+  thread you can direct from the chat. (Stop driving it in the terminal
+  first — one writer at a time.)
+- **Watch spend** — *"How much have I spent today?"* Spend also streams
+  live in the UI, with an automatic clamp-down if a fleet runs away.
+
+Threads are durable: Jevons stops idle agent processes to save money and
+rehydrates them the moment you direct them again — you never lose a
+conversation across restarts.
+
 ### Configuration
 
 jevonsd reads `~/.jevons/config.yaml` (or `--config <path>`); flags
