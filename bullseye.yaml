@@ -1321,6 +1321,23 @@ targets:
     origin: manual
     discovered: 2026-07-19
     achieved: 2026-07-19
+  T53:
+    name: The released jevonsd binary serves the web UI standalone — no repo checkout required
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - web/ is embedded in the binary (go:embed); GET / and /scripts/* serve the UI from the embed when the on-disk web/ directory is absent; dev mode (repo present) keeps disk serving + hot reload.
+    - 'Verified against a brew-style install location: / returns the chat UI with 200, and a chat round-trip works with no repo checkout on the machine path.'
+    - 'Found by soak-watch 2026-07-19: /opt/homebrew/opt/jevons has no web/, / returns 404 — a stranger''s install (T47) has no front end; likely true since v0.5.0.'
+    tags:
+    - release
+    - web
+    - t47-blocker
+    - soak-findings
+    origin: manual
+    discovered: 2026-07-19
+    achieved: 2026-07-19
   T6:
     name: Permission model enforced
     status: achieved
