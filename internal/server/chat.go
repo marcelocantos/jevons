@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 )
 
@@ -109,26 +110,48 @@ func (s *Server) RewindOverseer(n int) error {
 	}
 	s.mu.RLock()
 	reg := s.registry
+	clog := s.chatLog
 	s.mu.RUnlock()
 	if reg == nil {
 		return fmt.Errorf("rewind: no registry")
+	}
+	if clog == nil {
+		return fmt.Errorf("rewind: no chat log")
 	}
 	def := reg.Def(s.overseerName)
 	if def == nil {
 		return fmt.Errorf("rewind: overseer not registered")
 	}
 
-	reg.Stop(s.overseerName)
-	_, rerr := claudia.RewindSession(def.SessionID, def.WorkDir, n)
+	// Grok ACP sessions cannot be rewound in place, and the CLI ignores
+	// mcpServers on session/load anyway — so rewind is journal-first
+	// (🎯T52): truncate the durable record, then rotate the overseer onto
+	// a fresh session seeded with a recap of the trimmed history (the
+	// same rotation the daemon performs at boot).
+	if err := clog.TruncateTurns(n); err != nil {
+		return fmt.Errorf("rewind: %w", err)
+	}
 
+	reg.Stop(s.overseerName)
+	rotated := *def
+	rotated.SessionID = uuid.NewString()
+	rotated.Materialized = false
+	if err := reg.Register(rotated); err != nil {
+		return fmt.Errorf("rewind: rotate session: %w", err)
+	}
 	agent, lerr := reg.Launch(s.overseerName)
 	if lerr != nil {
 		return fmt.Errorf("rewind: relaunch failed: %w", lerr)
 	}
 	s.AttachOverseer(agent)
 
-	if rerr != nil {
-		return fmt.Errorf("rewind: %w", rerr)
+	if recap := clog.Recap(30, 6<<10); recap != "" {
+		go func() {
+			if err := s.SendToOverseer(
+				"[Conversation rewound by the owner. The record below is the surviving context — read it, then acknowledge in ONE short sentence.]\n\n" + recap); err != nil {
+				slog.Error("rewind recap send failed", "err", err)
+			}
+		}()
 	}
 	return nil
 }
@@ -328,7 +351,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				slog.Error("chat: rewind failed", "err", err)
 				continue
 			}
-			s.BroadcastChat(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
+			s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
 			continue
 		}
 
@@ -417,6 +440,14 @@ func (s *Server) BroadcastChat(line string) {
 			slog.Error("chat: DURABILITY FAILURE — chat log append failed", "err", err)
 		}
 	}
+	s.broadcastChatLive(line)
+}
+
+// broadcastChatLive fans a line out to connected clients WITHOUT
+// journaling it. Only for frames whose durable effect is already in the
+// journal (the rewound control frame after TruncateTurns — journaling it
+// too would double-trim replayed views).
+func (s *Server) broadcastChatLive(line string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ch := range s.chatListeners {
