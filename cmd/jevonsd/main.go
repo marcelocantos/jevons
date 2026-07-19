@@ -407,20 +407,6 @@ func main() {
 		}
 		mcpSrv.SetNotify(send)
 
-		// 🎯T50 regression oracle: if no MCP client has listed our tools
-		// shortly after boot, the overseer is running toolless — the
-		// exact silent failure that went unnoticed for a week. Fail LOUD.
-		go func() {
-			time.Sleep(45 * time.Second)
-			if mcpSrv.ToolsListCount() == 0 {
-				slog.Error("OVERSEER TOOLLESS — no MCP tools/list since boot; jevons tools are not attached (see 🎯T50)")
-				srv.Broadcast(map[string]any{
-					"type":  "error",
-					"error": "overseer booted without jevons tools (MCP attach failed) — actions will not work",
-				})
-			}
-		}()
-
 		// Re-seed the rotated session with a recap of the durable
 		// conversation so the overseer picks up where it left off.
 		if recap := clog.Recap(30, 6<<10); recap != "" {
@@ -434,7 +420,33 @@ func main() {
 				}
 			}()
 		}
+	} else {
+		// The overseer did not launch — almost always a missing/unauth
+		// Grok CLI (StartAll logged "auto-start failed"), so the chat
+		// cannot respond. Fail LOUD and legible so a first-run stranger
+		// knows exactly what to do instead of facing a silent chat
+		// (🎯T54); the UI-facing half is the chat handler's overseer-down
+		// path.
+		reason := overseerUnavailableReason()
+		slog.Error("OVERSEER NOT RUNNING — chat cannot respond until this is fixed",
+			"overseer", cfg.OverseerName, "likely_cause", reason)
+		srv.SetOverseerDownReason(reason)
 	}
+
+	// 🎯T50/🎯T54 regression oracle, hoisted out of the attach block so it
+	// fires even when the overseer never launched: if no MCP client has
+	// listed our tools shortly after boot, the overseer is toolless or
+	// absent. Fail LOUD.
+	go func() {
+		time.Sleep(45 * time.Second)
+		if mcpSrv.ToolsListCount() == 0 {
+			slog.Error("OVERSEER TOOLLESS OR ABSENT — no MCP tools/list since boot; jevons tools are not attached (see 🎯T50/🎯T54)")
+			srv.Broadcast(map[string]any{
+				"type":  "error",
+				"error": "overseer has no jevons tools (or failed to launch) — actions will not work",
+			})
+		}
+	}()
 
 	// Graceful shutdown on signal.
 	go func() {
@@ -620,6 +632,33 @@ func loadKeychainKey(service string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// overseerUnavailableReason returns a legible, actionable explanation for
+// why the overseer could not launch (🎯T54). The overwhelmingly common
+// first-run cause is a missing or unauthenticated Grok CLI, so it checks
+// for the `grok` binary the same way claudia resolves it and tailors the
+// message accordingly.
+func overseerUnavailableReason() string {
+	if _, err := exec.LookPath("grok"); err == nil {
+		return "the Grok agent failed to start — check that the Grok CLI is signed in " +
+			"(`grok login`, or set XAI_API_KEY) and see the jevonsd log for details"
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, p := range []string{
+			filepath.Join(home, ".grok", "bin", "grok"),
+			filepath.Join(home, ".local", "bin", "grok"),
+			"/opt/homebrew/bin/grok", "/usr/local/bin/grok",
+		} {
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return "the Grok agent failed to start — check that the Grok CLI at " + p +
+					" is signed in (`grok login`, or set XAI_API_KEY)"
+			}
+		}
+	}
+	return "the Grok CLI is not installed — install Grok Build and sign in " +
+		"(`grok login`, or set XAI_API_KEY), then restart jevonsd. jevons runs its " +
+		"overseer and workers as Grok agents and cannot operate without it"
 }
 
 // reapIdleGCInterval is how often the butler sweeps for idle spawned

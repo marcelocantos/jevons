@@ -2,7 +2,7 @@
 
 Jevons is a remote control system for **Grok Build** instances — a
 butler/CEO over a fleet of agents. It consists of a coordinator daemon
-(`jevonsd`), a browser chat UI, and a TUI client (`remote`).
+(`jevonsd`) and a browser chat UI (also wrapped by the iOS app).
 
 There is no Claude (or Codex) harness in jevons. The only provider is
 Grok via claudia (`ProviderGrok`: Task mode and Session ACP).
@@ -10,16 +10,16 @@ Grok via claudia (`ProviderGrok`: Task mode and Session ACP).
 ## Architecture
 
 ```
-  browser / remote  ──WebSocket──►  jevonsd  ──spawns──►  Jevons (Grok Session ACP)
-                                        ──manages──►  workers / threads (Grok)
-                                   MCP ◄─────────────┘ (tool calls)
+  browser / iOS  ──WebSocket──►  jevonsd  ──spawns──►  Jevons (Grok Session ACP)
+                                       ──manages──►  workers / threads (Grok)
+                                  MCP ◄─────────────┘ (tool calls)
 ```
 
 - **jevonsd**: HTTP/WebSocket server. Runs the overseer as a Grok ACP
   session, exposes an in-process MCP server for worker/thread management,
   tails `~/.grok/sessions` for cost accounting, and serves the web UI.
-- **remote**: Terminal UI client over WebSocket.
-- **Primary UI**: browser at `http://localhost:13705/` (`/ws/chat`).
+- **Primary UI**: browser at `http://localhost:13705/` (`/ws/chat`); the
+  iOS app wraps the same UI over a paired QUIC relay.
 
 ## Install (multi-step — not done until all succeed)
 
@@ -34,7 +34,7 @@ Grok via claudia (`ProviderGrok`: Task mode and Session ACP).
    ```
 5. **Optional — register as an MCP client** after restarting the agent session:
    ```bash
-   # Example for Claude Code as an MCP *client* of jevons (jeons itself is Grok-only):
+   # Example for Claude Code as an MCP *client* of jevons (jevons itself is Grok-only):
    claude mcp add --scope user --transport http jevons http://localhost:13705/mcp
    ```
 6. **Confirm tools** via `jevons_thread_list` or `jevons_cost`.
@@ -44,8 +44,6 @@ Grok via claudia (`ProviderGrok`: Task mode and Session ACP).
 ```bash
 jevonsd --port 13705 --workdir ~/projects
 open http://localhost:13705/
-# or
-remote --addr localhost:13705
 ```
 
 ## Key concepts

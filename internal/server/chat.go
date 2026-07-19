@@ -267,7 +267,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if proc == nil || !proc.Alive() {
-		conn.Close(websocket.StatusInternalError, "claude not running")
+		// Overseer is down (usually a missing/unauth Grok CLI on a fresh
+		// install). Send a legible error frame the UI renders BEFORE the
+		// socket closes, so a first-run stranger sees the cause and the
+		// fix instead of a blank, silent chat (🎯T54).
+		s.mu.RLock()
+		reason := s.overseerDownReason
+		s.mu.RUnlock()
+		if reason == "" {
+			reason = "the overseer is not running"
+		}
+		payload, _ := json.Marshal(map[string]string{"type": "error", "error": reason})
+		wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = conn.Write(wctx, websocket.MessageText, payload)
+		wcancel()
+		conn.Close(websocket.StatusInternalError, "overseer not running")
 		return
 	}
 
