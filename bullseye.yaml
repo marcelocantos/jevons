@@ -1338,6 +1338,24 @@ targets:
     origin: manual
     discovered: 2026-07-19
     achieved: 2026-07-19
+  T54:
+    name: A stranger's first run fails loud and legible when the grok CLI is missing, and the docs name the prerequisite
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - README's install path names the grok CLI (install + auth via `grok login` or XAI key) as a hard prerequisite for the overseer, not just under build-from-source.
+    - agents-guide.md has no stale `remote` TUI references (removed in 🎯T43) and no `jeons` typo.
+    - When the overseer fails to launch (grok missing/unauth), jevonsd logs a specific, actionable error naming grok + remediation, and a chat client that connects receives a legible error frame in the UI (not a bare socket close or a generic per-message failure).
+    - The 🎯T50 toolless-boot oracle still fires in the overseer-absent case (it currently sits inside the `if overseer != nil` block and is skipped when the overseer never launched).
+    context: 'T47-readiness, found 2026-07-19 during a stranger-install audit (soak day 1). The T53 discovery (brew UI 404 unnoticed for two releases) proved the stranger path was never walked; walking it surfaced: (1) README never mentions the grok CLI, so a fresh `brew install` yields a daemon whose overseer silently can''t launch (StartAll logs ''auto-start failed'', then the whole attach/notify/oracle/recap block is skipped because registry.Get returns nil); (2) agents-guide still documents the removed `remote` TUI + a ''jeons'' typo; (3) the failure is illegible to a non-author. De-risks 🎯T47 before a real second user hits it.'
+    tags:
+    - t47-blocker
+    - onboarding
+    - soak-findings
+    - docs
+    origin: manual
+    discovered: 2026-07-19
   T6:
     name: Permission model enforced
     status: achieved
