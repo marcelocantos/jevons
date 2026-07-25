@@ -116,6 +116,19 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons a { color: var(--accent); text-decoration: none; }
 .msg.jevons a:hover { text-decoration: underline; }
 
+/* Oversized content collapse (🎯T55): tall bubbles clamp to a bounded
+   height so a multi-screen tool dump / recap doesn't reflow the whole
+   transcript on load. The mask fades the content itself to transparent,
+   so it works on any bubble background (transparent jevons, translucent
+   user) without colour-matching. Expand toggles the clamp in place. */
+.msg-body.clamped { max-height: 30em; overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
+          mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent); }
+.msg-expand { display: block; margin-top: 4px; padding: 2px 0; background: none; border: none;
+  color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; opacity: 0.9; }
+.msg-expand:hover { opacity: 1; text-decoration: underline; }
+.msg.user .msg-expand { margin-left: auto; text-align: right; }
+
 /* Worker notes — out-of-band system messages from a delegated agent.
    Centred, dim, collapsible. Distinct from both user (right) and
    jevons (left) so the user can't mistake them for either side of
@@ -374,9 +387,9 @@ function appendOrAddJevons(text, ts) {
   if (target && target.classList && target.classList.contains('msg')
       && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
     target._streamRaw += text;
-    const timeEl = target.querySelector('.msg-time');
-    target.innerHTML = marked.parse(target._streamRaw);
-    if (timeEl) target.appendChild(timeEl);
+    // Write into the body wrapper only, so the timestamp (and any expand
+    // toggle, once sealed) survive the re-render (🎯T55).
+    target._body.innerHTML = marked.parse(target._streamRaw);
     scrollDown();
     return;
   }
@@ -393,6 +406,7 @@ function sealAssistantStream() {
   }
   if (el && typeof el._streamRaw === 'string') {
     delete el._streamRaw;
+    clampIfTall(el);   // clamp the finished assistant bubble if oversized (🎯T55)
   }
 }
 
@@ -435,11 +449,17 @@ function addTurnItem(cls, text) {
 function addMsg(role, text, when) {
   const d = document.createElement('div');
   d.className = 'msg ' + role;
+  // Content lives in a .msg-body wrapper so it can be height-clamped
+  // independently of the timestamp / expand toggle (🎯T55).
+  const body = document.createElement('div');
+  body.className = 'msg-body';
   if (role === 'jevons') {
-    d.innerHTML = marked.parse(text);
+    body.innerHTML = marked.parse(text);
   } else {
-    d.textContent = text;
+    body.textContent = text;
   }
+  d.appendChild(body);
+  d._body = body;
   const ms = when || Date.now();
   const ts = document.createElement('div');
   ts.className = 'msg-time';
@@ -447,8 +467,36 @@ function addMsg(role, text, when) {
   ts.textContent = relTime(ms);
   d.appendChild(ts);
   msgs.appendChild(d);
+  clampIfTall(d);
   scrollDown();
   return d;
+}
+
+// clampIfTall bounds an oversized bubble to COLLAPSE_MAX_EM and adds a
+// Show more / Show less toggle (🎯T55). It probes by applying the clamp
+// and checking for real overflow, so short bubbles are never touched and
+// never sprout a button. Idempotent — safe to call again after a stream
+// seals. The toggle is inserted between the body and the timestamp.
+const COLLAPSE_MAX_EM = 30;
+function clampIfTall(d) {
+  const body = d && d._body;
+  if (!body) return;
+  body.classList.add('clamped');
+  if (body.scrollHeight - body.clientHeight < 8) {
+    body.classList.remove('clamped');   // fits within the cap — leave it alone
+    return;
+  }
+  if (d._expandBtn) return;             // already has a toggle
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'msg-expand';
+  const setLabel = () => {
+    btn.textContent = body.classList.contains('clamped') ? 'Show more ▾' : 'Show less ▴';
+  };
+  btn.addEventListener('click', () => { body.classList.toggle('clamped'); setLabel(); });
+  setLabel();
+  body.after(btn);
+  d._expandBtn = btn;
 }
 
 // Render a transient status note (centred, dim italic) — used for
