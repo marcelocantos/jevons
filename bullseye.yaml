@@ -1359,7 +1359,7 @@ targets:
     achieved: 2026-07-19
   T55:
     name: Oversized chat content auto-collapses to a bounded height with expand-on-demand, so load doesn't thrash
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1377,6 +1377,7 @@ targets:
     - week-of-use
     origin: manual
     discovered: 2026-07-26
+    achieved: 2026-07-26
   T56:
     name: The chat history view is virtualised — only on-screen messages are in the DOM
     status: identified
