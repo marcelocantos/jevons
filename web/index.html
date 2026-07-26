@@ -6,6 +6,7 @@
 <title>Jevons — Chat</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F916;</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit/lib/addon-fit.min.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm/css/xterm.min.css">
@@ -102,6 +103,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons code { background: var(--surface-raised); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.88em; color: var(--accent); }
 .msg.jevons pre { background: var(--surface); border: 1px solid var(--border); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0.6em 0; }
 .msg.jevons pre code { background: none; padding: 0; color: var(--text); }
+.msg.jevons .mermaid-diagram { margin: 0.6em 0; overflow-x: auto; text-align: center; }
+.msg.jevons .mermaid-diagram svg { max-width: 100%; height: auto; }
 .msg.jevons ul, .msg.jevons ol { padding-left: 1.5em; margin: 0.5em 0; }
 .msg.jevons li { margin: 0.2em 0; }
 .msg.jevons h1, .msg.jevons h2, .msg.jevons h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: var(--heading); }
@@ -430,8 +433,9 @@ function sealAssistantStream() {
   }
   if (el && typeof el._streamRaw === 'string') {
     if (el._renderRaf) { cancelAnimationFrame(el._renderRaf); el._renderRaf = 0; }
-    renderBody(el, 'jevons', el._streamRaw);   // final render of the sealed turn
-    delete el._streamRaw;
+    const raw = el._streamRaw;
+    delete el._streamRaw;                       // clear first so the sealed
+    renderBody(el, 'jevons', raw);              // render draws mermaid (🎯T59)
     scheduleLatestExpansion();
   }
 }
@@ -527,9 +531,51 @@ function previewOf(text, maxLines) {
   if (out.length > LARGE_CHARS) out = out.slice(0, LARGE_CHARS);
   return out;
 }
+// Mermaid diagrams (🎯T59): assistant markdown may carry ```mermaid
+// fences, which marked emits as <pre><code class="language-mermaid">. We
+// swap each rendered SVG in place. Gated by paintBody to sealed content
+// (see the _streamRaw check) so a half-streamed diagram never flashes a
+// parse error. Invalid source is left as its original code block. Mermaid
+// is initialized lazily so its theme matches the UI theme at first use.
+let mermaidReady = false;
+let mermaidSeq = 0;
+function ensureMermaid() {
+  if (!window.mermaid) return null;
+  if (!mermaidReady) {
+    const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+    // suppressErrorRendering keeps mermaid from injecting its "Syntax error"
+    // bomb graphic into the page when an agent emits an invalid diagram — we
+    // degrade to the raw code block instead (🎯T59).
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, theme: dark ? 'dark' : 'default' });
+    mermaidReady = true;
+  }
+  return window.mermaid;
+}
+function renderMermaidIn(container) {
+  if (!container || !ensureMermaid()) return;
+  container.querySelectorAll('code.language-mermaid').forEach(code => {
+    const host = code.closest('pre') || code;
+    const src = code.textContent;
+    const id = 'mmd-' + (++mermaidSeq);
+    Promise.resolve().then(() => mermaid.render(id, src)).then(({ svg }) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'mermaid-diagram';
+      wrap.innerHTML = svg;
+      if (host.parentNode) host.replaceWith(wrap);
+    }).catch(() => {
+      // Invalid diagram — leave the code block; sweep any temp render node
+      // mermaid may have appended to <body> (id or 'd'+id).
+      [id, 'd' + id].forEach(x => { const n = document.getElementById(x); if (n) n.remove(); });
+    });
+  });
+}
 function paintBody(d, role, t) {
-  if (role === 'jevons') d._body.innerHTML = marked.parse(t);
-  else d._body.textContent = t;
+  if (role === 'jevons') {
+    d._body.innerHTML = marked.parse(t);
+    if (!d._streamRaw) renderMermaidIn(d._body);   // sealed content only
+  } else {
+    d._body.textContent = t;
+  }
 }
 function renderBody(d, role, text) {
   if (!isLarge(text)) {
