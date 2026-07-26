@@ -1437,6 +1437,25 @@ targets:
     origin: manual
     discovered: 2026-07-26
     achieved: 2026-07-26
+  T59:
+    name: The chat renderer draws mermaid diagrams from fenced ```mermaid blocks instead of showing raw source
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A ```mermaid fenced block in an assistant turn renders as an SVG diagram (.mermaid-diagram svg) in the web UI, not a raw code block.
+    - Rendering happens on sealed/complete content only — partial diagrams during token streaming do not flash mermaid parse errors (gated on the streaming _streamRaw marker).
+    - Non-mermaid code fences (```js, ```go, …) are unaffected and still render as code blocks.
+    - Invalid mermaid source degrades gracefully to the original code block, not a thrown error or broken UI.
+    - A hermetic Playwright test asserts the diagram renders and a plain code block does not, wired into make test-ui.
+    context: Owner asked 2026-07-27 whether the markdown renderer handles mermaid automatically. It does not — web/index.html loads only marked (paintBody → marked.parse), so ```mermaid renders as a plain code block. This adds mermaid.js + a post-parse render pass in the existing bounded-render/streaming flow.
+    tags:
+    - visual
+    - web
+    - chat
+    - rendering
+    origin: manual
+    discovered: 2026-07-27
   T6:
     name: Permission model enforced
     status: achieved
