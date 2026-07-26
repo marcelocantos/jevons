@@ -657,8 +657,7 @@ func grokBin() string {
 // removes any prior entry (ignoring the not-found error) then re-adds the
 // current URL, so a changed port/bind is always reflected.
 func ensureGrokMCPServer(cfg config.Config, host string) error {
-	name := cfg.MCPServerName
-	url := fmt.Sprintf("http://%s:%d/mcp", host, cfg.Port)
+	name, url := grokMCPServerSpec(cfg, host)
 	grok := grokBin()
 	_ = exec.Command(grok, "mcp", "remove", name).Run()
 	out, err := exec.Command(grok, "mcp", "add", "--transport", "http", name, url).CombinedOutput()
@@ -667,6 +666,15 @@ func ensureGrokMCPServer(cfg config.Config, host string) error {
 	}
 	slog.Info("registered overseer MCP server (user-scoped, survives session/load)", "name", name, "url", url)
 	return nil
+}
+
+// grokMCPServerSpec derives the user-scoped MCP registration for the
+// overseer: the config.toml server name and the streamable-HTTP endpoint
+// URL. The path must be exactly /mcp (where mcpserver mounts) and the host
+// must be a concrete address — never "localhost", which can resolve to ::1
+// while the loopback default binds IPv4 127.0.0.1 (🎯T6/🎯T58).
+func grokMCPServerSpec(cfg config.Config, host string) (name, url string) {
+	return cfg.MCPServerName, fmt.Sprintf("http://%s:%d/mcp", host, cfg.Port)
 }
 
 func overseerUnavailableReason() string {
