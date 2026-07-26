@@ -160,11 +160,14 @@ func (s *Server) RewindOverseer(n int) error {
 		return fmt.Errorf("rewind: overseer not registered")
 	}
 
-	// Grok ACP sessions cannot be rewound in place, and the CLI ignores
-	// mcpServers on session/load anyway — so rewind is journal-first
-	// (🎯T52): truncate the durable record, then rotate the overseer onto
-	// a fresh session seeded with a recap of the trimmed history (the
-	// same rotation the daemon performs at boot).
+	// A Grok ACP session cannot be truncated in place, so rewind is
+	// journal-first (🎯T52): truncate the durable record, then rotate the
+	// overseer onto a fresh session seeded with a recap of the trimmed
+	// history. This rotation is specific to rewind — unlike routine boot,
+	// which now RESUMES the real session (🎯T58): the overseer's MCP tools
+	// come from ~/.grok/config.toml and reattach on session/load, so a
+	// restart no longer needs to rotate-and-recap. Here we must rotate
+	// because the whole point is to drop turns the live session still holds.
 	if err := clog.TruncateTurns(n); err != nil {
 		return fmt.Errorf("rewind: %w", err)
 	}
