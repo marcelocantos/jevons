@@ -1439,7 +1439,7 @@ targets:
     achieved: 2026-07-26
   T59:
     name: The chat renderer draws mermaid diagrams from fenced ```mermaid blocks instead of showing raw source
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1456,6 +1456,7 @@ targets:
     - rendering
     origin: manual
     discovered: 2026-07-27
+    achieved: 2026-07-27
   T6:
     name: Permission model enforced
     status: achieved
