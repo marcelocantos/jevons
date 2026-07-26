@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/term"
 
 	"github.com/marcelocantos/claudia"
@@ -137,26 +136,19 @@ func main() {
 		}
 	}
 
-	// Write mcp.claudia.json for the overseer harness to discover the MCP
-	// server (claudia converts it to ACP session mcpServers). NOT .mcp.json:
-	// the Grok CLI scans that name and reclassifies matching ACP entries as
-	// repo-local, silently gating them behind folder trust. Use
-	// the concrete bind address, never "localhost": with the loopback-only
-	// default (🎯T6) the daemon listens on IPv4 127.0.0.1 only, and an MCP
-	// client that resolves localhost to ::1 gets connection-refused — the
-	// overseer then runs with NO tools (found live in the v0.6.0 trial).
+	// The overseer's MCP server is registered user-scoped in
+	// ~/.grok/config.toml (see ensureGrokMCPServer, called before launch),
+	// which attaches on both session/new and session/load — so we no
+	// longer pass a session-scoped ACP param (mcp.claudia.json), which the
+	// CLI honours only on session/new (🎯T58). Remove any stale copy so
+	// claudia doesn't double-register the same server name. Use the
+	// concrete bind address, never "localhost": the loopback-only default
+	// (🎯T6) binds IPv4 127.0.0.1, and localhost may resolve to ::1.
 	mcpHost := cfg.BindAddr
 	if mcpHost == "" || mcpHost == "0.0.0.0" || mcpHost == "::" {
 		mcpHost = "127.0.0.1"
 	}
-	mcpJSON := fmt.Sprintf(
-		`{"mcpServers":{%q:{"type":"http","url":"http://%s:%d/mcp"}}}`,
-		cfg.MCPServerName, mcpHost, cfg.Port)
-	mcpJSONPath := filepath.Join(jevDir, "mcp.claudia.json")
-	if err := os.WriteFile(mcpJSONPath, []byte(mcpJSON), 0o644); err != nil {
-		slog.Error("cannot write .mcp.json", "err", err)
-		os.Exit(1)
-	}
+	_ = os.Remove(filepath.Join(jevDir, "mcp.claudia.json"))
 
 	// Initialize CA for mTLS device provisioning.
 	ca, err := auth.NewCA(cfg.StateDir)
@@ -330,23 +322,21 @@ func main() {
 	}
 	jevonDef.Provider = cli.Provider
 
-	// OVERSEER SESSION ROTATION (owner-ratified 2026-07-18): the Grok CLI
-	// attaches ACP mcpServers on session/new but silently ignores them on
-	// session/load, so a resumed overseer would run with NO jevons tools.
-	// The overseer therefore mints a fresh session every boot — tools
-	// guaranteed — and continuity comes from the durable jevons chatlog
-	// (the UI record) plus a recap injected after attach. This is a
-	// designed, journaled migration, not silent conversation loss: the
-	// chatlog IS the conversation; the provider session is model memory.
-	oldOverseerSession := jevonDef.SessionID
-	jevonDef.SessionID = uuid.NewString()
-	jevonDef.Materialized = false
+	// The overseer's MCP tools come from a USER-SCOPED ~/.grok/config.toml
+	// entry (🎯T58), which the Grok CLI attaches on BOTH session/new and
+	// session/load — unlike the session-scoped ACP param, which it honours
+	// only on session/new. That lets the overseer RESUME its real session
+	// on restart (full model context) instead of rotating to a fresh
+	// session and re-priming with a lossy recap. Register before launch so
+	// the tools are present the moment the agent starts.
+	if err := ensureGrokMCPServer(cfg, mcpHost); err != nil {
+		slog.Warn("could not register jevons MCP server in ~/.grok/config.toml — overseer may start toolless", "err", err)
+	}
 	if err := registry.Register(*jevonDef); err != nil {
 		slog.Error("jevon agent register failed", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("jevon agent", "provider", jevonDef.Provider,
-		"session", jevonDef.SessionID, "rotated_from", oldOverseerSession)
+	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID, "resume", jevonDef.Materialized)
 
 	srv.SetRegistry(registry)
 
@@ -407,19 +397,11 @@ func main() {
 		}
 		mcpSrv.SetNotify(send)
 
-		// Re-seed the rotated session with a recap of the durable
-		// conversation so the overseer picks up where it left off.
-		if recap := clog.Recap(30, 6<<10); recap != "" {
-			go func() {
-				if err := srv.SendToOverseer(
-					"[Daemon restart. Your session was rotated so your MCP tools attach " +
-						"(the CLI only wires them on fresh sessions). The durable conversation " +
-						"record below is your context — read it, then acknowledge in ONE short " +
-						"sentence.]\n\n" + recap); err != nil {
-					slog.Error("recap send failed", "err", err)
-				}
-			}()
-		}
+		// No recap needed: the overseer resumes its real session on
+		// restart (via config.toml MCP tools that survive session/load,
+		// 🎯T58), so the model already has full context. The recap-on-boot
+		// hack — a lossy summary re-injected as a visible user turn every
+		// restart — is gone.
 	} else {
 		// The overseer did not launch — almost always a missing/unauth
 		// Grok CLI (StartAll logged "auto-start failed"), so the chat
@@ -639,21 +621,71 @@ func loadKeychainKey(service string) (string, error) {
 // first-run cause is a missing or unauthenticated Grok CLI, so it checks
 // for the `grok` binary the same way claudia resolves it and tailors the
 // message accordingly.
+// grokCandidatePaths lists where the Grok CLI is commonly installed, in
+// preference order, for the fallback when it is not on PATH.
+func grokCandidatePaths() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{
+		filepath.Join(home, ".grok", "bin", "grok"),
+		filepath.Join(home, ".local", "bin", "grok"),
+		"/opt/homebrew/bin/grok", "/usr/local/bin/grok",
+	}
+}
+
+// grokBin resolves the Grok CLI executable: PATH first, then the known
+// install locations. Returns "grok" as a last resort so exec produces a
+// clear "executable not found" error rather than a silent no-op.
+func grokBin() string {
+	if p, err := exec.LookPath("grok"); err == nil {
+		return p
+	}
+	for _, p := range grokCandidatePaths() {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return "grok"
+}
+
+// ensureGrokMCPServer registers jevonsd's MCP endpoint user-scoped in
+// ~/.grok/config.toml so the Grok CLI attaches it on BOTH session/new and
+// session/load — the key to the overseer resuming its real session across
+// restarts (🎯T58) instead of the old rotate-and-recap hack. Idempotent:
+// removes any prior entry (ignoring the not-found error) then re-adds the
+// current URL, so a changed port/bind is always reflected.
+func ensureGrokMCPServer(cfg config.Config, host string) error {
+	name, url := grokMCPServerSpec(cfg, host)
+	grok := grokBin()
+	_ = exec.Command(grok, "mcp", "remove", name).Run()
+	out, err := exec.Command(grok, "mcp", "add", "--transport", "http", name, url).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("grok mcp add %s %s: %w (%s)", name, url, err, strings.TrimSpace(string(out)))
+	}
+	slog.Info("registered overseer MCP server (user-scoped, survives session/load)", "name", name, "url", url)
+	return nil
+}
+
+// grokMCPServerSpec derives the user-scoped MCP registration for the
+// overseer: the config.toml server name and the streamable-HTTP endpoint
+// URL. The path must be exactly /mcp (where mcpserver mounts) and the host
+// must be a concrete address — never "localhost", which can resolve to ::1
+// while the loopback default binds IPv4 127.0.0.1 (🎯T6/🎯T58).
+func grokMCPServerSpec(cfg config.Config, host string) (name, url string) {
+	return cfg.MCPServerName, fmt.Sprintf("http://%s:%d/mcp", host, cfg.Port)
+}
+
 func overseerUnavailableReason() string {
 	if _, err := exec.LookPath("grok"); err == nil {
 		return "the Grok agent failed to start — check that the Grok CLI is signed in " +
 			"(`grok login`, or set XAI_API_KEY) and see the jevonsd log for details"
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		for _, p := range []string{
-			filepath.Join(home, ".grok", "bin", "grok"),
-			filepath.Join(home, ".local", "bin", "grok"),
-			"/opt/homebrew/bin/grok", "/usr/local/bin/grok",
-		} {
-			if st, err := os.Stat(p); err == nil && !st.IsDir() {
-				return "the Grok agent failed to start — check that the Grok CLI at " + p +
-					" is signed in (`grok login`, or set XAI_API_KEY)"
-			}
+	for _, p := range grokCandidatePaths() {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return "the Grok agent failed to start — check that the Grok CLI at " + p +
+				" is signed in (`grok login`, or set XAI_API_KEY)"
 		}
 	}
 	return "the Grok CLI is not installed — install Grok Build and sign in " +
