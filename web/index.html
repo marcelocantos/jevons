@@ -116,18 +116,22 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons a { color: var(--accent); text-decoration: none; }
 .msg.jevons a:hover { text-decoration: underline; }
 
-/* Oversized content collapse (🎯T55): tall bubbles clamp to a bounded
-   height so a multi-screen tool dump / recap doesn't reflow the whole
-   transcript on load. The mask fades the content itself to transparent,
-   so it works on any bubble background (transparent jevons, translucent
-   user) without colour-matching. Expand toggles the clamp in place. */
-.msg-body.clamped { max-height: 30em; overflow: hidden;
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
-          mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent); }
+/* Oversized content (🎯T57): large turns render only a bounded PREVIEW
+   up front (marked.parse + DOM built on ~14 lines, not the whole thing);
+   the full content is parsed lazily on Show more. Bounds the browser's
+   work, not just what's visible. .msg-expand is the toggle. */
 .msg-expand { display: block; margin-top: 4px; padding: 2px 0; background: none; border: none;
   color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; opacity: 0.9; }
 .msg-expand:hover { opacity: 1; text-decoration: underline; }
 .msg.user .msg-expand { margin-left: auto; text-align: right; }
+
+/* "Load earlier" — recent turns are replayed on connect; older history
+   stays in the durable log and is fetched on demand (🎯T57). */
+.load-earlier { align-self: center; margin: 4px auto 10px; padding: 5px 14px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 14px; color: var(--text-dim); font: inherit;
+  font-size: 12px; cursor: pointer; }
+.load-earlier:hover { color: var(--text); border-color: var(--border-focus); }
+.load-earlier[disabled] { opacity: 0.5; cursor: default; }
 
 /* Worker notes — out-of-band system messages from a delegated agent.
    Centred, dim, collapsible. Distinct from both user (right) and
@@ -298,6 +302,14 @@ function connect() { transport.connect(); }
 function handle(m) {
   const typ = m.type;
 
+  // Recent turns were replayed; older history stays in the durable log.
+  // Show a "Load earlier" affordance that pages it in on demand (🎯T57).
+  if (typ === 'history_meta') {
+    oldestIndex = m.start || 0;
+    if ((m.older || 0) > 0) ensureLoadEarlier();
+    return;
+  }
+
   // Server rewound the conversation N user turns — trim the view to
   // match: remove the Nth-from-last user message and everything after it.
   // The resent (edited) message then re-arrives as a fresh turn.
@@ -387,26 +399,37 @@ function appendOrAddJevons(text, ts) {
   if (target && target.classList && target.classList.contains('msg')
       && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
     target._streamRaw += text;
-    // Write into the body wrapper only, so the timestamp (and any expand
-    // toggle, once sealed) survive the re-render (🎯T55).
-    target._body.innerHTML = marked.parse(target._streamRaw);
-    scrollDown();
+    scheduleJevonsRender(target);   // rAF-debounced: coalesce burst chunks into ONE parse (🎯T57)
     return;
   }
   const el = addMsg('jevons', text, ts);
   el._streamRaw = text;
 }
 
+// scheduleJevonsRender coalesces streamed chunks: instead of re-parsing
+// the growing markdown on every delta (O(n²) on replay of a turn that
+// streamed as many frames), it re-renders at most once per animation
+// frame from the accumulated _streamRaw (🎯T57).
+function scheduleJevonsRender(el) {
+  if (el._renderRaf) return;
+  el._renderRaf = requestAnimationFrame(() => {
+    el._renderRaf = 0;
+    renderBody(el, 'jevons', el._streamRaw);
+    scrollDownThrottled();
+  });
+}
+
 // sealAssistantStream closes the open coalesced bubble so the next
-// turn starts a new one.
+// turn starts a new one — flushing any pending debounced render first.
 function sealAssistantStream() {
   let el = msgs.lastElementChild;
   while (el && el.classList && el.classList.contains('working-indicator')) {
     el = el.previousElementSibling;
   }
   if (el && typeof el._streamRaw === 'string') {
+    if (el._renderRaf) { cancelAnimationFrame(el._renderRaf); el._renderRaf = 0; }
+    renderBody(el, 'jevons', el._streamRaw);   // final render of the sealed turn
     delete el._streamRaw;
-    clampIfTall(el);   // clamp the finished assistant bubble if oversized (🎯T55)
   }
 }
 
@@ -423,7 +446,7 @@ function startTurn() {
   turnDetails._label = label;
   msgs.appendChild(turnDetails);
   turnCount++;
-  scrollDown();
+  scrollDownThrottled();
 }
 
 function closeTurn() {
@@ -443,60 +466,159 @@ function addTurnItem(cls, text) {
   turnItems.appendChild(d);
   const n = turnItems.children.length;
   turnDetails._label.textContent = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
-  scrollDown();
+  scrollDownThrottled();
 }
 
-function addMsg(role, text, when) {
+// buildMsg constructs a .msg element (body + timestamp) WITHOUT inserting
+// it, so it can be appended live or batched into a fragment for "load
+// earlier" prepend (🎯T57). Content renders bounded via renderBody.
+function buildMsg(role, text, when) {
   const d = document.createElement('div');
   d.className = 'msg ' + role;
-  // Content lives in a .msg-body wrapper so it can be height-clamped
-  // independently of the timestamp / expand toggle (🎯T55).
   const body = document.createElement('div');
   body.className = 'msg-body';
-  if (role === 'jevons') {
-    body.innerHTML = marked.parse(text);
-  } else {
-    body.textContent = text;
-  }
   d.appendChild(body);
   d._body = body;
+  renderBody(d, role, text);
   const ms = when || Date.now();
   const ts = document.createElement('div');
   ts.className = 'msg-time';
   ts.dataset.ts = ms;
   ts.textContent = relTime(ms);
   d.appendChild(ts);
-  msgs.appendChild(d);
-  clampIfTall(d);
-  scrollDown();
   return d;
 }
 
-// clampIfTall bounds an oversized bubble to COLLAPSE_MAX_EM and adds a
-// Show more / Show less toggle (🎯T55). It probes by applying the clamp
-// and checking for real overflow, so short bubbles are never touched and
-// never sprout a button. Idempotent — safe to call again after a stream
-// seals. The toggle is inserted between the body and the timestamp.
-const COLLAPSE_MAX_EM = 30;
-function clampIfTall(d) {
-  const body = d && d._body;
-  if (!body) return;
-  body.classList.add('clamped');
-  if (body.scrollHeight - body.clientHeight < 8) {
-    body.classList.remove('clamped');   // fits within the cap — leave it alone
+function addMsg(role, text, when) {
+  const d = buildMsg(role, text, when);
+  msgs.appendChild(d);
+  scrollDownThrottled();
+  return d;
+}
+
+// Bounded rendering (🎯T57): large content renders only a PREVIEW up
+// front — marked.parse and DOM build run on ~PREVIEW_LINES lines, not the
+// whole thing — with a Show more toggle that renders the full content
+// lazily on demand. Short content renders in full, no toggle. The
+// large-check is by raw size (no layout measurement), so it's cheap even
+// during a burst replay of thousands of lines.
+const PREVIEW_LINES = 14;
+const LARGE_CHARS = 1800;
+const LARGE_LINES = 26;
+
+function isLarge(text) {
+  if (text.length > LARGE_CHARS) return true;
+  let nl = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10 && ++nl > LARGE_LINES) return true;
+  }
+  return false;
+}
+function previewOf(text) {
+  const lines = text.split('\n');
+  let out = lines.length > PREVIEW_LINES ? lines.slice(0, PREVIEW_LINES).join('\n') : text;
+  if (out.length > LARGE_CHARS) out = out.slice(0, LARGE_CHARS);
+  return out;
+}
+function paintBody(d, role, t) {
+  if (role === 'jevons') d._body.innerHTML = marked.parse(t);
+  else d._body.textContent = t;
+}
+function renderBody(d, role, text) {
+  if (!isLarge(text)) {
+    paintBody(d, role, text);
+    if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
+    d._fullText = null;
     return;
   }
-  if (d._expandBtn) return;             // already has a toggle
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'msg-expand';
-  const setLabel = () => {
-    btn.textContent = body.classList.contains('clamped') ? 'Show more ▾' : 'Show less ▴';
-  };
-  btn.addEventListener('click', () => { body.classList.toggle('clamped'); setLabel(); });
-  setLabel();
-  body.after(btn);
-  d._expandBtn = btn;
+  d._fullText = text;
+  d._fullRole = role;
+  paintBody(d, role, d._expanded ? text : previewOf(text));
+  ensureExpandToggle(d);
+}
+function ensureExpandToggle(d) {
+  if (!d._expandBtn) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'msg-expand';
+    btn.addEventListener('click', () => {
+      d._expanded = !d._expanded;
+      paintBody(d, d._fullRole, d._expanded ? d._fullText : previewOf(d._fullText));
+      d._expandBtn.textContent = d._expanded ? 'Show less ▴' : 'Show more ▾';
+      if (d._expanded) scrollDownThrottled();
+    });
+    d._body.after(btn);
+    d._expandBtn = btn;
+  }
+  d._expandBtn.textContent = d._expanded ? 'Show less ▴' : 'Show more ▾';
+}
+
+// ── Load earlier (🎯T57) ──────────────────────────────────────────────
+// /ws/chat replays only recent turns; oldestIndex is the journal line the
+// window starts at. The button pages older history in via /api/history.
+let oldestIndex = 0;
+let loadingEarlier = false;
+let earlierBtn = null;
+
+function ensureLoadEarlier() {
+  if (oldestIndex <= 0) { if (earlierBtn) { earlierBtn.remove(); earlierBtn = null; } return; }
+  if (!earlierBtn) {
+    earlierBtn = document.createElement('button');
+    earlierBtn.type = 'button';
+    earlierBtn.className = 'load-earlier';
+    earlierBtn.textContent = 'Load earlier messages';
+    earlierBtn.addEventListener('click', loadEarlier);
+  }
+  if (msgs.firstChild !== earlierBtn) msgs.insertBefore(earlierBtn, msgs.firstChild);
+}
+
+async function loadEarlier() {
+  if (loadingEarlier || oldestIndex <= 0) return;
+  loadingEarlier = true;
+  earlierBtn.disabled = true;
+  earlierBtn.textContent = 'Loading…';
+  const before = oldestIndex;
+  try {
+    const data = await fetch('/api/history?end=' + before + '&limit=200').then(r => r.json());
+    const prevH = msgs.scrollHeight, prevTop = msgs.scrollTop;
+    const frag = renderFrames(data.lines || []);
+    msgs.insertBefore(frag, earlierBtn.nextSibling);   // button stays at the very top
+    oldestIndex = (data.start != null) ? data.start : 0;
+    // Content was added ABOVE the viewport — shift scrollTop by the gain
+    // so the user's position doesn't jump.
+    msgs.scrollTop = prevTop + (msgs.scrollHeight - prevH);
+  } catch (e) {
+    console.error('load earlier failed', e);
+  }
+  loadingEarlier = false;
+  if (oldestIndex > 0) { earlierBtn.disabled = false; earlierBtn.textContent = 'Load earlier messages'; }
+  else if (earlierBtn) { earlierBtn.remove(); earlierBtn = null; }
+}
+
+// renderFrames builds .msg nodes from raw wire frames into a fragment
+// (no #messages insert, no scroll) for prepend. Consecutive assistant
+// text frames coalesce into one bubble, mirroring the live path.
+function renderFrames(lines) {
+  const frag = document.createDocumentFragment();
+  let pending = null;   // { el, raw }
+  for (const line of lines) {
+    let m;
+    try { m = (typeof line === 'string') ? JSON.parse(line) : line; } catch { continue; }
+    const ts = m.timestamp ? new Date(m.timestamp).getTime() : Date.now();
+    if (m.type === 'user') {
+      const c = m.message && m.message.content;
+      if (typeof c === 'string' && c) { pending = null; frag.appendChild(buildMsg('user', c, ts)); }
+    } else if (m.type === 'assistant') {
+      let txt = '';
+      try { txt = ChatEvents.assistantTextBlocks(m).map(b => b.text).join(''); } catch { txt = ''; }
+      if (txt) {
+        if (pending) { pending.raw += txt; renderBody(pending.el, 'jevons', pending.raw); }
+        else { const el = buildMsg('jevons', txt, ts); pending = { el, raw: txt }; frag.appendChild(el); }
+      }
+    }
+    // tool_result / system frames are omitted from the older view.
+  }
+  return frag;
 }
 
 // Render a transient status note (centred, dim italic) — used for
@@ -617,6 +739,14 @@ function scrollDown() {
   // Re-pin after layout settles — markdown/timestamps can grow the
   // content height after the synchronous append, leaving us short.
   requestAnimationFrame(() => { if (autoScroll) msgs.scrollTop = msgs.scrollHeight; });
+}
+// scrollDownThrottled coalesces scroll requests to one per animation
+// frame, so a burst replay of many messages forces one layout, not one
+// per message (🎯T57).
+let _scrollRaf = 0;
+function scrollDownThrottled() {
+  if (_scrollRaf) return;
+  _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; scrollDown(); });
 }
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }

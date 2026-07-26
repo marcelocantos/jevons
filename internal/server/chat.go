@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,42 @@ import (
 // defaultOverseerName is the fallback registry name of the persistent
 // overseer process backing /ws/chat; config overrides it (🎯T44).
 const defaultOverseerName = "jevons"
+
+// historyReplayTurns caps how many recent turns /ws/chat replays on
+// connect (🎯T57). Older turns are fetched on demand via /api/history.
+const historyReplayTurns = 30
+
+// handleHistory serves older journal lines for "load earlier" paging
+// (🎯T57): GET /api/history?end=<idx>&limit=<n> returns the window
+// [end-limit, end) as a JSON array of raw wire frames, plus the new
+// window start and the total line count. The client prepends them.
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	clog := s.chatLog
+	s.mu.RUnlock()
+	if clog == nil {
+		http.Error(w, `{"error":"no history"}`, http.StatusServiceUnavailable)
+		return
+	}
+	end, _ := strconv.Atoi(r.URL.Query().Get("end"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 2000 {
+		limit = 200
+	}
+	lines, total, err := clog.ReadRange(end-limit, end)
+	if err != nil {
+		http.Error(w, `{"error":"history read failed"}`, http.StatusInternalServerError)
+		return
+	}
+	raw := make([]json.RawMessage, len(lines))
+	for i, ln := range lines {
+		raw[i] = json.RawMessage(ln)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"start": end - len(lines), "total": total, "lines": raw,
+	})
+}
 
 // SetProcess attaches the persistent Claude process for the /ws/chat endpoint.
 func (s *Server) SetProcess(proc *claudia.Agent) {
@@ -246,12 +283,19 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Replay history BEFORE the liveness check: the jevons-owned chat log
 	// is the durable record (🎯T30.1), and a dead overseer process must
 	// not blank the conversation — completed turns always come back.
+	//
+	// Replay is CAPPED to the most recent turns (🎯T57): shipping the whole
+	// journal on every reconnect is the dominant load cost on a long
+	// history. Older turns stay in the durable log and are fetched on
+	// demand via GET /api/history ("load earlier"); a history_meta frame
+	// tells the client how many older lines exist.
 	if clog != nil {
-		if err := clog.Replay(func(line string) error {
+		start, total, err := clog.ReplayTail(historyReplayTurns, func(line string) error {
 			writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 			return conn.Write(writeCtx, websocket.MessageText, []byte(line))
-		}); err != nil {
+		})
+		if err != nil {
 			slog.Warn("chat: chatlog replay failed", "err", err)
 			payload, _ := json.Marshal(map[string]string{
 				"type":  "error",
@@ -259,6 +303,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			})
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			_ = conn.Write(writeCtx, websocket.MessageText, payload)
+			cancel()
+		} else if start > 0 {
+			meta, _ := json.Marshal(map[string]any{
+				"type": "history_meta", "older": start, "total": total, "start": start,
+			})
+			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			_ = conn.Write(writeCtx, websocket.MessageText, meta)
 			cancel()
 		}
 	} else if proc != nil {

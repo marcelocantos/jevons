@@ -98,6 +98,91 @@ func (l *Log) Replay(fn func(line string) error) error {
 	}
 }
 
+// snapshot reads every complete line plus the index of each turn start.
+// A turn starts at a user line that does not directly follow another
+// user line (the wire carries duplicate user echoes). Read without the
+// write lock: the log is append-only, so a reader always sees a
+// consistent prefix even while a line is being appended.
+func (l *Log) snapshot() (lines []string, turnStarts []int, err error) {
+	f, err := os.Open(l.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("chatlog: snapshot open: %w", err)
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	prevUser := false
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			continue
+		}
+		var d struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal([]byte(line), &d)
+		isUser := d.Type == "user"
+		if isUser && !prevUser {
+			turnStarts = append(turnStarts, len(lines))
+		}
+		prevUser = isUser
+		lines = append(lines, line)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, nil, fmt.Errorf("chatlog: snapshot scan: %w", err)
+	}
+	return lines, turnStarts, nil
+}
+
+// ReplayTail streams only the last maxTurns turns to fn (the whole log if
+// maxTurns <= 0 or fewer turns exist). It returns the line index the
+// window starts at (== how many older lines were skipped) and the total
+// line count, so a client can offer "load earlier" and page backwards
+// with ReadRange (🎯T57 — capping replay is the big transfer/render win
+// on long histories). The durable log is untouched; only what the UI
+// materialises on connect is bounded.
+func (l *Log) ReplayTail(maxTurns int, fn func(line string) error) (start, total int, err error) {
+	lines, starts, err := l.snapshot()
+	if err != nil {
+		return 0, 0, err
+	}
+	total = len(lines)
+	cut := 0
+	if maxTurns > 0 && len(starts) > maxTurns {
+		cut = starts[len(starts)-maxTurns]
+	}
+	for _, ln := range lines[cut:] {
+		if err := fn(ln); err != nil {
+			return cut, total, err
+		}
+	}
+	return cut, total, nil
+}
+
+// ReadRange returns the journal lines in [start, end) plus the total line
+// count — the backing read for "load earlier" pagination (🎯T57). Bounds
+// are clamped; an empty or reversed range yields no lines.
+func (l *Log) ReadRange(start, end int) (out []string, total int, err error) {
+	lines, _, err := l.snapshot()
+	if err != nil {
+		return nil, 0, err
+	}
+	total = len(lines)
+	if start < 0 {
+		start = 0
+	}
+	if end > total {
+		end = total
+	}
+	if start >= end {
+		return nil, total, nil
+	}
+	return append([]string(nil), lines[start:end]...), total, nil
+}
+
 // TruncateTurns removes the last n user turns (and everything after
 // their start) from the journal — the rewind primitive (🎯T52). A turn
 // starts at a user line that does not directly follow another user line

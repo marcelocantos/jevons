@@ -111,3 +111,53 @@ func TestTruncateTurns(t *testing.T) {
 		t.Fatal("over-rewind must error")
 	}
 }
+
+// 🎯T57: capped replay + range read for "load earlier".
+func TestReplayTailAndReadRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j.jsonl")
+	l, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	// 4 turns: each a user line + an assistant line.
+	for i := 0; i < 4; i++ {
+		if err := l.Append(`{"type":"user","message":{"content":"q` + itoa(i) + `"}}`); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Append(`{"type":"assistant","message":{"content":[{"type":"text","text":"a` + itoa(i) + `"}]}}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Tail of the last 2 turns → lines for turns 2,3 (indices 4..7); start=4, total=8.
+	var got []string
+	start, total, err := l.ReplayTail(2, func(line string) error { got = append(got, line); return nil })
+	if err != nil {
+		t.Fatalf("ReplayTail: %v", err)
+	}
+	if total != 8 || start != 4 || len(got) != 4 {
+		t.Fatalf("ReplayTail: start=%d total=%d lines=%d, want 4/8/4", start, total, len(got))
+	}
+	if !strings.Contains(got[0], "q2") {
+		t.Fatalf("tail did not start at turn 2: %q", got[0])
+	}
+	// maxTurns >= turns → whole log.
+	got = nil
+	start, _, _ = l.ReplayTail(99, func(line string) error { got = append(got, line); return nil })
+	if start != 0 || len(got) != 8 {
+		t.Fatalf("ReplayTail(all): start=%d lines=%d, want 0/8", start, len(got))
+	}
+	// ReadRange for the older window before the tail (lines [0,4)).
+	older, total2, err := l.ReadRange(0, 4)
+	if err != nil {
+		t.Fatalf("ReadRange: %v", err)
+	}
+	if total2 != 8 || len(older) != 4 || !strings.Contains(older[0], "q0") {
+		t.Fatalf("ReadRange(0,4): total=%d n=%d", total2, len(older))
+	}
+	if out, _, _ := l.ReadRange(6, 3); out != nil {
+		t.Fatalf("reversed range should be empty, got %v", out)
+	}
+}
+
+func itoa(i int) string { return string(rune('0' + i)) }
