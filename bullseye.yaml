@@ -1398,7 +1398,7 @@ targets:
     discovered: 2026-07-26
   T57:
     name: 'Oversized turns cost bounded browser work: preview-only render up front, full content parsed lazily on expand, no per-chunk re-parse'
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1415,6 +1415,7 @@ targets:
     - week-of-use
     origin: manual
     discovered: 2026-07-26
+    achieved: 2026-07-26
   T6:
     name: Permission model enforced
     status: achieved
