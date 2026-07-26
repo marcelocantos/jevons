@@ -1416,6 +1416,26 @@ targets:
     origin: manual
     discovered: 2026-07-26
     achieved: 2026-07-26
+  T58:
+    name: Daemon restart resumes the overseer's real session — no recap/rotation, invisible in chat and journal
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - On daemon restart the overseer RESUMES its existing Grok ACP session (session/load, Materialized=true) with SessionID unchanged — no rotation to a fresh session, so the model keeps full context and no recap is built or injected.
+    - The overseer's MCP tools attach on session/load via a user-scoped ~/.grok/config.toml entry (ensureGrokMCPServer) rather than the session-scoped ACP param the CLI ignores on load — verified by tools being available after a restart with no rotation.
+    - 'The restart is invisible in the conversation: no ''[Daemon restart …]'' recap user turn and no ''Back online'' ack are broadcast to clients or appended to the chatlog.'
+    - Rewind (🎯T52) still intentionally rotates onto a fresh session seeded with a recap (in-place truncation is impossible); that path and chatlog.Recap are retained and its rationale comment corrected.
+    - Existing accumulated recap turns in the owner's journal are addressed (pruned with a backup, or an explicit note left for the owner).
+    context: 'Owner spotted a growing collection of ''[Daemon restart …]'' user bubbles 2026-07-26 and identified the root cause: ''grok doesn''t recover mcp servers correctly on loading a session, so we resorted to always starting a new session but injecting a compacted summary on startup — a very distasteful solution.'' Decisive experiment (2026-07-26) corrected the underlying assumption: the CLI ignores only the SESSION-SCOPED ACP mcpServers param on session/load; a USER-SCOPED ~/.grok/config.toml entry attaches on BOTH session/new and session/load. So the fix is ELIMINATION, not suppression: register the MCP server user-scoped, resume the real session on boot, delete the rotate-and-recap hack entirely.'
+    tags:
+    - web
+    - ux
+    - chat
+    - week-of-use
+    - cleanup
+    origin: manual
+    discovered: 2026-07-26
   T6:
     name: Permission model enforced
     status: achieved
