@@ -54,6 +54,7 @@ test-web:
 test-ui:
 	node scripts/chat-ui-test/test.js
 	node scripts/chat-ui-test/collapse-test.js
+	node scripts/chat-ui-test/infinite-scroll-test.js
 
 .PHONY: test-ui-live
 test-ui-live:

@@ -81,7 +81,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #main { flex: 1; display: flex; overflow: hidden; }
 
 /* Chat pane */
-#chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 #messages { flex: 1; overflow-y: auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
 #messages::-webkit-scrollbar { width: 6px; }
 #messages::-webkit-scrollbar-track { background: transparent; }
@@ -125,13 +125,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg-expand:hover { opacity: 1; text-decoration: underline; }
 .msg.user .msg-expand { margin-left: auto; text-align: right; }
 
-/* "Load earlier" — recent turns are replayed on connect; older history
-   stays in the durable log and is fetched on demand (🎯T57). */
-.load-earlier { align-self: center; margin: 4px auto 10px; padding: 5px 14px; background: var(--surface);
-  border: 1px solid var(--border); border-radius: 14px; color: var(--text-dim); font: inherit;
-  font-size: 12px; cursor: pointer; }
-.load-earlier:hover { color: var(--text); border-color: var(--border-focus); }
-.load-earlier[disabled] { opacity: 0.5; cursor: default; }
+/* Infinite scroll (🎯T57): recent turns replay on connect; a zero-height
+   top sentinel drives an IntersectionObserver that auto-pages older
+   history from the durable log as the user nears the top. A dim overlay
+   shows while a window loads (it's out of flow, so it doesn't perturb
+   scroll-position preservation). */
+.history-sentinel { height: 1px; margin: 0; flex: 0 0 auto; }
+.history-loading { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 3px 12px; font-size: 11px; color: var(--text-dim); z-index: 5; pointer-events: none; }
 
 /* Worker notes — out-of-band system messages from a delegated agent.
    Centred, dim, collapsible. Distinct from both user (right) and
@@ -306,7 +308,7 @@ function handle(m) {
   // Show a "Load earlier" affordance that pages it in on demand (🎯T57).
   if (typ === 'history_meta') {
     oldestIndex = m.start || 0;
-    if ((m.older || 0) > 0) ensureLoadEarlier();
+    if ((m.older || 0) > 0) setupInfiniteScroll();
     return;
   }
 
@@ -553,46 +555,78 @@ function ensureExpandToggle(d) {
   d._expandBtn.textContent = d._expanded ? 'Show less ▴' : 'Show more ▾';
 }
 
-// ── Load earlier (🎯T57) ──────────────────────────────────────────────
+// ── Infinite scroll for older history (🎯T57) ─────────────────────────
 // /ws/chat replays only recent turns; oldestIndex is the journal line the
-// window starts at. The button pages older history in via /api/history.
+// visible window starts at. A zero-height top sentinel drives an
+// IntersectionObserver: as the user scrolls near the top, older windows
+// auto-page in from the durable log via /api/history, prepended with the
+// scroll position preserved (no button).
 let oldestIndex = 0;
 let loadingEarlier = false;
-let earlierBtn = null;
+let historySentinel = null;
+let historyObserver = null;
+let historyLoadingEl = null;
 
-function ensureLoadEarlier() {
-  if (oldestIndex <= 0) { if (earlierBtn) { earlierBtn.remove(); earlierBtn = null; } return; }
-  if (!earlierBtn) {
-    earlierBtn = document.createElement('button');
-    earlierBtn.type = 'button';
-    earlierBtn.className = 'load-earlier';
-    earlierBtn.textContent = 'Load earlier messages';
-    earlierBtn.addEventListener('click', loadEarlier);
+function setupInfiniteScroll() {
+  if (oldestIndex <= 0) { teardownInfiniteScroll(); return; }
+  if (!historySentinel) {
+    historySentinel = document.createElement('div');
+    historySentinel.className = 'history-sentinel';
+    historySentinel.setAttribute('aria-hidden', 'true');
   }
-  if (msgs.firstChild !== earlierBtn) msgs.insertBefore(earlierBtn, msgs.firstChild);
+  if (msgs.firstChild !== historySentinel) msgs.insertBefore(historySentinel, msgs.firstChild);
+  if (!historyObserver) {
+    // rootMargin preloads a bit before the very top for a smooth feel.
+    historyObserver = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) loadEarlier();
+    }, { root: msgs, rootMargin: '400px 0px 0px 0px', threshold: 0 });
+    historyObserver.observe(historySentinel);
+  }
+}
+
+function teardownInfiniteScroll() {
+  if (historyObserver) { historyObserver.disconnect(); historyObserver = null; }
+  if (historySentinel) { historySentinel.remove(); historySentinel = null; }
 }
 
 async function loadEarlier() {
   if (loadingEarlier || oldestIndex <= 0) return;
   loadingEarlier = true;
-  earlierBtn.disabled = true;
-  earlierBtn.textContent = 'Loading…';
+  showHistoryLoading(true);
   const before = oldestIndex;
   try {
     const data = await fetch('/api/history?end=' + before + '&limit=200').then(r => r.json());
     const prevH = msgs.scrollHeight, prevTop = msgs.scrollTop;
     const frag = renderFrames(data.lines || []);
-    msgs.insertBefore(frag, earlierBtn.nextSibling);   // button stays at the very top
+    const anchor = historySentinel ? historySentinel.nextSibling : msgs.firstChild;
+    msgs.insertBefore(frag, anchor);
     oldestIndex = (data.start != null) ? data.start : 0;
-    // Content was added ABOVE the viewport — shift scrollTop by the gain
-    // so the user's position doesn't jump.
+    // Content added ABOVE the viewport — shift scrollTop by the height
+    // gained so the position doesn't jump, and the sentinel leaves view
+    // so we don't instantly re-trigger.
     msgs.scrollTop = prevTop + (msgs.scrollHeight - prevH);
   } catch (e) {
     console.error('load earlier failed', e);
   }
+  showHistoryLoading(false);
   loadingEarlier = false;
-  if (oldestIndex > 0) { earlierBtn.disabled = false; earlierBtn.textContent = 'Load earlier messages'; }
-  else if (earlierBtn) { earlierBtn.remove(); earlierBtn = null; }
+  if (oldestIndex <= 0) teardownInfiniteScroll();
+}
+
+// Out-of-flow loading overlay (anchored to #chat-pane) so it doesn't
+// perturb the prepend scroll-position math.
+function showHistoryLoading(on) {
+  const pane = msgs.parentElement;
+  if (on) {
+    if (!historyLoadingEl) {
+      historyLoadingEl = document.createElement('div');
+      historyLoadingEl.className = 'history-loading';
+      historyLoadingEl.textContent = 'Loading earlier…';
+    }
+    if (historyLoadingEl.parentNode !== pane) pane.appendChild(historyLoadingEl);
+  } else if (historyLoadingEl && historyLoadingEl.parentNode) {
+    historyLoadingEl.remove();
+  }
 }
 
 // renderFrames builds .msg nodes from raw wire frames into a fragment
