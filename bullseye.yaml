@@ -1396,6 +1396,26 @@ targets:
     - performance
     origin: manual
     discovered: 2026-07-26
+  T57:
+    name: 'Oversized turns cost bounded browser work: preview-only render up front, full content parsed lazily on expand, no per-chunk re-parse'
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'A large message (by raw size) renders only a bounded PREVIEW (~12 lines) up front — marked.parse and DOM construction run on the preview slice only, not the full content. The full content is parsed/built lazily on ''Show more'' (and can re-collapse). Measured: initial .msg-body node count / text length for a huge message is bounded, not proportional to the full content.'
+    - 'The streaming coalescer no longer re-parses on every chunk: re-render is debounced (rAF-coalesced), so a turn delivered as N chunks during replay costs O(N) not O(N²). scrollDown is throttled so replay does not force a layout per message.'
+    - On page load against the owner's real ~4700-line history, the transcript settles fast (no multi-second visible scroll-up churn) and total DOM node count is bounded; measured load/settle time is a large improvement over the T55 baseline.
+    - 'Preview height is ~half the T55 clamp (owner: ''halve the size''). Hermetic + live oracle: collapse-test asserts bounded preview DOM + lazy full-on-expand; live Playwright against the running daemon shows fast settle + bounded nodes.'
+    - Coalesce/working-indicator Playwright test still passes.
+    context: 'Owner feedback 2026-07-26 after T55 shipped locally: T55 only HIDES content (clamp after full render), so the browser still does all the parse+DOM work and it happens after-the-fact (15-20s of tool lists scrolling before cleanup). Root causes: (1) marked.parse on full huge content then post-hoc clamp; (2) appendOrAddJevons re-parses target._streamRaw on EVERY streamed chunk → O(n²) on replay of a turn that streamed as many deltas; (3) scrollDown per message. Fix = bound the WORK: preview-only up-front render, lazy full render on expand, debounced re-parse, throttled scroll. Distinct from and precedes 🎯T56 (true virtualisation + server replay cap for the ~10s WS transfer of the whole history).'
+    tags:
+    - visual
+    - web
+    - performance
+    - week-of-use
+    origin: manual
+    discovered: 2026-07-26
+    achieved: 2026-07-26
   T6:
     name: Permission model enforced
     status: achieved
