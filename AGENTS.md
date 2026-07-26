@@ -13,7 +13,7 @@ design docs without checking their supersession banners.
 
 ```bash
 make              # Build jevonsd
-make init         # Install prerequisites (Go 1.22+, C compiler for CGo/SQLite)
+make init         # Install prerequisites (Go 1.26+, C compiler for CGo/SQLite)
 make ios          # Regenerate the iOS Xcode project (xcodegen)
 ```
 

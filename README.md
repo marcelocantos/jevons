@@ -52,7 +52,7 @@ cd jevons
 make jevonsd
 ```
 
-Requires Go 1.22+ and a C compiler (CGo is needed for SQLite).
+Requires Go 1.26+ and a C compiler (CGo is needed for SQLite).
 
 ## Usage
 
@@ -109,6 +109,7 @@ overseer_model: ""       # "" = same as model
 state_dir: ~/.jevons
 sessions_dir: ~/.grok/sessions
 repos_root: ~/work/github.com
+mcp_server_name: jevonsmcp # name of the overseer's MCP server in ~/.grok/config.toml
 persona_file: ""         # optional replacement for the built-in persona template
 persona_notes: |         # freeform extras appended to the overseer's persona
   sqlpipe is the state-sync repo; route DB questions there.
@@ -139,7 +140,13 @@ jevonsd stores its data in `~/.jevons/`:
 | `usage.db` | Token-spend accounting (cost clamp-down) |
 | `budget.json` | Spend budgets and clamp-down thresholds |
 | `agents.json` / `threads.json` | Agent registry and durable thread store |
+| `chatlog/<overseer>.jsonl` | Durable append-only conversation journal — replayed on reconnect so no conversation is ever lost |
 | `jevons/` | Jevons working directory and generated instructions |
+
+On startup jevonsd also registers its MCP endpoint user-scoped in
+`~/.grok/config.toml` (an `[mcp_servers.<mcp_server_name>]` entry) so the
+overseer's management tools attach when the Grok CLI resumes its session
+across restarts.
 
 ## Agent integration
 
