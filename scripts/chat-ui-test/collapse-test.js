@@ -68,50 +68,63 @@ function startStaticServer() {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => typeof window.addMsg === 'function' && !!window.marked, null, { timeout: 10000 });
 
-    // Build a huge markdown list (like a big tool dump) + a huge user block.
-    const state = await page.evaluate(() => {
+    // Build: short reply, a huge assistant list, a huge user block, then
+    // a huge assistant "latest". The two middle huge ones are NOT the last
+    // message → collapsed previews; the LAST one auto-expands (owner req).
+    await page.evaluate(() => {
       const N = 60;
       const bigList = Array.from({ length: N }, (_, i) => `- bullseye__bullseye_tool_${i}`).join('\n');
       const bigUser = Array.from({ length: 80 }, (_, i) => `recap line ${i}: durable conversation record continues`).join('\n');
+      const latestList = Array.from({ length: N }, (_, i) => `- latest__item_${i}`).join('\n');
       window.addMsg('jevons', 'Short reply, nothing to collapse.');
       const jBig = window.addMsg('jevons', '### bullseye\n' + bigList);
       const uBig = window.addMsg('user', bigUser);
-      const shortMsg = document.querySelectorAll('#messages .msg.jevons')[0];
+      const latest = window.addMsg('jevons', '### latest\n' + latestList);
+      window._t = { N, uFullLen: bigUser.length, USER_PREVIEW_LINES: (window.USER_PREVIEW_LINES || 7) };
+      window._els = { jBig, uBig, latest, short: document.querySelectorAll('#messages .msg.jevons')[0] };
+    });
+    // Auto-expand-latest is debounced (rAF) — let it settle.
+    await page.waitForTimeout(200);
+
+    const state = await page.evaluate(() => {
+      const { jBig, uBig, latest, short } = window._els;
+      const uPrevLines = uBig._body.textContent.split('\n').length;
       return {
-        shortHasBtn: !!shortMsg.querySelector('.msg-expand'),
-        shortItems: shortMsg.querySelectorAll('li').length,
-        // huge assistant: preview should show FAR fewer than N list items
+        shortHasBtn: !!short.querySelector('.msg-expand'),
+        // middle huge ones: collapsed previews, far fewer than full
         jPreviewItems: jBig._body.querySelectorAll('li').length,
-        jHasBtn: !!jBig._expandBtn,
-        jFullN: N,
-        // huge user: preview text should be a fraction of the full text
-        uPreviewLen: uBig._body.textContent.length,
-        uFullLen: bigUser.length,
-        uHasBtn: !!uBig._expandBtn,
+        jHasBtn: !!jBig._expandBtn, jFullN: window._t.N,
+        uPreviewLines: uPrevLines, uPreviewLen: uBig._body.textContent.length, uFullLen: window._t.uFullLen,
+        // request preview should be ~half (USER_PREVIEW_LINES) of assistant
+        userPreviewCap: 7,
+        // latest huge assistant: auto-EXPANDED (full items), toggle says "less"
+        latestItems: latest._body.querySelectorAll('li').length,
+        latestExpanded: latest._expanded === true,
+        latestLabel: latest._expandBtn ? latest._expandBtn.textContent : '',
       };
     });
 
     if (state.shortHasBtn) failures.push('short bubble sprouted an expand toggle (should not)');
     if (!state.jHasBtn) failures.push('huge assistant bubble has no expand toggle');
-    if (!state.uHasBtn) failures.push('huge user bubble has no expand toggle');
     if (state.jPreviewItems === 0) failures.push('huge assistant preview rendered no items');
     if (state.jPreviewItems >= state.jFullN) failures.push(`assistant preview rendered ${state.jPreviewItems} of ${state.jFullN} items — not bounded`);
     if (state.jPreviewItems > 20) failures.push(`assistant preview too large: ${state.jPreviewItems} items (want ~14)`);
     if (state.uPreviewLen >= state.uFullLen) failures.push('user preview is the full text — not bounded');
-
-    const jBtns = await page.locator('#messages .msg.jevons .msg-expand').count();
-    const uBtns = await page.locator('#messages .msg.user .msg-expand').count();
-    if (jBtns !== 1) failures.push(`expected 1 assistant expand toggle, got ${jBtns}`);
-    if (uBtns !== 1) failures.push(`expected 1 user expand toggle, got ${uBtns}`);
+    // Request preview is halved (~7 lines, not ~14).
+    if (state.uPreviewLines > state.userPreviewCap + 1) failures.push(`request preview ${state.uPreviewLines} lines — want ~${state.userPreviewCap} (halved)`);
+    // Latest message is auto-expanded in full.
+    if (!state.latestExpanded) failures.push('latest message is NOT auto-expanded');
+    if (state.latestItems < state.jFullN) failures.push(`latest auto-expand rendered ${state.latestItems} of ${state.jFullN} items — not full`);
+    if (!/less/i.test(state.latestLabel)) failures.push(`latest toggle label = ${JSON.stringify(state.latestLabel)}, want "Show less"`);
 
     await page.screenshot({ path: path.join(OUT_DIR, 'collapse-preview.png'), fullPage: true });
 
-    // Expand the assistant bubble and confirm the FULL content is now rendered.
-    await page.locator('#messages .msg.jevons .msg-expand').click();
+    // Expand the (collapsed, non-latest) assistant bubble and confirm the
+    // FULL content is now built lazily.
+    await page.locator('#messages .msg.jevons').nth(1).locator('.msg-expand').click();
     const expanded = await page.evaluate(() => {
-      const j = document.querySelectorAll('#messages .msg.jevons')[1];
-      const btn = j.querySelector('.msg-expand');
-      return { items: j._body.querySelectorAll('li').length, label: btn.textContent };
+      const j = window._els.jBig;
+      return { items: j._body.querySelectorAll('li').length, label: j._expandBtn.textContent };
     });
     if (expanded.items < 60) failures.push(`after expand, only ${expanded.items} of 60 items rendered — full content not lazily built`);
     if (!/less/i.test(expanded.label)) failures.push(`toggle label after expand = ${JSON.stringify(expanded.label)}, want "Show less"`);

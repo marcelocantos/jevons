@@ -432,6 +432,7 @@ function sealAssistantStream() {
     if (el._renderRaf) { cancelAnimationFrame(el._renderRaf); el._renderRaf = 0; }
     renderBody(el, 'jevons', el._streamRaw);   // final render of the sealed turn
     delete el._streamRaw;
+    scheduleLatestExpansion();
   }
 }
 
@@ -494,6 +495,7 @@ function buildMsg(role, text, when) {
 function addMsg(role, text, when) {
   const d = buildMsg(role, text, when);
   msgs.appendChild(d);
+  scheduleLatestExpansion();
   scrollDownThrottled();
   return d;
 }
@@ -504,7 +506,10 @@ function addMsg(role, text, when) {
 // lazily on demand. Short content renders in full, no toggle. The
 // large-check is by raw size (no layout measurement), so it's cheap even
 // during a burst replay of thousands of lines.
+// Request (user) previews are half the size of assistant previews — a
+// request block is context to glance at, not read in full (owner req).
 const PREVIEW_LINES = 14;
+const USER_PREVIEW_LINES = 7;
 const LARGE_CHARS = 1800;
 const LARGE_LINES = 26;
 
@@ -516,9 +521,9 @@ function isLarge(text) {
   }
   return false;
 }
-function previewOf(text) {
+function previewOf(text, maxLines) {
   const lines = text.split('\n');
-  let out = lines.length > PREVIEW_LINES ? lines.slice(0, PREVIEW_LINES).join('\n') : text;
+  let out = lines.length > maxLines ? lines.slice(0, maxLines).join('\n') : text;
   if (out.length > LARGE_CHARS) out = out.slice(0, LARGE_CHARS);
   return out;
 }
@@ -535,7 +540,8 @@ function renderBody(d, role, text) {
   }
   d._fullText = text;
   d._fullRole = role;
-  paintBody(d, role, d._expanded ? text : previewOf(text));
+  d._previewLines = (role === 'user') ? USER_PREVIEW_LINES : PREVIEW_LINES;
+  paintBody(d, role, d._expanded ? text : previewOf(text, d._previewLines));
   ensureExpandToggle(d);
 }
 function ensureExpandToggle(d) {
@@ -545,7 +551,8 @@ function ensureExpandToggle(d) {
     btn.className = 'msg-expand';
     btn.addEventListener('click', () => {
       d._expanded = !d._expanded;
-      paintBody(d, d._fullRole, d._expanded ? d._fullText : previewOf(d._fullText));
+      d._userToggled = true;   // manual choice wins over auto-expand-latest
+      paintBody(d, d._fullRole, d._expanded ? d._fullText : previewOf(d._fullText, d._previewLines));
       d._expandBtn.textContent = d._expanded ? 'Show less ▴' : 'Show more ▾';
       if (d._expanded) scrollDownThrottled();
     });
@@ -553,6 +560,37 @@ function ensureExpandToggle(d) {
     d._expandBtn = btn;
   }
   d._expandBtn.textContent = d._expanded ? 'Show less ▴' : 'Show more ▾';
+}
+
+// The newest message renders expanded by default; the previously
+// auto-expanded one reverts to its collapsed preview (unless the user
+// toggled it manually). Debounced so a burst replay only expands the
+// final message once — the rest stay cheap previews (owner req).
+let latestEl = null;
+let latestRaf = 0;
+function lastMsgEl() {
+  let el = msgs.lastElementChild;
+  while (el && !(el.classList && el.classList.contains('msg'))) el = el.previousElementSibling;
+  return el;
+}
+function scheduleLatestExpansion() {
+  if (latestRaf) return;
+  latestRaf = requestAnimationFrame(() => { latestRaf = 0; refreshLatestExpansion(); });
+}
+function refreshLatestExpansion() {
+  const last = lastMsgEl();
+  if (last === latestEl) return;
+  if (latestEl && latestEl._autoExpanded && !latestEl._userToggled && latestEl._fullText != null) {
+    latestEl._autoExpanded = false;
+    latestEl._expanded = false;
+    renderBody(latestEl, latestEl._fullRole, latestEl._fullText);
+  }
+  latestEl = last;
+  if (last && last._fullText != null && !last._userToggled) {
+    last._autoExpanded = true;
+    last._expanded = true;
+    renderBody(last, last._fullRole, last._fullText);
+  }
 }
 
 // ── Infinite scroll for older history (🎯T57) ─────────────────────────
