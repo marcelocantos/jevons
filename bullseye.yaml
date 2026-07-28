@@ -1472,6 +1472,44 @@ targets:
     origin: manual
     discovered: 2026-03-08
     achieved: 2026-07-18
+  T60:
+    name: Overseer can reconnect dropped MCP servers mid-session without leaving the chat
+    status: identified
+    value: 8.0
+    cost: 5.0
+    acceptance:
+    - From inside a live overseer conversation, a callable control reconnects all configured MCP servers and/or a named server (not only via Grok TUI /mcps Space/r).
+    - After reconnect, tools from a previously-dropped server (e.g. github, gmail) are callable again in the same session — no session rotate and no manual TUI hop.
+    - A hermetic or live check fails if mid-session reconnect is a no-op or only works on session/new.
+    context: 'Product brief 2026-07-28. Boot attach is solved (T50/T58: user-scoped ~/.grok/config.toml + session/load). Mid-session drops (daemon restart of an HTTP MCP, flaky stdio server) leave servers gone until TUI /mcps refresh or a fresh session. Jevons is MCP producer-only; Grok CLI owns client attach. Need session-level reconnect the overseer can invoke.'
+    tags:
+    - mcp
+    - grok
+    - overseer
+    - resilience
+    - week-of-use
+    origin: manual
+    discovered: 2026-07-28
+  T61:
+    name: Worker replies reach the overseer — a directed worker's completion is delivered, not silently dropped
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - When the overseer directs a spawned worker, the worker's completed reply is delivered back to the overseer conversation (the 'you will be notified when it responds' promise holds) for Grok workers.
+    - 'The notify trigger fires on a terminal assistant stop (Event.IsTerminalStop: end_turn/stop_sequence/max_tokens), not on a ''system'' event that Grok never emits.'
+    - Mid-turn tool_use pauses and streaming chunks do NOT fire an early/partial notification; the full turn's text accumulates and delivers once at terminal stop.
+    - A unit test drives an event sequence through the agent event sink and asserts delivery on terminal stop and non-delivery on system/tool_use/streaming.
+    - 'Verified live: overseer directs a worker, worker finishes, overseer receives the ''[Agent <name> responded]'' notification with the reply.'
+    context: 'Owner hit this 2026-07-28: directed jevons-po, the work happened but the overseer never reported completion; the follow-up turn stalled. Root cause: mcpserver.wireAgentEvents flushed the accumulated worker reply and called notify only on a ''system'' event — a Claude-harness turn-complete signal. After the Grok-only migration, workers signal completion with a terminal assistant event (end_turn) and never emit ''system'', so replies accumulated but were never delivered. The T46 CEO-loop e2e stayed green because it exercises the butler reply path, not this async spawn+direct notify seam.'
+    tags:
+    - chat
+    - agents
+    - regression
+    - grok
+    - oracle-first
+    origin: manual
+    discovered: 2026-07-28
   T7:
     name: Mobile app for Jevon
     status: converging
