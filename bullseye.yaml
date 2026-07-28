@@ -1513,7 +1513,7 @@ targets:
     achieved: 2026-07-28
   T62:
     name: Async overseer notifications survive an overseer-busy collision — queued and delivered, never dropped on 'prompt already in flight'
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1532,6 +1532,7 @@ targets:
     - oracle-first
     origin: manual
     discovered: 2026-07-28
+    achieved: 2026-07-28
   T7:
     name: Mobile app for Jevon
     status: converging
