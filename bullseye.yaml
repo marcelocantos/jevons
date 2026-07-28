@@ -1511,6 +1511,27 @@ targets:
     origin: manual
     discovered: 2026-07-28
     achieved: 2026-07-28
+  T62:
+    name: Async overseer notifications survive an overseer-busy collision — queued and delivered, never dropped on 'prompt already in flight'
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'A worker reply (or budget alert) triggered while the overseer is mid-turn is NOT dropped: SendToOverseer queues it and it is delivered once the overseer''s current turn completes.'
+    - Delivery is verified by the note actually landing in the overseer's conversation/transcript and being surfaced in chat — NOT merely by a server-side 'notifying jevon' log line (the machinery firing is not the outcome).
+    - Multiple notes that pile up while busy are coalesced and delivered without loss or duplication; order preserved.
+    - 'Unit tests drive the queue via a stubbed sender: queued-while-busy then delivered on drain, immediate delivery when idle, and survival of a transient send failure.'
+    - 'Verified live: with the overseer busy, dispatch a worker; when the overseer next goes idle it receives ''[Agent <name> responded] ...'' in its own session and reports the reply unprompted (no transcript scavenging).'
+    context: 'Owner caught this 2026-07-28 after T61: the overseer itself reported it had to scavenge jevons-po''s transcript because ''no reply was pushed back into this overseer session''. Daemon log confirmed: ''notifying jevon agent=jevons-po'' immediately followed by ERROR ''notify jevon failed: grok acp: prompt already in flight''. SendToOverseer→proc.Send fails when the overseer''s single-prompt ACP session is mid-turn, and the note was logged-then-dropped (violating the repo''s no-silent-fail-sends rule). T61''s live validation was insufficient — it checked the notify log line (machinery), not the note landing in the overseer session (outcome). Fix: queue notes, drain on turn-complete (HandleAgentEvent), coalesce, requeue on failure.'
+    tags:
+    - chat
+    - agents
+    - regression
+    - grok
+    - durability
+    - oracle-first
+    origin: manual
+    discovered: 2026-07-28
   T7:
     name: Mobile app for Jevon
     status: converging
