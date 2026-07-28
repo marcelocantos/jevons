@@ -1535,7 +1535,7 @@ targets:
     achieved: 2026-07-28
   T63:
     name: Only genuine user turns render as chat bubbles; agent/system notifications fold into an informative activity strip
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1551,6 +1551,24 @@ targets:
     - chat
     - ux
     - wire
+    origin: manual
+    discovered: 2026-07-28
+    achieved: 2026-07-28
+  T64:
+    name: Activity-strip tool steps show a short argument summary, not just the tool name
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'A tool step in the activity strip shows a brief arg summary alongside the tool name (e.g. ''search_tool: jevonsmcp agent list''), parsed from the ACP tool_call rawInput.'
+    - Requires claudia to preserve rawInput on Event.Raw for tool_call session/updates (claudia currently re-marshals a struct that drops it) — a claudia change + release + jevons bump.
+    - chat_wire.go toolCallDetail returns the input map when present; the existing wire/Playwright tests cover a step rendering name + arg summary.
+    context: 'Follow-up from 🎯T63: activity steps now show the real tool name, but not its arguments, because claudia''s grok_acp.go handleSessionUpdate re-marshals a struct without rawInput, so Event.Raw for a tool_call lacks the args. jevons already omits empty tool_use input and the client already summarises non-empty input; only the claudia-side rawInput preservation is missing.'
+    tags:
+    - visual
+    - web
+    - chat
+    - claudia
     origin: manual
     discovered: 2026-07-28
   T7:
