@@ -172,6 +172,28 @@ func (s *Server) wireAgentEvents(name string, proc *claudia.Agent) {
 	proc.SubscribeEvents(s.agentEventSink(name))
 }
 
+// WireRunningAgents subscribes the completion-notify sink for every
+// currently-running agent except the overseer. Agents auto-started at boot
+// via registry.StartAll are launched WITHOUT going through handleAgentStart,
+// so their events were never wired — a worker that existed before a restart
+// (e.g. a resumed jevons-po) would finish its work but its reply would never
+// reach the overseer. Call once after StartAll (🎯T61). The overseer is
+// excluded because it gets its own event stream via Server.AttachOverseer.
+func (s *Server) WireRunningAgents(overseerName string) {
+	if s.registry == nil {
+		return
+	}
+	for _, def := range s.registry.List() {
+		if def.Name == overseerName {
+			continue
+		}
+		if proc := s.registry.Get(def.Name); proc != nil && proc.Alive() {
+			s.wireAgentEvents(def.Name, proc)
+			slog.Info("wired completion-notify for auto-started agent", "agent", def.Name)
+		}
+	}
+}
+
 // agentEventSink returns the per-agent event handler: it broadcasts every
 // event to the web UI, accumulates the turn's assistant text (across any
 // mid-turn tool_use pauses), and notifies the overseer once the turn
