@@ -397,6 +397,12 @@ func main() {
 		}
 		mcpSrv.SetNotify(send)
 
+		// Wire completion-notify for workers auto-started by StartAll above
+		// (🎯T61): unlike MCP-tool spawns, they never passed through
+		// handleAgentStart, so without this a resumed worker's reply would
+		// never reach the overseer.
+		mcpSrv.WireRunningAgents(cfg.OverseerName)
+
 		// No recap needed: the overseer resumes its real session on
 		// restart (via config.toml MCP tools that survive session/load,
 		// 🎯T58), so the model already has full context. The recap-on-boot

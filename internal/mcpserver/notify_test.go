@@ -80,6 +80,13 @@ func TestAgentEventSinkIgnoresSystemEvent(t *testing.T) {
 	}
 }
 
+// WireRunningAgents on a server with no registry is a safe no-op (called
+// at boot before/without a registry in degraded modes).
+func TestWireRunningAgentsNoRegistryIsSafe(t *testing.T) {
+	s := &Server{}
+	s.WireRunningAgents("jevons")
+}
+
 // A worker reply with no notify sink must not panic — the daemon may not
 // have attached the overseer yet.
 func TestNotifyWithoutSinkIsSafe(t *testing.T) {
