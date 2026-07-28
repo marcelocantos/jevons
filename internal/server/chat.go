@@ -476,11 +476,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 
 		slog.Info("chat: received", "msg", msg)
-		// Echo the user turn into the transcript. Grok ACP does not
-		// publish a user event for client prompts, and the browser
-		// only renders user bubbles from the wire (not optimistically).
+		// Echo the clean owner turn into the transcript as the single source
+		// of the owner bubble; the ACP echo of the same turn (which arrives
+		// prefixed) is dropped by chatWireLine to avoid a duplicate.
 		s.BroadcastChat(chatUserEcho(msg))
-		if err := s.SendToOverseer(msg); err != nil {
+		// Deliver to the overseer with the userTurnPrefix marker so the wire
+		// layer can tell owner turns from injected notifications, and the
+		// overseer can relay per the owner's instructions (🎯T63).
+		if err := s.SendToOverseer(userTurnPrefix + msg); err != nil {
 			// A refused/failed send must be visible on the wire, not just
 			// in the server log (🎯T49; live drill found "prompt already
 			// in flight" vanishing silently). Broadcast so every client —
