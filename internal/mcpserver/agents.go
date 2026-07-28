@@ -169,30 +169,47 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 // It broadcasts to the web UI and notifies Jevon when the agent
 // produces a text response.
 func (s *Server) wireAgentEvents(name string, proc *claudia.Agent) {
+	proc.SubscribeEvents(s.agentEventSink(name))
+}
+
+// agentEventSink returns the per-agent event handler: it broadcasts every
+// event to the web UI, accumulates the turn's assistant text (across any
+// mid-turn tool_use pauses), and notifies the overseer once the turn
+// reaches a terminal stop.
+//
+// A Grok worker signals turn completion with a terminal *assistant* event
+// (StopReason end_turn/stop_sequence/max_tokens — Event.IsTerminalStop),
+// NOT a "system" event. The original code keyed the flush on a "system"
+// event, a Claude-harness concept that Grok never emits, so worker replies
+// accumulated but were never delivered — the overseer's "you will be
+// notified when it responds" promise silently failed for every worker
+// (🎯T61). Keying on IsTerminalStop is what actually delivers the reply.
+func (s *Server) agentEventSink(name string) func(claudia.Event) {
 	var mu sync.Mutex
 	var responseText strings.Builder
 
-	proc.SubscribeEvents(func(ev claudia.Event) {
+	return func(ev claudia.Event) {
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
 
 		mu.Lock()
 		defer mu.Unlock()
 
-		switch ev.Type {
-		case "assistant":
-			if ev.Text != "" {
-				responseText.WriteString(ev.Text)
-			}
-		case "system":
-			// Turn complete — notify Jevon with the accumulated response.
+		// Accumulate assistant text first so a terminal event that also
+		// carries its last content block is included before we flush.
+		if ev.Type == "assistant" && ev.Text != "" {
+			responseText.WriteString(ev.Text)
+		}
+		// tool_use pauses are mid-turn (the worker will continue after tool
+		// results); only a terminal stop ends the turn and delivers.
+		if ev.IsTerminalStop() {
 			text := responseText.String()
 			responseText.Reset()
 			if text != "" {
 				s.notify(name, text)
 			}
 		}
-	})
+	}
 }
 
 // notify injects an agent response notification into Jevon's PTY.
