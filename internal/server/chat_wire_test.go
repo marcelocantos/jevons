@@ -44,18 +44,34 @@ func TestChatWireLineGrokACPShapes(t *testing.T) {
 			wantStop: "end_turn",
 		},
 		{
-			name:     "user text",
-			ev:       claudia.Event{Type: "user", Text: "hi", Raw: acpUserRaw},
-			wantOK:   true,
-			wantType: "user",
-			wantText: `"content":"hi"`,
+			// A genuine owner turn (userTurnPrefix) echoed by ACP is dropped:
+			// chatUserEcho already rendered the clean bubble (🎯T63).
+			name:   "prefixed owner turn suppressed",
+			ev:     claudia.Event{Type: "user", Text: userTurnPrefix + "hi", Raw: acpUserRaw},
+			wantOK: false,
 		},
 		{
-			name:     "progress tool_use",
+			// An unprefixed user-role turn is an injected notification →
+			// agent_note (activity strip), never a bubble.
+			name:     "unprefixed note becomes agent_note",
+			ev:       claudia.Event{Type: "user", Text: "[Agent po responded]\nPONG", Raw: acpUserRaw},
+			wantOK:   true,
+			wantType: "agent_note",
+			wantText: `"text":"[Agent po responded]`,
+		},
+		{
+			name:     "progress tool_use shows real tool name",
 			ev:       claudia.Event{Type: "progress", ProgressType: "tool_use", Raw: acpToolRaw},
 			wantOK:   true,
 			wantType: "assistant",
-			wantText: `"type":"tool_use"`,
+			wantText: `"name":"Bash"`,
+		},
+		{
+			// tool_call_update status frames are skipped to avoid duplicate
+			// activity rows for one tool call.
+			name:   "tool_call_update skipped",
+			ev:     claudia.Event{Type: "progress", ProgressType: "tool_use", Raw: []byte(`{"update":{"sessionUpdate":"tool_call_update","title":"Bash: ls"}}`)},
+			wantOK: false,
 		},
 		{
 			name:   "empty assistant non-terminal dropped",

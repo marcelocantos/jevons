@@ -1533,6 +1533,26 @@ targets:
     origin: manual
     discovered: 2026-07-28
     achieved: 2026-07-28
+  T63:
+    name: Only genuine user turns render as chat bubbles; agent/system notifications fold into an informative activity strip
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Genuine user messages are delivered to the overseer with a [user]\n discriminator prefix; they render as user bubbles with the prefix elided.
+    - Agent/system notifications ([Agent <name> responded] worker replies, budget alerts) do NOT render as chat bubbles — they are emitted as a distinct wire event (agent_note) and folded into the left-side activity indicators of the turn they trigger, still journaled for durability.
+    - 'The overseer decides what to relay to the user: only its own assistant turns surface as bubbles; the raw notifications are invisible except in the activity strip. Persona instructs it that user turns are [user]-prefixed and worker replies are notifications the user does not see.'
+    - 'The activity indicators are informative: a tool step shows the real tool name and a short arg summary (parsed from the ACP tool_call title/rawInput), not a bare ''tool_use:''; an agent-note step shows the agent and a gist.'
+    - chat_wire.go and chat_events.js stay in sync and are covered by the hermetic Node test; a Playwright check confirms notifications never appear as bubbles, user bubbles show clean text, and steps show real tool names.
+    context: 'Owner 2026-07-28: does not want worker→overseer notifications ([Agent X responded]) shown as chat messages. It is the top-level agent''s job to relay to the user per their instructions. Proposed mechanism: a [user]\\n prefix on genuine user messages so the system can discriminate; show user messages with prefix elided, hide the rest in the ''... n steps'' activity indicators. Owner also flagged those indicators as useless (bare ''tool_use:'' with no tool name) — root cause: chat_wire.go emits name=ev.ProgressType (''tool_use'') and empty input instead of parsing the ACP tool_call title/rawInput in ev.Raw.'
+    tags:
+    - visual
+    - web
+    - chat
+    - ux
+    - wire
+    origin: manual
+    discovered: 2026-07-28
   T7:
     name: Mobile app for Jevon
     status: converging

@@ -333,6 +333,14 @@ function handle(m) {
 
   const msgTs = m.timestamp ? new Date(m.timestamp).getTime() : Date.now();
 
+  if (typ==='agent_note') {
+    // Injected agent/system notification (worker reply, budget alert). The
+    // owner never sees these as chat bubbles — the overseer decides what to
+    // relay. Fold into the turn's activity strip only (🎯T63).
+    addTurnItem('agent-note', formatAgentNote(m.text || ''));
+    return;
+  }
+
   if (typ==='user') {
     const content = m.message?.content;
     if (typeof content === 'string') {
@@ -463,6 +471,15 @@ function closeTurn() {
   // else: leave the compact marker in place; hover reveals the detail.
   turnDetails = null;
   turnItems = null;
+}
+
+// formatAgentNote renders an injected notification as a compact activity
+// line: "[Agent jevons-po responded]\nPONG" → "jevons-po → PONG". Falls
+// back to a trimmed one-liner for other notes (e.g. budget alerts).
+function formatAgentNote(text) {
+  const m = text.match(/^\[Agent (.+?) responded\]\s*([\s\S]*)$/);
+  if (m) return m[1] + ' → ' + truncate(m[2].replace(/\s+/g, ' ').trim(), 80);
+  return truncate(text.replace(/\s+/g, ' ').trim(), 100);
 }
 
 function addTurnItem(cls, text) {
