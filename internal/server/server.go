@@ -83,6 +83,15 @@ type Server struct {
 
 	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
 	tokenLimiter *tokenRateLimiter
+
+	// Async notifications (worker replies, budget alerts) bound for the
+	// overseer. Its ACP session takes one prompt at a time, so a note that
+	// arrives mid-turn is queued here and flushed on the next turn-complete
+	// rather than dropped (🎯T62). Guarded by mu. notifySender is the
+	// delivery seam (nil = live overseer process); overridable in tests.
+	notifyQueue    []string
+	notifyDraining bool
+	notifySender   func(string) error
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -172,6 +181,13 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		s.turnBuf = ""
 		s.waiting = false
 		s.mu.Unlock()
+		// The overseer's ACP session is now idle — flush any async notes
+		// (worker replies, budget alerts) that arrived while it was busy and
+		// got "prompt already in flight". Runs on every terminal stop, even
+		// the completion of a note-injected turn, so a backlog drains one
+		// note-batch per turn (🎯T62). Deferred so it also fires on the
+		// !wasWaiting early return below.
+		defer s.drainOverseerNotes()
 		if !wasWaiting {
 			return
 		}

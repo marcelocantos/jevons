@@ -108,11 +108,63 @@ func (s *Server) SendToOverseer(text string) error {
 	if s.activityHook != nil {
 		s.activityHook()
 	}
+	// Queue rather than send directly: the overseer's ACP session handles
+	// one prompt at a time, so a note delivered while it is mid-turn returns
+	// "prompt already in flight". Historically that error was logged and the
+	// note DROPPED — silently losing worker replies (🎯T62). Enqueue and try
+	// to drain; anything not delivered now is retried on the next
+	// turn-complete (HandleAgentEvent).
+	s.mu.Lock()
+	s.notifyQueue = append(s.notifyQueue, text)
+	s.mu.Unlock()
+	s.drainOverseerNotes()
+	return nil
+}
+
+// sendNotes delivers one coalesced note batch to the overseer. The
+// notifySender seam lets tests stub delivery; nil uses the live process.
+func (s *Server) sendNotes(text string) error {
+	if s.notifySender != nil {
+		return s.notifySender(text)
+	}
 	proc := s.CurrentProcess()
 	if proc == nil || !proc.Alive() {
 		return fmt.Errorf("overseer not running")
 	}
 	return proc.Send(text)
+}
+
+// drainOverseerNotes attempts to deliver all queued async notifications to
+// the overseer as a single coalesced prompt. If the overseer is busy
+// ("prompt already in flight") or otherwise unreachable, the batch is
+// requeued at the front and left for the next turn-complete to retry —
+// nothing is dropped. A drain-in-progress guard serializes concurrent
+// callers (a worker reply and a turn-complete can race). Called from
+// SendToOverseer (new note) and HandleAgentEvent (overseer went idle).
+func (s *Server) drainOverseerNotes() {
+	s.mu.Lock()
+	if s.notifyDraining || len(s.notifyQueue) == 0 {
+		s.mu.Unlock()
+		return
+	}
+	batch := s.notifyQueue
+	s.notifyQueue = nil
+	s.notifyDraining = true
+	s.mu.Unlock()
+
+	err := s.sendNotes(strings.Join(batch, "\n\n"))
+
+	s.mu.Lock()
+	s.notifyDraining = false
+	if err != nil {
+		// Overseer busy or down — put the batch back at the front so order
+		// is preserved, and wait for the next turn-complete to retry.
+		s.notifyQueue = append(batch, s.notifyQueue...)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		slog.Debug("overseer busy; notes deferred to next turn", "deferred", len(batch), "err", err)
+	}
 }
 
 // handleCost serves the live cost snapshot: burn-rates, the "what is
