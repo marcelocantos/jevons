@@ -120,6 +120,27 @@
     return state.working;
   }
 
+  // followAfterPin models stick-to-bottom: while following, content growth
+  // must keep us at the bottom; a tiny shortfall must not disable follow
+  // when the pin flag is set (matches scrollDown _pinningScroll).
+  function shouldStayFollowing(args) {
+    const slack = args.slackPx == null ? 120 : args.slackPx;
+    if (args.pinning) return true;
+    return args.scrollTop + args.clientHeight >= args.scrollHeight - slack;
+  }
+
+  // Pure scroll pin: after content height grows, scrollTop becomes
+  // scrollHeight - clientHeight when following.
+  function pinFollow(state) {
+    if (!state.following) return state;
+    return {
+      following: true,
+      scrollTop: Math.max(0, state.scrollHeight - state.clientHeight),
+      clientHeight: state.clientHeight,
+      scrollHeight: state.scrollHeight,
+    };
+  }
+
   return {
     stopReason,
     isTerminalStop,
@@ -130,6 +151,8 @@
     createTurnState,
     applyChatEvent,
     applyChatEvents,
+    shouldStayFollowing,
+    pinFollow,
     TERMINAL_STOPS,
   };
 }));

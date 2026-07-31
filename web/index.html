@@ -446,6 +446,9 @@ function sealAssistantStream() {
     renderBody(el, 'jevons', raw);              // render draws mermaid (🎯T59)
     scheduleLatestExpansion();
   }
+  // Final layout (markdown / mermaid) often grows after the last stream
+  // pin — re-follow so the user never needs a manual nudge to see the end.
+  scrollDownThrottled();
 }
 
 function startTurn() {
@@ -579,6 +582,7 @@ function renderMermaidIn(container) {
       wrap.className = 'mermaid-diagram';
       wrap.innerHTML = svg;
       if (host.parentNode) host.replaceWith(wrap);
+      scrollDownThrottled();
     }).catch(() => {
       // Invalid diagram — leave the code block; sweep any temp render node
       // mermaid may have appended to <body> (id or 'd'+id).
@@ -865,15 +869,27 @@ setInterval(refreshCost, 3000);
 refreshCost();
 
 let autoScroll = true;
+// Ignore scroll events caused by our own pin so a 1px shortfall cannot
+// permanently disable follow (Grok-CLI-like stick-to-bottom).
+let _pinningScroll = false;
+const FOLLOW_SLACK_PX = 120;
 msgs.addEventListener('scroll', () => {
-  autoScroll = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - 30;
+  if (_pinningScroll) return;
+  autoScroll = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - FOLLOW_SLACK_PX;
 });
 function scrollDown() {
   if (!autoScroll) return;
-  msgs.scrollTop = msgs.scrollHeight;
-  // Re-pin after layout settles — markdown/timestamps can grow the
-  // content height after the synchronous append, leaving us short.
-  requestAnimationFrame(() => { if (autoScroll) msgs.scrollTop = msgs.scrollHeight; });
+  _pinningScroll = true;
+  const pin = () => { msgs.scrollTop = msgs.scrollHeight; };
+  pin();
+  // Double-rAF catches late markdown/table layout after the append.
+  requestAnimationFrame(() => {
+    pin();
+    requestAnimationFrame(() => {
+      pin();
+      _pinningScroll = false;
+    });
+  });
 }
 // scrollDownThrottled coalesces scroll requests to one per animation
 // frame, so a burst replay of many messages forces one layout, not one
@@ -882,6 +898,13 @@ let _scrollRaf = 0;
 function scrollDownThrottled() {
   if (_scrollRaf) return;
   _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; scrollDown(); });
+}
+// When follow is on, any content height growth (mermaid SVG, expand,
+// stream seal) re-pins — covers async layout that outlives double-rAF.
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => {
+    if (autoScroll) scrollDownThrottled();
+  }).observe(msgs);
 }
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }
@@ -940,9 +963,10 @@ function setEditingHighlight(el) {
 function send() {
   const t = input.value.trim();
   if (!t) return;
-  // If a turn is still in flight (no reply yet), cancel it and resubmit
-  // the edited message. Interrupt first; claudia's Send waits for the
-  // TUI to return to ready before it types, so the ordering is safe.
+  // Cancel-and-send (Grok CLI "send now"): server serialises — if a turn
+  // is in flight it interrupts, waits for idle, then prompts. Optional
+  // client interrupt starts cancel early; the server still waits before
+  // the replacement prompt so "prompt already in flight" cannot race.
   if (workingEl) transport.send('{"type":"interrupt"}');
   transport.send(t);
   input.value = '';

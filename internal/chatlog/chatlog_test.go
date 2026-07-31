@@ -10,6 +10,75 @@ import (
 	"testing"
 )
 
+func TestSealLinesCoalescesTokenStream(t *testing.T) {
+	raw := []string{
+		`{"type":"user","message":{"content":"hi"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Hel"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"lo"}]}}`,
+		`{"type":"assistant","message":{"content":[],"stop_reason":"end_turn"}}`,
+		`{"type":"user","message":{"content":"bye"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}}`,
+	}
+	got := SealLines(raw)
+	if len(got) != 4 {
+		t.Fatalf("sealed %d lines %v, want 4 (user, asst, user, asst)", len(got), got)
+	}
+	if !strings.Contains(got[1], "Hello") {
+		t.Fatalf("first assistant not coalesced: %s", got[1])
+	}
+	if !strings.Contains(got[1], "end_turn") {
+		t.Fatalf("first assistant missing stop: %s", got[1])
+	}
+	if !strings.Contains(got[3], "ok") {
+		t.Fatalf("second assistant: %s", got[3])
+	}
+}
+
+func TestSealLinesDropsToolOnlyMidFrames(t *testing.T) {
+	raw := []string{
+		`{"type":"user","message":{"content":"x"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}`,
+	}
+	got := SealLines(raw)
+	if len(got) != 2 {
+		t.Fatalf("got %d %v, want user+sealed asst", len(got), got)
+	}
+	if strings.Contains(got[1], "tool_use") {
+		t.Fatalf("tool frame leaked into sealed: %s", got[1])
+	}
+}
+
+func TestReplayTailSeals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j.jsonl")
+	l, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	for _, ln := range []string{
+		`{"type":"user","message":{"content":"a"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"1"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"2"}]}}`,
+		`{"type":"assistant","message":{"content":[],"stop_reason":"end_turn"}}`,
+	} {
+		if err := l.Append(ln); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	_, _, err = l.ReplayTail(30, func(line string) error { got = append(got, line); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("replay sealed %d frames, want 2: %v", len(got), got)
+	}
+	if !strings.Contains(got[1], "12") {
+		t.Fatalf("coalesced text missing: %s", got[1])
+	}
+}
+
 func TestAppendSurvivesReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "chatlog", "jevons.jsonl")
 	l, err := Open(path)

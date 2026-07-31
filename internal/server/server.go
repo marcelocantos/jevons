@@ -64,6 +64,13 @@ type Server struct {
 	turnBuf   string // accumulates Jevon text for current turn
 	waiting   bool   // true while awaiting a response from Jevon
 
+	// overseerInFlight is true between a successful ACP session/prompt
+	// and its terminal stop. Owner cancel-and-send waits on this so a
+	// second prompt is never issued while promptID is still set.
+	// idleWaiters are closed when the overseer becomes idle.
+	overseerInFlight bool
+	idleWaiters      []chan struct{}
+
 	lanSrv         *pigeon.LANServer // LAN server for direct connections
 	creds          *CredentialStore
 	openAIKey      string
@@ -92,6 +99,11 @@ type Server struct {
 	notifyQueue    []string
 	notifyDraining bool
 	notifySender   func(string) error
+
+	// ownerSend / ownerInterrupt are test seams for cancel-and-send
+	// (nil = live claudia.Agent process).
+	ownerSend      func(string) error
+	ownerInterrupt func() error
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -180,7 +192,13 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		turnText := s.turnBuf
 		s.turnBuf = ""
 		s.waiting = false
+		s.overseerInFlight = false
+		waiters := s.idleWaiters
+		s.idleWaiters = nil
 		s.mu.Unlock()
+		for _, ch := range waiters {
+			close(ch)
+		}
 		// The overseer's ACP session is now idle — flush any async notes
 		// (worker replies, budget alerts) that arrived while it was busy and
 		// got "prompt already in flight". Runs on every terminal stop, even

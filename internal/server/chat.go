@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/chatlog"
 )
 
 // defaultOverseerName is the fallback registry name of the persistent
@@ -51,6 +52,8 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"history read failed"}`, http.StatusInternalServerError)
 		return
 	}
+	// Seal token streams so "load earlier" matches connect replay.
+	lines = chatlog.SealLines(lines)
 	raw := make([]json.RawMessage, len(lines))
 	for i, ln := range lines {
 		raw[i] = json.RawMessage(ln)
@@ -89,15 +92,123 @@ func (s *Server) AttachOverseer(agent *claudia.Agent) {
 // to the chat wire shape, broadcast to /ws/chat listeners, then update
 // turn/idle status. Extracted so tests can drive the same path without
 // a live claudia.Agent.
+//
+// Live clients receive streaming assistant chunks. The durable journal
+// records sealed turns only (full assistant text + stop_reason on
+// end_turn) so reconnect does not replay every token frame.
 func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
-	// Normalise ACP/raw provider events into the stable chat wire
-	// shape the web UI understands (🎯T39). Raw ACP payloads have
-	// no type/message.content, so a pass-through leaves the
-	// working indicator stuck forever.
-	if line, ok := chatWireLine(ev); ok {
-		s.BroadcastChat(line)
+	line, ok := chatWireLine(ev)
+	if ok {
+		switch {
+		case ev.Type == "assistant" && ev.Text != "" && !ev.IsTerminalStop():
+			// Mid-stream token: live only — not journaled.
+			s.broadcastChatLive(line)
+		case ev.Type == "assistant" && ev.IsTerminalStop():
+			// Seal accumulated turn text into the journal once; live
+			// clients still get the terminal frame for working-clear.
+			s.mu.RLock()
+			full := s.turnBuf + ev.Text
+			s.mu.RUnlock()
+			if full != "" {
+				if sealed, sok := chatWireSealedAssistant(full, ev.StopReason); sok {
+					s.journalOnly(sealed)
+				}
+			}
+			s.broadcastChatLive(line)
+		case ev.Type == "progress":
+			// Tool activity is live UI only — not part of sealed reconnect.
+			s.broadcastChatLive(line)
+		default:
+			s.BroadcastChat(line)
+		}
 	}
 	s.HandleAgentEvent(ev)
+}
+
+// ownerPromptIdleWait is how long cancel-and-send waits for ACP to
+// finish the cancelled turn before issuing the replacement prompt.
+const ownerPromptIdleWait = 20 * time.Second
+
+// DeliverOwnerPrompt sends an owner chat message with Grok-CLI semantics:
+// if a turn is in flight, cancel it, wait until idle, then prompt.
+// Returns an error when the overseer cannot accept the prompt (surfaced
+// on the wire — never a silent drop).
+func (s *Server) DeliverOwnerPrompt(text string) error {
+	if s.activityHook != nil {
+		s.activityHook()
+	}
+	payload := userTurnPrefix + text
+
+	s.mu.Lock()
+	busy := s.overseerInFlight
+	s.mu.Unlock()
+	if busy {
+		if err := s.doOwnerInterrupt(); err != nil {
+			slog.Warn("chat: interrupt before cancel-and-send", "err", err)
+		}
+		if err := s.waitOverseerIdle(ownerPromptIdleWait); err != nil {
+			return err
+		}
+	}
+
+	err := s.doOwnerSend(payload)
+	if err != nil && strings.Contains(err.Error(), "already in flight") {
+		_ = s.doOwnerInterrupt()
+		if werr := s.waitOverseerIdle(ownerPromptIdleWait); werr != nil {
+			return fmt.Errorf("%w (after cancel: %v)", err, werr)
+		}
+		err = s.doOwnerSend(payload)
+	}
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.overseerInFlight = true
+	s.waiting = true
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Server) doOwnerSend(payload string) error {
+	if s.ownerSend != nil {
+		return s.ownerSend(payload)
+	}
+	proc := s.CurrentProcess()
+	if proc == nil || !proc.Alive() {
+		return fmt.Errorf("overseer not running")
+	}
+	return proc.Send(payload)
+}
+
+func (s *Server) doOwnerInterrupt() error {
+	if s.ownerInterrupt != nil {
+		return s.ownerInterrupt()
+	}
+	proc := s.CurrentProcess()
+	if proc == nil {
+		return nil
+	}
+	return proc.Interrupt()
+}
+
+// waitOverseerIdle blocks until overseerInFlight is false or timeout.
+func (s *Server) waitOverseerIdle(d time.Duration) error {
+	s.mu.Lock()
+	if !s.overseerInFlight {
+		s.mu.Unlock()
+		return nil
+	}
+	ch := make(chan struct{})
+	s.idleWaiters = append(s.idleWaiters, ch)
+	s.mu.Unlock()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ch:
+		return nil
+	case <-t.C:
+		return fmt.Errorf("timeout waiting for overseer idle after cancel")
+	}
 }
 
 // SendToOverseer delivers text to the current overseer process.
@@ -160,6 +271,10 @@ func (s *Server) drainOverseerNotes() {
 		// Overseer busy or down — put the batch back at the front so order
 		// is preserved, and wait for the next turn-complete to retry.
 		s.notifyQueue = append(batch, s.notifyQueue...)
+	} else {
+		// Note batch became the in-flight prompt.
+		s.overseerInFlight = true
+		s.waiting = true
 	}
 	s.mu.Unlock()
 	if err != nil {
@@ -345,6 +460,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// demand via GET /api/history ("load earlier"); a history_meta frame
 	// tells the client how many older lines exist.
 	if clog != nil {
+		// ReplayTail already seals token streams into turn bubbles so
+		// reconnect does not materialize thousands of live-style frames.
 		start, total, err := clog.ReplayTail(historyReplayTurns, func(line string) error {
 			writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
@@ -456,6 +573,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 					slog.Error("chat: interrupt failed", "err", err)
 				}
 			}
+			// Working-clear on the client is immediate; server idle is
+			// marked when ACP emits the cancelled turn's terminal stop.
 			continue
 		}
 
@@ -480,10 +599,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// of the owner bubble; the ACP echo of the same turn (which arrives
 		// prefixed) is dropped by chatWireLine to avoid a duplicate.
 		s.BroadcastChat(chatUserEcho(msg))
-		// Deliver to the overseer with the userTurnPrefix marker so the wire
-		// layer can tell owner turns from injected notifications, and the
-		// overseer can relay per the owner's instructions (🎯T63).
-		if err := s.SendToOverseer(userTurnPrefix + msg); err != nil {
+		// Cancel-and-send when busy (Grok CLI "send now"); wait for idle
+		// then prompt. Never use the async note queue for owner turns.
+		if err := s.DeliverOwnerPrompt(msg); err != nil {
 			// A refused/failed send must be visible on the wire, not just
 			// in the server log (🎯T49; live drill found "prompt already
 			// in flight" vanishing silently). Broadcast so every client —
@@ -495,6 +613,19 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			})
 			s.BroadcastChat(string(payload))
 		}
+	}
+}
+
+// journalOnly appends to the durable chat log without live fan-out.
+func (s *Server) journalOnly(line string) {
+	s.mu.RLock()
+	clog := s.chatLog
+	s.mu.RUnlock()
+	if clog == nil || line == "" {
+		return
+	}
+	if err := clog.Append(line); err != nil {
+		slog.Error("chat: DURABILITY FAILURE — sealed turn append failed", "err", err)
 	}
 }
 

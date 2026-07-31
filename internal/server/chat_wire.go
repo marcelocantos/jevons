@@ -157,6 +157,29 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 	}
 }
 
+// chatWireSealedAssistant builds one journal assistant line for a full
+// completed turn (coalesced text + terminal stop_reason).
+func chatWireSealedAssistant(text, stopReason string) (string, bool) {
+	if stopReason == "" {
+		stopReason = "end_turn"
+	}
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	msg := map[string]any{
+		"role":        "assistant",
+		"content":     []map[string]any{{"type": "text", "text": text}},
+		"stop_reason": stopReason,
+	}
+	b, err := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": ts,
+		"message":   msg,
+	})
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
+}
+
 // chatUserEcho builds the user-bubble wire line for a client-sent
 // prompt. Grok ACP does not echo the prompt as a user event, so the
 // chat handler synthesises one before forwarding to the overseer.

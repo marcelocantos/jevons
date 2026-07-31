@@ -237,12 +237,49 @@ test('regression guard: hasText without stop must not clear', () => {
   assert.strictEqual(ChatEvents.shouldClearWorking(m), false);
 });
 
+// ── follow-scroll pin ───────────────────────────────────────────
+
+test('pinning scroll keeps following even with tiny shortfall', () => {
+  assert.strictEqual(ChatEvents.shouldStayFollowing({
+    pinning: true,
+    scrollTop: 100,
+    clientHeight: 400,
+    scrollHeight: 600, // 100 short of bottom
+    slackPx: 30,
+  }), true);
+});
+
+test('user scroll-up disables follow', () => {
+  assert.strictEqual(ChatEvents.shouldStayFollowing({
+    pinning: false,
+    scrollTop: 0,
+    clientHeight: 400,
+    scrollHeight: 2000,
+    slackPx: 120,
+  }), false);
+});
+
+test('pinFollow after content growth sits at bottom', () => {
+  let st = { following: true, scrollTop: 0, clientHeight: 500, scrollHeight: 500 };
+  st.scrollHeight = 900; // content grew
+  st = ChatEvents.pinFollow(st);
+  assert.strictEqual(st.scrollTop, 400);
+  assert.strictEqual(st.following, true);
+});
+
+test('index.html follow-scroll uses slack + seal re-pin', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('FOLLOW_SLACK_PX') || html.includes('_pinningScroll'), 'pin guard');
+  assert.ok(html.includes('ResizeObserver'), 'height growth re-pin');
+  assert.ok(html.includes('sealAssistantStream') && html.includes('scrollDownThrottled'), 'seal re-pins');
+});
+
 // ── Go package tests ────────────────────────────────────────────
 
-test('go chat wire + roundtrip tests pass', () => {
+test('go chat wire + owner prompt + seal tests pass', () => {
   const r = spawnSync('go', [
-    'test', './internal/server/', '-count=1',
-    '-run', 'TestChat|TestDeliver|TestHandleAgent|TestUIContract|TestMultiChunk',
+    'test', './internal/server/', './internal/chatlog/', '-count=1',
+    '-run', 'TestChat|TestDeliver|TestHandleAgent|TestUIContract|TestMultiChunk|TestJournal|TestDeliverOwner|TestSeal|TestReplayTail',
   ], {
     cwd: path.join(__dirname, '..', '..'),
     encoding: 'utf8',

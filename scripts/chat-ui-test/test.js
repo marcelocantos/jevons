@@ -85,7 +85,9 @@ function startStaticServer() {
 
 // Mock WebSocket that delivers a Grok-shaped multi-token turn on send.
 // Passed to page.addInitScript(fn, arg).
-function installMockWebSocket({ tokens }) {
+// history: optional sealed frames replayed on open (reconnect oracle).
+// cancelAndSend: if true, interrupt mid-stream then accept next send.
+function installMockWebSocket({ tokens, history, cancelAndSend }) {
   class MockWebSocket {
     static CONNECTING = 0;
     static OPEN = 1;
@@ -98,21 +100,43 @@ function installMockWebSocket({ tokens }) {
       this.onclose = null;
       this.onerror = null;
       this.onmessage = null;
+      this._cancelled = false;
+      this._timer = null;
       queueMicrotask(() => {
         this.readyState = MockWebSocket.OPEN;
         if (this.onopen) this.onopen({});
+        // Sealed history only on the chat socket — never on /ws/reload
+        // (any message there triggers location.reload() in the app).
+        // Delay so transport attaches onmessage after open.
+        if (history && history.length && String(url).includes('/ws/chat')) {
+          setTimeout(() => {
+            for (const fr of history) this._emit(fr);
+          }, 30);
+        }
       });
       window.__mockSockets = window.__mockSockets || [];
       window.__mockSockets.push(this);
+      window.__mockSendLog = window.__mockSendLog || [];
     }
     send(data) {
       window.__lastChatSend = data;
+      window.__mockSendLog.push(data);
       if (typeof data !== 'string') return;
       if (data === '{"type":"ping"}') {
         this._emit({ type: 'pong' });
         return;
       }
-      if (data.startsWith('{')) return; // control frames
+      if (data === '{"type":"interrupt"}') {
+        this._cancelled = true;
+        if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+        this._emit({
+          type: 'assistant',
+          message: { role: 'assistant', content: [], stop_reason: 'end_turn' },
+        });
+        return;
+      }
+      if (data.startsWith('{')) return; // other control frames
+      this._cancelled = false;
       this._emit({
         type: 'user',
         message: { role: 'user', content: data },
@@ -120,6 +144,7 @@ function installMockWebSocket({ tokens }) {
       // Stream tokens with delays so appendOrAddJevons runs per chunk.
       let i = 0;
       const step = () => {
+        if (this._cancelled) return;
         if (i < tokens.length) {
           const text = tokens[i++];
           this._emit({
@@ -129,7 +154,7 @@ function installMockWebSocket({ tokens }) {
               content: [{ type: 'text', text }],
             },
           });
-          setTimeout(step, 15);
+          this._timer = setTimeout(step, 15);
           return;
         }
         this._emit({
@@ -141,7 +166,7 @@ function installMockWebSocket({ tokens }) {
           },
         });
       };
-      setTimeout(step, 20);
+      this._timer = setTimeout(step, 20);
     }
     close() {
       this.readyState = MockWebSocket.CLOSED;
@@ -153,6 +178,7 @@ function installMockWebSocket({ tokens }) {
     }
   }
   window.WebSocket = MockWebSocket;
+  window.__CHAT_UI_TEST = { tokens, history, cancelAndSend };
 }
 
 async function assertChatPercept(page, { expectFull, label }) {
@@ -244,19 +270,111 @@ async function runHermetic() {
   const { srv, base } = await startStaticServer();
   const browser = await chromium.launch({ headless: !HEADED });
   try {
-    const page = await browser.newPage({ viewport: { width: 900, height: 800 } });
-    await page.addInitScript(installMockWebSocket, { tokens: TOKENS });
-    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
-    const { failures, snapshot } = await assertChatPercept(page, {
-      expectFull: FULL_REPLY,
-      label: 'hermetic',
-    });
-    if (failures.length) {
-      console.error('HERMETIC FAIL:\n - ' + failures.join('\n - '));
-      console.error(JSON.stringify(snapshot, null, 2));
-      process.exitCode = 1;
-    } else {
-      console.log('HERMETIC PASS', snapshot);
+    // --- stream coalesce ---
+    {
+      const page = await browser.newPage({ viewport: { width: 900, height: 800 } });
+      await page.addInitScript(installMockWebSocket, { tokens: TOKENS });
+      await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+      const { failures, snapshot } = await assertChatPercept(page, {
+        expectFull: FULL_REPLY,
+        label: 'hermetic',
+      });
+      if (failures.length) {
+        console.error('HERMETIC FAIL:\n - ' + failures.join('\n - '));
+        console.error(JSON.stringify(snapshot, null, 2));
+        process.exitCode = 1;
+      } else {
+        console.log('HERMETIC PASS', snapshot);
+      }
+      await page.close();
+    }
+
+    // --- cancel mid-stream then send replacement (cancel-and-send) ---
+    {
+      const page = await browser.newPage({ viewport: { width: 900, height: 800 } });
+      await page.addInitScript(installMockWebSocket, {
+        tokens: ['slow', ' ', 'reply'],
+        cancelAndSend: true,
+      });
+      await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(
+        () => document.getElementById('status-text')?.textContent === 'connected',
+        null,
+        { timeout: 10000 },
+      );
+      await page.locator('#input').fill('first');
+      await page.locator('#send').click();
+      await page.waitForSelector('.working-indicator', { timeout: 5000 });
+      // Correct while busy.
+      await page.locator('#input').fill('second-correction');
+      await page.locator('#send').click();
+      await page.waitForFunction(
+        () => !document.querySelector('.working-indicator'),
+        null,
+        { timeout: 15000 },
+      );
+      const users = await page.locator('#messages .msg.user').allInnerTexts();
+      const joined = users.join('\n');
+      if (!joined.includes('second-correction')) {
+        console.error('CANCEL-SEND FAIL: correction user bubble missing', users);
+        process.exitCode = 1;
+      } else {
+        console.log('CANCEL-SEND PASS', { users: users.map(u => u.replace(/\nnow.*/, '').trim()) });
+      }
+      await page.close();
+    }
+
+    // --- reconnect with sealed history only (not token explosion) ---
+    // Criterion 5 is primarily proven by chatlog.SealLines / ReplayTail
+    // Go tests; this check ensures the UI renders a small sealed window
+    // without exploding into hundreds of bubbles.
+    {
+      const sealedHistory = [];
+      for (let i = 0; i < 5; i++) {
+        sealedHistory.push({
+          type: 'user',
+          message: { role: 'user', content: 'u' + i },
+        });
+        sealedHistory.push({
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'a' + i }],
+            stop_reason: 'end_turn',
+          },
+        });
+      }
+      const page = await browser.newPage({ viewport: { width: 900, height: 800 } });
+      await page.addInitScript(installMockWebSocket, {
+        tokens: ['ok'],
+        history: sealedHistory,
+      });
+      await page.goto(base + '/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForFunction(
+        () => document.getElementById('status-text')?.textContent === 'connected',
+        null,
+        { timeout: 15000 },
+      );
+      await page.waitForFunction(
+        () => document.querySelectorAll('#messages .msg.user').length >= 5
+          && document.querySelectorAll('#messages .msg.jevons').length >= 5,
+        null,
+        { timeout: 10000 },
+      );
+      const counts = await page.evaluate(() => ({
+        user: document.querySelectorAll('#messages .msg.user').length,
+        jevons: document.querySelectorAll('#messages .msg.jevons').length,
+      }));
+      if (counts.user < 5 || counts.jevons < 5) {
+        console.error('RECONNECT-SEALED FAIL: expected ≥5+5 bubbles', counts);
+        process.exitCode = 1;
+      } else if (counts.user + counts.jevons > 30) {
+        console.error('RECONNECT-SEALED FAIL: too many bubbles (token replay?)', counts);
+        process.exitCode = 1;
+      } else {
+        console.log('RECONNECT-SEALED PASS', counts);
+      }
+      await page.close();
     }
   } finally {
     await browser.close();

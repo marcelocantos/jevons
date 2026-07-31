@@ -144,6 +144,10 @@ func (l *Log) snapshot() (lines []string, turnStarts []int, err error) {
 // with ReadRange (🎯T57 — capping replay is the big transfer/render win
 // on long histories). The durable log is untouched; only what the UI
 // materialises on connect is bounded.
+//
+// Lines are sealed (token streams coalesced into one assistant bubble
+// per turn) before fn is called so reconnect never re-processes every
+// historical stream frame as a live event.
 func (l *Log) ReplayTail(maxTurns int, fn func(line string) error) (start, total int, err error) {
 	lines, starts, err := l.snapshot()
 	if err != nil {
@@ -154,12 +158,115 @@ func (l *Log) ReplayTail(maxTurns int, fn func(line string) error) (start, total
 	if maxTurns > 0 && len(starts) > maxTurns {
 		cut = starts[len(starts)-maxTurns]
 	}
-	for _, ln := range lines[cut:] {
+	for _, ln := range SealLines(lines[cut:]) {
 		if err := fn(ln); err != nil {
 			return cut, total, err
 		}
 	}
 	return cut, total, nil
+}
+
+// SealLines coalesces a raw journal window into sealed reconnect frames:
+// consecutive assistant text chunks merge into one message; a following
+// empty end_turn attaches stop_reason; tool-only mid-turn frames are
+// dropped from reconnect materialization (live UI still saw them).
+func SealLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	var out []string
+	var asstText strings.Builder
+	var asstOpen bool
+	flushAsst := func(stop string) {
+		if !asstOpen && stop == "" {
+			return
+		}
+		text := asstText.String()
+		asstText.Reset()
+		asstOpen = false
+		if text == "" && stop == "" {
+			return
+		}
+		if stop == "" {
+			stop = "end_turn"
+		}
+		content := []any{}
+		if text != "" {
+			content = []any{map[string]any{"type": "text", "text": text}}
+		}
+		b, err := json.Marshal(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role":        "assistant",
+				"content":     content,
+				"stop_reason": stop,
+			},
+		})
+		if err != nil {
+			return
+		}
+		out = append(out, string(b))
+	}
+
+	for _, line := range lines {
+		var d struct {
+			Type    string `json:"type"`
+			Message struct {
+				StopReason string          `json:"stop_reason"`
+				Content    json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &d) != nil {
+			out = append(out, line)
+			continue
+		}
+		switch d.Type {
+		case "user", "error", "agent_note", "system", "rewound", "history_meta":
+			flushAsst("")
+			out = append(out, line)
+		case "assistant":
+			stop := d.Message.StopReason
+			var text string
+			var parts []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+				Name string `json:"name"`
+			}
+			var plain string
+			if json.Unmarshal(d.Message.Content, &plain) == nil {
+				text = plain
+			} else if json.Unmarshal(d.Message.Content, &parts) == nil {
+				onlyTools := true
+				for _, p := range parts {
+					if p.Type == "text" && p.Text != "" {
+						text += p.Text
+						onlyTools = false
+					} else if p.Type == "tool_use" {
+						// drop tool frames from sealed reconnect
+					} else {
+						onlyTools = false
+					}
+				}
+				if onlyTools && text == "" && stop == "" {
+					continue // skip tool-only mid-turn
+				}
+			}
+			if text != "" {
+				asstText.WriteString(text)
+				asstOpen = true
+			}
+			if stop == "end_turn" || stop == "stop_sequence" || stop == "max_tokens" {
+				flushAsst(stop)
+			} else if text == "" && stop == "" && !asstOpen {
+				// nothing
+			}
+		default:
+			flushAsst("")
+			out = append(out, line)
+		}
+	}
+	flushAsst("")
+	return out
 }
 
 // ReadRange returns the journal lines in [start, end) plus the total line
