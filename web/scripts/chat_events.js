@@ -40,6 +40,20 @@
     return assistantTextBlocks(m).length > 0;
   }
 
+  function hasToolUse(m) {
+    const content = m && m.message && m.message.content;
+    if (!Array.isArray(content)) return false;
+    return content.some(c => c && c.type === 'tool_use');
+  }
+
+  // Empty terminal = cancelled-turn marker (no text, no tools). Used so
+  // cancel-and-send can ignore the cancelled turn's end_turn without
+  // swallowing the replacement turn's terminal.
+  function isEmptyTerminal(m) {
+    if (!isTerminalStop(m)) return false;
+    return !hasAssistantText(m) && !hasToolUse(m);
+  }
+
   // shouldClearWorking: only end-of-turn signals. Mid-stream text chunks
   // must NOT clear — clearing early drops workingEl and used to force a
   // new bubble per token (the "Hello / . / What / do / you / need / ?"
@@ -52,6 +66,16 @@
     // Reject non-array content (raw ACP shapes).
     if (!Array.isArray(content)) return false;
     return TERMINAL_STOPS.has(stopReason(m));
+  }
+
+  // shouldSuppressWorkingClear: when cancel-and-send is armed, only the
+  // cancelled turn's empty end_turn is suppressed. A non-empty terminal
+  // (text or tools) always clears — so force-idle without a cancel
+  // end_turn cannot leave working stuck forever.
+  function shouldSuppressWorkingClear(armed, m) {
+    if (!armed) return false;
+    if (m && m.type === 'status' && m.state === 'cancel_settled') return true;
+    return isEmptyTerminal(m);
   }
 
   // Pure stream coalescer — models bubble count without DOM.
@@ -146,7 +170,10 @@
     isTerminalStop,
     assistantTextBlocks,
     hasAssistantText,
+    hasToolUse,
+    isEmptyTerminal,
     shouldClearWorking,
+    shouldSuppressWorkingClear,
     workingLifecycle,
     createTurnState,
     applyChatEvent,

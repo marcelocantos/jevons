@@ -172,6 +172,33 @@ func TestJournalSealsStreamNotTokenFrames(t *testing.T) {
 	}
 }
 
+// TestForceOverseerIdleBroadcastsCancelSettled so the UI can disarm
+// suppressNextWorkingClear when ACP never emits cancel end_turn.
+func TestForceOverseerIdleBroadcastsCancelSettled(t *testing.T) {
+	s := New("test", t.TempDir())
+	ch := make(chan string, 4)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.overseerInFlight = true
+	s.mu.Unlock()
+
+	s.forceOverseerIdle()
+
+	select {
+	case line := <-ch:
+		if !strings.Contains(line, "cancel_settled") {
+			t.Fatalf("expected cancel_settled frame, got %s", line)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no cancel_settled broadcast")
+	}
+	s.mu.RLock()
+	if s.overseerInFlight {
+		t.Fatal("still in flight after force")
+	}
+	s.mu.RUnlock()
+}
+
 // TestDeliverOwnerPromptRetryAfterInFlightError covers the race where
 // Send returns "already in flight" even after we thought we were idle.
 func TestDeliverOwnerPromptRetryAfterInFlightError(t *testing.T) {

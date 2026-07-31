@@ -183,6 +183,8 @@ func (s *Server) DeliverOwnerPrompt(text string) error {
 
 // forceOverseerIdle clears the local in-flight gate and wakes waiters.
 // Used when ACP cancel does not produce a terminal event in time.
+// Broadcasts cancel_settled so clients disarm suppressNextWorkingClear
+// without treating a missing cancel end_turn as the replacement terminal.
 func (s *Server) forceOverseerIdle() {
 	s.mu.Lock()
 	s.overseerInFlight = false
@@ -193,6 +195,11 @@ func (s *Server) forceOverseerIdle() {
 	for _, ch := range waiters {
 		close(ch)
 	}
+	payload, _ := json.Marshal(map[string]string{
+		"type":  "status",
+		"state": "cancel_settled",
+	})
+	s.broadcastChatLive(string(payload))
 }
 
 func (s *Server) doOwnerSend(payload string) error {

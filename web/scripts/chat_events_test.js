@@ -277,8 +277,40 @@ test('index.html follow-scroll uses slack + seal re-pin', () => {
 test('index.html suppressNextWorkingClear + error frame handling', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.includes('suppressNextWorkingClear'), 'cancel-and-send working race guard');
+  assert.ok(html.includes('shouldSuppressWorkingClear'), 'uses empty-terminal-only suppress');
+  assert.ok(html.includes('cancel_settled'), 'force-idle disarm');
   assert.ok(html.includes("typ === 'error'") || html.includes('typ===\'error\''), 'error frames handled');
   assert.ok(html.includes('message not delivered') || html.includes('m.error'), 'surfaces delivery error');
+});
+
+test('empty cancel terminal is suppressible; text/tool terminal is not', () => {
+  const emptyTerm = endTurn();
+  const textTerm = {
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' },
+  };
+  const toolMid = {
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', name: 'Bash' }] },
+  };
+  assert.strictEqual(ChatEvents.isEmptyTerminal(emptyTerm), true);
+  assert.strictEqual(ChatEvents.shouldSuppressWorkingClear(true, emptyTerm), true);
+  assert.strictEqual(ChatEvents.shouldSuppressWorkingClear(true, textTerm), false);
+  assert.strictEqual(ChatEvents.shouldSuppressWorkingClear(false, emptyTerm), false);
+  assert.strictEqual(ChatEvents.shouldSuppressWorkingClear(true, { type: 'status', state: 'cancel_settled' }), true);
+  assert.strictEqual(ChatEvents.hasToolUse(toolMid), true);
+});
+
+// After suppress consumes empty cancel, a later empty terminal clears.
+test('force-idle path: first empty terminal after disarm clears working', () => {
+  // Simulate: armed → cancel_settled disarms → empty end_turn must clear.
+  let armed = true;
+  const settled = { type: 'status', state: 'cancel_settled' };
+  if (ChatEvents.shouldSuppressWorkingClear(armed, settled)) armed = false;
+  assert.strictEqual(armed, false);
+  const term = endTurn();
+  assert.strictEqual(ChatEvents.shouldSuppressWorkingClear(armed, term), false);
+  assert.strictEqual(ChatEvents.shouldClearWorking(term), true);
 });
 
 // ── Go package tests ────────────────────────────────────────────
