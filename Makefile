@@ -67,9 +67,16 @@ test-ui-live:
 # Live scenario suite (🎯T51): drives a RUNNING jevonsd through the
 # owner flows. Deterministic tier only by default; see scripts/live-suite
 # flags for the overseer/spawn/restart/rewind scenarios.
+# WARNING: defaults to your daily :13705 / ~/.jevons — prefer test-journey.
 .PHONY: test-live-suite
 test-live-suite:
 	go run ./scripts/live-suite -skip-overseer
+
+# Isolated owner-chat user journeys (separate port + state dir + MCP name).
+# Does NOT touch daily-driver stream. Needs Grok CLI; not in default `test`.
+.PHONY: test-journey
+test-journey: jevonsd
+	go run ./scripts/journey-suite
 
 test: test-go test-web test-ui
 
