@@ -86,20 +86,53 @@ func TestDeliverOwnerPromptCancelAndSendOrdersCancelBeforePrompt(t *testing.T) {
 }
 
 // TestDeliverOwnerPromptSurfacesInFlightAfterTimeout: if cancel never
-// completes, the replacement surfaces an error (not silent drop).
+// completes, DeliverOwnerPrompt force-clears the local idle gate and
+// still attempts Send via the real entry point (Grok-CLI best-effort
+// cancel-and-send). If Send then fails with "already in flight", that
+// error is returned — never a silent drop.
 func TestDeliverOwnerPromptSurfacesInFlightAfterTimeout(t *testing.T) {
 	s := New("test", t.TempDir())
+	s.ownerIdleWait = 40 * time.Millisecond
 	s.mu.Lock()
 	s.overseerInFlight = true
 	s.mu.Unlock()
-	// No idle signal — wait should time out. Shrink wait via direct call.
+	// Interrupt acknowledged but ACP never signals idle.
 	s.ownerInterrupt = func() error { return nil }
-	s.ownerSend = func(string) error { t.Fatal("must not send while still in flight"); return nil }
 
-	// Use short wait by calling waitOverseerIdle directly.
-	err := s.waitOverseerIdle(50 * time.Millisecond)
+	// Case A: after force-idle, Send succeeds.
+	sends := 0
+	s.ownerSend = func(payload string) error {
+		sends++
+		if !strings.Contains(payload, "correction after stuck turn") {
+			t.Fatalf("unexpected payload %q", payload)
+		}
+		return nil
+	}
+	if err := s.DeliverOwnerPrompt("correction after stuck turn"); err != nil {
+		t.Fatalf("expected force-idle then send to succeed: %v", err)
+	}
+	if sends != 1 {
+		t.Fatalf("sends=%d want 1", sends)
+	}
+
+	// Case B: after force-idle, Send still fails — error must surface.
+	s.mu.Lock()
+	s.overseerInFlight = true
+	s.mu.Unlock()
+	sends = 0
+	s.ownerSend = func(string) error {
+		sends++
+		return fmt.Errorf("grok acp: prompt already in flight")
+	}
+	err := s.DeliverOwnerPrompt("second correction")
 	if err == nil {
-		t.Fatal("expected timeout")
+		t.Fatal("expected error when Send remains in flight after force-idle")
+	}
+	if !strings.Contains(err.Error(), "already in flight") {
+		t.Fatalf("error = %v, want already in flight", err)
+	}
+	if sends < 1 {
+		t.Fatal("DeliverOwnerPrompt must attempt Send (not silent drop)")
 	}
 }
 

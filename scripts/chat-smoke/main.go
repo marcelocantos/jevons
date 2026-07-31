@@ -132,18 +132,22 @@ drain:
 			open = -1
 		}
 	}
-	if len(bubbles) != 1 {
-		fmt.Fprintf(os.Stderr, "FAIL: coalesce produced %d bubbles %q (chunks=%d); want 1\n",
-			len(bubbles), bubbles, asstChunks)
-		os.Exit(1)
+	// Text turns coalesce to one bubble; tool-only turns complete with
+	// end_turn and zero text (still a successful owner turn lifecycle).
+	if asstChunks > 0 {
+		if len(bubbles) != 1 {
+			fmt.Fprintf(os.Stderr, "FAIL: coalesce produced %d bubbles %q (chunks=%d); want 1\n",
+				len(bubbles), bubbles, asstChunks)
+			os.Exit(1)
+		}
+		if strings.TrimSpace(bubbles[0]) == "" {
+			fmt.Fprintf(os.Stderr, "FAIL: empty assistant bubble\n")
+			os.Exit(1)
+		}
+		fmt.Println("PASS working cleared; one assistant bubble:", trim(bubbles[0], 80))
+	} else {
+		fmt.Println("PASS working cleared; tool-only/empty terminal turn (no text chunks)")
 	}
-	if strings.TrimSpace(bubbles[0]) == "" {
-		fmt.Fprintf(os.Stderr, "FAIL: empty assistant bubble\n")
-		os.Exit(1)
-	}
-	// Multi-token replies must not arrive as one wire frame only when the
-	// model streams — but a single-frame reply is still one bubble (ok).
-	fmt.Println("PASS working cleared; one assistant bubble:", trim(bubbles[0], 80))
 	fmt.Println("chunks:", asstChunks, "events:", strings.Join(summary, " | "))
 }
 

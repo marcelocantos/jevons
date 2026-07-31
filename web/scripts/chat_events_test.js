@@ -274,6 +274,13 @@ test('index.html follow-scroll uses slack + seal re-pin', () => {
   assert.ok(html.includes('sealAssistantStream') && html.includes('scrollDownThrottled'), 'seal re-pins');
 });
 
+test('index.html suppressNextWorkingClear + error frame handling', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('suppressNextWorkingClear'), 'cancel-and-send working race guard');
+  assert.ok(html.includes("typ === 'error'") || html.includes('typ===\'error\''), 'error frames handled');
+  assert.ok(html.includes('message not delivered') || html.includes('m.error'), 'surfaces delivery error');
+});
+
 // ── Go package tests ────────────────────────────────────────────
 
 test('go chat wire + owner prompt + seal tests pass', () => {

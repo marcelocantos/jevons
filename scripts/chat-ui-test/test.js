@@ -308,6 +308,13 @@ async function runHermetic() {
       // Correct while busy.
       await page.locator('#input').fill('second-correction');
       await page.locator('#send').click();
+      // Immediately after cancel-and-send, working must still be on
+      // (cancelled turn's end_turn must not clear the replacement).
+      const workingAfterCorrect = await page.locator('.working-indicator').count();
+      if (workingAfterCorrect < 1) {
+        console.error('CANCEL-SEND FAIL: working cleared after correction send (cancel end_turn race)');
+        process.exitCode = 1;
+      }
       await page.waitForFunction(
         () => !document.querySelector('.working-indicator'),
         null,
@@ -315,11 +322,19 @@ async function runHermetic() {
       );
       const users = await page.locator('#messages .msg.user').allInnerTexts();
       const joined = users.join('\n');
+      const jevons = await page.locator('#messages .msg.jevons').count();
       if (!joined.includes('second-correction')) {
         console.error('CANCEL-SEND FAIL: correction user bubble missing', users);
         process.exitCode = 1;
+      } else if (jevons < 1) {
+        console.error('CANCEL-SEND FAIL: no assistant bubble for replacement turn');
+        process.exitCode = 1;
       } else {
-        console.log('CANCEL-SEND PASS', { users: users.map(u => u.replace(/\nnow.*/, '').trim()) });
+        console.log('CANCEL-SEND PASS', {
+          users: users.map(u => u.replace(/\nnow.*/, '').trim()),
+          workingAfterCorrect,
+          jevons,
+        });
       }
       await page.close();
     }

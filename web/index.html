@@ -304,6 +304,11 @@ transport.onError = msg => console.error('transport error:', msg);
 
 function connect() { transport.connect(); }
 
+// After cancel-and-send, the cancelled turn's end_turn must not clear
+// working for the replacement prompt (Grok CLI keeps "busy" until the
+// new turn finishes). Consumed once by the next terminal/error/system.
+let suppressNextWorkingClear = false;
+
 function handle(m) {
   const typ = m.type;
 
@@ -312,6 +317,20 @@ function handle(m) {
   if (typ === 'history_meta') {
     oldestIndex = m.start || 0;
     if ((m.older || 0) > 0) setupInfiniteScroll();
+    return;
+  }
+
+  // Delivery failure (cancel timeout, overseer down, in-flight race).
+  // Must clear working and show the error — never silent stuck state.
+  if (typ === 'error') {
+    suppressNextWorkingClear = false;
+    sealAssistantStream();
+    setWorking(false);
+    const d = document.createElement('div');
+    d.className = 'msg status';
+    d.textContent = m.error || 'error';
+    msgs.appendChild(d);
+    scrollDownThrottled();
     return;
   }
 
@@ -377,10 +396,16 @@ function handle(m) {
       input.focus();
     }
     // Only terminal stops clear working (not mid-stream text). Clearing
-    // early used to force one bubble per token.
+    // early used to force one bubble per token. Cancel-and-send: the
+    // cancelled turn's end_turn is suppressed so the replacement stays
+    // marked working until *its* terminal arrives.
     if (ChatEvents.shouldClearWorking(m)) {
       sealAssistantStream();
-      setWorking(false);
+      if (suppressNextWorkingClear) {
+        suppressNextWorkingClear = false;
+      } else {
+        setWorking(false);
+      }
     }
   } else if (typ==='tool_result' || typ==='result') {
     const content = m.content || m.message?.content;
@@ -395,7 +420,11 @@ function handle(m) {
     closeTurn();
     if (ChatEvents.shouldClearWorking(m)) {
       sealAssistantStream();
-      setWorking(false);
+      if (suppressNextWorkingClear) {
+        suppressNextWorkingClear = false;
+      } else {
+        setWorking(false);
+      }
     }
   }
 }
@@ -967,7 +996,12 @@ function send() {
   // is in flight it interrupts, waits for idle, then prompts. Optional
   // client interrupt starts cancel early; the server still waits before
   // the replacement prompt so "prompt already in flight" cannot race.
-  if (workingEl) transport.send('{"type":"interrupt"}');
+  // suppressNextWorkingClear: the cancelled turn's end_turn must not
+  // clear working after we mark the replacement busy.
+  if (workingEl) {
+    suppressNextWorkingClear = true;
+    transport.send('{"type":"interrupt"}');
+  }
   transport.send(t);
   input.value = '';
   histIdx = null; histDraft = ''; setEditingHighlight(null);
@@ -1093,7 +1127,11 @@ document.addEventListener('keydown', e => {
   if (e.key === 'PageUp') { e.preventDefault(); msgs.scrollBy(0, -msgs.clientHeight * 0.8); }
   if (e.key === 'PageDown') { e.preventDefault(); msgs.scrollBy(0, msgs.clientHeight * 0.8); }
   // Esc interrupts Jevons's current turn (like the Claude Code TUI).
-  if (e.key === 'Escape') { transport.send('{"type":"interrupt"}'); setWorking(false); }
+  if (e.key === 'Escape') {
+    suppressNextWorkingClear = false;
+    transport.send('{"type":"interrupt"}');
+    setWorking(false);
+  }
 });
 
 // Theme toggle.

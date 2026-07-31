@@ -104,6 +104,8 @@ type Server struct {
 	// (nil = live claudia.Agent process).
 	ownerSend      func(string) error
 	ownerInterrupt func() error
+	// ownerIdleWait overrides ownerPromptIdleWait in tests (0 = default).
+	ownerIdleWait time.Duration
 }
 
 // SetActivityHook registers a callback fired on owner activity — the

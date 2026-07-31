@@ -129,6 +129,13 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 // finish the cancelled turn before issuing the replacement prompt.
 const ownerPromptIdleWait = 20 * time.Second
 
+func (s *Server) ownerIdleTimeout() time.Duration {
+	if s.ownerIdleWait > 0 {
+		return s.ownerIdleWait
+	}
+	return ownerPromptIdleWait
+}
+
 // DeliverOwnerPrompt sends an owner chat message with Grok-CLI semantics:
 // if a turn is in flight, cancel it, wait until idle, then prompt.
 // Returns an error when the overseer cannot accept the prompt (surfaced
@@ -138,6 +145,7 @@ func (s *Server) DeliverOwnerPrompt(text string) error {
 		s.activityHook()
 	}
 	payload := userTurnPrefix + text
+	wait := s.ownerIdleTimeout()
 
 	s.mu.Lock()
 	busy := s.overseerInFlight
@@ -146,16 +154,20 @@ func (s *Server) DeliverOwnerPrompt(text string) error {
 		if err := s.doOwnerInterrupt(); err != nil {
 			slog.Warn("chat: interrupt before cancel-and-send", "err", err)
 		}
-		if err := s.waitOverseerIdle(ownerPromptIdleWait); err != nil {
-			return err
+		if err := s.waitOverseerIdle(wait); err != nil {
+			// ACP sometimes never emits a terminal after cancel. Clear the
+			// local gate so we can attempt Send; if the process is still
+			// truly busy, Send fails and we surface that (no silent drop).
+			slog.Warn("chat: idle wait after cancel timed out; forcing local idle", "err", err)
+			s.forceOverseerIdle()
 		}
 	}
 
 	err := s.doOwnerSend(payload)
 	if err != nil && strings.Contains(err.Error(), "already in flight") {
 		_ = s.doOwnerInterrupt()
-		if werr := s.waitOverseerIdle(ownerPromptIdleWait); werr != nil {
-			return fmt.Errorf("%w (after cancel: %v)", err, werr)
+		if werr := s.waitOverseerIdle(wait); werr != nil {
+			s.forceOverseerIdle()
 		}
 		err = s.doOwnerSend(payload)
 	}
@@ -167,6 +179,20 @@ func (s *Server) DeliverOwnerPrompt(text string) error {
 	s.waiting = true
 	s.mu.Unlock()
 	return nil
+}
+
+// forceOverseerIdle clears the local in-flight gate and wakes waiters.
+// Used when ACP cancel does not produce a terminal event in time.
+func (s *Server) forceOverseerIdle() {
+	s.mu.Lock()
+	s.overseerInFlight = false
+	s.waiting = false
+	waiters := s.idleWaiters
+	s.idleWaiters = nil
+	s.mu.Unlock()
+	for _, ch := range waiters {
+		close(ch)
+	}
 }
 
 func (s *Server) doOwnerSend(payload string) error {
