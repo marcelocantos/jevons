@@ -532,8 +532,10 @@ function scheduleJevonsRender(el) {
   if (el._renderRaf) return;
   el._renderRaf = requestAnimationFrame(() => {
     el._renderRaf = 0;
+    el._layoutText = el._streamRaw;
+    el._layoutRole = 'jevons';
     renderBody(el, 'jevons', el._streamRaw);
-    // T66: stream may start small then cross isLarge while still latest —
+    // T66: stream may start short then measure tall while still latest —
     // re-evaluate auto-expand so the sealed reply is not stuck collapsed.
     scheduleLatestExpansion();
     scrollDownThrottled();
@@ -551,7 +553,9 @@ function sealAssistantStream() {
     if (el._renderRaf) { cancelAnimationFrame(el._renderRaf); el._renderRaf = 0; }
     const raw = el._streamRaw;
     delete el._streamRaw;                       // clear first so the sealed
-    renderBody(el, 'jevons', raw);              // render draws mermaid (🎯T59)
+    el._layoutText = raw;                       // render draws mermaid (🎯T59)
+    el._layoutRole = 'jevons';
+    renderBody(el, 'jevons', raw);
     scheduleLatestExpansion();
   }
 }
@@ -603,7 +607,9 @@ function addTurnItem(cls, text) {
 
 // buildMsg constructs a .msg element (body + timestamp) WITHOUT inserting
 // it, so it can be appended live or batched into a fragment for "load
-// earlier" prepend (🎯T57). Content renders bounded via renderBody.
+// earlier" prepend (🎯T57). Height-based collapse requires the node to be
+// in the document — call layoutMsg after attach (offsetHeight is 0 in a
+// detached fragment).
 function buildMsg(role, text, when) {
   const d = document.createElement('div');
   d.className = 'msg ' + role;
@@ -611,7 +617,11 @@ function buildMsg(role, text, when) {
   body.className = 'msg-body';
   d.appendChild(body);
   d._body = body;
-  renderBody(d, role, text);
+  d._layoutRole = role;
+  d._layoutText = text == null ? '' : text;
+  // Provisional full paint (no collapse gate) so something shows if layout
+  // is deferred; layoutMsg remeasures once connected.
+  paintBody(d, role, d._layoutText);
   const ms = when || Date.now();
   const ts = document.createElement('div');
   ts.className = 'msg-time';
@@ -621,40 +631,68 @@ function buildMsg(role, text, when) {
   return d;
 }
 
+// layoutMsg runs height-ratio collapse once the message is in #messages.
+function layoutMsg(d) {
+  if (!d || !d.isConnected || d._layoutText == null) return;
+  renderBody(d, d._layoutRole || 'jevons', d._layoutText);
+}
+
+function layoutMsgList(nodes) {
+  for (const d of nodes) layoutMsg(d);
+}
+
 function addMsg(role, text, when) {
   const d = buildMsg(role, text, when);
   msgs.appendChild(d);
+  layoutMsg(d);
   scheduleLatestExpansion();
   scrollDownThrottled();
   return d;
 }
 
-// Bounded rendering (🎯T57): large content renders only a PREVIEW up
-// front — marked.parse and DOM build run on ~PREVIEW_LINES lines, not the
-// whole thing — with a Show more toggle that renders the full content
-// lazily on demand. Short content renders in full, no toggle. The
-// large-check is by raw size (no layout measurement), so it's cheap even
-// during a burst replay of thousands of lines.
-// Request (user) previews are half the size of assistant previews — a
-// request block is context to glance at, not read in full (owner req).
+// Bounded rendering (🎯T57): tall content gets a PREVIEW + Show more;
+// short content renders in full with no toggle. "Tall" is measured after
+// layout: full rendered height must be more than COLLAPSE_HEIGHT_RATIO
+// times the collapsed-preview height (not char/line proxies — tables
+// and markdown can look huge with few characters).
+// T66: the latest user request and latest assistant reply stay expanded
+// even when tall; T77 collapses prior auto-expanded messages when they
+// cease to be latest (unless the user toggled manually).
+// Request (user) previews use fewer lines — context to glance at.
 const PREVIEW_LINES = 14;
 const USER_PREVIEW_LINES = 7;
-const LARGE_CHARS = 1800;
-const LARGE_LINES = 26;
+// Collapse when full height > collapsed height × this ratio (50% taller).
+const COLLAPSE_HEIGHT_RATIO = 1.5;
+// Cap for preview text when building the collapsed sample (not the
+// tallness gate — that is pure rendered height).
+const PREVIEW_CHAR_CAP = 4000;
 
-function isLarge(text) {
-  if (text.length > LARGE_CHARS) return true;
-  let nl = 0;
-  for (let i = 0; i < text.length; i++) {
-    if (text.charCodeAt(i) === 10 && ++nl > LARGE_LINES) return true;
-  }
-  return false;
-}
 function previewOf(text, maxLines) {
   const lines = text.split('\n');
   let out = lines.length > maxLines ? lines.slice(0, maxLines).join('\n') : text;
-  if (out.length > LARGE_CHARS) out = out.slice(0, LARGE_CHARS);
+  if (out.length > PREVIEW_CHAR_CAP) out = out.slice(0, PREVIEW_CHAR_CAP);
   return out;
+}
+
+// Measure whether full render is tall enough to warrant collapse.
+// Paints full then preview into d._body (must already be in the DOM).
+// Returns { tall, fullH, collapsedH, preview }.
+function measureCollapse(d, role, text) {
+  const maxLines = (role === 'user') ? USER_PREVIEW_LINES : PREVIEW_LINES;
+  const preview = previewOf(text, maxLines);
+  if (preview === text) {
+    return { tall: false, fullH: 0, collapsedH: 0, preview };
+  }
+  paintBody(d, role, text);
+  const fullH = d._body.offsetHeight || 0;
+  paintBody(d, role, preview);
+  const collapsedH = d._body.offsetHeight || 0;
+  // Avoid divide-by-zero / zero-layout (hidden tab): treat as not tall.
+  if (collapsedH <= 0 || fullH <= 0) {
+    return { tall: false, fullH, collapsedH, preview };
+  }
+  const tall = fullH > collapsedH * COLLAPSE_HEIGHT_RATIO;
+  return { tall, fullH, collapsedH, preview };
 }
 // Mermaid diagrams (🎯T59): assistant markdown may carry ```mermaid
 // fences, which marked emits as <pre><code class="language-mermaid">. We
@@ -703,16 +741,21 @@ function paintBody(d, role, t) {
   }
 }
 function renderBody(d, role, text) {
-  if (!isLarge(text)) {
+  d._layoutRole = role;
+  d._layoutText = text;
+  d._fullRole = role;
+  d._previewLines = (role === 'user') ? USER_PREVIEW_LINES : PREVIEW_LINES;
+  const m = measureCollapse(d, role, text);
+  if (!m.tall) {
     paintBody(d, role, text);
     if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
     d._fullText = null;
     return;
   }
   d._fullText = text;
-  d._fullRole = role;
-  d._previewLines = (role === 'user') ? USER_PREVIEW_LINES : PREVIEW_LINES;
-  paintBody(d, role, d._expanded ? text : previewOf(text, d._previewLines));
+  d._previewCache = m.preview;
+  // Tall: show full only if expanded (latest auto-expand or user toggle).
+  paintBody(d, role, d._expanded ? text : m.preview);
   ensureExpandToggle(d);
 }
 function ensureExpandToggle(d) {
@@ -723,7 +766,8 @@ function ensureExpandToggle(d) {
     btn.addEventListener('click', () => {
       d._expanded = !d._expanded;
       d._userToggled = true;   // manual choice wins over auto-expand-latest
-      paintBody(d, d._fullRole, d._expanded ? d._fullText : previewOf(d._fullText, d._previewLines));
+      const prev = d._previewCache || previewOf(d._fullText, d._previewLines);
+      paintBody(d, d._fullRole, d._expanded ? d._fullText : prev);
       d._expandBtn.textContent = d._expanded ? 'Show less ▴' : 'Show more ▾';
       if (d._expanded) scrollDownThrottled();
     });
@@ -737,10 +781,9 @@ function ensureExpandToggle(d) {
 // auto-expanded one reverts to its collapsed preview (unless the user
 // toggled it manually). Debounced so a burst replay only expands the
 // final message once — the rest stay cheap previews (owner req).
-// T66: same rule for assistant as for user, including when a stream starts
-// small (not yet isLarge) and only later qualifies — re-apply while still
-// latest so it does not stick under "Show more".
-// T77: when an oversized message of either role ceases to be latest, the
+// T66: latest request AND latest assistant stay expanded when tall,
+// including when a stream starts short and later measures tall.
+// T77: when a tall message of either role ceases to be latest, the
 // auto-expand reverts to the bounded preview unless _userToggled.
 let latestEl = null;
 let latestRaf = 0;
@@ -817,9 +860,10 @@ async function loadEarlier() {
   try {
     const data = await fetch('/api/history?end=' + before + '&limit=200').then(r => r.json());
     const prevH = msgs.scrollHeight, prevTop = msgs.scrollTop;
-    const frag = renderFrames(data.lines || []);
+    const { frag, nodes } = renderFrames(data.lines || []);
     const anchor = historySentinel ? historySentinel.nextSibling : msgs.firstChild;
     msgs.insertBefore(frag, anchor);
+    layoutMsgList(nodes);   // height-ratio collapse needs connected nodes
     oldestIndex = (data.start != null) ? data.start : 0;
     // Content added ABOVE the viewport — shift scrollTop by the height
     // gained so the position doesn't jump, and the sentinel leaves view
@@ -852,8 +896,10 @@ function showHistoryLoading(on) {
 // renderFrames builds .msg nodes from raw wire frames into a fragment
 // (no #messages insert, no scroll) for prepend. Consecutive assistant
 // text frames coalesce into one bubble, mirroring the live path.
+// Returns { frag, nodes } so the caller can layoutMsgList after attach.
 function renderFrames(lines) {
   const frag = document.createDocumentFragment();
+  const nodes = [];
   let pending = null;   // { el, raw }
   for (const line of lines) {
     let m;
@@ -861,18 +907,32 @@ function renderFrames(lines) {
     const ts = m.timestamp ? new Date(m.timestamp).getTime() : Date.now();
     if (m.type === 'user') {
       const c = m.message && m.message.content;
-      if (typeof c === 'string' && c) { pending = null; frag.appendChild(buildMsg('user', c, ts)); }
+      if (typeof c === 'string' && c) {
+        pending = null;
+        const el = buildMsg('user', c, ts);
+        nodes.push(el);
+        frag.appendChild(el);
+      }
     } else if (m.type === 'assistant') {
       let txt = '';
       try { txt = ChatEvents.assistantTextBlocks(m).map(b => b.text).join(''); } catch { txt = ''; }
       if (txt) {
-        if (pending) { pending.raw += txt; renderBody(pending.el, 'jevons', pending.raw); }
-        else { const el = buildMsg('jevons', txt, ts); pending = { el, raw: txt }; frag.appendChild(el); }
+        if (pending) {
+          pending.raw += txt;
+          pending.el._layoutText = pending.raw;
+          // Detached: provisional paint only; layoutMsg after attach.
+          paintBody(pending.el, 'jevons', pending.raw);
+        } else {
+          const el = buildMsg('jevons', txt, ts);
+          pending = { el, raw: txt };
+          nodes.push(el);
+          frag.appendChild(el);
+        }
       }
     }
     // tool_result / system frames are omitted from the older view.
   }
-  return frag;
+  return { frag, nodes };
 }
 
 // Render a transient status note (centred, dim italic) — used for
