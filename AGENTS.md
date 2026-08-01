@@ -70,6 +70,10 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   separate files.
 - Convergence targets live in `bullseye.yaml` (🎯Tn); target lifecycle
   rides the PR that changes it.
+- Voice targets (anything under 🎯T21/T22/T28) are gated on the 🎯T37
+  decision — don't resume voice work without it.
+- The `jevons` overseer prompt is embedded in `cmd/jevonsd/main.go` until
+  🎯T44 externalizes it; treat it as config-in-code when editing.
 
 ## Project structure
 
@@ -81,7 +85,7 @@ jevons/
 │                         # cost, auth, discovery, transcript, cli
 ├── web/                  # Canonical web UI (served by jevonsd)
 ├── ios/Jevon/            # iOS thin client (WKWebView + pigeon)
-├── scripts/              # chat-smoke, chat-ui-test, browser-loop-test
+├── scripts/              # journey-suite, chat-smoke, chat-ui-test, …
 ├── docs/                 # charter, architecture-current, design docs
 └── bullseye.yaml         # Intent ledger
 ```
