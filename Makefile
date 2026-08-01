@@ -45,9 +45,11 @@ ios:
 test-go:
 	go test ./...
 
-# Hermetic Node tests for chat working-indicator lifecycle (🎯T39).
+# Hermetic Node tests for chat working-indicator lifecycle (🎯T39)
+# and attention-thread model (🎯T65).
 test-web:
 	node web/scripts/chat_events_test.js
+	node web/scripts/attention_threads_test.js
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright
 # from scripts/browser-loop-test). Live: make test-ui-live.

@@ -164,6 +164,18 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    that read surrounding context to infer dictation style. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
+/* 🎯T65 quiet attention stack — prefix-first; no command buttons / focus chrome */
+#attention-bar { display: none; flex-direction: row; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); }
+#attention-bar.visible { display: flex; }
+#attention-stack { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 0; flex: 1; }
+.attn-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--text-dim); font-size: 11px; font-weight: 500; cursor: pointer; line-height: 1.3; }
+.attn-chip:hover { border-color: var(--border-focus); color: var(--text); }
+.attn-chip.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.attn-chip.parked { opacity: 0.72; font-style: italic; }
+.attn-chip.main-chip { border-style: dashed; }
+.attn-chip .attn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
+.attn-chip .attn-status { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+
 /* Input bar */
 #input-bar { display: flex; gap: 10px; align-items: flex-end; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)) 20px; background: var(--surface); border-top: 1px solid var(--border);
   /* One-line control height, derived from the input's own metrics
@@ -249,6 +261,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <div id="main">
   <div id="chat-pane">
     <div id="messages"></div>
+    <div id="attention-bar" aria-label="Attention threads">
+      <div id="attention-stack" role="list"></div>
+    </div>
     <div id="input-bar">
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
@@ -274,6 +289,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/jlog.js"></script>
 <script src="scripts/transport.js"></script>
 <script src="scripts/chat_events.js"></script>
+<script src="scripts/attention_threads.js"></script>
 <script>
 const msgs = document.getElementById('messages');
 const input = document.getElementById('input');
@@ -281,6 +297,95 @@ const sendBtn = document.getElementById('send');
 const dot = document.getElementById('dot');
 const sTxt = document.getElementById('status-text');
 const agentsEl = document.getElementById('agents');
+const attentionBar = document.getElementById('attention-bar');
+const attentionStackEl = document.getElementById('attention-stack');
+const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Shift-Enter for a new line.';
+
+// 🎯T65 attention threads — prefix-first (docs/design/attention-threads.md).
+// Commands: aside: | capture: | park: | main: | pursue:  (case-insensitive)
+// Focus chrome is the composer placeholder when on a side thread — no "Focus:" label.
+let attentionState = (typeof AttentionThreads !== 'undefined')
+  ? AttentionThreads.load(window.localStorage)
+  : null;
+let mainDraftBackup = '';
+
+function persistAttention() {
+  if (!attentionState || typeof AttentionThreads === 'undefined') return;
+  AttentionThreads.save(window.localStorage, attentionState);
+}
+
+function updateComposerPlaceholder() {
+  if (!input) return;
+  if (typeof AttentionThreads === 'undefined' || !attentionState) {
+    input.placeholder = MAIN_PLACEHOLDER;
+    return;
+  }
+  // Side: "[aside: short-title] Write a message to Jevons"; main: clean (no [main]).
+  input.placeholder = AttentionThreads.composerPlaceholder(attentionState, MAIN_PLACEHOLDER);
+}
+
+function renderAttention() {
+  if (!attentionState || typeof AttentionThreads === 'undefined') return;
+  const stack = AttentionThreads.stack(attentionState);
+  const onMain = AttentionThreads.isMainFocus(attentionState);
+  // Quiet: only show when there is something to show (stack or non-main focus).
+  const show = stack.length > 0 || !onMain;
+  attentionBar.classList.toggle('visible', show);
+  updateComposerPlaceholder();
+
+  attentionStackEl.innerHTML = '';
+  if (!show) return;
+
+  // Main chip when not on main — click returns focus (same as main:).
+  if (!onMain) {
+    const mainChip = document.createElement('div');
+    mainChip.className = 'attn-chip main-chip';
+    mainChip.setAttribute('role', 'listitem');
+    mainChip.title = 'Return to main thread (or type main:)';
+    const mt = document.createElement('span');
+    mt.className = 'attn-title';
+    mt.textContent = 'Main';
+    mainChip.appendChild(mt);
+    mainChip.addEventListener('click', () => {
+      attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
+      attentionState = AttentionThreads.focusMain(attentionState);
+      input.value = mainDraftBackup || '';
+      autoGrow();
+      persistAttention();
+      renderAttention();
+      input.focus();
+    });
+    attentionStackEl.appendChild(mainChip);
+  }
+
+  for (const t of stack) {
+    const chip = document.createElement('div');
+    chip.className = 'attn-chip' +
+      (t.status === 'parked' ? ' parked' : '') +
+      (attentionState.focusId === t.id ? ' active' : '');
+    chip.setAttribute('role', 'listitem');
+    chip.title = t.body || t.title;
+    const title = document.createElement('span');
+    title.className = 'attn-title';
+    title.textContent = t.title;
+    chip.appendChild(title);
+    const st = document.createElement('span');
+    st.className = 'attn-status';
+    st.textContent = t.status;
+    chip.appendChild(st);
+    chip.addEventListener('click', () => {
+      if (AttentionThreads.isMainFocus(attentionState)) mainDraftBackup = input.value;
+      else attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
+      attentionState = AttentionThreads.pursue(attentionState, t.id);
+      const th = AttentionThreads.findThread(attentionState, t.id);
+      if (th) { input.value = th.body || ''; autoGrow(); }
+      persistAttention();
+      renderAttention();
+      input.focus();
+    });
+    attentionStackEl.appendChild(chip);
+  }
+}
 
 let turnDetails = null;
 let turnItems = null;
@@ -938,8 +1043,35 @@ function setEditingHighlight(el) {
 }
 
 function send() {
-  const t = input.value.trim();
+  let t = input.value.trim();
   if (!t) return;
+  // 🎯T65 prefix-first: aside:/capture:/park:/main:/pursue: (voice or type).
+  if (attentionState && typeof AttentionThreads !== 'undefined') {
+    if (!AttentionThreads.isMainFocus(attentionState)) {
+      // Don't clobber side-thread body with a command-prefixed draft.
+      const p = AttentionThreads.parsePrefix(t);
+      if (!p.command) {
+        attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
+      }
+    }
+    const r = AttentionThreads.handleComposer(attentionState, t);
+    attentionState = r.state;
+    persistAttention();
+    if (r.kind === 'local' || r.kind === 'empty') {
+      if (r.clearComposer) {
+        input.value = r.composerBody != null ? r.composerBody : '';
+      }
+      if (AttentionThreads.isMainFocus(attentionState)) mainDraftBackup = input.value;
+      histIdx = null; histDraft = ''; setEditingHighlight(null);
+      autoGrow();
+      renderAttention();
+      return; // no wire send for local commands
+    }
+    t = r.text;
+    if (!t) return;
+    if (AttentionThreads.isMainFocus(attentionState)) mainDraftBackup = '';
+    renderAttention();
+  }
   // If a turn is still in flight (no reply yet), cancel it and resubmit
   // the edited message. Interrupt first; claudia's Send waits for the
   // TUI to return to ready before it types, so the ordering is safe.
@@ -953,6 +1085,7 @@ function send() {
   autoScroll = true;
   setWorking(true);
   requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+  if (typeof renderAttention === 'function') renderAttention();
 }
 
 // rewindAndResend performs the destructive "edit an earlier message"
@@ -1046,8 +1179,22 @@ input.addEventListener('keydown', e => {
   if (e.altKey && e.key === 'ArrowUp') { if (recallHistory(-1)) e.preventDefault(); return; }
   if (e.altKey && e.key === 'ArrowDown') { if (recallHistory(+1)) e.preventDefault(); return; }
 });
-input.addEventListener('input', autoGrow);
+input.addEventListener('input', () => {
+  autoGrow();
+  // Prefix-first: do not treat typing as capture enablement. Only persist
+  // body when focused on a side thread and the draft is not a command.
+  if (attentionState && typeof AttentionThreads !== 'undefined') {
+    if (!AttentionThreads.isMainFocus(attentionState)) {
+      const p = AttentionThreads.parsePrefix(input.value);
+      if (!p.command) {
+        attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
+        persistAttention();
+      }
+    }
+  }
+});
 sendBtn.addEventListener('click', send);
+if (typeof renderAttention === 'function') renderAttention();
 // Keep focus in the textarea when clicking toolbar buttons: preventing
 // the mousedown default blocks the focus shift while still firing click.
 sendBtn.addEventListener('mousedown', e => e.preventDefault());
