@@ -134,6 +134,9 @@ func (s *Server) handleThreadList(_ context.Context, _ mcp.CallToolRequest) (*mc
 	for _, ts := range threads {
 		fmt.Fprintf(&b, "%-20s  %-8s  %-8s  %s\n",
 			ts.Thread.ID, ts.Thread.Kind, ts.Status.State, ts.Status.Summary)
+		if n := len(ts.Status.Integrity); n > 0 {
+			fmt.Fprintf(&b, "  ⚠ integrity issues: %d\n", n)
+		}
 	}
 	return mcp.NewToolResultText(b.String()), nil
 }
@@ -155,6 +158,12 @@ func (s *Server) handleThreadStatus(_ context.Context, req mcp.CallToolRequest) 
 	fmt.Fprintf(&b, "Session:     %s\n", ts.Thread.SessionID)
 	fmt.Fprintf(&b, "State:       %s\n", ts.Status.State)
 	fmt.Fprintf(&b, "Summary:     %s\n", ts.Status.Summary)
+	if n := len(ts.Status.Integrity); n > 0 {
+		fmt.Fprintf(&b, "Integrity:   %d issue(s) — %s\n", n, ts.Status.Integrity[0].Kind)
+		for _, iss := range ts.Status.Integrity {
+			fmt.Fprintf(&b, "  - turn %d: %s (%s)\n", iss.TurnIndex, iss.Kind, iss.Detail)
+		}
+	}
 	if ts.Thread.Description != "" {
 		fmt.Fprintf(&b, "Description: %s\n", ts.Thread.Description)
 	}

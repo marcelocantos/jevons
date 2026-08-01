@@ -4,13 +4,10 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -178,7 +175,7 @@ func (s *suite) jTwoAgentsSameWorkdir() error {
 	if err != nil {
 		return err
 	}
-	byName := map[string]agentInfo{}
+	byName := map[string]AgentInfo{}
 	for _, ag := range agents {
 		byName[ag.Name] = ag
 	}
@@ -239,7 +236,7 @@ func (s *suite) jPOWorkerLineageFanout() error {
 	if err != nil {
 		return err
 	}
-	by := map[string]agentInfo{}
+	by := map[string]AgentInfo{}
 	for _, a := range agents {
 		by[a.Name] = a
 	}
@@ -290,7 +287,7 @@ func (s *suite) jPOWorkerLineageFanout() error {
 	if err != nil {
 		return err
 	}
-	var workerRow *agentInfo
+	var workerRow *AgentInfo
 	for i := range agents2 {
 		if agents2[i].Name == worker {
 			workerRow = &agents2[i]
@@ -457,118 +454,5 @@ func (s *suite) jWorkerShellTool() error {
 	return nil
 }
 
-// ── MCP / HTTP helpers ───────────────────────────────────────────────
-
-type agentInfo struct {
-	Name    string `json:"name"`
-	WorkDir string `json:"workdir"`
-	Parent  string `json:"parent"`
-	Status  string `json:"status"`
-}
-
-func (s *suite) listAgentsHTTP() ([]agentInfo, error) {
-	resp, err := http.Get("http://" + s.host + "/api/agents")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("/api/agents HTTP %d", resp.StatusCode)
-	}
-	var agents []agentInfo
-	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
-		return nil, err
-	}
-	return agents, nil
-}
-
-func (s *suite) mcp(method string, params any) (json.RawMessage, error) {
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": method, "params": params,
-	})
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequest("POST", "http://"+s.host+"/mcp", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	client := &http.Client{Timeout: 3 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var out struct {
-		Result json.RawMessage `json:"result"`
-		Error  *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("%s decode: %w", method, err)
-	}
-	if out.Error != nil {
-		return nil, fmt.Errorf("%s: %s", method, out.Error.Message)
-	}
-	return out.Result, nil
-}
-
-func (s *suite) mcpText(tool string, args map[string]any) (string, error) {
-	if args == nil {
-		args = map[string]any{}
-	}
-	res, err := s.mcp("tools/call", map[string]any{
-		"name": tool, "arguments": args,
-	})
-	if err != nil {
-		return "", err
-	}
-	// Tool-level isError is encoded in the result content shape.
-	var envelope struct {
-		IsError bool `json:"isError"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(res, &envelope); err != nil {
-		return "", fmt.Errorf("decode tool result: %w", err)
-	}
-	var b strings.Builder
-	for _, c := range envelope.Content {
-		b.WriteString(c.Text)
-	}
-	text := b.String()
-	if envelope.IsError {
-		return text, fmt.Errorf("%s: %s", tool, trim(text, 160))
-	}
-	return text, nil
-}
-
-var sessionFragRE = regexp.MustCompile(`session[:\s]+([0-9a-fA-F….]{6,})`)
-
-func extractSessionFragment(s string) string {
-	// Prefer "(session: xxx)" form from agent start / list.
-	if i := strings.Index(s, "session:"); i >= 0 {
-		rest := strings.TrimSpace(s[i+len("session:"):])
-		// Truncate at first delimiter.
-		for _, sep := range []string{",", ")", " ", "\n", "\t"} {
-			if j := strings.Index(rest, sep); j >= 0 {
-				rest = rest[:j]
-			}
-		}
-		rest = strings.TrimSpace(rest)
-		if rest != "" {
-			return rest
-		}
-	}
-	m := sessionFragRE.FindStringSubmatch(s)
-	if len(m) == 2 {
-		return m[1]
-	}
-	return ""
-}
+// MCP/HTTP helpers live in steps.go (🎯T102 step library).
 

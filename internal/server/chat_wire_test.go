@@ -12,6 +12,31 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
+// 🎯T64: tool_call with rawInput must surface args for activity strip.
+func TestToolCallDetailRawInput(t *testing.T) {
+	raw := []byte(`{"update":{"sessionUpdate":"tool_call","title":"search_tool","rawInput":{"query":"jevonsmcp agent list"}}}`)
+	name, input := toolCallDetail(raw)
+	if name != "search_tool" {
+		t.Fatalf("name=%q", name)
+	}
+	if input == nil || input["query"] != "jevonsmcp agent list" {
+		t.Fatalf("input=%v", input)
+	}
+	// Without rawInput, name still works (T63).
+	raw2 := []byte(`{"update":{"sessionUpdate":"tool_call","title":"Bash"}}`)
+	n2, in2 := toolCallDetail(raw2)
+	if n2 != "Bash" || in2 != nil {
+		t.Fatalf("name=%q input=%v", n2, in2)
+	}
+	// Full progress wire line includes input for UI summariseInput.
+	line, ok := chatWireLine(claudia.Event{
+		Type: "progress", ProgressType: "tool_use", Raw: raw,
+	})
+	if !ok || !strings.Contains(line, "search_tool") || !strings.Contains(line, "jevonsmcp agent list") {
+		t.Fatalf("wire line missing tool+args: ok=%v line=%s", ok, line)
+	}
+}
+
 func TestChatWireLineGrokACPShapes(t *testing.T) {
 	// These Raws mirror what claudia's grok_acp.go puts on Event.Raw —
 	// session/update params for chunks, bare stopReason for prompt end.

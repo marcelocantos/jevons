@@ -54,6 +54,23 @@ Needs: Grok CLI signed in (same as daily jevonsd). Not part of default `make tes
 
 Hermetic meta-checks (doc inventory, port guard) live outside this section:
 `scripts/docratchet/` and `scripts/journey-suite/portguard/` — **not** journeys.
+Those packages are **meta-guards only**, never called “journeys.”
+
+## Step library (🎯T102)
+
+Journeys stay plain Go. Shared setup/act/assert helpers live in `steps.go`
+in this package (e.g. `ListAgentsHTTP`, `MCPToolCall`, `AgentStart`/`Send`,
+`MustAgentRunning`). Prefer steps over copy-paste; no formal YAML/DSL.
+
+## Journey cache (🎯T107)
+
+A **successful** live run may be cached for later replay (store the
+observed agent interaction after green; on cache hit, replay recorded
+frames; on miss or invalidation, re-run live). Cache is optional and
+must never turn a non-agent hermetic into a “journey.” Interface sketch:
+record under `$JEVons_JOURNEY_CACHE` or suite state after PASS; invalidate
+when journey source hash or jevonsd binary mtime changes. Not required for
+every run today; live is the default truth.
 
 ## Journeys
 
@@ -67,11 +84,13 @@ Hermetic meta-checks (doc inventory, port guard) live outside this section:
 5. **J6-mcp-tool-surface** — agent + thread tools registered
 6. **J7-overseer-registry** — overseer running in `/api/agents` and `agent_list`
 7. **J8-two-agents-same-workdir** — two fleet agents, same workdir, distinct sessions (T86 live)
-8. **J9-thread-spawn-direct** — spawn → direct short turn → remove
-9. **J10-worker-shell-tool** — worker runs `run_terminal_command` (T97 permission regression); marker file oracle
+8. **J8b-po-worker-lineage-fanout** — PO + worker parent lineage + T104 first-send brief
+9. **J9-thread-spawn-direct** — spawn → direct short turn → remove
+10. **J10-worker-shell-tool** — worker runs `run_terminal_command` (T97 permission regression); marker file oracle
+11. **J6b-mcp-reconnect** — live `jevons_mcp_reconnect` (T60/T105.1)
 
 ### Teardown oracle
-10. **J5-isolation** — sandbox journal under temp state; journey MCP gone; daily MCP intact
+12. **J5-isolation** — sandbox journal under temp state; journey MCP gone; daily MCP intact
 
 ## Cleanup
 

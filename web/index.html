@@ -7,6 +7,8 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F916;</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github-dark.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit/lib/addon-fit.min.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm/css/xterm.min.css">
@@ -81,17 +83,23 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 #main { flex: 1; display: flex; overflow: hidden; }
 
-/* Chat pane */
-#chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+/* Chat pane — messages flex:1 min-height:0 so composer growth shrinks the
+   transcript instead of covering the latest reply (🎯T70 / T70.1). */
+#chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 /* overflow-anchor:none — browser scroll-anchoring fights follow-scroll when
    a long markdown bubble is re-parsed every stream frame (🎯T30.2). */
-#messages { flex: 1; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
+#messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
 #messages::-webkit-scrollbar { width: 6px; }
 #messages::-webkit-scrollbar-track { background: transparent; }
 #messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
 
 .msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; }
-.msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: pre-wrap; word-wrap: break-word; }
+.msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: normal; word-wrap: break-word; }
+.msg.user .msg-body { white-space: pre-wrap; }
+.msg.user .msg-body blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 0.4em 0; color: var(--text-dim); white-space: pre-wrap; }
+.msg.user .msg-body p { margin: 0.35em 0; }
+.msg.user .msg-body p:first-child { margin-top: 0; }
+.msg.user .msg-body p:last-child { margin-bottom: 0; }
 /* The message currently being edited via up/down recall. Brighter bg +
    full-accent border (same 1px width → no reflow) + a box-shadow ring
    to "thicken" the border without shifting geometry. */
@@ -187,7 +195,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   --control-h: calc(1.45 * 14px + 24px); }
 /* Textarea (not <input>) so Wispr Flow and other STT tools detect a
    document-style input and produce full punctuated sentences. */
-#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: var(--control-h); max-height: 40vh; overflow-y: auto; }
+/* 🎯T69: multi-line min height so ordinary typing does not flicker a
+   one-line scrollbar; overflow hidden until near max (then internal scroll).
+   Cap 28vh so growth does not eat the latest assistant reply (🎯T70.1). */
+#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: calc(2.9 * 1.45 * 14px + 24px); max-height: 28vh; overflow-y: hidden; }
+#input.composer-scroll { overflow-y: auto; }
 /* Fade the placeholder well below entered text so it's obviously a
    prompt, not typed content. Lower opacity blends it toward the input
    background — darker in dark mode, lighter in light mode. */
@@ -222,8 +234,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .turn-marker:hover { color: var(--text-dim); }
 .turn-tip { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 30; min-width: 200px; max-width: 460px; max-height: 50vh; overflow-y: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 28px rgba(0,0,0,0.35); }
 .turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 1px; }
-.msg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; line-height: 1; }
+.msg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; line-height: 1; cursor: default; }
 .msg.user .msg-time { text-align: right; }
+/* 🎯T84: GitHub mark for compacted github.com workdirs */
+.agent-dir .gh-icon { display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; opacity: 0.85; }
+.agent-node .agent-dir { display: inline-flex; align-items: center; gap: 2px; }
 .turn-item { font-family: var(--mono); font-size: 11px; padding: 1px 0; letter-spacing: -0.02em; white-space: pre-wrap; word-break: break-word; }
 .turn-item.tool-use { color: var(--amber); }
 .turn-item.tool-result { color: var(--text-dim); }
@@ -250,11 +265,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; }
 .agent-children { padding-left: 14px; border-left: 1px solid var(--border); margin-left: 10px; }
 
-/* Terminal viewer */
-#terminal-header { padding: 6px 16px; font-size: 10px; font-weight: 600; color: var(--text-muted); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.08em; display: none; }
-#terminal-container { flex: 1; min-height: 0; overflow: hidden; display: none; }
-#terminal-container .xterm { height: 100%; }
-.agent-node { cursor: pointer; }
+/* Terminal viewer removed from product UI (🎯T73) — vestigial Claude/tmux panel.
+   Keep nodes selectable for future use without opening black chrome. */
+.agent-node { cursor: default; }
 .agent-node.selected { background: var(--accent-dim); }
 </style>
 </head>
@@ -284,8 +297,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="cost-ticker" title="Token burn rate — click for detail"></div>
     <div id="activity-header">Agents</div>
     <div id="agents"></div>
-    <div id="terminal-header"></div>
-    <div id="terminal-container"></div>
+
   </div>
 </div>
 <script src="scripts/jlog.js"></script>
@@ -646,10 +658,22 @@ function buildMsg(role, text, when) {
   const ms = when || Date.now();
   const ts = document.createElement('div');
   ts.className = 'msg-time';
-  ts.dataset.ts = ms;
+  ts.dataset.ts = String(ms);
   ts.textContent = relTime(ms);
+  // 🎯T91: absolute local time on hover; relative label stays in chrome.
+  ts.title = absTimeTitle(ms);
   d.appendChild(ts);
   return d;
+}
+function absTimeTitle(ms) {
+  try {
+    return new Date(ms).toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+  } catch (_) {
+    return String(ms);
+  }
 }
 
 // layoutMsg runs height-ratio collapse once the message is in #messages.
@@ -757,10 +781,53 @@ function renderMermaidIn(container) {
 function paintBody(d, role, t) {
   if (role === 'jevons') {
     d._body.innerHTML = marked.parse(t);
-    if (!d._streamRaw) renderMermaidIn(d._body);   // sealed content only
+    if (!d._streamRaw) {
+      renderMermaidIn(d._body);   // sealed content only
+      highlightCodeIn(d._body);   // 🎯T74
+    }
+  } else if (role === 'user') {
+    // 🎯T75: quote notation as blockquotes; plain text unchanged.
+    d._body.innerHTML = renderUserText(t);
   } else {
     d._body.textContent = t;
   }
+}
+// User bubbles: preserve plain text, promote lines of `> quote` to <blockquote>.
+function renderUserText(t) {
+  const s = String(t == null ? '' : t);
+  if (!/(^|\n)\s*>\s?/.test(s)) {
+    const span = document.createElement('span');
+    span.textContent = s;
+    return span.innerHTML; // escaped plain
+  }
+  // Lightweight line-based quote parser (not full markdown).
+  const lines = s.split('\n');
+  let html = '', inQ = false, qBuf = [];
+  const flushQ = () => {
+    if (!qBuf.length) return;
+    html += '<blockquote>' + escHtml(qBuf.join('\n')) + '</blockquote>';
+    qBuf = [];
+    inQ = false;
+  };
+  for (const line of lines) {
+    const m = line.match(/^\s*>\s?(.*)$/);
+    if (m) {
+      inQ = true;
+      qBuf.push(m[1]);
+    } else {
+      flushQ();
+      html += (html && !html.endsWith('>')) ? '\n' : '';
+      html += escHtml(line) + '\n';
+    }
+  }
+  flushQ();
+  return html.replace(/\n+$/, '');
+}
+function highlightCodeIn(container) {
+  if (!container || typeof hljs === 'undefined') return;
+  container.querySelectorAll('pre code').forEach(block => {
+    try { hljs.highlightElement(block); } catch (_) { /* unknown lang → leave plain */ }
+  });
 }
 function renderBody(d, role, text) {
   d._layoutRole = role;
@@ -1051,7 +1118,7 @@ function renderTree(byParent, parent, container) {
     node.dataset.parent = parent || '';
     node.innerHTML = '<span class="agent-dot '+a.status+'"></span>'
       + '<span class="agent-name">'+escHtml(a.name)+'</span>'
-      + '<span class="agent-dir">'+escHtml(shortDir(a.workdir || ''))+'</span>';
+      + '<span class="agent-dir">'+formatAgentDir(a.workdir || '')+'</span>';
     node.onclick = () => selectAgent(a.name);
     container.appendChild(node);
     if (byParent[a.name] && byParent[a.name].length) {
@@ -1062,8 +1129,26 @@ function renderTree(byParent, parent, container) {
     }
   });
 }
+// 🎯T84: compact workdir for RHS; github.com paths get an inline GitHub icon
+// instead of a bare ~ prefix.
 function shortDir(d) {
-  return d.replace(/^\/Users\/[^/]+/, '~').replace(/\/work\/github\.com\//,'/');
+  const s = String(d || '');
+  const gh = /(?:^|\/)(?:Users\/[^/]+\/)?work\/github\.com\/(.+)$/.exec(s)
+    || /github\.com\/(.+)$/.exec(s);
+  if (gh) {
+    return { html: true, text: gh[1], github: true };
+  }
+  const home = s.replace(/^\/Users\/[^/]+/, '~');
+  return { html: false, text: home };
+}
+function formatAgentDir(d) {
+  const info = shortDir(d);
+  if (info.github) {
+    // Inline octocat-ish mark (simple path icon via SVG).
+    const icon = '<svg class="gh-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+    return icon + escHtml(info.text);
+  }
+  return escHtml(info.text);
 }
 // 🎯T82: primary refresh is agents_changed push; slow poll is reconnect fallback only.
 setInterval(refreshAgents, 30000);
@@ -1378,17 +1463,23 @@ function updateWorkingProgress(text) {
 // Auto-grow the textarea: reset to one row, then expand to fit content
 // (capped by CSS max-height with internal scroll once that's reached).
 function autoGrow() {
+  input.classList.remove('composer-scroll');
   input.style.height = 'auto';
-  input.style.height = input.scrollHeight + 'px';
+  const maxPx = Math.round(window.innerHeight * 0.28);
+  const h = Math.min(input.scrollHeight, maxPx);
+  input.style.height = h + 'px';
+  // Only show scrollbar when content hits the cap (🎯T69).
+  if (input.scrollHeight > maxPx + 1) input.classList.add('composer-scroll');
 }
 
 // Enter submits, Shift-Enter inserts a newline.
 input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    // Cmd/Ctrl+Enter while editing a recalled message rewinds the
-    // conversation to it (destructive); plain Enter appends (safe).
-    if ((e.metaKey || e.ctrlKey) && editingEl) rewindAndResend();
+    // 🎯T88: primary send while a recalled bubble is highlighted rewinds
+    // and resends (destructive redo). Escape clears edit mode first for
+    // safe append; Cmd/Ctrl+Enter also forces safe append.
+    if (editingEl && !(e.metaKey || e.ctrlKey)) rewindAndResend();
     else send();
     return;
   }
@@ -1412,6 +1503,32 @@ input.addEventListener('input', () => {
     }
   }
 });
+// 🎯T80: bulk paste/dictation insert tidy (not keystroke mid-edit).
+input.addEventListener('paste', (e) => {
+  const clip = (e.clipboardData && e.clipboardData.getData('text')) || '';
+  if (!clip) return;
+  // Only tidy when replacing empty/all or inserting into empty field.
+  const start = input.selectionStart, end = input.selectionEnd;
+  const cur = input.value;
+  const isBulkEmpty = cur.length === 0 || (start === 0 && end === cur.length);
+  if (!isBulkEmpty) return;
+  const tidy = tidyDictationInsert(clip);
+  if (tidy === clip) return;
+  e.preventDefault();
+  input.value = tidy;
+  input.selectionStart = input.selectionEnd = tidy.length;
+  autoGrow();
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+});
+function tidyDictationInsert(s) {
+  let t = String(s).replace(/^\s+|\s+$/g, '');
+  if (!t) return t;
+  // Already multi-sentence / punctuated — leave alone.
+  if (/[.?!]/.test(t) && t !== t.toLowerCase()) return t;
+  if (/^[a-z]/.test(t)) t = t.charAt(0).toUpperCase() + t.slice(1);
+  if (!/[.?!]$/.test(t)) t += '.';
+  return t;
+}
 sendBtn.addEventListener('click', send);
 if (typeof renderAttention === 'function') renderAttention();
 // Keep focus in the textarea when clicking toolbar buttons: preventing
@@ -1435,7 +1552,12 @@ document.addEventListener('keydown', e => {
   if (e.key === 'PageUp') { e.preventDefault(); msgs.scrollBy(0, -msgs.clientHeight * 0.8); }
   if (e.key === 'PageDown') { e.preventDefault(); msgs.scrollBy(0, msgs.clientHeight * 0.8); }
   // Esc interrupts Jevons's current turn (like the Claude Code TUI).
-  if (e.key === 'Escape') { transport.send('{"type":"interrupt"}'); setWorking(false); }
+  if (e.key === 'Escape') {
+    // 🎯T88: clear history-edit mode so next Enter is safe append.
+    if (editingEl) { setEditingHighlight(null); histIdx = null; histDraft = ''; }
+    transport.send('{"type":"interrupt"}');
+    setWorking(false);
+  }
 });
 
 // Theme toggle.
@@ -1469,15 +1591,15 @@ let termWs = null;
 let termFit = null;
 let selectedAgent = null;
 
+// 🎯T73: selection only — do not open the obsolete black TMUX/detail panel.
 function selectAgent(name) {
   if (selectedAgent === name) {
-    // Deselect.
-    closeTerminal();
+    selectedAgent = null;
+    document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
     return;
   }
   selectedAgent = name;
   document.querySelectorAll('.agent-node').forEach(n => n.classList.toggle('selected', n.dataset.agent === name));
-  openTerminal(name);
 }
 
 function openTerminal(name) {
