@@ -38,6 +38,9 @@ import (
 
 const (
 	defaultPort     = 13715
+	// dailyPort is the live owner-driver bind. Journey suite MUST refuse it
+	// (Universe B / 🎯T101). Grep marker for hermetic doctrine test:
+	// refusing port daily-driver
 	dailyPort       = 13705
 	mcpName         = "jevonsmcp-journey"
 	dailyMCPName    = "jevonsmcp"

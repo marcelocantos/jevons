@@ -1,21 +1,30 @@
 # Journey suite (isolated owner-chat E2E)
 
+**Standing product doctrine (🎯T101):** this suite is the **preferred E2E net**
+for owner-visible chat/fleet behaviour. It is **distinct from** hermetic
+`make test` (Go/Node/Playwright mocks — no Grok, no isolate).
+
+**Journey-or-exception:** when an owner-visible failure is fixed, add a
+journey that covers it, **or** an explicit exception naming why
+unit/hermetic coverage is enough.
+
 ## Two universes
 
 Keep them distinct. Most agent/automated work lives in **B**.
 
 | | **A — Daily driver** | **B — Journey / throwaway** |
 |---|---|---|
-| When | Real owner use; rare diagnosis that **needs** live context | Default E2E owner-chat journeys and smoke |
-| Port | `:13705` | **13715** (or `-port 0`; never 13705) |
+| When | Real owner use; rare diagnosis that **needs** live context | **Preferred E2E** owner-chat + fleet journeys |
+| Port | `:13705` | **13715** (or `-port 0`; **never** 13705) |
 | State / chatlog | `~/.jevons` | `$TMPDIR/jevons-journey-*` |
 | MCP | `jevonsmcp` | `jevonsmcp-journey` (removed on exit) |
 
 **Policy:** do not drive Universe A unless the bug genuinely requires the
-owner’s session, journal, or MCP surface. Prefer this suite. Scripts that
-still attach to a running daemon (`make test-live-suite`, `chat-smoke`,
-`chat-smoke-cancel`) default to `:13705` — use them on purpose, not as the
-routine path.
+owner’s session, journal, or MCP surface. Prefer this suite. The suite
+**refuses** port `13705` so journeys cannot silently bind the daily
+driver. Scripts that still attach to a running daemon
+(`make test-live-suite`, `chat-smoke`, `chat-smoke-cancel`) default to
+`:13705` — use them on purpose, not as the routine path.
 
 ## Run
 

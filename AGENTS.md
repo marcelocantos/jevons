@@ -32,7 +32,22 @@ Two universes for live owner-chat work — keep them distinct:
 
 - **A (daily):** `:13705` / `~/.jevons` / `jevonsmcp` — real owner session.
   Touch only when diagnosis needs that context.
-- **B (isolated):** `make test-journey` — throwaway port/state/MCP; default E2E.
+- **B (isolated):** `make test-journey` — throwaway port/state/MCP.
+  The **preferred E2E net** for owner-visible chat/fleet behaviour (🎯T101).
+
+Hermetic `make test` (Go + Node + Playwright UI with mocks) is the fast
+gate and is **distinct from** journeys: it never needs Grok or a daemon.
+Journeys are opt-in live Grok against a throwaway isolate.
+
+**Journey-or-exception:** when an owner-visible product failure mode is
+fixed, land a journey that covers it, **or** an explicit exception in the
+diff/PR notes naming why unit/hermetic coverage is enough. Do not treat
+unit green alone as the standing net for chat/fleet regressions that only
+show up on the real path.
+
+Universe B never defaults to daily `:13705` — the suite refuses that port.
+Attaching to a running daily daemon (`make test-live-suite`, chat-smoke*)
+is intentional-only, not routine.
 
 ```bash
 make test         # All: Go + web hermetic (Node) + Playwright UI (hermetic)
