@@ -65,6 +65,27 @@ open http://localhost:13705/
   task, runs to completion) and `jevons_agent_*` (named durable agents).
   The legacy `jevons_*_session` tools were removed (🎯T41).
 
+## Fleet spawn path (🎯T78)
+
+**Default for child implementation work:** create a Jevons fleet agent or
+durable thread so the child **outlives the spawner** and can show in the
+RHS fleet panel (🎯T72 family).
+
+| Need | Tool |
+|---|---|
+| Named long-lived PO/boss/worker | `jevons_agent_start` → `jevons_agent_send` |
+| Durable owned conversation | `jevons_thread_spawn` → `jevons_thread_direct` |
+| One-shot task, no ongoing ownership | `jwork` |
+
+**Do not default to** Grok `spawn_subagent` (or worktree subagents that
+die with the parent). Those children are not first-class fleet entries,
+vanish on parent interrupt, and break multi-agent observability.
+
+Hard suppress of harness subagent spawn is optional where the Grok CLI
+allows it; until then this convention plus jevons MCP tools is the
+enforced path. Brief every new agent with target IDs and ownership —
+never bare "go".
+
 ## Configuration
 
 | Path | Purpose |
