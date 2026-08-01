@@ -64,6 +64,11 @@ open http://localhost:13705/
 - **Workers**: `jwork` (sole ephemeral primitive — one self-contained
   task, runs to completion) and `jevons_agent_*` (named durable agents).
   The legacy `jevons_*_session` tools were removed (🎯T41).
+- **MCP resilience (🎯T60)**: `jevons_mcp_reconnect` — from inside the
+  overseer chat, re-attach dropped MCP servers (all, or one named
+  server) without session rotate or TUI `/mcps`. Cycles
+  `grok mcp disable` → `enable` so tools from servers like github/gmail
+  work again in the same session.
 
 ## Fleet spawn path (🎯T78)
 

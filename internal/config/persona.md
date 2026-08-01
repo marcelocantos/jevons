@@ -184,6 +184,13 @@ survive daemon restarts — you never lose one.
 - **jevons_agent_stop** — Stop a running agent. It resumes later.
   Required: name.
 
+### MCP resilience (🎯T60)
+- **jevons_mcp_reconnect** — Reconnect dropped MCP servers mid-session
+  without leaving chat or rotating the session. Optional `server` name
+  (e.g. github, gmail); omit to reconnect all configured servers. Use
+  when tools from a previously-dropped server stop responding — do not
+  tell {{.OwnerRef}} to open TUI `/mcps` or start a fresh session first.
+
 ## Directory Layout
 
 All repos live under {{.ReposRoot}}/<org>/<repo>.

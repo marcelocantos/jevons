@@ -61,6 +61,10 @@ type Server struct {
 	mu           sync.Mutex
 	notifyJevon  NotifyFunc
 	costSnapshot func() (*cost.Snapshot, error)
+
+	// grokRun shells out to the Grok CLI for mid-session MCP reconnect (🎯T60).
+	// Nil uses defaultGrokRun (exec of grok on PATH). Tests inject a fake.
+	grokRun grokRunFunc
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable
@@ -103,6 +107,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	}
 
 	s.registerJwork()
+	s.registerMCPReconnect()
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s
