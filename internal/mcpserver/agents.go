@@ -83,7 +83,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if proc != nil && proc.Alive() {
 			status = "running"
 		}
-		fmt.Fprintf(&b, "%-20s %-10s %s (session: %s)\n", d.Name, status, d.WorkDir, d.SessionID[:8])
+		fmt.Fprintf(&b, "%-20s %-10s %s (session: %s)\n", d.Name, status, d.WorkDir, sessionDisplay(d.SessionID))
 	}
 	return mcp.NewToolResultText(b.String()), nil
 }
@@ -130,7 +130,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	// Wire events: broadcast to web UI and notify Jevon on agent responses.
 	s.wireAgentEvents(name, proc)
 
-	return mcp.NewToolResultText(fmt.Sprintf("Agent %q started (session: %s, workdir: %s)", name, def.SessionID[:8], def.WorkDir)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Agent %q started (session: %s, workdir: %s)", name, sessionDisplay(def.SessionID), def.WorkDir)), nil
 }
 
 func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
