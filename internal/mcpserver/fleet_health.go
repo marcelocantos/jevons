@@ -30,6 +30,46 @@ func deadRecoveryPlan(hasProc, alive, autoStart bool) (detect, tryRecover, clear
 	return true, false, true
 }
 
+// fleetSweepReg is the seam SweepDeadAgents needs so hermetic tests can
+// inject hasProc&&!Alive without a real OS process (🎯T85 oracle).
+type fleetSweepReg interface {
+	List() []claudia.AgentDef
+	// ProcState returns whether a process handle exists and whether it is Alive.
+	ProcState(name string) (hasProc, alive bool)
+	Launch(name string) error
+	Stop(name string)
+}
+
+// claudiaSweep adapts *claudia.Registry to fleetSweepReg.
+type claudiaSweep struct{ reg *claudia.Registry }
+
+func (c claudiaSweep) List() []claudia.AgentDef {
+	if c.reg == nil {
+		return nil
+	}
+	return c.reg.List()
+}
+
+func (c claudiaSweep) ProcState(name string) (hasProc, alive bool) {
+	if c.reg == nil {
+		return false, false
+	}
+	proc := c.reg.Get(name)
+	if proc == nil {
+		return false, false
+	}
+	return true, proc.Alive()
+}
+
+func (c claudiaSweep) Launch(name string) error {
+	_, err := c.reg.Launch(name)
+	return err
+}
+
+func (c claudiaSweep) Stop(name string) {
+	c.reg.Stop(name)
+}
+
 // SweepDeadAgents detects fleet agents whose process handle is present
 // but no longer Alive (silent death without Stop). Recovery policy:
 //   - AutoStart durable agents: re-Launch (rehydrate session)
@@ -41,21 +81,27 @@ func SweepDeadAgents(reg *claudia.Registry, overseerName string) []DeadAgentRepo
 	if reg == nil {
 		return nil
 	}
+	return sweepDeadAgents(claudiaSweep{reg}, overseerName)
+}
+
+// sweepDeadAgents is the testable implementation (real path + hermetic fakes).
+func sweepDeadAgents(reg fleetSweepReg, overseerName string) []DeadAgentReport {
+	if reg == nil {
+		return nil
+	}
 	var out []DeadAgentReport
 	for _, d := range reg.List() {
 		if d.Name == "" || d.Name == overseerName {
 			continue
 		}
-		proc := reg.Get(d.Name)
-		hasProc := proc != nil
-		alive := hasProc && proc.Alive()
+		hasProc, alive := reg.ProcState(d.Name)
 		detect, tryRecover, clearHandle := deadRecoveryPlan(hasProc, alive, d.AutoStart)
 		if !detect {
 			continue
 		}
 		rep := DeadAgentReport{Name: d.Name}
 		if tryRecover {
-			if _, err := reg.Launch(d.Name); err != nil {
+			if err := reg.Launch(d.Name); err != nil {
 				rep.Error = err.Error()
 				reg.Stop(d.Name)
 				slog.Warn("fleet health: dead AutoStart agent re-launch failed",
@@ -73,7 +119,7 @@ func SweepDeadAgents(reg *claudia.Registry, overseerName string) []DeadAgentRepo
 	return out
 }
 
-// FormatDeadAgentReport is a one-line human summary for MCP / notify.
+// FormatDeadAgentReport is a one-line human summary for MCP / notify / UI.
 func FormatDeadAgentReport(reps []DeadAgentReport) string {
 	if len(reps) == 0 {
 		return "fleet health: no dead agents"
@@ -89,4 +135,17 @@ func FormatDeadAgentReport(reps []DeadAgentReport) string {
 		}
 	}
 	return "fleet health: dead agents → " + strings.Join(parts, ", ")
+}
+
+// PrependFleetHealth surfaces recovery on tool results (agent_list / send),
+// not only slog (🎯T85 overseer/UI-visible path).
+func PrependFleetHealth(body string, reps []DeadAgentReport) string {
+	if len(reps) == 0 {
+		return body
+	}
+	line := FormatDeadAgentReport(reps)
+	if body == "" {
+		return line
+	}
+	return line + "\n" + body
 }

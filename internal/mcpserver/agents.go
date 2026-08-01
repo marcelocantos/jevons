@@ -82,13 +82,17 @@ func (s *Server) SetNotify(fn NotifyFunc) {
 }
 
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// 🎯T85: proactive silent-death sweep before listing.
-	if reps := SweepDeadAgents(s.registry, s.overseerName()); len(reps) > 0 {
-		slog.Info(FormatDeadAgentReport(reps))
+	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
+	// (and overseer notify), not only logs.
+	reps := SweepDeadAgents(s.registry, s.overseerName())
+	if len(reps) > 0 {
+		line := FormatDeadAgentReport(reps)
+		slog.Info(line)
+		s.notifyFleetHealth(line)
 	}
 	defs := s.registry.List()
 	if len(defs) == 0 {
-		return mcp.NewToolResultText("No agents registered."), nil
+		return mcp.NewToolResultText(PrependFleetHealth("No agents registered.", reps)), nil
 	}
 
 	var b strings.Builder
@@ -105,7 +109,23 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		fmt.Fprintf(&b, "%-20s %-10s parent=%-12s %s (session: %s)\n",
 			d.Name, status, parent, d.WorkDir, sessionDisplay(d.SessionID))
 	}
-	return mcp.NewToolResultText(b.String()), nil
+	return mcp.NewToolResultText(PrependFleetHealth(b.String(), reps)), nil
+}
+
+// notifyFleetHealth injects a fleet outage/recovery note into the overseer
+// when a notify hook is wired (live daemon). Tests may leave notify nil.
+func (s *Server) notifyFleetHealth(line string) {
+	if s == nil || line == "" {
+		return
+	}
+	s.mu.Lock()
+	fn := s.notifyJevon
+	s.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	// Distinct prefix so activity strip / overseer can treat as system note.
+	fn("[Fleet health] " + line)
 }
 
 func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -186,25 +206,40 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError("name and text are required"), nil
 	}
 
-	// 🎯T85: if the process died silently, try AutoStart rehydrate before fail.
+	// 🎯T85: if the process died silently, sweep + rehydrate before fail;
+	// surface any recovery line on the tool result (not only logs).
+	var healthNote string
 	if s.registry != nil {
-		_ = SweepDeadAgents(s.registry, s.overseerName())
+		if reps := SweepDeadAgents(s.registry, s.overseerName()); len(reps) > 0 {
+			healthNote = FormatDeadAgentReport(reps)
+			slog.Info(healthNote)
+			s.notifyFleetHealth(healthNote)
+		}
 	}
 
 	proc := s.registry.Get(name)
+	rehydrated := false
 	if proc == nil || !proc.Alive() {
 		// Last chance: Launch (rehydrate) then send — no silent drop.
 		if s.registry != nil && s.registry.Def(name) != nil {
 			p2, err := s.registry.Launch(name)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf(
-					"agent %q is not running and rehydrate failed: %v", name, err)), nil
+				errMsg := fmt.Sprintf("agent %q is not running and rehydrate failed: %v", name, err)
+				if healthNote != "" {
+					errMsg = healthNote + "; " + errMsg
+				}
+				return mcp.NewToolResultError(errMsg), nil
 			}
 			s.wireAgentEvents(name, p2)
 			proc = p2
+			rehydrated = true
 			slog.Info("agent send rehydrated dead/stopped process", "name", name)
 		} else {
-			return mcp.NewToolResultError(fmt.Sprintf("agent %q is not running", name)), nil
+			errMsg := fmt.Sprintf("agent %q is not running", name)
+			if healthNote != "" {
+				errMsg = healthNote + "; " + errMsg
+			}
+			return mcp.NewToolResultError(errMsg), nil
 		}
 	}
 
@@ -226,6 +261,12 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	msg := fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)
 	if injected {
 		msg += " (standing fleet brief T104/T78 prepended on first send)"
+	}
+	if rehydrated {
+		msg += " (rehydrated after dead/stopped process)"
+	}
+	if healthNote != "" {
+		msg += " [" + healthNote + "]"
 	}
 	return mcp.NewToolResultText(msg), nil
 }
