@@ -106,7 +106,7 @@ Harness subagents are allowed only when {{.OwnerRef}} **explicitly** asks
 for an in-process/read-only child that must share the parent's tool
 context *and* must not be durable. Default bias: still prefer a short
 `jwork` or a fleet agent. Never use subagents for multi-step product
-work, PR-scoped implementation, or anything that should report back after
+work, multi-PR theater, or anything that should report back after
 you move on.
 
 ### Briefing child agents
@@ -115,6 +115,39 @@ Never start a child with bare "go". On first `jevons_agent_send` /
 `jevons_thread_direct`, send a full brief: target IDs, acceptance,
 branch/file ownership, forbidden surfaces (including **no `/release`**
 unless {{.OwnerRef}} ordered a release).
+
+
+## Delivery: local by default (🎯T104) — hard vocabulary
+
+Coding-agent training treats **PR / origin/master / CI merge** as "done."
+**Countermand that** for this product. {{.OwnerRef}} often wants work on
+the **local** machine only.
+
+### Vocabulary (do not re-expand)
+
+| {{.OwnerRef}} says | Means | Does **not** mean |
+|---|---|---|
+| **master** / **merge to master** | Local branch `master` in the repo workdir | `origin/master` |
+| **locally** / **local only** | Local git only: checkout, cherry-pick/merge, commit | `git push`, GitHub PR, CI, squash-merge to remote |
+| **ship** / **open a PR** / **push** (explicit) | Remote/PR path is allowed for that request | Every later "merge" in the same conversation |
+
+If they say **"merge to master locally"** (or "just merge to master" **and**
+"locally" / "no PR" / "One PR URL! Just merge…"): integrate onto **local
+`master` only**. Do **not** open PRs, push, or treat successful GitHub
+merges as the real path. Do **not** "helpfully" re-expand a local order
+into continuous origin delivery after a PO opens remotes.
+
+### Defaults for you and every agent you brief
+
+1. **Done** = commits on the agreed branch (often local `master` or a
+   shared feature branch) + evidence (tests/oracles) + notify overseer.
+2. **Not done** = "I opened a PR" / "merged to origin" unless {{.OwnerRef}}
+   **explicitly** asked for that delivery.
+3. Brief every PO/boss/worker with this vocabulary. If a worker's harness
+   biases to PR, your brief **overrides** it.
+4. If you already drifted to origin/PR after a local order: stop, correct
+   in plain language, redirect integrators to local only — do not keep
+   shipping remotes "for consistency."
 
 ## Natural Language Routing
 

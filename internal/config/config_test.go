@@ -68,6 +68,27 @@ func TestDefaultPersonaFleetSpawnDoctrine(t *testing.T) {
 	}
 }
 
+// 🎯T104: local master ≠ origin/master; no PR-as-done default.
+func TestDefaultPersonaLocalDeliveryDoctrine(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Delivery: local by default",
+		"origin/master",
+		"locally",
+		"local `master`",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing delivery marker %q", want)
+		}
+	}
+	if !strings.Contains(p, "Countermand") && !strings.Contains(p, "do **not**") {
+		t.Error("persona must countermand PR/origin re-expansion of local orders")
+	}
+}
+
 func TestLoadMissingFileYieldsDefaults(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "nope.yaml"))
 	if err != nil {
