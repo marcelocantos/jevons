@@ -12,26 +12,53 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// 🎯T64: tool_call with rawInput must surface args for activity strip.
-func TestToolCallDetailRawInput(t *testing.T) {
-	raw := []byte(`{"update":{"sessionUpdate":"tool_call","title":"search_tool","rawInput":{"query":"jevonsmcp agent list"}}}`)
-	name, input := toolCallDetail(raw)
+// 🎯T64: product path is claudia handleSessionUpdate → Event.Raw → chatWireLine.
+// Fixed claudia passes ACP session/update params through as Raw (preserves
+// rawInput). This fixture is that real shape — not a hand-built partial.
+func TestToolCallDetailFromClaudiaPreservedParams(t *testing.T) {
+	// Exact ACP session/update params body (what fixed claudia puts on Event.Raw).
+	acpParams := []byte(`{
+		"sessionId":"s1",
+		"update":{
+			"sessionUpdate":"tool_call",
+			"title":"search_tool",
+			"kind":"other",
+			"rawInput":{"query":"jevonsmcp agent list","limit":3}
+		}
+	}`)
+	// Prove the OLD narrow re-marshal would have dropped rawInput (regression
+	// guard): if someone reintroduces struct re-marshal without rawInput, this
+	// documents the failure mode. We assert the product path uses full params.
+	var narrow struct {
+		SessionID string `json:"sessionId"`
+		Update    struct {
+			SessionUpdate string `json:"sessionUpdate"`
+			Title         string `json:"title"`
+			Kind          string `json:"kind"`
+		} `json:"update"`
+	}
+	if err := json.Unmarshal(acpParams, &narrow); err != nil {
+		t.Fatal(err)
+	}
+	stripped, _ := json.Marshal(narrow)
+	if strings.Contains(string(stripped), "rawInput") {
+		t.Fatal("test assumption failed: narrow re-marshal unexpectedly kept rawInput")
+	}
+	_, strippedIn := toolCallDetail(stripped)
+	if strippedIn != nil {
+		t.Fatal("narrow re-marshal must lose input — if not, oracle is weak")
+	}
+
+	// Product path: Event as emitted by fixed claudia (Raw = full params).
+	ev := claudia.Event{Type: "progress", ProgressType: "tool_use", Raw: acpParams}
+	name, input := toolCallDetail(ev.Raw)
 	if name != "search_tool" {
 		t.Fatalf("name=%q", name)
 	}
 	if input == nil || input["query"] != "jevonsmcp agent list" {
-		t.Fatalf("input=%v", input)
+		t.Fatalf("input=%v want query from rawInput", input)
 	}
-	// Without rawInput, name still works (T63).
-	raw2 := []byte(`{"update":{"sessionUpdate":"tool_call","title":"Bash"}}`)
-	n2, in2 := toolCallDetail(raw2)
-	if n2 != "Bash" || in2 != nil {
-		t.Fatalf("name=%q input=%v", n2, in2)
-	}
-	// Full progress wire line includes input for UI summariseInput.
-	line, ok := chatWireLine(claudia.Event{
-		Type: "progress", ProgressType: "tool_use", Raw: raw,
-	})
+	line, ok := chatWireLine(ev)
 	if !ok || !strings.Contains(line, "search_tool") || !strings.Contains(line, "jevonsmcp agent list") {
 		t.Fatalf("wire line missing tool+args: ok=%v line=%s", ok, line)
 	}

@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/claudia v0.20.1-0.20260801043820-58cb7f57da7c
+	github.com/marcelocantos/claudia v0.20.1-0.20260801142921-20464ce1e60b
 	github.com/marcelocantos/pigeon v0.19.0
 	github.com/mark3labs/mcp-go v0.44.1
 	golang.org/x/term v0.41.0
