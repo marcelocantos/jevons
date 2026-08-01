@@ -86,12 +86,14 @@ function slackOf(page) {
     );
 
     // Pad history so the stream starts near the bottom of a long transcript.
+    // Include the working indicator (live path always has it mid-turn).
     await page.evaluate(() => {
       document.getElementById('messages').innerHTML = '';
       for (let i = 0; i < 12; i++) {
         window.addMsg('user', 'prior user turn ' + i);
         window.addMsg('jevons', 'prior assistant turn ' + i + ' — short.');
       }
+      if (typeof setWorking === 'function') setWorking(true, 'streaming');
       // Force follow on and pin (same as send()).
       autoScroll = true;
       const m = document.getElementById('messages');
@@ -100,14 +102,27 @@ function slackOf(page) {
     await page.waitForTimeout(80);
 
     // Grow a streaming reply in steps that each add many lines.
-    const steps = 8;
+    // Assert scrollHeight is monotonic and follow lag stays within slack —
+    // regression for "pins to mid-bubble while tokens still arrive".
+    const steps = 10;
+    let prevHeight = 0;
     for (let s = 0; s < steps; s++) {
       await page.evaluate((step) => {
-        const block = Array.from({ length: 25 }, (_, i) => `- stream_step_${step}_line_${i}`).join('\n');
+        // Mix markdown so marked re-layout is non-trivial (lists + headings +
+        // a short table), matching real incremental replies.
+        const block = [
+          `### stream_step_${step}`,
+          ...Array.from({ length: 20 }, (_, i) => `- stream_step_${step}_line_${i}`),
+          '',
+          '| a | b |',
+          '| --- | --- |',
+          `| ${step} | ${step * 2} |`,
+          '',
+        ].join('\n');
         window.appendOrAddJevons((step === 0 ? '### long stream\n' : '\n') + block);
       }, s);
-      // rAF render + double-rAF pin + IntersectionObserver settle.
-      await page.waitForTimeout(120);
+      // rAF render + double-rAF pin + ResizeObserver / IO settle.
+      await page.waitForTimeout(150);
       const snap = await slackOf(page);
       // FOLLOW_SLACK_PX is 120; allow a little layout jitter.
       if (snap.dist > 140) {
@@ -116,7 +131,13 @@ function slackOf(page) {
           `height=${snap.scrollHeight}, client=${snap.clientHeight}, items=${snap.streamItems})`,
         );
       }
-      if (snap.streamItems < (s + 1) * 20) {
+      if (snap.scrollHeight + 1 < prevHeight) {
+        failures.push(
+          `step ${s}: scrollHeight shrank mid-stream (${prevHeight} → ${snap.scrollHeight})`,
+        );
+      }
+      prevHeight = Math.max(prevHeight, snap.scrollHeight);
+      if (snap.streamItems < (s + 1) * 15) {
         failures.push(`step ${s}: only ${snap.streamItems} list items rendered mid-stream (want ~full growth)`);
       }
     }

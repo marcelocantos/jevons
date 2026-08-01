@@ -87,8 +87,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    transcript instead of covering the latest reply (🎯T70 / T70.1). */
 #chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 /* overflow-anchor:none — browser scroll-anchoring fights follow-scroll when
-   a long markdown bubble is re-parsed every stream frame (🎯T30.2). */
+   a long markdown bubble is re-parsed every stream frame (🎯T30.2).
+   flex-shrink:0 on children — default flex-shrink:1 lets tall .msg items
+   compress inside the scroller so scrollHeight under-reports and stick-to-
+   bottom pins to a false mid-bubble "bottom" while tokens still arrive. */
 #messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
+#messages > * { flex-shrink: 0; }
 #messages::-webkit-scrollbar { width: 6px; }
 #messages::-webkit-scrollbar-track { background: transparent; }
 #messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
@@ -219,8 +223,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 @keyframes voice-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 .voice-indicator { font-size: 11px; color: var(--text-muted); padding: 4px 4px; align-self: center; font-style: italic; }
 /* "Working" indicator — order:1000 keeps it visually pinned below all
-   messages regardless of DOM insertion order while a turn is in flight. */
+   messages regardless of DOM insertion order while a turn is in flight.
+   messages-end (follow sentinel) uses order:1001 so true bottom stays last. */
 .working-indicator { order: 1000; align-self: flex-start; display: flex; align-items: center; gap: 7px; padding: 8px 4px; color: var(--text-muted); font-size: 13px; font-style: italic; }
+#messages-end { order: 1001; }
 .working-indicator .work-dots { display: inline-flex; gap: 4px; }
 .working-indicator .work-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: work-bounce 1.2s ease-in-out infinite; }
 .working-indicator .work-dots span:nth-child(2) { animation-delay: 0.16s; }
@@ -566,7 +572,12 @@ function scheduleJevonsRender(el) {
     // T66: stream may start short then measure tall while still latest —
     // re-evaluate auto-expand so the sealed reply is not stuck collapsed.
     scheduleLatestExpansion();
-    scrollDownThrottled();
+    // Force layout then pin immediately (not only coalesced rAF) so each
+    // incremental paint's true scrollHeight is what stick-to-bottom uses.
+    if (autoScroll) {
+      void (el._body && el._body.offsetHeight);
+      scrollDown();
+    }
   });
 }
 
@@ -580,12 +591,20 @@ function sealAssistantStream() {
     delete el._streamRaw;                       // clear first so the sealed
     el._layoutText = raw;                       // render draws mermaid (🎯T59)
     el._layoutRole = 'jevons';
+    // Stay expanded through seal so measure/paint never flashes a preview
+    // into the live latest bubble (would freeze follow at a mid offset).
+    el._expanded = true;
+    el._autoExpanded = true;
     renderBody(el, 'jevons', raw);
+    unwatchStreamBubble(el);
     scheduleLatestExpansion();
   }
-  // Final layout (markdown / mermaid) often grows after the last stream
-  // pin — re-follow so the user never needs a manual nudge to see the end.
-  scrollDownThrottled();
+  // Final layout (markdown / mermaid / highlight) often grows after the
+  // last stream pin — re-follow so the user never needs a manual nudge.
+  if (autoScroll) {
+    void msgs.offsetHeight;
+    scrollDown();
+  }
 }
 
 function startTurn() {
@@ -720,18 +739,46 @@ function previewOf(text, maxLines) {
 }
 
 // Measure whether full render is tall enough to warrant collapse.
-// Paints full then preview into d._body (must already be in the DOM).
-// Returns { tall, fullH, collapsedH, preview }.
+// Full height is measured on an off-DOM-width probe so we never paint
+// preview into the live body as an intermediate step (that thrash was the
+// root of stick-to-bottom freezing mid-stream / mid-seal — 🎯T30.2).
+// Returns { tall, fullH, collapsedH, preview }. Does NOT leave d painted.
 function measureCollapse(d, role, text) {
   const maxLines = (role === 'user') ? USER_PREVIEW_LINES : PREVIEW_LINES;
   const preview = previewOf(text, maxLines);
   if (preview === text) {
     return { tall: false, fullH: 0, collapsedH: 0, preview };
   }
-  paintBody(d, role, text);
-  const fullH = d._body.offsetHeight || 0;
-  paintBody(d, role, preview);
-  const collapsedH = d._body.offsetHeight || 0;
+  const width = (d._body && d._body.clientWidth) || d.clientWidth || 0;
+  // Probe shares .msg / role classes so markdown CSS applies; absolute so
+  // it cannot change #messages.scrollHeight while we measure.
+  const probe = document.createElement('div');
+  probe.className = d.className;
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:0;top:0;width:' +
+    (width > 0 ? width + 'px' : '100%') + ';max-width:85%;';
+  const probeBody = document.createElement('div');
+  probeBody.className = 'msg-body';
+  probe.appendChild(probeBody);
+  // Attach under #messages so CSS variables / inheritance match live bubbles.
+  msgs.appendChild(probe);
+  // Inline the paint for probe (avoid mutating d._body).
+  if (role === 'jevons') {
+    probeBody.innerHTML = marked.parse(text);
+  } else if (role === 'user') {
+    probeBody.innerHTML = renderUserText(text);
+  } else {
+    probeBody.textContent = text;
+  }
+  const fullH = probeBody.offsetHeight || 0;
+  if (role === 'jevons') {
+    probeBody.innerHTML = marked.parse(preview);
+  } else if (role === 'user') {
+    probeBody.innerHTML = renderUserText(preview);
+  } else {
+    probeBody.textContent = preview;
+  }
+  const collapsedH = probeBody.offsetHeight || 0;
+  probe.remove();
   // Avoid divide-by-zero / zero-layout (hidden tab): treat as not tall.
   if (collapsedH <= 0 || fullH <= 0) {
     return { tall: false, fullH, collapsedH, preview };
@@ -834,16 +881,30 @@ function renderBody(d, role, text) {
   d._layoutText = text;
   d._fullRole = role;
   d._previewLines = (role === 'user') ? USER_PREVIEW_LINES : PREVIEW_LINES;
-  // Live stream (🎯T30.2): always paint full text. measureCollapse thrash
-  // (full → preview → full into the live body) shrinks #messages.scrollHeight
-  // mid-frame and leaves follow-scroll pinned to a stale mid-bubble offset
-  // until seal — matching the "bounce back until response finishes" bug.
+  // Live stream (🎯T30.2): always paint full text once. No collapse measure
+  // mid-stream — keeps scrollHeight monotonic while tokens arrive.
   if (typeof d._streamRaw === 'string') {
     paintBody(d, role, text);
     if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
     d._fullText = null;
     d._expanded = true;
     d._autoExpanded = true;
+    watchStreamBubble(d);
+    return;
+  }
+  // Expanded (latest / user toggle): paint full once. Measure via probe only
+  // so we know whether to offer "Show less" — never intermediate preview.
+  if (d._expanded) {
+    paintBody(d, role, text);
+    const m = measureCollapse(d, role, text);
+    if (!m.tall) {
+      if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
+      d._fullText = null;
+      return;
+    }
+    d._fullText = text;
+    d._previewCache = m.preview;
+    ensureExpandToggle(d);
     return;
   }
   const m = measureCollapse(d, role, text);
@@ -855,8 +916,8 @@ function renderBody(d, role, text) {
   }
   d._fullText = text;
   d._previewCache = m.preview;
-  // Tall: show full only if expanded (latest auto-expand or user toggle).
-  paintBody(d, role, d._expanded ? text : m.preview);
+  // Collapsed non-latest: single paint of preview (probe already measured).
+  paintBody(d, role, m.preview);
   ensureExpandToggle(d);
 }
 function ensureExpandToggle(d) {
@@ -1182,14 +1243,16 @@ let autoScroll = true;
 // Ignore scroll events caused by our own pin so a 1px shortfall cannot
 // permanently disable follow (Grok-CLI-like stick-to-bottom, 🎯T30.2).
 let _pinningScroll = false;
+let _pinGuardUntil = 0;
 const FOLLOW_SLACK_PX = 120;
 msgs.addEventListener('scroll', () => {
-  if (_pinningScroll) return;
+  if (_pinningScroll || Date.now() < _pinGuardUntil) return;
   autoScroll = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - FOLLOW_SLACK_PX;
 });
 function scrollDown() {
   if (!autoScroll) return;
   _pinningScroll = true;
+  _pinGuardUntil = Date.now() + 80; // absorb delayed clamp scroll events
   const pin = () => { msgs.scrollTop = msgs.scrollHeight; };
   pin();
   // Double-rAF catches late markdown/table layout after the append.
@@ -1198,6 +1261,8 @@ function scrollDown() {
     requestAnimationFrame(() => {
       pin();
       _pinningScroll = false;
+      // Hold the ignore window a beat past the last pin.
+      _pinGuardUntil = Date.now() + 50;
     });
   });
 }
@@ -1208,6 +1273,28 @@ let _scrollRaf = 0;
 function scrollDownThrottled() {
   if (_scrollRaf) return;
   _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; scrollDown(); });
+}
+// ResizeObserver on the live streaming bubble: re-pin whenever its box
+// grows while follow is armed. End-sentinel IO alone only fires on
+// intersection *transitions*, so a bubble that keeps growing while already
+// non-intersecting never re-triggers (classic mid-stream freeze).
+let _streamRO = null;
+let _streamROEl = null;
+function watchStreamBubble(el) {
+  if (!el || typeof ResizeObserver === 'undefined') return;
+  if (_streamROEl === el && _streamRO) return;
+  unwatchStreamBubble();
+  _streamROEl = el;
+  _streamRO = new ResizeObserver(() => {
+    if (autoScroll) scrollDownThrottled();
+  });
+  _streamRO.observe(el);
+  if (el._body) _streamRO.observe(el._body);
+}
+function unwatchStreamBubble(el) {
+  if (el && _streamROEl && el !== _streamROEl) return;
+  if (_streamRO) { _streamRO.disconnect(); _streamRO = null; }
+  _streamROEl = null;
 }
 // Content-growth re-pin (🎯T30.2): #messages is flex-fixed so ResizeObserver
 // on the scroller never fires when scrollHeight grows. A 1px end sentinel
