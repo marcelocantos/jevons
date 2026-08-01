@@ -47,9 +47,10 @@ Needs: Grok CLI signed in (same as daily jevonsd). Not part of default `make tes
 6. **J7-overseer-registry** — overseer running in `/api/agents` and `agent_list`
 7. **J8-two-agents-same-workdir** — two fleet agents, same workdir, distinct sessions (T86 live)
 8. **J9-thread-spawn-direct** — spawn → direct short turn → remove
+9. **J10-worker-shell-tool** — worker runs `run_terminal_command` (T97 permission regression); marker file oracle
 
 ### Teardown oracle
-9. **J5-isolation** — sandbox journal under temp state; journey MCP gone; daily MCP intact
+10. **J5-isolation** — sandbox journal under temp state; journey MCP gone; daily MCP intact
 
 ## Cleanup
 

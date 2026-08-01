@@ -14,8 +14,8 @@
 //  3. cancel-and-send (interrupt mid-turn → replacement → terminal)
 //  4. reconnect sealed (second connect sees bounded sealed history)
 //  5. isolation (after teardown)
-//  6–9. orchestration: tool surface, overseer registry, two agents
-//      same workdir, thread spawn→direct→remove
+//  6–10. orchestration: tool surface, overseer registry, two agents
+//       same workdir, thread spawn→direct→remove, worker shell tool (T97)
 //
 // Not part of default `make test` (needs Grok + network).
 package main
@@ -189,6 +189,7 @@ persona_notes: |
 	s.run("J7-overseer-registry", s.jOverseerInRegistry)
 	s.run("J8-two-agents-same-workdir", s.jTwoAgentsSameWorkdir)
 	s.run("J9-thread-spawn-direct", s.jThreadSpawnDirectRemove)
+	s.run("J10-worker-shell-tool", s.jWorkerShellTool)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()

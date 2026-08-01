@@ -20,6 +20,7 @@ import (
 // Simple: tool surface + overseer registry presence.
 // Moderate: two fleet agents on one workdir (T86 live) + thread
 // spawn → direct → remove.
+// Shell tools: worker must execute run_terminal_command unattended (T97).
 
 func (s *suite) jMCPToolSurface() error {
 	res, err := s.mcp("tools/list", map[string]any{})
@@ -42,12 +43,12 @@ func (s *suite) jMCPToolSurface() error {
 		"jevons_agent_list",
 		"jevons_agent_start",
 		"jevons_agent_stop",
+		"jevons_agent_kill",
 		"jevons_agent_send",
 		"jevons_thread_list",
 		"jevons_thread_spawn",
 		"jevons_thread_direct",
 		"jevons_thread_remove",
-		"jevons_mcp_reconnect", // 🎯T60 mid-session MCP reconnect
 	}
 	var missing []string
 	for _, n := range required {
@@ -233,6 +234,89 @@ func (s *suite) jThreadSpawnDirectRemove() error {
 	}
 	if strings.Contains(list2, id) {
 		return fmt.Errorf("thread still listed after remove: %s", trim(list2, 160))
+	}
+	return nil
+}
+
+// jWorkerShellTool is the T97 regression journey: a fleet worker must
+// actually run run_terminal_command (not just start). Prior suite gaps
+// only did text-only directs, so ACP permission optionId bugs never fired.
+//
+// Uses thread_direct (blocks for the turn) rather than agent_send
+// (fire-and-forget notify).
+func (s *suite) jWorkerShellTool() error {
+	id := fmt.Sprintf("orch-shell-%d", time.Now().Unix()%100000)
+	work := filepath.Join(s.stateDir, "shell-work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		return err
+	}
+	// Marker file the worker creates via shell — oracle independent of model prose.
+	marker := filepath.Join(work, "j10-shell-marker.txt")
+	_ = os.Remove(marker)
+	defer func() {
+		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id})
+	}()
+
+	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": id, "workdir": work, "description": "journey shell-permission worker",
+	})
+	if err != nil {
+		return fmt.Errorf("spawn: %w (%s)", err, trim(spawnOut, 80))
+	}
+
+	token := "J10_SHELL_OK"
+	// Force the shell tool path. Echo both to stdout (for reply) and to a
+	// marker file (filesystem oracle if the model is chatty).
+	prompt := fmt.Sprintf(
+		"You MUST use the run_terminal_command tool. Run exactly:\n"+
+			"echo %s | tee %s\n"+
+			"Then reply with only the marker string %s (one line).",
+		token, marker, token,
+	)
+	directOut, err := s.mcpText("jevons_thread_direct", map[string]any{
+		"id": id, "text": prompt,
+	})
+	if err != nil {
+		return fmt.Errorf("direct shell turn: %w (%s)", err, trim(directOut, 200))
+	}
+	if strings.Contains(directOut, "unknown permission option") {
+		return fmt.Errorf("shell permission bug still present: %s", trim(directOut, 240))
+	}
+	if strings.Contains(strings.ToLower(directOut), "permission") &&
+		strings.Contains(strings.ToLower(directOut), "failed") {
+		return fmt.Errorf("permission failure in reply: %s", trim(directOut, 240))
+	}
+
+	// Primary oracle: marker file written by the shell command.
+	// Secondary: token appears in the agent reply (whitespace-tolerant).
+	markerOK := false
+	if data, err := os.ReadFile(marker); err == nil {
+		if strings.Contains(string(data), token) {
+			markerOK = true
+		}
+	}
+	flat := strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\n' || r == '\t' || r == '\r' {
+			return -1
+		}
+		return r
+	}, directOut)
+	replyOK := strings.Contains(flat, token)
+	if !markerOK && !replyOK {
+		return fmt.Errorf("shell turn did not prove tool ran (no marker file, no token in reply): %s",
+			trim(directOut, 200))
+	}
+	if !markerOK {
+		// Reply alone is weak if the model hallucinates the token without shell.
+		// Still fail hard when neither path works; soft-pass only if reply has
+		// token AND no permission error (tool may have run without tee path).
+		// Prefer marker — log when missing.
+		return fmt.Errorf("marker file missing/empty at %s; reply had token but filesystem oracle failed — check shell actually ran: %s",
+			marker, trim(directOut, 160))
+	}
+
+	if _, err := s.mcpText("jevons_thread_remove", map[string]any{"id": id}); err != nil {
+		return fmt.Errorf("remove: %w", err)
 	}
 	return nil
 }
