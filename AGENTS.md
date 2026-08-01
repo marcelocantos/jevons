@@ -40,7 +40,7 @@ make test-go      # go test ./...
 make test-web     # node web/scripts/chat_events_test.js
 make test-ui      # Playwright perceptual chat UI (mocked WS)
 make test-ui-live # Same, against a running jevonsd
-make test-journey # Isolated owner-chat journeys (Universe B; needs Grok)
+make test-journey # Isolated owner-chat + orchestration journeys (Universe B; needs Grok)
 make test-live-suite  # Attaches to running daemon (often A — intentional only)
 make bullseye     # Standing invariants: build, test, vet, clean tree
 ```

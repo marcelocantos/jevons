@@ -36,11 +36,20 @@ Needs: Grok CLI signed in (same as daily jevonsd). Not part of default `make tes
 
 ## Journeys
 
+### Owner chat
 1. **J1-health** — `/health`
 2. **J2-chat-round-trip** — idle send → terminal
 3. **J3-cancel-and-send** — long turn → interrupt → settle → replacement → terminal
 4. **J4-reconnect-sealed** — seed turn → reconnect → bounded replay + sandbox journal only
-5. **J5-isolation** — sandbox journal under temp state; journey MCP gone; daily MCP intact
+
+### Orchestration (MCP-direct on the isolate)
+5. **J6-mcp-tool-surface** — agent + thread tools registered
+6. **J7-overseer-registry** — overseer running in `/api/agents` and `agent_list`
+7. **J8-two-agents-same-workdir** — two fleet agents, same workdir, distinct sessions (T86 live)
+8. **J9-thread-spawn-direct** — spawn → direct short turn → remove
+
+### Teardown oracle
+9. **J5-isolation** — sandbox journal under temp state; journey MCP gone; daily MCP intact
 
 ## Cleanup
 

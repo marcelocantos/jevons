@@ -8,11 +8,14 @@
 //	make test-journey
 //	go run ./scripts/journey-suite [-keep] [-port 0]
 //
-// Journeys (live Grok ACP, short turns):
+// Journeys (live Grok ACP; owner chat + MCP orchestration):
 //  1. health
 //  2. chat round-trip (idle send → terminal)
 //  3. cancel-and-send (interrupt mid-turn → replacement → terminal)
 //  4. reconnect sealed (second connect sees bounded sealed history)
+//  5. isolation (after teardown)
+//  6–9. orchestration: tool surface, overseer registry, two agents
+//      same workdir, thread spawn→direct→remove
 //
 // Not part of default `make test` (needs Grok + network).
 package main
@@ -180,6 +183,12 @@ persona_notes: |
 	s.run("J2-chat-round-trip", s.jChatRoundTrip)
 	s.run("J3-cancel-and-send", s.jCancelAndSend)
 	s.run("J4-reconnect-sealed", s.jReconnectSealed)
+
+	// Orchestration (MCP-direct against the isolate — not the daily stream).
+	s.run("J6-mcp-tool-surface", s.jMCPToolSurface)
+	s.run("J7-overseer-registry", s.jOverseerInRegistry)
+	s.run("J8-two-agents-same-workdir", s.jTwoAgentsSameWorkdir)
+	s.run("J9-thread-spawn-direct", s.jThreadSpawnDirectRemove)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()
