@@ -74,6 +74,11 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   decision — don't resume voice work without it.
 - The `jevons` overseer prompt is embedded in `cmd/jevonsd/main.go` until
   🎯T44 externalizes it; treat it as config-in-code when editing.
+- **Fleet spawn (🎯T78):** child implementation work uses Jevons fleet
+  agents (`jevons_agent_start` / durable threads), **not** Grok
+  `spawn_subagent` / worktree children that die with the parent and never
+  show in the RHS fleet panel. Full doctrine: `internal/config/persona.md`
+  and `agents-guide.md`.
 
 ## Project structure
 

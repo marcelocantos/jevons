@@ -47,6 +47,27 @@ func TestPersonaUsesConfiguredIdentity(t *testing.T) {
 	}
 }
 
+// 🎯T78: overseer persona steers child work onto fleet agents, not harness subagents.
+func TestDefaultPersonaFleetSpawnDoctrine(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Fleet spawn doctrine",
+		"jevons_agent_start",
+		"jevons_thread_spawn",
+		"spawn_subagent",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing fleet-spawn doctrine marker %q", want)
+		}
+	}
+	if !strings.Contains(p, "Forbidden as the default") {
+		t.Error("default persona must forbid harness subagents as the default for implementation work")
+	}
+}
+
 func TestLoadMissingFileYieldsDefaults(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "nope.yaml"))
 	if err != nil {
