@@ -47,6 +47,7 @@ func (s *suite) jMCPToolSurface() error {
 		"jevons_thread_spawn",
 		"jevons_thread_direct",
 		"jevons_thread_remove",
+		"jevons_mcp_reconnect", // 🎯T60 mid-session MCP reconnect
 	}
 	var missing []string
 	for _, n := range required {
