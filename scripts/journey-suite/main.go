@@ -188,6 +188,7 @@ persona_notes: |
 
 	// Orchestration (MCP-direct against the isolate — not the daily stream).
 	s.run("J6-mcp-tool-surface", s.jMCPToolSurface)
+	s.run("J6b-mcp-reconnect", s.jMCPReconnect)
 	s.run("J7-overseer-registry", s.jOverseerInRegistry)
 	s.run("J8-two-agents-same-workdir", s.jTwoAgentsSameWorkdir)
 	s.run("J9-thread-spawn-direct", s.jThreadSpawnDirectRemove)

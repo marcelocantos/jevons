@@ -339,6 +339,8 @@ func main() {
 	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID, "resume", jevonDef.Materialized)
 
 	srv.SetRegistry(registry)
+	// 🎯T82: event-driven fleet panel refresh when agents.json mutates.
+	srv.WatchAgentsFile(registryPath)
 
 	listenAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.Port)
 

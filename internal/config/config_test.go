@@ -68,6 +68,25 @@ func TestDefaultPersonaFleetSpawnDoctrine(t *testing.T) {
 	}
 }
 
+// 🎯T87 / 🎯T103 thin: impatience + RSI filing bias in default persona.
+func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Impatience",
+		"bias to act",
+		"dead air",
+		"Recursive self-improvement",
+		"bullseye target",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("persona missing impatience/RSI marker %q", want)
+		}
+	}
+}
+
 // 🎯T104: local master ≠ origin/master; no PR-as-done default.
 func TestDefaultPersonaLocalDeliveryDoctrine(t *testing.T) {
 	p, err := Default().Persona()
@@ -86,6 +105,34 @@ func TestDefaultPersonaLocalDeliveryDoctrine(t *testing.T) {
 	}
 	if !strings.Contains(p, "Countermand") && !strings.Contains(p, "do **not**") {
 		t.Error("persona must countermand PR/origin re-expansion of local orders")
+	}
+}
+
+// 🎯T78/T104: agents-guide is the PO/worker product surface that inherits doctrine.
+func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
+	// agents-guide.md is repo-root product docs consumed by PO/workers.
+	path := filepath.Join("..", "..", "agents-guide.md")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		// Fallback when tests run from module root via go test ./...
+		path = "agents-guide.md"
+		b, err = os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("agents-guide.md: %v", err)
+		}
+	}
+	g := string(b)
+	for _, want := range []string{
+		"Fleet spawn path",
+		"jevons_agent_start",
+		"spawn_subagent",
+		"Delivery: local by default",
+		"local `master`",
+		"opened a PR",
+	} {
+		if !strings.Contains(g, want) {
+			t.Errorf("agents-guide.md missing doctrine marker %q", want)
+		}
 	}
 }
 

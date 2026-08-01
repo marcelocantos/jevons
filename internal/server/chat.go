@@ -256,6 +256,16 @@ func (s *Server) SetRegistry(reg *claudia.Registry) {
 	s.registry = reg
 }
 
+// NotifyAgentsChanged pushes a non-journaled live frame so the RHS fleet
+// panel refreshes without waiting on poll (🎯T82). Safe from any goroutine.
+func (s *Server) NotifyAgentsChanged() {
+	payload, err := json.Marshal(map[string]any{"type": "agents_changed"})
+	if err != nil {
+		return
+	}
+	s.broadcastChatLive(string(payload))
+}
+
 // GetAgent looks up a worker by name in the registry. Returns nil if
 // no registry is attached or no such name is registered (or the
 // registered agent has not been launched yet).

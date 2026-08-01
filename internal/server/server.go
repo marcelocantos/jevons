@@ -92,6 +92,9 @@ type Server struct {
 	notifyQueue    []string
 	notifyDraining bool
 	notifySender   func(string) error
+
+	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
+	agentsWatchCancel context.CancelFunc
 }
 
 // SetActivityHook registers a callback fired on owner activity — the

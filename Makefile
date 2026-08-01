@@ -57,6 +57,8 @@ test-ui:
 	node scripts/chat-ui-test/test.js
 	node scripts/chat-ui-test/collapse-test.js
 	node scripts/chat-ui-test/stream-scroll-test.js
+	node scripts/chat-ui-test/fleet-tree-test.js
+	node scripts/chat-ui-test/attention-ui-test.js
 	node scripts/chat-ui-test/infinite-scroll-test.js
 	node scripts/chat-ui-test/mermaid-test.js
 	node scripts/chat-ui-test/agent-note-test.js

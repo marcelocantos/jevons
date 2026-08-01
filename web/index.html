@@ -422,6 +422,12 @@ function handle(m) {
     return;
   }
 
+  // 🎯T82: registry file changed — refresh RHS fleet immediately (poll is fallback).
+  if (typ === 'agents_changed') {
+    refreshAgents();
+    return;
+  }
+
   // Server rewound the conversation N user turns — trim the view to
   // match: remove the Nth-from-last user message and everything after it.
   // The resent (edited) message then re-arrives as a fresh turn.
@@ -610,6 +616,11 @@ function addTurnItem(cls, text) {
   turnItems.appendChild(d);
   const n = turnItems.children.length;
   turnDetails._label.textContent = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
+  // 🎯T71: mid-turn tool activity is the best ACP-available progress signal.
+  if (cls === 'tool-use' || cls === 'tool-result') {
+    const short = truncate(String(text || '').replace(/\s+/g, ' ').trim(), 48);
+    updateWorkingProgress(n + (n === 1 ? ' step' : ' steps') + (short ? ' · ' + short : ''));
+  }
   scrollDownThrottled();
 }
 
@@ -1009,20 +1020,39 @@ function refreshAgents() {
       (byParent[p] = byParent[p] || []).push(a);
     });
     renderTree(byParent, '', agentsEl);
+    // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
+    updateFleetProgress(agents);
   }).catch(()=>{});
 }
+function updateFleetProgress(agents) {
+  if (!Array.isArray(agents)) return;
+  const running = agents.filter(a => a.status === 'running').length;
+  const stopped = agents.length - running;
+  // Surface on working indicator when a multi-agent job is live mid-turn.
+  if (workingEl && agents.length > 1) {
+    const base = workingProgress && !workingProgress.startsWith('fleet ')
+      ? workingProgress
+      : '';
+    const fleet = 'fleet ' + running + ' running · ' + stopped + ' stopped';
+    updateWorkingProgress(base ? base + ' · ' + fleet : fleet);
+  }
+}
 function renderTree(byParent, parent, container) {
-  const children = byParent[parent] || [];
+  // 🎯T68: sibling order is deliberate — name-sorted under each parent,
+  // independent of Go map iteration or poll order of the parent group.
+  const children = (byParent[parent] || []).slice().sort((a, b) =>
+    String(a.name || '').localeCompare(String(b.name || '')));
   children.forEach(a => {
     const node = document.createElement('div');
     node.className = 'agent-node' + (a.name === selectedAgent ? ' selected' : '');
     node.dataset.agent = a.name;
+    node.dataset.parent = parent || '';
     node.innerHTML = '<span class="agent-dot '+a.status+'"></span>'
       + '<span class="agent-name">'+escHtml(a.name)+'</span>'
-      + '<span class="agent-dir">'+escHtml(shortDir(a.workdir))+'</span>';
+      + '<span class="agent-dir">'+escHtml(shortDir(a.workdir || ''))+'</span>';
     node.onclick = () => selectAgent(a.name);
     container.appendChild(node);
-    if (byParent[a.name]) {
+    if (byParent[a.name] && byParent[a.name].length) {
       const sub = document.createElement('div');
       sub.className = 'agent-children';
       container.appendChild(sub);
@@ -1033,7 +1063,8 @@ function renderTree(byParent, parent, container) {
 function shortDir(d) {
   return d.replace(/^\/Users\/[^/]+/, '~').replace(/\/work\/github\.com\//,'/');
 }
-setInterval(refreshAgents, 3000);
+// 🎯T82: primary refresh is agents_changed push; slow poll is reconnect fallback only.
+setInterval(refreshAgents, 30000);
 refreshAgents();
 
 // Live token-burn ticker — the "what is burning right now" glance,
@@ -1268,20 +1299,52 @@ function recallHistory(dir) {
 // reply text arrives, so a long synchronous turn (e.g. directing a
 // worker that runs a test suite) doesn't look like a hang. Only driven
 // by live sends — never by history replay.
+// 🎯T71 thin: when tool steps arrive mid-turn, surface the best available
+// progress (last tool name / step count) instead of a static label alone.
+// 🎯T94 thin: client stuck-watchdog — if working stays on past a bound with
+// no seal, clear chrome + status note (no hand-minted session required).
 let workingEl = null;
-function setWorking(on) {
+let workingProgress = '';
+let workingWatch = 0;
+let WORKING_STUCK_MS = 10 * 60 * 1000; // 10m bound (documented; tests may shrink)
+function workingLabelHTML() {
+  const dots = '<span class="work-dots"><span></span><span></span><span></span></span>';
+  if (workingProgress) {
+    return 'Jevons: ' + escHtml(workingProgress) + ' ' + dots;
+  }
+  return 'Jevons is working ' + dots;
+}
+function setWorking(on, progress) {
   if (on) {
+    if (typeof progress === 'string') workingProgress = progress;
     if (!workingEl) {
       workingEl = document.createElement('div');
       workingEl.className = 'working-indicator';
-      workingEl.innerHTML = 'Jevons is working <span class="work-dots"><span></span><span></span><span></span></span>';
     }
+    workingEl.innerHTML = workingLabelHTML();
     msgs.appendChild(workingEl);
     scrollDown();
+    if (workingWatch) clearTimeout(workingWatch);
+    workingWatch = setTimeout(() => {
+      if (!workingEl) return;
+      setWorking(false);
+      addStatusMsg('Recovered from stuck turn (no sealed progress within 10m). Ready for input.');
+      console.warn('jevons: stuck-watchdog cleared working indicator (T94)');
+    }, WORKING_STUCK_MS);
   } else if (workingEl) {
     workingEl.remove();
     workingEl = null;
+    workingProgress = '';
+    if (workingWatch) { clearTimeout(workingWatch); workingWatch = 0; }
+  } else if (workingWatch) {
+    clearTimeout(workingWatch);
+    workingWatch = 0;
   }
+}
+function updateWorkingProgress(text) {
+  if (!workingEl) return;
+  workingProgress = text || '';
+  workingEl.innerHTML = workingLabelHTML();
 }
 
 // Auto-grow the textarea: reset to one row, then expand to fit content

@@ -49,6 +49,7 @@ func (s *suite) jMCPToolSurface() error {
 		"jevons_thread_spawn",
 		"jevons_thread_direct",
 		"jevons_thread_remove",
+		"jevons_mcp_reconnect",
 	}
 	var missing []string
 	for _, n := range required {
@@ -60,6 +61,42 @@ func (s *suite) jMCPToolSurface() error {
 		return fmt.Errorf("missing tools: %s", strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// jMCPReconnect exercises mid-session MCP re-attach (🎯T60 / 🎯T105.1).
+// Calls jevons_mcp_reconnect against the live isolate — behavioral cycle
+// via grok mcp disable/enable, not tools/list membership alone.
+func (s *suite) jMCPReconnect() error {
+	text, err := s.mcpText("jevons_mcp_reconnect", map[string]any{})
+	combined := text
+	if err != nil {
+		combined = combined + " " + err.Error()
+	}
+	low := strings.ToLower(combined)
+	// Empty config on a minimal isolate is a valid fail-closed path.
+	if strings.Contains(low, "no mcp servers configured") ||
+		strings.Contains(low, "nothing to reconnect") {
+		return nil
+	}
+	if err != nil && !strings.Contains(low, "ok") && !strings.Contains(low, "enable") {
+		return fmt.Errorf("mcp reconnect: %v (%s)", err, trim(text, 160))
+	}
+	if !strings.Contains(low, "ok") &&
+		!strings.Contains(low, "enable") &&
+		!strings.Contains(low, "reconnect") {
+		return fmt.Errorf("mcp reconnect unexpected report: %s", trim(combined, 200))
+	}
+	// Session not rotated: overseer still running under same name.
+	agents, lerr := s.listAgentsHTTP()
+	if lerr != nil {
+		return lerr
+	}
+	for _, a := range agents {
+		if a.Name == overseerName && a.Status == "running" {
+			return nil
+		}
+	}
+	return fmt.Errorf("after mcp reconnect, overseer not running in /api/agents")
 }
 
 func (s *suite) jOverseerInRegistry() error {

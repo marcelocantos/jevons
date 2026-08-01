@@ -18,7 +18,10 @@ import (
 //     (including legacy agents with empty parent)
 //   - peers, reverse lineage, and cross-tree kills are denied
 //
-// Cross-tree escalation (request via nearest common ancestor) is deferred.
+// Cross-tree requests are reified as an escalation toward the nearest
+// common ancestor (🎯T100 thin): the deny message names the NCA so the
+// actor can route justification upward instead of a bare refusal.
+// Full multi-hop skeptical parent approval workflow remains later.
 func canKill(reg *claudia.Registry, actor, target string, isOverseer func(string) bool) error {
 	if reg == nil {
 		return fmt.Errorf("agent registry not available")
@@ -48,10 +51,54 @@ func canKill(reg *claudia.Registry, actor, target string, isOverseer func(string
 	if reg.IsAncestor(actor, target) {
 		return nil
 	}
+	nca := nearestCommonAncestor(reg, actor, target)
+	if nca == "" {
+		return fmt.Errorf(
+			"denied: %q is not an ancestor of %q — only a parent (or overseer) may kill descendants; cross-tree kill is not direct (no common ancestor to escalate to)",
+			actor, target,
+		)
+	}
 	return fmt.Errorf(
-		"denied: %q is not an ancestor of %q — only a parent (or overseer) may kill descendants; cross-tree kill is not direct",
-		actor, target,
+		"denied: %q is not an ancestor of %q — cross-tree kill is not direct; escalate to nearest common ancestor %q with concrete justification (what/why/blast radius)",
+		actor, target, nca,
 	)
+}
+
+// nearestCommonAncestor returns the deepest shared ancestor of a and b,
+// or "" if none. Self is not an ancestor of self in IsAncestor; if a is
+// an ancestor of b (or vice versa), that ancestor is returned.
+func nearestCommonAncestor(reg *claudia.Registry, a, b string) string {
+	if reg == nil || a == "" || b == "" {
+		return ""
+	}
+	if a == b {
+		return a
+	}
+	if reg.IsAncestor(a, b) {
+		return a
+	}
+	if reg.IsAncestor(b, a) {
+		return b
+	}
+	// Walk parents of a; first that is ancestor of b (or is b) wins — walk
+	// from a upward so the deepest match is found first.
+	seen := map[string]bool{}
+	for cur := a; cur != "" && !seen[cur]; {
+		seen[cur] = true
+		def := reg.Def(cur)
+		if def == nil {
+			break
+		}
+		p := def.Parent
+		if p == "" {
+			break
+		}
+		if p == b || reg.IsAncestor(p, b) {
+			return p
+		}
+		cur = p
+	}
+	return ""
 }
 
 // killSubtree removes target and all its descendants (children first).
