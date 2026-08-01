@@ -34,13 +34,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
 const (
-	defaultPort     = 13715
-	// dailyPort is the live owner-driver bind. Journey suite MUST refuse it
-	// (Universe B / 🎯T101). Enforced by refuseDailyPort — tested hermetically.
-	dailyPort       = 13705
+	defaultPort     = portguard.DefaultPort
+	dailyPort       = portguard.DailyPort // Universe A — never bind (portguard.RefuseDaily)
 	mcpName         = "jevonsmcp-journey"
 	dailyMCPName    = "jevonsmcp"
 	overseerName    = "jevons"
@@ -48,15 +48,6 @@ const (
 	turnTimeout     = 90 * time.Second
 	maxReplayFrames = 200 // sealed recent window; thousands means pollution/unsealed
 )
-
-// refuseDailyPort returns an error when p is the daily-driver port so the
-// journey suite never binds Universe A. Used at startup and in isolation.
-func refuseDailyPort(p int) error {
-	if p == dailyPort {
-		return fmt.Errorf("refusing port %d (daily-driver); use %d or -port 0", dailyPort, defaultPort)
-	}
-	return nil
-}
 
 type suite struct {
 	host     string
@@ -92,7 +83,7 @@ func main() {
 			fatal(err)
 		}
 	}
-	if err := refuseDailyPort(p); err != nil {
+	if err := portguard.RefuseDaily(p); err != nil {
 		fatal(err)
 	}
 	host := fmt.Sprintf("127.0.0.1:%d", p)
@@ -220,7 +211,7 @@ persona_notes: |
 // assertIsolation checks path + MCP isolation: journal lives only under the
 // temp state dir, journey MCP is gone, daily MCP still present if it was.
 func assertIsolation(hadDailyMCP bool, stateDir string, port int) error {
-	if err := refuseDailyPort(port); err != nil {
+	if err := portguard.RefuseDaily(port); err != nil {
 		return err
 	}
 	homeJevons, err := filepath.Abs(filepath.Join(homeDir(), ".jevons"))

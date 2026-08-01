@@ -1,8 +1,7 @@
 # Journey suite (isolated owner-chat E2E)
 
 **What a user journey is (owner 2026-08-01, 🎯T107):** a mapped **owner-visible
-interaction with the product that runs end-to-end and must interact with an
-agent** (overseer and/or fleet worker). Grepping docs, pure helper unit tests,
+interaction with the product that runs end-to-end and must interact with an agent** (overseer and/or fleet worker). Grepping docs, pure helper unit tests,
 and hermetic UI mocks are **not** journeys.
 
 **Standing product doctrine (🎯T101):** this suite is the **preferred E2E net**
@@ -53,9 +52,8 @@ go run ./scripts/journey-suite -bin ./bin/jevonsd
 
 Needs: Grok CLI signed in (same as daily jevonsd). Not part of default `make test`.
 
-**Meta-guards only (not journeys):** `go test ./scripts/journey-suite/` runs
-doctrine/inventory/port-refusal unit checks. That is a ratchet for docs and
-Universe B safety — it does **not** execute J1–J10 or talk to an agent.
+Hermetic meta-checks (doc inventory, port guard) live outside this section:
+`scripts/docratchet/` and `scripts/journey-suite/portguard/` — **not** journeys.
 
 ## Journeys
 

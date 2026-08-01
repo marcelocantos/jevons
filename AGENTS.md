@@ -35,10 +35,11 @@ Two universes for live owner-chat work — keep them distinct:
 - **B (isolated):** `make test-journey` — throwaway port/state/MCP.
   The **preferred E2E net** for owner-visible chat/fleet behaviour (🎯T101).
 
-A **user journey** maps a real owner interaction and runs **end-to-end
-against an agent** (overseer and/or fleet). Hermetic unit tests and doc
-greps are not journeys. After a successful live run, caching the agent
-interaction for replay is allowed (🎯T107).
+A **user journey** maps a real owner interaction and runs **end-to-end**;
+it **must interact with an agent** (overseer and/or fleet). Hermetic unit
+tests and doc greps are not journeys (see `scripts/docratchet/`,
+`scripts/journey-suite/portguard/`). After a successful live run, caching
+the agent interaction for replay is allowed (🎯T107).
 
 Hermetic `make test` (Go + Node + Playwright UI with mocks) is the fast
 gate and is **distinct from** journeys: it never needs Grok or a daemon.
