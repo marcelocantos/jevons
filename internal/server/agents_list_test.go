@@ -15,8 +15,8 @@ import (
 
 // 🎯T72.1: GET /api/agents is the RHS fleet panel source of truth.
 // Completeness means every registered fleet agent appears — including
-// PO-spawned children with parent lineage — not only top-level durable
-// entries like jevons / jevons-po.
+// PO-spawned children (AutoStart false) — not only top-level durable
+// entries like jevons / jevons-po. Tree parent edges are 🎯T68.
 
 func TestListFleetAgentsNilRegistry(t *testing.T) {
 	got := listFleetAgents(nil)
@@ -25,7 +25,7 @@ func TestListFleetAgentsNilRegistry(t *testing.T) {
 	}
 }
 
-func TestListFleetAgentsIncludesEphemeralChildrenWithParent(t *testing.T) {
+func TestListFleetAgentsIncludesEphemeralChildren(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -34,8 +34,8 @@ func TestListFleetAgentsIncludesEphemeralChildrenWithParent(t *testing.T) {
 	// Top-level durable + PO-spawned ephemeral child (AutoStart false).
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Provider: "grok", AutoStart: true},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Provider: "grok", AutoStart: true, Parent: "jevons"},
-		{Name: "jv-ephemeral-child", WorkDir: dir, SessionID: "s-c", Provider: "grok", AutoStart: false, Parent: "jevons-po"},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Provider: "grok", AutoStart: true},
+		{Name: "jv-ephemeral-child", WorkDir: dir, SessionID: "s-c", Provider: "grok", AutoStart: false},
 	} {
 		if err := reg.Register(d); err != nil {
 			t.Fatal(err)
@@ -58,12 +58,6 @@ func TestListFleetAgentsIncludesEphemeralChildrenWithParent(t *testing.T) {
 			t.Fatalf("%s status=%q want stopped", a.Name, a.Status)
 		}
 	}
-	if byName["jevons-po"].Parent != "jevons" {
-		t.Fatalf("po parent=%q want jevons", byName["jevons-po"].Parent)
-	}
-	if byName["jv-ephemeral-child"].Parent != "jevons-po" {
-		t.Fatalf("child parent=%q want jevons-po", byName["jv-ephemeral-child"].Parent)
-	}
 	if byName["jv-ephemeral-child"].WorkDir != dir {
 		t.Fatalf("child workdir=%q", byName["jv-ephemeral-child"].WorkDir)
 	}
@@ -77,8 +71,8 @@ func TestHandleListAgentsHTTPCompleteness(t *testing.T) {
 	dir := t.TempDir()
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "1", Provider: "grok"},
-		{Name: "boss", WorkDir: dir, SessionID: "2", Provider: "grok", Parent: "jevons"},
-		{Name: "worker", WorkDir: dir, SessionID: "3", Provider: "grok", Parent: "boss"},
+		{Name: "boss", WorkDir: dir, SessionID: "2", Provider: "grok"},
+		{Name: "worker", WorkDir: dir, SessionID: "3", Provider: "grok"},
 	} {
 		if err := reg.Register(d); err != nil {
 			t.Fatal(err)
@@ -107,17 +101,14 @@ func TestHandleListAgentsHTTPCompleteness(t *testing.T) {
 	if len(agents) != 3 {
 		t.Fatalf("got %d agents: %+v", len(agents), agents)
 	}
-	seen := map[string]string{}
+	seen := map[string]bool{}
 	for _, a := range agents {
-		seen[a.Name] = a.Parent
+		seen[a.Name] = true
 	}
 	for _, name := range []string{"jevons", "boss", "worker"} {
-		if _, ok := seen[name]; !ok {
+		if !seen[name] {
 			t.Fatalf("missing %q in /api/agents: %+v", name, agents)
 		}
-	}
-	if seen["boss"] != "jevons" || seen["worker"] != "boss" {
-		t.Fatalf("parent map: %+v", seen)
 	}
 }
 
