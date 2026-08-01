@@ -533,6 +533,9 @@ function scheduleJevonsRender(el) {
   el._renderRaf = requestAnimationFrame(() => {
     el._renderRaf = 0;
     renderBody(el, 'jevons', el._streamRaw);
+    // T66: stream may start small then cross isLarge while still latest —
+    // re-evaluate auto-expand so the sealed reply is not stuck collapsed.
+    scheduleLatestExpansion();
     scrollDownThrottled();
   });
 }
@@ -734,6 +737,11 @@ function ensureExpandToggle(d) {
 // auto-expanded one reverts to its collapsed preview (unless the user
 // toggled it manually). Debounced so a burst replay only expands the
 // final message once — the rest stay cheap previews (owner req).
+// T66: same rule for assistant as for user, including when a stream starts
+// small (not yet isLarge) and only later qualifies — re-apply while still
+// latest so it does not stick under "Show more".
+// T77: when an oversized message of either role ceases to be latest, the
+// auto-expand reverts to the bounded preview unless _userToggled.
 let latestEl = null;
 let latestRaf = 0;
 function lastMsgEl() {
@@ -747,17 +755,23 @@ function scheduleLatestExpansion() {
 }
 function refreshLatestExpansion() {
   const last = lastMsgEl();
-  if (last === latestEl) return;
-  if (latestEl && latestEl._autoExpanded && !latestEl._userToggled && latestEl._fullText != null) {
-    latestEl._autoExpanded = false;
-    latestEl._expanded = false;
-    renderBody(latestEl, latestEl._fullRole, latestEl._fullText);
+  if (last !== latestEl) {
+    // T77: prior auto-expanded latest (user or assistant) collapses.
+    if (latestEl && latestEl._autoExpanded && !latestEl._userToggled && latestEl._fullText != null) {
+      latestEl._autoExpanded = false;
+      latestEl._expanded = false;
+      renderBody(latestEl, latestEl._fullRole, latestEl._fullText);
+    }
+    latestEl = last;
   }
-  latestEl = last;
+  // Re-evaluate every tick: same bubble may grow small→large while still
+  // latest (streaming assistant, 🎯T66). Never fight a manual toggle.
   if (last && last._fullText != null && !last._userToggled) {
-    last._autoExpanded = true;
-    last._expanded = true;
-    renderBody(last, last._fullRole, last._fullText);
+    if (!(last._expanded && last._autoExpanded)) {
+      last._autoExpanded = true;
+      last._expanded = true;
+      renderBody(last, last._fullRole, last._fullText);
+    }
   }
 }
 
