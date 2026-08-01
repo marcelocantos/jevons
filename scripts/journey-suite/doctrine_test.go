@@ -95,25 +95,44 @@ func TestT101JourneyInventoryJ1ThroughJ10(t *testing.T) {
 }
 
 func TestT101SuiteRefusesDailyPort(t *testing.T) {
-	mainSrc := readRepo(t, "scripts/journey-suite/main.go")
-	if !strings.Contains(mainSrc, "dailyPort") {
-		t.Fatal("main.go missing dailyPort constant")
-	}
-	if !strings.Contains(mainSrc, "13705") {
-		t.Fatal("main.go missing daily port number 13705")
-	}
-	// Exact refusal path used at startup and in isolation oracle.
-	if !strings.Contains(mainSrc, "refusing port") {
-		t.Fatal("main.go missing refusing port error path")
-	}
-	if !strings.Contains(mainSrc, "daily-driver") {
-		t.Fatal("main.go missing daily-driver refusal marker")
-	}
-	// Runtime constant must match daily.
+	// Drive the shipped refuseDailyPort function — not a source grep that
+	// a comment alone could satisfy (skeptic: criterion 5).
 	if dailyPort != 13705 {
 		t.Fatalf("dailyPort = %d, want 13705", dailyPort)
 	}
 	if defaultPort == dailyPort {
 		t.Fatal("defaultPort must not equal dailyPort")
+	}
+
+	err := refuseDailyPort(dailyPort)
+	if err == nil {
+		t.Fatal("refuseDailyPort(dailyPort) returned nil — daily driver would be allowed")
+	}
+	if !strings.Contains(err.Error(), "refusing port") {
+		t.Fatalf("error %q missing refusing port", err)
+	}
+	if !strings.Contains(err.Error(), "daily-driver") {
+		t.Fatalf("error %q missing daily-driver", err)
+	}
+	if !strings.Contains(err.Error(), "13705") {
+		t.Fatalf("error %q missing port number", err)
+	}
+
+	if err := refuseDailyPort(defaultPort); err != nil {
+		t.Fatalf("refuseDailyPort(defaultPort) = %v, want nil", err)
+	}
+	if err := refuseDailyPort(0); err != nil {
+		t.Fatalf("refuseDailyPort(0) = %v, want nil (ephemeral resolved later)", err)
+	}
+	if err := refuseDailyPort(13716); err != nil {
+		t.Fatalf("refuseDailyPort(13716) = %v, want nil", err)
+	}
+
+	// Structural: main and isolation must call refuseDailyPort (not a
+	// parallel reimplementation that could drift).
+	mainSrc := readRepo(t, "scripts/journey-suite/main.go")
+	if strings.Count(mainSrc, "refuseDailyPort(") < 3 {
+		// def + startup call + assertIsolation call
+		t.Fatalf("refuseDailyPort call sites in main.go: want ≥3 (def+startup+isolation), source must wire the function")
 	}
 }
