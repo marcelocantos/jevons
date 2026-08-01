@@ -221,11 +221,3 @@ func str(v any) string {
 	s, _ := v.(string)
 	return s
 }
-
-// short renders the first 8 characters of a session id for display.
-func short(sessionID string) string {
-	if len(sessionID) > 8 {
-		return sessionID[:8]
-	}
-	return sessionID
-}
