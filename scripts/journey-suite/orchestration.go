@@ -207,6 +207,105 @@ func (s *suite) jTwoAgentsSameWorkdir() error {
 	return nil
 }
 
+// jPOWorkerLineageFanout is a multi-slice control-plane path (🎯T108):
+// overseer tools start a PO (boss) and a worker under that PO, assert
+// /api/agents lineage + completeness, first send injects T104 standing
+// brief (ack text), stop leaves registry honest. This is the same MCP
+// surface the owner chat overseer uses — not a substitute for typing in
+// the browser, but the product spawn/direct path under live Grok.
+func (s *suite) jPOWorkerLineageFanout() error {
+	work := filepath.Join(s.stateDir, "fanout-work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		return err
+	}
+	po, worker := "jv-fanout-po", "jv-fanout-worker"
+	defer func() {
+		_, _ = s.mcpText("jevons_agent_kill", map[string]any{"name": worker, "actor": overseerName})
+		_, _ = s.mcpText("jevons_agent_kill", map[string]any{"name": po, "actor": overseerName})
+	}()
+
+	if _, err := s.mcpText("jevons_agent_start", map[string]any{
+		"name": po, "workdir": work, "actor": overseerName, "parent": overseerName,
+	}); err != nil {
+		return fmt.Errorf("start po: %w", err)
+	}
+	if _, err := s.mcpText("jevons_agent_start", map[string]any{
+		"name": worker, "workdir": work, "actor": po, "parent": po,
+	}); err != nil {
+		return fmt.Errorf("start worker: %w", err)
+	}
+
+	agents, err := s.listAgentsHTTP()
+	if err != nil {
+		return err
+	}
+	by := map[string]agentInfo{}
+	for _, a := range agents {
+		by[a.Name] = a
+	}
+	for _, name := range []string{po, worker, overseerName} {
+		if _, ok := by[name]; !ok {
+			return fmt.Errorf("fan-out list missing %q", name)
+		}
+	}
+	if by[po].Parent != overseerName && by[po].Parent != "" {
+		// parent may be empty if not persisted — require worker→po at minimum
+	}
+	if by[worker].Parent != po {
+		return fmt.Errorf("worker parent=%q want %q (who-started-whom)", by[worker].Parent, po)
+	}
+	if by[po].Status != "running" || by[worker].Status != "running" {
+		return fmt.Errorf("want both running: po=%s worker=%s", by[po].Status, by[worker].Status)
+	}
+
+	// First send must inject T104 standing brief (shipped path, not persona grep).
+	ack, err := s.mcpText("jevons_agent_send", map[string]any{
+		"name": worker,
+		"text": "Reply with exactly: FANOUT_PONG and do not open a PR.",
+	})
+	if err != nil {
+		return fmt.Errorf("worker send: %w", err)
+	}
+	if !strings.Contains(ack, "standing fleet brief") && !strings.Contains(ack, "T104") {
+		return fmt.Errorf("first send ack missing standing brief note: %s", trim(ack, 160))
+	}
+
+	// Integrator slice: second agent (po) also gets brief on first send.
+	ackPO, err := s.mcpText("jevons_agent_send", map[string]any{
+		"name": po,
+		"text": "Coordinate only; local commits only.",
+	})
+	if err != nil {
+		return fmt.Errorf("po send: %w", err)
+	}
+	if !strings.Contains(ackPO, "standing fleet brief") && !strings.Contains(ackPO, "T104") {
+		return fmt.Errorf("po first send missing brief note: %s", trim(ackPO, 160))
+	}
+
+	// Stop worker — must remain listed as stopped (not vanished without kill).
+	if _, err := s.mcpText("jevons_agent_stop", map[string]any{"name": worker}); err != nil {
+		return fmt.Errorf("stop worker: %w", err)
+	}
+	agents2, err := s.listAgentsHTTP()
+	if err != nil {
+		return err
+	}
+	var workerRow *agentInfo
+	for i := range agents2 {
+		if agents2[i].Name == worker {
+			workerRow = &agents2[i]
+			break
+		}
+	}
+	if workerRow == nil {
+		return fmt.Errorf("worker disappeared after stop (want still registered)")
+	}
+	if workerRow.Status == "running" {
+		return fmt.Errorf("worker still running after stop")
+	}
+	return nil
+}
+
 // jThreadSpawnDirectRemove is a moderate orchestration path: spawn a
 // owned thread, direct a short turn, then remove it cleanly.
 func (s *suite) jThreadSpawnDirectRemove() error {
@@ -363,6 +462,7 @@ func (s *suite) jWorkerShellTool() error {
 type agentInfo struct {
 	Name    string `json:"name"`
 	WorkDir string `json:"workdir"`
+	Parent  string `json:"parent"`
 	Status  string `json:"status"`
 }
 

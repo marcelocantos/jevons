@@ -191,6 +191,7 @@ persona_notes: |
 	s.run("J6b-mcp-reconnect", s.jMCPReconnect)
 	s.run("J7-overseer-registry", s.jOverseerInRegistry)
 	s.run("J8-two-agents-same-workdir", s.jTwoAgentsSameWorkdir)
+	s.run("J8b-po-worker-lineage-fanout", s.jPOWorkerLineageFanout)
 	s.run("J9-thread-spawn-direct", s.jThreadSpawnDirectRemove)
 	s.run("J10-worker-shell-tool", s.jWorkerShellTool)
 

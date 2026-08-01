@@ -131,21 +131,37 @@ function startStaticServer(agentsPayload) {
       failures.push(`T71 working progress not shown: ${JSON.stringify(work)}`);
     }
 
-    // 🎯T94 thin: stuck-watchdog clears working after bound (test uses short bound).
+    // 🎯T94: idle stuck-watchdog — progress resets idle clock; pure idle fires recover.
+    // Stub transport open/close: static hermetic server has no /ws/chat, and
+    // onClose would call setWorking(false) and onOpen wipes #messages.
     await page.evaluate(() => {
-      // Shrink bound for hermetic proof without waiting 10 minutes.
-      WORKING_STUCK_MS = 80;
+      if (typeof transport !== 'undefined' && transport) {
+        transport.onClose = function () {};
+        transport.onOpen = function () {};
+      }
+      WORKING_STUCK_MS = 150;
       setWorking(true);
     });
-    await page.waitForTimeout(200);
+    // Mid-turn progress must keep working alive past the bound.
+    for (let i = 0; i < 5; i++) {
+      await page.waitForTimeout(60);
+      await page.evaluate((n) => { updateWorkingProgress('step ' + n + ' · tool_x'); }, i);
+    }
+    await page.waitForTimeout(50);
+    const midHealthy = await page.evaluate(() => !!document.querySelector('.working-indicator'));
+    if (!midHealthy) {
+      failures.push('T94 false-recovered while progress was still arriving');
+    }
+    // Stop progress; idle bound should clear working + status note.
+    await page.waitForTimeout(250);
     const afterStuck = await page.evaluate(() => ({
       working: !!document.querySelector('.working-indicator'),
       status: [...document.querySelectorAll('.msg.status')].map(e => e.textContent).join(' | '),
     }));
     if (afterStuck.working) {
-      failures.push('T94 stuck-watchdog left working indicator on after bound');
+      failures.push('T94 stuck-watchdog left working indicator on after idle bound');
     }
-    if (!/stuck|Recovered/i.test(afterStuck.status)) {
+    if (!/stuck|Recovered|idle/i.test(afterStuck.status)) {
       failures.push('T94 stuck-watchdog status note missing: ' + JSON.stringify(afterStuck.status));
     }
   } catch (e) {

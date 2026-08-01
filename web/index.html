@@ -549,6 +549,8 @@ function scheduleJevonsRender(el) {
     el._layoutText = el._streamRaw;
     el._layoutRole = 'jevons';
     renderBody(el, 'jevons', el._streamRaw);
+    // Streaming text is real progress — reset T94 idle stuck clock.
+    if (workingEl) armWorkingWatch();
     // T66: stream may start short then measure tall while still latest —
     // re-evaluate auto-expand so the sealed reply is not stuck collapsed.
     scheduleLatestExpansion();
@@ -1299,20 +1301,51 @@ function recallHistory(dir) {
 // reply text arrives, so a long synchronous turn (e.g. directing a
 // worker that runs a test suite) doesn't look like a hang. Only driven
 // by live sends — never by history replay.
-// 🎯T71 thin: when tool steps arrive mid-turn, surface the best available
-// progress (last tool name / step count) instead of a static label alone.
-// 🎯T94 thin: client stuck-watchdog — if working stays on past a bound with
-// no seal, clear chrome + status note (no hand-minted session required).
+// 🎯T71: tool steps surface as progress on this chrome.
+// 🎯T94: stuck-watchdog is an *idle* bound — any real progress (tool step,
+// stream chunk, fleet rollup) resets lastWorkingActivity. Only when no
+// progress arrives for WORKING_STUCK_MS do we interrupt + clear chrome.
+// Never false-recover a long healthy multi-agent turn that is still moving.
 let workingEl = null;
 let workingProgress = '';
 let workingWatch = 0;
-let WORKING_STUCK_MS = 10 * 60 * 1000; // 10m bound (documented; tests may shrink)
+let lastWorkingActivity = 0;
+// var (not let) so hermetic tests can shrink the bound via page.evaluate.
+var WORKING_STUCK_MS = 10 * 60 * 1000; // 10m idle bound
 function workingLabelHTML() {
   const dots = '<span class="work-dots"><span></span><span></span><span></span></span>';
   if (workingProgress) {
     return 'Jevons: ' + escHtml(workingProgress) + ' ' + dots;
   }
   return 'Jevons is working ' + dots;
+}
+function clearWorkingWatch() {
+  if (workingWatch) { clearTimeout(workingWatch); workingWatch = 0; }
+}
+function armWorkingWatch() {
+  lastWorkingActivity = Date.now();
+  clearWorkingWatch();
+  workingWatch = setTimeout(onWorkingStuck, WORKING_STUCK_MS);
+}
+function onWorkingStuck() {
+  workingWatch = 0;
+  if (!workingEl) return;
+  const idle = Date.now() - lastWorkingActivity;
+  if (idle < WORKING_STUCK_MS - 25) {
+    // Progress arrived after schedule; re-arm for remaining idle budget.
+    workingWatch = setTimeout(onWorkingStuck, Math.max(10, WORKING_STUCK_MS - idle));
+    return;
+  }
+  // Cancel in-flight overseer turn (server settles / interrupt path) then
+  // clear chrome so the owner is not stuck on "working…" without a mint.
+  try {
+    if (typeof transport !== 'undefined' && transport && typeof transport.send === 'function') {
+      transport.send('{"type":"interrupt"}');
+    }
+  } catch (_) { /* ignore */ }
+  setWorking(false);
+  addStatusMsg('Recovered from stuck turn (no progress within idle bound). Ready for input.');
+  console.warn('jevons: stuck-watchdog idle timeout — interrupt + clear (T94)');
 }
 function setWorking(on, progress) {
   if (on) {
@@ -1324,27 +1357,22 @@ function setWorking(on, progress) {
     workingEl.innerHTML = workingLabelHTML();
     msgs.appendChild(workingEl);
     scrollDown();
-    if (workingWatch) clearTimeout(workingWatch);
-    workingWatch = setTimeout(() => {
-      if (!workingEl) return;
-      setWorking(false);
-      addStatusMsg('Recovered from stuck turn (no sealed progress within 10m). Ready for input.');
-      console.warn('jevons: stuck-watchdog cleared working indicator (T94)');
-    }, WORKING_STUCK_MS);
+    armWorkingWatch();
   } else if (workingEl) {
     workingEl.remove();
     workingEl = null;
     workingProgress = '';
-    if (workingWatch) { clearTimeout(workingWatch); workingWatch = 0; }
-  } else if (workingWatch) {
-    clearTimeout(workingWatch);
-    workingWatch = 0;
+    clearWorkingWatch();
+  } else {
+    clearWorkingWatch();
   }
 }
 function updateWorkingProgress(text) {
   if (!workingEl) return;
   workingProgress = text || '';
   workingEl.innerHTML = workingLabelHTML();
+  // Real mid-turn signal — reset idle clock so long healthy turns stay armed.
+  armWorkingWatch();
 }
 
 // Auto-grow the textarea: reset to one row, then expand to fit content

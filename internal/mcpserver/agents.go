@@ -82,6 +82,10 @@ func (s *Server) SetNotify(fn NotifyFunc) {
 }
 
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// 🎯T85: proactive silent-death sweep before listing.
+	if reps := SweepDeadAgents(s.registry, s.overseerName()); len(reps) > 0 {
+		slog.Info(FormatDeadAgentReport(reps))
+	}
 	defs := s.registry.List()
 	if len(defs) == 0 {
 		return mcp.NewToolResultText("No agents registered."), nil
@@ -182,16 +186,48 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError("name and text are required"), nil
 	}
 
+	// 🎯T85: if the process died silently, try AutoStart rehydrate before fail.
+	if s.registry != nil {
+		_ = SweepDeadAgents(s.registry, s.overseerName())
+	}
+
 	proc := s.registry.Get(name)
 	if proc == nil || !proc.Alive() {
-		return mcp.NewToolResultError(fmt.Sprintf("agent %q is not running", name)), nil
+		// Last chance: Launch (rehydrate) then send — no silent drop.
+		if s.registry != nil && s.registry.Def(name) != nil {
+			p2, err := s.registry.Launch(name)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf(
+					"agent %q is not running and rehydrate failed: %v", name, err)), nil
+			}
+			s.wireAgentEvents(name, p2)
+			proc = p2
+			slog.Info("agent send rehydrated dead/stopped process", "name", name)
+		} else {
+			return mcp.NewToolResultError(fmt.Sprintf("agent %q is not running", name)), nil
+		}
+	}
+
+	// 🎯T104 under fan-out: first send carries standing local-delivery brief.
+	s.mu.Lock()
+	if s.fleetBriefed == nil {
+		s.fleetBriefed = map[string]bool{}
+	}
+	text, injected := EnsureFleetBrief(s.fleetBriefed, name, text)
+	s.mu.Unlock()
+	if injected {
+		slog.Info("fleet standing brief injected on first send", "name", name)
 	}
 
 	if err := proc.Send(text); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("send failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)), nil
+	msg := fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)
+	if injected {
+		msg += " (standing fleet brief T104/T78 prepended on first send)"
+	}
+	return mcp.NewToolResultText(msg), nil
 }
 
 func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

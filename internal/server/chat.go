@@ -307,9 +307,27 @@ type agentInfo struct {
 // map. No filtering by AutoStart or top-level name — PO-spawned children
 // and other ephemeral fleet entries appear while they remain registered.
 // Order is name-sorted so polls do not reshuffle solely from map iteration.
+//
+// 🎯T85: before listing, clear/rehydrate dead process handles so the panel
+// never shows a zombie "running" hope for a silently dead worker.
 func listFleetAgents(reg *claudia.Registry) []agentInfo {
 	if reg == nil {
 		return []agentInfo{}
+	}
+	// Inline silent-death policy (same as mcpserver.SweepDeadAgents) so the
+	// HTTP feed path does not import mcpserver (cycle). Keep in sync.
+	for _, d := range reg.List() {
+		proc := reg.Get(d.Name)
+		if proc == nil || proc.Alive() {
+			continue
+		}
+		if d.AutoStart {
+			if _, err := reg.Launch(d.Name); err != nil {
+				reg.Stop(d.Name)
+			}
+		} else {
+			reg.Stop(d.Name)
+		}
 	}
 	defs := reg.List()
 	agents := make([]agentInfo, 0, len(defs))
