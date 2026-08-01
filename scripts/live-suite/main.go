@@ -3,7 +3,13 @@
 
 // live-suite drives a RUNNING jevonsd through the owner flows and
 // asserts on ground truth (MCP responses, the chat journal, wire
-// frames) — never on model prose alone (🎯T51). Two tiers:
+// frames) — never on model prose alone (🎯T51).
+//
+// Universe A (attach): defaults to daily :13705 / ~/.jevons / jevonsmcp.
+// Prefer make test-journey (Universe B) for routine owner-chat E2E; use
+// this suite when diagnosis needs the real session or MCP surface.
+//
+// Two tiers:
 //
 //   - MCP-direct scenarios are deterministic (no LLM in the loop).
 //   - Overseer scenarios exercise the prompt↔tool contract through

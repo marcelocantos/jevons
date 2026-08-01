@@ -1,7 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// chat-smoke-cancel: live cancel-and-send against a running jevonsd.
+// chat-smoke-cancel: live cancel-and-send against a RUNNING jevonsd
+// (defaults to daily :13705 — Universe A). Prefer make test-journey for
+// routine cancel E2E; use this when you intentionally want the live session.
 //
 //	go run ./scripts/chat-smoke-cancel
 //

@@ -1,18 +1,21 @@
 # Journey suite (isolated owner-chat E2E)
 
-Small user-journey suite against a **throwaway** `jevonsd` — the path to
-use once Jevons is the daily driver, so test traffic never lands in the
-live owner stream.
+## Two universes
 
-| Isolation | Daily driver |
-|---|---|
-| Port **13715** (or `-port 0`; never 13705) | `:13705` |
-| State under `$TMPDIR/jevons-journey-*` | `~/.jevons` |
-| Chatlog in that sandbox | `~/.jevons/chatlog/…` |
-| MCP name `jevonsmcp-journey` | `jevonsmcp` |
+Keep them distinct. Most agent/automated work lives in **B**.
 
-`make test-live-suite` still targets a *running* daemon (often daily) —
-prefer this suite for owner-chat journeys.
+| | **A — Daily driver** | **B — Journey / throwaway** |
+|---|---|---|
+| When | Real owner use; rare diagnosis that **needs** live context | Default E2E owner-chat journeys and smoke |
+| Port | `:13705` | **13715** (or `-port 0`; never 13705) |
+| State / chatlog | `~/.jevons` | `$TMPDIR/jevons-journey-*` |
+| MCP | `jevonsmcp` | `jevonsmcp-journey` (removed on exit) |
+
+**Policy:** do not drive Universe A unless the bug genuinely requires the
+owner’s session, journal, or MCP surface. Prefer this suite. Scripts that
+still attach to a running daemon (`make test-live-suite`, `chat-smoke`,
+`chat-smoke-cancel`) default to `:13705` — use them on purpose, not as the
+routine path.
 
 ## Run
 

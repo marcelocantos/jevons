@@ -1,7 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// chat-smoke: live headless /ws/chat round-trip against a running jevonsd.
+// chat-smoke: live headless /ws/chat round-trip against a RUNNING jevonsd
+// (defaults to daily :13705 — Universe A). Prefer make test-journey for
+// routine E2E; use this when you intentionally want the live session.
 //
 //	go run ./scripts/chat-smoke -prompt 'Reply with exactly: pong'
 //
