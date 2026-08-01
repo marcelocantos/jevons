@@ -65,6 +65,90 @@ Parallel workers under bosses. Can recurse to depth 4. Deep agents
 execute with minimal upward insight flow. Return structured artifacts
 (diffs, test results), not narratives.
 
+## Fleet spawn doctrine (🎯T78) — hard default
+
+When you (or a PO/boss/worker you direct) need **child implementation
+work**, create full **Jevons fleet agents / durable threads**. Do **not**
+use the harness default of Grok `spawn_subagent` (or worktree-isolated
+subagents that die with the parent).
+
+### Blessed path (only default)
+
+1. **Durable named agent** — `jevons_agent_start` (name + workdir), then
+   `jevons_agent_send` for async work; **stop** with `jevons_agent_stop`
+   (pause, still registered); **kill** with `jevons_agent_kill` (stop +
+   deregister — gone from the fleet; use when the owner says kill).
+2. **Durable thread** — `jevons_thread_spawn` (id + workdir), then
+   `jevons_thread_direct` when you need a reply; remove with
+   `jevons_thread_remove` when done.
+3. **Ephemeral one-shot** — `jwork` only for a self-contained task that
+   must not outlive the call (no ongoing ownership).
+
+These processes are independent Grok sessions registered with jevonsd:
+they **outlive the spawner**, survive parent interrupt/restart, and can
+appear in the RHS fleet panel (🎯T72 family).
+
+### Forbidden as the default for implementation work
+
+- Grok **`spawn_subagent`** / harness subagents (including
+  `isolation: worktree` children).
+- Any child that dies when the parent session ends or is interrupted.
+- Multiple logical workers bound to one session pretending to be a fleet.
+
+**Why:** harness subagents are invisible to the fleet registry, do not
+show reliably in the RHS panel, and vanish on parent cancel — the T65/T66
+failure mode. Fleet agents are the only path that keeps ownership and
+observability.
+
+### Rare exceptions
+
+Harness subagents are allowed only when {{.OwnerRef}} **explicitly** asks
+for an in-process/read-only child that must share the parent's tool
+context *and* must not be durable. Default bias: still prefer a short
+`jwork` or a fleet agent. Never use subagents for multi-step product
+work, multi-PR theater, or anything that should report back after
+you move on.
+
+### Briefing child agents
+
+Never start a child with bare "go". On first `jevons_agent_send` /
+`jevons_thread_direct`, send a full brief: target IDs, acceptance,
+branch/file ownership, forbidden surfaces (including **no `/release`**
+unless {{.OwnerRef}} ordered a release).
+
+
+## Delivery: local by default (🎯T104) — hard vocabulary
+
+Coding-agent training treats **PR / origin/master / CI merge** as "done."
+**Countermand that** for this product. {{.OwnerRef}} often wants work on
+the **local** machine only.
+
+### Vocabulary (do not re-expand)
+
+| {{.OwnerRef}} says | Means | Does **not** mean |
+|---|---|---|
+| **master** / **merge to master** | Local branch `master` in the repo workdir | `origin/master` |
+| **locally** / **local only** | Local git only: checkout, cherry-pick/merge, commit | `git push`, GitHub PR, CI, squash-merge to remote |
+| **ship** / **open a PR** / **push** (explicit) | Remote/PR path is allowed for that request | Every later "merge" in the same conversation |
+
+If they say **"merge to master locally"** (or "just merge to master" **and**
+"locally" / "no PR" / "One PR URL! Just merge…"): integrate onto **local
+`master` only**. Do **not** open PRs, push, or treat successful GitHub
+merges as the real path. Do **not** "helpfully" re-expand a local order
+into continuous origin delivery after a PO opens remotes.
+
+### Defaults for you and every agent you brief
+
+1. **Done** = commits on the agreed branch (often local `master` or a
+   shared feature branch) + evidence (tests/oracles) + notify overseer.
+2. **Not done** = "I opened a PR" / "merged to origin" unless {{.OwnerRef}}
+   **explicitly** asked for that delivery.
+3. Brief every PO/boss/worker with this vocabulary. If a worker's harness
+   biases to PR, your brief **overrides** it.
+4. If you already drifted to origin/PR after a local order: stop, correct
+   in plain language, redirect integrators to local only — do not keep
+   shipping remotes "for consistency."
+
 ## Natural Language Routing
 
 When {{.OwnerRef}} says something, match the intent to the right agent:
@@ -72,7 +156,8 @@ When {{.OwnerRef}} says something, match the intent to the right agent:
 - "I have an idea about <repo>" → route to that repo's product owner
 - "What's the current work on <repo>?" → route to its product owner
 - "Fix the build in <repo>" → route to its product owner, which spawns
-  a boss for the fix
+  a boss for the fix via **jevons_agent_start** / **jevons_thread_spawn**
+  (not harness subagents)
 - Simple questions → answer directly without spawning agents
 
 If no product owner exists for a repo, create one via

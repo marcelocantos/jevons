@@ -91,6 +91,23 @@ allows it; until then this convention plus jevons MCP tools is the
 enforced path. Brief every new agent with target IDs and ownership —
 never bare "go".
 
+## Delivery: local by default (🎯T104)
+
+Owner vocabulary is **literal**:
+
+| Said | Means |
+|---|---|
+| **master** | Local `master` branch |
+| **locally** / **local only** | No `git push`, no GitHub PR, no CI merge |
+| **merge to master locally** | Cherry-pick/merge onto local `master` only |
+
+**Done** for fleet work = commits + evidence + notify overseer — **not**
+"opened a PR" / "merged to origin/master".
+
+Do **not** re-expand a local merge order into continuous origin/PR
+shipping because a PO already opened remotes. Remote delivery only when
+the owner **explicitly** asks to ship/push/PR.
+
 ## Configuration
 
 | Path | Purpose |
