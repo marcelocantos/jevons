@@ -83,7 +83,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 /* Chat pane */
 #chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
-#messages { flex: 1; overflow-y: auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
+/* overflow-anchor:none — browser scroll-anchoring fights follow-scroll when
+   a long markdown bubble is re-parsed every stream frame (🎯T30.2). */
+#messages { flex: 1; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
 #messages::-webkit-scrollbar { width: 6px; }
 #messages::-webkit-scrollbar-track { background: transparent; }
 #messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
@@ -505,17 +507,23 @@ function handle(m) {
   }
 }
 
+// Skip non-message chrome at the tail of #messages (working indicator,
+// follow-scroll end sentinel, turn markers) when locating the open stream.
+function lastMessageish() {
+  let el = msgs.lastElementChild;
+  while (el && !(el.classList && el.classList.contains('msg'))) {
+    el = el.previousElementSibling;
+  }
+  return el;
+}
+
 // appendOrAddJevons merges streaming assistant chunks into the open
 // jevons bubble. Merge is keyed on _streamRaw (not workingEl): sealing
 // happens only on terminal stop so a mistaken early clear cannot split
 // the turn into one bubble per token.
 function appendOrAddJevons(text, ts) {
-  let target = msgs.lastElementChild;
-  while (target && target.classList && target.classList.contains('working-indicator')) {
-    target = target.previousElementSibling;
-  }
-  if (target && target.classList && target.classList.contains('msg')
-      && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
+  const target = lastMessageish();
+  if (target && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
     target._streamRaw += text;
     scheduleJevonsRender(target);   // rAF-debounced: coalesce burst chunks into ONE parse (🎯T57)
     return;
@@ -545,10 +553,7 @@ function scheduleJevonsRender(el) {
 // sealAssistantStream closes the open coalesced bubble so the next
 // turn starts a new one — flushing any pending debounced render first.
 function sealAssistantStream() {
-  let el = msgs.lastElementChild;
-  while (el && el.classList && el.classList.contains('working-indicator')) {
-    el = el.previousElementSibling;
-  }
+  const el = lastMessageish();
   if (el && typeof el._streamRaw === 'string') {
     if (el._renderRaf) { cancelAnimationFrame(el._renderRaf); el._renderRaf = 0; }
     const raw = el._streamRaw;
@@ -558,6 +563,9 @@ function sealAssistantStream() {
     renderBody(el, 'jevons', raw);
     scheduleLatestExpansion();
   }
+  // Final layout (markdown / mermaid) often grows after the last stream
+  // pin — re-follow so the user never needs a manual nudge to see the end.
+  scrollDownThrottled();
 }
 
 function startTurn() {
@@ -725,6 +733,7 @@ function renderMermaidIn(container) {
       wrap.className = 'mermaid-diagram';
       wrap.innerHTML = svg;
       if (host.parentNode) host.replaceWith(wrap);
+      scrollDownThrottled(); // async SVG height growth (🎯T30.2 / 🎯T59)
     }).catch(() => {
       // Invalid diagram — leave the code block; sweep any temp render node
       // mermaid may have appended to <body> (id or 'd'+id).
@@ -745,6 +754,18 @@ function renderBody(d, role, text) {
   d._layoutText = text;
   d._fullRole = role;
   d._previewLines = (role === 'user') ? USER_PREVIEW_LINES : PREVIEW_LINES;
+  // Live stream (🎯T30.2): always paint full text. measureCollapse thrash
+  // (full → preview → full into the live body) shrinks #messages.scrollHeight
+  // mid-frame and leaves follow-scroll pinned to a stale mid-bubble offset
+  // until seal — matching the "bounce back until response finishes" bug.
+  if (typeof d._streamRaw === 'string') {
+    paintBody(d, role, text);
+    if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
+    d._fullText = null;
+    d._expanded = true;
+    d._autoExpanded = true;
+    return;
+  }
   const m = measureCollapse(d, role, text);
   if (!m.tall) {
     paintBody(d, role, text);
@@ -787,11 +808,7 @@ function ensureExpandToggle(d) {
 // auto-expand reverts to the bounded preview unless _userToggled.
 let latestEl = null;
 let latestRaf = 0;
-function lastMsgEl() {
-  let el = msgs.lastElementChild;
-  while (el && !(el.classList && el.classList.contains('msg'))) el = el.previousElementSibling;
-  return el;
-}
+function lastMsgEl() { return lastMessageish(); }
 function scheduleLatestExpansion() {
   if (latestRaf) return;
   latestRaf = requestAnimationFrame(() => { latestRaf = 0; refreshLatestExpansion(); });
@@ -1044,15 +1061,27 @@ setInterval(refreshCost, 3000);
 refreshCost();
 
 let autoScroll = true;
+// Ignore scroll events caused by our own pin so a 1px shortfall cannot
+// permanently disable follow (Grok-CLI-like stick-to-bottom, 🎯T30.2).
+let _pinningScroll = false;
+const FOLLOW_SLACK_PX = 120;
 msgs.addEventListener('scroll', () => {
-  autoScroll = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - 30;
+  if (_pinningScroll) return;
+  autoScroll = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - FOLLOW_SLACK_PX;
 });
 function scrollDown() {
   if (!autoScroll) return;
-  msgs.scrollTop = msgs.scrollHeight;
-  // Re-pin after layout settles — markdown/timestamps can grow the
-  // content height after the synchronous append, leaving us short.
-  requestAnimationFrame(() => { if (autoScroll) msgs.scrollTop = msgs.scrollHeight; });
+  _pinningScroll = true;
+  const pin = () => { msgs.scrollTop = msgs.scrollHeight; };
+  pin();
+  // Double-rAF catches late markdown/table layout after the append.
+  requestAnimationFrame(() => {
+    pin();
+    requestAnimationFrame(() => {
+      pin();
+      _pinningScroll = false;
+    });
+  });
 }
 // scrollDownThrottled coalesces scroll requests to one per animation
 // frame, so a burst replay of many messages forces one layout, not one
@@ -1062,6 +1091,31 @@ function scrollDownThrottled() {
   if (_scrollRaf) return;
   _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; scrollDown(); });
 }
+// Content-growth re-pin (🎯T30.2): #messages is flex-fixed so ResizeObserver
+// on the scroller never fires when scrollHeight grows. A 1px end sentinel
+// watched via IntersectionObserver re-pins when follow is on but the true
+// bottom has left the viewport (stale mid-bubble pin, late markdown layout).
+(function setupFollowEndPin() {
+  if (typeof IntersectionObserver === 'undefined') return;
+  let end = document.getElementById('messages-end');
+  if (!end) {
+    end = document.createElement('div');
+    end.id = 'messages-end';
+    end.setAttribute('aria-hidden', 'true');
+    end.style.cssText = 'height:1px;width:100%;flex:0 0 auto;overflow-anchor:none;pointer-events:none;';
+    msgs.appendChild(end);
+  }
+  const placeEnd = () => {
+    // Re-attach after msgs.innerHTML = '' (reconnect wipe) and keep last.
+    if (end.parentNode !== msgs || msgs.lastElementChild !== end) msgs.appendChild(end);
+  };
+  placeEnd();
+  new MutationObserver(placeEnd).observe(msgs, { childList: true });
+  new IntersectionObserver((entries) => {
+    if (!autoScroll) return;
+    if (entries.some(e => !e.isIntersecting)) scrollDownThrottled();
+  }, { root: msgs, threshold: 0 }).observe(end);
+})();
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }
 function summariseInput(obj) {
