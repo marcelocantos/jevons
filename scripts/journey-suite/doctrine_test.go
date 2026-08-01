@@ -11,8 +11,13 @@ import (
 	"testing"
 )
 
-// 🎯T101 hermetic ratchet: journey doctrine markers + daily-port refusal
-// cannot silently drift off the ledger. No live Grok.
+// META ONLY — not user journeys (🎯T107).
+//
+// 🎯T101 hermetic ratchet: doctrine markers + daily-port refusal cannot
+// silently drift off the ledger. These tests do NOT map owner interactions,
+// do NOT start jevonsd/Grok, and do NOT interact with an agent. Live
+// journeys are `make test-journey` / go run ./scripts/journey-suite.
+
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
