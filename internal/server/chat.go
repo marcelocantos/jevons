@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -280,40 +281,58 @@ func (s *Server) RegistryAgents() []claudia.AgentDef {
 	return reg.List()
 }
 
-// handleListAgents returns all registered agents with their status.
+// agentInfo is the GET /api/agents JSON row consumed by the RHS fleet panel.
+// 🎯T72.1: completeness is a server feed concern — every registry agent
+// (durable or ephemeral child) must appear while registered. Parent is
+// reserved for 🎯T68 tree layout once the registry exposes lineage;
+// claudia AgentDef currently has no Parent field, so it stays empty.
+type agentInfo struct {
+	Name    string `json:"name"`
+	WorkDir string `json:"workdir"`
+	Parent  string `json:"parent,omitempty"`
+	Status  string `json:"status"`
+}
+
+// listFleetAgents returns the RHS panel source of truth: every agent
+// definition currently in the registry, with live status from the process
+// map. No filtering by AutoStart or top-level name — PO-spawned children
+// and other ephemeral fleet entries appear while they remain registered.
+// Order is name-sorted so polls do not reshuffle solely from map iteration.
+func listFleetAgents(reg *claudia.Registry) []agentInfo {
+	if reg == nil {
+		return []agentInfo{}
+	}
+	defs := reg.List()
+	agents := make([]agentInfo, 0, len(defs))
+	for _, d := range defs {
+		status := "stopped"
+		if proc := reg.Get(d.Name); proc != nil && proc.Alive() {
+			status = "running"
+		}
+		agents = append(agents, agentInfo{
+			Name:    d.Name,
+			WorkDir: d.WorkDir,
+			Status:  status,
+		})
+	}
+	sort.Slice(agents, func(i, j int) bool {
+		return agents[i].Name < agents[j].Name
+	})
+	return agents
+}
+
+// handleListAgents returns all registered fleet agents with status (🎯T72.1).
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	reg := s.registry
 	s.mu.RUnlock()
 
+	w.Header().Set("Content-Type", "application/json")
 	if reg == nil {
-		json.NewEncoder(w).Encode([]any{})
+		_ = json.NewEncoder(w).Encode([]agentInfo{})
 		return
 	}
-
-	defs := reg.List()
-	type agentInfo struct {
-		Name    string `json:"name"`
-		WorkDir string `json:"workdir"`
-		Parent  string `json:"parent,omitempty"`
-		Status  string `json:"status"`
-	}
-
-	agents := make([]agentInfo, len(defs))
-	for i, d := range defs {
-		status := "stopped"
-		if proc := reg.Get(d.Name); proc != nil && proc.Alive() {
-			status = "running"
-		}
-		agents[i] = agentInfo{
-			Name:    d.Name,
-			WorkDir: d.WorkDir,
-			Status:  status,
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agents)
+	_ = json.NewEncoder(w).Encode(listFleetAgents(reg))
 }
 
 // handleChat is a direct WebSocket ↔ Claude PTY bridge.
