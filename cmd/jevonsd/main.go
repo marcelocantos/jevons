@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
+	"github.com/marcelocantos/jevons/internal/upgrade"
 
 	"github.com/marcelocantos/pigeon"
 	"github.com/marcelocantos/pigeon/crypto"
@@ -245,8 +247,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// 🎯T40: SIGINT/SIGTERM = normal stop (StopAll); SIGHUP = upgrade exit
+	// (skip StopAll, write handles). JEVONS_UPGRADE_EXIT=1 also marks
+	// SIGTERM/SIGINT as upgrade when launchd cannot send SIGHUP.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Agent registry — manages persistent Grok ACP sessions.
 	registryPath := filepath.Join(cfg.StateDir, "agents.json")
@@ -257,6 +262,20 @@ func main() {
 			os.Exit(1)
 		}
 		registry = r
+	}
+
+	// Prior upgrade handoff: session_ids to resume (conversation path).
+	// Process reattach is residual until claudia connect-mode exists.
+	if snap, err := upgrade.LoadSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
+		slog.Error("upgrade handles load failed (malformed handoff is hard error)", "err", err)
+		os.Exit(1)
+	} else if snap != nil {
+		plan := upgrade.PlanReattach(snap)
+		slog.Info("upgrade handoff present — reattach by session_id (conversation load); process reattach residual",
+			"sessions", len(plan.SessionIDs),
+			"process_reattach", plan.ProcessReattachPossible,
+			"written_at", snap.WrittenAt,
+			"residual", plan.Residual)
 	}
 
 	// Wire registry and scanner into MCP server.
@@ -382,8 +401,33 @@ func main() {
 	}()
 
 	// Now start agents — MCP server is reachable.
+	// StartAll resumes session_ids from agents.json (conversation durability).
+	// True process reattach (same PID/stdio) needs claudia connect-mode (🎯T40 residual).
 	registry.StartAll()
-	defer registry.StopAll()
+
+	// Exit policy: normal → StopAll; upgrade (SIGHUP / JEVONS_UPGRADE_EXIT) → leave
+	// agents alone and write handles. See docs/design/upgrade-without-drain.md.
+	// Written from the signal goroutine; read from defer — use atomic.
+	var exitUpgrade atomic.Bool
+	defer func() {
+		mode := upgrade.ModeNormal
+		if exitUpgrade.Load() {
+			mode = upgrade.ModeUpgrade
+		}
+		if mode.StopAgents() {
+			registry.StopAll()
+			return
+		}
+		handles := upgrade.FromRegistry(registry)
+		snap := upgrade.BuildSnapshot(handles, os.Getpid())
+		path := upgrade.SnapshotPath(cfg.StateDir)
+		if err := upgrade.SaveSnapshot(path, snap); err != nil {
+			slog.Error("upgrade handles save failed", "path", path, "err", err)
+		} else {
+			slog.Info("upgrade exit: skipped StopAll; wrote agent handles",
+				"path", path, "agents", len(handles), "residual", snap.Residual)
+		}
+	}()
 
 	if jevonProc := registry.Get(cfg.OverseerName); jevonProc != nil {
 		// AttachOverseer sets the process and subscribes its event stream
@@ -440,10 +484,18 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown on signal.
+	// Graceful shutdown on signal (🎯T40: SIGHUP → upgrade exit).
 	go func() {
 		sig := <-sigCh
-		slog.Info("shutting down", "signal", sig)
+		if sig == syscall.SIGHUP || upgrade.EnvRequestsUpgrade() {
+			exitUpgrade.Store(true)
+		}
+		mode := upgrade.ModeNormal
+		if exitUpgrade.Load() {
+			mode = upgrade.ModeUpgrade
+		}
+		slog.Info("shutting down", "signal", sig, "exit_mode", mode.String(),
+			"stop_agents", mode.StopAgents())
 		cancel()
 		httpSrv.Close()
 	}()
