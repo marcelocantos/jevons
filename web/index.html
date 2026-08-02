@@ -474,14 +474,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <div id="composer-images" class="composer-images" aria-label="Attached images"></div>
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
-                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line."
+                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing."
+                title="Message box — / focuses here when focus is elsewhere (🎯T127)"
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
                 aria-describedby="input-hint"
                 autocomplete="off"
                 spellcheck="true"
                 autocapitalize="sentences"></textarea>
-      <span id="input-hint" class="sr-only">Type a prompt for the Jevons assistant. Use full sentences with punctuation.</span>
+      <span id="input-hint" class="sr-only">Type a prompt for the Jevons assistant. Use full sentences with punctuation. Press slash (/) outside any text field to focus this message box again.</span>
       <button id="send" disabled aria-label="Send message">Send</button>
     </div>
   </div>
@@ -535,6 +536,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
 <script src="scripts/composer_layout.js"></script>
+<script src="scripts/composer_keys.js"></script>
+<script src="scripts/composer_focus.js"></script>
 <script src="scripts/send_queue.js"></script>
 <script src="scripts/layout_probe.js"></script>
 <script src="scripts/tool_summary.js"></script>
@@ -552,7 +555,7 @@ const sTxt = document.getElementById('status-text');
 const agentsEl = document.getElementById('agents');
 const attentionBar = document.getElementById('attention-bar');
 const attentionStackEl = document.getElementById('attention-stack');
-const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line.';
+const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing.';
 
 // 🎯T120 page-session correlation id for decision logs (audit §3.1).
 // Stable for the life of this page load (survives WS reconnect; not regenerated).
@@ -3198,6 +3201,21 @@ input.addEventListener('keydown', e => {
     else send({ interrupt: interrupt });
     return;
   }
+  // 🎯T126: Home/End move caret in the message box (field-content policy).
+  // Explicit apply + preventDefault so macOS does not scroll the transcript
+  // and T119 jump-to-bottom never steals plain End while composer focused.
+  if (typeof ComposerKeys !== 'undefined' && ComposerKeys.selectionAfterHomeEnd) {
+    const next = ComposerKeys.selectionAfterHomeEnd(
+      e.key, input.value, input.selectionStart, input.selectionEnd, e
+    );
+    if (next) {
+      e.preventDefault();
+      e.stopPropagation();
+      input.selectionStart = next.start;
+      input.selectionEnd = next.end;
+      return;
+    }
+  }
   // Alt+Up/Down: queue follow-ups first, then request history (🎯T113/T88).
   // preventDefault overrides macOS's Option+Arrow paragraph jump.
   if (e.altKey && e.key === 'ArrowUp') { if (recallHistory(-1)) e.preventDefault(); return; }
@@ -3331,6 +3349,15 @@ enterTrackBottom();
 }, d));
 
 document.addEventListener('keydown', e => {
+  // 🎯T127: plain / focuses main composer when not in an editable field.
+  // Documented in placeholder + title + input-hint. No auto-refocus.
+  if (typeof ComposerFocus !== 'undefined' && ComposerFocus.tryFocusComposer) {
+    const r = ComposerFocus.tryFocusComposer(e, input, document.activeElement);
+    if (r.didFocus) {
+      e.preventDefault();
+      return;
+    }
+  }
   if (e.key === 'PageUp') {
     e.preventDefault();
     leaveTrackBottom();
@@ -3344,11 +3371,24 @@ document.addEventListener('keydown', e => {
     return;
   }
   // 🎯T119: jump-to-bottom (End / ⌘↓ / Ctrl+↓). No jump-to-top.
-  // Plain End inside the composer moves the caret — do not steal it.
+  // 🎯T126: when main composer is focused (activeElement === input), plain
+  // End must not jump — caret policy on the input keydown owns Home/End.
   if (typeof VirtualList !== 'undefined' && VirtualList.isJumpToBottomHotkey) {
-    const inField = e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT');
-    const plainEnd = e.key === 'End' && !e.metaKey && !e.ctrlKey;
-    if (!(plainEnd && inField) && VirtualList.isJumpToBottomHotkey(e.key, e)) {
+    const ae = document.activeElement;
+    const composerFocused = typeof ComposerKeys !== 'undefined' && ComposerKeys.isComposerFocused
+      ? ComposerKeys.isComposerFocused(ae, input)
+      : (ae === input);
+    const inTextField = ae && (typeof ComposerKeys !== 'undefined' && ComposerKeys.isComposerTextControl
+      ? ComposerKeys.isComposerTextControl(ae.tagName)
+      : (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT'));
+    const allowJump = typeof ComposerKeys !== 'undefined' && ComposerKeys.shouldAllowJumpToBottom
+      ? ComposerKeys.shouldAllowJumpToBottom(e.key, e, {
+          composerFocused: composerFocused,
+          inTextField: inTextField,
+          isJumpHotkey: VirtualList.isJumpToBottomHotkey,
+        })
+      : (!(composerFocused || inTextField) && VirtualList.isJumpToBottomHotkey(e.key, e));
+    if (allowJump) {
       e.preventDefault();
       jumpToBottom();
       return;
