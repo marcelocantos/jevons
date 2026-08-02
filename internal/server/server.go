@@ -25,6 +25,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/workers"
 )
 
@@ -102,6 +103,10 @@ type Server struct {
 
 	// agentProgress is live ACP-derived status for RHS fleet rows (🎯T118).
 	agentProgress *AgentProgressHub
+
+	// eventLog is the durable decision/lifecycle journal (🎯T120):
+	// state_dir/logs/events.jsonl — browser + server events, tool-readable.
+	eventLog *eventlog.Journal
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -246,6 +251,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
+	mux.HandleFunc("GET /api/logs", s.handleLogsTail)
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
 	mux.HandleFunc("/ws/voice", s.handleVoice)

@@ -124,6 +124,18 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 	return p2, true, nil
 }
 
+// logAgentSendResult emits structured slog for busy/queue/interrupt outcomes
+// (🎯T120.2). Shared field schema: component, name, status, queued, rehydrated.
+func logAgentSendResult(name string, res agentSendResult, rehydrated bool) {
+	slog.Info("agent_send",
+		"component", "agent_send",
+		"name", name,
+		"status", res.Status,
+		"queued", res.Queued,
+		"rehydrated", rehydrated,
+	)
+}
+
 // deliverToSender is the pure-ish busy/queue/interrupt path used by
 // sendToAgent and hermetic tests with a fake sender.
 func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSender, rehydrated bool) (agentSendResult, error) {
@@ -141,7 +153,9 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 			status = "rehydrated_sent"
 			msg += " (rehydrated after dead/stopped process)"
 		}
-		return agentSendResult{Status: status, Message: msg, Queued: s.pendingAgentSends(name)}, nil
+		res := agentSendResult{Status: status, Message: msg, Queued: s.pendingAgentSends(name)}
+		logAgentSendResult(name, res, rehydrated)
+		return res, nil
 	}
 
 	if !isPromptInFlight(err) {
@@ -153,37 +167,43 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 		if ierr := proc.Interrupt(); ierr != nil {
 			// Still queue so the nudge is not lost; surface both facts.
 			n := s.enqueueAgentSend(name, text)
-			return agentSendResult{
+			res := agentSendResult{
 				Status: "interrupted_queued",
 				Message: fmt.Sprintf(
 					"busy: prompt already in flight; interrupt failed (%v); message queued (%d pending) for delivery after the turn. "+
 						"Stuck recovery without kill: re-send with interrupt=true after a moment, or jevons_agent_stop then jevons_agent_start (resume session).",
 					ierr, n),
 				Queued: n,
-			}, nil
+			}
+			logAgentSendResult(name, res, rehydrated)
+			return res, nil
 		}
 		// Brief yield so ACP can clear promptID after session/cancel.
 		time.Sleep(50 * time.Millisecond)
 		if err2 := trySend(); err2 == nil {
 			msg := fmt.Sprintf("Interrupted in-flight turn on %q and sent the new message.", name)
-			return agentSendResult{Status: "interrupted_sent", Message: msg, Queued: s.pendingAgentSends(name)}, nil
+			res := agentSendResult{Status: "interrupted_sent", Message: msg, Queued: s.pendingAgentSends(name)}
+			logAgentSendResult(name, res, rehydrated)
+			return res, nil
 		} else if isPromptInFlight(err2) {
 			n := s.enqueueAgentSend(name, text)
-			return agentSendResult{
+			res := agentSendResult{
 				Status: "interrupted_queued",
 				Message: fmt.Sprintf(
 					"busy: interrupted %q but prompt still in flight; message queued (%d pending). "+
 						"Will deliver when the turn ends. Recovery without kill+remint: wait, or stop+start (resume).",
 					name, n),
 				Queued: n,
-			}, nil
+			}
+			logAgentSendResult(name, res, rehydrated)
+			return res, nil
 		} else {
 			return agentSendResult{}, fmt.Errorf("send after interrupt failed: %v", err2)
 		}
 	}
 
 	n := s.enqueueAgentSend(name, text)
-	return agentSendResult{
+	res := agentSendResult{
 		Status: "queued",
 		Message: fmt.Sprintf(
 			"busy: prompt already in flight on %q; message queued (%d pending) for delivery when the current turn ends. "+
@@ -191,7 +211,9 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 				"(or stop+start to resume the same session without kill/remint).",
 			name, n),
 		Queued: n,
-	}, nil
+	}
+	logAgentSendResult(name, res, rehydrated)
+	return res, nil
 }
 
 // drainAgentSendQueue delivers the next queued message after a terminal

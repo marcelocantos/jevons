@@ -56,6 +56,7 @@ test-web:
 	node web/scripts/layout_probe_test.js
 	node web/scripts/composer_layout_test.js
 	node web/scripts/send_queue_test.js
+	node web/scripts/decision_log_test.js
 	node web/scripts/tool_summary_test.js
 	node web/scripts/mermaid_actions_test.js
 

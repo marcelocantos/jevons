@@ -4,10 +4,34 @@
 package mcpserver
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 )
+
+// slogCapture records Info-level records for 🎯T120.2 field assertions.
+type slogCapture struct {
+	records []slog.Record
+}
+
+func (h *slogCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (h *slogCapture) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *slogCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *slogCapture) WithGroup(string) slog.Handler      { return h }
+
+func attrsMap(r slog.Record) map[string]any {
+	m := map[string]any{}
+	r.Attrs(func(a slog.Attr) bool {
+		m[a.Key] = a.Value.Any()
+		return true
+	})
+	return m
+}
 
 // fakeSender implements agentSender for 🎯T111.1 hermetic busy/queue tests.
 type fakeSender struct {
@@ -54,6 +78,11 @@ func TestIsPromptInFlight(t *testing.T) {
 }
 
 func TestDeliverToSenderQueuesWhenBusy(t *testing.T) {
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	s := &Server{}
 	fs := &fakeSender{alive: true, inFlight: true}
 	res, err := deliverToSender(s, "po", "nudge fan-out", false, fs, false)
@@ -71,6 +100,25 @@ func TestDeliverToSenderQueuesWhenBusy(t *testing.T) {
 	}
 	if len(fs.sent) != 0 {
 		t.Fatal("should not have sent while busy without interrupt")
+	}
+	// 🎯T120.2: structured slog on success path (not MCP text alone).
+	if len(cap.records) < 1 {
+		t.Fatal("expected agent_send slog record")
+	}
+	got := attrsMap(cap.records[0])
+	if got["component"] != "agent_send" || got["name"] != "po" || got["status"] != "queued" {
+		t.Fatalf("slog attrs=%v", got)
+	}
+	if got["queued"] != int64(1) && got["queued"] != 1 {
+		// slog may store int as int64 depending on Value.Any()
+		if q, ok := got["queued"].(int); !ok || q != 1 {
+			if q64, ok := got["queued"].(int64); !ok || q64 != 1 {
+				t.Fatalf("queued attr=%v (%T)", got["queued"], got["queued"])
+			}
+		}
+	}
+	if got["rehydrated"] != false {
+		t.Fatalf("rehydrated=%v", got["rehydrated"])
 	}
 	// Second nudge stacks.
 	res2, err := deliverToSender(s, "po", "second", false, fs, false)
@@ -117,17 +165,26 @@ func TestDeliverToSenderInterruptStillBusyQueues(t *testing.T) {
 }
 
 func TestDeliverToSenderHappyPath(t *testing.T) {
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	s := &Server{}
 	fs := &fakeSender{alive: true}
-	res, err := deliverToSender(s, "w", "hello", false, fs, false)
+	res, err := deliverToSender(s, "w", "hello", false, fs, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != "sent" {
+	if res.Status != "rehydrated_sent" {
 		t.Fatalf("status=%q", res.Status)
 	}
 	if len(fs.sent) != 1 {
 		t.Fatalf("sent=%v", fs.sent)
+	}
+	got := attrsMap(cap.records[0])
+	if got["status"] != "rehydrated_sent" || got["rehydrated"] != true || got["component"] != "agent_send" {
+		t.Fatalf("slog attrs=%v", got)
 	}
 }
 

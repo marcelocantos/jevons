@@ -87,6 +87,9 @@ type Server struct {
 	// agentSendQ is a per-agent FIFO of pending sends when the ACP session is
 	// busy (🎯T115). Guarded by mu. Nil until first enqueue.
 	agentSendQ map[string][]string
+
+	// eventLogTail tails durable product logs (🎯T120). Nil = tool unregistered.
+	eventLogTail EventLogTailFunc
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable

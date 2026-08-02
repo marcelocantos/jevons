@@ -467,6 +467,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   <div class="mvp-status" id="mvp-status"></div>
 </div>
 <script src="scripts/jlog.js"></script>
+<script src="scripts/decision_log.js"></script>
 <script src="scripts/transport.js"></script>
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
@@ -539,12 +540,16 @@ function renderAttention() {
     mt.textContent = 'Main';
     mainChip.appendChild(mt);
     mainChip.addEventListener('click', () => {
+      const fromId = attentionState && attentionState.focusId;
       attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
       attentionState = AttentionThreads.focusMain(attentionState);
       input.value = mainDraftBackup || '';
       autoGrow();
       persistAttention();
       renderAttention();
+      if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+        jLog('info', 'focus main', DecisionLog.formatFocusDecision('main', { from: fromId }));
+      }
       input.focus();
     });
     attentionStackEl.appendChild(mainChip);
@@ -569,6 +574,7 @@ function renderAttention() {
     st.textContent = t.status;
     chip.appendChild(st);
     chip.addEventListener('click', () => {
+      const fromId = attentionState && attentionState.focusId;
       if (AttentionThreads.isMainFocus(attentionState)) mainDraftBackup = input.value;
       else attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
       attentionState = AttentionThreads.pursue(attentionState, t.id);
@@ -576,6 +582,12 @@ function renderAttention() {
       if (th) { input.value = th.body || ''; autoGrow(); }
       persistAttention();
       renderAttention();
+      if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+        jLog('info', 'focus pursue', DecisionLog.formatFocusDecision('pursue', {
+          threadId: t.id,
+          from: fromId || 'main',
+        }));
+      }
       input.focus();
     });
     attentionStackEl.appendChild(chip);
@@ -1499,7 +1511,16 @@ function maybeCloseTargetAside(text) {
   if (typeof AttentionThreads === 'undefined' || !attentionState) return;
   const id = AttentionThreads.detectTargetFiled(text);
   if (!id) return;
+  const closedId = (AttentionThreads.stack(attentionState) || []).find(function (th) {
+    return th.purpose === 'file-target' && th.status === 'open';
+  });
   attentionState = AttentionThreads.closeTargetAside(attentionState);
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', 'focus dismiss', DecisionLog.formatFocusDecision('dismiss', {
+      threadId: closedId && closedId.id,
+      draft: id, // filed target id (short)
+    }));
+  }
   persistAttention();
   if (typeof renderAttention === 'function') renderAttention();
 }
@@ -1899,7 +1920,15 @@ function refreshAgents() {
     renderTree(byParent, '', agentsEl, agentsByName);
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
-  }).catch(()=>{});
+  }).catch((err)=>{
+    if (typeof jLog === 'function') {
+      jLog('warn', 'fleet list refresh failed', {
+        component: 'fleet',
+        decision: 'refresh',
+        err: err && err.message ? err.message : String(err || 'unknown'),
+      });
+    }
+  });
 }
 function updateFleetProgress(agents) {
   if (!Array.isArray(agents)) return;
@@ -2039,7 +2068,16 @@ function refreshCost() {
     costEl.title = alerts.length
       ? alerts.map(a=>`[${a.level}] ${a.kind}: ${a.detail}`).join('\n')
       : 'No runaway signals';
-  }).catch(()=>{ costEl.style.display='none'; });
+  }).catch((err)=>{
+    costEl.style.display='none';
+    if (typeof jLog === 'function') {
+      jLog('warn', 'cost poll failed', {
+        component: 'cost',
+        decision: 'poll',
+        err: err && err.message ? err.message : String(err || 'unknown'),
+      });
+    }
+  });
 }
 setInterval(refreshCost, 3000);
 refreshCost();
@@ -2659,9 +2697,30 @@ function send(opts) {
         attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
       }
     }
+    const ownerDraftForLog = t;
+    const parsedCmd = AttentionThreads.parsePrefix(t);
     const r = AttentionThreads.handleComposer(attentionState, t);
     attentionState = r.state;
     persistAttention();
+    // Decision log: composer outcome (kind/command/purpose/threadId).
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', 'composer decision', DecisionLog.formatComposerDecision(r, {
+        command: parsedCmd && parsedCmd.command,
+        draft: ownerDraftForLog,
+      }));
+      // Local focus transitions from prefixes (main/pursue/park/capture/…).
+      if (r.kind === 'local' && parsedCmd && parsedCmd.command) {
+        const focusAct = parsedCmd.command === 'capture' ? 'capture'
+          : (parsedCmd.command === 'target' ? 'target' : parsedCmd.command);
+        if (focusAct === 'main' || focusAct === 'pursue' || focusAct === 'park' ||
+            focusAct === 'capture') {
+          jLog('info', 'focus ' + focusAct, DecisionLog.formatFocusDecision(focusAct, {
+            threadId: r.threadId,
+            draft: ownerDraftForLog,
+          }));
+        }
+      }
+    }
     if (r.kind === 'local' || r.kind === 'empty') {
       if (r.clearComposer) {
         input.value = r.composerBody != null ? r.composerBody : '';
@@ -2679,6 +2738,7 @@ function send(opts) {
   }
   // 🎯T99: cheap continuation routing when on main with no explicit prefix.
   // Uses original owner draft (before image-marker rewrite is fine; route on text).
+  // ALWAYS log the route hit (including when match rewrites wire — T99 opacity).
   if (typeof ThreadRoute !== 'undefined' && attentionState &&
       typeof AttentionThreads !== 'undefined' && AttentionThreads.isMainFocus(attentionState)) {
     const ownerDraft = input.value.trim();
@@ -2686,6 +2746,9 @@ function send(opts) {
       return { id: th.id, title: th.title, digest: th.body, body: th.body };
     });
     const hit = ThreadRoute.route(ownerDraft || t, threads);
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', 'thread route', DecisionLog.formatRouteDecision(hit));
+    }
     if (hit.threadId && hit.reason === 'match') {
       attentionState = AttentionThreads.pursue(attentionState, hit.threadId);
       persistAttention();
@@ -2705,6 +2768,9 @@ function send(opts) {
         hasImages: pendingImages.length > 0,
       })
     : { action: workingEl && !interruptChord ? 'enqueue' : 'send', text: t, interrupt: !!(workingEl && interruptChord) };
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', 'send queue decision', DecisionLog.formatSendDecision(decision));
+  }
   if (decision.action === 'noop') return;
   if (decision.action === 'enqueue') {
     sendQueueState = SendQueue.enqueue(sendQueueState, decision.text);

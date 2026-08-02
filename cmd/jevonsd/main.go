@@ -28,6 +28,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
+	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
@@ -175,6 +176,17 @@ func main() {
 		os.Exit(1)
 	}
 	srv.SetChatLog(clog)
+
+	// Durable decision/lifecycle journal (🎯T120): browser + server events
+	// under state_dir/logs/events.jsonl — tool-readable without privilege.
+	if elog, err := eventlog.Open(eventlog.DefaultPath(cfg.StateDir)); err != nil {
+		slog.Error("cannot open event log", "err", err)
+		// Non-fatal: continue with slog-only browser path.
+	} else {
+		srv.SetEventLog(elog)
+		slog.Info("event log ready", "path", elog.Path())
+	}
+
 	srv.SetCA(ca)
 
 	// Load OpenAI API key from Keychain (fall back to env var).
@@ -319,6 +331,11 @@ func main() {
 	mcpSrv.SetScanner(scanner)
 	// 🎯T110 self-test packs — same in-process env as POST /api/self_test/run.
 	mcpSrv.SetSelfTestEnv(srv.SelfTestEnv)
+	// 🎯T120: product log introspection (durable events.jsonl).
+	mcpSrv.SetEventLogTailer(func(opt eventlog.TailOptions) ([]eventlog.Event, string, error) {
+		ev, err := srv.TailEventLog(opt)
+		return ev, srv.EventLogPath(), err
+	})
 
 	// Butler: durable-thread orchestrator over the thread store, the
 	// session scanner (non-invasive observation), and the transcript
