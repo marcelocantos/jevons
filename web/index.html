@@ -1312,8 +1312,10 @@ function enterTrackBottom() {
 }
 function leaveTrackBottom() {
   followMode = 'free';
-  // Must move clearly off the bottom before scroll/wheel-down re-arm.
-  _mayEnterFromGeometry = false;
+  // Lock geometry re-entry only while still inside the bottom ε band.
+  // If the leave already cleared that band (big scroll / jump to top),
+  // allow the next arrival to re-arm without an extra round-trip.
+  _mayEnterFromGeometry = distFromBottom() > ENTER_BOTTOM_EPS_PX;
 }
 function distFromBottom() {
   return msgs.scrollHeight - msgs.clientHeight - msgs.scrollTop;
