@@ -93,6 +93,16 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    bottom pins to a false mid-bubble "bottom" while tokens still arrive. */
 #messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
 #messages > * { flex-shrink: 0; }
+/* 🎯T56: browser skips layout/paint for off-screen shells; JS dematerialises bodies. */
+#messages > .msg { content-visibility: auto; contain-intrinsic-size: auto 72px; }
+#messages > .msg.virt-shell { content-visibility: visible; }
+#messages > .msg.virt-shell > * { display: none !important; }
+.composer-images { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 6px; }
+.composer-images:empty { display: none; }
+.composer-images .img-chip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.composer-images .img-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.composer-images .img-chip button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff; font-size: 11px; line-height: 18px; cursor: pointer; padding: 0; }
+.msg.user .chat-img { max-width: min(100%, 320px); max-height: 240px; border-radius: 8px; display: block; margin: 6px 0; border: 1px solid var(--user-border); }
 #messages::-webkit-scrollbar { width: 6px; }
 #messages::-webkit-scrollbar-track { background: transparent; }
 #messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
@@ -286,6 +296,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <div id="attention-stack" role="list"></div>
     </div>
     <div id="input-bar">
+      <div id="composer-images" class="composer-images" aria-label="Attached images"></div>
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
                 placeholder="Write a message to Jevons. Enter to send, Shift-Enter for a new line."
@@ -310,6 +321,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/transport.js"></script>
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
+<script src="scripts/virtual_list.js"></script>
+<script src="scripts/thread_route.js"></script>
 <script>
 const msgs = document.getElementById('messages');
 const input = document.getElementById('input');
@@ -832,34 +845,63 @@ function paintBody(d, role, t) {
       renderMermaidIn(d._body);   // sealed content only
       highlightCodeIn(d._body);   // 🎯T74
     }
+    // 🎯T95: auto-close target: filing aside when overseer confirms 🎯 id.
+    maybeCloseTargetAside(t);
   } else if (role === 'user') {
-    // 🎯T75: quote notation as blockquotes; plain text unchanged.
+    // 🎯T75: quote notation as blockquotes; 🎯T76: [image: id] → <img>.
     d._body.innerHTML = renderUserText(t);
   } else {
     d._body.textContent = t;
   }
 }
-// User bubbles: preserve plain text, promote lines of `> quote` to <blockquote>.
+function maybeCloseTargetAside(text) {
+  if (typeof AttentionThreads === 'undefined' || !attentionState) return;
+  const id = AttentionThreads.detectTargetFiled(text);
+  if (!id) return;
+  attentionState = AttentionThreads.closeTargetAside(attentionState);
+  persistAttention();
+  if (typeof renderAttention === 'function') renderAttention();
+}
+// User bubbles: preserve plain text, promote lines of `> quote` to <blockquote>,
+// and render 🎯T76 [image: <id>] markers as inline images.
 function renderUserText(t) {
   const s = String(t == null ? '' : t);
+  if (/\[image:\s*[a-f0-9]+\]/i.test(s)) return renderUserTextWithImages(s);
+  return renderUserTextQuotes(s);
+}
+function renderUserTextWithImages(s) {
+  const re = /\[image:\s*([a-f0-9]+)\]/gi;
+  let html = '';
+  let last = 0;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    html += renderUserTextQuotes(s.slice(last, m.index));
+    const id = m[1].toLowerCase();
+    html += '<img class="chat-img" src="/api/images/' + escHtml(id) + '" alt="pasted image ' + escHtml(id) + '" loading="lazy">';
+    last = m.index + m[0].length;
+  }
+  html += renderUserTextQuotes(s.slice(last));
+  return html;
+}
+function renderUserTextQuotes(s) {
+  s = String(s == null ? '' : s);
+  if (!s) return '';
   if (!/(^|\n)\s*>\s?/.test(s)) {
     const span = document.createElement('span');
     span.textContent = s;
-    return span.innerHTML; // escaped plain
+    return span.innerHTML;
   }
   // Lightweight line-based quote parser (not full markdown).
   const lines = s.split('\n');
-  let html = '', inQ = false, qBuf = [];
+  let html = '', qBuf = [];
   const flushQ = () => {
     if (!qBuf.length) return;
     html += '<blockquote>' + escHtml(qBuf.join('\n')) + '</blockquote>';
     qBuf = [];
-    inQ = false;
   };
   for (const line of lines) {
     const m = line.match(/^\s*>\s?(.*)$/);
     if (m) {
-      inQ = true;
       qBuf.push(m[1]);
     } else {
       flushQ();
@@ -1258,6 +1300,70 @@ msgs.addEventListener('wheel', (e) => {
   if (e.deltaY < 0) autoScroll = false;           // scroll up → read history
   else if (e.deltaY > 0 && nearBottom()) autoScroll = true; // scroll down into bottom band
 }, { passive: true });
+// 🎯T56: dematerialise off-screen message bodies (height-preserving shells).
+let _virtRaf = 0;
+function scheduleVirtualize() {
+  if (_virtRaf) return;
+  _virtRaf = requestAnimationFrame(() => {
+    _virtRaf = 0;
+    virtualizeMessages();
+  });
+}
+function virtualizeMessages() {
+  if (typeof VirtualList === 'undefined') return;
+  const scrollTop = msgs.scrollTop;
+  const clientH = msgs.clientHeight;
+  const buffer = VirtualList.DEFAULT_BUFFER || 800;
+  const children = msgs.children;
+  // Preserve scrollHeight while swapping shells: measure first.
+  for (let i = 0; i < children.length; i++) {
+    const el = children[i];
+    if (!el.classList || !el.classList.contains('msg')) continue;
+    // Never virtualise the live streaming bubble or working indicator host.
+    if (typeof el._streamRaw === 'string') {
+      if (el.classList.contains('virt-shell')) rematerializeMsg(el);
+      continue;
+    }
+    const top = el.offsetTop;
+    const h = el.offsetHeight;
+    const want = VirtualList.shouldMaterialize(top, h, scrollTop, clientH, buffer);
+    if (want) {
+      if (el.classList.contains('virt-shell')) rematerializeMsg(el);
+    } else if (!el.classList.contains('virt-shell')) {
+      dematerializeMsg(el);
+    }
+  }
+}
+function dematerializeMsg(el) {
+  if (!el || !el._body) return;
+  const h = el.offsetHeight;
+  el._virtH = h;
+  el._virtWasExpanded = !!el._expanded;
+  el.classList.add('virt-shell');
+  el.style.minHeight = h + 'px';
+  // Clear heavy body; keep shell + timestamp for layout/scroll math.
+  if (el._body) el._body.innerHTML = '';
+  if (el._expandBtn) { el._expandBtn.remove(); el._expandBtn = null; }
+}
+function rematerializeMsg(el) {
+  if (!el) return;
+  el.classList.remove('virt-shell');
+  el.style.minHeight = '';
+  if (el._virtWasExpanded) el._expanded = true;
+  const role = el._layoutRole || (el.classList.contains('user') ? 'user' : 'jevons');
+  const text = el._layoutText != null ? el._layoutText : (el._fullText || '');
+  if (text != null) renderBody(el, role, text);
+  delete el._virtH;
+  delete el._virtWasExpanded;
+}
+msgs.addEventListener('scroll', () => {
+  if (!_pinningScroll) scheduleVirtualize();
+}, { passive: true });
+// Expose for hermetic tests (🎯T56 / T76).
+window.virtualizeMessages = virtualizeMessages;
+window.dematerializeMsg = dematerializeMsg;
+window.rematerializeMsg = rematerializeMsg;
+window.renderUserText = renderUserText;
 let _touchLastY = null;
 msgs.addEventListener('touchstart', (e) => {
   _touchLastY = e.touches && e.touches[0] ? e.touches[0].clientY : null;
@@ -1388,8 +1494,14 @@ function setEditingHighlight(el) {
 
 function send() {
   let t = input.value.trim();
-  if (!t) return;
-  // 🎯T65 prefix-first: aside:/capture:/park:/main:/pursue: (voice or type).
+  // 🎯T76: allow send with only images attached.
+  if (!t && !pendingImages.length) return;
+  // Prepend image markers so the overseer receives durable references.
+  if (pendingImages.length) {
+    const markers = pendingImages.map(img => img.marker || ('[image: ' + img.id + ']')).join(' ');
+    t = t ? (markers + '\n' + t) : markers;
+  }
+  // 🎯T65/T95 prefix-first: aside:/capture:/park:/main:/pursue:/target:
   if (attentionState && typeof AttentionThreads !== 'undefined') {
     if (!AttentionThreads.isMainFocus(attentionState)) {
       // Don't clobber side-thread body with a command-prefixed draft.
@@ -1416,12 +1528,34 @@ function send() {
     if (AttentionThreads.isMainFocus(attentionState)) mainDraftBackup = '';
     renderAttention();
   }
+  // 🎯T99: cheap continuation routing when on main with no explicit prefix.
+  // Uses original owner draft (before image-marker rewrite is fine; route on text).
+  if (typeof ThreadRoute !== 'undefined' && attentionState &&
+      typeof AttentionThreads !== 'undefined' && AttentionThreads.isMainFocus(attentionState)) {
+    const ownerDraft = input.value.trim();
+    const threads = (attentionState.threads || []).map(function (th) {
+      return { id: th.id, title: th.title, digest: th.body, body: th.body };
+    });
+    const hit = ThreadRoute.route(ownerDraft || t, threads);
+    if (hit.threadId && hit.reason === 'match') {
+      attentionState = AttentionThreads.pursue(attentionState, hit.threadId);
+      persistAttention();
+      const th = AttentionThreads.findThread(attentionState, hit.threadId);
+      if (th && typeof AttentionThreads.formatAsideWire === 'function') {
+        t = AttentionThreads.formatAsideWire(th.id, th.title, t);
+      }
+      renderAttention();
+    }
+  }
   // If a turn is still in flight (no reply yet), cancel it and resubmit
   // the edited message. Interrupt first; claudia's Send waits for the
   // TUI to return to ready before it types, so the ordering is safe.
   if (workingEl) transport.send('{"type":"interrupt"}');
   transport.send(t);
   input.value = '';
+  pendingImages.forEach(img => { if (img.objectUrl) try { URL.revokeObjectURL(img.objectUrl); } catch (_) {} });
+  pendingImages.length = 0;
+  renderComposerImages();
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   autoGrow();
   // Sending pins us to the bottom so the outgoing message and the reply
@@ -1601,8 +1735,66 @@ input.addEventListener('input', () => {
     }
   }
 });
+// 🎯T76: image paste → upload → composer chip → [image: id] on send.
 // 🎯T80: bulk paste/dictation insert tidy (not keystroke mid-edit).
+const pendingImages = []; // { id, url, objectUrl? }
+const composerImagesEl = document.getElementById('composer-images');
+function renderComposerImages() {
+  if (!composerImagesEl) return;
+  composerImagesEl.innerHTML = '';
+  pendingImages.forEach((img, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'img-chip';
+    const el = document.createElement('img');
+    el.src = img.objectUrl || img.url;
+    el.alt = 'attachment ' + img.id;
+    chip.appendChild(el);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '×';
+    btn.title = 'Remove';
+    btn.addEventListener('click', () => {
+      if (img.objectUrl) try { URL.revokeObjectURL(img.objectUrl); } catch (_) {}
+      pendingImages.splice(idx, 1);
+      renderComposerImages();
+    });
+    chip.appendChild(btn);
+    composerImagesEl.appendChild(chip);
+  });
+}
+async function uploadPastedImage(file) {
+  const fd = new FormData();
+  fd.append('file', file, file.name || 'paste.png');
+  const res = await fetch('/api/images', { method: 'POST', body: fd });
+  if (!res.ok) throw new Error('upload ' + res.status);
+  return res.json();
+}
 input.addEventListener('paste', (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (items) {
+    const images = [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf('image/') === 0) {
+        const f = items[i].getAsFile();
+        if (f) images.push(f);
+      }
+    }
+    if (images.length) {
+      e.preventDefault();
+      images.forEach(async (file) => {
+        try {
+          const objectUrl = URL.createObjectURL(file);
+          const meta = await uploadPastedImage(file);
+          pendingImages.push({ id: meta.id, url: meta.url, objectUrl: objectUrl, marker: meta.marker });
+          renderComposerImages();
+        } catch (err) {
+          console.error('image paste upload failed', err);
+          if (typeof addStatusMsg === 'function') addStatusMsg('Image paste failed');
+        }
+      });
+      return;
+    }
+  }
   const clip = (e.clipboardData && e.clipboardData.getData('text')) || '';
   if (!clip) return;
   // Only tidy when replacing empty/all or inserting into empty field.

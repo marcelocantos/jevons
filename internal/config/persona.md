@@ -58,6 +58,24 @@ you did.
 
 When you hit a real product gap or repeated failure mode mid-work, **file or prompt filing** a bullseye target (name + acceptance) rather than only narrating the pain. Example path: owner `target:` aside, or you propose a 🎯 with acceptance and ask to file. Do not mint noise targets for one-off flukes.
 
+### target: asides (🎯T93 / 🎯T95)
+
+When the owner opens a short-lived filing aside (`[target-aside: …]` wire, or
+they typed `target: …`), treat it as a **purpose-bound filing ceremony**, not
+an open-ended attention workstream:
+1. Clarify name/acceptance only if needed (one or two short turns).
+2. File with **`jevons_target_file`** (cwd + name + acceptance).
+3. Confirm the new 🎯 id in your reply and include the exact marker
+   `__TARGET_FILED__:Tn` (e.g. `__TARGET_FILED__:T120`) so the UI auto-closes
+   the aside and returns focus to main.
+
+### Event-triggered push (🎯T34)
+
+When an observed event should wake a fleet thread (CI green, dependency landed,
+worker finished, timer), use **`jevons_event_push`** (target + event + text)
+rather than ad-hoc direct only. Delivery rehydrates stopped processes and
+fails loudly if undeliverable.
+
 ## Agent Architecture
 
 You manage a hierarchy of persistent Grok agents:

@@ -4,8 +4,9 @@
 // Pure attention-thread model for human↔overseer chat (🎯T65).
 // DOM-free so Node hermetic tests can require() it.
 //
-// Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:
+// Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:, target:
 // Case-insensitive; strip prefix before routing. No button-primary API.
+// target: opens a short-lived filing aside (🎯T93/T95).
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -20,11 +21,11 @@
   const STORAGE_KEY = 'jevons-attention-threads-v1';
 
   // Recognized composer prefixes (voice or type). Order irrelevant.
-  const COMMANDS = new Set(['aside', 'capture', 'park', 'main', 'pursue']);
+  const COMMANDS = new Set(['aside', 'capture', 'park', 'main', 'pursue', 'target']);
 
   // Leading command: optional whitespace, word, optional space, colon, rest.
-  // Matches "aside: foo", "ASIDE:foo", "capture : bar".
-  const PREFIX_RE = /^\s*(aside|capture|park|main|pursue)\s*:\s*/i;
+  // Matches "aside: foo", "ASIDE:foo", "capture : bar", "target: file this".
+  const PREFIX_RE = /^\s*(aside|capture|park|main|pursue|target)\s*:\s*/i;
 
   function now() {
     return Date.now();
@@ -75,6 +76,7 @@
           title: t.title,
           body: t.body,
           status: t.status === 'parked' ? 'parked' : 'open',
+          purpose: t.purpose === 'file-target' ? 'file-target' : (t.purpose || ''),
           createdAt: t.createdAt,
           updatedAt: t.updatedAt,
         };
@@ -122,11 +124,65 @@
       title: titleFromBody(text),
       body: text,
       status: 'open',
+      purpose: '',
       createdAt: ts,
       updatedAt: ts,
     });
     s.focusId = MAIN_ID;
     return { state: s, id: id };
+  }
+
+  // openTargetAside: purpose-bound filing thread (🎯T95). Focus stays main
+  // so the owner is not forced into a multi-day attention workstream.
+  function openTargetAside(state, body) {
+    const text = String(body || '').trim();
+    if (!text) return null;
+    const s = clone(state || emptyState());
+    const id = newId();
+    const ts = now();
+    s.threads.unshift({
+      id: id,
+      title: titleFromBody(text),
+      body: text,
+      status: 'open',
+      purpose: 'file-target',
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    s.focusId = MAIN_ID;
+    return { state: s, id: id };
+  }
+
+  // closeTargetAside: auto-close after successful 🎯 file (or explicit).
+  // If id omitted, closes the most recent open file-target aside.
+  function closeTargetAside(state, id) {
+    const s = clone(state || emptyState());
+    let target = null;
+    if (id) {
+      target = findThread(s, id);
+    } else {
+      target = (s.threads || []).find(function (t) {
+        return t.purpose === 'file-target' && t.status !== 'parked';
+      }) || null;
+    }
+    if (!target || target.purpose !== 'file-target') return s;
+    return park(s, target.id);
+  }
+
+  // Wire text for target: asides — overseer must clarify if needed, file
+  // via jevons_target_file, then emit __TARGET_FILED__:Tn confirmation.
+  function formatTargetWire(id, title, body) {
+    const t = String(title || 'target').replace(/[\[\]]/g, '');
+    return '[target-aside: ' + id + ' | ' + t + ']\n' + String(body || '').trim() +
+      '\n\n(Ceremony: short-lived target filing aside. Clarify acceptance if needed, ' +
+      'file with jevons_target_file, confirm 🎯 id. Include __TARGET_FILED__:Tn on success.)';
+  }
+
+  // detectTargetFiled: parse overseer/tool text for __TARGET_FILED__:Tn.
+  function detectTargetFiled(text) {
+    const m = String(text || '').match(/__TARGET_FILED__\s*:\s*(T[0-9]+(?:\.[0-9]+)?)/i);
+    if (!m) return null;
+    return m[1].toUpperCase().replace(/^T/, 'T'); // normalize T prefix
   }
 
   function park(state, id) {
@@ -307,6 +363,26 @@
       };
     }
 
+    // target: short-lived filing aside (🎯T93/T95) — not a general T65 workstream.
+    if (parsed.command === 'target') {
+      if (!bodyTrim) {
+        return { kind: 'empty', text: '', state: s0, clearComposer: false, composerBody: null };
+      }
+      const cap = openTargetAside(s0, bodyTrim);
+      const t = findThread(cap.state, cap.id);
+      const wire = formatTargetWire(cap.id, t ? t.title : titleFromBody(bodyTrim), bodyTrim);
+      return {
+        kind: 'send',
+        text: wire,
+        state: cap.state,
+        clearComposer: true,
+        composerBody: '',
+        routed: true,
+        threadId: cap.id,
+        purpose: 'file-target',
+      };
+    }
+
     // No command prefix.
     const text = bodyTrim;
     if (!text) {
@@ -390,6 +466,7 @@
               title: String(t.title || 'Untitled'),
               body: String(t.body || ''),
               status: t.status === 'parked' ? 'parked' : 'open',
+              purpose: t.purpose === 'file-target' ? 'file-target' : '',
               createdAt: Number(t.createdAt) || now(),
               updatedAt: Number(t.updatedAt) || now(),
             };
@@ -432,6 +509,10 @@
     isMainFocus: isMainFocus,
     parsePrefix: parsePrefix,
     capture: capture,
+    openTargetAside: openTargetAside,
+    closeTargetAside: closeTargetAside,
+    formatTargetWire: formatTargetWire,
+    detectTargetFiled: detectTargetFiled,
     park: park,
     parkByQuery: parkByQuery,
     pursue: pursue,

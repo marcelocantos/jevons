@@ -241,6 +241,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
 	mux.HandleFunc("/ws/voice", s.handleVoice)
+	s.registerImageRoutes(mux)
 }
 
 func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {

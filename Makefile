@@ -50,6 +50,8 @@ test-go:
 test-web:
 	node web/scripts/chat_events_test.js
 	node web/scripts/attention_threads_test.js
+	node web/scripts/virtual_list_test.js
+	node web/scripts/thread_route_test.js
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright
 # from scripts/browser-loop-test). Live: make test-ui-live.
@@ -63,6 +65,8 @@ test-ui:
 	node scripts/chat-ui-test/infinite-scroll-test.js
 	node scripts/chat-ui-test/mermaid-test.js
 	node scripts/chat-ui-test/agent-note-test.js
+	node scripts/chat-ui-test/virtual-list-test.js
+	node scripts/chat-ui-test/image-paste-test.js
 
 .PHONY: test-ui-live
 test-ui-live:

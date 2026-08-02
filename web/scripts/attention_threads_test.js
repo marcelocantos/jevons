@@ -31,6 +31,30 @@ test('parsePrefix is case-insensitive and strips prefix', function () {
   const c = AT.parsePrefix('no prefix here');
   assert.strictEqual(c.command, null);
   assert.strictEqual(c.body, 'no prefix here');
+  const d = AT.parsePrefix('target: virtualise history');
+  assert.strictEqual(d.command, 'target');
+  assert.strictEqual(d.body, 'virtualise history');
+});
+
+test('target: opens file-target aside, wire, main focus (T93/T95)', function () {
+  const r = AT.handleComposer(AT.emptyState(), 'target: Chat paste images work');
+  assert.strictEqual(r.kind, 'send');
+  assert.strictEqual(r.purpose, 'file-target');
+  assert.ok(r.text.indexOf('[target-aside:') === 0);
+  assert.ok(r.text.indexOf('jevons_target_file') > 0);
+  assert.strictEqual(r.state.focusId, AT.MAIN_ID);
+  assert.strictEqual(r.state.threads[0].purpose, 'file-target');
+});
+
+test('detectTargetFiled + closeTargetAside auto-closes filing aside', function () {
+  const open = AT.handleComposer(AT.emptyState(), 'target: Foo bar');
+  const id = open.threadId;
+  assert.ok(id);
+  const filed = AT.detectTargetFiled('Filed 🎯T120 — Foo\n__TARGET_FILED__:T120\n');
+  assert.strictEqual(filed, 'T120');
+  const closed = AT.closeTargetAside(open.state, id);
+  assert.strictEqual(closed.threads[0].status, 'parked');
+  assert.strictEqual(closed.focusId, AT.MAIN_ID);
 });
 
 test('aside: sends routed wire text and keeps main focus', function () {

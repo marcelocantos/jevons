@@ -20,6 +20,8 @@ import (
 // existing session observe-only; list and status report the full set.
 func (s *Server) SetButler(b *butler.Butler) {
 	s.butler = b
+	s.registerEventPushTools()
+	s.registerTargetFileTool()
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_adopt",
