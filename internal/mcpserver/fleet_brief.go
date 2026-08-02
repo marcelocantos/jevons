@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Delivery: local by default (🎯T104)
@@ -32,6 +32,19 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   implement yourself (including small patches, oracles, docs commits).
   Stay interruptible for overseer/owner directs; workers/bosses execute.
 - Residual: instructional doctrine, not a hard spawn-gate in the daemon.
+
+## Overseer never parents product workers (🎯T129)
+- For jevons-repo Build work: sole spawn parent for product workers is
+  jevons-po (not parent=jevons). Overseer routes to jevons-po; PO spawns.
+- Exception: PO dead/unregistered → rehydrate PO first, then PO spawns.
+- Residual: instructional until registry enforcement.
+
+## Filing reflex (🎯T130)
+- Real product gap / repeated failure / standing behavioural rule mid-work →
+  file or prompt-file a bullseye target (name + acceptance) in the same turn
+  — not only "standing rule" / "going forward" / "from now on" / "we should always…"
+  in chat. Ceremony: jevons_target_file and/or bullseye_commit track.
+- Related: ambient RSI 🎯T92, hierarchy 🎯T129. Residual: one-off flukes may skip.
 
 ## Report
 - When finished: report commit SHA(s) + test evidence to the overseer.

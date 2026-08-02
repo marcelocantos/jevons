@@ -104,7 +104,7 @@ func TestDefaultPersonaMultiSliceFanOut(t *testing.T) {
 	}
 }
 
-// 🎯T87 / 🎯T103 thin: impatience + RSI filing bias in default persona.
+// 🎯T87 / 🎯T103 / 🎯T130: impatience + RSI filing reflex in default persona.
 func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 	p, err := Default().Persona()
 	if err != nil {
@@ -116,9 +116,21 @@ func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 		"dead air",
 		"Recursive self-improvement",
 		"bullseye target",
+		"filing reflex",
+		"T130",
+		"standing rule",
+		"going forward",
+		"from now on",
+		"we should always",
+		"same turn",
+		"jevons_target_file",
+		"bullseye_commit",
+		"T92",
+		"T129",
+		"One-off flukes",
 	} {
 		if !strings.Contains(p, want) {
-			t.Errorf("persona missing impatience/RSI marker %q", want)
+			t.Errorf("persona missing impatience/RSI/T130 marker %q", want)
 		}
 	}
 }
@@ -165,7 +177,28 @@ func TestDefaultPersonaPONeverImplements(t *testing.T) {
 	}
 }
 
-// 🎯T78/T104/T125: agents-guide is the PO/worker product surface that inherits doctrine.
+// 🎯T129: overseer routes to jevons-po; never parents product workers under jevons.
+func TestDefaultPersonaOverseerNeverParentsWorkers(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Overseer never parents product workers",
+		"T129",
+		"jevons-po",
+		"parent=jevons",
+		"Sole spawn parent",
+		"rehydrate",
+		"instructional",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T129 marker %q", want)
+		}
+	}
+}
+
+// 🎯T78/T104/T125/T129/T130: agents-guide is the PO/worker product surface that inherits doctrine.
 func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	// agents-guide.md is repo-root product docs consumed by PO/workers.
 	path := filepath.Join("..", "..", "agents-guide.md")
@@ -195,6 +228,19 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"spawn-only for Build work",
 		"interruptible",
 		"instructional doctrine",
+		"Overseer never parents product workers",
+		"T129",
+		"parent=jevons",
+		"sole spawn parent",
+		"Filing reflex",
+		"T130",
+		"standing rule",
+		"going forward",
+		"from now on",
+		"we should always",
+		"jevons_target_file",
+		"bullseye_commit",
+		"T92",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)
@@ -202,7 +248,7 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	}
 }
 
-// 🎯T125: product AGENTS.md (and CLAUDE thin import) carry PO never-implements.
+// 🎯T125/T129/T130: product AGENTS.md (and CLAUDE thin import) carry fleet doctrine.
 func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 	path := filepath.Join("..", "..", "AGENTS.md")
 	b, err := os.ReadFile(path)
@@ -219,9 +265,23 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"T125",
 		"spawn-only",
 		"interruptible",
+		"Overseer never parents product workers",
+		"T129",
+		"parent=jevons",
+		"jevons-po",
+		"Filing reflex",
+		"T130",
+		"standing rule",
+		"going forward",
+		"from now on",
+		"we should always",
+		"jevons_target_file",
+		"bullseye_commit",
+		"T92",
+		"same turn",
 	} {
 		if !strings.Contains(a, want) {
-			t.Errorf("AGENTS.md missing T125 marker %q", want)
+			t.Errorf("AGENTS.md missing doctrine marker %q", want)
 		}
 	}
 	// CLAUDE.md is the thin adapter; must import AGENTS so doctrine is in the load path.
@@ -231,7 +291,7 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		t.Fatalf("CLAUDE.md: %v", err)
 	}
 	if !strings.Contains(string(cb), "AGENTS.md") {
-		t.Error("CLAUDE.md must import AGENTS.md so T125 doctrine is on the instruction surface")
+		t.Error("CLAUDE.md must import AGENTS.md so T125/T129/T130 doctrine is on the instruction surface")
 	}
 }
 

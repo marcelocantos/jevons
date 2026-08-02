@@ -113,6 +113,20 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   workers/bosses execute. Instructional doctrine (not a hard spawn-gate)
   unless a later target enforces it. Full text: `internal/config/persona.md`,
   `agents-guide.md`, fleet standing brief.
+- **Overseer never parents product workers (🎯T129):** for jevons-repo
+  Build work, overseer (`jevons`) routes owner intent to **`jevons-po`**
+  and does **not** `jevons_agent_start` product workers with
+  `parent=jevons`. Sole spawn parent for product workers = **`jevons-po`**
+  (T125). Exception: PO dead/unregistered → rehydrate PO first, then PO
+  spawns. Instructional until registry enforcement. Persona + agents-guide
+  + fleet brief.
+- **Filing reflex (🎯T130):** when a real product gap, repeated failure
+  mode, or standing behavioural rule appears mid-work → **file or
+  prompt-file a bullseye target** (name + acceptance) in the **same turn**
+  — not only "standing rule" / "going forward" / "from now on" /
+  "we should always…" in chat. Ceremony: `jevons_target_file` and/or
+  bullseye MCP (`bullseye_commit` track). Related: 🎯T92 ambient RSI,
+  🎯T129 hierarchy. Residual: one-off flukes may skip filing.
 
 ## Project structure
 

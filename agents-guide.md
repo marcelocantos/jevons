@@ -122,6 +122,38 @@ POs stay **interruptible** so redirects from above are not blocked by a
 solo coding session. **Residual:** instructional doctrine, not a hard
 daemon spawn-gate, unless a later target adds enforcement.
 
+### Overseer never parents product workers (🎯T129)
+
+For **jevons-repo Build work**, the overseer (`jevons`) routes owner
+intent to **`jevons-po`** and does **not** `jevons_agent_start` product
+workers with `parent=jevons` (or actor=jevons as parent).
+
+| Role | Spawns product workers with parent= |
+|---|---|
+| **Overseer (`jevons`)** | Does **not** — routes to PO only |
+| **`jevons-po` (sole spawn parent)** | Yes — bosses/workers under T125 |
+
+**Exception:** PO dead/unregistered → rehydrate or start PO first, then
+PO spawns. **Residual:** instructional until a later target adds registry
+enforcement (reject wrong parent).
+
+### Filing reflex (🎯T130) — doctrine first, narrative second
+
+When a **real product gap**, **repeated failure mode**, or **standing
+behavioural rule** appears mid-work → **file or prompt-file a bullseye
+target** (name + acceptance) in the **same turn** — not only chat promises.
+
+**Trigger phrases** that require filing (not "I'll remember"):
+- "standing rule"
+- "going forward"
+- "from now on"
+- "we should always…"
+- plus: repeated failure, hierarchy slip, logging gap, UX pain, fleet doctrine
+
+**Ceremony:** `jevons_target_file` and/or bullseye MCP (`bullseye_commit`
+op=track / file tools). Related: ambient RSI **🎯T92**, hierarchy **🎯T129**.
+**Residual:** one-off flukes may skip filing; judgment allowed.
+
 ## Delivery: local by default (🎯T104)
 
 Owner vocabulary is **literal**:
