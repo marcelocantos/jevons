@@ -117,7 +117,14 @@ func (s *Server) SendToOverseer(text string) error {
 	// turn-complete (HandleAgentEvent).
 	s.mu.Lock()
 	s.notifyQueue = append(s.notifyQueue, text)
+	depth := len(s.notifyQueue)
 	s.mu.Unlock()
+	// 🎯T128.3: enqueue is Info so queue growth is visible at production default.
+	slog.Info("notify_queue",
+		"component", "notify_queue",
+		"decision", "enqueue",
+		"depth", depth,
+	)
 	s.drainOverseerNotes()
 	return nil
 }
@@ -133,6 +140,23 @@ func (s *Server) sendNotes(text string) error {
 		return fmt.Errorf("overseer not running")
 	}
 	return proc.Send(text)
+}
+
+// notifyErrClass classifies overseer-notify delivery failures for structured
+// logs (🎯T128.3). Stable short codes for rg / dashboards.
+func notifyErrClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "prompt already in flight"):
+		return "busy"
+	case strings.Contains(msg, "overseer not running"):
+		return "not_running"
+	default:
+		return "other"
+	}
 }
 
 // drainOverseerNotes attempts to deliver all queued async notifications to
@@ -161,11 +185,27 @@ func (s *Server) drainOverseerNotes() {
 		// Overseer busy or down — put the batch back at the front so order
 		// is preserved, and wait for the next turn-complete to retry.
 		s.notifyQueue = append(batch, s.notifyQueue...)
+		depth := len(s.notifyQueue)
+		s.mu.Unlock()
+		// 🎯T128.3: busy-defer must be Info (not Debug) with depth + err_class.
+		slog.Info("notify_queue",
+			"component", "notify_queue",
+			"decision", "defer",
+			"depth", depth,
+			"deferred", len(batch),
+			"err_class", notifyErrClass(err),
+			"err", err,
+		)
+		return
 	}
+	depth := len(s.notifyQueue)
 	s.mu.Unlock()
-	if err != nil {
-		slog.Debug("overseer busy; notes deferred to next turn", "deferred", len(batch), "err", err)
-	}
+	slog.Info("notify_queue",
+		"component", "notify_queue",
+		"decision", "drain",
+		"depth", depth,
+		"drained", len(batch),
+	)
 }
 
 // handleCost serves the live cost snapshot: burn-rates, the "what is
