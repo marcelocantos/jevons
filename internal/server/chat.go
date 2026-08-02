@@ -76,6 +76,80 @@ func (s *Server) CurrentProcess() *claudia.Agent {
 	return s.proc
 }
 
+// waitForOverseer holds an open /ws/chat connection after history was
+// already sent while the overseer is dead. Serves pings so the browser
+// watchdog stays quiet, rejects chat turns with a short error, and
+// returns a live process once AttachOverseer has run — or nil if the
+// client disconnects. Must not Close the socket on "still down"; that
+// path caused reconnect storms that wiped and re-hydrated the transcript.
+func (s *Server) waitForOverseer(ctx context.Context, conn *websocket.Conn) *claudia.Agent {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	reads := make(chan readResult, 1)
+	go func() {
+		for {
+			_, data, err := conn.Read(ctx)
+			select {
+			case reads <- readResult{data: data, err: err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if cur := s.CurrentProcess(); cur != nil && cur.Alive() {
+				slog.Info("chat: overseer recovered; attaching live stream")
+				payload, _ := json.Marshal(map[string]string{
+					"type": "status", "text": "overseer is back",
+				})
+				wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				_ = conn.Write(wctx, websocket.MessageText, payload)
+				cancel()
+				return cur
+			}
+		case rr := <-reads:
+			if rr.err != nil {
+				return nil
+			}
+			msg := strings.TrimSpace(string(rr.data))
+			if msg == "" {
+				continue
+			}
+			if msg == `{"type":"ping"}` {
+				wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				_ = conn.Write(wctx, websocket.MessageText, []byte(`{"type":"pong"}`))
+				cancel()
+				continue
+			}
+			// Still down: do not drop the socket. Nack chat/control so the
+			// owner sees a stable history instead of a reconnect flicker.
+			s.mu.RLock()
+			reason := s.overseerDownReason
+			s.mu.RUnlock()
+			if reason == "" {
+				reason = "the overseer is not running"
+			}
+			payload, _ := json.Marshal(map[string]string{"type": "error", "error": reason})
+			wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			_ = conn.Write(wctx, websocket.MessageText, payload)
+			cancel()
+		}
+	}
+}
+
 // AttachOverseer makes agent the current overseer and (re)subscribes its
 // event stream to the chat broadcast + status handler. It is called at
 // startup and again after a rewind swaps the process — so every overseer
@@ -519,10 +593,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if proc == nil || !proc.Alive() {
-		// Overseer is down (usually a missing/unauth Grok CLI on a fresh
-		// install). Send a legible error frame the UI renders BEFORE the
-		// socket closes, so a first-run stranger sees the cause and the
-		// fix instead of a blank, silent chat (🎯T54).
+		// Overseer is down (budget pause, crash, missing Grok CLI, …).
+		// History was already replayed above — keep the socket OPEN so the
+		// resilient browser transport does not thrash reconnect → wipe DOM
+		// → re-replay ~10k stream frames → close (transcript flicker).
+		// 🎯T54 still surfaces a legible error; recovery waits for AttachOverseer.
 		s.mu.RLock()
 		reason := s.overseerDownReason
 		s.mu.RUnlock()
@@ -533,8 +608,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
 		_ = conn.Write(wctx, websocket.MessageText, payload)
 		wcancel()
-		conn.Close(websocket.StatusInternalError, "overseer not running")
-		return
+		slog.Info("chat: overseer down; holding connection after history replay", "reason", reason)
+		proc = s.waitForOverseer(ctx, conn)
+		if proc == nil {
+			return
+		}
+		// Fall through to subscribe on the recovered process.
 	}
 
 	// Subscribe to live JSONL events from the Claude process.
