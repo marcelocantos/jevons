@@ -226,6 +226,19 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg-expand:hover { opacity: 1; text-decoration: underline; }
 .msg.user .msg-expand { margin-left: auto; text-align: right; }
 
+/* 🎯T135: opt-in route switch under a user bubble (match suggestion only). */
+.msg.user .route-switch {
+  display: block; margin-top: 6px; margin-left: auto; text-align: right;
+  padding: 2px 0; background: none; border: none;
+  color: var(--accent); font: inherit; font-size: 12px; cursor: pointer;
+  opacity: 0.88; max-width: 100%;
+}
+.msg.user .route-switch:hover { opacity: 1; text-decoration: underline; }
+.msg.user .route-switch:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px;
+}
+.msg.user .route-switch[disabled] { opacity: 0.5; cursor: default; text-decoration: none; }
+
 /* History hydrate (🎯T57 API + 🎯T119 progressive full-data):
    WS still replays recent turns; remaining durable log is fetched into
    client memory without requiring scroll (progressive /api/history).
@@ -273,14 +286,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* 🎯T65 quiet attention stack — prefix-first; no command buttons / focus chrome */
-#attention-bar { display: none; flex-direction: row; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); }
+/* 🎯T134: single-row bar + overflow chip; no unbounded multi-row wall */
+#attention-bar { display: none; flex-direction: row; flex-wrap: nowrap; gap: 6px; align-items: center; padding: 6px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); max-height: 2.4rem; overflow: hidden; }
 #attention-bar.visible { display: flex; }
-#attention-stack { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 0; flex: 1; }
-.attn-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--text-dim); font-size: 11px; font-weight: 500; cursor: pointer; line-height: 1.3; }
+#attention-bar.attn-expanded { flex-wrap: wrap; max-height: none; overflow: visible; }
+#attention-stack { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; min-height: 0; flex: 1; min-width: 0; overflow: hidden; }
+#attention-bar.attn-expanded #attention-stack { flex-wrap: wrap; overflow: visible; }
+#attention-actions { display: flex; flex-shrink: 0; gap: 4px; align-items: center; }
+.attn-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--text-dim); font-size: 11px; font-weight: 500; cursor: pointer; line-height: 1.3; flex-shrink: 0; }
 .attn-chip:hover { border-color: var(--border-focus); color: var(--text); }
 .attn-chip.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
 .attn-chip.parked { opacity: 0.72; font-style: italic; }
 .attn-chip.main-chip { border-style: dashed; }
+.attn-chip.attn-overflow { border-style: dashed; opacity: 0.9; color: var(--text-muted); }
+.attn-chip.attn-action { border-style: solid; font-size: 10px; color: var(--text-muted); }
+.attn-chip.attn-action:hover { color: var(--text); border-color: var(--border-focus); }
 .attn-chip .attn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
 .attn-chip .attn-status { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
 
@@ -471,6 +491,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <button type="button" id="jump-bottom" hidden title="Jump to latest (End / ⌘↓)">↓ Latest</button>
     <div id="attention-bar" aria-label="Attention threads">
       <div id="attention-stack" role="list"></div>
+      <div id="attention-actions" aria-label="Attention bar actions"></div>
     </div>
     <div id="send-queue" aria-label="Queued follow-ups" role="list"></div>
     <div id="input-bar">
@@ -540,6 +561,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/agent_transcript.js"></script>
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
+<script src="scripts/route_suggest.js"></script>
 <script src="scripts/composer_layout.js"></script>
 <script src="scripts/composer_keys.js"></script>
 <script src="scripts/composer_focus.js"></script>
@@ -561,6 +583,12 @@ const sTxt = document.getElementById('status-text');
 const agentsEl = document.getElementById('agents');
 const attentionBar = document.getElementById('attention-bar');
 const attentionStackEl = document.getElementById('attention-stack');
+const attentionActionsEl = document.getElementById('attention-actions');
+// 🎯T134: expand overflow chips in-session (not persisted).
+let attentionBarExpanded = false;
+// 🎯T135: last auto-route match is suggestion-only (never steals wire).
+// Stashed until the next user bubble echo so we can attach "Continue in: …".
+let lastRouteSuggestion = null;
 const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing.';
 
 // 🎯T21 Wispr Flow: live a11y context + optional empty seed (strip before wire).
@@ -656,10 +684,15 @@ function renderAttention() {
   // Quiet: only show when there is something to show (stack or non-main focus).
   const show = stack.length > 0 || !onMain;
   attentionBar.classList.toggle('visible', show);
+  attentionBar.classList.toggle('attn-expanded', !!attentionBarExpanded);
   updateComposerPlaceholder();
 
   attentionStackEl.innerHTML = '';
-  if (!show) return;
+  if (attentionActionsEl) attentionActionsEl.innerHTML = '';
+  if (!show) {
+    attentionBarExpanded = false;
+    return;
+  }
 
   // Main chip when not on main — click returns focus (same as main:).
   if (!onMain) {
@@ -690,7 +723,17 @@ function renderAttention() {
     attentionStackEl.appendChild(mainChip);
   }
 
-  for (const t of stack) {
+  // 🎯T134: cap visible chips; overflow as "+N more" (expand) unless expanded.
+  const maxChips = (typeof AttentionThreads.MAX_VISIBLE_CHIPS === 'number')
+    ? AttentionThreads.MAX_VISIBLE_CHIPS
+    : 6;
+  const vs = (typeof AttentionThreads.visibleStack === 'function')
+    ? AttentionThreads.visibleStack(attentionState, { max: maxChips })
+    : { shown: stack, overflowCount: 0, overflow: [] };
+  const chips = attentionBarExpanded ? stack : vs.shown;
+  const overflowCount = attentionBarExpanded ? 0 : vs.overflowCount;
+
+  function appendThreadChip(t) {
     const chip = document.createElement('div');
     // 🎯T115: attention stack items are asides — 💡 title, no path chrome.
     chip.className = 'attn-chip attn-aside' +
@@ -727,6 +770,75 @@ function renderAttention() {
       input.focus();
     });
     attentionStackEl.appendChild(chip);
+  }
+
+  for (const t of chips) appendThreadChip(t);
+
+  if (overflowCount > 0) {
+    const more = document.createElement('div');
+    more.className = 'attn-chip attn-overflow';
+    more.setAttribute('role', 'listitem');
+    more.setAttribute('aria-label', overflowCount + ' more attention threads');
+    const overflowTitles = (vs.overflow || []).map(function (t) {
+      return t.title || t.id;
+    }).join('; ');
+    more.title = overflowTitles
+      ? ('Show ' + overflowCount + ' more: ' + overflowTitles)
+      : ('Show ' + overflowCount + ' more');
+    const mt = document.createElement('span');
+    mt.className = 'attn-title';
+    mt.textContent = '+' + overflowCount + ' more';
+    more.appendChild(mt);
+    more.addEventListener('click', () => {
+      attentionBarExpanded = true;
+      renderAttention();
+    });
+    attentionStackEl.appendChild(more);
+  } else if (attentionBarExpanded && stack.length > maxChips) {
+    const less = document.createElement('div');
+    less.className = 'attn-chip attn-overflow';
+    less.setAttribute('role', 'listitem');
+    less.title = 'Collapse overflow chips';
+    const lt = document.createElement('span');
+    lt.className = 'attn-title';
+    lt.textContent = 'Show less';
+    less.appendChild(lt);
+    less.addEventListener('click', () => {
+      attentionBarExpanded = false;
+      renderAttention();
+    });
+    attentionStackEl.appendChild(less);
+  }
+
+  // 🎯T134 bulk clear: dismiss all chrome chips + purge done archive.
+  if (attentionActionsEl && stack.length > 0 &&
+      typeof AttentionThreads.clearChromeNoise === 'function') {
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'attn-chip attn-action';
+    clearBtn.setAttribute('aria-label', 'Clear attention noise: dismiss all bar chips and purge archive');
+    clearBtn.title = 'Clear noise — dismiss all open/parked chips and purge done archive';
+    clearBtn.textContent = 'Clear noise';
+    clearBtn.addEventListener('click', () => {
+      const hadFocus = attentionState && attentionState.focusId;
+      attentionState = AttentionThreads.clearChromeNoise(attentionState);
+      attentionBarExpanded = false;
+      // Focus returns to main; restore main draft if we left a side thread.
+      if (hadFocus && hadFocus !== AttentionThreads.MAIN_ID) {
+        input.value = mainDraftBackup || '';
+        autoGrow();
+      }
+      persistAttention();
+      renderAttention();
+      if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+        jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision('dismiss', {
+          draft: 'clearChromeNoise',
+          corr: pageCorr,
+        }));
+      }
+      input.focus();
+    });
+    attentionActionsEl.appendChild(clearBtn);
   }
 }
 
@@ -903,6 +1015,12 @@ function handle(m) {
       closeTurn();
       const uEl = addMsg('user', content, msgTs);
       if (content) msgHistory.push({ text: content, el: uEl });
+      // 🎯T135: opt-in "Continue in: «title»" when auto-match suggested a thread.
+      // Match is suggestion only — default wire already went to main.
+      if (lastRouteSuggestion) {
+        attachRouteSwitch(uEl, lastRouteSuggestion);
+        lastRouteSuggestion = null;
+      }
       startTurn();
     } else if (Array.isArray(content)) {
       content.forEach(c => {
@@ -3032,29 +3150,47 @@ function send(opts) {
     renderAttention();
   }
   // 🎯T99: cheap continuation routing when on main with no explicit prefix.
-  // Uses original owner draft (before image-marker rewrite is fine; route on text).
-  // ALWAYS log the route hit (including when match rewrites wire — T99 opacity).
+  // 🎯T134: routeCandidates = open only — never done/archive ghosts.
+  // 🎯T135: match is suggestion only; no silent steal — NEVER pursue or
+  // rewrite `t` / wire via formatAsideWire on auto-match. Main draft stays main.
+  // ALWAYS log the route hit (T99 opacity / T120 DecisionLog).
+  let pendingRouteSuggestion = null;
   if (typeof ThreadRoute !== 'undefined' && attentionState &&
       typeof AttentionThreads !== 'undefined' && AttentionThreads.isMainFocus(attentionState)) {
     // Route on seed-stripped draft (🎯T21) so EMPTY_SEED never influences match.
     const ownerDraft = t;
-    const threads = (attentionState.threads || []).map(function (th) {
-      return { id: th.id, title: th.title, digest: th.body, body: th.body };
-    });
+    const threads = (typeof AttentionThreads.routeCandidates === 'function')
+      ? AttentionThreads.routeCandidates(attentionState)
+      : (attentionState.threads || []).filter(function (th) {
+          return th && th.status === 'open';
+        }).map(function (th) {
+          return { id: th.id, title: th.title, digest: th.body, body: th.body, status: th.status };
+        });
     const hit = ThreadRoute.route(ownerDraft || t, threads);
-    // ALWAYS log (match rewrites wire — T99 opacity / audit P0).
+    // ALWAYS log full hit even when we do not rewrite wire (🎯T135).
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('info', DecisionLog.decisionMsg('thread_route'), DecisionLog.formatRouteDecision(hit, pageCorr));
     }
-    if (hit.threadId && hit.reason === 'match') {
-      attentionState = AttentionThreads.pursue(attentionState, hit.threadId);
-      persistAttention();
-      const th = AttentionThreads.findThread(attentionState, hit.threadId);
-      if (th && typeof AttentionThreads.formatAsideWire === 'function') {
-        t = AttentionThreads.formatAsideWire(th.id, th.title, t);
+    // 🎯T135: plan only — steal always false; suggestion for opt-in affordance.
+    if (typeof RouteSuggest !== 'undefined' && typeof RouteSuggest.planAutoRouteAction === 'function') {
+      const act = RouteSuggest.planAutoRouteAction(hit, {
+        threads: threads,
+        body: ownerDraft || t,
+      });
+      // act.steal is always false by contract; never pursue / formatAsideWire here.
+      pendingRouteSuggestion = act.suggestion;
+    } else if (hit && hit.threadId && hit.reason === 'match') {
+      const matched = AttentionThreads.findThread(attentionState, hit.threadId);
+      if (matched && matched.status === 'open') {
+        pendingRouteSuggestion = {
+          threadId: String(hit.threadId),
+          title: matched.title || '',
+          score: typeof hit.score === 'number' ? hit.score : 0,
+          body: ownerDraft || t,
+        };
       }
-      renderAttention();
     }
+    // Intentionally NO AttentionThreads.pursue / formatAsideWire on match (🎯T135).
   }
   // 🎯T113: while busy, plain Enter enqueues; only Control+Enter interjects.
   const decision = (typeof SendQueue !== 'undefined')
@@ -3075,9 +3211,66 @@ function send(opts) {
     renderSendQueue();
     return;
   }
-  // Wire send (optional interrupt when busy + Control+Enter).
+  // Wire send stays on main; stash suggestion for the user-bubble affordance.
+  lastRouteSuggestion = pendingRouteSuggestion;
   clearComposerAfterQueueOrSend();
   submitWireText(decision.text, { interrupt: !!decision.interrupt });
+}
+
+// 🎯T135: attach opt-in "Continue in: «title»" under a user bubble.
+function attachRouteSwitch(msgEl, suggestion) {
+  if (!msgEl || !suggestion || typeof RouteSuggest === 'undefined') return;
+  if (!RouteSuggest.shouldShowSwitch({ reason: 'match', threadId: suggestion.threadId })) return;
+  if (msgEl.querySelector && msgEl.querySelector('.route-switch')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'route-switch';
+  btn.textContent = RouteSuggest.formatSwitchLabel(suggestion);
+  btn.title = 'Deliver this message to the suggested thread and interrupt main';
+  btn.setAttribute('aria-label', btn.textContent);
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (btn.disabled) return;
+    btn.disabled = true;
+    optInRouteSwitch(suggestion);
+  });
+  msgEl.appendChild(btn);
+}
+
+// 🎯T135 opt-in only: interrupt main + deliver body to suggested thread.
+// Default auto-match never calls this — only the owner click does.
+function optInRouteSwitch(suggestion) {
+  if (typeof RouteSuggest === 'undefined' || typeof AttentionThreads === 'undefined') return;
+  const plan = RouteSuggest.planOptInSwitch(suggestion);
+  if (!plan.ok) return;
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', DecisionLog.decisionMsg('thread_route'), {
+      decision: 'opt_in_route_switch',
+      threadId: plan.deliverTo,
+      title: plan.title || '',
+      corr: pageCorr,
+    });
+  }
+  // Cancel in-flight main turn for the stolen-then-redirected prompt.
+  if (workingEl) {
+    try { transport.send('{"type":"interrupt"}'); } catch (_) {}
+  }
+  const th = attentionState
+    ? AttentionThreads.findThread(attentionState, plan.deliverTo)
+    : null;
+  const title = plan.title || (th && th.title) || '';
+  // Local chrome focus follows opt-in delivery (not silent auto-match).
+  if (attentionState && typeof AttentionThreads.pursue === 'function') {
+    attentionState = AttentionThreads.pursue(attentionState, plan.deliverTo);
+    persistAttention();
+    renderAttention();
+  }
+  const wire = (typeof AttentionThreads.formatAsideWire === 'function')
+    ? AttentionThreads.formatAsideWire(plan.deliverTo, title, plan.body)
+    : plan.body;
+  // Already interrupted above when busy.
+  submitWireText(wire, { interrupt: false });
 }
 
 // rewindAndResend performs the destructive "edit an earlier message"

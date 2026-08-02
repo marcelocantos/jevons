@@ -53,6 +53,7 @@ test-web:
 	node web/scripts/fleet_row_test.js
 	node web/scripts/virtual_list_test.js
 	node web/scripts/thread_route_test.js
+	node web/scripts/route_suggest_test.js
 	node web/scripts/layout_probe_test.js
 	node web/scripts/composer_layout_test.js
 	node web/scripts/composer_keys_test.js
