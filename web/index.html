@@ -478,11 +478,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
                 title="Message box — / focuses here when focus is elsewhere (🎯T127)"
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
-                aria-describedby="input-hint"
+                aria-describedby="input-hint wispr-context"
                 autocomplete="off"
                 spellcheck="true"
                 autocapitalize="sentences"></textarea>
       <span id="input-hint" class="sr-only">Type a prompt for the Jevons assistant. Use full sentences with punctuation. Press slash (/) outside any text field to focus this message box again.</span>
+      <!-- 🎯T21: live sentence-shaped transcript context for Wispr Flow document mode -->
+      <span id="wispr-context" class="sr-only" aria-live="polite"></span>
       <button id="send" disabled aria-label="Send message">Send</button>
     </div>
   </div>
@@ -538,6 +540,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/composer_layout.js"></script>
 <script src="scripts/composer_keys.js"></script>
 <script src="scripts/composer_focus.js"></script>
+<script src="scripts/wispr_context.js"></script>
 <script src="scripts/send_queue.js"></script>
 <script src="scripts/layout_probe.js"></script>
 <script src="scripts/tool_summary.js"></script>
@@ -556,6 +559,50 @@ const agentsEl = document.getElementById('agents');
 const attentionBar = document.getElementById('attention-bar');
 const attentionStackEl = document.getElementById('attention-stack');
 const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing.';
+
+// 🎯T21 Wispr Flow: live a11y context + optional empty seed (strip before wire).
+const wisprContextEl = document.getElementById('wispr-context');
+function collectWisprTurns() {
+  if (!msgs) return [];
+  const nodes = msgs.querySelectorAll('.msg.user, .msg.jevons');
+  const out = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const d = nodes[i];
+    const role = d.classList && d.classList.contains('user') ? 'user' : 'assistant';
+    const text = d._layoutText != null
+      ? d._layoutText
+      : (d._body ? d._body.textContent : (d.textContent || ''));
+    out.push({ role: role, text: text });
+  }
+  return out;
+}
+function refreshWisprContext() {
+  if (typeof WisprContext === 'undefined') return;
+  const text = WisprContext.buildContextText(collectWisprTurns());
+  if (wisprContextEl) wisprContextEl.textContent = text;
+  if (input) {
+    // Keep describedby contract even if markup is edited later.
+    input.setAttribute(
+      'aria-describedby',
+      WisprContext.describedByIds(WisprContext.STATIC_HINT_ID, WisprContext.LIVE_REGION_ID)
+    );
+  }
+}
+function ensureWisprSeed() {
+  if (typeof WisprContext === 'undefined' || !input) return;
+  // Only seed when the live draft is empty of real text (fallback B).
+  if (!WisprContext.needsSeed(input.value)) return;
+  const next = WisprContext.applySeedIfEmpty(input.value);
+  if (next !== input.value) input.value = next;
+}
+function stripWisprSeedFromComposerValue() {
+  if (typeof WisprContext === 'undefined' || !input) return;
+  const stripped = WisprContext.prepareWireText(input.value);
+  if (stripped !== input.value && !WisprContext.isEffectivelyEmpty(input.value)) {
+    // Keep visible draft free of seed once the owner has real text.
+    input.value = stripped;
+  }
+}
 
 // 🎯T120 page-session correlation id for decision logs (audit §3.1).
 // Stable for the life of this page load (survives WS reconnect; not regenerated).
@@ -717,6 +764,8 @@ function endHistoryReplayAndPin(reason) {
   }
   scheduleVirtualize();
   updateJumpFab();
+  // 🎯T21: replay finished — refresh Wispr continuation context from history.
+  refreshWisprContext();
   if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
     jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('replay_pin', {
       reason: reason || 'end',
@@ -962,6 +1011,8 @@ function sealAssistantStream() {
     void msgs.offsetHeight;
     scrollDown();
   }
+  // 🎯T21: sealed assistant text is durable context for Wispr document mode.
+  refreshWisprContext();
 }
 
 function startTurn() {
@@ -1090,6 +1141,8 @@ function addMsg(role, text, when) {
   // 🎯T119.1: extend replay idle-end while burst continues via addMsg too.
   if (historyReplayActive) armHistoryReplayIdleEnd();
   scrollDownThrottled(); // no-op while historyReplayActive
+  // 🎯T21: keep Wispr describedby context current as history grows.
+  if (role === 'user' || role === 'jevons') refreshWisprContext();
   return d;
 }
 
@@ -1960,6 +2013,8 @@ async function loadEarlier() {
         corr: pageCorr,
       }));
     }
+    // 🎯T21: progressive hydrate may reveal older turns used in context window.
+    refreshWisprContext();
   } catch (e) {
     console.error('load earlier failed', e);
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
@@ -2865,6 +2920,8 @@ function clearComposerAfterQueueOrSend() {
   navFocus = { zone: 'live' };
   liveDraftBackup = '';
   autoGrow();
+  // 🎯T21: empty composer again — re-seed for next dictation (stripped on send).
+  ensureWisprSeed();
 }
 
 // opts.interrupt: true when Control+Enter (Grok-class interject).
@@ -2876,17 +2933,25 @@ function send(opts) {
     const qi = navFocus.index | 0;
     const it = sendQueueState.items[qi];
     if (it) {
-      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, input.value);
+      // Queue row text is owner draft — strip any accidental seed prefix.
+      const rowText = (typeof WisprContext !== 'undefined')
+        ? WisprContext.prepareWireText(input.value)
+        : input.value;
+      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, rowText);
       navFocus = { zone: 'live' };
       input.value = liveDraftBackup;
       liveDraftBackup = '';
       histIdx = null; histDraft = ''; setEditingHighlight(null);
       renderSendQueue();
       autoGrow();
+      ensureWisprSeed();
       return;
     }
   }
-  let t = input.value.trim();
+  // 🎯T21: strip empty-composer seed before wire; never invent grammar/`?`.
+  let t = (typeof WisprContext !== 'undefined')
+    ? WisprContext.prepareWireText(input.value).trim()
+    : input.value.trim();
   // 🎯T76: allow send with only images attached.
   if (!t && !pendingImages.length) return;
   // Prepend image markers so the overseer receives durable references.
@@ -2900,7 +2965,8 @@ function send(opts) {
       // Don't clobber side-thread body with a command-prefixed draft.
       const p = AttentionThreads.parsePrefix(t);
       if (!p.command) {
-        attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
+        // Persist seed-stripped draft only (🎯T21).
+        attentionState = AttentionThreads.updateActiveBody(attentionState, t);
       }
     }
     const ownerDraftForLog = t;
@@ -2933,8 +2999,13 @@ function send(opts) {
       if (r.clearComposer) {
         input.value = r.composerBody != null ? r.composerBody : '';
       }
-      if (AttentionThreads.isMainFocus(attentionState)) mainDraftBackup = input.value;
+      if (AttentionThreads.isMainFocus(attentionState)) {
+        mainDraftBackup = (typeof WisprContext !== 'undefined')
+          ? WisprContext.prepareWireText(input.value)
+          : input.value;
+      }
       histIdx = null; histDraft = ''; setEditingHighlight(null);
+      ensureWisprSeed();
       autoGrow();
       renderAttention();
       return; // no wire send for local commands
@@ -2949,7 +3020,8 @@ function send(opts) {
   // ALWAYS log the route hit (including when match rewrites wire — T99 opacity).
   if (typeof ThreadRoute !== 'undefined' && attentionState &&
       typeof AttentionThreads !== 'undefined' && AttentionThreads.isMainFocus(attentionState)) {
-    const ownerDraft = input.value.trim();
+    // Route on seed-stripped draft (🎯T21) so EMPTY_SEED never influences match.
+    const ownerDraft = t;
     const threads = (attentionState.threads || []).map(function (th) {
       return { id: th.id, title: th.title, digest: th.body, body: th.body };
     });
@@ -2998,7 +3070,9 @@ function send(opts) {
 // process, truncate transcript at a turn boundary, --resume). Only valid
 // when a recalled message is highlighted.
 function rewindAndResend() {
-  const text = input.value.trim();
+  const text = (typeof WisprContext !== 'undefined')
+    ? WisprContext.prepareWireText(input.value).trim()
+    : input.value.trim();
   if (!text || !editingEl) return;
   const users = [...msgs.querySelectorAll('.msg.user')];
   const idx = users.indexOf(editingEl);
@@ -3009,6 +3083,7 @@ function rewindAndResend() {
   input.value = '';
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   autoGrow();
+  ensureWisprSeed();
   enterTrackBottom(); setWorking(true);
   requestAnimationFrame(() => { scrollDown(); });
 }
@@ -3222,28 +3297,61 @@ input.addEventListener('keydown', e => {
   if (e.altKey && e.key === 'ArrowDown') { if (recallHistory(+1)) e.preventDefault(); return; }
 });
 input.addEventListener('input', () => {
+  // 🎯T21: keep seed only while effectively empty; strip once real draft exists.
+  if (typeof WisprContext !== 'undefined') {
+    const before = input.value;
+    const sel = input.selectionStart;
+    if (WisprContext.isEffectivelyEmpty(before)) {
+      const seeded = WisprContext.applySeedIfEmpty('');
+      if (before !== seeded) {
+        input.value = seeded;
+        try { input.selectionStart = input.selectionEnd = seeded.length; } catch (_) {}
+      }
+    } else if (WisprContext.hasSeedPrefix(before)) {
+      const after = WisprContext.prepareWireText(before);
+      if (after !== before) {
+        input.value = after;
+        const delta = before.length - after.length;
+        const pos = Math.max(0, (sel | 0) - delta);
+        try { input.selectionStart = input.selectionEnd = pos; } catch (_) {}
+      }
+    }
+  }
   autoGrow();
   // Live-edit the focused queue row as the owner types.
   if (navFocus.zone === 'queue' && typeof SendQueue !== 'undefined') {
     const it = sendQueueState.items[navFocus.index | 0];
     if (it) {
-      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, input.value);
+      const rowText = (typeof WisprContext !== 'undefined')
+        ? WisprContext.prepareWireText(input.value)
+        : input.value;
+      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, rowText);
       renderSendQueue();
     }
   } else if (navFocus.zone === 'live') {
-    liveDraftBackup = input.value;
+    liveDraftBackup = (typeof WisprContext !== 'undefined')
+      ? WisprContext.prepareWireText(input.value)
+      : input.value;
   }
   // Prefix-first: do not treat typing as capture enablement. Only persist
   // body when focused on a side thread and the draft is not a command.
   if (attentionState && typeof AttentionThreads !== 'undefined') {
     if (!AttentionThreads.isMainFocus(attentionState)) {
-      const p = AttentionThreads.parsePrefix(input.value);
+      const draftForBody = (typeof WisprContext !== 'undefined')
+        ? WisprContext.prepareWireText(input.value)
+        : input.value;
+      const p = AttentionThreads.parsePrefix(draftForBody);
       if (!p.command) {
-        attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
+        attentionState = AttentionThreads.updateActiveBody(attentionState, draftForBody);
         persistAttention();
       }
     }
   }
+});
+// 🎯T21: on focus of empty composer, ensure seed + describedby are current.
+input.addEventListener('focus', () => {
+  refreshWisprContext();
+  ensureWisprSeed();
 });
 // 🎯T76: image paste → upload → composer chip → [image: id] on send.
 // 🎯T80: bulk paste/dictation insert tidy (not keystroke mid-edit).
@@ -3335,6 +3443,9 @@ if (typeof renderAttention === 'function') renderAttention();
 // the mousedown default blocks the focus shift while still firing click.
 sendBtn.addEventListener('mousedown', e => e.preventDefault());
 
+// 🎯T21: bootstrap Wispr context region + empty seed before first dictation.
+refreshWisprContext();
+ensureWisprSeed();
 autoGrow();
 input.focus();
 connect();
@@ -3346,6 +3457,8 @@ connect();
 enterTrackBottom();
 [0, 100, 250, 500, 1000].forEach(d => setTimeout(() => {
   if (isTracking()) scrollDown();
+  // History burst may land within this window — refresh Wispr context again.
+  if (d >= 250) refreshWisprContext();
 }, d));
 
 document.addEventListener('keydown', e => {
@@ -3355,6 +3468,7 @@ document.addEventListener('keydown', e => {
     const r = ComposerFocus.tryFocusComposer(e, input, document.activeElement);
     if (r.didFocus) {
       e.preventDefault();
+      ensureWisprSeed();
       return;
     }
   }
