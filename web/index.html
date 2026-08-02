@@ -127,8 +127,52 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons code { background: var(--surface-raised); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.88em; color: var(--accent); }
 .msg.jevons pre { background: var(--surface); border: 1px solid var(--border); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0.6em 0; }
 .msg.jevons pre code { background: none; padding: 0; color: var(--text); }
-.msg.jevons .mermaid-diagram { margin: 0.6em 0; overflow-x: auto; text-align: center; }
+/* Mermaid diagrams (🎯T59) + open/copy toolbar (🎯T83.1). Do not force
+   bubble scaling — svg max-width:100% only; large graphs open in the panel. */
+.msg.jevons .mermaid-diagram { margin: 0.6em 0; overflow-x: auto; text-align: center; position: relative; }
 .msg.jevons .mermaid-diagram svg { max-width: 100%; height: auto; }
+.msg.jevons .mermaid-diagram .mermaid-toolbar {
+  display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;
+  margin: 0 0 6px; opacity: 0.72;
+}
+.msg.jevons .mermaid-diagram:hover .mermaid-toolbar,
+.msg.jevons .mermaid-diagram:focus-within .mermaid-toolbar { opacity: 1; }
+.msg.jevons .mermaid-diagram .mermaid-toolbar button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+  line-height: 1.3;
+}
+.msg.jevons .mermaid-diagram .mermaid-toolbar button:hover {
+  border-color: var(--border-focus); color: var(--text); background: var(--surface-raised);
+}
+.msg.jevons .mermaid-diagram .mermaid-toolbar button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+/* Dedicated viz panel — distinct from main chat scroll (🎯T83.1 interim under T83). */
+#mermaid-viz-panel {
+  display: none; position: fixed; right: 16px; bottom: 16px; z-index: 40;
+  width: min(520px, calc(100vw - 32px)); height: min(420px, calc(100vh - 48px));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); flex-direction: column; overflow: hidden;
+}
+#mermaid-viz-panel.open { display: flex; }
+#mermaid-viz-panel .mvp-header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border-bottom: 1px solid var(--border); background: var(--surface-raised); flex-shrink: 0;
+}
+#mermaid-viz-panel .mvp-title { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; }
+#mermaid-viz-panel .mvp-header button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+}
+#mermaid-viz-panel .mvp-header button:hover { color: var(--text); border-color: var(--border-focus); }
+#mermaid-viz-panel .mvp-body {
+  flex: 1; min-height: 0; overflow: auto; padding: 12px; text-align: center;
+}
+#mermaid-viz-panel .mvp-body svg { max-width: 100%; height: auto; }
+#mermaid-viz-panel .mvp-status {
+  font-size: 11px; color: var(--text-muted); padding: 0 10px 8px; flex-shrink: 0;
+}
 .msg.jevons ul, .msg.jevons ol { padding-left: 1.5em; margin: 0.5em 0; }
 .msg.jevons li { margin: 0.2em 0; }
 .msg.jevons h1, .msg.jevons h2, .msg.jevons h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: var(--heading); }
@@ -283,7 +327,19 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
 #theme-toggle button:hover { color: var(--text-dim); }
 #theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
-#agents { flex: 1; overflow-y: auto; padding: 8px 12px; }
+#agents { flex: 1; overflow-y: auto; padding: 8px 12px; min-height: 80px; }
+#workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
+.worker-row { padding: 5px 6px; border-radius: 5px; margin-bottom: 2px; border: 1px solid transparent; }
+.worker-row:hover { background: var(--surface-raised); }
+.worker-row .wr-head { display: flex; align-items: center; gap: 6px; }
+.worker-row .wr-id { font-family: var(--mono); font-size: 11px; color: var(--text); }
+.worker-row .wr-status { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.worker-row .wr-status.running { color: var(--green); }
+.worker-row .wr-status.completed { color: var(--text-dim); }
+.worker-row .wr-status.failed, .worker-row .wr-status.denied { color: var(--red, #f87171); }
+.worker-row .wr-task { color: var(--text-dim); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worker-row .wr-meta { color: var(--text-muted); font-size: 10px; font-family: var(--mono); margin-top: 2px; }
+.worker-row .wr-out { color: var(--text-muted); font-size: 10px; margin-top: 2px; max-height: 3.2em; overflow: hidden; }
 .agent-node { padding: 6px 8px; border-radius: 6px; margin-bottom: 1px; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
 .agent-node:hover { background: var(--surface-raised); }
 .agent-node .agent-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
@@ -327,8 +383,19 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="cost-ticker" title="Token burn rate — click for detail"></div>
     <div id="activity-header">Agents</div>
     <div id="agents"></div>
-
+    <div id="activity-header" style="margin-top:10px">Workers <span id="workers-live" style="font-weight:400;color:var(--text-muted);font-size:10px"></span></div>
+    <div id="workers" title="jwork workers (T8.2)"></div>
   </div>
+</div>
+<!-- 🎯T83.1: dedicated Mermaid host (bottom-right panel; not the chat scroller). -->
+<div id="mermaid-viz-panel" role="dialog" aria-label="Mermaid diagram" aria-modal="false" hidden>
+  <div class="mvp-header">
+    <span class="mvp-title">Diagram</span>
+    <button type="button" id="mvp-popout" title="Open in a new browser tab">New tab</button>
+    <button type="button" id="mvp-close" title="Close panel">Close</button>
+  </div>
+  <div class="mvp-body" id="mvp-body"></div>
+  <div class="mvp-status" id="mvp-status"></div>
 </div>
 <script src="scripts/jlog.js"></script>
 <script src="scripts/transport.js"></script>
@@ -340,6 +407,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/send_queue.js"></script>
 <script src="scripts/layout_probe.js"></script>
 <script src="scripts/tool_summary.js"></script>
+<script src="scripts/mermaid_actions.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
@@ -827,8 +895,10 @@ function measureCollapse(d, role, text) {
 // (see the _streamRaw check) so a half-streamed diagram never flashes a
 // parse error. Invalid source is left as its original code block. Mermaid
 // is initialized lazily so its theme matches the UI theme at first use.
+// 🎯T83.1: each diagram gets Open / Copy source / Copy image controls.
 let mermaidReady = false;
 let mermaidSeq = 0;
+let _mermaidPanelState = null; // { src, svgMarkup } for the open panel
 function ensureMermaid() {
   if (!window.mermaid) return null;
   if (!mermaidReady) {
@@ -841,6 +911,245 @@ function ensureMermaid() {
   }
   return window.mermaid;
 }
+function mermaidIsDark() {
+  return document.documentElement.getAttribute('data-theme') !== 'light';
+}
+function attachMermaidToolbar(wrap, src) {
+  if (!wrap || wrap.querySelector('.mermaid-toolbar')) return;
+  const MA = window.MermaidActions;
+  const buttons = (MA && MA.toolbarButtons) ? MA.toolbarButtons() : [
+    { action: 'open', label: 'Open', title: 'Open diagram' },
+    { action: 'copy-source', label: 'Copy source', title: 'Copy Mermaid source' },
+    { action: 'copy-image', label: 'Copy image', title: 'Copy diagram as PNG' },
+  ];
+  const bar = document.createElement('div');
+  bar.className = 'mermaid-toolbar';
+  bar.setAttribute('role', 'toolbar');
+  bar.setAttribute('aria-label', 'Diagram actions');
+  buttons.forEach(spec => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.mermaidAction = spec.action;
+    btn.textContent = spec.label;
+    if (spec.title) btn.title = spec.title;
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleMermaidAction(spec.action, wrap);
+    });
+    bar.appendChild(btn);
+  });
+  wrap.insertBefore(bar, wrap.firstChild);
+  wrap.dataset.mermaidSrc = src;
+}
+function svgMarkupFromWrap(wrap) {
+  const svg = wrap && wrap.querySelector('svg');
+  return svg ? svg.outerHTML : '';
+}
+function openMermaidPanel(src, svgMarkup) {
+  const panel = document.getElementById('mermaid-viz-panel');
+  const body = document.getElementById('mvp-body');
+  const status = document.getElementById('mvp-status');
+  if (!panel || !body) return;
+  _mermaidPanelState = { src: String(src || ''), svgMarkup: String(svgMarkup || '') };
+  body.innerHTML = _mermaidPanelState.svgMarkup || '<p style="color:var(--text-muted)">No diagram</p>';
+  if (status) status.textContent = '';
+  panel.hidden = false;
+  panel.classList.add('open');
+}
+function closeMermaidPanel() {
+  const panel = document.getElementById('mermaid-viz-panel');
+  if (!panel) return;
+  panel.classList.remove('open');
+  panel.hidden = true;
+}
+function openMermaidWindow(src, svgMarkup) {
+  const MA = window.MermaidActions;
+  const html = MA && MA.buildOpenDocumentHtml
+    ? MA.buildOpenDocumentHtml({
+        title: 'Mermaid diagram',
+        svgMarkup: svgMarkup || '',
+        mermaidSrc: src || '',
+        dark: mermaidIsDark(),
+      })
+    : '<!DOCTYPE html><title>Mermaid</title><body>' + (svgMarkup || '') + '</body>';
+  const w = window.open('', '_blank');
+  if (!w) {
+    // Popup blocked — still open the in-app panel.
+    openMermaidPanel(src, svgMarkup);
+    const status = document.getElementById('mvp-status');
+    if (status) status.textContent = 'Popup blocked; opened in panel instead.';
+    return null;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  return w;
+}
+function mermaidClipboardCaps() {
+  const MA = window.MermaidActions;
+  if (MA && MA.clipboardCapabilities) {
+    return MA.clipboardCapabilities({
+      isSecureContext: window.isSecureContext,
+      clipboard: navigator.clipboard,
+      ClipboardItem: window.ClipboardItem,
+    });
+  }
+  return {
+    secure: !!window.isSecureContext,
+    write: !!(navigator.clipboard && navigator.clipboard.write),
+    writeText: !!(navigator.clipboard && navigator.clipboard.writeText),
+    multiType: !!(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write),
+  };
+}
+// Rasterize the rendered SVG to a PNG blob via canvas.
+// Browser limits: requires the SVG to load as an image (xmlns present);
+// cross-origin styles in foreignObject may taint the canvas; secure
+// context + user gesture required for clipboard write of the result.
+function svgToPngBlob(svgMarkup, scale) {
+  const MA = window.MermaidActions;
+  const markup = MA && MA.normalizeSvgMarkup ? MA.normalizeSvgMarkup(svgMarkup) : String(svgMarkup || '');
+  if (!markup) return Promise.reject(new Error('empty svg'));
+  const dataUrl = MA && MA.svgMarkupToDataUrl
+    ? MA.svgMarkupToDataUrl(markup)
+    : 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(markup);
+  const s = (typeof scale === 'number' && scale > 0) ? scale : 2;
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = Math.max(1, Math.ceil((img.naturalWidth || img.width || 1) * s));
+        const h = Math.max(1, Math.ceil((img.naturalHeight || img.height || 1) * s));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject(new Error('no canvas')); return; }
+        // Opaque background so paste targets don't get a transparent PNG.
+        ctx.fillStyle = mermaidIsDark() ? '#1a0e0e' : '#f8f8fa';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        if (canvas.toBlob) {
+          canvas.toBlob((blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('toBlob failed'));
+          }, 'image/png');
+        } else {
+          reject(new Error('toBlob unsupported'));
+        }
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.onerror = () => reject(new Error('svg image load failed'));
+    img.src = dataUrl;
+  });
+}
+async function copyMermaidSource(src) {
+  const text = String(src || '');
+  const caps = mermaidClipboardCaps();
+  if (caps.writeText && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    return { ok: true, mode: 'text' };
+  }
+  // Legacy fallback (still user-gesture).
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand && document.execCommand('copy');
+  document.body.removeChild(ta);
+  if (!ok) throw new Error('clipboard text write failed');
+  return { ok: true, mode: 'text-legacy' };
+}
+async function copyMermaidImage(src, svgMarkup) {
+  const MA = window.MermaidActions;
+  const caps = mermaidClipboardCaps();
+  const pngBlob = await svgToPngBlob(svgMarkup);
+  const plan = MA && MA.clipboardWritePlan
+    ? MA.clipboardWritePlan({ mermaidSrc: src, pngBlob, caps, wantMulti: true })
+    : { mode: caps.multiType ? 'multi' : (caps.write ? 'image' : 'text'), text: src };
+
+  if (plan.mode === 'multi' && window.ClipboardItem && navigator.clipboard.write) {
+    // Multi-MIME: image/png + text/plain so paste targets pick what they support.
+    const item = new ClipboardItem({
+      'image/png': pngBlob,
+      'text/plain': new Blob([String(src || '')], { type: 'text/plain' }),
+    });
+    await navigator.clipboard.write([item]);
+    return { ok: true, mode: 'multi' };
+  }
+  if ((plan.mode === 'image' || plan.mode === 'multi') && window.ClipboardItem && navigator.clipboard.write) {
+    const item = new ClipboardItem({ 'image/png': pngBlob });
+    await navigator.clipboard.write([item]);
+    return { ok: true, mode: 'image' };
+  }
+  // No image clipboard — fall back to source so the gesture still does something useful.
+  await copyMermaidSource(src);
+  return { ok: true, mode: 'text-fallback', reason: plan.reason || 'image clipboard unavailable' };
+}
+function flashMermaidStatus(wrap, msg) {
+  if (!wrap) return;
+  let el = wrap.querySelector('.mermaid-action-status');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'mermaid-action-status';
+    el.style.cssText = 'font-size:11px;color:var(--text-muted);margin-top:4px;text-align:right;';
+    wrap.appendChild(el);
+  }
+  el.textContent = msg;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 2200);
+}
+async function handleMermaidAction(action, wrap) {
+  const src = (wrap && wrap.dataset.mermaidSrc) || '';
+  const svgMarkup = svgMarkupFromWrap(wrap);
+  try {
+    if (action === 'open') {
+      // Primary: dedicated panel distinct from chat scroll. New tab is a secondary control on the panel.
+      openMermaidPanel(src, svgMarkup);
+      flashMermaidStatus(wrap, 'Opened in panel');
+      return;
+    }
+    if (action === 'copy-source') {
+      await copyMermaidSource(src);
+      flashMermaidStatus(wrap, 'Source copied');
+      return;
+    }
+    if (action === 'copy-image') {
+      const r = await copyMermaidImage(src, svgMarkup);
+      if (r.mode === 'multi') flashMermaidStatus(wrap, 'Image + source copied');
+      else if (r.mode === 'image') flashMermaidStatus(wrap, 'Image copied');
+      else flashMermaidStatus(wrap, 'Source copied (image clipboard unavailable)');
+      return;
+    }
+  } catch (err) {
+    flashMermaidStatus(wrap, 'Copy failed: ' + (err && err.message ? err.message : 'error'));
+  }
+}
+function wireMermaidPanelChrome() {
+  const closeBtn = document.getElementById('mvp-close');
+  const popBtn = document.getElementById('mvp-popout');
+  if (closeBtn) closeBtn.addEventListener('click', () => closeMermaidPanel());
+  if (popBtn) {
+    popBtn.addEventListener('click', () => {
+      const st = _mermaidPanelState || { src: '', svgMarkup: '' };
+      openMermaidWindow(st.src, st.svgMarkup);
+    });
+  }
+}
+wireMermaidPanelChrome();
+// Expose for hermetic smoke (🎯T83.1).
+window.openMermaidPanel = openMermaidPanel;
+window.closeMermaidPanel = closeMermaidPanel;
+window.openMermaidWindow = openMermaidWindow;
+window.copyMermaidSource = copyMermaidSource;
+window.copyMermaidImage = copyMermaidImage;
+window.svgToPngBlob = svgToPngBlob;
+window.handleMermaidAction = handleMermaidAction;
 function renderMermaidIn(container) {
   if (!container || !ensureMermaid()) return;
   container.querySelectorAll('code.language-mermaid').forEach(code => {
@@ -851,6 +1160,7 @@ function renderMermaidIn(container) {
       const wrap = document.createElement('div');
       wrap.className = 'mermaid-diagram';
       wrap.innerHTML = svg;
+      attachMermaidToolbar(wrap, src);
       if (host.parentNode) host.replaceWith(wrap);
       scrollDownThrottled(); // async SVG height growth (🎯T30.2 / 🎯T59)
     }).catch(() => {
@@ -1293,6 +1603,56 @@ function formatAgentDir(d) {
 // 🎯T82: primary refresh is agents_changed push; slow poll is reconnect fallback only.
 setInterval(refreshAgents, 30000);
 refreshAgents();
+
+// 🎯T8.2: jwork workers panel — poll + SSE lifecycle stream.
+const workersEl = document.getElementById('workers');
+const workersLiveEl = document.getElementById('workers-live');
+function refreshWorkers() {
+  if (!workersEl) return;
+  fetch('/api/workers').then(r => r.json()).then(list => {
+    if (!Array.isArray(list)) return;
+    const running = list.filter(w => w.status === 'running').length;
+    const done = list.length - running;
+    if (workersLiveEl) {
+      workersLiveEl.textContent = list.length
+        ? (running + ' active · ' + done + ' done')
+        : 'none yet';
+    }
+    workersEl.innerHTML = '';
+    list.slice(0, 40).forEach(w => {
+      const row = document.createElement('div');
+      row.className = 'worker-row';
+      row.dataset.id = w.id || '';
+      const tok = (w.input_tokens || 0) + (w.output_tokens || 0);
+      const pol = w.policy_decision
+        ? (' · policy ' + w.policy_decision + (w.policy_level ? ' L' + w.policy_level : ''))
+        : '';
+      row.innerHTML =
+        '<div class="wr-head">'
+        + '<span class="wr-id">' + escHtml(w.id || '') + '</span>'
+        + '<span class="wr-status ' + escHtml(w.status || '') + '">' + escHtml(w.status || '') + '</span>'
+        + '</div>'
+        + '<div class="wr-task" title="' + escHtml(w.task || '') + '">' + escHtml(w.task || '') + '</div>'
+        + '<div class="wr-meta">' + tok + ' tok · $' + Number(w.cost_usd || 0).toFixed(4) + pol + '</div>'
+        + (w.outcome ? '<div class="wr-out">' + escHtml(String(w.outcome).slice(0, 160)) + '</div>' : '');
+      workersEl.appendChild(row);
+    });
+  }).catch(() => {});
+}
+function connectWorkersSSE() {
+  if (typeof EventSource === 'undefined') return;
+  try {
+    const es = new EventSource('/api/workers/events');
+    const bump = () => refreshWorkers();
+    ['worker_started', 'worker_progress', 'worker_completed', 'worker_failed', 'worker_denied'].forEach(t => {
+      es.addEventListener(t, bump);
+    });
+    es.onerror = () => { /* browser reconnects; poll remains fallback */ };
+  } catch (_) {}
+}
+setInterval(refreshWorkers, 10000);
+refreshWorkers();
+connectWorkersSSE();
 
 // Live token-burn ticker — the "what is burning right now" glance,
 // polled on the same cadence. Goes amber/red when a runaway signal trips.
