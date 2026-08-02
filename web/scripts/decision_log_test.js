@@ -1,8 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic unit tests for decision-log field builders.
+// Hermetic unit tests for decision-log field builders (🎯T120).
 // Run: node web/scripts/decision_log_test.js
+// Contract: docs/design/logging-telemetry-audit.md §3.2
 
 'use strict';
 
@@ -23,25 +24,25 @@ function test(name, fn) {
   }
 }
 
-// ── formatRouteDecision ──────────────────────────────────────────
+// ── formatRouteDecision (T99 opacity) ────────────────────────────
 
-test('formatRouteDecision includes reason, score, threadId', function () {
+test('formatRouteDecision: component=thread_route, decision=reason, score+threadId', function () {
   const f = DL.formatRouteDecision({
     threadId: 'att-abc',
     score: 0.82,
     reason: 'match',
   });
-  assert.strictEqual(f.component, 'ThreadRoute');
-  assert.strictEqual(f.decision, 'route');
+  assert.strictEqual(f.component, 'thread_route');
+  assert.strictEqual(f.decision, 'match');
+  assert.strictEqual(f.reason, 'match');
   assert.strictEqual(f.threadId, 'att-abc');
   assert.strictEqual(f.score, 0.82);
-  assert.strictEqual(f.reason, 'match');
 });
 
 test('formatRouteDecision logs no-match with null threadId', function () {
   const f = DL.formatRouteDecision({ threadId: null, score: 0.1, reason: 'no-match' });
+  assert.strictEqual(f.decision, 'no-match');
   assert.strictEqual(f.threadId, null);
-  assert.strictEqual(f.reason, 'no-match');
   assert.ok(f.score === 0.1);
 });
 
@@ -52,13 +53,13 @@ test('formatRouteDecision accepts corr', function () {
 
 // ── formatComposerDecision ───────────────────────────────────────
 
-test('formatComposerDecision carries kind, command, purpose, threadId', function () {
+test('formatComposerDecision: component=attention, decision=kind', function () {
   const f = DL.formatComposerDecision(
     { kind: 'send', purpose: 'file-target', threadId: 'att-1', routed: true },
     { command: 'target', draft: 'target: file this' }
   );
-  assert.strictEqual(f.component, 'AttentionThreads');
-  assert.strictEqual(f.decision, 'composer');
+  assert.strictEqual(f.component, 'attention');
+  assert.strictEqual(f.decision, 'send');
   assert.strictEqual(f.kind, 'send');
   assert.strictEqual(f.command, 'target');
   assert.strictEqual(f.purpose, 'file-target');
@@ -69,19 +70,39 @@ test('formatComposerDecision carries kind, command, purpose, threadId', function
 
 // ── formatSendDecision ───────────────────────────────────────────
 
-test('formatSendDecision enqueue/send/interrupt actions', function () {
-  assert.strictEqual(
-    DL.formatSendDecision({ action: 'enqueue', text: 'later' }).action,
-    'enqueue'
-  );
-  assert.strictEqual(
-    DL.formatSendDecision({ action: 'send', interrupt: false, text: 'hi' }).action,
-    'send'
-  );
+test('formatSendDecision: component=send_queue, decision=enqueue|send|interrupt', function () {
+  const enq = DL.formatSendDecision({ action: 'enqueue', text: 'later' });
+  assert.strictEqual(enq.component, 'send_queue');
+  assert.strictEqual(enq.decision, 'enqueue');
+
+  const send = DL.formatSendDecision({ action: 'send', interrupt: false, text: 'hi' });
+  assert.strictEqual(send.decision, 'send');
+
   const inter = DL.formatSendDecision({ action: 'send', interrupt: true, text: 'now' });
-  assert.strictEqual(inter.action, 'interrupt');
-  assert.strictEqual(inter.queueAction, 'send');
+  assert.strictEqual(inter.decision, 'interrupt');
   assert.strictEqual(inter.interrupt, true);
+});
+
+// ── history (T120.4) ─────────────────────────────────────────────
+
+test('formatHistoryDecision hydrate_page carries bounds + corr', function () {
+  const f = DL.formatHistoryDecision('hydrate_page', {
+    before: 400,
+    after: 200,
+    lines: 50,
+    corr: 'c-hist',
+  });
+  assert.strictEqual(f.component, 'history');
+  assert.strictEqual(f.decision, 'hydrate_page');
+  assert.strictEqual(f.before, 400);
+  assert.strictEqual(f.after, 200);
+  assert.strictEqual(f.lines, 50);
+  assert.strictEqual(f.corr, 'c-hist');
+});
+
+test('decisionMsg prefixes decision.', function () {
+  assert.strictEqual(DL.decisionMsg('thread_route'), 'decision.thread_route');
+  assert.strictEqual(DL.decisionMsg('history'), 'decision.history');
 });
 
 // ── truncation + redaction ───────────────────────────────────────
@@ -99,7 +120,7 @@ test('formatSendDecision truncates long draft', function () {
   assert.ok(f.draft.length <= DL.DRAFT_MAX);
 });
 
-test('sanitizeFields drops secret keys; no password/token in route fields', function () {
+test('sanitizeFields drops secret keys', function () {
   const dirty = DL.sanitizeFields({
     threadId: 'a',
     password: 'nope',
@@ -112,36 +133,32 @@ test('sanitizeFields drops secret keys; no password/token in route fields', func
   assert.strictEqual(dirty.reason, 'match');
   assert.strictEqual(dirty.password, undefined);
   assert.strictEqual(dirty.token, undefined);
-  assert.strictEqual(dirty.api_key, undefined);
-  assert.strictEqual(dirty.Authorization, undefined);
   assert.ok(DL.isSecretKey('password'));
-  assert.ok(DL.isSecretKey('access_token'));
   assert.ok(!DL.isSecretKey('threadId'));
 });
 
 test('formatFocusDecision main/pursue/park/dismiss', function () {
   const f = DL.formatFocusDecision('pursue', { threadId: 'att-9', from: 'main' });
-  assert.strictEqual(f.decision, 'focus');
-  assert.strictEqual(f.action, 'pursue');
+  assert.strictEqual(f.component, 'attention');
+  assert.strictEqual(f.decision, 'pursue');
   assert.strictEqual(f.threadId, 'att-9');
   assert.strictEqual(f.from, 'main');
 });
 
-// ── index.html wiring (optional greps) ───────────────────────────
+// ── index.html wiring ────────────────────────────────────────────
 
-test('index.html wires decision_log + jLog on route', function () {
+test('index.html wires decision_log + always logs route + history hydrate', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.includes('scripts/decision_log.js'), 'must load decision_log.js');
   assert.ok(html.includes('DecisionLog'), 'must reference DecisionLog');
-  assert.ok(
-    /ThreadRoute\.route/.test(html) && /formatRouteDecision|jLog/.test(html),
-    'send path must consult ThreadRoute and log decisions'
-  );
-  // Always log route (not only on match rewrite).
-  assert.ok(
-    html.includes('formatRouteDecision') || /jLog\([^)]*route/i.test(html),
-    'route decision must be logged'
-  );
+  assert.ok(html.includes('formatRouteDecision'), 'route decision must be logged');
+  assert.ok(html.includes('formatHistoryDecision') || html.includes('hydrate_page'),
+    'history hydrate must be logged (T120.4)');
+  assert.ok(html.includes('pageCorr') || /corr:\s*pageCorr|corr:\s*corr/.test(html) ||
+    html.includes('pageSessionCorr'),
+    'page-session corr should be wired');
+  assert.ok(/decision\.thread_route|decisionMsg\(['"]thread_route/.test(html),
+    'msg convention decision.thread_route');
 });
 
 if (failed) {

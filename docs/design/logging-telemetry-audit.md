@@ -1,6 +1,7 @@
 # Logging & telemetry audit (jevons)
 
-**Status:** Phase 1 audit note (design only; instrumentation owned by jv-log-impl)  
+**Status:** Phase 1 audit + Phase 2 as-implemented (§8) — instrumentation landed
+under 🎯T120.* (jv-log-impl)  
 **Date:** 2026-08-02  
 **Plane:** Build (local commits; no Ship)  
 **Related:** motivating incident T99 routing opacity; T111.1 agent busy/queue;
@@ -257,3 +258,57 @@ only if impl is stuck.
 - butler/fleet zero-slog packages: first land logs at mcpserver/server
   boundaries; package-deep slog is optional follow-up.
 - Correlation across multi-device pigeon clients: not specified here.
+- **Telemetry counters / DOM pressure / browser metrics:** deferred (logs-first
+  owner priority). Virtualize enter/leave stays uninstrumented at info
+  (would flood); debug-only if ever needed.
+
+---
+
+## 8. As-implemented (Phase 2 — jv-log-impl)
+
+**Landed on master (Build plane).** Source of truth remains this note + 🎯T120.*;
+this section records what shipped so operators and later agents do not invent
+a parallel design.
+
+| Area | Implementation | Oracle |
+|------|----------------|--------|
+| **DecisionLog pure helpers** | `web/scripts/decision_log.js` — `formatRouteDecision`, `formatComposerDecision`, `formatSendDecision`, `formatFocusDecision`, `formatHistoryDecision`, cost/fleet warn helpers; draft ≤120; secret-key redaction | `node web/scripts/decision_log_test.js` via `make test-web` |
+| **jLog pipe** | `web/scripts/jlog.js` → `POST /api/log`; preserves `component` / `decision` / `corr` | existing voice + decision call sites |
+| **T99 / attention / send-queue (T120.1)** | `web/index.html` `send()`: always logs route hit (score/reason/threadId) before rewrite; composer kind/command/purpose/threadId; send_queue enqueue\|send\|interrupt; focus main/pursue/park/dismiss | hermetic greps + DecisionLog unit tests |
+| **agent_send (T120.2)** | `internal/mcpserver/agent_send.go` `logAgentSendResult`: `component=agent_send`, `name`, `status`, `queued`, `rehydrated` on every success path | `TestDeliverToSenderQueuesWhenBusy`, `TestDeliverToSenderHappyPath` |
+| **Browser log API (T120.3)** | `handleBrowserLog` promotes component (default `browser`), decision, corr + rest fields; durable append via `internal/eventlog` journal under `state_dir/logs/` | `TestHandleBrowserLogStructuredFields`, `TestHandleBrowserLogDefaultComponent`, `go test ./internal/eventlog` |
+| **History / cost / fleet (T120.4)** | page-session `pageCorr`; `decision.history` on reconnect + hydrate_start/page/done/error; cost `poll_error` warn; fleet `refresh_error` warn (no progress-line flood) | `decision_log_test` wiring greps; code paths in index.html |
+| **Operator read** | slog + journal; `GET /api/logs` + MCP tail (eventlog tools) | manual rg / API |
+
+### Stable fields (rg-friendly)
+
+| component | decision (examples) | extra |
+|-----------|---------------------|--------|
+| `thread_route` | `match`, `no-match`, `ambiguous`, `explicit-prefix`, … | `score`, `threadId`, `reason`, `corr` |
+| `attention` | `send`, `local`, `empty`, `main`, `pursue`, `park`, `dismiss` | `command`, `purpose`, `threadId`, `draft` (≤120), `corr` |
+| `send_queue` | `enqueue`, `send`, `interrupt`, `noop` | `interrupt`, `draft`, `corr` |
+| `history` | `reconnect`, `hydrate_start`, `hydrate_page`, `hydrate_done`, `hydrate_error` | `before`, `after`, `lines`, `oldestIndex`, `corr` |
+| `cost` / `fleet` | `poll_error`, `refresh_error` | `err`, `corr` |
+| `agent_send` (server) | status in `status` field | `name`, `queued`, `rehydrated` |
+
+jLog **msg** convention: `decision.<component>` → slog message `browser: decision.<component>`.
+
+### Operator query
+
+```bash
+# Process / brew service log (path varies)
+rg 'browser: decision\.|component=(thread_route|attention|send_queue|history|agent_send)' /tmp/jevonsd.log
+# or: ~/.jevons/… depending on launchd
+
+# Durable journal (after daemon with eventlog open)
+rg '"component":"(thread_route|attention|send_queue|history)"' ~/.jevons/logs/events.jsonl
+# Tail API: GET /api/logs?component=thread_route&limit=50
+```
+
+### Residual after Phase 2
+
+- Zero-burn cost reason (optional) not instrumented — only poll failures.
+- Fleet secondary-line *choice* not logged at info (avoid flood; optional debug later).
+- Virtualize enter/leave not instrumented (audit P2 / debug-only).
+- butler/fleet package-deep slog still deferred (boundary agent_send only).
+- Live daemon must be restarted to serve new `web/` and server paths.

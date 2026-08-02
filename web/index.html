@@ -507,6 +507,12 @@ const attentionBar = document.getElementById('attention-bar');
 const attentionStackEl = document.getElementById('attention-stack');
 const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line.';
 
+// 🎯T120 page-session correlation id for decision logs (audit §3.1).
+// Stable for the life of this page load (survives WS reconnect; not regenerated).
+const pageCorr = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+  ? crypto.randomUUID()
+  : ('c-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
+
 // 🎯T65 attention threads — prefix-first (docs/design/attention-threads.md).
 // Commands: aside: | capture: | park: | main: | pursue:  (case-insensitive)
 // Focus chrome is the composer placeholder when on a side thread — no "Focus:" label.
@@ -561,7 +567,10 @@ function renderAttention() {
       persistAttention();
       renderAttention();
       if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-        jLog('info', 'focus main', DecisionLog.formatFocusDecision('main', { from: fromId }));
+        jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision('main', {
+          from: fromId,
+          corr: pageCorr,
+        }));
       }
       input.focus();
     });
@@ -596,9 +605,10 @@ function renderAttention() {
       persistAttention();
       renderAttention();
       if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-        jLog('info', 'focus pursue', DecisionLog.formatFocusDecision('pursue', {
+        jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision('pursue', {
           threadId: t.id,
           from: fromId || 'main',
+          corr: pageCorr,
         }));
       }
       input.focus();
@@ -625,6 +635,12 @@ transport.onOpen = () => {
   }
   updateJumpFab();
   input.value = v;
+  // 🎯T120.4: reconnect is a lifecycle event (same pageCorr across reconnects).
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('reconnect', {
+      corr: pageCorr,
+    }));
+  }
 };
 transport.onClose = () => {
   // Transport handles reconnect (backoff + version check) internally.
@@ -646,7 +662,21 @@ function handle(m) {
   // while pages are outstanding (does not gate the progressive fetch).
   if (typ === 'history_meta') {
     oldestIndex = m.start || 0;
+    // 🎯T120.4: progressive hydrate start (corr-linked).
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_start', {
+        oldestIndex: oldestIndex,
+        older: m.older || 0,
+        corr: pageCorr,
+      }));
+    }
     if ((m.older || 0) > 0) startProgressiveHistoryLoad();
+    else if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_done', {
+        oldestIndex: 0,
+        corr: pageCorr,
+      }));
+    }
     return;
   }
 
@@ -1529,9 +1559,10 @@ function maybeCloseTargetAside(text) {
   });
   attentionState = AttentionThreads.closeTargetAside(attentionState);
   if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-    jLog('info', 'focus dismiss', DecisionLog.formatFocusDecision('dismiss', {
+    jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision('dismiss', {
       threadId: closedId && closedId.id,
       draft: id, // filed target id (short)
+      corr: pageCorr,
     }));
   }
   persistAttention();
@@ -1765,6 +1796,17 @@ async function progressiveLoadRemainingHistory() {
     }
   } finally {
     progressiveHistoryRunning = false;
+    // 🎯T120.4: hydrate finished (or stalled at residual oldestIndex).
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision(
+        oldestIndex <= 0 ? 'hydrate_done' : 'hydrate_error',
+        {
+          oldestIndex: oldestIndex,
+          err: oldestIndex > 0 ? 'stall: oldestIndex did not advance' : undefined,
+          corr: pageCorr,
+        }
+      ));
+    }
   }
 }
 
@@ -1778,7 +1820,8 @@ async function loadEarlier() {
     const data = await fetch('/api/history?end=' + before + '&limit=200').then(r => r.json());
     const prevH = msgs.scrollHeight, prevTop = msgs.scrollTop;
     // Lazy shells: full chunk data on the node; no paint until materialize.
-    const { frag, nodes } = renderFrames(data.lines || [], { lazy: true });
+    const lines = data.lines || [];
+    const { frag, nodes } = renderFrames(lines, { lazy: true });
     const anchor = historySentinel ? historySentinel.nextSibling : msgs.firstChild;
     msgs.insertBefore(frag, anchor);
     layoutMsgList(nodes);   // no-op for unmeasured lazy shells
@@ -1789,8 +1832,25 @@ async function loadEarlier() {
     noteScrollMetrics();
     // Materialize only shells that entered the anticipation band.
     scheduleVirtualize();
+    // 🎯T120.4: one info log per history page (bounded; not per-frame).
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_page', {
+        before: before,
+        after: oldestIndex,
+        lines: lines.length,
+        corr: pageCorr,
+      }));
+    }
   } catch (e) {
     console.error('load earlier failed', e);
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('warn', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_error', {
+        before: before,
+        oldestIndex: oldestIndex,
+        err: e && e.message ? e.message : String(e || 'unknown'),
+        corr: pageCorr,
+      }));
+    }
   } finally {
     endScrollBookkeeping();
   }
@@ -1934,12 +1994,11 @@ function refreshAgents() {
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
   }).catch((err)=>{
-    if (typeof jLog === 'function') {
-      jLog('warn', 'fleet list refresh failed', {
-        component: 'fleet',
-        decision: 'refresh',
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('warn', DecisionLog.decisionMsg('fleet'), DecisionLog.formatFleetDecision('refresh_error', {
         err: err && err.message ? err.message : String(err || 'unknown'),
-      });
+        corr: pageCorr,
+      }));
     }
   });
 }
@@ -2083,12 +2142,11 @@ function refreshCost() {
       : 'No runaway signals';
   }).catch((err)=>{
     costEl.style.display='none';
-    if (typeof jLog === 'function') {
-      jLog('warn', 'cost poll failed', {
-        component: 'cost',
-        decision: 'poll',
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('warn', DecisionLog.decisionMsg('cost'), DecisionLog.formatCostDecision('poll_error', {
         err: err && err.message ? err.message : String(err || 'unknown'),
-      });
+        corr: pageCorr,
+      }));
     }
   });
 }
@@ -2715,11 +2773,12 @@ function send(opts) {
     const r = AttentionThreads.handleComposer(attentionState, t);
     attentionState = r.state;
     persistAttention();
-    // Decision log: composer outcome (kind/command/purpose/threadId).
+    // Decision log: composer outcome (kind/command/purpose/threadId) — audit §3.2.
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-      jLog('info', 'composer decision', DecisionLog.formatComposerDecision(r, {
+      jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatComposerDecision(r, {
         command: parsedCmd && parsedCmd.command,
         draft: ownerDraftForLog,
+        corr: pageCorr,
       }));
       // Local focus transitions from prefixes (main/pursue/park/capture/…).
       if (r.kind === 'local' && parsedCmd && parsedCmd.command) {
@@ -2727,9 +2786,10 @@ function send(opts) {
           : (parsedCmd.command === 'target' ? 'target' : parsedCmd.command);
         if (focusAct === 'main' || focusAct === 'pursue' || focusAct === 'park' ||
             focusAct === 'capture') {
-          jLog('info', 'focus ' + focusAct, DecisionLog.formatFocusDecision(focusAct, {
+          jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision(focusAct, {
             threadId: r.threadId,
             draft: ownerDraftForLog,
+            corr: pageCorr,
           }));
         }
       }
@@ -2759,8 +2819,9 @@ function send(opts) {
       return { id: th.id, title: th.title, digest: th.body, body: th.body };
     });
     const hit = ThreadRoute.route(ownerDraft || t, threads);
+    // ALWAYS log (match rewrites wire — T99 opacity / audit P0).
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-      jLog('info', 'thread route', DecisionLog.formatRouteDecision(hit));
+      jLog('info', DecisionLog.decisionMsg('thread_route'), DecisionLog.formatRouteDecision(hit, pageCorr));
     }
     if (hit.threadId && hit.reason === 'match') {
       attentionState = AttentionThreads.pursue(attentionState, hit.threadId);
@@ -2782,7 +2843,7 @@ function send(opts) {
       })
     : { action: workingEl && !interruptChord ? 'enqueue' : 'send', text: t, interrupt: !!(workingEl && interruptChord) };
   if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-    jLog('info', 'send queue decision', DecisionLog.formatSendDecision(decision));
+    jLog('info', DecisionLog.decisionMsg('send_queue'), DecisionLog.formatSendDecision(decision, pageCorr));
   }
   if (decision.action === 'noop') return;
   if (decision.action === 'enqueue') {
