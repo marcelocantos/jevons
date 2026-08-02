@@ -1,9 +1,19 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Virtualised chat list helpers (🎯T56). DOM-free core so Node can
-// require(); browser integration dematerialises off-screen message
-// bodies into height-preserving shells.
+// Shell+content transcript windowing (🎯T119).
+//
+// Data vs DOM (supersedes pure T57 infinite-scroll-as-data-throttle spirit):
+//   - Full durable transcript lives in the browser (progressive fetch OK).
+//   - Infinite scroll / windowing controls *render stress* only — not data caps.
+//   - T57 still provides /api/history + WS recent replay; T119 loads remaining
+//     history into client memory without requiring the owner to scroll for data.
+//
+// Model: every chunk has a persistent DOM *shell*; only near-viewport shells
+// *materialize* rich content. Far shells freeze cached height at measured width
+// and drop content. States: unmeasured | dematerialized | material.
+//
+// DOM-free core so Node can require(); browser integration in index.html.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -14,8 +24,21 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  // Default overscan in px beyond the viewport.
+  // Anticipation margin beyond the viewport (px).
   const DEFAULT_BUFFER = 800;
+
+  // Placeholder height before first materialize (lazy measure — no render-all).
+  const DEFAULT_ESTIMATE_HEIGHT = 72;
+  // Rough line height for text-based estimates (14px * 1.6 + padding slack).
+  const ESTIMATE_LINE_PX = 24;
+  const ESTIMATE_PAD_PX = 28;
+  const ESTIMATE_CHARS_PER_LINE = 72;
+
+  const SHELL_UNMEASURED = 'unmeasured';
+  const SHELL_DEMATERIALIZED = 'dematerialized';
+  const SHELL_MATERIAL = 'material';
+
+  // ── Viewport band ──────────────────────────────────────────────────
 
   // itemTops: array of { top, height } relative to container.
   // Returns indices that should be fully materialised.
@@ -31,7 +54,7 @@
       if (bot >= viewTop && top <= viewBot) out.push(i);
     }
     return out;
- }
+  }
 
   function shouldMaterialize(top, height, scrollTop, clientHeight, buffer) {
     const buf = typeof buffer === 'number' ? buffer : DEFAULT_BUFFER;
@@ -53,10 +76,362 @@
     return visibleIndices(tops, scrollTop, clientHeight, buf).length;
   }
 
+  // Which indices enter / leave the materialization band relative to a
+  // previous material set (event-driven enter/leave, no polling).
+  function enterLeaveBand(itemTops, scrollTop, clientHeight, buffer, previouslyMaterial) {
+    const want = new Set(visibleIndices(itemTops, scrollTop, clientHeight, buffer));
+    const prev = new Set(previouslyMaterial || []);
+    const enter = [];
+    const leave = [];
+    want.forEach(function (i) {
+      if (!prev.has(i)) enter.push(i);
+    });
+    prev.forEach(function (i) {
+      if (!want.has(i)) leave.push(i);
+    });
+    enter.sort(function (a, b) { return a - b; });
+    leave.sort(function (a, b) { return a - b; });
+    return { enter: enter, leave: leave, material: Array.from(want).sort(function (a, b) { return a - b; }) };
+  }
+
+  // ── Size cache ─────────────────────────────────────────────────────
+
+  // Entry: { height: number, width: number } — height valid only at that width.
+  function createSizeCache() {
+    return Object.create(null);
+  }
+
+  function recordSize(cache, id, height, width) {
+    if (!cache || id == null) return null;
+    const h = Number(height);
+    const w = Number(width);
+    if (!(h > 0) || !(w > 0)) return null;
+    const entry = { height: h, width: w };
+    cache[id] = entry;
+    return entry;
+  }
+
+  function getSize(cache, id) {
+    if (!cache || id == null) return null;
+    const e = cache[id];
+    if (!e || !(e.height > 0) || !(e.width > 0)) return null;
+    return e;
+  }
+
+  // Horizontal resize invalidates all heights (wrapping changes natural height).
+  // Returns number of entries cleared. Same width → no-op (0).
+  function invalidateOnWidthChange(cache, previousWidth, nextWidth) {
+    if (!cache) return 0;
+    const prev = Number(previousWidth);
+    const next = Number(nextWidth);
+    if (!(next > 0)) return 0;
+    if (prev === next) return 0;
+    let n = 0;
+    for (const k of Object.keys(cache)) {
+      delete cache[k];
+      n++;
+    }
+    return n;
+  }
+
+  // True when cache entry is usable at the given container width.
+  function sizeValidAtWidth(entry, width) {
+    if (!entry || !(entry.height > 0) || !(entry.width > 0)) return false;
+    return Number(width) === Number(entry.width);
+  }
+
+  // Shell height after dematerialize: prefer valid cache, else estimate.
+  function frozenShellHeight(entry, width, estimateHeight) {
+    if (sizeValidAtWidth(entry, width)) return entry.height;
+    const est = typeof estimateHeight === 'number' && estimateHeight > 0
+      ? estimateHeight
+      : DEFAULT_ESTIMATE_HEIGHT;
+    return est;
+  }
+
+  // ── Shell state machine ────────────────────────────────────────────
+
+  // material = content mounted; dematerialized = size known, content dropped;
+  // unmeasured = shell exists, never measured at current width.
+  function shellState(opts) {
+    const o = opts || {};
+    if (o.material) return SHELL_MATERIAL;
+    if (o.hasValidSize) return SHELL_DEMATERIALIZED;
+    return SHELL_UNMEASURED;
+  }
+
+  function nextStateOnEnterBand(state) {
+    // Enter band always wants content (measure if needed).
+    return SHELL_MATERIAL;
+  }
+
+  function nextStateOnLeaveBand(state, hasValidSize) {
+    if (state === SHELL_MATERIAL && hasValidSize) return SHELL_DEMATERIALIZED;
+    if (state === SHELL_MATERIAL && !hasValidSize) return SHELL_UNMEASURED;
+    if (state === SHELL_DEMATERIALIZED) return SHELL_DEMATERIALIZED;
+    return SHELL_UNMEASURED;
+  }
+
+  // After measure while material: transition path for leave.
+  function afterMeasure(state) {
+    if (state === SHELL_MATERIAL || state === SHELL_UNMEASURED) return SHELL_MATERIAL;
+    return state;
+  }
+
+  // ── Lazy estimate (no render-all) ──────────────────────────────────
+
+  function estimateHeightFromText(text, opts) {
+    const o = opts || {};
+    const charsPerLine = o.charsPerLine > 0 ? o.charsPerLine : ESTIMATE_CHARS_PER_LINE;
+    const linePx = o.linePx > 0 ? o.linePx : ESTIMATE_LINE_PX;
+    const pad = o.padPx != null ? o.padPx : ESTIMATE_PAD_PX;
+    const minH = o.minHeight > 0 ? o.minHeight : DEFAULT_ESTIMATE_HEIGHT;
+    const maxH = o.maxHeight > 0 ? o.maxHeight : 480;
+    const s = text == null ? '' : String(text);
+    if (!s) return minH;
+    const explicitLines = s.split(/\n/).length;
+    const wrapLines = Math.ceil(s.length / charsPerLine);
+    const lines = Math.max(explicitLines, wrapLines, 1);
+    const h = lines * linePx + pad;
+    return Math.max(minH, Math.min(maxH, h));
+  }
+
+  // ── Recent-first hydrate plan ──────────────────────────────────────
+  // Land on latest end: materialize only the end band first; older shells
+  // stay unmeasured/estimated (never parade old→new through viewport).
+
+  function recentFirstMaterializePlan(n, avgHeight, clientHeight, buffer) {
+    const count = Math.max(0, n | 0);
+    const h = avgHeight > 0 ? avgHeight : DEFAULT_ESTIMATE_HEIGHT;
+    const ch = clientHeight > 0 ? clientHeight : 600;
+    const buf = typeof buffer === 'number' ? buffer : DEFAULT_BUFFER;
+    if (count === 0) {
+      return { materialIndices: [], unmeasuredIndices: [], scrollTop: 0 };
+    }
+    const totalH = count * h;
+    const scrollTop = Math.max(0, totalH - ch);
+    const tops = [];
+    for (let i = 0; i < count; i++) {
+      tops.push({ top: i * h, height: h });
+    }
+    const materialIndices = visibleIndices(tops, scrollTop, ch, buf);
+    const matSet = new Set(materialIndices);
+    const unmeasuredIndices = [];
+    for (let i = 0; i < count; i++) {
+      if (!matSet.has(i)) unmeasuredIndices.push(i);
+    }
+    return {
+      materialIndices: materialIndices,
+      unmeasuredIndices: unmeasuredIndices,
+      scrollTop: scrollTop,
+      // Oracle: end of list is in the material set when scrolled to bottom.
+      landsOnLatest: materialIndices.indexOf(count - 1) >= 0,
+    };
+  }
+
+  // Startup plan: do NOT schedule full N materializations (lazy measure).
+  function startupMaterializeBudget(n, avgHeight, clientHeight, buffer) {
+    const plan = recentFirstMaterializePlan(n, avgHeight, clientHeight, buffer);
+    return {
+      mustMaterialize: plan.materialIndices.length,
+      mayDefer: plan.unmeasuredIndices.length,
+      total: n | 0,
+      // Hard rule: material set bounded by viewport+buffer, not N.
+      isLazy: plan.materialIndices.length < Math.max(1, n | 0) || (n | 0) <= plan.materialIndices.length,
+    };
+  }
+
+  // ── Progressive history fetch plan (data, not scroll-gated) ────────
+  // T119: after recent-first hydrate, fetch remaining history into client
+  // memory without requiring owner to scroll for data.
+
+  function progressiveHistoryPages(oldestIndex, pageLimit) {
+    const limit = pageLimit > 0 ? pageLimit : 200;
+    let end = Math.max(0, oldestIndex | 0);
+    const pages = [];
+    while (end > 0) {
+      const start = Math.max(0, end - limit);
+      pages.push({ end: end, limit: end - start, start: start });
+      end = start;
+    }
+    return pages;
+  }
+
+  // ── Whole-chunk coalescing ─────────────────────────────────────────
+  // History units are only complete cohesive chunks: whole owner request,
+  // whole assistant response (coalesced consecutive assistant text frames).
+  // Never emit partial mid-markdown fragments as separate display units.
+
+  function extractAssistantText(frame) {
+    if (!frame || frame.type !== 'assistant') return '';
+    const content = frame.message && frame.message.content;
+    if (!Array.isArray(content)) return '';
+    let txt = '';
+    for (let i = 0; i < content.length; i++) {
+      const c = content[i];
+      if (c && c.type === 'text' && typeof c.text === 'string') txt += c.text;
+    }
+    return txt;
+  }
+
+  function extractUserText(frame) {
+    if (!frame || frame.type !== 'user') return '';
+    const c = frame.message && frame.message.content;
+    if (typeof c === 'string') return c;
+    return '';
+  }
+
+  // frames: array of wire objects (or JSON strings). Returns whole chunks:
+  //   { role: 'user'|'jevons', text: string, timestamp?: number }
+  // Consecutive assistant text frames coalesce into one chunk.
+  function coalesceTranscriptFrames(frames) {
+    const out = [];
+    let pending = null; // { role, text, timestamp }
+    const list = Array.isArray(frames) ? frames : [];
+    for (let i = 0; i < list.length; i++) {
+      let m = list[i];
+      if (typeof m === 'string') {
+        try { m = JSON.parse(m); } catch (_) { continue; }
+      }
+      if (!m || typeof m !== 'object') continue;
+      const ts = m.timestamp ? new Date(m.timestamp).getTime() : undefined;
+      if (m.type === 'user') {
+        const text = extractUserText(m);
+        if (!text) continue;
+        pending = null;
+        out.push({ role: 'user', text: text, timestamp: ts });
+      } else if (m.type === 'assistant') {
+        const text = extractAssistantText(m);
+        if (!text) continue;
+        if (pending && pending.role === 'jevons') {
+          pending.text += text;
+          if (ts != null) pending.timestamp = ts;
+        } else {
+          pending = { role: 'jevons', text: text, timestamp: ts };
+          out.push(pending);
+        }
+      }
+      // tool_result / system / agent_note omitted from transcript window units
+    }
+    return out;
+  }
+
+  // Reject partial markdown "frames" as display units: a chunk must be a
+  // complete string unit we already hold, not a streaming mid-parse slice
+  // treated as a separate history row. Policy helper for tests + callers.
+  function isWholeChunk(chunk) {
+    if (!chunk || typeof chunk !== 'object') return false;
+    if (chunk.role !== 'user' && chunk.role !== 'jevons') return false;
+    if (typeof chunk.text !== 'string' || chunk.text.length === 0) return false;
+    // Explicit partial markers are rejected (streaming stubs).
+    if (chunk.partial === true || chunk.incomplete === true) return false;
+    return true;
+  }
+
+  function filterWholeChunks(chunks) {
+    return (Array.isArray(chunks) ? chunks : []).filter(isWholeChunk);
+  }
+
+  // ── Jump-to-bottom policy ──────────────────────────────────────────
+  // One step (hotkey + affordance); deliberately no jump-to-top.
+
+  function jumpPolicy() {
+    return {
+      hasJumpToBottom: true,
+      hasJumpToTop: false,
+      // End key, or Cmd/Ctrl+ArrowDown (Mac/Windows).
+      hotkeys: ['End', 'Meta+ArrowDown', 'Ctrl+ArrowDown'],
+    };
+  }
+
+  function shouldShowJumpFab(followMode, isAtBottom) {
+    // Show when owner is free-scrolling away from the live end.
+    if (isAtBottom) return false;
+    return followMode === 'free' || followMode === 'track' && !isAtBottom;
+  }
+
+  function isJumpToBottomHotkey(key, mods) {
+    const m = mods || {};
+    if (key === 'End' && !m.altKey && !m.shiftKey) return true;
+    if (key === 'ArrowDown' && (m.metaKey || m.ctrlKey) && !m.altKey && !m.shiftKey) return true;
+    return false;
+  }
+
+  // ── Resize ─────────────────────────────────────────────────────────
+
+  function shouldInvalidateSizeCache(previousWidth, nextWidth) {
+    const prev = Number(previousWidth);
+    const next = Number(nextWidth);
+    if (!(next > 0)) return false;
+    if (!(prev > 0)) return true; // first known width after unknown
+    return prev !== next;
+  }
+
+  // Near-viewport first remeasure order after width invalidate.
+  function remeasureOrder(itemTops, scrollTop, clientHeight, buffer) {
+    const near = visibleIndices(itemTops, scrollTop, clientHeight, buffer);
+    const nearSet = new Set(near);
+    const far = [];
+    for (let i = 0; i < itemTops.length; i++) {
+      if (!nearSet.has(i)) far.push(i);
+    }
+    return { immediate: near, deferred: far };
+  }
+
+  // ── Events that drive residency (documentation + test oracle) ──────
+
+  function residencyDrivers() {
+    return [
+      'scroll',
+      'intersection',
+      'resize',
+      'chunk_append',
+      'chunk_seal',
+      'jump_to_bottom',
+    ];
+  }
+
   return {
     DEFAULT_BUFFER: DEFAULT_BUFFER,
+    DEFAULT_ESTIMATE_HEIGHT: DEFAULT_ESTIMATE_HEIGHT,
+    SHELL_UNMEASURED: SHELL_UNMEASURED,
+    SHELL_DEMATERIALIZED: SHELL_DEMATERIALIZED,
+    SHELL_MATERIAL: SHELL_MATERIAL,
+
     visibleIndices: visibleIndices,
     shouldMaterialize: shouldMaterialize,
     materialisedCount: materialisedCount,
+    enterLeaveBand: enterLeaveBand,
+
+    createSizeCache: createSizeCache,
+    recordSize: recordSize,
+    getSize: getSize,
+    invalidateOnWidthChange: invalidateOnWidthChange,
+    sizeValidAtWidth: sizeValidAtWidth,
+    frozenShellHeight: frozenShellHeight,
+
+    shellState: shellState,
+    nextStateOnEnterBand: nextStateOnEnterBand,
+    nextStateOnLeaveBand: nextStateOnLeaveBand,
+    afterMeasure: afterMeasure,
+
+    estimateHeightFromText: estimateHeightFromText,
+    recentFirstMaterializePlan: recentFirstMaterializePlan,
+    startupMaterializeBudget: startupMaterializeBudget,
+    progressiveHistoryPages: progressiveHistoryPages,
+
+    coalesceTranscriptFrames: coalesceTranscriptFrames,
+    extractAssistantText: extractAssistantText,
+    extractUserText: extractUserText,
+    isWholeChunk: isWholeChunk,
+    filterWholeChunks: filterWholeChunks,
+
+    jumpPolicy: jumpPolicy,
+    shouldShowJumpFab: shouldShowJumpFab,
+    isJumpToBottomHotkey: isJumpToBottomHotkey,
+
+    shouldInvalidateSizeCache: shouldInvalidateSizeCache,
+    remeasureOrder: remeasureOrder,
+    residencyDrivers: residencyDrivers,
   };
 }));

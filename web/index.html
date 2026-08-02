@@ -93,7 +93,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    bottom pins to a false mid-bubble "bottom" while tokens still arrive. */
 #messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
 #messages > * { flex-shrink: 0; }
-/* 🎯T56: browser skips layout/paint for off-screen shells; JS dematerialises bodies. */
+/* 🎯T56/T119: shell always in DOM; content only near viewport. Far shells
+   freeze height (size cache) and drop bodies — content-visibility helps paint. */
 #messages > .msg { content-visibility: auto; contain-intrinsic-size: auto 72px; }
 #messages > .msg.virt-shell { content-visibility: visible; }
 #messages > .msg.virt-shell > * { display: none !important; }
@@ -196,15 +197,25 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg-expand:hover { opacity: 1; text-decoration: underline; }
 .msg.user .msg-expand { margin-left: auto; text-align: right; }
 
-/* Infinite scroll (🎯T57): recent turns replay on connect; a zero-height
-   top sentinel drives an IntersectionObserver that auto-pages older
-   history from the durable log as the user nears the top. A dim overlay
-   shows while a window loads (it's out of flow, so it doesn't perturb
-   scroll-position preservation). */
+/* History hydrate (🎯T57 API + 🎯T119 progressive full-data):
+   WS still replays recent turns; remaining durable log is fetched into
+   client memory without requiring scroll (progressive /api/history).
+   Top sentinel is optional residual while pages remain — not a data throttle.
+   Overlay is out of flow so it does not perturb scroll-position math. */
 .history-sentinel { height: 1px; margin: 0; flex: 0 0 auto; }
 .history-loading { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 3px 12px; font-size: 11px; color: var(--text-dim); z-index: 5; pointer-events: none; }
+
+/* 🎯T119: jump-to-bottom affordance when free-scrolling (no jump-to-top). */
+#jump-bottom {
+  position: absolute; right: 20px; bottom: 96px; z-index: 6;
+  border: 1px solid var(--border); background: var(--surface-raised); color: var(--text);
+  border-radius: 20px; padding: 6px 12px; font: inherit; font-size: 12px; font-weight: 500;
+  cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.25); opacity: 0.92;
+}
+#jump-bottom:hover { opacity: 1; border-color: var(--border-focus); }
+#jump-bottom[hidden] { display: none !important; }
 
 /* Worker notes — out-of-band system messages from a delegated agent.
    Centred, dim, collapsible. Distinct from both user (right) and
@@ -364,6 +375,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <div id="main">
   <div id="chat-pane">
     <div id="messages"></div>
+    <button type="button" id="jump-bottom" hidden title="Jump to latest (End / ⌘↓)">↓ Latest</button>
     <div id="attention-bar" aria-label="Attention threads">
       <div id="attention-stack" role="list"></div>
     </div>
@@ -528,6 +540,13 @@ transport.onOpen = () => {
   dot.className = 'dot on'; sTxt.textContent = 'connected'; sendBtn.disabled = false;
   msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
   msgHistory = []; histIdx = null; histDraft = ''; editingEl = null;
+  oldestIndex = 0; loadingEarlier = false; progressiveHistoryRunning = false;
+  teardownHistorySentinel();
+  if (typeof VirtualList !== 'undefined' && VirtualList.createSizeCache) {
+    // Fresh size cache after reconnect wipe (shells gone).
+    for (const k of Object.keys(virtSizeCache)) delete virtSizeCache[k];
+  }
+  updateJumpFab();
   input.value = v;
 };
 transport.onClose = () => {
@@ -544,11 +563,13 @@ function connect() { transport.connect(); }
 function handle(m) {
   const typ = m.type;
 
-  // Recent turns were replayed; older history stays in the durable log.
-  // Show a "Load earlier" affordance that pages it in on demand (🎯T57).
+  // Recent turns were replayed via WS (🎯T57). Remaining durable history is
+  // progressively fetched into client memory (🎯T119) — full data resident;
+  // infinite scroll is not a data throttle. Optional top sentinel remains
+  // while pages are outstanding (does not gate the progressive fetch).
   if (typ === 'history_meta') {
     oldestIndex = m.start || 0;
-    if ((m.older || 0) > 0) setupInfiniteScroll();
+    if ((m.older || 0) > 0) startProgressiveHistoryLoad();
     return;
   }
 
@@ -770,11 +791,13 @@ function addTurnItem(cls, text) {
 }
 
 // buildMsg constructs a .msg element (body + timestamp) WITHOUT inserting
-// it, so it can be appended live or batched into a fragment for "load
-// earlier" prepend (🎯T57). Height-based collapse requires the node to be
-// in the document — call layoutMsg after attach (offsetHeight is 0 in a
-// detached fragment).
-function buildMsg(role, text, when) {
+// it, so it can be appended live or batched into a fragment for history
+// prepend (🎯T57/T119). Height-based collapse requires the node in the
+// document — call layoutMsg after attach (offsetHeight is 0 detached).
+// opts.lazy (🎯T119): shell-only unmeasured placeholder — no markdown paint
+// until first materialization near the viewport (lazy measure).
+function buildMsg(role, text, when, opts) {
+  const lazy = !!(opts && opts.lazy);
   const d = document.createElement('div');
   d.className = 'msg ' + role;
   const body = document.createElement('div');
@@ -783,9 +806,25 @@ function buildMsg(role, text, when) {
   d._body = body;
   d._layoutRole = role;
   d._layoutText = text == null ? '' : text;
-  // Provisional full paint (no collapse gate) so something shows if layout
-  // is deferred; layoutMsg remeasures once connected.
-  paintBody(d, role, d._layoutText);
+  if (lazy) {
+    // Unmeasured shell: estimated height freezes geometry until enter-band.
+    d.classList.add('virt-shell');
+    d._shellState = (typeof VirtualList !== 'undefined')
+      ? VirtualList.SHELL_UNMEASURED
+      : 'unmeasured';
+    const est = (typeof VirtualList !== 'undefined')
+      ? VirtualList.estimateHeightFromText(d._layoutText)
+      : 72;
+    d.style.minHeight = est + 'px';
+    d._virtSize = null;
+  } else {
+    // Provisional full paint (no collapse gate) so something shows if layout
+    // is deferred; layoutMsg remeasures once connected.
+    paintBody(d, role, d._layoutText);
+    d._shellState = (typeof VirtualList !== 'undefined')
+      ? VirtualList.SHELL_MATERIAL
+      : 'material';
+  }
   const ms = when || Date.now();
   const ts = document.createElement('div');
   ts.className = 'msg-time';
@@ -808,8 +847,10 @@ function absTimeTitle(ms) {
 }
 
 // layoutMsg runs height-ratio collapse once the message is in #messages.
+// Lazy unmeasured shells skip paint until rematerialize (🎯T119).
 function layoutMsg(d) {
   if (!d || !d.isConnected || d._layoutText == null) return;
+  if (d.classList && d.classList.contains('virt-shell') && !d._virtSize) return;
   renderBody(d, d._layoutRole || 'jevons', d._layoutText);
 }
 
@@ -1370,20 +1411,29 @@ function refreshLatestExpansion() {
   if (heightMayHaveChanged) scheduleVirtualize();
 }
 
-// ── Infinite scroll for older history (🎯T57) ─────────────────────────
+// ── Progressive full-history hydrate (🎯T119; uses 🎯T57 /api/history) ─
 // /ws/chat replays only recent turns; oldestIndex is the journal line the
-// visible window starts at. A zero-height top sentinel drives an
-// IntersectionObserver: as the user scrolls near the top, older windows
-// auto-page in from the durable log via /api/history, prepended with the
-// scroll position preserved (no button).
+// recent window starts at. T119: remaining history is progressively fetched
+// into client memory + shells without requiring the owner to scroll for
+// *data*. Top sentinel is optional residual (IntersectionObserver can still
+// help if progressive lag); it is not a data-cap policy.
+// Shells for older pages are lazy (unmeasured) until near-viewport materialize.
 let oldestIndex = 0;
 let loadingEarlier = false;
+let progressiveHistoryRunning = false;
 let historySentinel = null;
 let historyObserver = null;
 let historyLoadingEl = null;
 
-function setupInfiniteScroll() {
-  if (oldestIndex <= 0) { teardownInfiniteScroll(); return; }
+function startProgressiveHistoryLoad() {
+  if (oldestIndex <= 0) { teardownHistorySentinel(); return; }
+  // Optional sentinel while pages remain (does not gate progressive fetch).
+  setupHistorySentinel();
+  progressiveLoadRemainingHistory();
+}
+
+function setupHistorySentinel() {
+  if (oldestIndex <= 0) { teardownHistorySentinel(); return; }
   if (!historySentinel) {
     historySentinel = document.createElement('div');
     historySentinel.className = 'history-sentinel';
@@ -1391,17 +1441,38 @@ function setupInfiniteScroll() {
   }
   if (msgs.firstChild !== historySentinel) msgs.insertBefore(historySentinel, msgs.firstChild);
   if (!historyObserver) {
-    // rootMargin preloads a bit before the very top for a smooth feel.
     historyObserver = new IntersectionObserver((entries) => {
+      // Residual: if progressive lag and owner is near top, nudge a page.
       if (entries.some(e => e.isIntersecting)) loadEarlier();
     }, { root: msgs, rootMargin: '400px 0px 0px 0px', threshold: 0 });
     historyObserver.observe(historySentinel);
   }
 }
 
-function teardownInfiniteScroll() {
+// Back-compat name for hermetic UI tests that still call setupInfiniteScroll.
+function setupInfiniteScroll() { startProgressiveHistoryLoad(); }
+
+function teardownHistorySentinel() {
   if (historyObserver) { historyObserver.disconnect(); historyObserver = null; }
   if (historySentinel) { historySentinel.remove(); historySentinel = null; }
+}
+function teardownInfiniteScroll() { teardownHistorySentinel(); }
+
+async function progressiveLoadRemainingHistory() {
+  if (progressiveHistoryRunning) return;
+  progressiveHistoryRunning = true;
+  try {
+    while (oldestIndex > 0) {
+      const before = oldestIndex;
+      await loadEarlier();
+      // Stall guard: if a page did not advance, stop to avoid tight loop.
+      if (oldestIndex >= before) break;
+      // Yield so recent-first viewport can paint between pages.
+      await new Promise(function (r) { requestAnimationFrame(r); });
+    }
+  } finally {
+    progressiveHistoryRunning = false;
+  }
 }
 
 async function loadEarlier() {
@@ -1413,16 +1484,18 @@ async function loadEarlier() {
   try {
     const data = await fetch('/api/history?end=' + before + '&limit=200').then(r => r.json());
     const prevH = msgs.scrollHeight, prevTop = msgs.scrollTop;
-    const { frag, nodes } = renderFrames(data.lines || []);
+    // Lazy shells: full chunk data on the node; no paint until materialize.
+    const { frag, nodes } = renderFrames(data.lines || [], { lazy: true });
     const anchor = historySentinel ? historySentinel.nextSibling : msgs.firstChild;
     msgs.insertBefore(frag, anchor);
-    layoutMsgList(nodes);   // height-ratio collapse needs connected nodes
+    layoutMsgList(nodes);   // no-op for unmeasured lazy shells
     oldestIndex = (data.start != null) ? data.start : 0;
     // Content added ABOVE the viewport — shift scrollTop by the height
-    // gained so the position doesn't jump, and the sentinel leaves view
-    // so we don't instantly re-trigger. Mode unchanged (not a user leave).
+    // gained so the position doesn't jump. Mode unchanged (not a user leave).
     msgs.scrollTop = prevTop + (msgs.scrollHeight - prevH);
     noteScrollMetrics();
+    // Materialize only shells that entered the anticipation band.
+    scheduleVirtualize();
   } catch (e) {
     console.error('load earlier failed', e);
   } finally {
@@ -1430,7 +1503,7 @@ async function loadEarlier() {
   }
   showHistoryLoading(false);
   loadingEarlier = false;
-  if (oldestIndex <= 0) teardownInfiniteScroll();
+  if (oldestIndex <= 0) teardownHistorySentinel();
 }
 
 // Out-of-flow loading overlay (anchored to #chat-pane) so it doesn't
@@ -1450,13 +1523,30 @@ function showHistoryLoading(on) {
 }
 
 // renderFrames builds .msg nodes from raw wire frames into a fragment
-// (no #messages insert, no scroll) for prepend. Consecutive assistant
-// text frames coalesce into one bubble, mirroring the live path.
+// (no #messages insert, no scroll) for prepend. Whole chunks only (🎯T119):
+// consecutive assistant text frames coalesce into one bubble via
+// VirtualList.coalesceTranscriptFrames. opts.lazy → unmeasured shells.
 // Returns { frag, nodes } so the caller can layoutMsgList after attach.
-function renderFrames(lines) {
+function renderFrames(lines, opts) {
+  const lazy = !!(opts && opts.lazy);
   const frag = document.createDocumentFragment();
   const nodes = [];
-  let pending = null;   // { el, raw }
+  const chunks = (typeof VirtualList !== 'undefined' && VirtualList.coalesceTranscriptFrames)
+    ? VirtualList.coalesceTranscriptFrames(lines)
+    : null;
+  if (chunks) {
+    for (const c of chunks) {
+      if (typeof VirtualList !== 'undefined' && VirtualList.isWholeChunk && !VirtualList.isWholeChunk(c)) {
+        continue;
+      }
+      const el = buildMsg(c.role, c.text, c.timestamp, { lazy: lazy });
+      nodes.push(el);
+      frag.appendChild(el);
+    }
+    return { frag, nodes };
+  }
+  // Fallback if VirtualList missing (should not happen in product).
+  let pending = null;
   for (const line of lines) {
     let m;
     try { m = (typeof line === 'string') ? JSON.parse(line) : line; } catch { continue; }
@@ -1465,7 +1555,7 @@ function renderFrames(lines) {
       const c = m.message && m.message.content;
       if (typeof c === 'string' && c) {
         pending = null;
-        const el = buildMsg('user', c, ts);
+        const el = buildMsg('user', c, ts, { lazy: lazy });
         nodes.push(el);
         frag.appendChild(el);
       }
@@ -1476,17 +1566,15 @@ function renderFrames(lines) {
         if (pending) {
           pending.raw += txt;
           pending.el._layoutText = pending.raw;
-          // Detached: provisional paint only; layoutMsg after attach.
-          paintBody(pending.el, 'jevons', pending.raw);
+          if (!lazy) paintBody(pending.el, 'jevons', pending.raw);
         } else {
-          const el = buildMsg('jevons', txt, ts);
+          const el = buildMsg('jevons', txt, ts, { lazy: lazy });
           pending = { el, raw: txt };
           nodes.push(el);
           frag.appendChild(el);
         }
       }
     }
-    // tool_result / system frames are omitted from the older view.
   }
   return { frag, nodes };
 }
@@ -1708,6 +1796,7 @@ function isTracking() { return followMode === 'track'; }
 function enterTrackBottom() {
   followMode = 'track';
   _mayEnterFromGeometry = true;
+  if (typeof updateJumpFab === 'function') updateJumpFab();
 }
 function leaveTrackBottom() {
   followMode = 'free';
@@ -1715,6 +1804,7 @@ function leaveTrackBottom() {
   // If the leave already cleared that band (big scroll / jump to top),
   // allow the next arrival to re-arm without an extra round-trip.
   _mayEnterFromGeometry = distFromBottom() > ENTER_BOTTOM_EPS_PX;
+  if (typeof updateJumpFab === 'function') updateJumpFab();
 }
 function distFromBottom() {
   return msgs.scrollHeight - msgs.clientHeight - msgs.scrollTop;
@@ -1805,10 +1895,26 @@ msgs.addEventListener('scroll', () => {
   }
   noteScrollMetrics();
   scheduleVirtualize();
+  updateJumpFab();
 }, { passive: true });
 
-// 🎯T56: dematerialise off-screen message bodies (height-preserving shells).
+// 🎯T56/T119: shell+content — dematerialise off-screen bodies; size cache
+// freezes height at measured width so rematerialize does not reflow-jump.
 let _virtRaf = 0;
+let _virtIdSeq = 0;
+const virtSizeCache = (typeof VirtualList !== 'undefined' && VirtualList.createSizeCache)
+  ? VirtualList.createSizeCache()
+  : Object.create(null);
+let _virtContainerWidth = 0;
+
+function msgVirtId(el) {
+  if (!el._virtId) el._virtId = 'm' + (++_virtIdSeq);
+  return el._virtId;
+}
+function msgsContentWidth() {
+  return msgs.clientWidth || 0;
+}
+
 function scheduleVirtualize() {
   if (_virtRaf) return;
   _virtRaf = requestAnimationFrame(() => {
@@ -1851,6 +1957,7 @@ function virtualizeMessages() {
   } finally {
     endScrollBookkeeping();
     _virtualizing = false;
+    updateJumpFab();
   }
 }
 function dematerializeMsg(el) {
@@ -1859,33 +1966,137 @@ function dematerializeMsg(el) {
   if (typeof el._streamRaw === 'string') return;
   if (el._expanded && el._autoExpanded) return;
   const h = el.offsetHeight;
+  const w = msgsContentWidth();
   el._virtH = h;
   el._virtWasExpanded = !!el._expanded;
+  if (typeof VirtualList !== 'undefined' && VirtualList.recordSize) {
+    VirtualList.recordSize(virtSizeCache, msgVirtId(el), h, w);
+  }
+  el._virtSize = (h > 0 && w > 0) ? { height: h, width: w } : el._virtSize;
+  el._shellState = (typeof VirtualList !== 'undefined')
+    ? VirtualList.SHELL_DEMATERIALIZED
+    : 'dematerialized';
   el.classList.add('virt-shell');
-  el.style.minHeight = h + 'px';
+  el.style.minHeight = (h > 0 ? h : (el._virtSize && el._virtSize.height) || 72) + 'px';
   // Clear heavy body; keep shell + timestamp + expand toggle for scroll math.
   if (el._body) el._body.innerHTML = '';
   // Do not remove _expandBtn — rematerialise repaints body; toggle stays.
 }
 function rematerializeMsg(el) {
   if (!el) return;
+  const cached = el._virtSize || (
+    typeof VirtualList !== 'undefined' && VirtualList.getSize
+      ? VirtualList.getSize(virtSizeCache, msgVirtId(el))
+      : null
+  );
+  const w = msgsContentWidth();
+  const cacheOk = cached && typeof VirtualList !== 'undefined' && VirtualList.sizeValidAtWidth
+    ? VirtualList.sizeValidAtWidth(cached, w)
+    : !!(cached && cached.width === w);
+  // Hold frozen height through paint so rematerialize does not jump.
+  if (cacheOk && cached.height > 0) {
+    el.style.minHeight = cached.height + 'px';
+  }
   el.classList.remove('virt-shell');
-  el.style.minHeight = '';
   // Prefer current _expanded (T77 may have collapsed while we were a shell).
   // Only restore dematerialised expanded flag when still auto-latest-ish.
   if (el._virtWasExpanded && el._expanded !== false) el._expanded = true;
   const role = el._layoutRole || (el.classList.contains('user') ? 'user' : 'jevons');
   const text = el._layoutText != null ? el._layoutText : (el._fullText || '');
   if (text != null) renderBody(el, role, text);
-  delete el._virtH;
-  delete el._virtWasExpanded;
+  el._shellState = (typeof VirtualList !== 'undefined')
+    ? VirtualList.SHELL_MATERIAL
+    : 'material';
+  // After layout, record size at current width and release minHeight lock.
+  const settle = () => {
+    if (!el.isConnected || el.classList.contains('virt-shell')) return;
+    const nh = el.offsetHeight;
+    const nw = msgsContentWidth();
+    if (nh > 0 && nw > 0) {
+      if (typeof VirtualList !== 'undefined' && VirtualList.recordSize) {
+        VirtualList.recordSize(virtSizeCache, msgVirtId(el), nh, nw);
+      }
+      el._virtSize = { height: nh, width: nw };
+    }
+    el.style.minHeight = '';
+    delete el._virtH;
+    delete el._virtWasExpanded;
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(settle);
+  } else {
+    settle();
+  }
 }
-// Expose for hermetic tests (🎯T56 / T76).
+
+// 🎯T119: width change invalidates size cache (wrap changes natural height).
+// Remeasure near-viewport first via virtualize; far shells remeasure on enter.
+function onMessagesWidthChange() {
+  if (typeof VirtualList === 'undefined') return;
+  const w = msgsContentWidth();
+  if (!w) return;
+  if (!VirtualList.shouldInvalidateSizeCache(_virtContainerWidth, w)) {
+    _virtContainerWidth = w;
+    return;
+  }
+  if (VirtualList.invalidateOnWidthChange) {
+    VirtualList.invalidateOnWidthChange(virtSizeCache, _virtContainerWidth, w);
+  }
+  _virtContainerWidth = w;
+  const children = msgs.querySelectorAll('#messages > .msg, .msg');
+  // Prefer direct children of msgs.
+  for (let i = 0; i < msgs.children.length; i++) {
+    const el = msgs.children[i];
+    if (!el.classList || !el.classList.contains('msg')) continue;
+    delete el._virtSize;
+    delete el._virtH;
+    if (el.classList.contains('virt-shell')) {
+      const est = VirtualList.estimateHeightFromText
+        ? VirtualList.estimateHeightFromText(el._layoutText || '')
+        : 72;
+      el.style.minHeight = est + 'px';
+      el._shellState = VirtualList.SHELL_UNMEASURED;
+    }
+  }
+  scheduleVirtualize();
+}
+if (typeof ResizeObserver !== 'undefined') {
+  const _msgsRO = new ResizeObserver(() => { onMessagesWidthChange(); });
+  _msgsRO.observe(msgs);
+  _virtContainerWidth = msgsContentWidth();
+}
+
+// 🎯T119 jump-to-bottom (hotkey + FAB); deliberately no jump-to-top.
+const jumpBottomBtn = document.getElementById('jump-bottom');
+function updateJumpFab() {
+  if (!jumpBottomBtn) return;
+  const show = (typeof VirtualList !== 'undefined' && VirtualList.shouldShowJumpFab)
+    ? VirtualList.shouldShowJumpFab(followMode, atBottom())
+    : (!atBottom());
+  jumpBottomBtn.hidden = !show;
+}
+function jumpToBottom() {
+  enterTrackBottom();
+  scrollDown();
+  scheduleVirtualize();
+  updateJumpFab();
+}
+if (jumpBottomBtn) {
+  jumpBottomBtn.addEventListener('click', () => { jumpToBottom(); });
+  jumpBottomBtn.addEventListener('mousedown', e => e.preventDefault());
+}
+
+// Expose for hermetic tests (🎯T56 / T76 / T119).
 window.virtualizeMessages = virtualizeMessages;
 window.dematerializeMsg = dematerializeMsg;
 window.rematerializeMsg = rematerializeMsg;
 window.scheduleVirtualize = scheduleVirtualize;
+window.jumpToBottom = jumpToBottom;
+window.updateJumpFab = updateJumpFab;
 window.renderUserText = renderUserText;
+window.startProgressiveHistoryLoad = startProgressiveHistoryLoad;
+window.setupInfiniteScroll = setupInfiniteScroll;
+window.loadEarlier = loadEarlier;
 
 // Actuator: pin only while Tracking; re-check before every pin (incl. rAF).
 function scrollDown() {
@@ -2587,6 +2798,17 @@ document.addEventListener('keydown', e => {
     msgs.scrollBy(0, msgs.clientHeight * 0.8);
     requestAnimationFrame(() => { tryEnterFromGeometry(); });
     return;
+  }
+  // 🎯T119: jump-to-bottom (End / ⌘↓ / Ctrl+↓). No jump-to-top.
+  // Plain End inside the composer moves the caret — do not steal it.
+  if (typeof VirtualList !== 'undefined' && VirtualList.isJumpToBottomHotkey) {
+    const inField = e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT');
+    const plainEnd = e.key === 'End' && !e.metaKey && !e.ctrlKey;
+    if (!(plainEnd && inField) && VirtualList.isJumpToBottomHotkey(e.key, e)) {
+      e.preventDefault();
+      jumpToBottom();
+      return;
+    }
   }
   // Esc interrupts Jevons's current turn (like the Claude Code TUI).
   if (e.key === 'Escape') {
