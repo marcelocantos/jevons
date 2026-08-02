@@ -69,12 +69,31 @@ an open-ended attention workstream:
    `__TARGET_FILED__:Tn` (e.g. `__TARGET_FILED__:T120`) so the UI auto-closes
    the aside and returns focus to main.
 
-### Event-triggered push (🎯T34)
+### Event-triggered push (🎯T34 / 🎯T114)
 
-When an observed event should wake a fleet thread (CI green, dependency landed,
-worker finished, timer), use **`jevons_event_push`** (target + event + text)
-rather than ad-hoc direct only. Delivery rehydrates stopped processes and
-fails loudly if undeliverable.
+When an observed event should wake a fleet participant (CI green, dependency
+landed, worker finished, timer), use **`jevons_event_push`** (target + event +
+text) rather than ad-hoc direct only. **Target is any participant by name** —
+butler thread or fleet agent (same deliver path). Delivery rehydrates stopped
+processes and fails loudly if undeliverable; it never says "no thread" when a
+registered agent exists (🎯T111.2).
+
+## Unified fleet: aside is a kind of agent (🎯T114)
+
+There is **one participant model**: every fleet member is an agent record
+(purpose + optional parent). An **aside** (owner side-chat or
+`jevons_thread_spawn`) is an agent whose **purpose is side chat** — not a
+second spine with separate talk APIs.
+
+| Purpose | Spawn | Talk | UI |
+|---|---|---|---|
+| `work` | `jevons_agent_start` (default) | `jevons_agent_send` / `jevons_event_push` | RHS fleet tree |
+| `aside` | `jevons_thread_spawn` or `agent_start` purpose=aside | same send/push path by name | attention chrome (T95.1); same underlying record |
+| `overseer` | daemon bootstrap | owner chat | main chat |
+
+Do **not** treat threads vs agents as hard-decoupled permanent architecture.
+Prefer `jevons_agent_start` for named long-lived work; use thread/aside spawn
+for side conversations. Both dual-write into the agent registry.
 
 ## Agent Architecture
 
@@ -144,6 +163,23 @@ Never start a child with bare "go". On first `jevons_agent_send` /
 `jevons_thread_direct`, send a full brief: target IDs, acceptance,
 branch/file ownership, forbidden surfaces (including **no `/release`**
 unless {{.OwnerRef}} ordered a release).
+
+### Multi-slice fan-out (🎯T111.4) — PO/boss default
+
+When a mission has **multiple independent slices** (parallel targets,
+independent file ownership, multi-agent batch), **PO and boss agents
+must** `jevons_agent_start` children with parent lineage early — not
+spend the session in unbounded solo read/grep/bullseye loops.
+
+- **Do fan-out** for multi-slice control-plane work; brief each child;
+  collect results.
+- **Solo is fine** for true single-agent tasks (one slice, one owner).
+- **Detectable failure:** a PO/boss with zero children on a multi-slice
+  mission surfaces in `jevons_agent_list` fan-out check and should be
+  corrected by spawning workers, not only by owner RHS eyeballing.
+- Pass `actor` / `parent` on spawn so the RHS tree matches who-started-whom
+  (🎯T111.3). Prefer `jevons_agent_start` over `jevons_thread_spawn` for
+  named long-lived PO/worker roles.
 
 
 ## Delivery: local by default (🎯T104) — hard vocabulary

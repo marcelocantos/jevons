@@ -294,12 +294,15 @@ func (s *Server) RegistryAgents() []claudia.AgentDef {
 // agentInfo is the GET /api/agents JSON row consumed by the RHS fleet panel.
 // 🎯T72.1: completeness is a server feed concern — every registry agent
 // (durable or ephemeral child) must appear while registered. Parent comes
-// from claudia AgentDef lineage (kill auth / 🎯T68 tree).
+// from claudia AgentDef lineage (kill auth / 🎯T68 tree). Purpose (🎯T114)
+// distinguishes work vs aside so UI can chrome asides without a second store.
 type agentInfo struct {
-	Name    string `json:"name"`
-	WorkDir string `json:"workdir"`
-	Parent  string `json:"parent,omitempty"`
-	Status  string `json:"status"`
+	Name        string `json:"name"`
+	WorkDir     string `json:"workdir"`
+	Parent      string `json:"parent,omitempty"`
+	Purpose     string `json:"purpose,omitempty"`
+	Description string `json:"description,omitempty"`
+	Status      string `json:"status"`
 }
 
 // listFleetAgents returns the RHS panel source of truth: every agent
@@ -352,10 +355,15 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		if proc := reg.Get(d.Name); proc != nil && proc.Alive() {
 			status = "running"
 		}
+		purpose := d.Purpose
+		if purpose == "" {
+			purpose = claudia.PurposeWork
+		}
 		agents = append(agents, agentInfo{
 			Name:    d.Name,
 			WorkDir: d.WorkDir,
 			Parent:  d.Parent,
+			Purpose: purpose,
 			Status:  status,
 		})
 	}

@@ -31,9 +31,20 @@ const (
 	KindSpawned Kind = "spawned"
 )
 
+// Purpose values for Thread.Purpose / agent dual-write (🎯T114).
+// Align with claudia.Purpose* constants.
+const (
+	PurposeWork     = "work"
+	PurposeAside    = "aside"
+	PurposeOverseer = "overseer"
+)
+
 // Thread is the persisted record. It is deliberately small: durable
 // identity plus the handle needed to rehydrate (SessionID → --resume).
 // Live status is derived on demand from the transcript, never stored.
+//
+// Threads are a kind of agent (purpose usually aside). Dual-write into
+// the agent registry on Launch keeps one logical participant model (🎯T114).
 type Thread struct {
 	ID          string    `json:"id"`              // stable butler-level handle
 	Kind        Kind      `json:"kind"`            // adopted | spawned
@@ -41,7 +52,15 @@ type Thread struct {
 	SessionID   string    `json:"session_id"`      // Grok session id (ACP load / resume)
 	Description string    `json:"description"`     // owner's work-language label
 	Model       string    `json:"model,omitempty"` // model override, if any
-	CreatedAt   time.Time `json:"created_at"`
+	// Parent is the fleet lineage parent (who spawned this thread).
+	// Propagated to the agent registry on Launch so /api/agents nests
+	// correctly (🎯T111.3). Empty when unknown (legacy adopted threads).
+	Parent string `json:"parent,omitempty"`
+	// Purpose is the unified fleet role (work | aside | overseer).
+	// Spawned threads default to aside (🎯T114). Empty means aside for
+	// threads at dual-write time.
+	Purpose   string    `json:"purpose,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Store is a durable, concurrency-safe registry of threads backed by a

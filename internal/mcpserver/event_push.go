@@ -17,8 +17,8 @@ import (
 func (s *Server) registerEventPushTools() {
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_event_push",
-			mcp.WithDescription("Push an event-driven message into a target thread/agent so it acts next (🎯T34). Rehydrates a stopped process; returns a typed error if undeliverable. Use when a dependency landed, CI went green, a worker finished, a timer elapsed, etc. — not for owner chat (use jevons_thread_direct)."),
-			mcp.WithString("target", mcp.Required(), mcp.Description("Thread ID (fleet/thread name) to push into")),
+			mcp.WithDescription("Push an event-driven message into a target participant (butler thread or fleet agent) so it acts next (🎯T34/T114/T111.2). One deliver path by name/id: rehydrates a stopped process; returns a typed error if undeliverable. Never fails with 'no thread' when a registered agent exists. Use when a dependency landed, CI went green, a worker finished, a timer elapsed, etc. — not for owner chat (use jevons_thread_direct)."),
+			mcp.WithString("target", mcp.Required(), mcp.Description("Thread ID or fleet agent name to push into")),
 			mcp.WithString("event", mcp.Required(), mcp.Description("Event source/kind, e.g. ci, worker-finished, timer, dependency")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("What the agent should do next / what happened")),
 		),

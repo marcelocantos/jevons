@@ -36,21 +36,23 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent Grok agent in a repo/directory. Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants."),
+			mcp.WithDescription("Start a persistent Grok agent in a repo/directory. Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (e.g. 'tern', 'jevon-frontend')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
+			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work → RHS fleet; aside → attention chrome.")),
 		),
 		s.handleAgentStart,
 	)
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_send",
-			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text."),
+			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text. If a prompt is already in flight, the message is queued for after the turn (not a dead-end). Pass interrupt=true to cancel the in-flight turn and send immediately (🎯T111.1 stuck recovery)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
+			mcp.WithBoolean("interrupt", mcp.Description("If true and a prompt is in flight, interrupt that turn then send (stuck recovery without kill). Default false = queue for after the turn.")),
 		),
 		s.handleAgentSend,
 	)
@@ -109,6 +111,12 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		fmt.Fprintf(&b, "%-20s %-10s parent=%-12s %s (session: %s)\n",
 			d.Name, status, parent, d.WorkDir, sessionDisplay(d.SessionID))
 	}
+	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
+	// missions should have fan-out — visible without only RHS eyeballing.
+	if hints := FormatFanOutHints(s.registry, s.overseerName()); hints != "" {
+		b.WriteString("\n")
+		b.WriteString(hints)
+	}
 	return mcp.NewToolResultText(PrependFleetHealth(b.String(), reps)), nil
 }
 
@@ -135,6 +143,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	model, _ := args["model"].(string)
 	actor, _ := args["actor"].(string)
 	parent, _ := args["parent"].(string)
+	purpose, _ := args["purpose"].(string)
 
 	if name == "" || workdir == "" {
 		return mcp.NewToolResultError("name and workdir are required"), nil
@@ -166,6 +175,17 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError("parent cannot equal agent name"), nil
 	}
 
+	// 🎯T114: purpose defaults to work for agent_start; aside is explicit.
+	purpose = strings.TrimSpace(purpose)
+	switch purpose {
+	case "", claudia.PurposeWork:
+		purpose = claudia.PurposeWork
+	case claudia.PurposeAside, claudia.PurposeOverseer:
+		// allowed
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("purpose %q invalid; use work, aside, or overseer", purpose)), nil
+	}
+
 	existed := s.registry.Def(name) != nil
 	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
 	if err != nil {
@@ -180,6 +200,10 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	if !existed || def.Parent == "" {
 		def.Parent = parent
 	}
+	// Purpose: set on mint; backfill empty purpose on re-start.
+	if !existed || def.Purpose == "" {
+		def.Purpose = purpose
+	}
 	if err := s.registry.Register(*def); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
@@ -193,54 +217,18 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	s.wireAgentEvents(name, proc)
 
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Agent %q started (session: %s, workdir: %s, parent: %s)",
-		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent)), nil
+		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s)",
+		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent, def.Purpose)), nil
 }
 
 func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	text, _ := args["text"].(string)
+	interrupt, _ := args["interrupt"].(bool)
 
 	if name == "" || text == "" {
 		return mcp.NewToolResultError("name and text are required"), nil
-	}
-
-	// 🎯T85: if the process died silently, sweep + rehydrate before fail;
-	// surface any recovery line on the tool result (not only logs).
-	var healthNote string
-	if s.registry != nil {
-		if reps := SweepDeadAgents(s.registry, s.overseerName()); len(reps) > 0 {
-			healthNote = FormatDeadAgentReport(reps)
-			slog.Info(healthNote)
-			s.notifyFleetHealth(healthNote)
-		}
-	}
-
-	proc := s.registry.Get(name)
-	rehydrated := false
-	if proc == nil || !proc.Alive() {
-		// Last chance: Launch (rehydrate) then send — no silent drop.
-		if s.registry != nil && s.registry.Def(name) != nil {
-			p2, err := s.registry.Launch(name)
-			if err != nil {
-				errMsg := fmt.Sprintf("agent %q is not running and rehydrate failed: %v", name, err)
-				if healthNote != "" {
-					errMsg = healthNote + "; " + errMsg
-				}
-				return mcp.NewToolResultError(errMsg), nil
-			}
-			s.wireAgentEvents(name, p2)
-			proc = p2
-			rehydrated = true
-			slog.Info("agent send rehydrated dead/stopped process", "name", name)
-		} else {
-			errMsg := fmt.Sprintf("agent %q is not running", name)
-			if healthNote != "" {
-				errMsg = healthNote + "; " + errMsg
-			}
-			return mcp.NewToolResultError(errMsg), nil
-		}
 	}
 
 	// 🎯T104 under fan-out: first send carries standing local-delivery brief.
@@ -254,19 +242,14 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 		slog.Info("fleet standing brief injected on first send", "name", name)
 	}
 
-	if err := proc.Send(text); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("send failed: %v", err)), nil
+	// 🎯T111.1: rehydrate + send, or queue/interrupt when prompt in flight.
+	result, err := s.sendToAgent(name, text, interrupt)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
-
-	msg := fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)
+	msg := result.Message
 	if injected {
 		msg += " (standing fleet brief T104/T78 prepended on first send)"
-	}
-	if rehydrated {
-		msg += " (rehydrated after dead/stopped process)"
-	}
-	if healthNote != "" {
-		msg += " [" + healthNote + "]"
 	}
 	return mcp.NewToolResultText(msg), nil
 }
@@ -412,6 +395,8 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			if text != "" {
 				s.notify(name, text)
 			}
+			// 🎯T111.1: deliver any nudges queued while the prompt was in flight.
+			s.drainAgentSendQueue(name)
 		}
 	}
 }

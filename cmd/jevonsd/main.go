@@ -27,12 +27,14 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/upgrade"
+	"github.com/marcelocantos/jevons/internal/workers"
 
 	"github.com/marcelocantos/pigeon"
 	"github.com/marcelocantos/pigeon/crypto"
@@ -201,6 +203,34 @@ func main() {
 		slog.Info("no xAI API key — voice bridge disabled (set XAI_API_KEY or store via: security add-generic-password -a jevons -s xai-api-key -w YOUR_KEY)")
 	}
 
+	// 🎯T8.2 worker observability (SQLite workers/events + SSE hub).
+	workerTracker, err := workers.NewTracker(filepath.Join(cfg.StateDir, "workers.db"))
+	if err != nil {
+		slog.Error("workers tracker unavailable — jwork observability disabled", "err", err)
+		workerTracker = nil
+	} else {
+		defer workerTracker.Close()
+		srv.SetWorkersTracker(workerTracker)
+	}
+
+	// 🎯T8.3 execution safety (doit Engine: L1/L2/L3, audit, capabilities).
+	// L3 stays off by default so boot is hermetic without an LLM; L1/L2 +
+	// capability registry + hash-chained audit are always on under StateDir.
+	var doitEng *doit.Engine
+	if eng, err := doit.Open(doit.OpenArgs{
+		StateDir:      filepath.Join(cfg.StateDir, "doit"),
+		Level3Enabled: false,
+	}); err != nil {
+		slog.Error("doit engine unavailable — jwork policy gate disabled", "err", err)
+	} else {
+		doitEng = eng
+		defer eng.Close()
+		slog.Info("doit engine ready",
+			"audit", eng.AuditPath(),
+			"capabilities", len(eng.ListCapabilities()),
+		)
+	}
+
 	// Worker completion events are delivered to the overseer via the
 	// registry agent's Send (wired below in SetNotify).
 	var registry *claudia.Registry
@@ -222,6 +252,12 @@ func main() {
 			return ""
 		},
 	})
+	if workerTracker != nil {
+		mcpSrv.SetWorkersTracker(workerTracker)
+	}
+	if doitEng != nil {
+		mcpSrv.SetDoitEngine(doitEng)
+	}
 
 	mux := http.NewServeMux()
 
@@ -298,11 +334,15 @@ func main() {
 	// usage DB is unavailable — the cockpit still runs, just unguarded.
 	guard := startCostGuard(ctx, cfg, registry, scanner, srv)
 
+	// 🎯T114: same Claudia adapter is Fleet (threads) and Participants
+	// (agent-only names) so Deliver/PushEvent share one id space.
+	fleetAdapter := fleet.NewClaudia(registry)
 	btlrCfg := butler.Config{
-		Store:   threadStore,
-		Scanner: scanner,
-		Reader:  transcript.NewReader(cfg.SessionsDir),
-		Fleet:   fleet.NewClaudia(registry),
+		Store:        threadStore,
+		Scanner:      scanner,
+		Reader:       transcript.NewReader(cfg.SessionsDir),
+		Fleet:        fleetAdapter,
+		Participants: fleetAdapter,
 	}
 	if guard != nil {
 		btlrCfg.SpawnGuard = guard.enforcer.AllowSpawn
@@ -342,6 +382,10 @@ func main() {
 		os.Exit(1)
 	}
 	jevonDef.Provider = cli.Provider
+	// 🎯T114: overseer purpose on the unified participant record.
+	if jevonDef.Purpose == "" {
+		jevonDef.Purpose = claudia.PurposeOverseer
+	}
 
 	// The overseer's MCP tools come from a USER-SCOPED ~/.grok/config.toml
 	// entry (🎯T58), which the Grok CLI attaches on BOTH session/new and

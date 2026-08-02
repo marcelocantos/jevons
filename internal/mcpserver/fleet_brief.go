@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Delivery: local by default (🎯T104)
@@ -19,6 +19,13 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 
 ## Fleet spawn (🎯T78)
 - Create child work via jevons_agent_start / jevons_thread_spawn, not Grok spawn_subagent.
+
+## Multi-slice fan-out (🎯T111.4)
+- If this mission has multiple independent slices, spawn jevons_agent_start
+  children (with parent/actor lineage) early — do not stay in unbounded solo
+  read/plan loops. Single-agent tasks are fine; multi-slice briefs require fan-out.
+- Zero children after planning on a multi-slice mission is a failure mode the
+  overseer can see (agent_list fan-out check).
 
 ## Report
 - When finished: report commit SHA(s) + test evidence to the overseer.

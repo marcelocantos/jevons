@@ -79,8 +79,16 @@ RHS fleet panel (🎯T72 family).
 | Need | Tool |
 |---|---|
 | Named long-lived PO/boss/worker | `jevons_agent_start` → `jevons_agent_send` |
-| Durable owned conversation | `jevons_thread_spawn` → `jevons_thread_direct` |
+| Durable owned conversation / aside | `jevons_thread_spawn` → `jevons_thread_direct` (or unified push/send by name) |
 | One-shot task, no ongoing ownership | `jwork` |
+
+### Unified participant model (🎯T114)
+
+An **aside is a kind of agent** (purpose=`aside`). Work agents use
+purpose=`work`. One registry id space and one deliver path:
+`jevons_event_push` / Deliver resolves **thread or agent by name** — no
+"no thread X" when the agent exists. UI: work agents on the RHS fleet;
+asides in attention chrome — same underlying records.
 
 **Do not default to** Grok `spawn_subagent` (or worktree subagents that
 die with the parent). Those children are not first-class fleet entries,
@@ -90,6 +98,14 @@ Hard suppress of harness subagent spawn is optional where the Grok CLI
 allows it; until then this convention plus jevons MCP tools is the
 enforced path. Brief every new agent with target IDs and ownership —
 never bare "go".
+
+### Multi-slice fan-out (🎯T111.4)
+
+PO/boss agents on **multi-slice** missions must spawn `jevons_agent_start`
+children (with `actor`/`parent` lineage) rather than unbounded solo
+exploration. Single-agent tasks remain fine. Zero children after planning
+on a multi-slice brief is a failure mode (`jevons_agent_list` fan-out
+check). Prefer agents over threads for named long-lived workers.
 
 ## Delivery: local by default (🎯T104)
 

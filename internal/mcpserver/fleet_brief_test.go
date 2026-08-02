@@ -22,6 +22,8 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"Do NOT open GitHub PRs",
 		"local commits",
 		"spawn_subagent",
+		"Multi-slice fan-out",
+		"T111.4",
 		"implement the fix",
 	} {
 		if !strings.Contains(out, want) {

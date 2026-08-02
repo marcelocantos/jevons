@@ -25,6 +25,8 @@ import (
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/doit"
+	"github.com/marcelocantos/jevons/internal/workers"
 )
 
 // ScreenshotFunc requests a screenshot from connected clients and returns the file path.
@@ -72,6 +74,16 @@ type Server struct {
 
 	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
 	selfTestEnv SelfTestEnvFunc
+
+	// workers tracks jwork lifecycle in SQLite + SSE (🎯T8.2). Nil = no-op.
+	workers *workers.Tracker
+	// doitEng is the execution-safety engine (🎯T8.3). Nil = spawn unguarded
+	// by policy (tests without engine).
+	doitEng *doit.Engine
+
+	// agentSendQ is a per-agent FIFO of pending sends when the ACP session is
+	// busy (🎯T115). Guarded by mu. Nil until first enqueue.
+	agentSendQ map[string][]string
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable
@@ -161,6 +173,16 @@ func mcpRequestLogger(next http.Handler, toolsList *int64) http.Handler {
 func (s *Server) SetBudgetGuards(spawn func() error, resume func(id string, auto bool) error) {
 	s.spawnGuard = spawn
 	s.resumeGuard = resume
+}
+
+// SetWorkersTracker attaches the 🎯T8.2 worker observability store + SSE hub.
+func (s *Server) SetWorkersTracker(t *workers.Tracker) {
+	s.workers = t
+}
+
+// SetDoitEngine attaches the 🎯T8.3 execution-safety engine for jwork gating.
+func (s *Server) SetDoitEngine(eng *doit.Engine) {
+	s.doitEng = eng
 }
 
 // checkSpawnAllowed refuses new worker launch when the budget clamp has

@@ -25,6 +25,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/workers"
 )
 
 // remoteWriter abstracts over WebSocket and tern relay connections.
@@ -95,6 +96,9 @@ type Server struct {
 
 	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
 	agentsWatchCancel context.CancelFunc
+
+	// workers is the 🎯T8.2 observability tracker (SQLite + SSE hub).
+	workers *workers.Tracker
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -241,6 +245,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
 	mux.HandleFunc("/ws/voice", s.handleVoice)
+	s.registerWorkerRoutes(mux)
 	s.registerImageRoutes(mux)
 	s.registerSelfTestRoutes(mux)
 }

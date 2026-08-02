@@ -19,6 +19,8 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/doit"
+	"github.com/marcelocantos/jevons/internal/workers"
 )
 
 const (
@@ -41,7 +43,8 @@ func (s *Server) registerJwork() {
 			mcp.WithDescription(
 				"Dispatch a task to an on-demand Grok Build worker. "+
 					"The worker is a fresh subprocess that runs the task to completion and returns the result. "+
-					"Task description must be self-contained — no implicit context is injected."),
+					"Task description must be self-contained — no implicit context is injected. "+
+					"Policy decisions (doit) are returned in structuredContent.metadata (🎯T8.3)."),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Task description. Must be self-contained — the worker has no prior context.")),
 			mcp.WithString("cwd", mcp.Description("Working directory for the worker (defaults to the coordinator's default)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
@@ -84,13 +87,70 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	workerID := uuid.New().String()[:8]
 	nextDepth := depth + 1
 
+	// 🎯T8.3: gate spawn through doit Evaluate/Execute + audit.
+	policy := doit.GateSpawn(ctx, s.doitEng, text, cwd)
+	if policy.Decision == "deny" {
+		slog.Warn("jwork: policy denied spawn",
+			"worker", workerID,
+			"decision", policy.Decision,
+			"level", policy.Level,
+			"reason", policy.Reason,
+		)
+		if s.workers != nil {
+			_ = s.workers.Start(workers.StartArgs{
+				ID: workerID, Task: text, Model: model, Cwd: cwd,
+			})
+			_ = s.workers.Finish(workers.FinishArgs{
+				ID: workerID, Status: workers.StatusDenied,
+				Outcome: "policy denied: " + policy.Reason,
+				Policy: &workers.PolicyArgs{
+					Decision: policy.Decision,
+					Level:    policy.Level,
+					Reason:   policy.Reason,
+					RuleID:   policy.RuleID,
+					AuditSeq: policy.AuditSeq,
+				},
+			})
+		}
+		return mcp.NewToolResultStructured(map[string]any{
+			"result":    "",
+			"worker_id": workerID,
+			"status":    workers.StatusDenied,
+			"policy": map[string]any{
+				"decision":  policy.Decision,
+				"level":     policy.Level,
+				"reason":    policy.Reason,
+				"rule_id":   policy.RuleID,
+				"audit_seq": policy.AuditSeq,
+			},
+		}, fmt.Sprintf("policy denied jwork spawn: %s", policy.Reason)), nil
+	}
+
 	slog.Info("jwork: dispatching worker",
 		"worker", workerID,
 		"depth", depth,
 		"cwd", cwd,
 		"model", model,
 		"provider", cli.Provider,
+		"policy", policy.Decision,
+		"policy_level", policy.Level,
 	)
+
+	if s.workers != nil {
+		if err := s.workers.Start(workers.StartArgs{
+			ID: workerID, Task: text, Model: model, Cwd: cwd,
+		}); err != nil {
+			slog.Warn("jwork: worker track start failed", "err", err)
+		} else {
+			_ = s.workers.RecordPolicy(workerID, workers.PolicyArgs{
+				Decision: policy.Decision,
+				Level:    policy.Level,
+				Reason:   policy.Reason,
+				RuleID:   policy.RuleID,
+				AuditSeq: policy.AuditSeq,
+			})
+		}
+	}
 
 	// Build the prompt. At higher depths, inject delegation guidance.
 	prompt := text
@@ -109,17 +169,39 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	events, err := task.Run(ctx, prompt)
 	if err != nil {
 		slog.Error("jwork: dispatch failed", "worker", workerID, "err", err)
+		if s.workers != nil {
+			_ = s.workers.Finish(workers.FinishArgs{
+				ID: workerID, Status: workers.StatusFailed,
+				Outcome: err.Error(),
+				Policy: &workers.PolicyArgs{
+					Decision: policy.Decision,
+					Level:    policy.Level,
+					Reason:   policy.Reason,
+					RuleID:   policy.RuleID,
+					AuditSeq: policy.AuditSeq,
+				},
+			})
+		}
 		return mcp.NewToolResultError(fmt.Sprintf("worker dispatch failed: %v", err)), nil
 	}
 
-	// Collect result while extracting progress heartbeats.
+	// Collect result while extracting progress heartbeats and token totals.
 	var textParts []string
+	var inputTok, outputTok int64
+	var costUSD float64
 	hb := &heartbeatTracker{}
 
 	for ev := range events {
 		switch ev.Type {
 		case claudia.TaskEventText:
 			textParts = append(textParts, ev.Content)
+			if s.workers != nil {
+				for _, line := range strings.Split(ev.Content, "\n") {
+					if strings.TrimSpace(line) != "" {
+						_ = s.workers.Progress(workerID, line)
+					}
+				}
+			}
 			// Check each line for markdown headings.
 			for _, line := range strings.Split(ev.Content, "\n") {
 				if heading, hdepth := extractHeading(line); heading != "" {
@@ -134,8 +216,18 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 					}
 				}
 			}
+		case claudia.TaskEventResult:
+			inputTok += int64(ev.Usage.InputTokens)
+			outputTok += int64(ev.Usage.OutputTokens)
+			costUSD += ev.CostUSD
+			if ev.Content != "" {
+				textParts = append(textParts, ev.Content)
+			}
 		case claudia.TaskEventError:
 			slog.Warn("jwork: worker error", "worker", workerID, "error", ev.ErrorMsg)
+			if s.workers != nil {
+				_ = s.workers.Progress(workerID, "error: "+ev.ErrorMsg)
+			}
 		}
 	}
 
@@ -153,7 +245,41 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		"result_len", len(result),
 	)
 
-	return mcp.NewToolResultText(truncate(result, 4000)), nil
+	if s.workers != nil {
+		_ = s.workers.Finish(workers.FinishArgs{
+			ID: workerID, Status: workers.StatusCompleted,
+			Outcome:      truncate(result, 500),
+			InputTokens:  inputTok,
+			OutputTokens: outputTok,
+			CostUSD:      costUSD,
+			Policy: &workers.PolicyArgs{
+				Decision: policy.Decision,
+				Level:    policy.Level,
+				Reason:   policy.Reason,
+				RuleID:   policy.RuleID,
+				AuditSeq: policy.AuditSeq,
+			},
+		})
+	}
+
+	// Text remains the primary human/agent payload; structuredContent carries
+	// policy + worker id for machine consumers (🎯T8.3 metadata).
+	truncated := truncate(result, 4000)
+	return mcp.NewToolResultStructured(map[string]any{
+		"result":         truncated,
+		"worker_id":      workerID,
+		"status":         workers.StatusCompleted,
+		"input_tokens":   inputTok,
+		"output_tokens":  outputTok,
+		"cost_usd":       costUSD,
+		"policy": map[string]any{
+			"decision":  policy.Decision,
+			"level":     policy.Level,
+			"reason":    policy.Reason,
+			"rule_id":   policy.RuleID,
+			"audit_seq": policy.AuditSeq,
+		},
+	}, truncated), nil
 }
 
 // extractHeading parses a markdown heading line, returning the text

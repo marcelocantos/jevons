@@ -60,11 +60,13 @@ func (s *Server) SetButler(b *butler.Butler) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_spawn",
-			mcp.WithDescription("Spawn a new Grok thread the butler owns end-to-end. Durable across restarts; idle process is stopped and rehydrated on demand."),
+			mcp.WithDescription("Spawn a new Grok thread the butler owns end-to-end. Durable across restarts; idle process is stopped and rehydrated on demand. Records fleet parent lineage (actor/parent, default overseer) so /api/agents nests correctly (🎯T111.3)."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Unique thread handle (e.g. 'tern-po', 'maze-rebuild')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory (absolute or ~-relative repo path)")),
 			mcp.WithString("description", mcp.Description("The owner's work-language label")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
+			mcp.WithString("actor", mcp.Description("Your agent name (who is spawning). Used as default parent for lineage.")),
+			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer).")),
 		),
 		s.handleThreadSpawn,
 	)
@@ -185,17 +187,39 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 		}
 	}
 
+	// 🎯T111.3: parent lineage for /api/agents tree (same defaults as agent_start).
+	parent := strings.TrimSpace(str(args["parent"]))
+	actor := strings.TrimSpace(str(args["actor"]))
+	if parent == "" {
+		parent = actor
+	}
+	if parent == "" {
+		parent = s.overseerName()
+	}
+	if parent == id {
+		return mcp.NewToolResultError("parent cannot equal thread id"), nil
+	}
+
 	th, err := s.butler.Spawn(butler.SpawnArgs{
 		ID:          id,
 		WorkDir:     workdir,
 		Description: str(args["description"]),
 		Model:       str(args["model"]),
+		Parent:      parent,
 	})
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	// Ensure registry parent is set even if Launch reused a legacy empty row
+	// (Launch already backfills; belt-and-suspenders when registry is shared).
+	if s.registry != nil {
+		if def := s.registry.Def(id); def != nil && def.Parent == "" && parent != "" {
+			def.Parent = parent
+			_ = s.registry.Register(*def)
+		}
+	}
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Spawned thread %q (session %s) in %s.", th.ID, short(th.SessionID), th.WorkDir)), nil
+		"Spawned thread %q (session %s) in %s (parent: %s).", th.ID, short(th.SessionID), th.WorkDir, parent)), nil
 }
 
 func (s *Server) handleThreadTakeover(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

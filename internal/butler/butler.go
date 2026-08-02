@@ -50,6 +50,17 @@ type Fleet interface {
 	Remove(id string)
 }
 
+// Participants is the optional secondary lookup for fleet agents that are
+// not butler threads (🎯T114 / 🎯T111.2). One deliver path addresses any
+// participant by name: thread store first, then this registry.
+type Participants interface {
+	// Exists reports whether a registered agent is known by id/name.
+	Exists(id string) bool
+	// Deliver rehydrates if needed, sends text, and returns a reply
+	// (or a typed error — never a silent drop).
+	Deliver(id, text string) (string, error)
+}
+
 // Butler orchestrates threads. It is safe for concurrent use (the Store
 // it wraps is concurrency-safe; the scanner and reader are read-only).
 type Butler struct {
@@ -57,6 +68,10 @@ type Butler struct {
 	scanner *discovery.Scanner
 	reader  *transcript.Reader
 	fleet   Fleet
+
+	// participants resolves fleet agents that are not in the thread store
+	// so Deliver/PushEvent share one name space with work agents (🎯T114).
+	participants Participants
 
 	// externallyActive reports whether a foreign process is currently
 	// driving the given session (the two-writer signal). Wired to the
@@ -77,11 +92,14 @@ type Butler struct {
 // Config parameterises New. Store, Scanner, and Reader are required.
 // Fleet is required for the spawn/direct/GC/take-over paths but may be
 // nil for an observe-only butler (adopt/list/status still work).
+// Participants is optional; when set, Deliver/PushEvent resolve agents
+// that exist only in the fleet registry (not threads.json).
 type Config struct {
-	Store   *thread.Store
-	Scanner *discovery.Scanner
-	Reader  *transcript.Reader
-	Fleet   Fleet
+	Store        *thread.Store
+	Scanner      *discovery.Scanner
+	Reader       *transcript.Reader
+	Fleet        Fleet
+	Participants Participants
 	// Now, IdleThreshold, and ExternallyActive are injected for
 	// deterministic tests; all default sensibly when nil/zero
 	// (ExternallyActive falls back to the scanner).
@@ -103,6 +121,7 @@ func New(cfg Config) *Butler {
 		scanner:          cfg.Scanner,
 		reader:           cfg.Reader,
 		fleet:            cfg.Fleet,
+		participants:     cfg.Participants,
 		externallyActive: cfg.ExternallyActive,
 		spawnGuard:       cfg.SpawnGuard,
 		resumeGuard:      cfg.ResumeGuard,
@@ -239,11 +258,19 @@ type SpawnArgs struct {
 	WorkDir     string // required
 	Description string
 	Model       string
+	// Parent is the fleet lineage parent recorded on the agent registry
+	// when Launch mints the process (🎯T111.3). Empty means unknown.
+	Parent string
+	// Purpose is the unified fleet role (work | aside | overseer).
+	// Thread spawn defaults to aside (side-chat participant) (🎯T114).
+	Purpose string
 }
 
 // Spawn creates a new thread the butler owns end-to-end and launches its
 // process. The thread record is persisted before the process starts, so
 // even a launch that dies leaves a durable, rehydratable thread.
+// Spawned threads are side-chat participants by default (Purpose aside);
+// work agents use jevons_agent_start (🎯T114).
 func (b *Butler) Spawn(args SpawnArgs) (*thread.Thread, error) {
 	if b.fleet == nil {
 		return nil, fmt.Errorf("spawn: no fleet configured")
@@ -258,12 +285,19 @@ func (b *Butler) Spawn(args SpawnArgs) (*thread.Thread, error) {
 		return nil, fmt.Errorf("spawn %q: %w", args.ID, err)
 	}
 
+	purpose := strings.TrimSpace(args.Purpose)
+	if purpose == "" {
+		purpose = thread.PurposeAside
+	}
+
 	t := &thread.Thread{
 		ID:          args.ID,
 		Kind:        thread.KindSpawned,
 		WorkDir:     args.WorkDir,
 		Description: args.Description,
 		Model:       args.Model,
+		Parent:      strings.TrimSpace(args.Parent),
+		Purpose:     purpose,
 		CreatedAt:   b.now(),
 	}
 	if err := b.store.Put(t); err != nil {
@@ -292,6 +326,9 @@ func (b *Butler) Spawn(args SpawnArgs) (*thread.Thread, error) {
 //
 // Adopted (observe-only) threads are refused until taken over, since a
 // second writer must not drive a session the owner still holds.
+//
+// Prefer Deliver when the target may be a fleet agent rather than a
+// butler thread (🎯T114). Direct remains the thread-only path.
 func (b *Butler) Direct(id, text string) (string, error) {
 	if b.fleet == nil {
 		return "", fmt.Errorf("direct: no fleet configured")
@@ -323,6 +360,36 @@ func (b *Butler) Direct(id, text string) (string, error) {
 		return "", fmt.Errorf("direct %q: %w", id, err)
 	}
 	return reply, nil
+}
+
+// Deliver is the unified talk path (🎯T114 / 🎯T111.2): resolve id as a
+// butler thread first, else as a fleet agent participant. Same no-silent-
+// fail / rehydrate guarantees on both arms. Missing targets report
+// "no participant", never "no thread" when an agent exists.
+func (b *Butler) Deliver(id, text string) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", fmt.Errorf("deliver: target id is required")
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("deliver: text is required")
+	}
+	if _, ok := b.store.Get(id); ok {
+		return b.Direct(id, text)
+	}
+	if b.participants != nil && b.participants.Exists(id) {
+		reply, err := b.participants.Deliver(id, text)
+		if err != nil {
+			return "", fmt.Errorf("deliver %q: %w", id, err)
+		}
+		return reply, nil
+	}
+	return "", fmt.Errorf("deliver: no participant %q", id)
+}
+
+// SetParticipants attaches (or replaces) the fleet-agent lookup used by
+// Deliver/PushEvent. Safe to call after New (e.g. when wiring production).
+func (b *Butler) SetParticipants(p Participants) {
+	b.participants = p
 }
 
 // TakeOver promotes an adopted (observe-only) thread to one jevons owns

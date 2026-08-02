@@ -101,6 +101,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `spawn_subagent` / worktree children that die with the parent and never
   show in the RHS fleet panel. Full doctrine: `internal/config/persona.md`
   and `agents-guide.md`.
+- **Unified fleet (🎯T114):** aside is a kind of agent (purpose field);
+  one deliver/send/push path by name for workers and asides; dual-write
+  threads into the agent registry. Docs: persona + agents-guide.
+- **Multi-slice fan-out (🎯T111.4):** PO/boss multi-slice missions
+  `jevons_agent_start` children early (with parent lineage); solo is fine
+  for single-agent tasks. Zero-children failure surfaces in agent_list.
 
 ## Project structure
 

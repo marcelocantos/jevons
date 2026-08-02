@@ -9,7 +9,20 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/marcelocantos/jevons/internal/doit"
+	"github.com/marcelocantos/jevons/internal/workers"
 )
+
+func openTestDoit(t *testing.T) (*doit.Engine, error) {
+	t.Helper()
+	return doit.Open(doit.OpenArgs{StateDir: t.TempDir()})
+}
+
+func openTestWorkers(t *testing.T) (*workers.Tracker, error) {
+	t.Helper()
+	return workers.NewTracker(":memory:")
+}
 
 func TestHandleJworkMissingText(t *testing.T) {
 	s := &Server{}
@@ -22,6 +35,57 @@ func TestHandleJworkMissingText(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Error("expected error result for missing text")
+	}
+}
+
+func TestHandleJworkPolicyDenyRecordsWorker(t *testing.T) {
+	// Real doit engine under a temp state dir — catastrophic task is L1 deny.
+	eng, err := openTestDoit(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	tr, err := openTestWorkers(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+
+	s := &Server{}
+	s.SetDoitEngine(eng)
+	s.SetWorkersTracker(tr)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"text": "please run: rm -rf / on production",
+	}
+	result, err := s.handleJwork(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Structured deny is not an MCP transport error — status=denied in payload.
+	if result.IsError {
+		t.Fatalf("expected structured deny, got tool error: %s", extractText(result))
+	}
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("structured content type %T", result.StructuredContent)
+	}
+	if sc["status"] != "denied" {
+		t.Fatalf("status=%v", sc["status"])
+	}
+	pol, _ := sc["policy"].(map[string]any)
+	if pol == nil || pol["decision"] != "deny" {
+		t.Fatalf("policy=%v", pol)
+	}
+
+	list, err := tr.Store.List("", 10)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("workers list: %v %+v", err, list)
+	}
+	if list[0].Status != "denied" || list[0].PolicyDecision != "deny" {
+		t.Fatalf("worker row: %+v", list[0])
 	}
 }
 

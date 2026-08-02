@@ -68,6 +68,42 @@ func TestDefaultPersonaFleetSpawnDoctrine(t *testing.T) {
 	}
 }
 
+// 🎯T114: unified fleet doctrine — aside is a kind of agent; one deliver path.
+func TestDefaultPersonaUnifiedFleetDoctrine(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Unified fleet",
+		"aside is a kind of agent",
+		"purpose",
+		"jevons_event_push",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T114 marker %q", want)
+		}
+	}
+}
+
+// 🎯T111.4: PO/boss multi-slice fan-out doctrine is in the default persona.
+func TestDefaultPersonaMultiSliceFanOut(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Multi-slice fan-out",
+		"T111.4",
+		"multiple independent slices",
+		"zero children",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing multi-slice fan-out marker %q", want)
+		}
+	}
+}
+
 // 🎯T87 / 🎯T103 thin: impatience + RSI filing bias in default persona.
 func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 	p, err := Default().Persona()
@@ -129,6 +165,10 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"Delivery: local by default",
 		"local `master`",
 		"opened a PR",
+		"Multi-slice fan-out",
+		"T111.4",
+		"Unified participant model",
+		"aside is a kind of agent",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)
