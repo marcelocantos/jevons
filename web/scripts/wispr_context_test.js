@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic unit tests for Wispr Flow composer context (🎯T21).
+// Hermetic unit tests for Wispr Flow composer context (🎯T21 / 🎯T133).
 // Run: node web/scripts/wispr_context_test.js
 
 'use strict';
@@ -120,6 +120,54 @@ test('stripSeed is prefix-only (no grammar fixer)', function () {
   assert.strictEqual(WC.prepareWireText(raw), raw);
 });
 
+// ── seed-only visibility class (🎯T133) ──────────────────────────
+
+test('isSeedOnly / needsSeedOnlyClass: seed-only vs real draft', function () {
+  assert.strictEqual(WC.SEED_ONLY_CLASS, 'composer-seed-only');
+  assert.ok(WC.isSeedOnly(WC.EMPTY_SEED), 'EMPTY_SEED is seed-only');
+  assert.ok(WC.needsSeedOnlyClass(WC.EMPTY_SEED), 'class on for EMPTY_SEED');
+  assert.ok(!WC.isSeedOnly(''), 'blank string is not seed-only (nothing to hide)');
+  assert.ok(!WC.needsSeedOnlyClass(''));
+  assert.ok(!WC.isSeedOnly('Hello world?'));
+  assert.ok(!WC.needsSeedOnlyClass('Hello world?'));
+  assert.ok(!WC.isSeedOnly(WC.EMPTY_SEED + 'real draft'));
+  assert.ok(!WC.needsSeedOnlyClass(WC.EMPTY_SEED + 'Are you done?'));
+  // Whitespace-only still effectively empty → hide if present as value.
+  assert.ok(WC.isSeedOnly('   '));
+  assert.ok(WC.needsSeedOnlyClass('   '));
+  // Real user punctuation alone is not seed-only.
+  assert.ok(!WC.isSeedOnly('.'));
+  assert.ok(!WC.isSeedOnly('?'));
+});
+
+test('handleSeedBackspace: seed-only Backspace clears whole seed once', function () {
+  const act = WC.handleSeedBackspace(WC.EMPTY_SEED, 'Backspace');
+  assert.ok(act && act.consume, 'must consume Backspace on seed-only');
+  assert.strictEqual(act.value, '');
+  assert.strictEqual(
+    WC.handleSeedBackspace(WC.EMPTY_SEED, 'Delete'),
+    null,
+    'Delete is not the seed-only policy key'
+  );
+  assert.strictEqual(
+    WC.handleSeedBackspace('Hello?', 'Backspace'),
+    null,
+    'real draft Backspace is default browser'
+  );
+  assert.strictEqual(WC.handleSeedBackspace('', 'Backspace'), null);
+  // After clear, prepareWireText still empty; re-seed via applySeedIfEmpty.
+  assert.strictEqual(WC.prepareWireText(act.value), '');
+  assert.strictEqual(WC.applySeedIfEmpty(act.value), WC.EMPTY_SEED);
+});
+
+test('seed-only class state flips when real draft appears; strip unchanged', function () {
+  assert.ok(WC.needsSeedOnlyClass(WC.applySeedIfEmpty('')));
+  const withReal = WC.EMPTY_SEED + 'What about T133?';
+  assert.ok(!WC.needsSeedOnlyClass(WC.applySeedIfEmpty(withReal)));
+  assert.strictEqual(WC.prepareWireText(withReal), 'What about T133?');
+  assert.strictEqual(WC.prepareWireText(WC.EMPTY_SEED), '');
+});
+
 // ── index.html wiring ────────────────────────────────────────────
 
 test('index.html wires wispr helper, live region, describedby, send strip', function () {
@@ -143,6 +191,35 @@ test('index.html wires wispr helper, live region, describedby, send strip', func
   assert.ok(
     html.includes('buildContextText') || html.includes('refreshWisprContext'),
     'history update must refresh context'
+  );
+});
+
+test('index.html has composer-seed-only CSS and class/Backspace wiring (🎯T133)', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(
+    html.includes('composer-seed-only'),
+    'CSS/class name composer-seed-only must appear'
+  );
+  assert.ok(
+    /composer-seed-only\s*\{[^}]*color\s*:\s*transparent/s.test(html) ||
+      html.includes('color: transparent'),
+    'seed-only CSS must set color: transparent'
+  );
+  assert.ok(
+    html.includes('caret-color'),
+    'seed-only CSS must set caret-color so caret stays visible'
+  );
+  assert.ok(
+    html.includes('syncComposerSeedClass') || html.includes('needsSeedOnlyClass'),
+    'must toggle seed-only class from helpers'
+  );
+  assert.ok(
+    html.includes('handleSeedBackspace') || html.includes('SEED_ONLY_CLASS'),
+    'must wire seed Backspace policy or SEED_ONLY_CLASS'
+  );
+  assert.ok(
+    html.includes('handleSeedBackspace'),
+    'Backspace handler must call handleSeedBackspace'
   );
 });
 

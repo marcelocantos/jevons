@@ -317,6 +317,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    background — darker in dark mode, lighter in light mode. */
 #input::placeholder { color: var(--text-muted); opacity: 0.45; }
 #input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+/* 🎯T133: EMPTY_SEED stays in the value for Wispr document mode, but the
+   full stop is not visible while the field is seed-only. Caret stays readable. */
+#input.composer-seed-only { color: transparent; caret-color: var(--text); }
 #send { min-height: var(--control-h); padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
 #send:hover { opacity: 0.85; }
 #send:disabled { opacity: 0.3; cursor: not-allowed; }
@@ -588,12 +591,24 @@ function refreshWisprContext() {
     );
   }
 }
+function syncComposerSeedClass() {
+  if (!input || typeof WisprContext === 'undefined') return;
+  const on = WisprContext.needsSeedOnlyClass(input.value);
+  input.classList.toggle(
+    WisprContext.SEED_ONLY_CLASS || 'composer-seed-only',
+    on
+  );
+}
 function ensureWisprSeed() {
   if (typeof WisprContext === 'undefined' || !input) return;
   // Only seed when the live draft is empty of real text (fallback B).
-  if (!WisprContext.needsSeed(input.value)) return;
+  if (!WisprContext.needsSeed(input.value)) {
+    syncComposerSeedClass();
+    return;
+  }
   const next = WisprContext.applySeedIfEmpty(input.value);
   if (next !== input.value) input.value = next;
+  syncComposerSeedClass();
 }
 function stripWisprSeedFromComposerValue() {
   if (typeof WisprContext === 'undefined' || !input) return;
@@ -602,6 +617,7 @@ function stripWisprSeedFromComposerValue() {
     // Keep visible draft free of seed once the owner has real text.
     input.value = stripped;
   }
+  syncComposerSeedClass();
 }
 
 // 🎯T120 page-session correlation id for decision logs (audit §3.1).
@@ -3276,6 +3292,18 @@ input.addEventListener('keydown', e => {
     else send({ interrupt: interrupt });
     return;
   }
+  // 🎯T133: Backspace on seed-only clears whole seed once (no period thrash).
+  if (typeof WisprContext !== 'undefined' && WisprContext.handleSeedBackspace) {
+    const act = WisprContext.handleSeedBackspace(input.value, e.key);
+    if (act && act.consume) {
+      e.preventDefault();
+      input.value = act.value;
+      try { input.selectionStart = input.selectionEnd = 0; } catch (_) {}
+      syncComposerSeedClass();
+      autoGrow();
+      return;
+    }
+  }
   // 🎯T126: Home/End move caret in the message box (field-content policy).
   // Explicit apply + preventDefault so macOS does not scroll the transcript
   // and T119 jump-to-bottom never steals plain End while composer focused.
@@ -3316,6 +3344,7 @@ input.addEventListener('input', () => {
         try { input.selectionStart = input.selectionEnd = pos; } catch (_) {}
       }
     }
+    syncComposerSeedClass();
   }
   autoGrow();
   // Live-edit the focused queue row as the owner types.
@@ -3349,9 +3378,11 @@ input.addEventListener('input', () => {
   }
 });
 // 🎯T21: on focus of empty composer, ensure seed + describedby are current.
+// 🎯T133: also refresh seed-only visibility class.
 input.addEventListener('focus', () => {
   refreshWisprContext();
   ensureWisprSeed();
+  syncComposerSeedClass();
 });
 // 🎯T76: image paste → upload → composer chip → [image: id] on send.
 // 🎯T80: bulk paste/dictation insert tidy (not keystroke mid-edit).

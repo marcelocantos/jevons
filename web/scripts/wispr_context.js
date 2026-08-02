@@ -179,6 +179,38 @@
     return isEffectivelyEmpty(value);
   }
 
+  // 🎯T133: CSS class on #input when only EMPTY_SEED (or seed-like empty) is present.
+  // Transparent text hides the period; caret-color keeps the caret visible.
+  const SEED_ONLY_CLASS = 'composer-seed-only';
+
+  /**
+   * True when the composer value has no real draft and is not a blank string —
+   * i.e. seed (or seed-shaped empty content) is what would render. Blank '' is
+   * not seed-only (nothing to hide yet).
+   */
+  function isSeedOnly(value) {
+    const s = value == null ? '' : String(value);
+    if (!s) return false;
+    return isEffectivelyEmpty(s);
+  }
+
+  /** Alias for class-toggle callers / tests. */
+  function needsSeedOnlyClass(value) {
+    return isSeedOnly(value);
+  }
+
+  /**
+   * Key policy: Backspace on seed-only clears the whole seed in one stroke
+   * (no char-by-char ZWSP/period thrash that can flash a visible '.').
+   * Returns { consume: true, value: '' } when the event should be handled;
+   * null when the browser default should run.
+   */
+  function handleSeedBackspace(value, key) {
+    if (key !== 'Backspace') return null;
+    if (!isSeedOnly(value)) return null;
+    return { consume: true, value: '' };
+  }
+
   return {
     LIVE_REGION_ID: LIVE_REGION_ID,
     STATIC_HINT_ID: STATIC_HINT_ID,
@@ -186,6 +218,7 @@
     DEFAULT_EXCERPT_CHARS: DEFAULT_EXCERPT_CHARS,
     BOOTSTRAP: BOOTSTRAP,
     EMPTY_SEED: EMPTY_SEED,
+    SEED_ONLY_CLASS: SEED_ONLY_CLASS,
     roleLabel: roleLabel,
     isSentenceShaped: isSentenceShaped,
     ensureSentence: ensureSentence,
@@ -198,5 +231,8 @@
     isEffectivelyEmpty: isEffectivelyEmpty,
     applySeedIfEmpty: applySeedIfEmpty,
     needsSeed: needsSeed,
+    isSeedOnly: isSeedOnly,
+    needsSeedOnlyClass: needsSeedOnlyClass,
+    handleSeedBackspace: handleSeedBackspace,
   };
 }));
