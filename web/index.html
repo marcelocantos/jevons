@@ -380,7 +380,41 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
 #theme-toggle button:hover { color: var(--text-dim); }
 #theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
-#agents { flex: 1; overflow-y: auto; padding: 8px 12px; min-height: 80px; }
+#agents { flex: 1; overflow-y: auto; padding: 8px 12px; min-height: 60px; max-height: 45%; }
+/* 🎯T124: fleet transcript inspect — bottom of RHS; never main chat */
+#agent-inspect {
+  display: none; flex-direction: column; flex: 1; min-height: 140px; max-height: 55%;
+  border-top: 1px solid var(--border); background: var(--bg);
+}
+#agent-inspect.visible { display: flex; }
+#agent-inspect-header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  font-size: 11px; font-weight: 600; color: var(--text-dim);
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0;
+}
+#agent-inspect-header .ai-name { color: var(--text); text-transform: none; letter-spacing: 0; font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#agent-inspect-header button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-muted);
+  font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: var(--sans);
+}
+#agent-inspect-header button:hover { color: var(--text); border-color: var(--border-focus); }
+#agent-inspect-body {
+  flex: 1; overflow-y: auto; padding: 10px 12px; font-size: 12px; line-height: 1.45;
+}
+#agent-inspect-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px 4px; }
+#agent-inspect-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; margin-bottom: 8px; }
+#agent-inspect-body .ai-turn { margin-bottom: 10px; }
+#agent-inspect-body .ai-role {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted); margin-bottom: 2px;
+}
+#agent-inspect-body .ai-turn.user .ai-role { color: var(--accent, #8b7cf6); }
+#agent-inspect-body .ai-turn.assistant .ai-role { color: var(--green, #4ade80); }
+#agent-inspect-body .ai-text {
+  white-space: pre-wrap; word-break: break-word; color: var(--text); font-family: var(--sans);
+  font-size: 12px; max-height: 40vh; overflow-y: auto;
+}
 #workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
 .worker-row { padding: 5px 6px; border-radius: 5px; margin-bottom: 2px; border: 1px solid transparent; }
 .worker-row:hover { background: var(--surface-raised); }
@@ -456,7 +490,17 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <button type="button" id="open-viz-btn" title="Open project graph viz panel (pinned / paste / chat)">Open viz</button>
     </div>
     <div id="agents"></div>
-    <div id="activity-header" style="margin-top:10px">Workers <span id="workers-live" style="font-weight:400;color:var(--text-muted);font-size:10px"></span></div>
+    <!-- 🎯T124: selected fleet agent/aside full transcript (out of band from main chat) -->
+    <div id="agent-inspect" aria-label="Selected agent transcript">
+      <div id="agent-inspect-header">
+        <span class="ai-label">Transcript</span>
+        <span class="ai-name" id="agent-inspect-name"></span>
+        <button type="button" id="agent-inspect-refresh" title="Reload transcript">Refresh</button>
+        <button type="button" id="agent-inspect-close" title="Clear selection">Close</button>
+      </div>
+      <div id="agent-inspect-body"></div>
+    </div>
+    <div id="activity-header" style="margin-top:0">Workers <span id="workers-live" style="font-weight:400;color:var(--text-muted);font-size:10px"></span></div>
     <div id="workers" title="jwork workers (🎯T8.2)"></div>
 
   </div>
@@ -485,6 +529,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
 <script src="scripts/fleet_row.js"></script>
+<script src="scripts/agent_transcript.js"></script>
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
 <script src="scripts/composer_layout.js"></script>
@@ -1980,6 +2025,7 @@ function addWorkerMsg(msg) {
 }
 
 // Agent tree
+let lastFleetAgents = []; // for 🎯T124 auto-select on new aside
 function refreshAgents() {
   fetch('/api/agents').then(r=>r.json()).then(agents => {
     agentsEl.innerHTML = '';
@@ -1990,9 +2036,20 @@ function refreshAgents() {
       (byParent[p] = byParent[p] || []).push(a);
       if (a && a.name) agentsByName[a.name] = a;
     });
+    // 🎯T124: new purpose=aside → auto-select and show transcript pane.
+    if (typeof AgentTranscript !== 'undefined') {
+      const auto = AgentTranscript.pickAutoSelect(lastFleetAgents, agents, selectedAgent);
+      if (auto && auto !== selectedAgent) {
+        selectedAgent = auto;
+      }
+    }
+    lastFleetAgents = Array.isArray(agents) ? agents.slice() : [];
     renderTree(byParent, '', agentsEl, agentsByName);
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
+    if (selectedAgent) {
+      loadAgentTranscript(selectedAgent, { quiet: true });
+    }
   }).catch((err)=>{
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('warn', DecisionLog.decisionMsg('fleet'), DecisionLog.formatFleetDecision('refresh_error', {
@@ -3262,16 +3319,115 @@ let termWs = null;
 let termFit = null;
 let selectedAgent = null;
 
-// 🎯T73: selection only — do not open the obsolete black TMUX/detail panel.
+// 🎯T124: select fleet agent/aside → RHS transcript pane (not main chat).
+// 🎯T73: do not open the obsolete black TMUX/detail panel.
+const agentInspectEl = document.getElementById('agent-inspect');
+const agentInspectName = document.getElementById('agent-inspect-name');
+const agentInspectBody = document.getElementById('agent-inspect-body');
+let agentTranscriptTimer = 0;
+
 function selectAgent(name) {
-  if (selectedAgent === name) {
-    selectedAgent = null;
-    document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
+  const next = (typeof AgentTranscript !== 'undefined')
+    ? AgentTranscript.nextSelection(selectedAgent, name)
+    : (selectedAgent === name ? null : name);
+  selectedAgent = next;
+  document.querySelectorAll('.agent-node').forEach(n =>
+    n.classList.toggle('selected', !!(selectedAgent && n.dataset.agent === selectedAgent)));
+  if (!selectedAgent) {
+    hideAgentInspect();
     return;
   }
-  selectedAgent = name;
-  document.querySelectorAll('.agent-node').forEach(n => n.classList.toggle('selected', n.dataset.agent === name));
+  loadAgentTranscript(selectedAgent, { quiet: false });
 }
+
+function hideAgentInspect() {
+  if (agentTranscriptTimer) { clearInterval(agentTranscriptTimer); agentTranscriptTimer = 0; }
+  if (agentInspectEl) agentInspectEl.classList.remove('visible');
+  if (agentInspectBody) agentInspectBody.innerHTML = '';
+  if (agentInspectName) agentInspectName.textContent = '';
+}
+
+function renderAgentInspect(model) {
+  if (!agentInspectEl || !agentInspectBody) return;
+  agentInspectEl.classList.add('visible');
+  if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
+  if (model.error) {
+    agentInspectBody.innerHTML = '<div class="ai-err"></div><div class="ai-empty"></div>';
+    agentInspectBody.querySelector('.ai-err').textContent = model.error;
+    agentInspectBody.querySelector('.ai-empty').textContent = model.empty
+      ? 'No turns yet — agent may still be starting.'
+      : '';
+    return;
+  }
+  if (model.empty) {
+    agentInspectBody.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'ai-empty';
+    empty.textContent = 'No transcript turns yet for this agent.';
+    agentInspectBody.appendChild(empty);
+    return;
+  }
+  agentInspectBody.innerHTML = '';
+  (model.lines || []).forEach(function (line) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ai-turn ' + (line.role || 'other');
+    const role = document.createElement('div');
+    role.className = 'ai-role';
+    role.textContent = line.role === 'user' ? 'User' : (line.role === 'assistant' ? 'Assistant' : (line.role || 'msg'));
+    const text = document.createElement('div');
+    text.className = 'ai-text';
+    text.textContent = line.text || '';
+    wrap.appendChild(role);
+    wrap.appendChild(text);
+    agentInspectBody.appendChild(wrap);
+  });
+  // Stay pinned to latest while following a live agent.
+  agentInspectBody.scrollTop = agentInspectBody.scrollHeight;
+}
+
+function loadAgentTranscript(name, opts) {
+  if (!name || !agentInspectEl) return;
+  const quiet = !!(opts && opts.quiet);
+  fetch('/api/agents/' + encodeURIComponent(name) + '/transcript')
+    .then(function (r) {
+      if (!r.ok) return r.json().then(function (j) {
+        throw new Error((j && j.error) || ('HTTP ' + r.status));
+      });
+      return r.json();
+    })
+    .then(function (payload) {
+      const model = (typeof AgentTranscript !== 'undefined')
+        ? AgentTranscript.paneModel(name, payload)
+        : { title: name, lines: (payload && payload.turns) || [], empty: !(payload && payload.turns && payload.turns.length), error: '' };
+      // Surface soft errors from empty session as empty, not hard fail.
+      if (payload && payload.error && model.empty) {
+        model.error = '';
+      }
+      renderAgentInspect(model);
+      document.querySelectorAll('.agent-node').forEach(n =>
+        n.classList.toggle('selected', n.dataset.agent === name));
+      // Poll while open so worker thinking streams into the pane.
+      if (!agentTranscriptTimer) {
+        agentTranscriptTimer = setInterval(function () {
+          if (selectedAgent) loadAgentTranscript(selectedAgent, { quiet: true });
+        }, 4000);
+      }
+    })
+    .catch(function (err) {
+      if (quiet) return;
+      const model = (typeof AgentTranscript !== 'undefined')
+        ? AgentTranscript.paneModel(name, null, err)
+        : { title: name, lines: [], empty: true, error: String(err && err.message || err) };
+      renderAgentInspect(model);
+    });
+}
+
+const agentInspectClose = document.getElementById('agent-inspect-close');
+if (agentInspectClose) agentInspectClose.onclick = function () { selectAgent(selectedAgent); };
+const agentInspectRefresh = document.getElementById('agent-inspect-refresh');
+if (agentInspectRefresh) agentInspectRefresh.onclick = function () {
+  if (selectedAgent) loadAgentTranscript(selectedAgent, { quiet: false });
+};
 
 function openTerminal(name) {
   closeTerminal();
@@ -3325,6 +3481,7 @@ function openTerminal(name) {
 
 function closeTerminal() {
   selectedAgent = null;
+  if (typeof hideAgentInspect === 'function') hideAgentInspect();
   if (termWs) { termWs.close(); termWs = null; }
   if (term) { term.dispose(); term = null; }
   if (termContainer._ro) { termContainer._ro.disconnect(); termContainer._ro = null; }

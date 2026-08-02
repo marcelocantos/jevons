@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/workers"
 )
 
@@ -107,6 +108,9 @@ type Server struct {
 	// eventLog is the durable decision/lifecycle journal (🎯T120):
 	// state_dir/logs/events.jsonl — browser + server events, tool-readable.
 	eventLog *eventlog.Journal
+
+	// transcriptReader reads Grok session chat_history for RHS inspect (🎯T124).
+	transcriptReader *transcript.Reader
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -248,6 +252,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)

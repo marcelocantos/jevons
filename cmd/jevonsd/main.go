@@ -176,6 +176,8 @@ func main() {
 		os.Exit(1)
 	}
 	srv.SetChatLog(clog)
+	// 🎯T124: RHS fleet transcript inspect reads Grok session chat_history.
+	srv.SetTranscriptReader(transcript.NewReader(cfg.SessionsDir))
 
 	// Durable decision/lifecycle journal (🎯T120): browser + server events
 	// under state_dir/logs/events.jsonl — tool-readable without privilege.
