@@ -28,12 +28,42 @@ Dev mode serves `web/` from disk with hot reload.
 
 ## Test
 
+Two universes for live owner-chat work — keep them distinct:
+
+- **A (daily):** `:13705` / `~/.jevons` / `jevonsmcp` — real owner session.
+  Touch only when diagnosis needs that context.
+- **B (isolated):** `make test-journey` — throwaway port/state/MCP.
+  The **preferred E2E net** for owner-visible chat/fleet behaviour (🎯T101).
+
+A **user journey** maps a real owner interaction and runs **end-to-end**;
+it **must interact with an agent** (overseer and/or fleet). Hermetic unit
+tests and doc greps are not journeys (see `scripts/docratchet/`,
+`scripts/journey-suite/portguard/`). After a successful live run, caching
+the agent interaction for replay is allowed (🎯T107).
+
+Hermetic `make test` (Go + Node + Playwright UI with mocks) is the fast
+gate and is **distinct from** journeys: it never needs Grok or a daemon.
+Journeys are opt-in live Grok against a throwaway isolate (`go run
+./scripts/journey-suite` / `make test-journey`).
+
+**Journey-or-exception:** when an owner-visible product failure mode is
+fixed, land a journey that covers it, **or** an explicit exception in the
+diff/PR notes naming why unit/hermetic coverage is enough. Do not treat
+unit green alone as the standing net for chat/fleet regressions that only
+show up on the real path.
+
+Universe B never defaults to daily `:13705` — the suite refuses that port.
+Attaching to a running daily daemon (`make test-live-suite`, chat-smoke*)
+is intentional-only, not routine.
+
 ```bash
 make test         # All: Go + web hermetic (Node) + Playwright UI (hermetic)
 make test-go      # go test ./...
 make test-web     # node web/scripts/chat_events_test.js
 make test-ui      # Playwright perceptual chat UI (mocked WS)
 make test-ui-live # Same, against a running jevonsd
+make test-journey # Isolated owner-chat + orchestration journeys (Universe B; needs Grok)
+make test-live-suite  # Attaches to running daemon (often A — intentional only)
 make bullseye     # Standing invariants: build, test, vet, clean tree
 ```
 
@@ -62,6 +92,10 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   separate files.
 - Convergence targets live in `bullseye.yaml` (🎯Tn); target lifecycle
   rides the PR that changes it.
+- Voice targets (anything under 🎯T21/T22/T28) are gated on the 🎯T37
+  decision — don't resume voice work without it.
+- The `jevons` overseer prompt is embedded in `cmd/jevonsd/main.go` until
+  🎯T44 externalizes it; treat it as config-in-code when editing.
 - **Fleet spawn (🎯T78):** child implementation work uses Jevons fleet
   agents (`jevons_agent_start` / durable threads), **not** Grok
   `spawn_subagent` / worktree children that die with the parent and never
@@ -78,7 +112,7 @@ jevons/
 │                         # cost, auth, discovery, transcript, cli
 ├── web/                  # Canonical web UI (served by jevonsd)
 ├── ios/Jevon/            # iOS thin client (WKWebView + pigeon)
-├── scripts/              # chat-smoke, chat-ui-test, browser-loop-test
+├── scripts/              # journey-suite, chat-smoke, chat-ui-test, …
 ├── docs/                 # charter, architecture-current, design docs
 └── bullseye.yaml         # Intent ledger
 ```

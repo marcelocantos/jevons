@@ -5,6 +5,7 @@ package thread
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,5 +175,24 @@ func TestDeriveStatus(t *testing.T) {
 				t.Fatal("summary should never be empty")
 			}
 		})
+	}
+}
+
+// 🎯T33: integrity findings surface on DeriveStatus for list/status.
+func TestDeriveStatusIntegrityFlag(t *testing.T) {
+	now := time.Now()
+	half := "this is a long enough prompt body"
+	dup := half + half
+	st := DeriveStatus(StatusInput{
+		Entries: []transcript.Entry{
+			{Type: "user", Role: "user", IsUserTurn: true, Text: dup, Timestamp: now},
+		},
+		Now: now,
+	})
+	if len(st.Integrity) == 0 {
+		t.Fatal("expected integrity issues on doubled user turn")
+	}
+	if !strings.Contains(st.Summary, "integrity") {
+		t.Fatalf("summary should flag integrity: %q", st.Summary)
 	}
 }

@@ -92,6 +92,9 @@ type Server struct {
 	notifyQueue    []string
 	notifyDraining bool
 	notifySender   func(string) error
+
+	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
+	agentsWatchCancel context.CancelFunc
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -238,6 +241,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
 	mux.HandleFunc("/ws/voice", s.handleVoice)
+	s.registerImageRoutes(mux)
+	s.registerSelfTestRoutes(mux)
 }
 
 func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {

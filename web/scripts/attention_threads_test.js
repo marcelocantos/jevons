@@ -31,6 +31,136 @@ test('parsePrefix is case-insensitive and strips prefix', function () {
   const c = AT.parsePrefix('no prefix here');
   assert.strictEqual(c.command, null);
   assert.strictEqual(c.body, 'no prefix here');
+  const d = AT.parsePrefix('target: virtualise history');
+  assert.strictEqual(d.command, 'target');
+  assert.strictEqual(d.body, 'virtualise history');
+});
+
+test('target: opens file-target aside, wire, main focus (T93/T95)', function () {
+  const r = AT.handleComposer(AT.emptyState(), 'target: Chat paste images work');
+  assert.strictEqual(r.kind, 'send');
+  assert.strictEqual(r.purpose, 'file-target');
+  assert.ok(r.text.indexOf('[target-aside:') === 0);
+  assert.ok(r.text.indexOf('jevons_target_file') > 0);
+  assert.strictEqual(r.state.focusId, AT.MAIN_ID);
+  assert.strictEqual(r.state.threads[0].purpose, 'file-target');
+});
+
+test('detectTargetFiled + closeTargetAside dismisses filing aside (done, not parked)', function () {
+  const open = AT.handleComposer(AT.emptyState(), 'target: Foo bar');
+  const id = open.threadId;
+  assert.ok(id);
+  const filed = AT.detectTargetFiled('Filed 🎯T120 — Foo\n__TARGET_FILED__:T120\n');
+  assert.strictEqual(filed, 'T120');
+  const closed = AT.closeTargetAside(open.state, id);
+  assert.strictEqual(closed.threads[0].status, 'done');
+  assert.strictEqual(closed.focusId, AT.MAIN_ID);
+  // Default chrome excludes completed filing asides (🎯T95.1).
+  assert.strictEqual(AT.stack(closed).length, 0);
+  // Archive still lists them for discoverability.
+  const arch = AT.archive(closed);
+  assert.strictEqual(arch.length, 1);
+  assert.strictEqual(arch[0].id, id);
+  assert.strictEqual(arch[0].status, 'done');
+});
+
+test('closeTargetAside without id closes most recent open file-target', function () {
+  let s = AT.handleComposer(AT.emptyState(), 'target: First filing').state;
+  s = AT.handleComposer(s, 'target: Second filing').state;
+  const closed = AT.closeTargetAside(s); // most recent open file-target
+  const second = closed.threads.find(function (t) { return t.body === 'Second filing'; });
+  const first = closed.threads.find(function (t) { return t.body === 'First filing'; });
+  assert.strictEqual(second.status, 'done');
+  assert.strictEqual(first.status, 'open');
+  assert.strictEqual(AT.stack(closed).length, 1);
+  assert.strictEqual(AT.archive(closed).length, 1);
+});
+
+test('general dismiss: done leaves chrome, stays in archive', function () {
+  const cap = AT.handleComposer(AT.emptyState(), 'aside: billing nit');
+  const id = cap.threadId;
+  const done = AT.dismiss(cap.state, id);
+  assert.strictEqual(done.threads[0].status, 'done');
+  assert.strictEqual(done.focusId, AT.MAIN_ID);
+  assert.strictEqual(AT.stack(done).length, 0);
+  assert.strictEqual(AT.archive(done).length, 1);
+  assert.strictEqual(AT.archivedStack(done)[0].id, id);
+});
+
+test('manual park still appears in default stack (not done)', function () {
+  let s = AT.handleComposer(AT.emptyState(), 'capture: Workstream').state;
+  const id = s.threads[0].id;
+  s = AT.park(s, id);
+  assert.strictEqual(s.threads[0].status, 'parked');
+  const st = AT.stack(s);
+  assert.strictEqual(st.length, 1);
+  assert.strictEqual(st[0].status, 'parked');
+  assert.strictEqual(AT.archive(s).length, 0);
+});
+
+test('serialize/deserialize preserves done status', function () {
+  let s = AT.handleComposer(AT.emptyState(), 'target: Persist done').state;
+  s = AT.closeTargetAside(s, s.threads[0].id);
+  const again = AT.deserialize(AT.serialize(s));
+  assert.strictEqual(again.threads[0].status, 'done');
+  assert.strictEqual(AT.stack(again).length, 0);
+  assert.strictEqual(AT.archive(again).length, 1);
+  // Legacy "archived" alias normalizes to done.
+  const legacy = AT.deserialize(JSON.stringify({
+    focusId: 'main',
+    threads: [{ id: 'att-x', title: 'X', body: 'X', status: 'archived', purpose: '', createdAt: 1, updatedAt: 1 }],
+  }));
+  assert.strictEqual(legacy.threads[0].status, 'done');
+});
+
+test('load migrates legacy parked file-target → done (not manual park)', function () {
+  // Pre-T95.1 localStorage: auto-close parked the filing aside.
+  const raw = JSON.stringify({
+    focusId: AT.MAIN_ID,
+    threads: [
+      {
+        id: 'att-file-old',
+        title: 'T113 filing',
+        body: 'target: something',
+        status: 'parked',
+        purpose: 'file-target',
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      {
+        id: 'att-work',
+        title: 'real workstream',
+        body: 'still parked on purpose',
+        status: 'parked',
+        purpose: '',
+        createdAt: 3,
+        updatedAt: 4,
+      },
+    ],
+  });
+  const store = {};
+  store[AT.STORAGE_KEY || 'jevons-attention-threads-v1'] = raw;
+  const storage = {
+    getItem: function (k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+    setItem: function (k, v) { store[k] = String(v); },
+  };
+  const loaded = AT.load(storage);
+  const filing = loaded.threads.find(function (t) { return t.id === 'att-file-old'; });
+  const work = loaded.threads.find(function (t) { return t.id === 'att-work'; });
+  assert.ok(filing);
+  assert.ok(work);
+  assert.strictEqual(filing.status, 'done');
+  assert.strictEqual(filing.purpose, 'file-target');
+  assert.strictEqual(work.status, 'parked');
+  // Default chrome: only intentional park remains.
+  const st = AT.stack(loaded);
+  assert.strictEqual(st.length, 1);
+  assert.strictEqual(st[0].id, 'att-work');
+  assert.strictEqual(AT.archive(loaded).length, 1);
+  assert.strictEqual(AT.archive(loaded)[0].id, 'att-file-old');
+  // deserialize alone (same migration path)
+  const d = AT.deserialize(raw);
+  assert.strictEqual(d.threads.find(function (t) { return t.id === 'att-file-old'; }).status, 'done');
 });
 
 test('aside: sends routed wire text and keeps main focus', function () {

@@ -5,12 +5,15 @@
 // (🎯T55/T57/T66/T77). Serves the static web/ UI, drives addMsg() and the
 // streaming append/seal path with short + huge content for both roles, and
 // asserts the WORK is bounded, not just the visuals:
-//   * a huge bubble renders only a PREVIEW (~14 lines) up front — its
+//   * tallness = rendered full height > 1.5 × collapsed-preview height
+//     (not char/line proxies)
+//   * a tall non-latest bubble renders only a PREVIEW (~14 lines) — its
 //     .msg-body node/text count is a small fraction of the full content
 //   * it grows a .msg-expand toggle; clicking renders the FULL content
 //     lazily (node count jumps to the full size), and re-collapses
 //   * a short bubble renders in full with no toggle
-//   * T66: latest oversized assistant starts expanded (incl. small→large stream)
+//   * T66: latest request/response stay expanded when tall (incl. stream
+//     that grows short→tall)
 //   * T77: when either role ceases to be latest, auto-expand reverts to preview
 // Screenshots the collapsed and expanded states into artifacts/.
 //
@@ -69,6 +72,14 @@ function startStaticServer() {
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => typeof window.addMsg === 'function' && !!window.marked, null, { timeout: 10000 });
+    // Collapse asserts structural DOM on all bubbles; stub virtualisation so
+    // T56 dematerialise cannot empty off-screen bodies mid-assert (virt is
+    // covered by virtual-list-test.js).
+    await page.evaluate(() => {
+      window.virtualizeMessages = function () {};
+      window.dematerializeMsg = function () {};
+      window.scheduleVirtualize = function () {};
+    });
 
     // ── Scenario A (T55/T57/T66): short + middle huge (both roles) + latest huge assistant ──
     // Build: short reply, a huge assistant list, a huge user block, then
@@ -141,10 +152,10 @@ function startStaticServer() {
 
     await page.screenshot({ path: path.join(OUT_DIR, 'collapse-expanded.png'), fullPage: true });
 
-    // ── Scenario B (T66 stream): small first chunk, grow past isLarge, seal ──
+    // ── Scenario B (T66 stream): small first chunk, grow until tall, seal ──
     // Simulates live assistant streaming: first frame is tiny, so the early
     // scheduleLatestExpansion must not lock the bubble as permanently
-    // non-expanded when it later qualifies.
+    // non-expanded when it later measures tall enough to collapse.
     await page.evaluate(() => {
       document.getElementById('messages').innerHTML = '';
       // Reset module-level latest tracking by driving through the real APIs.
@@ -280,6 +291,6 @@ function startStaticServer() {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - oversized content: bounded preview, lazy expand, T66 latest assistant expanded (incl. stream), T77 both roles collapse when non-latest');
+  console.log('ok - height-ratio collapse (full > 1.5× preview), T66 latest request/response stay expanded, T77 non-latest collapse');
   console.log('screenshots: artifacts/collapse-preview.png, artifacts/collapse-expanded.png');
 })();

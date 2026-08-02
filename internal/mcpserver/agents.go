@@ -36,10 +36,12 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent Grok agent in a repo/directory. Creates and registers it if new."),
+			mcp.WithDescription("Start a persistent Grok agent in a repo/directory. Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (e.g. 'tern', 'jevon-frontend')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
+			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
+			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 		),
 		s.handleAgentStart,
 	)
@@ -55,10 +57,19 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_stop",
-			mcp.WithDescription("Stop a running agent. It can be restarted later and will resume its session."),
+			mcp.WithDescription("Stop a running agent process only. The agent stays registered and can be started again (resume). Not the same as kill."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 		),
 		s.handleAgentStop,
+	)
+
+	s.mcpSrv.AddTool(
+		mcp.NewTool("jevons_agent_kill",
+			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister (subtree included)")),
+			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is requesting the kill). Overseer uses the overseer name (usually 'jevons').")),
+		),
+		s.handleAgentKill,
 	)
 }
 
@@ -71,9 +82,17 @@ func (s *Server) SetNotify(fn NotifyFunc) {
 }
 
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
+	// (and overseer notify), not only logs.
+	reps := SweepDeadAgents(s.registry, s.overseerName())
+	if len(reps) > 0 {
+		line := FormatDeadAgentReport(reps)
+		slog.Info(line)
+		s.notifyFleetHealth(line)
+	}
 	defs := s.registry.List()
 	if len(defs) == 0 {
-		return mcp.NewToolResultText("No agents registered."), nil
+		return mcp.NewToolResultText(PrependFleetHealth("No agents registered.", reps)), nil
 	}
 
 	var b strings.Builder
@@ -83,9 +102,30 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if proc != nil && proc.Alive() {
 			status = "running"
 		}
-		fmt.Fprintf(&b, "%-20s %-10s %s (session: %s)\n", d.Name, status, d.WorkDir, d.SessionID[:8])
+		parent := d.Parent
+		if parent == "" {
+			parent = "-"
+		}
+		fmt.Fprintf(&b, "%-20s %-10s parent=%-12s %s (session: %s)\n",
+			d.Name, status, parent, d.WorkDir, sessionDisplay(d.SessionID))
 	}
-	return mcp.NewToolResultText(b.String()), nil
+	return mcp.NewToolResultText(PrependFleetHealth(b.String(), reps)), nil
+}
+
+// notifyFleetHealth injects a fleet outage/recovery note into the overseer
+// when a notify hook is wired (live daemon). Tests may leave notify nil.
+func (s *Server) notifyFleetHealth(line string) {
+	if s == nil || line == "" {
+		return
+	}
+	s.mu.Lock()
+	fn := s.notifyJevon
+	s.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	// Distinct prefix so activity strip / overseer can treat as system note.
+	fn("[Fleet health] " + line)
 }
 
 func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -93,6 +133,8 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	name, _ := args["name"].(string)
 	workdir, _ := args["workdir"].(string)
 	model, _ := args["model"].(string)
+	actor, _ := args["actor"].(string)
+	parent, _ := args["parent"].(string)
 
 	if name == "" || workdir == "" {
 		return mcp.NewToolResultError("name and workdir are required"), nil
@@ -113,11 +155,31 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		workdir = home + workdir[1:]
 	}
 
-	def, err := s.registry.EnsureAgent(name, workdir, model, true)
+	// Lineage: parent defaults to actor, else overseer root.
+	if parent == "" {
+		parent = actor
+	}
+	if parent == "" {
+		parent = s.overseerName()
+	}
+	if parent == name {
+		return mcp.NewToolResultError("parent cannot equal agent name"), nil
+	}
+
+	existed := s.registry.Def(name) != nil
+	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
+	// Refresh copy after Ensure (Register may have stored a different pointer).
+	if d := s.registry.Def(name); d != nil {
+		def = d
+	}
 	def.Provider = cli.Provider
+	// Set parent only when minting or when legacy entry has empty parent.
+	if !existed || def.Parent == "" {
+		def.Parent = parent
+	}
 	if err := s.registry.Register(*def); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
@@ -130,7 +192,9 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	// Wire events: broadcast to web UI and notify Jevon on agent responses.
 	s.wireAgentEvents(name, proc)
 
-	return mcp.NewToolResultText(fmt.Sprintf("Agent %q started (session: %s, workdir: %s)", name, def.SessionID[:8], def.WorkDir)), nil
+	return mcp.NewToolResultText(fmt.Sprintf(
+		"Agent %q started (session: %s, workdir: %s, parent: %s)",
+		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent)), nil
 }
 
 func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -142,16 +206,69 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError("name and text are required"), nil
 	}
 
+	// 🎯T85: if the process died silently, sweep + rehydrate before fail;
+	// surface any recovery line on the tool result (not only logs).
+	var healthNote string
+	if s.registry != nil {
+		if reps := SweepDeadAgents(s.registry, s.overseerName()); len(reps) > 0 {
+			healthNote = FormatDeadAgentReport(reps)
+			slog.Info(healthNote)
+			s.notifyFleetHealth(healthNote)
+		}
+	}
+
 	proc := s.registry.Get(name)
+	rehydrated := false
 	if proc == nil || !proc.Alive() {
-		return mcp.NewToolResultError(fmt.Sprintf("agent %q is not running", name)), nil
+		// Last chance: Launch (rehydrate) then send — no silent drop.
+		if s.registry != nil && s.registry.Def(name) != nil {
+			p2, err := s.registry.Launch(name)
+			if err != nil {
+				errMsg := fmt.Sprintf("agent %q is not running and rehydrate failed: %v", name, err)
+				if healthNote != "" {
+					errMsg = healthNote + "; " + errMsg
+				}
+				return mcp.NewToolResultError(errMsg), nil
+			}
+			s.wireAgentEvents(name, p2)
+			proc = p2
+			rehydrated = true
+			slog.Info("agent send rehydrated dead/stopped process", "name", name)
+		} else {
+			errMsg := fmt.Sprintf("agent %q is not running", name)
+			if healthNote != "" {
+				errMsg = healthNote + "; " + errMsg
+			}
+			return mcp.NewToolResultError(errMsg), nil
+		}
+	}
+
+	// 🎯T104 under fan-out: first send carries standing local-delivery brief.
+	s.mu.Lock()
+	if s.fleetBriefed == nil {
+		s.fleetBriefed = map[string]bool{}
+	}
+	text, injected := EnsureFleetBrief(s.fleetBriefed, name, text)
+	s.mu.Unlock()
+	if injected {
+		slog.Info("fleet standing brief injected on first send", "name", name)
 	}
 
 	if err := proc.Send(text); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("send failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)), nil
+	msg := fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)
+	if injected {
+		msg += " (standing fleet brief T104/T78 prepended on first send)"
+	}
+	if rehydrated {
+		msg += " (rehydrated after dead/stopped process)"
+	}
+	if healthNote != "" {
+		msg += " [" + healthNote + "]"
+	}
+	return mcp.NewToolResultText(msg), nil
 }
 
 func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -162,7 +279,72 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 
 	s.registry.Stop(name)
-	return mcp.NewToolResultText(fmt.Sprintf("Agent %q stopped.", name)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Agent %q stopped (still registered; start again to resume).", name)), nil
+}
+
+func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	name, _ := args["name"].(string)
+	actor, _ := args["actor"].(string)
+	if name == "" {
+		return mcp.NewToolResultError("name is required"), nil
+	}
+	if s.registry == nil {
+		return mcp.NewToolResultError("agent registry not available"), nil
+	}
+	// Default actor for the overseer only when identity is proven via session;
+	// POs/bosses must always pass actor explicitly.
+	if actor == "" && s.transcript != nil && s.transcript.GetID != nil {
+		sid := s.transcript.GetID()
+		for _, d := range s.registry.List() {
+			if d.SessionID == sid {
+				actor = d.Name
+				break
+			}
+		}
+		if actor == "" {
+			actor = s.overseerName()
+		}
+	}
+	if err := canKill(s.registry, actor, name, s.isOverseerAgent); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	desc := s.registry.Descendants(name)
+	if err := killSubtree(s.registry, name); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", err)), nil
+	}
+	slog.Info("agent killed (removed from registry)", "name", name, "actor", actor, "descendants", len(desc))
+	msg := fmt.Sprintf(
+		"Agent %q killed by %q: process stopped and deregistered (will not auto-start; gone from agent list).",
+		name, actor,
+	)
+	if len(desc) > 0 {
+		msg += fmt.Sprintf(" Also killed %d descendant(s): %s.", len(desc), strings.Join(desc, ", "))
+	}
+	return mcp.NewToolResultText(msg), nil
+}
+
+// isOverseerAgent reports whether name is the owner-chat overseer.
+// Prefer session-id match via transcript ops; fall back to the conventional
+// overseer name used by default config.
+func (s *Server) isOverseerAgent(name string) bool {
+	if name == "" {
+		return false
+	}
+	if s.transcript != nil && s.transcript.GetID != nil {
+		sid := s.transcript.GetID()
+		if sid != "" {
+			if def := s.registry.Def(name); def != nil && def.SessionID == sid {
+				return true
+			}
+		}
+	}
+	return name == s.overseerName()
+}
+
+func (s *Server) overseerName() string {
+	// Conventional default; config overseer_name is almost always "jevons".
+	return "jevons"
 }
 
 // wireAgentEvents sets up the event handler for an agent process.

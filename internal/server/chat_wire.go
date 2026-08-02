@@ -181,23 +181,63 @@ func chatUserEcho(text string) string {
 // without a title, so the caller emits exactly one activity row per call
 // instead of a stack of indistinguishable "tool_use:" rows (🎯T63).
 func toolCallDetail(raw []byte) (name string, input map[string]any) {
-	// claudia re-marshals the ACP update into Event.Raw with the update
-	// object at top level (no JSON-RPC envelope) and, today, without
-	// rawInput — so we can surface the tool name (title) but not its args
-	// until claudia preserves rawInput. Still far better than "tool_use:".
+	// claudia re-marshals the ACP update into Event.Raw (update at top level
+	// or nested). Prefer title + rawInput/arguments when present (🎯T64).
 	var probe struct {
-		Update struct {
-			SessionUpdate string `json:"sessionUpdate"`
-			Title         string `json:"title"`
+		SessionUpdate string          `json:"sessionUpdate"`
+		Title         string          `json:"title"`
+		RawInput      json.RawMessage `json:"rawInput"`
+		Arguments     json.RawMessage `json:"arguments"`
+		Update        struct {
+			SessionUpdate string          `json:"sessionUpdate"`
+			Title         string          `json:"title"`
+			RawInput      json.RawMessage `json:"rawInput"`
+			Arguments     json.RawMessage `json:"arguments"`
 		} `json:"update"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return "", nil
 	}
-	if probe.Update.SessionUpdate != "tool_call" {
+	su := probe.Update.SessionUpdate
+	if su == "" {
+		su = probe.SessionUpdate
+	}
+	if su != "tool_call" {
 		return "", nil
 	}
-	return probe.Update.Title, nil
+	name = probe.Update.Title
+	if name == "" {
+		name = probe.Title
+	}
+	input = decodeToolInput(probe.Update.RawInput)
+	if input == nil {
+		input = decodeToolInput(probe.Update.Arguments)
+	}
+	if input == nil {
+		input = decodeToolInput(probe.RawInput)
+	}
+	if input == nil {
+		input = decodeToolInput(probe.Arguments)
+	}
+	return name, input
+}
+
+func decodeToolInput(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err == nil && len(m) > 0 {
+		return m
+	}
+	// Sometimes rawInput is a JSON string containing an object.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil && s != "" {
+		if err := json.Unmarshal([]byte(s), &m); err == nil && len(m) > 0 {
+			return m
+		}
+	}
+	return nil
 }
 
 // isClaudeShaped reports whether raw already carries a top-level "type"

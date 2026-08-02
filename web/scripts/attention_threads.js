@@ -4,8 +4,9 @@
 // Pure attention-thread model for human↔overseer chat (🎯T65).
 // DOM-free so Node hermetic tests can require() it.
 //
-// Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:
+// Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:, target:
 // Case-insensitive; strip prefix before routing. No button-primary API.
+// target: opens a short-lived filing aside (🎯T93/T95).
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -19,12 +20,18 @@
   const MAIN_ID = 'main';
   const STORAGE_KEY = 'jevons-attention-threads-v1';
 
+  // Thread lifecycle (🎯T95.1):
+  //   open    — active workstream / filing aside (default chrome)
+  //   parked  — owner deliberately parked; still shown as quiet chip
+  //   done    — completed/dismissed; archive only, not default chrome
+  // Legacy alias "archived" normalizes to done on clone/load.
+
   // Recognized composer prefixes (voice or type). Order irrelevant.
-  const COMMANDS = new Set(['aside', 'capture', 'park', 'main', 'pursue']);
+  const COMMANDS = new Set(['aside', 'capture', 'park', 'main', 'pursue', 'target']);
 
   // Leading command: optional whitespace, word, optional space, colon, rest.
-  // Matches "aside: foo", "ASIDE:foo", "capture : bar".
-  const PREFIX_RE = /^\s*(aside|capture|park|main|pursue)\s*:\s*/i;
+  // Matches "aside: foo", "ASIDE:foo", "capture : bar", "target: file this".
+  const PREFIX_RE = /^\s*(aside|capture|park|main|pursue|target)\s*:\s*/i;
 
   function now() {
     return Date.now();
@@ -32,6 +39,27 @@
 
   function newId() {
     return 'att-' + now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  }
+
+  // Normalize status for clone/serialize. Unknown → open.
+  function normalizeStatus(status) {
+    if (status === 'parked') return 'parked';
+    if (status === 'done' || status === 'archived') return 'done';
+    return 'open';
+  }
+
+  // 🎯T95.1 migrate: legacy auto-close used park() for file-target asides.
+  // Those are completed filings, not intentional T65 parks — treat as done so
+  // they leave default chrome after refresh (localStorage still has parked).
+  function migrateThreadStatus(purpose, status) {
+    const st = normalizeStatus(status);
+    if (purpose === 'file-target' && st === 'parked') return 'done';
+    return st;
+  }
+
+  function isChromeVisible(status) {
+    // Default attention bar: open + intentionally parked only.
+    return status === 'open' || status === 'parked';
   }
 
   function titleFromBody(body) {
@@ -74,7 +102,8 @@
           id: t.id,
           title: t.title,
           body: t.body,
-          status: t.status === 'parked' ? 'parked' : 'open',
+          status: normalizeStatus(t.status),
+          purpose: t.purpose === 'file-target' ? 'file-target' : (t.purpose || ''),
           createdAt: t.createdAt,
           updatedAt: t.updatedAt,
         };
@@ -122,11 +151,78 @@
       title: titleFromBody(text),
       body: text,
       status: 'open',
+      purpose: '',
       createdAt: ts,
       updatedAt: ts,
     });
     s.focusId = MAIN_ID;
     return { state: s, id: id };
+  }
+
+  // openTargetAside: purpose-bound filing thread (🎯T95). Focus stays main
+  // so the owner is not forced into a multi-day attention workstream.
+  function openTargetAside(state, body) {
+    const text = String(body || '').trim();
+    if (!text) return null;
+    const s = clone(state || emptyState());
+    const id = newId();
+    const ts = now();
+    s.threads.unshift({
+      id: id,
+      title: titleFromBody(text),
+      body: text,
+      status: 'open',
+      purpose: 'file-target',
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    s.focusId = MAIN_ID;
+    return { state: s, id: id };
+  }
+
+  // dismiss: mark aside done — leaves default chrome, stays in archive (🎯T95.1).
+  // Focus returns to main if the dismissed thread was focused.
+  function dismiss(state, id) {
+    const s = clone(state || emptyState());
+    const t = findThread(s, id);
+    if (!t) return s;
+    t.status = 'done';
+    t.updatedAt = now();
+    if (s.focusId === id) s.focusId = MAIN_ID;
+    return s;
+  }
+
+  // closeTargetAside: auto-close after successful 🎯 file (or explicit).
+  // Close = dismiss from chrome + focus main — not park-and-still-show (🎯T95/T95.1).
+  // If id omitted, closes the most recent open file-target aside.
+  function closeTargetAside(state, id) {
+    const s = clone(state || emptyState());
+    let target = null;
+    if (id) {
+      target = findThread(s, id);
+    } else {
+      target = (s.threads || []).find(function (t) {
+        return t.purpose === 'file-target' && t.status === 'open';
+      }) || null;
+    }
+    if (!target || target.purpose !== 'file-target') return s;
+    return dismiss(s, target.id);
+  }
+
+  // Wire text for target: asides — overseer must clarify if needed, file
+  // via jevons_target_file, then emit __TARGET_FILED__:Tn confirmation.
+  function formatTargetWire(id, title, body) {
+    const t = String(title || 'target').replace(/[\[\]]/g, '');
+    return '[target-aside: ' + id + ' | ' + t + ']\n' + String(body || '').trim() +
+      '\n\n(Ceremony: short-lived target filing aside. Clarify acceptance if needed, ' +
+      'file with jevons_target_file, confirm 🎯 id. Include __TARGET_FILED__:Tn on success.)';
+  }
+
+  // detectTargetFiled: parse overseer/tool text for __TARGET_FILED__:Tn.
+  function detectTargetFiled(text) {
+    const m = String(text || '').match(/__TARGET_FILED__\s*:\s*(T[0-9]+(?:\.[0-9]+)?)/i);
+    if (!m) return null;
+    return m[1].toUpperCase().replace(/^T/, 'T'); // normalize T prefix
   }
 
   function park(state, id) {
@@ -144,7 +240,9 @@
     const q = String(query || '').trim().toLowerCase();
     let target = null;
     if (q) {
+      // Prefer chrome-visible matches; do not re-park archive entries by title.
       target = (s.threads || []).find(function (t) {
+        if (!isChromeVisible(t.status)) return false;
         return (t.title || '').toLowerCase().indexOf(q) !== -1 ||
           (t.body || '').toLowerCase().indexOf(q) !== -1;
       }) || null;
@@ -152,9 +250,9 @@
       target = findThread(s, s.focusId);
     } else {
       // No query + main focus: park most recent open thread.
-      target = (s.threads || []).find(function (t) { return t.status !== 'parked'; }) || null;
+      target = (s.threads || []).find(function (t) { return t.status === 'open'; }) || null;
     }
-    if (!target) return s;
+    if (!target || target.status === 'done') return s;
     return park(s, target.id);
   }
 
@@ -162,6 +260,7 @@
     const s = clone(state || emptyState());
     const t = findThread(s, id);
     if (!t) return s;
+    // Re-open parked or archived workstreams when the owner pursues them.
     t.status = 'open';
     t.updatedAt = now();
     s.focusId = id;
@@ -197,16 +296,30 @@
     return s;
   }
 
-  // stack: open first, then parked; main is not listed.
+  // stack: default attention chrome — open first, then intentionally parked.
+  // Completed (done) asides are excluded (🎯T95.1); use archive() for those.
   function stack(state) {
     const s = state || emptyState();
     const open = [];
     const parked = [];
     (s.threads || []).forEach(function (t) {
+      if (t.status === 'done') return;
       if (t.status === 'parked') parked.push(t);
       else open.push(t);
     });
     return open.concat(parked);
+  }
+
+  // archive / archivedStack: discoverable history of completed asides.
+  function archive(state) {
+    const s = state || emptyState();
+    return (s.threads || []).filter(function (t) {
+      return t.status === 'done';
+    });
+  }
+
+  function archivedStack(state) {
+    return archive(state);
   }
 
   function formatAsideWire(id, title, body) {
@@ -307,6 +420,26 @@
       };
     }
 
+    // target: short-lived filing aside (🎯T93/T95) — not a general T65 workstream.
+    if (parsed.command === 'target') {
+      if (!bodyTrim) {
+        return { kind: 'empty', text: '', state: s0, clearComposer: false, composerBody: null };
+      }
+      const cap = openTargetAside(s0, bodyTrim);
+      const t = findThread(cap.state, cap.id);
+      const wire = formatTargetWire(cap.id, t ? t.title : titleFromBody(bodyTrim), bodyTrim);
+      return {
+        kind: 'send',
+        text: wire,
+        state: cap.state,
+        clearComposer: true,
+        composerBody: '',
+        routed: true,
+        threadId: cap.id,
+        purpose: 'file-target',
+      };
+    }
+
     // No command prefix.
     const text = bodyTrim;
     if (!text) {
@@ -385,11 +518,13 @@
         s.threads = parsed.threads
           .filter(function (t) { return t && t.id; })
           .map(function (t) {
+            const purpose = t.purpose === 'file-target' ? 'file-target' : '';
             return {
               id: String(t.id),
               title: String(t.title || 'Untitled'),
               body: String(t.body || ''),
-              status: t.status === 'parked' ? 'parked' : 'open',
+              status: migrateThreadStatus(purpose, t.status),
+              purpose: purpose,
               createdAt: Number(t.createdAt) || now(),
               updatedAt: Number(t.updatedAt) || now(),
             };
@@ -432,6 +567,11 @@
     isMainFocus: isMainFocus,
     parsePrefix: parsePrefix,
     capture: capture,
+    openTargetAside: openTargetAside,
+    dismiss: dismiss,
+    closeTargetAside: closeTargetAside,
+    formatTargetWire: formatTargetWire,
+    detectTargetFiled: detectTargetFiled,
     park: park,
     parkByQuery: parkByQuery,
     pursue: pursue,
@@ -439,6 +579,10 @@
     focusMain: focusMain,
     updateActiveBody: updateActiveBody,
     stack: stack,
+    archive: archive,
+    archivedStack: archivedStack,
+    normalizeStatus: normalizeStatus,
+    isChromeVisible: isChromeVisible,
     handleComposer: handleComposer,
     prepareSend: prepareSend,
     formatAsideWire: formatAsideWire,

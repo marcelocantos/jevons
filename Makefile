@@ -50,15 +50,26 @@ test-go:
 test-web:
 	node web/scripts/chat_events_test.js
 	node web/scripts/attention_threads_test.js
+	node web/scripts/virtual_list_test.js
+	node web/scripts/thread_route_test.js
+	node web/scripts/layout_probe_test.js
+	node web/scripts/composer_layout_test.js
+	node web/scripts/send_queue_test.js
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright
 # from scripts/browser-loop-test). Live: make test-ui-live.
 test-ui:
 	node scripts/chat-ui-test/test.js
 	node scripts/chat-ui-test/collapse-test.js
+	node scripts/chat-ui-test/stream-scroll-test.js
+	node scripts/chat-ui-test/fleet-tree-test.js
+	node scripts/chat-ui-test/attention-ui-test.js
+	node scripts/chat-ui-test/batch-t109-test.js
 	node scripts/chat-ui-test/infinite-scroll-test.js
 	node scripts/chat-ui-test/mermaid-test.js
 	node scripts/chat-ui-test/agent-note-test.js
+	node scripts/chat-ui-test/virtual-list-test.js
+	node scripts/chat-ui-test/image-paste-test.js
 
 .PHONY: test-ui-live
 test-ui-live:
@@ -67,9 +78,16 @@ test-ui-live:
 # Live scenario suite (🎯T51): drives a RUNNING jevonsd through the
 # owner flows. Deterministic tier only by default; see scripts/live-suite
 # flags for the overseer/spawn/restart/rewind scenarios.
+# WARNING: defaults to your daily :13705 / ~/.jevons — prefer test-journey.
 .PHONY: test-live-suite
 test-live-suite:
 	go run ./scripts/live-suite -skip-overseer
+
+# Isolated owner-chat user journeys (separate port + state dir + MCP name).
+# Does NOT touch daily-driver stream. Needs Grok CLI; not in default `test`.
+.PHONY: test-journey
+test-journey: jevonsd
+	go run ./scripts/journey-suite
 
 test: test-go test-web test-ui
 

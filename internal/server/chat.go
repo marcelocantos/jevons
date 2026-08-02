@@ -256,6 +256,16 @@ func (s *Server) SetRegistry(reg *claudia.Registry) {
 	s.registry = reg
 }
 
+// NotifyAgentsChanged pushes a non-journaled live frame so the RHS fleet
+// panel refreshes without waiting on poll (🎯T82). Safe from any goroutine.
+func (s *Server) NotifyAgentsChanged() {
+	payload, err := json.Marshal(map[string]any{"type": "agents_changed"})
+	if err != nil {
+		return
+	}
+	s.broadcastChatLive(string(payload))
+}
+
 // GetAgent looks up a worker by name in the registry. Returns nil if
 // no registry is attached or no such name is registered (or the
 // registered agent has not been launched yet).
@@ -283,9 +293,8 @@ func (s *Server) RegistryAgents() []claudia.AgentDef {
 
 // agentInfo is the GET /api/agents JSON row consumed by the RHS fleet panel.
 // 🎯T72.1: completeness is a server feed concern — every registry agent
-// (durable or ephemeral child) must appear while registered. Parent is
-// reserved for 🎯T68 tree layout once the registry exposes lineage;
-// claudia AgentDef currently has no Parent field, so it stays empty.
+// (durable or ephemeral child) must appear while registered. Parent comes
+// from claudia AgentDef lineage (kill auth / 🎯T68 tree).
 type agentInfo struct {
 	Name    string `json:"name"`
 	WorkDir string `json:"workdir"`
@@ -298,9 +307,43 @@ type agentInfo struct {
 // map. No filtering by AutoStart or top-level name — PO-spawned children
 // and other ephemeral fleet entries appear while they remain registered.
 // Order is name-sorted so polls do not reshuffle solely from map iteration.
+//
+// 🎯T85: before listing, clear/rehydrate dead process handles so the panel
+// never shows a zombie "running" hope for a silently dead worker. When any
+// recovery runs, NotifyAgentsChanged pushes a live frame so the UI refreshes
+// immediately (not only on the next poll).
 func listFleetAgents(reg *claudia.Registry) []agentInfo {
+	return listFleetAgentsNotifying(reg, nil)
+}
+
+// listFleetAgentsNotifying is the same feed with an optional notify hook for
+// recovery events (server wires agents_changed). Used by hermetic tests with
+// notify=nil.
+func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string)) []agentInfo {
 	if reg == nil {
 		return []agentInfo{}
+	}
+	var recovered []string
+	// Inline silent-death policy (same as mcpserver.deadRecoveryPlan) so the
+	// HTTP feed path does not import mcpserver (cycle). Keep in sync.
+	for _, d := range reg.List() {
+		proc := reg.Get(d.Name)
+		if proc == nil || proc.Alive() {
+			continue
+		}
+		if d.AutoStart {
+			if _, err := reg.Launch(d.Name); err != nil {
+				reg.Stop(d.Name)
+			} else {
+				recovered = append(recovered, d.Name)
+			}
+		} else {
+			reg.Stop(d.Name)
+			recovered = append(recovered, d.Name) // cleared → stopped, still surface
+		}
+	}
+	if len(recovered) > 0 && onRecovered != nil {
+		onRecovered(recovered)
 	}
 	defs := reg.List()
 	agents := make([]agentInfo, 0, len(defs))
@@ -312,6 +355,7 @@ func listFleetAgents(reg *claudia.Registry) []agentInfo {
 		agents = append(agents, agentInfo{
 			Name:    d.Name,
 			WorkDir: d.WorkDir,
+			Parent:  d.Parent,
 			Status:  status,
 		})
 	}
@@ -322,6 +366,7 @@ func listFleetAgents(reg *claudia.Registry) []agentInfo {
 }
 
 // handleListAgents returns all registered fleet agents with status (🎯T72.1).
+// 🎯T85: recovery during list triggers agents_changed so the RHS updates.
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	reg := s.registry
@@ -332,7 +377,11 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]agentInfo{})
 		return
 	}
-	_ = json.NewEncoder(w).Encode(listFleetAgents(reg))
+	agents := listFleetAgentsNotifying(reg, func(names []string) {
+		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
+		s.NotifyAgentsChanged()
+	})
+	_ = json.NewEncoder(w).Encode(agents)
 }
 
 // handleChat is a direct WebSocket ↔ Claude PTY bridge.

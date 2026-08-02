@@ -53,6 +53,8 @@ type Status struct {
 	Summary      string    `json:"summary"`       // one-line recent-activity summary
 	LastActivity time.Time `json:"last_activity"` // timestamp of the newest entry
 	ProcessUp    bool      `json:"process_up"`    // butler owns a live process for it
+	// Integrity issues from transcript.CheckUserTurns (🎯T33). Empty when clean.
+	Integrity []transcript.IntegrityIssue `json:"integrity,omitempty"`
 }
 
 // StatusInput carries everything DeriveStatus needs. It is a pure
@@ -82,9 +84,15 @@ func DeriveStatus(in StatusInput) Status {
 		threshold = DefaultIdleThreshold
 	}
 
+	// 🎯T33: always attach decidable integrity findings for butler list/status.
+	integrity := transcript.CheckUserTurns(in.Entries)
+
 	last, ok := lastMeaningful(in.Entries)
 	if !ok {
-		return Status{State: StateIdle, Summary: "no transcript activity", ProcessUp: in.ProcessUp}
+		return Status{
+			State: StateIdle, Summary: "no transcript activity", ProcessUp: in.ProcessUp,
+			Integrity: integrity,
+		}
 	}
 
 	lastActivity := last.Timestamp
@@ -97,7 +105,7 @@ func DeriveStatus(in StatusInput) Status {
 		recent = true
 	}
 
-	st := Status{LastActivity: lastActivity, ProcessUp: in.ProcessUp}
+	st := Status{LastActivity: lastActivity, ProcessUp: in.ProcessUp, Integrity: integrity}
 
 	switch {
 	case in.ExternallyActive:
@@ -119,6 +127,10 @@ func DeriveStatus(in StatusInput) Status {
 	}
 
 	st.Summary = summarise(in.Entries, st.State, in.Now, lastActivity)
+	if len(integrity) > 0 {
+		// Live thread-health signal for list/status (🎯T33).
+		st.Summary = "⚠ integrity: " + string(integrity[0].Kind) + " — " + st.Summary
+	}
 	return st
 }
 

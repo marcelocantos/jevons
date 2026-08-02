@@ -34,8 +34,8 @@ func TestListFleetAgentsIncludesEphemeralChildren(t *testing.T) {
 	// Top-level durable + PO-spawned ephemeral child (AutoStart false).
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Provider: "grok", AutoStart: true},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Provider: "grok", AutoStart: true},
-		{Name: "jv-ephemeral-child", WorkDir: dir, SessionID: "s-c", Provider: "grok", AutoStart: false},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Provider: "grok", AutoStart: true, Parent: "jevons"},
+		{Name: "jv-ephemeral-child", WorkDir: dir, SessionID: "s-c", Provider: "grok", AutoStart: false, Parent: "jevons-po"},
 	} {
 		if err := reg.Register(d); err != nil {
 			t.Fatal(err)
@@ -60,6 +60,13 @@ func TestListFleetAgentsIncludesEphemeralChildren(t *testing.T) {
 	}
 	if byName["jv-ephemeral-child"].WorkDir != dir {
 		t.Fatalf("child workdir=%q", byName["jv-ephemeral-child"].WorkDir)
+	}
+	// 🎯T68/T72.1: parent lineage is part of the feed for tree rendering.
+	if byName["jevons-po"].Parent != "jevons" {
+		t.Fatalf("po parent=%q want jevons", byName["jevons-po"].Parent)
+	}
+	if byName["jv-ephemeral-child"].Parent != "jevons-po" {
+		t.Fatalf("child parent=%q want jevons-po", byName["jv-ephemeral-child"].Parent)
 	}
 }
 

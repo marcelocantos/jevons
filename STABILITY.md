@@ -49,6 +49,7 @@ thread model and `jwork` are the only worker lifecycles.
 | `jevons_agent_start` | `name, workdir, model?` | Fluid |
 | `jevons_agent_send` | `name, text` | Fluid — async fire-and-forget since v0.3.0 |
 | `jevons_agent_stop` | `name` | Fluid |
+| `jevons_agent_kill` | `name` | Fluid |
 | `jevons_active_work` | `hours?, include_clean?` | Fluid — new in v0.4.0, cross-repo work dashboard |
 | `jwork` | `task, repo?, model?` | Fluid — new in v0.4.0, on-demand worker dispatch |
 | `jevons_transcript_read` | `session?, limit?` | Fluid — new in v0.3.0, reads Jevon conversation history |
