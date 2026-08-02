@@ -666,6 +666,67 @@ let turnDetails = null;
 let turnItems = null;
 let turnCount = 0;
 
+// ── History replay scroll suppress (reload + soft reconnect) ─────────
+// WS replays recent turns chronologically; stick-to-bottom per message
+// causes a scroll parade. Suppress pin during the burst; one pin after
+// history_meta (or idle end). Progressive hydrate still preserves viewport.
+let historyReplayActive = false;
+let historyReplayIdleTimer = 0;
+// Declared early so beginHistoryReplay can cancel a pending pin.
+let _scrollRaf = 0;
+
+function beginHistoryReplay() {
+  historyReplayActive = true;
+  if (_scrollRaf) { cancelAnimationFrame(_scrollRaf); _scrollRaf = 0; }
+  armHistoryReplayIdleEnd();
+}
+
+function armHistoryReplayIdleEnd() {
+  if (!historyReplayActive) return;
+  if (historyReplayIdleTimer) clearTimeout(historyReplayIdleTimer);
+  const ms = (typeof VirtualList !== 'undefined' && VirtualList.REPLAY_IDLE_END_MS) || 150;
+  historyReplayIdleTimer = setTimeout(function () {
+    historyReplayIdleTimer = 0;
+    endHistoryReplayAndPin('idle');
+  }, ms);
+}
+
+function endHistoryReplayAndPin(reason) {
+  if (!historyReplayActive) return;
+  historyReplayActive = false;
+  if (historyReplayIdleTimer) { clearTimeout(historyReplayIdleTimer); historyReplayIdleTimer = 0; }
+  if (_scrollRaf) { cancelAnimationFrame(_scrollRaf); _scrollRaf = 0; }
+  // One pin to live end — no per-message chase.
+  enterTrackBottom();
+  _pinningScroll = true;
+  beginScrollBookkeeping();
+  try {
+    const top = (typeof VirtualList !== 'undefined' && VirtualList.finalPinScrollTop)
+      ? VirtualList.finalPinScrollTop(msgs.scrollHeight, msgs.clientHeight)
+      : Math.max(0, msgs.scrollHeight - msgs.clientHeight);
+    msgs.scrollTop = top;
+    noteScrollMetrics();
+  } finally {
+    _pinningScroll = false;
+    endScrollBookkeeping();
+  }
+  scheduleVirtualize();
+  updateJumpFab();
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('replay_pin', {
+      reason: reason || 'end',
+      corr: pageCorr,
+    }));
+  }
+}
+window.beginHistoryReplay = beginHistoryReplay;
+window.endHistoryReplayAndPin = endHistoryReplayAndPin;
+Object.defineProperty(window, 'historyReplayActive', {
+  configurable: true,
+  get() { return historyReplayActive; },
+  set(v) { historyReplayActive = !!v; },
+});
+
 // Wire transport callbacks.
 transport.onOpen = () => {
   const v = input.value;
@@ -678,6 +739,8 @@ transport.onOpen = () => {
     // Fresh size cache after reconnect wipe (shells gone).
     for (const k of Object.keys(virtSizeCache)) delete virtSizeCache[k];
   }
+  // Suppress stick-to-bottom until recent WS replay finishes (🎯T119.1).
+  beginHistoryReplay();
   updateJumpFab();
   input.value = v;
   // 🎯T120.4: reconnect is a lifecycle event (same pageCorr across reconnects).
@@ -707,6 +770,8 @@ function handle(m) {
   // while pages are outstanding (does not gate the progressive fetch).
   if (typ === 'history_meta') {
     oldestIndex = m.start || 0;
+    // End chronological WS replay burst — one pin, then optional progressive hydrate.
+    endHistoryReplayAndPin('history_meta');
     // 🎯T120.4: progressive hydrate start (corr-linked).
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_start', {
@@ -724,6 +789,8 @@ function handle(m) {
     }
     return;
   }
+  // During WS replay burst, keep extending idle-end until frames stop.
+  if (historyReplayActive) armHistoryReplayIdleEnd();
 
   // 🎯T82: registry file changed — refresh RHS fleet immediately (poll is fallback).
   if (typ === 'agents_changed') {
@@ -1015,7 +1082,9 @@ function addMsg(role, text, when) {
   msgs.appendChild(d);
   layoutMsg(d);
   scheduleLatestExpansion();
-  scrollDownThrottled();
+  // 🎯T119.1: extend replay idle-end while burst continues via addMsg too.
+  if (historyReplayActive) armHistoryReplayIdleEnd();
+  scrollDownThrottled(); // no-op while historyReplayActive
   return d;
 }
 
@@ -2537,12 +2606,15 @@ window.setupInfiniteScroll = setupInfiniteScroll;
 window.loadEarlier = loadEarlier;
 
 // Actuator: pin only while Tracking; re-check before every pin (incl. rAF).
+// 🎯T119.1: no-op during history replay burst (suppress parade).
 function scrollDown() {
+  if (historyReplayActive) return;
+  if (typeof VirtualList !== 'undefined' && VirtualList.shouldSuppressPinDuringReplay(historyReplayActive)) return;
   if (!isTracking()) return;
   _pinningScroll = true;
   beginScrollBookkeeping();
   const pin = () => {
-    if (!isTracking()) return;
+    if (historyReplayActive || !isTracking()) return;
     msgs.scrollTop = msgs.scrollHeight;
     noteScrollMetrics();
   };
@@ -2560,9 +2632,10 @@ function scrollDown() {
 window.scrollDown = scrollDown;
 // scrollDownThrottled coalesces scroll requests to one per animation
 // frame, so a burst replay of many messages forces one layout, not one
-// per message (🎯T57).
-let _scrollRaf = 0;
+// per message (🎯T57). Still suppressed while historyReplayActive.
+// (_scrollRaf declared with historyReplayActive above.)
 function scrollDownThrottled() {
+  if (historyReplayActive) return;
   if (_scrollRaf) return;
   _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; scrollDown(); });
 }

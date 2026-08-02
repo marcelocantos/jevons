@@ -274,4 +274,28 @@ test('T119 estimate height for unmeasured shells (lazy)', function () {
   assert.ok(long <= 480);
 });
 
+// ── History replay pin suppress (reload/reconnect) ───────────────────
+
+test('T119.1 suppress pin during replay; final pin at bottom', function () {
+  assert.strictEqual(VL.shouldSuppressPinDuringReplay(true), true);
+  assert.strictEqual(VL.shouldSuppressPinDuringReplay(false), false);
+  assert.strictEqual(VL.finalPinScrollTop(1000, 300), 700);
+  assert.strictEqual(VL.finalPinScrollTop(100, 300), 0);
+  assert.ok(VL.REPLAY_IDLE_END_MS >= 50 && VL.REPLAY_IDLE_END_MS <= 500);
+});
+
+test('index.html wires historyReplayActive suppress on scrollDown', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('beginHistoryReplay') >= 0);
+  assert.ok(html.indexOf('endHistoryReplayAndPin') >= 0);
+  assert.ok(html.indexOf('historyReplayActive') >= 0);
+  assert.ok(/function scrollDown\(\)[\s\S]{0,200}historyReplayActive/.test(html),
+    'scrollDown checks historyReplayActive');
+  assert.ok(html.indexOf("endHistoryReplayAndPin('history_meta')") >= 0 ||
+    html.indexOf('endHistoryReplayAndPin("history_meta")') >= 0 ||
+    html.indexOf("endHistoryReplayAndPin('history_meta')") >= 0);
+});
+
 console.log(process.exitCode ? 'FAIL' : 'PASS virtual_list_test');

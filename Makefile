@@ -72,6 +72,7 @@ test-ui:
 	node scripts/chat-ui-test/attention-ui-test.js
 	node scripts/chat-ui-test/batch-t109-test.js
 	node scripts/chat-ui-test/infinite-scroll-test.js
+	node scripts/chat-ui-test/replay-scroll-test.js
 	node scripts/chat-ui-test/mermaid-test.js
 	node scripts/chat-ui-test/agent-note-test.js
 	node scripts/chat-ui-test/virtual-list-test.js

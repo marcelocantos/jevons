@@ -391,6 +391,23 @@
     ];
   }
 
+  // ── History replay scroll (reload / reconnect) ─────────────────────
+  // WS chronological replay must not stick-to-bottom per message (parade).
+  // Suppress pin while replayActive; one pin after history_meta / idle end.
+
+  const REPLAY_IDLE_END_MS = 150;
+
+  function shouldSuppressPinDuringReplay(replayActive) {
+    return !!replayActive;
+  }
+
+  // Final scrollTop after one pin to the live end.
+  function finalPinScrollTop(scrollHeight, clientHeight) {
+    const sh = Math.max(0, Number(scrollHeight) || 0);
+    const ch = Math.max(0, Number(clientHeight) || 0);
+    return Math.max(0, sh - ch);
+  }
+
   return {
     DEFAULT_BUFFER: DEFAULT_BUFFER,
     DEFAULT_ESTIMATE_HEIGHT: DEFAULT_ESTIMATE_HEIGHT,
@@ -433,5 +450,12 @@
     shouldInvalidateSizeCache: shouldInvalidateSizeCache,
     remeasureOrder: remeasureOrder,
     residencyDrivers: residencyDrivers,
+
+    // 🎯T119.1 / reload-reconnect: suppress stick-to-bottom during WS
+    // chronological replay; one pin after history_meta (or idle end).
+    shouldSuppressPinDuringReplay: shouldSuppressPinDuringReplay,
+    finalPinScrollTop: finalPinScrollTop,
+    // Idle end fallback ms if history_meta never arrives (empty log).
+    REPLAY_IDLE_END_MS: REPLAY_IDLE_END_MS,
   };
 }));
