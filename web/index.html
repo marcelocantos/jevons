@@ -327,26 +327,18 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
 #theme-toggle button:hover { color: var(--text-dim); }
 #theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
-#agents { flex: 1; overflow-y: auto; padding: 8px 12px; min-height: 80px; }
-#workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
-.worker-row { padding: 5px 6px; border-radius: 5px; margin-bottom: 2px; border: 1px solid transparent; }
-.worker-row:hover { background: var(--surface-raised); }
-.worker-row .wr-head { display: flex; align-items: center; gap: 6px; }
-.worker-row .wr-id { font-family: var(--mono); font-size: 11px; color: var(--text); }
-.worker-row .wr-status { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
-.worker-row .wr-status.running { color: var(--green); }
-.worker-row .wr-status.completed { color: var(--text-dim); }
-.worker-row .wr-status.failed, .worker-row .wr-status.denied { color: var(--red, #f87171); }
-.worker-row .wr-task { color: var(--text-dim); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.worker-row .wr-meta { color: var(--text-muted); font-size: 10px; font-family: var(--mono); margin-top: 2px; }
-.worker-row .wr-out { color: var(--text-muted); font-size: 10px; margin-top: 2px; max-height: 3.2em; overflow: hidden; }
+#agents { flex: 1; overflow-y: auto; padding: 8px 12px; }
 .agent-node { padding: 6px 8px; border-radius: 6px; margin-bottom: 1px; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
 .agent-node:hover { background: var(--surface-raised); }
 .agent-node .agent-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 .agent-node .agent-dot.running { background: var(--green); box-shadow: 0 0 4px var(--agent-dot-glow); }
 .agent-node .agent-dot.stopped { background: var(--text-muted); }
-.agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; }
-.agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; }
+.agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }
+/* 🎯T115: aside rows — 💡 title, no path column (description must not bleed into path area) */
+.agent-node.agent-aside .agent-name { color: var(--amber, #d4a017); font-weight: 500; }
+.agent-node.agent-aside .agent-dir { display: none; }
+.attn-chip.attn-aside .attn-title { color: var(--amber, #d4a017); }
 .agent-children { padding-left: 14px; border-left: 1px solid var(--border); margin-left: 10px; }
 
 /* Terminal viewer removed from product UI (🎯T73) — vestigial Claude/tmux panel.
@@ -384,7 +376,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="activity-header">Agents</div>
     <div id="agents"></div>
     <div id="activity-header" style="margin-top:10px">Workers <span id="workers-live" style="font-weight:400;color:var(--text-muted);font-size:10px"></span></div>
-    <div id="workers" title="jwork workers (T8.2)"></div>
+    <div id="workers" title="jwork workers (🎯T8.2)"></div>
+
   </div>
 </div>
 <!-- 🎯T83.1: dedicated Mermaid host (bottom-right panel; not the chat scroller). -->
@@ -401,6 +394,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/transport.js"></script>
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
+<script src="scripts/fleet_row.js"></script>
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
 <script src="scripts/composer_layout.js"></script>
@@ -482,14 +476,17 @@ function renderAttention() {
 
   for (const t of stack) {
     const chip = document.createElement('div');
-    chip.className = 'attn-chip' +
+    // 🎯T115: attention stack items are asides — 💡 title, no path chrome.
+    chip.className = 'attn-chip attn-aside' +
       (t.status === 'parked' ? ' parked' : '') +
       (attentionState.focusId === t.id ? ' active' : '');
     chip.setAttribute('role', 'listitem');
     chip.title = t.body || t.title;
     const title = document.createElement('span');
     title.className = 'attn-title';
-    title.textContent = t.title;
+    title.textContent = (typeof FleetRow !== 'undefined')
+      ? FleetRow.asideTitle(t.title)
+      : ('💡 ' + (t.title || 'aside'));
     chip.appendChild(title);
     const st = document.createElement('span');
     st.className = 'attn-status';
@@ -1562,13 +1559,24 @@ function renderTree(byParent, parent, container) {
   const children = (byParent[parent] || []).slice().sort((a, b) =>
     String(a.name || '').localeCompare(String(b.name || '')));
   children.forEach(a => {
+    // 🎯T115: overseer state-dir home omits path; aside purpose → 💡 + no path.
+    const row = (typeof FleetRow !== 'undefined')
+      ? FleetRow.fleetRowModel(a)
+      : { title: a.name || '', dirHtml: formatAgentDir(a.workdir || ''), omitPath: false, isAside: false };
     const node = document.createElement('div');
-    node.className = 'agent-node' + (a.name === selectedAgent ? ' selected' : '');
+    node.className = 'agent-node'
+      + (a.name === selectedAgent ? ' selected' : '')
+      + (row.isAside ? ' agent-aside' : '');
     node.dataset.agent = a.name;
     node.dataset.parent = parent || '';
-    node.innerHTML = '<span class="agent-dot '+a.status+'"></span>'
-      + '<span class="agent-name">'+escHtml(a.name)+'</span>'
-      + '<span class="agent-dir">'+formatAgentDir(a.workdir || '')+'</span>';
+    if (row.isAside) node.dataset.purpose = 'aside';
+    let html = '<span class="agent-dot '+escHtml(a.status || '')+'"></span>'
+      + '<span class="agent-name">'+escHtml(row.title)+'</span>';
+    // No path element when omitted — description must not occupy path column.
+    if (!row.omitPath) {
+      html += '<span class="agent-dir">'+row.dirHtml+'</span>';
+    }
+    node.innerHTML = html;
     node.onclick = () => selectAgent(a.name);
     container.appendChild(node);
     if (byParent[a.name] && byParent[a.name].length) {
@@ -1579,80 +1587,16 @@ function renderTree(byParent, parent, container) {
     }
   });
 }
-// 🎯T84: compact workdir for RHS; github.com paths get an inline GitHub icon
-// instead of a bare ~ prefix.
+// 🎯T84 / 🎯T115: path chrome lives in fleet_row.js (window.FleetRow).
 function shortDir(d) {
-  const s = String(d || '');
-  const gh = /(?:^|\/)(?:Users\/[^/]+\/)?work\/github\.com\/(.+)$/.exec(s)
-    || /github\.com\/(.+)$/.exec(s);
-  if (gh) {
-    return { html: true, text: gh[1], github: true };
-  }
-  const home = s.replace(/^\/Users\/[^/]+/, '~');
-  return { html: false, text: home };
+  return (typeof FleetRow !== 'undefined') ? FleetRow.shortDir(d) : { html: false, text: String(d || '') };
 }
 function formatAgentDir(d) {
-  const info = shortDir(d);
-  if (info.github) {
-    // Inline octocat-ish mark (simple path icon via SVG).
-    const icon = '<svg class="gh-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
-    return icon + escHtml(info.text);
-  }
-  return escHtml(info.text);
+  return (typeof FleetRow !== 'undefined') ? FleetRow.formatAgentDir(d) : escHtml(String(d || ''));
 }
 // 🎯T82: primary refresh is agents_changed push; slow poll is reconnect fallback only.
 setInterval(refreshAgents, 30000);
 refreshAgents();
-
-// 🎯T8.2: jwork workers panel — poll + SSE lifecycle stream.
-const workersEl = document.getElementById('workers');
-const workersLiveEl = document.getElementById('workers-live');
-function refreshWorkers() {
-  if (!workersEl) return;
-  fetch('/api/workers').then(r => r.json()).then(list => {
-    if (!Array.isArray(list)) return;
-    const running = list.filter(w => w.status === 'running').length;
-    const done = list.length - running;
-    if (workersLiveEl) {
-      workersLiveEl.textContent = list.length
-        ? (running + ' active · ' + done + ' done')
-        : 'none yet';
-    }
-    workersEl.innerHTML = '';
-    list.slice(0, 40).forEach(w => {
-      const row = document.createElement('div');
-      row.className = 'worker-row';
-      row.dataset.id = w.id || '';
-      const tok = (w.input_tokens || 0) + (w.output_tokens || 0);
-      const pol = w.policy_decision
-        ? (' · policy ' + w.policy_decision + (w.policy_level ? ' L' + w.policy_level : ''))
-        : '';
-      row.innerHTML =
-        '<div class="wr-head">'
-        + '<span class="wr-id">' + escHtml(w.id || '') + '</span>'
-        + '<span class="wr-status ' + escHtml(w.status || '') + '">' + escHtml(w.status || '') + '</span>'
-        + '</div>'
-        + '<div class="wr-task" title="' + escHtml(w.task || '') + '">' + escHtml(w.task || '') + '</div>'
-        + '<div class="wr-meta">' + tok + ' tok · $' + Number(w.cost_usd || 0).toFixed(4) + pol + '</div>'
-        + (w.outcome ? '<div class="wr-out">' + escHtml(String(w.outcome).slice(0, 160)) + '</div>' : '');
-      workersEl.appendChild(row);
-    });
-  }).catch(() => {});
-}
-function connectWorkersSSE() {
-  if (typeof EventSource === 'undefined') return;
-  try {
-    const es = new EventSource('/api/workers/events');
-    const bump = () => refreshWorkers();
-    ['worker_started', 'worker_progress', 'worker_completed', 'worker_failed', 'worker_denied'].forEach(t => {
-      es.addEventListener(t, bump);
-    });
-    es.onerror = () => { /* browser reconnects; poll remains fallback */ };
-  } catch (_) {}
-}
-setInterval(refreshWorkers, 10000);
-refreshWorkers();
-connectWorkersSSE();
 
 // Live token-burn ticker — the "what is burning right now" glance,
 // polled on the same cadence. Goes amber/red when a runaway signal trips.

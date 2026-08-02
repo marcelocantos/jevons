@@ -50,6 +50,7 @@ test-go:
 test-web:
 	node web/scripts/chat_events_test.js
 	node web/scripts/attention_threads_test.js
+	node web/scripts/fleet_row_test.js
 	node web/scripts/virtual_list_test.js
 	node web/scripts/thread_route_test.js
 	node web/scripts/layout_probe_test.js
