@@ -2195,6 +2195,11 @@ function addWorkerMsg(msg) {
 
 // Agent tree
 let lastFleetAgents = []; // for 🎯T124 auto-select on new aside
+// Declared early: updateComposerPlaceholder / renderAttention / refreshAgents
+// touch this before the terminal block further down. A late `let` left it in
+// the TDZ, threw on boot (T136 path), skipped applyTheme + connect → dark
+// FOUC stuck + empty transcript.
+let selectedAgent = null;
 function refreshAgents() {
   fetch('/api/agents').then(r=>r.json()).then(agents => {
     agentsEl.innerHTML = '';
@@ -3687,7 +3692,7 @@ const termContainer = document.getElementById('terminal-container');
 let term = null;
 let termWs = null;
 let termFit = null;
-let selectedAgent = null;
+// selectedAgent: declared with fleet tree state (above) — do not redeclare.
 
 // 🎯T124: select fleet agent/aside → RHS transcript pane (not main chat).
 // 🎯T73: do not open the obsolete black TMUX/detail panel.

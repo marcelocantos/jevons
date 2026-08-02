@@ -110,6 +110,24 @@ test('T136 create-aside dual-write + no attention chip wall', function () {
   assert.ok(html.indexOf('appendThreadChip') === -1, 'no chip loop for asides');
 });
 
+// Boot TDZ: updateComposerPlaceholder reads selectedAgent; renderAttention()
+// and refreshAgents run at page load. Late `let selectedAgent` threw, skipped
+// applyTheme + connect → dark stuck + empty transcript.
+test('index.html declares selectedAgent before boot renderAttention/refreshAgents', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const decl = html.indexOf('let selectedAgent = null;');
+  assert.ok(decl >= 0, 'selectedAgent declared once with let');
+  assert.strictEqual((html.match(/let selectedAgent/g) || []).length, 1, 'single let selectedAgent');
+  const bootRender = html.lastIndexOf("if (typeof renderAttention === 'function') renderAttention();");
+  const bootRefresh = html.indexOf('setInterval(refreshAgents, 30000);\nrefreshAgents();');
+  const theme = html.indexOf("applyTheme((document.cookie");
+  const connect = html.indexOf('\nconnect();\n');
+  assert.ok(bootRender > decl, 'boot renderAttention after selectedAgent decl');
+  assert.ok(bootRefresh > decl, 'boot refreshAgents after selectedAgent decl');
+  assert.ok(theme > decl, 'applyTheme after selectedAgent decl (script reaches theme)');
+  assert.ok(connect > decl, 'connect after selectedAgent decl');
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);
