@@ -62,7 +62,10 @@ type Server struct {
 
 	mu           sync.Mutex
 	notifyJevon  NotifyFunc
-	costSnapshot func() (*cost.Snapshot, error)
+	// agentEventHook receives every fleet worker event (progress, assistant, …)
+	// so the HTTP server can maintain RHS progress chrome (🎯T118).
+	agentEventHook func(name string, ev claudia.Event)
+	costSnapshot   func() (*cost.Snapshot, error)
 
 	// grokRun shells out to the Grok CLI for mid-session MCP reconnect (🎯T60).
 	// Nil uses defaultGrokRun (exec of grok on PATH). Tests inject a fake.

@@ -296,6 +296,8 @@ func (s *Server) RegistryAgents() []claudia.AgentDef {
 // (durable or ephemeral child) must appear while registered. Parent comes
 // from claudia AgentDef lineage (kill auth / 🎯T68 tree). Purpose (🎯T114)
 // distinguishes work vs aside so UI can chrome asides without a second store.
+// Phase/Step/Progress (🎯T118) are glanceable activity for worker secondary
+// lines — filled from ACP progress when known, else status baseline.
 type agentInfo struct {
 	Name        string `json:"name"`
 	WorkDir     string `json:"workdir"`
@@ -303,6 +305,9 @@ type agentInfo struct {
 	Purpose     string `json:"purpose,omitempty"`
 	Description string `json:"description,omitempty"`
 	Status      string `json:"status"`
+	Phase       string `json:"phase,omitempty"`
+	Step        string `json:"step,omitempty"`
+	Progress    string `json:"progress,omitempty"`
 }
 
 // listFleetAgents returns the RHS panel source of truth: every agent
@@ -316,13 +321,13 @@ type agentInfo struct {
 // recovery runs, NotifyAgentsChanged pushes a live frame so the UI refreshes
 // immediately (not only on the next poll).
 func listFleetAgents(reg *claudia.Registry) []agentInfo {
-	return listFleetAgentsNotifying(reg, nil)
+	return listFleetAgentsNotifying(reg, nil, nil)
 }
 
 // listFleetAgentsNotifying is the same feed with an optional notify hook for
 // recovery events (server wires agents_changed). Used by hermetic tests with
-// notify=nil.
-func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string)) []agentInfo {
+// notify=nil. progress may be nil (no ACP snapshots).
+func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string), progress *AgentProgressHub) []agentInfo {
 	if reg == nil {
 		return []agentInfo{}
 	}
@@ -359,18 +364,42 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		if purpose == "" {
 			purpose = claudia.PurposeWork
 		}
-		agents = append(agents, agentInfo{
+		// Seed status baseline when no richer ACP snapshot exists yet.
+		if progress != nil {
+			progress.SetStatus(d.Name, status)
+		}
+		info := agentInfo{
 			Name:    d.Name,
 			WorkDir: d.WorkDir,
 			Parent:  d.Parent,
 			Purpose: purpose,
 			Status:  status,
-		})
+		}
+		if progress != nil {
+			if p := progress.Get(d.Name); p.Summary != "" || p.Phase != "" || p.Step != "" {
+				info.Phase = p.Phase
+				info.Step = p.Step
+				info.Progress = p.Summary
+			}
+		}
+		agents = append(agents, info)
 	}
 	sort.Slice(agents, func(i, j int) bool {
 		return agents[i].Name < agents[j].Name
 	})
 	return agents
+}
+
+// ObserveAgentProgress records an ACP/tool event for name and returns whether
+// the glanceable summary changed (callers push agents_changed on true).
+func (s *Server) ObserveAgentProgress(name string, ev claudia.Event) bool {
+	if s == nil {
+		return false
+	}
+	if s.agentProgress == nil {
+		s.agentProgress = NewAgentProgressHub()
+	}
+	return s.agentProgress.Observe(name, ev)
 }
 
 // handleListAgents returns all registered fleet agents with status (🎯T72.1).
@@ -388,7 +417,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	agents := listFleetAgentsNotifying(reg, func(names []string) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
-	})
+	}, s.agentProgress)
 	_ = json.NewEncoder(w).Encode(agents)
 }
 

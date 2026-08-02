@@ -387,6 +387,18 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .agent-node .agent-dot.stopped { background: var(--text-muted); }
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }
+/* 🎯T118: progress/status secondary shares path slot without mono path chrome. */
+.agent-node .agent-dir.agent-progress,
+.agent-node .agent-dir.agent-status {
+  font-family: inherit;
+  letter-spacing: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-node .agent-dir.agent-progress { color: var(--text-muted); }
+.agent-node .agent-dir.agent-status { color: var(--text-muted); opacity: 0.85; }
 /* 🎯T115: aside rows — 💡 title, no path column (description must not bleed into path area) */
 .agent-node.agent-aside .agent-name { color: var(--amber, #d4a017); font-weight: 500; }
 .agent-node.agent-aside .agent-dir { display: none; }
@@ -1878,11 +1890,13 @@ function refreshAgents() {
   fetch('/api/agents').then(r=>r.json()).then(agents => {
     agentsEl.innerHTML = '';
     const byParent = {};
+    const agentsByName = {};
     agents.forEach(a => {
       const p = a.parent || '';
       (byParent[p] = byParent[p] || []).push(a);
+      if (a && a.name) agentsByName[a.name] = a;
     });
-    renderTree(byParent, '', agentsEl);
+    renderTree(byParent, '', agentsEl, agentsByName);
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
   }).catch(()=>{});
@@ -1900,16 +1914,23 @@ function updateFleetProgress(agents) {
     updateWorkingProgress(base ? base + ' · ' + fleet : fleet);
   }
 }
-function renderTree(byParent, parent, container) {
+function renderTree(byParent, parent, container, agentsByName) {
   // 🎯T68: sibling order is deliberate — name-sorted under each parent,
   // independent of Go map iteration or poll order of the parent group.
+  agentsByName = agentsByName || {};
   const children = (byParent[parent] || []).slice().sort((a, b) =>
     String(a.name || '').localeCompare(String(b.name || '')));
   children.forEach(a => {
-    // 🎯T115: overseer state-dir home omits path; aside purpose → 💡 + no path.
+    // 🎯T115/T118: overseer/aside omit path; workers prefer progress secondary
+    // when workdir matches parent; path stays for roots/POs/distinct workdir.
+    const parentAgent = parent ? agentsByName[parent] : null;
+    const hasChildren = !!(byParent[a.name] && byParent[a.name].length);
     const row = (typeof FleetRow !== 'undefined')
-      ? FleetRow.fleetRowModel(a)
-      : { title: a.name || '', dirHtml: formatAgentDir(a.workdir || ''), omitPath: false, isAside: false };
+      ? FleetRow.fleetRowModel(a, {
+          parentWorkdir: parentAgent ? (parentAgent.workdir || '') : '',
+          hasChildren: hasChildren,
+        })
+      : { title: a.name || '', dirHtml: formatAgentDir(a.workdir || ''), omitPath: false, isAside: false, secondaryHtml: '', secondaryKind: 'path' };
     const node = document.createElement('div');
     node.className = 'agent-node'
       + (a.name === selectedAgent ? ' selected' : '')
@@ -1917,11 +1938,15 @@ function renderTree(byParent, parent, container) {
     node.dataset.agent = a.name;
     node.dataset.parent = parent || '';
     if (row.isAside) node.dataset.purpose = 'aside';
+    if (row.secondaryKind) node.dataset.secondary = row.secondaryKind;
     let html = '<span class="agent-dot '+escHtml(a.status || '')+'"></span>'
       + '<span class="agent-name">'+escHtml(row.title)+'</span>';
-    // No path element when omitted — description must not occupy path column.
-    if (!row.omitPath) {
-      html += '<span class="agent-dir">'+row.dirHtml+'</span>';
+    // Secondary line: path (T84) or progress/status (T118). Aside has none.
+    const secHtml = row.secondaryHtml || (row.showPath ? row.dirHtml : '');
+    const secKind = row.secondaryKind || (secHtml ? 'path' : '');
+    if (secHtml && secKind) {
+      const cls = secKind === 'path' ? 'agent-dir' : ('agent-dir agent-' + secKind);
+      html += '<span class="'+cls+'">'+secHtml+'</span>';
     }
     node.innerHTML = html;
     node.onclick = () => selectAgent(a.name);
@@ -1930,7 +1955,7 @@ function renderTree(byParent, parent, container) {
       const sub = document.createElement('div');
       sub.className = 'agent-children';
       container.appendChild(sub);
-      renderTree(byParent, a.name, sub);
+      renderTree(byParent, a.name, sub, agentsByName);
     }
   });
 }

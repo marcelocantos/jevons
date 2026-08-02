@@ -99,6 +99,9 @@ type Server struct {
 
 	// workers is the 🎯T8.2 observability tracker (SQLite + SSE hub).
 	workers *workers.Tracker
+
+	// agentProgress is live ACP-derived status for RHS fleet rows (🎯T118).
+	agentProgress *AgentProgressHub
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -149,6 +152,7 @@ func New(version, stateDir string) *Server {
 		creds:         NewCredentialStore(filepath.Join(stateDir, "credential.json")),
 		chatListeners: make([]chan string, 0),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
+		agentProgress: NewAgentProgressHub(),
 	}
 
 	if rec, err := s.creds.Load(); err != nil {

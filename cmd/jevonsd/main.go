@@ -489,6 +489,14 @@ func main() {
 		}
 		mcpSrv.SetNotify(send)
 
+		// 🎯T118: ACP progress / tool steps → RHS fleet-row status chrome.
+		// agents_changed only when the glanceable summary changes.
+		mcpSrv.SetAgentEventHook(func(name string, ev claudia.Event) {
+			if srv.ObserveAgentProgress(name, ev) {
+				srv.NotifyAgentsChanged()
+			}
+		})
+
 		// Wire completion-notify for workers auto-started by StartAll above
 		// (🎯T61): unlike MCP-tool spawns, they never passed through
 		// handleAgentStart, so without this a resumed worker's reply would

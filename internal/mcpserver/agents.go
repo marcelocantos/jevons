@@ -5,7 +5,6 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -81,6 +80,15 @@ func (s *Server) SetNotify(fn NotifyFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.notifyJevon = fn
+}
+
+// SetAgentEventHook registers a sink for every fleet-worker ACP event
+// (progress, assistant, terminal stop). Used to drive RHS status chrome
+// without owner/overseer polling (🎯T118). Nil clears the hook.
+func (s *Server) SetAgentEventHook(fn func(name string, ev claudia.Event)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentEventHook = fn
 }
 
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -426,12 +434,14 @@ func (s *Server) notify(agentName, text string) {
 	fn(msg)
 }
 
-// broadcastAgentEvent sends agent events to the web UI.
+// broadcastAgentEvent fans a worker event to the optional progress/UI hook
+// (🎯T118). Previously a no-op stub; the HTTP server wires ObserveAgentProgress
+// + agents_changed so fleet rows update without poll.
 func (s *Server) broadcastAgentEvent(name string, ev claudia.Event) {
-	data, _ := json.Marshal(map[string]any{
-		"type":  "agent_event",
-		"agent": name,
-		"event": json.RawMessage(ev.Raw),
-	})
-	_ = data // TODO: wire to activity WebSocket via BroadcastChat
+	s.mu.Lock()
+	hook := s.agentEventHook
+	s.mu.Unlock()
+	if hook != nil {
+		hook(name, ev)
+	}
 }
