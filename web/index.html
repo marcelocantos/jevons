@@ -2331,7 +2331,8 @@ function refreshWorkers() {
         + '<span class="wr-status ' + escHtml(w.status || '') + '">' + escHtml(w.status || '') + '</span>'
         + '</div>'
         + '<div class="wr-task" title="' + escHtml(w.task || '') + '">' + escHtml(w.task || '') + '</div>'
-        + '<div class="wr-meta">' + tok + ' tok · $' + Number(w.cost_usd || 0).toFixed(4) + pol + '</div>'
+        // 🎯T137: no dollar reporting while budget clamp is off (SuperGrok).
+        + '<div class="wr-meta">' + tok + ' tok' + pol + '</div>'
         + (w.outcome ? '<div class="wr-out">' + escHtml(String(w.outcome).slice(0, 160)) + '</div>' : '');
       workersEl.appendChild(row);
     });
@@ -2352,37 +2353,13 @@ setInterval(refreshWorkers, 10000);
 refreshWorkers();
 connectWorkersSSE();
 
-// Live token-burn ticker — the "what is burning right now" glance,
-// polled on the same cadence. Goes amber/red when a runaway signal trips.
+// Live token-burn ticker — off while budget clamp is disabled (🎯T137).
+// Re-enable with clamp when subscription-vs-API $ accounting is redesigned.
 const costEl = document.getElementById('cost-ticker');
 function refreshCost() {
-  fetch('/api/cost').then(r=>r.json()).then(c => {
-    if (!c || c.error) { costEl.style.display='none'; return; }
-    costEl.style.display='block';
-    const g = (c.global_usd_per_hour||0).toFixed(2);
-    const f = (c.fleet_usd_per_hour||0).toFixed(2);
-    const alerts = c.alerts||[];
-    const kill = alerts.some(a=>a.level==='kill');
-    const warn = alerts.length>0;
-    costEl.className = kill ? 'cost-kill' : (warn ? 'cost-warn' : '');
-    let s = `🔥 $${g}/hr global · $${f}/hr fleet`;
-    if (alerts.length) s += ` · ⚠ ${alerts.length}`;
-    costEl.textContent = s;
-    costEl.title = alerts.length
-      ? alerts.map(a=>`[${a.level}] ${a.kind}: ${a.detail}`).join('\n')
-      : 'No runaway signals';
-  }).catch((err)=>{
-    costEl.style.display='none';
-    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-      jLog('warn', DecisionLog.decisionMsg('cost'), DecisionLog.formatCostDecision('poll_error', {
-        err: err && err.message ? err.message : String(err || 'unknown'),
-        corr: pageCorr,
-      }));
-    }
-  });
+  if (costEl) costEl.style.display = 'none';
 }
-setInterval(refreshCost, 3000);
-refreshCost();
+// No interval: dollar reporting disabled for now.
 
 // ── Latched stick-to-bottom (Track | Free) ────────────────────────────
 // Policy lives above the DOM. Mode is never re-derived from distance on

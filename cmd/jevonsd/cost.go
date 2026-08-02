@@ -32,17 +32,22 @@ type costGuard struct {
 // usage DB can't open — cost monitoring is important but must not be a
 // single point of failure for the whole cockpit.
 func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server) *costGuard {
-	store, err := cost.OpenStore(filepath.Join(jc.StateDir, "usage.db"))
-	if err != nil {
-		slog.Error("cost: usage db unavailable — clamp-down disabled", "err", err)
-		return nil
-	}
-
 	budgetPath := filepath.Join(jc.StateDir, "budget.json")
 	cfg, err := cost.LoadBudgetConfig(budgetPath)
 	if err != nil {
 		slog.Error("cost: bad budget.json — using defaults", "err", err, "path", budgetPath)
 		cfg = cost.DefaultBudgetConfig()
+	}
+	// Owner opt-out: SuperGrok / no marginal $ — clamp + dollar UI off (🎯T137 revisit).
+	if cfg.Disabled {
+		slog.Info("cost: clamp-down and live $ reporting disabled", "path", budgetPath, "reason", "budget.json disabled=true")
+		return nil
+	}
+
+	store, err := cost.OpenStore(filepath.Join(jc.StateDir, "usage.db"))
+	if err != nil {
+		slog.Error("cost: usage db unavailable — clamp-down disabled", "err", err)
+		return nil
 	}
 	// The configured overseer must always be protected — killing the CEO's
 	// own brain is never an acceptable enforcement outcome.
