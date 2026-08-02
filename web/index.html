@@ -339,6 +339,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/composer_layout.js"></script>
 <script src="scripts/send_queue.js"></script>
 <script src="scripts/layout_probe.js"></script>
+<script src="scripts/tool_summary.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
@@ -533,7 +534,7 @@ function handle(m) {
     const hasText = ChatEvents.hasAssistantText(m);
     content.forEach(c => {
       if (c.type==='tool_use') {
-        addTurnItem('tool-use', c.name + (c.input ? ': ' + summariseInput(c.input) : ''));
+        addTurnItem('tool-use', c.name + (c.input ? ': ' + ToolSummary.summariseInput(c.input) : ''));
       }
     });
     if (hasText) {
@@ -1590,13 +1591,7 @@ function unwatchStreamBubble(el) {
 })();
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }
-function summariseInput(obj) {
-  if (typeof obj === 'string') return truncate(obj, 60);
-  const keys = Object.keys(obj);
-  if (keys.length === 0) return '';
-  const v = obj[keys[0]];
-  return typeof v === 'string' ? truncate(v, 60) : keys.join(', ');
-}
+
 
 function relTime(ms) {
   const s = Math.floor((Date.now() - ms) / 1000);
