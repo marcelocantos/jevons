@@ -144,7 +144,28 @@ func TestDefaultPersonaLocalDeliveryDoctrine(t *testing.T) {
 	}
 }
 
-// 🎯T78/T104: agents-guide is the PO/worker product surface that inherits doctrine.
+// 🎯T125: Stratum-1 POs never implement; stay interruptible; instructional residual.
+func TestDefaultPersonaPONeverImplements(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"PO never implements",
+		"T125",
+		"Stratum 1",
+		"interruptible",
+		"Spawn-only for Build work",
+		"instructional doctrine",
+		"not a hard technical spawn-gate",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T125 marker %q", want)
+		}
+	}
+}
+
+// 🎯T78/T104/T125: agents-guide is the PO/worker product surface that inherits doctrine.
 func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	// agents-guide.md is repo-root product docs consumed by PO/workers.
 	path := filepath.Join("..", "..", "agents-guide.md")
@@ -169,10 +190,48 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"T111.4",
 		"Unified participant model",
 		"aside is a kind of agent",
+		"PO never implements",
+		"T125",
+		"spawn-only for Build work",
+		"interruptible",
+		"instructional doctrine",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)
 		}
+	}
+}
+
+// 🎯T125: product AGENTS.md (and CLAUDE thin import) carry PO never-implements.
+func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
+	path := filepath.Join("..", "..", "AGENTS.md")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		path = "AGENTS.md"
+		b, err = os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("AGENTS.md: %v", err)
+		}
+	}
+	a := string(b)
+	for _, want := range []string{
+		"PO never implements",
+		"T125",
+		"spawn-only",
+		"interruptible",
+	} {
+		if !strings.Contains(a, want) {
+			t.Errorf("AGENTS.md missing T125 marker %q", want)
+		}
+	}
+	// CLAUDE.md is the thin adapter; must import AGENTS so doctrine is in the load path.
+	claudePath := filepath.Join(filepath.Dir(path), "CLAUDE.md")
+	cb, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatalf("CLAUDE.md: %v", err)
+	}
+	if !strings.Contains(string(cb), "AGENTS.md") {
+		t.Error("CLAUDE.md must import AGENTS.md so T125 doctrine is on the instruction surface")
 	}
 }
 

@@ -107,6 +107,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
 - **Multi-slice fan-out (🎯T111.4):** PO/boss multi-slice missions
   `jevons_agent_start` children early (with parent lineage); solo is fine
   for single-agent tasks. Zero-children failure surfaces in agent_list.
+- **PO never implements (🎯T125):** Stratum-1 product owners are
+  **spawn-only** for Build work — no solo code/docs/oracle commits, even
+  "small" patches. They stay interruptible for overseer/owner directs;
+  workers/bosses execute. Instructional doctrine (not a hard spawn-gate)
+  unless a later target enforces it. Full text: `internal/config/persona.md`,
+  `agents-guide.md`, fleet standing brief.
 
 ## Project structure
 

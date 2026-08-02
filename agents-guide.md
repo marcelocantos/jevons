@@ -107,6 +107,21 @@ exploration. Single-agent tasks remain fine. Zero children after planning
 on a multi-slice brief is a failure mode (`jevons_agent_list` fan-out
 check). Prefer agents over threads for named long-lived workers.
 
+### PO never implements (🎯T125)
+
+**Stratum-1 product owners never implement themselves** — including small
+patches, oracle/tests, and docs commits. Mirror rule: **spawn-only for Build work**;
+no solo code/docs commits by the PO.
+
+| Role | Does |
+|---|---|
+| **PO (Stratum 1)** | Plan, brief, spawn workers/bosses, collect evidence, stay free for overseer/owner directs |
+| **Boss / worker** | Execute (edit, test, commit) under the brief |
+
+POs stay **interruptible** so redirects from above are not blocked by a
+solo coding session. **Residual:** instructional doctrine, not a hard
+daemon spawn-gate, unless a later target adds enforcement.
+
 ## Delivery: local by default (🎯T104)
 
 Owner vocabulary is **literal**:

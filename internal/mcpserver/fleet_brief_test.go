@@ -24,6 +24,10 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"spawn_subagent",
 		"Multi-slice fan-out",
 		"T111.4",
+		"PO never implements",
+		"T125",
+		"spawn-only for Build work",
+		"instructional doctrine",
 		"implement the fix",
 	} {
 		if !strings.Contains(out, want) {

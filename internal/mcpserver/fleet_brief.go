@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Delivery: local by default (🎯T104)
@@ -26,6 +26,12 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   read/plan loops. Single-agent tasks are fine; multi-slice briefs require fan-out.
 - Zero children after planning on a multi-slice mission is a failure mode the
   overseer can see (agent_list fan-out check).
+
+## PO never implements (🎯T125)
+- If you are a Stratum-1 product owner: spawn-only for Build work — never
+  implement yourself (including small patches, oracles, docs commits).
+  Stay interruptible for overseer/owner directs; workers/bosses execute.
+- Residual: instructional doctrine, not a hard spawn-gate in the daemon.
 
 ## Report
 - When finished: report commit SHA(s) + test evidence to the overseer.
