@@ -3326,9 +3326,23 @@ const agentInspectName = document.getElementById('agent-inspect-name');
 const agentInspectBody = document.getElementById('agent-inspect-body');
 let agentTranscriptTimer = 0;
 
-function selectAgent(name) {
+function selectAgent(name, opts) {
+  // Resolve purpose from fleet cache when available (overseer guard).
+  let purpose = opts && opts.purpose;
+  if (!purpose && name && lastFleetAgents && lastFleetAgents.length) {
+    const row = lastFleetAgents.find(function (a) { return a && a.name === name; });
+    if (row) purpose = row.purpose;
+  }
+  // 🎯T124 residual: never open inspect for overseer root — main chat is that stream.
+  if (typeof AgentTranscript !== 'undefined' && name &&
+      !AgentTranscript.shouldOpenTranscript(name, purpose)) {
+    selectedAgent = null;
+    document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
+    hideAgentInspect();
+    return;
+  }
   const next = (typeof AgentTranscript !== 'undefined')
-    ? AgentTranscript.nextSelection(selectedAgent, name)
+    ? AgentTranscript.nextSelection(selectedAgent, name, { purpose: purpose })
     : (selectedAgent === name ? null : name);
   selectedAgent = next;
   document.querySelectorAll('.agent-node').forEach(n =>
@@ -3387,6 +3401,11 @@ function renderAgentInspect(model) {
 
 function loadAgentTranscript(name, opts) {
   if (!name || !agentInspectEl) return;
+  // Hard guard: never fetch/render overseer into RHS pane.
+  if (typeof AgentTranscript !== 'undefined' && !AgentTranscript.shouldOpenTranscript(name)) {
+    hideAgentInspect();
+    return;
+  }
   const quiet = !!(opts && opts.quiet);
   fetch('/api/agents/' + encodeURIComponent(name) + '/transcript')
     .then(function (r) {

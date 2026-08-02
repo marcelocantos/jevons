@@ -26,6 +26,24 @@ test('nextSelection toggles off', function () {
   assert.strictEqual(AT.nextSelection('po', 'worker'), 'worker');
 });
 
+test('overseer root never opens transcript pane (T124 residual)', function () {
+  assert.strictEqual(AT.isOverseer('jevons'), true);
+  assert.strictEqual(AT.isOverseer('Jevons'), true);
+  assert.strictEqual(AT.isOverseer('po', 'work'), false);
+  assert.strictEqual(AT.isOverseer('ceo', 'overseer'), true);
+  assert.strictEqual(AT.shouldOpenTranscript('jevons'), false);
+  assert.strictEqual(AT.shouldOpenTranscript('worker', 'work'), true);
+  // Click overseer: clear / ignore inspect — never select for pane.
+  assert.strictEqual(AT.nextSelection(null, 'jevons'), null);
+  assert.strictEqual(AT.nextSelection('po', 'jevons'), null);
+  assert.strictEqual(AT.nextSelection(null, 'ceo', { purpose: 'overseer' }), null);
+  // Auto-select must not pick overseer even if mis-tagged as new aside name.
+  const prev = [];
+  const next = [{ name: 'jevons', purpose: 'overseer' }, { name: 'att-x', purpose: 'aside' }];
+  assert.strictEqual(AT.pickAutoSelect(prev, next, null), 'att-x');
+  assert.strictEqual(AT.pickAutoSelect([], [{ name: 'jevons', purpose: 'overseer' }], 'jevons'), null);
+});
+
 test('detectNewAsides finds purpose=aside only', function () {
   const prev = [{ name: 'jevons', purpose: 'overseer' }, { name: 'po', purpose: 'work' }];
   const next = prev.concat([

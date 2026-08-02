@@ -14,9 +14,29 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  // nextSelection(prevName, clickName) — toggle off if same name.
-  function nextSelection(prevName, clickName) {
+  // Overseer root uses main chat — never open RHS inspect for it (T124 residual).
+  function isOverseer(name, purpose) {
+    const n = String(name || '').toLowerCase();
+    if (n === 'jevons') return true;
+    const p = String(purpose || '').toLowerCase();
+    return p === 'overseer';
+  }
+
+  // True when a fleet row click should open the transcript pane.
+  function shouldOpenTranscript(name, purpose) {
+    if (!name) return false;
+    return !isOverseer(name, purpose);
+  }
+
+  // nextSelection(prevName, clickName, opts) — toggle off if same name.
+  // opts.purpose optional; overseer clicks never select for inspect.
+  function nextSelection(prevName, clickName, opts) {
     if (!clickName) return null;
+    const purpose = opts && opts.purpose;
+    if (!shouldOpenTranscript(clickName, purpose)) {
+      // Clear selection if re-clicking overseer or any overseer click.
+      return null;
+    }
     if (prevName && prevName === clickName) return null;
     return String(clickName);
   }
@@ -41,15 +61,17 @@
 
   // pickAutoSelect(prevList, nextList, currentSelection) → name|null
   // Prefer the last newly appeared aside (name-sorted: last = z-order); if
-  // none, keep currentSelection when still present.
+  // none, keep currentSelection when still present. Never auto-select overseer.
   function pickAutoSelect(prevList, nextList, currentSelection) {
-    const news = detectNewAsides(prevList, nextList);
+    const news = detectNewAsides(prevList, nextList).filter(function (n) {
+      return shouldOpenTranscript(n, 'aside');
+    });
     if (news.length) return news[news.length - 1];
     if (currentSelection) {
-      const still = (nextList || []).some(function (a) {
+      const row = (nextList || []).find(function (a) {
         return a && a.name === currentSelection;
       });
-      if (still) return currentSelection;
+      if (row && shouldOpenTranscript(row.name, row.purpose)) return currentSelection;
     }
     return null;
   }
@@ -91,6 +113,8 @@
   const MAIN_CHAT_IS_OWNER_OVERSEER_ONLY = true;
 
   return {
+    isOverseer: isOverseer,
+    shouldOpenTranscript: shouldOpenTranscript,
     nextSelection: nextSelection,
     detectNewAsides: detectNewAsides,
     pickAutoSelect: pickAutoSelect,
