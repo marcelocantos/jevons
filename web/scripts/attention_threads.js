@@ -48,6 +48,15 @@
     return 'open';
   }
 
+  // 🎯T95.1 migrate: legacy auto-close used park() for file-target asides.
+  // Those are completed filings, not intentional T65 parks — treat as done so
+  // they leave default chrome after refresh (localStorage still has parked).
+  function migrateThreadStatus(purpose, status) {
+    const st = normalizeStatus(status);
+    if (purpose === 'file-target' && st === 'parked') return 'done';
+    return st;
+  }
+
   function isChromeVisible(status) {
     // Default attention bar: open + intentionally parked only.
     return status === 'open' || status === 'parked';
@@ -509,12 +518,13 @@
         s.threads = parsed.threads
           .filter(function (t) { return t && t.id; })
           .map(function (t) {
+            const purpose = t.purpose === 'file-target' ? 'file-target' : '';
             return {
               id: String(t.id),
               title: String(t.title || 'Untitled'),
               body: String(t.body || ''),
-              status: normalizeStatus(t.status),
-              purpose: t.purpose === 'file-target' ? 'file-target' : '',
+              status: migrateThreadStatus(purpose, t.status),
+              purpose: purpose,
               createdAt: Number(t.createdAt) || now(),
               updatedAt: Number(t.updatedAt) || now(),
             };

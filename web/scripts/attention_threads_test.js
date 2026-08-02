@@ -113,6 +113,56 @@ test('serialize/deserialize preserves done status', function () {
   assert.strictEqual(legacy.threads[0].status, 'done');
 });
 
+test('load migrates legacy parked file-target → done (not manual park)', function () {
+  // Pre-T95.1 localStorage: auto-close parked the filing aside.
+  const raw = JSON.stringify({
+    focusId: AT.MAIN_ID,
+    threads: [
+      {
+        id: 'att-file-old',
+        title: 'T113 filing',
+        body: 'target: something',
+        status: 'parked',
+        purpose: 'file-target',
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      {
+        id: 'att-work',
+        title: 'real workstream',
+        body: 'still parked on purpose',
+        status: 'parked',
+        purpose: '',
+        createdAt: 3,
+        updatedAt: 4,
+      },
+    ],
+  });
+  const store = {};
+  store[AT.STORAGE_KEY || 'jevons-attention-threads-v1'] = raw;
+  const storage = {
+    getItem: function (k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+    setItem: function (k, v) { store[k] = String(v); },
+  };
+  const loaded = AT.load(storage);
+  const filing = loaded.threads.find(function (t) { return t.id === 'att-file-old'; });
+  const work = loaded.threads.find(function (t) { return t.id === 'att-work'; });
+  assert.ok(filing);
+  assert.ok(work);
+  assert.strictEqual(filing.status, 'done');
+  assert.strictEqual(filing.purpose, 'file-target');
+  assert.strictEqual(work.status, 'parked');
+  // Default chrome: only intentional park remains.
+  const st = AT.stack(loaded);
+  assert.strictEqual(st.length, 1);
+  assert.strictEqual(st[0].id, 'att-work');
+  assert.strictEqual(AT.archive(loaded).length, 1);
+  assert.strictEqual(AT.archive(loaded)[0].id, 'att-file-old');
+  // deserialize alone (same migration path)
+  const d = AT.deserialize(raw);
+  assert.strictEqual(d.threads.find(function (t) { return t.id === 'att-file-old'; }).status, 'done');
+});
+
 test('aside: sends routed wire text and keeps main focus', function () {
   const r = AT.handleComposer(AT.emptyState(), 'aside: billing nit');
   assert.strictEqual(r.kind, 'send');
