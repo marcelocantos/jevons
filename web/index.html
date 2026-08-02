@@ -1295,6 +1295,9 @@ refreshCost();
 let followMode = 'track'; // 'track' | 'free'
 // ~half–one line of 14px/1.6 body text — entry noise only, not a stay band.
 const ENTER_BOTTOM_EPS_PX = 16;
+// After Free, require leaving this band before geometry may re-enter Track.
+// Stops: wheel-up → free → still within 16px → scroll sensor re-arms → pin snag.
+let _mayEnterFromGeometry = true;
 let _pinningScroll = false;
 let _lastScrollTop = 0;
 let _lastScrollHeight = 0;
@@ -1303,8 +1306,15 @@ let _lastScrollHeight = 0;
 let _scrollBookkeeping = 0;
 
 function isTracking() { return followMode === 'track'; }
-function enterTrackBottom() { followMode = 'track'; }
-function leaveTrackBottom() { followMode = 'free'; }
+function enterTrackBottom() {
+  followMode = 'track';
+  _mayEnterFromGeometry = true;
+}
+function leaveTrackBottom() {
+  followMode = 'free';
+  // Must move clearly off the bottom before scroll/wheel-down re-arm.
+  _mayEnterFromGeometry = false;
+}
 function distFromBottom() {
   return msgs.scrollHeight - msgs.clientHeight - msgs.scrollTop;
 }
@@ -1313,6 +1323,14 @@ function atBottom() {
   const room = msgs.scrollHeight - msgs.clientHeight;
   if (room <= 0) return true;
   return distFromBottom() <= ENTER_BOTTOM_EPS_PX;
+}
+// Geometry may re-enter only after the user has left the ε band (or send/boot).
+function noteAwayFromBottom() {
+  if (distFromBottom() > ENTER_BOTTOM_EPS_PX) _mayEnterFromGeometry = true;
+}
+function tryEnterFromGeometry() {
+  noteAwayFromBottom();
+  if (_mayEnterFromGeometry && atBottom()) enterTrackBottom();
 }
 function noteScrollMetrics() {
   _lastScrollTop = msgs.scrollTop;
@@ -1346,11 +1364,8 @@ msgs.addEventListener('wheel', (e) => {
   if (e.deltaY < 0) {
     leaveTrackBottom(); // scroll up → free
   } else if (e.deltaY > 0) {
-    // Scroll down: enter only once we *arrive* at the bottom (small ε).
-    // Defer to next frame so scrollTop has applied.
-    requestAnimationFrame(() => {
-      if (atBottom()) enterTrackBottom();
-    });
+    // Scroll down: enter only after leaving the band then arriving again.
+    requestAnimationFrame(() => { tryEnterFromGeometry(); });
   }
 }, { passive: true });
 let _touchLastY = null;
@@ -1362,14 +1377,12 @@ msgs.addEventListener('touchmove', (e) => {
   const y = e.touches[0].clientY;
   if (y > _touchLastY + 2) leaveTrackBottom(); // finger down → content up
   else if (y < _touchLastY - 2) {
-    requestAnimationFrame(() => { if (atBottom()) enterTrackBottom(); });
+    requestAnimationFrame(() => { tryEnterFromGeometry(); });
   }
   _touchLastY = y;
 }, { passive: true });
-// Scrollbar: leave only when the user moves up *without* a concurrent
-// height shrink (layout/virtualise clamps look like scroll-up otherwise).
-// Enter only when the viewport *lands* at the bottom. Never recompute
-// mode from a fat "near bottom" band.
+// Scrollbar: leave when user moves up (height not shrinking). Enter only
+// via tryEnterFromGeometry (hysteresis after Free).
 msgs.addEventListener('scroll', () => {
   if (_pinningScroll || _scrollBookkeeping > 0) {
     noteScrollMetrics();
@@ -1377,11 +1390,11 @@ msgs.addEventListener('scroll', () => {
   }
   const top = msgs.scrollTop;
   const h = msgs.scrollHeight;
-  if (atBottom()) {
-    enterTrackBottom();
-  } else if (top + 1 < _lastScrollTop && h + 1 >= _lastScrollHeight) {
+  if (top + 1 < _lastScrollTop && h + 1 >= _lastScrollHeight) {
     // scrollTop fell while height did not shrink → user scrolled up
     leaveTrackBottom();
+  } else {
+    tryEnterFromGeometry();
   }
   noteScrollMetrics();
   scheduleVirtualize();
@@ -1933,7 +1946,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'PageDown') {
     e.preventDefault();
     msgs.scrollBy(0, msgs.clientHeight * 0.8);
-    requestAnimationFrame(() => { if (atBottom()) enterTrackBottom(); });
+    requestAnimationFrame(() => { tryEnterFromGeometry(); });
     return;
   }
   // Esc interrupts Jevons's current turn (like the Claude Code TUI).

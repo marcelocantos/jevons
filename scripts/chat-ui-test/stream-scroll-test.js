@@ -218,7 +218,33 @@ function slackOf(page) {
       );
     }
 
-    // Scroll to bottom manually — must re-enter Track (arrival).
+    // Small leave while still in ε band must NOT immediately re-arm Track
+    // (hysteresis — the residual mid-stream snag).
+    await page.evaluate(() => {
+      window.enterTrackBottom();
+      window.scrollDown();
+    });
+    await page.waitForTimeout(40);
+    await page.evaluate(() => {
+      window.leaveTrackBottom();
+      const m = document.getElementById('messages');
+      // Stay inside the old 16px entry band — geometry must not re-arm yet.
+      m.scrollTop = Math.max(0, m.scrollHeight - m.clientHeight - 8);
+    });
+    await page.waitForTimeout(40);
+    // Fire a synthetic scroll settle path (as layout would).
+    await page.evaluate(() => {
+      document.getElementById('messages').dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForTimeout(40);
+    const stillFree = await slackOf(page);
+    if (stillFree.tracking !== false) {
+      failures.push(
+        `hysteresis failed: still in ε band re-armed Track (mode=${stillFree.followMode}, dist=${stillFree.dist})`,
+      );
+    }
+
+    // Scroll clearly away then back to bottom — must re-enter Track (arrival).
     await page.evaluate(() => {
       window.leaveTrackBottom();
       const m = document.getElementById('messages');
