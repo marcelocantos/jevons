@@ -4,7 +4,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,8 +15,44 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
+
+// slogCapture records Info-level records for 🎯T128.2 empty_reason assertions.
+type slogCapture struct {
+	records []slog.Record
+}
+
+func (h *slogCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (h *slogCapture) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *slogCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *slogCapture) WithGroup(string) slog.Handler      { return h }
+
+func attrsMap(r slog.Record) map[string]any {
+	m := map[string]any{}
+	r.Attrs(func(a slog.Attr) bool {
+		m[a.Key] = a.Value.Any()
+		return true
+	})
+	return m
+}
+
+func findEmptyReason(cap *slogCapture, want string) map[string]any {
+	for _, rec := range cap.records {
+		if rec.Message != "agent_transcript empty" {
+			continue
+		}
+		got := attrsMap(rec)
+		if got["empty_reason"] == want {
+			return got
+		}
+	}
+	return nil
+}
 
 func TestHandleAgentTranscriptNotFound(t *testing.T) {
 	dir := t.TempDir()
@@ -75,6 +113,129 @@ func TestHandleAgentTranscriptEmptySession(t *testing.T) {
 		turns, _ := payload["turns"].([]any)
 		if len(turns) != 0 {
 			t.Fatalf("expected empty turns, got %+v", payload)
+		}
+	}
+	if payload["empty_reason"] != emptyReasonReadError {
+		t.Fatalf("empty_reason=%v want %s", payload["empty_reason"], emptyReasonReadError)
+	}
+}
+
+// TestHandleAgentTranscriptEmptyReasons covers 🎯T128.2: no_session, read_error,
+// and zero_turns each produce structured slog empty_reason (and journal when open).
+func TestHandleAgentTranscriptEmptyReasons(t *testing.T) {
+	dir := t.TempDir()
+	sessRoot := filepath.Join(dir, "sessions")
+	// Seed agents.json including empty session_id (Register requires non-empty;
+	// load path still allows no_session for pre-mint / partial registry rows).
+	sidMissing := "019fc2aa-bbbb-7ccc-8ddd-eeeeeeeeeeee"
+	sidEmpty := "019fc2aa-bbbb-7ccc-8ddd-ffffffffffff"
+	agentsJSON := `[
+  {"name":"no-sess","workdir":` + jsonString(dir) + `,"session_id":"","purpose":"work"},
+  {"name":"read-err","workdir":` + jsonString(dir) + `,"session_id":"` + sidMissing + `","purpose":"work"},
+  {"name":"zero-turns","workdir":` + jsonString(dir) + `,"session_id":"` + sidEmpty + `","purpose":"aside"}
+]`
+	if err := os.WriteFile(filepath.Join(dir, "agents.json"), []byte(agentsJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chatDir := filepath.Join(sessRoot, "fake%2Fwork", sidEmpty)
+	if err := os.MkdirAll(chatDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// progress-only lines are not user turns and are not "payload" → calm zero turns.
+	meta := `{"type":"progress","content":"booting"}` + "\n"
+	if err := os.WriteFile(filepath.Join(chatDir, "chat_history.jsonl"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	j, err := eventlog.Open(eventlog.DefaultPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	s := New("test", dir)
+	s.SetRegistry(reg)
+	s.SetTranscriptReader(transcript.NewReader(sessRoot))
+	s.SetEventLog(j)
+
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+
+	type caseSpec struct {
+		path   string
+		reason string
+		name   string
+	}
+	cases := []caseSpec{
+		{"/api/agents/no-sess/transcript", emptyReasonNoSession, "no-sess"},
+		{"/api/agents/read-err/transcript", emptyReasonReadError, "read-err"},
+		{"/api/agents/zero-turns/transcript", emptyReasonZeroTurns, "zero-turns"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%s", tc.reason, rr.Code, rr.Body.String())
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
+			t.Fatalf("%s: decode: %v", tc.reason, err)
+		}
+		if empty, _ := payload["empty"].(bool); !empty {
+			t.Fatalf("%s: want empty payload, got %+v", tc.reason, payload)
+		}
+		if payload["empty_reason"] != tc.reason {
+			t.Fatalf("%s: body empty_reason=%v", tc.reason, payload["empty_reason"])
+		}
+		got := findEmptyReason(cap, tc.reason)
+		if got == nil {
+			t.Fatalf("%s: no slog record with empty_reason (records=%d)", tc.reason, len(cap.records))
+		}
+		if got["component"] != "agent_transcript" {
+			t.Fatalf("%s: component=%v", tc.reason, got["component"])
+		}
+		if got["name"] != tc.name {
+			t.Fatalf("%s: name=%v want %s", tc.reason, got["name"], tc.name)
+		}
+		if tc.reason == emptyReasonReadError {
+			if got["err"] == nil || got["err"] == "" {
+				t.Fatalf("read_error should include err attr, got %v", got)
+			}
+		}
+	}
+
+	// Journal dual-write: all three empty_reason values greppable via fields.
+	events, err := eventlog.Tail(j.Path(), eventlog.TailOptions{
+		Limit:     20,
+		Component: "agent_transcript",
+		Source:    "server",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, ev := range events {
+		if ev.Fields == nil {
+			continue
+		}
+		if r, ok := ev.Fields["empty_reason"].(string); ok {
+			found[r] = true
+		}
+	}
+	for _, want := range []string{emptyReasonNoSession, emptyReasonReadError, emptyReasonZeroTurns} {
+		if !found[want] {
+			t.Fatalf("journal missing empty_reason=%s (found=%v events=%d)", want, found, len(events))
 		}
 	}
 }
