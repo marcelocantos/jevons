@@ -270,6 +270,114 @@ test('composerPlaceholder: main is clean; side uses [aside: title] hint', functi
   assert.ok(ph.indexOf('[main') === -1);
 });
 
+// ── 🎯T134 chrome hygiene + routing honesty ──────────────────────────
+
+test('T134 routeCandidates: open only — never done or parked', function () {
+  let s = AT.emptyState();
+  s = AT.handleComposer(s, 'capture: restic backup work').state;
+  const openId = s.threads[0].id;
+  s = AT.handleComposer(s, 'capture: parked later').state;
+  const parkId = s.threads[0].id;
+  s = AT.park(s, parkId);
+  s = AT.handleComposer(s, 'aside: done ghost title').state;
+  const doneId = s.threads[0].id;
+  s = AT.dismiss(s, doneId);
+
+  const cands = AT.routeCandidates(s);
+  assert.strictEqual(cands.length, 1);
+  assert.strictEqual(cands[0].id, openId);
+  assert.strictEqual(cands[0].status, 'open');
+  assert.ok(cands.every(function (t) { return t.status === 'open'; }));
+  // Done/parked never appear even if titles would match auto-route.
+  assert.ok(!cands.find(function (t) { return t.id === doneId; }));
+  assert.ok(!cands.find(function (t) { return t.id === parkId; }));
+});
+
+test('T134 stack excludes done; filing close still leaves bar clean', function () {
+  let s = AT.handleComposer(AT.emptyState(), 'target: File me please').state;
+  assert.strictEqual(AT.stack(s).length, 1);
+  s = AT.closeTargetAside(s);
+  assert.strictEqual(AT.stack(s).length, 0);
+  assert.strictEqual(AT.routeCandidates(s).length, 0);
+  assert.strictEqual(AT.archive(s).length, 1);
+});
+
+test('T134 visibleStack caps chips and reports overflow', function () {
+  assert.ok(AT.MAX_VISIBLE_CHIPS >= 1);
+  let s = AT.emptyState();
+  for (let i = 0; i < AT.MAX_VISIBLE_CHIPS + 3; i++) {
+    s = AT.handleComposer(s, 'capture: Workstream item ' + i + ' unique').state;
+  }
+  const full = AT.stack(s);
+  assert.strictEqual(full.length, AT.MAX_VISIBLE_CHIPS + 3);
+  const vs = AT.visibleStack(s);
+  assert.strictEqual(vs.shown.length, AT.MAX_VISIBLE_CHIPS);
+  assert.strictEqual(vs.overflowCount, 3);
+  assert.strictEqual(vs.overflow.length, 3);
+  const tiny = AT.visibleStack(s, { max: 2 });
+  assert.strictEqual(tiny.shown.length, 2);
+  assert.strictEqual(tiny.overflowCount, full.length - 2);
+});
+
+test('T134 clearDone / dismissAllParked / clearChromeNoise', function () {
+  let s = AT.emptyState();
+  s = AT.handleComposer(s, 'capture: Keep open').state;
+  const openId = s.threads[0].id;
+  s = AT.handleComposer(s, 'capture: Park me').state;
+  const parkId = s.threads[0].id;
+  s = AT.park(s, parkId);
+  s = AT.handleComposer(s, 'capture: Done me').state;
+  const doneId = s.threads[0].id;
+  s = AT.dismiss(s, doneId);
+
+  assert.strictEqual(AT.stack(s).length, 2); // open + parked
+  assert.strictEqual(AT.archive(s).length, 1);
+
+  // clearDone purges archive only.
+  let s2 = AT.clearDone(s);
+  assert.strictEqual(AT.archive(s2).length, 0);
+  assert.ok(AT.findThread(s2, openId));
+  assert.ok(AT.findThread(s2, parkId));
+  assert.ok(!AT.findThread(s2, doneId));
+
+  // dismissAllParked leaves open.
+  s2 = AT.dismissAllParked(s2);
+  assert.strictEqual(AT.findThread(s2, parkId).status, 'done');
+  assert.strictEqual(AT.findThread(s2, openId).status, 'open');
+  assert.strictEqual(AT.stack(s2).length, 1);
+
+  // clearChromeNoise: full bar reset (open+parked dismissed + archive purged).
+  s = AT.clearChromeNoise(s);
+  assert.strictEqual(AT.stack(s).length, 0);
+  assert.strictEqual(AT.archive(s).length, 0);
+  assert.strictEqual(s.focusId, AT.MAIN_ID);
+  assert.ok(!AT.findThread(s, openId));
+  assert.ok(!AT.findThread(s, parkId));
+  assert.ok(!AT.findThread(s, doneId));
+});
+
+test('T134 capture dedupes same fingerprint open thread', function () {
+  let s = AT.handleComposer(AT.emptyState(), 'capture: restic backup status').state;
+  assert.strictEqual(s.threads.length, 1);
+  const id = s.threads[0].id;
+  s = AT.handleComposer(s, 'capture: restic backup status').state;
+  assert.strictEqual(s.threads.length, 1);
+  assert.strictEqual(s.threads[0].id, id);
+  // Near-dup first line (whitespace/case) merges.
+  s = AT.handleComposer(s, 'capture:   RESTIC backup status  ').state;
+  assert.strictEqual(s.threads.length, 1);
+  assert.strictEqual(s.threads[0].id, id);
+  // Different workstream stacks separately.
+  s = AT.handleComposer(s, 'capture: billing nit later').state;
+  assert.strictEqual(s.threads.length, 2);
+  // Done ghost does not block a new open capture with same title.
+  s = AT.dismiss(s, id);
+  s = AT.handleComposer(s, 'capture: restic backup status').state;
+  assert.strictEqual(AT.stack(s).filter(function (t) {
+    return (t.body || '').toLowerCase().indexOf('restic') !== -1;
+  }).length, 1);
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);

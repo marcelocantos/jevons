@@ -47,9 +47,20 @@
     return hits / queryTokens.length + (hits >= 2 ? 0.25 : 0);
   }
 
+  // isRouteable: defense-in-depth for 🎯T134 — never auto-match done/archive.
+  // Prefer feeding routeCandidates (open-only) from AttentionThreads; this
+  // still skips ghosts if a full threads array is passed.
+  function isRouteable(thread) {
+    if (!thread || !thread.id || thread.id === 'main') return false;
+    const st = thread.status;
+    if (st === 'done' || st === 'archived') return false;
+    return true;
+  }
+
   // route(message, threads, opts) → { threadId|null, score, reason }
-  // threads: [{ id, title, digest, body, updatedAt? }]
+  // threads: [{ id, title, digest, body, status?, updatedAt? }]
   // Explicit prefixes (aside:, main:, target:, pursue:) disable auto-route.
+  // Skips done/archived even if caller forgot to filter (🎯T134).
   function route(message, threads, opts) {
     opts = opts || {};
     const raw = String(message || '').trim();
@@ -68,7 +79,7 @@
     let second = 0;
     for (let i = 0; i < list.length; i++) {
       const t = list[i];
-      if (!t || !t.id || t.id === 'main') continue;
+      if (!isRouteable(t)) continue;
       const sc = scoreThread(q, t);
       if (sc > bestScore) {
         second = bestScore;
@@ -93,6 +104,7 @@
   return {
     tokens: tokens,
     scoreThread: scoreThread,
+    isRouteable: isRouteable,
     route: route,
   };
 }));
