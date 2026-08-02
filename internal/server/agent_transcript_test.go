@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -105,8 +106,11 @@ func TestHandleAgentTranscriptWithFixture(t *testing.T) {
 	if err := os.MkdirAll(chatDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	line := `{"type":"user","message":{"role":"user","content":"hello aside"}}` + "\n" +
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"thinking…"}]}}` + "\n"
+	// Grok Build shape (top-level content) — the live fleet path that was empty before T124 residual.
+	line := `{"type":"user","content":[{"type":"text","text":"hello aside"}]}` + "\n" +
+		`{"type":"assistant","content":"thinking…","tool_calls":[]}` + "\n" +
+		`{"type":"tool_result","tool_call_id":"c1","content":"noise"}` + "\n" +
+		`{"type":"assistant","content":"done with aside"}` + "\n"
 	if err := os.WriteFile(filepath.Join(chatDir, "chat_history.jsonl"), []byte(line), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -123,10 +127,11 @@ func TestHandleAgentTranscriptWithFixture(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	var payload struct {
-		Name   string           `json:"name"`
-		Turns  []map[string]any `json:"turns"`
-		Empty  bool             `json:"empty"`
-		Purpose string          `json:"purpose"`
+		Name    string           `json:"name"`
+		Turns   []map[string]any `json:"turns"`
+		Empty   bool             `json:"empty"`
+		Purpose string           `json:"purpose"`
+		Error   string           `json:"error"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
@@ -134,6 +139,19 @@ func TestHandleAgentTranscriptWithFixture(t *testing.T) {
 	if payload.Name != "aside-1" || payload.Purpose != claudia.PurposeAside {
 		t.Fatalf("payload=%+v", payload)
 	}
-	// If finder found the file we get turns; if layout differs, empty is OK for this env.
-	t.Logf("turns=%d empty=%v", len(payload.Turns), payload.Empty)
+	if payload.Empty || len(payload.Turns) < 2 {
+		t.Fatalf("want non-empty Grok turns, got empty=%v turns=%+v err=%q", payload.Empty, payload.Turns, payload.Error)
+	}
+	if payload.Turns[0]["role"] != "user" {
+		t.Fatalf("first turn: %+v", payload.Turns[0])
+	}
+	ut, _ := payload.Turns[0]["text"].(string)
+	if ut != "hello aside" {
+		t.Fatalf("user text=%q", ut)
+	}
+	// Assistant text should include both assistant lines (tool_result ignored).
+	at, _ := payload.Turns[1]["text"].(string)
+	if !strings.Contains(at, "thinking") || !strings.Contains(at, "done with aside") {
+		t.Fatalf("assistant text=%q", at)
+	}
 }

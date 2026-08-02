@@ -36,7 +36,7 @@ type Entry struct {
 	Text       string    // extracted text (user string or assistant text blocks)
 	StopReason string    // assistant message.stop_reason when present
 	HasToolUse bool      // an assistant content block of type "tool_use"
-	IsUserTurn bool      // a user message whose content is a plain string (a real prompt)
+	IsUserTurn bool      // a user message with extractable prompt text (turn boundary)
 	Timestamp  time.Time // line timestamp when present
 }
 
@@ -51,8 +51,8 @@ func NewReader(sessionsDir string) *Reader {
 }
 
 // Read parses a session transcript and returns turns grouped by user message boundaries.
-// A turn boundary is a JSONL line with type "user" whose content is a plain string
-// (not a tool_result array).
+// A turn boundary is a JSONL line with type "user" whose content yields non-empty
+// prompt text (Grok top-level content string/text-blocks, or Claude nested message).
 func (r *Reader) Read(sessionID string) ([]map[string]any, error) {
 	path, err := r.findJSONL(sessionID)
 	if err != nil {
@@ -65,6 +65,13 @@ func (r *Reader) Read(sessionID string) ([]map[string]any, error) {
 	}
 
 	turns := extractTurns(lines)
+	if len(turns) == 0 && hasTranscriptPayload(lines) {
+		return nil, fmt.Errorf(
+			"transcript for session %q has %d lines but no user turns (unrecognized format?)",
+			sessionID, len(lines),
+		)
+	}
+
 	result := make([]map[string]any, len(turns))
 	for i, t := range turns {
 		result[i] = map[string]any{
@@ -95,6 +102,7 @@ func (r *Reader) Tail(sessionID string, n int) ([]Entry, error) {
 }
 
 // parseEntries reads a transcript file into chronological Entry values.
+// Supports Grok top-level content and Claude nested message envelopes.
 func parseEntries(path string) ([]Entry, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -112,15 +120,7 @@ func parseEntries(path string) ([]Entry, error) {
 			continue
 		}
 
-		var env struct {
-			Type      string `json:"type"`
-			Timestamp string `json:"timestamp"`
-			Message   *struct {
-				Role       string          `json:"role"`
-				StopReason string          `json:"stop_reason"`
-				Content    json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
+		var env lineEnvelope
 		if err := json.Unmarshal([]byte(raw), &env); err != nil {
 			continue // skip lines we cannot parse
 		}
@@ -134,52 +134,41 @@ func parseEntries(path string) ([]Entry, error) {
 		if env.Message != nil {
 			e.Role = env.Message.Role
 			e.StopReason = env.Message.StopReason
-			e.parseContent(env.Type, env.Message.Content)
+			e.fillFromContent(env.Type, env.Message.Content)
+		} else if len(env.Content) > 0 {
+			// Grok Build: content lives at the top level.
+			e.fillFromContent(env.Type, env.Content)
+			if e.Role == "" {
+				switch env.Type {
+				case "user":
+					e.Role = "user"
+				case "assistant":
+					e.Role = "assistant"
+				}
+			}
 		}
+		// tool_result / reasoning / system lines carry Type only (v1).
 		entries = append(entries, e)
 	}
 	return entries, scanner.Err()
 }
 
-// parseContent fills Text/HasToolUse/IsUserTurn from a message content
-// payload, which is either a JSON string (user prompt) or an array of
-// typed blocks (assistant / tool results).
-func (e *Entry) parseContent(typ string, content json.RawMessage) {
-	if len(content) == 0 {
-		return
+// fillFromContent sets Text/HasToolUse/IsUserTurn from a content payload
+// (JSON string or array of typed blocks).
+func (e *Entry) fillFromContent(typ string, content json.RawMessage) {
+	text, hasToolUse, isUser := parseContentPayload(typ, content)
+	e.Text = text
+	if hasToolUse {
+		e.HasToolUse = true
 	}
-	trimmed := strings.TrimSpace(string(content))
-	if len(trimmed) > 0 && trimmed[0] == '"' {
-		// Plain-string content: a genuine user prompt (turn boundary).
-		var s string
-		if json.Unmarshal(content, &s) == nil {
-			e.Text = s
-			if typ == "user" {
-				e.IsUserTurn = true
-			}
-		}
-		return
+	if isUser {
+		e.IsUserTurn = true
 	}
+}
 
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(content, &blocks) != nil {
-		return
-	}
-	var parts []string
-	for _, b := range blocks {
-		switch b.Type {
-		case "text":
-			if b.Text != "" {
-				parts = append(parts, b.Text)
-			}
-		case "tool_use":
-			e.HasToolUse = true
-		}
-	}
-	e.Text = strings.Join(parts, "\n")
+// parseContent is kept as a thin alias for older call sites / clarity in docs.
+func (e *Entry) parseContent(typ string, content json.RawMessage) {
+	e.fillFromContent(typ, content)
 }
 
 // Truncate rewrites a session transcript to keep only the first keepTurns
@@ -242,12 +231,26 @@ func (r *Reader) findJSONL(sessionID string) (string, error) {
 	return path, nil
 }
 
+// lineEnvelope covers both Grok (top-level content) and Claude (nested message).
+type lineEnvelope struct {
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	// Content is Grok Build top-level payload (string or text blocks).
+	Content json.RawMessage `json:"content"`
+	Message *struct {
+		Role       string          `json:"role"`
+		StopReason string          `json:"stop_reason"`
+		Content    json.RawMessage `json:"content"`
+	} `json:"message"`
+}
+
 // jsonlLine holds the raw bytes and parsed type/role for a single JSONL line.
 type jsonlLine struct {
 	raw  string
 	typ  string // "user", "assistant", "progress", "file-history-snapshot", etc.
 	role string // from message.role if present
-	// isUserTurn is true for type="user" lines where content is a string (not tool_result).
+	// isUserTurn is true for type="user" lines with extractable prompt text
+	// (Grok top-level content or Claude nested string content).
 	isUserTurn bool
 }
 
@@ -269,13 +272,7 @@ func readLines(path string) ([]jsonlLine, error) {
 			continue
 		}
 
-		var envelope struct {
-			Type    string `json:"type"`
-			Message *struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
+		var envelope lineEnvelope
 		if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
 			// Keep unparseable lines as-is.
 			lines = append(lines, jsonlLine{raw: raw})
@@ -287,16 +284,18 @@ func readLines(path string) ([]jsonlLine, error) {
 			typ: envelope.Type,
 		}
 
+		// Prefer Claude nested message when present; else Grok top-level content.
+		var content json.RawMessage
 		if envelope.Message != nil {
 			line.role = envelope.Message.Role
+			content = envelope.Message.Content
+		} else {
+			content = envelope.Content
+		}
 
-			// A "user turn" is a user message where content is a plain string,
-			// not a tool_result array. This marks a turn boundary.
-			if envelope.Type == "user" && envelope.Message.Content != nil {
-				content := strings.TrimSpace(string(envelope.Message.Content))
-				if len(content) > 0 && content[0] == '"' {
-					line.isUserTurn = true
-				}
+		if envelope.Type == "user" {
+			if _, _, isUser := parseContentPayload("user", content); isUser {
+				line.isUserTurn = true
 			}
 		}
 
@@ -305,7 +304,20 @@ func readLines(path string) ([]jsonlLine, error) {
 	return lines, scanner.Err()
 }
 
+// hasTranscriptPayload reports whether the file looks like a real chat
+// (not just empty/metadata), used to distinguish calm-empty from parser miss.
+func hasTranscriptPayload(lines []jsonlLine) bool {
+	for _, l := range lines {
+		switch l.typ {
+		case "user", "assistant", "tool_result", "reasoning", "tool_use":
+			return true
+		}
+	}
+	return false
+}
+
 // extractTurns groups JSONL lines into user→assistant turns.
+// tool_result / reasoning lines are ignored for turn text (v1).
 func extractTurns(lines []jsonlLine) []Turn {
 	var turns []Turn
 	turnNum := 0
@@ -347,46 +359,91 @@ func extractTurns(lines []jsonlLine) []Turn {
 	return turns
 }
 
-// extractText pulls the user's text from a user-turn JSONL line.
-func extractText(raw string) string {
-	var envelope struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
+// parseContentPayload extracts display text from a content field that is either
+// a JSON string or an array of typed blocks (text / tool_use / tool_result).
+// isUserTurn is true only for type "user" with non-empty extractable prompt text
+// (plain string, or text blocks — not pure tool_result arrays).
+func parseContentPayload(typ string, content json.RawMessage) (text string, hasToolUse bool, isUserTurn bool) {
+	if len(content) == 0 {
+		return "", false, false
 	}
-	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-		return ""
-	}
-	return envelope.Message.Content
-}
-
-// extractAssistantText pulls text content from an assistant JSONL line.
-func extractAssistantText(raw string) string {
-	var envelope struct {
-		Message struct {
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-		return ""
+	trimmed := strings.TrimSpace(string(content))
+	if trimmed == "" || trimmed == "null" {
+		return "", false, false
 	}
 
-	// Content is an array of blocks.
+	// Plain JSON string.
+	if trimmed[0] == '"' {
+		var s string
+		if json.Unmarshal(content, &s) != nil {
+			return "", false, false
+		}
+		s = strings.TrimSpace(s)
+		if typ == "user" && s != "" {
+			return s, false, true
+		}
+		return s, false, false
+	}
+
+	// Array of content blocks.
+	if trimmed[0] != '[' {
+		return "", false, false
+	}
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
-	if err := json.Unmarshal(envelope.Message.Content, &blocks); err != nil {
-		return ""
+	if json.Unmarshal(content, &blocks) != nil {
+		return "", false, false
 	}
-
 	var parts []string
 	for _, b := range blocks {
-		if b.Type == "text" && b.Text != "" {
-			parts = append(parts, b.Text)
+		switch b.Type {
+		case "text":
+			if b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		case "tool_use":
+			hasToolUse = true
 		}
+		// tool_result blocks intentionally ignored for turn text (v1).
 	}
-	return strings.Join(parts, "\n")
+	text = strings.Join(parts, "\n")
+	if typ == "user" && strings.TrimSpace(text) != "" {
+		isUserTurn = true
+	}
+	return text, hasToolUse, isUserTurn
+}
+
+// extractText pulls the user's prompt text from a user-turn JSONL line
+// (Grok top-level or Claude nested).
+func extractText(raw string) string {
+	var envelope lineEnvelope
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		return ""
+	}
+	content := envelope.Content
+	if envelope.Message != nil && len(envelope.Message.Content) > 0 {
+		content = envelope.Message.Content
+	}
+	text, _, _ := parseContentPayload("user", content)
+	return text
+}
+
+// extractAssistantText pulls assistant display text from a JSONL line.
+// Grok: top-level content string (or text blocks). Claude: message.content blocks.
+// tool_calls alone with empty content yield "".
+func extractAssistantText(raw string) string {
+	var envelope lineEnvelope
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		return ""
+	}
+	content := envelope.Content
+	if envelope.Message != nil && len(envelope.Message.Content) > 0 {
+		content = envelope.Message.Content
+	}
+	text, _, _ := parseContentPayload("assistant", content)
+	return text
 }
 
 // truncateLines keeps all lines up to and including the Nth user turn,
