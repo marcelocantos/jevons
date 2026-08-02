@@ -108,8 +108,12 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if parent == "" {
 			parent = "-"
 		}
-		fmt.Fprintf(&b, "%-20s %-10s parent=%-12s %s (session: %s)\n",
-			d.Name, status, parent, d.WorkDir, sessionDisplay(d.SessionID))
+		purpose := d.Purpose
+		if purpose == "" {
+			purpose = claudia.PurposeWork
+		}
+		fmt.Fprintf(&b, "%-20s %-10s purpose=%-8s parent=%-12s %s (session: %s)\n",
+			d.Name, status, purpose, parent, d.WorkDir, sessionDisplay(d.SessionID))
 	}
 	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
 	// missions should have fan-out — visible without only RHS eyeballing.
