@@ -998,12 +998,19 @@ function scheduleLatestExpansion() {
 }
 function refreshLatestExpansion() {
   const last = lastMsgEl();
+  let heightMayHaveChanged = false;
   if (last !== latestEl) {
     // T77: prior auto-expanded latest (user or assistant) collapses.
     if (latestEl && latestEl._autoExpanded && !latestEl._userToggled && latestEl._fullText != null) {
+      // If the prior latest was dematerialised as a virt-shell (scrolled
+      // off), rematerialise before collapse so minHeight/body stay in sync.
+      if (latestEl.classList && latestEl.classList.contains('virt-shell')) {
+        rematerializeMsg(latestEl);
+      }
       latestEl._autoExpanded = false;
       latestEl._expanded = false;
       renderBody(latestEl, latestEl._fullRole, latestEl._fullText);
+      heightMayHaveChanged = true;
     }
     latestEl = last;
   }
@@ -1014,8 +1021,12 @@ function refreshLatestExpansion() {
       last._autoExpanded = true;
       last._expanded = true;
       renderBody(last, last._fullRole, last._fullText);
+      heightMayHaveChanged = true;
     }
   }
+  // Collapse/expand changes layout; off-screen virt-shells that are now
+  // in view must rematerialise without waiting for a user wheel (🎯T56).
+  if (heightMayHaveChanged) scheduleVirtualize();
 }
 
 // ── Infinite scroll for older history (🎯T57) ─────────────────────────
@@ -1344,6 +1355,9 @@ function endScrollBookkeeping() {
   requestAnimationFrame(() => {
     _scrollBookkeeping = Math.max(0, _scrollBookkeeping - 1);
     noteScrollMetrics();
+    // Do not scheduleVirtualize here — virtualize itself uses bookkeeping and
+    // would rAF-loop. Re-check Track entry after pin/layout noise settles.
+    if (_scrollBookkeeping === 0) tryEnterFromGeometry();
   });
 }
 // Back-compat for hermetic tests / console: autoScroll mirrors latch.
@@ -1388,6 +1402,9 @@ msgs.addEventListener('touchmove', (e) => {
 msgs.addEventListener('scroll', () => {
   if (_pinningScroll || _scrollBookkeeping > 0) {
     noteScrollMetrics();
+    // Still virtualise: pin/collapse after send can bring dematerialised
+    // messages into view without a user wheel (blank gap until scroll).
+    scheduleVirtualize();
     return;
   }
   const top = msgs.scrollTop;
@@ -1411,8 +1428,12 @@ function scheduleVirtualize() {
     virtualizeMessages();
   });
 }
+let _virtualizing = false;
 function virtualizeMessages() {
   if (typeof VirtualList === 'undefined') return;
+  // Re-entrancy guard: pin/scroll during virt must not nest another pass.
+  if (_virtualizing) return;
+  _virtualizing = true;
   beginScrollBookkeeping();
   try {
     const scrollTop = msgs.scrollTop;
@@ -1441,24 +1462,30 @@ function virtualizeMessages() {
     if (isTracking()) scrollDown();
   } finally {
     endScrollBookkeeping();
+    _virtualizing = false;
   }
 }
 function dematerializeMsg(el) {
   if (!el || !el._body) return;
+  // Live / latest auto-expanded: keep real DOM (collapse + stream need it).
+  if (typeof el._streamRaw === 'string') return;
+  if (el._expanded && el._autoExpanded) return;
   const h = el.offsetHeight;
   el._virtH = h;
   el._virtWasExpanded = !!el._expanded;
   el.classList.add('virt-shell');
   el.style.minHeight = h + 'px';
-  // Clear heavy body; keep shell + timestamp for layout/scroll math.
+  // Clear heavy body; keep shell + timestamp + expand toggle for scroll math.
   if (el._body) el._body.innerHTML = '';
-  if (el._expandBtn) { el._expandBtn.remove(); el._expandBtn = null; }
+  // Do not remove _expandBtn — rematerialise repaints body; toggle stays.
 }
 function rematerializeMsg(el) {
   if (!el) return;
   el.classList.remove('virt-shell');
   el.style.minHeight = '';
-  if (el._virtWasExpanded) el._expanded = true;
+  // Prefer current _expanded (T77 may have collapsed while we were a shell).
+  // Only restore dematerialised expanded flag when still auto-latest-ish.
+  if (el._virtWasExpanded && el._expanded !== false) el._expanded = true;
   const role = el._layoutRole || (el.classList.contains('user') ? 'user' : 'jevons');
   const text = el._layoutText != null ? el._layoutText : (el._fullText || '');
   if (text != null) renderBody(el, role, text);
@@ -1469,6 +1496,7 @@ function rematerializeMsg(el) {
 window.virtualizeMessages = virtualizeMessages;
 window.dematerializeMsg = dematerializeMsg;
 window.rematerializeMsg = rematerializeMsg;
+window.scheduleVirtualize = scheduleVirtualize;
 window.renderUserText = renderUserText;
 
 // Actuator: pin only while Tracking; re-check before every pin (incl. rAF).

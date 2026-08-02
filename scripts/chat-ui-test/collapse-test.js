@@ -72,6 +72,14 @@ function startStaticServer() {
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => typeof window.addMsg === 'function' && !!window.marked, null, { timeout: 10000 });
+    // Collapse asserts structural DOM on all bubbles; stub virtualisation so
+    // T56 dematerialise cannot empty off-screen bodies mid-assert (virt is
+    // covered by virtual-list-test.js).
+    await page.evaluate(() => {
+      window.virtualizeMessages = function () {};
+      window.dematerializeMsg = function () {};
+      window.scheduleVirtualize = function () {};
+    });
 
     // ── Scenario A (T55/T57/T66): short + middle huge (both roles) + latest huge assistant ──
     // Build: short reply, a huge assistant list, a huge user block, then

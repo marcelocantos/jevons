@@ -90,7 +90,59 @@ function startServer() {
     if (after.lastShell) failures.push('latest msg should be materialised at bottom');
     if (after.shells < 10) failures.push('still expect off-screen shells at bottom, got ' + after.shells);
 
-    console.log(JSON.stringify({ stats, after, failures }, null, 2));
+    // T77 collapse of a tall prior reply must rematerialise in-view shells
+    // without a user wheel (blank gap above collapsed bubble regression).
+    const afterCollapse = await page.evaluate(async () => {
+      const el = document.getElementById('messages');
+      if (window.enterTrackBottom) window.enterTrackBottom();
+      // Tall assistant that will become non-latest.
+      const tall = Array.from({ length: 60 }, (_, i) => 'Tall reply line ' + i + '.').join('\n\n');
+      window.addMsg('jevons', tall);
+      el.scrollTop = el.scrollHeight;
+      window.virtualizeMessages();
+      // Dematerialise everything clearly above the fold (simulate long history).
+      const all = [...document.querySelectorAll('#messages > .msg')];
+      all.forEach((m, i) => {
+        if (i < all.length - 3 && !m.classList.contains('virt-shell') && typeof window.dematerializeMsg === 'function') {
+          // Leave a few near the end; force older ones to shells with full height.
+          if (m.offsetTop + m.offsetHeight < el.scrollTop - 20) window.dematerializeMsg(m);
+        }
+      });
+      const shellsBefore = document.querySelectorAll('#messages > .msg.virt-shell').length;
+      // New request → T77 collapses prior tall latest; height shrinks; Track pins.
+      window.addMsg('user', 'new request that collapses prior');
+      if (window.scrollDown) window.scrollDown();
+      // Drain rAF: scheduleLatestExpansion + scheduleVirtualize (+ pin).
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
+      // Product path should have scheduled virtualize; call once more as settle.
+      window.virtualizeMessages();
+      const viewTop = el.scrollTop;
+      const viewBot = viewTop + el.clientHeight;
+      let blankInView = 0;
+      let heavyInView = 0;
+      document.querySelectorAll('#messages > .msg').forEach((m) => {
+        const top = m.offsetTop;
+        const bot = top + m.offsetHeight;
+        if (bot < viewTop + 2 || top > viewBot - 2) return;
+        if (m.classList.contains('virt-shell') && m._body && m._body.innerHTML === '') blankInView++;
+        else if (!m.classList.contains('virt-shell')) heavyInView++;
+      });
+      return {
+        ok: blankInView === 0 && heavyInView > 0,
+        blankInView,
+        heavyInView,
+        shellsBefore,
+        shellsAfter: document.querySelectorAll('#messages > .msg.virt-shell').length,
+      };
+    });
+    if (!afterCollapse.ok) {
+      failures.push(
+        'after T77 collapse, in-view virt-shells not rematerialised ' +
+        JSON.stringify(afterCollapse),
+      );
+    }
+
+    console.log(JSON.stringify({ stats, after, afterCollapse, failures }, null, 2));
     if (failures.length) {
       console.error('FAIL', failures);
       process.exitCode = 1;
