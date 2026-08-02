@@ -109,6 +109,39 @@ test('index.html wires ComposerLayout into autoGrow', function () {
   assert.ok(html.includes('const growPx = input.offsetHeight - prevH'), 'must measure growth delta');
 });
 
+// ── 🎯T123: empty composer height matches send control ──────────
+
+test('empty composer min-height pins to --control-h (matches #send)', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Shared one-line control height on #input-bar.
+  assert.ok(
+    /#input-bar\s*\{[^}]*--control-h:\s*calc\(1\.45\s*\*\s*14px\s*\+\s*24px\)/.test(html),
+    '#input-bar must define one-line --control-h'
+  );
+  // #input empty/rest min-height is control-h, not T69 multi-line leftover.
+  const inputRule = html.match(/#input\s*\{[^}]+\}/);
+  assert.ok(inputRule, 'must have #input rule');
+  assert.ok(
+    /min-height:\s*var\(--control-h\)/.test(inputRule[0]),
+    '#input min-height must be var(--control-h), got: ' + inputRule[0]
+  );
+  assert.ok(
+    !/2\.9\s*\*\s*1\.45/.test(inputRule[0]),
+    'must not keep T69 multi-line min-height (2.9 * 1.45 …)'
+  );
+  assert.ok(
+    /max-height:\s*28vh/.test(inputRule[0]),
+    'must keep multi-line grow cap 28vh'
+  );
+  // #send pins to the same token → empty heights match by construction.
+  const sendRule = html.match(/#send\s*\{[^}]+\}/);
+  assert.ok(sendRule, 'must have #send rule');
+  assert.ok(
+    /min-height:\s*var\(--control-h\)/.test(sendRule[0]),
+    '#send min-height must be var(--control-h)'
+  );
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

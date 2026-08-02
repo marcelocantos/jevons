@@ -138,14 +138,34 @@ function startStaticServer() {
     if (!t88.rewindPrimary) failures.push('T88: Enter while editing should rewindAndResend: ' + JSON.stringify(t88));
     if (!t88.escClears) failures.push('T88: Escape should clear edit mode');
 
-    // ── T69 composer min-height ─────────────────────────────────────
+    // ── T69/T123 composer: compact empty height matches #send ─────
+    // T69 scrollbar policy remains (overflow hidden until cap); T123
+    // removed the multi-line default min-height so empty ≈ send.
     const t69 = await page.evaluate(() => {
       const cs = getComputedStyle(input);
+      const send = document.getElementById('send');
+      const sendH = send ? send.getBoundingClientRect().height : 0;
+      const inputH = input.getBoundingClientRect().height;
       const minH = parseFloat(cs.minHeight);
       const line = parseFloat(cs.lineHeight) || 20;
-      return { minH, line, tallEnough: minH >= line * 2.5 };
+      const maxH = cs.maxHeight;
+      return {
+        minH,
+        line,
+        inputH,
+        sendH,
+        maxH,
+        matchesSend: Math.abs(inputH - sendH) <= 2,
+        singleLineMin: minH > 0 && minH <= line * 1.5 + 30,
+        maxCapped: maxH === '28vh' || (parseFloat(maxH) > 0),
+      };
     });
-    if (!t69.tallEnough) failures.push('T69 composer min-height too small: ' + JSON.stringify(t69));
+    if (!t69.matchesSend) {
+      failures.push('T123 empty composer height must match send: ' + JSON.stringify(t69));
+    }
+    if (!t69.singleLineMin) {
+      failures.push('T123 composer min-height must be single-line compact: ' + JSON.stringify(t69));
+    }
 
     // ── T70 layout: messages flex shrinkable ────────────────────────
     const t70 = await page.evaluate(() => {

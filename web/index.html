@@ -305,10 +305,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   --control-h: calc(1.45 * 14px + 24px); }
 /* Textarea (not <input>) so Wispr Flow and other STT tools detect a
    document-style input and produce full punctuated sentences. */
-/* 🎯T69: multi-line min height so ordinary typing does not flicker a
-   one-line scrollbar; overflow hidden until near max (then internal scroll).
-   Cap 28vh so growth does not eat the latest assistant reply (🎯T70.1). */
-#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: calc(2.9 * 1.45 * 14px + 24px); max-height: 28vh; overflow-y: hidden; }
+/* 🎯T123: empty/single-line min-height pins to --control-h (same as #send).
+   No multi-line default min-height (T69-era scroll workaround removed).
+   autoGrow expands while typing; overflow hidden until max (🎯T69 scrollbar),
+   then .composer-scroll. Cap 28vh so growth does not eat the latest reply
+   (🎯T70.1). */
+#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: var(--control-h); max-height: 28vh; overflow-y: hidden; }
 #input.composer-scroll { overflow-y: auto; }
 /* Fade the placeholder well below entered text so it's obviously a
    prompt, not typed content. Lower opacity blends it toward the input
