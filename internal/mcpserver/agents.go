@@ -157,16 +157,27 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	parent, _ := args["parent"].(string)
 	purpose, _ := args["purpose"].(string)
 
+	life := map[string]any{"name": name, "workdir": workdir}
+
 	if name == "" || workdir == "" {
+		s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
+			"name": name, "err": "name and workdir are required",
+		})
 		return mcp.NewToolResultError("name and workdir are required"), nil
 	}
 
 	// Budget clamp: both new spawn and re-launch of a pause/kill-clamped
 	// or spawn-halted agent must be refused before EnsureAgent/Launch.
 	if blocked := s.checkSpawnAllowed(); blocked != nil {
+		s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
+			"name": name, "err": "spawn_halted",
+		})
 		return blocked, nil
 	}
 	if blocked := s.checkResumeAllowed(name); blocked != nil {
+		s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
+			"name": name, "err": "resume_halted",
+		})
 		return blocked, nil
 	}
 
@@ -175,6 +186,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		home, _ := os.UserHomeDir()
 		workdir = home + workdir[1:]
 	}
+	life["workdir"] = workdir
 
 	// Lineage: parent defaults to actor, else overseer root.
 	if parent == "" {
@@ -183,7 +195,11 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	if parent == "" {
 		parent = s.overseerName()
 	}
+	life["parent"] = parent
 	if parent == name {
+		s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
+			"name": name, "parent": parent, "err": "parent_equals_name",
+		})
 		return mcp.NewToolResultError("parent cannot equal agent name"), nil
 	}
 
@@ -195,12 +211,19 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	case claudia.PurposeAside, claudia.PurposeOverseer:
 		// allowed
 	default:
+		s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
+			"name": name, "purpose": purpose, "err": "invalid_purpose",
+		})
 		return mcp.NewToolResultError(fmt.Sprintf("purpose %q invalid; use work, aside, or overseer", purpose)), nil
 	}
+	life["purpose"] = purpose
 
 	existed := s.registry.Def(name) != nil
+	life["existed"] = existed
 	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
 	if err != nil {
+		life["err"] = err.Error()
+		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
 	// Refresh copy after Ensure (Register may have stored a different pointer).
@@ -217,16 +240,26 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		def.Purpose = purpose
 	}
 	if err := s.registry.Register(*def); err != nil {
+		life["err"] = err.Error()
+		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
 
 	proc, err := s.registry.Launch(name)
 	if err != nil {
+		life["err"] = err.Error()
+		life["session_id"] = sessionDisplay(def.SessionID)
+		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("start failed: %v", err)), nil
 	}
 
 	// Wire events: broadcast to web UI and notify Jevon on agent responses.
 	s.wireAgentEvents(name, proc)
+
+	life["session_id"] = sessionDisplay(def.SessionID)
+	life["purpose"] = def.Purpose
+	life["parent"] = def.Parent
+	s.logLifecycle(compAgentLifecycle, "start", "ok", life)
 
 	return mcp.NewToolResultText(fmt.Sprintf(
 		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s)",
@@ -270,10 +303,14 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	if name == "" {
+		s.logLifecycle(compAgentLifecycle, "stop", "error", map[string]any{
+			"err": "name is required",
+		})
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
 	s.registry.Stop(name)
+	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name})
 	return mcp.NewToolResultText(fmt.Sprintf("Agent %q stopped (still registered; start again to resume).", name)), nil
 }
 
@@ -281,10 +318,17 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	actor, _ := args["actor"].(string)
+	life := map[string]any{"name": name, "actor": actor}
 	if name == "" {
+		s.logLifecycle(compAgentLifecycle, "kill", "error", map[string]any{
+			"err": "name is required",
+		})
 		return mcp.NewToolResultError("name is required"), nil
 	}
 	if s.registry == nil {
+		s.logLifecycle(compAgentLifecycle, "kill", "error", map[string]any{
+			"name": name, "err": "registry unavailable",
+		})
 		return mcp.NewToolResultError("agent registry not available"), nil
 	}
 	// Default actor for the overseer only when identity is proven via session;
@@ -300,15 +344,21 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		if actor == "" {
 			actor = s.overseerName()
 		}
+		life["actor"] = actor
 	}
 	if err := canKill(s.registry, actor, name, s.isOverseerAgent); err != nil {
+		life["err"] = err.Error()
+		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	desc := s.registry.Descendants(name)
 	if err := killSubtree(s.registry, name); err != nil {
+		life["err"] = err.Error()
+		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", err)), nil
 	}
-	slog.Info("agent killed (removed from registry)", "name", name, "actor", actor, "descendants", len(desc))
+	life["descendants"] = len(desc)
+	s.logLifecycle(compAgentLifecycle, "kill", "ok", life)
 	msg := fmt.Sprintf(
 		"Agent %q killed by %q: process stopped and deregistered (will not auto-start; gone from agent list).",
 		name, actor,

@@ -178,7 +178,11 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 	args := req.GetArguments()
 	id := str(args["id"])
 	workdir := str(args["workdir"])
+	life := map[string]any{"id": id, "workdir": workdir}
 	if id == "" || workdir == "" {
+		s.logLifecycle(compThread, "spawn", "error", map[string]any{
+			"id": id, "err": "id and workdir are required",
+		})
 		return mcp.NewToolResultError("id and workdir are required"), nil
 	}
 	if strings.HasPrefix(workdir, "~/") {
@@ -186,6 +190,7 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 			workdir = home + workdir[1:]
 		}
 	}
+	life["workdir"] = workdir
 
 	// 🎯T111.3: parent lineage for /api/agents tree (same defaults as agent_start).
 	parent := strings.TrimSpace(str(args["parent"]))
@@ -196,7 +201,11 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 	if parent == "" {
 		parent = s.overseerName()
 	}
+	life["parent"] = parent
 	if parent == id {
+		s.logLifecycle(compThread, "spawn", "error", map[string]any{
+			"id": id, "parent": parent, "err": "parent_equals_id",
+		})
 		return mcp.NewToolResultError("parent cannot equal thread id"), nil
 	}
 
@@ -208,6 +217,8 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 		Parent:      parent,
 	})
 	if err != nil {
+		life["err"] = err.Error()
+		s.logLifecycle(compThread, "spawn", "error", life)
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	// Ensure registry parent is set even if Launch reused a legacy empty row
@@ -218,6 +229,9 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 			_ = s.registry.Register(*def)
 		}
 	}
+	life["session_id"] = short(th.SessionID)
+	life["purpose"] = th.Purpose
+	s.logLifecycle(compThread, "spawn", "ok", life)
 	return mcp.NewToolResultText(fmt.Sprintf(
 		"Spawned thread %q (session %s) in %s (parent: %s).", th.ID, short(th.SessionID), th.WorkDir, parent)), nil
 }

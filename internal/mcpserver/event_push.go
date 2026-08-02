@@ -28,21 +28,32 @@ func (s *Server) registerEventPushTools() {
 
 func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.butler == nil {
+		s.logLifecycle(compEventPush, "push", "error", map[string]any{
+			"err": "butler not configured",
+		})
 		return mcp.NewToolResultError("event push: butler not configured"), nil
 	}
 	args := req.GetArguments()
 	target := strings.TrimSpace(str(args["target"]))
 	event := strings.TrimSpace(str(args["event"]))
 	text := strings.TrimSpace(str(args["text"]))
+	life := map[string]any{"target": target, "event": event}
 	if target == "" || text == "" {
+		s.logLifecycle(compEventPush, "push", "error", map[string]any{
+			"target": target, "err": "target and text are required",
+		})
 		return mcp.NewToolResultError("target and text are required"), nil
 	}
 	if event == "" {
 		event = "unknown"
+		life["event"] = event
 	}
 	reply, err := s.butler.PushEvent(target, event, text)
 	if err != nil {
+		life["err"] = err.Error()
+		s.logLifecycle(compEventPush, "push", "error", life)
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	s.logLifecycle(compEventPush, "push", "ok", life)
 	return mcp.NewToolResultText(fmt.Sprintf("Pushed event %q to %q.\n\n%s", event, target, reply)), nil
 }

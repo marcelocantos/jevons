@@ -172,6 +172,15 @@ func (s *Server) SetEventLog(j *eventlog.Journal) {
 	s.eventLog = j
 }
 
+// LogEvent dual-writes a server-sourced lifecycle/decision event to slog and
+// the durable journal (source=server) when SetEventLog was called.
+// Siblings (🎯T128.1–T128.3) and fleet MCP tools use this path so
+// GET /api/logs and jevons_logs_tail see fleet truth, not only browser
+// decisions (🎯T128.4).
+func (s *Server) LogEvent(component, decision string, fields map[string]any) {
+	_ = eventlog.Log(s.eventJournal(), component, decision, fields)
+}
+
 // EventLogPath returns the durable journal path for MCP/tools.
 func (s *Server) EventLogPath() string {
 	return s.eventJournalPath()

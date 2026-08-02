@@ -5,12 +5,9 @@ package server
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
 
@@ -32,44 +29,20 @@ func (s *Server) SetTranscriptReader(r *transcript.Reader) {
 
 // logTranscriptEmpty fingerprints a soft-empty transcript response so operators
 // can reconstruct why the RHS pane was empty without re-running (🎯T128.2).
-// slog is the minimum; dual-write to the event journal when open (T128.4 helper
-// can replace the inline append later).
+// Dual-writes via LogEvent when the journal is open (🎯T128.4 helper).
 func (s *Server) logTranscriptEmpty(reason, name, sessionID, errMsg string) {
-	args := []any{
-		"component", "agent_transcript",
-		"empty_reason", reason,
-		"name", name,
+	fields := map[string]any{
+		"empty_reason": reason,
+		"name":         name,
+		"msg":          "agent_transcript empty",
 	}
 	if sessionID != "" {
-		args = append(args, "session_id", sessionID)
+		fields["session_id"] = sessionID
 	}
 	if errMsg != "" {
-		args = append(args, "err", errMsg)
+		fields["err"] = errMsg
 	}
-	slog.Info("agent_transcript empty", args...)
-
-	if j := s.eventJournal(); j != nil {
-		fields := map[string]any{
-			"empty_reason": reason,
-			"name":         name,
-		}
-		if sessionID != "" {
-			fields["session_id"] = sessionID
-		}
-		if errMsg != "" {
-			fields["err"] = errMsg
-		}
-		if err := j.Append(eventlog.Event{
-			TS:        time.Now().UTC().Format(time.RFC3339Nano),
-			Source:    "server",
-			Level:     "info",
-			Msg:       "agent_transcript empty",
-			Component: "agent_transcript",
-			Fields:    fields,
-		}); err != nil {
-			slog.Warn("eventlog: agent_transcript append failed", "err", err, "path", j.Path())
-		}
-	}
+	s.LogEvent("agent_transcript", "empty", fields)
 }
 
 // handleAgentTranscript serves one fleet agent's conversation turns for the

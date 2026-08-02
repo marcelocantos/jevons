@@ -181,10 +181,12 @@ func main() {
 
 	// Durable decision/lifecycle journal (🎯T120): browser + server events
 	// under state_dir/logs/events.jsonl — tool-readable without privilege.
-	if elog, err := eventlog.Open(eventlog.DefaultPath(cfg.StateDir)); err != nil {
+	var elog *eventlog.Journal
+	if j, err := eventlog.Open(eventlog.DefaultPath(cfg.StateDir)); err != nil {
 		slog.Error("cannot open event log", "err", err)
 		// Non-fatal: continue with slog-only browser path.
 	} else {
+		elog = j
 		srv.SetEventLog(elog)
 		slog.Info("event log ready", "path", elog.Path())
 	}
@@ -338,6 +340,12 @@ func main() {
 		ev, err := srv.TailEventLog(opt)
 		return ev, srv.EventLogPath(), err
 	})
+	// 🎯T128.4: fleet MCP tools dual-write lifecycle events (source=server)
+	// into the same journal so GET /api/logs / jevons_logs_tail see them.
+	mcpSrv.SetEventLogger(srv.LogEvent)
+	if elog != nil {
+		mcpSrv.SetEventJournal(elog)
+	}
 
 	// Butler: durable-thread orchestrator over the thread store, the
 	// session scanner (non-invasive observation), and the transcript

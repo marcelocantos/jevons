@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
+	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/workers"
 )
 
@@ -90,6 +91,12 @@ type Server struct {
 
 	// eventLogTail tails durable product logs (🎯T120). Nil = tool unregistered.
 	eventLogTail EventLogTailFunc
+	// eventLogger dual-writes server lifecycle events via HTTP Server.LogEvent
+	// when wired from main (🎯T128.4). Nil = fall through to eventJournal/slog.
+	eventLogger EventLoggerFunc
+	// eventJournal is the durable product journal for MCP lifecycle dual-write
+	// (🎯T128.1 / T128.4). Same file as GET /api/logs when SetEventJournal is wired.
+	eventJournal *eventlog.Journal
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable

@@ -16,12 +16,51 @@ import (
 // EventLogTailFunc returns newest-first events and the journal path.
 type EventLogTailFunc func(opt eventlog.TailOptions) (events []eventlog.Event, path string, err error)
 
+// EventLoggerFunc dual-writes structured server lifecycle events (🎯T128.4).
+// Wired from jevonsd to Server.LogEvent so fleet MCP tools share one journal.
+type EventLoggerFunc func(component, decision string, fields map[string]any)
+
 // SetEventLogTailer wires jevons_logs_tail (🎯T120 product introspection).
 func (s *Server) SetEventLogTailer(fn EventLogTailFunc) {
 	s.eventLogTail = fn
 	if fn != nil {
 		s.registerEventLogTools()
 	}
+}
+
+// SetEventLogger wires server→eventlog dual-write for fleet tools (🎯T128.4).
+// Preferred path when HTTP Server owns the journal (srv.LogEvent).
+func (s *Server) SetEventLogger(fn EventLoggerFunc) {
+	s.eventLogger = fn
+}
+
+// SetEventJournal attaches the durable journal for direct dual-write when
+// EventLogger is unset (tests / alternate wiring). Same file as GET /api/logs.
+func (s *Server) SetEventJournal(j *eventlog.Journal) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.eventJournal = j
+}
+
+// LogEvent emits a server-sourced product event. Prefers the wired
+// EventLogger (HTTP server dual-write), else the attached eventJournal,
+// else slog-only. Shared entrypoint for fleet tools (🎯T128.4).
+func (s *Server) LogEvent(component, decision string, fields map[string]any) {
+	if s == nil {
+		_ = eventlog.Log(nil, component, decision, fields)
+		return
+	}
+	if s.eventLogger != nil {
+		s.eventLogger(component, decision, fields)
+		return
+	}
+	s.mu.Lock()
+	j := s.eventJournal
+	s.mu.Unlock()
+	_ = eventlog.Log(j, component, decision, fields)
 }
 
 func (s *Server) registerEventLogTools() {
