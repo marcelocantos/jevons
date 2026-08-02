@@ -587,7 +587,7 @@ function scheduleJevonsRender(el) {
     scheduleLatestExpansion();
     // Force layout then pin immediately (not only coalesced rAF) so each
     // incremental paint's true scrollHeight is what stick-to-bottom uses.
-    if (autoScroll) {
+    if (isTracking()) {
       void (el._body && el._body.offsetHeight);
       scrollDown();
     }
@@ -614,7 +614,7 @@ function sealAssistantStream() {
   }
   // Final layout (markdown / mermaid / highlight) often grows after the
   // last stream pin — re-follow so the user never needs a manual nudge.
-  if (autoScroll) {
+  if (isTracking()) {
     void msgs.offsetHeight;
     scrollDown();
   }
@@ -1057,6 +1057,7 @@ async function loadEarlier() {
   loadingEarlier = true;
   showHistoryLoading(true);
   const before = oldestIndex;
+  beginScrollBookkeeping();
   try {
     const data = await fetch('/api/history?end=' + before + '&limit=200').then(r => r.json());
     const prevH = msgs.scrollHeight, prevTop = msgs.scrollTop;
@@ -1067,10 +1068,13 @@ async function loadEarlier() {
     oldestIndex = (data.start != null) ? data.start : 0;
     // Content added ABOVE the viewport — shift scrollTop by the height
     // gained so the position doesn't jump, and the sentinel leaves view
-    // so we don't instantly re-trigger.
+    // so we don't instantly re-trigger. Mode unchanged (not a user leave).
     msgs.scrollTop = prevTop + (msgs.scrollHeight - prevH);
+    noteScrollMetrics();
   } catch (e) {
     console.error('load earlier failed', e);
+  } finally {
+    endScrollBookkeeping();
   }
   showHistoryLoading(false);
   loadingEarlier = false;
@@ -1281,25 +1285,108 @@ function refreshCost() {
 setInterval(refreshCost, 3000);
 refreshCost();
 
-let autoScroll = true;
-// Ignore scroll events caused by our own pin so a 1px shortfall cannot
-// permanently disable follow (Grok-CLI-like stick-to-bottom, 🎯T30.2).
+// ── Latched stick-to-bottom (Track | Free) ────────────────────────────
+// Policy lives above the DOM. Mode is never re-derived from distance on
+// every scroll (that caused a fat magnet + mid-stream pin fights).
+//   track — bottom is the origin; growth always pins
+//   free  — user owns scrollTop; growth never pins
+// Enter: send / boot / arrive at bottom (ε only for entry).
+// Leave: intentional move away (wheel/touch/PageUp/scrollbar up).
+let followMode = 'track'; // 'track' | 'free'
+// ~half–one line of 14px/1.6 body text — entry noise only, not a stay band.
+const ENTER_BOTTOM_EPS_PX = 16;
 let _pinningScroll = false;
-const FOLLOW_SLACK_PX = 120;
+let _lastScrollTop = 0;
+let _lastScrollHeight = 0;
+// >0 while we adjust scrollTop/height for pin, virtualise, history prepend —
+// those must not be read as "user left the bottom".
+let _scrollBookkeeping = 0;
+
+function isTracking() { return followMode === 'track'; }
+function enterTrackBottom() { followMode = 'track'; }
+function leaveTrackBottom() { followMode = 'free'; }
 function distFromBottom() {
   return msgs.scrollHeight - msgs.clientHeight - msgs.scrollTop;
 }
-function nearBottom() {
-  return distFromBottom() <= FOLLOW_SLACK_PX;
+// True when content is short (nowhere to scroll) or within entry ε of end.
+function atBottom() {
+  const room = msgs.scrollHeight - msgs.clientHeight;
+  if (room <= 0) return true;
+  return distFromBottom() <= ENTER_BOTTOM_EPS_PX;
 }
-// User scroll-up must always disarm follow. Do NOT re-pin merely because
-// the end left the viewport — that fought history browsing (wheel moved a
-// few px then snapped back while autoScroll was still true within slack).
-// Growth follow is handled by post-paint scrollDown + stream ResizeObserver.
+function noteScrollMetrics() {
+  _lastScrollTop = msgs.scrollTop;
+  _lastScrollHeight = msgs.scrollHeight;
+}
+function beginScrollBookkeeping() { _scrollBookkeeping++; }
+function endScrollBookkeeping() {
+  // Defer clear so the scroll event from our write is still ignored.
+  requestAnimationFrame(() => {
+    _scrollBookkeeping = Math.max(0, _scrollBookkeeping - 1);
+    noteScrollMetrics();
+  });
+}
+// Back-compat for hermetic tests / console: autoScroll mirrors latch.
+Object.defineProperty(window, 'autoScroll', {
+  configurable: true,
+  get() { return followMode === 'track'; },
+  set(v) { followMode = v ? 'track' : 'free'; },
+});
+window.isTracking = isTracking;
+window.enterTrackBottom = enterTrackBottom;
+window.leaveTrackBottom = leaveTrackBottom;
+Object.defineProperty(window, 'followMode', {
+  configurable: true,
+  get() { return followMode; },
+  set(v) { followMode = (v === 'free') ? 'free' : 'track'; },
+});
+
+// User intent sensors — latch mode; do not recompute from geometry alone.
 msgs.addEventListener('wheel', (e) => {
-  if (e.deltaY < 0) autoScroll = false;           // scroll up → read history
-  else if (e.deltaY > 0 && nearBottom()) autoScroll = true; // scroll down into bottom band
+  if (e.deltaY < 0) {
+    leaveTrackBottom(); // scroll up → free
+  } else if (e.deltaY > 0) {
+    // Scroll down: enter only once we *arrive* at the bottom (small ε).
+    // Defer to next frame so scrollTop has applied.
+    requestAnimationFrame(() => {
+      if (atBottom()) enterTrackBottom();
+    });
+  }
 }, { passive: true });
+let _touchLastY = null;
+msgs.addEventListener('touchstart', (e) => {
+  _touchLastY = e.touches && e.touches[0] ? e.touches[0].clientY : null;
+}, { passive: true });
+msgs.addEventListener('touchmove', (e) => {
+  if (_touchLastY == null || !e.touches || !e.touches[0]) return;
+  const y = e.touches[0].clientY;
+  if (y > _touchLastY + 2) leaveTrackBottom(); // finger down → content up
+  else if (y < _touchLastY - 2) {
+    requestAnimationFrame(() => { if (atBottom()) enterTrackBottom(); });
+  }
+  _touchLastY = y;
+}, { passive: true });
+// Scrollbar: leave only when the user moves up *without* a concurrent
+// height shrink (layout/virtualise clamps look like scroll-up otherwise).
+// Enter only when the viewport *lands* at the bottom. Never recompute
+// mode from a fat "near bottom" band.
+msgs.addEventListener('scroll', () => {
+  if (_pinningScroll || _scrollBookkeeping > 0) {
+    noteScrollMetrics();
+    return;
+  }
+  const top = msgs.scrollTop;
+  const h = msgs.scrollHeight;
+  if (atBottom()) {
+    enterTrackBottom();
+  } else if (top + 1 < _lastScrollTop && h + 1 >= _lastScrollHeight) {
+    // scrollTop fell while height did not shrink → user scrolled up
+    leaveTrackBottom();
+  }
+  noteScrollMetrics();
+  scheduleVirtualize();
+}, { passive: true });
+
 // 🎯T56: dematerialise off-screen message bodies (height-preserving shells).
 let _virtRaf = 0;
 function scheduleVirtualize() {
@@ -1311,27 +1398,34 @@ function scheduleVirtualize() {
 }
 function virtualizeMessages() {
   if (typeof VirtualList === 'undefined') return;
-  const scrollTop = msgs.scrollTop;
-  const clientH = msgs.clientHeight;
-  const buffer = VirtualList.DEFAULT_BUFFER || 800;
-  const children = msgs.children;
-  // Preserve scrollHeight while swapping shells: measure first.
-  for (let i = 0; i < children.length; i++) {
-    const el = children[i];
-    if (!el.classList || !el.classList.contains('msg')) continue;
-    // Never virtualise the live streaming bubble or working indicator host.
-    if (typeof el._streamRaw === 'string') {
-      if (el.classList.contains('virt-shell')) rematerializeMsg(el);
-      continue;
+  beginScrollBookkeeping();
+  try {
+    const scrollTop = msgs.scrollTop;
+    const clientH = msgs.clientHeight;
+    const buffer = VirtualList.DEFAULT_BUFFER || 800;
+    const children = msgs.children;
+    // Preserve scrollHeight while swapping shells: measure first.
+    for (let i = 0; i < children.length; i++) {
+      const el = children[i];
+      if (!el.classList || !el.classList.contains('msg')) continue;
+      // Never virtualise the live streaming bubble or working indicator host.
+      if (typeof el._streamRaw === 'string') {
+        if (el.classList.contains('virt-shell')) rematerializeMsg(el);
+        continue;
+      }
+      const top = el.offsetTop;
+      const h = el.offsetHeight;
+      const want = VirtualList.shouldMaterialize(top, h, scrollTop, clientH, buffer);
+      if (want) {
+        if (el.classList.contains('virt-shell')) rematerializeMsg(el);
+      } else if (!el.classList.contains('virt-shell')) {
+        dematerializeMsg(el);
+      }
     }
-    const top = el.offsetTop;
-    const h = el.offsetHeight;
-    const want = VirtualList.shouldMaterialize(top, h, scrollTop, clientH, buffer);
-    if (want) {
-      if (el.classList.contains('virt-shell')) rematerializeMsg(el);
-    } else if (!el.classList.contains('virt-shell')) {
-      dematerializeMsg(el);
-    }
+    // Virtualise can change heights; re-pin only if still Tracking.
+    if (isTracking()) scrollDown();
+  } finally {
+    endScrollBookkeeping();
   }
 }
 function dematerializeMsg(el) {
@@ -1356,32 +1450,22 @@ function rematerializeMsg(el) {
   delete el._virtH;
   delete el._virtWasExpanded;
 }
-msgs.addEventListener('scroll', () => {
-  if (!_pinningScroll) scheduleVirtualize();
-}, { passive: true });
 // Expose for hermetic tests (🎯T56 / T76).
 window.virtualizeMessages = virtualizeMessages;
 window.dematerializeMsg = dematerializeMsg;
 window.rematerializeMsg = rematerializeMsg;
 window.renderUserText = renderUserText;
-let _touchLastY = null;
-msgs.addEventListener('touchstart', (e) => {
-  _touchLastY = e.touches && e.touches[0] ? e.touches[0].clientY : null;
-}, { passive: true });
-msgs.addEventListener('touchmove', (e) => {
-  if (_touchLastY == null || !e.touches || !e.touches[0]) return;
-  const y = e.touches[0].clientY;
-  if (y > _touchLastY + 2) autoScroll = false; // finger down → content up
-  _touchLastY = y;
-}, { passive: true });
-msgs.addEventListener('scroll', () => {
-  if (_pinningScroll) return;
-  autoScroll = nearBottom();
-});
+
+// Actuator: pin only while Tracking; re-check before every pin (incl. rAF).
 function scrollDown() {
-  if (!autoScroll) return;
+  if (!isTracking()) return;
   _pinningScroll = true;
-  const pin = () => { msgs.scrollTop = msgs.scrollHeight; };
+  beginScrollBookkeeping();
+  const pin = () => {
+    if (!isTracking()) return;
+    msgs.scrollTop = msgs.scrollHeight;
+    noteScrollMetrics();
+  };
   pin();
   // Double-rAF catches late markdown/table layout after the append.
   requestAnimationFrame(() => {
@@ -1389,9 +1473,11 @@ function scrollDown() {
     requestAnimationFrame(() => {
       pin();
       _pinningScroll = false;
+      endScrollBookkeeping();
     });
   });
 }
+window.scrollDown = scrollDown;
 // scrollDownThrottled coalesces scroll requests to one per animation
 // frame, so a burst replay of many messages forces one layout, not one
 // per message (🎯T57).
@@ -1401,7 +1487,7 @@ function scrollDownThrottled() {
   _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; scrollDown(); });
 }
 // ResizeObserver on the live streaming bubble: re-pin whenever its box
-// grows while follow is armed (content growth only — not user scroll-away).
+// grows while Tracking (content growth only — not user scroll-away).
 let _streamRO = null;
 let _streamROEl = null;
 function watchStreamBubble(el) {
@@ -1410,7 +1496,7 @@ function watchStreamBubble(el) {
   unwatchStreamBubble();
   _streamROEl = el;
   _streamRO = new ResizeObserver(() => {
-    if (autoScroll) scrollDownThrottled();
+    if (isTracking()) scrollDownThrottled();
   });
   _streamRO.observe(el);
   if (el._body) _streamRO.observe(el._body);
@@ -1558,11 +1644,10 @@ function send() {
   renderComposerImages();
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   autoGrow();
-  // Sending pins us to the bottom so the outgoing message and the reply
-  // scroll into view, even if we'd scrolled up to read history.
-  autoScroll = true;
+  // Sending re-enters Track so the outgoing message and the reply pin.
+  enterTrackBottom();
   setWorking(true);
-  requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+  requestAnimationFrame(() => { scrollDown(); });
   if (typeof renderAttention === 'function') renderAttention();
 }
 
@@ -1583,8 +1668,8 @@ function rewindAndResend() {
   input.value = '';
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   autoGrow();
-  autoScroll = true; setWorking(true);
-  requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+  enterTrackBottom(); setWorking(true);
+  requestAnimationFrame(() => { scrollDown(); });
 }
 
 // recallHistory walks msgHistory into the input. dir = -1 (older) or +1
@@ -1832,15 +1917,25 @@ connect();
 // On first load the server replays history as a burst of messages and
 // layout settles asynchronously, which can leave the view slightly above
 // the true bottom — so a freshly-typed message wouldn't scroll into view.
-// Pin to the bottom over the first second so we start at the latest.
+// Stay in Track and pin over the first second so we start at the latest.
+enterTrackBottom();
 [0, 100, 250, 500, 1000].forEach(d => setTimeout(() => {
-  msgs.scrollTop = msgs.scrollHeight;
-  autoScroll = true;
+  if (isTracking()) scrollDown();
 }, d));
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'PageUp') { e.preventDefault(); msgs.scrollBy(0, -msgs.clientHeight * 0.8); }
-  if (e.key === 'PageDown') { e.preventDefault(); msgs.scrollBy(0, msgs.clientHeight * 0.8); }
+  if (e.key === 'PageUp') {
+    e.preventDefault();
+    leaveTrackBottom();
+    msgs.scrollBy(0, -msgs.clientHeight * 0.8);
+    return;
+  }
+  if (e.key === 'PageDown') {
+    e.preventDefault();
+    msgs.scrollBy(0, msgs.clientHeight * 0.8);
+    requestAnimationFrame(() => { if (atBottom()) enterTrackBottom(); });
+    return;
+  }
   // Esc interrupts Jevons's current turn (like the Claude Code TUI).
   if (e.key === 'Escape') {
     // 🎯T88: clear history-edit mode so next Enter is safe append.

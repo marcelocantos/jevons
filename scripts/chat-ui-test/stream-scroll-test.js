@@ -1,14 +1,14 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic oracle for follow-scroll during long in-flight assistant streams
+// Hermetic oracle for latched Track/Free stick-to-bottom during streams
 // (🎯T30.2). Serves the static web/ UI, grows a streaming bubble past the
 // viewport, and asserts:
-//   * auto-follow keeps the viewport within FOLLOW slack of true bottom
-//     after each growth step (no freeze at a mid-bubble offset)
-//   * intentional scroll-up disarms follow (autoScroll false) and is not
-//     bounced back by the next stream chunk
-//   * after seal, free scroll reaches the true bottom
+//   * Track mode keeps the viewport at true bottom after each growth step
+//   * intentional scroll-up latches Free (not re-armed by distance) and
+//     is not bounced back by the next stream chunk — even a small leave
+//   * after seal, free scroll reaches the true bottom; re-enter Track
+//     only by arriving at the bottom
 //
 //   node scripts/chat-ui-test/stream-scroll-test.js [--headed]
 
@@ -60,7 +60,9 @@ function slackOf(page) {
     const dist = m.scrollHeight - m.clientHeight - m.scrollTop;
     return {
       dist,
-      autoScroll: window.autoScroll === true || (typeof autoScroll !== 'undefined' && autoScroll === true),
+      followMode: window.followMode,
+      tracking: typeof window.isTracking === 'function' ? window.isTracking() : null,
+      autoScroll: window.autoScroll === true,
       scrollTop: m.scrollTop,
       scrollHeight: m.scrollHeight,
       clientHeight: m.clientHeight,
@@ -94,15 +96,14 @@ function slackOf(page) {
         window.addMsg('jevons', 'prior assistant turn ' + i + ' — short.');
       }
       if (typeof setWorking === 'function') setWorking(true, 'streaming');
-      // Force follow on and pin (same as send()).
-      autoScroll = true;
-      const m = document.getElementById('messages');
-      m.scrollTop = m.scrollHeight;
+      // Force Track and pin (same as send()).
+      window.enterTrackBottom();
+      window.scrollDown();
     });
     await page.waitForTimeout(80);
 
     // Grow a streaming reply in steps that each add many lines.
-    // Assert scrollHeight is monotonic and follow lag stays within slack —
+    // Assert scrollHeight is monotonic and Track keeps true bottom —
     // regression for "pins to mid-bubble while tokens still arrive".
     const steps = 10;
     let prevHeight = 0;
@@ -124,12 +125,15 @@ function slackOf(page) {
       // rAF render + double-rAF pin + ResizeObserver / IO settle.
       await page.waitForTimeout(150);
       const snap = await slackOf(page);
-      // FOLLOW_SLACK_PX is 120; allow a little layout jitter.
-      if (snap.dist > 140) {
+      // Track must pin hard; allow a few px layout jitter only.
+      if (snap.dist > 24) {
         failures.push(
           `step ${s}: follow lag ${snap.dist}px (scrollTop=${snap.scrollTop}, ` +
           `height=${snap.scrollHeight}, client=${snap.clientHeight}, items=${snap.streamItems})`,
         );
+      }
+      if (snap.tracking !== true) {
+        failures.push(`step ${s}: expected Track mid-stream, got mode=${snap.followMode}`);
       }
       if (snap.scrollHeight + 1 < prevHeight) {
         failures.push(
@@ -143,19 +147,17 @@ function slackOf(page) {
     }
 
     if (!failures.length) {
-      // Intentional scroll-up must disarm follow and survive the next chunk.
+      // Small intentional leave (well under the old 120px band) must latch Free
+      // and survive further stream growth without re-pin.
       await page.evaluate(() => {
+        window.leaveTrackBottom();
         const m = document.getElementById('messages');
-        m.scrollTop = Math.max(0, m.scrollTop - 400);
+        m.scrollTop = Math.max(0, m.scrollTop - 40);
       });
       await page.waitForTimeout(50);
       const afterUp = await slackOf(page);
-      // autoScroll is a let in page scope — classic script binds it on window in browsers.
-      const armed = await page.evaluate(() => {
-        try { return autoScroll; } catch (_) { return null; }
-      });
-      if (armed !== false) {
-        failures.push(`scroll-up did not disarm follow (autoScroll=${JSON.stringify(armed)}, dist=${afterUp.dist})`);
+      if (afterUp.tracking !== false) {
+        failures.push(`small scroll-up did not latch Free (mode=${afterUp.followMode}, dist=${afterUp.dist})`);
       }
       const topBefore = afterUp.scrollTop;
       await page.evaluate(() => {
@@ -163,34 +165,34 @@ function slackOf(page) {
       });
       await page.waitForTimeout(120);
       const afterChunk = await slackOf(page);
-      // Must not bounce back to bottom (would jump scrollTop up by hundreds).
-      if (afterChunk.scrollTop > topBefore + 80) {
+      if (afterChunk.tracking !== false) {
+        failures.push(`stream growth re-armed Track after leave (mode=${afterChunk.followMode})`);
+      }
+      // Must not bounce back to bottom (would jump scrollTop up).
+      if (afterChunk.scrollTop > topBefore + 24) {
         failures.push(
-          `next stream chunk bounced scroll after user scroll-up ` +
+          `next stream chunk bounced scroll after user leave ` +
           `(was ${topBefore}, now ${afterChunk.scrollTop})`,
         );
       }
     }
 
-    // Seal, re-enable follow, pin, then free-scroll must reach true bottom.
+    // Seal, re-enter Track, pin.
     await page.evaluate(() => {
       window.sealAssistantStream();
-      autoScroll = true;
-      const m = document.getElementById('messages');
-      m.scrollTop = m.scrollHeight;
+      window.enterTrackBottom();
+      window.scrollDown();
     });
     await page.waitForTimeout(150);
     const sealed = await slackOf(page);
-    if (sealed.dist > 140) {
+    if (sealed.dist > 24) {
       failures.push(`after seal+pin, still ${sealed.dist}px from bottom`);
     }
 
-    // History browse: small wheel-up must NOT snap back to bottom (regression
-    // from end-sentinel IntersectionObserver re-pin while autoScroll true).
+    // History browse: wheel-up latches Free and must NOT snap back.
     await page.evaluate(() => {
-      autoScroll = true;
-      const m = document.getElementById('messages');
-      m.scrollTop = m.scrollHeight;
+      window.enterTrackBottom();
+      window.scrollDown();
     });
     await page.waitForTimeout(40);
     await page.locator('#messages').hover({ position: { x: 40, y: 40 } });
@@ -202,11 +204,8 @@ function slackOf(page) {
         `history wheel-up snapped back (dist=${afterWheel.dist}, want well above bottom)`,
       );
     }
-    const wheelArmed = await page.evaluate(() => {
-      try { return autoScroll; } catch (_) { return null; }
-    });
-    if (wheelArmed !== false) {
-      failures.push(`history wheel-up did not disarm follow (autoScroll=${JSON.stringify(wheelArmed)})`);
+    if (afterWheel.tracking !== false) {
+      failures.push(`history wheel-up did not latch Free (mode=${afterWheel.followMode})`);
     }
     // Stay put — no delayed snap after wheel (wait a beat).
     const topAfterWheel = afterWheel.scrollTop;
@@ -219,9 +218,9 @@ function slackOf(page) {
       );
     }
 
-    // Scroll up then down manually — should reach bottom without bounce fight.
+    // Scroll to bottom manually — must re-enter Track (arrival).
     await page.evaluate(() => {
-      autoScroll = false;
+      window.leaveTrackBottom();
       const m = document.getElementById('messages');
       m.scrollTop = 0;
     });
@@ -234,6 +233,9 @@ function slackOf(page) {
     const free = await slackOf(page);
     if (free.dist > 5) {
       failures.push(`after seal, free scroll cannot reach bottom (dist=${free.dist})`);
+    }
+    if (free.tracking !== true) {
+      failures.push(`arriving at bottom did not enter Track (mode=${free.followMode})`);
     }
     if (!free.hasEnd) {
       failures.push('messages-end sentinel missing after stream');
