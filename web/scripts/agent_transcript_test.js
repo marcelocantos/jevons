@@ -100,6 +100,16 @@ test('index.html wires agent inspect pane + selectAgent transcript', function ()
     'selectAgent must not append to main messages');
 });
 
+test('T136 create-aside dual-write + no attention chip wall', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('ensureFleetAside') >= 0, 'registers fleet aside on create');
+  assert.ok(html.indexOf('/api/asides') >= 0, 'POST /api/asides path');
+  assert.ok(html.indexOf("attentionBar.classList.remove('visible')") >= 0 ||
+    html.indexOf('classList.remove("visible")') >= 0,
+    'attention bar not shown for aside stack');
+  assert.ok(html.indexOf('appendThreadChip') === -1, 'no chip loop for asides');
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);

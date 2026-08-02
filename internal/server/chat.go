@@ -409,11 +409,12 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			progress.SetStatus(d.Name, status)
 		}
 		info := agentInfo{
-			Name:    d.Name,
-			WorkDir: d.WorkDir,
-			Parent:  d.Parent,
-			Purpose: purpose,
-			Status:  status,
+			Name:        d.Name,
+			WorkDir:     d.WorkDir,
+			Parent:      d.Parent,
+			Purpose:     purpose,
+			Description: d.Description,
+			Status:      status,
 		}
 		if progress != nil {
 			if p := progress.Get(d.Name); p.Summary != "" || p.Phase != "" || p.Step != "" {

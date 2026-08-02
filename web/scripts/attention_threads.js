@@ -1,12 +1,17 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Pure attention-thread model for human↔overseer chat (🎯T65).
+// Pure attention/aside model for human↔overseer chat (🎯T65 / 🎯T136).
 // DOM-free so Node hermetic tests can require() it.
 //
 // Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:, target:
 // Case-insensitive; strip prefix before routing. No button-primary API.
 // target: opens a short-lived filing aside (🎯T93/T95).
+//
+// 🎯T136: owner-facing chrome for asides lives in the RHS fleet tree, not
+// the top attention chip bar. chromeStack() is always empty; stack() remains
+// for internal route/park model + wire. Create paths dual-write purpose=aside
+// agents into /api/agents.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -355,8 +360,9 @@
     return s;
   }
 
-  // stack: default attention chrome — open first, then intentionally parked.
+  // stack: open first, then intentionally parked (model / route helpers).
   // Completed (done) asides are excluded (🎯T95.1); use archive() for those.
+  // 🎯T136: do NOT use stack for top-bar chrome — use chromeStack() (always empty).
   function stack(state) {
     const s = state || emptyState();
     const open = [];
@@ -367,6 +373,12 @@
       else open.push(t);
     });
     return open.concat(parked);
+  }
+
+  // chromeStack (🎯T136): top #attention-bar never shows open/parked aside chips.
+  // Asides live in the RHS fleet tree. Model stack() still exists for T99 route.
+  function chromeStack(/* state */) {
+    return [];
   }
 
   // routeCandidates (🎯T134 / T99): only open chrome threads the owner would
@@ -390,14 +402,14 @@
       });
   }
 
-  // visibleStack (🎯T134): cap chrome chips; overflow for "+N more".
-  // opts.max defaults to MAX_VISIBLE_CHIPS.
+  // visibleStack: cap for any residual chrome consumers. 🎯T136: chrome is empty.
+  // opts.max defaults to MAX_VISIBLE_CHIPS. Uses chromeStack (not model stack).
   function visibleStack(state, opts) {
     opts = opts || {};
     const max = typeof opts.max === 'number' && opts.max > 0
       ? Math.floor(opts.max)
       : MAX_VISIBLE_CHIPS;
-    const full = stack(state);
+    const full = chromeStack(state);
     if (full.length <= max) {
       return { shown: full.slice(), overflowCount: 0, overflow: [] };
     }
@@ -727,6 +739,7 @@
     focusMain: focusMain,
     updateActiveBody: updateActiveBody,
     stack: stack,
+    chromeStack: chromeStack,
     routeCandidates: routeCandidates,
     visibleStack: visibleStack,
     clearDone: clearDone,

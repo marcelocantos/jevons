@@ -32,7 +32,7 @@
       title = threadOrTitle.title != null ? String(threadOrTitle.title) : '';
     }
     title = String(title || '').replace(/\s+/g, ' ').trim();
-    if (!title) title = 'thread';
+    if (!title) title = 'aside';
     // Cap long titles so the chip stays scannable.
     if (title.length > 48) title = title.slice(0, 45).trim() + '…';
     return 'Continue in: «' + title + '»';

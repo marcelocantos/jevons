@@ -87,8 +87,9 @@ RHS fleet panel (🎯T72 family).
 An **aside is a kind of agent** (purpose=`aside`). Work agents use
 purpose=`work`. One registry id space and one deliver path:
 `jevons_event_push` / Deliver resolves **thread or agent by name** — no
-"no thread X" when the agent exists. UI: work agents on the RHS fleet;
-asides in attention chrome — same underlying records.
+"no thread X" when the agent exists. UI: work agents **and** asides on the
+RHS fleet tree (asides use 💡 chrome; 🎯T136) — not a top attention chip
+bar. Same underlying registry records.
 
 **Do not default to** Grok `spawn_subagent` (or worktree subagents that
 die with the parent). Those children are not first-class fleet entries,

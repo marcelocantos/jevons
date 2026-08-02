@@ -302,7 +302,7 @@ test('T134 stack excludes done; filing close still leaves bar clean', function (
   assert.strictEqual(AT.archive(s).length, 1);
 });
 
-test('T134 visibleStack caps chips and reports overflow', function () {
+test('T134 model stack still accumulates; T136 chrome/visible empty', function () {
   assert.ok(AT.MAX_VISIBLE_CHIPS >= 1);
   let s = AT.emptyState();
   for (let i = 0; i < AT.MAX_VISIBLE_CHIPS + 3; i++) {
@@ -310,13 +310,43 @@ test('T134 visibleStack caps chips and reports overflow', function () {
   }
   const full = AT.stack(s);
   assert.strictEqual(full.length, AT.MAX_VISIBLE_CHIPS + 3);
+  // 🎯T136: top chrome never shows aside chips (RHS fleet tree owns them).
+  assert.strictEqual(AT.chromeStack(s).length, 0);
   const vs = AT.visibleStack(s);
-  assert.strictEqual(vs.shown.length, AT.MAX_VISIBLE_CHIPS);
-  assert.strictEqual(vs.overflowCount, 3);
-  assert.strictEqual(vs.overflow.length, 3);
-  const tiny = AT.visibleStack(s, { max: 2 });
-  assert.strictEqual(tiny.shown.length, 2);
-  assert.strictEqual(tiny.overflowCount, full.length - 2);
+  assert.strictEqual(vs.shown.length, 0);
+  assert.strictEqual(vs.overflowCount, 0);
+});
+
+// ── 🎯T136 asides live only in RHS fleet tree ─────────────────────────
+
+test('T136 chromeStack always empty even with open and parked asides', function () {
+  let s = AT.handleComposer(AT.emptyState(), 'aside: billing nit').state;
+  s = AT.handleComposer(s, 'capture: parked later').state;
+  const parkId = s.threads[0].id;
+  s = AT.park(s, parkId);
+  assert.ok(AT.stack(s).length >= 2, 'model stack still tracks asides');
+  assert.strictEqual(AT.chromeStack(s).length, 0);
+  assert.strictEqual(AT.visibleStack(s).shown.length, 0);
+  // Route candidates still open-only for T99/T135 (no silent steal elsewhere).
+  assert.ok(AT.routeCandidates(s).length >= 1);
+});
+
+test('T136 index.html: attention-bar not used for aside wall; fleet register path', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('ensureFleetAside') >= 0, 'create-aside dual-writes fleet');
+  assert.ok(html.indexOf('/api/asides') >= 0, 'POST /api/asides');
+  // renderAttention must not show chip wall for asides.
+  assert.ok(/function renderAttention\(\)\s*\{[\s\S]{0,600}?classList\.remove\(['"]visible['"]\)/.test(html) ||
+    html.indexOf("attentionBar.classList.remove('visible')") >= 0,
+    'renderAttention never shows attention-bar');
+  assert.ok(html.indexOf('aria-label="Attention asides"') >= 0 ||
+    html.indexOf("aria-label='Attention asides'") >= 0,
+    'owner-visible vocabulary: asides not threads');
+  // Must not leave a chip loop as the default chrome path for open stack.
+  assert.ok(html.indexOf('appendThreadChip') === -1,
+    'no appendThreadChip wall in index');
 });
 
 test('T134 clearDone / dismissAllParked / clearChromeNoise', function () {

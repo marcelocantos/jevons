@@ -105,7 +105,7 @@ second spine with separate talk APIs.
 | Purpose | Spawn | Talk | UI |
 |---|---|---|---|
 | `work` | `jevons_agent_start` (default) | `jevons_agent_send` / `jevons_event_push` | RHS fleet tree |
-| `aside` | `jevons_thread_spawn` or `agent_start` purpose=aside | same send/push path by name | attention chrome (T95.1); same underlying record |
+| `aside` | `jevons_thread_spawn` or `agent_start` purpose=aside; owner `aside:`/`capture:` via `POST /api/asides` | same send/push path by name | RHS fleet tree 💡 chrome (T136); not top attention chip bar |
 | `overseer` | daemon bootstrap | owner chat | main chat |
 
 Do **not** treat threads vs agents as hard-decoupled permanent architecture.

@@ -92,8 +92,8 @@ test('T135 shouldShowSwitch only on match with threadId', function () {
 test('T135 formatSwitchLabel', function () {
   assert.strictEqual(RS.formatSwitchLabel({ title: 'restic backup' }), 'Continue in: «restic backup»');
   assert.strictEqual(RS.formatSwitchLabel('billing nit'), 'Continue in: «billing nit»');
-  assert.strictEqual(RS.formatSwitchLabel(''), 'Continue in: «thread»');
-  assert.strictEqual(RS.formatSwitchLabel(null), 'Continue in: «thread»');
+  assert.strictEqual(RS.formatSwitchLabel(''), 'Continue in: «aside»');
+  assert.strictEqual(RS.formatSwitchLabel(null), 'Continue in: «aside»');
 });
 
 // ── planOptInSwitch ──────────────────────────────────────────────
