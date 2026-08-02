@@ -200,6 +200,18 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .attn-chip .attn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
 .attn-chip .attn-status { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
 
+/* 🎯T113 send queue strip — Grok-like, just above the composer */
+#send-queue { display: none; flex-direction: column; gap: 4px; padding: 8px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); }
+#send-queue.visible { display: flex; }
+.send-queue-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-raised); font-size: 12px; line-height: 1.35; color: var(--text-dim); }
+.send-queue-item.focused { border-color: var(--accent); background: var(--accent-dim); color: var(--text); }
+.send-queue-item .sq-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-queue-item .sq-actions { display: flex; gap: 4px; flex-shrink: 0; margin-left: auto; }
+.send-queue-item .sq-actions button { border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 11px; font-family: var(--sans); padding: 2px 8px; border-radius: 5px; cursor: pointer; line-height: 1.3; }
+.send-queue-item .sq-actions button:hover { border-color: var(--border-focus); color: var(--text); }
+.send-queue-item .sq-actions button.sq-send-now { color: var(--accent); border-color: rgba(239,68,68,0.35); }
+.send-queue-item .sq-actions button.sq-send-now:hover { background: var(--accent-dim); }
+
 /* Input bar */
 #input-bar { display: flex; gap: 10px; align-items: flex-end; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)) 20px; background: var(--surface); border-top: 1px solid var(--border);
   /* One-line control height, derived from the input's own metrics
@@ -295,11 +307,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="attention-bar" aria-label="Attention threads">
       <div id="attention-stack" role="list"></div>
     </div>
+    <div id="send-queue" aria-label="Queued follow-ups" role="list"></div>
     <div id="input-bar">
       <div id="composer-images" class="composer-images" aria-label="Attached images"></div>
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
-                placeholder="Write a message to Jevons. Enter to send, Shift-Enter for a new line."
+                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line."
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
                 aria-describedby="input-hint"
@@ -324,6 +337,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
 <script src="scripts/composer_layout.js"></script>
+<script src="scripts/send_queue.js"></script>
 <script src="scripts/layout_probe.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
@@ -338,7 +352,7 @@ const sTxt = document.getElementById('status-text');
 const agentsEl = document.getElementById('agents');
 const attentionBar = document.getElementById('attention-bar');
 const attentionStackEl = document.getElementById('attention-stack');
-const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Shift-Enter for a new line.';
+const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line.';
 
 // 🎯T65 attention threads — prefix-first (docs/design/attention-threads.md).
 // Commands: aside: | capture: | park: | main: | pursue:  (case-insensitive)
@@ -441,7 +455,8 @@ transport.onOpen = () => {
 transport.onClose = () => {
   // Transport handles reconnect (backoff + version check) internally.
   dot.className = 'dot off'; sTxt.textContent = 'reconnecting'; sendBtn.disabled = true;
-  setWorking(false); // don't leave "working" hanging across a disconnect
+  // Clear chrome only — do not auto-drain the send queue while offline (🎯T113).
+  setWorking(false, undefined, { skipDrain: true });
 };
 transport.onMessage = m => handle(m);
 transport.onError = msg => console.error('transport error:', msg);
@@ -1613,6 +1628,12 @@ setInterval(() => {
 // transcript). histIdx === null means we're editing the live input.
 let msgHistory = [];   // [{text, el}] — el is the rendered user bubble
 let histIdx = null;
+// 🎯T113: follow-up send queue (pure policy in send_queue.js).
+let sendQueueState = (typeof SendQueue !== 'undefined') ? SendQueue.emptyState() : { items: [], nextId: 1 };
+// Combined Alt+Up/Down focus: live | queue | history (queue before history).
+let navFocus = { zone: 'live' };
+let liveDraftBackup = '';
+const sendQueueEl = document.getElementById('send-queue');
 let histDraft = '';
 let editingEl = null;  // the bubble currently highlighted as "being edited"
 
@@ -1627,7 +1648,156 @@ function setEditingHighlight(el) {
   }
 }
 
-function send() {
+// 🎯T113: render queued follow-ups above the composer (send-now / cancel).
+function renderSendQueue() {
+  if (!sendQueueEl || typeof SendQueue === 'undefined') return;
+  const items = sendQueueState.items || [];
+  sendQueueEl.innerHTML = '';
+  if (!items.length) {
+    sendQueueEl.classList.remove('visible');
+    return;
+  }
+  sendQueueEl.classList.add('visible');
+  items.forEach(function (it, idx) {
+    const row = document.createElement('div');
+    row.className = 'send-queue-item';
+    row.setAttribute('role', 'listitem');
+    row.dataset.id = it.id;
+    if (navFocus.zone === 'queue' && (navFocus.index | 0) === idx) {
+      row.classList.add('focused');
+    }
+    const text = document.createElement('span');
+    text.className = 'sq-text';
+    text.textContent = it.text;
+    text.title = it.text;
+    row.appendChild(text);
+    const actions = document.createElement('div');
+    actions.className = 'sq-actions';
+    const sendNow = document.createElement('button');
+    sendNow.type = 'button';
+    sendNow.className = 'sq-send-now';
+    sendNow.textContent = 'Send now';
+    sendNow.title = 'Send now (interject if a turn is in flight)';
+    sendNow.addEventListener('click', function () { sendQueueNow(it.id); });
+    sendNow.addEventListener('mousedown', function (e) { e.preventDefault(); });
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'sq-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.title = 'Remove from queue';
+    cancelBtn.addEventListener('click', function () { cancelQueued(it.id); });
+    cancelBtn.addEventListener('mousedown', function (e) { e.preventDefault(); });
+    actions.appendChild(sendNow);
+    actions.appendChild(cancelBtn);
+    row.appendChild(actions);
+    sendQueueEl.appendChild(row);
+  });
+}
+
+function cancelQueued(id) {
+  if (typeof SendQueue === 'undefined') return;
+  sendQueueState = SendQueue.cancel(sendQueueState, id);
+  if (navFocus.zone === 'queue') {
+    const n = sendQueueState.items.length;
+    if (!n) {
+      navFocus = { zone: 'live' };
+      input.value = liveDraftBackup;
+    } else if ((navFocus.index | 0) >= n) {
+      navFocus = { zone: 'queue', index: n - 1 };
+      input.value = sendQueueState.items[n - 1].text;
+    }
+  }
+  renderSendQueue();
+  autoGrow();
+}
+
+// Send-now: pull one queued item and submit immediately (interject if busy).
+function sendQueueNow(id) {
+  if (typeof SendQueue === 'undefined') return;
+  const taken = SendQueue.takeById(sendQueueState, id);
+  if (!taken.item) return;
+  sendQueueState = taken.state;
+  if (navFocus.zone === 'queue') {
+    navFocus = { zone: 'live' };
+    liveDraftBackup = '';
+  }
+  renderSendQueue();
+  submitWireText(taken.item.text, { interrupt: !!workingEl });
+}
+
+// Submit a fully-prepared wire string (interrupt optional). Used by send()
+// and by auto-drain / send-now so queue drain does not re-enter attention.
+function submitWireText(t, opts) {
+  const o = opts || {};
+  if (o.interrupt && workingEl) {
+    // Interject: cancel in-flight turn first; claudia's Send waits for
+    // ready, so interrupt-then-send ordering is safe.
+    transport.send('{"type":"interrupt"}');
+  }
+  transport.send(t);
+  histIdx = null; histDraft = ''; setEditingHighlight(null);
+  navFocus = { zone: 'live' };
+  liveDraftBackup = '';
+  enterTrackBottom();
+  setWorking(true);
+  requestAnimationFrame(() => { scrollDown(); });
+  if (typeof renderAttention === 'function') renderAttention();
+}
+
+// Drain head of queue once the in-flight turn seals.
+function drainSendQueueIfIdle() {
+  if (workingEl) return;
+  if (typeof SendQueue === 'undefined') return;
+  if (!sendQueueState.items.length) return;
+  const r = SendQueue.shiftNext(sendQueueState);
+  if (!r.item) return;
+  sendQueueState = r.state;
+  if (navFocus.zone === 'queue') {
+    const n = sendQueueState.items.length;
+    if (!n) {
+      navFocus = { zone: 'live' };
+      input.value = liveDraftBackup;
+      autoGrow();
+    } else if ((navFocus.index | 0) >= n) {
+      navFocus = { zone: 'queue', index: n - 1 };
+      input.value = sendQueueState.items[n - 1].text;
+      autoGrow();
+    }
+  }
+  renderSendQueue();
+  submitWireText(r.item.text, { interrupt: false });
+}
+
+function clearComposerAfterQueueOrSend() {
+  input.value = '';
+  pendingImages.forEach(img => { if (img.objectUrl) try { URL.revokeObjectURL(img.objectUrl); } catch (_) {} });
+  pendingImages.length = 0;
+  renderComposerImages();
+  histIdx = null; histDraft = ''; setEditingHighlight(null);
+  navFocus = { zone: 'live' };
+  liveDraftBackup = '';
+  autoGrow();
+}
+
+// opts.interrupt: true when Control+Enter (Grok-class interject).
+function send(opts) {
+  const interruptChord = !!(opts && opts.interrupt);
+  // If Alt-nav is focused on a queue row, Enter commits edits back into
+  // that row (does not re-enqueue a duplicate).
+  if (navFocus.zone === 'queue' && typeof SendQueue !== 'undefined' && !interruptChord) {
+    const qi = navFocus.index | 0;
+    const it = sendQueueState.items[qi];
+    if (it) {
+      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, input.value);
+      navFocus = { zone: 'live' };
+      input.value = liveDraftBackup;
+      liveDraftBackup = '';
+      histIdx = null; histDraft = ''; setEditingHighlight(null);
+      renderSendQueue();
+      autoGrow();
+      return;
+    }
+  }
   let t = input.value.trim();
   // 🎯T76: allow send with only images attached.
   if (!t && !pendingImages.length) return;
@@ -1682,22 +1852,25 @@ function send() {
       renderAttention();
     }
   }
-  // If a turn is still in flight (no reply yet), cancel it and resubmit
-  // the edited message. Interrupt first; claudia's Send waits for the
-  // TUI to return to ready before it types, so the ordering is safe.
-  if (workingEl) transport.send('{"type":"interrupt"}');
-  transport.send(t);
-  input.value = '';
-  pendingImages.forEach(img => { if (img.objectUrl) try { URL.revokeObjectURL(img.objectUrl); } catch (_) {} });
-  pendingImages.length = 0;
-  renderComposerImages();
-  histIdx = null; histDraft = ''; setEditingHighlight(null);
-  autoGrow();
-  // Sending re-enters Track so the outgoing message and the reply pin.
-  enterTrackBottom();
-  setWorking(true);
-  requestAnimationFrame(() => { scrollDown(); });
-  if (typeof renderAttention === 'function') renderAttention();
+  // 🎯T113: while busy, plain Enter enqueues; only Control+Enter interjects.
+  const decision = (typeof SendQueue !== 'undefined')
+    ? SendQueue.decideSend({
+        busy: !!workingEl,
+        interrupt: interruptChord,
+        text: t,
+        hasImages: pendingImages.length > 0,
+      })
+    : { action: workingEl && !interruptChord ? 'enqueue' : 'send', text: t, interrupt: !!(workingEl && interruptChord) };
+  if (decision.action === 'noop') return;
+  if (decision.action === 'enqueue') {
+    sendQueueState = SendQueue.enqueue(sendQueueState, decision.text);
+    clearComposerAfterQueueOrSend();
+    renderSendQueue();
+    return;
+  }
+  // Wire send (optional interrupt when busy + Control+Enter).
+  clearComposerAfterQueueOrSend();
+  submitWireText(decision.text, { interrupt: !!decision.interrupt });
 }
 
 // rewindAndResend performs the destructive "edit an earlier message"
@@ -1721,29 +1894,70 @@ function rewindAndResend() {
   requestAnimationFrame(() => { scrollDown(); });
 }
 
-// recallHistory walks msgHistory into the input. dir = -1 (older) or +1
-// (newer). Returns true if it handled the key (so the caller can
-// preventDefault), false to let the arrow move the cursor normally.
+// 🎯T113 + 🎯T88: Alt+Up/Down cycles queued follow-ups first, then
+// previously submitted request history (queue before history).
+// dir = -1 (older / Up) or +1 (newer / Down). Returns true if handled.
 function recallHistory(dir) {
-  if (msgHistory.length === 0) return false;
-  if (histIdx === null) {
-    if (dir > 0) return false;         // Down on live input: nothing to do
-    histDraft = input.value;           // save what we were typing
-    histIdx = msgHistory.length;
+  if (typeof SendQueue === 'undefined') {
+    // Legacy path if module missing.
+    if (msgHistory.length === 0) return false;
+    if (histIdx === null) {
+      if (dir > 0) return false;
+      histDraft = input.value;
+      histIdx = msgHistory.length;
+    }
+    histIdx += dir;
+    if (histIdx >= msgHistory.length) {
+      histIdx = null;
+      input.value = histDraft;
+      setEditingHighlight(null);
+    } else {
+      if (histIdx < 0) histIdx = 0;
+      const entry = msgHistory[histIdx];
+      input.value = entry.text;
+      setEditingHighlight(entry.el);
+    }
+    autoGrow();
+    input.selectionStart = input.selectionEnd = input.value.length;
+    return true;
   }
-  histIdx += dir;
-  if (histIdx >= msgHistory.length) {  // walked back to the live draft
+
+  // Persist in-place edits to the focused queue row before leaving it.
+  if (navFocus.zone === 'queue' && sendQueueState.items[navFocus.index | 0]) {
+    const cur = sendQueueState.items[navFocus.index | 0];
+    sendQueueState = SendQueue.updateItem(sendQueueState, cur.id, input.value);
+  } else if (navFocus.zone === 'live') {
+    liveDraftBackup = input.value;
+    histDraft = input.value;
+  }
+
+  const qLen = sendQueueState.items.length;
+  const hLen = msgHistory.length;
+  if (qLen === 0 && hLen === 0) return false;
+
+  const stepped = SendQueue.cycleNav(navFocus, dir, qLen, hLen);
+  if (!stepped.handled) return false;
+  navFocus = stepped.focus;
+
+  if (navFocus.zone === 'live') {
     histIdx = null;
-    input.value = histDraft;
+    input.value = liveDraftBackup || histDraft || '';
     setEditingHighlight(null);
-  } else {
-    if (histIdx < 0) histIdx = 0;      // clamp at the oldest
+  } else if (navFocus.zone === 'queue') {
+    histIdx = null;
+    setEditingHighlight(null);
+    const it = sendQueueState.items[navFocus.index | 0];
+    input.value = it ? it.text : '';
+  } else if (navFocus.zone === 'history') {
+    histIdx = navFocus.index | 0;
+    if (histIdx < 0) histIdx = 0;
+    if (histIdx >= msgHistory.length) histIdx = msgHistory.length - 1;
     const entry = msgHistory[histIdx];
-    input.value = entry.text;
-    setEditingHighlight(entry.el);
+    input.value = entry ? entry.text : '';
+    setEditingHighlight(entry ? entry.el : null);
   }
+  renderSendQueue();
   autoGrow();
-  // Put the caret at the end of the recalled text.
   input.selectionStart = input.selectionEnd = input.value.length;
   return true;
 }
@@ -1798,7 +2012,9 @@ function onWorkingStuck() {
   addStatusMsg('Recovered from stuck turn (no progress within idle bound). Ready for input.');
   console.warn('jevons: stuck-watchdog idle timeout — interrupt + clear (T94)');
 }
-function setWorking(on, progress) {
+// opts.skipDrain: clear chrome without auto-submitting the next queued item
+// (disconnect / offline). Normal seal drains FIFO (🎯T113).
+function setWorking(on, progress, opts) {
   if (on) {
     if (typeof progress === 'string') workingProgress = progress;
     if (!workingEl) {
@@ -1814,6 +2030,8 @@ function setWorking(on, progress) {
     workingEl = null;
     workingProgress = '';
     clearWorkingWatch();
+    // 🎯T113: when the in-flight turn seals, auto-submit the next queued item.
+    if (!(opts && opts.skipDrain)) drainSendQueueIfIdle();
   } else {
     clearWorkingWatch();
   }
@@ -1852,24 +2070,35 @@ function autoGrow() {
 }
 
 // Enter submits, Shift-Enter inserts a newline.
+// 🎯T113: plain Enter enqueues while busy; only Control+Enter interjects.
 input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
+    const interrupt = !!e.ctrlKey; // Control+Enter only (not Cmd/Meta)
     // 🎯T88: primary send while a recalled bubble is highlighted rewinds
     // and resends (destructive redo). Escape clears edit mode first for
     // safe append; Cmd/Ctrl+Enter also forces safe append.
-    if (editingEl && !(e.metaKey || e.ctrlKey)) rewindAndResend();
-    else send();
+    if (editingEl && !interrupt && !e.metaKey) rewindAndResend();
+    else send({ interrupt: interrupt });
     return;
   }
-  // Alt+Up/Down recall previous messages. A dedicated modifier keeps
-  // plain Up/Down free for line navigation in a multi-line draft.
+  // Alt+Up/Down: queue follow-ups first, then request history (🎯T113/T88).
   // preventDefault overrides macOS's Option+Arrow paragraph jump.
   if (e.altKey && e.key === 'ArrowUp') { if (recallHistory(-1)) e.preventDefault(); return; }
   if (e.altKey && e.key === 'ArrowDown') { if (recallHistory(+1)) e.preventDefault(); return; }
 });
 input.addEventListener('input', () => {
   autoGrow();
+  // Live-edit the focused queue row as the owner types.
+  if (navFocus.zone === 'queue' && typeof SendQueue !== 'undefined') {
+    const it = sendQueueState.items[navFocus.index | 0];
+    if (it) {
+      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, input.value);
+      renderSendQueue();
+    }
+  } else if (navFocus.zone === 'live') {
+    liveDraftBackup = input.value;
+  }
   // Prefix-first: do not treat typing as capture enablement. Only persist
   // body when focused on a side thread and the draft is not a command.
   if (attentionState && typeof AttentionThreads !== 'undefined') {
