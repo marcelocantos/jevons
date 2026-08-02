@@ -1,9 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic perceptual test for mermaid diagram rendering (🎯T59) and
-// open/copy toolbar (🎯T83.1). Serves the static web/ UI and drives
-// addMsg() with assistant content, then asserts:
+// Hermetic perceptual test for mermaid diagram rendering (🎯T59),
+// open/copy toolbar (🎯T83.1), and durable graph viz chrome (🎯T83).
+// Serves the static web/ UI and drives addMsg() with assistant content,
+// then asserts:
 //   * a ```mermaid fence renders as an SVG (.mermaid-diagram svg), not raw
 //   * a plain ```js fence is untouched — still a <pre><code>, no diagram
 //   * invalid mermaid source degrades to its original code block (no throw,
@@ -13,6 +14,9 @@
 //   * toolbar Open / Copy source / Copy image is present
 //   * Open puts the same graph in the dedicated panel (not chat scroll)
 //   * Copy source path writes Mermaid text; Copy image path yields a PNG blob
+//   * Agents "Open viz" opens durable panel empty state without chat
+//   * Open-from-chat pins last graph; reopen via Open viz / Load last restores it
+//   * Paste + Render path loads bullseye-style Mermaid export into the panel
 // Screenshots the rendered diagram into artifacts/.
 //
 //   node scripts/chat-ui-test/mermaid-test.js [--headed]
@@ -236,6 +240,111 @@ function startStaticServer() {
       failures.push('copy image path failed: ' + (copyImg.reason || JSON.stringify(copyImg)));
     } else if (!copyImg.hasPngPath) {
       failures.push('copy image path missing');
+    }
+
+    // ── 🎯T83 durable chrome: Open viz, pin/persist, paste ──────────
+    // Fresh storage: clear pin, open from Agents chrome → empty state.
+    const emptyChrome = await page.evaluate(() => {
+      try { localStorage.removeItem(window.MermaidActions.PIN_STORAGE_KEY); } catch (_) {}
+      window.closeMermaidPanel();
+      const btn = document.getElementById('open-viz-btn');
+      if (!btn) return { ok: false, reason: 'no #open-viz-btn' };
+      btn.click();
+      const panel = document.getElementById('mermaid-viz-panel');
+      const body = document.getElementById('mvp-body');
+      const empty = body && body.querySelector('[data-mvp-empty]');
+      const inMessages = !!(panel && document.getElementById('messages') &&
+        document.getElementById('messages').contains(panel));
+      return {
+        ok: true,
+        open: !!(panel && panel.classList.contains('open') && !panel.hidden),
+        hasEmpty: !!empty,
+        outsideChat: !!panel && !inMessages,
+        title: (document.getElementById('mvp-title') || {}).textContent || '',
+        loadLast: !!document.getElementById('mvp-load-last'),
+        pasteBtn: !!document.getElementById('mvp-paste-btn'),
+      };
+    });
+    if (!emptyChrome.ok) failures.push('open viz chrome: ' + emptyChrome.reason);
+    else {
+      if (!emptyChrome.open) failures.push('Open viz did not open #mermaid-viz-panel');
+      if (!emptyChrome.hasEmpty) failures.push('Open viz missing empty state (data-mvp-empty)');
+      if (!emptyChrome.outsideChat) failures.push('viz panel is inside #messages');
+      if (!emptyChrome.loadLast || !emptyChrome.pasteBtn) {
+        failures.push('panel chrome missing Load last / Paste controls');
+      }
+    }
+
+    // Re-open from chat diagram → pins; close; Open viz restores last.
+    const persist = await page.evaluate(async () => {
+      try { localStorage.removeItem(window.MermaidActions.PIN_STORAGE_KEY); } catch (_) {}
+      window.closeMermaidPanel();
+      const wrap = window._diag && window._diag._body.querySelector('.mermaid-diagram');
+      if (!wrap) return { ok: false, reason: 'no diagram wrap' };
+      await window.handleMermaidAction('open', wrap);
+      const pinnedAfterOpen = window.MermaidActions.loadPinnedGraph(localStorage);
+      window.closeMermaidPanel();
+      const closed = (() => {
+        const p = document.getElementById('mermaid-viz-panel');
+        return !p || p.hidden || !p.classList.contains('open');
+      })();
+      window.openVizFromChrome();
+      const panel = document.getElementById('mermaid-viz-panel');
+      const body = document.getElementById('mvp-body');
+      return {
+        ok: true,
+        pinnedSrc: pinnedAfterOpen && pinnedAfterOpen.src,
+        closed: closed,
+        reopenOpen: !!(panel && panel.classList.contains('open') && !panel.hidden),
+        hasSvg: !!(body && body.querySelector('svg')),
+        svgText: body ? (body.textContent || '') : '',
+        emptyAfterPin: !!(body && body.querySelector('[data-mvp-empty]')),
+      };
+    });
+    if (!persist.ok) failures.push('persist path: ' + persist.reason);
+    else {
+      if (!persist.pinnedSrc || persist.pinnedSrc.indexOf('graph TD') < 0) {
+        failures.push('open-from-chat did not pin mermaid source');
+      }
+      if (!persist.closed) failures.push('closeMermaidPanel left panel open');
+      if (!persist.reopenOpen) failures.push('Open viz did not reopen after pin');
+      if (persist.emptyAfterPin) failures.push('Open viz showed empty after pin (expected last graph)');
+      if (!persist.hasSvg) failures.push('restored last graph missing SVG');
+      if (persist.svgText.indexOf('Start') < 0 && persist.svgText.indexOf('Ship') < 0) {
+        failures.push('restored last graph labels missing');
+      }
+    }
+
+    // Paste + Render: bullseye-style export into durable panel (no chat).
+    const pastePath = await page.evaluate(async () => {
+      window.closeMermaidPanel();
+      const ta = document.getElementById('mvp-paste');
+      if (!ta) return { ok: false, reason: 'no #mvp-paste' };
+      ta.value = '```mermaid\ngraph LR;\n  Bullseye[T83] --> Panel[viz];\n```';
+      document.getElementById('mvp-paste-wrap').classList.add('open');
+      await window.renderMermaidSourceInPanel(ta.value, { title: 'Bullseye export', pin: true });
+      const panel = document.getElementById('mermaid-viz-panel');
+      const body = document.getElementById('mvp-body');
+      const pin = window.MermaidActions.loadPinnedGraph(localStorage);
+      return {
+        ok: true,
+        open: !!(panel && panel.classList.contains('open') && !panel.hidden),
+        hasSvg: !!(body && body.querySelector('svg')),
+        text: body ? (body.textContent || '') : '',
+        pinSrc: pin && pin.src,
+        pinTitle: pin && pin.title,
+      };
+    });
+    if (!pastePath.ok) failures.push('paste path: ' + pastePath.reason);
+    else {
+      if (!pastePath.open) failures.push('paste render did not open panel');
+      if (!pastePath.hasSvg) failures.push('paste render missing SVG');
+      if (pastePath.text.indexOf('T83') < 0 && pastePath.text.indexOf('viz') < 0) {
+        failures.push('paste render labels missing (T83/viz)');
+      }
+      if (!pastePath.pinSrc || pastePath.pinSrc.indexOf('graph LR') < 0) {
+        failures.push('paste path did not pin source');
+      }
     }
 
     await page.screenshot({ path: path.join(OUT_DIR, 'mermaid.png'), fullPage: true });

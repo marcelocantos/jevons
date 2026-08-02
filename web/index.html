@@ -149,19 +149,20 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons .mermaid-diagram .mermaid-toolbar button:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }
-/* Dedicated viz panel — distinct from main chat scroll (🎯T83.1 interim under T83). */
+/* Durable graph viz panel — bottom-right chrome for project graphs (🎯T83),
+   not only ad-hoc chat mermaid (🎯T83.1). Reuses #mermaid-viz-panel. */
 #mermaid-viz-panel {
   display: none; position: fixed; right: 16px; bottom: 16px; z-index: 40;
-  width: min(520px, calc(100vw - 32px)); height: min(420px, calc(100vh - 48px));
+  width: min(560px, calc(100vw - 32px)); height: min(460px, calc(100vh - 48px));
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: 0 12px 40px rgba(0,0,0,0.35); flex-direction: column; overflow: hidden;
 }
 #mermaid-viz-panel.open { display: flex; }
 #mermaid-viz-panel .mvp-header {
-  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px; flex-wrap: wrap;
   border-bottom: 1px solid var(--border); background: var(--surface-raised); flex-shrink: 0;
 }
-#mermaid-viz-panel .mvp-title { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; }
+#mermaid-viz-panel .mvp-title { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; min-width: 72px; }
 #mermaid-viz-panel .mvp-header button {
   border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
   font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
@@ -174,6 +175,34 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #mermaid-viz-panel .mvp-status {
   font-size: 11px; color: var(--text-muted); padding: 0 10px 8px; flex-shrink: 0;
 }
+#mermaid-viz-panel .mvp-empty { text-align: left; color: var(--text-dim); max-width: 36em; margin: 0 auto; }
+#mermaid-viz-panel .mvp-empty-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-empty-body { font-size: 12px; line-height: 1.45; margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-empty-hint { font-size: 11px; color: var(--text-muted); margin: 0; }
+#mermaid-viz-panel .mvp-paste-wrap {
+  display: none; flex-direction: column; gap: 6px; padding: 8px 10px;
+  border-top: 1px solid var(--border); flex-shrink: 0; background: var(--surface-raised);
+}
+#mermaid-viz-panel .mvp-paste-wrap.open { display: flex; }
+#mermaid-viz-panel .mvp-paste-wrap label { font-size: 11px; color: var(--text-muted); text-align: left; }
+#mermaid-viz-panel #mvp-paste {
+  width: 100%; min-height: 72px; max-height: 140px; resize: vertical;
+  font: inherit; font-family: var(--mono); font-size: 11px; line-height: 1.35;
+  color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px; box-sizing: border-box;
+}
+#mermaid-viz-panel #mvp-paste:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Agents chrome: open durable viz without going through chat (🎯T83). */
+#activity-header.agents-header {
+  display: flex; align-items: center; gap: 8px; justify-content: space-between;
+}
+#activity-header.agents-header .ah-label { flex: 1; }
+#open-viz-btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  font: inherit; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+}
+#open-viz-btn:hover { color: var(--text); border-color: var(--border-focus); background: var(--surface-raised); }
 .msg.jevons ul, .msg.jevons ol { padding-left: 1.5em; margin: 0.5em 0; }
 .msg.jevons li { margin: 0.2em 0; }
 .msg.jevons h1, .msg.jevons h2, .msg.jevons h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: var(--heading); }
@@ -397,21 +426,32 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   </div>
   <div id="activity-pane">
     <div id="cost-ticker" title="Token burn rate — click for detail"></div>
-    <div id="activity-header">Agents</div>
+    <div id="activity-header" class="agents-header">
+      <span class="ah-label">Agents</span>
+      <button type="button" id="open-viz-btn" title="Open project graph viz panel (pinned / paste / chat)">Open viz</button>
+    </div>
     <div id="agents"></div>
     <div id="activity-header" style="margin-top:10px">Workers <span id="workers-live" style="font-weight:400;color:var(--text-muted);font-size:10px"></span></div>
     <div id="workers" title="jwork workers (🎯T8.2)"></div>
 
   </div>
 </div>
-<!-- 🎯T83.1: dedicated Mermaid host (bottom-right panel; not the chat scroller). -->
-<div id="mermaid-viz-panel" role="dialog" aria-label="Mermaid diagram" aria-modal="false" hidden>
+<!-- 🎯T83: durable graph viz chrome (bottom-right; reuses T83.1 panel host). -->
+<div id="mermaid-viz-panel" role="dialog" aria-label="Project graph visualization" aria-modal="false" hidden>
   <div class="mvp-header">
-    <span class="mvp-title">Diagram</span>
+    <span class="mvp-title" id="mvp-title">Graph viz</span>
+    <button type="button" id="mvp-load-last" title="Restore the last pinned graph">Load last</button>
+    <button type="button" id="mvp-paste-btn" title="Paste Mermaid / bullseye graph export">Paste</button>
+    <button type="button" id="mvp-render" title="Render pasted Mermaid source">Render</button>
+    <button type="button" id="mvp-pin" title="Pin current graph as last">Pin</button>
     <button type="button" id="mvp-popout" title="Open in a new browser tab">New tab</button>
     <button type="button" id="mvp-close" title="Close panel">Close</button>
   </div>
   <div class="mvp-body" id="mvp-body"></div>
+  <div class="mvp-paste-wrap" id="mvp-paste-wrap">
+    <label for="mvp-paste">Mermaid source (bullseye graph export or fenced paste)</label>
+    <textarea id="mvp-paste" spellcheck="false" placeholder="graph TD;&#10;  A --> B"></textarea>
+  </div>
   <div class="mvp-status" id="mvp-status"></div>
 </div>
 <script src="scripts/jlog.js"></script>
@@ -946,9 +986,11 @@ function measureCollapse(d, role, text) {
 // parse error. Invalid source is left as its original code block. Mermaid
 // is initialized lazily so its theme matches the UI theme at first use.
 // 🎯T83.1: each diagram gets Open / Copy source / Copy image controls.
+// 🎯T83: durable bottom-right chrome — pin last, paste bullseye export,
+// open-from Agents "Open viz" without re-pasting into chat.
 let mermaidReady = false;
 let mermaidSeq = 0;
-let _mermaidPanelState = null; // { src, svgMarkup } for the open panel
+let _mermaidPanelState = null; // { src, svgMarkup, title } for the open panel
 function ensureMermaid() {
   if (!window.mermaid) return null;
   if (!mermaidReady) {
@@ -963,6 +1005,9 @@ function ensureMermaid() {
 }
 function mermaidIsDark() {
   return document.documentElement.getAttribute('data-theme') !== 'light';
+}
+function mermaidStorage() {
+  try { return window.localStorage; } catch (_) { return null; }
 }
 function attachMermaidToolbar(wrap, src) {
   if (!wrap || wrap.querySelector('.mermaid-toolbar')) return;
@@ -996,28 +1041,218 @@ function svgMarkupFromWrap(wrap) {
   const svg = wrap && wrap.querySelector('svg');
   return svg ? svg.outerHTML : '';
 }
-function openMermaidPanel(src, svgMarkup) {
-  const panel = document.getElementById('mermaid-viz-panel');
-  const body = document.getElementById('mvp-body');
+function setMermaidPanelStatus(msg) {
   const status = document.getElementById('mvp-status');
-  if (!panel || !body) return;
-  _mermaidPanelState = { src: String(src || ''), svgMarkup: String(svgMarkup || '') };
-  body.innerHTML = _mermaidPanelState.svgMarkup || '<p style="color:var(--text-muted)">No diagram</p>';
-  if (status) status.textContent = '';
+  if (status) status.textContent = msg || '';
+}
+function setMermaidPanelTitle(title) {
+  const el = document.getElementById('mvp-title');
+  if (el) el.textContent = title || 'Graph viz';
+}
+function showMermaidPasteArea(show) {
+  const wrap = document.getElementById('mvp-paste-wrap');
+  if (!wrap) return;
+  if (show) wrap.classList.add('open');
+  else wrap.classList.remove('open');
+}
+function showMermaidPanelShell() {
+  const panel = document.getElementById('mermaid-viz-panel');
+  if (!panel) return null;
   panel.hidden = false;
   panel.classList.add('open');
+  return panel;
+}
+function renderMermaidPanelEmpty() {
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  if (!body) return;
+  body.innerHTML = (MA && MA.emptyStateHtml) ? MA.emptyStateHtml() : '<p>No graph loaded.</p>';
+  _mermaidPanelState = null;
+  setMermaidPanelTitle('Graph viz');
+}
+function applyMermaidPanelContent(opts) {
+  const o = opts || {};
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  if (!body) return;
+  const src = MA && MA.stripMermaidFence ? MA.stripMermaidFence(o.src) : String(o.src || '');
+  const svgMarkup = String(o.svgMarkup || '');
+  const title = String(o.title || 'Graph').trim() || 'Graph';
+  _mermaidPanelState = { src, svgMarkup, title };
+  if (svgMarkup) {
+    body.innerHTML = svgMarkup;
+  } else if (src) {
+    body.innerHTML = '<pre class="mvp-source-fallback" style="text-align:left;font-size:11px;white-space:pre-wrap">' +
+      (MA && MA.escapeHtml ? MA.escapeHtml(src) : src) + '</pre>';
+  } else {
+    renderMermaidPanelEmpty();
+    return;
+  }
+  setMermaidPanelTitle(title);
+}
+function pinMermaidPanelState(extraStatus) {
+  const MA = window.MermaidActions;
+  const st = _mermaidPanelState;
+  if (!st || !(st.src || st.svgMarkup)) {
+    setMermaidPanelStatus('Nothing to pin');
+    return null;
+  }
+  const saved = MA && MA.savePinnedGraph
+    ? MA.savePinnedGraph(mermaidStorage(), {
+        src: st.src,
+        svgMarkup: st.svgMarkup,
+        title: st.title || 'Graph',
+        updatedAt: Date.now(),
+      })
+    : null;
+  if (saved) {
+    setMermaidPanelStatus(extraStatus || 'Pinned as last graph');
+  } else {
+    setMermaidPanelStatus('Could not pin (storage unavailable)');
+  }
+  return saved;
+}
+/**
+ * Open durable panel with optional diagram. When pin is true (default for
+ * chat Open), persists as last graph so chrome "Open viz" / Load last work.
+ */
+function openMermaidPanel(src, svgMarkup, opts) {
+  const o = opts || {};
+  const panel = showMermaidPanelShell();
+  if (!panel) return;
+  const hasContent = !!(src || svgMarkup);
+  if (!hasContent) {
+    renderMermaidPanelEmpty();
+    setMermaidPanelStatus(o.status || '');
+    return;
+  }
+  applyMermaidPanelContent({
+    src: src,
+    svgMarkup: svgMarkup,
+    title: o.title || 'Diagram',
+  });
+  if (o.pin !== false) pinMermaidPanelState(o.status || 'Opened · pinned as last');
+  else setMermaidPanelStatus(o.status || '');
+  if (o.showPaste) showMermaidPasteArea(true);
 }
 function closeMermaidPanel() {
   const panel = document.getElementById('mermaid-viz-panel');
   if (!panel) return;
   panel.classList.remove('open');
   panel.hidden = true;
+  showMermaidPasteArea(false);
+}
+/** Agents chrome / Open viz: durable surface without chat paste. */
+function openVizFromChrome() {
+  const MA = window.MermaidActions;
+  const plan = MA && MA.openFromChromePlan
+    ? MA.openFromChromePlan(mermaidStorage())
+    : { mode: 'empty' };
+  showMermaidPanelShell();
+  if (plan.mode === 'pinned' && plan.pin) {
+    applyMermaidPanelContent({
+      src: plan.pin.src,
+      svgMarkup: plan.pin.svgMarkup,
+      title: plan.pin.title || 'Last graph',
+    });
+    // Prefer cached SVG; if only source, re-render via mermaid when available.
+    if (!plan.pin.svgMarkup && plan.pin.src) {
+      renderMermaidSourceInPanel(plan.pin.src, { title: plan.pin.title || 'Last graph', pin: false, status: 'Loaded last · rendering…' });
+      return;
+    }
+    setMermaidPanelStatus('Loaded last pinned graph');
+    return;
+  }
+  renderMermaidPanelEmpty();
+  setMermaidPanelStatus('Empty — paste bullseye Mermaid export or open from chat');
+}
+function loadLastMermaidGraph() {
+  const MA = window.MermaidActions;
+  const pin = MA && MA.loadPinnedGraph ? MA.loadPinnedGraph(mermaidStorage()) : null;
+  if (!pin) {
+    showMermaidPanelShell();
+    renderMermaidPanelEmpty();
+    setMermaidPanelStatus('No pinned graph yet');
+    return;
+  }
+  showMermaidPanelShell();
+  applyMermaidPanelContent({
+    src: pin.src,
+    svgMarkup: pin.svgMarkup,
+    title: pin.title || 'Last graph',
+  });
+  if (!pin.svgMarkup && pin.src) {
+    renderMermaidSourceInPanel(pin.src, { title: pin.title || 'Last graph', pin: false, status: 'Loaded last · rendering…' });
+    return;
+  }
+  setMermaidPanelStatus('Loaded last pinned graph');
+}
+/** Render raw/fenced Mermaid into the durable panel (manual refresh path). */
+function renderMermaidSourceInPanel(rawSrc, opts) {
+  const o = opts || {};
+  const MA = window.MermaidActions;
+  const src = MA && MA.stripMermaidFence ? MA.stripMermaidFence(rawSrc) : String(rawSrc || '').trim();
+  if (!src) {
+    setMermaidPanelStatus('Paste Mermaid source first');
+    return Promise.resolve(null);
+  }
+  showMermaidPanelShell();
+  applyMermaidPanelContent({ src: src, svgMarkup: '', title: o.title || 'Pasted graph' });
+  const m = ensureMermaid();
+  if (!m) {
+    setMermaidPanelStatus('Mermaid not loaded — source shown as text');
+    if (o.pin !== false) pinMermaidPanelState('Source pinned (render unavailable)');
+    return Promise.resolve(null);
+  }
+  const id = 'mvp-mmd-' + (++mermaidSeq);
+  setMermaidPanelStatus(o.status || 'Rendering…');
+  return Promise.resolve()
+    .then(() => m.render(id, src))
+    .then(({ svg }) => {
+      applyMermaidPanelContent({
+        src: src,
+        svgMarkup: svg,
+        title: o.title || 'Pasted graph',
+      });
+      if (o.pin !== false) pinMermaidPanelState(o.status || 'Rendered · pinned as last');
+      else setMermaidPanelStatus(o.status || 'Rendered');
+      return svg;
+    })
+    .catch((err) => {
+      setMermaidPanelStatus('Render failed: ' + (err && err.message ? err.message : 'invalid Mermaid'));
+      return null;
+    });
+}
+function pasteMermaidIntoPanel() {
+  showMermaidPanelShell();
+  showMermaidPasteArea(true);
+  const ta = document.getElementById('mvp-paste');
+  if (ta) {
+    ta.focus();
+    // Prefer clipboard.readText when available (secure context + gesture).
+    if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+      navigator.clipboard.readText().then((t) => {
+        if (t && ta && !ta.value) ta.value = t;
+        setMermaidPanelStatus('Paste ready — edit if needed, then Render');
+      }).catch(() => {
+        setMermaidPanelStatus('Paste into the box, then Render');
+      });
+      return;
+    }
+  }
+  setMermaidPanelStatus('Paste into the box, then Render');
+}
+function renderPastedMermaid() {
+  const ta = document.getElementById('mvp-paste');
+  const raw = ta ? ta.value : '';
+  return renderMermaidSourceInPanel(raw, { title: 'Pasted graph', pin: true });
 }
 function openMermaidWindow(src, svgMarkup) {
   const MA = window.MermaidActions;
+  const title = (_mermaidPanelState && _mermaidPanelState.title) || 'Mermaid diagram';
   const html = MA && MA.buildOpenDocumentHtml
     ? MA.buildOpenDocumentHtml({
-        title: 'Mermaid diagram',
+        title: title,
         svgMarkup: svgMarkup || '',
         mermaidSrc: src || '',
         dark: mermaidIsDark(),
@@ -1026,9 +1261,7 @@ function openMermaidWindow(src, svgMarkup) {
   const w = window.open('', '_blank');
   if (!w) {
     // Popup blocked — still open the in-app panel.
-    openMermaidPanel(src, svgMarkup);
-    const status = document.getElementById('mvp-status');
-    if (status) status.textContent = 'Popup blocked; opened in panel instead.';
+    openMermaidPanel(src, svgMarkup, { pin: false, status: 'Popup blocked; opened in panel instead.' });
     return null;
   }
   w.document.open();
@@ -1159,8 +1392,8 @@ async function handleMermaidAction(action, wrap) {
   const svgMarkup = svgMarkupFromWrap(wrap);
   try {
     if (action === 'open') {
-      // Primary: dedicated panel distinct from chat scroll. New tab is a secondary control on the panel.
-      openMermaidPanel(src, svgMarkup);
+      // Primary: durable panel distinct from chat scroll; auto-pin as last graph (🎯T83).
+      openMermaidPanel(src, svgMarkup, { title: 'Chat diagram', pin: true });
       flashMermaidStatus(wrap, 'Opened in panel');
       return;
     }
@@ -1183,6 +1416,11 @@ async function handleMermaidAction(action, wrap) {
 function wireMermaidPanelChrome() {
   const closeBtn = document.getElementById('mvp-close');
   const popBtn = document.getElementById('mvp-popout');
+  const loadBtn = document.getElementById('mvp-load-last');
+  const pasteBtn = document.getElementById('mvp-paste-btn');
+  const renderBtn = document.getElementById('mvp-render');
+  const pinBtn = document.getElementById('mvp-pin');
+  const openVizBtn = document.getElementById('open-viz-btn');
   if (closeBtn) closeBtn.addEventListener('click', () => closeMermaidPanel());
   if (popBtn) {
     popBtn.addEventListener('click', () => {
@@ -1190,12 +1428,21 @@ function wireMermaidPanelChrome() {
       openMermaidWindow(st.src, st.svgMarkup);
     });
   }
+  if (loadBtn) loadBtn.addEventListener('click', () => loadLastMermaidGraph());
+  if (pasteBtn) pasteBtn.addEventListener('click', () => pasteMermaidIntoPanel());
+  if (renderBtn) renderBtn.addEventListener('click', () => { renderPastedMermaid(); });
+  if (pinBtn) pinBtn.addEventListener('click', () => pinMermaidPanelState('Pinned as last graph'));
+  if (openVizBtn) openVizBtn.addEventListener('click', () => openVizFromChrome());
 }
 wireMermaidPanelChrome();
-// Expose for hermetic smoke (🎯T83.1).
+// Expose for hermetic smoke (🎯T83 / T83.1).
 window.openMermaidPanel = openMermaidPanel;
 window.closeMermaidPanel = closeMermaidPanel;
 window.openMermaidWindow = openMermaidWindow;
+window.openVizFromChrome = openVizFromChrome;
+window.loadLastMermaidGraph = loadLastMermaidGraph;
+window.renderMermaidSourceInPanel = renderMermaidSourceInPanel;
+window.pinMermaidPanelState = pinMermaidPanelState;
 window.copyMermaidSource = copyMermaidSource;
 window.copyMermaidImage = copyMermaidImage;
 window.svgToPngBlob = svgToPngBlob;

@@ -1,7 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Mermaid diagram actions (🎯T83.1): open-in-panel/tab, copy source, copy image.
+// Mermaid diagram actions (🎯T83.1 + 🎯T83 durable chrome):
+// open-in-panel/tab, copy source, copy image, pin last graph, paste/load.
 // DOM-free pure helpers so Node can require(); browser glue in index.html.
 
 (function (root, factory) {
@@ -13,12 +14,30 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  /** localStorage key for the last pinned project/chat graph (🎯T83). */
+  const PIN_STORAGE_KEY = 'jevons-mermaid-viz-v1';
+
   /** Toolbar control definitions shown on each rendered .mermaid-diagram. */
   function toolbarButtons() {
     return [
       { action: 'open', label: 'Open', title: 'Open diagram in dedicated panel' },
       { action: 'copy-source', label: 'Copy source', title: 'Copy Mermaid source as text' },
       { action: 'copy-image', label: 'Copy image', title: 'Copy diagram as PNG (and Mermaid text when multi-MIME clipboard is available)' },
+    ];
+  }
+
+  /**
+   * Durable panel header controls (🎯T83 chrome, not chat-bubble toolbar).
+   * Manual refresh / paste / load-last; event-driven refresh is deferred.
+   */
+  function panelChromeButtons() {
+    return [
+      { action: 'load-last', label: 'Load last', title: 'Restore the last pinned graph' },
+      { action: 'paste', label: 'Paste', title: 'Paste Mermaid / bullseye graph export' },
+      { action: 'render', label: 'Render', title: 'Render pasted Mermaid source' },
+      { action: 'pin', label: 'Pin', title: 'Pin current graph as last' },
+      { action: 'popout', label: 'New tab', title: 'Open in a new browser tab' },
+      { action: 'close', label: 'Close', title: 'Close panel' },
     ];
   }
 
@@ -170,8 +189,131 @@
     return 'panel';
   }
 
+  /**
+   * Strip optional ```mermaid fences and surrounding whitespace.
+   * Accepts raw bullseye graph export or a fenced chat paste.
+   */
+  function stripMermaidFence(text) {
+    let s = String(text == null ? '' : text).replace(/^\uFEFF/, '').trim();
+    if (!s) return '';
+    // Full fence: ```mermaid ... ``` or ``` ... ```
+    const fenced = s.match(/^```(?:mermaid)?\s*\r?\n([\s\S]*?)\r?\n```\s*$/i);
+    if (fenced) return String(fenced[1] || '').trim();
+    // Leading fence only (paste without closing fence)
+    const lead = s.match(/^```(?:mermaid)?\s*\r?\n([\s\S]*)$/i);
+    if (lead) {
+      let body = String(lead[1] || '');
+      body = body.replace(/\r?\n```\s*$/, '');
+      return body.trim();
+    }
+    return s;
+  }
+
+  /** True when source looks like something mermaid might accept (non-empty). */
+  function isRenderableSource(src) {
+    return stripMermaidFence(src).length > 0;
+  }
+
+  /**
+   * Normalize a pin payload for storage / panel state.
+   * @returns {{ version: number, src: string, svgMarkup: string, title: string, updatedAt: number }|null}
+   */
+  function normalizePinnedGraph(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const src = stripMermaidFence(raw.src);
+    const svgMarkup = String(raw.svgMarkup == null ? '' : raw.svgMarkup);
+    if (!src && !svgMarkup) return null;
+    const title = String(raw.title == null ? '' : raw.title).trim() || 'Graph';
+    const updatedAt = typeof raw.updatedAt === 'number' && isFinite(raw.updatedAt)
+      ? raw.updatedAt
+      : Date.now();
+    return {
+      version: 1,
+      src: src,
+      svgMarkup: svgMarkup,
+      title: title,
+      updatedAt: updatedAt,
+    };
+  }
+
+  /**
+   * Load pinned graph from a Storage-like object (injectable for tests).
+   * @param {{ getItem?: function(string): ?string }} storage
+   */
+  function loadPinnedGraph(storage) {
+    if (!storage || typeof storage.getItem !== 'function') return null;
+    let raw;
+    try {
+      raw = storage.getItem(PIN_STORAGE_KEY);
+    } catch (_) {
+      return null;
+    }
+    if (!raw) return null;
+    try {
+      return normalizePinnedGraph(JSON.parse(raw));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
+   * Persist a pinned graph. Returns the normalized payload or null.
+   * @param {{ setItem?: function(string, string): void }} storage
+   */
+  function savePinnedGraph(storage, state) {
+    const n = normalizePinnedGraph(state);
+    if (!n || !storage || typeof storage.setItem !== 'function') return null;
+    try {
+      storage.setItem(PIN_STORAGE_KEY, JSON.stringify(n));
+    } catch (_) {
+      return null;
+    }
+    return n;
+  }
+
+  /** Remove pinned graph from storage. */
+  function clearPinnedGraph(storage) {
+    if (!storage || typeof storage.removeItem !== 'function') return false;
+    try {
+      storage.removeItem(PIN_STORAGE_KEY);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Empty-state copy when the durable panel has no diagram yet (🎯T83).
+   * Instructs paste of bullseye Mermaid export or open from chat.
+   */
+  function emptyStateHtml() {
+    return (
+      '<div class="mvp-empty" data-mvp-empty="1">' +
+      '<p class="mvp-empty-title">Project graph viz</p>' +
+      '<p class="mvp-empty-body">No graph loaded. Open a Mermaid diagram from chat, ' +
+      'use <strong>Load last</strong> for the pinned graph, or <strong>Paste</strong> a ' +
+      'bullseye Mermaid export (```mermaid fence or raw source).</p>' +
+      '<p class="mvp-empty-hint">Manual refresh only — live event refresh is deferred.</p>' +
+      '</div>'
+    );
+  }
+
+  /**
+   * Decide what the durable panel should show on open-from-chrome.
+   * @returns {{ mode: 'pinned'|'empty', pin?: object }}
+   */
+  function openFromChromePlan(storage) {
+    const pin = loadPinnedGraph(storage);
+    if (pin && (pin.src || pin.svgMarkup)) {
+      return { mode: 'pinned', pin: pin };
+    }
+    return { mode: 'empty' };
+  }
+
   return {
+    PIN_STORAGE_KEY: PIN_STORAGE_KEY,
     toolbarButtons: toolbarButtons,
+    panelChromeButtons: panelChromeButtons,
     clipboardCapabilities: clipboardCapabilities,
     clipboardWritePlan: clipboardWritePlan,
     escapeHtml: escapeHtml,
@@ -179,5 +321,13 @@
     normalizeSvgMarkup: normalizeSvgMarkup,
     svgMarkupToDataUrl: svgMarkupToDataUrl,
     openPlacement: openPlacement,
+    stripMermaidFence: stripMermaidFence,
+    isRenderableSource: isRenderableSource,
+    normalizePinnedGraph: normalizePinnedGraph,
+    loadPinnedGraph: loadPinnedGraph,
+    savePinnedGraph: savePinnedGraph,
+    clearPinnedGraph: clearPinnedGraph,
+    emptyStateHtml: emptyStateHtml,
+    openFromChromePlan: openFromChromePlan,
   };
 }));

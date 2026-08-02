@@ -1,7 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic unit tests for mermaid open/copy helpers (🎯T83.1).
+// Hermetic unit tests for mermaid open/copy helpers (🎯T83.1)
+// and durable panel pin/persist (🎯T83).
 // Run: node web/scripts/mermaid_actions_test.js
 
 'use strict';
@@ -130,6 +131,91 @@ test('svgMarkupToDataUrl encodes markup', function () {
 test('openPlacement defaults to panel; preferWindow uses window', function () {
   assert.strictEqual(MA.openPlacement({}), 'panel');
   assert.strictEqual(MA.openPlacement({ preferWindow: true }), 'window');
+});
+
+test('panelChromeButtons includes load-last, paste, pin, close', function () {
+  const actions = MA.panelChromeButtons().map(function (b) { return b.action; });
+  assert.ok(actions.indexOf('load-last') >= 0);
+  assert.ok(actions.indexOf('paste') >= 0);
+  assert.ok(actions.indexOf('render') >= 0);
+  assert.ok(actions.indexOf('pin') >= 0);
+  assert.ok(actions.indexOf('close') >= 0);
+});
+
+test('stripMermaidFence unwraps fenced and raw source', function () {
+  assert.strictEqual(MA.stripMermaidFence('graph TD; A-->B;'), 'graph TD; A-->B;');
+  assert.strictEqual(
+    MA.stripMermaidFence('```mermaid\ngraph TD; A-->B;\n```'),
+    'graph TD; A-->B;'
+  );
+  assert.strictEqual(
+    MA.stripMermaidFence('```\nflowchart LR; X-->Y;\n```'),
+    'flowchart LR; X-->Y;'
+  );
+  assert.strictEqual(MA.stripMermaidFence('  \n  '), '');
+  assert.strictEqual(MA.isRenderableSource('```mermaid\nA\n```'), true);
+  assert.strictEqual(MA.isRenderableSource('   '), false);
+});
+
+function memStorage(seed) {
+  const map = Object.create(null);
+  if (seed) {
+    Object.keys(seed).forEach(function (k) { map[k] = seed[k]; });
+  }
+  return {
+    getItem: function (k) { return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : null; },
+    setItem: function (k, v) { map[k] = String(v); },
+    removeItem: function (k) { delete map[k]; },
+    _map: map,
+  };
+}
+
+test('savePinnedGraph / loadPinnedGraph round-trip and clear', function () {
+  const store = memStorage();
+  assert.strictEqual(MA.loadPinnedGraph(store), null);
+  const saved = MA.savePinnedGraph(store, {
+    src: '```mermaid\ngraph TD; A-->B;\n```',
+    svgMarkup: '<svg><text>A</text></svg>',
+    title: 'Bullseye active',
+  });
+  assert.ok(saved);
+  assert.strictEqual(saved.src, 'graph TD; A-->B;');
+  assert.strictEqual(saved.title, 'Bullseye active');
+  assert.strictEqual(saved.version, 1);
+  const loaded = MA.loadPinnedGraph(store);
+  assert.ok(loaded);
+  assert.strictEqual(loaded.src, 'graph TD; A-->B;');
+  assert.ok(loaded.svgMarkup.indexOf('<svg>') >= 0);
+  assert.ok(typeof loaded.updatedAt === 'number');
+  MA.clearPinnedGraph(store);
+  assert.strictEqual(MA.loadPinnedGraph(store), null);
+});
+
+test('loadPinnedGraph ignores corrupt JSON and empty payload', function () {
+  const bad = memStorage();
+  bad.setItem(MA.PIN_STORAGE_KEY, '{not json');
+  assert.strictEqual(MA.loadPinnedGraph(bad), null);
+  assert.strictEqual(MA.savePinnedGraph(memStorage(), { src: '', svgMarkup: '' }), null);
+  assert.strictEqual(MA.normalizePinnedGraph(null), null);
+  assert.strictEqual(MA.normalizePinnedGraph({ src: '  ' }), null);
+});
+
+test('openFromChromePlan returns empty or pinned', function () {
+  const empty = MA.openFromChromePlan(memStorage());
+  assert.strictEqual(empty.mode, 'empty');
+  const store = memStorage();
+  MA.savePinnedGraph(store, { src: 'graph TD; A-->B;' });
+  const plan = MA.openFromChromePlan(store);
+  assert.strictEqual(plan.mode, 'pinned');
+  assert.strictEqual(plan.pin.src, 'graph TD; A-->B;');
+});
+
+test('emptyStateHtml is durable chrome empty copy', function () {
+  const html = MA.emptyStateHtml();
+  assert.ok(html.indexOf('data-mvp-empty') >= 0);
+  assert.ok(/Load last/i.test(html));
+  assert.ok(/Paste/i.test(html));
+  assert.ok(/bullseye/i.test(html));
 });
 
 if (failed) {
