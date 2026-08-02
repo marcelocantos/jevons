@@ -52,6 +52,7 @@ test-web:
 	node web/scripts/attention_threads_test.js
 	node web/scripts/virtual_list_test.js
 	node web/scripts/thread_route_test.js
+	node web/scripts/composer_layout_test.js
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright
 # from scripts/browser-loop-test). Live: make test-ui-live.

@@ -323,6 +323,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/attention_threads.js"></script>
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
+<script src="scripts/composer_layout.js"></script>
 <script>
 const msgs = document.getElementById('messages');
 const input = document.getElementById('input');
@@ -1822,7 +1823,12 @@ function updateWorkingProgress(text) {
 
 // Auto-grow the textarea: reset to one row, then expand to fit content
 // (capped by CSS max-height with internal scroll once that's reached).
+// 🎯T70.1: when height grows, the flex #messages viewport shrinks by the
+// same delta; browsers keep scrollTop fixed, so the latest reply slides
+// under the composer. Bump messages.scrollTop by the growth delta so the
+// bottom of the transcript stays in view.
 function autoGrow() {
+  const prevH = input.offsetHeight;
   input.classList.remove('composer-scroll');
   input.style.height = 'auto';
   const maxPx = Math.round(window.innerHeight * 0.28);
@@ -1830,6 +1836,14 @@ function autoGrow() {
   input.style.height = h + 'px';
   // Only show scrollbar when content hits the cap (🎯T69).
   if (input.scrollHeight > maxPx + 1) input.classList.add('composer-scroll');
+  const growPx = input.offsetHeight - prevH;
+  if (growPx > 0 && typeof ComposerLayout !== 'undefined') {
+    beginScrollBookkeeping();
+    msgs.scrollTop = ComposerLayout.scrollTopAfterComposerGrow(
+      msgs.scrollTop, msgs.clientHeight, msgs.scrollHeight, growPx
+    );
+    endScrollBookkeeping();
+  }
 }
 
 // Enter submits, Shift-Enter inserts a newline.
