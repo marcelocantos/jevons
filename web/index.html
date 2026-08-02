@@ -344,14 +344,27 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    as a hover tooltip. One small line, so it takes minimal vertical space. */
 .turn-marker { align-self: flex-start; position: relative; font-family: var(--mono); font-size: 11px; color: var(--text-muted); letter-spacing: -0.02em; user-select: none; cursor: default; line-height: 1.2; margin: 0; }
 .turn-marker:hover { color: var(--text-dim); }
-.turn-tip { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 30; min-width: 200px; max-width: 460px; max-height: 50vh; overflow-y: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 28px rgba(0,0,0,0.35); }
-.turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 1px; }
+/* 🎯T122: tip must not inherit the narrow marker's shrink-to-fit width.
+   max-content + high min/max → wide single-line chrome; wrap only past max. */
+.turn-tip {
+  display: none; position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 30;
+  width: max-content; min-width: 320px; max-width: min(720px, 92vw);
+  max-height: 50vh; overflow-x: hidden; overflow-y: auto;
+  background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+}
+.turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
 .msg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; line-height: 1; cursor: default; }
 .msg.user .msg-time { text-align: right; }
 /* 🎯T84: GitHub mark for compacted github.com workdirs */
 .agent-dir .gh-icon { display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; opacity: 0.85; }
 .agent-node .agent-dir { display: inline-flex; align-items: center; gap: 2px; }
-.turn-item { font-family: var(--mono); font-size: 11px; padding: 1px 0; letter-spacing: -0.02em; white-space: pre-wrap; word-break: break-word; }
+/* 🎯T122: do not break-word early; soft-wrap only at tip max-width. */
+.turn-item {
+  font-family: var(--mono); font-size: 11px; padding: 2px 0; letter-spacing: -0.02em;
+  line-height: 1.35; max-width: 100%;
+  white-space: pre-wrap; word-break: normal; overflow-wrap: break-word;
+}
 .turn-item.tool-use { color: var(--amber); }
 .turn-item.tool-result { color: var(--text-dim); }
 
