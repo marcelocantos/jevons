@@ -1243,16 +1243,38 @@ let autoScroll = true;
 // Ignore scroll events caused by our own pin so a 1px shortfall cannot
 // permanently disable follow (Grok-CLI-like stick-to-bottom, 🎯T30.2).
 let _pinningScroll = false;
-let _pinGuardUntil = 0;
 const FOLLOW_SLACK_PX = 120;
+function distFromBottom() {
+  return msgs.scrollHeight - msgs.clientHeight - msgs.scrollTop;
+}
+function nearBottom() {
+  return distFromBottom() <= FOLLOW_SLACK_PX;
+}
+// User scroll-up must always disarm follow. Do NOT re-pin merely because
+// the end left the viewport — that fought history browsing (wheel moved a
+// few px then snapped back while autoScroll was still true within slack).
+// Growth follow is handled by post-paint scrollDown + stream ResizeObserver.
+msgs.addEventListener('wheel', (e) => {
+  if (e.deltaY < 0) autoScroll = false;           // scroll up → read history
+  else if (e.deltaY > 0 && nearBottom()) autoScroll = true; // scroll down into bottom band
+}, { passive: true });
+let _touchLastY = null;
+msgs.addEventListener('touchstart', (e) => {
+  _touchLastY = e.touches && e.touches[0] ? e.touches[0].clientY : null;
+}, { passive: true });
+msgs.addEventListener('touchmove', (e) => {
+  if (_touchLastY == null || !e.touches || !e.touches[0]) return;
+  const y = e.touches[0].clientY;
+  if (y > _touchLastY + 2) autoScroll = false; // finger down → content up
+  _touchLastY = y;
+}, { passive: true });
 msgs.addEventListener('scroll', () => {
-  if (_pinningScroll || Date.now() < _pinGuardUntil) return;
-  autoScroll = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - FOLLOW_SLACK_PX;
+  if (_pinningScroll) return;
+  autoScroll = nearBottom();
 });
 function scrollDown() {
   if (!autoScroll) return;
   _pinningScroll = true;
-  _pinGuardUntil = Date.now() + 80; // absorb delayed clamp scroll events
   const pin = () => { msgs.scrollTop = msgs.scrollHeight; };
   pin();
   // Double-rAF catches late markdown/table layout after the append.
@@ -1261,8 +1283,6 @@ function scrollDown() {
     requestAnimationFrame(() => {
       pin();
       _pinningScroll = false;
-      // Hold the ignore window a beat past the last pin.
-      _pinGuardUntil = Date.now() + 50;
     });
   });
 }
@@ -1275,9 +1295,7 @@ function scrollDownThrottled() {
   _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; scrollDown(); });
 }
 // ResizeObserver on the live streaming bubble: re-pin whenever its box
-// grows while follow is armed. End-sentinel IO alone only fires on
-// intersection *transitions*, so a bubble that keeps growing while already
-// non-intersecting never re-triggers (classic mid-stream freeze).
+// grows while follow is armed (content growth only — not user scroll-away).
 let _streamRO = null;
 let _streamROEl = null;
 function watchStreamBubble(el) {
@@ -1296,12 +1314,10 @@ function unwatchStreamBubble(el) {
   if (_streamRO) { _streamRO.disconnect(); _streamRO = null; }
   _streamROEl = null;
 }
-// Content-growth re-pin (🎯T30.2): #messages is flex-fixed so ResizeObserver
-// on the scroller never fires when scrollHeight grows. A 1px end sentinel
-// watched via IntersectionObserver re-pins when follow is on but the true
-// bottom has left the viewport (stale mid-bubble pin, late markdown layout).
-(function setupFollowEndPin() {
-  if (typeof IntersectionObserver === 'undefined') return;
+// Keep a 1px end sentinel last in #messages (layout / lastMessageish hygiene).
+// Deliberately NO IntersectionObserver re-pin here: "end left viewport"
+// includes intentional history scroll and was snapping the view back.
+(function setupMessagesEnd() {
   let end = document.getElementById('messages-end');
   if (!end) {
     end = document.createElement('div');
@@ -1311,15 +1327,10 @@ function unwatchStreamBubble(el) {
     msgs.appendChild(end);
   }
   const placeEnd = () => {
-    // Re-attach after msgs.innerHTML = '' (reconnect wipe) and keep last.
     if (end.parentNode !== msgs || msgs.lastElementChild !== end) msgs.appendChild(end);
   };
   placeEnd();
   new MutationObserver(placeEnd).observe(msgs, { childList: true });
-  new IntersectionObserver((entries) => {
-    if (!autoScroll) return;
-    if (entries.some(e => !e.isIntersecting)) scrollDownThrottled();
-  }, { root: msgs, threshold: 0 }).observe(end);
 })();
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }

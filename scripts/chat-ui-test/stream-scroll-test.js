@@ -184,6 +184,41 @@ function slackOf(page) {
     if (sealed.dist > 140) {
       failures.push(`after seal+pin, still ${sealed.dist}px from bottom`);
     }
+
+    // History browse: small wheel-up must NOT snap back to bottom (regression
+    // from end-sentinel IntersectionObserver re-pin while autoScroll true).
+    await page.evaluate(() => {
+      autoScroll = true;
+      const m = document.getElementById('messages');
+      m.scrollTop = m.scrollHeight;
+    });
+    await page.waitForTimeout(40);
+    await page.locator('#messages').hover({ position: { x: 40, y: 40 } });
+    await page.mouse.wheel(0, -300);
+    await page.waitForTimeout(120);
+    const afterWheel = await slackOf(page);
+    if (afterWheel.dist < 80) {
+      failures.push(
+        `history wheel-up snapped back (dist=${afterWheel.dist}, want well above bottom)`,
+      );
+    }
+    const wheelArmed = await page.evaluate(() => {
+      try { return autoScroll; } catch (_) { return null; }
+    });
+    if (wheelArmed !== false) {
+      failures.push(`history wheel-up did not disarm follow (autoScroll=${JSON.stringify(wheelArmed)})`);
+    }
+    // Stay put — no delayed snap after wheel (wait a beat).
+    const topAfterWheel = afterWheel.scrollTop;
+    await page.waitForTimeout(200);
+    const afterWait = await slackOf(page);
+    if (Math.abs(afterWait.scrollTop - topAfterWheel) > 40) {
+      failures.push(
+        `scroll drifted after wheel-up without user input ` +
+        `(was ${topAfterWheel}, now ${afterWait.scrollTop})`,
+      );
+    }
+
     // Scroll up then down manually — should reach bottom without bounce fight.
     await page.evaluate(() => {
       autoScroll = false;
