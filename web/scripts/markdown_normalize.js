@@ -1,0 +1,45 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+// Markdown pre-parse normalization for the chat UI (🎯T145).
+// Keep this file free of DOM so Node can require() it.
+//
+// Models often glue intro blurb to a fenced code block with no newline:
+//   Here's a snippet:```cpp
+//   int x;
+//   ```
+// marked then fails to open a code fence (fence sticks to the sentence).
+// ensureFenceNewlines inserts a blank line before an opening fence when
+// it is glued to a preceding non-newline character.
+
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory();
+  } else {
+    root.MarkdownNormalize = factory();
+  }
+}(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  // Opening fence: ``` or ```lang (lang: alnum / _ / + / -).
+  // Lookbehind alternative for older engines: capture prior non-newline char.
+  const SMUSHED_OPEN_FENCE = /([^\n\r])(```[a-zA-Z0-9_+-]*)/g;
+
+  /**
+   * Ensure markdown fenced code blocks are not fused to preceding prose.
+   * Idempotent for already-well-formed markdown (fence after newline).
+   * Does not alter fence lines that already start at column 0 of a line.
+   *
+   * @param {string} text
+   * @returns {string}
+   */
+  function ensureFenceNewlines(text) {
+    if (text == null || text === '') return text == null ? text : '';
+    if (typeof text !== 'string') text = String(text);
+    return text.replace(SMUSHED_OPEN_FENCE, '$1\n\n$2');
+  }
+
+  return {
+    ensureFenceNewlines: ensureFenceNewlines,
+  };
+}));

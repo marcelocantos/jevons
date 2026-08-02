@@ -571,6 +571,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/layout_probe.js"></script>
 <script src="scripts/tool_summary.js"></script>
 <script src="scripts/mermaid_actions.js"></script>
+<script src="scripts/markdown_normalize.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
@@ -1235,7 +1236,7 @@ function measureCollapse(d, role, text) {
   msgs.appendChild(probe);
   // Inline the paint for probe (avoid mutating d._body).
   if (role === 'jevons') {
-    probeBody.innerHTML = marked.parse(text);
+    probeBody.innerHTML = parseAssistantMarkdown(text);
   } else if (role === 'user') {
     probeBody.innerHTML = renderUserText(text);
   } else {
@@ -1243,7 +1244,7 @@ function measureCollapse(d, role, text) {
   }
   const fullH = probeBody.offsetHeight || 0;
   if (role === 'jevons') {
-    probeBody.innerHTML = marked.parse(preview);
+    probeBody.innerHTML = parseAssistantMarkdown(preview);
   } else if (role === 'user') {
     probeBody.innerHTML = renderUserText(preview);
   } else {
@@ -1746,9 +1747,17 @@ function renderMermaidIn(container) {
     });
   });
 }
+// 🎯T145: normalize smushed ``` fences before marked so prose:```lang
+// never fuses the opening fence onto the preceding sentence.
+function parseAssistantMarkdown(text) {
+  const raw = (typeof MarkdownNormalize !== 'undefined')
+    ? MarkdownNormalize.ensureFenceNewlines(text)
+    : text;
+  return marked.parse(raw == null ? '' : raw);
+}
 function paintBody(d, role, t) {
   if (role === 'jevons') {
-    d._body.innerHTML = marked.parse(t);
+    d._body.innerHTML = parseAssistantMarkdown(t);
     if (!d._streamRaw) {
       renderMermaidIn(d._body);   // sealed content only
       highlightCodeIn(d._body);   // 🎯T74
@@ -4160,7 +4169,7 @@ transport.onVoiceEvent = msg => {
     if (startVoice._assistantEl && startVoice._assistantBuf) {
       const el = startVoice._assistantEl;
       const timeEl = el.querySelector('.msg-time');
-      el.innerHTML = marked.parse(startVoice._assistantBuf);
+      el.innerHTML = parseAssistantMarkdown(startVoice._assistantBuf);
       if (timeEl) el.appendChild(timeEl);
     }
     startVoice._assistantEl = null;

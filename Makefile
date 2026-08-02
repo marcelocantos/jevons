@@ -65,6 +65,7 @@ test-web:
 	node web/scripts/tool_tooltip_test.js
 	node web/scripts/agent_transcript_test.js
 	node web/scripts/mermaid_actions_test.js
+	node web/scripts/markdown_normalize_test.js
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright
 # from scripts/browser-loop-test). Live: make test-ui-live.
