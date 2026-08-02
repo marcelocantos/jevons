@@ -262,6 +262,8 @@ func main() {
 	// Wire registry and scanner into MCP server.
 	mcpSrv.SetRegistry(registry)
 	mcpSrv.SetScanner(scanner)
+	// 🎯T110 self-test packs — same in-process env as POST /api/self_test/run.
+	mcpSrv.SetSelfTestEnv(srv.SelfTestEnv)
 
 	// Butler: durable-thread orchestrator over the thread store, the
 	// session scanner (non-invasive observation), and the transcript

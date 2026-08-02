@@ -69,6 +69,9 @@ type Server struct {
 	// fleetBriefed tracks agents that already received FleetStandingBrief
 	// on first jevons_agent_send (🎯T104 under fan-out).
 	fleetBriefed map[string]bool
+
+	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
+	selfTestEnv SelfTestEnvFunc
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable
