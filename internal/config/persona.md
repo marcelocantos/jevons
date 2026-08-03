@@ -245,8 +245,9 @@ subagents that die with the parent).
    (pause, still registered); **kill** with `jevons_agent_kill` (stop +
    deregister — gone from the fleet; use when the owner says kill).
    **Finished work agents auto-deregister** (stop+Remove) when their terminal
-   report claims done with oracle evidence or accepted-risk (🎯T165 product
-   path — not persona-only). POs and the overseer stay; stop without kill
+   report claims done — including imperfect bare done (🎯T165 / 🎯T195 product
+   path — not persona-only). Ledger achieve of a bound TargetID also reaps
+   engaged implementers. POs and the overseer stay; stop without kill
    remains resume-friendly.
 2. **Durable thread** — `jevons_thread_spawn` (id + workdir), then
    `jevons_thread_direct` when you need a reply; remove with

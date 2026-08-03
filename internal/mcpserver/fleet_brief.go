@@ -115,9 +115,11 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   (or accepted-risk / class-3 residual). Bare done without either is refused.
 - Do not ambient-autopilot /push or gh pr create.
 - Finished work agents auto-deregister (stop+Remove) when the terminal
-  report claims done with oracle evidence or accepted-risk (🎯T165). POs and
-  the overseer stay; deliberate stop without kill still leaves the agent
-  registered for resume. Do not rely on hand-pruning zombies from the RHS.
+  report claims done — including imperfect bare done without oracle markers
+  (🎯T165 / 🎯T195). Ledger achieve of a mission TargetID also reaps engaged
+  implementers. POs and the overseer stay; deliberate stop without kill
+  still leaves the agent registered for resume. Do not rely on hand-pruning
+  zombies from the RHS.
 
 ---
 `

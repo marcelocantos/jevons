@@ -21,8 +21,8 @@ func TestLooksLikeFinishedWorkReport(t *testing.T) {
 	}{
 		{"", false},
 		{"still reading the tree", false},
-		{"Done. Mission complete.", false}, // bare done — T31 residual
-		{"go test ./... PASS", false},      // evidence without claim
+		{"Done. Mission complete.", true}, // 🎯T195 bare done still reaps
+		{"go test ./... PASS", false},     // evidence without claim
 		{"SHA abcdef0123456 landed", false},
 		{"Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS", true},
 		{"finished — make test green", true},
@@ -124,18 +124,85 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 	}
 }
 
-func TestT165BareDoneDoesNotReap(t *testing.T) {
+// 🎯T195: imperfect (bare done) completion reports still reap work leaves.
+// Overseer may still refuse bare done for acceptance (T31.1); reaping is hygiene.
+func TestT195BareDoneReapsWorkAgent(t *testing.T) {
 	reg := regWithTree(t)
 	// "worker" from fixture is purpose-empty (defaults to work) and not durable.
 	reaped, err := ReapDoneWorkAgent(reg, "worker", "Done. All finished.", func(string) bool { return false })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reaped {
-		t.Fatal("bare done must not reap")
+	if !reaped {
+		t.Fatal("bare done must reap work implementer (T195)")
 	}
-	if reg.Def("worker") == nil {
-		t.Fatal("worker removed on bare done")
+	if reg.Def("worker") != nil {
+		t.Fatal("worker still registered after bare-done reap")
+	}
+}
+
+// 🎯T195 hermetic: implementer path with imperfect report → agent_list omits name.
+func TestT195ImperfectDoneReportHermetic(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []claudia.AgentDef{
+		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer, Materialized: true, Provider: "grok"},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons", Materialized: true, Provider: "grok"},
+		{Name: "jv-t195-reap-imperfect", WorkDir: dir, SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po", Materialized: true, Provider: "grok", TargetID: "T195"},
+	} {
+		if err := reg.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Server{registry: reg}
+	isO := s.isOverseerAgent
+
+	// Residual: stop without kill keeps registration.
+	stopReq := mcp.CallToolRequest{}
+	stopReq.Params.Arguments = map[string]any{"name": "jv-t195-reap-imperfect"}
+	if _, err := s.handleAgentStop(context.Background(), stopReq); err != nil {
+		t.Fatal(err)
+	}
+	if reg.Def("jv-t195-reap-imperfect") == nil {
+		t.Fatal("stop must not deregister (T165/T195 residual)")
+	}
+
+	// Imperfect done report (no oracle markers) → stop+Remove.
+	report := "Done. Mission complete. Target achieved."
+	reaped, err := ReapDoneWorkAgent(reg, "jv-t195-reap-imperfect", report, isO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reaped {
+		t.Fatal("expected work agent reaped on imperfect done path")
+	}
+	if reg.Def("jv-t195-reap-imperfect") != nil {
+		t.Fatal("worker still registered after imperfect-done reap")
+	}
+
+	listReq := mcp.CallToolRequest{}
+	listRes, err := s.handleAgentList(context.Background(), listReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := toolText(listRes)
+	if strings.Contains(out, "jv-t195-reap-imperfect") {
+		t.Fatalf("agent_list still lists reaped worker:\n%s", out)
+	}
+	if !strings.Contains(out, "jevons-po") || !strings.Contains(out, "jevons") {
+		t.Fatalf("PO/overseer must remain in agent_list:\n%s", out)
+	}
+
+	// PO imperfect report must not auto-reap durable PO.
+	reapedPO, err := ReapDoneWorkAgent(reg, "jevons-po", report, isO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reapedPO {
+		t.Fatal("PO must not auto-reap")
 	}
 }
 

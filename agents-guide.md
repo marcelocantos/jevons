@@ -303,12 +303,14 @@ Owner vocabulary is **literal**:
 "opened a PR" / "merged to origin/master". Bare done without oracle or
 accepted-risk is also refused (🎯T31.1).
 
-**Finished work agents leave the fleet without hand-pruning (🎯T165):**
-when a work agent's terminal report claims done with oracle evidence or
-accepted-risk, the product stop+Removes them from the registry (RHS /
-`agent_list` omit the name). Residual: POs and overseer stay; deliberate
-`jevons_agent_stop` without kill still leaves registration for resume;
-T90 deep anomaly supervisor is separate.
+**Finished work agents leave the fleet without hand-pruning (🎯T165 / 🎯T195):**
+when a work agent's terminal report claims done — including imperfect bare
+done without oracle markers — the product stop+Removes them from the
+registry (RHS / `agent_list` omit the name). When a mission target is
+achieved on the bullseye ledger, work agents engaged on that TargetID are
+also reaped. Residual: POs and overseer stay; multi-target agents without
+a matching TargetID stay; deliberate `jevons_agent_stop` without kill
+still leaves registration for resume; T90 deep anomaly supervisor is separate.
 
 Do **not** re-expand a local merge order into continuous origin/PR
 shipping because a PO already opened remotes. Remote delivery only when

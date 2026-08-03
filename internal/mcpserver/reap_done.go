@@ -12,19 +12,34 @@ import (
 )
 
 // LooksLikeFinishedWorkReport is true when a terminal agent response claims
-// completion with acceptable evidence (oracle or accepted-risk). Used to
-// auto-deregister finished work agents (🎯T165). Mid-turn status with a SHA
-// or "go test" alone does not match — a completion claim is required so WIP
-// progress does not reap the worker.
+// completion. Used to auto-deregister finished work agents (🎯T165 / 🎯T195).
+//
+// 🎯T195: a completion claim alone is enough for reaping (hygiene) even when
+// the report omits oracle markers — imperfect "done" must not leave zombie
+// implementers. Overseer acceptance still requires oracle or accepted-risk
+// under 🎯T31.1; reaping ≠ accepting the work.
+// Mid-turn status with a SHA or "go test" alone does not match — a completion
+// claim is required so WIP progress does not reap the worker.
 func LooksLikeFinishedWorkReport(report string) bool {
 	s := strings.ToLower(strings.TrimSpace(report))
 	if s == "" {
 		return false
 	}
-	if !hasCompletionClaim(s) {
-		return false
+	return hasCompletionClaim(s)
+}
+
+// finishedWorkReapReason classifies why a finished-work report is reaping.
+func finishedWorkReapReason(report string) string {
+	switch ClassifyCompletionReport(report) {
+	case CompletionAcceptedRisk:
+		return "accepted_risk"
+	case CompletionOracleEvidence:
+		return "finished_work"
+	case CompletionBareDone:
+		return "bare_done_completion" // 🎯T195 imperfect report
+	default:
+		return "finished_work"
 	}
-	return hasOracleEvidence(s) || hasAcceptedRisk(s)
 }
 
 // DurableFleetAgent reports whether name must not be auto-reaped on done
@@ -53,9 +68,10 @@ func DurableFleetAgent(name, purpose string, isOverseer func(string) bool) bool 
 }
 
 // ShouldAutoReapDoneWorkAgent decides whether a finished-work report should
-// stop+Remove the agent from the live fleet registry (🎯T165).
-// Refuses durable roles, unregistered names, agents with descendants, bare
-// done without evidence, and non-work purposes.
+// stop+Remove the agent from the live fleet registry (🎯T165 / 🎯T195).
+// Refuses durable roles, unregistered names, agents with descendants, and
+// reports with no completion claim. Bare done (no oracle markers) still reaps
+// work leaves — imperfect implementer reports must not leave zombies (🎯T195).
 func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isOverseer func(string) bool) (bool, string) {
 	if reg == nil || name == "" {
 		return false, "no_registry_or_name"
@@ -73,7 +89,7 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if len(reg.Descendants(name)) > 0 {
 		return false, "has_descendants"
 	}
-	return true, "finished_work"
+	return true, finishedWorkReapReason(report)
 }
 
 // ReapDoneWorkAgent stops and deregisters name when ShouldAutoReapDoneWorkAgent
@@ -91,7 +107,8 @@ func ReapDoneWorkAgent(reg *claudia.Registry, name, report string, isOverseer fu
 }
 
 // maybeReapDoneWorkAgent runs after a terminal worker turn is notified to the
-// overseer: if the reply is a finished-work report, leave the fleet (🎯T165).
+// overseer: if the reply is a finished-work report (including imperfect bare
+// done — 🎯T195), leave the fleet (🎯T165).
 func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	if s == nil || s.registry == nil || name == "" || report == "" {
 		return
@@ -101,7 +118,7 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		return
 	}
 	if err := killSubtree(s.registry, name); err != nil {
-		slog.Warn("T165 auto-reap failed", "agent", name, "reason", reason, "err", err)
+		slog.Warn("T165/T195 auto-reap failed", "agent", name, "reason", reason, "err", err)
 		s.logLifecycle(compAgentLifecycle, "reap_done", "error", map[string]any{
 			"name": name, "reason": reason, "err": err.Error(),
 		})

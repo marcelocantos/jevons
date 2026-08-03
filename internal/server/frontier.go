@@ -962,6 +962,9 @@ func (s *Server) ensureFrontierWatch(ledger string) {
 	s.frontierWatchCancel = cancel
 	s.frontierWatchPath = ledger
 	s.mu.Unlock()
+	// 🎯T195: seed achieved set before watching so historical achieves do not
+	// mass-reap engaged agents on first ledger event after bind.
+	s.seedAchievedFromLedger(ledger)
 	go s.runFrontierWatch(ctx, ledger)
 }
 
@@ -1006,6 +1009,9 @@ func (s *Server) runFrontierWatch(ctx context.Context, path string) {
 		mu    sync.Mutex
 	)
 	fire := func() {
+		// 🎯T195: reap implementers engaged on newly achieved targets before
+		// broadcasting the frontier refresh (ledger is the achieve signal).
+		s.maybeReapOnLedgerAchieve(path)
 		s.NotifyFrontierChanged()
 	}
 	schedule := func() {
