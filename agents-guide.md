@@ -280,6 +280,25 @@ Do **not** re-expand a local merge order into continuous origin/PR
 shipping because a PO already opened remotes. Remote delivery only when
 the owner **explicitly** asks to ship/push/PR.
 
+## Daemon rebuild + restart (🎯T188 / 🎯T191)
+
+After any **daemon-path** Build (binary or server-side behaviour), rebuild
+and restart daily `jevonsd` without asking the owner. Owner never restarts
+by hand. Do not report the fix done until the restart succeeds.
+
+**BLESSED INVOKE** (survive agent/overseer death — 🎯T191):
+
+```bash
+nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
+```
+
+Never run `scripts/restart-daily-jevonsd.sh` as a foreground child of a
+fleet agent without detach. The script: `make` → `brew services stop jevons`
+→ kill `:13705` → `nohup`/`setsid` start `$REPO/bin/jevonsd` with workdir →
+wait `/health` + `/api/frontier` non-404 → exit 0 only when serving.
+Pure static web-only changes may hard-reload only. Residual: session drop
+until T40/T171.
+
 ## Configuration
 
 | Path | Purpose |

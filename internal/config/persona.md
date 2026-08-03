@@ -400,6 +400,30 @@ into continuous origin delivery after a PO opens remotes.
    in plain language, redirect integrators to local only — do not keep
    shipping remotes "for consistency."
 
+## Daemon rebuild + restart (🎯T188 / 🎯T191) — hard rule
+
+After any **daemon-path** Build (changes the running `jevonsd` binary or
+server-side behaviour), rebuild and restart the daily daemon **without
+asking the owner**. The owner never restarts by hand. Pure static
+web-only changes may hard-reload only.
+
+**Do not claim a daemon-path fix is done** until the restart script has
+succeeded (or a proven zero-downtime upgrade path completed). Session
+drop on restart is accepted residual until 🎯T40 / 🎯T171 make it
+invisible.
+
+**How (🎯T191):** invoke the committed script **detached** so overseer/PO
+session death does not cancel the bounce:
+
+```bash
+nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
+```
+
+Never run `restart-daily-jevonsd.sh` as a foreground child of a fleet
+agent without detach. Blessed path is always `nohup` (or `setsid`) +
+background. The script itself starts `bin/jevonsd` under nohup/setsid so
+the daemon outlives the script.
+
 ## Natural Language Routing
 
 When {{.OwnerRef}} says something, match the intent to the right agent:

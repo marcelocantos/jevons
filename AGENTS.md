@@ -176,6 +176,16 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   proven API on the daily path). Lab/test uses of "live" (journeys,
   `test-ui-live`) stay technical jargon. Persona Communication Style +
   agents-guide + fleet standing brief.
+- **Daemon rebuild + restart (🎯T188 / 🎯T191):** after any Build that
+  changes the running `jevonsd` binary or server-side behaviour, rebuild
+  and restart the daily daemon without asking the owner. Owner never
+  restarts by hand. Do not claim a daemon-path fix done until restart
+  succeeds. Invoke **detached**:
+  `nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &`
+  Never foreground the script under a fleet agent (session death kills
+  the bounce). Script path: `scripts/restart-daily-jevonsd.sh`. Pure
+  static web-only may hard-reload only. Residual: session drop until
+  T40/T171. Persona + agents-guide.
 
 ## Project structure
 
