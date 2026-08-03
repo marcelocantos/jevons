@@ -171,9 +171,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Session discovery defaults to cfg.SessionsDir (typically ~/.grok/sessions).
-	// Provider-aware Claude JSONL discovery is 🎯T213; do not hard-label this Grok-only.
-	scanner := discovery.NewScanner(cfg.SessionsDir)
+	// Multi-provider session roots (🎯T213): Grok sessions + Claude projects.
+	sessionRoots := discovery.Roots{
+		GrokSessions:   cfg.SessionsDir,
+		ClaudeProjects: cfg.ClaudeProjects,
+	}
+	scanner := discovery.NewScannerRoots(sessionRoots)
 
 	srv := server.New(cli.Version, cfg.StateDir)
 	srv.SetOverseerName(cfg.OverseerName)
@@ -194,8 +197,8 @@ func main() {
 		os.Exit(1)
 	}
 	srv.SetChatLog(clog)
-	// 🎯T124: RHS fleet transcript inspect reads Grok session chat_history.
-	srv.SetTranscriptReader(transcript.NewReader(cfg.SessionsDir))
+	// 🎯T124 / 🎯T213: RHS fleet transcript inspect reads Grok + Claude stores.
+	srv.SetTranscriptReader(transcript.NewReaderRoots(sessionRoots))
 
 	// Durable decision/lifecycle journal (🎯T120): browser + server events
 	// under state_dir/logs/events.jsonl — tool-readable without privilege.
@@ -301,11 +304,11 @@ func main() {
 		return srv.RequestScreenshot(10 * time.Second)
 	}, &mcpserver.TranscriptOps{
 		Read: func(sessionID string) ([]map[string]any, error) {
-			tr := transcript.NewReader(cfg.SessionsDir)
+			tr := transcript.NewReaderRoots(sessionRoots)
 			return tr.Read(sessionID)
 		},
 		Truncate: func(sessionID string, keepTurns int) error {
-			tr := transcript.NewReader(cfg.SessionsDir)
+			tr := transcript.NewReaderRoots(sessionRoots)
 			return tr.Truncate(sessionID, keepTurns)
 		},
 		GetID: func() string {
@@ -444,7 +447,7 @@ func main() {
 	btlrCfg := butler.Config{
 		Store:        threadStore,
 		Scanner:      scanner,
-		Reader:       transcript.NewReader(cfg.SessionsDir),
+		Reader:       transcript.NewReaderRoots(sessionRoots),
 		Fleet:        fleetAdapter,
 		Participants: fleetAdapter,
 	}

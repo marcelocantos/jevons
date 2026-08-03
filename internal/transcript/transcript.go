@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package transcript provides read, truncate, and fork operations on
-// Grok Build session chat_history.jsonl files.
+// provider session transcripts (Grok chat_history.jsonl and Claude
+// session JSONL under ~/.claude/projects — 🎯T213).
 package transcript
 
 import (
@@ -40,14 +41,20 @@ type Entry struct {
 	Timestamp  time.Time // line timestamp when present
 }
 
-// Reader provides transcript operations backed by the Grok sessions tree.
+// Reader provides transcript operations over multi-provider session roots.
 type Reader struct {
-	sessionsDir string // ~/.grok/sessions
+	roots discovery.Roots
 }
 
-// NewReader creates a Reader rooted at the given Grok sessions directory.
+// NewReader creates a Grok-only Reader. sessionsDir is typically
+// ~/.grok/sessions. Prefer NewReaderRoots when Claude discovery is needed.
 func NewReader(sessionsDir string) *Reader {
-	return &Reader{sessionsDir: sessionsDir}
+	return NewReaderRoots(discovery.Roots{GrokSessions: sessionsDir})
+}
+
+// NewReaderRoots creates a Reader over multi-provider roots (🎯T213).
+func NewReaderRoots(r discovery.Roots) *Reader {
+	return &Reader{roots: r}
 }
 
 // Read parses a session transcript and returns turns grouped by user message boundaries.
@@ -216,12 +223,13 @@ func (r *Reader) Fork(sessionID string, keepTurns int) (string, error) {
 	return newUUID, nil
 }
 
-// findJSONL locates chat_history.jsonl for a Grok session id.
+// findJSONL locates the transcript JSONL for a session id across Grok and
+// Claude roots (🎯T213). Preference: Grok chat_history, else Claude session file.
 func (r *Reader) findJSONL(sessionID string) (string, error) {
 	if !discovery.IsSessionID(sessionID) {
 		return "", fmt.Errorf("invalid session ID: %q", sessionID)
 	}
-	path := discovery.ChatHistoryPath(r.sessionsDir, sessionID)
+	path := discovery.TranscriptPath(r.roots, sessionID)
 	if path == "" {
 		return "", fmt.Errorf("transcript not found for session %q", sessionID)
 	}

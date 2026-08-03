@@ -19,8 +19,9 @@ const (
 	emptyReasonZeroTurns = "zero_turns"
 )
 
-// SetTranscriptReader attaches the Grok sessions transcript reader used by
+// SetTranscriptReader attaches the multi-provider transcript reader used by
 // GET /api/agents/{name}/transcript (🎯T124) and inspect wire history (🎯T209).
+// Roots cover Grok sessions and Claude projects (🎯T213).
 func (s *Server) SetTranscriptReader(r *transcript.Reader) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

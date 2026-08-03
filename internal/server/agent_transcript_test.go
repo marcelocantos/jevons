@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
@@ -314,5 +315,70 @@ func TestHandleAgentTranscriptWithFixture(t *testing.T) {
 	at, _ := payload.Turns[1]["text"].(string)
 	if !strings.Contains(at, "thinking") || !strings.Contains(at, "done with aside") {
 		t.Fatalf("assistant text=%q", at)
+	}
+}
+
+// 🎯T213: RHS inspect loads sealed history from Claude projects only (no Grok tree).
+func TestHandleAgentTranscriptClaudeProjectsOnly(t *testing.T) {
+	dir := t.TempDir()
+	projects := filepath.Join(dir, "projects")
+	sid := "019fc2aa-bbbb-7ccc-8ddd-eeeeeeeeee01"
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name:      "claude-worker",
+		WorkDir:   dir,
+		SessionID: sid,
+		Purpose:   claudia.PurposeWork,
+		Provider:  "claude",
+		Parent:    "jevons-po",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	bucket := filepath.Join(projects, "fake-claude-work")
+	if err := os.MkdirAll(bucket, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"user","message":{"role":"user","content":"hello claude"}}` + "\n" +
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"claude reply"}]}}` + "\n"
+	if err := os.WriteFile(filepath.Join(bucket, sid+".jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New("test", dir)
+	s.SetRegistry(reg)
+	// Claude-only roots: empty Grok sessions must still resolve the transcript.
+	s.SetTranscriptReader(transcript.NewReaderRoots(discovery.Roots{
+		ClaudeProjects: projects,
+	}))
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/agents/claude-worker/transcript", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Name  string           `json:"name"`
+		Turns []map[string]any `json:"turns"`
+		Empty bool             `json:"empty"`
+		Error string           `json:"error"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Empty || len(payload.Turns) < 2 {
+		t.Fatalf("want Claude turns, got empty=%v turns=%+v err=%q", payload.Empty, payload.Turns, payload.Error)
+	}
+	if payload.Turns[0]["role"] != "user" {
+		t.Fatalf("first turn: %+v", payload.Turns[0])
+	}
+	ut, _ := payload.Turns[0]["text"].(string)
+	if ut != "hello claude" {
+		t.Fatalf("user text=%q", ut)
 	}
 }

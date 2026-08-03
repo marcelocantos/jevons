@@ -52,8 +52,12 @@ type Config struct {
 	OverseerModel string `yaml:"overseer_model"` // "" = same as Model
 
 	StateDir    string `yaml:"state_dir"`    // jevons state (registry, threads, usage.db, …)
-	SessionsDir string `yaml:"sessions_dir"` // provider session store the collector/scanner tail
-	ReposRoot   string `yaml:"repos_root"`   // where the owner's repos live
+	SessionsDir string `yaml:"sessions_dir"` // Grok sessions tree (~/.grok/sessions)
+	// ClaudeProjects is the Claude Code projects tree (~/.claude/projects)
+	// used for fleet inspect/status/transcript discovery (🎯T213). Empty
+	// falls back to Default (~/.claude/projects). Not the parent ~/.claude.
+	ClaudeProjects string `yaml:"claude_projects"`
+	ReposRoot      string `yaml:"repos_root"` // where the owner's repos live
 
 	// MCPServerName is the name under which jevonsd's MCP server is
 	// registered in agent sessions; tools appear to the overseer as
@@ -264,14 +268,15 @@ func Default() Config {
 		home = "."
 	}
 	return Config{
-		OverseerName:  "jevons",
-		BindAddr:      "127.0.0.1",
-		Port:          13705,
-		WorkDir:       ".",
-		StateDir:      filepath.Join(home, ".jevons"),
-		SessionsDir:   filepath.Join(home, ".grok", "sessions"),
-		ReposRoot:     filepath.Join(home, "work", "github.com"),
-		MCPServerName: "jevonsmcp",
+		OverseerName:   "jevons",
+		BindAddr:       "127.0.0.1",
+		Port:           13705,
+		WorkDir:        ".",
+		StateDir:       filepath.Join(home, ".jevons"),
+		SessionsDir:    filepath.Join(home, ".grok", "sessions"),
+		ClaudeProjects: filepath.Join(home, ".claude", "projects"),
+		ReposRoot:      filepath.Join(home, "work", "github.com"),
+		MCPServerName:  "jevonsmcp",
 	}
 }
 
@@ -312,6 +317,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.SessionsDir == "" {
 		cfg.SessionsDir = def.SessionsDir
+	}
+	if cfg.ClaudeProjects == "" {
+		cfg.ClaudeProjects = def.ClaudeProjects
 	}
 	if cfg.MCPServerName == "" {
 		cfg.MCPServerName = def.MCPServerName
