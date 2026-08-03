@@ -68,6 +68,11 @@ targets:
     status: converging
     value: 5
     depends_on: [T1]
+    acceptance:
+      - First criterion must hold
+      - Second criterion must hold
+    context: Fixture context for T181 hover card.
+    tags: [ui, frontier]
   T3:
     name: Blocked
     status: identified
@@ -100,6 +105,16 @@ targets:
 	}
 	if rows[0].Dependents[0].ID != "T3" || rows[0].Dependents[0].Name != "Blocked" {
 		t.Fatalf("T2 dep0=%+v", rows[0].Dependents[0])
+	}
+	// 🎯T181: acceptance/context/tags on list payload for rich hover cards.
+	if len(rows[0].Acceptance) != 2 || rows[0].Acceptance[0] != "First criterion must hold" {
+		t.Fatalf("T2 acceptance=%v", rows[0].Acceptance)
+	}
+	if rows[0].Context != "Fixture context for T181 hover card." {
+		t.Fatalf("T2 context=%q", rows[0].Context)
+	}
+	if len(rows[0].Tags) != 2 || rows[0].Tags[0] != "ui" {
+		t.Fatalf("T2 tags=%v", rows[0].Tags)
 	}
 	if rows[1].ID != "T4" || rows[1].Fanout != 0 {
 		t.Fatalf("row1=%+v", rows[1])

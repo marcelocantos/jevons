@@ -32,6 +32,16 @@
     return hasSelection ? TAB_TRANSCRIPT : TAB_FRONTIER;
   }
 
+  function normalizeStringList(raw) {
+    if (!Array.isArray(raw)) return [];
+    var out = [];
+    for (var i = 0; i < raw.length; i++) {
+      var s = raw[i] == null ? '' : String(raw[i]).trim();
+      if (s) out.push(s);
+    }
+    return out;
+  }
+
   // normalizePayload(apiJSON|err) → { available, ledger, cwd, rows, empty, error }
   function normalizePayload(payload, err) {
     if (err) {
@@ -61,6 +71,9 @@
         fanout: fanout,
         dependents: deps,
         value: typeof t.value === 'number' ? t.value : undefined,
+        acceptance: normalizeStringList(t.acceptance),
+        context: t.context != null ? String(t.context).trim() : '',
+        tags: normalizeStringList(t.tags),
       };
     }).filter(function (r) {
       return r && r.id;
@@ -188,6 +201,75 @@
     return '';
   }
 
+  // formatTargetCardMarkdown(row) — rich markdown for ID/name InstantTip (🎯T181).
+  // Sections: title (🎯id + name), status, acceptance (all), context, tags, dependents.
+  // Pure string builder; product renders via marked / parseAssistantMarkdown.
+  function formatTargetCardMarkdown(row) {
+    if (!row || !row.id) return '';
+    var id = String(row.id).trim();
+    var name = String(row.name || '').trim();
+    var lines = [];
+    lines.push('**🎯' + id + '**' + (name ? (' — ' + name) : ''));
+    var st = statusTitle(row.status) || String(row.status || '').trim();
+    if (st) {
+      lines.push('');
+      lines.push('**Status:** ' + st);
+    }
+    var acc = normalizeStringList(row.acceptance);
+    if (acc.length > 0) {
+      lines.push('');
+      lines.push('**Acceptance**');
+      for (var i = 0; i < acc.length; i++) {
+        lines.push('- ' + acc[i]);
+      }
+    }
+    var ctx = row.context != null ? String(row.context).trim() : '';
+    if (ctx) {
+      // Keep tip compact: first paragraph only if multi-paragraph.
+      var firstPara = ctx.split(/\n\s*\n/)[0].trim();
+      // Cap very long single paragraphs.
+      if (firstPara.length > 480) {
+        firstPara = firstPara.slice(0, 479) + '…';
+      }
+      if (firstPara) {
+        lines.push('');
+        lines.push('**Context**');
+        lines.push(firstPara);
+      }
+    }
+    var tags = normalizeStringList(row.tags);
+    if (tags.length > 0) {
+      lines.push('');
+      lines.push('**Tags:** ' + tags.join(', '));
+    }
+    var deps = normalizeDependents(row.dependents);
+    if (deps.length > 0) {
+      lines.push('');
+      lines.push('**Dependents** (' + deps.length + ')');
+      for (var j = 0; j < deps.length; j++) {
+        var d = deps[j];
+        var bullet = '- ' + d.id;
+        if (d.name) bullet += ' — ' + d.name;
+        lines.push(bullet);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  // formatTargetCardPlain — aria-label / text fallback (no markdown markers).
+  function formatTargetCardPlain(row) {
+    if (!row || !row.id) return '';
+    var parts = ['🎯' + String(row.id).trim()];
+    if (row.name) parts.push(String(row.name).trim());
+    var st = statusTitle(row.status) || String(row.status || '').trim();
+    if (st) parts.push('Status: ' + st);
+    var acc = normalizeStringList(row.acceptance);
+    if (acc.length > 0) {
+      parts.push('Acceptance: ' + acc.join('; '));
+    }
+    return parts.join('. ');
+  }
+
   // API path constant — client never hard-codes ledger file paths.
   var API_PATH = '/api/frontier';
 
@@ -206,5 +288,7 @@
     normalizeDependents: normalizeDependents,
     shortName: shortName,
     emptyMessage: emptyMessage,
+    formatTargetCardMarkdown: formatTargetCardMarkdown,
+    formatTargetCardPlain: formatTargetCardPlain,
   };
 }));

@@ -41,6 +41,9 @@ test('normalizePayload maps API rows; empty/error calm', function () {
         status: 'Converging',
         fanout: 3,
         value: 8,
+        acceptance: ['Criterion A holds', 'Criterion B holds'],
+        context: 'Why this target exists.',
+        tags: ['providers', 'api'],
         dependents: [
           { id: 'T27.2', name: 'Child A' },
           { id: 'T27.3', name: 'Child B' },
@@ -57,6 +60,10 @@ test('normalizePayload maps API rows; empty/error calm', function () {
   assert.strictEqual(m.rows[1].dependents.length, 3);
   assert.strictEqual(m.rows[1].dependents[0].id, 'T27.2');
   assert.strictEqual(m.rows[1].dependents[0].name, 'Child A');
+  // 🎯T181: acceptance/context/tags pass through normalizePayload.
+  assert.deepStrictEqual(m.rows[1].acceptance, ['Criterion A holds', 'Criterion B holds']);
+  assert.strictEqual(m.rows[1].context, 'Why this target exists.');
+  assert.deepStrictEqual(m.rows[1].tags, ['providers', 'api']);
   assert.strictEqual(m.empty, false);
   assert.ok(m.ledger.indexOf('bullseye.yaml') >= 0);
 
@@ -281,6 +288,69 @@ test('T179 status normal case + tight widths + dependents tip wiring', function 
   assert.ok(html.indexOf('formatFanout(row.fanout, row.id, row.dependents)') >= 0 ||
     /formatFanout\s*\(\s*row\.fanout\s*,\s*row\.id\s*,\s*row\.dependents\s*\)/.test(html),
     'formatFanout receives row.dependents');
+});
+
+// 🎯T181: rich markdown target card includes acceptance + multi-section markers.
+test('formatTargetCardMarkdown includes id name status acceptance context tags (🎯T181)', function () {
+  const md = FT.formatTargetCardMarkdown({
+    id: 'T181',
+    name: 'Rich target hover on Frontier',
+    status: 'Converging',
+    acceptance: [
+      'Hovering a frontier target ID shows InstantTip with full target',
+      'Hermetic tip includes acceptance text',
+    ],
+    context: 'Owner wants fully expanded target in rich markdown.',
+    tags: ['ui', 'frontier'],
+    dependents: [{ id: 'T999', name: 'Downstream' }],
+  });
+  assert.ok(md.indexOf('🎯T181') >= 0, 'id: ' + md);
+  assert.ok(md.indexOf('Rich target hover on Frontier') >= 0, 'name');
+  assert.ok(md.indexOf('**Status:**') >= 0 || md.indexOf('Converging') >= 0, 'status section');
+  assert.ok(md.indexOf('**Acceptance**') >= 0, 'acceptance heading');
+  assert.ok(md.indexOf('Hovering a frontier target ID shows InstantTip with full target') >= 0,
+    'acceptance criterion text');
+  assert.ok(md.indexOf('Hermetic tip includes acceptance text') >= 0, 'second acceptance');
+  assert.ok(md.indexOf('**Context**') >= 0, 'context heading');
+  assert.ok(md.indexOf('Owner wants fully expanded') >= 0, 'context body');
+  assert.ok(md.indexOf('**Tags:**') >= 0 && md.indexOf('ui') >= 0, 'tags');
+  assert.ok(md.indexOf('**Dependents**') >= 0 && md.indexOf('T999') >= 0, 'dependents');
+  // Multi-section markdown (not a single name string).
+  assert.ok(md.split('\n').length >= 6, 'multi-line card: ' + md);
+
+  const plain = FT.formatTargetCardPlain({
+    id: 'T181',
+    name: 'Rich target hover',
+    status: 'converging',
+    acceptance: ['A holds'],
+  });
+  assert.ok(plain.indexOf('🎯T181') >= 0);
+  assert.ok(plain.indexOf('A holds') >= 0);
+  assert.strictEqual(FT.formatTargetCardMarkdown(null), '');
+  assert.strictEqual(FT.formatTargetCardMarkdown({}), '');
+});
+
+// 🎯T181: index wires rich card on .ft-id and .ft-name with left-of-pointer + html.
+test('T181 index.html rich card tip on id/name + InstantTip placement', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('// 🎯T173: headerless table');
+  assert.ok(start >= 0);
+  const end = html.indexOf('function loadFrontier', start);
+  const region = html.slice(start, end);
+  assert.ok(region.indexOf('formatTargetCardMarkdown') >= 0, 'card markdown builder');
+  assert.ok(region.indexOf('InstantTip.attach(id') >= 0 || /InstantTip\.attach\(\s*id/.test(region),
+    'attach on id cell');
+  assert.ok(region.indexOf('InstantTip.attach(name') >= 0 || /InstantTip\.attach\(\s*name/.test(region),
+    'attach on name cell');
+  assert.ok(region.indexOf('html: true') >= 0 || region.indexOf('html:true') >= 0, 'html tip content');
+  assert.ok(region.indexOf('left-of-pointer') >= 0 || region.indexOf('PLACE_LEFT_OF_POINTER') >= 0,
+    'left-of-pointer placement');
+  assert.ok(region.indexOf('instant-tip-card') >= 0 || region.indexOf('CARD_CLASS') >= 0,
+    'card class');
+  assert.ok(region.indexOf('id.title') < 0, 'no id.title native');
+  assert.ok(/\.instant-tip-card\s*\{/.test(html) || /\.instant-tip\.instant-tip-card/.test(html),
+    'card CSS');
+  assert.ok(html.indexOf('parseAssistantMarkdown') >= 0, 'markdown render path available');
 });
 
 if (failed) {

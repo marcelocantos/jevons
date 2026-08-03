@@ -39,6 +39,8 @@ type FrontierDependent struct {
 }
 
 // FrontierRow is one compact frontier table line.
+// 🎯T181: acceptance/context/tags ship on the list payload so ID/name
+// hover cards need no per-row detail round-trip.
 type FrontierRow struct {
 	ID         string              `json:"id"`
 	Name       string              `json:"name"`
@@ -46,6 +48,9 @@ type FrontierRow struct {
 	Fanout     int                 `json:"fanout"`
 	Dependents []FrontierDependent `json:"dependents,omitempty"`
 	Value      float64             `json:"value,omitempty"`
+	Acceptance []string            `json:"acceptance,omitempty"`
+	Context    string              `json:"context,omitempty"`
+	Tags       []string            `json:"tags,omitempty"`
 }
 
 // FrontierResponse is GET /api/frontier JSON.
@@ -117,10 +122,13 @@ func isBullseyeNotInitialized(out string) bool {
 
 // bullseyeTarget is the subset of ledger fields needed for frontier rows.
 type bullseyeTarget struct {
-	Name      string   `yaml:"name"`
-	Status    string   `yaml:"status"`
-	Value     float64  `yaml:"value"`
-	DependsOn []string `yaml:"depends_on"`
+	Name       string   `yaml:"name"`
+	Status     string   `yaml:"status"`
+	Value      float64  `yaml:"value"`
+	DependsOn  []string `yaml:"depends_on"`
+	Acceptance []string `yaml:"acceptance"`
+	Context    string   `yaml:"context"`
+	Tags       []string `yaml:"tags"`
 }
 
 // bullseyeLedger is the on-disk YAML shape (targets map only).
@@ -219,6 +227,14 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 		if deps == nil {
 			deps = []FrontierDependent{}
 		}
+		acc := t.Acceptance
+		if acc == nil {
+			acc = []string{}
+		}
+		tags := t.Tags
+		if tags == nil {
+			tags = []string{}
+		}
 		rows = append(rows, FrontierRow{
 			ID:         id,
 			Name:       t.Name,
@@ -226,6 +242,9 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 			Fanout:     len(deps),
 			Dependents: deps,
 			Value:      t.Value,
+			Acceptance: acc,
+			Context:    strings.TrimSpace(t.Context),
+			Tags:       tags,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {

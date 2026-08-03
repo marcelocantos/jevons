@@ -651,15 +651,42 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 6px 20px rgba(0,0,0,0.32);
-  white-space: normal;
+  /* pre-line: multi-line fanout tips (T179) keep newlines; HTML cards use block tags */
+  white-space: pre-line;
   word-break: normal;
   overflow-wrap: break-word;
   pointer-events: none;
 }
 .instant-tip.instant-tip-show { display: block; }
+/* 🎯T181: rich target card (markdown HTML); wider, scrollable, left-of-pointer */
+.instant-tip.instant-tip-card {
+  max-width: min(420px, 92vw);
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+}
+.instant-tip.instant-tip-card p { margin: 0 0 0.45em; }
+.instant-tip.instant-tip-card p:last-child { margin-bottom: 0; }
+.instant-tip.instant-tip-card ul,
+.instant-tip.instant-tip-card ol {
+  margin: 0.25em 0 0.45em 1.1em;
+  padding: 0;
+}
+.instant-tip.instant-tip-card li { margin: 0.15em 0; }
+.instant-tip.instant-tip-card strong { color: var(--strong); font-weight: 600; }
+.instant-tip.instant-tip-card h1,
+.instant-tip.instant-tip-card h2,
+.instant-tip.instant-tip-card h3 {
+  font-size: 12px; font-weight: 600; color: var(--heading);
+  margin: 0 0 0.35em;
+}
 #frontier-table .ft-status,
 #frontier-table .ft-fanout,
-#frontier-table .ft-name {
+#frontier-table .ft-name,
+#frontier-table .ft-id {
   cursor: default;
 }
 #workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
@@ -4737,6 +4764,7 @@ function renderFrontierTable(model) {
   }
   // 🎯T173: headerless table — id / name / status abbr / fanout N᚛ (hide 0).
   // 🎯T175: explanations via InstantTip (0ms), never native title= on these cells.
+  // 🎯T181: ID + name → rich markdown target card (left-of-pointer placement).
   const table = document.createElement('table');
   table.id = 'frontier-table';
   table.setAttribute('aria-label', 'Bullseye frontier');
@@ -4752,8 +4780,31 @@ function renderFrontierTable(model) {
     name.textContent = (typeof FrontierTable !== 'undefined')
       ? FrontierTable.shortName(fullName, 72)
       : fullName;
-    // Full name tip when truncated or always for glanceable full text (no title=).
-    if (fullName && typeof InstantTip !== 'undefined') {
+    // 🎯T181: rich target card on ID and name (ledger acceptance/context/tags).
+    if (typeof InstantTip !== 'undefined' && typeof FrontierTable !== 'undefined'
+        && FrontierTable.formatTargetCardMarkdown) {
+      const md = FrontierTable.formatTargetCardMarkdown(row);
+      const plain = FrontierTable.formatTargetCardPlain
+        ? FrontierTable.formatTargetCardPlain(row)
+        : md;
+      if (md) {
+        let html = md;
+        if (typeof parseAssistantMarkdown === 'function') {
+          try { html = parseAssistantMarkdown(md); } catch (_) { html = md; }
+        } else if (typeof marked !== 'undefined' && marked.parse) {
+          try { html = marked.parse(md); } catch (_) { html = md; }
+        }
+        const cardOpts = {
+          html: true,
+          ariaLabel: plain,
+          placement: InstantTip.PLACE_LEFT_OF_POINTER || 'left-of-pointer',
+          className: InstantTip.CARD_CLASS || 'instant-tip-card',
+        };
+        InstantTip.attach(id, html, cardOpts);
+        InstantTip.attach(name, html, cardOpts);
+      }
+    } else if (fullName && typeof InstantTip !== 'undefined') {
+      // Fallback: name-only tip when pure helpers unavailable.
       InstantTip.attach(name, fullName);
     }
     const status = document.createElement('td');

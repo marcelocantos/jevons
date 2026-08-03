@@ -30,6 +30,8 @@ function mockEl(tag) {
     style: {},
     children: [],
     attrs: {},
+    offsetWidth: 200,
+    offsetHeight: 100,
     classList: {
       _s: new Set(),
       add(c) {
@@ -64,11 +66,20 @@ function mockEl(tag) {
       if (!listeners[type]) listeners[type] = [];
       listeners[type].push(fn);
     },
-    dispatch(type) {
-      (listeners[type] || []).forEach(function (fn) { fn({ type: type }); });
+    dispatch(type, extra) {
+      const ev = Object.assign({ type: type }, extra || {});
+      (listeners[type] || []).forEach(function (fn) { fn(ev); });
     },
     _listeners: listeners,
   };
+  Object.defineProperty(el, 'innerHTML', {
+    get() { return this._innerHTML || ''; },
+    set(v) {
+      this._innerHTML = String(v);
+      this.textContent = String(v).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    },
+    configurable: true,
+  });
   return el;
 }
 
@@ -176,8 +187,94 @@ test('index.html wires InstantTip on frontier cells; no title= for status/fanout
   assert.ok(/\.instant-tip\s*\{/.test(html), 'instant-tip CSS');
 });
 
+// 🎯T181: pure left-of-pointer placement — prefer left, flip near left edge, clamp.
+test('placeLeftOfPointerRect prefers left of cursor; flips when clipped (🎯T181)', function () {
+  // Room on left: tip fully left of pointer, vertically centered.
+  const roomy = IT.placeLeftOfPointerRect({
+    pointerX: 400,
+    pointerY: 300,
+    tipW: 200,
+    tipH: 100,
+    viewW: 1000,
+    viewH: 800,
+    gap: 12,
+    pad: 4,
+  });
+  assert.strictEqual(roomy.side, 'left');
+  assert.strictEqual(roomy.left, 400 - 12 - 200);
+  assert.strictEqual(roomy.top, 300 - 50);
+
+  // Near left edge: flip to right of pointer.
+  const edge = IT.placeLeftOfPointerRect({
+    pointerX: 40,
+    pointerY: 200,
+    tipW: 200,
+    tipH: 80,
+    viewW: 800,
+    viewH: 600,
+    gap: 12,
+    pad: 4,
+  });
+  assert.strictEqual(edge.side, 'right');
+  assert.strictEqual(edge.left, 40 + 12);
+  assert.strictEqual(edge.top, 200 - 40);
+
+  // Vertical clamp near top.
+  const topClamp = IT.placeLeftOfPointerRect({
+    pointerX: 500,
+    pointerY: 10,
+    tipW: 100,
+    tipH: 120,
+    viewW: 800,
+    viewH: 600,
+    gap: 12,
+    pad: 4,
+  });
+  assert.ok(topClamp.top >= 4, 'clamped top: ' + topClamp.top);
+
+  // Vertical clamp near bottom.
+  const botClamp = IT.placeLeftOfPointerRect({
+    pointerX: 500,
+    pointerY: 590,
+    tipW: 100,
+    tipH: 120,
+    viewW: 800,
+    viewH: 600,
+    gap: 12,
+    pad: 4,
+  });
+  assert.ok(botClamp.top + 120 <= 600 - 4 + 1, 'clamped bottom: ' + botClamp.top);
+});
+
+test('attach html + left-of-pointer shows immediately with card class (🎯T181)', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const body = '<p><strong>🎯T181</strong> — Card</p><ul><li>Acceptance A</li></ul>';
+  const tip = IT.attach(host, body, {
+    doc: doc,
+    mount: doc.body,
+    html: true,
+    ariaLabel: '🎯T181 Card. Acceptance A',
+    placement: IT.PLACE_LEFT_OF_POINTER,
+    className: IT.CARD_CLASS,
+  });
+  assert.ok(tip);
+  assert.ok(tip.className.indexOf(IT.CARD_CLASS) >= 0, 'card class on tip');
+  assert.ok(tip.innerHTML.indexOf('Acceptance A') >= 0, 'html body has acceptance');
+  assert.strictEqual(host.attrs['aria-label'].indexOf('Acceptance A') >= 0, true);
+  host.dispatch('pointerenter', { clientX: 400, clientY: 250 });
+  assert.strictEqual(IT.isVisible(tip), true, '0ms show');
+  // Position applied (left of pointer ≈ 400 - 12 - 200).
+  assert.ok(tip.style.left, 'left set');
+  assert.ok(tip.style.top, 'top set');
+  const leftPx = parseInt(tip.style.left, 10);
+  assert.ok(leftPx < 400, 'tip placed left of pointer x=400, got ' + leftPx);
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);
 }
 console.log('All instant_tip tests passed');
+
