@@ -600,7 +600,8 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			responseText.Reset()
 			if text != "" {
 				// Notify overseer first so the done report is delivered before
-				// the worker leaves the registry (🎯T165).
+				// the worker leaves the registry (🎯T165) — unless [silent]
+				// (ops events: daemon-restarted / worker-idle fine chatter).
 				s.notify(name, text)
 			}
 			// 🎯T111.1: deliver any nudges queued while the prompt was in flight.
@@ -612,7 +613,15 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 }
 
 // notify injects an agent response notification into Jevon's PTY.
+// Silent ops replies ([silent] prefix) are logged but not sent to the overseer
+// so owner chat is not spammed with "workers fine / no continue needed".
 func (s *Server) notify(agentName, text string) {
+	if IsSilentAgentResponse(text) {
+		slog.Info("agent response suppressed (silent)",
+			"agent", agentName, "len", len(text))
+		return
+	}
+
 	s.mu.Lock()
 	fn := s.notifyJevon
 	s.mu.Unlock()

@@ -31,6 +31,7 @@ const (
 )
 
 // WorkerIdleRef is one work agent mentioned in an idle/restart event body.
+// SilentResponsePrefix / IsSilentAgentResponse live in silent_response.go (single definition).
 type WorkerIdleRef struct {
 	Name     string
 	Parent   string
@@ -100,8 +101,9 @@ func FormatWorkerIdleText(w WorkerIdleRef) string {
 	}
 	b.WriteString("\nThis is the same class as a CLI session that stops after interrupt/restart ")
 	b.WriteString("and needs an explicit continue — not a backend outage.\n")
-	b.WriteString("Your call: send continue / re-brief mission / restart that worker / reap if done / file 🎯 if product gap.\n")
-	b.WriteString("Do not wait for the owner to babysit. Local master only (T104) unless Ship was opened.")
+	b.WriteString("Act: continue / re-brief / restart that worker / reap if done / file 🎯 if product gap.\n")
+	b.WriteString("Do not wait for the owner to babysit. Local master only (T104) unless Ship was opened.\n")
+	b.WriteString(silentResponseInstruction)
 	return b.String()
 }
 
@@ -139,7 +141,8 @@ func FormatDaemonRestartedText(parent string, workers []WorkerIdleRef) string {
 	}
 	b.WriteString("\nDual path (🎯T171): framework also short-resumes open-mission workers; ")
 	b.WriteString("you replan/reap/reseed. Do not blast missionless/aside/deliberate-stop. ")
-	b.WriteString("Local master only (T104).")
+	b.WriteString("Local master only (T104).\n")
+	b.WriteString(silentResponseInstruction)
 	return b.String()
 }
 
