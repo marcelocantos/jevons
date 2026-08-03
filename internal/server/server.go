@@ -278,7 +278,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
-	mux.HandleFunc("POST /api/asides", s.handleCreateAside) // 🎯T136: register purpose=aside in fleet
+	mux.HandleFunc("POST /api/asides", s.handleCreateAside)       // 🎯T136: register purpose=aside in fleet
+	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside) // 🎯T152: dismiss fleet aside on target filed
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)

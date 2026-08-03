@@ -831,6 +831,58 @@ function ensureFleetAside(id, title) {
   });
 }
 
+// 🎯T152: reverse of ensureFleetAside — DELETE /api/asides/{id} deregisters the
+// dual-written purpose=aside fleet agent so RHS 💡 leaves with target-file close.
+// Selection returns to main (selectedAgent=null) when the dismissed id was focused.
+function dismissFleetAside(id) {
+  if (!id) return Promise.resolve(null);
+  const name = String(id);
+  return fetch('/api/asides/' + encodeURIComponent(name), {
+    method: 'DELETE',
+  }).then(function (r) {
+    if (!r.ok && r.status !== 404) {
+      return r.text().then(function (t) {
+        throw new Error(t || ('aside dismiss HTTP ' + r.status));
+      });
+    }
+    // 404 / already gone is fine (idempotent close).
+    return r.status === 404 ? { name: name, dismissed: true } : r.json();
+  }).then(function (row) {
+    if (selectedAgent === name) {
+      selectedAgent = null;
+      try {
+        document.querySelectorAll('.agent-node').forEach(function (n) {
+          n.classList.remove('selected');
+        });
+      } catch (_) {}
+      try { if (typeof hideAgentInspect === 'function') hideAgentInspect(); } catch (_) {}
+    }
+    try { refreshAgents(); } catch (_) {}
+    return row;
+  }).catch(function (err) {
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('warn', DecisionLog.decisionMsg('attention'), {
+        decision: 'aside_dismiss_error',
+        threadId: name,
+        err: err && err.message ? err.message : String(err || 'unknown'),
+        corr: pageCorr,
+      });
+    }
+    // Optimistic local clear so a flaky DELETE still drops RHS selection noise.
+    if (selectedAgent === name) {
+      selectedAgent = null;
+      try {
+        document.querySelectorAll('.agent-node').forEach(function (n) {
+          n.classList.remove('selected');
+        });
+      } catch (_) {}
+      try { if (typeof hideAgentInspect === 'function') hideAgentInspect(); } catch (_) {}
+    }
+    try { refreshAgents(); } catch (_) {}
+    return null;
+  });
+}
+
 let turnDetails = null;
 let turnItems = null;
 let turnCount = 0;
@@ -2081,23 +2133,29 @@ function paintBody(d, role, t) {
 }
 function maybeCloseTargetAside(text) {
   if (typeof AttentionThreads === 'undefined' || !attentionState) return;
-  const id = AttentionThreads.detectTargetFiled(text);
-  if (!id) return;
-  const closedId = (AttentionThreads.stack(attentionState) || []).find(function (th) {
+  const filed = AttentionThreads.detectTargetFiled(text);
+  if (!filed) return;
+  // 🎯T153: auto-close returns focus to main composer.
+  focusComposer();
+  // Capture open file-target before close so we can dismiss its fleet dual-write.
+  const closedTh = (AttentionThreads.stack(attentionState) || []).find(function (th) {
     return th.purpose === 'file-target' && th.status === 'open';
   });
+  const asideId = closedTh && closedTh.id ? closedTh.id : null;
   attentionState = AttentionThreads.closeTargetAside(attentionState);
   if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
     jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision('dismiss', {
-      threadId: closedId && closedId.id,
-      draft: id, // filed target id (short)
+      threadId: asideId,
+      draft: filed, // filed target id (short)
       corr: pageCorr,
     }));
   }
   persistAttention();
   if (typeof renderAttention === 'function') renderAttention();
-  // 🎯T153: target-aside auto-close returns focus to main composer.
-  focusComposer();
+  // 🎯T152: also kill/deregister dual-written fleet purpose=aside (RHS 💡 row).
+  if (asideId && typeof dismissFleetAside === 'function') {
+    dismissFleetAside(asideId);
+  }
 }
 // User bubbles: preserve plain text, promote lines of `> quote` to <blockquote>,
 // and render 🎯T76 [image: <id>] markers as inline images.
