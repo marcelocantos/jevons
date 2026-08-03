@@ -677,9 +677,10 @@ test('T185/T190 index.html Graph control + large panel + layout CSS', function (
   const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 4000);
   const catchIdx = ofg.indexOf('.catch(');
   assert.ok(catchIdx >= 0, 'openFrontierGraph has catch');
-  assert.ok(ofg.slice(catchIdx).indexOf('renderMermaidPanelEmpty') < 0,
+  const catchCode = ofg.slice(catchIdx).replace(/\/\/[^\n]*/g, '');
+  assert.ok(!/renderMermaidPanelEmpty\s*\(/.test(catchCode),
     'T196: catch must not use empty paste shell');
-  assert.ok(ofg.slice(catchIdx).indexOf('renderMermaidPanelFetchError') >= 0,
+  assert.ok(catchCode.indexOf('renderMermaidPanelFetchError') >= 0,
     'T196: catch uses fetch-error path');
   // Pure module exports.
   assert.strictEqual(typeof FT.buildActiveDependencyMermaid, 'function');
@@ -687,6 +688,70 @@ test('T185/T190 index.html Graph control + large panel + layout CSS', function (
   assert.strictEqual(typeof FT.packActiveGraphIslands, 'function');
   assert.strictEqual(typeof FT.mermaidActiveGraphHeader, 'function');
 });
+
+// 🎯T198: engagement overlay — target_id equality, sink bottom, stop control.
+// No name parsing: agent named T10.2-worker without target_id stays free.
+test('applyEngagement by target_id sinks engaged bottom + stop request (🎯T198)', function () {
+  assert.strictEqual(FT.STOP_GLYPH, '\u25A0');
+  assert.strictEqual(FT.ENGAGEMENT_STOP_PATH, '/api/agents/engagement/stop');
+  assert.strictEqual(FT.normalizeTargetID('🎯T10.2'), 'T10.2');
+  assert.strictEqual(FT.normalizeTargetID('  T198 '), 'T198');
+
+  const rows = [
+    { id: 'T10.2', name: 'Server Peer' },
+    { id: 'T1', name: 'Tool surface' },
+    { id: 'T200', name: 'Portfolios' },
+  ];
+  // Name looks like a T-id but has NO target_id — must not engage.
+  const agents = [
+    { name: 'T10.2-worker', purpose: 'work' },
+    { name: 'jv-fixture-worker', purpose: 'work', target_id: 'T10.2' },
+    { name: 'jevons', purpose: 'overseer', target_id: 'T10.2' },
+  ];
+  const out = FT.applyEngagement(rows, agents);
+  assert.strictEqual(out.length, 3);
+  // Free first (relative order T1, T200), engaged last (T10.2).
+  assert.strictEqual(out[0].id, 'T1');
+  assert.strictEqual(out[0].engaged, false);
+  assert.strictEqual(out[1].id, 'T200');
+  assert.strictEqual(out[1].engaged, false);
+  assert.strictEqual(out[2].id, 'T10.2');
+  assert.strictEqual(out[2].engaged, true);
+  assert.deepStrictEqual(out[2].engaged_agents, ['jv-fixture-worker']);
+
+  // Index ignores overseer + name-only matches.
+  const idx = FT.engagementIndex(agents);
+  assert.deepStrictEqual(idx['T10.2'].agents, ['jv-fixture-worker']);
+
+  const stop = FT.stopEngagementRequest('🎯T10.2');
+  assert.strictEqual(stop.method, 'POST');
+  assert.strictEqual(stop.url, '/api/agents/engagement/stop');
+  assert.deepStrictEqual(stop.body, { target_id: 'T10.2' });
+
+  // Kickoff brief requires target_id= on spawn.
+  const text = FT.buildPlayKickoffText({ id: 'T10.2', name: 'Peer' });
+  assert.ok(text.indexOf('target_id=T10.2') >= 0, 'target_id in brief: ' + text);
+});
+
+test('T198 index.html engaged stop wiring + agents merge', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('applyEngagement') >= 0, 'applyEngagement in render');
+  assert.ok(html.indexOf('stopFrontierEngagement') >= 0, 'stopFrontierEngagement');
+  assert.ok(html.indexOf('ft-engaged') >= 0, 'engaged row class');
+  assert.ok(html.indexOf('ft-stop-btn') >= 0, 'stop button class');
+  assert.ok(html.indexOf('STOP_GLYPH') >= 0 || html.indexOf('\\u25A0') >= 0 || html.indexOf('\u25A0') >= 0,
+    'stop glyph');
+  assert.ok(html.indexOf('__frontierEngagementStop') >= 0, 'mockable stop seam');
+  assert.ok(html.indexOf('/api/agents/engagement/stop') >= 0 || html.indexOf('stopEngagementRequest') >= 0,
+    'engagement stop path');
+  assert.ok(html.indexOf('frontierAgentsCache') >= 0, 'agents cache for merge');
+  // agents_changed reloads frontier engagement.
+  const ac = html.indexOf("typ === 'agents_changed'");
+  assert.ok(ac >= 0);
+  const region = html.slice(ac, ac + 400);
+  assert.ok(region.indexOf('loadFrontier') >= 0, 'agents_changed → loadFrontier: ' + region);
+});
+
 
 if (failed) {
   console.error(failed + ' failed');
