@@ -11,6 +11,15 @@
 // 🎯T186: sticky hover surface — tip stays open while pointer is over host OR
 // tip (grace hide on leave both). Tip receives pointer events so wheel scroll
 // works. Optional maxRight clamp so card never covers #frontier-table.
+//
+// 🎯T187: never auto-timeout while over the card. Gap grace is only for the
+// host→tip bridge (not an idle timer). After the tip is entered, leave-host
+// alone does not dismiss; hide only on leave-tip (or leave both without tip
+// engagement). Nested scroll/wheel must not re-arm hide. No setInterval.
+//
+// 🎯T203: product-wide singleton — at most one InstantTip panel visible.
+// Showing a tip for a new host force-hides every other open InstantTip
+// (sticky state reset via tip._instantTipForceHide).
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -23,8 +32,9 @@
 
   // Oracle: product tip path must show with zero delay.
   var SHOW_DELAY_MS = 0;
-  // 🎯T186: grace to cross host→tip gap before hide (show stays 0ms).
-  var HIDE_GRACE_MS = 100;
+  // 🎯T186/T187: grace only to cross host→tip gap (not idle auto-hide).
+  // 100ms was too short — pointer can take longer; 300–500ms bridge window.
+  var HIDE_GRACE_MS = 400;
   var TIP_CLASS = 'instant-tip';
   var SHOW_CLASS = 'instant-tip-show';
   var HOST_CLASS = 'has-instant-tip';
@@ -36,6 +46,9 @@
   var DEFAULT_CLAMP_GAP = 8;
   var DEFAULT_CLAMP_SELECTORS = ['#frontier-table', '#frontier-body'];
 
+  // 🎯T203: tips currently claimed open (product-wide singleton registry).
+  var openTips = [];
+
   // Pure schedule descriptor for hermetic checks (no timer).
   function showSchedule() {
     return {
@@ -45,14 +58,58 @@
     };
   }
 
-  // Pure hide-grace descriptor (🎯T186).
+  // Pure hide-grace descriptor (🎯T186/T187).
+  // Grace is host→tip bridge only; cancel on tip enter; never idle timeout.
   function hideSchedule() {
     return {
       graceMs: HIDE_GRACE_MS,
       usesTimeout: true,
+      usesInterval: false,
       event: 'pointerleave',
       cancelOn: 'pointerenter',
+      gapOnly: true,
+      neverWhileOverTip: true,
     };
+  }
+
+  // Pure: should a scheduled hide run given hover flags? (🎯T187)
+  // While overTip (or overHost), hide must not run — no wall-clock dismiss.
+  function shouldRunScheduledHide(state) {
+    var s = state || {};
+    if (s.overHost || s.overTip) return false;
+    return true;
+  }
+
+  // Pure: host leave policy (🎯T187).
+  // - overTip: never schedule (still on card)
+  // - tipEngaged: host leave alone does not dismiss; tip leave owns dismiss
+  // - else: schedule gap grace for host→tip bridge
+  function shouldScheduleHideOnHostLeave(state) {
+    var s = state || {};
+    if (s.overTip) return false;
+    if (s.tipEngaged) return false;
+    return true;
+  }
+
+  // Pure: tip leave policy — hide only when not over host (or after grace).
+  function shouldScheduleHideOnTipLeave(state) {
+    var s = state || {};
+    if (s.overHost || s.overTip) return false;
+    return true;
+  }
+
+  // relatedTarget still inside el? Nested children / scroll chrome (🎯T187).
+  function relatedStillInside(el, related) {
+    if (!el || !related) return false;
+    if (el === related) return true;
+    if (typeof el.contains === 'function') {
+      try {
+        return el.contains(related);
+      } catch (_) {
+        return false;
+      }
+    }
+    return false;
   }
 
   // Pure: given empty text, attach is a no-op.
@@ -265,10 +322,60 @@
     return pos;
   }
 
+  // 🎯T203 registry helpers.
+  function claimOpen(tip) {
+    if (!tip) return;
+    for (var i = 0; i < openTips.length; i++) {
+      if (openTips[i] === tip) return;
+    }
+    openTips.push(tip);
+  }
+
+  function releaseOpen(tip) {
+    if (!tip) return;
+    for (var i = openTips.length - 1; i >= 0; i--) {
+      if (openTips[i] === tip) openTips.splice(i, 1);
+    }
+  }
+
+  // Force-hide a tip: prefer attach's sticky reset (_instantTipForceHide).
+  function forceHideTip(tip) {
+    if (!tip) return false;
+    if (typeof tip._instantTipForceHide === 'function') {
+      tip._instantTipForceHide();
+      return true;
+    }
+    return hideTip(tip);
+  }
+
+  // Hide every open tip except keep (🎯T203 singleton).
+  function dismissOtherTips(keep) {
+    var snapshot = openTips.slice();
+    var n = 0;
+    for (var i = 0; i < snapshot.length; i++) {
+      var t = snapshot[i];
+      if (!t || t === keep) continue;
+      forceHideTip(t);
+      n++;
+    }
+    return n;
+  }
+
+  // openTipsCount / getOpenTips — hermetic inspection of the singleton set.
+  function openTipsCount() {
+    return openTips.length;
+  }
+
+  function getOpenTips() {
+    return openTips.slice();
+  }
+
   // showTip(tip) — synchronous; no setTimeout. Used by attach + hermetic.
   // opts.placement / opts.event / opts.host for positioning.
+  // 🎯T203: product-wide singleton — dismisses every other open InstantTip first.
   function showTip(tip, host, opts) {
     if (!tip) return false;
+    dismissOtherTips(tip);
     if (tip.style) {
       tip.style.display = 'block';
       // 🎯T186: tip must receive pointer events (scroll, sticky hover bridge).
@@ -295,11 +402,13 @@
     } else if (host) {
       placeTip(tip, host);
     }
+    claimOpen(tip);
     return true;
   }
 
   function hideTip(tip) {
     if (!tip) return false;
+    releaseOpen(tip);
     if (tip.style) {
       tip.style.display = 'none';
       tip.style.pointerEvents = 'none';
@@ -388,6 +497,8 @@
 
     var overHost = false;
     var overTip = false;
+    // 🎯T187: once pointer has entered the tip, dismiss is tip-leave only.
+    var tipEngaged = false;
     var hideTimer = null;
 
     function clearHideTimer() {
@@ -396,6 +507,21 @@
         hideTimer = null;
       }
     }
+
+    function hoverState() {
+      return { overHost: overHost, overTip: overTip, tipEngaged: tipEngaged };
+    }
+
+    function doHide() {
+      clearHideTimer();
+      tipEngaged = false;
+      overTip = false;
+      overHost = false;
+      hideTip(tip);
+    }
+
+    // 🎯T203: singleton dismiss from another tip's show path resets sticky state.
+    tip._instantTipForceHide = doHide;
 
     function placeOpts(ev) {
       return {
@@ -427,13 +553,28 @@
       showTip(tip, host, placeOpts(ev));
     }
 
-    function onHostLeave() {
+    function onHostLeave(ev) {
+      var related = ev && (ev.relatedTarget != null ? ev.relatedTarget : ev.toElement);
+      // Moving into the tip (or its children) is not a real host leave for hide.
+      if (relatedStillInside(tip, related)) {
+        overHost = false;
+        overTip = true;
+        tipEngaged = true;
+        clearHideTimer();
+        return;
+      }
       overHost = false;
+      // 🎯T187: after tip engaged, leave-host alone never dismisses.
+      if (!shouldScheduleHideOnHostLeave(hoverState())) {
+        clearHideTimer();
+        return;
+      }
       scheduleHide();
     }
 
     function onTipEnter() {
       overTip = true;
+      tipEngaged = true;
       clearHideTimer();
       // Tip already open when entered from host; ensure visible if re-entered.
       if (!isVisible(tip)) {
@@ -441,30 +582,50 @@
       }
     }
 
-    function onTipLeave() {
+    function onTipLeave(ev) {
+      var related = ev && (ev.relatedTarget != null ? ev.relatedTarget : ev.toElement);
+      // Nested children / scroll chrome: still inside tip → ignore (🎯T187).
+      if (relatedStillInside(tip, related)) {
+        return;
+      }
+      // Moving back onto host: stay open; host enter may also fire.
+      if (relatedStillInside(host, related)) {
+        overTip = false;
+        overHost = true;
+        clearHideTimer();
+        return;
+      }
       overTip = false;
+      if (!shouldScheduleHideOnTipLeave(hoverState())) {
+        clearHideTimer();
+        return;
+      }
       scheduleHide();
     }
 
     function scheduleHide() {
       if (sticky) {
-        if (overHost || overTip) {
+        // 🎯T187: while over tip (or host), never arm hide.
+        if (!shouldRunScheduledHide(hoverState())) {
           clearHideTimer();
           return;
         }
         clearHideTimer();
         if (graceMs <= 0) {
-          hideTip(tip);
+          doHide();
           return;
         }
+        // Gap grace only — not an idle timer. Callback re-checks overTip.
         hideTimer = schedule(function () {
           hideTimer = null;
-          if (!overHost && !overTip) hideTip(tip);
+          // Never hide while pointer is over tip/host (🎯T187).
+          if (!shouldRunScheduledHide(hoverState())) return;
+          doHide();
         }, graceMs);
         return;
       }
       // Non-sticky: immediate hide (legacy / explicit opt-out).
-      hideTip(tip);
+      doHide();
     }
 
     if (typeof host.addEventListener === 'function') {
@@ -480,9 +641,16 @@
       tip.addEventListener('pointerleave', onTipLeave);
       tip.addEventListener('mouseenter', onTipEnter);
       tip.addEventListener('mouseleave', onTipLeave);
+      // Wheel/scroll over tip children must not dismiss (pointer stays over tip).
+      // No hide path on wheel — only enter/leave flags drive dismiss.
+      tip.addEventListener('wheel', function () {
+        overTip = true;
+        tipEngaged = true;
+        clearHideTimer();
+      }, { passive: true });
     }
 
-    // Stash for tests / cleanup.
+    // Stash for tests / cleanup / hermetic overTip inspection.
     host._instantTip = tip;
     host._instantTipShow = onHostEnter;
     host._instantTipHide = onHostLeave;
@@ -490,6 +658,7 @@
     host._instantTipSticky = sticky;
     tip._instantTipOnEnter = onTipEnter;
     tip._instantTipOnLeave = onTipLeave;
+    tip._instantTipHoverState = hoverState;
     return tip;
   }
 
@@ -506,12 +675,20 @@
     DEFAULT_CLAMP_SELECTORS: DEFAULT_CLAMP_SELECTORS,
     showSchedule: showSchedule,
     hideSchedule: hideSchedule,
+    shouldRunScheduledHide: shouldRunScheduledHide,
+    shouldScheduleHideOnHostLeave: shouldScheduleHideOnHostLeave,
+    shouldScheduleHideOnTipLeave: shouldScheduleHideOnTipLeave,
+    relatedStillInside: relatedStillInside,
     tipTextOrEmpty: tipTextOrEmpty,
     placeLeftOfPointerRect: placeLeftOfPointerRect,
     resolveClampRight: resolveClampRight,
     placeTipLeftOfPointer: placeTipLeftOfPointer,
     showTip: showTip,
     hideTip: hideTip,
+    forceHideTip: forceHideTip,
+    dismissOtherTips: dismissOtherTips,
+    openTipsCount: openTipsCount,
+    getOpenTips: getOpenTips,
     isVisible: isVisible,
     attach: attach,
   };

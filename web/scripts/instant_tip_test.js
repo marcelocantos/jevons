@@ -187,12 +187,17 @@ test('instant_tip.js source never setTimeout-delays show', function () {
   const grace = src.match(/HIDE_GRACE_MS\s*=\s*(\d+)/);
   assert.ok(grace, 'HIDE_GRACE_MS numeric');
   const g = Number(grace[1]);
-  assert.ok(g >= 50 && g <= 150, 'HIDE_GRACE_MS in 50–150ms: ' + g);
+  // 🎯T186 was 50–150; 🎯T187 widens bridge grace to ~300–500ms.
+  assert.ok(g >= 50 && g <= 500, 'HIDE_GRACE_MS in 50–500ms: ' + g);
   // pointerenter is the primary event.
   assert.ok(src.indexOf('pointerenter') >= 0);
   // Sticky: tip listens for enter/leave.
   assert.ok(src.indexOf('onTipEnter') >= 0 || /tip\.addEventListener\s*\(\s*['"]pointerenter/.test(src),
     'tip pointerenter for sticky');
+  // 🎯T203: singleton registry on show path.
+  assert.ok(src.indexOf('dismissOtherTips') >= 0, 'dismissOtherTips in source');
+  assert.ok(src.indexOf('openTips') >= 0 || src.indexOf('claimOpen') >= 0, 'open tip registry');
+  assert.ok(src.indexOf('_instantTipForceHide') >= 0, 'forceHide for sticky reset');
 });
 
 test('index.html wires InstantTip on frontier cells; no title= for status/fanout/name', function () {
@@ -327,10 +332,10 @@ test('sticky: enter tip after leave host keeps tip open (🎯T186)', function ()
     clampSelectors: [],
   });
   assert.ok(tip);
-  assert.ok(IT.HIDE_GRACE_MS >= 50 && IT.HIDE_GRACE_MS <= 150, 'grace in range');
+  assert.ok(IT.HIDE_GRACE_MS >= 50 && IT.HIDE_GRACE_MS <= 500, 'grace in range');
   const hs = IT.hideSchedule();
   assert.strictEqual(hs.usesTimeout, true);
-  assert.ok(hs.graceMs >= 50 && hs.graceMs <= 150);
+  assert.ok(hs.graceMs >= 50 && hs.graceMs <= 500);
 
   host.dispatch('pointerenter', { clientX: 500, clientY: 200 });
   assert.strictEqual(IT.isVisible(tip), true, 'shown 0ms');
@@ -466,6 +471,69 @@ test('index.html sticky + clamp wiring (🎯T186)', function () {
   assert.ok(region.indexOf('frontier-table') >= 0 || region.indexOf('clampSelectors') >= 0,
     'clamp to frontier table');
   assert.ok(region.indexOf('clampSelectors') >= 0, 'clampSelectors wired');
+});
+
+// 🎯T203: product-wide singleton — show second tip hides first.
+test('singleton: attach/show second tip hides first (🎯T203)', function () {
+  const doc = mockDoc();
+  const host1 = mockEl('td');
+  const host2 = mockEl('td');
+  host1.ownerDocument = doc;
+  host2.ownerDocument = doc;
+  const tip1 = IT.attach(host1, '<p>Card A — T100</p>', {
+    doc: doc, mount: doc.body, html: true, hideGraceMs: 0,
+    sticky: true, className: IT.CARD_CLASS, placement: IT.PLACE_LEFT_OF_POINTER,
+    clampSelectors: [],
+  });
+  const tip2 = IT.attach(host2, '<p>Card B — T200</p>', {
+    doc: doc, mount: doc.body, html: true, hideGraceMs: 0,
+    sticky: true, className: IT.CARD_CLASS, placement: IT.PLACE_LEFT_OF_POINTER,
+    clampSelectors: [],
+  });
+  assert.ok(tip1 && tip2);
+  assert.strictEqual(typeof tip1._instantTipForceHide, 'function', 'forceHide wired');
+  assert.strictEqual(typeof tip2._instantTipForceHide, 'function');
+
+  host1.dispatch('pointerenter', { clientX: 400, clientY: 200 });
+  assert.strictEqual(IT.isVisible(tip1), true, 'first shown');
+  assert.strictEqual(IT.openTipsCount(), 1, 'registry has 1');
+
+  host2.dispatch('pointerenter', { clientX: 420, clientY: 220 });
+  assert.strictEqual(IT.isVisible(tip2), true, 'second shown');
+  assert.strictEqual(IT.isVisible(tip1), false, 'first hidden by singleton');
+  assert.strictEqual(IT.openTipsCount(), 1, 'registry still 1');
+  assert.strictEqual(IT.getOpenTips()[0], tip2, 'open tip is second');
+
+  // Third: plain text tip also participates in product-wide singleton.
+  const host3 = mockEl('td');
+  host3.ownerDocument = doc;
+  const tip3 = IT.attach(host3, 'Fanout list', {
+    doc: doc, mount: doc.body, hideGraceMs: 0, sticky: true,
+  });
+  host3.dispatch('pointerenter');
+  assert.strictEqual(IT.isVisible(tip3), true);
+  assert.strictEqual(IT.isVisible(tip2), false, 'card dismissed by text tip');
+  assert.strictEqual(IT.openTipsCount(), 1);
+});
+
+test('singleton: showTip path dismisses peers without attach sticky (🎯T203)', function () {
+  const doc = mockDoc();
+  const a = mockEl('div');
+  const b = mockEl('div');
+  a.className = IT.TIP_CLASS;
+  b.className = IT.TIP_CLASS;
+  a.style = {};
+  b.style = {};
+  // Standalone tips (no attach forceHide) still hide via hideTip.
+  IT.showTip(a, null, {});
+  assert.strictEqual(IT.isVisible(a), true);
+  assert.strictEqual(IT.openTipsCount(), 1);
+  IT.showTip(b, null, {});
+  assert.strictEqual(IT.isVisible(b), true);
+  assert.strictEqual(IT.isVisible(a), false, 'peer hidden on showTip');
+  assert.strictEqual(IT.openTipsCount(), 1);
+  IT.hideTip(b);
+  assert.strictEqual(IT.openTipsCount(), 0);
 });
 
 if (failed) {
