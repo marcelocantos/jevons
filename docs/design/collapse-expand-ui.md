@@ -136,6 +136,17 @@ Chrome-only on top of clip model:
 | Clipped pad | `padding-bottom: 0` so border butts clip edge |
 | Short | No tab / no fade unless `measureCollapse` says tall |
 
+### 2026-08-03 — residual chrome (tab-in + short scrim)
+
+Owner smoke after pocket polish: hang-off tab and multi-line tall scrim felt wrong.
+
+| Piece | Residual polish |
+|-------|-----------------|
+| Fade height | `height: var(--radius)` (same token as `.msg` corner radius) — not `2.75rem` |
+| Tab | Flipped inside: `bottom: -1px` + `border-bottom: none` + top radius; tongue into pocket edge, not hang-off under box |
+| Chevron | Unchanged sense: up collapsed / down expanded |
+| Keep | Dark scrim, tall-only tab, time outside, full-render clip |
+
 ## Non-goals (unless discussion says otherwise)
 
 - Changing T66/T77 semantics without explicit owner OK.

@@ -11,7 +11,8 @@
 //   * bottom pocket scrim (.msg-clip-fade) present when collapsed (darken)
 //   * chevron tab (.msg-expand-tab) only — no "Show more" / "Show less" text
 //   * short bubble has no tab and no fade
-//   * timestamp outside bubble box; tab flush with outer bottom border
+//   * timestamp outside bubble box; tab tongue inside bottom edge
+//   * scrim height matches bubble --radius (short edge cue, not multi-line)
 //   * T66: latest request/response stay expanded when tall (incl. stream
 //     that grows short→tall)
 //   * T77: when either role ceases to be latest, auto-expand reverts to clip
@@ -146,11 +147,15 @@ function assertNoShowMoreLess(text, label, failures) {
         jBtnClass: jBig._expandBtn ? jBig._expandBtn.className : '',
         jBtnText: jBig._expandBtn ? jBig._expandBtn.textContent.trim() : '',
         jAria: jBig._expandBtn ? jBig._expandBtn.getAttribute('aria-label') : '',
-        // Pocket geometry: time outside border box; tab flush under bottom edge;
-        // fade bottom aligns with msg bottom (inner border).
+        // Pocket geometry: time outside border box; tab tongue inside bottom edge
+        // (bottom flush; top above msg bottom); fade bottom flush + height ≤ radius.
         jTimeOutside: jTimeRect ? jTimeRect.top >= jMsgRect.bottom - 1 : false,
-        jTabFlush: jTabRect ? Math.abs(jTabRect.top - jMsgRect.bottom) <= 3 : false,
+        jTabInside: jTabRect
+          ? (Math.abs(jTabRect.bottom - jMsgRect.bottom) <= 3 && jTabRect.top < jMsgRect.bottom - 2)
+          : false,
         jFadeFlush: jFadeRect ? Math.abs(jFadeRect.bottom - jMsgRect.bottom) <= 2 : false,
+        jFadeH: jFadeRect ? jFadeRect.height : 0,
+        jRadiusPx: parseFloat(getComputedStyle(jBig).borderBottomLeftRadius) || 0,
         jPadBottom: getComputedStyle(jBig).paddingBottom,
         uLines: uBig._body.textContent.split('\n').length,
         uFullLen: window._t.uFullLen,
@@ -199,8 +204,11 @@ function assertNoShowMoreLess(text, label, failures) {
       failures.push('pocket fade still references --bg/--user-bg (fade-to-page, not dark scrim)');
     }
     if (!state.jTimeOutside) failures.push('timestamp still inside bubble box (want outside / under border)');
-    if (!state.jTabFlush) failures.push('expand tab not hard-flush with outer bottom border');
+    if (!state.jTabInside) failures.push('expand tab not inside bottom edge (want tongue into pocket, not hang-off)');
     if (!state.jFadeFlush) failures.push('clip fade not flush to inner bottom of bubble border');
+    if (state.jFadeH > 0 && state.jRadiusPx > 0 && state.jFadeH > state.jRadiusPx + 1) {
+      failures.push(`clip fade height ${state.jFadeH}px > bubble radius ${state.jRadiusPx}px (want height: var(--radius))`);
+    }
     if (state.jPadBottom && state.jPadBottom !== '0px') {
       failures.push(`clipped bubble padding-bottom = ${state.jPadBottom}, want 0 so border butts content`);
     }
@@ -439,6 +447,6 @@ function assertNoShowMoreLess(text, label, failures) {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - pocket clip collapse (dark scrim + border tab + time outside), T66/T77, short no tab');
+  console.log('ok - pocket clip collapse (radius scrim + inside tab + time outside), T66/T77, short no tab');
   console.log('screenshots: artifacts/collapse-preview.png, artifacts/collapse-expanded.png');
 })();

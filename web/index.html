@@ -236,14 +236,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   max-height: var(--collapsed-max-height);
   overflow: hidden;
 }
-/* Pocket scrim: fade-to-dark flush to inner bottom of border (not to page bg). */
+/* Pocket scrim: fade-to-dark flush to inner bottom of border (not to page bg).
+   Height matches bubble corner radius so scrim stays a short edge cue. */
 .msg-clip-fade {
   display: none;
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 2.75rem;
+  height: var(--radius);
   margin: 0;
   pointer-events: none;
   z-index: 1;
@@ -251,15 +252,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.45));
 }
 .msg.msg-clipped > .msg-clip-fade { display: block; }
-/* Bottom-edge pocket tab: protrudes from outer bottom border (part of border). */
+/* Bottom-edge pocket tab: tongue into pocket from inner bottom border (not hang-off). */
 .msg-expand-tab {
   display: flex; align-items: center; justify-content: center;
   width: 2.25rem; height: 1.05rem; padding: 0;
-  position: absolute; left: 50%; top: 100%;
+  position: absolute; left: 50%; bottom: -1px; /* 1px into border; bulk sits inside */
   transform: translateX(-50%);
-  margin: 0; margin-top: -1px; /* hard-flush / merge with outer bottom border */
-  border: 1px solid var(--border); border-top: none;
-  border-radius: 0 0 7px 7px; background: var(--surface);
+  margin: 0;
+  border: 1px solid var(--border); border-bottom: none;
+  border-radius: 7px 7px 0 0; background: var(--surface);
   color: var(--text-dim); font: inherit; font-size: 11px; line-height: 1;
   cursor: pointer; opacity: 0.92; z-index: 2;
 }
@@ -2156,8 +2157,8 @@ function updateExpandTab(d) {
   d._expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   d._expandBtn.setAttribute('aria-label', expanded ? 'Collapse' : 'Expand');
   d._expandBtn.title = expanded ? 'Collapse' : 'Expand';
-  // Pocket tab protrudes down from bottom edge: chevron flipped vs first clip
-  // land — up when collapsed (pull out of pocket), down when expanded (tuck in).
+  // Pocket tab sits inside bottom edge: up when collapsed (pull content out),
+  // down when expanded (tuck back into pocket).
   d._expandBtn.innerHTML = '<span class="chev" aria-hidden="true">' +
     (expanded ? '\u25BE' : '\u25B4') + '</span>';
 }
