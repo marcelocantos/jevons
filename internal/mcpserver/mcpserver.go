@@ -23,6 +23,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
@@ -97,6 +98,25 @@ type Server struct {
 	// eventJournal is the durable product journal for MCP lifecycle dual-write
 	// (🎯T128.1 / T128.4). Same file as GET /api/logs when SetEventJournal is wired.
 	eventJournal *eventlog.Journal
+
+	// defaultProvider is the daemon-wide claudia backend for new agents
+	// when agent_start / thread_spawn / jwork omit provider (🎯T148).
+	// Empty means cli.ResolveProvider falls through to env / grok at use time.
+	defaultProvider string
+}
+
+// SetDefaultProvider sets the daemon-wide claudia backend used when spawn
+// tools omit provider (🎯T148). Pass the already-resolved default
+// (cli.ResolveProvider("", cfg.Provider)); empty re-resolves from env at use.
+func (s *Server) SetDefaultProvider(provider string) {
+	s.defaultProvider = strings.TrimSpace(provider)
+}
+
+// resolvedDefaultProvider returns the effective default for new agents.
+func (s *Server) resolvedDefaultProvider() claudia.Provider {
+	// defaultProvider is the config-resolved value from main; pass as cfg
+	// so env is only consulted when main left it empty.
+	return cli.ResolveProvider("", s.defaultProvider)
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable

@@ -52,6 +52,9 @@ type Thread struct {
 	SessionID   string    `json:"session_id"`      // Grok session id (ACP load / resume)
 	Description string    `json:"description"`     // owner's work-language label
 	Model       string    `json:"model,omitempty"` // model override, if any
+	// Provider is the claudia backend id for this thread's process (🎯T148).
+	// Empty means fleet/daemon default. Persisted so rehydrate keeps the choice.
+	Provider string `json:"provider,omitempty"`
 	// Parent is the fleet lineage parent (who spawned this thread).
 	// Propagated to the agent registry on Launch so /api/agents nests
 	// correctly (🎯T111.3). Empty when unknown (legacy adopted threads).

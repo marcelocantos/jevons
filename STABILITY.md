@@ -25,6 +25,7 @@ Snapshot as of v0.5.0.
 | `--config` | string | `~/.jevons/config.yaml` | Fluid — new post-v0.5.0 (🎯T44 structured config) |
 | `--workdir` | string | `"."` | Fluid — overrides config file |
 | `--model` | string | `""` | Fluid — overrides config file |
+| `--provider` | string | `""` | Fluid — 🎯T148 default agent backend (grok/claude/…; empty = config/env/grok) |
 | `--jevons-model` | string | `""` | Fluid — overrides config file |
 | `--debug` | bool | `false` | Stable |
 | `--version` | bool | `false` | Stable |
@@ -46,18 +47,18 @@ thread model and `jwork` are the only worker lifecycles.
 | Tool | Parameters | Stability |
 |---|---|---|
 | `jevons_agent_list` | (none) | Fluid |
-| `jevons_agent_start` | `name, workdir, model?` | Fluid |
+| `jevons_agent_start` | `name, workdir, model?, provider?` | Fluid — provider 🎯T148 |
 | `jevons_agent_send` | `name, text` | Fluid — async fire-and-forget since v0.3.0 |
 | `jevons_agent_stop` | `name` | Fluid |
 | `jevons_agent_kill` | `name` | Fluid |
 | `jevons_active_work` | `hours?, include_clean?` | Fluid — new in v0.4.0, cross-repo work dashboard |
-| `jwork` | `task, repo?, model?` | Fluid — new in v0.4.0, on-demand worker dispatch |
+| `jwork` | `task, repo?, model?, provider?` | Fluid — provider 🎯T148 |
 | `jevons_transcript_read` | `session?, limit?` | Fluid — new in v0.3.0, reads Jevon conversation history |
 | `jevons_transcript_rewind` | `session, n?` | Fluid — new in v0.3.0, trims Jevon history |
 | `jevons_thread_adopt` | `session_id, description?` | Fluid — new in v0.5.0, adopt-observe a session as a durable thread |
 | `jevons_thread_list` | (none) | Fluid — new in v0.5.0 |
 | `jevons_thread_status` | `id` | Fluid — new in v0.5.0 |
-| `jevons_thread_spawn` | `id, workdir, description?, model?` | Fluid — new in v0.5.0 |
+| `jevons_thread_spawn` | `id, workdir, description?, model?, provider?` | Fluid — provider 🎯T148 |
 | `jevons_thread_direct` | `id, text` | Fluid — new in v0.5.0, rehydrates idle process on demand |
 | `jevons_thread_takeover` | `id` | Fluid — new in v0.5.0 |
 | `jevons_thread_remove` | `id` | Fluid — new in v0.5.0 |

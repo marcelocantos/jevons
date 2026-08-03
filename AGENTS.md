@@ -1,8 +1,7 @@
 # Jevons
 
 Coordinator for a community of coding agents under a single CEO agent.
-Go daemon (`jevonsd`) + canonical web UI + iOS thin client. The only
-agent provider is Grok, via the claudia harness.
+Go daemon (`jevonsd`) + canonical web UI + iOS thin client. Default agent provider is Grok via the claudia harness; backends are pluggable (🎯T148).
 
 **Architecture:** read [docs/architecture-current.md](docs/architecture-current.md)
 — the one honest, current description of the system (components, agent

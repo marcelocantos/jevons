@@ -1,11 +1,14 @@
 # Jevons Agent Guide
 
-Jevons is a remote control system for **Grok Build** instances — a
-butler/CEO over a fleet of agents. It consists of a coordinator daemon
-(`jevonsd`) and a browser chat UI (also wrapped by the iOS app).
+Jevons is a remote control system for coding agents — a butler/CEO over
+a fleet of agents. It consists of a coordinator daemon (`jevonsd`) and a
+browser chat UI (also wrapped by the iOS app).
 
-There is no Claude (or Codex) harness in jevons. The only provider is
-Grok via claudia (`ProviderGrok`: Task mode and Session ACP).
+Agent backends are **pluggable via claudia** (🎯T148). The default is
+Grok Build (`ProviderGrok`: Task mode and Session ACP). Overseer or PO
+can choose another claudia-supported backend **per spawn** (e.g. Claude)
+without restarting `jevonsd`. Residual: Claude Session re-stitch and
+Bedrock are claudia-side (pass-through provider strings are accepted).
 
 ## Architecture
 
@@ -184,9 +187,32 @@ the owner **explicitly** asks to ship/push/PR.
 | `~/.grok/sessions/` | Grok session store |
 | `~/.jevons/jevons/AGENTS.md` | Generated overseer instructions |
 
+## Agent provider (🎯T148)
+
+**Default** (daemon-wide), in order:
+
+1. `provider:` in `~/.jevons/config.yaml`
+2. env `JEVONS_PROVIDER`
+3. flag `--provider` (overrides file when set)
+4. `grok` (back-compat)
+
+**Ad hoc** (per spawn — overseer/PO):
+
+```text
+jevons_agent_start(name=…, workdir=…, provider="claude", model=…?)
+jevons_thread_spawn(id=…, workdir=…, provider="claude", model=…?)
+jwork(text=…, provider="claude", model=…?)
+```
+
+Empty `provider` on resume keeps the **registry-stored** backend (not
+clobbered to Grok). New agents without an override use the daemon default.
+Provider strings pass through to claudia (no allow-list) so future ids
+(e.g. Bedrock) are not blocked at the Jevons selection surface.
+
 ## Gotchas
 
-- Only Grok is supported. There is no `--provider` switch.
+- Default remains Grok for empty config/env; set `provider` / `JEVONS_PROVIDER`
+  or pass `provider=` on spawn to use another backend.
 - Cost events from Grok may not carry Claude-style `costUSD` yet; the
   collector still tails session files for activity; pricing tables will
   improve as Grok usage telemetry is understood.

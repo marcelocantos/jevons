@@ -47,7 +47,8 @@ func (s *Server) registerJwork() {
 					"Policy decisions (doit) are returned in structuredContent.metadata (🎯T8.3)."),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Task description. Must be self-contained — the worker has no prior context.")),
 			mcp.WithString("cwd", mcp.Description("Working directory for the worker (defaults to the coordinator's default)")),
-			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
+			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Empty = daemon default. 🎯T148.")),
 			mcp.WithNumber("depth", mcp.Description("Current call depth (0 = top-level). Workers increment this when calling jwork themselves. Do not set manually.")),
 		),
 		s.handleJwork,
@@ -63,8 +64,10 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	text, _ := args["text"].(string)
 	cwd, _ := args["cwd"].(string)
 	model, _ := args["model"].(string)
+	providerArg, _ := args["provider"].(string)
 	depthF, _ := args["depth"].(float64)
 	depth := int(depthF)
+	provider := cli.SelectAgentProvider(providerArg, "", s.resolvedDefaultProvider())
 
 	if text == "" {
 		return mcp.NewToolResultError("missing required parameter: text"), nil
@@ -131,7 +134,7 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		"depth", depth,
 		"cwd", cwd,
 		"model", model,
-		"provider", cli.Provider,
+		"provider", provider,
 		"policy", policy.Decision,
 		"policy_level", policy.Level,
 	)
@@ -161,7 +164,7 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	task := claudia.NewTask(claudia.TaskConfig{
 		ID:       workerID,
 		Name:     fmt.Sprintf("jwork-d%d-%s", depth, workerID),
-		Provider: cli.Provider,
+		Provider: provider,
 		WorkDir:  cwd,
 		Model:    model,
 	})

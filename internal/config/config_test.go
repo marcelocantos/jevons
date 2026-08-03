@@ -325,6 +325,28 @@ func TestLoadOverlaysAndBackfills(t *testing.T) {
 	}
 }
 
+// 🎯T148: provider field loads from YAML; empty is valid (env/grok fallback).
+func TestLoadProviderField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("provider: claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Provider != "claude" {
+		t.Fatalf("provider = %q want claude", cfg.Provider)
+	}
+	cfgEmpty, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfgEmpty.Provider != "" {
+		t.Fatalf("default provider should be empty string (env/grok at resolve), got %q", cfgEmpty.Provider)
+	}
+}
+
 func TestLoadMalformedFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(":\n\t bad"), 0o644); err != nil {

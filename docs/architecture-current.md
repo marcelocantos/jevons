@@ -37,7 +37,7 @@ surfaces, the MCP tools the CEO drives, durable state, and cost governance.
 - **[claudia](https://github.com/marcelocantos/claudia)** — the agent
   harness library: process spawn, Grok ACP (session/new, session/load,
   session/prompt), Task one-shots, tmux-backed fleets, the agent registry.
-  Jevons's only provider is Grok, via claudia.
+  Default agent provider is Grok via claudia; selection is pluggable (🎯T148).
 - **[pigeon](https://github.com/marcelocantos/pigeon)** — relay, pairing,
   and crypto primitives (PairingArtifact / PairingHost / CredentialStore).
 
@@ -72,7 +72,7 @@ stability grades are in [../STABILITY.md](../STABILITY.md).
 
 ## The provider seam (🎯T45)
 
-Jevons is deliberately single-provider (Grok via claudia), but the
+Jevons defaults to Grok via claudia with a pluggable selection surface (🎯T148); the
 boundary is explicit so a second backend inherits the whole control
 plane rather than forking it:
 

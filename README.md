@@ -104,6 +104,7 @@ overseer_name: jevons    # the CEO agent's name
 bind_addr: 127.0.0.1     # loopback-only by default; remote devices use the pigeon relay
 port: 13705
 workdir: "."             # default workdir for workers
+provider: ""             # default agent backend: grok | claude | … ("" = JEVONS_PROVIDER or grok)
 model: ""                # default worker model ("" = provider default)
 overseer_model: ""       # "" = same as model
 state_dir: ~/.jevons
@@ -124,6 +125,7 @@ jevonsd:
   --port              Listen port (default 13705)
   --workdir           Default working directory for workers (default ".")
   --model             Default model for workers
+  --provider          Default agent backend (grok, claude, …; empty = config/env/grok)
   --jevons-model      Model for the overseer (default: same as --model)
   --debug             Enable debug logging
   --version           Print version and exit

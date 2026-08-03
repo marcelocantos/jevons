@@ -12,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -60,11 +61,12 @@ func (s *Server) SetButler(b *butler.Butler) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_thread_spawn",
-			mcp.WithDescription("Spawn a new Grok thread the butler owns end-to-end. Durable across restarts; idle process is stopped and rehydrated on demand. Records fleet parent lineage (actor/parent, default overseer) so /api/agents nests correctly (🎯T111.3)."),
+			mcp.WithDescription("Spawn a new durable thread the butler owns end-to-end (claudia backend: default from config/env). Idle process is stopped and rehydrated on demand. Records fleet parent lineage (actor/parent, default overseer) so /api/agents nests correctly (🎯T111.3). Optional provider selects the backend ad hoc (🎯T148)."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Unique thread handle (e.g. 'tern-po', 'maze-rebuild')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory (absolute or ~-relative repo path)")),
 			mcp.WithString("description", mcp.Description("The owner's work-language label")),
-			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
+			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Empty = daemon default. 🎯T148.")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is spawning). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer).")),
 		),
@@ -209,11 +211,13 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultError("parent cannot equal thread id"), nil
 	}
 
+	provider := string(cli.SelectAgentProvider(str(args["provider"]), "", s.resolvedDefaultProvider()))
 	th, err := s.butler.Spawn(butler.SpawnArgs{
 		ID:          id,
 		WorkDir:     workdir,
 		Description: str(args["description"]),
 		Model:       str(args["model"]),
+		Provider:    provider,
 		Parent:      parent,
 	})
 	if err != nil {
@@ -229,6 +233,7 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 			_ = s.registry.Register(*def)
 		}
 	}
+	life["provider"] = provider
 	life["session_id"] = short(th.SessionID)
 	life["purpose"] = th.Purpose
 	s.logLifecycle(compThread, "spawn", "ok", life)
