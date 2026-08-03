@@ -125,9 +125,54 @@
     return 'status';
   }
 
-  // 🎯T205: body paint policy for one inspect turn (same product paths as main).
+  // 🎯T221: unwrap fleet inject wrappers for inspect display.
+  // Owner repro: role=user text often arrives as <user_query>…</user_query>
+  // (event push / overseer inject). Returns { text, wasWrapped }.
+  function unwrapInspectUserText(text) {
+    let t = text == null ? '' : String(text);
+    let wasWrapped = false;
+    // Repeated unwrap for nested identical wrappers (defensive).
+    for (let i = 0; i < 3; i++) {
+      const m = t.match(
+        /^\s*<user_query(?:\s[^>]*)?>\s*([\s\S]*?)\s*<\/user_query>\s*$/i,
+      );
+      if (!m) break;
+      t = m[1];
+      wasWrapped = true;
+    }
+    return { text: t, wasWrapped: wasWrapped };
+  }
+
+  // Escape raw HTML so marked cannot emit live tags (XSS), while MD syntax
+  // (**bold**, lists, fences) still parses. Inspect-user path only.
+  function escapeHtmlForInspectMarkdown(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // True when inspect user body should use the marked path (not plain/renderUserText).
+  // Fleet injects (wasWrapped) always; MD-shaped text (bold/lists/fences/headings).
+  // Residual: pure system-reminder walls without MD markers stay plain.
+  function inspectUserShouldMarkdown(text, wasWrapped) {
+    if (wasWrapped) return true;
+    const s = String(text == null ? '' : text);
+    if (!s) return false;
+    if (/\*\*[^*\n]+\*\*/.test(s)) return true;
+    if (/__[^_\n]+__/.test(s)) return true;
+    if (/^#{1,6}\s+\S/m.test(s)) return true;
+    if (/```/.test(s)) return true;
+    if (/^\s*[-*+]\s+\S/m.test(s)) return true;
+    if (/^\s*\d+\.\s+\S/m.test(s)) return true;
+    return false;
+  }
+
+  // 🎯T205/T221: body paint policy for one inspect turn.
   // Assistant → HTML via parseAssistantMarkdown (sealed main-chat path).
-  // User → HTML via renderUserText when provided (quotes/images); else plain text.
+  // User → 🎯T221: MD HTML for fleet injects / MD-shaped text (inspect-only);
+  //         else renderUserText (quotes/images) or plain. Main chat paintBody
+  //         is unchanged.
   // Other → plain text. msgRole is the .msg class role for shared chrome.
   // deps: { parseAssistantMarkdown?, renderUserText? }
   function paintInspectLineBody(role, text, deps) {
@@ -142,11 +187,25 @@
       return { mode: 'text', content: t, msgRole: msgRole };
     }
     if (role === 'user') {
+      const unwrapped = unwrapInspectUserText(t);
+      const display = unwrapped.text;
+      const parse = deps.parseAssistantMarkdown;
+      if (
+        typeof parse === 'function' &&
+        inspectUserShouldMarkdown(display, unwrapped.wasWrapped)
+      ) {
+        // Escape raw HTML first so injects cannot XSS via <script> etc.
+        return {
+          mode: 'html',
+          content: parse(escapeHtmlForInspectMarkdown(display)),
+          msgRole: msgRole,
+        };
+      }
       const renderUser = deps.renderUserText;
       if (typeof renderUser === 'function') {
-        return { mode: 'html', content: renderUser(t), msgRole: msgRole };
+        return { mode: 'html', content: renderUser(display), msgRole: msgRole };
       }
-      return { mode: 'text', content: t, msgRole: msgRole };
+      return { mode: 'text', content: display, msgRole: msgRole };
     }
     return { mode: 'text', content: t, msgRole: msgRole };
   }
@@ -396,6 +455,9 @@
     paneModel: paneModel,
     escapeHtml: escapeHtml,
     inspectToMsgRole: inspectToMsgRole,
+    unwrapInspectUserText: unwrapInspectUserText,
+    escapeHtmlForInspectMarkdown: escapeHtmlForInspectMarkdown,
+    inspectUserShouldMarkdown: inspectUserShouldMarkdown,
     paintInspectLineBody: paintInspectLineBody,
     paintInspectLinesHTML: paintInspectLinesHTML,
     linesFingerprint: linesFingerprint,

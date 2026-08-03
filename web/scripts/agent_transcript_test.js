@@ -231,7 +231,7 @@ test('T205 paintInspectLinesHTML: .msg chrome + bold/heading/fence + user path',
     return AT.escapeHtml(s);
   }
   const lines = [
-    { role: 'user', text: 'plain **not** md' },
+    { role: 'user', text: 'plain no-md text' },
     {
       role: 'assistant',
       text: '# Status\n\nDone with **bold** work.\n\n```js\nconst x = 1;\n```',
@@ -249,13 +249,12 @@ test('T205 paintInspectLinesHTML: .msg chrome + bold/heading/fence + user path',
   assert.ok(html.indexOf('<h1>') >= 0 && html.indexOf('Status') >= 0, 'heading element');
   assert.ok(html.indexOf('<strong>') >= 0 && html.indexOf('bold') >= 0, 'strong element');
   assert.ok(html.indexOf('<pre>') >= 0 && html.indexOf('<code>') >= 0, 'fence → pre/code');
-  // User plain keeps literal stars (escaped), not <strong> from markdown.
+  // Non-MD user stays on renderUserText (no marked strong); quotes still work.
   const userChunks = html.match(/<div class="msg user">[\s\S]*?<\/div>/g) || [];
   assert.ok(userChunks.length >= 2, 'two user turns');
-  assert.ok(/plain \*\*not\*\* md/.test(userChunks[0]),
-    'user body keeps literal stars, not <strong>');
+  assert.ok(userChunks[0].indexOf('plain no-md text') >= 0, 'plain user text present');
   assert.ok(userChunks[0].indexOf('<strong>') < 0,
-    'user turn must not gain <strong> from markdown');
+    'non-MD user turn must not gain <strong>');
   assert.ok(userChunks[1].indexOf('<blockquote>') >= 0, 'user quotes via renderUserText');
 });
 
@@ -265,17 +264,21 @@ test('T205 paintInspectLineBody roles + msgRole', function () {
   assert.strictEqual(a.mode, 'html');
   assert.strictEqual(a.msgRole, 'jevons');
   assert.ok(a.content.indexOf('<strong>') >= 0);
-  // Without renderUserText: plain text path.
+  // 🎯T221: MD-shaped user with parseAssistantMarkdown → html strong path.
   const u = AT.paintInspectLineBody('user', '**x**', { parseAssistantMarkdown: md });
-  assert.strictEqual(u.mode, 'text');
+  assert.strictEqual(u.mode, 'html');
   assert.strictEqual(u.msgRole, 'user');
-  assert.strictEqual(u.content, '**x**');
-  // With renderUserText: shared user-body HTML path.
+  assert.ok(u.content.indexOf('<strong>') >= 0, 'MD-shaped user uses marked path');
+  // Plain user without MD markers: renderUserText path.
   const u2 = AT.paintInspectLineBody('user', '> q', {
     renderUserText: function (t) { return '<blockquote>' + t.slice(2) + '</blockquote>'; },
   });
   assert.strictEqual(u2.mode, 'html');
   assert.ok(u2.content.indexOf('<blockquote>') >= 0);
+  // Plain user, no renderUserText, no MD → text mode.
+  const u3 = AT.paintInspectLineBody('user', 'hello only');
+  assert.strictEqual(u3.mode, 'text');
+  assert.strictEqual(u3.content, 'hello only');
   assert.strictEqual(AT.inspectToMsgRole('assistant'), 'jevons');
   assert.strictEqual(AT.inspectToMsgRole('user'), 'user');
   assert.strictEqual(AT.inspectToMsgRole('other'), 'status');
@@ -390,7 +393,8 @@ test('T167 single scroll: no nested overflow-y auto/scroll on turn sections', fu
 // 🎯T217: product path must paint assistant MD as HTML (<strong>/<pre>), not raw **.
 // Live repro (2026-08-03 daily :13705): selectAgent → WS agent_transcript history →
 // renderAgentInspect → paintBody('jevons') → parseAssistantMarkdown; DOM has strong/table.
-// Residual: role=user (system-reminder / owner dumps) stay plain/pre-wrap — not a bug.
+// 🎯T221 supersedes prior residual that user dumps stay plain — MD-shaped user
+// and <user_query> injects now mark down on the inspect path only.
 test('T217 renderAgentInspect: assistant→jevons paintBody, never textContent for MD role', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
@@ -403,12 +407,17 @@ test('T217 renderAgentInspect: assistant→jevons paintBody, never textContent f
       body.indexOf('inspectToMsgRole(line.role)') >= 0,
     'assistant maps to jevons for paintBody role',
   );
-  // Must call paintBody with msgRole (not raw line.role which would miss 'jevons' branch).
+  // Must call paintBody with msgRole for non-user (assistant/status).
   assert.ok(/paintBody\s*\(\s*d\s*,\s*msgRole\s*,/.test(body),
     'paintBody(d, msgRole, …) — role must be mapped class, not wire role');
   // Fallback when paintBody missing: still parseAssistantMarkdown for jevons (T217).
   assert.ok(body.indexOf('parseAssistantMarkdown') >= 0,
     'inspect render has parseAssistantMarkdown fallback for jevons');
+  // 🎯T221: user branch uses paintInspectLineBody (inspect-only MD policy).
+  assert.ok(body.indexOf('paintInspectLineBody') >= 0,
+    'inspect user path uses paintInspectLineBody (T221)');
+  assert.ok(body.indexOf("msgRole === 'user'") >= 0 || body.indexOf('msgRole === "user"') >= 0,
+    'explicit user branch for inspect MD paint');
   // Must not be the only paint path for all roles: textContent alone for every line.
   // Allowed: textContent for status / last-resort catch — not as sole assistant path.
   assert.ok(body.indexOf("msgRole === 'jevons'") >= 0 || body.indexOf('msgRole === "jevons"') >= 0,
@@ -429,6 +438,13 @@ test('T217 renderAgentInspect: assistant→jevons paintBody, never textContent f
   assert.ok(jevonsBlock, 'jevons if-block present');
   assert.ok(jevonsBlock[0].indexOf('textContent') < 0,
     'paintBody jevons branch must not assign textContent (raw ** bug)');
+  // Main chat paintBody user path stays non-MD (T221 inspect-only).
+  const userBlock = pb.match(/else if\s*\(\s*role\s*===\s*['"]user['"]\s*\)\s*\{[\s\S]*?\}\s*else/);
+  assert.ok(userBlock, 'paintBody user branch present');
+  assert.ok(userBlock[0].indexOf('renderUserText') >= 0,
+    'main paintBody user still uses renderUserText (not product-wide MD)');
+  assert.ok(userBlock[0].indexOf('parseAssistantMarkdown') < 0,
+    'main paintBody user must not call parseAssistantMarkdown');
 });
 
 test('T217 paintInspectLinesHTML: fixture **bold**/fence → strong/pre (not raw stars)', function () {
@@ -443,7 +459,8 @@ test('T217 paintInspectLinesHTML: fixture **bold**/fence → strong/pre (not raw
   }
   const lines = [
     { role: 'assistant', text: '## Gate\n\nDone with **bold** work.\n\n```js\nconst x = 1;\n```' },
-    { role: 'user', text: '<system-reminder>\n**not** assistant md\n</system-reminder>' },
+    // Non-MD plain system dump (no ** / lists) stays non-marked residual.
+    { role: 'user', text: '<system-reminder>\nplain wall only\n</system-reminder>' },
   ];
   const out = AT.paintInspectLinesHTML(lines, { parseAssistantMarkdown: parseLikeMarked });
   assert.ok(out.indexOf('class="msg jevons"') >= 0, 'assistant → .msg.jevons');
@@ -457,18 +474,121 @@ test('T217 paintInspectLinesHTML: fixture **bold**/fence → strong/pre (not raw
   assert.ok(jevonsChunks[0].indexOf('<strong>') >= 0, 'jevons chunk has strong');
   assert.ok(!/Done with \*\*bold\*\* work/.test(jevonsChunks[0]),
     'assistant must not leave literal **bold** in HTML');
-  // User residual: system-reminder / dumps stay plain (escaped), not marked.
+  // Residual: pure system-reminder without MD markers stays plain (no <strong>).
   const userChunks = out.match(/<div class="msg user">[\s\S]*?<\/div>/g) || [];
   assert.ok(userChunks.length >= 1);
   assert.ok(userChunks[0].indexOf('<strong>') < 0,
-    'user system-reminder residual: no marked <strong>');
-  assert.ok(/\*\*not\*\*/.test(userChunks[0]) || userChunks[0].indexOf('**not**') >= 0,
-    'user keeps literal stars (accepted residual)');
+    'plain system-reminder residual: no marked <strong>');
+  assert.ok(userChunks[0].indexOf('plain wall only') >= 0,
+    'plain system-reminder text still visible');
   // Role map pure unit (no assistant→user).
   assert.strictEqual(AT.inspectToMsgRole('assistant'), 'jevons');
   assert.strictEqual(AT.inspectToMsgRole('user'), 'user');
   assert.notStrictEqual(AT.inspectToMsgRole('assistant'), 'user');
   assert.notStrictEqual(AT.inspectToMsgRole('assistant'), 'status');
+});
+
+// 🎯T221: inspect user fleet injects / MD-shaped turns → strong/list HTML (not raw **).
+// Owner repro: jevons-po RHS Transcript T190 design-pin bubble as role=user
+// wrapped in <user_query>…</user_query> with **Prefer option 2** and - lists.
+test('T221 unwrapInspectUserText strips user_query wrapper', function () {
+  const u = AT.unwrapInspectUserText(
+    '<user_query>\n**Prefer option 2**\n\n- one\n- two\n</user_query>',
+  );
+  assert.strictEqual(u.wasWrapped, true);
+  assert.ok(u.text.indexOf('**Prefer option 2**') >= 0);
+  assert.ok(u.text.indexOf('<user_query>') < 0);
+  assert.ok(u.text.indexOf('</user_query>') < 0);
+  const plain = AT.unwrapInspectUserText('just text');
+  assert.strictEqual(plain.wasWrapped, false);
+  assert.strictEqual(plain.text, 'just text');
+  // Nested / whitespace-tolerant
+  const n = AT.unwrapInspectUserText('  <user_query attr="x"> hi </user_query>  ');
+  assert.strictEqual(n.wasWrapped, true);
+  assert.strictEqual(n.text, 'hi');
+});
+
+test('T221 inspectUserShouldMarkdown: inject + MD markers; plain residual', function () {
+  assert.strictEqual(AT.inspectUserShouldMarkdown('hello', true), true, 'inject always MD');
+  assert.strictEqual(AT.inspectUserShouldMarkdown('**Prefer option 2**', false), true);
+  assert.strictEqual(AT.inspectUserShouldMarkdown('- list item here', false), true);
+  assert.strictEqual(AT.inspectUserShouldMarkdown('## Head', false), true);
+  assert.strictEqual(AT.inspectUserShouldMarkdown('plain wall only', false), false);
+  assert.strictEqual(AT.inspectUserShouldMarkdown('', false), false);
+});
+
+test('T221 owner repro: user_query **Prefer option 2** list → strong/list HTML', function () {
+  function parseLikeMarked(md) {
+    let s = String(md || '');
+    // Simulate marked: entities from pre-escape stay; MD becomes tags.
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // List items (simple): consecutive - lines → <ul><li>
+    const lines = s.split('\n');
+    let out = '';
+    let inList = false;
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^\s*[-*+]\s+(.+)$/);
+      if (m) {
+        if (!inList) { out += '<ul>'; inList = true; }
+        out += '<li>' + m[1] + '</li>';
+      } else {
+        if (inList) { out += '</ul>'; inList = false; }
+        if (lines[i].trim()) out += '<p>' + lines[i] + '</p>';
+      }
+    }
+    if (inList) out += '</ul>';
+    return out || s;
+  }
+  const inject =
+    '<user_query>\n' +
+    '**Prefer option 2** for the design pin.\n\n' +
+    '- Keep inspect chrome shared\n' +
+    '- Escape raw HTML/XSS\n' +
+    '</user_query>';
+  const lines = [{ role: 'user', text: inject }];
+  const html = AT.paintInspectLinesHTML(lines, {
+    parseAssistantMarkdown: parseLikeMarked,
+    renderUserText: function (t) { return AT.escapeHtml(t); },
+  });
+  assert.ok(html.indexOf('class="msg user"') >= 0, 'user bubble');
+  assert.ok(html.indexOf('<strong>') >= 0, 'must paint <strong> not raw stars');
+  assert.ok(html.indexOf('Prefer option 2') >= 0, 'prefer-option text present');
+  assert.ok(!/\*\*Prefer option 2\*\*/.test(html),
+    'must not leave literal **Prefer option 2** stars');
+  assert.ok(html.indexOf('<ul>') >= 0 || html.indexOf('<li>') >= 0,
+    'list items become list HTML');
+  assert.ok(html.indexOf('<user_query>') < 0, 'wrapper stripped from display');
+  assert.ok(html.indexOf('</user_query>') < 0, 'closing wrapper stripped');
+  // XSS: raw HTML in inject must not become live tags after escape+parse.
+  const evil = AT.paintInspectLineBody(
+    'user',
+    '<user_query>**ok** <script>alert(1)</script></user_query>',
+    { parseAssistantMarkdown: parseLikeMarked },
+  );
+  assert.strictEqual(evil.mode, 'html');
+  assert.ok(evil.content.indexOf('<strong>') >= 0, 'bold still works');
+  assert.ok(evil.content.indexOf('<script>') < 0, 'raw script tag escaped (no live script)');
+  assert.ok(
+    evil.content.indexOf('&lt;script&gt;') >= 0 || evil.content.indexOf('alert(1)') >= 0,
+    'script content visible as escaped text',
+  );
+});
+
+test('T221 renderAgentInspect wires paintInspectLineBody for user (inspect-only)', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
+  assert.ok(fn, 'renderAgentInspect present');
+  const body = fn[0];
+  assert.ok(body.indexOf('paintInspectLineBody') >= 0,
+    'must call paintInspectLineBody for T221 user policy');
+  assert.ok(body.indexOf('T221') >= 0 || body.indexOf('user_query') >= 0
+    || body.indexOf('inspect-only') >= 0,
+    'T221 / inspect-only comment present');
+  // Must not change main paintBody user → still renderUserText only.
+  const paint = html.match(/function paintBody\([\s\S]*?\nfunction maybeCloseTargetAside/);
+  assert.ok(paint, 'paintBody present');
+  assert.ok(/role\s*===\s*['"]user['"][\s\S]*renderUserText/.test(paint[0]),
+    'main paintBody user path still renderUserText');
 });
 
 test('T217 turnsToLines preserves assistant role (no silent map to user/other)', function () {
