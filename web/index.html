@@ -229,12 +229,22 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    re-parse. --collapsed-max-height must match COLLAPSED_MAX_HEIGHT in JS.
    Pocket polish: clipped bubble = content slotted into a dark pocket;
    fade/tab/time are border-chrome, not in-flow competitors. */
-:root { --collapsed-max-height: 14rem; }
+:root {
+  --collapsed-max-height: 14rem;
+  --expand-tab-height: 1.05rem;
+  --expand-tab-clearance: 0.35rem; /* air above tab when expanded (🎯T166) */
+}
 /* Collapsed: border butts clipped content (time lives outside). */
 .msg.msg-clipped { padding-bottom: 0; }
 .msg.msg-clipped > .msg-body {
   max-height: var(--collapsed-max-height);
   overflow: hidden;
+}
+/* 🎯T166: expanded tall bubbles (tab present, not clipped) reserve bottom
+   padding so the last text line clears the inside-edge collapse tab.
+   Collapsed stays padding-bottom:0 above; short bubbles never get a tab. */
+.msg:has(> .msg-expand-tab):not(.msg-clipped) {
+  padding-bottom: calc(var(--expand-tab-height) + var(--expand-tab-clearance));
 }
 /* Pocket scrim: fade-to-dark flush to inner bottom of border (not to page bg).
    Height matches bubble corner radius so scrim stays a short edge cue.
@@ -257,7 +267,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    z-index above .msg-clip-fade for both .msg.user and .msg.jevons (tab must paint over scrim). */
 .msg-expand-tab {
   display: flex; align-items: center; justify-content: center;
-  width: 2.25rem; height: 1.05rem; padding: 0;
+  width: 2.25rem; height: var(--expand-tab-height); padding: 0;
   position: absolute; left: 50%; bottom: -1px; /* 1px into border; bulk sits inside */
   transform: translateX(-50%);
   margin: 0;

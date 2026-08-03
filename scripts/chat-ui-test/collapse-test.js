@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Hermetic perceptual test for clip-collapse of oversized chat bubbles
-// (🎯T106 + T66/T77). Serves the static web/ UI, drives addMsg() and the
+// (🎯T106 + T66/T77 + T166). Serves the static web/ UI, drives addMsg() and the
 // streaming append/seal path with short + huge + medium-tall content for
 // both roles, and asserts the clip model (not the old truncated re-parse
 // preview):
@@ -19,6 +19,8 @@
 //   * T66: latest request/response stay expanded when tall (incl. stream
 //     that grows short→tall)
 //   * T77: when either role ceases to be latest, auto-expand reverts to clip
+//   * T166: expanded+tab reserves bottom padding so last text clears ▲ tab;
+//     collapsed msg-clipped stays padding-bottom:0
 // Screenshots the collapsed and expanded states into artifacts/.
 //
 //   node scripts/chat-ui-test/collapse-test.js [--headed]
@@ -309,13 +311,48 @@ function assertNoShowMoreLess(text, label, failures) {
     await page.locator('#messages .msg.jevons').nth(1).locator('.msg-expand-tab').click();
     const expanded = await page.evaluate(() => {
       const j = window._els.jBig;
+      const body = j._body;
+      const tab = j._expandBtn;
+      const padBottom = getComputedStyle(j).paddingBottom;
+      const padPx = parseFloat(padBottom) || 0;
+      const tabH = tab ? tab.getBoundingClientRect().height : 0;
+      const bodyRect = body ? body.getBoundingClientRect() : null;
+      const tabRect = tab ? tab.getBoundingClientRect() : null;
+      // Gap from body bottom edge to tab top — should be ≥ 0 (text clears tab).
+      const bodyTabGap = (bodyRect && tabRect) ? (tabRect.top - bodyRect.bottom) : null;
+      // Also measure last text line box vs tab top.
+      let lastLineBottom = null;
+      if (body) {
+        const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null);
+        let n;
+        while ((n = walker.nextNode())) {
+          if (!n.nodeValue || !/\S/.test(n.nodeValue)) continue;
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          const rects = range.getClientRects();
+          for (let i = 0; i < rects.length; i++) {
+            const r = rects[i];
+            if (r.height < 0.5 || r.width < 0.5) continue;
+            if (lastLineBottom == null || r.bottom > lastLineBottom) lastLineBottom = r.bottom;
+          }
+        }
+      }
+      const lastLineTabGap = (lastLineBottom != null && tabRect)
+        ? (tabRect.top - lastLineBottom)
+        : null;
       return {
-        items: j._body.querySelectorAll('li').length,
+        items: body.querySelectorAll('li').length,
         clipped: j.classList.contains('msg-clipped'),
         expanded: j._expanded === true,
-        label: j._expandBtn ? j._expandBtn.getAttribute('aria-label') : '',
-        btnText: j._expandBtn ? j._expandBtn.textContent.trim() : '',
-        maxH: getComputedStyle(j._body).maxHeight,
+        hasTab: !!tab,
+        label: tab ? tab.getAttribute('aria-label') : '',
+        btnText: tab ? tab.textContent.trim() : '',
+        maxH: getComputedStyle(body).maxHeight,
+        padBottom,
+        padPx,
+        tabH,
+        bodyTabGap,
+        lastLineTabGap,
       };
     });
     if (expanded.items < 60) failures.push(`after expand, only ${expanded.items} of 60 items in DOM`);
@@ -329,6 +366,76 @@ function assertNoShowMoreLess(text, label, failures) {
       // expanded body should not keep the clip max-height
       failures.push(`after expand, body max-height still ${expanded.maxH}`);
     }
+    // 🎯T166: expanded tall + tab → bottom padding clears collapse tab.
+    if (!expanded.hasTab) failures.push('T166: expanded tall bubble lost expand tab');
+    if (!(expanded.padPx >= expanded.tabH - 0.5)) {
+      failures.push(
+        `T166: expanded padding-bottom ${expanded.padBottom} (${expanded.padPx}px) < tab height ${expanded.tabH}px`
+      );
+    }
+    if (expanded.lastLineTabGap == null || expanded.lastLineTabGap < -0.5) {
+      failures.push(
+        `T166: last text line overlaps collapse tab (gap=${expanded.lastLineTabGap})`
+      );
+    }
+    if (expanded.bodyTabGap != null && expanded.bodyTabGap < -0.5) {
+      failures.push(
+        `T166: msg-body bottom overlaps tab top (gap=${expanded.bodyTabGap})`
+      );
+    }
+
+    // T166: latest auto-expanded tall also clears tab; short still no tab.
+    const t166Latest = await page.evaluate(() => {
+      const latest = window._els.latest;
+      const short = window._els.short;
+      const tab = latest && latest._expandBtn;
+      const padPx = latest ? (parseFloat(getComputedStyle(latest).paddingBottom) || 0) : 0;
+      const tabH = tab ? tab.getBoundingClientRect().height : 0;
+      const tabRect = tab ? tab.getBoundingClientRect() : null;
+      let lastLineBottom = null;
+      if (latest && latest._body) {
+        const walker = document.createTreeWalker(latest._body, NodeFilter.SHOW_TEXT, null);
+        let n;
+        while ((n = walker.nextNode())) {
+          if (!n.nodeValue || !/\S/.test(n.nodeValue)) continue;
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          const rects = range.getClientRects();
+          for (let i = 0; i < rects.length; i++) {
+            const r = rects[i];
+            if (r.height < 0.5 || r.width < 0.5) continue;
+            if (lastLineBottom == null || r.bottom > lastLineBottom) lastLineBottom = r.bottom;
+          }
+        }
+      }
+      const lastLineTabGap = (lastLineBottom != null && tabRect)
+        ? (tabRect.top - lastLineBottom)
+        : null;
+      return {
+        latestExpanded: latest && latest._expanded === true,
+        latestClipped: latest && latest.classList.contains('msg-clipped'),
+        latestHasTab: !!tab,
+        padPx,
+        tabH,
+        lastLineTabGap,
+        shortHasTab: !!(short && (short._expandBtn || short.querySelector('.msg-expand-tab'))),
+      };
+    });
+    if (!t166Latest.latestExpanded || t166Latest.latestClipped) {
+      failures.push('T166 setup: latest tall not expanded without .msg-clipped');
+    }
+    if (!t166Latest.latestHasTab) failures.push('T166: latest tall missing collapse tab');
+    if (!(t166Latest.padPx >= t166Latest.tabH - 0.5)) {
+      failures.push(
+        `T166: latest expanded pad-bottom ${t166Latest.padPx}px < tab ${t166Latest.tabH}px`
+      );
+    }
+    if (t166Latest.lastLineTabGap == null || t166Latest.lastLineTabGap < -0.5) {
+      failures.push(
+        `T166: latest last line overlaps tab (gap=${t166Latest.lastLineTabGap})`
+      );
+    }
+    if (t166Latest.shortHasTab) failures.push('T166: short bubble grew expand tab');
 
     await page.screenshot({ path: path.join(OUT_DIR, 'collapse-expanded.png'), fullPage: true });
 
@@ -566,6 +673,6 @@ function assertNoShowMoreLess(text, label, failures) {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - pocket clip collapse (radius scrim + inside tab + time outside), T66/T77, short no tab, medium-tall gate');
+  console.log('ok - pocket clip collapse (radius scrim + inside tab + time outside), T66/T77, short no tab, medium-tall gate, T166 expand pad');
   console.log('screenshots: artifacts/collapse-preview.png, artifacts/collapse-expanded.png');
 })();
