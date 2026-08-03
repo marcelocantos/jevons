@@ -6,8 +6,6 @@ package rsi
 import (
 	"strings"
 	"testing"
-
-	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 func TestBullseyeFilerArgs(t *testing.T) {
@@ -17,8 +15,6 @@ func TestBullseyeFilerArgs(t *testing.T) {
 			saw = append([]string{}, args...)
 			return "ok\nids: T155\n", nil
 		},
-		// Empty open set so unique names track normally.
-		LoadOpen: func(cwd string) ([]targetfile.OpenLeaf, error) { return nil, nil },
 	}
 	id, err := f.File(FileArgs{
 		Cwd:        t.TempDir(),
@@ -40,19 +36,13 @@ func TestBullseyeFilerArgs(t *testing.T) {
 	}
 }
 
-// 🎯T222: RSI filer attaches to existing open near-dup instead of track.
-func TestBullseyeFilerAttachesNearDuplicate(t *testing.T) {
+// 🎯T226: RSI filer always tracks — never attaches to an existing open leaf.
+func TestBullseyeFilerAlwaysAllocatesNewID(t *testing.T) {
 	trackCalls := 0
 	f := BullseyeFiler{
 		Run: func(args ...string) (string, error) {
 			trackCalls++
 			return "ok\nids: T999\n", nil
-		},
-		LoadOpen: func(cwd string) ([]targetfile.OpenLeaf, error) {
-			return []targetfile.OpenLeaf{{
-				ID: "T220", Name: "Inspect user MD injects", Status: "identified",
-				Acceptance: []string{"user injects render as MD"},
-			}}, nil
 		},
 	}
 	id, err := f.File(FileArgs{
@@ -63,11 +53,11 @@ func TestBullseyeFilerAttachesNearDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "T220" {
-		t.Fatalf("id=%q want T220", id)
+	if id != "T999" {
+		t.Fatalf("id=%q want T999 (new allocation)", id)
 	}
-	if trackCalls != 0 {
-		t.Fatalf("trackCalls=%d want 0", trackCalls)
+	if trackCalls != 1 {
+		t.Fatalf("trackCalls=%d want 1", trackCalls)
 	}
 }
 

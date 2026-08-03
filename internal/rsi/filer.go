@@ -10,22 +10,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // BullseyeFiler shells out to the bullseye CLI (same path as jevons_target_file).
 type BullseyeFiler struct {
 	// Run is optional override for tests (args → stdout, err).
 	Run func(args ...string) (string, error)
-	// LoadOpen optional override for 🎯T222 near-dup attach (tests).
-	LoadOpen func(cwd string) ([]targetfile.OpenLeaf, error)
-	// Force skips near-dup attach (deliberate split residual).
-	Force bool
 }
 
 // File implements Filer via `bullseye commit --op track`.
-// 🎯T222: attaches to an existing open near-duplicate instead of allocating.
+// 🎯T226: always allocates a new id (near-dup file attach removed).
 func (f BullseyeFiler) File(args FileArgs) (string, error) {
 	cwd := strings.TrimSpace(args.Cwd)
 	name := strings.TrimSpace(args.Name)
@@ -47,23 +41,6 @@ func (f BullseyeFiler) File(args FileArgs) (string, error) {
 	acceptance := args.Acceptance
 	if len(acceptance) == 0 {
 		acceptance = []string{"Owner confirms the desired state is met."}
-	}
-
-	// 🎯T222 product gate at filer boundary (in addition to RSI cycle Dedupe).
-	if !f.Force {
-		load := f.LoadOpen
-		if load == nil {
-			load = targetfile.LoadOpenLeavesFromCwd
-		}
-		if leaves, lerr := load(abs); lerr == nil {
-			if dup := targetfile.FindDuplicate(leaves, targetfile.Proposal{
-				Name:       name,
-				Acceptance: acceptance,
-				MissionKey: targetfile.ExtractMissionKey(args.Context),
-			}); dup != nil {
-				return strings.TrimPrefix(dup.ExistingID, "🎯"), nil
-			}
-		}
 	}
 
 	cmdArgs := []string{

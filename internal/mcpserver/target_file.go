@@ -13,29 +13,23 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-
-	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // registerTargetFileTool exposes light-path bullseye filing for 🎯T93/T95
 // (target: asides). Runs `bullseye commit --op track` in a repo cwd.
-// 🎯T222: near-duplicate open leaves attach to the existing 🎯 id (no second id).
+// 🎯T226: always allocates a new id (near-dup file attach removed; no silent attach).
 func (s *Server) registerTargetFileTool() {
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_target_file",
-			mcp.WithDescription("File a bullseye target in a repo ledger (light path for owner target: asides — 🎯T93/T95). Requires bullseye CLI on PATH. Returns the new 🎯 id (or attaches to an existing near-duplicate open leaf — 🎯T222). After success, confirm the id to the owner; the UI auto-closes the filing aside when it sees the confirmation marker. Set force=true to deliberately allocate a second id for a same-mission split."),
+			mcp.WithDescription("File a bullseye target in a repo ledger (light path for owner target: asides — 🎯T93/T95). Requires bullseye CLI on PATH. Always allocates a new 🎯 id (🎯T226: no near-duplicate attach). After success, confirm the id to the owner; the UI auto-closes the filing aside when it sees the confirmation marker."),
 			mcp.WithString("cwd", mcp.Required(), mcp.Description("Repo directory containing bullseye.yaml (or parent to discover)")),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Desired-state assertion (target name)")),
 			mcp.WithString("acceptance", mcp.Description("Acceptance criterion (single string; more can be space-separated or repeated via context)")),
-			mcp.WithString("context", mcp.Description("Optional context / why. Optional mission_key:FOO tags same-mission for dedupe (🎯T222).")),
-			mcp.WithBoolean("force", mcp.Description("If true, skip near-duplicate attach and allocate a new id (deliberate split residual 🎯T222). Default false.")),
+			mcp.WithString("context", mcp.Description("Optional context / why.")),
 		),
 		s.handleTargetFile,
 	)
 }
-
-// loadOpenLeavesForFile discovers open leaves for dedupe. Tests may override.
-var loadOpenLeavesForFile = targetfile.LoadOpenLeavesFromCwd
 
 func (s *Server) handleTargetFile(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
@@ -43,7 +37,6 @@ func (s *Server) handleTargetFile(_ context.Context, req mcp.CallToolRequest) (*
 	name := strings.TrimSpace(str(args["name"]))
 	acceptance := strings.TrimSpace(str(args["acceptance"]))
 	contextText := strings.TrimSpace(str(args["context"]))
-	force := boolArg(args["force"])
 	if cwd == "" || name == "" {
 		return mcp.NewToolResultError("cwd and name are required"), nil
 	}
@@ -63,21 +56,7 @@ func (s *Server) handleTargetFile(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(fmt.Sprintf("cwd is not a directory: %s", abs)), nil
 	}
 
-	// 🎯T222: attach to existing open leaf when near-duplicate of name/acceptance/mission_key.
-	missionKey := targetfile.ExtractMissionKey(contextText)
-	if !force {
-		if leaves, lerr := loadOpenLeavesForFile(abs); lerr == nil {
-			if dup := targetfile.FindDuplicate(leaves, targetfile.Proposal{
-				Name:       name,
-				Acceptance: []string{acceptance},
-				MissionKey: missionKey,
-			}); dup != nil {
-				return mcp.NewToolResultText(targetfile.AttachMessage(dup, name)), nil
-			}
-		}
-		// Ledger missing / unreadable: fall through to track (no silent fail of filing).
-	}
-
+	// 🎯T226: always track — never attach to an existing open leaf by name/acceptance.
 	cmdArgs := []string{
 		"commit", "--op", "track",
 		"--cwd", abs,
