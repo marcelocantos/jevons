@@ -135,6 +135,25 @@ func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 	}
 }
 
+// 🎯T98: persona carries alter-ego identity pointer (draft doctrine linked).
+func TestDefaultPersonaCEOAlterEgo(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"alter ego",
+		"T98",
+		"ceo-alter-ego.md",
+		"not a passive butler",
+		"CEO seat",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("persona missing T98 alter-ego marker %q", want)
+		}
+	}
+}
+
 // 🎯T104: local master ≠ origin/master; no PR-as-done default.
 func TestDefaultPersonaLocalDeliveryDoctrine(t *testing.T) {
 	p, err := Default().Persona()
@@ -279,6 +298,9 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"T112",
 		"T67",
 		"T29-class",
+		"alter ego", // T98
+		"T98",
+		"ceo-alter-ego.md",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)

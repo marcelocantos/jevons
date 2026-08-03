@@ -4,6 +4,11 @@ Jevons is a remote control system for coding agents — a butler/CEO over
 a fleet of agents. It consists of a coordinator daemon (`jevonsd`) and a
 browser chat UI (also wrapped by the iOS app).
 
+**CEO identity (🎯T98):** the overseer is the owner's **alter ego** in the
+CEO seat (default action/bias/judgment). Doctrine draft for owner review:
+`docs/design/ceo-alter-ego.md`. This guide carries the operational
+slices workers must obey (fleet spawn, local delivery, PO hierarchy, filing).
+
 Agent backends are **pluggable via claudia** (🎯T148). The default is
 Grok Build (`ProviderGrok`: Task mode and Session ACP). Overseer or PO
 can choose another claudia-supported backend **per spawn** (e.g. Claude)

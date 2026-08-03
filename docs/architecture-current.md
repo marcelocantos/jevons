@@ -135,10 +135,12 @@ default install as single-trusted-operator, single-machine.
 
 ## Voice
 
-De-emphasized pending the 🎯T37 decision (adopt xAI Voice Agent Builder
-vs DIY). The web mic was removed — dictation happens via Wispr Flow into
-the text field. Dormant machinery remains in `/ws/voice`,
-`internal/server/voice*.go`, and `ios/…/VoiceManager.swift`.
+De-emphasized. 🎯T37 decided **no-go** on xAI Voice Agent Builder as the
+primary stack (decision note: [analysis/voice-agent-builder-eval.md](analysis/voice-agent-builder-eval.md)).
+Dictation is Wispr Flow into the text field. When full-duplex resumes,
+prefer client→Grok Speech-to-Speech with ephemeral tokens (🎯T22 shape),
+not the Builder console/telephony product. Dormant machinery remains in
+`/ws/voice`, `internal/server/voice*.go`, and `ios/…/VoiceManager.swift`.
 
 ## Package map
 
