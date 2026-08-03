@@ -2846,11 +2846,15 @@ function maybeCloseTargetAside(text) {
   }
 }
 // User bubbles: preserve plain text, promote lines of `> quote` to <blockquote>,
-// and render 🎯T76 [image: <id>] markers as inline images.
+// and render 🎯T76/T224 [image: <id>] markers as server-served thumbnails.
+// Full-res residual stays at /api/images/{id}; browser hydrate uses /thumb only.
 function renderUserText(t) {
   const s = String(t == null ? '' : t);
   if (/\[image:\s*[a-f0-9]+\]/i.test(s)) return renderUserTextWithImages(s);
   return renderUserTextQuotes(s);
+}
+function imageThumbSrc(id) {
+  return '/api/images/' + id + '/thumb';
 }
 function renderUserTextWithImages(s) {
   const re = /\[image:\s*([a-f0-9]+)\]/gi;
@@ -2860,7 +2864,8 @@ function renderUserTextWithImages(s) {
   while ((m = re.exec(s)) !== null) {
     html += renderUserTextQuotes(s.slice(last, m.index));
     const id = m[1].toLowerCase();
-    html += '<img class="chat-img" src="/api/images/' + escHtml(id) + '" alt="pasted image ' + escHtml(id) + '" loading="lazy">';
+    html += '<img class="chat-img" src="' + escHtml(imageThumbSrc(id)) +
+      '" alt="pasted image ' + escHtml(id) + '" loading="lazy">';
     last = m.index + m[0].length;
   }
   html += renderUserTextQuotes(s.slice(last));
@@ -4755,9 +4760,10 @@ input.addEventListener('focus', () => {
   ensureWisprSeed();
   syncComposerSeedClass();
 });
-// 🎯T76: image paste → upload → composer chip → [image: id] on send.
+// 🎯T76/T224: image paste → upload → composer chip → [image: id] on send.
+// Upload is immediate (not blob:-only); journal marker hydrates thumbs later.
 // 🎯T80: bulk paste/dictation insert tidy (not keystroke mid-edit).
-const pendingImages = []; // { id, url, objectUrl? }
+const pendingImages = []; // { id, url, thumbUrl, objectUrl?, marker }
 const composerImagesEl = document.getElementById('composer-images');
 function renderComposerImages() {
   if (!composerImagesEl) return;
@@ -4766,7 +4772,8 @@ function renderComposerImages() {
     const chip = document.createElement('div');
     chip.className = 'img-chip';
     const el = document.createElement('img');
-    el.src = img.objectUrl || img.url;
+    // Prefer local objectUrl for instant chip; fall back to server thumb.
+    el.src = img.objectUrl || img.thumbUrl || img.url;
     el.alt = 'attachment ' + img.id;
     chip.appendChild(el);
     const btn = document.createElement('button');
@@ -4805,7 +4812,13 @@ input.addEventListener('paste', (e) => {
         try {
           const objectUrl = URL.createObjectURL(file);
           const meta = await uploadPastedImage(file);
-          pendingImages.push({ id: meta.id, url: meta.url, objectUrl: objectUrl, marker: meta.marker });
+          pendingImages.push({
+            id: meta.id,
+            url: meta.url,
+            thumbUrl: meta.thumb_url || imageThumbSrc(meta.id),
+            objectUrl: objectUrl,
+            marker: meta.marker,
+          });
           renderComposerImages();
         } catch (err) {
           console.error('image paste upload failed', err);

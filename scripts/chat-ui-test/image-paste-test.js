@@ -1,8 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic 🎯T76: renderUserText turns [image: id] into <img>; upload API
-// covered by Go tests. This checks the shipped UI render path.
+// Hermetic 🎯T76/T224: renderUserText turns [image: id] into thumb <img>;
+// upload/journal/thumb API covered by Go tests (TestImageUploadJournalHydrateThumb).
 //   node scripts/chat-ui-test/image-paste-test.js
 
 'use strict';
@@ -20,8 +20,9 @@ function startServer() {
     const srv = http.createServer((req, res) => {
       const u = new URL(req.url, 'http://127.0.0.1');
       if (u.pathname.startsWith('/api/images/')) {
-        res.writeHead(200, { 'Content-Type': 'image/png' });
-        res.end(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+        // Thumb path ends with /thumb; full-res residual also stubbed.
+        res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+        res.end(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
         return;
       }
       const rel = u.pathname === '/' ? '/index.html' : u.pathname;
@@ -50,18 +51,24 @@ function startServer() {
       window.addMsg('user', '[image: deadbeefcafebabe] look at this');
       const img = document.querySelector('#messages .msg.user img.chat-img');
       if (!img) return { ok: false, reason: 'no img' };
-      if (img.getAttribute('src') !== '/api/images/deadbeefcafebabe') {
-        return { ok: false, reason: 'src ' + img.getAttribute('src') };
+      // 🎯T224: browser hydrate uses thumb URL, not full-res / blob:.
+      const want = '/api/images/deadbeefcafebabe/thumb';
+      if (img.getAttribute('src') !== want) {
+        return { ok: false, reason: 'src ' + img.getAttribute('src') + ' want ' + want };
       }
       const html = window.renderUserText('[image: abcdef0123456789]');
       if (html.indexOf('chat-img') < 0) return { ok: false, reason: 'renderUserText' };
+      if (html.indexOf('/api/images/abcdef0123456789/thumb') < 0) {
+        return { ok: false, reason: 'no thumb in html ' + html };
+      }
+      if (html.indexOf('blob:') >= 0) return { ok: false, reason: 'blob url in hydrate' };
       return { ok: true };
     });
     if (!ok.ok) {
       console.error('FAIL', ok);
       process.exitCode = 1;
     } else {
-      console.log('PASS image-paste-test');
+      console.log('PASS image-paste-test (T224 thumbs)');
     }
   } finally {
     await browser.close();
