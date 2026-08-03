@@ -108,6 +108,13 @@ type Server struct {
 	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
 	agentsWatchCancel context.CancelFunc
 
+	// frontierCwd is the primary workdir for bullseye ledger discovery (🎯T131).
+	// Path resolution always goes through bullseye CLI — never hard-coded yaml.
+	frontierCwd string
+	// frontierWatchCancel / frontierWatchPath: fsnotify on resolved ledger (🎯T131).
+	frontierWatchCancel context.CancelFunc
+	frontierWatchPath   string
+
 	// workers is the 🎯T8.2 observability tracker (SQLite + SSE hub).
 	workers *workers.Tracker
 
@@ -285,6 +292,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
 	mux.HandleFunc("POST /api/asides", s.handleCreateAside)       // 🎯T136: register purpose=aside in fleet
 	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside) // 🎯T152: dismiss fleet aside on target filed
+	mux.HandleFunc("GET /api/frontier", s.handleFrontier) // 🎯T131: live bullseye frontier table
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)

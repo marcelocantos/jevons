@@ -173,6 +173,12 @@ func main() {
 
 	srv := server.New(cli.Version, cfg.StateDir)
 	srv.SetOverseerName(cfg.OverseerName)
+	// 🎯T131: primary project workdir for bullseye frontier discovery (CLI open).
+	if absWD, err := filepath.Abs(cfg.WorkDir); err == nil {
+		srv.SetFrontierCwd(absWD)
+	} else {
+		srv.SetFrontierCwd(cfg.WorkDir)
+	}
 
 	// Durable conversation log (🎯T30.1): every chat line is fsynced here
 	// and replayed to reconnecting clients — no conversation is ever lost.
