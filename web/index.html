@@ -490,28 +490,16 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 #degraded-banner.visible { display: block; }
 #agents { flex: 1; overflow-y: auto; padding: 8px 12px; min-height: 60px; max-height: 45%; }
-/* 🎯T200: domain portfolio groups (declarative membership, no GM) */
-.portfolio-panel { margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
-.portfolio-group { margin-bottom: 6px; }
-.portfolio-header {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text-muted); padding: 2px 0 4px;
+/* 🎯T200: portfolio virtual nodes in fleet tree — folder lead, not status dot */
+.agent-node.agent-portfolio { cursor: default; }
+.agent-node.agent-portfolio .agent-name {
+  color: var(--text-dim); font-weight: 600; font-size: 12px;
+  text-transform: uppercase; letter-spacing: 0.04em;
 }
-.portfolio-title { color: var(--text-dim); }
-.portfolio-count {
-  margin-left: auto; font-family: var(--mono); font-weight: 500;
-  font-size: 10px; color: var(--text-muted);
+.agent-node .agent-folder {
+  flex-shrink: 0; width: 14px; text-align: center; font-size: 12px; line-height: 1;
+  opacity: 0.9;
 }
-.portfolio-members { display: flex; flex-direction: column; gap: 1px; }
-.portfolio-member {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 11px; padding: 2px 4px; border-radius: 4px;
-  color: var(--text-dim);
-}
-.portfolio-member-label { font-family: var(--mono); color: var(--text); }
-.portfolio-member-meta { margin-left: auto; font-size: 10px; color: var(--text-muted); }
-.portfolio-empty { font-style: italic; color: var(--text-muted); }
 /* 🎯T131: RHS bottom — tabbed Frontier | Transcript (T124 coexist) */
 #rhs-bottom {
   display: flex; flex-direction: column; flex: 1; min-height: 140px; max-height: 55%;
@@ -3120,38 +3108,40 @@ let lastFleetAgents = []; // for 🎯T124 auto-select on new aside
 // FOUC stuck + empty transcript.
 let selectedAgent = null;
 function refreshAgents() {
-  // 🎯T200: portfolios + agents in parallel; missing portfolios stay calm.
+  // 🎯T200: portfolios woven into fleet tree under overseer (not a separate panel).
   Promise.all([
     fetch('/api/agents').then(r => r.json()),
     fetch('/api/portfolios').then(r => r.ok ? r.json() : { portfolios: [] }).catch(function () { return { portfolios: [] }; }),
   ]).then(function (pair) {
-    const agents = pair[0];
+    const agents = Array.isArray(pair[0]) ? pair[0] : [];
     const portfolioPayload = pair[1];
     agentsEl.innerHTML = '';
-    // Portfolio group chrome above the fleet tree (declarative membership).
-    if (typeof PortfolioGroup !== 'undefined') {
-      const ph = PortfolioGroup.renderPortfoliosHtml(portfolioPayload);
-      if (ph) {
-        const wrap = document.createElement('div');
-        wrap.innerHTML = ph;
-        while (wrap.firstChild) agentsEl.appendChild(wrap.firstChild);
-      }
+    // Display-only weave: virtual portfolio parents under overseer; lineage_parent kept.
+    let byParent = {};
+    let treeNodes = agents;
+    if (typeof PortfolioGroup !== 'undefined' && PortfolioGroup.weaveFleetTree) {
+      const woven = PortfolioGroup.weaveFleetTree(agents, portfolioPayload);
+      treeNodes = woven.nodes || agents;
+      byParent = woven.byParent || {};
+    } else {
+      agents.forEach(a => {
+        const p = (a && a.parent) || '';
+        (byParent[p] = byParent[p] || []).push(a);
+      });
     }
-    const byParent = {};
     const agentsByName = {};
-    (Array.isArray(agents) ? agents : []).forEach(a => {
-      const p = a.parent || '';
-      (byParent[p] = byParent[p] || []).push(a);
+    treeNodes.forEach(a => {
       if (a && a.name) agentsByName[a.name] = a;
     });
     // 🎯T124: new purpose=aside → auto-select and show transcript pane.
+    // Use registry agents (not virtual portfolio nodes) for auto-select.
     if (typeof AgentTranscript !== 'undefined') {
       const auto = AgentTranscript.pickAutoSelect(lastFleetAgents, agents, selectedAgent);
       if (auto && auto !== selectedAgent) {
         selectedAgent = auto;
       }
     }
-    lastFleetAgents = Array.isArray(agents) ? agents.slice() : [];
+    lastFleetAgents = agents.slice();
     renderTree(byParent, '', agentsEl, agentsByName);
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
@@ -3184,39 +3174,58 @@ function updateFleetProgress(agents) {
 function renderTree(byParent, parent, container, agentsByName) {
   // 🎯T68: sibling order is deliberate — name-sorted under each parent,
   // independent of Go map iteration or poll order of the parent group.
+  // 🎯T200: portfolio virtual nodes sort with agents; folder lead not status dot.
   agentsByName = agentsByName || {};
   const children = (byParent[parent] || []).slice().sort((a, b) =>
     String(a.name || '').localeCompare(String(b.name || '')));
   children.forEach(a => {
+    const isPortfolio = (typeof PortfolioGroup !== 'undefined' && PortfolioGroup.isPortfolioNode)
+      ? PortfolioGroup.isPortfolioNode(a)
+      : !!(a && (a.is_portfolio || a.purpose === 'portfolio'));
     // 🎯T115/T118: overseer/aside omit path; workers prefer progress secondary
     // when workdir matches parent; path stays for roots/POs/distinct workdir.
     const parentAgent = parent ? agentsByName[parent] : null;
     const hasChildren = !!(byParent[a.name] && byParent[a.name].length);
-    const row = (typeof FleetRow !== 'undefined')
-      ? FleetRow.fleetRowModel(a, {
-          parentWorkdir: parentAgent ? (parentAgent.workdir || '') : '',
-          hasChildren: hasChildren,
-        })
-      : { title: a.name || '', dirHtml: formatAgentDir(a.workdir || ''), omitPath: false, isAside: false, secondaryHtml: '', secondaryKind: 'path' };
+    let row;
+    if (isPortfolio && typeof PortfolioGroup !== 'undefined' && PortfolioGroup.portfolioRowChrome) {
+      row = PortfolioGroup.portfolioRowChrome(a);
+      row.isAside = false;
+      row.showPath = false;
+    } else if (typeof FleetRow !== 'undefined') {
+      row = FleetRow.fleetRowModel(a, {
+        parentWorkdir: parentAgent ? (parentAgent.workdir || '') : '',
+        hasChildren: hasChildren,
+      });
+    } else {
+      row = { title: a.name || '', dirHtml: formatAgentDir(a.workdir || ''), omitPath: false, isAside: false, secondaryHtml: '', secondaryKind: 'path' };
+    }
     const node = document.createElement('div');
     node.className = 'agent-node'
       + (a.name === selectedAgent ? ' selected' : '')
-      + (row.isAside ? ' agent-aside' : '');
+      + (row.isAside ? ' agent-aside' : '')
+      + (isPortfolio ? ' agent-portfolio' : '');
     node.dataset.agent = a.name;
     node.dataset.parent = parent || '';
     if (row.isAside) node.dataset.purpose = 'aside';
+    if (isPortfolio) node.dataset.purpose = 'portfolio';
     if (row.secondaryKind) node.dataset.secondary = row.secondaryKind;
-    let html = '<span class="agent-dot '+escHtml(a.status || '')+'"></span>'
-      + '<span class="agent-name">'+escHtml(row.title)+'</span>';
-    // Secondary line: path (T84) or progress/status (T118). Aside has none.
-    const secHtml = row.secondaryHtml || (row.showPath ? row.dirHtml : '');
-    const secKind = row.secondaryKind || (secHtml ? 'path' : '');
+    // 🎯T200: portfolio → folder icon; agents keep green/grey status dot.
+    const lead = (typeof PortfolioGroup !== 'undefined' && PortfolioGroup.rowLeadHtml)
+      ? PortfolioGroup.rowLeadHtml(a)
+      : ('<span class="agent-dot '+escHtml(a.status || '')+'"></span>');
+    let html = lead + '<span class="agent-name">'+escHtml(row.title)+'</span>';
+    // Secondary line: path (T84) or progress/status (T118). Aside/portfolio have none.
+    const secHtml = isPortfolio ? '' : (row.secondaryHtml || (row.showPath ? row.dirHtml : ''));
+    const secKind = isPortfolio ? '' : (row.secondaryKind || (secHtml ? 'path' : ''));
     if (secHtml && secKind) {
       const cls = secKind === 'path' ? 'agent-dir' : ('agent-dir agent-' + secKind);
       html += '<span class="'+cls+'">'+secHtml+'</span>';
     }
     node.innerHTML = html;
-    node.onclick = () => selectAgent(a.name);
+    // Virtual portfolio nodes are not selectable agents (display chrome only).
+    if (!isPortfolio) {
+      node.onclick = () => selectAgent(a.name);
+    }
     container.appendChild(node);
     if (byParent[a.name] && byParent[a.name].length) {
       const sub = document.createElement('div');
