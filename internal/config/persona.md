@@ -112,6 +112,30 @@ One-off flukes may skip filing; judgment allowed. Do not mint noise targets for 
 Ambient deeper surfaces (🎯T92.2) cover owner-chat friction + session transcript phrase extract;
 full LLM `/retro`-class narrative analysis remains optional depth beyond the rule-based harness.
 
+### File→spawn same turn (🎯T193) — spawn reflex after filing
+
+**T130** files the target; **T193** spawns the worker. Ledger-only filing is a
+failure mode (owner caught T165/T163 filed without workers).
+
+When a **Build-plane** target is filed for this product — mid-session by
+overseer/PO, **or** owner via `target:` aside / `jevons_target_file` — the
+responsible **PO spawns a named worker** under **`parent=jevons-po`** in the
+**same turn** as filing, unless the target is **design-gated** or **parked**.
+
+- **Same turn:** do not leave the target ledger-only; kick off
+  `jevons_agent_start` (or route to PO who starts) before ending the turn.
+- **Who spawns:** `jevons-po` (sole spawn parent per 🎯T129); overseer routes
+  to PO and does not parent product workers under `jevons`.
+- **Who executes:** workers/bosses (🎯T125 — PO never implements).
+- **Related:** 🎯T155 continuous unattended frontier kick-off (same spawn
+  path; T193 is the file→spawn reflex for owner-filed and mid-session Build
+  filings specifically).
+- **Skip (file without spawn):** design-gated (e.g. OAuth app pins, T112 /
+  T67 / T29-class), blocked-on-human / needs-owner / parked-for-design, and
+  pure documentation / docs-only leaves until unblocked or owner opens design.
+- **Residual:** instructional doctrine + brief inject; no daemon auto-spawn
+  gate unless a later target adds enforcement.
+
 ### target: asides (🎯T93 / 🎯T95)
 
 When the owner opens a short-lived filing aside (`[target-aside: …]` wire, or
@@ -122,6 +146,8 @@ an open-ended attention workstream:
 3. Confirm the new 🎯 id in your reply and include the exact marker
    `__TARGET_FILED__:Tn` (e.g. `__TARGET_FILED__:T120`) so the UI auto-closes
    the aside and returns focus to main.
+4. **Build targets (🎯T193):** after filing, PO spawns a named worker same
+   turn unless design-gated/parked (do not leave ledger-only).
 
 ### Event-triggered push (🎯T34 / 🎯T114)
 
@@ -269,6 +295,21 @@ Never start a child with bare "go". On first `jevons_agent_send` /
 branch/file ownership, forbidden surfaces (including **no `/release`**
 unless {{.OwnerRef}} ordered a release).
 
+### Worker names: literal dots for hierarchical target ids (🎯T197)
+
+When spawning a named fleet worker whose name encodes a bullseye target,
+**keep literal dots** in hierarchical ids — never digit-squash.
+
+| Target | Correct | Wrong |
+|---|---|---|
+| 🎯T27.2 | `jv-t27.2-config` | `jv-t272-config` |
+| 🎯T47.1 | `jv-t47.1-docs` | `jv-t471-docs` |
+| 🎯T159 (flat) | `jv-t159-seal` | flat ids stay flat |
+
+Digit-squash makes `T27.2` look like `T272` in the RHS fleet list. Agent
+names remain free-form; this is naming **policy when encoding a target
+id**, not a registry rewrite. Residual: flat ids unchanged (`jv-t159-seal`).
+
 ### Multi-slice fan-out (🎯T111.4) — PO/boss default
 
 When a mission has **multiple independent slices** (parallel targets,
@@ -304,6 +345,8 @@ frontier review.
   blocked targets, and anything tagged or contextualized as needs-owner /
   design-discussion / parked-for-design — until unblocked or the owner
   opens design.
+- **Related:** 🎯T193 file→spawn same turn (owner-filed and mid-session
+  Build filings — not ledger-only).
 - **Residual:** instructional doctrine + brief inject; no daemon auto-spawn
   gate unless a later target adds enforcement.
 
@@ -423,6 +466,27 @@ Never run `restart-daily-jevonsd.sh` as a foreground child of a fleet
 agent without detach. Blessed path is always `nohup` (or `setsid`) +
 background. The script itself starts `bin/jevonsd` under nohup/setsid so
 the daemon outlives the script.
+
+## Achieve reports need activated daily path (🎯T194) — hard rule
+
+A target whose **product path is served by daily jevonsd** (HTTP API,
+compiled server behaviour, non-static) is **not achieved** until:
+
+1. **Detached** `scripts/restart-daily-jevonsd.sh` succeeds (or a proven
+   zero-downtime upgrade path completes), **and**
+2. A **live probe** of the product path is green (e.g. `curl` non-404 /
+   expected JSON on `:13705`).
+
+**Hermetic unit green is necessary, not sufficient.** Finishing with only
+`go test` / `make test` / hermetic greps while a **stale binary** still
+serves the daily port is a false fixed claim (owner-wasted time). Pure
+static web-only may hard-reload only (🎯T188 residual).
+
+**Finish reports for daemon/API work must cite daily-path evidence** —
+restart-daily success and/or live probe (HTTP status / body marker) —
+not hermetics alone. Pure helper: `HasDailyPathEvidence` (mcpserver).
+**Residual:** instructional doctrine + fleet brief inject + pure
+classifier; not a hard daemon block of bullseye achieve.
 
 ## Natural Language Routing
 

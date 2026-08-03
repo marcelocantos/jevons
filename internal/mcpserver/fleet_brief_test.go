@@ -51,6 +51,17 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"T112",
 		"T67",
 		"T29-class",
+		// 🎯T193 file→spawn same turn
+		"File→spawn same turn",
+		"T193",
+		"Build-plane",
+		"same turn",
+		"named worker",
+		"ledger-only",
+		"target:",
+		"design-gated",
+		"blocked-on-human",
+		"docs-only",
 		"PO never implements",
 		"T125",
 		"spawn-only for Build work",
@@ -79,6 +90,14 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"hard-reloadable UI",
 		"proven API",
 		"daily path",
+		// 🎯T197 worker names: literal dots, never digit-squash
+		"Worker names: literal dots for hierarchical ids",
+		"T197",
+		"jv-t27.2-config",
+		"jv-t272-config",
+		"digit-squash",
+		"jv-t159-seal",
+		"literal dots",
 		"implement the fix",
 	} {
 		if !strings.Contains(out, want) {

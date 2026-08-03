@@ -169,6 +169,18 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Skip design-gated (T112 / T67 / T29-class) and blocked targets until
   unblocked or owner opens design. Instructional residual. Persona +
   agents-guide + fleet standing brief.
+- **File→spawn same turn (🎯T193):** when a **Build-plane** target is filed
+  (owner `target:` aside / mid-session), **PO spawns a named worker** under
+  **`parent=jevons-po`** in the **same turn** as filing — not ledger-only.
+  T130 files; T193 spawns. Skip design-gated / blocked-on-human /
+  parked-for-design / pure documentation. Related: 🎯T155 continuous
+  frontier kick-off. Instructional residual. Persona + agents-guide +
+  fleet standing brief.
+- **Worker names literal dots (🎯T197):** hierarchical target ids in fleet
+  worker names keep **literal dots** — never digit-squash
+  (`jv-t27.2-config` not `jv-t272-config`). Flat ids unchanged
+  (`jv-t159-seal`). Names free-form otherwise. Persona + agents-guide +
+  fleet standing brief.
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /
@@ -186,6 +198,17 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   the bounce). Script path: `scripts/restart-daily-jevonsd.sh`. Pure
   static web-only may hard-reload only. Residual: session drop until
   T40/T171. Persona + agents-guide.
+- **Achieve reports need activated daily path (🎯T194):** a target whose
+  product path is served by daily jevonsd (HTTP API, compiled server,
+  non-static) is **not achieved** until detached `restart-daily-jevonsd`
+  succeeds (or proven zero-downtime upgrade) **and** a live probe of the
+  product path is green (e.g. curl non-404). Hermetic unit green is
+  **necessary not sufficient** — hermetics alone do not close daemon/API
+  work while a stale binary may still serve. Finish reports must cite
+  daily-path evidence (restart success and/or live probe). Pure web
+  static may hard-reload only (T188). Pure helper: `HasDailyPathEvidence`.
+  Residual: instructional + pure classifier; not a hard achieve block.
+  Persona + agents-guide + fleet standing brief.
 
 ## Project structure
 

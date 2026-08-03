@@ -306,6 +306,56 @@ func TestDefaultPersonaUnattendedFrontierAutoSpawn(t *testing.T) {
 	}
 }
 
+// 🎯T193: Build filings spawn a named worker same turn (not ledger-only).
+func TestDefaultPersonaFileToSpawnSameTurn(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"File→spawn same turn",
+		"T193",
+		"Build-plane",
+		"same turn",
+		"parent=jevons-po",
+		"named worker",
+		"ledger-only",
+		"target:",
+		"design-gated",
+		"parked",
+		"pure documentation",
+		"docs-only",
+		"T130",
+		"T155",
+		"instructional",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T193 marker %q", want)
+		}
+	}
+}
+
+// 🎯T197: hierarchical worker names keep literal dots; never digit-squash.
+func TestDefaultPersonaWorkerNamesLiteralDots(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Worker names: literal dots for hierarchical target ids",
+		"T197",
+		"jv-t27.2-config",
+		"jv-t272-config",
+		"digit-squash",
+		"jv-t159-seal",
+		"literal dots",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T197 marker %q", want)
+		}
+	}
+}
+
 // 🎯T176: overseer status language — in progress for workers; live only for product-visible.
 func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
 	p, err := Default().Persona()
@@ -333,7 +383,7 @@ func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
 	}
 }
 
-// 🎯T78/T104/T125/T129/T130/T155/T176: agents-guide is the PO/worker product surface that inherits doctrine.
+// 🎯T78/T104/T125/T129/T130/T155/T193/T176: agents-guide is the PO/worker product surface that inherits doctrine.
 func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	// agents-guide.md is repo-root product docs consumed by PO/workers.
 	path := filepath.Join("..", "..", "agents-guide.md")
@@ -386,6 +436,18 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"T112",
 		"T67",
 		"T29-class",
+		// 🎯T193 file→spawn same turn
+		"File→spawn same turn",
+		"T193",
+		"Build-plane",
+		"same turn",
+		"named worker",
+		"ledger-only",
+		"target:",
+		"design-gated",
+		"blocked-on-human",
+		"pure documentation",
+		"docs-only",
 		"alter ego", // T98
 		"T98",
 		"ceo-alter-ego.md",
@@ -420,6 +482,13 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"hard-reloadable UI",
 		"proven API",
 		"daily path",
+		// 🎯T197 worker names: literal dots
+		"Worker names: literal dots for hierarchical target ids",
+		"T197",
+		"jv-t27.2-config",
+		"jv-t272-config",
+		"digit-squash",
+		"jv-t159-seal",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)
@@ -427,7 +496,7 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	}
 }
 
-// 🎯T125/T129/T130/T155/T176: product AGENTS.md (and CLAUDE thin import) carry fleet doctrine.
+// 🎯T125/T129/T130/T155/T193/T176: product AGENTS.md (and CLAUDE thin import) carry fleet doctrine.
 func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 	path := filepath.Join("..", "..", "AGENTS.md")
 	b, err := os.ReadFile(path)
@@ -467,6 +536,17 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"T112",
 		"T67",
 		"T29-class",
+		// 🎯T193 file→spawn same turn
+		"File→spawn same turn",
+		"T193",
+		"Build-plane",
+		"same turn",
+		"named worker",
+		"ledger-only",
+		"target:",
+		"design-gated",
+		"blocked-on-human",
+		"pure documentation",
 		// 🎯T31.1
 		"Oracle-first completion",
 		"T31",
@@ -497,6 +577,13 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"hard-reloadable UI",
 		"proven API",
 		"daily path",
+		// 🎯T197 worker names: literal dots
+		"Worker names literal dots",
+		"T197",
+		"jv-t27.2-config",
+		"jv-t272-config",
+		"digit-squash",
+		"jv-t159-seal",
 	} {
 		if !strings.Contains(a, want) {
 			t.Errorf("AGENTS.md missing doctrine marker %q", want)
@@ -509,7 +596,7 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		t.Fatalf("CLAUDE.md: %v", err)
 	}
 	if !strings.Contains(string(cb), "AGENTS.md") {
-		t.Error("CLAUDE.md must import AGENTS.md so T125/T129/T130/T155 doctrine is on the instruction surface")
+		t.Error("CLAUDE.md must import AGENTS.md so T125/T129/T130/T155/T193 doctrine is on the instruction surface")
 	}
 }
 

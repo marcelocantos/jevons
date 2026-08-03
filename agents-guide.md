@@ -127,6 +127,21 @@ allows it; until then this convention plus jevons MCP tools is the
 enforced path. Brief every new agent with target IDs and ownership —
 never bare "go".
 
+### Worker names: literal dots for hierarchical target ids (🎯T197)
+
+Agent names are free-form. When a name encodes a **hierarchical** bullseye
+target id, **keep the literal dots** — never digit-squash.
+
+| Target | Correct worker name | Wrong (digit-squash) |
+|---|---|---|
+| 🎯T27.2 | `jv-t27.2-config` | `jv-t272-config` |
+| 🎯T47.1 | `jv-t47.1-docs` | `jv-t471-docs` |
+| 🎯T159 (flat) | `jv-t159-seal` | unchanged — flat ids stay flat |
+
+Digit-squash makes `T27.2` vs `T272` (or `T47.1` vs `T471`) ambiguous in
+the RHS fleet list. Residual: flat ids (no sub-target segment) stay as
+today (`jv-t159-seal`). Optional suffix (`-config`, `-docs`) is free-form.
+
 ### Multi-slice fan-out (🎯T111.4)
 
 PO/boss agents on **multi-slice** missions must spawn `jevons_agent_start`
@@ -147,6 +162,25 @@ fleet worker** under **`parent=jevons-po`** in the **same operational cycle**
 - Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
 - **Skip:** design-gated (T112 / T67 / T29-class) and blocked targets stay
   unspawned until unblocked or owner opens design.
+- **Related:** 🎯T193 file→spawn same turn (owner-filed and mid-session Build).
+- **Residual:** instructional; no daemon auto-spawn unless later enforced.
+
+### File→spawn same turn (🎯T193)
+
+**T130** files the target; **T193** spawns the worker. Do **not** leave
+Build filings **ledger-only**.
+
+When a **Build-plane** target is filed — owner via `target:` aside /
+`jevons_target_file`, or mid-session by overseer/PO — **`jevons-po` spawns a
+named worker** under **`parent=jevons-po`** in the **same turn** as filing
+unless the target is design-gated or parked.
+
+- **Same turn:** `jevons_agent_start` (or route to PO) before the turn ends.
+- Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
+- **Skip (file without spawn):** design-gated (e.g. OAuth app pins, T112 /
+  T67 / T29-class), blocked-on-human / needs-owner / parked-for-design, and
+  pure documentation / docs-only.
+- **Related:** 🎯T155 continuous unattended frontier kick-off.
 - **Residual:** instructional; no daemon auto-spawn unless later enforced.
 
 ### PO never implements (🎯T125)
@@ -298,6 +332,26 @@ fleet agent without detach. The script: `make` → `brew services stop jevons`
 wait `/health` + `/api/frontier` non-404 → exit 0 only when serving.
 Pure static web-only changes may hard-reload only. Residual: session drop
 until T40/T171.
+
+## Achieve reports need activated daily path (🎯T194)
+
+Daemon/API product is **not achieved on hermetics alone**. When the
+product path is served by daily `jevonsd` (HTTP API, compiled server,
+non-static):
+
+1. Detached `scripts/restart-daily-jevonsd.sh` must succeed (or proven
+   zero-downtime upgrade), **and**
+2. A **live probe** of the product path must be green (e.g. `curl`
+   non-404 / expected body on the daily port).
+
+**Hermetic unit green is necessary not sufficient.** Do not retire or
+claim fixed while a stale binary may still serve. Finish reports must
+cite **daily-path evidence** (restart-daily success and/or live probe),
+not only `go test` / hermetic greps. Pure static web may hard-reload only
+(🎯T188). Pure helper: `HasDailyPathEvidence` (`internal/mcpserver`).
+
+**Residual:** instructional + pure classifier; not a hard daemon block of
+bullseye achieve.
 
 ## Configuration
 
