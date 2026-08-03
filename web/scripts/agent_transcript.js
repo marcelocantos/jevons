@@ -109,6 +109,54 @@
     };
   }
 
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // 🎯T157: how one inspect turn body is painted.
+  // Assistant → HTML via parseAssistantMarkdown (same seal path as main chat).
+  // User/other → plain escaped text (CSS pre-wrap on .ai-turn.user .ai-text).
+  // deps.parseAssistantMarkdown(text) → html string; required for assistant.
+  function paintInspectLineBody(role, text, deps) {
+    deps = deps || {};
+    const t = text == null ? '' : String(text);
+    if (role === 'assistant') {
+      const parse = deps.parseAssistantMarkdown;
+      if (typeof parse === 'function') {
+        return { mode: 'html', content: parse(t) };
+      }
+      // Missing parse: still never pretends to be markdown — plain escape.
+      return { mode: 'text', content: t };
+    }
+    return { mode: 'text', content: t };
+  }
+
+  // Hermetic HTML fixture for #agent-inspect-body turn list (🎯T157).
+  // deps.parseAssistantMarkdown mirrors index.html seal path (marked + T145).
+  function paintInspectLinesHTML(lines, deps) {
+    deps = deps || {};
+    let html = '';
+    (lines || []).forEach(function (line) {
+      if (!line) return;
+      const role = line.role || 'other';
+      const roleLabel = role === 'user' ? 'User'
+        : (role === 'assistant' ? 'Assistant' : (role || 'msg'));
+      const body = paintInspectLineBody(role, line.text, deps);
+      const bodyInner = body.mode === 'html'
+        ? body.content
+        : escapeHtml(body.content);
+      html += '<div class="ai-turn ' + escapeHtml(role) + '">'
+        + '<div class="ai-role">' + escapeHtml(roleLabel) + '</div>'
+        + '<div class="ai-text">' + bodyInner + '</div>'
+        + '</div>';
+    });
+    return html;
+  }
+
   // mainChatMustNotContainFleetTraffic — oracle marker: product rule string.
   const MAIN_CHAT_IS_OWNER_OVERSEER_ONLY = true;
 
@@ -120,6 +168,9 @@
     pickAutoSelect: pickAutoSelect,
     turnsToLines: turnsToLines,
     paneModel: paneModel,
+    escapeHtml: escapeHtml,
+    paintInspectLineBody: paintInspectLineBody,
+    paintInspectLinesHTML: paintInspectLinesHTML,
     MAIN_CHAT_IS_OWNER_OVERSEER_ONLY: MAIN_CHAT_IS_OWNER_OVERSEER_ONLY,
   };
 }));

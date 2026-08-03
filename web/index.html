@@ -525,10 +525,53 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 #agent-inspect-body .ai-turn.user .ai-role { color: var(--accent, #8b7cf6); }
 #agent-inspect-body .ai-turn.assistant .ai-role { color: var(--green, #4ade80); }
+/* 🎯T157: user stays plain/pre-wrap; assistant is full markdown (not force pre-wrap on HTML). */
 #agent-inspect-body .ai-text {
-  white-space: pre-wrap; word-break: break-word; color: var(--text); font-family: var(--sans);
+  word-break: break-word; color: var(--text); font-family: var(--sans);
   font-size: 12px; max-height: 40vh; overflow-y: auto;
 }
+#agent-inspect-body .ai-turn.user .ai-text { white-space: pre-wrap; }
+#agent-inspect-body .ai-turn.assistant .ai-text { white-space: normal; }
+/* Mirror .msg.jevons markdown chrome under inspect (tables/code/lists/headings). */
+#agent-inspect-body .ai-turn.assistant .ai-text p { margin: 0.45em 0; }
+#agent-inspect-body .ai-turn.assistant .ai-text p:first-child { margin-top: 0; }
+#agent-inspect-body .ai-turn.assistant .ai-text p:last-child { margin-bottom: 0; }
+#agent-inspect-body .ai-turn.assistant .ai-text code {
+  background: var(--surface-raised); padding: 2px 6px; border-radius: 4px;
+  font-family: var(--mono); font-size: 0.88em; color: var(--accent);
+}
+#agent-inspect-body .ai-turn.assistant .ai-text pre {
+  background: var(--surface); border: 1px solid var(--border); padding: 10px 12px;
+  border-radius: 8px; overflow-x: auto; margin: 0.5em 0;
+}
+#agent-inspect-body .ai-turn.assistant .ai-text pre code {
+  background: none; padding: 0; color: var(--text);
+}
+#agent-inspect-body .ai-turn.assistant .ai-text ul,
+#agent-inspect-body .ai-turn.assistant .ai-text ol { padding-left: 1.5em; margin: 0.45em 0; }
+#agent-inspect-body .ai-turn.assistant .ai-text li { margin: 0.15em 0; }
+#agent-inspect-body .ai-turn.assistant .ai-text h1,
+#agent-inspect-body .ai-turn.assistant .ai-text h2,
+#agent-inspect-body .ai-turn.assistant .ai-text h3 {
+  margin: 0.7em 0 0.25em; font-weight: 600; color: var(--heading);
+}
+#agent-inspect-body .ai-turn.assistant .ai-text h1 { font-size: 1.08em; }
+#agent-inspect-body .ai-turn.assistant .ai-text h2 { font-size: 1.04em; }
+#agent-inspect-body .ai-turn.assistant .ai-text h3 { font-size: 1em; }
+#agent-inspect-body .ai-turn.assistant .ai-text blockquote {
+  border-left: 2px solid var(--accent); padding-left: 10px; margin: 0.45em 0; color: var(--text-dim);
+}
+#agent-inspect-body .ai-turn.assistant .ai-text table {
+  border-collapse: collapse; margin: 0.45em 0; font-size: 0.92em;
+}
+#agent-inspect-body .ai-turn.assistant .ai-text th,
+#agent-inspect-body .ai-turn.assistant .ai-text td {
+  border: 1px solid var(--border); padding: 4px 8px;
+}
+#agent-inspect-body .ai-turn.assistant .ai-text th { background: var(--surface); font-weight: 500; }
+#agent-inspect-body .ai-turn.assistant .ai-text strong { color: var(--strong); font-weight: 600; }
+#agent-inspect-body .ai-turn.assistant .ai-text a { color: var(--accent); text-decoration: none; }
+#agent-inspect-body .ai-turn.assistant .ai-text a:hover { text-decoration: underline; }
 /* 🎯T131: frontier table pane */
 #frontier-pane { flex: 1; min-height: 0; }
 #frontier-toolbar {
@@ -4440,6 +4483,8 @@ function renderAgentInspect(model) {
     return;
   }
   agentInspectBody.innerHTML = '';
+  // 🎯T157: assistant bodies via parseAssistantMarkdown (sealed main-chat path);
+  // user/other stay plain textContent + pre-wrap CSS. No progressive smd.
   (model.lines || []).forEach(function (line) {
     const wrap = document.createElement('div');
     wrap.className = 'ai-turn ' + (line.role || 'other');
@@ -4448,11 +4493,27 @@ function renderAgentInspect(model) {
     role.textContent = line.role === 'user' ? 'User' : (line.role === 'assistant' ? 'Assistant' : (line.role || 'msg'));
     const text = document.createElement('div');
     text.className = 'ai-text';
-    text.textContent = line.text || '';
+    const body = (typeof AgentTranscript !== 'undefined' && AgentTranscript.paintInspectLineBody)
+      ? AgentTranscript.paintInspectLineBody(line.role, line.text, {
+          parseAssistantMarkdown: (typeof parseAssistantMarkdown === 'function')
+            ? parseAssistantMarkdown
+            : null,
+        })
+      : (line.role === 'assistant' && typeof parseAssistantMarkdown === 'function'
+          ? { mode: 'html', content: parseAssistantMarkdown(line.text || '') }
+          : { mode: 'text', content: line.text || '' });
+    if (body.mode === 'html') {
+      text.innerHTML = body.content;
+    } else {
+      text.textContent = body.content;
+    }
     wrap.appendChild(role);
     wrap.appendChild(text);
     agentInspectBody.appendChild(wrap);
   });
+  if (typeof decorateBodyLinks === 'function') {
+    decorateBodyLinks(agentInspectBody); // 🎯T151 belt-and-suspenders
+  }
   // Stay pinned to latest while following a live agent.
   agentInspectBody.scrollTop = agentInspectBody.scrollHeight;
 }
