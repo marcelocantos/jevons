@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/workers"
@@ -135,6 +136,10 @@ type Server struct {
 	// agentSendHook overrides live registry Send for POST /api/agents/{name}/send
 	// hermetic tests (🎯T182). Nil = Launch + Agent.Send on the registry.
 	agentSendHook func(name, text string) (status string, err error)
+
+	// portfolios is the declarative domain portfolio registry (🎯T200).
+	// Guarded by mu. Empty = calm missing (no RHS portfolio chrome).
+	portfolios []config.Portfolio
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -295,10 +300,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
 	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend) // 🎯T182: product agent_send proxy
-	mux.HandleFunc("POST /api/asides", s.handleCreateAside)           // 🎯T136: register purpose=aside in fleet
-	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)    // 🎯T152: dismiss fleet aside on target filed
-	mux.HandleFunc("GET /api/frontier", s.handleFrontier)             // 🎯T131: live bullseye frontier table
-	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph)  // 🎯T185: unachieved dependency Mermaid
+	mux.HandleFunc("POST /api/asides", s.handleCreateAside)          // 🎯T136: register purpose=aside in fleet
+	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)   // 🎯T152: dismiss fleet aside on target filed
+	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)    // 🎯T200: domain portfolio groups
+	mux.HandleFunc("GET /api/frontier", s.handleFrontier)            // 🎯T131: live bullseye frontier table
+	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph) // 🎯T185: unachieved dependency Mermaid
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)

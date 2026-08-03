@@ -175,6 +175,8 @@ func main() {
 
 	srv := server.New(cli.Version, cfg.StateDir)
 	srv.SetOverseerName(cfg.OverseerName)
+	// 🎯T200: declarative domain portfolios from config (no GM agent).
+	srv.SetPortfolios(cfg.Portfolios)
 	// 🎯T131: primary project workdir for bullseye frontier discovery (CLI open).
 	if absWD, err := filepath.Abs(cfg.WorkDir); err == nil {
 		srv.SetFrontierCwd(absWD)

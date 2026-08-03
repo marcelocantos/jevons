@@ -74,6 +74,23 @@ type Config struct {
 	// Empty means no external providers are configured. Reloadable via
 	// provider.ConfigManager without a full daemon restart.
 	Providers []ProviderDecl `yaml:"providers"`
+
+	// Portfolios are named domain groups of repos/products (🎯T200).
+	// Membership is declarative path fragments matched against agent
+	// workdirs — never agent-name parsing. Empty means no portfolio chrome.
+	Portfolios []Portfolio `yaml:"portfolios"`
+}
+
+// Portfolio is one named domain group (e.g. personal, minicades, schools).
+// Members are path fragments (e.g. "github.com/org/repo") that match agent
+// workdirs by containment after normalization. No standing GM agent (🎯T201).
+type Portfolio struct {
+	// ID is the stable handle (required, unique among portfolios).
+	ID string `yaml:"id" json:"id"`
+	// Name is the owner-visible label; empty defaults to ID.
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	// Members are declarative membership paths (repo/product roots).
+	Members []string `yaml:"members" json:"members"`
 }
 
 // Transport modes for ProviderDecl (match internal/provider constants).
@@ -175,6 +192,37 @@ func (p ProviderDecl) LaunchArgv() []string { return p.ParamStringSlice("argv") 
 // ConnectURL is params.url for transport=connect.
 func (p ProviderDecl) ConnectURL() string { return p.ParamString("url") }
 
+// ValidatePortfolios checks Portfolios entries (🎯T200). Empty list is
+// valid (calm missing). Hard errors: missing id, duplicate ids, empty
+// member path strings. Empty members on a portfolio is allowed (calm).
+func ValidatePortfolios(list []Portfolio) error {
+	seen := make(map[string]struct{}, len(list))
+	for i, p := range list {
+		id := strings.TrimSpace(p.ID)
+		if id == "" {
+			return fmt.Errorf("config: portfolios[%d]: id is required", i)
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("config: portfolios: duplicate id %q", id)
+		}
+		seen[id] = struct{}{}
+		for j, m := range p.Members {
+			if strings.TrimSpace(m) == "" {
+				return fmt.Errorf("config: portfolios[%q]: members[%d]: path is required", id, j)
+			}
+		}
+	}
+	return nil
+}
+
+// DisplayName returns the owner-visible portfolio label.
+func (p Portfolio) DisplayName() string {
+	if n := strings.TrimSpace(p.Name); n != "" {
+		return n
+	}
+	return strings.TrimSpace(p.ID)
+}
+
 // ValidateProviders checks Providers entries. Empty list is valid.
 // Unknown param keys are allowed (forward-compatible). Hard errors:
 // missing id/transport, bad transport, duplicate ids, launch without
@@ -269,6 +317,9 @@ func Load(path string) (Config, error) {
 		cfg.MCPServerName = def.MCPServerName
 	}
 	if err := ValidateProviders(cfg.Providers); err != nil {
+		return cfg, err
+	}
+	if err := ValidatePortfolios(cfg.Portfolios); err != nil {
 		return cfg, err
 	}
 	return cfg, nil

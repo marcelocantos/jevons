@@ -51,6 +51,7 @@ test-web:
 	node web/scripts/chat_events_test.js
 	node web/scripts/attention_threads_test.js
 	node web/scripts/fleet_row_test.js
+	node web/scripts/portfolio_group_test.js
 	node web/scripts/virtual_list_test.js
 	node web/scripts/thread_route_test.js
 	node web/scripts/route_suggest_test.js
@@ -63,6 +64,7 @@ test-web:
 	node web/scripts/decision_log_test.js
 	node web/scripts/chat_reconnect_test.js
 	node web/scripts/tool_summary_test.js
+	node web/scripts/working_progress_test.js
 	node web/scripts/tool_tooltip_test.js
 	node web/scripts/instant_tip_test.js
 	node web/scripts/agent_transcript_test.js

@@ -689,3 +689,98 @@ func TestLoadProvidersEmptyIsOK(t *testing.T) {
 		t.Fatalf("default providers should be empty, got %+v", cfg.Providers)
 	}
 }
+
+// 🎯T200: domain portfolios are declarative config (not agent-name parse).
+func TestLoadPortfoliosFixtureGroup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+portfolios:
+  - id: personal
+    name: Personal
+    members:
+      - github.com/marcelocantos/jevons
+      - github.com/marcelocantos/pigeon
+  - id: minicades
+    members:
+      - github.com/squz/yourworld2
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Portfolios) != 2 {
+		t.Fatalf("portfolios=%d want 2: %+v", len(cfg.Portfolios), cfg.Portfolios)
+	}
+	p := cfg.Portfolios[0]
+	if p.ID != "personal" || p.Name != "Personal" {
+		t.Fatalf("first portfolio: %+v", p)
+	}
+	if len(p.Members) != 2 {
+		t.Fatalf("personal members=%d want ≥2: %+v", len(p.Members), p.Members)
+	}
+	if p.DisplayName() != "Personal" {
+		t.Fatalf("DisplayName=%q", p.DisplayName())
+	}
+	if cfg.Portfolios[1].DisplayName() != "minicades" {
+		t.Fatalf("minicades DisplayName defaults to id: %q", cfg.Portfolios[1].DisplayName())
+	}
+}
+
+func TestLoadPortfoliosMissingCalm(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Portfolios == nil {
+		// nil is fine for Go zero value; treat as empty.
+		return
+	}
+	if len(cfg.Portfolios) != 0 {
+		t.Fatalf("default portfolios should be empty, got %+v", cfg.Portfolios)
+	}
+}
+
+func TestLoadPortfoliosValidationErrors(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		yaml string
+		sub  string
+	}{
+		{"missing id", "portfolios:\n  - name: X\n    members: [a]\n", "id is required"},
+		{"dup id", "portfolios:\n  - id: a\n    members: [x]\n  - id: a\n    members: [y]\n", "duplicate"},
+		{"empty member", "portfolios:\n  - id: a\n    members: [\"  \"]\n", "path is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tc.sub) {
+				t.Fatalf("err=%v want substring %q", err, tc.sub)
+			}
+		})
+	}
+}
+
+func TestValidatePortfoliosEmptyOK(t *testing.T) {
+	if err := ValidatePortfolios(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePortfolios([]Portfolio{}); err != nil {
+		t.Fatal(err)
+	}
+	// Empty members list is calm (group exists, no products yet).
+	if err := ValidatePortfolios([]Portfolio{{ID: "solo", Members: nil}}); err != nil {
+		t.Fatal(err)
+	}
+}
