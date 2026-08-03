@@ -234,38 +234,14 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	life["purpose"] = purpose
 
-	existed := s.registry.Def(name) != nil
-	life["existed"] = existed
-	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
+	def, existed, err := s.stitchAgentStart(name, workdir, model, providerArg, parent, purpose, targetID)
 	if err != nil {
 		life["err"] = err.Error()
+		life["existed"] = existed
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
-	// Refresh copy after Ensure (Register may have stored a different pointer).
-	if d := s.registry.Def(name); d != nil {
-		def = d
-	}
-	// 🎯T148: ad hoc provider override wins; else keep stored; else default.
-	// Never unconditionally force Grok on resume.
-	def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
-	// Set parent only when minting or when legacy entry has empty parent.
-	if !existed || def.Parent == "" {
-		def.Parent = parent
-	}
-	// Purpose: set on mint; backfill empty purpose on re-start.
-	if !existed || def.Purpose == "" {
-		def.Purpose = purpose
-	}
-	// 🎯T198: target_id on mint, or when caller supplies a non-empty id (rebind).
-	if targetID != "" {
-		def.TargetID = targetID
-	}
-	if err := s.registry.Register(*def); err != nil {
-		life["err"] = err.Error()
-		s.logLifecycle(compAgentLifecycle, "start", "error", life)
-		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
-	}
+	life["existed"] = existed
 
 	proc, err := s.registry.Launch(name)
 	if err != nil {
@@ -295,6 +271,59 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	msg += ")"
 	return mcp.NewToolResultText(msg), nil
+}
+
+// stitchAgentStart mints or updates a fleet agent registry row the same way
+// jevons_agent_start does before registry.Launch (🎯T148 / 🎯T215).
+//
+// Hermetic Session stitch surface: Provider selection, SessionID mint,
+// Parent/Purpose/TargetID dual-write — without spawning Grok or Claude.
+// Materialized stays false until a real Launch succeeds in claudia.
+func (s *Server) stitchAgentStart(name, workdir, model, providerArg, parent, purpose, targetID string) (*claudia.AgentDef, bool, error) {
+	if s == nil || s.registry == nil {
+		return nil, false, fmt.Errorf("no agent registry")
+	}
+	existed := s.registry.Def(name) != nil
+	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
+	if err != nil {
+		return nil, existed, err
+	}
+	// Refresh copy after Ensure (Register may have stored a different pointer).
+	if d := s.registry.Def(name); d != nil {
+		def = d
+	}
+	// 🎯T148: ad hoc provider override wins; else keep stored; else default.
+	// Never unconditionally force Grok on resume.
+	def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
+	// Set parent only when minting or when legacy entry has empty parent.
+	if !existed || def.Parent == "" {
+		def.Parent = parent
+	}
+	// Purpose: set on mint; backfill empty purpose on re-start.
+	if !existed || def.Purpose == "" {
+		def.Purpose = purpose
+	}
+	// 🎯T198: target_id on mint, or when caller supplies a non-empty id (rebind).
+	if targetID != "" {
+		def.TargetID = targetID
+	}
+	if err := s.registry.Register(*def); err != nil {
+		return nil, existed, err
+	}
+	if d := s.registry.Def(name); d != nil {
+		def = d
+	}
+	return def, existed, nil
+}
+
+// launchConfigFromDef is the Config handoff registry.Launch would pass into
+// claudia Start (Provider, SessionID, RequireResume←Materialized). Hermetic
+// tests assert this stitch without spawning a process (🎯T215).
+func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sessionID string, requireResume bool) {
+	if def == nil {
+		return "", "", false
+	}
+	return def.Provider, def.SessionID, def.Materialized
 }
 
 // normalizeAgentTargetID strips 🎯 and whitespace for registry TargetID (🎯T198).
