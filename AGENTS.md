@@ -133,6 +133,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   "we should always…" in chat. Ceremony: `jevons_target_file` and/or
   bullseye MCP (`bullseye_commit` track). Related: 🎯T92 ambient RSI,
   🎯T129 hierarchy. Residual: one-off flukes may skip filing.
+- **Oracle-first completion (🎯T31 / 🎯T31.1):** bare "done" / complete /
+  finished without **oracle evidence** (named test + green, and/or
+  commit SHA) or **explicit accepted-risk / class-3** language is **not
+  accepted**. Overseer is the independent gate (attestation ≠ execution).
+  Instructional residual + pure classifier; greenfield elicitation is
+  🎯T31.2. Persona + agents-guide + fleet standing brief.
 - **Unattended frontier auto-spawn (🎯T155):** when a new frontier leaf is
   filed that is not design-gated / needs-owner / design-discussion /
   parked-for-design, **`jevons-po` spawns a fleet worker** under

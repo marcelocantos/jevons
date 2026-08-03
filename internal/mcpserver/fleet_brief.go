@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T31 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Delivery: local by default (🎯T104)
@@ -16,6 +16,16 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   unless the owner (or overseer on the owner's clear instruction) asked to ship via PR.
 - "master" / "merge to master" means local branch master, not origin/master.
 - "locally" means no git push, no GitHub PR, no CI merge.
+
+## Oracle-first completion (🎯T31 / 🎯T31.1)
+- Bare "done" / "complete" / "finished" without evidence is NOT accepted.
+- Every finish report MUST carry either (a) executable oracle evidence
+  (named test command + green result, and/or commit SHA that lands the
+  oracle) or (b) explicit accepted-risk / isolated class-3 language.
+- Attestation ≠ execution: self-attested "done" prose is not verification.
+  The overseer (who did not do the work) is the independent gate (rule 9).
+- Residual: instructional doctrine + pure classifier; not a hard daemon
+  block. Greenfield elicitation is 🎯T31.2.
 
 ## Fleet spawn (🎯T78)
 - Create child work via jevons_agent_start / jevons_thread_spawn, not Grok spawn_subagent.
@@ -55,7 +65,8 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Related: ambient RSI 🎯T92, hierarchy 🎯T129. Residual: one-off flukes may skip.
 
 ## Report
-- When finished: report commit SHA(s) + test evidence to the overseer.
+- When finished: report commit SHA(s) + test evidence to the overseer
+  (or accepted-risk / class-3 residual). Bare done without either is refused.
 - Do not ambient-autopilot /push or gh pr create.
 
 ---

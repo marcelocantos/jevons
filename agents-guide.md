@@ -31,6 +31,9 @@ Bedrock are claudia-side (pass-through provider strings are accepted).
 
 ## Install (multi-step — not done until all succeed)
 
+Canonical second-user path lives in root `README.md` (🎯T47 residual docs).
+Same-machine browser use is the supported docs-only path today.
+
 1. **Binary**: `brew install marcelocantos/tap/jevons`
 2. **Grok CLI**: install Grok Build and auth (`grok login` or `XAI_API_KEY`);
    ensure `grok` is on `PATH` or at `~/.grok/bin/grok`.
@@ -40,12 +43,15 @@ Bedrock are claudia-side (pass-through provider strings are accepted).
    ```bash
    lsof -iTCP:13705 -sTCP:LISTEN
    ```
-5. **Optional — register as an MCP client** after restarting the agent session:
+5. **Optional device pair** — `jevonsd --pair <id> --relay <url>` + Jevon iOS
+   app QR scan (source under `ios/`; no App Store binary yet; full
+   onboarding is 🎯T14).
+6. **Optional — register as an MCP client** after restarting the agent session:
    ```bash
    # Example for Claude Code as an MCP *client* of jevons (jevons itself is Grok-only):
    claude mcp add --scope user --transport http jevons http://localhost:13705/mcp
    ```
-6. **Confirm tools** via `jevons_thread_list` or `jevons_cost`.
+7. **Confirm tools** via `jevons_thread_list` or `jevons_cost`.
 
 ## Running manually
 
@@ -190,6 +196,24 @@ target** (name + acceptance) in the **same turn** — not only chat promises.
 op=track / file tools). Related: ambient RSI **🎯T92**, hierarchy **🎯T129**.
 **Residual:** one-off flukes may skip filing; judgment allowed.
 
+## Oracle-first completion (🎯T31 / 🎯T31.1)
+
+**Bare "done" is not accepted.** Finish reports must carry either:
+
+1. **Executable oracle evidence** — named test command + green result,
+   and/or commit SHA that lands the oracle; or
+2. **Explicit accepted-risk / isolated class-3** language for residual
+   that stays human-gated.
+
+**Attestation ≠ execution** (oracle-first rule 9): the overseer, who did
+not do the work, is the independent gate. Self-attested "complete /
+finished / achieved" prose without evidence is refused for production
+or retire claims. Do not substitute adjacent greens ("it compiles",
+"agent replied") for the product property under test.
+
+**Residual:** instructional + pure `ClassifyCompletionReport` heuristic;
+not a hard daemon block. Greenfield oracle elicitation → **🎯T31.2**.
+
 ## Delivery: local by default (🎯T104)
 
 Owner vocabulary is **literal**:
@@ -201,7 +225,8 @@ Owner vocabulary is **literal**:
 | **merge to master locally** | Cherry-pick/merge onto local `master` only |
 
 **Done** for fleet work = commits + evidence + notify overseer — **not**
-"opened a PR" / "merged to origin/master".
+"opened a PR" / "merged to origin/master". Bare done without oracle or
+accepted-risk is also refused (🎯T31.1).
 
 Do **not** re-expand a local merge order into continuous origin/PR
 shipping because a PO already opened remotes. Remote delivery only when

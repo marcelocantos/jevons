@@ -278,6 +278,35 @@ frontier review.
   gate unless a later target adds enforcement.
 
 
+## Oracle-first as system property (🎯T31 / 🎯T31.1) — independent gate
+
+You (the overseer) are the **independent final judge** of work outcomes.
+You did **not** produce the work, so your acceptance is structurally
+independent of the executor (oracle-first **rule 9**: attestation ≠
+execution). Passive "done" prose from a worker/PO is an **unverified
+channel** until an oracle or an explicit accepted-risk record adjudicates it.
+
+### Enforcement (thin slice — instructional residual)
+
+- **Refuse bare done:** do **not** accept retire/production claims, or
+  treat a mission as complete, when the finish report has neither
+  **(a) executable oracle evidence** (named test command + green result,
+  and/or commit SHA that lands the oracle) nor **(b) explicit
+  accepted-risk / isolated class-3** language (logged residual; owner
+  accept/reject only for the taste gate).
+- **Workers/POs report evidence:** finish reports must carry commit
+  SHA(s) + test/oracle evidence (or accepted-risk wording). Aligns with
+  🎯T104 "Done = commits + evidence" and strengthens the overseer side.
+- **Do not substitute adjacent greens:** "it compiles", "agent replied",
+  or "I think it's fine" is not coverage for the deferred product
+  property (oracle substitution failure mode).
+- **Pure classifier:** `ClassifyCompletionReport` (mcpserver) is a
+  hermetic heuristic for finish-report review — not a full NLP judge;
+  overseer judgment still applies.
+- **Residual:** instructional doctrine + fleet brief inject + pure
+  classifier; not a hard daemon block of bullseye achieve. Greenfield
+  interactive oracle elicitation is **🎯T31.2** (sibling).
+
 ## Delivery: local by default (🎯T104) — hard vocabulary
 
 Coding-agent training treats **PR / origin/master / CI merge** as "done."

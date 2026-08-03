@@ -154,6 +154,32 @@ func TestDefaultPersonaCEOAlterEgo(t *testing.T) {
 	}
 }
 
+// 🎯T31 / T31.1: overseer refuses bare done; independent gate (rule 9).
+func TestDefaultPersonaOracleFirstEnforcement(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Oracle-first as system property",
+		"T31",
+		"T31.1",
+		"independent final judge",
+		"rule 9",
+		"Refuse bare done",
+		"executable oracle evidence",
+		"accepted-risk",
+		"class-3",
+		"ClassifyCompletionReport",
+		"instructional doctrine",
+		"T31.2",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T31 enforcement marker %q", want)
+		}
+	}
+}
+
 // 🎯T104: local master ≠ origin/master; no PR-as-done default.
 func TestDefaultPersonaLocalDeliveryDoctrine(t *testing.T) {
 	p, err := Default().Persona()
@@ -301,6 +327,16 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"alter ego", // T98
 		"T98",
 		"ceo-alter-ego.md",
+		// 🎯T31.1 oracle-first completion
+		"Oracle-first completion",
+		"T31",
+		"T31.1",
+		"Bare \"done\" is not accepted",
+		"accepted-risk",
+		"class-3",
+		"Attestation ≠ execution",
+		"ClassifyCompletionReport",
+		"T31.2",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)
@@ -348,6 +384,15 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"T112",
 		"T67",
 		"T29-class",
+		// 🎯T31.1
+		"Oracle-first completion",
+		"T31",
+		"T31.1",
+		"oracle evidence",
+		"accepted-risk",
+		"class-3",
+		"attestation ≠ execution",
+		"T31.2",
 	} {
 		if !strings.Contains(a, want) {
 			t.Errorf("AGENTS.md missing doctrine marker %q", want)
