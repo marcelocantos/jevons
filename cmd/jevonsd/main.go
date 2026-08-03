@@ -318,6 +318,13 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
+	// 🎯T40: default Grok connect-mode so agents use detached `grok agent
+	// serve` + WebSocket and survive coordinator-only upgrades. Override
+	// with CLAUDIA_GROK_CONNECT=0 to force parent-owned stdio.
+	if v := os.Getenv("CLAUDIA_GROK_CONNECT"); v == "" {
+		_ = os.Setenv("CLAUDIA_GROK_CONNECT", "1")
+	}
+
 	// Agent registry — manages persistent Grok ACP sessions.
 	registryPath := filepath.Join(cfg.StateDir, "agents.json")
 	{
@@ -329,14 +336,33 @@ func main() {
 		registry = r
 	}
 
-	// Prior upgrade handoff: session_ids to resume (conversation path).
-	// Process reattach is residual until claudia connect-mode exists.
+	// Prior upgrade handoff: session_ids + optional connect-mode endpoints.
+	// Process reattach when handles carry ConnectURL+PID (agents.json also
+	// persists those fields from the last Launch).
 	if snap, err := upgrade.LoadSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
 		slog.Error("upgrade handles load failed (malformed handoff is hard error)", "err", err)
 		os.Exit(1)
 	} else if snap != nil {
 		plan := upgrade.PlanReattach(snap)
-		slog.Info("upgrade handoff present — reattach by session_id (conversation load); process reattach residual",
+		// Merge connect endpoints into registry defs before StartAll so
+		// Launch reattaches to still-running serve processes.
+		for _, h := range snap.Agents {
+			if h.ConnectURL == "" || h.Name == "" {
+				continue
+			}
+			if def := registry.Def(h.Name); def != nil {
+				def.ConnectURL = h.ConnectURL
+				def.ConnectPID = h.PID
+				def.GrokConnect = true
+				if h.SessionID != "" {
+					def.SessionID = h.SessionID
+				}
+				if err := registry.Register(*def); err != nil {
+					slog.Warn("upgrade handoff: could not merge connect endpoint", "agent", h.Name, "err", err)
+				}
+			}
+		}
+		slog.Info("upgrade handoff present",
 			"sessions", len(plan.SessionIDs),
 			"process_reattach", plan.ProcessReattachPossible,
 			"written_at", snap.WrittenAt,
@@ -493,8 +519,9 @@ func main() {
 	}()
 
 	// Now start agents — MCP server is reachable.
-	// StartAll resumes session_ids from agents.json (conversation durability).
-	// True process reattach (same PID/stdio) needs claudia connect-mode (🎯T40 residual).
+	// StartAll resumes session_ids from agents.json; with Grok connect-mode
+	// (CLAUDIA_GROK_CONNECT) it reattaches to still-running serve PIDs when
+	// ConnectURL/ConnectPID are present (🎯T40 process durability).
 	registry.StartAll()
 
 	// Exit policy: normal → StopAll; upgrade (SIGHUP / JEVONS_UPGRADE_EXIT) → leave

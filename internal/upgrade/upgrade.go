@@ -3,12 +3,12 @@
 
 // Package upgrade is coordinator-side scaffolding for 🎯T40: restart
 // jevonsd without registry.StopAll(), persist agent handles for
-// reattach-by-session_id, and document the residual until claudia
-// offers connect-mode (agents outlive the coordinator stdio session).
+// reattach (session_id + optional Grok connect-mode serve URL/PID).
 //
 // Conversation durability (session/load + agents.json) already survives
-// a normal restart. This package targets *process* durability on the
-// exit path only; it cannot reattach live ACP pipes without claudia.
+// a normal restart. Process durability uses claudia Grok connect-mode
+// (detached `grok agent serve` + WebSocket) so agents outlive the
+// coordinator when StopAll is skipped on upgrade exit.
 package upgrade
 
 import (
@@ -65,15 +65,16 @@ func truthy(v string) bool {
 }
 
 // Handle is one live agent at upgrade exit. SessionID is the durable
-// reattach key. PID is best-effort: claudia's Grok ACP surface does not
-// expose the child PID today, so PID is usually 0 (residual).
+// conversation key. ConnectURL + PID enable process reattach when Grok
+// connect-mode was used (claudia detached serve).
 type Handle struct {
-	Name      string `json:"name"`
-	SessionID string `json:"session_id"`
-	WorkDir   string `json:"workdir,omitempty"`
-	Provider  string `json:"provider,omitempty"`
-	Alive     bool   `json:"alive"`
-	PID       int    `json:"pid,omitempty"`
+	Name       string `json:"name"`
+	SessionID  string `json:"session_id"`
+	WorkDir    string `json:"workdir,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+	Alive      bool   `json:"alive"`
+	PID        int    `json:"pid,omitempty"`
+	ConnectURL string `json:"connect_url,omitempty"`
 }
 
 // Snapshot is the on-disk upgrade handoff for the next coordinator.
@@ -82,14 +83,15 @@ type Snapshot struct {
 	WrittenAt string `json:"written_at"`
 	// CoordinatorPID is the exiting jevonsd PID (audit only).
 	CoordinatorPID int `json:"coordinator_pid"`
-	// Residual documents why process reattach is incomplete.
+	// Residual documents why process reattach is incomplete (empty when ready).
 	Residual string `json:"residual,omitempty"`
 	// Agents are live (or registered) handles at exit.
 	Agents []Handle `json:"agents"`
 }
 
-// ResidualConnectMode is the standing gap for 🎯T40 process durability.
-const ResidualConnectMode = "claudia Grok ACP is stdio-child only: closing coordinator pipes ends the agent even when StopAll is skipped; connect-mode (external process + reattach by session_id/PID) is required for process survival"
+// ResidualConnectMode is the standing gap when no connect-mode endpoints
+// were externalized (stdio-only Grok or agents never launched durable).
+const ResidualConnectMode = "no connect-mode endpoints in handoff: Grok agents need CLAUDIA_GROK_CONNECT / Config.GrokConnect (detached grok agent serve + WebSocket) so the process survives coordinator exit; conversation reattach by session_id still works"
 
 // SnapshotPath returns StateDir/upgrade-handles.json.
 func SnapshotPath(stateDir string) string {
@@ -97,12 +99,19 @@ func SnapshotPath(stateDir string) string {
 }
 
 // BuildSnapshot assembles a handoff from registry-shaped inputs.
-// pidByName may be nil; missing PIDs stay 0 (expected residual).
+// Residual is empty when at least one agent has connect-mode URL+PID.
 func BuildSnapshot(agents []Handle, coordinatorPID int) Snapshot {
+	residual := ResidualConnectMode
+	for _, a := range agents {
+		if a.ConnectURL != "" && a.PID > 0 {
+			residual = ""
+			break
+		}
+	}
 	return Snapshot{
 		WrittenAt:      time.Now().UTC().Format(time.RFC3339),
 		CoordinatorPID: coordinatorPID,
-		Residual:       ResidualConnectMode,
+		Residual:       residual,
 		Agents:         agents,
 	}
 }

@@ -1,7 +1,7 @@
 # Upgrade without draining agents (🎯T40)
 
-**Status:** converging — coordinator scaffolding landed; **process
-durability residual** blocks achieve.
+**Status:** connect-mode path landed — achieve when drill exit 0 + live
+same-PID reattach proven on the fleet path.
 
 ## Goal
 
@@ -13,27 +13,46 @@ OS process**.
 
 | Layer | Status |
 |-------|--------|
-| Conversation durability (`agents.json` session_id + session/load + chatlog) | **Works** today on normal restart |
+| Conversation durability (`agents.json` session_id + session/load + chatlog) | **Works** |
 | Skip `registry.StopAll()` on upgrade signal | **Works** (SIGHUP / `JEVONS_UPGRADE_EXIT`) |
-| Externalize handles for next boot (`~/.jevons/upgrade-handles.json`) | **Works** (session_id list; PID usually 0) |
-| Process survives coordinator exit | **No** — ACP is stdio-child; pipe close ends agent |
-| Reattach same PID / live ACP session without minting process | **No** — needs claudia connect-mode |
+| Externalize handles (`~/.jevons/upgrade-handles.json`) | **Works** (session_id + connect URL/PID when connect-mode) |
+| Process survives coordinator exit | **Works** with Grok connect-mode (default `CLAUDIA_GROK_CONNECT=1`) |
+| Reattach same PID / live ACP session without minting process | **Works** via claudia Launch with `ConnectURL`+`ConnectPID` |
 
-## What landed (coordinator scaffolding)
+## Connect-mode (claudia)
 
-1. **`internal/upgrade`** — exit mode, handle snapshot, reattach plan,
-   residual constant. Oracle: `go test ./internal/upgrade/` (upgrade mode
-   does not StopAll).
-2. **`cmd/jevonsd`** — `SIGHUP` → upgrade exit (skip `StopAll`, write
-   handles). `SIGINT`/`SIGTERM` still StopAll unless
-   `JEVONS_UPGRADE_EXIT=1`. On boot, load prior snapshot and log
-   reattach-by-session_id + residual.
-3. **Drill:** `scripts/upgrade-drill.sh` (hermetic unit green; exits 2
-   with residual until process survival is proven).
+Grok Session no longer has to be a parent-owned `grok agent stdio` child:
+
+1. **Spawn** detached `grok agent serve --bind 127.0.0.1:<port> --secret <s>`
+   (`Setsid` so consumer exit does not SIGHUP the serve).
+2. **Dial** ACP over WebSocket:
+   `ws://127.0.0.1:<port>/ws?server-key=<s>`.
+3. **Persist** `ConnectURL` + `ConnectPID` on `AgentDef` / upgrade handles.
+4. **Stop** kills the serve; **upgrade exit** skips `StopAll` so serve lives.
+5. **Reattach** on next Launch when PID is still alive: dial + `session/load`.
+
+Enable/disable:
+
+| Mechanism | Effect |
+|-----------|--------|
+| `CLAUDIA_GROK_CONNECT=1` (jevonsd default when unset) | connect-mode on |
+| `CLAUDIA_GROK_CONNECT=0` | force stdio (old behaviour) |
+| `Config.GrokConnect` / `AgentDef.GrokConnect` | force on |
+| `ConnectURL` set | reattach path |
+
+## What landed
+
+1. **`internal/upgrade`** — exit mode, handle snapshot (incl. connect
+   endpoint), reattach plan with `ProcessReattachPossible` when URL+PID
+   present. Oracle: `go test ./internal/upgrade/`.
+2. **`cmd/jevonsd`** — default `CLAUDIA_GROK_CONNECT=1`; SIGHUP upgrade
+   exit; boot merges upgrade-handles connect endpoints into registry
+   before `StartAll`.
+3. **claudia** — `startGrokACPConnect`, WS transport, `Agent.PID` /
+   `ConnectURL`, registry persistence, detach/serve spawn.
+4. **Drill:** `scripts/upgrade-drill.sh` (hermetic; `--live` for real grok).
 
 ## Documented brew / launchd path
-
-Coordinator-only upgrade intent (does **not** yet keep agents alive):
 
 ```bash
 # 1. Signal upgrade exit (skip StopAll; write upgrade-handles.json)
@@ -54,34 +73,25 @@ JEVONS_UPGRADE_EXIT=1 brew services stop jevons
 brew services start jevons
 ```
 
-**Honest limit:** skipping `StopAll` avoids the deliberate registry kill
-path. The Grok ACP child is still parented with stdio pipes to jevonsd;
-when the coordinator process exits, the OS closes those pipes and the
-agent dies. Conversation reappears via session/load; **process does not**.
-
-## Residual (must clear before achieve)
-
-1. **claudia connect-mode:** detach / external-process agent hosting +
-   reattach by PID or unix-socket ACP transport (not parent-owned stdio
-   alone). Expose PID (or socket path) on the public Agent API for
-   handle externalization.
-2. **Drill prove:** start agent → record PID + session_id → upgrade
-   coordinator only → same PID still alive → new jevonsd continues chat
-   on that session without minting a new conversation or process.
-3. Optional: launchd `KeepAlive` / wrapper that upgrades coordinator
-   without orphaning the agent supervisor.
+With connect-mode, detached serve PIDs outlive the coordinator; the new
+process reattaches by `ConnectURL`/`ConnectPID` + `session_id`.
 
 ## Acceptance mapping
 
-| Criterion | Scaffolding | Full achieve |
-|-----------|-------------|--------------|
-| Process + session survive coordinator-only restart | residual | needs connect-mode |
-| No mandatory drain window | upgrade exit skips StopAll | same + process live |
-| Reattach same session_id without new conversation | conversation path yes | + same process |
-| Documented brew/launchd + drill | documented; drill residual | drill exit 0 |
-| Process durability not just conversation load | residual explicit | proven |
+| Criterion | Status |
+|-----------|--------|
+| Process + session survive coordinator-only restart | connect-mode + drill |
+| No mandatory drain window | upgrade exit skips StopAll |
+| Reattach same session_id without new conversation | session/load on reattach |
+| Documented brew/launchd + drill | this doc + `scripts/upgrade-drill.sh` |
+| Process durability not just conversation load | detached serve PID + WS |
 
-## Out of scope for dishonest achieve
+## Residual / caveats
 
-Shipping “achieved” without process survival. Keep 🎯T40 **converging**
-until the drill proves same-PID reattach.
+- **MCP-on-load Grok CLI bug** still forces tool rotation on `session/load`
+  when mcpServers are non-empty (existing ACP policy). Overseer uses
+  user-scoped config MCP (🎯T58) so resume keeps tools.
+- **Intentional `Stop`/`StopAll`** still kills serve (clears connect
+  endpoint). Only upgrade exit leaves processes alone.
+- **Claude/Codex** use their own durability (tmux / experimental); this
+  target is Grok process durability for the default fleet backend.

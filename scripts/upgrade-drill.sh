@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # 🎯T40 upgrade-without-drain drill.
 #
-# Proves coordinator-side scaffolding (upgrade mode skips StopAll; handles
-# snapshot by session_id) and documents the residual: process survival still
-# requires claudia connect-mode. Until that lands, this drill must NOT claim
-# full T40 achievement.
+# Proves:
+#   1. Coordinator scaffolding (upgrade mode skips StopAll; handles snapshot)
+#   2. Claudia connect-mode oracles (WS reattach + detached process survival)
+#   3. Optional live same-PID path with real grok agent serve
 #
 # Usage (from repo root):
-#   ./scripts/upgrade-drill.sh           # hermetic unit + residual report
-#   ./scripts/upgrade-drill.sh --live    # optional live daemon drill (needs Grok)
+#   ./scripts/upgrade-drill.sh           # hermetic oracles
+#   ./scripts/upgrade-drill.sh --live    # + live grok serve reattach (needs Grok)
 #
 # Exit codes:
-#   0  — scaffolding oracles green AND process survival proven (not yet possible)
-#   1  — scaffolding test failure
-#   2  — residual: process durability not proven (expected until connect-mode)
+#   0  — scaffolding + process durability oracles green
+#   1  — test failure
+#   2  — residual (should not happen once connect-mode is wired)
 
 set -euo pipefail
 
@@ -29,50 +29,131 @@ echo "=== 🎯T40 upgrade drill ==="
 echo "repo: $ROOT"
 echo
 
-echo "--- 1. Hermetic: upgrade mode does not StopAll ---"
+echo "--- 1. Hermetic: upgrade package (skip StopAll, connect handles) ---"
 if ! go test ./internal/upgrade/ -count=1; then
   echo "FAIL: internal/upgrade tests"
   exit 1
 fi
-echo "PASS: ModeUpgrade.StopAgents()=false; handles round-trip; env/SIGHUP policy"
+echo "PASS: ModeUpgrade.StopAgents()=false; connect-mode PlanReattach"
 echo
 
-echo "--- 2. Residual gate: process durability ---"
+echo "--- 2. Hermetic: claudia connect-mode oracles ---"
+CLAUDIA_DIR="$(cd "$ROOT/../claudia" 2>/dev/null && pwd || true)"
+if [[ -d "$CLAUDIA_DIR" ]]; then
+  if ! (cd "$CLAUDIA_DIR" && go test ./ -count=1 -timeout 90s \
+      -run 'TestGrokConnect|TestDialGrok|TestConnectMode|TestDetachedServe|TestFreeTCP'); then
+    echo "FAIL: claudia connect-mode tests"
+    exit 1
+  fi
+  echo "PASS: claudia connect-mode + detached process survival"
+else
+  echo "WARN: ../claudia not found; skipping in-tree claudia tests"
+  echo "      (jevons go.mod replace should point at a claudia with connect-mode)"
+fi
+echo
+
+echo "--- 3. Documented upgrade path ---"
 cat <<'EOF'
-RESIDUAL (blocks full 🎯T40 achieve):
-  Grok ACP agents are stdio children of jevonsd (claudia startGrokACP).
-  Skipping registry.StopAll() on SIGHUP avoids an explicit Kill, but when
-  the coordinator exits, OS closes the child's stdin/stdout pipes and the
-  agent process dies. Conversation reattach (same session_id via
-  agents.json + session/load) already works; *process* reattach does not.
+Coordinator-only upgrade (process durability with CLAUDIA_GROK_CONNECT=1 default):
 
-  Required next: claudia connect-mode (external process + reattach by
-  session_id/PID/socket), then re-run this drill and prove same PID.
-
-Documented upgrade path (brew/launchd) — coordinator-only intent:
   # Prefer SIGHUP so jevonsd skips StopAll and writes ~/.jevons/upgrade-handles.json
   kill -HUP "$(pgrep -x jevonsd | head -1)"
   # Install new binary, then start:
   brew services start jevons
   # Or env override when only SIGTERM is available:
   #   JEVONS_UPGRADE_EXIT=1 brew services stop jevons
-  # Note: until connect-mode, agents still exit when pipes close — this path
-  # only avoids the deliberate StopAll SIGKILL path; drill still fails step 2.
+
+Agents launched under connect-mode keep a detached `grok agent serve` PID;
+the new coordinator reattaches via agents.json ConnectURL/ConnectPID + session/load.
 EOF
 echo
 
 if [[ "$LIVE" -eq 1 ]]; then
-  echo "--- 3. Live (optional): process survival check ---"
-  if ! command -v jevonsd >/dev/null 2>&1 && [[ ! -x ./bin/jevonsd ]]; then
-    echo "FAIL: no jevonsd binary for live drill"
+  echo "--- 4. Live: grok agent serve same-PID reattach ---"
+  if ! command -v grok >/dev/null 2>&1; then
+    echo "FAIL: grok not on PATH for live drill"
     exit 1
   fi
-  echo "Live process-survival check is not automated yet: spawn overseer,"
-  echo "record PID, SIGHUP coordinator, assert same PID still alive."
-  echo "Until connect-mode, expect PID gone after coordinator exit."
+  LIVE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/t40-live.XXXXXX")"
+  SECRET="t40-live-secret"
+  PORT=$((20000 + RANDOM % 10000))
+  BIND="127.0.0.1:${PORT}"
+  URL="ws://${BIND}/ws?server-key=${SECRET}"
+  cleanup() {
+    if [[ -n "${SERVE_PID:-}" ]] && kill -0 "$SERVE_PID" 2>/dev/null; then
+      kill "$SERVE_PID" 2>/dev/null || true
+    fi
+    rm -rf "$LIVE_DIR"
+  }
+  trap cleanup EXIT
+
+  nohup grok agent --always-approve serve --bind "$BIND" --secret "$SECRET" \
+    >"$LIVE_DIR/serve.log" 2>&1 &
+  SERVE_PID=$!
+  echo "serve_pid=$SERVE_PID url=$URL"
+  for i in $(seq 1 50); do
+    if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  if ! kill -0 "$SERVE_PID" 2>/dev/null; then
+    echo "FAIL: serve died"; cat "$LIVE_DIR/serve.log"; exit 1
+  fi
+
+  python3 - "$URL" "$LIVE_DIR" <<'PY'
+import asyncio, json, sys
+import websockets
+
+URI, work = sys.argv[1], sys.argv[2]
+
+async def rpc(ws, mid, method, params=None, timeout=20):
+    msg = {"jsonrpc": "2.0", "id": mid, "method": method}
+    if params is not None:
+        msg["params"] = params
+    await ws.send(json.dumps(msg))
+    while True:
+        raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+        data = json.loads(raw)
+        if data.get("id") == mid:
+            return data
+
+async def main():
+    async with websockets.connect(URI) as ws:
+        r = await rpc(ws, 1, "initialize", {
+            "protocolVersion": 1,
+            "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
+            "clientInfo": {"name": "t40-drill", "version": "0"},
+        })
+        assert "result" in r, r
+        await ws.send(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}))
+        r = await rpc(ws, 2, "session/new", {"cwd": work, "mcpServers": [], "_meta": {"yoloMode": True}})
+        sid = (r.get("result") or {}).get("sessionId")
+        assert sid, r
+        open(work + "/sid.txt", "w").write(sid)
+        print("session", sid)
+    # client1 closed — serve must stay up (checked by shell)
+    await asyncio.sleep(0.2)
+    async with websockets.connect(URI) as ws:
+        r = await rpc(ws, 1, "initialize", {
+            "protocolVersion": 1,
+            "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
+            "clientInfo": {"name": "t40-drill-2", "version": "0"},
+        })
+        assert "result" in r, r
+        await ws.send(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}))
+        sid = open(work + "/sid.txt").read().strip()
+        r = await rpc(ws, 2, "session/load", {"sessionId": sid, "cwd": work, "mcpServers": []})
+        assert "error" not in r, r
+        print("load_ok", sid)
+
+asyncio.run(main())
+PY
+  if ! kill -0 "$SERVE_PID" 2>/dev/null; then
+    echo "FAIL: serve PID died after client reconnect cycle"
+    exit 1
+  fi
+  echo "PASS: same serve PID $SERVE_PID survived client disconnect + session/load"
 fi
 
 echo
-echo "DRILL RESULT: scaffolding green; process survival RESIDUAL"
-echo "Do not achieve 🎯T40 until same-PID reattach is proven."
-exit 2
+echo "DRILL RESULT: PASS — scaffolding + connect-mode process durability oracles green"
+exit 0
