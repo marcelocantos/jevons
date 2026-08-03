@@ -69,6 +69,16 @@ type Server struct {
 	turnBuf   string // accumulates Jevon text for current turn
 	waiting   bool   // true while awaiting a response from Jevon
 
+	// overseerLastProgress is the last ACP/event/activity time for stuck-busy
+	// detection (🎯T204). Zero means never observed.
+	overseerLastProgress time.Time
+	// cockpitHooks are fleet health/nudge actuators (set from main).
+	cockpitHooks CockpitHooks
+	// overseerEventSub is the claudia subscription token for DeliverOverseerEvent
+	// (🎯T210): must unsubscribe before re-attach so rewind+cockpit do not
+	// double-broadcast every token.
+	overseerEventSub int64
+
 	// chatConns is the number of live /ws/chat handlers (🎯T140 connect spans).
 	// Guarded by mu; used only for concurrent=N on open/close logging.
 	chatConns int

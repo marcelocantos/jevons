@@ -156,9 +156,23 @@ func (s *Server) waitForOverseer(ctx context.Context, conn *websocket.Conn) *cla
 // startup and again after a rewind swaps the process — so every overseer
 // reference resolves indirectly through s.proc and stays correct across
 // the swap, and no /ws/chat connection is left holding a dead handle.
+//
+// Idempotent on re-attach (🎯T210): prior DeliverOverseerEvent subscription
+// is removed before adding a new one. Without this, rewind + cockpit
+// AttachOverseer on the same process stacked two fans and every assistant
+// token was journaled/broadcast twice (GotGot / CheckingChecking).
 func (s *Server) AttachOverseer(agent *claudia.Agent) {
-	s.SetProcess(agent)
-	agent.SubscribeEvents(s.DeliverOverseerEvent)
+	if agent == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.overseerEventSub != 0 && s.proc != nil {
+		s.proc.UnsubscribeEvents(s.overseerEventSub)
+		s.overseerEventSub = 0
+	}
+	s.proc = agent
+	s.overseerEventSub = agent.SubscribeEvents(s.DeliverOverseerEvent)
+	s.mu.Unlock()
 }
 
 // DeliverOverseerEvent is the live event path for the overseer: normalise
@@ -166,6 +180,8 @@ func (s *Server) AttachOverseer(agent *claudia.Agent) {
 // turn/idle status. Extracted so tests can drive the same path without
 // a live claudia.Agent.
 func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
+	// Any ACP traffic resets stuck-busy idle (🎯T204).
+	s.NoteOverseerProgress()
 	// Normalise ACP/raw provider events into the stable chat wire
 	// shape the web UI understands (🎯T39). Raw ACP payloads have
 	// no type/message.content, so a pass-through leaves the
@@ -275,6 +291,10 @@ func (s *Server) drainOverseerNotes() {
 		)
 		return
 	}
+	// Successful prompt delivery: mark waiting so stuck-busy can see an
+	// in-flight turn even when only notify/owner notes are on the wire.
+	s.waiting = true
+	s.overseerLastProgress = time.Now()
 	depth := len(s.notifyQueue)
 	s.mu.Unlock()
 	slog.Info("notify_queue",

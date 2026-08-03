@@ -1388,8 +1388,18 @@ function handle(m) {
     }
     // Fall through so existing error UI (if any) still runs.
   }
-  if (typ === 'status' && m.text && /overseer is back/i.test(String(m.text))) {
-    setDegraded(false);
+  // 🎯T204 / T94: cockpit ready — clear degraded banner AND working chrome so
+  // plain Enter is send again (not permanent enqueue while workingEl stuck).
+  if (typ === 'status') {
+    const stText = m.text != null ? String(m.text) : '';
+    const ready = /overseer is back/i.test(stText) || m.state === 'idle';
+    if (ready && /overseer is back/i.test(stText)) {
+      setDegraded(false);
+      if (workingEl) setWorking(false);
+    } else if (m.state === 'idle' && workingEl && !/thinking/i.test(stText)) {
+      // Server settled a turn (or forced idle after unstick).
+      setWorking(false);
+    }
   }
 
   // 🎯T143: soft reconnect — drop history firehose; keep control frames.
@@ -5011,12 +5021,36 @@ function renderAgentInspect(model) {
     body.className = 'msg-body';
     d.appendChild(body);
     d._body = body;
+    // 🎯T217: assistant/jevons must never land as textContent (raw ** / fences).
     // Shared main path: paintBody → parseAssistantMarkdown + mermaid/hljs/links;
-    // user → renderUserText (quotes/images).
-    if (typeof paintBody === 'function') {
-      paintBody(d, msgRole, line.text || '');
-    } else {
-      body.textContent = line.text || '';
+    // user → renderUserText (quotes/images). Residual: user/system dumps stay plain.
+    const raw = line.text || '';
+    try {
+      if (typeof paintBody === 'function') {
+        paintBody(d, msgRole, raw);
+      } else if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
+        body.innerHTML = parseAssistantMarkdown(raw);
+        if (typeof decorateBodyLinks === 'function') decorateBodyLinks(body);
+      } else if (msgRole === 'user' && typeof renderUserText === 'function') {
+        body.innerHTML = renderUserText(raw);
+      } else if (msgRole === 'jevons' || msgRole === 'user') {
+        // Last-resort escape (still not textContent for assistant — avoids raw MD look
+        // when marked is absent; escaped HTML is visible as plain).
+        body.textContent = raw;
+      } else {
+        body.textContent = raw;
+      }
+    } catch (paintErr) {
+      // One bad turn must not abort the forEach — keep remaining turns paint-able.
+      try {
+        if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
+          body.innerHTML = parseAssistantMarkdown(raw);
+        } else {
+          body.textContent = raw;
+        }
+      } catch (_) {
+        body.textContent = raw;
+      }
     }
     agentInspectBody.appendChild(d);
   });

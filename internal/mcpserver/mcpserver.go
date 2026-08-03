@@ -114,6 +114,37 @@ type Server struct {
 	idleActivity *IdleActivityTracker
 	// idleNudgeLedger persists backoff/max counts under state_dir/fleet/.
 	idleNudgeLedger *IdleNudgeLedger
+	// idleNudgeSweep is set by StartIdleNudgeLoop so cockpit can trigger
+	// a non-post-restart sweep (🎯T204).
+	idleNudgeSweep func(postRestart bool)
+}
+
+// TriggerIdleNudgeSweep runs one idle-nudge sweep (postRestart=false).
+// No-op until StartIdleNudgeLoop has registered the actuator.
+func (s *Server) TriggerIdleNudgeSweep() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	f := s.idleNudgeSweep
+	s.mu.Unlock()
+	if f != nil {
+		f(false)
+	}
+}
+
+// SweepFleetHealth runs SweepDeadAgents for the given overseer name
+// (log-only report). Safe for cockpit hooks.
+func (s *Server) SweepFleetHealth(overseerName string) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	if overseerName == "" {
+		overseerName = "jevons"
+	}
+	if reps := SweepDeadAgents(s.registry, overseerName); len(reps) > 0 {
+		slog.Info("cockpit fleet health", "report", FormatDeadAgentReport(reps))
+	}
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn

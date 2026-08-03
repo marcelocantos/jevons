@@ -635,15 +635,19 @@ func main() {
 	// first pass; backoff/max). Runs even if overseer attach failed so
 	// AutoStart workers are not left phase=idle forever. Owner restarts
 	// daily after achieve — do not claim done without that path (T194).
+	// Also registers TriggerIdleNudgeSweep for cockpit fleet hooks (T204).
 	go mcpserver.StartIdleNudgeLoop(ctx, mcpserver.IdleNudgeLoopArgs{
 		Server:       mcpSrv,
 		StateDir:     cfg.StateDir,
 		OverseerName: cfg.OverseerName,
 	})
 
-	// 🎯T204: continuous cockpit convergence — mid-session stop/rewind/
-	// launch failure must re-enter Launch+AttachOverseer; waitForOverseer
-	// alone never launches. Interval reconciler owns the desired state.
+	// 🎯T204: cockpit converge — overseer Alive+Attach+turn-usable (stuck-busy
+	// unstick), fleet dead-handle recovery, idle worker nudge. Not liveness alone.
+	srv.SetCockpitHooks(server.CockpitHooks{
+		FleetHealth: func() { mcpSrv.SweepFleetHealth(cfg.OverseerName) },
+		FleetNudge:  func() { mcpSrv.TriggerIdleNudgeSweep() },
+	})
 	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
 
 	// 🎯T50/🎯T54 regression oracle, hoisted out of the attach block so it

@@ -36,7 +36,8 @@ const (
 	// the product stops looping (owner may still kill). Residual: no infinite loops.
 	DefaultIdleNudgeMax = 8
 	// DefaultIdleNudgeInterval is how often the daemon re-evaluates the fleet.
-	DefaultIdleNudgeInterval = 1 * time.Minute
+	// 30s keeps pressure on idle workers; cockpit also ticks fleet hooks (🎯T204).
+	DefaultIdleNudgeInterval = 30 * time.Second
 	// DefaultPostRestartDelay lets StartAll settle before the first wake sweep.
 	DefaultPostRestartDelay = 15 * time.Second
 
@@ -850,6 +851,11 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 			"skipped", skipped,
 		)
 	}
+
+	// Expose sweep to cockpit converge (🎯T204) without a second ticker owner.
+	args.Server.mu.Lock()
+	args.Server.idleNudgeSweep = runSweep
+	args.Server.mu.Unlock()
 
 	// Post-restart wake after short settle.
 	select {

@@ -48,9 +48,14 @@ PORT="${JEVONS_RESTART_PORT:-13705}"
 WORKDIR="${JEVONS_RESTART_WORKDIR:-$ROOT}"
 LOG="${JEVONS_RESTART_LOG:-$HOME/.jevons/daily-jevonsd.log}"
 WAIT_SEC="${JEVONS_RESTART_WAIT_SEC:-90}"
+# 🎯T218: min seconds between successful restarts (debounce thrash from
+# concurrent workers each bouncing daily after every land).
+MIN_INTERVAL_SEC="${JEVONS_RESTART_MIN_INTERVAL_SEC:-180}"
+STAMP_FILE="${JEVONS_RESTART_STAMP:-$HOME/.jevons/restart-daily.last}"
 BIN="$ROOT/bin/jevonsd"
 DRY_RUN=0
 SKIP_MAKE="${JEVONS_RESTART_SKIP_MAKE:-0}"
+FORCE=0
 
 usage() {
   cat <<'EOF'
@@ -62,13 +67,16 @@ start repo bin/jevonsd detached, wait until /health and /api/frontier serve.
 Options:
   -h, --help     Show this help and exit 0
   --dry-run      Print planned steps; do not stop/start/kill
+  --force        Ignore min-interval debounce (🎯T218)
 
 Env:
-  JEVONS_RESTART_PORT       Listen port (default 13705)
-  JEVONS_RESTART_WORKDIR    -workdir for jevonsd (default: repo root)
-  JEVONS_RESTART_LOG        Daemon log file (default ~/.jevons/daily-jevonsd.log)
-  JEVONS_RESTART_WAIT_SEC   Health wait seconds (default 90)
-  JEVONS_RESTART_SKIP_MAKE  If 1, skip make rebuild
+  JEVONS_RESTART_PORT              Listen port (default 13705)
+  JEVONS_RESTART_WORKDIR           -workdir for jevonsd (default: repo root)
+  JEVONS_RESTART_LOG               Daemon log file (default ~/.jevons/daily-jevonsd.log)
+  JEVONS_RESTART_WAIT_SEC          Health wait seconds (default 90)
+  JEVONS_RESTART_SKIP_MAKE         If 1, skip make rebuild
+  JEVONS_RESTART_MIN_INTERVAL_SEC  Debounce window (default 180; 🎯T218)
+  JEVONS_RESTART_STAMP             Stamp file for last success (default ~/.jevons/restart-daily.last)
 
 BLESSED INVOKE (survive agent/overseer death):
   nohup ./scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
@@ -96,11 +104,29 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN=1
       shift
       ;;
+    --force)
+      FORCE=1
+      shift
+      ;;
     *)
       die "unknown argument: $1 (try --help)"
       ;;
   esac
 done
+
+# 🎯T218: refuse thrash restarts unless --force or interval elapsed.
+if [[ "$FORCE" -eq 0 && "$DRY_RUN" -eq 0 && -f "$STAMP_FILE" ]]; then
+  last="$(cat "$STAMP_FILE" 2>/dev/null || true)"
+  now="$(date +%s)"
+  if [[ "$last" =~ ^[0-9]+$ ]]; then
+    elapsed=$((now - last))
+    if [[ "$elapsed" -lt "$MIN_INTERVAL_SEC" ]]; then
+      remain=$((MIN_INTERVAL_SEC - elapsed))
+      log "🎯T218 debounce: last restart ${elapsed}s ago (min ${MIN_INTERVAL_SEC}s); skip (remain ${remain}s). Use --force to override."
+      exit 0
+    fi
+  fi
+fi
 
 # --- helpers -----------------------------------------------------------------
 
@@ -240,4 +266,7 @@ start_daemon_detached
 wait_until_serving
 
 log "OK: daily jevonsd serving on :$PORT (workdir=$WORKDIR)"
+# 🎯T218: stamp successful restart for debounce window.
+mkdir -p "$(dirname "$STAMP_FILE")" 2>/dev/null || true
+date +%s >"$STAMP_FILE" 2>/dev/null || true
 exit 0

@@ -5,13 +5,14 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 )
 
 func TestPlanCockpitDesiredOK(t *testing.T) {
 	t.Parallel()
-	p := planCockpit(cockpitObs{Registered: true, ProcAlive: true, ChatAttached: true}, 0, 8)
+	p := planCockpit(cockpitObs{Registered: true, ProcAlive: true, ChatAttached: true}, 0, 8, 0)
 	if p != cockpitOK {
 		t.Fatalf("phase=%v want OK", p)
 	}
@@ -19,7 +20,7 @@ func TestPlanCockpitDesiredOK(t *testing.T) {
 
 func TestPlanCockpitAttachWhenProcAlive(t *testing.T) {
 	t.Parallel()
-	p := planCockpit(cockpitObs{Registered: true, ProcAlive: true, ChatAttached: false}, 3, 8)
+	p := planCockpit(cockpitObs{Registered: true, ProcAlive: true, ChatAttached: false}, 3, 8, 0)
 	if p != cockpitAttach {
 		t.Fatalf("phase=%v want Attach", p)
 	}
@@ -27,7 +28,7 @@ func TestPlanCockpitAttachWhenProcAlive(t *testing.T) {
 
 func TestPlanCockpitLaunchWhenDown(t *testing.T) {
 	t.Parallel()
-	p := planCockpit(cockpitObs{Registered: true, ProcAlive: false, ChatAttached: false}, 0, 8)
+	p := planCockpit(cockpitObs{Registered: true, ProcAlive: false, ChatAttached: false}, 0, 8, 0)
 	if p != cockpitLaunch {
 		t.Fatalf("phase=%v want Launch", p)
 	}
@@ -35,11 +36,11 @@ func TestPlanCockpitLaunchWhenDown(t *testing.T) {
 
 func TestPlanCockpitGiveUpAfterMaxAttempts(t *testing.T) {
 	t.Parallel()
-	p := planCockpit(cockpitObs{Registered: true, ProcAlive: false, ChatAttached: false}, 8, 8)
+	p := planCockpit(cockpitObs{Registered: true, ProcAlive: false, ChatAttached: false}, 8, 8, 0)
 	if p != cockpitGiveUp {
 		t.Fatalf("phase=%v want GiveUp", p)
 	}
-	p = planCockpit(cockpitObs{Registered: true, ProcAlive: false, ChatAttached: false}, 99, 8)
+	p = planCockpit(cockpitObs{Registered: true, ProcAlive: false, ChatAttached: false}, 99, 8, 0)
 	if p != cockpitGiveUp {
 		t.Fatalf("phase=%v want GiveUp", p)
 	}
@@ -47,9 +48,36 @@ func TestPlanCockpitGiveUpAfterMaxAttempts(t *testing.T) {
 
 func TestPlanCockpitUnregisteredGiveUp(t *testing.T) {
 	t.Parallel()
-	p := planCockpit(cockpitObs{}, 0, 8)
+	p := planCockpit(cockpitObs{}, 0, 8, 0)
 	if p != cockpitGiveUp {
 		t.Fatalf("phase=%v want GiveUp", p)
+	}
+}
+
+func TestPlanCockpitUnstickBusyWhenStalePrompt(t *testing.T) {
+	t.Parallel()
+	o := cockpitObs{
+		Registered: true, ProcAlive: true, ChatAttached: true,
+		PromptInFlight: true, SinceProgress: 2 * time.Minute,
+	}
+	p := planCockpit(o, 0, 8, 90*time.Second)
+	if p != cockpitUnstickBusy {
+		t.Fatalf("phase=%v want UnstickBusy", p)
+	}
+	// Fresh progress while busy → still OK (healthy long turn).
+	o.SinceProgress = 5 * time.Second
+	p = planCockpit(o, 0, 8, 90*time.Second)
+	if p != cockpitOK {
+		t.Fatalf("fresh progress phase=%v want OK", p)
+	}
+	// Queue backlog with no progress → unstick.
+	o = cockpitObs{
+		Registered: true, ProcAlive: true, ChatAttached: true,
+		QueueDepth: 3, SinceProgress: 2 * time.Minute,
+	}
+	p = planCockpit(o, 0, 8, 90*time.Second)
+	if p != cockpitUnstickBusy {
+		t.Fatalf("queue backlog phase=%v want UnstickBusy", p)
 	}
 }
 
