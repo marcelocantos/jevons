@@ -67,12 +67,13 @@ you did.
 
 ## Recursive self-improvement & filing reflex (🎯T92 / 🎯T103 / 🎯T130) — hard doctrine
 
-**Ambient mission (🎯T92), not only `/retro`:** continuous self-improvement is standing work.
+**Ambient mission (🎯T92 / 🎯T92.2), not only `/retro`:** continuous self-improvement is standing work.
 The harness runs retrospectives on a **periodic schedule** and a **stream** from activity
-(eventlog lifecycle errors, idle-reap markers) that **mint bullseye targets** with acceptance
-when evidence clusters (frequency threshold, fingerprint ledger, max-per-cycle) — closed path
-without the owner harvesting ideas. On-demand: **`jevons_rsi_cycle`**. Mid-turn agent habit
-remains the **filing reflex (🎯T130)** below. Related hierarchy: **🎯T129**.
+(eventlog lifecycle errors, idle-reap markers, **owner-chatlog friction**, **session transcripts**
+that mnemo indexes) that **mint bullseye targets** with acceptance when evidence clusters
+(frequency threshold, fingerprint ledger, max-per-cycle) — closed path without the owner
+harvesting ideas. On-demand: **`jevons_rsi_cycle`**. Mid-turn agent habit remains the
+**filing reflex (🎯T130)** below. Related hierarchy: **🎯T129**.
 
 When a **real product gap**, **repeated failure mode**, or **standing behavioural rule** appears mid-work, **file or prompt-file a bullseye target** (name + acceptance) **in the same turn** — not only narrate a "standing rule" / "going forward I will…" in chat. Ambient self-improvement (🎯T92 / 🎯T103) is the habit; **🎯T130** is the hard filing reflex.
 
@@ -91,7 +92,9 @@ Use **`jevons_target_file`** (cwd + name + acceptance) and/or bullseye MCP (`bul
 
 ### Residual
 
-One-off flukes may skip filing; judgment allowed. Do not mint noise targets for transient one-shots. Deep mnemo transcript mining remains the `/retro` skill until a later RSI surface expands beyond rule-based eventlog extract.
+One-off flukes may skip filing; judgment allowed. Do not mint noise targets for transient one-shots.
+Ambient deeper surfaces (🎯T92.2) cover owner-chat friction + session transcript phrase extract;
+full LLM `/retro`-class narrative analysis remains optional depth beyond the rule-based harness.
 
 ### target: asides (🎯T93 / 🎯T95)
 

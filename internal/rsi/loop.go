@@ -30,6 +30,16 @@ type LoopArgs struct {
 	MintCwd string
 	// EventLogPath defaults to eventlog.DefaultPath(StateDir).
 	EventLogPath string
+	// ChatLogPath is the owner-chat durable JSONL (🎯T92.2). Empty skips that surface.
+	// Typical: state_dir/chatlog/<overseer>.jsonl.
+	ChatLogPath string
+	// SessionsDir is the provider session store (mnemo-indexed chat_history.jsonl).
+	// Empty skips session transcript mining (🎯T92.2).
+	SessionsDir string
+	// ChatLookback / SessionLookback / SessionTurnCap bound deeper sampling (0 = package defaults).
+	ChatLookback    int
+	SessionLookback int
+	SessionTurnCap  int
 	// Interval defaults to DefaultInterval. ≤0 disables the schedule ticker
 	// (stream-only / manual RunOnce still work).
 	Interval time.Duration
@@ -162,6 +172,19 @@ func (l *Loop) cycle(reason string) (CycleResult, error) {
 	ev := EventsToEvidence(rows)
 	ev = append(ev, stream...)
 
+	// 🎯T92.2 deeper surfaces: owner-chatlog friction + session transcripts.
+	// Failures here are soft (log + skip surface) so ambient never dies on one path.
+	if chatEv, err := l.loadChatEvidence(); err != nil {
+		slog.Debug("ambient RSI chatlog surface skipped", "err", err)
+	} else {
+		ev = append(ev, chatEv...)
+	}
+	if sessEv, err := l.loadSessionEvidence(); err != nil {
+		slog.Debug("ambient RSI session surface skipped", "err", err)
+	} else {
+		ev = append(ev, sessEv...)
+	}
+
 	prior, err := l.ledger.ActiveFingerprints(l.args.Now())
 	if err != nil {
 		return CycleResult{}, err
@@ -195,6 +218,32 @@ func (l *Loop) cycle(reason string) (CycleResult, error) {
 	}
 	_ = reason
 	return res, nil
+}
+
+func (l *Loop) loadChatEvidence() ([]Evidence, error) {
+	path := strings.TrimSpace(l.args.ChatLogPath)
+	if path == "" {
+		// Convention: state_dir/chatlog/*.jsonl — pick first match when unset.
+		// Daemon passes explicit path; tests may omit.
+		return nil, nil
+	}
+	turns, err := LoadChatLogTurns(path, l.args.ChatLookback)
+	if err != nil {
+		return nil, err
+	}
+	return ChatTurnsToEvidence(turns), nil
+}
+
+func (l *Loop) loadSessionEvidence() ([]Evidence, error) {
+	dir := strings.TrimSpace(l.args.SessionsDir)
+	if dir == "" {
+		return nil, nil
+	}
+	turns, err := LoadRecentSessionTurns(dir, l.args.SessionLookback, l.args.SessionTurnCap)
+	if err != nil {
+		return nil, err
+	}
+	return ChatTurnsToEvidence(turns), nil
 }
 
 func loadErrorishEvents(path string, limit int) ([]EventRow, error) {

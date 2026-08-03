@@ -1,10 +1,13 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package rsi implements the thin ambient recursive self-improvement loop
-// (🎯T92): evidence from activity → improvement candidates → noise-controlled
-// bullseye filing. Schedule and stream hooks live in the daemon; this package
-// is pure + injectable so hermetic tests prove the mint path without Grok.
+// Package rsi implements the ambient recursive self-improvement loop
+// (🎯T92 / 🎯T92.2): evidence from activity → improvement candidates →
+// noise-controlled bullseye filing. Surfaces: eventlog lifecycle, stream
+// (idle-reap), owner-chat friction (chatlog), and session transcripts
+// (mnemo-indexed chat_history). Schedule/stream hooks live in the daemon;
+// this package is pure + injectable so hermetic tests prove the mint path
+// without Grok.
 package rsi
 
 import (
@@ -25,7 +28,8 @@ const DefaultMaxMint = 2
 // Evidence is one unit of activity for retrospective analysis.
 type Evidence struct {
 	// Kind classifies the surface: lifecycle_error, tool_failure,
-	// event_push_error, reaped_idle, stuck_work, cost_anomaly, chat_gap, other.
+	// event_push_error, reaped_idle, stuck_work, cost_anomaly, chat_gap,
+	// transcript_friction, other.
 	Kind      string
 	Component string
 	Decision  string
@@ -186,8 +190,8 @@ type evidenceBucket struct {
 }
 
 // ExtractCandidates clusters evidence into improvement candidates.
-// Thin vertical: rule-based grouping by kind+component+decision+normalized msg.
-// LLM/mnemo-depth retrospectives remain residual (deeper T92 children).
+// Rule-based grouping by kind+component+decision+normalized msg (T92.1).
+// Deeper surfaces (chatlog + session transcripts) feed the same cluster path (T92.2).
 func ExtractCandidates(ev []Evidence, minCount int) []Candidate {
 	if minCount <= 0 {
 		minCount = DefaultMinCount
@@ -352,7 +356,7 @@ func actionable(e Evidence) bool {
 	kind := strings.TrimSpace(e.Kind)
 	switch kind {
 	case "lifecycle_error", "tool_failure", "event_push_error",
-		"stuck_work", "cost_anomaly", "chat_gap":
+		"stuck_work", "cost_anomaly", "chat_gap", "transcript_friction":
 		return true
 	case "reaped_idle":
 		// Stream marker alone is not a mint signal (noise); only clusters with errors matter.
@@ -500,12 +504,18 @@ func candidateFromBucket(b *evidenceBucket) Candidate {
 	kindLabel := strings.Join(kinds, ",")
 
 	name := fmt.Sprintf("%s %s failures are diagnosed or eliminated", comp, dec)
-	// Prefer stuck/cost wording when those kinds dominate.
+	// Prefer stuck/cost/chat/session wording when those kinds dominate.
 	if _, ok := b.kinds["stuck_work"]; ok {
 		name = fmt.Sprintf("Stuck work in %s is detected and unblocked early", comp)
 	}
 	if _, ok := b.kinds["cost_anomaly"]; ok {
 		name = fmt.Sprintf("Cost anomalies in %s are explained or clamped", comp)
+	}
+	if _, ok := b.kinds["chat_gap"]; ok {
+		name = fmt.Sprintf("Owner-chat friction (%s) is reduced or filed as a target", phraseFromSample(e))
+	}
+	if _, ok := b.kinds["transcript_friction"]; ok {
+		name = fmt.Sprintf("Session transcript friction (%s) is diagnosed or eliminated", phraseFromSample(e))
 	}
 
 	acceptance := []string{
@@ -514,7 +524,7 @@ func candidateFromBucket(b *evidenceBucket) Candidate {
 		"Hermetic or live evidence shows either a reduced recurrence rate or an owner-visible disposition of the failure mode.",
 	}
 	ctx := fmt.Sprintf(
-		"Ambient RSI (🎯T92) cycle from evidence: kind=%s component=%s decision=%s count=%d sample_msg=%q sources=%v. Origin: ambient-rsi thin vertical (rule-based extract; not full mnemo /retro).",
+		"Ambient RSI (🎯T92/T92.2) cycle from evidence: kind=%s component=%s decision=%s count=%d sample_msg=%q sources=%v. Origin: ambient-rsi (eventlog + owner-chat + session transcript extract; noise-controlled).",
 		kindLabel, comp, dec, b.count, truncate(e.Message, 160), b.ids,
 	)
 	fp := FingerprintOf(name, comp+"|"+dec+"|"+kindLabel)
@@ -535,4 +545,21 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// phraseFromSample pulls the friction phrase from Fields or message for naming.
+func phraseFromSample(e Evidence) string {
+	if e.Fields != nil {
+		if p := strings.TrimSpace(e.Fields["phrase"]); p != "" {
+			return p
+		}
+	}
+	msg := strings.TrimSpace(e.Message)
+	if i := strings.Index(msg, ": "); i >= 0 && i+2 < len(msg) {
+		return truncate(msg[i+2:], 40)
+	}
+	if msg != "" {
+		return truncate(msg, 40)
+	}
+	return "repeated pain"
 }

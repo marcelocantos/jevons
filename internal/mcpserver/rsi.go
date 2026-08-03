@@ -26,7 +26,7 @@ func (s *Server) SetRSILoop(loop *rsi.Loop) {
 func (s *Server) registerRSITools() {
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_rsi_cycle",
-			mcp.WithDescription("Run one ambient RSI retrospective cycle now (🎯T92): sample recent lifecycle/eventlog evidence (+ stream buffer), extract improvement candidates, apply noise control, and file bullseye targets when not dry-run. Prefer harness schedule/stream for ambient operation; use this to force a cycle or inspect proposals."),
+			mcp.WithDescription("Run one ambient RSI retrospective cycle now (🎯T92/T92.2): sample lifecycle/eventlog evidence, owner-chatlog friction, session transcripts (mnemo surface), + stream buffer; extract improvement candidates; apply noise control; file bullseye targets when not dry-run. Prefer harness schedule/stream for ambient operation; use this to force a cycle or inspect proposals."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, extract+dedupe only — do not file targets (overrides loop dry-run for this call only when the loop supports it via RunOnce still filing based on loop config; prefer loop DryRun for global).")),
 		),
 		s.handleRSICycle,

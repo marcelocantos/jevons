@@ -912,6 +912,8 @@ func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop
 //	JEVONS_RSI_INTERVAL   — duration (default 30m); "0" or negative disables ticker
 //	JEVONS_RSI_MINT_CWD   — bullseye repo to file into (default: discover product repo)
 //	JEVONS_RSI_DRY_RUN    — "1"/"true" extract only, never file
+//	JEVONS_RSI_NO_CHAT    — "1" skip owner-chatlog deeper surface (🎯T92.2)
+//	JEVONS_RSI_NO_SESSION — "1" skip session-transcript deeper surface (🎯T92.2)
 func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Loop {
 	interval := rsi.DefaultInterval
 	if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_INTERVAL")); v != "" {
@@ -932,11 +934,21 @@ func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.S
 	case "1", "true", "yes", "on":
 		dry = true
 	}
+	chatLogPath := ""
+	if !envTruthy("JEVONS_RSI_NO_CHAT") {
+		chatLogPath = filepath.Join(cfg.StateDir, "chatlog", cfg.OverseerName+".jsonl")
+	}
+	sessionsDir := ""
+	if !envTruthy("JEVONS_RSI_NO_SESSION") {
+		sessionsDir = strings.TrimSpace(cfg.SessionsDir)
+	}
 	loop, err := rsi.NewLoop(rsi.LoopArgs{
-		StateDir: cfg.StateDir,
-		MintCwd:  mintCwd,
-		Interval: interval,
-		DryRun:   dry,
+		StateDir:    cfg.StateDir,
+		MintCwd:     mintCwd,
+		Interval:    interval,
+		DryRun:      dry,
+		ChatLogPath: chatLogPath,
+		SessionsDir: sessionsDir,
 	})
 	if err != nil {
 		slog.Warn("ambient RSI disabled", "err", err)
@@ -948,9 +960,20 @@ func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.S
 		"interval", interval.String(),
 		"mint_cwd", mintCwd,
 		"dry_run", dry,
+		"chatlog", chatLogPath != "",
+		"sessions", sessionsDir != "",
 		"ledger", "state_dir/rsi/minted.json",
 	)
 	return loop
+}
+
+func envTruthy(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveRSIMintCwd picks the bullseye repo for ambient mints: product tree
