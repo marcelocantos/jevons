@@ -254,6 +254,89 @@
     return label.replace(/"/g, "'").replace(/\n/g, ' ');
   }
 
+  // buildActiveDependencyMermaid(targets) — full unachieved graph (🎯T185).
+  // targets: [{ id, name?, depends_on?: [{id}|string] }]. Only nodes present
+  // in the set are drawn; edges whose dep is missing are dropped (among
+  // non-achieved). Returns raw Mermaid (no fences) for panel render.
+  function buildActiveDependencyMermaid(targets) {
+    var list = Array.isArray(targets) ? targets : [];
+    var byId = {};
+    var ids = [];
+    var i;
+    for (i = 0; i < list.length; i++) {
+      var t = list[i];
+      if (!t || t.id == null) continue;
+      var id = String(t.id).trim();
+      if (!id || byId[id]) continue;
+      byId[id] = t;
+      ids.push(id);
+    }
+    ids.sort();
+    var lines = ['graph TD'];
+    for (i = 0; i < ids.length; i++) {
+      var nid = mermaidNodeId(ids[i]);
+      var row = byId[ids[i]];
+      var name = row && row.name != null ? String(row.name).trim() : '';
+      var label = mermaidLabel(ids[i], name);
+      lines.push('    ' + nid + '["' + label + '"]');
+    }
+    var edgeKeys = {};
+    var edges = [];
+    for (i = 0; i < ids.length; i++) {
+      var fromId = ids[i];
+      var fromNode = mermaidNodeId(fromId);
+      var deps = normalizeDependents(
+        byId[fromId].depends_on != null
+          ? byId[fromId].depends_on
+          : byId[fromId].dependsOn
+      );
+      for (var j = 0; j < deps.length; j++) {
+        var depId = deps[j].id;
+        if (!byId[depId]) continue; // only edges among unachieved set
+        var toNode = mermaidNodeId(depId);
+        var ek = fromNode + '\0' + toNode;
+        if (edgeKeys[ek]) continue;
+        edgeKeys[ek] = true;
+        edges.push({ from: fromNode, to: toNode });
+      }
+    }
+    edges.sort(function (a, b) {
+      if (a.from !== b.from) return a.from < b.from ? -1 : 1;
+      return a.to < b.to ? -1 : a.to > b.to ? 1 : 0;
+    });
+    for (i = 0; i < edges.length; i++) {
+      lines.push('    ' + edges[i].from + ' -.->|needs| ' + edges[i].to);
+    }
+    return lines.join('\n') + (lines.length > 1 ? '\n' : '');
+  }
+
+  // normalizeGraphPayload(apiJSON|err) → { available, mermaid, ledger, nodes, edges, error }
+  function normalizeGraphPayload(payload, err) {
+    if (err) {
+      return {
+        available: false,
+        mermaid: '',
+        ledger: '',
+        nodeCount: 0,
+        edgeCount: 0,
+        error: String(err && err.message ? err.message : err),
+      };
+    }
+    var p = payload || {};
+    var mermaid = p.mermaid != null ? String(p.mermaid) : '';
+    return {
+      available: !!p.available,
+      mermaid: mermaid,
+      ledger: p.ledger != null ? String(p.ledger) : '',
+      cwd: p.cwd != null ? String(p.cwd) : '',
+      nodeCount: typeof p.node_count === 'number' ? p.node_count
+        : (typeof p.nodeCount === 'number' ? p.nodeCount : 0),
+      edgeCount: typeof p.edge_count === 'number' ? p.edge_count
+        : (typeof p.edgeCount === 'number' ? p.edgeCount : 0),
+      error: p.error != null ? String(p.error) : '',
+    };
+  }
+
   // formatDepMinigraph(row) — mermaid LR of focus + incoming + outgoing (🎯T184).
   // Returns fenced ```mermaid block or '' when no focus id.
   function formatDepMinigraph(row) {
@@ -441,8 +524,10 @@
     return parts.join('. ');
   }
 
-  // API path constant — client never hard-codes ledger file paths.
+  // API path constants — client never hard-codes ledger file paths.
   var API_PATH = '/api/frontier';
+  // 🎯T185: full unachieved dependency graph (Mermaid) for Frontier Graph control.
+  var GRAPH_API_PATH = '/api/frontier/graph';
 
   // 🎯T182: play control → message product PO to start work on a frontier row.
   var PLAY_GLYPH = '\u25B6'; // ▶
@@ -513,12 +598,14 @@
     TAB_FRONTIER: TAB_FRONTIER,
     POLL_MS: POLL_MS,
     API_PATH: API_PATH,
+    GRAPH_API_PATH: GRAPH_API_PATH,
     FANOUT_MARK: FANOUT_MARK,
     PLAY_GLYPH: PLAY_GLYPH,
     DEFAULT_PLAY_PO: DEFAULT_PLAY_PO,
     nextBottomTab: nextBottomTab,
     tabAfterAgentSelect: tabAfterAgentSelect,
     normalizePayload: normalizePayload,
+    normalizeGraphPayload: normalizeGraphPayload,
     formatStatus: formatStatus,
     statusTitle: statusTitle,
     formatFanout: formatFanout,
@@ -528,6 +615,7 @@
     formatTargetCardMarkdown: formatTargetCardMarkdown,
     formatTargetCardPlain: formatTargetCardPlain,
     formatDepMinigraph: formatDepMinigraph,
+    buildActiveDependencyMermaid: buildActiveDependencyMermaid,
     mermaidNodeId: mermaidNodeId,
     resolvePlayPO: resolvePlayPO,
     agentSendPath: agentSendPath,

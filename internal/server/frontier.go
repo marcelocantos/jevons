@@ -526,6 +526,231 @@ func (s *Server) handleFrontier(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// GraphResponse is GET /api/frontier/graph JSON (🎯T185): entire unachieved
+// dependency graph as Mermaid source for the Frontier Graph control.
+type GraphResponse struct {
+	Available bool   `json:"available"`
+	Ledger    string `json:"ledger,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
+	Mermaid   string `json:"mermaid,omitempty"`
+	NodeCount int    `json:"node_count,omitempty"`
+	EdgeCount int    `json:"edge_count,omitempty"`
+	Error     string `json:"error,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// mermaidSafeNodeID maps target ids to Mermaid node ids (T27.1 → T27_1).
+func mermaidSafeNodeID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "node"
+	}
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "node"
+	}
+	// Mermaid identifiers should not start with a digit.
+	if out[0] >= '0' && out[0] <= '9' {
+		return "n_" + out
+	}
+	return out
+}
+
+// truncateMermaidLabel shortens a display name for dense graphs.
+func truncateMermaidLabel(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 1 {
+		return "…"
+	}
+	// rune-aware-ish: byte truncate is fine for ASCII-heavy ledger names.
+	return s[:max-1] + "…"
+}
+
+// escapeMermaidLabel keeps quoted node text safe for Mermaid.
+func escapeMermaidLabel(s string) string {
+	s = strings.ReplaceAll(s, `"`, "'")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return s
+}
+
+// computeActiveGraphMermaidFromLedger builds Mermaid for all unachieved
+// (active) targets and depends_on edges among them (🎯T185). Achieved /
+// set_aside nodes are omitted; edges to non-active deps are dropped.
+func computeActiveGraphMermaidFromLedger(ledgerPath string) (mermaid string, nodeCount, edgeCount int, err error) {
+	data, err := os.ReadFile(ledgerPath)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	var doc bullseyeLedger
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return "", 0, 0, fmt.Errorf("parse ledger: %w", err)
+	}
+	if doc.Targets == nil || len(doc.Targets) == 0 {
+		return "graph TD\n", 0, 0, nil
+	}
+
+	activeIDs := make([]string, 0)
+	nameOf := make(map[string]string)
+	active := make(map[string]bool)
+	for id, t := range doc.Targets {
+		if !isActiveStatus(t.Status) {
+			continue
+		}
+		active[id] = true
+		activeIDs = append(activeIDs, id)
+		nameOf[id] = strings.TrimSpace(t.Name)
+	}
+	sort.Slice(activeIDs, func(i, j int) bool {
+		return targetIDLess(activeIDs[i], activeIDs[j])
+	})
+
+	var b strings.Builder
+	b.WriteString("graph TD\n")
+	for _, id := range activeIDs {
+		nid := mermaidSafeNodeID(id)
+		label := nameOf[id]
+		if label == "" {
+			label = id
+		} else {
+			// Prefer "T185 · short name" for scanability in large graphs.
+			label = id + " · " + truncateMermaidLabel(label, 36)
+		}
+		fmt.Fprintf(&b, "    %s[\"%s\"]\n", nid, escapeMermaidLabel(label))
+	}
+
+	// Edges: dependent -.->|needs| dep among active nodes only.
+	type edge struct{ from, to string }
+	edges := make([]edge, 0)
+	seenEdge := make(map[string]bool)
+	for _, id := range activeIDs {
+		t := doc.Targets[id]
+		from := mermaidSafeNodeID(id)
+		for _, dep := range t.DependsOn {
+			dep = strings.TrimSpace(dep)
+			if dep == "" || !active[dep] {
+				continue
+			}
+			to := mermaidSafeNodeID(dep)
+			key := from + "\x00" + to
+			if seenEdge[key] {
+				continue
+			}
+			seenEdge[key] = true
+			edges = append(edges, edge{from: from, to: to})
+		}
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].from != edges[j].from {
+			return edges[i].from < edges[j].from
+		}
+		return edges[i].to < edges[j].to
+	})
+	for _, e := range edges {
+		fmt.Fprintf(&b, "    %s -.->|needs| %s\n", e.from, e.to)
+	}
+	return b.String(), len(activeIDs), len(edges), nil
+}
+
+// loadFrontierGraph discovers the ledger and returns active-graph Mermaid.
+func loadFrontierGraph(cwd string) GraphResponse {
+	now := time.Now().UTC().Format(time.RFC3339)
+	resp := GraphResponse{
+		Available: false,
+		UpdatedAt: now,
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		resp.Error = "no workdir for bullseye discovery"
+		return resp
+	}
+	if strings.HasPrefix(cwd, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			cwd = filepath.Join(home, cwd[2:])
+		}
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		resp.Error = fmt.Sprintf("cwd: %v", err)
+		return resp
+	}
+	resp.Cwd = abs
+
+	ledger, notInit, err := discoverLedgerPath(abs)
+	if notInit {
+		resp.Error = "no bullseye ledger for this workdir"
+		return resp
+	}
+	if err != nil {
+		resp.Error = err.Error()
+		return resp
+	}
+	resp.Ledger = ledger
+
+	src, nodes, edges, err := computeActiveGraphMermaidFromLedger(ledger)
+	if err != nil {
+		// Fallback: bullseye CLI graph export (scope=active ≈ unachieved).
+		out, cliErr := runBullseyeCLI("query", "--view", "graph", "--scope", "active", "--cwd", abs)
+		if cliErr == nil && strings.TrimSpace(out) != "" {
+			// Strip optional ```mermaid fences from CLI output.
+			src = stripMermaidFenceCLI(out)
+			if src != "" {
+				resp.Mermaid = src
+				resp.Available = true
+				return resp
+			}
+		}
+		resp.Error = fmt.Sprintf("read ledger: %v", err)
+		return resp
+	}
+	resp.Mermaid = src
+	resp.NodeCount = nodes
+	resp.EdgeCount = edges
+	resp.Available = true
+	return resp
+}
+
+// stripMermaidFenceCLI peels ```mermaid wrappers from bullseye graph export.
+func stripMermaidFenceCLI(text string) string {
+	s := strings.TrimSpace(text)
+	s = strings.TrimPrefix(s, "\ufeff")
+	if strings.HasPrefix(s, "```") {
+		// Drop first fence line.
+		if i := strings.IndexByte(s, '\n'); i >= 0 {
+			s = s[i+1:]
+		} else {
+			return ""
+		}
+		s = strings.TrimSpace(s)
+		if strings.HasSuffix(s, "```") {
+			s = strings.TrimSpace(s[:len(s)-3])
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
+// handleFrontierGraph serves GET /api/frontier/graph — unachieved Mermaid (🎯T185).
+func (s *Server) handleFrontierGraph(w http.ResponseWriter, r *http.Request) {
+	cwd := s.frontierCwdOr(r.URL.Query().Get("cwd"))
+	resp := loadFrontierGraph(cwd)
+	if resp.Available && resp.Ledger != "" {
+		s.ensureFrontierWatch(resp.Ledger)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 // NotifyFrontierChanged pushes a live frame so the RHS frontier table refreshes
 // without waiting on poll (🎯T131). Safe from any goroutine.
 func (s *Server) NotifyFrontierChanged() {

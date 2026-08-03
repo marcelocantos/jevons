@@ -524,6 +524,66 @@ test('T182 tight status/fan CSS + play cell + send path wiring', function () {
     'T181 placement still present');
 });
 
+// 🎯T185: pure unachieved graph builder + Graph control + large panel wiring.
+test('buildActiveDependencyMermaid from unachieved set (🎯T185)', function () {
+  assert.strictEqual(FT.GRAPH_API_PATH, '/api/frontier/graph');
+  const src = FT.buildActiveDependencyMermaid([
+    { id: 'T2', name: 'Ready leaf', depends_on: [{ id: 'T1', name: 'Done' }] },
+    { id: 'T3', name: 'Blocked', depends_on: [{ id: 'T2' }] },
+    { id: 'T3.1', name: 'Nested', depends_on: ['T3', 'T1'] },
+    { id: 'T4', name: 'Orphan', depends_on: [] },
+  ]);
+  assert.ok(src.indexOf('graph TD') === 0, 'starts with graph TD: ' + src.slice(0, 40));
+  assert.ok(src.indexOf('T2[') >= 0 && src.indexOf('T3[') >= 0 && src.indexOf('T3_1[') >= 0, 'nodes');
+  assert.ok(src.indexOf('T4[') >= 0, 'orphan node');
+  // Edge to T1 dropped (T1 not in unachieved set).
+  assert.ok(src.indexOf('T1[') < 0, 'no T1 node');
+  assert.ok(src.indexOf('|needs| T1') < 0, 'no edge to T1');
+  assert.ok(src.indexOf('T3 -.->|needs| T2') >= 0, 'T3→T2: ' + src);
+  assert.ok(src.indexOf('T3_1 -.->|needs| T3') >= 0, 'T3.1→T3');
+  // Empty set still valid Mermaid.
+  const empty = FT.buildActiveDependencyMermaid([]);
+  assert.ok(empty.indexOf('graph TD') === 0, empty);
+});
+
+test('normalizeGraphPayload (🎯T185)', function () {
+  const ok = FT.normalizeGraphPayload({
+    available: true,
+    mermaid: 'graph TD\n  A --> B\n',
+    node_count: 2,
+    edge_count: 1,
+    ledger: '/x/bullseye.yaml',
+  });
+  assert.strictEqual(ok.available, true);
+  assert.ok(ok.mermaid.indexOf('graph TD') >= 0);
+  assert.strictEqual(ok.nodeCount, 2);
+  assert.strictEqual(ok.edgeCount, 1);
+  const bad = FT.normalizeGraphPayload(null, new Error('boom'));
+  assert.strictEqual(bad.available, false);
+  assert.ok(/boom/.test(bad.error));
+});
+
+test('T185 index.html Graph control + large panel + open path', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Graph button next to Refresh; Refresh retained (manual recovery).
+  assert.ok(html.indexOf('id="frontier-graph"') >= 0, 'Graph button');
+  assert.ok(/>Graph</.test(html) || html.indexOf('>Graph</button>') >= 0, 'Graph label');
+  assert.ok(html.indexOf('id="frontier-refresh"') >= 0, 'Refresh retained');
+  // ~90% overlay class on mermaid panel.
+  assert.ok(/#mermaid-viz-panel\.mvp-large\s*\{/.test(html), 'mvp-large CSS');
+  assert.ok(/90vw/.test(html) && /90vh/.test(html), '90vw/90vh sizing');
+  // Open path: fetch graph API + openFrontierGraph + wire button.
+  assert.ok(html.indexOf('/api/frontier/graph') >= 0, 'graph API path');
+  assert.ok(html.indexOf('function openFrontierGraph') >= 0, 'openFrontierGraph defined');
+  assert.ok(html.indexOf('openFrontierGraph') >= 0 && html.indexOf('frontier-graph') >= 0,
+    'button wiring present');
+  assert.ok(html.indexOf('GRAPH_API_PATH') >= 0 || html.indexOf('/api/frontier/graph') >= 0);
+  assert.ok(html.indexOf('mvp-large') >= 0, 'large class used in JS/CSS');
+  // Pure module exports.
+  assert.strictEqual(typeof FT.buildActiveDependencyMermaid, 'function');
+  assert.strictEqual(typeof FT.normalizeGraphPayload, 'function');
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

@@ -165,6 +165,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   box-shadow: 0 12px 40px rgba(0,0,0,0.35); flex-direction: column; overflow: hidden;
 }
 #mermaid-viz-panel.open { display: flex; }
+/* 🎯T185: Frontier Graph — ~90% viewport overlay of unachieved dependency graph */
+#mermaid-viz-panel.mvp-large {
+  left: 50%; top: 50%; right: auto; bottom: auto;
+  transform: translate(-50%, -50%);
+  width: 90vw; height: 90vh;
+  max-width: none; max-height: none;
+  z-index: 60;
+  border-radius: 12px;
+}
 #mermaid-viz-panel .mvp-header {
   display: flex; align-items: center; gap: 6px; padding: 8px 10px; flex-wrap: wrap;
   border-bottom: 1px solid var(--border); background: var(--surface-raised); flex-shrink: 0;
@@ -821,7 +830,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       </div>
       <div id="frontier-pane" class="rhs-tab-pane active" role="tabpanel" aria-label="Bullseye frontier">
         <div id="frontier-toolbar">
-          <button type="button" id="frontier-refresh" title="Reload frontier">Refresh</button>
+          <button type="button" id="frontier-graph" title="Open unachieved dependency graph (~90% view)">Graph</button>
+          <button type="button" id="frontier-refresh" title="Manual reload if live watch/WS missed a change">Refresh</button>
         </div>
         <div id="frontier-body"></div>
       </div>
@@ -2001,11 +2011,15 @@ function showMermaidPasteArea(show) {
   if (show) wrap.classList.add('open');
   else wrap.classList.remove('open');
 }
-function showMermaidPanelShell() {
+function showMermaidPanelShell(opts) {
   const panel = document.getElementById('mermaid-viz-panel');
   if (!panel) return null;
+  const o = opts || {};
   panel.hidden = false;
   panel.classList.add('open');
+  // 🎯T185: large overlay for Frontier Graph; default chrome stays compact.
+  if (o.large) panel.classList.add('mvp-large');
+  else if (o.large === false) panel.classList.remove('mvp-large');
   return panel;
 }
 function renderMermaidPanelEmpty() {
@@ -2064,7 +2078,7 @@ function pinMermaidPanelState(extraStatus) {
  */
 function openMermaidPanel(src, svgMarkup, opts) {
   const o = opts || {};
-  const panel = showMermaidPanelShell();
+  const panel = showMermaidPanelShell({ large: !!o.large });
   if (!panel) return;
   const hasContent = !!(src || svgMarkup);
   if (!hasContent) {
@@ -2085,6 +2099,7 @@ function closeMermaidPanel() {
   const panel = document.getElementById('mermaid-viz-panel');
   if (!panel) return;
   panel.classList.remove('open');
+  panel.classList.remove('mvp-large');
   panel.hidden = true;
   showMermaidPasteArea(false);
 }
@@ -2094,7 +2109,7 @@ function openVizFromChrome() {
   const plan = MA && MA.openFromChromePlan
     ? MA.openFromChromePlan(mermaidStorage())
     : { mode: 'empty' };
-  showMermaidPanelShell();
+  showMermaidPanelShell({ large: false });
   if (plan.mode === 'pinned' && plan.pin) {
     applyMermaidPanelContent({
       src: plan.pin.src,
@@ -2103,7 +2118,7 @@ function openVizFromChrome() {
     });
     // Prefer cached SVG; if only source, re-render via mermaid when available.
     if (!plan.pin.svgMarkup && plan.pin.src) {
-      renderMermaidSourceInPanel(plan.pin.src, { title: plan.pin.title || 'Last graph', pin: false, status: 'Loaded last · rendering…' });
+      renderMermaidSourceInPanel(plan.pin.src, { title: plan.pin.title || 'Last graph', pin: false, status: 'Loaded last · rendering…', large: false });
       return;
     }
     setMermaidPanelStatus('Loaded last pinned graph');
@@ -2111,6 +2126,66 @@ function openVizFromChrome() {
   }
   renderMermaidPanelEmpty();
   setMermaidPanelStatus('Empty — paste bullseye Mermaid export or open from chat');
+}
+/**
+ * 🎯T185: Frontier Graph — open ~90% panel with entire unachieved dependency graph.
+ * Fetches GET /api/frontier/graph (ledger-built Mermaid); renders into #mermaid-viz-panel.
+ */
+function openFrontierGraph(opts) {
+  const o = opts || {};
+  const api = (typeof FrontierTable !== 'undefined' && FrontierTable.GRAPH_API_PATH)
+    ? FrontierTable.GRAPH_API_PATH
+    : '/api/frontier/graph';
+  showMermaidPanelShell({ large: true });
+  setMermaidPanelTitle('Unachieved graph');
+  setMermaidPanelStatus(o.status || 'Loading unachieved dependency graph…');
+  const body = document.getElementById('mvp-body');
+  if (body) body.innerHTML = '<p class="mvp-empty-body" style="padding:12px">Loading…</p>';
+  return fetch(api)
+    .then(function (r) {
+      if (!r.ok) {
+        return r.json().then(function (j) {
+          throw new Error((j && j.error) || ('HTTP ' + r.status));
+        }).catch(function (e) {
+          if (e && e.message && e.message.indexOf('HTTP') === 0) throw e;
+          throw new Error('HTTP ' + r.status);
+        });
+      }
+      return r.json();
+    })
+    .then(function (payload) {
+      const model = (typeof FrontierTable !== 'undefined' && FrontierTable.normalizeGraphPayload)
+        ? FrontierTable.normalizeGraphPayload(payload)
+        : {
+            available: !!(payload && payload.available),
+            mermaid: (payload && payload.mermaid) || '',
+            error: (payload && payload.error) || '',
+            nodeCount: (payload && payload.node_count) || 0,
+            edgeCount: (payload && payload.edge_count) || 0,
+          };
+      if (!model.available || !model.mermaid) {
+        renderMermaidPanelEmpty();
+        setMermaidPanelTitle('Unachieved graph');
+        setMermaidPanelStatus(model.error || 'No unachieved graph available');
+        return model;
+      }
+      const meta = (model.nodeCount || model.edgeCount)
+        ? (' · ' + (model.nodeCount || 0) + ' nodes · ' + (model.edgeCount || 0) + ' edges')
+        : '';
+      return renderMermaidSourceInPanel(model.mermaid, {
+        title: 'Unachieved graph',
+        pin: o.pin !== false,
+        large: true,
+        status: 'Unachieved dependency graph' + meta,
+      }).then(function () { return model; });
+    })
+    .catch(function (err) {
+      showMermaidPanelShell({ large: true });
+      renderMermaidPanelEmpty();
+      setMermaidPanelTitle('Unachieved graph');
+      setMermaidPanelStatus('Graph failed: ' + String(err && err.message || err));
+      return null;
+    });
 }
 function loadLastMermaidGraph() {
   const MA = window.MermaidActions;
@@ -2142,7 +2217,7 @@ function renderMermaidSourceInPanel(rawSrc, opts) {
     setMermaidPanelStatus('Paste Mermaid source first');
     return Promise.resolve(null);
   }
-  showMermaidPanelShell();
+  showMermaidPanelShell({ large: o.large });
   applyMermaidPanelContent({ src: src, svgMarkup: '', title: o.title || 'Pasted graph' });
   const m = ensureMermaid();
   if (!m) {
@@ -2386,6 +2461,7 @@ window.openMermaidPanel = openMermaidPanel;
 window.closeMermaidPanel = closeMermaidPanel;
 window.openMermaidWindow = openMermaidWindow;
 window.openVizFromChrome = openVizFromChrome;
+window.openFrontierGraph = openFrontierGraph;
 window.loadLastMermaidGraph = loadLastMermaidGraph;
 window.renderMermaidSourceInPanel = renderMermaidSourceInPanel;
 window.pinMermaidPanelState = pinMermaidPanelState;
@@ -5058,6 +5134,11 @@ if (agentInspectRefresh) agentInspectRefresh.onclick = function () {
 const frontierRefresh = document.getElementById('frontier-refresh');
 if (frontierRefresh) frontierRefresh.onclick = function () {
   loadFrontier({ quiet: false });
+};
+// 🎯T185: Graph — ~90% unachieved dependency graph (Refresh kept as recovery).
+const frontierGraph = document.getElementById('frontier-graph');
+if (frontierGraph) frontierGraph.onclick = function () {
+  if (typeof openFrontierGraph === 'function') openFrontierGraph({ pin: true });
 };
 // Boot: show frontier table (T131 default tab).
 if (typeof loadFrontier === 'function') {

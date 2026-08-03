@@ -334,6 +334,142 @@ targets:
 	}
 }
 
+// 🎯T185: unachieved graph from ledger — active nodes + depends_on edges among them.
+func TestComputeActiveGraphMermaidFromLedger(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bullseye.yaml")
+	yaml := `
+schema_version: 5
+targets:
+  T1:
+    name: Done base
+    status: achieved
+  T2:
+    name: Ready leaf
+    status: converging
+    depends_on: [T1]
+  T3:
+    name: Blocked child
+    status: identified
+    depends_on: [T2]
+  T3.1:
+    name: Nested active
+    status: converging
+    depends_on: [T3, T1]
+  T4:
+    name: Orphan active
+    status: identified
+  T5:
+    name: Parked
+    status: set_aside
+    depends_on: [T2]
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, nodes, edges, err := computeActiveGraphMermaidFromLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Active: T2, T3, T3.1, T4 (not T1 achieved, not T5 set_aside).
+	if nodes != 4 {
+		t.Fatalf("nodes=%d want 4; mermaid=\n%s", nodes, src)
+	}
+	// Edges among active only: T3→T2, T3.1→T3 (T3.1→T1 dropped; T2→T1 dropped).
+	if edges != 2 {
+		t.Fatalf("edges=%d want 2; mermaid=\n%s", edges, src)
+	}
+	if !strings.Contains(src, "graph TD") {
+		t.Fatalf("missing graph TD:\n%s", src)
+	}
+	if !strings.Contains(src, "T2[") || !strings.Contains(src, "T3[") || !strings.Contains(src, "T3_1[") || !strings.Contains(src, "T4[") {
+		t.Fatalf("missing active nodes:\n%s", src)
+	}
+	if strings.Contains(src, "T1[") || strings.Contains(src, "T5[") {
+		t.Fatalf("achieved/set_aside must not appear:\n%s", src)
+	}
+	if !strings.Contains(src, "T3 -.->|needs| T2") {
+		t.Fatalf("missing T3→T2 edge:\n%s", src)
+	}
+	if !strings.Contains(src, "T3_1 -.->|needs| T3") {
+		t.Fatalf("missing T3.1→T3 edge:\n%s", src)
+	}
+	// Edge to achieved T1 must not appear.
+	if strings.Contains(src, "|needs| T1") {
+		t.Fatalf("edge to achieved T1 must be omitted:\n%s", src)
+	}
+}
+
+func TestMermaidSafeNodeID(t *testing.T) {
+	if got := mermaidSafeNodeID("T27.1"); got != "T27_1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := mermaidSafeNodeID("9bad"); got != "n_9bad" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestHandleFrontierGraphHTTP(t *testing.T) {
+	prev := runBullseyeCLI
+	t.Cleanup(func() { runBullseyeCLI = prev })
+
+	dir := t.TempDir()
+	ledger := filepath.Join(dir, "bullseye.yaml")
+	if err := os.WriteFile(ledger, []byte(`
+targets:
+  T10:
+    name: Base
+    status: converging
+  T11:
+    name: Child
+    status: identified
+    depends_on: [T10]
+  T99:
+    name: Done
+    status: achieved
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runBullseyeCLI = func(args ...string) (string, error) {
+		return "File: " + ledger + "\n", nil
+	}
+	s := New("test", t.TempDir())
+	s.SetFrontierCwd(dir)
+	req := httptest.NewRequest(http.MethodGet, "/api/frontier/graph", nil)
+	rr := httptest.NewRecorder()
+	s.handleFrontierGraph(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("status %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp GraphResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Available {
+		t.Fatalf("want available: %+v", resp)
+	}
+	if resp.NodeCount != 2 || resp.EdgeCount != 1 {
+		t.Fatalf("nodes=%d edges=%d mermaid=%s", resp.NodeCount, resp.EdgeCount, resp.Mermaid)
+	}
+	if !strings.Contains(resp.Mermaid, "T11 -.->|needs| T10") {
+		t.Fatalf("mermaid=%s", resp.Mermaid)
+	}
+	if strings.Contains(resp.Mermaid, "T99") {
+		t.Fatalf("achieved T99 leaked: %s", resp.Mermaid)
+	}
+}
+
+func TestStripMermaidFenceCLI(t *testing.T) {
+	in := "```mermaid\ngraph TD\n  A --> B\n```"
+	got := stripMermaidFenceCLI(in)
+	if got != "graph TD\n  A --> B" {
+		t.Fatalf("got %q", got)
+	}
+	if stripMermaidFenceCLI("graph TD") != "graph TD" {
+		t.Fatal("raw passthrough")
+	}
+}
+
 func TestNotifyFrontierChangedShape(t *testing.T) {
 	s := New("test", t.TempDir())
 	ch := make(chan string, 1)
