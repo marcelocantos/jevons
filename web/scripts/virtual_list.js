@@ -262,47 +262,55 @@
   // whole assistant response (coalesced consecutive assistant text frames).
   // Never emit partial mid-markdown fragments as separate display units.
 
-  // 🎯T147/T161: prefer ChatEvents join helpers when available (browser
-  // load order / Node require); keep a local twin so this module stays
-  // usable in isolation and never falls back to bare += at fence or
-  // paragraph edges.
-  function coalesceAssistantTextLocal(prev, next) {
-    if (typeof ChatEvents !== 'undefined' && ChatEvents.coalesceAssistantText) {
-      return ChatEvents.coalesceAssistantText(prev, next);
+  // 🎯T161: structural segment join only (no content sniff). Prefer
+  // ChatEvents when available; local twin for isolated Node require.
+  function joinAssistantSegmentsLocal(prev, next) {
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.joinAssistantSegments) {
+      return ChatEvents.joinAssistantSegments(prev, next);
     }
     prev = String(prev == null ? '' : prev);
     next = String(next == null ? '' : next);
     if (!prev) return next;
     if (!next) return prev;
     if (/[\n\r]$/.test(prev) || /^[\n\r]/.test(next)) return prev + next;
-    // Fence (T147 subset), block openers, or sentence-end + capital para
-    // segment (T161). Skip bare tokens ("Hello."+"What") so token streams
-    // stay fused; multi-word next (or short complete "Done.") separates.
-    const sentenceEnd = /[.!?]['"»\u201d\u2019\)\]]*$/.test(prev);
-    const paraStart = /^([A-Z\u00C0-\u024F]|(\*\*|__|[_*])[A-Z\u00C0-\u024F])/.test(next);
-    const paraSeg = /\s/.test(next) || (next.length >= 2 && /[.!?]['"»\u201d\u2019\)\]]*$/.test(next));
-    if (
-      /^```/.test(next) ||
-      /^(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)/.test(next) ||
-      (sentenceEnd && paraStart && paraSeg)
-    ) {
-      return prev + '\n\n' + next;
+    return prev + '\n\n' + next;
+  }
+
+  function appendAssistantStreamLocal(prev, next) {
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.appendAssistantStream) {
+      return ChatEvents.appendAssistantStream(prev, next);
     }
-    return prev + next;
+    return String(prev == null ? '' : prev) + String(next == null ? '' : next);
   }
 
   function extractAssistantText(frame) {
     if (!frame || frame.type !== 'assistant') return '';
     const content = frame.message && frame.message.content;
     if (!Array.isArray(content)) return '';
+    // Multi-block text parts are known segments → structural join.
     let txt = '';
+    let nText = 0;
     for (let i = 0; i < content.length; i++) {
       const c = content[i];
-      if (c && c.type === 'text' && typeof c.text === 'string') {
-        txt = coalesceAssistantTextLocal(txt, c.text);
+      if (c && c.type === 'text' && typeof c.text === 'string' && c.text) {
+        txt = nText === 0
+          ? c.text
+          : joinAssistantSegmentsLocal(txt, c.text);
+        nText += 1;
       }
     }
     return txt;
+  }
+
+  function frameHasNonTextAssistant(frame) {
+    if (!frame || frame.type !== 'assistant') return false;
+    const content = frame.message && frame.message.content;
+    if (!Array.isArray(content)) return false;
+    for (let i = 0; i < content.length; i++) {
+      const c = content[i];
+      if (c && c.type && c.type !== 'text') return true;
+    }
+    return false;
   }
 
   function extractUserText(frame) {
@@ -315,9 +323,12 @@
   // frames: array of wire objects (or JSON strings). Returns whole chunks:
   //   { role: 'user'|'jevons', text: string, timestamp?: number }
   // Consecutive assistant text frames coalesce into one chunk.
+  // 🎯T161: bare-concat continuous text frames; segment-join after
+  // tool_use/tool_result gaps (protocol edge, not content sniff).
   function coalesceTranscriptFrames(frames) {
     const out = [];
     let pending = null; // { role, text, timestamp }
+    let segmentEdgePending = false;
     const list = Array.isArray(frames) ? frames : [];
     for (let i = 0; i < list.length; i++) {
       let m = list[i];
@@ -330,19 +341,30 @@
         const text = extractUserText(m);
         if (!text) continue;
         pending = null;
+        segmentEdgePending = false;
         out.push({ role: 'user', text: text, timestamp: ts });
+      } else if (m.type === 'tool_result' || m.type === 'result') {
+        if (pending) segmentEdgePending = true;
+        // omitted from transcript window units
       } else if (m.type === 'assistant') {
+        if (frameHasNonTextAssistant(m) && pending) {
+          segmentEdgePending = true;
+        }
         const text = extractAssistantText(m);
         if (!text) continue;
         if (pending && pending.role === 'jevons') {
-          pending.text = coalesceAssistantTextLocal(pending.text, text);
+          pending.text = segmentEdgePending
+            ? joinAssistantSegmentsLocal(pending.text, text)
+            : appendAssistantStreamLocal(pending.text, text);
+          segmentEdgePending = false;
           if (ts != null) pending.timestamp = ts;
         } else {
           pending = { role: 'jevons', text: text, timestamp: ts };
           out.push(pending);
+          segmentEdgePending = false;
         }
       }
-      // tool_result / system / agent_note omitted from transcript window units
+      // system / agent_note omitted from transcript window units
     }
     return out;
   }

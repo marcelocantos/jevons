@@ -1408,17 +1408,24 @@ function handle(m) {
   } else if (typ==='assistant') {
     const content = m.message?.content;
     if (!Array.isArray(content)) return;
-    const hasText = ChatEvents.hasAssistantText(m);
+    // 🎯T161: single ordered walk. Non-text (tool_use) marks a segment edge
+    // for the *following* text only; multi-block text parts are segment edges
+    // between them. Continuous single-block frames bare-concat (tokens).
+    let emittedText = false;
+    const anyText = ChatEvents.hasAssistantText(m);
+    if (anyText) closeTurn();
     content.forEach(c => {
       if (c.type==='tool_use') {
+        streamSegmentEdge = true;
         addTurnItem('tool-use', c.name + (c.input ? ': ' + ToolSummary.summariseInput(c.input) : ''));
+      } else if (c.type==='text' && c.text) {
+        const edge = streamSegmentEdge || emittedText;
+        appendOrAddJevons(c.text, msgTs, { segmentEdge: edge });
+        streamSegmentEdge = false;
+        emittedText = true;
       }
     });
-    if (hasText) {
-      closeTurn();
-      ChatEvents.assistantTextBlocks(m).forEach(c => appendOrAddJevons(c.text, msgTs));
-      focusComposer();
-    }
+    if (anyText) focusComposer();
     // Only terminal stops clear working (not mid-stream text). Clearing
     // early used to force one bubble per token.
     if (ChatEvents.shouldClearWorking(m)) {
@@ -1426,6 +1433,8 @@ function handle(m) {
       setWorking(false);
     }
   } else if (typ==='tool_result' || typ==='result') {
+    // 🎯T161: tool result is a protocol segment boundary for next text.
+    streamSegmentEdge = true;
     const content = m.content || m.message?.content;
     if (Array.isArray(content)) {
       content.forEach(c => {
@@ -1460,23 +1469,32 @@ function lastMessageish() {
 // chrome, stuck-watchdog status, and worker notes can insert .msg nodes
 // that are not the open stream and would otherwise start a second bubble.
 let openStreamEl = null;
+// 🎯T161: next assistant text after tool_use/tool_result is a new segment
+// (structural edge — not content sniffing). Cleared on seal / new bubble.
+let streamSegmentEdge = false;
 
 function clearOpenStreamHandle() {
   openStreamEl = null;
+  streamSegmentEdge = false;
 }
 
 // appendOrAddJevons merges streaming assistant chunks into the open
 // jevons bubble. Merge is keyed on openStreamEl + _streamRaw (not
 // lastMessageish / workingEl). Seal only on terminal stop (or user turn)
 // so tool rounds never split one logical reply into multiple bubbles.
-function appendOrAddJevons(text, ts) {
+// opts.segmentEdge: known protocol segment boundary → joinAssistantSegments;
+// otherwise bare appendAssistantStream (intra-segment tokens).
+function appendOrAddJevons(text, ts, opts) {
+  const segmentEdge = !!(opts && opts.segmentEdge);
   const target = (openStreamEl && openStreamEl.isConnected &&
     typeof openStreamEl._streamRaw === 'string')
     ? openStreamEl
     : null;
   if (target) {
-    // 🎯T147: join-time fence repair at segment edge (not bare +=).
-    target._streamRaw = ChatEvents.coalesceAssistantText(target._streamRaw, text);
+    // 🎯T161: structural segment join vs bare token append — never sniff text.
+    target._streamRaw = segmentEdge
+      ? ChatEvents.joinAssistantSegments(target._streamRaw, text)
+      : ChatEvents.appendAssistantStream(target._streamRaw, text);
     scheduleJevonsRender(target);   // rAF-debounced: coalesce burst chunks into ONE parse (🎯T57)
     return;
   }
@@ -1486,6 +1504,7 @@ function appendOrAddJevons(text, ts) {
   // _streamRaw already set in buildMsg when streamOpen; keep assign for clarity.
   el._streamRaw = typeof el._streamRaw === 'string' ? el._streamRaw : text;
   openStreamEl = el;
+  streamSegmentEdge = false;
 }
 
 // scheduleJevonsRender coalesces streamed chunks: instead of re-parsing
@@ -2760,7 +2779,8 @@ function renderFrames(lines, opts) {
       }
     } else if (m.type === 'assistant') {
       let txt = '';
-      // 🎯T147: joinAssistantTexts (not bare join('')) + coalesce at history pending edge.
+      // 🎯T161: multi-block = segment list; consecutive assistant frames in
+      // this fallback are treated as segment edges (sealed history / multi-part).
       try {
         txt = ChatEvents.joinAssistantTexts(
           ChatEvents.assistantTextBlocks(m).map(b => b.text),
@@ -2768,7 +2788,7 @@ function renderFrames(lines, opts) {
       } catch { txt = ''; }
       if (txt) {
         if (pending) {
-          pending.raw = ChatEvents.coalesceAssistantText(pending.raw, txt);
+          pending.raw = ChatEvents.joinAssistantSegments(pending.raw, txt);
           pending.el._layoutText = pending.raw;
           if (!lazy) paintBody(pending.el, 'jevons', pending.raw);
         } else {

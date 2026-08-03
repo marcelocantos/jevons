@@ -15,9 +15,94 @@ var terminalStops = map[string]bool{
 	"max_tokens":    true,
 }
 
+// joinAssistantSegments inserts a blank line between two known segments when
+// neither already has a line break at the boundary (🎯T161). Structural only —
+// no markdown/content sniffing (no ``` / capital / list special cases).
+func joinAssistantSegments(prev, next string) string {
+	if prev == "" {
+		return next
+	}
+	if next == "" {
+		return prev
+	}
+	if strings.HasSuffix(prev, "\n") || strings.HasSuffix(prev, "\r") ||
+		strings.HasPrefix(next, "\n") || strings.HasPrefix(next, "\r") {
+		return prev + next
+	}
+	return prev + "\n\n" + next
+}
+
+// appendSegmentText appends text to acc: structural segment join when edge
+// is set, otherwise bare concat (intra-segment tokens).
+func appendSegmentText(acc *strings.Builder, text string, edge *bool) {
+	if text == "" {
+		return
+	}
+	if acc.Len() == 0 {
+		acc.WriteString(text)
+		*edge = false
+		return
+	}
+	if *edge {
+		joined := joinAssistantSegments(acc.String(), text)
+		acc.Reset()
+		acc.WriteString(joined)
+		*edge = false
+		return
+	}
+	acc.WriteString(text)
+}
+
+// applyAssistantContent walks message content in order (🎯T161):
+// non-text blocks mark a segment edge for the following text; multiple text
+// blocks in one message are segment edges between them; continuous single
+// text deltas bare-concat.
+func applyAssistantContent(acc *strings.Builder, content any, edge *bool) (wrote bool) {
+	switch c := content.(type) {
+	case string:
+		if c == "" {
+			return false
+		}
+		appendSegmentText(acc, c, edge)
+		return true
+	case []any:
+		textParts := 0
+		for _, raw := range c {
+			m, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			t, _ := m["type"].(string)
+			if t != "" && t != "text" {
+				if acc.Len() > 0 {
+					*edge = true
+				}
+				continue
+			}
+			s, ok := m["text"].(string)
+			if !ok || s == "" {
+				continue
+			}
+			if textParts > 0 {
+				*edge = true
+			}
+			appendSegmentText(acc, s, edge)
+			textParts++
+			wrote = true
+		}
+		return wrote
+	default:
+		return false
+	}
+}
+
 // CoalesceStreamLines merges consecutive assistant stream deltas into one
 // sealed assistant frame per turn (🎯T142). Non-assistant lines pass through
 // unchanged. The durable log is never rewritten — this is a replay view.
+//
+// 🎯T161: after non-text assistant content (tool_use) or tool_result, the next
+// text joins with joinAssistantSegments. Intra-segment token deltas bare-concat.
+// No content-shaped fence heuristics (T147 removed).
 //
 // Sealed shape:
 //
@@ -29,12 +114,14 @@ func CoalesceStreamLines(lines []string) []string {
 	out := make([]string, 0, len(lines)/8+8)
 	var acc strings.Builder
 	var accTS string
+	segmentEdgePending := false
 	flush := func(stop string) {
 		if acc.Len() == 0 && stop == "" {
 			return
 		}
 		text := acc.String()
 		acc.Reset()
+		segmentEdgePending = false
 		if stop == "" {
 			stop = "end_turn"
 		}
@@ -69,8 +156,23 @@ func CoalesceStreamLines(lines []string) []string {
 				Content    any   `json:"content"`
 			} `json:"message"`
 		}
-		if err := json.Unmarshal([]byte(ln), &head); err != nil || head.Type != "assistant" {
-			// Non-assistant: seal any open assistant stream first.
+		if err := json.Unmarshal([]byte(ln), &head); err != nil {
+			if acc.Len() > 0 {
+				flush("end_turn")
+			}
+			out = append(out, ln)
+			continue
+		}
+		if head.Type == "tool_result" || head.Type == "result" {
+			// Protocol segment edge; keep stream open for one sealed bubble.
+			if acc.Len() > 0 {
+				segmentEdgePending = true
+			}
+			out = append(out, ln)
+			continue
+		}
+		if head.Type != "assistant" {
+			// Other non-assistant: seal any open assistant stream first.
 			if acc.Len() > 0 {
 				flush("end_turn")
 			}
@@ -81,22 +183,12 @@ func CoalesceStreamLines(lines []string) []string {
 		if head.Message != nil {
 			stop = head.Message.StopReason
 		}
-		text := assistantTextFromContent(nil)
+		wrote := false
 		if head.Message != nil {
-			text = assistantTextFromContent(head.Message.Content)
+			wrote = applyAssistantContent(&acc, head.Message.Content, &segmentEdgePending)
 		}
-		if text != "" {
-			if acc.Len() > 0 {
-				// 🎯T147-style fence edge: insert blank line before ``` if needed.
-				prev := acc.String()
-				if !strings.HasSuffix(prev, "\n") && strings.HasPrefix(text, "```") {
-					acc.WriteString("\n\n")
-				}
-			}
-			acc.WriteString(text)
-			if head.Timestamp != "" {
-				accTS = head.Timestamp
-			}
+		if wrote && head.Timestamp != "" {
+			accTS = head.Timestamp
 		}
 		if terminalStops[stop] {
 			// Empty end_turn still seals (even if no text accumulated).
@@ -107,33 +199,6 @@ func CoalesceStreamLines(lines []string) []string {
 		flush("end_turn")
 	}
 	return out
-}
-
-func assistantTextFromContent(content any) string {
-	switch c := content.(type) {
-	case string:
-		return c
-	case []any:
-		var b strings.Builder
-		for _, raw := range c {
-			m, ok := raw.(map[string]any)
-			if !ok {
-				continue
-			}
-			if t, _ := m["type"].(string); t != "text" && t != "" {
-				// allow missing type if text present
-				if _, has := m["text"]; !has {
-					continue
-				}
-			}
-			if s, ok := m["text"].(string); ok && s != "" {
-				b.WriteString(s)
-			}
-		}
-		return b.String()
-	default:
-		return ""
-	}
 }
 
 // ReplayTailSealed is ReplayTail with 🎯T142 sealed-turn coalescing on the

@@ -59,21 +59,20 @@ func TestCoalesceStreamLinesSealsTokenStream(t *testing.T) {
 	}
 }
 
-func TestCoalesceStreamLinesFenceEdge(t *testing.T) {
-	// JSON-escaped newline in text field (as journal stores it).
-	raw := []string{
-		`{"type":"assistant","message":{"content":[{"type":"text","text":"see:"}]}}`,
-		`{"type":"assistant","message":{"content":[{"type":"text","text":"\u0060\u0060\u0060go\n"}]}}`,
-		`{"type":"assistant","message":{"content":[],"stop_reason":"end_turn"}}`,
-	}
-	// Build fence line with real backticks via Marshal for valid JSON.
+func TestCoalesceStreamLinesContinuousFenceBareConcat(t *testing.T) {
+	// 🎯T161: continuous token frames bare-concat (no ``` content sniff).
+	// Display fence hygiene remains T145 ensureFenceNewlines.
 	part, _ := json.Marshal(map[string]any{
 		"type": "assistant",
 		"message": map[string]any{
 			"content": []any{map[string]any{"type": "text", "text": "```go\n"}},
 		},
 	})
-	raw[1] = string(part)
+	raw := []string{
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"see:"}]}}`,
+		string(part),
+		`{"type":"assistant","message":{"content":[],"stop_reason":"end_turn"}}`,
+	}
 	got := CoalesceStreamLines(raw)
 	if len(got) != 1 {
 		t.Fatalf("n=%d %v", len(got), got)
@@ -89,8 +88,36 @@ func TestCoalesceStreamLinesFenceEdge(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := sealed.Message.Content[0].Text
-	if text != "see:\n\n```go\n" {
-		t.Fatalf("fence edge not repaired: %q", text)
+	if text != "see:```go\n" {
+		t.Fatalf("continuous stream should bare-concat, got %q", text)
+	}
+}
+
+func TestCoalesceStreamLinesToolGapStructuralJoin(t *testing.T) {
+	// tool_use between text segments → structural blank line (no content sniff).
+	raw := []string{
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"First paragraph ends here."}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"read_file","input":{}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Second paragraph starts here."}]}}`,
+		`{"type":"assistant","message":{"content":[],"stop_reason":"end_turn"}}`,
+	}
+	got := CoalesceStreamLines(raw)
+	if len(got) != 1 {
+		t.Fatalf("n=%d want 1 sealed bubble: %v", len(got), got)
+	}
+	var sealed struct {
+		Message struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(got[0]), &sealed); err != nil {
+		t.Fatal(err)
+	}
+	want := "First paragraph ends here.\n\nSecond paragraph starts here."
+	if sealed.Message.Content[0].Text != want {
+		t.Fatalf("got %q want %q", sealed.Message.Content[0].Text, want)
 	}
 }
 
