@@ -272,7 +272,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons .msg-expand-tab {
   background: var(--surface); border-color: var(--border);
 }
-.msg-expand-tab .chev { display: block; font-size: 10px; line-height: 1; }
+.msg-expand-tab .chev { display: block; font-size: 13px; line-height: 1; }
 
 /* 🎯T135: opt-in route switch under a user bubble (match suggestion only). */
 .msg.user .route-switch {
@@ -2157,10 +2157,9 @@ function updateExpandTab(d) {
   d._expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   d._expandBtn.setAttribute('aria-label', expanded ? 'Collapse' : 'Expand');
   d._expandBtn.title = expanded ? 'Collapse' : 'Expand';
-  // Pocket tab sits inside bottom edge: up when collapsed (pull content out),
-  // down when expanded (tuck back into pocket).
+  // Inside-edge pocket tab: down when collapsed (reveal more), up when expanded.
   d._expandBtn.innerHTML = '<span class="chev" aria-hidden="true">' +
-    (expanded ? '\u25BE' : '\u25B4') + '</span>';
+    (expanded ? '\u25B4' : '\u25BE') + '</span>';
 }
 
 function renderBody(d, role, text) {
