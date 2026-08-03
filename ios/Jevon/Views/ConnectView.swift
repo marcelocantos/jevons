@@ -1,10 +1,16 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import Pigeon
 import SwiftUI
 
 struct ConnectView: View {
     @Environment(Connection.self) private var connection
+
+    /// Called after a PairingArtifact is decoded and persisted so the
+    /// parent can switch to the relay WebUI path without a relaunch
+    /// (🎯T7 user-flow residual).
+    var onPaired: ((PairingArtifact) -> Void)?
 
     var body: some View {
         ZStack {
@@ -12,10 +18,15 @@ struct ConnectView: View {
             #if !targetEnvironment(simulator)
             QRScannerView(
                 onScanArtifact: { artifact in
-                    // Persist for the next launch — the production
-                    // artifact-driven WKWebView path picks it up at
-                    // ContentView's PigeonAccount.shared.load().
-                    try? PigeonAccount.shared.save(artifact)
+                    // Persist for relaunches, then hand off immediately
+                    // so ContentView can present WebUIView(artifact:).
+                    do {
+                        try PigeonAccount.shared.save(artifact)
+                        onPaired?(artifact)
+                    } catch {
+                        // Leave scanner up; connection.state surfaces
+                        // subsequent transport errors if any.
+                    }
                 }
             )
             .ignoresSafeArea()
