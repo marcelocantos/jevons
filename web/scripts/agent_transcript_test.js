@@ -387,6 +387,110 @@ test('T167 single scroll: no nested overflow-y auto/scroll on turn sections', fu
     'legacy .ai-text rules removed');
 });
 
+// 🎯T217: product path must paint assistant MD as HTML (<strong>/<pre>), not raw **.
+// Live repro (2026-08-03 daily :13705): selectAgent → WS agent_transcript history →
+// renderAgentInspect → paintBody('jevons') → parseAssistantMarkdown; DOM has strong/table.
+// Residual: role=user (system-reminder / owner dumps) stay plain/pre-wrap — not a bug.
+test('T217 renderAgentInspect: assistant→jevons paintBody, never textContent for MD role', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
+  assert.ok(fn, 'renderAgentInspect present');
+  const body = fn[0];
+  // Role map: assistant must go through inspectToMsgRole → jevons (not user/status).
+  assert.ok(body.indexOf('inspectToMsgRole') >= 0, 'must map via inspectToMsgRole');
+  assert.ok(
+    body.indexOf("line.role === 'assistant' ? 'jevons'") >= 0 ||
+      body.indexOf('inspectToMsgRole(line.role)') >= 0,
+    'assistant maps to jevons for paintBody role',
+  );
+  // Must call paintBody with msgRole (not raw line.role which would miss 'jevons' branch).
+  assert.ok(/paintBody\s*\(\s*d\s*,\s*msgRole\s*,/.test(body),
+    'paintBody(d, msgRole, …) — role must be mapped class, not wire role');
+  // Fallback when paintBody missing: still parseAssistantMarkdown for jevons (T217).
+  assert.ok(body.indexOf('parseAssistantMarkdown') >= 0,
+    'inspect render has parseAssistantMarkdown fallback for jevons');
+  // Must not be the only paint path for all roles: textContent alone for every line.
+  // Allowed: textContent for status / last-resort catch — not as sole assistant path.
+  assert.ok(body.indexOf("msgRole === 'jevons'") >= 0 || body.indexOf('msgRole === "jevons"') >= 0,
+    'explicit jevons branch for MD paint (not blind textContent)');
+  // paintBody itself: jevons uses innerHTML + parseAssistantMarkdown, not textContent.
+  const paint = html.match(/function paintBody\([\s\S]*?\nfunction maybeCloseTargetAside/);
+  assert.ok(paint, 'paintBody present before maybeCloseTargetAside');
+  const pb = paint[0];
+  assert.ok(/role\s*===\s*['"]jevons['"]/.test(pb), 'paintBody branches on jevons');
+  assert.ok(pb.indexOf('parseAssistantMarkdown') >= 0, 'paintBody uses marked path for jevons');
+  assert.ok(/_body\.innerHTML\s*=\s*parseAssistantMarkdown/.test(pb),
+    'jevons body is innerHTML from parseAssistantMarkdown');
+  // textContent for assistant would be the T217 bug; only non-jevons/non-user may use it.
+  const textContentAssigns = pb.match(/_body\.textContent\s*=/g) || [];
+  assert.ok(textContentAssigns.length >= 1, 'status/other may use textContent');
+  // The textContent assign must sit in the else (not under jevons).
+  const jevonsBlock = pb.match(/if\s*\(\s*role\s*===\s*['"]jevons['"]\s*\)\s*\{[\s\S]*?\}\s*else if/);
+  assert.ok(jevonsBlock, 'jevons if-block present');
+  assert.ok(jevonsBlock[0].indexOf('textContent') < 0,
+    'paintBody jevons branch must not assign textContent (raw ** bug)');
+});
+
+test('T217 paintInspectLinesHTML: fixture **bold**/fence → strong/pre (not raw stars)', function () {
+  function parseLikeMarked(md) {
+    // Minimal stand-in for sealed parseAssistantMarkdown / marked.parse.
+    let s = String(md || '');
+    s = s.replace(/^##\s+(.+)$/m, '<h2>$1</h2>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/```[\w]*\n([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+    if (s.indexOf('<') < 0) s = '<p>' + AT.escapeHtml(s) + '</p>';
+    return s;
+  }
+  const lines = [
+    { role: 'assistant', text: '## Gate\n\nDone with **bold** work.\n\n```js\nconst x = 1;\n```' },
+    { role: 'user', text: '<system-reminder>\n**not** assistant md\n</system-reminder>' },
+  ];
+  const out = AT.paintInspectLinesHTML(lines, { parseAssistantMarkdown: parseLikeMarked });
+  assert.ok(out.indexOf('class="msg jevons"') >= 0, 'assistant → .msg.jevons');
+  assert.ok(out.indexOf('<strong>') >= 0 && out.indexOf('bold') >= 0,
+    'assistant body must contain <strong> not only raw **');
+  assert.ok(out.indexOf('<pre>') >= 0, 'assistant fence → <pre>');
+  assert.ok(out.indexOf('<h2>') >= 0, 'assistant heading → <h2>');
+  // Raw ** must not be the sole representation of assistant bold.
+  const jevonsChunks = out.match(/<div class="msg jevons">[\s\S]*?<\/div>/g) || [];
+  assert.ok(jevonsChunks.length >= 1);
+  assert.ok(jevonsChunks[0].indexOf('<strong>') >= 0, 'jevons chunk has strong');
+  assert.ok(!/Done with \*\*bold\*\* work/.test(jevonsChunks[0]),
+    'assistant must not leave literal **bold** in HTML');
+  // User residual: system-reminder / dumps stay plain (escaped), not marked.
+  const userChunks = out.match(/<div class="msg user">[\s\S]*?<\/div>/g) || [];
+  assert.ok(userChunks.length >= 1);
+  assert.ok(userChunks[0].indexOf('<strong>') < 0,
+    'user system-reminder residual: no marked <strong>');
+  assert.ok(/\*\*not\*\*/.test(userChunks[0]) || userChunks[0].indexOf('**not**') >= 0,
+    'user keeps literal stars (accepted residual)');
+  // Role map pure unit (no assistant→user).
+  assert.strictEqual(AT.inspectToMsgRole('assistant'), 'jevons');
+  assert.strictEqual(AT.inspectToMsgRole('user'), 'user');
+  assert.notStrictEqual(AT.inspectToMsgRole('assistant'), 'user');
+  assert.notStrictEqual(AT.inspectToMsgRole('assistant'), 'status');
+});
+
+test('T217 turnsToLines preserves assistant role (no silent map to user/other)', function () {
+  const lines = AT.turnsToLines([
+    { role: 'assistant', text: '**hi**' },
+    { role: 'user', text: '**sys**' },
+    { role: 'system', text: 'x' },
+  ]);
+  assert.strictEqual(lines[0].role, 'assistant');
+  assert.strictEqual(lines[1].role, 'user');
+  // Unknown roles pass through as-is (not forced to user).
+  assert.strictEqual(lines[2].role, 'system');
+  const painted = AT.paintInspectLineBody('assistant', '**hi**', {
+    parseAssistantMarkdown: function (t) {
+      return t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    },
+  });
+  assert.strictEqual(painted.mode, 'html');
+  assert.strictEqual(painted.msgRole, 'jevons');
+  assert.ok(painted.content.indexOf('<strong>') >= 0);
+});
+
 test('T136 create-aside dual-write + no attention chip wall', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('ensureFleetAside') >= 0, 'registers fleet aside on create');
