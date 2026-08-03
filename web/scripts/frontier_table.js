@@ -251,7 +251,8 @@
   }
 
   // formatFanout(n, id, dependents?) → { text, title, visible }.
-  // Hide when 0 (🎯T173). Nonzero: "N᚛" + InstantTip lead count + bullets "• TID — name" (🎯T179).
+  // Hide when 0 (🎯T173). Nonzero: "N᚛" + InstantTip lead count + bullets
+  // "• TID Name" (space separator, not em-dash — 🎯T179 owner pin).
   function formatFanout(n, id, dependents) {
     var deps = normalizeDependents(dependents);
     var count = deps.length > 0
@@ -271,7 +272,7 @@
       for (var i = 0; i < deps.length; i++) {
         var d = deps[i];
         var bullet = '• ' + d.id;
-        if (d.name) bullet += ' — ' + d.name;
+        if (d.name) bullet += ' ' + d.name;
         lines.push(bullet);
       }
       title = lines.join('\n');
@@ -688,7 +689,11 @@
 
   // 🎯T182: play control → message product PO to start work on a frontier row.
   var PLAY_GLYPH = '\u25B6'; // ▶
+  // 🎯T198: stop when row is engaged (worker has matching target_id).
+  var STOP_GLYPH = '\u25A0'; // ■
   var DEFAULT_PLAY_PO = 'jevons-po';
+  var ENGAGEMENT_STOP_PATH = '/api/agents/engagement/stop';
+  var AGENTS_API_PATH = '/api/agents';
 
   // resolvePlayPO — residual multi-PO: default jevons-po for jevons ledger.
   function resolvePlayPO(opts) {
@@ -704,8 +709,72 @@
     return '/api/agents/' + encodeURIComponent(n) + '/send';
   }
 
+  // normalizeTargetID — strip 🎯 / whitespace. Engagement match key (🎯T198).
+  // Never derived from agent names.
+  function normalizeTargetID(raw) {
+    var s = raw == null ? '' : String(raw).trim();
+    if (!s) return '';
+    // U+1F3AF TARGET (may arrive as surrogate pair or literal).
+    s = s.replace(/^\uD83C\uDFAF/, '').replace(/^🎯/, '');
+    return s.trim();
+  }
+
+  // engagementIndex(agents) — map target_id → { agents: [name,...] }.
+  // Uses agent.target_id only (explicit registry field). No name parsing.
+  function engagementIndex(agents) {
+    var list = Array.isArray(agents) ? agents : [];
+    var by = {};
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (!a) continue;
+      var tid = normalizeTargetID(
+        a.target_id != null ? a.target_id : (a.targetId != null ? a.targetId : '')
+      );
+      if (!tid) continue;
+      var purpose = String(a.purpose || 'work').trim().toLowerCase();
+      if (purpose === 'overseer') continue;
+      var name = String(a.name || '').trim();
+      if (!name) continue;
+      if (!by[tid]) by[tid] = { agents: [] };
+      if (by[tid].agents.indexOf(name) < 0) by[tid].agents.push(name);
+    }
+    Object.keys(by).forEach(function (k) {
+      by[k].agents.sort();
+    });
+    return by;
+  }
+
+  // applyEngagement(rows, agents) — overlay engaged flag + sink engaged rows
+  // to bottom. Free frontier items keep relative order; engaged keep relative
+  // order among themselves after free. Pure Jevons UI overlay (not bullseye status).
+  function applyEngagement(rows, agents) {
+    var index = engagementIndex(agents);
+    var list = Array.isArray(rows) ? rows : [];
+    var free = [];
+    var engaged = [];
+    for (var i = 0; i < list.length; i++) {
+      var row = list[i];
+      if (!row || !row.id) continue;
+      var tid = normalizeTargetID(row.id);
+      var hit = index[tid];
+      var copy = {};
+      Object.keys(row).forEach(function (k) { copy[k] = row[k]; });
+      if (hit && hit.agents && hit.agents.length > 0) {
+        copy.engaged = true;
+        copy.engaged_agents = hit.agents.slice();
+        engaged.push(copy);
+      } else {
+        copy.engaged = false;
+        copy.engaged_agents = [];
+        free.push(copy);
+      }
+    }
+    return free.concat(engaged);
+  }
+
   // buildPlayKickoffText(row) — body for PO: target id + name + spawn brief.
   // Asks PO to kick off with full brief, parent=jevons-po (not toast-only).
+  // 🎯T198: require target_id= on jevons_agent_start so UI can engage without name parse.
   function buildPlayKickoffText(row, opts) {
     if (!row || !row.id) return '';
     var id = String(row.id).trim();
@@ -717,9 +786,16 @@
     lines.push('');
     lines.push(
       'Kick off now: spawn/brief a fleet worker with parent=' + po +
-      ' and a full brief to execute this target end-to-end ' +
+      ' and target_id=' + id +
+      ' (jevons_agent_start target_id arg — required for Frontier engagement overlay 🎯T198; do not encode the T-id only in the worker name) ' +
+      'and a full brief to execute this target end-to-end ' +
       '(local commits + oracle evidence; no Ship/PR unless the owner asks). ' +
       'Do not only toast or acknowledge — actually start the worker.'
+    );
+    // 🎯T197: hierarchical target ids keep literal dots in worker names.
+    lines.push(
+      'Worker name: encode hierarchical target ids with literal dots ' +
+      '(e.g. jv-t27.2-config not jv-t272-config); flat ids stay flat (jv-t159-seal).'
     );
     var st = statusTitle(row.status) || String(row.status || '').trim();
     if (st) {
@@ -750,6 +826,17 @@
     };
   }
 
+  // stopEngagementRequest(targetId) — pure POST body for stop (🎯T198).
+  function stopEngagementRequest(targetId) {
+    var tid = normalizeTargetID(targetId);
+    return {
+      url: ENGAGEMENT_STOP_PATH,
+      method: 'POST',
+      body: { target_id: tid },
+      target_id: tid,
+    };
+  }
+
   return {
     TAB_TRANSCRIPT: TAB_TRANSCRIPT,
     TAB_FRONTIER: TAB_FRONTIER,
@@ -758,7 +845,10 @@
     GRAPH_API_PATH: GRAPH_API_PATH,
     FANOUT_MARK: FANOUT_MARK,
     PLAY_GLYPH: PLAY_GLYPH,
+    STOP_GLYPH: STOP_GLYPH,
     DEFAULT_PLAY_PO: DEFAULT_PLAY_PO,
+    ENGAGEMENT_STOP_PATH: ENGAGEMENT_STOP_PATH,
+    AGENTS_API_PATH: AGENTS_API_PATH,
     nextBottomTab: nextBottomTab,
     tabAfterAgentSelect: tabAfterAgentSelect,
     targetIDLess: targetIDLess,
@@ -785,5 +875,10 @@
     agentSendPath: agentSendPath,
     buildPlayKickoffText: buildPlayKickoffText,
     playKickoffRequest: playKickoffRequest,
+    normalizeTargetID: normalizeTargetID,
+    engagementIndex: engagementIndex,
+    applyEngagement: applyEngagement,
+    stopEngagementRequest: stopEngagementRequest,
   };
+
 }));

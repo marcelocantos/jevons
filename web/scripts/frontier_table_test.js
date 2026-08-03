@@ -118,7 +118,7 @@ test('formatFanout N᚛ + title; hide when 0 (🎯T173)', function () {
   assert.ok(FT.formatFanout(3, 'T173').title.indexOf('T173') >= 0);
 });
 
-// 🎯T179: lead count line + "• TID — name" bullets from dependents[{id,name}].
+// 🎯T179: lead count line + "• TID Name" bullets (space, not em-dash) from dependents[{id,name}].
 test('formatFanout InstantTip lists dependents with id + name (🎯T179)', function () {
   const deps = [
     { id: 'T10.3', name: 'Client requests table drives server actions' },
@@ -131,16 +131,17 @@ test('formatFanout InstantTip lists dependents with id + name (🎯T179)', funct
   assert.strictEqual(many.text, '4\u169B');
   // Lead line unchanged.
   assert.ok(many.title.indexOf('4 targets depend on T10.2') === 0, 'lead line first: ' + many.title);
-  // Bullets: id + em-dash + name
-  assert.ok(many.title.indexOf('• T10.3 — Client requests table drives server actions') >= 0, many.title);
-  assert.ok(many.title.indexOf('• T10.4 — Reconnect uses diff sync only') >= 0, many.title);
-  assert.ok(many.title.indexOf('• T10.5 — Short') >= 0, many.title);
-  assert.ok(many.title.indexOf('• T10.6 — Also blocked') >= 0, many.title);
+  // Bullets: id + space + name (owner pin: not em-dash-only).
+  assert.ok(many.title.indexOf('• T10.3 Client requests table drives server actions') >= 0, many.title);
+  assert.ok(many.title.indexOf('• T10.4 Reconnect uses diff sync only') >= 0, many.title);
+  assert.ok(many.title.indexOf('• T10.5 Short') >= 0, many.title);
+  assert.ok(many.title.indexOf('• T10.6 Also blocked') >= 0, many.title);
+  assert.ok(many.title.indexOf('—') < 0, 'no em-dash in fanout tip: ' + many.title);
   // Multi-line (lead + 4 bullets).
   assert.strictEqual(many.title.split('\n').length, 5, many.title);
 
   const one = FT.formatFanout(1, 'T2', [{ id: 'T3', name: 'Blocked' }]);
-  assert.strictEqual(one.title, '1 target depends on T2\n• T3 — Blocked');
+  assert.strictEqual(one.title, '1 target depends on T2\n• T3 Blocked');
 
   // Hide when empty dependents / zero.
   const z = FT.formatFanout(0, 'T9', []);
@@ -473,6 +474,11 @@ test('playKickoffRequest messages jevons-po with full brief (🎯T182)', functio
   assert.ok(text.indexOf('parent=jevons-po') >= 0, 'parent lineage: ' + text);
   assert.ok(/spawn|brief|Kick off/i.test(text), 'kick off language: ' + text);
   assert.ok(text.indexOf('Play sends to PO') >= 0, 'acceptance in brief');
+  // 🎯T197: kickoff brief teaches literal-dot hierarchical worker names.
+  assert.ok(text.indexOf('jv-t27.2-config') >= 0, 'T197 dotted example: ' + text);
+  assert.ok(text.indexOf('jv-t272-config') >= 0, 'T197 anti-squash example: ' + text);
+  assert.ok(text.indexOf('jv-t159-seal') >= 0, 'T197 flat residual: ' + text);
+  assert.ok(/literal dots/i.test(text), 'T197 policy phrase: ' + text);
   assert.strictEqual(FT.buildPlayKickoffText(null), '');
   assert.strictEqual(FT.buildPlayKickoffText({}), '');
 });
@@ -660,6 +666,17 @@ test('T185/T190 index.html Graph control + large panel + layout CSS', function (
     'button wiring present');
   assert.ok(html.indexOf('GRAPH_API_PATH') >= 0 || html.indexOf('/api/frontier/graph') >= 0);
   assert.ok(html.indexOf('mvp-large') >= 0, 'large class used in JS/CSS');
+  // 🎯T196: failed fetch → actionable error, not empty paste shell.
+  assert.ok(html.indexOf('renderMermaidPanelFetchError') >= 0, 'T196 fetch-error renderer');
+  const ofgStart = html.indexOf('function openFrontierGraph');
+  const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
+  const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 4000);
+  const catchIdx = ofg.indexOf('.catch(');
+  assert.ok(catchIdx >= 0, 'openFrontierGraph has catch');
+  assert.ok(ofg.slice(catchIdx).indexOf('renderMermaidPanelEmpty') < 0,
+    'T196: catch must not use empty paste shell');
+  assert.ok(ofg.slice(catchIdx).indexOf('renderMermaidPanelFetchError') >= 0,
+    'T196: catch uses fetch-error path');
   // Pure module exports.
   assert.strictEqual(typeof FT.buildActiveDependencyMermaid, 'function');
   assert.strictEqual(typeof FT.normalizeGraphPayload, 'function');
