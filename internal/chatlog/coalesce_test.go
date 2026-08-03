@@ -121,6 +121,94 @@ func TestCoalesceStreamLinesToolGapStructuralJoin(t *testing.T) {
 	}
 }
 
+// 🎯T223: user mid-assistant must not split one response into two seals.
+// Fixture mirrors the durable journal failure: stream tokens → user insert
+// → more tokens → end_turn. Hard-reload uses CoalesceStreamLines.
+func TestCoalesceStreamLinesUserMidStreamOneSeal(t *testing.T) {
+	raw := []string{
+		`{"type":"user","message":{"role":"user","content":"what about filing?"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"First half ends mid"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"-sentence at diagram."}]}}`,
+		// Premature owner follow-up journaled while stream still open.
+		`{"type":"user","message":{"role":"user","content":"observe bullseye"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" Second half continues the list."}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+	}
+	got := CoalesceStreamLines(raw)
+	// user + sealed full asst + mid user  → 3 frames (not 4 with split asst).
+	if len(got) != 3 {
+		t.Fatalf("sealed count=%d want 3: %v", len(got), got)
+	}
+	if !strings.Contains(got[0], "what about filing") {
+		t.Fatalf("0 want opening user: %s", got[0])
+	}
+	var sealed struct {
+		Type     string `json:"type"`
+		StreamID string `json:"stream_id"`
+		Message  struct {
+			StopReason string `json:"stop_reason"`
+			Content    []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(got[1]), &sealed); err != nil {
+		t.Fatal(err)
+	}
+	if sealed.Type != "assistant" || sealed.Message.StopReason != "end_turn" {
+		t.Fatalf("sealed1: %+v", sealed)
+	}
+	text := sealed.Message.Content[0].Text
+	want := "First half ends mid-sentence at diagram. Second half continues the list."
+	if text != want {
+		t.Fatalf("joined text=%q want %q", text, want)
+	}
+	if !strings.Contains(got[2], "observe bullseye") {
+		t.Fatalf("2 want mid user after sealed body: %s", got[2])
+	}
+}
+
+// 🎯T223: explicit stream_id join across interleave; two ids stay two blocks.
+func TestCoalesceStreamLinesByStreamID(t *testing.T) {
+	raw := []string{
+		`{"type":"assistant","stream_id":"s-a","message":{"role":"assistant","content":[{"type":"text","text":"A1"}]}}`,
+		`{"type":"assistant","stream_id":"s-b","message":{"role":"assistant","content":[{"type":"text","text":"B1"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"noise"}}`,
+		`{"type":"assistant","stream_id":"s-a","message":{"role":"assistant","content":[{"type":"text","text":"A2"}]}}`,
+		`{"type":"assistant","stream_id":"s-b","message":{"role":"assistant","content":[{"type":"text","text":"B2"}]}}`,
+		`{"type":"assistant","stream_id":"s-a","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+		`{"type":"assistant","stream_id":"s-b","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+	}
+	got := CoalesceStreamLines(raw)
+	// sealed A, sealed B, user  — order follows first fragment of each stream + user pass-through.
+	if len(got) != 3 {
+		t.Fatalf("n=%d want 3: %v", len(got), got)
+	}
+	var a, b struct {
+		StreamID string `json:"stream_id"`
+		Message  struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(got[0]), &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(got[1]), &b); err != nil {
+		t.Fatal(err)
+	}
+	if a.StreamID != "s-a" || a.Message.Content[0].Text != "A1A2" {
+		t.Fatalf("A: id=%q text=%q", a.StreamID, a.Message.Content[0].Text)
+	}
+	if b.StreamID != "s-b" || b.Message.Content[0].Text != "B1B2" {
+		t.Fatalf("B: id=%q text=%q", b.StreamID, b.Message.Content[0].Text)
+	}
+	if !strings.Contains(got[2], "noise") {
+		t.Fatalf("user pass-through: %s", got[2])
+	}
+}
+
 func TestReplayTailSealedBounded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "j.jsonl")
 	l, err := Open(path)

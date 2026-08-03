@@ -157,6 +157,27 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 	}
 }
 
+// stampStreamID injects stream_id onto a chat wire JSON object (🎯T223).
+// Assistant (and related) fragments of one overseer response share one id
+// so journal/history coalesce and the client join by identity, not adjacency.
+// Empty id or invalid JSON leaves the line unchanged.
+func stampStreamID(line, streamID string) string {
+	streamID = strings.TrimSpace(streamID)
+	if line == "" || streamID == "" {
+		return line
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil || m == nil {
+		return line
+	}
+	m["stream_id"] = streamID
+	b, err := json.Marshal(m)
+	if err != nil {
+		return line
+	}
+	return string(b)
+}
+
 // chatUserEcho builds the user-bubble wire line for a client-sent
 // prompt. Grok ACP does not echo the prompt as a user event, so the
 // chat handler synthesises one before forwarding to the overseer.

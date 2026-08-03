@@ -175,6 +175,23 @@ func (s *Server) AttachOverseer(agent *claudia.Agent) {
 	s.mu.Unlock()
 }
 
+// ensureOverseerStreamIDLocked returns the open response stream id, minting
+// one if needed (🎯T223). Caller must hold s.mu.
+func (s *Server) ensureOverseerStreamIDLocked() string {
+	if s.overseerStreamID == "" {
+		s.overseerStreamSeq++
+		s.overseerStreamID = "s" + strconv.FormatUint(s.overseerStreamSeq, 10)
+	}
+	return s.overseerStreamID
+}
+
+// clearOverseerStreamID drops the open stream label after a terminal stop.
+func (s *Server) clearOverseerStreamID() {
+	s.mu.Lock()
+	s.overseerStreamID = ""
+	s.mu.Unlock()
+}
+
 // DeliverOverseerEvent is the live event path for the overseer: normalise
 // to the chat wire shape, broadcast to /ws/chat listeners, then update
 // turn/idle status. Extracted so tests can drive the same path without
@@ -186,8 +203,22 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	// shape the web UI understands (🎯T39). Raw ACP payloads have
 	// no type/message.content, so a pass-through leaves the
 	// working indicator stuck forever.
+	// 🎯T223: stamp stream_id on assistant/progress fragments so journal
+	// and client join by identity across interleave (not adjacency).
+	var streamID string
+	if ev.Type == "assistant" || ev.Type == "progress" {
+		s.mu.Lock()
+		streamID = s.ensureOverseerStreamIDLocked()
+		s.mu.Unlock()
+	}
 	if line, ok := chatWireLine(ev); ok {
+		if streamID != "" {
+			line = stampStreamID(line, streamID)
+		}
 		s.BroadcastChat(line)
+	}
+	if ev.IsTerminalStop() {
+		s.clearOverseerStreamID()
 	}
 	s.HandleAgentEvent(ev)
 }

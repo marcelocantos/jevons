@@ -213,6 +213,22 @@ func TestChatUserEcho(t *testing.T) {
 	}
 }
 
+// 🎯T223: stampStreamID puts a join key on assistant wire frames.
+func TestStampStreamID(t *testing.T) {
+	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`
+	got := stampStreamID(line, "s42")
+	var probe map[string]any
+	if err := json.Unmarshal([]byte(got), &probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe["stream_id"] != "s42" {
+		t.Fatalf("stream_id=%v want s42; line=%s", probe["stream_id"], got)
+	}
+	if stampStreamID(line, "") != line {
+		t.Fatal("empty id must leave line unchanged")
+	}
+}
+
 func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 	s := New("test", t.TempDir())
 	ch := make(chan string, 16)
@@ -245,13 +261,17 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 		}
 	}
 
-	// First: assistant with text content array.
+	// First: assistant with text content array + stream_id (🎯T223).
 	var a1 map[string]any
 	if err := json.Unmarshal([]byte(lines[0]), &a1); err != nil {
 		t.Fatal(err)
 	}
 	if a1["type"] != "assistant" {
 		t.Fatalf("line0 type=%v line=%s", a1["type"], lines[0])
+	}
+	sid1, _ := a1["stream_id"].(string)
+	if sid1 == "" {
+		t.Fatalf("line0 missing stream_id: %s", lines[0])
 	}
 	msg1, _ := a1["message"].(map[string]any)
 	content1, _ := msg1["content"].([]any)
@@ -263,7 +283,7 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 		t.Fatalf("line0 block=%v", block)
 	}
 
-	// Second: terminal empty-content assistant with stop_reason.
+	// Second: terminal empty-content assistant with stop_reason; same stream_id.
 	var a2 map[string]any
 	if err := json.Unmarshal([]byte(lines[1]), &a2); err != nil {
 		t.Fatal(err)
@@ -271,9 +291,19 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 	if a2["type"] != "assistant" {
 		t.Fatalf("line1 type=%v line=%s", a2["type"], lines[1])
 	}
+	if a2["stream_id"] != sid1 {
+		t.Fatalf("stream_id mismatch: chunk=%q end=%v", sid1, a2["stream_id"])
+	}
 	msg2, _ := a2["message"].(map[string]any)
 	if msg2["stop_reason"] != "end_turn" {
 		t.Fatalf("line1 stop_reason=%v", msg2["stop_reason"])
+	}
+	// Terminal clears open stream so the next turn mints a new id.
+	s.mu.Lock()
+	openID := s.overseerStreamID
+	s.mu.Unlock()
+	if openID != "" {
+		t.Fatalf("overseerStreamID still %q after terminal", openID)
 	}
 
 	// Idle status: waiting must clear.

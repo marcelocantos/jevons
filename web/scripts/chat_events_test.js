@@ -253,6 +253,78 @@ test('T159: two real end_turns → two bubbles (no continuity heuristic)', () =>
   assert.strictEqual(state.assistantBubbles[1], 'second');
 });
 
+// ── 🎯T223 join by stream_id; user mid-stream does not split ──────
+
+function chunkWithId(text, streamId) {
+  return {
+    type: 'assistant',
+    stream_id: streamId,
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+  };
+}
+
+function endTurnWithId(streamId) {
+  return {
+    type: 'assistant',
+    stream_id: streamId,
+    message: { role: 'assistant', content: [], stop_reason: 'end_turn' },
+  };
+}
+
+test('T223: user mid-assistant without seal keeps one legacy bubble', () => {
+  // Journal-shaped interleave: asst half, owner user, asst half, end_turn.
+  const events = [
+    user('start'),
+    chunk('First half ends mid'),
+    chunk('-sentence.'),
+    user('observe bullseye'),
+    chunk(' Second half continues.'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(
+    state.assistantBubbles.length,
+    1,
+    `expected 1 bubble, got ${state.assistantBubbles.length}: ${JSON.stringify(state.assistantBubbles)}`,
+  );
+  assert.strictEqual(
+    state.assistantBubbles[0],
+    'First half ends mid-sentence. Second half continues.',
+  );
+  assert.strictEqual(state.userTexts.length, 2);
+  assert.strictEqual(state.openStream, -1);
+});
+
+test('T223: interleaved fragments join by stream_id; two ids stay two', () => {
+  const events = [
+    chunkWithId('A1', 's-a'),
+    chunkWithId('B1', 's-b'),
+    user('noise'),
+    chunkWithId('A2', 's-a'),
+    chunkWithId('B2', 's-b'),
+    endTurnWithId('s-a'),
+    endTurnWithId('s-b'),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 2);
+  assert.strictEqual(state.assistantBubbles[0], 'A1A2');
+  assert.strictEqual(state.assistantBubbles[1], 'B1B2');
+  assert.strictEqual(ChatEvents.streamIdOf(chunkWithId('x', 's-a')), 's-a');
+});
+
+test('T223 index.html: no seal on user; join keys stream_id', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('openStreamById'), 'must keep stream_id → el map');
+  assert.ok(html.includes('stream_id') || html.includes('streamId'), 'must read wire stream id');
+  // User path must not call sealAssistantStream (T223 pin).
+  const userBlock = html.match(/if\s*\(\s*typ\s*===\s*['"]user['"]\s*\)\s*\{[\s\S]*?\} else if\s*\(\s*typ\s*===\s*['"]assistant['"]/);
+  assert.ok(userBlock, 'user handle block must exist');
+  assert.ok(
+    !/sealAssistantStream\s*\(/.test(userBlock[0]),
+    'user mid-stream must not sealAssistantStream',
+  );
+});
+
 test('text+end_turn in one event: one bubble and clear', () => {
   const events = [
     user('x'),

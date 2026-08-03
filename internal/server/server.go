@@ -69,6 +69,13 @@ type Server struct {
 	turnBuf   string // accumulates Jevon text for current turn
 	waiting   bool   // true while awaiting a response from Jevon
 
+	// overseerStreamID labels every assistant/progress fragment of the open
+	// overseer response (🎯T223). Minted on first fragment; cleared on
+	// terminal stop so journal + client join by id across interleave.
+	overseerStreamID string
+	// overseerStreamSeq is a monotonic counter for short stream ids.
+	overseerStreamSeq uint64
+
 	// overseerLastProgress is the last ACP/event/activity time for stuck-busy
 	// detection (🎯T204). Zero means never observed.
 	overseerLastProgress time.Time
@@ -274,6 +281,7 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		turnText := s.turnBuf
 		s.turnBuf = ""
 		s.waiting = false
+		s.overseerStreamID = "" // 🎯T223: terminal settle closes stream label
 		s.mu.Unlock()
 		// The overseer's ACP session is now idle — flush any async notes
 		// (worker replies, budget alerts) that arrived while it was busy and

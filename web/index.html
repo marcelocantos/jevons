@@ -1563,9 +1563,9 @@ function handle(m) {
       // Server synthesises a user echo on send; Grok ACP may also
       // publish user_message_chunk for the same prompt. Drop the dupe.
       if (content && msgHistory[msgHistory.length - 1]?.text === content) return;
-      // 🎯T159: owner user turn seals any open assistant stream (same as
-      // ChatEvents.applyChatEvent openStream=-1) — not a continuity guess.
-      sealAssistantStream();
+      // 🎯T223: do NOT seal open assistant streams on user interleave.
+      // Join identity is stream_id (and legacy openStreamEl until terminal).
+      // Premature seal was the journal/hydrate split of one answer into two.
       closeTurn();
       const uEl = addMsg('user', content, msgTs);
       if (content) msgHistory.push({ text: content, el: uEl });
@@ -1593,16 +1593,23 @@ function handle(m) {
     // 🎯T161: single ordered walk. Non-text (tool_use) marks a segment edge
     // for the *following* text only; multi-block text parts are segment edges
     // between them. Continuous single-block frames bare-concat (tokens).
+    // 🎯T223: stream_id joins fragments into one bubble across interleave.
+    const streamId = (typeof ChatEvents !== 'undefined' && ChatEvents.streamIdOf)
+      ? ChatEvents.streamIdOf(m)
+      : (m.stream_id || m.streamId || '');
     let emittedText = false;
     const anyText = ChatEvents.hasAssistantText(m);
     if (anyText) closeTurn();
     content.forEach(c => {
       if (c.type==='tool_use') {
         streamSegmentEdge = true;
+        if (streamId && openStreamById[streamId]) {
+          // per-id edge handled inside appendOrAddJevons via opts
+        }
         addTurnItem('tool-use', c.name + (c.input ? ': ' + ToolSummary.summariseInput(c.input) : ''));
       } else if (c.type==='text' && c.text) {
         const edge = streamSegmentEdge || emittedText;
-        appendOrAddJevons(c.text, msgTs, { segmentEdge: edge });
+        appendOrAddJevons(c.text, msgTs, { segmentEdge: edge, streamId: streamId });
         streamSegmentEdge = false;
         emittedText = true;
       }
@@ -1611,7 +1618,7 @@ function handle(m) {
     // Only terminal stops clear working (not mid-stream text). Clearing
     // early used to force one bubble per token.
     if (ChatEvents.shouldClearWorking(m)) {
-      sealAssistantStream();
+      sealAssistantStream(streamId);
       setWorking(false);
     }
   } else if (typ==='tool_result' || typ==='result') {
@@ -1646,32 +1653,48 @@ function lastMessageish() {
   return el;
 }
 
-// 🎯T159: sole open-stream handle. Bubble boundary = terminal stop_reason
-// (or a new owner user turn). Never rediscover via lastMessageish — tool
-// chrome, stuck-watchdog status, and worker notes can insert .msg nodes
-// that are not the open stream and would otherwise start a second bubble.
+// 🎯T159 / 🎯T223: open-stream handles. Bubble boundary = terminal
+// stop_reason (not user interleave). Join key is stream_id when present;
+// legacy openStreamEl for unlabeled frames. Never rediscover via
+// lastMessageish — tool chrome and worker notes can insert .msg nodes.
 let openStreamEl = null;
+// stream_id → open jevons element (🎯T223).
+const openStreamById = Object.create(null);
 // 🎯T161: next assistant text after tool_use/tool_result is a new segment
 // (structural edge — not content sniffing). Cleared on seal / new bubble.
 let streamSegmentEdge = false;
 
-function clearOpenStreamHandle() {
-  openStreamEl = null;
+function clearOpenStreamHandle(streamId) {
+  if (streamId) {
+    const el = openStreamById[streamId];
+    delete openStreamById[streamId];
+    if (openStreamEl === el) openStreamEl = null;
+  } else {
+    openStreamEl = null;
+    for (const k of Object.keys(openStreamById)) delete openStreamById[k];
+  }
   streamSegmentEdge = false;
 }
 
 // appendOrAddJevons merges streaming assistant chunks into the open
-// jevons bubble. Merge is keyed on openStreamEl + _streamRaw (not
-// lastMessageish / workingEl). Seal only on terminal stop (or user turn)
-// so tool rounds never split one logical reply into multiple bubbles.
+// jevons bubble. Merge is keyed on stream_id (🎯T223) or openStreamEl +
+// _streamRaw — not lastMessageish / workingEl. Seal only on terminal stop
+// so tool rounds and mid-stream user lines never split one logical reply.
 // opts.segmentEdge: known protocol segment boundary → joinAssistantSegments;
+// opts.streamId: wire stream_id for join-by-identity.
 // otherwise bare appendAssistantStream (intra-segment tokens).
 function appendOrAddJevons(text, ts, opts) {
   const segmentEdge = !!(opts && opts.segmentEdge);
-  const target = (openStreamEl && openStreamEl.isConnected &&
-    typeof openStreamEl._streamRaw === 'string')
-    ? openStreamEl
-    : null;
+  const streamId = opts && opts.streamId ? String(opts.streamId) : '';
+  let target = null;
+  if (streamId && openStreamById[streamId] &&
+      openStreamById[streamId].isConnected &&
+      typeof openStreamById[streamId]._streamRaw === 'string') {
+    target = openStreamById[streamId];
+  } else if (!streamId && openStreamEl && openStreamEl.isConnected &&
+      typeof openStreamEl._streamRaw === 'string') {
+    target = openStreamEl;
+  }
   if (target) {
     // 🎯T161: structural segment join vs bare token append — never sniff text.
     target._streamRaw = segmentEdge
@@ -1685,6 +1708,10 @@ function appendOrAddJevons(text, ts, opts) {
   const el = addMsg('jevons', text, ts, { streamOpen: true });
   // _streamRaw already set in buildMsg when streamOpen; keep assign for clarity.
   el._streamRaw = typeof el._streamRaw === 'string' ? el._streamRaw : text;
+  if (streamId) {
+    el._streamId = streamId;
+    openStreamById[streamId] = el;
+  }
   openStreamEl = el;
   streamSegmentEdge = false;
 }
@@ -1718,17 +1745,23 @@ function scheduleJevonsRender(el) {
   });
 }
 
-// sealAssistantStream closes the open coalesced bubble so the next
+// sealAssistantStream closes an open coalesced bubble so the next
 // turn starts a new one — flushing any pending debounced render first.
-// 🎯T159: only terminal stop_reason / system / new user turn call this —
-// never tool_use progress.
-function sealAssistantStream() {
-  let el = (openStreamEl && typeof openStreamEl._streamRaw === 'string')
-    ? openStreamEl
-    : null;
+// 🎯T159 / 🎯T223: only terminal stop_reason / system call this — never
+// tool_use progress, and never owner user interleave (join by stream_id).
+// streamId: seal that labeled stream only; omit to seal the legacy handle
+// (and all labeled opens on hard wipe paths).
+function sealAssistantStream(streamId) {
+  let el = null;
+  if (streamId && openStreamById[streamId] &&
+      typeof openStreamById[streamId]._streamRaw === 'string') {
+    el = openStreamById[streamId];
+  } else if (!streamId && openStreamEl && typeof openStreamEl._streamRaw === 'string') {
+    el = openStreamEl;
+  }
   // Fallback: scan for a still-open stream if the handle was lost (e.g.
   // soft reconnect residual) — still never invent continuity without _streamRaw.
-  if (!el) {
+  if (!el && !streamId) {
     const tail = lastMessageish();
     if (tail && tail.classList.contains('jevons') && typeof tail._streamRaw === 'string') {
       el = tail;
@@ -1756,7 +1789,7 @@ function sealAssistantStream() {
     unwatchStreamBubble(el);
     scheduleLatestExpansion();
   }
-  clearOpenStreamHandle();
+  clearOpenStreamHandle(streamId || undefined);
   // Final layout (markdown / mermaid / highlight) often grows after the
   // last stream pin — re-follow so the user never needs a manual nudge.
   if (isTracking()) {
