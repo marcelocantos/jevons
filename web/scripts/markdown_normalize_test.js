@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic tests for markdown fence smush normalization (🎯T145).
+// Hermetic tests for markdown fence smush normalization (🎯T145, 🎯T146).
 // Run: node web/scripts/markdown_normalize_test.js
 
 'use strict';
@@ -91,13 +91,59 @@ test('idempotent: second pass is no-op', () => {
 // ── Closing fence on its own line still fine ────────────────────
 
 test('closing fence after code line unchanged when opening already good', () => {
-  const input = '```\nline with ``` ticks inside\n```';
-  // Opening is at start — no smush. Inner ``` may get a blank line if glued
-  // to a non-newline char; here " ``` " has a space then ticks — space is
-  // non-newline so we insert (harmless for invalid-in-fence content).
-  // Prefer: only assert well-formed outer fences stay openers on own line.
+  // Opening is at start — no smush. Inner mid-line ``` is not a real block
+  // start (no newline after fence token) so stays put (🎯T146).
   const well = '```python\nprint(1)\n```';
   assert.strictEqual(ensureFenceNewlines(well), well);
+  const withInner = '```\nline with ``` ticks inside\n```';
+  assert.strictEqual(ensureFenceNewlines(withInner), withInner);
+});
+
+// ── 🎯T146: mid-prose fence markers must not open blocks ────────
+
+test('T146 mid-prose bare ``` example is unchanged (no empty fence)', () => {
+  // Acceptance: intentional fence characters in prose must not become an
+  // opener. Pre-T146 blank-line insert would yield "...like \n\n``` in..."
+  // and marked would treat the rest of the message as a broken code block.
+  const input = 'Use triple backticks like ``` in the docs.';
+  const out = ensureFenceNewlines(input);
+  assert.strictEqual(out, input);
+  assert.ok(!out.includes('\n\n```'), 'must not insert blank line before mid-prose fence');
+  // No line that is only a fence opener with dangling info-string prose.
+  const lines = out.split('\n');
+  assert.ok(
+    !lines.some((l) => /^```/.test(l)),
+    'mid-prose example must not produce a column-0 fence line: ' + JSON.stringify(out),
+  );
+});
+
+test('T146 mid-prose ```lang word example is unchanged', () => {
+  const input = 'Here is ```cpp as a language tag example only.';
+  assert.strictEqual(ensureFenceNewlines(input), input);
+});
+
+test('T146 smushed-form description without real block stays prose', () => {
+  // Describes the smush pattern without providing a following newline body.
+  const input = 'The smushed form is prose:```lang then more words.';
+  assert.strictEqual(ensureFenceNewlines(input), input);
+});
+
+test('T146 CRLF smushed real fence still gets blank line', () => {
+  const input = 'See:```cpp\r\nint x;\r\n```';
+  const out = ensureFenceNewlines(input);
+  assert.strictEqual(out, 'See:\n\n```cpp\r\nint x;\r\n```');
+});
+
+test('T146 incomplete stream fence without newline is left (no premature open)', () => {
+  // Streaming may pause after ```lang before the body newline; do not invent
+  // a fence line yet. When "\ncode" arrives, full-text re-normalize fixes it.
+  const partial = "Here's a snippet:```cpp";
+  assert.strictEqual(ensureFenceNewlines(partial), partial);
+  const full = partial + '\nint x;\n```';
+  assert.strictEqual(
+    ensureFenceNewlines(full),
+    "Here's a snippet:\n\n```cpp\nint x;\n```",
+  );
 });
 
 if (failed) {
