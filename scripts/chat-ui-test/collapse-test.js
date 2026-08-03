@@ -123,6 +123,24 @@ function assertNoShowMoreLess(text, label, failures) {
       const pageText = document.getElementById('messages').innerText || '';
       const jFade = jBig.querySelector('.msg-clip-fade');
       const jFadeBg = jFade ? getComputedStyle(jFade).backgroundImage : '';
+      const jFadeZ = jFade ? parseFloat(getComputedStyle(jFade).zIndex) || 0 : 0;
+      const jTabZ = jBig._expandBtn ? parseFloat(getComputedStyle(jBig._expandBtn).zIndex) || 0 : 0;
+      const uFade = uBig.querySelector('.msg-clip-fade');
+      const uFadeBg = uFade ? getComputedStyle(uFade).backgroundImage : '';
+      const uFadeZ = uFade ? parseFloat(getComputedStyle(uFade).zIndex) || 0 : 0;
+      const uTabZ = uBig._expandBtn ? parseFloat(getComputedStyle(uBig._expandBtn).zIndex) || 0 : 0;
+      // Parse max alpha from linear-gradient(... rgba(0,0,0,A) ...) end stop.
+      const maxScrimAlpha = (bg) => {
+        if (!bg) return null;
+        let max = 0;
+        const re = /rgba?\(\s*0\s*,\s*0\s*,\s*0\s*(?:,\s*([0-9.]+)\s*)?\)/gi;
+        let m;
+        while ((m = re.exec(bg))) {
+          const a = m[1] == null ? 1 : parseFloat(m[1]);
+          if (!Number.isNaN(a) && a > max) max = a;
+        }
+        return max;
+      };
       const jMsgRect = jBig.getBoundingClientRect();
       const jTime = jBig.querySelector('.msg-time');
       const jTimeRect = jTime ? jTime.getBoundingClientRect() : null;
@@ -144,6 +162,9 @@ function assertNoShowMoreLess(text, label, failures) {
         jOverflow: jBodyStyle.overflow,
         jHasFade: !!jFade && getComputedStyle(jFade).display !== 'none',
         jFadeBg,
+        jFadeZ,
+        jTabZ,
+        jScrimAlpha: maxScrimAlpha(jFadeBg),
         jBtnClass: jBig._expandBtn ? jBig._expandBtn.className : '',
         jBtnText: jBig._expandBtn ? jBig._expandBtn.textContent.trim() : '',
         jAria: jBig._expandBtn ? jBig._expandBtn.getAttribute('aria-label') : '',
@@ -163,6 +184,11 @@ function assertNoShowMoreLess(text, label, failures) {
         uExpanded: uBig._expanded === true,
         uClipped: uBig.classList.contains('msg-clipped'),
         uHasBtn: !!uBig._expandBtn,
+        uHasFade: !!uFade && getComputedStyle(uFade).display !== 'none',
+        uFadeBg,
+        uFadeZ,
+        uTabZ,
+        uScrimAlpha: maxScrimAlpha(uFadeBg),
         uMaxH: uBodyStyle.maxHeight,
         uOverflow: uBodyStyle.overflow,
         // table: header cells must remain when collapsed (clip model)
@@ -203,6 +229,14 @@ function assertNoShowMoreLess(text, label, failures) {
     if (state.jFadeBg && /var\(--bg\)|var\(--user-bg\)/i.test(state.jFadeBg)) {
       failures.push('pocket fade still references --bg/--user-bg (fade-to-page, not dark scrim)');
     }
+    // Soft pocket: max scrim opacity ~half of prior 0.45 (accept 0.15–0.28).
+    if (state.jScrimAlpha == null || state.jScrimAlpha < 0.15 || state.jScrimAlpha > 0.28) {
+      failures.push(`assistant scrim max alpha = ${state.jScrimAlpha}, want ~0.22 (range 0.15–0.28)`);
+    }
+    // Tab must stack above scrim for assistant and user (both roles).
+    if (!(state.jTabZ > state.jFadeZ)) {
+      failures.push(`assistant tab z-index ${state.jTabZ} not above fade ${state.jFadeZ}`);
+    }
     if (!state.jTimeOutside) failures.push('timestamp still inside bubble box (want outside / under border)');
     if (!state.jTabInside) failures.push('expand tab not inside bottom edge (want tongue into pocket, not hang-off)');
     if (!state.jFadeFlush) failures.push('clip fade not flush to inner bottom of bubble border');
@@ -221,6 +255,16 @@ function assertNoShowMoreLess(text, label, failures) {
     if (!state.uClipped) failures.push('non-latest huge user missing .msg-clipped');
     if (state.uExpanded) failures.push('T77: non-latest huge user is expanded (want clipped)');
     if (!state.uHasBtn) failures.push('T77: non-latest huge user has no expand tab');
+    if (!state.uHasFade) failures.push('collapsed user missing .msg-clip-fade gradient');
+    if (state.uFadeBg && !/rgba?\(\s*0\s*,\s*0\s*,\s*0/i.test(state.uFadeBg)) {
+      failures.push(`user pocket fade backgroundImage = ${JSON.stringify(state.uFadeBg)}, want darken via rgba(0,0,0,…)`);
+    }
+    if (state.uScrimAlpha == null || state.uScrimAlpha < 0.15 || state.uScrimAlpha > 0.28) {
+      failures.push(`user scrim max alpha = ${state.uScrimAlpha}, want ~0.22 (range 0.15–0.28)`);
+    }
+    if (!(state.uTabZ > state.uFadeZ)) {
+      failures.push(`user tab z-index ${state.uTabZ} not above fade ${state.uFadeZ}`);
+    }
     if (!state.uMaxH || state.uMaxH === 'none') failures.push(`collapsed user max-height = ${state.uMaxH}, want capped`);
     if (state.uOverflow !== 'hidden') failures.push(`collapsed user overflow = ${state.uOverflow}, want hidden`);
 

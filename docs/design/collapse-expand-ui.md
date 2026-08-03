@@ -147,6 +147,13 @@ Owner smoke after pocket polish: hang-off tab and multi-line tall scrim felt wro
 | Chevron | Unchanged sense: up collapsed / down expanded |
 | Keep | Dark scrim, tall-only tab, time outside, full-render clip |
 
+### 2026-08-03 — scrim opacity + tab z-order
+
+| Piece | Polish |
+|-------|--------|
+| Scrim max alpha | `0.45` → `0.22` (half); height still `var(--radius)`; fade-to-dark structure |
+| Tab stack | `.msg-expand-tab` `z-index: 3` above `.msg-clip-fade` `z-index: 1` for **both** `.msg.user` and `.msg.jevons` |
+
 ## Non-goals (unless discussion says otherwise)
 
 - Changing T66/T77 semantics without explicit owner OK.
