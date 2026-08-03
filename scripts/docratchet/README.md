@@ -15,6 +15,7 @@ These tests are **not** user journeys (🎯T107). They do not start
 | T47 install path | That root `README.md` still names brew install, config, pair residual, adopt, and direct; architecture-current no longer claims pre-T6 all-interfaces default. Not a live second-user drill. |
 | T191 restart-daily | `scripts/restart-daily-jevonsd.sh` exists, executable, `/bin/bash -n`, `--help`/`--dry-run`, nohup/setsid detach markers; persona/AGENTS/agents-guide carry T188+T191 doctrine. Not a live daily bounce. |
 | T194 daily-path achieve | persona/AGENTS/agents-guide/fleet_brief carry doctrine: daemon/API not achieved on hermetics alone; restart-daily + live probe; `HasDailyPathEvidence`. Pure classifier tests live in `internal/mcpserver`. Not a live daily bounce. |
+| T197 worker names | Doctrine surfaces + `agents.go` spawn tool keep hierarchical worker-name examples with **literal dots** (`jv-t27.2-config` not `jv-t272-config`); flat residual `jv-t159-seal`. Spawn path hermetic: `TestEnsureAgentPreservesLiteralDotsInName`. |
 | Daily port | Lives in `scripts/journey-suite/portguard` — real function unit test, not a doc grep. |
 
 ```bash
