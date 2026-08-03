@@ -1015,6 +1015,12 @@
     };
   }
 
+  // 🎯T230: quiet poll / re-render must not remount while InstantTip hover is latched.
+  // Pure policy for hermetics; index.html calls InstantTip.anyHoverLatched().
+  function shouldSkipRerenderWhileTipLatched(latched) {
+    return !!latched;
+  }
+
   return {
     TAB_TRANSCRIPT: TAB_TRANSCRIPT,
     TAB_FRONTIER: TAB_FRONTIER,
@@ -1066,6 +1072,7 @@
     engagementIndex: engagementIndex,
     applyEngagement: applyEngagement,
     stopEngagementRequest: stopEngagementRequest,
+    shouldSkipRerenderWhileTipLatched: shouldSkipRerenderWhileTipLatched,
   };
 
 }));

@@ -17,6 +17,11 @@
 // alone does not dismiss; hide only on leave-tip (or leave both without tip
 // engagement). Nested scroll/wheel must not re-arm hide. No setInterval.
 //
+// 🎯T230: frontier quiet poll / re-render must not tear down a tip while
+// the pointer is latched (overTip or overHost). isHoverLatched / anyHoverLatched
+// let the table skip remount; dismiss only on leave of trigger+card (or
+// force-hide / singleton peer). Still pointer over card is never wall-clock hide.
+//
 // 🎯T203: product-wide singleton — at most one InstantTip panel visible.
 // Showing a tip for a new host force-hides every other open InstantTip
 // (sticky state reset via tip._instantTipForceHide).
@@ -95,6 +100,16 @@
     var s = state || {};
     if (s.overHost || s.overTip) return false;
     return true;
+  }
+
+  // Pure: pointer latched on host and/or tip (🎯T230).
+  // Visible open tip with overTip/overHost must survive frontier re-render.
+  // Gap-only grace (both false, still visible until timer) is NOT latched —
+  // remount may clean up after the user has left both.
+  function isHoverLatchedState(state, visible) {
+    if (!visible) return false;
+    var s = state || {};
+    return !!(s.overTip || s.overHost);
   }
 
   // relatedTarget still inside el? Nested children / scroll chrome (🎯T187).
@@ -367,6 +382,61 @@
 
   function getOpenTips() {
     return openTips.slice();
+  }
+
+  // isHoverLatched(tip) — true while pointer is over tip or its host (🎯T230).
+  // Used by frontier re-render to avoid tearing down a card under a still pointer.
+  function isHoverLatched(tip) {
+    if (!tip) return false;
+    if (!isVisible(tip)) return false;
+    var s = null;
+    if (typeof tip._instantTipHoverState === 'function') {
+      try {
+        s = tip._instantTipHoverState();
+      } catch (_) {
+        s = null;
+      }
+    }
+    // Open visible tip without hover state: treat as latched (safe).
+    if (!s) return true;
+    return isHoverLatchedState(s, true);
+  }
+
+  // anyHoverLatched() — product-wide: any open tip has pointer over tip/host.
+  function anyHoverLatched() {
+    for (var i = 0; i < openTips.length; i++) {
+      if (isHoverLatched(openTips[i])) return true;
+    }
+    return false;
+  }
+
+  // discardDetachedTips(doc?) — remove non-latched .instant-tip nodes (🎯T230).
+  // Latched tips (pointer over tip/host) are kept; others force-hide + unmount.
+  // Returns { removed, preserved }.
+  function discardDetachedTips(doc) {
+    var d = doc || (typeof document !== 'undefined' ? document : null);
+    var removed = 0;
+    var preserved = 0;
+    if (!d || typeof d.querySelectorAll !== 'function') {
+      return { removed: 0, preserved: 0 };
+    }
+    var nodes = d.querySelectorAll('.' + TIP_CLASS);
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!el) continue;
+      if (isHoverLatched(el)) {
+        preserved++;
+        continue;
+      }
+      forceHideTip(el);
+      if (el.parentNode) {
+        try {
+          el.parentNode.removeChild(el);
+        } catch (_) { /* detached already */ }
+      }
+      removed++;
+    }
+    return { removed: removed, preserved: preserved };
   }
 
   // showTip(tip) — synchronous; no setTimeout. Used by attach + hermetic.
@@ -677,6 +747,10 @@
     shouldRunScheduledHide: shouldRunScheduledHide,
     shouldScheduleHideOnHostLeave: shouldScheduleHideOnHostLeave,
     shouldScheduleHideOnTipLeave: shouldScheduleHideOnTipLeave,
+    isHoverLatchedState: isHoverLatchedState,
+    isHoverLatched: isHoverLatched,
+    anyHoverLatched: anyHoverLatched,
+    discardDetachedTips: discardDetachedTips,
     relatedStillInside: relatedStillInside,
     tipTextOrEmpty: tipTextOrEmpty,
     placeLeftOfPointerRect: placeLeftOfPointerRect,

@@ -55,6 +55,12 @@ function mockEl(tag) {
       c.parentNode = this;
       return c;
     },
+    removeChild(c) {
+      const i = this.children.indexOf(c);
+      if (i >= 0) this.children.splice(i, 1);
+      if (c) c.parentNode = null;
+      return c;
+    },
     setAttribute(k, v) {
       this.attrs[k] = String(v);
     },
@@ -691,6 +697,145 @@ test('T187: leave tip after engagement hides; walk-away via host after tip also 
   assert.ok(timers.pending.filter(Boolean).length >= 1, 'walk-away schedules hide');
   timers.flush();
   assert.strictEqual(IT.isVisible(tip), false, 'hidden after tip→host→leave host');
+});
+
+// ─── 🎯T230: no wall-clock dismiss while over card; re-render must not kill ─
+
+test('T230 pure: isHoverLatchedState only while overTip/overHost and visible', function () {
+  assert.strictEqual(IT.isHoverLatchedState({ overTip: true, overHost: false }, true), true);
+  assert.strictEqual(IT.isHoverLatchedState({ overTip: false, overHost: true }, true), true);
+  assert.strictEqual(IT.isHoverLatchedState({ overTip: true, overHost: true }, true), true);
+  assert.strictEqual(
+    IT.isHoverLatchedState({ overTip: false, overHost: false }, true),
+    false,
+    'gap grace (left both, still visible) is not latched'
+  );
+  assert.strictEqual(IT.isHoverLatchedState({ overTip: true }, false), false, 'hidden not latched');
+  assert.strictEqual(IT.isHoverLatchedState(null, true), false);
+});
+
+test('T230: still pointer over tip — no hide timer; leave schedules hide', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const timers = mockTimers();
+  const tip = IT.attach(host, '<p>Frontier card body</p>', {
+    doc: doc,
+    mount: doc.body,
+    html: true,
+    sticky: true,
+    hideGraceMs: 100,
+    timers: timers,
+    placement: IT.PLACE_LEFT_OF_POINTER,
+    className: IT.CARD_CLASS,
+    clampSelectors: [],
+  });
+  host.dispatch('pointerenter', { clientX: 400, clientY: 200 });
+  tip.dispatch('pointerenter');
+  assert.strictEqual(IT.isVisible(tip), true);
+  assert.strictEqual(IT.isHoverLatched(tip), true, 'latched over tip');
+  assert.strictEqual(IT.anyHoverLatched(), true);
+
+  // Still pointer: flush many timer slots — must stay open (no idle auto-hide).
+  timers.flush();
+  timers.flush();
+  assert.strictEqual(IT.isVisible(tip), true, 'still open after idle flushes');
+  assert.strictEqual(
+    timers.pending.filter(Boolean).length,
+    0,
+    'no hide timer armed while overTip'
+  );
+  assert.strictEqual(tip._instantTipHoverState().overTip, true);
+
+  // Leave host while still on card — must stay open (no timer).
+  host.dispatch('pointerleave');
+  assert.strictEqual(IT.isVisible(tip), true, 'leave-host alone while over tip keeps open');
+  assert.strictEqual(IT.isHoverLatched(tip), true, 'still latched over tip');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0, 'no hide while overTip');
+
+  // Leave tip (not over host) → grace schedules hide.
+  tip.dispatch('pointerleave');
+  assert.strictEqual(tip._instantTipHoverState().overTip, false);
+  assert.strictEqual(tip._instantTipHoverState().overHost, false);
+  assert.strictEqual(IT.isHoverLatched(tip), false, 'not latched after leave tip+host');
+  assert.ok(timers.pending.filter(Boolean).length >= 1, 'leave schedules hide');
+  timers.flush();
+  assert.strictEqual(IT.isVisible(tip), false, 'hidden after leave + grace');
+  assert.strictEqual(IT.anyHoverLatched(), false);
+});
+
+test('T230: discardDetachedTips preserves latched tip, removes others', function () {
+  const doc = mockDoc();
+  const body = doc.body;
+  // querySelectorAll mock for discardDetachedTips
+  const tips = [];
+  doc.querySelectorAll = function (sel) {
+    if (String(sel).indexOf('instant-tip') >= 0) return tips.slice();
+    return [];
+  };
+
+  const hostA = mockEl('td');
+  hostA.ownerDocument = doc;
+  const hostB = mockEl('td');
+  hostB.ownerDocument = doc;
+  const tipA = IT.attach(hostA, 'Card A latched', {
+    doc: doc, mount: body, sticky: true, hideGraceMs: 0,
+  });
+  const tipB = IT.attach(hostB, 'Card B closed', {
+    doc: doc, mount: body, sticky: true, hideGraceMs: 0,
+  });
+  tips.push(tipA, tipB);
+
+  hostA.dispatch('pointerenter');
+  tipA.dispatch('pointerenter');
+  assert.strictEqual(IT.isVisible(tipA), true);
+  assert.strictEqual(IT.isHoverLatched(tipA), true);
+  // tipB never shown — not latched
+  assert.strictEqual(IT.isHoverLatched(tipB), false);
+
+  const r = IT.discardDetachedTips(doc);
+  assert.strictEqual(r.preserved, 1, 'latched preserved');
+  assert.strictEqual(r.removed, 1, 'closed removed');
+  assert.strictEqual(IT.isVisible(tipA), true, 'latched still visible');
+  assert.ok(tipA.parentNode === body || body.children.indexOf(tipA) >= 0, 'latched still mounted');
+  assert.ok(!tipB.parentNode || body.children.indexOf(tipB) < 0, 'closed unmounted');
+});
+
+test('T230: anyHoverLatched false after leave both (gap grace still visible)', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const timers = mockTimers();
+  const tip = IT.attach(host, 'Grace gap', {
+    doc: doc, mount: doc.body, sticky: true, hideGraceMs: 80, timers: timers,
+  });
+  host.dispatch('pointerenter');
+  assert.strictEqual(IT.anyHoverLatched(), true, 'over host latched');
+  host.dispatch('pointerleave');
+  // During gap grace: still visible, both flags false → not latched (remount OK).
+  assert.strictEqual(IT.isVisible(tip), true, 'visible during grace');
+  assert.strictEqual(tip._instantTipHoverState().overHost, false);
+  assert.strictEqual(tip._instantTipHoverState().overTip, false);
+  assert.strictEqual(IT.isHoverLatched(tip), false, 'gap not latched');
+  assert.strictEqual(IT.anyHoverLatched(), false);
+  timers.flush();
+  assert.strictEqual(IT.isVisible(tip), false);
+});
+
+test('T230 index.html skips re-render while anyHoverLatched; discardDetachedTips path', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('function renderFrontierTable');
+  assert.ok(start >= 0, 'renderFrontierTable present');
+  const end = html.indexOf('function loadFrontier', start);
+  const region = html.slice(start, end > start ? end : start + 4000);
+  assert.ok(region.indexOf('anyHoverLatched') >= 0, 'anyHoverLatched gate');
+  assert.ok(region.indexOf('T230') >= 0, 'T230 comment');
+  assert.ok(region.indexOf('discardDetachedTips') >= 0, 'discardDetachedTips cleanup');
+  // Must not blindly removeChild all tips without the latch gate.
+  assert.ok(
+    /anyHoverLatched[\s\S]*return;/.test(region) || region.indexOf('anyHoverLatched()') >= 0,
+    'early return when latched'
+  );
 });
 
 if (failed) {

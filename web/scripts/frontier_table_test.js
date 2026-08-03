@@ -862,6 +862,33 @@ test('playKickoff blocked when engaged or closed (🎯T222)', function () {
     'UI handles blocked kickoff');
 });
 
+// 🎯T230: frontier re-render must not kill tips while pointer is over card.
+test('T230 skip re-render while InstantTip hover latched', function () {
+  assert.strictEqual(typeof FT.shouldSkipRerenderWhileTipLatched, 'function');
+  assert.strictEqual(FT.shouldSkipRerenderWhileTipLatched(true), true);
+  assert.strictEqual(FT.shouldSkipRerenderWhileTipLatched(false), false);
+  assert.strictEqual(FT.shouldSkipRerenderWhileTipLatched(0), false);
+  assert.strictEqual(FT.shouldSkipRerenderWhileTipLatched(1), true);
+
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('function renderFrontierTable');
+  assert.ok(start >= 0);
+  const end = html.indexOf('function loadFrontier', start);
+  const region = html.slice(start, end > start ? end : start + 5000);
+  assert.ok(region.indexOf('anyHoverLatched') >= 0, 'anyHoverLatched gate in render');
+  assert.ok(region.indexOf('T230') >= 0, 'T230 marked');
+  assert.ok(region.indexOf('discardDetachedTips') >= 0, 'safe tip cleanup');
+  // Old bug: unconditional removeChild of every .instant-tip on every poll.
+  // Must gate on latch first (early return), then discardDetachedTips.
+  const latchIdx = region.indexOf('anyHoverLatched');
+  const discardIdx = region.indexOf('discardDetachedTips');
+  assert.ok(latchIdx >= 0 && discardIdx >= 0 && latchIdx < discardIdx,
+    'latch check before discardDetachedTips wipe');
+  assert.ok(/anyHoverLatched\(\)\s*\)\s*\{\s*return;/.test(region)
+    || /anyHoverLatched\(\)[\s\S]{0,80}return;/.test(region),
+    'early return when latched');
+});
+
 
 if (failed) {
   console.error(failed + ' failed');

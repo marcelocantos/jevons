@@ -5461,10 +5461,23 @@ function loadAgentTranscript(name, opts) {
 
 function renderFrontierTable(model) {
   if (!frontierBodyEl) return;
+  // 🎯T230: never tear down a latched InstantTip (pointer over tip or host).
+  // Quiet poll / frontier_changed used to removeChild every .instant-tip,
+  // which felt like an idle auto-timeout while the mouse sat still on the card.
+  // Skip remount while latched; next poll after leave applies the fresh model.
+  if (typeof InstantTip !== 'undefined' && typeof InstantTip.anyHoverLatched === 'function'
+      && InstantTip.anyHoverLatched()) {
+    return;
+  }
   // Drop previous fixed-layer tips (hosts are about to be destroyed).
-  document.querySelectorAll('.instant-tip').forEach(function (el) {
-    if (el && el.parentNode) el.parentNode.removeChild(el);
-  });
+  // Prefer InstantTip.discardDetachedTips so registry + sticky state stay consistent.
+  if (typeof InstantTip !== 'undefined' && typeof InstantTip.discardDetachedTips === 'function') {
+    InstantTip.discardDetachedTips(document);
+  } else {
+    document.querySelectorAll('.instant-tip').forEach(function (el) {
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
+  }
   if (rhsTabMeta) {
     rhsTabMeta.textContent = model.available
       ? ((model.rows && model.rows.length) + ' ready')
