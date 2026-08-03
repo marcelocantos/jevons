@@ -662,6 +662,19 @@ let attentionBarExpanded = false;
 let lastRouteSuggestion = null;
 const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing.';
 
+// 🎯T153: force focus back to main composer after pointer chrome actions.
+// Prefer ComposerFocus.focusComposer; fall back to #input.focus().
+function focusComposer() {
+  if (typeof ComposerFocus !== 'undefined' && ComposerFocus.focusComposer) {
+    return ComposerFocus.focusComposer(input);
+  }
+  if (input && typeof input.focus === 'function') {
+    input.focus();
+    return { didFocus: true, reason: 'focused' };
+  }
+  return { didFocus: false, reason: 'no-composer' };
+}
+
 // 🎯T21 Wispr Flow: live a11y context + optional empty seed (strip before wire).
 const wisprContextEl = document.getElementById('wispr-context');
 function collectWisprTurns() {
@@ -1195,7 +1208,7 @@ function handle(m) {
     if (hasText) {
       closeTurn();
       ChatEvents.assistantTextBlocks(m).forEach(c => appendOrAddJevons(c.text, msgTs));
-      input.focus();
+      focusComposer();
     }
     // Only terminal stops clear working (not mid-stream text). Clearing
     // early used to force one bubble per token.
@@ -1557,6 +1570,8 @@ function attachMermaidToolbar(wrap, src) {
   buttons.forEach(spec => {
     const btn = document.createElement('button');
     btn.type = 'button';
+    // 🎯T153: bubble mermaid chrome is pointer-only (not a Tab stop).
+    btn.tabIndex = -1;
     btn.dataset.mermaidAction = spec.action;
     btn.textContent = spec.label;
     if (spec.title) btn.title = spec.title;
@@ -2081,6 +2096,8 @@ function maybeCloseTargetAside(text) {
   }
   persistAttention();
   if (typeof renderAttention === 'function') renderAttention();
+  // 🎯T153: target-aside auto-close returns focus to main composer.
+  focusComposer();
 }
 // User bubbles: preserve plain text, promote lines of `> quote` to <blockquote>,
 // and render 🎯T76 [image: <id>] markers as inline images.
@@ -2214,6 +2231,10 @@ function ensureExpandToggle(d) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'msg-expand-tab';
+    // 🎯T153: pointer-only pocket tab — not a sequential Tab stop.
+    btn.tabIndex = -1;
+    // Prevent mousedown from parking focus on the tab (composer-first).
+    btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
     btn.addEventListener('click', () => {
       d._expanded = !d._expanded;
       d._userToggled = true;   // manual choice wins over auto-expand-latest
@@ -2222,6 +2243,8 @@ function ensureExpandToggle(d) {
       updateExpandTab(d);
       if (d._expanded) scrollDownThrottled();
       scheduleVirtualize();
+      // 🎯T153: return focus to main composer after expand/collapse.
+      focusComposer();
     });
     // Absolute pocket tab; DOM after body/fade keeps a11y order sensible.
     if (d._clipFade) d._clipFade.after(btn);
@@ -2233,6 +2256,8 @@ function ensureExpandToggle(d) {
   } else if (!d._clipFade && d._body && d._expandBtn.previousSibling !== d._body) {
     d._body.after(d._expandBtn);
   }
+  // Keep pointer-only even if an older tab instance is reused.
+  if (d._expandBtn) d._expandBtn.tabIndex = -1;
   updateExpandTab(d);
 }
 
@@ -3146,14 +3171,23 @@ setInterval(() => {
 // transcript). histIdx === null means we're editing the live input.
 let msgHistory = [];   // [{text, el}] — el is the rendered user bubble
 let histIdx = null;
-// 🎯T113: follow-up send queue (pure policy in send_queue.js).
-let sendQueueState = (typeof SendQueue !== 'undefined') ? SendQueue.emptyState() : { items: [], nextId: 1 };
+// 🎯T113 / 🎯T154: follow-up send queue (pure policy in send_queue.js).
+// Persist to localStorage so full reload restores FIFO; soft reconnect
+// must never reset to emptyState() (onOpen hard wipe leaves queue alone).
+let sendQueueState = (typeof SendQueue !== 'undefined')
+  ? SendQueue.load(window.localStorage)
+  : { items: [], nextId: 1 };
 // Combined Alt+Up/Down focus: live | queue | history (queue before history).
 let navFocus = { zone: 'live' };
 let liveDraftBackup = '';
 const sendQueueEl = document.getElementById('send-queue');
 let histDraft = '';
 let editingEl = null;  // the bubble currently highlighted as "being edited"
+
+function persistSendQueue() {
+  if (typeof SendQueue === 'undefined') return;
+  SendQueue.save(window.localStorage, sendQueueState);
+}
 
 // setEditingHighlight moves the .editing highlight to el (or clears it),
 // scrolling it into view so you can see which message you're editing.
@@ -3215,6 +3249,7 @@ function renderSendQueue() {
 function cancelQueued(id) {
   if (typeof SendQueue === 'undefined') return;
   sendQueueState = SendQueue.cancel(sendQueueState, id);
+  persistSendQueue();
   if (navFocus.zone === 'queue') {
     const n = sendQueueState.items.length;
     if (!n) {
@@ -3235,6 +3270,7 @@ function sendQueueNow(id) {
   const taken = SendQueue.takeById(sendQueueState, id);
   if (!taken.item) return;
   sendQueueState = taken.state;
+  persistSendQueue();
   if (navFocus.zone === 'queue') {
     navFocus = { zone: 'live' };
     liveDraftBackup = '';
@@ -3270,6 +3306,7 @@ function drainSendQueueIfIdle() {
   const r = SendQueue.shiftNext(sendQueueState);
   if (!r.item) return;
   sendQueueState = r.state;
+  persistSendQueue();
   if (navFocus.zone === 'queue') {
     const n = sendQueueState.items.length;
     if (!n) {
@@ -3297,6 +3334,8 @@ function clearComposerAfterQueueOrSend() {
   autoGrow();
   // 🎯T21: empty composer again — re-seed for next dictation (stripped on send).
   ensureWisprSeed();
+  // 🎯T153: send/enqueue returns focus to composer (composer-first Tab path).
+  focusComposer();
 }
 
 // opts.interrupt: true when Control+Enter (Grok-class interject).
@@ -3320,6 +3359,7 @@ function send(opts) {
       renderSendQueue();
       autoGrow();
       ensureWisprSeed();
+      focusComposer();
       return;
     }
   }
@@ -3394,6 +3434,8 @@ function send(opts) {
       ensureWisprSeed();
       autoGrow();
       renderAttention();
+      // 🎯T153: local attention cmds (main/park/pursue/…) keep composer focused.
+      focusComposer();
       return; // no wire send for local commands
     }
     t = r.text;
@@ -3459,6 +3501,7 @@ function send(opts) {
   if (decision.action === 'noop') return;
   if (decision.action === 'enqueue') {
     sendQueueState = SendQueue.enqueue(sendQueueState, decision.text);
+    persistSendQueue();
     clearComposerAfterQueueOrSend();
     renderSendQueue();
     return;
@@ -3477,15 +3520,20 @@ function attachRouteSwitch(msgEl, suggestion) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'route-switch';
+  // 🎯T153: route-switch is pointer-only chrome — not a Tab stop.
+  btn.tabIndex = -1;
   btn.textContent = RouteSuggest.formatSwitchLabel(suggestion);
   btn.title = 'Deliver this message to the suggested aside and interrupt main';
   btn.setAttribute('aria-label', btn.textContent);
+  btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
   btn.addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
     if (btn.disabled) return;
     btn.disabled = true;
     optInRouteSwitch(suggestion);
+    // 🎯T153: return focus to main composer after opt-in route click.
+    focusComposer();
   });
   msgEl.appendChild(btn);
 }
@@ -3938,7 +3986,7 @@ sendBtn.addEventListener('mousedown', e => e.preventDefault());
 refreshWisprContext();
 ensureWisprSeed();
 autoGrow();
-input.focus();
+focusComposer();
 connect();
 
 // On first load the server replays history as a burst of messages and
