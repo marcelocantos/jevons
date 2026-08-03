@@ -146,6 +146,32 @@ test('T173 headerless table + abbr/fanout wiring in index.html', function () {
   assert.ok(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*1%/.test(html), 'fanout shrink-wrap');
 });
 
+test('T174 frontier table width constrained to RHS container', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Table must not grow past #frontier-body: fixed layout + max-width 100%.
+  assert.ok(/#frontier-table\s*\{[^}]*max-width:\s*100%/.test(html), 'table max-width 100%');
+  assert.ok(/#frontier-table\s*\{[^}]*table-layout:\s*fixed/.test(html), 'table-layout fixed');
+  assert.ok(!/#frontier-table\s*\{[^}]*table-layout:\s*auto/.test(html), 'not table-layout auto');
+  // Name cell ellipsizes within remaining space (overflow chain).
+  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*overflow:\s*hidden/.test(html), 'name overflow hidden');
+  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*text-overflow:\s*ellipsis/.test(html), 'name ellipsis');
+  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*white-space:\s*nowrap/.test(html), 'name nowrap');
+  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*min-width:\s*0/.test(html), 'name min-width 0');
+  // Flex/table parent chain can shrink (min-width:0) so table cannot force pane wider.
+  assert.ok(/#frontier-body\s*\{[^}]*min-width:\s*0/.test(html), 'frontier-body min-width 0');
+  assert.ok(/#frontier-pane\s*\{[^}]*min-width:\s*0/.test(html), 'frontier-pane min-width 0');
+  assert.ok(/#rhs-bottom\s*\{[^}]*min-width:\s*0/.test(html), 'rhs-bottom min-width 0');
+  // No min-width on the table that forces pane overflow (px/ch/em floors).
+  const tableBlock = html.match(/#frontier-table\s*\{[^}]*\}/);
+  assert.ok(tableBlock, 'frontier-table rule present');
+  assert.ok(!/min-width:\s*\d+(px|rem|em|ch)/.test(tableBlock[0]), 'table has no forcing min-width');
+  // T173 chrome cols still shrink-wrap within the bound.
+  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*1%/.test(html), 'id still 1%');
+  assert.ok(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*1%/.test(html), 'status still 1%');
+  assert.ok(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*1%/.test(html), 'fanout still 1%');
+  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*99%/.test(html), 'name still 99%');
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);
