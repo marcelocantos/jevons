@@ -179,6 +179,79 @@ test('tool_use mid-turn then text then end_turn: one bubble, cleared', () => {
   assert.strictEqual(state.working, false);
 });
 
+// ── 🎯T159 one bubble per terminal stop_reason ───────────────────
+
+function toolUse(name, stopReason) {
+  const message = {
+    role: 'assistant',
+    content: [{ type: 'tool_use', name: name || 'Bash', input: {} }],
+  };
+  if (stopReason) message.stop_reason = stopReason;
+  return { type: 'assistant', message };
+}
+
+test('T159: stop_reason tool_use never clears working', () => {
+  assert.strictEqual(ChatEvents.shouldClearWorking(toolUse('Bash', 'tool_use')), false);
+  assert.strictEqual(ChatEvents.isTerminalStop(toolUse('Bash', 'tool_use')), false);
+  assert.ok(ChatEvents.TERMINAL_STOPS.has('end_turn'));
+  assert.ok(ChatEvents.TERMINAL_STOPS.has('stop_sequence'));
+  assert.ok(ChatEvents.TERMINAL_STOPS.has('max_tokens'));
+  assert.ok(!ChatEvents.TERMINAL_STOPS.has('tool_use'));
+});
+
+test('T159 hermetic: multi-chunk + tool_use + text + end_turn → one bubble', () => {
+  // Acceptance fixture: stream text → tool round(s) → more text → terminal.
+  const events = [
+    user('clean asides'),
+    chunk('| Bubble | Content |\n'),
+    chunk('|--------|---------|\n'),
+    chunk('| 1 | table |\n'),
+    toolUse('use_tool', 'tool_use'),
+    toolUse('run_terminal_command'),
+    chunk('\n**Note:** daily daemon needs the binary.\n'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(
+    state.assistantBubbles.length,
+    1,
+    `expected 1 bubble, got ${state.assistantBubbles.length}: ${JSON.stringify(state.assistantBubbles)}`,
+  );
+  const raw = state.assistantBubbles[0];
+  assert.ok(raw.includes('| Bubble |'), 'table head present');
+  assert.ok(raw.includes('**Note:**'), 'note present in same bubble');
+  assert.strictEqual(state.openStream, -1, 'sealed after end_turn');
+  assert.strictEqual(state.working, false);
+});
+
+test('T159: text before and after tool_use stop_reason stays one bubble', () => {
+  const events = [
+    user('x'),
+    chunk('Table then '),
+    toolUse('search_tool', 'tool_use'),
+    chunk('Note after tools'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  assert.strictEqual(state.assistantBubbles[0], 'Table then Note after tools');
+});
+
+test('T159: two real end_turns → two bubbles (no continuity heuristic)', () => {
+  const events = [
+    user('a'),
+    chunk('first'),
+    endTurn(),
+    // No clever merge across real terminal boundaries — even without a user.
+    chunk('second'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 2);
+  assert.strictEqual(state.assistantBubbles[0], 'first');
+  assert.strictEqual(state.assistantBubbles[1], 'second');
+});
+
 test('text+end_turn in one event: one bubble and clear', () => {
   const events = [
     user('x'),
@@ -224,6 +297,22 @@ test('index.html wires ChatEvents + stream seal', () => {
   assert.ok(
     html.includes('_streamRaw'),
     'merge must key on _streamRaw (not only workingEl)',
+  );
+});
+
+test('T159 index.html: openStreamEl handle + seal only via shouldClearWorking', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('openStreamEl'), 'must keep explicit open-stream handle (🎯T159)');
+  assert.ok(html.includes('clearOpenStreamHandle'), 'must clear handle on seal/wipe');
+  // Seal path must gate on shouldClearWorking (terminal stops), not bare tool_use.
+  assert.ok(
+    /if\s*\(\s*ChatEvents\.shouldClearWorking\s*\(\s*m\s*\)\s*\)\s*\{[\s\S]*?sealAssistantStream\s*\(/.test(html),
+    'sealAssistantStream must be gated on shouldClearWorking',
+  );
+  // Must not seal on tool_use stop_reason string checks inventing policy.
+  assert.ok(
+    !/stop_reason\s*===\s*['"]tool_use['"]/.test(html),
+    'must not special-case tool_use string for seal policy',
   );
 });
 

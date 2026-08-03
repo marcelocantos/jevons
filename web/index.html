@@ -1176,6 +1176,7 @@ transport.onOpen = () => {
   sTxt.textContent = 'connecting';
   sendBtn.disabled = false;
   msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
+  clearOpenStreamHandle(); // 🎯T159: drop open-stream handle with the wiped DOM
   msgHistory = []; histIdx = null; histDraft = ''; editingEl = null;
   oldestIndex = 0; loadingEarlier = false; progressiveHistoryRunning = false;
   teardownHistorySentinel();
@@ -1380,6 +1381,9 @@ function handle(m) {
       // Server synthesises a user echo on send; Grok ACP may also
       // publish user_message_chunk for the same prompt. Drop the dupe.
       if (content && msgHistory[msgHistory.length - 1]?.text === content) return;
+      // 🎯T159: owner user turn seals any open assistant stream (same as
+      // ChatEvents.applyChatEvent openStream=-1) — not a continuity guess.
+      sealAssistantStream();
       closeTurn();
       const uEl = addMsg('user', content, msgTs);
       if (content) msgHistory.push({ text: content, el: uEl });
@@ -1440,7 +1444,9 @@ function handle(m) {
 }
 
 // Skip non-message chrome at the tail of #messages (working indicator,
-// follow-scroll end sentinel, turn markers) when locating the open stream.
+// follow-scroll end sentinel, turn markers) when locating the latest
+// .msg. Not used as the stream-merge key — intervening .msg.status /
+// .msg.worker would break coalesce (🎯T159).
 function lastMessageish() {
   let el = msgs.lastElementChild;
   while (el && !(el.classList && el.classList.contains('msg'))) {
@@ -1449,13 +1455,26 @@ function lastMessageish() {
   return el;
 }
 
+// 🎯T159: sole open-stream handle. Bubble boundary = terminal stop_reason
+// (or a new owner user turn). Never rediscover via lastMessageish — tool
+// chrome, stuck-watchdog status, and worker notes can insert .msg nodes
+// that are not the open stream and would otherwise start a second bubble.
+let openStreamEl = null;
+
+function clearOpenStreamHandle() {
+  openStreamEl = null;
+}
+
 // appendOrAddJevons merges streaming assistant chunks into the open
-// jevons bubble. Merge is keyed on _streamRaw (not workingEl): sealing
-// happens only on terminal stop so a mistaken early clear cannot split
-// the turn into one bubble per token.
+// jevons bubble. Merge is keyed on openStreamEl + _streamRaw (not
+// lastMessageish / workingEl). Seal only on terminal stop (or user turn)
+// so tool rounds never split one logical reply into multiple bubbles.
 function appendOrAddJevons(text, ts) {
-  const target = lastMessageish();
-  if (target && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
+  const target = (openStreamEl && openStreamEl.isConnected &&
+    typeof openStreamEl._streamRaw === 'string')
+    ? openStreamEl
+    : null;
+  if (target) {
     // 🎯T147: join-time fence repair at segment edge (not bare +=).
     target._streamRaw = ChatEvents.coalesceAssistantText(target._streamRaw, text);
     scheduleJevonsRender(target);   // rAF-debounced: coalesce burst chunks into ONE parse (🎯T57)
@@ -1466,6 +1485,7 @@ function appendOrAddJevons(text, ts) {
   const el = addMsg('jevons', text, ts, { streamOpen: true });
   // _streamRaw already set in buildMsg when streamOpen; keep assign for clarity.
   el._streamRaw = typeof el._streamRaw === 'string' ? el._streamRaw : text;
+  openStreamEl = el;
 }
 
 // scheduleJevonsRender coalesces streamed chunks: instead of re-parsing
@@ -1495,8 +1515,20 @@ function scheduleJevonsRender(el) {
 
 // sealAssistantStream closes the open coalesced bubble so the next
 // turn starts a new one — flushing any pending debounced render first.
+// 🎯T159: only terminal stop_reason / system / new user turn call this —
+// never tool_use progress.
 function sealAssistantStream() {
-  const el = lastMessageish();
+  let el = (openStreamEl && typeof openStreamEl._streamRaw === 'string')
+    ? openStreamEl
+    : null;
+  // Fallback: scan for a still-open stream if the handle was lost (e.g.
+  // soft reconnect residual) — still never invent continuity without _streamRaw.
+  if (!el) {
+    const tail = lastMessageish();
+    if (tail && tail.classList.contains('jevons') && typeof tail._streamRaw === 'string') {
+      el = tail;
+    }
+  }
   if (el && typeof el._streamRaw === 'string') {
     if (el._renderRaf) { cancelAnimationFrame(el._renderRaf); el._renderRaf = 0; }
     const raw = el._streamRaw;
@@ -1516,6 +1548,7 @@ function sealAssistantStream() {
     unwatchStreamBubble(el);
     scheduleLatestExpansion();
   }
+  clearOpenStreamHandle();
   // Final layout (markdown / mermaid / highlight) often grows after the
   // last stream pin — re-follow so the user never needs a manual nudge.
   if (isTracking()) {
