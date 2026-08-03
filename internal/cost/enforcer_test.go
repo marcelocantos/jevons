@@ -168,6 +168,45 @@ func TestFleetKillAttendedVsUnattended(t *testing.T) {
 	}
 }
 
+// TestSubscriptionNeverEnforcesUSD (🎯T137): even if kill-level USD
+// alerts are injected, subscription accounting must not pause workers,
+// stop the fleet, fire the kill-switch, or halt spawns.
+func TestSubscriptionNeverEnforcesUSD(t *testing.T) {
+	cfg := DefaultBudgetConfig()
+	cfg.Accounting = AccountingSubscription
+	h := newHarness(cfg)
+	h.now = h.now.Add(2 * time.Hour) // unattended — would fire switch under list_price
+
+	h.e.Act(alertsOf(AlertWorkerRate, LevelKill, "po"))
+	h.e.Act(alertsOf(AlertWorkerRate, LevelKill, "po"))
+	h.e.Act(alertsOf(AlertFleetRate, LevelKill, ""))
+	h.e.Act(alertsOf(AlertFleetRate, LevelKill, ""))
+	h.e.Act(&Snapshot{Alerts: []Alert{{Kind: AlertHardCeiling, Level: LevelKill, Detail: "fake ceiling"}}})
+	h.e.Act(&Snapshot{Alerts: []Alert{{Kind: AlertHardCeiling, Level: LevelKill, Detail: "fake ceiling"}}})
+
+	if len(h.acts.paused) != 0 || len(h.acts.killed) != 0 || h.acts.fleetStops != 0 || h.acts.killSwitch != 0 {
+		t.Fatalf("subscription enforced on USD alerts: %+v notices=%v", h.acts, h.notices)
+	}
+	if err := h.e.AllowSpawn(); err != nil {
+		t.Fatalf("subscription hard-ceiling halted spawn: %v", err)
+	}
+}
+
+// TestDisabledConfigDoesNotMeanEnforcerRuns is a documentation oracle:
+// disabled=true means startCostGuard returns nil (no enforcer). If an
+// enforcer is still constructed with Disabled set, Act must not treat it
+// as subscription; callers must not start it — we only assert the
+// EffectiveAccounting path used by wiring.
+func TestDisabledMeansNoSubscriptionEnforcementPath(t *testing.T) {
+	cfg := DefaultBudgetConfig()
+	cfg.Disabled = true
+	if cfg.EffectiveAccounting() != AccountingDisabled {
+		t.Fatalf("got %q", cfg.EffectiveAccounting())
+	}
+	// list_price enforcer path still enforces if someone wires wrongly —
+	// disabled is an opt-out of the whole subsystem, not a soft mode.
+}
+
 // TestGlobalIsInformational: a global-rate kill (the owner's own foreign
 // spend) must NOT clamp jevons's fleet or halt its spawns — only inform.
 func TestGlobalIsInformational(t *testing.T) {

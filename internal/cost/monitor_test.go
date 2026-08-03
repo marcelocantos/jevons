@@ -6,6 +6,7 @@ package cost
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -228,14 +229,93 @@ func TestBudgetConfigRoundTrip(t *testing.T) {
 	if err != nil || cfg.Global.KillUSDPerHour != 60 {
 		t.Fatalf("defaults not loaded: %+v, %v", cfg, err)
 	}
+	if cfg.EffectiveAccounting() != AccountingListPrice {
+		t.Fatalf("default accounting = %q, want list_price", cfg.EffectiveAccounting())
+	}
 
 	cfg.Global.KillUSDPerHour = 99
 	cfg.DeadManIdle = Duration(2 * time.Hour)
+	cfg.Accounting = AccountingSubscription
 	if err := cfg.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	back, err := LoadBudgetConfig(path)
 	if err != nil || back.Global.KillUSDPerHour != 99 || back.DeadManIdle.Std() != 2*time.Hour {
 		t.Fatalf("round-trip lost data: %+v, %v", back, err)
+	}
+	if back.EffectiveAccounting() != AccountingSubscription || !back.IsSubscription() {
+		t.Fatalf("subscription accounting not preserved: %+v", back)
+	}
+}
+
+// TestSubscriptionAccountingHonesty (🎯T137): high API-eq burn under
+// subscription accounting surfaces only warn-level USD alerts and never
+// a kill hard-ceiling — estimates are not real SuperGrok dollars.
+func TestSubscriptionAccountingHonesty(t *testing.T) {
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	s := seedStore(t, now)
+
+	cfg := DefaultBudgetConfig()
+	cfg.Accounting = AccountingSubscription
+	cfg.MaxSessions = 3
+	cfg.DailyBudgetUSD = 100
+	cfg.HardCeilingUSDPerDay = 3 // today's spend in seed is high enough
+	cfg.MinEventsForKill = 0
+
+	m := NewMonitor(&MonitorArgs{
+		Store:    s,
+		Config:   func() *BudgetConfig { return cfg },
+		IsOrphan: onlyGhostOrphan,
+		Now:      func() time.Time { return now },
+	})
+	snap, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Accounting != AccountingSubscription || snap.Billable {
+		t.Fatalf("snapshot accounting/billable = %q/%v", snap.Accounting, snap.Billable)
+	}
+	if !containsNotBilled(snap.CurrencyNote) {
+		t.Fatalf("currency_note not honest: %q", snap.CurrencyNote)
+	}
+
+	for _, a := range snap.Alerts {
+		switch a.Kind {
+		case AlertGlobalRate, AlertFleetRate, AlertWorkerRate, AlertHardCeiling:
+			if a.Level > LevelWarn {
+				t.Fatalf("subscription USD alert %s level %s > warn: %s", a.Kind, a.Level, a.Detail)
+			}
+		}
+	}
+	// Hard ceiling must still surface (as warn), not vanish.
+	gotHard := false
+	for _, a := range snap.Alerts {
+		if a.Kind == AlertHardCeiling {
+			gotHard = true
+			if a.Level != LevelWarn {
+				t.Fatalf("hard ceiling under subscription = %s, want warn", a.Level)
+			}
+		}
+	}
+	if !gotHard {
+		t.Fatal("hard ceiling signal missing under subscription")
+	}
+}
+
+func containsNotBilled(s string) bool {
+	return strings.Contains(strings.ToLower(s), "not billed") ||
+		strings.Contains(strings.ToLower(s), "subscription")
+}
+
+// TestDisabledAccounting derives disabled mode from the flag alone.
+func TestDisabledAccounting(t *testing.T) {
+	cfg := DefaultBudgetConfig()
+	cfg.Disabled = true
+	cfg.Accounting = AccountingSubscription // ignored when disabled
+	if cfg.EffectiveAccounting() != AccountingDisabled {
+		t.Fatalf("got %q", cfg.EffectiveAccounting())
+	}
+	if cfg.IsSubscription() {
+		t.Fatal("disabled must not report as subscription")
 	}
 }

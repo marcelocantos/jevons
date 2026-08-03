@@ -17,14 +17,15 @@ import (
 
 // registerTargetFileTool exposes light-path bullseye filing for 🎯T93/T95
 // (target: asides). Runs `bullseye commit --op track` in a repo cwd.
+// 🎯T226: always allocates a new id (near-dup file attach removed; no silent attach).
 func (s *Server) registerTargetFileTool() {
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_target_file",
-			mcp.WithDescription("File a bullseye target in a repo ledger (light path for owner target: asides — 🎯T93/T95). Requires bullseye CLI on PATH. Returns the new 🎯 id. After success, confirm the id to the owner; the UI auto-closes the filing aside when it sees the confirmation marker."),
+			mcp.WithDescription("File a bullseye target in a repo ledger (light path for owner target: asides — 🎯T93/T95). Requires bullseye CLI on PATH. Always allocates a new 🎯 id (🎯T226: no near-duplicate attach). After success, confirm the id to the owner; the UI auto-closes the filing aside when it sees the confirmation marker."),
 			mcp.WithString("cwd", mcp.Required(), mcp.Description("Repo directory containing bullseye.yaml (or parent to discover)")),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Desired-state assertion (target name)")),
 			mcp.WithString("acceptance", mcp.Description("Acceptance criterion (single string; more can be space-separated or repeated via context)")),
-			mcp.WithString("context", mcp.Description("Optional context / why")),
+			mcp.WithString("context", mcp.Description("Optional context / why.")),
 		),
 		s.handleTargetFile,
 	)
@@ -55,6 +56,7 @@ func (s *Server) handleTargetFile(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(fmt.Sprintf("cwd is not a directory: %s", abs)), nil
 	}
 
+	// 🎯T226: always track — never attach to an existing open leaf by name/acceptance.
 	cmdArgs := []string{
 		"commit", "--op", "track",
 		"--cwd", abs,
@@ -76,6 +78,19 @@ func (s *Server) handleTargetFile(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	return mcp.NewToolResultText(fmt.Sprintf(
 		"Filed 🎯%s — %s\n__TARGET_FILED__:%s\n\n%s", id, name, id, out)), nil
+}
+
+// boolArg coerces MCP JSON bool / string into bool.
+func boolArg(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		s := strings.ToLower(strings.TrimSpace(x))
+		return s == "true" || s == "1" || s == "yes"
+	default:
+		return false
+	}
 }
 
 // runBullseye shells out to bullseye on PATH. Tests can override.

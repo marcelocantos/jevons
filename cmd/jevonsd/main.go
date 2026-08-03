@@ -31,6 +31,8 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/provider"
+	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -46,7 +48,7 @@ func main() {
 	configPath := flag.String("config", "", "config file (default ~/.jevons/config.yaml; missing file = built-in defaults)")
 	port := flag.Int("port", 13705, "listen port")
 	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 — loopback only; remote devices use the pigeon relay)")
-	relayURL := flag.String("relay", "", "relay URL to register with (e.g. wss://tern.fly.dev)")
+	relayURL := flag.String("relay", "", "relay URL to register with (e.g. https://carrier-pigeon.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
 	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
@@ -147,14 +149,15 @@ func main() {
 		}
 	}
 
-	// The overseer's MCP server is registered user-scoped in
-	// ~/.grok/config.toml (see ensureGrokMCPServer, called before launch),
-	// which attaches on both session/new and session/load — so we no
-	// longer pass a session-scoped ACP param (mcp.claudia.json), which the
-	// CLI honours only on session/new (🎯T58). Remove any stale copy so
-	// claudia doesn't double-register the same server name. Use the
-	// concrete bind address, never "localhost": the loopback-only default
-	// (🎯T6) binds IPv4 127.0.0.1, and localhost may resolve to ::1.
+	// Overseer MCP is registered user-scoped for the selected provider
+	// before launch (ensureOverseerMCPServer: Grok → ~/.grok/config.toml,
+	// Claude → claude mcp -s user; 🎯T58 + 🎯T212). That attaches on both
+	// session/new and session/load — so we no longer pass a session-scoped
+	// ACP param (mcp.claudia.json), which Grok honours only on session/new.
+	// Remove any stale copy so claudia doesn't double-register the same
+	// server name. Use the concrete bind address, never "localhost": the
+	// loopback-only default (🎯T6) binds IPv4 127.0.0.1, and localhost may
+	// resolve to ::1.
 	mcpHost := cfg.BindAddr
 	if mcpHost == "" || mcpHost == "0.0.0.0" || mcpHost == "::" {
 		mcpHost = "127.0.0.1"
@@ -168,11 +171,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create components — Grok-only; sessions live under cfg.SessionsDir.
-	scanner := discovery.NewScanner(cfg.SessionsDir)
+	// Multi-provider session roots (🎯T213): Grok sessions + Claude projects.
+	sessionRoots := discovery.Roots{
+		GrokSessions:   cfg.SessionsDir,
+		ClaudeProjects: cfg.ClaudeProjects,
+	}
+	scanner := discovery.NewScannerRoots(sessionRoots)
 
 	srv := server.New(cli.Version, cfg.StateDir)
 	srv.SetOverseerName(cfg.OverseerName)
+	// 🎯T200: declarative domain portfolios from config (no GM agent).
+	srv.SetPortfolios(cfg.Portfolios)
+	// 🎯T131: primary project workdir for bullseye frontier discovery (CLI open).
+	if absWD, err := filepath.Abs(cfg.WorkDir); err == nil {
+		srv.SetFrontierCwd(absWD)
+	} else {
+		srv.SetFrontierCwd(cfg.WorkDir)
+	}
 
 	// Durable conversation log (🎯T30.1): every chat line is fsynced here
 	// and replayed to reconnecting clients — no conversation is ever lost.
@@ -182,8 +197,8 @@ func main() {
 		os.Exit(1)
 	}
 	srv.SetChatLog(clog)
-	// 🎯T124: RHS fleet transcript inspect reads Grok session chat_history.
-	srv.SetTranscriptReader(transcript.NewReader(cfg.SessionsDir))
+	// 🎯T124 / 🎯T213: RHS fleet transcript inspect reads Grok + Claude stores.
+	srv.SetTranscriptReader(transcript.NewReaderRoots(sessionRoots))
 
 	// Durable decision/lifecycle journal (🎯T120): browser + server events
 	// under state_dir/logs/events.jsonl — tool-readable without privilege.
@@ -235,6 +250,35 @@ func main() {
 		srv.SetWorkersTracker(workerTracker)
 	}
 
+	// 🎯T27.2: structured provider config + persistence home for the registry.
+	// Desired set comes from config.yaml `providers:`; runtime state lives in
+	// StateDir/providers/registry.db. Reconcile/supervisor is 🎯T27.3.
+	// providerCfg is retained for the process lifetime so Reload remains
+	// available when T27.3 wires reconcile / an admin surface.
+	var providerCfg *provider.ConfigManager
+	if pstore, err := provider.OpenStore(provider.DefaultStorePath(cfg.StateDir)); err != nil {
+		slog.Error("provider store unavailable — external providers disabled", "err", err)
+	} else {
+		defer pstore.Close()
+		pm, err := provider.NewConfigManager(provider.ConfigManagerArgs{
+			ConfigPath: cfgPath,
+			Store:      pstore,
+		})
+		if err != nil {
+			slog.Error("provider config load failed — external providers disabled", "err", err)
+		} else {
+			providerCfg = pm
+			slog.Info("provider config ready",
+				"path", providerCfg.ConfigPath(),
+				"store", pstore.Path(),
+				"desired", len(providerCfg.Desired()),
+				"enabled", len(providerCfg.Enabled()),
+			)
+		}
+	}
+	// providerCfg retained for process lifetime (T27.3 will wire reconcile/reload).
+	_ = providerCfg
+
 	// 🎯T8.3 execution safety (doit Engine: L1/L2/L3, audit, capabilities).
 	// L3 stays off by default so boot is hermetic without an LLM; L1/L2 +
 	// capability registry + hash-chained audit are always on under StateDir.
@@ -260,11 +304,11 @@ func main() {
 		return srv.RequestScreenshot(10 * time.Second)
 	}, &mcpserver.TranscriptOps{
 		Read: func(sessionID string) ([]map[string]any, error) {
-			tr := transcript.NewReader(cfg.SessionsDir)
+			tr := transcript.NewReaderRoots(sessionRoots)
 			return tr.Read(sessionID)
 		},
 		Truncate: func(sessionID string, keepTurns int) error {
-			tr := transcript.NewReader(cfg.SessionsDir)
+			tr := transcript.NewReaderRoots(sessionRoots)
 			return tr.Truncate(sessionID, keepTurns)
 		},
 		GetID: func() string {
@@ -311,6 +355,13 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
+	// 🎯T40: default Grok connect-mode so agents use detached `grok agent
+	// serve` + WebSocket and survive coordinator-only upgrades. Override
+	// with CLAUDIA_GROK_CONNECT=0 to force parent-owned stdio.
+	if v := os.Getenv("CLAUDIA_GROK_CONNECT"); v == "" {
+		_ = os.Setenv("CLAUDIA_GROK_CONNECT", "1")
+	}
+
 	// Agent registry — manages persistent Grok ACP sessions.
 	registryPath := filepath.Join(cfg.StateDir, "agents.json")
 	{
@@ -322,14 +373,33 @@ func main() {
 		registry = r
 	}
 
-	// Prior upgrade handoff: session_ids to resume (conversation path).
-	// Process reattach is residual until claudia connect-mode exists.
+	// Prior upgrade handoff: session_ids + optional connect-mode endpoints.
+	// Process reattach when handles carry ConnectURL+PID (agents.json also
+	// persists those fields from the last Launch).
 	if snap, err := upgrade.LoadSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
 		slog.Error("upgrade handles load failed (malformed handoff is hard error)", "err", err)
 		os.Exit(1)
 	} else if snap != nil {
 		plan := upgrade.PlanReattach(snap)
-		slog.Info("upgrade handoff present — reattach by session_id (conversation load); process reattach residual",
+		// Merge connect endpoints into registry defs before StartAll so
+		// Launch reattaches to still-running serve processes.
+		for _, h := range snap.Agents {
+			if h.ConnectURL == "" || h.Name == "" {
+				continue
+			}
+			if def := registry.Def(h.Name); def != nil {
+				def.ConnectURL = h.ConnectURL
+				def.ConnectPID = h.PID
+				def.GrokConnect = true
+				if h.SessionID != "" {
+					def.SessionID = h.SessionID
+				}
+				if err := registry.Register(*def); err != nil {
+					slog.Warn("upgrade handoff: could not merge connect endpoint", "agent", h.Name, "err", err)
+				}
+			}
+		}
+		slog.Info("upgrade handoff present",
 			"sessions", len(plan.SessionIDs),
 			"process_reattach", plan.ProcessReattachPossible,
 			"written_at", snap.WrittenAt,
@@ -377,7 +447,7 @@ func main() {
 	btlrCfg := butler.Config{
 		Store:        threadStore,
 		Scanner:      scanner,
-		Reader:       transcript.NewReader(cfg.SessionsDir),
+		Reader:       transcript.NewReaderRoots(sessionRoots),
 		Fleet:        fleetAdapter,
 		Participants: fleetAdapter,
 	}
@@ -400,10 +470,13 @@ func main() {
 		srv.SetActivityHook(guard.enforcer.Heartbeat)
 	}
 
+	// 🎯T92 ambient RSI: schedule + stream (reap) mint improvement targets.
+	rsiLoop := startAmbientRSI(ctx, cfg, mcpSrv)
+
 	// Process-as-cache GC: periodically stop idle spawned threads'
 	// processes (resumably) to free resources. The threads persist and
-	// rehydrate on the next Direct.
-	go reapIdleThreads(ctx, btlr)
+	// rehydrate on the next Direct. Stream-feeds ambient RSI on reap.
+	go reapIdleThreads(ctx, btlr, rsiLoop)
 
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
@@ -425,15 +498,14 @@ func main() {
 		jevonDef.Purpose = claudia.PurposeOverseer
 	}
 
-	// The overseer's MCP tools come from a USER-SCOPED ~/.grok/config.toml
-	// entry (🎯T58), which the Grok CLI attaches on BOTH session/new and
-	// session/load — unlike the session-scoped ACP param, which it honours
-	// only on session/new. That lets the overseer RESUME its real session
-	// on restart (full model context) instead of rotating to a fresh
-	// session and re-priming with a lossy recap. Register before launch so
-	// the tools are present the moment the agent starts.
-	if err := ensureGrokMCPServer(cfg, mcpHost); err != nil {
-		slog.Warn("could not register jevons MCP server in ~/.grok/config.toml — overseer may start toolless", "err", err)
+	// Overseer MCP tools: user-scoped install for the selected overseer
+	// provider (🎯T58 Grok, 🎯T212 Claude). Register before launch so tools
+	// are present on session/new and session/load (resume keeps tools).
+	// Default fleet/overseer remains Grok unless provider is explicitly
+	// claude (or other); this does not flip the compile-time default.
+	if err := ensureOverseerMCPServer(cfg, mcpHost, jevonDef.Provider); err != nil {
+		slog.Warn("could not register overseer MCP server — overseer may start toolless",
+			"provider", jevonDef.Provider, "err", err)
 	}
 	if err := registry.Register(*jevonDef); err != nil {
 		slog.Error("jevon agent register failed", "err", err)
@@ -483,8 +555,9 @@ func main() {
 	}()
 
 	// Now start agents — MCP server is reachable.
-	// StartAll resumes session_ids from agents.json (conversation durability).
-	// True process reattach (same PID/stdio) needs claudia connect-mode (🎯T40 residual).
+	// StartAll resumes session_ids from agents.json; with Grok connect-mode
+	// (CLAUDIA_GROK_CONNECT) it reattaches to still-running serve PIDs when
+	// ConnectURL/ConnectPID are present (🎯T40 process durability).
 	registry.StartAll()
 
 	// Exit policy: normal → StopAll; upgrade (SIGHUP / JEVONS_UPGRADE_EXIT) → leave
@@ -529,10 +602,13 @@ func main() {
 
 		// 🎯T118: ACP progress / tool steps → RHS fleet-row status chrome.
 		// agents_changed only when the glanceable summary changes.
+		// 🎯T209: same hook multiplexes inspect live frames on /ws/chat for
+		// subscribed fleet agents (primary inspect path; not HTTP poll).
 		mcpSrv.SetAgentEventHook(func(name string, ev claudia.Event) {
 			if srv.ObserveAgentProgress(name, ev) {
 				srv.NotifyAgentsChanged()
 			}
+			srv.DeliverInspectLive(name, ev)
 		})
 
 		// Wire completion-notify for workers auto-started by StartAll above
@@ -547,17 +623,34 @@ func main() {
 		// hack — a lossy summary re-injected as a visible user turn every
 		// restart — is gone.
 	} else {
-		// The overseer did not launch — almost always a missing/unauth
-		// Grok CLI (StartAll logged "auto-start failed"), so the chat
-		// cannot respond. Fail LOUD and legible so a first-run stranger
-		// knows exactly what to do instead of facing a silent chat
-		// (🎯T54); the UI-facing half is the chat handler's overseer-down
-		// path.
-		reason := overseerUnavailableReason()
+		// The overseer did not launch (StartAll logged "auto-start failed"),
+		// so the chat cannot respond. Fail LOUD and legible with
+		// provider-aware diagnosis (🎯T54, 🎯T214 J4) — do not blame a missing
+		// Grok CLI when the overseer provider is Claude/other. Cockpit
+		// converge (🎯T204) keeps retrying Launch+attach.
+		reason := overseerUnavailableReason(jevonDef.Provider)
 		slog.Error("OVERSEER NOT RUNNING — chat cannot respond until this is fixed",
-			"overseer", cfg.OverseerName, "likely_cause", reason)
+			"overseer", cfg.OverseerName, "provider", jevonDef.Provider, "likely_cause", reason)
 		srv.SetOverseerDownReason(reason)
 	}
+
+	// 🎯T171 dual-path: daemon-restarted → POs+overseer; short resume →
+	// open-mission workers (T207 brief-or-verify); worker-idle transition → PO.
+	// Also wires fleet-health hook for cockpit (T204).
+	go mcpserver.StartIdleNudgeLoop(ctx, mcpserver.IdleNudgeLoopArgs{
+		Server:       mcpSrv,
+		StateDir:     cfg.StateDir,
+		OverseerName: cfg.OverseerName,
+		DefaultPO:    "jevons-po",
+	})
+
+	// 🎯T204: cockpit converge — overseer Alive+Attach+turn-usable; fleet
+	// dead-handle recovery. Restart dual-path is T171 (not periodic ladder).
+	srv.SetCockpitHooks(server.CockpitHooks{
+		FleetHealth: func() { mcpSrv.SweepFleetHealth(cfg.OverseerName) },
+		FleetNudge:  func() { mcpSrv.TriggerIdleNudgeSweep() }, // health only
+	})
+	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
 
 	// 🎯T50/🎯T54 regression oracle, hoisted out of the attach block so it
 	// fires even when the overseer never launched: if no MCP client has
@@ -768,11 +861,6 @@ func loadKeychainKey(service string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// overseerUnavailableReason returns a legible, actionable explanation for
-// why the overseer could not launch (🎯T54). The overwhelmingly common
-// first-run cause is a missing or unauthenticated Grok CLI, so it checks
-// for the `grok` binary the same way claudia resolves it and tailors the
-// message accordingly.
 // grokCandidatePaths lists where the Grok CLI is commonly installed, in
 // preference order, for the fallback when it is not on PATH.
 func grokCandidatePaths() []string {
@@ -802,6 +890,48 @@ func grokBin() string {
 	return "grok"
 }
 
+// overseerMCPKind names which CLI path installs overseer MCP tools (🎯T212).
+type overseerMCPKind string
+
+const (
+	overseerMCPGrok   overseerMCPKind = "grok"
+	overseerMCPClaude overseerMCPKind = "claude"
+	overseerMCPNone   overseerMCPKind = "none"
+)
+
+// overseerMCPKindForProvider is the pure oracle for 🎯T212: which user-scoped
+// MCP ensure path the boot/attach code must take. Default/empty and Grok →
+// Grok config.toml; Claude → claude mcp -s user; Codex/Bedrock → none
+// (accepted residual: no known durable user-scope MCP install CLI).
+func overseerMCPKindForProvider(provider claudia.Provider) overseerMCPKind {
+	switch provider {
+	case claudia.ProviderClaude:
+		return overseerMCPClaude
+	case claudia.ProviderCodex, claudia.ProviderBedrock:
+		return overseerMCPNone
+	default:
+		// Grok and unknown/empty: keep historical Grok path (default fleet).
+		return overseerMCPGrok
+	}
+}
+
+// ensureOverseerMCPServer registers jevonsd's MCP endpoint for the selected
+// overseer provider before launch (🎯T58, 🎯T212). Grok writes user-scoped
+// ~/.grok/config.toml; Claude writes user-scoped Claude MCP config via
+// `claude mcp add -s user`. Idempotent remove-then-add so port/bind changes
+// always land. Residual: codex/bedrock return a clear skip error (class-3
+// until a durable install path exists); live Claude smoke remains optional.
+func ensureOverseerMCPServer(cfg config.Config, host string, provider claudia.Provider) error {
+	switch overseerMCPKindForProvider(provider) {
+	case overseerMCPClaude:
+		return ensureClaudeMCPServer(cfg, host)
+	case overseerMCPNone:
+		return fmt.Errorf("overseer provider %q has no user-scoped MCP ensure path yet (residual; overseer may start toolless)", provider)
+	default:
+		return ensureGrokMCPServer(cfg, host)
+	}
+}
+
 // ensureGrokMCPServer registers jevonsd's MCP endpoint user-scoped in
 // ~/.grok/config.toml so the Grok CLI attaches it on BOTH session/new and
 // session/load — the key to the overseer resuming its real session across
@@ -809,40 +939,162 @@ func grokBin() string {
 // removes any prior entry (ignoring the not-found error) then re-adds the
 // current URL, so a changed port/bind is always reflected.
 func ensureGrokMCPServer(cfg config.Config, host string) error {
-	name, url := grokMCPServerSpec(cfg, host)
+	name, url := overseerMCPServerSpec(cfg, host)
 	grok := grokBin()
+	args := grokMCPAddArgs(name, url)
 	_ = exec.Command(grok, "mcp", "remove", name).Run()
-	out, err := exec.Command(grok, "mcp", "add", "--transport", "http", name, url).CombinedOutput()
+	out, err := exec.Command(grok, args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("grok mcp add %s %s: %w (%s)", name, url, err, strings.TrimSpace(string(out)))
 	}
-	slog.Info("registered overseer MCP server (user-scoped, survives session/load)", "name", name, "url", url)
+	slog.Info("registered overseer MCP server (Grok user-scoped, survives session/load)",
+		"name", name, "url", url, "provider", "grok")
 	return nil
 }
 
-// grokMCPServerSpec derives the user-scoped MCP registration for the
-// overseer: the config.toml server name and the streamable-HTTP endpoint
-// URL. The path must be exactly /mcp (where mcpserver mounts) and the host
-// must be a concrete address — never "localhost", which can resolve to ::1
-// while the loopback default binds IPv4 127.0.0.1 (🎯T6/🎯T58).
-func grokMCPServerSpec(cfg config.Config, host string) (name, url string) {
+// ensureClaudeMCPServer registers jevonsd's MCP endpoint user-scoped in
+// Claude Code config (`claude mcp add --transport http -s user`) so a
+// Claude overseer gets jevons tools on session start and resume (🎯T212).
+// Idempotent remove-then-add. Residual: live Claude overseer smoke is
+// class-3/owner-gated; hermetics cover kind routing + argv shape.
+func ensureClaudeMCPServer(cfg config.Config, host string) error {
+	name, url := overseerMCPServerSpec(cfg, host)
+	bin := claudeBin()
+	args := claudeMCPAddArgs(name, url)
+	_ = exec.Command(bin, "mcp", "remove", "-s", "user", name).Run()
+	out, err := exec.Command(bin, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("claude mcp add %s %s: %w (%s)", name, url, err, strings.TrimSpace(string(out)))
+	}
+	slog.Info("registered overseer MCP server (Claude user-scoped)",
+		"name", name, "url", url, "provider", "claude")
+	return nil
+}
+
+// overseerMCPServerSpec derives the MCP registration name and streamable-HTTP
+// endpoint URL for the overseer. The path must be exactly /mcp (mcpserver
+// mount) and the host a concrete address — never "localhost" (::1 vs
+// 127.0.0.1; 🎯T6/🎯T58). Shared by Grok and Claude ensure paths (🎯T212).
+func overseerMCPServerSpec(cfg config.Config, host string) (name, url string) {
 	return cfg.MCPServerName, fmt.Sprintf("http://%s:%d/mcp", host, cfg.Port)
 }
 
-func overseerUnavailableReason() string {
-	if _, err := exec.LookPath("grok"); err == nil {
-		return "the Grok agent failed to start — check that the Grok CLI is signed in " +
-			"(`grok login`, or set XAI_API_KEY) and see the jevonsd log for details"
+// grokMCPServerSpec is the historical name for overseerMCPServerSpec (tests).
+func grokMCPServerSpec(cfg config.Config, host string) (name, url string) {
+	return overseerMCPServerSpec(cfg, host)
+}
+
+// grokMCPAddArgs is the pure argv for `grok mcp add` after the binary
+// (oracle: transport http, name, concrete /mcp URL).
+func grokMCPAddArgs(name, url string) []string {
+	return []string{"mcp", "add", "--transport", "http", name, url}
+}
+
+// claudeMCPAddArgs is the pure argv for `claude mcp add` after the binary
+// (🎯T212 oracle: user scope so tools survive resume; transport http).
+func claudeMCPAddArgs(name, url string) []string {
+	return []string{"mcp", "add", "--transport", "http", "-s", "user", name, url}
+}
+
+// claudeCandidatePaths lists common Claude Code install locations when the
+// binary is not on PATH (symlink often under ~/.local/bin).
+func claudeCandidatePaths() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
 	}
-	for _, p := range grokCandidatePaths() {
+	return []string{
+		filepath.Join(home, ".local", "bin", "claude"),
+		filepath.Join(home, ".claude", "local", "claude"),
+		"/opt/homebrew/bin/claude", "/usr/local/bin/claude",
+	}
+}
+
+// claudeBin resolves the Claude CLI: PATH first, then known install paths.
+// Returns "claude" as last resort so exec fails loudly if missing.
+func claudeBin() string {
+	if p, err := exec.LookPath("claude"); err == nil {
+		return p
+	}
+	for _, p := range claudeCandidatePaths() {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return "the Grok agent failed to start — check that the Grok CLI at " + p +
-				" is signed in (`grok login`, or set XAI_API_KEY)"
+			return p
 		}
 	}
-	return "the Grok CLI is not installed — install Grok Build and sign in " +
-		"(`grok login`, or set XAI_API_KEY), then restart jevonsd. jevons runs its " +
-		"overseer and workers as Grok agents and cannot operate without it"
+	return "claude"
+}
+
+// diagnoseOverseerUnavailable is the pure oracle for 🎯T214 J4: message text
+// is keyed by overseer provider. Missing Grok connect fields must not
+// mislabel a Claude/Codex/Bedrock overseer as "Grok is broken".
+//
+// binOnPath: provider CLI found on PATH. candidatePath: non-empty when a
+// known install path exists off-PATH (Grok only today).
+func diagnoseOverseerUnavailable(provider claudia.Provider, binOnPath bool, candidatePath string) string {
+	switch provider {
+	case claudia.ProviderClaude:
+		if binOnPath {
+			return "the Claude agent failed to start — check that the Claude CLI is authenticated " +
+				"and see the jevonsd log for details (overseer provider is claude)"
+		}
+		return "the Claude CLI is not installed (or not on PATH) — install Claude Code, authenticate, " +
+			"then restart jevonsd (overseer provider is claude; this is not a Grok CLI issue)"
+	case claudia.ProviderCodex:
+		if binOnPath {
+			return "the Codex agent failed to start — check Codex auth and see the jevonsd log " +
+				"(overseer provider is codex)"
+		}
+		return "the Codex CLI is not installed (or not on PATH) — install Codex, authenticate, " +
+			"then restart jevonsd (overseer provider is codex; this is not a Grok CLI issue)"
+	case claudia.ProviderBedrock:
+		return "the Bedrock agent failed to start — check AWS credentials/region and see the " +
+			"jevonsd log (overseer provider is bedrock; this is not a Grok CLI issue)"
+	default:
+		// Grok (default fleet) and unknown providers: Grok-oriented copy.
+		if binOnPath {
+			return "the Grok agent failed to start — check that the Grok CLI is signed in " +
+				"(`grok login`, or set XAI_API_KEY) and see the jevonsd log for details"
+		}
+		if candidatePath != "" {
+			return "the Grok agent failed to start — check that the Grok CLI at " + candidatePath +
+				" is signed in (`grok login`, or set XAI_API_KEY)"
+		}
+		return "the Grok CLI is not installed — install Grok Build and sign in " +
+			"(`grok login`, or set XAI_API_KEY), then restart jevonsd. The default overseer " +
+			"provider is Grok; set provider=claude (or config/env) only when that backend is ready"
+	}
+}
+
+// overseerUnavailableReason probes the host for the selected overseer
+// provider's CLI and returns a legible, actionable explanation (🎯T54, 🎯T214).
+func overseerUnavailableReason(provider claudia.Provider) string {
+	switch provider {
+	case claudia.ProviderClaude:
+		if _, err := exec.LookPath("claude"); err == nil {
+			return diagnoseOverseerUnavailable(provider, true, "")
+		}
+		for _, p := range claudeCandidatePaths() {
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return diagnoseOverseerUnavailable(provider, true, "")
+			}
+		}
+		return diagnoseOverseerUnavailable(provider, false, "")
+	case claudia.ProviderCodex:
+		_, err := exec.LookPath("codex")
+		return diagnoseOverseerUnavailable(provider, err == nil, "")
+	case claudia.ProviderBedrock:
+		return diagnoseOverseerUnavailable(provider, false, "")
+	default:
+		if _, err := exec.LookPath("grok"); err == nil {
+			return diagnoseOverseerUnavailable(claudia.ProviderGrok, true, "")
+		}
+		for _, p := range grokCandidatePaths() {
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return diagnoseOverseerUnavailable(claudia.ProviderGrok, false, p)
+			}
+		}
+		return diagnoseOverseerUnavailable(claudia.ProviderGrok, false, "")
+	}
 }
 
 // reapIdleGCInterval is how often the butler sweeps for idle spawned
@@ -850,7 +1102,8 @@ func overseerUnavailableReason() string {
 const reapIdleGCInterval = 2 * time.Minute
 
 // reapIdleThreads runs the process-as-cache GC sweep until ctx is done.
-func reapIdleThreads(ctx context.Context, btlr *butler.Butler) {
+// When rsiLoop is non-nil, reaped thread ids are stream-fed into ambient RSI (🎯T92).
+func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop) {
 	ticker := time.NewTicker(reapIdleGCInterval)
 	defer ticker.Stop()
 	for {
@@ -860,7 +1113,98 @@ func reapIdleThreads(ctx context.Context, btlr *butler.Butler) {
 		case <-ticker.C:
 			if reaped := btlr.ReapIdle(); len(reaped) > 0 {
 				slog.Info("reaped idle thread processes", "threads", reaped)
+				if rsiLoop != nil {
+					rsiLoop.NoteReaped(reaped)
+				}
 			}
 		}
 	}
+}
+
+// startAmbientRSI wires the 🎯T92 schedule/stream loop and MCP jevons_rsi_cycle.
+// Env:
+//
+//	JEVONS_RSI_INTERVAL   — duration (default 30m); "0" or negative disables ticker
+//	JEVONS_RSI_MINT_CWD   — bullseye repo to file into (default: discover product repo)
+//	JEVONS_RSI_DRY_RUN    — "1"/"true" extract only, never file
+//	JEVONS_RSI_NO_CHAT    — "1" skip owner-chatlog deeper surface (🎯T92.2)
+//	JEVONS_RSI_NO_SESSION — "1" skip session-transcript deeper surface (🎯T92.2)
+func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Loop {
+	interval := rsi.DefaultInterval
+	if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_INTERVAL")); v != "" {
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			slog.Warn("JEVONS_RSI_INTERVAL invalid; using default", "value", v, "default", rsi.DefaultInterval)
+		}
+	}
+	mintCwd := strings.TrimSpace(os.Getenv("JEVONS_RSI_MINT_CWD"))
+	if mintCwd == "" {
+		mintCwd = resolveRSIMintCwd(cfg)
+	}
+	dry := false
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_RSI_DRY_RUN"))) {
+	case "1", "true", "yes", "on":
+		dry = true
+	}
+	chatLogPath := ""
+	if !envTruthy("JEVONS_RSI_NO_CHAT") {
+		chatLogPath = filepath.Join(cfg.StateDir, "chatlog", cfg.OverseerName+".jsonl")
+	}
+	sessionsDir := ""
+	if !envTruthy("JEVONS_RSI_NO_SESSION") {
+		sessionsDir = strings.TrimSpace(cfg.SessionsDir)
+	}
+	loop, err := rsi.NewLoop(rsi.LoopArgs{
+		StateDir:    cfg.StateDir,
+		MintCwd:     mintCwd,
+		Interval:    interval,
+		DryRun:      dry,
+		ChatLogPath: chatLogPath,
+		SessionsDir: sessionsDir,
+	})
+	if err != nil {
+		slog.Warn("ambient RSI disabled", "err", err)
+		return nil
+	}
+	mcpSrv.SetRSILoop(loop)
+	go loop.Run(ctx)
+	slog.Info("ambient RSI ready",
+		"interval", interval.String(),
+		"mint_cwd", mintCwd,
+		"dry_run", dry,
+		"chatlog", chatLogPath != "",
+		"sessions", sessionsDir != "",
+		"ledger", "state_dir/rsi/minted.json",
+	)
+	return loop
+}
+
+func envTruthy(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// resolveRSIMintCwd picks the bullseye repo for ambient mints: product tree
+// under ReposRoot when present, else WorkDir / process cwd.
+func resolveRSIMintCwd(cfg config.Config) string {
+	cand := filepath.Join(cfg.ReposRoot, "marcelocantos", "jevons")
+	if st, err := os.Stat(filepath.Join(cand, "bullseye.yaml")); err == nil && !st.IsDir() {
+		return cand
+	}
+	if wd := strings.TrimSpace(cfg.WorkDir); wd != "" && wd != "." {
+		if st, err := os.Stat(filepath.Join(wd, "bullseye.yaml")); err == nil && !st.IsDir() {
+			return wd
+		}
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return cfg.WorkDir
 }

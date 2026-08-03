@@ -122,40 +122,85 @@ test('T119 whole-chunk only: tool frames do not become display units', function 
   assert.strictEqual(chunks[1].text, 'done');
 });
 
-// ── 🎯T147 join-time fence repair in coalesceTranscriptFrames ───────────
+// ── 🎯T161 structural segment edges in coalesceTranscriptFrames ────────
 
-test('T147 coalesceTranscriptFrames: prose then fence segment inserts blank line', function () {
+test('T161 continuous text frames bare-concat (intra-segment tokens)', function () {
+  // No tool gap → consecutive assistant text frames are stream tokens.
   const chunks = VL.coalesceTranscriptFrames([
-    { type: 'user', message: { content: 'write cpp' } },
+    { type: 'user', message: { content: 'hi' } },
     {
       type: 'assistant',
-      message: { content: [{ type: 'text', text: 'Intro.' }] },
+      message: { content: [{ type: 'text', text: 'Hel' }] },
     },
     {
       type: 'assistant',
-      message: { content: [{ type: 'text', text: '```cpp\ncode\n```' }] },
+      message: { content: [{ type: 'text', text: 'lo.' }] },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'What' }] },
     },
   ]);
   assert.strictEqual(chunks.length, 2);
-  assert.strictEqual(chunks[1].role, 'jevons');
-  assert.strictEqual(chunks[1].text, 'Intro.\n\n```cpp\ncode\n```');
-  assert.ok(!chunks[1].text.includes('.```'), 'must not smush period+fence');
+  assert.strictEqual(chunks[1].text, 'Hello.What');
 });
 
-test('T147 extract multi-block: join parts with fence edge repair', function () {
+test('T161 tool_use gap then next text uses structural segment join', function () {
+  const chunks = VL.coalesceTranscriptFrames([
+    { type: 'user', message: { content: 'two paras' } },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'First paragraph ends here.' }] },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'read_file', input: {} }] },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Second paragraph starts here.' }] },
+    },
+  ]);
+  assert.strictEqual(chunks.length, 2);
+  assert.strictEqual(
+    chunks[1].text,
+    'First paragraph ends here.\n\nSecond paragraph starts here.',
+  );
+});
+
+test('T161 tool gap then fence/list uses same structural path (no content sniff)', function () {
+  const fence = VL.coalesceTranscriptFrames([
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Intro.' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'x', input: {} }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: '```cpp\ncode\n```' }] } },
+  ]);
+  assert.strictEqual(fence[0].text, 'Intro.\n\n```cpp\ncode\n```');
+
+  const list = VL.coalesceTranscriptFrames([
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Items:' }] } },
+    { type: 'tool_result', content: [{ type: 'text', text: 'ok' }] },
+    { type: 'assistant', message: { content: [{ type: 'text', text: '- a\n- b' }] } },
+  ]);
+  assert.strictEqual(list[0].text, 'Items:\n\n- a\n- b');
+});
+
+test('T161 extract multi-block: text parts are segments', function () {
   const chunks = VL.coalesceTranscriptFrames([
     {
       type: 'assistant',
       message: {
         content: [
-          { type: 'text', text: 'See:' },
-          { type: 'text', text: '```js\n1\n```' },
+          { type: 'text', text: 'First paragraph ends here.' },
+          { type: 'text', text: 'Second paragraph starts here.' },
         ],
       },
     },
   ]);
   assert.strictEqual(chunks.length, 1);
-  assert.strictEqual(chunks[0].text, 'See:\n\n```js\n1\n```');
+  assert.strictEqual(
+    chunks[0].text,
+    'First paragraph ends here.\n\nSecond paragraph starts here.',
+  );
 });
 
 

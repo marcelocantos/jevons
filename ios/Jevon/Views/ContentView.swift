@@ -67,7 +67,7 @@ struct ContentView: View {
     private var fallbackView: some View {
         switch connection.state {
         case .disconnected:
-            ConnectView()
+            ConnectView(onPaired: { pairingArtifact = $0 })
         case .connecting:
             if connection.hasConnected, let url = connection.httpBaseURL {
                 WebUIView(serverURL: url)
@@ -91,7 +91,7 @@ struct ContentView: View {
                     ChatView()
                 }
             } else {
-                ConnectView()
+                ConnectView(onPaired: { pairingArtifact = $0 })
             }
         }
     }

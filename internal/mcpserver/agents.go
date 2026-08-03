@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // NotifyFunc injects a text message into the Jevon overseer's PTY input.
@@ -35,14 +36,16 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148)."),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (e.g. 'tern', 'jevon-frontend')")),
+			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
 			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Empty = keep stored provider on resume, else daemon default (config/env/grok). 🎯T148.")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
+			mcp.WithString("target_id", mcp.Description("Optional bullseye target id this agent is engaged on (e.g. T10.2). Written to registry as target_id for Frontier engagement overlay (🎯T198). Empty = not mission-bound.")),
+			mcp.WithBoolean("force_engage", mcp.Description("If true, allow a second work agent on an already-engaged or closed target (deliberate override 🎯T222). Default false.")),
 		),
 		s.handleAgentStart,
 	)
@@ -67,7 +70,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_kill",
-			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
+			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Idempotent: if the agent is already not registered (e.g. auto-reaped after a done report), returns success without error. Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister (subtree included)")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is requesting the kill). Overseer uses the overseer name (usually 'jevons').")),
 		),
@@ -158,6 +161,20 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	actor, _ := args["actor"].(string)
 	parent, _ := args["parent"].(string)
 	purpose, _ := args["purpose"].(string)
+	targetID, _ := args["target_id"].(string)
+	forceEngage := boolArg(args["force_engage"])
+	// Also accept mission / bullseye_target aliases (same field).
+	if targetID == "" {
+		if v, ok := args["mission"].(string); ok {
+			targetID = v
+		}
+	}
+	if targetID == "" {
+		if v, ok := args["bullseye_target"].(string); ok {
+			targetID = v
+		}
+	}
+	targetID = normalizeAgentTargetID(targetID)
 
 	life := map[string]any{"name": name, "workdir": workdir}
 
@@ -220,34 +237,24 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	life["purpose"] = purpose
 
-	existed := s.registry.Def(name) != nil
-	life["existed"] = existed
-	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
+	// 🎯T222: work + target_id → no second implementer; closed targets refused.
+	if purpose == claudia.PurposeWork && targetID != "" {
+		if msg := s.refuseEngagedOrClosedTarget(name, workdir, targetID, forceEngage); msg != "" {
+			life["err"] = "engagement_gate"
+			life["target_id"] = targetID
+			s.logLifecycle(compAgentLifecycle, "start", "error", life)
+			return mcp.NewToolResultError(msg), nil
+		}
+	}
+
+	def, existed, err := s.stitchAgentStart(name, workdir, model, providerArg, parent, purpose, targetID)
 	if err != nil {
 		life["err"] = err.Error()
+		life["existed"] = existed
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
-	// Refresh copy after Ensure (Register may have stored a different pointer).
-	if d := s.registry.Def(name); d != nil {
-		def = d
-	}
-	// 🎯T148: ad hoc provider override wins; else keep stored; else default.
-	// Never unconditionally force Grok on resume.
-	def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
-	// Set parent only when minting or when legacy entry has empty parent.
-	if !existed || def.Parent == "" {
-		def.Parent = parent
-	}
-	// Purpose: set on mint; backfill empty purpose on re-start.
-	if !existed || def.Purpose == "" {
-		def.Purpose = purpose
-	}
-	if err := s.registry.Register(*def); err != nil {
-		life["err"] = err.Error()
-		s.logLifecycle(compAgentLifecycle, "start", "error", life)
-		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
-	}
+	life["existed"] = existed
 
 	proc, err := s.registry.Launch(name)
 	if err != nil {
@@ -264,11 +271,143 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	life["purpose"] = def.Purpose
 	life["parent"] = def.Parent
 	life["provider"] = string(def.Provider)
+	if def.TargetID != "" {
+		life["target_id"] = def.TargetID
+	}
 	s.logLifecycle(compAgentLifecycle, "start", "ok", life)
 
-	return mcp.NewToolResultText(fmt.Sprintf(
-		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, provider: %s)",
-		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent, def.Purpose, def.Provider)), nil
+	msg := fmt.Sprintf(
+		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, provider: %s",
+		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent, def.Purpose, def.Provider)
+	if def.TargetID != "" {
+		msg += fmt.Sprintf(", target_id: %s", def.TargetID)
+	}
+	msg += ")"
+	return mcp.NewToolResultText(msg), nil
+}
+
+// stitchAgentStart mints or updates a fleet agent registry row the same way
+// jevons_agent_start does before registry.Launch (🎯T148 / 🎯T215).
+//
+// Hermetic Session stitch surface: Provider selection, SessionID mint,
+// Parent/Purpose/TargetID dual-write — without spawning Grok or Claude.
+// Materialized stays false until a real Launch succeeds in claudia.
+func (s *Server) stitchAgentStart(name, workdir, model, providerArg, parent, purpose, targetID string) (*claudia.AgentDef, bool, error) {
+	if s == nil || s.registry == nil {
+		return nil, false, fmt.Errorf("no agent registry")
+	}
+	existed := s.registry.Def(name) != nil
+	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
+	if err != nil {
+		return nil, existed, err
+	}
+	// Refresh copy after Ensure (Register may have stored a different pointer).
+	if d := s.registry.Def(name); d != nil {
+		def = d
+	}
+	// 🎯T148: ad hoc provider override wins; else keep stored; else default.
+	// Never unconditionally force Grok on resume.
+	def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
+	// Set parent only when minting or when legacy entry has empty parent.
+	if !existed || def.Parent == "" {
+		def.Parent = parent
+	}
+	// Purpose: set on mint; backfill empty purpose on re-start.
+	if !existed || def.Purpose == "" {
+		def.Purpose = purpose
+	}
+	// 🎯T198: target_id on mint, or when caller supplies a non-empty id (rebind).
+	if targetID != "" {
+		def.TargetID = targetID
+	}
+	if err := s.registry.Register(*def); err != nil {
+		return nil, existed, err
+	}
+	if d := s.registry.Def(name); d != nil {
+		def = d
+	}
+	return def, existed, nil
+}
+
+// launchConfigFromDef is the Config handoff registry.Launch would pass into
+// claudia Start (Provider, SessionID, RequireResume←Materialized). Hermetic
+// tests assert this stitch without spawning a process (🎯T215).
+func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sessionID string, requireResume bool) {
+	if def == nil {
+		return "", "", false
+	}
+	return def.Provider, def.SessionID, def.Materialized
+}
+
+// normalizeAgentTargetID strips 🎯 and whitespace for registry TargetID (🎯T198).
+func normalizeAgentTargetID(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	s = strings.TrimPrefix(s, "🎯")
+	return strings.TrimSpace(s)
+}
+
+// workAgentsEngagedOnTarget returns registered work agents bound to targetID
+// (TargetID equality), excluding excludeName (same-name resume). Skips
+// overseer purpose. 🎯T222.
+func workAgentsEngagedOnTarget(reg *claudia.Registry, targetID, excludeName string) []string {
+	want := normalizeAgentTargetID(targetID)
+	if reg == nil || want == "" {
+		return nil
+	}
+	excludeName = strings.TrimSpace(excludeName)
+	var names []string
+	for _, d := range reg.List() {
+		if normalizeAgentTargetID(d.TargetID) != want {
+			continue
+		}
+		if d.Purpose == claudia.PurposeOverseer || d.Name == "jevons" {
+			continue
+		}
+		// Durable POs are not implementers for engagement thrash (kickoff
+		// workers are work agents with target_id; PO usually has empty TargetID).
+		if d.Name == excludeName {
+			continue
+		}
+		// Only purpose=work counts as engaged implementer (asides residual).
+		p := strings.TrimSpace(d.Purpose)
+		if p == "" {
+			p = claudia.PurposeWork
+		}
+		if p != claudia.PurposeWork {
+			continue
+		}
+		names = append(names, d.Name)
+	}
+	return names
+}
+
+// loadTargetStatusForKickoff looks up ledger status for targetID under cwd.
+// Tests may override. Missing ledger → empty status (engagement-only gate).
+var loadTargetStatusForKickoff = targetfile.LoadTargetStatusFromCwd
+
+// refuseEngagedOrClosedTarget returns a non-empty error message when
+// agent_start must not spawn a second implementer (🎯T222).
+func (s *Server) refuseEngagedOrClosedTarget(name, workdir, targetID string, force bool) string {
+	if force {
+		return ""
+	}
+	targetID = normalizeAgentTargetID(targetID)
+	if targetID == "" {
+		return ""
+	}
+	var engaged []string
+	if s != nil && s.registry != nil {
+		engaged = workAgentsEngagedOnTarget(s.registry, targetID, name)
+	}
+	status, _ := loadTargetStatusForKickoff(workdir, targetID)
+	dec := targetfile.GateKickoff(status, engaged, force)
+	if dec.Allow {
+		return ""
+	}
+	return dec.Message
 }
 
 func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -350,6 +489,28 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 			actor = s.overseerName()
 		}
 		life["actor"] = actor
+	}
+	// Idempotent kill (🎯T229): desired state is "not registered". After
+	// T165/T195 auto-reap, PO/overseer hygiene kills race the reaper and used
+	// to log lifecycle_error for every double-kill. Already-gone is success.
+	if s.isOverseerAgent(name) {
+		life["err"] = fmt.Sprintf("refusing to kill %q — that is the overseer", name)
+		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
+		return mcp.NewToolResultError(fmt.Sprintf("refusing to kill %q — that is the overseer", name)), nil
+	}
+	if s.registry.Def(name) == nil {
+		if actor == "" {
+			life["err"] = "actor is required (pass your agent name; overseer uses the overseer name)"
+			s.logLifecycle(compAgentLifecycle, "kill", "error", life)
+			return mcp.NewToolResultError("actor is required (pass your agent name; overseer uses the overseer name)"), nil
+		}
+		life["already_gone"] = true
+		life["descendants"] = 0
+		s.logLifecycle(compAgentLifecycle, "kill", "ok", life)
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"Agent %q already not registered (idempotent kill by %q; no-op).",
+			name, actor,
+		)), nil
 	}
 	if err := canKill(s.registry, actor, name, s.isOverseerAgent); err != nil {
 		life["err"] = err.Error()
@@ -460,16 +621,29 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			text := responseText.String()
 			responseText.Reset()
 			if text != "" {
+				// Notify overseer first so the done report is delivered before
+				// the worker leaves the registry (🎯T165) — unless [silent]
+				// (ops events: daemon-restarted / worker-idle fine chatter).
 				s.notify(name, text)
 			}
 			// 🎯T111.1: deliver any nudges queued while the prompt was in flight.
 			s.drainAgentSendQueue(name)
+			// 🎯T165: finished work agents auto stop+Remove (not persona-only).
+			s.maybeReapDoneWorkAgent(name, text)
 		}
 	}
 }
 
 // notify injects an agent response notification into Jevon's PTY.
+// Silent ops replies ([silent] prefix) are logged but not sent to the overseer
+// so owner chat is not spammed with "workers fine / no continue needed".
 func (s *Server) notify(agentName, text string) {
+	if IsSilentAgentResponse(text) {
+		slog.Info("agent response suppressed (silent)",
+			"agent", agentName, "len", len(text))
+		return
+	}
+
 	s.mu.Lock()
 	fn := s.notifyJevon
 	s.mu.Unlock()
@@ -492,10 +666,18 @@ func (s *Server) notify(agentName, text string) {
 // broadcastAgentEvent fans a worker event to the optional progress/UI hook
 // (🎯T118). Previously a no-op stub; the HTTP server wires ObserveAgentProgress
 // + agents_changed so fleet rows update without poll.
+// Also feeds the idle activity tracker and enter-idle → parent events (🎯T207).
 func (s *Server) broadcastAgentEvent(name string, ev claudia.Event) {
 	s.mu.Lock()
 	hook := s.agentEventHook
+	tracker := s.idleActivity
 	s.mu.Unlock()
+	if tracker != nil {
+		_, _, enteredIdle := tracker.ObserveTransition(name, ev)
+		if enteredIdle {
+			s.emitWorkerIdleToParent(name)
+		}
+	}
 	if hook != nil {
 		hook(name, ev)
 	}

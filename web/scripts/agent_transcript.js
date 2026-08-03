@@ -1,9 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// RHS agent/aside transcript inspect policy (🎯T124). DOM-free pure helpers
-// for hermetic tests: selection transitions, auto-select on new aside, pane
-// model from API turns. Main chat is never the sink for fleet monologue.
+// RHS agent/aside transcript inspect policy (🎯T124 / 🎯T205). DOM-free pure
+// helpers for hermetic tests: selection transitions, auto-select on new aside,
+// pane model, shared .msg body paint + scroll stickiness. Main chat is never
+// the sink for fleet monologue.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -109,8 +110,340 @@
     };
   }
 
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // Map inspect turn roles → main chat .msg role classes (🎯T205).
+  function inspectToMsgRole(role) {
+    if (role === 'user') return 'user';
+    if (role === 'assistant') return 'jevons';
+    return 'status';
+  }
+
+  // 🎯T221: unwrap fleet inject wrappers for inspect display.
+  // Owner repro: role=user text often arrives as <user_query>…</user_query>
+  // (event push / overseer inject). Returns { text, wasWrapped }.
+  function unwrapInspectUserText(text) {
+    let t = text == null ? '' : String(text);
+    let wasWrapped = false;
+    // Repeated unwrap for nested identical wrappers (defensive).
+    for (let i = 0; i < 3; i++) {
+      const m = t.match(
+        /^\s*<user_query(?:\s[^>]*)?>\s*([\s\S]*?)\s*<\/user_query>\s*$/i,
+      );
+      if (!m) break;
+      t = m[1];
+      wasWrapped = true;
+    }
+    return { text: t, wasWrapped: wasWrapped };
+  }
+
+  // Escape raw HTML so marked cannot emit live tags (XSS), while MD syntax
+  // (**bold**, lists, fences) still parses. Inspect-user path only.
+  function escapeHtmlForInspectMarkdown(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // True when inspect user body should use the marked path (not plain/renderUserText).
+  // Fleet injects (wasWrapped) always; MD-shaped text (bold/lists/fences/headings).
+  // Residual: pure system-reminder walls without MD markers stay plain.
+  function inspectUserShouldMarkdown(text, wasWrapped) {
+    if (wasWrapped) return true;
+    const s = String(text == null ? '' : text);
+    if (!s) return false;
+    if (/\*\*[^*\n]+\*\*/.test(s)) return true;
+    if (/__[^_\n]+__/.test(s)) return true;
+    if (/^#{1,6}\s+\S/m.test(s)) return true;
+    if (/```/.test(s)) return true;
+    if (/^\s*[-*+]\s+\S/m.test(s)) return true;
+    if (/^\s*\d+\.\s+\S/m.test(s)) return true;
+    return false;
+  }
+
+  // 🎯T205/T221: body paint policy for one inspect turn.
+  // Assistant → HTML via parseAssistantMarkdown (sealed main-chat path).
+  // User → 🎯T221: MD HTML for fleet injects / MD-shaped text (inspect-only);
+  //         else renderUserText (quotes/images) or plain. Main chat paintBody
+  //         is unchanged.
+  // Other → plain text. msgRole is the .msg class role for shared chrome.
+  // deps: { parseAssistantMarkdown?, renderUserText? }
+  function paintInspectLineBody(role, text, deps) {
+    deps = deps || {};
+    const t = text == null ? '' : String(text);
+    const msgRole = inspectToMsgRole(role);
+    if (role === 'assistant') {
+      const parse = deps.parseAssistantMarkdown;
+      if (typeof parse === 'function') {
+        return { mode: 'html', content: parse(t), msgRole: msgRole };
+      }
+      return { mode: 'text', content: t, msgRole: msgRole };
+    }
+    if (role === 'user') {
+      const unwrapped = unwrapInspectUserText(t);
+      const display = unwrapped.text;
+      const parse = deps.parseAssistantMarkdown;
+      if (
+        typeof parse === 'function' &&
+        inspectUserShouldMarkdown(display, unwrapped.wasWrapped)
+      ) {
+        // Escape raw HTML first so injects cannot XSS via <script> etc.
+        return {
+          mode: 'html',
+          content: parse(escapeHtmlForInspectMarkdown(display)),
+          msgRole: msgRole,
+        };
+      }
+      const renderUser = deps.renderUserText;
+      if (typeof renderUser === 'function') {
+        return { mode: 'html', content: renderUser(display), msgRole: msgRole };
+      }
+      return { mode: 'text', content: display, msgRole: msgRole };
+    }
+    return { mode: 'text', content: t, msgRole: msgRole };
+  }
+
+  // Hermetic HTML fixture for #agent-inspect-body: main .msg bubble chrome (🎯T205).
+  // deps.parseAssistantMarkdown / deps.renderUserText mirror index.html paths.
+  function paintInspectLinesHTML(lines, deps) {
+    deps = deps || {};
+    let html = '';
+    (lines || []).forEach(function (line) {
+      if (!line) return;
+      const role = line.role || 'other';
+      const body = paintInspectLineBody(role, line.text, deps);
+      const msgRole = body.msgRole || inspectToMsgRole(role);
+      const bodyInner = body.mode === 'html'
+        ? body.content
+        : escapeHtml(body.content);
+      html += '<div class="msg ' + escapeHtml(msgRole) + '">'
+        + '<div class="msg-body">' + bodyInner + '</div>'
+        + '</div>';
+    });
+    return html;
+  }
+
+  // Stable fingerprint for poll no-op (skip full replace when content unchanged).
+  function linesFingerprint(lines) {
+    let s = '';
+    (lines || []).forEach(function (l, i) {
+      if (!l) return;
+      s += i + '\0' + (l.role || '') + '\0' + (l.text == null ? '' : String(l.text)) + '\n';
+    });
+    return s;
+  }
+
+  // 🎯T205: latched stick-to-bottom policy (Track | Free) — pure, reusable for
+  // #agent-inspect-body. Mirrors main #messages: free-scroll is never yanked
+  // to bottom on content growth; near-bottom / Track keeps following.
+  //
+  // Mode is latched, not re-derived from distance every frame:
+  //   track — pin scrollTop to scrollHeight after updates
+  //   free  — preserve scrollTop; growth never pins
+  // Enter: boot / explicit enterTrack / arrive at bottom (ε entry only).
+  // Leave: intentional scroll up (wheel / scroll metrics).
+  function createScrollFollow(opts) {
+    opts = opts || {};
+    const eps = opts.eps != null ? Number(opts.eps) : 16;
+    let mode = 'track'; // 'track' | 'free'
+    let mayEnterFromGeometry = true;
+    let lastScrollTop = 0;
+    let lastScrollHeight = 0;
+    let bookkeeping = 0;
+
+    function distFromBottom(el) {
+      if (!el) return 0;
+      return el.scrollHeight - el.clientHeight - el.scrollTop;
+    }
+    function atBottom(el) {
+      if (!el) return true;
+      const room = el.scrollHeight - el.clientHeight;
+      if (room <= 0) return true;
+      return distFromBottom(el) <= eps;
+    }
+    function isTracking() { return mode === 'track'; }
+    function getMode() { return mode; }
+    function setMode(m) { mode = (m === 'free') ? 'free' : 'track'; }
+    function enterTrack() {
+      mode = 'track';
+      mayEnterFromGeometry = true;
+    }
+    function leaveTrack(el) {
+      mode = 'free';
+      mayEnterFromGeometry = el ? distFromBottom(el) > eps : false;
+    }
+    function noteAwayFromBottom(el) {
+      if (el && distFromBottom(el) > eps) mayEnterFromGeometry = true;
+    }
+    function tryEnterFromGeometry(el) {
+      noteAwayFromBottom(el);
+      if (mayEnterFromGeometry && atBottom(el)) enterTrack();
+    }
+    function noteMetrics(el) {
+      if (!el) return;
+      lastScrollTop = el.scrollTop;
+      lastScrollHeight = el.scrollHeight;
+    }
+    function beginBookkeeping() { bookkeeping++; }
+    function endBookkeeping() { bookkeeping = Math.max(0, bookkeeping - 1); }
+    function onWheel(deltaY, el) {
+      if (deltaY < 0) leaveTrack(el);
+      else if (deltaY > 0) tryEnterFromGeometry(el);
+    }
+    function onScroll(el) {
+      if (!el) return;
+      if (bookkeeping > 0) {
+        noteMetrics(el);
+        return;
+      }
+      const top = el.scrollTop;
+      const h = el.scrollHeight;
+      if (top + 1 < lastScrollTop && h + 1 >= lastScrollHeight) {
+        leaveTrack(el);
+      } else {
+        tryEnterFromGeometry(el);
+      }
+      noteMetrics(el);
+    }
+    function shouldPin() { return mode === 'track'; }
+    // After content mutation: pin if tracking; else restore prevTop (free read).
+    function applyAfterUpdate(el, prevTop) {
+      if (!el) return;
+      beginBookkeeping();
+      try {
+        if (mode === 'track') {
+          el.scrollTop = el.scrollHeight;
+        } else if (typeof prevTop === 'number' && isFinite(prevTop)) {
+          el.scrollTop = prevTop;
+        }
+        noteMetrics(el);
+      } finally {
+        endBookkeeping();
+      }
+    }
+    // Pure policy (no DOM): next scrollTop after update given metrics.
+    function nextScrollTop(args) {
+      args = args || {};
+      const scrollHeight = Number(args.scrollHeight) || 0;
+      const prevTop = args.prevTop;
+      if (mode === 'track') return scrollHeight;
+      if (typeof prevTop === 'number' && isFinite(prevTop)) return prevTop;
+      return 0;
+    }
+
+    return {
+      eps: eps,
+      isTracking: isTracking,
+      getMode: getMode,
+      setMode: setMode,
+      enterTrack: enterTrack,
+      leaveTrack: leaveTrack,
+      tryEnterFromGeometry: tryEnterFromGeometry,
+      atBottom: atBottom,
+      distFromBottom: distFromBottom,
+      onWheel: onWheel,
+      onScroll: onScroll,
+      shouldPin: shouldPin,
+      applyAfterUpdate: applyAfterUpdate,
+      nextScrollTop: nextScrollTop,
+      noteMetrics: noteMetrics,
+      beginBookkeeping: beginBookkeeping,
+      endBookkeeping: endBookkeeping,
+    };
+  }
+
   // mainChatMustNotContainFleetTraffic — oracle marker: product rule string.
   const MAIN_CHAT_IS_OWNER_OVERSEER_ONLY = true;
+
+  // ── 🎯T209: inspect multiplex over /ws/chat (same wire class as main) ──
+
+  /** Client → server control frame to start inspect history+live for name. */
+  function inspectSubscribeFrame(name) {
+    return JSON.stringify({ type: 'inspect_subscribe', name: String(name || '') });
+  }
+
+  /** Client → server control frame to stop inspect multiplex (name optional). */
+  function inspectUnsubscribeFrame(name) {
+    const o = { type: 'inspect_unsubscribe' };
+    if (name) o.name = String(name);
+    return JSON.stringify(o);
+  }
+
+  /** True when a WS frame is the agent inspect multiplex envelope. */
+  function isAgentTranscriptFrame(m) {
+    return !!(m && m.type === 'agent_transcript');
+  }
+
+  const INSPECT_TERMINAL_STOPS = { end_turn: 1, stop_sequence: 1, max_tokens: 1 };
+
+  function inspectEventStopReason(ev) {
+    const msg = ev && ev.message;
+    if (!msg) return '';
+    return msg.stop_reason || msg.stopReason || '';
+  }
+
+  /**
+   * Apply a progressive live event (chat-wire-ish) onto sealed-ish lines.
+   * Assistant tokens coalesce into the last streaming assistant line.
+   * Terminal stop seals the stream flag. Pure — no DOM.
+   *
+   * @param {Array<{role:string,text:string,_stream?:boolean}>|null} lines
+   * @param {object|null} event
+   * @returns {Array<{role:string,text:string,_stream?:boolean}>}
+   */
+  function applyInspectLiveFrame(lines, event) {
+    const out = (lines || []).map(function (l) {
+      return l ? { role: l.role, text: l.text, _stream: l._stream } : l;
+    });
+    if (!event || !event.type) return out;
+    if (event.type === 'user') {
+      const content = event.message && event.message.content;
+      const text = typeof content === 'string' ? content : '';
+      if (text) out.push({ role: 'user', text: text });
+      return out;
+    }
+    if (event.type === 'assistant') {
+      const content = event.message && event.message.content;
+      let text = '';
+      if (Array.isArray(content)) {
+        content.forEach(function (c) {
+          if (c && c.type === 'text' && c.text) text += c.text;
+        });
+      }
+      if (text) {
+        const last = out[out.length - 1];
+        if (last && last.role === 'assistant' && last._stream) {
+          last.text = (last.text || '') + text;
+        } else {
+          out.push({ role: 'assistant', text: text, _stream: true });
+        }
+      }
+      const sr = inspectEventStopReason(event);
+      if (INSPECT_TERMINAL_STOPS[sr] && out.length) {
+        const last = out[out.length - 1];
+        if (last && last._stream) delete last._stream;
+      }
+      return out;
+    }
+    return out;
+  }
+
+  /**
+   * paneModel from a wire agent_transcript history frame (kind=history).
+   * Same shape as HTTP payload for renderAgentInspect.
+   */
+  function paneModelFromWire(frame, err) {
+    if (err) return paneModel(frame && frame.name, null, err);
+    if (!frame) return paneModel('', null, new Error('empty inspect frame'));
+    return paneModel(frame.name, frame, frame.error && frame.empty ? null : (frame.error ? new Error(frame.error) : null));
+  }
 
   return {
     isOverseer: isOverseer,
@@ -120,6 +453,20 @@
     pickAutoSelect: pickAutoSelect,
     turnsToLines: turnsToLines,
     paneModel: paneModel,
+    escapeHtml: escapeHtml,
+    inspectToMsgRole: inspectToMsgRole,
+    unwrapInspectUserText: unwrapInspectUserText,
+    escapeHtmlForInspectMarkdown: escapeHtmlForInspectMarkdown,
+    inspectUserShouldMarkdown: inspectUserShouldMarkdown,
+    paintInspectLineBody: paintInspectLineBody,
+    paintInspectLinesHTML: paintInspectLinesHTML,
+    linesFingerprint: linesFingerprint,
+    createScrollFollow: createScrollFollow,
     MAIN_CHAT_IS_OWNER_OVERSEER_ONLY: MAIN_CHAT_IS_OWNER_OVERSEER_ONLY,
+    inspectSubscribeFrame: inspectSubscribeFrame,
+    inspectUnsubscribeFrame: inspectUnsubscribeFrame,
+    isAgentTranscriptFrame: isAgentTranscriptFrame,
+    applyInspectLiveFrame: applyInspectLiveFrame,
+    paneModelFromWire: paneModelFromWire,
   };
 }));

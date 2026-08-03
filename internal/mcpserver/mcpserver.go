@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -28,6 +29,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/workers"
 )
 
@@ -103,6 +105,49 @@ type Server struct {
 	// when agent_start / thread_spawn / jwork omit provider (🎯T148).
 	// Empty means cli.ResolveProvider falls through to env / grok at use time.
 	defaultProvider string
+
+	// rsiLoop is the ambient recursive self-improvement schedule/stream (🎯T92).
+	// Nil until SetRSILoop; jevons_rsi_cycle requires it.
+	rsiLoop *rsi.Loop
+
+	// idleActivity tracks ACP phase for enter-idle detection (🎯T207).
+	// Nil until StartIdleNudgeLoop; broadcastAgentEvent Observes transitions.
+	idleActivity *IdleActivityTracker
+	// idleNudgeLedger legacy path (auto-nudge ladder retired); may be nil.
+	idleNudgeLedger *IdleNudgeLedger
+	// idleEventLast debounces worker-idle events per agent name.
+	idleEventLast map[string]time.Time
+	// idleNudgeSweep is set by StartIdleNudgeLoop for cockpit fleet health
+	// (dead-handle sweep only — no auto-continue ladder).
+	idleNudgeSweep func(postRestart bool)
+}
+
+// TriggerIdleNudgeSweep runs one idle-nudge sweep (postRestart=false).
+// No-op until StartIdleNudgeLoop has registered the actuator.
+func (s *Server) TriggerIdleNudgeSweep() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	f := s.idleNudgeSweep
+	s.mu.Unlock()
+	if f != nil {
+		f(false)
+	}
+}
+
+// SweepFleetHealth runs SweepDeadAgents for the given overseer name
+// (log-only report). Safe for cockpit hooks.
+func (s *Server) SweepFleetHealth(overseerName string) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	if overseerName == "" {
+		overseerName = "jevons"
+	}
+	if reps := SweepDeadAgents(s.registry, overseerName); len(reps) > 0 {
+		slog.Info("cockpit fleet health", "report", FormatDeadAgentReport(reps))
+	}
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn

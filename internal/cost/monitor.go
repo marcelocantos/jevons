@@ -71,6 +71,12 @@ type Snapshot struct {
 	At     time.Time     `json:"at"`
 	Window time.Duration `json:"window_ns"`
 
+	// Accounting / Billable / CurrencyNote describe how USD fields must
+	// be read (🎯T137). subscription → not real SuperGrok dollars.
+	Accounting   string `json:"accounting"`
+	Billable     bool   `json:"billable"`
+	CurrencyNote string `json:"currency_note,omitempty"`
+
 	GlobalUSDPerHour float64            `json:"global_usd_per_hour"`
 	FleetUSDPerHour  float64            `json:"fleet_usd_per_hour"`
 	WorkerUSDPerHour map[string]float64 `json:"worker_usd_per_hour,omitempty"`
@@ -132,7 +138,14 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 		return nil, err
 	}
 
-	snap := &Snapshot{At: now, Window: cfg.Window.Std(), Sessions: rows}
+	snap := &Snapshot{
+		At:           now,
+		Window:       cfg.Window.Std(),
+		Sessions:     rows,
+		Accounting:   cfg.EffectiveAccounting(),
+		Billable:     cfg.EffectiveAccounting() == AccountingListPrice,
+		CurrencyNote: cfg.CurrencyNote(),
+	}
 
 	var globalCost, fleetCost float64
 	var globalEvents, fleetEvents int
@@ -197,8 +210,14 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 // so tests can exercise the policy against synthetic snapshots too. The
 // event counts back the thin-rate guard: a kill-level rate from too few
 // events is a spike, not a runaway, and is capped at pause.
+//
+// Under accounting=subscription (🎯T137), USD ladder / hard-ceiling
+// signals are capped at LevelWarn and labeled as non-bill estimates so
+// the enforcer never pause/kills on fake SuperGrok dollars. Session-
+// count and orphan signals stay available (resource hygiene, not $).
 func (m *Monitor) evaluate(cfg *BudgetConfig, snap *Snapshot, orphans []string, globalEvents, fleetEvents int, workerEvents map[string]int) []Alert {
 	var alerts []Alert
+	sub := cfg.IsSubscription()
 
 	// capThin downgrades a kill-level rate to pause when the window holds
 	// fewer than MinEventsForKill events in that scope.
@@ -208,23 +227,35 @@ func (m *Monitor) evaluate(cfg *BudgetConfig, snap *Snapshot, orphans []string, 
 		}
 		return lvl
 	}
-
-	if lvl := capThin(cfg.Global.LevelFor(snap.GlobalUSDPerHour), globalEvents); lvl != LevelNone {
-		alerts = append(alerts, Alert{Kind: AlertGlobalRate, Level: lvl,
-			Detail: fmt.Sprintf("global burn %.2f USD/hr (%s ≥ %.2f); %d events", snap.GlobalUSDPerHour, lvl, cfg.Global.thresholdFor(lvl), globalEvents)})
+	// capSub: under subscription accounting, USD rates never escalate
+	// past warn — estimates are informational only.
+	capSub := func(lvl Level) Level {
+		if sub && lvl > LevelWarn {
+			return LevelWarn
+		}
+		return lvl
 	}
-	if lvl := capThin(cfg.Fleet.LevelFor(snap.FleetUSDPerHour), fleetEvents); lvl != LevelNone {
+	usdLabel := "USD"
+	if sub {
+		usdLabel = "API-eq est USD (not billed)"
+	}
+
+	if lvl := capSub(capThin(cfg.Global.LevelFor(snap.GlobalUSDPerHour), globalEvents)); lvl != LevelNone {
+		alerts = append(alerts, Alert{Kind: AlertGlobalRate, Level: lvl,
+			Detail: fmt.Sprintf("global burn %.2f %s/hr (%s ≥ %.2f); %d events", snap.GlobalUSDPerHour, usdLabel, lvl, cfg.Global.thresholdFor(lvl), globalEvents)})
+	}
+	if lvl := capSub(capThin(cfg.Fleet.LevelFor(snap.FleetUSDPerHour), fleetEvents)); lvl != LevelNone {
 		alerts = append(alerts, Alert{Kind: AlertFleetRate, Level: lvl,
-			Detail: fmt.Sprintf("fleet burn %.2f USD/hr (%s ≥ %.2f); %d events", snap.FleetUSDPerHour, lvl, cfg.Fleet.thresholdFor(lvl), fleetEvents)})
+			Detail: fmt.Sprintf("fleet burn %.2f %s/hr (%s ≥ %.2f); %d events", snap.FleetUSDPerHour, usdLabel, lvl, cfg.Fleet.thresholdFor(lvl), fleetEvents)})
 	}
 	for w, rate := range snap.WorkerUSDPerHour {
 		limits := cfg.Worker
 		if o, ok := cfg.Workers[w]; ok {
 			limits = o
 		}
-		if lvl := capThin(limits.LevelFor(rate), workerEvents[w]); lvl != LevelNone {
+		if lvl := capSub(capThin(limits.LevelFor(rate), workerEvents[w])); lvl != LevelNone {
 			alerts = append(alerts, Alert{Kind: AlertWorkerRate, Level: lvl, Worker: w,
-				Detail: fmt.Sprintf("worker %s burn %.2f USD/hr (%s ≥ %.2f)", w, rate, lvl, limits.thresholdFor(lvl))})
+				Detail: fmt.Sprintf("worker %s burn %.2f %s/hr (%s ≥ %.2f)", w, rate, usdLabel, lvl, limits.thresholdFor(lvl))})
 		}
 	}
 	if cfg.MaxSessions > 0 && len(snap.Sessions) > cfg.MaxSessions {
@@ -236,12 +267,19 @@ func (m *Monitor) evaluate(cfg *BudgetConfig, snap *Snapshot, orphans []string, 
 			Detail: fmt.Sprintf("%d burning session(s) with no owner attached", len(orphans))})
 	}
 	if cfg.DailyBudgetUSD > 0 && snap.ProjectedTodayUSD > cfg.DailyBudgetUSD {
-		alerts = append(alerts, Alert{Kind: AlertProjection, Level: LevelWarn,
-			Detail: fmt.Sprintf("projected %.2f USD today (budget %.2f)", snap.ProjectedTodayUSD, cfg.DailyBudgetUSD)})
+		detail := fmt.Sprintf("projected %.2f %s today (budget %.2f)", snap.ProjectedTodayUSD, usdLabel, cfg.DailyBudgetUSD)
+		alerts = append(alerts, Alert{Kind: AlertProjection, Level: LevelWarn, Detail: detail})
 	}
 	if cfg.HardCeilingUSDPerDay > 0 && snap.SpentTodayUSD >= cfg.HardCeilingUSDPerDay {
-		alerts = append(alerts, Alert{Kind: AlertHardCeiling, Level: LevelKill,
-			Detail: fmt.Sprintf("spent %.2f USD today ≥ hard ceiling %.2f — spawning halted", snap.SpentTodayUSD, cfg.HardCeilingUSDPerDay)})
+		// list_price: kill-level hard ceiling halts spawning.
+		// subscription: warn only — estimate is not real SuperGrok $.
+		if sub {
+			alerts = append(alerts, Alert{Kind: AlertHardCeiling, Level: LevelWarn,
+				Detail: fmt.Sprintf("spent %.2f %s today ≥ hard ceiling %.2f — informational only under subscription accounting", snap.SpentTodayUSD, usdLabel, cfg.HardCeilingUSDPerDay)})
+		} else {
+			alerts = append(alerts, Alert{Kind: AlertHardCeiling, Level: LevelKill,
+				Detail: fmt.Sprintf("spent %.2f USD today ≥ hard ceiling %.2f — spawning halted", snap.SpentTodayUSD, cfg.HardCeilingUSDPerDay)})
+		}
 	}
 	return alerts
 }

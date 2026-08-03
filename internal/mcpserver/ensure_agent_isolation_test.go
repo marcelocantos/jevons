@@ -74,3 +74,39 @@ func TestEnsureAgentSameNameIdempotent(t *testing.T) {
 		t.Fatalf("List len = %d, want 1", len(reg.List()))
 	}
 }
+
+// 🎯T197: spawn path preserves hierarchical dots in agent names (no digit-squash).
+func TestEnsureAgentPreservesLiteralDotsInName(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const dotted = "jv-t27.2-config"
+	const flat = "jv-t159-seal"
+	d, err := reg.EnsureAgent(dotted, "/work/repo", "", false)
+	if err != nil {
+		t.Fatalf("EnsureAgent dotted: %v", err)
+	}
+	if d.Name != dotted {
+		t.Fatalf("name mutated: got %q want %q", d.Name, dotted)
+	}
+	if reg.Def(dotted) == nil {
+		t.Fatal("dotted name not look-up-able by full key")
+	}
+	if reg.Def("jv-t272-config") != nil {
+		t.Fatal("digit-squash key must not resolve the dotted agent")
+	}
+	f, err := reg.EnsureAgent(flat, "/work/repo", "", false)
+	if err != nil {
+		t.Fatalf("EnsureAgent flat: %v", err)
+	}
+	if f.Name != flat {
+		t.Fatalf("flat name mutated: got %q want %q", f.Name, flat)
+	}
+	if reg.Def(flat) == nil {
+		t.Fatal("flat name missing")
+	}
+	if len(reg.List()) != 2 {
+		t.Fatalf("List len = %d, want 2", len(reg.List()))
+	}
+}

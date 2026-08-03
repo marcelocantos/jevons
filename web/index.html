@@ -94,8 +94,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
 #messages > * { flex-shrink: 0; }
 /* 🎯T56/T119: shell always in DOM; content only near viewport. Far shells
-   freeze height (size cache) and drop bodies — content-visibility helps paint. */
+   freeze height (size cache) and drop bodies — content-visibility helps paint.
+   User/assistant bubbles keep content-visibility:visible so pocket tab +
+   outside timestamp (top:100% chrome) are not paint-contained/clipped (T106). */
 #messages > .msg { content-visibility: auto; contain-intrinsic-size: auto 72px; }
+#messages > .msg.user,
+#messages > .msg.jevons { content-visibility: visible; }
 #messages > .msg.virt-shell { content-visibility: visible; }
 #messages > .msg.virt-shell > * { display: none !important; }
 .composer-images { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 6px; }
@@ -108,7 +112,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #messages::-webkit-scrollbar-track { background: transparent; }
 #messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
 
-.msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; }
+.msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; position: relative; }
+/* User/assistant: reserve space under the border for outside timestamp (+ pocket tab when tall). */
+.msg.user, .msg.jevons { margin-bottom: 1.2rem; }
 .msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: normal; word-wrap: break-word; }
 .msg.user .msg-body { white-space: pre-wrap; }
 .msg.user .msg-body blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 0.4em 0; color: var(--text-dim); white-space: pre-wrap; }
@@ -119,7 +125,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    full-accent border (same 1px width → no reflow) + a box-shadow ring
    to "thicken" the border without shifting geometry. */
 .msg.user.editing { background: var(--user-bg-editing); border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
-.msg.jevons { align-self: flex-start; background: transparent; color: var(--text); white-space: normal; padding: 10px 4px; }
+/* 🎯T106: assistant talk bubble — same geometry family as user, border only (no fill). */
+.msg.jevons { align-self: flex-start; background: transparent; color: var(--text); border: 1px solid var(--border); white-space: normal; word-wrap: break-word; }
 
 /* Markdown in agent responses */
 .msg.jevons p { margin: 0.5em 0; }
@@ -158,6 +165,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   box-shadow: 0 12px 40px rgba(0,0,0,0.35); flex-direction: column; overflow: hidden;
 }
 #mermaid-viz-panel.open { display: flex; }
+/* 🎯T185: Frontier Graph — ~90% viewport overlay of unachieved dependency graph */
+#mermaid-viz-panel.mvp-large {
+  left: 50%; top: 50%; right: auto; bottom: auto;
+  transform: translate(-50%, -50%);
+  width: 90vw; height: 90vh;
+  max-width: none; max-height: none;
+  z-index: 60;
+  border-radius: 12px;
+}
 #mermaid-viz-panel .mvp-header {
   display: flex; align-items: center; gap: 6px; padding: 8px 10px; flex-wrap: wrap;
   border-bottom: 1px solid var(--border); background: var(--surface-raised); flex-shrink: 0;
@@ -172,6 +188,33 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   flex: 1; min-height: 0; overflow: auto; padding: 12px; text-align: center;
 }
 #mermaid-viz-panel .mvp-body svg { max-width: 100%; height: auto; }
+/* 🎯T190: multi-diagram pack — each connected component is its own Mermaid
+   block; wrap-grid fills the ~90% panel without one mega horizontal strip. */
+#mermaid-viz-panel .mvp-body.mvp-pack {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+  align-content: start;
+  text-align: left;
+}
+#mermaid-viz-panel .mvp-pack-block {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  background: var(--surface-raised);
+  overflow: auto;
+  min-width: 0;
+}
+#mermaid-viz-panel .mvp-pack-block .mvp-pack-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+#mermaid-viz-panel .mvp-pack-block svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+#mermaid-viz-panel .mvp-pack-block[data-kind="orphans"] {
+  grid-column: 1 / -1; /* orphans span full width when last */
+}
 #mermaid-viz-panel .mvp-status {
   font-size: 11px; color: var(--text-muted); padding: 0 10px 8px; flex-shrink: 0;
 }
@@ -179,6 +222,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #mermaid-viz-panel .mvp-empty-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; }
 #mermaid-viz-panel .mvp-empty-body { font-size: 12px; line-height: 1.45; margin: 0 0 8px; }
 #mermaid-viz-panel .mvp-empty-hint { font-size: 11px; color: var(--text-muted); margin: 0; }
+/* 🎯T196: product fetch failure (404/5xx/network) — not the empty paste shell */
+#mermaid-viz-panel .mvp-error { text-align: left; color: var(--text-dim); max-width: 36em; margin: 0 auto; }
+#mermaid-viz-panel .mvp-error-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-error-body { font-size: 12px; line-height: 1.45; margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-error-hint { font-size: 11px; color: var(--text-muted); margin: 0; }
 #mermaid-viz-panel .mvp-paste-wrap {
   display: none; flex-direction: column; gap: 6px; padding: 8px 10px;
   border-top: 1px solid var(--border); flex-shrink: 0; background: var(--surface-raised);
@@ -217,14 +265,69 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons a { color: var(--accent); text-decoration: none; }
 .msg.jevons a:hover { text-decoration: underline; }
 
-/* Oversized content (🎯T57): large turns render only a bounded PREVIEW
-   up front (marked.parse + DOM built on ~14 lines, not the whole thing);
-   the full content is parsed lazily on Show more. Bounds the browser's
-   work, not just what's visible. .msg-expand is the toggle. */
-.msg-expand { display: block; margin-top: 4px; padding: 2px 0; background: none; border: none;
-  color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; opacity: 0.9; }
-.msg-expand:hover { opacity: 1; text-decoration: underline; }
-.msg.user .msg-expand { margin-left: auto; text-align: right; }
+/* Oversized content (🎯T106): full marked/HTML always mounted; collapse is
+   CSS max-height + overflow:hidden on .msg-body (clip), never truncated
+   re-parse. --collapsed-max-height must match COLLAPSED_MAX_HEIGHT in JS.
+   Pocket polish: clipped bubble = content slotted into a dark pocket;
+   fade/tab/time are border-chrome, not in-flow competitors. */
+:root {
+  --collapsed-max-height: 14rem;
+  --expand-tab-height: 1.05rem;
+  --expand-tab-clearance: 0.35rem; /* air above tab when expanded (🎯T166) */
+}
+/* Collapsed: border butts clipped content (time lives outside). */
+.msg.msg-clipped { padding-bottom: 0; }
+.msg.msg-clipped > .msg-body {
+  max-height: var(--collapsed-max-height);
+  overflow: hidden;
+}
+/* 🎯T166: expanded tall bubbles (tab present, not clipped) reserve bottom
+   padding so the last text line clears the inside-edge collapse tab.
+   Collapsed stays padding-bottom:0 above; short bubbles never get a tab. */
+.msg:has(> .msg-expand-tab):not(.msg-clipped) {
+  padding-bottom: calc(var(--expand-tab-height) + var(--expand-tab-clearance));
+}
+/* Pocket scrim: fade-to-dark flush to inner bottom of border (not to page bg).
+   Height matches bubble corner radius so scrim stays a short edge cue.
+   Max opacity ~half of prior 0.45 so the edge cue stays soft. */
+.msg-clip-fade {
+  display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--radius);
+  margin: 0;
+  pointer-events: none;
+  z-index: 1;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.22));
+}
+.msg.msg-clipped > .msg-clip-fade { display: block; }
+/* Bottom-edge pocket tab: tongue into pocket from inner bottom border (not hang-off).
+   z-index above .msg-clip-fade for both .msg.user and .msg.jevons (tab must paint over scrim). */
+.msg-expand-tab {
+  display: flex; align-items: center; justify-content: center;
+  width: 2.25rem; height: var(--expand-tab-height); padding: 0;
+  position: absolute; left: 50%; bottom: -1px; /* 1px into border; bulk sits inside */
+  transform: translateX(-50%);
+  margin: 0;
+  border: 1px solid var(--border); border-bottom: none;
+  border-radius: 7px 7px 0 0; background: var(--bg);
+  color: var(--text-dim); font: inherit; font-size: 11px; line-height: 1;
+  cursor: pointer; opacity: 0.92; z-index: 3;
+}
+.msg-expand-tab:hover { opacity: 1; color: var(--text); border-color: var(--border-focus); }
+.msg-expand-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.msg.user .msg-expand-tab {
+  background: var(--bg); border-color: var(--user-border); color: var(--text-dim);
+  z-index: 3;
+}
+.msg.jevons .msg-expand-tab {
+  background: var(--bg); border-color: var(--border);
+  z-index: 3;
+}
+.msg-expand-tab .chev { display: block; font-size: 13px; line-height: 1; }
 
 /* 🎯T135: opt-in route switch under a user bubble (match suggestion only). */
 .msg.user .route-switch {
@@ -379,8 +482,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   padding: 8px 12px; box-shadow: 0 8px 28px rgba(0,0,0,0.35);
 }
 .turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
-.msg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; line-height: 1; cursor: default; }
-.msg.user .msg-time { text-align: right; }
+/* Timestamp outside the bubble, slightly under the border (not in the pocket). */
+.msg-time {
+  position: absolute; top: 100%; left: 2px; right: auto;
+  margin-top: 4px; padding-top: 0;
+  font-size: 10px; color: var(--text-muted); font-family: var(--mono);
+  letter-spacing: -0.02em; user-select: none; line-height: 1; cursor: default;
+  z-index: 1;
+}
+.msg.user .msg-time { left: auto; right: 2px; text-align: right; }
 /* 🎯T84: GitHub mark for compacted github.com workdirs */
 .agent-dir .gh-icon { display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; opacity: 0.85; }
 .agent-node .agent-dir { display: inline-flex; align-items: center; gap: 2px; }
@@ -412,14 +522,49 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 #degraded-banner.visible { display: block; }
 #agents { flex: 1; overflow-y: auto; padding: 8px 12px; min-height: 60px; max-height: 45%; }
-/* 🎯T124: fleet transcript inspect — bottom of RHS; never main chat */
-#agent-inspect {
-  display: none; flex-direction: column; flex: 1; min-height: 140px; max-height: 55%;
+/* 🎯T200: portfolio virtual nodes in fleet tree — folder lead, not status dot */
+.agent-node.agent-portfolio { cursor: default; }
+.agent-node.agent-portfolio .agent-name {
+  color: var(--text-dim); font-weight: 600; font-size: 12px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.agent-node .agent-folder {
+  flex-shrink: 0; width: 14px; text-align: center; font-size: 12px; line-height: 1;
+  opacity: 0.9;
+}
+/* 🎯T131: RHS bottom — tabbed Frontier | Transcript (T124 coexist) */
+#rhs-bottom {
+  display: flex; flex-direction: column; flex: 1; min-height: 140px; max-height: 55%;
+  min-width: 0; /* 🎯T174: flex child must shrink so frontier table cannot expand pane */
   border-top: 1px solid var(--border); background: var(--bg);
 }
-#agent-inspect.visible { display: flex; }
+#rhs-bottom-tabs {
+  display: flex; align-items: center; gap: 0; flex-shrink: 0;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 0 4px;
+}
+#rhs-bottom-tabs button {
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 11px; font-weight: 600; font-family: var(--sans);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+#rhs-bottom-tabs button:hover { color: var(--text-dim); }
+#rhs-bottom-tabs button.active {
+  color: var(--text); border-bottom-color: var(--accent);
+}
+#rhs-bottom-tabs .rhs-tab-meta {
+  margin-left: auto; font-size: 10px; color: var(--text-muted);
+  font-family: var(--mono); padding-right: 8px; max-width: 40%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rhs-tab-pane { display: none; flex-direction: column; flex: 1; min-height: 0; }
+.rhs-tab-pane.active { display: flex; }
+/* 🎯T124: fleet transcript inspect — never main chat */
+#agent-inspect { flex: 1; min-height: 0; }
 #agent-inspect-header {
-  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
   font-size: 11px; font-weight: 600; color: var(--text-dim);
   border-bottom: 1px solid var(--border); background: var(--surface);
   text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0;
@@ -430,22 +575,195 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: var(--sans);
 }
 #agent-inspect-header button:hover { color: var(--text); border-color: var(--border-focus); }
+/* 🎯T205: inspect is main transcript in microcosm — .msg chrome + paintBody;
+   overflow-anchor:none + stick/free (not unconditional pin). No .ai-turn CSS fork. */
 #agent-inspect-body {
-  flex: 1; overflow-y: auto; padding: 10px 12px; font-size: 12px; line-height: 1.45;
+  flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+  font-size: 13px; line-height: 1.5;
+  scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent;
 }
+#agent-inspect-body > * { flex-shrink: 0; }
 #agent-inspect-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px 4px; }
 #agent-inspect-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; margin-bottom: 8px; }
-#agent-inspect-body .ai-turn { margin-bottom: 10px; }
-#agent-inspect-body .ai-role {
-  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--text-muted); margin-bottom: 2px;
+/* Shared .msg / .msg-body chrome (global rules). Narrow pane: full width OK. */
+#agent-inspect-body > .msg { max-width: 100%; }
+/* 🎯T167: per-turn .msg must not nest vertical scroll traps. */
+#agent-inspect-body > .msg .msg-body { overflow-y: visible; max-height: none; }
+/* 🎯T131 / 🎯T173 / 🎯T174: frontier table — headerless; constrained to pane; name ellipsizes */
+#frontier-pane { flex: 1; min-height: 0; min-width: 0; }
+#frontier-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 4px 12px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
-#agent-inspect-body .ai-turn.user .ai-role { color: var(--accent, #8b7cf6); }
-#agent-inspect-body .ai-turn.assistant .ai-role { color: var(--green, #4ade80); }
-#agent-inspect-body .ai-text {
-  white-space: pre-wrap; word-break: break-word; color: var(--text); font-family: var(--sans);
-  font-size: 12px; max-height: 40vh; overflow-y: auto;
+#frontier-toolbar button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-muted);
+  font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: var(--sans);
 }
+#frontier-toolbar button:hover { color: var(--text); border-color: var(--border-focus); }
+#frontier-body {
+  flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 0;
+  font-size: 11px;
+}
+#frontier-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px; }
+#frontier-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; padding: 8px 12px; }
+/* fixed + max-width:100%: long names ellipsize instead of growing past #frontier-body */
+/* 🎯T177: explicit rem chrome cols — 1%/99% under fixed layout collapses chrome and paints over name */
+#frontier-table {
+  width: 100%; max-width: 100%; border-collapse: collapse; font-family: var(--sans);
+  table-layout: fixed;
+}
+#frontier-table td {
+  padding: 5px 6px; border-bottom: 1px solid var(--border);
+  color: var(--text); vertical-align: middle;
+}
+#frontier-table tr:hover td { background: var(--surface-raised); }
+/* 🎯T179: tight chrome rem widths; status normal case (no small-caps) */
+#frontier-table .ft-id {
+  font-family: var(--mono); font-size: 11px; color: var(--accent);
+  white-space: nowrap; font-weight: 500;
+  width: 4rem; overflow: hidden; text-overflow: ellipsis;
+  padding-left: 10px; padding-right: 4px;
+}
+#frontier-table .ft-name {
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding-left: 4px; padding-right: 4px;
+}
+/* 🎯T182: status + fan tightly packed (near-zero pad between them) */
+#frontier-table .ft-status {
+  font-size: 10px; color: var(--text-dim); white-space: nowrap;
+  width: 1.75rem; padding-left: 2px; padding-right: 0;
+}
+#frontier-table .ft-fanout {
+  font-family: var(--mono); font-size: 10px; color: var(--text-muted);
+  text-align: right; white-space: nowrap;
+  width: 2rem; padding-left: 0; padding-right: 2px;
+}
+#frontier-table .ft-fanout.ft-fanout-empty {
+  color: transparent;
+}
+/* 🎯T182: far-right play control → POST /api/agents/{po}/send */
+/* 🎯T198: engaged row → stop glyph; free stay play */
+#frontier-table .ft-play {
+  width: 1.6rem; padding-left: 0; padding-right: 8px;
+  text-align: center; white-space: nowrap;
+}
+#frontier-table .ft-play-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin: 0; padding: 2px 4px; line-height: 1;
+  /* Medium product green (token --green: dark #4ade80 / light #10b981). */
+  font-size: 11px; color: var(--green);
+  background: transparent; border: none; border-radius: 4px;
+  cursor: pointer;
+}
+#frontier-table .ft-play-btn:hover {
+  background: var(--surface-raised); color: var(--green);
+}
+#frontier-table .ft-play-btn:disabled {
+  opacity: 0.45; cursor: default;
+}
+#frontier-table .ft-play-btn.ft-stop-btn {
+  color: var(--amber, #d4a017);
+}
+#frontier-table tr.ft-engaged td {
+  color: var(--text-dim);
+}
+#frontier-table tr.ft-engaged .ft-id {
+  opacity: 0.92;
+}
+
+/* 🎯T175: instant custom tips (fixed layer; 0ms show — not native title=) */
+/* 🎯T186: sticky hover — tip receives pointer events while shown */
+/* 🎯T231: ONE hit rect = AABB(card ∪ id+name); leave → dismiss grace=0. No bridge. */
+.instant-tip {
+  display: none;
+  position: fixed;
+  z-index: 200;
+  max-width: min(360px, 90vw);
+  padding: 5px 9px;
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.32);
+  /* pre-line: multi-line fanout tips (T179) keep newlines; HTML cards use block tags */
+  white-space: pre-line;
+  word-break: normal;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+.instant-tip.instant-tip-show {
+  display: block;
+  pointer-events: auto;
+}
+.instant-tip-hit {
+  display: none;
+  position: fixed;
+  z-index: 198;
+  pointer-events: none;
+  background: transparent;
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+/* 🎯T181/T184: rich target card (markdown HTML + mermaid); scrollable, left-of-pointer */
+/* 🎯T186: sticky scroll + right edge clamped left of #frontier-table */
+.instant-tip.instant-tip-card {
+  max-width: min(480px, 94vw);
+  max-height: min(75vh, 560px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+}
+.instant-tip.instant-tip-card p { margin: 0 0 0.45em; }
+.instant-tip.instant-tip-card p:last-child { margin-bottom: 0; }
+.instant-tip.instant-tip-card ul,
+.instant-tip.instant-tip-card ol {
+  margin: 0.25em 0 0.45em 1.1em;
+  padding: 0;
+}
+.instant-tip.instant-tip-card li { margin: 0.15em 0; }
+.instant-tip.instant-tip-card strong { color: var(--strong); font-weight: 600; }
+.instant-tip.instant-tip-card h1,
+.instant-tip.instant-tip-card h2,
+.instant-tip.instant-tip-card h3 {
+  font-size: 12px; font-weight: 600; color: var(--heading);
+  margin: 0 0 0.35em;
+}
+.instant-tip.instant-tip-card pre {
+  margin: 0.35em 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  font-size: 11px;
+  background: var(--surface-sunken, rgba(0,0,0,0.06));
+  border-radius: 4px;
+}
+.instant-tip.instant-tip-card code { font-family: var(--mono); font-size: 11px; }
+.instant-tip.instant-tip-card .mermaid-diagram {
+  margin: 0.4em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.instant-tip.instant-tip-card .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+/* Compact tip: hide chat-style mermaid toolbar (cards are sticky/scrollable — T186). */
+.instant-tip.instant-tip-card .mermaid-diagram .mermaid-toolbar { display: none; }
+#frontier-table .ft-status,
+#frontier-table .ft-fanout,
+#frontier-table .ft-name,
+#frontier-table .ft-id {
+  cursor: default;
+}
+#frontier-table .ft-play { cursor: default; }
+
 #workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
 .worker-row { padding: 5px 6px; border-radius: 5px; margin-bottom: 2px; border: 1px solid transparent; }
 .worker-row:hover { background: var(--surface-raised); }
@@ -506,7 +824,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <div id="composer-images" class="composer-images" aria-label="Attached images"></div>
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
-                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing."
+                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter empty pops last message, Shift+Enter for a new line. / focuses box when not typing."
                 title="Message box — / focuses here when focus is elsewhere (🎯T127)"
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
@@ -527,15 +845,30 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <button type="button" id="open-viz-btn" title="Open project graph viz panel (pinned / paste / chat)">Open viz</button>
     </div>
     <div id="agents"></div>
-    <!-- 🎯T124: selected fleet agent/aside full transcript (out of band from main chat) -->
-    <div id="agent-inspect" aria-label="Selected agent transcript">
-      <div id="agent-inspect-header">
-        <span class="ai-label">Transcript</span>
-        <span class="ai-name" id="agent-inspect-name"></span>
-        <button type="button" id="agent-inspect-refresh" title="Reload transcript">Refresh</button>
-        <button type="button" id="agent-inspect-close" title="Clear selection">Close</button>
+    <!-- 🎯T131: RHS bottom tabs — Frontier (live bullseye) | Transcript (T124) -->
+    <div id="rhs-bottom" aria-label="Frontier and agent transcript">
+      <div id="rhs-bottom-tabs" role="tablist">
+        <button type="button" role="tab" data-tab="frontier" id="rhs-tab-frontier" class="active" aria-selected="true">Frontier</button>
+        <button type="button" role="tab" data-tab="transcript" id="rhs-tab-transcript" aria-selected="false">Transcript</button>
+        <span class="rhs-tab-meta" id="rhs-tab-meta" title="Ledger path from bullseye discovery"></span>
       </div>
-      <div id="agent-inspect-body"></div>
+      <div id="frontier-pane" class="rhs-tab-pane active" role="tabpanel" aria-label="Bullseye frontier">
+        <div id="frontier-toolbar">
+          <button type="button" id="frontier-graph" title="Open unachieved dependency graph (~90% view)">Graph</button>
+          <button type="button" id="frontier-refresh" title="Manual reload if live watch/WS missed a change">Refresh</button>
+        </div>
+        <div id="frontier-body"></div>
+      </div>
+      <!-- 🎯T124: selected fleet agent/aside full transcript (out of band from main chat) -->
+      <div id="agent-inspect" class="rhs-tab-pane" role="tabpanel" aria-label="Selected agent transcript">
+        <div id="agent-inspect-header">
+          <span class="ai-label">Transcript</span>
+          <span class="ai-name" id="agent-inspect-name"></span>
+          <button type="button" id="agent-inspect-refresh" title="Reload transcript">Refresh</button>
+          <button type="button" id="agent-inspect-close" title="Clear selection">Close</button>
+        </div>
+        <div id="agent-inspect-body"></div>
+      </div>
     </div>
     <div id="activity-header" style="margin-top:0">Workers <span id="workers-live" style="font-weight:400;color:var(--text-muted);font-size:10px"></span></div>
     <div id="workers" title="jwork workers (🎯T8.2)"></div>
@@ -567,7 +900,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
 <script src="scripts/fleet_row.js"></script>
+<script src="scripts/portfolio_group.js"></script>
 <script src="scripts/agent_transcript.js"></script>
+<script src="scripts/frontier_table.js"></script>
+<script src="scripts/instant_tip.js"></script>
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
 <script src="scripts/route_suggest.js"></script>
@@ -578,13 +914,32 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/send_queue.js"></script>
 <script src="scripts/layout_probe.js"></script>
 <script src="scripts/tool_summary.js"></script>
+<script src="scripts/working_progress.js"></script>
 <script src="scripts/mermaid_actions.js"></script>
 <script src="scripts/markdown_normalize.js"></script>
+<script src="scripts/link_safety.js"></script>
 <script src="scripts/smd.js"></script>
 <script src="scripts/streaming_markdown.js"></script>
+<script src="scripts/cost_display.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
+// 🎯T151: content links open in a new tab (never steal chat session).
+(function wireLinkSafety() {
+  if (typeof LinkSafety === 'undefined') return;
+  // Capture-phase: any user click on an <a href> that still lacks target
+  // gets safe attrs before navigation (activity chrome, late-injected HTML).
+  document.addEventListener('click', function (e) {
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    const a = t.closest('a[href]');
+    if (!a) return;
+    // Leave plain product hash-only routes in-app if intentional.
+    const href = a.getAttribute('href') || '';
+    if (href.charAt(0) === '#' && href.indexOf('://') < 0) return;
+    LinkSafety.decorateAnchor(a);
+  }, true);
+})();
 </script>
 <script>
 const msgs = document.getElementById('messages');
@@ -601,7 +956,20 @@ let attentionBarExpanded = false;
 // 🎯T135: last auto-route match is suggestion-only (never steals wire).
 // Stashed until the next user bubble echo so we can attach "Continue in: …".
 let lastRouteSuggestion = null;
-const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing.';
+const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter empty pops last message, Shift+Enter for a new line. / focuses box when not typing.';
+
+// 🎯T153: force focus back to main composer after pointer chrome actions.
+// Prefer ComposerFocus.focusComposer; fall back to #input.focus().
+function focusComposer() {
+  if (typeof ComposerFocus !== 'undefined' && ComposerFocus.focusComposer) {
+    return ComposerFocus.focusComposer(input);
+  }
+  if (input && typeof input.focus === 'function') {
+    input.focus();
+    return { didFocus: true, reason: 'focused' };
+  }
+  return { didFocus: false, reason: 'no-composer' };
+}
 
 // 🎯T21 Wispr Flow: live a11y context + optional empty seed (strip before wire).
 const wisprContextEl = document.getElementById('wispr-context');
@@ -759,6 +1127,68 @@ function ensureFleetAside(id, title) {
   });
 }
 
+// 🎯T152: reverse of ensureFleetAside — DELETE /api/asides/{id} deregisters the
+// dual-written purpose=aside fleet agent so RHS 💡 leaves with target-file close.
+// Selection returns to main (selectedAgent=null) when the dismissed id was focused.
+function dismissFleetAside(id) {
+  if (!id) return Promise.resolve(null);
+  const name = String(id);
+  return fetch('/api/asides/' + encodeURIComponent(name), {
+    method: 'DELETE',
+  }).then(function (r) {
+    if (!r.ok && r.status !== 404) {
+      return r.text().then(function (t) {
+        throw new Error(t || ('aside dismiss HTTP ' + r.status));
+      });
+    }
+    // 404 = already gone (idempotent). 200 = deregistered.
+    // 🎯T164: never treat "route missing / stale binary" as success without a
+    // follow-up refresh; refreshAgents is the owner-visible truth.
+    return r.status === 404
+      ? { name: name, dismissed: true, missing: true }
+      : r.json();
+  }).then(function (row) {
+    // Optimistic local drop so RHS does not wait on poll for agents_changed.
+    if (Array.isArray(lastFleetAgents)) {
+      lastFleetAgents = lastFleetAgents.filter(function (a) {
+        return !(a && a.name === name);
+      });
+    }
+    if (selectedAgent === name) {
+      selectedAgent = null;
+      try {
+        document.querySelectorAll('.agent-node').forEach(function (n) {
+          n.classList.remove('selected');
+        });
+      } catch (_) {}
+      try { if (typeof hideAgentInspect === 'function') hideAgentInspect(); } catch (_) {}
+    }
+    try { refreshAgents(); } catch (_) {}
+    return row;
+  }).catch(function (err) {
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('warn', DecisionLog.decisionMsg('attention'), {
+        decision: 'aside_dismiss_error',
+        threadId: name,
+        err: err && err.message ? err.message : String(err || 'unknown'),
+        corr: pageCorr,
+      });
+    }
+    // Optimistic local clear so a flaky DELETE still drops RHS selection noise.
+    if (selectedAgent === name) {
+      selectedAgent = null;
+      try {
+        document.querySelectorAll('.agent-node').forEach(function (n) {
+          n.classList.remove('selected');
+        });
+      } catch (_) {}
+      try { if (typeof hideAgentInspect === 'function') hideAgentInspect(); } catch (_) {}
+    }
+    try { refreshAgents(); } catch (_) {}
+    return null;
+  });
+}
+
 let turnDetails = null;
 let turnItems = null;
 let turnCount = 0;
@@ -825,6 +1255,17 @@ Object.defineProperty(window, 'historyReplayActive', {
   get() { return historyReplayActive; },
   set(v) { historyReplayActive = !!v; },
 });
+// 🎯T164 hermetic UI oracles (and debug): bridge global-lexical lets so
+// page.evaluate can drive maybeCloseTargetAside / dual-write dismiss.
+Object.defineProperty(window, 'attentionState', {
+  configurable: true,
+  get() { return attentionState; },
+  set(v) { attentionState = v; },
+});
+window.ensureFleetAside = ensureFleetAside;
+window.dismissFleetAside = dismissFleetAside;
+window.maybeCloseTargetAside = maybeCloseTargetAside;
+window.refreshAgents = refreshAgents;
 
 // 🎯T140: client connect spans — join server conn_id + pageCorr + ms.
 let chatConnId = null;
@@ -905,6 +1346,7 @@ transport.onOpen = () => {
   sTxt.textContent = 'connecting';
   sendBtn.disabled = false;
   msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
+  clearOpenStreamHandle(); // 🎯T159: drop open-stream handle with the wiped DOM
   msgHistory = []; histIdx = null; histDraft = ''; editingEl = null;
   oldestIndex = 0; loadingEarlier = false; progressiveHistoryRunning = false;
   teardownHistorySentinel();
@@ -984,8 +1426,18 @@ function handle(m) {
     }
     // Fall through so existing error UI (if any) still runs.
   }
-  if (typ === 'status' && m.text && /overseer is back/i.test(String(m.text))) {
-    setDegraded(false);
+  // 🎯T204 / T94: cockpit ready — clear degraded banner AND working chrome so
+  // plain Enter is send again (not permanent enqueue while workingEl stuck).
+  if (typ === 'status') {
+    const stText = m.text != null ? String(m.text) : '';
+    const ready = /overseer is back/i.test(stText) || m.state === 'idle';
+    if (ready && /overseer is back/i.test(stText)) {
+      setDegraded(false);
+      if (workingEl) setWorking(false);
+    } else if (m.state === 'idle' && workingEl && !/thinking/i.test(stText)) {
+      // Server settled a turn (or forced idle after unstick).
+      setWorking(false);
+    }
   }
 
   // 🎯T143: soft reconnect — drop history firehose; keep control frames.
@@ -1027,8 +1479,14 @@ function handle(m) {
       concurrent: m.concurrent,
       soft: wasSoft,
     });
+    // 🎯T228: wire reopened idle — drain offline-enqueued follow-ups.
+    if (typeof drainSendQueueIfIdle === 'function') {
+      try { drainSendQueueIfIdle(); } catch (_) {}
+    }
     // Soft reconnect: DOM already has transcript — skip full progressive re-hydrate.
+    // 🎯T209: re-subscribe inspect so sealed history + live resume on this socket.
     if (wasSoft) {
+      if (typeof resubscribeAgentInspect === 'function') resubscribeAgentInspect();
       if (!chatConnUiReadyLogged) {
         chatConnUiReadyLogged = true;
         logChatConn('ui_ready', { ms: chatConnMs(), soft: true });
@@ -1060,14 +1518,31 @@ function handle(m) {
         logChatConn('ui_ready', { ms: chatConnMs() });
       }
     }
+    // 🎯T209: after main history_meta, re-bind inspect multiplex on this conn.
+    if (typeof resubscribeAgentInspect === 'function') resubscribeAgentInspect();
     return;
   }
   // During WS replay burst, keep extending idle-end until frames stop.
   if (historyReplayActive) armHistoryReplayIdleEnd();
 
   // 🎯T82: registry file changed — refresh RHS fleet immediately (poll is fallback).
+  // 🎯T198: also re-merge frontier engagement (target_id overlay).
   if (typ === 'agents_changed') {
     refreshAgents();
+    if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
+    return;
+  }
+
+  // 🎯T131: bullseye ledger changed — refresh frontier table (poll is fallback).
+  if (typ === 'frontier_changed') {
+    if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
+    return;
+  }
+
+  // 🎯T209: fleet inspect multiplex on /ws/chat (same wire class as main chat).
+  // Never paint into #messages — RHS pane only (T124 residual).
+  if (typ === 'agent_transcript') {
+    handleAgentTranscriptWire(m);
     return;
   }
 
@@ -1103,6 +1578,9 @@ function handle(m) {
       // Server synthesises a user echo on send; Grok ACP may also
       // publish user_message_chunk for the same prompt. Drop the dupe.
       if (content && msgHistory[msgHistory.length - 1]?.text === content) return;
+      // 🎯T223: do NOT seal open assistant streams on user interleave.
+      // Join identity is stream_id (and legacy openStreamEl until terminal).
+      // Premature seal was the journal/hydrate split of one answer into two.
       closeTurn();
       const uEl = addMsg('user', content, msgTs);
       if (content) msgHistory.push({ text: content, el: uEl });
@@ -1127,24 +1605,40 @@ function handle(m) {
   } else if (typ==='assistant') {
     const content = m.message?.content;
     if (!Array.isArray(content)) return;
-    const hasText = ChatEvents.hasAssistantText(m);
+    // 🎯T161: single ordered walk. Non-text (tool_use) marks a segment edge
+    // for the *following* text only; multi-block text parts are segment edges
+    // between them. Continuous single-block frames bare-concat (tokens).
+    // 🎯T223: stream_id joins fragments into one bubble across interleave.
+    const streamId = (typeof ChatEvents !== 'undefined' && ChatEvents.streamIdOf)
+      ? ChatEvents.streamIdOf(m)
+      : (m.stream_id || m.streamId || '');
+    let emittedText = false;
+    const anyText = ChatEvents.hasAssistantText(m);
+    if (anyText) closeTurn();
     content.forEach(c => {
       if (c.type==='tool_use') {
+        streamSegmentEdge = true;
+        if (streamId && openStreamById[streamId]) {
+          // per-id edge handled inside appendOrAddJevons via opts
+        }
         addTurnItem('tool-use', c.name + (c.input ? ': ' + ToolSummary.summariseInput(c.input) : ''));
+      } else if (c.type==='text' && c.text) {
+        const edge = streamSegmentEdge || emittedText;
+        appendOrAddJevons(c.text, msgTs, { segmentEdge: edge, streamId: streamId });
+        streamSegmentEdge = false;
+        emittedText = true;
       }
     });
-    if (hasText) {
-      closeTurn();
-      ChatEvents.assistantTextBlocks(m).forEach(c => appendOrAddJevons(c.text, msgTs));
-      input.focus();
-    }
+    if (anyText) focusComposer();
     // Only terminal stops clear working (not mid-stream text). Clearing
     // early used to force one bubble per token.
     if (ChatEvents.shouldClearWorking(m)) {
-      sealAssistantStream();
+      sealAssistantStream(streamId);
       setWorking(false);
     }
   } else if (typ==='tool_result' || typ==='result') {
+    // 🎯T161: tool result is a protocol segment boundary for next text.
+    streamSegmentEdge = true;
     const content = m.content || m.message?.content;
     if (Array.isArray(content)) {
       content.forEach(c => {
@@ -1163,7 +1657,9 @@ function handle(m) {
 }
 
 // Skip non-message chrome at the tail of #messages (working indicator,
-// follow-scroll end sentinel, turn markers) when locating the open stream.
+// follow-scroll end sentinel, turn markers) when locating the latest
+// .msg. Not used as the stream-merge key — intervening .msg.status /
+// .msg.worker would break coalesce (🎯T159).
 function lastMessageish() {
   let el = msgs.lastElementChild;
   while (el && !(el.classList && el.classList.contains('msg'))) {
@@ -1172,15 +1668,53 @@ function lastMessageish() {
   return el;
 }
 
+// 🎯T159 / 🎯T223: open-stream handles. Bubble boundary = terminal
+// stop_reason (not user interleave). Join key is stream_id when present;
+// legacy openStreamEl for unlabeled frames. Never rediscover via
+// lastMessageish — tool chrome and worker notes can insert .msg nodes.
+let openStreamEl = null;
+// stream_id → open jevons element (🎯T223).
+const openStreamById = Object.create(null);
+// 🎯T161: next assistant text after tool_use/tool_result is a new segment
+// (structural edge — not content sniffing). Cleared on seal / new bubble.
+let streamSegmentEdge = false;
+
+function clearOpenStreamHandle(streamId) {
+  if (streamId) {
+    const el = openStreamById[streamId];
+    delete openStreamById[streamId];
+    if (openStreamEl === el) openStreamEl = null;
+  } else {
+    openStreamEl = null;
+    for (const k of Object.keys(openStreamById)) delete openStreamById[k];
+  }
+  streamSegmentEdge = false;
+}
+
 // appendOrAddJevons merges streaming assistant chunks into the open
-// jevons bubble. Merge is keyed on _streamRaw (not workingEl): sealing
-// happens only on terminal stop so a mistaken early clear cannot split
-// the turn into one bubble per token.
-function appendOrAddJevons(text, ts) {
-  const target = lastMessageish();
-  if (target && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
-    // 🎯T147: join-time fence repair at segment edge (not bare +=).
-    target._streamRaw = ChatEvents.coalesceAssistantText(target._streamRaw, text);
+// jevons bubble. Merge is keyed on stream_id (🎯T223) or openStreamEl +
+// _streamRaw — not lastMessageish / workingEl. Seal only on terminal stop
+// so tool rounds and mid-stream user lines never split one logical reply.
+// opts.segmentEdge: known protocol segment boundary → joinAssistantSegments;
+// opts.streamId: wire stream_id for join-by-identity.
+// otherwise bare appendAssistantStream (intra-segment tokens).
+function appendOrAddJevons(text, ts, opts) {
+  const segmentEdge = !!(opts && opts.segmentEdge);
+  const streamId = opts && opts.streamId ? String(opts.streamId) : '';
+  let target = null;
+  if (streamId && openStreamById[streamId] &&
+      openStreamById[streamId].isConnected &&
+      typeof openStreamById[streamId]._streamRaw === 'string') {
+    target = openStreamById[streamId];
+  } else if (!streamId && openStreamEl && openStreamEl.isConnected &&
+      typeof openStreamEl._streamRaw === 'string') {
+    target = openStreamEl;
+  }
+  if (target) {
+    // 🎯T161: structural segment join vs bare token append — never sniff text.
+    target._streamRaw = segmentEdge
+      ? ChatEvents.joinAssistantSegments(target._streamRaw, text)
+      : ChatEvents.appendAssistantStream(target._streamRaw, text);
     scheduleJevonsRender(target);   // rAF-debounced: coalesce burst chunks into ONE parse (🎯T57)
     return;
   }
@@ -1189,6 +1723,12 @@ function appendOrAddJevons(text, ts) {
   const el = addMsg('jevons', text, ts, { streamOpen: true });
   // _streamRaw already set in buildMsg when streamOpen; keep assign for clarity.
   el._streamRaw = typeof el._streamRaw === 'string' ? el._streamRaw : text;
+  if (streamId) {
+    el._streamId = streamId;
+    openStreamById[streamId] = el;
+  }
+  openStreamEl = el;
+  streamSegmentEdge = false;
 }
 
 // scheduleJevonsRender coalesces streamed chunks: instead of re-parsing
@@ -1202,6 +1742,10 @@ function scheduleJevonsRender(el) {
     el._layoutText = el._streamRaw;
     el._layoutRole = 'jevons';
     renderBody(el, 'jevons', el._streamRaw);
+    // 🎯T164: live stream only — paintBody no longer auto-closes (history-safe).
+    if (!historyReplayActive && typeof el._streamRaw === 'string') {
+      maybeCloseTargetAside(el._streamRaw);
+    }
     // Streaming text is real progress — reset T94 idle stuck clock.
     if (workingEl) armWorkingWatch();
     // T66: stream may start short then measure tall while still latest —
@@ -1216,10 +1760,28 @@ function scheduleJevonsRender(el) {
   });
 }
 
-// sealAssistantStream closes the open coalesced bubble so the next
+// sealAssistantStream closes an open coalesced bubble so the next
 // turn starts a new one — flushing any pending debounced render first.
-function sealAssistantStream() {
-  const el = lastMessageish();
+// 🎯T159 / 🎯T223: only terminal stop_reason / system call this — never
+// tool_use progress, and never owner user interleave (join by stream_id).
+// streamId: seal that labeled stream only; omit to seal the legacy handle
+// (and all labeled opens on hard wipe paths).
+function sealAssistantStream(streamId) {
+  let el = null;
+  if (streamId && openStreamById[streamId] &&
+      typeof openStreamById[streamId]._streamRaw === 'string') {
+    el = openStreamById[streamId];
+  } else if (!streamId && openStreamEl && typeof openStreamEl._streamRaw === 'string') {
+    el = openStreamEl;
+  }
+  // Fallback: scan for a still-open stream if the handle was lost (e.g.
+  // soft reconnect residual) — still never invent continuity without _streamRaw.
+  if (!el && !streamId) {
+    const tail = lastMessageish();
+    if (tail && tail.classList.contains('jevons') && typeof tail._streamRaw === 'string') {
+      el = tail;
+    }
+  }
   if (el && typeof el._streamRaw === 'string') {
     if (el._renderRaf) { cancelAnimationFrame(el._renderRaf); el._renderRaf = 0; }
     const raw = el._streamRaw;
@@ -1236,9 +1798,13 @@ function sealAssistantStream() {
     el._expanded = true;
     el._autoExpanded = true;
     renderBody(el, 'jevons', raw);
+    // 🎯T164: terminal seal of a live turn — run filed-marker close once more
+    // (stream path may have already closed; idempotent when no open file-target).
+    if (!historyReplayActive) maybeCloseTargetAside(raw);
     unwatchStreamBubble(el);
     scheduleLatestExpansion();
   }
+  clearOpenStreamHandle(streamId || undefined);
   // Final layout (markdown / mermaid / highlight) often grows after the
   // last stream pin — re-follow so the user never needs a manual nudge.
   if (isTracking()) {
@@ -1384,54 +1950,57 @@ function addMsg(role, text, when, opts) {
   return d;
 }
 
-// Bounded rendering (🎯T57): tall content gets a PREVIEW + Show more;
-// short content renders in full with no toggle. "Tall" is measured after
-// layout: full rendered height must be more than COLLAPSE_HEIGHT_RATIO
-// times the collapsed-preview height (not char/line proxies — tables
-// and markdown can look huge with few characters).
+// Bounded rendering (🎯T106): tall content is full-rendered HTML clipped
+// to COLLAPSED_MAX_HEIGHT (CSS max-height + overflow:hidden). Collapse
+// never truncates source or re-marked for a preview — tables/lists/code
+// stay intact in the DOM. "Tall" = full rendered height exceeds the fixed
+// clip box (not char/line proxies). Pre-T106 used 1.5× against a short
+// preview height (preview-vs-full); that ratio is obsolete under a fixed
+// max-height clip — requiring full > 1.5×14rem left medium-tall messages
+// (14–21rem) without tab or .msg-clipped.
 // T66: the latest user request and latest assistant reply stay expanded
 // even when tall; T77 collapses prior auto-expanded messages when they
 // cease to be latest (unless the user toggled manually).
-// Request (user) previews use fewer lines — context to glance at.
-const PREVIEW_LINES = 14;
-const USER_PREVIEW_LINES = 7;
-// Collapse when full height > collapsed height × this ratio (50% taller).
-const COLLAPSE_HEIGHT_RATIO = 1.5;
-// Cap for preview text when building the collapsed sample (not the
-// tallness gate — that is pure rendered height).
-const PREVIEW_CHAR_CAP = 4000;
+// Single named clip height — keep in sync with :root --collapsed-max-height.
+const COLLAPSED_MAX_HEIGHT = '14rem';
+// Subpixel slack so fullH == collapsedH (or 1–2px over from layout) is not
+// spuriously tall; content must clearly exceed the clip box.
+const COLLAPSE_HEIGHT_EPSILON_PX = 6;
 
-function previewOf(text, maxLines) {
-  const lines = text.split('\n');
-  let out = lines.length > maxLines ? lines.slice(0, maxLines).join('\n') : text;
-  if (out.length > PREVIEW_CHAR_CAP) out = out.slice(0, PREVIEW_CHAR_CAP);
-  return out;
+function collapsedMaxHeightPx() {
+  const m = /^([\d.]+)rem$/i.exec(COLLAPSED_MAX_HEIGHT);
+  if (m) {
+    const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    return parseFloat(m[1]) * root;
+  }
+  const px = /^([\d.]+)px$/i.exec(COLLAPSED_MAX_HEIGHT);
+  return px ? parseFloat(px[1]) : 224;
 }
 
 // Measure whether full render is tall enough to warrant collapse.
-// Full height is measured on an off-DOM-width probe so we never paint
-// preview into the live body as an intermediate step (that thrash was the
-// root of stick-to-bottom freezing mid-stream / mid-seal — 🎯T30.2).
-// Returns { tall, fullH, collapsedH, preview }. Does NOT leave d painted.
+// Full height is measured on an off-DOM-width probe so we never thrash the
+// live body as an intermediate step (stick-to-bottom — 🎯T30.2). Collapsed
+// height is the named clip box (COLLAPSED_MAX_HEIGHT), not a re-parsed
+// preview. Returns { tall, fullH, collapsedH }. Does NOT leave d painted.
 function measureCollapse(d, role, text) {
-  const maxLines = (role === 'user') ? USER_PREVIEW_LINES : PREVIEW_LINES;
-  const preview = previewOf(text, maxLines);
-  if (preview === text) {
-    return { tall: false, fullH: 0, collapsedH: 0, preview };
-  }
-  const width = (d._body && d._body.clientWidth) || d.clientWidth || 0;
+  const collapsedH = collapsedMaxHeightPx();
+  // Use the bubble's outer width (not body clientWidth): the probe is a .msg
+  // with the same padding, so matching outer width keeps content-box width
+  // (and wrap) aligned with the live body. Body-only width under-pads and
+  // can double-count wrapped lines.
+  const width = d.clientWidth || (d._body && d._body.clientWidth) || 0;
   // Probe shares .msg / role classes so markdown CSS applies; absolute so
   // it cannot change #messages.scrollHeight while we measure.
   const probe = document.createElement('div');
-  probe.className = d.className;
+  probe.className = (d.className || ('msg ' + role)).replace(/\bmsg-clipped\b/g, '').trim();
   probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:0;top:0;width:' +
-    (width > 0 ? width + 'px' : '100%') + ';max-width:85%;';
+    (width > 0 ? width + 'px' : '100%') + ';max-width:85%;box-sizing:border-box;';
   const probeBody = document.createElement('div');
   probeBody.className = 'msg-body';
   probe.appendChild(probeBody);
   // Attach under #messages so CSS variables / inheritance match live bubbles.
   msgs.appendChild(probe);
-  // Inline the paint for probe (avoid mutating d._body).
+  // Full render only — never a truncated preview path.
   if (role === 'jevons') {
     probeBody.innerHTML = parseAssistantMarkdown(text);
   } else if (role === 'user') {
@@ -1440,21 +2009,15 @@ function measureCollapse(d, role, text) {
     probeBody.textContent = text;
   }
   const fullH = probeBody.offsetHeight || 0;
-  if (role === 'jevons') {
-    probeBody.innerHTML = parseAssistantMarkdown(preview);
-  } else if (role === 'user') {
-    probeBody.innerHTML = renderUserText(preview);
-  } else {
-    probeBody.textContent = preview;
-  }
-  const collapsedH = probeBody.offsetHeight || 0;
   probe.remove();
-  // Avoid divide-by-zero / zero-layout (hidden tab): treat as not tall.
+  // Avoid zero-layout (hidden tab): treat as not tall.
   if (collapsedH <= 0 || fullH <= 0) {
-    return { tall: false, fullH, collapsedH, preview };
+    return { tall: false, fullH, collapsedH };
   }
-  const tall = fullH > collapsedH * COLLAPSE_HEIGHT_RATIO;
-  return { tall, fullH, collapsedH, preview };
+  // Tall when content exceeds the clip box (+epsilon). Do not use 1.5× —
+  // that was for preview-vs-full height under the old truncated model.
+  const tall = fullH > collapsedH + COLLAPSE_HEIGHT_EPSILON_PX;
+  return { tall, fullH, collapsedH };
 }
 // Mermaid diagrams (🎯T59): assistant markdown may carry ```mermaid
 // fences, which marked emits as <pre><code class="language-mermaid">. We
@@ -1501,6 +2064,8 @@ function attachMermaidToolbar(wrap, src) {
   buttons.forEach(spec => {
     const btn = document.createElement('button');
     btn.type = 'button';
+    // 🎯T153: bubble mermaid chrome is pointer-only (not a Tab stop).
+    btn.tabIndex = -1;
     btn.dataset.mermaidAction = spec.action;
     btn.textContent = spec.label;
     if (spec.title) btn.title = spec.title;
@@ -1532,26 +2097,68 @@ function showMermaidPasteArea(show) {
   if (show) wrap.classList.add('open');
   else wrap.classList.remove('open');
 }
-function showMermaidPanelShell() {
+function showMermaidPanelShell(opts) {
   const panel = document.getElementById('mermaid-viz-panel');
   if (!panel) return null;
+  const o = opts || {};
   panel.hidden = false;
   panel.classList.add('open');
+  // 🎯T185: large overlay for Frontier Graph; default chrome stays compact.
+  if (o.large) panel.classList.add('mvp-large');
+  else if (o.large === false) panel.classList.remove('mvp-large');
   return panel;
 }
 function renderMermaidPanelEmpty() {
   const MA = window.MermaidActions;
   const body = document.getElementById('mvp-body');
   if (!body) return;
+  body.classList.remove('mvp-pack');
   body.innerHTML = (MA && MA.emptyStateHtml) ? MA.emptyStateHtml() : '<p>No graph loaded.</p>';
   _mermaidPanelState = null;
   setMermaidPanelTitle('Graph viz');
+}
+/**
+ * 🎯T196: Show HTTP/network failure in panel body + status with recovery hint.
+ * Never uses the generic empty paste shell (that implies "no content yet").
+ */
+function renderMermaidPanelFetchError(err, defaults) {
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  const d = defaults || {};
+  showMermaidPasteArea(false);
+  if (body) body.classList.remove('mvp-pack');
+  if (MA && typeof MA.productFetchFailureFromError === 'function') {
+    const view = MA.productFetchFailureFromError(err, d);
+    if (body) body.innerHTML = view.bodyHtml;
+    _mermaidPanelState = null;
+    setMermaidPanelTitle(view.title);
+    setMermaidPanelStatus(view.status);
+    return view;
+  }
+  const msg = String(err && err.message ? err.message : err || 'unknown error');
+  const statusCode = err && typeof err.httpStatus === 'number' ? err.httpStatus : null;
+  const code = statusCode != null ? ('HTTP ' + statusCode) : '';
+  const status = (d.resource || 'Request') + ' failed: ' + (code || msg) + ' · rebuild / restart-daily';
+  if (body) {
+    body.innerHTML =
+      '<div class="mvp-error" data-mvp-fetch-error="1">' +
+      '<p class="mvp-error-title">' + (d.resource || 'Request') + ' could not load</p>' +
+      '<p class="mvp-error-body"><strong>' + (code || 'Error') + '</strong>' +
+      (msg && msg !== code ? (' — ' + msg) : '') + '</p>' +
+      '<p class="mvp-error-hint">Rebuild jevonsd if needed, then run scripts/restart-daily-jevonsd.sh and hard-reload the UI.</p>' +
+      '</div>';
+  }
+  _mermaidPanelState = null;
+  setMermaidPanelTitle(d.resource || 'Request');
+  setMermaidPanelStatus(status);
+  return { status: status, title: d.resource || 'Request' };
 }
 function applyMermaidPanelContent(opts) {
   const o = opts || {};
   const MA = window.MermaidActions;
   const body = document.getElementById('mvp-body');
   if (!body) return;
+  body.classList.remove('mvp-pack');
   const src = MA && MA.stripMermaidFence ? MA.stripMermaidFence(o.src) : String(o.src || '');
   const svgMarkup = String(o.svgMarkup || '');
   const title = String(o.title || 'Graph').trim() || 'Graph';
@@ -1595,7 +2202,7 @@ function pinMermaidPanelState(extraStatus) {
  */
 function openMermaidPanel(src, svgMarkup, opts) {
   const o = opts || {};
-  const panel = showMermaidPanelShell();
+  const panel = showMermaidPanelShell({ large: !!o.large });
   if (!panel) return;
   const hasContent = !!(src || svgMarkup);
   if (!hasContent) {
@@ -1616,6 +2223,7 @@ function closeMermaidPanel() {
   const panel = document.getElementById('mermaid-viz-panel');
   if (!panel) return;
   panel.classList.remove('open');
+  panel.classList.remove('mvp-large');
   panel.hidden = true;
   showMermaidPasteArea(false);
 }
@@ -1625,7 +2233,7 @@ function openVizFromChrome() {
   const plan = MA && MA.openFromChromePlan
     ? MA.openFromChromePlan(mermaidStorage())
     : { mode: 'empty' };
-  showMermaidPanelShell();
+  showMermaidPanelShell({ large: false });
   if (plan.mode === 'pinned' && plan.pin) {
     applyMermaidPanelContent({
       src: plan.pin.src,
@@ -1634,7 +2242,7 @@ function openVizFromChrome() {
     });
     // Prefer cached SVG; if only source, re-render via mermaid when available.
     if (!plan.pin.svgMarkup && plan.pin.src) {
-      renderMermaidSourceInPanel(plan.pin.src, { title: plan.pin.title || 'Last graph', pin: false, status: 'Loaded last · rendering…' });
+      renderMermaidSourceInPanel(plan.pin.src, { title: plan.pin.title || 'Last graph', pin: false, status: 'Loaded last · rendering…', large: false });
       return;
     }
     setMermaidPanelStatus('Loaded last pinned graph');
@@ -1642,6 +2250,190 @@ function openVizFromChrome() {
   }
   renderMermaidPanelEmpty();
   setMermaidPanelStatus('Empty — paste bullseye Mermaid export or open from chat');
+}
+/**
+ * 🎯T185: Frontier Graph — open ~90% panel with entire unachieved dependency graph.
+ * Fetches GET /api/frontier/graph (ledger-built Mermaid); renders into #mermaid-viz-panel.
+ * 🎯T190: multi-diagram pack (one Mermaid per connected component + orphans block)
+ * into wrap-grid blocks — not one mega LR strip / Mermaid-native TD alone.
+ * 🎯T196: 404/5xx/network → actionable error body (HTTP + restart-daily), not empty paste shell.
+ */
+function openFrontierGraph(opts) {
+  const o = opts || {};
+  const api = (typeof FrontierTable !== 'undefined' && FrontierTable.GRAPH_API_PATH)
+    ? FrontierTable.GRAPH_API_PATH
+    : '/api/frontier/graph';
+  showMermaidPanelShell({ large: true });
+  showMermaidPasteArea(false);
+  setMermaidPanelTitle('Unachieved graph');
+  setMermaidPanelStatus(o.status || 'Loading unachieved dependency graph…');
+  const body = document.getElementById('mvp-body');
+  if (body) {
+    body.classList.remove('mvp-pack');
+    body.innerHTML = '<p class="mvp-empty-body" style="padding:12px">Loading…</p>';
+  }
+  return fetch(api)
+    .then(function (r) {
+      if (!r.ok) {
+        return r.json().then(function (j) {
+          const err = new Error((j && j.error) || ('HTTP ' + r.status));
+          err.httpStatus = r.status;
+          err.kind = 'http';
+          throw err;
+        }, function () {
+          const err = new Error('HTTP ' + r.status);
+          err.httpStatus = r.status;
+          err.kind = 'http';
+          throw err;
+        });
+      }
+      return r.json();
+    })
+    .then(function (payload) {
+      const model = (typeof FrontierTable !== 'undefined' && FrontierTable.normalizeGraphPayload)
+        ? FrontierTable.normalizeGraphPayload(payload)
+        : {
+            available: !!(payload && payload.available),
+            mermaid: (payload && payload.mermaid) || '',
+            diagrams: (payload && payload.diagrams) || [],
+            pack: (payload && payload.pack) || 'wrap-grid',
+            error: (payload && payload.error) || '',
+            nodeCount: (payload && payload.node_count) || 0,
+            edgeCount: (payload && payload.edge_count) || 0,
+          };
+      const hasDiagrams = model.diagrams && model.diagrams.length > 0;
+      if (!model.available || (!model.mermaid && !hasDiagrams)) {
+        // Empty ledger / no graph — not a product fetch failure (distinct from 🎯T196).
+        renderMermaidPanelEmpty();
+        setMermaidPanelTitle('Unachieved graph');
+        setMermaidPanelStatus(model.error || 'No unachieved graph available');
+        return model;
+      }
+      const nBlocks = hasDiagrams ? model.diagrams.length : 1;
+      const meta = (model.nodeCount || model.edgeCount)
+        ? (' · ' + (model.nodeCount || 0) + ' nodes · ' + (model.edgeCount || 0) + ' edges · ' +
+           nBlocks + ' diagram' + (nBlocks === 1 ? '' : 's'))
+        : '';
+      if (hasDiagrams) {
+        return renderMermaidDiagramPackInPanel(model.diagrams, {
+          title: 'Unachieved graph',
+          pinSrc: model.mermaid,
+          pin: o.pin !== false,
+          large: true,
+          pack: model.pack || 'wrap-grid',
+          status: 'Unachieved dependency graph' + meta,
+        }).then(function () { return model; });
+      }
+      return renderMermaidSourceInPanel(model.mermaid, {
+        title: 'Unachieved graph',
+        pin: o.pin !== false,
+        large: true,
+        status: 'Unachieved dependency graph' + meta,
+      }).then(function () { return model; });
+    })
+    .catch(function (err) {
+      showMermaidPanelShell({ large: true });
+      // 🎯T196: never the empty paste shell here — that looks "unimplemented".
+      renderMermaidPanelFetchError(err, { resource: 'Unachieved graph' });
+      return null;
+    });
+}
+/**
+ * 🎯T190: render each component Mermaid as its own block in a wrap-grid pack.
+ * pinSrc is the joined multi-diagram source for pin/copy; each block renders alone.
+ */
+function renderMermaidDiagramPackInPanel(diagrams, opts) {
+  const o = opts || {};
+  const list = Array.isArray(diagrams) ? diagrams : [];
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  if (!body) return Promise.resolve(null);
+  showMermaidPanelShell({ large: o.large !== false });
+  const pinSrc = o.pinSrc != null ? String(o.pinSrc) : list.map(function (d) {
+    return d && d.mermaid ? d.mermaid : '';
+  }).filter(Boolean).join('\n');
+  _mermaidPanelState = {
+    src: pinSrc,
+    svgMarkup: '',
+    title: o.title || 'Unachieved graph',
+    pack: o.pack || 'wrap-grid',
+    diagrams: list,
+  };
+  body.classList.add('mvp-pack');
+  body.innerHTML = '';
+  const m = ensureMermaid();
+  if (!m) {
+    // Fallback: show sources as text blocks.
+    list.forEach(function (d, i) {
+      const block = document.createElement('div');
+      block.className = 'mvp-pack-block';
+      block.setAttribute('data-kind', (d && d.kind) || 'component');
+      block.setAttribute('data-diagram-id', (d && d.id) || ('d' + i));
+      const title = document.createElement('p');
+      title.className = 'mvp-pack-title';
+      title.textContent = (d && d.title) || ('Diagram ' + (i + 1));
+      block.appendChild(title);
+      const pre = document.createElement('pre');
+      pre.className = 'mvp-source-fallback';
+      pre.style.cssText = 'text-align:left;font-size:11px;white-space:pre-wrap;margin:0';
+      pre.textContent = (d && d.mermaid) || '';
+      block.appendChild(pre);
+      body.appendChild(block);
+    });
+    setMermaidPanelTitle(o.title || 'Unachieved graph');
+    setMermaidPanelStatus('Mermaid not loaded — sources shown as text');
+    if (o.pin !== false) pinMermaidPanelState('Source pack pinned (render unavailable)');
+    return Promise.resolve(null);
+  }
+  setMermaidPanelTitle(o.title || 'Unachieved graph');
+  setMermaidPanelStatus(o.status || 'Rendering…');
+  const renders = list.map(function (d, i) {
+    const src = MA && MA.stripMermaidFence
+      ? MA.stripMermaidFence(d && d.mermaid)
+      : String((d && d.mermaid) || '').trim();
+    const block = document.createElement('div');
+    block.className = 'mvp-pack-block';
+    block.setAttribute('data-kind', (d && d.kind) || 'component');
+    block.setAttribute('data-diagram-id', (d && d.id) || ('d' + i));
+    const title = document.createElement('p');
+    title.className = 'mvp-pack-title';
+    title.textContent = (d && d.title) || ('Diagram ' + (i + 1));
+    block.appendChild(title);
+    const host = document.createElement('div');
+    host.className = 'mvp-pack-host';
+    block.appendChild(host);
+    body.appendChild(block);
+    if (!src) {
+      host.textContent = '(empty)';
+      return Promise.resolve(null);
+    }
+    const id = 'mvp-pack-mmd-' + (++mermaidSeq) + '-' + i;
+    return Promise.resolve()
+      .then(function () { return m.render(id, src); })
+      .then(function (result) {
+        host.innerHTML = result && result.svg ? result.svg : '';
+        return result && result.svg;
+      })
+      .catch(function (err) {
+        host.innerHTML = '<pre class="mvp-source-fallback" style="text-align:left;font-size:11px;white-space:pre-wrap">' +
+          (MA && MA.escapeHtml ? MA.escapeHtml(src) : src) + '</pre>';
+        host.title = 'Render failed: ' + (err && err.message ? err.message : 'invalid Mermaid');
+        return null;
+      });
+  });
+  return Promise.all(renders).then(function (svgs) {
+    const joinedSvg = svgs.filter(Boolean).join('\n');
+    _mermaidPanelState = {
+      src: pinSrc,
+      svgMarkup: joinedSvg,
+      title: o.title || 'Unachieved graph',
+      pack: o.pack || 'wrap-grid',
+      diagrams: list,
+    };
+    if (o.pin !== false) pinMermaidPanelState(o.status || 'Rendered · pinned as last');
+    else setMermaidPanelStatus(o.status || 'Rendered');
+    return svgs;
+  });
 }
 function loadLastMermaidGraph() {
   const MA = window.MermaidActions;
@@ -1673,7 +2465,7 @@ function renderMermaidSourceInPanel(rawSrc, opts) {
     setMermaidPanelStatus('Paste Mermaid source first');
     return Promise.resolve(null);
   }
-  showMermaidPanelShell();
+  showMermaidPanelShell({ large: o.large });
   applyMermaidPanelContent({ src: src, svgMarkup: '', title: o.title || 'Pasted graph' });
   const m = ensureMermaid();
   if (!m) {
@@ -1917,6 +2709,8 @@ window.openMermaidPanel = openMermaidPanel;
 window.closeMermaidPanel = closeMermaidPanel;
 window.openMermaidWindow = openMermaidWindow;
 window.openVizFromChrome = openVizFromChrome;
+window.openFrontierGraph = openFrontierGraph;
+window.renderMermaidDiagramPackInPanel = renderMermaidDiagramPackInPanel;
 window.loadLastMermaidGraph = loadLastMermaidGraph;
 window.renderMermaidSourceInPanel = renderMermaidSourceInPanel;
 window.pinMermaidPanelState = pinMermaidPanelState;
@@ -1944,13 +2738,24 @@ function renderMermaidIn(container) {
     });
   });
 }
-// 🎯T145: normalize smushed ``` fences before marked so prose:```lang
-// never fuses the opening fence onto the preceding sentence.
+// 🎯T145/T146: normalize smushed ``` fences before marked so prose:```lang\n
+// never fuses a real opening fence onto the preceding sentence; mid-prose
+// ``` examples (no following newline) stay prose and do not open blocks.
+// 🎯T151: every rendered <a href> gets target=_blank + rel=noopener noreferrer.
 function parseAssistantMarkdown(text) {
   const raw = (typeof MarkdownNormalize !== 'undefined')
     ? MarkdownNormalize.ensureFenceNewlines(text)
     : text;
-  return marked.parse(raw == null ? '' : raw);
+  let html = marked.parse(raw == null ? '' : raw);
+  if (typeof LinkSafety !== 'undefined' && LinkSafety.ensureHtmlAnchors) {
+    html = LinkSafety.ensureHtmlAnchors(html);
+  }
+  return html;
+}
+function decorateBodyLinks(container) {
+  if (typeof LinkSafety !== 'undefined' && LinkSafety.decorateContainer) {
+    LinkSafety.decorateContainer(container);
+  }
 }
 // 🎯T150: progressive stream paint via thetarnav/streaming-markdown (smd).
 // Mid-stream: delta parser_write into per-bubble session (closed **…** live).
@@ -1977,6 +2782,7 @@ function paintStreamBody(d, t) {
   if (!canStream) {
     // Interim fallback only: marked every frame (never plain textContent).
     d._body.innerHTML = parseAssistantMarkdown(t);
+    decorateBodyLinks(d._body);
     return;
   }
   if (!d._smdSession) {
@@ -1985,9 +2791,11 @@ function paintStreamBody(d, t) {
   }
   if (!d._smdSession) {
     d._body.innerHTML = parseAssistantMarkdown(t);
+    decorateBodyLinks(d._body);
     return;
   }
   d._smdSession.writeFull(t, streamNormalize);
+  decorateBodyLinks(d._body);
 }
 function paintBody(d, role, t) {
   if (role === 'jevons') {
@@ -1996,42 +2804,72 @@ function paintBody(d, role, t) {
     } else {
       destroyStreamSession(d);
       d._body.innerHTML = parseAssistantMarkdown(t);
+      decorateBodyLinks(d._body); // 🎯T151 belt-and-suspenders
       renderMermaidIn(d._body);   // sealed content only
       highlightCodeIn(d._body);   // 🎯T74
     }
-    // 🎯T95: auto-close target: filing aside when overseer confirms 🎯 id.
-    maybeCloseTargetAside(t);
+    // 🎯T164: do NOT auto-close here — paintBody runs for history replay and
+    // lazy rematerialize. Live stream/seal calls maybeCloseTargetAside only.
   } else if (role === 'user') {
     // 🎯T75: quote notation as blockquotes; 🎯T76: [image: id] → <img>.
     d._body.innerHTML = renderUserText(t);
+    decorateBodyLinks(d._body);
   } else {
     d._body.textContent = t;
   }
 }
+// 🎯T95/T152/T164: on live __TARGET_FILED__:Tn, close local file-target chrome
+// and DELETE dual-written purpose=aside fleet row(s). Live path only — history
+// paint must not steal a new open filing aside (live repro att-mscvtpdo-rel53v).
 function maybeCloseTargetAside(text) {
+  // History replay / soft-reconnect firehose: never auto-close from past markers.
+  if (typeof historyReplayActive !== 'undefined' && historyReplayActive) return;
   if (typeof AttentionThreads === 'undefined' || !attentionState) return;
-  const id = AttentionThreads.detectTargetFiled(text);
-  if (!id) return;
-  const closedId = (AttentionThreads.stack(attentionState) || []).find(function (th) {
-    return th.purpose === 'file-target' && th.status === 'open';
-  });
+  const filed = AttentionThreads.detectTargetFiled(text);
+  if (!filed) return;
+  // 🎯T153: auto-close returns focus to main composer.
+  focusComposer();
+  // Resolve dual-write ids before close (open + any file-target still in fleet).
+  const asideIds = (typeof AttentionThreads.resolveTargetAsideIdsToDismiss === 'function')
+    ? AttentionThreads.resolveTargetAsideIdsToDismiss(
+        attentionState,
+        typeof lastFleetAgents !== 'undefined' ? lastFleetAgents : [],
+        typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+      )
+    : (function () {
+        const openTh = (AttentionThreads.stack(attentionState) || []).find(function (th) {
+          return th.purpose === 'file-target' && th.status === 'open';
+        });
+        return openTh && openTh.id ? [openTh.id] : [];
+      })();
+  const asideId = asideIds.length ? asideIds[0] : null;
   attentionState = AttentionThreads.closeTargetAside(attentionState);
   if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
     jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision('dismiss', {
-      threadId: closedId && closedId.id,
-      draft: id, // filed target id (short)
+      threadId: asideId,
+      draft: filed, // filed target id (short)
       corr: pageCorr,
     }));
   }
   persistAttention();
   if (typeof renderAttention === 'function') renderAttention();
+  // 🎯T152/T164: deregister every matched dual-written fleet aside (not stop-only).
+  if (typeof dismissFleetAside === 'function') {
+    for (let i = 0; i < asideIds.length; i++) {
+      dismissFleetAside(asideIds[i]);
+    }
+  }
 }
 // User bubbles: preserve plain text, promote lines of `> quote` to <blockquote>,
-// and render 🎯T76 [image: <id>] markers as inline images.
+// and render 🎯T76/T224 [image: <id>] markers as server-served thumbnails.
+// Full-res residual stays at /api/images/{id}; browser hydrate uses /thumb only.
 function renderUserText(t) {
   const s = String(t == null ? '' : t);
   if (/\[image:\s*[a-f0-9]+\]/i.test(s)) return renderUserTextWithImages(s);
   return renderUserTextQuotes(s);
+}
+function imageThumbSrc(id) {
+  return '/api/images/' + id + '/thumb';
 }
 function renderUserTextWithImages(s) {
   const re = /\[image:\s*([a-f0-9]+)\]/gi;
@@ -2041,7 +2879,8 @@ function renderUserTextWithImages(s) {
   while ((m = re.exec(s)) !== null) {
     html += renderUserTextQuotes(s.slice(last, m.index));
     const id = m[1].toLowerCase();
-    html += '<img class="chat-img" src="/api/images/' + escHtml(id) + '" alt="pasted image ' + escHtml(id) + '" loading="lazy">';
+    html += '<img class="chat-img" src="' + escHtml(imageThumbSrc(id)) +
+      '" alt="pasted image ' + escHtml(id) + '" loading="lazy">';
     last = m.index + m[0].length;
   }
   html += renderUserTextQuotes(s.slice(last));
@@ -2082,77 +2921,120 @@ function highlightCodeIn(container) {
     try { hljs.highlightElement(block); } catch (_) { /* unknown lang → leave plain */ }
   });
 }
+function clearClipChrome(d) {
+  if (!d) return;
+  d.classList.remove('msg-clipped');
+  if (d._clipFade) { d._clipFade.remove(); d._clipFade = null; }
+  if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
+}
+
+// 🎯T106: clip state only — full body HTML is never swapped for a preview.
+function applyClipState(d, clipped) {
+  if (!d || !d._body) return;
+  if (clipped) {
+    d.classList.add('msg-clipped');
+    if (!d._clipFade) {
+      const fade = document.createElement('div');
+      fade.className = 'msg-clip-fade';
+      fade.setAttribute('aria-hidden', 'true');
+      d._body.after(fade);
+      d._clipFade = fade;
+    } else if (d._clipFade.parentNode !== d) {
+      d._body.after(d._clipFade);
+    }
+  } else {
+    d.classList.remove('msg-clipped');
+    if (d._clipFade) { d._clipFade.remove(); d._clipFade = null; }
+  }
+}
+
+function updateExpandTab(d) {
+  if (!d || !d._expandBtn) return;
+  const expanded = !!d._expanded;
+  d._expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  d._expandBtn.setAttribute('aria-label', expanded ? 'Collapse' : 'Expand');
+  d._expandBtn.title = expanded ? 'Collapse' : 'Expand';
+  // Inside-edge pocket tab: down when collapsed (reveal more), up when expanded.
+  d._expandBtn.innerHTML = '<span class="chev" aria-hidden="true">' +
+    (expanded ? '\u25B4' : '\u25BE') + '</span>';
+}
+
 function renderBody(d, role, text) {
   d._layoutRole = role;
   d._layoutText = text;
   d._fullRole = role;
-  d._previewLines = (role === 'user') ? USER_PREVIEW_LINES : PREVIEW_LINES;
-  // Live stream (🎯T30.2): always paint full text once. No collapse measure
-  // mid-stream — keeps scrollHeight monotonic while tokens arrive.
+  // Live stream (🎯T30.2 / T150): always paint full progressive body.
+  // No collapse measure mid-stream — keeps scrollHeight monotonic.
   if (typeof d._streamRaw === 'string') {
     paintBody(d, role, text);
-    if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
+    clearClipChrome(d);
     d._fullText = null;
     d._expanded = true;
     d._autoExpanded = true;
     watchStreamBubble(d);
     return;
   }
-  // Expanded (latest / user toggle): paint full once. Measure via probe only
-  // so we know whether to offer "Show less" — never intermediate preview.
-  if (d._expanded) {
-    paintBody(d, role, text);
-    const m = measureCollapse(d, role, text);
-    if (!m.tall) {
-      if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
-      d._fullText = null;
-      return;
-    }
-    d._fullText = text;
-    d._previewCache = m.preview;
-    ensureExpandToggle(d);
-    return;
-  }
+  // Always paint FULL content (🎯T106). Clip is CSS-only when collapsed.
+  paintBody(d, role, text);
   const m = measureCollapse(d, role, text);
   if (!m.tall) {
-    paintBody(d, role, text);
-    if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
+    // Non-tall: never tab, never fade (pocket chrome is tall-only).
+    clearClipChrome(d);
     d._fullText = null;
     return;
   }
   d._fullText = text;
-  d._previewCache = m.preview;
-  // Collapsed non-latest: single paint of preview (probe already measured).
-  paintBody(d, role, m.preview);
+  applyClipState(d, !d._expanded);
   ensureExpandToggle(d);
 }
 function ensureExpandToggle(d) {
+  // Guard: tab only when measure marked this bubble tall (_fullText set).
+  if (!d || d._fullText == null) {
+    if (d && d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
+    return;
+  }
   if (!d._expandBtn) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'msg-expand';
+    btn.className = 'msg-expand-tab';
+    // 🎯T153: pointer-only pocket tab — not a sequential Tab stop.
+    btn.tabIndex = -1;
+    // Prevent mousedown from parking focus on the tab (composer-first).
+    btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
     btn.addEventListener('click', () => {
       d._expanded = !d._expanded;
       d._userToggled = true;   // manual choice wins over auto-expand-latest
-      const prev = d._previewCache || previewOf(d._fullText, d._previewLines);
-      paintBody(d, d._fullRole, d._expanded ? d._fullText : prev);
-      d._expandBtn.textContent = d._expanded ? 'Show less ▴' : 'Show more ▾';
+      // Clip toggle only — never re-parse a truncated preview (🎯T106).
+      applyClipState(d, !d._expanded);
+      updateExpandTab(d);
       if (d._expanded) scrollDownThrottled();
+      scheduleVirtualize();
+      // 🎯T153: return focus to main composer after expand/collapse.
+      focusComposer();
     });
-    d._body.after(btn);
+    // Absolute pocket tab; DOM after body/fade keeps a11y order sensible.
+    if (d._clipFade) d._clipFade.after(btn);
+    else if (d._body) d._body.after(btn);
+    else d.appendChild(btn);
     d._expandBtn = btn;
+  } else if (d._clipFade && d._expandBtn.previousSibling !== d._clipFade) {
+    d._clipFade.after(d._expandBtn);
+  } else if (!d._clipFade && d._body && d._expandBtn.previousSibling !== d._body) {
+    d._body.after(d._expandBtn);
   }
-  d._expandBtn.textContent = d._expanded ? 'Show less ▴' : 'Show more ▾';
+  // Keep pointer-only even if an older tab instance is reused.
+  if (d._expandBtn) d._expandBtn.tabIndex = -1;
+  updateExpandTab(d);
 }
 
 // The newest message renders expanded by default; the previously
-// auto-expanded one reverts to its collapsed preview (unless the user
+// auto-expanded one reverts to its clipped full body (unless the user
 // toggled it manually). Debounced so a burst replay only expands the
-// final message once — the rest stay cheap previews (owner req).
+// final message once — prior tall messages stay clipped (owner req).
 // T66: latest request AND latest assistant stay expanded when tall,
 // including when a stream starts short and later measures tall.
 // T77: when a tall message of either role ceases to be latest, the
-// auto-expand reverts to the bounded preview unless _userToggled.
+// auto-expand reverts to the clipped full body unless _userToggled.
 let latestEl = null;
 let latestRaf = 0;
 function lastMsgEl() { return lastMessageish(); }
@@ -2254,6 +3136,11 @@ async function progressiveLoadRemainingHistory() {
     }
   } finally {
     progressiveHistoryRunning = false;
+    // 🎯T227: progressive hydrate paints user bubbles without msgHistory push.
+    // Resync so empty Alt+Enter / history-nav see the full painted transcript.
+    if (typeof rebuildMsgHistoryFromDomIfNeeded === 'function') {
+      rebuildMsgHistoryFromDomIfNeeded();
+    }
     // 🎯T120.4: hydrate finished (or stalled at residual oldestIndex).
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision(
@@ -2384,7 +3271,8 @@ function renderFrames(lines, opts) {
       }
     } else if (m.type === 'assistant') {
       let txt = '';
-      // 🎯T147: joinAssistantTexts (not bare join('')) + coalesce at history pending edge.
+      // 🎯T161: multi-block = segment list; consecutive assistant frames in
+      // this fallback are treated as segment edges (sealed history / multi-part).
       try {
         txt = ChatEvents.joinAssistantTexts(
           ChatEvents.assistantTextBlocks(m).map(b => b.text),
@@ -2392,7 +3280,7 @@ function renderFrames(lines, opts) {
       } catch { txt = ''; }
       if (txt) {
         if (pending) {
-          pending.raw = ChatEvents.coalesceAssistantText(pending.raw, txt);
+          pending.raw = ChatEvents.joinAssistantSegments(pending.raw, txt);
           pending.el._layoutText = pending.raw;
           if (!lazy) paintBody(pending.el, 'jevons', pending.raw);
         } else {
@@ -2462,28 +3350,49 @@ let lastFleetAgents = []; // for 🎯T124 auto-select on new aside
 // FOUC stuck + empty transcript.
 let selectedAgent = null;
 function refreshAgents() {
-  fetch('/api/agents').then(r=>r.json()).then(agents => {
+  // 🎯T200: portfolios woven into fleet tree under overseer (not a separate panel).
+  Promise.all([
+    fetch('/api/agents').then(r => r.json()),
+    fetch('/api/portfolios').then(r => r.ok ? r.json() : { portfolios: [] }).catch(function () { return { portfolios: [] }; }),
+  ]).then(function (pair) {
+    const agents = Array.isArray(pair[0]) ? pair[0] : [];
+    const portfolioPayload = pair[1];
     agentsEl.innerHTML = '';
-    const byParent = {};
+    // Display-only weave: virtual portfolio parents under overseer; lineage_parent kept.
+    let byParent = {};
+    let treeNodes = agents;
+    if (typeof PortfolioGroup !== 'undefined' && PortfolioGroup.weaveFleetTree) {
+      const woven = PortfolioGroup.weaveFleetTree(agents, portfolioPayload);
+      treeNodes = woven.nodes || agents;
+      byParent = woven.byParent || {};
+    } else {
+      agents.forEach(a => {
+        const p = (a && a.parent) || '';
+        (byParent[p] = byParent[p] || []).push(a);
+      });
+    }
     const agentsByName = {};
-    agents.forEach(a => {
-      const p = a.parent || '';
-      (byParent[p] = byParent[p] || []).push(a);
+    treeNodes.forEach(a => {
       if (a && a.name) agentsByName[a.name] = a;
     });
     // 🎯T124: new purpose=aside → auto-select and show transcript pane.
+    // Use registry agents (not virtual portfolio nodes) for auto-select.
+    let autoSelected = false;
     if (typeof AgentTranscript !== 'undefined') {
       const auto = AgentTranscript.pickAutoSelect(lastFleetAgents, agents, selectedAgent);
       if (auto && auto !== selectedAgent) {
         selectedAgent = auto;
+        autoSelected = true;
       }
     }
-    lastFleetAgents = Array.isArray(agents) ? agents.slice() : [];
+    lastFleetAgents = agents.slice();
     renderTree(byParent, '', agentsEl, agentsByName);
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
-    if (selectedAgent) {
-      loadAgentTranscript(selectedAgent, { quiet: true });
+    // 🎯T209: inspect updates arrive on /ws/chat — no HTTP re-fetch on fleet refresh.
+    // Only re-subscribe when auto-select changes the focused agent.
+    if (autoSelected && selectedAgent && typeof subscribeAgentInspect === 'function') {
+      subscribeAgentInspect(selectedAgent);
     }
   }).catch((err)=>{
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
@@ -2498,51 +3407,71 @@ function updateFleetProgress(agents) {
   if (!Array.isArray(agents)) return;
   const running = agents.filter(a => a.status === 'running').length;
   const stopped = agents.length - running;
-  // Surface on working indicator when a multi-agent job is live mid-turn.
+  // Surface on working indicator when a multi-agent job is mid-turn.
+  // 🎯T202: replace a single fleet rollup segment — never append thrash.
   if (workingEl && agents.length > 1) {
-    const base = workingProgress && !workingProgress.startsWith('fleet ')
-      ? workingProgress
-      : '';
-    const fleet = 'fleet ' + running + ' running · ' + stopped + ' stopped';
-    updateWorkingProgress(base ? base + ' · ' + fleet : fleet);
+    const WP = typeof WorkingProgress !== 'undefined' ? WorkingProgress : null;
+    const next = WP
+      ? WP.mergeFleetProgress(workingProgress, running, stopped)
+      : ('fleet ' + running + ' running · ' + stopped + ' stopped');
+    updateWorkingProgress(next);
   }
 }
 function renderTree(byParent, parent, container, agentsByName) {
   // 🎯T68: sibling order is deliberate — name-sorted under each parent,
   // independent of Go map iteration or poll order of the parent group.
+  // 🎯T200: portfolio virtual nodes sort with agents; folder lead not status dot.
   agentsByName = agentsByName || {};
   const children = (byParent[parent] || []).slice().sort((a, b) =>
     String(a.name || '').localeCompare(String(b.name || '')));
   children.forEach(a => {
+    const isPortfolio = (typeof PortfolioGroup !== 'undefined' && PortfolioGroup.isPortfolioNode)
+      ? PortfolioGroup.isPortfolioNode(a)
+      : !!(a && (a.is_portfolio || a.purpose === 'portfolio'));
     // 🎯T115/T118: overseer/aside omit path; workers prefer progress secondary
     // when workdir matches parent; path stays for roots/POs/distinct workdir.
     const parentAgent = parent ? agentsByName[parent] : null;
     const hasChildren = !!(byParent[a.name] && byParent[a.name].length);
-    const row = (typeof FleetRow !== 'undefined')
-      ? FleetRow.fleetRowModel(a, {
-          parentWorkdir: parentAgent ? (parentAgent.workdir || '') : '',
-          hasChildren: hasChildren,
-        })
-      : { title: a.name || '', dirHtml: formatAgentDir(a.workdir || ''), omitPath: false, isAside: false, secondaryHtml: '', secondaryKind: 'path' };
+    let row;
+    if (isPortfolio && typeof PortfolioGroup !== 'undefined' && PortfolioGroup.portfolioRowChrome) {
+      row = PortfolioGroup.portfolioRowChrome(a);
+      row.isAside = false;
+      row.showPath = false;
+    } else if (typeof FleetRow !== 'undefined') {
+      row = FleetRow.fleetRowModel(a, {
+        parentWorkdir: parentAgent ? (parentAgent.workdir || '') : '',
+        hasChildren: hasChildren,
+      });
+    } else {
+      row = { title: a.name || '', dirHtml: formatAgentDir(a.workdir || ''), omitPath: false, isAside: false, secondaryHtml: '', secondaryKind: 'path' };
+    }
     const node = document.createElement('div');
     node.className = 'agent-node'
       + (a.name === selectedAgent ? ' selected' : '')
-      + (row.isAside ? ' agent-aside' : '');
+      + (row.isAside ? ' agent-aside' : '')
+      + (isPortfolio ? ' agent-portfolio' : '');
     node.dataset.agent = a.name;
     node.dataset.parent = parent || '';
     if (row.isAside) node.dataset.purpose = 'aside';
+    if (isPortfolio) node.dataset.purpose = 'portfolio';
     if (row.secondaryKind) node.dataset.secondary = row.secondaryKind;
-    let html = '<span class="agent-dot '+escHtml(a.status || '')+'"></span>'
-      + '<span class="agent-name">'+escHtml(row.title)+'</span>';
-    // Secondary line: path (T84) or progress/status (T118). Aside has none.
-    const secHtml = row.secondaryHtml || (row.showPath ? row.dirHtml : '');
-    const secKind = row.secondaryKind || (secHtml ? 'path' : '');
+    // 🎯T200: portfolio → folder icon; agents keep green/grey status dot.
+    const lead = (typeof PortfolioGroup !== 'undefined' && PortfolioGroup.rowLeadHtml)
+      ? PortfolioGroup.rowLeadHtml(a)
+      : ('<span class="agent-dot '+escHtml(a.status || '')+'"></span>');
+    let html = lead + '<span class="agent-name">'+escHtml(row.title)+'</span>';
+    // Secondary line: path (T84) or progress/status (T118). Aside/portfolio have none.
+    const secHtml = isPortfolio ? '' : (row.secondaryHtml || (row.showPath ? row.dirHtml : ''));
+    const secKind = isPortfolio ? '' : (row.secondaryKind || (secHtml ? 'path' : ''));
     if (secHtml && secKind) {
       const cls = secKind === 'path' ? 'agent-dir' : ('agent-dir agent-' + secKind);
       html += '<span class="'+cls+'">'+secHtml+'</span>';
     }
     node.innerHTML = html;
-    node.onclick = () => selectAgent(a.name);
+    // Virtual portfolio nodes are not selectable agents (display chrome only).
+    if (!isPortfolio) {
+      node.onclick = () => selectAgent(a.name);
+    }
     container.appendChild(node);
     if (byParent[a.name] && byParent[a.name].length) {
       const sub = document.createElement('div');
@@ -2615,13 +3544,31 @@ setInterval(refreshWorkers, 10000);
 refreshWorkers();
 connectWorkersSSE();
 
-// Live token-burn ticker — off while budget clamp is disabled (🎯T137).
-// Re-enable with clamp when subscription-vs-API $ accounting is redesigned.
+// Live token-burn ticker (🎯T137): hidden when disabled; subscription
+// shows API-eq estimates labeled not-billed; list_price shows billable $.
 const costEl = document.getElementById('cost-ticker');
 function refreshCost() {
-  if (costEl) costEl.style.display = 'none';
+  if (!costEl) return;
+  const fmt = (typeof CostDisplay !== 'undefined' && CostDisplay.formatCostTicker)
+    ? CostDisplay.formatCostTicker
+    : null;
+  fetch('/api/cost').then(function (r) { return r.json(); }).then(function (c) {
+    const view = fmt ? fmt(c) : { visible: false };
+    if (!view.visible) {
+      costEl.style.display = 'none';
+      costEl.textContent = '';
+      return;
+    }
+    costEl.style.display = 'block';
+    costEl.className = view.className || '';
+    costEl.textContent = view.text || '';
+    costEl.title = view.title || '';
+  }).catch(function () {
+    costEl.style.display = 'none';
+  });
 }
-// No interval: dollar reporting disabled for now.
+setInterval(refreshCost, 3000);
+refreshCost();
 
 // ── Latched stick-to-bottom (Track | Free) ────────────────────────────
 // Policy lives above the DOM. Mode is never re-derived from distance on
@@ -3055,14 +4002,23 @@ setInterval(() => {
 // transcript). histIdx === null means we're editing the live input.
 let msgHistory = [];   // [{text, el}] — el is the rendered user bubble
 let histIdx = null;
-// 🎯T113: follow-up send queue (pure policy in send_queue.js).
-let sendQueueState = (typeof SendQueue !== 'undefined') ? SendQueue.emptyState() : { items: [], nextId: 1 };
+// 🎯T113 / 🎯T154: follow-up send queue (pure policy in send_queue.js).
+// Persist to localStorage so full reload restores FIFO; soft reconnect
+// must never reset to emptyState() (onOpen hard wipe leaves queue alone).
+let sendQueueState = (typeof SendQueue !== 'undefined')
+  ? SendQueue.load(window.localStorage)
+  : { items: [], nextId: 1 };
 // Combined Alt+Up/Down focus: live | queue | history (queue before history).
 let navFocus = { zone: 'live' };
 let liveDraftBackup = '';
 const sendQueueEl = document.getElementById('send-queue');
 let histDraft = '';
 let editingEl = null;  // the bubble currently highlighted as "being edited"
+
+function persistSendQueue() {
+  if (typeof SendQueue === 'undefined') return;
+  SendQueue.save(window.localStorage, sendQueueState);
+}
 
 // setEditingHighlight moves the .editing highlight to el (or clears it),
 // scrolling it into view so you can see which message you're editing.
@@ -3121,9 +4077,13 @@ function renderSendQueue() {
   });
 }
 
+// 🎯T154: paint restored queue on boot (load already ran at declaration).
+renderSendQueue();
+
 function cancelQueued(id) {
   if (typeof SendQueue === 'undefined') return;
   sendQueueState = SendQueue.cancel(sendQueueState, id);
+  persistSendQueue();
   if (navFocus.zone === 'queue') {
     const n = sendQueueState.items.length;
     if (!n) {
@@ -3133,6 +4093,7 @@ function cancelQueued(id) {
       navFocus = { zone: 'queue', index: n - 1 };
       input.value = sendQueueState.items[n - 1].text;
     }
+    if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
   }
   renderSendQueue();
   autoGrow();
@@ -3144,24 +4105,48 @@ function sendQueueNow(id) {
   const taken = SendQueue.takeById(sendQueueState, id);
   if (!taken.item) return;
   sendQueueState = taken.state;
+  persistSendQueue();
   if (navFocus.zone === 'queue') {
     navFocus = { zone: 'live' };
     liveDraftBackup = '';
   }
   renderSendQueue();
-  submitWireText(taken.item.text, { interrupt: !!workingEl });
+  const sent = submitWireText(taken.item.text, { interrupt: !!workingEl });
+  if (!sent) {
+    // 🎯T228: restore to visible queue — never drop on failed wire.
+    sendQueueState = SendQueue.enqueue(sendQueueState, taken.item.text);
+    persistSendQueue();
+    renderSendQueue();
+  }
+}
+
+// 🎯T228: chat wire ready for owner turns (WS OPEN or native bridge open).
+function isChatWireOpen() {
+  if (typeof transport === 'undefined' || !transport) return false;
+  if (typeof transport.isOpen === 'function') return !!transport.isOpen();
+  if (transport.ws != null) return transport.ws.readyState === 1;
+  // Legacy native without isOpen: assume post path exists.
+  return typeof transport.send === 'function';
 }
 
 // Submit a fully-prepared wire string (interrupt optional). Used by send()
 // and by auto-drain / send-now so queue drain does not re-enter attention.
+// Returns true only when transport accepted the payload (🎯T228 — callers
+// must not clear the composer on false).
 function submitWireText(t, opts) {
   const o = opts || {};
   if (o.interrupt && workingEl) {
     // Interject: cancel in-flight turn first; claudia's Send waits for
     // ready, so interrupt-then-send ordering is safe.
-    transport.send('{"type":"interrupt"}');
+    try { transport.send('{"type":"interrupt"}'); } catch (_) {}
   }
-  transport.send(t);
+  let ok = false;
+  try {
+    ok = !!transport.send(t);
+  } catch (_) {
+    ok = false;
+  }
+  if (!ok) return false;
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   navFocus = { zone: 'live' };
   liveDraftBackup = '';
@@ -3169,30 +4154,45 @@ function submitWireText(t, opts) {
   setWorking(true);
   requestAnimationFrame(() => { scrollDown(); });
   if (typeof renderAttention === 'function') renderAttention();
+  return true;
 }
 
-// Drain head of queue once the in-flight turn seals.
+// Drain head of queue once the in-flight turn seals (or wire reopens idle).
 function drainSendQueueIfIdle() {
   if (workingEl) return;
   if (typeof SendQueue === 'undefined') return;
   if (!sendQueueState.items.length) return;
+  // 🎯T228: never shift-off a queue item if the wire cannot take it.
+  if (!isChatWireOpen()) return;
   const r = SendQueue.shiftNext(sendQueueState);
   if (!r.item) return;
   sendQueueState = r.state;
+  persistSendQueue();
   if (navFocus.zone === 'queue') {
     const n = sendQueueState.items.length;
     if (!n) {
       navFocus = { zone: 'live' };
       input.value = liveDraftBackup;
+      if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
       autoGrow();
     } else if ((navFocus.index | 0) >= n) {
       navFocus = { zone: 'queue', index: n - 1 };
       input.value = sendQueueState.items[n - 1].text;
+      if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
       autoGrow();
     }
   }
   renderSendQueue();
-  submitWireText(r.item.text, { interrupt: false });
+  const sent = submitWireText(r.item.text, { interrupt: false });
+  if (!sent) {
+    // Put head back so the strip still shows the owner's text (no drop).
+    sendQueueState = {
+      items: [{ id: r.item.id, text: r.item.text }].concat(sendQueueState.items || []),
+      nextId: sendQueueState.nextId || 1,
+    };
+    persistSendQueue();
+    renderSendQueue();
+  }
 }
 
 function clearComposerAfterQueueOrSend() {
@@ -3206,6 +4206,8 @@ function clearComposerAfterQueueOrSend() {
   autoGrow();
   // 🎯T21: empty composer again — re-seed for next dictation (stripped on send).
   ensureWisprSeed();
+  // 🎯T153: send/enqueue returns focus to composer (composer-first Tab path).
+  focusComposer();
 }
 
 // opts.interrupt: true when Control+Enter (Grok-class interject).
@@ -3222,6 +4224,7 @@ function send(opts) {
         ? WisprContext.prepareWireText(input.value)
         : input.value;
       sendQueueState = SendQueue.updateItem(sendQueueState, it.id, rowText);
+      persistSendQueue();
       navFocus = { zone: 'live' };
       input.value = liveDraftBackup;
       liveDraftBackup = '';
@@ -3229,6 +4232,7 @@ function send(opts) {
       renderSendQueue();
       autoGrow();
       ensureWisprSeed();
+      focusComposer();
       return;
     }
   }
@@ -3303,6 +4307,8 @@ function send(opts) {
       ensureWisprSeed();
       autoGrow();
       renderAttention();
+      // 🎯T153: local attention cmds (main/park/pursue/…) keep composer focused.
+      focusComposer();
       return; // no wire send for local commands
     }
     t = r.text;
@@ -3354,28 +4360,59 @@ function send(opts) {
     // Intentionally NO AttentionThreads.pursue / formatAsideWire on match (🎯T135).
   }
   // 🎯T113: while busy, plain Enter enqueues; only Control+Enter interjects.
+  // 🎯T228: offline / wire-down also enqueues visibly (never clear-and-drop).
+  const wireOpen = isChatWireOpen();
   const decision = (typeof SendQueue !== 'undefined')
     ? SendQueue.decideSend({
         busy: !!workingEl,
         interrupt: interruptChord,
         text: t,
         hasImages: pendingImages.length > 0,
+        wireOpen: wireOpen,
       })
-    : { action: workingEl && !interruptChord ? 'enqueue' : 'send', text: t, interrupt: !!(workingEl && interruptChord) };
+    : (!wireOpen || (workingEl && !interruptChord)
+      ? { action: 'enqueue', text: t, reason: !wireOpen ? 'offline' : 'busy' }
+      : { action: 'send', text: t, interrupt: !!(workingEl && interruptChord) });
   if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
     jLog('info', DecisionLog.decisionMsg('send_queue'), DecisionLog.formatSendDecision(decision, pageCorr));
   }
-  if (decision.action === 'noop') return;
+  if (decision.action === 'noop') return; // seed-only / empty residual — no clear
   if (decision.action === 'enqueue') {
-    sendQueueState = SendQueue.enqueue(sendQueueState, decision.text);
-    clearComposerAfterQueueOrSend();
-    renderSendQueue();
+    if (typeof SendQueue !== 'undefined') {
+      sendQueueState = SendQueue.enqueue(sendQueueState, decision.text);
+      persistSendQueue();
+      clearComposerAfterQueueOrSend();
+      renderSendQueue();
+      // Owner-visible: queue strip. Offline reason also flashes status briefly.
+      if (decision.reason === 'offline' && sTxt && sTxt.textContent !== 'connected') {
+        /* status already reconnecting/connecting — strip is the evidence */
+      } else if (decision.reason === 'offline' && sTxt) {
+        sTxt.textContent = 'queued (offline)';
+      }
+      return;
+    }
+    // No SendQueue module — keep draft and surface error (never silent drop).
+    if (sTxt) sTxt.textContent = 'send failed — not connected';
     return;
   }
   // Wire send stays on main; stash suggestion for the user-bubble affordance.
+  // 🎯T228: clear composer ONLY after transport accepts the payload.
   lastRouteSuggestion = pendingRouteSuggestion;
-  clearComposerAfterQueueOrSend();
-  submitWireText(decision.text, { interrupt: !!decision.interrupt });
+  const sent = submitWireText(decision.text, { interrupt: !!decision.interrupt });
+  if (sent) {
+    clearComposerAfterQueueOrSend();
+    return;
+  }
+  // Race: wire closed between decide and send — fall back to visible queue.
+  if (typeof SendQueue !== 'undefined') {
+    sendQueueState = SendQueue.enqueue(sendQueueState, decision.text);
+    persistSendQueue();
+    clearComposerAfterQueueOrSend();
+    renderSendQueue();
+    if (sTxt) sTxt.textContent = 'queued (offline)';
+    return;
+  }
+  if (sTxt) sTxt.textContent = 'send failed — not connected';
 }
 
 // 🎯T135: attach opt-in "Continue in: «title»" under a user bubble.
@@ -3386,15 +4423,20 @@ function attachRouteSwitch(msgEl, suggestion) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'route-switch';
+  // 🎯T153: route-switch is pointer-only chrome — not a Tab stop.
+  btn.tabIndex = -1;
   btn.textContent = RouteSuggest.formatSwitchLabel(suggestion);
   btn.title = 'Deliver this message to the suggested aside and interrupt main';
   btn.setAttribute('aria-label', btn.textContent);
+  btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
   btn.addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
     if (btn.disabled) return;
     btn.disabled = true;
     optInRouteSwitch(suggestion);
+    // 🎯T153: return focus to main composer after opt-in route click.
+    focusComposer();
   });
   msgEl.appendChild(btn);
 }
@@ -3458,6 +4500,87 @@ function rewindAndResend() {
   requestAnimationFrame(() => { scrollDown(); });
 }
 
+// 🎯T227: owner bubbles in #messages (WS + progressive hydrate). Progressive
+// hydrate paints via renderFrames without pushing msgHistory — DOM is the
+// durable product view when memory desyncs.
+function collectDomOwnerEntries() {
+  const nodes = msgs ? msgs.querySelectorAll('.msg.user') : [];
+  if (typeof ComposerKeys !== 'undefined' && ComposerKeys.ownerEntriesFromUserNodes) {
+    return ComposerKeys.ownerEntriesFromUserNodes([...nodes]);
+  }
+  const out = [];
+  for (const el of nodes) {
+    const text = el._layoutText != null ? String(el._layoutText) : '';
+    if (text) out.push({ text: text, el: el });
+  }
+  return out;
+}
+
+// Rebuild msgHistory from DOM when empty/desynced so Alt+Enter and Alt+Up
+// share one source of truth after progressive hydrate (🎯T227).
+function rebuildMsgHistoryFromDomIfNeeded() {
+  const domEntries = collectDomOwnerEntries();
+  if (!domEntries.length) return;
+  // Prefer full DOM rebuild when memory is empty or shorter than painted users
+  // (progressive prepend adds older bubbles msgHistory never saw).
+  if (!msgHistory.length || msgHistory.length < domEntries.length) {
+    msgHistory = domEntries.map(function (e) { return { text: e.text, el: e.el }; });
+  }
+}
+
+// 🎯T132 / 🎯T227: Alt+Enter on an empty composer seeds the box with the most
+// recent owner message as an interjection/edit draft.
+// Prefers msgHistory; falls back to DOM `.msg.user` when history is empty
+// (product break: progressive hydrate / desync → silent no-op).
+// Returns true when a message was loaded.
+function popLastOwnerAsInterjection() {
+  const domEntries = collectDomOwnerEntries();
+  let entry = null;
+  if (typeof ComposerKeys !== 'undefined' && ComposerKeys.resolveLastOwnerEntry) {
+    entry = ComposerKeys.resolveLastOwnerEntry(msgHistory, domEntries);
+  } else if (typeof ComposerKeys !== 'undefined' && ComposerKeys.lastOwnerHistoryEntry) {
+    entry = ComposerKeys.lastOwnerHistoryEntry(msgHistory);
+    if (!entry || !entry.text) entry = ComposerKeys.lastOwnerHistoryEntry(domEntries);
+  } else if (msgHistory.length) {
+    entry = {
+      text: msgHistory[msgHistory.length - 1].text,
+      index: msgHistory.length - 1,
+      el: msgHistory[msgHistory.length - 1].el,
+    };
+  } else if (domEntries.length) {
+    entry = {
+      text: domEntries[domEntries.length - 1].text,
+      index: domEntries.length - 1,
+      el: domEntries[domEntries.length - 1].el,
+    };
+  }
+  if (!entry || !entry.text) return false;
+  // Resync memory when we had to lean on DOM so histIdx / Alt+Up stay coherent.
+  if (entry.source === 'dom' || !msgHistory.length) {
+    rebuildMsgHistoryFromDomIfNeeded();
+    if (msgHistory.length) {
+      entry = {
+        text: msgHistory[msgHistory.length - 1].text,
+        index: msgHistory.length - 1,
+        el: msgHistory[msgHistory.length - 1].el,
+      };
+    }
+  }
+  liveDraftBackup = '';
+  histDraft = '';
+  histIdx = entry.index;
+  navFocus = { zone: 'history', index: entry.index };
+  input.value = entry.text || '';
+  setEditingHighlight(entry.el || null);
+  if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
+  autoGrow();
+  try {
+    input.selectionStart = input.selectionEnd = input.value.length;
+  } catch (_) {}
+  focusComposer();
+  return true;
+}
+
 // 🎯T113 + 🎯T88: Alt+Up/Down cycles queued follow-ups first, then
 // previously submitted request history (queue before history).
 // dir = -1 (older / Up) or +1 (newer / Down). Returns true if handled.
@@ -3481,6 +4604,7 @@ function recallHistory(dir) {
       input.value = entry.text;
       setEditingHighlight(entry.el);
     }
+    if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
     autoGrow();
     input.selectionStart = input.selectionEnd = input.value.length;
     return true;
@@ -3490,6 +4614,7 @@ function recallHistory(dir) {
   if (navFocus.zone === 'queue' && sendQueueState.items[navFocus.index | 0]) {
     const cur = sendQueueState.items[navFocus.index | 0];
     sendQueueState = SendQueue.updateItem(sendQueueState, cur.id, input.value);
+    persistSendQueue();
   } else if (navFocus.zone === 'live') {
     liveDraftBackup = input.value;
     histDraft = input.value;
@@ -3520,6 +4645,8 @@ function recallHistory(dir) {
     input.value = entry ? entry.text : '';
     setEditingHighlight(entry ? entry.el : null);
   }
+  // 🎯T183: any programmatic draft swap must re-sync seed-only visibility.
+  if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
   renderSendQueue();
   autoGrow();
   input.selectionStart = input.selectionEnd = input.value.length;
@@ -3635,10 +4762,29 @@ function autoGrow() {
 
 // Enter submits, Shift-Enter inserts a newline.
 // 🎯T113: plain Enter enqueues while busy; only Control+Enter interjects.
+// 🎯T132: Ctrl+Enter = immediate send (never Alt); empty Alt+Enter pops
+// last owner message into the composer as the interjection/edit seed.
+// 🎯T192: composerEmpty via isEffectivelyEmpty — seed-shaped residue
+// (EMPTY_SEED, bare ".", ZWSP-only, partial thrash) counts as empty, not
+// !input.value / trim-only (those treat the hidden seed as a real draft).
 input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter') {
+    const composerEmpty = (typeof WisprContext !== 'undefined' && WisprContext.isEffectivelyEmpty)
+      ? WisprContext.isEffectivelyEmpty(input.value)
+      : !String(input.value || '').trim();
+    const action = (typeof ComposerKeys !== 'undefined' && ComposerKeys.classifyEnterAction)
+      ? ComposerKeys.classifyEnterAction(e.key, e, { composerEmpty: composerEmpty })
+      : (e.shiftKey ? 'newline'
+        : (e.ctrlKey ? 'interrupt'
+          : (e.altKey ? (composerEmpty ? 'pop_last' : 'noop') : 'send')));
+    if (action === 'newline' || action == null) return; // Shift+Enter → native newline
     e.preventDefault();
-    const interrupt = !!e.ctrlKey; // Control+Enter only (not Cmd/Meta)
+    if (action === 'noop') return; // non-empty Alt+Enter: do not send (Firefox-safe)
+    if (action === 'pop_last') {
+      popLastOwnerAsInterjection();
+      return;
+    }
+    const interrupt = action === 'interrupt'; // Control+Enter only (not Alt, not Meta)
     // 🎯T88: primary send while a recalled bubble is highlighted rewinds
     // and resends (destructive redo). Escape clears edit mode first for
     // safe append; Cmd/Ctrl+Enter also forces safe append.
@@ -3724,6 +4870,7 @@ input.addEventListener('input', () => {
         ? WisprContext.prepareWireText(input.value)
         : input.value;
       sendQueueState = SendQueue.updateItem(sendQueueState, it.id, rowText);
+      persistSendQueue();
       renderSendQueue();
     }
   } else if (navFocus.zone === 'live') {
@@ -3753,9 +4900,10 @@ input.addEventListener('focus', () => {
   ensureWisprSeed();
   syncComposerSeedClass();
 });
-// 🎯T76: image paste → upload → composer chip → [image: id] on send.
+// 🎯T76/T224: image paste → upload → composer chip → [image: id] on send.
+// Upload is immediate (not blob:-only); journal marker hydrates thumbs later.
 // 🎯T80: bulk paste/dictation insert tidy (not keystroke mid-edit).
-const pendingImages = []; // { id, url, objectUrl? }
+const pendingImages = []; // { id, url, thumbUrl, objectUrl?, marker }
 const composerImagesEl = document.getElementById('composer-images');
 function renderComposerImages() {
   if (!composerImagesEl) return;
@@ -3764,7 +4912,8 @@ function renderComposerImages() {
     const chip = document.createElement('div');
     chip.className = 'img-chip';
     const el = document.createElement('img');
-    el.src = img.objectUrl || img.url;
+    // Prefer local objectUrl for instant chip; fall back to server thumb.
+    el.src = img.objectUrl || img.thumbUrl || img.url;
     el.alt = 'attachment ' + img.id;
     chip.appendChild(el);
     const btn = document.createElement('button');
@@ -3803,7 +4952,13 @@ input.addEventListener('paste', (e) => {
         try {
           const objectUrl = URL.createObjectURL(file);
           const meta = await uploadPastedImage(file);
-          pendingImages.push({ id: meta.id, url: meta.url, objectUrl: objectUrl, marker: meta.marker });
+          pendingImages.push({
+            id: meta.id,
+            url: meta.url,
+            thumbUrl: meta.thumb_url || imageThumbSrc(meta.id),
+            objectUrl: objectUrl,
+            marker: meta.marker,
+          });
           renderComposerImages();
         } catch (err) {
           console.error('image paste upload failed', err);
@@ -3844,11 +4999,26 @@ if (typeof renderAttention === 'function') renderAttention();
 sendBtn.addEventListener('mousedown', e => e.preventDefault());
 
 // 🎯T21: bootstrap Wispr context region + empty seed before first dictation.
+// 🎯T183: restore hot-reload draft BEFORE seed so composer-seed-only is not
+// left on when real text is present (transparent draft until first edit).
+try {
+  const bootSavedInput = sessionStorage.getItem('jevons-input');
+  if (bootSavedInput) {
+    input.value = bootSavedInput;
+    sessionStorage.removeItem('jevons-input');
+  }
+} catch (_) {}
 refreshWisprContext();
 ensureWisprSeed();
 autoGrow();
-input.focus();
+focusComposer();
 connect();
+// 🎯T183: browser form-restore can race after scripts; re-sync seed class.
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('pageshow', function () {
+    if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
+  });
+}
 
 // On first load the server replays history as a burst of messages and
 // layout settles asynchronously, which can leave the view slightly above
@@ -3908,8 +5078,20 @@ document.addEventListener('keydown', e => {
       return;
     }
   }
-  // Esc interrupts Jevons's current turn (like the Claude Code TUI).
+  // Esc: close open mermaid viz / Frontier Graph panel first (🎯T189), then
+  // interrupt Jevons's current turn (like the Claude Code TUI). Closed panel
+  // must not steal Escape from interrupt / edit-cancel.
   if (e.key === 'Escape') {
+    const mvp = document.getElementById('mermaid-viz-panel');
+    const MA = window.MermaidActions;
+    const closePanel = MA && MA.shouldCloseMermaidOnEscape
+      ? MA.shouldCloseMermaidOnEscape(e.key, mvp)
+      : !!(mvp && !mvp.hidden && mvp.classList && mvp.classList.contains('open'));
+    if (closePanel) {
+      e.preventDefault();
+      closeMermaidPanel();
+      return;
+    }
     // 🎯T88: clear history-edit mode so next Enter is safe append.
     if (editingEl) { setEditingHighlight(null); histIdx = null; histDraft = ''; }
     transport.send('{"type":"interrupt"}');
@@ -3949,11 +5131,74 @@ let termFit = null;
 // selectedAgent: declared with fleet tree state (above) — do not redeclare.
 
 // 🎯T124: select fleet agent/aside → RHS transcript pane (not main chat).
+// 🎯T131: RHS bottom tabs — Frontier (default) | Transcript.
 // 🎯T73: do not open the obsolete black TMUX/detail panel.
 const agentInspectEl = document.getElementById('agent-inspect');
 const agentInspectName = document.getElementById('agent-inspect-name');
 const agentInspectBody = document.getElementById('agent-inspect-body');
-let agentTranscriptTimer = 0;
+const frontierPaneEl = document.getElementById('frontier-pane');
+const frontierBodyEl = document.getElementById('frontier-body');
+const rhsTabMeta = document.getElementById('rhs-tab-meta');
+let frontierPollTimer = 0;
+// 🎯T205: fingerprint + stick/free latch for #agent-inspect-body.
+// 🎯T209: progressive lines held for live wire frames (no setInterval poll).
+let _agentInspectFp = '';
+let _agentInspectLines = [];
+let _agentInspectFollow = null;
+function agentInspectFollow() {
+  if (!_agentInspectFollow) {
+    _agentInspectFollow = (typeof AgentTranscript !== 'undefined' && AgentTranscript.createScrollFollow)
+      ? AgentTranscript.createScrollFollow({ eps: 16 })
+      : {
+          isTracking: function () { return true; },
+          shouldPin: function () { return true; },
+          enterTrack: function () {},
+          leaveTrack: function () {},
+          onWheel: function () {},
+          onScroll: function () {},
+          applyAfterUpdate: function (el) {
+            if (el) el.scrollTop = el.scrollHeight;
+          },
+        };
+  }
+  return _agentInspectFollow;
+}
+if (agentInspectBody) {
+  agentInspectBody.addEventListener('wheel', function (e) {
+    const f = agentInspectFollow();
+    if (f && f.onWheel) f.onWheel(e.deltaY, agentInspectBody);
+  }, { passive: true });
+  agentInspectBody.addEventListener('scroll', function () {
+    const f = agentInspectFollow();
+    if (f && f.onScroll) f.onScroll(agentInspectBody);
+  }, { passive: true });
+}
+let rhsBottomTab = (typeof FrontierTable !== 'undefined')
+  ? FrontierTable.TAB_FRONTIER
+  : 'frontier';
+
+function setRhsBottomTab(tab) {
+  const next = (typeof FrontierTable !== 'undefined')
+    ? FrontierTable.nextBottomTab(rhsBottomTab, tab)
+    : (tab === 'transcript' ? 'transcript' : 'frontier');
+  rhsBottomTab = next;
+  document.querySelectorAll('#rhs-bottom-tabs button[data-tab]').forEach(function (btn) {
+    const on = btn.dataset.tab === next;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  if (frontierPaneEl) frontierPaneEl.classList.toggle('active', next === 'frontier');
+  if (agentInspectEl) agentInspectEl.classList.toggle('active', next === 'transcript');
+  if (next === 'frontier' && typeof loadFrontier === 'function') {
+    loadFrontier({ quiet: true });
+  }
+}
+
+document.querySelectorAll('#rhs-bottom-tabs button[data-tab]').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    setRhsBottomTab(btn.dataset.tab);
+  });
+});
 
 function selectAgent(name, opts) {
   // Resolve purpose from fleet cache when available (overseer guard).
@@ -3981,22 +5226,96 @@ function selectAgent(name, opts) {
     hideAgentInspect();
     return;
   }
-  loadAgentTranscript(selectedAgent, { quiet: false });
+  // 🎯T205: new selection → Track + force repaint fingerprint.
+  _agentInspectFp = '';
+  _agentInspectLines = [];
+  agentInspectFollow().enterTrack();
+  // 🎯T131: selecting a fleet agent switches to Transcript tab.
+  setRhsBottomTab((typeof FrontierTable !== 'undefined')
+    ? FrontierTable.tabAfterAgentSelect(true)
+    : 'transcript');
+  // 🎯T209: primary path = inspect_subscribe on /ws/chat (not HTTP poll).
+  subscribeAgentInspect(selectedAgent);
 }
 
 function hideAgentInspect() {
-  if (agentTranscriptTimer) { clearInterval(agentTranscriptTimer); agentTranscriptTimer = 0; }
-  if (agentInspectEl) agentInspectEl.classList.remove('visible');
+  unsubscribeAgentInspect();
   if (agentInspectBody) agentInspectBody.innerHTML = '';
   if (agentInspectName) agentInspectName.textContent = '';
+  _agentInspectFp = '';
+  _agentInspectLines = [];
+  // Keep RHS bottom visible; return to Frontier tab (T131).
+  setRhsBottomTab((typeof FrontierTable !== 'undefined')
+    ? FrontierTable.tabAfterAgentSelect(false)
+    : 'frontier');
   if (typeof updateComposerPlaceholder === 'function') updateComposerPlaceholder();
 }
 
+// 🎯T209: thin named-agent multiplex on main /ws/chat pipe.
+function subscribeAgentInspect(name) {
+  if (!name || typeof transport === 'undefined' || !transport.send) return;
+  const frame = (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectSubscribeFrame)
+    ? AgentTranscript.inspectSubscribeFrame(name)
+    : JSON.stringify({ type: 'inspect_subscribe', name: name });
+  try { transport.send(frame); } catch (_) { /* offline */ }
+}
+function unsubscribeAgentInspect() {
+  if (typeof transport === 'undefined' || !transport.send) return;
+  const frame = (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectUnsubscribeFrame)
+    ? AgentTranscript.inspectUnsubscribeFrame()
+    : JSON.stringify({ type: 'inspect_unsubscribe' });
+  try { transport.send(frame); } catch (_) { /* offline */ }
+}
+function resubscribeAgentInspect() {
+  if (selectedAgent) subscribeAgentInspect(selectedAgent);
+}
+
+// Apply agent_transcript WS frames to RHS inspect (not main #messages).
+function handleAgentTranscriptWire(m) {
+  if (!m || !selectedAgent || m.name !== selectedAgent) return;
+  if (m.kind === 'live' && m.event) {
+    if (typeof AgentTranscript !== 'undefined' && AgentTranscript.applyInspectLiveFrame) {
+      _agentInspectLines = AgentTranscript.applyInspectLiveFrame(_agentInspectLines, m.event);
+    }
+    const lines = (_agentInspectLines || []).map(function (l) {
+      return { role: l.role, text: l.text };
+    });
+    renderAgentInspect({
+      title: selectedAgent,
+      empty: lines.length === 0,
+      error: '',
+      lines: lines,
+    });
+    return;
+  }
+  // kind=history (default): sealed turns — same model as former HTTP payload.
+  const model = (typeof AgentTranscript !== 'undefined')
+    ? AgentTranscript.paneModel(m.name || selectedAgent, m)
+    : { title: m.name || selectedAgent, lines: (m.turns) || [], empty: !(m.turns && m.turns.length), error: '' };
+  if (m.error && model.empty && !m.denied) {
+    model.error = '';
+  } else if (m.denied && m.error) {
+    model.error = m.error;
+  }
+  _agentInspectLines = (model.lines || []).map(function (l) {
+    return { role: l.role, text: l.text };
+  });
+  renderAgentInspect(model);
+  document.querySelectorAll('.agent-node').forEach(n =>
+    n.classList.toggle('selected', n.dataset.agent === selectedAgent));
+}
+
+// 🎯T205: RHS inspect = main transcript microcosm — .msg + paintBody (not .ai-turn
+// log panel); stick/free scroll; fingerprint no-op when content unchanged.
+// 🎯T208: body re-paint only — never setRhsBottomTab. Transcript tab is set only
+// by selectAgent (owner picks fleet agent) or explicit Transcript tab click.
+// Quiet wire/refresh must leave Frontier alone while selection remains.
+// 🎯T209: primary delivery is WS agent_transcript; HTTP residual for refresh.
 function renderAgentInspect(model) {
   if (!agentInspectEl || !agentInspectBody) return;
-  agentInspectEl.classList.add('visible');
   if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
   if (model.error) {
+    _agentInspectFp = '';
     agentInspectBody.innerHTML = '<div class="ai-err"></div><div class="ai-empty"></div>';
     agentInspectBody.querySelector('.ai-err').textContent = model.error;
     agentInspectBody.querySelector('.ai-empty').textContent = model.empty
@@ -4005,6 +5324,7 @@ function renderAgentInspect(model) {
     return;
   }
   if (model.empty) {
+    _agentInspectFp = '';
     agentInspectBody.innerHTML = '';
     const empty = document.createElement('div');
     empty.className = 'ai-empty';
@@ -4012,24 +5332,100 @@ function renderAgentInspect(model) {
     agentInspectBody.appendChild(empty);
     return;
   }
+  const lines = model.lines || [];
+  const fp = (typeof AgentTranscript !== 'undefined' && AgentTranscript.linesFingerprint)
+    ? AgentTranscript.linesFingerprint(lines)
+    : String(lines.length) + ':' + lines.map(function (l) {
+        return (l && l.role) + '\0' + (l && l.text);
+      }).join('\n');
+  // Unchanged poll: do not thrash free-scroll or full-replace.
+  if (fp === _agentInspectFp && agentInspectBody.querySelector('.msg')) {
+    return;
+  }
+  const follow = agentInspectFollow();
+  const prevTop = agentInspectBody.scrollTop;
   agentInspectBody.innerHTML = '';
-  (model.lines || []).forEach(function (line) {
-    const wrap = document.createElement('div');
-    wrap.className = 'ai-turn ' + (line.role || 'other');
-    const role = document.createElement('div');
-    role.className = 'ai-role';
-    role.textContent = line.role === 'user' ? 'User' : (line.role === 'assistant' ? 'Assistant' : (line.role || 'msg'));
-    const text = document.createElement('div');
-    text.className = 'ai-text';
-    text.textContent = line.text || '';
-    wrap.appendChild(role);
-    wrap.appendChild(text);
-    agentInspectBody.appendChild(wrap);
+  lines.forEach(function (line) {
+    const msgRole = (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectToMsgRole)
+      ? AgentTranscript.inspectToMsgRole(line.role)
+      : (line.role === 'user' ? 'user' : (line.role === 'assistant' ? 'jevons' : 'status'));
+    const d = document.createElement('div');
+    d.className = 'msg ' + msgRole;
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    d.appendChild(body);
+    d._body = body;
+    // 🎯T217: assistant/jevons must never land as textContent (raw ** / fences).
+    // Shared main path: paintBody → parseAssistantMarkdown + mermaid/hljs/links.
+    // 🎯T221: inspect user turns that are fleet injects / MD-shaped → marked HTML
+    // (inspect-only; main chat paintBody user path stays plain/renderUserText).
+    const raw = line.text || '';
+    try {
+      if (msgRole === 'user' && typeof AgentTranscript !== 'undefined'
+          && typeof AgentTranscript.paintInspectLineBody === 'function') {
+        // Inspect-only policy: unwrap <user_query>, MD when inject/MD-shaped.
+        const painted = AgentTranscript.paintInspectLineBody('user', raw, {
+          parseAssistantMarkdown: (typeof parseAssistantMarkdown === 'function')
+            ? parseAssistantMarkdown : undefined,
+          renderUserText: (typeof renderUserText === 'function')
+            ? renderUserText : undefined,
+        });
+        if (painted && painted.mode === 'html') {
+          body.innerHTML = painted.content;
+          if (typeof decorateBodyLinks === 'function') decorateBodyLinks(body);
+        } else {
+          body.textContent = (painted && painted.content != null) ? painted.content : raw;
+        }
+      } else if (typeof paintBody === 'function') {
+        paintBody(d, msgRole, raw);
+      } else if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
+        body.innerHTML = parseAssistantMarkdown(raw);
+        if (typeof decorateBodyLinks === 'function') decorateBodyLinks(body);
+      } else if (msgRole === 'user' && typeof renderUserText === 'function') {
+        body.innerHTML = renderUserText(raw);
+      } else if (msgRole === 'jevons' || msgRole === 'user') {
+        // Last-resort escape (still not textContent for assistant — avoids raw MD look
+        // when marked is absent; escaped HTML is visible as plain).
+        body.textContent = raw;
+      } else {
+        body.textContent = raw;
+      }
+    } catch (paintErr) {
+      // One bad turn must not abort the forEach — keep remaining turns paint-able.
+      try {
+        if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
+          body.innerHTML = parseAssistantMarkdown(raw);
+        } else if (msgRole === 'user' && typeof parseAssistantMarkdown === 'function'
+            && typeof AgentTranscript !== 'undefined'
+            && AgentTranscript.inspectUserShouldMarkdown
+            && AgentTranscript.inspectUserShouldMarkdown(raw, false)) {
+          body.innerHTML = parseAssistantMarkdown(raw);
+        } else {
+          body.textContent = raw;
+        }
+      } catch (_) {
+        body.textContent = raw;
+      }
+    }
+    agentInspectBody.appendChild(d);
   });
-  // Stay pinned to latest while following a live agent.
-  agentInspectBody.scrollTop = agentInspectBody.scrollHeight;
+  if (typeof decorateBodyLinks === 'function') {
+    decorateBodyLinks(agentInspectBody); // 🎯T151 belt-and-suspenders
+  }
+  _agentInspectFp = fp;
+  // Stickiness: pin only while Tracking; free preserves prevTop.
+  if (follow && follow.applyAfterUpdate) {
+    follow.applyAfterUpdate(agentInspectBody, prevTop);
+    if (follow.shouldPin && follow.shouldPin()) {
+      requestAnimationFrame(function () {
+        if (follow.shouldPin()) follow.applyAfterUpdate(agentInspectBody);
+      });
+    }
+  }
 }
 
+// 🎯T209 residual: manual refresh re-issues inspect_subscribe (wire history),
+// optionally falling back to HTTP GET for debug when transport is down.
 function loadAgentTranscript(name, opts) {
   if (!name || !agentInspectEl) return;
   // Hard guard: never fetch/render overseer into RHS pane.
@@ -4038,6 +5434,12 @@ function loadAgentTranscript(name, opts) {
     return;
   }
   const quiet = !!(opts && opts.quiet);
+  // Primary product path: re-subscribe on /ws/chat for sealed history push.
+  if (typeof transport !== 'undefined' && transport.send) {
+    subscribeAgentInspect(name);
+    return;
+  }
+  // Residual HTTP when no chat transport (export/debug / hermetic stubs).
   fetch('/api/agents/' + encodeURIComponent(name) + '/transcript')
     .then(function (r) {
       if (!r.ok) return r.json().then(function (j) {
@@ -4049,19 +5451,15 @@ function loadAgentTranscript(name, opts) {
       const model = (typeof AgentTranscript !== 'undefined')
         ? AgentTranscript.paneModel(name, payload)
         : { title: name, lines: (payload && payload.turns) || [], empty: !(payload && payload.turns && payload.turns.length), error: '' };
-      // Surface soft errors from empty session as empty, not hard fail.
       if (payload && payload.error && model.empty) {
         model.error = '';
       }
+      _agentInspectLines = (model.lines || []).map(function (l) {
+        return { role: l.role, text: l.text };
+      });
       renderAgentInspect(model);
       document.querySelectorAll('.agent-node').forEach(n =>
         n.classList.toggle('selected', n.dataset.agent === name));
-      // Poll while open so worker thinking streams into the pane.
-      if (!agentTranscriptTimer) {
-        agentTranscriptTimer = setInterval(function () {
-          if (selectedAgent) loadAgentTranscript(selectedAgent, { quiet: true });
-        }, 4000);
-      }
     })
     .catch(function (err) {
       if (quiet) return;
@@ -4072,12 +5470,423 @@ function loadAgentTranscript(name, opts) {
     });
 }
 
+function renderFrontierTable(model) {
+  if (!frontierBodyEl) return;
+  // 🎯T230: never tear down a latched InstantTip (pointer over tip or host).
+  // Quiet poll / frontier_changed used to removeChild every .instant-tip,
+  // which felt like an idle auto-timeout while the mouse sat still on the card.
+  // Skip remount while latched; next poll after leave applies the fresh model.
+  if (typeof InstantTip !== 'undefined' && typeof InstantTip.anyHoverLatched === 'function'
+      && InstantTip.anyHoverLatched()) {
+    return;
+  }
+  // Drop previous fixed-layer tips (hosts are about to be destroyed).
+  // Prefer InstantTip.discardDetachedTips so registry + sticky state stay consistent.
+  if (typeof InstantTip !== 'undefined' && typeof InstantTip.discardDetachedTips === 'function') {
+    InstantTip.discardDetachedTips(document);
+  } else {
+    document.querySelectorAll('.instant-tip').forEach(function (el) {
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
+  }
+  if (rhsTabMeta) {
+    rhsTabMeta.textContent = model.available
+      ? ((model.rows && model.rows.length) + ' ready')
+      : '';
+    rhsTabMeta.title = model.ledger
+      ? ('Ledger: ' + model.ledger + ' (via bullseye discovery)')
+      : (model.error || 'No ledger');
+  }
+  if (model.error && !model.available) {
+    frontierBodyEl.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'ai-empty';
+    empty.textContent = (typeof FrontierTable !== 'undefined')
+      ? FrontierTable.emptyMessage(model)
+      : (model.error || 'Frontier unavailable.');
+    frontierBodyEl.appendChild(empty);
+    return;
+  }
+  if (model.empty) {
+    frontierBodyEl.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'ai-empty';
+    empty.textContent = (typeof FrontierTable !== 'undefined')
+      ? FrontierTable.emptyMessage(model)
+      : 'Frontier is empty.';
+    frontierBodyEl.appendChild(empty);
+    return;
+  }
+  // 🎯T173: headerless table — id / name / status abbr / fanout N᚛ (hide 0).
+  // 🎯T175: explanations via InstantTip (0ms), never native title= on these cells.
+  // 🎯T181: ID + name → rich markdown target card (left-of-pointer placement).
+  // 🎯T198: merge /api/agents target_id → engaged rows sink bottom, play→stop.
+  const table = document.createElement('table');
+  table.id = 'frontier-table';
+  table.setAttribute('aria-label', 'Bullseye frontier');
+  const tbody = document.createElement('tbody');
+  const agents = (model && model.agents) || frontierAgentsCache || [];
+  const rows = (typeof FrontierTable !== 'undefined' && FrontierTable.applyEngagement)
+    ? FrontierTable.applyEngagement(model.rows || [], agents)
+    : (model.rows || []);
+  rows.forEach(function (row) {
+    const tr = document.createElement('tr');
+    if (row.engaged) {
+      tr.className = 'ft-engaged';
+      tr.setAttribute('data-engaged', '1');
+      if (row.engaged_agents && row.engaged_agents.length) {
+        tr.setAttribute('data-engaged-agents', row.engaged_agents.join(','));
+      }
+    }
+    const id = document.createElement('td');
+    id.className = 'ft-id';
+    id.textContent = '🎯' + row.id;
+    const name = document.createElement('td');
+    name.className = 'ft-name';
+    const fullName = row.name || '';
+    name.textContent = (typeof FrontierTable !== 'undefined')
+      ? FrontierTable.shortName(fullName, 72)
+      : fullName;
+    // 🎯T181/T184: full semantic card on ID and name (markdown HTML + mermaid deps).
+    if (typeof InstantTip !== 'undefined' && typeof FrontierTable !== 'undefined'
+        && FrontierTable.formatTargetCardMarkdown) {
+      const md = FrontierTable.formatTargetCardMarkdown(row);
+      const plain = FrontierTable.formatTargetCardPlain
+        ? FrontierTable.formatTargetCardPlain(row)
+        : md;
+      if (md) {
+        let html = md;
+        // Markdown-bearing fields (acceptance/context/attestation + mermaid fence)
+        // via marked / parseAssistantMarkdown — not plain escaped text only.
+        if (typeof parseAssistantMarkdown === 'function') {
+          try { html = parseAssistantMarkdown(md); } catch (_) { html = md; }
+        } else if (typeof marked !== 'undefined' && marked.parse) {
+          try { html = marked.parse(md); } catch (_) { html = md; }
+        }
+        // 🎯T186/T231: sticky card; ONE hit rect = AABB(card ∪ id+name).
+        // Leave rect → dismiss immediately (HIDE_GRACE_MS=0). No bridge element.
+        // groupHosts = id+name of active row; clamp right edge left of table.
+        const cardOpts = {
+          html: true,
+          ariaLabel: plain,
+          placement: InstantTip.PLACE_LEFT_OF_POINTER || 'left-of-pointer',
+          className: InstantTip.CARD_CLASS || 'instant-tip-card',
+          sticky: true,
+          hitGroup: true,
+          groupHosts: [id, name],
+          clampSelectors: ['#frontier-table', '#frontier-body'],
+        };
+        // Single attach per row (id primary; name in groupHosts hit rect).
+        const tipCard = InstantTip.attach(id, html, cardOpts);
+        // 🎯T184: render mermaid minigraph inside card tips (same path as chat).
+        if (typeof renderMermaidIn === 'function' && tipCard) {
+          renderMermaidIn(tipCard);
+        }
+      }
+    } else if (fullName && typeof InstantTip !== 'undefined') {
+      // Fallback: name-only tip when pure helpers unavailable.
+      InstantTip.attach(name, fullName);
+    }
+    const status = document.createElement('td');
+    status.className = 'ft-status';
+    let statusTip = '';
+    if (typeof FrontierTable !== 'undefined') {
+      status.textContent = FrontierTable.formatStatus(row.status);
+      statusTip = FrontierTable.statusTitle(row.status);
+    } else {
+      status.textContent = row.status || '';
+      statusTip = row.status || '';
+    }
+    if (statusTip && typeof InstantTip !== 'undefined') {
+      InstantTip.attach(status, statusTip);
+    }
+    const fan = document.createElement('td');
+    fan.className = 'ft-fanout';
+    if (typeof FrontierTable !== 'undefined' && FrontierTable.formatFanout) {
+      // 🎯T179: tip = lead count line + "• TID Name" bullets from dependents[]
+      const fo = FrontierTable.formatFanout(row.fanout, row.id, row.dependents);
+      if (fo.visible) {
+        fan.textContent = fo.text;
+        if (fo.title && typeof InstantTip !== 'undefined') {
+          InstantTip.attach(fan, fo.title);
+        }
+      } else {
+        fan.className = 'ft-fanout ft-fanout-empty';
+        fan.textContent = '';
+      }
+    } else {
+      const n = row.fanout != null ? row.fanout : 0;
+      fan.textContent = n > 0 ? String(n) : '';
+    }
+    // 🎯T182/T198: free → play (kickoff PO); engaged → stop (kill by target_id).
+    const play = document.createElement('td');
+    play.className = 'ft-play';
+    const playBtn = document.createElement('button');
+    playBtn.type = 'button';
+    const engaged = !!row.engaged;
+    if (engaged) {
+      playBtn.className = 'ft-play-btn ft-stop-btn';
+      playBtn.textContent = (typeof FrontierTable !== 'undefined' && FrontierTable.STOP_GLYPH)
+        ? FrontierTable.STOP_GLYPH
+        : '\u25A0';
+      playBtn.setAttribute('aria-label', 'Stop work on 🎯' + (row.id || ''));
+      playBtn.title = 'Stop engaged worker(s) for this target';
+      playBtn.addEventListener('click', function (ev) {
+        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+        stopFrontierEngagement(row, playBtn);
+      });
+    } else {
+      playBtn.className = 'ft-play-btn';
+      playBtn.textContent = (typeof FrontierTable !== 'undefined' && FrontierTable.PLAY_GLYPH)
+        ? FrontierTable.PLAY_GLYPH
+        : '\u25B6';
+      playBtn.setAttribute('aria-label', 'Start work on 🎯' + (row.id || ''));
+      playBtn.title = 'Start work via jevons-po';
+      playBtn.addEventListener('click', function (ev) {
+        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+        playFrontierTarget(row, playBtn);
+      });
+    }
+    play.appendChild(playBtn);
+    tr.appendChild(id);
+    tr.appendChild(name);
+    tr.appendChild(status);
+    tr.appendChild(fan);
+    tr.appendChild(play);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  frontierBodyEl.innerHTML = '';
+  frontierBodyEl.appendChild(table);
+}
+
+// 🎯T198: latest /api/agents snapshot for frontier engagement merge.
+let frontierAgentsCache = [];
+
+// 🎯T182: POST product agent-send path so PO spawns/briefs work on the target.
+// Mock seam: window.__frontierAgentSend(url, body) → Promise (hermetic tests).
+// 🎯T222: blocked when engaged / set_aside / achieved — no second kickoff.
+function playFrontierTarget(row, btnEl) {
+  if (!row || !row.id) return Promise.resolve(null);
+  const req = (typeof FrontierTable !== 'undefined' && FrontierTable.playKickoffRequest)
+    ? FrontierTable.playKickoffRequest(row)
+    : {
+        url: '/api/agents/jevons-po/send',
+        method: 'POST',
+        body: {
+          text: 'Start work on frontier target 🎯' + row.id +
+            (row.name ? (' — ' + row.name) : '') +
+            '.\n\nKick off now: spawn/brief a fleet worker with parent=jevons-po ' +
+            'and target_id=' + row.id +
+            ' (jevons_agent_start target_id — 🎯T198). Do not only toast or acknowledge.',
+        },
+        po: 'jevons-po',
+      };
+  // 🎯T222: pure gate may return blocked (no body).
+  if (req && req.blocked) {
+    if (typeof jLog === 'function') {
+      jLog('info', 'frontier_play_blocked', {
+        target: row.id,
+        reason: req.reason,
+        message: req.message,
+      });
+    }
+    return Promise.resolve({ status: 'blocked', reason: req.reason, message: req.message });
+  }
+  if (!req || !req.body || !req.body.text) return Promise.resolve(null);
+  if (btnEl) btnEl.disabled = true;
+  const sendFn = (typeof window !== 'undefined' && typeof window.__frontierAgentSend === 'function')
+    ? window.__frontierAgentSend
+    : function (url, body) {
+        return fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }).then(function (r) {
+          return r.json().then(function (j) {
+            if (!r.ok) {
+              const err = new Error((j && j.error) || ('HTTP ' + r.status));
+              err.status = r.status;
+              err.body = j;
+              throw err;
+            }
+            return j;
+          }).catch(function (e) {
+            if (e && e.status) throw e;
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return {};
+          });
+        });
+      };
+  return Promise.resolve(sendFn(req.url, req.body))
+    .then(function (res) {
+      if (typeof jLog === 'function') {
+        jLog('info', 'frontier_play', {
+          target: row.id,
+          po: req.po,
+          status: (res && res.status) || 'sent',
+        });
+      }
+      return res;
+    })
+    .catch(function (err) {
+      if (typeof jLog === 'function') {
+        jLog('warn', 'frontier_play_failed', {
+          target: row.id,
+          po: req.po,
+          err: String(err && err.message || err),
+        });
+      }
+      return null;
+    })
+    .finally(function () {
+      if (btnEl) btnEl.disabled = false;
+    });
+}
+
+// 🎯T198: POST /api/agents/engagement/stop — kill workers with matching target_id.
+// Mock seam: window.__frontierEngagementStop(url, body) → Promise.
+function stopFrontierEngagement(row, btnEl) {
+  if (!row || !row.id) return Promise.resolve(null);
+  const req = (typeof FrontierTable !== 'undefined' && FrontierTable.stopEngagementRequest)
+    ? FrontierTable.stopEngagementRequest(row.id)
+    : {
+        url: '/api/agents/engagement/stop',
+        method: 'POST',
+        body: { target_id: String(row.id).replace(/^🎯/, '').trim() },
+        target_id: String(row.id).replace(/^🎯/, '').trim(),
+      };
+  if (!req || !req.body || !req.body.target_id) return Promise.resolve(null);
+  if (btnEl) btnEl.disabled = true;
+  const stopFn = (typeof window !== 'undefined' && typeof window.__frontierEngagementStop === 'function')
+    ? window.__frontierEngagementStop
+    : function (url, body) {
+        return fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }).then(function (r) {
+          return r.json().then(function (j) {
+            if (!r.ok) {
+              const err = new Error((j && j.error) || ('HTTP ' + r.status));
+              err.status = r.status;
+              err.body = j;
+              throw err;
+            }
+            return j;
+          }).catch(function (e) {
+            if (e && e.status) throw e;
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return {};
+          });
+        });
+      };
+  return Promise.resolve(stopFn(req.url, req.body))
+    .then(function (res) {
+      if (typeof jLog === 'function') {
+        jLog('info', 'frontier_stop', {
+          target: row.id,
+          stopped: (res && res.stopped) || [],
+          status: (res && res.status) || 'ok',
+        });
+      }
+      // Refresh agents + frontier so engaged chrome clears without waiting for poll.
+      if (typeof refreshAgents === 'function') refreshAgents();
+      if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
+      return res;
+    })
+    .catch(function (err) {
+      if (typeof jLog === 'function') {
+        jLog('warn', 'frontier_stop_failed', {
+          target: row.id,
+          err: String(err && err.message || err),
+        });
+      }
+      return null;
+    })
+    .finally(function () {
+      if (btnEl) btnEl.disabled = false;
+    });
+}
+
+function loadFrontier(opts) {
+  if (!frontierBodyEl) return;
+  const quiet = !!(opts && opts.quiet);
+  const api = (typeof FrontierTable !== 'undefined' && FrontierTable.API_PATH)
+    ? FrontierTable.API_PATH
+    : '/api/frontier';
+  const agentsApi = (typeof FrontierTable !== 'undefined' && FrontierTable.AGENTS_API_PATH)
+    ? FrontierTable.AGENTS_API_PATH
+    : '/api/agents';
+  // 🎯T198: fetch frontier + agents; merge by target_id (no name parse).
+  Promise.all([
+    fetch(api).then(function (r) {
+      if (!r.ok) return r.json().then(function (j) {
+        throw new Error((j && j.error) || ('HTTP ' + r.status));
+      }).catch(function () {
+        throw new Error('HTTP ' + r.status);
+      });
+      return r.json();
+    }),
+    fetch(agentsApi).then(function (r) {
+      if (!r.ok) return [];
+      return r.json().catch(function () { return []; });
+    }).catch(function () { return []; }),
+  ])
+    .then(function (pair) {
+      const payload = pair[0];
+      const agents = Array.isArray(pair[1]) ? pair[1] : [];
+      frontierAgentsCache = agents;
+      const model = (typeof FrontierTable !== 'undefined')
+        ? FrontierTable.normalizePayload(payload)
+        : {
+            available: !!(payload && payload.available),
+            ledger: (payload && payload.ledger) || '',
+            rows: (payload && payload.targets) || [],
+            empty: !(payload && payload.targets && payload.targets.length),
+            error: (payload && payload.error) || '',
+          };
+      model.agents = agents;
+      renderFrontierTable(model);
+      // Light poll fallback when pane is up (fsnotify pushes frontier_changed).
+      if (!frontierPollTimer) {
+        const ms = (typeof FrontierTable !== 'undefined' && FrontierTable.POLL_MS)
+          ? FrontierTable.POLL_MS
+          : 8000;
+        frontierPollTimer = setInterval(function () {
+          loadFrontier({ quiet: true });
+        }, ms);
+      }
+    })
+    .catch(function (err) {
+      if (quiet) return;
+      const model = (typeof FrontierTable !== 'undefined')
+        ? FrontierTable.normalizePayload(null, err)
+        : { available: false, rows: [], empty: true, error: String(err && err.message || err) };
+      model.agents = frontierAgentsCache || [];
+      renderFrontierTable(model);
+    });
+}
+
 const agentInspectClose = document.getElementById('agent-inspect-close');
 if (agentInspectClose) agentInspectClose.onclick = function () { selectAgent(selectedAgent); };
 const agentInspectRefresh = document.getElementById('agent-inspect-refresh');
 if (agentInspectRefresh) agentInspectRefresh.onclick = function () {
   if (selectedAgent) loadAgentTranscript(selectedAgent, { quiet: false });
 };
+const frontierRefresh = document.getElementById('frontier-refresh');
+if (frontierRefresh) frontierRefresh.onclick = function () {
+  loadFrontier({ quiet: false });
+};
+// 🎯T185: Graph — ~90% unachieved dependency graph (Refresh kept as recovery).
+const frontierGraph = document.getElementById('frontier-graph');
+if (frontierGraph) frontierGraph.onclick = function () {
+  if (typeof openFrontierGraph === 'function') openFrontierGraph({ pin: true });
+};
+// Boot: show frontier table (T131 default tab).
+if (typeof loadFrontier === 'function') {
+  try { loadFrontier({ quiet: false }); } catch (e) { /* isolated */ }
+}
 
 function openTerminal(name) {
   closeTerminal();
@@ -4141,9 +5950,17 @@ function closeTerminal() {
   document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
 }
 
-// Preserve input across hot reloads.
-const savedInput = sessionStorage.getItem('jevons-input');
-if (savedInput) { input.value = savedInput; sessionStorage.removeItem('jevons-input'); }
+// Preserve input across hot reloads (late path if boot restore missed).
+// 🎯T183: always re-sync seed-only class after restore so real draft is visible.
+try {
+  const savedInput = sessionStorage.getItem('jevons-input');
+  if (savedInput) {
+    input.value = savedInput;
+    sessionStorage.removeItem('jevons-input');
+  }
+} catch (_) {}
+if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
+if (typeof autoGrow === 'function') autoGrow();
 
 // Voice UI — uses transport abstraction for both browser and native modes.
 const voiceBtn = document.getElementById('voice-btn');

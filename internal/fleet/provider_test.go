@@ -70,3 +70,69 @@ func TestRegisterProviderFromThread(t *testing.T) {
 		t.Fatalf("empty → default: %q", got)
 	}
 }
+
+// 🎯T215: fleet ensureRegistered (Launch's registry half) stitches
+// provider=claude without live Grok/Claude process.
+func TestClaudeSessionStitchEnsureRegistered(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := NewClaudia(reg)
+	f.SetDefaultProvider(claudia.ProviderGrok)
+
+	th := &thread.Thread{
+		ID:       "jv-t215-fleet-claude",
+		WorkDir:  t.TempDir(),
+		Provider: string(claudia.ProviderClaude),
+		Parent:   "jevons-po",
+		Purpose:  thread.PurposeWork,
+	}
+	if err := f.ensureRegistered(th); err != nil {
+		t.Fatalf("ensureRegistered mint: %v", err)
+	}
+	def := reg.Def(th.ID)
+	if def == nil {
+		t.Fatal("missing registry def after ensureRegistered")
+	}
+	if def.Provider != claudia.ProviderClaude {
+		t.Fatalf("Provider = %q want claude", def.Provider)
+	}
+	if def.SessionID == "" {
+		t.Fatal("SessionID empty — session handoff broken")
+	}
+	if def.Materialized {
+		t.Fatal("Materialized true before Launch")
+	}
+	if th.SessionID == "" || th.SessionID != def.SessionID {
+		t.Fatalf("thread SessionID handoff = %q def=%q", th.SessionID, def.SessionID)
+	}
+
+	// Resume with empty thread provider + Grok default must not clobber.
+	th2 := &thread.Thread{
+		ID:      th.ID,
+		WorkDir: th.WorkDir,
+		Parent:  "jevons-po",
+		Purpose: thread.PurposeWork,
+	}
+	if err := f.ensureRegistered(th2); err != nil {
+		t.Fatalf("ensureRegistered resume: %v", err)
+	}
+	again := reg.Def(th.ID)
+	if again.Provider != claudia.ProviderClaude {
+		t.Fatalf("resume clobbered Provider to %q", again.Provider)
+	}
+	if again.SessionID != def.SessionID {
+		t.Fatalf("resume reminted session: %q → %q", def.SessionID, again.SessionID)
+	}
+
+	// Post-Launch Materialized must keep provider/session (claudia handoff).
+	again.Materialized = true
+	if err := reg.Register(*again); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.Def(th.ID); got.Provider != claudia.ProviderClaude || !got.Materialized {
+		t.Fatalf("after Materialized: provider=%q materialized=%v", got.Provider, got.Materialized)
+	}
+}
+

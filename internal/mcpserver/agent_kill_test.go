@@ -177,3 +177,68 @@ func TestCanKillRequiresActor(t *testing.T) {
 		t.Fatalf("want actor required, got %v", err)
 	}
 }
+
+// 🎯T229: kill of an already-absent agent is success (idempotent), not
+// lifecycle_error — matches T165/T195 auto-reap + hygiene double-kill.
+func TestAgentKillAlreadyGoneIdempotent(t *testing.T) {
+	reg := regWithTree(t)
+	s := &Server{registry: reg}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "never-existed", "actor": "po"}
+	res, err := s.handleAgentKill(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("already-gone kill must not error: %s", toolText(res))
+	}
+	if !strings.Contains(toolText(res), "already not registered") {
+		t.Fatalf("want idempotent message, got %q", toolText(res))
+	}
+}
+
+// 🎯T229: second kill after a successful kill is a no-op success.
+func TestAgentKillDoubleKillIdempotent(t *testing.T) {
+	reg := regWithTree(t)
+	s := &Server{registry: reg}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "worker", "actor": "po"}
+	res1, err := s.handleAgentKill(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res1.IsError {
+		t.Fatalf("first kill: %s", toolText(res1))
+	}
+	res2, err := s.handleAgentKill(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.IsError {
+		t.Fatalf("second kill must be idempotent ok: %s", toolText(res2))
+	}
+	if !strings.Contains(toolText(res2), "already not registered") {
+		t.Fatalf("want already-gone message, got %q", toolText(res2))
+	}
+	if reg.Def("worker") != nil {
+		t.Fatal("worker still registered")
+	}
+}
+
+// 🎯T229: already-gone kill still requires actor (audit trail).
+func TestAgentKillAlreadyGoneRequiresActor(t *testing.T) {
+	reg := regWithTree(t)
+	s := &Server{registry: reg}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "ghost"}
+	res, err := s.handleAgentKill(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatal("expected actor required on already-gone without actor")
+	}
+	if !strings.Contains(toolText(res), "actor") {
+		t.Fatalf("got %q", toolText(res))
+	}
+}

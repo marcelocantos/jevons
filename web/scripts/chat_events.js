@@ -40,39 +40,57 @@
     return assistantTextBlocks(m).length > 0;
   }
 
-  // ── Join-time fence repair (🎯T147) ─────────────────────────────
-  // ACP can emit separate assistant segments: prose ending without NL,
-  // then (after tool_result) a segment that starts with ```. Naive
-  // `+=` / join('') smushes into `snippet.```cpp`. T145 ensureFenceNewlines
-  // is display-only; this is definitive repair at every segment edge.
+  // ── Segment-edge join (🎯T161; replaces T147 content sniff) ─────
+  // Grok/ACP emits separate assistant *segments* at protocol boundaries
+  // (tool rounds, multi-block content parts). Bare concat across those
+  // edges smashes paragraphs/fences/lists. T145 ensureFenceNewlines is
+  // display-only for already-fused fences.
+  //
+  // Zero content heuristics: join never inspects for `.`, capitals, ```,
+  // headings, lists, or word counts. The caller knows it is a segment
+  // edge from the event/protocol shape and uses joinAssistantSegments.
+  // Intra-segment token deltas use appendAssistantStream (bare concat).
 
   /**
-   * Coalesce two assistant text segments at a join boundary.
-   * If prev does not end with newline and next starts with a markdown
-   * fence opener (```), insert a blank line before append.
+   * Join two assistant segments at a known segment boundary.
+   * If neither side already has a line break at the boundary, insert a
+   * blank line. Does not inspect markdown or prose shape.
    *
    * @param {string|null|undefined} prev
    * @param {string|null|undefined} next
    * @returns {string}
    */
-  function coalesceAssistantText(prev, next) {
+  function joinAssistantSegments(prev, next) {
     prev = String(prev == null ? '' : prev);
     next = String(next == null ? '' : next);
     if (!prev) return next;
     if (!next) return prev;
-    if (!/[\n\r]$/.test(prev) && /^```/.test(next)) return prev + '\n\n' + next;
+    if (/[\n\r]$/.test(prev) || /^[\n\r]/.test(next)) return prev + next;
+    return prev + '\n\n' + next;
+  }
+
+  /**
+   * Intra-segment stream append (token/delta). Always bare concat.
+   *
+   * @param {string|null|undefined} prev
+   * @param {string|null|undefined} next
+   * @returns {string}
+   */
+  function appendAssistantStream(prev, next) {
+    prev = String(prev == null ? '' : prev);
+    next = String(next == null ? '' : next);
     return prev + next;
   }
 
   /**
-   * Join an array of assistant text parts with segment-edge fence repair.
+   * Join an ordered list of known segments (multi-block content).
    * Prefer this over `.join('')` for multi-block assistant content.
    *
    * @param {Array<string|null|undefined>|null|undefined} parts
    * @returns {string}
    */
   function joinAssistantTexts(parts) {
-    return (parts || []).reduce((acc, p) => coalesceAssistantText(acc, p), '');
+    return (parts || []).reduce((acc, p) => joinAssistantSegments(acc, p), '');
   }
 
   // shouldClearWorking: only end-of-turn signals. Mid-stream text chunks
@@ -91,14 +109,29 @@
 
   // Pure stream coalescer — models bubble count without DOM.
   // Used as the oracle for multi-chunk turns.
+  // segmentEdgePending: next text after non-text protocol content
+  // (tool_use, tool_result) joins via joinAssistantSegments, not bare concat.
+  function streamIdOf(m) {
+    if (!m) return '';
+    const id = m.stream_id != null ? m.stream_id : m.streamId;
+    return id == null ? '' : String(id).trim();
+  }
+
   function createTurnState() {
     return {
       working: false,
       userTexts: [],
       // Each entry is one jevons bubble's accumulated raw text.
       assistantBubbles: [],
-      // Index of the open stream bubble, or -1 when sealed.
+      // Index of the open unlabeled stream bubble, or -1 when sealed.
       openStream: -1,
+      // 🎯T223: stream_id → bubble index (join by identity, not adjacency).
+      streamBubbles: Object.create(null),
+      // stream_id → true while that stream is still open.
+      openById: Object.create(null),
+      segmentEdgePending: false,
+      // Per-stream segment edge (id → bool); legacy uses segmentEdgePending.
+      segmentEdgeById: Object.create(null),
     };
   }
 
@@ -112,27 +145,90 @@
         if (last === content) return state; // dedupe echo + ACP user chunk
         state.userTexts.push(content);
         state.working = true;
-        state.openStream = -1; // new user turn seals prior stream
+        // 🎯T223: user mid-stream does NOT seal open assistant streams.
+        // Streams seal only on terminal stop_reason (or system). Interleave
+        // is OK when fragments share stream_id; legacy openStream also stays.
+        state.segmentEdgePending = false;
       }
       return state;
     }
 
+    if (m.type === 'tool_result' || m.type === 'result') {
+      if (state.openStream >= 0) state.segmentEdgePending = true;
+      Object.keys(state.openById || {}).forEach(function (id) {
+        if (state.openById[id]) state.segmentEdgeById[id] = true;
+      });
+      return state;
+    }
+
     if (m.type === 'assistant') {
-      const blocks = assistantTextBlocks(m);
-      for (const b of blocks) {
-        if (state.openStream >= 0) {
-          state.assistantBubbles[state.openStream] = coalesceAssistantText(
-            state.assistantBubbles[state.openStream],
-            b.text,
-          );
-        } else {
-          state.assistantBubbles.push(b.text);
-          state.openStream = state.assistantBubbles.length - 1;
+      const content = m.message && m.message.content;
+      const sid = streamIdOf(m);
+      // Walk content in order: non-text marks a segment edge for the next
+      // text part; multiple text blocks in one message are segment edges
+      // between them; continuous single-block frames stay bare-concat.
+      if (Array.isArray(content)) {
+        let textPartsThisEvent = 0;
+        for (let i = 0; i < content.length; i++) {
+          const c = content[i];
+          if (!c) continue;
+          if (c.type === 'text' && c.text) {
+            let idx = -1;
+            let edge = false;
+            if (sid) {
+              if (state.streamBubbles[sid] == null) {
+                state.assistantBubbles.push(c.text);
+                idx = state.assistantBubbles.length - 1;
+                state.streamBubbles[sid] = idx;
+                state.openById[sid] = true;
+                state.segmentEdgeById[sid] = false;
+              } else {
+                idx = state.streamBubbles[sid];
+                edge = !!(state.segmentEdgeById[sid] || textPartsThisEvent > 0);
+                state.assistantBubbles[idx] = edge
+                  ? joinAssistantSegments(state.assistantBubbles[idx], c.text)
+                  : appendAssistantStream(state.assistantBubbles[idx], c.text);
+                state.segmentEdgeById[sid] = false;
+              }
+              // Keep legacy openStream pointing at latest labeled stream for
+              // callers that still read the singleton handle.
+              state.openStream = idx;
+            } else if (state.openStream >= 0) {
+              idx = state.openStream;
+              edge = !!(state.segmentEdgePending || textPartsThisEvent > 0);
+              state.assistantBubbles[idx] = edge
+                ? joinAssistantSegments(state.assistantBubbles[idx], c.text)
+                : appendAssistantStream(state.assistantBubbles[idx], c.text);
+              state.segmentEdgePending = false;
+            } else {
+              state.assistantBubbles.push(c.text);
+              state.openStream = state.assistantBubbles.length - 1;
+              state.segmentEdgePending = false;
+            }
+            textPartsThisEvent += 1;
+          } else if (c.type && c.type !== 'text') {
+            // tool_use and other non-text content: next text is a new segment
+            if (sid) {
+              if (state.openById[sid]) state.segmentEdgeById[sid] = true;
+            } else if (state.openStream >= 0) {
+              state.segmentEdgePending = true;
+            }
+          }
         }
       }
       if (shouldClearWorking(m)) {
         state.working = false;
-        state.openStream = -1;
+        if (sid) {
+          delete state.openById[sid];
+          delete state.segmentEdgeById[sid];
+          // Only clear singleton if it pointed at this stream.
+          if (state.streamBubbles[sid] === state.openStream) {
+            state.openStream = -1;
+          }
+        } else {
+          state.openStream = -1;
+        }
+        state.segmentEdgePending = false;
       }
       return state;
     }
@@ -140,6 +236,9 @@
     if (m.type === 'system') {
       state.working = false;
       state.openStream = -1;
+      state.openById = Object.create(null);
+      state.segmentEdgeById = Object.create(null);
+      state.segmentEdgePending = false;
     }
     return state;
   }
@@ -163,8 +262,12 @@
     isTerminalStop,
     assistantTextBlocks,
     hasAssistantText,
-    coalesceAssistantText,
+    streamIdOf,
+    joinAssistantSegments,
+    appendAssistantStream,
     joinAssistantTexts,
+    // Alias: only for known segment-edge joins (not token streams).
+    coalesceAssistantText: joinAssistantSegments,
     shouldClearWorking,
     workingLifecycle,
     createTurnState,

@@ -179,6 +179,152 @@ test('tool_use mid-turn then text then end_turn: one bubble, cleared', () => {
   assert.strictEqual(state.working, false);
 });
 
+// ── 🎯T159 one bubble per terminal stop_reason ───────────────────
+
+function toolUse(name, stopReason) {
+  const message = {
+    role: 'assistant',
+    content: [{ type: 'tool_use', name: name || 'Bash', input: {} }],
+  };
+  if (stopReason) message.stop_reason = stopReason;
+  return { type: 'assistant', message };
+}
+
+test('T159: stop_reason tool_use never clears working', () => {
+  assert.strictEqual(ChatEvents.shouldClearWorking(toolUse('Bash', 'tool_use')), false);
+  assert.strictEqual(ChatEvents.isTerminalStop(toolUse('Bash', 'tool_use')), false);
+  assert.ok(ChatEvents.TERMINAL_STOPS.has('end_turn'));
+  assert.ok(ChatEvents.TERMINAL_STOPS.has('stop_sequence'));
+  assert.ok(ChatEvents.TERMINAL_STOPS.has('max_tokens'));
+  assert.ok(!ChatEvents.TERMINAL_STOPS.has('tool_use'));
+});
+
+test('T159 hermetic: multi-chunk + tool_use + text + end_turn → one bubble', () => {
+  // Acceptance fixture: stream text → tool round(s) → more text → terminal.
+  const events = [
+    user('clean asides'),
+    chunk('| Bubble | Content |\n'),
+    chunk('|--------|---------|\n'),
+    chunk('| 1 | table |\n'),
+    toolUse('use_tool', 'tool_use'),
+    toolUse('run_terminal_command'),
+    chunk('\n**Note:** daily daemon needs the binary.\n'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(
+    state.assistantBubbles.length,
+    1,
+    `expected 1 bubble, got ${state.assistantBubbles.length}: ${JSON.stringify(state.assistantBubbles)}`,
+  );
+  const raw = state.assistantBubbles[0];
+  assert.ok(raw.includes('| Bubble |'), 'table head present');
+  assert.ok(raw.includes('**Note:**'), 'note present in same bubble');
+  assert.strictEqual(state.openStream, -1, 'sealed after end_turn');
+  assert.strictEqual(state.working, false);
+});
+
+test('T159: text before and after tool_use stop_reason stays one bubble', () => {
+  const events = [
+    user('x'),
+    chunk('Table then '),
+    toolUse('search_tool', 'tool_use'),
+    chunk('Note after tools'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  // 🎯T161: tool_use is a segment edge → structural blank line; still one bubble.
+  assert.strictEqual(state.assistantBubbles[0], 'Table then \n\nNote after tools');
+});
+
+test('T159: two real end_turns → two bubbles (no continuity heuristic)', () => {
+  const events = [
+    user('a'),
+    chunk('first'),
+    endTurn(),
+    // No clever merge across real terminal boundaries — even without a user.
+    chunk('second'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 2);
+  assert.strictEqual(state.assistantBubbles[0], 'first');
+  assert.strictEqual(state.assistantBubbles[1], 'second');
+});
+
+// ── 🎯T223 join by stream_id; user mid-stream does not split ──────
+
+function chunkWithId(text, streamId) {
+  return {
+    type: 'assistant',
+    stream_id: streamId,
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+  };
+}
+
+function endTurnWithId(streamId) {
+  return {
+    type: 'assistant',
+    stream_id: streamId,
+    message: { role: 'assistant', content: [], stop_reason: 'end_turn' },
+  };
+}
+
+test('T223: user mid-assistant without seal keeps one legacy bubble', () => {
+  // Journal-shaped interleave: asst half, owner user, asst half, end_turn.
+  const events = [
+    user('start'),
+    chunk('First half ends mid'),
+    chunk('-sentence.'),
+    user('observe bullseye'),
+    chunk(' Second half continues.'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(
+    state.assistantBubbles.length,
+    1,
+    `expected 1 bubble, got ${state.assistantBubbles.length}: ${JSON.stringify(state.assistantBubbles)}`,
+  );
+  assert.strictEqual(
+    state.assistantBubbles[0],
+    'First half ends mid-sentence. Second half continues.',
+  );
+  assert.strictEqual(state.userTexts.length, 2);
+  assert.strictEqual(state.openStream, -1);
+});
+
+test('T223: interleaved fragments join by stream_id; two ids stay two', () => {
+  const events = [
+    chunkWithId('A1', 's-a'),
+    chunkWithId('B1', 's-b'),
+    user('noise'),
+    chunkWithId('A2', 's-a'),
+    chunkWithId('B2', 's-b'),
+    endTurnWithId('s-a'),
+    endTurnWithId('s-b'),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 2);
+  assert.strictEqual(state.assistantBubbles[0], 'A1A2');
+  assert.strictEqual(state.assistantBubbles[1], 'B1B2');
+  assert.strictEqual(ChatEvents.streamIdOf(chunkWithId('x', 's-a')), 's-a');
+});
+
+test('T223 index.html: no seal on user; join keys stream_id', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('openStreamById'), 'must keep stream_id → el map');
+  assert.ok(html.includes('stream_id') || html.includes('streamId'), 'must read wire stream id');
+  // User path must not call sealAssistantStream (T223 pin).
+  const userBlock = html.match(/if\s*\(\s*typ\s*===\s*['"]user['"]\s*\)\s*\{[\s\S]*?\} else if\s*\(\s*typ\s*===\s*['"]assistant['"]/);
+  assert.ok(userBlock, 'user handle block must exist');
+  assert.ok(
+    !/sealAssistantStream\s*\(/.test(userBlock[0]),
+    'user mid-stream must not sealAssistantStream',
+  );
+});
+
 test('text+end_turn in one event: one bubble and clear', () => {
   const events = [
     user('x'),
@@ -227,37 +373,79 @@ test('index.html wires ChatEvents + stream seal', () => {
   );
 });
 
-// ── 🎯T147 join-time fence repair at segment edges ───────────────
-
-test('T147 coalesceAssistantText: Intro. + ```cpp fence inserts blank line', () => {
-  // Acceptance fixture: two frames at ACP segment boundary (not T145 alone).
-  const prev = 'Intro.';
-  const next = '```cpp\ncode\n```';
-  const out = ChatEvents.coalesceAssistantText(prev, next);
-  assert.strictEqual(out, 'Intro.\n\n```cpp\ncode\n```');
-  // Must not smush: period immediately followed by fence.
-  assert.ok(!out.includes('.```'), 'must not produce smushed prose.```');
-  assert.ok(/\n```cpp/.test(out), 'fence must start after a newline');
+test('T159 index.html: openStreamEl handle + seal only via shouldClearWorking', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('openStreamEl'), 'must keep explicit open-stream handle (🎯T159)');
+  assert.ok(html.includes('clearOpenStreamHandle'), 'must clear handle on seal/wipe');
+  // Seal path must gate on shouldClearWorking (terminal stops), not bare tool_use.
+  assert.ok(
+    /if\s*\(\s*ChatEvents\.shouldClearWorking\s*\(\s*m\s*\)\s*\)\s*\{[\s\S]*?sealAssistantStream\s*\(/.test(html),
+    'sealAssistantStream must be gated on shouldClearWorking',
+  );
+  // Must not seal on tool_use stop_reason string checks inventing policy.
+  assert.ok(
+    !/stop_reason\s*===\s*['"]tool_use['"]/.test(html),
+    'must not special-case tool_use string for seal policy',
+  );
 });
 
-test('T147 coalesceAssistantText: already-newline prev is unchanged join', () => {
-  const out = ChatEvents.coalesceAssistantText('Intro.\n', '```cpp\nx\n```');
-  assert.strictEqual(out, 'Intro.\n```cpp\nx\n```');
+// ── 🎯T161 structural segment-edge join (replaces T147 content sniff) ─
+// joinAssistantSegments: blank line only when neither side has a boundary
+// break — never inspects for ``` / capital / lists / word counts.
+// appendAssistantStream: bare concat for intra-segment tokens.
+// applyChatEvents: segment join only after tool_use/tool_result or multi-block.
+
+test('T161 joinAssistantSegments: two segments without boundary NL get blank line', () => {
+  const out = ChatEvents.joinAssistantSegments(
+    'First paragraph ends here.',
+    'Second paragraph starts here.',
+  );
+  assert.strictEqual(out, 'First paragraph ends here.\n\nSecond paragraph starts here.');
+  assert.ok(!out.includes('here.Second'), 'must not smash segments');
 });
 
-test('T147 coalesceAssistantText: non-fence next is bare concat', () => {
-  assert.strictEqual(ChatEvents.coalesceAssistantText('Hello', '.'), 'Hello.');
-  assert.strictEqual(ChatEvents.coalesceAssistantText('a', 'b'), 'ab');
+test('T161 joinAssistantSegments: same rule for fence/list/heading payloads', () => {
+  // Same structural join for all segment strings — no content special-cases.
+  assert.strictEqual(
+    ChatEvents.joinAssistantSegments('Intro.', '```cpp\ncode\n```'),
+    'Intro.\n\n```cpp\ncode\n```',
+  );
+  assert.strictEqual(
+    ChatEvents.joinAssistantSegments('Here are the items:', '- first\n- second'),
+    'Here are the items:\n\n- first\n- second',
+  );
+  assert.strictEqual(
+    ChatEvents.joinAssistantSegments('Overview.', '# Title\nbody'),
+    'Overview.\n\n# Title\nbody',
+  );
 });
 
-test('T147 coalesceAssistantText: empty/null edges', () => {
-  assert.strictEqual(ChatEvents.coalesceAssistantText('', '```\nx\n```'), '```\nx\n```');
-  assert.strictEqual(ChatEvents.coalesceAssistantText('Intro.', ''), 'Intro.');
-  assert.strictEqual(ChatEvents.coalesceAssistantText(null, '```\n```'), '```\n```');
-  assert.strictEqual(ChatEvents.coalesceAssistantText('x', null), 'x');
+test('T161 joinAssistantSegments: existing boundary break is unchanged', () => {
+  assert.strictEqual(
+    ChatEvents.joinAssistantSegments('Intro.\n', '```cpp\nx\n```'),
+    'Intro.\n```cpp\nx\n```',
+  );
+  assert.strictEqual(
+    ChatEvents.joinAssistantSegments('Intro.', '\n```cpp\nx\n```'),
+    'Intro.\n```cpp\nx\n```',
+  );
 });
 
-test('T147 joinAssistantTexts: multi-part segment edges', () => {
+test('T161 joinAssistantSegments: empty/null edges', () => {
+  assert.strictEqual(ChatEvents.joinAssistantSegments('', '```\nx\n```'), '```\nx\n```');
+  assert.strictEqual(ChatEvents.joinAssistantSegments('Intro.', ''), 'Intro.');
+  assert.strictEqual(ChatEvents.joinAssistantSegments(null, '```\n```'), '```\n```');
+  assert.strictEqual(ChatEvents.joinAssistantSegments('x', null), 'x');
+});
+
+test('T161 appendAssistantStream: always bare concat (token stream)', () => {
+  assert.strictEqual(ChatEvents.appendAssistantStream('Hello', '.'), 'Hello.');
+  assert.strictEqual(ChatEvents.appendAssistantStream('a', 'b'), 'ab');
+  assert.strictEqual(ChatEvents.appendAssistantStream('Hello.', 'What'), 'Hello.What');
+  assert.strictEqual(ChatEvents.appendAssistantStream('Intro.', '```cpp'), 'Intro.```cpp');
+});
+
+test('T161 joinAssistantTexts: multi-part segments always structural join', () => {
   const out = ChatEvents.joinAssistantTexts([
     'Checking conventions briefly, then a small clean snippet.',
     '```cpp\nint main() {}\n```',
@@ -266,11 +454,44 @@ test('T147 joinAssistantTexts: multi-part segment edges', () => {
     out,
     'Checking conventions briefly, then a small clean snippet.\n\n```cpp\nint main() {}\n```',
   );
-  assert.ok(!out.includes('.```'), 'join must not smush period+fence');
+  assert.strictEqual(
+    ChatEvents.joinAssistantTexts([
+      'First paragraph ends here.',
+      'Second paragraph starts here.',
+    ]),
+    'First paragraph ends here.\n\nSecond paragraph starts here.',
+  );
 });
 
-test('T147 applyChatEvents: tool_result gap then fence segment coalesces with NL', () => {
-  // Proven root cause shape: prose segment, tool frames, then fence-start segment.
+test('T161 applyChatEvents: continuous token stream stays bare-fused', () => {
+  const tokens = ['Hello', '.', 'What', 'do', 'you', 'need', '?'];
+  const events = [user('hello'), ...tokens.map(chunk), endTurn()];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  assert.strictEqual(state.assistantBubbles[0], tokens.join(''));
+});
+
+test('T161 applyChatEvents: tool_use gap then next segment gets structural join', () => {
+  // Prose segment, tool frame, then next segment (prose / fence / list — same path).
+  const events = [
+    user('explain two points'),
+    chunk('First paragraph ends here.'),
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'read_file', input: {} }] },
+    },
+    chunk('Second paragraph starts here.'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  assert.strictEqual(
+    state.assistantBubbles[0],
+    'First paragraph ends here.\n\nSecond paragraph starts here.',
+  );
+});
+
+test('T161 applyChatEvents: tool gap then fence segment (same structural path)', () => {
   const events = [
     user('write a snippet of C++ code'),
     chunk('Checking C++ conventions briefly, then a small clean snippet.'),
@@ -283,41 +504,68 @@ test('T147 applyChatEvents: tool_result gap then fence segment coalesces with NL
   ];
   const state = ChatEvents.applyChatEvents(events);
   assert.strictEqual(state.assistantBubbles.length, 1);
-  const raw = state.assistantBubbles[0];
-  assert.ok(!raw.includes('.```'), 'must not smush at tool_result gap');
-  assert.ok(
-    raw.includes('snippet.\n\n```cpp') || raw.includes('snippet.\n```cpp'),
-    'at least one newline before fence; got: ' + JSON.stringify(raw.slice(0, 120)),
-  );
   assert.strictEqual(
-    raw,
+    state.assistantBubbles[0],
     'Checking C++ conventions briefly, then a small clean snippet.\n\n```cpp\nint x = 1;\n```',
   );
 });
 
-test('T147 index.html: no bare _streamRaw += / pending.raw += / join(\'\') on assistant paths', () => {
+test('T161 applyChatEvents: multi-block text parts join as segments', () => {
+  const events = [
+    user('x'),
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'First paragraph ends here.' },
+          { type: 'text', text: 'Second paragraph starts here.' },
+        ],
+        stop_reason: 'end_turn',
+      },
+    },
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  assert.strictEqual(
+    state.assistantBubbles[0],
+    'First paragraph ends here.\n\nSecond paragraph starts here.',
+  );
+});
+
+test('T161 index.html: segment-edge join wired; no bare += / join(\'\')', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(
-    html.includes('ChatEvents.coalesceAssistantText'),
-    'must wire ChatEvents.coalesceAssistantText',
+    html.includes('ChatEvents.joinAssistantSegments'),
+    'must wire ChatEvents.joinAssistantSegments',
+  );
+  assert.ok(
+    html.includes('ChatEvents.appendAssistantStream'),
+    'must wire ChatEvents.appendAssistantStream',
   );
   assert.ok(
     html.includes('ChatEvents.joinAssistantTexts'),
     'must wire ChatEvents.joinAssistantTexts',
   );
-  // Bare stream/history joins are the T147 failure modes.
+  assert.ok(
+    html.includes('segmentEdge') || html.includes('streamSegmentEdge'),
+    'must track structural segment edge from protocol',
+  );
   assert.ok(
     !html.includes('_streamRaw +='),
-    'must not bare-append _streamRaw (use coalesceAssistantText)',
+    'must not bare-append _streamRaw',
   );
   assert.ok(
     !html.includes('pending.raw +='),
-    'must not bare-append pending.raw (use coalesceAssistantText)',
+    'must not bare-append pending.raw',
   );
-  // Multi-block join must not use empty-string join for assistant text.
   assert.ok(
     !/\.map\(\s*b\s*=>\s*b\.text\s*\)\.join\(\s*['"]{2}\s*\)/.test(html),
     'must not join assistant text blocks with join(\'\')',
+  );
+  // No content-sniff join helpers in product path.
+  assert.ok(
+    !/needsJoinBreak|looksLikeParagraphSegment|SENTENCE_END_RE/.test(html),
+    'must not embed content-sniff helpers in index.html',
   );
 });
 

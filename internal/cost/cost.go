@@ -21,6 +21,12 @@
 // pause → kill escalation, a hard ceiling that stops spawning, a global
 // kill-switch that reaches launchd-detached tmux fleets, a dead-man's
 // switch, and an auto-resume guard.
+//
+// Accounting honesty (🎯T137): budget.json accounting=list_price (default)
+// treats USD as billable for enforcement. accounting=subscription
+// (SuperGrok / no marginal $) reports API-equivalent estimates labeled
+// non-bill and never pause/kills on them. disabled=true turns the
+// collector and enforcer off entirely; /api/cost reports disabled.
 package cost
 
 import "time"

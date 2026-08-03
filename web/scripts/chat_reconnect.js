@@ -31,6 +31,8 @@
   /**
    * While soft-reconnecting, drop history/live stream frames until meta.
    * Always keep: conn, history_meta, error, status, agents_changed, rewound, pong.
+   * 🎯T209: agent_transcript (inspect multiplex) is also kept so RHS inspect
+   * does not go dark across soft reconnect while main firehose is suppressed.
    */
   function shouldSuppressFrame(softActive, msg) {
     if (!softActive) return false;
@@ -38,7 +40,8 @@
     const typ = m.type == null ? '' : String(m.type);
     if (typ === 'conn' || typ === 'history_meta' || typ === 'error' ||
         typ === 'status' || typ === 'agents_changed' || typ === 'rewound' ||
-        typ === 'cost_alert' || typ === 'pong') {
+        typ === 'cost_alert' || typ === 'pong' || typ === 'agent_transcript' ||
+        typ === 'frontier_changed') {
       return false;
     }
     // Plain chat stream / user echo / assistant tokens — suppress during soft.

@@ -1,20 +1,26 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic perceptual test for bounded oversized-content rendering
-// (🎯T55/T57/T66/T77). Serves the static web/ UI, drives addMsg() and the
-// streaming append/seal path with short + huge content for both roles, and
-// asserts the WORK is bounded, not just the visuals:
-//   * tallness = rendered full height > 1.5 × collapsed-preview height
-//     (not char/line proxies)
-//   * a tall non-latest bubble renders only a PREVIEW (~14 lines) — its
-//     .msg-body node/text count is a small fraction of the full content
-//   * it grows a .msg-expand toggle; clicking renders the FULL content
-//     lazily (node count jumps to the full size), and re-collapses
-//   * a short bubble renders in full with no toggle
+// Hermetic perceptual test for clip-collapse of oversized chat bubbles
+// (🎯T106 + T66/T77 + T166). Serves the static web/ UI, drives addMsg() and the
+// streaming append/seal path with short + huge + medium-tall content for
+// both roles, and asserts the clip model (not the old truncated re-parse
+// preview):
+//   * tallness = full rendered height > COLLAPSED_MAX_HEIGHT (+ epsilon)
+//     (not 1.5× the clip box — that left medium-tall 14–21rem without tab)
+//   * medium-tall (clip < full < 1.5×clip) non-latest → tab + .msg-clipped
+//   * collapsed tall bubbles keep FULL HTML in the DOM (tables/lists intact)
+//   * container is height-capped (max-height / overflow hidden / .msg-clipped)
+//   * bottom pocket scrim (.msg-clip-fade) present when collapsed (darken)
+//   * chevron tab (.msg-expand-tab) only — no "Show more" / "Show less" text
+//   * short bubble has no tab and no fade
+//   * timestamp outside bubble box; tab tongue inside bottom edge
+//   * scrim height matches bubble --radius (short edge cue, not multi-line)
 //   * T66: latest request/response stay expanded when tall (incl. stream
 //     that grows short→tall)
-//   * T77: when either role ceases to be latest, auto-expand reverts to preview
+//   * T77: when either role ceases to be latest, auto-expand reverts to clip
+//   * T166: expanded+tab reserves bottom padding so last text clears ▲ tab;
+//     collapsed msg-clipped stays padding-bottom:0
 // Screenshots the collapsed and expanded states into artifacts/.
 //
 //   node scripts/chat-ui-test/collapse-test.js [--headed]
@@ -63,6 +69,12 @@ function startStaticServer() {
   });
 }
 
+function assertNoShowMoreLess(text, label, failures) {
+  if (/show\s*more|show\s*less/i.test(text || '')) {
+    failures.push(`${label}: found Show more/less text: ${JSON.stringify(text)}`);
+  }
+}
+
 (async () => {
   const failures = [];
   const { srv, base } = await startStaticServer();
@@ -81,85 +93,355 @@ function startStaticServer() {
       window.scheduleVirtualize = function () {};
     });
 
-    // ── Scenario A (T55/T57/T66): short + middle huge (both roles) + latest huge assistant ──
+    // ── Scenario A (T106/T66): short + middle huge (both roles) + latest huge assistant ──
     // Build: short reply, a huge assistant list, a huge user block, then
-    // a huge assistant "latest". The two middle huge ones are NOT the last
-    // message → collapsed previews; the LAST one auto-expands (owner req).
+    // a huge assistant "latest". Middle huge ones are NOT the last message
+    // → clipped full render; the LAST one auto-expands (T66).
     await page.evaluate(() => {
       const N = 60;
       const bigList = Array.from({ length: N }, (_, i) => `- bullseye__bullseye_tool_${i}`).join('\n');
       const bigUser = Array.from({ length: 80 }, (_, i) => `recap line ${i}: durable conversation record continues`).join('\n');
       const latestList = Array.from({ length: N }, (_, i) => `- latest__item_${i}`).join('\n');
+      // Table-first tall content: clip must keep thead/header cells in DOM.
+      const tableMd = [
+        '| ID | Name | Notes |',
+        '| --- | --- | --- |',
+        ...Array.from({ length: 40 }, (_, i) => `| ${i} | item_${i} | note ${i} |`),
+      ].join('\n');
       window.addMsg('jevons', 'Short reply, nothing to collapse.');
       const jBig = window.addMsg('jevons', '### bullseye\n' + bigList);
       const uBig = window.addMsg('user', bigUser);
+      const jTable = window.addMsg('jevons', '### inventory\n\n' + tableMd);
       const latest = window.addMsg('jevons', '### latest\n' + latestList);
-      window._t = { N, uFullLen: bigUser.length, USER_PREVIEW_LINES: (window.USER_PREVIEW_LINES || 7) };
-      window._els = { jBig, uBig, latest, short: document.querySelectorAll('#messages .msg.jevons')[0] };
+      window._t = { N, uFullLen: bigUser.length };
+      window._els = { jBig, uBig, jTable, latest, short: document.querySelectorAll('#messages .msg.jevons')[0] };
     });
     // Auto-expand-latest is debounced (rAF) — let it settle.
     await page.waitForTimeout(200);
 
     const state = await page.evaluate(() => {
-      const { jBig, uBig, latest, short } = window._els;
-      const uPrevLines = uBig._body.textContent.split('\n').length;
+      const { jBig, uBig, jTable, latest, short } = window._els;
+      const jBodyStyle = getComputedStyle(jBig._body);
+      const uBodyStyle = getComputedStyle(uBig._body);
+      const jBorder = getComputedStyle(jBig).borderTopWidth;
+      const jBg = getComputedStyle(jBig).backgroundColor;
+      const pageText = document.getElementById('messages').innerText || '';
+      const jFade = jBig.querySelector('.msg-clip-fade');
+      const jFadeBg = jFade ? getComputedStyle(jFade).backgroundImage : '';
+      const jFadeZ = jFade ? parseFloat(getComputedStyle(jFade).zIndex) || 0 : 0;
+      const jTabZ = jBig._expandBtn ? parseFloat(getComputedStyle(jBig._expandBtn).zIndex) || 0 : 0;
+      const uFade = uBig.querySelector('.msg-clip-fade');
+      const uFadeBg = uFade ? getComputedStyle(uFade).backgroundImage : '';
+      const uFadeZ = uFade ? parseFloat(getComputedStyle(uFade).zIndex) || 0 : 0;
+      const uTabZ = uBig._expandBtn ? parseFloat(getComputedStyle(uBig._expandBtn).zIndex) || 0 : 0;
+      // Parse max alpha from linear-gradient(... rgba(0,0,0,A) ...) end stop.
+      const maxScrimAlpha = (bg) => {
+        if (!bg) return null;
+        let max = 0;
+        const re = /rgba?\(\s*0\s*,\s*0\s*,\s*0\s*(?:,\s*([0-9.]+)\s*)?\)/gi;
+        let m;
+        while ((m = re.exec(bg))) {
+          const a = m[1] == null ? 1 : parseFloat(m[1]);
+          if (!Number.isNaN(a) && a > max) max = a;
+        }
+        return max;
+      };
+      const jMsgRect = jBig.getBoundingClientRect();
+      const jTime = jBig.querySelector('.msg-time');
+      const jTimeRect = jTime ? jTime.getBoundingClientRect() : null;
+      const jTabRect = jBig._expandBtn ? jBig._expandBtn.getBoundingClientRect() : null;
+      const jFadeRect = jFade ? jFade.getBoundingClientRect() : null;
+      const shortFade = short.querySelector('.msg-clip-fade');
       return {
-        shortHasBtn: !!short.querySelector('.msg-expand'),
-        // middle huge ones: collapsed previews, far fewer than full
-        jPreviewItems: jBig._body.querySelectorAll('li').length,
-        jHasBtn: !!jBig._expandBtn, jFullN: window._t.N,
+        shortHasBtn: !!short.querySelector('.msg-expand-tab'),
+        shortHasOldBtn: !!short.querySelector('.msg-expand:not(.msg-expand-tab)'),
+        shortHasFade: !!shortFade && getComputedStyle(shortFade).display !== 'none',
+        shortExpandBtn: !!short._expandBtn,
+        // middle huge ones: full DOM, clipped container
+        jItems: jBig._body.querySelectorAll('li').length,
+        jFullN: window._t.N,
+        jHasBtn: !!jBig._expandBtn,
+        jClipped: jBig.classList.contains('msg-clipped'),
         jExpanded: jBig._expanded === true,
-        uPreviewLines: uPrevLines, uPreviewLen: uBig._body.textContent.length, uFullLen: window._t.uFullLen,
+        jMaxH: jBodyStyle.maxHeight,
+        jOverflow: jBodyStyle.overflow,
+        jHasFade: !!jFade && getComputedStyle(jFade).display !== 'none',
+        jFadeBg,
+        jFadeZ,
+        jTabZ,
+        jScrimAlpha: maxScrimAlpha(jFadeBg),
+        jBtnClass: jBig._expandBtn ? jBig._expandBtn.className : '',
+        jBtnText: jBig._expandBtn ? jBig._expandBtn.textContent.trim() : '',
+        jAria: jBig._expandBtn ? jBig._expandBtn.getAttribute('aria-label') : '',
+        // Pocket geometry: time outside border box; tab tongue inside bottom edge
+        // (bottom flush; top above msg bottom); fade bottom flush + height ≤ radius.
+        jTimeOutside: jTimeRect ? jTimeRect.top >= jMsgRect.bottom - 1 : false,
+        jTabInside: jTabRect
+          ? (Math.abs(jTabRect.bottom - jMsgRect.bottom) <= 3 && jTabRect.top < jMsgRect.bottom - 2)
+          : false,
+        jFadeFlush: jFadeRect ? Math.abs(jFadeRect.bottom - jMsgRect.bottom) <= 2 : false,
+        jFadeH: jFadeRect ? jFadeRect.height : 0,
+        jRadiusPx: parseFloat(getComputedStyle(jBig).borderBottomLeftRadius) || 0,
+        jPadBottom: getComputedStyle(jBig).paddingBottom,
+        uLines: uBig._body.textContent.split('\n').length,
+        uFullLen: window._t.uFullLen,
+        uBodyLen: uBig._body.textContent.length,
         uExpanded: uBig._expanded === true,
+        uClipped: uBig.classList.contains('msg-clipped'),
         uHasBtn: !!uBig._expandBtn,
-        // request preview should be ~half (USER_PREVIEW_LINES) of assistant
-        userPreviewCap: 7,
-        // latest huge assistant: auto-EXPANDED (full items), toggle says "less"
+        uHasFade: !!uFade && getComputedStyle(uFade).display !== 'none',
+        uFadeBg,
+        uFadeZ,
+        uTabZ,
+        uScrimAlpha: maxScrimAlpha(uFadeBg),
+        uMaxH: uBodyStyle.maxHeight,
+        uOverflow: uBodyStyle.overflow,
+        // table: header cells must remain when collapsed (clip model)
+        tableTh: jTable._body.querySelectorAll('th').length,
+        tableThText: Array.from(jTable._body.querySelectorAll('th')).map((th) => th.textContent.trim()),
+        tableClipped: jTable.classList.contains('msg-clipped'),
+        tableRows: jTable._body.querySelectorAll('tr').length,
+        // latest huge assistant: auto-EXPANDED (full items), no clip
         latestItems: latest._body.querySelectorAll('li').length,
         latestExpanded: latest._expanded === true,
-        latestLabel: latest._expandBtn ? latest._expandBtn.textContent : '',
+        latestClipped: latest.classList.contains('msg-clipped'),
+        latestLabel: latest._expandBtn ? latest._expandBtn.getAttribute('aria-label') : '',
+        latestBtnText: latest._expandBtn ? latest._expandBtn.textContent.trim() : '',
+        // assistant geometry: border present, no opaque fill
+        jBorderPx: parseFloat(jBorder) || 0,
+        jBg,
+        pageHasShowMoreLess: /show\s*more|show\s*less/i.test(pageText),
       };
     });
 
-    if (state.shortHasBtn) failures.push('short bubble sprouted an expand toggle (should not)');
-    if (!state.jHasBtn) failures.push('huge assistant bubble has no expand toggle');
-    if (state.jPreviewItems === 0) failures.push('huge assistant preview rendered no items');
-    if (state.jPreviewItems >= state.jFullN) failures.push(`assistant preview rendered ${state.jPreviewItems} of ${state.jFullN} items — not bounded`);
-    if (state.jPreviewItems > 20) failures.push(`assistant preview too large: ${state.jPreviewItems} items (want ~14)`);
-    if (state.uPreviewLen >= state.uFullLen) failures.push('user preview is the full text — not bounded');
-    // Request preview is halved (~7 lines, not ~14).
-    if (state.uPreviewLines > state.userPreviewCap + 1) failures.push(`request preview ${state.uPreviewLines} lines — want ~${state.userPreviewCap} (halved)`);
-    // Latest message is auto-expanded in full (T66).
+    if (state.shortHasBtn) failures.push('short bubble sprouted an expand tab (should not)');
+    if (state.shortHasOldBtn) failures.push('short bubble has legacy .msg-expand control');
+    if (state.shortHasFade) failures.push('short bubble has visible .msg-clip-fade (should not)');
+    if (state.shortExpandBtn) failures.push('short bubble has _expandBtn ref (should not)');
+    if (!state.jHasBtn) failures.push('huge assistant bubble has no expand tab');
+    if (state.jItems < state.jFullN) {
+      failures.push(`collapsed assistant DOM has ${state.jItems}/${state.jFullN} items — want full render under clip`);
+    }
+    if (!state.jClipped) failures.push('non-latest huge assistant missing .msg-clipped');
+    if (state.jExpanded) failures.push('T77: non-latest huge assistant is expanded (want clipped)');
+    if (!state.jMaxH || state.jMaxH === 'none') failures.push(`collapsed assistant max-height = ${state.jMaxH}, want capped`);
+    if (state.jOverflow !== 'hidden') failures.push(`collapsed assistant overflow = ${state.jOverflow}, want hidden`);
+    if (!state.jHasFade) failures.push('collapsed assistant missing .msg-clip-fade gradient');
+    // Pocket scrim must darken (rgba black), not dissolve into var(--bg)/page.
+    if (state.jFadeBg && !/rgba?\(\s*0\s*,\s*0\s*,\s*0/i.test(state.jFadeBg)) {
+      failures.push(`pocket fade backgroundImage = ${JSON.stringify(state.jFadeBg)}, want darken via rgba(0,0,0,…)`);
+    }
+    if (state.jFadeBg && /var\(--bg\)|var\(--user-bg\)/i.test(state.jFadeBg)) {
+      failures.push('pocket fade still references --bg/--user-bg (fade-to-page, not dark scrim)');
+    }
+    // Soft pocket: max scrim opacity ~half of prior 0.45 (accept 0.15–0.28).
+    if (state.jScrimAlpha == null || state.jScrimAlpha < 0.15 || state.jScrimAlpha > 0.28) {
+      failures.push(`assistant scrim max alpha = ${state.jScrimAlpha}, want ~0.22 (range 0.15–0.28)`);
+    }
+    // Tab must stack above scrim for assistant and user (both roles).
+    if (!(state.jTabZ > state.jFadeZ)) {
+      failures.push(`assistant tab z-index ${state.jTabZ} not above fade ${state.jFadeZ}`);
+    }
+    if (!state.jTimeOutside) failures.push('timestamp still inside bubble box (want outside / under border)');
+    if (!state.jTabInside) failures.push('expand tab not inside bottom edge (want tongue into pocket, not hang-off)');
+    if (!state.jFadeFlush) failures.push('clip fade not flush to inner bottom of bubble border');
+    if (state.jFadeH > 0 && state.jRadiusPx > 0 && state.jFadeH > state.jRadiusPx + 1) {
+      failures.push(`clip fade height ${state.jFadeH}px > bubble radius ${state.jRadiusPx}px (want height: var(--radius))`);
+    }
+    if (state.jPadBottom && state.jPadBottom !== '0px') {
+      failures.push(`clipped bubble padding-bottom = ${state.jPadBottom}, want 0 so border butts content`);
+    }
+    if (!/msg-expand-tab/.test(state.jBtnClass || '')) failures.push(`expand control class = ${JSON.stringify(state.jBtnClass)}, want msg-expand-tab`);
+    assertNoShowMoreLess(state.jBtnText, 'assistant tab', failures);
+    if (!/expand/i.test(state.jAria || '')) failures.push(`collapsed tab aria-label = ${JSON.stringify(state.jAria)}, want Expand`);
+
+    if (state.uBodyLen < state.uFullLen) failures.push('collapsed user body text shorter than full — re-parse preview?');
+    if (state.uLines < 80) failures.push(`collapsed user DOM has ${state.uLines} lines — want full 80 under clip`);
+    if (!state.uClipped) failures.push('non-latest huge user missing .msg-clipped');
+    if (state.uExpanded) failures.push('T77: non-latest huge user is expanded (want clipped)');
+    if (!state.uHasBtn) failures.push('T77: non-latest huge user has no expand tab');
+    if (!state.uHasFade) failures.push('collapsed user missing .msg-clip-fade gradient');
+    if (state.uFadeBg && !/rgba?\(\s*0\s*,\s*0\s*,\s*0/i.test(state.uFadeBg)) {
+      failures.push(`user pocket fade backgroundImage = ${JSON.stringify(state.uFadeBg)}, want darken via rgba(0,0,0,…)`);
+    }
+    if (state.uScrimAlpha == null || state.uScrimAlpha < 0.15 || state.uScrimAlpha > 0.28) {
+      failures.push(`user scrim max alpha = ${state.uScrimAlpha}, want ~0.22 (range 0.15–0.28)`);
+    }
+    if (!(state.uTabZ > state.uFadeZ)) {
+      failures.push(`user tab z-index ${state.uTabZ} not above fade ${state.uFadeZ}`);
+    }
+    if (!state.uMaxH || state.uMaxH === 'none') failures.push(`collapsed user max-height = ${state.uMaxH}, want capped`);
+    if (state.uOverflow !== 'hidden') failures.push(`collapsed user overflow = ${state.uOverflow}, want hidden`);
+
+    if (state.tableTh < 3) failures.push(`collapsed table has ${state.tableTh} th cells — want full header under clip`);
+    if (!state.tableThText.includes('ID') || !state.tableThText.includes('Name') || !state.tableThText.includes('Notes')) {
+      failures.push(`collapsed table headers = ${JSON.stringify(state.tableThText)}, want ID/Name/Notes`);
+    }
+    if (!state.tableClipped) failures.push('tall table bubble not clipped');
+    if (state.tableRows < 40) failures.push(`collapsed table rows = ${state.tableRows}, want full structure`);
+
     if (!state.latestExpanded) failures.push('latest message is NOT auto-expanded');
+    if (state.latestClipped) failures.push('latest auto-expanded message still has .msg-clipped');
     if (state.latestItems < state.jFullN) failures.push(`latest auto-expand rendered ${state.latestItems} of ${state.jFullN} items — not full`);
-    if (!/less/i.test(state.latestLabel)) failures.push(`latest toggle label = ${JSON.stringify(state.latestLabel)}, want "Show less"`);
-    // T77: non-latest oversized of BOTH roles stay collapsed.
-    if (state.jExpanded) failures.push('T77: non-latest huge assistant is expanded (want collapsed preview)');
-    if (state.uExpanded) failures.push('T77: non-latest huge user is expanded (want collapsed preview)');
-    if (!state.uHasBtn) failures.push('T77: non-latest huge user has no expand toggle');
+    if (!/collapse/i.test(state.latestLabel || '')) {
+      failures.push(`latest tab aria-label = ${JSON.stringify(state.latestLabel)}, want Collapse`);
+    }
+    assertNoShowMoreLess(state.latestBtnText, 'latest tab', failures);
+    if (state.pageHasShowMoreLess) failures.push('messages pane still contains Show more/Show less text');
+
+    // Border-only assistant: non-zero border; transparent/no solid fill.
+    if (state.jBorderPx < 1) failures.push(`assistant bubble border width = ${state.jBorderPx}, want ≥1px`);
+    if (state.jBg && !/rgba?\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)|transparent/i.test(state.jBg)) {
+      // allow fully transparent; solid fills fail
+      const m = state.jBg.match(/rgba?\(([^)]+)\)/);
+      if (m) {
+        const parts = m[1].split(',').map((s) => parseFloat(s.trim()));
+        if (parts.length >= 4 && parts[3] > 0.05) {
+          failures.push(`assistant bubble has fill background ${state.jBg} — want border-only/transparent`);
+        } else if (parts.length === 3) {
+          failures.push(`assistant bubble has solid background ${state.jBg} — want border-only/transparent`);
+        }
+      }
+    }
 
     await page.screenshot({ path: path.join(OUT_DIR, 'collapse-preview.png'), fullPage: true });
 
-    // Expand the (collapsed, non-latest) assistant bubble and confirm the
-    // FULL content is now built lazily.
-    await page.locator('#messages .msg.jevons').nth(1).locator('.msg-expand').click();
+    // Expand the (clipped, non-latest) assistant bubble — DOM item count
+    // stays full; only clip class drops.
+    await page.locator('#messages .msg.jevons').nth(1).locator('.msg-expand-tab').click();
     const expanded = await page.evaluate(() => {
       const j = window._els.jBig;
-      return { items: j._body.querySelectorAll('li').length, label: j._expandBtn.textContent };
+      const body = j._body;
+      const tab = j._expandBtn;
+      const padBottom = getComputedStyle(j).paddingBottom;
+      const padPx = parseFloat(padBottom) || 0;
+      const tabH = tab ? tab.getBoundingClientRect().height : 0;
+      const bodyRect = body ? body.getBoundingClientRect() : null;
+      const tabRect = tab ? tab.getBoundingClientRect() : null;
+      // Gap from body bottom edge to tab top — should be ≥ 0 (text clears tab).
+      const bodyTabGap = (bodyRect && tabRect) ? (tabRect.top - bodyRect.bottom) : null;
+      // Also measure last text line box vs tab top.
+      let lastLineBottom = null;
+      if (body) {
+        const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null);
+        let n;
+        while ((n = walker.nextNode())) {
+          if (!n.nodeValue || !/\S/.test(n.nodeValue)) continue;
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          const rects = range.getClientRects();
+          for (let i = 0; i < rects.length; i++) {
+            const r = rects[i];
+            if (r.height < 0.5 || r.width < 0.5) continue;
+            if (lastLineBottom == null || r.bottom > lastLineBottom) lastLineBottom = r.bottom;
+          }
+        }
+      }
+      const lastLineTabGap = (lastLineBottom != null && tabRect)
+        ? (tabRect.top - lastLineBottom)
+        : null;
+      return {
+        items: body.querySelectorAll('li').length,
+        clipped: j.classList.contains('msg-clipped'),
+        expanded: j._expanded === true,
+        hasTab: !!tab,
+        label: tab ? tab.getAttribute('aria-label') : '',
+        btnText: tab ? tab.textContent.trim() : '',
+        maxH: getComputedStyle(body).maxHeight,
+        padBottom,
+        padPx,
+        tabH,
+        bodyTabGap,
+        lastLineTabGap,
+      };
     });
-    if (expanded.items < 60) failures.push(`after expand, only ${expanded.items} of 60 items rendered — full content not lazily built`);
-    if (!/less/i.test(expanded.label)) failures.push(`toggle label after expand = ${JSON.stringify(expanded.label)}, want "Show less"`);
+    if (expanded.items < 60) failures.push(`after expand, only ${expanded.items} of 60 items in DOM`);
+    if (expanded.clipped) failures.push('after expand, bubble still .msg-clipped');
+    if (!expanded.expanded) failures.push('after expand, _expanded is false');
+    if (!/collapse/i.test(expanded.label || '')) {
+      failures.push(`toggle aria after expand = ${JSON.stringify(expanded.label)}, want Collapse`);
+    }
+    assertNoShowMoreLess(expanded.btnText, 'expanded tab', failures);
+    if (expanded.maxH && expanded.maxH !== 'none') {
+      // expanded body should not keep the clip max-height
+      failures.push(`after expand, body max-height still ${expanded.maxH}`);
+    }
+    // 🎯T166: expanded tall + tab → bottom padding clears collapse tab.
+    if (!expanded.hasTab) failures.push('T166: expanded tall bubble lost expand tab');
+    if (!(expanded.padPx >= expanded.tabH - 0.5)) {
+      failures.push(
+        `T166: expanded padding-bottom ${expanded.padBottom} (${expanded.padPx}px) < tab height ${expanded.tabH}px`
+      );
+    }
+    if (expanded.lastLineTabGap == null || expanded.lastLineTabGap < -0.5) {
+      failures.push(
+        `T166: last text line overlaps collapse tab (gap=${expanded.lastLineTabGap})`
+      );
+    }
+    if (expanded.bodyTabGap != null && expanded.bodyTabGap < -0.5) {
+      failures.push(
+        `T166: msg-body bottom overlaps tab top (gap=${expanded.bodyTabGap})`
+      );
+    }
+
+    // T166: latest auto-expanded tall also clears tab; short still no tab.
+    const t166Latest = await page.evaluate(() => {
+      const latest = window._els.latest;
+      const short = window._els.short;
+      const tab = latest && latest._expandBtn;
+      const padPx = latest ? (parseFloat(getComputedStyle(latest).paddingBottom) || 0) : 0;
+      const tabH = tab ? tab.getBoundingClientRect().height : 0;
+      const tabRect = tab ? tab.getBoundingClientRect() : null;
+      let lastLineBottom = null;
+      if (latest && latest._body) {
+        const walker = document.createTreeWalker(latest._body, NodeFilter.SHOW_TEXT, null);
+        let n;
+        while ((n = walker.nextNode())) {
+          if (!n.nodeValue || !/\S/.test(n.nodeValue)) continue;
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          const rects = range.getClientRects();
+          for (let i = 0; i < rects.length; i++) {
+            const r = rects[i];
+            if (r.height < 0.5 || r.width < 0.5) continue;
+            if (lastLineBottom == null || r.bottom > lastLineBottom) lastLineBottom = r.bottom;
+          }
+        }
+      }
+      const lastLineTabGap = (lastLineBottom != null && tabRect)
+        ? (tabRect.top - lastLineBottom)
+        : null;
+      return {
+        latestExpanded: latest && latest._expanded === true,
+        latestClipped: latest && latest.classList.contains('msg-clipped'),
+        latestHasTab: !!tab,
+        padPx,
+        tabH,
+        lastLineTabGap,
+        shortHasTab: !!(short && (short._expandBtn || short.querySelector('.msg-expand-tab'))),
+      };
+    });
+    if (!t166Latest.latestExpanded || t166Latest.latestClipped) {
+      failures.push('T166 setup: latest tall not expanded without .msg-clipped');
+    }
+    if (!t166Latest.latestHasTab) failures.push('T166: latest tall missing collapse tab');
+    if (!(t166Latest.padPx >= t166Latest.tabH - 0.5)) {
+      failures.push(
+        `T166: latest expanded pad-bottom ${t166Latest.padPx}px < tab ${t166Latest.tabH}px`
+      );
+    }
+    if (t166Latest.lastLineTabGap == null || t166Latest.lastLineTabGap < -0.5) {
+      failures.push(
+        `T166: latest last line overlaps tab (gap=${t166Latest.lastLineTabGap})`
+      );
+    }
+    if (t166Latest.shortHasTab) failures.push('T166: short bubble grew expand tab');
 
     await page.screenshot({ path: path.join(OUT_DIR, 'collapse-expanded.png'), fullPage: true });
 
     // ── Scenario B (T66 stream): small first chunk, grow until tall, seal ──
-    // Simulates live assistant streaming: first frame is tiny, so the early
-    // scheduleLatestExpansion must not lock the bubble as permanently
-    // non-expanded when it later measures tall enough to collapse.
     await page.evaluate(() => {
       document.getElementById('messages').innerHTML = '';
-      // Reset module-level latest tracking by driving through the real APIs.
-      // appendOrAddJevons / sealAssistantStream are in page scope.
       window.appendOrAddJevons('hi'); // small open
     });
     await page.waitForTimeout(50);
@@ -168,6 +450,16 @@ function startStaticServer() {
       window.appendOrAddJevons('\n### stream\n' + big);
     });
     await page.waitForTimeout(100);
+    // Mid-stream must not be clipped.
+    const midStream = await page.evaluate(() => {
+      const el = document.querySelector('#messages .msg.jevons');
+      return {
+        clipped: el && el.classList.contains('msg-clipped'),
+        streaming: el && typeof el._streamRaw === 'string',
+      };
+    });
+    if (midStream.clipped) failures.push('T150/T106: live stream bubble is .msg-clipped mid-stream');
+
     await page.evaluate(() => { window.sealAssistantStream(); });
     await page.waitForTimeout(200);
 
@@ -178,8 +470,10 @@ function startStaticServer() {
         expanded: el._expanded === true,
         auto: el._autoExpanded === true,
         items: el._body.querySelectorAll('li').length,
-        label: el._expandBtn ? el._expandBtn.textContent : '',
+        label: el._expandBtn ? el._expandBtn.getAttribute('aria-label') : '',
+        btnText: el._expandBtn ? el._expandBtn.textContent.trim() : '',
         hasFull: el._fullText != null,
+        clipped: el.classList.contains('msg-clipped'),
       };
     });
     if (streamState.missing) failures.push('T66 stream: no assistant bubble after seal');
@@ -188,7 +482,11 @@ function startStaticServer() {
       if (!streamState.expanded) failures.push('T66 stream: latest assistant after small→large stream is NOT expanded');
       if (!streamState.auto) failures.push('T66 stream: latest assistant missing _autoExpanded');
       if (streamState.items < 60) failures.push(`T66 stream: only ${streamState.items}/60 items rendered after auto-expand`);
-      if (!/less/i.test(streamState.label || '')) failures.push(`T66 stream: label = ${JSON.stringify(streamState.label)}, want "Show less"`);
+      if (streamState.clipped) failures.push('T66 stream: latest sealed tall bubble is clipped');
+      if (!/collapse/i.test(streamState.label || '')) {
+        failures.push(`T66 stream: aria-label = ${JSON.stringify(streamState.label)}, want Collapse`);
+      }
+      assertNoShowMoreLess(streamState.btnText, 'T66 stream tab', failures);
     }
 
     // ── Scenario C (T77): large user then large assistant — user collapses ──
@@ -217,18 +515,24 @@ function startStaticServer() {
       return {
         uExpanded: u._expanded === true,
         uAuto: u._autoExpanded === true,
-        uPreviewish: u._body.textContent.split('\n').length <= 10,
+        uClipped: u.classList.contains('msg-clipped'),
+        uFullLines: u._body.textContent.split('\n').length,
         aExpanded: asst._expanded === true,
         aItems: asst._body.querySelectorAll('li').length,
-        aLabel: asst._expandBtn ? asst._expandBtn.textContent : '',
+        aLabel: asst._expandBtn ? asst._expandBtn.getAttribute('aria-label') : '',
+        aClipped: asst.classList.contains('msg-clipped'),
       };
     });
     if (afterAsst.uExpanded) failures.push('T77: large user still expanded after newer assistant arrived');
     if (afterAsst.uAuto) failures.push('T77: large user still _autoExpanded after ceasing to be latest');
-    if (!afterAsst.uPreviewish) failures.push('T77: large user body still full-height after collapse');
+    if (!afterAsst.uClipped) failures.push('T77: large user not .msg-clipped after collapse');
+    if (afterAsst.uFullLines < 80) failures.push('T77: large user lost full body text after clip collapse');
     if (!afterAsst.aExpanded) failures.push('T66/T77: latest large assistant not expanded after displacing user');
+    if (afterAsst.aClipped) failures.push('T66: latest assistant is clipped');
     if (afterAsst.aItems < 60) failures.push(`T66: latest assistant rendered ${afterAsst.aItems}/60 items`);
-    if (!/less/i.test(afterAsst.aLabel || '')) failures.push(`T66: latest assistant label = ${JSON.stringify(afterAsst.aLabel)}`);
+    if (!/collapse/i.test(afterAsst.aLabel || '')) {
+      failures.push(`T66: latest assistant aria = ${JSON.stringify(afterAsst.aLabel)}`);
+    }
 
     // ── Scenario D (T77): large assistant then large user — assistant collapses ──
     await page.evaluate(() => {
@@ -249,35 +553,113 @@ function startStaticServer() {
       return {
         aExpanded: a._expanded === true,
         aAuto: a._autoExpanded === true,
-        aPreviewItems: a._body.querySelectorAll('li').length,
+        aItems: a._body.querySelectorAll('li').length,
+        aClipped: a.classList.contains('msg-clipped'),
         uExpanded: u._expanded === true,
         uLines: u._body.textContent.split('\n').length,
       };
     });
     if (afterUser2.aExpanded) failures.push('T77: large assistant still expanded after newer user arrived');
     if (afterUser2.aAuto) failures.push('T77: large assistant still _autoExpanded after ceasing to be latest');
-    if (afterUser2.aPreviewItems >= 60) failures.push('T77: non-latest assistant still full-rendered');
+    if (afterUser2.aItems < 60) failures.push('T77: non-latest assistant lost full list under clip');
+    if (!afterUser2.aClipped) failures.push('T77: non-latest assistant not .msg-clipped');
     if (!afterUser2.uExpanded) failures.push('T77: latest large user not auto-expanded');
 
     // Manual toggle wins: expand non-latest assistant, then add a new msg —
     // manual expand must survive (not forced closed by auto path on others).
     await page.evaluate(() => {
       const a = window._els3.a;
-      // Simulate click: user expanded the non-latest assistant.
       a._expanded = true;
       a._userToggled = true;
       window.renderBody(a, a._fullRole, a._fullText);
-      a._expandBtn.textContent = 'Show less ▴';
       window.addMsg('jevons', 'short trailing');
     });
     await page.waitForTimeout(200);
     const manual = await page.evaluate(() => {
       const a = window._els3.a;
-      return { expanded: a._expanded === true, userToggled: a._userToggled === true, items: a._body.querySelectorAll('li').length };
+      return {
+        expanded: a._expanded === true,
+        userToggled: a._userToggled === true,
+        items: a._body.querySelectorAll('li').length,
+        clipped: a.classList.contains('msg-clipped'),
+      };
     });
     if (!manual.userToggled) failures.push('manual toggle flag lost');
     if (!manual.expanded) failures.push('T77: manual expand of non-latest was undone by later messages');
     if (manual.items < 60) failures.push('T77: manual expand lost full content after later message');
+    if (manual.clipped) failures.push('T77: manual expand still clipped after later message');
+
+    // ── Scenario E (T106 tallness gate): medium-tall > clip box, < 1.5× clip ──
+    // Old 1.5× ratio against fixed 14rem left these without tab/.msg-clipped.
+    // Fixture lines tuned so measureCollapse fullH sits in
+    // (collapsedH+eps, collapsedH×1.5). Layout drift out of band → fail with
+    // heights so the fixture can be retuned (not silently test huge path).
+    await page.evaluate(() => {
+      document.getElementById('messages').innerHTML = '';
+      // ~12 user lines at default metrics ≈ 14–20rem (under old 1.5× gate).
+      const medUser = Array.from({ length: 12 }, (_, i) =>
+        `medium user line ${i}: request body exceeds the 14rem clip pocket`).join('\n');
+      // ~6 list items ≈ medium-tall assistant (not the huge 60-item fixtures).
+      const medAsst = Array.from({ length: 6 }, (_, i) =>
+        `- medium_item_${i} with a bit of padding`).join('\n');
+      const uMed = window.addMsg('user', medUser);
+      const jMed = window.addMsg('jevons', '### medium\n' + medAsst);
+      // Trailing short so neither medium bubble is latest (T66 expand would
+      // mask clip). Short must not be tall.
+      const trail = window.addMsg('jevons', 'Short trailing reply.');
+      window._elsMed = { uMed, jMed, trail, medUser, medAsst };
+    });
+    await page.waitForTimeout(200);
+
+    const medium = await page.evaluate(() => {
+      const { uMed, jMed, trail, medUser, medAsst } = window._elsMed;
+      // Same probe path as production (classic script → window.measureCollapse).
+      const um = typeof window.measureCollapse === 'function'
+        ? window.measureCollapse(uMed, 'user', medUser)
+        : null;
+      const jm = typeof window.measureCollapse === 'function'
+        ? window.measureCollapse(jMed, 'jevons', '### medium\n' + medAsst)
+        : null;
+      return {
+        um,
+        jm,
+        uClipped: uMed.classList.contains('msg-clipped'),
+        jClipped: jMed.classList.contains('msg-clipped'),
+        uHasBtn: !!uMed._expandBtn,
+        jHasBtn: !!jMed._expandBtn,
+        uExpanded: uMed._expanded === true,
+        jExpanded: jMed._expanded === true,
+        trailHasBtn: !!trail._expandBtn,
+        trailClipped: trail.classList.contains('msg-clipped'),
+      };
+    });
+
+    if (!medium.um || !medium.jm) {
+      failures.push('Scenario E: measureCollapse not on window — cannot band-check medium fixtures');
+    } else {
+      const band = (m, label) => {
+        if (!m.tall) {
+          failures.push(`${label}: measureCollapse.tall=false (fullH=${m.fullH}, collapsedH=${m.collapsedH}) — fixture too short`);
+          return;
+        }
+        // Must sit under the old 1.5× gate so this scenario proves the fix.
+        if (m.fullH >= m.collapsedH * 1.5) {
+          failures.push(
+            `${label}: fullH=${m.fullH} >= 1.5×collapsedH=${m.collapsedH * 1.5} — fixture too huge; retune for medium band`
+          );
+        }
+      };
+      band(medium.um, 'medium-tall user');
+      band(medium.jm, 'medium-tall assistant');
+    }
+    if (!medium.uClipped) failures.push('medium-tall non-latest user missing .msg-clipped');
+    if (!medium.uHasBtn) failures.push('medium-tall non-latest user missing expand tab');
+    if (medium.uExpanded) failures.push('medium-tall non-latest user is expanded (want clipped)');
+    if (!medium.jClipped) failures.push('medium-tall non-latest assistant missing .msg-clipped');
+    if (!medium.jHasBtn) failures.push('medium-tall non-latest assistant missing expand tab');
+    if (medium.jExpanded) failures.push('medium-tall non-latest assistant is expanded (want clipped)');
+    if (medium.trailHasBtn) failures.push('short trailing sprouted expand tab');
+    if (medium.trailClipped) failures.push('short trailing has .msg-clipped');
 
   } catch (e) {
     failures.push('exception: ' + e.message);
@@ -291,6 +673,6 @@ function startStaticServer() {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - height-ratio collapse (full > 1.5× preview), T66 latest request/response stay expanded, T77 non-latest collapse');
+  console.log('ok - pocket clip collapse (radius scrim + inside tab + time outside), T66/T77, short no tab, medium-tall gate, T166 expand pad');
   console.log('screenshots: artifacts/collapse-preview.png, artifacts/collapse-expanded.png');
 })();

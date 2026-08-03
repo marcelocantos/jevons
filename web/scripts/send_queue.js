@@ -1,12 +1,15 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Owner-chat send queue policy (🎯T113). DOM-free so Node can require().
+// Owner-chat send queue policy (🎯T113 / 🎯T154). DOM-free so Node can require().
 //
 // While an overseer turn is in flight, plain Enter enqueues a follow-up.
 // Only Control+Enter interjects (interrupt + send). Queued items drain
 // FIFO when the in-flight turn seals. Alt+Up/Down cycles queue before
 // submitted request history.
+//
+// 🎯T154: queue state persists to localStorage (text-only bodies) so full
+// page reload restores FIFO order; soft reconnect must not reset it.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -17,15 +20,19 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  const STORAGE_KEY = 'jevons-send-queue-v1';
+
   function emptyState() {
     return { items: [], nextId: 1 };
   }
 
   // Pure send decision before wire I/O.
   // busy: turn in flight; interrupt: Control+Enter chord.
+  // wireOpen: chat socket ready (🎯T228). undefined → treat as open
+  // (legacy pure callers); explicit false never silent-drops payload.
   // Returns:
   //   { action: 'noop' }
-  //   { action: 'enqueue', text }
+  //   { action: 'enqueue', text, reason?: 'busy'|'offline' }
   //   { action: 'send', text, interrupt: boolean }
   function decideSend(opts) {
     const o = opts || {};
@@ -34,8 +41,13 @@
     const raw = o.text == null ? '' : String(o.text);
     const hasPayload = raw.trim().length > 0 || !!o.hasImages;
     if (!hasPayload) return { action: 'noop' };
+    // 🎯T228: offline / reconnecting must enqueue visibly — never clear-and-drop.
+    const wireOpen = o.wireOpen === undefined ? true : !!o.wireOpen;
+    if (!wireOpen) {
+      return { action: 'enqueue', text: raw, reason: 'offline' };
+    }
     if (busy && !interrupt) {
-      return { action: 'enqueue', text: raw };
+      return { action: 'enqueue', text: raw, reason: 'busy' };
     }
     return { action: 'send', text: raw, interrupt: busy && interrupt };
   }
@@ -176,14 +188,85 @@
     return '';
   }
 
+  // ── Persistence (🎯T154) — same pattern as AttentionThreads.load/save ──
+
+  function serialize(state) {
+    const s = state || emptyState();
+    const items = (s.items || []).map(function (it) {
+      return {
+        id: String(it && it.id != null ? it.id : ''),
+        text: String(it && it.text != null ? it.text : ''),
+      };
+    }).filter(function (it) { return it.id.length > 0; });
+    let nextId = Math.max(1, Number(s.nextId) || 1);
+    // Keep nextId strictly above any restored qN suffix so ids stay unique.
+    for (let i = 0; i < items.length; i++) {
+      const m = /^q(\d+)$/.exec(items[i].id);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n >= nextId) nextId = n + 1;
+      }
+    }
+    return JSON.stringify({ items: items, nextId: nextId });
+  }
+
+  function deserialize(raw) {
+    if (!raw) return emptyState();
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!parsed || typeof parsed !== 'object') return emptyState();
+      const items = [];
+      let maxQ = 0;
+      if (Array.isArray(parsed.items)) {
+        for (let i = 0; i < parsed.items.length; i++) {
+          const it = parsed.items[i];
+          if (!it || it.id == null || it.id === '') continue;
+          const id = String(it.id);
+          items.push({ id: id, text: String(it.text == null ? '' : it.text) });
+          const m = /^q(\d+)$/.exec(id);
+          if (m) {
+            const n = parseInt(m[1], 10);
+            if (n > maxQ) maxQ = n;
+          }
+        }
+      }
+      let nextId = Math.max(1, Number(parsed.nextId) || 1);
+      if (nextId <= maxQ) nextId = maxQ + 1;
+      return { items: items, nextId: nextId };
+    } catch (e) {
+      return emptyState();
+    }
+  }
+
+  function load(storage) {
+    if (!storage || typeof storage.getItem !== 'function') return emptyState();
+    try {
+      return deserialize(storage.getItem(STORAGE_KEY));
+    } catch (e) {
+      return emptyState();
+    }
+  }
+
+  function save(storage, state) {
+    if (!storage || typeof storage.setItem !== 'function') return;
+    try {
+      storage.setItem(STORAGE_KEY, serialize(state));
+    } catch (e) {
+      // Quota / private mode — ignore; in-memory state still works.
+    }
+  }
+
   // Grok-class mismatch notes (documented for agents / tests).
   const GROK_MISMATCHES = [
     'Esc still interrupts the in-flight turn (Claude-Code parity); it does not cancel the focused queue item.',
     'Cmd+Enter is not an interject chord — only Control+Enter interrupts while busy (plain/meta Enter enqueues).',
     'No dedicated keyboard cancel for the focused queue row beyond strip cancel / take; Grok may bind extra chords.',
+    // 🎯T154 residual: queue items are text-only; composer images are not persisted.
+    'Send-queue persistence is text-only: images at enqueue are not stored (pendingImages cleared); reload restores text bodies only. In-flight draft in #input stays separate from the queue.',
   ];
 
   return {
+    STORAGE_KEY: STORAGE_KEY,
     emptyState: emptyState,
     decideSend: decideSend,
     shouldInterrupt: shouldInterrupt,
@@ -195,6 +278,10 @@
     shiftNext: shiftNext,
     cycleNav: cycleNav,
     textForFocus: textForFocus,
+    serialize: serialize,
+    deserialize: deserialize,
+    load: load,
+    save: save,
     GROK_MISMATCHES: GROK_MISMATCHES,
   };
 }));

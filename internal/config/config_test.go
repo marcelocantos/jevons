@@ -128,9 +128,89 @@ func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 		"T92",
 		"T129",
 		"One-off flukes",
+		// 🎯T92 / T92.2 ambient: schedule/stream + deeper chat/session surfaces
+		"not only `/retro`",
+		"periodic schedule",
+		"jevons_rsi_cycle",
+		"mint bullseye targets",
+		"owner-chatlog friction",
+		"session transcripts",
+		"T92.2",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("persona missing impatience/RSI/T130 marker %q", want)
+		}
+	}
+}
+
+// 🎯T98: persona carries alter-ego identity pointer (draft doctrine linked).
+func TestDefaultPersonaCEOAlterEgo(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"alter ego",
+		"T98",
+		"ceo-alter-ego.md",
+		"not a passive butler",
+		"CEO seat",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("persona missing T98 alter-ego marker %q", want)
+		}
+	}
+}
+
+// 🎯T31 / T31.1: overseer refuses bare done; independent gate (rule 9).
+func TestDefaultPersonaOracleFirstEnforcement(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Oracle-first as system property",
+		"T31",
+		"T31.1",
+		"independent final judge",
+		"rule 9",
+		"Refuse bare done",
+		"executable oracle evidence",
+		"accepted-risk",
+		"class-3",
+		"ClassifyCompletionReport",
+		"instructional doctrine",
+		"T31.2",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T31 enforcement marker %q", want)
+		}
+	}
+}
+
+// 🎯T31.2: greenfield oracle-coverage map process in persona.
+func TestDefaultPersonaGreenfieldOracleElicitation(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Greenfield oracle elicitation",
+		"T31.2",
+		"Oracle-coverage map",
+		"pinned",
+		"fuzzy",
+		"when X, expect Y",
+		"SPIRAL",
+		"DECIDABLE-FROM-TASTE",
+		"PROPORTIONALITY",
+		"GOODHART",
+		"CoverageMap",
+		"ClassifyDesignClause",
+		"greenfield-oracle-elicitation.md",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T31.2 marker %q", want)
 		}
 	}
 }
@@ -198,7 +278,134 @@ func TestDefaultPersonaOverseerNeverParentsWorkers(t *testing.T) {
 	}
 }
 
-// 🎯T78/T104/T125/T129/T130: agents-guide is the PO/worker product surface that inherits doctrine.
+// 🎯T155: new unattended frontier leaves get a worker immediately (parent=jevons-po).
+func TestDefaultPersonaUnattendedFrontierAutoSpawn(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Unattended frontier auto-spawn",
+		"T155",
+		"parent=jevons-po",
+		"same operational cycle",
+		"kick off",
+		"non-design frontier",
+		"immediately",
+		"needs-owner",
+		"design-discussion",
+		"parked-for-design",
+		"T112",
+		"T67",
+		"T29-class",
+		"instructional",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T155 marker %q", want)
+		}
+	}
+}
+
+// 🎯T193: Build filings spawn a named worker same turn (not ledger-only).
+func TestDefaultPersonaFileToSpawnSameTurn(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"File→spawn same turn",
+		"T193",
+		"Build-plane",
+		"same turn",
+		"parent=jevons-po",
+		"named worker",
+		"ledger-only",
+		"target:",
+		"design-gated",
+		"parked",
+		"pure documentation",
+		"docs-only",
+		"T130",
+		"T155",
+		"instructional",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T193 marker %q", want)
+		}
+	}
+}
+
+// 🎯T197: hierarchical worker names keep literal dots; never digit-squash.
+func TestDefaultPersonaWorkerNamesLiteralDots(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Worker names: literal dots for hierarchical target ids",
+		"T197",
+		"jv-t27.2-config",
+		"jv-t272-config",
+		"digit-squash",
+		"jv-t159-seal",
+		"literal dots",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T197 marker %q", want)
+		}
+	}
+}
+
+// 🎯T176: overseer status language — in progress for workers; live only for product-visible.
+func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Status vocabulary: in progress vs live",
+		"T176",
+		"in progress",
+		"not yet owner-visible",
+		"Never call a registered or running worker",
+		`"live"`,
+		"product is on the wire",
+		"landed",
+		"shipped",
+		"commit SHA",
+		"hard-reloadable UI",
+		"proven API path",
+		"daily",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T176 marker %q", want)
+		}
+	}
+}
+
+// 🎯T194: daemon/API achieve requires activated daily path (restart-daily + live probe).
+func TestDefaultPersonaDailyPathAchieve(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Achieve reports need activated daily path",
+		"T194",
+		"necessary, not sufficient",
+		"restart-daily-jevonsd",
+		"live probe",
+		"stale binary",
+		"HasDailyPathEvidence",
+		"Hermetic unit green",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T194 marker %q", want)
+		}
+	}
+}
+
+// 🎯T78/T104/T125/T129/T130/T155/T193/T176: agents-guide is the PO/worker product surface that inherits doctrine.
 func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	// agents-guide.md is repo-root product docs consumed by PO/workers.
 	path := filepath.Join("..", "..", "agents-guide.md")
@@ -241,6 +448,77 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"jevons_target_file",
 		"bullseye_commit",
 		"T92",
+		"Unattended frontier auto-spawn",
+		"T155",
+		"parent=jevons-po",
+		"same operational cycle",
+		"needs-owner",
+		"design-discussion",
+		"parked-for-design",
+		"T112",
+		"T67",
+		"T29-class",
+		// 🎯T193 file→spawn same turn
+		"File→spawn same turn",
+		"T193",
+		"Build-plane",
+		"same turn",
+		"named worker",
+		"ledger-only",
+		"target:",
+		"design-gated",
+		"blocked-on-human",
+		"pure documentation",
+		"docs-only",
+		"alter ego", // T98
+		"T98",
+		"ceo-alter-ego.md",
+		// 🎯T31.1 oracle-first completion
+		"Oracle-first completion",
+		"T31",
+		"T31.1",
+		"Bare \"done\" is not accepted",
+		"accepted-risk",
+		"class-3",
+		"Attestation ≠ execution",
+		"ClassifyCompletionReport",
+		// 🎯T31.2 greenfield elicitation
+		"Greenfield oracle elicitation",
+		"T31.2",
+		"oracle-coverage map",
+		"pinned",
+		"fuzzy",
+		"when X, expect Y",
+		"SPIRAL",
+		"DECIDABLE-FROM-TASTE",
+		"CoverageMap",
+		"greenfield-oracle-elicitation.md",
+		// 🎯T176 status language
+		"Status language: in progress vs live",
+		"T176",
+		"in progress",
+		"not yet owner-visible",
+		"Never call a registered or running worker",
+		"landed",
+		"shipped",
+		"hard-reloadable UI",
+		"proven API",
+		"daily path",
+		// 🎯T194 daily-path achieve
+		"Achieve reports need activated daily path",
+		"T194",
+		"necessary not sufficient",
+		"restart-daily-jevonsd",
+		"live probe",
+		"HasDailyPathEvidence",
+		"hermetics alone",
+		// 🎯T197 worker names: literal dots
+		"Worker names: literal dots for hierarchical target ids",
+		"T197",
+		"jv-t27.2-config",
+		"jv-t272-config",
+		"digit-squash",
+		"jv-t159-seal",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)
@@ -248,7 +526,7 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	}
 }
 
-// 🎯T125/T129/T130: product AGENTS.md (and CLAUDE thin import) carry fleet doctrine.
+// 🎯T125/T129/T130/T155/T193/T176: product AGENTS.md (and CLAUDE thin import) carry fleet doctrine.
 func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 	path := filepath.Join("..", "..", "AGENTS.md")
 	b, err := os.ReadFile(path)
@@ -279,6 +557,71 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"bullseye_commit",
 		"T92",
 		"same turn",
+		"Unattended frontier auto-spawn",
+		"T155",
+		"parent=jevons-po",
+		"needs-owner",
+		"design-discussion",
+		"parked-for-design",
+		"T112",
+		"T67",
+		"T29-class",
+		// 🎯T193 file→spawn same turn
+		"File→spawn same turn",
+		"T193",
+		"Build-plane",
+		"same turn",
+		"named worker",
+		"ledger-only",
+		"target:",
+		"design-gated",
+		"blocked-on-human",
+		"pure documentation",
+		// 🎯T31.1
+		"Oracle-first completion",
+		"T31",
+		"T31.1",
+		"oracle evidence",
+		"accepted-risk",
+		"class-3",
+		"attestation ≠ execution",
+		// 🎯T31.2
+		"Greenfield oracle elicitation",
+		"T31.2",
+		"oracle-coverage map",
+		"pinned",
+		"fuzzy",
+		"when X expect Y",
+		"SPIRAL",
+		"DECIDABLE-FROM-TASTE",
+		"CoverageMap",
+		"greenfield-oracle-elicitation.md",
+		// 🎯T176 status language
+		"Status language in progress vs live",
+		"T176",
+		"in progress",
+		"owner-visible",
+		"never call a running worker",
+		"landed",
+		"shipped",
+		"hard-reloadable UI",
+		"proven API",
+		"daily path",
+		// 🎯T194 daily-path achieve
+		"Achieve reports need activated daily path",
+		"T194",
+		"necessary not sufficient",
+		"restart-daily-jevonsd",
+		"live probe",
+		"HasDailyPathEvidence",
+		"stale binary",
+		// 🎯T197 worker names: literal dots
+		"Worker names literal dots",
+		"T197",
+		"jv-t27.2-config",
+		"jv-t272-config",
+		"digit-squash",
+		"jv-t159-seal",
 	} {
 		if !strings.Contains(a, want) {
 			t.Errorf("AGENTS.md missing doctrine marker %q", want)
@@ -291,7 +634,7 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		t.Fatalf("CLAUDE.md: %v", err)
 	}
 	if !strings.Contains(string(cb), "AGENTS.md") {
-		t.Error("CLAUDE.md must import AGENTS.md so T125/T129/T130 doctrine is on the instruction surface")
+		t.Error("CLAUDE.md must import AGENTS.md so T125/T129/T130/T155/T193 doctrine is on the instruction surface")
 	}
 }
 
@@ -354,5 +697,215 @@ func TestLoadMalformedFileFailsClosed(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("malformed config must be a hard error")
+	}
+}
+
+// 🎯T27.2: structured providers list (id, transport, enable, params).
+func TestLoadProvidersConnectAndLaunch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+providers:
+  - id: mnemo
+    transport: connect
+    enable: true
+    params:
+      url: http://127.0.0.1:8741
+      extra_flag: keep-me
+  - id: pulse
+    transport: launch
+    enable: false
+    params:
+      exec: /usr/local/bin/pulse
+      argv: ["--serve", "9100"]
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Providers) != 2 {
+		t.Fatalf("providers len=%d want 2", len(cfg.Providers))
+	}
+	mnemo := cfg.Providers[0]
+	if mnemo.ID != "mnemo" || mnemo.Transport != ProviderTransportConnect {
+		t.Fatalf("mnemo: %+v", mnemo)
+	}
+	if !mnemo.Enabled() {
+		t.Fatal("mnemo enable:true should be enabled")
+	}
+	if mnemo.ConnectURL() != "http://127.0.0.1:8741" {
+		t.Fatalf("url=%q", mnemo.ConnectURL())
+	}
+	if mnemo.ParamString("extra_flag") != "keep-me" {
+		t.Fatalf("forward-compat param lost: %+v", mnemo.Params)
+	}
+	pulse := cfg.Providers[1]
+	if pulse.Enabled() {
+		t.Fatal("pulse enable:false should be disabled")
+	}
+	if pulse.LaunchExec() != "/usr/local/bin/pulse" {
+		t.Fatalf("exec=%q", pulse.LaunchExec())
+	}
+	argv := pulse.LaunchArgv()
+	if len(argv) != 2 || argv[0] != "--serve" || argv[1] != "9100" {
+		t.Fatalf("argv=%v", argv)
+	}
+}
+
+func TestLoadProvidersDefaultEnableTrue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+providers:
+  - id: only
+    transport: connect
+    params:
+      url: http://127.0.0.1:1
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Providers[0].Enabled() {
+		t.Fatal("omitted enable defaults to true")
+	}
+}
+
+func TestLoadProvidersValidationErrors(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		yaml string
+		sub  string
+	}{
+		{"missing id", "providers:\n  - transport: connect\n    params: {url: x}\n", "id is required"},
+		{"dup id", "providers:\n  - id: a\n    transport: connect\n    params: {url: x}\n  - id: a\n    transport: connect\n    params: {url: y}\n", "duplicate"},
+		{"bad transport", "providers:\n  - id: a\n    transport: fog\n", "unsupported"},
+		{"launch no exec", "providers:\n  - id: a\n    transport: launch\n    params: {}\n", "launch needs"},
+		{"connect no url", "providers:\n  - id: a\n    transport: connect\n    params: {}\n", "connect needs"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tc.sub) {
+				t.Fatalf("err=%v want substring %q", err, tc.sub)
+			}
+		})
+	}
+}
+
+func TestLoadProvidersEmptyIsOK(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Providers) != 0 {
+		t.Fatalf("default providers should be empty, got %+v", cfg.Providers)
+	}
+}
+
+// 🎯T200: domain portfolios are declarative config (not agent-name parse).
+func TestLoadPortfoliosFixtureGroup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+portfolios:
+  - id: personal
+    name: Personal
+    members:
+      - github.com/marcelocantos/jevons
+      - github.com/marcelocantos/pigeon
+  - id: minicades
+    members:
+      - github.com/squz/yourworld2
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Portfolios) != 2 {
+		t.Fatalf("portfolios=%d want 2: %+v", len(cfg.Portfolios), cfg.Portfolios)
+	}
+	p := cfg.Portfolios[0]
+	if p.ID != "personal" || p.Name != "Personal" {
+		t.Fatalf("first portfolio: %+v", p)
+	}
+	if len(p.Members) != 2 {
+		t.Fatalf("personal members=%d want ≥2: %+v", len(p.Members), p.Members)
+	}
+	if p.DisplayName() != "Personal" {
+		t.Fatalf("DisplayName=%q", p.DisplayName())
+	}
+	if cfg.Portfolios[1].DisplayName() != "minicades" {
+		t.Fatalf("minicades DisplayName defaults to id: %q", cfg.Portfolios[1].DisplayName())
+	}
+}
+
+func TestLoadPortfoliosMissingCalm(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Portfolios == nil {
+		// nil is fine for Go zero value; treat as empty.
+		return
+	}
+	if len(cfg.Portfolios) != 0 {
+		t.Fatalf("default portfolios should be empty, got %+v", cfg.Portfolios)
+	}
+}
+
+func TestLoadPortfoliosValidationErrors(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		yaml string
+		sub  string
+	}{
+		{"missing id", "portfolios:\n  - name: X\n    members: [a]\n", "id is required"},
+		{"dup id", "portfolios:\n  - id: a\n    members: [x]\n  - id: a\n    members: [y]\n", "duplicate"},
+		{"empty member", "portfolios:\n  - id: a\n    members: [\"  \"]\n", "path is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tc.sub) {
+				t.Fatalf("err=%v want substring %q", err, tc.sub)
+			}
+		})
+	}
+}
+
+func TestValidatePortfoliosEmptyOK(t *testing.T) {
+	if err := ValidatePortfolios(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePortfolios([]Portfolio{}); err != nil {
+		t.Fatal(err)
+	}
+	// Empty members list is calm (group exists, no products yet).
+	if err := ValidatePortfolios([]Portfolio{{ID: "solo", Members: nil}}); err != nil {
+		t.Fatal(err)
 	}
 }

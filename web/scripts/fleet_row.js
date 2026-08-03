@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Pure RHS fleet-row chrome helpers (🎯T115 / T84 / T118).
+// Pure RHS fleet-row chrome helpers (🎯T115 / T84 / T118 / T211).
 // DOM-free so Node hermetic tests can require() it.
 //
 // Rules:
@@ -11,6 +11,9 @@
 //   - 🎯T118: same-workdir fan-out workers prefer progress/status secondary
 //     over redundant path; path stays for roots/POs (has children) or
 //     when workdir differs from parent.
+//   - 🎯T211: process-alive (status=running) ≠ turn-busy. Bare "running"
+//     progress/status is never chrome as a busy action; phase idle (or no
+//     in-flight prompt/tool) → idle/parked; phase working → action line.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -23,6 +26,8 @@
 
   const ASIDE_PURPOSES = new Set(['aside', 'side', 'side-chat', 'file-target']);
   const PROGRESS_MAX = 48;
+  // Process / non-action labels: never treat as busy work chrome (🎯T211).
+  const PROCESS_LABELS = new Set(['running', 'stopped', 'idle', 'parked']);
 
   function escHtml(s) {
     return String(s == null ? '' : s)
@@ -45,6 +50,41 @@
     if (!s) return '';
     n = n == null ? PROGRESS_MAX : n;
     return s.length > n ? s.slice(0, n - 1) + '…' : s;
+  }
+
+  function isProcessOnlyLabel(text) {
+    return PROCESS_LABELS.has(collapse(text).toLowerCase());
+  }
+
+  // 🎯T211: busy = turn in flight (working phase and/or real action line).
+  // status=running with phase idle (or bare progress "running") is not busy.
+  function isBusyAgent(agent) {
+    const a = agent && typeof agent === 'object' ? agent : {};
+    const phase = collapse(a.phase || '').toLowerCase();
+    if (phase === 'working') return true;
+    if (phase === 'idle' || phase === 'parked') return false;
+    if (phase === 'blocked') return false;
+    const step = collapse(a.step || a.last_tool || a.lastTool || '');
+    if (step) return true;
+    const explicit = collapse(a.progress || a.summary || '');
+    if (!explicit) return false;
+    if (isProcessOnlyLabel(explicit)) return false;
+    const low = explicit.toLowerCase();
+    if (low === 'working' || low.indexOf('working') === 0) return true;
+    // Non-process secondary (e.g. "working · Bash") counts as busy action.
+    if (low.indexOf(' · ') !== -1 || low.indexOf('·') !== -1) return true;
+    return false;
+  }
+
+  // True when secondary text is a real ACP action (not process liveness).
+  function isActionProgressText(text) {
+    const t = collapse(text);
+    if (!t || isProcessOnlyLabel(t)) return false;
+    const low = t.toLowerCase();
+    if (low === 'working' || low.indexOf('working') === 0) return true;
+    if (low === 'blocked' || low.indexOf('blocked') === 0) return true;
+    if (low.indexOf(' · ') !== -1 || low.indexOf('·') !== -1) return true;
+    return false;
   }
 
   // Compare workdirs ignoring trailing slash and trivial home spellings.
@@ -118,23 +158,60 @@
     return false;
   }
 
-  // Glanceable single-line status/progress from API / fixture fields.
+  // Glanceable single-line status/progress from API / fixture fields (🎯T211).
+  // Bare process labels (running/idle/stopped/parked) never masquerade as actions.
   function formatFleetProgress(agent, maxLen) {
     const a = agent && typeof agent === 'object' ? agent : {};
     maxLen = maxLen == null ? PROGRESS_MAX : maxLen;
-    const explicit = collapse(a.progress || a.summary || '');
-    if (explicit) return truncate(explicit, maxLen);
-
-    const phase = collapse(a.phase || '');
+    const phaseRaw = collapse(a.phase || '');
+    const phase = phaseRaw.toLowerCase();
     const step = collapse(a.step || a.last_tool || a.lastTool || '');
-    if (phase && step) return truncate(phase + ' · ' + step, maxLen);
+    let explicit = collapse(a.progress || a.summary || '');
+    // Strip bare process labels so progress="running" is not an action line.
+    if (explicit && isProcessOnlyLabel(explicit)) {
+      explicit = '';
+    }
+
+    // Working → show action (explicit progress or phase · step).
+    if (phase === 'working') {
+      if (explicit) return truncate(explicit, maxLen);
+      if (step) return truncate('working · ' + step, maxLen);
+      return 'working';
+    }
+
+    // Blocked → not busy-work chrome, but still a named state with optional step.
+    if (phase === 'blocked') {
+      if (explicit) return truncate(explicit, maxLen);
+      if (step) return truncate('blocked · ' + step, maxLen);
+      return 'blocked';
+    }
+
+    // Explicit non-process progress (API already composed "working · tool").
+    if (explicit) {
+      if (isActionProgressText(explicit)) return truncate(explicit, maxLen);
+      return truncate(explicit, maxLen);
+    }
+
+    // Idle / parked / empty phase: process may still be status=running.
+    if (phase === 'idle' || phase === 'parked' || phase === '') {
+      const st = collapse(a.status || '').toLowerCase();
+      if (st === 'stopped') return 'stopped';
+      // Process-alive alone → idle (not "running").
+      if (st === 'running' || phase === 'idle' || phase === 'parked') {
+        return phase === 'parked' ? 'parked' : 'idle';
+      }
+      if (step) return truncate(step, maxLen);
+      return phase === 'parked' ? 'parked' : (phase === 'idle' ? 'idle' : '');
+    }
+
+    if (phase && step) return truncate(phaseRaw + ' · ' + step, maxLen);
     if (step) return truncate(step, maxLen);
-    if (phase) return truncate(phase, maxLen);
+    if (phaseRaw) return truncate(phaseRaw, maxLen);
 
     const st = collapse(a.status || '').toLowerCase();
-    if (st === 'running') return 'running';
+    if (st === 'running') return 'idle'; // 🎯T211: process-alive ≠ busy
     if (st === 'stopped') return 'stopped';
-    if (st === 'blocked' || st === 'idle' || st === 'working') return st;
+    if (st === 'blocked' || st === 'idle' || st === 'working' || st === 'parked') return st;
     return '';
   }
 
@@ -155,8 +232,14 @@
     const baseLabel = String(a.description || a.name || '').trim() || (isAside ? 'aside' : '');
     const title = isAside ? asideTitle(baseLabel) : baseLabel;
     const progressText = isAside ? '' : formatFleetProgress(a);
+    const busy = !isAside && isBusyAgent(a);
+    // Rich action chrome only for real ACP actions — not phase=idle or bare running.
+    const hasAction = !!(
+      busy ||
+      isActionProgressText(progressText) ||
+      (collapse(a.phase || '').toLowerCase() === 'working')
+    );
 
-    const hasRich = !!(collapse(a.progress || a.summary || a.phase || a.step || a.last_tool || a.lastTool));
     let secondaryHtml = '';
     let secondaryKind = '';
     if (isAside) {
@@ -165,15 +248,15 @@
       secondaryHtml = formatAgentDir(a.workdir || '');
       secondaryKind = secondaryHtml ? 'path' : '';
     } else if (isStateDirOverseerHome(a.workdir, a.name)) {
-      // Overseer home: no path; only non-trivial ACP progress (no bare running).
-      if (hasRich && progressText) {
+      // Overseer home: no path; only non-trivial ACP action (no bare running/idle).
+      if (hasAction && progressText && isActionProgressText(progressText)) {
         secondaryHtml = escHtml(progressText);
         secondaryKind = 'progress';
       }
     } else if (progressText) {
       secondaryHtml = escHtml(progressText);
-      // Bare process status vs richer ACP progress/phase/step.
-      secondaryKind = hasRich ? 'progress' : 'status';
+      // Busy action → progress; process-only idle/stopped → status (not busy).
+      secondaryKind = hasAction && isActionProgressText(progressText) ? 'progress' : 'status';
     }
 
     // Legacy omitPath: true when no path chrome is emitted (aside/overseer or worker progress).
@@ -189,6 +272,7 @@
       secondaryHtml: secondaryHtml,
       secondaryKind: secondaryKind,
       progressText: progressText,
+      busy: busy,
       purpose: String(purpose || ''),
     };
   }
@@ -202,6 +286,9 @@
     isStateDirOverseerHome: isStateDirOverseerHome,
     shouldOmitPath: shouldOmitPath,
     shouldShowPathSecondary: shouldShowPathSecondary,
+    isProcessOnlyLabel: isProcessOnlyLabel,
+    isBusyAgent: isBusyAgent,
+    isActionProgressText: isActionProgressText,
     formatFleetProgress: formatFleetProgress,
     asideTitle: asideTitle,
     fleetRowModel: fleetRowModel,

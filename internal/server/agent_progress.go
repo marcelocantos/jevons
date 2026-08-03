@@ -116,10 +116,14 @@ func (h *AgentProgressHub) SetStatus(name, status string) {
 	}
 }
 
+// statusBaseline maps process liveness to glanceable chrome (🎯T211).
+// Process status=running alone is not busy work: phase stays idle and the
+// summary is "idle" (not "running"), so RHS never presents bare running as
+// an action line. Busy rows come only from ACP Observe (phase=working + step).
 func statusBaseline(status string) (phase, summary string) {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "running":
-		return "idle", "running"
+		return "idle", "idle"
 	case "stopped":
 		return "idle", "stopped"
 	default:

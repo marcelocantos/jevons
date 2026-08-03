@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/workers"
@@ -68,6 +69,23 @@ type Server struct {
 	turnBuf   string // accumulates Jevon text for current turn
 	waiting   bool   // true while awaiting a response from Jevon
 
+	// overseerStreamID labels every assistant/progress fragment of the open
+	// overseer response (🎯T223). Minted on first fragment; cleared on
+	// terminal stop so journal + client join by id across interleave.
+	overseerStreamID string
+	// overseerStreamSeq is a monotonic counter for short stream ids.
+	overseerStreamSeq uint64
+
+	// overseerLastProgress is the last ACP/event/activity time for stuck-busy
+	// detection (🎯T204). Zero means never observed.
+	overseerLastProgress time.Time
+	// cockpitHooks are fleet health/nudge actuators (set from main).
+	cockpitHooks CockpitHooks
+	// overseerEventSub is the claudia subscription token for DeliverOverseerEvent
+	// (🎯T210): must unsubscribe before re-attach so rewind+cockpit do not
+	// double-broadcast every token.
+	overseerEventSub int64
+
 	// chatConns is the number of live /ws/chat handlers (🎯T140 connect spans).
 	// Guarded by mu; used only for concurrent=N on open/close logging.
 	chatConns int
@@ -92,6 +110,10 @@ type Server struct {
 	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
 	tokenLimiter *tokenRateLimiter
 
+	// peerSessionFactory builds pure sqlpipe Peer sessions for /ws/sqlpipe
+	// (🎯T10 pure transport residual). Nil → endpoint fails closed.
+	peerSessionFactory PeerSessionFactory
+
 	// Async notifications (worker replies, budget alerts) bound for the
 	// overseer. Its ACP session takes one prompt at a time, so a note that
 	// arrives mid-turn is queued here and flushed on the next turn-complete
@@ -103,6 +125,17 @@ type Server struct {
 
 	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
 	agentsWatchCancel context.CancelFunc
+
+	// frontierCwd is the primary workdir for bullseye ledger discovery (🎯T131).
+	// Path resolution always goes through bullseye CLI — never hard-coded yaml.
+	frontierCwd string
+	// frontierWatchCancel / frontierWatchPath: fsnotify on resolved ledger (🎯T131).
+	frontierWatchCancel context.CancelFunc
+	frontierWatchPath   string
+	// achievedTargetsSeen is the last-observed set of ledger status=achieved
+	// target IDs for 🎯T195 reap-on-achieve. Seeded on watch bind; only
+	// *newly* achieved IDs trigger implementer reaping (no mass-kill on boot).
+	achievedTargetsSeen map[string]bool
 
 	// workers is the 🎯T8.2 observability tracker (SQLite + SSE hub).
 	workers *workers.Tracker
@@ -117,9 +150,23 @@ type Server struct {
 	// transcriptReader reads Grok session chat_history for RHS inspect (🎯T124).
 	transcriptReader *transcript.Reader
 
+	// inspectByCh / inspectChans: per-/ws/chat subscription for fleet RHS
+	// transcript multiplex (🎯T209). One agent per chat listener channel.
+	// Guarded by mu (same as chatListeners).
+	inspectByCh  map[chan string]string
+	inspectChans map[string]map[chan string]struct{}
+
 	// defaultProvider is the daemon-wide claudia backend for new asides
 	// and other registry mint paths on this server (🎯T148).
 	defaultProvider claudia.Provider
+
+	// agentSendHook overrides live registry Send for POST /api/agents/{name}/send
+	// hermetic tests (🎯T182). Nil = Launch + Agent.Send on the registry.
+	agentSendHook func(name, text string) (status string, err error)
+
+	// portfolios is the declarative domain portfolio registry (🎯T200).
+	// Guarded by mu. Empty = calm missing (no RHS portfolio chrome).
+	portfolios []config.Portfolio
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -166,6 +213,13 @@ func (s *Server) SetOverseerDownReason(reason string) {
 	s.overseerDownReason = reason
 }
 
+// OverseerDownReason returns the last legible overseer-down explanation.
+func (s *Server) OverseerDownReason() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.overseerDownReason
+}
+
 // SetChatLog attaches the durable jevons-owned conversation log
 // (🎯T30.1): every chat line broadcast is appended to it, and /ws/chat
 // clients replay history from it instead of the provider's store.
@@ -185,6 +239,8 @@ func New(version, stateDir string) *Server {
 		remotes:       make(map[int]remoteConn),
 		creds:         NewCredentialStore(filepath.Join(stateDir, "credential.json")),
 		chatListeners: make([]chan string, 0),
+		inspectByCh:   make(map[chan string]string),
+		inspectChans:  make(map[string]map[chan string]struct{}),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
 		agentProgress: NewAgentProgressHub(),
 	}
@@ -225,6 +281,7 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		turnText := s.turnBuf
 		s.turnBuf = ""
 		s.waiting = false
+		s.overseerStreamID = "" // 🎯T223: terminal settle closes stream label
 		s.mu.Unlock()
 		// The overseer's ACP session is now idle — flush any async notes
 		// (worker replies, budget alerts) that arrived while it was busy and
@@ -276,9 +333,17 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
+	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe) // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
-	mux.HandleFunc("POST /api/asides", s.handleCreateAside) // 🎯T136: register purpose=aside in fleet
+	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend) // 🎯T182: product agent_send proxy
+	// 🎯T198: stop workers engaged on a frontier target (TargetID equality).
+	mux.HandleFunc("POST /api/agents/engagement/stop", s.handleEngagementStop)
+	mux.HandleFunc("POST /api/asides", s.handleCreateAside)          // 🎯T136: register purpose=aside in fleet
+	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)   // 🎯T152: dismiss fleet aside on target filed
+	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)    // 🎯T200: domain portfolio groups
+	mux.HandleFunc("GET /api/frontier", s.handleFrontier)            // 🎯T131: live bullseye frontier table
+	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph) // 🎯T185: unachieved dependency Mermaid
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)

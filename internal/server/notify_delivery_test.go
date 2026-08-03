@@ -198,6 +198,13 @@ func TestNotifyErrClass(t *testing.T) {
 	if got := notifyErrClass(fmt.Errorf("grok acp: prompt already in flight")); got != "busy" {
 		t.Fatalf("got %q", got)
 	}
+	// 🎯T214 J6: non-Grok busy strings classify as busy (not other).
+	if got := notifyErrClass(fmt.Errorf("task x is busy")); got != "busy" {
+		t.Fatalf("task busy got %q", got)
+	}
+	if got := notifyErrClass(fmt.Errorf("session busy")); got != "busy" {
+		t.Fatalf("session busy got %q", got)
+	}
 	if got := notifyErrClass(fmt.Errorf("overseer not running")); got != "not_running" {
 		t.Fatalf("got %q", got)
 	}

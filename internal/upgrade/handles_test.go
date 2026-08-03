@@ -48,7 +48,38 @@ func TestFromRegistryCapturesSessionID(t *testing.T) {
 		t.Fatal("expected not alive without Launch")
 	}
 	if got[0].PID != 0 {
-		t.Fatal("PID must stay 0 until claudia exposes process id (residual)")
+		t.Fatal("PID must be 0 when def has no ConnectPID")
+	}
+}
+
+func TestFromRegistryCapturesConnectEndpoint(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name:       "worker",
+		WorkDir:    t.TempDir(),
+		SessionID:  "sess-connect",
+		Provider:   claudia.ProviderGrok,
+		ConnectURL: "ws://127.0.0.1:9/ws?server-key=x",
+		ConnectPID: 4242,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := FromRegistry(reg)
+	if len(got) != 1 {
+		t.Fatalf("len = %d", len(got))
+	}
+	if got[0].ConnectURL == "" || got[0].PID != 4242 {
+		t.Fatalf("connect endpoint not captured: %+v", got[0])
+	}
+	plan := PlanReattach(&Snapshot{Agents: got})
+	if !plan.ProcessReattachPossible {
+		t.Fatal("process reattach should be possible with connect URL+PID")
+	}
+	if plan.Residual != "" {
+		t.Fatalf("residual = %q, want empty", plan.Residual)
 	}
 }
 
@@ -57,15 +88,30 @@ func TestPlanReattachResidual(t *testing.T) {
 		Agents: []Handle{{Name: "a", SessionID: "s1"}, {Name: "b", SessionID: "s2"}},
 	})
 	if plan.ProcessReattachPossible {
-		t.Fatal("process reattach must be false until connect-mode")
+		t.Fatal("process reattach must be false without connect endpoints")
 	}
 	if plan.Residual == "" {
-		t.Fatal("residual required")
+		t.Fatal("residual required when no connect endpoints")
 	}
 	if len(plan.SessionIDs) != 2 {
 		t.Fatalf("sessions = %v", plan.SessionIDs)
 	}
 	if p := PlanReattach(nil); len(p.SessionIDs) != 0 || p.ProcessReattachPossible {
 		t.Fatalf("nil plan = %+v", p)
+	}
+}
+
+func TestPlanReattachConnectMode(t *testing.T) {
+	plan := PlanReattach(&Snapshot{
+		Agents: []Handle{{
+			Name: "jevons", SessionID: "s1",
+			PID: 100, ConnectURL: "ws://127.0.0.1:1/ws?server-key=k",
+		}},
+	})
+	if !plan.ProcessReattachPossible {
+		t.Fatal("want process reattach possible")
+	}
+	if plan.Residual != "" {
+		t.Fatalf("residual = %q", plan.Residual)
 	}
 }

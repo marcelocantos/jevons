@@ -349,6 +349,78 @@ test('T136 index.html: attention-bar not used for aside wall; fleet register pat
     'no appendThreadChip wall in index');
 });
 
+// 🎯T152: target-file close must dismiss dual-written fleet aside (RHS 💡),
+// not only local file-target attention state.
+// 🎯T164: live-only path + resolveTargetAsideIdsToDismiss for stopped zombies.
+test('T152/T164 maybeCloseTargetAside dismisses fleet aside on __TARGET_FILED__', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('function dismissFleetAside') >= 0, 'dismissFleetAside reverse of ensure');
+  assert.ok(html.indexOf("method: 'DELETE'") >= 0 || html.indexOf('method: "DELETE"') >= 0,
+    'DELETE /api/asides/{id}');
+  assert.ok(/\/api\/asides\/['"]\s*\+\s*encodeURIComponent/.test(html) ||
+    html.indexOf("/api/asides/' + encodeURIComponent") >= 0 ||
+    html.indexOf('/api/asides/" + encodeURIComponent') >= 0,
+    'DELETE path encodes aside id');
+  // maybeCloseTargetAside must call dismiss after closeTargetAside.
+  const closeFn = html.match(/function maybeCloseTargetAside\([\s\S]*?\n\}/);
+  assert.ok(closeFn, 'maybeCloseTargetAside present');
+  assert.ok(closeFn[0].indexOf('closeTargetAside') >= 0, 'closes local file-target');
+  assert.ok(closeFn[0].indexOf('dismissFleetAside') >= 0, 'also dismisses fleet aside');
+  assert.ok(closeFn[0].indexOf('detectTargetFiled') >= 0, 'keeps T95 marker detection');
+  assert.ok(closeFn[0].indexOf('historyReplayActive') >= 0,
+    'T164: skip auto-close during history replay');
+  assert.ok(closeFn[0].indexOf('resolveTargetAsideIdsToDismiss') >= 0,
+    'T164: resolve dual-write ids including fleet zombies');
+  // Live stream/seal must call maybeCloseTargetAside; paintBody must not.
+  assert.ok(html.indexOf('maybeCloseTargetAside(el._streamRaw)') >= 0 ||
+    /maybeCloseTargetAside\(\s*el\._streamRaw\s*\)/.test(html),
+    'live stream scheduleJevonsRender calls maybeCloseTargetAside');
+  assert.ok(html.indexOf('maybeCloseTargetAside(raw)') >= 0 ||
+    /maybeCloseTargetAside\(\s*raw\s*\)/.test(html),
+    'sealAssistantStream calls maybeCloseTargetAside');
+  // paintBody must not *call* maybeCloseTargetAside (history/lazy-safe).
+  // Comment may still mention the name; only an invocation is banned.
+  const paintFn = html.match(/function paintBody\([\s\S]*?\nfunction maybeCloseTargetAside/);
+  assert.ok(paintFn, 'paintBody present before maybeCloseTargetAside');
+  assert.ok(!/maybeCloseTargetAside\s*\(/.test(paintFn[0]),
+    'paintBody must not invoke maybeCloseTargetAside (history/lazy paint path)');
+
+  // Model path (hermetic, no fetch): open target: → close on marker → no open file-target.
+  const open = AT.handleComposer(AT.emptyState(), 'target: links always new tab');
+  const id = open.threadId;
+  assert.ok(id && id.indexOf('att-') === 0);
+  assert.strictEqual(open.state.threads[0].purpose, 'file-target');
+  assert.strictEqual(open.state.threads[0].status, 'open');
+  const filed = AT.detectTargetFiled('Filed 🎯T151 — links\n__TARGET_FILED__:T151\n');
+  assert.strictEqual(filed, 'T151');
+  const closed = AT.closeTargetAside(open.state, id);
+  assert.strictEqual(AT.stack(closed).filter(function (t) {
+    return t.purpose === 'file-target' && t.status === 'open';
+  }).length, 0, 'no open file-target after close');
+  assert.strictEqual(closed.focusId, AT.MAIN_ID);
+  // Wire contract: index pairs ensure on create with dismiss on filed.
+  assert.ok(html.indexOf('ensureFleetAside') >= 0 && html.indexOf('dismissFleetAside') >= 0);
+
+  // 🎯T164 pure resolve: open file-target → id; after local close, fleet zombie still listed.
+  const idsOpen = AT.resolveTargetAsideIdsToDismiss(open.state, [
+    { name: 'jevons', purpose: 'overseer' },
+    { name: id, purpose: 'aside', status: 'stopped' },
+  ], id);
+  assert.ok(idsOpen.indexOf(id) >= 0, 'open filing resolves dual-write id');
+  const idsZombie = AT.resolveTargetAsideIdsToDismiss(closed, [
+    { name: 'jevons', purpose: 'overseer' },
+    { name: id, purpose: 'aside', status: 'stopped' },
+  ], id);
+  assert.ok(idsZombie.indexOf(id) >= 0,
+    'done file-target still in fleet → still resolve DELETE id (zombie residual)');
+  const idsGone = AT.resolveTargetAsideIdsToDismiss(closed, [
+    { name: 'jevons', purpose: 'overseer' },
+  ], null);
+  assert.strictEqual(idsGone.length, 0, 'no fleet dual-write → no invent ids');
+});
+
 test('T134 clearDone / dismissAllParked / clearChromeNoise', function () {
   let s = AT.emptyState();
   s = AT.handleComposer(s, 'capture: Keep open').state;

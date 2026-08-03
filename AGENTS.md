@@ -8,6 +8,13 @@ Go daemon (`jevonsd`) + canonical web UI + iOS thin client. Default agent provid
 model, persistence, security posture, glossary). Do not trust older
 design docs without checking their supersession banners.
 
+**CEO identity (🎯T98):** Jevons-as-CEO is the owner's **alter ego** —
+default action, bias, and judgment match what the owner would do in the
+same seat. Draft doctrine (owner review residual):
+[docs/design/ceo-alter-ego.md](docs/design/ceo-alter-ego.md). Live
+behaviour still loads from `internal/config/persona.md` and the fleet
+standing brief; this note maps dimensions → surfaces → targets.
+
 ## Build
 
 ```bash
@@ -126,6 +133,84 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   "we should always…" in chat. Ceremony: `jevons_target_file` and/or
   bullseye MCP (`bullseye_commit` track). Related: 🎯T92 ambient RSI,
   🎯T129 hierarchy. Residual: one-off flukes may skip filing.
+- **Ambient RSI (🎯T92 / 🎯T92.2):** harness schedule + idle-reap stream mint
+  improvement targets from eventlog, **owner-chatlog friction**, and
+  **session transcripts** (`internal/rsi`, `jevons_rsi_cycle`); not only
+  owner `/retro`. Noise control (min count, fingerprint ledger, max-per-cycle)
+  still caps flooding when deeper extract proposes more. Filing reflex is the
+  mid-turn agent half of the same mission.
+- **Oracle-first completion (🎯T31 / 🎯T31.1):** bare "done" / complete /
+  finished without **oracle evidence** (named test + green, and/or
+  commit SHA) or **explicit accepted-risk / class-3** language is **not
+  accepted**. Overseer is the independent gate (attestation ≠ execution).
+  Instructional residual + pure classifier. Persona + agents-guide +
+  fleet standing brief.
+- **Finished work auto-deregister (🎯T165 / 🎯T195):** when a **work**
+  agent’s terminal report claims done — including imperfect bare done
+  without oracle markers — the product **stop+Removes** it from the live
+  fleet (not persona-only hygiene). Ledger achieve of a mission TargetID
+  also reaps engaged implementers. Hermetic: spawn fixture → done/achieve
+  path → `agent_list` omits name. Residual: POs and overseer stay;
+  multi-target agents without matching TargetID stay; deliberate stop
+  without kill still resume-friendly; T90 anomaly supervisor separate.
+- **Greenfield oracle elicitation (🎯T31.2):** for new software (no
+  external reference), co-develop an **oracle-coverage map** alongside
+  design — **pinned** / **fuzzy** / load-bearing **when X expect Y**
+  examples (plus taste / spike). **SPIRAL** (design → thin slice → owner
+  reacts → intent sharpens → new oracle); refuse production on still-
+  fuzzy parts. **DECIDABLE-FROM-TASTE** sort; **PROPORTIONALITY +
+  GOODHART** (spikes OK un-oracled; pin only with load-bearing examples).
+  Pure `CoverageMap` / `ClassifyDesignClause` helpers. Residual:
+  instructional + pure model; not a hard daemon block; T29 UI + owner
+  process-fidelity class-3. Design: `docs/design/greenfield-oracle-elicitation.md`.
+- **Unattended frontier auto-spawn (🎯T155):** when a new frontier leaf is
+  filed that is not design-gated / needs-owner / design-discussion /
+  parked-for-design, **`jevons-po` spawns a fleet worker** under
+  **`parent=jevons-po`** in the same operational cycle — kick off all
+  non-design frontier work continuously; do not wait for the owner.
+  Skip design-gated (T112 / T67 / T29-class) and blocked targets until
+  unblocked or owner opens design. Instructional residual. Persona +
+  agents-guide + fleet standing brief.
+- **File→spawn same turn (🎯T193):** when a **Build-plane** target is filed
+  (owner `target:` aside / mid-session), **PO spawns a named worker** under
+  **`parent=jevons-po`** in the **same turn** as filing — not ledger-only.
+  T130 files; T193 spawns. Skip design-gated / blocked-on-human /
+  parked-for-design / pure documentation. Related: 🎯T155 continuous
+  frontier kick-off. Instructional residual. Persona + agents-guide +
+  fleet standing brief.
+- **Worker names literal dots (🎯T197):** hierarchical target ids in fleet
+  worker names keep **literal dots** — never digit-squash
+  (`jv-t27.2-config` not `jv-t272-config`). Flat ids unchanged
+  (`jv-t159-seal`). Names free-form otherwise. Persona + agents-guide +
+  fleet standing brief.
+- **Status language in progress vs live (🎯T176):** always say **in progress**
+  for a registered/running worker whose product is not yet owner-visible;
+  never call a running worker **live**. Reserve **live** / **landed** /
+  **shipped** for product evidence only (commit SHA + hard-reloadable UI, or
+  proven API on the daily path). Lab/test uses of "live" (journeys,
+  `test-ui-live`) stay technical jargon. Persona Communication Style +
+  agents-guide + fleet standing brief.
+- **Daemon rebuild + restart (🎯T188 / 🎯T191):** after any Build that
+  changes the running `jevonsd` binary or server-side behaviour, rebuild
+  and restart the daily daemon without asking the owner. Owner never
+  restarts by hand. Do not claim a daemon-path fix done until restart
+  succeeds. Invoke **detached**:
+  `nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &`
+  Never foreground the script under a fleet agent (session death kills
+  the bounce). Script path: `scripts/restart-daily-jevonsd.sh`. Pure
+  static web-only may hard-reload only. Residual: session drop until
+  T40/T171. Persona + agents-guide.
+- **Achieve reports need activated daily path (🎯T194):** a target whose
+  product path is served by daily jevonsd (HTTP API, compiled server,
+  non-static) is **not achieved** until detached `restart-daily-jevonsd`
+  succeeds (or proven zero-downtime upgrade) **and** a live probe of the
+  product path is green (e.g. curl non-404). Hermetic unit green is
+  **necessary not sufficient** — hermetics alone do not close daemon/API
+  work while a stale binary may still serve. Finish reports must cite
+  daily-path evidence (restart success and/or live probe). Pure web
+  static may hard-reload only (T188). Pure helper: `HasDailyPathEvidence`.
+  Residual: instructional + pure classifier; not a hard achieve block.
+  Persona + agents-guide + fleet standing brief.
 
 ## Project structure
 

@@ -21,7 +21,7 @@ function test(name, fn) {
   }
 }
 
-console.log('fleet_row_test (🎯T115 + 🎯T118)');
+console.log('fleet_row_test (🎯T115 + 🎯T118 + 🎯T211)');
 
 test('overseer state-dir home omits path', function () {
   const row = FR.fleetRowModel({
@@ -116,7 +116,7 @@ test('T118 same-workdir leaf worker prefers progress over path', function () {
   assert.strictEqual(row.dirHtml, '');
 });
 
-test('T118 same-workdir worker without ACP falls back to status line', function () {
+test('T118 same-workdir worker without ACP falls back to idle status (T211)', function () {
   const repo = '/Users/x/work/github.com/org/repo';
   const row = FR.fleetRowModel({
     name: 'alpha-worker',
@@ -126,7 +126,9 @@ test('T118 same-workdir worker without ACP falls back to status line', function 
   }, { parentWorkdir: repo, hasChildren: false });
   assert.strictEqual(row.showPath, false);
   assert.strictEqual(row.secondaryKind, 'status');
-  assert.strictEqual(row.secondaryHtml, 'running');
+  // 🎯T211: process-alive alone → idle, never bare "running" as busy chrome.
+  assert.strictEqual(row.secondaryHtml, 'idle');
+  assert.strictEqual(row.busy, false);
   assert.ok(row.secondaryHtml.indexOf('org/repo') === -1);
 });
 
@@ -184,8 +186,62 @@ test('T118 shouldShowPathSecondary policy matrix', function () {
   assert.strictEqual(FR.shouldShowPathSecondary({ name: 'att', purpose: 'aside', workdir: '/r' }, {}), false);
 });
 
+// ── 🎯T211 process-alive vs turn-busy ─────────────────────────────
+
+test('T211: status=running phase=idle is not classified or rendered busy', function () {
+  const fixture = {
+    name: 'jv-idle',
+    workdir: '/Users/x/work/github.com/org/repo',
+    parent: 'jevons-po',
+    status: 'running',
+    phase: 'idle',
+    progress: 'running', // live API used to emit this misleadingly
+  };
+  assert.strictEqual(FR.isBusyAgent(fixture), false);
+  assert.strictEqual(FR.formatFleetProgress(fixture), 'idle');
+  assert.ok(!/running/i.test(FR.formatFleetProgress(fixture)) || FR.formatFleetProgress(fixture) === 'idle');
+
+  const row = FR.fleetRowModel(fixture, {
+    parentWorkdir: fixture.workdir,
+    hasChildren: false,
+  });
+  assert.strictEqual(row.busy, false);
+  assert.strictEqual(row.secondaryKind, 'status');
+  assert.strictEqual(row.secondaryHtml, 'idle');
+  assert.ok(row.secondaryHtml.indexOf('running') === -1);
+  assert.ok(row.secondaryKind !== 'progress');
+});
+
+test('T211: phase=working shows action chrome and is busy', function () {
+  const fixture = {
+    name: 'jv-busy',
+    workdir: '/Users/x/work/github.com/org/repo',
+    parent: 'jevons-po',
+    status: 'running',
+    phase: 'working',
+    step: 'use_tool:read_file',
+    progress: 'working · use_tool:read_file',
+  };
+  assert.strictEqual(FR.isBusyAgent(fixture), true);
+  assert.ok(FR.formatFleetProgress(fixture).indexOf('use_tool') !== -1);
+  const row = FR.fleetRowModel(fixture, {
+    parentWorkdir: fixture.workdir,
+    hasChildren: false,
+  });
+  assert.strictEqual(row.busy, true);
+  assert.strictEqual(row.secondaryKind, 'progress');
+  assert.ok(row.secondaryHtml.indexOf('use_tool') !== -1 || row.progressText.indexOf('working') !== -1);
+});
+
+test('T211: bare status=running with no phase → idle not busy', function () {
+  assert.strictEqual(FR.isBusyAgent({ status: 'running' }), false);
+  assert.strictEqual(FR.formatFleetProgress({ status: 'running' }), 'idle');
+  assert.strictEqual(FR.isBusyAgent({ status: 'running', progress: 'running' }), false);
+  assert.strictEqual(FR.formatFleetProgress({ status: 'running', progress: 'running' }), 'idle');
+});
+
 if (process.exitCode) {
   console.error('fleet_row_test: FAILED');
   process.exit(1);
 }
-console.log('ok - fleet_row_test (🎯T115 + 🎯T118)');
+console.log('ok - fleet_row_test (🎯T115 + 🎯T118 + 🎯T211)');

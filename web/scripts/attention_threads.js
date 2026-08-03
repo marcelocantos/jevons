@@ -289,6 +289,46 @@
     return m[1].toUpperCase().replace(/^T/, 'T'); // normalize T prefix
   }
 
+  // resolveTargetAsideIdsToDismiss: fleet dual-write ids to DELETE after a
+  // live __TARGET_FILED__ paint (🎯T164). Prefer open file-target; also any
+  // file-target thread still present in the fleet list (stopped zombies after
+  // local attention already closed). Does not invent ids for non-filing asides.
+  function resolveTargetAsideIdsToDismiss(state, fleetAgents, selectedAgent) {
+    const s = state || emptyState();
+    const fleet = Array.isArray(fleetAgents) ? fleetAgents : [];
+    const threads = s.threads || [];
+    const ids = [];
+    function push(id) {
+      if (!id) return;
+      if (ids.indexOf(id) >= 0) return;
+      ids.push(id);
+    }
+    const open = threads.find(function (t) {
+      return t && t.purpose === 'file-target' && t.status === 'open' && t.id;
+    });
+    if (open) push(open.id);
+    threads.forEach(function (t) {
+      if (!t || t.purpose !== 'file-target' || !t.id) return;
+      const inFleet = fleet.some(function (a) {
+        return a && a.name === t.id;
+      });
+      if (inFleet) push(t.id);
+    });
+    // Selected RHS row if it is this filing aside (still dual-written).
+    if (selectedAgent) {
+      const th = threads.find(function (t) {
+        return t && t.purpose === 'file-target' && t.id === selectedAgent;
+      });
+      if (th) {
+        const row = fleet.find(function (a) {
+          return a && a.name === selectedAgent;
+        });
+        if (row) push(selectedAgent);
+      }
+    }
+    return ids;
+  }
+
   function park(state, id) {
     const s = clone(state || emptyState());
     const t = findThread(s, id);
@@ -732,6 +772,7 @@
     closeTargetAside: closeTargetAside,
     formatTargetWire: formatTargetWire,
     detectTargetFiled: detectTargetFiled,
+    resolveTargetAsideIdsToDismiss: resolveTargetAsideIdsToDismiss,
     park: park,
     parkByQuery: parkByQuery,
     pursue: pursue,

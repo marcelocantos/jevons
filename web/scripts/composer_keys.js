@@ -1,14 +1,21 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Composer Home/End caret vs jump-to-bottom policy (🎯T126 / 🎯T149).
-// DOM-free so Node hermetic tests can require(); index.html wires the
-// caret apply + jump gate.
+// Composer key policy (🎯T126 / 🎯T149 / 🎯T132).
+// DOM-free so Node hermetic tests can require(); index.html wires caret
+// apply, jump gate, and Enter-chord handling.
 //
 // 🎯T149: operate on *effective* (Wispr seed-stripped) content bounds so
 // seed-only EMPTY_SEED does not look like a Home/End no-op, and seed+text
 // lands on the visible draft — not inside the invisible seed prefix.
 // Meta/Ctrl+ArrowLeft/Right act as field ends (macOS / cross-platform habit).
+//
+// 🎯T132 Enter chords (composer focused):
+//   Ctrl+Enter  → immediate send / interject (never Alt+Enter — Firefox)
+//   Alt+Enter empty (seed-only counts) → pop last owner message as edit seed
+//   Alt+Enter non-empty → noop (must not steal Ctrl+Enter immediate-send)
+//   plain Enter → send (enqueue while busy per SendQueue)
+//   Shift+Enter → newline
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -167,6 +174,117 @@
     return activeEl === composerEl;
   }
 
+  // ── 🎯T132 Enter-chord policy ─────────────────────────────────────
+  // Pure classification for the composer keydown path.
+  //
+  // Returns:
+  //   'newline'    — Shift+Enter (leave browser default)
+  //   'send'       — plain Enter (or Meta+Enter): send / enqueue
+  //   'interrupt'  — Ctrl+Enter: immediate send / interject while busy
+  //   'pop_last'   — Alt+Enter when composer is effectively empty
+  //   'noop'       — Alt+Enter with draft text (do not send)
+  //   null         — not Enter (caller ignores)
+  //
+  // composerEmpty: true when there is no real draft ('' / whitespace /
+  // Wispr seed-only). Caller passes WisprContext.isEffectivelyEmpty.
+
+  /**
+   * @param {string} key
+   * @param {{ metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean, shiftKey?: boolean }} mods
+   * @param {{ composerEmpty?: boolean }} [opts]
+   * @returns {'newline'|'send'|'interrupt'|'pop_last'|'noop'|null}
+   */
+  function classifyEnterAction(key, mods, opts) {
+    if (key !== 'Enter') return null;
+    const m = mods || {};
+    const o = opts || {};
+    if (m.shiftKey) return 'newline';
+
+    // Ctrl+Enter wins as immediate-send even if other modifiers are held
+    // (except Shift, already handled). Alt alone must never map here.
+    if (m.ctrlKey) return 'interrupt';
+
+    // Alt+Enter (no Ctrl): empty → pop last owner message; non-empty → noop.
+    // Avoids Firefox Alt+Enter collisions on the send/interject path.
+    if (m.altKey) {
+      return o.composerEmpty ? 'pop_last' : 'noop';
+    }
+
+    // Plain Enter or Meta+Enter: normal send path (T113 enqueues when busy).
+    return 'send';
+  }
+
+  /**
+   * Most recent owner message from chronological history.
+   * @param {Array<{text?: string, el?: *}>|null|undefined} history
+   * @returns {{ text: string, index: number, el: * }|null}
+   */
+  function lastOwnerHistoryEntry(history) {
+    if (!history || !history.length) return null;
+    const index = history.length - 1;
+    const entry = history[index];
+    if (!entry) return null;
+    const text = entry.text == null ? '' : String(entry.text);
+    return { text: text, index: index, el: entry.el };
+  }
+
+  /**
+   * 🎯T227: product-path last-owner resolve for Alt+Enter pop.
+   *
+   * Prefer in-memory msgHistory (WS replay + live user turns). When that is
+   * empty or has no text (progressive hydrate paints `.msg.user` into the DOM
+   * without pushing msgHistory; soft-reconnect / desync can leave the same
+   * hole), fall back to chronological DOM-derived entries so empty Alt+Enter
+   * still seeds the last owner bubble. Pure classifier alone never saw this —
+   * classifyEnterAction stayed green while pop_last was a silent no-op.
+   *
+   * @param {Array<{text?: string, el?: *}>|null|undefined} history
+   * @param {Array<{text?: string, el?: *}>|null|undefined} domEntries chronological owner bubbles
+   * @returns {{ text: string, index: number, el: *, source: 'history'|'dom' }|null}
+   */
+  function resolveLastOwnerEntry(history, domEntries) {
+    const fromHist = lastOwnerHistoryEntry(history);
+    if (fromHist && fromHist.text) {
+      return {
+        text: fromHist.text,
+        index: fromHist.index,
+        el: fromHist.el,
+        source: 'history',
+      };
+    }
+    const fromDom = lastOwnerHistoryEntry(domEntries);
+    if (fromDom && fromDom.text) {
+      return {
+        text: fromDom.text,
+        index: fromDom.index,
+        el: fromDom.el,
+        source: 'dom',
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Build [{text, el}] from owner bubble nodes (product: `.msg.user` with
+   * `_layoutText`). Filters empty text. Order preserved (chronological DOM).
+   * @param {Array<{_layoutText?: *, textContent?: *}>|null|undefined} nodes
+   * @returns {Array<{text: string, el: *}>}
+   */
+  function ownerEntriesFromUserNodes(nodes) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const el = list[i];
+      if (!el) continue;
+      let text = '';
+      if (el._layoutText != null) text = String(el._layoutText);
+      else if (el.textContent != null) text = String(el.textContent);
+      if (!text) continue;
+      out.push({ text: text, el: el });
+    }
+    return out;
+  }
+
   return {
     isComposerTextControl: isComposerTextControl,
     contentCaretBounds: contentCaretBounds,
@@ -177,5 +295,11 @@
     isComposerFocused: isComposerFocused,
     // Exported for hermetic parity with VirtualList jump keys.
     defaultIsJumpToBottomHotkey: defaultIsJumpToBottomHotkey,
+    // 🎯T132
+    classifyEnterAction: classifyEnterAction,
+    lastOwnerHistoryEntry: lastOwnerHistoryEntry,
+    // 🎯T227
+    resolveLastOwnerEntry: resolveLastOwnerEntry,
+    ownerEntriesFromUserNodes: ownerEntriesFromUserNodes,
   };
 }));

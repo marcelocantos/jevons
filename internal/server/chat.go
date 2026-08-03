@@ -20,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // defaultOverseerName is the fallback registry name of the persistent
@@ -155,9 +156,40 @@ func (s *Server) waitForOverseer(ctx context.Context, conn *websocket.Conn) *cla
 // startup and again after a rewind swaps the process — so every overseer
 // reference resolves indirectly through s.proc and stays correct across
 // the swap, and no /ws/chat connection is left holding a dead handle.
+//
+// Idempotent on re-attach (🎯T210): prior DeliverOverseerEvent subscription
+// is removed before adding a new one. Without this, rewind + cockpit
+// AttachOverseer on the same process stacked two fans and every assistant
+// token was journaled/broadcast twice (GotGot / CheckingChecking).
 func (s *Server) AttachOverseer(agent *claudia.Agent) {
-	s.SetProcess(agent)
-	agent.SubscribeEvents(s.DeliverOverseerEvent)
+	if agent == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.overseerEventSub != 0 && s.proc != nil {
+		s.proc.UnsubscribeEvents(s.overseerEventSub)
+		s.overseerEventSub = 0
+	}
+	s.proc = agent
+	s.overseerEventSub = agent.SubscribeEvents(s.DeliverOverseerEvent)
+	s.mu.Unlock()
+}
+
+// ensureOverseerStreamIDLocked returns the open response stream id, minting
+// one if needed (🎯T223). Caller must hold s.mu.
+func (s *Server) ensureOverseerStreamIDLocked() string {
+	if s.overseerStreamID == "" {
+		s.overseerStreamSeq++
+		s.overseerStreamID = "s" + strconv.FormatUint(s.overseerStreamSeq, 10)
+	}
+	return s.overseerStreamID
+}
+
+// clearOverseerStreamID drops the open stream label after a terminal stop.
+func (s *Server) clearOverseerStreamID() {
+	s.mu.Lock()
+	s.overseerStreamID = ""
+	s.mu.Unlock()
 }
 
 // DeliverOverseerEvent is the live event path for the overseer: normalise
@@ -165,12 +197,28 @@ func (s *Server) AttachOverseer(agent *claudia.Agent) {
 // turn/idle status. Extracted so tests can drive the same path without
 // a live claudia.Agent.
 func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
+	// Any ACP traffic resets stuck-busy idle (🎯T204).
+	s.NoteOverseerProgress()
 	// Normalise ACP/raw provider events into the stable chat wire
 	// shape the web UI understands (🎯T39). Raw ACP payloads have
 	// no type/message.content, so a pass-through leaves the
 	// working indicator stuck forever.
+	// 🎯T223: stamp stream_id on assistant/progress fragments so journal
+	// and client join by identity across interleave (not adjacency).
+	var streamID string
+	if ev.Type == "assistant" || ev.Type == "progress" {
+		s.mu.Lock()
+		streamID = s.ensureOverseerStreamIDLocked()
+		s.mu.Unlock()
+	}
 	if line, ok := chatWireLine(ev); ok {
+		if streamID != "" {
+			line = stampStreamID(line, streamID)
+		}
 		s.BroadcastChat(line)
+	}
+	if ev.IsTerminalStop() {
+		s.clearOverseerStreamID()
 	}
 	s.HandleAgentEvent(ev)
 }
@@ -218,14 +266,16 @@ func (s *Server) sendNotes(text string) error {
 
 // notifyErrClass classifies overseer-notify delivery failures for structured
 // logs (🎯T128.3). Stable short codes for rg / dashboards.
+// Busy uses agenterr.IsPromptBusy so Claude/Task strings classify like Grok ACP (🎯T214 J6).
 func notifyErrClass(err error) string {
 	if err == nil {
 		return ""
 	}
+	if agenterr.IsPromptBusy(err) {
+		return "busy"
+	}
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "prompt already in flight"):
-		return "busy"
 	case strings.Contains(msg, "overseer not running"):
 		return "not_running"
 	default:
@@ -272,6 +322,10 @@ func (s *Server) drainOverseerNotes() {
 		)
 		return
 	}
+	// Successful prompt delivery: mark waiting so stuck-busy can see an
+	// in-flight turn even when only notify/owner notes are on the wire.
+	s.waiting = true
+	s.overseerLastProgress = time.Now()
 	depth := len(s.notifyQueue)
 	s.mu.Unlock()
 	slog.Info("notify_queue",
@@ -284,10 +338,14 @@ func (s *Server) drainOverseerNotes() {
 
 // handleCost serves the live cost snapshot: burn-rates, the "what is
 // burning right now" view, and any tripped runaway signals.
+// When the budget clamp is off (budget.json disabled=true), the source
+// returns {"disabled":true,"accounting":"disabled"} so the UI can hide
+// dollar figures without treating it as an error (🎯T137).
 func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if s.costSource == nil {
-		w.Write([]byte(`{"error":"cost monitoring not enabled"}`))
+		// Unset source: subsystem never wired (or usage.db failed open).
+		w.Write([]byte(`{"disabled":true,"accounting":"disabled","billable":false,"error":"cost monitoring not enabled"}`))
 		return
 	}
 	snap := s.costSource()
@@ -300,14 +358,44 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// rewindStrategy selects how product rewind rebinds the overseer session
+// after the durable chatlog is truncated (🎯T214 J5).
+//
+//   - rewindNativeJSONL: Claude Session — claudia.RewindSession truncates the
+//     provider JSONL; same SessionID is resumed (not a silent Grok-style rotate).
+//   - rewindRotateRecap: Grok ACP and other providers without in-place session
+//     truncate — journal-first rotate onto a fresh SessionID + chatlog recap.
+type rewindStrategy int
+
+const (
+	rewindRotateRecap rewindStrategy = iota
+	rewindNativeJSONL
+)
+
+// rewindStrategyForProvider is the hermetic policy oracle for 🎯T214 J5.
+// Only Claude Session (and empty, which claudia treats as Claude) uses
+// native JSONL rewind. Grok/Codex/Bedrock/unknown must not silently apply
+// Claude JSONL rules — rotate+recap is the honest product path.
+func rewindStrategyForProvider(p claudia.Provider) rewindStrategy {
+	switch p {
+	case claudia.ProviderClaude, "":
+		return rewindNativeJSONL
+	default:
+		return rewindRotateRecap
+	}
+}
+
 // RewindOverseer rolls the Jevons conversation back n user turns and
-// resumes it. claudia requires the live process be stopped first (a
-// running claude holds the conversation in memory and would re-append
-// the dropped turns), so this stops the overseer, truncates its
-// transcript at a turn boundary, relaunches with --resume, and
-// re-attaches the event stream. The rewind is undoable via the
-// .rewind-bak sidecar claudia leaves behind. The overseer is always
-// relaunched, even if the truncate fails, so the chat is never left dead.
+// resumes the overseer. Always journal-first (🎯T52): truncate the durable
+// chatlog, stop the live process, then rebind the session:
+//
+//   - Claude (🎯T214): claudia.RewindSession on the same SessionID, then Launch
+//     with Materialized/RequireResume. No silent Grok rotate applied wrongly.
+//     Falls back to rotate+recap if native JSONL rewind fails (missing file,
+//     wrong turn count) — failure is logged, not mislabeled as Grok-only success.
+//   - Grok / others: rotate SessionID + seed recap (Grok ACP cannot truncate
+//     in place). Residual: chatlog turn count vs Claude JSONL turn boundaries
+//     may diverge when both are used; product n is chatlog turns.
 func (s *Server) RewindOverseer(n int) error {
 	if n < 1 {
 		return fmt.Errorf("rewind: turns must be >= 1")
@@ -327,36 +415,70 @@ func (s *Server) RewindOverseer(n int) error {
 		return fmt.Errorf("rewind: overseer not registered")
 	}
 
-	// A Grok ACP session cannot be truncated in place, so rewind is
-	// journal-first (🎯T52): truncate the durable record, then rotate the
-	// overseer onto a fresh session seeded with a recap of the trimmed
-	// history. This rotation is specific to rewind — unlike routine boot,
-	// which now RESUMES the real session (🎯T58): the overseer's MCP tools
-	// come from ~/.grok/config.toml and reattach on session/load, so a
-	// restart no longer needs to rotate-and-recap. Here we must rotate
-	// because the whole point is to drop turns the live session still holds.
 	if err := clog.TruncateTurns(n); err != nil {
 		return fmt.Errorf("rewind: %w", err)
 	}
 
 	reg.Stop(s.overseerName)
-	rotated := *def
-	rotated.SessionID = uuid.NewString()
-	rotated.Materialized = false
-	if err := reg.Register(rotated); err != nil {
-		return fmt.Errorf("rewind: rotate session: %w", err)
+	// Stop clears ConnectURL/PID on the registry copy, but `def` was
+	// snapshotted before Stop. Re-registering that snapshot re-persisted
+	// the dead serve endpoint and forced Launch into reattach → connection
+	// reset (🎯T204). Always clear connect endpoint before re-register.
+	next := clearConnectEndpoint(*def)
+	strategy := rewindStrategyForProvider(def.Provider)
+	injectRecap := true
+
+	if strategy == rewindNativeJSONL {
+		if _, err := claudia.RewindSession(def.SessionID, def.WorkDir, n); err != nil {
+			slog.Warn("rewind: Claude native JSONL rewind failed; falling back to rotate+recap",
+				"provider", def.Provider, "session", def.SessionID, "err", err)
+			// Fall through to rotate path.
+			strategy = rewindRotateRecap
+		} else {
+			// Same session id, still materialized; resume the truncated JSONL.
+			next.Materialized = true
+			injectRecap = false
+			slog.Info("rewind: Claude native JSONL path",
+				"provider", def.Provider, "session", next.SessionID, "turns", n)
+		}
+	}
+
+	if strategy == rewindRotateRecap {
+		// Grok ACP (and fallback): cannot truncate the live session in place.
+		next.SessionID = uuid.NewString()
+		next.Materialized = false
+		slog.Info("rewind: rotate+recap path",
+			"provider", def.Provider, "new_session", next.SessionID, "turns", n)
+	}
+
+	if err := reg.Register(next); err != nil {
+		return fmt.Errorf("rewind: register session: %w", err)
 	}
 	agent, lerr := reg.Launch(s.overseerName)
 	if lerr != nil {
+		// Leave stopped + clean def; cockpit converge (🎯T204) will retry.
+		s.SetOverseerDownReason("rewind relaunch failed: " + lerr.Error())
+		s.NotifyAgentsChanged()
 		return fmt.Errorf("rewind: relaunch failed: %w", lerr)
 	}
 	s.AttachOverseer(agent)
+	s.SetOverseerDownReason("")
 
-	if recap := clog.Recap(30, 6<<10); recap != "" {
+	if injectRecap {
+		if recap := clog.Recap(30, 6<<10); recap != "" {
+			go func() {
+				if err := s.SendToOverseer(
+					"[Conversation rewound by the owner. The record below is the surviving context — read it, then acknowledge in ONE short sentence.]\n\n" + recap); err != nil {
+					slog.Error("rewind recap send failed", "err", err)
+				}
+			}()
+		}
+	} else {
+		// Native path: model already has truncated transcript; short ack only.
 		go func() {
 			if err := s.SendToOverseer(
-				"[Conversation rewound by the owner. The record below is the surviving context — read it, then acknowledge in ONE short sentence.]\n\n" + recap); err != nil {
-				slog.Error("rewind recap send failed", "err", err)
+				"[Conversation rewound by the owner — your session transcript was truncated in place. Acknowledge in ONE short sentence.]"); err != nil {
+				slog.Error("rewind ack send failed", "err", err)
 			}
 		}()
 	}
@@ -418,10 +540,13 @@ type agentInfo struct {
 	Parent      string `json:"parent,omitempty"`
 	Purpose     string `json:"purpose,omitempty"`
 	Description string `json:"description,omitempty"`
-	Status      string `json:"status"`
-	Phase       string `json:"phase,omitempty"`
-	Step        string `json:"step,omitempty"`
-	Progress    string `json:"progress,omitempty"`
+	// TargetID is the bullseye target this agent is engaged on (🎯T198).
+	// Empty when not mission-bound. UI merges with /api/frontier by equality.
+	TargetID string `json:"target_id,omitempty"`
+	Status   string `json:"status"`
+	Phase    string `json:"phase,omitempty"`
+	Step     string `json:"step,omitempty"`
+	Progress string `json:"progress,omitempty"`
 }
 
 // listFleetAgents returns the RHS panel source of truth: every agent
@@ -488,6 +613,7 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			Parent:      d.Parent,
 			Purpose:     purpose,
 			Description: d.Description,
+			TargetID:    strings.TrimSpace(d.TargetID),
 			Status:      status,
 		}
 		if progress != nil {
@@ -684,6 +810,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	defer func() {
+		// 🎯T209: drop inspect multiplex subscription with the chat listener.
+		s.clearInspectSub(ch)
 		s.mu.Lock()
 		for i, l := range s.chatListeners {
 			if l == ch {
@@ -744,20 +872,57 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Rewind control frame: roll the conversation back N user turns
-		// and resume. Tell all clients to trim their view to match.
-		if strings.HasPrefix(msg, `{"type":"rewind"`) {
+		// Control frames are JSON objects with a "type" field. Match on the
+		// unmarshalled type — never HasPrefix on key order (Go map marshal and
+		// probes may emit {"name":…,"type":"inspect_subscribe"} which must not
+		// fall through into owner chat / overseer as a user turn) (🎯T209).
+		if strings.HasPrefix(msg, "{") {
 			var ctl struct {
-				Turns int `json:"turns"`
+				Type  string `json:"type"`
+				Name  string `json:"name"`
+				Turns int    `json:"turns"`
 			}
-			_ = json.Unmarshal([]byte(msg), &ctl)
-			slog.Info("chat: rewind", "turns", ctl.Turns)
-			if err := s.RewindOverseer(ctl.Turns); err != nil {
-				slog.Error("chat: rewind failed", "err", err)
-				continue
+			if err := json.Unmarshal([]byte(msg), &ctl); err == nil && ctl.Type != "" {
+				switch ctl.Type {
+				case "rewind":
+					// Roll conversation back N user turns; tell clients to trim.
+					slog.Info("chat: rewind", "turns", ctl.Turns)
+					if err := s.RewindOverseer(ctl.Turns); err != nil {
+						slog.Error("chat: rewind failed", "err", err)
+						continue
+					}
+					s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
+					continue
+				case "inspect_subscribe", "inspect_unsubscribe":
+					// 🎯T209: RHS agent inspect multiplex on /ws/chat.
+					name := strings.TrimSpace(ctl.Name)
+					if ctl.Type == "inspect_unsubscribe" || name == "" {
+						s.setInspectSub(ch, "")
+						slog.Info("chat: inspect unsubscribe")
+						continue
+					}
+					s.setInspectSub(ch, name)
+					slog.Info("chat: inspect subscribe", "name", name)
+					if line, ok := s.marshalAgentTranscriptHistory(name); ok {
+						writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+						_ = conn.Write(writeCtx, websocket.MessageText, []byte(line))
+						cancel()
+					} else {
+						payload, _ := json.Marshal(map[string]any{
+							"type":  "agent_transcript",
+							"kind":  inspectKindHistory,
+							"name":  name,
+							"turns": []any{},
+							"empty": true,
+							"error": "agent not found",
+						})
+						writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						_ = conn.Write(writeCtx, websocket.MessageText, payload)
+						cancel()
+					}
+					continue
+				}
 			}
-			s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
-			continue
 		}
 
 		slog.Info("chat: received", "msg", msg)

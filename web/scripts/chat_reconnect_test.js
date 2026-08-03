@@ -37,6 +37,8 @@ test('suppress stream frames during soft; keep control frames', function () {
   assert.strictEqual(CR.shouldSuppressFrame(true, { type: 'conn' }), false);
   assert.strictEqual(CR.shouldSuppressFrame(true, { type: 'history_meta' }), false);
   assert.strictEqual(CR.shouldSuppressFrame(true, { type: 'error' }), false);
+  // 🎯T209: inspect multiplex frames must not be suppressed on soft reconnect.
+  assert.strictEqual(CR.shouldSuppressFrame(true, { type: 'agent_transcript' }), false);
   assert.strictEqual(CR.shouldSuppressFrame(false, { type: 'assistant' }), false);
 });
 

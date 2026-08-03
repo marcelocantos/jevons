@@ -49,6 +49,9 @@ func TestJourneyDoctrineMarkers(t *testing.T) {
 			"13705",
 			"test-journey",
 			"must interact with an agent", // T107 definition
+			"alter ego",                 // T98 CEO identity link
+			"ceo-alter-ego.md",
+			"T98",
 		}},
 		{"journey README", readme, []string{
 			"preferred E2E net",
@@ -64,6 +67,50 @@ func TestJourneyDoctrineMarkers(t *testing.T) {
 			if !strings.Contains(doc.body, m) {
 				t.Errorf("%s missing doctrine marker %q", doc.name, m)
 			}
+		}
+	}
+}
+
+// TestCEOAlterEgoDoctrineMarkers ratchets 🎯T98 draft doctrine: alter-ego
+// north star, multi-dimension map, surface/target linkage, voice-first,
+// ramifications vs chat wrapper. Owner ratification residual is explicit
+// in the note; this only keeps the note from rotting.
+func TestCEOAlterEgoDoctrineMarkers(t *testing.T) {
+	note := readRepo(t, "docs/design/ceo-alter-ego.md")
+	for _, want := range []string{
+		"alter ego",
+		"T98",
+		"not a passive butler",
+		"chat wrapper",
+		"Impatience",
+		"Resourcefulness",
+		"Risk, escalation",
+		"Quality bar",
+		"Communication style",
+		"Attention management",
+		"Multi-agent orchestration",
+		"Self-improvement",
+		"Tool & permission boldness",
+		"Delivery vocabulary",
+		"Voice-first",
+		"persona.md",
+		"fleet",
+		"bullseye",
+		"T87",
+		"T90",
+		"T92",
+		"T96",
+		"T104",
+		"T78",
+		"T125",
+		"T129",
+		"T130",
+		"Owner review",
+		"no slash",
+		"draft for owner review",
+	} {
+		if !strings.Contains(note, want) {
+			t.Errorf("ceo-alter-ego.md missing T98 marker %q", want)
 		}
 	}
 }

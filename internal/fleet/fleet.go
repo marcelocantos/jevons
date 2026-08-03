@@ -61,18 +61,14 @@ func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia
 	return cli.SelectAgentProvider(string(fromThread), stored, defaultProv)
 }
 
-// Launch ensures a live, ready process for the thread. If the thread's
-// session already exists on disk, claudia resumes it (--resume); the
-// resume/summary menu is auto-cleared by claudia's readiness handshake
-// (T24). It populates t.SessionID with the live process's session so
-// the thread can be rehydrated later.
+// ensureRegistered mints or backfills the registry row for a thread without
+// spawning a process. Dual-write half of Launch (🎯T114/T148) and hermetic
+// surface for 🎯T215 provider=claude Session stitch tests.
 //
-// Dual-write (🎯T114): every thread Launch registers or updates the
-// agent registry row with Parent + Purpose so threads and agents share
-// one id space. Parent lineage (🎯T111.3) is taken from the thread.
-// Provider (🎯T148) is set on mint or backfilled when empty; never forced
-// to Grok on resume when a stored provider exists.
-func (f *Claudia) Launch(t *thread.Thread) error {
+// Provider is set on mint or backfilled when empty; never forced to Grok on
+// resume when a stored provider exists. Materialized stays false until a real
+// (or fake-backend) Launch succeeds inside claudia.Registry.
+func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 	purpose := strings.TrimSpace(t.Purpose)
 	if purpose == "" {
 		purpose = claudia.PurposeAside // thread path → aside by default
@@ -99,26 +95,54 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 		}); err != nil {
 			return fmt.Errorf("register agent %q: %w", t.ID, err)
 		}
-	} else if def := f.reg.Def(t.ID); def != nil {
-		dirty := false
-		// Backfill empty provider only — never overwrite a stored choice.
-		if def.Provider == "" {
-			def.Provider = providerForLaunch("", threadProv, f.defaultProvider)
-			dirty = true
+		if t.SessionID == "" {
+			t.SessionID = sid
 		}
-		// Backfill empty parent when the spawn path now knows the creator.
-		if def.Parent == "" && t.Parent != "" {
-			def.Parent = t.Parent
-			dirty = true
+		return nil
+	}
+
+	def := f.reg.Def(t.ID)
+	if def == nil {
+		return nil
+	}
+	dirty := false
+	// Backfill empty provider only — never overwrite a stored choice.
+	if def.Provider == "" {
+		def.Provider = providerForLaunch("", threadProv, f.defaultProvider)
+		dirty = true
+	}
+	// Backfill empty parent when the spawn path now knows the creator.
+	if def.Parent == "" && t.Parent != "" {
+		def.Parent = t.Parent
+		dirty = true
+	}
+	// Backfill purpose for legacy dual-write rows (🎯T114).
+	if def.Purpose == "" && purpose != "" {
+		def.Purpose = purpose
+		dirty = true
+	}
+	if dirty {
+		if err := f.reg.Register(*def); err != nil {
+			return fmt.Errorf("update agent %q: %w", t.ID, err)
 		}
-		// Backfill purpose for legacy dual-write rows (🎯T114).
-		if def.Purpose == "" && purpose != "" {
-			def.Purpose = purpose
-			dirty = true
-		}
-		if dirty {
-			_ = f.reg.Register(*def)
-		}
+	}
+	return nil
+}
+
+// Launch ensures a live, ready process for the thread. If the thread's
+// session already exists on disk, claudia resumes it (--resume); the
+// resume/summary menu is auto-cleared by claudia's readiness handshake
+// (T24). It populates t.SessionID with the live process's session so
+// the thread can be rehydrated later.
+//
+// Dual-write (🎯T114): every thread Launch registers or updates the
+// agent registry row with Parent + Purpose so threads and agents share
+// one id space. Parent lineage (🎯T111.3) is taken from the thread.
+// Provider (🎯T148) is set on mint or backfilled when empty; never forced
+// to Grok on resume when a stored provider exists.
+func (f *Claudia) Launch(t *thread.Thread) error {
+	if err := f.ensureRegistered(t); err != nil {
+		return err
 	}
 
 	ag, err := f.reg.Launch(t.ID)

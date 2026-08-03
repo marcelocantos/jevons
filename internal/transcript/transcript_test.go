@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/discovery"
 )
 
 // Grok Build chat_history.jsonl shapes (real sessions under ~/.grok/sessions).
@@ -136,6 +138,38 @@ func TestReader_Read_GrokSession(t *testing.T) {
 	}
 	text, _ := turns[0]["text"].(string)
 	if !strings.Contains(text, "spawn a worker") {
+		t.Fatalf("user text: %q", text)
+	}
+}
+
+// 🎯T213: Claude-only projects root is enough for Reader.Read (no Grok tree).
+func TestReader_Read_ClaudeSessionOnly(t *testing.T) {
+	root := t.TempDir()
+	projects := filepath.Join(root, "projects")
+	sid := "019fc1c6-9c23-7261-b8e0-c7bc5967a746"
+	bucket := discovery.EncodeClaudeProject("/tmp/claude-work")
+	dir := filepath.Join(projects, bucket)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, sid+".jsonl")
+	if err := os.WriteFile(path, []byte(claudeFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewReaderRoots(discovery.Roots{ClaudeProjects: projects})
+	turns, err := r.Read(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) < 2 {
+		t.Fatalf("turns=%d payload=%+v", len(turns), turns)
+	}
+	if turns[0]["role"] != "user" {
+		t.Fatalf("first role: %+v", turns[0])
+	}
+	text, _ := turns[0]["text"].(string)
+	if text != "hello aside" {
 		t.Fatalf("user text: %q", text)
 	}
 }

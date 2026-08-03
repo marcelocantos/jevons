@@ -38,10 +38,24 @@ func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Reg
 		slog.Error("cost: bad budget.json — using defaults", "err", err, "path", budgetPath)
 		cfg = cost.DefaultBudgetConfig()
 	}
-	// Owner opt-out: SuperGrok / no marginal $ — clamp + dollar UI off (🎯T137 revisit).
+	// Owner opt-out via budget.json (🎯T137): no collector/enforcer, but
+	// /api/cost still reports disabled so the UI hides $ honestly.
 	if cfg.Disabled {
-		slog.Info("cost: clamp-down and live $ reporting disabled", "path", budgetPath, "reason", "budget.json disabled=true")
+		slog.Info("cost: clamp-down disabled", "path", budgetPath, "reason", "budget.json disabled=true",
+			"hint", "set disabled=false and accounting=subscription for SuperGrok (API-eq $ never enforces)")
+		srv.SetCostSource(func() any {
+			return map[string]any{
+				"disabled":      true,
+				"accounting":    cost.AccountingDisabled,
+				"billable":      false,
+				"currency_note": "cost monitoring disabled",
+			}
+		})
 		return nil
+	}
+	if cfg.IsSubscription() {
+		slog.Info("cost: subscription accounting — USD estimates never pause/kill",
+			"path", budgetPath, "accounting", cost.AccountingSubscription)
 	}
 
 	store, err := cost.OpenStore(filepath.Join(jc.StateDir, "usage.db"))

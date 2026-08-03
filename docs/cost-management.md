@@ -1,4 +1,6 @@
 > **Historical (2026-07-18).** The "idea (not scheduled)" status below is obsolete: this design shipped, evolved, as the 🎯T36 cost clamp-down (`internal/cost`, v0.5.0) — collector → monitor → enforcer over Grok session JSONL, not ccusage.
+>
+> **On-demand multi-harness reports (🎯T163):** for ad-hoc Claude/Grok/Codex/Cursor usage (API-preferring, fixture-backed scrape), see [harness-usage.md](harness-usage.md) and `go run ./cmd/harness-usage`. That path is observational; 🎯T36 remains the live enforcement plane.
 
 # Cost Management — Design Note
 

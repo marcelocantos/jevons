@@ -10,7 +10,9 @@
 // typing in the composer or any other text field (e.g. Mermaid paste).
 //
 // DOM-free policy so Node hermetic tests can require(); browser wires
-// document keydown in index.html. No aggressive auto-refocus.
+// document keydown + focusComposer() call sites in index.html.
+// 🎯T153: aggressive return-to-composer after pointer chrome (send, expand
+// tab, route-switch, aside dismiss) — separate from the `/` hotkey.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -104,6 +106,23 @@
     return { didFocus: true, reason: 'focused' };
   }
 
+  /**
+   * 🎯T153: force focus onto the main composer after common chrome actions
+   * (send, expand/collapse click, route-switch, aside dismiss). Unconditional
+   * — not gated on activeElement (unlike the `/` hotkey). DOM-free: caller
+   * passes the #input element (or a mock with .focus()).
+   *
+   * @param {object} composerEl element with .focus() (main #input)
+   * @returns {{ didFocus: boolean, reason: string }}
+   */
+  function focusComposer(composerEl) {
+    if (!composerEl || typeof composerEl.focus !== 'function') {
+      return { didFocus: false, reason: 'no-composer' };
+    }
+    composerEl.focus();
+    return { didFocus: true, reason: 'focused' };
+  }
+
   return {
     HOTKEY: HOTKEY,
     HOTKEY_HINT: HOTKEY_HINT,
@@ -112,5 +131,6 @@
     isEditableTarget: isEditableTarget,
     shouldFocusComposer: shouldFocusComposer,
     tryFocusComposer: tryFocusComposer,
+    focusComposer: focusComposer,
   };
 }));

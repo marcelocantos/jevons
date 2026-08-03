@@ -181,3 +181,77 @@ func (s *Server) handleCreateAside(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewEncoder(w).Encode(out)
 }
+
+// dismissAsideAgent stops and deregisters a purpose=aside fleet agent by id
+// (🎯T152 reverse of ensureAsideAgent / POST /api/asides). Refuses overseer
+// and non-aside purposes so filing auto-close cannot kill workers.
+func (s *Server) dismissAsideAgent(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	s.mu.RLock()
+	overseer := s.overseerName
+	if overseer == "" {
+		overseer = defaultOverseerName
+	}
+	reg := s.registry
+	s.mu.RUnlock()
+
+	if id == overseer {
+		return fmt.Errorf("cannot dismiss the overseer")
+	}
+	if reg == nil {
+		return fmt.Errorf("no agent registry")
+	}
+	def := reg.Def(id)
+	if def == nil {
+		// Idempotent: already gone is success for the close path.
+		return nil
+	}
+	if def.Purpose != claudia.PurposeAside {
+		return fmt.Errorf("agent %q purpose %q is not aside; refuse dismiss", id, def.Purpose)
+	}
+	if err := reg.Remove(id); err != nil {
+		return fmt.Errorf("remove aside %q: %w", id, err)
+	}
+	slog.Info("aside dismissed",
+		"component", "aside",
+		"name", id,
+	)
+	return nil
+}
+
+// handleDeleteAside DELETE /api/asides/{id} — stop/deregister a purpose=aside
+// fleet agent so RHS 💡 chrome leaves with the filing close path (🎯T152).
+func (s *Server) handleDeleteAside(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.dismissAsideAgent(id); err != nil {
+		msg := err.Error()
+		code := http.StatusBadRequest
+		switch {
+		case strings.Contains(msg, "no agent registry"):
+			code = http.StatusServiceUnavailable
+		case strings.Contains(msg, "not aside"):
+			code = http.StatusConflict
+		case strings.Contains(msg, "overseer"):
+			code = http.StatusForbidden
+		}
+		http.Error(w, msg, code)
+		return
+	}
+	s.NotifyAgentsChanged()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"name":     id,
+		"dismissed": true,
+	})
+}

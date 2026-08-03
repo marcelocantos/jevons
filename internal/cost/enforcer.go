@@ -181,6 +181,10 @@ func (e *Enforcer) Act(snap *Snapshot) {
 	defer e.mu.Unlock()
 	e.lastSnap = snap
 	cfg := e.config()
+	// 🎯T137: under subscription accounting, API-list-price USD must never
+	// drive pause/kill/spawn-halt — defense in depth even if a monitor
+	// alert slips through above LevelWarn.
+	sub := cfg.IsSubscription()
 
 	// Reduce alerts to the max level per target.
 	workerLevel := map[string]Level{}
@@ -188,21 +192,37 @@ func (e *Enforcer) Act(snap *Snapshot) {
 	hardCeiling := false
 	infoSeen := map[string]bool{}
 	for _, a := range snap.Alerts {
+		lvl := a.Level
 		switch a.Kind {
 		case AlertWorkerRate:
-			if a.Level > workerLevel[a.Worker] {
-				workerLevel[a.Worker] = a.Level
+			if sub && lvl > LevelWarn {
+				lvl = LevelWarn
+			}
+			if lvl > workerLevel[a.Worker] {
+				workerLevel[a.Worker] = lvl
 			}
 		case AlertFleetRate:
-			if a.Level > fleetLevel {
-				fleetLevel = a.Level
+			if sub && lvl > LevelWarn {
+				lvl = LevelWarn
+			}
+			if lvl > fleetLevel {
+				fleetLevel = lvl
 			}
 		case AlertGlobalRate:
-			if a.Level > globalLevel {
-				globalLevel = a.Level
+			if sub && lvl > LevelWarn {
+				lvl = LevelWarn
+			}
+			if lvl > globalLevel {
+				globalLevel = lvl
 			}
 		case AlertHardCeiling:
-			hardCeiling = true
+			if sub {
+				// Informational only — never halt spawns on estimate $.
+				infoSeen["!"+a.Kind] = true
+				e.notifyOnce("!"+a.Kind, LevelWarn, a.Detail)
+			} else {
+				hardCeiling = true
+			}
 		case AlertSessionCount, AlertOrphanSessions, AlertProjection, AlertCollectorStale:
 			infoSeen["!"+a.Kind] = true
 			e.notifyOnce("!"+a.Kind, LevelWarn, a.Detail)

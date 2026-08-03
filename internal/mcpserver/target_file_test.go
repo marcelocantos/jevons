@@ -61,6 +61,40 @@ func TestHandleTargetFileUsesBullseye(t *testing.T) {
 	}
 }
 
+// 🎯T226: file twice with same mission always allocates a new id (no attach).
+func TestHandleTargetFileAlwaysAllocatesNewID(t *testing.T) {
+	prev := runBullseye
+	t.Cleanup(func() { runBullseye = prev })
+
+	trackCalls := 0
+	runBullseye = func(args ...string) (string, error) {
+		trackCalls++
+		return "ok\nids: T221\n", nil
+	}
+
+	s := New(t.TempDir(), nil, nil)
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"cwd":        t.TempDir(),
+		"name":       "RHS inspect user-MD for fleet injects",
+		"acceptance": "user injects and MD-shaped user turns render",
+	}
+	res, err := s.handleTargetFile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := targetFileToolText(res)
+	if trackCalls != 1 {
+		t.Fatalf("must always track (trackCalls=%d)", trackCalls)
+	}
+	if !strings.Contains(text, "__TARGET_FILED__:T221") {
+		t.Fatalf("want new id T221, got %q", text)
+	}
+	if strings.Contains(text, "no new id allocated") || strings.Contains(text, "Attached to existing") {
+		t.Fatalf("must not attach: %q", text)
+	}
+}
+
 func targetFileToolText(res *mcp.CallToolResult) string {
 	if res == nil {
 		return ""

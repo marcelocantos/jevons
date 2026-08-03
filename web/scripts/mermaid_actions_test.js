@@ -218,6 +218,158 @@ test('emptyStateHtml is durable chrome empty copy', function () {
   assert.ok(/bullseye/i.test(html));
 });
 
+// 🎯T196: failed product fetches show HTTP + recovery — not empty paste shell.
+test('productFetchFailureView 404 includes HTTP code + recovery, not paste shell', function () {
+  const view = MA.productFetchFailureView({
+    resource: 'Unachieved graph',
+    status: 404,
+    kind: 'http',
+  });
+  assert.strictEqual(view.httpStatus, 404);
+  assert.strictEqual(view.kind, 'http');
+  assert.ok(/HTTP 404/.test(view.status), 'status has HTTP 404: ' + view.status);
+  assert.ok(/rebuild|restart-daily/i.test(view.status), 'status has recovery short: ' + view.status);
+  assert.ok(view.bodyHtml.indexOf('data-mvp-fetch-error') >= 0, 'error body marker');
+  assert.ok(/HTTP 404/.test(view.bodyHtml), 'body has HTTP 404');
+  assert.ok(/restart-daily/i.test(view.bodyHtml), 'body has recovery hint');
+  assert.ok(view.bodyHtml.indexOf('data-mvp-empty') < 0, 'not empty shell');
+  assert.ok(!/No graph loaded/i.test(view.bodyHtml), 'not empty paste copy');
+  assert.ok(!/\bPaste\b/i.test(view.bodyHtml), 'does not invite paste as primary');
+  assert.ok(view.status.indexOf(MA.PRODUCT_FETCH_RECOVERY_SHORT) >= 0);
+  assert.ok(view.recoveryHint.indexOf('restart-daily') >= 0);
+});
+
+test('productFetchFailureView 5xx and network are distinct from empty-available', function () {
+  const s5 = MA.productFetchFailureView({
+    resource: 'Unachieved graph',
+    status: 503,
+    message: 'service unavailable',
+  });
+  assert.strictEqual(s5.httpStatus, 503);
+  assert.ok(/HTTP 503/.test(s5.status));
+  assert.ok(/service unavailable/i.test(s5.status));
+  assert.ok(s5.bodyHtml.indexOf('data-mvp-fetch-error') >= 0);
+
+  const net = MA.productFetchFailureView({
+    resource: 'Unachieved graph',
+    message: 'Failed to fetch',
+    kind: 'network',
+  });
+  assert.strictEqual(net.kind, 'network');
+  assert.ok(/Failed to fetch|network/i.test(net.status), net.status);
+  assert.ok(/rebuild|restart-daily/i.test(net.status));
+  assert.ok(net.bodyHtml.indexOf('data-mvp-fetch-error') >= 0);
+  assert.ok(net.bodyHtml.indexOf('data-mvp-empty') < 0);
+
+  const empty = MA.emptyStateHtml();
+  assert.ok(empty.indexOf('data-mvp-empty') >= 0);
+  assert.ok(empty.indexOf('data-mvp-fetch-error') < 0);
+  assert.notStrictEqual(empty, s5.bodyHtml);
+  assert.notStrictEqual(empty, net.bodyHtml);
+});
+
+test('productFetchFailureFromError maps httpStatus and message HTTP codes', function () {
+  const e404 = new Error('not found');
+  e404.httpStatus = 404;
+  e404.kind = 'http';
+  const v = MA.productFetchFailureFromError(e404, { resource: 'Unachieved graph' });
+  assert.strictEqual(v.httpStatus, 404);
+  assert.ok(/HTTP 404/.test(v.status));
+  assert.ok(/not found/i.test(v.status) || /not found/i.test(v.bodyHtml));
+
+  const fromMsg = MA.productFetchFailureFromError(new Error('HTTP 502 bad gateway'), {
+    resource: 'Unachieved graph',
+  });
+  assert.strictEqual(fromMsg.httpStatus, 502);
+  assert.ok(/HTTP 502/.test(fromMsg.status));
+
+  const net = MA.productFetchFailureFromError(new Error('Failed to fetch'), {
+    resource: 'Unachieved graph',
+  });
+  assert.strictEqual(net.kind, 'network');
+  assert.ok(net.bodyHtml.indexOf('data-mvp-fetch-error') >= 0);
+});
+
+// 🎯T189: Escape closes open #mermaid-viz-panel (incl. mvp-large); ignore when closed.
+function mockPanel(opts) {
+  const o = opts || {};
+  const classes = Object.create(null);
+  (o.classes || []).forEach(function (c) { classes[c] = true; });
+  return {
+    hidden: !!o.hidden,
+    classList: {
+      contains: function (c) { return !!classes[c]; },
+    },
+  };
+}
+
+test('isMermaidPanelOpen true only when open class and not hidden', function () {
+  assert.strictEqual(MA.isMermaidPanelOpen(null), false);
+  assert.strictEqual(MA.isMermaidPanelOpen(mockPanel({ hidden: true, classes: ['open'] })), false);
+  assert.strictEqual(MA.isMermaidPanelOpen(mockPanel({ hidden: false, classes: [] })), false);
+  assert.strictEqual(MA.isMermaidPanelOpen(mockPanel({ hidden: false, classes: ['open'] })), true);
+  // mvp-large Graph overlay still "open".
+  assert.strictEqual(
+    MA.isMermaidPanelOpen(mockPanel({ hidden: false, classes: ['open', 'mvp-large'] })),
+    true
+  );
+});
+
+test('shouldCloseMermaidOnEscape only for Escape when panel open', function () {
+  const open = mockPanel({ hidden: false, classes: ['open', 'mvp-large'] });
+  const closed = mockPanel({ hidden: true, classes: [] });
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Escape', open), true);
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Escape', closed), false);
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Escape', null), false);
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Enter', open), false);
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Esc', open), false);
+});
+
+test('T189 index.html Escape wiring calls closeMermaidPanel when open', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('shouldCloseMermaidOnEscape') >= 0, 'policy helper used');
+  assert.ok(html.indexOf('mermaid-viz-panel') >= 0, 'panel id');
+  // Escape branch closes panel then returns (does not always steal interrupt).
+  assert.ok(/if\s*\(\s*closePanel\s*\)\s*\{[\s\S]*?closeMermaidPanel\(\)/.test(html),
+    'closePanel branch invokes closeMermaidPanel');
+  assert.ok(html.indexOf('function closeMermaidPanel') >= 0, 'closeMermaidPanel defined');
+  // Interrupt path still present for when panel is closed.
+  assert.ok(html.indexOf('{"type":"interrupt"}') >= 0, 'interrupt retained when panel closed');
+});
+
+// 🎯T196: openFrontierGraph failed fetch → fetch-error view, not empty paste shell.
+test('T196 index.html openFrontierGraph catch uses fetch-error path not empty shell', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('function openFrontierGraph') >= 0, 'openFrontierGraph defined');
+  assert.ok(html.indexOf('function renderMermaidPanelFetchError') >= 0, 'renderMermaidPanelFetchError');
+  assert.ok(html.indexOf('productFetchFailureFromError') >= 0, 'uses pure failure helper');
+  assert.ok(html.indexOf('data-mvp-fetch-error') >= 0 || html.indexOf('mvp-error') >= 0,
+    'error markup present');
+  // Extract openFrontierGraph and assert catch path.
+  const start = html.indexOf('function openFrontierGraph');
+  assert.ok(start >= 0);
+  const nextFn = html.indexOf('\nfunction ', start + 10);
+  const ofg = html.slice(start, nextFn > start ? nextFn : start + 4000);
+  assert.ok(ofg.indexOf('renderMermaidPanelFetchError') >= 0,
+    'openFrontierGraph catch/error path calls renderMermaidPanelFetchError');
+  // Catch must not paint empty paste shell (that was the product bug).
+  const catchIdx = ofg.indexOf('.catch(');
+  assert.ok(catchIdx >= 0, 'has .catch');
+  // Strip line comments so intentional docs don't trip the call-site check.
+  const catchCode = ofg.slice(catchIdx).replace(/\/\/[^\n]*/g, '');
+  assert.ok(catchCode.indexOf('renderMermaidPanelFetchError') >= 0, 'catch uses fetch error');
+  assert.ok(!/renderMermaidPanelEmpty\s*\(/.test(catchCode),
+    'catch must not call renderMermaidPanelEmpty (empty paste shell)');
+  // HTTP status attached on !r.ok for status line / body.
+  assert.ok(/httpStatus\s*=\s*r\.status/.test(ofg), 'attaches httpStatus from response');
+  // CSS for error body.
+  assert.ok(/\.mvp-error/.test(html), 'mvp-error CSS');
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

@@ -82,8 +82,13 @@ func TestAgentProgressTerminalStop(t *testing.T) {
 func TestAgentProgressSetStatusBaseline(t *testing.T) {
 	h := NewAgentProgressHub()
 	h.SetStatus("a", "running")
-	if h.Get("a").Summary != "running" {
-		t.Fatalf("baseline=%q", h.Get("a").Summary)
+	// 🎯T211: process-alive baseline is phase=idle summary=idle, never progress="running".
+	got := h.Get("a")
+	if got.Phase != "idle" {
+		t.Fatalf("baseline phase=%q want idle", got.Phase)
+	}
+	if got.Summary != "idle" {
+		t.Fatalf("baseline summary=%q want idle (not running)", got.Summary)
 	}
 	// Rich snapshot not clobbered by running baseline.
 	_ = h.Observe("a", claudia.Event{
@@ -92,13 +97,25 @@ func TestAgentProgressSetStatusBaseline(t *testing.T) {
 		Raw:          []byte(`{"update":{"sessionUpdate":"tool_call","title":"Grep"}}`),
 	})
 	h.SetStatus("a", "running")
-	got := h.Get("a")
+	got = h.Get("a")
 	if got.Step != "Grep" && !strings.Contains(got.Summary, "Grep") {
 		t.Fatalf("rich progress clobbered: %+v", got)
 	}
 	h.SetStatus("a", "stopped")
 	if h.Get("a").Phase != "idle" {
 		t.Fatalf("stopped should idle phase: %+v", h.Get("a"))
+	}
+}
+
+// 🎯T211: statusBaseline never emits bare "running" as glanceable progress.
+func TestStatusBaselineRunningIsIdle(t *testing.T) {
+	phase, summary := statusBaseline("running")
+	if phase != "idle" || summary != "idle" {
+		t.Fatalf("running → phase=%q summary=%q want idle/idle", phase, summary)
+	}
+	phase, summary = statusBaseline("stopped")
+	if phase != "idle" || summary != "stopped" {
+		t.Fatalf("stopped → phase=%q summary=%q want idle/stopped", phase, summary)
 	}
 }
 

@@ -66,15 +66,31 @@ func (l Limits) LevelFor(usdPerHour float64) Level {
 	}
 }
 
+// Accounting modes for clamp honesty (🎯T137). list_price treats
+// provider costUSD / table estimates as billable dollars for enforcement
+// and UI. subscription is SuperGrok / flat-plan: those figures are
+// API-equivalent estimates only — never pause/kill/spawn-halt on them.
+const (
+	AccountingListPrice    = "list_price"
+	AccountingSubscription = "subscription"
+	AccountingDisabled     = "disabled" // derived when Disabled=true; not stored
+)
+
 // BudgetConfig is the clamp-down policy, persisted at
 // ~/.jevons/budget.json. The zero value is unusable; start from
 // DefaultBudgetConfig and override.
 type BudgetConfig struct {
 	// Disabled turns off the entire cost subsystem for this daemon:
-	// no collector, no enforcer (pause/kill/spawn-halt), no /api/cost
-	// feed. Owner 2026-08-03: SuperGrok has no marginal $; API-equivalent
-	// burn was pausing the overseer. Revisit under 🎯T137.
+	// no collector, no enforcer (pause/kill/spawn-halt). GET /api/cost
+	// still reports {"disabled":true}. Owner opt-out without code edits.
 	Disabled bool `json:"disabled"`
+
+	// Accounting selects how USD figures drive enforcement and UI
+	// (🎯T137). Empty defaults to list_price. Use "subscription" for
+	// SuperGrok / no-marginal-$ plans so API-list-price token burn is
+	// never treated as real dollars for pause/kill. Ignored when
+	// Disabled is true.
+	Accounting string `json:"accounting,omitempty"`
 
 	// Global covers ALL spend visible in the store, attributed or not —
 	// the incident's invisible fleet lands here.
@@ -131,12 +147,45 @@ type BudgetConfig struct {
 	KillConfirmTicks int `json:"kill_confirm_ticks"`
 }
 
+// EffectiveAccounting returns the accounting mode that governs this
+// config: disabled, subscription, or list_price.
+func (c *BudgetConfig) EffectiveAccounting() string {
+	if c == nil || c.Disabled {
+		return AccountingDisabled
+	}
+	if c.Accounting == AccountingSubscription {
+		return AccountingSubscription
+	}
+	return AccountingListPrice
+}
+
+// IsSubscription reports whether USD figures are non-bill estimates
+// (SuperGrok / flat subscription) and must not drive pause/kill.
+func (c *BudgetConfig) IsSubscription() bool {
+	return c != nil && c.EffectiveAccounting() == AccountingSubscription
+}
+
+// CurrencyNote is the honest label for USD fields under this config.
+func (c *BudgetConfig) CurrencyNote() string {
+	switch c.EffectiveAccounting() {
+	case AccountingSubscription:
+		return "API-equivalent USD estimate — not billed under SuperGrok / flat subscription"
+	case AccountingDisabled:
+		return "cost monitoring disabled"
+	default:
+		return "USD at API list-price / provider costUSD (billable estimate)"
+	}
+}
+
 // DefaultBudgetConfig returns the shipped defaults. They are set from
 // the 2026-07-06 incident's shape (~$227/hr sustained, 47 sessions):
 // generous enough not to clamp normal interactive work, tight enough
 // that the incident would have been killed inside its first hour.
+// Accounting defaults to list_price (paid API). SuperGrok owners set
+// accounting=subscription in budget.json (🎯T137).
 func DefaultBudgetConfig() *BudgetConfig {
 	return &BudgetConfig{
+		Accounting:           AccountingListPrice,
 		Global:               Limits{WarnUSDPerHour: 10, ThrottleUSDPerHour: 20, PauseUSDPerHour: 40, KillUSDPerHour: 60},
 		Fleet:                Limits{WarnUSDPerHour: 5, ThrottleUSDPerHour: 10, PauseUSDPerHour: 20, KillUSDPerHour: 40},
 		Worker:               Limits{WarnUSDPerHour: 2, ThrottleUSDPerHour: 5, PauseUSDPerHour: 10, KillUSDPerHour: 20},
