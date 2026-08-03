@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic unit tests for Wispr Flow composer context (🎯T21 / 🎯T133).
+// Hermetic unit tests for Wispr Flow composer context (🎯T21 / 🎯T133 / 🎯T183).
 // Run: node web/scripts/wispr_context_test.js
 
 'use strict';
@@ -228,6 +228,55 @@ test('index.html has composer-seed-only CSS and class/Backspace wiring (🎯T133
   assert.ok(
     html.includes('handleSeedBackspace'),
     'Backspace handler must call handleSeedBackspace'
+  );
+});
+
+// ── restored draft visibility after reload (🎯T183) ─────────────
+// Bug: #input.composer-seed-only { color: transparent } left on after
+// draft restore (hot-reload sessionStorage / form restore) → invisible
+// text until an edit re-syncs the class. Fix: re-sync after restore.
+
+test('T183 restored non-empty draft must not keep seed-only class', function () {
+  // Pure model of post-restore class decision (same helper index.html uses).
+  const restored = 'Hello after reload — still here';
+  assert.ok(
+    !WC.needsSeedOnlyClass(restored),
+    'non-empty restored draft must not request seed-only (transparent) class'
+  );
+  assert.ok(
+    !WC.isSeedOnly(restored),
+    'non-empty restored draft is not seed-only'
+  );
+  // EMPTY_SEED alone still hides (empty residual).
+  assert.ok(WC.needsSeedOnlyClass(WC.EMPTY_SEED));
+  // Seed prefix + real text: visible (class off).
+  assert.ok(!WC.needsSeedOnlyClass(WC.EMPTY_SEED + restored));
+  // Blank residual: class off (nothing to hide).
+  assert.ok(!WC.needsSeedOnlyClass(''));
+});
+
+test('T183 index.html re-syncs seed class after draft restore paths', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Boot: hot-reload draft restored before ensureWisprSeed so class is not stuck.
+  assert.ok(
+    /jevons-input[\s\S]{0,400}ensureWisprSeed\(\)/.test(html) ||
+      /bootSavedInput[\s\S]{0,400}ensureWisprSeed\(\)/.test(html),
+    'boot must restore jevons-input draft before ensureWisprSeed'
+  );
+  // Late restore / safety: syncComposerSeedClass after savedInput path.
+  assert.ok(
+    /jevons-input[\s\S]{0,500}syncComposerSeedClass/.test(html),
+    'after jevons-input restore must call syncComposerSeedClass'
+  );
+  // Browser form-restore race: pageshow re-sync.
+  assert.ok(
+    /pageshow[\s\S]{0,200}syncComposerSeedClass/.test(html),
+    'pageshow must re-sync seed-only class (form-restore race)'
+  );
+  // Transparent CSS still gated on seed-only class only.
+  assert.ok(
+    /#input\.composer-seed-only\s*\{[^}]*color\s*:\s*transparent/s.test(html),
+    'transparent color only under .composer-seed-only'
   );
 });
 

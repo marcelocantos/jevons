@@ -3675,6 +3675,7 @@ function cancelQueued(id) {
       navFocus = { zone: 'queue', index: n - 1 };
       input.value = sendQueueState.items[n - 1].text;
     }
+    if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
   }
   renderSendQueue();
   autoGrow();
@@ -3728,10 +3729,12 @@ function drainSendQueueIfIdle() {
     if (!n) {
       navFocus = { zone: 'live' };
       input.value = liveDraftBackup;
+      if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
       autoGrow();
     } else if ((navFocus.index | 0) >= n) {
       navFocus = { zone: 'queue', index: n - 1 };
       input.value = sendQueueState.items[n - 1].text;
+      if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
       autoGrow();
     }
   }
@@ -4063,6 +4066,7 @@ function recallHistory(dir) {
       input.value = entry.text;
       setEditingHighlight(entry.el);
     }
+    if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
     autoGrow();
     input.selectionStart = input.selectionEnd = input.value.length;
     return true;
@@ -4103,6 +4107,8 @@ function recallHistory(dir) {
     input.value = entry ? entry.text : '';
     setEditingHighlight(entry ? entry.el : null);
   }
+  // 🎯T183: any programmatic draft swap must re-sync seed-only visibility.
+  if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
   renderSendQueue();
   autoGrow();
   input.selectionStart = input.selectionEnd = input.value.length;
@@ -4444,11 +4450,26 @@ if (typeof renderAttention === 'function') renderAttention();
 sendBtn.addEventListener('mousedown', e => e.preventDefault());
 
 // 🎯T21: bootstrap Wispr context region + empty seed before first dictation.
+// 🎯T183: restore hot-reload draft BEFORE seed so composer-seed-only is not
+// left on when real text is present (transparent draft until first edit).
+try {
+  const bootSavedInput = sessionStorage.getItem('jevons-input');
+  if (bootSavedInput) {
+    input.value = bootSavedInput;
+    sessionStorage.removeItem('jevons-input');
+  }
+} catch (_) {}
 refreshWisprContext();
 ensureWisprSeed();
 autoGrow();
 focusComposer();
 connect();
+// 🎯T183: browser form-restore can race after scripts; re-sync seed class.
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('pageshow', function () {
+    if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
+  });
+}
 
 // On first load the server replays history as a burst of messages and
 // layout settles asynchronously, which can leave the view slightly above
@@ -4971,9 +4992,17 @@ function closeTerminal() {
   document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
 }
 
-// Preserve input across hot reloads.
-const savedInput = sessionStorage.getItem('jevons-input');
-if (savedInput) { input.value = savedInput; sessionStorage.removeItem('jevons-input'); }
+// Preserve input across hot reloads (late path if boot restore missed).
+// 🎯T183: always re-sync seed-only class after restore so real draft is visible.
+try {
+  const savedInput = sessionStorage.getItem('jevons-input');
+  if (savedInput) {
+    input.value = savedInput;
+    sessionStorage.removeItem('jevons-input');
+  }
+} catch (_) {}
+if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
+if (typeof autoGrow === 'function') autoGrow();
 
 // Voice UI — uses transport abstraction for both browser and native modes.
 const voiceBtn = document.getElementById('voice-btn');
