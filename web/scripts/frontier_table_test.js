@@ -353,6 +353,81 @@ test('T181 index.html rich card tip on id/name + InstantTip placement', function
   assert.ok(html.indexOf('parseAssistantMarkdown') >= 0, 'markdown render path available');
 });
 
+// 🎯T182: pure kickoff request → jevons-po send path with target id/name brief.
+test('playKickoffRequest messages jevons-po with full brief (🎯T182)', function () {
+  assert.strictEqual(FT.DEFAULT_PLAY_PO, 'jevons-po');
+  assert.strictEqual(FT.PLAY_GLYPH, '\u25B6');
+  assert.strictEqual(FT.resolvePlayPO(), 'jevons-po');
+  assert.strictEqual(FT.agentSendPath('jevons-po'), '/api/agents/jevons-po/send');
+  assert.strictEqual(FT.agentSendPath('my-po'), '/api/agents/my-po/send');
+
+  const req = FT.playKickoffRequest({
+    id: 'T182',
+    name: 'Frontier play + tight status/fan',
+    status: 'Converging',
+    acceptance: ['Play sends to PO', 'Tight CSS'],
+  });
+  assert.strictEqual(req.method, 'POST');
+  assert.strictEqual(req.po, 'jevons-po');
+  assert.strictEqual(req.url, '/api/agents/jevons-po/send');
+  assert.ok(req.body && req.body.text, 'body.text present');
+  const text = req.body.text;
+  assert.ok(text.indexOf('T182') >= 0, 'target id: ' + text);
+  assert.ok(text.indexOf('Frontier play') >= 0, 'name: ' + text);
+  assert.ok(text.indexOf('parent=jevons-po') >= 0, 'parent lineage: ' + text);
+  assert.ok(/spawn|brief|Kick off/i.test(text), 'kick off language: ' + text);
+  assert.ok(text.indexOf('Play sends to PO') >= 0, 'acceptance in brief');
+  assert.strictEqual(FT.buildPlayKickoffText(null), '');
+  assert.strictEqual(FT.buildPlayKickoffText({}), '');
+});
+
+// 🎯T182: CSS tight status/fan + play column + wiring (mockable send path).
+test('T182 tight status/fan CSS + play cell + send path wiring', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+
+  const stBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
+  const fanBlock = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*\}/);
+  assert.ok(stBlock, 'ft-status rule');
+  assert.ok(fanBlock, 'ft-fanout rule');
+  // Near-zero pad between status and fanout.
+  assert.ok(/padding-right:\s*0/.test(stBlock[0]), 'status padding-right 0: ' + stBlock[0]);
+  assert.ok(/padding-left:\s*0/.test(fanBlock[0]), 'fanout padding-left 0: ' + fanBlock[0]);
+
+  assert.ok(/#frontier-table\s+\.ft-play\s*\{/.test(html), 'ft-play column CSS');
+  assert.ok(/#frontier-table\s+\.ft-play-btn\s*\{/.test(html) || html.indexOf('ft-play-btn') >= 0,
+    'play button class');
+
+  const start = html.indexOf('// 🎯T173: headerless table');
+  assert.ok(start >= 0);
+  // Include playFrontierTarget (defined after render) in region end.
+  const end = html.indexOf('function loadFrontier', start);
+  const region = html.slice(start, end > start ? end : start + 8000);
+  assert.ok(region.indexOf("play.className = 'ft-play'") >= 0 || region.indexOf('ft-play') >= 0,
+    'play cell in row builder');
+  assert.ok(region.indexOf('ft-play-btn') >= 0, 'play button in row builder');
+  assert.ok(region.indexOf('playFrontierTarget') >= 0, 'playFrontierTarget called');
+  assert.ok(html.indexOf('function playFrontierTarget') >= 0, 'playFrontierTarget defined');
+  assert.ok(html.indexOf('playKickoffRequest') >= 0, 'uses pure kickoff request');
+  assert.ok(html.indexOf('__frontierAgentSend') >= 0, 'mockable send seam');
+  assert.ok(html.indexOf('/api/agents/') >= 0 && /\/api\/agents\/.*send/.test(html) ||
+    html.indexOf("'/send'") >= 0 || html.indexOf('/send') >= 0,
+    'agent send path present');
+
+  // DOM order id|name|status|fan|play
+  const idB = html.indexOf("id.className = 'ft-id'");
+  const nameB = html.indexOf("name.className = 'ft-name'");
+  const stB = html.indexOf("status.className = 'ft-status'");
+  const fanB = html.indexOf("fan.className = 'ft-fanout'");
+  const playB = html.indexOf("play.className = 'ft-play'");
+  assert.ok(idB >= 0 && nameB > idB && stB > nameB && fanB > stB && playB > fanB,
+    'DOM order id|name|status|fan|play');
+
+  // Does not clobber T181 rich hover wiring.
+  assert.ok(html.indexOf('formatTargetCardMarkdown') >= 0, 'T181 card still present');
+  assert.ok(html.indexOf('left-of-pointer') >= 0 || html.indexOf('PLACE_LEFT_OF_POINTER') >= 0,
+    'T181 placement still present');
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

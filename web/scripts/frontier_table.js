@@ -273,12 +273,78 @@
   // API path constant — client never hard-codes ledger file paths.
   var API_PATH = '/api/frontier';
 
+  // 🎯T182: play control → message product PO to start work on a frontier row.
+  var PLAY_GLYPH = '\u25B6'; // ▶
+  var DEFAULT_PLAY_PO = 'jevons-po';
+
+  // resolvePlayPO — residual multi-PO: default jevons-po for jevons ledger.
+  function resolvePlayPO(opts) {
+    var o = opts || {};
+    if (o.po) return String(o.po).trim() || DEFAULT_PLAY_PO;
+    if (o.agent) return String(o.agent).trim() || DEFAULT_PLAY_PO;
+    return DEFAULT_PLAY_PO;
+  }
+
+  // agentSendPath(name) — product HTTP proxy for fleet agent_send (🎯T182).
+  function agentSendPath(name) {
+    var n = String(name || DEFAULT_PLAY_PO).trim() || DEFAULT_PLAY_PO;
+    return '/api/agents/' + encodeURIComponent(n) + '/send';
+  }
+
+  // buildPlayKickoffText(row) — body for PO: target id + name + spawn brief.
+  // Asks PO to kick off with full brief, parent=jevons-po (not toast-only).
+  function buildPlayKickoffText(row, opts) {
+    if (!row || !row.id) return '';
+    var id = String(row.id).trim();
+    var name = row.name != null ? String(row.name).trim() : '';
+    var po = resolvePlayPO(opts);
+    var lines = [];
+    lines.push('Start work on frontier target 🎯' + id +
+      (name ? (' — ' + name) : '') + '.');
+    lines.push('');
+    lines.push(
+      'Kick off now: spawn/brief a fleet worker with parent=' + po +
+      ' and a full brief to execute this target end-to-end ' +
+      '(local commits + oracle evidence; no Ship/PR unless the owner asks). ' +
+      'Do not only toast or acknowledge — actually start the worker.'
+    );
+    var st = statusTitle(row.status) || String(row.status || '').trim();
+    if (st) {
+      lines.push('');
+      lines.push('Status: ' + st);
+    }
+    var acc = normalizeStringList(row.acceptance);
+    if (acc.length > 0) {
+      lines.push('');
+      lines.push('Acceptance:');
+      for (var i = 0; i < acc.length; i++) {
+        lines.push('- ' + acc[i]);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  // playKickoffRequest(row, opts) — pure request shape for hermetic mocks.
+  // { url, method, body: { text }, po }
+  function playKickoffRequest(row, opts) {
+    var po = resolvePlayPO(opts);
+    var text = buildPlayKickoffText(row, opts);
+    return {
+      url: agentSendPath(po),
+      method: 'POST',
+      body: { text: text },
+      po: po,
+    };
+  }
+
   return {
     TAB_TRANSCRIPT: TAB_TRANSCRIPT,
     TAB_FRONTIER: TAB_FRONTIER,
     POLL_MS: POLL_MS,
     API_PATH: API_PATH,
     FANOUT_MARK: FANOUT_MARK,
+    PLAY_GLYPH: PLAY_GLYPH,
+    DEFAULT_PLAY_PO: DEFAULT_PLAY_PO,
     nextBottomTab: nextBottomTab,
     tabAfterAgentSelect: tabAfterAgentSelect,
     normalizePayload: normalizePayload,
@@ -290,5 +356,9 @@
     emptyMessage: emptyMessage,
     formatTargetCardMarkdown: formatTargetCardMarkdown,
     formatTargetCardPlain: formatTargetCardPlain,
+    resolvePlayPO: resolvePlayPO,
+    agentSendPath: agentSendPath,
+    buildPlayKickoffText: buildPlayKickoffText,
+    playKickoffRequest: playKickoffRequest,
   };
 }));
