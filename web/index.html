@@ -4652,8 +4652,20 @@ document.addEventListener('keydown', e => {
       return;
     }
   }
-  // Esc interrupts Jevons's current turn (like the Claude Code TUI).
+  // Esc: close open mermaid viz / Frontier Graph panel first (🎯T189), then
+  // interrupt Jevons's current turn (like the Claude Code TUI). Closed panel
+  // must not steal Escape from interrupt / edit-cancel.
   if (e.key === 'Escape') {
+    const mvp = document.getElementById('mermaid-viz-panel');
+    const MA = window.MermaidActions;
+    const closePanel = MA && MA.shouldCloseMermaidOnEscape
+      ? MA.shouldCloseMermaidOnEscape(e.key, mvp)
+      : !!(mvp && !mvp.hidden && mvp.classList && mvp.classList.contains('open'));
+    if (closePanel) {
+      e.preventDefault();
+      closeMermaidPanel();
+      return;
+    }
     // 🎯T88: clear history-edit mode so next Enter is safe append.
     if (editingEl) { setEditingHighlight(null); histIdx = null; histDraft = ''; }
     transport.send('{"type":"interrupt"}');

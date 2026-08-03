@@ -218,6 +218,55 @@ test('emptyStateHtml is durable chrome empty copy', function () {
   assert.ok(/bullseye/i.test(html));
 });
 
+// 🎯T189: Escape closes open #mermaid-viz-panel (incl. mvp-large); ignore when closed.
+function mockPanel(opts) {
+  const o = opts || {};
+  const classes = Object.create(null);
+  (o.classes || []).forEach(function (c) { classes[c] = true; });
+  return {
+    hidden: !!o.hidden,
+    classList: {
+      contains: function (c) { return !!classes[c]; },
+    },
+  };
+}
+
+test('isMermaidPanelOpen true only when open class and not hidden', function () {
+  assert.strictEqual(MA.isMermaidPanelOpen(null), false);
+  assert.strictEqual(MA.isMermaidPanelOpen(mockPanel({ hidden: true, classes: ['open'] })), false);
+  assert.strictEqual(MA.isMermaidPanelOpen(mockPanel({ hidden: false, classes: [] })), false);
+  assert.strictEqual(MA.isMermaidPanelOpen(mockPanel({ hidden: false, classes: ['open'] })), true);
+  // mvp-large Graph overlay still "open".
+  assert.strictEqual(
+    MA.isMermaidPanelOpen(mockPanel({ hidden: false, classes: ['open', 'mvp-large'] })),
+    true
+  );
+});
+
+test('shouldCloseMermaidOnEscape only for Escape when panel open', function () {
+  const open = mockPanel({ hidden: false, classes: ['open', 'mvp-large'] });
+  const closed = mockPanel({ hidden: true, classes: [] });
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Escape', open), true);
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Escape', closed), false);
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Escape', null), false);
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Enter', open), false);
+  assert.strictEqual(MA.shouldCloseMermaidOnEscape('Esc', open), false);
+});
+
+test('T189 index.html Escape wiring calls closeMermaidPanel when open', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('shouldCloseMermaidOnEscape') >= 0, 'policy helper used');
+  assert.ok(html.indexOf('mermaid-viz-panel') >= 0, 'panel id');
+  // Escape branch closes panel then returns (does not always steal interrupt).
+  assert.ok(/if\s*\(\s*closePanel\s*\)\s*\{[\s\S]*?closeMermaidPanel\(\)/.test(html),
+    'closePanel branch invokes closeMermaidPanel');
+  assert.ok(html.indexOf('function closeMermaidPanel') >= 0, 'closeMermaidPanel defined');
+  // Interrupt path still present for when panel is closed.
+  assert.ok(html.indexOf('{"type":"interrupt"}') >= 0, 'interrupt retained when panel closed');
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

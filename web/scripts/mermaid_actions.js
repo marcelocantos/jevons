@@ -310,6 +310,34 @@
     return { mode: 'empty' };
   }
 
+  /**
+   * Whether #mermaid-viz-panel is currently shown (compact chrome or mvp-large).
+   * Accepts a minimal panel shape so hermetic tests stay DOM-free (🎯T189).
+   * @param {{ classList?: { contains: (c: string) => boolean }, hidden?: boolean }|null} panel
+   */
+  function isMermaidPanelOpen(panel) {
+    if (!panel) return false;
+    if (panel.hidden) return false;
+    const cl = panel.classList;
+    if (cl && typeof cl.contains === 'function') {
+      return !!cl.contains('open');
+    }
+    // Fallback: hidden cleared without classList (tests / partial mocks).
+    return panel.hidden === false;
+  }
+
+  /**
+   * Escape closes the durable mermaid panel when it is open (same as Close).
+   * When closed, Escape must not be claimed — other UI (interrupt, edit
+   * cancel, etc.) keeps the key (🎯T189).
+   * @param {string} key event.key
+   * @param {{ classList?: { contains: (c: string) => boolean }, hidden?: boolean }|null} panel
+   * @returns {boolean} true → caller should closeMermaidPanel + preventDefault
+   */
+  function shouldCloseMermaidOnEscape(key, panel) {
+    return String(key || '') === 'Escape' && isMermaidPanelOpen(panel);
+  }
+
   return {
     PIN_STORAGE_KEY: PIN_STORAGE_KEY,
     toolbarButtons: toolbarButtons,
@@ -329,5 +357,7 @@
     clearPinnedGraph: clearPinnedGraph,
     emptyStateHtml: emptyStateHtml,
     openFromChromePlan: openFromChromePlan,
+    isMermaidPanelOpen: isMermaidPanelOpen,
+    shouldCloseMermaidOnEscape: shouldCloseMermaidOnEscape,
   };
 }));
