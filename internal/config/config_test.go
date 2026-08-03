@@ -306,7 +306,34 @@ func TestDefaultPersonaUnattendedFrontierAutoSpawn(t *testing.T) {
 	}
 }
 
-// 🎯T78/T104/T125/T129/T130/T155: agents-guide is the PO/worker product surface that inherits doctrine.
+// 🎯T176: overseer status language — in progress for workers; live only for product-visible.
+func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Status vocabulary: in progress vs live",
+		"T176",
+		"in progress",
+		"not yet owner-visible",
+		"Never call a registered or running worker",
+		`"live"`,
+		"product is on the wire",
+		"landed",
+		"shipped",
+		"commit SHA",
+		"hard-reloadable UI",
+		"proven API path",
+		"daily",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T176 marker %q", want)
+		}
+	}
+}
+
+// 🎯T78/T104/T125/T129/T130/T155/T176: agents-guide is the PO/worker product surface that inherits doctrine.
 func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	// agents-guide.md is repo-root product docs consumed by PO/workers.
 	path := filepath.Join("..", "..", "agents-guide.md")
@@ -382,6 +409,17 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"DECIDABLE-FROM-TASTE",
 		"CoverageMap",
 		"greenfield-oracle-elicitation.md",
+		// 🎯T176 status language
+		"Status language: in progress vs live",
+		"T176",
+		"in progress",
+		"not yet owner-visible",
+		"Never call a registered or running worker",
+		"landed",
+		"shipped",
+		"hard-reloadable UI",
+		"proven API",
+		"daily path",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)
@@ -389,7 +427,7 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	}
 }
 
-// 🎯T125/T129/T130/T155: product AGENTS.md (and CLAUDE thin import) carry fleet doctrine.
+// 🎯T125/T129/T130/T155/T176: product AGENTS.md (and CLAUDE thin import) carry fleet doctrine.
 func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 	path := filepath.Join("..", "..", "AGENTS.md")
 	b, err := os.ReadFile(path)
@@ -448,6 +486,17 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"DECIDABLE-FROM-TASTE",
 		"CoverageMap",
 		"greenfield-oracle-elicitation.md",
+		// 🎯T176 status language
+		"Status language in progress vs live",
+		"T176",
+		"in progress",
+		"owner-visible",
+		"never call a running worker",
+		"landed",
+		"shipped",
+		"hard-reloadable UI",
+		"proven API",
+		"daily path",
 	} {
 		if !strings.Contains(a, want) {
 			t.Errorf("AGENTS.md missing doctrine marker %q", want)

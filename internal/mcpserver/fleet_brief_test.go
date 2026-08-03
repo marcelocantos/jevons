@@ -68,6 +68,17 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"jevons_target_file",
 		"bullseye_commit",
 		"T92",
+		// 🎯T176 status language
+		"Status language: in progress vs live",
+		"T176",
+		"in progress",
+		"not yet owner-visible",
+		"Never call a registered/running worker",
+		"landed",
+		"shipped",
+		"hard-reloadable UI",
+		"proven API",
+		"daily path",
 		"implement the fix",
 	} {
 		if !strings.Contains(out, want) {

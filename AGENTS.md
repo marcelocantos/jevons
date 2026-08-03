@@ -169,6 +169,13 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Skip design-gated (T112 / T67 / T29-class) and blocked targets until
   unblocked or owner opens design. Instructional residual. Persona +
   agents-guide + fleet standing brief.
+- **Status language in progress vs live (🎯T176):** always say **in progress**
+  for a registered/running worker whose product is not yet owner-visible;
+  never call a running worker **live**. Reserve **live** / **landed** /
+  **shipped** for product evidence only (commit SHA + hard-reloadable UI, or
+  proven API on the daily path). Lab/test uses of "live" (journeys,
+  `test-ui-live`) stay technical jargon. Persona Communication Style +
+  agents-guide + fleet standing brief.
 
 ## Project structure
 

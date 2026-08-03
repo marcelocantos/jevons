@@ -7,8 +7,13 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T31 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T31 / 🎯T176 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
+
+## Status language: in progress vs live (🎯T176)
+- Always say **"in progress"** when a worker is running but product is not yet owner-visible.
+- Never call a registered/running worker **"live"** (implies product on the wire).
+- **"Live" / "landed" / "shipped"** only with product evidence: commit SHA + hard-reloadable UI, or proven API on the daily path.
 
 ## Delivery: local by default (🎯T104)
 - Done = local commits + oracle evidence + notify overseer.

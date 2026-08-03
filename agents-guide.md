@@ -241,6 +241,20 @@ Pure helpers: `CoverageMap` / `ClassifyDesignClause` /
 rich T29 surface and owner process-fidelity validation remain
 class-3 / follow-ups.
 
+## Status language: in progress vs live (🎯T176)
+
+Hard vocabulary when reporting fleet / worker status to the owner (overseer
+voice; workers use the same words in finish reports):
+
+| Say | When |
+|---|---|
+| **in progress** | Worker is registered or running, but product is **not yet owner-visible** |
+| **live** / **landed** / **shipped** | Only with product evidence: commit SHA + hard-reloadable UI, or proven API on the daily path |
+
+Never call a registered or running worker **"live"** — that implies product
+on the wire. Residual: journey-suite / `test-ui-live` / daemon-attach uses of
+"live" stay lab jargon, not status language about workers.
+
 ## Delivery: local by default (🎯T104)
 
 Owner vocabulary is **literal**:
