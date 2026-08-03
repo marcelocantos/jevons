@@ -55,20 +55,20 @@ Three concepts, one durable spine:
   process holds; malformed durable state is a hard error, never a silent
   reset.
 - **Overseer ("jevons")** — a persistent named Grok agent that is the CEO.
-  Its instructions are currently embedded in `cmd/jevonsd/main.go`
-  (externalizing them is 🎯T44). Communication is fire-and-forget:
-  `jevons_agent_send` returns immediately; worker replies and completions
-  arrive as async notifications pushed into the overseer's conversation.
+  Identity and persona come from structured config (`~/.jevons/config.yaml`
+  + built-in `persona.md` template; 🎯T44) — no owner-specific identity in
+  compiled code. Communication is fire-and-forget: `jevons_agent_send`
+  returns immediately; worker replies and completions arrive as async
+  notifications pushed into the overseer's conversation.
 - **jwork** (`internal/mcpserver/jwork.go`) — the ephemeral primitive: a
   fresh worker runs one self-contained task to completion and returns the
   result (recursion capped at depth 3).
 
-A legacy third generation (`internal/manager` + session MCP tools) is
-being deleted (🎯T41).
-
-The CEO drives everything through the in-process **MCP server**
-(`internal/mcpserver`, `jevons_*` tools + `jwork`); the tool list and
-stability grades are in [../STABILITY.md](../STABILITY.md).
+The durable-thread path is the only agent lifecycle (🎯T41 removed the
+legacy manager/session MCP generation). The CEO drives everything through
+the in-process **MCP server** (`internal/mcpserver`, `jevons_*` tools +
+`jwork`); the tool list and stability grades are in
+[../STABILITY.md](../STABILITY.md).
 
 ## The provider seam (🎯T45)
 
@@ -101,13 +101,23 @@ module fetches.
 
 ## Cost governance
 
-`internal/cost` (🎯T36): L1 collector tails every active Grok session
-JSONL (registered or not) into `usage.db`; L2 monitor computes rolling
-burn rates per worker/fleet/global; L3 enforcer escalates
-warn → throttle → pause → kill with irreversibility guards
+`internal/cost` (🎯T36, honesty 🎯T137): L1 collector tails every active
+Grok session JSONL (registered or not) into `usage.db`; L2 monitor
+computes rolling burn rates per worker/fleet/global; L3 enforcer
+escalates warn → throttle → pause → kill with irreversibility guards
 (minimum-evidence before kill, sustained-breach confirmation, protected
-workers, dead-man's switch). Budgets are hot-editable in
+workers, dead-man's switch). Budgets are editable in
 `~/.jevons/budget.json`.
+
+**Accounting modes** (`budget.json`):
+
+| Mode | When | Enforcement on USD | UI $ |
+|---|---|---|---|
+| `list_price` (default) | paid API / real marginal $ | full ladder + hard ceiling | billable $ |
+| `subscription` | SuperGrok / flat plan | never pause/kill on API-eq $ | labeled "est / not billed" |
+| `disabled: true` | full opt-out | no enforcer | ticker hidden; `/api/cost` reports disabled |
+
+Fleet pause never stops the overseer (🎯T139).
 
 ## Persistence
 
@@ -118,20 +128,25 @@ workers, dead-man's switch). Budgets are hot-editable in
 | `~/.jevons/usage.db` | token-spend events (SQLite) | yes |
 | `~/.jevons/budget.json` | clamp-down policy | yes |
 | `~/.jevons/credential.json` | pigeon pairing (single device) | yes |
-| `~/.grok/sessions/…/chat_history.jsonl` | provider transcripts (source of truth for history) | yes (provider-owned) |
+| `~/.jevons/chatlog/<overseer>.jsonl` | jevons-owned append-only conversation journal (🎯T30.1) | yes |
+| `~/.grok/sessions/…/chat_history.jsonl` | provider transcripts | yes (provider-owned) |
 | process state, voice FSM, broadcast fan-out | in-memory | no — by design |
 
-A jevons-owned append-only transcript (so history display never depends
-on the provider's private store) is 🎯T30.1.
+UI history replays from the jevons-owned chatlog so conversation display
+does not depend on the provider's private store (🎯T30.1).
 
 ## Security posture (honest)
 
-Built: mTLS CA + QR device provisioning; origin-safe WebSockets and CSRF
-guards on mutating routes (🎯T38); cost clamp-down bypass hardening
-(🎯T36.1). Not yet: default bind is all-interfaces with mTLS off;
-workers and the overseer run permissions-bypassed; the charter's
-risk-graded permission model is not enforced (🎯T5, 🎯T6). Treat a
-default install as single-trusted-operator, single-machine.
+Built: default bind is **loopback-only** (`127.0.0.1` / 🎯T6) unless
+`bind_addr` / `--bind` deliberately widens it; remote devices use the
+pigeon relay, not LAN exposure; mTLS CA + QR device provisioning
+available when enabled; origin-safe WebSockets and CSRF guards on
+mutating routes (🎯T38); cost clamp-down bypass hardening (🎯T36.1).
+Not yet: mTLS off by default; workers and the overseer still run
+permissions-bypassed (worker execution gating is 🎯T8.3 post-MVP);
+stranger-ready device onboarding (App Store binary + `jevons --init`) is
+still 🎯T14. Treat a default install as single-trusted-operator,
+single-machine.
 
 ## Voice
 
