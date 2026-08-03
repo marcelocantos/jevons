@@ -1924,7 +1924,6 @@ targets:
     status: achieved
     value: 0.0
     cost: 0.0
-    set_aside_reason: 'Owner 2026-08-03: park. Suspicious of incomplete-stream theory — asterisks persisted on already-sealed messages until hard-reload; only reload fixed them. Real bug may be seal/hydrate/virtualize path not stream-only. Reopen when re-diagnosed.'
     attestation: 'SHA 62117e6 feat(web): progressive streaming markdown via thetarnav/streaming-markdown 0.2.15 (vendored UMD smd.js). Mid-stream paintStreamBody uses delta parser_write; closed **text** → <strong> before seal (hermetic streaming_markdown_test). Seal still full marked + mermaid/highlight. No textContent stream default. make test-web green including streaming_markdown_test. Residual: virtualize already skips live stream bubbles; sealed hydrate uses marked; selection may reset only on non-monotonic rewrite (normalize insert).'
     acceptance:
     - Live stream paints progressive markdown — not raw source (no product default of textContent / plain stream). Closed emphasis (e.g. **bold lead** once the closer arrives) renders as bold without hard-reload.

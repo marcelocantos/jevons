@@ -58,6 +58,19 @@ open http://localhost:13705/
 - **Sessions on disk**: `~/.grok/sessions/<encoded-cwd>/<session-id>/`
   plus `~/.grok/active_sessions.json`.
 
+## Chat markdown (web UI)
+
+- **Mid-stream (🎯T150):** assistant bubbles paint progressive markdown via
+  vendored `streaming-markdown` (`web/scripts/smd.js` +
+  `streaming_markdown.js`). Closed emphasis (e.g. `**bold**`) becomes real
+  bold as soon as both delimiters arrive — not raw source, and not delayed
+  until end of turn.
+- **Seal:** full `marked` parse (plus mermaid 🎯T59 and highlight.js 🎯T74).
+- **Fence hygiene:** T145 `ensureFenceNewlines` and T147
+  `coalesceAssistantText` keep smushed `prose.```lang` from breaking fences.
+- **Never** use plain `textContent` of markdown source as the live stream
+  default.
+
 ## MCP tools
 
 - **Threads**: `jevons_thread_adopt`, `_list`, `_status`, `_spawn`,
