@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/claudia v0.0.0
+	github.com/marcelocantos/claudia v0.20.1-0.20260802230201-3f9daa511a86
 	github.com/marcelocantos/doit v0.9.0
 	github.com/marcelocantos/pigeon v0.19.0
 	github.com/mark3labs/mcp-go v0.47.0
@@ -38,5 +38,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/marcelocantos/claudia => ../claudia
