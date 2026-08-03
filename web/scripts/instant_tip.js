@@ -7,6 +7,10 @@
 //
 // 🎯T181: optional HTML content + left-of-pointer placement for rich cards.
 // Default remains above-host text tips (status/fanout).
+//
+// 🎯T186: sticky hover surface — tip stays open while pointer is over host OR
+// tip (grace hide on leave both). Tip receives pointer events so wheel scroll
+// works. Optional maxRight clamp so card never covers #frontier-table.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -19,6 +23,8 @@
 
   // Oracle: product tip path must show with zero delay.
   var SHOW_DELAY_MS = 0;
+  // 🎯T186: grace to cross host→tip gap before hide (show stays 0ms).
+  var HIDE_GRACE_MS = 100;
   var TIP_CLASS = 'instant-tip';
   var SHOW_CLASS = 'instant-tip-show';
   var HOST_CLASS = 'has-instant-tip';
@@ -27,6 +33,8 @@
   var PLACE_LEFT_OF_POINTER = 'left-of-pointer';
   var EDGE_PAD = 4;
   var POINTER_GAP = 12;
+  var DEFAULT_CLAMP_GAP = 8;
+  var DEFAULT_CLAMP_SELECTORS = ['#frontier-table', '#frontier-body'];
 
   // Pure schedule descriptor for hermetic checks (no timer).
   function showSchedule() {
@@ -37,6 +45,16 @@
     };
   }
 
+  // Pure hide-grace descriptor (🎯T186).
+  function hideSchedule() {
+    return {
+      graceMs: HIDE_GRACE_MS,
+      usesTimeout: true,
+      event: 'pointerleave',
+      cancelOn: 'pointerenter',
+    };
+  }
+
   // Pure: given empty text, attach is a no-op.
   function tipTextOrEmpty(text) {
     if (text == null) return '';
@@ -44,13 +62,17 @@
     return s;
   }
 
-  // placeLeftOfPointerRect — pure placement math for 🎯T181 cards.
+  // placeLeftOfPointerRect — pure placement math for 🎯T181/T186 cards.
   // Prefer left of pointer, vertically centered on pointer.
-  // If not enough room on the left, flip to the right of the pointer.
+  // If not enough room on the left (and no maxRight clamp), flip to the right.
   // Clamp to viewport so the card stays on-screen (near edges residual: clamp).
   //
-  // args: { pointerX, pointerY, tipW, tipH, viewW, viewH, gap?, pad? }
-  // returns: { left, top, side: 'left'|'right' }
+  // 🎯T186 maxRight: card.right must be ≤ maxRight (e.g. frontier table left − gap).
+  // Prefer left-of-pointer under that constraint; shrink maxWidth when needed.
+  // Flip residual: when maxRight is set, do not flip over the table — shrink instead.
+  //
+  // args: { pointerX, pointerY, tipW, tipH, viewW, viewH, gap?, pad?, maxRight? }
+  // returns: { left, top, side: 'left'|'right', maxWidth?: number }
   function placeLeftOfPointerRect(args) {
     var a = args || {};
     var px = Number(a.pointerX) || 0;
@@ -61,18 +83,53 @@
     var vh = Math.max(0, Number(a.viewH) || 0);
     var gap = a.gap != null ? Number(a.gap) : POINTER_GAP;
     var pad = a.pad != null ? Number(a.pad) : EDGE_PAD;
+    var hasMaxRight = a.maxRight != null && isFinite(Number(a.maxRight));
+    var maxRight = hasMaxRight ? Number(a.maxRight) : null;
 
     var side = 'left';
     var left = px - gap - tw;
-    if (left < pad) {
-      // Flip to right of pointer when left would clip.
-      side = 'right';
-      left = px + gap;
+    var maxWidth = null;
+
+    if (hasMaxRight) {
+      // Prefer left-of-pointer, but never cover the clamp region (table).
+      if (left + tw > maxRight) {
+        left = maxRight - tw;
+      }
+      if (left < pad) {
+        left = pad;
+        var avail = Math.max(0, maxRight - pad);
+        if (avail > 0 && (tw <= 0 || avail < tw)) {
+          maxWidth = Math.floor(avail);
+          tw = maxWidth;
+          left = maxRight - tw;
+          if (left < pad) left = pad;
+        } else if (avail <= 0) {
+          // No room left of table: pin at pad with zero-width residual.
+          left = pad;
+          maxWidth = 0;
+        }
+      }
+      // Do not flip to the right of the pointer when clamping to a table —
+      // that would place the card over the frontier (owner residual: shrink).
+    } else {
+      if (left < pad) {
+        // Flip to right of pointer when left would clip.
+        side = 'right';
+        left = px + gap;
+      }
+      // Clamp horizontally if still overflowing (narrow viewport residual).
+      if (vw > 0) {
+        if (left + tw > vw - pad) left = Math.max(pad, vw - pad - tw);
+        if (left < pad) left = pad;
+      }
     }
-    // Clamp horizontally if still overflowing (narrow viewport residual).
-    if (vw > 0) {
-      if (left + tw > vw - pad) left = Math.max(pad, vw - pad - tw);
+
+    // Viewport horizontal residual still applies with maxRight (pad left edge).
+    if (hasMaxRight && vw > 0) {
       if (left < pad) left = pad;
+      if (left + tw > vw - pad) {
+        left = Math.max(pad, Math.min(left, vw - pad - tw));
+      }
     }
 
     var top = py - th / 2;
@@ -83,11 +140,46 @@
       top = pad;
     }
 
-    return {
+    var out = {
       left: Math.round(left),
       top: Math.round(top),
       side: side,
     };
+    if (maxWidth != null) out.maxWidth = maxWidth;
+    return out;
+  }
+
+  // resolveClampRight — pure: left edge of clamp target minus gap.
+  // Prefer first matching selector among clampSelectors (or clampEl rect).
+  // args: { clampEl?, clampRect?, clampSelectors?, doc?, clampGap?, gap? }
+  function resolveClampRight(args) {
+    var a = args || {};
+    if (a.maxRight != null && isFinite(Number(a.maxRight))) {
+      return Number(a.maxRight);
+    }
+    var gap = a.clampGap != null ? Number(a.clampGap)
+      : (a.gap != null ? Number(a.gap) : DEFAULT_CLAMP_GAP);
+    if (a.clampRect && typeof a.clampRect.left === 'number') {
+      return a.clampRect.left - gap;
+    }
+    var el = a.clampEl || null;
+    if (!el && a.doc && typeof a.doc.querySelector === 'function') {
+      var sels = a.clampSelectors || DEFAULT_CLAMP_SELECTORS;
+      if (typeof sels === 'string') sels = [sels];
+      for (var i = 0; i < sels.length; i++) {
+        try {
+          el = a.doc.querySelector(sels[i]);
+        } catch (_) {
+          el = null;
+        }
+        if (el) break;
+      }
+    }
+    if (el && typeof el.getBoundingClientRect === 'function') {
+      var r = el.getBoundingClientRect();
+      if (r && typeof r.left === 'number') return r.left - gap;
+    }
+    return null;
   }
 
   // Position tip above host using viewport coords (avoids overflow:hidden clip).
@@ -110,6 +202,7 @@
   }
 
   // placeTipLeftOfPointer(tip, event) — card placement relative to pointer.
+  // opts.maxRight / clampEl / clampSelectors / clampGap / doc for 🎯T186 clamp.
   function placeTipLeftOfPointer(tip, event, opts) {
     if (!tip) return null;
     var o = opts || {};
@@ -127,19 +220,47 @@
     }
     var vw = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 0;
     var vh = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 0;
+    var tipW = tip.offsetWidth || 0;
+    var tipH = tip.offsetHeight || 0;
+
+    var maxRight = resolveClampRight({
+      maxRight: o.maxRight,
+      clampEl: o.clampEl,
+      clampRect: o.clampRect,
+      clampSelectors: o.clampSelectors,
+      clampGap: o.clampGap,
+      gap: o.gap,
+      doc: o.doc || (tip.ownerDocument || null),
+    });
+
+    // If clamp forces a shrink, apply max-width before measuring for final place.
+    if (maxRight != null) {
+      var pad = o.pad != null ? Number(o.pad) : EDGE_PAD;
+      var avail = Math.max(0, maxRight - pad);
+      if (avail > 0 && tipW > avail && tip.style) {
+        tip.style.maxWidth = Math.floor(avail) + 'px';
+        tipW = tip.offsetWidth || avail;
+        tipH = tip.offsetHeight || tipH;
+      }
+    }
+
     var pos = placeLeftOfPointerRect({
       pointerX: px,
       pointerY: py,
-      tipW: tip.offsetWidth || 0,
-      tipH: tip.offsetHeight || 0,
+      tipW: tipW,
+      tipH: tipH,
       viewW: vw,
       viewH: vh,
       gap: o.gap,
       pad: o.pad,
+      maxRight: maxRight,
     });
     if (tip.style) {
       tip.style.left = pos.left + 'px';
       tip.style.top = pos.top + 'px';
+      if (pos.maxWidth != null) {
+        tip.style.maxWidth = pos.maxWidth + 'px';
+      }
     }
     return pos;
   }
@@ -148,7 +269,11 @@
   // opts.placement / opts.event / opts.host for positioning.
   function showTip(tip, host, opts) {
     if (!tip) return false;
-    if (tip.style) tip.style.display = 'block';
+    if (tip.style) {
+      tip.style.display = 'block';
+      // 🎯T186: tip must receive pointer events (scroll, sticky hover bridge).
+      tip.style.pointerEvents = 'auto';
+    }
     if (tip.classList && tip.classList.add) tip.classList.add(SHOW_CLASS);
     else if (typeof tip.className === 'string' && tip.className.indexOf(SHOW_CLASS) < 0) {
       tip.className = (tip.className ? tip.className + ' ' : '') + SHOW_CLASS;
@@ -156,7 +281,17 @@
     var o = opts || {};
     var placement = o.placement || PLACE_ABOVE_HOST;
     if (placement === PLACE_LEFT_OF_POINTER) {
-      placeTipLeftOfPointer(tip, o.event, { host: host || o.host, gap: o.gap, pad: o.pad });
+      placeTipLeftOfPointer(tip, o.event, {
+        host: host || o.host,
+        gap: o.gap,
+        pad: o.pad,
+        maxRight: o.maxRight,
+        clampEl: o.clampEl,
+        clampRect: o.clampRect,
+        clampSelectors: o.clampSelectors,
+        clampGap: o.clampGap,
+        doc: o.doc,
+      });
     } else if (host) {
       placeTip(tip, host);
     }
@@ -165,7 +300,10 @@
 
   function hideTip(tip) {
     if (!tip) return false;
-    if (tip.style) tip.style.display = 'none';
+    if (tip.style) {
+      tip.style.display = 'none';
+      tip.style.pointerEvents = 'none';
+    }
     if (tip.classList && tip.classList.remove) tip.classList.remove(SHOW_CLASS);
     else if (typeof tip.className === 'string') {
       tip.className = tip.className.replace(new RegExp('\\b' + SHOW_CLASS + '\\b', 'g'), '').trim();
@@ -192,6 +330,10 @@
   //   ariaLabel — plain string for aria-label (defaults to stripped text)
   //   placement — 'above-host' (default) | 'left-of-pointer' (🎯T181)
   //   className — extra class on tip (e.g. instant-tip-card)
+  //   sticky — 🎯T186 default true: hide only after leave host AND tip (grace)
+  //   hideGraceMs — override HIDE_GRACE_MS (tests may inject 0 or timers)
+  //   timers — { setTimeout, clearTimeout } for hermetic sticky tests
+  //   maxRight / clampEl / clampSelectors / clampGap — 🎯T186 table clamp
   function attach(host, text, opts) {
     var label = tipTextOrEmpty(text);
     if (!host || !label) return null;
@@ -224,6 +366,7 @@
     tip.style.display = 'none';
     tip.style.position = 'fixed';
     tip.style.zIndex = '200';
+    // 🎯T186: receive pointer events while open (set auto on show).
     tip.style.pointerEvents = 'none';
 
     var mount = o.mount || (doc.body || null);
@@ -232,47 +375,140 @@
     }
 
     var placement = o.placement || PLACE_ABOVE_HOST;
+    var sticky = o.sticky !== false; // default sticky (🎯T186)
+    var graceMs = o.hideGraceMs != null ? Number(o.hideGraceMs) : HIDE_GRACE_MS;
+    if (!(graceMs >= 0)) graceMs = HIDE_GRACE_MS;
+    var timers = o.timers || null;
+    var schedule = timers && typeof timers.setTimeout === 'function'
+      ? timers.setTimeout
+      : (typeof setTimeout === 'function' ? setTimeout : function (fn) { fn(); return 0; });
+    var cancel = timers && typeof timers.clearTimeout === 'function'
+      ? timers.clearTimeout
+      : (typeof clearTimeout === 'function' ? clearTimeout : function () {});
 
-    // SHOW_DELAY_MS is 0: call showTip synchronously — never setTimeout.
-    function onEnter(ev) {
+    var overHost = false;
+    var overTip = false;
+    var hideTimer = null;
+
+    function clearHideTimer() {
+      if (hideTimer != null) {
+        cancel(hideTimer);
+        hideTimer = null;
+      }
+    }
+
+    function placeOpts(ev) {
+      return {
+        placement: placement,
+        event: ev,
+        host: host,
+        gap: o.gap,
+        pad: o.pad,
+        maxRight: o.maxRight,
+        clampEl: o.clampEl,
+        clampRect: o.clampRect,
+        clampSelectors: o.clampSelectors || (placement === PLACE_LEFT_OF_POINTER
+          ? DEFAULT_CLAMP_SELECTORS
+          : null),
+        clampGap: o.clampGap,
+        doc: doc,
+      };
+    }
+
+    // SHOW_DELAY_MS is 0: call showTip synchronously — never setTimeout for show.
+    function onHostEnter(ev) {
+      overHost = true;
+      clearHideTimer();
       if (SHOW_DELAY_MS > 0) {
         // Dead branch by policy; kept only so a non-zero constant would be visible
         // in review. Product must keep SHOW_DELAY_MS === 0.
         return;
       }
-      showTip(tip, host, { placement: placement, event: ev, host: host });
+      showTip(tip, host, placeOpts(ev));
     }
-    function onLeave() {
+
+    function onHostLeave() {
+      overHost = false;
+      scheduleHide();
+    }
+
+    function onTipEnter() {
+      overTip = true;
+      clearHideTimer();
+      // Tip already open when entered from host; ensure visible if re-entered.
+      if (!isVisible(tip)) {
+        showTip(tip, host, placeOpts(null));
+      }
+    }
+
+    function onTipLeave() {
+      overTip = false;
+      scheduleHide();
+    }
+
+    function scheduleHide() {
+      if (sticky) {
+        if (overHost || overTip) {
+          clearHideTimer();
+          return;
+        }
+        clearHideTimer();
+        if (graceMs <= 0) {
+          hideTip(tip);
+          return;
+        }
+        hideTimer = schedule(function () {
+          hideTimer = null;
+          if (!overHost && !overTip) hideTip(tip);
+        }, graceMs);
+        return;
+      }
+      // Non-sticky: immediate hide (legacy / explicit opt-out).
       hideTip(tip);
     }
 
     if (typeof host.addEventListener === 'function') {
-      host.addEventListener('pointerenter', onEnter);
-      host.addEventListener('pointerleave', onLeave);
+      host.addEventListener('pointerenter', onHostEnter);
+      host.addEventListener('pointerleave', onHostLeave);
       // mouseenter/leave for older paths / hermetic dispatch without PointerEvent.
-      host.addEventListener('mouseenter', onEnter);
-      host.addEventListener('mouseleave', onLeave);
+      host.addEventListener('mouseenter', onHostEnter);
+      host.addEventListener('mouseleave', onHostLeave);
+    }
+
+    if (sticky && typeof tip.addEventListener === 'function') {
+      tip.addEventListener('pointerenter', onTipEnter);
+      tip.addEventListener('pointerleave', onTipLeave);
+      tip.addEventListener('mouseenter', onTipEnter);
+      tip.addEventListener('mouseleave', onTipLeave);
     }
 
     // Stash for tests / cleanup.
     host._instantTip = tip;
-    host._instantTipShow = onEnter;
-    host._instantTipHide = onLeave;
+    host._instantTipShow = onHostEnter;
+    host._instantTipHide = onHostLeave;
     host._instantTipPlacement = placement;
+    host._instantTipSticky = sticky;
+    tip._instantTipOnEnter = onTipEnter;
+    tip._instantTipOnLeave = onTipLeave;
     return tip;
   }
 
   return {
     SHOW_DELAY_MS: SHOW_DELAY_MS,
+    HIDE_GRACE_MS: HIDE_GRACE_MS,
     TIP_CLASS: TIP_CLASS,
     SHOW_CLASS: SHOW_CLASS,
     HOST_CLASS: HOST_CLASS,
     CARD_CLASS: CARD_CLASS,
     PLACE_ABOVE_HOST: PLACE_ABOVE_HOST,
     PLACE_LEFT_OF_POINTER: PLACE_LEFT_OF_POINTER,
+    DEFAULT_CLAMP_GAP: DEFAULT_CLAMP_GAP,
+    DEFAULT_CLAMP_SELECTORS: DEFAULT_CLAMP_SELECTORS,
     showSchedule: showSchedule,
+    hideSchedule: hideSchedule,
     tipTextOrEmpty: tipTextOrEmpty,
     placeLeftOfPointerRect: placeLeftOfPointerRect,
+    resolveClampRight: resolveClampRight,
     placeTipLeftOfPointer: placeTipLeftOfPointer,
     showTip: showTip,
     hideTip: hideTip,

@@ -666,6 +666,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 
 /* 🎯T175: instant custom tips (fixed layer; 0ms show — not native title=) */
+/* 🎯T186: sticky hover — tip receives pointer events while shown (scroll + bridge) */
 .instant-tip {
   display: none;
   position: fixed;
@@ -686,8 +687,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   overflow-wrap: break-word;
   pointer-events: none;
 }
-.instant-tip.instant-tip-show { display: block; }
+.instant-tip.instant-tip-show {
+  display: block;
+  pointer-events: auto;
+}
 /* 🎯T181/T184: rich target card (markdown HTML + mermaid); scrollable, left-of-pointer */
+/* 🎯T186: sticky scroll + right edge clamped left of #frontier-table */
 .instant-tip.instant-tip-card {
   max-width: min(480px, 94vw);
   max-height: min(75vh, 560px);
@@ -730,7 +735,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   max-width: 100%;
   height: auto;
 }
-/* Compact tip: hide chat-style mermaid toolbar (pointer-events none on tip). */
+/* Compact tip: hide chat-style mermaid toolbar (cards are sticky/scrollable — T186). */
 .instant-tip.instant-tip-card .mermaid-diagram .mermaid-toolbar { display: none; }
 #frontier-table .ft-status,
 #frontier-table .ft-fanout,
@@ -4935,11 +4940,14 @@ function renderFrontierTable(model) {
         } else if (typeof marked !== 'undefined' && marked.parse) {
           try { html = marked.parse(md); } catch (_) { html = md; }
         }
+        // 🎯T186: sticky tip (host↔card) + clamp right edge to #frontier-table left.
         const cardOpts = {
           html: true,
           ariaLabel: plain,
           placement: InstantTip.PLACE_LEFT_OF_POINTER || 'left-of-pointer',
           className: InstantTip.CARD_CLASS || 'instant-tip-card',
+          sticky: true,
+          clampSelectors: ['#frontier-table', '#frontier-body'],
         };
         const tipId = InstantTip.attach(id, html, cardOpts);
         const tipName = InstantTip.attach(name, html, cardOpts);
