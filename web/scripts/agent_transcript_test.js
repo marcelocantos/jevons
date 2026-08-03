@@ -91,8 +91,11 @@ test('index.html wires agent inspect pane + selectAgent transcript', function ()
   assert.ok(html.indexOf('agent-inspect') >= 0 || html.indexOf('id="agent-transcript"') >= 0,
     'transcript pane host');
   assert.ok(html.indexOf('scripts/agent_transcript.js') >= 0, 'script tag');
+  // 🎯T209: primary path is inspect_subscribe on /ws/chat; HTTP residual OK.
+  assert.ok(html.indexOf('inspect_subscribe') >= 0 || html.indexOf('subscribeAgentInspect') >= 0,
+    'inspect subscribe wire path');
   assert.ok(html.indexOf('/api/agents/') >= 0 && html.indexOf('transcript') >= 0,
-    'fetches agent transcript');
+    'HTTP transcript residual for debug/export');
   assert.ok(html.indexOf('pickAutoSelect') >= 0 || html.indexOf('AgentTranscript.pickAutoSelect') >= 0,
     'auto-select on new aside');
   // Must not dump fleet monologue into #messages as the select path.
@@ -101,7 +104,7 @@ test('index.html wires agent inspect pane + selectAgent transcript', function ()
 });
 
 // 🎯T208: quiet/background inspect re-paint must not steal rhsBottomTab.
-// Frontier stays active across refreshAgents + 4s poll while selectedAgent set.
+// Frontier stays active across refreshAgents + wire updates while selectedAgent set.
 test('T208 quiet inspect re-paint does not setRhsBottomTab transcript', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const renderFn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
@@ -115,12 +118,63 @@ test('T208 quiet inspect re-paint does not setRhsBottomTab transcript', function
     /setRhsBottomTab\([\s\S]*?tabAfterAgentSelect\(true\)/.test(selectFn[0]) ||
       /setRhsBottomTab\([\s\S]*?['"]transcript['"]/.test(selectFn[0]),
     'selectAgent must set transcript tab on open inspect');
-  // Quiet path still reloads body while selection remains (refresh + poll).
-  assert.ok(html.indexOf('loadAgentTranscript(selectedAgent, { quiet: true })') >= 0,
-    'quiet loadAgentTranscript still used for poll/refresh body re-paint');
+  // 🎯T209: body updates via agent_transcript wire; no quiet HTTP poll loop.
+  assert.ok(html.indexOf('handleAgentTranscriptWire') >= 0,
+    'wire handler re-paints inspect without tab steal');
+  assert.ok(!/setInterval\s*\(\s*function\s*\(\s*\)\s*\{\s*if\s*\(\s*selectedAgent\s*\)\s*loadAgentTranscript/.test(html),
+    'no setInterval loadAgentTranscript poll while selected');
   // Explicit tab click wiring remains.
   assert.ok(/btn\.dataset\.tab/.test(html) && /setRhsBottomTab\(btn\.dataset\.tab\)/.test(html),
     'owner tab click still sets rhsBottomTab');
+});
+
+// 🎯T209: inspect uses /ws/chat multiplex — not a required 4s HTTP poll.
+test('T209 inspect wire path: subscribe on select, no setInterval poll', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const selectFn = html.match(/function selectAgent\([\s\S]*?\nfunction hideAgentInspect/);
+  assert.ok(selectFn, 'selectAgent present');
+  assert.ok(/subscribeAgentInspect\s*\(/.test(selectFn[0]),
+    'selectAgent must subscribe inspect on wire');
+  assert.ok(!/loadAgentTranscript\s*\(\s*selectedAgent/.test(selectFn[0]) ||
+    /subscribeAgentInspect/.test(selectFn[0]),
+    'selectAgent primary path is wire subscribe');
+  const hideFn = html.match(/function hideAgentInspect\([\s\S]*?\nfunction /);
+  assert.ok(hideFn && /unsubscribeAgentInspect/.test(hideFn[0]),
+    'hide unsubscribes inspect');
+  assert.ok(html.indexOf("typ === 'agent_transcript'") >= 0 ||
+    html.indexOf('typ === "agent_transcript"') >= 0 ||
+    html.indexOf("=== 'agent_transcript'") >= 0,
+    'handle routes agent_transcript frames');
+  // No 4s transcript poll interval (product path).
+  assert.ok(html.indexOf('agentTranscriptTimer') < 0,
+    'agentTranscriptTimer poll removed');
+  assert.ok(!/setInterval\s*\([^)]*4000\s*\)/.test(html) ||
+    !/loadAgentTranscript\(selectedAgent,\s*\{\s*quiet:\s*true\s*\}\)/.test(html),
+    'no 4s quiet loadAgentTranscript interval');
+  // Pure helpers exported.
+  assert.ok(typeof AT.inspectSubscribeFrame === 'function');
+  assert.ok(typeof AT.applyInspectLiveFrame === 'function');
+  const sub = JSON.parse(AT.inspectSubscribeFrame('jv-t209-wire'));
+  assert.strictEqual(sub.type, 'inspect_subscribe');
+  assert.strictEqual(sub.name, 'jv-t209-wire');
+  const unsub = JSON.parse(AT.inspectUnsubscribeFrame());
+  assert.strictEqual(unsub.type, 'inspect_unsubscribe');
+  // Progressive live coalesce.
+  let lines = AT.applyInspectLiveFrame([], {
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'Hel' }] },
+  });
+  lines = AT.applyInspectLiveFrame(lines, {
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'lo' }] },
+  });
+  assert.strictEqual(lines.length, 1);
+  assert.strictEqual(lines[0].text, 'Hello');
+  lines = AT.applyInspectLiveFrame(lines, {
+    type: 'assistant',
+    message: { role: 'assistant', content: [], stop_reason: 'end_turn' },
+  });
+  assert.ok(!lines[0]._stream, 'terminal seals stream');
 });
 
 // 🎯T205 / T157: RHS inspect uses shared paintBody + .msg chrome (not .ai-turn fork).

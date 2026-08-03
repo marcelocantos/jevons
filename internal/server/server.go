@@ -133,6 +133,12 @@ type Server struct {
 	// transcriptReader reads Grok session chat_history for RHS inspect (🎯T124).
 	transcriptReader *transcript.Reader
 
+	// inspectByCh / inspectChans: per-/ws/chat subscription for fleet RHS
+	// transcript multiplex (🎯T209). One agent per chat listener channel.
+	// Guarded by mu (same as chatListeners).
+	inspectByCh  map[chan string]string
+	inspectChans map[string]map[chan string]struct{}
+
 	// defaultProvider is the daemon-wide claudia backend for new asides
 	// and other registry mint paths on this server (🎯T148).
 	defaultProvider claudia.Provider
@@ -216,6 +222,8 @@ func New(version, stateDir string) *Server {
 		remotes:       make(map[int]remoteConn),
 		creds:         NewCredentialStore(filepath.Join(stateDir, "credential.json")),
 		chatListeners: make([]chan string, 0),
+		inspectByCh:   make(map[chan string]string),
+		inspectChans:  make(map[string]map[chan string]struct{}),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
 		agentProgress: NewAgentProgressHub(),
 	}

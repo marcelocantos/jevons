@@ -1431,7 +1431,9 @@ function handle(m) {
       soft: wasSoft,
     });
     // Soft reconnect: DOM already has transcript — skip full progressive re-hydrate.
+    // 🎯T209: re-subscribe inspect so sealed history + live resume on this socket.
     if (wasSoft) {
+      if (typeof resubscribeAgentInspect === 'function') resubscribeAgentInspect();
       if (!chatConnUiReadyLogged) {
         chatConnUiReadyLogged = true;
         logChatConn('ui_ready', { ms: chatConnMs(), soft: true });
@@ -1463,6 +1465,8 @@ function handle(m) {
         logChatConn('ui_ready', { ms: chatConnMs() });
       }
     }
+    // 🎯T209: after main history_meta, re-bind inspect multiplex on this conn.
+    if (typeof resubscribeAgentInspect === 'function') resubscribeAgentInspect();
     return;
   }
   // During WS replay burst, keep extending idle-end until frames stop.
@@ -1479,6 +1483,13 @@ function handle(m) {
   // 🎯T131: bullseye ledger changed — refresh frontier table (poll is fallback).
   if (typ === 'frontier_changed') {
     if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
+    return;
+  }
+
+  // 🎯T209: fleet inspect multiplex on /ws/chat (same wire class as main chat).
+  // Never paint into #messages — RHS pane only (T124 residual).
+  if (typ === 'agent_transcript') {
+    handleAgentTranscriptWire(m);
     return;
   }
 
@@ -3149,18 +3160,22 @@ function refreshAgents() {
     });
     // 🎯T124: new purpose=aside → auto-select and show transcript pane.
     // Use registry agents (not virtual portfolio nodes) for auto-select.
+    let autoSelected = false;
     if (typeof AgentTranscript !== 'undefined') {
       const auto = AgentTranscript.pickAutoSelect(lastFleetAgents, agents, selectedAgent);
       if (auto && auto !== selectedAgent) {
         selectedAgent = auto;
+        autoSelected = true;
       }
     }
     lastFleetAgents = agents.slice();
     renderTree(byParent, '', agentsEl, agentsByName);
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
-    if (selectedAgent) {
-      loadAgentTranscript(selectedAgent, { quiet: true });
+    // 🎯T209: inspect updates arrive on /ws/chat — no HTTP re-fetch on fleet refresh.
+    // Only re-subscribe when auto-select changes the focused agent.
+    if (autoSelected && selectedAgent && typeof subscribeAgentInspect === 'function') {
+      subscribeAgentInspect(selectedAgent);
     }
   }).catch((err)=>{
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
@@ -4779,10 +4794,11 @@ const agentInspectBody = document.getElementById('agent-inspect-body');
 const frontierPaneEl = document.getElementById('frontier-pane');
 const frontierBodyEl = document.getElementById('frontier-body');
 const rhsTabMeta = document.getElementById('rhs-tab-meta');
-let agentTranscriptTimer = 0;
 let frontierPollTimer = 0;
-// 🎯T205: poll fingerprint + stick/free latch for #agent-inspect-body.
+// 🎯T205: fingerprint + stick/free latch for #agent-inspect-body.
+// 🎯T209: progressive lines held for live wire frames (no setInterval poll).
 let _agentInspectFp = '';
+let _agentInspectLines = [];
 let _agentInspectFollow = null;
 function agentInspectFollow() {
   if (!_agentInspectFollow) {
@@ -4867,19 +4883,22 @@ function selectAgent(name, opts) {
   }
   // 🎯T205: new selection → Track + force repaint fingerprint.
   _agentInspectFp = '';
+  _agentInspectLines = [];
   agentInspectFollow().enterTrack();
   // 🎯T131: selecting a fleet agent switches to Transcript tab.
   setRhsBottomTab((typeof FrontierTable !== 'undefined')
     ? FrontierTable.tabAfterAgentSelect(true)
     : 'transcript');
-  loadAgentTranscript(selectedAgent, { quiet: false });
+  // 🎯T209: primary path = inspect_subscribe on /ws/chat (not HTTP poll).
+  subscribeAgentInspect(selectedAgent);
 }
 
 function hideAgentInspect() {
-  if (agentTranscriptTimer) { clearInterval(agentTranscriptTimer); agentTranscriptTimer = 0; }
+  unsubscribeAgentInspect();
   if (agentInspectBody) agentInspectBody.innerHTML = '';
   if (agentInspectName) agentInspectName.textContent = '';
   _agentInspectFp = '';
+  _agentInspectLines = [];
   // Keep RHS bottom visible; return to Frontier tab (T131).
   setRhsBottomTab((typeof FrontierTable !== 'undefined')
     ? FrontierTable.tabAfterAgentSelect(false)
@@ -4887,11 +4906,66 @@ function hideAgentInspect() {
   if (typeof updateComposerPlaceholder === 'function') updateComposerPlaceholder();
 }
 
+// 🎯T209: thin named-agent multiplex on main /ws/chat pipe.
+function subscribeAgentInspect(name) {
+  if (!name || typeof transport === 'undefined' || !transport.send) return;
+  const frame = (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectSubscribeFrame)
+    ? AgentTranscript.inspectSubscribeFrame(name)
+    : JSON.stringify({ type: 'inspect_subscribe', name: name });
+  try { transport.send(frame); } catch (_) { /* offline */ }
+}
+function unsubscribeAgentInspect() {
+  if (typeof transport === 'undefined' || !transport.send) return;
+  const frame = (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectUnsubscribeFrame)
+    ? AgentTranscript.inspectUnsubscribeFrame()
+    : JSON.stringify({ type: 'inspect_unsubscribe' });
+  try { transport.send(frame); } catch (_) { /* offline */ }
+}
+function resubscribeAgentInspect() {
+  if (selectedAgent) subscribeAgentInspect(selectedAgent);
+}
+
+// Apply agent_transcript WS frames to RHS inspect (not main #messages).
+function handleAgentTranscriptWire(m) {
+  if (!m || !selectedAgent || m.name !== selectedAgent) return;
+  if (m.kind === 'live' && m.event) {
+    if (typeof AgentTranscript !== 'undefined' && AgentTranscript.applyInspectLiveFrame) {
+      _agentInspectLines = AgentTranscript.applyInspectLiveFrame(_agentInspectLines, m.event);
+    }
+    const lines = (_agentInspectLines || []).map(function (l) {
+      return { role: l.role, text: l.text };
+    });
+    renderAgentInspect({
+      title: selectedAgent,
+      empty: lines.length === 0,
+      error: '',
+      lines: lines,
+    });
+    return;
+  }
+  // kind=history (default): sealed turns — same model as former HTTP payload.
+  const model = (typeof AgentTranscript !== 'undefined')
+    ? AgentTranscript.paneModel(m.name || selectedAgent, m)
+    : { title: m.name || selectedAgent, lines: (m.turns) || [], empty: !(m.turns && m.turns.length), error: '' };
+  if (m.error && model.empty && !m.denied) {
+    model.error = '';
+  } else if (m.denied && m.error) {
+    model.error = m.error;
+  }
+  _agentInspectLines = (model.lines || []).map(function (l) {
+    return { role: l.role, text: l.text };
+  });
+  renderAgentInspect(model);
+  document.querySelectorAll('.agent-node').forEach(n =>
+    n.classList.toggle('selected', n.dataset.agent === selectedAgent));
+}
+
 // 🎯T205: RHS inspect = main transcript microcosm — .msg + paintBody (not .ai-turn
-// log panel); stick/free scroll; poll no-op when fingerprint unchanged.
+// log panel); stick/free scroll; fingerprint no-op when content unchanged.
 // 🎯T208: body re-paint only — never setRhsBottomTab. Transcript tab is set only
 // by selectAgent (owner picks fleet agent) or explicit Transcript tab click.
-// Quiet poll / refreshAgents must leave Frontier alone while selection remains.
+// Quiet wire/refresh must leave Frontier alone while selection remains.
+// 🎯T209: primary delivery is WS agent_transcript; HTTP residual for refresh.
 function renderAgentInspect(model) {
   if (!agentInspectEl || !agentInspectBody) return;
   if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
@@ -4960,6 +5034,8 @@ function renderAgentInspect(model) {
   }
 }
 
+// 🎯T209 residual: manual refresh re-issues inspect_subscribe (wire history),
+// optionally falling back to HTTP GET for debug when transport is down.
 function loadAgentTranscript(name, opts) {
   if (!name || !agentInspectEl) return;
   // Hard guard: never fetch/render overseer into RHS pane.
@@ -4968,6 +5044,12 @@ function loadAgentTranscript(name, opts) {
     return;
   }
   const quiet = !!(opts && opts.quiet);
+  // Primary product path: re-subscribe on /ws/chat for sealed history push.
+  if (typeof transport !== 'undefined' && transport.send) {
+    subscribeAgentInspect(name);
+    return;
+  }
+  // Residual HTTP when no chat transport (export/debug / hermetic stubs).
   fetch('/api/agents/' + encodeURIComponent(name) + '/transcript')
     .then(function (r) {
       if (!r.ok) return r.json().then(function (j) {
@@ -4979,19 +5061,15 @@ function loadAgentTranscript(name, opts) {
       const model = (typeof AgentTranscript !== 'undefined')
         ? AgentTranscript.paneModel(name, payload)
         : { title: name, lines: (payload && payload.turns) || [], empty: !(payload && payload.turns && payload.turns.length), error: '' };
-      // Surface soft errors from empty session as empty, not hard fail.
       if (payload && payload.error && model.empty) {
         model.error = '';
       }
+      _agentInspectLines = (model.lines || []).map(function (l) {
+        return { role: l.role, text: l.text };
+      });
       renderAgentInspect(model);
       document.querySelectorAll('.agent-node').forEach(n =>
         n.classList.toggle('selected', n.dataset.agent === name));
-      // Poll while open so worker thinking streams into the pane.
-      if (!agentTranscriptTimer) {
-        agentTranscriptTimer = setInterval(function () {
-          if (selectedAgent) loadAgentTranscript(selectedAgent, { quiet: true });
-        }, 4000);
-      }
     })
     .catch(function (err) {
       if (quiet) return;

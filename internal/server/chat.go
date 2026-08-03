@@ -700,6 +700,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	defer func() {
+		// 🎯T209: drop inspect multiplex subscription with the chat listener.
+		s.clearInspectSub(ch)
 		s.mu.Lock()
 		for i, l := range s.chatListeners {
 			if l == ch {
@@ -773,6 +775,44 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
+			continue
+		}
+
+		// 🎯T209: RHS agent inspect multiplex — subscribe on the same /ws/chat
+		// pipe as main owner chat (not a separate 4s HTTP poll product path).
+		if strings.HasPrefix(msg, `{"type":"inspect_subscribe"`) ||
+			strings.HasPrefix(msg, `{"type":"inspect_unsubscribe"`) {
+			var ctl struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal([]byte(msg), &ctl)
+			name := strings.TrimSpace(ctl.Name)
+			if ctl.Type == "inspect_unsubscribe" || name == "" {
+				s.setInspectSub(ch, "")
+				slog.Info("chat: inspect unsubscribe")
+				continue
+			}
+			s.setInspectSub(ch, name)
+			slog.Info("chat: inspect subscribe", "name", name)
+			// Sealed history immediately on the socket (same class as chatlog replay).
+			if line, ok := s.marshalAgentTranscriptHistory(name); ok {
+				writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				_ = conn.Write(writeCtx, websocket.MessageText, []byte(line))
+				cancel()
+			} else {
+				payload, _ := json.Marshal(map[string]any{
+					"type":  "agent_transcript",
+					"kind":  inspectKindHistory,
+					"name":  name,
+					"turns": []any{},
+					"empty": true,
+					"error": "agent not found",
+				})
+				writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				_ = conn.Write(writeCtx, websocket.MessageText, payload)
+				cancel()
+			}
 			continue
 		}
 

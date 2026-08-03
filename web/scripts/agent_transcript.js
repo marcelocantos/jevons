@@ -303,6 +303,89 @@
   // mainChatMustNotContainFleetTraffic — oracle marker: product rule string.
   const MAIN_CHAT_IS_OWNER_OVERSEER_ONLY = true;
 
+  // ── 🎯T209: inspect multiplex over /ws/chat (same wire class as main) ──
+
+  /** Client → server control frame to start inspect history+live for name. */
+  function inspectSubscribeFrame(name) {
+    return JSON.stringify({ type: 'inspect_subscribe', name: String(name || '') });
+  }
+
+  /** Client → server control frame to stop inspect multiplex (name optional). */
+  function inspectUnsubscribeFrame(name) {
+    const o = { type: 'inspect_unsubscribe' };
+    if (name) o.name = String(name);
+    return JSON.stringify(o);
+  }
+
+  /** True when a WS frame is the agent inspect multiplex envelope. */
+  function isAgentTranscriptFrame(m) {
+    return !!(m && m.type === 'agent_transcript');
+  }
+
+  const INSPECT_TERMINAL_STOPS = { end_turn: 1, stop_sequence: 1, max_tokens: 1 };
+
+  function inspectEventStopReason(ev) {
+    const msg = ev && ev.message;
+    if (!msg) return '';
+    return msg.stop_reason || msg.stopReason || '';
+  }
+
+  /**
+   * Apply a progressive live event (chat-wire-ish) onto sealed-ish lines.
+   * Assistant tokens coalesce into the last streaming assistant line.
+   * Terminal stop seals the stream flag. Pure — no DOM.
+   *
+   * @param {Array<{role:string,text:string,_stream?:boolean}>|null} lines
+   * @param {object|null} event
+   * @returns {Array<{role:string,text:string,_stream?:boolean}>}
+   */
+  function applyInspectLiveFrame(lines, event) {
+    const out = (lines || []).map(function (l) {
+      return l ? { role: l.role, text: l.text, _stream: l._stream } : l;
+    });
+    if (!event || !event.type) return out;
+    if (event.type === 'user') {
+      const content = event.message && event.message.content;
+      const text = typeof content === 'string' ? content : '';
+      if (text) out.push({ role: 'user', text: text });
+      return out;
+    }
+    if (event.type === 'assistant') {
+      const content = event.message && event.message.content;
+      let text = '';
+      if (Array.isArray(content)) {
+        content.forEach(function (c) {
+          if (c && c.type === 'text' && c.text) text += c.text;
+        });
+      }
+      if (text) {
+        const last = out[out.length - 1];
+        if (last && last.role === 'assistant' && last._stream) {
+          last.text = (last.text || '') + text;
+        } else {
+          out.push({ role: 'assistant', text: text, _stream: true });
+        }
+      }
+      const sr = inspectEventStopReason(event);
+      if (INSPECT_TERMINAL_STOPS[sr] && out.length) {
+        const last = out[out.length - 1];
+        if (last && last._stream) delete last._stream;
+      }
+      return out;
+    }
+    return out;
+  }
+
+  /**
+   * paneModel from a wire agent_transcript history frame (kind=history).
+   * Same shape as HTTP payload for renderAgentInspect.
+   */
+  function paneModelFromWire(frame, err) {
+    if (err) return paneModel(frame && frame.name, null, err);
+    if (!frame) return paneModel('', null, new Error('empty inspect frame'));
+    return paneModel(frame.name, frame, frame.error && frame.empty ? null : (frame.error ? new Error(frame.error) : null));
+  }
+
   return {
     isOverseer: isOverseer,
     shouldOpenTranscript: shouldOpenTranscript,
@@ -318,5 +401,10 @@
     linesFingerprint: linesFingerprint,
     createScrollFollow: createScrollFollow,
     MAIN_CHAT_IS_OWNER_OVERSEER_ONLY: MAIN_CHAT_IS_OWNER_OVERSEER_ONLY,
+    inspectSubscribeFrame: inspectSubscribeFrame,
+    inspectUnsubscribeFrame: inspectUnsubscribeFrame,
+    isAgentTranscriptFrame: isAgentTranscriptFrame,
+    applyInspectLiveFrame: applyInspectLiveFrame,
+    paneModelFromWire: paneModelFromWire,
   };
 }));

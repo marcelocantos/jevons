@@ -20,7 +20,7 @@ const (
 )
 
 // SetTranscriptReader attaches the Grok sessions transcript reader used by
-// GET /api/agents/{name}/transcript (🎯T124).
+// GET /api/agents/{name}/transcript (🎯T124) and inspect wire history (🎯T209).
 func (s *Server) SetTranscriptReader(r *transcript.Reader) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -45,9 +45,9 @@ func (s *Server) logTranscriptEmpty(reason, name, sessionID, errMsg string) {
 	s.LogEvent("agent_transcript", "empty", fields)
 }
 
-// handleAgentTranscript serves one fleet agent's conversation turns for the
-// RHS inspect pane — out of band from main owner↔overseer chat.
-// GET /api/agents/{name}/transcript
+// handleAgentTranscript serves one fleet agent's conversation turns for debug
+// / export residual (🎯T124). Product RHS inspect primary path is /ws/chat
+// inspect_subscribe (🎯T209); this HTTP endpoint is not required while selected.
 func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PathValue("name"))
 	if name == "" {
@@ -55,84 +55,24 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.RLock()
-	reg := s.registry
-	tr := s.transcriptReader
-	s.mu.RUnlock()
-	if reg == nil {
-		http.Error(w, `{"error":"no agent registry"}`, http.StatusServiceUnavailable)
-		return
-	}
-	if tr == nil {
-		http.Error(w, `{"error":"transcript reader unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
-
-	var sessionID, purpose, workdir string
-	found := false
-	for _, d := range reg.List() {
-		if d.Name == name {
-			found = true
-			sessionID = d.SessionID
-			purpose = d.Purpose
-			workdir = d.WorkDir
-			break
-		}
-	}
-	if !found {
+	payload, ok := s.buildAgentTranscriptPayload(name)
+	if !ok {
 		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
 		return
 	}
-	if sessionID == "" {
-		s.logTranscriptEmpty(emptyReasonNoSession, name, "", "")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"name":         name,
-			"purpose":      purpose,
-			"workdir":      workdir,
-			"session_id":   "",
-			"turns":        []any{},
-			"empty":        true,
-			"empty_reason": emptyReasonNoSession,
-			"note":         "no session_id yet",
-		})
+	// HTTP residual omits wire envelope fields clients only need on WS.
+	delete(payload, "type")
+	delete(payload, "kind")
+	delete(payload, "denied")
+	if errMsg, _ := payload["error"].(string); errMsg == "no agent registry" {
+		http.Error(w, `{"error":"no agent registry"}`, http.StatusServiceUnavailable)
 		return
 	}
-
-	turns, err := tr.Read(sessionID)
-	if err != nil {
-		// Not found / unreadable — still 200 with empty turns so the pane
-		// can show a calm empty state (new agent, mint not materialized).
-		s.logTranscriptEmpty(emptyReasonReadError, name, sessionID, err.Error())
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"name":         name,
-			"purpose":      purpose,
-			"workdir":      workdir,
-			"session_id":   sessionID,
-			"turns":        []any{},
-			"empty":        true,
-			"empty_reason": emptyReasonReadError,
-			"error":        err.Error(),
-		})
+	if errMsg, _ := payload["error"].(string); errMsg == "transcript reader unavailable" {
+		http.Error(w, `{"error":"transcript reader unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
-	if turns == nil {
-		turns = []map[string]any{}
-	}
-	empty := len(turns) == 0
-	resp := map[string]any{
-		"name":       name,
-		"purpose":    purpose,
-		"workdir":    workdir,
-		"session_id": sessionID,
-		"turns":      turns,
-		"empty":      empty,
-	}
-	if empty {
-		s.logTranscriptEmpty(emptyReasonZeroTurns, name, sessionID, "")
-		resp["empty_reason"] = emptyReasonZeroTurns
-	}
+	// Overseer denied on wire path; HTTP returns empty soft state for parity.
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(payload)
 }

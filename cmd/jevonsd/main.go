@@ -598,10 +598,13 @@ func main() {
 
 		// 🎯T118: ACP progress / tool steps → RHS fleet-row status chrome.
 		// agents_changed only when the glanceable summary changes.
+		// 🎯T209: same hook multiplexes inspect live frames on /ws/chat for
+		// subscribed fleet agents (primary inspect path; not HTTP poll).
 		mcpSrv.SetAgentEventHook(func(name string, ev claudia.Event) {
 			if srv.ObserveAgentProgress(name, ev) {
 				srv.NotifyAgentsChanged()
 			}
+			srv.DeliverInspectLive(name, ev)
 		})
 
 		// Wire completion-notify for workers auto-started by StartAll above
@@ -627,6 +630,16 @@ func main() {
 			"overseer", cfg.OverseerName, "likely_cause", reason)
 		srv.SetOverseerDownReason(reason)
 	}
+
+	// 🎯T207: post-restart wake + periodic idle auto-nudge (brief-or-verify
+	// first pass; backoff/max). Runs even if overseer attach failed so
+	// AutoStart workers are not left phase=idle forever. Owner restarts
+	// daily after achieve — do not claim done without that path (T194).
+	go mcpserver.StartIdleNudgeLoop(ctx, mcpserver.IdleNudgeLoopArgs{
+		Server:       mcpSrv,
+		StateDir:     cfg.StateDir,
+		OverseerName: cfg.OverseerName,
+	})
 
 	// 🎯T204: continuous cockpit convergence — mid-session stop/rewind/
 	// launch failure must re-enter Launch+AttachOverseer; waitForOverseer
