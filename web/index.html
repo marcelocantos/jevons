@@ -3246,6 +3246,9 @@ function renderSendQueue() {
   });
 }
 
+// 🎯T154: paint restored queue on boot (load already ran at declaration).
+renderSendQueue();
+
 function cancelQueued(id) {
   if (typeof SendQueue === 'undefined') return;
   sendQueueState = SendQueue.cancel(sendQueueState, id);
@@ -3352,6 +3355,7 @@ function send(opts) {
         ? WisprContext.prepareWireText(input.value)
         : input.value;
       sendQueueState = SendQueue.updateItem(sendQueueState, it.id, rowText);
+      persistSendQueue();
       navFocus = { zone: 'live' };
       input.value = liveDraftBackup;
       liveDraftBackup = '';
@@ -3629,6 +3633,7 @@ function recallHistory(dir) {
   if (navFocus.zone === 'queue' && sendQueueState.items[navFocus.index | 0]) {
     const cur = sendQueueState.items[navFocus.index | 0];
     sendQueueState = SendQueue.updateItem(sendQueueState, cur.id, input.value);
+    persistSendQueue();
   } else if (navFocus.zone === 'live') {
     liveDraftBackup = input.value;
     histDraft = input.value;
@@ -3863,6 +3868,7 @@ input.addEventListener('input', () => {
         ? WisprContext.prepareWireText(input.value)
         : input.value;
       sendQueueState = SendQueue.updateItem(sendQueueState, it.id, rowText);
+      persistSendQueue();
       renderSendQueue();
     }
   } else if (navFocus.zone === 'live') {

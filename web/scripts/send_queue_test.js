@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic unit tests for owner-chat send queue (🎯T113).
+// Hermetic unit tests for owner-chat send queue (🎯T113 / 🎯T154).
 // Run: node web/scripts/send_queue_test.js
 // NOT Playwright — pure-state policy + index.html wiring greps.
 
@@ -153,6 +153,104 @@ test('textForFocus resolves queue then history', function () {
   );
 });
 
+// ── Persistence / reload (🎯T154) ────────────────────────────────
+
+function memStorage(seed) {
+  const map = Object.assign({}, seed || {});
+  return {
+    getItem: function (k) { return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : null; },
+    setItem: function (k, v) { map[k] = String(v); },
+    removeItem: function (k) { delete map[k]; },
+    _map: map,
+  };
+}
+
+test('serialize/deserialize round-trip preserves order and bodies', function () {
+  let s = SQ.emptyState();
+  s = SQ.enqueue(s, 'first follow-up');
+  s = SQ.enqueue(s, 'second follow-up');
+  const raw = SQ.serialize(s);
+  const restored = SQ.deserialize(raw);
+  assert.strictEqual(restored.items.length, 2);
+  assert.strictEqual(restored.items[0].text, 'first follow-up');
+  assert.strictEqual(restored.items[1].text, 'second follow-up');
+  assert.strictEqual(restored.items[0].id, s.items[0].id);
+  assert.strictEqual(restored.items[1].id, s.items[1].id);
+  assert.ok(restored.nextId > restored.items.length);
+});
+
+test('load/save storage fixture: enqueue → reload → length and bodies match', function () {
+  const storage = memStorage();
+  let s = SQ.emptyState();
+  s = SQ.enqueue(s, 'alpha');
+  s = SQ.enqueue(s, 'beta');
+  s = SQ.enqueue(s, 'gamma');
+  SQ.save(storage, s);
+  // Simulate full page reload: fresh load from storage only.
+  const reloaded = SQ.load(storage);
+  assert.strictEqual(reloaded.items.length, 3);
+  assert.deepStrictEqual(
+    reloaded.items.map(function (it) { return it.text; }),
+    ['alpha', 'beta', 'gamma']
+  );
+  assert.strictEqual(storage.getItem(SQ.STORAGE_KEY) != null, true);
+});
+
+test('drain still works after restore (FIFO after reload)', function () {
+  const storage = memStorage();
+  let s = SQ.enqueue(SQ.enqueue(SQ.emptyState(), 'one'), 'two');
+  SQ.save(storage, s);
+  s = SQ.load(storage);
+  let r = SQ.shiftNext(s);
+  assert.strictEqual(r.item.text, 'one');
+  r = SQ.shiftNext(r.state);
+  assert.strictEqual(r.item.text, 'two');
+  r = SQ.shiftNext(r.state);
+  assert.strictEqual(r.item, null);
+  assert.strictEqual(r.state.items.length, 0);
+  // Persist empty after drain.
+  SQ.save(storage, r.state);
+  const empty = SQ.load(storage);
+  assert.strictEqual(empty.items.length, 0);
+});
+
+test('deserialize corrupt / empty / missing → emptyState', function () {
+  assert.deepStrictEqual(SQ.deserialize(null).items, []);
+  assert.deepStrictEqual(SQ.deserialize('').items, []);
+  assert.deepStrictEqual(SQ.deserialize('not-json{').items, []);
+  assert.deepStrictEqual(SQ.deserialize('{}').items, []);
+  assert.deepStrictEqual(SQ.deserialize('{"items":"nope"}').items, []);
+  assert.deepStrictEqual(SQ.load(null).items, []);
+  assert.deepStrictEqual(SQ.load({}).items, []);
+});
+
+test('deserialize bumps nextId past max qN id', function () {
+  const raw = JSON.stringify({
+    items: [{ id: 'q9', text: 'late' }, { id: 'q3', text: 'early' }],
+    nextId: 2,
+  });
+  const s = SQ.deserialize(raw);
+  assert.strictEqual(s.items.length, 2);
+  assert.ok(s.nextId > 9, 'nextId must not collide with restored q9');
+  const s2 = SQ.enqueue(s, 'fresh');
+  assert.strictEqual(s2.items[2].id, 'q' + (s.nextId));
+  assert.notStrictEqual(s2.items[2].id, 'q9');
+});
+
+test('cancel/update after load persist cleanly via save', function () {
+  const storage = memStorage();
+  let s = SQ.enqueue(SQ.enqueue(SQ.emptyState(), 'a'), 'b');
+  SQ.save(storage, s);
+  s = SQ.load(storage);
+  const idA = s.items[0].id;
+  s = SQ.cancel(s, idA);
+  s = SQ.updateItem(s, s.items[0].id, 'b-edited');
+  SQ.save(storage, s);
+  const again = SQ.load(storage);
+  assert.strictEqual(again.items.length, 1);
+  assert.strictEqual(again.items[0].text, 'b-edited');
+});
+
 // ── index.html wiring ────────────────────────────────────────────
 
 test('index.html loads SendQueue and does not interrupt on plain busy send', function () {
@@ -172,6 +270,41 @@ test('index.html loads SendQueue and does not interrupt on plain busy send', fun
   );
   assert.ok(html.includes('decideSend') || html.includes('shouldEnqueue'),
     'send path must consult queue policy');
+});
+
+test('index.html boots from SendQueue.load and persists mutations (T154)', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('SendQueue.load'), 'boot must restore queue from storage');
+  assert.ok(html.includes('persistSendQueue'), 'mutations must call persistSendQueue');
+  assert.ok(html.includes('SendQueue.save'), 'persist must call SendQueue.save');
+  // Boot paint after restore.
+  assert.ok(
+    /renderSendQueue\(\);\s*\n\s*\n\s*function cancelQueued/.test(html) ||
+      html.includes('// 🎯T154: paint restored queue on boot'),
+    'must render restored queue on boot'
+  );
+  // Soft reconnect / hard onOpen must not reset the queue to emptyState.
+  // The only load/empty path should be the declaration-time load (or fallback).
+  const emptyAssigns = html.match(/sendQueueState\s*=\s*SendQueue\.emptyState\s*\(/g) || [];
+  assert.strictEqual(
+    emptyAssigns.length,
+    0,
+    'must not assign sendQueueState = SendQueue.emptyState() (reload uses load; reconnect must not wipe)'
+  );
+  // onOpen hard wipe clears msgs/history but not sendQueueState.
+  const onOpen = html.match(/transport\.onOpen\s*=\s*\(\)\s*=>\s*\{[\s\S]*?\n\};/);
+  assert.ok(onOpen, 'transport.onOpen must exist');
+  assert.ok(
+    !/sendQueueState\s*=/.test(onOpen[0]),
+    'onOpen (soft/hard reconnect) must not reassign sendQueueState'
+  );
+  // Residual: text-only documented on module mismatches.
+  assert.ok(
+    SQ.GROK_MISMATCHES.some(function (m) {
+      return /text-only/i.test(m) && /image/i.test(m);
+    }),
+    'GROK_MISMATCHES must document text-only image residual'
+  );
 });
 
 test('Grok mismatches are documented on the module', function () {
