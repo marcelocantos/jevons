@@ -575,6 +575,54 @@ test('packActiveGraphIslands stacks components (🎯T190)', function () {
   assert.deepStrictEqual(islands[2], ['D', 'E']);
 });
 
+// 🎯T199: natural/version order for target ids (not pure lex).
+test('targetIDCompare natural sort (🎯T199)', function () {
+  assert.strictEqual(typeof FT.targetIDCompare, 'function');
+  assert.strictEqual(typeof FT.targetIDLess, 'function');
+
+  const want = ['T1', 'T2', 'T10', 'T10.2', 'T27', 'T27.3', 'T100'];
+  const shuffled = ['T100', 'T10', 'T27.3', 'T2', 'T10.2', 'T1', 'T27'];
+  shuffled.sort(FT.targetIDCompare);
+  assert.deepStrictEqual(shuffled, want);
+
+  assert.ok(FT.targetIDLess('T10.2', 'T10.10'), 'T10.2 < T10.10');
+  assert.ok(!FT.targetIDLess('T10.10', 'T10.2'), 'not T10.10 < T10.2');
+  assert.ok(FT.targetIDLess('T1', 'T1.1'));
+  assert.ok(FT.targetIDLess('T1.1', 'T2'));
+  assert.ok(!FT.targetIDLess('T10', 'T10'));
+  assert.ok(FT.targetIDLess('foo2', 'foo10'), 'non-T residual');
+  assert.ok(FT.targetIDLess('T1', 'T01'), 'leading zeros: shorter first');
+  assert.strictEqual(FT.targetIDCompare('T10', 'T10'), 0);
+});
+
+test('packActiveGraphIslands natural target ids (🎯T199)', function () {
+  const islands = FT.packActiveGraphIslands(
+    ['T10', 'T2', 'T100', 'T10.2'],
+    [{ from: 'T2', to: 'T10' }]
+  );
+  assert.strictEqual(islands.length, 3, JSON.stringify(islands));
+  // Natural: {T2,T10}, {T10.2}, {T100} — not lex {T10,T10.2,T100,T2}.
+  assert.deepStrictEqual(islands[0], ['T2', 'T10']);
+  assert.deepStrictEqual(islands[1], ['T10.2']);
+  assert.deepStrictEqual(islands[2], ['T100']);
+});
+
+test('buildActiveDependencyMermaid id order natural (🎯T199)', function () {
+  // Nodes should appear in natural order within islands (T2 before T10).
+  const src = FT.buildActiveDependencyMermaid([
+    { id: 'T10', name: 'Ten' },
+    { id: 'T2', name: 'Two', depends_on: [{ id: 'T10' }] },
+    { id: 'T100', name: 'Hundred' },
+  ]);
+  const i2 = src.indexOf('T2[');
+  const i10 = src.indexOf('T10[');
+  const i100 = src.indexOf('T100[');
+  assert.ok(i2 >= 0 && i10 >= 0 && i100 >= 0, src);
+  assert.ok(i2 < i10, 'T2 before T10 in mermaid: ' + src);
+  // T2-T10 island before orphan T100 by first id natural order.
+  assert.ok(i10 < i100 || src.indexOf('island_0') < src.indexOf('island_1'), src);
+});
+
 test('normalizeGraphPayload (🎯T185)', function () {
   const ok = FT.normalizeGraphPayload({
     available: true,

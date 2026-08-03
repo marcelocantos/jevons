@@ -26,6 +26,69 @@
     return prev === TAB_TRANSCRIPT ? TAB_TRANSCRIPT : TAB_FRONTIER;
   }
 
+  // 🎯T199: natural/version compare for bullseye-style target ids.
+  // Digit runs compare as integers; non-digit runs byte-wise.
+  // Example: T1 < T1.1 < T2 < T10 < T10.2 < T10.10 < T27 < T27.3 < T100.
+  // Mirrors server targetIDLess / naturalLess.
+  function isDigitChar(c) {
+    return c >= '0' && c <= '9';
+  }
+
+  function cmpDigitRun(a, b) {
+    var sa = 0;
+    var sb = 0;
+    while (sa < a.length - 1 && a.charAt(sa) === '0') sa++;
+    while (sb < b.length - 1 && b.charAt(sb) === '0') sb++;
+    var da = a.slice(sa);
+    var db = b.slice(sb);
+    if (da.length !== db.length) return da.length < db.length ? -1 : 1;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    if (a.length !== b.length) return a.length < b.length ? -1 : 1;
+    return 0;
+  }
+
+  // targetIDLess(a, b) — true when a should sort before b (natural order).
+  function targetIDLess(a, b) {
+    return targetIDCompare(a, b) < 0;
+  }
+
+  // targetIDCompare(a, b) → -1 | 0 | 1 for Array.sort comparators.
+  function targetIDCompare(a, b) {
+    a = a == null ? '' : String(a);
+    b = b == null ? '' : String(b);
+    var ia = 0;
+    var ib = 0;
+    while (ia < a.length && ib < b.length) {
+      var aDig = isDigitChar(a.charAt(ia));
+      var bDig = isDigitChar(b.charAt(ib));
+      if (aDig && bDig) {
+        var ea = ia;
+        var eb = ib;
+        while (ea < a.length && isDigitChar(a.charAt(ea))) ea++;
+        while (eb < b.length && isDigitChar(b.charAt(eb))) eb++;
+        var c = cmpDigitRun(a.slice(ia, ea), b.slice(ib, eb));
+        if (c !== 0) return c;
+        ia = ea;
+        ib = eb;
+        continue;
+      }
+      if (aDig !== bDig) {
+        return a.charAt(ia) < b.charAt(ib) ? -1 : 1;
+      }
+      if (a.charAt(ia) !== b.charAt(ib)) {
+        return a.charAt(ia) < b.charAt(ib) ? -1 : 1;
+      }
+      ia++;
+      ib++;
+    }
+    var ra = a.length - ia;
+    var rb = b.length - ib;
+    if (ra < rb) return -1;
+    if (ra > rb) return 1;
+    return 0;
+  }
+
   // When a fleet agent is selected, product switches to transcript tab.
   // When selection clears, stay on current tab (usually frontier remains).
   function tabAfterAgentSelect(hasSelection) {
@@ -310,13 +373,11 @@
           queue.push(nbs[k]);
         }
       }
-      comp.sort();
+      comp.sort(targetIDCompare);
       islands.push(comp);
     }
     islands.sort(function (x, y) {
-      var ax = x[0] || '';
-      var by = y[0] || '';
-      return ax < by ? -1 : ax > by ? 1 : 0;
+      return targetIDCompare(x[0] || '', y[0] || '');
     });
     return islands;
   }
@@ -340,7 +401,7 @@
       byId[id] = t;
       ids.push(id);
     }
-    ids.sort();
+    ids.sort(targetIDCompare);
     var edgeKeys = {};
     var rawEdges = []; // { from, to } original ids
     for (i = 0; i < ids.length; i++) {
@@ -360,8 +421,9 @@
       }
     }
     rawEdges.sort(function (a, b) {
-      if (a.from !== b.from) return a.from < b.from ? -1 : 1;
-      return a.to < b.to ? -1 : a.to > b.to ? 1 : 0;
+      var cf = targetIDCompare(a.from, b.from);
+      if (cf !== 0) return cf;
+      return targetIDCompare(a.to, b.to);
     });
 
     var islands = packActiveGraphIslands(ids, rawEdges);
@@ -699,6 +761,8 @@
     DEFAULT_PLAY_PO: DEFAULT_PLAY_PO,
     nextBottomTab: nextBottomTab,
     tabAfterAgentSelect: tabAfterAgentSelect,
+    targetIDLess: targetIDLess,
+    targetIDCompare: targetIDCompare,
     normalizePayload: normalizePayload,
     normalizeGraphPayload: normalizeGraphPayload,
     formatStatus: formatStatus,

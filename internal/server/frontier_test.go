@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -443,6 +444,78 @@ func TestPackIslandsFromAdj(t *testing.T) {
 		t.Fatalf("island1=%v", islands[1])
 	}
 	if got := strings.Join(islands[2], ","); got != "D,E" {
+		t.Fatalf("island2=%v", islands[2])
+	}
+}
+
+// 🎯T199: natural/version order for target ids (not pure lex).
+func TestTargetIDLessNatural(t *testing.T) {
+	// Canonical acceptance chain from bullseye T199.
+	want := []string{"T1", "T2", "T10", "T10.2", "T27", "T27.3", "T100"}
+	got := append([]string(nil), want...)
+	// Shuffle into lex-wrong order (T10 before T2 under pure string sort).
+	got = []string{"T100", "T10", "T27.3", "T2", "T10.2", "T1", "T27"}
+	sort.Slice(got, func(i, j int) bool { return targetIDLess(got[i], got[j]) })
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("natural sort:\n got %v\nwant %v", got, want)
+	}
+
+	// Sub-versions: T10.2 < T10.10 (lex would reverse).
+	if !targetIDLess("T10.2", "T10.10") {
+		t.Fatal("expected T10.2 < T10.10")
+	}
+	if targetIDLess("T10.10", "T10.2") {
+		t.Fatal("expected not T10.10 < T10.2")
+	}
+
+	// Child after parent, before next sibling root.
+	if !targetIDLess("T1", "T1.1") {
+		t.Fatal("T1 < T1.1")
+	}
+	if !targetIDLess("T1.1", "T2") {
+		t.Fatal("T1.1 < T2")
+	}
+
+	// Equal ids are not less.
+	if targetIDLess("T10", "T10") {
+		t.Fatal("equal should not be less")
+	}
+
+	// Residual: non-T prefixes still segment-split digit runs.
+	if !targetIDLess("foo2", "foo10") {
+		t.Fatal("foo2 < foo10")
+	}
+	if targetIDLess("foo10", "foo2") {
+		t.Fatal("not foo10 < foo2")
+	}
+
+	// Leading zeros: same magnitude, shorter raw run first.
+	if !targetIDLess("T1", "T01") {
+		t.Fatal("T1 < T01 (equal magnitude, fewer digits)")
+	}
+}
+
+func TestPackIslandsNaturalTargetIDs(t *testing.T) {
+	// Island packing must use natural id order (🎯T199).
+	active := []string{"T10", "T2", "T100", "T10.2"}
+	adj := map[string][]string{
+		"T2":    {"T10"},
+		"T10":   {"T2"},
+		"T10.2": nil,
+		"T100":  nil,
+	}
+	islands := packIslandsFromAdj(active, adj)
+	// Islands ordered by first id: {T2,T10}, {T10.2}, {T100}
+	if len(islands) != 3 {
+		t.Fatalf("islands=%v", islands)
+	}
+	if got := strings.Join(islands[0], ","); got != "T2,T10" {
+		t.Fatalf("island0 natural=%v (lex would put T10 first)", islands[0])
+	}
+	if got := strings.Join(islands[1], ","); got != "T10.2" {
+		t.Fatalf("island1=%v", islands[1])
+	}
+	if got := strings.Join(islands[2], ","); got != "T100" {
 		t.Fatalf("island2=%v", islands[2])
 	}
 }

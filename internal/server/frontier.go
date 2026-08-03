@@ -404,9 +404,82 @@ func displayStatus(status string) string {
 	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
 }
 
-// targetIDLess orders T1 < T2 < T10 < T1.1 roughly by numeric segments.
+// targetIDLess orders bullseye-style ids by natural/version segments (🎯T199).
+// Digit runs compare as integers; non-digit runs are byte-wise.
+// Example: T1 < T1.1 < T2 < T10 < T10.2 < T10.10 < T27 < T27.3 < T100.
 func targetIDLess(a, b string) bool {
-	return a < b
+	return naturalLess(a, b)
+}
+
+// naturalLess is alphanumeric / natsort / version-style compare.
+// Splits each string into alternating non-digit and digit runs; digit runs
+// compare by integer magnitude (leading zeros ignored for value, then shorter
+// raw run wins on ties). Residual: non-T prefixes still segment-split.
+func naturalLess(a, b string) bool {
+	ia, ib := 0, 0
+	for ia < len(a) && ib < len(b) {
+		aDig := a[ia] >= '0' && a[ia] <= '9'
+		bDig := b[ib] >= '0' && b[ib] <= '9'
+		if aDig && bDig {
+			ea, eb := ia, ib
+			for ea < len(a) && a[ea] >= '0' && a[ea] <= '9' {
+				ea++
+			}
+			for eb < len(b) && b[eb] >= '0' && b[eb] <= '9' {
+				eb++
+			}
+			if c := cmpDigitRun(a[ia:ea], b[ib:eb]); c != 0 {
+				return c < 0
+			}
+			ia, ib = ea, eb
+			continue
+		}
+		if aDig != bDig {
+			// Digit vs non-digit at the same position: compare bytes.
+			return a[ia] < b[ib]
+		}
+		// Both non-digit: consume equal run lengths one byte at a time.
+		if a[ia] != b[ib] {
+			return a[ia] < b[ib]
+		}
+		ia++
+		ib++
+	}
+	return len(a)-ia < len(b)-ib
+}
+
+// cmpDigitRun compares digit strings as unsigned integers.
+// Leading zeros do not change magnitude; on equal magnitude, shorter raw
+// run is less (so "1" < "01"). Returns -1, 0, or 1.
+func cmpDigitRun(a, b string) int {
+	sa, sb := 0, 0
+	for sa < len(a)-1 && a[sa] == '0' {
+		sa++
+	}
+	for sb < len(b)-1 && b[sb] == '0' {
+		sb++
+	}
+	da, db := a[sa:], b[sb:]
+	if len(da) != len(db) {
+		if len(da) < len(db) {
+			return -1
+		}
+		return 1
+	}
+	if da < db {
+		return -1
+	}
+	if da > db {
+		return 1
+	}
+	// Equal magnitude: prefer fewer leading zeros (shorter raw).
+	if len(a) != len(b) {
+		if len(a) < len(b) {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
 
 // SetFrontierCwd sets the primary workdir used to discover the project ledger
