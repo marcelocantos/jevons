@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -109,13 +110,15 @@ type Server struct {
 	// Nil until SetRSILoop; jevons_rsi_cycle requires it.
 	rsiLoop *rsi.Loop
 
-	// idleActivity tracks ACP phase/time for auto-nudge (🎯T207).
-	// Nil until StartIdleNudgeLoop; broadcastAgentEvent also Observes when set.
+	// idleActivity tracks ACP phase for enter-idle detection (🎯T207).
+	// Nil until StartIdleNudgeLoop; broadcastAgentEvent Observes transitions.
 	idleActivity *IdleActivityTracker
-	// idleNudgeLedger persists backoff/max counts under state_dir/fleet/.
+	// idleNudgeLedger legacy path (auto-nudge ladder retired); may be nil.
 	idleNudgeLedger *IdleNudgeLedger
-	// idleNudgeSweep is set by StartIdleNudgeLoop so cockpit can trigger
-	// a non-post-restart sweep (🎯T204).
+	// idleEventLast debounces worker-idle events per agent name.
+	idleEventLast map[string]time.Time
+	// idleNudgeSweep is set by StartIdleNudgeLoop for cockpit fleet health
+	// (dead-handle sweep only — no auto-continue ladder).
 	idleNudgeSweep func(postRestart bool)
 }
 

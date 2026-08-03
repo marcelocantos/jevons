@@ -337,19 +337,31 @@ func (t *IdleActivityTracker) clock() time.Time {
 
 // Observe updates phase from a claudia event (same signals as AgentProgress).
 func (t *IdleActivityTracker) Observe(name string, ev claudia.Event) {
+	_, _, _ = t.ObserveTransition(name, ev)
+}
+
+// ObserveTransition updates phase and reports whether the agent entered idle
+// from a prior working phase (🎯T207 enter-idle edge — not seed-idle).
+// Purpose/open-mission filters are applied by the caller.
+func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (prevPhase, nextPhase string, enteredIdle bool) {
 	if t == nil || name == "" {
-		return
+		return "", "", false
 	}
 	phase, ok := idlePhaseFromEvent(ev)
 	if !ok {
-		return
+		return "", "", false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.by == nil {
 		t.by = make(map[string]IdleActivity)
 	}
+	prev := t.by[name]
+	prevPhase = prev.Phase
+	nextPhase = phase
 	t.by[name] = IdleActivity{Phase: phase, Updated: t.clock()}
+	enteredIdle = nextPhase == "idle" && strings.ToLower(strings.TrimSpace(prevPhase)) == "working"
+	return prevPhase, nextPhase, enteredIdle
 }
 
 // Get returns the last activity, or zero.
@@ -719,155 +731,81 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 	return rep
 }
 
-// IdleNudgeLoopArgs configures the daemon schedule (🎯T207).
+// IdleNudgeLoopArgs configures the 🎯T207 event-first supervisor.
+// Auto-nudge ladders are retired: detect + notify parent PO only.
 type IdleNudgeLoopArgs struct {
 	Server       *Server
 	StateDir     string
 	Activity     *IdleActivityTracker
-	Interval     time.Duration // 0 → DefaultIdleNudgeInterval; <0 disables ticker (post-restart only)
-	PostDelay    time.Duration // 0 → DefaultPostRestartDelay
+	Interval     time.Duration // unused for nudge; fleet health tick only (0 → 1m)
+	PostDelay    time.Duration // 0 → DefaultDaemonRestartNotifyDelay
 	OverseerName string
+	DefaultPO    string // empty → jevons-po
 	Now          func() time.Time
 }
 
-// StartIdleNudgeLoop runs post-restart wake then periodic sweeps until ctx done.
-// Safe to call from a goroutine. No-ops when Server or registry is nil.
+// StartIdleNudgeLoop wires enter-idle tracking and posts daemon-restarted
+// events to parent POs after settle. Safe to call from a goroutine.
+// No-ops when Server or registry is nil.
+//
+// Does NOT blast workers with continue. Does NOT exponential-backoff nudge.
+// PO judgment owns resume / re-brief / restart (🎯T207 event-first).
 func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	if args.Server == nil || args.Server.registry == nil {
 		return
-	}
-	ledger, err := OpenIdleNudgeLedger(args.StateDir)
-	if err != nil {
-		slog.Warn("idle nudge ledger disabled", "err", err)
-		ledger = nil
 	}
 	activity := args.Activity
 	if activity == nil {
 		activity = NewIdleActivityTracker()
 	}
-	// Expose tracker on server for event sink updates.
 	args.Server.mu.Lock()
 	args.Server.idleActivity = activity
-	args.Server.idleNudgeLedger = ledger
+	if args.Server.idleEventLast == nil {
+		args.Server.idleEventLast = map[string]time.Time{}
+	}
 	args.Server.mu.Unlock()
 
-	nowFn := args.Now
-	if nowFn == nil {
-		nowFn = time.Now
-	}
 	overseer := args.OverseerName
 	if overseer == "" {
 		overseer = "jevons"
 	}
+	defaultPO := args.DefaultPO
+	if defaultPO == "" {
+		defaultPO = defaultProductPOName
+	}
 	postDelay := args.PostDelay
 	if postDelay == 0 {
-		postDelay = DefaultPostRestartDelay
+		postDelay = DefaultDaemonRestartNotifyDelay
 	}
 
-	// Fire-and-forget push: send/queue/interrupt, never WaitForResponse.
-	// butler.PushEvent → fleet.Deliver blocks up to replyTimeout (10m) per
-	// agent and serialized post-restart wake to one agent (🎯T207 live fail).
-	push := func(target, event, text string) error {
-		msg := formatIdleNudgeWire(event, text)
-		res, err := args.Server.sendToAgent(target, msg, true /* interrupt stuck turns */)
-		if err != nil {
-			return err
+	// Seed activity so boot seed-idle is not confused with working→idle.
+	for _, d := range args.Server.registry.List() {
+		if proc := args.Server.registry.Get(d.Name); proc != nil && proc.Alive() {
+			activity.SeedRunning(d.Name)
 		}
-		args.Server.logLifecycle(compIdleNudge, "nudge", "ok", map[string]any{
-			"target": target, "event": event, "status": res.Status, "queued": res.Queued,
-		})
-		return nil
 	}
 
-	briefPresent := func(name string) bool {
-		args.Server.mu.Lock()
-		defer args.Server.mu.Unlock()
-		return args.Server.fleetBriefed != nil && args.Server.fleetBriefed[name]
-	}
-	markBriefed := func(name string) {
-		args.Server.mu.Lock()
-		defer args.Server.mu.Unlock()
-		if args.Server.fleetBriefed == nil {
-			args.Server.fleetBriefed = map[string]bool{}
-		}
-		args.Server.fleetBriefed[name] = true
-	}
-
-	// Prevent overlapping sweeps if a future path blocks again.
-	var sweepMu sync.Mutex
-
-	runSweep := func(postRestart bool) {
-		if !sweepMu.TryLock() {
-			slog.Warn("idle nudge sweep skipped: prior sweep still running")
-			return
-		}
-		defer sweepMu.Unlock()
-
-		// Dead-handle rehydrate first so post-restart wake sees running procs.
-		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
-			slog.Info("idle nudge: fleet health before sweep", "report", FormatDeadAgentReport(reps))
-		}
-		// Seed activity for currently running workers (no ACP yet).
-		for _, d := range args.Server.registry.List() {
-			if proc := args.Server.registry.Get(d.Name); proc != nil && proc.Alive() {
-				activity.SeedRunning(d.Name)
-			}
-		}
-		reps := SweepIdleNudges(IdleNudgeSweepArgs{
-			Reg:          args.Server.registry,
-			Activity:     activity,
-			Ledger:       ledger,
-			Push:         push,
-			Now:          nowFn(),
-			PostRestart:  postRestart,
-			OverseerName: overseer,
-			BriefPresent: briefPresent,
-			MarkBriefed:  markBriefed,
-		})
-		var nudged, maxed, failed, fullBrief int
-		skipped := map[string]int{}
-		for _, r := range reps {
-			switch {
-			case r.Delivered:
-				nudged++
-				if r.Kind == IdleNudgeKindFullBrief {
-					fullBrief++
-				}
-			case r.Action == IdleNudgeMaxed:
-				maxed++
-			case r.Error != "":
-				failed++
-			case r.Action == IdleNudgeSkip:
-				skipped[r.Reason]++
-			}
-		}
-		slog.Info("idle nudge sweep",
-			"post_restart", postRestart,
-			"evaluated", len(reps),
-			"nudged", nudged,
-			"full_brief", fullBrief,
-			"maxed", maxed,
-			"failed", failed,
-			"skipped", skipped,
-		)
-	}
-
-	// Expose sweep to cockpit converge (🎯T204) without a second ticker owner.
+	// Cockpit fleet hook: health only (no auto-nudge sweep).
 	args.Server.mu.Lock()
-	args.Server.idleNudgeSweep = runSweep
+	args.Server.idleNudgeSweep = func(postRestart bool) {
+		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
+			slog.Info("fleet health (cockpit/idle loop)", "report", FormatDeadAgentReport(reps), "post_restart", postRestart)
+		}
+	}
 	args.Server.mu.Unlock()
 
-	// Post-restart wake after short settle.
+	// After settle: daemon-restarted → each parent PO (once).
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(postDelay):
-		runSweep(true)
+		args.Server.NotifyDaemonRestarted(overseer, defaultPO)
 	}
 
+	// Light periodic fleet health only (not idle ladder).
 	interval := args.Interval
 	if interval == 0 {
-		interval = DefaultIdleNudgeInterval
+		interval = time.Minute
 	}
 	if interval < 0 {
 		<-ctx.Done()
@@ -880,7 +818,113 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runSweep(false)
+			if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
+				slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
+			}
 		}
+	}
+}
+
+// emitWorkerIdleToParent fires worker-idle to the worker's parent PO when
+// policy allows (open mission, debounce). Fire-and-forget; queues if PO busy.
+func (s *Server) emitWorkerIdleToParent(name string) {
+	if s == nil || s.registry == nil || name == "" {
+		return
+	}
+	def := s.registry.Def(name)
+	if def == nil {
+		return
+	}
+	if !HasOpenMissionForIdle(*def, nil) {
+		return
+	}
+	overseer := s.overseerName()
+	parent := ResolveEventParent(*def, defaultProductPOName, overseer)
+	if parent == "" || parent == name {
+		return
+	}
+
+	now := time.Now()
+	s.mu.Lock()
+	if s.idleEventLast == nil {
+		s.idleEventLast = map[string]time.Time{}
+	}
+	if last, ok := s.idleEventLast[name]; ok && now.Sub(last) < DefaultWorkerIdleDebounce {
+		s.mu.Unlock()
+		return
+	}
+	s.idleEventLast[name] = now
+	s.mu.Unlock()
+
+	ref := WorkerIdleRef{
+		Name:     def.Name,
+		Parent:   parent,
+		TargetID: def.TargetID,
+		Purpose:  def.Purpose,
+		Phase:    "idle",
+	}
+	text := FormatWorkerIdleText(ref)
+	msg := formatIdleNudgeWire(eventWorkerIdle, text)
+	// Do not interrupt PO mid-turn — queue if busy (T111.1).
+	res, err := s.sendToAgent(parent, msg, false)
+	if err != nil {
+		slog.Warn("worker-idle event deliver failed",
+			"worker", name, "parent", parent, "err", err)
+		s.logLifecycle(compIdleNudge, "worker_idle", "error", map[string]any{
+			"worker": name, "parent": parent, "err": err.Error(),
+		})
+		return
+	}
+	slog.Info("worker-idle event delivered",
+		"worker", name, "parent", parent, "status", res.Status, "queued", res.Queued)
+	s.logLifecycle(compIdleNudge, "worker_idle", "ok", map[string]any{
+		"worker": name, "parent": parent, "status": res.Status, "queued": res.Queued,
+	})
+}
+
+// NotifyDaemonRestarted sends daemon-restarted once per parent PO listing
+// that parent's running work children. Fire-and-forget; queues if busy.
+func (s *Server) NotifyDaemonRestarted(overseer, defaultPO string) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	if overseer == "" {
+		overseer = "jevons"
+	}
+	if defaultPO == "" {
+		defaultPO = defaultProductPOName
+	}
+	running := func(name string) bool {
+		proc := s.registry.Get(name)
+		return proc != nil && proc.Alive()
+	}
+	byParent := CollectWorkChildren(s.registry.List(), running, defaultPO, overseer)
+	if len(byParent) == 0 {
+		// Still notify default PO so someone owns the restart disposition.
+		byParent[defaultPO] = nil
+	}
+	for parent, kids := range byParent {
+		if parent == "" || parent == overseer {
+			// Overseer is not the product PO; skip unless no other parent.
+			if parent == overseer && defaultPO != overseer {
+				continue
+			}
+		}
+		text := FormatDaemonRestartedText(parent, kids)
+		msg := formatIdleNudgeWire(eventDaemonRestarted, text)
+		res, err := s.sendToAgent(parent, msg, false)
+		if err != nil {
+			slog.Warn("daemon-restarted event deliver failed",
+				"parent", parent, "workers", len(kids), "err", err)
+			s.logLifecycle(compIdleNudge, "daemon_restarted", "error", map[string]any{
+				"parent": parent, "workers": len(kids), "err": err.Error(),
+			})
+			continue
+		}
+		slog.Info("daemon-restarted event delivered",
+			"parent", parent, "workers", len(kids), "status", res.Status, "queued", res.Queued)
+		s.logLifecycle(compIdleNudge, "daemon_restarted", "ok", map[string]any{
+			"parent": parent, "workers": len(kids), "status": res.Status, "queued": res.Queued,
+		})
 	}
 }

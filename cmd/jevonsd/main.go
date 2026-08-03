@@ -149,14 +149,15 @@ func main() {
 		}
 	}
 
-	// The overseer's MCP server is registered user-scoped in
-	// ~/.grok/config.toml (see ensureGrokMCPServer, called before launch),
-	// which attaches on both session/new and session/load — so we no
-	// longer pass a session-scoped ACP param (mcp.claudia.json), which the
-	// CLI honours only on session/new (🎯T58). Remove any stale copy so
-	// claudia doesn't double-register the same server name. Use the
-	// concrete bind address, never "localhost": the loopback-only default
-	// (🎯T6) binds IPv4 127.0.0.1, and localhost may resolve to ::1.
+	// Overseer MCP is registered user-scoped for the selected provider
+	// before launch (ensureOverseerMCPServer: Grok → ~/.grok/config.toml,
+	// Claude → claude mcp -s user; 🎯T58 + 🎯T212). That attaches on both
+	// session/new and session/load — so we no longer pass a session-scoped
+	// ACP param (mcp.claudia.json), which Grok honours only on session/new.
+	// Remove any stale copy so claudia doesn't double-register the same
+	// server name. Use the concrete bind address, never "localhost": the
+	// loopback-only default (🎯T6) binds IPv4 127.0.0.1, and localhost may
+	// resolve to ::1.
 	mcpHost := cfg.BindAddr
 	if mcpHost == "" || mcpHost == "0.0.0.0" || mcpHost == "::" {
 		mcpHost = "127.0.0.1"
@@ -494,15 +495,14 @@ func main() {
 		jevonDef.Purpose = claudia.PurposeOverseer
 	}
 
-	// The overseer's MCP tools come from a USER-SCOPED ~/.grok/config.toml
-	// entry (🎯T58), which the Grok CLI attaches on BOTH session/new and
-	// session/load — unlike the session-scoped ACP param, which it honours
-	// only on session/new. That lets the overseer RESUME its real session
-	// on restart (full model context) instead of rotating to a fresh
-	// session and re-priming with a lossy recap. Register before launch so
-	// the tools are present the moment the agent starts.
-	if err := ensureGrokMCPServer(cfg, mcpHost); err != nil {
-		slog.Warn("could not register jevons MCP server in ~/.grok/config.toml — overseer may start toolless", "err", err)
+	// Overseer MCP tools: user-scoped install for the selected overseer
+	// provider (🎯T58 Grok, 🎯T212 Claude). Register before launch so tools
+	// are present on session/new and session/load (resume keeps tools).
+	// Default fleet/overseer remains Grok unless provider is explicitly
+	// claude (or other); this does not flip the compile-time default.
+	if err := ensureOverseerMCPServer(cfg, mcpHost, jevonDef.Provider); err != nil {
+		slog.Warn("could not register overseer MCP server — overseer may start toolless",
+			"provider", jevonDef.Provider, "err", err)
 	}
 	if err := registry.Register(*jevonDef); err != nil {
 		slog.Error("jevon agent register failed", "err", err)
@@ -631,22 +631,21 @@ func main() {
 		srv.SetOverseerDownReason(reason)
 	}
 
-	// 🎯T207: post-restart wake + periodic idle auto-nudge (brief-or-verify
-	// first pass; backoff/max). Runs even if overseer attach failed so
-	// AutoStart workers are not left phase=idle forever. Owner restarts
-	// daily after achieve — do not claim done without that path (T194).
-	// Also registers TriggerIdleNudgeSweep for cockpit fleet hooks (T204).
+	// 🎯T207 event-first: enter-idle → parent PO; daemon-restarted → POs.
+	// No blast-continue to every agent; PO judges resume/re-brief/restart.
+	// Also wires fleet-health hook for cockpit (T204).
 	go mcpserver.StartIdleNudgeLoop(ctx, mcpserver.IdleNudgeLoopArgs{
 		Server:       mcpSrv,
 		StateDir:     cfg.StateDir,
 		OverseerName: cfg.OverseerName,
+		DefaultPO:    "jevons-po",
 	})
 
-	// 🎯T204: cockpit converge — overseer Alive+Attach+turn-usable (stuck-busy
-	// unstick), fleet dead-handle recovery, idle worker nudge. Not liveness alone.
+	// 🎯T204: cockpit converge — overseer Alive+Attach+turn-usable; fleet
+	// dead-handle recovery. Worker mission resume is PO via T207 events.
 	srv.SetCockpitHooks(server.CockpitHooks{
 		FleetHealth: func() { mcpSrv.SweepFleetHealth(cfg.OverseerName) },
-		FleetNudge:  func() { mcpSrv.TriggerIdleNudgeSweep() },
+		FleetNudge:  func() { mcpSrv.TriggerIdleNudgeSweep() }, // health only
 	})
 	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
 
@@ -888,34 +887,138 @@ func grokBin() string {
 	return "grok"
 }
 
+// overseerMCPKind names which CLI path installs overseer MCP tools (🎯T212).
+type overseerMCPKind string
+
+const (
+	overseerMCPGrok   overseerMCPKind = "grok"
+	overseerMCPClaude overseerMCPKind = "claude"
+	overseerMCPNone   overseerMCPKind = "none"
+)
+
+// overseerMCPKindForProvider is the pure oracle for 🎯T212: which user-scoped
+// MCP ensure path the boot/attach code must take. Default/empty and Grok →
+// Grok config.toml; Claude → claude mcp -s user; Codex/Bedrock → none
+// (accepted residual: no known durable user-scope MCP install CLI).
+func overseerMCPKindForProvider(provider claudia.Provider) overseerMCPKind {
+	switch provider {
+	case claudia.ProviderClaude:
+		return overseerMCPClaude
+	case claudia.ProviderCodex, claudia.ProviderBedrock:
+		return overseerMCPNone
+	default:
+		// Grok and unknown/empty: keep historical Grok path (default fleet).
+		return overseerMCPGrok
+	}
+}
+
+// ensureOverseerMCPServer registers jevonsd's MCP endpoint for the selected
+// overseer provider before launch (🎯T58, 🎯T212). Grok writes user-scoped
+// ~/.grok/config.toml; Claude writes user-scoped Claude MCP config via
+// `claude mcp add -s user`. Idempotent remove-then-add so port/bind changes
+// always land. Residual: codex/bedrock return a clear skip error (class-3
+// until a durable install path exists); live Claude smoke remains optional.
+func ensureOverseerMCPServer(cfg config.Config, host string, provider claudia.Provider) error {
+	switch overseerMCPKindForProvider(provider) {
+	case overseerMCPClaude:
+		return ensureClaudeMCPServer(cfg, host)
+	case overseerMCPNone:
+		return fmt.Errorf("overseer provider %q has no user-scoped MCP ensure path yet (residual; overseer may start toolless)", provider)
+	default:
+		return ensureGrokMCPServer(cfg, host)
+	}
+}
+
 // ensureGrokMCPServer registers jevonsd's MCP endpoint user-scoped in
 // ~/.grok/config.toml so the Grok CLI attaches it on BOTH session/new and
 // session/load — the key to the overseer resuming its real session across
 // restarts (🎯T58) instead of the old rotate-and-recap hack. Idempotent:
 // removes any prior entry (ignoring the not-found error) then re-adds the
 // current URL, so a changed port/bind is always reflected.
-//
-// Residual (🎯T212 / restitch J1): Claude overseer MCP install is a separate
-// product path — this helper remains Grok-config.toml-only by design.
 func ensureGrokMCPServer(cfg config.Config, host string) error {
-	name, url := grokMCPServerSpec(cfg, host)
+	name, url := overseerMCPServerSpec(cfg, host)
 	grok := grokBin()
+	args := grokMCPAddArgs(name, url)
 	_ = exec.Command(grok, "mcp", "remove", name).Run()
-	out, err := exec.Command(grok, "mcp", "add", "--transport", "http", name, url).CombinedOutput()
+	out, err := exec.Command(grok, args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("grok mcp add %s %s: %w (%s)", name, url, err, strings.TrimSpace(string(out)))
 	}
-	slog.Info("registered overseer MCP server (user-scoped, survives session/load)", "name", name, "url", url)
+	slog.Info("registered overseer MCP server (Grok user-scoped, survives session/load)",
+		"name", name, "url", url, "provider", "grok")
 	return nil
 }
 
-// grokMCPServerSpec derives the user-scoped MCP registration for the
-// overseer: the config.toml server name and the streamable-HTTP endpoint
-// URL. The path must be exactly /mcp (where mcpserver mounts) and the host
-// must be a concrete address — never "localhost", which can resolve to ::1
-// while the loopback default binds IPv4 127.0.0.1 (🎯T6/🎯T58).
-func grokMCPServerSpec(cfg config.Config, host string) (name, url string) {
+// ensureClaudeMCPServer registers jevonsd's MCP endpoint user-scoped in
+// Claude Code config (`claude mcp add --transport http -s user`) so a
+// Claude overseer gets jevons tools on session start and resume (🎯T212).
+// Idempotent remove-then-add. Residual: live Claude overseer smoke is
+// class-3/owner-gated; hermetics cover kind routing + argv shape.
+func ensureClaudeMCPServer(cfg config.Config, host string) error {
+	name, url := overseerMCPServerSpec(cfg, host)
+	bin := claudeBin()
+	args := claudeMCPAddArgs(name, url)
+	_ = exec.Command(bin, "mcp", "remove", "-s", "user", name).Run()
+	out, err := exec.Command(bin, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("claude mcp add %s %s: %w (%s)", name, url, err, strings.TrimSpace(string(out)))
+	}
+	slog.Info("registered overseer MCP server (Claude user-scoped)",
+		"name", name, "url", url, "provider", "claude")
+	return nil
+}
+
+// overseerMCPServerSpec derives the MCP registration name and streamable-HTTP
+// endpoint URL for the overseer. The path must be exactly /mcp (mcpserver
+// mount) and the host a concrete address — never "localhost" (::1 vs
+// 127.0.0.1; 🎯T6/🎯T58). Shared by Grok and Claude ensure paths (🎯T212).
+func overseerMCPServerSpec(cfg config.Config, host string) (name, url string) {
 	return cfg.MCPServerName, fmt.Sprintf("http://%s:%d/mcp", host, cfg.Port)
+}
+
+// grokMCPServerSpec is the historical name for overseerMCPServerSpec (tests).
+func grokMCPServerSpec(cfg config.Config, host string) (name, url string) {
+	return overseerMCPServerSpec(cfg, host)
+}
+
+// grokMCPAddArgs is the pure argv for `grok mcp add` after the binary
+// (oracle: transport http, name, concrete /mcp URL).
+func grokMCPAddArgs(name, url string) []string {
+	return []string{"mcp", "add", "--transport", "http", name, url}
+}
+
+// claudeMCPAddArgs is the pure argv for `claude mcp add` after the binary
+// (🎯T212 oracle: user scope so tools survive resume; transport http).
+func claudeMCPAddArgs(name, url string) []string {
+	return []string{"mcp", "add", "--transport", "http", "-s", "user", name, url}
+}
+
+// claudeCandidatePaths lists common Claude Code install locations when the
+// binary is not on PATH (symlink often under ~/.local/bin).
+func claudeCandidatePaths() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{
+		filepath.Join(home, ".local", "bin", "claude"),
+		filepath.Join(home, ".claude", "local", "claude"),
+		"/opt/homebrew/bin/claude", "/usr/local/bin/claude",
+	}
+}
+
+// claudeBin resolves the Claude CLI: PATH first, then known install paths.
+// Returns "claude" as last resort so exec fails loudly if missing.
+func claudeBin() string {
+	if p, err := exec.LookPath("claude"); err == nil {
+		return p
+	}
+	for _, p := range claudeCandidatePaths() {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return "claude"
 }
 
 // diagnoseOverseerUnavailable is the pure oracle for 🎯T214 J4: message text
@@ -964,8 +1067,15 @@ func diagnoseOverseerUnavailable(provider claudia.Provider, binOnPath bool, cand
 func overseerUnavailableReason(provider claudia.Provider) string {
 	switch provider {
 	case claudia.ProviderClaude:
-		_, err := exec.LookPath("claude")
-		return diagnoseOverseerUnavailable(provider, err == nil, "")
+		if _, err := exec.LookPath("claude"); err == nil {
+			return diagnoseOverseerUnavailable(provider, true, "")
+		}
+		for _, p := range claudeCandidatePaths() {
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return diagnoseOverseerUnavailable(provider, true, "")
+			}
+		}
+		return diagnoseOverseerUnavailable(provider, false, "")
 	case claudia.ProviderCodex:
 		_, err := exec.LookPath("codex")
 		return diagnoseOverseerUnavailable(provider, err == nil, "")
