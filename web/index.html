@@ -992,9 +992,19 @@ function dismissFleetAside(id) {
         throw new Error(t || ('aside dismiss HTTP ' + r.status));
       });
     }
-    // 404 / already gone is fine (idempotent close).
-    return r.status === 404 ? { name: name, dismissed: true } : r.json();
+    // 404 = already gone (idempotent). 200 = deregistered.
+    // 🎯T164: never treat "route missing / stale binary" as success without a
+    // follow-up refresh; refreshAgents is the owner-visible truth.
+    return r.status === 404
+      ? { name: name, dismissed: true, missing: true }
+      : r.json();
   }).then(function (row) {
+    // Optimistic local drop so RHS does not wait on poll for agents_changed.
+    if (Array.isArray(lastFleetAgents)) {
+      lastFleetAgents = lastFleetAgents.filter(function (a) {
+        return !(a && a.name === name);
+      });
+    }
     if (selectedAgent === name) {
       selectedAgent = null;
       try {
@@ -1096,6 +1106,17 @@ Object.defineProperty(window, 'historyReplayActive', {
   get() { return historyReplayActive; },
   set(v) { historyReplayActive = !!v; },
 });
+// 🎯T164 hermetic UI oracles (and debug): bridge global-lexical lets so
+// page.evaluate can drive maybeCloseTargetAside / dual-write dismiss.
+Object.defineProperty(window, 'attentionState', {
+  configurable: true,
+  get() { return attentionState; },
+  set(v) { attentionState = v; },
+});
+window.ensureFleetAside = ensureFleetAside;
+window.dismissFleetAside = dismissFleetAside;
+window.maybeCloseTargetAside = maybeCloseTargetAside;
+window.refreshAgents = refreshAgents;
 
 // 🎯T140: client connect spans — join server conn_id + pageCorr + ms.
 let chatConnId = null;
@@ -1518,6 +1539,10 @@ function scheduleJevonsRender(el) {
     el._layoutText = el._streamRaw;
     el._layoutRole = 'jevons';
     renderBody(el, 'jevons', el._streamRaw);
+    // 🎯T164: live stream only — paintBody no longer auto-closes (history-safe).
+    if (!historyReplayActive && typeof el._streamRaw === 'string') {
+      maybeCloseTargetAside(el._streamRaw);
+    }
     // Streaming text is real progress — reset T94 idle stuck clock.
     if (workingEl) armWorkingWatch();
     // T66: stream may start short then measure tall while still latest —
@@ -1564,6 +1589,9 @@ function sealAssistantStream() {
     el._expanded = true;
     el._autoExpanded = true;
     renderBody(el, 'jevons', raw);
+    // 🎯T164: terminal seal of a live turn — run filed-marker close once more
+    // (stream path may have already closed; idempotent when no open file-target).
+    if (!historyReplayActive) maybeCloseTargetAside(raw);
     unwatchStreamBubble(el);
     scheduleLatestExpansion();
   }
@@ -2342,8 +2370,8 @@ function paintBody(d, role, t) {
       renderMermaidIn(d._body);   // sealed content only
       highlightCodeIn(d._body);   // 🎯T74
     }
-    // 🎯T95: auto-close target: filing aside when overseer confirms 🎯 id.
-    maybeCloseTargetAside(t);
+    // 🎯T164: do NOT auto-close here — paintBody runs for history replay and
+    // lazy rematerialize. Live stream/seal calls maybeCloseTargetAside only.
   } else if (role === 'user') {
     // 🎯T75: quote notation as blockquotes; 🎯T76: [image: id] → <img>.
     d._body.innerHTML = renderUserText(t);
@@ -2352,17 +2380,31 @@ function paintBody(d, role, t) {
     d._body.textContent = t;
   }
 }
+// 🎯T95/T152/T164: on live __TARGET_FILED__:Tn, close local file-target chrome
+// and DELETE dual-written purpose=aside fleet row(s). Live path only — history
+// paint must not steal a new open filing aside (live repro att-mscvtpdo-rel53v).
 function maybeCloseTargetAside(text) {
+  // History replay / soft-reconnect firehose: never auto-close from past markers.
+  if (typeof historyReplayActive !== 'undefined' && historyReplayActive) return;
   if (typeof AttentionThreads === 'undefined' || !attentionState) return;
   const filed = AttentionThreads.detectTargetFiled(text);
   if (!filed) return;
   // 🎯T153: auto-close returns focus to main composer.
   focusComposer();
-  // Capture open file-target before close so we can dismiss its fleet dual-write.
-  const closedTh = (AttentionThreads.stack(attentionState) || []).find(function (th) {
-    return th.purpose === 'file-target' && th.status === 'open';
-  });
-  const asideId = closedTh && closedTh.id ? closedTh.id : null;
+  // Resolve dual-write ids before close (open + any file-target still in fleet).
+  const asideIds = (typeof AttentionThreads.resolveTargetAsideIdsToDismiss === 'function')
+    ? AttentionThreads.resolveTargetAsideIdsToDismiss(
+        attentionState,
+        typeof lastFleetAgents !== 'undefined' ? lastFleetAgents : [],
+        typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+      )
+    : (function () {
+        const openTh = (AttentionThreads.stack(attentionState) || []).find(function (th) {
+          return th.purpose === 'file-target' && th.status === 'open';
+        });
+        return openTh && openTh.id ? [openTh.id] : [];
+      })();
+  const asideId = asideIds.length ? asideIds[0] : null;
   attentionState = AttentionThreads.closeTargetAside(attentionState);
   if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
     jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision('dismiss', {
@@ -2373,9 +2415,11 @@ function maybeCloseTargetAside(text) {
   }
   persistAttention();
   if (typeof renderAttention === 'function') renderAttention();
-  // 🎯T152: also kill/deregister dual-written fleet purpose=aside (RHS 💡 row).
-  if (asideId && typeof dismissFleetAside === 'function') {
-    dismissFleetAside(asideId);
+  // 🎯T152/T164: deregister every matched dual-written fleet aside (not stop-only).
+  if (typeof dismissFleetAside === 'function') {
+    for (let i = 0; i < asideIds.length; i++) {
+      dismissFleetAside(asideIds[i]);
+    }
   }
 }
 // User bubbles: preserve plain text, promote lines of `> quote` to <blockquote>,
