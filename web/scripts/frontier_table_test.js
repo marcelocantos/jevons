@@ -34,8 +34,19 @@ test('normalizePayload maps API rows; empty/error calm', function () {
     ledger: '/resolved/by/bullseye/bullseye.yaml',
     cwd: '/proj',
     targets: [
-      { id: 'T131', name: 'RHS frontier table', status: 'Converging', fanout: 0 },
-      { id: 'T27.1', name: 'Provider contract', status: 'Converging', fanout: 3, value: 8 },
+      { id: 'T131', name: 'RHS frontier table', status: 'Converging', fanout: 0, dependents: [] },
+      {
+        id: 'T27.1',
+        name: 'Provider contract',
+        status: 'Converging',
+        fanout: 3,
+        value: 8,
+        dependents: [
+          { id: 'T27.2', name: 'Child A' },
+          { id: 'T27.3', name: 'Child B' },
+          { id: 'T27.4', name: 'Child C' },
+        ],
+      },
     ],
     updated_at: '2026-08-03T00:00:00Z',
   });
@@ -43,6 +54,9 @@ test('normalizePayload maps API rows; empty/error calm', function () {
   assert.strictEqual(m.rows.length, 2);
   assert.strictEqual(m.rows[0].id, 'T131');
   assert.strictEqual(m.rows[1].fanout, 3);
+  assert.strictEqual(m.rows[1].dependents.length, 3);
+  assert.strictEqual(m.rows[1].dependents[0].id, 'T27.2');
+  assert.strictEqual(m.rows[1].dependents[0].name, 'Child A');
   assert.strictEqual(m.empty, false);
   assert.ok(m.ledger.indexOf('bullseye.yaml') >= 0);
 
@@ -95,6 +109,42 @@ test('formatFanout N᚛ + title; hide when 0 (🎯T173)', function () {
   assert.strictEqual(many.title, '4 targets depend on T10.2');
   // Real id passthrough
   assert.ok(FT.formatFanout(3, 'T173').title.indexOf('T173') >= 0);
+});
+
+// 🎯T179: lead count line + "• TID — name" bullets from dependents[{id,name}].
+test('formatFanout InstantTip lists dependents with id + name (🎯T179)', function () {
+  const deps = [
+    { id: 'T10.3', name: 'Client requests table drives server actions' },
+    { id: 'T10.4', name: 'Reconnect uses diff sync only' },
+    { id: 'T10.5', name: 'Short' },
+    { id: 'T10.6', name: 'Also blocked' },
+  ];
+  const many = FT.formatFanout(4, 'T10.2', deps);
+  assert.strictEqual(many.visible, true);
+  assert.strictEqual(many.text, '4\u169B');
+  // Lead line unchanged.
+  assert.ok(many.title.indexOf('4 targets depend on T10.2') === 0, 'lead line first: ' + many.title);
+  // Bullets: id + em-dash + name
+  assert.ok(many.title.indexOf('• T10.3 — Client requests table drives server actions') >= 0, many.title);
+  assert.ok(many.title.indexOf('• T10.4 — Reconnect uses diff sync only') >= 0, many.title);
+  assert.ok(many.title.indexOf('• T10.5 — Short') >= 0, many.title);
+  assert.ok(many.title.indexOf('• T10.6 — Also blocked') >= 0, many.title);
+  // Multi-line (lead + 4 bullets).
+  assert.strictEqual(many.title.split('\n').length, 5, many.title);
+
+  const one = FT.formatFanout(1, 'T2', [{ id: 'T3', name: 'Blocked' }]);
+  assert.strictEqual(one.title, '1 target depends on T2\n• T3 — Blocked');
+
+  // Hide when empty dependents / zero.
+  const z = FT.formatFanout(0, 'T9', []);
+  assert.strictEqual(z.visible, false);
+  assert.strictEqual(z.title, '');
+
+  // Bare string dependents still list ids (name optional).
+  const bare = FT.formatFanout(2, 'T1', ['T2', 'T3']);
+  assert.ok(bare.title.indexOf('2 targets depend on T1') === 0);
+  assert.ok(bare.title.indexOf('• T2') >= 0);
+  assert.ok(bare.title.indexOf('• T3') >= 0);
 });
 
 test('client uses API path — does not hard-code ledger discovery path', function () {
@@ -199,6 +249,38 @@ test('T177 chrome cols use explicit rem widths — not 1%/99% under fixed layout
   const fanBuild = html.indexOf("fan.className = 'ft-fanout'");
   assert.ok(rowBuild >= 0 && nameBuild > rowBuild && statusBuild > nameBuild && fanBuild > statusBuild,
     'DOM order id|name|status|fan');
+});
+
+// 🎯T179: no small-caps status; tighter id/fanout than T177 (4.5/2.75); dependents tip wiring.
+test('T179 status normal case + tight widths + dependents tip wiring', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const statusBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
+  assert.ok(statusBlock, 'ft-status rule');
+  assert.ok(!/font-variant\s*:\s*small-caps/.test(statusBlock[0]), 'no small-caps on .ft-status');
+  assert.ok(!/#frontier-table\s+\.ft-status\s*\{[^}]*font-variant\s*:\s*small-caps/.test(html),
+    'no small-caps anywhere on ft-status');
+
+  const idW = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*([\d.]+)(rem|ch)/);
+  const fanW = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*([\d.]+)(rem|ch)/);
+  const stW = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*([\d.]+)(rem|ch)/);
+  assert.ok(idW, 'id width');
+  assert.ok(fanW, 'fanout width');
+  assert.ok(stW, 'status width');
+  // Tighter than T177: id < 4.5rem, fanout < 2.75rem; status ~2rem.
+  if (idW[2] === 'rem') {
+    assert.ok(parseFloat(idW[1]) < 4.5, 'id tighter than 4.5rem, got ' + idW[1]);
+  }
+  if (fanW[2] === 'rem') {
+    assert.ok(parseFloat(fanW[1]) < 2.75, 'fanout tighter than 2.75rem, got ' + fanW[1]);
+  }
+  if (stW[2] === 'rem') {
+    assert.ok(Math.abs(parseFloat(stW[1]) - 2) < 0.5, 'status ~2rem, got ' + stW[1]);
+  }
+
+  // Render passes dependents into formatFanout (not fanout-only).
+  assert.ok(html.indexOf('formatFanout(row.fanout, row.id, row.dependents)') >= 0 ||
+    /formatFanout\s*\(\s*row\.fanout\s*,\s*row\.id\s*,\s*row\.dependents\s*\)/.test(html),
+    'formatFanout receives row.dependents');
 });
 
 if (failed) {

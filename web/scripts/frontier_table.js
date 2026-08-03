@@ -48,11 +48,18 @@
     var targets = Array.isArray(p.targets) ? p.targets : [];
     var rows = targets.map(function (t) {
       if (!t) return null;
+      var deps = normalizeDependents(t.dependents);
+      var fanout = typeof t.fanout === 'number' ? t.fanout : (parseInt(t.fanout, 10) || 0);
+      // Prefer dependents length when present (API Fanout == len(Dependents)).
+      if (deps.length > 0 || Array.isArray(t.dependents)) {
+        fanout = deps.length;
+      }
       return {
         id: String(t.id || ''),
         name: String(t.name || ''),
         status: String(t.status || ''),
-        fanout: typeof t.fanout === 'number' ? t.fanout : (parseInt(t.fanout, 10) || 0),
+        fanout: fanout,
+        dependents: deps,
         value: typeof t.value === 'number' ? t.value : undefined,
       };
     }).filter(function (r) {
@@ -116,18 +123,51 @@
     return s.replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
   }
 
-  // formatFanout(n, id) → { text, title, visible }.
-  // Hide cell content when fanout is 0 (🎯T173). Nonzero: "N᚛" + hover detail.
-  function formatFanout(n, id) {
-    var count = typeof n === 'number' ? n : (parseInt(n, 10) || 0);
+  // normalizeDependents — API objects {id,name}, bare strings, or parallel fields.
+  function normalizeDependents(raw) {
+    if (!Array.isArray(raw)) return [];
+    var out = [];
+    for (var i = 0; i < raw.length; i++) {
+      var d = raw[i];
+      if (d == null) continue;
+      if (typeof d === 'string') {
+        var sid = String(d).trim();
+        if (sid) out.push({ id: sid, name: '' });
+        continue;
+      }
+      var id = String(d.id || d.ID || '').trim();
+      if (!id) continue;
+      out.push({ id: id, name: String(d.name || d.Name || '').trim() });
+    }
+    return out;
+  }
+
+  // formatFanout(n, id, dependents?) → { text, title, visible }.
+  // Hide when 0 (🎯T173). Nonzero: "N᚛" + InstantTip lead count + bullets "• TID — name" (🎯T179).
+  function formatFanout(n, id, dependents) {
+    var deps = normalizeDependents(dependents);
+    var count = deps.length > 0
+      ? deps.length
+      : (typeof n === 'number' ? n : (parseInt(n, 10) || 0));
     if (count <= 0) {
       return { text: '', title: '', visible: false };
     }
     var tid = String(id || '').trim() || '?';
     var text = String(count) + FANOUT_MARK;
-    var title = count === 1
+    var lead = count === 1
       ? ('1 target depends on ' + tid)
       : (String(count) + ' targets depend on ' + tid);
+    var title = lead;
+    if (deps.length > 0) {
+      var lines = [lead];
+      for (var i = 0; i < deps.length; i++) {
+        var d = deps[i];
+        var bullet = '• ' + d.id;
+        if (d.name) bullet += ' — ' + d.name;
+        lines.push(bullet);
+      }
+      title = lines.join('\n');
+    }
     return { text: text, title: title, visible: true };
   }
 
@@ -163,6 +203,7 @@
     formatStatus: formatStatus,
     statusTitle: statusTitle,
     formatFanout: formatFanout,
+    normalizeDependents: normalizeDependents,
     shortName: shortName,
     emptyMessage: emptyMessage,
   };

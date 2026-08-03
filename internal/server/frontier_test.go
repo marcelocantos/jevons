@@ -56,7 +56,7 @@ func TestComputeFrontierFromLedger(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bullseye.yaml")
 	// T1 done; T2 active depends on T1 → frontier; T3 active depends on T2 → blocked;
-	// T2 blocks T3 so fanout(T2)=1.
+	// T2 blocks T3 so fanout(T2)=1. Dependents include id+name (🎯T179).
 	yaml := `
 schema_version: 5
 targets:
@@ -94,14 +94,88 @@ targets:
 	if rows[0].Status != "Converging" {
 		t.Fatalf("status display=%q", rows[0].Status)
 	}
+	// 🎯T179: Dependents are active targets that depends_on this id; Fanout == len.
+	if len(rows[0].Dependents) != 1 || rows[0].Fanout != len(rows[0].Dependents) {
+		t.Fatalf("T2 dependents=%+v fanout=%d", rows[0].Dependents, rows[0].Fanout)
+	}
+	if rows[0].Dependents[0].ID != "T3" || rows[0].Dependents[0].Name != "Blocked" {
+		t.Fatalf("T2 dep0=%+v", rows[0].Dependents[0])
+	}
 	if rows[1].ID != "T4" || rows[1].Fanout != 0 {
 		t.Fatalf("row1=%+v", rows[1])
+	}
+	if len(rows[1].Dependents) != 0 {
+		t.Fatalf("T4 should have empty dependents, got %+v", rows[1].Dependents)
 	}
 	// T3 must not appear (blocked by active T2).
 	for _, r := range rows {
 		if r.ID == "T3" {
 			t.Fatal("blocked T3 must not be on frontier")
 		}
+	}
+}
+
+// 🎯T179: multi-dependent reverse edges carry id+name; Fanout matches len(Dependents).
+func TestComputeFrontierDependentsList(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bullseye.yaml")
+	yaml := `
+targets:
+  T10.2:
+    name: Ready parent
+    status: converging
+  T10.3:
+    name: Client requests table drives server actions
+    status: identified
+    depends_on: [T10.2]
+  T10.4:
+    name: Reconnect uses diff sync only
+    status: converging
+    depends_on: [T10.2]
+  T10.5:
+    name: Done sibling
+    status: achieved
+    depends_on: [T10.2]
+  T10.6:
+    name: Also blocked
+    status: identified
+    depends_on: [T10.2]
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := computeFrontierFromLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID != "T10.2" {
+		t.Fatalf("want only T10.2 on frontier, got %+v", rows)
+	}
+	// Active dependents only (T10.5 achieved excluded).
+	if rows[0].Fanout != 3 || len(rows[0].Dependents) != 3 {
+		t.Fatalf("fanout=%d deps=%+v", rows[0].Fanout, rows[0].Dependents)
+	}
+	want := map[string]string{
+		"T10.3": "Client requests table drives server actions",
+		"T10.4": "Reconnect uses diff sync only",
+		"T10.6": "Also blocked",
+	}
+	for _, d := range rows[0].Dependents {
+		name, ok := want[d.ID]
+		if !ok {
+			t.Fatalf("unexpected dependent %+v", d)
+		}
+		if d.Name != name {
+			t.Fatalf("dep %s name=%q want %q", d.ID, d.Name, name)
+		}
+		delete(want, d.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing dependents %v", want)
+	}
+	// Sorted by id.
+	if rows[0].Dependents[0].ID != "T10.3" || rows[0].Dependents[1].ID != "T10.4" || rows[0].Dependents[2].ID != "T10.6" {
+		t.Fatalf("order=%+v", rows[0].Dependents)
 	}
 }
 

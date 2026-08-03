@@ -612,10 +612,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   color: var(--text); vertical-align: middle;
 }
 #frontier-table tr:hover td { background: var(--surface-raised); }
+/* 🎯T179: tight chrome rem widths; status normal case (no small-caps) */
 #frontier-table .ft-id {
   font-family: var(--mono); font-size: 11px; color: var(--accent);
   white-space: nowrap; font-weight: 500;
-  width: 4.5rem; overflow: hidden; text-overflow: ellipsis;
+  width: 4rem; overflow: hidden; text-overflow: ellipsis;
   padding-left: 10px; padding-right: 4px;
 }
 #frontier-table .ft-name {
@@ -626,12 +627,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #frontier-table .ft-status {
   font-size: 10px; color: var(--text-dim); white-space: nowrap;
   width: 2rem; padding-left: 4px; padding-right: 4px;
-  font-variant: small-caps; letter-spacing: 0.02em;
 }
 #frontier-table .ft-fanout {
   font-family: var(--mono); font-size: 10px; color: var(--text-muted);
   text-align: right; white-space: nowrap;
-  width: 2.75rem; padding-left: 4px; padding-right: 10px;
+  width: 2.25rem; padding-left: 4px; padding-right: 10px;
 }
 #frontier-table .ft-fanout.ft-fanout-empty {
   color: transparent;
@@ -4772,7 +4772,8 @@ function renderFrontierTable(model) {
     const fan = document.createElement('td');
     fan.className = 'ft-fanout';
     if (typeof FrontierTable !== 'undefined' && FrontierTable.formatFanout) {
-      const fo = FrontierTable.formatFanout(row.fanout, row.id);
+      // 🎯T179: tip = lead count line + "• TID — name" bullets from dependents[]
+      const fo = FrontierTable.formatFanout(row.fanout, row.id, row.dependents);
       if (fo.visible) {
         fan.textContent = fo.text;
         if (fo.title && typeof InstantTip !== 'undefined') {

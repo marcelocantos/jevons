@@ -32,13 +32,20 @@ import (
 // graph: active targets with deps satisfied). Live refresh: fsnotify on
 // the resolved ledger + client poll fallback. No Bullseye WebSocket.
 
+// FrontierDependent is an active target that lists this row's id in depends_on (🎯T179).
+type FrontierDependent struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // FrontierRow is one compact frontier table line.
 type FrontierRow struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Status string  `json:"status"`
-	Fanout int     `json:"fanout"`
-	Value  float64 `json:"value,omitempty"`
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	Status     string              `json:"status"`
+	Fanout     int                 `json:"fanout"`
+	Dependents []FrontierDependent `json:"dependents,omitempty"`
+	Value      float64             `json:"value,omitempty"`
 }
 
 // FrontierResponse is GET /api/frontier JSON.
@@ -147,16 +154,19 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 		return []FrontierRow{}, nil
 	}
 
-	// Precompute active set and reverse edges for fanout.
+	// Precompute active set and reverse edges for fanout / dependents (🎯T179).
 	active := make(map[string]bool)
 	statusOf := make(map[string]string)
+	nameOf := make(map[string]string)
 	for id, t := range doc.Targets {
 		statusOf[id] = t.Status
+		nameOf[id] = t.Name
 		if isActiveStatus(t.Status) {
 			active[id] = true
 		}
 	}
-	fanout := make(map[string]int)
+	// dependents[depID] = active targets that list depID in depends_on
+	dependents := make(map[string][]FrontierDependent)
 	for id, t := range doc.Targets {
 		if !active[id] {
 			continue
@@ -166,8 +176,17 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 			if dep == "" {
 				continue
 			}
-			fanout[dep]++
+			dependents[dep] = append(dependents[dep], FrontierDependent{
+				ID:   id,
+				Name: nameOf[id],
+			})
 		}
+	}
+	// Stable order for tip lists.
+	for dep := range dependents {
+		sort.Slice(dependents[dep], func(i, j int) bool {
+			return targetIDLess(dependents[dep][i].ID, dependents[dep][j].ID)
+		})
 	}
 
 	rows := make([]FrontierRow, 0)
@@ -196,12 +215,17 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 		if !ready {
 			continue
 		}
+		deps := dependents[id]
+		if deps == nil {
+			deps = []FrontierDependent{}
+		}
 		rows = append(rows, FrontierRow{
-			ID:     id,
-			Name:   t.Name,
-			Status: displayStatus(t.Status),
-			Fanout: fanout[id],
-			Value:  t.Value,
+			ID:         id,
+			Name:       t.Name,
+			Status:     displayStatus(t.Status),
+			Fanout:     len(deps),
+			Dependents: deps,
+			Value:      t.Value,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
