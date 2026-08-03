@@ -536,9 +536,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #agent-inspect-body .ai-turn.user .ai-role { color: var(--accent, #8b7cf6); }
 #agent-inspect-body .ai-turn.assistant .ai-role { color: var(--green, #4ade80); }
 /* 🎯T157: user stays plain/pre-wrap; assistant is full markdown (not force pre-wrap on HTML). */
+/* 🎯T167: no max-height / overflow-y on per-turn .ai-text — only #agent-inspect-body scrolls. */
 #agent-inspect-body .ai-text {
   word-break: break-word; color: var(--text); font-family: var(--sans);
-  font-size: 12px; max-height: 40vh; overflow-y: auto;
+  font-size: 12px;
 }
 #agent-inspect-body .ai-turn.user .ai-text { white-space: pre-wrap; }
 #agent-inspect-body .ai-turn.assistant .ai-text { white-space: normal; }

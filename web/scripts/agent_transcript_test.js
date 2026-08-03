@@ -174,6 +174,64 @@ test('T157 paintInspectLineBody roles', function () {
   assert.strictEqual(u.content, '**x**');
 });
 
+// 🎯T167: one vertical scroll surface for RHS inspect — outer body only.
+// Per-turn wrappers (.ai-turn / .ai-text) must not trap wheel with overflow-y.
+test('T167 single scroll: no nested overflow-y auto/scroll on turn sections', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Outer pane is the scroll container.
+  assert.ok(
+    /#agent-inspect-body\s*\{[^}]*overflow-y:\s*auto/.test(html),
+    '#agent-inspect-body must be the vertical scroll container',
+  );
+  // Multi-turn fixture: paint turns as product DOM; assert no inline overflow traps.
+  const lines = [
+    { role: 'user', text: 'prompt one' },
+    { role: 'assistant', text: '## long\n\n' + 'x\n'.repeat(80) },
+    { role: 'user', text: 'prompt two' },
+    { role: 'assistant', text: '```\n' + 'line\n'.repeat(40) + '```' },
+  ];
+  const body = AT.paintInspectLinesHTML(lines, {
+    parseAssistantMarkdown: function (t) {
+      return '<p>' + AT.escapeHtml(t) + '</p>';
+    },
+  });
+  assert.ok((body.match(/class="ai-turn /g) || []).length >= 4, 'multi-turn inspect DOM');
+  assert.ok(body.indexOf('class="ai-text"') >= 0, '.ai-text wrappers present');
+  // Fixture HTML must not set overflow / max-height on turn sections.
+  assert.ok(!/\boverflow(-y)?\s*[:=]\s*(auto|scroll)/i.test(body),
+    'turn HTML must not set overflow auto/scroll');
+  assert.ok(!/\bmax-height\s*[:=]/i.test(body),
+    'turn HTML must not set max-height');
+  // CSS: .ai-turn and .ai-text under inspect must not get overflow-y auto|scroll or max-height.
+  // (pre may keep overflow-x for wide code — residual OK.)
+  function ruleBlock(selector) {
+    const re = new RegExp(
+      selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}',
+    );
+    const m = html.match(re);
+    return m ? m[1] : '';
+  }
+  const aiText = ruleBlock('#agent-inspect-body .ai-text');
+  assert.ok(aiText.length > 0, '.ai-text rule present');
+  assert.ok(!/overflow-y\s*:\s*(auto|scroll)/i.test(aiText),
+    '.ai-text must not use overflow-y auto/scroll');
+  assert.ok(!/max-height\s*:/i.test(aiText),
+    '.ai-text must not use max-height (nested scroll trap)');
+  const aiTurn = ruleBlock('#agent-inspect-body .ai-turn');
+  if (aiTurn) {
+    assert.ok(!/overflow-y\s*:\s*(auto|scroll)/i.test(aiTurn),
+      '.ai-turn must not use overflow-y auto/scroll');
+    assert.ok(!/max-height\s*:/i.test(aiTurn),
+      '.ai-turn must not use max-height');
+  }
+  // Intentional residual: pre may overflow-x only (not vertical nest).
+  const preRule = ruleBlock('#agent-inspect-body .ai-turn.assistant .ai-text pre');
+  if (preRule) {
+    assert.ok(!/overflow-y\s*:\s*(auto|scroll)/i.test(preRule),
+      'pre must not use overflow-y auto/scroll');
+  }
+});
+
 test('T136 create-aside dual-write + no attention chip wall', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('ensureFleetAside') >= 0, 'registers fleet aside on create');
