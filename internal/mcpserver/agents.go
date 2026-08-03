@@ -532,10 +532,15 @@ func (s *Server) notify(agentName, text string) {
 // broadcastAgentEvent fans a worker event to the optional progress/UI hook
 // (🎯T118). Previously a no-op stub; the HTTP server wires ObserveAgentProgress
 // + agents_changed so fleet rows update without poll.
+// Also feeds the idle-nudge activity tracker (🎯T207) when wired.
 func (s *Server) broadcastAgentEvent(name string, ev claudia.Event) {
 	s.mu.Lock()
 	hook := s.agentEventHook
+	tracker := s.idleActivity
 	s.mu.Unlock()
+	if tracker != nil {
+		tracker.Observe(name, ev)
+	}
 	if hook != nil {
 		hook(name, ev)
 	}

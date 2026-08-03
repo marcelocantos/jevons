@@ -108,6 +108,12 @@ type Server struct {
 	// rsiLoop is the ambient recursive self-improvement schedule/stream (🎯T92).
 	// Nil until SetRSILoop; jevons_rsi_cycle requires it.
 	rsiLoop *rsi.Loop
+
+	// idleActivity tracks ACP phase/time for auto-nudge (🎯T207).
+	// Nil until StartIdleNudgeLoop; broadcastAgentEvent also Observes when set.
+	idleActivity *IdleActivityTracker
+	// idleNudgeLedger persists backoff/max counts under state_dir/fleet/.
+	idleNudgeLedger *IdleNudgeLedger
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn
