@@ -433,3 +433,55 @@ func TestFormatIdleNudgeWire(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// 🎯T171 path 2: post-restart resume delivers to open-mission workers only —
+// not PO, not aside, not deliberate-stop.
+func TestSweepIdleNudgesPostRestartSkipsPOAndAside(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []claudia.AgentDef{
+		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer, Materialized: true, Provider: "grok", AutoStart: true},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons",
+			Materialized: true, Provider: "grok", AutoStart: true},
+		{Name: "jv-t171-worker", WorkDir: dir, SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po",
+			Materialized: true, Provider: "grok", AutoStart: true, TargetID: "T171"},
+		{Name: "aside-1", WorkDir: dir, SessionID: "s-a", Purpose: claudia.PurposeAside, Parent: "jevons",
+			Materialized: true, Provider: "grok", AutoStart: true},
+	} {
+		if err := reg.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	activity := NewIdleActivityTracker()
+	activity.SeedRunning("jv-t171-worker")
+	activity.SeedRunning("jevons-po")
+	var pushed []string
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg: reg, Activity: activity, Now: time.Unix(4000, 0), PostRestart: true,
+		OverseerName: "jevons",
+		Push: func(target, event, text string) error {
+			pushed = append(pushed, target)
+			return nil
+		},
+		ProcessRunning: func(name string) bool {
+			return name == "jv-t171-worker" || name == "jevons-po" || name == "aside-1"
+		},
+	})
+	if len(pushed) != 1 || pushed[0] != "jv-t171-worker" {
+		t.Fatalf("pushed=%v want only jv-t171-worker; reps=%+v", pushed, reps)
+	}
+	by := map[string]IdleNudgeReport{}
+	for _, r := range reps {
+		by[r.Name] = r
+	}
+	if w := by["jv-t171-worker"]; !w.Delivered {
+		t.Fatalf("worker: %+v", w)
+	}
+	if po := by["jevons-po"]; po.Action == IdleNudgeNudge || po.Delivered {
+		t.Fatalf("PO must not short-resume: %+v", po)
+	}
+}

@@ -11,13 +11,13 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// 🎯T207 (event-first): framework detects; PO judges.
+// 🎯T171 dual-path post-restart recovery (builds on 🎯T207 event path):
 //
-//   - worker-idle: only on transition into idle with open mission
-//   - daemon-restarted: once per parent PO after jevonsd StartAll settle
-//   - No blast "continue" to every agent; no exponential backoff ladder.
+//  1. daemon-restarted → each durable parent PO + overseer (reattached summary)
+//  2. short fire-and-forget resume → open-mission work agents only (T207 brief-or-verify path)
+//  3. worker-idle → parent PO only on working→idle transition (debounced; not a poll)
 //
-// Optional mechanical floor (dead process, stuck-busy) stays on T204/T85.
+// Rejected: only-PO hope, only-blast-everyone. Mechanical floor (dead/stuck) stays T204/T85.
 
 const (
 	// DefaultWorkerIdleDebounce avoids double-firing on flappy end_turn edges.
@@ -25,9 +25,9 @@ const (
 	// DefaultDaemonRestartNotifyDelay lets StartAll + wire settle.
 	DefaultDaemonRestartNotifyDelay = 12 * time.Second
 
-	eventWorkerIdle       = "worker-idle"
-	eventDaemonRestarted  = "daemon-restarted"
-	defaultProductPOName  = "jevons-po"
+	eventWorkerIdle      = "worker-idle"
+	eventDaemonRestarted = "daemon-restarted"
+	defaultProductPOName = "jevons-po"
 )
 
 // WorkerIdleRef is one work agent mentioned in an idle/restart event body.
@@ -37,6 +37,7 @@ type WorkerIdleRef struct {
 	TargetID string
 	Purpose  string
 	Phase    string
+	Status   string // process status hint: running | stopped
 }
 
 // ShouldEmitWorkerIdle is the hermetic gate for enter-idle events.
@@ -104,37 +105,126 @@ func FormatWorkerIdleText(w WorkerIdleRef) string {
 	return b.String()
 }
 
-// FormatDaemonRestartedText builds one parent-facing restart brief listing
-// that parent's running work children (or all known open workers).
+// FormatDaemonRestartedText builds one parent- or overseer-facing restart brief
+// listing reattached work children (name, target_id, status/phase).
 func FormatDaemonRestartedText(parent string, workers []WorkerIdleRef) string {
 	var b strings.Builder
 	b.WriteString("jevonsd restarted (or reattached). Control plane is back.\n\n")
-	b.WriteString("Hint: work agents may be process-alive (status=running) but not advancing ")
-	b.WriteString("mid-mission — same as resuming a Grok/Claude CLI after Ctrl+C: they often ")
-	b.WriteString("need an explicit continue or re-brief, not more waiting.\n\n")
+	b.WriteString("Hint: reattached sessions may be phase=idle (status=running) until they ")
+	b.WriteString("receive a turn — not a default 'restart your workers' (process often fine). ")
+	b.WriteString("Same class as resuming a CLI after Ctrl+C: explicit continue/re-brief, not more waiting.\n\n")
 	if parent != "" {
 		fmt.Fprintf(&b, "Addressed to: %s\n", parent)
 	}
 	if len(workers) == 0 {
 		b.WriteString("No running work children listed under you right now.\n")
 	} else {
-		b.WriteString("Running work agents to consider resuming or reaping:\n")
+		b.WriteString("Reattached work agents (name, target, status):\n")
 		for _, w := range workers {
 			tid := strings.TrimSpace(strings.TrimPrefix(w.TargetID, "🎯"))
+			st := strings.TrimSpace(w.Status)
+			if st == "" {
+				st = "running"
+			}
+			ph := strings.TrimSpace(w.Phase)
+			if ph == "" {
+				ph = "idle"
+			}
 			if tid != "" {
-				fmt.Fprintf(&b, "  - %s (🎯%s)\n", w.Name, tid)
+				fmt.Fprintf(&b, "  - %s | 🎯%s | status=%s phase=%s\n", w.Name, tid, st, ph)
 			} else {
-				fmt.Fprintf(&b, "  - %s\n", w.Name)
+				fmt.Fprintf(&b, "  - %s | status=%s phase=%s\n", w.Name, st, ph)
 			}
 		}
 	}
-	b.WriteString("\nDo not blast unrelated agents. Prefer scoped continue/re-brief for open missions; ")
-	b.WriteString("reap done workers (T165/T195). Local master only (T104).")
+	b.WriteString("\nDual path (🎯T171): framework also short-resumes open-mission workers; ")
+	b.WriteString("you replan/reap/reseed. Do not blast missionless/aside/deliberate-stop. ")
+	b.WriteString("Local master only (T104).")
 	return b.String()
 }
 
+// DaemonRestartEventTargets returns who should receive daemon-restarted:
+// each parent key in byParent (durable POs / bosses) plus overseer when distinct.
+// Pure helper for hermetic emit-target oracles (🎯T171).
+func DaemonRestartEventTargets(byParent map[string][]WorkerIdleRef, overseer, defaultPO string) []string {
+	if overseer == "" {
+		overseer = "jevons"
+	}
+	if defaultPO == "" {
+		defaultPO = defaultProductPOName
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	if len(byParent) == 0 {
+		add(defaultPO)
+	} else {
+		for parent := range byParent {
+			// Parent keys that are the overseer still count if they own work
+			// children; we always add overseer once below for cockpit.
+			if parent == overseer {
+				continue // overseer added explicitly as cockpit recipient
+			}
+			add(parent)
+		}
+		if len(out) == 0 {
+			add(defaultPO)
+		}
+	}
+	add(overseer) // always: cockpit dual-path (1)
+	return out
+}
+
+// EligibleOpenMissionResume is the pure gate for post-restart short resume
+// (🎯T171 path 2). True only for open-mission work implementers — not aside,
+// overseer, PO/boss coordinators, deliberate-stop, design-gated, or finished.
+//
+// Open mission: purpose=work AND process running AND (AutoStart OR bound
+// target_id) AND not the durable PO/boss name heuristic.
+func EligibleOpenMissionResume(d claudia.AgentDef, running, deliberateStop, designGated, looksFinished bool) bool {
+	if deliberateStop || designGated || looksFinished {
+		return false
+	}
+	if !running {
+		return false
+	}
+	purpose := strings.TrimSpace(d.Purpose)
+	if purpose == "" {
+		purpose = claudia.PurposeWork
+	}
+	if purpose == claudia.PurposeOverseer || purpose == claudia.PurposeAside {
+		return false
+	}
+	if purpose != claudia.PurposeWork {
+		return false
+	}
+	// POs/bosses get daemon-restarted (path 1), not implementer short-resume.
+	if looksLikePOOrBoss(d.Name) {
+		return false
+	}
+	tid := strings.TrimSpace(d.TargetID)
+	if tid == "" && !d.AutoStart {
+		return false // missionless non-durable: do not blast
+	}
+	// AutoStart and/or bound target_id.
+	return d.AutoStart || tid != ""
+}
+
 // CollectWorkChildren groups running purpose=work agents by ResolveEventParent.
+// phaseByName is optional (name → phase); default phase is idle after reattach.
 func CollectWorkChildren(defs []claudia.AgentDef, running func(name string) bool, defaultPO, overseer string) map[string][]WorkerIdleRef {
+	return CollectWorkChildrenWithPhase(defs, running, nil, defaultPO, overseer)
+}
+
+// CollectWorkChildrenWithPhase is CollectWorkChildren with optional phase map.
+func CollectWorkChildrenWithPhase(defs []claudia.AgentDef, running func(name string) bool, phaseByName func(name string) string, defaultPO, overseer string) map[string][]WorkerIdleRef {
 	out := map[string][]WorkerIdleRef{}
 	if running == nil {
 		running = func(string) bool { return false }
@@ -154,14 +244,37 @@ func CollectWorkChildren(defs []claudia.AgentDef, running func(name string) bool
 			continue
 		}
 		parent := ResolveEventParent(d, defaultPO, overseer)
+		phase := "idle"
+		if phaseByName != nil {
+			if p := strings.TrimSpace(phaseByName(d.Name)); p != "" {
+				phase = p
+			}
+		}
 		ref := WorkerIdleRef{
 			Name:     d.Name,
 			Parent:   parent,
 			TargetID: d.TargetID,
 			Purpose:  purpose,
-			Phase:    "idle",
+			Phase:    phase,
+			Status:   "running",
 		}
 		out[parent] = append(out[parent], ref)
+	}
+	return out
+}
+
+// FlattenWorkChildren returns a de-duplicated list of all work refs in byParent.
+func FlattenWorkChildren(byParent map[string][]WorkerIdleRef) []WorkerIdleRef {
+	seen := map[string]bool{}
+	var out []WorkerIdleRef
+	for _, kids := range byParent {
+		for _, w := range kids {
+			if w.Name == "" || seen[w.Name] {
+				continue
+			}
+			seen[w.Name] = true
+			out = append(out, w)
+		}
 	}
 	return out
 }

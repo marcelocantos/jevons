@@ -653,6 +653,14 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 		briefPresent = args.BriefPresent(d.Name)
 	}
 
+	// 🎯T171: post-restart short resume only for open-mission implementers
+	// (not PO/boss, not missionless non-AutoStart). Periodic path unchanged.
+	if args.PostRestart {
+		if !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished) {
+			hasMission = false
+		}
+	}
+
 	obs := IdleNudgeObs{
 		Name:           d.Name,
 		Purpose:        purpose,
@@ -670,6 +678,9 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 		PostRestart:    args.PostRestart,
 	}
 	action, reason := ClassifyIdleNudge(obs)
+	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished) {
+		action, reason = IdleNudgeSkip, "not_open_mission_resume"
+	}
 	kind := ClassifyIdleNudgeKind(briefPresent)
 	rep := IdleNudgeReport{
 		Name:        d.Name,
@@ -731,8 +742,8 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 	return rep
 }
 
-// IdleNudgeLoopArgs configures the 🎯T207 event-first supervisor.
-// Auto-nudge ladders are retired: detect + notify parent PO only.
+// IdleNudgeLoopArgs configures the 🎯T171 dual-path supervisor (T207 send path).
+// Steady-state: enter-idle → parent PO only. Restart: dual path (events + short resume).
 type IdleNudgeLoopArgs struct {
 	Server       *Server
 	StateDir     string
@@ -744,12 +755,13 @@ type IdleNudgeLoopArgs struct {
 	Now          func() time.Time
 }
 
-// StartIdleNudgeLoop wires enter-idle tracking and posts daemon-restarted
-// events to parent POs after settle. Safe to call from a goroutine.
-// No-ops when Server or registry is nil.
+// StartIdleNudgeLoop wires enter-idle tracking and, after settle, runs 🎯T171 dual path:
 //
-// Does NOT blast workers with continue. Does NOT exponential-backoff nudge.
-// PO judgment owns resume / re-brief / restart (🎯T207 event-first).
+//  1. daemon-restarted → each parent PO + overseer
+//  2. short fire-and-forget resume → open-mission work agents (T207 brief-or-verify)
+//  3. steady-state worker-idle remains transition-only via emitWorkerIdleToParent
+//
+// Does NOT periodic-poll nudge. Does NOT blast missionless/aside/overseer.
 func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	if args.Server == nil || args.Server.registry == nil {
 		return
@@ -777,6 +789,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	if postDelay == 0 {
 		postDelay = DefaultDaemonRestartNotifyDelay
 	}
+	stateDir := args.StateDir
 
 	// Seed activity so boot seed-idle is not confused with working→idle.
 	for _, d := range args.Server.registry.List() {
@@ -785,7 +798,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		}
 	}
 
-	// Cockpit fleet hook: health only (no auto-nudge sweep).
+	// Cockpit fleet hook: health only (no auto-nudge ladder poll).
 	args.Server.mu.Lock()
 	args.Server.idleNudgeSweep = func(postRestart bool) {
 		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
@@ -794,12 +807,13 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	}
 	args.Server.mu.Unlock()
 
-	// After settle: daemon-restarted → each parent PO (once).
+	// After settle: dual path (events to PO+overseer, short resume to open-mission workers).
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(postDelay):
 		args.Server.NotifyDaemonRestarted(overseer, defaultPO)
+		args.Server.ResumeOpenMissionWorkers(overseer, stateDir, activity)
 	}
 
 	// Light periodic fleet health only (not idle ladder).
@@ -882,8 +896,10 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 	})
 }
 
-// NotifyDaemonRestarted sends daemon-restarted once per parent PO listing
-// that parent's running work children. Fire-and-forget; queues if busy.
+// NotifyDaemonRestarted sends daemon-restarted once per durable parent PO and
+// to the overseer (cockpit), each with a reattached-children summary (🎯T171).
+// Fire-and-forget; queues if busy. Does not short-resume workers — that is
+// ResumeOpenMissionWorkers.
 func (s *Server) NotifyDaemonRestarted(overseer, defaultPO string) {
 	if s == nil || s.registry == nil {
 		return
@@ -898,33 +914,123 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO string) {
 		proc := s.registry.Get(name)
 		return proc != nil && proc.Alive()
 	}
-	byParent := CollectWorkChildren(s.registry.List(), running, defaultPO, overseer)
-	if len(byParent) == 0 {
-		// Still notify default PO so someone owns the restart disposition.
-		byParent[defaultPO] = nil
-	}
-	for parent, kids := range byParent {
-		if parent == "" || parent == overseer {
-			// Overseer is not the product PO; skip unless no other parent.
-			if parent == overseer && defaultPO != overseer {
-				continue
-			}
+	phaseOf := func(name string) string {
+		s.mu.Lock()
+		act := s.idleActivity
+		s.mu.Unlock()
+		if act == nil {
+			return "idle"
 		}
-		text := FormatDaemonRestartedText(parent, kids)
+		if p := act.Get(name).Phase; p != "" {
+			return p
+		}
+		return "idle"
+	}
+	byParent := CollectWorkChildrenWithPhase(s.registry.List(), running, phaseOf, defaultPO, overseer)
+	targets := DaemonRestartEventTargets(byParent, overseer, defaultPO)
+	allKids := FlattenWorkChildren(byParent)
+
+	for _, target := range targets {
+		kids := byParent[target]
+		if target == overseer {
+			// Cockpit gets the full reattached fleet summary.
+			kids = allKids
+		}
+		text := FormatDaemonRestartedText(target, kids)
 		msg := formatIdleNudgeWire(eventDaemonRestarted, text)
-		res, err := s.sendToAgent(parent, msg, false)
+		// Do not interrupt PO/overseer mid-turn — queue if busy.
+		res, err := s.sendToAgent(target, msg, false)
 		if err != nil {
 			slog.Warn("daemon-restarted event deliver failed",
-				"parent", parent, "workers", len(kids), "err", err)
+				"target", target, "workers", len(kids), "err", err)
 			s.logLifecycle(compIdleNudge, "daemon_restarted", "error", map[string]any{
-				"parent": parent, "workers": len(kids), "err": err.Error(),
+				"target": target, "workers": len(kids), "err": err.Error(),
 			})
 			continue
 		}
 		slog.Info("daemon-restarted event delivered",
-			"parent", parent, "workers", len(kids), "status", res.Status, "queued", res.Queued)
+			"target", target, "workers", len(kids), "status", res.Status, "queued", res.Queued)
 		s.logLifecycle(compIdleNudge, "daemon_restarted", "ok", map[string]any{
-			"parent": parent, "workers": len(kids), "status": res.Status, "queued": res.Queued,
+			"target": target, "workers": len(kids), "status": res.Status, "queued": res.Queued,
 		})
 	}
+}
+
+// ResumeOpenMissionWorkers fire-and-forget short-resumes open-mission work
+// agents after restart via the T207 brief-or-verify send path (🎯T171 path 2).
+// Skips aside, overseer, PO/boss, deliberate-stop, design-gated, looks-finished.
+// Interrupt only when the prompt is already in flight (stuck recovery).
+func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *IdleActivityTracker) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	if overseer == "" {
+		overseer = "jevons"
+	}
+	if activity == nil {
+		s.mu.Lock()
+		activity = s.idleActivity
+		s.mu.Unlock()
+	}
+	if activity == nil {
+		activity = NewIdleActivityTracker()
+	}
+	var ledger *IdleNudgeLedger
+	if stateDir != "" {
+		if l, err := OpenIdleNudgeLedger(stateDir); err == nil {
+			ledger = l
+			s.mu.Lock()
+			s.idleNudgeLedger = l
+			s.mu.Unlock()
+		} else {
+			slog.Warn("open-mission resume: ledger open failed", "err", err)
+		}
+	}
+
+	// Fire-and-forget: send path queues when busy; interrupt only on stuck in-flight.
+	push := func(target, event, text string) error {
+		msg := formatIdleNudgeWire(event, text)
+		// interrupt=true: if prompt in flight after reattach, clear stuck turn (T171).
+		// When idle/send succeeds first try, interrupt is never invoked.
+		_, err := s.sendToAgent(target, msg, true)
+		return err
+	}
+
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg:          s.registry,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
+		Now:          time.Now(),
+		PostRestart:  true,
+		OverseerName: overseer,
+		BriefPresent: func(name string) bool {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.fleetBriefed != nil && s.fleetBriefed[name]
+		},
+		MarkBriefed: func(name string) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.fleetBriefed == nil {
+				s.fleetBriefed = map[string]bool{}
+			}
+			s.fleetBriefed[name] = true
+		},
+		// DesignGated / LooksFinished residual: no frontier probe on restart path.
+	})
+
+	delivered, skipped := 0, 0
+	for _, r := range reps {
+		if r.Delivered {
+			delivered++
+		} else {
+			skipped++
+		}
+	}
+	slog.Info("open-mission post-restart resume sweep",
+		"delivered", delivered, "skipped_or_other", skipped, "reports", len(reps))
+	s.logLifecycle(compIdleNudge, "post_restart_resume", "ok", map[string]any{
+		"delivered": delivered, "reports": len(reps),
+	})
 }

@@ -634,8 +634,8 @@ func main() {
 		srv.SetOverseerDownReason(reason)
 	}
 
-	// 🎯T207 event-first: enter-idle → parent PO; daemon-restarted → POs.
-	// No blast-continue to every agent; PO judges resume/re-brief/restart.
+	// 🎯T171 dual-path: daemon-restarted → POs+overseer; short resume →
+	// open-mission workers (T207 brief-or-verify); worker-idle transition → PO.
 	// Also wires fleet-health hook for cockpit (T204).
 	go mcpserver.StartIdleNudgeLoop(ctx, mcpserver.IdleNudgeLoopArgs{
 		Server:       mcpSrv,
@@ -645,7 +645,7 @@ func main() {
 	})
 
 	// 🎯T204: cockpit converge — overseer Alive+Attach+turn-usable; fleet
-	// dead-handle recovery. Worker mission resume is PO via T207 events.
+	// dead-handle recovery. Restart dual-path is T171 (not periodic ladder).
 	srv.SetCockpitHooks(server.CockpitHooks{
 		FleetHealth: func() { mcpSrv.SweepFleetHealth(cfg.OverseerName) },
 		FleetNudge:  func() { mcpSrv.TriggerIdleNudgeSweep() }, // health only

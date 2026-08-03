@@ -48,8 +48,8 @@ func TestResolveEventParent(t *testing.T) {
 func TestFormatDaemonRestartedAndWorkerIdle(t *testing.T) {
 	t.Parallel()
 	workers := []WorkerIdleRef{
-		{Name: "jv-t212", TargetID: "T212", Parent: "jevons-po"},
-		{Name: "jv-t213", TargetID: "T213", Parent: "jevons-po"},
+		{Name: "jv-t212", TargetID: "T212", Parent: "jevons-po", Status: "running", Phase: "idle"},
+		{Name: "jv-t213", TargetID: "T213", Parent: "jevons-po", Status: "running", Phase: "idle"},
 	}
 	text := FormatDaemonRestartedText("jevons-po", workers)
 	if !strings.Contains(text, "jevonsd restarted") {
@@ -57,6 +57,12 @@ func TestFormatDaemonRestartedAndWorkerIdle(t *testing.T) {
 	}
 	if !strings.Contains(text, "jv-t212") || !strings.Contains(text, "🎯T212") {
 		t.Fatal(text)
+	}
+	if !strings.Contains(text, "status=running") || !strings.Contains(text, "phase=idle") {
+		t.Fatal("reattached summary must include status/phase:", text)
+	}
+	if !strings.Contains(text, "phase=idle") {
+		t.Fatal("hint should note reattached may be idle until a turn")
 	}
 	if !strings.Contains(text, "continue") {
 		t.Fatal("hint should mention continue")
@@ -72,6 +78,86 @@ func TestFormatDaemonRestartedAndWorkerIdle(t *testing.T) {
 	}
 	if !strings.Contains(idle, "Your call") {
 		t.Fatal("PO judgment language missing")
+	}
+}
+
+// 🎯T171: daemon-restarted emit targets = each parent PO + overseer (not workers).
+func TestDaemonRestartEventTargetsPOsAndOverseer(t *testing.T) {
+	t.Parallel()
+	byParent := map[string][]WorkerIdleRef{
+		"jevons-po":  {{Name: "jv-a", TargetID: "T1"}},
+		"claudia-po": {{Name: "jv-b", TargetID: "T2"}},
+	}
+	got := DaemonRestartEventTargets(byParent, "jevons", "jevons-po")
+	want := map[string]bool{"jevons-po": true, "claudia-po": true, "jevons": true}
+	if len(got) != 3 {
+		t.Fatalf("targets=%v want 3 (2 POs + overseer)", got)
+	}
+	for _, name := range got {
+		if !want[name] {
+			t.Fatalf("unexpected target %q in %v", name, got)
+		}
+	}
+	// Empty fleet still notifies default PO + overseer.
+	empty := DaemonRestartEventTargets(nil, "jevons", "jevons-po")
+	if len(empty) != 2 || empty[0] != "jevons-po" && empty[1] != "jevons-po" {
+		// order: defaultPO then overseer
+		if !(len(empty) == 2 && empty[0] == "jevons-po" && empty[1] == "jevons") {
+			t.Fatalf("empty fleet targets=%v", empty)
+		}
+	}
+	// Workers must never appear as event recipients.
+	for _, name := range got {
+		if strings.HasPrefix(name, "jv-") {
+			t.Fatalf("worker %q must not receive daemon-restarted event", name)
+		}
+	}
+}
+
+// 🎯T171: open-mission short-resume eligibility (not blast everyone).
+func TestEligibleOpenMissionResume(t *testing.T) {
+	t.Parallel()
+	work := claudia.AgentDef{
+		Name: "jv-t171", Purpose: claudia.PurposeWork, AutoStart: true, TargetID: "T171",
+	}
+	if !EligibleOpenMissionResume(work, true, false, false, false) {
+		t.Fatal("bound AutoStart work should be eligible")
+	}
+	// AutoStart only, no target_id
+	autoOnly := claudia.AgentDef{Name: "jv-orphan", Purpose: claudia.PurposeWork, AutoStart: true}
+	if !EligibleOpenMissionResume(autoOnly, true, false, false, false) {
+		t.Fatal("AutoStart work without target still open-mission residual")
+	}
+	// bound target without AutoStart (running)
+	bound := claudia.AgentDef{Name: "jv-bound", Purpose: claudia.PurposeWork, TargetID: "T9"}
+	if !EligibleOpenMissionResume(bound, true, false, false, false) {
+		t.Fatal("bound target_id without AutoStart should be eligible when running")
+	}
+	// missionless non-AutoStart
+	missionless := claudia.AgentDef{Name: "jv-ephemeral", Purpose: claudia.PurposeWork, AutoStart: false}
+	if EligibleOpenMissionResume(missionless, true, false, false, false) {
+		t.Fatal("missionless non-AutoStart must not resume")
+	}
+	// PO/boss get path-1 events, not short resume
+	po := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork, AutoStart: true}
+	if EligibleOpenMissionResume(po, true, false, false, false) {
+		t.Fatal("PO must not get open-mission short resume")
+	}
+	aside := claudia.AgentDef{Name: "aside-1", Purpose: claudia.PurposeAside, AutoStart: true}
+	if EligibleOpenMissionResume(aside, true, false, false, false) {
+		t.Fatal("aside must skip")
+	}
+	if EligibleOpenMissionResume(work, false, false, false, false) {
+		t.Fatal("not running must skip")
+	}
+	if EligibleOpenMissionResume(work, true, true, false, false) {
+		t.Fatal("deliberate stop must skip")
+	}
+	if EligibleOpenMissionResume(work, true, false, true, false) {
+		t.Fatal("design-gated must skip")
+	}
+	if EligibleOpenMissionResume(work, true, false, false, true) {
+		t.Fatal("looks-finished must skip")
 	}
 }
 
