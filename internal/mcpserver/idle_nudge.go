@@ -18,16 +18,23 @@ import (
 )
 
 // 🎯T207: auto-nudge stuck/idle fleet work agents (esp. after jevonsd restart).
-// Pure classifier + backoff/max ledger + daemon sweep. Delivery is event_push /
-// butler Deliver (resume brief). Achieved-should-reap stays T165/T195.
+// Pure classifier + backoff/max ledger + daemon sweep.
+//
+// Delivery MUST be fire-and-forget (send / queue / interrupt), never
+// butler.PushEvent → fleet.Deliver → WaitForResponse. The latter blocks up to
+// ~10m per agent and serializes the whole fleet wake — live failure mode:
+// one ledger entry, no "idle nudge sweep" summary, remaining workers stay
+// phase=idle forever until a manual PO wave.
+// Achieved-should-reap stays T165/T195.
 
 const (
 	// DefaultIdleNudgeThreshold is how long phase=idle (or no progress) may
 	// sit before a periodic wake is considered.
-	DefaultIdleNudgeThreshold = 5 * time.Minute
+	// Tuned for continuous pressure: 5m left unproductive workers sitting too long.
+	DefaultIdleNudgeThreshold = 2 * time.Minute
 	// DefaultIdleNudgeMax is the maximum automatic nudges per agent before
 	// the product stops looping (owner may still kill). Residual: no infinite loops.
-	DefaultIdleNudgeMax = 3
+	DefaultIdleNudgeMax = 8
 	// DefaultIdleNudgeInterval is how often the daemon re-evaluates the fleet.
 	DefaultIdleNudgeInterval = 1 * time.Minute
 	// DefaultPostRestartDelay lets StartAll settle before the first wake sweep.
@@ -37,12 +44,13 @@ const (
 )
 
 // DefaultIdleNudgeBackoffs is the minimum wait after nudge N before N+1
-// (index 0 = after first nudge). Longer than the idle threshold so we do not
-// thrash agents that already received a resume brief.
+// (index 0 = after first nudge). Must be short enough that a worker which
+// stays phase=idle after a brief is re-pressured within the same session,
+// but long enough to avoid thrashing mid-tool turns that look idle briefly.
 var DefaultIdleNudgeBackoffs = []time.Duration{
-	10 * time.Minute,
-	30 * time.Minute,
-	90 * time.Minute,
+	2 * time.Minute,
+	5 * time.Minute,
+	15 * time.Minute,
 }
 
 // IdleNudgeAction is the pure-policy decision for one agent observation.
@@ -275,6 +283,17 @@ func IdleNudgeEventSource(postRestart bool, kind IdleNudgeKind) string {
 		return "post-restart-wake"
 	}
 	return "idle-nudge"
+}
+
+// formatIdleNudgeWire wraps the resume body like butler.FormatEventPush so
+// workers can distinguish automated idle pressure from owner chat.
+// Kept local so the fire-and-forget send path does not need a Butler.
+func formatIdleNudgeWire(event, text string) string {
+	src := strings.TrimSpace(event)
+	if src == "" {
+		src = "idle-nudge"
+	}
+	return fmt.Sprintf("[event: %s] %s", src, strings.TrimSpace(text))
 }
 
 // SessionLooksBriefed reports whether transcript/user text already carries
@@ -682,14 +701,16 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 			slog.Warn("idle nudge ledger record failed", "agent", d.Name, "err", err)
 		}
 	}
-	// After a successful nudge, mark activity so we do not immediately
-	// re-classify as aged idle before the agent responds.
+	// Reset idle clock only — do NOT claim phase=working. Fake "working"
+	// poisoned re-nudge forever when ACP never observed a real turn (live:
+	// post-nudge workers stayed phase=idle in UI but classifier skipped
+	// in_progress). Backoff/max already prevent thrash.
 	if args.Activity != nil {
 		args.Activity.mu.Lock()
 		if args.Activity.by == nil {
 			args.Activity.by = make(map[string]IdleActivity)
 		}
-		args.Activity.by[d.Name] = IdleActivity{Phase: "working", Updated: now}
+		args.Activity.by[d.Name] = IdleActivity{Phase: "idle", Updated: now}
 		args.Activity.mu.Unlock()
 	}
 	slog.Info("idle nudge delivered",
@@ -742,16 +763,17 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		postDelay = DefaultPostRestartDelay
 	}
 
+	// Fire-and-forget push: send/queue/interrupt, never WaitForResponse.
+	// butler.PushEvent → fleet.Deliver blocks up to replyTimeout (10m) per
+	// agent and serialized post-restart wake to one agent (🎯T207 live fail).
 	push := func(target, event, text string) error {
-		if args.Server.butler == nil {
-			return fmt.Errorf("butler not configured")
-		}
-		_, err := args.Server.butler.PushEvent(target, event, text)
+		msg := formatIdleNudgeWire(event, text)
+		res, err := args.Server.sendToAgent(target, msg, true /* interrupt stuck turns */)
 		if err != nil {
 			return err
 		}
 		args.Server.logLifecycle(compIdleNudge, "nudge", "ok", map[string]any{
-			"target": target, "event": event,
+			"target": target, "event": event, "status": res.Status, "queued": res.Queued,
 		})
 		return nil
 	}
@@ -770,7 +792,16 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		args.Server.fleetBriefed[name] = true
 	}
 
+	// Prevent overlapping sweeps if a future path blocks again.
+	var sweepMu sync.Mutex
+
 	runSweep := func(postRestart bool) {
+		if !sweepMu.TryLock() {
+			slog.Warn("idle nudge sweep skipped: prior sweep still running")
+			return
+		}
+		defer sweepMu.Unlock()
+
 		// Dead-handle rehydrate first so post-restart wake sees running procs.
 		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
 			slog.Info("idle nudge: fleet health before sweep", "report", FormatDeadAgentReport(reps))
@@ -793,6 +824,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 			MarkBriefed:  markBriefed,
 		})
 		var nudged, maxed, failed, fullBrief int
+		skipped := map[string]int{}
 		for _, r := range reps {
 			switch {
 			case r.Delivered:
@@ -804,6 +836,8 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 				maxed++
 			case r.Error != "":
 				failed++
+			case r.Action == IdleNudgeSkip:
+				skipped[r.Reason]++
 			}
 		}
 		slog.Info("idle nudge sweep",
@@ -813,6 +847,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 			"full_brief", fullBrief,
 			"maxed", maxed,
 			"failed", failed,
+			"skipped", skipped,
 		)
 	}
 

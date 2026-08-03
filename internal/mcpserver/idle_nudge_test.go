@@ -362,11 +362,14 @@ func TestSweepIdleNudgesPostRestartFullBriefThenContinue(t *testing.T) {
 		t.Fatalf("second push should be short continue: %+v", pushed)
 	}
 
-	// Max out: third+fourth would hit max after DefaultIdleNudgeMax.
-	_ = ledger.Record("jv-t207-idle", later)
-	_ = ledger.Record("jv-t207-idle", later) // count now 3 (1+1+1 from first two sweeps + one? first Record was 1, second sweep Recorded → 2, plus 2 = 4)
-	// Re-read: first sweep Record→1, second→2, then we added 2 more →4.
-	// Max is 3 so classify maxed.
+	// Max out: pad ledger count to DefaultIdleNudgeMax.
+	for {
+		c, _ := ledger.Get("jv-t207-idle")
+		if c >= DefaultIdleNudgeMax {
+			break
+		}
+		_ = ledger.Record("jv-t207-idle", later)
+	}
 	activity.by["jv-t207-idle"] = IdleActivity{Phase: "idle", Updated: later.Add(-10 * time.Minute)}
 	far := later.Add(2 * time.Hour)
 	reps3 := SweepIdleNudges(IdleNudgeSweepArgs{
@@ -379,5 +382,54 @@ func TestSweepIdleNudgesPostRestartFullBriefThenContinue(t *testing.T) {
 		if r.Name == "jv-t207-idle" && r.Action != IdleNudgeMaxed {
 			t.Fatalf("want maxed after max nudges: %+v", r)
 		}
+	}
+
+	// After a successful nudge, activity stays phase=idle (clock reset only).
+	// Claiming "working" without ACP evidence poisoned live re-nudge.
+	if ph := activity.Get("jv-t207-idle").Phase; ph != "idle" {
+		t.Fatalf("post-nudge activity phase=%q want idle (not fake working)", ph)
+	}
+}
+
+// 🎯T207: empty target_id work agents remain eligible (no_open_mission is not
+// the live skip for jv-* rows that never bound T198).
+func TestSweepIdleNudgesEmptyTargetIDWorkEligible(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t198-frontier-engaged", WorkDir: dir, SessionID: "s1",
+		Purpose: claudia.PurposeWork, Materialized: true, Provider: "grok", AutoStart: true,
+		// TargetID empty — live common case
+	}); err != nil {
+		t.Fatal(err)
+	}
+	activity := NewIdleActivityTracker()
+	now := time.Unix(3000, 0)
+	activity.by = map[string]IdleActivity{
+		"jv-t198-frontier-engaged": {Phase: "idle", Updated: now.Add(-10 * time.Minute)},
+	}
+	var pushed int
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg: reg, Activity: activity, Now: now, OverseerName: "jevons",
+		Push: func(target, event, text string) error {
+			pushed++
+			return nil
+		},
+		ProcessRunning: func(name string) bool { return true },
+	})
+	if pushed != 1 {
+		t.Fatalf("pushed=%d want 1 for empty target_id idle work agent; reps=%+v", pushed, reps)
+	}
+}
+
+func TestFormatIdleNudgeWire(t *testing.T) {
+	t.Parallel()
+	got := formatIdleNudgeWire("idle-nudge-brief", "hello")
+	if got != "[event: idle-nudge-brief] hello" {
+		t.Fatalf("got %q", got)
 	}
 }
