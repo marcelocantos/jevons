@@ -81,13 +81,12 @@
   }
 
   // Pure: host leave policy (🎯T187).
-  // - overTip: never schedule (still on card)
-  // - tipEngaged: host leave alone does not dismiss; tip leave owns dismiss
-  // - else: schedule gap grace for host→tip bridge
+  // - overTip: never schedule (still on card — leave-host alone must not dismiss)
+  // - else: schedule gap grace for host→tip bridge, or walk-away after tip→host
+  // tipEngaged does not block host leave when !overTip (would stick the card open).
   function shouldScheduleHideOnHostLeave(state) {
     var s = state || {};
     if (s.overTip) return false;
-    if (s.tipEngaged) return false;
     return true;
   }
 
@@ -564,7 +563,7 @@
         return;
       }
       overHost = false;
-      // 🎯T187: after tip engaged, leave-host alone never dismisses.
+      // 🎯T187: leave-host alone never dismisses while overTip; otherwise gap grace.
       if (!shouldScheduleHideOnHostLeave(hoverState())) {
         clearHideTimer();
         return;

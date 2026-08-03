@@ -536,6 +536,163 @@ test('singleton: showTip path dismisses peers without attach sticky (🎯T203)',
   assert.strictEqual(IT.openTipsCount(), 0);
 });
 
+// ─── 🎯T187: no auto-timeout while over tip; gap grace only ─────────────────
+
+test('T187 pure: shouldRunScheduledHide never true while overTip', function () {
+  assert.strictEqual(IT.shouldRunScheduledHide({ overTip: true, overHost: false }), false);
+  assert.strictEqual(IT.shouldRunScheduledHide({ overTip: true, overHost: true }), false);
+  assert.strictEqual(IT.shouldRunScheduledHide({ overTip: false, overHost: true }), false);
+  assert.strictEqual(IT.shouldRunScheduledHide({ overTip: false, overHost: false }), true);
+  assert.strictEqual(
+    IT.shouldScheduleHideOnHostLeave({ overTip: true, tipEngaged: true }),
+    false,
+    'leave-host alone while over tip must not schedule'
+  );
+  assert.strictEqual(
+    IT.shouldScheduleHideOnHostLeave({ overTip: false, tipEngaged: true }),
+    true,
+    'walk-away after tip→host still schedules'
+  );
+  assert.strictEqual(
+    IT.shouldScheduleHideOnTipLeave({ overHost: true, overTip: false }),
+    false
+  );
+  assert.strictEqual(
+    IT.shouldScheduleHideOnTipLeave({ overHost: false, overTip: false }),
+    true
+  );
+});
+
+test('T187 hideSchedule: gap-only grace, no setInterval, neverWhileOverTip', function () {
+  const hs = IT.hideSchedule();
+  assert.strictEqual(hs.usesInterval, false, 'no setInterval auto-hide');
+  assert.strictEqual(hs.gapOnly, true);
+  assert.strictEqual(hs.neverWhileOverTip, true);
+  assert.strictEqual(hs.usesTimeout, true);
+  assert.ok(hs.graceMs >= 300 && hs.graceMs <= 500, 'product grace 300–500ms: ' + hs.graceMs);
+  assert.strictEqual(IT.HIDE_GRACE_MS, hs.graceMs);
+});
+
+test('T187 source has no setInterval auto-hide path', function () {
+  const src = fs.readFileSync(path.join(__dirname, 'instant_tip.js'), 'utf8');
+  assert.ok(!/setInterval\s*\(/.test(src), 'no setInterval in instant_tip.js');
+  assert.ok(src.indexOf('shouldRunScheduledHide') >= 0);
+  assert.ok(src.indexOf('neverWhileOverTip') >= 0 || src.indexOf('overTip') >= 0);
+  assert.ok(/HIDE_GRACE_MS\s*=\s*([3-5]\d{2})/.test(src), 'HIDE_GRACE_MS in 300–500');
+});
+
+test('T187: overTip true → scheduled hide does not run', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const timers = mockTimers();
+  const tip = IT.attach(host, 'Sticky card — no idle timeout', {
+    doc: doc,
+    mount: doc.body,
+    sticky: true,
+    hideGraceMs: 50,
+    timers: timers,
+    placement: IT.PLACE_LEFT_OF_POINTER,
+    className: IT.CARD_CLASS,
+    clampSelectors: [],
+  });
+  host.dispatch('pointerenter', { clientX: 500, clientY: 200 });
+  assert.strictEqual(IT.isVisible(tip), true);
+
+  // Leave host then enter tip (bridge).
+  host.dispatch('pointerleave');
+  assert.ok(timers.pending.filter(Boolean).length >= 1, 'gap grace armed');
+  tip.dispatch('pointerenter');
+  assert.strictEqual(tip._instantTipHoverState().overTip, true);
+  assert.strictEqual(tip._instantTipHoverState().tipEngaged, true);
+
+  // While over tip, force-arm a hide timer as if something re-scheduled — callback must no-op.
+  // Entering tip should have cancelled; flush any cancelled slots then verify still open.
+  timers.flush();
+  assert.strictEqual(IT.isVisible(tip), true, 'still open after grace flush while overTip');
+
+  // leave-host alone while over tip must not hide (re-dispatch host leave).
+  host.dispatch('pointerleave');
+  assert.strictEqual(IT.isVisible(tip), true, 'leave-host alone while over tip keeps open');
+  assert.strictEqual(
+    timers.pending.filter(Boolean).length,
+    0,
+    'no hide timer while overTip'
+  );
+  timers.flush();
+  assert.strictEqual(IT.isVisible(tip), true, 'still open after idle flush over tip');
+
+  // Wheel over tip must not dismiss.
+  tip.dispatch('wheel', { deltaY: 40 });
+  assert.strictEqual(IT.isVisible(tip), true);
+  assert.strictEqual(tip._instantTipHoverState().overTip, true);
+  timers.flush();
+  assert.strictEqual(IT.isVisible(tip), true, 'wheel does not auto-hide');
+
+  // Real dismiss: leave tip (not over host).
+  tip.dispatch('pointerleave');
+  assert.strictEqual(IT.isVisible(tip), true, 'grace after tip leave');
+  timers.flush();
+  assert.strictEqual(IT.isVisible(tip), false, 'hidden after leave tip + grace');
+});
+
+test('T187: after tip entered, leave-host alone does not hide', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const timers = mockTimers();
+  const tip = IT.attach(host, 'Engaged card', {
+    doc: doc, mount: doc.body, sticky: true, hideGraceMs: 40, timers: timers,
+  });
+  host.dispatch('pointerenter');
+  tip.dispatch('pointerenter');
+  assert.strictEqual(tip._instantTipHoverState().tipEngaged, true);
+  assert.strictEqual(tip._instantTipHoverState().overTip, true);
+
+  // Host leave while still over tip — must not arm hide.
+  host.dispatch('pointerleave');
+  assert.strictEqual(IT.isVisible(tip), true);
+  assert.ok(
+    timers.pending.filter(Boolean).length === 0,
+    'no grace timer when overTip on host leave'
+  );
+
+  // Nested leave (relatedTarget still inside tip) ignored.
+  const child = mockEl('div');
+  tip.appendChild(child);
+  tip.contains = function (n) { return n === tip || n === child || (tip.children && tip.children.indexOf(n) >= 0); };
+  tip.dispatch('pointerleave', { relatedTarget: child });
+  assert.strictEqual(IT.isVisible(tip), true, 'nested relatedTarget stay open');
+  assert.strictEqual(tip._instantTipHoverState().overTip, true);
+});
+
+test('T187: leave tip after engagement hides; walk-away via host after tip also hides', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const timers = mockTimers();
+  const tip = IT.attach(host, 'Walk away', {
+    doc: doc, mount: doc.body, sticky: true, hideGraceMs: 30, timers: timers,
+  });
+  host.contains = function (n) { return n === host; };
+  tip.contains = function (n) { return n === tip; };
+
+  host.dispatch('pointerenter');
+  tip.dispatch('pointerenter');
+  // Return to host from tip (relatedTarget = host).
+  tip.dispatch('pointerleave', { relatedTarget: host });
+  assert.strictEqual(IT.isVisible(tip), true, 'tip→host stays open');
+  assert.strictEqual(tip._instantTipHoverState().overHost, true);
+  assert.strictEqual(tip._instantTipHoverState().overTip, false);
+
+  // Leave host to void — must schedule hide (not stuck).
+  host.dispatch('pointerleave');
+  assert.strictEqual(IT.isVisible(tip), true, 'grace');
+  assert.ok(timers.pending.filter(Boolean).length >= 1, 'walk-away schedules hide');
+  timers.flush();
+  assert.strictEqual(IT.isVisible(tip), false, 'hidden after tip→host→leave host');
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);
