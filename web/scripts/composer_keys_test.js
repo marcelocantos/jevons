@@ -304,6 +304,42 @@ test('T132 Alt+Enter empty → pop_last; non-empty → noop (no steal)', functio
   );
 });
 
+// 🎯T192: seed-shaped residue must match truly empty for Alt+Enter.
+// Break was isEffectivelyEmpty missing bare "." / ZWSP-only / partial thrash
+// after EMPTY_SEED strip — composer looked empty (or seed-only) but noop'd.
+test('T192 Alt+Enter seed-shaped → pop_last; non-seed draft → noop', function () {
+  const seedShaped = [
+    '',
+    WC.EMPTY_SEED,
+    '.',
+    '\u200B',
+    '\u200B.',
+    '.\u200B',
+    WC.EMPTY_SEED + WC.EMPTY_SEED,
+  ];
+  seedShaped.forEach(function (v) {
+    assert.ok(WC.isEffectivelyEmpty(v), 'isEffectivelyEmpty: ' + JSON.stringify(v));
+    assert.strictEqual(
+      CK.classifyEnterAction('Enter', { altKey: true }, {
+        composerEmpty: WC.isEffectivelyEmpty(v),
+      }),
+      'pop_last',
+      'Alt+Enter pop_last for ' + JSON.stringify(v)
+    );
+  });
+  const drafts = ['real draft', '?', 'Hello.', WC.EMPTY_SEED + 'Are we done?'];
+  drafts.forEach(function (v) {
+    assert.ok(!WC.isEffectivelyEmpty(v), 'not empty: ' + JSON.stringify(v));
+    assert.strictEqual(
+      CK.classifyEnterAction('Enter', { altKey: true }, {
+        composerEmpty: WC.isEffectivelyEmpty(v),
+      }),
+      'noop',
+      'Alt+Enter noop for draft ' + JSON.stringify(v)
+    );
+  });
+});
+
 test('T132 plain Enter → send; Shift+Enter → newline; Meta is not interrupt', function () {
   assert.strictEqual(CK.classifyEnterAction('Enter', {}, { composerEmpty: false }), 'send');
   assert.strictEqual(CK.classifyEnterAction('Enter', { metaKey: true }, {}), 'send');
@@ -357,6 +393,17 @@ test('T132 index.html wires Ctrl+Enter interrupt and Alt+Enter pop_last', functi
     !/interrupt\s*=\s*!!\s*\(?e\.altKey/.test(html) &&
       !/interrupt:\s*!!e\.altKey/.test(html),
     'must not set interrupt from altKey alone'
+  );
+  // 🎯T192: empty check must use isEffectivelyEmpty (not bare !value / trim-only).
+  assert.ok(
+    /composerEmpty[\s\S]{0,120}isEffectivelyEmpty/.test(html) ||
+      /isEffectivelyEmpty\(input\.value\)/.test(html),
+    'composerEmpty must come from WisprContext.isEffectivelyEmpty(input.value)'
+  );
+  assert.ok(
+    !/composerEmpty\s*=\s*!\s*input\.value/.test(html) &&
+      !/composerEmpty\s*=\s*!\s*String\(input\.value/.test(html),
+    'must not set composerEmpty from bare !input.value (seed looks non-empty)'
   );
 });
 

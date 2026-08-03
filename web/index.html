@@ -4349,6 +4349,9 @@ function autoGrow() {
 // 🎯T113: plain Enter enqueues while busy; only Control+Enter interjects.
 // 🎯T132: Ctrl+Enter = immediate send (never Alt); empty Alt+Enter pops
 // last owner message into the composer as the interjection/edit seed.
+// 🎯T192: composerEmpty via isEffectivelyEmpty — seed-shaped residue
+// (EMPTY_SEED, bare ".", ZWSP-only, partial thrash) counts as empty, not
+// !input.value / trim-only (those treat the hidden seed as a real draft).
 input.addEventListener('keydown', e => {
   if (e.key === 'Enter') {
     const composerEmpty = (typeof WisprContext !== 'undefined' && WisprContext.isEffectivelyEmpty)

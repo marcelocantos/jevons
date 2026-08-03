@@ -161,16 +161,44 @@
     return s;
   }
 
-  /**
-   * Wire-bound text: seed removed. Does not invent/fix grammar or `?`.
-   * Caller still applies .trim() as product policy requires.
-   */
-  function prepareWireText(value) {
-    return stripSeed(value);
+  // Zero-width / format chars that are not all covered by JS \s (notably
+  // U+200B ZWSP — the EMPTY_SEED flanks). Partial seed thrash leaves these
+  // behind and must not count as a real draft (🎯T192).
+  const INVISIBLE_FORMAT_RE = /[\u200B\u200C\u200D\u2060\uFEFF]/g;
+
+  function stripInvisibleFormat(value) {
+    return String(value == null ? '' : value).replace(INVISIBLE_FORMAT_RE, '');
   }
 
+  /**
+   * True when remaining text is only seed-shaped residue: empty/whitespace,
+   * zero-width format, and/or a lone period (EMPTY_SEED's sentence anchor).
+   * Real drafts like "?" or "Hello." are not residue.
+   */
+  function isSeedShapedResidue(value) {
+    const s = collapseWs(stripInvisibleFormat(value));
+    return s === '' || s === '.';
+  }
+
+  /**
+   * Wire-bound text: seed + seed-shaped residue removed. Does not invent
+   * or fix grammar/`?`. Caller still applies .trim() as product policy.
+   * Bare "." / ZWSP-only wire as empty so Alt+Enter empty and send-empty
+   * agree (🎯T192).
+   */
+  function prepareWireText(value) {
+    const s = stripSeed(value);
+    if (isSeedShapedResidue(s)) return '';
+    return s;
+  }
+
+  /**
+   * No real owner draft: '', whitespace, EMPTY_SEED, ZWSP-only, bare ".",
+   * or partial seed thrash (ZWSP+period combinations without other text).
+   * Used for Alt+Enter empty, reseeding, and seed-only CSS (🎯T192).
+   */
   function isEffectivelyEmpty(value) {
-    return collapseWs(prepareWireText(value)) === '';
+    return isSeedShapedResidue(stripSeed(value));
   }
 
   /**
@@ -239,6 +267,8 @@
     hasSeedPrefix: hasSeedPrefix,
     seedPrefixLen: seedPrefixLen,
     stripSeed: stripSeed,
+    stripInvisibleFormat: stripInvisibleFormat,
+    isSeedShapedResidue: isSeedShapedResidue,
     prepareWireText: prepareWireText,
     isEffectivelyEmpty: isEffectivelyEmpty,
     applySeedIfEmpty: applySeedIfEmpty,

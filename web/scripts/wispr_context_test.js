@@ -111,6 +111,10 @@ test('prepareWireText strips seed; preserves real user ? and punctuation', funct
   // Seed-only is effectively empty after strip.
   assert.ok(WC.isEffectivelyEmpty(WC.EMPTY_SEED));
   assert.ok(!WC.isEffectivelyEmpty('?'));
+  // 🎯T192: seed-shaped residue wires empty (not a real draft period).
+  assert.strictEqual(WC.prepareWireText('.'), '');
+  assert.strictEqual(WC.prepareWireText('\u200B'), '');
+  assert.strictEqual(WC.prepareWireText('\u200B.'), '');
 });
 
 test('stripSeed is prefix-only (no grammar fixer)', function () {
@@ -143,8 +147,11 @@ test('isSeedOnly / needsSeedOnlyClass: seed-only vs real draft', function () {
   // Whitespace-only still effectively empty → hide if present as value.
   assert.ok(WC.isSeedOnly('   '));
   assert.ok(WC.needsSeedOnlyClass('   '));
-  // Real user punctuation alone is not seed-only.
-  assert.ok(!WC.isSeedOnly('.'));
+  // 🎯T192: bare seed-period / ZWSP residue counts as seed-only (hide + empty).
+  assert.ok(WC.isSeedOnly('.'), 'bare period is seed-shaped empty');
+  assert.ok(WC.needsSeedOnlyClass('.'));
+  assert.ok(WC.isSeedOnly('\u200B'), 'ZWSP-only is seed-shaped empty');
+  // Real user punctuation that is not the seed period is not seed-only.
   assert.ok(!WC.isSeedOnly('?'));
 });
 
@@ -174,6 +181,42 @@ test('seed-only class state flips when real draft appears; strip unchanged', fun
   assert.ok(!WC.needsSeedOnlyClass(WC.applySeedIfEmpty(withReal)));
   assert.strictEqual(WC.prepareWireText(withReal), 'What about T133?');
   assert.strictEqual(WC.prepareWireText(WC.EMPTY_SEED), '');
+});
+
+// ── 🎯T192 seed-shaped empty (Alt+Enter / composerEmpty) ─────────
+
+test('T192 isEffectivelyEmpty: EMPTY_SEED, bare ., ZWSP, partial thrash', function () {
+  const emptyish = [
+    '',
+    '   ',
+    WC.EMPTY_SEED,
+    '.',
+    '\u200B',
+    '\u200B\u200B',
+    '\u200B.',
+    '.\u200B',
+    WC.EMPTY_SEED + WC.EMPTY_SEED,
+    ' \u200B. \u200B ',
+  ];
+  emptyish.forEach(function (v) {
+    assert.ok(
+      WC.isEffectivelyEmpty(v),
+      'expected effectively empty: ' + JSON.stringify(v)
+    );
+    assert.strictEqual(
+      WC.prepareWireText(v),
+      '',
+      'wire empty for seed-shaped: ' + JSON.stringify(v)
+    );
+  });
+  // Real drafts stay non-empty.
+  assert.ok(!WC.isEffectivelyEmpty('?'));
+  assert.ok(!WC.isEffectivelyEmpty('hello'));
+  assert.ok(!WC.isEffectivelyEmpty(WC.EMPTY_SEED + 'hi'));
+  assert.ok(!WC.isEffectivelyEmpty('Hello.'));
+  assert.ok(!WC.isEffectivelyEmpty('..'));
+  assert.strictEqual(WC.prepareWireText(WC.EMPTY_SEED + 'hi'), 'hi');
+  assert.strictEqual(WC.prepareWireText('Hello.'), 'Hello.');
 });
 
 // ── index.html wiring ────────────────────────────────────────────
