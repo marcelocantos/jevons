@@ -106,7 +106,6 @@ test('T208 quiet inspect re-paint does not setRhsBottomTab transcript', function
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const renderFn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
   assert.ok(renderFn, 'renderAgentInspect present before loadAgentTranscript');
-  // Ban the real call (not comment mentions of the helper name).
   assert.ok(!/setRhsBottomTab\s*\(/.test(renderFn[0]),
     'renderAgentInspect must not call setRhsBottomTab (quiet poll steals Frontier)');
   // selectAgent still switches to Transcript on explicit owner pick.
@@ -124,41 +123,41 @@ test('T208 quiet inspect re-paint does not setRhsBottomTab transcript', function
     'owner tab click still sets rhsBottomTab');
 });
 
-// 🎯T157: RHS inspect assistant bodies use sealed markdown, not plain textContent-only.
-test('T157 renderAgentInspect paints assistant via parseAssistantMarkdown', function () {
+// 🎯T205 / T157: RHS inspect uses shared paintBody + .msg chrome (not .ai-turn fork).
+test('T205 renderAgentInspect uses paintBody + .msg (not .ai-turn log panel)', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const fn = html.match(/function renderAgentInspect\([\s\S]*?\n\}/);
-  assert.ok(fn, 'renderAgentInspect present');
+  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
+  assert.ok(fn, 'renderAgentInspect present before loadAgentTranscript');
   const body = fn[0];
-  assert.ok(body.indexOf('parseAssistantMarkdown') >= 0,
-    'assistant paint must call parseAssistantMarkdown');
-  assert.ok(body.indexOf('paintInspectLineBody') >= 0 || body.indexOf('innerHTML') >= 0,
-    'assistant path sets HTML (not text-only for all roles)');
-  // Must not force every line through textContent only.
-  assert.ok(!/text\.textContent\s*=\s*line\.text/.test(body),
-    'must not paint all turns with textContent = line.text');
-  // CSS: assistant not force-pre-wrap; user may pre-wrap; markdown chrome present.
-  assert.ok(html.indexOf('#agent-inspect-body .ai-turn.assistant .ai-text') >= 0,
-    'assistant .ai-text scoped styles');
-  assert.ok(html.indexOf('#agent-inspect-body .ai-turn.user .ai-text') >= 0,
-    'user .ai-text pre-wrap scope');
-  assert.ok(
-    /#agent-inspect-body[\s\S]{0,1200}\.ai-turn\.assistant[\s\S]{0,200}pre/.test(html) ||
-      html.indexOf('#agent-inspect-body .ai-turn.assistant .ai-text pre') >= 0,
-    'inspect mirrors code/pre styles for assistant markdown',
-  );
-  assert.ok(
-    html.indexOf('#agent-inspect-body .ai-turn.assistant .ai-text table') >= 0 ||
-      html.indexOf('#agent-inspect-body .ai-turn.assistant .ai-text strong') >= 0,
-    'inspect mirrors table/strong styles',
-  );
+  assert.ok(body.indexOf('paintBody') >= 0,
+    'must paint via shared paintBody (main sealed path)');
+  assert.ok(body.indexOf('className = \'msg ') >= 0 || body.indexOf('className = "msg ') >= 0 ||
+    body.indexOf("className = 'msg '") >= 0 || /className\s*=\s*['"]msg\s/.test(body) ||
+    body.indexOf("'msg '") >= 0 || body.indexOf('"msg "') >= 0 || body.indexOf('msg ') >= 0,
+    'must use .msg bubble class');
+  assert.ok(body.indexOf('msg-body') >= 0, 'must use .msg-body');
+  assert.ok(body.indexOf('ai-turn') < 0, 'must not build .ai-turn log-panel chrome');
+  assert.ok(body.indexOf('applyAfterUpdate') >= 0 || body.indexOf('shouldPin') >= 0,
+    'must apply stick/free after update (not unconditional pin only)');
+  // No unconditional always-on pin without tracking gate.
+  assert.ok(!/agentInspectBody\.scrollTop\s*=\s*agentInspectBody\.scrollHeight\s*;\s*\n\}/.test(body),
+    'must not unconditionally set scrollTop = scrollHeight at end of render');
+  // CSS: no mirrored markdown fork under .ai-turn
+  assert.ok(html.indexOf('#agent-inspect-body .ai-turn.assistant .ai-text') < 0,
+    'must not mirror .msg.jevons under .ai-turn CSS fork');
+  assert.ok(html.indexOf('overflow-anchor: none') >= 0 || html.indexOf('overflow-anchor:none') >= 0,
+    'inspect scroll container uses overflow-anchor:none like main');
+  assert.ok(/#agent-inspect-body\s*\{[^}]*overflow-anchor\s*:\s*none/.test(html),
+    '#agent-inspect-body must set overflow-anchor:none');
+  // Shared chrome: global .msg.jevons styles remain; inspect hosts .msg
+  assert.ok(html.indexOf('.msg.jevons pre') >= 0, 'main .msg.jevons chrome still present');
+  assert.ok(html.indexOf('createScrollFollow') >= 0, 'wires createScrollFollow');
+  assert.ok(html.indexOf('linesFingerprint') >= 0, 'poll fingerprint skip path');
 });
 
-test('T157 paintInspectLinesHTML fixture: bold + heading + fence → real elements', function () {
-  // Stand-in for parseAssistantMarkdown (marked is CDN-only in product HTML).
+test('T205 paintInspectLinesHTML: .msg chrome + bold/heading/fence + user path', function () {
   function parseLikeSeal(md) {
     const raw = String(md || '');
-    // Minimal tags covering acceptance: strong, heading, pre/code fence.
     let out = raw;
     out = out.replace(/^#\s+(.+)$/m, '<h1>$1</h1>');
     out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -166,48 +165,139 @@ test('T157 paintInspectLinesHTML fixture: bold + heading + fence → real elemen
     if (out === raw) out = '<p>' + AT.escapeHtml(raw) + '</p>';
     return out;
   }
+  function userPath(t) {
+    // Stand-in for renderUserText: escape; promote `> quote` lines.
+    const s = String(t || '');
+    if (/^>\s?/m.test(s)) {
+      return s.split('\n').map(function (line) {
+        const m = line.match(/^\s*>\s?(.*)$/);
+        return m ? '<blockquote>' + AT.escapeHtml(m[1]) + '</blockquote>' : AT.escapeHtml(line);
+      }).join('');
+    }
+    return AT.escapeHtml(s);
+  }
   const lines = [
     { role: 'user', text: 'plain **not** md' },
     {
       role: 'assistant',
       text: '# Status\n\nDone with **bold** work.\n\n```js\nconst x = 1;\n```',
     },
+    { role: 'user', text: '> quoted line' },
   ];
-  const html = AT.paintInspectLinesHTML(lines, { parseAssistantMarkdown: parseLikeSeal });
-  assert.ok(html.indexOf('class="ai-turn assistant"') >= 0, 'assistant turn wrapper');
+  const html = AT.paintInspectLinesHTML(lines, {
+    parseAssistantMarkdown: parseLikeSeal,
+    renderUserText: userPath,
+  });
+  assert.ok(html.indexOf('class="msg jevons"') >= 0, 'assistant → .msg.jevons');
+  assert.ok(html.indexOf('class="msg user"') >= 0, 'user → .msg.user');
+  assert.ok(html.indexOf('class="msg-body"') >= 0, '.msg-body present');
+  assert.ok(html.indexOf('ai-turn') < 0, 'no .ai-turn in fixture');
   assert.ok(html.indexOf('<h1>') >= 0 && html.indexOf('Status') >= 0, 'heading element');
   assert.ok(html.indexOf('<strong>') >= 0 && html.indexOf('bold') >= 0, 'strong element');
   assert.ok(html.indexOf('<pre>') >= 0 && html.indexOf('<code>') >= 0, 'fence → pre/code');
-  // User stays escaped plain (no strong from **not**).
-  assert.ok(html.indexOf('class="ai-turn user"') >= 0, 'user turn wrapper');
-  const userChunk = html.match(/<div class="ai-turn user">[\s\S]*?<\/div><\/div>/);
-  assert.ok(userChunk, 'user turn chunk');
-  assert.ok(/plain \*\*not\*\* md/.test(userChunk[0]),
-    'user body keeps literal stars (escaped plain), not <strong>');
-  assert.ok(userChunk[0].indexOf('<strong>') < 0,
+  // User plain keeps literal stars (escaped), not <strong> from markdown.
+  const userChunks = html.match(/<div class="msg user">[\s\S]*?<\/div>/g) || [];
+  assert.ok(userChunks.length >= 2, 'two user turns');
+  assert.ok(/plain \*\*not\*\* md/.test(userChunks[0]),
+    'user body keeps literal stars, not <strong>');
+  assert.ok(userChunks[0].indexOf('<strong>') < 0,
     'user turn must not gain <strong> from markdown');
+  assert.ok(userChunks[1].indexOf('<blockquote>') >= 0, 'user quotes via renderUserText');
 });
 
-test('T157 paintInspectLineBody roles', function () {
+test('T205 paintInspectLineBody roles + msgRole', function () {
   const md = function (t) { return '<p><strong>' + t + '</strong></p>'; };
   const a = AT.paintInspectLineBody('assistant', 'hi', { parseAssistantMarkdown: md });
   assert.strictEqual(a.mode, 'html');
+  assert.strictEqual(a.msgRole, 'jevons');
   assert.ok(a.content.indexOf('<strong>') >= 0);
+  // Without renderUserText: plain text path.
   const u = AT.paintInspectLineBody('user', '**x**', { parseAssistantMarkdown: md });
   assert.strictEqual(u.mode, 'text');
+  assert.strictEqual(u.msgRole, 'user');
   assert.strictEqual(u.content, '**x**');
+  // With renderUserText: shared user-body HTML path.
+  const u2 = AT.paintInspectLineBody('user', '> q', {
+    renderUserText: function (t) { return '<blockquote>' + t.slice(2) + '</blockquote>'; },
+  });
+  assert.strictEqual(u2.mode, 'html');
+  assert.ok(u2.content.indexOf('<blockquote>') >= 0);
+  assert.strictEqual(AT.inspectToMsgRole('assistant'), 'jevons');
+  assert.strictEqual(AT.inspectToMsgRole('user'), 'user');
+  assert.strictEqual(AT.inspectToMsgRole('other'), 'status');
+});
+
+// 🎯T205 stickiness pure policy (follow/preserve).
+test('T205 scroll follow: track pins; free preserves prevTop', function () {
+  const f = AT.createScrollFollow({ eps: 16 });
+  assert.strictEqual(f.getMode(), 'track');
+  assert.strictEqual(f.shouldPin(), true);
+  assert.strictEqual(f.nextScrollTop({ scrollHeight: 900, prevTop: 40 }), 900,
+    'track → pin to scrollHeight');
+
+  f.leaveTrack({ scrollTop: 100, scrollHeight: 900, clientHeight: 200 });
+  assert.strictEqual(f.getMode(), 'free');
+  assert.strictEqual(f.shouldPin(), false);
+  assert.strictEqual(f.nextScrollTop({ scrollHeight: 1200, prevTop: 100 }), 100,
+    'free → preserve prevTop (not yanked to bottom)');
+
+  // Wheel up leaves track; wheel down may re-enter when at bottom.
+  f.enterTrack();
+  f.onWheel(-12, { scrollTop: 50, scrollHeight: 500, clientHeight: 200 });
+  assert.strictEqual(f.getMode(), 'free');
+
+  // applyAfterUpdate against fake el
+  const el = {
+    scrollTop: 80,
+    scrollHeight: 1000,
+    clientHeight: 300,
+  };
+  f.enterTrack();
+  f.applyAfterUpdate(el, 80);
+  assert.strictEqual(el.scrollTop, 1000, 'track apply pins');
+
+  f.leaveTrack({ scrollTop: 200, scrollHeight: 1000, clientHeight: 300 });
+  el.scrollTop = 200;
+  el.scrollHeight = 1400;
+  f.applyAfterUpdate(el, 200);
+  assert.strictEqual(el.scrollTop, 200, 'free apply preserves prevTop');
+});
+
+test('T205 scroll follow: geometry re-enter only after leaving ε band', function () {
+  const f = AT.createScrollFollow({ eps: 16 });
+  // Leave while still near bottom → mayEnter false until user clears band.
+  const near = { scrollTop: 484, scrollHeight: 500, clientHeight: 10 }; // dist=6
+  f.leaveTrack(near);
+  assert.strictEqual(f.getMode(), 'free');
+  // Still in band: tryEnter should not re-arm track.
+  f.tryEnterFromGeometry(near);
+  assert.strictEqual(f.getMode(), 'free', 'still in ε band after leave → stay free');
+  // Clear band then return to bottom.
+  const away = { scrollTop: 0, scrollHeight: 500, clientHeight: 100 }; // dist large
+  f.tryEnterFromGeometry(away);
+  assert.strictEqual(f.getMode(), 'free'); // not at bottom
+  const bottom = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 }; // dist=0
+  f.tryEnterFromGeometry(bottom);
+  assert.strictEqual(f.getMode(), 'track', 'after leaving band, at-bottom re-enters track');
+});
+
+test('T205 linesFingerprint stable; changes on new turn', function () {
+  const a = [
+    { role: 'user', text: 'hi' },
+    { role: 'assistant', text: 'yo' },
+  ];
+  const b = a.concat([{ role: 'assistant', text: 'more' }]);
+  assert.strictEqual(AT.linesFingerprint(a), AT.linesFingerprint(a));
+  assert.notStrictEqual(AT.linesFingerprint(a), AT.linesFingerprint(b));
 });
 
 // 🎯T167: one vertical scroll surface for RHS inspect — outer body only.
-// Per-turn wrappers (.ai-turn / .ai-text) must not trap wheel with overflow-y.
 test('T167 single scroll: no nested overflow-y auto/scroll on turn sections', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  // Outer pane is the scroll container.
   assert.ok(
     /#agent-inspect-body\s*\{[^}]*overflow-y:\s*auto/.test(html),
     '#agent-inspect-body must be the vertical scroll container',
   );
-  // Multi-turn fixture: paint turns as product DOM; assert no inline overflow traps.
   const lines = [
     { role: 'user', text: 'prompt one' },
     { role: 'assistant', text: '## long\n\n' + 'x\n'.repeat(80) },
@@ -219,15 +309,13 @@ test('T167 single scroll: no nested overflow-y auto/scroll on turn sections', fu
       return '<p>' + AT.escapeHtml(t) + '</p>';
     },
   });
-  assert.ok((body.match(/class="ai-turn /g) || []).length >= 4, 'multi-turn inspect DOM');
-  assert.ok(body.indexOf('class="ai-text"') >= 0, '.ai-text wrappers present');
-  // Fixture HTML must not set overflow / max-height on turn sections.
+  assert.ok((body.match(/class="msg /g) || []).length >= 4, 'multi-turn .msg DOM');
+  assert.ok(body.indexOf('class="msg-body"') >= 0, '.msg-body wrappers present');
   assert.ok(!/\boverflow(-y)?\s*[:=]\s*(auto|scroll)/i.test(body),
     'turn HTML must not set overflow auto/scroll');
   assert.ok(!/\bmax-height\s*[:=]/i.test(body),
     'turn HTML must not set max-height');
-  // CSS: .ai-turn and .ai-text under inspect must not get overflow-y auto|scroll or max-height.
-  // (pre may keep overflow-x for wide code — residual OK.)
+  // CSS: per-turn under inspect must not get overflow-y auto|scroll as a nest trap.
   function ruleBlock(selector) {
     const re = new RegExp(
       selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}',
@@ -235,25 +323,14 @@ test('T167 single scroll: no nested overflow-y auto/scroll on turn sections', fu
     const m = html.match(re);
     return m ? m[1] : '';
   }
-  const aiText = ruleBlock('#agent-inspect-body .ai-text');
-  assert.ok(aiText.length > 0, '.ai-text rule present');
-  assert.ok(!/overflow-y\s*:\s*(auto|scroll)/i.test(aiText),
-    '.ai-text must not use overflow-y auto/scroll');
-  assert.ok(!/max-height\s*:/i.test(aiText),
-    '.ai-text must not use max-height (nested scroll trap)');
-  const aiTurn = ruleBlock('#agent-inspect-body .ai-turn');
-  if (aiTurn) {
-    assert.ok(!/overflow-y\s*:\s*(auto|scroll)/i.test(aiTurn),
-      '.ai-turn must not use overflow-y auto/scroll');
-    assert.ok(!/max-height\s*:/i.test(aiTurn),
-      '.ai-turn must not use max-height');
+  const msgBody = ruleBlock('#agent-inspect-body > .msg .msg-body');
+  if (msgBody) {
+    assert.ok(!/overflow-y\s*:\s*(auto|scroll)/i.test(msgBody),
+      '.msg-body under inspect must not use overflow-y auto/scroll');
   }
-  // Intentional residual: pre may overflow-x only (not vertical nest).
-  const preRule = ruleBlock('#agent-inspect-body .ai-turn.assistant .ai-text pre');
-  if (preRule) {
-    assert.ok(!/overflow-y\s*:\s*(auto|scroll)/i.test(preRule),
-      'pre must not use overflow-y auto/scroll');
-  }
+  // No residual .ai-turn overflow traps.
+  assert.ok(html.indexOf('#agent-inspect-body .ai-text') < 0,
+    'legacy .ai-text rules removed');
 });
 
 test('T136 create-aside dual-write + no attention chip wall', function () {

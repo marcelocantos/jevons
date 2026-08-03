@@ -548,66 +548,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: var(--sans);
 }
 #agent-inspect-header button:hover { color: var(--text); border-color: var(--border-focus); }
+/* 🎯T205: inspect is main transcript in microcosm — .msg chrome + paintBody;
+   overflow-anchor:none + stick/free (not unconditional pin). No .ai-turn CSS fork. */
 #agent-inspect-body {
-  flex: 1; overflow-y: auto; padding: 10px 12px; font-size: 12px; line-height: 1.45;
+  flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+  font-size: 13px; line-height: 1.5;
+  scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent;
 }
+#agent-inspect-body > * { flex-shrink: 0; }
 #agent-inspect-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px 4px; }
 #agent-inspect-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; margin-bottom: 8px; }
-#agent-inspect-body .ai-turn { margin-bottom: 10px; }
-#agent-inspect-body .ai-role {
-  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--text-muted); margin-bottom: 2px;
-}
-#agent-inspect-body .ai-turn.user .ai-role { color: var(--accent, #8b7cf6); }
-#agent-inspect-body .ai-turn.assistant .ai-role { color: var(--green, #4ade80); }
-/* 🎯T157: user stays plain/pre-wrap; assistant is full markdown (not force pre-wrap on HTML). */
-/* 🎯T167: no max-height / overflow-y on per-turn .ai-text — only #agent-inspect-body scrolls. */
-#agent-inspect-body .ai-text {
-  word-break: break-word; color: var(--text); font-family: var(--sans);
-  font-size: 12px;
-}
-#agent-inspect-body .ai-turn.user .ai-text { white-space: pre-wrap; }
-#agent-inspect-body .ai-turn.assistant .ai-text { white-space: normal; }
-/* Mirror .msg.jevons markdown chrome under inspect (tables/code/lists/headings). */
-#agent-inspect-body .ai-turn.assistant .ai-text p { margin: 0.45em 0; }
-#agent-inspect-body .ai-turn.assistant .ai-text p:first-child { margin-top: 0; }
-#agent-inspect-body .ai-turn.assistant .ai-text p:last-child { margin-bottom: 0; }
-#agent-inspect-body .ai-turn.assistant .ai-text code {
-  background: var(--surface-raised); padding: 2px 6px; border-radius: 4px;
-  font-family: var(--mono); font-size: 0.88em; color: var(--accent);
-}
-#agent-inspect-body .ai-turn.assistant .ai-text pre {
-  background: var(--surface); border: 1px solid var(--border); padding: 10px 12px;
-  border-radius: 8px; overflow-x: auto; margin: 0.5em 0;
-}
-#agent-inspect-body .ai-turn.assistant .ai-text pre code {
-  background: none; padding: 0; color: var(--text);
-}
-#agent-inspect-body .ai-turn.assistant .ai-text ul,
-#agent-inspect-body .ai-turn.assistant .ai-text ol { padding-left: 1.5em; margin: 0.45em 0; }
-#agent-inspect-body .ai-turn.assistant .ai-text li { margin: 0.15em 0; }
-#agent-inspect-body .ai-turn.assistant .ai-text h1,
-#agent-inspect-body .ai-turn.assistant .ai-text h2,
-#agent-inspect-body .ai-turn.assistant .ai-text h3 {
-  margin: 0.7em 0 0.25em; font-weight: 600; color: var(--heading);
-}
-#agent-inspect-body .ai-turn.assistant .ai-text h1 { font-size: 1.08em; }
-#agent-inspect-body .ai-turn.assistant .ai-text h2 { font-size: 1.04em; }
-#agent-inspect-body .ai-turn.assistant .ai-text h3 { font-size: 1em; }
-#agent-inspect-body .ai-turn.assistant .ai-text blockquote {
-  border-left: 2px solid var(--accent); padding-left: 10px; margin: 0.45em 0; color: var(--text-dim);
-}
-#agent-inspect-body .ai-turn.assistant .ai-text table {
-  border-collapse: collapse; margin: 0.45em 0; font-size: 0.92em;
-}
-#agent-inspect-body .ai-turn.assistant .ai-text th,
-#agent-inspect-body .ai-turn.assistant .ai-text td {
-  border: 1px solid var(--border); padding: 4px 8px;
-}
-#agent-inspect-body .ai-turn.assistant .ai-text th { background: var(--surface); font-weight: 500; }
-#agent-inspect-body .ai-turn.assistant .ai-text strong { color: var(--strong); font-weight: 600; }
-#agent-inspect-body .ai-turn.assistant .ai-text a { color: var(--accent); text-decoration: none; }
-#agent-inspect-body .ai-turn.assistant .ai-text a:hover { text-decoration: underline; }
+/* Shared .msg / .msg-body chrome (global rules). Narrow pane: full width OK. */
+#agent-inspect-body > .msg { max-width: 100%; }
+/* 🎯T167: per-turn .msg must not nest vertical scroll traps. */
+#agent-inspect-body > .msg .msg-body { overflow-y: visible; max-height: none; }
 /* 🎯T131 / 🎯T173 / 🎯T174: frontier table — headerless; constrained to pane; name ellipsizes */
 #frontier-pane { flex: 1; min-height: 0; min-width: 0; }
 #frontier-toolbar {
@@ -662,6 +617,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   color: transparent;
 }
 /* 🎯T182: far-right play control → POST /api/agents/{po}/send */
+/* 🎯T198: engaged row → stop glyph; free stay play */
 #frontier-table .ft-play {
   width: 1.6rem; padding-left: 0; padding-right: 8px;
   text-align: center; white-space: nowrap;
@@ -678,6 +634,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 #frontier-table .ft-play-btn:disabled {
   opacity: 0.45; cursor: default;
+}
+#frontier-table .ft-play-btn.ft-stop-btn {
+  color: var(--amber, #d4a017);
+}
+#frontier-table tr.ft-engaged td {
+  color: var(--text-dim);
+}
+#frontier-table tr.ft-engaged .ft-id {
+  opacity: 0.92;
 }
 
 /* 🎯T175: instant custom tips (fixed layer; 0ms show — not native title=) */
@@ -1504,8 +1469,10 @@ function handle(m) {
   if (historyReplayActive) armHistoryReplayIdleEnd();
 
   // 🎯T82: registry file changed — refresh RHS fleet immediately (poll is fallback).
+  // 🎯T198: also re-merge frontier engagement (target_id overlay).
   if (typ === 'agents_changed') {
     refreshAgents();
+    if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
     return;
   }
 
@@ -4814,6 +4781,37 @@ const frontierBodyEl = document.getElementById('frontier-body');
 const rhsTabMeta = document.getElementById('rhs-tab-meta');
 let agentTranscriptTimer = 0;
 let frontierPollTimer = 0;
+// 🎯T205: poll fingerprint + stick/free latch for #agent-inspect-body.
+let _agentInspectFp = '';
+let _agentInspectFollow = null;
+function agentInspectFollow() {
+  if (!_agentInspectFollow) {
+    _agentInspectFollow = (typeof AgentTranscript !== 'undefined' && AgentTranscript.createScrollFollow)
+      ? AgentTranscript.createScrollFollow({ eps: 16 })
+      : {
+          isTracking: function () { return true; },
+          shouldPin: function () { return true; },
+          enterTrack: function () {},
+          leaveTrack: function () {},
+          onWheel: function () {},
+          onScroll: function () {},
+          applyAfterUpdate: function (el) {
+            if (el) el.scrollTop = el.scrollHeight;
+          },
+        };
+  }
+  return _agentInspectFollow;
+}
+if (agentInspectBody) {
+  agentInspectBody.addEventListener('wheel', function (e) {
+    const f = agentInspectFollow();
+    if (f && f.onWheel) f.onWheel(e.deltaY, agentInspectBody);
+  }, { passive: true });
+  agentInspectBody.addEventListener('scroll', function () {
+    const f = agentInspectFollow();
+    if (f && f.onScroll) f.onScroll(agentInspectBody);
+  }, { passive: true });
+}
 let rhsBottomTab = (typeof FrontierTable !== 'undefined')
   ? FrontierTable.TAB_FRONTIER
   : 'frontier';
@@ -4867,6 +4865,9 @@ function selectAgent(name, opts) {
     hideAgentInspect();
     return;
   }
+  // 🎯T205: new selection → Track + force repaint fingerprint.
+  _agentInspectFp = '';
+  agentInspectFollow().enterTrack();
   // 🎯T131: selecting a fleet agent switches to Transcript tab.
   setRhsBottomTab((typeof FrontierTable !== 'undefined')
     ? FrontierTable.tabAfterAgentSelect(true)
@@ -4878,6 +4879,7 @@ function hideAgentInspect() {
   if (agentTranscriptTimer) { clearInterval(agentTranscriptTimer); agentTranscriptTimer = 0; }
   if (agentInspectBody) agentInspectBody.innerHTML = '';
   if (agentInspectName) agentInspectName.textContent = '';
+  _agentInspectFp = '';
   // Keep RHS bottom visible; return to Frontier tab (T131).
   setRhsBottomTab((typeof FrontierTable !== 'undefined')
     ? FrontierTable.tabAfterAgentSelect(false)
@@ -4885,13 +4887,16 @@ function hideAgentInspect() {
   if (typeof updateComposerPlaceholder === 'function') updateComposerPlaceholder();
 }
 
+// 🎯T205: RHS inspect = main transcript microcosm — .msg + paintBody (not .ai-turn
+// log panel); stick/free scroll; poll no-op when fingerprint unchanged.
+// 🎯T208: body re-paint only — never setRhsBottomTab. Transcript tab is set only
+// by selectAgent (owner picks fleet agent) or explicit Transcript tab click.
+// Quiet poll / refreshAgents must leave Frontier alone while selection remains.
 function renderAgentInspect(model) {
   if (!agentInspectEl || !agentInspectBody) return;
-  // 🎯T208: body re-paint only — never switch bottom tab. Transcript tab is set only
-  // by selectAgent (owner picks fleet agent) or explicit Transcript tab click.
-  // Quiet poll / refreshAgents must leave Frontier alone while selection remains.
   if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
   if (model.error) {
+    _agentInspectFp = '';
     agentInspectBody.innerHTML = '<div class="ai-err"></div><div class="ai-empty"></div>';
     agentInspectBody.querySelector('.ai-err').textContent = model.error;
     agentInspectBody.querySelector('.ai-empty').textContent = model.empty
@@ -4900,6 +4905,7 @@ function renderAgentInspect(model) {
     return;
   }
   if (model.empty) {
+    _agentInspectFp = '';
     agentInspectBody.innerHTML = '';
     const empty = document.createElement('div');
     empty.className = 'ai-empty';
@@ -4907,40 +4913,51 @@ function renderAgentInspect(model) {
     agentInspectBody.appendChild(empty);
     return;
   }
+  const lines = model.lines || [];
+  const fp = (typeof AgentTranscript !== 'undefined' && AgentTranscript.linesFingerprint)
+    ? AgentTranscript.linesFingerprint(lines)
+    : String(lines.length) + ':' + lines.map(function (l) {
+        return (l && l.role) + '\0' + (l && l.text);
+      }).join('\n');
+  // Unchanged poll: do not thrash free-scroll or full-replace.
+  if (fp === _agentInspectFp && agentInspectBody.querySelector('.msg')) {
+    return;
+  }
+  const follow = agentInspectFollow();
+  const prevTop = agentInspectBody.scrollTop;
   agentInspectBody.innerHTML = '';
-  // 🎯T157: assistant bodies via parseAssistantMarkdown (sealed main-chat path);
-  // user/other stay plain textContent + pre-wrap CSS. No progressive smd.
-  (model.lines || []).forEach(function (line) {
-    const wrap = document.createElement('div');
-    wrap.className = 'ai-turn ' + (line.role || 'other');
-    const role = document.createElement('div');
-    role.className = 'ai-role';
-    role.textContent = line.role === 'user' ? 'User' : (line.role === 'assistant' ? 'Assistant' : (line.role || 'msg'));
-    const text = document.createElement('div');
-    text.className = 'ai-text';
-    const body = (typeof AgentTranscript !== 'undefined' && AgentTranscript.paintInspectLineBody)
-      ? AgentTranscript.paintInspectLineBody(line.role, line.text, {
-          parseAssistantMarkdown: (typeof parseAssistantMarkdown === 'function')
-            ? parseAssistantMarkdown
-            : null,
-        })
-      : (line.role === 'assistant' && typeof parseAssistantMarkdown === 'function'
-          ? { mode: 'html', content: parseAssistantMarkdown(line.text || '') }
-          : { mode: 'text', content: line.text || '' });
-    if (body.mode === 'html') {
-      text.innerHTML = body.content;
+  lines.forEach(function (line) {
+    const msgRole = (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectToMsgRole)
+      ? AgentTranscript.inspectToMsgRole(line.role)
+      : (line.role === 'user' ? 'user' : (line.role === 'assistant' ? 'jevons' : 'status'));
+    const d = document.createElement('div');
+    d.className = 'msg ' + msgRole;
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    d.appendChild(body);
+    d._body = body;
+    // Shared main path: paintBody → parseAssistantMarkdown + mermaid/hljs/links;
+    // user → renderUserText (quotes/images).
+    if (typeof paintBody === 'function') {
+      paintBody(d, msgRole, line.text || '');
     } else {
-      text.textContent = body.content;
+      body.textContent = line.text || '';
     }
-    wrap.appendChild(role);
-    wrap.appendChild(text);
-    agentInspectBody.appendChild(wrap);
+    agentInspectBody.appendChild(d);
   });
   if (typeof decorateBodyLinks === 'function') {
     decorateBodyLinks(agentInspectBody); // 🎯T151 belt-and-suspenders
   }
-  // Stay pinned to latest while following a live agent.
-  agentInspectBody.scrollTop = agentInspectBody.scrollHeight;
+  _agentInspectFp = fp;
+  // Stickiness: pin only while Tracking; free preserves prevTop.
+  if (follow && follow.applyAfterUpdate) {
+    follow.applyAfterUpdate(agentInspectBody, prevTop);
+    if (follow.shouldPin && follow.shouldPin()) {
+      requestAnimationFrame(function () {
+        if (follow.shouldPin()) follow.applyAfterUpdate(agentInspectBody);
+      });
+    }
+  }
 }
 
 function loadAgentTranscript(name, opts) {
@@ -5022,12 +5039,24 @@ function renderFrontierTable(model) {
   // 🎯T173: headerless table — id / name / status abbr / fanout N᚛ (hide 0).
   // 🎯T175: explanations via InstantTip (0ms), never native title= on these cells.
   // 🎯T181: ID + name → rich markdown target card (left-of-pointer placement).
+  // 🎯T198: merge /api/agents target_id → engaged rows sink bottom, play→stop.
   const table = document.createElement('table');
   table.id = 'frontier-table';
   table.setAttribute('aria-label', 'Bullseye frontier');
   const tbody = document.createElement('tbody');
-  (model.rows || []).forEach(function (row) {
+  const agents = (model && model.agents) || frontierAgentsCache || [];
+  const rows = (typeof FrontierTable !== 'undefined' && FrontierTable.applyEngagement)
+    ? FrontierTable.applyEngagement(model.rows || [], agents)
+    : (model.rows || []);
+  rows.forEach(function (row) {
     const tr = document.createElement('tr');
+    if (row.engaged) {
+      tr.className = 'ft-engaged';
+      tr.setAttribute('data-engaged', '1');
+      if (row.engaged_agents && row.engaged_agents.length) {
+        tr.setAttribute('data-engaged-agents', row.engaged_agents.join(','));
+      }
+    }
     const id = document.createElement('td');
     id.className = 'ft-id';
     id.textContent = '🎯' + row.id;
@@ -5090,7 +5119,7 @@ function renderFrontierTable(model) {
     const fan = document.createElement('td');
     fan.className = 'ft-fanout';
     if (typeof FrontierTable !== 'undefined' && FrontierTable.formatFanout) {
-      // 🎯T179: tip = lead count line + "• TID — name" bullets from dependents[]
+      // 🎯T179: tip = lead count line + "• TID Name" bullets from dependents[]
       const fo = FrontierTable.formatFanout(row.fanout, row.id, row.dependents);
       if (fo.visible) {
         fan.textContent = fo.text;
@@ -5105,21 +5134,35 @@ function renderFrontierTable(model) {
       const n = row.fanout != null ? row.fanout : 0;
       fan.textContent = n > 0 ? String(n) : '';
     }
-    // 🎯T182: far-right play → message jevons-po to start this target (not toast-only).
+    // 🎯T182/T198: free → play (kickoff PO); engaged → stop (kill by target_id).
     const play = document.createElement('td');
     play.className = 'ft-play';
     const playBtn = document.createElement('button');
     playBtn.type = 'button';
-    playBtn.className = 'ft-play-btn';
-    playBtn.textContent = (typeof FrontierTable !== 'undefined' && FrontierTable.PLAY_GLYPH)
-      ? FrontierTable.PLAY_GLYPH
-      : '\u25B6';
-    playBtn.setAttribute('aria-label', 'Start work on 🎯' + (row.id || ''));
-    playBtn.title = 'Start work via jevons-po';
-    playBtn.addEventListener('click', function (ev) {
-      if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-      playFrontierTarget(row, playBtn);
-    });
+    const engaged = !!row.engaged;
+    if (engaged) {
+      playBtn.className = 'ft-play-btn ft-stop-btn';
+      playBtn.textContent = (typeof FrontierTable !== 'undefined' && FrontierTable.STOP_GLYPH)
+        ? FrontierTable.STOP_GLYPH
+        : '\u25A0';
+      playBtn.setAttribute('aria-label', 'Stop work on 🎯' + (row.id || ''));
+      playBtn.title = 'Stop engaged worker(s) for this target';
+      playBtn.addEventListener('click', function (ev) {
+        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+        stopFrontierEngagement(row, playBtn);
+      });
+    } else {
+      playBtn.className = 'ft-play-btn';
+      playBtn.textContent = (typeof FrontierTable !== 'undefined' && FrontierTable.PLAY_GLYPH)
+        ? FrontierTable.PLAY_GLYPH
+        : '\u25B6';
+      playBtn.setAttribute('aria-label', 'Start work on 🎯' + (row.id || ''));
+      playBtn.title = 'Start work via jevons-po';
+      playBtn.addEventListener('click', function (ev) {
+        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+        playFrontierTarget(row, playBtn);
+      });
+    }
     play.appendChild(playBtn);
     tr.appendChild(id);
     tr.appendChild(name);
@@ -5132,6 +5175,9 @@ function renderFrontierTable(model) {
   frontierBodyEl.innerHTML = '';
   frontierBodyEl.appendChild(table);
 }
+
+// 🎯T198: latest /api/agents snapshot for frontier engagement merge.
+let frontierAgentsCache = [];
 
 // 🎯T182: POST product agent-send path so PO spawns/briefs work on the target.
 // Mock seam: window.__frontierAgentSend(url, body) → Promise (hermetic tests).
@@ -5146,7 +5192,8 @@ function playFrontierTarget(row, btnEl) {
           text: 'Start work on frontier target 🎯' + row.id +
             (row.name ? (' — ' + row.name) : '') +
             '.\n\nKick off now: spawn/brief a fleet worker with parent=jevons-po ' +
-            'and a full brief. Do not only toast or acknowledge.',
+            'and target_id=' + row.id +
+            ' (jevons_agent_start target_id — 🎯T198). Do not only toast or acknowledge.',
         },
         po: 'jevons-po',
       };
@@ -5201,22 +5248,99 @@ function playFrontierTarget(row, btnEl) {
     });
 }
 
+// 🎯T198: POST /api/agents/engagement/stop — kill workers with matching target_id.
+// Mock seam: window.__frontierEngagementStop(url, body) → Promise.
+function stopFrontierEngagement(row, btnEl) {
+  if (!row || !row.id) return Promise.resolve(null);
+  const req = (typeof FrontierTable !== 'undefined' && FrontierTable.stopEngagementRequest)
+    ? FrontierTable.stopEngagementRequest(row.id)
+    : {
+        url: '/api/agents/engagement/stop',
+        method: 'POST',
+        body: { target_id: String(row.id).replace(/^🎯/, '').trim() },
+        target_id: String(row.id).replace(/^🎯/, '').trim(),
+      };
+  if (!req || !req.body || !req.body.target_id) return Promise.resolve(null);
+  if (btnEl) btnEl.disabled = true;
+  const stopFn = (typeof window !== 'undefined' && typeof window.__frontierEngagementStop === 'function')
+    ? window.__frontierEngagementStop
+    : function (url, body) {
+        return fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }).then(function (r) {
+          return r.json().then(function (j) {
+            if (!r.ok) {
+              const err = new Error((j && j.error) || ('HTTP ' + r.status));
+              err.status = r.status;
+              err.body = j;
+              throw err;
+            }
+            return j;
+          }).catch(function (e) {
+            if (e && e.status) throw e;
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return {};
+          });
+        });
+      };
+  return Promise.resolve(stopFn(req.url, req.body))
+    .then(function (res) {
+      if (typeof jLog === 'function') {
+        jLog('info', 'frontier_stop', {
+          target: row.id,
+          stopped: (res && res.stopped) || [],
+          status: (res && res.status) || 'ok',
+        });
+      }
+      // Refresh agents + frontier so engaged chrome clears without waiting for poll.
+      if (typeof refreshAgents === 'function') refreshAgents();
+      if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
+      return res;
+    })
+    .catch(function (err) {
+      if (typeof jLog === 'function') {
+        jLog('warn', 'frontier_stop_failed', {
+          target: row.id,
+          err: String(err && err.message || err),
+        });
+      }
+      return null;
+    })
+    .finally(function () {
+      if (btnEl) btnEl.disabled = false;
+    });
+}
+
 function loadFrontier(opts) {
   if (!frontierBodyEl) return;
   const quiet = !!(opts && opts.quiet);
   const api = (typeof FrontierTable !== 'undefined' && FrontierTable.API_PATH)
     ? FrontierTable.API_PATH
     : '/api/frontier';
-  fetch(api)
-    .then(function (r) {
+  const agentsApi = (typeof FrontierTable !== 'undefined' && FrontierTable.AGENTS_API_PATH)
+    ? FrontierTable.AGENTS_API_PATH
+    : '/api/agents';
+  // 🎯T198: fetch frontier + agents; merge by target_id (no name parse).
+  Promise.all([
+    fetch(api).then(function (r) {
       if (!r.ok) return r.json().then(function (j) {
         throw new Error((j && j.error) || ('HTTP ' + r.status));
       }).catch(function () {
         throw new Error('HTTP ' + r.status);
       });
       return r.json();
-    })
-    .then(function (payload) {
+    }),
+    fetch(agentsApi).then(function (r) {
+      if (!r.ok) return [];
+      return r.json().catch(function () { return []; });
+    }).catch(function () { return []; }),
+  ])
+    .then(function (pair) {
+      const payload = pair[0];
+      const agents = Array.isArray(pair[1]) ? pair[1] : [];
+      frontierAgentsCache = agents;
       const model = (typeof FrontierTable !== 'undefined')
         ? FrontierTable.normalizePayload(payload)
         : {
@@ -5226,6 +5350,7 @@ function loadFrontier(opts) {
             empty: !(payload && payload.targets && payload.targets.length),
             error: (payload && payload.error) || '',
           };
+      model.agents = agents;
       renderFrontierTable(model);
       // Light poll fallback when pane is up (fsnotify pushes frontier_changed).
       if (!frontierPollTimer) {
@@ -5242,6 +5367,7 @@ function loadFrontier(opts) {
       const model = (typeof FrontierTable !== 'undefined')
         ? FrontierTable.normalizePayload(null, err)
         : { available: false, rows: [], empty: true, error: String(err && err.message || err) };
+      model.agents = frontierAgentsCache || [];
       renderFrontierTable(model);
     });
 }
