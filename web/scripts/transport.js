@@ -62,6 +62,9 @@ class WebSocketTransport {
     this._heartbeatTimer = null;     // periodic ping send
     this._watchdogTimer = null;      // fires if no traffic in time
     this._installedGlobalListeners = false;
+    // 🎯T140: generation increments on every _open so stale sockets/handlers
+    // can be ignored (multi-connect races).
+    this.generation = 0;
   }
 
   // Exponential backoff schedule (ms). Starts tight, caps at 5s.
@@ -86,6 +89,21 @@ class WebSocketTransport {
     const h = location.hostname === 'localhost'
       ? '127.0.0.1:' + location.port : location.host;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    // 🎯T140: supersede any previous socket so dual handlers cannot both paint.
+    const prev = this.ws;
+    const prevGen = this.generation;
+    this.generation += 1;
+    const gen = this.generation;
+    if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
+      try { this.onTransportReplaced?.(prevGen, gen); } catch (_) { /* ignore */ }
+      try {
+        prev.onopen = null;
+        prev.onclose = null;
+        prev.onerror = null;
+        prev.onmessage = null;
+        prev.close();
+      } catch (_) { /* ignore */ }
+    }
     let ws;
     try {
       ws = new WebSocket(proto + '//' + h + '/ws/chat');
@@ -95,18 +113,24 @@ class WebSocketTransport {
     }
     this.ws = ws;
     ws.onopen = () => {
+      if (gen !== this.generation) return; // superseded
       this._reconnectAttempt = 0;
       this._startHeartbeat();
       this._kickWatchdog();
-      this.onOpen?.();
+      this.onOpen?.({ generation: gen });
     };
     ws.onclose = () => {
+      if (gen !== this.generation) return; // superseded; do not reconnect on stale
       this._stopHeartbeat();
-      this.onClose?.();
+      this.onClose?.({ generation: gen });
       if (this._desiredOpen) this._scheduleReconnect();
     };
     ws.onerror = () => { /* onclose will follow */ };
     ws.onmessage = e => {
+      if (gen !== this.generation) {
+        try { this.onStaleFrame?.(gen, this.generation); } catch (_) { /* ignore */ }
+        return;
+      }
       this._kickWatchdog();
       // Filter out heartbeat pong frames before user code sees them.
       if (typeof e.data === 'string' && e.data === '{"type":"pong"}') return;

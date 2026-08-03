@@ -548,12 +548,46 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetReadLimit(1 << 20)
 	ctx := r.Context()
-	slog.Info("chat client connected")
 
+	// 🎯T140: connection lifecycle spans — conn_id + concurrent + replay timing.
+	connID := uuid.NewString()
 	s.mu.Lock()
+	s.chatConns++
+	concurrent := s.chatConns
 	proc := s.proc
 	clog := s.chatLog
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.chatConns > 0 {
+			s.chatConns--
+		}
+		left := s.chatConns
+		s.mu.Unlock()
+		s.LogEvent("chat_conn", "close", map[string]any{
+			"conn_id":    connID,
+			"concurrent": left,
+		})
+		slog.Info("chat client disconnected", "conn_id", connID, "concurrent", left)
+	}()
+
+	s.LogEvent("chat_conn", "open", map[string]any{
+		"conn_id":    connID,
+		"concurrent": concurrent,
+	})
+	slog.Info("chat client connected", "conn_id", connID, "concurrent", concurrent)
+
+	// First frame: client attaches conn_id before history firehose (🎯T140).
+	{
+		hello, _ := json.Marshal(map[string]any{
+			"type":       "conn",
+			"conn_id":    connID,
+			"concurrent": concurrent,
+		})
+		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = conn.Write(wctx, websocket.MessageText, hello)
+		cancel()
+	}
 
 	// Replay history BEFORE the liveness check: the jevons-owned chat log
 	// is the durable record (🎯T30.1), and a dead overseer process must
@@ -565,13 +599,30 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// demand via GET /api/history ("load earlier"); a history_meta frame
 	// tells the client how many older lines exist.
 	if clog != nil {
+		replayStart := time.Now()
+		var frames int
+		var bytes int
 		start, total, err := clog.ReplayTail(historyReplayTurns, func(line string) error {
+			frames++
+			bytes += len(line) + 1
 			writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 			return conn.Write(writeCtx, websocket.MessageText, []byte(line))
 		})
+		replayMS := time.Since(replayStart).Milliseconds()
+		fields := map[string]any{
+			"conn_id":    connID,
+			"concurrent": concurrent,
+			"frames":     frames,
+			"bytes":      bytes,
+			"ms":         replayMS,
+			"older":      start,
+			"total":      total,
+		}
 		if err != nil {
-			slog.Warn("chat: chatlog replay failed", "err", err)
+			fields["err"] = err.Error()
+			s.LogEvent("chat_conn", "replay_error", fields)
+			slog.Warn("chat: chatlog replay failed", "conn_id", connID, "frames", frames, "bytes", bytes, "ms", replayMS, "err", err)
 			payload, _ := json.Marshal(map[string]string{
 				"type":  "error",
 				"error": "history replay incomplete: " + err.Error(),
@@ -579,9 +630,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			_ = conn.Write(writeCtx, websocket.MessageText, payload)
 			cancel()
-		} else if start > 0 {
+		} else {
+			s.LogEvent("chat_conn", "replay", fields)
+			slog.Info("chat: chatlog replay", "conn_id", connID, "frames", frames, "bytes", bytes, "ms", replayMS, "older", start, "total", total)
+			// Always emit history_meta (even when older==0) so the client can
+			// close the connect span without waiting for idle timeout.
 			meta, _ := json.Marshal(map[string]any{
 				"type": "history_meta", "older": start, "total": total, "start": start,
+				"conn_id": connID, "replay_frames": frames, "replay_bytes": bytes, "replay_ms": replayMS,
 			})
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			_ = conn.Write(writeCtx, websocket.MessageText, meta)
@@ -608,7 +664,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
 		_ = conn.Write(wctx, websocket.MessageText, payload)
 		wcancel()
-		slog.Info("chat: overseer down; holding connection after history replay", "reason", reason)
+		s.LogEvent("chat_conn", "degraded", map[string]any{
+			"conn_id": connID, "reason": reason, "concurrent": concurrent,
+		})
+		slog.Info("chat: overseer down; holding connection after history replay", "conn_id", connID, "reason", reason)
 		proc = s.waitForOverseer(ctx, conn)
 		if proc == nil {
 			return
@@ -631,7 +690,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.mu.Unlock()
-		slog.Info("chat client disconnected")
 	}()
 
 	// Server → Client: forward raw JSONL lines.

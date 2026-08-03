@@ -816,10 +816,38 @@ Object.defineProperty(window, 'historyReplayActive', {
   set(v) { historyReplayActive = !!v; },
 });
 
+// 🎯T140: client connect spans — join server conn_id + pageCorr + ms.
+let chatConnId = null;
+let chatConnOpenedAt = 0;
+let chatConnFirstFrameAt = 0;
+let chatConnHistoryMetaAt = 0;
+let chatConnUiReadyLogged = false;
+function chatConnMs() {
+  return chatConnOpenedAt ? Math.round(performance.now() - chatConnOpenedAt) : 0;
+}
+function logChatConn(decision, extra) {
+  if (typeof jLog !== 'function' || typeof DecisionLog === 'undefined' || !DecisionLog.formatConnectDecision) return;
+  const o = Object.assign({
+    conn_id: chatConnId || undefined,
+    ms: chatConnMs(),
+    generation: transport && transport.generation,
+    corr: pageCorr,
+  }, extra || {});
+  jLog('info', DecisionLog.decisionMsg('chat_conn'), DecisionLog.formatConnectDecision(decision, o));
+}
+
 // Wire transport callbacks.
 transport.onOpen = () => {
   const v = input.value;
-  dot.className = 'dot on'; sTxt.textContent = 'connected'; sendBtn.disabled = false;
+  chatConnId = null;
+  chatConnOpenedAt = performance.now();
+  chatConnFirstFrameAt = 0;
+  chatConnHistoryMetaAt = 0;
+  chatConnUiReadyLogged = false;
+  // Until history_meta, show connecting — full "connected" after replay span ends.
+  dot.className = 'dot on';
+  sTxt.textContent = 'connecting';
+  sendBtn.disabled = false;
   msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
   msgHistory = []; histIdx = null; histDraft = ''; editingEl = null;
   oldestIndex = 0; loadingEarlier = false; progressiveHistoryRunning = false;
@@ -838,12 +866,34 @@ transport.onOpen = () => {
       corr: pageCorr,
     }));
   }
+  logChatConn('open', { ms: 0 });
 };
 transport.onClose = () => {
   // Transport handles reconnect (backoff + version check) internally.
+  logChatConn('close', {});
+  chatConnId = null;
+  chatConnOpenedAt = 0;
   dot.className = 'dot off'; sTxt.textContent = 'reconnecting'; sendBtn.disabled = true;
   // Clear chrome only — do not auto-drain the send queue while offline (🎯T113).
   setWorking(false, undefined, { skipDrain: true });
+};
+transport.onTransportReplaced = function (prevGen, gen) {
+  logChatConn('transport_replaced', {
+    generation: gen,
+    prev_conn_id: chatConnId || undefined,
+    ms: chatConnMs(),
+  });
+};
+transport.onStaleFrame = function (frameGen, currentGen) {
+  // Bounded: only log occasionally would be nicer; once per gen is enough noise-wise
+  // if we only fire from superseded sockets briefly.
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined' && DecisionLog.formatConnectDecision) {
+    jLog('warn', DecisionLog.decisionMsg('chat_conn'), DecisionLog.formatConnectDecision('stale_frame', {
+      generation: currentGen,
+      corr: pageCorr,
+      ms: chatConnMs(),
+    }));
+  }
 };
 transport.onMessage = m => handle(m);
 transport.onError = msg => console.error('transport error:', msg);
@@ -853,28 +903,66 @@ function connect() { transport.connect(); }
 function handle(m) {
   const typ = m.type;
 
+  // 🎯T140: server conn hello — attach conn_id before history firehose.
+  if (typ === 'conn') {
+    chatConnId = m.conn_id || m.connId || null;
+    logChatConn('open', {
+      concurrent: m.concurrent,
+      ms: chatConnMs(),
+    });
+    return;
+  }
+
+  // 🎯T140: first non-hello frame (start of history firehose or live).
+  if (!chatConnFirstFrameAt && chatConnOpenedAt) {
+    chatConnFirstFrameAt = performance.now();
+    logChatConn('first_frame', {
+      ms: chatConnMs(),
+      type: typ || (m.message && m.message.role) || 'unknown',
+    });
+  }
+
   // Recent turns were replayed via WS (🎯T57). Remaining durable history is
   // progressively fetched into client memory (🎯T119) — full data resident;
   // infinite scroll is not a data throttle. Optional top sentinel remains
   // while pages are outstanding (does not gate the progressive fetch).
   if (typ === 'history_meta') {
     oldestIndex = m.start || 0;
+    chatConnHistoryMetaAt = performance.now();
     // End chronological WS replay burst — one pin, then optional progressive hydrate.
     endHistoryReplayAndPin('history_meta');
+    sTxt.textContent = 'connected';
+    logChatConn('history_meta', {
+      ms: chatConnMs(),
+      frames: m.replay_frames,
+      bytes: m.replay_bytes,
+      replay_ms: m.replay_ms,
+      concurrent: m.concurrent,
+    });
     // 🎯T120.4: progressive hydrate start (corr-linked).
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_start', {
         oldestIndex: oldestIndex,
         older: m.older || 0,
         corr: pageCorr,
+        conn_id: chatConnId,
+        ms: chatConnMs(),
       }));
     }
     if ((m.older || 0) > 0) startProgressiveHistoryLoad();
-    else if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_done', {
-        oldestIndex: 0,
-        corr: pageCorr,
-      }));
+    else {
+      if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+        jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_done', {
+          oldestIndex: 0,
+          corr: pageCorr,
+          conn_id: chatConnId,
+          ms: chatConnMs(),
+        }));
+      }
+      if (!chatConnUiReadyLogged) {
+        chatConnUiReadyLogged = true;
+        logChatConn('ui_ready', { ms: chatConnMs() });
+      }
     }
     return;
   }
@@ -2026,8 +2114,18 @@ async function progressiveLoadRemainingHistory() {
           oldestIndex: oldestIndex,
           err: oldestIndex > 0 ? 'stall: oldestIndex did not advance' : undefined,
           corr: pageCorr,
+          conn_id: chatConnId,
+          ms: typeof chatConnMs === 'function' ? chatConnMs() : undefined,
         }
       ));
+    }
+    // 🎯T140: connect span complete when hydrate done (or stalled).
+    if (!chatConnUiReadyLogged && typeof logChatConn === 'function') {
+      chatConnUiReadyLogged = true;
+      logChatConn(oldestIndex <= 0 ? 'ui_ready' : 'ui_ready_partial', {
+        ms: chatConnMs(),
+        oldestIndex: oldestIndex,
+      });
     }
   }
 }

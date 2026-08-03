@@ -68,6 +68,10 @@ type Server struct {
 	turnBuf   string // accumulates Jevon text for current turn
 	waiting   bool   // true while awaiting a response from Jevon
 
+	// chatConns is the number of live /ws/chat handlers (🎯T140 connect spans).
+	// Guarded by mu; used only for concurrent=N on open/close logging.
+	chatConns int
+
 	lanSrv         *pigeon.LANServer // LAN server for direct connections
 	creds          *CredentialStore
 	openAIKey      string

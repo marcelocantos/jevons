@@ -100,6 +100,34 @@ test('formatHistoryDecision hydrate_page carries bounds + corr', function () {
   assert.strictEqual(f.corr, 'c-hist');
 });
 
+test('formatConnectDecision open carries conn_id concurrent corr', function () {
+  const f = DL.formatConnectDecision('open', {
+    conn_id: 'abc',
+    concurrent: 2,
+    ms: 0,
+    corr: 'c1',
+  });
+  assert.strictEqual(f.component, 'chat_conn');
+  assert.strictEqual(f.decision, 'open');
+  assert.strictEqual(f.conn_id, 'abc');
+  assert.strictEqual(f.concurrent, 2);
+  assert.strictEqual(f.corr, 'c1');
+});
+
+test('formatConnectDecision history_meta carries replay metrics', function () {
+  const f = DL.formatConnectDecision('history_meta', {
+    conn_id: 'abc',
+    ms: 120,
+    frames: 10000,
+    bytes: 1500000,
+    replay_ms: 80,
+  });
+  assert.strictEqual(f.frames, 10000);
+  assert.strictEqual(f.bytes, 1500000);
+  assert.strictEqual(f.replay_ms, 80);
+  assert.strictEqual(f.ms, 120);
+});
+
 test('decisionMsg prefixes decision.', function () {
   assert.strictEqual(DL.decisionMsg('thread_route'), 'decision.thread_route');
   assert.strictEqual(DL.decisionMsg('history'), 'decision.history');

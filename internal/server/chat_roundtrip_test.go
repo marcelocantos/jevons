@@ -292,16 +292,29 @@ func TestChatOverseerDownSendsLegibleErrorFrame(t *testing.T) {
 	}
 	defer conn.CloseNow()
 
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("expected an error frame before close, got read error: %v", err)
-	}
+	// 🎯T140: first frame is conn hello; error follows (no chatlog to replay).
 	var m struct {
 		Type  string `json:"type"`
 		Error string `json:"error"`
 	}
-	if json.Unmarshal(data, &m) != nil || m.Type != "error" {
-		t.Fatalf("first frame = %q, want an error frame", string(data))
+	for i := 0; i < 4; i++ {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("expected an error frame before close, got read error: %v", err)
+		}
+		if json.Unmarshal(data, &m) != nil {
+			t.Fatalf("frame %d not JSON: %q", i, string(data))
+		}
+		if m.Type == "conn" {
+			continue
+		}
+		if m.Type == "error" {
+			break
+		}
+		t.Fatalf("frame %d = %q, want conn or error", i, string(data))
+	}
+	if m.Type != "error" {
+		t.Fatalf("never got error frame, last type=%q", m.Type)
 	}
 	if !strings.Contains(m.Error, "Grok CLI is not installed") {
 		t.Fatalf("error frame %q does not carry the configured reason", m.Error)
