@@ -498,6 +498,10 @@ test('T182 tight status/fan CSS + play cell + send path wiring', function () {
   assert.ok(/#frontier-table\s+\.ft-play\s*\{/.test(html), 'ft-play column CSS');
   assert.ok(/#frontier-table\s+\.ft-play-btn\s*\{/.test(html) || html.indexOf('ft-play-btn') >= 0,
     'play button class');
+  // Play glyph uses medium product green (not accent red/purple).
+  const playBtnBlock = html.match(/#frontier-table\s+\.ft-play-btn\s*\{[^}]*\}/);
+  assert.ok(playBtnBlock && /color:\s*var\(--green\)/.test(playBtnBlock[0]),
+    'play btn medium green: ' + (playBtnBlock ? playBtnBlock[0] : 'missing'));
 
   const start = html.indexOf('// 🎯T173: headerless table');
   assert.ok(start >= 0);

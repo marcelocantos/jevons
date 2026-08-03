@@ -6,6 +6,7 @@ package server
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,5 +144,32 @@ func TestOverseerInspectHistoryDenied(t *testing.T) {
 	}
 	if payload["denied"] != true {
 		t.Fatalf("want denied, got %v", payload)
+	}
+}
+
+// 🎯T209: control frames must be recognised by JSON "type", not byte prefix
+// order — {"name":"x","type":"inspect_subscribe"} must not become owner chat.
+func TestInspectControlFrameTypeOrderIndependent(t *testing.T) {
+	// Simulate the fragile HasPrefix failure mode the daily probe hit.
+	nameFirst := `{"name":"jv-t209-probe","type":"inspect_subscribe"}`
+	typeFirst := `{"type":"inspect_subscribe","name":"jv-t209-probe"}`
+	for _, raw := range []string{nameFirst, typeFirst} {
+		var ctl struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal([]byte(raw), &ctl); err != nil {
+			t.Fatalf("unmarshal %s: %v", raw, err)
+		}
+		if ctl.Type != "inspect_subscribe" || ctl.Name != "jv-t209-probe" {
+			t.Fatalf("ctl=%+v from %s", ctl, raw)
+		}
+	}
+	// Prefix match would only catch type-first — document the bug class.
+	if strings.HasPrefix(nameFirst, `{"type":"inspect_subscribe"`) {
+		t.Fatal("test assumption failed: name-first should not HasPrefix type-first")
+	}
+	if !strings.HasPrefix(typeFirst, `{"type":"inspect_subscribe"`) {
+		t.Fatal("test assumption failed: type-first should HasPrefix")
 	}
 }

@@ -762,58 +762,57 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Rewind control frame: roll the conversation back N user turns
-		// and resume. Tell all clients to trim their view to match.
-		if strings.HasPrefix(msg, `{"type":"rewind"`) {
+		// Control frames are JSON objects with a "type" field. Match on the
+		// unmarshalled type — never HasPrefix on key order (Go map marshal and
+		// probes may emit {"name":…,"type":"inspect_subscribe"} which must not
+		// fall through into owner chat / overseer as a user turn) (🎯T209).
+		if strings.HasPrefix(msg, "{") {
 			var ctl struct {
-				Turns int `json:"turns"`
+				Type  string `json:"type"`
+				Name  string `json:"name"`
+				Turns int    `json:"turns"`
 			}
-			_ = json.Unmarshal([]byte(msg), &ctl)
-			slog.Info("chat: rewind", "turns", ctl.Turns)
-			if err := s.RewindOverseer(ctl.Turns); err != nil {
-				slog.Error("chat: rewind failed", "err", err)
-				continue
+			if err := json.Unmarshal([]byte(msg), &ctl); err == nil && ctl.Type != "" {
+				switch ctl.Type {
+				case "rewind":
+					// Roll conversation back N user turns; tell clients to trim.
+					slog.Info("chat: rewind", "turns", ctl.Turns)
+					if err := s.RewindOverseer(ctl.Turns); err != nil {
+						slog.Error("chat: rewind failed", "err", err)
+						continue
+					}
+					s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
+					continue
+				case "inspect_subscribe", "inspect_unsubscribe":
+					// 🎯T209: RHS agent inspect multiplex on /ws/chat.
+					name := strings.TrimSpace(ctl.Name)
+					if ctl.Type == "inspect_unsubscribe" || name == "" {
+						s.setInspectSub(ch, "")
+						slog.Info("chat: inspect unsubscribe")
+						continue
+					}
+					s.setInspectSub(ch, name)
+					slog.Info("chat: inspect subscribe", "name", name)
+					if line, ok := s.marshalAgentTranscriptHistory(name); ok {
+						writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+						_ = conn.Write(writeCtx, websocket.MessageText, []byte(line))
+						cancel()
+					} else {
+						payload, _ := json.Marshal(map[string]any{
+							"type":  "agent_transcript",
+							"kind":  inspectKindHistory,
+							"name":  name,
+							"turns": []any{},
+							"empty": true,
+							"error": "agent not found",
+						})
+						writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						_ = conn.Write(writeCtx, websocket.MessageText, payload)
+						cancel()
+					}
+					continue
+				}
 			}
-			s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
-			continue
-		}
-
-		// 🎯T209: RHS agent inspect multiplex — subscribe on the same /ws/chat
-		// pipe as main owner chat (not a separate 4s HTTP poll product path).
-		if strings.HasPrefix(msg, `{"type":"inspect_subscribe"`) ||
-			strings.HasPrefix(msg, `{"type":"inspect_unsubscribe"`) {
-			var ctl struct {
-				Type string `json:"type"`
-				Name string `json:"name"`
-			}
-			_ = json.Unmarshal([]byte(msg), &ctl)
-			name := strings.TrimSpace(ctl.Name)
-			if ctl.Type == "inspect_unsubscribe" || name == "" {
-				s.setInspectSub(ch, "")
-				slog.Info("chat: inspect unsubscribe")
-				continue
-			}
-			s.setInspectSub(ch, name)
-			slog.Info("chat: inspect subscribe", "name", name)
-			// Sealed history immediately on the socket (same class as chatlog replay).
-			if line, ok := s.marshalAgentTranscriptHistory(name); ok {
-				writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-				_ = conn.Write(writeCtx, websocket.MessageText, []byte(line))
-				cancel()
-			} else {
-				payload, _ := json.Marshal(map[string]any{
-					"type":  "agent_transcript",
-					"kind":  inspectKindHistory,
-					"name":  name,
-					"turns": []any{},
-					"empty": true,
-					"error": "agent not found",
-				})
-				writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				_ = conn.Write(writeCtx, websocket.MessageText, payload)
-				cancel()
-			}
-			continue
 		}
 
 		slog.Info("chat: received", "msg", msg)
