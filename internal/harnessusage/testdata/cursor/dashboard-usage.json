@@ -1,0 +1,13 @@
+{
+  "source": "cursor-dashboard-fixture",
+  "billing_cycle_start": "2026-07-01T00:00:00Z",
+  "billing_cycle_end": "2026-08-01T00:00:00Z",
+  "plan": "pro",
+  "included_requests": 500,
+  "used_requests": 123,
+  "on_demand_spend_usd": 4.56,
+  "models": [
+    {"model": "claude-4-sonnet", "requests": 80, "input_tokens": 1200000, "output_tokens": 45000},
+    {"model": "gpt-5", "requests": 43, "input_tokens": 400000, "output_tokens": 20000}
+  ]
+}

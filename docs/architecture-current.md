@@ -124,6 +124,12 @@ workers, dead-man's switch). Budgets are editable in
 
 Fleet pause never stops the overseer (🎯T139).
 
+**On-demand multi-harness usage (🎯T163):** `internal/harnessusage` +
+`cmd/harness-usage` produce observational reports for Claude Code, Grok,
+Codex, and Cursor (local JSONL/SQLite scrape; optional live-API probe
+with soft degrade). Not an enforcement plane — see
+[harness-usage.md](harness-usage.md).
+
 ## Persistence
 
 | Path | Contents | Survives restart |
