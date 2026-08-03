@@ -13,6 +13,37 @@ rewriting history.
 
 ### Notes
 
+#### 2026-08-03 (later) — pocket metaphor polish (owner screenshots)
+
+Post-`ff7c5ee` smoke. Collapsed bubble must feel like a **pocket** the content
+is slotted into — not a body with a floating control below.
+
+**Must**
+
+1. **Tab orientation / attachment:** tab **comes out of the bottom of the
+   container border**, hard flush with the outer border (part of the border
+   language), not floating mid-gap under the content. Current tab reads
+   upside-down / detached — fix so it is a bottom-edge pocket tab.
+2. **Chevron sense:** match pocket tab (protruding from bottom edge). Not
+   “hanging from content above.”
+3. **Fade = pocket darken, not text dissolve:** bottom overlay is a
+   **slightly darker scrim** (fade-to-dark / into the pocket), flush to the
+   **inner bottom of the border**. Not a fade-to-transparent of the text into
+   the page `--bg`, and not floating above the border with a gap.
+4. **Timestamp outside the box:** place `.msg-time` **outside / slightly
+   under** the bubble border so the border can sit hard against clipped
+   content. Time must not compete with the pocket fade/tab inside the box.
+5. **Tab only when warranted:** **no expand tab on non-tall messages.**
+   Tiny bubbles must not grow a chevron. When expanded (e.g. latest tall),
+   prefer tab only when useful (collapsed always if tall; expanded: optional
+   collapse — if shown, still flush bottom-border tab, not always-on for
+   short content).
+6. **Collapsed = pocket:** content flows under the dark pocket edge;
+   container looks like content is slotted into a pocket.
+
+**Ship baseline still wrong until this lands** (`ff7c5ee` clip model kept;
+chrome/layout only).
+
 #### 2026-08-03 — owner direction (collapse = clip, not re-preview)
 
 Screenshots: collapsed prior bubble showed a broken partial table (missing
@@ -92,6 +123,18 @@ Shipped clip model in `web/index.html`: full `paintBody` always; collapse =
 `.msg-clipped` + body `max-height`/`overflow:hidden`; gradient +
 `.msg-expand-tab` chevron only. Deleted `previewOf` / PREVIEW_LINES re-parse
 path. Hermetic: `scripts/chat-ui-test/collapse-test.js`.
+
+### 2026-08-03 later — pocket polish (post-smoke)
+
+Chrome-only on top of clip model:
+
+| Piece | Polish |
+|-------|--------|
+| Fade | Absolute bottom of `.msg`; `transparent → rgba(0,0,0,0.45)` scrim; not `var(--bg)` dissolve |
+| Tab | Absolute `top:100%` center, `margin-top:-1px` merge with outer bottom border; chevron up when collapsed / down when expanded |
+| Time | Absolute under border (`top:100%`), corner-aligned; not inside content box |
+| Clipped pad | `padding-bottom: 0` so border butts clip edge |
+| Short | No tab / no fade unless `measureCollapse` says tall |
 
 ## Non-goals (unless discussion says otherwise)
 

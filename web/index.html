@@ -94,8 +94,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
 #messages > * { flex-shrink: 0; }
 /* 🎯T56/T119: shell always in DOM; content only near viewport. Far shells
-   freeze height (size cache) and drop bodies — content-visibility helps paint. */
+   freeze height (size cache) and drop bodies — content-visibility helps paint.
+   User/assistant bubbles keep content-visibility:visible so pocket tab +
+   outside timestamp (top:100% chrome) are not paint-contained/clipped (T106). */
 #messages > .msg { content-visibility: auto; contain-intrinsic-size: auto 72px; }
+#messages > .msg.user,
+#messages > .msg.jevons { content-visibility: visible; }
 #messages > .msg.virt-shell { content-visibility: visible; }
 #messages > .msg.virt-shell > * { display: none !important; }
 .composer-images { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 6px; }
@@ -109,6 +113,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
 
 .msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; position: relative; }
+/* User/assistant: reserve space under the border for outside timestamp (+ pocket tab when tall). */
+.msg.user, .msg.jevons { margin-bottom: 1.2rem; }
 .msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: normal; word-wrap: break-word; }
 .msg.user .msg-body { white-space: pre-wrap; }
 .msg.user .msg-body blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 0.4em 0; color: var(--text-dim); white-space: pre-wrap; }
@@ -220,38 +226,42 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 /* Oversized content (🎯T106): full marked/HTML always mounted; collapse is
    CSS max-height + overflow:hidden on .msg-body (clip), never truncated
-   re-parse. --collapsed-max-height must match COLLAPSED_MAX_HEIGHT in JS. */
+   re-parse. --collapsed-max-height must match COLLAPSED_MAX_HEIGHT in JS.
+   Pocket polish: clipped bubble = content slotted into a dark pocket;
+   fade/tab/time are border-chrome, not in-flow competitors. */
 :root { --collapsed-max-height: 14rem; }
+/* Collapsed: border butts clipped content (time lives outside). */
+.msg.msg-clipped { padding-bottom: 0; }
 .msg.msg-clipped > .msg-body {
   max-height: var(--collapsed-max-height);
   overflow: hidden;
 }
-/* Bottom gradient pocket — content fades into the bubble/chat surface. */
+/* Pocket scrim: fade-to-dark flush to inner bottom of border (not to page bg). */
 .msg-clip-fade {
   display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   height: 2.75rem;
-  margin-top: -2.75rem;
+  margin: 0;
   pointer-events: none;
-  position: relative;
   z-index: 1;
-  background: linear-gradient(to bottom, transparent, var(--bg));
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.45));
 }
 .msg.msg-clipped > .msg-clip-fade { display: block; }
-.msg.user.msg-clipped > .msg-clip-fade {
-  background: linear-gradient(to bottom, transparent, var(--user-bg));
-}
-.msg.jevons.msg-clipped > .msg-clip-fade {
-  background: linear-gradient(to bottom, transparent, var(--bg));
-}
-/* Bottom-edge chevron tab (no "Show more" / "Show less" text). */
+/* Bottom-edge pocket tab: protrudes from outer bottom border (part of border). */
 .msg-expand-tab {
   display: flex; align-items: center; justify-content: center;
-  width: 2.25rem; height: 1.05rem; margin: 0 auto;
-  padding: 0; border: 1px solid var(--border); border-top: none;
+  width: 2.25rem; height: 1.05rem; padding: 0;
+  position: absolute; left: 50%; top: 100%;
+  transform: translateX(-50%);
+  margin: 0; margin-top: -1px; /* hard-flush / merge with outer bottom border */
+  border: 1px solid var(--border); border-top: none;
   border-radius: 0 0 7px 7px; background: var(--surface);
   color: var(--text-dim); font: inherit; font-size: 11px; line-height: 1;
-  cursor: pointer; opacity: 0.92; position: relative; z-index: 2;
-  transform: translateY(1px);
+  cursor: pointer; opacity: 0.92; z-index: 2;
 }
 .msg-expand-tab:hover { opacity: 1; color: var(--text); border-color: var(--border-focus); }
 .msg-expand-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -259,7 +269,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   background: var(--user-bg); border-color: var(--user-border); color: var(--text-dim);
 }
 .msg.jevons .msg-expand-tab {
-  background: var(--bg); border-color: var(--border);
+  background: var(--surface); border-color: var(--border);
 }
 .msg-expand-tab .chev { display: block; font-size: 10px; line-height: 1; }
 
@@ -416,8 +426,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   padding: 8px 12px; box-shadow: 0 8px 28px rgba(0,0,0,0.35);
 }
 .turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
-.msg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; line-height: 1; cursor: default; }
-.msg.user .msg-time { text-align: right; }
+/* Timestamp outside the bubble, slightly under the border (not in the pocket). */
+.msg-time {
+  position: absolute; top: 100%; left: 2px; right: auto;
+  margin-top: 4px; padding-top: 0;
+  font-size: 10px; color: var(--text-muted); font-family: var(--mono);
+  letter-spacing: -0.02em; user-select: none; line-height: 1; cursor: default;
+  z-index: 1;
+}
+.msg.user .msg-time { left: auto; right: 2px; text-align: right; }
 /* 🎯T84: GitHub mark for compacted github.com workdirs */
 .agent-dir .gh-icon { display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; opacity: 0.85; }
 .agent-node .agent-dir { display: inline-flex; align-items: center; gap: 2px; }
@@ -2139,9 +2156,10 @@ function updateExpandTab(d) {
   d._expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   d._expandBtn.setAttribute('aria-label', expanded ? 'Collapse' : 'Expand');
   d._expandBtn.title = expanded ? 'Collapse' : 'Expand';
-  // Chevron only: down when collapsed (expand), up when expanded (collapse).
+  // Pocket tab protrudes down from bottom edge: chevron flipped vs first clip
+  // land — up when collapsed (pull out of pocket), down when expanded (tuck in).
   d._expandBtn.innerHTML = '<span class="chev" aria-hidden="true">' +
-    (expanded ? '\u25B4' : '\u25BE') + '</span>';
+    (expanded ? '\u25BE' : '\u25B4') + '</span>';
 }
 
 function renderBody(d, role, text) {
@@ -2163,6 +2181,7 @@ function renderBody(d, role, text) {
   paintBody(d, role, text);
   const m = measureCollapse(d, role, text);
   if (!m.tall) {
+    // Non-tall: never tab, never fade (pocket chrome is tall-only).
     clearClipChrome(d);
     d._fullText = null;
     return;
@@ -2172,6 +2191,11 @@ function renderBody(d, role, text) {
   ensureExpandToggle(d);
 }
 function ensureExpandToggle(d) {
+  // Guard: tab only when measure marked this bubble tall (_fullText set).
+  if (!d || d._fullText == null) {
+    if (d && d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
+    return;
+  }
   if (!d._expandBtn) {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -2185,13 +2209,14 @@ function ensureExpandToggle(d) {
       if (d._expanded) scrollDownThrottled();
       scheduleVirtualize();
     });
-    // Tab sits after fade (if any) so it anchors the bubble bottom edge.
+    // Absolute pocket tab; DOM after body/fade keeps a11y order sensible.
     if (d._clipFade) d._clipFade.after(btn);
-    else d._body.after(btn);
+    else if (d._body) d._body.after(btn);
+    else d.appendChild(btn);
     d._expandBtn = btn;
   } else if (d._clipFade && d._expandBtn.previousSibling !== d._clipFade) {
     d._clipFade.after(d._expandBtn);
-  } else if (!d._clipFade && d._expandBtn.previousSibling !== d._body) {
+  } else if (!d._clipFade && d._body && d._expandBtn.previousSibling !== d._body) {
     d._body.after(d._expandBtn);
   }
   updateExpandTab(d);

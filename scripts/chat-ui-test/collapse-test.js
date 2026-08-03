@@ -8,9 +8,10 @@
 //   * tallness = full rendered height > COLLAPSED_MAX_HEIGHT × 1.5
 //   * collapsed tall bubbles keep FULL HTML in the DOM (tables/lists intact)
 //   * container is height-capped (max-height / overflow hidden / .msg-clipped)
-//   * bottom gradient (.msg-clip-fade) present when collapsed
+//   * bottom pocket scrim (.msg-clip-fade) present when collapsed (darken)
 //   * chevron tab (.msg-expand-tab) only — no "Show more" / "Show less" text
-//   * short bubble has no tab
+//   * short bubble has no tab and no fade
+//   * timestamp outside bubble box; tab flush with outer bottom border
 //   * T66: latest request/response stay expanded when tall (incl. stream
 //     that grows short→tall)
 //   * T77: when either role ceases to be latest, auto-expand reverts to clip
@@ -119,9 +120,19 @@ function assertNoShowMoreLess(text, label, failures) {
       const jBorder = getComputedStyle(jBig).borderTopWidth;
       const jBg = getComputedStyle(jBig).backgroundColor;
       const pageText = document.getElementById('messages').innerText || '';
+      const jFade = jBig.querySelector('.msg-clip-fade');
+      const jFadeBg = jFade ? getComputedStyle(jFade).backgroundImage : '';
+      const jMsgRect = jBig.getBoundingClientRect();
+      const jTime = jBig.querySelector('.msg-time');
+      const jTimeRect = jTime ? jTime.getBoundingClientRect() : null;
+      const jTabRect = jBig._expandBtn ? jBig._expandBtn.getBoundingClientRect() : null;
+      const jFadeRect = jFade ? jFade.getBoundingClientRect() : null;
+      const shortFade = short.querySelector('.msg-clip-fade');
       return {
         shortHasBtn: !!short.querySelector('.msg-expand-tab'),
         shortHasOldBtn: !!short.querySelector('.msg-expand:not(.msg-expand-tab)'),
+        shortHasFade: !!shortFade && getComputedStyle(shortFade).display !== 'none',
+        shortExpandBtn: !!short._expandBtn,
         // middle huge ones: full DOM, clipped container
         jItems: jBig._body.querySelectorAll('li').length,
         jFullN: window._t.N,
@@ -130,10 +141,17 @@ function assertNoShowMoreLess(text, label, failures) {
         jExpanded: jBig._expanded === true,
         jMaxH: jBodyStyle.maxHeight,
         jOverflow: jBodyStyle.overflow,
-        jHasFade: !!jBig.querySelector('.msg-clip-fade'),
+        jHasFade: !!jFade && getComputedStyle(jFade).display !== 'none',
+        jFadeBg,
         jBtnClass: jBig._expandBtn ? jBig._expandBtn.className : '',
         jBtnText: jBig._expandBtn ? jBig._expandBtn.textContent.trim() : '',
         jAria: jBig._expandBtn ? jBig._expandBtn.getAttribute('aria-label') : '',
+        // Pocket geometry: time outside border box; tab flush under bottom edge;
+        // fade bottom aligns with msg bottom (inner border).
+        jTimeOutside: jTimeRect ? jTimeRect.top >= jMsgRect.bottom - 1 : false,
+        jTabFlush: jTabRect ? Math.abs(jTabRect.top - jMsgRect.bottom) <= 3 : false,
+        jFadeFlush: jFadeRect ? Math.abs(jFadeRect.bottom - jMsgRect.bottom) <= 2 : false,
+        jPadBottom: getComputedStyle(jBig).paddingBottom,
         uLines: uBig._body.textContent.split('\n').length,
         uFullLen: window._t.uFullLen,
         uBodyLen: uBig._body.textContent.length,
@@ -162,6 +180,8 @@ function assertNoShowMoreLess(text, label, failures) {
 
     if (state.shortHasBtn) failures.push('short bubble sprouted an expand tab (should not)');
     if (state.shortHasOldBtn) failures.push('short bubble has legacy .msg-expand control');
+    if (state.shortHasFade) failures.push('short bubble has visible .msg-clip-fade (should not)');
+    if (state.shortExpandBtn) failures.push('short bubble has _expandBtn ref (should not)');
     if (!state.jHasBtn) failures.push('huge assistant bubble has no expand tab');
     if (state.jItems < state.jFullN) {
       failures.push(`collapsed assistant DOM has ${state.jItems}/${state.jFullN} items — want full render under clip`);
@@ -171,6 +191,19 @@ function assertNoShowMoreLess(text, label, failures) {
     if (!state.jMaxH || state.jMaxH === 'none') failures.push(`collapsed assistant max-height = ${state.jMaxH}, want capped`);
     if (state.jOverflow !== 'hidden') failures.push(`collapsed assistant overflow = ${state.jOverflow}, want hidden`);
     if (!state.jHasFade) failures.push('collapsed assistant missing .msg-clip-fade gradient');
+    // Pocket scrim must darken (rgba black), not dissolve into var(--bg)/page.
+    if (state.jFadeBg && !/rgba?\(\s*0\s*,\s*0\s*,\s*0/i.test(state.jFadeBg)) {
+      failures.push(`pocket fade backgroundImage = ${JSON.stringify(state.jFadeBg)}, want darken via rgba(0,0,0,…)`);
+    }
+    if (state.jFadeBg && /var\(--bg\)|var\(--user-bg\)/i.test(state.jFadeBg)) {
+      failures.push('pocket fade still references --bg/--user-bg (fade-to-page, not dark scrim)');
+    }
+    if (!state.jTimeOutside) failures.push('timestamp still inside bubble box (want outside / under border)');
+    if (!state.jTabFlush) failures.push('expand tab not hard-flush with outer bottom border');
+    if (!state.jFadeFlush) failures.push('clip fade not flush to inner bottom of bubble border');
+    if (state.jPadBottom && state.jPadBottom !== '0px') {
+      failures.push(`clipped bubble padding-bottom = ${state.jPadBottom}, want 0 so border butts content`);
+    }
     if (!/msg-expand-tab/.test(state.jBtnClass || '')) failures.push(`expand control class = ${JSON.stringify(state.jBtnClass)}, want msg-expand-tab`);
     assertNoShowMoreLess(state.jBtnText, 'assistant tab', failures);
     if (!/expand/i.test(state.jAria || '')) failures.push(`collapsed tab aria-label = ${JSON.stringify(state.jAria)}, want Expand`);
@@ -406,6 +439,6 @@ function assertNoShowMoreLess(text, label, failures) {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - clip collapse (full DOM + max-height), T66 latest stay expanded, T77 non-latest clip, no Show more/less');
+  console.log('ok - pocket clip collapse (dark scrim + border tab + time outside), T66/T77, short no tab');
   console.log('screenshots: artifacts/collapse-preview.png, artifacts/collapse-expanded.png');
 })();
