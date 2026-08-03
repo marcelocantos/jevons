@@ -190,7 +190,11 @@ longer maintains its own transcript database.
 - Grok realtime voice bridge still lives in-tree.
 - Lua view script runtime (🎯T9) is partially implemented — server-side
   rendering works; client-side Lua on iOS is not yet wired.
-- sqlpipe state sync (🎯T10) is incomplete.
+- sqlpipe state sync (🎯T10) is incomplete. Pure-transport residual
+  🎯T10.1 is landed: `internal/sync` PeerMessage framing + policy;
+  `/ws/sqlpipe` rejects application JSON and fails closed without a
+  PeerSession. Remaining: Peer re-integration (CGO/C++23, 🎯T10.2),
+  requests/diff/subscriptions (T10.3–T10.5), product cutover (T10.6).
 - Active work dashboard (🎯T16.1) complete.
 
 ### Testing
