@@ -602,7 +602,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		replayStart := time.Now()
 		var frames int
 		var bytes int
-		start, total, err := clog.ReplayTail(historyReplayTurns, func(line string) error {
+		// 🎯T142: sealed-turn replay — merge token stream into one frame/turn.
+		start, total, err := clog.ReplayTailSealed(historyReplayTurns, func(line string) error {
 			frames++
 			bytes += len(line) + 1
 			writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -618,6 +619,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			"ms":         replayMS,
 			"older":      start,
 			"total":      total,
+			"sealed":     true, // 🎯T142
 		}
 		if err != nil {
 			fields["err"] = err.Error()
