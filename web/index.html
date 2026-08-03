@@ -405,6 +405,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
 #theme-toggle button:hover { color: var(--text-dim); }
 #theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
+/* 🎯T138: stable degraded cockpit banner (overseer down / budget pause) */
+#degraded-banner {
+  display: none; flex-shrink: 0; padding: 8px 20px; font-size: 12px; font-weight: 500;
+  background: var(--amber); color: #1a1a12; border-bottom: 1px solid var(--border);
+}
+#degraded-banner.visible { display: block; }
 #agents { flex: 1; overflow-y: auto; padding: 8px 12px; min-height: 60px; max-height: 45%; }
 /* 🎯T124: fleet transcript inspect — bottom of RHS; never main chat */
 #agent-inspect {
@@ -485,6 +491,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 </head>
 <body>
 <div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span><span id="voice-status"><span class="voice-dot"></span><span id="voice-status-text">listening</span></span><div id="theme-toggle"><button data-t="light" title="Light">&#9788;</button><button data-t="system" title="System" class="active">&#9680;</button><button data-t="dark" title="Dark">&#9790;</button></div></div>
+<div id="degraded-banner" role="status" aria-live="polite"></div>
 <div id="main">
   <div id="chat-pane">
     <div id="messages"></div>
@@ -556,6 +563,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/jlog.js"></script>
 <script src="scripts/decision_log.js"></script>
 <script src="scripts/transport.js"></script>
+<script src="scripts/chat_reconnect.js"></script>
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
 <script src="scripts/fleet_row.js"></script>
@@ -822,6 +830,26 @@ let chatConnOpenedAt = 0;
 let chatConnFirstFrameAt = 0;
 let chatConnHistoryMetaAt = 0;
 let chatConnUiReadyLogged = false;
+// 🎯T143: soft reconnect — keep DOM, suppress history firehose until meta.
+let chatEverReady = false;
+let softReconnectActive = false;
+// 🎯T138: degraded cockpit (overseer down) — banner + long reconnect backoff.
+const degradedBannerEl = document.getElementById('degraded-banner');
+function setDegraded(on, reason) {
+  if (transport && typeof transport.setDegradedHold === 'function') {
+    transport.setDegradedHold(!!on);
+  }
+  if (!degradedBannerEl) return;
+  if (on) {
+    degradedBannerEl.textContent = reason
+      ? ('Cockpit degraded: ' + reason + ' — history stays; send blocked until overseer is back.')
+      : 'Cockpit degraded: overseer is not running.';
+    degradedBannerEl.classList.add('visible');
+  } else {
+    degradedBannerEl.textContent = '';
+    degradedBannerEl.classList.remove('visible');
+  }
+}
 function chatConnMs() {
   return chatConnOpenedAt ? Math.round(performance.now() - chatConnOpenedAt) : 0;
 }
@@ -844,6 +872,32 @@ transport.onOpen = () => {
   chatConnFirstFrameAt = 0;
   chatConnHistoryMetaAt = 0;
   chatConnUiReadyLogged = false;
+  const msgCount = msgs ? msgs.querySelectorAll('.msg').length : 0;
+  softReconnectActive = (typeof ChatReconnect !== 'undefined' && ChatReconnect.shouldSoftReconnect)
+    ? ChatReconnect.shouldSoftReconnect({ msgCount: msgCount, everReady: chatEverReady })
+    : false;
+
+  if (softReconnectActive) {
+    // 🎯T143: keep transcript DOM; cancel progressive hydrate thrash only.
+    progressiveHistoryRunning = false;
+    loadingEarlier = false;
+    dot.className = 'dot on';
+    sTxt.textContent = 'reconnecting';
+    sendBtn.disabled = false;
+    input.value = v;
+    logChatConn('soft_reconnect', { ms: 0, msgCount: msgCount });
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('reconnect', {
+        corr: pageCorr,
+        conn_id: chatConnId,
+        ms: 0,
+      }));
+    }
+    return;
+  }
+
+  // Hard reconnect / first paint — wipe and full replay.
+  softReconnectActive = false;
   // Until history_meta, show connecting — full "connected" after replay span ends.
   dot.className = 'dot on';
   sTxt.textContent = 'connecting';
@@ -866,14 +920,18 @@ transport.onOpen = () => {
       corr: pageCorr,
     }));
   }
-  logChatConn('open', { ms: 0 });
+  logChatConn('open', { ms: 0, soft: false });
 };
 transport.onClose = () => {
   // Transport handles reconnect (backoff + version check) internally.
-  logChatConn('close', {});
+  logChatConn('close', { soft: !!softReconnectActive });
   chatConnId = null;
   chatConnOpenedAt = 0;
-  dot.className = 'dot off'; sTxt.textContent = 'reconnecting'; sendBtn.disabled = true;
+  softReconnectActive = false;
+  // Keep transcript if we had been ready (T143); only status chrome updates.
+  dot.className = 'dot off';
+  sTxt.textContent = 'reconnecting';
+  sendBtn.disabled = true;
   // Clear chrome only — do not auto-drain the send queue while offline (🎯T113).
   setWorking(false, undefined, { skipDrain: true });
 };
@@ -906,10 +964,31 @@ function handle(m) {
   // 🎯T140: server conn hello — attach conn_id before history firehose.
   if (typ === 'conn') {
     chatConnId = m.conn_id || m.connId || null;
-    logChatConn('open', {
+    logChatConn(softReconnectActive ? 'soft_reconnect' : 'open', {
       concurrent: m.concurrent,
       ms: chatConnMs(),
+      soft: !!softReconnectActive,
     });
+    return;
+  }
+
+  // 🎯T138: overseer-down / degraded — banner; do not thrash reconnect.
+  if (typ === 'error') {
+    const errText = m.error || m.message || '';
+    if (typeof ChatReconnect !== 'undefined' && ChatReconnect.isOverseerDownError &&
+        ChatReconnect.isOverseerDownError(errText)) {
+      setDegraded(true, errText);
+      logChatConn('degraded', { ms: chatConnMs() });
+    }
+    // Fall through so existing error UI (if any) still runs.
+  }
+  if (typ === 'status' && m.text && /overseer is back/i.test(String(m.text))) {
+    setDegraded(false);
+  }
+
+  // 🎯T143: soft reconnect — drop history firehose; keep control frames.
+  if (softReconnectActive && typeof ChatReconnect !== 'undefined' &&
+      ChatReconnect.shouldSuppressFrame && ChatReconnect.shouldSuppressFrame(true, m)) {
     return;
   }
 
@@ -919,6 +998,7 @@ function handle(m) {
     logChatConn('first_frame', {
       ms: chatConnMs(),
       type: typ || (m.message && m.message.role) || 'unknown',
+      soft: !!softReconnectActive,
     });
   }
 
@@ -927,18 +1007,32 @@ function handle(m) {
   // infinite scroll is not a data throttle. Optional top sentinel remains
   // while pages are outstanding (does not gate the progressive fetch).
   if (typ === 'history_meta') {
+    const wasSoft = softReconnectActive;
+    softReconnectActive = false;
     oldestIndex = m.start || 0;
     chatConnHistoryMetaAt = performance.now();
     // End chronological WS replay burst — one pin, then optional progressive hydrate.
-    endHistoryReplayAndPin('history_meta');
+    if (!wasSoft) endHistoryReplayAndPin('history_meta');
+    else if (historyReplayActive) endHistoryReplayAndPin('history_meta');
     sTxt.textContent = 'connected';
+    sendBtn.disabled = false;
+    chatEverReady = true;
     logChatConn('history_meta', {
       ms: chatConnMs(),
       frames: m.replay_frames,
       bytes: m.replay_bytes,
       replay_ms: m.replay_ms,
       concurrent: m.concurrent,
+      soft: wasSoft,
     });
+    // Soft reconnect: DOM already has transcript — skip full progressive re-hydrate.
+    if (wasSoft) {
+      if (!chatConnUiReadyLogged) {
+        chatConnUiReadyLogged = true;
+        logChatConn('ui_ready', { ms: chatConnMs(), soft: true });
+      }
+      return;
+    }
     // 🎯T120.4: progressive hydrate start (corr-linked).
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_start', {
@@ -2412,8 +2506,9 @@ function formatAgentDir(d) {
   return (typeof FleetRow !== 'undefined') ? FleetRow.formatAgentDir(d) : escHtml(String(d || ''));
 }
 // 🎯T82: primary refresh is agents_changed push; slow poll is reconnect fallback only.
-setInterval(refreshAgents, 30000);
-refreshAgents();
+// 🎯T141: fleet refresh must not abort boot (theme/connect).
+setInterval(function () { try { refreshAgents(); } catch (_) {} }, 30000);
+try { refreshAgents(); } catch (_) {}
 
 // 🎯T8.2: jwork workers panel — poll + SSE lifecycle stream.
 const workersEl = document.getElementById('workers');

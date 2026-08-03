@@ -65,10 +65,19 @@ class WebSocketTransport {
     // 🎯T140: generation increments on every _open so stale sockets/handlers
     // can be ignored (multi-connect races).
     this.generation = 0;
+    // 🎯T138: when true, use long reconnect backoff (overseer degraded).
+    this._degradedHold = false;
+  }
+
+  setDegradedHold(on) {
+    this._degradedHold = !!on;
+    if (!on) this._reconnectAttempt = 0;
   }
 
   // Exponential backoff schedule (ms). Starts tight, caps at 5s.
   static _BACKOFF = [50, 100, 200, 400, 800, 1600, 3200, 5000];
+  // 🎯T138: longer backoff while overseer is down (avoid thrash).
+  static _DEGRADED_BACKOFF = [2000, 5000, 10000, 15000, 30000];
   // Send a ping every N ms; close socket if no traffic for N ms.
   static _HEARTBEAT_MS = 15000;
   static _WATCHDOG_MS = 25000;
@@ -149,7 +158,9 @@ class WebSocketTransport {
       location.reload();
       return;
     }
-    const delays = WebSocketTransport._BACKOFF;
+    const delays = this._degradedHold
+      ? WebSocketTransport._DEGRADED_BACKOFF
+      : WebSocketTransport._BACKOFF;
     const delay = delays[Math.min(this._reconnectAttempt, delays.length - 1)];
     this._reconnectAttempt++;
     this._reconnectTimer = setTimeout(() => {

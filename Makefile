@@ -61,6 +61,7 @@ test-web:
 	node web/scripts/wispr_context_test.js
 	node web/scripts/send_queue_test.js
 	node web/scripts/decision_log_test.js
+	node web/scripts/chat_reconnect_test.js
 	node web/scripts/tool_summary_test.js
 	node web/scripts/tool_tooltip_test.js
 	node web/scripts/agent_transcript_test.js
