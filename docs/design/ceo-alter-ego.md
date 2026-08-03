@@ -194,4 +194,7 @@ Until the owner marks this ratified, treat contested calls as **draft guidance**
 
 - **2026-08-01** — Owner: CEO should be alter ego; T87/T90 are dimensions of a larger identity (filed 🎯T98).
 - **2026-08-02** — Grok CLI embodiment inventory points here for full alter-ego policy.
-- **2026-08-03** — Draft doctrine note landed for owner review (this file).
+- **2026-08-03** — Draft doctrine note landed for owner review (this file). Linked from
+  `AGENTS.md`, `agents-guide.md`, and `internal/config/persona.md`. Hermetic ratchets:
+  `scripts/docratchet` + `internal/config` persona/guide markers. Residual: owner
+  ratification checklist above (do not ship contested hard-law expansion without it).
