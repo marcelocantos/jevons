@@ -92,6 +92,10 @@ type Server struct {
 	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
 	tokenLimiter *tokenRateLimiter
 
+	// peerSessionFactory builds pure sqlpipe Peer sessions for /ws/sqlpipe
+	// (🎯T10 pure transport residual). Nil → endpoint fails closed.
+	peerSessionFactory PeerSessionFactory
+
 	// Async notifications (worker replies, budget alerts) bound for the
 	// overseer. Its ACP session takes one prompt at a time, so a note that
 	// arrives mid-turn is queued here and flushed on the next turn-complete
@@ -276,6 +280,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
+	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe) // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
 	mux.HandleFunc("POST /api/asides", s.handleCreateAside)       // 🎯T136: register purpose=aside in fleet
