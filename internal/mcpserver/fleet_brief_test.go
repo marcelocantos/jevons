@@ -90,6 +90,15 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"hard-reloadable UI",
 		"proven API",
 		"daily path",
+		// 🎯T194 daily-path achieve evidence
+		"Achieve reports need activated daily path",
+		"T194",
+		"necessary not sufficient",
+		"restart-daily-jevonsd.sh",
+		"live probe",
+		"HasDailyPathEvidence",
+		"hermetics alone",
+		"stale binary",
 		// 🎯T197 worker names: literal dots, never digit-squash
 		"Worker names: literal dots for hierarchical ids",
 		"T197",

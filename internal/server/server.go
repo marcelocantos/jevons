@@ -115,6 +115,10 @@ type Server struct {
 	// frontierWatchCancel / frontierWatchPath: fsnotify on resolved ledger (🎯T131).
 	frontierWatchCancel context.CancelFunc
 	frontierWatchPath   string
+	// achievedTargetsSeen is the last-observed set of ledger status=achieved
+	// target IDs for 🎯T195 reap-on-achieve. Seeded on watch bind; only
+	// *newly* achieved IDs trigger implementer reaping (no mass-kill on boot).
+	achievedTargetsSeen map[string]bool
 
 	// workers is the 🎯T8.2 observability tracker (SQLite + SSE hub).
 	workers *workers.Tracker
@@ -307,6 +311,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
 	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend) // 🎯T182: product agent_send proxy
+	// 🎯T198: stop workers engaged on a frontier target (TargetID equality).
+	mux.HandleFunc("POST /api/agents/engagement/stop", s.handleEngagementStop)
 	mux.HandleFunc("POST /api/asides", s.handleCreateAside)          // 🎯T136: register purpose=aside in fleet
 	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)   // 🎯T152: dismiss fleet aside on target filed
 	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)    // 🎯T200: domain portfolio groups

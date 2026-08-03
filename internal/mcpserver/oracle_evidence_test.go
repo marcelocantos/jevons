@@ -61,3 +61,47 @@ func TestCompletionEvidenceClassString(t *testing.T) {
 		t.Fatalf("got %q", CompletionOracleEvidence.String())
 	}
 }
+
+// 🎯T194: daily-path evidence required for daemon/API achieve; hermetics alone insufficient.
+func TestHasDailyPathEvidence(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", false},
+		{"hermetic only", "Done. SHA abcdef0. go test ./internal/server -run Frontier PASS", false},
+		{"make test only", "complete — make test green", false},
+		{"restart-daily", "Done. Detached restart-daily-jevonsd succeeded; SHA deadbeef", true},
+		{"live curl", "Live probe: curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:13705/api/frontier → 200", true},
+		{"http 200 frontier", "GET http://127.0.0.1:13705/api/frontier → HTTP 200 with targets JSON", true},
+		{"non-404", "restart-daily exit 0; /api/frontier non-404", true},
+		{"daily path phrase", "proven on the daily path after bounce", true},
+		{"zero-downtime residual", "proven zero-downtime upgrade; product path green", true},
+		{"status only", "still rebuilding", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := HasDailyPathEvidence(tc.in)
+			if got != tc.want {
+				t.Fatalf("HasDailyPathEvidence(%q)=%v want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLooksLikeHermeticOnlyDaemonClaim(t *testing.T) {
+	if !LooksLikeHermeticOnlyDaemonClaim("Done. hermetic go test ./internal/server PASS") {
+		t.Fatal("hermetic-only achieve claim should flag T194 anti-pattern")
+	}
+	if LooksLikeHermeticOnlyDaemonClaim("Done. restart-daily-jevonsd + curl /api/frontier HTTP 200. go test green") {
+		t.Fatal("daily-path evidence must clear hermetic-only flag")
+	}
+	if LooksLikeHermeticOnlyDaemonClaim("still reading the tree") {
+		t.Fatal("non-claim must not flag")
+	}
+	if LooksLikeHermeticOnlyDaemonClaim("Done. Mission complete.") {
+		// bare done is T31, not T194 hermetic-only
+		t.Fatal("bare done without hermetic markers is not hermetic-only daemon claim")
+	}
+}

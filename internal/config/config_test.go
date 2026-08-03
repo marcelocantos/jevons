@@ -383,6 +383,28 @@ func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
 	}
 }
 
+// 🎯T194: daemon/API achieve requires activated daily path (restart-daily + live probe).
+func TestDefaultPersonaDailyPathAchieve(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Achieve reports need activated daily path",
+		"T194",
+		"necessary, not sufficient",
+		"restart-daily-jevonsd",
+		"live probe",
+		"stale binary",
+		"HasDailyPathEvidence",
+		"Hermetic unit green",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T194 marker %q", want)
+		}
+	}
+}
+
 // 🎯T78/T104/T125/T129/T130/T155/T193/T176: agents-guide is the PO/worker product surface that inherits doctrine.
 func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	// agents-guide.md is repo-root product docs consumed by PO/workers.
@@ -482,6 +504,14 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"hard-reloadable UI",
 		"proven API",
 		"daily path",
+		// 🎯T194 daily-path achieve
+		"Achieve reports need activated daily path",
+		"T194",
+		"necessary not sufficient",
+		"restart-daily-jevonsd",
+		"live probe",
+		"HasDailyPathEvidence",
+		"hermetics alone",
 		// 🎯T197 worker names: literal dots
 		"Worker names: literal dots for hierarchical target ids",
 		"T197",
@@ -577,6 +607,14 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"hard-reloadable UI",
 		"proven API",
 		"daily path",
+		// 🎯T194 daily-path achieve
+		"Achieve reports need activated daily path",
+		"T194",
+		"necessary not sufficient",
+		"restart-daily-jevonsd",
+		"live probe",
+		"HasDailyPathEvidence",
+		"stale binary",
 		// 🎯T197 worker names: literal dots
 		"Worker names literal dots",
 		"T197",

@@ -195,6 +195,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #mermaid-viz-panel .mvp-empty-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; }
 #mermaid-viz-panel .mvp-empty-body { font-size: 12px; line-height: 1.45; margin: 0 0 8px; }
 #mermaid-viz-panel .mvp-empty-hint { font-size: 11px; color: var(--text-muted); margin: 0; }
+/* 🎯T196: product fetch failure (404/5xx/network) — not the empty paste shell */
+#mermaid-viz-panel .mvp-error { text-align: left; color: var(--text-dim); max-width: 36em; margin: 0 auto; }
+#mermaid-viz-panel .mvp-error-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-error-body { font-size: 12px; line-height: 1.45; margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-error-hint { font-size: 11px; color: var(--text-muted); margin: 0; }
 #mermaid-viz-panel .mvp-paste-wrap {
   display: none; flex-direction: column; gap: 6px; padding: 8px 10px;
   border-top: 1px solid var(--border); flex-shrink: 0; background: var(--surface-raised);
@@ -2047,6 +2052,41 @@ function renderMermaidPanelEmpty() {
   _mermaidPanelState = null;
   setMermaidPanelTitle('Graph viz');
 }
+/**
+ * 🎯T196: Show HTTP/network failure in panel body + status with recovery hint.
+ * Never uses the generic empty paste shell (that implies "no content yet").
+ */
+function renderMermaidPanelFetchError(err, defaults) {
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  const d = defaults || {};
+  showMermaidPasteArea(false);
+  if (MA && typeof MA.productFetchFailureFromError === 'function') {
+    const view = MA.productFetchFailureFromError(err, d);
+    if (body) body.innerHTML = view.bodyHtml;
+    _mermaidPanelState = null;
+    setMermaidPanelTitle(view.title);
+    setMermaidPanelStatus(view.status);
+    return view;
+  }
+  const msg = String(err && err.message ? err.message : err || 'unknown error');
+  const statusCode = err && typeof err.httpStatus === 'number' ? err.httpStatus : null;
+  const code = statusCode != null ? ('HTTP ' + statusCode) : '';
+  const status = (d.resource || 'Request') + ' failed: ' + (code || msg) + ' · rebuild / restart-daily';
+  if (body) {
+    body.innerHTML =
+      '<div class="mvp-error" data-mvp-fetch-error="1">' +
+      '<p class="mvp-error-title">' + (d.resource || 'Request') + ' could not load</p>' +
+      '<p class="mvp-error-body"><strong>' + (code || 'Error') + '</strong>' +
+      (msg && msg !== code ? (' — ' + msg) : '') + '</p>' +
+      '<p class="mvp-error-hint">Rebuild jevonsd if needed, then run scripts/restart-daily-jevonsd.sh and hard-reload the UI.</p>' +
+      '</div>';
+  }
+  _mermaidPanelState = null;
+  setMermaidPanelTitle(d.resource || 'Request');
+  setMermaidPanelStatus(status);
+  return { status: status, title: d.resource || 'Request' };
+}
 function applyMermaidPanelContent(opts) {
   const o = opts || {};
   const MA = window.MermaidActions;
@@ -2147,6 +2187,7 @@ function openVizFromChrome() {
 /**
  * 🎯T185: Frontier Graph — open ~90% panel with entire unachieved dependency graph.
  * Fetches GET /api/frontier/graph (ledger-built Mermaid); renders into #mermaid-viz-panel.
+ * 🎯T196: 404/5xx/network → actionable error body (HTTP + restart-daily), not empty paste shell.
  */
 function openFrontierGraph(opts) {
   const o = opts || {};
@@ -2154,6 +2195,7 @@ function openFrontierGraph(opts) {
     ? FrontierTable.GRAPH_API_PATH
     : '/api/frontier/graph';
   showMermaidPanelShell({ large: true });
+  showMermaidPasteArea(false);
   setMermaidPanelTitle('Unachieved graph');
   setMermaidPanelStatus(o.status || 'Loading unachieved dependency graph…');
   const body = document.getElementById('mvp-body');
@@ -2162,10 +2204,15 @@ function openFrontierGraph(opts) {
     .then(function (r) {
       if (!r.ok) {
         return r.json().then(function (j) {
-          throw new Error((j && j.error) || ('HTTP ' + r.status));
-        }).catch(function (e) {
-          if (e && e.message && e.message.indexOf('HTTP') === 0) throw e;
-          throw new Error('HTTP ' + r.status);
+          const err = new Error((j && j.error) || ('HTTP ' + r.status));
+          err.httpStatus = r.status;
+          err.kind = 'http';
+          throw err;
+        }, function () {
+          const err = new Error('HTTP ' + r.status);
+          err.httpStatus = r.status;
+          err.kind = 'http';
+          throw err;
         });
       }
       return r.json();
@@ -2181,6 +2228,7 @@ function openFrontierGraph(opts) {
             edgeCount: (payload && payload.edge_count) || 0,
           };
       if (!model.available || !model.mermaid) {
+        // Empty ledger / no graph — not a product fetch failure (distinct from 🎯T196).
         renderMermaidPanelEmpty();
         setMermaidPanelTitle('Unachieved graph');
         setMermaidPanelStatus(model.error || 'No unachieved graph available');
@@ -2198,9 +2246,8 @@ function openFrontierGraph(opts) {
     })
     .catch(function (err) {
       showMermaidPanelShell({ large: true });
-      renderMermaidPanelEmpty();
-      setMermaidPanelTitle('Unachieved graph');
-      setMermaidPanelStatus('Graph failed: ' + String(err && err.message || err));
+      // 🎯T196: never the empty paste shell here — that looks "unimplemented".
+      renderMermaidPanelFetchError(err, { resource: 'Unachieved graph' });
       return null;
     });
 }

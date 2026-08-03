@@ -35,14 +35,15 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148)."),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (e.g. 'tern', 'jevon-frontend')")),
+			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing."),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
 			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Empty = keep stored provider on resume, else daemon default (config/env/grok). 🎯T148.")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
+			mcp.WithString("target_id", mcp.Description("Optional bullseye target id this agent is engaged on (e.g. T10.2). Written to registry as target_id for Frontier engagement overlay (🎯T198). Empty = not mission-bound.")),
 		),
 		s.handleAgentStart,
 	)
@@ -158,6 +159,19 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	actor, _ := args["actor"].(string)
 	parent, _ := args["parent"].(string)
 	purpose, _ := args["purpose"].(string)
+	targetID, _ := args["target_id"].(string)
+	// Also accept mission / bullseye_target aliases (same field).
+	if targetID == "" {
+		if v, ok := args["mission"].(string); ok {
+			targetID = v
+		}
+	}
+	if targetID == "" {
+		if v, ok := args["bullseye_target"].(string); ok {
+			targetID = v
+		}
+	}
+	targetID = normalizeAgentTargetID(targetID)
 
 	life := map[string]any{"name": name, "workdir": workdir}
 
@@ -243,6 +257,10 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	if !existed || def.Purpose == "" {
 		def.Purpose = purpose
 	}
+	// 🎯T198: target_id on mint, or when caller supplies a non-empty id (rebind).
+	if targetID != "" {
+		def.TargetID = targetID
+	}
 	if err := s.registry.Register(*def); err != nil {
 		life["err"] = err.Error()
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
@@ -264,11 +282,29 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	life["purpose"] = def.Purpose
 	life["parent"] = def.Parent
 	life["provider"] = string(def.Provider)
+	if def.TargetID != "" {
+		life["target_id"] = def.TargetID
+	}
 	s.logLifecycle(compAgentLifecycle, "start", "ok", life)
 
-	return mcp.NewToolResultText(fmt.Sprintf(
-		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, provider: %s)",
-		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent, def.Purpose, def.Provider)), nil
+	msg := fmt.Sprintf(
+		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, provider: %s",
+		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent, def.Purpose, def.Provider)
+	if def.TargetID != "" {
+		msg += fmt.Sprintf(", target_id: %s", def.TargetID)
+	}
+	msg += ")"
+	return mcp.NewToolResultText(msg), nil
+}
+
+// normalizeAgentTargetID strips 🎯 and whitespace for registry TargetID (🎯T198).
+func normalizeAgentTargetID(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	s = strings.TrimPrefix(s, "🎯")
+	return strings.TrimSpace(s)
 }
 
 func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
