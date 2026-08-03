@@ -4840,7 +4840,9 @@ function hideAgentInspect() {
 
 function renderAgentInspect(model) {
   if (!agentInspectEl || !agentInspectBody) return;
-  setRhsBottomTab('transcript');
+  // 🎯T208: body re-paint only — never switch bottom tab. Transcript tab is set only
+  // by selectAgent (owner picks fleet agent) or explicit Transcript tab click.
+  // Quiet poll / refreshAgents must leave Frontier alone while selection remains.
   if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
   if (model.error) {
     agentInspectBody.innerHTML = '<div class="ai-err"></div><div class="ai-empty"></div>';

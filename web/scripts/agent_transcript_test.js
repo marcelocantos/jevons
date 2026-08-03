@@ -100,6 +100,30 @@ test('index.html wires agent inspect pane + selectAgent transcript', function ()
     'selectAgent must not append to main messages');
 });
 
+// 🎯T208: quiet/background inspect re-paint must not steal rhsBottomTab.
+// Frontier stays active across refreshAgents + 4s poll while selectedAgent set.
+test('T208 quiet inspect re-paint does not setRhsBottomTab transcript', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const renderFn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
+  assert.ok(renderFn, 'renderAgentInspect present before loadAgentTranscript');
+  // Ban the real call (not comment mentions of the helper name).
+  assert.ok(!/setRhsBottomTab\s*\(/.test(renderFn[0]),
+    'renderAgentInspect must not call setRhsBottomTab (quiet poll steals Frontier)');
+  // selectAgent still switches to Transcript on explicit owner pick.
+  const selectFn = html.match(/function selectAgent\([\s\S]*?\nfunction hideAgentInspect/);
+  assert.ok(selectFn, 'selectAgent present before hideAgentInspect');
+  assert.ok(
+    /setRhsBottomTab\([\s\S]*?tabAfterAgentSelect\(true\)/.test(selectFn[0]) ||
+      /setRhsBottomTab\([\s\S]*?['"]transcript['"]/.test(selectFn[0]),
+    'selectAgent must set transcript tab on open inspect');
+  // Quiet path still reloads body while selection remains (refresh + poll).
+  assert.ok(html.indexOf('loadAgentTranscript(selectedAgent, { quiet: true })') >= 0,
+    'quiet loadAgentTranscript still used for poll/refresh body re-paint');
+  // Explicit tab click wiring remains.
+  assert.ok(/btn\.dataset\.tab/.test(html) && /setRhsBottomTab\(btn\.dataset\.tab\)/.test(html),
+    'owner tab click still sets rhsBottomTab');
+});
+
 // 🎯T157: RHS inspect assistant bodies use sealed markdown, not plain textContent-only.
 test('T157 renderAgentInspect paints assistant via parseAssistantMarkdown', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
