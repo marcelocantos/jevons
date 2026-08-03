@@ -262,6 +262,21 @@
   // whole assistant response (coalesced consecutive assistant text frames).
   // Never emit partial mid-markdown fragments as separate display units.
 
+  // 🎯T147: prefer ChatEvents join helpers when available (browser load
+  // order / Node require); keep a local twin so this module stays usable
+  // in isolation and never falls back to bare += at fence edges.
+  function coalesceAssistantTextLocal(prev, next) {
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.coalesceAssistantText) {
+      return ChatEvents.coalesceAssistantText(prev, next);
+    }
+    prev = String(prev == null ? '' : prev);
+    next = String(next == null ? '' : next);
+    if (!prev) return next;
+    if (!next) return prev;
+    if (!/[\n\r]$/.test(prev) && /^```/.test(next)) return prev + '\n\n' + next;
+    return prev + next;
+  }
+
   function extractAssistantText(frame) {
     if (!frame || frame.type !== 'assistant') return '';
     const content = frame.message && frame.message.content;
@@ -269,7 +284,9 @@
     let txt = '';
     for (let i = 0; i < content.length; i++) {
       const c = content[i];
-      if (c && c.type === 'text' && typeof c.text === 'string') txt += c.text;
+      if (c && c.type === 'text' && typeof c.text === 'string') {
+        txt = coalesceAssistantTextLocal(txt, c.text);
+      }
     }
     return txt;
   }
@@ -304,7 +321,7 @@
         const text = extractAssistantText(m);
         if (!text) continue;
         if (pending && pending.role === 'jevons') {
-          pending.text += text;
+          pending.text = coalesceAssistantTextLocal(pending.text, text);
           if (ts != null) pending.timestamp = ts;
         } else {
           pending = { role: 'jevons', text: text, timestamp: ts };

@@ -995,7 +995,8 @@ function lastMessageish() {
 function appendOrAddJevons(text, ts) {
   const target = lastMessageish();
   if (target && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
-    target._streamRaw += text;
+    // 🎯T147: join-time fence repair at segment edge (not bare +=).
+    target._streamRaw = ChatEvents.coalesceAssistantText(target._streamRaw, text);
     scheduleJevonsRender(target);   // rAF-debounced: coalesce burst chunks into ONE parse (🎯T57)
     return;
   }
@@ -2137,10 +2138,15 @@ function renderFrames(lines, opts) {
       }
     } else if (m.type === 'assistant') {
       let txt = '';
-      try { txt = ChatEvents.assistantTextBlocks(m).map(b => b.text).join(''); } catch { txt = ''; }
+      // 🎯T147: joinAssistantTexts (not bare join('')) + coalesce at history pending edge.
+      try {
+        txt = ChatEvents.joinAssistantTexts(
+          ChatEvents.assistantTextBlocks(m).map(b => b.text),
+        );
+      } catch { txt = ''; }
       if (txt) {
         if (pending) {
-          pending.raw += txt;
+          pending.raw = ChatEvents.coalesceAssistantText(pending.raw, txt);
           pending.el._layoutText = pending.raw;
           if (!lazy) paintBody(pending.el, 'jevons', pending.raw);
         } else {
