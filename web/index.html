@@ -580,6 +580,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/tool_summary.js"></script>
 <script src="scripts/mermaid_actions.js"></script>
 <script src="scripts/markdown_normalize.js"></script>
+<script src="scripts/smd.js"></script>
+<script src="scripts/streaming_markdown.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
@@ -1182,8 +1184,11 @@ function appendOrAddJevons(text, ts) {
     scheduleJevonsRender(target);   // rAF-debounced: coalesce burst chunks into ONE parse (🎯T57)
     return;
   }
-  const el = addMsg('jevons', text, ts);
-  el._streamRaw = text;
+  // 🎯T150: open stream flag before first paint so progressive markdown
+  // applies from frame 0 (not a marked flash then smd restart).
+  const el = addMsg('jevons', text, ts, { streamOpen: true });
+  // _streamRaw already set in buildMsg when streamOpen; keep assign for clarity.
+  el._streamRaw = typeof el._streamRaw === 'string' ? el._streamRaw : text;
 }
 
 // scheduleJevonsRender coalesces streamed chunks: instead of re-parsing
@@ -1221,6 +1226,11 @@ function sealAssistantStream() {
     delete el._streamRaw;                       // clear first so the sealed
     el._layoutText = raw;                       // render draws mermaid (🎯T59)
     el._layoutRole = 'jevons';
+    // 🎯T150: end progressive session before full marked seal paint.
+    if (el._smdSession) {
+      try { el._smdSession.end(); } catch (_) { /* ignore */ }
+    }
+    destroyStreamSession(el);
     // Stay expanded through seal so measure/paint never flashes a preview
     // into the live latest bubble (would freeze follow at a mid offset).
     el._expanded = true;
@@ -1305,6 +1315,10 @@ function buildMsg(role, text, when, opts) {
   d._body = body;
   d._layoutRole = role;
   d._layoutText = text == null ? '' : text;
+  // 🎯T150: live stream bubbles paint progressive MD from the first frame.
+  if (opts && opts.streamOpen) {
+    d._streamRaw = d._layoutText;
+  }
   if (lazy) {
     // Unmeasured shell: estimated height freezes geometry until enter-band.
     d.classList.add('virt-shell');
@@ -1357,8 +1371,8 @@ function layoutMsgList(nodes) {
   for (const d of nodes) layoutMsg(d);
 }
 
-function addMsg(role, text, when) {
-  const d = buildMsg(role, text, when);
+function addMsg(role, text, when, opts) {
+  const d = buildMsg(role, text, when, opts);
   msgs.appendChild(d);
   layoutMsg(d);
   scheduleLatestExpansion();
@@ -1938,10 +1952,50 @@ function parseAssistantMarkdown(text) {
     : text;
   return marked.parse(raw == null ? '' : raw);
 }
+// 🎯T150: progressive stream paint via thetarnav/streaming-markdown (smd).
+// Mid-stream: delta parser_write into per-bubble session (closed **…** live).
+// Seal: destroy session + full marked (mermaid T59 + highlight T74).
+// Never product-default textContent for assistant stream bodies.
+function streamNormalize(text) {
+  if (typeof MarkdownNormalize !== 'undefined' && MarkdownNormalize.ensureFenceNewlines) {
+    return MarkdownNormalize.ensureFenceNewlines(text);
+  }
+  return text;
+}
+function destroyStreamSession(d) {
+  if (d && d._smdSession) {
+    try { d._smdSession.destroy(); } catch (_) { /* ignore */ }
+    d._smdSession = null;
+  }
+}
+function paintStreamBody(d, t) {
+  if (!d || !d._body) return;
+  const smdLib = (typeof smd !== 'undefined') ? smd : null;
+  const canStream = smdLib
+    && typeof StreamingMarkdown !== 'undefined'
+    && StreamingMarkdown.createSession;
+  if (!canStream) {
+    // Interim fallback only: marked every frame (never plain textContent).
+    d._body.innerHTML = parseAssistantMarkdown(t);
+    return;
+  }
+  if (!d._smdSession) {
+    d._body.innerHTML = '';
+    d._smdSession = StreamingMarkdown.createSession(d._body, smdLib);
+  }
+  if (!d._smdSession) {
+    d._body.innerHTML = parseAssistantMarkdown(t);
+    return;
+  }
+  d._smdSession.writeFull(t, streamNormalize);
+}
 function paintBody(d, role, t) {
   if (role === 'jevons') {
-    d._body.innerHTML = parseAssistantMarkdown(t);
-    if (!d._streamRaw) {
+    if (typeof d._streamRaw === 'string') {
+      paintStreamBody(d, t);
+    } else {
+      destroyStreamSession(d);
+      d._body.innerHTML = parseAssistantMarkdown(t);
       renderMermaidIn(d._body);   // sealed content only
       highlightCodeIn(d._body);   // 🎯T74
     }
