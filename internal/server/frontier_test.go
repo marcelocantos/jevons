@@ -67,12 +67,17 @@ targets:
     name: Ready leaf
     status: converging
     value: 5
+    cost: 3
     depends_on: [T1]
     acceptance:
       - First criterion must hold
       - Second criterion must hold
     context: Fixture context for T181 hover card.
     tags: [ui, frontier]
+    origin: owner
+    discovered: "2026-08-03"
+    owner: jevons-po
+    custom_note: special extra field
   T3:
     name: Blocked
     status: identified
@@ -115,6 +120,25 @@ targets:
 	}
 	if len(rows[0].Tags) != 2 || rows[0].Tags[0] != "ui" {
 		t.Fatalf("T2 tags=%v", rows[0].Tags)
+	}
+	// 🎯T184: depends_on (outgoing) with names; cost; origin; extra unknown keys.
+	if len(rows[0].DependsOn) != 1 || rows[0].DependsOn[0].ID != "T1" {
+		t.Fatalf("T2 depends_on=%+v", rows[0].DependsOn)
+	}
+	if rows[0].DependsOn[0].Name != "Done base" {
+		t.Fatalf("T2 depends_on name=%q", rows[0].DependsOn[0].Name)
+	}
+	if rows[0].Cost != 3 {
+		t.Fatalf("T2 cost=%v", rows[0].Cost)
+	}
+	if rows[0].Origin != "owner" || rows[0].Discovered != "2026-08-03" {
+		t.Fatalf("T2 origin/discovered=%q/%q", rows[0].Origin, rows[0].Discovered)
+	}
+	if rows[0].Extra == nil || rows[0].Extra["owner"] != "jevons-po" {
+		t.Fatalf("T2 extra owner=%v", rows[0].Extra)
+	}
+	if rows[0].Extra["custom_note"] != "special extra field" {
+		t.Fatalf("T2 extra custom_note=%v", rows[0].Extra)
 	}
 	if rows[1].ID != "T4" || rows[1].Fanout != 0 {
 		t.Fatalf("row1=%+v", rows[1])

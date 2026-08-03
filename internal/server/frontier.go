@@ -32,7 +32,8 @@ import (
 // graph: active targets with deps satisfied). Live refresh: fsnotify on
 // the resolved ledger + client poll fallback. No Bullseye WebSocket.
 
-// FrontierDependent is an active target that lists this row's id in depends_on (🎯T179).
+// FrontierDependent is a related target (id + short name) for tips and cards.
+// Used for both incoming dependents (🎯T179) and outgoing depends_on (🎯T184).
 type FrontierDependent struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -41,16 +42,26 @@ type FrontierDependent struct {
 // FrontierRow is one compact frontier table line.
 // 🎯T181: acceptance/context/tags ship on the list payload so ID/name
 // hover cards need no per-row detail round-trip.
+// 🎯T184: full semantic card — depends_on, cost, attestation, dates, extra.
 type FrontierRow struct {
-	ID         string              `json:"id"`
-	Name       string              `json:"name"`
-	Status     string              `json:"status"`
-	Fanout     int                 `json:"fanout"`
-	Dependents []FrontierDependent `json:"dependents,omitempty"`
-	Value      float64             `json:"value,omitempty"`
-	Acceptance []string            `json:"acceptance,omitempty"`
-	Context    string              `json:"context,omitempty"`
-	Tags       []string            `json:"tags,omitempty"`
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	Status      string              `json:"status"`
+	Fanout      int                 `json:"fanout"`
+	Dependents  []FrontierDependent `json:"dependents,omitempty"`
+	DependsOn   []FrontierDependent `json:"depends_on,omitempty"`
+	Value       float64             `json:"value,omitempty"`
+	Cost        float64             `json:"cost,omitempty"`
+	ActualCost  float64             `json:"actual_cost,omitempty"`
+	Acceptance  []string            `json:"acceptance,omitempty"`
+	Context     string              `json:"context,omitempty"`
+	Tags        []string            `json:"tags,omitempty"`
+	Attestation string              `json:"attestation,omitempty"`
+	Origin      string              `json:"origin,omitempty"`
+	Discovered  string              `json:"discovered,omitempty"`
+	Achieved    string              `json:"achieved,omitempty"`
+	// Extra carries non-canonical ledger keys as stringified values (🎯T184).
+	Extra map[string]string `json:"extra,omitempty"`
 }
 
 // FrontierResponse is GET /api/frontier JSON.
@@ -120,20 +131,39 @@ func isBullseyeNotInitialized(out string) bool {
 		strings.Contains(out, "no bullseye.yaml found")
 }
 
-// bullseyeTarget is the subset of ledger fields needed for frontier rows.
+// bullseyeTarget is the structured ledger fields used for frontier rows.
 type bullseyeTarget struct {
-	Name       string   `yaml:"name"`
-	Status     string   `yaml:"status"`
-	Value      float64  `yaml:"value"`
-	DependsOn  []string `yaml:"depends_on"`
-	Acceptance []string `yaml:"acceptance"`
-	Context    string   `yaml:"context"`
-	Tags       []string `yaml:"tags"`
+	Name        string   `yaml:"name"`
+	Status      string   `yaml:"status"`
+	Value       float64  `yaml:"value"`
+	Cost        float64  `yaml:"cost"`
+	ActualCost  float64  `yaml:"actual_cost"`
+	DependsOn   []string `yaml:"depends_on"`
+	Acceptance  []string `yaml:"acceptance"`
+	Context     string   `yaml:"context"`
+	Tags        []string `yaml:"tags"`
+	Attestation string   `yaml:"attestation"`
+	Origin      string   `yaml:"origin"`
+	Discovered  string   `yaml:"discovered"`
+	Achieved    string   `yaml:"achieved"`
+}
+
+// knownBullseyeTargetKeys are fields mapped into FrontierRow columns; other
+// target keys land in FrontierRow.Extra for key-value card display (🎯T184).
+var knownBullseyeTargetKeys = map[string]bool{
+	"name": true, "status": true, "value": true, "cost": true, "actual_cost": true,
+	"depends_on": true, "acceptance": true, "context": true, "tags": true,
+	"attestation": true, "origin": true, "discovered": true, "achieved": true,
 }
 
 // bullseyeLedger is the on-disk YAML shape (targets map only).
 type bullseyeLedger struct {
 	Targets map[string]bullseyeTarget `yaml:"targets"`
+}
+
+// bullseyeLedgerRaw re-reads targets as maps so Extra can capture unknown keys.
+type bullseyeLedgerRaw struct {
+	Targets map[string]map[string]any `yaml:"targets"`
 }
 
 func isActiveStatus(status string) bool {
@@ -144,6 +174,96 @@ func isActiveStatus(status string) bool {
 func isDoneStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
 	return s == "achieved" || s == "set_aside"
+}
+
+// stringifyYAMLValue flattens a YAML scalar/list for Extra key-value display.
+func stringifyYAMLValue(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(x)
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case int:
+		return strconv.Itoa(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		// Prefer integer display when whole.
+		if x == float64(int64(x)) {
+			return strconv.FormatInt(int64(x), 10)
+		}
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case []any:
+		parts := make([]string, 0, len(x))
+		for _, el := range x {
+			s := stringifyYAMLValue(el)
+			if s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, ", ")
+	case map[string]any:
+		// Compact JSON-ish for rare map extras.
+		b, err := json.Marshal(x)
+		if err != nil {
+			return fmt.Sprint(x)
+		}
+		return string(b)
+	default:
+		return strings.TrimSpace(fmt.Sprint(x))
+	}
+}
+
+// extractTargetExtra maps unknown ledger keys → string values (sorted keys).
+func extractTargetExtra(raw map[string]any) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string)
+	for k, v := range raw {
+		key := strings.TrimSpace(k)
+		if key == "" || knownBullseyeTargetKeys[key] {
+			continue
+		}
+		s := stringifyYAMLValue(v)
+		if s == "" {
+			continue
+		}
+		out[key] = s
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// resolveDependsOn builds outgoing edges with names when the dep id is known.
+func resolveDependsOn(ids []string, nameOf map[string]string) []FrontierDependent {
+	if len(ids) == 0 {
+		return []FrontierDependent{}
+	}
+	out := make([]FrontierDependent, 0, len(ids))
+	seen := make(map[string]bool)
+	for _, dep := range ids {
+		dep = strings.TrimSpace(dep)
+		if dep == "" || seen[dep] {
+			continue
+		}
+		seen[dep] = true
+		out = append(out, FrontierDependent{
+			ID:   dep,
+			Name: nameOf[dep],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return targetIDLess(out[i].ID, out[j].ID)
+	})
+	return out
 }
 
 // computeFrontierFromLedger reads a discovered ledger path and builds frontier
@@ -160,6 +280,16 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 	}
 	if doc.Targets == nil {
 		return []FrontierRow{}, nil
+	}
+	// Raw pass for Extra (unknown keys) — best-effort; ignore parse errors.
+	extraByID := make(map[string]map[string]string)
+	var rawDoc bullseyeLedgerRaw
+	if err := yaml.Unmarshal(data, &rawDoc); err == nil && rawDoc.Targets != nil {
+		for id, m := range rawDoc.Targets {
+			if ex := extractTargetExtra(m); len(ex) > 0 {
+				extraByID[id] = ex
+			}
+		}
 	}
 
 	// Precompute active set and reverse edges for fanout / dependents (🎯T179).
@@ -235,16 +365,25 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 		if tags == nil {
 			tags = []string{}
 		}
+		dependsOn := resolveDependsOn(t.DependsOn, nameOf)
 		rows = append(rows, FrontierRow{
-			ID:         id,
-			Name:       t.Name,
-			Status:     displayStatus(t.Status),
-			Fanout:     len(deps),
-			Dependents: deps,
-			Value:      t.Value,
-			Acceptance: acc,
-			Context:    strings.TrimSpace(t.Context),
-			Tags:       tags,
+			ID:          id,
+			Name:        t.Name,
+			Status:      displayStatus(t.Status),
+			Fanout:      len(deps),
+			Dependents:  deps,
+			DependsOn:   dependsOn,
+			Value:       t.Value,
+			Cost:        t.Cost,
+			ActualCost:  t.ActualCost,
+			Acceptance:  acc,
+			Context:     strings.TrimSpace(t.Context),
+			Tags:        tags,
+			Attestation: strings.TrimSpace(t.Attestation),
+			Origin:      strings.TrimSpace(t.Origin),
+			Discovered:  strings.TrimSpace(t.Discovered),
+			Achieved:    strings.TrimSpace(t.Achieved),
+			Extra:       extraByID[id],
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {

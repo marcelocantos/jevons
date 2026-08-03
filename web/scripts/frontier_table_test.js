@@ -330,6 +330,82 @@ test('formatTargetCardMarkdown includes id name status acceptance context tags (
   assert.strictEqual(FT.formatTargetCardMarkdown({}), '');
 });
 
+// 🎯T184: full semantic card — common fields, extra kv, mermaid with focus id.
+test('formatTargetCardMarkdown semantic fields + mermaid minigraph (🎯T184)', function () {
+  const row = {
+    id: 'T184',
+    name: 'Full semantic frontier card',
+    status: 'Converging',
+    value: 8,
+    cost: 3,
+    acceptance: [
+      'Card shows acceptance list',
+      'Mermaid minigraph includes focus id',
+    ],
+    context: 'Owner wants full target view with deps graph.',
+    tags: ['ui', 'frontier'],
+    depends_on: [{ id: 'T181', name: 'Rich hover' }],
+    dependents: [{ id: 'T999', name: 'Downstream consumer' }],
+    attestation: 'SHA abc1234 + green oracles',
+    origin: 'manual',
+    discovered: '2026-08-03',
+    extra: { owner: 'jevons-po', custom_flag: 'yes' },
+  };
+  const md = FT.formatTargetCardMarkdown(row);
+  assert.ok(md.indexOf('🎯T184') >= 0, 'focus id in card');
+  assert.ok(md.indexOf('**Status:**') >= 0 && md.indexOf('Converging') >= 0, 'status');
+  assert.ok(md.indexOf('**Value / cost:**') >= 0, 'value/cost section');
+  assert.ok(md.indexOf('value 8') >= 0 && md.indexOf('cost 3') >= 0, 'metrics: ' + md);
+  assert.ok(md.indexOf('**Tags:**') >= 0 && md.indexOf('ui') >= 0, 'tags');
+  assert.ok(md.indexOf('**Depends on**') >= 0 && md.indexOf('T181') >= 0, 'depends_on');
+  assert.ok(md.indexOf('**Dependents**') >= 0 && md.indexOf('T999') >= 0, 'dependents');
+  assert.ok(md.indexOf('**Acceptance**') >= 0, 'acceptance heading');
+  assert.ok(md.indexOf('Card shows acceptance list') >= 0, 'acceptance text');
+  assert.ok(md.indexOf('**Context**') >= 0 && md.indexOf('full target view') >= 0, 'context');
+  assert.ok(md.indexOf('**Attestation**') >= 0 && md.indexOf('SHA abc1234') >= 0, 'attestation');
+  assert.ok(md.indexOf('**Other fields**') >= 0, 'extra heading');
+  assert.ok(md.indexOf('owner') >= 0 && md.indexOf('jevons-po') >= 0, 'extra owner');
+  assert.ok(md.indexOf('custom_flag') >= 0, 'extra custom');
+  // Hermetic: mermaid fragment with focus id.
+  assert.ok(md.indexOf('```mermaid') >= 0, 'mermaid fence: ' + md);
+  assert.ok(md.indexOf('graph LR') >= 0, 'graph LR');
+  assert.ok(/T184/.test(md), 'focus id appears in graph body');
+  const graph = FT.formatDepMinigraph(row);
+  assert.ok(graph.indexOf('```mermaid') === 0 || graph.indexOf('```mermaid') >= 0, 'graph fence');
+  assert.ok(graph.indexOf(FT.mermaidNodeId('T184')) >= 0, 'safe focus node');
+  assert.ok(graph.indexOf('-->') >= 0, 'edges present');
+  // One-sided still draws focus node.
+  const oneSide = FT.formatDepMinigraph({ id: 'T50', name: 'Solo', depends_on: [], dependents: [] });
+  assert.ok(oneSide.indexOf('```mermaid') >= 0 && oneSide.indexOf('T50') >= 0, 'solo graph');
+
+  // normalizePayload passes through T184 fields.
+  const m = FT.normalizePayload({
+    available: true,
+    targets: [{
+      id: 'T184',
+      name: 'Full card',
+      status: 'Converging',
+      fanout: 1,
+      value: 2,
+      cost: 1,
+      acceptance: ['A holds'],
+      context: 'ctx',
+      tags: ['t'],
+      depends_on: [{ id: 'T1', name: 'Base' }],
+      dependents: [{ id: 'T2', name: 'Child' }],
+      attestation: 'ok',
+      origin: 'manual',
+      discovered: '2026-08-03',
+      extra: { owner: 'x' },
+    }],
+  });
+  assert.strictEqual(m.rows[0].depends_on[0].id, 'T1');
+  assert.strictEqual(m.rows[0].cost, 1);
+  assert.strictEqual(m.rows[0].attestation, 'ok');
+  assert.strictEqual(m.rows[0].extra.owner, 'x');
+  assert.deepStrictEqual(m.rows[0].acceptance, ['A holds']);
+});
+
 // 🎯T181: index wires rich card on .ft-id and .ft-name with left-of-pointer + html.
 test('T181 index.html rich card tip on id/name + InstantTip placement', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -351,6 +427,26 @@ test('T181 index.html rich card tip on id/name + InstantTip placement', function
   assert.ok(/\.instant-tip-card\s*\{/.test(html) || /\.instant-tip\.instant-tip-card/.test(html),
     'card CSS');
   assert.ok(html.indexOf('parseAssistantMarkdown') >= 0, 'markdown render path available');
+});
+
+// 🎯T184: index wires mermaid render on card tips + mermaid CSS in tip.
+test('T184 index.html mermaid on target card + semantic payload fields', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('// 🎯T173: headerless table');
+  assert.ok(start >= 0);
+  const end = html.indexOf('function loadFrontier', start);
+  const region = html.slice(start, end > start ? end : start + 9000);
+  assert.ok(region.indexOf('renderMermaidIn') >= 0, 'renderMermaidIn on tip: ' + region.slice(0, 200));
+  assert.ok(region.indexOf('parseAssistantMarkdown') >= 0, 'markdown path for card');
+  assert.ok(region.indexOf('left-of-pointer') >= 0 || region.indexOf('PLACE_LEFT_OF_POINTER') >= 0,
+    'placement retained');
+  assert.ok(/\.instant-tip\.instant-tip-card\s+\.mermaid-diagram/.test(html) ||
+    html.indexOf('instant-tip-card .mermaid-diagram') >= 0,
+    'card mermaid CSS');
+  // Script still exports minigraph helper.
+  const src = fs.readFileSync(path.join(__dirname, 'frontier_table.js'), 'utf8');
+  assert.ok(src.indexOf('formatDepMinigraph') >= 0, 'formatDepMinigraph exported');
+  assert.ok(src.indexOf('depends_on') >= 0, 'depends_on in client');
 });
 
 // 🎯T182: pure kickoff request → jevons-po send path with target id/name brief.

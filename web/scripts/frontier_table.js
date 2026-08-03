@@ -42,6 +42,29 @@
     return out;
   }
 
+  // normalizeNumber — finite number or undefined (omit empty zeros only if never set).
+  function normalizeNumber(raw) {
+    if (typeof raw === 'number' && isFinite(raw)) return raw;
+    if (raw == null || raw === '') return undefined;
+    var n = Number(raw);
+    return isFinite(n) ? n : undefined;
+  }
+
+  // normalizeExtra — object of string key → string value (unknown ledger fields).
+  function normalizeExtra(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    var out = {};
+    Object.keys(raw).forEach(function (k) {
+      var key = String(k || '').trim();
+      if (!key) return;
+      var v = raw[k];
+      if (v == null) return;
+      var s = typeof v === 'string' ? v.trim() : String(v).trim();
+      if (s) out[key] = s;
+    });
+    return out;
+  }
+
   // normalizePayload(apiJSON|err) → { available, ledger, cwd, rows, empty, error }
   function normalizePayload(payload, err) {
     if (err) {
@@ -59,6 +82,7 @@
     var rows = targets.map(function (t) {
       if (!t) return null;
       var deps = normalizeDependents(t.dependents);
+      var dependsOn = normalizeDependents(t.depends_on != null ? t.depends_on : t.dependsOn);
       var fanout = typeof t.fanout === 'number' ? t.fanout : (parseInt(t.fanout, 10) || 0);
       // Prefer dependents length when present (API Fanout == len(Dependents)).
       if (deps.length > 0 || Array.isArray(t.dependents)) {
@@ -70,10 +94,18 @@
         status: String(t.status || ''),
         fanout: fanout,
         dependents: deps,
-        value: typeof t.value === 'number' ? t.value : undefined,
+        depends_on: dependsOn,
+        value: normalizeNumber(t.value),
+        cost: normalizeNumber(t.cost),
+        actual_cost: normalizeNumber(t.actual_cost != null ? t.actual_cost : t.actualCost),
         acceptance: normalizeStringList(t.acceptance),
         context: t.context != null ? String(t.context).trim() : '',
         tags: normalizeStringList(t.tags),
+        attestation: t.attestation != null ? String(t.attestation).trim() : '',
+        origin: t.origin != null ? String(t.origin).trim() : '',
+        discovered: t.discovered != null ? String(t.discovered).trim() : '',
+        achieved: t.achieved != null ? String(t.achieved).trim() : '',
+        extra: normalizeExtra(t.extra),
       };
     }).filter(function (r) {
       return r && r.id;
@@ -201,9 +233,81 @@
     return '';
   }
 
-  // formatTargetCardMarkdown(row) — rich markdown for ID/name InstantTip (🎯T181).
-  // Sections: title (🎯id + name), status, acceptance (all), context, tags, dependents.
-  // Pure string builder; product renders via marked / parseAssistantMarkdown.
+  // mermaidNodeId — safe mermaid identifier from a target id (T27.1 → T27_1).
+  function mermaidNodeId(id) {
+    var s = String(id || '').trim();
+    if (!s) return 'node';
+    var safe = s.replace(/[^A-Za-z0-9_]/g, '_');
+    if (!/^[A-Za-z_]/.test(safe)) safe = 'n_' + safe;
+    return safe;
+  }
+
+  // mermaidLabel — short quoted label; escape " for mermaid node text.
+  function mermaidLabel(id, name) {
+    var label = String(id || '').trim() || '?';
+    var n = name != null ? String(name).trim() : '';
+    if (n) {
+      // Keep graph readable: id + truncated name.
+      if (n.length > 28) n = n.slice(0, 27) + '…';
+      label = label + ' · ' + n;
+    }
+    return label.replace(/"/g, "'").replace(/\n/g, ' ');
+  }
+
+  // formatDepMinigraph(row) — mermaid LR of focus + incoming + outgoing (🎯T184).
+  // Returns fenced ```mermaid block or '' when no focus id.
+  function formatDepMinigraph(row) {
+    if (!row || !row.id) return '';
+    var focusId = String(row.id).trim();
+    var focusNode = mermaidNodeId(focusId);
+    var focusLabel = mermaidLabel(focusId, row.name);
+    var depsOn = normalizeDependents(
+      row.depends_on != null ? row.depends_on : row.dependsOn
+    );
+    var dependents = normalizeDependents(row.dependents);
+    var lines = [];
+    lines.push('```mermaid');
+    lines.push('graph LR');
+    lines.push('  ' + focusNode + '["' + focusLabel + '"]');
+    lines.push('  style ' + focusNode + ' stroke-width:2px');
+    var declared = {};
+    declared[focusNode] = true;
+    function ensureNode(rel) {
+      var nid = mermaidNodeId(rel.id);
+      if (declared[nid]) return nid;
+      declared[nid] = true;
+      lines.push('  ' + nid + '["' + mermaidLabel(rel.id, rel.name) + '"]');
+      return nid;
+    }
+    var i;
+    // Incoming: dependent → focus
+    for (i = 0; i < dependents.length; i++) {
+      var inc = ensureNode(dependents[i]);
+      lines.push('  ' + inc + ' --> ' + focusNode);
+    }
+    // Outgoing: focus → depends_on
+    for (i = 0; i < depsOn.length; i++) {
+      var out = ensureNode(depsOn[i]);
+      lines.push('  ' + focusNode + ' --> ' + out);
+    }
+    lines.push('```');
+    return lines.join('\n');
+  }
+
+  // formatMetric — value/cost display; omit when undefined/null/empty.
+  function formatMetric(n) {
+    if (n == null || n === '') return '';
+    if (typeof n === 'number' && isFinite(n)) {
+      if (n === 0) return '0';
+      return String(n);
+    }
+    var s = String(n).trim();
+    return s;
+  }
+
+  // formatTargetCardMarkdown(row) — full semantic card (🎯T181 + 🎯T184).
+  // Common fields semantic; markdown bodies for acceptance/context/attestation;
+  // extra key-values; mermaid minigraph of deps. Product: parseAssistantMarkdown + mermaid.
   function formatTargetCardMarkdown(row) {
     if (!row || !row.id) return '';
     var id = String(row.id).trim();
@@ -215,32 +319,34 @@
       lines.push('');
       lines.push('**Status:** ' + st);
     }
-    var acc = normalizeStringList(row.acceptance);
-    if (acc.length > 0) {
+    var val = formatMetric(row.value);
+    var cost = formatMetric(row.cost);
+    var actual = formatMetric(row.actual_cost != null ? row.actual_cost : row.actualCost);
+    if (val || cost || actual) {
       lines.push('');
-      lines.push('**Acceptance**');
-      for (var i = 0; i < acc.length; i++) {
-        lines.push('- ' + acc[i]);
-      }
-    }
-    var ctx = row.context != null ? String(row.context).trim() : '';
-    if (ctx) {
-      // Keep tip compact: first paragraph only if multi-paragraph.
-      var firstPara = ctx.split(/\n\s*\n/)[0].trim();
-      // Cap very long single paragraphs.
-      if (firstPara.length > 480) {
-        firstPara = firstPara.slice(0, 479) + '…';
-      }
-      if (firstPara) {
-        lines.push('');
-        lines.push('**Context**');
-        lines.push(firstPara);
-      }
+      var metrics = [];
+      if (val) metrics.push('value ' + val);
+      if (cost) metrics.push('cost ' + cost);
+      if (actual) metrics.push('actual_cost ' + actual);
+      lines.push('**Value / cost:** ' + metrics.join(' · '));
     }
     var tags = normalizeStringList(row.tags);
     if (tags.length > 0) {
       lines.push('');
       lines.push('**Tags:** ' + tags.join(', '));
+    }
+    var depsOn = normalizeDependents(
+      row.depends_on != null ? row.depends_on : row.dependsOn
+    );
+    if (depsOn.length > 0) {
+      lines.push('');
+      lines.push('**Depends on** (' + depsOn.length + ')');
+      for (var di = 0; di < depsOn.length; di++) {
+        var dout = depsOn[di];
+        var outBullet = '- ' + dout.id;
+        if (dout.name) outBullet += ' — ' + dout.name;
+        lines.push(outBullet);
+      }
     }
     var deps = normalizeDependents(row.dependents);
     if (deps.length > 0) {
@@ -252,6 +358,61 @@
         if (d.name) bullet += ' — ' + d.name;
         lines.push(bullet);
       }
+    }
+    var acc = normalizeStringList(row.acceptance);
+    if (acc.length > 0) {
+      lines.push('');
+      lines.push('**Acceptance**');
+      for (var i = 0; i < acc.length; i++) {
+        // Keep markdown in criterion text intact for marked render.
+        lines.push('- ' + acc[i]);
+      }
+    }
+    var ctx = row.context != null ? String(row.context).trim() : '';
+    if (ctx) {
+      // Compact tip: first paragraph; cap very long single paragraphs.
+      var firstPara = ctx.split(/\n\s*\n/)[0].trim();
+      if (firstPara.length > 720) {
+        firstPara = firstPara.slice(0, 719) + '…';
+      }
+      if (firstPara) {
+        lines.push('');
+        lines.push('**Context**');
+        lines.push(firstPara);
+      }
+    }
+    var att = row.attestation != null ? String(row.attestation).trim() : '';
+    if (att) {
+      if (att.length > 480) att = att.slice(0, 479) + '…';
+      lines.push('');
+      lines.push('**Attestation**');
+      lines.push(att);
+    }
+    var meta = [];
+    if (row.origin) meta.push('origin: ' + String(row.origin).trim());
+    if (row.discovered) meta.push('discovered: ' + String(row.discovered).trim());
+    if (row.achieved) meta.push('achieved: ' + String(row.achieved).trim());
+    if (meta.length > 0) {
+      lines.push('');
+      lines.push('**Meta:** ' + meta.join(' · '));
+    }
+    // Unknown / extra ledger fields as key-value pairs (🎯T184).
+    var extra = normalizeExtra(row.extra);
+    var extraKeys = Object.keys(extra).sort();
+    if (extraKeys.length > 0) {
+      lines.push('');
+      lines.push('**Other fields**');
+      for (var ei = 0; ei < extraKeys.length; ei++) {
+        var ek = extraKeys[ei];
+        lines.push('- **' + ek + ':** ' + extra[ek]);
+      }
+    }
+    // Mermaid minigraph: focus + incoming + outgoing (may be one-sided).
+    var graph = formatDepMinigraph(row);
+    if (graph) {
+      lines.push('');
+      lines.push('**Dependencies**');
+      lines.push(graph);
     }
     return lines.join('\n');
   }
@@ -266,6 +427,16 @@
     var acc = normalizeStringList(row.acceptance);
     if (acc.length > 0) {
       parts.push('Acceptance: ' + acc.join('; '));
+    }
+    var depsOn = normalizeDependents(
+      row.depends_on != null ? row.depends_on : row.dependsOn
+    );
+    if (depsOn.length > 0) {
+      parts.push('Depends on: ' + depsOn.map(function (d) { return d.id; }).join(', '));
+    }
+    var deps = normalizeDependents(row.dependents);
+    if (deps.length > 0) {
+      parts.push('Dependents: ' + deps.map(function (d) { return d.id; }).join(', '));
     }
     return parts.join('. ');
   }
@@ -356,6 +527,8 @@
     emptyMessage: emptyMessage,
     formatTargetCardMarkdown: formatTargetCardMarkdown,
     formatTargetCardPlain: formatTargetCardPlain,
+    formatDepMinigraph: formatDepMinigraph,
+    mermaidNodeId: mermaidNodeId,
     resolvePlayPO: resolvePlayPO,
     agentSendPath: agentSendPath,
     buildPlayKickoffText: buildPlayKickoffText,

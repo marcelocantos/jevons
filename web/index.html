@@ -678,10 +678,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   pointer-events: none;
 }
 .instant-tip.instant-tip-show { display: block; }
-/* 🎯T181: rich target card (markdown HTML); wider, scrollable, left-of-pointer */
+/* 🎯T181/T184: rich target card (markdown HTML + mermaid); scrollable, left-of-pointer */
 .instant-tip.instant-tip-card {
-  max-width: min(420px, 92vw);
-  max-height: min(70vh, 480px);
+  max-width: min(480px, 94vw);
+  max-height: min(75vh, 560px);
   overflow-y: auto;
   padding: 10px 12px;
   font-size: 12px;
@@ -703,6 +703,26 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   font-size: 12px; font-weight: 600; color: var(--heading);
   margin: 0 0 0.35em;
 }
+.instant-tip.instant-tip-card pre {
+  margin: 0.35em 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  font-size: 11px;
+  background: var(--surface-sunken, rgba(0,0,0,0.06));
+  border-radius: 4px;
+}
+.instant-tip.instant-tip-card code { font-family: var(--mono); font-size: 11px; }
+.instant-tip.instant-tip-card .mermaid-diagram {
+  margin: 0.4em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.instant-tip.instant-tip-card .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+/* Compact tip: hide chat-style mermaid toolbar (pointer-events none on tip). */
+.instant-tip.instant-tip-card .mermaid-diagram .mermaid-toolbar { display: none; }
 #frontier-table .ft-status,
 #frontier-table .ft-fanout,
 #frontier-table .ft-name,
@@ -4823,7 +4843,7 @@ function renderFrontierTable(model) {
     name.textContent = (typeof FrontierTable !== 'undefined')
       ? FrontierTable.shortName(fullName, 72)
       : fullName;
-    // 🎯T181: rich target card on ID and name (ledger acceptance/context/tags).
+    // 🎯T181/T184: full semantic card on ID and name (markdown HTML + mermaid deps).
     if (typeof InstantTip !== 'undefined' && typeof FrontierTable !== 'undefined'
         && FrontierTable.formatTargetCardMarkdown) {
       const md = FrontierTable.formatTargetCardMarkdown(row);
@@ -4832,6 +4852,8 @@ function renderFrontierTable(model) {
         : md;
       if (md) {
         let html = md;
+        // Markdown-bearing fields (acceptance/context/attestation + mermaid fence)
+        // via marked / parseAssistantMarkdown — not plain escaped text only.
         if (typeof parseAssistantMarkdown === 'function') {
           try { html = parseAssistantMarkdown(md); } catch (_) { html = md; }
         } else if (typeof marked !== 'undefined' && marked.parse) {
@@ -4843,8 +4865,13 @@ function renderFrontierTable(model) {
           placement: InstantTip.PLACE_LEFT_OF_POINTER || 'left-of-pointer',
           className: InstantTip.CARD_CLASS || 'instant-tip-card',
         };
-        InstantTip.attach(id, html, cardOpts);
-        InstantTip.attach(name, html, cardOpts);
+        const tipId = InstantTip.attach(id, html, cardOpts);
+        const tipName = InstantTip.attach(name, html, cardOpts);
+        // 🎯T184: render mermaid minigraph inside card tips (same path as chat).
+        if (typeof renderMermaidIn === 'function') {
+          if (tipId) renderMermaidIn(tipId);
+          if (tipName) renderMermaidIn(tipName);
+        }
       }
     } else if (fullName && typeof InstantTip !== 'undefined') {
       // Fallback: name-only tip when pure helpers unavailable.
