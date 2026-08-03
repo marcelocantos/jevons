@@ -212,7 +212,34 @@ or retire claims. Do not substitute adjacent greens ("it compiles",
 "agent replied") for the product property under test.
 
 **Residual:** instructional + pure `ClassifyCompletionReport` heuristic;
-not a hard daemon block. Greenfield oracle elicitation → **🎯T31.2**.
+not a hard daemon block.
+
+## Greenfield oracle elicitation (🎯T31.2)
+
+For **new software** (no external reference), co-develop an
+**oracle-coverage map** alongside design:
+
+| Status | Meaning |
+|--------|---------|
+| **pinned** | Executable checks seeded from load-bearing examples |
+| **fuzzy** | Still open — production refused until pinned enough to test |
+| **taste** | Class-3 perceptual residue — single owner accept/reject |
+| **spike** | Exploratory on purpose; intentionally un-oracled |
+
+**SPIRAL:** design → thin slice → owner reacts → intent sharpens → new
+oracle (not waterfall). **Unit of intent:** *when X, expect Y*.
+
+**DECIDABLE-FROM-TASTE:** separate decidable criteria from irreducible
+taste before production work. **PROPORTIONALITY + GOODHART:** spikes may
+stay un-oracled; pin only with load-bearing examples (rule 6).
+
+Pure helpers: `CoverageMap` / `ClassifyDesignClause` /
+`ParseLoadBearingExample` (`internal/mcpserver`). Design note:
+`docs/design/greenfield-oracle-elicitation.md`.
+
+**Residual:** instructional + pure map model; not a hard daemon block;
+rich T29 surface and owner process-fidelity validation remain
+class-3 / follow-ups.
 
 ## Delivery: local by default (🎯T104)
 

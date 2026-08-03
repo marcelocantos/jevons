@@ -194,7 +194,7 @@ func TestDefaultPersonaGreenfieldOracleElicitation(t *testing.T) {
 	for _, want := range []string{
 		"Greenfield oracle elicitation",
 		"T31.2",
-		"oracle-coverage map",
+		"Oracle-coverage map",
 		"pinned",
 		"fuzzy",
 		"when X, expect Y",

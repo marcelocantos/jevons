@@ -25,7 +25,22 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Attestation ≠ execution: self-attested "done" prose is not verification.
   The overseer (who did not do the work) is the independent gate (rule 9).
 - Residual: instructional doctrine + pure classifier; not a hard daemon
-  block. Greenfield elicitation is 🎯T31.2.
+  block.
+
+## Greenfield oracle elicitation (🎯T31.2)
+- For NEW software (no external reference), co-develop an oracle-coverage
+  map alongside design: pinned (executable checks), fuzzy (still open),
+  load-bearing examples (when X expect Y) from the owner, plus taste /
+  spike buckets.
+- SPIRAL: design → thin slice → owner reacts → intent sharpens → new oracle.
+  Refuse production work on still-fuzzy regions until pinned enough to test.
+- DECIDABLE-FROM-TASTE: separate decidable criteria from irreducible
+  perceptual taste; residue is a single owner accept/reject.
+- PROPORTIONALITY + GOODHART: spikes may stay un-oracled on purpose; pin
+  only with load-bearing examples (not convenient ones). Pure helpers:
+  CoverageMap / ClassifyDesignClause / ParseLoadBearingExample.
+- Residual: instructional + pure map model; not a hard daemon block; rich
+  T29 surface and owner process-fidelity gate remain class-3 / follow-ups.
 
 ## Fleet spawn (🎯T78)
 - Create child work via jevons_agent_start / jevons_thread_spawn, not Grok spawn_subagent.
