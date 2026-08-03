@@ -232,8 +232,21 @@ class WebSocketTransport {
     this.stopVoice();
   }
 
+  // True when chat WS can accept owner turns (🎯T228).
+  isOpen() {
+    return this.ws?.readyState === 1;
+  }
+
+  // Returns true only when bytes left the socket. Callers must not clear
+  // the composer on false (silent drop is forbidden — 🎯T228).
   send(text) {
-    if (this.ws?.readyState === 1) this.ws.send(text);
+    if (this.ws?.readyState !== 1) return false;
+    try {
+      this.ws.send(text);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   startVoice() {
@@ -413,6 +426,8 @@ class NativeTransport {
     this.onAudio = null;
     this.onVoiceEvent = null;
     this.onError = null;
+    // 🎯T228: track native bridge open for isOpen / send success.
+    this._bridgeOpen = false;
 
     // Register global callback for Swift → JS messages.
     window._jevonsTransport = this;
@@ -423,11 +438,23 @@ class NativeTransport {
   }
 
   disconnect() {
+    this._bridgeOpen = false;
     this._post({action: 'disconnect'});
   }
 
+  isOpen() {
+    return !!this._bridgeOpen;
+  }
+
+  // Returns true when the bridge accepted the post (🎯T228).
   send(text) {
-    this._post({action: 'send', data: text});
+    if (!this._bridgeOpen) return false;
+    try {
+      this._post({action: 'send', data: text});
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   startVoice() {
@@ -467,10 +494,16 @@ class NativeTransport {
   // --- Swift → JS entry points (called via evaluateJavaScript) ---
 
   // Called by Swift when connected to jevonsd.
-  _onOpen() { this.onOpen?.(); }
+  _onOpen() {
+    this._bridgeOpen = true;
+    this.onOpen?.();
+  }
 
   // Called by Swift when disconnected.
-  _onClose() { this.onClose?.(); }
+  _onClose() {
+    this._bridgeOpen = false;
+    this.onClose?.();
+  }
 
   // Called by Swift with a JSON message from jevonsd.
   _onMessage(json) { this.onMessage?.(json); }

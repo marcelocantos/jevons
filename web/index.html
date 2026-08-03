@@ -1468,6 +1468,10 @@ function handle(m) {
       concurrent: m.concurrent,
       soft: wasSoft,
     });
+    // 🎯T228: wire reopened idle — drain offline-enqueued follow-ups.
+    if (typeof drainSendQueueIfIdle === 'function') {
+      try { drainSendQueueIfIdle(); } catch (_) {}
+    }
     // Soft reconnect: DOM already has transcript — skip full progressive re-hydrate.
     // 🎯T209: re-subscribe inspect so sealed history + live resume on this socket.
     if (wasSoft) {
@@ -4091,19 +4095,42 @@ function sendQueueNow(id) {
     liveDraftBackup = '';
   }
   renderSendQueue();
-  submitWireText(taken.item.text, { interrupt: !!workingEl });
+  const sent = submitWireText(taken.item.text, { interrupt: !!workingEl });
+  if (!sent) {
+    // 🎯T228: restore to visible queue — never drop on failed wire.
+    sendQueueState = SendQueue.enqueue(sendQueueState, taken.item.text);
+    persistSendQueue();
+    renderSendQueue();
+  }
+}
+
+// 🎯T228: chat wire ready for owner turns (WS OPEN or native bridge open).
+function isChatWireOpen() {
+  if (typeof transport === 'undefined' || !transport) return false;
+  if (typeof transport.isOpen === 'function') return !!transport.isOpen();
+  if (transport.ws != null) return transport.ws.readyState === 1;
+  // Legacy native without isOpen: assume post path exists.
+  return typeof transport.send === 'function';
 }
 
 // Submit a fully-prepared wire string (interrupt optional). Used by send()
 // and by auto-drain / send-now so queue drain does not re-enter attention.
+// Returns true only when transport accepted the payload (🎯T228 — callers
+// must not clear the composer on false).
 function submitWireText(t, opts) {
   const o = opts || {};
   if (o.interrupt && workingEl) {
     // Interject: cancel in-flight turn first; claudia's Send waits for
     // ready, so interrupt-then-send ordering is safe.
-    transport.send('{"type":"interrupt"}');
+    try { transport.send('{"type":"interrupt"}'); } catch (_) {}
   }
-  transport.send(t);
+  let ok = false;
+  try {
+    ok = !!transport.send(t);
+  } catch (_) {
+    ok = false;
+  }
+  if (!ok) return false;
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   navFocus = { zone: 'live' };
   liveDraftBackup = '';
@@ -4111,13 +4138,16 @@ function submitWireText(t, opts) {
   setWorking(true);
   requestAnimationFrame(() => { scrollDown(); });
   if (typeof renderAttention === 'function') renderAttention();
+  return true;
 }
 
-// Drain head of queue once the in-flight turn seals.
+// Drain head of queue once the in-flight turn seals (or wire reopens idle).
 function drainSendQueueIfIdle() {
   if (workingEl) return;
   if (typeof SendQueue === 'undefined') return;
   if (!sendQueueState.items.length) return;
+  // 🎯T228: never shift-off a queue item if the wire cannot take it.
+  if (!isChatWireOpen()) return;
   const r = SendQueue.shiftNext(sendQueueState);
   if (!r.item) return;
   sendQueueState = r.state;
@@ -4137,7 +4167,16 @@ function drainSendQueueIfIdle() {
     }
   }
   renderSendQueue();
-  submitWireText(r.item.text, { interrupt: false });
+  const sent = submitWireText(r.item.text, { interrupt: false });
+  if (!sent) {
+    // Put head back so the strip still shows the owner's text (no drop).
+    sendQueueState = {
+      items: [{ id: r.item.id, text: r.item.text }].concat(sendQueueState.items || []),
+      nextId: sendQueueState.nextId || 1,
+    };
+    persistSendQueue();
+    renderSendQueue();
+  }
 }
 
 function clearComposerAfterQueueOrSend() {
@@ -4305,29 +4344,59 @@ function send(opts) {
     // Intentionally NO AttentionThreads.pursue / formatAsideWire on match (🎯T135).
   }
   // 🎯T113: while busy, plain Enter enqueues; only Control+Enter interjects.
+  // 🎯T228: offline / wire-down also enqueues visibly (never clear-and-drop).
+  const wireOpen = isChatWireOpen();
   const decision = (typeof SendQueue !== 'undefined')
     ? SendQueue.decideSend({
         busy: !!workingEl,
         interrupt: interruptChord,
         text: t,
         hasImages: pendingImages.length > 0,
+        wireOpen: wireOpen,
       })
-    : { action: workingEl && !interruptChord ? 'enqueue' : 'send', text: t, interrupt: !!(workingEl && interruptChord) };
+    : (!wireOpen || (workingEl && !interruptChord)
+      ? { action: 'enqueue', text: t, reason: !wireOpen ? 'offline' : 'busy' }
+      : { action: 'send', text: t, interrupt: !!(workingEl && interruptChord) });
   if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
     jLog('info', DecisionLog.decisionMsg('send_queue'), DecisionLog.formatSendDecision(decision, pageCorr));
   }
-  if (decision.action === 'noop') return;
+  if (decision.action === 'noop') return; // seed-only / empty residual — no clear
   if (decision.action === 'enqueue') {
+    if (typeof SendQueue !== 'undefined') {
+      sendQueueState = SendQueue.enqueue(sendQueueState, decision.text);
+      persistSendQueue();
+      clearComposerAfterQueueOrSend();
+      renderSendQueue();
+      // Owner-visible: queue strip. Offline reason also flashes status briefly.
+      if (decision.reason === 'offline' && sTxt && sTxt.textContent !== 'connected') {
+        /* status already reconnecting/connecting — strip is the evidence */
+      } else if (decision.reason === 'offline' && sTxt) {
+        sTxt.textContent = 'queued (offline)';
+      }
+      return;
+    }
+    // No SendQueue module — keep draft and surface error (never silent drop).
+    if (sTxt) sTxt.textContent = 'send failed — not connected';
+    return;
+  }
+  // Wire send stays on main; stash suggestion for the user-bubble affordance.
+  // 🎯T228: clear composer ONLY after transport accepts the payload.
+  lastRouteSuggestion = pendingRouteSuggestion;
+  const sent = submitWireText(decision.text, { interrupt: !!decision.interrupt });
+  if (sent) {
+    clearComposerAfterQueueOrSend();
+    return;
+  }
+  // Race: wire closed between decide and send — fall back to visible queue.
+  if (typeof SendQueue !== 'undefined') {
     sendQueueState = SendQueue.enqueue(sendQueueState, decision.text);
     persistSendQueue();
     clearComposerAfterQueueOrSend();
     renderSendQueue();
+    if (sTxt) sTxt.textContent = 'queued (offline)';
     return;
   }
-  // Wire send stays on main; stash suggestion for the user-bubble affordance.
-  lastRouteSuggestion = pendingRouteSuggestion;
-  clearComposerAfterQueueOrSend();
-  submitWireText(decision.text, { interrupt: !!decision.interrupt });
+  if (sTxt) sTxt.textContent = 'send failed — not connected';
 }
 
 // 🎯T135: attach opt-in "Continue in: «title»" under a user bubble.

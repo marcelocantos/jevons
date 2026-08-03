@@ -58,6 +58,82 @@ test('images-only payload can enqueue while busy', function () {
   assert.strictEqual(d.action, 'enqueue');
 });
 
+// ── 🎯T228: non-empty must send or enqueue — never silent noop ────
+
+test('T228 non-empty offline enqueues (must-send path, no silent drop)', function () {
+  const d = SQ.decideSend({
+    busy: false,
+    interrupt: false,
+    text: 'owner real draft',
+    wireOpen: false,
+  });
+  assert.strictEqual(d.action, 'enqueue');
+  assert.strictEqual(d.reason, 'offline');
+  assert.strictEqual(d.text, 'owner real draft');
+  assert.notStrictEqual(d.action, 'noop');
+});
+
+test('T228 non-empty offline while busy still enqueues', function () {
+  const d = SQ.decideSend({
+    busy: true,
+    interrupt: true, // interrupt cannot fire offline
+    text: 'interject offline',
+    wireOpen: false,
+  });
+  assert.strictEqual(d.action, 'enqueue');
+  assert.strictEqual(d.reason, 'offline');
+});
+
+test('T228 empty / whitespace stays noop even offline', function () {
+  assert.strictEqual(
+    SQ.decideSend({ busy: false, text: '', wireOpen: false }).action,
+    'noop'
+  );
+  assert.strictEqual(
+    SQ.decideSend({ busy: false, text: '   ', wireOpen: false }).action,
+    'noop'
+  );
+});
+
+test('T228 connected idle non-empty must send', function () {
+  const d = SQ.decideSend({
+    busy: false,
+    interrupt: false,
+    text: 'hello wire',
+    wireOpen: true,
+  });
+  assert.strictEqual(d.action, 'send');
+  assert.strictEqual(d.interrupt, false);
+  assert.strictEqual(d.text, 'hello wire');
+});
+
+test('T228 connected busy non-empty enqueues (visible queue path)', function () {
+  const d = SQ.decideSend({
+    busy: true,
+    interrupt: false,
+    text: 'follow while busy',
+    wireOpen: true,
+  });
+  assert.strictEqual(d.action, 'enqueue');
+  assert.strictEqual(d.reason, 'busy');
+});
+
+test('T228 wireOpen undefined keeps legacy open behaviour', function () {
+  const d = SQ.decideSend({ busy: false, text: 'legacy' });
+  assert.strictEqual(d.action, 'send');
+});
+
+test('T228 images-only offline enqueues', function () {
+  const d = SQ.decideSend({
+    busy: false,
+    text: '',
+    hasImages: true,
+    wireOpen: false,
+  });
+  assert.strictEqual(d.action, 'enqueue');
+  assert.strictEqual(d.reason, 'offline');
+});
+
 // ── queue mutate / drain ─────────────────────────────────────────
 
 test('enqueue then shiftNext drains FIFO', function () {
@@ -310,6 +386,72 @@ test('index.html boots from SendQueue.load and persists mutations (T154)', funct
 test('Grok mismatches are documented on the module', function () {
   assert.ok(Array.isArray(SQ.GROK_MISMATCHES));
   assert.ok(SQ.GROK_MISMATCHES.length >= 1);
+});
+
+// ── 🎯T228 index.html / transport wiring ─────────────────────────
+
+test('T228 index.html: wireOpen + clear only after send success', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('isChatWireOpen'), 'must probe wire readiness');
+  assert.ok(/wireOpen\s*:/.test(html) || html.includes('wireOpen:'),
+    'decideSend must receive wireOpen');
+  assert.ok(html.includes('function submitWireText'), 'submitWireText must exist');
+  // Clear after successful wire, not before (old pattern was clear then submit).
+  const sendFn = html.match(/function send\(opts\)\s*\{[\s\S]*?\nfunction attachRouteSwitch/);
+  assert.ok(sendFn, 'send() body extractable');
+  const body = sendFn[0];
+  assert.ok(
+    /const sent\s*=\s*submitWireText/.test(body) || /submitWireText\([\s\S]*\)\s*;\s*\n\s*if \(sent\)/.test(body),
+    'send() must capture submitWireText success'
+  );
+  assert.ok(
+    /if \(sent\)\s*\{[\s\S]*clearComposerAfterQueueOrSend/.test(body),
+    'clearComposer must run only after successful wire send'
+  );
+  // Must not clear-then-submit in the wire path (silent-drop shape).
+  assert.ok(
+    !/clearComposerAfterQueueOrSend\(\);\s*\n\s*submitWireText\(/.test(body),
+    'must not clear composer immediately before submitWireText (T228 silent-drop)'
+  );
+  assert.ok(
+    html.includes('queued (offline)') || html.includes("reason === 'offline'"),
+    'offline enqueue must leave owner-visible evidence'
+  );
+  // Transport contract: send returns boolean; isOpen present.
+  const tr = fs.readFileSync(path.join(__dirname, 'transport.js'), 'utf8');
+  assert.ok(/isOpen\s*\(/.test(tr), 'transport must expose isOpen');
+  assert.ok(
+    /return false/.test(tr) && /readyState !== 1|readyState === 1/.test(tr),
+    'transport.send must fail closed when WS not OPEN'
+  );
+});
+
+test('T228 wispr seed-only residual: empty prepareWireText is discardable', function () {
+  // Residual acceptance: seed-only empty may no-op without error.
+  // Caller uses prepareWireText then early-return when empty; decideSend
+  // never sees seed-only residue as payload when prepared correctly.
+  let WC;
+  try {
+    WC = require('./wispr_context.js');
+  } catch (e) {
+    return; // optional if module path changes
+  }
+  const seedEmpty = WC.prepareWireText(WC.EMPTY_SEED);
+  assert.strictEqual(seedEmpty, '');
+  assert.strictEqual(
+    SQ.decideSend({ busy: false, text: seedEmpty, wireOpen: true }).action,
+    'noop'
+  );
+  const real = WC.prepareWireText(WC.EMPTY_SEED + 'real owner text');
+  assert.strictEqual(real, 'real owner text');
+  assert.strictEqual(
+    SQ.decideSend({ busy: false, text: real, wireOpen: true }).action,
+    'send'
+  );
+  assert.strictEqual(
+    SQ.decideSend({ busy: false, text: real, wireOpen: false }).action,
+    'enqueue'
+  );
 });
 
 if (failed) {

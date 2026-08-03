@@ -28,9 +28,11 @@
 
   // Pure send decision before wire I/O.
   // busy: turn in flight; interrupt: Control+Enter chord.
+  // wireOpen: chat socket ready (🎯T228). undefined → treat as open
+  // (legacy pure callers); explicit false never silent-drops payload.
   // Returns:
   //   { action: 'noop' }
-  //   { action: 'enqueue', text }
+  //   { action: 'enqueue', text, reason?: 'busy'|'offline' }
   //   { action: 'send', text, interrupt: boolean }
   function decideSend(opts) {
     const o = opts || {};
@@ -39,8 +41,13 @@
     const raw = o.text == null ? '' : String(o.text);
     const hasPayload = raw.trim().length > 0 || !!o.hasImages;
     if (!hasPayload) return { action: 'noop' };
+    // 🎯T228: offline / reconnecting must enqueue visibly — never clear-and-drop.
+    const wireOpen = o.wireOpen === undefined ? true : !!o.wireOpen;
+    if (!wireOpen) {
+      return { action: 'enqueue', text: raw, reason: 'offline' };
+    }
     if (busy && !interrupt) {
-      return { action: 'enqueue', text: raw };
+      return { action: 'enqueue', text: raw, reason: 'busy' };
     }
     return { action: 'send', text: raw, interrupt: busy && interrupt };
   }
