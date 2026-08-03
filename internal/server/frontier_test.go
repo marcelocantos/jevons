@@ -379,8 +379,16 @@ targets:
 	if edges != 2 {
 		t.Fatalf("edges=%d want 2; mermaid=\n%s", edges, src)
 	}
-	if !strings.Contains(src, "graph TD") {
-		t.Fatalf("missing graph TD:\n%s", src)
+	// 🎯T190: layout directives + flowchart TB (not graph TD sprawl).
+	if !strings.Contains(src, "%%{init:") {
+		t.Fatalf("missing mermaid init:\n%s", src)
+	}
+	if !strings.Contains(src, "useMaxWidth") || !strings.Contains(src, "nodeSpacing") ||
+		!strings.Contains(src, "rankSpacing") || !strings.Contains(src, "wrappingWidth") {
+		t.Fatalf("missing layout knobs:\n%s", src)
+	}
+	if !strings.Contains(src, "flowchart TB") {
+		t.Fatalf("missing flowchart TB:\n%s", src)
 	}
 	if !strings.Contains(src, "T2[") || !strings.Contains(src, "T3[") || !strings.Contains(src, "T3_1[") || !strings.Contains(src, "T4[") {
 		t.Fatalf("missing active nodes:\n%s", src)
@@ -397,6 +405,60 @@ targets:
 	// Edge to achieved T1 must not appear.
 	if strings.Contains(src, "|needs| T1") {
 		t.Fatalf("edge to achieved T1 must be omitted:\n%s", src)
+	}
+	// 🎯T190: island packing — connected {T2,T3,T3.1} vs orphan T4.
+	if !strings.Contains(src, "subgraph island_") {
+		t.Fatalf("missing island subgraph packing:\n%s", src)
+	}
+	if !strings.Contains(src, "direction TB") {
+		t.Fatalf("missing subgraph direction TB:\n%s", src)
+	}
+	if !strings.Contains(src, "island_0 ~~~ island_1") {
+		t.Fatalf("missing vertical packing link:\n%s", src)
+	}
+	if !strings.Contains(src, "linkStyle") || !strings.Contains(src, "stroke:none") {
+		t.Fatalf("packing links should be hidden via linkStyle:\n%s", src)
+	}
+}
+
+func TestPackIslandsFromAdj(t *testing.T) {
+	// A-B connected, C alone, D-E connected.
+	active := []string{"B", "A", "E", "C", "D"}
+	adj := map[string][]string{
+		"A": {"B"},
+		"B": {"A"},
+		"C": nil,
+		"D": {"E"},
+		"E": {"D"},
+	}
+	// Discovery order follows active slice; components sorted by first id.
+	islands := packIslandsFromAdj(active, adj)
+	if len(islands) != 3 {
+		t.Fatalf("islands=%v", islands)
+	}
+	if got := strings.Join(islands[0], ","); got != "A,B" {
+		t.Fatalf("island0=%v", islands[0])
+	}
+	if got := strings.Join(islands[1], ","); got != "C" {
+		t.Fatalf("island1=%v", islands[1])
+	}
+	if got := strings.Join(islands[2], ","); got != "D,E" {
+		t.Fatalf("island2=%v", islands[2])
+	}
+}
+
+func TestMermaidActiveGraphHeader(t *testing.T) {
+	h := mermaidActiveGraphHeader()
+	if !strings.HasPrefix(h, "%%{init:") {
+		t.Fatalf("prefix: %q", h)
+	}
+	if !strings.Contains(h, "flowchart TB") {
+		t.Fatalf("missing flowchart TB: %q", h)
+	}
+	for _, tok := range []string{"useMaxWidth", "nodeSpacing", "rankSpacing", "wrappingWidth"} {
+		if !strings.Contains(h, tok) {
+			t.Fatalf("missing %s: %q", tok, h)
+		}
 	}
 }
 

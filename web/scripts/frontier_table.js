@@ -254,10 +254,79 @@
     return label.replace(/"/g, "'").replace(/\n/g, ' ');
   }
 
+  // 🎯T190: Mermaid layout knobs — keep ~30–50 nodes inside the ~90% panel.
+  var MERMAID_NODE_SPACING = 28;
+  var MERMAID_RANK_SPACING = 36;
+  var MERMAID_WRAPPING_WIDTH = 180;
+
+  // mermaidActiveGraphHeader — init + flowchart TB (🎯T185 + 🎯T190).
+  function mermaidActiveGraphHeader() {
+    return (
+      "%%{init: {'flowchart': {'useMaxWidth': true, 'nodeSpacing': " +
+      MERMAID_NODE_SPACING +
+      ", 'rankSpacing': " +
+      MERMAID_RANK_SPACING +
+      ", 'wrappingWidth': " +
+      MERMAID_WRAPPING_WIDTH +
+      "}}}%%\nflowchart TB"
+    );
+  }
+
+  // packActiveGraphIslands — connected components for vertical island packing
+  // (🎯T190). ids sorted; undirected edges from {from,to} original ids.
+  // Returns array of islands (each island = sorted id list); islands ordered
+  // by first id.
+  function packActiveGraphIslands(ids, undirectedPairs) {
+    var list = Array.isArray(ids) ? ids.slice() : [];
+    if (!list.length) return [];
+    var adj = {};
+    var i;
+    for (i = 0; i < list.length; i++) adj[list[i]] = [];
+    var pairs = Array.isArray(undirectedPairs) ? undirectedPairs : [];
+    for (i = 0; i < pairs.length; i++) {
+      var p = pairs[i];
+      if (!p || p.from == null || p.to == null) continue;
+      var a = String(p.from);
+      var b = String(p.to);
+      if (!adj[a] || !adj[b]) continue;
+      adj[a].push(b);
+      adj[b].push(a);
+    }
+    var visited = {};
+    var islands = [];
+    for (i = 0; i < list.length; i++) {
+      var start = list[i];
+      if (visited[start]) continue;
+      var queue = [start];
+      visited[start] = true;
+      var comp = [];
+      while (queue.length) {
+        var cur = queue.shift();
+        comp.push(cur);
+        var nbs = adj[cur] || [];
+        for (var k = 0; k < nbs.length; k++) {
+          if (visited[nbs[k]]) continue;
+          visited[nbs[k]] = true;
+          queue.push(nbs[k]);
+        }
+      }
+      comp.sort();
+      islands.push(comp);
+    }
+    islands.sort(function (x, y) {
+      var ax = x[0] || '';
+      var by = y[0] || '';
+      return ax < by ? -1 : ax > by ? 1 : 0;
+    });
+    return islands;
+  }
+
   // buildActiveDependencyMermaid(targets) — full unachieved graph (🎯T185).
   // targets: [{ id, name?, depends_on?: [{id}|string] }]. Only nodes present
   // in the set are drawn; edges whose dep is missing are dropped (among
   // non-achieved). Returns raw Mermaid (no fences) for panel render.
+  // 🎯T190: layout init + flowchart TB + island subgraph packing (stack
+  // components vertically so the graph is not one infinite LR strip).
   function buildActiveDependencyMermaid(targets) {
     var list = Array.isArray(targets) ? targets : [];
     var byId = {};
@@ -272,19 +341,10 @@
       ids.push(id);
     }
     ids.sort();
-    var lines = ['graph TD'];
-    for (i = 0; i < ids.length; i++) {
-      var nid = mermaidNodeId(ids[i]);
-      var row = byId[ids[i]];
-      var name = row && row.name != null ? String(row.name).trim() : '';
-      var label = mermaidLabel(ids[i], name);
-      lines.push('    ' + nid + '["' + label + '"]');
-    }
     var edgeKeys = {};
-    var edges = [];
+    var rawEdges = []; // { from, to } original ids
     for (i = 0; i < ids.length; i++) {
       var fromId = ids[i];
-      var fromNode = mermaidNodeId(fromId);
       var deps = normalizeDependents(
         byId[fromId].depends_on != null
           ? byId[fromId].depends_on
@@ -293,21 +353,56 @@
       for (var j = 0; j < deps.length; j++) {
         var depId = deps[j].id;
         if (!byId[depId]) continue; // only edges among unachieved set
-        var toNode = mermaidNodeId(depId);
-        var ek = fromNode + '\0' + toNode;
+        var ek = fromId + '\0' + depId;
         if (edgeKeys[ek]) continue;
         edgeKeys[ek] = true;
-        edges.push({ from: fromNode, to: toNode });
+        rawEdges.push({ from: fromId, to: depId });
       }
     }
-    edges.sort(function (a, b) {
+    rawEdges.sort(function (a, b) {
       if (a.from !== b.from) return a.from < b.from ? -1 : 1;
       return a.to < b.to ? -1 : a.to > b.to ? 1 : 0;
     });
-    for (i = 0; i < edges.length; i++) {
-      lines.push('    ' + edges[i].from + ' -.->|needs| ' + edges[i].to);
+
+    var islands = packActiveGraphIslands(ids, rawEdges);
+    var lines = [mermaidActiveGraphHeader()];
+    for (i = 0; i < islands.length; i++) {
+      lines.push('    subgraph island_' + i + '[" "]');
+      lines.push('        direction TB');
+      var island = islands[i];
+      var islandSet = {};
+      var n;
+      for (n = 0; n < island.length; n++) {
+        islandSet[island[n]] = true;
+        var nid = mermaidNodeId(island[n]);
+        var row = byId[island[n]];
+        var name = row && row.name != null ? String(row.name).trim() : '';
+        var label = mermaidLabel(island[n], name);
+        lines.push('        ' + nid + '["' + label + '"]');
+      }
+      for (n = 0; n < rawEdges.length; n++) {
+        var e = rawEdges[n];
+        if (!islandSet[e.from] || !islandSet[e.to]) continue;
+        lines.push(
+          '        ' +
+            mermaidNodeId(e.from) +
+            ' -.->|needs| ' +
+            mermaidNodeId(e.to)
+        );
+      }
+      lines.push('    end');
     }
-    return lines.join('\n') + (lines.length > 1 ? '\n' : '');
+    // Vertical packing chain between islands (invisible layout links).
+    if (islands.length > 1) {
+      var realEdgeCount = rawEdges.length;
+      var packIdx = [];
+      for (i = 0; i < islands.length - 1; i++) {
+        lines.push('    island_' + i + ' ~~~ island_' + (i + 1));
+        packIdx.push(String(realEdgeCount + i));
+      }
+      lines.push('    linkStyle ' + packIdx.join(',') + ' stroke:none,fill:none');
+    }
+    return lines.join('\n') + '\n';
   }
 
   // normalizeGraphPayload(apiJSON|err) → { available, mermaid, ledger, nodes, edges, error }
@@ -616,6 +711,11 @@
     formatTargetCardPlain: formatTargetCardPlain,
     formatDepMinigraph: formatDepMinigraph,
     buildActiveDependencyMermaid: buildActiveDependencyMermaid,
+    mermaidActiveGraphHeader: mermaidActiveGraphHeader,
+    packActiveGraphIslands: packActiveGraphIslands,
+    MERMAID_NODE_SPACING: MERMAID_NODE_SPACING,
+    MERMAID_RANK_SPACING: MERMAID_RANK_SPACING,
+    MERMAID_WRAPPING_WIDTH: MERMAID_WRAPPING_WIDTH,
     mermaidNodeId: mermaidNodeId,
     resolvePlayPO: resolvePlayPO,
     agentSendPath: agentSendPath,

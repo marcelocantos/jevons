@@ -585,9 +585,77 @@ func escapeMermaidLabel(s string) string {
 	return s
 }
 
+// Mermaid layout knobs for the unachieved Frontier Graph (🎯T190).
+// Tight spacing + useMaxWidth keep ~30–50 nodes inside the ~90% panel;
+// wrappingWidth softens wide labels; island packing stacks disconnected
+// components vertically so they do not form one infinite LR strip.
+const (
+	mermaidNodeSpacing   = 28
+	mermaidRankSpacing   = 36
+	mermaidWrappingWidth = 180
+)
+
+// mermaidActiveGraphHeader is the init + direction prefix for unachieved
+// dependency graphs (🎯T185 + 🎯T190). Hermetic tests assert these tokens.
+func mermaidActiveGraphHeader() string {
+	return fmt.Sprintf(
+		"%%%%{init: {'flowchart': {'useMaxWidth': true, 'nodeSpacing': %d, 'rankSpacing': %d, 'wrappingWidth': %d}}}%%%%\nflowchart TB\n",
+		mermaidNodeSpacing, mermaidRankSpacing, mermaidWrappingWidth,
+	)
+}
+
+// packIslandsFromAdj is the pure connected-component packer (🎯T190).
+// activeIDs should already be sorted (stable island discovery order).
+// adj is an undirected adjacency list (both directions present).
+// Each island's ids are sorted by targetIDLess; islands ordered by first id.
+func packIslandsFromAdj(activeIDs []string, adj map[string][]string) [][]string {
+	if len(activeIDs) == 0 {
+		return nil
+	}
+	visited := make(map[string]bool, len(activeIDs))
+	var islands [][]string
+	for _, start := range activeIDs {
+		if visited[start] {
+			continue
+		}
+		// BFS component.
+		queue := []string{start}
+		visited[start] = true
+		var comp []string
+		for len(queue) > 0 {
+			cur := queue[0]
+			queue = queue[1:]
+			comp = append(comp, cur)
+			for _, nb := range adj[cur] {
+				if visited[nb] {
+					continue
+				}
+				visited[nb] = true
+				queue = append(queue, nb)
+			}
+		}
+		sort.Slice(comp, func(i, j int) bool {
+			return targetIDLess(comp[i], comp[j])
+		})
+		islands = append(islands, comp)
+	}
+	sort.Slice(islands, func(i, j int) bool {
+		if len(islands[i]) == 0 {
+			return true
+		}
+		if len(islands[j]) == 0 {
+			return false
+		}
+		return targetIDLess(islands[i][0], islands[j][0])
+	})
+	return islands
+}
+
 // computeActiveGraphMermaidFromLedger builds Mermaid for all unachieved
 // (active) targets and depends_on edges among them (🎯T185). Achieved /
 // set_aside nodes are omitted; edges to non-active deps are dropped.
+// 🎯T190: layout init (useMaxWidth / spacing / wrappingWidth), flowchart TB,
+// and connected-component packing so islands stack vertically.
 func computeActiveGraphMermaidFromLedger(ledgerPath string) (mermaid string, nodeCount, edgeCount int, err error) {
 	data, err := os.ReadFile(ledgerPath)
 	if err != nil {
@@ -598,7 +666,7 @@ func computeActiveGraphMermaidFromLedger(ledgerPath string) (mermaid string, nod
 		return "", 0, 0, fmt.Errorf("parse ledger: %w", err)
 	}
 	if doc.Targets == nil || len(doc.Targets) == 0 {
-		return "graph TD\n", 0, 0, nil
+		return mermaidActiveGraphHeader(), 0, 0, nil
 	}
 
 	activeIDs := make([]string, 0)
@@ -616,51 +684,95 @@ func computeActiveGraphMermaidFromLedger(ledgerPath string) (mermaid string, nod
 		return targetIDLess(activeIDs[i], activeIDs[j])
 	})
 
-	var b strings.Builder
-	b.WriteString("graph TD\n")
-	for _, id := range activeIDs {
-		nid := mermaidSafeNodeID(id)
-		label := nameOf[id]
-		if label == "" {
-			label = id
-		} else {
-			// Prefer "T185 · short name" for scanability in large graphs.
-			label = id + " · " + truncateMermaidLabel(label, 36)
-		}
-		fmt.Fprintf(&b, "    %s[\"%s\"]\n", nid, escapeMermaidLabel(label))
-	}
-
-	// Edges: dependent -.->|needs| dep among active nodes only.
-	type edge struct{ from, to string }
-	edges := make([]edge, 0)
+	// Edges among active nodes only (original target ids).
+	type rawEdge struct{ from, to string }
+	rawEdges := make([]rawEdge, 0)
 	seenEdge := make(map[string]bool)
+	adj := make(map[string][]string, len(activeIDs))
+	for _, id := range activeIDs {
+		adj[id] = nil
+	}
 	for _, id := range activeIDs {
 		t := doc.Targets[id]
-		from := mermaidSafeNodeID(id)
 		for _, dep := range t.DependsOn {
 			dep = strings.TrimSpace(dep)
 			if dep == "" || !active[dep] {
 				continue
 			}
-			to := mermaidSafeNodeID(dep)
-			key := from + "\x00" + to
+			key := id + "\x00" + dep
 			if seenEdge[key] {
 				continue
 			}
 			seenEdge[key] = true
-			edges = append(edges, edge{from: from, to: to})
+			rawEdges = append(rawEdges, rawEdge{from: id, to: dep})
+			adj[id] = append(adj[id], dep)
+			adj[dep] = append(adj[dep], id)
 		}
 	}
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].from != edges[j].from {
-			return edges[i].from < edges[j].from
+	sort.Slice(rawEdges, func(i, j int) bool {
+		if rawEdges[i].from != rawEdges[j].from {
+			return rawEdges[i].from < rawEdges[j].from
 		}
-		return edges[i].to < edges[j].to
+		return rawEdges[i].to < rawEdges[j].to
 	})
-	for _, e := range edges {
-		fmt.Fprintf(&b, "    %s -.->|needs| %s\n", e.from, e.to)
+
+	islands := packIslandsFromAdj(activeIDs, adj)
+
+	var b strings.Builder
+	b.WriteString(mermaidActiveGraphHeader())
+
+	// Emit each island as a TB subgraph so Mermaid stacks components
+	// vertically under flowchart TB (🎯T190) rather than one LR strip.
+	for i, island := range islands {
+		fmt.Fprintf(&b, "    subgraph island_%d[\" \"]\n", i)
+		b.WriteString("        direction TB\n")
+		for _, id := range island {
+			nid := mermaidSafeNodeID(id)
+			label := nameOf[id]
+			if label == "" {
+				label = id
+			} else {
+				// Prefer "T185 · short name" for scanability in large graphs.
+				label = id + " · " + truncateMermaidLabel(label, 36)
+			}
+			fmt.Fprintf(&b, "        %s[\"%s\"]\n", nid, escapeMermaidLabel(label))
+		}
+		// Edges wholly inside this island.
+		islandSet := make(map[string]bool, len(island))
+		for _, id := range island {
+			islandSet[id] = true
+		}
+		for _, e := range rawEdges {
+			if !islandSet[e.from] || !islandSet[e.to] {
+				continue
+			}
+			fmt.Fprintf(&b, "        %s -.->|needs| %s\n", mermaidSafeNodeID(e.from), mermaidSafeNodeID(e.to))
+		}
+		b.WriteString("    end\n")
 	}
-	return b.String(), len(activeIDs), len(edges), nil
+
+	// Vertical packing chain between islands (invisible layout links).
+	// Mermaid thick-link ~~~ + linkStyle stroke:none keeps islands ordered
+	// top-to-bottom without drawing a visible path (🎯T190).
+	if len(islands) > 1 {
+		realEdgeCount := len(rawEdges)
+		for i := 0; i < len(islands)-1; i++ {
+			// Subgraph-to-subgraph layout edge.
+			fmt.Fprintf(&b, "    island_%d ~~~ island_%d\n", i, i+1)
+		}
+		// Hide packing links only (indices after real edges; packing links
+		// are emitted after subgraphs so their linkStyle indices are
+		// realEdgeCount .. realEdgeCount+nIslands-2).
+		indices := make([]string, 0, len(islands)-1)
+		for i := 0; i < len(islands)-1; i++ {
+			indices = append(indices, strconv.Itoa(realEdgeCount+i))
+		}
+		// linkStyle applies to all links in document order. Real edges are
+		// inside subgraphs first (0..realEdgeCount-1), then packing.
+		fmt.Fprintf(&b, "    linkStyle %s stroke:none,fill:none\n", strings.Join(indices, ","))
+	}
+
+	return b.String(), len(activeIDs), len(rawEdges), nil
 }
 
 // loadFrontierGraph discovers the ledger and returns active-graph Mermaid.
