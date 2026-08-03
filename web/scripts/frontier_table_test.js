@@ -417,8 +417,9 @@ test('T181 index.html rich card tip on id/name + InstantTip placement', function
   assert.ok(region.indexOf('formatTargetCardMarkdown') >= 0, 'card markdown builder');
   assert.ok(region.indexOf('InstantTip.attach(id') >= 0 || /InstantTip\.attach\(\s*id/.test(region),
     'attach on id cell');
-  assert.ok(region.indexOf('InstantTip.attach(name') >= 0 || /InstantTip\.attach\(\s*name/.test(region),
-    'attach on name cell');
+  // 🎯T231: single attach with groupHosts [id, name] — not dual attach on name.
+  assert.ok(region.indexOf('groupHosts') >= 0, 'groupHosts for id+name hit rect');
+  assert.ok(region.indexOf('hitGroup') >= 0, 'hitGroup single-rect model');
   assert.ok(region.indexOf('html: true') >= 0 || region.indexOf('html:true') >= 0, 'html tip content');
   assert.ok(region.indexOf('left-of-pointer') >= 0 || region.indexOf('PLACE_LEFT_OF_POINTER') >= 0,
     'left-of-pointer placement');

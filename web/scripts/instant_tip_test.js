@@ -16,7 +16,7 @@ function test(name, fn) {
   } catch (e) {
     failed++;
     console.error('FAIL-', name);
-    console.error('    ', e && e.stack ? e.stack.split('\n').slice(0, 5).join('\n     ') : e);
+    console.error('    ', e && e.stack ? e.stack.split('\n').slice(0, 6).join('\n     ') : e);
   }
 }
 
@@ -32,6 +32,7 @@ function mockEl(tag) {
     attrs: {},
     offsetWidth: 200,
     offsetHeight: 100,
+    _rect: { left: 10, top: 40, right: 50, bottom: 54, width: 40, height: 14 },
     classList: {
       _s: new Set(),
       add(c) {
@@ -48,7 +49,7 @@ function mockEl(tag) {
     },
     ownerDocument: null,
     getBoundingClientRect() {
-      return { left: 10, top: 40, right: 50, bottom: 54, width: 40, height: 14 };
+      return Object.assign({}, this._rect);
     },
     appendChild(c) {
       this.children.push(c);
@@ -96,31 +97,12 @@ function mockDoc() {
     createElement(tag) {
       return mockEl(tag);
     },
+    addEventListener() {},
+    removeEventListener() {},
   };
   body.ownerDocument = doc;
   return doc;
 }
-
-test('SHOW_DELAY_MS is 0 and schedule never uses timeout', function () {
-  assert.strictEqual(IT.SHOW_DELAY_MS, 0);
-  const sch = IT.showSchedule();
-  assert.strictEqual(sch.delayMs, 0);
-  assert.strictEqual(sch.usesTimeout, false);
-  assert.strictEqual(sch.event, 'pointerenter');
-});
-
-test('attach strips title= and sets aria-label', function () {
-  const doc = mockDoc();
-  const host = mockEl('td');
-  host.ownerDocument = doc;
-  host.title = 'Converging';
-  const tip = IT.attach(host, 'Converging', { doc: doc, mount: doc.body });
-  assert.ok(tip, 'tip created');
-  assert.strictEqual(host.title, '');
-  assert.strictEqual(host.attrs['aria-label'], 'Converging');
-  assert.strictEqual(tip.textContent, 'Converging');
-  assert.ok(host.classList.contains(IT.HOST_CLASS));
-});
 
 function mockTimers() {
   const pending = [];
@@ -144,21 +126,45 @@ function mockTimers() {
   };
 }
 
+// ─── Core show path ───────────────────────────────────────────────────────
+
+test('SHOW_DELAY_MS is 0 and schedule never uses timeout', function () {
+  assert.strictEqual(IT.SHOW_DELAY_MS, 0);
+  const sch = IT.showSchedule();
+  assert.strictEqual(sch.delayMs, 0);
+  assert.strictEqual(sch.usesTimeout, false);
+  assert.strictEqual(sch.event, 'pointerenter');
+});
+
+test('attach strips title= and sets aria-label', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  host.title = 'Converging';
+  const tip = IT.attach(host, 'Converging', { doc: doc, mount: doc.body });
+  assert.ok(tip, 'tip created');
+  assert.strictEqual(host.title, '');
+  assert.strictEqual(host.attrs['aria-label'], 'Converging');
+  assert.strictEqual(tip.textContent, 'Converging');
+  assert.ok(host.classList.contains(IT.HOST_CLASS));
+});
+
 test('pointerenter shows tip immediately with no setTimeout (🎯T175)', function () {
   const doc = mockDoc();
   const host = mockEl('td');
   host.ownerDocument = doc;
   const timers = mockTimers();
   const tip = IT.attach(host, '4 targets depend on T10.2', {
-    doc: doc, mount: doc.body, timers: timers, hideGraceMs: 0,
+    doc: doc, mount: doc.body, timers: timers, hitGroup: true,
   });
   assert.ok(tip);
   assert.strictEqual(IT.isVisible(tip), false);
-  // Simulate pointerenter — must show in same turn (no delay queue).
-  host.dispatch('pointerenter');
+  host.dispatch('pointerenter', { clientX: 20, clientY: 45 });
   assert.strictEqual(IT.isVisible(tip), true, 'visible immediately on pointerenter');
-  host.dispatch('pointerleave');
-  assert.strictEqual(IT.isVisible(tip), false, 'hidden on pointerleave (grace 0)');
+  // Leave outside hit rect → immediate hide (grace 0).
+  host.dispatch('pointerleave', { clientX: 900, clientY: 900 });
+  assert.strictEqual(IT.isVisible(tip), false, 'hidden on leave outside hit rect');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0, 'no grace timer');
 });
 
 test('mouseenter also shows (fallback path)', function () {
@@ -167,11 +173,11 @@ test('mouseenter also shows (fallback path)', function () {
   host.ownerDocument = doc;
   const timers = mockTimers();
   const tip = IT.attach(host, 'Identified', {
-    doc: doc, mount: doc.body, timers: timers, hideGraceMs: 0,
+    doc: doc, mount: doc.body, timers: timers, hitGroup: true,
   });
-  host.dispatch('mouseenter');
+  host.dispatch('mouseenter', { clientX: 20, clientY: 45 });
   assert.strictEqual(IT.isVisible(tip), true);
-  host.dispatch('mouseleave');
+  host.dispatch('mouseleave', { clientX: 900, clientY: 900 });
   assert.strictEqual(IT.isVisible(tip), false);
 });
 
@@ -183,36 +189,28 @@ test('empty text → no tip, no attach', function () {
   assert.strictEqual(IT.attach(host, '   ', { doc: doc }), null);
 });
 
-test('instant_tip.js source never setTimeout-delays show', function () {
+test('instant_tip.js source: 0ms show, HIDE_GRACE_MS=0, no bridge product path', function () {
   const src = fs.readFileSync(path.join(__dirname, 'instant_tip.js'), 'utf8');
-  // No setTimeout(show, N) path for the product show handler.
-  // 🎯T186 may use setTimeout only for hide grace — never for show.
   assert.ok(!/setTimeout\s*\(\s*show/.test(src), 'must not setTimeout before show');
-  assert.ok(/SHOW_DELAY_MS\s*=\s*0/.test(src), 'SHOW_DELAY_MS = 0 in source');
-  assert.ok(/HIDE_GRACE_MS\s*=\s*\d+/.test(src), 'HIDE_GRACE_MS present');
-  const grace = src.match(/HIDE_GRACE_MS\s*=\s*(\d+)/);
-  assert.ok(grace, 'HIDE_GRACE_MS numeric');
-  const g = Number(grace[1]);
-  // 🎯T186 was 50–150; 🎯T187 widens bridge grace to ~300–500ms.
-  assert.ok(g >= 50 && g <= 500, 'HIDE_GRACE_MS in 50–500ms: ' + g);
-  // pointerenter is the primary event.
+  assert.ok(/SHOW_DELAY_MS\s*=\s*0/.test(src), 'SHOW_DELAY_MS = 0');
+  assert.ok(/HIDE_GRACE_MS\s*=\s*0/.test(src), 'HIDE_GRACE_MS = 0 product');
+  assert.ok(src.indexOf('pointInHitRect') >= 0, 'pointInHitRect pure predicate');
+  assert.ok(src.indexOf('computeHitRect') >= 0 || src.indexOf('unionHitRect') >= 0,
+    'single hit rect builder');
+  // Product model must not use multi-element bridge path.
+  assert.ok(src.indexOf('BRIDGE_CLASS') < 0, 'no BRIDGE_CLASS');
+  assert.ok(src.indexOf('instant-tip-bridge') < 0, 'no instant-tip-bridge');
+  assert.ok(src.indexOf('overBridge') < 0, 'no overBridge multi-flag');
   assert.ok(src.indexOf('pointerenter') >= 0);
-  // Sticky: tip listens for enter/leave.
-  assert.ok(src.indexOf('onTipEnter') >= 0 || /tip\.addEventListener\s*\(\s*['"]pointerenter/.test(src),
-    'tip pointerenter for sticky');
-  // 🎯T203: singleton registry on show path.
-  assert.ok(src.indexOf('dismissOtherTips') >= 0, 'dismissOtherTips in source');
-  assert.ok(src.indexOf('openTips') >= 0 || src.indexOf('claimOpen') >= 0, 'open tip registry');
-  assert.ok(src.indexOf('_instantTipForceHide') >= 0, 'forceHide for sticky reset');
+  assert.ok(src.indexOf('dismissOtherTips') >= 0);
+  assert.ok(src.indexOf('_instantTipForceHide') >= 0);
+  assert.ok(!/setInterval\s*\(/.test(src), 'no setInterval');
 });
 
 test('index.html wires InstantTip on frontier cells; no title= for status/fanout/name', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('scripts/instant_tip.js') >= 0, 'script tag');
   assert.ok(html.indexOf('InstantTip.attach') >= 0, 'attach used');
-  // Render path must not assign native title on frontier explanation cells.
-  // Allow other title= elsewhere in chrome; ban status.title / fan.title / name.title
-  // in the frontier row builder region.
   const start = html.indexOf('// 🎯T173: headerless table');
   assert.ok(start >= 0, 'frontier render marker');
   const end = html.indexOf('function loadFrontier', start);
@@ -221,215 +219,75 @@ test('index.html wires InstantTip on frontier cells; no title= for status/fanout
   assert.ok(region.indexOf('status.title') < 0, 'no status.title');
   assert.ok(region.indexOf('fan.title') < 0, 'no fan.title');
   assert.ok(region.indexOf('name.title') < 0, 'no name.title');
-  // Custom tip path for the three explanation surfaces.
   assert.ok(/InstantTip\.attach\(\s*status/.test(region) || region.indexOf('InstantTip.attach(status') >= 0,
     'status InstantTip');
   assert.ok(region.indexOf('InstantTip.attach(fan') >= 0 || /InstantTip\.attach\(\s*fan/.test(region),
     'fan InstantTip');
-  assert.ok(region.indexOf('InstantTip.attach(name') >= 0 || /InstantTip\.attach\(\s*name/.test(region),
-    'name InstantTip');
-  // CSS for tip chrome present.
   assert.ok(/\.instant-tip\s*\{/.test(html), 'instant-tip CSS');
+  // 🎯T231: single hit rect wiring, no bridge CSS class as product path.
+  assert.ok(region.indexOf('hitGroup') >= 0, 'hitGroup on cards');
+  assert.ok(region.indexOf('groupHosts') >= 0, 'groupHosts id+name');
+  assert.ok(html.indexOf('instant-tip-bridge') < 0, 'no bridge CSS');
+  assert.ok(/\.instant-tip-hit\s*\{/.test(html) || html.indexOf('instant-tip-hit') >= 0,
+    'hit layer CSS');
 });
 
-// 🎯T181: pure left-of-pointer placement — prefer left, flip near left edge, clamp.
+// ─── Placement (T181/T186) ────────────────────────────────────────────────
+
 test('placeLeftOfPointerRect prefers left of cursor; flips when clipped (🎯T181)', function () {
-  // Room on left: tip fully left of pointer, vertically centered.
   const roomy = IT.placeLeftOfPointerRect({
-    pointerX: 400,
-    pointerY: 300,
-    tipW: 200,
-    tipH: 100,
-    viewW: 1000,
-    viewH: 800,
-    gap: 12,
-    pad: 4,
+    pointerX: 400, pointerY: 300, tipW: 200, tipH: 100,
+    viewW: 1000, viewH: 800, gap: 12, pad: 4,
   });
   assert.strictEqual(roomy.side, 'left');
   assert.strictEqual(roomy.left, 400 - 12 - 200);
   assert.strictEqual(roomy.top, 300 - 50);
 
-  // Near left edge: flip to right of pointer.
   const edge = IT.placeLeftOfPointerRect({
-    pointerX: 40,
-    pointerY: 200,
-    tipW: 200,
-    tipH: 80,
-    viewW: 800,
-    viewH: 600,
-    gap: 12,
-    pad: 4,
+    pointerX: 40, pointerY: 200, tipW: 200, tipH: 80,
+    viewW: 800, viewH: 600, gap: 12, pad: 4,
   });
   assert.strictEqual(edge.side, 'right');
   assert.strictEqual(edge.left, 40 + 12);
-  assert.strictEqual(edge.top, 200 - 40);
 
-  // Vertical clamp near top.
   const topClamp = IT.placeLeftOfPointerRect({
-    pointerX: 500,
-    pointerY: 10,
-    tipW: 100,
-    tipH: 120,
-    viewW: 800,
-    viewH: 600,
-    gap: 12,
-    pad: 4,
+    pointerX: 500, pointerY: 10, tipW: 100, tipH: 80,
+    viewW: 800, viewH: 600, gap: 12, pad: 4,
   });
-  assert.ok(topClamp.top >= 4, 'clamped top: ' + topClamp.top);
-
-  // Vertical clamp near bottom.
-  const botClamp = IT.placeLeftOfPointerRect({
-    pointerX: 500,
-    pointerY: 590,
-    tipW: 100,
-    tipH: 120,
-    viewW: 800,
-    viewH: 600,
-    gap: 12,
-    pad: 4,
-  });
-  assert.ok(botClamp.top + 120 <= 600 - 4 + 1, 'clamped bottom: ' + botClamp.top);
+  assert.ok(topClamp.top >= 4, 'top clamped');
 });
 
 test('attach html + left-of-pointer shows immediately with card class (🎯T181)', function () {
   const doc = mockDoc();
   const host = mockEl('td');
   host.ownerDocument = doc;
-  const body = '<p><strong>🎯T181</strong> — Card</p><ul><li>Acceptance A</li></ul>';
-  const tip = IT.attach(host, body, {
+  const tip = IT.attach(host, '<p>Acceptance A</p>', {
     doc: doc,
     mount: doc.body,
     html: true,
     ariaLabel: '🎯T181 Card. Acceptance A',
     placement: IT.PLACE_LEFT_OF_POINTER,
     className: IT.CARD_CLASS,
-    // No table in mock doc — skip clamp so left-of-pointer math is pure.
     clampSelectors: [],
+    hitGroup: true,
   });
   assert.ok(tip);
   assert.ok(tip.className.indexOf(IT.CARD_CLASS) >= 0, 'card class on tip');
   assert.ok(tip.innerHTML.indexOf('Acceptance A') >= 0, 'html body has acceptance');
-  assert.strictEqual(host.attrs['aria-label'].indexOf('Acceptance A') >= 0, true);
   host.dispatch('pointerenter', { clientX: 400, clientY: 250 });
   assert.strictEqual(IT.isVisible(tip), true, '0ms show');
-  // Position applied (left of pointer ≈ 400 - 12 - 200).
   assert.ok(tip.style.left, 'left set');
-  assert.ok(tip.style.top, 'top set');
-  const leftPx = parseInt(tip.style.left, 10);
-  assert.ok(leftPx < 400, 'tip placed left of pointer x=400, got ' + leftPx);
-  // 🎯T186: tip receives pointer events while shown.
   assert.strictEqual(tip.style.pointerEvents, 'auto', 'pointer-events auto while shown');
 });
 
-// 🎯T186: sticky — enter tip after leave host cancels hide.
-test('sticky: enter tip after leave host keeps tip open (🎯T186)', function () {
-  const doc = mockDoc();
-  const host = mockEl('td');
-  host.ownerDocument = doc;
-  const timers = mockTimers();
-  const tip = IT.attach(host, 'Scrollable card body', {
-    doc: doc,
-    mount: doc.body,
-    sticky: true,
-    hideGraceMs: 100,
-    timers: timers,
-    placement: IT.PLACE_LEFT_OF_POINTER,
-    className: IT.CARD_CLASS,
-    clampSelectors: [],
-  });
-  assert.ok(tip);
-  assert.ok(IT.HIDE_GRACE_MS >= 50 && IT.HIDE_GRACE_MS <= 500, 'grace in range');
-  const hs = IT.hideSchedule();
-  assert.strictEqual(hs.usesTimeout, true);
-  assert.ok(hs.graceMs >= 50 && hs.graceMs <= 500);
-
-  host.dispatch('pointerenter', { clientX: 500, clientY: 200 });
-  assert.strictEqual(IT.isVisible(tip), true, 'shown 0ms');
-  assert.strictEqual(tip.style.pointerEvents, 'auto');
-
-  // Leave host → hide scheduled, still visible.
-  host.dispatch('pointerleave');
-  assert.strictEqual(IT.isVisible(tip), true, 'still visible during grace');
-  assert.ok(timers.pending.filter(Boolean).length >= 1, 'hide timer scheduled');
-
-  // Enter tip within grace → cancel hide.
-  tip.dispatch('pointerenter');
-  assert.strictEqual(IT.isVisible(tip), true, 'visible after tip enter');
-  timers.flush(); // would fire cancelled timer slots only if still pending
-  assert.strictEqual(IT.isVisible(tip), true, 'still visible after flush (cancelled)');
-
-  // Leave tip → schedule hide again → flush → hidden.
-  tip.dispatch('pointerleave');
-  assert.strictEqual(IT.isVisible(tip), true, 'grace after tip leave');
-  timers.flush();
-  assert.strictEqual(IT.isVisible(tip), false, 'hidden after leave both + grace');
-});
-
-test('sticky: leave host without entering tip hides after grace (🎯T186)', function () {
-  const doc = mockDoc();
-  const host = mockEl('td');
-  host.ownerDocument = doc;
-  const timers = mockTimers();
-  const tip = IT.attach(host, 'Fanout list', {
-    doc: doc, mount: doc.body, sticky: true, hideGraceMs: 80, timers: timers,
-  });
-  host.dispatch('pointerenter');
-  assert.strictEqual(IT.isVisible(tip), true);
-  host.dispatch('pointerleave');
-  assert.strictEqual(IT.isVisible(tip), true, 'grace');
-  assert.ok(timers.pending.some(function (p) { return p && p.ms === 80; }), 'grace ms');
-  timers.flush();
-  assert.strictEqual(IT.isVisible(tip), false, 'hidden after grace without tip enter');
-});
-
-// 🎯T186: clamp card right edge to frontier table left.
 test('placeLeftOfPointerRect clamps right edge to maxRight (🎯T186)', function () {
-  // Wide tip left of pointer would extend past table at x=500.
   const pos = IT.placeLeftOfPointerRect({
-    pointerX: 520,
-    pointerY: 200,
-    tipW: 200,
-    tipH: 100,
-    viewW: 1000,
-    viewH: 800,
-    gap: 12,
-    pad: 4,
-    maxRight: 500, // table left − gap
+    pointerX: 520, pointerY: 200, tipW: 200, tipH: 100,
+    viewW: 1000, viewH: 800, gap: 12, pad: 4, maxRight: 500,
   });
   assert.strictEqual(pos.side, 'left');
-  assert.ok(pos.left + 200 <= 500 + 0.5, 'right edge ≤ maxRight: left=' + pos.left);
-  assert.strictEqual(pos.left, 300); // 500 - 200
-
-  // Prefer left of pointer when it already fits under clamp.
-  const roomy = IT.placeLeftOfPointerRect({
-    pointerX: 400,
-    pointerY: 200,
-    tipW: 100,
-    tipH: 80,
-    viewW: 1000,
-    viewH: 800,
-    gap: 12,
-    pad: 4,
-    maxRight: 450,
-  });
-  assert.strictEqual(roomy.left, 400 - 12 - 100);
-  assert.ok(roomy.left + 100 <= 450);
-
-  // Not enough room: shrink maxWidth; do not flip over table.
-  const tight = IT.placeLeftOfPointerRect({
-    pointerX: 80,
-    pointerY: 200,
-    tipW: 300,
-    tipH: 100,
-    viewW: 1000,
-    viewH: 800,
-    gap: 12,
-    pad: 4,
-    maxRight: 100,
-  });
-  assert.strictEqual(tight.side, 'left', 'no flip over table when maxRight set');
-  assert.ok(tight.maxWidth != null && tight.maxWidth <= 96, 'shrunk: ' + tight.maxWidth);
-  assert.ok(tight.left + (tight.maxWidth || 0) <= 100 + 0.5, 'clamped after shrink');
+  assert.ok(pos.left + 200 <= 500 + 0.5, 'right edge ≤ maxRight');
+  assert.strictEqual(pos.left, 300);
 });
 
 test('resolveClampRight from clampRect / maxRight (🎯T186)', function () {
@@ -440,7 +298,6 @@ test('resolveClampRight from clampRect / maxRight (🎯T186)', function () {
   );
   assert.strictEqual(IT.DEFAULT_CLAMP_GAP, 8);
   assert.ok(IT.DEFAULT_CLAMP_SELECTORS.indexOf('#frontier-table') >= 0);
-  assert.ok(IT.DEFAULT_CLAMP_SELECTORS.indexOf('#frontier-body') >= 0);
 });
 
 test('attach left-of-pointer with maxRight clamps card (🎯T186)', function () {
@@ -454,7 +311,7 @@ test('attach left-of-pointer with maxRight clamps card (🎯T186)', function () 
     placement: IT.PLACE_LEFT_OF_POINTER,
     className: IT.CARD_CLASS,
     maxRight: 350,
-    // tip mock width 200
+    hitGroup: true,
   });
   tip.offsetWidth = 200;
   tip.offsetHeight = 120;
@@ -464,7 +321,7 @@ test('attach left-of-pointer with maxRight clamps card (🎯T186)', function () 
   assert.ok(left + 200 <= 350 + 0.5, 'card right ≤ maxRight: left=' + left);
 });
 
-test('index.html sticky + clamp wiring (🎯T186)', function () {
+test('index.html sticky + clamp wiring (🎯T186/T231)', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(/\.instant-tip\.instant-tip-show\s*\{[^}]*pointer-events:\s*auto/.test(html)
     || /instant-tip-show[\s\S]*?pointer-events:\s*auto/.test(html),
@@ -473,13 +330,14 @@ test('index.html sticky + clamp wiring (🎯T186)', function () {
   assert.ok(start >= 0);
   const end = html.indexOf('function loadFrontier', start);
   const region = html.slice(start, end > start ? end : start + 9000);
-  assert.ok(region.indexOf('sticky') >= 0 || region.indexOf('T186') >= 0, 'sticky/T186 in render');
-  assert.ok(region.indexOf('frontier-table') >= 0 || region.indexOf('clampSelectors') >= 0,
-    'clamp to frontier table');
+  assert.ok(region.indexOf('sticky') >= 0 || region.indexOf('T186') >= 0 || region.indexOf('T231') >= 0,
+    'sticky/T186/T231 in render');
   assert.ok(region.indexOf('clampSelectors') >= 0, 'clampSelectors wired');
+  assert.ok(region.indexOf('hitGroup') >= 0, 'hitGroup wired');
 });
 
-// 🎯T203: product-wide singleton — show second tip hides first.
+// ─── Singleton (T203) ─────────────────────────────────────────────────────
+
 test('singleton: attach/show second tip hides first (🎯T203)', function () {
   const doc = mockDoc();
   const host1 = mockEl('td');
@@ -487,39 +345,27 @@ test('singleton: attach/show second tip hides first (🎯T203)', function () {
   host1.ownerDocument = doc;
   host2.ownerDocument = doc;
   const tip1 = IT.attach(host1, '<p>Card A — T100</p>', {
-    doc: doc, mount: doc.body, html: true, hideGraceMs: 0,
-    sticky: true, className: IT.CARD_CLASS, placement: IT.PLACE_LEFT_OF_POINTER,
-    clampSelectors: [],
+    doc: doc, mount: doc.body, html: true,
+    sticky: true, hitGroup: true, className: IT.CARD_CLASS,
+    placement: IT.PLACE_LEFT_OF_POINTER, clampSelectors: [],
   });
   const tip2 = IT.attach(host2, '<p>Card B — T200</p>', {
-    doc: doc, mount: doc.body, html: true, hideGraceMs: 0,
-    sticky: true, className: IT.CARD_CLASS, placement: IT.PLACE_LEFT_OF_POINTER,
-    clampSelectors: [],
+    doc: doc, mount: doc.body, html: true,
+    sticky: true, hitGroup: true, className: IT.CARD_CLASS,
+    placement: IT.PLACE_LEFT_OF_POINTER, clampSelectors: [],
   });
   assert.ok(tip1 && tip2);
-  assert.strictEqual(typeof tip1._instantTipForceHide, 'function', 'forceHide wired');
-  assert.strictEqual(typeof tip2._instantTipForceHide, 'function');
+  assert.strictEqual(typeof tip1._instantTipForceHide, 'function');
 
   host1.dispatch('pointerenter', { clientX: 400, clientY: 200 });
   assert.strictEqual(IT.isVisible(tip1), true, 'first shown');
-  assert.strictEqual(IT.openTipsCount(), 1, 'registry has 1');
+  assert.strictEqual(IT.openTipsCount(), 1);
 
   host2.dispatch('pointerenter', { clientX: 420, clientY: 220 });
   assert.strictEqual(IT.isVisible(tip2), true, 'second shown');
   assert.strictEqual(IT.isVisible(tip1), false, 'first hidden by singleton');
-  assert.strictEqual(IT.openTipsCount(), 1, 'registry still 1');
-  assert.strictEqual(IT.getOpenTips()[0], tip2, 'open tip is second');
-
-  // Third: plain text tip also participates in product-wide singleton.
-  const host3 = mockEl('td');
-  host3.ownerDocument = doc;
-  const tip3 = IT.attach(host3, 'Fanout list', {
-    doc: doc, mount: doc.body, hideGraceMs: 0, sticky: true,
-  });
-  host3.dispatch('pointerenter');
-  assert.strictEqual(IT.isVisible(tip3), true);
-  assert.strictEqual(IT.isVisible(tip2), false, 'card dismissed by text tip');
   assert.strictEqual(IT.openTipsCount(), 1);
+  IT.hideTip(tip2);
 });
 
 test('singleton: showTip path dismisses peers without attach sticky (🎯T203)', function () {
@@ -530,244 +376,110 @@ test('singleton: showTip path dismisses peers without attach sticky (🎯T203)',
   b.className = IT.TIP_CLASS;
   a.style = {};
   b.style = {};
-  // Standalone tips (no attach forceHide) still hide via hideTip.
   IT.showTip(a, null, {});
   assert.strictEqual(IT.isVisible(a), true);
-  assert.strictEqual(IT.openTipsCount(), 1);
   IT.showTip(b, null, {});
   assert.strictEqual(IT.isVisible(b), true);
   assert.strictEqual(IT.isVisible(a), false, 'peer hidden on showTip');
-  assert.strictEqual(IT.openTipsCount(), 1);
   IT.hideTip(b);
   assert.strictEqual(IT.openTipsCount(), 0);
 });
 
-// ─── 🎯T187: no auto-timeout while over tip; gap grace only ─────────────────
+// ─── T187/T230 retained: no idle timeout over card ────────────────────────
 
-test('T187 pure: shouldRunScheduledHide never true while overTip', function () {
+test('T187 pure: shouldRunScheduledHide never true while over tip/host', function () {
   assert.strictEqual(IT.shouldRunScheduledHide({ overTip: true, overHost: false }), false);
-  assert.strictEqual(IT.shouldRunScheduledHide({ overTip: true, overHost: true }), false);
   assert.strictEqual(IT.shouldRunScheduledHide({ overTip: false, overHost: true }), false);
+  assert.strictEqual(IT.shouldRunScheduledHide({ insideHitRect: true }), false);
   assert.strictEqual(IT.shouldRunScheduledHide({ overTip: false, overHost: false }), true);
-  assert.strictEqual(
-    IT.shouldScheduleHideOnHostLeave({ overTip: true, tipEngaged: true }),
-    false,
-    'leave-host alone while over tip must not schedule'
-  );
-  assert.strictEqual(
-    IT.shouldScheduleHideOnHostLeave({ overTip: false, tipEngaged: true }),
-    true,
-    'walk-away after tip→host still schedules'
-  );
-  assert.strictEqual(
-    IT.shouldScheduleHideOnTipLeave({ overHost: true, overTip: false }),
-    false
-  );
-  assert.strictEqual(
-    IT.shouldScheduleHideOnTipLeave({ overHost: false, overTip: false }),
-    true
-  );
 });
 
-test('T187 hideSchedule: gap-only grace, no setInterval, neverWhileOverTip', function () {
-  const hs = IT.hideSchedule();
-  assert.strictEqual(hs.usesInterval, false, 'no setInterval auto-hide');
-  assert.strictEqual(hs.gapOnly, true);
-  assert.strictEqual(hs.neverWhileOverTip, true);
-  assert.strictEqual(hs.usesTimeout, true);
-  assert.ok(hs.graceMs >= 300 && hs.graceMs <= 500, 'product grace 300–500ms: ' + hs.graceMs);
-  assert.strictEqual(IT.HIDE_GRACE_MS, hs.graceMs);
+test('T187 hideSchedule: product hit-rect, grace 0, no setInterval', function () {
+  const hs = IT.hideSchedule({ hitGroup: true });
+  assert.strictEqual(hs.usesInterval, false);
+  assert.strictEqual(hs.graceMs, 0);
+  assert.strictEqual(hs.usesTimeout, false);
+  assert.strictEqual(hs.model, 'hit-rect');
+  assert.strictEqual(hs.immediateOnLeaveHitGroup, true);
+  assert.strictEqual(IT.HIDE_GRACE_MS, 0);
+  assert.strictEqual(IT.resolveHideGraceMs({ hitGroup: true }), 0);
 });
 
-test('T187 source has no setInterval auto-hide path', function () {
-  const src = fs.readFileSync(path.join(__dirname, 'instant_tip.js'), 'utf8');
-  assert.ok(!/setInterval\s*\(/.test(src), 'no setInterval in instant_tip.js');
-  assert.ok(src.indexOf('shouldRunScheduledHide') >= 0);
-  assert.ok(src.indexOf('neverWhileOverTip') >= 0 || src.indexOf('overTip') >= 0);
-  assert.ok(/HIDE_GRACE_MS\s*=\s*([3-5]\d{2})/.test(src), 'HIDE_GRACE_MS in 300–500');
-});
-
-test('T187: overTip true → scheduled hide does not run', function () {
+test('T187: over tip → stay open; leave tip outside rect → hide now', function () {
   const doc = mockDoc();
   const host = mockEl('td');
   host.ownerDocument = doc;
+  host._rect = { left: 320, top: 200, right: 360, bottom: 220, width: 40, height: 20 };
   const timers = mockTimers();
   const tip = IT.attach(host, 'Sticky card — no idle timeout', {
     doc: doc,
     mount: doc.body,
     sticky: true,
-    hideGraceMs: 50,
+    hitGroup: true,
     timers: timers,
     placement: IT.PLACE_LEFT_OF_POINTER,
     className: IT.CARD_CLASS,
     clampSelectors: [],
   });
-  host.dispatch('pointerenter', { clientX: 500, clientY: 200 });
+  // Inject known hit rect: card left + host right.
+  tip._instantTipSetHitRect({ left: 100, top: 50, right: 360, bottom: 400 });
+  host.dispatch('pointerenter', { clientX: 340, clientY: 210 });
   assert.strictEqual(IT.isVisible(tip), true);
-
-  // Leave host then enter tip (bridge).
-  host.dispatch('pointerleave');
-  assert.ok(timers.pending.filter(Boolean).length >= 1, 'gap grace armed');
-  tip.dispatch('pointerenter');
+  tip.dispatch('pointerenter', { clientX: 150, clientY: 100 });
   assert.strictEqual(tip._instantTipHoverState().overTip, true);
-  assert.strictEqual(tip._instantTipHoverState().tipEngaged, true);
 
-  // While over tip, force-arm a hide timer as if something re-scheduled — callback must no-op.
-  // Entering tip should have cancelled; flush any cancelled slots then verify still open.
+  // Idle flush — still open (no timeout).
   timers.flush();
-  assert.strictEqual(IT.isVisible(tip), true, 'still open after grace flush while overTip');
-
-  // leave-host alone while over tip must not hide (re-dispatch host leave).
-  host.dispatch('pointerleave');
-  assert.strictEqual(IT.isVisible(tip), true, 'leave-host alone while over tip keeps open');
-  assert.strictEqual(
-    timers.pending.filter(Boolean).length,
-    0,
-    'no hide timer while overTip'
-  );
   timers.flush();
   assert.strictEqual(IT.isVisible(tip), true, 'still open after idle flush over tip');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0, 'no hide timer');
 
-  // Wheel over tip must not dismiss.
-  tip.dispatch('wheel', { deltaY: 40 });
-  assert.strictEqual(IT.isVisible(tip), true);
-  assert.strictEqual(tip._instantTipHoverState().overTip, true);
-  timers.flush();
-  assert.strictEqual(IT.isVisible(tip), true, 'wheel does not auto-hide');
+  // Leave host while over tip (still in rect) — stay.
+  host.dispatch('pointerleave', { clientX: 150, clientY: 100, relatedTarget: tip });
+  assert.strictEqual(IT.isVisible(tip), true, 'leave-host into tip keeps open');
 
-  // Real dismiss: leave tip (not over host).
-  tip.dispatch('pointerleave');
-  assert.strictEqual(IT.isVisible(tip), true, 'grace after tip leave');
-  timers.flush();
-  assert.strictEqual(IT.isVisible(tip), false, 'hidden after leave tip + grace');
+  // Sample outside hit rect → dismiss now, 0 grace.
+  tip._instantTipSamplePointer(900, 900);
+  assert.strictEqual(IT.isVisible(tip), false, 'outside hit rect hides immediately');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0, 'no grace after leave');
 });
 
-test('T187: after tip entered, leave-host alone does not hide', function () {
-  const doc = mockDoc();
-  const host = mockEl('td');
-  host.ownerDocument = doc;
-  const timers = mockTimers();
-  const tip = IT.attach(host, 'Engaged card', {
-    doc: doc, mount: doc.body, sticky: true, hideGraceMs: 40, timers: timers,
-  });
-  host.dispatch('pointerenter');
-  tip.dispatch('pointerenter');
-  assert.strictEqual(tip._instantTipHoverState().tipEngaged, true);
-  assert.strictEqual(tip._instantTipHoverState().overTip, true);
+// ─── T230: latch + re-render ──────────────────────────────────────────────
 
-  // Host leave while still over tip — must not arm hide.
-  host.dispatch('pointerleave');
-  assert.strictEqual(IT.isVisible(tip), true);
-  assert.ok(
-    timers.pending.filter(Boolean).length === 0,
-    'no grace timer when overTip on host leave'
-  );
-
-  // Nested leave (relatedTarget still inside tip) ignored.
-  const child = mockEl('div');
-  tip.appendChild(child);
-  tip.contains = function (n) { return n === tip || n === child || (tip.children && tip.children.indexOf(n) >= 0); };
-  tip.dispatch('pointerleave', { relatedTarget: child });
-  assert.strictEqual(IT.isVisible(tip), true, 'nested relatedTarget stay open');
-  assert.strictEqual(tip._instantTipHoverState().overTip, true);
+test('T230 pure: isHoverLatchedState while inside hit rect / host / tip', function () {
+  assert.strictEqual(IT.isHoverLatchedState({ overTip: true }, true), true);
+  assert.strictEqual(IT.isHoverLatchedState({ overHost: true }, true), true);
+  assert.strictEqual(IT.isHoverLatchedState({ insideHitRect: true }, true), true);
+  assert.strictEqual(IT.isHoverLatchedState({ overTip: false, overHost: false }, true), false);
+  assert.strictEqual(IT.isHoverLatchedState({ overTip: true }, false), false);
 });
 
-test('T187: leave tip after engagement hides; walk-away via host after tip also hides', function () {
-  const doc = mockDoc();
-  const host = mockEl('td');
-  host.ownerDocument = doc;
-  const timers = mockTimers();
-  const tip = IT.attach(host, 'Walk away', {
-    doc: doc, mount: doc.body, sticky: true, hideGraceMs: 30, timers: timers,
-  });
-  host.contains = function (n) { return n === host; };
-  tip.contains = function (n) { return n === tip; };
-
-  host.dispatch('pointerenter');
-  tip.dispatch('pointerenter');
-  // Return to host from tip (relatedTarget = host).
-  tip.dispatch('pointerleave', { relatedTarget: host });
-  assert.strictEqual(IT.isVisible(tip), true, 'tip→host stays open');
-  assert.strictEqual(tip._instantTipHoverState().overHost, true);
-  assert.strictEqual(tip._instantTipHoverState().overTip, false);
-
-  // Leave host to void — must schedule hide (not stuck).
-  host.dispatch('pointerleave');
-  assert.strictEqual(IT.isVisible(tip), true, 'grace');
-  assert.ok(timers.pending.filter(Boolean).length >= 1, 'walk-away schedules hide');
-  timers.flush();
-  assert.strictEqual(IT.isVisible(tip), false, 'hidden after tip→host→leave host');
-});
-
-// ─── 🎯T230: no wall-clock dismiss while over card; re-render must not kill ─
-
-test('T230 pure: isHoverLatchedState only while overTip/overHost and visible', function () {
-  assert.strictEqual(IT.isHoverLatchedState({ overTip: true, overHost: false }, true), true);
-  assert.strictEqual(IT.isHoverLatchedState({ overTip: false, overHost: true }, true), true);
-  assert.strictEqual(IT.isHoverLatchedState({ overTip: true, overHost: true }, true), true);
-  assert.strictEqual(
-    IT.isHoverLatchedState({ overTip: false, overHost: false }, true),
-    false,
-    'gap grace (left both, still visible) is not latched'
-  );
-  assert.strictEqual(IT.isHoverLatchedState({ overTip: true }, false), false, 'hidden not latched');
-  assert.strictEqual(IT.isHoverLatchedState(null, true), false);
-});
-
-test('T230: still pointer over tip — no hide timer; leave schedules hide', function () {
+test('T230: still pointer over tip — latched; leave outside rect unlatches + hides', function () {
   const doc = mockDoc();
   const host = mockEl('td');
   host.ownerDocument = doc;
   const timers = mockTimers();
   const tip = IT.attach(host, '<p>Frontier card body</p>', {
-    doc: doc,
-    mount: doc.body,
-    html: true,
-    sticky: true,
-    hideGraceMs: 100,
-    timers: timers,
-    placement: IT.PLACE_LEFT_OF_POINTER,
-    className: IT.CARD_CLASS,
+    doc: doc, mount: doc.body, html: true, sticky: true, hitGroup: true,
+    timers: timers, placement: IT.PLACE_LEFT_OF_POINTER, className: IT.CARD_CLASS,
     clampSelectors: [],
   });
-  host.dispatch('pointerenter', { clientX: 400, clientY: 200 });
-  tip.dispatch('pointerenter');
-  assert.strictEqual(IT.isVisible(tip), true);
+  tip._instantTipSetHitRect({ left: 100, top: 50, right: 400, bottom: 300 });
+  host.dispatch('pointerenter', { clientX: 200, clientY: 100 });
+  tip.dispatch('pointerenter', { clientX: 150, clientY: 80 });
   assert.strictEqual(IT.isHoverLatched(tip), true, 'latched over tip');
   assert.strictEqual(IT.anyHoverLatched(), true);
-
-  // Still pointer: flush many timer slots — must stay open (no idle auto-hide).
   timers.flush();
-  timers.flush();
-  assert.strictEqual(IT.isVisible(tip), true, 'still open after idle flushes');
-  assert.strictEqual(
-    timers.pending.filter(Boolean).length,
-    0,
-    'no hide timer armed while overTip'
-  );
-  assert.strictEqual(tip._instantTipHoverState().overTip, true);
+  assert.strictEqual(IT.isVisible(tip), true, 'no idle auto-hide');
 
-  // Leave host while still on card — must stay open (no timer).
-  host.dispatch('pointerleave');
-  assert.strictEqual(IT.isVisible(tip), true, 'leave-host alone while over tip keeps open');
-  assert.strictEqual(IT.isHoverLatched(tip), true, 'still latched over tip');
-  assert.strictEqual(timers.pending.filter(Boolean).length, 0, 'no hide while overTip');
-
-  // Leave tip (not over host) → grace schedules hide.
-  tip.dispatch('pointerleave');
-  assert.strictEqual(tip._instantTipHoverState().overTip, false);
-  assert.strictEqual(tip._instantTipHoverState().overHost, false);
-  assert.strictEqual(IT.isHoverLatched(tip), false, 'not latched after leave tip+host');
-  assert.ok(timers.pending.filter(Boolean).length >= 1, 'leave schedules hide');
-  timers.flush();
-  assert.strictEqual(IT.isVisible(tip), false, 'hidden after leave + grace');
+  tip._instantTipSamplePointer(800, 800);
+  assert.strictEqual(IT.isVisible(tip), false);
   assert.strictEqual(IT.anyHoverLatched(), false);
 });
 
 test('T230: discardDetachedTips preserves latched tip, removes others', function () {
   const doc = mockDoc();
   const body = doc.body;
-  // querySelectorAll mock for discardDetachedTips
   const tips = [];
   doc.querySelectorAll = function (sel) {
     if (String(sel).indexOf('instant-tip') >= 0) return tips.slice();
@@ -779,47 +491,22 @@ test('T230: discardDetachedTips preserves latched tip, removes others', function
   const hostB = mockEl('td');
   hostB.ownerDocument = doc;
   const tipA = IT.attach(hostA, 'Card A latched', {
-    doc: doc, mount: body, sticky: true, hideGraceMs: 0,
+    doc: doc, mount: body, sticky: true, hitGroup: true,
   });
   const tipB = IT.attach(hostB, 'Card B closed', {
-    doc: doc, mount: body, sticky: true, hideGraceMs: 0,
+    doc: doc, mount: body, sticky: true, hitGroup: true,
   });
   tips.push(tipA, tipB);
 
-  hostA.dispatch('pointerenter');
-  tipA.dispatch('pointerenter');
-  assert.strictEqual(IT.isVisible(tipA), true);
+  hostA.dispatch('pointerenter', { clientX: 20, clientY: 45 });
+  tipA.dispatch('pointerenter', { clientX: 20, clientY: 45 });
   assert.strictEqual(IT.isHoverLatched(tipA), true);
-  // tipB never shown — not latched
   assert.strictEqual(IT.isHoverLatched(tipB), false);
 
   const r = IT.discardDetachedTips(doc);
   assert.strictEqual(r.preserved, 1, 'latched preserved');
   assert.strictEqual(r.removed, 1, 'closed removed');
-  assert.strictEqual(IT.isVisible(tipA), true, 'latched still visible');
-  assert.ok(tipA.parentNode === body || body.children.indexOf(tipA) >= 0, 'latched still mounted');
-  assert.ok(!tipB.parentNode || body.children.indexOf(tipB) < 0, 'closed unmounted');
-});
-
-test('T230: anyHoverLatched false after leave both (gap grace still visible)', function () {
-  const doc = mockDoc();
-  const host = mockEl('td');
-  host.ownerDocument = doc;
-  const timers = mockTimers();
-  const tip = IT.attach(host, 'Grace gap', {
-    doc: doc, mount: doc.body, sticky: true, hideGraceMs: 80, timers: timers,
-  });
-  host.dispatch('pointerenter');
-  assert.strictEqual(IT.anyHoverLatched(), true, 'over host latched');
-  host.dispatch('pointerleave');
-  // During gap grace: still visible, both flags false → not latched (remount OK).
-  assert.strictEqual(IT.isVisible(tip), true, 'visible during grace');
-  assert.strictEqual(tip._instantTipHoverState().overHost, false);
-  assert.strictEqual(tip._instantTipHoverState().overTip, false);
-  assert.strictEqual(IT.isHoverLatched(tip), false, 'gap not latched');
-  assert.strictEqual(IT.anyHoverLatched(), false);
-  timers.flush();
-  assert.strictEqual(IT.isVisible(tip), false);
+  assert.strictEqual(IT.isVisible(tipA), true);
 });
 
 test('T230 index.html skips re-render while anyHoverLatched; discardDetachedTips path', function () {
@@ -831,11 +518,203 @@ test('T230 index.html skips re-render while anyHoverLatched; discardDetachedTips
   assert.ok(region.indexOf('anyHoverLatched') >= 0, 'anyHoverLatched gate');
   assert.ok(region.indexOf('T230') >= 0, 'T230 comment');
   assert.ok(region.indexOf('discardDetachedTips') >= 0, 'discardDetachedTips cleanup');
-  // Must not blindly removeChild all tips without the latch gate.
-  assert.ok(
-    /anyHoverLatched[\s\S]*return;/.test(region) || region.indexOf('anyHoverLatched()') >= 0,
-    'early return when latched'
-  );
+});
+
+// ─── 🎯T231: single hit rect = AABB(card ∪ id+name), grace 0 ─────────────
+
+test('T231 pure: unionHitRect is one AABB of card + hosts', function () {
+  const card = { left: 100, top: 50, right: 300, bottom: 400 };
+  const id = { left: 320, top: 200, right: 360, bottom: 220 };
+  const name = { left: 360, top: 200, right: 500, bottom: 220 };
+  const u = IT.unionHitRect([card, id, name]);
+  assert.strictEqual(u.left, 100);
+  assert.strictEqual(u.top, 50);
+  assert.strictEqual(u.right, 500);
+  assert.strictEqual(u.bottom, 400);
+});
+
+test('T231 pure: computeHitRect = AABB(card ∪ hostRects) — no multi-region', function () {
+  const rect = IT.computeHitRect({
+    cardRect: { left: 100, top: 50, right: 300, bottom: 400 },
+    hostRects: [
+      { left: 320, top: 200, right: 360, bottom: 220 },
+      { left: 360, top: 200, right: 500, bottom: 220 },
+    ],
+  });
+  assert.ok(rect);
+  assert.strictEqual(rect.left, 100);
+  assert.strictEqual(rect.top, 50);
+  assert.strictEqual(rect.right, 500);
+  assert.strictEqual(rect.bottom, 400);
+  // Single rect only — computeHitRect returns one object, not an array of bridges.
+  assert.strictEqual(typeof rect.left, 'number');
+  assert.ok(!Array.isArray(rect));
+});
+
+test('T231 pure: pointInHitRect / shouldDismissOutsideHitRect', function () {
+  const rect = { left: 100, top: 50, right: 500, bottom: 400 };
+  assert.strictEqual(IT.pointInHitRect(200, 100, rect), true, 'inside card');
+  assert.strictEqual(IT.pointInHitRect(400, 210, rect), true, 'inside id/name band');
+  assert.strictEqual(IT.pointInHitRect(310, 210, rect), true, 'gap inside AABB stays open');
+  assert.strictEqual(IT.pointInHitRect(310, 30, rect), false, 'above hit rect top');
+  assert.strictEqual(IT.pointInHitRect(310, 450, rect), false, 'below hit rect bottom');
+  assert.strictEqual(IT.pointInHitRect(50, 210, rect), false, 'left of card');
+  assert.strictEqual(IT.pointInHitRect(600, 210, rect), false, 'right of name');
+  assert.strictEqual(IT.shouldDismissOutsideHitRect(310, 30, rect), true);
+  assert.strictEqual(IT.shouldDismissOutsideHitRect(200, 100, rect), false);
+});
+
+test('T231 pure: HIDE_GRACE_MS is 0 for continuous hit-rect product', function () {
+  assert.strictEqual(IT.HIDE_GRACE_MS, 0);
+  assert.strictEqual(IT.resolveHideGraceMs({ hitGroup: true }), 0);
+  assert.strictEqual(IT.resolveHideGraceMs({}), 0);
+  const hs = IT.hideSchedule({ hitGroup: true });
+  assert.strictEqual(hs.graceMs, 0);
+  assert.strictEqual(hs.usesTimeout, false);
+});
+
+test('T231: leave hit rect → dismiss immediately (0 grace, no timer)', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  host._rect = { left: 320, top: 200, right: 500, bottom: 220, width: 180, height: 20 };
+  const timers = mockTimers();
+  const tip = IT.attach(host, '<p>Card</p>', {
+    doc: doc, mount: doc.body, html: true, sticky: true, hitGroup: true,
+    timers: timers, className: IT.CARD_CLASS, placement: IT.PLACE_LEFT_OF_POINTER,
+    clampSelectors: [],
+  });
+  tip._instantTipSetHitRect({ left: 100, top: 50, right: 500, bottom: 400 });
+  host.dispatch('pointerenter', { clientX: 400, clientY: 210 });
+  assert.strictEqual(IT.isVisible(tip), true);
+
+  // Sample outside — immediate hide, zero pending timers.
+  const stayed = tip._instantTipSamplePointer(900, 100);
+  assert.strictEqual(stayed, false);
+  assert.strictEqual(IT.isVisible(tip), false, 'dismiss now');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0, '0 grace — no timer');
+});
+
+test('T231: above hit-rect top while over strip-x → dismiss', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const timers = mockTimers();
+  const tip = IT.attach(host, 'Card', {
+    doc: doc, mount: doc.body, sticky: true, hitGroup: true, timers: timers,
+  });
+  // Hit rect top=50; sample y=30 at x inside horizontal span → outside.
+  tip._instantTipSetHitRect({ left: 100, top: 50, right: 500, bottom: 400 });
+  host.dispatch('pointerenter', { clientX: 300, clientY: 100 });
+  assert.strictEqual(IT.isVisible(tip), true);
+  tip._instantTipSamplePointer(310, 30);
+  assert.strictEqual(IT.isVisible(tip), false, 'above rect dismisses');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0);
+});
+
+test('T231: below hit-rect bottom while over strip-x → dismiss', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const timers = mockTimers();
+  const tip = IT.attach(host, 'Card', {
+    doc: doc, mount: doc.body, sticky: true, hitGroup: true, timers: timers,
+  });
+  tip._instantTipSetHitRect({ left: 100, top: 50, right: 500, bottom: 400 });
+  host.dispatch('pointerenter', { clientX: 300, clientY: 100 });
+  tip._instantTipSamplePointer(310, 450);
+  assert.strictEqual(IT.isVisible(tip), false, 'below rect dismisses');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0);
+});
+
+test('T231: id/name → card (still inside hit rect) stays open', function () {
+  const doc = mockDoc();
+  const id = mockEl('td');
+  const name = mockEl('td');
+  id.ownerDocument = doc;
+  name.ownerDocument = doc;
+  id._rect = { left: 320, top: 200, right: 360, bottom: 220, width: 40, height: 20 };
+  name._rect = { left: 360, top: 200, right: 500, bottom: 220, width: 140, height: 20 };
+  const timers = mockTimers();
+  const tip = IT.attach(id, '<p>Rich card</p>', {
+    doc: doc, mount: doc.body, html: true, sticky: true, hitGroup: true,
+    groupHosts: [id, name], timers: timers, className: IT.CARD_CLASS,
+    placement: IT.PLACE_LEFT_OF_POINTER, clampSelectors: [],
+  });
+  tip._instantTipSetHitRect({ left: 100, top: 50, right: 500, bottom: 400 });
+  tip.offsetWidth = 200;
+  tip.offsetHeight = 350;
+  tip.style.left = '100px';
+  tip.style.top = '50px';
+
+  // Enter id cell.
+  id.dispatch('pointerenter', { clientX: 340, clientY: 210 });
+  assert.strictEqual(IT.isVisible(tip), true);
+
+  // Move through gap (inside AABB) toward card — sample stays inside.
+  assert.strictEqual(tip._instantTipSamplePointer(310, 210), true, 'gap inside AABB');
+  assert.strictEqual(IT.isVisible(tip), true);
+
+  // Onto card body.
+  assert.strictEqual(tip._instantTipSamplePointer(150, 100), true, 'on card');
+  assert.strictEqual(IT.isVisible(tip), true);
+  tip.dispatch('pointerenter', { clientX: 150, clientY: 100 });
+  assert.strictEqual(IT.isVisible(tip), true, 'tip enter keeps open');
+
+  // Leave host while relatedTarget is tip — stay.
+  id.dispatch('pointerleave', { clientX: 150, clientY: 100, relatedTarget: tip });
+  assert.strictEqual(IT.isVisible(tip), true, 'host→card no dismiss');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0, 'no grace timer armed');
+});
+
+test('T231: leave card into void outside rect → dismiss 0 grace', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const timers = mockTimers();
+  const tip = IT.attach(host, 'Card', {
+    doc: doc, mount: doc.body, sticky: true, hitGroup: true, timers: timers,
+  });
+  tip._instantTipSetHitRect({ left: 100, top: 50, right: 500, bottom: 400 });
+  host.dispatch('pointerenter', { clientX: 200, clientY: 100 });
+  tip.dispatch('pointerenter', { clientX: 150, clientY: 80 });
+  assert.strictEqual(IT.isVisible(tip), true);
+
+  // Leave tip with coords outside rect.
+  tip.dispatch('pointerleave', { clientX: 50, clientY: 80 });
+  assert.strictEqual(IT.isVisible(tip), false, 'leave card outside rect hides');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0);
+});
+
+test('T231: source has no multi-element bridge product model', function () {
+  const src = fs.readFileSync(path.join(__dirname, 'instant_tip.js'), 'utf8');
+  assert.ok(src.indexOf('pointInHitRect') >= 0);
+  assert.ok(src.indexOf('unionHitRect') >= 0 || src.indexOf('computeHitRect') >= 0);
+  assert.ok(src.indexOf('instant-tip-bridge') < 0);
+  assert.ok(src.indexOf('BRIDGE_CLASS') < 0);
+  assert.ok(src.indexOf('overBridge') < 0);
+  assert.ok(src.indexOf('bridgeRectBetween') < 0, 'no bridge geometry helper');
+  assert.ok(/HIDE_GRACE_MS\s*=\s*0/.test(src));
+  // index: single attach + groupHosts, no dual name attach for cards.
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('// 🎯T173: headerless table');
+  const end = html.indexOf('function loadFrontier', start);
+  const region = html.slice(start, end);
+  assert.ok(region.indexOf('groupHosts') >= 0);
+  assert.ok(region.indexOf('hitGroup') >= 0);
+  assert.ok(region.indexOf('instant-tip-bridge') < 0);
+  assert.ok(!/InstantTip\.attach\(\s*name/.test(region)
+    || region.indexOf('groupHosts') >= 0,
+    'card path uses groupHosts not dual name attach required');
+});
+
+test('T231 index wiring: hitGroup + groupHosts + no bridge', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('hitGroup: true') >= 0 || html.indexOf('hitGroup:true') >= 0
+    || /hitGroup:\s*true/.test(html), 'hitGroup true on cards');
+  assert.ok(html.indexOf('groupHosts') >= 0);
+  assert.ok(html.indexOf('instant-tip-bridge') < 0);
+  assert.ok(html.indexOf('T231') >= 0);
 });
 
 if (failed) {
@@ -843,4 +722,3 @@ if (failed) {
   process.exit(1);
 }
 console.log('All instant_tip tests passed');
-

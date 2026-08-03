@@ -674,7 +674,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 
 /* 🎯T175: instant custom tips (fixed layer; 0ms show — not native title=) */
-/* 🎯T186: sticky hover — tip receives pointer events while shown (scroll + bridge) */
+/* 🎯T186: sticky hover — tip receives pointer events while shown */
+/* 🎯T231: ONE hit rect = AABB(card ∪ id+name); leave → dismiss grace=0. No bridge. */
 .instant-tip {
   display: none;
   position: fixed;
@@ -698,6 +699,16 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .instant-tip.instant-tip-show {
   display: block;
   pointer-events: auto;
+}
+.instant-tip-hit {
+  display: none;
+  position: fixed;
+  z-index: 198;
+  pointer-events: none;
+  background: transparent;
+  border: none;
+  margin: 0;
+  padding: 0;
 }
 /* 🎯T181/T184: rich target card (markdown HTML + mermaid); scrollable, left-of-pointer */
 /* 🎯T186: sticky scroll + right edge clamped left of #frontier-table */
@@ -5552,21 +5563,24 @@ function renderFrontierTable(model) {
         } else if (typeof marked !== 'undefined' && marked.parse) {
           try { html = marked.parse(md); } catch (_) { html = md; }
         }
-        // 🎯T186: sticky tip (host↔card) + clamp right edge to #frontier-table left.
+        // 🎯T186/T231: sticky card; ONE hit rect = AABB(card ∪ id+name).
+        // Leave rect → dismiss immediately (HIDE_GRACE_MS=0). No bridge element.
+        // groupHosts = id+name of active row; clamp right edge left of table.
         const cardOpts = {
           html: true,
           ariaLabel: plain,
           placement: InstantTip.PLACE_LEFT_OF_POINTER || 'left-of-pointer',
           className: InstantTip.CARD_CLASS || 'instant-tip-card',
           sticky: true,
+          hitGroup: true,
+          groupHosts: [id, name],
           clampSelectors: ['#frontier-table', '#frontier-body'],
         };
-        const tipId = InstantTip.attach(id, html, cardOpts);
-        const tipName = InstantTip.attach(name, html, cardOpts);
+        // Single attach per row (id primary; name in groupHosts hit rect).
+        const tipCard = InstantTip.attach(id, html, cardOpts);
         // 🎯T184: render mermaid minigraph inside card tips (same path as chat).
-        if (typeof renderMermaidIn === 'function') {
-          if (tipId) renderMermaidIn(tipId);
-          if (tipName) renderMermaidIn(tipName);
+        if (typeof renderMermaidIn === 'function' && tipCard) {
+          renderMermaidIn(tipCard);
         }
       }
     } else if (fullName && typeof InstantTip !== 'undefined') {
