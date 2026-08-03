@@ -299,6 +299,144 @@
   }
 
   /**
+   * Recovery when chrome product API is missing/stale (404/5xx) or unreachable (🎯T196).
+   * Owner-facing; matches daily daemon bounce path.
+   */
+  const PRODUCT_FETCH_RECOVERY_HINT =
+    'Rebuild jevonsd if needed, then run scripts/restart-daily-jevonsd.sh and hard-reload the UI.';
+
+  /** Short status-line recovery fragment (status bar is one line). */
+  const PRODUCT_FETCH_RECOVERY_SHORT = 'rebuild / restart-daily';
+
+  /**
+   * 🎯T196: Actionable chrome fetch failure view — HTTP code + recovery.
+   * Must never look like emptyStateHtml (generic paste shell).
+   *
+   * @param {{
+   *   resource?: string,
+   *   status?: number,
+   *   message?: string,
+   *   kind?: 'http'|'network'|'unknown',
+   *   recoveryHint?: string,
+   * }} info
+   * @returns {{
+   *   title: string,
+   *   status: string,
+   *   bodyHtml: string,
+   *   httpStatus: number|null,
+   *   kind: string,
+   *   recoveryHint: string,
+   * }}
+   */
+  function productFetchFailureView(info) {
+    const o = info || {};
+    const resource = String(o.resource || 'Request').trim() || 'Request';
+    let httpStatus = null;
+    if (typeof o.status === 'number' && isFinite(o.status) && o.status > 0) {
+      httpStatus = Math.floor(o.status);
+    }
+    let detail = String(o.message == null ? '' : o.message).trim();
+    const httpOnly = /^HTTP\s+(\d{3})\b/i.exec(detail);
+    if (httpOnly) {
+      if (httpStatus == null) httpStatus = parseInt(httpOnly[1], 10);
+      detail = detail.replace(/^HTTP\s+\d{3}\s*[:.\-–—]?\s*/i, '').trim();
+    }
+    let kind = o.kind || '';
+    if (!kind) {
+      if (httpStatus != null) kind = 'http';
+      else if (/failed to fetch|networkerror|network error|load failed|econnrefused/i.test(detail)) {
+        kind = 'network';
+      } else {
+        kind = 'unknown';
+      }
+    }
+    const recovery = String(o.recoveryHint || PRODUCT_FETCH_RECOVERY_HINT).trim()
+      || PRODUCT_FETCH_RECOVERY_HINT;
+    const codeLabel = httpStatus != null ? ('HTTP ' + httpStatus) : '';
+    let statusCore;
+    if (codeLabel && detail && detail !== codeLabel) {
+      statusCore = resource + ' failed: ' + codeLabel + ' — ' + detail;
+    } else if (codeLabel) {
+      statusCore = resource + ' failed: ' + codeLabel;
+    } else if (detail) {
+      statusCore = resource + ' failed: ' + detail;
+    } else if (kind === 'network') {
+      statusCore = resource + ' failed: network error';
+    } else {
+      statusCore = resource + ' failed';
+    }
+    const status = statusCore + ' · ' + PRODUCT_FETCH_RECOVERY_SHORT;
+
+    let bodyDetail;
+    if (codeLabel && detail) {
+      bodyDetail = '<strong>' + escapeHtml(codeLabel) + '</strong> — ' + escapeHtml(detail);
+    } else if (codeLabel) {
+      bodyDetail = '<strong>' + escapeHtml(codeLabel) + '</strong>';
+    } else if (detail) {
+      bodyDetail = '<strong>Error</strong> — ' + escapeHtml(detail);
+    } else if (kind === 'network') {
+      bodyDetail = '<strong>Network error</strong> — request unreachable';
+    } else {
+      bodyDetail = '<strong>Error</strong> — request failed';
+    }
+
+    const bodyHtml =
+      '<div class="mvp-error" data-mvp-fetch-error="1">' +
+      '<p class="mvp-error-title">' + escapeHtml(resource) + ' could not load</p>' +
+      '<p class="mvp-error-body">' + bodyDetail + '</p>' +
+      '<p class="mvp-error-hint">' + escapeHtml(recovery) + '</p>' +
+      '</div>';
+
+    return {
+      title: resource,
+      status: status,
+      bodyHtml: bodyHtml,
+      httpStatus: httpStatus,
+      kind: kind,
+      recoveryHint: recovery,
+    };
+  }
+
+  /**
+   * Map a thrown Error (optionally with httpStatus/kind) into productFetchFailureView.
+   * @param {Error|{message?: string, httpStatus?: number, kind?: string}|string|null} err
+   * @param {{ resource?: string, status?: number, kind?: string, recoveryHint?: string }} [defaults]
+   */
+  function productFetchFailureFromError(err, defaults) {
+    const d = defaults || {};
+    let message = '';
+    let status = typeof d.status === 'number' ? d.status : null;
+    let kind = d.kind || '';
+    if (err && typeof err === 'object') {
+      if (err.message != null) message = String(err.message);
+      else message = String(err);
+      if (typeof err.httpStatus === 'number' && isFinite(err.httpStatus)) {
+        status = err.httpStatus;
+      }
+      if (err.kind) kind = String(err.kind);
+    } else if (err != null) {
+      message = String(err);
+    }
+    if (status == null) {
+      const m = /HTTP\s+(\d{3})\b/i.exec(message);
+      if (m) status = parseInt(m[1], 10);
+    }
+    if (!kind) {
+      if (status != null) kind = 'http';
+      else if (/failed to fetch|networkerror|network error|load failed|econnrefused/i.test(message)) {
+        kind = 'network';
+      }
+    }
+    return productFetchFailureView({
+      resource: d.resource || 'Request',
+      status: status != null ? status : undefined,
+      message: message,
+      kind: kind || undefined,
+      recoveryHint: d.recoveryHint,
+    });
+  }
+
+  /**
    * Decide what the durable panel should show on open-from-chrome.
    * @returns {{ mode: 'pinned'|'empty', pin?: object }}
    */
@@ -356,6 +494,10 @@
     savePinnedGraph: savePinnedGraph,
     clearPinnedGraph: clearPinnedGraph,
     emptyStateHtml: emptyStateHtml,
+    PRODUCT_FETCH_RECOVERY_HINT: PRODUCT_FETCH_RECOVERY_HINT,
+    PRODUCT_FETCH_RECOVERY_SHORT: PRODUCT_FETCH_RECOVERY_SHORT,
+    productFetchFailureView: productFetchFailureView,
+    productFetchFailureFromError: productFetchFailureFromError,
     openFromChromePlan: openFromChromePlan,
     isMermaidPanelOpen: isMermaidPanelOpen,
     shouldCloseMermaidOnEscape: shouldCloseMermaidOnEscape,
