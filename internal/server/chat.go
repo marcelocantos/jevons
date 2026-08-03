@@ -344,7 +344,11 @@ func (s *Server) RewindOverseer(n int) error {
 	}
 
 	reg.Stop(s.overseerName)
-	rotated := *def
+	// Stop clears ConnectURL/PID on the registry copy, but `def` was
+	// snapshotted before Stop. Re-registering that snapshot re-persisted
+	// the dead serve endpoint and forced Launch into reattach → connection
+	// reset (🎯T204). Always rotate with a clean connect endpoint.
+	rotated := clearConnectEndpoint(*def)
 	rotated.SessionID = uuid.NewString()
 	rotated.Materialized = false
 	if err := reg.Register(rotated); err != nil {
@@ -352,9 +356,13 @@ func (s *Server) RewindOverseer(n int) error {
 	}
 	agent, lerr := reg.Launch(s.overseerName)
 	if lerr != nil {
+		// Leave stopped + clean def; cockpit converge (🎯T204) will retry.
+		s.SetOverseerDownReason("rewind relaunch failed: " + lerr.Error())
+		s.NotifyAgentsChanged()
 		return fmt.Errorf("rewind: relaunch failed: %w", lerr)
 	}
 	s.AttachOverseer(agent)
+	s.SetOverseerDownReason("")
 
 	if recap := clog.Recap(30, 6<<10); recap != "" {
 		go func() {
@@ -422,10 +430,13 @@ type agentInfo struct {
 	Parent      string `json:"parent,omitempty"`
 	Purpose     string `json:"purpose,omitempty"`
 	Description string `json:"description,omitempty"`
-	Status      string `json:"status"`
-	Phase       string `json:"phase,omitempty"`
-	Step        string `json:"step,omitempty"`
-	Progress    string `json:"progress,omitempty"`
+	// TargetID is the bullseye target this agent is engaged on (🎯T198).
+	// Empty when not mission-bound. UI merges with /api/frontier by equality.
+	TargetID string `json:"target_id,omitempty"`
+	Status   string `json:"status"`
+	Phase    string `json:"phase,omitempty"`
+	Step     string `json:"step,omitempty"`
+	Progress string `json:"progress,omitempty"`
 }
 
 // listFleetAgents returns the RHS panel source of truth: every agent
@@ -492,6 +503,7 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			Parent:      d.Parent,
 			Purpose:     purpose,
 			Description: d.Description,
+			TargetID:    strings.TrimSpace(d.TargetID),
 			Status:      status,
 		}
 		if progress != nil {

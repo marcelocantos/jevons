@@ -186,6 +186,13 @@ func (s *Server) SetOverseerDownReason(reason string) {
 	s.overseerDownReason = reason
 }
 
+// OverseerDownReason returns the last legible overseer-down explanation.
+func (s *Server) OverseerDownReason() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.overseerDownReason
+}
+
 // SetChatLog attaches the durable jevons-owned conversation log
 // (🎯T30.1): every chat line broadcast is appended to it, and /ws/chat
 // clients replay history from it instead of the provider's store.

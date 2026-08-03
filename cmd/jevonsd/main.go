@@ -621,12 +621,17 @@ func main() {
 		// cannot respond. Fail LOUD and legible so a first-run stranger
 		// knows exactly what to do instead of facing a silent chat
 		// (🎯T54); the UI-facing half is the chat handler's overseer-down
-		// path.
+		// path. Cockpit converge (🎯T204) keeps retrying Launch+attach.
 		reason := overseerUnavailableReason()
 		slog.Error("OVERSEER NOT RUNNING — chat cannot respond until this is fixed",
 			"overseer", cfg.OverseerName, "likely_cause", reason)
 		srv.SetOverseerDownReason(reason)
 	}
+
+	// 🎯T204: continuous cockpit convergence — mid-session stop/rewind/
+	// launch failure must re-enter Launch+AttachOverseer; waitForOverseer
+	// alone never launches. Interval reconciler owns the desired state.
+	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
 
 	// 🎯T50/🎯T54 regression oracle, hoisted out of the attach block so it
 	// fires even when the overseer never launched: if no MCP client has
