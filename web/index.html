@@ -642,6 +642,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/link_safety.js"></script>
 <script src="scripts/smd.js"></script>
 <script src="scripts/streaming_markdown.js"></script>
+<script src="scripts/cost_display.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
@@ -2822,13 +2823,31 @@ setInterval(refreshWorkers, 10000);
 refreshWorkers();
 connectWorkersSSE();
 
-// Live token-burn ticker — off while budget clamp is disabled (🎯T137).
-// Re-enable with clamp when subscription-vs-API $ accounting is redesigned.
+// Live token-burn ticker (🎯T137): hidden when disabled; subscription
+// shows API-eq estimates labeled not-billed; list_price shows billable $.
 const costEl = document.getElementById('cost-ticker');
 function refreshCost() {
-  if (costEl) costEl.style.display = 'none';
+  if (!costEl) return;
+  const fmt = (typeof CostDisplay !== 'undefined' && CostDisplay.formatCostTicker)
+    ? CostDisplay.formatCostTicker
+    : null;
+  fetch('/api/cost').then(function (r) { return r.json(); }).then(function (c) {
+    const view = fmt ? fmt(c) : { visible: false };
+    if (!view.visible) {
+      costEl.style.display = 'none';
+      costEl.textContent = '';
+      return;
+    }
+    costEl.style.display = 'block';
+    costEl.className = view.className || '';
+    costEl.textContent = view.text || '';
+    costEl.title = view.title || '';
+  }).catch(function () {
+    costEl.style.display = 'none';
+  });
 }
-// No interval: dollar reporting disabled for now.
+setInterval(refreshCost, 3000);
+refreshCost();
 
 // ── Latched stick-to-bottom (Track | Free) ────────────────────────────
 // Policy lives above the DOM. Mode is never re-derived from distance on

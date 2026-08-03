@@ -38,13 +38,18 @@ func (s *Server) handleCost(_ context.Context, _ mcp.CallToolRequest) (*mcp.Call
 	}
 
 	var b strings.Builder
+	unit := "$"
+	if !snap.Billable || snap.Accounting == cost.AccountingSubscription {
+		unit = "est $"
+		fmt.Fprintf(&b, "Accounting: %s — %s\n", snap.Accounting, snap.CurrencyNote)
+	}
 	fmt.Fprintf(&b, "Burn rate (last %s window):\n", snap.Window)
-	fmt.Fprintf(&b, "  global: $%.2f/hr   fleet: $%.2f/hr\n", snap.GlobalUSDPerHour, snap.FleetUSDPerHour)
-	fmt.Fprintf(&b, "  today: $%.2f spent, $%.2f projected\n", snap.SpentTodayUSD, snap.ProjectedTodayUSD)
+	fmt.Fprintf(&b, "  global: %s%.2f/hr   fleet: %s%.2f/hr\n", unit, snap.GlobalUSDPerHour, unit, snap.FleetUSDPerHour)
+	fmt.Fprintf(&b, "  today: %s%.2f spent, %s%.2f projected\n", unit, snap.SpentTodayUSD, unit, snap.ProjectedTodayUSD)
 	if len(snap.WorkerUSDPerHour) > 0 {
 		b.WriteString("  per worker:")
 		for w, r := range snap.WorkerUSDPerHour {
-			fmt.Fprintf(&b, " %s=$%.2f/hr", w, r)
+			fmt.Fprintf(&b, " %s=%s%.2f/hr", w, unit, r)
 		}
 		b.WriteByte('\n')
 	}
@@ -59,7 +64,7 @@ func (s *Server) handleCost(_ context.Context, _ mcp.CallToolRequest) (*mcp.Call
 			if who == "" {
 				who = "(unattributed)"
 			}
-			fmt.Fprintf(&b, "  $%.2f  %s  %s  %s\n", r.CostUSD, r.SessionID[:min(8, len(r.SessionID))], who, r.Model)
+			fmt.Fprintf(&b, "  %s%.2f  %s  %s  %s\n", unit, r.CostUSD, r.SessionID[:min(8, len(r.SessionID))], who, r.Model)
 		}
 	}
 	if len(snap.Alerts) > 0 {

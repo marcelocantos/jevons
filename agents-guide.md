@@ -239,7 +239,7 @@ the owner **explicitly** asks to ship/push/PR.
 | `~/.jevons/` | Data directory |
 | `~/.jevons/threads.json` | Durable thread registry |
 | `~/.jevons/usage.db` | Token-spend accounting |
-| `~/.jevons/budget.json` | Spend budgets / thresholds (optional) |
+| `~/.jevons/budget.json` | Spend budgets / thresholds (optional). `disabled` opt-out; `accounting` = `list_price` (default, billable $) or `subscription` (SuperGrok: API-eq $ never enforces — 🎯T137) |
 | `~/.jevons/agents.json` | Agent registry |
 | `~/.grok/sessions/` | Grok session store |
 | `~/.jevons/jevons/AGENTS.md` | Generated overseer instructions |

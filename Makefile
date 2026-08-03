@@ -68,6 +68,7 @@ test-web:
 	node web/scripts/mermaid_actions_test.js
 	node web/scripts/markdown_normalize_test.js
 	node web/scripts/streaming_markdown_test.js
+	node web/scripts/cost_display_test.js
 	node web/scripts/link_safety_test.js
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright

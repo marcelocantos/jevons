@@ -284,10 +284,14 @@ func (s *Server) drainOverseerNotes() {
 
 // handleCost serves the live cost snapshot: burn-rates, the "what is
 // burning right now" view, and any tripped runaway signals.
+// When the budget clamp is off (budget.json disabled=true), the source
+// returns {"disabled":true,"accounting":"disabled"} so the UI can hide
+// dollar figures without treating it as an error (🎯T137).
 func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if s.costSource == nil {
-		w.Write([]byte(`{"error":"cost monitoring not enabled"}`))
+		// Unset source: subsystem never wired (or usage.db failed open).
+		w.Write([]byte(`{"disabled":true,"accounting":"disabled","billable":false,"error":"cost monitoring not enabled"}`))
 		return
 	}
 	snap := s.costSource()
