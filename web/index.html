@@ -5463,6 +5463,7 @@ let frontierAgentsCache = [];
 
 // 🎯T182: POST product agent-send path so PO spawns/briefs work on the target.
 // Mock seam: window.__frontierAgentSend(url, body) → Promise (hermetic tests).
+// 🎯T222: blocked when engaged / set_aside / achieved — no second kickoff.
 function playFrontierTarget(row, btnEl) {
   if (!row || !row.id) return Promise.resolve(null);
   const req = (typeof FrontierTable !== 'undefined' && FrontierTable.playKickoffRequest)
@@ -5479,6 +5480,17 @@ function playFrontierTarget(row, btnEl) {
         },
         po: 'jevons-po',
       };
+  // 🎯T222: pure gate may return blocked (no body).
+  if (req && req.blocked) {
+    if (typeof jLog === 'function') {
+      jLog('info', 'frontier_play_blocked', {
+        target: row.id,
+        reason: req.reason,
+        message: req.message,
+      });
+    }
+    return Promise.resolve({ status: 'blocked', reason: req.reason, message: req.message });
+  }
   if (!req || !req.body || !req.body.text) return Promise.resolve(null);
   if (btnEl) btnEl.disabled = true;
   const sendFn = (typeof window !== 'undefined' && typeof window.__frontierAgentSend === 'function')

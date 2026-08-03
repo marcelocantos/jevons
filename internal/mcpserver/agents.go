@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // NotifyFunc injects a text message into the Jevon overseer's PTY input.
@@ -35,7 +36,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing."),
+			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
@@ -44,6 +45,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
 			mcp.WithString("target_id", mcp.Description("Optional bullseye target id this agent is engaged on (e.g. T10.2). Written to registry as target_id for Frontier engagement overlay (🎯T198). Empty = not mission-bound.")),
+			mcp.WithBoolean("force_engage", mcp.Description("If true, allow a second work agent on an already-engaged or closed target (deliberate override 🎯T222). Default false.")),
 		),
 		s.handleAgentStart,
 	)
@@ -160,6 +162,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	parent, _ := args["parent"].(string)
 	purpose, _ := args["purpose"].(string)
 	targetID, _ := args["target_id"].(string)
+	forceEngage := boolArg(args["force_engage"])
 	// Also accept mission / bullseye_target aliases (same field).
 	if targetID == "" {
 		if v, ok := args["mission"].(string); ok {
@@ -233,6 +236,16 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(fmt.Sprintf("purpose %q invalid; use work, aside, or overseer", purpose)), nil
 	}
 	life["purpose"] = purpose
+
+	// 🎯T222: work + target_id → no second implementer; closed targets refused.
+	if purpose == claudia.PurposeWork && targetID != "" {
+		if msg := s.refuseEngagedOrClosedTarget(name, workdir, targetID, forceEngage); msg != "" {
+			life["err"] = "engagement_gate"
+			life["target_id"] = targetID
+			s.logLifecycle(compAgentLifecycle, "start", "error", life)
+			return mcp.NewToolResultError(msg), nil
+		}
+	}
 
 	def, existed, err := s.stitchAgentStart(name, workdir, model, providerArg, parent, purpose, targetID)
 	if err != nil {
@@ -334,6 +347,67 @@ func normalizeAgentTargetID(raw string) string {
 	}
 	s = strings.TrimPrefix(s, "🎯")
 	return strings.TrimSpace(s)
+}
+
+// workAgentsEngagedOnTarget returns registered work agents bound to targetID
+// (TargetID equality), excluding excludeName (same-name resume). Skips
+// overseer purpose. 🎯T222.
+func workAgentsEngagedOnTarget(reg *claudia.Registry, targetID, excludeName string) []string {
+	want := normalizeAgentTargetID(targetID)
+	if reg == nil || want == "" {
+		return nil
+	}
+	excludeName = strings.TrimSpace(excludeName)
+	var names []string
+	for _, d := range reg.List() {
+		if normalizeAgentTargetID(d.TargetID) != want {
+			continue
+		}
+		if d.Purpose == claudia.PurposeOverseer || d.Name == "jevons" {
+			continue
+		}
+		// Durable POs are not implementers for engagement thrash (kickoff
+		// workers are work agents with target_id; PO usually has empty TargetID).
+		if d.Name == excludeName {
+			continue
+		}
+		// Only purpose=work counts as engaged implementer (asides residual).
+		p := strings.TrimSpace(d.Purpose)
+		if p == "" {
+			p = claudia.PurposeWork
+		}
+		if p != claudia.PurposeWork {
+			continue
+		}
+		names = append(names, d.Name)
+	}
+	return names
+}
+
+// loadTargetStatusForKickoff looks up ledger status for targetID under cwd.
+// Tests may override. Missing ledger → empty status (engagement-only gate).
+var loadTargetStatusForKickoff = targetfile.LoadTargetStatusFromCwd
+
+// refuseEngagedOrClosedTarget returns a non-empty error message when
+// agent_start must not spawn a second implementer (🎯T222).
+func (s *Server) refuseEngagedOrClosedTarget(name, workdir, targetID string, force bool) string {
+	if force {
+		return ""
+	}
+	targetID = normalizeAgentTargetID(targetID)
+	if targetID == "" {
+		return ""
+	}
+	var engaged []string
+	if s != nil && s.registry != nil {
+		engaged = workAgentsEngagedOnTarget(s.registry, targetID, name)
+	}
+	status, _ := loadTargetStatusForKickoff(workdir, targetID)
+	dec := targetfile.GateKickoff(status, engaged, force)
+	if dec.Allow {
+		return ""
+	}
+	return dec.Message
 }
 
 func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

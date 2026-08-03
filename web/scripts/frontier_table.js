@@ -900,11 +900,46 @@
     return free.concat(engaged);
   }
 
+  // canPlayKickoff(row) — 🎯T222: refuse set_aside / achieved / already engaged.
+  // Pure gate used by playKickoffRequest and UI. Residual: force via opts.force.
+  function canPlayKickoff(row, opts) {
+    var o = opts || {};
+    if (o.force) {
+      return { ok: true, reason: 'ok' };
+    }
+    if (!row || !row.id) {
+      return { ok: false, reason: 'no_id', message: 'missing target id' };
+    }
+    if (row.engaged) {
+      var agents = Array.isArray(row.engaged_agents) ? row.engaged_agents.slice() : [];
+      return {
+        ok: false,
+        reason: 'already_engaged',
+        agents: agents,
+        message: 'target already has engaged implementer(s)' +
+          (agents.length ? (': ' + agents.join(', ')) : '') +
+          ' — focus existing engagement or stop first',
+      };
+    }
+    var st = String(row.status || '').trim().toLowerCase().replace(/-/g, '_');
+    if (st === 'set_aside' || st === 'achieved') {
+      return {
+        ok: false,
+        reason: st,
+        message: 'target is ' + st + ' — not available for kickoff',
+      };
+    }
+    return { ok: true, reason: 'ok' };
+  }
+
   // buildPlayKickoffText(row) — body for PO: target id + name + spawn brief.
   // Asks PO to kick off with full brief, parent=jevons-po (not toast-only).
   // 🎯T198: require target_id= on jevons_agent_start so UI can engage without name parse.
+  // 🎯T222: empty string when canPlayKickoff refuses (caller uses blocked request).
   function buildPlayKickoffText(row, opts) {
     if (!row || !row.id) return '';
+    var gate = canPlayKickoff(row, opts);
+    if (!gate.ok) return '';
     var id = String(row.id).trim();
     var name = row.name != null ? String(row.name).trim() : '';
     var po = resolvePlayPO(opts);
@@ -925,6 +960,10 @@
       'Worker name: encode hierarchical target ids with literal dots ' +
       '(e.g. jv-t27.2-config not jv-t272-config); flat ids stay flat (jv-t159-seal).'
     );
+    // 🎯T222: if an implementer is already engaged, do not spawn a second.
+    lines.push(
+      'If target_id=' + id + ' already has an engaged work agent, do not spawn a second — focus the existing engagement (🎯T222).'
+    );
     var st = statusTitle(row.status) || String(row.status || '').trim();
     if (st) {
       lines.push('');
@@ -942,8 +981,18 @@
   }
 
   // playKickoffRequest(row, opts) — pure request shape for hermetic mocks.
-  // { url, method, body: { text }, po }
+  // { url, method, body: { text }, po } or { blocked: true, reason, message }
   function playKickoffRequest(row, opts) {
+    var gate = canPlayKickoff(row, opts);
+    if (!gate.ok) {
+      return {
+        blocked: true,
+        reason: gate.reason,
+        message: gate.message || gate.reason,
+        agents: gate.agents || [],
+        po: resolvePlayPO(opts),
+      };
+    }
     var po = resolvePlayPO(opts);
     var text = buildPlayKickoffText(row, opts);
     return {
@@ -951,6 +1000,7 @@
       method: 'POST',
       body: { text: text },
       po: po,
+      blocked: false,
     };
   }
 
@@ -1009,6 +1059,7 @@
     mermaidNodeId: mermaidNodeId,
     resolvePlayPO: resolvePlayPO,
     agentSendPath: agentSendPath,
+    canPlayKickoff: canPlayKickoff,
     buildPlayKickoffText: buildPlayKickoffText,
     playKickoffRequest: playKickoffRequest,
     normalizeTargetID: normalizeTargetID,

@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 func TestParseBullseyeTrackID(t *testing.T) {
@@ -30,6 +32,12 @@ func TestParseBullseyeTrackID(t *testing.T) {
 func TestHandleTargetFileUsesBullseye(t *testing.T) {
 	prev := runBullseye
 	t.Cleanup(func() { runBullseye = prev })
+	prevLoad := loadOpenLeavesForFile
+	t.Cleanup(func() { loadOpenLeavesForFile = prevLoad })
+	// Empty open set so unique names track normally.
+	loadOpenLeavesForFile = func(cwd string) ([]targetfile.OpenLeaf, error) {
+		return nil, nil
+	}
 	var saw []string
 	runBullseye = func(args ...string) (string, error) {
 		saw = append([]string{}, args...)
@@ -58,6 +66,80 @@ func TestHandleTargetFileUsesBullseye(t *testing.T) {
 	joined := strings.Join(saw, " ")
 	if !strings.Contains(joined, "commit") || !strings.Contains(joined, "Images paste works") {
 		t.Fatalf("bullseye args unexpected: %v", saw)
+	}
+}
+
+// 🎯T222: file twice with same mission fixture → one id (no second track).
+func TestHandleTargetFileDedupesNearDuplicate(t *testing.T) {
+	prev := runBullseye
+	t.Cleanup(func() { runBullseye = prev })
+	prevLoad := loadOpenLeavesForFile
+	t.Cleanup(func() { loadOpenLeavesForFile = prevLoad })
+
+	loadOpenLeavesForFile = func(cwd string) ([]targetfile.OpenLeaf, error) {
+		return []targetfile.OpenLeaf{{
+			ID:         "T220",
+			Name:       "RHS inspect renders fleet user injects as markdown",
+			Acceptance: []string{"user injects and MD-shaped user turns render"},
+			Status:     "identified",
+		}}, nil
+	}
+	trackCalls := 0
+	runBullseye = func(args ...string) (string, error) {
+		trackCalls++
+		return "ok\nids: T221\n", nil
+	}
+
+	s := New(t.TempDir(), nil, nil)
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"cwd":        t.TempDir(),
+		"name":       "RHS inspect user-MD for fleet injects",
+		"acceptance": "user injects and MD-shaped user turns render",
+	}
+	res, err := s.handleTargetFile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := targetFileToolText(res)
+	if trackCalls != 0 {
+		t.Fatalf("must not allocate second id (trackCalls=%d)", trackCalls)
+	}
+	if !strings.Contains(text, "__TARGET_FILED__:T220") {
+		t.Fatalf("want attach to T220, got %q", text)
+	}
+	if !strings.Contains(text, "🎯T220") || !strings.Contains(text, "no new id allocated") {
+		t.Fatalf("attach message: %q", text)
+	}
+}
+
+// 🎯T222 residual: force=true allocates despite near-dup.
+func TestHandleTargetFileForceSplit(t *testing.T) {
+	prev := runBullseye
+	t.Cleanup(func() { runBullseye = prev })
+	prevLoad := loadOpenLeavesForFile
+	t.Cleanup(func() { loadOpenLeavesForFile = prevLoad })
+
+	loadOpenLeavesForFile = func(cwd string) ([]targetfile.OpenLeaf, error) {
+		return []targetfile.OpenLeaf{{
+			ID: "T220", Name: "Same mission", Status: "identified",
+		}}, nil
+	}
+	runBullseye = func(args ...string) (string, error) {
+		return "ok\nids: T999\n", nil
+	}
+	s := New(t.TempDir(), nil, nil)
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"cwd": t.TempDir(), "name": "Same mission", "force": true,
+	}
+	res, err := s.handleTargetFile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := targetFileToolText(res)
+	if !strings.Contains(text, "__TARGET_FILED__:T999") {
+		t.Fatalf("force split want T999, got %q", text)
 	}
 }
 

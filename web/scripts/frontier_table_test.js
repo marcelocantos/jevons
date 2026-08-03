@@ -809,6 +809,59 @@ test('T198 index.html engaged stop wiring + agents merge', function () {
   assert.ok(region.indexOf('loadFrontier') >= 0, 'agents_changed → loadFrontier: ' + region);
 });
 
+// 🎯T222: play on engaged / set_aside / achieved → blocked (no second agent).
+test('playKickoff blocked when engaged or closed (🎯T222)', function () {
+  assert.strictEqual(typeof FT.canPlayKickoff, 'function');
+
+  const engaged = FT.playKickoffRequest({
+    id: 'T221',
+    name: 'Inspect user MD',
+    status: 'identified',
+    engaged: true,
+    engaged_agents: ['jv-t221-inspect-user-md'],
+  });
+  assert.strictEqual(engaged.blocked, true);
+  assert.strictEqual(engaged.reason, 'already_engaged');
+  assert.ok(!engaged.body, 'no send body when blocked');
+  assert.ok((engaged.message || '').indexOf('jv-t221-inspect-user-md') >= 0);
+
+  const setAside = FT.playKickoffRequest({
+    id: 'T220',
+    name: 'Dup',
+    status: 'set_aside',
+  });
+  assert.strictEqual(setAside.blocked, true);
+  assert.strictEqual(setAside.reason, 'set_aside');
+
+  const achieved = FT.canPlayKickoff({ id: 'T1', status: 'achieved' });
+  assert.strictEqual(achieved.ok, false);
+  assert.strictEqual(achieved.reason, 'achieved');
+
+  // Free open target still produces kickoff.
+  const free = FT.playKickoffRequest({
+    id: 'T222',
+    name: 'Dedupe filing',
+    status: 'identified',
+    engaged: false,
+  });
+  assert.strictEqual(free.blocked, false);
+  assert.ok(free.body && free.body.text);
+  assert.ok(free.body.text.indexOf('T222') >= 0);
+  assert.ok(free.body.text.indexOf('do not spawn a second') >= 0 || free.body.text.indexOf('🎯T222') >= 0);
+
+  // Force override residual.
+  const forced = FT.playKickoffRequest({
+    id: 'T221', engaged: true, engaged_agents: ['w'],
+  }, { force: true });
+  assert.strictEqual(forced.blocked, false);
+  assert.ok(forced.body && forced.body.text);
+
+  // index.html respects blocked.
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('req.blocked') >= 0 || html.indexOf('frontier_play_blocked') >= 0,
+    'UI handles blocked kickoff');
+});
+
 
 if (failed) {
   console.error(failed + ' failed');
