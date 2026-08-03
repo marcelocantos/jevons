@@ -3125,6 +3125,11 @@ async function progressiveLoadRemainingHistory() {
     }
   } finally {
     progressiveHistoryRunning = false;
+    // 🎯T227: progressive hydrate paints user bubbles without msgHistory push.
+    // Resync so empty Alt+Enter / history-nav see the full painted transcript.
+    if (typeof rebuildMsgHistoryFromDomIfNeeded === 'function') {
+      rebuildMsgHistoryFromDomIfNeeded();
+    }
     // 🎯T120.4: hydrate finished (or stalled at residual oldestIndex).
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision(
@@ -4484,17 +4489,72 @@ function rewindAndResend() {
   requestAnimationFrame(() => { scrollDown(); });
 }
 
-// 🎯T132: Alt+Enter on an empty composer seeds the box with the most
-// recent owner message (msgHistory tail) as an interjection/edit draft.
-// Mirrors one step of history-nav into the live box without cycling.
+// 🎯T227: owner bubbles in #messages (WS + progressive hydrate). Progressive
+// hydrate paints via renderFrames without pushing msgHistory — DOM is the
+// durable product view when memory desyncs.
+function collectDomOwnerEntries() {
+  const nodes = msgs ? msgs.querySelectorAll('.msg.user') : [];
+  if (typeof ComposerKeys !== 'undefined' && ComposerKeys.ownerEntriesFromUserNodes) {
+    return ComposerKeys.ownerEntriesFromUserNodes([...nodes]);
+  }
+  const out = [];
+  for (const el of nodes) {
+    const text = el._layoutText != null ? String(el._layoutText) : '';
+    if (text) out.push({ text: text, el: el });
+  }
+  return out;
+}
+
+// Rebuild msgHistory from DOM when empty/desynced so Alt+Enter and Alt+Up
+// share one source of truth after progressive hydrate (🎯T227).
+function rebuildMsgHistoryFromDomIfNeeded() {
+  const domEntries = collectDomOwnerEntries();
+  if (!domEntries.length) return;
+  // Prefer full DOM rebuild when memory is empty or shorter than painted users
+  // (progressive prepend adds older bubbles msgHistory never saw).
+  if (!msgHistory.length || msgHistory.length < domEntries.length) {
+    msgHistory = domEntries.map(function (e) { return { text: e.text, el: e.el }; });
+  }
+}
+
+// 🎯T132 / 🎯T227: Alt+Enter on an empty composer seeds the box with the most
+// recent owner message as an interjection/edit draft.
+// Prefers msgHistory; falls back to DOM `.msg.user` when history is empty
+// (product break: progressive hydrate / desync → silent no-op).
 // Returns true when a message was loaded.
 function popLastOwnerAsInterjection() {
-  const entry = (typeof ComposerKeys !== 'undefined' && ComposerKeys.lastOwnerHistoryEntry)
-    ? ComposerKeys.lastOwnerHistoryEntry(msgHistory)
-    : (msgHistory.length
-      ? { text: msgHistory[msgHistory.length - 1].text, index: msgHistory.length - 1, el: msgHistory[msgHistory.length - 1].el }
-      : null);
-  if (!entry) return false;
+  const domEntries = collectDomOwnerEntries();
+  let entry = null;
+  if (typeof ComposerKeys !== 'undefined' && ComposerKeys.resolveLastOwnerEntry) {
+    entry = ComposerKeys.resolveLastOwnerEntry(msgHistory, domEntries);
+  } else if (typeof ComposerKeys !== 'undefined' && ComposerKeys.lastOwnerHistoryEntry) {
+    entry = ComposerKeys.lastOwnerHistoryEntry(msgHistory);
+    if (!entry || !entry.text) entry = ComposerKeys.lastOwnerHistoryEntry(domEntries);
+  } else if (msgHistory.length) {
+    entry = {
+      text: msgHistory[msgHistory.length - 1].text,
+      index: msgHistory.length - 1,
+      el: msgHistory[msgHistory.length - 1].el,
+    };
+  } else if (domEntries.length) {
+    entry = {
+      text: domEntries[domEntries.length - 1].text,
+      index: domEntries.length - 1,
+      el: domEntries[domEntries.length - 1].el,
+    };
+  }
+  if (!entry || !entry.text) return false;
+  // Resync memory when we had to lean on DOM so histIdx / Alt+Up stay coherent.
+  if (entry.source === 'dom' || !msgHistory.length) {
+    rebuildMsgHistoryFromDomIfNeeded();
+    if (msgHistory.length) {
+      entry = {
+        text: msgHistory[msgHistory.length - 1].text,
+        index: msgHistory.length - 1,
+        el: msgHistory[msgHistory.length - 1].el,
+      };
+    }
+  }
   liveDraftBackup = '';
   histDraft = '';
   histIdx = entry.index;

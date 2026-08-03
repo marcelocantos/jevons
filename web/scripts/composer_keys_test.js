@@ -373,6 +373,78 @@ test('T132 lastOwnerHistoryEntry returns tail text for pop_last wire-up', functi
   assert.strictEqual(last.el.id, 2);
 });
 
+// 🎯T227: product break was empty msgHistory after progressive hydrate (DOM has
+// .msg.user, memory does not) while classifyEnterAction still returned pop_last.
+// Pure resolve must fall back to DOM-derived entries so empty Alt+Enter works.
+test('T227 resolveLastOwnerEntry: empty history + DOM users → last owner', function () {
+  assert.strictEqual(typeof CK.resolveLastOwnerEntry, 'function');
+  assert.strictEqual(typeof CK.ownerEntriesFromUserNodes, 'function');
+
+  assert.strictEqual(CK.resolveLastOwnerEntry(null, null), null);
+  assert.strictEqual(CK.resolveLastOwnerEntry([], []), null);
+
+  const dom = [
+    { text: 'older owner', el: { id: 'a' } },
+    { text: 'most recent owner', el: { id: 'b' } },
+  ];
+  // Empty / textless history → DOM tail (the real product-path break).
+  const fromDom = CK.resolveLastOwnerEntry([], dom);
+  assert.ok(fromDom, 'must resolve from DOM when history empty');
+  assert.strictEqual(fromDom.text, 'most recent owner');
+  assert.strictEqual(fromDom.source, 'dom');
+  assert.strictEqual(fromDom.el.id, 'b');
+
+  const emptyTextHist = [{ text: '', el: { id: 'z' } }];
+  const fromDom2 = CK.resolveLastOwnerEntry(emptyTextHist, dom);
+  assert.ok(fromDom2);
+  assert.strictEqual(fromDom2.text, 'most recent owner');
+  assert.strictEqual(fromDom2.source, 'dom');
+
+  // Non-empty history wins over DOM (live/WS path).
+  const hist = [
+    { text: 'hist older', el: { id: 1 } },
+    { text: 'from msgHistory', el: { id: 2 } },
+  ];
+  const fromHist = CK.resolveLastOwnerEntry(hist, dom);
+  assert.ok(fromHist);
+  assert.strictEqual(fromHist.text, 'from msgHistory');
+  assert.strictEqual(fromHist.source, 'history');
+});
+
+test('T227 ownerEntriesFromUserNodes uses _layoutText (hydrate shells)', function () {
+  const nodes = [
+    { _layoutText: 'first', textContent: 'wrong' },
+    { _layoutText: '', textContent: 'skip empty layout' },
+    { _layoutText: 'last owner from hydrate', textContent: 'painted' },
+  ];
+  const entries = CK.ownerEntriesFromUserNodes(nodes);
+  assert.strictEqual(entries.length, 2);
+  assert.strictEqual(entries[0].text, 'first');
+  assert.strictEqual(entries[1].text, 'last owner from hydrate');
+  const resolved = CK.resolveLastOwnerEntry([], entries);
+  assert.strictEqual(resolved.text, 'last owner from hydrate');
+  assert.strictEqual(resolved.source, 'dom');
+});
+
+// End-to-end product policy: empty seed + Alt+Enter → pop_last, and resolve
+// still finds the owner text when only DOM entries exist (not pure classify alone).
+test('T227 product path: seed empty + Alt+Enter pop_last resolves DOM last owner', function () {
+  const composerEmpty = WC.isEffectivelyEmpty(WC.EMPTY_SEED);
+  assert.ok(composerEmpty);
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: composerEmpty }),
+    'pop_last'
+  );
+  const action = CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true });
+  assert.strictEqual(action, 'pop_last');
+  // The missing link: pop_last must have a text source when msgHistory=[].
+  const entry = CK.resolveLastOwnerEntry([], [
+    { text: 'Alt+Enter should load this after hydrate', el: {} },
+  ]);
+  assert.ok(entry && entry.text);
+  assert.ok(entry.text.indexOf('Alt+Enter should load') === 0);
+});
+
 test('T132 index.html wires Ctrl+Enter interrupt and Alt+Enter pop_last', function () {
   const htmlPath = path.join(__dirname, '..', 'index.html');
   const html = fs.readFileSync(htmlPath, 'utf8');
@@ -404,6 +476,17 @@ test('T132 index.html wires Ctrl+Enter interrupt and Alt+Enter pop_last', functi
     !/composerEmpty\s*=\s*!\s*input\.value/.test(html) &&
       !/composerEmpty\s*=\s*!\s*String\(input\.value/.test(html),
     'must not set composerEmpty from bare !input.value (seed looks non-empty)'
+  );
+  // 🎯T227: product path must resolve last owner via DOM fallback, not
+  // msgHistory alone (progressive hydrate never pushed msgHistory).
+  assert.ok(
+    html.includes('resolveLastOwnerEntry') || html.includes('collectDomOwnerEntries'),
+    'must wire T227 DOM fallback for empty msgHistory pop'
+  );
+  assert.ok(
+    html.includes('rebuildMsgHistoryFromDomIfNeeded') ||
+      html.includes('ownerEntriesFromUserNodes'),
+    'must resync msgHistory from DOM after progressive hydrate / pop'
   );
 });
 

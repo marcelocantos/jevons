@@ -228,6 +228,63 @@
     return { text: text, index: index, el: entry.el };
   }
 
+  /**
+   * 🎯T227: product-path last-owner resolve for Alt+Enter pop.
+   *
+   * Prefer in-memory msgHistory (WS replay + live user turns). When that is
+   * empty or has no text (progressive hydrate paints `.msg.user` into the DOM
+   * without pushing msgHistory; soft-reconnect / desync can leave the same
+   * hole), fall back to chronological DOM-derived entries so empty Alt+Enter
+   * still seeds the last owner bubble. Pure classifier alone never saw this —
+   * classifyEnterAction stayed green while pop_last was a silent no-op.
+   *
+   * @param {Array<{text?: string, el?: *}>|null|undefined} history
+   * @param {Array<{text?: string, el?: *}>|null|undefined} domEntries chronological owner bubbles
+   * @returns {{ text: string, index: number, el: *, source: 'history'|'dom' }|null}
+   */
+  function resolveLastOwnerEntry(history, domEntries) {
+    const fromHist = lastOwnerHistoryEntry(history);
+    if (fromHist && fromHist.text) {
+      return {
+        text: fromHist.text,
+        index: fromHist.index,
+        el: fromHist.el,
+        source: 'history',
+      };
+    }
+    const fromDom = lastOwnerHistoryEntry(domEntries);
+    if (fromDom && fromDom.text) {
+      return {
+        text: fromDom.text,
+        index: fromDom.index,
+        el: fromDom.el,
+        source: 'dom',
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Build [{text, el}] from owner bubble nodes (product: `.msg.user` with
+   * `_layoutText`). Filters empty text. Order preserved (chronological DOM).
+   * @param {Array<{_layoutText?: *, textContent?: *}>|null|undefined} nodes
+   * @returns {Array<{text: string, el: *}>}
+   */
+  function ownerEntriesFromUserNodes(nodes) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const el = list[i];
+      if (!el) continue;
+      let text = '';
+      if (el._layoutText != null) text = String(el._layoutText);
+      else if (el.textContent != null) text = String(el.textContent);
+      if (!text) continue;
+      out.push({ text: text, el: el });
+    }
+    return out;
+  }
+
   return {
     isComposerTextControl: isComposerTextControl,
     contentCaretBounds: contentCaretBounds,
@@ -241,5 +298,8 @@
     // 🎯T132
     classifyEnterAction: classifyEnterAction,
     lastOwnerHistoryEntry: lastOwnerHistoryEntry,
+    // 🎯T227
+    resolveLastOwnerEntry: resolveLastOwnerEntry,
+    ownerEntriesFromUserNodes: ownerEntriesFromUserNodes,
   };
 }));
