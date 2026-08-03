@@ -18,6 +18,11 @@ import (
 //     (including legacy agents with empty parent)
 //   - peers, reverse lineage, and cross-tree kills are denied
 //
+// Callers that want idempotent kill (desired state = not registered) must
+// short-circuit when Def(target)==nil before calling canKill — see
+// handleAgentKill (🎯T229). This helper still errors on missing target so
+// pure authorization tests and non-idempotent call sites stay strict.
+//
 // Cross-tree requests are reified as an escalation toward the nearest
 // common ancestor (🎯T100 thin): the deny message names the NCA so the
 // actor can route justification upward instead of a bare refusal.

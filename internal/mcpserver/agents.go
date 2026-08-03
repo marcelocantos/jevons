@@ -70,7 +70,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_kill",
-			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
+			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Idempotent: if the agent is already not registered (e.g. auto-reaped after a done report), returns success without error. Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister (subtree included)")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is requesting the kill). Overseer uses the overseer name (usually 'jevons').")),
 		),
@@ -489,6 +489,28 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 			actor = s.overseerName()
 		}
 		life["actor"] = actor
+	}
+	// Idempotent kill (🎯T229): desired state is "not registered". After
+	// T165/T195 auto-reap, PO/overseer hygiene kills race the reaper and used
+	// to log lifecycle_error for every double-kill. Already-gone is success.
+	if s.isOverseerAgent(name) {
+		life["err"] = fmt.Sprintf("refusing to kill %q — that is the overseer", name)
+		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
+		return mcp.NewToolResultError(fmt.Sprintf("refusing to kill %q — that is the overseer", name)), nil
+	}
+	if s.registry.Def(name) == nil {
+		if actor == "" {
+			life["err"] = "actor is required (pass your agent name; overseer uses the overseer name)"
+			s.logLifecycle(compAgentLifecycle, "kill", "error", life)
+			return mcp.NewToolResultError("actor is required (pass your agent name; overseer uses the overseer name)"), nil
+		}
+		life["already_gone"] = true
+		life["descendants"] = 0
+		s.logLifecycle(compAgentLifecycle, "kill", "ok", life)
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"Agent %q already not registered (idempotent kill by %q; no-op).",
+			name, actor,
+		)), nil
 	}
 	if err := canKill(s.registry, actor, name, s.isOverseerAgent); err != nil {
 		life["err"] = err.Error()

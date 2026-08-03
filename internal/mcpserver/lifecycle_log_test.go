@@ -141,6 +141,39 @@ func TestAgentKillDeniedLifecycleLog(t *testing.T) {
 	}
 }
 
+// 🎯T229: already-gone kill logs outcome=ok with already_gone (not lifecycle_error).
+func TestAgentKillAlreadyGoneLifecycleLog(t *testing.T) {
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	reg := regWithTree(t)
+	s := &Server{registry: reg}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "ghost-worker", "actor": "po"}
+	res, err := s.handleAgentKill(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("already-gone: %s", toolText(res))
+	}
+	got := findLifecycle(cap.records, compAgentLifecycle, "kill")
+	if got == nil {
+		t.Fatal("expected kill lifecycle slog")
+	}
+	if got["outcome"] != "ok" {
+		t.Fatalf("want outcome=ok (no RSI lifecycle_error), got %v", got)
+	}
+	if got["already_gone"] != true {
+		t.Fatalf("want already_gone=true, got %v", got)
+	}
+	if got["name"] != "ghost-worker" || got["actor"] != "po" {
+		t.Fatalf("attrs=%v", got)
+	}
+}
+
 // 🎯T128.1: agent_start validation failure logs component+outcome (no Launch).
 func TestAgentStartErrorLifecycleLog(t *testing.T) {
 	cap := &slogCapture{}
