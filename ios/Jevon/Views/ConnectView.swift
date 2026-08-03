@@ -34,7 +34,7 @@ struct ConnectView: View {
                         .padding(.bottom, 8)
                 }
 
-                Text("Scan the QR code from jevond")
+                Text("Scan the QR code from jevonsd")
                     .multilineTextAlignment(.center)
                     .font(.callout)
                     .foregroundStyle(.white)

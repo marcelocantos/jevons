@@ -17,9 +17,13 @@ Snapshot as of v0.5.0.
 | Flag | Type | Default | Stability |
 |---|---|---|---|
 | `--port` | int | `13705` | Stable |
+| `--bind` | string | `127.0.0.1` | Stable — loopback-only default (🎯T6); widen deliberately |
 | `--relay` | string | `""` | Fluid — URL format and registration protocol may change |
-| `--relay-token` | string | `""` | Fluid |
+| `--relay-token` | string | `""` | Fluid — also `TERN_TOKEN` env |
 | `--instance-id` | string | `""` | Fluid |
+| `--pair` | string | `""` | Fluid — mint PairingArtifact + QR for peer instance id (one-shot) |
+| `--add-credential` | string | `""` | Fluid — ingest server-side PairingRecord JSON (one-shot) |
+| `--tls` | bool | `false` | Fluid — mTLS on the HTTP listener |
 | `--set-openai-key` | bool | `false` | Stable — interactive key prompt |
 | `--set-xai-key` | bool | `false` | Fluid — new in v0.3.0, interactive xAI key prompt for Grok voice bridge |
 | `--config` | string | `~/.jevons/config.yaml` | Fluid — new post-v0.5.0 (🎯T44 structured config) |
@@ -149,17 +153,19 @@ New in v0.2.0. JSON array of agent definitions.
 | Path | Purpose | Stability |
 |---|---|---|
 | `~/.jevons/` | Data directory | Stable |
+| `~/.jevons/config.yaml` | Structured config (🎯T44); missing file = defaults | Fluid — new post-v0.5.0 |
 | `~/.jevons/jevons.db` | SQLite database | Stable |
 | `~/.jevons/agents.json` | Agent registry | Fluid |
 | `~/.jevons/threads.json` | Durable thread registry (butler/CEO) | Fluid — new in v0.5.0 |
 | `~/.jevons/usage.db` | Token-spend accounting (cost clamp-down) | Fluid — new in v0.5.0 |
 | `~/.jevons/budget.json` | Spend budgets / thresholds | Fluid — new in v0.5.0 |
+| `~/.jevons/credential.json` | Server-side pigeon PairingRecord (single device) | Fluid |
 | `~/.jevons/chatlog/<overseer>.jsonl` | Durable jevons-owned conversation log (🎯T30.1) — replayed to chat clients | Fluid — new post-v0.5.0 |
 | `~/.jevons/jevons/AGENTS.md` | Generated overseer instructions | Fluid |
 | `~/.jevons/jevons/.mcp.json` | MCP server config for Jevons | Fluid |
 | `~/.jevons/lua/views/` | Lua view scripts | Fluid |
 | `~/.jevons/remote_history` | `remote` TUI input history (orphaned — client removed) | Deprecated |
-| `web/` | Web UI (served from disk, hot-reloaded) | Fluid |
+| `web/` | Dev-mode on-disk UI (hot-reloaded); released binary serves embedded UI (🎯T53) | Fluid |
 
 Transcript memory (`~/.jevons/memory.db`) was removed in v0.3.0. The
 mnemo MCP server now provides global session indexing; jevonsd no

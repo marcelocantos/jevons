@@ -46,7 +46,7 @@ func main() {
 	configPath := flag.String("config", "", "config file (default ~/.jevons/config.yaml; missing file = built-in defaults)")
 	port := flag.Int("port", 13705, "listen port")
 	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 — loopback only; remote devices use the pigeon relay)")
-	relayURL := flag.String("relay", "", "relay URL to register with (e.g. wss://tern.fly.dev)")
+	relayURL := flag.String("relay", "", "relay URL to register with (e.g. https://carrier-pigeon.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
 	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")

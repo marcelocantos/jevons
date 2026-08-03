@@ -12,6 +12,7 @@ These tests are **not** user journeys (🎯T107). They do not start
 |---|---|
 | Doc markers | That `AGENTS.md` / journey README still contain fixed substrings (prose ratchet). Not `os.ReadFile` itself — the stdlib is assumed. If the doctrine text is deleted, CI fails. |
 | Journey inventory | That J1–J10 IDs appear in README **and** as `s.run("J…")` registrations in suite source. Drift between docs and registration is caught. |
+| T47 install path | That root `README.md` still names brew install, config, pair residual, adopt, and direct; architecture-current no longer claims pre-T6 all-interfaces default. Not a live second-user drill. |
 | Daily port | Lives in `scripts/journey-suite/portguard` — real function unit test, not a doc grep. |
 
 ```bash
