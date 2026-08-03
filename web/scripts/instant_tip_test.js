@@ -1,0 +1,183 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+'use strict';
+
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const IT = require('./instant_tip.js');
+
+let failed = 0;
+function test(name, fn) {
+  try {
+    fn();
+    console.log('ok  -', name);
+  } catch (e) {
+    failed++;
+    console.error('FAIL-', name);
+    console.error('    ', e && e.stack ? e.stack.split('\n').slice(0, 5).join('\n     ') : e);
+  }
+}
+
+function mockEl(tag) {
+  const listeners = {};
+  const el = {
+    tagName: String(tag || 'div').toUpperCase(),
+    className: '',
+    textContent: '',
+    title: 'SHOULD_BE_CLEARED',
+    style: {},
+    children: [],
+    attrs: {},
+    classList: {
+      _s: new Set(),
+      add(c) {
+        this._s.add(c);
+        el.className = Array.from(this._s).join(' ');
+      },
+      remove(c) {
+        this._s.delete(c);
+        el.className = Array.from(this._s).join(' ');
+      },
+      contains(c) {
+        return this._s.has(c);
+      },
+    },
+    ownerDocument: null,
+    getBoundingClientRect() {
+      return { left: 10, top: 40, right: 50, bottom: 54, width: 40, height: 14 };
+    },
+    appendChild(c) {
+      this.children.push(c);
+      c.parentNode = this;
+      return c;
+    },
+    setAttribute(k, v) {
+      this.attrs[k] = String(v);
+    },
+    removeAttribute(k) {
+      delete this.attrs[k];
+      if (k === 'title') this.title = '';
+    },
+    addEventListener(type, fn) {
+      if (!listeners[type]) listeners[type] = [];
+      listeners[type].push(fn);
+    },
+    dispatch(type) {
+      (listeners[type] || []).forEach(function (fn) { fn({ type: type }); });
+    },
+    _listeners: listeners,
+  };
+  return el;
+}
+
+function mockDoc() {
+  const body = mockEl('body');
+  const doc = {
+    body: body,
+    createElement(tag) {
+      return mockEl(tag);
+    },
+  };
+  body.ownerDocument = doc;
+  return doc;
+}
+
+test('SHOW_DELAY_MS is 0 and schedule never uses timeout', function () {
+  assert.strictEqual(IT.SHOW_DELAY_MS, 0);
+  const sch = IT.showSchedule();
+  assert.strictEqual(sch.delayMs, 0);
+  assert.strictEqual(sch.usesTimeout, false);
+  assert.strictEqual(sch.event, 'pointerenter');
+});
+
+test('attach strips title= and sets aria-label', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  host.title = 'Converging';
+  const tip = IT.attach(host, 'Converging', { doc: doc, mount: doc.body });
+  assert.ok(tip, 'tip created');
+  assert.strictEqual(host.title, '');
+  assert.strictEqual(host.attrs['aria-label'], 'Converging');
+  assert.strictEqual(tip.textContent, 'Converging');
+  assert.ok(host.classList.contains(IT.HOST_CLASS));
+});
+
+test('pointerenter shows tip immediately with no setTimeout (🎯T175)', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const tip = IT.attach(host, '4 targets depend on T10.2', { doc: doc, mount: doc.body });
+  assert.ok(tip);
+  assert.strictEqual(IT.isVisible(tip), false);
+  // Simulate pointerenter — must show in same turn (no delay queue).
+  host.dispatch('pointerenter');
+  assert.strictEqual(IT.isVisible(tip), true, 'visible immediately on pointerenter');
+  host.dispatch('pointerleave');
+  assert.strictEqual(IT.isVisible(tip), false, 'hidden on pointerleave');
+});
+
+test('mouseenter also shows (fallback path)', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  const tip = IT.attach(host, 'Identified', { doc: doc, mount: doc.body });
+  host.dispatch('mouseenter');
+  assert.strictEqual(IT.isVisible(tip), true);
+  host.dispatch('mouseleave');
+  assert.strictEqual(IT.isVisible(tip), false);
+});
+
+test('empty text → no tip, no attach', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  assert.strictEqual(IT.attach(host, '', { doc: doc }), null);
+  assert.strictEqual(IT.attach(host, '   ', { doc: doc }), null);
+});
+
+test('instant_tip.js source never setTimeout-delays show', function () {
+  const src = fs.readFileSync(path.join(__dirname, 'instant_tip.js'), 'utf8');
+  // No setTimeout(show, N) path for the product show handler.
+  assert.ok(src.indexOf('setTimeout') === -1 || /setTimeout\s*\(/.test(src) === false
+    || !/setTimeout\s*\(\s*show/.test(src),
+    'must not setTimeout before show');
+  // Explicit constant lock.
+  assert.ok(/SHOW_DELAY_MS\s*=\s*0/.test(src), 'SHOW_DELAY_MS = 0 in source');
+  // pointerenter is the primary event.
+  assert.ok(src.indexOf('pointerenter') >= 0);
+});
+
+test('index.html wires InstantTip on frontier cells; no title= for status/fanout/name', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('scripts/instant_tip.js') >= 0, 'script tag');
+  assert.ok(html.indexOf('InstantTip.attach') >= 0, 'attach used');
+  // Render path must not assign native title on frontier explanation cells.
+  // Allow other title= elsewhere in chrome; ban status.title / fan.title / name.title
+  // in the frontier row builder region.
+  const start = html.indexOf('// 🎯T173: headerless table');
+  assert.ok(start >= 0, 'frontier render marker');
+  const end = html.indexOf('function loadFrontier', start);
+  assert.ok(end > start, 'loadFrontier after render');
+  const region = html.slice(start, end);
+  assert.ok(region.indexOf('status.title') < 0, 'no status.title');
+  assert.ok(region.indexOf('fan.title') < 0, 'no fan.title');
+  assert.ok(region.indexOf('name.title') < 0, 'no name.title');
+  // Custom tip path for the three explanation surfaces.
+  assert.ok(/InstantTip\.attach\(\s*status/.test(region) || region.indexOf('InstantTip.attach(status') >= 0,
+    'status InstantTip');
+  assert.ok(region.indexOf('InstantTip.attach(fan') >= 0 || /InstantTip\.attach\(\s*fan/.test(region),
+    'fan InstantTip');
+  assert.ok(region.indexOf('InstantTip.attach(name') >= 0 || /InstantTip\.attach\(\s*name/.test(region),
+    'name InstantTip');
+  // CSS for tip chrome present.
+  assert.ok(/\.instant-tip\s*\{/.test(html), 'instant-tip CSS');
+});
+
+if (failed) {
+  console.error(failed + ' failed');
+  process.exit(1);
+}
+console.log('All instant_tip tests passed');

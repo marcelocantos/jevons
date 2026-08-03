@@ -602,6 +602,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #frontier-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px; }
 #frontier-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; padding: 8px 12px; }
 /* fixed + max-width:100%: long names ellipsize instead of growing past #frontier-body */
+/* 🎯T177: explicit rem chrome cols — 1%/99% under fixed layout collapses chrome and paints over name */
 #frontier-table {
   width: 100%; max-width: 100%; border-collapse: collapse; font-family: var(--sans);
   table-layout: fixed;
@@ -611,29 +612,55 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   color: var(--text); vertical-align: middle;
 }
 #frontier-table tr:hover td { background: var(--surface-raised); }
-/* Shrink-wrap chrome cols (1% + nowrap → content-ish width under fixed layout) */
 #frontier-table .ft-id {
   font-family: var(--mono); font-size: 11px; color: var(--accent);
   white-space: nowrap; font-weight: 500;
-  width: 1%; padding-left: 10px; padding-right: 4px;
+  width: 4.5rem; overflow: hidden; text-overflow: ellipsis;
+  padding-left: 10px; padding-right: 4px;
 }
 #frontier-table .ft-name {
-  width: 99%; min-width: 0;
+  min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding-left: 4px; padding-right: 4px;
 }
 #frontier-table .ft-status {
   font-size: 10px; color: var(--text-dim); white-space: nowrap;
-  width: 1%; padding-left: 4px; padding-right: 4px;
+  width: 2rem; padding-left: 4px; padding-right: 4px;
   font-variant: small-caps; letter-spacing: 0.02em;
 }
 #frontier-table .ft-fanout {
   font-family: var(--mono); font-size: 10px; color: var(--text-muted);
   text-align: right; white-space: nowrap;
-  width: 1%; padding-left: 4px; padding-right: 10px;
+  width: 2.75rem; padding-left: 4px; padding-right: 10px;
 }
 #frontier-table .ft-fanout.ft-fanout-empty {
   color: transparent;
+}
+/* 🎯T175: instant custom tips (fixed layer; 0ms show — not native title=) */
+.instant-tip {
+  display: none;
+  position: fixed;
+  z-index: 200;
+  max-width: min(360px, 90vw);
+  padding: 5px 9px;
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.32);
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+.instant-tip.instant-tip-show { display: block; }
+#frontier-table .ft-status,
+#frontier-table .ft-fanout,
+#frontier-table .ft-name {
+  cursor: default;
 }
 #workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
 .worker-row { padding: 5px 6px; border-radius: 5px; margin-bottom: 2px; border: 1px solid transparent; }
@@ -772,6 +799,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/fleet_row.js"></script>
 <script src="scripts/agent_transcript.js"></script>
 <script src="scripts/frontier_table.js"></script>
+<script src="scripts/instant_tip.js"></script>
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
 <script src="scripts/route_suggest.js"></script>
@@ -4675,6 +4703,10 @@ function loadAgentTranscript(name, opts) {
 
 function renderFrontierTable(model) {
   if (!frontierBodyEl) return;
+  // Drop previous fixed-layer tips (hosts are about to be destroyed).
+  document.querySelectorAll('.instant-tip').forEach(function (el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  });
   if (rhsTabMeta) {
     rhsTabMeta.textContent = model.available
       ? ((model.rows && model.rows.length) + ' ready')
@@ -4704,6 +4736,7 @@ function renderFrontierTable(model) {
     return;
   }
   // 🎯T173: headerless table — id / name / status abbr / fanout N᚛ (hide 0).
+  // 🎯T175: explanations via InstantTip (0ms), never native title= on these cells.
   const table = document.createElement('table');
   table.id = 'frontier-table';
   table.setAttribute('aria-label', 'Bullseye frontier');
@@ -4715,18 +4748,26 @@ function renderFrontierTable(model) {
     id.textContent = '🎯' + row.id;
     const name = document.createElement('td');
     name.className = 'ft-name';
-    name.title = row.name || '';
+    const fullName = row.name || '';
     name.textContent = (typeof FrontierTable !== 'undefined')
-      ? FrontierTable.shortName(row.name, 72)
-      : (row.name || '');
+      ? FrontierTable.shortName(fullName, 72)
+      : fullName;
+    // Full name tip when truncated or always for glanceable full text (no title=).
+    if (fullName && typeof InstantTip !== 'undefined') {
+      InstantTip.attach(name, fullName);
+    }
     const status = document.createElement('td');
     status.className = 'ft-status';
+    let statusTip = '';
     if (typeof FrontierTable !== 'undefined') {
       status.textContent = FrontierTable.formatStatus(row.status);
-      status.title = FrontierTable.statusTitle(row.status);
+      statusTip = FrontierTable.statusTitle(row.status);
     } else {
       status.textContent = row.status || '';
-      status.title = row.status || '';
+      statusTip = row.status || '';
+    }
+    if (statusTip && typeof InstantTip !== 'undefined') {
+      InstantTip.attach(status, statusTip);
     }
     const fan = document.createElement('td');
     fan.className = 'ft-fanout';
@@ -4734,11 +4775,12 @@ function renderFrontierTable(model) {
       const fo = FrontierTable.formatFanout(row.fanout, row.id);
       if (fo.visible) {
         fan.textContent = fo.text;
-        fan.title = fo.title;
+        if (fo.title && typeof InstantTip !== 'undefined') {
+          InstantTip.attach(fan, fo.title);
+        }
       } else {
         fan.className = 'ft-fanout ft-fanout-empty';
         fan.textContent = '';
-        fan.title = '';
       }
     } else {
       const n = row.fanout != null ? row.fanout : 0;

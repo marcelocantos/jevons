@@ -139,11 +139,20 @@ test('T173 headerless table + abbr/fanout wiring in index.html', function () {
   // Fanout N᚛ path
   assert.ok(html.indexOf('FrontierTable.formatFanout') >= 0, 'formatFanout used');
   assert.ok(html.indexOf('ft-fanout-empty') >= 0, 'empty fanout class for hide-0');
-  // Column layout: name takes remaining; shrink chrome cols
-  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*99%/.test(html), 'name width 99%');
-  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*1%/.test(html), 'id shrink-wrap');
-  assert.ok(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*1%/.test(html), 'status shrink-wrap');
-  assert.ok(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*1%/.test(html), 'fanout shrink-wrap');
+});
+
+test('T175 frontier cells use InstantTip not native title=', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('scripts/instant_tip.js') >= 0, 'instant_tip script');
+  const start = html.indexOf('// 🎯T173: headerless table');
+  assert.ok(start >= 0);
+  const end = html.indexOf('function loadFrontier', start);
+  const region = html.slice(start, end);
+  assert.ok(region.indexOf('status.title') < 0, 'no status.title');
+  assert.ok(region.indexOf('fan.title') < 0, 'no fan.title');
+  assert.ok(region.indexOf('name.title') < 0, 'no name.title');
+  assert.ok(region.indexOf('InstantTip.attach') >= 0, 'InstantTip.attach in render');
+  assert.ok(/\.instant-tip\s*\{/.test(html), 'instant-tip CSS');
 });
 
 test('T174 frontier table width constrained to RHS container', function () {
@@ -165,11 +174,31 @@ test('T174 frontier table width constrained to RHS container', function () {
   const tableBlock = html.match(/#frontier-table\s*\{[^}]*\}/);
   assert.ok(tableBlock, 'frontier-table rule present');
   assert.ok(!/min-width:\s*\d+(px|rem|em|ch)/.test(tableBlock[0]), 'table has no forcing min-width');
-  // T173 chrome cols still shrink-wrap within the bound.
-  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*1%/.test(html), 'id still 1%');
-  assert.ok(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*1%/.test(html), 'status still 1%');
-  assert.ok(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*1%/.test(html), 'fanout still 1%');
-  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*99%/.test(html), 'name still 99%');
+});
+
+test('T177 chrome cols use explicit rem widths — not 1%/99% under fixed layout', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Explicit rem/ch widths for chrome; name flexes (no width:99%).
+  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*[\d.]+(rem|ch)/.test(html), 'id explicit rem/ch');
+  assert.ok(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*[\d.]+(rem|ch)/.test(html), 'status explicit rem/ch');
+  assert.ok(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*[\d.]+(rem|ch)/.test(html), 'fanout explicit rem/ch');
+  // Forbid collapsed chrome under table-layout:fixed (owner fail: ID paints mid-name).
+  assert.ok(!/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*1%/.test(html), 'id rejects width:1%');
+  assert.ok(!/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*1%/.test(html), 'status rejects width:1%');
+  assert.ok(!/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*1%/.test(html), 'fanout rejects width:1%');
+  assert.ok(!/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*99%/.test(html), 'name rejects width:99%');
+  // Name takes remaining space without a width claim.
+  assert.ok(!/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*[\d.]+%/.test(html), 'name has no percent width');
+  // Id ellipsizes long ids (residual: very long target ids).
+  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*overflow:\s*hidden/.test(html), 'id overflow hidden');
+  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*text-overflow:\s*ellipsis/.test(html), 'id ellipsis');
+  // DOM order still id|name|status|fan (class sequence in row builder).
+  const rowBuild = html.indexOf("id.className = 'ft-id'");
+  const nameBuild = html.indexOf("name.className = 'ft-name'");
+  const statusBuild = html.indexOf("status.className = 'ft-status'");
+  const fanBuild = html.indexOf("fan.className = 'ft-fanout'");
+  assert.ok(rowBuild >= 0 && nameBuild > rowBuild && statusBuild > nameBuild && fanBuild > statusBuild,
+    'DOM order id|name|status|fan');
 });
 
 if (failed) {
