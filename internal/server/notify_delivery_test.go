@@ -5,6 +5,7 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -82,5 +83,128 @@ func TestOverseerNoteSurvivesTransientFailure(t *testing.T) {
 	s.drainOverseerNotes()
 	if len(delivered) != 1 || !strings.Contains(delivered[0], "keep me") {
 		t.Fatalf("note not redelivered after transient failure: %v", delivered)
+	}
+}
+
+func notifyAttrsMap(r slog.Record) map[string]any {
+	m := map[string]any{}
+	r.Attrs(func(a slog.Attr) bool {
+		m[a.Key] = a.Value.Any()
+		return true
+	})
+	return m
+}
+
+func findNotifyDecision(records []slog.Record, decision string) (map[string]any, bool) {
+	for _, r := range records {
+		if r.Message != "notify_queue" || r.Level != slog.LevelInfo {
+			continue
+		}
+		attrs := notifyAttrsMap(r)
+		if attrs["decision"] == decision {
+			return attrs, true
+		}
+	}
+	return nil, false
+}
+
+func intAttr(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case int32:
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
+// 🎯T128.3: busy-defer is Info (not Debug) with depth + err_class; re-queue
+// path remains hermetically covered.
+func TestOverseerNotifyBusyDeferLogsAtInfo(t *testing.T) {
+	cap := &captureHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	s := &Server{}
+	var delivered []string
+	busy := true
+	s.notifySender = func(text string) error {
+		if busy {
+			return fmt.Errorf("grok acp: prompt already in flight")
+		}
+		delivered = append(delivered, text)
+		return nil
+	}
+
+	_ = s.SendToOverseer("[Agent a responded]\nfoo")
+	if len(delivered) != 0 {
+		t.Fatalf("delivered while busy: %v", delivered)
+	}
+
+	enqueue, ok := findNotifyDecision(cap.records, "enqueue")
+	if !ok {
+		t.Fatal("expected Info notify_queue decision=enqueue")
+	}
+	if enqueue["component"] != "notify_queue" {
+		t.Fatalf("enqueue component=%v", enqueue["component"])
+	}
+	if d, ok := intAttr(enqueue["depth"]); !ok || d < 1 {
+		t.Fatalf("enqueue depth=%v", enqueue["depth"])
+	}
+
+	deferAttrs, ok := findNotifyDecision(cap.records, "defer")
+	if !ok {
+		t.Fatal("expected Info notify_queue decision=defer (busy path must not be Debug-only)")
+	}
+	if deferAttrs["component"] != "notify_queue" {
+		t.Fatalf("defer component=%v", deferAttrs["component"])
+	}
+	if deferAttrs["err_class"] != "busy" {
+		t.Fatalf("err_class=%v want busy", deferAttrs["err_class"])
+	}
+	depth, ok := intAttr(deferAttrs["depth"])
+	if !ok || depth < 1 {
+		t.Fatalf("defer depth=%v want >=1", deferAttrs["depth"])
+	}
+	deferred, ok := intAttr(deferAttrs["deferred"])
+	if !ok || deferred < 1 {
+		t.Fatalf("deferred=%v want >=1", deferAttrs["deferred"])
+	}
+
+	// Drain re-queue: notes still pending, then idle drain delivers once.
+	if got := len(s.notifyQueue); got != 1 {
+		t.Fatalf("queue depth after defer=%d want 1", got)
+	}
+	busy = false
+	before := len(cap.records)
+	s.drainOverseerNotes()
+	if len(delivered) != 1 || !strings.Contains(delivered[0], "foo") {
+		t.Fatalf("re-queue drain failed: delivered=%v", delivered)
+	}
+	drainAttrs, ok := findNotifyDecision(cap.records[before:], "drain")
+	if !ok {
+		t.Fatal("expected Info notify_queue decision=drain after successful re-delivery")
+	}
+	if drained, ok := intAttr(drainAttrs["drained"]); !ok || drained != 1 {
+		t.Fatalf("drained=%v want 1", drainAttrs["drained"])
+	}
+}
+
+func TestNotifyErrClass(t *testing.T) {
+	if got := notifyErrClass(fmt.Errorf("grok acp: prompt already in flight")); got != "busy" {
+		t.Fatalf("got %q", got)
+	}
+	if got := notifyErrClass(fmt.Errorf("overseer not running")); got != "not_running" {
+		t.Fatalf("got %q", got)
+	}
+	if got := notifyErrClass(fmt.Errorf("connection reset")); got != "other" {
+		t.Fatalf("got %q", got)
+	}
+	if got := notifyErrClass(nil); got != "" {
+		t.Fatalf("nil got %q", got)
 	}
 }

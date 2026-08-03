@@ -1,12 +1,17 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Pure attention-thread model for human↔overseer chat (🎯T65).
+// Pure attention/aside model for human↔overseer chat (🎯T65 / 🎯T136).
 // DOM-free so Node hermetic tests can require() it.
 //
 // Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:, target:
 // Case-insensitive; strip prefix before routing. No button-primary API.
 // target: opens a short-lived filing aside (🎯T93/T95).
+//
+// 🎯T136: owner-facing chrome for asides lives in the RHS fleet tree, not
+// the top attention chip bar. chromeStack() is always empty; stack() remains
+// for internal route/park model + wire. Create paths dual-write purpose=aside
+// agents into /api/agents.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -19,6 +24,8 @@
 
   const MAIN_ID = 'main';
   const STORAGE_KEY = 'jevons-attention-threads-v1';
+  // 🎯T134: cap default bar chips; overflow is "+N more", not multi-row wall.
+  const MAX_VISIBLE_CHIPS = 6;
 
   // Thread lifecycle (🎯T95.1):
   //   open    — active workstream / filing aside (default chrome)
@@ -60,6 +67,24 @@
   function isChromeVisible(status) {
     // Default attention bar: open + intentionally parked only.
     return status === 'open' || status === 'parked';
+  }
+
+  // 🎯T134: fingerprint for near-dup capture (normalize first line / title).
+  function normalizeFingerprint(text) {
+    return String(text || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[….]+\s*$/, '')
+      .trim();
+  }
+
+  function fingerprintForThread(title, body) {
+    const first = String(body || '').trim().split(/\r?\n/).find(function (l) {
+      return l.trim().length > 0;
+    }) || '';
+    const raw = first.trim() || String(title || '').trim();
+    return normalizeFingerprint(raw);
   }
 
   function titleFromBody(body) {
@@ -138,14 +163,41 @@
     };
   }
 
+  // Find open chrome thread with same fingerprint (🎯T134 dedupe).
+  // Does not match done/parked — only live open workstreams.
+  function findOpenDup(state, text, purpose) {
+    const fp = fingerprintForThread(titleFromBody(text), text);
+    if (!fp) return null;
+    const wantPurpose = purpose === 'file-target' ? 'file-target' : '';
+    return ((state && state.threads) || []).find(function (t) {
+      if (t.status !== 'open') return false;
+      const tPurpose = t.purpose === 'file-target' ? 'file-target' : '';
+      if (tPurpose !== wantPurpose) return false;
+      return fingerprintForThread(t.title, t.body) === fp;
+    }) || null;
+  }
+
   // capture: arrest body into a new open side thread; focus stays main.
-  // Returns { state, id } or null if body empty.
+  // Near-dup open thread → update existing instead of stacking (🎯T134).
+  // Returns { state, id, merged? } or null if body empty.
   function capture(state, body) {
     const text = String(body || '').trim();
     if (!text) return null;
     const s = clone(state || emptyState());
-    const id = newId();
     const ts = now();
+    const existing = findOpenDup(s, text, '');
+    if (existing) {
+      existing.body = text;
+      existing.title = titleFromBody(text) || existing.title;
+      existing.updatedAt = ts;
+      // Bump to front of list so chrome order reflects latest capture.
+      s.threads = [existing].concat(s.threads.filter(function (t) {
+        return t.id !== existing.id;
+      }));
+      s.focusId = MAIN_ID;
+      return { state: s, id: existing.id, merged: true };
+    }
+    const id = newId();
     s.threads.unshift({
       id: id,
       title: titleFromBody(text),
@@ -156,17 +208,29 @@
       updatedAt: ts,
     });
     s.focusId = MAIN_ID;
-    return { state: s, id: id };
+    return { state: s, id: id, merged: false };
   }
 
   // openTargetAside: purpose-bound filing thread (🎯T95). Focus stays main
   // so the owner is not forced into a multi-day attention workstream.
+  // Dedupe open file-target asides by fingerprint (🎯T134).
   function openTargetAside(state, body) {
     const text = String(body || '').trim();
     if (!text) return null;
     const s = clone(state || emptyState());
-    const id = newId();
     const ts = now();
+    const existing = findOpenDup(s, text, 'file-target');
+    if (existing) {
+      existing.body = text;
+      existing.title = titleFromBody(text) || existing.title;
+      existing.updatedAt = ts;
+      s.threads = [existing].concat(s.threads.filter(function (t) {
+        return t.id !== existing.id;
+      }));
+      s.focusId = MAIN_ID;
+      return { state: s, id: existing.id, merged: true };
+    }
+    const id = newId();
     s.threads.unshift({
       id: id,
       title: titleFromBody(text),
@@ -177,7 +241,7 @@
       updatedAt: ts,
     });
     s.focusId = MAIN_ID;
-    return { state: s, id: id };
+    return { state: s, id: id, merged: false };
   }
 
   // dismiss: mark aside done — leaves default chrome, stays in archive (🎯T95.1).
@@ -296,8 +360,9 @@
     return s;
   }
 
-  // stack: default attention chrome — open first, then intentionally parked.
+  // stack: open first, then intentionally parked (model / route helpers).
   // Completed (done) asides are excluded (🎯T95.1); use archive() for those.
+  // 🎯T136: do NOT use stack for top-bar chrome — use chromeStack() (always empty).
   function stack(state) {
     const s = state || emptyState();
     const open = [];
@@ -308,6 +373,100 @@
       else open.push(t);
     });
     return open.concat(parked);
+  }
+
+  // chromeStack (🎯T136): top #attention-bar never shows open/parked aside chips.
+  // Asides live in the RHS fleet tree. Model stack() still exists for T99 route.
+  function chromeStack(/* state */) {
+    return [];
+  }
+
+  // routeCandidates (🎯T134 / T99): only open chrome threads the owner would
+  // expect. Never done/archive ghosts; never parked (auto-route is open-only).
+  // Shape ready for ThreadRoute.route (id, title, digest, body, status).
+  function routeCandidates(state) {
+    const s = state || emptyState();
+    return (s.threads || [])
+      .filter(function (t) {
+        return t && t.id && t.id !== MAIN_ID && t.status === 'open';
+      })
+      .map(function (t) {
+        return {
+          id: t.id,
+          title: t.title,
+          digest: t.body,
+          body: t.body,
+          status: t.status,
+          updatedAt: t.updatedAt,
+        };
+      });
+  }
+
+  // visibleStack: cap for any residual chrome consumers. 🎯T136: chrome is empty.
+  // opts.max defaults to MAX_VISIBLE_CHIPS. Uses chromeStack (not model stack).
+  function visibleStack(state, opts) {
+    opts = opts || {};
+    const max = typeof opts.max === 'number' && opts.max > 0
+      ? Math.floor(opts.max)
+      : MAX_VISIBLE_CHIPS;
+    const full = chromeStack(state);
+    if (full.length <= max) {
+      return { shown: full.slice(), overflowCount: 0, overflow: [] };
+    }
+    return {
+      shown: full.slice(0, max),
+      overflowCount: full.length - max,
+      overflow: full.slice(max),
+    };
+  }
+
+  // clearDone: purge archive (done) threads from state (🎯T134 bulk clear).
+  function clearDone(state) {
+    const s = clone(state || emptyState());
+    s.threads = (s.threads || []).filter(function (t) {
+      return t.status !== 'done';
+    });
+    if (s.focusId !== MAIN_ID && !findThread(s, s.focusId)) {
+      s.focusId = MAIN_ID;
+    }
+    return s;
+  }
+
+  // dismissAllParked: parked → done (leave open workstreams) (🎯T134).
+  function dismissAllParked(state) {
+    const s = clone(state || emptyState());
+    const ts = now();
+    (s.threads || []).forEach(function (t) {
+      if (t.status === 'parked') {
+        t.status = 'done';
+        t.updatedAt = ts;
+      }
+    });
+    if (s.focusId !== MAIN_ID) {
+      const f = findThread(s, s.focusId);
+      if (!f || f.status === 'done') s.focusId = MAIN_ID;
+    }
+    return s;
+  }
+
+  // dismissAllChrome: open + parked → done (full bar dismiss) (🎯T134).
+  function dismissAllChrome(state) {
+    const s = clone(state || emptyState());
+    const ts = now();
+    (s.threads || []).forEach(function (t) {
+      if (t.status === 'open' || t.status === 'parked') {
+        t.status = 'done';
+        t.updatedAt = ts;
+      }
+    });
+    s.focusId = MAIN_ID;
+    return s;
+  }
+
+  // clearChromeNoise: dismiss all chrome-visible + purge done archive (🎯T134).
+  // Owner bulk reset without one-by-one chip dismiss.
+  function clearChromeNoise(state) {
+    return clearDone(dismissAllChrome(state));
   }
 
   // archive / archivedStack: discoverable history of completed asides.
@@ -560,6 +719,7 @@
   return {
     MAIN_ID: MAIN_ID,
     STORAGE_KEY: STORAGE_KEY,
+    MAX_VISIBLE_CHIPS: MAX_VISIBLE_CHIPS,
     COMMANDS: COMMANDS,
     emptyState: emptyState,
     clone: clone,
@@ -579,10 +739,18 @@
     focusMain: focusMain,
     updateActiveBody: updateActiveBody,
     stack: stack,
+    chromeStack: chromeStack,
+    routeCandidates: routeCandidates,
+    visibleStack: visibleStack,
+    clearDone: clearDone,
+    dismissAllParked: dismissAllParked,
+    dismissAllChrome: dismissAllChrome,
+    clearChromeNoise: clearChromeNoise,
     archive: archive,
     archivedStack: archivedStack,
     normalizeStatus: normalizeStatus,
     isChromeVisible: isChromeVisible,
+    normalizeFingerprint: normalizeFingerprint,
     handleComposer: handleComposer,
     prepareSend: prepareSend,
     formatAsideWire: formatAsideWire,

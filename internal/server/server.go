@@ -25,6 +25,9 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/transcript"
+	"github.com/marcelocantos/jevons/internal/workers"
 )
 
 // remoteWriter abstracts over WebSocket and tern relay connections.
@@ -95,6 +98,19 @@ type Server struct {
 
 	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
 	agentsWatchCancel context.CancelFunc
+
+	// workers is the 🎯T8.2 observability tracker (SQLite + SSE hub).
+	workers *workers.Tracker
+
+	// agentProgress is live ACP-derived status for RHS fleet rows (🎯T118).
+	agentProgress *AgentProgressHub
+
+	// eventLog is the durable decision/lifecycle journal (🎯T120):
+	// state_dir/logs/events.jsonl — browser + server events, tool-readable.
+	eventLog *eventlog.Journal
+
+	// transcriptReader reads Grok session chat_history for RHS inspect (🎯T124).
+	transcriptReader *transcript.Reader
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -145,6 +161,7 @@ func New(version, stateDir string) *Server {
 		creds:         NewCredentialStore(filepath.Join(stateDir, "credential.json")),
 		chatListeners: make([]chan string, 0),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
+		agentProgress: NewAgentProgressHub(),
 	}
 
 	if rec, err := s.creds.Load(); err != nil {
@@ -235,12 +252,16 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
+	mux.HandleFunc("POST /api/asides", s.handleCreateAside) // 🎯T136: register purpose=aside in fleet
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
+	mux.HandleFunc("GET /api/logs", s.handleLogsTail)
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
 	mux.HandleFunc("/ws/voice", s.handleVoice)
+	s.registerWorkerRoutes(mux)
 	s.registerImageRoutes(mux)
 	s.registerSelfTestRoutes(mux)
 }

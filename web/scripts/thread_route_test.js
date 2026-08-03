@@ -45,4 +45,39 @@ test('target: prefix never auto-routes', function () {
   assert.strictEqual(r.reason, 'explicit-prefix');
 });
 
+// 🎯T134: never silent-match done/archive ghosts (even if passed raw).
+test('T134 route ignores done status ghosts', function () {
+  const mixed = [
+    { id: 'att-ghost', title: 'restic backup', body: 'restic snapshots prune', status: 'done' },
+    { id: 'att-live', title: 'billing nit', body: 'invoice stripe', status: 'open' },
+  ];
+  const r = TR.route("How's restic going?", mixed);
+  assert.strictEqual(r.threadId, null);
+  assert.ok(r.reason === 'no-match' || r.reason === 'no-terms');
+});
+
+test('T134 route ignores archived alias', function () {
+  const mixed = [
+    { id: 'att-ghost', title: 'restic backup', body: 'restic prune', status: 'archived' },
+  ];
+  const r = TR.route('restic backup status please', mixed);
+  assert.strictEqual(r.threadId, null);
+});
+
+test('T134 open thread still matches when status open', function () {
+  const openOnly = [
+    { id: 'att-restic', title: 'restic backup', body: 'restic snapshots', status: 'open' },
+  ];
+  const r = TR.route("How's restic going?", openOnly);
+  assert.strictEqual(r.threadId, 'att-restic');
+  assert.strictEqual(r.reason, 'match');
+});
+
+test('T134 isRouteable rejects done', function () {
+  assert.strictEqual(TR.isRouteable({ id: 'x', status: 'done' }), false);
+  assert.strictEqual(TR.isRouteable({ id: 'x', status: 'archived' }), false);
+  assert.strictEqual(TR.isRouteable({ id: 'x', status: 'open' }), true);
+  assert.strictEqual(TR.isRouteable({ id: 'main' }), false);
+});
+
 console.log(process.exitCode ? 'FAIL' : 'PASS thread_route_test');

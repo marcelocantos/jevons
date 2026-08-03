@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -26,11 +27,15 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/doit"
+	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
+	"github.com/marcelocantos/jevons/internal/upgrade"
+	"github.com/marcelocantos/jevons/internal/workers"
 
 	"github.com/marcelocantos/pigeon"
 	"github.com/marcelocantos/pigeon/crypto"
@@ -171,6 +176,21 @@ func main() {
 		os.Exit(1)
 	}
 	srv.SetChatLog(clog)
+	// 🎯T124: RHS fleet transcript inspect reads Grok session chat_history.
+	srv.SetTranscriptReader(transcript.NewReader(cfg.SessionsDir))
+
+	// Durable decision/lifecycle journal (🎯T120): browser + server events
+	// under state_dir/logs/events.jsonl — tool-readable without privilege.
+	var elog *eventlog.Journal
+	if j, err := eventlog.Open(eventlog.DefaultPath(cfg.StateDir)); err != nil {
+		slog.Error("cannot open event log", "err", err)
+		// Non-fatal: continue with slog-only browser path.
+	} else {
+		elog = j
+		srv.SetEventLog(elog)
+		slog.Info("event log ready", "path", elog.Path())
+	}
+
 	srv.SetCA(ca)
 
 	// Load OpenAI API key from Keychain (fall back to env var).
@@ -199,6 +219,34 @@ func main() {
 		slog.Info("no xAI API key — voice bridge disabled (set XAI_API_KEY or store via: security add-generic-password -a jevons -s xai-api-key -w YOUR_KEY)")
 	}
 
+	// 🎯T8.2 worker observability (SQLite workers/events + SSE hub).
+	workerTracker, err := workers.NewTracker(filepath.Join(cfg.StateDir, "workers.db"))
+	if err != nil {
+		slog.Error("workers tracker unavailable — jwork observability disabled", "err", err)
+		workerTracker = nil
+	} else {
+		defer workerTracker.Close()
+		srv.SetWorkersTracker(workerTracker)
+	}
+
+	// 🎯T8.3 execution safety (doit Engine: L1/L2/L3, audit, capabilities).
+	// L3 stays off by default so boot is hermetic without an LLM; L1/L2 +
+	// capability registry + hash-chained audit are always on under StateDir.
+	var doitEng *doit.Engine
+	if eng, err := doit.Open(doit.OpenArgs{
+		StateDir:      filepath.Join(cfg.StateDir, "doit"),
+		Level3Enabled: false,
+	}); err != nil {
+		slog.Error("doit engine unavailable — jwork policy gate disabled", "err", err)
+	} else {
+		doitEng = eng
+		defer eng.Close()
+		slog.Info("doit engine ready",
+			"audit", eng.AuditPath(),
+			"capabilities", len(eng.ListCapabilities()),
+		)
+	}
+
 	// Worker completion events are delivered to the overseer via the
 	// registry agent's Send (wired below in SetNotify).
 	var registry *claudia.Registry
@@ -220,6 +268,12 @@ func main() {
 			return ""
 		},
 	})
+	if workerTracker != nil {
+		mcpSrv.SetWorkersTracker(workerTracker)
+	}
+	if doitEng != nil {
+		mcpSrv.SetDoitEngine(doitEng)
+	}
 
 	mux := http.NewServeMux()
 
@@ -245,8 +299,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// 🎯T40: SIGINT/SIGTERM = normal stop (StopAll); SIGHUP = upgrade exit
+	// (skip StopAll, write handles). JEVONS_UPGRADE_EXIT=1 also marks
+	// SIGTERM/SIGINT as upgrade when launchd cannot send SIGHUP.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Agent registry — manages persistent Grok ACP sessions.
 	registryPath := filepath.Join(cfg.StateDir, "agents.json")
@@ -259,11 +316,36 @@ func main() {
 		registry = r
 	}
 
+	// Prior upgrade handoff: session_ids to resume (conversation path).
+	// Process reattach is residual until claudia connect-mode exists.
+	if snap, err := upgrade.LoadSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
+		slog.Error("upgrade handles load failed (malformed handoff is hard error)", "err", err)
+		os.Exit(1)
+	} else if snap != nil {
+		plan := upgrade.PlanReattach(snap)
+		slog.Info("upgrade handoff present — reattach by session_id (conversation load); process reattach residual",
+			"sessions", len(plan.SessionIDs),
+			"process_reattach", plan.ProcessReattachPossible,
+			"written_at", snap.WrittenAt,
+			"residual", plan.Residual)
+	}
+
 	// Wire registry and scanner into MCP server.
 	mcpSrv.SetRegistry(registry)
 	mcpSrv.SetScanner(scanner)
 	// 🎯T110 self-test packs — same in-process env as POST /api/self_test/run.
 	mcpSrv.SetSelfTestEnv(srv.SelfTestEnv)
+	// 🎯T120: product log introspection (durable events.jsonl).
+	mcpSrv.SetEventLogTailer(func(opt eventlog.TailOptions) ([]eventlog.Event, string, error) {
+		ev, err := srv.TailEventLog(opt)
+		return ev, srv.EventLogPath(), err
+	})
+	// 🎯T128.4: fleet MCP tools dual-write lifecycle events (source=server)
+	// into the same journal so GET /api/logs / jevons_logs_tail see them.
+	mcpSrv.SetEventLogger(srv.LogEvent)
+	if elog != nil {
+		mcpSrv.SetEventJournal(elog)
+	}
 
 	// Butler: durable-thread orchestrator over the thread store, the
 	// session scanner (non-invasive observation), and the transcript
@@ -279,11 +361,15 @@ func main() {
 	// usage DB is unavailable — the cockpit still runs, just unguarded.
 	guard := startCostGuard(ctx, cfg, registry, scanner, srv)
 
+	// 🎯T114: same Claudia adapter is Fleet (threads) and Participants
+	// (agent-only names) so Deliver/PushEvent share one id space.
+	fleetAdapter := fleet.NewClaudia(registry)
 	btlrCfg := butler.Config{
-		Store:   threadStore,
-		Scanner: scanner,
-		Reader:  transcript.NewReader(cfg.SessionsDir),
-		Fleet:   fleet.NewClaudia(registry),
+		Store:        threadStore,
+		Scanner:      scanner,
+		Reader:       transcript.NewReader(cfg.SessionsDir),
+		Fleet:        fleetAdapter,
+		Participants: fleetAdapter,
 	}
 	if guard != nil {
 		btlrCfg.SpawnGuard = guard.enforcer.AllowSpawn
@@ -323,6 +409,10 @@ func main() {
 		os.Exit(1)
 	}
 	jevonDef.Provider = cli.Provider
+	// 🎯T114: overseer purpose on the unified participant record.
+	if jevonDef.Purpose == "" {
+		jevonDef.Purpose = claudia.PurposeOverseer
+	}
 
 	// The overseer's MCP tools come from a USER-SCOPED ~/.grok/config.toml
 	// entry (🎯T58), which the Grok CLI attaches on BOTH session/new and
@@ -382,8 +472,33 @@ func main() {
 	}()
 
 	// Now start agents — MCP server is reachable.
+	// StartAll resumes session_ids from agents.json (conversation durability).
+	// True process reattach (same PID/stdio) needs claudia connect-mode (🎯T40 residual).
 	registry.StartAll()
-	defer registry.StopAll()
+
+	// Exit policy: normal → StopAll; upgrade (SIGHUP / JEVONS_UPGRADE_EXIT) → leave
+	// agents alone and write handles. See docs/design/upgrade-without-drain.md.
+	// Written from the signal goroutine; read from defer — use atomic.
+	var exitUpgrade atomic.Bool
+	defer func() {
+		mode := upgrade.ModeNormal
+		if exitUpgrade.Load() {
+			mode = upgrade.ModeUpgrade
+		}
+		if mode.StopAgents() {
+			registry.StopAll()
+			return
+		}
+		handles := upgrade.FromRegistry(registry)
+		snap := upgrade.BuildSnapshot(handles, os.Getpid())
+		path := upgrade.SnapshotPath(cfg.StateDir)
+		if err := upgrade.SaveSnapshot(path, snap); err != nil {
+			slog.Error("upgrade handles save failed", "path", path, "err", err)
+		} else {
+			slog.Info("upgrade exit: skipped StopAll; wrote agent handles",
+				"path", path, "agents", len(handles), "residual", snap.Residual)
+		}
+	}()
 
 	if jevonProc := registry.Get(cfg.OverseerName); jevonProc != nil {
 		// AttachOverseer sets the process and subscribes its event stream
@@ -400,6 +515,14 @@ func main() {
 			}
 		}
 		mcpSrv.SetNotify(send)
+
+		// 🎯T118: ACP progress / tool steps → RHS fleet-row status chrome.
+		// agents_changed only when the glanceable summary changes.
+		mcpSrv.SetAgentEventHook(func(name string, ev claudia.Event) {
+			if srv.ObserveAgentProgress(name, ev) {
+				srv.NotifyAgentsChanged()
+			}
+		})
 
 		// Wire completion-notify for workers auto-started by StartAll above
 		// (🎯T61): unlike MCP-tool spawns, they never passed through
@@ -440,10 +563,18 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown on signal.
+	// Graceful shutdown on signal (🎯T40: SIGHUP → upgrade exit).
 	go func() {
 		sig := <-sigCh
-		slog.Info("shutting down", "signal", sig)
+		if sig == syscall.SIGHUP || upgrade.EnvRequestsUpgrade() {
+			exitUpgrade.Store(true)
+		}
+		mode := upgrade.ModeNormal
+		if exitUpgrade.Load() {
+			mode = upgrade.ModeUpgrade
+		}
+		slog.Info("shutting down", "signal", sig, "exit_mode", mode.String(),
+			"stop_agents", mode.StopAgents())
 		cancel()
 		httpSrv.Close()
 	}()

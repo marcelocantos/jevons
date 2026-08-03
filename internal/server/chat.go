@@ -76,6 +76,80 @@ func (s *Server) CurrentProcess() *claudia.Agent {
 	return s.proc
 }
 
+// waitForOverseer holds an open /ws/chat connection after history was
+// already sent while the overseer is dead. Serves pings so the browser
+// watchdog stays quiet, rejects chat turns with a short error, and
+// returns a live process once AttachOverseer has run — or nil if the
+// client disconnects. Must not Close the socket on "still down"; that
+// path caused reconnect storms that wiped and re-hydrated the transcript.
+func (s *Server) waitForOverseer(ctx context.Context, conn *websocket.Conn) *claudia.Agent {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	reads := make(chan readResult, 1)
+	go func() {
+		for {
+			_, data, err := conn.Read(ctx)
+			select {
+			case reads <- readResult{data: data, err: err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if cur := s.CurrentProcess(); cur != nil && cur.Alive() {
+				slog.Info("chat: overseer recovered; attaching live stream")
+				payload, _ := json.Marshal(map[string]string{
+					"type": "status", "text": "overseer is back",
+				})
+				wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				_ = conn.Write(wctx, websocket.MessageText, payload)
+				cancel()
+				return cur
+			}
+		case rr := <-reads:
+			if rr.err != nil {
+				return nil
+			}
+			msg := strings.TrimSpace(string(rr.data))
+			if msg == "" {
+				continue
+			}
+			if msg == `{"type":"ping"}` {
+				wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				_ = conn.Write(wctx, websocket.MessageText, []byte(`{"type":"pong"}`))
+				cancel()
+				continue
+			}
+			// Still down: do not drop the socket. Nack chat/control so the
+			// owner sees a stable history instead of a reconnect flicker.
+			s.mu.RLock()
+			reason := s.overseerDownReason
+			s.mu.RUnlock()
+			if reason == "" {
+				reason = "the overseer is not running"
+			}
+			payload, _ := json.Marshal(map[string]string{"type": "error", "error": reason})
+			wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			_ = conn.Write(wctx, websocket.MessageText, payload)
+			cancel()
+		}
+	}
+}
+
 // AttachOverseer makes agent the current overseer and (re)subscribes its
 // event stream to the chat broadcast + status handler. It is called at
 // startup and again after a rewind swaps the process — so every overseer
@@ -117,7 +191,14 @@ func (s *Server) SendToOverseer(text string) error {
 	// turn-complete (HandleAgentEvent).
 	s.mu.Lock()
 	s.notifyQueue = append(s.notifyQueue, text)
+	depth := len(s.notifyQueue)
 	s.mu.Unlock()
+	// 🎯T128.3: enqueue is Info so queue growth is visible at production default.
+	slog.Info("notify_queue",
+		"component", "notify_queue",
+		"decision", "enqueue",
+		"depth", depth,
+	)
 	s.drainOverseerNotes()
 	return nil
 }
@@ -133,6 +214,23 @@ func (s *Server) sendNotes(text string) error {
 		return fmt.Errorf("overseer not running")
 	}
 	return proc.Send(text)
+}
+
+// notifyErrClass classifies overseer-notify delivery failures for structured
+// logs (🎯T128.3). Stable short codes for rg / dashboards.
+func notifyErrClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "prompt already in flight"):
+		return "busy"
+	case strings.Contains(msg, "overseer not running"):
+		return "not_running"
+	default:
+		return "other"
+	}
 }
 
 // drainOverseerNotes attempts to deliver all queued async notifications to
@@ -161,11 +259,27 @@ func (s *Server) drainOverseerNotes() {
 		// Overseer busy or down — put the batch back at the front so order
 		// is preserved, and wait for the next turn-complete to retry.
 		s.notifyQueue = append(batch, s.notifyQueue...)
+		depth := len(s.notifyQueue)
+		s.mu.Unlock()
+		// 🎯T128.3: busy-defer must be Info (not Debug) with depth + err_class.
+		slog.Info("notify_queue",
+			"component", "notify_queue",
+			"decision", "defer",
+			"depth", depth,
+			"deferred", len(batch),
+			"err_class", notifyErrClass(err),
+			"err", err,
+		)
+		return
 	}
+	depth := len(s.notifyQueue)
 	s.mu.Unlock()
-	if err != nil {
-		slog.Debug("overseer busy; notes deferred to next turn", "deferred", len(batch), "err", err)
-	}
+	slog.Info("notify_queue",
+		"component", "notify_queue",
+		"decision", "drain",
+		"depth", depth,
+		"drained", len(batch),
+	)
 }
 
 // handleCost serves the live cost snapshot: burn-rates, the "what is
@@ -294,12 +408,20 @@ func (s *Server) RegistryAgents() []claudia.AgentDef {
 // agentInfo is the GET /api/agents JSON row consumed by the RHS fleet panel.
 // 🎯T72.1: completeness is a server feed concern — every registry agent
 // (durable or ephemeral child) must appear while registered. Parent comes
-// from claudia AgentDef lineage (kill auth / 🎯T68 tree).
+// from claudia AgentDef lineage (kill auth / 🎯T68 tree). Purpose (🎯T114)
+// distinguishes work vs aside so UI can chrome asides without a second store.
+// Phase/Step/Progress (🎯T118) are glanceable activity for worker secondary
+// lines — filled from ACP progress when known, else status baseline.
 type agentInfo struct {
-	Name    string `json:"name"`
-	WorkDir string `json:"workdir"`
-	Parent  string `json:"parent,omitempty"`
-	Status  string `json:"status"`
+	Name        string `json:"name"`
+	WorkDir     string `json:"workdir"`
+	Parent      string `json:"parent,omitempty"`
+	Purpose     string `json:"purpose,omitempty"`
+	Description string `json:"description,omitempty"`
+	Status      string `json:"status"`
+	Phase       string `json:"phase,omitempty"`
+	Step        string `json:"step,omitempty"`
+	Progress    string `json:"progress,omitempty"`
 }
 
 // listFleetAgents returns the RHS panel source of truth: every agent
@@ -313,13 +435,13 @@ type agentInfo struct {
 // recovery runs, NotifyAgentsChanged pushes a live frame so the UI refreshes
 // immediately (not only on the next poll).
 func listFleetAgents(reg *claudia.Registry) []agentInfo {
-	return listFleetAgentsNotifying(reg, nil)
+	return listFleetAgentsNotifying(reg, nil, nil)
 }
 
 // listFleetAgentsNotifying is the same feed with an optional notify hook for
 // recovery events (server wires agents_changed). Used by hermetic tests with
-// notify=nil.
-func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string)) []agentInfo {
+// notify=nil. progress may be nil (no ACP snapshots).
+func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string), progress *AgentProgressHub) []agentInfo {
 	if reg == nil {
 		return []agentInfo{}
 	}
@@ -352,17 +474,47 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		if proc := reg.Get(d.Name); proc != nil && proc.Alive() {
 			status = "running"
 		}
-		agents = append(agents, agentInfo{
-			Name:    d.Name,
-			WorkDir: d.WorkDir,
-			Parent:  d.Parent,
-			Status:  status,
-		})
+		purpose := d.Purpose
+		if purpose == "" {
+			purpose = claudia.PurposeWork
+		}
+		// Seed status baseline when no richer ACP snapshot exists yet.
+		if progress != nil {
+			progress.SetStatus(d.Name, status)
+		}
+		info := agentInfo{
+			Name:        d.Name,
+			WorkDir:     d.WorkDir,
+			Parent:      d.Parent,
+			Purpose:     purpose,
+			Description: d.Description,
+			Status:      status,
+		}
+		if progress != nil {
+			if p := progress.Get(d.Name); p.Summary != "" || p.Phase != "" || p.Step != "" {
+				info.Phase = p.Phase
+				info.Step = p.Step
+				info.Progress = p.Summary
+			}
+		}
+		agents = append(agents, info)
 	}
 	sort.Slice(agents, func(i, j int) bool {
 		return agents[i].Name < agents[j].Name
 	})
 	return agents
+}
+
+// ObserveAgentProgress records an ACP/tool event for name and returns whether
+// the glanceable summary changed (callers push agents_changed on true).
+func (s *Server) ObserveAgentProgress(name string, ev claudia.Event) bool {
+	if s == nil {
+		return false
+	}
+	if s.agentProgress == nil {
+		s.agentProgress = NewAgentProgressHub()
+	}
+	return s.agentProgress.Observe(name, ev)
 }
 
 // handleListAgents returns all registered fleet agents with status (🎯T72.1).
@@ -380,7 +532,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	agents := listFleetAgentsNotifying(reg, func(names []string) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
-	})
+	}, s.agentProgress)
 	_ = json.NewEncoder(w).Encode(agents)
 }
 
@@ -441,10 +593,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if proc == nil || !proc.Alive() {
-		// Overseer is down (usually a missing/unauth Grok CLI on a fresh
-		// install). Send a legible error frame the UI renders BEFORE the
-		// socket closes, so a first-run stranger sees the cause and the
-		// fix instead of a blank, silent chat (🎯T54).
+		// Overseer is down (budget pause, crash, missing Grok CLI, …).
+		// History was already replayed above — keep the socket OPEN so the
+		// resilient browser transport does not thrash reconnect → wipe DOM
+		// → re-replay ~10k stream frames → close (transcript flicker).
+		// 🎯T54 still surfaces a legible error; recovery waits for AttachOverseer.
 		s.mu.RLock()
 		reason := s.overseerDownReason
 		s.mu.RUnlock()
@@ -455,8 +608,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
 		_ = conn.Write(wctx, websocket.MessageText, payload)
 		wcancel()
-		conn.Close(websocket.StatusInternalError, "overseer not running")
-		return
+		slog.Info("chat: overseer down; holding connection after history replay", "reason", reason)
+		proc = s.waitForOverseer(ctx, conn)
+		if proc == nil {
+			return
+		}
+		// Fall through to subscribe on the recovered process.
 	}
 
 	// Subscribe to live JSONL events from the Claude process.

@@ -3,12 +3,14 @@
 
 // Package fleet is the claudia-backed implementation of butler.Fleet:
 // launches, directs, and stops disposable Grok processes behind
-// durable threads.
+// durable threads. It also implements butler.Participants for agents
+// that exist only in the registry (🎯T114 unified deliver path).
 package fleet
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,7 +26,8 @@ const (
 	defaultReplyTimeout = 10 * time.Minute
 )
 
-// Claudia adapts a claudia.Registry to the butler.Fleet interface.
+// Claudia adapts a claudia.Registry to the butler.Fleet interface and
+// to butler.Participants (agent-only deliver).
 type Claudia struct {
 	reg          *claudia.Registry
 	readyTimeout time.Duration
@@ -45,7 +48,16 @@ func NewClaudia(reg *claudia.Registry) *Claudia {
 // resume/summary menu is auto-cleared by claudia's readiness handshake
 // (T24). It populates t.SessionID with the live process's session so
 // the thread can be rehydrated later.
+//
+// Dual-write (🎯T114): every thread Launch registers or updates the
+// agent registry row with Parent + Purpose so threads and agents share
+// one id space. Parent lineage (🎯T111.3) is taken from the thread.
 func (f *Claudia) Launch(t *thread.Thread) error {
+	purpose := strings.TrimSpace(t.Purpose)
+	if purpose == "" {
+		purpose = claudia.PurposeAside // thread path → aside by default
+	}
+
 	// Ensure a registry def. Resume when SessionID is known; otherwise
 	// mint a placeholder id and let Grok ACP replace it on session/new.
 	if f.reg.Def(t.ID) == nil {
@@ -60,12 +72,30 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 			Provider:  cli.Provider,
 			SessionID: sid,
 			AutoStart: true,
+			Parent:    t.Parent,
+			Purpose:   purpose,
 		}); err != nil {
 			return fmt.Errorf("register agent %q: %w", t.ID, err)
 		}
-	} else if def := f.reg.Def(t.ID); def != nil && def.Provider != cli.Provider {
-		def.Provider = cli.Provider
-		_ = f.reg.Register(*def)
+	} else if def := f.reg.Def(t.ID); def != nil {
+		dirty := false
+		if def.Provider != cli.Provider {
+			def.Provider = cli.Provider
+			dirty = true
+		}
+		// Backfill empty parent when the spawn path now knows the creator.
+		if def.Parent == "" && t.Parent != "" {
+			def.Parent = t.Parent
+			dirty = true
+		}
+		// Backfill purpose for legacy dual-write rows (🎯T114).
+		if def.Purpose == "" && purpose != "" {
+			def.Purpose = purpose
+			dirty = true
+		}
+		if dirty {
+			_ = f.reg.Register(*def)
+		}
 	}
 
 	ag, err := f.reg.Launch(t.ID)
@@ -126,4 +156,46 @@ func (f *Claudia) Remove(id string) {
 		// A thread with no registry def (observe-only) is a normal no-op.
 		return
 	}
+}
+
+// Exists reports whether a fleet agent is registered (butler.Participants).
+func (f *Claudia) Exists(id string) bool {
+	if f == nil || f.reg == nil || id == "" {
+		return false
+	}
+	return f.reg.Def(id) != nil
+}
+
+// Deliver rehydrates a registered agent if needed and sends text,
+// waiting for a reply (butler.Participants — 🎯T114 / 🎯T111.2).
+func (f *Claudia) Deliver(id, text string) (string, error) {
+	if f == nil || f.reg == nil {
+		return "", fmt.Errorf("no agent registry")
+	}
+	if f.reg.Def(id) == nil {
+		return "", fmt.Errorf("no agent %q", id)
+	}
+	ag := f.reg.Get(id)
+	if ag == nil || !ag.Alive() {
+		launched, err := f.reg.Launch(id)
+		if err != nil {
+			return "", fmt.Errorf("could not rehydrate agent %q: %w", id, err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), f.readyTimeout)
+		defer cancel()
+		if err := launched.WaitReady(ctx); err != nil {
+			return "", fmt.Errorf("agent %q not ready: %w", id, err)
+		}
+		ag = launched
+	}
+	if err := ag.Send(text); err != nil {
+		return "", fmt.Errorf("send to agent %q: %w", id, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), f.replyTimeout)
+	defer cancel()
+	reply, err := ag.WaitForResponse(ctx)
+	if err != nil {
+		return "", fmt.Errorf("await reply from agent %q: %w", id, err)
+	}
+	return reply, nil
 }

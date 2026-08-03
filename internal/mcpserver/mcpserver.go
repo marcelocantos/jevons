@@ -25,6 +25,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/doit"
+	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/workers"
 )
 
 // ScreenshotFunc requests a screenshot from connected clients and returns the file path.
@@ -60,7 +63,10 @@ type Server struct {
 
 	mu           sync.Mutex
 	notifyJevon  NotifyFunc
-	costSnapshot func() (*cost.Snapshot, error)
+	// agentEventHook receives every fleet worker event (progress, assistant, …)
+	// so the HTTP server can maintain RHS progress chrome (🎯T118).
+	agentEventHook func(name string, ev claudia.Event)
+	costSnapshot   func() (*cost.Snapshot, error)
 
 	// grokRun shells out to the Grok CLI for mid-session MCP reconnect (🎯T60).
 	// Nil uses defaultGrokRun (exec of grok on PATH). Tests inject a fake.
@@ -72,6 +78,25 @@ type Server struct {
 
 	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
 	selfTestEnv SelfTestEnvFunc
+
+	// workers tracks jwork lifecycle in SQLite + SSE (🎯T8.2). Nil = no-op.
+	workers *workers.Tracker
+	// doitEng is the execution-safety engine (🎯T8.3). Nil = spawn unguarded
+	// by policy (tests without engine).
+	doitEng *doit.Engine
+
+	// agentSendQ is a per-agent FIFO of pending sends when the ACP session is
+	// busy (🎯T115). Guarded by mu. Nil until first enqueue.
+	agentSendQ map[string][]string
+
+	// eventLogTail tails durable product logs (🎯T120). Nil = tool unregistered.
+	eventLogTail EventLogTailFunc
+	// eventLogger dual-writes server lifecycle events via HTTP Server.LogEvent
+	// when wired from main (🎯T128.4). Nil = fall through to eventJournal/slog.
+	eventLogger EventLoggerFunc
+	// eventJournal is the durable product journal for MCP lifecycle dual-write
+	// (🎯T128.1 / T128.4). Same file as GET /api/logs when SetEventJournal is wired.
+	eventJournal *eventlog.Journal
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable
@@ -161,6 +186,16 @@ func mcpRequestLogger(next http.Handler, toolsList *int64) http.Handler {
 func (s *Server) SetBudgetGuards(spawn func() error, resume func(id string, auto bool) error) {
 	s.spawnGuard = spawn
 	s.resumeGuard = resume
+}
+
+// SetWorkersTracker attaches the 🎯T8.2 worker observability store + SSE hub.
+func (s *Server) SetWorkersTracker(t *workers.Tracker) {
+	s.workers = t
+}
+
+// SetDoitEngine attaches the 🎯T8.3 execution-safety engine for jwork gating.
+func (s *Server) SetDoitEngine(eng *doit.Engine) {
+	s.doitEng = eng
 }
 
 // checkSpawnAllowed refuses new worker launch when the budget clamp has

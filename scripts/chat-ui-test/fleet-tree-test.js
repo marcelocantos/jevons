@@ -57,12 +57,18 @@ function startStaticServer(agentsPayload) {
 (async () => {
   const failures = [];
   // Deliberately unsorted feed — UI must still show stable name order under each parent.
+  // Fan-out workers share PO workdir (typical); zeta keeps a distinct path.
+  const poRepo = '/Users/x/work/github.com/org/po-repo';
   let agents = [
-    { name: 'zeta-worker', workdir: '/w/z', parent: 'po', status: 'running' },
-    { name: 'alpha-worker', workdir: '/w/a', parent: 'po', status: 'stopped' },
-    { name: 'po', workdir: '/w/po', parent: 'jevons', status: 'running' },
-    { name: 'jevons', workdir: '/w/j', parent: '', status: 'running' },
-    { name: 'mid-worker', workdir: '/w/m', parent: 'po', status: 'running' },
+    { name: 'zeta-worker', workdir: '/Users/x/work/github.com/org/other', parent: 'po', status: 'running', progress: 'working · xcodebuild' },
+    { name: 'alpha-worker', workdir: poRepo, parent: 'po', status: 'stopped', progress: 'stopped' },
+    { name: 'po', workdir: poRepo, parent: 'jevons', status: 'running' },
+    // 🎯T115: root overseer state-dir home must not render as path chrome.
+    { name: 'jevons', workdir: '/Users/x/.jevons/jevons', parent: '', status: 'running' },
+    // 🎯T118: same-workdir leaf under po → progress secondary, not path.
+    { name: 'mid-worker', workdir: poRepo, parent: 'po', status: 'running', phase: 'working', step: 'Bash: go test', progress: 'working · Bash: go test' },
+    // Aside-purpose row: 💡 title, no path element (description must not bleed).
+    { name: 'att-billing', description: 'billing nit', purpose: 'aside', workdir: '/Users/x/.jevons/threads/att-billing', parent: 'jevons', status: 'running' },
   ];
   const { srv, base } = await startStaticServer(() => agents);
   const browser = await chromium.launch({ headless: !HEADED });
@@ -93,11 +99,11 @@ function startStaticServer(agentsPayload) {
       }));
     });
 
-    if (tree.length !== 5) {
-      failures.push(`expected 5 agent nodes (completeness), got ${tree.length}: ${JSON.stringify(tree)}`);
+    if (tree.length !== 6) {
+      failures.push(`expected 6 agent nodes (completeness), got ${tree.length}: ${JSON.stringify(tree)}`);
     }
     const names = tree.map(t => t.name);
-    if (!names.includes('zeta-worker') || !names.includes('alpha-worker') || !names.includes('jevons')) {
+    if (!names.includes('zeta-worker') || !names.includes('alpha-worker') || !names.includes('jevons') || !names.includes('att-billing')) {
       failures.push(`missing agents in panel: ${names.join(',')}`);
     }
     // Top-level roots first: only jevons has empty parent in this fixture.
@@ -115,6 +121,94 @@ function startStaticServer(agentsPayload) {
     const po = tree.find(t => t.name === 'po');
     if (!po || po.parent !== 'jevons') {
       failures.push(`po parent=${po && po.parent}, want jevons`);
+    }
+
+    // 🎯T115: overseer omits ~/.jevons/jevons path; aside has 💡 and no path.
+    const chrome = await page.evaluate(() => {
+      const nodes = [...document.querySelectorAll('#agents .agent-node')];
+      function row(name) {
+        const n = nodes.find(el => el.dataset.agent === name);
+        if (!n) return null;
+        const dir = n.querySelector('.agent-dir');
+        return {
+          nameText: (n.querySelector('.agent-name') || {}).textContent || '',
+          hasDir: !!dir,
+          dirText: dir ? (dir.textContent || '') : '',
+          isAsideClass: n.classList.contains('agent-aside'),
+        };
+      }
+      return { jevons: row('jevons'), aside: row('att-billing'), po: row('po') };
+    });
+    if (!chrome.jevons) {
+      failures.push('T115: jevons row missing');
+    } else {
+      if (chrome.jevons.hasDir || /\.jevons|jevons\/jevons/i.test(chrome.jevons.dirText)) {
+        failures.push('T115: overseer must omit state-dir path: ' + JSON.stringify(chrome.jevons));
+      }
+      if (chrome.jevons.nameText !== 'jevons') {
+        failures.push('T115: overseer title: ' + JSON.stringify(chrome.jevons.nameText));
+      }
+    }
+    if (!chrome.aside) {
+      failures.push('T115: aside row missing');
+    } else {
+      if (!/^💡\s*billing nit$/.test(chrome.aside.nameText)) {
+        failures.push('T115: aside title wants 💡 billing nit: ' + JSON.stringify(chrome.aside.nameText));
+      }
+      if (chrome.aside.hasDir || chrome.aside.dirText) {
+        failures.push('T115: aside must have no path element: ' + JSON.stringify(chrome.aside));
+      }
+      if (!chrome.aside.isAsideClass) {
+        failures.push('T115: aside missing agent-aside class');
+      }
+    }
+    if (!chrome.po || !chrome.po.hasDir || !/org\/po-repo/.test(chrome.po.dirText)) {
+      failures.push('T115: work agent (PO) must keep path chrome: ' + JSON.stringify(chrome.po));
+    }
+
+    // 🎯T118: same-workdir worker → non-path progress secondary; distinct workdir keeps path.
+    const t118 = await page.evaluate(() => {
+      const nodes = [...document.querySelectorAll('#agents .agent-node')];
+      function row(name) {
+        const n = nodes.find(el => el.dataset.agent === name);
+        if (!n) return null;
+        const dir = n.querySelector('.agent-dir');
+        return {
+          secondary: n.dataset.secondary || '',
+          hasDir: !!dir,
+          dirText: dir ? (dir.textContent || '') : '',
+          dirClass: dir ? dir.className : '',
+        };
+      }
+      return { mid: row('mid-worker'), alpha: row('alpha-worker'), zeta: row('zeta-worker'), po: row('po') };
+    });
+    if (!t118.mid) {
+      failures.push('T118: mid-worker row missing');
+    } else {
+      if (t118.mid.secondary !== 'progress') {
+        failures.push('T118: mid-worker secondaryKind want progress: ' + JSON.stringify(t118.mid));
+      }
+      if (!/working/.test(t118.mid.dirText) || !/Bash/.test(t118.mid.dirText)) {
+        failures.push('T118: mid-worker progress text: ' + JSON.stringify(t118.mid));
+      }
+      if (/po-repo|github\.com/.test(t118.mid.dirText)) {
+        failures.push('T118: mid-worker must not show path as secondary: ' + JSON.stringify(t118.mid));
+      }
+      if (!/agent-progress/.test(t118.mid.dirClass)) {
+        failures.push('T118: mid-worker missing agent-progress class: ' + JSON.stringify(t118.mid));
+      }
+    }
+    if (!t118.alpha || t118.alpha.secondary !== 'progress' && t118.alpha.secondary !== 'status') {
+      // stopped + progress field → progress kind
+      if (!t118.alpha || !/stopped/i.test(t118.alpha.dirText) || /po-repo/.test(t118.alpha.dirText || '')) {
+        failures.push('T118: alpha-worker should show non-path status/progress: ' + JSON.stringify(t118.alpha));
+      }
+    }
+    if (!t118.zeta || t118.zeta.secondary !== 'path' || !/org\/other/.test(t118.zeta.dirText || '')) {
+      failures.push('T118: distinct-workdir worker keeps path: ' + JSON.stringify(t118.zeta));
+    }
+    if (!t118.po || t118.po.secondary !== 'path') {
+      failures.push('T118: PO with children keeps path secondary: ' + JSON.stringify(t118.po));
     }
 
     // 🎯T71 thin: working indicator picks up tool progress.
@@ -176,5 +270,5 @@ function startStaticServer(agentsPayload) {
     for (const f of failures) console.error('  -', f);
     process.exit(1);
   }
-  console.log('ok - fleet tree hierarchy + stable sibling sort (T68); completeness; T71 working progress');
+  console.log('ok - fleet tree hierarchy + stable sibling sort (T68); completeness; T71 working progress; T115 overseer/aside chrome; T118 progress secondary');
 })();

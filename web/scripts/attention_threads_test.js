@@ -270,6 +270,144 @@ test('composerPlaceholder: main is clean; side uses [aside: title] hint', functi
   assert.ok(ph.indexOf('[main') === -1);
 });
 
+// ── 🎯T134 chrome hygiene + routing honesty ──────────────────────────
+
+test('T134 routeCandidates: open only — never done or parked', function () {
+  let s = AT.emptyState();
+  s = AT.handleComposer(s, 'capture: restic backup work').state;
+  const openId = s.threads[0].id;
+  s = AT.handleComposer(s, 'capture: parked later').state;
+  const parkId = s.threads[0].id;
+  s = AT.park(s, parkId);
+  s = AT.handleComposer(s, 'aside: done ghost title').state;
+  const doneId = s.threads[0].id;
+  s = AT.dismiss(s, doneId);
+
+  const cands = AT.routeCandidates(s);
+  assert.strictEqual(cands.length, 1);
+  assert.strictEqual(cands[0].id, openId);
+  assert.strictEqual(cands[0].status, 'open');
+  assert.ok(cands.every(function (t) { return t.status === 'open'; }));
+  // Done/parked never appear even if titles would match auto-route.
+  assert.ok(!cands.find(function (t) { return t.id === doneId; }));
+  assert.ok(!cands.find(function (t) { return t.id === parkId; }));
+});
+
+test('T134 stack excludes done; filing close still leaves bar clean', function () {
+  let s = AT.handleComposer(AT.emptyState(), 'target: File me please').state;
+  assert.strictEqual(AT.stack(s).length, 1);
+  s = AT.closeTargetAside(s);
+  assert.strictEqual(AT.stack(s).length, 0);
+  assert.strictEqual(AT.routeCandidates(s).length, 0);
+  assert.strictEqual(AT.archive(s).length, 1);
+});
+
+test('T134 model stack still accumulates; T136 chrome/visible empty', function () {
+  assert.ok(AT.MAX_VISIBLE_CHIPS >= 1);
+  let s = AT.emptyState();
+  for (let i = 0; i < AT.MAX_VISIBLE_CHIPS + 3; i++) {
+    s = AT.handleComposer(s, 'capture: Workstream item ' + i + ' unique').state;
+  }
+  const full = AT.stack(s);
+  assert.strictEqual(full.length, AT.MAX_VISIBLE_CHIPS + 3);
+  // 🎯T136: top chrome never shows aside chips (RHS fleet tree owns them).
+  assert.strictEqual(AT.chromeStack(s).length, 0);
+  const vs = AT.visibleStack(s);
+  assert.strictEqual(vs.shown.length, 0);
+  assert.strictEqual(vs.overflowCount, 0);
+});
+
+// ── 🎯T136 asides live only in RHS fleet tree ─────────────────────────
+
+test('T136 chromeStack always empty even with open and parked asides', function () {
+  let s = AT.handleComposer(AT.emptyState(), 'aside: billing nit').state;
+  s = AT.handleComposer(s, 'capture: parked later').state;
+  const parkId = s.threads[0].id;
+  s = AT.park(s, parkId);
+  assert.ok(AT.stack(s).length >= 2, 'model stack still tracks asides');
+  assert.strictEqual(AT.chromeStack(s).length, 0);
+  assert.strictEqual(AT.visibleStack(s).shown.length, 0);
+  // Route candidates still open-only for T99/T135 (no silent steal elsewhere).
+  assert.ok(AT.routeCandidates(s).length >= 1);
+});
+
+test('T136 index.html: attention-bar not used for aside wall; fleet register path', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('ensureFleetAside') >= 0, 'create-aside dual-writes fleet');
+  assert.ok(html.indexOf('/api/asides') >= 0, 'POST /api/asides');
+  // renderAttention must not show chip wall for asides.
+  assert.ok(/function renderAttention\(\)\s*\{[\s\S]{0,600}?classList\.remove\(['"]visible['"]\)/.test(html) ||
+    html.indexOf("attentionBar.classList.remove('visible')") >= 0,
+    'renderAttention never shows attention-bar');
+  assert.ok(html.indexOf('aria-label="Attention asides"') >= 0 ||
+    html.indexOf("aria-label='Attention asides'") >= 0,
+    'owner-visible vocabulary: asides not threads');
+  // Must not leave a chip loop as the default chrome path for open stack.
+  assert.ok(html.indexOf('appendThreadChip') === -1,
+    'no appendThreadChip wall in index');
+});
+
+test('T134 clearDone / dismissAllParked / clearChromeNoise', function () {
+  let s = AT.emptyState();
+  s = AT.handleComposer(s, 'capture: Keep open').state;
+  const openId = s.threads[0].id;
+  s = AT.handleComposer(s, 'capture: Park me').state;
+  const parkId = s.threads[0].id;
+  s = AT.park(s, parkId);
+  s = AT.handleComposer(s, 'capture: Done me').state;
+  const doneId = s.threads[0].id;
+  s = AT.dismiss(s, doneId);
+
+  assert.strictEqual(AT.stack(s).length, 2); // open + parked
+  assert.strictEqual(AT.archive(s).length, 1);
+
+  // clearDone purges archive only.
+  let s2 = AT.clearDone(s);
+  assert.strictEqual(AT.archive(s2).length, 0);
+  assert.ok(AT.findThread(s2, openId));
+  assert.ok(AT.findThread(s2, parkId));
+  assert.ok(!AT.findThread(s2, doneId));
+
+  // dismissAllParked leaves open.
+  s2 = AT.dismissAllParked(s2);
+  assert.strictEqual(AT.findThread(s2, parkId).status, 'done');
+  assert.strictEqual(AT.findThread(s2, openId).status, 'open');
+  assert.strictEqual(AT.stack(s2).length, 1);
+
+  // clearChromeNoise: full bar reset (open+parked dismissed + archive purged).
+  s = AT.clearChromeNoise(s);
+  assert.strictEqual(AT.stack(s).length, 0);
+  assert.strictEqual(AT.archive(s).length, 0);
+  assert.strictEqual(s.focusId, AT.MAIN_ID);
+  assert.ok(!AT.findThread(s, openId));
+  assert.ok(!AT.findThread(s, parkId));
+  assert.ok(!AT.findThread(s, doneId));
+});
+
+test('T134 capture dedupes same fingerprint open thread', function () {
+  let s = AT.handleComposer(AT.emptyState(), 'capture: restic backup status').state;
+  assert.strictEqual(s.threads.length, 1);
+  const id = s.threads[0].id;
+  s = AT.handleComposer(s, 'capture: restic backup status').state;
+  assert.strictEqual(s.threads.length, 1);
+  assert.strictEqual(s.threads[0].id, id);
+  // Near-dup first line (whitespace/case) merges.
+  s = AT.handleComposer(s, 'capture:   RESTIC backup status  ').state;
+  assert.strictEqual(s.threads.length, 1);
+  assert.strictEqual(s.threads[0].id, id);
+  // Different workstream stacks separately.
+  s = AT.handleComposer(s, 'capture: billing nit later').state;
+  assert.strictEqual(s.threads.length, 2);
+  // Done ghost does not block a new open capture with same title.
+  s = AT.dismiss(s, id);
+  s = AT.handleComposer(s, 'capture: restic backup status').state;
+  assert.strictEqual(AT.stack(s).filter(function (t) {
+    return (t.body || '').toLowerCase().indexOf('restic') !== -1;
+  }).length, 1);
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);

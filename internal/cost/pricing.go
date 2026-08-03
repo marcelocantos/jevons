@@ -14,9 +14,9 @@ type ModelRate struct {
 }
 
 // rateTable maps a lowercase model-name substring to its rates. Matched
-// in order; first hit wins. The entries reflect Anthropic list pricing;
-// costUSD from the transcript is always preferred when present, so this
-// table is the fallback, and drift here biases estimates, not billing.
+// in order; first hit wins. Provider-supplied cost (Claude costUSD, Grok
+// costUsdTicks) is always preferred when present; this table is only the
+// fallback, and drift here biases estimates, not billing.
 var rateTable = []struct {
 	substr string
 	rate   ModelRate
@@ -24,12 +24,15 @@ var rateTable = []struct {
 	{"opus", ModelRate{15, 75}},
 	{"sonnet", ModelRate{3, 15}},
 	{"haiku", ModelRate{1, 5}},
+	// Grok Build: no public per-token list that matches costUsdTicks;
+	// keep a conservative high fallback so missing ticks still trip
+	// budgets early rather than undercounting.
+	{"grok", ModelRate{15, 75}},
 }
 
-// defaultRate prices unknown models (new families, e.g. fable) at the
-// most expensive known family. For a clamp-down system, overestimating
-// unknown spend is the safe direction — it trips budgets earlier, never
-// later.
+// defaultRate prices unknown models (new families) at the most expensive
+// known family. For a clamp-down system, overestimating unknown spend is
+// the safe direction — it trips budgets earlier, never later.
 var defaultRate = ModelRate{15, 75}
 
 const (

@@ -12,6 +12,17 @@ import (
 	"time"
 )
 
+// nonBillableBasenames are session-tree sidecars that never carry usage.
+// Grok usage lives only on updates.jsonl; Claude Code uses <id>.jsonl.
+var nonBillableBasenames = map[string]bool{
+	"chat_history.jsonl":   true,
+	"events.jsonl":         true,
+	"rewind_points.jsonl":  true,
+	"prompt_history.jsonl": true,
+	"hunk_records.jsonl":   true,
+	"btw_history.jsonl":    true,
+}
+
 // tailFile reads the unread suffix of one session JSONL, parses billable
 // events, and returns them along with the new offset (the byte position
 // after the last complete line — a partial trailing line is left for the
@@ -39,8 +50,7 @@ func tailFile(path string, offset int64, attribute func(sessionID string) string
 		return nil, offset, err
 	}
 
-	// Session id fallback: the filename is <uuid>.jsonl.
-	session := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	session := sessionIDFromPath(path)
 
 	// Tool-result lines can run to megabytes, so read whole lines with a
 	// Reader rather than a Scanner with its token-size ceiling.
@@ -61,4 +71,27 @@ func tailFile(path string, offset int64, attribute func(sessionID string) string
 		}
 	}
 	return events, pos, nil
+}
+
+// sessionIDFromPath derives a fallback session id from the on-disk layout.
+//
+//	Claude Code:  …/<project>/<session-id>.jsonl  → basename
+//	Grok Build:   …/<cwd-enc>/<session-id>/updates.jsonl → parent dir
+func sessionIDFromPath(path string) string {
+	base := filepath.Base(path)
+	if base == "updates.jsonl" || nonBillableBasenames[base] {
+		return filepath.Base(filepath.Dir(path))
+	}
+	return strings.TrimSuffix(base, ".jsonl")
+}
+
+// isBillableTranscript reports whether path is a JSONL the collector
+// should tail for usage. Grok writes cost on updates.jsonl; Claude Code
+// writes assistant lines on <session-id>.jsonl. Known non-usage sidecars
+// are skipped so the tail-state table does not fill with dead chrome.
+func isBillableTranscript(path string) bool {
+	if !strings.HasSuffix(path, ".jsonl") {
+		return false
+	}
+	return !nonBillableBasenames[filepath.Base(path)]
 }

@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -80,13 +79,15 @@ func NewCollector(args *CollectorArgs) *Collector {
 }
 
 // ScanOnce walks the projects tree and refreshes the active-file set:
-// transcripts modified within the active window. Returns the set.
+// billable transcripts modified within the active window. Returns the set.
+// Billable = Grok updates.jsonl or Claude Code <session-uuid>.jsonl —
+// other sidecars (chat_history, events, …) never carry usage (🎯T117).
 func (c *Collector) ScanOnce() ([]string, error) {
 	cutoff := c.now().Add(-c.activeWindow)
 	var files []string
 	err := filepath.WalkDir(c.projectsRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil // unreadable entries are skipped, not fatal
+		if err != nil || d.IsDir() || !isBillableTranscript(path) {
+			return nil // unreadable / non-billable entries are skipped, not fatal
 		}
 		if fi, err := d.Info(); err == nil && fi.ModTime().After(cutoff) {
 			files = append(files, path)

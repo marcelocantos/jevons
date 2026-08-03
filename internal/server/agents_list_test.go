@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -137,5 +138,48 @@ func TestHandleListAgentsEmptyWithoutRegistry(t *testing.T) {
 	}
 	if len(agents) != 0 {
 		t.Fatalf("want empty, got %+v", agents)
+	}
+}
+
+// 🎯T118: /api/agents surfaces ACP-derived progress for fleet-row secondary.
+func TestListFleetAgentsProgressFields(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, d := range []claudia.AgentDef{
+		{Name: "po", WorkDir: dir, SessionID: "1", Provider: "grok"},
+		{Name: "worker", WorkDir: dir, SessionID: "2", Provider: "grok", Parent: "po"},
+	} {
+		if err := reg.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hub := NewAgentProgressHub()
+	changed := hub.Observe("worker", claudia.Event{
+		Type:         "progress",
+		ProgressType: "tool_use",
+		Raw:          []byte(`{"update":{"sessionUpdate":"tool_call","title":"Bash: go test"}}`),
+	})
+	if !changed {
+		t.Fatal("observe should change")
+	}
+	got := listFleetAgentsNotifying(reg, nil, hub)
+	byName := map[string]agentInfo{}
+	for _, a := range got {
+		byName[a.Name] = a
+	}
+	w := byName["worker"]
+	// Process is not launched → stopped; ACP step must still surface.
+	if w.Step == "" || !strings.Contains(w.Step, "Bash") {
+		t.Fatalf("worker step=%q progress=%q phase=%q", w.Step, w.Progress, w.Phase)
+	}
+	if w.Progress == "" {
+		t.Fatalf("worker progress empty: %+v", w)
+	}
+	// Stopped process baseline still present for po (no ACP events).
+	if byName["po"].Progress == "" {
+		t.Fatalf("po should have status baseline progress: %+v", byName["po"])
 	}
 }

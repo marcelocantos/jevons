@@ -93,7 +93,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    bottom pins to a false mid-bubble "bottom" while tokens still arrive. */
 #messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
 #messages > * { flex-shrink: 0; }
-/* 🎯T56: browser skips layout/paint for off-screen shells; JS dematerialises bodies. */
+/* 🎯T56/T119: shell always in DOM; content only near viewport. Far shells
+   freeze height (size cache) and drop bodies — content-visibility helps paint. */
 #messages > .msg { content-visibility: auto; contain-intrinsic-size: auto 72px; }
 #messages > .msg.virt-shell { content-visibility: visible; }
 #messages > .msg.virt-shell > * { display: none !important; }
@@ -127,8 +128,81 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons code { background: var(--surface-raised); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.88em; color: var(--accent); }
 .msg.jevons pre { background: var(--surface); border: 1px solid var(--border); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0.6em 0; }
 .msg.jevons pre code { background: none; padding: 0; color: var(--text); }
-.msg.jevons .mermaid-diagram { margin: 0.6em 0; overflow-x: auto; text-align: center; }
+/* Mermaid diagrams (🎯T59) + open/copy toolbar (🎯T83.1). Do not force
+   bubble scaling — svg max-width:100% only; large graphs open in the panel. */
+.msg.jevons .mermaid-diagram { margin: 0.6em 0; overflow-x: auto; text-align: center; position: relative; }
 .msg.jevons .mermaid-diagram svg { max-width: 100%; height: auto; }
+.msg.jevons .mermaid-diagram .mermaid-toolbar {
+  display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;
+  margin: 0 0 6px; opacity: 0.72;
+}
+.msg.jevons .mermaid-diagram:hover .mermaid-toolbar,
+.msg.jevons .mermaid-diagram:focus-within .mermaid-toolbar { opacity: 1; }
+.msg.jevons .mermaid-diagram .mermaid-toolbar button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+  line-height: 1.3;
+}
+.msg.jevons .mermaid-diagram .mermaid-toolbar button:hover {
+  border-color: var(--border-focus); color: var(--text); background: var(--surface-raised);
+}
+.msg.jevons .mermaid-diagram .mermaid-toolbar button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+/* Durable graph viz panel — bottom-right chrome for project graphs (🎯T83),
+   not only ad-hoc chat mermaid (🎯T83.1). Reuses #mermaid-viz-panel. */
+#mermaid-viz-panel {
+  display: none; position: fixed; right: 16px; bottom: 16px; z-index: 40;
+  width: min(560px, calc(100vw - 32px)); height: min(460px, calc(100vh - 48px));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); flex-direction: column; overflow: hidden;
+}
+#mermaid-viz-panel.open { display: flex; }
+#mermaid-viz-panel .mvp-header {
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); background: var(--surface-raised); flex-shrink: 0;
+}
+#mermaid-viz-panel .mvp-title { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; min-width: 72px; }
+#mermaid-viz-panel .mvp-header button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+}
+#mermaid-viz-panel .mvp-header button:hover { color: var(--text); border-color: var(--border-focus); }
+#mermaid-viz-panel .mvp-body {
+  flex: 1; min-height: 0; overflow: auto; padding: 12px; text-align: center;
+}
+#mermaid-viz-panel .mvp-body svg { max-width: 100%; height: auto; }
+#mermaid-viz-panel .mvp-status {
+  font-size: 11px; color: var(--text-muted); padding: 0 10px 8px; flex-shrink: 0;
+}
+#mermaid-viz-panel .mvp-empty { text-align: left; color: var(--text-dim); max-width: 36em; margin: 0 auto; }
+#mermaid-viz-panel .mvp-empty-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-empty-body { font-size: 12px; line-height: 1.45; margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-empty-hint { font-size: 11px; color: var(--text-muted); margin: 0; }
+#mermaid-viz-panel .mvp-paste-wrap {
+  display: none; flex-direction: column; gap: 6px; padding: 8px 10px;
+  border-top: 1px solid var(--border); flex-shrink: 0; background: var(--surface-raised);
+}
+#mermaid-viz-panel .mvp-paste-wrap.open { display: flex; }
+#mermaid-viz-panel .mvp-paste-wrap label { font-size: 11px; color: var(--text-muted); text-align: left; }
+#mermaid-viz-panel #mvp-paste {
+  width: 100%; min-height: 72px; max-height: 140px; resize: vertical;
+  font: inherit; font-family: var(--mono); font-size: 11px; line-height: 1.35;
+  color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px; box-sizing: border-box;
+}
+#mermaid-viz-panel #mvp-paste:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Agents chrome: open durable viz without going through chat (🎯T83). */
+#activity-header.agents-header {
+  display: flex; align-items: center; gap: 8px; justify-content: space-between;
+}
+#activity-header.agents-header .ah-label { flex: 1; }
+#open-viz-btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  font: inherit; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+}
+#open-viz-btn:hover { color: var(--text); border-color: var(--border-focus); background: var(--surface-raised); }
 .msg.jevons ul, .msg.jevons ol { padding-left: 1.5em; margin: 0.5em 0; }
 .msg.jevons li { margin: 0.2em 0; }
 .msg.jevons h1, .msg.jevons h2, .msg.jevons h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: var(--heading); }
@@ -152,15 +226,38 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg-expand:hover { opacity: 1; text-decoration: underline; }
 .msg.user .msg-expand { margin-left: auto; text-align: right; }
 
-/* Infinite scroll (🎯T57): recent turns replay on connect; a zero-height
-   top sentinel drives an IntersectionObserver that auto-pages older
-   history from the durable log as the user nears the top. A dim overlay
-   shows while a window loads (it's out of flow, so it doesn't perturb
-   scroll-position preservation). */
+/* 🎯T135: opt-in route switch under a user bubble (match suggestion only). */
+.msg.user .route-switch {
+  display: block; margin-top: 6px; margin-left: auto; text-align: right;
+  padding: 2px 0; background: none; border: none;
+  color: var(--accent); font: inherit; font-size: 12px; cursor: pointer;
+  opacity: 0.88; max-width: 100%;
+}
+.msg.user .route-switch:hover { opacity: 1; text-decoration: underline; }
+.msg.user .route-switch:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px;
+}
+.msg.user .route-switch[disabled] { opacity: 0.5; cursor: default; text-decoration: none; }
+
+/* History hydrate (🎯T57 API + 🎯T119 progressive full-data):
+   WS still replays recent turns; remaining durable log is fetched into
+   client memory without requiring scroll (progressive /api/history).
+   Top sentinel is optional residual while pages remain — not a data throttle.
+   Overlay is out of flow so it does not perturb scroll-position math. */
 .history-sentinel { height: 1px; margin: 0; flex: 0 0 auto; }
 .history-loading { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 3px 12px; font-size: 11px; color: var(--text-dim); z-index: 5; pointer-events: none; }
+
+/* 🎯T119: jump-to-bottom affordance when free-scrolling (no jump-to-top). */
+#jump-bottom {
+  position: absolute; right: 20px; bottom: 96px; z-index: 6;
+  border: 1px solid var(--border); background: var(--surface-raised); color: var(--text);
+  border-radius: 20px; padding: 6px 12px; font: inherit; font-size: 12px; font-weight: 500;
+  cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.25); opacity: 0.92;
+}
+#jump-bottom:hover { opacity: 1; border-color: var(--border-focus); }
+#jump-bottom[hidden] { display: none !important; }
 
 /* Worker notes — out-of-band system messages from a delegated agent.
    Centred, dim, collapsible. Distinct from both user (right) and
@@ -189,14 +286,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* 🎯T65 quiet attention stack — prefix-first; no command buttons / focus chrome */
-#attention-bar { display: none; flex-direction: row; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); }
+/* 🎯T134: single-row bar + overflow chip; no unbounded multi-row wall */
+#attention-bar { display: none; flex-direction: row; flex-wrap: nowrap; gap: 6px; align-items: center; padding: 6px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); max-height: 2.4rem; overflow: hidden; }
 #attention-bar.visible { display: flex; }
-#attention-stack { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 0; flex: 1; }
-.attn-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--text-dim); font-size: 11px; font-weight: 500; cursor: pointer; line-height: 1.3; }
+#attention-bar.attn-expanded { flex-wrap: wrap; max-height: none; overflow: visible; }
+#attention-stack { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; min-height: 0; flex: 1; min-width: 0; overflow: hidden; }
+#attention-bar.attn-expanded #attention-stack { flex-wrap: wrap; overflow: visible; }
+#attention-actions { display: flex; flex-shrink: 0; gap: 4px; align-items: center; }
+.attn-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--text-dim); font-size: 11px; font-weight: 500; cursor: pointer; line-height: 1.3; flex-shrink: 0; }
 .attn-chip:hover { border-color: var(--border-focus); color: var(--text); }
 .attn-chip.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
 .attn-chip.parked { opacity: 0.72; font-style: italic; }
 .attn-chip.main-chip { border-style: dashed; }
+.attn-chip.attn-overflow { border-style: dashed; opacity: 0.9; color: var(--text-muted); }
+.attn-chip.attn-action { border-style: solid; font-size: 10px; color: var(--text-muted); }
+.attn-chip.attn-action:hover { color: var(--text); border-color: var(--border-focus); }
 .attn-chip .attn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
 .attn-chip .attn-status { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
 
@@ -221,16 +325,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   --control-h: calc(1.45 * 14px + 24px); }
 /* Textarea (not <input>) so Wispr Flow and other STT tools detect a
    document-style input and produce full punctuated sentences. */
-/* 🎯T69: multi-line min height so ordinary typing does not flicker a
-   one-line scrollbar; overflow hidden until near max (then internal scroll).
-   Cap 28vh so growth does not eat the latest assistant reply (🎯T70.1). */
-#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: calc(2.9 * 1.45 * 14px + 24px); max-height: 28vh; overflow-y: hidden; }
+/* 🎯T123: empty/single-line min-height pins to --control-h (same as #send).
+   No multi-line default min-height (T69-era scroll workaround removed).
+   autoGrow expands while typing; overflow hidden until max (🎯T69 scrollbar),
+   then .composer-scroll. Cap 28vh so growth does not eat the latest reply
+   (🎯T70.1). */
+#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: var(--control-h); max-height: 28vh; overflow-y: hidden; }
 #input.composer-scroll { overflow-y: auto; }
 /* Fade the placeholder well below entered text so it's obviously a
    prompt, not typed content. Lower opacity blends it toward the input
    background — darker in dark mode, lighter in light mode. */
 #input::placeholder { color: var(--text-muted); opacity: 0.45; }
 #input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+/* 🎯T133: EMPTY_SEED stays in the value for Wispr document mode, but the
+   full stop is not visible while the field is seed-only. Caret stays readable. */
+#input.composer-seed-only { color: transparent; caret-color: var(--text); }
 #send { min-height: var(--control-h); padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
 #send:hover { opacity: 0.85; }
 #send:disabled { opacity: 0.3; cursor: not-allowed; }
@@ -260,14 +369,27 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    as a hover tooltip. One small line, so it takes minimal vertical space. */
 .turn-marker { align-self: flex-start; position: relative; font-family: var(--mono); font-size: 11px; color: var(--text-muted); letter-spacing: -0.02em; user-select: none; cursor: default; line-height: 1.2; margin: 0; }
 .turn-marker:hover { color: var(--text-dim); }
-.turn-tip { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 30; min-width: 200px; max-width: 460px; max-height: 50vh; overflow-y: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 28px rgba(0,0,0,0.35); }
-.turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 1px; }
+/* 🎯T122: tip must not inherit the narrow marker's shrink-to-fit width.
+   max-content + high min/max → wide single-line chrome; wrap only past max. */
+.turn-tip {
+  display: none; position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 30;
+  width: max-content; min-width: 320px; max-width: min(720px, 92vw);
+  max-height: 50vh; overflow-x: hidden; overflow-y: auto;
+  background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+}
+.turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
 .msg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; line-height: 1; cursor: default; }
 .msg.user .msg-time { text-align: right; }
 /* 🎯T84: GitHub mark for compacted github.com workdirs */
 .agent-dir .gh-icon { display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; opacity: 0.85; }
 .agent-node .agent-dir { display: inline-flex; align-items: center; gap: 2px; }
-.turn-item { font-family: var(--mono); font-size: 11px; padding: 1px 0; letter-spacing: -0.02em; white-space: pre-wrap; word-break: break-word; }
+/* 🎯T122: do not break-word early; soft-wrap only at tip max-width. */
+.turn-item {
+  font-family: var(--mono); font-size: 11px; padding: 2px 0; letter-spacing: -0.02em;
+  line-height: 1.35; max-width: 100%;
+  white-space: pre-wrap; word-break: normal; overflow-wrap: break-word;
+}
 .turn-item.tool-use { color: var(--amber); }
 .turn-item.tool-result { color: var(--text-dim); }
 
@@ -283,14 +405,76 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
 #theme-toggle button:hover { color: var(--text-dim); }
 #theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
-#agents { flex: 1; overflow-y: auto; padding: 8px 12px; }
+#agents { flex: 1; overflow-y: auto; padding: 8px 12px; min-height: 60px; max-height: 45%; }
+/* 🎯T124: fleet transcript inspect — bottom of RHS; never main chat */
+#agent-inspect {
+  display: none; flex-direction: column; flex: 1; min-height: 140px; max-height: 55%;
+  border-top: 1px solid var(--border); background: var(--bg);
+}
+#agent-inspect.visible { display: flex; }
+#agent-inspect-header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  font-size: 11px; font-weight: 600; color: var(--text-dim);
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0;
+}
+#agent-inspect-header .ai-name { color: var(--text); text-transform: none; letter-spacing: 0; font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#agent-inspect-header button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-muted);
+  font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: var(--sans);
+}
+#agent-inspect-header button:hover { color: var(--text); border-color: var(--border-focus); }
+#agent-inspect-body {
+  flex: 1; overflow-y: auto; padding: 10px 12px; font-size: 12px; line-height: 1.45;
+}
+#agent-inspect-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px 4px; }
+#agent-inspect-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; margin-bottom: 8px; }
+#agent-inspect-body .ai-turn { margin-bottom: 10px; }
+#agent-inspect-body .ai-role {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted); margin-bottom: 2px;
+}
+#agent-inspect-body .ai-turn.user .ai-role { color: var(--accent, #8b7cf6); }
+#agent-inspect-body .ai-turn.assistant .ai-role { color: var(--green, #4ade80); }
+#agent-inspect-body .ai-text {
+  white-space: pre-wrap; word-break: break-word; color: var(--text); font-family: var(--sans);
+  font-size: 12px; max-height: 40vh; overflow-y: auto;
+}
+#workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
+.worker-row { padding: 5px 6px; border-radius: 5px; margin-bottom: 2px; border: 1px solid transparent; }
+.worker-row:hover { background: var(--surface-raised); }
+.worker-row .wr-head { display: flex; align-items: center; gap: 6px; }
+.worker-row .wr-id { font-family: var(--mono); font-size: 11px; color: var(--text); }
+.worker-row .wr-status { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.worker-row .wr-status.running { color: var(--green); }
+.worker-row .wr-status.completed { color: var(--text-dim); }
+.worker-row .wr-status.failed, .worker-row .wr-status.denied { color: var(--red, #f87171); }
+.worker-row .wr-task { color: var(--text-dim); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worker-row .wr-meta { color: var(--text-muted); font-size: 10px; font-family: var(--mono); margin-top: 2px; }
+.worker-row .wr-out { color: var(--text-muted); font-size: 10px; margin-top: 2px; max-height: 3.2em; overflow: hidden; }
 .agent-node { padding: 6px 8px; border-radius: 6px; margin-bottom: 1px; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
 .agent-node:hover { background: var(--surface-raised); }
 .agent-node .agent-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 .agent-node .agent-dot.running { background: var(--green); box-shadow: 0 0 4px var(--agent-dot-glow); }
 .agent-node .agent-dot.stopped { background: var(--text-muted); }
-.agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; }
-.agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; }
+.agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }
+/* 🎯T118: progress/status secondary shares path slot without mono path chrome. */
+.agent-node .agent-dir.agent-progress,
+.agent-node .agent-dir.agent-status {
+  font-family: inherit;
+  letter-spacing: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-node .agent-dir.agent-progress { color: var(--text-muted); }
+.agent-node .agent-dir.agent-status { color: var(--text-muted); opacity: 0.85; }
+/* 🎯T115: aside rows — 💡 title, no path column (description must not bleed into path area) */
+.agent-node.agent-aside .agent-name { color: var(--amber, #d4a017); font-weight: 500; }
+.agent-node.agent-aside .agent-dir { display: none; }
+.attn-chip.attn-aside .attn-title { color: var(--amber, #d4a017); }
 .agent-children { padding-left: 14px; border-left: 1px solid var(--border); margin-left: 10px; }
 
 /* Terminal viewer removed from product UI (🎯T73) — vestigial Claude/tmux panel.
@@ -304,41 +488,90 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <div id="main">
   <div id="chat-pane">
     <div id="messages"></div>
-    <div id="attention-bar" aria-label="Attention threads">
+    <button type="button" id="jump-bottom" hidden title="Jump to latest (End / ⌘↓)">↓ Latest</button>
+    <!-- 🎯T136: attention bar not used for aside wall — asides live in RHS fleet tree -->
+    <div id="attention-bar" aria-label="Attention asides" hidden>
       <div id="attention-stack" role="list"></div>
+      <div id="attention-actions" aria-label="Attention aside actions"></div>
     </div>
     <div id="send-queue" aria-label="Queued follow-ups" role="list"></div>
     <div id="input-bar">
       <div id="composer-images" class="composer-images" aria-label="Attached images"></div>
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
-                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line."
+                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing."
+                title="Message box — / focuses here when focus is elsewhere (🎯T127)"
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
-                aria-describedby="input-hint"
+                aria-describedby="input-hint wispr-context"
                 autocomplete="off"
                 spellcheck="true"
                 autocapitalize="sentences"></textarea>
-      <span id="input-hint" class="sr-only">Type a prompt for the Jevons assistant. Use full sentences with punctuation.</span>
+      <span id="input-hint" class="sr-only">Type a prompt for the Jevons assistant. Use full sentences with punctuation. Press slash (/) outside any text field to focus this message box again.</span>
+      <!-- 🎯T21: live sentence-shaped transcript context for Wispr Flow document mode -->
+      <span id="wispr-context" class="sr-only" aria-live="polite"></span>
       <button id="send" disabled aria-label="Send message">Send</button>
     </div>
   </div>
   <div id="activity-pane">
     <div id="cost-ticker" title="Token burn rate — click for detail"></div>
-    <div id="activity-header">Agents</div>
+    <div id="activity-header" class="agents-header">
+      <span class="ah-label">Agents</span>
+      <button type="button" id="open-viz-btn" title="Open project graph viz panel (pinned / paste / chat)">Open viz</button>
+    </div>
     <div id="agents"></div>
+    <!-- 🎯T124: selected fleet agent/aside full transcript (out of band from main chat) -->
+    <div id="agent-inspect" aria-label="Selected agent transcript">
+      <div id="agent-inspect-header">
+        <span class="ai-label">Transcript</span>
+        <span class="ai-name" id="agent-inspect-name"></span>
+        <button type="button" id="agent-inspect-refresh" title="Reload transcript">Refresh</button>
+        <button type="button" id="agent-inspect-close" title="Clear selection">Close</button>
+      </div>
+      <div id="agent-inspect-body"></div>
+    </div>
+    <div id="activity-header" style="margin-top:0">Workers <span id="workers-live" style="font-weight:400;color:var(--text-muted);font-size:10px"></span></div>
+    <div id="workers" title="jwork workers (🎯T8.2)"></div>
 
   </div>
 </div>
+<!-- 🎯T83: durable graph viz chrome (bottom-right; reuses T83.1 panel host). -->
+<div id="mermaid-viz-panel" role="dialog" aria-label="Project graph visualization" aria-modal="false" hidden>
+  <div class="mvp-header">
+    <span class="mvp-title" id="mvp-title">Graph viz</span>
+    <button type="button" id="mvp-load-last" title="Restore the last pinned graph">Load last</button>
+    <button type="button" id="mvp-paste-btn" title="Paste Mermaid / bullseye graph export">Paste</button>
+    <button type="button" id="mvp-render" title="Render pasted Mermaid source">Render</button>
+    <button type="button" id="mvp-pin" title="Pin current graph as last">Pin</button>
+    <button type="button" id="mvp-popout" title="Open in a new browser tab">New tab</button>
+    <button type="button" id="mvp-close" title="Close panel">Close</button>
+  </div>
+  <div class="mvp-body" id="mvp-body"></div>
+  <div class="mvp-paste-wrap" id="mvp-paste-wrap">
+    <label for="mvp-paste">Mermaid source (bullseye graph export or fenced paste)</label>
+    <textarea id="mvp-paste" spellcheck="false" placeholder="graph TD;&#10;  A --> B"></textarea>
+  </div>
+  <div class="mvp-status" id="mvp-status"></div>
+</div>
 <script src="scripts/jlog.js"></script>
+<script src="scripts/decision_log.js"></script>
 <script src="scripts/transport.js"></script>
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
+<script src="scripts/fleet_row.js"></script>
+<script src="scripts/agent_transcript.js"></script>
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
+<script src="scripts/route_suggest.js"></script>
 <script src="scripts/composer_layout.js"></script>
+<script src="scripts/composer_keys.js"></script>
+<script src="scripts/composer_focus.js"></script>
+<script src="scripts/wispr_context.js"></script>
 <script src="scripts/send_queue.js"></script>
 <script src="scripts/layout_probe.js"></script>
+<script src="scripts/tool_summary.js"></script>
+<script src="scripts/mermaid_actions.js"></script>
+<script src="scripts/markdown_normalize.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
@@ -352,7 +585,76 @@ const sTxt = document.getElementById('status-text');
 const agentsEl = document.getElementById('agents');
 const attentionBar = document.getElementById('attention-bar');
 const attentionStackEl = document.getElementById('attention-stack');
-const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line.';
+const attentionActionsEl = document.getElementById('attention-actions');
+// 🎯T134: expand overflow chips in-session (not persisted).
+let attentionBarExpanded = false;
+// 🎯T135: last auto-route match is suggestion-only (never steals wire).
+// Stashed until the next user bubble echo so we can attach "Continue in: …".
+let lastRouteSuggestion = null;
+const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing.';
+
+// 🎯T21 Wispr Flow: live a11y context + optional empty seed (strip before wire).
+const wisprContextEl = document.getElementById('wispr-context');
+function collectWisprTurns() {
+  if (!msgs) return [];
+  const nodes = msgs.querySelectorAll('.msg.user, .msg.jevons');
+  const out = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const d = nodes[i];
+    const role = d.classList && d.classList.contains('user') ? 'user' : 'assistant';
+    const text = d._layoutText != null
+      ? d._layoutText
+      : (d._body ? d._body.textContent : (d.textContent || ''));
+    out.push({ role: role, text: text });
+  }
+  return out;
+}
+function refreshWisprContext() {
+  if (typeof WisprContext === 'undefined') return;
+  const text = WisprContext.buildContextText(collectWisprTurns());
+  if (wisprContextEl) wisprContextEl.textContent = text;
+  if (input) {
+    // Keep describedby contract even if markup is edited later.
+    input.setAttribute(
+      'aria-describedby',
+      WisprContext.describedByIds(WisprContext.STATIC_HINT_ID, WisprContext.LIVE_REGION_ID)
+    );
+  }
+}
+function syncComposerSeedClass() {
+  if (!input || typeof WisprContext === 'undefined') return;
+  const on = WisprContext.needsSeedOnlyClass(input.value);
+  input.classList.toggle(
+    WisprContext.SEED_ONLY_CLASS || 'composer-seed-only',
+    on
+  );
+}
+function ensureWisprSeed() {
+  if (typeof WisprContext === 'undefined' || !input) return;
+  // Only seed when the live draft is empty of real text (fallback B).
+  if (!WisprContext.needsSeed(input.value)) {
+    syncComposerSeedClass();
+    return;
+  }
+  const next = WisprContext.applySeedIfEmpty(input.value);
+  if (next !== input.value) input.value = next;
+  syncComposerSeedClass();
+}
+function stripWisprSeedFromComposerValue() {
+  if (typeof WisprContext === 'undefined' || !input) return;
+  const stripped = WisprContext.prepareWireText(input.value);
+  if (stripped !== input.value && !WisprContext.isEffectivelyEmpty(input.value)) {
+    // Keep visible draft free of seed once the owner has real text.
+    input.value = stripped;
+  }
+  syncComposerSeedClass();
+}
+
+// 🎯T120 page-session correlation id for decision logs (audit §3.1).
+// Stable for the life of this page load (survives WS reconnect; not regenerated).
+const pageCorr = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+  ? crypto.randomUUID()
+  : ('c-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
 
 // 🎯T65 attention threads — prefix-first (docs/design/attention-threads.md).
 // Commands: aside: | capture: | park: | main: | pursue:  (case-insensitive)
@@ -369,80 +671,150 @@ function persistAttention() {
 
 function updateComposerPlaceholder() {
   if (!input) return;
+  // 🎯T136: when a purpose=aside is selected in the RHS tree, show aside hint
+  // even though top chip focus is retired.
+  if (selectedAgent && Array.isArray(lastFleetAgents)) {
+    const row = lastFleetAgents.find(function (a) {
+      return a && a.name === selectedAgent;
+    });
+    if (row && String(row.purpose || '').toLowerCase() === 'aside') {
+      const title = row.description || row.name || 'aside';
+      if (typeof AttentionThreads !== 'undefined' && AttentionThreads.shortTitle) {
+        input.placeholder = '[aside: ' + AttentionThreads.shortTitle(title) + '] Write a message to Jevons';
+      } else {
+        input.placeholder = '[aside: ' + title + '] Write a message to Jevons';
+      }
+      return;
+    }
+  }
   if (typeof AttentionThreads === 'undefined' || !attentionState) {
     input.placeholder = MAIN_PLACEHOLDER;
     return;
   }
-  // Side: "[aside: short-title] Write a message to Jevons"; main: clean (no [main]).
+  // Side model focus (pursue: / residual): "[aside: short-title] …"; main: clean.
   input.placeholder = AttentionThreads.composerPlaceholder(attentionState, MAIN_PLACEHOLDER);
 }
 
+// 🎯T136: top attention chip bar is never the home for asides.
+// Keep DOM host for layout stability; never add .visible / chip wall.
 function renderAttention() {
-  if (!attentionState || typeof AttentionThreads === 'undefined') return;
-  const stack = AttentionThreads.stack(attentionState);
-  const onMain = AttentionThreads.isMainFocus(attentionState);
-  // Quiet: only show when there is something to show (stack or non-main focus).
-  const show = stack.length > 0 || !onMain;
-  attentionBar.classList.toggle('visible', show);
+  if (!attentionBar) return;
+  attentionBar.classList.remove('visible');
+  attentionBar.classList.remove('attn-expanded');
+  attentionBar.hidden = true;
+  attentionBarExpanded = false;
+  if (attentionStackEl) attentionStackEl.innerHTML = '';
+  if (attentionActionsEl) attentionActionsEl.innerHTML = '';
   updateComposerPlaceholder();
+}
 
-  attentionStackEl.innerHTML = '';
-  if (!show) return;
-
-  // Main chip when not on main — click returns focus (same as main:).
-  if (!onMain) {
-    const mainChip = document.createElement('div');
-    mainChip.className = 'attn-chip main-chip';
-    mainChip.setAttribute('role', 'listitem');
-    mainChip.title = 'Return to main thread (or type main:)';
-    const mt = document.createElement('span');
-    mt.className = 'attn-title';
-    mt.textContent = 'Main';
-    mainChip.appendChild(mt);
-    mainChip.addEventListener('click', () => {
-      attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
-      attentionState = AttentionThreads.focusMain(attentionState);
-      input.value = mainDraftBackup || '';
-      autoGrow();
-      persistAttention();
-      renderAttention();
-      input.focus();
-    });
-    attentionStackEl.appendChild(mainChip);
-  }
-
-  for (const t of stack) {
-    const chip = document.createElement('div');
-    chip.className = 'attn-chip' +
-      (t.status === 'parked' ? ' parked' : '') +
-      (attentionState.focusId === t.id ? ' active' : '');
-    chip.setAttribute('role', 'listitem');
-    chip.title = t.body || t.title;
-    const title = document.createElement('span');
-    title.className = 'attn-title';
-    title.textContent = t.title;
-    chip.appendChild(title);
-    const st = document.createElement('span');
-    st.className = 'attn-status';
-    st.textContent = t.status;
-    chip.appendChild(st);
-    chip.addEventListener('click', () => {
-      if (AttentionThreads.isMainFocus(attentionState)) mainDraftBackup = input.value;
-      else attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
-      attentionState = AttentionThreads.pursue(attentionState, t.id);
-      const th = AttentionThreads.findThread(attentionState, t.id);
-      if (th) { input.value = th.body || ''; autoGrow(); }
-      persistAttention();
-      renderAttention();
-      input.focus();
-    });
-    attentionStackEl.appendChild(chip);
-  }
+// 🎯T136: dual-write create-aside into fleet registry (purpose=aside) so RHS
+// tree shows 💡 nodes; auto-select + inspect follow agents_changed / refresh.
+function ensureFleetAside(id, title) {
+  if (!id) return Promise.resolve(null);
+  const body = JSON.stringify({
+    id: String(id),
+    title: String(title || 'aside'),
+  });
+  return fetch('/api/asides', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body,
+  }).then(function (r) {
+    if (!r.ok) {
+      return r.text().then(function (t) {
+        throw new Error(t || ('aside register HTTP ' + r.status));
+      });
+    }
+    return r.json();
+  }).then(function (row) {
+    // Prefer explicit select of the created id; refreshAgents also auto-picks new asides.
+    if (row && row.name) {
+      selectedAgent = row.name;
+    }
+    refreshAgents();
+    return row;
+  }).catch(function (err) {
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('warn', DecisionLog.decisionMsg('attention'), {
+        decision: 'aside_register_error',
+        threadId: id,
+        err: err && err.message ? err.message : String(err || 'unknown'),
+        corr: pageCorr,
+      });
+    }
+    // Still refresh in case agents_changed already fired elsewhere.
+    try { refreshAgents(); } catch (_) {}
+    return null;
+  });
 }
 
 let turnDetails = null;
 let turnItems = null;
 let turnCount = 0;
+
+// ── History replay scroll suppress (reload + soft reconnect) ─────────
+// WS replays recent turns chronologically; stick-to-bottom per message
+// causes a scroll parade. Suppress pin during the burst; one pin after
+// history_meta (or idle end). Progressive hydrate still preserves viewport.
+let historyReplayActive = false;
+let historyReplayIdleTimer = 0;
+// Declared early so beginHistoryReplay can cancel a pending pin.
+let _scrollRaf = 0;
+
+function beginHistoryReplay() {
+  historyReplayActive = true;
+  if (_scrollRaf) { cancelAnimationFrame(_scrollRaf); _scrollRaf = 0; }
+  armHistoryReplayIdleEnd();
+}
+
+function armHistoryReplayIdleEnd() {
+  if (!historyReplayActive) return;
+  if (historyReplayIdleTimer) clearTimeout(historyReplayIdleTimer);
+  const ms = (typeof VirtualList !== 'undefined' && VirtualList.REPLAY_IDLE_END_MS) || 150;
+  historyReplayIdleTimer = setTimeout(function () {
+    historyReplayIdleTimer = 0;
+    endHistoryReplayAndPin('idle');
+  }, ms);
+}
+
+function endHistoryReplayAndPin(reason) {
+  if (!historyReplayActive) return;
+  historyReplayActive = false;
+  if (historyReplayIdleTimer) { clearTimeout(historyReplayIdleTimer); historyReplayIdleTimer = 0; }
+  if (_scrollRaf) { cancelAnimationFrame(_scrollRaf); _scrollRaf = 0; }
+  // One pin to live end — no per-message chase.
+  enterTrackBottom();
+  _pinningScroll = true;
+  beginScrollBookkeeping();
+  try {
+    const top = (typeof VirtualList !== 'undefined' && VirtualList.finalPinScrollTop)
+      ? VirtualList.finalPinScrollTop(msgs.scrollHeight, msgs.clientHeight)
+      : Math.max(0, msgs.scrollHeight - msgs.clientHeight);
+    msgs.scrollTop = top;
+    noteScrollMetrics();
+  } finally {
+    _pinningScroll = false;
+    endScrollBookkeeping();
+  }
+  scheduleVirtualize();
+  updateJumpFab();
+  // 🎯T21: replay finished — refresh Wispr continuation context from history.
+  refreshWisprContext();
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('replay_pin', {
+      reason: reason || 'end',
+      corr: pageCorr,
+    }));
+  }
+}
+window.beginHistoryReplay = beginHistoryReplay;
+window.endHistoryReplayAndPin = endHistoryReplayAndPin;
+Object.defineProperty(window, 'historyReplayActive', {
+  configurable: true,
+  get() { return historyReplayActive; },
+  set(v) { historyReplayActive = !!v; },
+});
 
 // Wire transport callbacks.
 transport.onOpen = () => {
@@ -450,7 +822,22 @@ transport.onOpen = () => {
   dot.className = 'dot on'; sTxt.textContent = 'connected'; sendBtn.disabled = false;
   msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
   msgHistory = []; histIdx = null; histDraft = ''; editingEl = null;
+  oldestIndex = 0; loadingEarlier = false; progressiveHistoryRunning = false;
+  teardownHistorySentinel();
+  if (typeof VirtualList !== 'undefined' && VirtualList.createSizeCache) {
+    // Fresh size cache after reconnect wipe (shells gone).
+    for (const k of Object.keys(virtSizeCache)) delete virtSizeCache[k];
+  }
+  // Suppress stick-to-bottom until recent WS replay finishes (🎯T119.1).
+  beginHistoryReplay();
+  updateJumpFab();
   input.value = v;
+  // 🎯T120.4: reconnect is a lifecycle event (same pageCorr across reconnects).
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('reconnect', {
+      corr: pageCorr,
+    }));
+  }
 };
 transport.onClose = () => {
   // Transport handles reconnect (backoff + version check) internally.
@@ -466,13 +853,33 @@ function connect() { transport.connect(); }
 function handle(m) {
   const typ = m.type;
 
-  // Recent turns were replayed; older history stays in the durable log.
-  // Show a "Load earlier" affordance that pages it in on demand (🎯T57).
+  // Recent turns were replayed via WS (🎯T57). Remaining durable history is
+  // progressively fetched into client memory (🎯T119) — full data resident;
+  // infinite scroll is not a data throttle. Optional top sentinel remains
+  // while pages are outstanding (does not gate the progressive fetch).
   if (typ === 'history_meta') {
     oldestIndex = m.start || 0;
-    if ((m.older || 0) > 0) setupInfiniteScroll();
+    // End chronological WS replay burst — one pin, then optional progressive hydrate.
+    endHistoryReplayAndPin('history_meta');
+    // 🎯T120.4: progressive hydrate start (corr-linked).
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_start', {
+        oldestIndex: oldestIndex,
+        older: m.older || 0,
+        corr: pageCorr,
+      }));
+    }
+    if ((m.older || 0) > 0) startProgressiveHistoryLoad();
+    else if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_done', {
+        oldestIndex: 0,
+        corr: pageCorr,
+      }));
+    }
     return;
   }
+  // During WS replay burst, keep extending idle-end until frames stop.
+  if (historyReplayActive) armHistoryReplayIdleEnd();
 
   // 🎯T82: registry file changed — refresh RHS fleet immediately (poll is fallback).
   if (typ === 'agents_changed') {
@@ -515,6 +922,12 @@ function handle(m) {
       closeTurn();
       const uEl = addMsg('user', content, msgTs);
       if (content) msgHistory.push({ text: content, el: uEl });
+      // 🎯T135: opt-in "Continue in: «title»" when auto-match suggested a thread.
+      // Match is suggestion only — default wire already went to main.
+      if (lastRouteSuggestion) {
+        attachRouteSwitch(uEl, lastRouteSuggestion);
+        lastRouteSuggestion = null;
+      }
       startTurn();
     } else if (Array.isArray(content)) {
       content.forEach(c => {
@@ -533,7 +946,7 @@ function handle(m) {
     const hasText = ChatEvents.hasAssistantText(m);
     content.forEach(c => {
       if (c.type==='tool_use') {
-        addTurnItem('tool-use', c.name + (c.input ? ': ' + summariseInput(c.input) : ''));
+        addTurnItem('tool-use', c.name + (c.input ? ': ' + ToolSummary.summariseInput(c.input) : ''));
       }
     });
     if (hasText) {
@@ -639,6 +1052,8 @@ function sealAssistantStream() {
     void msgs.offsetHeight;
     scrollDown();
   }
+  // 🎯T21: sealed assistant text is durable context for Wispr document mode.
+  refreshWisprContext();
 }
 
 function startTurn() {
@@ -692,11 +1107,13 @@ function addTurnItem(cls, text) {
 }
 
 // buildMsg constructs a .msg element (body + timestamp) WITHOUT inserting
-// it, so it can be appended live or batched into a fragment for "load
-// earlier" prepend (🎯T57). Height-based collapse requires the node to be
-// in the document — call layoutMsg after attach (offsetHeight is 0 in a
-// detached fragment).
-function buildMsg(role, text, when) {
+// it, so it can be appended live or batched into a fragment for history
+// prepend (🎯T57/T119). Height-based collapse requires the node in the
+// document — call layoutMsg after attach (offsetHeight is 0 detached).
+// opts.lazy (🎯T119): shell-only unmeasured placeholder — no markdown paint
+// until first materialization near the viewport (lazy measure).
+function buildMsg(role, text, when, opts) {
+  const lazy = !!(opts && opts.lazy);
   const d = document.createElement('div');
   d.className = 'msg ' + role;
   const body = document.createElement('div');
@@ -705,9 +1122,25 @@ function buildMsg(role, text, when) {
   d._body = body;
   d._layoutRole = role;
   d._layoutText = text == null ? '' : text;
-  // Provisional full paint (no collapse gate) so something shows if layout
-  // is deferred; layoutMsg remeasures once connected.
-  paintBody(d, role, d._layoutText);
+  if (lazy) {
+    // Unmeasured shell: estimated height freezes geometry until enter-band.
+    d.classList.add('virt-shell');
+    d._shellState = (typeof VirtualList !== 'undefined')
+      ? VirtualList.SHELL_UNMEASURED
+      : 'unmeasured';
+    const est = (typeof VirtualList !== 'undefined')
+      ? VirtualList.estimateHeightFromText(d._layoutText)
+      : 72;
+    d.style.minHeight = est + 'px';
+    d._virtSize = null;
+  } else {
+    // Provisional full paint (no collapse gate) so something shows if layout
+    // is deferred; layoutMsg remeasures once connected.
+    paintBody(d, role, d._layoutText);
+    d._shellState = (typeof VirtualList !== 'undefined')
+      ? VirtualList.SHELL_MATERIAL
+      : 'material';
+  }
   const ms = when || Date.now();
   const ts = document.createElement('div');
   ts.className = 'msg-time';
@@ -730,8 +1163,10 @@ function absTimeTitle(ms) {
 }
 
 // layoutMsg runs height-ratio collapse once the message is in #messages.
+// Lazy unmeasured shells skip paint until rematerialize (🎯T119).
 function layoutMsg(d) {
   if (!d || !d.isConnected || d._layoutText == null) return;
+  if (d.classList && d.classList.contains('virt-shell') && !d._virtSize) return;
   renderBody(d, d._layoutRole || 'jevons', d._layoutText);
 }
 
@@ -744,7 +1179,11 @@ function addMsg(role, text, when) {
   msgs.appendChild(d);
   layoutMsg(d);
   scheduleLatestExpansion();
-  scrollDownThrottled();
+  // 🎯T119.1: extend replay idle-end while burst continues via addMsg too.
+  if (historyReplayActive) armHistoryReplayIdleEnd();
+  scrollDownThrottled(); // no-op while historyReplayActive
+  // 🎯T21: keep Wispr describedby context current as history grows.
+  if (role === 'user' || role === 'jevons') refreshWisprContext();
   return d;
 }
 
@@ -797,7 +1236,7 @@ function measureCollapse(d, role, text) {
   msgs.appendChild(probe);
   // Inline the paint for probe (avoid mutating d._body).
   if (role === 'jevons') {
-    probeBody.innerHTML = marked.parse(text);
+    probeBody.innerHTML = parseAssistantMarkdown(text);
   } else if (role === 'user') {
     probeBody.innerHTML = renderUserText(text);
   } else {
@@ -805,7 +1244,7 @@ function measureCollapse(d, role, text) {
   }
   const fullH = probeBody.offsetHeight || 0;
   if (role === 'jevons') {
-    probeBody.innerHTML = marked.parse(preview);
+    probeBody.innerHTML = parseAssistantMarkdown(preview);
   } else if (role === 'user') {
     probeBody.innerHTML = renderUserText(preview);
   } else {
@@ -826,8 +1265,12 @@ function measureCollapse(d, role, text) {
 // (see the _streamRaw check) so a half-streamed diagram never flashes a
 // parse error. Invalid source is left as its original code block. Mermaid
 // is initialized lazily so its theme matches the UI theme at first use.
+// 🎯T83.1: each diagram gets Open / Copy source / Copy image controls.
+// 🎯T83: durable bottom-right chrome — pin last, paste bullseye export,
+// open-from Agents "Open viz" without re-pasting into chat.
 let mermaidReady = false;
 let mermaidSeq = 0;
+let _mermaidPanelState = null; // { src, svgMarkup, title } for the open panel
 function ensureMermaid() {
   if (!window.mermaid) return null;
   if (!mermaidReady) {
@@ -840,6 +1283,450 @@ function ensureMermaid() {
   }
   return window.mermaid;
 }
+function mermaidIsDark() {
+  return document.documentElement.getAttribute('data-theme') !== 'light';
+}
+function mermaidStorage() {
+  try { return window.localStorage; } catch (_) { return null; }
+}
+function attachMermaidToolbar(wrap, src) {
+  if (!wrap || wrap.querySelector('.mermaid-toolbar')) return;
+  const MA = window.MermaidActions;
+  const buttons = (MA && MA.toolbarButtons) ? MA.toolbarButtons() : [
+    { action: 'open', label: 'Open', title: 'Open diagram' },
+    { action: 'copy-source', label: 'Copy source', title: 'Copy Mermaid source' },
+    { action: 'copy-image', label: 'Copy image', title: 'Copy diagram as PNG' },
+  ];
+  const bar = document.createElement('div');
+  bar.className = 'mermaid-toolbar';
+  bar.setAttribute('role', 'toolbar');
+  bar.setAttribute('aria-label', 'Diagram actions');
+  buttons.forEach(spec => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.mermaidAction = spec.action;
+    btn.textContent = spec.label;
+    if (spec.title) btn.title = spec.title;
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleMermaidAction(spec.action, wrap);
+    });
+    bar.appendChild(btn);
+  });
+  wrap.insertBefore(bar, wrap.firstChild);
+  wrap.dataset.mermaidSrc = src;
+}
+function svgMarkupFromWrap(wrap) {
+  const svg = wrap && wrap.querySelector('svg');
+  return svg ? svg.outerHTML : '';
+}
+function setMermaidPanelStatus(msg) {
+  const status = document.getElementById('mvp-status');
+  if (status) status.textContent = msg || '';
+}
+function setMermaidPanelTitle(title) {
+  const el = document.getElementById('mvp-title');
+  if (el) el.textContent = title || 'Graph viz';
+}
+function showMermaidPasteArea(show) {
+  const wrap = document.getElementById('mvp-paste-wrap');
+  if (!wrap) return;
+  if (show) wrap.classList.add('open');
+  else wrap.classList.remove('open');
+}
+function showMermaidPanelShell() {
+  const panel = document.getElementById('mermaid-viz-panel');
+  if (!panel) return null;
+  panel.hidden = false;
+  panel.classList.add('open');
+  return panel;
+}
+function renderMermaidPanelEmpty() {
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  if (!body) return;
+  body.innerHTML = (MA && MA.emptyStateHtml) ? MA.emptyStateHtml() : '<p>No graph loaded.</p>';
+  _mermaidPanelState = null;
+  setMermaidPanelTitle('Graph viz');
+}
+function applyMermaidPanelContent(opts) {
+  const o = opts || {};
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  if (!body) return;
+  const src = MA && MA.stripMermaidFence ? MA.stripMermaidFence(o.src) : String(o.src || '');
+  const svgMarkup = String(o.svgMarkup || '');
+  const title = String(o.title || 'Graph').trim() || 'Graph';
+  _mermaidPanelState = { src, svgMarkup, title };
+  if (svgMarkup) {
+    body.innerHTML = svgMarkup;
+  } else if (src) {
+    body.innerHTML = '<pre class="mvp-source-fallback" style="text-align:left;font-size:11px;white-space:pre-wrap">' +
+      (MA && MA.escapeHtml ? MA.escapeHtml(src) : src) + '</pre>';
+  } else {
+    renderMermaidPanelEmpty();
+    return;
+  }
+  setMermaidPanelTitle(title);
+}
+function pinMermaidPanelState(extraStatus) {
+  const MA = window.MermaidActions;
+  const st = _mermaidPanelState;
+  if (!st || !(st.src || st.svgMarkup)) {
+    setMermaidPanelStatus('Nothing to pin');
+    return null;
+  }
+  const saved = MA && MA.savePinnedGraph
+    ? MA.savePinnedGraph(mermaidStorage(), {
+        src: st.src,
+        svgMarkup: st.svgMarkup,
+        title: st.title || 'Graph',
+        updatedAt: Date.now(),
+      })
+    : null;
+  if (saved) {
+    setMermaidPanelStatus(extraStatus || 'Pinned as last graph');
+  } else {
+    setMermaidPanelStatus('Could not pin (storage unavailable)');
+  }
+  return saved;
+}
+/**
+ * Open durable panel with optional diagram. When pin is true (default for
+ * chat Open), persists as last graph so chrome "Open viz" / Load last work.
+ */
+function openMermaidPanel(src, svgMarkup, opts) {
+  const o = opts || {};
+  const panel = showMermaidPanelShell();
+  if (!panel) return;
+  const hasContent = !!(src || svgMarkup);
+  if (!hasContent) {
+    renderMermaidPanelEmpty();
+    setMermaidPanelStatus(o.status || '');
+    return;
+  }
+  applyMermaidPanelContent({
+    src: src,
+    svgMarkup: svgMarkup,
+    title: o.title || 'Diagram',
+  });
+  if (o.pin !== false) pinMermaidPanelState(o.status || 'Opened · pinned as last');
+  else setMermaidPanelStatus(o.status || '');
+  if (o.showPaste) showMermaidPasteArea(true);
+}
+function closeMermaidPanel() {
+  const panel = document.getElementById('mermaid-viz-panel');
+  if (!panel) return;
+  panel.classList.remove('open');
+  panel.hidden = true;
+  showMermaidPasteArea(false);
+}
+/** Agents chrome / Open viz: durable surface without chat paste. */
+function openVizFromChrome() {
+  const MA = window.MermaidActions;
+  const plan = MA && MA.openFromChromePlan
+    ? MA.openFromChromePlan(mermaidStorage())
+    : { mode: 'empty' };
+  showMermaidPanelShell();
+  if (plan.mode === 'pinned' && plan.pin) {
+    applyMermaidPanelContent({
+      src: plan.pin.src,
+      svgMarkup: plan.pin.svgMarkup,
+      title: plan.pin.title || 'Last graph',
+    });
+    // Prefer cached SVG; if only source, re-render via mermaid when available.
+    if (!plan.pin.svgMarkup && plan.pin.src) {
+      renderMermaidSourceInPanel(plan.pin.src, { title: plan.pin.title || 'Last graph', pin: false, status: 'Loaded last · rendering…' });
+      return;
+    }
+    setMermaidPanelStatus('Loaded last pinned graph');
+    return;
+  }
+  renderMermaidPanelEmpty();
+  setMermaidPanelStatus('Empty — paste bullseye Mermaid export or open from chat');
+}
+function loadLastMermaidGraph() {
+  const MA = window.MermaidActions;
+  const pin = MA && MA.loadPinnedGraph ? MA.loadPinnedGraph(mermaidStorage()) : null;
+  if (!pin) {
+    showMermaidPanelShell();
+    renderMermaidPanelEmpty();
+    setMermaidPanelStatus('No pinned graph yet');
+    return;
+  }
+  showMermaidPanelShell();
+  applyMermaidPanelContent({
+    src: pin.src,
+    svgMarkup: pin.svgMarkup,
+    title: pin.title || 'Last graph',
+  });
+  if (!pin.svgMarkup && pin.src) {
+    renderMermaidSourceInPanel(pin.src, { title: pin.title || 'Last graph', pin: false, status: 'Loaded last · rendering…' });
+    return;
+  }
+  setMermaidPanelStatus('Loaded last pinned graph');
+}
+/** Render raw/fenced Mermaid into the durable panel (manual refresh path). */
+function renderMermaidSourceInPanel(rawSrc, opts) {
+  const o = opts || {};
+  const MA = window.MermaidActions;
+  const src = MA && MA.stripMermaidFence ? MA.stripMermaidFence(rawSrc) : String(rawSrc || '').trim();
+  if (!src) {
+    setMermaidPanelStatus('Paste Mermaid source first');
+    return Promise.resolve(null);
+  }
+  showMermaidPanelShell();
+  applyMermaidPanelContent({ src: src, svgMarkup: '', title: o.title || 'Pasted graph' });
+  const m = ensureMermaid();
+  if (!m) {
+    setMermaidPanelStatus('Mermaid not loaded — source shown as text');
+    if (o.pin !== false) pinMermaidPanelState('Source pinned (render unavailable)');
+    return Promise.resolve(null);
+  }
+  const id = 'mvp-mmd-' + (++mermaidSeq);
+  setMermaidPanelStatus(o.status || 'Rendering…');
+  return Promise.resolve()
+    .then(() => m.render(id, src))
+    .then(({ svg }) => {
+      applyMermaidPanelContent({
+        src: src,
+        svgMarkup: svg,
+        title: o.title || 'Pasted graph',
+      });
+      if (o.pin !== false) pinMermaidPanelState(o.status || 'Rendered · pinned as last');
+      else setMermaidPanelStatus(o.status || 'Rendered');
+      return svg;
+    })
+    .catch((err) => {
+      setMermaidPanelStatus('Render failed: ' + (err && err.message ? err.message : 'invalid Mermaid'));
+      return null;
+    });
+}
+function pasteMermaidIntoPanel() {
+  showMermaidPanelShell();
+  showMermaidPasteArea(true);
+  const ta = document.getElementById('mvp-paste');
+  if (ta) {
+    ta.focus();
+    // Prefer clipboard.readText when available (secure context + gesture).
+    if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+      navigator.clipboard.readText().then((t) => {
+        if (t && ta && !ta.value) ta.value = t;
+        setMermaidPanelStatus('Paste ready — edit if needed, then Render');
+      }).catch(() => {
+        setMermaidPanelStatus('Paste into the box, then Render');
+      });
+      return;
+    }
+  }
+  setMermaidPanelStatus('Paste into the box, then Render');
+}
+function renderPastedMermaid() {
+  const ta = document.getElementById('mvp-paste');
+  const raw = ta ? ta.value : '';
+  return renderMermaidSourceInPanel(raw, { title: 'Pasted graph', pin: true });
+}
+function openMermaidWindow(src, svgMarkup) {
+  const MA = window.MermaidActions;
+  const title = (_mermaidPanelState && _mermaidPanelState.title) || 'Mermaid diagram';
+  const html = MA && MA.buildOpenDocumentHtml
+    ? MA.buildOpenDocumentHtml({
+        title: title,
+        svgMarkup: svgMarkup || '',
+        mermaidSrc: src || '',
+        dark: mermaidIsDark(),
+      })
+    : '<!DOCTYPE html><title>Mermaid</title><body>' + (svgMarkup || '') + '</body>';
+  const w = window.open('', '_blank');
+  if (!w) {
+    // Popup blocked — still open the in-app panel.
+    openMermaidPanel(src, svgMarkup, { pin: false, status: 'Popup blocked; opened in panel instead.' });
+    return null;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  return w;
+}
+function mermaidClipboardCaps() {
+  const MA = window.MermaidActions;
+  if (MA && MA.clipboardCapabilities) {
+    return MA.clipboardCapabilities({
+      isSecureContext: window.isSecureContext,
+      clipboard: navigator.clipboard,
+      ClipboardItem: window.ClipboardItem,
+    });
+  }
+  return {
+    secure: !!window.isSecureContext,
+    write: !!(navigator.clipboard && navigator.clipboard.write),
+    writeText: !!(navigator.clipboard && navigator.clipboard.writeText),
+    multiType: !!(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write),
+  };
+}
+// Rasterize the rendered SVG to a PNG blob via canvas.
+// Browser limits: requires the SVG to load as an image (xmlns present);
+// cross-origin styles in foreignObject may taint the canvas; secure
+// context + user gesture required for clipboard write of the result.
+function svgToPngBlob(svgMarkup, scale) {
+  const MA = window.MermaidActions;
+  const markup = MA && MA.normalizeSvgMarkup ? MA.normalizeSvgMarkup(svgMarkup) : String(svgMarkup || '');
+  if (!markup) return Promise.reject(new Error('empty svg'));
+  const dataUrl = MA && MA.svgMarkupToDataUrl
+    ? MA.svgMarkupToDataUrl(markup)
+    : 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(markup);
+  const s = (typeof scale === 'number' && scale > 0) ? scale : 2;
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = Math.max(1, Math.ceil((img.naturalWidth || img.width || 1) * s));
+        const h = Math.max(1, Math.ceil((img.naturalHeight || img.height || 1) * s));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject(new Error('no canvas')); return; }
+        // Opaque background so paste targets don't get a transparent PNG.
+        ctx.fillStyle = mermaidIsDark() ? '#1a0e0e' : '#f8f8fa';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        if (canvas.toBlob) {
+          canvas.toBlob((blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('toBlob failed'));
+          }, 'image/png');
+        } else {
+          reject(new Error('toBlob unsupported'));
+        }
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.onerror = () => reject(new Error('svg image load failed'));
+    img.src = dataUrl;
+  });
+}
+async function copyMermaidSource(src) {
+  const text = String(src || '');
+  const caps = mermaidClipboardCaps();
+  if (caps.writeText && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    return { ok: true, mode: 'text' };
+  }
+  // Legacy fallback (still user-gesture).
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand && document.execCommand('copy');
+  document.body.removeChild(ta);
+  if (!ok) throw new Error('clipboard text write failed');
+  return { ok: true, mode: 'text-legacy' };
+}
+async function copyMermaidImage(src, svgMarkup) {
+  const MA = window.MermaidActions;
+  const caps = mermaidClipboardCaps();
+  const pngBlob = await svgToPngBlob(svgMarkup);
+  const plan = MA && MA.clipboardWritePlan
+    ? MA.clipboardWritePlan({ mermaidSrc: src, pngBlob, caps, wantMulti: true })
+    : { mode: caps.multiType ? 'multi' : (caps.write ? 'image' : 'text'), text: src };
+
+  if (plan.mode === 'multi' && window.ClipboardItem && navigator.clipboard.write) {
+    // Multi-MIME: image/png + text/plain so paste targets pick what they support.
+    const item = new ClipboardItem({
+      'image/png': pngBlob,
+      'text/plain': new Blob([String(src || '')], { type: 'text/plain' }),
+    });
+    await navigator.clipboard.write([item]);
+    return { ok: true, mode: 'multi' };
+  }
+  if ((plan.mode === 'image' || plan.mode === 'multi') && window.ClipboardItem && navigator.clipboard.write) {
+    const item = new ClipboardItem({ 'image/png': pngBlob });
+    await navigator.clipboard.write([item]);
+    return { ok: true, mode: 'image' };
+  }
+  // No image clipboard — fall back to source so the gesture still does something useful.
+  await copyMermaidSource(src);
+  return { ok: true, mode: 'text-fallback', reason: plan.reason || 'image clipboard unavailable' };
+}
+function flashMermaidStatus(wrap, msg) {
+  if (!wrap) return;
+  let el = wrap.querySelector('.mermaid-action-status');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'mermaid-action-status';
+    el.style.cssText = 'font-size:11px;color:var(--text-muted);margin-top:4px;text-align:right;';
+    wrap.appendChild(el);
+  }
+  el.textContent = msg;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 2200);
+}
+async function handleMermaidAction(action, wrap) {
+  const src = (wrap && wrap.dataset.mermaidSrc) || '';
+  const svgMarkup = svgMarkupFromWrap(wrap);
+  try {
+    if (action === 'open') {
+      // Primary: durable panel distinct from chat scroll; auto-pin as last graph (🎯T83).
+      openMermaidPanel(src, svgMarkup, { title: 'Chat diagram', pin: true });
+      flashMermaidStatus(wrap, 'Opened in panel');
+      return;
+    }
+    if (action === 'copy-source') {
+      await copyMermaidSource(src);
+      flashMermaidStatus(wrap, 'Source copied');
+      return;
+    }
+    if (action === 'copy-image') {
+      const r = await copyMermaidImage(src, svgMarkup);
+      if (r.mode === 'multi') flashMermaidStatus(wrap, 'Image + source copied');
+      else if (r.mode === 'image') flashMermaidStatus(wrap, 'Image copied');
+      else flashMermaidStatus(wrap, 'Source copied (image clipboard unavailable)');
+      return;
+    }
+  } catch (err) {
+    flashMermaidStatus(wrap, 'Copy failed: ' + (err && err.message ? err.message : 'error'));
+  }
+}
+function wireMermaidPanelChrome() {
+  const closeBtn = document.getElementById('mvp-close');
+  const popBtn = document.getElementById('mvp-popout');
+  const loadBtn = document.getElementById('mvp-load-last');
+  const pasteBtn = document.getElementById('mvp-paste-btn');
+  const renderBtn = document.getElementById('mvp-render');
+  const pinBtn = document.getElementById('mvp-pin');
+  const openVizBtn = document.getElementById('open-viz-btn');
+  if (closeBtn) closeBtn.addEventListener('click', () => closeMermaidPanel());
+  if (popBtn) {
+    popBtn.addEventListener('click', () => {
+      const st = _mermaidPanelState || { src: '', svgMarkup: '' };
+      openMermaidWindow(st.src, st.svgMarkup);
+    });
+  }
+  if (loadBtn) loadBtn.addEventListener('click', () => loadLastMermaidGraph());
+  if (pasteBtn) pasteBtn.addEventListener('click', () => pasteMermaidIntoPanel());
+  if (renderBtn) renderBtn.addEventListener('click', () => { renderPastedMermaid(); });
+  if (pinBtn) pinBtn.addEventListener('click', () => pinMermaidPanelState('Pinned as last graph'));
+  if (openVizBtn) openVizBtn.addEventListener('click', () => openVizFromChrome());
+}
+wireMermaidPanelChrome();
+// Expose for hermetic smoke (🎯T83 / T83.1).
+window.openMermaidPanel = openMermaidPanel;
+window.closeMermaidPanel = closeMermaidPanel;
+window.openMermaidWindow = openMermaidWindow;
+window.openVizFromChrome = openVizFromChrome;
+window.loadLastMermaidGraph = loadLastMermaidGraph;
+window.renderMermaidSourceInPanel = renderMermaidSourceInPanel;
+window.pinMermaidPanelState = pinMermaidPanelState;
+window.copyMermaidSource = copyMermaidSource;
+window.copyMermaidImage = copyMermaidImage;
+window.svgToPngBlob = svgToPngBlob;
+window.handleMermaidAction = handleMermaidAction;
 function renderMermaidIn(container) {
   if (!container || !ensureMermaid()) return;
   container.querySelectorAll('code.language-mermaid').forEach(code => {
@@ -850,6 +1737,7 @@ function renderMermaidIn(container) {
       const wrap = document.createElement('div');
       wrap.className = 'mermaid-diagram';
       wrap.innerHTML = svg;
+      attachMermaidToolbar(wrap, src);
       if (host.parentNode) host.replaceWith(wrap);
       scrollDownThrottled(); // async SVG height growth (🎯T30.2 / 🎯T59)
     }).catch(() => {
@@ -859,9 +1747,17 @@ function renderMermaidIn(container) {
     });
   });
 }
+// 🎯T145: normalize smushed ``` fences before marked so prose:```lang
+// never fuses the opening fence onto the preceding sentence.
+function parseAssistantMarkdown(text) {
+  const raw = (typeof MarkdownNormalize !== 'undefined')
+    ? MarkdownNormalize.ensureFenceNewlines(text)
+    : text;
+  return marked.parse(raw == null ? '' : raw);
+}
 function paintBody(d, role, t) {
   if (role === 'jevons') {
-    d._body.innerHTML = marked.parse(t);
+    d._body.innerHTML = parseAssistantMarkdown(t);
     if (!d._streamRaw) {
       renderMermaidIn(d._body);   // sealed content only
       highlightCodeIn(d._body);   // 🎯T74
@@ -879,7 +1775,17 @@ function maybeCloseTargetAside(text) {
   if (typeof AttentionThreads === 'undefined' || !attentionState) return;
   const id = AttentionThreads.detectTargetFiled(text);
   if (!id) return;
+  const closedId = (AttentionThreads.stack(attentionState) || []).find(function (th) {
+    return th.purpose === 'file-target' && th.status === 'open';
+  });
   attentionState = AttentionThreads.closeTargetAside(attentionState);
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision('dismiss', {
+      threadId: closedId && closedId.id,
+      draft: id, // filed target id (short)
+      corr: pageCorr,
+    }));
+  }
   persistAttention();
   if (typeof renderAttention === 'function') renderAttention();
 }
@@ -1050,20 +1956,29 @@ function refreshLatestExpansion() {
   if (heightMayHaveChanged) scheduleVirtualize();
 }
 
-// ── Infinite scroll for older history (🎯T57) ─────────────────────────
+// ── Progressive full-history hydrate (🎯T119; uses 🎯T57 /api/history) ─
 // /ws/chat replays only recent turns; oldestIndex is the journal line the
-// visible window starts at. A zero-height top sentinel drives an
-// IntersectionObserver: as the user scrolls near the top, older windows
-// auto-page in from the durable log via /api/history, prepended with the
-// scroll position preserved (no button).
+// recent window starts at. T119: remaining history is progressively fetched
+// into client memory + shells without requiring the owner to scroll for
+// *data*. Top sentinel is optional residual (IntersectionObserver can still
+// help if progressive lag); it is not a data-cap policy.
+// Shells for older pages are lazy (unmeasured) until near-viewport materialize.
 let oldestIndex = 0;
 let loadingEarlier = false;
+let progressiveHistoryRunning = false;
 let historySentinel = null;
 let historyObserver = null;
 let historyLoadingEl = null;
 
-function setupInfiniteScroll() {
-  if (oldestIndex <= 0) { teardownInfiniteScroll(); return; }
+function startProgressiveHistoryLoad() {
+  if (oldestIndex <= 0) { teardownHistorySentinel(); return; }
+  // Optional sentinel while pages remain (does not gate progressive fetch).
+  setupHistorySentinel();
+  progressiveLoadRemainingHistory();
+}
+
+function setupHistorySentinel() {
+  if (oldestIndex <= 0) { teardownHistorySentinel(); return; }
   if (!historySentinel) {
     historySentinel = document.createElement('div');
     historySentinel.className = 'history-sentinel';
@@ -1071,17 +1986,49 @@ function setupInfiniteScroll() {
   }
   if (msgs.firstChild !== historySentinel) msgs.insertBefore(historySentinel, msgs.firstChild);
   if (!historyObserver) {
-    // rootMargin preloads a bit before the very top for a smooth feel.
     historyObserver = new IntersectionObserver((entries) => {
+      // Residual: if progressive lag and owner is near top, nudge a page.
       if (entries.some(e => e.isIntersecting)) loadEarlier();
     }, { root: msgs, rootMargin: '400px 0px 0px 0px', threshold: 0 });
     historyObserver.observe(historySentinel);
   }
 }
 
-function teardownInfiniteScroll() {
+// Back-compat name for hermetic UI tests that still call setupInfiniteScroll.
+function setupInfiniteScroll() { startProgressiveHistoryLoad(); }
+
+function teardownHistorySentinel() {
   if (historyObserver) { historyObserver.disconnect(); historyObserver = null; }
   if (historySentinel) { historySentinel.remove(); historySentinel = null; }
+}
+function teardownInfiniteScroll() { teardownHistorySentinel(); }
+
+async function progressiveLoadRemainingHistory() {
+  if (progressiveHistoryRunning) return;
+  progressiveHistoryRunning = true;
+  try {
+    while (oldestIndex > 0) {
+      const before = oldestIndex;
+      await loadEarlier();
+      // Stall guard: if a page did not advance, stop to avoid tight loop.
+      if (oldestIndex >= before) break;
+      // Yield so recent-first viewport can paint between pages.
+      await new Promise(function (r) { requestAnimationFrame(r); });
+    }
+  } finally {
+    progressiveHistoryRunning = false;
+    // 🎯T120.4: hydrate finished (or stalled at residual oldestIndex).
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision(
+        oldestIndex <= 0 ? 'hydrate_done' : 'hydrate_error',
+        {
+          oldestIndex: oldestIndex,
+          err: oldestIndex > 0 ? 'stall: oldestIndex did not advance' : undefined,
+          corr: pageCorr,
+        }
+      ));
+    }
+  }
 }
 
 async function loadEarlier() {
@@ -1093,24 +2040,46 @@ async function loadEarlier() {
   try {
     const data = await fetch('/api/history?end=' + before + '&limit=200').then(r => r.json());
     const prevH = msgs.scrollHeight, prevTop = msgs.scrollTop;
-    const { frag, nodes } = renderFrames(data.lines || []);
+    // Lazy shells: full chunk data on the node; no paint until materialize.
+    const lines = data.lines || [];
+    const { frag, nodes } = renderFrames(lines, { lazy: true });
     const anchor = historySentinel ? historySentinel.nextSibling : msgs.firstChild;
     msgs.insertBefore(frag, anchor);
-    layoutMsgList(nodes);   // height-ratio collapse needs connected nodes
+    layoutMsgList(nodes);   // no-op for unmeasured lazy shells
     oldestIndex = (data.start != null) ? data.start : 0;
     // Content added ABOVE the viewport — shift scrollTop by the height
-    // gained so the position doesn't jump, and the sentinel leaves view
-    // so we don't instantly re-trigger. Mode unchanged (not a user leave).
+    // gained so the position doesn't jump. Mode unchanged (not a user leave).
     msgs.scrollTop = prevTop + (msgs.scrollHeight - prevH);
     noteScrollMetrics();
+    // Materialize only shells that entered the anticipation band.
+    scheduleVirtualize();
+    // 🎯T120.4: one info log per history page (bounded; not per-frame).
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_page', {
+        before: before,
+        after: oldestIndex,
+        lines: lines.length,
+        corr: pageCorr,
+      }));
+    }
+    // 🎯T21: progressive hydrate may reveal older turns used in context window.
+    refreshWisprContext();
   } catch (e) {
     console.error('load earlier failed', e);
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('warn', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_error', {
+        before: before,
+        oldestIndex: oldestIndex,
+        err: e && e.message ? e.message : String(e || 'unknown'),
+        corr: pageCorr,
+      }));
+    }
   } finally {
     endScrollBookkeeping();
   }
   showHistoryLoading(false);
   loadingEarlier = false;
-  if (oldestIndex <= 0) teardownInfiniteScroll();
+  if (oldestIndex <= 0) teardownHistorySentinel();
 }
 
 // Out-of-flow loading overlay (anchored to #chat-pane) so it doesn't
@@ -1130,13 +2099,30 @@ function showHistoryLoading(on) {
 }
 
 // renderFrames builds .msg nodes from raw wire frames into a fragment
-// (no #messages insert, no scroll) for prepend. Consecutive assistant
-// text frames coalesce into one bubble, mirroring the live path.
+// (no #messages insert, no scroll) for prepend. Whole chunks only (🎯T119):
+// consecutive assistant text frames coalesce into one bubble via
+// VirtualList.coalesceTranscriptFrames. opts.lazy → unmeasured shells.
 // Returns { frag, nodes } so the caller can layoutMsgList after attach.
-function renderFrames(lines) {
+function renderFrames(lines, opts) {
+  const lazy = !!(opts && opts.lazy);
   const frag = document.createDocumentFragment();
   const nodes = [];
-  let pending = null;   // { el, raw }
+  const chunks = (typeof VirtualList !== 'undefined' && VirtualList.coalesceTranscriptFrames)
+    ? VirtualList.coalesceTranscriptFrames(lines)
+    : null;
+  if (chunks) {
+    for (const c of chunks) {
+      if (typeof VirtualList !== 'undefined' && VirtualList.isWholeChunk && !VirtualList.isWholeChunk(c)) {
+        continue;
+      }
+      const el = buildMsg(c.role, c.text, c.timestamp, { lazy: lazy });
+      nodes.push(el);
+      frag.appendChild(el);
+    }
+    return { frag, nodes };
+  }
+  // Fallback if VirtualList missing (should not happen in product).
+  let pending = null;
   for (const line of lines) {
     let m;
     try { m = (typeof line === 'string') ? JSON.parse(line) : line; } catch { continue; }
@@ -1145,7 +2131,7 @@ function renderFrames(lines) {
       const c = m.message && m.message.content;
       if (typeof c === 'string' && c) {
         pending = null;
-        const el = buildMsg('user', c, ts);
+        const el = buildMsg('user', c, ts, { lazy: lazy });
         nodes.push(el);
         frag.appendChild(el);
       }
@@ -1156,17 +2142,15 @@ function renderFrames(lines) {
         if (pending) {
           pending.raw += txt;
           pending.el._layoutText = pending.raw;
-          // Detached: provisional paint only; layoutMsg after attach.
-          paintBody(pending.el, 'jevons', pending.raw);
+          if (!lazy) paintBody(pending.el, 'jevons', pending.raw);
         } else {
-          const el = buildMsg('jevons', txt, ts);
+          const el = buildMsg('jevons', txt, ts, { lazy: lazy });
           pending = { el, raw: txt };
           nodes.push(el);
           frag.appendChild(el);
         }
       }
     }
-    // tool_result / system frames are omitted from the older view.
   }
   return { frag, nodes };
 }
@@ -1219,18 +2203,44 @@ function addWorkerMsg(msg) {
 }
 
 // Agent tree
+let lastFleetAgents = []; // for 🎯T124 auto-select on new aside
+// Declared early: updateComposerPlaceholder / renderAttention / refreshAgents
+// touch this before the terminal block further down. A late `let` left it in
+// the TDZ, threw on boot (T136 path), skipped applyTheme + connect → dark
+// FOUC stuck + empty transcript.
+let selectedAgent = null;
 function refreshAgents() {
   fetch('/api/agents').then(r=>r.json()).then(agents => {
     agentsEl.innerHTML = '';
     const byParent = {};
+    const agentsByName = {};
     agents.forEach(a => {
       const p = a.parent || '';
       (byParent[p] = byParent[p] || []).push(a);
+      if (a && a.name) agentsByName[a.name] = a;
     });
-    renderTree(byParent, '', agentsEl);
+    // 🎯T124: new purpose=aside → auto-select and show transcript pane.
+    if (typeof AgentTranscript !== 'undefined') {
+      const auto = AgentTranscript.pickAutoSelect(lastFleetAgents, agents, selectedAgent);
+      if (auto && auto !== selectedAgent) {
+        selectedAgent = auto;
+      }
+    }
+    lastFleetAgents = Array.isArray(agents) ? agents.slice() : [];
+    renderTree(byParent, '', agentsEl, agentsByName);
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
-  }).catch(()=>{});
+    if (selectedAgent) {
+      loadAgentTranscript(selectedAgent, { quiet: true });
+    }
+  }).catch((err)=>{
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('warn', DecisionLog.decisionMsg('fleet'), DecisionLog.formatFleetDecision('refresh_error', {
+        err: err && err.message ? err.message : String(err || 'unknown'),
+        corr: pageCorr,
+      }));
+    }
+  });
 }
 function updateFleetProgress(agents) {
   if (!Array.isArray(agents)) return;
@@ -1245,77 +2255,120 @@ function updateFleetProgress(agents) {
     updateWorkingProgress(base ? base + ' · ' + fleet : fleet);
   }
 }
-function renderTree(byParent, parent, container) {
+function renderTree(byParent, parent, container, agentsByName) {
   // 🎯T68: sibling order is deliberate — name-sorted under each parent,
   // independent of Go map iteration or poll order of the parent group.
+  agentsByName = agentsByName || {};
   const children = (byParent[parent] || []).slice().sort((a, b) =>
     String(a.name || '').localeCompare(String(b.name || '')));
   children.forEach(a => {
+    // 🎯T115/T118: overseer/aside omit path; workers prefer progress secondary
+    // when workdir matches parent; path stays for roots/POs/distinct workdir.
+    const parentAgent = parent ? agentsByName[parent] : null;
+    const hasChildren = !!(byParent[a.name] && byParent[a.name].length);
+    const row = (typeof FleetRow !== 'undefined')
+      ? FleetRow.fleetRowModel(a, {
+          parentWorkdir: parentAgent ? (parentAgent.workdir || '') : '',
+          hasChildren: hasChildren,
+        })
+      : { title: a.name || '', dirHtml: formatAgentDir(a.workdir || ''), omitPath: false, isAside: false, secondaryHtml: '', secondaryKind: 'path' };
     const node = document.createElement('div');
-    node.className = 'agent-node' + (a.name === selectedAgent ? ' selected' : '');
+    node.className = 'agent-node'
+      + (a.name === selectedAgent ? ' selected' : '')
+      + (row.isAside ? ' agent-aside' : '');
     node.dataset.agent = a.name;
     node.dataset.parent = parent || '';
-    node.innerHTML = '<span class="agent-dot '+a.status+'"></span>'
-      + '<span class="agent-name">'+escHtml(a.name)+'</span>'
-      + '<span class="agent-dir">'+formatAgentDir(a.workdir || '')+'</span>';
+    if (row.isAside) node.dataset.purpose = 'aside';
+    if (row.secondaryKind) node.dataset.secondary = row.secondaryKind;
+    let html = '<span class="agent-dot '+escHtml(a.status || '')+'"></span>'
+      + '<span class="agent-name">'+escHtml(row.title)+'</span>';
+    // Secondary line: path (T84) or progress/status (T118). Aside has none.
+    const secHtml = row.secondaryHtml || (row.showPath ? row.dirHtml : '');
+    const secKind = row.secondaryKind || (secHtml ? 'path' : '');
+    if (secHtml && secKind) {
+      const cls = secKind === 'path' ? 'agent-dir' : ('agent-dir agent-' + secKind);
+      html += '<span class="'+cls+'">'+secHtml+'</span>';
+    }
+    node.innerHTML = html;
     node.onclick = () => selectAgent(a.name);
     container.appendChild(node);
     if (byParent[a.name] && byParent[a.name].length) {
       const sub = document.createElement('div');
       sub.className = 'agent-children';
       container.appendChild(sub);
-      renderTree(byParent, a.name, sub);
+      renderTree(byParent, a.name, sub, agentsByName);
     }
   });
 }
-// 🎯T84: compact workdir for RHS; github.com paths get an inline GitHub icon
-// instead of a bare ~ prefix.
+// 🎯T84 / 🎯T115: path chrome lives in fleet_row.js (window.FleetRow).
 function shortDir(d) {
-  const s = String(d || '');
-  const gh = /(?:^|\/)(?:Users\/[^/]+\/)?work\/github\.com\/(.+)$/.exec(s)
-    || /github\.com\/(.+)$/.exec(s);
-  if (gh) {
-    return { html: true, text: gh[1], github: true };
-  }
-  const home = s.replace(/^\/Users\/[^/]+/, '~');
-  return { html: false, text: home };
+  return (typeof FleetRow !== 'undefined') ? FleetRow.shortDir(d) : { html: false, text: String(d || '') };
 }
 function formatAgentDir(d) {
-  const info = shortDir(d);
-  if (info.github) {
-    // Inline octocat-ish mark (simple path icon via SVG).
-    const icon = '<svg class="gh-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
-    return icon + escHtml(info.text);
-  }
-  return escHtml(info.text);
+  return (typeof FleetRow !== 'undefined') ? FleetRow.formatAgentDir(d) : escHtml(String(d || ''));
 }
 // 🎯T82: primary refresh is agents_changed push; slow poll is reconnect fallback only.
 setInterval(refreshAgents, 30000);
 refreshAgents();
 
-// Live token-burn ticker — the "what is burning right now" glance,
-// polled on the same cadence. Goes amber/red when a runaway signal trips.
+// 🎯T8.2: jwork workers panel — poll + SSE lifecycle stream.
+const workersEl = document.getElementById('workers');
+const workersLiveEl = document.getElementById('workers-live');
+function refreshWorkers() {
+  if (!workersEl) return;
+  fetch('/api/workers').then(r => r.json()).then(list => {
+    if (!Array.isArray(list)) return;
+    const running = list.filter(w => w.status === 'running').length;
+    const done = list.length - running;
+    if (workersLiveEl) {
+      workersLiveEl.textContent = list.length
+        ? (running + ' active · ' + done + ' done')
+        : 'none yet';
+    }
+    workersEl.innerHTML = '';
+    list.slice(0, 40).forEach(w => {
+      const row = document.createElement('div');
+      row.className = 'worker-row';
+      row.dataset.id = w.id || '';
+      const tok = (w.input_tokens || 0) + (w.output_tokens || 0);
+      const pol = w.policy_decision
+        ? (' · policy ' + w.policy_decision + (w.policy_level ? ' L' + w.policy_level : ''))
+        : '';
+      row.innerHTML =
+        '<div class="wr-head">'
+        + '<span class="wr-id">' + escHtml(w.id || '') + '</span>'
+        + '<span class="wr-status ' + escHtml(w.status || '') + '">' + escHtml(w.status || '') + '</span>'
+        + '</div>'
+        + '<div class="wr-task" title="' + escHtml(w.task || '') + '">' + escHtml(w.task || '') + '</div>'
+        // 🎯T137: no dollar reporting while budget clamp is off (SuperGrok).
+        + '<div class="wr-meta">' + tok + ' tok' + pol + '</div>'
+        + (w.outcome ? '<div class="wr-out">' + escHtml(String(w.outcome).slice(0, 160)) + '</div>' : '');
+      workersEl.appendChild(row);
+    });
+  }).catch(() => {});
+}
+function connectWorkersSSE() {
+  if (typeof EventSource === 'undefined') return;
+  try {
+    const es = new EventSource('/api/workers/events');
+    const bump = () => refreshWorkers();
+    ['worker_started', 'worker_progress', 'worker_completed', 'worker_failed', 'worker_denied'].forEach(t => {
+      es.addEventListener(t, bump);
+    });
+    es.onerror = () => { /* browser reconnects; poll remains fallback */ };
+  } catch (_) {}
+}
+setInterval(refreshWorkers, 10000);
+refreshWorkers();
+connectWorkersSSE();
+
+// Live token-burn ticker — off while budget clamp is disabled (🎯T137).
+// Re-enable with clamp when subscription-vs-API $ accounting is redesigned.
 const costEl = document.getElementById('cost-ticker');
 function refreshCost() {
-  fetch('/api/cost').then(r=>r.json()).then(c => {
-    if (!c || c.error) { costEl.style.display='none'; return; }
-    costEl.style.display='block';
-    const g = (c.global_usd_per_hour||0).toFixed(2);
-    const f = (c.fleet_usd_per_hour||0).toFixed(2);
-    const alerts = c.alerts||[];
-    const kill = alerts.some(a=>a.level==='kill');
-    const warn = alerts.length>0;
-    costEl.className = kill ? 'cost-kill' : (warn ? 'cost-warn' : '');
-    let s = `🔥 $${g}/hr global · $${f}/hr fleet`;
-    if (alerts.length) s += ` · ⚠ ${alerts.length}`;
-    costEl.textContent = s;
-    costEl.title = alerts.length
-      ? alerts.map(a=>`[${a.level}] ${a.kind}: ${a.detail}`).join('\n')
-      : 'No runaway signals';
-  }).catch(()=>{ costEl.style.display='none'; });
+  if (costEl) costEl.style.display = 'none';
 }
-setInterval(refreshCost, 3000);
-refreshCost();
+// No interval: dollar reporting disabled for now.
 
 // ── Latched stick-to-bottom (Track | Free) ────────────────────────────
 // Policy lives above the DOM. Mode is never re-derived from distance on
@@ -1341,6 +2394,7 @@ function isTracking() { return followMode === 'track'; }
 function enterTrackBottom() {
   followMode = 'track';
   _mayEnterFromGeometry = true;
+  if (typeof updateJumpFab === 'function') updateJumpFab();
 }
 function leaveTrackBottom() {
   followMode = 'free';
@@ -1348,6 +2402,7 @@ function leaveTrackBottom() {
   // If the leave already cleared that band (big scroll / jump to top),
   // allow the next arrival to re-arm without an extra round-trip.
   _mayEnterFromGeometry = distFromBottom() > ENTER_BOTTOM_EPS_PX;
+  if (typeof updateJumpFab === 'function') updateJumpFab();
 }
 function distFromBottom() {
   return msgs.scrollHeight - msgs.clientHeight - msgs.scrollTop;
@@ -1438,10 +2493,26 @@ msgs.addEventListener('scroll', () => {
   }
   noteScrollMetrics();
   scheduleVirtualize();
+  updateJumpFab();
 }, { passive: true });
 
-// 🎯T56: dematerialise off-screen message bodies (height-preserving shells).
+// 🎯T56/T119: shell+content — dematerialise off-screen bodies; size cache
+// freezes height at measured width so rematerialize does not reflow-jump.
 let _virtRaf = 0;
+let _virtIdSeq = 0;
+const virtSizeCache = (typeof VirtualList !== 'undefined' && VirtualList.createSizeCache)
+  ? VirtualList.createSizeCache()
+  : Object.create(null);
+let _virtContainerWidth = 0;
+
+function msgVirtId(el) {
+  if (!el._virtId) el._virtId = 'm' + (++_virtIdSeq);
+  return el._virtId;
+}
+function msgsContentWidth() {
+  return msgs.clientWidth || 0;
+}
+
 function scheduleVirtualize() {
   if (_virtRaf) return;
   _virtRaf = requestAnimationFrame(() => {
@@ -1484,6 +2555,7 @@ function virtualizeMessages() {
   } finally {
     endScrollBookkeeping();
     _virtualizing = false;
+    updateJumpFab();
   }
 }
 function dematerializeMsg(el) {
@@ -1492,41 +2564,148 @@ function dematerializeMsg(el) {
   if (typeof el._streamRaw === 'string') return;
   if (el._expanded && el._autoExpanded) return;
   const h = el.offsetHeight;
+  const w = msgsContentWidth();
   el._virtH = h;
   el._virtWasExpanded = !!el._expanded;
+  if (typeof VirtualList !== 'undefined' && VirtualList.recordSize) {
+    VirtualList.recordSize(virtSizeCache, msgVirtId(el), h, w);
+  }
+  el._virtSize = (h > 0 && w > 0) ? { height: h, width: w } : el._virtSize;
+  el._shellState = (typeof VirtualList !== 'undefined')
+    ? VirtualList.SHELL_DEMATERIALIZED
+    : 'dematerialized';
   el.classList.add('virt-shell');
-  el.style.minHeight = h + 'px';
+  el.style.minHeight = (h > 0 ? h : (el._virtSize && el._virtSize.height) || 72) + 'px';
   // Clear heavy body; keep shell + timestamp + expand toggle for scroll math.
   if (el._body) el._body.innerHTML = '';
   // Do not remove _expandBtn — rematerialise repaints body; toggle stays.
 }
 function rematerializeMsg(el) {
   if (!el) return;
+  const cached = el._virtSize || (
+    typeof VirtualList !== 'undefined' && VirtualList.getSize
+      ? VirtualList.getSize(virtSizeCache, msgVirtId(el))
+      : null
+  );
+  const w = msgsContentWidth();
+  const cacheOk = cached && typeof VirtualList !== 'undefined' && VirtualList.sizeValidAtWidth
+    ? VirtualList.sizeValidAtWidth(cached, w)
+    : !!(cached && cached.width === w);
+  // Hold frozen height through paint so rematerialize does not jump.
+  if (cacheOk && cached.height > 0) {
+    el.style.minHeight = cached.height + 'px';
+  }
   el.classList.remove('virt-shell');
-  el.style.minHeight = '';
   // Prefer current _expanded (T77 may have collapsed while we were a shell).
   // Only restore dematerialised expanded flag when still auto-latest-ish.
   if (el._virtWasExpanded && el._expanded !== false) el._expanded = true;
   const role = el._layoutRole || (el.classList.contains('user') ? 'user' : 'jevons');
   const text = el._layoutText != null ? el._layoutText : (el._fullText || '');
   if (text != null) renderBody(el, role, text);
-  delete el._virtH;
-  delete el._virtWasExpanded;
+  el._shellState = (typeof VirtualList !== 'undefined')
+    ? VirtualList.SHELL_MATERIAL
+    : 'material';
+  // After layout, record size at current width and release minHeight lock.
+  const settle = () => {
+    if (!el.isConnected || el.classList.contains('virt-shell')) return;
+    const nh = el.offsetHeight;
+    const nw = msgsContentWidth();
+    if (nh > 0 && nw > 0) {
+      if (typeof VirtualList !== 'undefined' && VirtualList.recordSize) {
+        VirtualList.recordSize(virtSizeCache, msgVirtId(el), nh, nw);
+      }
+      el._virtSize = { height: nh, width: nw };
+    }
+    el.style.minHeight = '';
+    delete el._virtH;
+    delete el._virtWasExpanded;
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(settle);
+  } else {
+    settle();
+  }
 }
-// Expose for hermetic tests (🎯T56 / T76).
+
+// 🎯T119: width change invalidates size cache (wrap changes natural height).
+// Remeasure near-viewport first via virtualize; far shells remeasure on enter.
+function onMessagesWidthChange() {
+  if (typeof VirtualList === 'undefined') return;
+  const w = msgsContentWidth();
+  if (!w) return;
+  if (!VirtualList.shouldInvalidateSizeCache(_virtContainerWidth, w)) {
+    _virtContainerWidth = w;
+    return;
+  }
+  if (VirtualList.invalidateOnWidthChange) {
+    VirtualList.invalidateOnWidthChange(virtSizeCache, _virtContainerWidth, w);
+  }
+  _virtContainerWidth = w;
+  const children = msgs.querySelectorAll('#messages > .msg, .msg');
+  // Prefer direct children of msgs.
+  for (let i = 0; i < msgs.children.length; i++) {
+    const el = msgs.children[i];
+    if (!el.classList || !el.classList.contains('msg')) continue;
+    delete el._virtSize;
+    delete el._virtH;
+    if (el.classList.contains('virt-shell')) {
+      const est = VirtualList.estimateHeightFromText
+        ? VirtualList.estimateHeightFromText(el._layoutText || '')
+        : 72;
+      el.style.minHeight = est + 'px';
+      el._shellState = VirtualList.SHELL_UNMEASURED;
+    }
+  }
+  scheduleVirtualize();
+}
+if (typeof ResizeObserver !== 'undefined') {
+  const _msgsRO = new ResizeObserver(() => { onMessagesWidthChange(); });
+  _msgsRO.observe(msgs);
+  _virtContainerWidth = msgsContentWidth();
+}
+
+// 🎯T119 jump-to-bottom (hotkey + FAB); deliberately no jump-to-top.
+const jumpBottomBtn = document.getElementById('jump-bottom');
+function updateJumpFab() {
+  if (!jumpBottomBtn) return;
+  const show = (typeof VirtualList !== 'undefined' && VirtualList.shouldShowJumpFab)
+    ? VirtualList.shouldShowJumpFab(followMode, atBottom())
+    : (!atBottom());
+  jumpBottomBtn.hidden = !show;
+}
+function jumpToBottom() {
+  enterTrackBottom();
+  scrollDown();
+  scheduleVirtualize();
+  updateJumpFab();
+}
+if (jumpBottomBtn) {
+  jumpBottomBtn.addEventListener('click', () => { jumpToBottom(); });
+  jumpBottomBtn.addEventListener('mousedown', e => e.preventDefault());
+}
+
+// Expose for hermetic tests (🎯T56 / T76 / T119).
 window.virtualizeMessages = virtualizeMessages;
 window.dematerializeMsg = dematerializeMsg;
 window.rematerializeMsg = rematerializeMsg;
 window.scheduleVirtualize = scheduleVirtualize;
+window.jumpToBottom = jumpToBottom;
+window.updateJumpFab = updateJumpFab;
 window.renderUserText = renderUserText;
+window.startProgressiveHistoryLoad = startProgressiveHistoryLoad;
+window.setupInfiniteScroll = setupInfiniteScroll;
+window.loadEarlier = loadEarlier;
 
 // Actuator: pin only while Tracking; re-check before every pin (incl. rAF).
+// 🎯T119.1: no-op during history replay burst (suppress parade).
 function scrollDown() {
+  if (historyReplayActive) return;
+  if (typeof VirtualList !== 'undefined' && VirtualList.shouldSuppressPinDuringReplay(historyReplayActive)) return;
   if (!isTracking()) return;
   _pinningScroll = true;
   beginScrollBookkeeping();
   const pin = () => {
-    if (!isTracking()) return;
+    if (historyReplayActive || !isTracking()) return;
     msgs.scrollTop = msgs.scrollHeight;
     noteScrollMetrics();
   };
@@ -1544,9 +2723,10 @@ function scrollDown() {
 window.scrollDown = scrollDown;
 // scrollDownThrottled coalesces scroll requests to one per animation
 // frame, so a burst replay of many messages forces one layout, not one
-// per message (🎯T57).
-let _scrollRaf = 0;
+// per message (🎯T57). Still suppressed while historyReplayActive.
+// (_scrollRaf declared with historyReplayActive above.)
 function scrollDownThrottled() {
+  if (historyReplayActive) return;
   if (_scrollRaf) return;
   _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; scrollDown(); });
 }
@@ -1590,13 +2770,7 @@ function unwatchStreamBubble(el) {
 })();
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }
-function summariseInput(obj) {
-  if (typeof obj === 'string') return truncate(obj, 60);
-  const keys = Object.keys(obj);
-  if (keys.length === 0) return '';
-  const v = obj[keys[0]];
-  return typeof v === 'string' ? truncate(v, 60) : keys.join(', ');
-}
+
 
 function relTime(ms) {
   const s = Math.floor((Date.now() - ms) / 1000);
@@ -1777,6 +2951,8 @@ function clearComposerAfterQueueOrSend() {
   navFocus = { zone: 'live' };
   liveDraftBackup = '';
   autoGrow();
+  // 🎯T21: empty composer again — re-seed for next dictation (stripped on send).
+  ensureWisprSeed();
 }
 
 // opts.interrupt: true when Control+Enter (Grok-class interject).
@@ -1788,17 +2964,25 @@ function send(opts) {
     const qi = navFocus.index | 0;
     const it = sendQueueState.items[qi];
     if (it) {
-      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, input.value);
+      // Queue row text is owner draft — strip any accidental seed prefix.
+      const rowText = (typeof WisprContext !== 'undefined')
+        ? WisprContext.prepareWireText(input.value)
+        : input.value;
+      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, rowText);
       navFocus = { zone: 'live' };
       input.value = liveDraftBackup;
       liveDraftBackup = '';
       histIdx = null; histDraft = ''; setEditingHighlight(null);
       renderSendQueue();
       autoGrow();
+      ensureWisprSeed();
       return;
     }
   }
-  let t = input.value.trim();
+  // 🎯T21: strip empty-composer seed before wire; never invent grammar/`?`.
+  let t = (typeof WisprContext !== 'undefined')
+    ? WisprContext.prepareWireText(input.value).trim()
+    : input.value.trim();
   // 🎯T76: allow send with only images attached.
   if (!t && !pendingImages.length) return;
   // Prepend image markers so the overseer receives durable references.
@@ -1812,18 +2996,58 @@ function send(opts) {
       // Don't clobber side-thread body with a command-prefixed draft.
       const p = AttentionThreads.parsePrefix(t);
       if (!p.command) {
-        attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
+        // Persist seed-stripped draft only (🎯T21).
+        attentionState = AttentionThreads.updateActiveBody(attentionState, t);
       }
     }
+    const ownerDraftForLog = t;
+    const parsedCmd = AttentionThreads.parsePrefix(t);
     const r = AttentionThreads.handleComposer(attentionState, t);
     attentionState = r.state;
     persistAttention();
+    // Decision log: composer outcome (kind/command/purpose/threadId) — audit §3.2.
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatComposerDecision(r, {
+        command: parsedCmd && parsedCmd.command,
+        draft: ownerDraftForLog,
+        corr: pageCorr,
+      }));
+      // Local focus transitions from prefixes (main/pursue/park/capture/…).
+      if (r.kind === 'local' && parsedCmd && parsedCmd.command) {
+        const focusAct = parsedCmd.command === 'capture' ? 'capture'
+          : (parsedCmd.command === 'target' ? 'target' : parsedCmd.command);
+        if (focusAct === 'main' || focusAct === 'pursue' || focusAct === 'park' ||
+            focusAct === 'capture') {
+          jLog('info', DecisionLog.decisionMsg('attention'), DecisionLog.formatFocusDecision(focusAct, {
+            threadId: r.threadId,
+            draft: ownerDraftForLog,
+            corr: pageCorr,
+          }));
+        }
+      }
+    }
+    // 🎯T136: any create that yields an aside id dual-writes to fleet registry
+    // so RHS tree shows 💡 + auto-select/inspect (not top chip chrome).
+    if (r.threadId && (parsedCmd && (parsedCmd.command === 'aside' ||
+        parsedCmd.command === 'capture' || parsedCmd.command === 'target'))) {
+      const th = AttentionThreads.findThread(attentionState, r.threadId);
+      let title = th && th.title ? th.title : '';
+      if (!title && typeof AttentionThreads.titleFromBody === 'function') {
+        title = AttentionThreads.titleFromBody((th && th.body) || '');
+      }
+      ensureFleetAside(r.threadId, title || 'aside');
+    }
     if (r.kind === 'local' || r.kind === 'empty') {
       if (r.clearComposer) {
         input.value = r.composerBody != null ? r.composerBody : '';
       }
-      if (AttentionThreads.isMainFocus(attentionState)) mainDraftBackup = input.value;
+      if (AttentionThreads.isMainFocus(attentionState)) {
+        mainDraftBackup = (typeof WisprContext !== 'undefined')
+          ? WisprContext.prepareWireText(input.value)
+          : input.value;
+      }
       histIdx = null; histDraft = ''; setEditingHighlight(null);
+      ensureWisprSeed();
       autoGrow();
       renderAttention();
       return; // no wire send for local commands
@@ -1834,23 +3058,47 @@ function send(opts) {
     renderAttention();
   }
   // 🎯T99: cheap continuation routing when on main with no explicit prefix.
-  // Uses original owner draft (before image-marker rewrite is fine; route on text).
+  // 🎯T134: routeCandidates = open only — never done/archive ghosts.
+  // 🎯T135: match is suggestion only; no silent steal — NEVER pursue or
+  // rewrite `t` / wire via formatAsideWire on auto-match. Main draft stays main.
+  // ALWAYS log the route hit (T99 opacity / T120 DecisionLog).
+  let pendingRouteSuggestion = null;
   if (typeof ThreadRoute !== 'undefined' && attentionState &&
       typeof AttentionThreads !== 'undefined' && AttentionThreads.isMainFocus(attentionState)) {
-    const ownerDraft = input.value.trim();
-    const threads = (attentionState.threads || []).map(function (th) {
-      return { id: th.id, title: th.title, digest: th.body, body: th.body };
-    });
+    // Route on seed-stripped draft (🎯T21) so EMPTY_SEED never influences match.
+    const ownerDraft = t;
+    const threads = (typeof AttentionThreads.routeCandidates === 'function')
+      ? AttentionThreads.routeCandidates(attentionState)
+      : (attentionState.threads || []).filter(function (th) {
+          return th && th.status === 'open';
+        }).map(function (th) {
+          return { id: th.id, title: th.title, digest: th.body, body: th.body, status: th.status };
+        });
     const hit = ThreadRoute.route(ownerDraft || t, threads);
-    if (hit.threadId && hit.reason === 'match') {
-      attentionState = AttentionThreads.pursue(attentionState, hit.threadId);
-      persistAttention();
-      const th = AttentionThreads.findThread(attentionState, hit.threadId);
-      if (th && typeof AttentionThreads.formatAsideWire === 'function') {
-        t = AttentionThreads.formatAsideWire(th.id, th.title, t);
-      }
-      renderAttention();
+    // ALWAYS log full hit even when we do not rewrite wire (🎯T135).
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('thread_route'), DecisionLog.formatRouteDecision(hit, pageCorr));
     }
+    // 🎯T135: plan only — steal always false; suggestion for opt-in affordance.
+    if (typeof RouteSuggest !== 'undefined' && typeof RouteSuggest.planAutoRouteAction === 'function') {
+      const act = RouteSuggest.planAutoRouteAction(hit, {
+        threads: threads,
+        body: ownerDraft || t,
+      });
+      // act.steal is always false by contract; never pursue / formatAsideWire here.
+      pendingRouteSuggestion = act.suggestion;
+    } else if (hit && hit.threadId && hit.reason === 'match') {
+      const matched = AttentionThreads.findThread(attentionState, hit.threadId);
+      if (matched && matched.status === 'open') {
+        pendingRouteSuggestion = {
+          threadId: String(hit.threadId),
+          title: matched.title || '',
+          score: typeof hit.score === 'number' ? hit.score : 0,
+          body: ownerDraft || t,
+        };
+      }
+    }
+    // Intentionally NO AttentionThreads.pursue / formatAsideWire on match (🎯T135).
   }
   // 🎯T113: while busy, plain Enter enqueues; only Control+Enter interjects.
   const decision = (typeof SendQueue !== 'undefined')
@@ -1861,6 +3109,9 @@ function send(opts) {
         hasImages: pendingImages.length > 0,
       })
     : { action: workingEl && !interruptChord ? 'enqueue' : 'send', text: t, interrupt: !!(workingEl && interruptChord) };
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', DecisionLog.decisionMsg('send_queue'), DecisionLog.formatSendDecision(decision, pageCorr));
+  }
   if (decision.action === 'noop') return;
   if (decision.action === 'enqueue') {
     sendQueueState = SendQueue.enqueue(sendQueueState, decision.text);
@@ -1868,9 +3119,66 @@ function send(opts) {
     renderSendQueue();
     return;
   }
-  // Wire send (optional interrupt when busy + Control+Enter).
+  // Wire send stays on main; stash suggestion for the user-bubble affordance.
+  lastRouteSuggestion = pendingRouteSuggestion;
   clearComposerAfterQueueOrSend();
   submitWireText(decision.text, { interrupt: !!decision.interrupt });
+}
+
+// 🎯T135: attach opt-in "Continue in: «title»" under a user bubble.
+function attachRouteSwitch(msgEl, suggestion) {
+  if (!msgEl || !suggestion || typeof RouteSuggest === 'undefined') return;
+  if (!RouteSuggest.shouldShowSwitch({ reason: 'match', threadId: suggestion.threadId })) return;
+  if (msgEl.querySelector && msgEl.querySelector('.route-switch')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'route-switch';
+  btn.textContent = RouteSuggest.formatSwitchLabel(suggestion);
+  btn.title = 'Deliver this message to the suggested aside and interrupt main';
+  btn.setAttribute('aria-label', btn.textContent);
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (btn.disabled) return;
+    btn.disabled = true;
+    optInRouteSwitch(suggestion);
+  });
+  msgEl.appendChild(btn);
+}
+
+// 🎯T135 opt-in only: interrupt main + deliver body to suggested thread.
+// Default auto-match never calls this — only the owner click does.
+function optInRouteSwitch(suggestion) {
+  if (typeof RouteSuggest === 'undefined' || typeof AttentionThreads === 'undefined') return;
+  const plan = RouteSuggest.planOptInSwitch(suggestion);
+  if (!plan.ok) return;
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+    jLog('info', DecisionLog.decisionMsg('thread_route'), {
+      decision: 'opt_in_route_switch',
+      threadId: plan.deliverTo,
+      title: plan.title || '',
+      corr: pageCorr,
+    });
+  }
+  // Cancel in-flight main turn for the stolen-then-redirected prompt.
+  if (workingEl) {
+    try { transport.send('{"type":"interrupt"}'); } catch (_) {}
+  }
+  const th = attentionState
+    ? AttentionThreads.findThread(attentionState, plan.deliverTo)
+    : null;
+  const title = plan.title || (th && th.title) || '';
+  // Local chrome focus follows opt-in delivery (not silent auto-match).
+  if (attentionState && typeof AttentionThreads.pursue === 'function') {
+    attentionState = AttentionThreads.pursue(attentionState, plan.deliverTo);
+    persistAttention();
+    renderAttention();
+  }
+  const wire = (typeof AttentionThreads.formatAsideWire === 'function')
+    ? AttentionThreads.formatAsideWire(plan.deliverTo, title, plan.body)
+    : plan.body;
+  // Already interrupted above when busy.
+  submitWireText(wire, { interrupt: false });
 }
 
 // rewindAndResend performs the destructive "edit an earlier message"
@@ -1879,7 +3187,9 @@ function send(opts) {
 // process, truncate transcript at a turn boundary, --resume). Only valid
 // when a recalled message is highlighted.
 function rewindAndResend() {
-  const text = input.value.trim();
+  const text = (typeof WisprContext !== 'undefined')
+    ? WisprContext.prepareWireText(input.value).trim()
+    : input.value.trim();
   if (!text || !editingEl) return;
   const users = [...msgs.querySelectorAll('.msg.user')];
   const idx = users.indexOf(editingEl);
@@ -1890,6 +3200,7 @@ function rewindAndResend() {
   input.value = '';
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   autoGrow();
+  ensureWisprSeed();
   enterTrackBottom(); setWorking(true);
   requestAnimationFrame(() => { scrollDown(); });
 }
@@ -2082,34 +3393,97 @@ input.addEventListener('keydown', e => {
     else send({ interrupt: interrupt });
     return;
   }
+  // 🎯T133: Backspace on seed-only clears whole seed once (no period thrash).
+  if (typeof WisprContext !== 'undefined' && WisprContext.handleSeedBackspace) {
+    const act = WisprContext.handleSeedBackspace(input.value, e.key);
+    if (act && act.consume) {
+      e.preventDefault();
+      input.value = act.value;
+      try { input.selectionStart = input.selectionEnd = 0; } catch (_) {}
+      syncComposerSeedClass();
+      autoGrow();
+      return;
+    }
+  }
+  // 🎯T126: Home/End move caret in the message box (field-content policy).
+  // Explicit apply + preventDefault so macOS does not scroll the transcript
+  // and T119 jump-to-bottom never steals plain End while composer focused.
+  if (typeof ComposerKeys !== 'undefined' && ComposerKeys.selectionAfterHomeEnd) {
+    const next = ComposerKeys.selectionAfterHomeEnd(
+      e.key, input.value, input.selectionStart, input.selectionEnd, e
+    );
+    if (next) {
+      e.preventDefault();
+      e.stopPropagation();
+      input.selectionStart = next.start;
+      input.selectionEnd = next.end;
+      return;
+    }
+  }
   // Alt+Up/Down: queue follow-ups first, then request history (🎯T113/T88).
   // preventDefault overrides macOS's Option+Arrow paragraph jump.
   if (e.altKey && e.key === 'ArrowUp') { if (recallHistory(-1)) e.preventDefault(); return; }
   if (e.altKey && e.key === 'ArrowDown') { if (recallHistory(+1)) e.preventDefault(); return; }
 });
 input.addEventListener('input', () => {
+  // 🎯T21: keep seed only while effectively empty; strip once real draft exists.
+  if (typeof WisprContext !== 'undefined') {
+    const before = input.value;
+    const sel = input.selectionStart;
+    if (WisprContext.isEffectivelyEmpty(before)) {
+      const seeded = WisprContext.applySeedIfEmpty('');
+      if (before !== seeded) {
+        input.value = seeded;
+        try { input.selectionStart = input.selectionEnd = seeded.length; } catch (_) {}
+      }
+    } else if (WisprContext.hasSeedPrefix(before)) {
+      const after = WisprContext.prepareWireText(before);
+      if (after !== before) {
+        input.value = after;
+        const delta = before.length - after.length;
+        const pos = Math.max(0, (sel | 0) - delta);
+        try { input.selectionStart = input.selectionEnd = pos; } catch (_) {}
+      }
+    }
+    syncComposerSeedClass();
+  }
   autoGrow();
   // Live-edit the focused queue row as the owner types.
   if (navFocus.zone === 'queue' && typeof SendQueue !== 'undefined') {
     const it = sendQueueState.items[navFocus.index | 0];
     if (it) {
-      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, input.value);
+      const rowText = (typeof WisprContext !== 'undefined')
+        ? WisprContext.prepareWireText(input.value)
+        : input.value;
+      sendQueueState = SendQueue.updateItem(sendQueueState, it.id, rowText);
       renderSendQueue();
     }
   } else if (navFocus.zone === 'live') {
-    liveDraftBackup = input.value;
+    liveDraftBackup = (typeof WisprContext !== 'undefined')
+      ? WisprContext.prepareWireText(input.value)
+      : input.value;
   }
   // Prefix-first: do not treat typing as capture enablement. Only persist
   // body when focused on a side thread and the draft is not a command.
   if (attentionState && typeof AttentionThreads !== 'undefined') {
     if (!AttentionThreads.isMainFocus(attentionState)) {
-      const p = AttentionThreads.parsePrefix(input.value);
+      const draftForBody = (typeof WisprContext !== 'undefined')
+        ? WisprContext.prepareWireText(input.value)
+        : input.value;
+      const p = AttentionThreads.parsePrefix(draftForBody);
       if (!p.command) {
-        attentionState = AttentionThreads.updateActiveBody(attentionState, input.value);
+        attentionState = AttentionThreads.updateActiveBody(attentionState, draftForBody);
         persistAttention();
       }
     }
   }
+});
+// 🎯T21: on focus of empty composer, ensure seed + describedby are current.
+// 🎯T133: also refresh seed-only visibility class.
+input.addEventListener('focus', () => {
+  refreshWisprContext();
+  ensureWisprSeed();
+  syncComposerSeedClass();
 });
 // 🎯T76: image paste → upload → composer chip → [image: id] on send.
 // 🎯T80: bulk paste/dictation insert tidy (not keystroke mid-edit).
@@ -2201,6 +3575,9 @@ if (typeof renderAttention === 'function') renderAttention();
 // the mousedown default blocks the focus shift while still firing click.
 sendBtn.addEventListener('mousedown', e => e.preventDefault());
 
+// 🎯T21: bootstrap Wispr context region + empty seed before first dictation.
+refreshWisprContext();
+ensureWisprSeed();
 autoGrow();
 input.focus();
 connect();
@@ -2212,9 +3589,21 @@ connect();
 enterTrackBottom();
 [0, 100, 250, 500, 1000].forEach(d => setTimeout(() => {
   if (isTracking()) scrollDown();
+  // History burst may land within this window — refresh Wispr context again.
+  if (d >= 250) refreshWisprContext();
 }, d));
 
 document.addEventListener('keydown', e => {
+  // 🎯T127: plain / focuses main composer when not in an editable field.
+  // Documented in placeholder + title + input-hint. No auto-refocus.
+  if (typeof ComposerFocus !== 'undefined' && ComposerFocus.tryFocusComposer) {
+    const r = ComposerFocus.tryFocusComposer(e, input, document.activeElement);
+    if (r.didFocus) {
+      e.preventDefault();
+      ensureWisprSeed();
+      return;
+    }
+  }
   if (e.key === 'PageUp') {
     e.preventDefault();
     leaveTrackBottom();
@@ -2226,6 +3615,30 @@ document.addEventListener('keydown', e => {
     msgs.scrollBy(0, msgs.clientHeight * 0.8);
     requestAnimationFrame(() => { tryEnterFromGeometry(); });
     return;
+  }
+  // 🎯T119: jump-to-bottom (End / ⌘↓ / Ctrl+↓). No jump-to-top.
+  // 🎯T126: when main composer is focused (activeElement === input), plain
+  // End must not jump — caret policy on the input keydown owns Home/End.
+  if (typeof VirtualList !== 'undefined' && VirtualList.isJumpToBottomHotkey) {
+    const ae = document.activeElement;
+    const composerFocused = typeof ComposerKeys !== 'undefined' && ComposerKeys.isComposerFocused
+      ? ComposerKeys.isComposerFocused(ae, input)
+      : (ae === input);
+    const inTextField = ae && (typeof ComposerKeys !== 'undefined' && ComposerKeys.isComposerTextControl
+      ? ComposerKeys.isComposerTextControl(ae.tagName)
+      : (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT'));
+    const allowJump = typeof ComposerKeys !== 'undefined' && ComposerKeys.shouldAllowJumpToBottom
+      ? ComposerKeys.shouldAllowJumpToBottom(e.key, e, {
+          composerFocused: composerFocused,
+          inTextField: inTextField,
+          isJumpHotkey: VirtualList.isJumpToBottomHotkey,
+        })
+      : (!(composerFocused || inTextField) && VirtualList.isJumpToBottomHotkey(e.key, e));
+    if (allowJump) {
+      e.preventDefault();
+      jumpToBottom();
+      return;
+    }
   }
   // Esc interrupts Jevons's current turn (like the Claude Code TUI).
   if (e.key === 'Escape') {
@@ -2265,18 +3678,138 @@ const termContainer = document.getElementById('terminal-container');
 let term = null;
 let termWs = null;
 let termFit = null;
-let selectedAgent = null;
+// selectedAgent: declared with fleet tree state (above) — do not redeclare.
 
-// 🎯T73: selection only — do not open the obsolete black TMUX/detail panel.
-function selectAgent(name) {
-  if (selectedAgent === name) {
+// 🎯T124: select fleet agent/aside → RHS transcript pane (not main chat).
+// 🎯T73: do not open the obsolete black TMUX/detail panel.
+const agentInspectEl = document.getElementById('agent-inspect');
+const agentInspectName = document.getElementById('agent-inspect-name');
+const agentInspectBody = document.getElementById('agent-inspect-body');
+let agentTranscriptTimer = 0;
+
+function selectAgent(name, opts) {
+  // Resolve purpose from fleet cache when available (overseer guard).
+  let purpose = opts && opts.purpose;
+  if (!purpose && name && lastFleetAgents && lastFleetAgents.length) {
+    const row = lastFleetAgents.find(function (a) { return a && a.name === name; });
+    if (row) purpose = row.purpose;
+  }
+  // 🎯T124 residual: never open inspect for overseer root — main chat is that stream.
+  if (typeof AgentTranscript !== 'undefined' && name &&
+      !AgentTranscript.shouldOpenTranscript(name, purpose)) {
     selectedAgent = null;
     document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
+    hideAgentInspect();
     return;
   }
-  selectedAgent = name;
-  document.querySelectorAll('.agent-node').forEach(n => n.classList.toggle('selected', n.dataset.agent === name));
+  const next = (typeof AgentTranscript !== 'undefined')
+    ? AgentTranscript.nextSelection(selectedAgent, name, { purpose: purpose })
+    : (selectedAgent === name ? null : name);
+  selectedAgent = next;
+  document.querySelectorAll('.agent-node').forEach(n =>
+    n.classList.toggle('selected', !!(selectedAgent && n.dataset.agent === selectedAgent)));
+  if (typeof updateComposerPlaceholder === 'function') updateComposerPlaceholder();
+  if (!selectedAgent) {
+    hideAgentInspect();
+    return;
+  }
+  loadAgentTranscript(selectedAgent, { quiet: false });
 }
+
+function hideAgentInspect() {
+  if (agentTranscriptTimer) { clearInterval(agentTranscriptTimer); agentTranscriptTimer = 0; }
+  if (agentInspectEl) agentInspectEl.classList.remove('visible');
+  if (agentInspectBody) agentInspectBody.innerHTML = '';
+  if (agentInspectName) agentInspectName.textContent = '';
+  if (typeof updateComposerPlaceholder === 'function') updateComposerPlaceholder();
+}
+
+function renderAgentInspect(model) {
+  if (!agentInspectEl || !agentInspectBody) return;
+  agentInspectEl.classList.add('visible');
+  if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
+  if (model.error) {
+    agentInspectBody.innerHTML = '<div class="ai-err"></div><div class="ai-empty"></div>';
+    agentInspectBody.querySelector('.ai-err').textContent = model.error;
+    agentInspectBody.querySelector('.ai-empty').textContent = model.empty
+      ? 'No turns yet — agent may still be starting.'
+      : '';
+    return;
+  }
+  if (model.empty) {
+    agentInspectBody.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'ai-empty';
+    empty.textContent = 'No transcript turns yet for this agent.';
+    agentInspectBody.appendChild(empty);
+    return;
+  }
+  agentInspectBody.innerHTML = '';
+  (model.lines || []).forEach(function (line) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ai-turn ' + (line.role || 'other');
+    const role = document.createElement('div');
+    role.className = 'ai-role';
+    role.textContent = line.role === 'user' ? 'User' : (line.role === 'assistant' ? 'Assistant' : (line.role || 'msg'));
+    const text = document.createElement('div');
+    text.className = 'ai-text';
+    text.textContent = line.text || '';
+    wrap.appendChild(role);
+    wrap.appendChild(text);
+    agentInspectBody.appendChild(wrap);
+  });
+  // Stay pinned to latest while following a live agent.
+  agentInspectBody.scrollTop = agentInspectBody.scrollHeight;
+}
+
+function loadAgentTranscript(name, opts) {
+  if (!name || !agentInspectEl) return;
+  // Hard guard: never fetch/render overseer into RHS pane.
+  if (typeof AgentTranscript !== 'undefined' && !AgentTranscript.shouldOpenTranscript(name)) {
+    hideAgentInspect();
+    return;
+  }
+  const quiet = !!(opts && opts.quiet);
+  fetch('/api/agents/' + encodeURIComponent(name) + '/transcript')
+    .then(function (r) {
+      if (!r.ok) return r.json().then(function (j) {
+        throw new Error((j && j.error) || ('HTTP ' + r.status));
+      });
+      return r.json();
+    })
+    .then(function (payload) {
+      const model = (typeof AgentTranscript !== 'undefined')
+        ? AgentTranscript.paneModel(name, payload)
+        : { title: name, lines: (payload && payload.turns) || [], empty: !(payload && payload.turns && payload.turns.length), error: '' };
+      // Surface soft errors from empty session as empty, not hard fail.
+      if (payload && payload.error && model.empty) {
+        model.error = '';
+      }
+      renderAgentInspect(model);
+      document.querySelectorAll('.agent-node').forEach(n =>
+        n.classList.toggle('selected', n.dataset.agent === name));
+      // Poll while open so worker thinking streams into the pane.
+      if (!agentTranscriptTimer) {
+        agentTranscriptTimer = setInterval(function () {
+          if (selectedAgent) loadAgentTranscript(selectedAgent, { quiet: true });
+        }, 4000);
+      }
+    })
+    .catch(function (err) {
+      if (quiet) return;
+      const model = (typeof AgentTranscript !== 'undefined')
+        ? AgentTranscript.paneModel(name, null, err)
+        : { title: name, lines: [], empty: true, error: String(err && err.message || err) };
+      renderAgentInspect(model);
+    });
+}
+
+const agentInspectClose = document.getElementById('agent-inspect-close');
+if (agentInspectClose) agentInspectClose.onclick = function () { selectAgent(selectedAgent); };
+const agentInspectRefresh = document.getElementById('agent-inspect-refresh');
+if (agentInspectRefresh) agentInspectRefresh.onclick = function () {
+  if (selectedAgent) loadAgentTranscript(selectedAgent, { quiet: false });
+};
 
 function openTerminal(name) {
   closeTerminal();
@@ -2330,6 +3863,7 @@ function openTerminal(name) {
 
 function closeTerminal() {
   selectedAgent = null;
+  if (typeof hideAgentInspect === 'function') hideAgentInspect();
   if (termWs) { termWs.close(); termWs = null; }
   if (term) { term.dispose(); term = null; }
   if (termContainer._ro) { termContainer._ro.disconnect(); termContainer._ro = null; }
@@ -2635,7 +4169,7 @@ transport.onVoiceEvent = msg => {
     if (startVoice._assistantEl && startVoice._assistantBuf) {
       const el = startVoice._assistantEl;
       const timeEl = el.querySelector('.msg-time');
-      el.innerHTML = marked.parse(startVoice._assistantBuf);
+      el.innerHTML = parseAssistantMarkdown(startVoice._assistantBuf);
       if (timeEl) el.appendChild(timeEl);
     }
     startVoice._assistantEl = null;

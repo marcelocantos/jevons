@@ -101,6 +101,32 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `spawn_subagent` / worktree children that die with the parent and never
   show in the RHS fleet panel. Full doctrine: `internal/config/persona.md`
   and `agents-guide.md`.
+- **Unified fleet (🎯T114):** aside is a kind of agent (purpose field);
+  one deliver/send/push path by name for workers and asides; dual-write
+  threads into the agent registry. Docs: persona + agents-guide.
+- **Multi-slice fan-out (🎯T111.4):** PO/boss multi-slice missions
+  `jevons_agent_start` children early (with parent lineage); solo is fine
+  for single-agent tasks. Zero-children failure surfaces in agent_list.
+- **PO never implements (🎯T125):** Stratum-1 product owners are
+  **spawn-only** for Build work — no solo code/docs/oracle commits, even
+  "small" patches. They stay interruptible for overseer/owner directs;
+  workers/bosses execute. Instructional doctrine (not a hard spawn-gate)
+  unless a later target enforces it. Full text: `internal/config/persona.md`,
+  `agents-guide.md`, fleet standing brief.
+- **Overseer never parents product workers (🎯T129):** for jevons-repo
+  Build work, overseer (`jevons`) routes owner intent to **`jevons-po`**
+  and does **not** `jevons_agent_start` product workers with
+  `parent=jevons`. Sole spawn parent for product workers = **`jevons-po`**
+  (T125). Exception: PO dead/unregistered → rehydrate PO first, then PO
+  spawns. Instructional until registry enforcement. Persona + agents-guide
+  + fleet brief.
+- **Filing reflex (🎯T130):** when a real product gap, repeated failure
+  mode, or standing behavioural rule appears mid-work → **file or
+  prompt-file a bullseye target** (name + acceptance) in the **same turn**
+  — not only "standing rule" / "going forward" / "from now on" /
+  "we should always…" in chat. Ceremony: `jevons_target_file` and/or
+  bullseye MCP (`bullseye_commit` track). Related: 🎯T92 ambient RSI,
+  🎯T129 hierarchy. Residual: one-off flukes may skip filing.
 
 ## Project structure
 

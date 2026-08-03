@@ -1,0 +1,163 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+// Package upgrade is coordinator-side scaffolding for 🎯T40: restart
+// jevonsd without registry.StopAll(), persist agent handles for
+// reattach-by-session_id, and document the residual until claudia
+// offers connect-mode (agents outlive the coordinator stdio session).
+//
+// Conversation durability (session/load + agents.json) already survives
+// a normal restart. This package targets *process* durability on the
+// exit path only; it cannot reattach live ACP pipes without claudia.
+package upgrade
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// EnvUpgradeExit, when set to a truthy value ("1", "true", "yes") at the
+// moment of SIGTERM/SIGINT, treats that shutdown as an upgrade exit
+// (skip StopAll). SIGHUP always means upgrade exit.
+const EnvUpgradeExit = "JEVONS_UPGRADE_EXIT"
+
+// HandlesFileName is the snapshot written under StateDir on upgrade exit.
+const HandlesFileName = "upgrade-handles.json"
+
+// Mode is how the coordinator is leaving.
+type Mode int
+
+const (
+	// ModeNormal stops agents on exit (historical behaviour).
+	ModeNormal Mode = iota
+	// ModeUpgrade leaves agent processes alone and records handles.
+	ModeUpgrade
+)
+
+// StopAgents reports whether exit should call registry.StopAll().
+func (m Mode) StopAgents() bool {
+	return m != ModeUpgrade
+}
+
+// String is for logs.
+func (m Mode) String() string {
+	if m == ModeUpgrade {
+		return "upgrade"
+	}
+	return "normal"
+}
+
+// EnvRequestsUpgrade is true when JEVONS_UPGRADE_EXIT is truthy.
+func EnvRequestsUpgrade() bool {
+	return truthy(os.Getenv(EnvUpgradeExit))
+}
+
+func truthy(v string) bool {
+	switch v {
+	case "1", "true", "TRUE", "yes", "YES", "on", "ON":
+		return true
+	default:
+		return false
+	}
+}
+
+// Handle is one live agent at upgrade exit. SessionID is the durable
+// reattach key. PID is best-effort: claudia's Grok ACP surface does not
+// expose the child PID today, so PID is usually 0 (residual).
+type Handle struct {
+	Name      string `json:"name"`
+	SessionID string `json:"session_id"`
+	WorkDir   string `json:"workdir,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Alive     bool   `json:"alive"`
+	PID       int    `json:"pid,omitempty"`
+}
+
+// Snapshot is the on-disk upgrade handoff for the next coordinator.
+type Snapshot struct {
+	// WrittenAt is RFC3339 when the old process exited for upgrade.
+	WrittenAt string `json:"written_at"`
+	// CoordinatorPID is the exiting jevonsd PID (audit only).
+	CoordinatorPID int `json:"coordinator_pid"`
+	// Residual documents why process reattach is incomplete.
+	Residual string `json:"residual,omitempty"`
+	// Agents are live (or registered) handles at exit.
+	Agents []Handle `json:"agents"`
+}
+
+// ResidualConnectMode is the standing gap for 🎯T40 process durability.
+const ResidualConnectMode = "claudia Grok ACP is stdio-child only: closing coordinator pipes ends the agent even when StopAll is skipped; connect-mode (external process + reattach by session_id/PID) is required for process survival"
+
+// SnapshotPath returns StateDir/upgrade-handles.json.
+func SnapshotPath(stateDir string) string {
+	return filepath.Join(stateDir, HandlesFileName)
+}
+
+// BuildSnapshot assembles a handoff from registry-shaped inputs.
+// pidByName may be nil; missing PIDs stay 0 (expected residual).
+func BuildSnapshot(agents []Handle, coordinatorPID int) Snapshot {
+	return Snapshot{
+		WrittenAt:      time.Now().UTC().Format(time.RFC3339),
+		CoordinatorPID: coordinatorPID,
+		Residual:       ResidualConnectMode,
+		Agents:         agents,
+	}
+}
+
+// SaveSnapshot writes snap atomically under path (write temp + rename).
+func SaveSnapshot(path string, snap Snapshot) error {
+	if path == "" {
+		return fmt.Errorf("upgrade snapshot: empty path")
+	}
+	data, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		return fmt.Errorf("upgrade snapshot marshal: %w", err)
+	}
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("upgrade snapshot dir: %w", err)
+		}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("upgrade snapshot write: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("upgrade snapshot rename: %w", err)
+	}
+	return nil
+}
+
+// LoadSnapshot reads a previous upgrade handoff. Missing file returns
+// (nil, nil). Malformed file is a hard error (no silent reset).
+func LoadSnapshot(path string) (*Snapshot, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("upgrade snapshot read: %w", err)
+	}
+	var snap Snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, fmt.Errorf("upgrade snapshot parse %s: %w", path, err)
+	}
+	return &snap, nil
+}
+
+// SessionIDs returns non-empty session ids from a snapshot (reattach plan).
+func SessionIDs(snap *Snapshot) []string {
+	if snap == nil {
+		return nil
+	}
+	out := make([]string, 0, len(snap.Agents))
+	for _, a := range snap.Agents {
+		if a.SessionID != "" {
+			out = append(out, a.SessionID)
+		}
+	}
+	return out
+}

@@ -38,8 +38,8 @@ func (s *Server) SetScanner(scanner *discovery.Scanner) {
 
 // repoInfo aggregates all three signals for a single repo.
 type repoInfo struct {
-	orgRepo     string    // "org/repo"
-	repoPath    string    // absolute filesystem path
+	orgRepo      string // "org/repo"
+	repoPath     string // absolute filesystem path
 	lastActivity time.Time
 	sessionCount int
 	activeCount  int
@@ -78,9 +78,9 @@ func (s *Server) handleActiveWork(_ context.Context, req mcp.CallToolRequest) (*
 	}
 
 	type sessionGroup struct {
-		count      int
+		count       int
 		activeCount int
-		lastMod    time.Time
+		lastMod     time.Time
 	}
 	sessionsByPath := make(map[string]*sessionGroup) // WorkDir → group
 	for _, si := range sessions {

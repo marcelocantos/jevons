@@ -70,6 +70,12 @@ func (l Limits) LevelFor(usdPerHour float64) Level {
 // ~/.jevons/budget.json. The zero value is unusable; start from
 // DefaultBudgetConfig and override.
 type BudgetConfig struct {
+	// Disabled turns off the entire cost subsystem for this daemon:
+	// no collector, no enforcer (pause/kill/spawn-halt), no /api/cost
+	// feed. Owner 2026-08-03: SuperGrok has no marginal $; API-equivalent
+	// burn was pausing the overseer. Revisit under 🎯T137.
+	Disabled bool `json:"disabled"`
+
 	// Global covers ALL spend visible in the store, attributed or not —
 	// the incident's invisible fleet lands here.
 	Global Limits `json:"global"`

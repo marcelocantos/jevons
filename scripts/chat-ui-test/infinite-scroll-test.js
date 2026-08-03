@@ -1,14 +1,16 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic test for infinite-scroll history paging (🎯T57). Serves the
-// static web/ UI plus a canned /api/history that returns SMALL windows,
-// enables paging via a history_meta event, then scrolls to the top
-// repeatedly and asserts:
+// Hermetic test for progressive full-history hydrate (🎯T119) using the
+// 🎯T57 /api/history API. Serves the static web/ UI plus a canned
+// /api/history that returns SMALL windows, enables hydrate via a
+// history_meta event, then asserts:
 //   * no "Load earlier" button exists (paging is automatic)
-//   * a top sentinel drives the IntersectionObserver
-//   * each scroll-to-top prepends an older window (message count grows)
-//   * when the oldest end is reached, the sentinel is torn down
+//   * remaining history loads without requiring the owner to scroll
+//     for *data* (progressive background fetch)
+//   * message count grows to cover the full older range
+//   * when the oldest end is reached, the optional sentinel is torn down
+//   * jump-to-bottom FAB exists; no jump-to-top control
 //
 //   node scripts/chat-ui-test/infinite-scroll-test.js [--headed]
 
@@ -71,39 +73,43 @@ function startServer() {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => typeof window.handle === 'function' && !!window.marked, null, { timeout: 10000 });
 
-    // Seed a few visible messages, then enable paging: 20 older lines exist,
-    // the window starts at line 20 (history_meta drives setupInfiniteScroll).
+    // Seed recent messages, then enable progressive hydrate: 20 older lines
+    // exist, recent window starts at line 20.
     const init = await page.evaluate(() => {
       for (let i = 0; i < 20; i++) window.addMsg('user', 'recent ' + i);
       window.handle({ type: 'history_meta', older: 20, start: 20, total: 40 });
       return {
         button: !!document.querySelector('.load-earlier'),
-        sentinel: !!document.querySelector('.history-sentinel'),
+        jumpTop: !!document.querySelector('#jump-top, .jump-top'),
+        jumpBottom: !!document.getElementById('jump-bottom'),
         msgs: document.querySelectorAll('#messages .msg').length,
       };
     });
     if (init.button) failures.push('a "Load earlier" button exists — paging should be automatic');
-    if (!init.sentinel) failures.push('no top sentinel installed for infinite scroll');
+    if (init.jumpTop) failures.push('jump-to-top control must not exist (🎯T119)');
+    if (!init.jumpBottom) failures.push('jump-to-bottom FAB missing');
 
-    // Scroll to the top repeatedly; each should prepend an older window.
-    const counts = [init.msgs];
-    for (let i = 0; i < 5; i++) {
-      await page.evaluate(() => { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; });
-      await page.waitForTimeout(150);
-      await page.evaluate(() => { document.getElementById('messages').scrollTop = 0; });
-      await page.waitForTimeout(500);
-      counts.push(await page.evaluate(() => document.querySelectorAll('#messages .msg').length));
+    // Progressive load must grow the transcript WITHOUT scroll-to-top for data.
+    // Wait until all 40 messages are resident (20 recent + 20 older).
+    let finalCount = init.msgs;
+    for (let i = 0; i < 40; i++) {
+      await page.waitForTimeout(100);
+      finalCount = await page.evaluate(() => document.querySelectorAll('#messages .msg').length);
+      if (finalCount >= 40) break;
     }
-    if (counts[1] <= counts[0]) failures.push(`first scroll-to-top did not load older messages (counts ${JSON.stringify(counts)})`);
-    if (counts[counts.length - 1] <= counts[1]) failures.push(`later scrolls did not keep paging (counts ${JSON.stringify(counts)})`);
+    if (finalCount < 40) {
+      failures.push(`progressive load did not fetch full history without scroll (got ${finalCount}, want ≥40)`);
+    }
 
-    // After exhausting the 20 older lines, the sentinel is torn down.
     const end = await page.evaluate(() => ({
       sentinel: !!document.querySelector('.history-sentinel'),
       msgs: document.querySelectorAll('#messages .msg').length,
+      shells: document.querySelectorAll('#messages .msg.virt-shell').length,
     }));
-    if (end.msgs < 20 + 20) failures.push(`expected all 40 messages after full paging, got ${end.msgs}`);
+    if (end.msgs < 40) failures.push(`expected all 40 messages after progressive hydrate, got ${end.msgs}`);
     if (end.sentinel) failures.push('sentinel not torn down after reaching the oldest message');
+    // Windowed content: with 40 msgs in a short viewport, some should be shells.
+    // (Not a hard fail if estimates keep them all "visible" with buffer — soft.)
     if (consoleErrors.length) failures.push('console errors: ' + JSON.stringify(consoleErrors.slice(0, 3)));
   } catch (e) {
     failures.push('exception: ' + e.message);
@@ -117,5 +123,5 @@ function startServer() {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - older history auto-pages on scroll-to-top (no button); sentinel torn down at the start');
+  console.log('ok - progressive full history hydrate without scroll-for-data; no jump-to-top (🎯T119)');
 })();

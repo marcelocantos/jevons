@@ -6,11 +6,13 @@
 // worker fleet burned ~$10.9k invisibly because nothing measured spend in
 // real time and nothing could stop it automatically.
 //
-// Layer 1 (this file + store/tail/collector): every active Grok Build
-// session JSONL under ~/.grok/sessions is tailed in near-real-time —
-// not just jevons-registered workers, because the incident fleet was
-// exactly the kind of thing registration misses. Usage is priced
-// (costUSD preferred, pricing table fallback) and recorded in SQLite.
+// Layer 1 (this file + store/tail/collector): every active billable
+// transcript under the configured sessions root is tailed in
+// near-real-time — not just jevons-registered workers, because the
+// incident fleet was exactly the kind of thing registration misses.
+// Grok Build: updates.jsonl turn_completed (costUsdTicks preferred).
+// Claude Code: <session>.jsonl assistant lines (costUSD preferred).
+// Pricing-table fallback only when the provider omits a cost figure.
 //
 // Layer 2 (monitor): rolling burn-rates per worker/fleet/global, a
 // one-query "what is burning right now" view, and runaway signals.
