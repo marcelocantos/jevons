@@ -75,10 +75,23 @@ Hermetic: `scripts/chat-ui-test/collapse-test.js` (will need update under clip m
 
 ## Remaining open (implementation detail)
 
-1. Exact collapsed max-height (px vs × line-height vs ratio of viewport).
-2. Gradient height / opacity / whether tab sits on top of gradient.
+1. ~~Exact collapsed max-height (px vs × line-height vs ratio of viewport).~~
+   **Settled 2026-08-03 (impl):** `COLLAPSED_MAX_HEIGHT = '14rem'` (CSS
+   `--collapsed-max-height`); tall when `fullH > collapsedH × 1.5`.
+2. ~~Gradient height / opacity / whether tab sits on top of gradient.~~
+   **Settled 2026-08-03 (impl):** `.msg-clip-fade` ~2.75rem linear fade into
+   chat/`user-bg`; chevron tab below body (after fade in DOM).
 3. Motion: instant height vs short CSS transition (must not break stick-to-bottom).
-4. Whether user bubbles get the same border-only treatment or keep filled chrome.
+   *Still open — current impl is instant clip toggle.*
+4. ~~Whether user bubbles get the same border-only treatment or keep filled chrome.~~
+   **Settled:** user keeps filled chrome; assistant is border-only.
+
+### 2026-08-03 — implementation note (jv-t106-clip)
+
+Shipped clip model in `web/index.html`: full `paintBody` always; collapse =
+`.msg-clipped` + body `max-height`/`overflow:hidden`; gradient +
+`.msg-expand-tab` chevron only. Deleted `previewOf` / PREVIEW_LINES re-parse
+path. Hermetic: `scripts/chat-ui-test/collapse-test.js`.
 
 ## Non-goals (unless discussion says otherwise)
 
