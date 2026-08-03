@@ -141,6 +141,17 @@
     return s.indexOf(EMPTY_SEED) === 0;
   }
 
+  /** Length of leading EMPTY_SEED prefix (0 if none). For caret bounds (🎯T149). */
+  function seedPrefixLen(value) {
+    let s = value == null ? '' : String(value);
+    let n = 0;
+    while (s.indexOf(EMPTY_SEED) === 0) {
+      n += EMPTY_SEED.length;
+      s = s.slice(EMPTY_SEED.length);
+    }
+    return n;
+  }
+
   /** Strip empty-composer seed only; never strip real user punctuation. */
   function stripSeed(value) {
     let s = value == null ? '' : String(value);
@@ -226,6 +237,7 @@
     buildContextText: buildContextText,
     describedByIds: describedByIds,
     hasSeedPrefix: hasSeedPrefix,
+    seedPrefixLen: seedPrefixLen,
     stripSeed: stripSeed,
     prepareWireText: prepareWireText,
     isEffectivelyEmpty: isEffectivelyEmpty,

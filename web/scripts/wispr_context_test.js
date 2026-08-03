@@ -120,6 +120,14 @@ test('stripSeed is prefix-only (no grammar fixer)', function () {
   assert.strictEqual(WC.prepareWireText(raw), raw);
 });
 
+test('seedPrefixLen reports leading EMPTY_SEED length (🎯T149 caret bounds)', function () {
+  assert.strictEqual(WC.seedPrefixLen(''), 0);
+  assert.strictEqual(WC.seedPrefixLen('plain'), 0);
+  assert.strictEqual(WC.seedPrefixLen(WC.EMPTY_SEED), WC.EMPTY_SEED.length);
+  assert.strictEqual(WC.seedPrefixLen(WC.EMPTY_SEED + 'hello'), WC.EMPTY_SEED.length);
+  assert.strictEqual(WC.seedPrefixLen('x' + WC.EMPTY_SEED), 0);
+});
+
 // ── seed-only visibility class (🎯T133) ──────────────────────────
 
 test('isSeedOnly / needsSeedOnlyClass: seed-only vs real draft', function () {

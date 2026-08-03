@@ -3411,12 +3411,27 @@ input.addEventListener('keydown', e => {
       return;
     }
   }
-  // 🎯T126: Home/End move caret in the message box (field-content policy).
-  // Explicit apply + preventDefault so macOS does not scroll the transcript
-  // and T119 jump-to-bottom never steals plain End while composer focused.
+  // 🎯T126 / 🎯T149: Home/End (and Meta|Ctrl+ArrowLeft/Right) move caret in
+  // the message box on *effective* content bounds — seed-aware so EMPTY_SEED
+  // does not trap Home/End in invisible ZWSP/period. Explicit apply +
+  // preventDefault so macOS does not scroll the transcript and T119
+  // jump-to-bottom never steals plain End while composer focused.
   if (typeof ComposerKeys !== 'undefined' && ComposerKeys.selectionAfterHomeEnd) {
+    const seedOpts = (typeof WisprContext !== 'undefined') ? {
+      seedPrefixLen: typeof WisprContext.seedPrefixLen === 'function'
+        ? WisprContext.seedPrefixLen(input.value)
+        : (WisprContext.hasSeedPrefix && WisprContext.hasSeedPrefix(input.value)
+          ? String(WisprContext.EMPTY_SEED || '').length
+          : 0),
+      effectiveLength: typeof WisprContext.stripSeed === 'function'
+        ? WisprContext.stripSeed(input.value).length
+        : undefined,
+      isSeedOnly: typeof WisprContext.isSeedOnly === 'function'
+        ? WisprContext.isSeedOnly(input.value)
+        : undefined,
+    } : {};
     const next = ComposerKeys.selectionAfterHomeEnd(
-      e.key, input.value, input.selectionStart, input.selectionEnd, e
+      e.key, input.value, input.selectionStart, input.selectionEnd, e, seedOpts
     );
     if (next) {
       e.preventDefault();
