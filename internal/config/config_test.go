@@ -198,7 +198,35 @@ func TestDefaultPersonaOverseerNeverParentsWorkers(t *testing.T) {
 	}
 }
 
-// 🎯T78/T104/T125/T129/T130: agents-guide is the PO/worker product surface that inherits doctrine.
+// 🎯T155: new unattended frontier leaves get a worker immediately (parent=jevons-po).
+func TestDefaultPersonaUnattendedFrontierAutoSpawn(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Unattended frontier auto-spawn",
+		"T155",
+		"parent=jevons-po",
+		"same operational cycle",
+		"kick off",
+		"non-design frontier",
+		"immediately",
+		"needs-owner",
+		"design-discussion",
+		"parked-for-design",
+		"T112",
+		"T67",
+		"T29-class",
+		"instructional",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T155 marker %q", want)
+		}
+	}
+}
+
+// 🎯T78/T104/T125/T129/T130/T155: agents-guide is the PO/worker product surface that inherits doctrine.
 func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	// agents-guide.md is repo-root product docs consumed by PO/workers.
 	path := filepath.Join("..", "..", "agents-guide.md")
@@ -241,6 +269,16 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"jevons_target_file",
 		"bullseye_commit",
 		"T92",
+		"Unattended frontier auto-spawn",
+		"T155",
+		"parent=jevons-po",
+		"same operational cycle",
+		"needs-owner",
+		"design-discussion",
+		"parked-for-design",
+		"T112",
+		"T67",
+		"T29-class",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)
@@ -248,7 +286,7 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	}
 }
 
-// 🎯T125/T129/T130: product AGENTS.md (and CLAUDE thin import) carry fleet doctrine.
+// 🎯T125/T129/T130/T155: product AGENTS.md (and CLAUDE thin import) carry fleet doctrine.
 func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 	path := filepath.Join("..", "..", "AGENTS.md")
 	b, err := os.ReadFile(path)
@@ -279,6 +317,15 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"bullseye_commit",
 		"T92",
 		"same turn",
+		"Unattended frontier auto-spawn",
+		"T155",
+		"parent=jevons-po",
+		"needs-owner",
+		"design-discussion",
+		"parked-for-design",
+		"T112",
+		"T67",
+		"T29-class",
 	} {
 		if !strings.Contains(a, want) {
 			t.Errorf("AGENTS.md missing doctrine marker %q", want)
@@ -291,7 +338,7 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		t.Fatalf("CLAUDE.md: %v", err)
 	}
 	if !strings.Contains(string(cb), "AGENTS.md") {
-		t.Error("CLAUDE.md must import AGENTS.md so T125/T129/T130 doctrine is on the instruction surface")
+		t.Error("CLAUDE.md must import AGENTS.md so T125/T129/T130/T155 doctrine is on the instruction surface")
 	}
 }
 

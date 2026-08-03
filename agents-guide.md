@@ -124,6 +124,20 @@ exploration. Single-agent tasks remain fine. Zero children after planning
 on a multi-slice brief is a failure mode (`jevons_agent_list` fan-out
 check). Prefer agents over threads for named long-lived workers.
 
+### Unattended frontier auto-spawn (🎯T155)
+
+When a **new frontier leaf** is filed that is **not** design-gated /
+needs-owner / design-discussion / parked-for-design, **`jevons-po` spawns a
+fleet worker** under **`parent=jevons-po`** in the **same operational cycle**
+— do not wait for the owner to request a frontier review.
+
+- **Standing rule:** kick off all non-design frontier work **continuously**;
+  new unattended leaves get a worker **immediately**.
+- Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
+- **Skip:** design-gated (T112 / T67 / T29-class) and blocked targets stay
+  unspawned until unblocked or owner opens design.
+- **Residual:** instructional; no daemon auto-spawn unless later enforced.
+
 ### PO never implements (🎯T125)
 
 **Stratum-1 product owners never implement themselves** — including small

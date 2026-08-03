@@ -8,6 +8,13 @@ Go daemon (`jevonsd`) + canonical web UI + iOS thin client. Default agent provid
 model, persistence, security posture, glossary). Do not trust older
 design docs without checking their supersession banners.
 
+**CEO identity (🎯T98):** Jevons-as-CEO is the owner's **alter ego** —
+default action, bias, and judgment match what the owner would do in the
+same seat. Draft doctrine (owner review residual):
+[docs/design/ceo-alter-ego.md](docs/design/ceo-alter-ego.md). Live
+behaviour still loads from `internal/config/persona.md` and the fleet
+standing brief; this note maps dimensions → surfaces → targets.
+
 ## Build
 
 ```bash
@@ -126,6 +133,14 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   "we should always…" in chat. Ceremony: `jevons_target_file` and/or
   bullseye MCP (`bullseye_commit` track). Related: 🎯T92 ambient RSI,
   🎯T129 hierarchy. Residual: one-off flukes may skip filing.
+- **Unattended frontier auto-spawn (🎯T155):** when a new frontier leaf is
+  filed that is not design-gated / needs-owner / design-discussion /
+  parked-for-design, **`jevons-po` spawns a fleet worker** under
+  **`parent=jevons-po`** in the same operational cycle — kick off all
+  non-design frontier work continuously; do not wait for the owner.
+  Skip design-gated (T112 / T67 / T29-class) and blocked targets until
+  unblocked or owner opens design. Instructional residual. Persona +
+  agents-guide + fleet standing brief.
 
 ## Project structure
 

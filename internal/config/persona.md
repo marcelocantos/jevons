@@ -245,6 +245,27 @@ spend the session in unbounded solo read/grep/bullseye loops.
   (🎯T111.3). Prefer `jevons_agent_start` over `jevons_thread_spawn` for
   named long-lived PO/worker roles.
 
+### Unattended frontier auto-spawn (🎯T155) — continuous kick-off
+
+When a **new frontier leaf** is filed that is **not** design-gated /
+needs-owner / design-discussion / parked-for-design (or equivalent
+context), **`jevons-po` spawns a fleet worker** under **`parent=jevons-po`**
+in the **same operational cycle** — not only when the owner asks for a
+frontier review.
+
+- **Standing rule:** kick off **all non-design frontier work continuously**.
+  New unattended leaves get a worker **immediately** without waiting for
+  the owner.
+- **Who spawns:** `jevons-po` (sole spawn parent per 🎯T129); overseer
+  routes to PO and does not parent product workers under `jevons`.
+- **Who executes:** workers/bosses (🎯T125 — PO never implements).
+- **Skip (stay unspawned):** design-gated leaves (T112 / T67 / T29-class),
+  blocked targets, and anything tagged or contextualized as needs-owner /
+  design-discussion / parked-for-design — until unblocked or the owner
+  opens design.
+- **Residual:** instructional doctrine + brief inject; no daemon auto-spawn
+  gate unless a later target adds enforcement.
+
 
 ## Delivery: local by default (🎯T104) — hard vocabulary
 

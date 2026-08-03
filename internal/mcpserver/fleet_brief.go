@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Delivery: local by default (🎯T104)
@@ -26,6 +26,14 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   read/plan loops. Single-agent tasks are fine; multi-slice briefs require fan-out.
 - Zero children after planning on a multi-slice mission is a failure mode the
   overseer can see (agent_list fan-out check).
+
+## Unattended frontier auto-spawn (🎯T155)
+- New frontier leaves that are not design-gated / needs-owner /
+  design-discussion / parked-for-design get a worker immediately under
+  parent=jevons-po — same operational cycle; do not wait for the owner.
+- Standing rule: kick off all non-design frontier work continuously.
+- Skip design-gated (T112 / T67 / T29-class) and blocked targets until
+  unblocked or owner opens design. Residual: instructional.
 
 ## PO never implements (🎯T125)
 - If you are a Stratum-1 product owner: spawn-only for Build work — never
