@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -34,9 +34,8 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 
 ## Achieve reports need activated daily path (🎯T194)
 - Daemon/API product (HTTP API, compiled server, non-static) is **not
-  achieved on hermetics alone**. Hermetic unit green is necessary not
-  sufficient.
-- Not achieved until **detached** `scripts/restart-daily-jevonsd.sh`
+  achieved on hermetics alone**. Hermetic unit green is necessary not sufficient.
+- Not achieved until **detached** scripts/restart-daily-jevonsd.sh
   succeeds (or proven zero-downtime upgrade) **and** a **live probe** of
   the product path is green (e.g. curl non-404 on the daily port).
 - Finish reports for daemon/API work must cite **daily-path evidence**
@@ -65,8 +64,8 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 
 ## Worker names: literal dots for hierarchical ids (🎯T197)
 - When a fleet worker name encodes a hierarchical target id, keep **literal dots** — never digit-squash.
-- Correct: `jv-t27.2-config` for 🎯T27.2. Wrong: `jv-t272-config` (ambiguous with T272).
-- Flat ids unchanged: `jv-t159-seal` stays flat (no sub-target segment to preserve).
+- Correct: jv-t27.2-config for 🎯T27.2. Wrong: jv-t272-config (ambiguous with T272).
+- Flat ids unchanged: jv-t159-seal stays flat (no sub-target segment to preserve).
 - Names are free-form; this policy applies only when encoding a target id.
 
 ## Multi-slice fan-out (🎯T111.4)
