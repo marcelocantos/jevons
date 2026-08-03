@@ -108,8 +108,13 @@ func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Reg
 	enforcer := cost.NewEnforcer(&cost.EnforcerArgs{
 		Snapshot: monitor.Snapshot,
 		Config:   config,
-		Actions:  &fleetActions{registry: registry, killswitch: &cost.TmuxKillSwitch{Socket: sock}},
-		Notify:   notify,
+		Actions: &fleetActions{
+			registry:   registry,
+			killswitch: &cost.TmuxKillSwitch{Socket: sock},
+			// 🎯T139: never stop the overseer on fleet pause/StopAll.
+			protect: append([]string{}, cfg.ProtectedWorkers...),
+		},
+		Notify: notify,
 	})
 
 	go collector.Run(ctx, cost.DefaultScanInterval, cost.DefaultPollInterval)
@@ -142,27 +147,60 @@ func fleetSessionSet(sock string) map[string]bool {
 type fleetActions struct {
 	registry   *claudia.Registry
 	killswitch *cost.TmuxKillSwitch
+	// protect: agent names never stopped by fleet pause / PauseWorker (🎯T139).
+	// KillWorker still may remove non-overseer workers; protect blocks Stop.
+	protect []string
+}
+
+func (a *fleetActions) isProtected(id string) bool {
+	for _, p := range a.protect {
+		if p == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *fleetActions) PauseWorker(id string) error {
+	if a.isProtected(id) {
+		slog.Info("budget: skip pause of protected worker", "name", id)
+		return nil
+	}
 	a.registry.Stop(id) // resumable — the thread and session persist
 	return nil
 }
 
 func (a *fleetActions) KillWorker(id string) error {
+	if a.isProtected(id) {
+		// Never deregister the overseer; pause path already no-ops protect.
+		slog.Info("budget: skip kill of protected worker", "name", id)
+		return nil
+	}
 	a.registry.Stop(id)
 	return a.registry.Remove(id)
 }
 
 func (a *fleetActions) StopFleet() error {
-	a.registry.StopAll()
+	// 🎯T139: StopAll would grey the overseer and undeliver chat. Stop
+	// everyone else; leave protected names (overseer) running.
+	protect := map[string]bool{}
+	for _, p := range a.protect {
+		protect[p] = true
+	}
+	for _, d := range a.registry.List() {
+		if protect[d.Name] {
+			continue
+		}
+		a.registry.Stop(d.Name)
+	}
 	return nil
 }
 
 func (a *fleetActions) KillSwitch() error {
 	// Reap the launchd-detached fleet server first (reaches orphans the
-	// registry has lost), then stop what the registry still tracks.
+	// registry has lost), then stop what the registry still tracks —
+	// still skipping protected overseer (🎯T139).
 	err := a.killswitch.Kill()
-	a.registry.StopAll()
+	_ = a.StopFleet()
 	return err
 }

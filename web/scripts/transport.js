@@ -62,10 +62,22 @@ class WebSocketTransport {
     this._heartbeatTimer = null;     // periodic ping send
     this._watchdogTimer = null;      // fires if no traffic in time
     this._installedGlobalListeners = false;
+    // 🎯T140: generation increments on every _open so stale sockets/handlers
+    // can be ignored (multi-connect races).
+    this.generation = 0;
+    // 🎯T138: when true, use long reconnect backoff (overseer degraded).
+    this._degradedHold = false;
+  }
+
+  setDegradedHold(on) {
+    this._degradedHold = !!on;
+    if (!on) this._reconnectAttempt = 0;
   }
 
   // Exponential backoff schedule (ms). Starts tight, caps at 5s.
   static _BACKOFF = [50, 100, 200, 400, 800, 1600, 3200, 5000];
+  // 🎯T138: longer backoff while overseer is down (avoid thrash).
+  static _DEGRADED_BACKOFF = [2000, 5000, 10000, 15000, 30000];
   // Send a ping every N ms; close socket if no traffic for N ms.
   static _HEARTBEAT_MS = 15000;
   static _WATCHDOG_MS = 25000;
@@ -86,6 +98,21 @@ class WebSocketTransport {
     const h = location.hostname === 'localhost'
       ? '127.0.0.1:' + location.port : location.host;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    // 🎯T140: supersede any previous socket so dual handlers cannot both paint.
+    const prev = this.ws;
+    const prevGen = this.generation;
+    this.generation += 1;
+    const gen = this.generation;
+    if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
+      try { this.onTransportReplaced?.(prevGen, gen); } catch (_) { /* ignore */ }
+      try {
+        prev.onopen = null;
+        prev.onclose = null;
+        prev.onerror = null;
+        prev.onmessage = null;
+        prev.close();
+      } catch (_) { /* ignore */ }
+    }
     let ws;
     try {
       ws = new WebSocket(proto + '//' + h + '/ws/chat');
@@ -95,18 +122,24 @@ class WebSocketTransport {
     }
     this.ws = ws;
     ws.onopen = () => {
+      if (gen !== this.generation) return; // superseded
       this._reconnectAttempt = 0;
       this._startHeartbeat();
       this._kickWatchdog();
-      this.onOpen?.();
+      this.onOpen?.({ generation: gen });
     };
     ws.onclose = () => {
+      if (gen !== this.generation) return; // superseded; do not reconnect on stale
       this._stopHeartbeat();
-      this.onClose?.();
+      this.onClose?.({ generation: gen });
       if (this._desiredOpen) this._scheduleReconnect();
     };
     ws.onerror = () => { /* onclose will follow */ };
     ws.onmessage = e => {
+      if (gen !== this.generation) {
+        try { this.onStaleFrame?.(gen, this.generation); } catch (_) { /* ignore */ }
+        return;
+      }
       this._kickWatchdog();
       // Filter out heartbeat pong frames before user code sees them.
       if (typeof e.data === 'string' && e.data === '{"type":"pong"}') return;
@@ -125,7 +158,9 @@ class WebSocketTransport {
       location.reload();
       return;
     }
-    const delays = WebSocketTransport._BACKOFF;
+    const delays = this._degradedHold
+      ? WebSocketTransport._DEGRADED_BACKOFF
+      : WebSocketTransport._BACKOFF;
     const delay = delays[Math.min(this._reconnectAttempt, delays.length - 1)];
     this._reconnectAttempt++;
     this._reconnectTimer = setTimeout(() => {

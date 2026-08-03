@@ -59,18 +59,31 @@ func TestChatReplaysFromJevonsLogWithDeadOverseer(t *testing.T) {
 	}
 	defer conn.CloseNow()
 
+	// 🎯T140: skip conn hello (+ optional trailing history_meta after replay).
 	var got []string
-	for range lines {
+	for len(got) < len(lines) {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
 			t.Fatalf("read after %d lines: %v (history lost)", len(got), err)
 		}
-		got = append(got, string(data))
-	}
-	for i, want := range lines {
-		if got[i] != want {
-			t.Fatalf("replayed line %d = %q, want %q", i, got[i], want)
+		raw := string(data)
+		if strings.Contains(raw, `"type":"conn"`) || strings.Contains(raw, `"type": "conn"`) {
+			continue
 		}
+		if strings.Contains(raw, `"type":"history_meta"`) || strings.Contains(raw, `"type": "history_meta"`) {
+			continue
+		}
+		got = append(got, raw)
+	}
+	if len(got) != len(lines) {
+		t.Fatalf("got %d frames, want %d", len(got), len(lines))
+	}
+	// 🎯T142: sealed replay may re-encode JSON key order; check content.
+	if !strings.Contains(got[0], "ship the fix") {
+		t.Fatalf("user frame: %s", got[0])
+	}
+	if !strings.Contains(got[1], "Shipped.") || !strings.Contains(got[1], "end_turn") {
+		t.Fatalf("assistant sealed frame: %s", got[1])
 	}
 }
 

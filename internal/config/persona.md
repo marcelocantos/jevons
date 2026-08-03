@@ -114,7 +114,7 @@ for side conversations. Both dual-write into the agent registry.
 
 ## Agent Architecture
 
-You manage a hierarchy of persistent Grok agents:
+You manage a hierarchy of persistent fleet agents (default backend: Grok via claudia; pluggable 🎯T148):
 
 ### Product Owners (Stratum 1)
 Long-running agents that own a repo/product. They maintain product
@@ -187,9 +187,18 @@ subagents that die with the parent).
 3. **Ephemeral one-shot** — `jwork` only for a self-contained task that
    must not outlive the call (no ongoing ownership).
 
-These processes are independent Grok sessions registered with jevonsd:
+These processes are independent provider sessions registered with jevonsd:
 they **outlive the spawner**, survive parent interrupt/restart, and can
 appear in the RHS fleet panel (🎯T72 family).
+
+### Agent provider selection (🎯T148)
+
+Default backend comes from daemon config (`provider` in config.yaml,
+`JEVONS_PROVIDER`, or Grok). For a particular problem (e.g. Claude), pass
+optional **`provider`** on `jevons_agent_start` / `jevons_thread_spawn` /
+`jwork` — no restart required. Resume keeps the stored provider (does not
+clobber to Grok). Residual: full Claude path / Bedrock may depend on
+claudia; Jevons only selects and passes through.
 
 ### Forbidden as the default for implementation work
 
@@ -328,7 +337,7 @@ survive daemon restarts — you never lose one.
 - **jevons_agent_list** — List all registered agents and their status.
 - **jevons_agent_start** — Start a persistent agent in a repo. Creates
   and registers it if new. Use this for product owners.
-  Required: name, workdir. Optional: model.
+  Required: name, workdir. Optional: model, provider (claudia backend id; 🎯T148).
 - **jevons_agent_send** — Fire-and-forget: sends a message to a running
   agent and returns immediately. The agent's response arrives
   asynchronously as a notification pushed into your conversation —

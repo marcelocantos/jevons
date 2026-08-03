@@ -258,6 +258,9 @@ type SpawnArgs struct {
 	WorkDir     string // required
 	Description string
 	Model       string
+	// Provider is the claudia backend id for the thread's process (🎯T148).
+	// Empty → fleet default (config/env/grok).
+	Provider string
 	// Parent is the fleet lineage parent recorded on the agent registry
 	// when Launch mints the process (🎯T111.3). Empty means unknown.
 	Parent string
@@ -296,6 +299,7 @@ func (b *Butler) Spawn(args SpawnArgs) (*thread.Thread, error) {
 		WorkDir:     args.WorkDir,
 		Description: args.Description,
 		Model:       args.Model,
+		Provider:    strings.TrimSpace(args.Provider),
 		Parent:      strings.TrimSpace(args.Parent),
 		Purpose:     purpose,
 		CreatedAt:   b.now(),

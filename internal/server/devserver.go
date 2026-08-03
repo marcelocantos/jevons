@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/fsnotify/fsnotify"
@@ -17,14 +18,19 @@ import (
 	"github.com/marcelocantos/jevons/web"
 )
 
+// devReloadDebounce coalesces fsnotify bursts (multi-file agent edits)
+// into one client reload (🎯T144).
+const devReloadDebounce = 400 * time.Millisecond
+
 // DevServer serves static files from a directory and notifies
 // connected clients to reload when files change.
 type DevServer struct {
 	dir     string
 	handler http.Handler
 
-	mu        sync.Mutex
-	reloadChs []chan struct{}
+	mu            sync.Mutex
+	reloadChs     []chan struct{}
+	reloadTimer   *time.Timer // 🎯T144 debounce
 }
 
 // NewDevServer creates a dev server for the given directory.
@@ -92,7 +98,12 @@ func noCache(w http.ResponseWriter) {
 
 // Watch starts watching the directory for changes and triggers reloads.
 // Blocks until the watcher is closed.
+// Set JEVONS_DEV_RELOAD=0 to disable reload notifications (still serves disk).
 func (ds *DevServer) Watch() error {
+	if os.Getenv("JEVONS_DEV_RELOAD") == "0" {
+		slog.Info("dev server reload disabled", "env", "JEVONS_DEV_RELOAD=0", "dir", ds.dir)
+		return nil
+	}
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -102,7 +113,7 @@ func (ds *DevServer) Watch() error {
 	if err := watcher.Add(ds.dir); err != nil {
 		return err
 	}
-	slog.Info("dev server watching", "dir", ds.dir)
+	slog.Info("dev server watching", "dir", ds.dir, "debounce", devReloadDebounce.String())
 
 	for {
 		select {
@@ -111,8 +122,8 @@ func (ds *DevServer) Watch() error {
 				return nil
 			}
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-				slog.Info("file changed, triggering reload", "file", event.Name)
-				ds.triggerReload()
+				slog.Info("file changed, scheduling reload", "file", event.Name)
+				ds.scheduleReload()
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -121,6 +132,18 @@ func (ds *DevServer) Watch() error {
 			slog.Error("watcher error", "err", err)
 		}
 	}
+}
+
+// scheduleReload debounces triggerReload (🎯T144).
+func (ds *DevServer) scheduleReload() {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+	if ds.reloadTimer != nil {
+		ds.reloadTimer.Stop()
+	}
+	ds.reloadTimer = time.AfterFunc(devReloadDebounce, func() {
+		ds.triggerReload()
+	})
 }
 
 func (ds *DevServer) handleReload(w http.ResponseWriter, r *http.Request) {

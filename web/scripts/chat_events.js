@@ -40,6 +40,41 @@
     return assistantTextBlocks(m).length > 0;
   }
 
+  // ── Join-time fence repair (🎯T147) ─────────────────────────────
+  // ACP can emit separate assistant segments: prose ending without NL,
+  // then (after tool_result) a segment that starts with ```. Naive
+  // `+=` / join('') smushes into `snippet.```cpp`. T145 ensureFenceNewlines
+  // is display-only; this is definitive repair at every segment edge.
+
+  /**
+   * Coalesce two assistant text segments at a join boundary.
+   * If prev does not end with newline and next starts with a markdown
+   * fence opener (```), insert a blank line before append.
+   *
+   * @param {string|null|undefined} prev
+   * @param {string|null|undefined} next
+   * @returns {string}
+   */
+  function coalesceAssistantText(prev, next) {
+    prev = String(prev == null ? '' : prev);
+    next = String(next == null ? '' : next);
+    if (!prev) return next;
+    if (!next) return prev;
+    if (!/[\n\r]$/.test(prev) && /^```/.test(next)) return prev + '\n\n' + next;
+    return prev + next;
+  }
+
+  /**
+   * Join an array of assistant text parts with segment-edge fence repair.
+   * Prefer this over `.join('')` for multi-block assistant content.
+   *
+   * @param {Array<string|null|undefined>|null|undefined} parts
+   * @returns {string}
+   */
+  function joinAssistantTexts(parts) {
+    return (parts || []).reduce((acc, p) => coalesceAssistantText(acc, p), '');
+  }
+
   // shouldClearWorking: only end-of-turn signals. Mid-stream text chunks
   // must NOT clear — clearing early drops workingEl and used to force a
   // new bubble per token (the "Hello / . / What / do / you / need / ?"
@@ -86,7 +121,10 @@
       const blocks = assistantTextBlocks(m);
       for (const b of blocks) {
         if (state.openStream >= 0) {
-          state.assistantBubbles[state.openStream] += b.text;
+          state.assistantBubbles[state.openStream] = coalesceAssistantText(
+            state.assistantBubbles[state.openStream],
+            b.text,
+          );
         } else {
           state.assistantBubbles.push(b.text);
           state.openStream = state.assistantBubbles.length - 1;
@@ -125,6 +163,8 @@
     isTerminalStop,
     assistantTextBlocks,
     hasAssistantText,
+    coalesceAssistantText,
+    joinAssistantTexts,
     shouldClearWorking,
     workingLifecycle,
     createTurnState,

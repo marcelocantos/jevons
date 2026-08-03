@@ -405,6 +405,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
 #theme-toggle button:hover { color: var(--text-dim); }
 #theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
+/* 🎯T138: stable degraded cockpit banner (overseer down / budget pause) */
+#degraded-banner {
+  display: none; flex-shrink: 0; padding: 8px 20px; font-size: 12px; font-weight: 500;
+  background: var(--amber); color: #1a1a12; border-bottom: 1px solid var(--border);
+}
+#degraded-banner.visible { display: block; }
 #agents { flex: 1; overflow-y: auto; padding: 8px 12px; min-height: 60px; max-height: 45%; }
 /* 🎯T124: fleet transcript inspect — bottom of RHS; never main chat */
 #agent-inspect {
@@ -485,6 +491,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 </head>
 <body>
 <div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span><span id="voice-status"><span class="voice-dot"></span><span id="voice-status-text">listening</span></span><div id="theme-toggle"><button data-t="light" title="Light">&#9788;</button><button data-t="system" title="System" class="active">&#9680;</button><button data-t="dark" title="Dark">&#9790;</button></div></div>
+<div id="degraded-banner" role="status" aria-live="polite"></div>
 <div id="main">
   <div id="chat-pane">
     <div id="messages"></div>
@@ -556,6 +563,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/jlog.js"></script>
 <script src="scripts/decision_log.js"></script>
 <script src="scripts/transport.js"></script>
+<script src="scripts/chat_reconnect.js"></script>
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
 <script src="scripts/fleet_row.js"></script>
@@ -572,6 +580,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/tool_summary.js"></script>
 <script src="scripts/mermaid_actions.js"></script>
 <script src="scripts/markdown_normalize.js"></script>
+<script src="scripts/smd.js"></script>
+<script src="scripts/streaming_markdown.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
@@ -816,10 +826,84 @@ Object.defineProperty(window, 'historyReplayActive', {
   set(v) { historyReplayActive = !!v; },
 });
 
+// 🎯T140: client connect spans — join server conn_id + pageCorr + ms.
+let chatConnId = null;
+let chatConnOpenedAt = 0;
+let chatConnFirstFrameAt = 0;
+let chatConnHistoryMetaAt = 0;
+let chatConnUiReadyLogged = false;
+// 🎯T143: soft reconnect — keep DOM, suppress history firehose until meta.
+let chatEverReady = false;
+let softReconnectActive = false;
+// 🎯T138: degraded cockpit (overseer down) — banner + long reconnect backoff.
+const degradedBannerEl = document.getElementById('degraded-banner');
+function setDegraded(on, reason) {
+  if (transport && typeof transport.setDegradedHold === 'function') {
+    transport.setDegradedHold(!!on);
+  }
+  if (!degradedBannerEl) return;
+  if (on) {
+    degradedBannerEl.textContent = reason
+      ? ('Cockpit degraded: ' + reason + ' — history stays; send blocked until overseer is back.')
+      : 'Cockpit degraded: overseer is not running.';
+    degradedBannerEl.classList.add('visible');
+  } else {
+    degradedBannerEl.textContent = '';
+    degradedBannerEl.classList.remove('visible');
+  }
+}
+function chatConnMs() {
+  return chatConnOpenedAt ? Math.round(performance.now() - chatConnOpenedAt) : 0;
+}
+function logChatConn(decision, extra) {
+  if (typeof jLog !== 'function' || typeof DecisionLog === 'undefined' || !DecisionLog.formatConnectDecision) return;
+  const o = Object.assign({
+    conn_id: chatConnId || undefined,
+    ms: chatConnMs(),
+    generation: transport && transport.generation,
+    corr: pageCorr,
+  }, extra || {});
+  jLog('info', DecisionLog.decisionMsg('chat_conn'), DecisionLog.formatConnectDecision(decision, o));
+}
+
 // Wire transport callbacks.
 transport.onOpen = () => {
   const v = input.value;
-  dot.className = 'dot on'; sTxt.textContent = 'connected'; sendBtn.disabled = false;
+  chatConnId = null;
+  chatConnOpenedAt = performance.now();
+  chatConnFirstFrameAt = 0;
+  chatConnHistoryMetaAt = 0;
+  chatConnUiReadyLogged = false;
+  const msgCount = msgs ? msgs.querySelectorAll('.msg').length : 0;
+  softReconnectActive = (typeof ChatReconnect !== 'undefined' && ChatReconnect.shouldSoftReconnect)
+    ? ChatReconnect.shouldSoftReconnect({ msgCount: msgCount, everReady: chatEverReady })
+    : false;
+
+  if (softReconnectActive) {
+    // 🎯T143: keep transcript DOM; cancel progressive hydrate thrash only.
+    progressiveHistoryRunning = false;
+    loadingEarlier = false;
+    dot.className = 'dot on';
+    sTxt.textContent = 'reconnecting';
+    sendBtn.disabled = false;
+    input.value = v;
+    logChatConn('soft_reconnect', { ms: 0, msgCount: msgCount });
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('reconnect', {
+        corr: pageCorr,
+        conn_id: chatConnId,
+        ms: 0,
+      }));
+    }
+    return;
+  }
+
+  // Hard reconnect / first paint — wipe and full replay.
+  softReconnectActive = false;
+  // Until history_meta, show connecting — full "connected" after replay span ends.
+  dot.className = 'dot on';
+  sTxt.textContent = 'connecting';
+  sendBtn.disabled = false;
   msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
   msgHistory = []; histIdx = null; histDraft = ''; editingEl = null;
   oldestIndex = 0; loadingEarlier = false; progressiveHistoryRunning = false;
@@ -838,12 +922,38 @@ transport.onOpen = () => {
       corr: pageCorr,
     }));
   }
+  logChatConn('open', { ms: 0, soft: false });
 };
 transport.onClose = () => {
   // Transport handles reconnect (backoff + version check) internally.
-  dot.className = 'dot off'; sTxt.textContent = 'reconnecting'; sendBtn.disabled = true;
+  logChatConn('close', { soft: !!softReconnectActive });
+  chatConnId = null;
+  chatConnOpenedAt = 0;
+  softReconnectActive = false;
+  // Keep transcript if we had been ready (T143); only status chrome updates.
+  dot.className = 'dot off';
+  sTxt.textContent = 'reconnecting';
+  sendBtn.disabled = true;
   // Clear chrome only — do not auto-drain the send queue while offline (🎯T113).
   setWorking(false, undefined, { skipDrain: true });
+};
+transport.onTransportReplaced = function (prevGen, gen) {
+  logChatConn('transport_replaced', {
+    generation: gen,
+    prev_conn_id: chatConnId || undefined,
+    ms: chatConnMs(),
+  });
+};
+transport.onStaleFrame = function (frameGen, currentGen) {
+  // Bounded: only log occasionally would be nicer; once per gen is enough noise-wise
+  // if we only fire from superseded sockets briefly.
+  if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined' && DecisionLog.formatConnectDecision) {
+    jLog('warn', DecisionLog.decisionMsg('chat_conn'), DecisionLog.formatConnectDecision('stale_frame', {
+      generation: currentGen,
+      corr: pageCorr,
+      ms: chatConnMs(),
+    }));
+  }
 };
 transport.onMessage = m => handle(m);
 transport.onError = msg => console.error('transport error:', msg);
@@ -853,28 +963,102 @@ function connect() { transport.connect(); }
 function handle(m) {
   const typ = m.type;
 
+  // 🎯T140: server conn hello — attach conn_id before history firehose.
+  if (typ === 'conn') {
+    chatConnId = m.conn_id || m.connId || null;
+    logChatConn(softReconnectActive ? 'soft_reconnect' : 'open', {
+      concurrent: m.concurrent,
+      ms: chatConnMs(),
+      soft: !!softReconnectActive,
+    });
+    return;
+  }
+
+  // 🎯T138: overseer-down / degraded — banner; do not thrash reconnect.
+  if (typ === 'error') {
+    const errText = m.error || m.message || '';
+    if (typeof ChatReconnect !== 'undefined' && ChatReconnect.isOverseerDownError &&
+        ChatReconnect.isOverseerDownError(errText)) {
+      setDegraded(true, errText);
+      logChatConn('degraded', { ms: chatConnMs() });
+    }
+    // Fall through so existing error UI (if any) still runs.
+  }
+  if (typ === 'status' && m.text && /overseer is back/i.test(String(m.text))) {
+    setDegraded(false);
+  }
+
+  // 🎯T143: soft reconnect — drop history firehose; keep control frames.
+  if (softReconnectActive && typeof ChatReconnect !== 'undefined' &&
+      ChatReconnect.shouldSuppressFrame && ChatReconnect.shouldSuppressFrame(true, m)) {
+    return;
+  }
+
+  // 🎯T140: first non-hello frame (start of history firehose or live).
+  if (!chatConnFirstFrameAt && chatConnOpenedAt) {
+    chatConnFirstFrameAt = performance.now();
+    logChatConn('first_frame', {
+      ms: chatConnMs(),
+      type: typ || (m.message && m.message.role) || 'unknown',
+      soft: !!softReconnectActive,
+    });
+  }
+
   // Recent turns were replayed via WS (🎯T57). Remaining durable history is
   // progressively fetched into client memory (🎯T119) — full data resident;
   // infinite scroll is not a data throttle. Optional top sentinel remains
   // while pages are outstanding (does not gate the progressive fetch).
   if (typ === 'history_meta') {
+    const wasSoft = softReconnectActive;
+    softReconnectActive = false;
     oldestIndex = m.start || 0;
+    chatConnHistoryMetaAt = performance.now();
     // End chronological WS replay burst — one pin, then optional progressive hydrate.
-    endHistoryReplayAndPin('history_meta');
+    if (!wasSoft) endHistoryReplayAndPin('history_meta');
+    else if (historyReplayActive) endHistoryReplayAndPin('history_meta');
+    sTxt.textContent = 'connected';
+    sendBtn.disabled = false;
+    chatEverReady = true;
+    logChatConn('history_meta', {
+      ms: chatConnMs(),
+      frames: m.replay_frames,
+      bytes: m.replay_bytes,
+      replay_ms: m.replay_ms,
+      concurrent: m.concurrent,
+      soft: wasSoft,
+    });
+    // Soft reconnect: DOM already has transcript — skip full progressive re-hydrate.
+    if (wasSoft) {
+      if (!chatConnUiReadyLogged) {
+        chatConnUiReadyLogged = true;
+        logChatConn('ui_ready', { ms: chatConnMs(), soft: true });
+      }
+      return;
+    }
     // 🎯T120.4: progressive hydrate start (corr-linked).
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_start', {
         oldestIndex: oldestIndex,
         older: m.older || 0,
         corr: pageCorr,
+        conn_id: chatConnId,
+        ms: chatConnMs(),
       }));
     }
     if ((m.older || 0) > 0) startProgressiveHistoryLoad();
-    else if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_done', {
-        oldestIndex: 0,
-        corr: pageCorr,
-      }));
+    else {
+      if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+        jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_done', {
+          oldestIndex: 0,
+          corr: pageCorr,
+          conn_id: chatConnId,
+          ms: chatConnMs(),
+        }));
+      }
+      if (!chatConnUiReadyLogged) {
+        chatConnUiReadyLogged = true;
+        logChatConn('ui_ready', { ms: chatConnMs() });
+      }
     }
     return;
   }
@@ -995,12 +1179,16 @@ function lastMessageish() {
 function appendOrAddJevons(text, ts) {
   const target = lastMessageish();
   if (target && target.classList.contains('jevons') && typeof target._streamRaw === 'string') {
-    target._streamRaw += text;
+    // 🎯T147: join-time fence repair at segment edge (not bare +=).
+    target._streamRaw = ChatEvents.coalesceAssistantText(target._streamRaw, text);
     scheduleJevonsRender(target);   // rAF-debounced: coalesce burst chunks into ONE parse (🎯T57)
     return;
   }
-  const el = addMsg('jevons', text, ts);
-  el._streamRaw = text;
+  // 🎯T150: open stream flag before first paint so progressive markdown
+  // applies from frame 0 (not a marked flash then smd restart).
+  const el = addMsg('jevons', text, ts, { streamOpen: true });
+  // _streamRaw already set in buildMsg when streamOpen; keep assign for clarity.
+  el._streamRaw = typeof el._streamRaw === 'string' ? el._streamRaw : text;
 }
 
 // scheduleJevonsRender coalesces streamed chunks: instead of re-parsing
@@ -1038,6 +1226,11 @@ function sealAssistantStream() {
     delete el._streamRaw;                       // clear first so the sealed
     el._layoutText = raw;                       // render draws mermaid (🎯T59)
     el._layoutRole = 'jevons';
+    // 🎯T150: end progressive session before full marked seal paint.
+    if (el._smdSession) {
+      try { el._smdSession.end(); } catch (_) { /* ignore */ }
+    }
+    destroyStreamSession(el);
     // Stay expanded through seal so measure/paint never flashes a preview
     // into the live latest bubble (would freeze follow at a mid offset).
     el._expanded = true;
@@ -1122,6 +1315,10 @@ function buildMsg(role, text, when, opts) {
   d._body = body;
   d._layoutRole = role;
   d._layoutText = text == null ? '' : text;
+  // 🎯T150: live stream bubbles paint progressive MD from the first frame.
+  if (opts && opts.streamOpen) {
+    d._streamRaw = d._layoutText;
+  }
   if (lazy) {
     // Unmeasured shell: estimated height freezes geometry until enter-band.
     d.classList.add('virt-shell');
@@ -1174,8 +1371,8 @@ function layoutMsgList(nodes) {
   for (const d of nodes) layoutMsg(d);
 }
 
-function addMsg(role, text, when) {
-  const d = buildMsg(role, text, when);
+function addMsg(role, text, when, opts) {
+  const d = buildMsg(role, text, when, opts);
   msgs.appendChild(d);
   layoutMsg(d);
   scheduleLatestExpansion();
@@ -1755,10 +1952,50 @@ function parseAssistantMarkdown(text) {
     : text;
   return marked.parse(raw == null ? '' : raw);
 }
+// 🎯T150: progressive stream paint via thetarnav/streaming-markdown (smd).
+// Mid-stream: delta parser_write into per-bubble session (closed **…** live).
+// Seal: destroy session + full marked (mermaid T59 + highlight T74).
+// Never product-default textContent for assistant stream bodies.
+function streamNormalize(text) {
+  if (typeof MarkdownNormalize !== 'undefined' && MarkdownNormalize.ensureFenceNewlines) {
+    return MarkdownNormalize.ensureFenceNewlines(text);
+  }
+  return text;
+}
+function destroyStreamSession(d) {
+  if (d && d._smdSession) {
+    try { d._smdSession.destroy(); } catch (_) { /* ignore */ }
+    d._smdSession = null;
+  }
+}
+function paintStreamBody(d, t) {
+  if (!d || !d._body) return;
+  const smdLib = (typeof smd !== 'undefined') ? smd : null;
+  const canStream = smdLib
+    && typeof StreamingMarkdown !== 'undefined'
+    && StreamingMarkdown.createSession;
+  if (!canStream) {
+    // Interim fallback only: marked every frame (never plain textContent).
+    d._body.innerHTML = parseAssistantMarkdown(t);
+    return;
+  }
+  if (!d._smdSession) {
+    d._body.innerHTML = '';
+    d._smdSession = StreamingMarkdown.createSession(d._body, smdLib);
+  }
+  if (!d._smdSession) {
+    d._body.innerHTML = parseAssistantMarkdown(t);
+    return;
+  }
+  d._smdSession.writeFull(t, streamNormalize);
+}
 function paintBody(d, role, t) {
   if (role === 'jevons') {
-    d._body.innerHTML = parseAssistantMarkdown(t);
-    if (!d._streamRaw) {
+    if (typeof d._streamRaw === 'string') {
+      paintStreamBody(d, t);
+    } else {
+      destroyStreamSession(d);
+      d._body.innerHTML = parseAssistantMarkdown(t);
       renderMermaidIn(d._body);   // sealed content only
       highlightCodeIn(d._body);   // 🎯T74
     }
@@ -2025,8 +2262,18 @@ async function progressiveLoadRemainingHistory() {
           oldestIndex: oldestIndex,
           err: oldestIndex > 0 ? 'stall: oldestIndex did not advance' : undefined,
           corr: pageCorr,
+          conn_id: chatConnId,
+          ms: typeof chatConnMs === 'function' ? chatConnMs() : undefined,
         }
       ));
+    }
+    // 🎯T140: connect span complete when hydrate done (or stalled).
+    if (!chatConnUiReadyLogged && typeof logChatConn === 'function') {
+      chatConnUiReadyLogged = true;
+      logChatConn(oldestIndex <= 0 ? 'ui_ready' : 'ui_ready_partial', {
+        ms: chatConnMs(),
+        oldestIndex: oldestIndex,
+      });
     }
   }
 }
@@ -2137,10 +2384,15 @@ function renderFrames(lines, opts) {
       }
     } else if (m.type === 'assistant') {
       let txt = '';
-      try { txt = ChatEvents.assistantTextBlocks(m).map(b => b.text).join(''); } catch { txt = ''; }
+      // 🎯T147: joinAssistantTexts (not bare join('')) + coalesce at history pending edge.
+      try {
+        txt = ChatEvents.joinAssistantTexts(
+          ChatEvents.assistantTextBlocks(m).map(b => b.text),
+        );
+      } catch { txt = ''; }
       if (txt) {
         if (pending) {
-          pending.raw += txt;
+          pending.raw = ChatEvents.coalesceAssistantText(pending.raw, txt);
           pending.el._layoutText = pending.raw;
           if (!lazy) paintBody(pending.el, 'jevons', pending.raw);
         } else {
@@ -2308,8 +2560,9 @@ function formatAgentDir(d) {
   return (typeof FleetRow !== 'undefined') ? FleetRow.formatAgentDir(d) : escHtml(String(d || ''));
 }
 // 🎯T82: primary refresh is agents_changed push; slow poll is reconnect fallback only.
-setInterval(refreshAgents, 30000);
-refreshAgents();
+// 🎯T141: fleet refresh must not abort boot (theme/connect).
+setInterval(function () { try { refreshAgents(); } catch (_) {} }, 30000);
+try { refreshAgents(); } catch (_) {}
 
 // 🎯T8.2: jwork workers panel — poll + SSE lifecycle stream.
 const workersEl = document.getElementById('workers');
@@ -3405,12 +3658,27 @@ input.addEventListener('keydown', e => {
       return;
     }
   }
-  // 🎯T126: Home/End move caret in the message box (field-content policy).
-  // Explicit apply + preventDefault so macOS does not scroll the transcript
-  // and T119 jump-to-bottom never steals plain End while composer focused.
+  // 🎯T126 / 🎯T149: Home/End (and Meta|Ctrl+ArrowLeft/Right) move caret in
+  // the message box on *effective* content bounds — seed-aware so EMPTY_SEED
+  // does not trap Home/End in invisible ZWSP/period. Explicit apply +
+  // preventDefault so macOS does not scroll the transcript and T119
+  // jump-to-bottom never steals plain End while composer focused.
   if (typeof ComposerKeys !== 'undefined' && ComposerKeys.selectionAfterHomeEnd) {
+    const seedOpts = (typeof WisprContext !== 'undefined') ? {
+      seedPrefixLen: typeof WisprContext.seedPrefixLen === 'function'
+        ? WisprContext.seedPrefixLen(input.value)
+        : (WisprContext.hasSeedPrefix && WisprContext.hasSeedPrefix(input.value)
+          ? String(WisprContext.EMPTY_SEED || '').length
+          : 0),
+      effectiveLength: typeof WisprContext.stripSeed === 'function'
+        ? WisprContext.stripSeed(input.value).length
+        : undefined,
+      isSeedOnly: typeof WisprContext.isSeedOnly === 'function'
+        ? WisprContext.isSeedOnly(input.value)
+        : undefined,
+    } : {};
     const next = ComposerKeys.selectionAfterHomeEnd(
-      e.key, input.value, input.selectionStart, input.selectionEnd, e
+      e.key, input.value, input.selectionStart, input.selectionEnd, e, seedOpts
     );
     if (next) {
       e.preventDefault();

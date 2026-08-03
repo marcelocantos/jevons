@@ -35,10 +35,11 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent Grok agent in a repo/directory. Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114)."),
+			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (e.g. 'tern', 'jevon-frontend')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
-			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = Grok default)")),
+			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Empty = keep stored provider on resume, else daemon default (config/env/grok). 🎯T148.")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
@@ -153,6 +154,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	name, _ := args["name"].(string)
 	workdir, _ := args["workdir"].(string)
 	model, _ := args["model"].(string)
+	providerArg, _ := args["provider"].(string)
 	actor, _ := args["actor"].(string)
 	parent, _ := args["parent"].(string)
 	purpose, _ := args["purpose"].(string)
@@ -230,7 +232,9 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	if d := s.registry.Def(name); d != nil {
 		def = d
 	}
-	def.Provider = cli.Provider
+	// 🎯T148: ad hoc provider override wins; else keep stored; else default.
+	// Never unconditionally force Grok on resume.
+	def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
 	// Set parent only when minting or when legacy entry has empty parent.
 	if !existed || def.Parent == "" {
 		def.Parent = parent
@@ -259,11 +263,12 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	life["session_id"] = sessionDisplay(def.SessionID)
 	life["purpose"] = def.Purpose
 	life["parent"] = def.Parent
+	life["provider"] = string(def.Provider)
 	s.logLifecycle(compAgentLifecycle, "start", "ok", life)
 
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s)",
-		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent, def.Purpose)), nil
+		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, provider: %s)",
+		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent, def.Purpose, def.Provider)), nil
 }
 
 func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

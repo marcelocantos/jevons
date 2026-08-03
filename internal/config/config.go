@@ -39,6 +39,10 @@ type Config struct {
 
 	Port          int    `yaml:"port"`
 	WorkDir       string `yaml:"workdir"`        // default workdir for workers
+	// Provider is the default claudia agent backend id ("grok", "claude", …).
+	// Empty = JEVONS_PROVIDER env, else grok (🎯T148). Not an allow-list —
+	// unknown strings pass through to claudia.
+	Provider      string `yaml:"provider"`
 	Model         string `yaml:"model"`          // default worker model ("" = provider default)
 	OverseerModel string `yaml:"overseer_model"` // "" = same as Model
 

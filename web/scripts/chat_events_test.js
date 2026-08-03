@@ -227,6 +227,100 @@ test('index.html wires ChatEvents + stream seal', () => {
   );
 });
 
+// ── 🎯T147 join-time fence repair at segment edges ───────────────
+
+test('T147 coalesceAssistantText: Intro. + ```cpp fence inserts blank line', () => {
+  // Acceptance fixture: two frames at ACP segment boundary (not T145 alone).
+  const prev = 'Intro.';
+  const next = '```cpp\ncode\n```';
+  const out = ChatEvents.coalesceAssistantText(prev, next);
+  assert.strictEqual(out, 'Intro.\n\n```cpp\ncode\n```');
+  // Must not smush: period immediately followed by fence.
+  assert.ok(!out.includes('.```'), 'must not produce smushed prose.```');
+  assert.ok(/\n```cpp/.test(out), 'fence must start after a newline');
+});
+
+test('T147 coalesceAssistantText: already-newline prev is unchanged join', () => {
+  const out = ChatEvents.coalesceAssistantText('Intro.\n', '```cpp\nx\n```');
+  assert.strictEqual(out, 'Intro.\n```cpp\nx\n```');
+});
+
+test('T147 coalesceAssistantText: non-fence next is bare concat', () => {
+  assert.strictEqual(ChatEvents.coalesceAssistantText('Hello', '.'), 'Hello.');
+  assert.strictEqual(ChatEvents.coalesceAssistantText('a', 'b'), 'ab');
+});
+
+test('T147 coalesceAssistantText: empty/null edges', () => {
+  assert.strictEqual(ChatEvents.coalesceAssistantText('', '```\nx\n```'), '```\nx\n```');
+  assert.strictEqual(ChatEvents.coalesceAssistantText('Intro.', ''), 'Intro.');
+  assert.strictEqual(ChatEvents.coalesceAssistantText(null, '```\n```'), '```\n```');
+  assert.strictEqual(ChatEvents.coalesceAssistantText('x', null), 'x');
+});
+
+test('T147 joinAssistantTexts: multi-part segment edges', () => {
+  const out = ChatEvents.joinAssistantTexts([
+    'Checking conventions briefly, then a small clean snippet.',
+    '```cpp\nint main() {}\n```',
+  ]);
+  assert.strictEqual(
+    out,
+    'Checking conventions briefly, then a small clean snippet.\n\n```cpp\nint main() {}\n```',
+  );
+  assert.ok(!out.includes('.```'), 'join must not smush period+fence');
+});
+
+test('T147 applyChatEvents: tool_result gap then fence segment coalesces with NL', () => {
+  // Proven root cause shape: prose segment, tool frames, then fence-start segment.
+  const events = [
+    user('write a snippet of C++ code'),
+    chunk('Checking C++ conventions briefly, then a small clean snippet.'),
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'read_file', input: {} }] },
+    },
+    chunk('```cpp\nint x = 1;\n```'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  const raw = state.assistantBubbles[0];
+  assert.ok(!raw.includes('.```'), 'must not smush at tool_result gap');
+  assert.ok(
+    raw.includes('snippet.\n\n```cpp') || raw.includes('snippet.\n```cpp'),
+    'at least one newline before fence; got: ' + JSON.stringify(raw.slice(0, 120)),
+  );
+  assert.strictEqual(
+    raw,
+    'Checking C++ conventions briefly, then a small clean snippet.\n\n```cpp\nint x = 1;\n```',
+  );
+});
+
+test('T147 index.html: no bare _streamRaw += / pending.raw += / join(\'\') on assistant paths', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(
+    html.includes('ChatEvents.coalesceAssistantText'),
+    'must wire ChatEvents.coalesceAssistantText',
+  );
+  assert.ok(
+    html.includes('ChatEvents.joinAssistantTexts'),
+    'must wire ChatEvents.joinAssistantTexts',
+  );
+  // Bare stream/history joins are the T147 failure modes.
+  assert.ok(
+    !html.includes('_streamRaw +='),
+    'must not bare-append _streamRaw (use coalesceAssistantText)',
+  );
+  assert.ok(
+    !html.includes('pending.raw +='),
+    'must not bare-append pending.raw (use coalesceAssistantText)',
+  );
+  // Multi-block join must not use empty-string join for assistant text.
+  assert.ok(
+    !/\.map\(\s*b\s*=>\s*b\.text\s*\)\.join\(\s*['"]{2}\s*\)/.test(html),
+    'must not join assistant text blocks with join(\'\')',
+  );
+});
+
 // ── regression guard: old clear-on-first-text policy is gone ────
 
 test('regression guard: hasText without stop must not clear', () => {

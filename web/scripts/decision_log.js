@@ -29,6 +29,7 @@
     history: 'history',
     fleet: 'fleet',
     cost: 'cost',
+    chat_conn: 'chat_conn', // 🎯T140 connect/replay spans
   };
 
   // Keys that must never appear in decision fields.
@@ -127,7 +128,7 @@
 
   // History hydrate / reconnect (🎯T120.4).
   // decision: hydrate_start | hydrate_page | hydrate_done | hydrate_error | reconnect
-  // opts: { before?, after?, lines?, older?, oldestIndex?, err?, corr? }
+  // opts: { before?, after?, lines?, older?, oldestIndex?, err?, corr?, conn_id?, ms? }
   function formatHistoryDecision(decision, opts) {
     const o = opts || {};
     const fields = {};
@@ -137,7 +138,28 @@
     if (o.older != null) fields.older = Number(o.older);
     if (o.oldestIndex != null) fields.oldestIndex = Number(o.oldestIndex);
     if (o.err != null && o.err !== '') fields.err = truncateDraft(String(o.err), 120);
+    if (o.conn_id != null && o.conn_id !== '') fields.conn_id = String(o.conn_id);
+    if (o.ms != null) fields.ms = Number(o.ms);
     return withEnvelope(COMPONENT.history, decision == null ? 'history' : String(decision), fields, o.corr);
+  }
+
+  // 🎯T140: /ws/chat connection spans (open → first_frame → history_meta → ui_ready).
+  // decision: open | first_frame | history_meta | ui_ready | transport_replaced | stale_frame
+  // opts: { conn_id?, concurrent?, ms?, frames?, bytes?, replay_ms?, corr?, prev_conn_id?, generation? }
+  function formatConnectDecision(decision, opts) {
+    const o = opts || {};
+    const fields = {};
+    if (o.conn_id != null && o.conn_id !== '') fields.conn_id = String(o.conn_id);
+    if (o.prev_conn_id != null && o.prev_conn_id !== '') fields.prev_conn_id = String(o.prev_conn_id);
+    if (o.concurrent != null) fields.concurrent = Number(o.concurrent);
+    if (o.ms != null) fields.ms = Number(o.ms);
+    if (o.frames != null) fields.frames = Number(o.frames);
+    if (o.bytes != null) fields.bytes = Number(o.bytes);
+    if (o.replay_ms != null) fields.replay_ms = Number(o.replay_ms);
+    if (o.generation != null) fields.generation = Number(o.generation);
+    if (o.type != null && o.type !== '') fields.type = String(o.type);
+    if (o.oldestIndex != null) fields.oldestIndex = Number(o.oldestIndex);
+    return withEnvelope(COMPONENT.chat_conn, decision == null ? 'conn' : String(decision), fields, o.corr);
   }
 
   // Cost / fleet failure helpers (bounded warn).
@@ -168,6 +190,7 @@
     formatSendDecision: formatSendDecision,
     formatFocusDecision: formatFocusDecision,
     formatHistoryDecision: formatHistoryDecision,
+    formatConnectDecision: formatConnectDecision,
     formatCostDecision: formatCostDecision,
     formatFleetDecision: formatFleetDecision,
   };

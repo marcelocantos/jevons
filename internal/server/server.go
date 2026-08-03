@@ -25,6 +25,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/workers"
@@ -66,6 +67,10 @@ type Server struct {
 	remotes   map[int]remoteConn
 	turnBuf   string // accumulates Jevon text for current turn
 	waiting   bool   // true while awaiting a response from Jevon
+
+	// chatConns is the number of live /ws/chat handlers (🎯T140 connect spans).
+	// Guarded by mu; used only for concurrent=N on open/close logging.
+	chatConns int
 
 	lanSrv         *pigeon.LANServer // LAN server for direct connections
 	creds          *CredentialStore
@@ -111,6 +116,10 @@ type Server struct {
 
 	// transcriptReader reads Grok session chat_history for RHS inspect (🎯T124).
 	transcriptReader *transcript.Reader
+
+	// defaultProvider is the daemon-wide claudia backend for new asides
+	// and other registry mint paths on this server (🎯T148).
+	defaultProvider claudia.Provider
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -129,6 +138,22 @@ func (s *Server) SetOverseerName(name string) {
 	if name != "" {
 		s.overseerName = name
 	}
+}
+
+// SetDefaultProvider sets the daemon-wide claudia backend for new agents
+// registered via HTTP paths such as asides (🎯T148).
+func (s *Server) SetDefaultProvider(p claudia.Provider) {
+	if p != "" {
+		s.defaultProvider = p
+	}
+}
+
+// resolvedDefaultProvider returns the effective default for mint paths.
+func (s *Server) resolvedDefaultProvider() claudia.Provider {
+	if s.defaultProvider != "" {
+		return s.defaultProvider
+	}
+	return cli.ResolveProvider("", "")
 }
 
 // SetOverseerDownReason records a legible, actionable explanation for why

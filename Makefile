@@ -61,11 +61,13 @@ test-web:
 	node web/scripts/wispr_context_test.js
 	node web/scripts/send_queue_test.js
 	node web/scripts/decision_log_test.js
+	node web/scripts/chat_reconnect_test.js
 	node web/scripts/tool_summary_test.js
 	node web/scripts/tool_tooltip_test.js
 	node web/scripts/agent_transcript_test.js
 	node web/scripts/mermaid_actions_test.js
 	node web/scripts/markdown_normalize_test.js
+	node web/scripts/streaming_markdown_test.js
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright
 # from scripts/browser-loop-test). Live: make test-ui-live.

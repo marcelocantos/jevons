@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package fleet is the claudia-backed implementation of butler.Fleet:
-// launches, directs, and stops disposable Grok processes behind
+// launches, directs, and stops disposable agent processes behind
 // durable threads. It also implements butler.Participants for agents
 // that exist only in the registry (🎯T114 unified deliver path).
 package fleet
@@ -29,18 +29,36 @@ const (
 // Claudia adapts a claudia.Registry to the butler.Fleet interface and
 // to butler.Participants (agent-only deliver).
 type Claudia struct {
-	reg          *claudia.Registry
-	readyTimeout time.Duration
-	replyTimeout time.Duration
+	reg             *claudia.Registry
+	defaultProvider claudia.Provider
+	readyTimeout    time.Duration
+	replyTimeout    time.Duration
 }
 
-// NewClaudia wraps a registry as a Fleet (always Grok).
+// NewClaudia wraps a registry as a Fleet. Default provider resolves from
+// env / Grok (🎯T148); main should call SetDefaultProvider with the
+// config-resolved value.
 func NewClaudia(reg *claudia.Registry) *Claudia {
 	return &Claudia{
-		reg:          reg,
-		readyTimeout: defaultReadyTimeout,
-		replyTimeout: defaultReplyTimeout,
+		reg:             reg,
+		defaultProvider: cli.ResolveProvider("", ""),
+		readyTimeout:    defaultReadyTimeout,
+		replyTimeout:    defaultReplyTimeout,
 	}
+}
+
+// SetDefaultProvider sets the daemon-wide backend for new threads when
+// the thread record has no provider (🎯T148).
+func (f *Claudia) SetDefaultProvider(p claudia.Provider) {
+	if p != "" {
+		f.defaultProvider = p
+	}
+}
+
+// providerForLaunch picks the registry provider for a thread Launch.
+// Never clobbers a non-empty stored provider (resume keeps backend).
+func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia.Provider {
+	return cli.SelectAgentProvider(string(fromThread), stored, defaultProv)
 }
 
 // Launch ensures a live, ready process for the thread. If the thread's
@@ -52,24 +70,28 @@ func NewClaudia(reg *claudia.Registry) *Claudia {
 // Dual-write (🎯T114): every thread Launch registers or updates the
 // agent registry row with Parent + Purpose so threads and agents share
 // one id space. Parent lineage (🎯T111.3) is taken from the thread.
+// Provider (🎯T148) is set on mint or backfilled when empty; never forced
+// to Grok on resume when a stored provider exists.
 func (f *Claudia) Launch(t *thread.Thread) error {
 	purpose := strings.TrimSpace(t.Purpose)
 	if purpose == "" {
 		purpose = claudia.PurposeAside // thread path → aside by default
 	}
+	threadProv := claudia.Provider(strings.TrimSpace(t.Provider))
 
 	// Ensure a registry def. Resume when SessionID is known; otherwise
-	// mint a placeholder id and let Grok ACP replace it on session/new.
+	// mint a placeholder id and let the provider replace it on session/new.
 	if f.reg.Def(t.ID) == nil {
 		sid := t.SessionID
 		if sid == "" {
 			sid = uuid.New().String()
 		}
+		prov := providerForLaunch("", threadProv, f.defaultProvider)
 		if err := f.reg.Register(claudia.AgentDef{
 			Name:      t.ID,
 			WorkDir:   t.WorkDir,
 			Model:     t.Model,
-			Provider:  cli.Provider,
+			Provider:  prov,
 			SessionID: sid,
 			AutoStart: true,
 			Parent:    t.Parent,
@@ -79,8 +101,9 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 		}
 	} else if def := f.reg.Def(t.ID); def != nil {
 		dirty := false
-		if def.Provider != cli.Provider {
-			def.Provider = cli.Provider
+		// Backfill empty provider only — never overwrite a stored choice.
+		if def.Provider == "" {
+			def.Provider = providerForLaunch("", threadProv, f.defaultProvider)
 			dirty = true
 		}
 		// Backfill empty parent when the spawn path now knows the creator.

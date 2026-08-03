@@ -1,9 +1,14 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Composer Home/End caret vs jump-to-bottom policy (🎯T126).
+// Composer Home/End caret vs jump-to-bottom policy (🎯T126 / 🎯T149).
 // DOM-free so Node hermetic tests can require(); index.html wires the
 // caret apply + jump gate.
+//
+// 🎯T149: operate on *effective* (Wispr seed-stripped) content bounds so
+// seed-only EMPTY_SEED does not look like a Home/End no-op, and seed+text
+// lands on the visible draft — not inside the invisible seed prefix.
+// Meta/Ctrl+ArrowLeft/Right act as field ends (macOS / cross-platform habit).
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -16,40 +21,114 @@
 
   // Field-content policy (owner: start/end of the *message box*, not
   // line-local and not transcript scroll):
-  //   Home → caret/selection anchor at 0
-  //   End  → caret/selection at value.length
+  //   Home / Meta|Ctrl+ArrowLeft  → start of effective content
+  //   End  / Meta|Ctrl+ArrowRight → end of effective content
+  // Seed-only (effective empty): both collapse to the insert point
+  // (after seed / value.length) so caret never sits *before* the seed
+  // where typed characters would embed inside EMPTY_SEED.
 
   function isComposerTextControl(tagName) {
     const t = String(tagName || '').toUpperCase();
     return t === 'TEXTAREA' || t === 'INPUT';
   }
 
-  function caretAfterHome(_value, _selectionStart) {
-    return 0;
+  /**
+   * Effective caret bounds for field Home/End.
+   * @param {string} value raw composer value (may include EMPTY_SEED prefix)
+   * @param {{
+   *   seedPrefixLen?: number,
+   *   effectiveLength?: number,
+   *   isSeedOnly?: boolean
+   * }} [opts]
+   * @returns {{ home: number, end: number }}
+   */
+  function contentCaretBounds(value, opts) {
+    const s = String(value == null ? '' : value);
+    const o = opts || {};
+    let seedLen = 0;
+    if (typeof o.seedPrefixLen === 'number' && o.seedPrefixLen > 0) {
+      seedLen = Math.min(Math.floor(o.seedPrefixLen), s.length);
+    }
+    let effectiveLen;
+    if (typeof o.effectiveLength === 'number' && o.effectiveLength >= 0) {
+      effectiveLen = o.effectiveLength;
+    } else {
+      effectiveLen = Math.max(0, s.length - seedLen);
+    }
+    const seedOnly = o.isSeedOnly === true
+      || (seedLen > 0 && effectiveLen === 0)
+      || (s.length > 0 && seedLen > 0 && s.length === seedLen);
+
+    if (!s.length || seedOnly || effectiveLen === 0) {
+      // Empty effective content: one resting insert point (after seed).
+      return { home: s.length, end: s.length };
+    }
+    // Real draft: Home at first effective char (skip seed prefix if any).
+    return { home: seedLen, end: s.length };
   }
 
-  function caretAfterEnd(value, _selectionStart) {
-    return String(value == null ? '' : value).length;
+  function caretAfterHome(value, _selectionStart, opts) {
+    return contentCaretBounds(value, opts).home;
   }
 
-  // Pure selection result for Home/End (and Shift+ variants).
-  // Returns null when the key is not a composer caret key we own.
-  // Ignores Meta/Ctrl chords so Cmd/Ctrl+ArrowDown jump still works
-  // via the document-level jump handler; plain Home/End (optional
-  // Shift for extend) are ours.
-  function selectionAfterHomeEnd(key, value, selStart, selEnd, mods) {
+  function caretAfterEnd(value, _selectionStart, opts) {
+    return contentCaretBounds(value, opts).end;
+  }
+
+  /**
+   * Pure selection result for Home/End and Meta|Ctrl+ArrowLeft/Right
+   * (and Shift+ variants). Returns null when the key is not a composer
+   * caret key we own (e.g. plain ArrowLeft, Meta+ArrowDown for jump).
+   *
+   * @param {string} key
+   * @param {string} value
+   * @param {number} selStart
+   * @param {number} selEnd
+   * @param {{ metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean, shiftKey?: boolean }} mods
+   * @param {{ seedPrefixLen?: number, effectiveLength?: number, isSeedOnly?: boolean }} [opts]
+   */
+  function selectionAfterHomeEnd(key, value, selStart, selEnd, mods, opts) {
     const m = mods || {};
-    if (m.metaKey || m.ctrlKey || m.altKey) return null;
+    // Alt: leave Option+Arrow paragraph / browser defaults alone.
+    if (m.altKey) return null;
+
+    const metaChord = !!(m.metaKey || m.ctrlKey);
+    let goHome = false;
+    let goEnd = false;
+
+    if (key === 'Home') {
+      goHome = true;
+    } else if (key === 'End') {
+      goEnd = true;
+    } else if (key === 'ArrowLeft' && metaChord) {
+      // macOS Cmd+Left (and Ctrl+Left) → field start of effective content.
+      goHome = true;
+    } else if (key === 'ArrowRight' && metaChord) {
+      goEnd = true;
+    } else {
+      return null;
+    }
+
     const start = typeof selStart === 'number' ? selStart : 0;
     const end = typeof selEnd === 'number' ? selEnd : start;
-    const len = String(value == null ? '' : value).length;
-    if (key === 'Home') {
-      if (m.shiftKey) return { start: 0, end: end };
-      return { start: 0, end: 0 };
+    const bounds = contentCaretBounds(value, opts);
+    const home = bounds.home;
+    const fieldEnd = bounds.end;
+
+    if (goHome) {
+      if (m.shiftKey) {
+        // Extend toward start of effective content; clamp anchor into bounds.
+        const anchor = Math.max(end, home);
+        return { start: home, end: anchor };
+      }
+      return { start: home, end: home };
     }
-    if (key === 'End') {
-      if (m.shiftKey) return { start: start, end: len };
-      return { start: len, end: len };
+    if (goEnd) {
+      if (m.shiftKey) {
+        const anchor = Math.min(start, fieldEnd);
+        return { start: anchor, end: fieldEnd };
+      }
+      return { start: fieldEnd, end: fieldEnd };
     }
     return null;
   }
@@ -90,6 +169,7 @@
 
   return {
     isComposerTextControl: isComposerTextControl,
+    contentCaretBounds: contentCaretBounds,
     caretAfterHome: caretAfterHome,
     caretAfterEnd: caretAfterEnd,
     selectionAfterHomeEnd: selectionAfterHomeEnd,

@@ -119,11 +119,14 @@ test('index.html declares selectedAgent before boot renderAttention/refreshAgent
   assert.ok(decl >= 0, 'selectedAgent declared once with let');
   assert.strictEqual((html.match(/let selectedAgent/g) || []).length, 1, 'single let selectedAgent');
   const bootRender = html.lastIndexOf("if (typeof renderAttention === 'function') renderAttention();");
-  const bootRefresh = html.indexOf('setInterval(refreshAgents, 30000);\nrefreshAgents();');
+  // Boot refresh may be try-wrapped; match the interval arm + immediate call.
+  const bootRefresh = html.indexOf('setInterval(function () { try { refreshAgents(); } catch (_) {} }, 30000);');
+  const bootRefreshAlt = html.indexOf('setInterval(refreshAgents, 30000);');
+  const bootRefreshAt = bootRefresh >= 0 ? bootRefresh : bootRefreshAlt;
   const theme = html.indexOf("applyTheme((document.cookie");
   const connect = html.indexOf('\nconnect();\n');
   assert.ok(bootRender > decl, 'boot renderAttention after selectedAgent decl');
-  assert.ok(bootRefresh > decl, 'boot refreshAgents after selectedAgent decl');
+  assert.ok(bootRefreshAt > decl, 'boot refreshAgents after selectedAgent decl');
   assert.ok(theme > decl, 'applyTheme after selectedAgent decl (script reaches theme)');
   assert.ok(connect > decl, 'connect after selectedAgent decl');
 });

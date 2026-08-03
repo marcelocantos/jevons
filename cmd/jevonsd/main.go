@@ -50,7 +50,8 @@ func main() {
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
 	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
-	model := flag.String("model", "", "default model for Grok workers (empty = Grok CLI default)")
+	model := flag.String("model", "", "default model for workers (empty = provider default)")
+	providerFlag := flag.String("provider", "", "default agent backend (grok, claude, …; empty = config.yaml / JEVONS_PROVIDER / grok)")
 	overseerModel := flag.String("jevons-model", "", "model for the overseer agent (empty = same as -model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	enableTLS := flag.Bool("tls", false, "enable mTLS on the HTTP listener (requires client certs after provisioning)")
@@ -117,9 +118,14 @@ func main() {
 	if explicit["model"] {
 		cfg.Model = *model
 	}
+	if explicit["provider"] {
+		cfg.Provider = *providerFlag
+	}
 	if explicit["jevons-model"] {
 		cfg.OverseerModel = *overseerModel
 	}
+	// 🎯T148: resolve once at boot (config → JEVONS_PROVIDER → grok).
+	defaultProvider := cli.ResolveProvider("", cfg.Provider)
 
 	// Set up the overseer workdir with rendered persona instructions.
 	jevDir := cfg.OverseerDir()
@@ -363,7 +369,11 @@ func main() {
 
 	// 🎯T114: same Claudia adapter is Fleet (threads) and Participants
 	// (agent-only names) so Deliver/PushEvent share one id space.
+	// 🎯T148: pluggable default provider for new threads/agents.
 	fleetAdapter := fleet.NewClaudia(registry)
+	fleetAdapter.SetDefaultProvider(defaultProvider)
+	mcpSrv.SetDefaultProvider(string(defaultProvider))
+	srv.SetDefaultProvider(defaultProvider)
 	btlrCfg := butler.Config{
 		Store:        threadStore,
 		Scanner:      scanner,
@@ -398,7 +408,7 @@ func main() {
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
 
-	// Overseer: Grok Session ACP only.
+	// Overseer: claudia Session (default backend from config/env; usually Grok).
 	overseerModelChoice := cfg.OverseerModel
 	if overseerModelChoice == "" {
 		overseerModelChoice = cfg.Model
@@ -408,7 +418,8 @@ func main() {
 		slog.Error("jevon agent setup failed", "err", err)
 		os.Exit(1)
 	}
-	jevonDef.Provider = cli.Provider
+	// 🎯T148: keep stored provider on resume; only set default when empty.
+	jevonDef.Provider = cli.SelectAgentProvider("", jevonDef.Provider, defaultProvider)
 	// 🎯T114: overseer purpose on the unified participant record.
 	if jevonDef.Purpose == "" {
 		jevonDef.Purpose = claudia.PurposeOverseer

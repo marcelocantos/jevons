@@ -122,6 +122,43 @@ test('T119 whole-chunk only: tool frames do not become display units', function 
   assert.strictEqual(chunks[1].text, 'done');
 });
 
+// ── 🎯T147 join-time fence repair in coalesceTranscriptFrames ───────────
+
+test('T147 coalesceTranscriptFrames: prose then fence segment inserts blank line', function () {
+  const chunks = VL.coalesceTranscriptFrames([
+    { type: 'user', message: { content: 'write cpp' } },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Intro.' }] },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: '```cpp\ncode\n```' }] },
+    },
+  ]);
+  assert.strictEqual(chunks.length, 2);
+  assert.strictEqual(chunks[1].role, 'jevons');
+  assert.strictEqual(chunks[1].text, 'Intro.\n\n```cpp\ncode\n```');
+  assert.ok(!chunks[1].text.includes('.```'), 'must not smush period+fence');
+});
+
+test('T147 extract multi-block: join parts with fence edge repair', function () {
+  const chunks = VL.coalesceTranscriptFrames([
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'See:' },
+          { type: 'text', text: '```js\n1\n```' },
+        ],
+      },
+    },
+  ]);
+  assert.strictEqual(chunks.length, 1);
+  assert.strictEqual(chunks[0].text, 'See:\n\n```js\n1\n```');
+});
+
+
 // ── full data resident + windowed content ────────────────────────────
 
 test('T119 full data: progressive pages cover entire older range without scroll gate', function () {

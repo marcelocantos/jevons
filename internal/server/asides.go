@@ -14,8 +14,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
-
-	"github.com/marcelocantos/jevons/internal/cli"
 )
 
 // createAsideRequest is the JSON body for POST /api/asides (🎯T136).
@@ -126,8 +124,8 @@ func (s *Server) ensureAsideAgent(id, title, parent string) (createAsideResponse
 		Name:        id,
 		WorkDir:     workdir,
 		SessionID:   uuid.New().String(),
-		Provider:    cli.Provider,
-		AutoStart:   false, // register-only; no Grok process on create
+		Provider:    s.resolvedDefaultProvider(),
+		AutoStart:   false, // register-only; no process on create
 		Parent:      parent,
 		Purpose:     claudia.PurposeAside,
 		Description: title,
