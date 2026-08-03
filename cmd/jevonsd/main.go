@@ -31,6 +31,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -406,10 +407,13 @@ func main() {
 		srv.SetActivityHook(guard.enforcer.Heartbeat)
 	}
 
+	// 🎯T92 ambient RSI: schedule + stream (reap) mint improvement targets.
+	rsiLoop := startAmbientRSI(ctx, cfg, mcpSrv)
+
 	// Process-as-cache GC: periodically stop idle spawned threads'
 	// processes (resumably) to free resources. The threads persist and
-	// rehydrate on the next Direct.
-	go reapIdleThreads(ctx, btlr)
+	// rehydrate on the next Direct. Stream-feeds ambient RSI on reap.
+	go reapIdleThreads(ctx, btlr, rsiLoop)
 
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
@@ -856,7 +860,8 @@ func overseerUnavailableReason() string {
 const reapIdleGCInterval = 2 * time.Minute
 
 // reapIdleThreads runs the process-as-cache GC sweep until ctx is done.
-func reapIdleThreads(ctx context.Context, btlr *butler.Butler) {
+// When rsiLoop is non-nil, reaped thread ids are stream-fed into ambient RSI (🎯T92).
+func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop) {
 	ticker := time.NewTicker(reapIdleGCInterval)
 	defer ticker.Stop()
 	for {
@@ -866,7 +871,75 @@ func reapIdleThreads(ctx context.Context, btlr *butler.Butler) {
 		case <-ticker.C:
 			if reaped := btlr.ReapIdle(); len(reaped) > 0 {
 				slog.Info("reaped idle thread processes", "threads", reaped)
+				if rsiLoop != nil {
+					rsiLoop.NoteReaped(reaped)
+				}
 			}
 		}
 	}
+}
+
+// startAmbientRSI wires the 🎯T92 schedule/stream loop and MCP jevons_rsi_cycle.
+// Env:
+//
+//	JEVONS_RSI_INTERVAL   — duration (default 30m); "0" or negative disables ticker
+//	JEVONS_RSI_MINT_CWD   — bullseye repo to file into (default: discover product repo)
+//	JEVONS_RSI_DRY_RUN    — "1"/"true" extract only, never file
+func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Loop {
+	interval := rsi.DefaultInterval
+	if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_INTERVAL")); v != "" {
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			slog.Warn("JEVONS_RSI_INTERVAL invalid; using default", "value", v, "default", rsi.DefaultInterval)
+		}
+	}
+	mintCwd := strings.TrimSpace(os.Getenv("JEVONS_RSI_MINT_CWD"))
+	if mintCwd == "" {
+		mintCwd = resolveRSIMintCwd(cfg)
+	}
+	dry := false
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_RSI_DRY_RUN"))) {
+	case "1", "true", "yes", "on":
+		dry = true
+	}
+	loop, err := rsi.NewLoop(rsi.LoopArgs{
+		StateDir: cfg.StateDir,
+		MintCwd:  mintCwd,
+		Interval: interval,
+		DryRun:   dry,
+	})
+	if err != nil {
+		slog.Warn("ambient RSI disabled", "err", err)
+		return nil
+	}
+	mcpSrv.SetRSILoop(loop)
+	go loop.Run(ctx)
+	slog.Info("ambient RSI ready",
+		"interval", interval.String(),
+		"mint_cwd", mintCwd,
+		"dry_run", dry,
+		"ledger", "state_dir/rsi/minted.json",
+	)
+	return loop
+}
+
+// resolveRSIMintCwd picks the bullseye repo for ambient mints: product tree
+// under ReposRoot when present, else WorkDir / process cwd.
+func resolveRSIMintCwd(cfg config.Config) string {
+	cand := filepath.Join(cfg.ReposRoot, "marcelocantos", "jevons")
+	if st, err := os.Stat(filepath.Join(cand, "bullseye.yaml")); err == nil && !st.IsDir() {
+		return cand
+	}
+	if wd := strings.TrimSpace(cfg.WorkDir); wd != "" && wd != "." {
+		if st, err := os.Stat(filepath.Join(wd, "bullseye.yaml")); err == nil && !st.IsDir() {
+			return wd
+		}
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return cfg.WorkDir
 }

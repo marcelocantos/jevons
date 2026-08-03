@@ -67,7 +67,14 @@ you did.
 
 ## Recursive self-improvement & filing reflex (🎯T92 / 🎯T103 / 🎯T130) — hard doctrine
 
-When a **real product gap**, **repeated failure mode**, or **standing behavioural rule** appears mid-work, **file or prompt-file a bullseye target** (name + acceptance) **in the same turn** — not only narrate a "standing rule" / "going forward I will…" in chat. Ambient self-improvement (🎯T92 / 🎯T103) is the habit; **🎯T130** is the hard filing reflex. Related hierarchy routing: **🎯T129**.
+**Ambient mission (🎯T92), not only `/retro`:** continuous self-improvement is standing work.
+The harness runs retrospectives on a **periodic schedule** and a **stream** from activity
+(eventlog lifecycle errors, idle-reap markers) that **mint bullseye targets** with acceptance
+when evidence clusters (frequency threshold, fingerprint ledger, max-per-cycle) — closed path
+without the owner harvesting ideas. On-demand: **`jevons_rsi_cycle`**. Mid-turn agent habit
+remains the **filing reflex (🎯T130)** below. Related hierarchy: **🎯T129**.
+
+When a **real product gap**, **repeated failure mode**, or **standing behavioural rule** appears mid-work, **file or prompt-file a bullseye target** (name + acceptance) **in the same turn** — not only narrate a "standing rule" / "going forward I will…" in chat. Ambient self-improvement (🎯T92 / 🎯T103) is the habit; **🎯T130** is the hard filing reflex.
 
 ### Triggers that require filing (not chat-only)
 
@@ -80,11 +87,11 @@ If you catch yourself saying (or meaning any of):
 
 ### Ceremony
 
-Use **`jevons_target_file`** (cwd + name + acceptance) and/or bullseye MCP (`bullseye_commit` op=track / file tools). Owner path remains the `target:` aside. Propose a 🎯 with acceptance and file (or prompt-file) in that turn.
+Use **`jevons_target_file`** (cwd + name + acceptance) and/or bullseye MCP (`bullseye_commit` op=track / file tools). Owner path remains the `target:` aside. Propose a 🎯 with acceptance and file (or prompt-file) in that turn. Harness path: schedule/stream RSI or **`jevons_rsi_cycle`**.
 
 ### Residual
 
-One-off flukes may skip filing; judgment allowed. Do not mint noise targets for transient one-shots.
+One-off flukes may skip filing; judgment allowed. Do not mint noise targets for transient one-shots. Deep mnemo transcript mining remains the `/retro` skill until a later RSI surface expands beyond rule-based eventlog extract.
 
 ### target: asides (🎯T93 / 🎯T95)
 
@@ -305,7 +312,38 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
   overseer judgment still applies.
 - **Residual:** instructional doctrine + fleet brief inject + pure
   classifier; not a hard daemon block of bullseye achieve. Greenfield
-  interactive oracle elicitation is **🎯T31.2** (sibling).
+  interactive oracle elicitation is **🎯T31.2** (sibling / below).
+
+## Greenfield oracle elicitation (🎯T31.2) — coverage map from intent
+
+For **new software** there is no external reference to extract. The
+"reference" is the owner's intent. You hold the design gate so work is
+not built against still-fuzzy intent (oracle-first doctrine: example is
+the unit of intent transfer; spiral, not waterfall).
+
+### Process (instructional residual)
+
+- **Oracle-coverage map:** co-develop alongside design a live map of
+  **pinned** (executable checks), **fuzzy** (still open), **taste**
+  (class-3 residue), and **spike** (exploratory, intentionally
+  un-oracled). Load-bearing concrete examples (**when X, expect Y**)
+  elicited from the owner seed the pins.
+- **SPIRAL:** design → thin slice → owner reacts → intent sharpens →
+  new oracle. **Refuse production** on still-fuzzy regions until pinned
+  enough to test; spikes may explore without an oracle on purpose.
+- **DECIDABLE-FROM-TASTE:** sort decidable criteria from irreducible
+  perceptual taste first; the taste residue is a **single** owner
+  accept/reject — never mix "feel" into a decidable acceptance clause.
+- **PROPORTIONALITY + GOODHART:** do not straitjacket exploratory spikes;
+  drive *load-bearing* examples (rule 6), not convenient ones. Pin only
+  after examples exist.
+- **Pure model:** `CoverageMap`, `ClassifyDesignClause`,
+  `ParseLoadBearingExample` in mcpserver are hermetic helpers for map
+  review — not a full product UI (🎯T29 residual).
+- **Residual:** instructional doctrine + pure map; not a hard daemon
+  block of generation/achieve. Owner validates process fidelity in real
+  design sessions (**isolated class-3**). Design notes:
+  `docs/design/greenfield-oracle-elicitation.md`.
 
 ## Delivery: local by default (🎯T104) — hard vocabulary
 

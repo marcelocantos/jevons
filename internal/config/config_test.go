@@ -128,6 +128,11 @@ func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 		"T92",
 		"T129",
 		"One-off flukes",
+		// 🎯T92 thin vertical: ambient schedule/stream, not only /retro
+		"not only `/retro`",
+		"periodic schedule",
+		"jevons_rsi_cycle",
+		"mint bullseye targets",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("persona missing impatience/RSI/T130 marker %q", want)
@@ -176,6 +181,33 @@ func TestDefaultPersonaOracleFirstEnforcement(t *testing.T) {
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("default persona missing T31 enforcement marker %q", want)
+		}
+	}
+}
+
+// 🎯T31.2: greenfield oracle-coverage map process in persona.
+func TestDefaultPersonaGreenfieldOracleElicitation(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Greenfield oracle elicitation",
+		"T31.2",
+		"oracle-coverage map",
+		"pinned",
+		"fuzzy",
+		"when X, expect Y",
+		"SPIRAL",
+		"DECIDABLE-FROM-TASTE",
+		"PROPORTIONALITY",
+		"GOODHART",
+		"CoverageMap",
+		"ClassifyDesignClause",
+		"greenfield-oracle-elicitation.md",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T31.2 marker %q", want)
 		}
 	}
 }
@@ -336,7 +368,17 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"class-3",
 		"Attestation ≠ execution",
 		"ClassifyCompletionReport",
+		// 🎯T31.2 greenfield elicitation
+		"Greenfield oracle elicitation",
 		"T31.2",
+		"oracle-coverage map",
+		"pinned",
+		"fuzzy",
+		"when X, expect Y",
+		"SPIRAL",
+		"DECIDABLE-FROM-TASTE",
+		"CoverageMap",
+		"greenfield-oracle-elicitation.md",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)
@@ -392,7 +434,17 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"accepted-risk",
 		"class-3",
 		"attestation ≠ execution",
+		// 🎯T31.2
+		"Greenfield oracle elicitation",
 		"T31.2",
+		"oracle-coverage map",
+		"pinned",
+		"fuzzy",
+		"when X expect Y",
+		"SPIRAL",
+		"DECIDABLE-FROM-TASTE",
+		"CoverageMap",
+		"greenfield-oracle-elicitation.md",
 	} {
 		if !strings.Contains(a, want) {
 			t.Errorf("AGENTS.md missing doctrine marker %q", want)

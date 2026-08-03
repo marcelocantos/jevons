@@ -28,6 +28,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/workers"
 )
 
@@ -103,6 +104,10 @@ type Server struct {
 	// when agent_start / thread_spawn / jwork omit provider (🎯T148).
 	// Empty means cli.ResolveProvider falls through to env / grok at use time.
 	defaultProvider string
+
+	// rsiLoop is the ambient recursive self-improvement schedule/stream (🎯T92).
+	// Nil until SetRSILoop; jevons_rsi_cycle requires it.
+	rsiLoop *rsi.Loop
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn

@@ -133,12 +133,26 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   "we should always…" in chat. Ceremony: `jevons_target_file` and/or
   bullseye MCP (`bullseye_commit` track). Related: 🎯T92 ambient RSI,
   🎯T129 hierarchy. Residual: one-off flukes may skip filing.
+- **Ambient RSI (🎯T92):** harness schedule + idle-reap stream mint
+  improvement targets from eventlog evidence (`internal/rsi`,
+  `jevons_rsi_cycle`); not only owner `/retro`. Filing reflex is the
+  mid-turn agent half of the same mission.
 - **Oracle-first completion (🎯T31 / 🎯T31.1):** bare "done" / complete /
   finished without **oracle evidence** (named test + green, and/or
   commit SHA) or **explicit accepted-risk / class-3** language is **not
   accepted**. Overseer is the independent gate (attestation ≠ execution).
-  Instructional residual + pure classifier; greenfield elicitation is
-  🎯T31.2. Persona + agents-guide + fleet standing brief.
+  Instructional residual + pure classifier. Persona + agents-guide +
+  fleet standing brief.
+- **Greenfield oracle elicitation (🎯T31.2):** for new software (no
+  external reference), co-develop an **oracle-coverage map** alongside
+  design — **pinned** / **fuzzy** / load-bearing **when X expect Y**
+  examples (plus taste / spike). **SPIRAL** (design → thin slice → owner
+  reacts → intent sharpens → new oracle); refuse production on still-
+  fuzzy parts. **DECIDABLE-FROM-TASTE** sort; **PROPORTIONALITY +
+  GOODHART** (spikes OK un-oracled; pin only with load-bearing examples).
+  Pure `CoverageMap` / `ClassifyDesignClause` helpers. Residual:
+  instructional + pure model; not a hard daemon block; T29 UI + owner
+  process-fidelity class-3. Design: `docs/design/greenfield-oracle-elicitation.md`.
 - **Unattended frontier auto-spawn (🎯T155):** when a new frontier leaf is
   filed that is not design-gated / needs-owner / design-discussion /
   parked-for-design, **`jevons-po` spawns a fleet worker** under
