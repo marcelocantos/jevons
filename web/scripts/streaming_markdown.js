@@ -56,7 +56,11 @@
 
     function start() {
       if (typeof rootEl.innerHTML === 'string') rootEl.innerHTML = '';
-      const renderer = smd.default_renderer(rootEl);
+      let renderer = smd.default_renderer(rootEl);
+      // 🎯T151: progressive <a> open in new tab (do not edit vendored smd.js).
+      if (root.LinkSafety && typeof root.LinkSafety.wrapSmdDefaultRenderer === 'function') {
+        renderer = root.LinkSafety.wrapSmdDefaultRenderer(smd, renderer);
+      }
       parser = smd.parser(renderer);
       lastNormalized = '';
       ended = false;
@@ -287,6 +291,11 @@
           stack.push(code);
           return;
         }
+        // 🎯T151: hermetic/string path — anchors carry target=_blank + safe rel.
+        if (node.tag === 'a') {
+          node.attrs.target = '_blank';
+          node.attrs.rel = 'noopener noreferrer';
+        }
         stack[stack.length - 1].children.push(node);
         stack.push(node);
       },
@@ -307,6 +316,11 @@
           }
         } catch (_) {
           cur.attrs['data-attr'] = value;
+        }
+        // Re-assert after href arrives so ensure attrs survive set_attr.
+        if (cur.tag === 'a') {
+          cur.attrs.target = '_blank';
+          cur.attrs.rel = 'noopener noreferrer';
         }
       },
       toHTML: function () { return ser(stack[0]); },

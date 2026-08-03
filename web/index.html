@@ -639,11 +639,28 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/tool_summary.js"></script>
 <script src="scripts/mermaid_actions.js"></script>
 <script src="scripts/markdown_normalize.js"></script>
+<script src="scripts/link_safety.js"></script>
 <script src="scripts/smd.js"></script>
 <script src="scripts/streaming_markdown.js"></script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
+// 🎯T151: content links open in a new tab (never steal chat session).
+(function wireLinkSafety() {
+  if (typeof LinkSafety === 'undefined') return;
+  // Capture-phase: any user click on an <a href> that still lacks target
+  // gets safe attrs before navigation (activity chrome, late-injected HTML).
+  document.addEventListener('click', function (e) {
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    const a = t.closest('a[href]');
+    if (!a) return;
+    // Leave plain product hash-only routes in-app if intentional.
+    const href = a.getAttribute('href') || '';
+    if (href.charAt(0) === '#' && href.indexOf('://') < 0) return;
+    LinkSafety.decorateAnchor(a);
+  }, true);
+})();
 </script>
 <script>
 const msgs = document.getElementById('messages');
@@ -2070,11 +2087,21 @@ function renderMermaidIn(container) {
 // 🎯T145/T146: normalize smushed ``` fences before marked so prose:```lang\n
 // never fuses a real opening fence onto the preceding sentence; mid-prose
 // ``` examples (no following newline) stay prose and do not open blocks.
+// 🎯T151: every rendered <a href> gets target=_blank + rel=noopener noreferrer.
 function parseAssistantMarkdown(text) {
   const raw = (typeof MarkdownNormalize !== 'undefined')
     ? MarkdownNormalize.ensureFenceNewlines(text)
     : text;
-  return marked.parse(raw == null ? '' : raw);
+  let html = marked.parse(raw == null ? '' : raw);
+  if (typeof LinkSafety !== 'undefined' && LinkSafety.ensureHtmlAnchors) {
+    html = LinkSafety.ensureHtmlAnchors(html);
+  }
+  return html;
+}
+function decorateBodyLinks(container) {
+  if (typeof LinkSafety !== 'undefined' && LinkSafety.decorateContainer) {
+    LinkSafety.decorateContainer(container);
+  }
 }
 // 🎯T150: progressive stream paint via thetarnav/streaming-markdown (smd).
 // Mid-stream: delta parser_write into per-bubble session (closed **…** live).
@@ -2101,6 +2128,7 @@ function paintStreamBody(d, t) {
   if (!canStream) {
     // Interim fallback only: marked every frame (never plain textContent).
     d._body.innerHTML = parseAssistantMarkdown(t);
+    decorateBodyLinks(d._body);
     return;
   }
   if (!d._smdSession) {
@@ -2109,9 +2137,11 @@ function paintStreamBody(d, t) {
   }
   if (!d._smdSession) {
     d._body.innerHTML = parseAssistantMarkdown(t);
+    decorateBodyLinks(d._body);
     return;
   }
   d._smdSession.writeFull(t, streamNormalize);
+  decorateBodyLinks(d._body);
 }
 function paintBody(d, role, t) {
   if (role === 'jevons') {
@@ -2120,6 +2150,7 @@ function paintBody(d, role, t) {
     } else {
       destroyStreamSession(d);
       d._body.innerHTML = parseAssistantMarkdown(t);
+      decorateBodyLinks(d._body); // 🎯T151 belt-and-suspenders
       renderMermaidIn(d._body);   // sealed content only
       highlightCodeIn(d._body);   // 🎯T74
     }
@@ -2128,6 +2159,7 @@ function paintBody(d, role, t) {
   } else if (role === 'user') {
     // 🎯T75: quote notation as blockquotes; 🎯T76: [image: id] → <img>.
     d._body.innerHTML = renderUserText(t);
+    decorateBodyLinks(d._body);
   } else {
     d._body.textContent = t;
   }
