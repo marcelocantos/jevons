@@ -1,7 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic unit tests for composer Home/End caret policy (🎯T126 / 🎯T149).
+// Hermetic unit tests for composer key policy
+// (🎯T126 / 🎯T149 Home/End; 🎯T132 Enter chords).
 // Run: node web/scripts/composer_keys_test.js
 // Pure policy — no DOM, no Playwright.
 
@@ -253,6 +254,110 @@ test('T149 wispr_context exports seedPrefixLen / isSeedOnly / stripSeed / EMPTY_
   assert.strictEqual(WC.stripSeed(WC.EMPTY_SEED + 'hi'), 'hi');
   assert.ok(WC.isSeedOnly(WC.EMPTY_SEED));
   assert.ok(!WC.isSeedOnly('hi'));
+});
+
+// ── 🎯T132 Enter-chord policy ───────────────────────────────────────
+
+test('T132 Ctrl+Enter → interrupt (immediate send), not Alt', function () {
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { ctrlKey: true }, { composerEmpty: false }),
+    'interrupt'
+  );
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { ctrlKey: true }, { composerEmpty: true }),
+    'interrupt'
+  );
+  // Alt alone must never be interrupt/send.
+  assert.notStrictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false }),
+    'interrupt'
+  );
+  assert.notStrictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true }),
+    'interrupt'
+  );
+  assert.notStrictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false }),
+    'send'
+  );
+});
+
+test('T132 Alt+Enter empty → pop_last; non-empty → noop (no steal)', function () {
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true }),
+    'pop_last'
+  );
+  // Seed-only is effectively empty (caller sets composerEmpty from Wispr).
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: WC.isEffectivelyEmpty(WC.EMPTY_SEED) }),
+    'pop_last'
+  );
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false }),
+    'noop'
+  );
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: WC.isEffectivelyEmpty('real draft'),
+    }),
+    'noop'
+  );
+});
+
+test('T132 plain Enter → send; Shift+Enter → newline; Meta is not interrupt', function () {
+  assert.strictEqual(CK.classifyEnterAction('Enter', {}, { composerEmpty: false }), 'send');
+  assert.strictEqual(CK.classifyEnterAction('Enter', { metaKey: true }, {}), 'send');
+  assert.strictEqual(CK.classifyEnterAction('Enter', { shiftKey: true }, {}), 'newline');
+  // Shift wins over other modifiers for newline.
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { shiftKey: true, ctrlKey: true }, {}),
+    'newline'
+  );
+  assert.strictEqual(CK.classifyEnterAction('ArrowUp', {}, {}), null);
+});
+
+test('T132 Ctrl+Alt+Enter still interrupt (Ctrl owns immediate send)', function () {
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { ctrlKey: true, altKey: true }, { composerEmpty: true }),
+    'interrupt'
+  );
+});
+
+test('T132 lastOwnerHistoryEntry returns tail text for pop_last wire-up', function () {
+  assert.strictEqual(CK.lastOwnerHistoryEntry(null), null);
+  assert.strictEqual(CK.lastOwnerHistoryEntry([]), null);
+  const hist = [
+    { text: 'first', el: { id: 1 } },
+    { text: 'most recent owner', el: { id: 2 } },
+  ];
+  const last = CK.lastOwnerHistoryEntry(hist);
+  assert.ok(last);
+  assert.strictEqual(last.text, 'most recent owner');
+  assert.strictEqual(last.index, 1);
+  assert.strictEqual(last.el.id, 2);
+});
+
+test('T132 index.html wires Ctrl+Enter interrupt and Alt+Enter pop_last', function () {
+  const htmlPath = path.join(__dirname, '..', 'index.html');
+  const html = fs.readFileSync(htmlPath, 'utf8');
+  assert.ok(html.includes('classifyEnterAction') || html.includes('T132'),
+    'must use classifyEnterAction / T132 Enter policy');
+  assert.ok(html.includes('popLastOwnerAsInterjection') || html.includes('pop_last'),
+    'must wire empty Alt+Enter pop path');
+  assert.ok(
+    /Ctrl\+Enter|Control\+Enter/.test(html) && /interrupt|interject/.test(html),
+    'UI must document Ctrl+Enter interject/immediate send'
+  );
+  assert.ok(
+    /Alt\+Enter/.test(html) && /pop/.test(html.toLowerCase()),
+    'UI must document Alt+Enter empty pop'
+  );
+  // Must not treat Alt alone as interrupt chord in the send path.
+  assert.ok(
+    !/interrupt\s*=\s*!!\s*\(?e\.altKey/.test(html) &&
+      !/interrupt:\s*!!e\.altKey/.test(html),
+    'must not set interrupt from altKey alone'
+  );
 });
 
 if (failed) {

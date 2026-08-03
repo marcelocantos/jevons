@@ -565,7 +565,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <div id="composer-images" class="composer-images" aria-label="Attached images"></div>
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
-                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing."
+                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter empty pops last message, Shift+Enter for a new line. / focuses box when not typing."
                 title="Message box — / focuses here when focus is elsewhere (🎯T127)"
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
@@ -660,7 +660,7 @@ let attentionBarExpanded = false;
 // 🎯T135: last auto-route match is suggestion-only (never steals wire).
 // Stashed until the next user bubble echo so we can attach "Continue in: …".
 let lastRouteSuggestion = null;
-const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Shift+Enter for a new line. / focuses box when not typing.';
+const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter empty pops last message, Shift+Enter for a new line. / focuses box when not typing.';
 
 // 🎯T153: force focus back to main composer after pointer chrome actions.
 // Prefer ComposerFocus.focusComposer; fall back to #input.focus().
@@ -2067,8 +2067,9 @@ function renderMermaidIn(container) {
     });
   });
 }
-// 🎯T145: normalize smushed ``` fences before marked so prose:```lang
-// never fuses the opening fence onto the preceding sentence.
+// 🎯T145/T146: normalize smushed ``` fences before marked so prose:```lang\n
+// never fuses a real opening fence onto the preceding sentence; mid-prose
+// ``` examples (no following newline) stay prose and do not open blocks.
 function parseAssistantMarkdown(text) {
   const raw = (typeof MarkdownNormalize !== 'undefined')
     ? MarkdownNormalize.ensureFenceNewlines(text)
@@ -3659,6 +3660,32 @@ function rewindAndResend() {
   requestAnimationFrame(() => { scrollDown(); });
 }
 
+// 🎯T132: Alt+Enter on an empty composer seeds the box with the most
+// recent owner message (msgHistory tail) as an interjection/edit draft.
+// Mirrors one step of history-nav into the live box without cycling.
+// Returns true when a message was loaded.
+function popLastOwnerAsInterjection() {
+  const entry = (typeof ComposerKeys !== 'undefined' && ComposerKeys.lastOwnerHistoryEntry)
+    ? ComposerKeys.lastOwnerHistoryEntry(msgHistory)
+    : (msgHistory.length
+      ? { text: msgHistory[msgHistory.length - 1].text, index: msgHistory.length - 1, el: msgHistory[msgHistory.length - 1].el }
+      : null);
+  if (!entry) return false;
+  liveDraftBackup = '';
+  histDraft = '';
+  histIdx = entry.index;
+  navFocus = { zone: 'history', index: entry.index };
+  input.value = entry.text || '';
+  setEditingHighlight(entry.el || null);
+  if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
+  autoGrow();
+  try {
+    input.selectionStart = input.selectionEnd = input.value.length;
+  } catch (_) {}
+  focusComposer();
+  return true;
+}
+
 // 🎯T113 + 🎯T88: Alt+Up/Down cycles queued follow-ups first, then
 // previously submitted request history (queue before history).
 // dir = -1 (older / Up) or +1 (newer / Down). Returns true if handled.
@@ -3837,10 +3864,26 @@ function autoGrow() {
 
 // Enter submits, Shift-Enter inserts a newline.
 // 🎯T113: plain Enter enqueues while busy; only Control+Enter interjects.
+// 🎯T132: Ctrl+Enter = immediate send (never Alt); empty Alt+Enter pops
+// last owner message into the composer as the interjection/edit seed.
 input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter') {
+    const composerEmpty = (typeof WisprContext !== 'undefined' && WisprContext.isEffectivelyEmpty)
+      ? WisprContext.isEffectivelyEmpty(input.value)
+      : !String(input.value || '').trim();
+    const action = (typeof ComposerKeys !== 'undefined' && ComposerKeys.classifyEnterAction)
+      ? ComposerKeys.classifyEnterAction(e.key, e, { composerEmpty: composerEmpty })
+      : (e.shiftKey ? 'newline'
+        : (e.ctrlKey ? 'interrupt'
+          : (e.altKey ? (composerEmpty ? 'pop_last' : 'noop') : 'send')));
+    if (action === 'newline' || action == null) return; // Shift+Enter → native newline
     e.preventDefault();
-    const interrupt = !!e.ctrlKey; // Control+Enter only (not Cmd/Meta)
+    if (action === 'noop') return; // non-empty Alt+Enter: do not send (Firefox-safe)
+    if (action === 'pop_last') {
+      popLastOwnerAsInterjection();
+      return;
+    }
+    const interrupt = action === 'interrupt'; // Control+Enter only (not Alt, not Meta)
     // 🎯T88: primary send while a recalled bubble is highlighted rewinds
     // and resends (destructive redo). Escape clears edit mode first for
     // safe append; Cmd/Ctrl+Enter also forces safe append.
