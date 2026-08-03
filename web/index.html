@@ -188,6 +188,33 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   flex: 1; min-height: 0; overflow: auto; padding: 12px; text-align: center;
 }
 #mermaid-viz-panel .mvp-body svg { max-width: 100%; height: auto; }
+/* 🎯T190: multi-diagram pack — each connected component is its own Mermaid
+   block; wrap-grid fills the ~90% panel without one mega horizontal strip. */
+#mermaid-viz-panel .mvp-body.mvp-pack {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+  align-content: start;
+  text-align: left;
+}
+#mermaid-viz-panel .mvp-pack-block {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  background: var(--surface-raised);
+  overflow: auto;
+  min-width: 0;
+}
+#mermaid-viz-panel .mvp-pack-block .mvp-pack-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+#mermaid-viz-panel .mvp-pack-block svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+#mermaid-viz-panel .mvp-pack-block[data-kind="orphans"] {
+  grid-column: 1 / -1; /* orphans span full width when last */
+}
 #mermaid-viz-panel .mvp-status {
   font-size: 11px; color: var(--text-muted); padding: 0 10px 8px; flex-shrink: 0;
 }
@@ -2037,6 +2064,7 @@ function renderMermaidPanelEmpty() {
   const MA = window.MermaidActions;
   const body = document.getElementById('mvp-body');
   if (!body) return;
+  body.classList.remove('mvp-pack');
   body.innerHTML = (MA && MA.emptyStateHtml) ? MA.emptyStateHtml() : '<p>No graph loaded.</p>';
   _mermaidPanelState = null;
   setMermaidPanelTitle('Graph viz');
@@ -2050,6 +2078,7 @@ function renderMermaidPanelFetchError(err, defaults) {
   const body = document.getElementById('mvp-body');
   const d = defaults || {};
   showMermaidPasteArea(false);
+  if (body) body.classList.remove('mvp-pack');
   if (MA && typeof MA.productFetchFailureFromError === 'function') {
     const view = MA.productFetchFailureFromError(err, d);
     if (body) body.innerHTML = view.bodyHtml;
@@ -2081,6 +2110,7 @@ function applyMermaidPanelContent(opts) {
   const MA = window.MermaidActions;
   const body = document.getElementById('mvp-body');
   if (!body) return;
+  body.classList.remove('mvp-pack');
   const src = MA && MA.stripMermaidFence ? MA.stripMermaidFence(o.src) : String(o.src || '');
   const svgMarkup = String(o.svgMarkup || '');
   const title = String(o.title || 'Graph').trim() || 'Graph';
@@ -2176,6 +2206,8 @@ function openVizFromChrome() {
 /**
  * 🎯T185: Frontier Graph — open ~90% panel with entire unachieved dependency graph.
  * Fetches GET /api/frontier/graph (ledger-built Mermaid); renders into #mermaid-viz-panel.
+ * 🎯T190: multi-diagram pack (one Mermaid per connected component + orphans block)
+ * into wrap-grid blocks — not one mega LR strip / Mermaid-native TD alone.
  * 🎯T196: 404/5xx/network → actionable error body (HTTP + restart-daily), not empty paste shell.
  */
 function openFrontierGraph(opts) {
@@ -2188,7 +2220,10 @@ function openFrontierGraph(opts) {
   setMermaidPanelTitle('Unachieved graph');
   setMermaidPanelStatus(o.status || 'Loading unachieved dependency graph…');
   const body = document.getElementById('mvp-body');
-  if (body) body.innerHTML = '<p class="mvp-empty-body" style="padding:12px">Loading…</p>';
+  if (body) {
+    body.classList.remove('mvp-pack');
+    body.innerHTML = '<p class="mvp-empty-body" style="padding:12px">Loading…</p>';
+  }
   return fetch(api)
     .then(function (r) {
       if (!r.ok) {
@@ -2212,20 +2247,35 @@ function openFrontierGraph(opts) {
         : {
             available: !!(payload && payload.available),
             mermaid: (payload && payload.mermaid) || '',
+            diagrams: (payload && payload.diagrams) || [],
+            pack: (payload && payload.pack) || 'wrap-grid',
             error: (payload && payload.error) || '',
             nodeCount: (payload && payload.node_count) || 0,
             edgeCount: (payload && payload.edge_count) || 0,
           };
-      if (!model.available || !model.mermaid) {
+      const hasDiagrams = model.diagrams && model.diagrams.length > 0;
+      if (!model.available || (!model.mermaid && !hasDiagrams)) {
         // Empty ledger / no graph — not a product fetch failure (distinct from 🎯T196).
         renderMermaidPanelEmpty();
         setMermaidPanelTitle('Unachieved graph');
         setMermaidPanelStatus(model.error || 'No unachieved graph available');
         return model;
       }
+      const nBlocks = hasDiagrams ? model.diagrams.length : 1;
       const meta = (model.nodeCount || model.edgeCount)
-        ? (' · ' + (model.nodeCount || 0) + ' nodes · ' + (model.edgeCount || 0) + ' edges')
+        ? (' · ' + (model.nodeCount || 0) + ' nodes · ' + (model.edgeCount || 0) + ' edges · ' +
+           nBlocks + ' diagram' + (nBlocks === 1 ? '' : 's'))
         : '';
+      if (hasDiagrams) {
+        return renderMermaidDiagramPackInPanel(model.diagrams, {
+          title: 'Unachieved graph',
+          pinSrc: model.mermaid,
+          pin: o.pin !== false,
+          large: true,
+          pack: model.pack || 'wrap-grid',
+          status: 'Unachieved dependency graph' + meta,
+        }).then(function () { return model; });
+      }
       return renderMermaidSourceInPanel(model.mermaid, {
         title: 'Unachieved graph',
         pin: o.pin !== false,
@@ -2239,6 +2289,103 @@ function openFrontierGraph(opts) {
       renderMermaidPanelFetchError(err, { resource: 'Unachieved graph' });
       return null;
     });
+}
+/**
+ * 🎯T190: render each component Mermaid as its own block in a wrap-grid pack.
+ * pinSrc is the joined multi-diagram source for pin/copy; each block renders alone.
+ */
+function renderMermaidDiagramPackInPanel(diagrams, opts) {
+  const o = opts || {};
+  const list = Array.isArray(diagrams) ? diagrams : [];
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  if (!body) return Promise.resolve(null);
+  showMermaidPanelShell({ large: o.large !== false });
+  const pinSrc = o.pinSrc != null ? String(o.pinSrc) : list.map(function (d) {
+    return d && d.mermaid ? d.mermaid : '';
+  }).filter(Boolean).join('\n');
+  _mermaidPanelState = {
+    src: pinSrc,
+    svgMarkup: '',
+    title: o.title || 'Unachieved graph',
+    pack: o.pack || 'wrap-grid',
+    diagrams: list,
+  };
+  body.classList.add('mvp-pack');
+  body.innerHTML = '';
+  const m = ensureMermaid();
+  if (!m) {
+    // Fallback: show sources as text blocks.
+    list.forEach(function (d, i) {
+      const block = document.createElement('div');
+      block.className = 'mvp-pack-block';
+      block.setAttribute('data-kind', (d && d.kind) || 'component');
+      block.setAttribute('data-diagram-id', (d && d.id) || ('d' + i));
+      const title = document.createElement('p');
+      title.className = 'mvp-pack-title';
+      title.textContent = (d && d.title) || ('Diagram ' + (i + 1));
+      block.appendChild(title);
+      const pre = document.createElement('pre');
+      pre.className = 'mvp-source-fallback';
+      pre.style.cssText = 'text-align:left;font-size:11px;white-space:pre-wrap;margin:0';
+      pre.textContent = (d && d.mermaid) || '';
+      block.appendChild(pre);
+      body.appendChild(block);
+    });
+    setMermaidPanelTitle(o.title || 'Unachieved graph');
+    setMermaidPanelStatus('Mermaid not loaded — sources shown as text');
+    if (o.pin !== false) pinMermaidPanelState('Source pack pinned (render unavailable)');
+    return Promise.resolve(null);
+  }
+  setMermaidPanelTitle(o.title || 'Unachieved graph');
+  setMermaidPanelStatus(o.status || 'Rendering…');
+  const renders = list.map(function (d, i) {
+    const src = MA && MA.stripMermaidFence
+      ? MA.stripMermaidFence(d && d.mermaid)
+      : String((d && d.mermaid) || '').trim();
+    const block = document.createElement('div');
+    block.className = 'mvp-pack-block';
+    block.setAttribute('data-kind', (d && d.kind) || 'component');
+    block.setAttribute('data-diagram-id', (d && d.id) || ('d' + i));
+    const title = document.createElement('p');
+    title.className = 'mvp-pack-title';
+    title.textContent = (d && d.title) || ('Diagram ' + (i + 1));
+    block.appendChild(title);
+    const host = document.createElement('div');
+    host.className = 'mvp-pack-host';
+    block.appendChild(host);
+    body.appendChild(block);
+    if (!src) {
+      host.textContent = '(empty)';
+      return Promise.resolve(null);
+    }
+    const id = 'mvp-pack-mmd-' + (++mermaidSeq) + '-' + i;
+    return Promise.resolve()
+      .then(function () { return m.render(id, src); })
+      .then(function (result) {
+        host.innerHTML = result && result.svg ? result.svg : '';
+        return result && result.svg;
+      })
+      .catch(function (err) {
+        host.innerHTML = '<pre class="mvp-source-fallback" style="text-align:left;font-size:11px;white-space:pre-wrap">' +
+          (MA && MA.escapeHtml ? MA.escapeHtml(src) : src) + '</pre>';
+        host.title = 'Render failed: ' + (err && err.message ? err.message : 'invalid Mermaid');
+        return null;
+      });
+  });
+  return Promise.all(renders).then(function (svgs) {
+    const joinedSvg = svgs.filter(Boolean).join('\n');
+    _mermaidPanelState = {
+      src: pinSrc,
+      svgMarkup: joinedSvg,
+      title: o.title || 'Unachieved graph',
+      pack: o.pack || 'wrap-grid',
+      diagrams: list,
+    };
+    if (o.pin !== false) pinMermaidPanelState(o.status || 'Rendered · pinned as last');
+    else setMermaidPanelStatus(o.status || 'Rendered');
+    return svgs;
+  });
 }
 function loadLastMermaidGraph() {
   const MA = window.MermaidActions;
@@ -2515,6 +2662,7 @@ window.closeMermaidPanel = closeMermaidPanel;
 window.openMermaidWindow = openMermaidWindow;
 window.openVizFromChrome = openVizFromChrome;
 window.openFrontierGraph = openFrontierGraph;
+window.renderMermaidDiagramPackInPanel = renderMermaidDiagramPackInPanel;
 window.loadLastMermaidGraph = loadLastMermaidGraph;
 window.renderMermaidSourceInPanel = renderMermaidSourceInPanel;
 window.pinMermaidPanelState = pinMermaidPanelState;

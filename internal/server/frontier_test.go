@@ -336,6 +336,7 @@ targets:
 }
 
 // 🎯T185: unachieved graph from ledger — active nodes + depends_on edges among them.
+// 🎯T190: multi-diagram pack (component + orphans), not one mega subgraph strip.
 func TestComputeActiveGraphMermaidFromLedger(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bullseye.yaml")
@@ -368,57 +369,141 @@ targets:
 	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	src, nodes, edges, err := computeActiveGraphMermaidFromLedger(path)
+	pack, err := computeActiveGraphPackFromLedger(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Active: T2, T3, T3.1, T4 (not T1 achieved, not T5 set_aside).
-	if nodes != 4 {
-		t.Fatalf("nodes=%d want 4; mermaid=\n%s", nodes, src)
+	if pack.NodeCount != 4 {
+		t.Fatalf("nodes=%d want 4; pack=%+v", pack.NodeCount, pack)
 	}
 	// Edges among active only: T3→T2, T3.1→T3 (T3.1→T1 dropped; T2→T1 dropped).
-	if edges != 2 {
-		t.Fatalf("edges=%d want 2; mermaid=\n%s", edges, src)
+	if pack.EdgeCount != 2 {
+		t.Fatalf("edges=%d want 2", pack.EdgeCount)
 	}
-	// 🎯T190: layout directives + flowchart TB (not graph TD sprawl).
-	if !strings.Contains(src, "%%{init:") {
-		t.Fatalf("missing mermaid init:\n%s", src)
+	if pack.Pack != frontierGraphPackLayout {
+		t.Fatalf("pack=%q want %q", pack.Pack, frontierGraphPackLayout)
 	}
-	if !strings.Contains(src, "useMaxWidth") || !strings.Contains(src, "nodeSpacing") ||
-		!strings.Contains(src, "rankSpacing") || !strings.Contains(src, "wrappingWidth") {
-		t.Fatalf("missing layout knobs:\n%s", src)
+	// Multi-diagram: one component {T2,T3,T3.1} + one orphans {T4}.
+	if len(pack.Diagrams) != 2 {
+		t.Fatalf("diagrams=%d want 2: %+v", len(pack.Diagrams), pack.Diagrams)
 	}
-	if !strings.Contains(src, "flowchart TB") {
-		t.Fatalf("missing flowchart TB:\n%s", src)
+	var comp, orph *GraphDiagramBlock
+	for i := range pack.Diagrams {
+		d := &pack.Diagrams[i]
+		switch d.Kind {
+		case graphDiagramKindComponent:
+			comp = d
+		case graphDiagramKindOrphans:
+			orph = d
+		}
 	}
-	if !strings.Contains(src, "T2[") || !strings.Contains(src, "T3[") || !strings.Contains(src, "T3_1[") || !strings.Contains(src, "T4[") {
-		t.Fatalf("missing active nodes:\n%s", src)
+	if comp == nil || orph == nil {
+		t.Fatalf("want component+orphans: %+v", pack.Diagrams)
 	}
-	if strings.Contains(src, "T1[") || strings.Contains(src, "T5[") {
-		t.Fatalf("achieved/set_aside must not appear:\n%s", src)
+	if comp.NodeCount != 3 || comp.EdgeCount != 2 {
+		t.Fatalf("component nodes=%d edges=%d:\n%s", comp.NodeCount, comp.EdgeCount, comp.Mermaid)
 	}
-	if !strings.Contains(src, "T3 -.->|needs| T2") {
-		t.Fatalf("missing T3→T2 edge:\n%s", src)
+	if orph.NodeCount != 1 || orph.EdgeCount != 0 {
+		t.Fatalf("orphans nodes=%d edges=%d:\n%s", orph.NodeCount, orph.EdgeCount, orph.Mermaid)
 	}
-	if !strings.Contains(src, "T3_1 -.->|needs| T3") {
-		t.Fatalf("missing T3.1→T3 edge:\n%s", src)
+	// Layout directives inside each diagram (not Mermaid-native TD alone as sole fix).
+	for _, d := range pack.Diagrams {
+		if !strings.Contains(d.Mermaid, "%%{init:") {
+			t.Fatalf("missing mermaid init in %s:\n%s", d.ID, d.Mermaid)
+		}
+		if !strings.Contains(d.Mermaid, "useMaxWidth") || !strings.Contains(d.Mermaid, "nodeSpacing") ||
+			!strings.Contains(d.Mermaid, "rankSpacing") || !strings.Contains(d.Mermaid, "wrappingWidth") {
+			t.Fatalf("missing layout knobs in %s:\n%s", d.ID, d.Mermaid)
+		}
+		if !strings.Contains(d.Mermaid, "flowchart TB") {
+			t.Fatalf("missing flowchart TB in %s:\n%s", d.ID, d.Mermaid)
+		}
+		// Reject single-mega subgraph packing as the product shape.
+		if strings.Contains(d.Mermaid, "subgraph island_") {
+			t.Fatalf("diagrams must not use subgraph island packing:\n%s", d.Mermaid)
+		}
 	}
-	// Edge to achieved T1 must not appear.
-	if strings.Contains(src, "|needs| T1") {
-		t.Fatalf("edge to achieved T1 must be omitted:\n%s", src)
+	if !strings.Contains(comp.Mermaid, "T2[") || !strings.Contains(comp.Mermaid, "T3[") || !strings.Contains(comp.Mermaid, "T3_1[") {
+		t.Fatalf("missing component nodes:\n%s", comp.Mermaid)
 	}
-	// 🎯T190: island packing — connected {T2,T3,T3.1} vs orphan T4.
-	if !strings.Contains(src, "subgraph island_") {
-		t.Fatalf("missing island subgraph packing:\n%s", src)
+	if !strings.Contains(orph.Mermaid, "T4[") {
+		t.Fatalf("missing orphan node:\n%s", orph.Mermaid)
 	}
-	if !strings.Contains(src, "direction TB") {
-		t.Fatalf("missing subgraph direction TB:\n%s", src)
+	if strings.Contains(comp.Mermaid, "T1[") || strings.Contains(comp.Mermaid, "T5[") ||
+		strings.Contains(orph.Mermaid, "T1[") || strings.Contains(orph.Mermaid, "T5[") {
+		t.Fatalf("achieved/set_aside must not appear")
 	}
-	if !strings.Contains(src, "island_0 ~~~ island_1") {
-		t.Fatalf("missing vertical packing link:\n%s", src)
+	if !strings.Contains(comp.Mermaid, "T3 -.->|needs| T2") {
+		t.Fatalf("missing T3→T2 edge:\n%s", comp.Mermaid)
 	}
-	if !strings.Contains(src, "linkStyle") || !strings.Contains(src, "stroke:none") {
-		t.Fatalf("packing links should be hidden via linkStyle:\n%s", src)
+	if !strings.Contains(comp.Mermaid, "T3_1 -.->|needs| T3") {
+		t.Fatalf("missing T3.1→T3 edge:\n%s", comp.Mermaid)
+	}
+	if strings.Contains(comp.Mermaid, "|needs| T1") {
+		t.Fatalf("edge to achieved T1 must be omitted:\n%s", comp.Mermaid)
+	}
+	// Joined pin source carries multi-diagram packing directives.
+	if !strings.Contains(pack.Mermaid, "jevons-frontier-pack") || !strings.Contains(pack.Mermaid, "pack=wrap-grid") {
+		t.Fatalf("joined source missing pack markers:\n%s", pack.Mermaid)
+	}
+	if !strings.Contains(pack.Mermaid, "kind=component") || !strings.Contains(pack.Mermaid, "kind=orphans") {
+		t.Fatalf("joined source missing diagram kinds:\n%s", pack.Mermaid)
+	}
+	// Legacy single-string entry still returns joined multi-diagram source.
+	src, nodes, edges, err := computeActiveGraphMermaidFromLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodes != 4 || edges != 2 {
+		t.Fatalf("legacy nodes=%d edges=%d", nodes, edges)
+	}
+	if !strings.Contains(src, "jevons-frontier-pack") {
+		t.Fatalf("legacy mermaid missing pack:\n%s", src)
+	}
+}
+
+func TestSplitOrphanComponents(t *testing.T) {
+	connected, orphans := splitOrphanComponents([][]string{
+		{"A", "B"},
+		{"C"},
+		{"D", "E", "F"},
+		{"G"},
+	})
+	if len(connected) != 2 {
+		t.Fatalf("connected=%v", connected)
+	}
+	if strings.Join(orphans, ",") != "C,G" {
+		t.Fatalf("orphans=%v", orphans)
+	}
+}
+
+func TestPackActiveGraphDiagramsOrder(t *testing.T) {
+	// Larger edge-count component first; orphans last.
+	connected := [][]string{
+		{"A", "B"},          // 1 edge
+		{"D", "E", "F", "G"}, // 3 edges
+	}
+	orphans := []string{"Z", "Y"}
+	nameOf := map[string]string{}
+	edges := []rawGraphEdge{
+		{from: "B", to: "A"},
+		{from: "E", to: "D"},
+		{from: "F", to: "E"},
+		{from: "G", to: "F"},
+	}
+	blocks := packActiveGraphDiagrams(connected, orphans, nameOf, edges)
+	if len(blocks) != 3 {
+		t.Fatalf("blocks=%d %+v", len(blocks), blocks)
+	}
+	if blocks[0].Kind != graphDiagramKindComponent || blocks[0].NodeCount != 4 {
+		t.Fatalf("first should be largest component: %+v", blocks[0])
+	}
+	if blocks[1].NodeCount != 2 {
+		t.Fatalf("second component: %+v", blocks[1])
+	}
+	if blocks[2].Kind != graphDiagramKindOrphans || blocks[2].NodeCount != 2 {
+		t.Fatalf("orphans last: %+v", blocks[2])
 	}
 }
 
@@ -586,8 +671,21 @@ targets:
 	if resp.NodeCount != 2 || resp.EdgeCount != 1 {
 		t.Fatalf("nodes=%d edges=%d mermaid=%s", resp.NodeCount, resp.EdgeCount, resp.Mermaid)
 	}
+	if resp.Pack != frontierGraphPackLayout {
+		t.Fatalf("pack=%q", resp.Pack)
+	}
+	if len(resp.Diagrams) != 1 {
+		// Single connected component {T10,T11}, no orphans.
+		t.Fatalf("diagrams=%d want 1: %+v", len(resp.Diagrams), resp.Diagrams)
+	}
+	if resp.Diagrams[0].Kind != graphDiagramKindComponent {
+		t.Fatalf("kind=%s", resp.Diagrams[0].Kind)
+	}
+	if !strings.Contains(resp.Diagrams[0].Mermaid, "T11 -.->|needs| T10") {
+		t.Fatalf("diagram mermaid=%s", resp.Diagrams[0].Mermaid)
+	}
 	if !strings.Contains(resp.Mermaid, "T11 -.->|needs| T10") {
-		t.Fatalf("mermaid=%s", resp.Mermaid)
+		t.Fatalf("joined mermaid=%s", resp.Mermaid)
 	}
 	if strings.Contains(resp.Mermaid, "T99") {
 		t.Fatalf("achieved T99 leaked: %s", resp.Mermaid)

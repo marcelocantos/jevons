@@ -599,18 +599,44 @@ func (s *Server) handleFrontier(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// GraphDiagramBlock is one Mermaid diagram in a multi-component pack (🎯T190).
+// Each connected component (or the shared orphans block) is its own diagram;
+// the panel packs blocks in a wrap grid instead of one mega LR strip.
+type GraphDiagramBlock struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"` // "component" | "orphans"
+	Title     string `json:"title,omitempty"`
+	Mermaid   string `json:"mermaid"`
+	NodeCount int    `json:"node_count"`
+	EdgeCount int    `json:"edge_count"`
+}
+
 // GraphResponse is GET /api/frontier/graph JSON (🎯T185): entire unachieved
 // dependency graph as Mermaid source for the Frontier Graph control.
+// 🎯T190: Diagrams holds one Mermaid source per connected component (plus
+// optional orphans block); Pack names the panel layout ("wrap-grid").
+// Mermaid remains a multi-diagram joined source for pin/copy fallback.
 type GraphResponse struct {
-	Available bool   `json:"available"`
-	Ledger    string `json:"ledger,omitempty"`
-	Cwd       string `json:"cwd,omitempty"`
-	Mermaid   string `json:"mermaid,omitempty"`
-	NodeCount int    `json:"node_count,omitempty"`
-	EdgeCount int    `json:"edge_count,omitempty"`
-	Error     string `json:"error,omitempty"`
-	UpdatedAt string `json:"updated_at,omitempty"`
+	Available bool                `json:"available"`
+	Ledger    string              `json:"ledger,omitempty"`
+	Cwd       string              `json:"cwd,omitempty"`
+	Mermaid   string              `json:"mermaid,omitempty"`
+	Diagrams  []GraphDiagramBlock `json:"diagrams,omitempty"`
+	Pack      string              `json:"pack,omitempty"`
+	NodeCount int                 `json:"node_count,omitempty"`
+	EdgeCount int                 `json:"edge_count,omitempty"`
+	Error     string              `json:"error,omitempty"`
+	UpdatedAt string              `json:"updated_at,omitempty"`
 }
+
+// Frontier graph pack layout token (🎯T190). Hermetic tests assert this value.
+const frontierGraphPackLayout = "wrap-grid"
+
+// Diagram kind tokens (🎯T190).
+const (
+	graphDiagramKindComponent = "component"
+	graphDiagramKindOrphans   = "orphans"
+)
 
 // mermaidSafeNodeID maps target ids to Mermaid node ids (T27.1 → T27_1).
 func mermaidSafeNodeID(id string) string {
@@ -659,17 +685,17 @@ func escapeMermaidLabel(s string) string {
 }
 
 // Mermaid layout knobs for the unachieved Frontier Graph (🎯T190).
-// Tight spacing + useMaxWidth keep ~30–50 nodes inside the ~90% panel;
-// wrappingWidth softens wide labels; island packing stacks disconnected
-// components vertically so they do not form one infinite LR strip.
+// Tight spacing + useMaxWidth keep ~30–50 nodes inside each component diagram;
+// wrappingWidth softens wide labels. Multi-diagram wrap-grid packing lives
+// in the panel CSS — Mermaid-native TD alone is rejected as the sole fix.
 const (
 	mermaidNodeSpacing   = 28
 	mermaidRankSpacing   = 36
 	mermaidWrappingWidth = 180
 )
 
-// mermaidActiveGraphHeader is the init + direction prefix for unachieved
-// dependency graphs (🎯T185 + 🎯T190). Hermetic tests assert these tokens.
+// mermaidActiveGraphHeader is the init + direction prefix for one unachieved
+// dependency diagram (🎯T185 + 🎯T190). Hermetic tests assert these tokens.
 func mermaidActiveGraphHeader() string {
 	return fmt.Sprintf(
 		"%%%%{init: {'flowchart': {'useMaxWidth': true, 'nodeSpacing': %d, 'rankSpacing': %d, 'wrappingWidth': %d}}}%%%%\nflowchart TB\n",
@@ -677,7 +703,7 @@ func mermaidActiveGraphHeader() string {
 	)
 }
 
-// packIslandsFromAdj is the pure connected-component packer (🎯T190).
+// packIslandsFromAdj is the pure connected-component partitioner (🎯T190).
 // activeIDs should already be sorted (stable island discovery order).
 // adj is an undirected adjacency list (both directions present).
 // Each island's ids are sorted by targetIDLess; islands ordered by first id.
@@ -724,22 +750,187 @@ func packIslandsFromAdj(activeIDs []string, adj map[string][]string) [][]string 
 	return islands
 }
 
-// computeActiveGraphMermaidFromLedger builds Mermaid for all unachieved
-// (active) targets and depends_on edges among them (🎯T185). Achieved /
-// set_aside nodes are omitted; edges to non-active deps are dropped.
-// 🎯T190: layout init (useMaxWidth / spacing / wrappingWidth), flowchart TB,
-// and connected-component packing so islands stack vertically.
-func computeActiveGraphMermaidFromLedger(ledgerPath string) (mermaid string, nodeCount, edgeCount int, err error) {
+// splitOrphanComponents peels size-1 islands into a shared orphans list
+// (🎯T190 option-1 special case of multi-diagram packing). Connected
+// components (size ≥ 2) stay separate.
+func splitOrphanComponents(islands [][]string) (connected [][]string, orphans []string) {
+	for _, island := range islands {
+		if len(island) == 0 {
+			continue
+		}
+		if len(island) == 1 {
+			orphans = append(orphans, island[0])
+			continue
+		}
+		connected = append(connected, island)
+	}
+	sort.Slice(orphans, func(i, j int) bool {
+		return targetIDLess(orphans[i], orphans[j])
+	})
+	return connected, orphans
+}
+
+// countEdgesInSet returns how many directed raw edges have both ends in set.
+func countEdgesInSet(edges []rawGraphEdge, set map[string]bool) int {
+	n := 0
+	for _, e := range edges {
+		if set[e.from] && set[e.to] {
+			n++
+		}
+	}
+	return n
+}
+
+type rawGraphEdge struct{ from, to string }
+
+// emitMermaidForNodes builds one flowchart TB diagram for the given nodes
+// and among-set edges (🎯T190 multi-diagram model).
+func emitMermaidForNodes(ids []string, nameOf map[string]string, edges []rawGraphEdge) (src string, edgeCount int) {
+	var b strings.Builder
+	b.WriteString(mermaidActiveGraphHeader())
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+		nid := mermaidSafeNodeID(id)
+		label := nameOf[id]
+		if label == "" {
+			label = id
+		} else {
+			label = id + " · " + truncateMermaidLabel(label, 36)
+		}
+		fmt.Fprintf(&b, "  %s[\"%s\"]\n", nid, escapeMermaidLabel(label))
+	}
+	for _, e := range edges {
+		if !set[e.from] || !set[e.to] {
+			continue
+		}
+		fmt.Fprintf(&b, "  %s -.->|needs| %s\n", mermaidSafeNodeID(e.from), mermaidSafeNodeID(e.to))
+		edgeCount++
+	}
+	return b.String(), edgeCount
+}
+
+// packActiveGraphDiagrams turns connected components + optional orphans into
+// ordered diagram blocks (largest/most-edges first, then orphans). Pure (🎯T190).
+func packActiveGraphDiagrams(
+	connected [][]string,
+	orphans []string,
+	nameOf map[string]string,
+	edges []rawGraphEdge,
+) []GraphDiagramBlock {
+	type ranked struct {
+		ids       []string
+		nodes     int
+		edgeCount int
+		firstID   string
+	}
+	rankedList := make([]ranked, 0, len(connected))
+	for _, comp := range connected {
+		if len(comp) == 0 {
+			continue
+		}
+		set := make(map[string]bool, len(comp))
+		for _, id := range comp {
+			set[id] = true
+		}
+		rankedList = append(rankedList, ranked{
+			ids:       comp,
+			nodes:     len(comp),
+			edgeCount: countEdgesInSet(edges, set),
+			firstID:   comp[0],
+		})
+	}
+	// Largest / most-edges first (optional quasi-optimize for pack order).
+	sort.SliceStable(rankedList, func(i, j int) bool {
+		if rankedList[i].edgeCount != rankedList[j].edgeCount {
+			return rankedList[i].edgeCount > rankedList[j].edgeCount
+		}
+		if rankedList[i].nodes != rankedList[j].nodes {
+			return rankedList[i].nodes > rankedList[j].nodes
+		}
+		return targetIDLess(rankedList[i].firstID, rankedList[j].firstID)
+	})
+
+	blocks := make([]GraphDiagramBlock, 0, len(rankedList)+1)
+	for i, r := range rankedList {
+		src, ec := emitMermaidForNodes(r.ids, nameOf, edges)
+		blocks = append(blocks, GraphDiagramBlock{
+			ID:        fmt.Sprintf("c%d", i),
+			Kind:      graphDiagramKindComponent,
+			Title:     fmt.Sprintf("Component (%d nodes)", r.nodes),
+			Mermaid:   src,
+			NodeCount: r.nodes,
+			EdgeCount: ec,
+		})
+	}
+	if len(orphans) > 0 {
+		src, ec := emitMermaidForNodes(orphans, nameOf, edges)
+		blocks = append(blocks, GraphDiagramBlock{
+			ID:        "orphans",
+			Kind:      graphDiagramKindOrphans,
+			Title:     fmt.Sprintf("Orphans (%d)", len(orphans)),
+			Mermaid:   src,
+			NodeCount: len(orphans),
+			EdgeCount: ec,
+		})
+	}
+	return blocks
+}
+
+// joinGraphDiagramSources builds a pin/copy multi-diagram source with pack
+// markers. Not valid as a single Mermaid render — panel uses diagrams[].
+func joinGraphDiagramSources(pack string, blocks []GraphDiagramBlock) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%%%% jevons-frontier-pack pack=%s diagrams=%d %%%%\n", pack, len(blocks))
+	for i, d := range blocks {
+		fmt.Fprintf(&b, "%%%% --- diagram %d id=%s kind=%s --- %%%%\n", i, d.ID, d.Kind)
+		b.WriteString(strings.TrimSpace(d.Mermaid))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// activeGraphPack is the multi-diagram result of ledger graph build (🎯T190).
+type activeGraphPack struct {
+	Diagrams  []GraphDiagramBlock
+	Pack      string
+	Mermaid   string // joined multi-diagram pin source
+	NodeCount int
+	EdgeCount int
+}
+
+// emptyActiveGraphPack is a valid empty pack with one empty flowchart block.
+func emptyActiveGraphPack() activeGraphPack {
+	emptySrc := mermaidActiveGraphHeader()
+	blocks := []GraphDiagramBlock{{
+		ID:      "empty",
+		Kind:    graphDiagramKindComponent,
+		Title:   "Empty",
+		Mermaid: emptySrc,
+	}}
+	return activeGraphPack{
+		Diagrams: blocks,
+		Pack:     frontierGraphPackLayout,
+		Mermaid:  joinGraphDiagramSources(frontierGraphPackLayout, blocks),
+	}
+}
+
+// computeActiveGraphPackFromLedger builds multi-diagram Mermaid for all
+// unachieved (active) targets and depends_on edges among them (🎯T185/T190).
+// Achieved / set_aside nodes are omitted; edges to non-active deps are dropped.
+// 🎯T190: partition into connected components; each component is its own
+// Mermaid diagram; size-1 isolates share one orphans diagram; pack=wrap-grid.
+func computeActiveGraphPackFromLedger(ledgerPath string) (activeGraphPack, error) {
 	data, err := os.ReadFile(ledgerPath)
 	if err != nil {
-		return "", 0, 0, err
+		return activeGraphPack{}, err
 	}
 	var doc bullseyeLedger
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return "", 0, 0, fmt.Errorf("parse ledger: %w", err)
+		return activeGraphPack{}, fmt.Errorf("parse ledger: %w", err)
 	}
 	if doc.Targets == nil || len(doc.Targets) == 0 {
-		return mermaidActiveGraphHeader(), 0, 0, nil
+		return emptyActiveGraphPack(), nil
 	}
 
 	activeIDs := make([]string, 0)
@@ -757,9 +948,7 @@ func computeActiveGraphMermaidFromLedger(ledgerPath string) (mermaid string, nod
 		return targetIDLess(activeIDs[i], activeIDs[j])
 	})
 
-	// Edges among active nodes only (original target ids).
-	type rawEdge struct{ from, to string }
-	rawEdges := make([]rawEdge, 0)
+	rawEdges := make([]rawGraphEdge, 0)
 	seenEdge := make(map[string]bool)
 	adj := make(map[string][]string, len(activeIDs))
 	for _, id := range activeIDs {
@@ -777,75 +966,50 @@ func computeActiveGraphMermaidFromLedger(ledgerPath string) (mermaid string, nod
 				continue
 			}
 			seenEdge[key] = true
-			rawEdges = append(rawEdges, rawEdge{from: id, to: dep})
+			rawEdges = append(rawEdges, rawGraphEdge{from: id, to: dep})
 			adj[id] = append(adj[id], dep)
 			adj[dep] = append(adj[dep], id)
 		}
 	}
 	sort.Slice(rawEdges, func(i, j int) bool {
 		if rawEdges[i].from != rawEdges[j].from {
-			return rawEdges[i].from < rawEdges[j].from
+			return targetIDLess(rawEdges[i].from, rawEdges[j].from)
 		}
-		return rawEdges[i].to < rawEdges[j].to
+		return targetIDLess(rawEdges[i].to, rawEdges[j].to)
 	})
 
 	islands := packIslandsFromAdj(activeIDs, adj)
+	connected, orphans := splitOrphanComponents(islands)
+	blocks := packActiveGraphDiagrams(connected, orphans, nameOf, rawEdges)
 
-	var b strings.Builder
-	b.WriteString(mermaidActiveGraphHeader())
-
-	// Emit each island as a TB subgraph so Mermaid stacks components
-	// vertically under flowchart TB (🎯T190) rather than one LR strip.
-	for i, island := range islands {
-		fmt.Fprintf(&b, "    subgraph island_%d[\" \"]\n", i)
-		b.WriteString("        direction TB\n")
-		for _, id := range island {
-			nid := mermaidSafeNodeID(id)
-			label := nameOf[id]
-			if label == "" {
-				label = id
-			} else {
-				// Prefer "T185 · short name" for scanability in large graphs.
-				label = id + " · " + truncateMermaidLabel(label, 36)
-			}
-			fmt.Fprintf(&b, "        %s[\"%s\"]\n", nid, escapeMermaidLabel(label))
-		}
-		// Edges wholly inside this island.
-		islandSet := make(map[string]bool, len(island))
-		for _, id := range island {
-			islandSet[id] = true
-		}
-		for _, e := range rawEdges {
-			if !islandSet[e.from] || !islandSet[e.to] {
-				continue
-			}
-			fmt.Fprintf(&b, "        %s -.->|needs| %s\n", mermaidSafeNodeID(e.from), mermaidSafeNodeID(e.to))
-		}
-		b.WriteString("    end\n")
+	// Empty active set after filter: still return pack shell.
+	if len(blocks) == 0 {
+		emptySrc := mermaidActiveGraphHeader()
+		blocks = []GraphDiagramBlock{{
+			ID:      "empty",
+			Kind:    graphDiagramKindComponent,
+			Title:   "Empty",
+			Mermaid: emptySrc,
+		}}
 	}
 
-	// Vertical packing chain between islands (invisible layout links).
-	// Mermaid thick-link ~~~ + linkStyle stroke:none keeps islands ordered
-	// top-to-bottom without drawing a visible path (🎯T190).
-	if len(islands) > 1 {
-		realEdgeCount := len(rawEdges)
-		for i := 0; i < len(islands)-1; i++ {
-			// Subgraph-to-subgraph layout edge.
-			fmt.Fprintf(&b, "    island_%d ~~~ island_%d\n", i, i+1)
-		}
-		// Hide packing links only (indices after real edges; packing links
-		// are emitted after subgraphs so their linkStyle indices are
-		// realEdgeCount .. realEdgeCount+nIslands-2).
-		indices := make([]string, 0, len(islands)-1)
-		for i := 0; i < len(islands)-1; i++ {
-			indices = append(indices, strconv.Itoa(realEdgeCount+i))
-		}
-		// linkStyle applies to all links in document order. Real edges are
-		// inside subgraphs first (0..realEdgeCount-1), then packing.
-		fmt.Fprintf(&b, "    linkStyle %s stroke:none,fill:none\n", strings.Join(indices, ","))
-	}
+	return activeGraphPack{
+		Diagrams:  blocks,
+		Pack:      frontierGraphPackLayout,
+		Mermaid:   joinGraphDiagramSources(frontierGraphPackLayout, blocks),
+		NodeCount: len(activeIDs),
+		EdgeCount: len(rawEdges),
+	}, nil
+}
 
-	return b.String(), len(activeIDs), len(rawEdges), nil
+// computeActiveGraphMermaidFromLedger is the legacy single-string entry
+// (tests + callers that only need joined source). Prefer pack for product.
+func computeActiveGraphMermaidFromLedger(ledgerPath string) (mermaid string, nodeCount, edgeCount int, err error) {
+	p, err := computeActiveGraphPackFromLedger(ledgerPath)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return p.Mermaid, p.NodeCount, p.EdgeCount, nil
 }
 
 // loadFrontierGraph discovers the ledger and returns active-graph Mermaid.
@@ -883,25 +1047,35 @@ func loadFrontierGraph(cwd string) GraphResponse {
 	}
 	resp.Ledger = ledger
 
-	src, nodes, edges, err := computeActiveGraphMermaidFromLedger(ledger)
+	pack, err := computeActiveGraphPackFromLedger(ledger)
 	if err != nil {
 		// Fallback: bullseye CLI graph export (scope=active ≈ unachieved).
 		out, cliErr := runBullseyeCLI("query", "--view", "graph", "--scope", "active", "--cwd", abs)
 		if cliErr == nil && strings.TrimSpace(out) != "" {
 			// Strip optional ```mermaid fences from CLI output.
-			src = stripMermaidFenceCLI(out)
+			src := stripMermaidFenceCLI(out)
 			if src != "" {
 				resp.Mermaid = src
 				resp.Available = true
+				// Single CLI blob → one component diagram for multi-path UI.
+				resp.Pack = frontierGraphPackLayout
+				resp.Diagrams = []GraphDiagramBlock{{
+					ID:      "cli",
+					Kind:    graphDiagramKindComponent,
+					Title:   "Active graph",
+					Mermaid: src,
+				}}
 				return resp
 			}
 		}
 		resp.Error = fmt.Sprintf("read ledger: %v", err)
 		return resp
 	}
-	resp.Mermaid = src
-	resp.NodeCount = nodes
-	resp.EdgeCount = edges
+	resp.Mermaid = pack.Mermaid
+	resp.Diagrams = pack.Diagrams
+	resp.Pack = pack.Pack
+	resp.NodeCount = pack.NodeCount
+	resp.EdgeCount = pack.EdgeCount
 	resp.Available = true
 	return resp
 }

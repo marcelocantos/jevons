@@ -318,12 +318,15 @@
     return label.replace(/"/g, "'").replace(/\n/g, ' ');
   }
 
-  // 🎯T190: Mermaid layout knobs — keep ~30–50 nodes inside the ~90% panel.
+  // 🎯T190: Mermaid layout knobs per component diagram; panel packs blocks.
   var MERMAID_NODE_SPACING = 28;
   var MERMAID_RANK_SPACING = 36;
   var MERMAID_WRAPPING_WIDTH = 180;
+  var FRONTIER_GRAPH_PACK = 'wrap-grid';
+  var GRAPH_DIAGRAM_KIND_COMPONENT = 'component';
+  var GRAPH_DIAGRAM_KIND_ORPHANS = 'orphans';
 
-  // mermaidActiveGraphHeader — init + flowchart TB (🎯T185 + 🎯T190).
+  // mermaidActiveGraphHeader — init + flowchart TB for one component (🎯T185 + 🎯T190).
   function mermaidActiveGraphHeader() {
     return (
       "%%{init: {'flowchart': {'useMaxWidth': true, 'nodeSpacing': " +
@@ -336,10 +339,8 @@
     );
   }
 
-  // packActiveGraphIslands — connected components for vertical island packing
-  // (🎯T190). ids sorted; undirected edges from {from,to} original ids.
-  // Returns array of islands (each island = sorted id list); islands ordered
-  // by first id.
+  // packActiveGraphIslands — connected-component partition (🎯T190).
+  // Returns array of islands (each = sorted id list); islands ordered by first id.
   function packActiveGraphIslands(ids, undirectedPairs) {
     var list = Array.isArray(ids) ? ids.slice() : [];
     if (!list.length) return [];
@@ -383,13 +384,112 @@
     return islands;
   }
 
-  // buildActiveDependencyMermaid(targets) — full unachieved graph (🎯T185).
-  // targets: [{ id, name?, depends_on?: [{id}|string] }]. Only nodes present
-  // in the set are drawn; edges whose dep is missing are dropped (among
-  // non-achieved). Returns raw Mermaid (no fences) for panel render.
-  // 🎯T190: layout init + flowchart TB + island subgraph packing (stack
-  // components vertically so the graph is not one infinite LR strip).
-  function buildActiveDependencyMermaid(targets) {
+  // splitOrphanComponents — size-1 islands → orphans list (🎯T190).
+  function splitOrphanComponents(islands) {
+    var connected = [];
+    var orphans = [];
+    var list = Array.isArray(islands) ? islands : [];
+    for (var i = 0; i < list.length; i++) {
+      var island = list[i];
+      if (!island || !island.length) continue;
+      if (island.length === 1) orphans.push(island[0]);
+      else connected.push(island);
+    }
+    orphans.sort(targetIDCompare);
+    return { connected: connected, orphans: orphans };
+  }
+
+  // emitMermaidForNodes — one flowchart TB for a node set + among-set edges.
+  function emitMermaidForNodes(ids, byId, rawEdges) {
+    var lines = [mermaidActiveGraphHeader()];
+    var set = {};
+    var i;
+    for (i = 0; i < ids.length; i++) {
+      set[ids[i]] = true;
+      var row = byId && byId[ids[i]];
+      var name = row && row.name != null ? String(row.name).trim() : '';
+      lines.push('  ' + mermaidNodeId(ids[i]) + '["' + mermaidLabel(ids[i], name) + '"]');
+    }
+    var edgeCount = 0;
+    var edges = Array.isArray(rawEdges) ? rawEdges : [];
+    for (i = 0; i < edges.length; i++) {
+      var e = edges[i];
+      if (!set[e.from] || !set[e.to]) continue;
+      lines.push(
+        '  ' + mermaidNodeId(e.from) + ' -.->|needs| ' + mermaidNodeId(e.to)
+      );
+      edgeCount++;
+    }
+    return { mermaid: lines.join('\n') + '\n', edgeCount: edgeCount };
+  }
+
+  // packActiveGraphDiagrams — multi-diagram blocks, largest first, orphans last.
+  function packActiveGraphDiagrams(connected, orphans, byId, rawEdges) {
+    var ranked = [];
+    var i;
+    var comps = Array.isArray(connected) ? connected : [];
+    for (i = 0; i < comps.length; i++) {
+      var ids = comps[i];
+      if (!ids || !ids.length) continue;
+      var set = {};
+      for (var n = 0; n < ids.length; n++) set[ids[n]] = true;
+      var ec = 0;
+      var edges = Array.isArray(rawEdges) ? rawEdges : [];
+      for (var e = 0; e < edges.length; e++) {
+        if (set[edges[e].from] && set[edges[e].to]) ec++;
+      }
+      ranked.push({ ids: ids, nodes: ids.length, edgeCount: ec, firstID: ids[0] });
+    }
+    ranked.sort(function (a, b) {
+      if (a.edgeCount !== b.edgeCount) return b.edgeCount - a.edgeCount;
+      if (a.nodes !== b.nodes) return b.nodes - a.nodes;
+      return targetIDCompare(a.firstID, b.firstID);
+    });
+    var blocks = [];
+    for (i = 0; i < ranked.length; i++) {
+      var r = ranked[i];
+      var emitted = emitMermaidForNodes(r.ids, byId, rawEdges);
+      blocks.push({
+        id: 'c' + i,
+        kind: GRAPH_DIAGRAM_KIND_COMPONENT,
+        title: 'Component (' + r.nodes + ' nodes)',
+        mermaid: emitted.mermaid,
+        nodeCount: r.nodes,
+        edgeCount: emitted.edgeCount,
+      });
+    }
+    var orph = Array.isArray(orphans) ? orphans : [];
+    if (orph.length) {
+      var oe = emitMermaidForNodes(orph, byId, rawEdges);
+      blocks.push({
+        id: 'orphans',
+        kind: GRAPH_DIAGRAM_KIND_ORPHANS,
+        title: 'Orphans (' + orph.length + ')',
+        mermaid: oe.mermaid,
+        nodeCount: orph.length,
+        edgeCount: oe.edgeCount,
+      });
+    }
+    return blocks;
+  }
+
+  function joinGraphDiagramSources(pack, blocks) {
+    var list = Array.isArray(blocks) ? blocks : [];
+    var lines = ['%% jevons-frontier-pack pack=' + pack + ' diagrams=' + list.length + ' %%'];
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i];
+      lines.push(
+        '%% --- diagram ' + i + ' id=' + d.id + ' kind=' + d.kind + ' --- %%'
+      );
+      lines.push(String(d.mermaid || '').replace(/\s+$/, ''));
+    }
+    return lines.join('\n') + '\n';
+  }
+
+  // buildActiveDependencyDiagrams(targets) — multi-diagram pack (🎯T190 option 2).
+  // Each connected component is its own Mermaid diagram; size-1 isolates share
+  // one orphans diagram; pack=wrap-grid for panel block layout.
+  function buildActiveDependencyDiagrams(targets) {
     var list = Array.isArray(targets) ? targets : [];
     var byId = {};
     var ids = [];
@@ -404,7 +504,7 @@
     }
     ids.sort(targetIDCompare);
     var edgeKeys = {};
-    var rawEdges = []; // { from, to } original ids
+    var rawEdges = [];
     for (i = 0; i < ids.length; i++) {
       var fromId = ids[i];
       var deps = normalizeDependents(
@@ -414,7 +514,7 @@
       );
       for (var j = 0; j < deps.length; j++) {
         var depId = deps[j].id;
-        if (!byId[depId]) continue; // only edges among unachieved set
+        if (!byId[depId]) continue;
         var ek = fromId + '\0' + depId;
         if (edgeKeys[ek]) continue;
         edgeKeys[ek] = true;
@@ -428,52 +528,45 @@
     });
 
     var islands = packActiveGraphIslands(ids, rawEdges);
-    var lines = [mermaidActiveGraphHeader()];
-    for (i = 0; i < islands.length; i++) {
-      lines.push('    subgraph island_' + i + '[" "]');
-      lines.push('        direction TB');
-      var island = islands[i];
-      var islandSet = {};
-      var n;
-      for (n = 0; n < island.length; n++) {
-        islandSet[island[n]] = true;
-        var nid = mermaidNodeId(island[n]);
-        var row = byId[island[n]];
-        var name = row && row.name != null ? String(row.name).trim() : '';
-        var label = mermaidLabel(island[n], name);
-        lines.push('        ' + nid + '["' + label + '"]');
-      }
-      for (n = 0; n < rawEdges.length; n++) {
-        var e = rawEdges[n];
-        if (!islandSet[e.from] || !islandSet[e.to]) continue;
-        lines.push(
-          '        ' +
-            mermaidNodeId(e.from) +
-            ' -.->|needs| ' +
-            mermaidNodeId(e.to)
-        );
-      }
-      lines.push('    end');
+    var split = splitOrphanComponents(islands);
+    var diagrams = packActiveGraphDiagrams(
+      split.connected,
+      split.orphans,
+      byId,
+      rawEdges
+    );
+    if (!diagrams.length) {
+      diagrams = [{
+        id: 'empty',
+        kind: GRAPH_DIAGRAM_KIND_COMPONENT,
+        title: 'Empty',
+        mermaid: mermaidActiveGraphHeader() + '\n',
+        nodeCount: 0,
+        edgeCount: 0,
+      }];
     }
-    // Vertical packing chain between islands (invisible layout links).
-    if (islands.length > 1) {
-      var realEdgeCount = rawEdges.length;
-      var packIdx = [];
-      for (i = 0; i < islands.length - 1; i++) {
-        lines.push('    island_' + i + ' ~~~ island_' + (i + 1));
-        packIdx.push(String(realEdgeCount + i));
-      }
-      lines.push('    linkStyle ' + packIdx.join(',') + ' stroke:none,fill:none');
-    }
-    return lines.join('\n') + '\n';
+    return {
+      pack: FRONTIER_GRAPH_PACK,
+      diagrams: diagrams,
+      mermaid: joinGraphDiagramSources(FRONTIER_GRAPH_PACK, diagrams),
+      nodeCount: ids.length,
+      edgeCount: rawEdges.length,
+    };
   }
 
-  // normalizeGraphPayload(apiJSON|err) → { available, mermaid, ledger, nodes, edges, error }
+  // buildActiveDependencyMermaid(targets) — joined multi-diagram pin source (🎯T185/T190).
+  function buildActiveDependencyMermaid(targets) {
+    return buildActiveDependencyDiagrams(targets).mermaid;
+  }
+
+  // normalizeGraphPayload(apiJSON|err) → multi-diagram pack model (🎯T185/T190).
   function normalizeGraphPayload(payload, err) {
     if (err) {
       return {
         available: false,
         mermaid: '',
+        diagrams: [],
+        pack: FRONTIER_GRAPH_PACK,
         ledger: '',
         nodeCount: 0,
         edgeCount: 0,
@@ -482,9 +575,44 @@
     }
     var p = payload || {};
     var mermaid = p.mermaid != null ? String(p.mermaid) : '';
+    var pack = p.pack != null && String(p.pack).trim()
+      ? String(p.pack).trim()
+      : FRONTIER_GRAPH_PACK;
+    var diagrams = [];
+    var rawDiagrams = Array.isArray(p.diagrams) ? p.diagrams : [];
+    for (var i = 0; i < rawDiagrams.length; i++) {
+      var d = rawDiagrams[i] || {};
+      var dMermaid = d.mermaid != null ? String(d.mermaid) : '';
+      if (!dMermaid) continue;
+      diagrams.push({
+        id: d.id != null ? String(d.id) : ('d' + i),
+        kind: d.kind != null ? String(d.kind) : GRAPH_DIAGRAM_KIND_COMPONENT,
+        title: d.title != null ? String(d.title) : '',
+        mermaid: dMermaid,
+        nodeCount: typeof d.node_count === 'number' ? d.node_count
+          : (typeof d.nodeCount === 'number' ? d.nodeCount : 0),
+        edgeCount: typeof d.edge_count === 'number' ? d.edge_count
+          : (typeof d.edgeCount === 'number' ? d.edgeCount : 0),
+      });
+    }
+    // Fallback: single mermaid blob without diagrams[] → one component block.
+    if (!diagrams.length && mermaid && mermaid.indexOf('jevons-frontier-pack') < 0) {
+      diagrams = [{
+        id: 'single',
+        kind: GRAPH_DIAGRAM_KIND_COMPONENT,
+        title: 'Graph',
+        mermaid: mermaid,
+        nodeCount: typeof p.node_count === 'number' ? p.node_count
+          : (typeof p.nodeCount === 'number' ? p.nodeCount : 0),
+        edgeCount: typeof p.edge_count === 'number' ? p.edge_count
+          : (typeof p.edgeCount === 'number' ? p.edgeCount : 0),
+      }];
+    }
     return {
       available: !!p.available,
       mermaid: mermaid,
+      diagrams: diagrams,
+      pack: pack,
       ledger: p.ledger != null ? String(p.ledger) : '',
       cwd: p.cwd != null ? String(p.cwd) : '',
       nodeCount: typeof p.node_count === 'number' ? p.node_count
@@ -865,8 +993,16 @@
     formatTargetCardPlain: formatTargetCardPlain,
     formatDepMinigraph: formatDepMinigraph,
     buildActiveDependencyMermaid: buildActiveDependencyMermaid,
+    buildActiveDependencyDiagrams: buildActiveDependencyDiagrams,
     mermaidActiveGraphHeader: mermaidActiveGraphHeader,
     packActiveGraphIslands: packActiveGraphIslands,
+    splitOrphanComponents: splitOrphanComponents,
+    packActiveGraphDiagrams: packActiveGraphDiagrams,
+    joinGraphDiagramSources: joinGraphDiagramSources,
+    emitMermaidForNodes: emitMermaidForNodes,
+    FRONTIER_GRAPH_PACK: FRONTIER_GRAPH_PACK,
+    GRAPH_DIAGRAM_KIND_COMPONENT: GRAPH_DIAGRAM_KIND_COMPONENT,
+    GRAPH_DIAGRAM_KIND_ORPHANS: GRAPH_DIAGRAM_KIND_ORPHANS,
     MERMAID_NODE_SPACING: MERMAID_NODE_SPACING,
     MERMAID_RANK_SPACING: MERMAID_RANK_SPACING,
     MERMAID_WRAPPING_WIDTH: MERMAID_WRAPPING_WIDTH,

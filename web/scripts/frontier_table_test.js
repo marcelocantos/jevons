@@ -535,44 +535,65 @@ test('T182 tight status/fan CSS + play cell + send path wiring', function () {
 });
 
 // 🎯T185: pure unachieved graph builder + Graph control + large panel wiring.
-// 🎯T190: layout init, flowchart TB, island packing (not graph TD LR strip).
-test('buildActiveDependencyMermaid from unachieved set (🎯T185/T190)', function () {
+// 🎯T190: multi-diagram pack (component + orphans), wrap-grid — not mega subgraph strip.
+test('buildActiveDependencyDiagrams multi-diagram pack (🎯T185/T190)', function () {
   assert.strictEqual(FT.GRAPH_API_PATH, '/api/frontier/graph');
-  const src = FT.buildActiveDependencyMermaid([
+  assert.strictEqual(FT.FRONTIER_GRAPH_PACK, 'wrap-grid');
+  const pack = FT.buildActiveDependencyDiagrams([
     { id: 'T2', name: 'Ready leaf', depends_on: [{ id: 'T1', name: 'Done' }] },
     { id: 'T3', name: 'Blocked', depends_on: [{ id: 'T2' }] },
     { id: 'T3.1', name: 'Nested', depends_on: ['T3', 'T1'] },
     { id: 'T4', name: 'Orphan', depends_on: [] },
   ]);
-  // Layout directives (🎯T190).
-  assert.ok(src.indexOf("%%{init:") === 0, 'starts with mermaid init: ' + src.slice(0, 60));
-  assert.ok(src.indexOf("useMaxWidth': true") >= 0 || src.indexOf('useMaxWidth\': true') >= 0
-    || /useMaxWidth['"]?\s*:\s*true/.test(src), 'useMaxWidth: ' + src.slice(0, 120));
-  assert.ok(/nodeSpacing['"]?\s*:\s*\d+/.test(src), 'nodeSpacing');
-  assert.ok(/rankSpacing['"]?\s*:\s*\d+/.test(src), 'rankSpacing');
-  assert.ok(/wrappingWidth['"]?\s*:\s*\d+/.test(src), 'wrappingWidth');
-  assert.ok(src.indexOf('flowchart TB') >= 0, 'flowchart TB');
-  assert.ok(src.indexOf('graph LR') < 0 || src.indexOf('flowchart TB') < src.indexOf('graph LR'),
-    'primary direction is TB not LR');
-  assert.ok(src.indexOf('T2[') >= 0 && src.indexOf('T3[') >= 0 && src.indexOf('T3_1[') >= 0, 'nodes');
-  assert.ok(src.indexOf('T4[') >= 0, 'orphan node');
-  // Edge to T1 dropped (T1 not in unachieved set).
-  assert.ok(src.indexOf('T1[') < 0, 'no T1 node');
-  assert.ok(src.indexOf('|needs| T1') < 0, 'no edge to T1');
-  assert.ok(src.indexOf('T3 -.->|needs| T2') >= 0, 'T3→T2: ' + src);
-  assert.ok(src.indexOf('T3_1 -.->|needs| T3') >= 0, 'T3.1→T3');
-  // Island packing: connected {T2,T3,T3.1} vs orphan T4 → subgraphs + ~~~.
-  assert.ok(src.indexOf('subgraph island_') >= 0, 'island subgraphs: ' + src);
-  assert.ok(src.indexOf('direction TB') >= 0, 'subgraph direction TB');
-  assert.ok(src.indexOf('island_0 ~~~ island_1') >= 0, 'vertical packing link: ' + src);
-  assert.ok(/linkStyle .+stroke:none/.test(src), 'packing links hidden');
-  // Empty set still valid Mermaid with layout header.
-  const empty = FT.buildActiveDependencyMermaid([]);
-  assert.ok(empty.indexOf('flowchart TB') >= 0, empty);
-  assert.ok(empty.indexOf('useMaxWidth') >= 0, 'empty still has init');
+  assert.strictEqual(pack.pack, 'wrap-grid');
+  assert.strictEqual(pack.nodeCount, 4);
+  assert.strictEqual(pack.edgeCount, 2);
+  // Component {T2,T3,T3.1} + orphans {T4}.
+  assert.strictEqual(pack.diagrams.length, 2, JSON.stringify(pack.diagrams.map(function (d) {
+    return { id: d.id, kind: d.kind, n: d.nodeCount };
+  })));
+  const comp = pack.diagrams.find(function (d) { return d.kind === 'component'; });
+  const orph = pack.diagrams.find(function (d) { return d.kind === 'orphans'; });
+  assert.ok(comp, 'component block');
+  assert.ok(orph, 'orphans block');
+  assert.strictEqual(comp.nodeCount, 3);
+  assert.strictEqual(comp.edgeCount, 2);
+  assert.strictEqual(orph.nodeCount, 1);
+  // Layout directives inside each diagram.
+  [comp, orph].forEach(function (d) {
+    assert.ok(d.mermaid.indexOf('%%{init:') >= 0, 'init in ' + d.id);
+    assert.ok(/useMaxWidth['"]?\s*:\s*true/.test(d.mermaid), 'useMaxWidth');
+    assert.ok(/nodeSpacing['"]?\s*:\s*\d+/.test(d.mermaid), 'nodeSpacing');
+    assert.ok(/rankSpacing['"]?\s*:\s*\d+/.test(d.mermaid), 'rankSpacing');
+    assert.ok(/wrappingWidth['"]?\s*:\s*\d+/.test(d.mermaid), 'wrappingWidth');
+    assert.ok(d.mermaid.indexOf('flowchart TB') >= 0, 'flowchart TB');
+    assert.ok(d.mermaid.indexOf('subgraph island_') < 0, 'no subgraph island packing');
+  });
+  assert.ok(comp.mermaid.indexOf('T2[') >= 0 && comp.mermaid.indexOf('T3[') >= 0
+    && comp.mermaid.indexOf('T3_1[') >= 0, 'component nodes');
+  assert.ok(orph.mermaid.indexOf('T4[') >= 0, 'orphan node');
+  assert.ok(comp.mermaid.indexOf('T1[') < 0, 'no T1');
+  assert.ok(comp.mermaid.indexOf('|needs| T1') < 0, 'no edge to T1');
+  assert.ok(comp.mermaid.indexOf('T3 -.->|needs| T2') >= 0, 'T3→T2');
+  assert.ok(comp.mermaid.indexOf('T3_1 -.->|needs| T3') >= 0, 'T3.1→T3');
+  // Joined pin source carries multi-diagram packing directives.
+  assert.ok(pack.mermaid.indexOf('jevons-frontier-pack') >= 0, pack.mermaid.slice(0, 120));
+  assert.ok(pack.mermaid.indexOf('pack=wrap-grid') >= 0, 'pack directive');
+  assert.ok(pack.mermaid.indexOf('kind=component') >= 0 && pack.mermaid.indexOf('kind=orphans') >= 0);
+  // Legacy builder returns joined multi-diagram source.
+  const src = FT.buildActiveDependencyMermaid([
+    { id: 'T2', depends_on: ['T3'] },
+    { id: 'T3' },
+  ]);
+  assert.ok(src.indexOf('jevons-frontier-pack') >= 0, src.slice(0, 80));
+  // Empty set still valid pack.
+  const empty = FT.buildActiveDependencyDiagrams([]);
+  assert.strictEqual(empty.pack, 'wrap-grid');
+  assert.ok(empty.diagrams.length >= 1);
+  assert.ok(empty.diagrams[0].mermaid.indexOf('flowchart TB') >= 0);
 });
 
-test('packActiveGraphIslands stacks components (🎯T190)', function () {
+test('packActiveGraphIslands + splitOrphanComponents (🎯T190)', function () {
   // Two islands: A-B connected, C alone, D-E connected.
   const islands = FT.packActiveGraphIslands(
     ['B', 'A', 'E', 'C', 'D'],
@@ -583,6 +604,9 @@ test('packActiveGraphIslands stacks components (🎯T190)', function () {
   assert.deepStrictEqual(islands[0], ['A', 'B']);
   assert.deepStrictEqual(islands[1], ['C']);
   assert.deepStrictEqual(islands[2], ['D', 'E']);
+  const split = FT.splitOrphanComponents(islands);
+  assert.strictEqual(split.connected.length, 2);
+  assert.deepStrictEqual(split.orphans, ['C']);
 });
 
 // 🎯T199: natural/version order for target ids (not pure lex).
@@ -617,40 +641,63 @@ test('packActiveGraphIslands natural target ids (🎯T199)', function () {
   assert.deepStrictEqual(islands[2], ['T100']);
 });
 
-test('buildActiveDependencyMermaid id order natural (🎯T199)', function () {
-  // Nodes should appear in natural order within islands (T2 before T10).
-  const src = FT.buildActiveDependencyMermaid([
+test('buildActiveDependencyDiagrams id order natural (🎯T199)', function () {
+  // Nodes natural order within component (T2 before T10); orphans separate.
+  const pack = FT.buildActiveDependencyDiagrams([
     { id: 'T10', name: 'Ten' },
     { id: 'T2', name: 'Two', depends_on: [{ id: 'T10' }] },
     { id: 'T100', name: 'Hundred' },
   ]);
-  const i2 = src.indexOf('T2[');
-  const i10 = src.indexOf('T10[');
-  const i100 = src.indexOf('T100[');
-  assert.ok(i2 >= 0 && i10 >= 0 && i100 >= 0, src);
-  assert.ok(i2 < i10, 'T2 before T10 in mermaid: ' + src);
-  // T2-T10 island before orphan T100 by first id natural order.
-  assert.ok(i10 < i100 || src.indexOf('island_0') < src.indexOf('island_1'), src);
+  const comp = pack.diagrams.find(function (d) { return d.kind === 'component'; });
+  const orph = pack.diagrams.find(function (d) { return d.kind === 'orphans'; });
+  assert.ok(comp, pack.mermaid);
+  assert.ok(orph, 'T100 orphan');
+  const i2 = comp.mermaid.indexOf('T2[');
+  const i10 = comp.mermaid.indexOf('T10[');
+  assert.ok(i2 >= 0 && i10 >= 0, comp.mermaid);
+  assert.ok(i2 < i10, 'T2 before T10 in component: ' + comp.mermaid);
+  assert.ok(orph.mermaid.indexOf('T100[') >= 0, orph.mermaid);
 });
 
-test('normalizeGraphPayload (🎯T185)', function () {
+test('normalizeGraphPayload multi-diagram (🎯T185/T190)', function () {
   const ok = FT.normalizeGraphPayload({
     available: true,
-    mermaid: 'flowchart TB\n  A --> B\n',
+    mermaid: '%% jevons-frontier-pack pack=wrap-grid diagrams=1 %%\nflowchart TB\n  A --> B\n',
+    pack: 'wrap-grid',
+    diagrams: [{
+      id: 'c0',
+      kind: 'component',
+      title: 'Component (2 nodes)',
+      mermaid: 'flowchart TB\n  A --> B\n',
+      node_count: 2,
+      edge_count: 1,
+    }],
     node_count: 2,
     edge_count: 1,
     ledger: '/x/bullseye.yaml',
   });
   assert.strictEqual(ok.available, true);
-  assert.ok(ok.mermaid.indexOf('flowchart TB') >= 0);
+  assert.strictEqual(ok.pack, 'wrap-grid');
+  assert.strictEqual(ok.diagrams.length, 1);
+  assert.strictEqual(ok.diagrams[0].id, 'c0');
+  assert.strictEqual(ok.diagrams[0].nodeCount, 2);
+  assert.ok(ok.mermaid.indexOf('wrap-grid') >= 0);
   assert.strictEqual(ok.nodeCount, 2);
   assert.strictEqual(ok.edgeCount, 1);
+  // Single mermaid without diagrams[] → synthetic component block.
+  const single = FT.normalizeGraphPayload({
+    available: true,
+    mermaid: 'flowchart TB\n  X --> Y\n',
+    node_count: 2,
+  });
+  assert.strictEqual(single.diagrams.length, 1);
+  assert.strictEqual(single.diagrams[0].kind, 'component');
   const bad = FT.normalizeGraphPayload(null, new Error('boom'));
   assert.strictEqual(bad.available, false);
   assert.ok(/boom/.test(bad.error));
 });
 
-test('T185/T190 index.html Graph control + large panel + layout CSS', function () {
+test('T185/T190 index.html Graph control + large panel + multi-diagram pack CSS', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   // Graph button next to Refresh; Refresh retained (manual recovery).
   assert.ok(html.indexOf('id="frontier-graph"') >= 0, 'Graph button');
@@ -663,6 +710,14 @@ test('T185/T190 index.html Graph control + large panel + layout CSS', function (
   assert.ok(/#mermaid-viz-panel\s+\.mvp-body\s+svg\s*\{[^}]*max-width:\s*100%/.test(html)
     || /#mermaid-viz-panel \.mvp-body svg \{[^}]*max-width: 100%/.test(html),
     'mvp-body svg max-width 100%');
+  // 🎯T190: multi-diagram wrap-grid pack blocks.
+  assert.ok(html.indexOf('mvp-pack') >= 0, 'mvp-pack class');
+  assert.ok(html.indexOf('mvp-pack-block') >= 0, 'mvp-pack-block');
+  assert.ok(html.indexOf('auto-fill') >= 0, 'wrap-grid columns');
+  assert.ok(html.indexOf('function renderMermaidDiagramPackInPanel') >= 0,
+    'multi-diagram renderer');
+  assert.ok(html.indexOf('renderMermaidDiagramPackInPanel') >= 0
+    && html.indexOf('model.diagrams') >= 0, 'openFrontierGraph uses diagrams pack');
   // Open path: fetch graph API + openFrontierGraph + wire button.
   assert.ok(html.indexOf('/api/frontier/graph') >= 0, 'graph API path');
   assert.ok(html.indexOf('function openFrontierGraph') >= 0, 'openFrontierGraph defined');
@@ -674,7 +729,7 @@ test('T185/T190 index.html Graph control + large panel + layout CSS', function (
   assert.ok(html.indexOf('renderMermaidPanelFetchError') >= 0, 'T196 fetch-error renderer');
   const ofgStart = html.indexOf('function openFrontierGraph');
   const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
-  const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 4000);
+  const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 6000);
   const catchIdx = ofg.indexOf('.catch(');
   assert.ok(catchIdx >= 0, 'openFrontierGraph has catch');
   const catchCode = ofg.slice(catchIdx).replace(/\/\/[^\n]*/g, '');
@@ -684,8 +739,10 @@ test('T185/T190 index.html Graph control + large panel + layout CSS', function (
     'T196: catch uses fetch-error path');
   // Pure module exports.
   assert.strictEqual(typeof FT.buildActiveDependencyMermaid, 'function');
+  assert.strictEqual(typeof FT.buildActiveDependencyDiagrams, 'function');
   assert.strictEqual(typeof FT.normalizeGraphPayload, 'function');
   assert.strictEqual(typeof FT.packActiveGraphIslands, 'function');
+  assert.strictEqual(typeof FT.splitOrphanComponents, 'function');
   assert.strictEqual(typeof FT.mermaidActiveGraphHeader, 'function');
 });
 
