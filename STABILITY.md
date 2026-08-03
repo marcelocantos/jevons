@@ -10,7 +10,7 @@ right before locking them in.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.5.0.
+Snapshot as of v0.11.0 (surface catalogue still growing pre-1.0; last full table base was v0.5.0).
 
 ### CLI: `jevonsd`
 

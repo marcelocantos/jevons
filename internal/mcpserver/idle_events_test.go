@@ -76,8 +76,14 @@ func TestFormatDaemonRestartedAndWorkerIdle(t *testing.T) {
 	if !strings.Contains(idle, "jv-t212") || !strings.Contains(idle, "phase=idle") {
 		t.Fatal(idle)
 	}
-	if !strings.Contains(idle, "Your call") {
-		t.Fatal("PO judgment language missing")
+	if !strings.Contains(idle, "Act:") && !strings.Contains(idle, "Your call") {
+		t.Fatal("PO action language missing:", idle)
+	}
+	if !strings.Contains(idle, SilentResponsePrefix) {
+		t.Fatal("worker-idle must teach [silent] filter prefix")
+	}
+	if !strings.Contains(text, SilentResponsePrefix) {
+		t.Fatal("daemon-restarted must teach [silent] filter prefix")
 	}
 }
 

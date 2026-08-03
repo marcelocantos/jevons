@@ -18,14 +18,15 @@ Bedrock are claudia-side (pass-through provider strings are accepted).
 ## Architecture
 
 ```
-  browser / iOS  ──WebSocket──►  jevonsd  ──spawns──►  Jevons (Grok Session ACP)
-                                       ──manages──►  workers / threads (Grok)
+  browser / iOS  ──WebSocket──►  jevonsd  ──spawns──►  Jevons (default: Grok Session ACP)
+                                       ──manages──►  workers / threads (provider-selectable)
                                   MCP ◄─────────────┘ (tool calls)
 ```
 
-- **jevonsd**: HTTP/WebSocket server. Runs the overseer as a Grok ACP
-  session, exposes an in-process MCP server for worker/thread management,
-  tails `~/.grok/sessions` for cost accounting, and serves the web UI.
+- **jevonsd**: HTTP/WebSocket server. Runs the overseer as a Session ACP
+  process (default Grok; pluggable via 🎯T148), exposes an in-process MCP
+  server for worker/thread management, collects harness usage (Grok
+  sessions plus other providers when configured), and serves the web UI.
 - **Primary UI**: browser at `http://localhost:13705/` (`/ws/chat`); the
   iOS app wraps the same UI over a paired QUIC relay.
 
@@ -46,10 +47,14 @@ Same-machine browser use is the supported docs-only path today.
 5. **Optional device pair** — `jevonsd --pair <id> --relay <url>` + Jevon iOS
    app QR scan (source under `ios/`; no App Store binary yet; full
    onboarding is 🎯T14).
-6. **Optional — register as an MCP client** after restarting the agent session:
+6. **MCP attach**: on boot, jevonsd auto-registers its HTTP MCP into the
+   overseer's client config when possible. For an external MCP client
+   (e.g. Claude Code talking *to* jevons), after restarting that client:
    ```bash
-   # Example for Claude Code as an MCP *client* of jevons (jevons itself is Grok-only):
-   claude mcp add --scope user --transport http jevons http://localhost:13705/mcp
+   # Prefer 127.0.0.1 (loopback default, 🎯T6); name matches product default jevonsmcp.
+   claude mcp add -s user --transport http jevonsmcp http://127.0.0.1:13705/mcp
+   # Grok Build recovery (if auto-ensure did not stick):
+   #   grok mcp add --transport http jevonsmcp http://127.0.0.1:13705/mcp
    ```
 7. **Confirm tools** via `jevons_thread_list` or `jevons_cost`.
 
@@ -62,12 +67,15 @@ open http://localhost:13705/
 
 ## Key concepts
 
-- **Jevons (overseer)**: Grok Session ACP process managed by jevonsd.
+- **Jevons (overseer)**: Session ACP process managed by jevonsd (default
+  Grok; other claudia providers via config/`provider=`).
 - **Thread**: Durable semantic unit (transcript + metadata + status), not
   tied to a live process. Process = disposable cache.
-- **Workers / agents**: Grok Task or Session workers.
-- **Sessions on disk**: `~/.grok/sessions/<encoded-cwd>/<session-id>/`
-  plus `~/.grok/active_sessions.json`.
+- **Workers / agents**: Task or Session workers; `provider=` per spawn
+  (default Grok).
+- **Sessions on disk**: provider-specific roots (e.g.
+  `~/.grok/sessions/<encoded-cwd>/<session-id>/` plus
+  `~/.grok/active_sessions.json`; Claude inspect discovery is 🎯T213).
 
 ## Chat markdown (web UI)
 
@@ -85,9 +93,10 @@ open http://localhost:13705/
 ## MCP tools
 
 - **Threads**: `jevons_thread_adopt`, `_list`, `_status`, `_spawn`,
-  `_direct`, `_takeover`, `_remove` — Grok sessions only.
-- **Cost**: `jevons_cost` — burn-rate snapshot (collector tails
-  `~/.grok/sessions`).
+  `_direct`, `_takeover`, `_remove` — durable threads over provider
+  sessions (default Grok; other providers via spawn/`provider`).
+- **Cost**: `jevons_cost` — burn-rate snapshot (multi-harness when
+  configured; Grok session tails remain the historical path).
 - **Workers**: `jwork` (sole ephemeral primitive — one self-contained
   task, runs to completion) and `jevons_agent_*` (named durable agents).
   The legacy `jevons_*_session` tools were removed (🎯T41).
