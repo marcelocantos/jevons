@@ -145,6 +145,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   accepted**. Overseer is the independent gate (attestation ≠ execution).
   Instructional residual + pure classifier. Persona + agents-guide +
   fleet standing brief.
+- **Finished work auto-deregister (🎯T165):** when a **work** agent’s
+  terminal report claims done with oracle evidence or accepted-risk, the
+  product **stop+Removes** it from the live fleet (not persona-only
+  hygiene). Hermetic: spawn fixture → done path → `agent_list` omits
+  name. Residual: POs and overseer stay; deliberate stop without kill
+  still resume-friendly; T90 anomaly supervisor separate.
 - **Greenfield oracle elicitation (🎯T31.2):** for new software (no
   external reference), co-develop an **oracle-coverage map** alongside
   design — **pinned** / **fuzzy** / load-bearing **when X expect Y**

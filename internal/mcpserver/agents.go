@@ -460,10 +460,14 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			text := responseText.String()
 			responseText.Reset()
 			if text != "" {
+				// Notify overseer first so the done report is delivered before
+				// the worker leaves the registry (🎯T165).
 				s.notify(name, text)
 			}
 			// 🎯T111.1: deliver any nudges queued while the prompt was in flight.
 			s.drainAgentSendQueue(name)
+			// 🎯T165: finished work agents auto stop+Remove (not persona-only).
+			s.maybeReapDoneWorkAgent(name, text)
 		}
 	}
 }

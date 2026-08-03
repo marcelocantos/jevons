@@ -255,6 +255,13 @@ Owner vocabulary is **literal**:
 "opened a PR" / "merged to origin/master". Bare done without oracle or
 accepted-risk is also refused (🎯T31.1).
 
+**Finished work agents leave the fleet without hand-pruning (🎯T165):**
+when a work agent's terminal report claims done with oracle evidence or
+accepted-risk, the product stop+Removes them from the registry (RHS /
+`agent_list` omit the name). Residual: POs and overseer stay; deliberate
+`jevons_agent_stop` without kill still leaves registration for resume;
+T90 deep anomaly supervisor is separate.
+
 Do **not** re-expand a local merge order into continuous origin/PR
 shipping because a PO already opened remotes. Remote delivery only when
 the owner **explicitly** asks to ship/push/PR.
