@@ -1,9 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// RHS agent/aside transcript inspect policy (🎯T124). DOM-free pure helpers
-// for hermetic tests: selection transitions, auto-select on new aside, pane
-// model from API turns. Main chat is never the sink for fleet monologue.
+// RHS agent/aside transcript inspect policy (🎯T124 / 🎯T205). DOM-free pure
+// helpers for hermetic tests: selection transitions, auto-select on new aside,
+// pane model, shared .msg body paint + scroll stickiness. Main chat is never
+// the sink for fleet monologue.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -117,44 +118,186 @@
       .replace(/"/g, '&quot;');
   }
 
-  // 🎯T157: how one inspect turn body is painted.
-  // Assistant → HTML via parseAssistantMarkdown (same seal path as main chat).
-  // User/other → plain escaped text (CSS pre-wrap on .ai-turn.user .ai-text).
-  // deps.parseAssistantMarkdown(text) → html string; required for assistant.
+  // Map inspect turn roles → main chat .msg role classes (🎯T205).
+  function inspectToMsgRole(role) {
+    if (role === 'user') return 'user';
+    if (role === 'assistant') return 'jevons';
+    return 'status';
+  }
+
+  // 🎯T205: body paint policy for one inspect turn (same product paths as main).
+  // Assistant → HTML via parseAssistantMarkdown (sealed main-chat path).
+  // User → HTML via renderUserText when provided (quotes/images); else plain text.
+  // Other → plain text. msgRole is the .msg class role for shared chrome.
+  // deps: { parseAssistantMarkdown?, renderUserText? }
   function paintInspectLineBody(role, text, deps) {
     deps = deps || {};
     const t = text == null ? '' : String(text);
+    const msgRole = inspectToMsgRole(role);
     if (role === 'assistant') {
       const parse = deps.parseAssistantMarkdown;
       if (typeof parse === 'function') {
-        return { mode: 'html', content: parse(t) };
+        return { mode: 'html', content: parse(t), msgRole: msgRole };
       }
-      // Missing parse: still never pretends to be markdown — plain escape.
-      return { mode: 'text', content: t };
+      return { mode: 'text', content: t, msgRole: msgRole };
     }
-    return { mode: 'text', content: t };
+    if (role === 'user') {
+      const renderUser = deps.renderUserText;
+      if (typeof renderUser === 'function') {
+        return { mode: 'html', content: renderUser(t), msgRole: msgRole };
+      }
+      return { mode: 'text', content: t, msgRole: msgRole };
+    }
+    return { mode: 'text', content: t, msgRole: msgRole };
   }
 
-  // Hermetic HTML fixture for #agent-inspect-body turn list (🎯T157).
-  // deps.parseAssistantMarkdown mirrors index.html seal path (marked + T145).
+  // Hermetic HTML fixture for #agent-inspect-body: main .msg bubble chrome (🎯T205).
+  // deps.parseAssistantMarkdown / deps.renderUserText mirror index.html paths.
   function paintInspectLinesHTML(lines, deps) {
     deps = deps || {};
     let html = '';
     (lines || []).forEach(function (line) {
       if (!line) return;
       const role = line.role || 'other';
-      const roleLabel = role === 'user' ? 'User'
-        : (role === 'assistant' ? 'Assistant' : (role || 'msg'));
       const body = paintInspectLineBody(role, line.text, deps);
+      const msgRole = body.msgRole || inspectToMsgRole(role);
       const bodyInner = body.mode === 'html'
         ? body.content
         : escapeHtml(body.content);
-      html += '<div class="ai-turn ' + escapeHtml(role) + '">'
-        + '<div class="ai-role">' + escapeHtml(roleLabel) + '</div>'
-        + '<div class="ai-text">' + bodyInner + '</div>'
+      html += '<div class="msg ' + escapeHtml(msgRole) + '">'
+        + '<div class="msg-body">' + bodyInner + '</div>'
         + '</div>';
     });
     return html;
+  }
+
+  // Stable fingerprint for poll no-op (skip full replace when content unchanged).
+  function linesFingerprint(lines) {
+    let s = '';
+    (lines || []).forEach(function (l, i) {
+      if (!l) return;
+      s += i + '\0' + (l.role || '') + '\0' + (l.text == null ? '' : String(l.text)) + '\n';
+    });
+    return s;
+  }
+
+  // 🎯T205: latched stick-to-bottom policy (Track | Free) — pure, reusable for
+  // #agent-inspect-body. Mirrors main #messages: free-scroll is never yanked
+  // to bottom on content growth; near-bottom / Track keeps following.
+  //
+  // Mode is latched, not re-derived from distance every frame:
+  //   track — pin scrollTop to scrollHeight after updates
+  //   free  — preserve scrollTop; growth never pins
+  // Enter: boot / explicit enterTrack / arrive at bottom (ε entry only).
+  // Leave: intentional scroll up (wheel / scroll metrics).
+  function createScrollFollow(opts) {
+    opts = opts || {};
+    const eps = opts.eps != null ? Number(opts.eps) : 16;
+    let mode = 'track'; // 'track' | 'free'
+    let mayEnterFromGeometry = true;
+    let lastScrollTop = 0;
+    let lastScrollHeight = 0;
+    let bookkeeping = 0;
+
+    function distFromBottom(el) {
+      if (!el) return 0;
+      return el.scrollHeight - el.clientHeight - el.scrollTop;
+    }
+    function atBottom(el) {
+      if (!el) return true;
+      const room = el.scrollHeight - el.clientHeight;
+      if (room <= 0) return true;
+      return distFromBottom(el) <= eps;
+    }
+    function isTracking() { return mode === 'track'; }
+    function getMode() { return mode; }
+    function setMode(m) { mode = (m === 'free') ? 'free' : 'track'; }
+    function enterTrack() {
+      mode = 'track';
+      mayEnterFromGeometry = true;
+    }
+    function leaveTrack(el) {
+      mode = 'free';
+      mayEnterFromGeometry = el ? distFromBottom(el) > eps : false;
+    }
+    function noteAwayFromBottom(el) {
+      if (el && distFromBottom(el) > eps) mayEnterFromGeometry = true;
+    }
+    function tryEnterFromGeometry(el) {
+      noteAwayFromBottom(el);
+      if (mayEnterFromGeometry && atBottom(el)) enterTrack();
+    }
+    function noteMetrics(el) {
+      if (!el) return;
+      lastScrollTop = el.scrollTop;
+      lastScrollHeight = el.scrollHeight;
+    }
+    function beginBookkeeping() { bookkeeping++; }
+    function endBookkeeping() { bookkeeping = Math.max(0, bookkeeping - 1); }
+    function onWheel(deltaY, el) {
+      if (deltaY < 0) leaveTrack(el);
+      else if (deltaY > 0) tryEnterFromGeometry(el);
+    }
+    function onScroll(el) {
+      if (!el) return;
+      if (bookkeeping > 0) {
+        noteMetrics(el);
+        return;
+      }
+      const top = el.scrollTop;
+      const h = el.scrollHeight;
+      if (top + 1 < lastScrollTop && h + 1 >= lastScrollHeight) {
+        leaveTrack(el);
+      } else {
+        tryEnterFromGeometry(el);
+      }
+      noteMetrics(el);
+    }
+    function shouldPin() { return mode === 'track'; }
+    // After content mutation: pin if tracking; else restore prevTop (free read).
+    function applyAfterUpdate(el, prevTop) {
+      if (!el) return;
+      beginBookkeeping();
+      try {
+        if (mode === 'track') {
+          el.scrollTop = el.scrollHeight;
+        } else if (typeof prevTop === 'number' && isFinite(prevTop)) {
+          el.scrollTop = prevTop;
+        }
+        noteMetrics(el);
+      } finally {
+        endBookkeeping();
+      }
+    }
+    // Pure policy (no DOM): next scrollTop after update given metrics.
+    function nextScrollTop(args) {
+      args = args || {};
+      const scrollHeight = Number(args.scrollHeight) || 0;
+      const prevTop = args.prevTop;
+      if (mode === 'track') return scrollHeight;
+      if (typeof prevTop === 'number' && isFinite(prevTop)) return prevTop;
+      return 0;
+    }
+
+    return {
+      eps: eps,
+      isTracking: isTracking,
+      getMode: getMode,
+      setMode: setMode,
+      enterTrack: enterTrack,
+      leaveTrack: leaveTrack,
+      tryEnterFromGeometry: tryEnterFromGeometry,
+      atBottom: atBottom,
+      distFromBottom: distFromBottom,
+      onWheel: onWheel,
+      onScroll: onScroll,
+      shouldPin: shouldPin,
+      applyAfterUpdate: applyAfterUpdate,
+      nextScrollTop: nextScrollTop,
+      noteMetrics: noteMetrics,
+      beginBookkeeping: beginBookkeeping,
+      endBookkeeping: endBookkeeping,
+    };
   }
 
   // mainChatMustNotContainFleetTraffic — oracle marker: product rule string.
@@ -169,8 +312,11 @@
     turnsToLines: turnsToLines,
     paneModel: paneModel,
     escapeHtml: escapeHtml,
+    inspectToMsgRole: inspectToMsgRole,
     paintInspectLineBody: paintInspectLineBody,
     paintInspectLinesHTML: paintInspectLinesHTML,
+    linesFingerprint: linesFingerprint,
+    createScrollFollow: createScrollFollow,
     MAIN_CHAT_IS_OWNER_OVERSEER_ONLY: MAIN_CHAT_IS_OWNER_OVERSEER_ONLY,
   };
 }));
