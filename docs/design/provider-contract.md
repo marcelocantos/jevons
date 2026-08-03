@@ -73,7 +73,11 @@ they expose **their own** MCP endpoint for the hub to aggregate.
 
 ## 3. Lifecycle & transport
 
-A provider is defined by a registry entry (persisted per 🎯T27.2). Two
+A provider is defined by a **desired** registry entry in structured
+config (`~/.jevons/config.yaml` `providers:` list — 🎯T27.2; YAML is the
+on-disk format from 🎯T44; the acceptance “config.json” example is
+illustrative). Runtime state (last-known manifests, feed cursors) lives
+in `~/.jevons/providers/registry.db` (additive SQLite store). Two
 modes, one handshake:
 
 | Mode | Behaviour |
@@ -425,7 +429,7 @@ Every downstream target and every real provider is verified by
 
 | Need | Target |
 |------|--------|
-| structured config + persistence (provider registry) | 🎯T27.2 |
+| structured config + persistence (provider registry) | 🎯T27.2 — `config.Providers` + `provider.Store` / `ConfigManager.Reload` |
 | generic supervisor (launch) + connect + reconcile | 🎯T27.3 |
 | MCP client → re-export into `/mcp` | 🎯T27.4 |
 | feed ingestion → aggregated live model | 🎯T27.5 |

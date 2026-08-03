@@ -1,11 +1,16 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package config is jevonsd's structured configuration (🎯T44). It owns
-// every value that used to be compiled in — identity (owner and overseer
-// names), the persona prompt, state paths, port, and models — so that no
-// owner-specific identity lives in code. Precedence: built-in defaults,
-// then ~/.jevons/config.yaml (or --config), then explicit flags.
+// Package config is jevonsd's structured configuration (🎯T44 + 🎯T27.2).
+// It owns every value that used to be compiled in — identity (owner and
+// overseer names), the persona prompt, state paths, port, models, and
+// external-provider declarations — so that no owner-specific identity
+// lives in code. Precedence: built-in defaults, then
+// ~/.jevons/config.yaml (or --config), then explicit flags.
+//
+// External ecosystem providers (mnemo, …) are declared under `providers:`
+// (🎯T27.2). That list is distinct from the `provider` field (🎯T148),
+// which selects the default claudia agent backend.
 package config
 
 import (
@@ -63,6 +68,144 @@ type Config struct {
 	// and routing hints that must not live in code.
 	PersonaFile  string `yaml:"persona_file"`
 	PersonaNotes string `yaml:"persona_notes"`
+
+	// Providers is the desired set of external ecosystem providers
+	// (🎯T27.2 / parent 🎯T27). Distinct from Provider (agent backend).
+	// Empty means no external providers are configured. Reloadable via
+	// provider.ConfigManager without a full daemon restart.
+	Providers []ProviderDecl `yaml:"providers"`
+}
+
+// Transport modes for ProviderDecl (match internal/provider constants).
+const (
+	ProviderTransportLaunch  = "launch"
+	ProviderTransportConnect = "connect"
+)
+
+// ProviderDecl is one external tool registration in structured config
+// (🎯T27.2). Transport is launch (exec/argv) or connect (url); Params
+// holds mode-specific keys and is additive for forward-compatible
+// extensions (unknown keys are preserved, not rejected).
+//
+// YAML example:
+//
+//	providers:
+//	  - id: mnemo
+//	    transport: connect
+//	    enable: true
+//	    params:
+//	      url: http://127.0.0.1:8741
+//	  - id: pulse
+//	    transport: launch
+//	    enable: false
+//	    params:
+//	      exec: /usr/local/bin/pulse-provider
+//	      argv: ["--serve", "--port", "9100"]
+type ProviderDecl struct {
+	ID        string         `yaml:"id" json:"id"`
+	Transport string         `yaml:"transport" json:"transport"` // launch | connect
+	Enable    *bool          `yaml:"enable,omitempty" json:"enable,omitempty"`
+	Params    map[string]any `yaml:"params,omitempty" json:"params,omitempty"`
+}
+
+// Enabled reports whether this declaration is active. Omitted enable
+// defaults to true (listed providers are desired unless disabled).
+func (p ProviderDecl) Enabled() bool {
+	if p.Enable == nil {
+		return true
+	}
+	return *p.Enable
+}
+
+// ParamString returns a string param, or "" if missing/non-string.
+func (p ProviderDecl) ParamString(key string) string {
+	if p.Params == nil {
+		return ""
+	}
+	v, ok := p.Params[key]
+	if !ok || v == nil {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Sprint(v)
+	}
+	return s
+}
+
+// ParamStringSlice returns a string-slice param (argv). Accepts []any
+// from YAML or []string; non-string elements are stringified.
+func (p ProviderDecl) ParamStringSlice(key string) []string {
+	if p.Params == nil {
+		return nil
+	}
+	v, ok := p.Params[key]
+	if !ok || v == nil {
+		return nil
+	}
+	switch t := v.(type) {
+	case []string:
+		out := make([]string, len(t))
+		copy(out, t)
+		return out
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			if e == nil {
+				continue
+			}
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			} else {
+				out = append(out, fmt.Sprint(e))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// LaunchExec is params.exec for transport=launch.
+func (p ProviderDecl) LaunchExec() string { return p.ParamString("exec") }
+
+// LaunchArgv is params.argv for transport=launch.
+func (p ProviderDecl) LaunchArgv() []string { return p.ParamStringSlice("argv") }
+
+// ConnectURL is params.url for transport=connect.
+func (p ProviderDecl) ConnectURL() string { return p.ParamString("url") }
+
+// ValidateProviders checks Providers entries. Empty list is valid.
+// Unknown param keys are allowed (forward-compatible). Hard errors:
+// missing id/transport, bad transport, duplicate ids, launch without
+// exec/argv, connect without url.
+func ValidateProviders(list []ProviderDecl) error {
+	seen := make(map[string]struct{}, len(list))
+	for i, p := range list {
+		id := strings.TrimSpace(p.ID)
+		if id == "" {
+			return fmt.Errorf("config: providers[%d]: id is required", i)
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("config: providers: duplicate id %q", id)
+		}
+		seen[id] = struct{}{}
+		switch p.Transport {
+		case ProviderTransportLaunch:
+			if p.LaunchExec() == "" && len(p.LaunchArgv()) == 0 {
+				return fmt.Errorf("config: providers[%q]: launch needs params.exec and/or params.argv", id)
+			}
+		case ProviderTransportConnect:
+			if p.ConnectURL() == "" {
+				return fmt.Errorf("config: providers[%q]: connect needs params.url", id)
+			}
+		case "":
+			return fmt.Errorf("config: providers[%q]: transport is required (launch|connect)", id)
+		default:
+			return fmt.Errorf("config: providers[%q]: transport %q unsupported (want launch|connect)", id, p.Transport)
+		}
+	}
+	return nil
 }
 
 // Default returns the out-of-the-box configuration, rooted at the
@@ -90,7 +233,8 @@ func DefaultPath() string { return filepath.Join(Default().StateDir, "config.yam
 // Load returns Default overlaid with the YAML file at path. A missing
 // file is not an error — the defaults ARE the out-of-the-box config. A
 // present-but-malformed file is a hard error (never silently ignore the
-// owner's explicit configuration).
+// owner's explicit configuration). Provider declarations are validated
+// when present (🎯T27.2).
 func Load(path string) (Config, error) {
 	cfg := Default()
 	data, err := os.ReadFile(path)
@@ -123,6 +267,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.MCPServerName == "" {
 		cfg.MCPServerName = def.MCPServerName
+	}
+	if err := ValidateProviders(cfg.Providers); err != nil {
+		return cfg, err
 	}
 	return cfg, nil
 }

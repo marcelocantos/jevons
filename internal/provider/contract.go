@@ -1,11 +1,16 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package provider is the 🎯T27.1 provider-contract kernel: manifest/describe,
+// Package provider is the 🎯T27 provider-contract kernel: manifest/describe,
 // feed events, ViewNode UI surfaces, MCP endpoint declaration, and an
-// in-process registry that mirrors the hub surface jevonsd will own after
-// 🎯T27.2–T27.6. Real network transports grow later; the conformance suite
-// asserts the protocol through this package.
+// in-process registry that mirrors the hub surface jevonsd owns after
+// 🎯T27.2–T27.6.
+//
+// 🎯T27.2 adds structured config loading (via internal/config Providers),
+// an additive SQLite persistence home (Store under StateDir/providers/),
+// and ConfigManager.Reload for mid-process desired-set updates without a
+// full daemon restart. Real network transports / supervisor: 🎯T27.3+.
+// The T27.1 conformance suite asserts the protocol through this package.
 package provider
 
 import (

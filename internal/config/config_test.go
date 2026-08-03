@@ -525,3 +525,118 @@ func TestLoadMalformedFileFailsClosed(t *testing.T) {
 		t.Fatal("malformed config must be a hard error")
 	}
 }
+
+// 🎯T27.2: structured providers list (id, transport, enable, params).
+func TestLoadProvidersConnectAndLaunch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+providers:
+  - id: mnemo
+    transport: connect
+    enable: true
+    params:
+      url: http://127.0.0.1:8741
+      extra_flag: keep-me
+  - id: pulse
+    transport: launch
+    enable: false
+    params:
+      exec: /usr/local/bin/pulse
+      argv: ["--serve", "9100"]
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Providers) != 2 {
+		t.Fatalf("providers len=%d want 2", len(cfg.Providers))
+	}
+	mnemo := cfg.Providers[0]
+	if mnemo.ID != "mnemo" || mnemo.Transport != ProviderTransportConnect {
+		t.Fatalf("mnemo: %+v", mnemo)
+	}
+	if !mnemo.Enabled() {
+		t.Fatal("mnemo enable:true should be enabled")
+	}
+	if mnemo.ConnectURL() != "http://127.0.0.1:8741" {
+		t.Fatalf("url=%q", mnemo.ConnectURL())
+	}
+	if mnemo.ParamString("extra_flag") != "keep-me" {
+		t.Fatalf("forward-compat param lost: %+v", mnemo.Params)
+	}
+	pulse := cfg.Providers[1]
+	if pulse.Enabled() {
+		t.Fatal("pulse enable:false should be disabled")
+	}
+	if pulse.LaunchExec() != "/usr/local/bin/pulse" {
+		t.Fatalf("exec=%q", pulse.LaunchExec())
+	}
+	argv := pulse.LaunchArgv()
+	if len(argv) != 2 || argv[0] != "--serve" || argv[1] != "9100" {
+		t.Fatalf("argv=%v", argv)
+	}
+}
+
+func TestLoadProvidersDefaultEnableTrue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+providers:
+  - id: only
+    transport: connect
+    params:
+      url: http://127.0.0.1:1
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Providers[0].Enabled() {
+		t.Fatal("omitted enable defaults to true")
+	}
+}
+
+func TestLoadProvidersValidationErrors(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		yaml string
+		sub  string
+	}{
+		{"missing id", "providers:\n  - transport: connect\n    params: {url: x}\n", "id is required"},
+		{"dup id", "providers:\n  - id: a\n    transport: connect\n    params: {url: x}\n  - id: a\n    transport: connect\n    params: {url: y}\n", "duplicate"},
+		{"bad transport", "providers:\n  - id: a\n    transport: fog\n", "unsupported"},
+		{"launch no exec", "providers:\n  - id: a\n    transport: launch\n    params: {}\n", "launch needs"},
+		{"connect no url", "providers:\n  - id: a\n    transport: connect\n    params: {}\n", "connect needs"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tc.sub) {
+				t.Fatalf("err=%v want substring %q", err, tc.sub)
+			}
+		})
+	}
+}
+
+func TestLoadProvidersEmptyIsOK(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Providers) != 0 {
+		t.Fatalf("default providers should be empty, got %+v", cfg.Providers)
+	}
+}

@@ -44,6 +44,11 @@ func TestProviderContractDocCompleteness(t *testing.T) {
 		"mock_ping",
 		"internal/provider",
 		"ios/Jevon/Models/ViewNode.swift",
+		// 🎯T27.2 surfaces documented in the contract
+		"config.yaml",
+		"providers:",
+		"registry.db",
+		"ConfigManager",
 	}
 	for _, needle := range required {
 		if !strings.Contains(doc, needle) {

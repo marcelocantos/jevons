@@ -31,6 +31,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -241,6 +242,35 @@ func main() {
 		defer workerTracker.Close()
 		srv.SetWorkersTracker(workerTracker)
 	}
+
+	// 🎯T27.2: structured provider config + persistence home for the registry.
+	// Desired set comes from config.yaml `providers:`; runtime state lives in
+	// StateDir/providers/registry.db. Reconcile/supervisor is 🎯T27.3.
+	// providerCfg is retained for the process lifetime so Reload remains
+	// available when T27.3 wires reconcile / an admin surface.
+	var providerCfg *provider.ConfigManager
+	if pstore, err := provider.OpenStore(provider.DefaultStorePath(cfg.StateDir)); err != nil {
+		slog.Error("provider store unavailable — external providers disabled", "err", err)
+	} else {
+		defer pstore.Close()
+		pm, err := provider.NewConfigManager(provider.ConfigManagerArgs{
+			ConfigPath: cfgPath,
+			Store:      pstore,
+		})
+		if err != nil {
+			slog.Error("provider config load failed — external providers disabled", "err", err)
+		} else {
+			providerCfg = pm
+			slog.Info("provider config ready",
+				"path", providerCfg.ConfigPath(),
+				"store", pstore.Path(),
+				"desired", len(providerCfg.Desired()),
+				"enabled", len(providerCfg.Enabled()),
+			)
+		}
+	}
+	// providerCfg retained for process lifetime (T27.3 will wire reconcile/reload).
+	_ = providerCfg
 
 	// 🎯T8.3 execution safety (doit Engine: L1/L2/L3, audit, capabilities).
 	// L3 stays off by default so boot is hermetic without an LLM; L1/L2 +

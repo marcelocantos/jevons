@@ -57,7 +57,12 @@ Three concepts, one durable spine:
 - **Overseer ("jevons")** — a persistent named Grok agent that is the CEO.
   Identity and persona come from structured config (`~/.jevons/config.yaml`
   + built-in `persona.md` template; 🎯T44) — no owner-specific identity in
-  compiled code. Communication is fire-and-forget: `jevons_agent_send`
+  compiled code. External ecosystem providers are declared under the same
+  file's `providers:` list (id, transport launch|connect, enable, params)
+  with runtime registry state in `~/.jevons/providers/registry.db` (🎯T27.2;
+  reloadable via `provider.ConfigManager` without a full daemon restart;
+  process supervise/reconcile is 🎯T27.3). Communication is fire-and-forget:
+  `jevons_agent_send`
   returns immediately; worker replies and completions arrive as async
   notifications pushed into the overseer's conversation.
 - **jwork** (`internal/mcpserver/jwork.go`) — the ephemeral primitive: a
