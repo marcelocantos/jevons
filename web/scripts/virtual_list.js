@@ -262,9 +262,10 @@
   // whole assistant response (coalesced consecutive assistant text frames).
   // Never emit partial mid-markdown fragments as separate display units.
 
-  // 🎯T147: prefer ChatEvents join helpers when available (browser load
-  // order / Node require); keep a local twin so this module stays usable
-  // in isolation and never falls back to bare += at fence edges.
+  // 🎯T147/T161: prefer ChatEvents join helpers when available (browser
+  // load order / Node require); keep a local twin so this module stays
+  // usable in isolation and never falls back to bare += at fence or
+  // paragraph edges.
   function coalesceAssistantTextLocal(prev, next) {
     if (typeof ChatEvents !== 'undefined' && ChatEvents.coalesceAssistantText) {
       return ChatEvents.coalesceAssistantText(prev, next);
@@ -273,7 +274,20 @@
     next = String(next == null ? '' : next);
     if (!prev) return next;
     if (!next) return prev;
-    if (!/[\n\r]$/.test(prev) && /^```/.test(next)) return prev + '\n\n' + next;
+    if (/[\n\r]$/.test(prev) || /^[\n\r]/.test(next)) return prev + next;
+    // Fence (T147 subset), block openers, or sentence-end + capital para
+    // segment (T161). Skip bare tokens ("Hello."+"What") so token streams
+    // stay fused; multi-word next (or short complete "Done.") separates.
+    const sentenceEnd = /[.!?]['"»\u201d\u2019\)\]]*$/.test(prev);
+    const paraStart = /^([A-Z\u00C0-\u024F]|(\*\*|__|[_*])[A-Z\u00C0-\u024F])/.test(next);
+    const paraSeg = /\s/.test(next) || (next.length >= 2 && /[.!?]['"»\u201d\u2019\)\]]*$/.test(next));
+    if (
+      /^```/.test(next) ||
+      /^(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)/.test(next) ||
+      (sentenceEnd && paraStart && paraSeg)
+    ) {
+      return prev + '\n\n' + next;
+    }
     return prev + next;
   }
 

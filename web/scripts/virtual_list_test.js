@@ -158,6 +158,47 @@ test('T147 extract multi-block: join parts with fence edge repair', function () 
   assert.strictEqual(chunks[0].text, 'See:\n\n```js\n1\n```');
 });
 
+// ── 🎯T161 paragraph segment edges in coalesceTranscriptFrames ─────────
+
+test('T161 coalesceTranscriptFrames: two prose paragraphs without NL get blank line', function () {
+  const chunks = VL.coalesceTranscriptFrames([
+    { type: 'user', message: { content: 'two paras' } },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'First paragraph ends here.' }] },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Second paragraph starts here.' }] },
+    },
+  ]);
+  assert.strictEqual(chunks.length, 2);
+  assert.strictEqual(
+    chunks[1].text,
+    'First paragraph ends here.\n\nSecond paragraph starts here.',
+  );
+  assert.ok(!chunks[1].text.includes('here.Second'), 'must not smash paragraphs');
+});
+
+test('T161 extract multi-block: paragraph parts separated at join', function () {
+  const chunks = VL.coalesceTranscriptFrames([
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'First paragraph ends here.' },
+          { type: 'text', text: 'Second paragraph starts here.' },
+        ],
+      },
+    },
+  ]);
+  assert.strictEqual(chunks.length, 1);
+  assert.strictEqual(
+    chunks[0].text,
+    'First paragraph ends here.\n\nSecond paragraph starts here.',
+  );
+});
+
 
 // ── full data resident + windowed content ────────────────────────────
 

@@ -321,6 +321,89 @@ test('T147 index.html: no bare _streamRaw += / pending.raw += / join(\'\') on as
   );
 });
 
+// ── 🎯T161 general segment-edge paragraph/block separation (T147 subset) ─
+// T147 only special-cased fence openers. T161 generalizes the same join
+// helper for paragraph/block edges when ACP emits separate segments
+// (prose. + tool_result + next prose) that bare concat would fuse.
+
+test('T161 coalesceAssistantText: two prose paragraphs without NL get blank line', () => {
+  // Owner acceptance fixture: no leading/trailing NL on either segment.
+  const prev = 'First paragraph ends here.';
+  const next = 'Second paragraph starts here.';
+  const out = ChatEvents.coalesceAssistantText(prev, next);
+  assert.strictEqual(out, 'First paragraph ends here.\n\nSecond paragraph starts here.');
+  assert.ok(!out.includes('here.Second'), 'must not smash paragraphs');
+  assert.ok(/\.\n\nS/.test(out), 'must insert blank line at segment edge');
+});
+
+test('T161 joinAssistantTexts: multi-part prose paragraphs separated', () => {
+  const out = ChatEvents.joinAssistantTexts([
+    'First paragraph ends here.',
+    'Second paragraph starts here.',
+  ]);
+  assert.strictEqual(
+    out,
+    'First paragraph ends here.\n\nSecond paragraph starts here.',
+  );
+});
+
+test('T161 coalesceAssistantText: fence case remains T147 subset', () => {
+  // Keep T147 green: Intro. + ```cpp still inserts blank line.
+  const out = ChatEvents.coalesceAssistantText('Intro.', '```cpp\ncode\n```');
+  assert.strictEqual(out, 'Intro.\n\n```cpp\ncode\n```');
+  assert.ok(!out.includes('.```'), 'fence must not smush');
+});
+
+test('T161 coalesceAssistantText: does not invent mid-sentence breaks', () => {
+  // Token glue and same-paragraph continuations stay bare concat.
+  assert.strictEqual(ChatEvents.coalesceAssistantText('Hello', '.'), 'Hello.');
+  assert.strictEqual(ChatEvents.coalesceAssistantText('a', 'b'), 'ab');
+  assert.strictEqual(ChatEvents.coalesceAssistantText('Hel', 'lo.'), 'Hello.');
+  // Single-token next after period (screenshot token stream) — not a para segment.
+  assert.strictEqual(ChatEvents.coalesceAssistantText('Hello.', 'What'), 'Hello.What');
+  // Leading space on next ⇒ same-paragraph continue (model already spaced).
+  assert.strictEqual(
+    ChatEvents.coalesceAssistantText('Done.', ' More text.'),
+    'Done. More text.',
+  );
+  // Mid-sentence capital is rare; no sentence ender ⇒ bare concat.
+  assert.strictEqual(
+    ChatEvents.coalesceAssistantText('the value is', 'X'),
+    'the value isX',
+  );
+});
+
+test('T161 coalesceAssistantText: block openers at segment edge get blank line', () => {
+  assert.strictEqual(
+    ChatEvents.coalesceAssistantText('Here are the items:', '- first\n- second'),
+    'Here are the items:\n\n- first\n- second',
+  );
+  assert.strictEqual(
+    ChatEvents.coalesceAssistantText('Overview.', '# Title\nbody'),
+    'Overview.\n\n# Title\nbody',
+  );
+});
+
+test('T161 applyChatEvents: tool_result gap then next paragraph separates', () => {
+  // Proven shape: prose segment, tool frames, then next paragraph segment.
+  const events = [
+    user('explain two points'),
+    chunk('First paragraph ends here.'),
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'read_file', input: {} }] },
+    },
+    chunk('Second paragraph starts here.'),
+    endTurn(),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  assert.strictEqual(
+    state.assistantBubbles[0],
+    'First paragraph ends here.\n\nSecond paragraph starts here.',
+  );
+});
+
 // ── regression guard: old clear-on-first-text policy is gone ────
 
 test('regression guard: hasText without stop must not clear', () => {
