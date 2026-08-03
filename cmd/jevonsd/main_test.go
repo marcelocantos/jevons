@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/config"
 )
 
@@ -64,5 +65,57 @@ func TestGrokCandidatePaths(t *testing.T) {
 func TestGrokBin(t *testing.T) {
 	if got := grokBin(); !strings.HasSuffix(got, "grok") {
 		t.Errorf("grokBin() = %q, want a path ending in grok", got)
+	}
+}
+
+// 🎯T214 J4: diagnostics must not mislabel Claude/other as a Grok CLI failure
+// solely because Grok connect fields/binaries are missing.
+func TestDiagnoseOverseerUnavailableProviderAware(t *testing.T) {
+	// Claude + missing binary: must not mention Grok install as the fix.
+	got := diagnoseOverseerUnavailable(claudia.ProviderClaude, false, "")
+	if !strings.Contains(got, "claude") && !strings.Contains(strings.ToLower(got), "claude") {
+		t.Fatalf("claude missing: want Claude-facing text, got %q", got)
+	}
+	if strings.Contains(got, "install Grok") || strings.Contains(got, "grok login") {
+		t.Fatalf("claude missing must not blame Grok CLI: %q", got)
+	}
+	if !strings.Contains(got, "not a Grok CLI issue") {
+		t.Fatalf("claude missing should disclaim Grok: %q", got)
+	}
+
+	// Claude + binary present: still Claude-facing, not Grok login.
+	got = diagnoseOverseerUnavailable(claudia.ProviderClaude, true, "")
+	if strings.Contains(got, "grok login") || strings.Contains(got, "XAI_API_KEY") {
+		t.Fatalf("claude present must not use Grok auth copy: %q", got)
+	}
+
+	// Codex missing.
+	got = diagnoseOverseerUnavailable(claudia.ProviderCodex, false, "")
+	if strings.Contains(got, "install Grok") {
+		t.Fatalf("codex must not blame Grok: %q", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "codex") {
+		t.Fatalf("codex text: %q", got)
+	}
+
+	// Bedrock: credentials, not Grok.
+	got = diagnoseOverseerUnavailable(claudia.ProviderBedrock, false, "")
+	if strings.Contains(got, "install Grok") || strings.Contains(got, "grok login") {
+		t.Fatalf("bedrock must not blame Grok: %q", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "bedrock") {
+		t.Fatalf("bedrock text: %q", got)
+	}
+
+	// Grok missing: historical first-run copy still mentions Grok install.
+	got = diagnoseOverseerUnavailable(claudia.ProviderGrok, false, "")
+	if !strings.Contains(got, "Grok CLI is not installed") {
+		t.Fatalf("grok missing: %q", got)
+	}
+
+	// Grok with off-PATH candidate.
+	got = diagnoseOverseerUnavailable(claudia.ProviderGrok, false, "/opt/homebrew/bin/grok")
+	if !strings.Contains(got, "/opt/homebrew/bin/grok") {
+		t.Fatalf("grok candidate path: %q", got)
 	}
 }

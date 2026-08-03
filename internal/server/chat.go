@@ -20,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // defaultOverseerName is the fallback registry name of the persistent
@@ -218,14 +219,16 @@ func (s *Server) sendNotes(text string) error {
 
 // notifyErrClass classifies overseer-notify delivery failures for structured
 // logs (🎯T128.3). Stable short codes for rg / dashboards.
+// Busy uses agenterr.IsPromptBusy so Claude/Task strings classify like Grok ACP (🎯T214 J6).
 func notifyErrClass(err error) string {
 	if err == nil {
 		return ""
 	}
+	if agenterr.IsPromptBusy(err) {
+		return "busy"
+	}
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "prompt already in flight"):
-		return "busy"
 	case strings.Contains(msg, "overseer not running"):
 		return "not_running"
 	default:
@@ -304,14 +307,44 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// rewindStrategy selects how product rewind rebinds the overseer session
+// after the durable chatlog is truncated (🎯T214 J5).
+//
+//   - rewindNativeJSONL: Claude Session — claudia.RewindSession truncates the
+//     provider JSONL; same SessionID is resumed (not a silent Grok-style rotate).
+//   - rewindRotateRecap: Grok ACP and other providers without in-place session
+//     truncate — journal-first rotate onto a fresh SessionID + chatlog recap.
+type rewindStrategy int
+
+const (
+	rewindRotateRecap rewindStrategy = iota
+	rewindNativeJSONL
+)
+
+// rewindStrategyForProvider is the hermetic policy oracle for 🎯T214 J5.
+// Only Claude Session (and empty, which claudia treats as Claude) uses
+// native JSONL rewind. Grok/Codex/Bedrock/unknown must not silently apply
+// Claude JSONL rules — rotate+recap is the honest product path.
+func rewindStrategyForProvider(p claudia.Provider) rewindStrategy {
+	switch p {
+	case claudia.ProviderClaude, "":
+		return rewindNativeJSONL
+	default:
+		return rewindRotateRecap
+	}
+}
+
 // RewindOverseer rolls the Jevons conversation back n user turns and
-// resumes it. claudia requires the live process be stopped first (a
-// running claude holds the conversation in memory and would re-append
-// the dropped turns), so this stops the overseer, truncates its
-// transcript at a turn boundary, relaunches with --resume, and
-// re-attaches the event stream. The rewind is undoable via the
-// .rewind-bak sidecar claudia leaves behind. The overseer is always
-// relaunched, even if the truncate fails, so the chat is never left dead.
+// resumes the overseer. Always journal-first (🎯T52): truncate the durable
+// chatlog, stop the live process, then rebind the session:
+//
+//   - Claude (🎯T214): claudia.RewindSession on the same SessionID, then Launch
+//     with Materialized/RequireResume. No silent Grok rotate applied wrongly.
+//     Falls back to rotate+recap if native JSONL rewind fails (missing file,
+//     wrong turn count) — failure is logged, not mislabeled as Grok-only success.
+//   - Grok / others: rotate SessionID + seed recap (Grok ACP cannot truncate
+//     in place). Residual: chatlog turn count vs Claude JSONL turn boundaries
+//     may diverge when both are used; product n is chatlog turns.
 func (s *Server) RewindOverseer(n int) error {
 	if n < 1 {
 		return fmt.Errorf("rewind: turns must be >= 1")
@@ -331,14 +364,6 @@ func (s *Server) RewindOverseer(n int) error {
 		return fmt.Errorf("rewind: overseer not registered")
 	}
 
-	// A Grok ACP session cannot be truncated in place, so rewind is
-	// journal-first (🎯T52): truncate the durable record, then rotate the
-	// overseer onto a fresh session seeded with a recap of the trimmed
-	// history. This rotation is specific to rewind — unlike routine boot,
-	// which now RESUMES the real session (🎯T58): the overseer's MCP tools
-	// come from ~/.grok/config.toml and reattach on session/load, so a
-	// restart no longer needs to rotate-and-recap. Here we must rotate
-	// because the whole point is to drop turns the live session still holds.
 	if err := clog.TruncateTurns(n); err != nil {
 		return fmt.Errorf("rewind: %w", err)
 	}
@@ -347,12 +372,36 @@ func (s *Server) RewindOverseer(n int) error {
 	// Stop clears ConnectURL/PID on the registry copy, but `def` was
 	// snapshotted before Stop. Re-registering that snapshot re-persisted
 	// the dead serve endpoint and forced Launch into reattach → connection
-	// reset (🎯T204). Always rotate with a clean connect endpoint.
-	rotated := clearConnectEndpoint(*def)
-	rotated.SessionID = uuid.NewString()
-	rotated.Materialized = false
-	if err := reg.Register(rotated); err != nil {
-		return fmt.Errorf("rewind: rotate session: %w", err)
+	// reset (🎯T204). Always clear connect endpoint before re-register.
+	next := clearConnectEndpoint(*def)
+	strategy := rewindStrategyForProvider(def.Provider)
+	injectRecap := true
+
+	if strategy == rewindNativeJSONL {
+		if _, err := claudia.RewindSession(def.SessionID, def.WorkDir, n); err != nil {
+			slog.Warn("rewind: Claude native JSONL rewind failed; falling back to rotate+recap",
+				"provider", def.Provider, "session", def.SessionID, "err", err)
+			// Fall through to rotate path.
+			strategy = rewindRotateRecap
+		} else {
+			// Same session id, still materialized; resume the truncated JSONL.
+			next.Materialized = true
+			injectRecap = false
+			slog.Info("rewind: Claude native JSONL path",
+				"provider", def.Provider, "session", next.SessionID, "turns", n)
+		}
+	}
+
+	if strategy == rewindRotateRecap {
+		// Grok ACP (and fallback): cannot truncate the live session in place.
+		next.SessionID = uuid.NewString()
+		next.Materialized = false
+		slog.Info("rewind: rotate+recap path",
+			"provider", def.Provider, "new_session", next.SessionID, "turns", n)
+	}
+
+	if err := reg.Register(next); err != nil {
+		return fmt.Errorf("rewind: register session: %w", err)
 	}
 	agent, lerr := reg.Launch(s.overseerName)
 	if lerr != nil {
@@ -364,11 +413,21 @@ func (s *Server) RewindOverseer(n int) error {
 	s.AttachOverseer(agent)
 	s.SetOverseerDownReason("")
 
-	if recap := clog.Recap(30, 6<<10); recap != "" {
+	if injectRecap {
+		if recap := clog.Recap(30, 6<<10); recap != "" {
+			go func() {
+				if err := s.SendToOverseer(
+					"[Conversation rewound by the owner. The record below is the surviving context — read it, then acknowledge in ONE short sentence.]\n\n" + recap); err != nil {
+					slog.Error("rewind recap send failed", "err", err)
+				}
+			}()
+		}
+	} else {
+		// Native path: model already has truncated transcript; short ack only.
 		go func() {
 			if err := s.SendToOverseer(
-				"[Conversation rewound by the owner. The record below is the surviving context — read it, then acknowledge in ONE short sentence.]\n\n" + recap); err != nil {
-				slog.Error("rewind recap send failed", "err", err)
+				"[Conversation rewound by the owner — your session transcript was truncated in place. Acknowledge in ONE short sentence.]"); err != nil {
+				slog.Error("rewind ack send failed", "err", err)
 			}
 		}()
 	}

@@ -6,10 +6,10 @@ package mcpserver
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // agentSendResult is the outcome of sendToAgent (🎯T111.1).
@@ -27,13 +27,11 @@ type agentSender interface {
 	Alive() bool
 }
 
-// isPromptInFlight reports the Grok ACP busy error that dead-ended
-// overseer nudges before 🎯T111.1.
+// isPromptInFlight reports a concurrent prompt/turn (busy) so senders
+// queue or interrupt instead of hard-failing (🎯T111.1, 🎯T214 J6).
+// Provider-agnostic: not Grok ACP string only — see agenterr.IsPromptBusy.
 func isPromptInFlight(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "already in flight")
+	return agenterr.IsPromptBusy(err)
 }
 
 // enqueueAgentSend appends text for delivery after the current turn.

@@ -66,8 +66,16 @@ func (f *fakeSender) Interrupt() error {
 }
 
 func TestIsPromptInFlight(t *testing.T) {
+	// Grok ACP (historical).
 	if !isPromptInFlight(fmt.Errorf("send to x: grok acp: prompt already in flight")) {
-		t.Fatal("expected match")
+		t.Fatal("expected Grok ACP match")
+	}
+	// 🎯T214 J6: non-Grok busy shapes must queue, not hard-fail.
+	if !isPromptInFlight(fmt.Errorf("task worker-1 is busy")) {
+		t.Fatal("expected Task busy match")
+	}
+	if !isPromptInFlight(fmt.Errorf("claude session: prompt in progress")) {
+		t.Fatal("expected Claude-shaped busy match")
 	}
 	if isPromptInFlight(fmt.Errorf("other")) {
 		t.Fatal("unexpected match")
@@ -76,6 +84,41 @@ func TestIsPromptInFlight(t *testing.T) {
 		t.Fatal("nil")
 	}
 }
+
+// 🎯T214 J6: deliverToSender queues on non-Grok busy strings (not only ACP).
+func TestDeliverToSenderQueuesOnTaskBusy(t *testing.T) {
+	s := &Server{}
+	fs := &busyStringSender{alive: true, busyErr: "task abc is busy"}
+	res, err := deliverToSender(s, "po", "nudge", false, fs, false)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if res.Status != "queued" {
+		t.Fatalf("status=%q want queued", res.Status)
+	}
+	if res.Queued != 1 {
+		t.Fatalf("queued=%d", res.Queued)
+	}
+}
+
+// busyStringSender returns a configurable busy error on Send.
+type busyStringSender struct {
+	alive   bool
+	busyErr string
+	sent    []string
+}
+
+func (f *busyStringSender) Alive() bool { return f.alive }
+
+func (f *busyStringSender) Send(text string) error {
+	if f.busyErr != "" {
+		return fmt.Errorf("%s", f.busyErr)
+	}
+	f.sent = append(f.sent, text)
+	return nil
+}
+
+func (f *busyStringSender) Interrupt() error { return nil }
 
 func TestDeliverToSenderQueuesWhenBusy(t *testing.T) {
 	cap := &slogCapture{}

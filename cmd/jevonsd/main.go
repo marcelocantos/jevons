@@ -170,7 +170,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create components — Grok-only; sessions live under cfg.SessionsDir.
+	// Session discovery defaults to cfg.SessionsDir (typically ~/.grok/sessions).
+	// Provider-aware Claude JSONL discovery is 🎯T213; do not hard-label this Grok-only.
 	scanner := discovery.NewScanner(cfg.SessionsDir)
 
 	srv := server.New(cli.Version, cfg.StateDir)
@@ -619,15 +620,14 @@ func main() {
 		// hack — a lossy summary re-injected as a visible user turn every
 		// restart — is gone.
 	} else {
-		// The overseer did not launch — almost always a missing/unauth
-		// Grok CLI (StartAll logged "auto-start failed"), so the chat
-		// cannot respond. Fail LOUD and legible so a first-run stranger
-		// knows exactly what to do instead of facing a silent chat
-		// (🎯T54); the UI-facing half is the chat handler's overseer-down
-		// path. Cockpit converge (🎯T204) keeps retrying Launch+attach.
-		reason := overseerUnavailableReason()
+		// The overseer did not launch (StartAll logged "auto-start failed"),
+		// so the chat cannot respond. Fail LOUD and legible with
+		// provider-aware diagnosis (🎯T54, 🎯T214 J4) — do not blame a missing
+		// Grok CLI when the overseer provider is Claude/other. Cockpit
+		// converge (🎯T204) keeps retrying Launch+attach.
+		reason := overseerUnavailableReason(jevonDef.Provider)
 		slog.Error("OVERSEER NOT RUNNING — chat cannot respond until this is fixed",
-			"overseer", cfg.OverseerName, "likely_cause", reason)
+			"overseer", cfg.OverseerName, "provider", jevonDef.Provider, "likely_cause", reason)
 		srv.SetOverseerDownReason(reason)
 	}
 
@@ -855,11 +855,6 @@ func loadKeychainKey(service string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// overseerUnavailableReason returns a legible, actionable explanation for
-// why the overseer could not launch (🎯T54). The overwhelmingly common
-// first-run cause is a missing or unauthenticated Grok CLI, so it checks
-// for the `grok` binary the same way claudia resolves it and tailors the
-// message accordingly.
 // grokCandidatePaths lists where the Grok CLI is commonly installed, in
 // preference order, for the fallback when it is not on PATH.
 func grokCandidatePaths() []string {
@@ -895,6 +890,9 @@ func grokBin() string {
 // restarts (🎯T58) instead of the old rotate-and-recap hack. Idempotent:
 // removes any prior entry (ignoring the not-found error) then re-adds the
 // current URL, so a changed port/bind is always reflected.
+//
+// Residual (🎯T212 / restitch J1): Claude overseer MCP install is a separate
+// product path — this helper remains Grok-config.toml-only by design.
 func ensureGrokMCPServer(cfg config.Config, host string) error {
 	name, url := grokMCPServerSpec(cfg, host)
 	grok := grokBin()
@@ -916,20 +914,70 @@ func grokMCPServerSpec(cfg config.Config, host string) (name, url string) {
 	return cfg.MCPServerName, fmt.Sprintf("http://%s:%d/mcp", host, cfg.Port)
 }
 
-func overseerUnavailableReason() string {
-	if _, err := exec.LookPath("grok"); err == nil {
-		return "the Grok agent failed to start — check that the Grok CLI is signed in " +
-			"(`grok login`, or set XAI_API_KEY) and see the jevonsd log for details"
-	}
-	for _, p := range grokCandidatePaths() {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return "the Grok agent failed to start — check that the Grok CLI at " + p +
+// diagnoseOverseerUnavailable is the pure oracle for 🎯T214 J4: message text
+// is keyed by overseer provider. Missing Grok connect fields must not
+// mislabel a Claude/Codex/Bedrock overseer as "Grok is broken".
+//
+// binOnPath: provider CLI found on PATH. candidatePath: non-empty when a
+// known install path exists off-PATH (Grok only today).
+func diagnoseOverseerUnavailable(provider claudia.Provider, binOnPath bool, candidatePath string) string {
+	switch provider {
+	case claudia.ProviderClaude:
+		if binOnPath {
+			return "the Claude agent failed to start — check that the Claude CLI is authenticated " +
+				"and see the jevonsd log for details (overseer provider is claude)"
+		}
+		return "the Claude CLI is not installed (or not on PATH) — install Claude Code, authenticate, " +
+			"then restart jevonsd (overseer provider is claude; this is not a Grok CLI issue)"
+	case claudia.ProviderCodex:
+		if binOnPath {
+			return "the Codex agent failed to start — check Codex auth and see the jevonsd log " +
+				"(overseer provider is codex)"
+		}
+		return "the Codex CLI is not installed (or not on PATH) — install Codex, authenticate, " +
+			"then restart jevonsd (overseer provider is codex; this is not a Grok CLI issue)"
+	case claudia.ProviderBedrock:
+		return "the Bedrock agent failed to start — check AWS credentials/region and see the " +
+			"jevonsd log (overseer provider is bedrock; this is not a Grok CLI issue)"
+	default:
+		// Grok (default fleet) and unknown providers: Grok-oriented copy.
+		if binOnPath {
+			return "the Grok agent failed to start — check that the Grok CLI is signed in " +
+				"(`grok login`, or set XAI_API_KEY) and see the jevonsd log for details"
+		}
+		if candidatePath != "" {
+			return "the Grok agent failed to start — check that the Grok CLI at " + candidatePath +
 				" is signed in (`grok login`, or set XAI_API_KEY)"
 		}
+		return "the Grok CLI is not installed — install Grok Build and sign in " +
+			"(`grok login`, or set XAI_API_KEY), then restart jevonsd. The default overseer " +
+			"provider is Grok; set provider=claude (or config/env) only when that backend is ready"
 	}
-	return "the Grok CLI is not installed — install Grok Build and sign in " +
-		"(`grok login`, or set XAI_API_KEY), then restart jevonsd. jevons runs its " +
-		"overseer and workers as Grok agents and cannot operate without it"
+}
+
+// overseerUnavailableReason probes the host for the selected overseer
+// provider's CLI and returns a legible, actionable explanation (🎯T54, 🎯T214).
+func overseerUnavailableReason(provider claudia.Provider) string {
+	switch provider {
+	case claudia.ProviderClaude:
+		_, err := exec.LookPath("claude")
+		return diagnoseOverseerUnavailable(provider, err == nil, "")
+	case claudia.ProviderCodex:
+		_, err := exec.LookPath("codex")
+		return diagnoseOverseerUnavailable(provider, err == nil, "")
+	case claudia.ProviderBedrock:
+		return diagnoseOverseerUnavailable(provider, false, "")
+	default:
+		if _, err := exec.LookPath("grok"); err == nil {
+			return diagnoseOverseerUnavailable(claudia.ProviderGrok, true, "")
+		}
+		for _, p := range grokCandidatePaths() {
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return diagnoseOverseerUnavailable(claudia.ProviderGrok, false, p)
+			}
+		}
+		return diagnoseOverseerUnavailable(claudia.ProviderGrok, false, "")
+	}
 }
 
 // reapIdleGCInterval is how often the butler sweeps for idle spawned

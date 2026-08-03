@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // 🎯T182: POST /api/agents/{name}/send — fire-and-forget deliver to a fleet
@@ -116,7 +118,7 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 			code = http.StatusNotFound
 		} else if strings.Contains(msg, "required") {
 			code = http.StatusBadRequest
-		} else if strings.Contains(msg, "already in flight") {
+		} else if agenterr.IsPromptBusy(err) {
 			code = http.StatusConflict
 		}
 		writeJSONError(w, code, msg)
