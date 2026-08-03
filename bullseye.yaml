@@ -335,7 +335,6 @@ targets:
     status: identified
     value: 5.0
     cost: 3.0
-    set_aside_reason: 'Owner 2026-08-02: design/taste — needs owner discussion before settling UI. Removed from unattended batch; parked for design conversation. Do not implement unattended.'
     acceptance:
     - Assistant replies use talk-bubble geometry like user requests but with no background fill — border only.
     - Collapsed tall bubbles keep the same full rendered HTML as expanded (tables/lists/code intact); only the container height changes and content is overflow-clipped. No truncated-source re-markdown preview for collapsed state.
