@@ -63,12 +63,38 @@ test('normalizePayload maps API rows; empty/error calm', function () {
   assert.strictEqual(err.empty, true);
 });
 
-test('formatStatus and shortName', function () {
-  assert.strictEqual(FT.formatStatus('Converging'), 'Converging');
-  assert.strictEqual(FT.formatStatus('identified'), 'Identified');
+test('formatStatus abbr + statusTitle (🎯T173)', function () {
+  assert.strictEqual(FT.formatStatus('Converging'), 'Cv');
+  assert.strictEqual(FT.formatStatus('converging'), 'Cv');
+  assert.strictEqual(FT.formatStatus('Identified'), 'Id');
+  assert.strictEqual(FT.formatStatus('identified'), 'Id');
+  assert.strictEqual(FT.formatStatus('set_aside'), 'Sa');
+  assert.strictEqual(FT.formatStatus('SetAside'), 'Sa');
   assert.strictEqual(FT.formatStatus(''), '—');
+  assert.strictEqual(FT.statusTitle('Converging'), 'Converging');
+  assert.strictEqual(FT.statusTitle('identified'), 'Identified');
+  assert.strictEqual(FT.statusTitle('set_aside'), 'Set aside');
+  assert.strictEqual(FT.statusTitle(''), '');
   assert.ok(FT.shortName('x'.repeat(60), 20).length <= 20);
   assert.strictEqual(FT.shortName('short', 48), 'short');
+});
+
+test('formatFanout N᚛ + title; hide when 0 (🎯T173)', function () {
+  assert.strictEqual(FT.FANOUT_MARK, '\u169B');
+  const z = FT.formatFanout(0, 'T10.2');
+  assert.strictEqual(z.visible, false);
+  assert.strictEqual(z.text, '');
+  assert.strictEqual(z.title, '');
+  const one = FT.formatFanout(1, 'T10.2');
+  assert.strictEqual(one.visible, true);
+  assert.strictEqual(one.text, '1\u169B');
+  assert.strictEqual(one.title, '1 target depends on T10.2');
+  const many = FT.formatFanout(4, 'T10.2');
+  assert.strictEqual(many.visible, true);
+  assert.strictEqual(many.text, '4\u169B');
+  assert.strictEqual(many.title, '4 targets depend on T10.2');
+  // Real id passthrough
+  assert.ok(FT.formatFanout(3, 'T173').title.indexOf('T173') >= 0);
 });
 
 test('client uses API path — does not hard-code ledger discovery path', function () {
@@ -96,6 +122,28 @@ test('index.html wires frontier tab + API + no hard-coded ledger path', function
   // as the ledger location (server discovers via bullseye).
   assert.ok(!/const\s+BULLSEYE_PATH\s*=\s*['"]bullseye\.yaml['"]/.test(html));
   assert.ok(!/ledger\s*=\s*['"][^'"]*bullseye\.yaml['"]/.test(html));
+});
+
+test('T173 headerless table + abbr/fanout wiring in index.html', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // No column headers: do not create thead or hard-code ID/NAME/STATUS/FAN labels.
+  assert.ok(html.indexOf('createElement(\'thead\')') === -1, 'no thead element');
+  assert.ok(html.indexOf('createElement("thead")') === -1, 'no thead element (dbl)');
+  assert.ok(!/<th>\s*Id\s*<\/th>/i.test(html), 'no Id header cell');
+  assert.ok(!/<th>\s*Name\s*<\/th>/i.test(html), 'no Name header cell');
+  assert.ok(!/<th[^>]*>\s*Status\s*<\/th>/i.test(html), 'no Status header cell');
+  assert.ok(!/>Fan<\/th>/i.test(html), 'no Fan header cell');
+  // Status abbr + title via pure helpers
+  assert.ok(html.indexOf('FrontierTable.formatStatus') >= 0, 'formatStatus used');
+  assert.ok(html.indexOf('FrontierTable.statusTitle') >= 0, 'statusTitle used');
+  // Fanout N᚛ path
+  assert.ok(html.indexOf('FrontierTable.formatFanout') >= 0, 'formatFanout used');
+  assert.ok(html.indexOf('ft-fanout-empty') >= 0, 'empty fanout class for hide-0');
+  // Column layout: name takes remaining; shrink chrome cols
+  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*99%/.test(html), 'name width 99%');
+  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*1%/.test(html), 'id shrink-wrap');
+  assert.ok(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*1%/.test(html), 'status shrink-wrap');
+  assert.ok(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*1%/.test(html), 'fanout shrink-wrap');
 });
 
 if (failed) {

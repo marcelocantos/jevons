@@ -71,12 +71,64 @@
     };
   }
 
-  // formatStatus short label for table cell.
+  // Ogham feather mark (U+169B) — fanout glyph (🎯T173).
+  var FANOUT_MARK = '\u169B';
+
+  // Canonical status → short code + display title (🎯T173).
+  // Keys are lowercased with underscores/spaces stripped for lookup.
+  var STATUS_ABBR = {
+    identified: { abbr: 'Id', title: 'Identified' },
+    converging: { abbr: 'Cv', title: 'Converging' },
+    achieved: { abbr: 'Ac', title: 'Achieved' },
+    setaside: { abbr: 'Sa', title: 'Set aside' },
+    set_aside: { abbr: 'Sa', title: 'Set aside' },
+    postponed: { abbr: 'Pp', title: 'Postponed' },
+    assigned: { abbr: 'As', title: 'Assigned' },
+  };
+
+  function statusKey(status) {
+    return String(status || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  }
+
+  // formatStatus — abbreviated code for cell text (🎯T173). Empty → em dash.
   function formatStatus(status) {
     var s = String(status || '').trim();
     if (!s) return '—';
-    // Capitalize first letter only for compact display.
-    return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+    var key = statusKey(s);
+    var hit = STATUS_ABBR[key] || STATUS_ABBR[key.replace(/_/g, '')];
+    if (hit) return hit.abbr;
+    // Fallback: first letters of CamelCase / snake words, max 2–3 chars.
+    var parts = s.replace(/_/g, ' ').split(/(?=[A-Z])|[\s-]+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return parts.map(function (p) { return p.charAt(0).toUpperCase(); }).join('').slice(0, 3);
+    }
+    return s.slice(0, 2).charAt(0).toUpperCase() + s.slice(1, 2).toLowerCase();
+  }
+
+  // statusTitle — full status string for hover/title.
+  function statusTitle(status) {
+    var s = String(status || '').trim();
+    if (!s) return '';
+    var key = statusKey(s);
+    var hit = STATUS_ABBR[key] || STATUS_ABBR[key.replace(/_/g, '')];
+    if (hit) return hit.title;
+    // Pretty-print unknown: snake → words, capitalize.
+    return s.replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  }
+
+  // formatFanout(n, id) → { text, title, visible }.
+  // Hide cell content when fanout is 0 (🎯T173). Nonzero: "N᚛" + hover detail.
+  function formatFanout(n, id) {
+    var count = typeof n === 'number' ? n : (parseInt(n, 10) || 0);
+    if (count <= 0) {
+      return { text: '', title: '', visible: false };
+    }
+    var tid = String(id || '').trim() || '?';
+    var text = String(count) + FANOUT_MARK;
+    var title = count === 1
+      ? ('1 target depends on ' + tid)
+      : (String(count) + ' targets depend on ' + tid);
+    return { text: text, title: title, visible: true };
   }
 
   // shortName truncates long target names for the compact table.
@@ -104,10 +156,13 @@
     TAB_FRONTIER: TAB_FRONTIER,
     POLL_MS: POLL_MS,
     API_PATH: API_PATH,
+    FANOUT_MARK: FANOUT_MARK,
     nextBottomTab: nextBottomTab,
     tabAfterAgentSelect: tabAfterAgentSelect,
     normalizePayload: normalizePayload,
     formatStatus: formatStatus,
+    statusTitle: statusTitle,
+    formatFanout: formatFanout,
     shortName: shortName,
     emptyMessage: emptyMessage,
   };

@@ -583,7 +583,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #agent-inspect-body .ai-turn.assistant .ai-text strong { color: var(--strong); font-weight: 600; }
 #agent-inspect-body .ai-turn.assistant .ai-text a { color: var(--accent); text-decoration: none; }
 #agent-inspect-body .ai-turn.assistant .ai-text a:hover { text-decoration: underline; }
-/* 🎯T131: frontier table pane */
+/* 🎯T131 / 🎯T173: frontier table pane — headerless; id/status/fan shrink-wrap; name flexes */
 #frontier-pane { flex: 1; min-height: 0; }
 #frontier-toolbar {
   display: flex; align-items: center; gap: 8px; padding: 4px 12px;
@@ -602,33 +602,36 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #frontier-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; padding: 8px 12px; }
 #frontier-table {
   width: 100%; border-collapse: collapse; font-family: var(--sans);
-  table-layout: fixed;
-}
-#frontier-table th {
-  text-align: left; font-size: 10px; font-weight: 600; color: var(--text-muted);
-  text-transform: uppercase; letter-spacing: 0.05em;
-  padding: 6px 10px; border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; background: var(--bg); z-index: 1;
+  table-layout: auto;
 }
 #frontier-table td {
-  padding: 5px 10px; border-bottom: 1px solid var(--border);
-  color: var(--text); vertical-align: top;
+  padding: 5px 6px; border-bottom: 1px solid var(--border);
+  color: var(--text); vertical-align: middle;
 }
 #frontier-table tr:hover td { background: var(--surface-raised); }
+/* Shrink-wrap chrome cols (1% + nowrap → content width + light pad wiggle) */
 #frontier-table .ft-id {
   font-family: var(--mono); font-size: 11px; color: var(--accent);
   white-space: nowrap; font-weight: 500;
+  width: 1%; padding-left: 10px; padding-right: 4px;
 }
 #frontier-table .ft-name {
-  max-width: 0; width: 100%;
+  width: 99%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding-left: 4px; padding-right: 4px;
 }
 #frontier-table .ft-status {
-  font-size: 10px; color: var(--text-dim); text-transform: capitalize; white-space: nowrap;
+  font-size: 10px; color: var(--text-dim); white-space: nowrap;
+  width: 1%; padding-left: 4px; padding-right: 4px;
+  font-variant: small-caps; letter-spacing: 0.02em;
 }
 #frontier-table .ft-fanout {
   font-family: var(--mono); font-size: 10px; color: var(--text-muted);
   text-align: right; white-space: nowrap;
+  width: 1%; padding-left: 4px; padding-right: 10px;
+}
+#frontier-table .ft-fanout.ft-fanout-empty {
+  color: transparent;
 }
 #workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
 .worker-row { padding: 5px 6px; border-radius: 5px; margin-bottom: 2px; border: 1px solid transparent; }
@@ -4698,12 +4701,10 @@ function renderFrontierTable(model) {
     frontierBodyEl.appendChild(empty);
     return;
   }
+  // 🎯T173: headerless table — id / name / status abbr / fanout N᚛ (hide 0).
   const table = document.createElement('table');
   table.id = 'frontier-table';
   table.setAttribute('aria-label', 'Bullseye frontier');
-  const thead = document.createElement('thead');
-  thead.innerHTML = '<tr><th>Id</th><th>Name</th><th>Status</th><th title="Unblocking fanout">Fan</th></tr>';
-  table.appendChild(thead);
   const tbody = document.createElement('tbody');
   (model.rows || []).forEach(function (row) {
     const tr = document.createElement('tr');
@@ -4714,16 +4715,33 @@ function renderFrontierTable(model) {
     name.className = 'ft-name';
     name.title = row.name || '';
     name.textContent = (typeof FrontierTable !== 'undefined')
-      ? FrontierTable.shortName(row.name, 56)
+      ? FrontierTable.shortName(row.name, 72)
       : (row.name || '');
     const status = document.createElement('td');
     status.className = 'ft-status';
-    status.textContent = (typeof FrontierTable !== 'undefined')
-      ? FrontierTable.formatStatus(row.status)
-      : (row.status || '');
+    if (typeof FrontierTable !== 'undefined') {
+      status.textContent = FrontierTable.formatStatus(row.status);
+      status.title = FrontierTable.statusTitle(row.status);
+    } else {
+      status.textContent = row.status || '';
+      status.title = row.status || '';
+    }
     const fan = document.createElement('td');
     fan.className = 'ft-fanout';
-    fan.textContent = String(row.fanout != null ? row.fanout : 0);
+    if (typeof FrontierTable !== 'undefined' && FrontierTable.formatFanout) {
+      const fo = FrontierTable.formatFanout(row.fanout, row.id);
+      if (fo.visible) {
+        fan.textContent = fo.text;
+        fan.title = fo.title;
+      } else {
+        fan.className = 'ft-fanout ft-fanout-empty';
+        fan.textContent = '';
+        fan.title = '';
+      }
+    } else {
+      const n = row.fanout != null ? row.fanout : 0;
+      fan.textContent = n > 0 ? String(n) : '';
+    }
     tr.appendChild(id);
     tr.appendChild(name);
     tr.appendChild(status);
