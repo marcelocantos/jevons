@@ -1446,15 +1446,19 @@ function addMsg(role, text, when, opts) {
 // Bounded rendering (🎯T106): tall content is full-rendered HTML clipped
 // to COLLAPSED_MAX_HEIGHT (CSS max-height + overflow:hidden). Collapse
 // never truncates source or re-marked for a preview — tables/lists/code
-// stay intact in the DOM. "Tall" = full rendered height >
-// COLLAPSED_MAX_HEIGHT × COLLAPSE_HEIGHT_RATIO (not char/line proxies).
+// stay intact in the DOM. "Tall" = full rendered height exceeds the fixed
+// clip box (not char/line proxies). Pre-T106 used 1.5× against a short
+// preview height (preview-vs-full); that ratio is obsolete under a fixed
+// max-height clip — requiring full > 1.5×14rem left medium-tall messages
+// (14–21rem) without tab or .msg-clipped.
 // T66: the latest user request and latest assistant reply stay expanded
 // even when tall; T77 collapses prior auto-expanded messages when they
 // cease to be latest (unless the user toggled manually).
 // Single named clip height — keep in sync with :root --collapsed-max-height.
 const COLLAPSED_MAX_HEIGHT = '14rem';
-// Collapse when full height > collapsed box height × this ratio (50% taller).
-const COLLAPSE_HEIGHT_RATIO = 1.5;
+// Subpixel slack so fullH == collapsedH (or 1–2px over from layout) is not
+// spuriously tall; content must clearly exceed the clip box.
+const COLLAPSE_HEIGHT_EPSILON_PX = 6;
 
 function collapsedMaxHeightPx() {
   const m = /^([\d.]+)rem$/i.exec(COLLAPSED_MAX_HEIGHT);
@@ -1473,13 +1477,17 @@ function collapsedMaxHeightPx() {
 // preview. Returns { tall, fullH, collapsedH }. Does NOT leave d painted.
 function measureCollapse(d, role, text) {
   const collapsedH = collapsedMaxHeightPx();
-  const width = (d._body && d._body.clientWidth) || d.clientWidth || 0;
+  // Use the bubble's outer width (not body clientWidth): the probe is a .msg
+  // with the same padding, so matching outer width keeps content-box width
+  // (and wrap) aligned with the live body. Body-only width under-pads and
+  // can double-count wrapped lines.
+  const width = d.clientWidth || (d._body && d._body.clientWidth) || 0;
   // Probe shares .msg / role classes so markdown CSS applies; absolute so
   // it cannot change #messages.scrollHeight while we measure.
   const probe = document.createElement('div');
   probe.className = (d.className || ('msg ' + role)).replace(/\bmsg-clipped\b/g, '').trim();
   probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:0;top:0;width:' +
-    (width > 0 ? width + 'px' : '100%') + ';max-width:85%;';
+    (width > 0 ? width + 'px' : '100%') + ';max-width:85%;box-sizing:border-box;';
   const probeBody = document.createElement('div');
   probeBody.className = 'msg-body';
   probe.appendChild(probeBody);
@@ -1499,7 +1507,9 @@ function measureCollapse(d, role, text) {
   if (collapsedH <= 0 || fullH <= 0) {
     return { tall: false, fullH, collapsedH };
   }
-  const tall = fullH > collapsedH * COLLAPSE_HEIGHT_RATIO;
+  // Tall when content exceeds the clip box (+epsilon). Do not use 1.5× —
+  // that was for preview-vs-full height under the old truncated model.
+  const tall = fullH > collapsedH + COLLAPSE_HEIGHT_EPSILON_PX;
   return { tall, fullH, collapsedH };
 }
 // Mermaid diagrams (🎯T59): assistant markdown may carry ```mermaid

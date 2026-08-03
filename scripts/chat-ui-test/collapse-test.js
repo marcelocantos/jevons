@@ -3,9 +3,12 @@
 
 // Hermetic perceptual test for clip-collapse of oversized chat bubbles
 // (🎯T106 + T66/T77). Serves the static web/ UI, drives addMsg() and the
-// streaming append/seal path with short + huge content for both roles, and
-// asserts the clip model (not the old truncated re-parse preview):
-//   * tallness = full rendered height > COLLAPSED_MAX_HEIGHT × 1.5
+// streaming append/seal path with short + huge + medium-tall content for
+// both roles, and asserts the clip model (not the old truncated re-parse
+// preview):
+//   * tallness = full rendered height > COLLAPSED_MAX_HEIGHT (+ epsilon)
+//     (not 1.5× the clip box — that left medium-tall 14–21rem without tab)
+//   * medium-tall (clip < full < 1.5×clip) non-latest → tab + .msg-clipped
 //   * collapsed tall bubbles keep FULL HTML in the DOM (tables/lists intact)
 //   * container is height-capped (max-height / overflow hidden / .msg-clipped)
 //   * bottom pocket scrim (.msg-clip-fade) present when collapsed (darken)
@@ -479,6 +482,78 @@ function assertNoShowMoreLess(text, label, failures) {
     if (manual.items < 60) failures.push('T77: manual expand lost full content after later message');
     if (manual.clipped) failures.push('T77: manual expand still clipped after later message');
 
+    // ── Scenario E (T106 tallness gate): medium-tall > clip box, < 1.5× clip ──
+    // Old 1.5× ratio against fixed 14rem left these without tab/.msg-clipped.
+    // Fixture lines tuned so measureCollapse fullH sits in
+    // (collapsedH+eps, collapsedH×1.5). Layout drift out of band → fail with
+    // heights so the fixture can be retuned (not silently test huge path).
+    await page.evaluate(() => {
+      document.getElementById('messages').innerHTML = '';
+      // ~12 user lines at default metrics ≈ 14–20rem (under old 1.5× gate).
+      const medUser = Array.from({ length: 12 }, (_, i) =>
+        `medium user line ${i}: request body exceeds the 14rem clip pocket`).join('\n');
+      // ~6 list items ≈ medium-tall assistant (not the huge 60-item fixtures).
+      const medAsst = Array.from({ length: 6 }, (_, i) =>
+        `- medium_item_${i} with a bit of padding`).join('\n');
+      const uMed = window.addMsg('user', medUser);
+      const jMed = window.addMsg('jevons', '### medium\n' + medAsst);
+      // Trailing short so neither medium bubble is latest (T66 expand would
+      // mask clip). Short must not be tall.
+      const trail = window.addMsg('jevons', 'Short trailing reply.');
+      window._elsMed = { uMed, jMed, trail, medUser, medAsst };
+    });
+    await page.waitForTimeout(200);
+
+    const medium = await page.evaluate(() => {
+      const { uMed, jMed, trail, medUser, medAsst } = window._elsMed;
+      // Same probe path as production (classic script → window.measureCollapse).
+      const um = typeof window.measureCollapse === 'function'
+        ? window.measureCollapse(uMed, 'user', medUser)
+        : null;
+      const jm = typeof window.measureCollapse === 'function'
+        ? window.measureCollapse(jMed, 'jevons', '### medium\n' + medAsst)
+        : null;
+      return {
+        um,
+        jm,
+        uClipped: uMed.classList.contains('msg-clipped'),
+        jClipped: jMed.classList.contains('msg-clipped'),
+        uHasBtn: !!uMed._expandBtn,
+        jHasBtn: !!jMed._expandBtn,
+        uExpanded: uMed._expanded === true,
+        jExpanded: jMed._expanded === true,
+        trailHasBtn: !!trail._expandBtn,
+        trailClipped: trail.classList.contains('msg-clipped'),
+      };
+    });
+
+    if (!medium.um || !medium.jm) {
+      failures.push('Scenario E: measureCollapse not on window — cannot band-check medium fixtures');
+    } else {
+      const band = (m, label) => {
+        if (!m.tall) {
+          failures.push(`${label}: measureCollapse.tall=false (fullH=${m.fullH}, collapsedH=${m.collapsedH}) — fixture too short`);
+          return;
+        }
+        // Must sit under the old 1.5× gate so this scenario proves the fix.
+        if (m.fullH >= m.collapsedH * 1.5) {
+          failures.push(
+            `${label}: fullH=${m.fullH} >= 1.5×collapsedH=${m.collapsedH * 1.5} — fixture too huge; retune for medium band`
+          );
+        }
+      };
+      band(medium.um, 'medium-tall user');
+      band(medium.jm, 'medium-tall assistant');
+    }
+    if (!medium.uClipped) failures.push('medium-tall non-latest user missing .msg-clipped');
+    if (!medium.uHasBtn) failures.push('medium-tall non-latest user missing expand tab');
+    if (medium.uExpanded) failures.push('medium-tall non-latest user is expanded (want clipped)');
+    if (!medium.jClipped) failures.push('medium-tall non-latest assistant missing .msg-clipped');
+    if (!medium.jHasBtn) failures.push('medium-tall non-latest assistant missing expand tab');
+    if (medium.jExpanded) failures.push('medium-tall non-latest assistant is expanded (want clipped)');
+    if (medium.trailHasBtn) failures.push('short trailing sprouted expand tab');
+    if (medium.trailClipped) failures.push('short trailing has .msg-clipped');
+
   } catch (e) {
     failures.push('exception: ' + e.message);
   } finally {
@@ -491,6 +566,6 @@ function assertNoShowMoreLess(text, label, failures) {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - pocket clip collapse (radius scrim + inside tab + time outside), T66/T77, short no tab');
+  console.log('ok - pocket clip collapse (radius scrim + inside tab + time outside), T66/T77, short no tab, medium-tall gate');
   console.log('screenshots: artifacts/collapse-preview.png, artifacts/collapse-expanded.png');
 })();

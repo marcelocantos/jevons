@@ -86,7 +86,7 @@ then re-`marked`), not “too short a max-height.”
 
 | Rule | Behaviour |
 |------|-----------|
-| Tallness | After layout: full `offsetHeight` > 1.5 × collapsed-preview height |
+| Tallness | After layout: full `offsetHeight` > clip-box height (+ small epsilon) |
 | Latest | Newest user **and** assistant bubbles stay expanded when tall (T66) |
 | Prior | Auto-expanded tall bubbles collapse when they stop being latest (T77), unless manually toggled |
 | Control | Text button `.msg-expand`: “Show more ▾” / “Show less ▴” |
@@ -108,7 +108,8 @@ Hermetic: `scripts/chat-ui-test/collapse-test.js` (will need update under clip m
 
 1. ~~Exact collapsed max-height (px vs × line-height vs ratio of viewport).~~
    **Settled 2026-08-03 (impl):** `COLLAPSED_MAX_HEIGHT = '14rem'` (CSS
-   `--collapsed-max-height`); tall when `fullH > collapsedH × 1.5`.
+   `--collapsed-max-height`); tall when `fullH > collapsedH + epsilon`
+   (not 1.5× — that was preview-vs-full; obsolete under fixed clip box).
 2. ~~Gradient height / opacity / whether tab sits on top of gradient.~~
    **Settled 2026-08-03 (impl):** `.msg-clip-fade` ~2.75rem linear fade into
    chat/`user-bg`; chevron tab below body (after fade in DOM).
@@ -146,6 +147,16 @@ Owner smoke after pocket polish: hang-off tab and multi-line tall scrim felt wro
 | Tab | Flipped inside: `bottom: -1px` + `border-bottom: none` + top radius; tongue into pocket edge, not hang-off under box |
 | Chevron | Unchanged sense: up collapsed / down expanded |
 | Keep | Dark scrim, tall-only tab, time outside, full-render clip |
+
+### 2026-08-03 — tallness gate (medium-tall restore)
+
+Bug: after clip model, `tall = fullH > collapsedH × 1.5` used the **fixed
+14rem clip box** as `collapsedH`, so messages between ~14–21rem never got
+`.msg-clipped` / tab (owner-visible: user requests lost collapsing).
+
+Fix: `tall = fullH > collapsedH + COLLAPSE_HEIGHT_EPSILON_PX` (both roles).
+Hermetic: medium-tall user/assistant fixtures (taller than 14rem, under
+21rem) must tab+clip when non-latest.
 
 ### 2026-08-03 — scrim opacity + tab z-order
 
