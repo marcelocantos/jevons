@@ -155,6 +155,7 @@
   // True when inspect user body should use the marked path (not plain/renderUserText).
   // Fleet injects (wasWrapped) always; MD-shaped text (bold/lists/fences/headings).
   // Residual: pure system-reminder walls without MD markers stay plain.
+  // 🎯T233: harness inject walls are handled as nuggets before this path.
   function inspectUserShouldMarkdown(text, wasWrapped) {
     if (wasWrapped) return true;
     const s = String(text == null ? '' : text);
@@ -168,13 +169,111 @@
     return false;
   }
 
-  // 🎯T205/T221: body paint policy for one inspect turn.
+  // 🎯T233: extract inner body of a <system-reminder>…</system-reminder> wall.
+  // Falls back to the original text when tags are partial/absent.
+  function extractSystemReminderBody(text) {
+    const s = String(text == null ? '' : text);
+    const m = s.match(
+      /<system-reminder(?:\s[^>]*)?>\s*([\s\S]*?)\s*<\/system-reminder>/i,
+    );
+    if (m) return m[1];
+    return s.replace(/<\/?system-reminder(?:\s[^>]*)?>/gi, '').trim() || s;
+  }
+
+  // 🎯T233: classify harness / fleet injects that must not paint as full user bubbles.
+  // Owner prose (including MD-shaped <user_query> design pins) stays kind=owner.
+  // Returns:
+  //   { kind:'inject', injectKind, label, detail }
+  //   { kind:'owner', detail, wasWrapped }
+  function classifyInspectUserLine(text) {
+    const raw = text == null ? '' : String(text);
+    const unwrapped = unwrapInspectUserText(raw);
+    const display = unwrapped.text;
+    const trimmed = String(display).replace(/^\s+/, '');
+
+    // system-reminder tags on raw or unwrapped (harness walls).
+    if (
+      /<system-reminder[\s>]/i.test(raw) ||
+      /<\/system-reminder>/i.test(raw) ||
+      /<system-reminder[\s>]/i.test(display)
+    ) {
+      return {
+        kind: 'inject',
+        injectKind: 'system-reminder',
+        label: '⋯ system',
+        detail: extractSystemReminderBody(display),
+      };
+    }
+    // Fleet standing brief (first-send inject; may include PO brief after).
+    if (
+      trimmed.indexOf('[Jevons fleet standing brief') === 0 ||
+      /Jevons fleet standing brief/.test(display)
+    ) {
+      return {
+        kind: 'inject',
+        injectKind: 'standing-brief',
+        label: '⋯ brief',
+        detail: display,
+      };
+    }
+    // Event push wrappers: [event: worker-finished] …
+    if (/^\[event:\s*[^\]]+\]/i.test(trimmed)) {
+      const em = trimmed.match(/^\[event:\s*([^\]]+)\]/i);
+      const src = em ? String(em[1]).trim() : 'event';
+      return {
+        kind: 'inject',
+        injectKind: 'event',
+        label: '⋯ ' + (src || 'event'),
+        detail: display,
+      };
+    }
+    if (trimmed.indexOf('[Daemon restart') === 0) {
+      return {
+        kind: 'inject',
+        injectKind: 'daemon',
+        label: '⋯ system',
+        detail: display,
+      };
+    }
+    // Residual: pure owner prose (and MD-shaped user_query design pins).
+    return {
+      kind: 'owner',
+      detail: display,
+      wasWrapped: unwrapped.wasWrapped,
+    };
+  }
+
+  // 🎯T233: compacted activity nugget HTML — same family as main-chat ⋯ n steps
+  // (.turn-marker + .turn-tip hover). Detail is escaped plain text in the tip.
+  function paintInjectNuggetHTML(label, detail, injectKind) {
+    const kind = injectKind || 'system';
+    const lab = label || '⋯ system';
+    const tip = detail == null ? '' : String(detail);
+    return (
+      '<div class="turn-marker inject-nugget" data-inject="' +
+      escapeHtml(kind) +
+      '">' +
+      '<span class="inject-label">' +
+      escapeHtml(lab) +
+      '</span>' +
+      '<div class="turn-tip">' +
+      '<div class="turn-item inject-detail">' +
+      escapeHtml(tip) +
+      '</div>' +
+      '</div>' +
+      '</div>'
+    );
+  }
+
+  // 🎯T205/T221/T233: body paint policy for one inspect turn.
   // Assistant → HTML via parseAssistantMarkdown (sealed main-chat path).
-  // User → 🎯T221: MD HTML for fleet injects / MD-shaped text (inspect-only);
+  // User → 🎯T233: harness injects → mode=nugget (compact ⋯ chrome + hover);
+  //         else 🎯T221 MD HTML for fleet injects / MD-shaped text (inspect-only);
   //         else renderUserText (quotes/images) or plain. Main chat paintBody
   //         is unchanged.
   // Other → plain text. msgRole is the .msg class role for shared chrome.
   // deps: { parseAssistantMarkdown?, renderUserText? }
+  // mode: 'html' | 'text' | 'nugget' (nugget content is full outer HTML).
   function paintInspectLineBody(role, text, deps) {
     deps = deps || {};
     const t = text == null ? '' : String(text);
@@ -187,12 +286,22 @@
       return { mode: 'text', content: t, msgRole: msgRole };
     }
     if (role === 'user') {
-      const unwrapped = unwrapInspectUserText(t);
-      const display = unwrapped.text;
+      const cls = classifyInspectUserLine(t);
+      if (cls.kind === 'inject') {
+        return {
+          mode: 'nugget',
+          content: paintInjectNuggetHTML(cls.label, cls.detail, cls.injectKind),
+          msgRole: 'status',
+          injectKind: cls.injectKind,
+          label: cls.label,
+          detail: cls.detail,
+        };
+      }
+      const display = cls.detail;
       const parse = deps.parseAssistantMarkdown;
       if (
         typeof parse === 'function' &&
-        inspectUserShouldMarkdown(display, unwrapped.wasWrapped)
+        inspectUserShouldMarkdown(display, cls.wasWrapped)
       ) {
         // Escape raw HTML first so injects cannot XSS via <script> etc.
         return {
@@ -210,7 +319,8 @@
     return { mode: 'text', content: t, msgRole: msgRole };
   }
 
-  // Hermetic HTML fixture for #agent-inspect-body: main .msg bubble chrome (🎯T205).
+  // Hermetic HTML fixture for #agent-inspect-body: main .msg bubble chrome (🎯T205)
+  // plus 🎯T233 inject nuggets (not full user bubbles).
   // deps.parseAssistantMarkdown / deps.renderUserText mirror index.html paths.
   function paintInspectLinesHTML(lines, deps) {
     deps = deps || {};
@@ -219,6 +329,11 @@
       if (!line) return;
       const role = line.role || 'other';
       const body = paintInspectLineBody(role, line.text, deps);
+      if (body.mode === 'nugget') {
+        // Full outer chrome already (turn-marker); no .msg.user wrapper.
+        html += body.content;
+        return;
+      }
       const msgRole = body.msgRole || inspectToMsgRole(role);
       const bodyInner = body.mode === 'html'
         ? body.content
@@ -458,6 +573,9 @@
     unwrapInspectUserText: unwrapInspectUserText,
     escapeHtmlForInspectMarkdown: escapeHtmlForInspectMarkdown,
     inspectUserShouldMarkdown: inspectUserShouldMarkdown,
+    extractSystemReminderBody: extractSystemReminderBody,
+    classifyInspectUserLine: classifyInspectUserLine,
+    paintInjectNuggetHTML: paintInjectNuggetHTML,
     paintInspectLineBody: paintInspectLineBody,
     paintInspectLinesHTML: paintInspectLinesHTML,
     linesFingerprint: linesFingerprint,

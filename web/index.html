@@ -590,6 +590,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #agent-inspect-body > .msg { max-width: 100%; }
 /* 🎯T167: per-turn .msg must not nest vertical scroll traps. */
 #agent-inspect-body > .msg .msg-body { overflow-y: visible; max-height: none; }
+/* 🎯T233: harness injects as compact ⋯ nuggets (family of main-chat turn-marker). */
+#agent-inspect-body > .turn-marker.inject-nugget {
+  align-self: flex-start; margin: 2px 0;
+}
+#agent-inspect-body > .turn-marker.inject-nugget .inject-label {
+  font-family: var(--mono); font-size: 11px;
+}
 /* 🎯T131 / 🎯T173 / 🎯T174: frontier table — headerless; constrained to pane; name ellipsizes */
 #frontier-pane { flex: 1; min-height: 0; min-width: 0; }
 #frontier-toolbar {
@@ -5339,7 +5346,10 @@ function renderAgentInspect(model) {
         return (l && l.role) + '\0' + (l && l.text);
       }).join('\n');
   // Unchanged poll: do not thrash free-scroll or full-replace.
-  if (fp === _agentInspectFp && agentInspectBody.querySelector('.msg')) {
+  // 🎯T233: inject-only transcripts may have .inject-nugget and no .msg.
+  if (fp === _agentInspectFp &&
+      (agentInspectBody.querySelector('.msg') ||
+       agentInspectBody.querySelector('.inject-nugget'))) {
     return;
   }
   const follow = agentInspectFollow();
@@ -5349,34 +5359,52 @@ function renderAgentInspect(model) {
     const msgRole = (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectToMsgRole)
       ? AgentTranscript.inspectToMsgRole(line.role)
       : (line.role === 'user' ? 'user' : (line.role === 'assistant' ? 'jevons' : 'status'));
-    const d = document.createElement('div');
-    d.className = 'msg ' + msgRole;
-    const body = document.createElement('div');
-    body.className = 'msg-body';
-    d.appendChild(body);
-    d._body = body;
     // 🎯T217: assistant/jevons must never land as textContent (raw ** / fences).
     // Shared main path: paintBody → parseAssistantMarkdown + mermaid/hljs/links.
     // 🎯T221: inspect user turns that are fleet injects / MD-shaped → marked HTML
     // (inspect-only; main chat paintBody user path stays plain/renderUserText).
+    // 🎯T233: harness system-reminders / standing brief / event injects → compact
+    // ⋯ nugget chrome (same family as turn-marker), not full user-shaped bubbles.
     const raw = line.text || '';
     try {
-      if (msgRole === 'user' && typeof AgentTranscript !== 'undefined'
+      if (line.role === 'user' && typeof AgentTranscript !== 'undefined'
           && typeof AgentTranscript.paintInspectLineBody === 'function') {
-        // Inspect-only policy: unwrap <user_query>, MD when inject/MD-shaped.
         const painted = AgentTranscript.paintInspectLineBody('user', raw, {
           parseAssistantMarkdown: (typeof parseAssistantMarkdown === 'function')
             ? parseAssistantMarkdown : undefined,
           renderUserText: (typeof renderUserText === 'function')
             ? renderUserText : undefined,
         });
+        // Compact inject nugget: outer turn-marker HTML (no .msg.user bubble).
+        if (painted && painted.mode === 'nugget' && painted.content) {
+          const wrap = document.createElement('div');
+          wrap.innerHTML = painted.content;
+          const node = wrap.firstChild;
+          if (node) agentInspectBody.appendChild(node);
+          return;
+        }
+        const d = document.createElement('div');
+        d.className = 'msg ' + (painted && painted.msgRole ? painted.msgRole : msgRole);
+        const body = document.createElement('div');
+        body.className = 'msg-body';
+        d.appendChild(body);
+        d._body = body;
         if (painted && painted.mode === 'html') {
           body.innerHTML = painted.content;
           if (typeof decorateBodyLinks === 'function') decorateBodyLinks(body);
         } else {
           body.textContent = (painted && painted.content != null) ? painted.content : raw;
         }
-      } else if (typeof paintBody === 'function') {
+        agentInspectBody.appendChild(d);
+        return;
+      }
+      const d = document.createElement('div');
+      d.className = 'msg ' + msgRole;
+      const body = document.createElement('div');
+      body.className = 'msg-body';
+      d.appendChild(body);
+      d._body = body;
+      if (typeof paintBody === 'function') {
         paintBody(d, msgRole, raw);
       } else if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
         body.innerHTML = parseAssistantMarkdown(raw);
@@ -5390,9 +5418,15 @@ function renderAgentInspect(model) {
       } else {
         body.textContent = raw;
       }
+      agentInspectBody.appendChild(d);
     } catch (paintErr) {
       // One bad turn must not abort the forEach — keep remaining turns paint-able.
       try {
+        const d = document.createElement('div');
+        d.className = 'msg ' + msgRole;
+        const body = document.createElement('div');
+        body.className = 'msg-body';
+        d.appendChild(body);
         if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
           body.innerHTML = parseAssistantMarkdown(raw);
         } else if (msgRole === 'user' && typeof parseAssistantMarkdown === 'function'
@@ -5403,11 +5437,17 @@ function renderAgentInspect(model) {
         } else {
           body.textContent = raw;
         }
+        agentInspectBody.appendChild(d);
       } catch (_) {
+        const d = document.createElement('div');
+        d.className = 'msg ' + msgRole;
+        const body = document.createElement('div');
+        body.className = 'msg-body';
         body.textContent = raw;
+        d.appendChild(body);
+        agentInspectBody.appendChild(d);
       }
     }
-    agentInspectBody.appendChild(d);
   });
   if (typeof decorateBodyLinks === 'function') {
     decorateBodyLinks(agentInspectBody); // 🎯T151 belt-and-suspenders

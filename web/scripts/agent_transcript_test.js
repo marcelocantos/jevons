@@ -474,13 +474,13 @@ test('T217 paintInspectLinesHTML: fixture **bold**/fence → strong/pre (not raw
   assert.ok(jevonsChunks[0].indexOf('<strong>') >= 0, 'jevons chunk has strong');
   assert.ok(!/Done with \*\*bold\*\* work/.test(jevonsChunks[0]),
     'assistant must not leave literal **bold** in HTML');
-  // Residual: pure system-reminder without MD markers stays plain (no <strong>).
-  const userChunks = out.match(/<div class="msg user">[\s\S]*?<\/div>/g) || [];
-  assert.ok(userChunks.length >= 1);
-  assert.ok(userChunks[0].indexOf('<strong>') < 0,
-    'plain system-reminder residual: no marked <strong>');
-  assert.ok(userChunks[0].indexOf('plain wall only') >= 0,
-    'plain system-reminder text still visible');
+  // 🎯T233: pure system-reminder is a compact inject nugget, not a .msg.user bubble.
+  assert.ok(out.indexOf('inject-nugget') >= 0, 'system-reminder → inject-nugget');
+  assert.ok(out.indexOf('⋯ system') >= 0, 'system-reminder label ⋯ system');
+  assert.ok(out.indexOf('plain wall only') >= 0,
+    'system-reminder detail still available (hover tip)');
+  assert.ok(!/<div class="msg user">[\s\S]*plain wall only/.test(out),
+    'system-reminder must not paint as full user bubble');
   // Role map pure unit (no assistant→user).
   assert.strictEqual(AT.inspectToMsgRole('assistant'), 'jevons');
   assert.strictEqual(AT.inspectToMsgRole('user'), 'user');
@@ -589,6 +589,147 @@ test('T221 renderAgentInspect wires paintInspectLineBody for user (inspect-only)
   assert.ok(paint, 'paintBody present');
   assert.ok(/role\s*===\s*['"]user['"][\s\S]*renderUserText/.test(paint[0]),
     'main paintBody user path still renderUserText');
+});
+
+// ── 🎯T233: harness injects → compacted ⋯ nuggets (inspect), owner prose bubbles ──
+
+test('T233 classifyInspectUserLine: system-reminder / brief / event / owner residual', function () {
+  const sys = AT.classifyInspectUserLine(
+    '<system-reminder>\nBackground task done.\nUse get_output.\n</system-reminder>',
+  );
+  assert.strictEqual(sys.kind, 'inject');
+  assert.strictEqual(sys.injectKind, 'system-reminder');
+  assert.strictEqual(sys.label, '⋯ system');
+  assert.ok(sys.detail.indexOf('Background task done') >= 0);
+  assert.ok(sys.detail.indexOf('<system-reminder>') < 0, 'tags stripped from detail');
+
+  const brief = AT.classifyInspectUserLine(
+    '[Jevons fleet standing brief — apply for this whole assignment]\n\n## Delivery\n- local only\n\n[PO brief]\nDo the thing.',
+  );
+  assert.strictEqual(brief.kind, 'inject');
+  assert.strictEqual(brief.injectKind, 'standing-brief');
+  assert.strictEqual(brief.label, '⋯ brief');
+  assert.ok(brief.detail.indexOf('PO brief') >= 0);
+
+  const ev = AT.classifyInspectUserLine('[event: worker-finished] slice A landed');
+  assert.strictEqual(ev.kind, 'inject');
+  assert.strictEqual(ev.injectKind, 'event');
+  assert.strictEqual(ev.label, '⋯ worker-finished');
+  assert.ok(ev.detail.indexOf('slice A landed') >= 0);
+
+  const daemon = AT.classifyInspectUserLine('[Daemon restart 12:00] sessions rehydrated');
+  assert.strictEqual(daemon.kind, 'inject');
+  assert.strictEqual(daemon.injectKind, 'daemon');
+  assert.strictEqual(daemon.label, '⋯ system');
+
+  // Owner prose residual — including MD-shaped user_query design pins (T221).
+  const owner = AT.classifyInspectUserLine('Please fix the inspect chrome.');
+  assert.strictEqual(owner.kind, 'owner');
+  assert.strictEqual(owner.detail, 'Please fix the inspect chrome.');
+
+  const pin = AT.classifyInspectUserLine(
+    '<user_query>\n**Prefer option 2**\n\n- Keep inspect chrome\n</user_query>',
+  );
+  assert.strictEqual(pin.kind, 'owner', 'design pin stays owner bubble');
+  assert.ok(pin.wasWrapped);
+  assert.ok(pin.detail.indexOf('**Prefer option 2**') >= 0);
+
+  // user_query wrapping a standing brief still classifies as inject.
+  const wrappedBrief = AT.classifyInspectUserLine(
+    '<user_query>\n[Jevons fleet standing brief — apply]\nLocal only.\n</user_query>',
+  );
+  assert.strictEqual(wrappedBrief.kind, 'inject');
+  assert.strictEqual(wrappedBrief.injectKind, 'standing-brief');
+});
+
+test('T233 paintInjectNuggetHTML: turn-marker family + escaped hover detail', function () {
+  const html = AT.paintInjectNuggetHTML(
+    '⋯ system',
+    'Background <script>alert(1)</script> done',
+    'system-reminder',
+  );
+  assert.ok(html.indexOf('class="turn-marker inject-nugget"') >= 0, 'turn-marker family');
+  assert.ok(html.indexOf('data-inject="system-reminder"') >= 0);
+  assert.ok(html.indexOf('class="inject-label"') >= 0);
+  assert.ok(html.indexOf('⋯ system') >= 0);
+  assert.ok(html.indexOf('class="turn-tip"') >= 0, 'hover tip present');
+  assert.ok(html.indexOf('class="turn-item inject-detail"') >= 0, 'detail path');
+  assert.ok(html.indexOf('<script>') < 0, 'no live script');
+  assert.ok(html.indexOf('&lt;script&gt;') >= 0, 'script escaped in tip');
+});
+
+test('T233 paintInspectLinesHTML: inject → nugget; owner → .msg.user', function () {
+  const lines = [
+    {
+      role: 'user',
+      text: '<system-reminder>\nBackground task "call-abc" completed (exit code: 0).\n</system-reminder>',
+    },
+    {
+      role: 'user',
+      text: '[Jevons fleet standing brief — apply for this whole assignment]\n\n## Status language',
+    },
+    { role: 'user', text: '[event: idle-nudge-brief] continue T233' },
+    { role: 'user', text: 'Owner prose stays a normal bubble.' },
+    { role: 'assistant', text: 'Working on it.' },
+  ];
+  const out = AT.paintInspectLinesHTML(lines, {
+    parseAssistantMarkdown: function (t) { return '<p>' + AT.escapeHtml(t) + '</p>'; },
+    renderUserText: function (t) { return AT.escapeHtml(t); },
+  });
+  // Injects: nugget chrome, not full user bubbles.
+  assert.strictEqual((out.match(/inject-nugget/g) || []).length, 3, 'three inject nuggets');
+  assert.ok(out.indexOf('⋯ system') >= 0);
+  assert.ok(out.indexOf('⋯ brief') >= 0);
+  assert.ok(out.indexOf('⋯ idle-nudge-brief') >= 0 || out.indexOf('⋯ event') >= 0);
+  assert.ok(out.indexOf('Background task') >= 0, 'system detail in tip');
+  assert.ok(out.indexOf('Status language') >= 0, 'brief detail in tip');
+  // Owner residual: normal user bubble.
+  assert.ok(out.indexOf('class="msg user"') >= 0, 'owner → .msg.user');
+  assert.ok(out.indexOf('Owner prose stays a normal bubble.') >= 0);
+  // No user bubble wrapping the system-reminder wall.
+  assert.ok(!/<div class="msg user">[\s\S]*Background task/.test(out),
+    'system-reminder not inside .msg.user');
+  assert.ok(!/<div class="msg user">[\s\S]*fleet standing brief/.test(out),
+    'standing brief not inside .msg.user');
+  // Assistant still jevons bubble.
+  assert.ok(out.indexOf('class="msg jevons"') >= 0);
+});
+
+test('T233 paintInspectLineBody mode=nugget for harness injects', function () {
+  const n = AT.paintInspectLineBody(
+    'user',
+    '<system-reminder>\nplain wall only\n</system-reminder>',
+  );
+  assert.strictEqual(n.mode, 'nugget');
+  assert.strictEqual(n.injectKind, 'system-reminder');
+  assert.ok(n.content.indexOf('inject-nugget') >= 0);
+  assert.ok(n.content.indexOf('plain wall only') >= 0);
+
+  const o = AT.paintInspectLineBody('user', 'hello owner');
+  assert.notStrictEqual(o.mode, 'nugget');
+  assert.strictEqual(o.msgRole, 'user');
+});
+
+test('T233 renderAgentInspect wires nugget path + fingerprint inject-only', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
+  assert.ok(fn, 'renderAgentInspect present');
+  const body = fn[0];
+  assert.ok(body.indexOf("mode === 'nugget'") >= 0 || body.indexOf('mode === "nugget"') >= 0,
+    'handles mode=nugget from paintInspectLineBody');
+  assert.ok(body.indexOf('inject-nugget') >= 0 || body.indexOf('T233') >= 0,
+    'T233 / inject-nugget path present');
+  assert.ok(body.indexOf('inject-nugget') >= 0,
+    'fingerprint skip covers inject-only transcripts');
+  // CSS: inspect hosts turn-marker inject nuggets.
+  assert.ok(/#agent-inspect-body\s*>\s*\.turn-marker\.inject-nugget/.test(html) ||
+    html.indexOf('inject-nugget') >= 0,
+    'inspect CSS for inject-nugget');
+  // Main chat paintBody user path unchanged (product residual: inspect-first).
+  const paint = html.match(/function paintBody\([\s\S]*?\nfunction maybeCloseTargetAside/);
+  assert.ok(paint, 'paintBody present');
+  assert.ok(paint[0].indexOf('nugget') < 0,
+    'main paintBody does not take T233 nugget path (inspect-first residual)');
 });
 
 test('T217 turnsToLines preserves assistant role (no silent map to user/other)', function () {
