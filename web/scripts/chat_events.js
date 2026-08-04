@@ -40,6 +40,31 @@
     return assistantTextBlocks(m).length > 0;
   }
 
+  // ── Silent overseer ops replies (🎯T238 / T240 / T245) ──────────
+  // Mirrors internal/silentresponse.Is: owner-filterable when the turn
+  // text starts with [silent] (optional leading whitespace / short lead-in).
+  const SILENT_PREFIX = '[silent]';
+
+  /**
+   * Whether assistant completion text must not paint as an owner bubble.
+   * @param {string|null|undefined} text
+   * @returns {boolean}
+   */
+  function isSilentAssistantText(text) {
+    const t = String(text == null ? '' : text).trim();
+    if (!t) return false;
+    const lower = t.toLowerCase();
+    const pref = SILENT_PREFIX.toLowerCase();
+    if (lower.startsWith(pref)) return true;
+    // Marker on its own line within a short lead-in (first 80 chars).
+    const head = t.length > 80 ? t.slice(0, 80) : t;
+    const lines = head.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim().toLowerCase().startsWith(pref)) return true;
+    }
+    return false;
+  }
+
   // ── Segment-edge join (🎯T161; replaces T147 content sniff) ─────
   // Grok/ACP emits separate assistant *segments* at protocol boundaries
   // (tool rounds, multi-block content parts). Bare concat across those
@@ -132,6 +157,10 @@
       segmentEdgePending: false,
       // Per-stream segment edge (id → bool); legacy uses segmentEdgePending.
       segmentEdgeById: Object.create(null),
+      // 🎯T245: stream_id → true once classified silent (drop further body).
+      silentById: Object.create(null),
+      // Legacy unlabeled open stream is silent (whole-stream suppress).
+      legacySilent: false,
     };
   }
 
@@ -164,6 +193,9 @@
     if (m.type === 'assistant') {
       const content = m.message && m.message.content;
       const sid = streamIdOf(m);
+      // 🎯T245: whole-stream silent suppress (mirror T240 server). Once this
+      // stream's accumulated text is silent, drop further body until seal.
+      if (!state.silentById) state.silentById = Object.create(null);
       // Walk content in order: non-text marks a segment edge for the next
       // text part; multiple text blocks in one message are segment edges
       // between them; continuous single-block frames stay bare-concat.
@@ -173,6 +205,19 @@
           const c = content[i];
           if (!c) continue;
           if (c.type === 'text' && c.text) {
+            // Stream already marked silent — drop body (do not paint).
+            if (sid && state.silentById[sid]) {
+              continue;
+            }
+            if (!sid && state.legacySilent) {
+              continue;
+            }
+            // First fragment (or full turn) that is pure silent: mark + drop.
+            if (isSilentAssistantText(c.text)) {
+              if (sid) state.silentById[sid] = true;
+              else state.legacySilent = true;
+              continue;
+            }
             let idx = -1;
             let edge = false;
             if (sid) {
@@ -221,12 +266,14 @@
         if (sid) {
           delete state.openById[sid];
           delete state.segmentEdgeById[sid];
+          delete state.silentById[sid];
           // Only clear singleton if it pointed at this stream.
           if (state.streamBubbles[sid] === state.openStream) {
             state.openStream = -1;
           }
         } else {
           state.openStream = -1;
+          state.legacySilent = false;
         }
         state.segmentEdgePending = false;
       }
@@ -238,6 +285,8 @@
       state.openStream = -1;
       state.openById = Object.create(null);
       state.segmentEdgeById = Object.create(null);
+      state.silentById = Object.create(null);
+      state.legacySilent = false;
       state.segmentEdgePending = false;
     }
     return state;
@@ -262,6 +311,7 @@
     isTerminalStop,
     assistantTextBlocks,
     hasAssistantText,
+    isSilentAssistantText,
     streamIdOf,
     joinAssistantSegments,
     appendAssistantStream,
@@ -274,5 +324,6 @@
     applyChatEvent,
     applyChatEvents,
     TERMINAL_STOPS,
+    SILENT_PREFIX,
   };
 }));

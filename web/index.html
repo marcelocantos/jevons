@@ -1629,6 +1629,8 @@ function handle(m) {
     let emittedText = false;
     const anyText = ChatEvents.hasAssistantText(m);
     if (anyText) closeTurn();
+    // 🎯T245: client defense — never paint pure [silent] body even if a
+    // fragment slipped past server suppress (or history carried raw body).
     content.forEach(c => {
       if (c.type==='tool_use') {
         streamSegmentEdge = true;
@@ -1637,13 +1639,21 @@ function handle(m) {
         }
         addTurnItem('tool-use', c.name + (c.input ? ': ' + ToolSummary.summariseInput(c.input) : ''));
       } else if (c.type==='text' && c.text) {
+        const alreadySilent = !!(streamId && openStreamSilentById[streamId]);
+        const thisSilent = typeof ChatEvents !== 'undefined' && ChatEvents.isSilentAssistantText
+          && ChatEvents.isSilentAssistantText(c.text);
+        if (alreadySilent || thisSilent) {
+          if (streamId) openStreamSilentById[streamId] = true;
+          // Pure silent: no owner bubble (still process terminal below).
+          return;
+        }
         const edge = streamSegmentEdge || emittedText;
         appendOrAddJevons(c.text, msgTs, { segmentEdge: edge, streamId: streamId });
         streamSegmentEdge = false;
         emittedText = true;
       }
     });
-    if (anyText) focusComposer();
+    if (emittedText) focusComposer();
     // Only terminal stops clear working (not mid-stream text). Clearing
     // early used to force one bubble per token.
     if (ChatEvents.shouldClearWorking(m)) {
@@ -1689,6 +1699,8 @@ function lastMessageish() {
 let openStreamEl = null;
 // stream_id → open jevons element (🎯T223).
 const openStreamById = Object.create(null);
+// 🎯T245: stream_id → true once this open stream is pure-silent (drop body).
+const openStreamSilentById = Object.create(null);
 // 🎯T161: next assistant text after tool_use/tool_result is a new segment
 // (structural edge — not content sniffing). Cleared on seal / new bubble.
 let streamSegmentEdge = false;
@@ -1697,10 +1709,12 @@ function clearOpenStreamHandle(streamId) {
   if (streamId) {
     const el = openStreamById[streamId];
     delete openStreamById[streamId];
+    delete openStreamSilentById[streamId];
     if (openStreamEl === el) openStreamEl = null;
   } else {
     openStreamEl = null;
     for (const k of Object.keys(openStreamById)) delete openStreamById[k];
+    for (const k of Object.keys(openStreamSilentById)) delete openStreamSilentById[k];
   }
   streamSegmentEdge = false;
 }

@@ -10,6 +10,50 @@ import (
 	"testing"
 )
 
+// 🎯T245: pure silent sealed empty + agent_note + visible → only visible body.
+// Mirrors owner screenshot: two ACP turns with only agent_note between must
+// not leave silent text for display coalesce to glue onto the next reply.
+func TestCoalesceStreamLinesSilentThenAgentNoteThenVisible(t *testing.T) {
+	raw := []string{
+		`{"type":"assistant","stream_id":"35728c40","message":{"role":"assistant","content":[{"type":"text","text":"[silent] PO already re-pressured jv-t244; no further action."}]}}`,
+		`{"type":"assistant","stream_id":"35728c40","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+		`{"type":"agent_note","text":"[Agent jevons-po responded] Independent gate…"}`,
+		`{"type":"assistant","stream_id":"9cb609c1","message":{"role":"assistant","content":[{"type":"text","text":"**🎯T244 landed.**\n\nIndependent check."}]}}`,
+		`{"type":"assistant","stream_id":"9cb609c1","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+	}
+	got := CoalesceStreamLines(raw)
+	// empty silent sealed + agent_note + visible sealed → 3 lines
+	if len(got) != 3 {
+		t.Fatalf("count=%d want 3: %v", len(got), got)
+	}
+	if strings.Contains(got[0], "re-pressured") || strings.Contains(got[0], "[silent]") {
+		t.Fatalf("silent body leaked: %s", got[0])
+	}
+	var silent struct {
+		Message struct {
+			Content []any `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(got[0]), &silent); err != nil {
+		t.Fatal(err)
+	}
+	if len(silent.Message.Content) != 0 {
+		t.Fatalf("silent content must be empty: %v", silent.Message.Content)
+	}
+	if !strings.Contains(got[1], "agent_note") && !strings.Contains(got[1], "Independent gate") {
+		// agent_note passes through as-is
+		if !strings.Contains(got[1], "Agent jevons-po") {
+			t.Fatalf("agent_note missing: %s", got[1])
+		}
+	}
+	if !strings.Contains(got[2], "T244 landed") {
+		t.Fatalf("visible body missing: %s", got[2])
+	}
+	if strings.Contains(got[2], "[silent]") || strings.Contains(got[2], "re-pressured") {
+		t.Fatalf("silent glued into visible: %s", got[2])
+	}
+}
+
 // 🎯T240: multi-fragment [silent] stream seals to empty body (history strip).
 func TestCoalesceStreamLinesStripsSilentSealed(t *testing.T) {
 	raw := []string{

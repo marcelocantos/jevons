@@ -312,6 +312,46 @@ test('T223: interleaved fragments join by stream_id; two ids stay two', () => {
   assert.strictEqual(ChatEvents.streamIdOf(chunkWithId('x', 's-a')), 's-a');
 });
 
+// ── 🎯T245 silent-only turns do not leak into next visible bubble ──
+
+test('T245 isSilentAssistantText matches [silent] prefix', () => {
+  assert.ok(ChatEvents.isSilentAssistantText('[silent] PO re-pressured'));
+  assert.ok(ChatEvents.isSilentAssistantText('  [SILENT] ops ok'));
+  assert.ok(!ChatEvents.isSilentAssistantText('Owner needs this'));
+  assert.ok(!ChatEvents.isSilentAssistantText(''));
+});
+
+test('T245 pure silent stream + agent_note + visible → only second bubble', () => {
+  const events = [
+    chunkWithId('[silent] PO already re-pressured jv-t244; no further action.', 's-silent'),
+    endTurnWithId('s-silent'),
+    { type: 'agent_note', text: 'worker note' },
+    chunkWithId('**🎯T244 landed.**', 's-vis'),
+    endTurnWithId('s-vis'),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(
+    state.assistantBubbles.length,
+    1,
+    `want 1 bubble, got ${JSON.stringify(state.assistantBubbles)}`,
+  );
+  assert.strictEqual(state.assistantBubbles[0], '**🎯T244 landed.**');
+  assert.ok(state.assistantBubbles[0].indexOf('[silent]') < 0);
+});
+
+test('T245 multi-fragment silent then visible: only visible body', () => {
+  const events = [
+    chunkWithId('[silent]', 's9'),
+    chunkWithId(' continued jv-t245', 's9'),
+    endTurnWithId('s9'),
+    chunkWithId('Owner needs this.', 's10'),
+    endTurnWithId('s10'),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  assert.strictEqual(state.assistantBubbles[0], 'Owner needs this.');
+});
+
 test('T223 index.html: no seal on user; join keys stream_id', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.includes('openStreamById'), 'must keep stream_id → el map');

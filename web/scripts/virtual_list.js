@@ -320,15 +320,92 @@
     return '';
   }
 
+  function streamIdOfFrame(m) {
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.streamIdOf) {
+      return ChatEvents.streamIdOf(m);
+    }
+    if (!m) return '';
+    const id = m.stream_id != null ? m.stream_id : m.streamId;
+    return id == null ? '' : String(id).trim();
+  }
+
+  function isSilentTextLocal(text) {
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.isSilentAssistantText) {
+      return ChatEvents.isSilentAssistantText(text);
+    }
+    const t = String(text == null ? '' : text).trim();
+    if (!t) return false;
+    const lower = t.toLowerCase();
+    if (lower.startsWith('[silent]')) return true;
+    const head = t.length > 80 ? t.slice(0, 80) : t;
+    const lines = head.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim().toLowerCase().startsWith('[silent]')) return true;
+    }
+    return false;
+  }
+
+  function isTerminalFrameLocal(m) {
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.isTerminalStop) {
+      return ChatEvents.isTerminalStop(m);
+    }
+    if (!m || m.type !== 'assistant') return false;
+    const msg = m.message || {};
+    const stop = msg.stop_reason || msg.stopReason || '';
+    return stop === 'end_turn' || stop === 'stop_sequence' || stop === 'max_tokens';
+  }
+
   // frames: array of wire objects (or JSON strings). Returns whole chunks:
   //   { role: 'user'|'jevons', text: string, timestamp?: number }
-  // Consecutive assistant text frames coalesce into one chunk.
   // 🎯T161: bare-concat continuous text frames; segment-join after
   // tool_use/tool_result gaps (protocol edge, not content sniff).
+  // 🎯T223 / T245: join by stream_id when present; terminal stop_reason
+  // seals a stream so the next assistant turn is a new bubble. agent_note
+  // / system chrome between turns must NOT glue distinct replies (owner
+  // screenshot: pure [silent] + next visible across agent_note).
+  // 🎯T238 / T245: silent bodies never become display chunks.
   function coalesceTranscriptFrames(frames) {
     const out = [];
-    let pending = null; // { role, text, timestamp }
-    let segmentEdgePending = false;
+    // sid → open chunk ref already pushed to out (still accepting text).
+    const openById = Object.create(null);
+    // Unlabeled open stream (legacy frames without stream_id).
+    let legacyOpen = null;
+    const segmentEdgeById = Object.create(null);
+    let segmentEdgeLegacy = false;
+    // Once a stream is silent, drop further body until terminal seal.
+    const silentById = Object.create(null);
+    let legacySilent = false;
+
+    function markSegmentEdges() {
+      Object.keys(openById).forEach(function (id) {
+        if (openById[id]) segmentEdgeById[id] = true;
+      });
+      if (legacyOpen) segmentEdgeLegacy = true;
+    }
+
+    function sealStream(sid) {
+      if (sid) {
+        delete openById[sid];
+        delete segmentEdgeById[sid];
+        delete silentById[sid];
+      } else {
+        legacyOpen = null;
+        segmentEdgeLegacy = false;
+        legacySilent = false;
+      }
+    }
+
+    function sealAll() {
+      Object.keys(openById).forEach(function (id) {
+        delete openById[id];
+        delete segmentEdgeById[id];
+        delete silentById[id];
+      });
+      legacyOpen = null;
+      segmentEdgeLegacy = false;
+      legacySilent = false;
+    }
+
     const list = Array.isArray(frames) ? frames : [];
     for (let i = 0; i < list.length; i++) {
       let m = list[i];
@@ -337,34 +414,81 @@
       }
       if (!m || typeof m !== 'object') continue;
       const ts = m.timestamp ? new Date(m.timestamp).getTime() : undefined;
+
       if (m.type === 'user') {
         const text = extractUserText(m);
         if (!text) continue;
-        pending = null;
-        segmentEdgePending = false;
+        sealAll();
         out.push({ role: 'user', text: text, timestamp: ts });
-      } else if (m.type === 'tool_result' || m.type === 'result') {
-        if (pending) segmentEdgePending = true;
+        continue;
+      }
+
+      if (m.type === 'tool_result' || m.type === 'result') {
+        markSegmentEdges();
         // omitted from transcript window units
-      } else if (m.type === 'assistant') {
-        if (frameHasNonTextAssistant(m) && pending) {
-          segmentEdgePending = true;
+        continue;
+      }
+
+      if (m.type === 'system') {
+        // Full settle — seal every open stream (matches live shouldClearWorking).
+        sealAll();
+        continue;
+      }
+
+      if (m.type === 'assistant') {
+        const sid = streamIdOfFrame(m);
+        if (frameHasNonTextAssistant(m)) {
+          if (sid && openById[sid]) segmentEdgeById[sid] = true;
+          else if (!sid && legacyOpen) segmentEdgeLegacy = true;
         }
         const text = extractAssistantText(m);
-        if (!text) continue;
-        if (pending && pending.role === 'jevons') {
-          pending.text = segmentEdgePending
-            ? joinAssistantSegmentsLocal(pending.text, text)
-            : appendAssistantStreamLocal(pending.text, text);
-          segmentEdgePending = false;
-          if (ts != null) pending.timestamp = ts;
-        } else {
-          pending = { role: 'jevons', text: text, timestamp: ts };
-          out.push(pending);
-          segmentEdgePending = false;
+        if (text) {
+          // 🎯T245 whole-stream silent: drop body for this stream.
+          let silent = sid ? !!silentById[sid] : legacySilent;
+          if (!silent && isSilentTextLocal(text)) {
+            if (sid) silentById[sid] = true;
+            else legacySilent = true;
+            silent = true;
+          }
+          if (!silent) {
+            if (sid) {
+              let pending = openById[sid];
+              if (pending) {
+                const edge = !!segmentEdgeById[sid];
+                pending.text = edge
+                  ? joinAssistantSegmentsLocal(pending.text, text)
+                  : appendAssistantStreamLocal(pending.text, text);
+                segmentEdgeById[sid] = false;
+                if (ts != null) pending.timestamp = ts;
+              } else {
+                pending = { role: 'jevons', text: text, timestamp: ts };
+                out.push(pending);
+                openById[sid] = pending;
+                segmentEdgeById[sid] = false;
+              }
+            } else if (legacyOpen) {
+              const edge = segmentEdgeLegacy;
+              legacyOpen.text = edge
+                ? joinAssistantSegmentsLocal(legacyOpen.text, text)
+                : appendAssistantStreamLocal(legacyOpen.text, text);
+              segmentEdgeLegacy = false;
+              if (ts != null) legacyOpen.timestamp = ts;
+            } else {
+              legacyOpen = { role: 'jevons', text: text, timestamp: ts };
+              out.push(legacyOpen);
+              segmentEdgeLegacy = false;
+            }
+          }
         }
+        // Terminal always seals — empty end_turn must not leave pending open
+        // so a later assistant turn cannot glue across agent_notes (T245).
+        if (isTerminalFrameLocal(m)) {
+          sealStream(sid || '');
+        }
+        continue;
       }
-      // system / agent_note omitted from transcript window units
+      // agent_note / status / other chrome omitted from transcript window units
+      // and do NOT seal open streams (join is by stream_id / terminal only).
     }
     return out;
   }

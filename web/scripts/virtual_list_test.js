@@ -184,6 +184,121 @@ test('T161 tool gap then fence/list uses same structural path (no content sniff)
   assert.strictEqual(list[0].text, 'Items:\n\n- a\n- b');
 });
 
+// ── 🎯T245 silent-only turns must not leak/coalesce into next bubble ──
+
+test('T245 pure [silent] + agent_note + visible → only second body', function () {
+  // Owner screenshot regression: two ACP turns with only agent_note between
+  // must not glue silent ops chatter onto the next owner-visible reply.
+  const chunks = VL.coalesceTranscriptFrames([
+    {
+      type: 'assistant',
+      stream_id: '35728c40',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '[silent] PO already re-pressured jv-t244; no further action.' }],
+        stop_reason: 'end_turn',
+      },
+    },
+    { type: 'agent_note', text: '[Agent jevons-po responded] Independent gate…' },
+    {
+      type: 'assistant',
+      stream_id: '9cb609c1',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '**🎯T244 landed.**\n\nIndependent check.' }],
+        stop_reason: 'end_turn',
+      },
+    },
+  ]);
+  assert.strictEqual(chunks.length, 1, 'only visible turn: ' + JSON.stringify(chunks));
+  assert.strictEqual(chunks[0].role, 'jevons');
+  assert.strictEqual(chunks[0].text, '**🎯T244 landed.**\n\nIndependent check.');
+  assert.ok(chunks[0].text.indexOf('[silent]') < 0, 'silent must not leak');
+  assert.ok(chunks[0].text.indexOf('re-pressured') < 0, 'silent body must not glue');
+});
+
+test('T245 empty sealed silent + agent_note + visible → only second body', function () {
+  // Journal path after T240: silent stream is empty body + end_turn.
+  const chunks = VL.coalesceTranscriptFrames([
+    {
+      type: 'assistant',
+      stream_id: '35728c40',
+      message: { role: 'assistant', content: [], stop_reason: 'end_turn' },
+    },
+    { type: 'agent_note', text: 'note' },
+    {
+      type: 'assistant',
+      stream_id: '9cb609c1',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '**🎯T244 landed.**' }],
+        stop_reason: 'end_turn',
+      },
+    },
+  ]);
+  assert.strictEqual(chunks.length, 1);
+  assert.strictEqual(chunks[0].text, '**🎯T244 landed.**');
+});
+
+test('T245 two visible turns with only agent_note between stay two bubbles', function () {
+  // Terminal seal + stream_id: consecutive overseer turns must not glue.
+  const chunks = VL.coalesceTranscriptFrames([
+    {
+      type: 'assistant',
+      stream_id: 's-a',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'First turn.' }],
+        stop_reason: 'end_turn',
+      },
+    },
+    { type: 'agent_note', text: 'worker note' },
+    {
+      type: 'assistant',
+      stream_id: 's-b',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Second turn.' }],
+        stop_reason: 'end_turn',
+      },
+    },
+  ]);
+  assert.strictEqual(chunks.length, 2, JSON.stringify(chunks));
+  assert.strictEqual(chunks[0].text, 'First turn.');
+  assert.strictEqual(chunks[1].text, 'Second turn.');
+});
+
+test('T245 multi-fragment silent stream stripped before visible', function () {
+  const chunks = VL.coalesceTranscriptFrames([
+    {
+      type: 'assistant',
+      stream_id: 's9',
+      message: { content: [{ type: 'text', text: '[silent]' }] },
+    },
+    {
+      type: 'assistant',
+      stream_id: 's9',
+      message: { content: [{ type: 'text', text: ' continued jv-t245' }] },
+    },
+    {
+      type: 'assistant',
+      stream_id: 's9',
+      message: { content: [], stop_reason: 'end_turn' },
+    },
+    { type: 'agent_note', text: 'note' },
+    {
+      type: 'assistant',
+      stream_id: 's10',
+      message: {
+        content: [{ type: 'text', text: 'Owner needs this.' }],
+        stop_reason: 'end_turn',
+      },
+    },
+  ]);
+  assert.strictEqual(chunks.length, 1);
+  assert.strictEqual(chunks[0].text, 'Owner needs this.');
+});
+
 test('T161 extract multi-block: text parts are segments', function () {
   const chunks = VL.coalesceTranscriptFrames([
     {
