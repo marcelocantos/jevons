@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
 // userTurnPrefix marks a turn delivered to the overseer as a genuine owner
@@ -64,6 +65,30 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 
 	case "assistant":
 		if ev.Text != "" {
+			// 🎯T238: overseer ops replies marked [silent] must not paint as
+			// owner-visible assistant bubbles or durable chatlog turns.
+			// Worker→overseer silent suppress remains on mcpserver notify.
+			// Residual (class-3): streaming partial tokens before a sealed
+			// [silent] prefix may still paint until suppress-on-seal.
+			if silentresponse.Is(ev.Text) {
+				// Terminal silent still needs end_turn so the UI clears working.
+				if ev.IsTerminalStop() {
+					b, err := json.Marshal(map[string]any{
+						"type":      "assistant",
+						"timestamp": ts,
+						"message": map[string]any{
+							"role":        "assistant",
+							"content":     []any{},
+							"stop_reason": ev.StopReason,
+						},
+					})
+					if err != nil {
+						return "", false
+					}
+					return string(b), true
+				}
+				return "", false
+			}
 			msg := map[string]any{
 				"role": "assistant",
 				"content": []map[string]any{
