@@ -954,7 +954,9 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 	if def == nil {
 		return
 	}
-	if !HasOpenMissionForIdle(*def, nil) {
+	// 🎯T244: pass work-child count so unbound POs with zero children skip emit.
+	workKids := CountWorkChildren(s.registry.List(), name)
+	if !HasOpenMissionForIdle(*def, nil, workKids) {
 		return
 	}
 	overseer := s.overseerName()

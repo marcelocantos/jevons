@@ -282,10 +282,36 @@ func FlattenWorkChildren(byParent map[string][]WorkerIdleRef) []WorkerIdleRef {
 	return out
 }
 
-// HasOpenMissionForIdle is the default open-mission heuristic for enter-idle:
-// work purpose with any TargetID, or work purpose always (PO may reap).
-// Callers may tighten with MissionOpen(targetID).
-func HasOpenMissionForIdle(d claudia.AgentDef, missionOpen func(targetID string) bool) bool {
+// CountWorkChildren returns how many purpose=work agents list parentName as Parent.
+// Used by the enter-idle open-mission gate (🎯T244) so unbound POs with zero
+// work children are not treated as open mission.
+func CountWorkChildren(defs []claudia.AgentDef, parentName string) int {
+	parentName = strings.TrimSpace(parentName)
+	if parentName == "" {
+		return 0
+	}
+	n := 0
+	for _, c := range defs {
+		if strings.TrimSpace(c.Parent) != parentName {
+			continue
+		}
+		purpose := strings.TrimSpace(c.Purpose)
+		if purpose == "" {
+			purpose = claudia.PurposeWork
+		}
+		if purpose == claudia.PurposeWork {
+			n++
+		}
+	}
+	return n
+}
+
+// HasOpenMissionForIdle is the default open-mission heuristic for enter-idle.
+// purpose=work with a bound TargetID is open (callers may tighten with
+// missionOpen). Unbound implementers stay open so the parent PO can reap.
+// Unbound PO/boss-shaped agents with zero work children are NOT open mission
+// (🎯T244) — long-lived standing idle must not thrash the overseer.
+func HasOpenMissionForIdle(d claudia.AgentDef, missionOpen func(targetID string) bool, workChildCount int) bool {
 	purpose := d.Purpose
 	if purpose == "" {
 		purpose = claudia.PurposeWork
@@ -295,7 +321,11 @@ func HasOpenMissionForIdle(d claudia.AgentDef, missionOpen func(targetID string)
 	}
 	tid := strings.TrimSpace(d.TargetID)
 	if tid == "" {
-		return true // unbound work still visible to PO
+		// 🎯T244: unbound PO/boss with no work children = standing idle, not open mission.
+		if looksLikePOOrBoss(d.Name) && workChildCount <= 0 {
+			return false
+		}
+		return true // unbound implementer still visible to parent
 	}
 	if missionOpen != nil {
 		return missionOpen(tid)

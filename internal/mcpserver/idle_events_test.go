@@ -33,6 +33,62 @@ func TestShouldEmitWorkerIdle(t *testing.T) {
 	}
 }
 
+// 🎯T244: unbound PO with zero work children is not open mission — no worker-idle thrash.
+func TestHasOpenMissionForIdleUnboundPO(t *testing.T) {
+	t.Parallel()
+	po := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork}
+	if HasOpenMissionForIdle(po, nil, 0) {
+		t.Fatal("unbound PO with zero work children must not be open mission")
+	}
+	// Compose with ShouldEmitWorkerIdle (acceptance oracle).
+	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, HasOpenMissionForIdle(po, nil, 0)) {
+		t.Fatal("ShouldEmitWorkerIdle must be false for unbound empty-children PO")
+	}
+	// Residual: engaged PO with active work children still open.
+	if !HasOpenMissionForIdle(po, nil, 1) {
+		t.Fatal("PO with work children must stay open mission")
+	}
+	// Residual: PO with bound target_id still open even with zero children.
+	bound := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork, TargetID: "T99"}
+	if !HasOpenMissionForIdle(bound, nil, 0) {
+		t.Fatal("PO with target_id must stay open mission")
+	}
+	// Unbound implementer (not PO-shaped) still open so parent can reap.
+	worker := claudia.AgentDef{Name: "jv-t244", Purpose: claudia.PurposeWork}
+	if !HasOpenMissionForIdle(worker, nil, 0) {
+		t.Fatal("unbound implementer must remain open mission")
+	}
+	// Aside / non-work never open.
+	aside := claudia.AgentDef{Name: "aside-1", Purpose: claudia.PurposeAside}
+	if HasOpenMissionForIdle(aside, nil, 0) {
+		t.Fatal("aside must not be open mission")
+	}
+	// missionOpen can close a bound target.
+	if HasOpenMissionForIdle(bound, func(string) bool { return false }, 0) {
+		t.Fatal("missionOpen false must close bound target")
+	}
+}
+
+func TestCountWorkChildren(t *testing.T) {
+	t.Parallel()
+	defs := []claudia.AgentDef{
+		{Name: "jevons-po", Purpose: claudia.PurposeWork, Parent: "jevons"},
+		{Name: "jv-a", Purpose: claudia.PurposeWork, Parent: "jevons-po"},
+		{Name: "jv-b", Purpose: claudia.PurposeWork, Parent: "jevons-po"},
+		{Name: "aside-1", Purpose: claudia.PurposeAside, Parent: "jevons-po"},
+		{Name: "other", Purpose: claudia.PurposeWork, Parent: "other-po"},
+	}
+	if n := CountWorkChildren(defs, "jevons-po"); n != 2 {
+		t.Fatalf("work children=%d want 2 (aside excluded)", n)
+	}
+	if n := CountWorkChildren(defs, "other-po"); n != 1 {
+		t.Fatalf("other-po children=%d want 1", n)
+	}
+	if n := CountWorkChildren(defs, "missing"); n != 0 {
+		t.Fatalf("missing parent children=%d", n)
+	}
+}
+
 func TestResolveEventParent(t *testing.T) {
 	t.Parallel()
 	d := claudia.AgentDef{Name: "jv-x", Parent: "jevons-po"}
