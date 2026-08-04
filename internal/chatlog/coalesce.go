@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
 // terminalStops match chat_events.js TERMINAL_STOPS — seal a turn.
@@ -259,13 +261,25 @@ func CoalesceStreamLines(lines []string) []string {
 		if stop == "" {
 			stop = "end_turn"
 		}
+		// 🎯T240: sealed turn whose concatenated text is silent — emit
+		// empty body only (history/replay display path). Durable journal
+		// is not rewritten; this is a view filter.
+		body := st.acc.String()
+		var content []any
+		if silentresponse.Is(body) {
+			content = []any{}
+		} else if body != "" {
+			content = []any{
+				map[string]any{"type": "text", "text": body},
+			}
+		} else {
+			content = []any{}
+		}
 		msg := map[string]any{
 			"type": "assistant",
 			"message": map[string]any{
-				"role": "assistant",
-				"content": []any{
-					map[string]any{"type": "text", "text": st.acc.String()},
-				},
+				"role":        "assistant",
+				"content":     content,
 				"stop_reason": stop,
 			},
 		}

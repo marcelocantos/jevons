@@ -75,6 +75,16 @@ type Server struct {
 	overseerStreamID string
 	// overseerStreamSeq is a monotonic counter for short stream ids.
 	overseerStreamSeq uint64
+	// overseerStreamAcc concatenates assistant text deltas for the open
+	// stream so 🎯T240 can classify [silent] across token splits.
+	overseerStreamAcc string
+	// overseerStreamSilent is true once the open stream is known silent
+	// (marker complete); further body fragments are dropped (🎯T240).
+	overseerStreamSilent bool
+	// overseerStreamHold buffers wire lines while Classify is still
+	// Pending (incomplete "[silent]" prefix). Flushed on Visible; dropped
+	// on Silent (🎯T240).
+	overseerStreamHold []string
 
 	// overseerLastProgress is the last ACP/event/activity time for stuck-busy
 	// detection (🎯T204). Zero means never observed.
@@ -282,6 +292,9 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		s.turnBuf = ""
 		s.waiting = false
 		s.overseerStreamID = "" // 🎯T223: terminal settle closes stream label
+		s.overseerStreamAcc = ""
+		s.overseerStreamSilent = false
+		s.overseerStreamHold = nil // 🎯T240 silent stream state
 		s.mu.Unlock()
 		// The overseer's ACP session is now idle — flush any async notes
 		// (worker replies, budget alerts) that arrived while it was busy and

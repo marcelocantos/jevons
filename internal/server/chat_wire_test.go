@@ -500,6 +500,87 @@ func TestChatWireLineSilentTerminalClearsWithoutBody(t *testing.T) {
 	}
 }
 
+// 🎯T240: multi-fragment stream "[silent]" + " continued" → no owner body.
+func TestDeliverOverseerEventSuppressesMultiFragmentSilentStream(t *testing.T) {
+	s := New("test", t.TempDir())
+	ch := make(chan string, 32)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.waiting = true
+	s.mu.Unlock()
+
+	// Token-split silent turn (the T238 residual: later fragments lack prefix).
+	for _, frag := range []string{"[silent]", " continued", " jv-t240"} {
+		s.DeliverOverseerEvent(claudia.Event{
+			Type: "assistant",
+			Text: frag,
+		})
+	}
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		Text:       "",
+		StopReason: "end_turn",
+	})
+	// Non-silent control.
+	s.DeliverOverseerEvent(claudia.Event{
+		Type: "assistant",
+		Text: "Hello owner",
+	})
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		Text:       "",
+		StopReason: "end_turn",
+	})
+
+	var lines []string
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case l := <-ch:
+			if strings.Contains(l, "continued") || strings.Contains(l, "[silent]") {
+				t.Fatalf("silent fragment leaked: %s", l)
+			}
+			lines = append(lines, l)
+			if strings.Contains(l, "Hello owner") {
+				// wait one more for possible end_turn
+				select {
+				case l2 := <-ch:
+					lines = append(lines, l2)
+				case <-time.After(200 * time.Millisecond):
+				}
+				goto done
+			}
+		case <-deadline:
+			t.Fatalf("timeout; lines=%v", lines)
+		}
+	}
+done:
+	sawHello := false
+	sawEmptyTerminal := false
+	for _, l := range lines {
+		if strings.Contains(l, "Hello owner") {
+			sawHello = true
+		}
+		if strings.Contains(l, `"stop_reason":"end_turn"`) && !strings.Contains(l, "Hello") {
+			// empty content terminal for silent stream
+			var m struct {
+				Message struct {
+					Content []any `json:"content"`
+				} `json:"message"`
+			}
+			if json.Unmarshal([]byte(l), &m) == nil && len(m.Message.Content) == 0 {
+				sawEmptyTerminal = true
+			}
+		}
+	}
+	if !sawHello {
+		t.Fatalf("non-silent missing: %v", lines)
+	}
+	if !sawEmptyTerminal {
+		t.Fatalf("expected empty end_turn for silent stream among %v", lines)
+	}
+}
+
 // 🎯T238: DeliverOverseerEvent → BroadcastChat/journal path drops silent body.
 func TestDeliverOverseerEventSuppressesSilentAssistantJournal(t *testing.T) {
 	s := New("test", t.TempDir())

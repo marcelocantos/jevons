@@ -67,11 +67,11 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 
 	case "assistant":
 		if ev.Text != "" {
-			// 🎯T238: overseer ops replies marked [silent] must not paint as
-			// owner-visible assistant bubbles or durable chatlog turns.
+			// 🎯T238 / 🎯T240: overseer ops replies marked [silent] must not
+			// paint as owner-visible assistant bubbles. Single-fragment
+			// Is() still applies here; multi-delta streams are suppressed
+			// in DeliverOverseerEvent via accumulated Classify (stream seal).
 			// Worker→overseer silent suppress remains on mcpserver notify.
-			// Residual (class-3): streaming partial tokens before a sealed
-			// [silent] prefix may still paint until suppress-on-seal.
 			if silentresponse.Is(ev.Text) {
 				// Terminal silent still needs end_turn so the UI clears working.
 				if ev.IsTerminalStop() {

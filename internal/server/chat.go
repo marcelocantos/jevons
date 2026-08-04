@@ -21,6 +21,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
 // defaultOverseerName is the fallback registry name of the persistent
@@ -53,8 +55,12 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"history read failed"}`, http.StatusInternalServerError)
 		return
 	}
-	raw := make([]json.RawMessage, len(lines))
-	for i, ln := range lines {
+	// 🎯T240: display path coalesces token streams and strips silent sealed
+	// assistant bodies (same view as ReplayTailSealed). Raw journal unchanged.
+	// start/total still describe the raw window for paging.
+	display := chatlog.CoalesceStreamLines(lines)
+	raw := make([]json.RawMessage, len(display))
+	for i, ln := range display {
 		raw[i] = json.RawMessage(ln)
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -185,17 +191,47 @@ func (s *Server) ensureOverseerStreamIDLocked() string {
 	return s.overseerStreamID
 }
 
-// clearOverseerStreamID drops the open stream label after a terminal stop.
+// clearOverseerStreamID drops the open stream label and 🎯T240 silent state
+// after a terminal stop.
 func (s *Server) clearOverseerStreamID() {
 	s.mu.Lock()
 	s.overseerStreamID = ""
+	s.overseerStreamAcc = ""
+	s.overseerStreamSilent = false
+	s.overseerStreamHold = nil
 	s.mu.Unlock()
+}
+
+// emptyEndTurnWire builds a body-less terminal assistant frame so the UI
+// clears working without painting prose (🎯T238 / 🎯T240).
+func emptyEndTurnWire(stopReason, streamID string) string {
+	if stopReason == "" {
+		stopReason = "end_turn"
+	}
+	b, err := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"message": map[string]any{
+			"role":        "assistant",
+			"content":     []any{},
+			"stop_reason": stopReason,
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	return stampStreamID(string(b), streamID)
 }
 
 // DeliverOverseerEvent is the live event path for the overseer: normalise
 // to the chat wire shape, broadcast to /ws/chat listeners, then update
 // turn/idle status. Extracted so tests can drive the same path without
 // a live claudia.Agent.
+//
+// 🎯T240: assistant text is classified as a whole stream (accumulated
+// deltas per stream_id). Once silentresponse marks the stream Silent,
+// body fragments are neither journaled nor broadcast; only an empty
+// end_turn is emitted on terminal so the UI clears working.
 func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	// Any ACP traffic resets stuck-busy idle (🎯T204).
 	s.NoteOverseerProgress()
@@ -211,10 +247,77 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 		streamID = s.ensureOverseerStreamIDLocked()
 		s.mu.Unlock()
 	}
+
+	// 🎯T240 whole-stream silent: accumulate assistant text, suppress body.
+	if ev.Type == "assistant" && (ev.Text != "" || ev.IsTerminalStop()) {
+		s.mu.Lock()
+		if ev.Text != "" {
+			s.overseerStreamAcc += ev.Text
+			switch silentresponse.Classify(s.overseerStreamAcc) {
+			case silentresponse.Silent:
+				s.overseerStreamSilent = true
+				s.overseerStreamHold = nil // drop any incomplete-prefix hold
+			case silentresponse.Visible:
+				// Flush any held prefix fragments now that we know visible.
+				for _, held := range s.overseerStreamHold {
+					s.mu.Unlock()
+					s.BroadcastChat(held)
+					s.mu.Lock()
+				}
+				s.overseerStreamHold = nil
+			}
+		}
+		silent := s.overseerStreamSilent
+		class := silentresponse.Classify(s.overseerStreamAcc)
+		s.mu.Unlock()
+
+		if silent {
+			if ev.IsTerminalStop() {
+				if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
+					s.BroadcastChat(line)
+				}
+				s.clearOverseerStreamID()
+			}
+			// Body fragments: drop (not journaled).
+			s.HandleAgentEvent(ev)
+			return
+		}
+
+		if class == silentresponse.Pending && ev.Text != "" && !ev.IsTerminalStop() {
+			// Hold wire until prefix completes or stream proves visible.
+			if line, ok := chatWireLine(ev); ok {
+				if streamID != "" {
+					line = stampStreamID(line, streamID)
+				}
+				s.mu.Lock()
+				s.overseerStreamHold = append(s.overseerStreamHold, line)
+				s.mu.Unlock()
+			}
+			s.HandleAgentEvent(ev)
+			return
+		}
+
+		// Terminal while still Pending with empty/non-silent acc: flush hold
+		// then normal wire (empty end_turn). Pending with incomplete "[" only
+		// is rare; treat as visible on seal.
+		if ev.IsTerminalStop() && class == silentresponse.Pending {
+			s.mu.Lock()
+			held := s.overseerStreamHold
+			s.overseerStreamHold = nil
+			s.mu.Unlock()
+			for _, h := range held {
+				s.BroadcastChat(h)
+			}
+		}
+	}
+
 	if line, ok := chatWireLine(ev); ok {
 		if streamID != "" {
 			line = stampStreamID(line, streamID)
 		}
+		// If this full-text event is silent (T238 single-fragment path) and
+		// we did not already return above, chatWireLine drops body; terminal
+		// empty end_turn still ok.
 		s.BroadcastChat(line)
 	}
 	if ev.IsTerminalStop() {

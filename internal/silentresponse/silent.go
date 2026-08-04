@@ -2,13 +2,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package silentresponse classifies fleet-ops replies that must not surface
-// to the owner (🎯T238 overseer→owner; mcpserver worker→overseer notify).
+// to the owner (🎯T238 overseer→owner; 🎯T240 whole-stream seal;
+// mcpserver worker→overseer notify).
 package silentresponse
 
 import "strings"
 
 // Prefix marks filterable ops replies. Case-insensitive on the filter.
 const Prefix = "[silent]"
+
+// StreamClass is the progressive classification of an accumulating assistant
+// stream (🎯T240). ACP delivers token deltas; a single fragment rarely holds
+// the full [silent] marker.
+type StreamClass int
+
+const (
+	// Pending — not enough text yet to decide (empty or incomplete prefix).
+	Pending StreamClass = iota
+	// Silent — sealed or partial text is owner-filterable.
+	Silent
+	// Visible — cannot become silent (owner-visible prose).
+	Visible
+)
 
 // Is reports whether agent completion text is owner-filterable (starts with
 // [silent], optional leading whitespace / short multi-line lead-in).
@@ -34,4 +49,23 @@ func Is(text string) bool {
 		}
 	}
 	return false
+}
+
+// Classify reports whether accumulating stream text is silent, still pending
+// a complete [silent] prefix, or definitely owner-visible (🎯T240).
+func Classify(acc string) StreamClass {
+	if Is(acc) {
+		return Silent
+	}
+	t := strings.TrimSpace(acc)
+	if t == "" {
+		return Pending
+	}
+	lower := strings.ToLower(t)
+	pref := strings.ToLower(Prefix)
+	// Incomplete marker: "[" / "[s" / "[silent" still Pending.
+	if strings.HasPrefix(pref, lower) {
+		return Pending
+	}
+	return Visible
 }

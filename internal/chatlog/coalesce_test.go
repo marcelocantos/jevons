@@ -10,6 +10,45 @@ import (
 	"testing"
 )
 
+// 🎯T240: multi-fragment [silent] stream seals to empty body (history strip).
+func TestCoalesceStreamLinesStripsSilentSealed(t *testing.T) {
+	raw := []string{
+		`{"type":"user","message":{"role":"user","content":"ping"}}`,
+		`{"type":"assistant","stream_id":"s9","message":{"role":"assistant","content":[{"type":"text","text":"[silent]"}]}}`,
+		`{"type":"assistant","stream_id":"s9","message":{"role":"assistant","content":[{"type":"text","text":" continued"}]}}`,
+		`{"type":"assistant","stream_id":"s9","message":{"role":"assistant","content":[{"type":"text","text":" jv-t240"}]}}`,
+		`{"type":"assistant","stream_id":"s9","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+		`{"type":"assistant","stream_id":"s10","message":{"role":"assistant","content":[{"type":"text","text":"Owner needs this."}]}}`,
+		`{"type":"assistant","stream_id":"s10","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+	}
+	got := CoalesceStreamLines(raw)
+	if len(got) != 3 {
+		t.Fatalf("count=%d want 3 (user + empty silent + owner): %v", len(got), got)
+	}
+	// Silent sealed: no body text, no "continued".
+	if strings.Contains(got[1], "continued") || strings.Contains(got[1], "[silent]") {
+		t.Fatalf("silent body leaked: %s", got[1])
+	}
+	var silent struct {
+		Message struct {
+			Content    []any  `json:"content"`
+			StopReason string `json:"stop_reason"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(got[1]), &silent); err != nil {
+		t.Fatal(err)
+	}
+	if len(silent.Message.Content) != 0 {
+		t.Fatalf("silent content must be empty: %v", silent.Message.Content)
+	}
+	if silent.Message.StopReason != "end_turn" {
+		t.Fatalf("stop=%q", silent.Message.StopReason)
+	}
+	if !strings.Contains(got[2], "Owner needs this") {
+		t.Fatalf("non-silent unchanged: %s", got[2])
+	}
+}
+
 func TestCoalesceStreamLinesSealsTokenStream(t *testing.T) {
 	// One user turn + many assistant token crumbs + end_turn.
 	raw := []string{
