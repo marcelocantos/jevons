@@ -49,6 +49,156 @@ func TestCoalesceStreamLinesStripsSilentSealed(t *testing.T) {
 	}
 }
 
+// 🎯T242: multi-fragment visible stream + empty end_turn → sealed body non-empty.
+// Regression: silent strip / empty terminal must not wipe non-silent stream_id bodies.
+func TestCoalesceStreamLinesVisibleMultiFragmentEmptyEndTurnKeepsBody(t *testing.T) {
+	raw := []string{
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+		`{"type":"assistant","stream_id":"s42","message":{"role":"assistant","content":[{"type":"text","text":"Hel"}]}}`,
+		`{"type":"assistant","stream_id":"s42","message":{"role":"assistant","content":[{"type":"text","text":"lo owner"}]}}`,
+		`{"type":"assistant","stream_id":"s42","message":{"role":"assistant","content":[{"type":"text","text":" — stays."}]}}`,
+		// Empty terminal (Grok ACP) — must not clear accumulated body.
+		`{"type":"assistant","stream_id":"s42","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+	}
+	got := CoalesceStreamLines(raw)
+	if len(got) != 2 {
+		t.Fatalf("count=%d want 2 (user + sealed asst): %v", len(got), got)
+	}
+	var sealed struct {
+		StreamID string `json:"stream_id"`
+		Message  struct {
+			StopReason string `json:"stop_reason"`
+			Content    []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(got[1]), &sealed); err != nil {
+		t.Fatal(err)
+	}
+	if sealed.StreamID != "s42" {
+		t.Fatalf("stream_id=%q", sealed.StreamID)
+	}
+	if sealed.Message.StopReason != "end_turn" {
+		t.Fatalf("stop=%q", sealed.Message.StopReason)
+	}
+	if len(sealed.Message.Content) != 1 || sealed.Message.Content[0].Text != "Hello owner — stays." {
+		t.Fatalf("sealed body wiped or wrong: %+v (raw=%s)", sealed.Message.Content, got[1])
+	}
+}
+
+// 🎯T242: reused wire stream_id after terminal (daemon restart s1,s2,…) must not
+// merge a prior [silent] turn into a later visible turn and strip the body.
+func TestCoalesceStreamLinesStreamIDReuseAfterTerminalDoesNotWipeVisible(t *testing.T) {
+	// Same stream_id "s2" for two logical turns (restart re-minted s2).
+	raw := []string{
+		`{"type":"user","message":{"role":"user","content":"ops"}}`,
+		`{"type":"assistant","stream_id":"s2","message":{"role":"assistant","content":[{"type":"text","text":"[silent] continued workers"}]}}`,
+		`{"type":"assistant","stream_id":"s2","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+		`{"type":"user","message":{"role":"user","content":"what about the bug?"}}`,
+		`{"type":"assistant","stream_id":"s2","message":{"role":"assistant","content":[{"type":"text","text":"Visible reply"}]}}`,
+		`{"type":"assistant","stream_id":"s2","message":{"role":"assistant","content":[{"type":"text","text":" must stay."}]}}`,
+		`{"type":"assistant","stream_id":"s2","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+	}
+	got := CoalesceStreamLines(raw)
+	// user, empty silent, user, visible sealed  → 4
+	if len(got) != 4 {
+		t.Fatalf("count=%d want 4: %v", len(got), got)
+	}
+	if !strings.Contains(got[0], "ops") {
+		t.Fatalf("0: %s", got[0])
+	}
+	// Silent turn stripped.
+	if strings.Contains(got[1], "continued") || strings.Contains(got[1], "[silent]") {
+		t.Fatalf("silent leaked: %s", got[1])
+	}
+	var silent struct {
+		Message struct {
+			Content []any `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(got[1]), &silent); err != nil {
+		t.Fatal(err)
+	}
+	if len(silent.Message.Content) != 0 {
+		t.Fatalf("silent content: %v", silent.Message.Content)
+	}
+	if !strings.Contains(got[2], "what about the bug") {
+		t.Fatalf("2: %s", got[2])
+	}
+	var visible struct {
+		StreamID string `json:"stream_id"`
+		Message  struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(got[3]), &visible); err != nil {
+		t.Fatal(err)
+	}
+	if visible.StreamID != "s2" {
+		t.Fatalf("visible stream_id=%q", visible.StreamID)
+	}
+	if len(visible.Message.Content) != 1 || visible.Message.Content[0].Text != "Visible reply must stay." {
+		t.Fatalf("visible body lost to silent false-merge: %+v line=%s", visible.Message.Content, got[3])
+	}
+}
+
+// 🎯T242 acceptance: N owner turns with assistant text → N assistant bodies after seal.
+func TestCoalesceStreamLinesNOwnerTurnsNAssistantBodies(t *testing.T) {
+	raw := []string{
+		`{"type":"user","message":{"role":"user","content":"q1"}}`,
+		`{"type":"assistant","stream_id":"s1","message":{"role":"assistant","content":[{"type":"text","text":"A1"}]}}`,
+		`{"type":"assistant","stream_id":"s1","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+		`{"type":"user","message":{"role":"user","content":"q2"}}`,
+		// Reused stream_id after terminal (restart).
+		`{"type":"assistant","stream_id":"s1","message":{"role":"assistant","content":[{"type":"text","text":"A2"}]}}`,
+		`{"type":"assistant","stream_id":"s1","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+		`{"type":"user","message":{"role":"user","content":"q3"}}`,
+		`{"type":"assistant","stream_id":"s1","message":{"role":"assistant","content":[{"type":"text","text":"A3"}]}}`,
+		`{"type":"assistant","stream_id":"s1","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`,
+	}
+	got := CoalesceStreamLines(raw)
+	if len(got) != 6 {
+		t.Fatalf("count=%d want 6: %v", len(got), got)
+	}
+	wantBodies := []string{"A1", "A2", "A3"}
+	bi := 0
+	for _, ln := range got {
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(ln), &probe); err != nil {
+			t.Fatal(err)
+		}
+		if probe.Type != "assistant" {
+			continue
+		}
+		var m struct {
+			Message struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(ln), &m); err != nil {
+			t.Fatal(err)
+		}
+		if bi >= len(wantBodies) {
+			t.Fatalf("extra assistant: %s", ln)
+		}
+		if len(m.Message.Content) != 1 || m.Message.Content[0].Text != wantBodies[bi] {
+			t.Fatalf("asst[%d] body=%v want %q line=%s", bi, m.Message.Content, wantBodies[bi], ln)
+		}
+		bi++
+	}
+	if bi != 3 {
+		t.Fatalf("assistant bodies=%d want 3", bi)
+	}
+}
+
 func TestCoalesceStreamLinesSealsTokenStream(t *testing.T) {
 	// One user turn + many assistant token crumbs + end_turn.
 	raw := []string{

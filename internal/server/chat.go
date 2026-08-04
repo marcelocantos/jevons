@@ -182,11 +182,17 @@ func (s *Server) AttachOverseer(agent *claudia.Agent) {
 }
 
 // ensureOverseerStreamIDLocked returns the open response stream id, minting
-// one if needed (🎯T223). Caller must hold s.mu.
+// one if needed (🎯T223 / 🎯T242). Caller must hold s.mu.
+//
+// IDs are globally unique (UUID), not "s1"/"s2" restart counters. Short
+// sequential ids reused after every daemon bounce caused CoalesceStreamLines
+// to glue many real turns into one stream on history replay — and if any
+// reincarnation started with [silent], the whole blob was stripped (owner
+// saw replies flash live then vanish on seal/reload as consecutive users).
 func (s *Server) ensureOverseerStreamIDLocked() string {
 	if s.overseerStreamID == "" {
-		s.overseerStreamSeq++
-		s.overseerStreamID = "s" + strconv.FormatUint(s.overseerStreamSeq, 10)
+		s.overseerStreamSeq++ // kept for metrics / debug ordering only
+		s.overseerStreamID = uuid.NewString()
 	}
 	return s.overseerStreamID
 }
