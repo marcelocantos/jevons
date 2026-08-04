@@ -81,17 +81,23 @@ status language about workers.
 - Surface blockers early (missing path, stuck worker, empty turn) — never leave dead air.
 - Short status over essays; act, then report.
 
-## Recursive self-improvement & filing reflex (🎯T92 / 🎯T103 / 🎯T130) — hard doctrine
+## Recursive self-improvement & filing reflex (🎯T92 / 🎯T243 / 🎯T103 / 🎯T130) — hard doctrine
 
-**Ambient mission (🎯T92 / 🎯T92.2), not only `/retro`:** continuous self-improvement is standing work.
-The harness runs retrospectives on a **periodic schedule** and a **stream** from activity
-(eventlog lifecycle errors, idle-reap markers, **owner-chatlog friction**, **session transcripts**
-that mnemo indexes) that **mint bullseye targets** with acceptance when evidence clusters
-(frequency threshold, fingerprint ledger, max-per-cycle) — closed path without the owner
-harvesting ideas. On-demand: **`jevons_rsi_cycle`**. Mid-turn agent habit remains the
-**filing reflex (🎯T130)** below. Related hierarchy: **🎯T129**.
+**Ambient coach (🎯T243), not only `/retro`:** continuous self-improvement is standing work.
+The harness **RSI coach** drip-reads owner main chat (priority), eventlog, and session transcripts
+on a **periodic schedule** (+ stream markers). It forms **judgments**
+(observation, evidence pointers/quotes, severity, suggested inquiry, optional solution
+sketches) and delivers them to **you (overseer)** via event_push / agent_send.
+**You alone decide** outcomes: file target(s) where, alert owner, brief PO, ignore with
+reason, or other. The coach **does not** call bullseye file/achieve/set_aside and does
+**not** implement product work. On-demand: **`jevons_rsi_coach_cycle`** /
+**`jevons_rsi_coach_status`**. Retune the coach (prompt, interval, rate cap, focus
+filters) with **`jevons_rsi_coach_configure`** — alert fatigue is a dial, not a veto
+(bi-directional SI). Residual direct mint (`jevons_rsi_cycle` / `JEVONS_RSI_MINT`) is
+**not** the product path. Mid-turn agent habit remains the **filing reflex (🎯T130)**
+below. Related hierarchy: **🎯T129**. Related ambient extract: **🎯T92 / T92.2**.
 
-When a **real product gap**, **repeated failure mode**, or **standing behavioural rule** appears mid-work, **file or prompt-file a bullseye target** (name + acceptance) **in the same turn** — not only narrate a "standing rule" / "going forward I will…" in chat. Ambient self-improvement (🎯T92 / 🎯T103) is the habit; **🎯T130** is the hard filing reflex.
+When a **real product gap**, **repeated failure mode**, or **standing behavioural rule** appears mid-work, **file or prompt-file a bullseye target** (name + acceptance) **in the same turn** — not only narrate a "standing rule" / "going forward I will…" in chat. Ambient self-improvement (🎯T92 / 🎯T243 / 🎯T103) is the habit; **🎯T130** is the hard filing reflex.
 
 ### Triggers that require filing (not chat-only)
 
@@ -104,13 +110,14 @@ If you catch yourself saying (or meaning any of):
 
 ### Ceremony
 
-Use **`jevons_target_file`** (cwd + name + acceptance) and/or bullseye MCP (`bullseye_commit` op=track / file tools). Owner path remains the `target:` aside. Propose a 🎯 with acceptance and file (or prompt-file) in that turn. Harness path: schedule/stream RSI or **`jevons_rsi_cycle`**.
+Use **`jevons_target_file`** (cwd + name + acceptance) and/or bullseye MCP (`bullseye_commit` op=track / file tools). Owner path remains the `target:` aside. Propose a 🎯 with acceptance and file (or prompt-file) in that turn. Harness coach path: **`jevons_rsi_coach_cycle`** (judgments to you); you file when warranted. Residual mint: **`jevons_rsi_cycle`** only when explicitly enabled.
 
 ### Residual
 
 One-off flukes may skip filing; judgment allowed. Do not mint noise targets for transient one-shots.
-Ambient deeper surfaces (🎯T92.2) cover owner-chat friction + session transcript phrase extract;
-full LLM `/retro`-class narrative analysis remains optional depth beyond the rule-based harness.
+Ambient coach (🎯T243) drip-feeds owner-chat + session surfaces into judgments for overseer
+disposition; phrase-list direct mint (T92.2 residual) is not the product path.
+Full LLM `/retro`-class narrative analysis remains optional depth beyond the rule-based harness.
 
 ### File→spawn same turn (🎯T193) — spawn reflex after filing
 

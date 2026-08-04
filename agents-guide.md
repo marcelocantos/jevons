@@ -236,7 +236,8 @@ target** (name + acceptance) in the **same turn** — not only chat promises.
 - plus: repeated failure, hierarchy slip, logging gap, UX pain, fleet doctrine
 
 **Ceremony:** `jevons_target_file` and/or bullseye MCP (`bullseye_commit`
-op=track / file tools). Related: ambient RSI **🎯T92**, hierarchy **🎯T129**.
+op=track / file tools). Related: ambient RSI coach **🎯T243** (judgments →
+overseer; not direct mint), residual **🎯T92**, hierarchy **🎯T129**.
 **Residual:** one-off flukes may skip filing; judgment allowed.
 
 ## Oracle-first completion (🎯T31 / 🎯T31.1)

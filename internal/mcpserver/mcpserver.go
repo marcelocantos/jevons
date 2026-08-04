@@ -64,8 +64,8 @@ type Server struct {
 
 	toolsListCount int64
 
-	mu           sync.Mutex
-	notifyJevon  NotifyFunc
+	mu          sync.Mutex
+	notifyJevon NotifyFunc
 	// agentEventHook receives every fleet worker event (progress, assistant, …)
 	// so the HTTP server can maintain RHS progress chrome (🎯T118).
 	agentEventHook func(name string, ev claudia.Event)
@@ -106,9 +106,13 @@ type Server struct {
 	// Empty means cli.ResolveProvider falls through to env / grok at use time.
 	defaultProvider string
 
-	// rsiLoop is the ambient recursive self-improvement schedule/stream (🎯T92).
-	// Nil until SetRSILoop; jevons_rsi_cycle requires it.
+	// rsiLoop is the residual phrase/eventlog mint path (🎯T92; opt-in product residual).
+	// Nil until SetRSILoop; jevons_rsi_cycle requires it. Product path is rsiCoach (🎯T243).
 	rsiLoop *rsi.Loop
+
+	// rsiCoach posts judgments to the overseer; never files bullseye (🎯T243).
+	// Nil until SetRSICoach.
+	rsiCoach *rsi.Coach
 
 	// idleActivity tracks ACP phase for enter-idle detection (🎯T207).
 	// Nil until StartIdleNudgeLoop; broadcastAgentEvent Observes transitions.

@@ -470,13 +470,15 @@ func main() {
 		srv.SetActivityHook(guard.enforcer.Heartbeat)
 	}
 
-	// 🎯T92 ambient RSI: schedule + stream (reap) mint improvement targets.
-	rsiLoop := startAmbientRSI(ctx, cfg, mcpSrv)
+	// 🎯T243 ambient RSI coach (product path): judgments → overseer.
+	// Residual 🎯T92 mint remains opt-in (JEVONS_RSI_MINT / DEEPER).
+	rsiCoach := startAmbientRSICoach(ctx, cfg, mcpSrv)
+	rsiLoop := startAmbientRSIMint(ctx, cfg, mcpSrv)
 
 	// Process-as-cache GC: periodically stop idle spawned threads'
 	// processes (resumably) to free resources. The threads persist and
-	// rehydrate on the next Direct. Stream-feeds ambient RSI on reap.
-	go reapIdleThreads(ctx, btlr, rsiLoop)
+	// rehydrate on the next Direct. Stream-feeds coach (+ residual mint).
+	go reapIdleThreads(ctx, btlr, rsiLoop, rsiCoach)
 
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
@@ -1102,8 +1104,8 @@ func overseerUnavailableReason(provider claudia.Provider) string {
 const reapIdleGCInterval = 2 * time.Minute
 
 // reapIdleThreads runs the process-as-cache GC sweep until ctx is done.
-// When rsiLoop is non-nil, reaped thread ids are stream-fed into ambient RSI (🎯T92).
-func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop) {
+// Reaped thread ids stream-feed the RSI coach (🎯T243) and residual mint loop (🎯T92).
+func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop, rsiCoach *rsi.Coach) {
 	ticker := time.NewTicker(reapIdleGCInterval)
 	defer ticker.Stop()
 	for {
@@ -1113,6 +1115,9 @@ func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop
 		case <-ticker.C:
 			if reaped := btlr.ReapIdle(); len(reaped) > 0 {
 				slog.Info("reaped idle thread processes", "threads", reaped)
+				if rsiCoach != nil {
+					rsiCoach.NoteReaped(reaped)
+				}
 				if rsiLoop != nil {
 					rsiLoop.NoteReaped(reaped)
 				}
@@ -1121,20 +1126,100 @@ func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop
 	}
 }
 
-// startAmbientRSI wires the 🎯T92 schedule/stream loop and MCP jevons_rsi_cycle.
+// startAmbientRSICoach wires the 🎯T243 product path: drip-read surfaces →
+// structured judgments → overseer (never bullseye file).
 // Env:
 //
-//	JEVONS_RSI_INTERVAL   — duration (default 30m); "0" or negative disables ticker
-//	JEVONS_RSI_MINT_CWD   — bullseye repo to file into (default: discover product repo)
-//	JEVONS_RSI_DRY_RUN    — "1"/"true" extract only, never file
-//	JEVONS_RSI_DEEPER     — "1" enable T92.2 phrase-list mint from owner chatlog +
-//	                        session transcripts (default OFF until 🎯T243 coach design;
-//	                        fixed-phrase mint flooded the frontier with noise leaves)
-//	JEVONS_RSI_NO_CHAT    — when DEEPER is on: "1" skip owner-chatlog surface
-//	JEVONS_RSI_NO_SESSION — when DEEPER is on: "1" skip session-transcript surface
+//	JEVONS_RSI_COACH=0       — disable coach schedule (MCP tools still register if started)
+//	JEVONS_RSI_COACH_INTERVAL — duration (default 15m); "0" disables ticker
+//	JEVONS_RSI_NO_CHAT       — "1" skip owner-chatlog surface
+//	JEVONS_RSI_NO_SESSION    — "1" skip session-transcript surface
+func startAmbientRSICoach(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Coach {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_RSI_COACH"))) {
+	case "0", "false", "no", "off":
+		slog.Info("ambient RSI coach disabled by JEVONS_RSI_COACH")
+		return nil
+	}
+	interval := rsi.DefaultCoachInterval
+	if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_COACH_INTERVAL")); v != "" {
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			slog.Warn("JEVONS_RSI_COACH_INTERVAL invalid; using default", "value", v, "default", rsi.DefaultCoachInterval)
+		}
+	} else if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_INTERVAL")); v != "" {
+		// Shared interval env still honoured for coach when coach-specific unset.
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		}
+	}
+	chatLogPath := ""
+	if !envTruthy("JEVONS_RSI_NO_CHAT") {
+		name := cfg.OverseerName
+		if name == "" {
+			name = "jevons"
+		}
+		chatLogPath = filepath.Join(cfg.StateDir, "chatlog", name+".jsonl")
+	}
+	sessionsDir := ""
+	if !envTruthy("JEVONS_RSI_NO_SESSION") {
+		sessionsDir = strings.TrimSpace(cfg.SessionsDir)
+	}
+	deliverer := mcpSrv.NewOverseerJudgmentDeliverer(cfg.OverseerName)
+	coach, err := rsi.NewCoach(rsi.CoachArgs{
+		StateDir:    cfg.StateDir,
+		ChatLogPath: chatLogPath,
+		SessionsDir: sessionsDir,
+		Interval:    interval,
+		Deliverer:   deliverer,
+		SeedEOF:     true, // continuous drip: only new appends after boot
+		DryRun:      false,
+	})
+	if err != nil {
+		slog.Warn("ambient RSI coach disabled", "err", err)
+		return nil
+	}
+	// Ensure durable default config exists for overseer retune surface.
+	if _, err := os.Stat(rsi.CoachConfigPath(cfg.StateDir)); os.IsNotExist(err) {
+		def := rsi.DefaultCoachConfig()
+		if name := strings.TrimSpace(cfg.OverseerName); name != "" {
+			def.Overseer = name
+		}
+		_ = rsi.SaveCoachConfig(cfg.StateDir, def)
+	}
+	mcpSrv.SetRSICoach(coach)
+	go coach.Run(ctx)
+	slog.Info("ambient RSI coach ready",
+		"interval", interval.String(),
+		"chatlog", chatLogPath != "",
+		"sessions", sessionsDir != "",
+		"overseer", cfg.OverseerName,
+		"config", "state_dir/rsi/coach_config.json",
+		"cursor", "state_dir/rsi/coach_cursor.json",
+		"ledger", "state_dir/rsi/judged.json",
+	)
+	return coach
+}
+
+// startAmbientRSIMint wires residual 🎯T92 direct bullseye mint (NOT product path).
+// Product path is the coach (🎯T243). Phrase-list / mint only when explicitly opted in:
 //
-// Eventlog lifecycle mint (T92.1 thin path) still runs unless DRY_RUN / no mint cwd.
-func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Loop {
+//	JEVONS_RSI_MINT=1  — enable eventlog mint loop (still subject to DRY_RUN)
+//	JEVONS_RSI_DEEPER=1 — also feed chatlog+session phrase extract into mint (noisy)
+//	JEVONS_RSI_INTERVAL, JEVONS_RSI_MINT_CWD, JEVONS_RSI_DRY_RUN as before
+//
+// When neither MINT nor DEEPER is set, the mint loop is not started (coach only).
+func startAmbientRSIMint(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Loop {
+	mintOn := envTruthy("JEVONS_RSI_MINT")
+	deeper := envTruthy("JEVONS_RSI_DEEPER")
+	if !mintOn && !deeper {
+		slog.Info("ambient RSI mint residual off (product path is coach 🎯T243); set JEVONS_RSI_MINT=1 to enable")
+		return nil
+	}
 	interval := rsi.DefaultInterval
 	if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_INTERVAL")); v != "" {
 		if v == "0" {
@@ -1154,9 +1239,6 @@ func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.S
 	case "1", "true", "yes", "on":
 		dry = true
 	}
-	// 🎯T243 interim: phrase/deeper mint is opt-in. Default off so ambient
-	// does not re-file T169-style friction noise while the coach design lands.
-	deeper := envTruthy("JEVONS_RSI_DEEPER")
 	chatLogPath := ""
 	sessionsDir := ""
 	if deeper {
@@ -1176,12 +1258,12 @@ func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.S
 		SessionsDir: sessionsDir,
 	})
 	if err != nil {
-		slog.Warn("ambient RSI disabled", "err", err)
+		slog.Warn("ambient RSI mint residual disabled", "err", err)
 		return nil
 	}
 	mcpSrv.SetRSILoop(loop)
 	go loop.Run(ctx)
-	slog.Info("ambient RSI ready",
+	slog.Info("ambient RSI mint residual ready (not product path)",
 		"interval", interval.String(),
 		"mint_cwd", mintCwd,
 		"dry_run", dry,

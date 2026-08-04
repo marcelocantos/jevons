@@ -133,12 +133,13 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   "we should always…" in chat. Ceremony: `jevons_target_file` and/or
   bullseye MCP (`bullseye_commit` track). Related: 🎯T92 ambient RSI,
   🎯T129 hierarchy. Residual: one-off flukes may skip filing.
-- **Ambient RSI (🎯T92 / 🎯T92.2):** harness schedule + idle-reap stream mint
-  improvement targets from eventlog, **owner-chatlog friction**, and
-  **session transcripts** (`internal/rsi`, `jevons_rsi_cycle`); not only
-  owner `/retro`. Noise control (min count, fingerprint ledger, max-per-cycle)
-  still caps flooding when deeper extract proposes more. Filing reflex is the
-  mid-turn agent half of the same mission.
+- **Ambient RSI coach (🎯T243 / T92):** harness coach drip-reads owner main
+  chat (priority), eventlog, and session transcripts; posts **judgments** to
+  the overseer (`jevons_rsi_coach_cycle` / configure / status). Overseer alone
+  files / alerts / briefs PO / ignores. Coach never calls bullseye. Residual
+  phrase-list mint (`JEVONS_RSI_MINT` / `jevons_rsi_cycle`) is not product
+  path. Filing reflex is the mid-turn agent half of the same mission.
+
 - **Oracle-first completion (🎯T31 / 🎯T31.1):** bare "done" / complete /
   finished without **oracle evidence** (named test + green, and/or
   commit SHA) or **explicit accepted-risk / class-3** language is **not

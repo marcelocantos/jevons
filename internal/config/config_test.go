@@ -128,14 +128,16 @@ func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 		"T92",
 		"T129",
 		"One-off flukes",
-		// 🎯T92 / T92.2 ambient: schedule/stream + deeper chat/session surfaces
+		// 🎯T243 coach + T92 residual: judgments → overseer; not direct mint product path
 		"not only `/retro`",
 		"periodic schedule",
-		"jevons_rsi_cycle",
-		"mint bullseye targets",
-		"owner-chatlog friction",
+		"jevons_rsi_coach_cycle",
+		"T243",
+		"You alone decide",
+		"jevons_rsi_coach_configure",
+		"owner main chat",
 		"session transcripts",
-		"T92.2",
+		"T92",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("persona missing impatience/RSI/T130 marker %q", want)

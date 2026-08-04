@@ -1,13 +1,22 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package rsi implements the ambient recursive self-improvement loop
-// (🎯T92 / 🎯T92.2): evidence from activity → improvement candidates →
-// noise-controlled bullseye filing. Surfaces: eventlog lifecycle, stream
-// (idle-reap), owner-chat friction (chatlog), and session transcripts
-// (mnemo-indexed chat_history). Schedule/stream hooks live in the daemon;
-// this package is pure + injectable so hermetic tests prove the mint path
-// without Grok.
+// Package rsi implements ambient recursive self-improvement (🎯T92 / 🎯T243).
+//
+// Product path (🎯T243): Coach drip-reads owner chat (priority), eventlog, and
+// session transcripts; forms structured Judgments; delivers them to the
+// overseer. The coach never files bullseye — overseer alone decides file /
+// alert / brief PO / ignore. Overseer retunes coach prompt + runtime dials
+// (bi-directional SI). Continuous read uses a durable byte-offset cursor
+// (not full history re-ingest each cycle).
+//
+// Residual mint path (🎯T92 / T92.2): ExtractCandidates + RunCycle + Loop may
+// still file bullseye when explicitly opted in (JEVONS_RSI_MINT / DEEPER).
+// Phrase-list direct mint is not the product path; extract may feed coach
+// proposals only.
+//
+// Schedule/stream hooks live in the daemon; this package is pure + injectable
+// so hermetic tests prove coach→overseer without Grok.
 package rsi
 
 import (

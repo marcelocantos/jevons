@@ -41,7 +41,21 @@ func OpenLedger(stateDir string, ttl time.Duration) (*Ledger, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("rsi ledger: mkdir: %w", err)
 	}
-	return &Ledger{path: filepath.Join(dir, "minted.json"), ttl: ttl}, nil
+	return openLedgerAt(filepath.Join(dir, "minted.json"), ttl)
+}
+
+// openLedgerAt opens a fingerprint ledger at an explicit path (mint or judged).
+func openLedgerAt(path string, ttl time.Duration) (*Ledger, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("rsi ledger: path required")
+	}
+	if ttl <= 0 {
+		ttl = DefaultLedgerTTL
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("rsi ledger: mkdir: %w", err)
+	}
+	return &Ledger{path: path, ttl: ttl}, nil
 }
 
 // Path returns the ledger file path.
