@@ -187,3 +187,17 @@ func TestIsFailure(t *testing.T) {
 		t.Fatal("unknown is failure")
 	}
 }
+
+func TestClassifyMessageAlias(t *testing.T) {
+	t.Parallel()
+	if agenterr.ClassifyMessage("Internal error") != agenterr.ClassBackendUnavailable {
+		t.Fatal("ClassifyMessage must match ClassifyText")
+	}
+	c := agenterr.ClassRateLimit
+	if !c.IsTransient() || !c.IsFailure() {
+		t.Fatal("method forms for T236")
+	}
+	if agenterr.ClassAuth.IsTransient() {
+		t.Fatal("auth not transient")
+	}
+}

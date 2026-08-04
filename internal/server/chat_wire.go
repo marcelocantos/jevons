@@ -5,10 +5,12 @@ package server
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
@@ -89,20 +91,39 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 				}
 				return "", false
 			}
+			// 🎯T237: rewrite bare provider failure prose (e.g. "Internal error")
+			// so owner-visible copy carries class; structured slog for T236.
+			displayText := ev.Text
+			var failClass agenterr.Class
+			if class := agenterr.ClassifyText(ev.Text); class.IsFailure() {
+				failClass = class
+				displayText = agenterr.OwnerCopy(class, ev.Text)
+				slog.Warn("provider_failure",
+					"component", "provider_failure",
+					"failure_class", class.String(),
+					"transient", class.IsTransient(),
+					"surface", "chat_wire",
+					"raw", strings.TrimSpace(ev.Text),
+				)
+			}
 			msg := map[string]any{
 				"role": "assistant",
 				"content": []map[string]any{
-					{"type": "text", "text": ev.Text},
+					{"type": "text", "text": displayText},
 				},
 			}
 			if ev.StopReason != "" {
 				msg["stop_reason"] = ev.StopReason
 			}
-			b, err := json.Marshal(map[string]any{
+			wire := map[string]any{
 				"type":      "assistant",
 				"timestamp": ts,
 				"message":   msg,
-			})
+			}
+			if failClass.IsFailure() {
+				wire["failure_class"] = failClass.String()
+			}
+			b, err := json.Marshal(wire)
 			if err != nil {
 				return "", false
 			}

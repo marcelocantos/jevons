@@ -106,9 +106,16 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 
 	status, err := s.sendToNamedAgent(name, text)
 	if err != nil {
+		// 🎯T237: structured class for T236 recovery; owner copy beyond bare Internal error.
+		class, ownerMsg := agenterr.ClassifyAndFormat(err)
+		if !class.IsFailure() {
+			ownerMsg = err.Error()
+		}
 		slog.Warn("agent_send_http",
 			"component", "agent_send",
 			"name", name,
+			"failure_class", class.String(),
+			"transient", class.IsTransient(),
 			"err", err.Error(),
 		)
 		// Map common cases to status codes.
@@ -121,7 +128,7 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		} else if agenterr.IsPromptBusy(err) {
 			code = http.StatusConflict
 		}
-		writeJSONError(w, code, msg)
+		writeJSONErrorClass(w, code, ownerMsg, class)
 		return
 	}
 
@@ -140,7 +147,16 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 
 // writeJSONError writes {"error": msg} with the given status.
 func writeJSONError(w http.ResponseWriter, code int, msg string) {
+	writeJSONErrorClass(w, code, msg, agenterr.ClassNone)
+}
+
+// writeJSONErrorClass writes {"error": msg, "failure_class": …} for 🎯T237.
+func writeJSONErrorClass(w http.ResponseWriter, code int, msg string, class agenterr.Class) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	body := map[string]string{"error": msg}
+	if class.IsFailure() {
+		body["failure_class"] = class.String()
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }

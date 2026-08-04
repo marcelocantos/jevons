@@ -38,6 +38,18 @@ func (c Class) String() string {
 	return string(c)
 }
 
+// IsTransient reports whether this class warrants poll/retry/re-pressure
+// (method form for T236 consumers; same as TransientBackend).
+func (c Class) IsTransient() bool {
+	return TransientBackend(c)
+}
+
+// IsFailure reports whether this is a non-empty failure class
+// (method form for T236 consumers; same as IsFailure function).
+func (c Class) IsFailure() bool {
+	return c != ClassNone
+}
+
 // Classify maps an error to a Class. Nil and busy → ClassNone.
 func Classify(err error) Class {
 	if err == nil {
@@ -93,6 +105,11 @@ func ClassifyText(msg string) Class {
 		return ClassUnknown
 	}
 	return ClassNone
+}
+
+// ClassifyMessage is an alias of ClassifyText (T236 import name).
+func ClassifyMessage(msg string) Class {
+	return ClassifyText(msg)
 }
 
 // TransientBackend reports classes that warrant poll/retry/re-pressure once

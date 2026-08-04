@@ -89,6 +89,14 @@ func TestChatWireLineGrokACPShapes(t *testing.T) {
 			wantText: `"text":"pong"`,
 		},
 		{
+			// 🎯T237: bare Internal error is rewritten with class, not left as-is.
+			name:     "internal error classified on wire",
+			ev:       claudia.Event{Type: "assistant", Text: "Internal error", StopReason: "end_turn", Raw: acpEndRaw},
+			wantOK:   true,
+			wantType: "assistant",
+			wantText: `backend_unavailable`,
+		},
+		{
 			name:     "empty-text end_turn from ACP",
 			ev:       claudia.Event{Type: "assistant", Text: "", StopReason: "end_turn", Raw: acpEndRaw},
 			wantOK:   true,

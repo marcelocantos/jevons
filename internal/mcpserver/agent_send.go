@@ -157,7 +157,20 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 	}
 
 	if !isPromptInFlight(err) {
-		return agentSendResult{}, fmt.Errorf("send failed: %v", err)
+		// 🎯T237: structured class + owner-visible copy (not bare Internal error).
+		class, ownerMsg := agenterr.ClassifyAndFormat(err)
+		if !class.IsFailure() {
+			ownerMsg = err.Error()
+		}
+		slog.Warn("agent_send",
+			"component", "agent_send",
+			"name", name,
+			"status", "failed",
+			"failure_class", class.String(),
+			"transient", class.IsTransient(),
+			"err", err.Error(),
+		)
+		return agentSendResult{}, fmt.Errorf("send failed: %s", ownerMsg)
 	}
 
 	// Busy path (🎯T111.1): interrupt then send, or queue for after turn.
@@ -196,7 +209,19 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 			logAgentSendResult(name, res, rehydrated)
 			return res, nil
 		} else {
-			return agentSendResult{}, fmt.Errorf("send after interrupt failed: %v", err2)
+			class, ownerMsg := agenterr.ClassifyAndFormat(err2)
+			if !class.IsFailure() {
+				ownerMsg = err2.Error()
+			}
+			slog.Warn("agent_send",
+				"component", "agent_send",
+				"name", name,
+				"status", "failed_after_interrupt",
+				"failure_class", class.String(),
+				"transient", class.IsTransient(),
+				"err", err2.Error(),
+			)
+			return agentSendResult{}, fmt.Errorf("send after interrupt failed: %s", ownerMsg)
 		}
 	}
 
@@ -242,7 +267,13 @@ func (s *Server) drainAgentSendQueue(name string) {
 			s.mu.Unlock()
 			return
 		}
-		slog.Warn("agent send queue: drain send failed", "name", name, "err", err)
+		class := agenterr.Classify(err)
+		slog.Warn("agent send queue: drain send failed",
+			"name", name,
+			"err", err,
+			"failure_class", class.String(),
+			"transient", class.IsTransient(),
+		)
 		return
 	}
 	slog.Info("agent send queue: drained one message", "name", name, "remaining", s.pendingAgentSends(name))

@@ -938,11 +938,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			// in the server log (🎯T49; live drill found "prompt already
 			// in flight" vanishing silently). Broadcast so every client —
 			// and the journal — records that this turn was not delivered.
-			slog.Error("chat: send to overseer failed", "err", err)
-			payload, _ := json.Marshal(map[string]string{
+			// 🎯T237: structured failure_class + owner copy beyond bare Internal error.
+			class, ownerMsg := agenterr.ClassifyAndFormat(err)
+			if !class.IsFailure() {
+				ownerMsg = err.Error()
+			}
+			slog.Error("chat: send to overseer failed",
+				"err", err,
+				"failure_class", class.String(),
+				"transient", class.IsTransient(),
+			)
+			frame := map[string]string{
 				"type":  "error",
-				"error": "message not delivered: " + err.Error(),
-			})
+				"error": "message not delivered: " + ownerMsg,
+			}
+			if class.IsFailure() {
+				frame["failure_class"] = class.String()
+			}
+			payload, _ := json.Marshal(frame)
 			s.BroadcastChat(string(payload))
 		}
 	}

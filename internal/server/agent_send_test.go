@@ -6,6 +6,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -86,6 +87,32 @@ func TestHandleAgentSendBusyConflict(t *testing.T) {
 	s.handleAgentSend(rr, req)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// 🎯T237: provider failure is classified — not bare Internal error on the HTTP path.
+func TestHandleAgentSendClassifiesInternalError(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.SetAgentSendHook(func(name, text string) (string, error) {
+		return "", fmt.Errorf("Internal error")
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/jevons-po/send",
+		strings.NewReader(`{"text":"kickoff"}`))
+	req.SetPathValue("name", "jevons-po")
+	rr := httptest.NewRecorder()
+	s.handleAgentSend(rr, req)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["failure_class"] != "backend_unavailable" {
+		t.Fatalf("failure_class=%q body=%v", body["failure_class"], body)
+	}
+	if body["error"] == "Internal error" || !strings.Contains(body["error"], "backend_unavailable") {
+		t.Fatalf("owner error still bare: %q", body["error"])
 	}
 }
 
