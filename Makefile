@@ -93,6 +93,7 @@ test-ui:
 	node scripts/chat-ui-test/virtual-list-test.js
 	node scripts/chat-ui-test/image-paste-test.js
 	node scripts/chat-ui-test/t164-aside-dismiss-test.js
+	node scripts/chat-ui-test/t241-alt-enter-test.js
 
 .PHONY: test-ui-live
 test-ui-live:

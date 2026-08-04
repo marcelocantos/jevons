@@ -831,7 +831,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <div id="composer-images" class="composer-images" aria-label="Attached images"></div>
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
-                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter empty pops last message, Shift+Enter for a new line. / focuses box when not typing."
+                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter force-sends draft or next queued, Shift+Enter for a new line. / focuses box when not typing."
                 title="Message box — / focuses here when focus is elsewhere (🎯T127)"
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
@@ -964,7 +964,7 @@ let attentionBarExpanded = false;
 // 🎯T135: last auto-route match is suggestion-only (never steals wire).
 // Stashed until the next user bubble echo so we can attach "Continue in: …".
 let lastRouteSuggestion = null;
-const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter empty pops last message, Shift+Enter for a new line. / focuses box when not typing.';
+const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter force-sends draft or next queued, Shift+Enter for a new line. / focuses box when not typing.';
 
 // 🎯T153: force focus back to main composer after pointer chrome actions.
 // Prefer ComposerFocus.focusComposer; fall back to #input.focus().
@@ -4903,12 +4903,12 @@ function autoGrow() {
 }
 
 // Enter submits, Shift-Enter inserts a newline.
-// 🎯T113: plain Enter enqueues while busy; only Control+Enter interjects.
-// 🎯T132: Ctrl+Enter = immediate send (never Alt); empty Alt+Enter pops
-// last owner message into the composer as the interjection/edit seed.
+// 🎯T113: plain Enter enqueues while busy; Control+Enter interjects.
+// 🎯T241: Alt+Enter = force-send only — real draft → interject that draft;
+// empty/seed-only (isEffectivelyEmpty) + queue ≥1 → sendQueueNow; never pop_last.
+// History remains Alt+Up/Down only.
 // 🎯T192: composerEmpty via isEffectivelyEmpty — seed-shaped residue
-// (EMPTY_SEED, bare ".", ZWSP-only, partial thrash) counts as empty, not
-// !input.value / trim-only (those treat the hidden seed as a real draft).
+// (EMPTY_SEED, bare ".", ZWSP-only) counts as empty, not bare !trim().
 input.addEventListener('keydown', e => {
   // 🎯T235: treat Enter by key or code (macOS Option+Enter can leave key
   // non-"Enter" while code is still Enter). Alt via altKey or Alt modifier.
@@ -4918,6 +4918,9 @@ input.addEventListener('keydown', e => {
     const composerEmpty = (typeof WisprContext !== 'undefined' && WisprContext.isEffectivelyEmpty)
       ? WisprContext.isEffectivelyEmpty(input.value)
       : !String(input.value || '').trim();
+    const queueLen = (typeof sendQueueState !== 'undefined' && sendQueueState && sendQueueState.items)
+      ? sendQueueState.items.length
+      : 0;
     // Option/Alt: some layouts set altKey false but getModifierState('Alt').
     const altHeld = !!(e.altKey || (typeof e.getModifierState === 'function' && e.getModifierState('Alt')));
     const mods = {
@@ -4928,19 +4931,35 @@ input.addEventListener('keydown', e => {
       code: e.code,
     };
     const action = (typeof ComposerKeys !== 'undefined' && ComposerKeys.classifyEnterAction)
-      ? ComposerKeys.classifyEnterAction(e.key, mods, { composerEmpty: composerEmpty, code: e.code })
+      ? ComposerKeys.classifyEnterAction(e.key, mods, {
+          composerEmpty: composerEmpty,
+          code: e.code,
+          queueLen: queueLen,
+        })
       : (mods.shiftKey ? 'newline'
         : (mods.ctrlKey ? 'interrupt'
-          : (mods.altKey ? (composerEmpty ? 'pop_last' : 'noop') : 'send')));
+          : (mods.altKey
+            ? (!composerEmpty ? 'force_send'
+              : (queueLen > 0 ? 'send_queue_now' : 'noop'))
+            : 'send')));
     if (action === 'newline' || action == null) return; // Shift+Enter → native newline
     e.preventDefault();
-    if (action === 'noop') return; // non-empty Alt+Enter: do not send (Firefox-safe)
-    if (action === 'pop_last') {
-      // 🎯T235: fail loud inside pop when owner bubbles exist but resolve miss.
-      popLastOwnerAsInterjection();
+    if (action === 'noop') return; // empty Alt+Enter with no queue
+    // 🎯T241: Alt+Enter never pop_last — history is Alt+Up/Down only.
+    if (action === 'send_queue_now') {
+      const items = (sendQueueState && sendQueueState.items) || [];
+      if (!items.length) return;
+      let id = null;
+      if (navFocus.zone === 'queue' && items[navFocus.index | 0]) {
+        id = items[navFocus.index | 0].id;
+      } else {
+        id = items[0].id; // FIFO head when none focused
+      }
+      if (id && typeof sendQueueNow === 'function') sendQueueNow(id);
       return;
     }
-    const interrupt = action === 'interrupt'; // Control+Enter only (not Alt, not Meta)
+    // force_send (Alt+Enter draft) and interrupt (Ctrl+Enter) both interject.
+    const interrupt = action === 'interrupt' || action === 'force_send';
     // 🎯T88: primary send while a recalled bubble is highlighted rewinds
     // and resends (destructive redo). Escape clears edit mode first for
     // safe append; Cmd/Ctrl+Enter also forces safe append.

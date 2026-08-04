@@ -258,7 +258,7 @@ test('T149 wispr_context exports seedPrefixLen / isSeedOnly / stripSeed / EMPTY_
 
 // ── 🎯T132 Enter-chord policy ───────────────────────────────────────
 
-test('T132 Ctrl+Enter → interrupt (immediate send), not Alt', function () {
+test('T132 Ctrl+Enter → interrupt (immediate send)', function () {
   assert.strictEqual(
     CK.classifyEnterAction('Enter', { ctrlKey: true }, { composerEmpty: false }),
     'interrupt'
@@ -267,47 +267,92 @@ test('T132 Ctrl+Enter → interrupt (immediate send), not Alt', function () {
     CK.classifyEnterAction('Enter', { ctrlKey: true }, { composerEmpty: true }),
     'interrupt'
   );
-  // Alt alone must never be interrupt/send.
-  assert.notStrictEqual(
-    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false }),
-    'interrupt'
-  );
-  assert.notStrictEqual(
-    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true }),
-    'interrupt'
-  );
+  // Alt alone is never plain 'send' (enqueue path) or 'interrupt' — force_send / send_queue_now / noop.
   assert.notStrictEqual(
     CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false }),
     'send'
   );
+  assert.notStrictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true, queueLen: 0 }),
+    'interrupt'
+  );
 });
 
-test('T132 Alt+Enter empty → pop_last; non-empty → noop (no steal)', function () {
-  assert.strictEqual(
-    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true }),
-    'pop_last'
-  );
-  // Seed-only is effectively empty (caller sets composerEmpty from Wispr).
-  assert.strictEqual(
-    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: WC.isEffectivelyEmpty(WC.EMPTY_SEED) }),
-    'pop_last'
-  );
+// 🎯T241: Alt+Enter = force-send only (never pop_last).
+test('T241 Alt+Enter real draft → force_send (not pop_last, not noop)', function () {
   assert.strictEqual(
     CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false }),
-    'noop'
+    'force_send'
   );
   assert.strictEqual(
     CK.classifyEnterAction('Enter', { altKey: true }, {
       composerEmpty: WC.isEffectivelyEmpty('real draft'),
+      queueLen: 0,
     }),
-    'noop'
+    'force_send'
+  );
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: WC.isEffectivelyEmpty(WC.EMPTY_SEED + 'Are we done?'),
+      queueLen: 3,
+    }),
+    'force_send',
+    'real draft wins over queue (send composer text, not sendQueueNow)'
+  );
+  assert.notStrictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false }),
+    'pop_last'
   );
 });
 
-// 🎯T192: seed-shaped residue must match truly empty for Alt+Enter.
-// Break was isEffectivelyEmpty missing bare "." / ZWSP-only / partial thrash
-// after EMPTY_SEED strip — composer looked empty (or seed-only) but noop'd.
-test('T192 Alt+Enter seed-shaped → pop_last; non-seed draft → noop', function () {
+test('T241 Alt+Enter empty/seed-only + queue≥1 → send_queue_now', function () {
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: true,
+      queueLen: 1,
+    }),
+    'send_queue_now'
+  );
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: WC.isEffectivelyEmpty(WC.EMPTY_SEED),
+      queueLen: 2,
+    }),
+    'send_queue_now',
+    'EMPTY_SEED counts as empty → queue send-now'
+  );
+  assert.notStrictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: true,
+      queueLen: 1,
+    }),
+    'pop_last'
+  );
+});
+
+test('T241 Alt+Enter empty + no queue → noop (never pop_last)', function () {
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: true,
+      queueLen: 0,
+    }),
+    'noop'
+  );
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: WC.isEffectivelyEmpty(WC.EMPTY_SEED),
+      queueLen: 0,
+    }),
+    'noop'
+  );
+  assert.notStrictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true }),
+    'pop_last'
+  );
+});
+
+// 🎯T192/T241: seed-shaped residue is empty for Alt+Enter force-send branching.
+test('T192/T241 Alt+Enter seed-shaped → queue branch; real draft → force_send', function () {
   const seedShaped = [
     '',
     WC.EMPTY_SEED,
@@ -322,9 +367,18 @@ test('T192 Alt+Enter seed-shaped → pop_last; non-seed draft → noop', functio
     assert.strictEqual(
       CK.classifyEnterAction('Enter', { altKey: true }, {
         composerEmpty: WC.isEffectivelyEmpty(v),
+        queueLen: 1,
       }),
-      'pop_last',
-      'Alt+Enter pop_last for ' + JSON.stringify(v)
+      'send_queue_now',
+      'seed-shaped + queue → send_queue_now for ' + JSON.stringify(v)
+    );
+    assert.strictEqual(
+      CK.classifyEnterAction('Enter', { altKey: true }, {
+        composerEmpty: WC.isEffectivelyEmpty(v),
+        queueLen: 0,
+      }),
+      'noop',
+      'seed-shaped no queue → noop for ' + JSON.stringify(v)
     );
   });
   const drafts = ['real draft', '?', 'Hello.', WC.EMPTY_SEED + 'Are we done?'];
@@ -333,9 +387,10 @@ test('T192 Alt+Enter seed-shaped → pop_last; non-seed draft → noop', functio
     assert.strictEqual(
       CK.classifyEnterAction('Enter', { altKey: true }, {
         composerEmpty: WC.isEffectivelyEmpty(v),
+        queueLen: 0,
       }),
-      'noop',
-      'Alt+Enter noop for draft ' + JSON.stringify(v)
+      'force_send',
+      'Alt+Enter force_send for draft ' + JSON.stringify(v)
     );
   });
 });
@@ -426,45 +481,47 @@ test('T227 ownerEntriesFromUserNodes uses _layoutText (hydrate shells)', functio
   assert.strictEqual(resolved.source, 'dom');
 });
 
-// End-to-end product policy: empty seed + Alt+Enter → pop_last, and resolve
-// still finds the owner text when only DOM entries exist (not pure classify alone).
-test('T227 product path: seed empty + Alt+Enter pop_last resolves DOM last owner', function () {
-  const composerEmpty = WC.isEffectivelyEmpty(WC.EMPTY_SEED);
-  assert.ok(composerEmpty);
-  assert.strictEqual(
-    CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: composerEmpty }),
-    'pop_last'
-  );
-  const action = CK.classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true });
-  assert.strictEqual(action, 'pop_last');
-  // The missing link: pop_last must have a text source when msgHistory=[].
+// 🎯T227 resolve helpers remain (history/DOM); Alt+Enter product path no longer pop_last.
+test('T227 resolveLastOwnerEntry still works for history tooling (not Alt+Enter product)', function () {
   const entry = CK.resolveLastOwnerEntry([], [
-    { text: 'Alt+Enter should load this after hydrate', el: {} },
+    { text: 'owner text for history tooling', el: {} },
   ]);
   assert.ok(entry && entry.text);
-  assert.ok(entry.text.indexOf('Alt+Enter should load') === 0);
+  assert.ok(entry.text.indexOf('owner text for history') === 0);
+  // 🎯T241: Alt+Enter never routes to pop_last even when empty.
+  assert.notStrictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: WC.isEffectivelyEmpty(WC.EMPTY_SEED),
+      queueLen: 0,
+    }),
+    'pop_last'
+  );
 });
 
-test('T132 index.html wires Ctrl+Enter interrupt and Alt+Enter pop_last', function () {
+test('T241 index.html wires Alt+Enter force_send / send_queue_now (not pop_last)', function () {
   const htmlPath = path.join(__dirname, '..', 'index.html');
   const html = fs.readFileSync(htmlPath, 'utf8');
-  assert.ok(html.includes('classifyEnterAction') || html.includes('T132'),
-    'must use classifyEnterAction / T132 Enter policy');
-  assert.ok(html.includes('popLastOwnerAsInterjection') || html.includes('pop_last'),
-    'must wire empty Alt+Enter pop path');
+  assert.ok(html.includes('classifyEnterAction'),
+    'must use classifyEnterAction Enter policy');
+  assert.ok(html.includes('send_queue_now') || html.includes('sendQueueNow'),
+    'must wire Alt+Enter queue send-now path');
+  assert.ok(html.includes('force_send') || /action === 'force_send'/.test(html),
+    'must wire Alt+Enter force_send for draft');
+  assert.ok(
+    /queueLen/.test(html),
+    'must pass queueLen into classifyEnterAction'
+  );
   assert.ok(
     /Ctrl\+Enter|Control\+Enter/.test(html) && /interrupt|interject/.test(html),
     'UI must document Ctrl+Enter interject/immediate send'
   );
   assert.ok(
-    /Alt\+Enter/.test(html) && /pop/.test(html.toLowerCase()),
-    'UI must document Alt+Enter empty pop'
+    /Alt\+Enter/.test(html) && /force-send|force.send|queued/i.test(html),
+    'UI must document Alt+Enter force-send (not empty-pops-last)'
   );
-  // Must not treat Alt alone as interrupt chord in the send path.
   assert.ok(
-    !/interrupt\s*=\s*!!\s*\(?e\.altKey/.test(html) &&
-      !/interrupt:\s*!!e\.altKey/.test(html),
-    'must not set interrupt from altKey alone'
+    !/Alt\+Enter empty pops last/i.test(html),
+    'placeholder must not advertise empty Alt+Enter pop_last'
   );
   // 🎯T192: empty check must use isEffectivelyEmpty (not bare !value / trim-only).
   assert.ok(
@@ -477,16 +534,12 @@ test('T132 index.html wires Ctrl+Enter interrupt and Alt+Enter pop_last', functi
       !/composerEmpty\s*=\s*!\s*String\(input\.value/.test(html),
     'must not set composerEmpty from bare !input.value (seed looks non-empty)'
   );
-  // 🎯T227: product path must resolve last owner via DOM fallback, not
-  // msgHistory alone (progressive hydrate never pushed msgHistory).
+  // Product path: Alt+Enter must not call popLast on the enter chord.
+  const enterBlock = html.match(/input\.addEventListener\('keydown'[\s\S]{0,2500}?if \(isEnter\)[\s\S]{0,1800}/);
+  assert.ok(enterBlock, 'must have enter keydown handler');
   assert.ok(
-    html.includes('resolveLastOwnerEntry') || html.includes('collectDomOwnerEntries'),
-    'must wire T227 DOM fallback for empty msgHistory pop'
-  );
-  assert.ok(
-    html.includes('rebuildMsgHistoryFromDomIfNeeded') ||
-      html.includes('ownerEntriesFromUserNodes'),
-    'must resync msgHistory from DOM after progressive hydrate / pop'
+    !/popLastOwnerAsInterjection\s*\(/.test(enterBlock[0]),
+    'Alt+Enter enter handler must not call popLastOwnerAsInterjection'
   );
 });
 
@@ -495,35 +548,38 @@ test('T132 index.html wires Ctrl+Enter interrupt and Alt+Enter pop_last', functi
 // missed empty Alt+Enter. Cover: code-Enter fallback, clobber-after-rebuild,
 // empty _layoutText fallthrough, DOM-longer prefer, failLoud, index wiring.
 
-test('T235 isEnterKey / classify: code Enter when key is not Enter (Option+Enter)', function () {
+test('T235/T241 isEnterKey / classify: code Enter when key is not Enter (Option+Enter)', function () {
   assert.strictEqual(typeof CK.isEnterKey, 'function');
   assert.ok(CK.isEnterKey('Enter', {}));
   assert.ok(CK.isEnterKey('', { code: 'Enter' }), 'code Enter counts');
   assert.ok(CK.isEnterKey(null, { code: 'NumpadEnter' }));
   assert.ok(!CK.isEnterKey('a', { code: 'KeyA' }));
-  // Product: key may be wrong/empty while code is Enter + alt → pop_last.
+  // Product: key may be wrong/empty while code is Enter + alt → force-send policy.
   assert.strictEqual(
     CK.classifyEnterAction('', { altKey: true, code: 'Enter' }, {
       composerEmpty: true,
       code: 'Enter',
+      queueLen: 0,
     }),
-    'pop_last',
-    'Option+Enter via code must pop when empty'
+    'noop',
+    'Option+Enter empty no queue → noop (never pop_last)'
   );
   assert.strictEqual(
     CK.classifyEnterAction('Dead', { altKey: true, code: 'Enter' }, {
       composerEmpty: WC.isEffectivelyEmpty(WC.EMPTY_SEED),
       code: 'Enter',
+      queueLen: 1,
     }),
-    'pop_last'
+    'send_queue_now',
+    'Option+Enter seed-only + queue → send_queue_now'
   );
   assert.strictEqual(
     CK.classifyEnterAction('', { altKey: true, code: 'Enter' }, {
       composerEmpty: false,
       code: 'Enter',
     }),
-    'noop',
-    'non-empty draft still noop'
+    'force_send',
+    'non-empty draft → force_send'
   );
 });
 
@@ -593,14 +649,24 @@ test('T235 planPopLastOwner: never clobber DOM text with empty hist tail', funct
   }));
 });
 
-test('T235 planPopLastOwner: seed empty + Alt+Enter product path end-to-end pure', function () {
+test('T241 seed empty + Alt+Enter is force-send policy (planPopLast is not product path)', function () {
   const composerEmpty = WC.isEffectivelyEmpty(WC.EMPTY_SEED);
   assert.ok(composerEmpty);
-  const action = CK.classifyEnterAction('Enter', { altKey: true }, {
-    composerEmpty: composerEmpty,
-  });
-  assert.strictEqual(action, 'pop_last');
-  // Hydrate shells without msgHistory (nodes → entries → plan).
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: composerEmpty,
+      queueLen: 1,
+    }),
+    'send_queue_now'
+  );
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: composerEmpty,
+      queueLen: 0,
+    }),
+    'noop'
+  );
+  // planPopLastOwner remains for tooling/tests but is not Alt+Enter product.
   const nodes = [
     { _layoutText: 'first owner', textContent: 'x' },
     { _layoutText: '', _body: { textContent: 'last owner via body' } },
@@ -632,21 +698,23 @@ test('T235 planPopLastOwner: failLoud when bubbles exist but unresolvable', func
   assert.strictEqual(quiet.failLoud, false, 'no bubbles → quiet miss OK');
 });
 
-test('T235 planPopLastOwner: non-empty draft path stays noop (no accidental send)', function () {
+test('T241 non-empty draft Alt+Enter is force_send (not noop)', function () {
   assert.strictEqual(
     CK.classifyEnterAction('Enter', { altKey: true }, {
       composerEmpty: WC.isEffectivelyEmpty('real draft still here'),
     }),
-    'noop'
+    'force_send'
   );
 });
 
-test('T235 index.html wires planPopLastOwner, failLoud, code/Alt Option+Enter', function () {
+test('T235 index.html still has planPopLastOwner helpers + Option+Enter code path', function () {
   const htmlPath = path.join(__dirname, '..', 'index.html');
   const html = fs.readFileSync(htmlPath, 'utf8');
-  assert.ok(html.includes('planPopLastOwner'), 'must call planPopLastOwner on product path');
-  assert.ok(html.includes('failLoud') || /Could not load last owner/.test(html),
-    'must fail loud (status msg) when pop misses with bubbles');
+  // Helpers may remain for residual tooling; Alt+Enter product is T241 force-send.
+  assert.ok(html.includes('planPopLastOwner') || html.includes('resolveLastOwnerEntry'),
+    'history resolve helpers may still exist');
+  assert.ok(html.includes('e.code') || html.includes('code: e.code'),
+    'must pass code for Option+Enter');
   assert.ok(html.includes('addStatusMsg'), 'fail loud via addStatusMsg');
   assert.ok(
     /getModifierState\s*\(\s*['"]Alt['"]\s*\)/.test(html) || /altHeld/.test(html),

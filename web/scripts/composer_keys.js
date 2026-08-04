@@ -10,12 +10,15 @@
 // lands on the visible draft — not inside the invisible seed prefix.
 // Meta/Ctrl+ArrowLeft/Right act as field ends (macOS / cross-platform habit).
 //
-// 🎯T132 Enter chords (composer focused):
-//   Ctrl+Enter  → immediate send / interject (never Alt+Enter — Firefox)
-//   Alt+Enter empty (seed-only counts) → pop last owner message as edit seed
-//   Alt+Enter non-empty → noop (must not steal Ctrl+Enter immediate-send)
+// Enter chords (composer focused):
+//   Ctrl+Enter  → immediate send / interject
+//   🎯T241 Alt+Enter = force-send only (never pop_last / never history):
+//     real draft (!isEffectivelyEmpty) → force_send (interject if busy)
+//     empty/seed-only + queue≥1 → send_queue_now (strip Send now)
+//     empty/seed-only + no queue → noop
 //   plain Enter → send (enqueue while busy per SendQueue)
 //   Shift+Enter → newline
+// History recall remains Alt+Up/Down only (not Alt+Enter).
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -178,20 +181,25 @@
   // Pure classification for the composer keydown path.
   //
   // Returns:
-  //   'newline'    — Shift+Enter (leave browser default)
-  //   'send'       — plain Enter (or Meta+Enter): send / enqueue
-  //   'interrupt'  — Ctrl+Enter: immediate send / interject while busy
-  //   'pop_last'   — Alt+Enter when composer is effectively empty
-  //   'noop'       — Alt+Enter with draft text (do not send)
-  //   null         — not Enter (caller ignores)
+  //   'newline'         — Shift+Enter (leave browser default)
+  //   'send'            — plain Enter (or Meta+Enter): send / enqueue
+  //   'interrupt'       — Ctrl+Enter: immediate send / interject while busy
+  //   'force_send'      — Alt+Enter with real draft (🎯T241 interject draft)
+  //   'send_queue_now'  — Alt+Enter empty/seed-only + queue≥1 (Send now)
+  //   'noop'            — Alt+Enter empty/seed-only + no queue
+  //   null              — not Enter (caller ignores)
+  //
+  // 🎯T241: Alt+Enter never returns 'pop_last'. History is Alt+Up/Down only.
   //
   // composerEmpty: true when there is no real draft ('' / whitespace /
-  // Wispr seed-only). Caller passes WisprContext.isEffectivelyEmpty.
+  // Wispr seed-only EMPTY_SEED / seed-shaped residue). Caller MUST pass
+  // WisprContext.isEffectivelyEmpty — bare !trim() treats hidden seed as draft.
+  // queueLen: send-queue item count for empty-composer send-now branch.
 
   /**
    * True when this keydown is Enter (incl. NumpadEnter / code fallback).
    * 🎯T235: macOS Option+Enter sometimes leaves key non-"Enter" while
-   * code stays Enter — pure `key === 'Enter'` then never reached pop_last.
+   * code stays Enter — pure `key === 'Enter'` then never classified.
    * @param {string} key
    * @param {{ code?: string }} [opts]
    */
@@ -204,8 +212,8 @@
   /**
    * @param {string} key
    * @param {{ metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean, shiftKey?: boolean, code?: string }} mods
-   * @param {{ composerEmpty?: boolean, code?: string }} [opts]
-   * @returns {'newline'|'send'|'interrupt'|'pop_last'|'noop'|null}
+   * @param {{ composerEmpty?: boolean, code?: string, queueLen?: number }} [opts]
+   * @returns {'newline'|'send'|'interrupt'|'force_send'|'send_queue_now'|'noop'|null}
    */
   function classifyEnterAction(key, mods, opts) {
     const m = mods || {};
@@ -216,15 +224,19 @@
     if (m.shiftKey) return 'newline';
 
     // Ctrl+Enter wins as immediate-send even if other modifiers are held
-    // (except Shift, already handled). Alt alone must never map here.
+    // (except Shift, already handled).
     if (m.ctrlKey) return 'interrupt';
 
-    // Alt+Enter (no Ctrl): empty → pop last owner message; non-empty → noop.
-    // Avoids Firefox Alt+Enter collisions on the send/interject path.
-    // 🎯T235: also treat altGraphKey / getModifierState('Alt') via mods.altKey
-    // (callers may set altKey from e.altKey || e.getModifierState('Alt')).
+    // 🎯T241 Alt+Enter = force-send only (never pop_last / history):
+    //   real draft → force_send (caller sends draft with interrupt if busy)
+    //   empty/seed-only + queue≥1 → send_queue_now
+    //   empty/seed-only + no queue → noop
+    // 🎯T235: callers may set altKey from e.altKey || getModifierState('Alt').
     if (m.altKey) {
-      return o.composerEmpty ? 'pop_last' : 'noop';
+      if (!o.composerEmpty) return 'force_send';
+      const qLen = o.queueLen | 0;
+      if (qLen > 0) return 'send_queue_now';
+      return 'noop';
     }
 
     // Plain Enter or Meta+Enter: normal send path (T113 enqueues when busy).
