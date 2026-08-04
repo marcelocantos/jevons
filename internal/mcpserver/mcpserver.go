@@ -122,7 +122,8 @@ type Server struct {
 	idleNudgeSweep func(postRestart bool)
 }
 
-// TriggerIdleNudgeSweep runs one idle-nudge sweep (postRestart=false).
+// TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).
+// 🎯T236: also re-pressures open-mission workers after stuck-busy / terminal failure.
 // No-op until StartIdleNudgeLoop has registered the actuator.
 func (s *Server) TriggerIdleNudgeSweep() {
 	if s == nil {
@@ -134,6 +135,15 @@ func (s *Server) TriggerIdleNudgeSweep() {
 	if f != nil {
 		f(false)
 	}
+}
+
+// TriggerFleetRecoverSweep runs one open-mission stuck/failure recover pass (🎯T236).
+// Safe for cockpit hooks; no-op when registry unset.
+func (s *Server) TriggerFleetRecoverSweep() {
+	if s == nil || s.registry == nil {
+		return
+	}
+	s.runFleetRecoverSweep(false)
 }
 
 // SweepFleetHealth runs SweepDeadAgents for the given overseer name

@@ -620,6 +620,14 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		if ev.IsTerminalStop() {
 			text := responseText.String()
 			responseText.Reset()
+			// 🎯T236: latch structured failure class / empty terminal so fleet
+			// recover can re-pressure without owner continue (T237 class).
+			s.mu.Lock()
+			tracker := s.idleActivity
+			s.mu.Unlock()
+			if tracker != nil {
+				tracker.NoteTerminalOutcome(name, text)
+			}
 			if text != "" {
 				// Notify overseer first so the done report is delivered before
 				// the worker leaves the registry (🎯T165) — unless [silent]

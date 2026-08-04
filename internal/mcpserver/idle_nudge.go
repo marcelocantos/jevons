@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // 🎯T207: auto-nudge stuck/idle fleet work agents (esp. after jevonsd restart).
@@ -310,10 +311,17 @@ func SessionLooksBriefed(priorUserText string) bool {
 
 // --- activity tracker (last progress per agent) ---
 
-// IdleActivity is the last glanceable phase/time for idle classification.
+// IdleActivity is the last glanceable phase/time for idle classification
+// and fleet recover (🎯T236) latches.
 type IdleActivity struct {
 	Phase   string
 	Updated time.Time
+	// FailureClass is the last structured terminal failure (agenterr / T237).
+	FailureClass agenterr.Class
+	// NeedsRecover is true after terminal error/empty until ClearRecover.
+	NeedsRecover bool
+	// TerminalEmpty is true when the last terminal stop had empty text.
+	TerminalEmpty bool
 }
 
 // IdleActivityTracker records ACP-derived phase for the idle-nudge sweep.
@@ -359,7 +367,20 @@ func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (
 	prev := t.by[name]
 	prevPhase = prev.Phase
 	nextPhase = phase
-	t.by[name] = IdleActivity{Phase: phase, Updated: t.clock()}
+	// Preserve T236 recover latches across mid-turn working updates;
+	// NoteTerminalOutcome sets them on end_turn; ClearRecover clears.
+	next := IdleActivity{
+		Phase:         phase,
+		Updated:       t.clock(),
+		FailureClass:  prev.FailureClass,
+		NeedsRecover:  prev.NeedsRecover,
+		TerminalEmpty: prev.TerminalEmpty,
+	}
+	// Fresh working progress clears stale recover latch only when we see
+	// real tool/assistant activity after a prior recover cycle was delivered
+	// (NeedsRecover already false). If NeedsRecover is still true, keep it
+	// until ClearRecover so a flappy assistant crumb cannot drop the signal.
+	t.by[name] = next
 	enteredIdle = nextPhase == "idle" && strings.ToLower(strings.TrimSpace(prevPhase)) == "working"
 	return prevPhase, nextPhase, enteredIdle
 }
@@ -729,13 +750,9 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 	// poisoned re-nudge forever when ACP never observed a real turn (live:
 	// post-nudge workers stayed phase=idle in UI but classifier skipped
 	// in_progress). Backoff/max already prevent thrash.
+	// Preserve T236 FailureClass; clear NeedsRecover via ClearRecover shape.
 	if args.Activity != nil {
-		args.Activity.mu.Lock()
-		if args.Activity.by == nil {
-			args.Activity.by = make(map[string]IdleActivity)
-		}
-		args.Activity.by[d.Name] = IdleActivity{Phase: "idle", Updated: now}
-		args.Activity.mu.Unlock()
+		args.Activity.ClearRecover(d.Name, now)
 	}
 	slog.Info("idle nudge delivered",
 		"agent", d.Name, "reason", reason, "kind", kind, "post_restart", args.PostRestart)
@@ -798,12 +815,14 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		}
 	}
 
-	// Cockpit fleet hook: health only (no auto-nudge ladder poll).
+	// Cockpit fleet hook: dead-handle health + T236 outage/stuck recover.
+	// No general idle ladder (T207 event-first); recover is failure/stuck only.
 	args.Server.mu.Lock()
 	args.Server.idleNudgeSweep = func(postRestart bool) {
 		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
 			slog.Info("fleet health (cockpit/idle loop)", "report", FormatDeadAgentReport(reps), "post_restart", postRestart)
 		}
+		args.Server.runFleetRecoverSweep(postRestart)
 	}
 	args.Server.mu.Unlock()
 
@@ -836,6 +855,92 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 				slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
 			}
 		}
+	}
+}
+
+// runFleetRecoverSweep evaluates open-mission workers for stuck-busy or
+// terminal failure re-pressure (🎯T236). Fire-and-forget deliver.
+func (s *Server) runFleetRecoverSweep(postRestart bool) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	overseer := s.overseerName()
+	if overseer == "" {
+		overseer = "jevons"
+	}
+	s.mu.Lock()
+	activity := s.idleActivity
+	ledger := s.idleNudgeLedger
+	s.mu.Unlock()
+	if activity == nil {
+		activity = NewIdleActivityTracker()
+		s.mu.Lock()
+		s.idleActivity = activity
+		s.mu.Unlock()
+	}
+
+	push := func(target string, interrupt bool, event, text string) error {
+		msg := formatIdleNudgeWire(event, text)
+		_, err := s.sendToAgent(target, msg, interrupt)
+		return err
+	}
+	interruptFn := func(name string) error {
+		proc := s.registry.Get(name)
+		if proc == nil || !proc.Alive() {
+			return fmt.Errorf("not running")
+		}
+		return proc.Interrupt()
+	}
+
+	reps := SweepFleetRecover(FleetRecoverSweepArgs{
+		Reg:          s.registry,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
+		Interrupt:    interruptFn,
+		Now:          time.Now(),
+		OverseerName: overseer,
+		StuckTimeout: DefaultFleetStuckTimeout,
+		BriefPresent: func(name string) bool {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.fleetBriefed != nil && s.fleetBriefed[name]
+		},
+		MarkBriefed: func(name string) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.fleetBriefed == nil {
+				s.fleetBriefed = map[string]bool{}
+			}
+			s.fleetBriefed[name] = true
+		},
+	})
+	delivered := 0
+	for _, r := range reps {
+		if r.Delivered {
+			delivered++
+			s.logLifecycle(compFleetRecover, string(r.Action), "ok", map[string]any{
+				"agent":         r.Name,
+				"reason":        r.Reason,
+				"failure_class": string(r.FailureClass),
+				"kind":          string(r.Kind),
+				"interrupted":   r.Interrupted,
+				"post_restart":  postRestart,
+			})
+		} else if r.Error != "" {
+			s.logLifecycle(compFleetRecover, string(r.Action), "error", map[string]any{
+				"agent":         r.Name,
+				"reason":        r.Reason,
+				"failure_class": string(r.FailureClass),
+				"err":           r.Error,
+			})
+		}
+	}
+	if delivered > 0 {
+		slog.Info("fleet recover sweep",
+			"summary", FormatFleetRecoverSummary(reps),
+			"post_restart", postRestart,
+		)
 	}
 }
 
