@@ -919,6 +919,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script src="scripts/composer_focus.js"></script>
 <script src="scripts/wispr_context.js"></script>
 <script src="scripts/send_queue.js"></script>
+<script src="scripts/composer_persist.js"></script>
 <script src="scripts/layout_probe.js"></script>
 <script src="scripts/tool_summary.js"></script>
 <script src="scripts/working_progress.js"></script>
@@ -1486,6 +1487,10 @@ function handle(m) {
       concurrent: m.concurrent,
       soft: wasSoft,
     });
+    // 🎯T239: re-queue unacked pending against restored chatlog (no dupes).
+    if (typeof reconcilePendingSends === 'function') {
+      try { reconcilePendingSends(); } catch (_) {}
+    }
     // 🎯T228: wire reopened idle — drain offline-enqueued follow-ups.
     if (typeof drainSendQueueIfIdle === 'function') {
       try { drainSendQueueIfIdle(); } catch (_) {}
@@ -1591,6 +1596,8 @@ function handle(m) {
       closeTurn();
       const uEl = addMsg('user', content, msgTs);
       if (content) msgHistory.push({ text: content, el: uEl });
+      // 🎯T239: user echo = durable ack of a staged wire send.
+      if (content && typeof ackPendingFromContent === 'function') ackPendingFromContent(content);
       // 🎯T135: opt-in "Continue in: «title»" when auto-match suggested a thread.
       // Match is suggestion only — default wire already went to main.
       if (lastRouteSuggestion) {
@@ -4027,6 +4034,102 @@ function persistSendQueue() {
   SendQueue.save(window.localStorage, sendQueueState);
 }
 
+// 🎯T239: durable draft + unacked wire sends (localStorage; survives
+// hard-reload / soft reconnect / daily daemon restart — not sessionStorage-only).
+let pendingSendState = (typeof ComposerPersist !== 'undefined')
+  ? (function () {
+      const r = ComposerPersist.loadPending(window.localStorage);
+      if (!r.ok && r.present) {
+        console.error('ComposerPersist: pending restore failed', r.error);
+        if (typeof sTxt !== 'undefined' && sTxt) sTxt.textContent = 'pending-send restore failed';
+      }
+      return r.state || ComposerPersist.emptyPending();
+    })()
+  : { items: [] };
+
+function persistComposerDraft(text) {
+  if (typeof ComposerPersist === 'undefined') return;
+  const t = text == null ? '' : String(text);
+  const r = ComposerPersist.saveDraft(window.localStorage, t);
+  if (!r.ok) console.error('ComposerPersist: saveDraft failed', r.error);
+}
+
+function clearComposerDraft() {
+  if (typeof ComposerPersist === 'undefined') return;
+  ComposerPersist.clearDraft(window.localStorage);
+}
+
+function persistPendingSend() {
+  if (typeof ComposerPersist === 'undefined') return;
+  const r = ComposerPersist.savePending(window.localStorage, pendingSendState);
+  if (!r.ok) console.error('ComposerPersist: savePending failed', r.error);
+}
+
+function stagePendingSend(text) {
+  if (typeof ComposerPersist === 'undefined') return;
+  const t = text == null ? '' : String(text).trim();
+  if (!t) return;
+  pendingSendState = ComposerPersist.stagePending(pendingSendState, t);
+  persistPendingSend();
+}
+
+// Ack pending items that already appear as user bubbles / history.
+function ackPendingFromContent(content) {
+  if (typeof ComposerPersist === 'undefined' || !content) return;
+  const r = ComposerPersist.ackPendingAgainstHistory(pendingSendState, [content]);
+  if (r.acked && r.acked.length) {
+    pendingSendState = r.state;
+    persistPendingSend();
+  }
+}
+
+// After history_meta: re-queue unacked pending not already on chatlog or queue.
+// History source = msgHistory, with DOM user bubbles as fallback (hard replay).
+function reconcilePendingSends() {
+  if (typeof ComposerPersist === 'undefined') return;
+  let historyTexts = (msgHistory || []).map(function (h) {
+    return h && h.text != null ? String(h.text) : '';
+  }).filter(function (t) { return t.trim().length > 0; });
+  if (!historyTexts.length && typeof collectDomOwnerEntries === 'function') {
+    try {
+      historyTexts = collectDomOwnerEntries().map(function (e) {
+        return e && e.text != null ? String(e.text) : '';
+      }).filter(function (t) { return t.trim().length > 0; });
+    } catch (_) { /* DOM not ready */ }
+  }
+  const queueTexts = (sendQueueState && sendQueueState.items || []).map(function (it) {
+    return it && it.text != null ? String(it.text) : '';
+  });
+  const plan = ComposerPersist.planRestore({
+    draftText: '',
+    pendingState: pendingSendState,
+    historyTexts: historyTexts,
+    queueTexts: queueTexts,
+  });
+  pendingSendState = plan.pendingAfterAck;
+  // Drop requeued from pending once enqueued (queue is durable via T154).
+  if (plan.requeueTexts && plan.requeueTexts.length && typeof SendQueue !== 'undefined') {
+    for (let i = 0; i < plan.requeueTexts.length; i++) {
+      const t = plan.requeueTexts[i];
+      sendQueueState = SendQueue.enqueue(sendQueueState, t);
+      pendingSendState = ComposerPersist.ackPendingAgainstHistory(pendingSendState, [t]).state;
+    }
+    persistSendQueue();
+    if (typeof renderSendQueue === 'function') renderSendQueue();
+    if (sTxt && plan.requeueTexts.length && sTxt.textContent !== 'connected') {
+      sTxt.textContent = 'requeued unacked (' + plan.requeueTexts.length + ')';
+    }
+  }
+  // Pending already covered by visible queue: drop (no silent re-dupe).
+  if (queueTexts.length) {
+    pendingSendState = ComposerPersist.ackPendingAgainstHistory(pendingSendState, queueTexts).state;
+  }
+  persistPendingSend();
+  if (typeof drainSendQueueIfIdle === 'function') {
+    try { drainSendQueueIfIdle(); } catch (_) {}
+  }
+}
+
 // setEditingHighlight moves the .editing highlight to el (or clears it),
 // scrolling it into view so you can see which message you're editing.
 function setEditingHighlight(el) {
@@ -4154,6 +4257,8 @@ function submitWireText(t, opts) {
     ok = false;
   }
   if (!ok) return false;
+  // 🎯T239: stage until user echo / chatlog ack — never silent-drop on restart.
+  stagePendingSend(t);
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   navFocus = { zone: 'live' };
   liveDraftBackup = '';
@@ -4210,6 +4315,8 @@ function clearComposerAfterQueueOrSend() {
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   navFocus = { zone: 'live' };
   liveDraftBackup = '';
+  // 🎯T239: intentional clear after accept/enqueue — drop durable draft.
+  clearComposerDraft();
   autoGrow();
   // 🎯T21: empty composer again — re-seed for next dictation (stripped on send).
   ensureWisprSeed();
@@ -4926,6 +5033,8 @@ input.addEventListener('input', () => {
     liveDraftBackup = (typeof WisprContext !== 'undefined')
       ? WisprContext.prepareWireText(input.value)
       : input.value;
+    // 🎯T239: continuous localStorage draft (survives daemon restart reload).
+    if (typeof persistComposerDraft === 'function') persistComposerDraft(liveDraftBackup);
   }
   // Prefix-first: do not treat typing as capture enablement. Only persist
   // body when focused on a side thread and the draft is not a command.
@@ -5048,13 +5157,25 @@ if (typeof renderAttention === 'function') renderAttention();
 sendBtn.addEventListener('mousedown', e => e.preventDefault());
 
 // 🎯T21: bootstrap Wispr context region + empty seed before first dictation.
-// 🎯T183: restore hot-reload draft BEFORE seed so composer-seed-only is not
+// 🎯T183/T239: restore durable draft BEFORE seed so composer-seed-only is not
 // left on when real text is present (transparent draft until first edit).
+// Prefer localStorage; migrate legacy sessionStorage jevons-input once.
 try {
-  const bootSavedInput = sessionStorage.getItem('jevons-input');
-  if (bootSavedInput) {
-    input.value = bootSavedInput;
-    sessionStorage.removeItem('jevons-input');
+  if (typeof ComposerPersist !== 'undefined') {
+    const bootDraft = ComposerPersist.restoreDraft(window.localStorage, window.sessionStorage);
+    if (!bootDraft.ok && bootDraft.present) {
+      console.error('ComposerPersist: draft restore failed', bootDraft.error);
+      if (sTxt) sTxt.textContent = 'draft restore failed';
+    } else if (bootDraft.text && bootDraft.text.trim()) {
+      input.value = bootDraft.text;
+      liveDraftBackup = bootDraft.text;
+    }
+  } else {
+    const bootSavedInput = sessionStorage.getItem('jevons-input');
+    if (bootSavedInput) {
+      input.value = bootSavedInput;
+      sessionStorage.removeItem('jevons-input');
+    }
   }
 } catch (_) {}
 refreshWisprContext();
@@ -6032,13 +6153,24 @@ function closeTerminal() {
   document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
 }
 
-// Preserve input across hot reloads (late path if boot restore missed).
-// 🎯T183: always re-sync seed-only class after restore so real draft is visible.
+// Preserve input across reloads (late path if boot restore missed).
+// 🎯T183/T239: re-sync seed-only class after restore so real draft is visible.
 try {
-  const savedInput = sessionStorage.getItem('jevons-input');
-  if (savedInput) {
-    input.value = savedInput;
-    sessionStorage.removeItem('jevons-input');
+  if (typeof ComposerPersist !== 'undefined') {
+    const late = ComposerPersist.restoreDraft(window.localStorage, window.sessionStorage);
+    if (!late.ok && late.present) {
+      console.error('ComposerPersist: late draft restore failed', late.error);
+    } else if (late.text && late.text.trim() && (!input.value || !(input.value || '').trim() ||
+        (typeof WisprContext !== 'undefined' && WisprContext.isEffectivelyEmpty(input.value)))) {
+      input.value = late.text;
+      liveDraftBackup = late.text;
+    }
+  } else {
+    const savedInput = sessionStorage.getItem('jevons-input');
+    if (savedInput) {
+      input.value = savedInput;
+      sessionStorage.removeItem('jevons-input');
+    }
   }
 } catch (_) {}
 if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
@@ -6380,7 +6512,15 @@ transport.onVoiceEvent = msg => {
     rws.onopen = () => {
       if (wasOpen) {
         // Server came back after going away — page assets may be stale.
-        sessionStorage.setItem('jevons-input', input.value);
+        // 🎯T239: localStorage draft is continuous; also flush seed-stripped.
+        try {
+          const t = (typeof WisprContext !== 'undefined')
+            ? WisprContext.prepareWireText(input.value) : input.value;
+          if (typeof persistComposerDraft === 'function') persistComposerDraft(t);
+          else sessionStorage.setItem('jevons-input', input.value);
+        } catch (_) {
+          try { sessionStorage.setItem('jevons-input', input.value); } catch (__) {}
+        }
         location.reload();
         return;
       }
@@ -6388,7 +6528,14 @@ transport.onVoiceEvent = msg => {
       attempt = 0;
     };
     rws.onmessage = () => {
-      sessionStorage.setItem('jevons-input', input.value);
+      try {
+        const t = (typeof WisprContext !== 'undefined')
+          ? WisprContext.prepareWireText(input.value) : input.value;
+        if (typeof persistComposerDraft === 'function') persistComposerDraft(t);
+        else sessionStorage.setItem('jevons-input', input.value);
+      } catch (_) {
+        try { sessionStorage.setItem('jevons-input', input.value); } catch (__) {}
+      }
       location.reload();
     };
     rws.onclose = () => {

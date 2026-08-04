@@ -18,7 +18,7 @@ import "embed"
 //go:embed scripts/fleet_row.js scripts/agent_transcript.js scripts/virtual_list.js
 //go:embed scripts/thread_route.js scripts/route_suggest.js scripts/composer_layout.js
 //go:embed scripts/composer_keys.js scripts/composer_focus.js scripts/wispr_context.js
-//go:embed scripts/send_queue.js scripts/layout_probe.js scripts/tool_summary.js
+//go:embed scripts/send_queue.js scripts/composer_persist.js scripts/layout_probe.js scripts/tool_summary.js
 //go:embed scripts/mermaid_actions.js scripts/markdown_normalize.js
 //go:embed scripts/smd.js scripts/streaming_markdown.js
 //go:embed scripts/tool_tooltip.js

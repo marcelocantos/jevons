@@ -300,16 +300,20 @@ test('T183 restored non-empty draft must not keep seed-only class', function () 
 
 test('T183 index.html re-syncs seed class after draft restore paths', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  // Boot: hot-reload draft restored before ensureWisprSeed so class is not stuck.
+  // Boot: durable draft restored before ensureWisprSeed so class is not stuck.
+  // 🎯T239: ComposerPersist.restoreDraft (localStorage); legacy jevons-input ok.
   assert.ok(
-    /jevons-input[\s\S]{0,400}ensureWisprSeed\(\)/.test(html) ||
-      /bootSavedInput[\s\S]{0,400}ensureWisprSeed\(\)/.test(html),
-    'boot must restore jevons-input draft before ensureWisprSeed'
+    /ComposerPersist\.restoreDraft[\s\S]{0,800}ensureWisprSeed\(\)/.test(html) ||
+      /jevons-input[\s\S]{0,800}ensureWisprSeed\(\)/.test(html) ||
+      /bootSavedInput[\s\S]{0,800}ensureWisprSeed\(\)/.test(html) ||
+      /bootDraft[\s\S]{0,800}ensureWisprSeed\(\)/.test(html),
+    'boot must restore durable draft before ensureWisprSeed'
   );
-  // Late restore / safety: syncComposerSeedClass after savedInput path.
+  // Late restore / safety: syncComposerSeedClass after restore path.
   assert.ok(
-    /jevons-input[\s\S]{0,500}syncComposerSeedClass/.test(html),
-    'after jevons-input restore must call syncComposerSeedClass'
+    /restoreDraft[\s\S]{0,600}syncComposerSeedClass/.test(html) ||
+      /jevons-input[\s\S]{0,500}syncComposerSeedClass/.test(html),
+    'after draft restore must call syncComposerSeedClass'
   );
   // Browser form-restore race: pageshow re-sync.
   assert.ok(
