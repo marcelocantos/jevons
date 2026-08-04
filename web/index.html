@@ -4507,9 +4507,9 @@ function rewindAndResend() {
   requestAnimationFrame(() => { scrollDown(); });
 }
 
-// 🎯T227: owner bubbles in #messages (WS + progressive hydrate). Progressive
-// hydrate paints via renderFrames without pushing msgHistory — DOM is the
-// durable product view when memory desyncs.
+// 🎯T227 / 🎯T235: owner bubbles in #messages (WS + progressive hydrate).
+// Progressive hydrate paints via renderFrames without pushing msgHistory —
+// DOM is the durable product view when memory desyncs.
 function collectDomOwnerEntries() {
   const nodes = msgs ? msgs.querySelectorAll('.msg.user') : [];
   if (typeof ComposerKeys !== 'undefined' && ComposerKeys.ownerEntriesFromUserNodes) {
@@ -4517,8 +4517,15 @@ function collectDomOwnerEntries() {
   }
   const out = [];
   for (const el of nodes) {
-    const text = el._layoutText != null ? String(el._layoutText) : '';
-    if (text) out.push({ text: text, el: el });
+    // Prefer non-empty _layoutText; fall back to body (not outer textContent —
+    // timestamp chrome lives outside .msg-body).
+    let text = '';
+    if (el._layoutText != null && String(el._layoutText).length) {
+      text = String(el._layoutText);
+    } else if (el._body && el._body.textContent) {
+      text = String(el._body.textContent);
+    }
+    if (text && String(text).trim()) out.push({ text: text, el: el });
   }
   return out;
 }
@@ -4535,50 +4542,71 @@ function rebuildMsgHistoryFromDomIfNeeded() {
   }
 }
 
-// 🎯T132 / 🎯T227: Alt+Enter on an empty composer seeds the box with the most
-// recent owner message as an interjection/edit draft.
-// Prefers msgHistory; falls back to DOM `.msg.user` when history is empty
-// (product break: progressive hydrate / desync → silent no-op).
+// 🎯T132 / 🎯T227 / 🎯T235: Alt+Enter on an empty/seed-only composer seeds the
+// box with the most recent owner message as an interjection/edit draft.
+// Product path uses ComposerKeys.planPopLastOwner (resolve + resync without
+// clobbering DOM text with empty hist tail). Fail loud when owner bubbles
+// exist but pop cannot load (silent no-op is not acceptable — 🎯T235).
 // Returns true when a message was loaded.
 function popLastOwnerAsInterjection() {
   const domEntries = collectDomOwnerEntries();
-  let entry = null;
-  if (typeof ComposerKeys !== 'undefined' && ComposerKeys.resolveLastOwnerEntry) {
-    entry = ComposerKeys.resolveLastOwnerEntry(msgHistory, domEntries);
-  } else if (typeof ComposerKeys !== 'undefined' && ComposerKeys.lastOwnerHistoryEntry) {
-    entry = ComposerKeys.lastOwnerHistoryEntry(msgHistory);
-    if (!entry || !entry.text) entry = ComposerKeys.lastOwnerHistoryEntry(domEntries);
-  } else if (msgHistory.length) {
-    entry = {
-      text: msgHistory[msgHistory.length - 1].text,
-      index: msgHistory.length - 1,
-      el: msgHistory[msgHistory.length - 1].el,
-    };
-  } else if (domEntries.length) {
-    entry = {
-      text: domEntries[domEntries.length - 1].text,
-      index: domEntries.length - 1,
-      el: domEntries[domEntries.length - 1].el,
-    };
-  }
-  if (!entry || !entry.text) return false;
-  // Resync memory when we had to lean on DOM so histIdx / Alt+Up stay coherent.
-  if (entry.source === 'dom' || !msgHistory.length) {
-    rebuildMsgHistoryFromDomIfNeeded();
-    if (msgHistory.length) {
+  let plan = null;
+  if (typeof ComposerKeys !== 'undefined' && ComposerKeys.planPopLastOwner) {
+    plan = ComposerKeys.planPopLastOwner(msgHistory, domEntries);
+  } else {
+    // Legacy fallback if planPopLastOwner missing (older script cache).
+    let entry = null;
+    if (typeof ComposerKeys !== 'undefined' && ComposerKeys.resolveLastOwnerEntry) {
+      entry = ComposerKeys.resolveLastOwnerEntry(msgHistory, domEntries);
+    } else if (msgHistory.length) {
       entry = {
         text: msgHistory[msgHistory.length - 1].text,
         index: msgHistory.length - 1,
         el: msgHistory[msgHistory.length - 1].el,
       };
+    } else if (domEntries.length) {
+      entry = {
+        text: domEntries[domEntries.length - 1].text,
+        index: domEntries.length - 1,
+        el: domEntries[domEntries.length - 1].el,
+      };
     }
+    if (entry && entry.text) {
+      plan = {
+        ok: true,
+        text: entry.text,
+        el: entry.el,
+        index: entry.index,
+        history: null,
+        failLoud: false,
+      };
+    } else {
+      plan = {
+        ok: false,
+        failLoud: !!(domEntries.length || msgHistory.length),
+        reason: 'resolve_miss',
+      };
+    }
+  }
+  if (!plan || !plan.ok || !plan.text) {
+    // 🎯T235: fail loud when owner bubbles exist — never silent miss.
+    if (plan && plan.failLoud && typeof addStatusMsg === 'function') {
+      addStatusMsg('Could not load last owner message into composer.');
+    }
+    return false;
+  }
+  // Apply resynced history when the plan rebuilt it (DOM longer / DOM source).
+  if (plan.history && plan.history.length) {
+    msgHistory = plan.history;
+  } else if (!msgHistory.length && domEntries.length) {
+    rebuildMsgHistoryFromDomIfNeeded();
   }
   liveDraftBackup = '';
   histDraft = '';
-  histIdx = entry.index;
-  navFocus = { zone: 'history', index: entry.index };
-  input.value = entry.text || '';
-  setEditingHighlight(entry.el || null);
+  histIdx = typeof plan.index === 'number' ? plan.index : (msgHistory.length - 1);
+  navFocus = { zone: 'history', index: histIdx };
+  input.value = plan.text || '';
+  setEditingHighlight(plan.el || null);
   if (typeof syncComposerSeedClass === 'function') syncComposerSeedClass();
   autoGrow();
   try {
@@ -4775,19 +4803,33 @@ function autoGrow() {
 // (EMPTY_SEED, bare ".", ZWSP-only, partial thrash) counts as empty, not
 // !input.value / trim-only (those treat the hidden seed as a real draft).
 input.addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
+  // 🎯T235: treat Enter by key or code (macOS Option+Enter can leave key
+  // non-"Enter" while code is still Enter). Alt via altKey or Alt modifier.
+  const enterByCode = e.code === 'Enter' || e.code === 'NumpadEnter';
+  const isEnter = e.key === 'Enter' || enterByCode;
+  if (isEnter) {
     const composerEmpty = (typeof WisprContext !== 'undefined' && WisprContext.isEffectivelyEmpty)
       ? WisprContext.isEffectivelyEmpty(input.value)
       : !String(input.value || '').trim();
+    // Option/Alt: some layouts set altKey false but getModifierState('Alt').
+    const altHeld = !!(e.altKey || (typeof e.getModifierState === 'function' && e.getModifierState('Alt')));
+    const mods = {
+      shiftKey: !!e.shiftKey,
+      ctrlKey: !!e.ctrlKey,
+      altKey: altHeld,
+      metaKey: !!e.metaKey,
+      code: e.code,
+    };
     const action = (typeof ComposerKeys !== 'undefined' && ComposerKeys.classifyEnterAction)
-      ? ComposerKeys.classifyEnterAction(e.key, e, { composerEmpty: composerEmpty })
-      : (e.shiftKey ? 'newline'
-        : (e.ctrlKey ? 'interrupt'
-          : (e.altKey ? (composerEmpty ? 'pop_last' : 'noop') : 'send')));
+      ? ComposerKeys.classifyEnterAction(e.key, mods, { composerEmpty: composerEmpty, code: e.code })
+      : (mods.shiftKey ? 'newline'
+        : (mods.ctrlKey ? 'interrupt'
+          : (mods.altKey ? (composerEmpty ? 'pop_last' : 'noop') : 'send')));
     if (action === 'newline' || action == null) return; // Shift+Enter → native newline
     e.preventDefault();
     if (action === 'noop') return; // non-empty Alt+Enter: do not send (Firefox-safe)
     if (action === 'pop_last') {
+      // 🎯T235: fail loud inside pop when owner bubbles exist but resolve miss.
       popLastOwnerAsInterjection();
       return;
     }

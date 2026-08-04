@@ -490,6 +490,178 @@ test('T132 index.html wires Ctrl+Enter interrupt and Alt+Enter pop_last', functi
   );
 });
 
+// ── 🎯T235 product-path re-break (anti-greenwash) ───────────────────
+// Prior stack (T132/T192/T227) stayed hermetic-green while daily UI still
+// missed empty Alt+Enter. Cover: code-Enter fallback, clobber-after-rebuild,
+// empty _layoutText fallthrough, DOM-longer prefer, failLoud, index wiring.
+
+test('T235 isEnterKey / classify: code Enter when key is not Enter (Option+Enter)', function () {
+  assert.strictEqual(typeof CK.isEnterKey, 'function');
+  assert.ok(CK.isEnterKey('Enter', {}));
+  assert.ok(CK.isEnterKey('', { code: 'Enter' }), 'code Enter counts');
+  assert.ok(CK.isEnterKey(null, { code: 'NumpadEnter' }));
+  assert.ok(!CK.isEnterKey('a', { code: 'KeyA' }));
+  // Product: key may be wrong/empty while code is Enter + alt → pop_last.
+  assert.strictEqual(
+    CK.classifyEnterAction('', { altKey: true, code: 'Enter' }, {
+      composerEmpty: true,
+      code: 'Enter',
+    }),
+    'pop_last',
+    'Option+Enter via code must pop when empty'
+  );
+  assert.strictEqual(
+    CK.classifyEnterAction('Dead', { altKey: true, code: 'Enter' }, {
+      composerEmpty: WC.isEffectivelyEmpty(WC.EMPTY_SEED),
+      code: 'Enter',
+    }),
+    'pop_last'
+  );
+  assert.strictEqual(
+    CK.classifyEnterAction('', { altKey: true, code: 'Enter' }, {
+      composerEmpty: false,
+      code: 'Enter',
+    }),
+    'noop',
+    'non-empty draft still noop'
+  );
+});
+
+test('T235 lastOwnerHistoryEntry skips trailing empty stubs', function () {
+  const last = CK.lastOwnerHistoryEntry([
+    { text: 'keep me', el: 1 },
+    { text: '', el: 2 },
+    { text: null, el: 3 },
+  ]);
+  assert.ok(last);
+  assert.strictEqual(last.text, 'keep me');
+  assert.strictEqual(last.index, 0);
+});
+
+test('T235 resolve: DOM longer than hist prefers DOM last (hydrate ahead)', function () {
+  const hist = [{ text: 'stale-tail-only-in-memory', el: 'h' }];
+  const dom = [
+    { text: 'older', el: 'a' },
+    { text: 'true most recent painted', el: 'b' },
+  ];
+  const r = CK.resolveLastOwnerEntry(hist, dom);
+  assert.ok(r);
+  assert.strictEqual(r.source, 'dom');
+  assert.strictEqual(r.text, 'true most recent painted');
+});
+
+test('T235 ownerEntriesFromUserNodes: empty _layoutText falls through to _body', function () {
+  const nodes = [
+    { _layoutText: '', _body: { textContent: 'visible body after dematerialize miss' }, textContent: '2m ago' },
+    { _layoutText: 'has layout', _body: { textContent: 'ignored' } },
+  ];
+  const entries = CK.ownerEntriesFromUserNodes(nodes);
+  assert.strictEqual(entries.length, 2);
+  assert.strictEqual(entries[0].text, 'visible body after dematerialize miss');
+  assert.strictEqual(entries[1].text, 'has layout');
+});
+
+test('T235 planPopLastOwner: empty hist + DOM → ok with text (T227 path)', function () {
+  assert.strictEqual(typeof CK.planPopLastOwner, 'function');
+  const plan = CK.planPopLastOwner([], [
+    { text: 'older', el: 1 },
+    { text: 'MOST RECENT OWNER TO POP', el: 2 },
+  ]);
+  assert.ok(plan.ok, 'must succeed');
+  assert.strictEqual(plan.text, 'MOST RECENT OWNER TO POP');
+  assert.strictEqual(plan.source, 'dom');
+  assert.ok(plan.history && plan.history.length === 2);
+});
+
+test('T235 planPopLastOwner: never clobber DOM text with empty hist tail', function () {
+  // Prior product bug: resolve found DOM text (hist only empty stubs),
+  // rebuild no-op (hist.length >= dom.length), then entry overwritten with
+  // empty hist last → silent miss. planPopLastOwner must keep DOM text.
+  const hist = [
+    { text: '', el: 1 },
+    { text: '', el: 2 },
+    { text: '', el: 3 },
+  ];
+  const dom = [{ text: 'only painted owner', el: 9 }];
+  const plan = CK.planPopLastOwner(hist, dom);
+  assert.ok(plan.ok, 'must not clobber: ' + JSON.stringify(plan));
+  assert.strictEqual(plan.text, 'only painted owner');
+  assert.ok(plan.text.length > 0);
+  // Resynced history must not reintroduce empty-only tail as the load text.
+  assert.ok(plan.history && plan.history.some(function (e) {
+    return e.text === 'only painted owner';
+  }));
+});
+
+test('T235 planPopLastOwner: seed empty + Alt+Enter product path end-to-end pure', function () {
+  const composerEmpty = WC.isEffectivelyEmpty(WC.EMPTY_SEED);
+  assert.ok(composerEmpty);
+  const action = CK.classifyEnterAction('Enter', { altKey: true }, {
+    composerEmpty: composerEmpty,
+  });
+  assert.strictEqual(action, 'pop_last');
+  // Hydrate shells without msgHistory (nodes → entries → plan).
+  const nodes = [
+    { _layoutText: 'first owner', textContent: 'x' },
+    { _layoutText: '', _body: { textContent: 'last owner via body' } },
+  ];
+  const dom = CK.ownerEntriesFromUserNodes(nodes);
+  const plan = CK.planPopLastOwner([], dom);
+  assert.ok(plan.ok);
+  assert.strictEqual(plan.text, 'last owner via body');
+});
+
+test('T235 planPopLastOwner: failLoud when bubbles exist but unresolvable', function () {
+  // All empty texts — bubbles counted via hist stubs / empty dom skip.
+  const plan = CK.planPopLastOwner(
+    [{ text: '' }, { text: '' }],
+    []
+  );
+  // hist stubs have no text → bubbleCount 0 from hist filter, dom empty
+  // → no_owner silent. Use dom with empty-only nodes via plan after collect.
+  const plan2 = CK.planPopLastOwner([], [{ text: '', el: 1 }]);
+  // empty text filtered by lastOwner — bubbleCount from dom.length is 1
+  // but lastOwnerHistoryEntry returns null for empty text entries.
+  // planPopLastOwner counts dom.length for bubbleCount:
+  assert.strictEqual(plan2.ok, false);
+  assert.strictEqual(plan2.failLoud, true, 'must fail loud when dom entries present');
+  assert.ok(plan2.reason === 'resolve_miss' || plan2.reason === 'no_owner');
+
+  const quiet = CK.planPopLastOwner([], []);
+  assert.strictEqual(quiet.ok, false);
+  assert.strictEqual(quiet.failLoud, false, 'no bubbles → quiet miss OK');
+});
+
+test('T235 planPopLastOwner: non-empty draft path stays noop (no accidental send)', function () {
+  assert.strictEqual(
+    CK.classifyEnterAction('Enter', { altKey: true }, {
+      composerEmpty: WC.isEffectivelyEmpty('real draft still here'),
+    }),
+    'noop'
+  );
+});
+
+test('T235 index.html wires planPopLastOwner, failLoud, code/Alt Option+Enter', function () {
+  const htmlPath = path.join(__dirname, '..', 'index.html');
+  const html = fs.readFileSync(htmlPath, 'utf8');
+  assert.ok(html.includes('planPopLastOwner'), 'must call planPopLastOwner on product path');
+  assert.ok(html.includes('failLoud') || /Could not load last owner/.test(html),
+    'must fail loud (status msg) when pop misses with bubbles');
+  assert.ok(html.includes('addStatusMsg'), 'fail loud via addStatusMsg');
+  assert.ok(
+    /getModifierState\s*\(\s*['"]Alt['"]\s*\)/.test(html) || /altHeld/.test(html),
+    'must detect Option/Alt via getModifierState or altHeld'
+  );
+  assert.ok(
+    /code\s*===\s*['"]Enter['"]/.test(html) || /e\.code/.test(html),
+    'must consider e.code for Enter (macOS Option+Enter)'
+  );
+  assert.ok(
+    /composerEmpty[\s\S]{0,200}isEffectivelyEmpty/.test(html),
+    'seed-empty still via isEffectivelyEmpty'
+  );
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);

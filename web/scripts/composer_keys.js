@@ -189,15 +189,30 @@
   // Wispr seed-only). Caller passes WisprContext.isEffectivelyEmpty.
 
   /**
+   * True when this keydown is Enter (incl. NumpadEnter / code fallback).
+   * 🎯T235: macOS Option+Enter sometimes leaves key non-"Enter" while
+   * code stays Enter — pure `key === 'Enter'` then never reached pop_last.
    * @param {string} key
-   * @param {{ metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean, shiftKey?: boolean }} mods
-   * @param {{ composerEmpty?: boolean }} [opts]
+   * @param {{ code?: string }} [opts]
+   */
+  function isEnterKey(key, opts) {
+    if (key === 'Enter') return true;
+    const code = opts && opts.code != null ? String(opts.code) : '';
+    return code === 'Enter' || code === 'NumpadEnter';
+  }
+
+  /**
+   * @param {string} key
+   * @param {{ metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean, shiftKey?: boolean, code?: string }} mods
+   * @param {{ composerEmpty?: boolean, code?: string }} [opts]
    * @returns {'newline'|'send'|'interrupt'|'pop_last'|'noop'|null}
    */
   function classifyEnterAction(key, mods, opts) {
-    if (key !== 'Enter') return null;
     const m = mods || {};
     const o = opts || {};
+    // Prefer explicit opts.code; fall back to mods.code (KeyboardEvent).
+    const code = o.code != null ? o.code : m.code;
+    if (!isEnterKey(key, { code: code })) return null;
     if (m.shiftKey) return 'newline';
 
     // Ctrl+Enter wins as immediate-send even if other modifiers are held
@@ -206,6 +221,8 @@
 
     // Alt+Enter (no Ctrl): empty → pop last owner message; non-empty → noop.
     // Avoids Firefox Alt+Enter collisions on the send/interject path.
+    // 🎯T235: also treat altGraphKey / getModifierState('Alt') via mods.altKey
+    // (callers may set altKey from e.altKey || e.getModifierState('Alt')).
     if (m.altKey) {
       return o.composerEmpty ? 'pop_last' : 'noop';
     }
@@ -221,29 +238,52 @@
    */
   function lastOwnerHistoryEntry(history) {
     if (!history || !history.length) return null;
-    const index = history.length - 1;
-    const entry = history[index];
-    if (!entry) return null;
-    const text = entry.text == null ? '' : String(entry.text);
-    return { text: text, index: index, el: entry.el };
+    // Prefer last non-empty text (trailing empty stubs must not win).
+    for (let i = history.length - 1; i >= 0; i--) {
+      const entry = history[i];
+      if (!entry) continue;
+      const text = entry.text == null ? '' : String(entry.text);
+      if (!text) continue;
+      return { text: text, index: i, el: entry.el };
+    }
+    return null;
   }
 
   /**
-   * 🎯T227: product-path last-owner resolve for Alt+Enter pop.
+   * 🎯T227 / 🎯T235: product-path last-owner resolve for Alt+Enter pop.
    *
    * Prefer in-memory msgHistory (WS replay + live user turns). When that is
    * empty or has no text (progressive hydrate paints `.msg.user` into the DOM
    * without pushing msgHistory; soft-reconnect / desync can leave the same
    * hole), fall back to chronological DOM-derived entries so empty Alt+Enter
-   * still seeds the last owner bubble. Pure classifier alone never saw this —
-   * classifyEnterAction stayed green while pop_last was a silent no-op.
+   * still seeds the last owner bubble.
+   *
+   * 🎯T235: when DOM has *more* owner entries than history (hydrate ahead of
+   * memory), prefer DOM last — history may hold a stale tail that is not the
+   * painted most-recent owner. Pure classifyEnterAction alone never saw this.
    *
    * @param {Array<{text?: string, el?: *}>|null|undefined} history
    * @param {Array<{text?: string, el?: *}>|null|undefined} domEntries chronological owner bubbles
    * @returns {{ text: string, index: number, el: *, source: 'history'|'dom' }|null}
    */
   function resolveLastOwnerEntry(history, domEntries) {
-    const fromHist = lastOwnerHistoryEntry(history);
+    const hist = Array.isArray(history) ? history : [];
+    const dom = Array.isArray(domEntries) ? domEntries : [];
+
+    // Hydrate-ahead: DOM is the durable product view when longer than memory.
+    if (dom.length > hist.length) {
+      const fromDomFirst = lastOwnerHistoryEntry(dom);
+      if (fromDomFirst && fromDomFirst.text) {
+        return {
+          text: fromDomFirst.text,
+          index: fromDomFirst.index,
+          el: fromDomFirst.el,
+          source: 'dom',
+        };
+      }
+    }
+
+    const fromHist = lastOwnerHistoryEntry(hist);
     if (fromHist && fromHist.text) {
       return {
         text: fromHist.text,
@@ -252,7 +292,7 @@
         source: 'history',
       };
     }
-    const fromDom = lastOwnerHistoryEntry(domEntries);
+    const fromDom = lastOwnerHistoryEntry(dom);
     if (fromDom && fromDom.text) {
       return {
         text: fromDom.text,
@@ -267,7 +307,9 @@
   /**
    * Build [{text, el}] from owner bubble nodes (product: `.msg.user` with
    * `_layoutText`). Filters empty text. Order preserved (chronological DOM).
-   * @param {Array<{_layoutText?: *, textContent?: *}>|null|undefined} nodes
+   * 🎯T235: empty-string `_layoutText` must fall through to `_body` / content
+   * (prior code treated '' as set and skipped visible body text → silent miss).
+   * @param {Array<{_layoutText?: *, textContent?: *, _body?: {textContent?: *}}>|null|undefined} nodes
    * @returns {Array<{text: string, el: *}>}
    */
   function ownerEntriesFromUserNodes(nodes) {
@@ -277,12 +319,101 @@
       const el = list[i];
       if (!el) continue;
       let text = '';
-      if (el._layoutText != null) text = String(el._layoutText);
-      else if (el.textContent != null) text = String(el.textContent);
-      if (!text) continue;
+      if (el._layoutText != null && String(el._layoutText).length) {
+        text = String(el._layoutText);
+      } else if (el._body && el._body.textContent != null && String(el._body.textContent).length) {
+        // Prefer body over outer textContent (timestamp chrome lives outside body).
+        text = String(el._body.textContent);
+      } else if (el._layoutText == null && el.textContent != null) {
+        text = String(el.textContent);
+      }
+      if (!text || !String(text).trim()) continue;
       out.push({ text: text, el: el });
     }
     return out;
+  }
+
+  /**
+   * 🎯T235: full product-path plan for empty Alt+Enter pop.
+   *
+   * Resolves last owner text, resyncs history from DOM when needed, and
+   * **never clobbers** a good resolved entry with an empty hist tail after a
+   * no-op rebuild (prior greenwash: resolve found DOM text → rebuild skipped
+   * because hist.length >= dom.length with empty stubs → overwrite → false).
+   *
+   * @param {Array<{text?: string, el?: *}>|null|undefined} history
+   * @param {Array<{text?: string, el?: *}>|null|undefined} domEntries
+   * @returns {{
+   *   ok: boolean,
+   *   text?: string,
+   *   el?: *,
+   *   index?: number,
+   *   source?: 'history'|'dom',
+   *   history?: Array<{text: string, el: *}>,
+   *   failLoud?: boolean,
+   *   reason?: string,
+   *   bubbleCount?: number
+   * }}
+   */
+  function planPopLastOwner(history, domEntries) {
+    const hist = Array.isArray(history) ? history : [];
+    const dom = Array.isArray(domEntries) ? domEntries : [];
+    let bubbleCount = 0;
+    for (let i = 0; i < hist.length; i++) {
+      if (hist[i] && hist[i].text) bubbleCount++;
+    }
+    if (dom.length > bubbleCount) bubbleCount = dom.length;
+
+    const entry = resolveLastOwnerEntry(hist, dom);
+    if (!entry || !entry.text) {
+      return {
+        ok: false,
+        failLoud: bubbleCount > 0,
+        reason: bubbleCount > 0 ? 'resolve_miss' : 'no_owner',
+        bubbleCount: bubbleCount,
+      };
+    }
+
+    // Resync memory: DOM wins when longer or when we resolved from DOM.
+    // Always copy DOM when it is the longer/equal source of truth so Alt+Up
+    // shares the same stack — but never replace entry.text with empty tail.
+    let nextHist = hist.slice();
+    if (dom.length && (entry.source === 'dom' || !hist.length || hist.length < dom.length)) {
+      nextHist = dom.map(function (e) {
+        return { text: e.text, el: e.el };
+      });
+    }
+
+    let index = entry.index;
+    let el = entry.el;
+    // Re-point index/el at nextHist tail when it still carries the same text.
+    if (nextHist.length) {
+      const last = nextHist[nextHist.length - 1];
+      if (last && last.text === entry.text) {
+        index = nextHist.length - 1;
+        el = last.el;
+      } else {
+        // Keep resolved text; find last matching entry for highlight.
+        for (let i = nextHist.length - 1; i >= 0; i--) {
+          if (nextHist[i] && nextHist[i].text === entry.text) {
+            index = i;
+            el = nextHist[i].el;
+            break;
+          }
+        }
+      }
+    }
+
+    // Guard: if nextHist last is empty/wrong, still return the resolved text.
+    return {
+      ok: true,
+      text: entry.text,
+      el: el,
+      index: index,
+      source: entry.source,
+      history: nextHist,
+      bubbleCount: bubbleCount,
+    };
   }
 
   return {
@@ -297,9 +428,11 @@
     defaultIsJumpToBottomHotkey: defaultIsJumpToBottomHotkey,
     // 🎯T132
     classifyEnterAction: classifyEnterAction,
+    isEnterKey: isEnterKey,
     lastOwnerHistoryEntry: lastOwnerHistoryEntry,
-    // 🎯T227
+    // 🎯T227 / 🎯T235
     resolveLastOwnerEntry: resolveLastOwnerEntry,
     ownerEntriesFromUserNodes: ownerEntriesFromUserNodes,
+    planPopLastOwner: planPopLastOwner,
   };
 }));
