@@ -1127,8 +1127,13 @@ func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop
 //	JEVONS_RSI_INTERVAL   — duration (default 30m); "0" or negative disables ticker
 //	JEVONS_RSI_MINT_CWD   — bullseye repo to file into (default: discover product repo)
 //	JEVONS_RSI_DRY_RUN    — "1"/"true" extract only, never file
-//	JEVONS_RSI_NO_CHAT    — "1" skip owner-chatlog deeper surface (🎯T92.2)
-//	JEVONS_RSI_NO_SESSION — "1" skip session-transcript deeper surface (🎯T92.2)
+//	JEVONS_RSI_DEEPER     — "1" enable T92.2 phrase-list mint from owner chatlog +
+//	                        session transcripts (default OFF until 🎯T243 coach design;
+//	                        fixed-phrase mint flooded the frontier with noise leaves)
+//	JEVONS_RSI_NO_CHAT    — when DEEPER is on: "1" skip owner-chatlog surface
+//	JEVONS_RSI_NO_SESSION — when DEEPER is on: "1" skip session-transcript surface
+//
+// Eventlog lifecycle mint (T92.1 thin path) still runs unless DRY_RUN / no mint cwd.
 func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Loop {
 	interval := rsi.DefaultInterval
 	if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_INTERVAL")); v != "" {
@@ -1149,13 +1154,18 @@ func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.S
 	case "1", "true", "yes", "on":
 		dry = true
 	}
+	// 🎯T243 interim: phrase/deeper mint is opt-in. Default off so ambient
+	// does not re-file T169-style friction noise while the coach design lands.
+	deeper := envTruthy("JEVONS_RSI_DEEPER")
 	chatLogPath := ""
-	if !envTruthy("JEVONS_RSI_NO_CHAT") {
-		chatLogPath = filepath.Join(cfg.StateDir, "chatlog", cfg.OverseerName+".jsonl")
-	}
 	sessionsDir := ""
-	if !envTruthy("JEVONS_RSI_NO_SESSION") {
-		sessionsDir = strings.TrimSpace(cfg.SessionsDir)
+	if deeper {
+		if !envTruthy("JEVONS_RSI_NO_CHAT") {
+			chatLogPath = filepath.Join(cfg.StateDir, "chatlog", cfg.OverseerName+".jsonl")
+		}
+		if !envTruthy("JEVONS_RSI_NO_SESSION") {
+			sessionsDir = strings.TrimSpace(cfg.SessionsDir)
+		}
 	}
 	loop, err := rsi.NewLoop(rsi.LoopArgs{
 		StateDir:    cfg.StateDir,
@@ -1175,6 +1185,7 @@ func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.S
 		"interval", interval.String(),
 		"mint_cwd", mintCwd,
 		"dry_run", dry,
+		"deeper_phrase_mint", deeper,
 		"chatlog", chatLogPath != "",
 		"sessions", sessionsDir != "",
 		"ledger", "state_dir/rsi/minted.json",
