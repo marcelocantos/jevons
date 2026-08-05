@@ -21,6 +21,8 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+
+	"golang.org/x/image/draw"
 )
 
 // ImageThumbMaxEdge is the longest side (px) for browser-delivered thumbs (🎯T224).
@@ -227,7 +229,9 @@ func (s *Server) writeThumbFromFull(id, fullPath string) error {
 }
 
 // resizeMaxEdge returns img scaled so max(width,height) <= maxEdge.
-// Nearest-neighbour; good enough for chat thumbs (no new deps).
+// Catmull-Rom (cubic) resampling — not nearest-neighbour (🎯T256).
+// Existing on-disk thumbs under images/thumbs/ stay old until re-upload
+// or lazy re-generation after delete; new uploads and lazy GET regenerate.
 func resizeMaxEdge(img image.Image, maxEdge int) image.Image {
 	if maxEdge <= 0 {
 		return img
@@ -253,13 +257,7 @@ func resizeMaxEdge(img image.Image, maxEdge int) image.Image {
 		nh = 1
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
-	for y := 0; y < nh; y++ {
-		sy := b.Min.Y + y*h/nh
-		for x := 0; x < nw; x++ {
-			sx := b.Min.X + x*w/nw
-			dst.Set(x, y, img.At(sx, sy))
-		}
-	}
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Src, nil)
 	return dst
 }
 

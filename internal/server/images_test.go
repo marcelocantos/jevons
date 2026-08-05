@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"image"
+	"image/color"
 	"image/png"
 	"io"
 	"mime/multipart"
@@ -250,5 +251,48 @@ func TestImageMarkerAndURLs(t *testing.T) {
 	}
 	if ImageFullURL(id) != "/api/images/0123456789abcdef" {
 		t.Fatal(ImageFullURL(id))
+	}
+}
+
+// 🎯T256: downscale must not be pure nearest-neighbour.
+// Sharp black|white edge: NN keeps only 0/255; Catmull-Rom/bilinear
+// produces intermediate samples near the seam.
+func TestResizeMaxEdgeNotNearestNeighbour(t *testing.T) {
+	const w, h = 640, 40
+	src := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if x < w/2 {
+				src.Set(x, y, color.RGBA{0, 0, 0, 255})
+			} else {
+				src.Set(x, y, color.RGBA{255, 255, 255, 255})
+			}
+		}
+	}
+	out := resizeMaxEdge(src, 80)
+	ob := out.Bounds()
+	if ob.Dx() != 80 || ob.Dy() != 5 {
+		t.Fatalf("size got %dx%d want 80x5", ob.Dx(), ob.Dy())
+	}
+	inter := 0
+	for y := ob.Min.Y; y < ob.Max.Y; y++ {
+		for x := ob.Min.X; x < ob.Max.X; x++ {
+			r, _, _, _ := out.At(x, y).RGBA()
+			lv := int(r >> 8)
+			if lv > 8 && lv < 247 {
+				inter++
+			}
+		}
+	}
+	if inter == 0 {
+		t.Fatal("downscale produced only pure black/white; want intermediate samples (not nearest-neighbour)")
+	}
+}
+
+func TestResizeMaxEdgeNoOpWhenWithinMax(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 100, 80))
+	out := resizeMaxEdge(src, ImageThumbMaxEdge)
+	if out.Bounds() != src.Bounds() {
+		t.Fatalf("expected unchanged bounds, got %v", out.Bounds())
 	}
 }
