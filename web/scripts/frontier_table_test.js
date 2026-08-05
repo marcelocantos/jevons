@@ -484,6 +484,168 @@ test('playKickoffRequest messages jevons-po with full brief (🎯T182)', functio
   assert.strictEqual(FT.buildPlayKickoffText({}), '');
 });
 
+// 🎯T255: resolvePlayPO binds to selected product PO (not hard-coded jevons-po).
+test('T255 resolvePlayPO selected PO / worker parent / residual default', function () {
+  assert.strictEqual(typeof FT.resolvePlayPO, 'function');
+  assert.strictEqual(typeof FT.isProductOwnerName, 'function');
+  assert.strictEqual(typeof FT.playKickoffTitle, 'function');
+  assert.strictEqual(FT.isProductOwnerName('yourworld2-po'), true);
+  assert.strictEqual(FT.isProductOwnerName('jevons-po'), true);
+  assert.strictEqual(FT.isProductOwnerName('jv-t44.1-worker'), false);
+  assert.strictEqual(FT.isProductOwnerName('jevons'), false);
+  assert.strictEqual(FT.isProductOwnerName(''), false);
+
+  const agents = [
+    { name: 'jevons', purpose: 'overseer', workdir: '/Users/x/.jevons/jevons' },
+    {
+      name: 'jevons-po',
+      purpose: 'work',
+      parent: 'jevons',
+      workdir: '/Users/x/work/github.com/marcelocantos/jevons',
+    },
+    {
+      name: 'yourworld2-po',
+      purpose: 'work',
+      parent: 'jevons',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    {
+      name: 'yw2-worker',
+      purpose: 'work',
+      parent: 'yourworld2-po',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    {
+      name: 'jv-worker',
+      purpose: 'work',
+      parent: 'jevons-po',
+      workdir: '/Users/x/work/github.com/marcelocantos/jevons',
+    },
+    {
+      name: 'yw2-boss',
+      purpose: 'work',
+      parent: 'yourworld2-po',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    {
+      name: 'yw2-leaf',
+      purpose: 'work',
+      parent: 'yw2-boss',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+  ];
+
+  // No selection / overseer → residual default jevons-po.
+  assert.strictEqual(FT.resolvePlayPO(), 'jevons-po');
+  assert.strictEqual(FT.resolvePlayPO({}), 'jevons-po');
+  assert.strictEqual(FT.resolvePlayPO({ selectedAgent: null, agents: agents }), 'jevons-po');
+  assert.strictEqual(FT.resolvePlayPO({ selectedAgent: '', agents: agents }), 'jevons-po');
+  assert.strictEqual(FT.resolvePlayPO({ selectedAgent: 'jevons', agents: agents }), 'jevons-po');
+
+  // Selected is product owner → that PO.
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'yourworld2-po', agents: agents }),
+    'yourworld2-po');
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'jevons-po', agents: agents }),
+    'jevons-po');
+
+  // Selected worker → parent PO.
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'yw2-worker', agents: agents }),
+    'yourworld2-po');
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'jv-worker', agents: agents }),
+    'jevons-po');
+
+  // Walk parent chain (leaf → boss → PO).
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'yw2-leaf', agents: agents }),
+    'yourworld2-po');
+
+  // Explicit po override wins.
+  assert.strictEqual(
+    FT.resolvePlayPO({
+      po: 'explicit-po',
+      selectedAgent: 'yourworld2-po',
+      agents: agents,
+    }),
+    'explicit-po');
+
+  // Dual-agent fixture: playKickoffRequest hits selected product PO, not jevons-po.
+  const ywReq = FT.playKickoffRequest(
+    { id: 'T44.1', name: 'Externalize overseer prompt', status: 'Converging' },
+    { selectedAgent: 'yourworld2-po', agents: agents }
+  );
+  assert.strictEqual(ywReq.blocked, false);
+  assert.strictEqual(ywReq.po, 'yourworld2-po');
+  assert.strictEqual(ywReq.url, '/api/agents/yourworld2-po/send');
+  assert.ok(ywReq.body.text.indexOf('parent=yourworld2-po') >= 0, ywReq.body.text);
+  assert.ok(ywReq.body.text.indexOf('T44.1') >= 0);
+
+  const jvReq = FT.playKickoffRequest(
+    { id: 'T255', name: 'Play PO routing', status: 'Converging' },
+    { selectedAgent: 'jevons-po', agents: agents }
+  );
+  assert.strictEqual(jvReq.po, 'jevons-po');
+  assert.strictEqual(jvReq.url, '/api/agents/jevons-po/send');
+  assert.ok(jvReq.body.text.indexOf('parent=jevons-po') >= 0);
+
+  // Worker selection routes kickoff to parent PO send path.
+  const workerReq = FT.playKickoffRequest(
+    { id: 'T99', name: 'Worker selection', status: 'Converging' },
+    { selectedAgent: 'yw2-worker', agents: agents }
+  );
+  assert.strictEqual(workerReq.po, 'yourworld2-po');
+  assert.strictEqual(workerReq.url, '/api/agents/yourworld2-po/send');
+
+  // Tooltip title shows real recipient.
+  assert.strictEqual(FT.playKickoffTitle('yourworld2-po'), 'Start work via yourworld2-po');
+  assert.strictEqual(FT.playKickoffTitle('jevons-po'), 'Start work via jevons-po');
+  assert.strictEqual(FT.playKickoffTitle(''), 'Start work via jevons-po');
+  assert.strictEqual(FT.playKickoffTitle(null), 'Start work via jevons-po');
+
+  // Name-only (not in list) still honors *-po shape.
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'other-product-po', agents: [] }),
+    'other-product-po');
+});
+
+// 🎯T255: index.html wires selectedAgent into playKickoff + real tooltip recipient.
+test('T255 index.html play path uses resolvePlayPO + selectedAgent', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+
+  // Tooltip not hard-coded to jevons-po alone.
+  assert.ok(html.indexOf("playBtn.title = 'Start work via jevons-po'") < 0,
+    'must not hard-code play tooltip to jevons-po');
+  assert.ok(html.indexOf('playKickoffTitle') >= 0 || html.indexOf('resolvePlayPO') >= 0,
+    'play title uses resolvePlayPO / playKickoffTitle');
+  assert.ok(html.indexOf('data-play-po') >= 0, 'data-play-po on button for probe');
+
+  // playFrontierTarget passes selection + agents into playKickoffRequest.
+  const start = html.indexOf('function playFrontierTarget');
+  assert.ok(start >= 0, 'playFrontierTarget defined');
+  // Include preceding T255 comment block.
+  const regionStart = Math.max(0, start - 200);
+  const end = html.indexOf('\nfunction ', start + 10);
+  const body = html.slice(regionStart, end > start ? end : start + 3500);
+  assert.ok(body.indexOf('selectedAgent') >= 0, 'playFrontierTarget reads selectedAgent');
+  assert.ok(body.indexOf('playKickoffRequest(row, playOpts)') >= 0 ||
+    /playKickoffRequest\s*\(\s*row\s*,/.test(body),
+    'playKickoffRequest receives opts with selection');
+  assert.ok(body.indexOf('T255') >= 0, 'T255 marked on playFrontierTarget');
+  assert.ok(body.indexOf('frontierAgentsCache') >= 0 || body.indexOf('lastFleetAgents') >= 0,
+    'agents list passed for parent-PO walk');
+
+  // Render path sets title from resolvePlayPO.
+  const renderStart = html.indexOf('function renderFrontierTable');
+  assert.ok(renderStart >= 0);
+  const renderEnd = html.indexOf('function loadFrontier', renderStart);
+  const region = html.slice(renderStart, renderEnd > renderStart ? renderEnd : renderStart + 9000);
+  assert.ok(region.indexOf('resolvePlayPO') >= 0, 'render resolves play PO');
+  assert.ok(region.indexOf('selectedAgent') >= 0, 'render uses selectedAgent for play title');
+});
+
 // 🎯T182: CSS tight status/fan + play column + wiring (mockable send path).
 test('T182 tight status/fan CSS + play cell + send path wiring', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');

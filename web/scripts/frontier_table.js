@@ -823,12 +823,100 @@
   var ENGAGEMENT_STOP_PATH = '/api/agents/engagement/stop';
   var AGENTS_API_PATH = '/api/agents';
 
-  // resolvePlayPO — residual multi-PO: default jevons-po for jevons ledger.
+  // Product owners conventionally end with -po (jevons-po, yourworld2-po).
+  function isProductOwnerName(name) {
+    var n = String(name || '').trim().toLowerCase();
+    if (!n || n.length < 4) return false;
+    return n.slice(-3) === '-po';
+  }
+
+  function findAgentByName(agents, name) {
+    var want = String(name || '').trim();
+    if (!want) return null;
+    var list = Array.isArray(agents) ? agents : [];
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (a && String(a.name || '').trim() === want) return a;
+    }
+    return null;
+  }
+
+  // resolvePlayPO — 🎯T255: bind kickoff recipient to selected product PO.
+  // Priority:
+  //   1. explicit opts.po
+  //   2. legacy opts.agent when no selection/agents (direct PO name)
+  //   3. selectedAgent is *-po / product owner → that agent
+  //   4. selected is worker with parent PO in agents list → parent PO (walk up)
+  //   5. selected non-overseer with workdir and *-po sibling/same-path residual:
+  //      if selected itself is non-overseer with workdir and name is PO-shaped, use it
+  //   6. no selection / overseer / unresolved → DEFAULT_PLAY_PO (jevons-po)
   function resolvePlayPO(opts) {
     var o = opts || {};
-    if (o.po) return String(o.po).trim() || DEFAULT_PLAY_PO;
-    if (o.agent) return String(o.agent).trim() || DEFAULT_PLAY_PO;
+    if (o.po != null && String(o.po).trim()) {
+      return String(o.po).trim();
+    }
+
+    var agents = Array.isArray(o.agents) ? o.agents : [];
+    var selected = '';
+    if (o.selectedAgent != null) selected = String(o.selectedAgent).trim();
+    else if (o.selected != null) selected = String(o.selected).trim();
+
+    // Legacy: opts.agent was a direct PO name when no selection wiring existed.
+    if (!selected && agents.length === 0 && o.agent != null && String(o.agent).trim()) {
+      return String(o.agent).trim();
+    }
+    // If caller still passes agent as selection without selectedAgent, accept it.
+    if (!selected && o.agent != null) selected = String(o.agent).trim();
+
+    if (!selected) return DEFAULT_PLAY_PO;
+
+    var row = findAgentByName(agents, selected);
+    if (row) {
+      var purpose = String(row.purpose || row.role || '').trim().toLowerCase();
+      if (purpose === 'overseer') return DEFAULT_PLAY_PO;
+
+      // Selected is a product owner → kickoff that agent.
+      if (isProductOwnerName(row.name)) {
+        return String(row.name).trim();
+      }
+
+      // Worker / boss: walk parent chain for a product owner in the agents list.
+      var seen = {};
+      var cur = row;
+      var hops = 0;
+      while (cur && hops < 16) {
+        hops++;
+        var parentName = String(cur.parent || '').trim();
+        if (!parentName || seen[parentName]) break;
+        seen[parentName] = true;
+        if (isProductOwnerName(parentName)) return parentName;
+        var parentRow = findAgentByName(agents, parentName);
+        if (!parentRow) {
+          // Parent name known but not in list — still honor *-po shape.
+          break;
+        }
+        var pp = String(parentRow.purpose || parentRow.role || '').trim().toLowerCase();
+        if (pp === 'overseer') break;
+        if (isProductOwnerName(parentRow.name)) {
+          return String(parentRow.name).trim();
+        }
+        cur = parentRow;
+      }
+
+      // Non-overseer with workdir but not PO-shaped and no parent PO → residual default.
+      // (Do not POST to a random worker; kickoff must land on a PO.)
+      return DEFAULT_PLAY_PO;
+    }
+
+    // Selection name known but not in agents list: honor *-po shape, else default.
+    if (isProductOwnerName(selected)) return selected;
     return DEFAULT_PLAY_PO;
+  }
+
+  // playKickoffTitle(po) — tooltip / title for the play button (real recipient).
+  function playKickoffTitle(po) {
+    var n = String(po || DEFAULT_PLAY_PO).trim() || DEFAULT_PLAY_PO;
+    return 'Start work via ' + n;
   }
 
   // agentSendPath(name) — product HTTP proxy for fleet agent_send (🎯T182).
@@ -1095,7 +1183,9 @@
     MERMAID_RANK_SPACING: MERMAID_RANK_SPACING,
     MERMAID_WRAPPING_WIDTH: MERMAID_WRAPPING_WIDTH,
     mermaidNodeId: mermaidNodeId,
+    isProductOwnerName: isProductOwnerName,
     resolvePlayPO: resolvePlayPO,
+    playKickoffTitle: playKickoffTitle,
     agentSendPath: agentSendPath,
     canPlayKickoff: canPlayKickoff,
     buildPlayKickoffText: buildPlayKickoffText,

@@ -6439,7 +6439,17 @@ function renderFrontierTable(model) {
         ? FrontierTable.PLAY_GLYPH
         : '\u25B6';
       playBtn.setAttribute('aria-label', 'Start work on 🎯' + (row.id || ''));
-      playBtn.title = 'Start work via jevons-po';
+      // 🎯T255: tooltip shows real kickoff recipient (selected product PO, not hard-coded).
+      const playPO = (typeof FrontierTable !== 'undefined' && FrontierTable.resolvePlayPO)
+        ? FrontierTable.resolvePlayPO({
+            selectedAgent: typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+            agents: agents,
+          })
+        : 'jevons-po';
+      playBtn.title = (typeof FrontierTable !== 'undefined' && FrontierTable.playKickoffTitle)
+        ? FrontierTable.playKickoffTitle(playPO)
+        : ('Start work via ' + playPO);
+      playBtn.setAttribute('data-play-po', playPO);
       playBtn.addEventListener('click', function (ev) {
         if (ev) { ev.preventDefault(); ev.stopPropagation(); }
         playFrontierTarget(row, playBtn);
@@ -6464,22 +6474,34 @@ let frontierAgentsCache = [];
 // 🎯T182: POST product agent-send path so PO spawns/briefs work on the target.
 // Mock seam: window.__frontierAgentSend(url, body) → Promise (hermetic tests).
 // 🎯T222: blocked when engaged / set_aside / achieved — no second kickoff.
+// 🎯T255: kickoff recipient = selected product PO (not hard-coded jevons-po).
 function playFrontierTarget(row, btnEl) {
   if (!row || !row.id) return Promise.resolve(null);
+  const playOpts = {
+    selectedAgent: typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+    agents: (typeof frontierAgentsCache !== 'undefined' && frontierAgentsCache)
+      ? frontierAgentsCache
+      : (typeof lastFleetAgents !== 'undefined' && lastFleetAgents ? lastFleetAgents : []),
+  };
   const req = (typeof FrontierTable !== 'undefined' && FrontierTable.playKickoffRequest)
-    ? FrontierTable.playKickoffRequest(row)
-    : {
-        url: '/api/agents/jevons-po/send',
-        method: 'POST',
-        body: {
-          text: 'Start work on frontier target 🎯' + row.id +
-            (row.name ? (' — ' + row.name) : '') +
-            '.\n\nKick off now: spawn/brief a fleet worker with parent=jevons-po ' +
-            'and target_id=' + row.id +
-            ' (jevons_agent_start target_id — 🎯T198). Do not only toast or acknowledge.',
-        },
-        po: 'jevons-po',
-      };
+    ? FrontierTable.playKickoffRequest(row, playOpts)
+    : (function () {
+        const po = (typeof FrontierTable !== 'undefined' && FrontierTable.resolvePlayPO)
+          ? FrontierTable.resolvePlayPO(playOpts)
+          : 'jevons-po';
+        return {
+          url: '/api/agents/' + encodeURIComponent(po) + '/send',
+          method: 'POST',
+          body: {
+            text: 'Start work on frontier target 🎯' + row.id +
+              (row.name ? (' — ' + row.name) : '') +
+              '.\n\nKick off now: spawn/brief a fleet worker with parent=' + po +
+              ' and target_id=' + row.id +
+              ' (jevons_agent_start target_id — 🎯T198). Do not only toast or acknowledge.',
+          },
+          po: po,
+        };
+      })();
   // 🎯T222: pure gate may return blocked (no body).
   if (req && req.blocked) {
     if (typeof jLog === 'function') {
