@@ -43,6 +43,57 @@ test('shouldMaterialize edge cases', function () {
   assert.strictEqual(VL.shouldMaterialize(5000, 100, 0, 300, 0), false);
 });
 
+// ── 🎯T246: stay expanded while any part on-screen ───────────────────
+
+test('T246 anyPartInViewport: partial overlap stays material', function () {
+  // Fully inside
+  assert.strictEqual(VL.anyPartInViewport(100, 50, 0, 300), true);
+  // Top edge just inside
+  assert.strictEqual(VL.anyPartInViewport(299, 50, 0, 300), true);
+  // Bottom edge just inside (1px above scrollTop still counts)
+  assert.strictEqual(VL.anyPartInViewport(-49, 50, 0, 300), true);
+  // Fully above fold
+  assert.strictEqual(VL.anyPartInViewport(0, 100, 100, 300), false);
+  assert.strictEqual(VL.isFullyAboveViewport(0, 100, 100), true);
+  // Fully below fold
+  assert.strictEqual(VL.anyPartInViewport(400, 50, 0, 300), false);
+  // Zero height at boundary: not intersecting (bot === scrollTop)
+  assert.strictEqual(VL.anyPartInViewport(100, 0, 100, 300), false);
+});
+
+test('T246 shouldAutoCollapseOffScreen: only when fully off-screen, not latest', function () {
+  // Latest never auto-collapses
+  assert.strictEqual(VL.shouldAutoCollapseOffScreen({
+    isLatest: true, autoExpanded: true, userToggled: false,
+    top: 0, height: 100, scrollTop: 500, clientHeight: 300,
+  }), false);
+  // Manual toggle never auto-collapses
+  assert.strictEqual(VL.shouldAutoCollapseOffScreen({
+    isLatest: false, autoExpanded: true, userToggled: true,
+    top: 0, height: 100, scrollTop: 500, clientHeight: 300,
+  }), false);
+  // Not auto-expanded → no auto-collapse action
+  assert.strictEqual(VL.shouldAutoCollapseOffScreen({
+    isLatest: false, autoExpanded: false, userToggled: false,
+    top: 0, height: 100, scrollTop: 500, clientHeight: 300,
+  }), false);
+  // Still partially in viewport → keep expanded
+  assert.strictEqual(VL.shouldAutoCollapseOffScreen({
+    isLatest: false, autoExpanded: true, userToggled: false,
+    top: 250, height: 100, scrollTop: 0, clientHeight: 300,
+  }), false);
+  // Fully above fold → may collapse
+  assert.strictEqual(VL.shouldAutoCollapseOffScreen({
+    isLatest: false, autoExpanded: true, userToggled: false,
+    top: 0, height: 100, scrollTop: 200, clientHeight: 300,
+  }), true);
+  // Fully below fold → may collapse
+  assert.strictEqual(VL.shouldAutoCollapseOffScreen({
+    isLatest: false, autoExpanded: true, userToggled: false,
+    top: 800, height: 100, scrollTop: 0, clientHeight: 300,
+  }), true);
+});
+
 // ── recent-first hydrate ─────────────────────────────────────────────
 
 test('T119 recent-first hydrate lands on latest end', function () {

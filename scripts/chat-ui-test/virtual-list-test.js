@@ -90,31 +90,26 @@ function startServer() {
     if (after.lastShell) failures.push('latest msg should be materialised at bottom');
     if (after.shells < 10) failures.push('still expect off-screen shells at bottom, got ' + after.shells);
 
-    // T77 collapse of a tall prior reply must rematerialise in-view shells
-    // without a user wheel (blank gap above collapsed bubble regression).
+    // Height change after collapse/expand must rematerialise in-view shells
+    // without a user wheel (blank gap regression).
     const afterCollapse = await page.evaluate(async () => {
       const el = document.getElementById('messages');
       if (window.enterTrackBottom) window.enterTrackBottom();
-      // Tall assistant that will become non-latest.
       const tall = Array.from({ length: 60 }, (_, i) => 'Tall reply line ' + i + '.').join('\n\n');
-      window.addMsg('jevons', tall);
+      const prior = window.addMsg('jevons', tall);
       el.scrollTop = el.scrollHeight;
       window.virtualizeMessages();
-      // Dematerialise everything clearly above the fold (simulate long history).
       const all = [...document.querySelectorAll('#messages > .msg')];
       all.forEach((m, i) => {
         if (i < all.length - 3 && !m.classList.contains('virt-shell') && typeof window.dematerializeMsg === 'function') {
-          // Leave a few near the end; force older ones to shells with full height.
           if (m.offsetTop + m.offsetHeight < el.scrollTop - 20) window.dematerializeMsg(m);
         }
       });
       const shellsBefore = document.querySelectorAll('#messages > .msg.virt-shell').length;
-      // New request → T77 collapses prior tall latest; height shrinks; Track pins.
-      window.addMsg('user', 'new request that collapses prior');
+      window.addMsg('user', 'new request that may push prior up');
       if (window.scrollDown) window.scrollDown();
-      // Drain rAF: scheduleLatestExpansion + scheduleVirtualize (+ pin).
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
-      // Product path should have scheduled virtualize; call once more as settle.
+      if (window.refreshLatestExpansion) window.refreshLatestExpansion();
       window.virtualizeMessages();
       const viewTop = el.scrollTop;
       const viewBot = viewTop + el.clientHeight;
@@ -133,16 +128,84 @@ function startServer() {
         heavyInView,
         shellsBefore,
         shellsAfter: document.querySelectorAll('#messages > .msg.virt-shell').length,
+        priorClipped: prior.classList.contains('msg-clipped'),
       };
     });
     if (!afterCollapse.ok) {
       failures.push(
-        'after T77 collapse, in-view virt-shells not rematerialised ' +
+        'after height-change/T246 path, in-view virt-shells not rematerialised ' +
         JSON.stringify(afterCollapse),
       );
     }
 
-    console.log(JSON.stringify({ stats, after, afterCollapse, failures }, null, 2));
+    // 🎯T246: stay material while partially on-screen; collapse/dematerialize only when fully above fold.
+    // Controlled free-scroll geometry (short viewport would pin-collapse tall on new msg).
+    const t246Virt = await page.evaluate(async () => {
+      const el = document.getElementById('messages');
+      // Clear for a short controlled transcript.
+      el.innerHTML = '';
+      if (window.enterTrackBottom) window.enterTrackBottom();
+      const body = Array.from({ length: 25 }, (_, i) => 'T246 line ' + i + ' with padding text xx').join('\n\n');
+      const msg = window.addMsg('jevons', body);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      if (window.refreshLatestExpansion) window.refreshLatestExpansion();
+      // Short trailing without enough bulk to clear prior when free-scrolled mid-list.
+      if (window.leaveTrackBottom) window.leaveTrackBottom();
+      window.addMsg('user', 'short');
+      // Filler below so we can later scroll prior fully out.
+      for (let i = 0; i < 10; i++) {
+        window.addMsg('jevons', 'filler ' + i + '\n' + 'x'.repeat(80));
+      }
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      // Keep prior auto-expanded for the on-screen clause.
+      msg._autoExpanded = true;
+      msg._expanded = true;
+      msg._userToggled = false;
+      if (msg._fullText != null) window.renderBody(msg, msg._fullRole, msg._fullText);
+      if (window.leaveTrackBottom) window.leaveTrackBottom();
+      // Partial view: prior top slightly above fold, bottom still visible.
+      el.scrollTop = Math.max(0, msg.offsetTop + Math.floor(msg.offsetHeight * 0.3));
+      window.virtualizeMessages();
+      if (window.collapseAutoExpandedOffScreen) window.collapseAutoExpandedOffScreen();
+      const viewTop = el.scrollTop;
+      const viewBot = viewTop + el.clientHeight;
+      const top = msg.offsetTop;
+      const bot = top + msg.offsetHeight;
+      const onScreen = {
+        anyVisible: bot > viewTop && top < viewBot,
+        fullyAbove: bot <= viewTop,
+        expanded: msg._expanded === true,
+        auto: msg._autoExpanded === true,
+        shell: msg.classList.contains('virt-shell'),
+        clipped: msg.classList.contains('msg-clipped'),
+      };
+      // Fully above fold.
+      el.scrollTop = msg.offsetTop + msg.offsetHeight + 80;
+      if (msg.offsetTop + msg.offsetHeight > el.scrollTop) el.scrollTop = el.scrollHeight;
+      window.virtualizeMessages();
+      if (window.collapseAutoExpandedOffScreen) window.collapseAutoExpandedOffScreen();
+      window.virtualizeMessages();
+      const off = {
+        fullyAbove: msg.offsetTop + msg.offsetHeight <= el.scrollTop,
+        expanded: msg._expanded === true,
+        auto: msg._autoExpanded === true,
+        shell: msg.classList.contains('virt-shell'),
+        clipped: msg.classList.contains('msg-clipped'),
+      };
+      return { onScreen, off };
+    });
+    if (!t246Virt.onScreen.anyVisible || t246Virt.onScreen.fullyAbove) {
+      failures.push('T246 virt on-screen setup failed ' + JSON.stringify(t246Virt.onScreen));
+    } else if (!t246Virt.onScreen.expanded || t246Virt.onScreen.shell || t246Virt.onScreen.clipped) {
+      failures.push('T246: on-screen message not material+expanded ' + JSON.stringify(t246Virt.onScreen));
+    }
+    if (!t246Virt.off.fullyAbove) {
+      failures.push('T246 virt: failed to scroll message fully above fold ' + JSON.stringify(t246Virt.off));
+    } else if (t246Virt.off.expanded && t246Virt.off.auto) {
+      failures.push('T246: fully above fold still auto-expanded ' + JSON.stringify(t246Virt.off));
+    }
+
+    console.log(JSON.stringify({ stats, after, afterCollapse, t246Virt, failures }, null, 2));
     if (failures.length) {
       console.error('FAIL', failures);
       process.exitCode = 1;

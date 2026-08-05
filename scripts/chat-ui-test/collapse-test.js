@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Hermetic perceptual test for clip-collapse of oversized chat bubbles
-// (🎯T106 + T66/T77 + T166). Serves the static web/ UI, drives addMsg() and the
+// (🎯T106 + T66/T246 + T166). Serves the static web/ UI, drives addMsg() and the
 // streaming append/seal path with short + huge + medium-tall content for
 // both roles, and asserts the clip model (not the old truncated re-parse
 // preview):
@@ -18,7 +18,9 @@
 //   * scrim height matches bubble --radius (short edge cue, not multi-line)
 //   * T66: latest request/response stay expanded when tall (incl. stream
 //     that grows short→tall)
-//   * T77: when either role ceases to be latest, auto-expand reverts to clip
+//   * T246: auto-expanded stays open while any part is in the viewport;
+//     may collapse only after fully scrolled out of sight (above fold).
+//     (Supersedes T77 "collapse when no longer latest".)
 //   * T166: expanded+tab reserves bottom padding so last text clears ▲ tab;
 //     collapsed msg-clipped stays padding-bottom:0
 // Screenshots the collapsed and expanded states into artifacts/.
@@ -223,7 +225,7 @@ function assertNoShowMoreLess(text, label, failures) {
       failures.push(`collapsed assistant DOM has ${state.jItems}/${state.jFullN} items — want full render under clip`);
     }
     if (!state.jClipped) failures.push('non-latest huge assistant missing .msg-clipped');
-    if (state.jExpanded) failures.push('T77: non-latest huge assistant is expanded (want clipped)');
+    if (state.jExpanded) failures.push('T246: off-screen non-latest huge assistant is expanded (want clipped)');
     if (!state.jMaxH || state.jMaxH === 'none') failures.push(`collapsed assistant max-height = ${state.jMaxH}, want capped`);
     if (state.jOverflow !== 'hidden') failures.push(`collapsed assistant overflow = ${state.jOverflow}, want hidden`);
     if (!state.jHasFade) failures.push('collapsed assistant missing .msg-clip-fade gradient');
@@ -258,8 +260,8 @@ function assertNoShowMoreLess(text, label, failures) {
     if (state.uBodyLen < state.uFullLen) failures.push('collapsed user body text shorter than full — re-parse preview?');
     if (state.uLines < 80) failures.push(`collapsed user DOM has ${state.uLines} lines — want full 80 under clip`);
     if (!state.uClipped) failures.push('non-latest huge user missing .msg-clipped');
-    if (state.uExpanded) failures.push('T77: non-latest huge user is expanded (want clipped)');
-    if (!state.uHasBtn) failures.push('T77: non-latest huge user has no expand tab');
+    if (state.uExpanded) failures.push('T246: off-screen non-latest huge user is expanded (want clipped)');
+    if (!state.uHasBtn) failures.push('T246: non-latest huge user has no expand tab');
     if (!state.uHasFade) failures.push('collapsed user missing .msg-clip-fade gradient');
     if (state.uFadeBg && !/rgba?\(\s*0\s*,\s*0\s*,\s*0/i.test(state.uFadeBg)) {
       failures.push(`user pocket fade backgroundImage = ${JSON.stringify(state.uFadeBg)}, want darken via rgba(0,0,0,…)`);
@@ -489,9 +491,12 @@ function assertNoShowMoreLess(text, label, failures) {
       assertNoShowMoreLess(streamState.btnText, 'T66 stream tab', failures);
     }
 
-    // ── Scenario C (T77): large user then large assistant — user collapses ──
+    // ── Scenario C (T246): large user then large assistant with Track pin ──
+    // Stick-to-bottom puts the prior fully above the fold → auto-collapse.
+    // Explicit enterTrackBottom: earlier scenarios may leave Free mode.
     await page.evaluate(() => {
       document.getElementById('messages').innerHTML = '';
+      if (window.enterTrackBottom) window.enterTrackBottom();
       const bigUser = Array.from({ length: 80 }, (_, i) => `user line ${i}`).join('\n');
       const bigAsst = Array.from({ length: 60 }, (_, i) => `- asst_${i}`).join('\n');
       const u = window.addMsg('user', bigUser);
@@ -503,12 +508,19 @@ function assertNoShowMoreLess(text, label, failures) {
       const u = window._els2.u;
       return { expanded: u._expanded === true, auto: u._autoExpanded === true };
     });
-    if (!afterUser.expanded) failures.push('T77 setup: latest huge user did not auto-expand');
+    if (!afterUser.expanded) failures.push('T246 setup: latest huge user did not auto-expand');
 
     await page.evaluate(() => {
+      if (window.enterTrackBottom) window.enterTrackBottom();
       window._els2.asst = window.addMsg('jevons', window._els2.asstText);
     });
     await page.waitForTimeout(200);
+    // Ensure pin + off-screen collapse settled (rAF + late layout).
+    await page.evaluate(() => {
+      if (window.enterTrackBottom) window.enterTrackBottom();
+      if (window.refreshLatestExpansion) window.refreshLatestExpansion();
+      if (window.collapseAutoExpandedOffScreen) window.collapseAutoExpandedOffScreen();
+    });
 
     const afterAsst = await page.evaluate(() => {
       const { u, asst } = window._els2;
@@ -523,20 +535,22 @@ function assertNoShowMoreLess(text, label, failures) {
         aClipped: asst.classList.contains('msg-clipped'),
       };
     });
-    if (afterAsst.uExpanded) failures.push('T77: large user still expanded after newer assistant arrived');
-    if (afterAsst.uAuto) failures.push('T77: large user still _autoExpanded after ceasing to be latest');
-    if (!afterAsst.uClipped) failures.push('T77: large user not .msg-clipped after collapse');
-    if (afterAsst.uFullLines < 80) failures.push('T77: large user lost full body text after clip collapse');
-    if (!afterAsst.aExpanded) failures.push('T66/T77: latest large assistant not expanded after displacing user');
+    // Two tall bubbles + pin bottom → prior is off-screen and collapses.
+    if (afterAsst.uExpanded) failures.push('T246: large user still expanded after newer tall assistant pinned bottom');
+    if (afterAsst.uAuto) failures.push('T246: large user still _autoExpanded after off-screen collapse');
+    if (!afterAsst.uClipped) failures.push('T246: large user not .msg-clipped after off-screen collapse');
+    if (afterAsst.uFullLines < 80) failures.push('T246: large user lost full body text after clip collapse');
+    if (!afterAsst.aExpanded) failures.push('T66/T246: latest large assistant not expanded after displacing user');
     if (afterAsst.aClipped) failures.push('T66: latest assistant is clipped');
     if (afterAsst.aItems < 60) failures.push(`T66: latest assistant rendered ${afterAsst.aItems}/60 items`);
     if (!/collapse/i.test(afterAsst.aLabel || '')) {
       failures.push(`T66: latest assistant aria = ${JSON.stringify(afterAsst.aLabel)}`);
     }
 
-    // ── Scenario D (T77): large assistant then large user — assistant collapses ──
+    // ── Scenario D (T246): large assistant then large user — assistant off-screen collapses ──
     await page.evaluate(() => {
       document.getElementById('messages').innerHTML = '';
+      if (window.enterTrackBottom) window.enterTrackBottom();
       const bigAsst = Array.from({ length: 60 }, (_, i) => `- prior_${i}`).join('\n');
       const bigUser = Array.from({ length: 80 }, (_, i) => `next user ${i}`).join('\n');
       const a = window.addMsg('jevons', '### prior\n' + bigAsst);
@@ -544,9 +558,15 @@ function assertNoShowMoreLess(text, label, failures) {
     });
     await page.waitForTimeout(150);
     await page.evaluate(() => {
+      if (window.enterTrackBottom) window.enterTrackBottom();
       window._els3.u = window.addMsg('user', window._els3.bigUser);
     });
     await page.waitForTimeout(200);
+    await page.evaluate(() => {
+      if (window.enterTrackBottom) window.enterTrackBottom();
+      if (window.refreshLatestExpansion) window.refreshLatestExpansion();
+      if (window.collapseAutoExpandedOffScreen) window.collapseAutoExpandedOffScreen();
+    });
 
     const afterUser2 = await page.evaluate(() => {
       const { a, u } = window._els3;
@@ -559,11 +579,11 @@ function assertNoShowMoreLess(text, label, failures) {
         uLines: u._body.textContent.split('\n').length,
       };
     });
-    if (afterUser2.aExpanded) failures.push('T77: large assistant still expanded after newer user arrived');
-    if (afterUser2.aAuto) failures.push('T77: large assistant still _autoExpanded after ceasing to be latest');
-    if (afterUser2.aItems < 60) failures.push('T77: non-latest assistant lost full list under clip');
-    if (!afterUser2.aClipped) failures.push('T77: non-latest assistant not .msg-clipped');
-    if (!afterUser2.uExpanded) failures.push('T77: latest large user not auto-expanded');
+    if (afterUser2.aExpanded) failures.push('T246: large assistant still expanded after newer tall user pinned bottom');
+    if (afterUser2.aAuto) failures.push('T246: large assistant still _autoExpanded after off-screen collapse');
+    if (afterUser2.aItems < 60) failures.push('T246: non-latest assistant lost full list under clip');
+    if (!afterUser2.aClipped) failures.push('T246: non-latest assistant not .msg-clipped when off-screen');
+    if (!afterUser2.uExpanded) failures.push('T246: latest large user not auto-expanded');
 
     // Manual toggle wins: expand non-latest assistant, then add a new msg —
     // manual expand must survive (not forced closed by auto path on others).
@@ -585,9 +605,101 @@ function assertNoShowMoreLess(text, label, failures) {
       };
     });
     if (!manual.userToggled) failures.push('manual toggle flag lost');
-    if (!manual.expanded) failures.push('T77: manual expand of non-latest was undone by later messages');
-    if (manual.items < 60) failures.push('T77: manual expand lost full content after later message');
-    if (manual.clipped) failures.push('T77: manual expand still clipped after later message');
+    if (!manual.expanded) failures.push('T246: manual expand of non-latest was undone by later messages');
+    if (manual.items < 60) failures.push('T246: manual expand lost full content after later message');
+    if (manual.clipped) failures.push('T246: manual expand still clipped after later message');
+
+    // ── Scenario C2 (T246 core) ─────────────────────────────────────────
+    // Phase 1: tall + short only; leave track; keep prior partially visible
+    // → stays auto-expanded (not "collapse when no longer latest").
+    // Phase 2: free-scroll fillers for room, then scroll prior fully above
+    // → may collapse.
+    await page.evaluate(() => {
+      document.getElementById('messages').innerHTML = '';
+      if (window.enterTrackBottom) window.enterTrackBottom();
+      const tall = Array.from({ length: 50 }, (_, i) => `- stay_${i}`).join('\n');
+      const prior = window.addMsg('jevons', '### stay open\n' + tall);
+      window._t246 = { prior };
+    });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      window._t246.short = window.addMsg('user', 'short follow-up that does not fill the viewport alone');
+    });
+    await page.waitForTimeout(200);
+    const t246Stay = await page.evaluate(() => {
+      const el = document.getElementById('messages');
+      const p = window._t246.prior;
+      if (window.leaveTrackBottom) window.leaveTrackBottom();
+      // Keep prior partially in view (top slightly above scrollTop).
+      const target = Math.max(0, Math.min(
+        p.offsetTop + Math.floor(p.offsetHeight * 0.35),
+        Math.max(0, el.scrollHeight - el.clientHeight - 1),
+      ));
+      el.scrollTop = target;
+      if (window.collapseAutoExpandedOffScreen) window.collapseAutoExpandedOffScreen();
+      const top = p.offsetTop;
+      const bot = top + p.offsetHeight;
+      const viewTop = el.scrollTop;
+      const viewBot = viewTop + el.clientHeight;
+      return {
+        anyVisible: bot > viewTop && top < viewBot,
+        fullyAbove: bot <= viewTop,
+        expanded: p._expanded === true,
+        auto: p._autoExpanded === true,
+        clipped: p.classList.contains('msg-clipped'),
+        top, bot, viewTop, viewBot,
+      };
+    });
+    if (!t246Stay.anyVisible || t246Stay.fullyAbove) {
+      failures.push('T246 stay-expanded setup: prior not partially in viewport ' + JSON.stringify(t246Stay));
+    } else {
+      if (!t246Stay.expanded) failures.push('T246: prior tall collapsed while still partially on-screen');
+      if (!t246Stay.auto) failures.push('T246: prior tall lost _autoExpanded while still on-screen');
+      if (t246Stay.clipped) failures.push('T246: prior tall .msg-clipped while still on-screen');
+    }
+
+    // Phase 2: free-scroll filler bulk (no stick-to-bottom pin), then scroll out.
+    const t246Off = await page.evaluate(() => {
+      const el = document.getElementById('messages');
+      const p = window._t246.prior;
+      if (window.leaveTrackBottom) window.leaveTrackBottom();
+      // Ensure prior is still the auto-expanded subject (fillers become latest).
+      if (!p._autoExpanded) {
+        p._autoExpanded = true;
+        p._expanded = true;
+        p._userToggled = false;
+        if (p._fullText != null) window.renderBody(p, p._fullRole, p._fullText);
+      }
+      for (let i = 0; i < 14; i++) {
+        window.addMsg('jevons', 'filler block ' + i + '\n\n' + Array.from({ length: 18 }, (_, j) => 'line ' + j).join('\n'));
+      }
+      // scrollDown is a no-op while Free; still force free.
+      if (window.leaveTrackBottom) window.leaveTrackBottom();
+      el.scrollTop = p.offsetTop + p.offsetHeight + 80;
+      if (p.offsetTop + p.offsetHeight > el.scrollTop) {
+        el.scrollTop = el.scrollHeight;
+      }
+      if (window.collapseAutoExpandedOffScreen) window.collapseAutoExpandedOffScreen();
+      const bot = p.offsetTop + p.offsetHeight;
+      return {
+        fullyAbove: bot <= el.scrollTop,
+        expanded: p._expanded === true,
+        auto: p._autoExpanded === true,
+        clipped: p.classList.contains('msg-clipped'),
+        items: p._body.querySelectorAll('li').length,
+        scrollTop: el.scrollTop,
+        bot,
+        maxScroll: el.scrollHeight - el.clientHeight,
+      };
+    });
+    if (!t246Off.fullyAbove) {
+      failures.push('T246 off-screen setup failed to place prior above fold ' + JSON.stringify(t246Off));
+    } else {
+      if (t246Off.expanded) failures.push('T246: prior tall still expanded after fully scrolled out of view');
+      if (t246Off.auto) failures.push('T246: prior tall still _autoExpanded when fully off-screen');
+      if (!t246Off.clipped) failures.push('T246: prior tall not .msg-clipped after leaving viewport');
+      if (t246Off.items < 50) failures.push('T246: clipped prior lost full list under clip model');
+    }
 
     // ── Scenario E (T106 tallness gate): medium-tall > clip box, < 1.5× clip ──
     // Old 1.5× ratio against fixed 14rem left these without tab/.msg-clipped.
@@ -673,6 +785,6 @@ function assertNoShowMoreLess(text, label, failures) {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - pocket clip collapse (radius scrim + inside tab + time outside), T66/T77, short no tab, medium-tall gate, T166 expand pad');
+  console.log('ok - pocket clip collapse (radius scrim + inside tab + time outside), T66/T246, short no tab, medium-tall gate, T166 expand pad');
   console.log('screenshots: artifacts/collapse-preview.png, artifacts/collapse-expanded.png');
 })();

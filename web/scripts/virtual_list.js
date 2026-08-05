@@ -64,6 +64,38 @@
     return bot >= viewTop && top <= viewBot;
   }
 
+  // 🎯T246: strict viewport intersection (no materialize buffer).
+  // Any overlap keeps a newly arrived auto-expanded bubble open.
+  function anyPartInViewport(top, height, scrollTop, clientHeight) {
+    const t = Number(top) || 0;
+    const h = Number(height) || 0;
+    const st = Number(scrollTop) || 0;
+    const ch = Number(clientHeight) || 0;
+    const bot = t + h;
+    const viewBot = st + ch;
+    return bot > st && t < viewBot;
+  }
+
+  // Fully scrolled above the fold (typical: newer messages pushed this up).
+  function isFullyAboveViewport(top, height, scrollTop) {
+    const t = Number(top) || 0;
+    const h = Number(height) || 0;
+    const st = Number(scrollTop) || 0;
+    return t + h <= st;
+  }
+
+  // Auto-collapse policy for tall bubbles that were auto-expanded (T66/T246).
+  // Latest always stays expanded. Manual toggle (_userToggled) never auto-collapses.
+  // Non-latest auto-expanded may collapse only when fully outside the strict
+  // viewport (any remaining pixel on-screen keeps it expanded).
+  function shouldAutoCollapseOffScreen(opts) {
+    const o = opts || {};
+    if (o.isLatest) return false;
+    if (o.userToggled) return false;
+    if (!o.autoExpanded) return false;
+    return !anyPartInViewport(o.top, o.height, o.scrollTop, o.clientHeight);
+  }
+
   // Count how many items would stay materialised for a long list
   // scrolled to the bottom (oracle for "bounded DOM work").
   function materialisedCount(n, avgHeight, clientHeight, buffer) {
@@ -594,6 +626,9 @@
 
     visibleIndices: visibleIndices,
     shouldMaterialize: shouldMaterialize,
+    anyPartInViewport: anyPartInViewport,
+    isFullyAboveViewport: isFullyAboveViewport,
+    shouldAutoCollapseOffScreen: shouldAutoCollapseOffScreen,
     materialisedCount: materialisedCount,
     enterLeaveBand: enterLeaveBand,
 
