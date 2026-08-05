@@ -107,7 +107,41 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .composer-images .img-chip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 .composer-images .img-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .composer-images .img-chip button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff; font-size: 11px; line-height: 18px; cursor: pointer; padding: 0; }
-.msg.user .chat-img { max-width: min(100%, 320px); max-height: 240px; border-radius: 8px; display: block; margin: 6px 0; border: 1px solid var(--user-border); }
+.msg.user .chat-img { max-width: min(100%, 320px); max-height: 240px; border-radius: 8px; display: block; margin: 6px 0; border: 1px solid var(--user-border); cursor: zoom-in; }
+/* 🎯T258: in-page full-res image lightbox + multi-id carousel */
+#img-lightbox {
+  position: fixed; inset: 0; z-index: 12000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.82);
+  padding: 24px;
+}
+#img-lightbox[hidden] { display: none !important; }
+#img-lightbox .ilb-stage {
+  position: relative; max-width: min(96vw, 1200px); max-height: 90vh;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+#img-lightbox .ilb-img {
+  max-width: 96vw; max-height: 78vh; object-fit: contain;
+  border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.45);
+  background: var(--surface);
+}
+#img-lightbox .ilb-chrome {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+}
+#img-lightbox .ilb-chrome button {
+  border: 1px solid var(--border); background: var(--surface-raised); color: var(--text);
+  border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+}
+#img-lightbox .ilb-chrome button:hover { border-color: var(--border-focus); }
+#img-lightbox .ilb-chrome button:disabled { opacity: 0.4; cursor: default; }
+#img-lightbox .ilb-counter { font-size: 12px; color: var(--text-dim); min-width: 4em; text-align: center; }
+#img-lightbox .ilb-thumbs { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; max-width: 96vw; }
+#img-lightbox .ilb-thumbs button {
+  width: 48px; height: 48px; padding: 0; border-radius: 6px; overflow: hidden;
+  border: 2px solid transparent; background: var(--surface-high); cursor: pointer;
+}
+#img-lightbox .ilb-thumbs button.active { border-color: var(--accent); }
+#img-lightbox .ilb-thumbs img { width: 100%; height: 100%; object-fit: cover; display: block; }
 #messages::-webkit-scrollbar { width: 6px; }
 #messages::-webkit-scrollbar-track { background: transparent; }
 #messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
@@ -964,6 +998,19 @@ body.rhs-resizing-row { cursor: row-resize; }
 
   </div>
 </div>
+<!-- 🎯T258: full-res chat image lightbox (multi-id carousel in same message). -->
+<div id="img-lightbox" role="dialog" aria-modal="true" aria-label="Image viewer" hidden>
+  <div class="ilb-stage">
+    <img class="ilb-img" id="ilb-img" alt="Full resolution image" draggable="false">
+    <div class="ilb-chrome">
+      <button type="button" id="ilb-prev" title="Previous image (←)" aria-label="Previous image">‹ Prev</button>
+      <span class="ilb-counter" id="ilb-counter" aria-live="polite"></span>
+      <button type="button" id="ilb-next" title="Next image (→)" aria-label="Next image">Next ›</button>
+      <button type="button" id="ilb-close" title="Close (Esc)" aria-label="Close image viewer">Close</button>
+    </div>
+    <div class="ilb-thumbs" id="ilb-thumbs" hidden></div>
+  </div>
+</div>
 <!-- 🎯T83: durable graph viz chrome (bottom-right; reuses T83.1 panel host). -->
 <div id="mermaid-viz-panel" role="dialog" aria-label="Project graph visualization" aria-modal="false" hidden>
   <div class="mvp-header">
@@ -1009,6 +1056,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/mermaid_actions.js"></script>
 <script src="scripts/markdown_normalize.js"></script>
 <script src="scripts/link_safety.js"></script>
+<script src="scripts/image_lightbox.js"></script>
 <script src="scripts/smd.js"></script>
 <script src="scripts/streaming_markdown.js"></script>
 <script src="scripts/cost_display.js"></script>
@@ -3063,13 +3111,23 @@ function maybeCloseTargetAside(text) {
 // User bubbles: preserve plain text, promote lines of `> quote` to <blockquote>,
 // and render 🎯T76/T224 [image: <id>] markers as server-served thumbnails.
 // Full-res residual stays at /api/images/{id}; browser hydrate uses /thumb only.
+// Click opens 🎯T258 in-page lightbox (full-res on demand).
 function renderUserText(t) {
   const s = String(t == null ? '' : t);
   if (/\[image:\s*[a-f0-9]+\]/i.test(s)) return renderUserTextWithImages(s);
   return renderUserTextQuotes(s);
 }
 function imageThumbSrc(id) {
-  return '/api/images/' + id + '/thumb';
+  if (typeof ImageLightbox !== 'undefined' && ImageLightbox.imageThumbSrc) {
+    return ImageLightbox.imageThumbSrc(id);
+  }
+  return '/api/images/' + String(id || '').toLowerCase() + '/thumb';
+}
+function imageFullSrc(id) {
+  if (typeof ImageLightbox !== 'undefined' && ImageLightbox.imageFullSrc) {
+    return ImageLightbox.imageFullSrc(id);
+  }
+  return '/api/images/' + String(id || '').toLowerCase();
 }
 function renderUserTextWithImages(s) {
   const re = /\[image:\s*([a-f0-9]+)\]/gi;
@@ -3080,12 +3138,172 @@ function renderUserTextWithImages(s) {
     html += renderUserTextQuotes(s.slice(last, m.index));
     const id = m[1].toLowerCase();
     html += '<img class="chat-img" src="' + escHtml(imageThumbSrc(id)) +
-      '" alt="pasted image ' + escHtml(id) + '" loading="lazy">';
+      '" data-image-id="' + escHtml(id) +
+      '" alt="pasted image ' + escHtml(id) + '" loading="lazy" tabindex="0" role="button">';
     last = m.index + m[0].length;
   }
   html += renderUserTextQuotes(s.slice(last));
   return html;
 }
+
+// ── 🎯T258 image lightbox (full-res on demand + multi-id carousel) ──
+let ilbSession = { open: false, ids: [], index: 0 };
+const ilbRoot = document.getElementById('img-lightbox');
+const ilbImg = document.getElementById('ilb-img');
+const ilbPrev = document.getElementById('ilb-prev');
+const ilbNext = document.getElementById('ilb-next');
+const ilbClose = document.getElementById('ilb-close');
+const ilbCounter = document.getElementById('ilb-counter');
+const ilbThumbs = document.getElementById('ilb-thumbs');
+
+function paintImageLightbox() {
+  if (!ilbRoot || typeof ImageLightbox === 'undefined') return;
+  if (!ImageLightbox.isOpen(ilbSession)) {
+    ilbRoot.hidden = true;
+    if (ilbImg) {
+      ilbImg.removeAttribute('src');
+      ilbImg.alt = '';
+    }
+    return;
+  }
+  const id = ImageLightbox.currentId(ilbSession);
+  const multi = ImageLightbox.hasMultiple(ilbSession);
+  const n = ilbSession.ids.length;
+  const i = (ilbSession.index | 0) + 1;
+  ilbRoot.hidden = false;
+  if (ilbImg) {
+    // Full-res on demand — never /thumb in the overlay.
+    ilbImg.src = ImageLightbox.imageFullSrc(id);
+    ilbImg.alt = 'Full resolution image ' + id;
+  }
+  if (ilbCounter) {
+    ilbCounter.textContent = multi ? (i + ' / ' + n) : '';
+  }
+  if (ilbPrev) {
+    ilbPrev.disabled = !multi;
+    ilbPrev.hidden = !multi;
+  }
+  if (ilbNext) {
+    ilbNext.disabled = !multi;
+    ilbNext.hidden = !multi;
+  }
+  if (ilbThumbs) {
+    if (!multi) {
+      ilbThumbs.hidden = true;
+      ilbThumbs.innerHTML = '';
+    } else {
+      ilbThumbs.hidden = false;
+      ilbThumbs.innerHTML = '';
+      for (let t = 0; t < ilbSession.ids.length; t++) {
+        const tid = ilbSession.ids[t];
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.title = 'Image ' + (t + 1);
+        if (t === ilbSession.index) btn.className = 'active';
+        btn.setAttribute('data-ilb-index', String(t));
+        const th = document.createElement('img');
+        th.src = ImageLightbox.imageThumbSrc(tid);
+        th.alt = '';
+        btn.appendChild(th);
+        ilbThumbs.appendChild(btn);
+      }
+    }
+  }
+}
+
+function openImageLightboxFromEl(img) {
+  if (typeof ImageLightbox === 'undefined' || !img) return;
+  const resolved = ImageLightbox.resolveFromClick(img);
+  if (!resolved.id && !(resolved.ids && resolved.ids.length)) return;
+  ilbSession = ImageLightbox.open({ ids: resolved.ids, id: resolved.id });
+  paintImageLightbox();
+}
+
+function closeImageLightbox() {
+  if (typeof ImageLightbox === 'undefined') {
+    ilbSession = { open: false, ids: [], index: 0 };
+  } else {
+    ilbSession = ImageLightbox.close(ilbSession);
+  }
+  paintImageLightbox();
+}
+
+function stepImageLightbox(delta) {
+  if (typeof ImageLightbox === 'undefined' || !ImageLightbox.isOpen(ilbSession)) return;
+  ilbSession = delta > 0 ? ImageLightbox.next(ilbSession) : ImageLightbox.prev(ilbSession);
+  paintImageLightbox();
+}
+
+(function wireImageLightbox() {
+  if (!ilbRoot || typeof ImageLightbox === 'undefined') return;
+  // Click thumb in chat → open full-res overlay.
+  document.addEventListener('click', function (e) {
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    // Thumb strip inside lightbox.
+    if (ilbRoot && !ilbRoot.hidden && ilbThumbs && ilbThumbs.contains(t)) {
+      const btn = t.closest('button[data-ilb-index]');
+      if (btn) {
+        e.preventDefault();
+        const idx = parseInt(btn.getAttribute('data-ilb-index'), 10);
+        if (!isNaN(idx)) {
+          ilbSession = ImageLightbox.goTo(ilbSession, idx);
+          paintImageLightbox();
+        }
+      }
+      return;
+    }
+    if (ImageLightbox.isOpen(ilbSession)) {
+      // Backdrop click (on root, not stage chrome) dismisses.
+      if (t === ilbRoot) {
+        e.preventDefault();
+        closeImageLightbox();
+        return;
+      }
+      if (ilbClose && (t === ilbClose || ilbClose.contains(t))) {
+        e.preventDefault();
+        closeImageLightbox();
+        return;
+      }
+      if (ilbPrev && (t === ilbPrev || ilbPrev.contains(t))) {
+        e.preventDefault();
+        stepImageLightbox(-1);
+        return;
+      }
+      if (ilbNext && (t === ilbNext || ilbNext.contains(t))) {
+        e.preventDefault();
+        stepImageLightbox(1);
+        return;
+      }
+      return;
+    }
+    const img = t.closest('img.chat-img');
+    if (!img) return;
+    // Only chat message images (not composer chips).
+    if (!img.closest || !img.closest('#messages, #agent-inspect-body')) return;
+    e.preventDefault();
+    openImageLightboxFromEl(img);
+  });
+  // Enter/Space on focused chat-img.
+  document.addEventListener('keydown', function (e) {
+    if (ImageLightbox.isOpen(ilbSession)) {
+      const r = ImageLightbox.handleKey(ilbSession, e.key);
+      if (r.action) {
+        e.preventDefault();
+        ilbSession = r.session;
+        paintImageLightbox();
+      }
+      return;
+    }
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const t = e.target;
+    if (!t || !t.classList || !t.classList.contains('chat-img')) return;
+    if (!t.closest || !t.closest('#messages, #agent-inspect-body')) return;
+    e.preventDefault();
+    openImageLightboxFromEl(t);
+  }, true);
+})();
+
 function renderUserTextQuotes(s) {
   s = String(s == null ? '' : s);
   if (!s) return '';

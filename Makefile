@@ -76,6 +76,7 @@ test-web:
 	node web/scripts/streaming_markdown_test.js
 	node web/scripts/cost_display_test.js
 	node web/scripts/link_safety_test.js
+	node web/scripts/image_lightbox_test.js
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright
 # from scripts/browser-loop-test). Live: make test-ui-live.
@@ -93,6 +94,7 @@ test-ui:
 	node scripts/chat-ui-test/t159-seal-test.js
 	node scripts/chat-ui-test/virtual-list-test.js
 	node scripts/chat-ui-test/image-paste-test.js
+	node scripts/chat-ui-test/image-lightbox-test.js
 	node scripts/chat-ui-test/t164-aside-dismiss-test.js
 	node scripts/chat-ui-test/t241-alt-enter-test.js
 
