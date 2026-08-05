@@ -11,15 +11,32 @@ const assert = require('assert');
 const MA = require('./mermaid_actions.js');
 
 let failed = 0;
+const pending = [];
 function test(name, fn) {
+  // Supports sync tests and async tests that return a Promise (🎯T274 timeout race).
+  let result;
   try {
-    fn();
-    console.log('ok  -', name);
+    result = fn();
   } catch (e) {
     failed++;
     console.error('FAIL-', name);
     console.error('    ', e && e.stack ? e.stack.split('\n').slice(0, 4).join('\n     ') : e);
+    return;
   }
+  if (result && typeof result.then === 'function') {
+    pending.push(
+      result.then(
+        function () { console.log('ok  -', name); },
+        function (e) {
+          failed++;
+          console.error('FAIL-', name);
+          console.error('    ', e && e.stack ? e.stack.split('\n').slice(0, 4).join('\n     ') : e);
+        }
+      )
+    );
+    return;
+  }
+  console.log('ok  -', name);
 }
 
 test('toolbar has Open, Copy source, Copy image', function () {
@@ -512,8 +529,51 @@ test('T268 index.html wires scale-to-fill for single large graph', function () {
   assert.ok(ofg.indexOf('renderMermaidSourceInPanel') >= 0, 'single path uses source renderer');
 });
 
-if (failed) {
-  console.error(failed + ' failed');
+// 🎯T274: pause earlier-history while large graph open; render timeout.
+test('T274 shouldPauseHistoryHydrate only for open mvp-large', function () {
+  assert.strictEqual(typeof MA.shouldPauseHistoryHydrate, 'function');
+  assert.strictEqual(MA.shouldPauseHistoryHydrate(null), false);
+  assert.strictEqual(
+    MA.shouldPauseHistoryHydrate(mockPanel({ hidden: false, classes: ['open'] })),
+    false,
+    'compact open does not pause'
+  );
+  assert.strictEqual(
+    MA.shouldPauseHistoryHydrate(mockPanel({ hidden: false, classes: ['open', 'mvp-large'] })),
+    true,
+    'large graph pauses hydrate'
+  );
+  assert.strictEqual(
+    MA.shouldPauseHistoryHydrate(mockPanel({ hidden: true, classes: ['open', 'mvp-large'] })),
+    false,
+    'hidden does not pause'
+  );
+});
+
+test('T274 withMermaidRenderTimeout rejects hung render', async function () {
+  assert.strictEqual(typeof MA.withMermaidRenderTimeout, 'function');
+  assert.ok(MA.MERMAID_RENDER_TIMEOUT_MS >= 1000);
+  const hung = new Promise(function () { /* never settles */ });
+  let rejected = null;
+  try {
+    await MA.withMermaidRenderTimeout(hung, 30);
+  } catch (e) {
+    rejected = e;
+  }
+  assert.ok(rejected, 'timeout rejects');
+  assert.strictEqual(rejected.kind, 'timeout');
+  // Fast resolve still wins.
+  const ok = await MA.withMermaidRenderTimeout(Promise.resolve({ svg: '<svg/>' }), 500);
+  assert.strictEqual(ok.svg, '<svg/>');
+});
+
+Promise.all(pending).then(function () {
+  if (failed) {
+    console.error(failed + ' failed');
+    process.exit(1);
+  }
+  console.log('all mermaid_actions tests passed');
+}).catch(function (e) {
+  console.error('suite error', e);
   process.exit(1);
-}
-console.log('all mermaid_actions tests passed');
+});

@@ -476,6 +476,60 @@
     return String(key || '') === 'Escape' && isMermaidPanelOpen(panel);
   }
 
+  /**
+   * 🎯T274: pause chat earlier-history hydrate while the large Frontier Graph
+   * overlay is open. Layout thrash + IntersectionObserver re-fire was flashing
+   * "Loading earlier…" above the empty/slow orthograph graph panel.
+   * Compact chrome (mvp-large absent) does not pause hydrate.
+   * @param {{ classList?: { contains: (c: string) => boolean }, hidden?: boolean }|null} panel
+   */
+  function shouldPauseHistoryHydrate(panel) {
+    if (!isMermaidPanelOpen(panel)) return false;
+    const cl = panel && panel.classList;
+    if (cl && typeof cl.contains === 'function') {
+      return !!cl.contains('mvp-large');
+    }
+    return false;
+  }
+
+  /** Default Mermaid render budget for frontier/panel diagrams (🎯T274). */
+  var MERMAID_RENDER_TIMEOUT_MS = 12000;
+
+  /**
+   * Race a render promise against a timeout so the panel never infinite-loads
+   * on a hung dagre layout (large single-component residual).
+   * @param {Promise} renderPromise
+   * @param {number} [ms]
+   * @returns {Promise}
+   */
+  function withMermaidRenderTimeout(renderPromise, ms) {
+    var budget = typeof ms === 'number' && ms > 0 ? ms : MERMAID_RENDER_TIMEOUT_MS;
+    var p = renderPromise && typeof renderPromise.then === 'function'
+      ? renderPromise
+      : Promise.resolve(renderPromise);
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        var err = new Error('Mermaid render timed out after ' + budget + 'ms');
+        err.kind = 'timeout';
+        reject(err);
+      }, budget);
+      p.then(function (v) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(v);
+      }, function (e) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(e);
+      });
+    });
+  }
+
   // ── 🎯T268: single-graph scale-to-fill ─────────────────────────────────
   // Frontier Graph (mvp-large) must expand the rendered SVG to fill the pane
   // (contain: use full width or height). Shrink-only max-width:100% leaves
@@ -662,6 +716,10 @@
     openFromChromePlan: openFromChromePlan,
     isMermaidPanelOpen: isMermaidPanelOpen,
     shouldCloseMermaidOnEscape: shouldCloseMermaidOnEscape,
+    // 🎯T274
+    shouldPauseHistoryHydrate: shouldPauseHistoryHydrate,
+    MERMAID_RENDER_TIMEOUT_MS: MERMAID_RENDER_TIMEOUT_MS,
+    withMermaidRenderTimeout: withMermaidRenderTimeout,
     // 🎯T268
     parseSvgNaturalSize: parseSvgNaturalSize,
     computeContainScale: computeContainScale,

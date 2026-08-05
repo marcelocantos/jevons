@@ -2899,6 +2899,8 @@ function closeMermaidPanel() {
   panel.classList.remove('mvp-large');
   panel.hidden = true;
   showMermaidPasteArea(false);
+  // 🎯T274: drop any residual "Loading earlier…" that was suppressed while open.
+  if (typeof showHistoryLoading === 'function') showHistoryLoading(false);
 }
 /** Agents chrome / Open viz: durable surface without chat paste. */
 function openVizFromChrome() {
@@ -3109,8 +3111,11 @@ function renderMermaidDiagramPackInPanel(diagrams, opts) {
       return Promise.resolve(null);
     }
     const id = 'mvp-pack-mmd-' + (++mermaidSeq) + '-' + i;
-    return Promise.resolve()
-      .then(function () { return m.render(id, src); })
+    const renderP = Promise.resolve().then(function () { return m.render(id, src); });
+    const bounded = (MA && typeof MA.withMermaidRenderTimeout === 'function')
+      ? MA.withMermaidRenderTimeout(renderP)
+      : renderP;
+    return bounded
       .then(function (result) {
         host.innerHTML = result && result.svg ? result.svg : '';
         return result && result.svg;
@@ -3118,7 +3123,12 @@ function renderMermaidDiagramPackInPanel(diagrams, opts) {
       .catch(function (err) {
         host.innerHTML = '<pre class="mvp-source-fallback" style="text-align:left;font-size:11px;white-space:pre-wrap">' +
           (MA && MA.escapeHtml ? MA.escapeHtml(src) : src) + '</pre>';
-        host.title = 'Render failed: ' + (err && err.message ? err.message : 'invalid Mermaid');
+        const msg = err && err.message ? err.message : 'invalid Mermaid';
+        host.title = 'Render failed: ' + msg;
+        // 🎯T274: stable error, not infinite Loading.
+        if (err && err.kind === 'timeout') {
+          host.setAttribute('data-mvp-render-timeout', '1');
+        }
         return null;
       });
   });
@@ -3177,8 +3187,11 @@ function renderMermaidSourceInPanel(rawSrc, opts) {
   const id = 'mvp-mmd-' + (++mermaidSeq);
   setMermaidPanelStatus(o.status || 'Rendering…');
   const wantFill = o.scaleToFill === true || o.large === true;
-  return Promise.resolve()
-    .then(() => m.render(id, src))
+  const renderP = Promise.resolve().then(() => m.render(id, src));
+  const bounded = (MA && typeof MA.withMermaidRenderTimeout === 'function')
+    ? MA.withMermaidRenderTimeout(renderP)
+    : renderP;
+  return bounded
     .then(({ svg }) => {
       applyMermaidPanelContent({
         src: src,
@@ -3197,7 +3210,13 @@ function renderMermaidSourceInPanel(rawSrc, opts) {
       return svg;
     })
     .catch((err) => {
-      setMermaidPanelStatus('Render failed: ' + (err && err.message ? err.message : 'invalid Mermaid'));
+      // 🎯T274: stable error (timeout or parse) — keep source fallback body, not empty load.
+      const msg = err && err.message ? err.message : 'invalid Mermaid';
+      setMermaidPanelStatus('Render failed: ' + msg);
+      if (err && err.kind === 'timeout') {
+        const body = document.getElementById('mvp-body');
+        if (body) body.setAttribute('data-mvp-render-timeout', '1');
+      }
       return null;
     });
 }
@@ -3419,6 +3438,7 @@ window.closeMermaidPanel = closeMermaidPanel;
 window.openMermaidWindow = openMermaidWindow;
 window.openVizFromChrome = openVizFromChrome;
 window.openFrontierGraph = openFrontierGraph;
+window.isLargeGraphPanelOpen = isLargeGraphPanelOpen;
 window.renderMermaidDiagramPackInPanel = renderMermaidDiagramPackInPanel;
 window.loadLastMermaidGraph = loadLastMermaidGraph;
 window.renderMermaidSourceInPanel = renderMermaidSourceInPanel;
@@ -4223,6 +4243,8 @@ function setupHistorySentinel() {
   if (msgs.firstChild !== historySentinel) msgs.insertBefore(historySentinel, msgs.firstChild);
   if (!historyObserver) {
     historyObserver = new IntersectionObserver((entries) => {
+      // 🎯T274: do not thrash earlier-history while large graph overlay is open.
+      if (typeof isLargeGraphPanelOpen === 'function' && isLargeGraphPanelOpen()) return;
       // Residual: if progressive lag and owner is near top, nudge a page.
       if (entries.some(e => e.isIntersecting)) loadEarlier();
     }, { root: msgs, rootMargin: '400px 0px 0px 0px', threshold: 0 });
@@ -4252,6 +4274,12 @@ async function progressiveLoadRemainingHistory() {
   hydratePageSeq = 0;
   try {
     while (oldestIndex > 0) {
+      // 🎯T274: pause hydrate while Frontier Graph large panel is open so
+      // "Loading earlier…" does not flash above a slow/empty graph viewer.
+      if (typeof isLargeGraphPanelOpen === 'function' && isLargeGraphPanelOpen()) {
+        await new Promise(function (r) { setTimeout(r, HISTORY_PAGE_GAP_MS); });
+        continue;
+      }
       const before = oldestIndex;
       await loadEarlier();
       // Stall guard: if a page did not advance, stop to avoid tight loop.
@@ -4291,8 +4319,21 @@ async function progressiveLoadRemainingHistory() {
   }
 }
 
+/** 🎯T274: large Frontier Graph overlay open → pause earlier-history chrome. */
+function isLargeGraphPanelOpen() {
+  const panel = document.getElementById('mermaid-viz-panel');
+  const MA = window.MermaidActions;
+  if (MA && typeof MA.shouldPauseHistoryHydrate === 'function') {
+    return !!MA.shouldPauseHistoryHydrate(panel);
+  }
+  if (!panel || panel.hidden) return false;
+  return panel.classList.contains('open') && panel.classList.contains('mvp-large');
+}
+
 async function loadEarlier() {
   if (loadingEarlier || oldestIndex <= 0) return;
+  // 🎯T274: never flash "Loading earlier…" over the large graph panel.
+  if (isLargeGraphPanelOpen()) return;
   loadingEarlier = true;
   showHistoryLoading(true);
   const before = oldestIndex;
@@ -4351,6 +4392,10 @@ async function loadEarlier() {
 // perturb the prepend scroll-position math.
 function showHistoryLoading(on) {
   const pane = msgs.parentElement;
+  // 🎯T274: suppress overlay while large graph is open (even if a page is mid-flight).
+  if (on && typeof isLargeGraphPanelOpen === 'function' && isLargeGraphPanelOpen()) {
+    on = false;
+  }
   if (on) {
     if (!historyLoadingEl) {
       historyLoadingEl = document.createElement('div');

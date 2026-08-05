@@ -319,9 +319,12 @@
   }
 
   // 🎯T190: Mermaid layout knobs per component diagram; panel packs blocks.
+  // 🎯T274: cap nodes/diagram — browser Mermaid hangs on 60+ node single graphs
+  // (orthograph external ledger was one 64-node component → empty viewer).
   var MERMAID_NODE_SPACING = 28;
   var MERMAID_RANK_SPACING = 36;
   var MERMAID_WRAPPING_WIDTH = 180;
+  var MERMAID_MAX_NODES_PER_DIAGRAM = 24;
   var FRONTIER_GRAPH_PACK = 'wrap-grid';
   var GRAPH_DIAGRAM_KIND_COMPONENT = 'component';
   var GRAPH_DIAGRAM_KIND_ORPHANS = 'orphans';
@@ -399,6 +402,75 @@
     return { connected: connected, orphans: orphans };
   }
 
+  // targetRootFamily — T1.2.3 → T1 (🎯T274 hierarchical re-split).
+  function targetRootFamily(id) {
+    var s = String(id == null ? '' : id).trim();
+    if (!s) return s;
+    var dot = s.indexOf('.');
+    return dot >= 0 ? s.slice(0, dot) : s;
+  }
+
+  // chunkIDList — hard slices of maxNodes (🎯T274).
+  function chunkIDList(ids, maxNodes) {
+    var max = maxNodes > 0 ? maxNodes : MERMAID_MAX_NODES_PER_DIAGRAM;
+    var list = Array.isArray(ids) ? ids : [];
+    if (!list.length) return [];
+    if (list.length <= max) return [list.slice()];
+    var out = [];
+    for (var i = 0; i < list.length; i += max) {
+      out.push(list.slice(i, i + max));
+    }
+    return out;
+  }
+
+  // splitOversizedComponents — re-partition components > maxNodes (🎯T274).
+  // Prefer hierarchical root-family groups packed into bins ≤ max; hard-chunk
+  // if a single family is still huge (avoids one diagram per tiny root).
+  function splitOversizedComponents(connected, maxNodes) {
+    var max = maxNodes > 0 ? maxNodes : MERMAID_MAX_NODES_PER_DIAGRAM;
+    var comps = Array.isArray(connected) ? connected : [];
+    var out = [];
+    for (var c = 0; c < comps.length; c++) {
+      var comp = comps[c];
+      if (!comp || !comp.length) continue;
+      if (comp.length <= max) {
+        out.push(comp.slice());
+        continue;
+      }
+      var groups = {};
+      var roots = [];
+      for (var i = 0; i < comp.length; i++) {
+        var id = comp[i];
+        var root = targetRootFamily(id);
+        if (!Object.prototype.hasOwnProperty.call(groups, root)) {
+          groups[root] = [];
+          roots.push(root);
+        }
+        groups[root].push(id);
+      }
+      roots.sort(targetIDCompare);
+      var bin = [];
+      function flush() {
+        if (!bin.length) return;
+        out.push(bin);
+        bin = [];
+      }
+      for (var r = 0; r < roots.length; r++) {
+        var ids = groups[roots[r]].slice().sort(targetIDCompare);
+        if (ids.length > max) {
+          flush();
+          var chunks = chunkIDList(ids, max);
+          for (var k = 0; k < chunks.length; k++) out.push(chunks[k]);
+          continue;
+        }
+        if (bin.length + ids.length > max) flush();
+        bin = bin.concat(ids);
+      }
+      flush();
+    }
+    return out;
+  }
+
   // emitMermaidForNodes — one flowchart TB for a node set + among-set edges.
   function emitMermaidForNodes(ids, byId, rawEdges) {
     var lines = [mermaidActiveGraphHeader()];
@@ -458,17 +530,24 @@
         edgeCount: emitted.edgeCount,
       });
     }
+    // 🎯T274: cap orphan strips the same way (large orphan list also hangs Mermaid).
     var orph = Array.isArray(orphans) ? orphans : [];
     if (orph.length) {
-      var oe = emitMermaidForNodes(orph, byId, rawEdges);
-      blocks.push({
-        id: 'orphans',
-        kind: GRAPH_DIAGRAM_KIND_ORPHANS,
-        title: 'Orphans (' + orph.length + ')',
-        mermaid: oe.mermaid,
-        nodeCount: orph.length,
-        edgeCount: oe.edgeCount,
-      });
+      var ochunks = chunkIDList(orph, MERMAID_MAX_NODES_PER_DIAGRAM);
+      for (var oi = 0; oi < ochunks.length; oi++) {
+        var chunk = ochunks[oi];
+        var oe = emitMermaidForNodes(chunk, byId, rawEdges);
+        blocks.push({
+          id: ochunks.length > 1 ? ('orphans_' + oi) : 'orphans',
+          kind: GRAPH_DIAGRAM_KIND_ORPHANS,
+          title: ochunks.length > 1
+            ? ('Orphans part ' + (oi + 1) + ' (' + chunk.length + ')')
+            : ('Orphans (' + chunk.length + ')'),
+          mermaid: oe.mermaid,
+          nodeCount: chunk.length,
+          edgeCount: oe.edgeCount,
+        });
+      }
     }
     return blocks;
   }
@@ -529,8 +608,13 @@
 
     var islands = packActiveGraphIslands(ids, rawEdges);
     var split = splitOrphanComponents(islands);
-    var diagrams = packActiveGraphDiagrams(
+    // 🎯T274: re-split oversized components before emit (external large ledgers).
+    var connected = splitOversizedComponents(
       split.connected,
+      MERMAID_MAX_NODES_PER_DIAGRAM
+    );
+    var diagrams = packActiveGraphDiagrams(
+      connected,
       split.orphans,
       byId,
       rawEdges
@@ -1277,6 +1361,9 @@
     mermaidActiveGraphHeader: mermaidActiveGraphHeader,
     packActiveGraphIslands: packActiveGraphIslands,
     splitOrphanComponents: splitOrphanComponents,
+    splitOversizedComponents: splitOversizedComponents,
+    targetRootFamily: targetRootFamily,
+    chunkIDList: chunkIDList,
     packActiveGraphDiagrams: packActiveGraphDiagrams,
     joinGraphDiagramSources: joinGraphDiagramSources,
     emitMermaidForNodes: emitMermaidForNodes,
@@ -1286,6 +1373,7 @@
     MERMAID_NODE_SPACING: MERMAID_NODE_SPACING,
     MERMAID_RANK_SPACING: MERMAID_RANK_SPACING,
     MERMAID_WRAPPING_WIDTH: MERMAID_WRAPPING_WIDTH,
+    MERMAID_MAX_NODES_PER_DIAGRAM: MERMAID_MAX_NODES_PER_DIAGRAM,
     mermaidNodeId: mermaidNodeId,
     isProductOwnerName: isProductOwnerName,
     resolvePlayPO: resolvePlayPO,

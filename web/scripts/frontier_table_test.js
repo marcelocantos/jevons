@@ -1104,6 +1104,70 @@ test('T253 index.html loadFrontier/graph pass selected agent workdir', function 
     'selectAgent reloads on overseer/deselect and agent select');
 });
 
+// 🎯T274: oversized single component (orthograph-shaped) re-splits for Mermaid.
+test('T274 splitOversizedComponents caps nodes per diagram', function () {
+  assert.strictEqual(FT.MERMAID_MAX_NODES_PER_DIAGRAM, 24);
+  assert.strictEqual(FT.targetRootFamily('T1.2.3'), 'T1');
+  assert.strictEqual(FT.targetRootFamily('T10'), 'T10');
+  // Small component passes through.
+  const small = FT.splitOversizedComponents([['T1', 'T1.1', 'T2']], 24);
+  assert.strictEqual(small.length, 1);
+  assert.strictEqual(small[0].length, 3);
+  // Mega component spanning many root families.
+  const mega = [];
+  for (let i = 1; i <= 15; i++) {
+    mega.push('T' + i);
+    for (let j = 1; j <= 3; j++) mega.push('T' + i + '.' + j);
+  }
+  assert.strictEqual(mega.length, 60);
+  const parts = FT.splitOversizedComponents([mega], FT.MERMAID_MAX_NODES_PER_DIAGRAM);
+  assert.ok(parts.length >= 2, 're-split 60-node mega, got ' + parts.length);
+  let total = 0;
+  parts.forEach(function (p) {
+    assert.ok(p.length <= FT.MERMAID_MAX_NODES_PER_DIAGRAM, 'part len ' + p.length);
+    total += p.length;
+  });
+  assert.strictEqual(total, 60);
+});
+
+test('T274 buildActiveDependencyDiagrams re-splits orthograph-sized chain', function () {
+  const targets = [];
+  for (let i = 1; i <= 30; i++) {
+    const row = { id: 'T' + i, name: 'Node ' + i };
+    if (i > 1) row.depends_on = [{ id: 'T' + (i - 1) }];
+    targets.push(row);
+  }
+  const pack = FT.buildActiveDependencyDiagrams(targets);
+  assert.strictEqual(pack.nodeCount, 30);
+  assert.ok(pack.diagrams.length >= 2,
+    '30-node chain must produce multiple diagrams, got ' + pack.diagrams.length);
+  pack.diagrams.forEach(function (d) {
+    assert.ok(d.nodeCount <= FT.MERMAID_MAX_NODES_PER_DIAGRAM,
+      d.id + ' has ' + d.nodeCount + ' nodes');
+    assert.ok(d.mermaid && d.mermaid.indexOf('flowchart') >= 0, d.id + ' has mermaid');
+  });
+});
+
+test('T274 index.html pauses history hydrate while large graph open', function () {
+  const html = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  assert.ok(html.indexOf('function isLargeGraphPanelOpen') >= 0, 'isLargeGraphPanelOpen');
+  assert.ok(html.indexOf('shouldPauseHistoryHydrate') >= 0, 'uses pure pause helper');
+  assert.ok(html.indexOf('isLargeGraphPanelOpen()') >= 0, 'wired into hydrate path');
+  assert.ok(html.indexOf('withMermaidRenderTimeout') >= 0, 'render timeout wired');
+  // loadEarlier must refuse while large graph open (no Loading earlier flash).
+  const leStart = html.indexOf('async function loadEarlier');
+  assert.ok(leStart >= 0);
+  const leEnd = html.indexOf('\nfunction ', leStart + 10);
+  const leBody = html.slice(leStart, leEnd > leStart ? leEnd : leStart + 2500);
+  assert.ok(leBody.indexOf('isLargeGraphPanelOpen') >= 0, 'loadEarlier checks large panel');
+  // showHistoryLoading suppresses overlay while large panel open.
+  const shStart = html.indexOf('function showHistoryLoading');
+  assert.ok(shStart >= 0);
+  const shEnd = html.indexOf('\nfunction ', shStart + 10);
+  const shBody = html.slice(shStart, shEnd > shStart ? shEnd : shStart + 1200);
+  assert.ok(shBody.indexOf('isLargeGraphPanelOpen') >= 0, 'showHistoryLoading suppresses');
+});
+
 // 🎯T267: target-ask auto-selects owning PO + highlights Frontier row.
 test('T267 extractTargetIDs + detectTargetAsk + planTargetAskFocus', function () {
   assert.strictEqual(typeof FT.extractTargetIDs, 'function');
