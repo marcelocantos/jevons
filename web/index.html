@@ -3577,17 +3577,26 @@ function teardownHistorySentinel() {
 }
 function teardownInfiniteScroll() { teardownHistorySentinel(); }
 
+// 🎯T259: min gap between progressive /api/history pages so large chatlogs
+// cannot peg a core with back-to-back full-file ReadRange (~every rAF).
+const HISTORY_PAGE_GAP_MS = 400;
+// Sample hydrate_page decision logs (start/done stay Info).
+const HISTORY_PAGE_LOG_EVERY = 25;
+let hydratePageSeq = 0;
+
 async function progressiveLoadRemainingHistory() {
   if (progressiveHistoryRunning) return;
   progressiveHistoryRunning = true;
+  hydratePageSeq = 0;
   try {
     while (oldestIndex > 0) {
       const before = oldestIndex;
       await loadEarlier();
       // Stall guard: if a page did not advance, stop to avoid tight loop.
       if (oldestIndex >= before) break;
-      // Yield so recent-first viewport can paint between pages.
+      // 🎯T259: yield + rate-limit — rAF alone was ~180ms and still burned CPU.
       await new Promise(function (r) { requestAnimationFrame(r); });
+      await new Promise(function (r) { setTimeout(r, HISTORY_PAGE_GAP_MS); });
     }
   } finally {
     progressiveHistoryRunning = false;
@@ -3642,9 +3651,14 @@ async function loadEarlier() {
     noteScrollMetrics();
     // Materialize only shells that entered the anticipation band.
     scheduleVirtualize();
-    // 🎯T120.4: one info log per history page (bounded; not per-frame).
+    // 🎯T259 / T120.4: sample hydrate_page (not every page at info — large
+    // journals were multi-hundred INFO lines and still burned log path).
+    hydratePageSeq++;
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
-      jLog('info', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_page', {
+      const sample = hydratePageSeq === 1 ||
+        hydratePageSeq % HISTORY_PAGE_LOG_EVERY === 0 ||
+        oldestIndex <= 0;
+      jLog(sample ? 'info' : 'debug', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_page', {
         before: before,
         after: oldestIndex,
         lines: lines.length,

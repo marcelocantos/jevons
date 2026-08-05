@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marcelocantos/pigeon"
@@ -119,6 +120,16 @@ type Server struct {
 
 	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
 	tokenLimiter *tokenRateLimiter
+
+	// historyGate bounds concurrent GET /api/history so progressive hydrate
+	// of a multi-megabyte chatlog cannot peg more than one core (🎯T259).
+	historyGate *historyHydrateGate
+	// historyPageSeq counts successful /api/history responses for sampled
+	// Info logging (🎯T259 spam reduction).
+	historyPageSeq atomic.Uint64
+	// historySlowHook is set only in hermetic tests to hold the gate while
+	// concurrent requests pile up (proves max in-flight ≤ capacity).
+	historySlowHook func()
 
 	// peerSessionFactory builds pure sqlpipe Peer sessions for /ws/sqlpipe
 	// (🎯T10 pure transport residual). Nil → endpoint fails closed.
@@ -252,6 +263,7 @@ func New(version, stateDir string) *Server {
 		inspectByCh:   make(map[chan string]string),
 		inspectChans:  make(map[string]map[chan string]struct{}),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
+		historyGate:   newHistoryHydrateGate(maxHistoryHydrateConcurrent),
 		agentProgress: NewAgentProgressHub(),
 	}
 

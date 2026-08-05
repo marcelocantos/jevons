@@ -187,6 +187,11 @@ test('index.html wires decision_log + always logs route + history hydrate', func
     'page-session corr should be wired');
   assert.ok(/decision\.thread_route|decisionMsg\(['"]thread_route/.test(html),
     'msg convention decision.thread_route');
+  // 🎯T259: progressive hydrate rate-limit + sampled page logs.
+  assert.ok(html.includes('HISTORY_PAGE_GAP_MS'),
+    'T259 must rate-limit progressive /api/history pages');
+  assert.ok(html.includes('HISTORY_PAGE_LOG_EVERY'),
+    'T259 must sample hydrate_page info logs');
 });
 
 if (failed) {

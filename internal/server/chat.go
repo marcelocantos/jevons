@@ -37,7 +37,18 @@ const historyReplayTurns = 30
 // (🎯T57): GET /api/history?end=<idx>&limit=<n> returns the window
 // [end-limit, end) as a JSON array of raw wire frames, plus the new
 // window start and the total line count. The client prepends them.
+//
+// 🎯T259: concurrent handlers are serialised via historyGate so a large
+// chatlog progressive hydrate cannot burn more than one core. Successful
+// pages log at Debug (sampled Info every historyInfoEvery) to avoid
+// hydrate_page INFO spam on multi-100k-line journals.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	s.historyGate.acquire()
+	defer s.historyGate.release()
+	if s.historySlowHook != nil {
+		s.historySlowHook()
+	}
+
 	s.mu.RLock()
 	clog := s.chatLog
 	s.mu.RUnlock()
@@ -67,6 +78,16 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"start": end - len(lines), "total": total, "lines": raw,
 	})
+	// 🎯T259: Debug per page; sample Info so large progressive hydrates do not
+	// flood the decision/event log at production default.
+	n := s.historyPageSeq.Add(1)
+	if n == 1 || n%historyInfoEvery == 0 {
+		slog.Info("history hydrate page",
+			"end", end, "limit", limit, "lines", len(lines), "total", total, "seq", n)
+	} else {
+		slog.Debug("history hydrate page",
+			"end", end, "limit", limit, "lines", len(lines), "total", total, "seq", n)
+	}
 }
 
 // SetProcess attaches the persistent Claude process for the /ws/chat endpoint.
