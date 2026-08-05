@@ -473,7 +473,7 @@ test('T268 hermetic 10+ node fixture: dense graph scale-to-fill uses pane', func
   assert.ok(/px$/.test(style.width));
 });
 
-test('T268 multi-diagram is pack residual (does not block single path)', function () {
+test('T268 multi diagramCount on single planner skips (use T276 pack path)', function () {
   const plan = MA.planSingleGraphScaleToFill({
     svgW: 800,
     svgH: 600,
@@ -481,9 +481,102 @@ test('T268 multi-diagram is pack residual (does not block single path)', functio
     paneH: 900,
     diagramCount: 4,
   });
-  assert.strictEqual(plan.mode, 'pack-residual');
+  assert.strictEqual(plan.mode, 'skip');
   assert.strictEqual(plan.fillsPane, false);
-  assert.ok(/bin-pack|residual|Multi-component/i.test(plan.residual || ''));
+});
+
+// ── 🎯T276: pack natural boxes → pane form-factor → scale composite ──────
+
+test('T276 wrap-grid micro-island oracle FAILS ≥95% fill (old path)', function () {
+  // Orthograph-class: 3 natural diagram boxes in a large frontier pane.
+  // Old wrap-grid minmax(320px) leaves micro-islands — must NOT fill pane.
+  const boxes = [
+    { w: 900, h: 600 },
+    { w: 700, h: 500 },
+    { w: 500, h: 400 },
+  ];
+  const paneW = 1400;
+  const paneH = 900;
+  const micro = MA.planWrapGridMicroIslandOracle(boxes, { paneW: paneW, paneH: paneH, cellMax: 320 });
+  assert.strictEqual(micro.mode, 'wrap-grid-micro');
+  assert.strictEqual(micro.fillsPane, false, 'wrap-grid micro-islands must fail fill oracle');
+  assert.ok(micro.maxCellCover < 0.5, 'max cover with 320px cells=' + micro.maxCellCover);
+});
+
+test('T276 pack+scale multi-box fills ≥95% of one pane axis', function () {
+  // Same orthograph-class fixture: 3 components, large pane.
+  const boxes = [
+    { w: 900, h: 600, id: 'c0' },
+    { w: 700, h: 500, id: 'c1' },
+    { w: 500, h: 400, id: 'c2' },
+  ];
+  const paneW = 1400;
+  const paneH = 900;
+  const plan = MA.planMultiDiagramPackScaleToFill({
+    boxes: boxes,
+    paneW: paneW,
+    paneH: paneH,
+    padding: 0,
+    gap: 12,
+  });
+  assert.strictEqual(plan.mode, 'pack-scale-to-fill');
+  assert.strictEqual(plan.placements.length, 3);
+  assert.ok(plan.scale > 0, 'scale=' + plan.scale);
+  assert.strictEqual(plan.fillsPane, true, 'composite must fill pane');
+  const cover = Math.max(plan.displayW / paneW, plan.displayH / paneH);
+  assert.ok(cover >= 0.95, 'cover=' + cover + ' must be ≥0.95');
+  // Display composite uses full contain — at least one axis nearly pane.
+  assert.ok(
+    Math.abs(plan.displayW - paneW) < 1 || Math.abs(plan.displayH - paneH) < 1 || cover >= 0.95
+  );
+  // Placements are non-overlapping in display space (shelf pack).
+  for (let i = 0; i < plan.placements.length; i++) {
+    const a = plan.placements[i];
+    assert.ok(a.displayW > 0 && a.displayH > 0);
+    for (let j = i + 1; j < plan.placements.length; j++) {
+      const b = plan.placements[j];
+      const sepX = a.displayX + a.displayW <= b.displayX + 1e-6
+        || b.displayX + b.displayW <= a.displayX + 1e-6;
+      const sepY = a.displayY + a.displayH <= b.displayY + 1e-6
+        || b.displayY + b.displayH <= a.displayY + 1e-6;
+      assert.ok(sepX || sepY, 'placements ' + i + ',' + j + ' must not overlap');
+    }
+  }
+});
+
+test('T276 packBoxesIntoPaneAspect returns composite matching pane aspect spirit', function () {
+  const boxes = [
+    { w: 400, h: 300 },
+    { w: 400, h: 300 },
+    { w: 400, h: 300 },
+  ];
+  // Wide pane → shelf width should allow side-by-side packing.
+  const packed = MA.packBoxesIntoPaneAspect(boxes, { paneW: 1600, paneH: 800, gap: 0 });
+  assert.ok(packed.compositeW > 0 && packed.compositeH > 0);
+  assert.strictEqual(packed.placements.length, 3);
+  // At least two boxes share a row when shelf is wide enough.
+  const ys = packed.placements.map(function (p) { return p.y; });
+  const uniqueY = ys.filter(function (y, i) { return ys.indexOf(y) === i; });
+  assert.ok(uniqueY.length < 3, 'wide pane should shelf-pack multiple per row, ys=' + ys);
+});
+
+test('T276 index.html wires pack+scale for multi-diagram (not residual only)', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('planMultiDiagramPackScaleToFill') >= 0
+    || html.indexOf('fitMermaidPackToPane') >= 0,
+    'multi pack fit wired');
+  assert.ok(html.indexOf('function fitMermaidPackToPane') >= 0, 'fitMermaidPackToPane defined');
+  assert.ok(html.indexOf('fitMermaidPackToPane') >= 0
+    && html.indexOf('renderMermaidDiagramPackInPanel') >= 0,
+    'pack renderer triggers pack fit');
+  // Must not early-return multi as residual-only.
+  const fitStart = html.indexOf('function fitMermaidPanelSvgToPane');
+  assert.ok(fitStart >= 0);
+  const fitSlice = html.slice(fitStart, fitStart + 1200);
+  assert.ok(fitSlice.indexOf('fitMermaidPackToPane') >= 0, 'single fit routes pack to T276');
+  assert.ok(fitSlice.indexOf('multi residual') < 0, 'no multi residual early-return');
 });
 
 test('T268 applySvgScaleToFill mutates style + data attr', function () {

@@ -235,23 +235,26 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   height: auto;
   flex-shrink: 0;
 }
-/* 🎯T190: multi-diagram pack — each connected component is its own Mermaid
-   block; wrap-grid fills the ~90% panel without one mega horizontal strip.
-   Residual (T268): multi-component bin-pack into pane aspect later. */
+/* 🎯T190/T276: multi-diagram pack host. T276 places blocks absolutely after
+   pack+scale; relative body is the composite coordinate space. */
 #mermaid-viz-panel .mvp-body.mvp-pack {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
-  gap: 12px;
-  align-content: start;
+  position: relative;
+  display: block;
   text-align: left;
+  overflow: auto;
+}
+#mermaid-viz-panel .mvp-body.mvp-pack.mvp-pack-scaled {
+  /* Composite sized by fitMermaidPackToPane (displayW×displayH). */
+  overflow: auto;
 }
 #mermaid-viz-panel .mvp-pack-block {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 10px 10px;
   background: var(--surface-raised);
-  overflow: auto;
+  overflow: hidden;
   min-width: 0;
+  box-sizing: border-box;
 }
 #mermaid-viz-panel .mvp-pack-block .mvp-pack-title {
   font-size: 11px;
@@ -259,9 +262,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   color: var(--text-muted);
   margin: 0 0 6px;
 }
-#mermaid-viz-panel .mvp-pack-block svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
-#mermaid-viz-panel .mvp-pack-block[data-kind="orphans"] {
-  grid-column: 1 / -1; /* orphans span full width when last */
+#mermaid-viz-panel .mvp-pack-block svg {
+  max-width: none;
+  max-height: none;
+  height: auto;
+  display: block;
+  margin: 0 auto;
 }
 #mermaid-viz-panel .mvp-status {
   font-size: 11px; color: var(--text-muted); padding: 0 10px 8px; flex-shrink: 0;
@@ -2810,14 +2816,16 @@ function applyMermaidPanelContent(opts) {
 /**
  * 🎯T268: scale a single rendered SVG to fill #mvp-body (contain).
  * Used for Frontier Graph large panel / single-component path.
- * Multi-diagram pack is residual — leave pack layout alone.
+ * Multi-diagram → fitMermaidPackToPane (🎯T276 pack+scale).
  */
 function fitMermaidPanelSvgToPane(opts) {
   const o = opts || {};
   const MA = window.MermaidActions;
   const body = document.getElementById('mvp-body');
   if (!body || !MA || typeof MA.planSingleGraphScaleToFill !== 'function') return null;
-  if (body.classList.contains('mvp-pack')) return null; // multi residual
+  if (body.classList.contains('mvp-pack')) {
+    return fitMermaidPackToPane(o);
+  }
   const svg = body.querySelector('svg');
   if (!svg) return null;
   const nat = MA.parseSvgNaturalSize(svg);
@@ -2846,6 +2854,101 @@ function fitMermaidPanelSvgToPane(opts) {
   if (plan.mode !== 'scale-to-fill') return plan;
   body.classList.add('mvp-scale-fill');
   MA.applySvgScaleToFill(svg, plan);
+  return plan;
+}
+/**
+ * 🎯T276: multi-diagram pack+scale.
+ * (1) measure each block SVG natural size
+ * (2) pack into pane form-factor rectangle
+ * (3) scale composite to fill pane; place blocks absolutely
+ */
+function fitMermaidPackToPane(opts) {
+  const o = opts || {};
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  if (!body || !MA || typeof MA.planMultiDiagramPackScaleToFill !== 'function') return null;
+  const blocks = body.querySelectorAll('.mvp-pack-block');
+  if (!blocks || !blocks.length) return null;
+  const boxes = [];
+  const blockList = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    const svg = block.querySelector('svg');
+    if (!svg) continue;
+    const nat = MA.parseSvgNaturalSize(svg);
+    let w = nat.w;
+    let h = nat.h;
+    if (!w || !h) {
+      try {
+        const r = svg.getBoundingClientRect && svg.getBoundingClientRect();
+        if (r && r.width > 0 && r.height > 0) {
+          w = r.width;
+          h = r.height;
+        }
+      } catch (_) { /* ignore */ }
+    }
+    if (!w || !h) continue;
+    // Title chrome ~28px; include so pack doesn't clip labels.
+    const title = block.querySelector('.mvp-pack-title');
+    const titleH = title ? 28 : 0;
+    const padChrome = 20; // block padding
+    boxes.push({
+      w: w,
+      h: h + titleH + padChrome,
+      id: block.getAttribute('data-diagram-id') || ('d' + i),
+    });
+    blockList.push({ block: block, svg: svg, naturalW: w, naturalH: h });
+  }
+  if (!boxes.length) return null;
+  const paneW = body.clientWidth || 0;
+  const paneH = body.clientHeight || 0;
+  const plan = MA.planMultiDiagramPackScaleToFill({
+    boxes: boxes,
+    paneW: paneW,
+    paneH: paneH,
+    padding: o.padding != null ? o.padding : 0,
+    gap: o.gap != null ? o.gap : 12,
+  });
+  if (plan.mode !== 'pack-scale-to-fill') return plan;
+  body.classList.add('mvp-pack-scaled');
+  body.style.position = 'relative';
+  body.style.minHeight = Math.round(plan.displayH) + 'px';
+  // Center composite in pane when smaller on one axis.
+  const offsetX = Math.max(0, (paneW - plan.displayW) / 2);
+  const offsetY = Math.max(0, (paneH - plan.displayH) / 2);
+  for (let p = 0; p < plan.placements.length; p++) {
+    const pl = plan.placements[p];
+    const item = blockList[pl.i];
+    if (!item) continue;
+    // Placement box includes title chrome; SVG uses natural aspect within content area.
+    const titleH = item.block.querySelector('.mvp-pack-title') ? 28 * plan.scale : 0;
+    const padChrome = 20 * plan.scale;
+    const contentH = Math.max(1, pl.displayH - titleH - padChrome);
+    const contentW = pl.displayW;
+    // Contain natural SVG into content slot of the placement.
+    const svgScale = MA.computeContainScale(item.naturalW, item.naturalH, contentW, contentH);
+    const svgDispW = item.naturalW * svgScale;
+    const svgDispH = item.naturalH * svgScale;
+    if (typeof MA.applyPackPlacement === 'function') {
+      MA.applyPackPlacement(item.block, item.svg, {
+        displayX: pl.displayX + offsetX,
+        displayY: pl.displayY + offsetY,
+        displayW: pl.displayW,
+        displayH: pl.displayH,
+      }, plan.scale);
+    } else {
+      item.block.style.position = 'absolute';
+      item.block.style.left = (pl.displayX + offsetX) + 'px';
+      item.block.style.top = (pl.displayY + offsetY) + 'px';
+      item.block.style.width = pl.displayW + 'px';
+    }
+    MA.applySvgScaleToFill(item.svg, {
+      mode: 'scale-to-fill',
+      scale: svgScale,
+      displayW: svgDispW,
+      displayH: svgDispH,
+    });
+  }
   return plan;
 }
 function pinMermaidPanelState(extraStatus) {
@@ -3004,8 +3107,8 @@ function openFrontierGraph(opts) {
         ? (' · ' + (model.nodeCount || 0) + ' nodes · ' + (model.edgeCount || 0) + ' edges · ' +
            nBlocks + ' diagram' + (nBlocks === 1 ? '' : 's'))
         : '';
-      // 🎯T268: single-graph → scale-to-fill pane (not pack grid cell).
-      // Multi-diagram pack remains residual (bin-pack later).
+      // 🎯T268: single-graph → scale-to-fill pane.
+      // 🎯T276: multi-diagram → pack+scale (fitMermaidPackToPane after render).
       if (hasDiagrams && model.diagrams.length === 1) {
         const only = model.diagrams[0];
         const singleSrc = (only && only.mermaid) || model.mermaid;
@@ -3142,6 +3245,10 @@ function renderMermaidDiagramPackInPanel(diagrams, opts) {
       pack: o.pack || 'wrap-grid',
       diagrams: list,
     };
+    // 🎯T276: pack natural boxes into pane form-factor, scale composite to fill.
+    requestAnimationFrame(function () {
+      fitMermaidPackToPane({ padding: 0 });
+    });
     if (o.pin !== false) pinMermaidPanelState(o.status || 'Rendered · pinned as last');
     else setMermaidPanelStatus(o.status || 'Rendered');
     return svgs;

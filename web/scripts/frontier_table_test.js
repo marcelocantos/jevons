@@ -873,10 +873,12 @@ test('T185/T190 index.html Graph control + large panel + multi-diagram pack CSS'
   assert.ok(/#mermaid-viz-panel\s+\.mvp-body\s+svg\s*\{[^}]*max-width:\s*100%/.test(html)
     || /#mermaid-viz-panel \.mvp-body svg \{[^}]*max-width: 100%/.test(html),
     'mvp-body svg max-width 100%');
-  // 🎯T190: multi-diagram wrap-grid pack blocks.
+  // 🎯T190/T276: multi-diagram pack blocks + pack+scale (not 320px wrap-grid only).
   assert.ok(html.indexOf('mvp-pack') >= 0, 'mvp-pack class');
   assert.ok(html.indexOf('mvp-pack-block') >= 0, 'mvp-pack-block');
-  assert.ok(html.indexOf('auto-fill') >= 0, 'wrap-grid columns');
+  assert.ok(html.indexOf('function fitMermaidPackToPane') >= 0
+    || html.indexOf('planMultiDiagramPackScaleToFill') >= 0,
+    'T276 pack+scale path');
   assert.ok(html.indexOf('function renderMermaidDiagramPackInPanel') >= 0,
     'multi-diagram renderer');
   assert.ok(html.indexOf('renderMermaidDiagramPackInPanel') >= 0

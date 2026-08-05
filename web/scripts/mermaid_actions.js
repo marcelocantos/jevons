@@ -533,8 +533,9 @@
   // ── 🎯T268: single-graph scale-to-fill ─────────────────────────────────
   // Frontier Graph (mvp-large) must expand the rendered SVG to fill the pane
   // (contain: use full width or height). Shrink-only max-width:100% leaves
-  // tiny graphs floating in empty margins — fail. Multi-component pack is a
-  // residual (later bin-pack shelf/skyline); single graph ships first.
+  // tiny graphs floating in empty margins — fail.
+  // 🎯T276: multi-diagram = pack natural boxes into pane aspect, then scale
+  // the composite (not wrap-grid minmax(320px) micro-islands).
 
   /** Positive finite number or 0. */
   function positiveNumber(n) {
@@ -591,32 +592,30 @@
 
   /**
    * 🎯T268 fit plan for a single graph in the frontier pane.
+   * Multi-diagram goes through planMultiDiagramPackScaleToFill (🎯T276).
    * @param {{
    *   svgW: number, svgH: number, paneW: number, paneH: number,
    *   padding?: number, diagramCount?: number
    * }} opts
    * @returns {{
-   *   mode: 'scale-to-fill'|'pack-residual'|'skip',
+   *   mode: 'scale-to-fill'|'skip',
    *   scale: number,
    *   displayW: number,
    *   displayH: number,
-   *   fillsPane: boolean,
-   *   residual?: string
+   *   fillsPane: boolean
    * }}
    */
   function planSingleGraphScaleToFill(opts) {
     const o = opts || {};
     const count = o.diagramCount != null ? Math.floor(o.diagramCount) : 1;
     if (count > 1) {
+      // Caller should use planMultiDiagramPackScaleToFill; keep single-path pure.
       return {
-        mode: 'pack-residual',
+        mode: 'skip',
         scale: 1,
         displayW: positiveNumber(o.svgW),
         displayH: positiveNumber(o.svgH),
         fillsPane: false,
-        residual:
-          'Multi-component: later bin-pack (shelf/skyline) into pane aspect; ' +
-          'single-graph scale-to-fill is the T268 product path.',
       };
     }
     const pad = o.padding != null ? Math.max(0, positiveNumber(o.padding) || 0) : 24;
@@ -651,12 +650,220 @@
   }
 
   /**
+   * 🎯T276: shelf-pack natural diagram boxes into a nominal rectangle whose
+   * aspect matches the pane. Simple first-fit decreasing shelf (height-major).
+   * @param {Array<{w:number,h:number,id?:string}>} boxes
+   * @param {{ paneW: number, paneH: number, gap?: number }} opts
+   * @returns {{
+   *   placements: Array<{i:number,id?:string,x:number,y:number,w:number,h:number}>,
+   *   compositeW: number,
+   *   compositeH: number,
+   *   shelfWidth: number
+   * }}
+   */
+  function packBoxesIntoPaneAspect(boxes, opts) {
+    const o = opts || {};
+    const paneW = positiveNumber(o.paneW);
+    const paneH = positiveNumber(o.paneH);
+    const gap = o.gap != null ? Math.max(0, positiveNumber(o.gap) || 0) : 12;
+    const list = Array.isArray(boxes) ? boxes : [];
+    const items = [];
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i] || {};
+      const w = positiveNumber(b.w);
+      const h = positiveNumber(b.h);
+      if (!w || !h) continue;
+      items.push({ i: i, id: b.id, w: w, h: h });
+    }
+    if (!items.length) {
+      return { placements: [], compositeW: 0, compositeH: 0, shelfWidth: 0 };
+    }
+    // Target shelf width from pane aspect so packed rows fill a pane-shaped bin.
+    // floor at largest box width so every item can sit on a shelf.
+    let maxW = 0;
+    let area = 0;
+    for (let j = 0; j < items.length; j++) {
+      if (items[j].w > maxW) maxW = items[j].w;
+      area += items[j].w * items[j].h;
+    }
+    let shelfWidth = maxW;
+    if (paneW > 0 && paneH > 0) {
+      // Ideal width for a bin with pane aspect and total area (plus gap slack).
+      const aspect = paneW / paneH;
+      const idealW = Math.sqrt(area * aspect);
+      shelfWidth = Math.max(maxW, idealW);
+      // Prefer not wider than pane natural; still ≥ maxW.
+      if (paneW >= maxW) shelfWidth = Math.min(Math.max(shelfWidth, maxW), Math.max(paneW, maxW));
+      else shelfWidth = maxW;
+    }
+    // Sort tallest-first for denser shelves (stable by original index).
+    items.sort(function (a, b) {
+      if (b.h !== a.h) return b.h - a.h;
+      return a.i - b.i;
+    });
+    const placements = [];
+    let cursorY = 0;
+    let shelfH = 0;
+    let cursorX = 0;
+    let usedW = 0;
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k];
+      if (cursorX > 0 && cursorX + it.w > shelfWidth + 1e-9) {
+        // New shelf.
+        cursorY += shelfH + gap;
+        cursorX = 0;
+        shelfH = 0;
+      }
+      placements.push({
+        i: it.i,
+        id: it.id,
+        x: cursorX,
+        y: cursorY,
+        w: it.w,
+        h: it.h,
+      });
+      cursorX += it.w + gap;
+      if (it.h > shelfH) shelfH = it.h;
+      const rowRight = cursorX - gap;
+      if (rowRight > usedW) usedW = rowRight;
+    }
+    const compositeH = cursorY + shelfH;
+    const compositeW = Math.max(usedW, maxW);
+    // Restore placement order by original diagram index.
+    placements.sort(function (a, b) { return a.i - b.i; });
+    return {
+      placements: placements,
+      compositeW: compositeW,
+      compositeH: compositeH,
+      shelfWidth: shelfWidth,
+    };
+  }
+
+  /**
+   * 🎯T276: measure boxes → pack into pane form-factor → contain-scale composite.
+   * Product path for multi-diagram frontier graphs (orthograph 3-block etc.).
+   * @param {{
+   *   boxes: Array<{w:number,h:number,id?:string}>,
+   *   paneW: number, paneH: number,
+   *   padding?: number, gap?: number
+   * }} opts
+   * @returns {{
+   *   mode: 'pack-scale-to-fill'|'skip',
+   *   scale: number,
+   *   compositeW: number,
+   *   compositeH: number,
+   *   displayW: number,
+   *   displayH: number,
+   *   fillsPane: boolean,
+   *   placements: Array<{i:number,id?:string,x:number,y:number,w:number,h:number,
+   *     displayX:number,displayY:number,displayW:number,displayH:number}>
+   * }}
+   */
+  function planMultiDiagramPackScaleToFill(opts) {
+    const o = opts || {};
+    const pad = o.padding != null ? Math.max(0, positiveNumber(o.padding) || 0) : 0;
+    const paneW = Math.max(0, positiveNumber(o.paneW) - pad);
+    const paneH = Math.max(0, positiveNumber(o.paneH) - pad);
+    const gap = o.gap != null ? Math.max(0, positiveNumber(o.gap) || 0) : 12;
+    const packed = packBoxesIntoPaneAspect(o.boxes || [], {
+      paneW: paneW,
+      paneH: paneH,
+      gap: gap,
+    });
+    if (!packed.placements.length || !packed.compositeW || !packed.compositeH || !paneW || !paneH) {
+      return {
+        mode: 'skip',
+        scale: 1,
+        compositeW: packed.compositeW || 0,
+        compositeH: packed.compositeH || 0,
+        displayW: packed.compositeW || 0,
+        displayH: packed.compositeH || 0,
+        fillsPane: false,
+        placements: [],
+      };
+    }
+    const scale = computeContainScale(packed.compositeW, packed.compositeH, paneW, paneH);
+    const displayW = packed.compositeW * scale;
+    const displayH = packed.compositeH * scale;
+    const coverW = displayW / paneW;
+    const coverH = displayH / paneH;
+    const fillsPane = Math.max(coverW, coverH) >= 0.95;
+    const placements = packed.placements.map(function (p) {
+      return {
+        i: p.i,
+        id: p.id,
+        x: p.x,
+        y: p.y,
+        w: p.w,
+        h: p.h,
+        displayX: p.x * scale,
+        displayY: p.y * scale,
+        displayW: p.w * scale,
+        displayH: p.h * scale,
+      };
+    });
+    return {
+      mode: 'pack-scale-to-fill',
+      scale: scale,
+      compositeW: packed.compositeW,
+      compositeH: packed.compositeH,
+      displayW: displayW,
+      displayH: displayH,
+      fillsPane: fillsPane,
+      placements: placements,
+    };
+  }
+
+  /**
+   * Oracle helper: wrap-grid micro-island layout never fills the pane.
+   * Models T190 CSS minmax(min(100%, 320px), 1fr) — each cell ≤320, no
+   * composite scale. Used by hermetics so the old path fails ≥95% cover.
+   * @param {Array<{w:number,h:number}>} boxes
+   * @param {{ paneW: number, paneH: number, cellMax?: number }} opts
+   * @returns {{ fillsPane: boolean, maxCellCover: number, mode: string }}
+   */
+  function planWrapGridMicroIslandOracle(boxes, opts) {
+    const o = opts || {};
+    const paneW = positiveNumber(o.paneW);
+    const paneH = positiveNumber(o.paneH);
+    const cellMax = o.cellMax != null ? positiveNumber(o.cellMax) : 320;
+    const list = Array.isArray(boxes) ? boxes : [];
+    if (!paneW || !paneH || !list.length) {
+      return { fillsPane: false, maxCellCover: 0, mode: 'wrap-grid-micro' };
+    }
+    // Each diagram sits in a ≤cellMax column; SVG max-width 100% of cell, no scale-up.
+    let maxCover = 0;
+    for (let i = 0; i < list.length; i++) {
+      const bw = positiveNumber(list[i] && list[i].w);
+      const bh = positiveNumber(list[i] && list[i].h);
+      if (!bw || !bh) continue;
+      const cellW = Math.min(cellMax, paneW);
+      // Shrink-only into cell; no scale-up past natural.
+      const s = Math.min(1, cellW / bw);
+      const dw = bw * s;
+      const dh = bh * s;
+      const cover = Math.max(dw / paneW, dh / paneH);
+      if (cover > maxCover) maxCover = cover;
+    }
+    return {
+      fillsPane: maxCover >= 0.95,
+      maxCellCover: maxCover,
+      mode: 'wrap-grid-micro',
+    };
+  }
+
+  /**
    * Inline style object for the fitted SVG (browser applies after render).
    * Clears max-width so CSS shrink-only cannot undo scale-up.
+   * Accepts scale-to-fill (T268) and pack-scale-to-fill placements (T276).
    */
   function svgScaleToFillStyle(plan) {
     const p = plan || {};
-    if (p.mode !== 'scale-to-fill' || !(p.displayW > 0) || !(p.displayH > 0)) {
+    if (
+      (p.mode !== 'scale-to-fill' && p.mode !== 'pack-scale-to-fill') ||
+      !(p.displayW > 0) ||
+      !(p.displayH > 0)
+    ) {
       return null;
     }
     return {
@@ -687,6 +894,37 @@
     }
     if (typeof svg.setAttribute === 'function') {
       svg.setAttribute('data-mvp-scale-fill', String(plan.scale));
+    }
+    return true;
+  }
+
+  /**
+   * Apply one T276 placement to a pack block + its SVG (DOM-free shape).
+   * @returns {boolean}
+   */
+  function applyPackPlacement(block, svg, placement, scale) {
+    if (!placement) return false;
+    const s = positiveNumber(scale) || 1;
+    if (block && block.style && typeof block.style === 'object') {
+      block.style.position = 'absolute';
+      block.style.left = Math.round(placement.displayX * 1000) / 1000 + 'px';
+      block.style.top = Math.round(placement.displayY * 1000) / 1000 + 'px';
+      block.style.width = Math.round(placement.displayW * 1000) / 1000 + 'px';
+      block.style.height = 'auto';
+      block.style.margin = '0';
+      block.style.gridColumn = 'auto';
+    }
+    if (svg) {
+      applySvgScaleToFill(svg, {
+        mode: 'scale-to-fill',
+        scale: s,
+        displayW: placement.displayW,
+        displayH: placement.displayH,
+      });
+    }
+    if (block && typeof block.setAttribute === 'function') {
+      block.setAttribute('data-mvp-pack-placed', '1');
+      block.setAttribute('data-mvp-pack-scale', String(s));
     }
     return true;
   }
@@ -726,5 +964,10 @@
     planSingleGraphScaleToFill: planSingleGraphScaleToFill,
     svgScaleToFillStyle: svgScaleToFillStyle,
     applySvgScaleToFill: applySvgScaleToFill,
+    // 🎯T276
+    packBoxesIntoPaneAspect: packBoxesIntoPaneAspect,
+    planMultiDiagramPackScaleToFill: planMultiDiagramPackScaleToFill,
+    planWrapGridMicroIslandOracle: planWrapGridMicroIslandOracle,
+    applyPackPlacement: applyPackPlacement,
   };
 }));
