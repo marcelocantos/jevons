@@ -408,12 +408,17 @@
     return false;
   }
 
-  // 🎯T250: aside wire user bodies never become main transcript chunks.
+  // 🎯T250/T264: aside wire user bodies never become main transcript chunks.
   function isAsideWireUserTextLocal(text) {
-    if (typeof AttentionThreads !== 'undefined' && AttentionThreads.isAsideWireUserText) {
-      return AttentionThreads.isAsideWireUserText(text);
+    if (typeof AttentionThreads !== 'undefined') {
+      if (AttentionThreads.isAsideWireUserText) {
+        return AttentionThreads.isAsideWireUserText(text);
+      }
+      if (AttentionThreads.looksLikeAsideWireMarker) {
+        return AttentionThreads.looksLikeAsideWireMarker(text);
+      }
     }
-    const t = String(text == null ? '' : text);
+    const t = String(text == null ? '' : text).replace(/^\s*(?:\[image:\s*[^\]]*\]\s*)+/i, '');
     if (/^\s*\[attention\s*:/i.test(t)) return true;
     if (/^\s*\[target-aside\s*:/i.test(t)) return true;
     return false;

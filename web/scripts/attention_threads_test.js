@@ -457,6 +457,59 @@ test('T250 index.html: main paint filters aside wires; sidebar merge wired', fun
     'handle user path uses T250 helpers');
 });
 
+// ── 🎯T264: flash-class never-paint (self-clear after paint still fails) ─
+
+test('T264 looksLikeAsideWireMarker + never paint incident / image-prefix flash', function () {
+  // Owner incident fixture (att-msftck4l freeform aside).
+  const incident =
+    '[attention:att-msftck4l-9sguxj|how does bullseye compare to beads?]\n' +
+    'how does bullseye compare to beads?';
+  assert.ok(AT.looksLikeAsideWireMarker(incident), 'incident marker class');
+  assert.ok(AT.isAsideWireUserText(incident));
+  assert.ok(!AT.shouldPaintMainUserText(incident), 'never paint main');
+
+  // Header-only flash (truncated bubble title class).
+  const headerOnly = '[attention:att-msftck4l-9sguxj|how does…]';
+  assert.ok(!AT.shouldPaintMainUserText(headerOnly));
+
+  // Image prepend before wire must not open a paint path (flash class).
+  const withImage =
+    '[image: d592b0380b1a9e9b]\n' +
+    '[attention:att-x|billing nit]\nbilling body';
+  assert.ok(AT.looksLikeAsideWireMarker(withImage), 'image-prefix still wire');
+  assert.ok(AT.isAsideWireUserText(withImage));
+  assert.ok(!AT.shouldPaintMainUserText(withImage), 'image+attention never paints');
+
+  // target-aside full wire
+  const tgt = AT.formatTargetWire('att-file', 'title', 'body');
+  assert.ok(!AT.shouldPaintMainUserText(tgt));
+
+  // Plain owner text still paints.
+  assert.ok(AT.shouldPaintMainUserText('how does bullseye compare to beads?'));
+  assert.ok(AT.shouldPaintMainUserText('[image: abc]\nplain body'));
+});
+
+test('T264 index.html: isMainAsideWireUserText + addMsg flash gate', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('function isMainAsideWireUserText') >= 0,
+    'local never-paint helper');
+  assert.ok(html.indexOf('isMainAsideWireUserText') >= 0);
+  // Live handle uses the flash-safe gate (not only soft AttentionThreads &&).
+  assert.ok(/isMainAsideWireUserText\(content\)/.test(html),
+    'handle user path calls isMainAsideWireUserText');
+  // addMsg last-line defense (optimistic/live flash).
+  assert.ok(/function addMsg\([\s\S]*?isMainAsideWireUserText/.test(html),
+    'addMsg gates user role before insert');
+  assert.ok(/role === ['"]user['"][\s\S]{0,200}?isMainAsideWireUserText/.test(html),
+    'addMsg user branch never-paints aside wire');
+  // renderFrames history path
+  assert.ok(/isMainAsideWireUserText\(c\.text\)/.test(html) ||
+    /isMainAsideWireUserText\(c\)/.test(html),
+    'history renderFrames uses never-paint gate');
+});
+
 test('T136 index.html: attention-bar not used for aside wall; fleet register path', function () {
   const fs = require('fs');
   const path = require('path');

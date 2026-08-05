@@ -331,6 +331,35 @@ test('T250 coalesce skips attention and target-aside user frames', function () {
   assert.ok(cache['att-y'] && cache['att-y'][0].text.indexOf('body') === 0);
 });
 
+// 🎯T264: image-prefix + attention wire must not flash into main chunks.
+test('T264 coalesce skips image-prefixed attention wire (flash class)', function () {
+  const AT = require('./attention_threads.js');
+  global.AttentionThreads = AT;
+  const incident =
+    '[attention:att-msftck4l-9sguxj|how does bullseye compare to beads?]\n' +
+    'how does bullseye compare to beads?';
+  const frames = [
+    { type: 'user', message: { content: 'main hello' } },
+    { type: 'user', message: { content: incident } },
+    {
+      type: 'user',
+      message: {
+        content: '[image: abc123]\n[attention:att-x|t]\nbody',
+      },
+    },
+    { type: 'user', message: { content: 'still main' } },
+  ];
+  const chunks = VL.coalesceTranscriptFrames(frames);
+  const userTexts = chunks.filter(function (c) { return c.role === 'user'; }).map(function (c) {
+    return c.text;
+  });
+  assert.deepStrictEqual(userTexts, ['main hello', 'still main'],
+    'T264 flash wires excluded: ' + JSON.stringify(userTexts));
+  assert.ok(userTexts.every(function (t) {
+    return t.indexOf('[attention:') < 0 && t.indexOf('[target-aside:') < 0;
+  }), 'no raw wire marker prefix in main chunks');
+});
+
 // ── 🎯T245 silent-only turns must not leak/coalesce into next bubble ──
 
 test('T245 pure [silent] + agent_note + visible → only second body', function () {

@@ -1864,10 +1864,13 @@ function handle(m) {
       if (content && msgHistory[msgHistory.length - 1]?.text === content) return;
       // 🎯T239: user echo = durable ack of a staged wire send (including asides).
       if (content && typeof ackPendingFromContent === 'function') ackPendingFromContent(content);
-      // 🎯T250: aside wire turns never paint on main #messages — sidebar only.
-      if (typeof AttentionThreads !== 'undefined' &&
-          AttentionThreads.shouldPaintMainUserText &&
-          !AttentionThreads.shouldPaintMainUserText(content)) {
+      // 🎯T250/T264: aside wire turns never paint on main #messages — sidebar only.
+      // Flash-class: gate before any addMsg (self-clear after paint still fails acceptance).
+      if (typeof isMainAsideWireUserText === 'function'
+          ? isMainAsideWireUserText(content)
+          : (typeof AttentionThreads !== 'undefined' &&
+              AttentionThreads.shouldPaintMainUserText &&
+              !AttentionThreads.shouldPaintMainUserText(content))) {
         noteAsideWireFromMain(content);
         // Still settle activity chrome as a user boundary (no main bubble).
         closeTurn();
@@ -2314,6 +2317,13 @@ function layoutMsgList(nodes) {
 }
 
 function addMsg(role, text, when, opts) {
+  // 🎯T264: last line of defense — never insert a main user bubble whose body
+  // is a raw attention/target-aside wire (covers optimistic/live flash paths).
+  if (role === 'user' && typeof isMainAsideWireUserText === 'function' &&
+      isMainAsideWireUserText(text)) {
+    try { noteAsideWireFromMain(text); } catch (_) { /* isolated */ }
+    return null;
+  }
   const d = buildMsg(role, text, when, opts);
   msgs.appendChild(d);
   layoutMsg(d);
@@ -3930,10 +3940,9 @@ function renderFrames(lines, opts) {
       if (typeof VirtualList !== 'undefined' && VirtualList.isWholeChunk && !VirtualList.isWholeChunk(c)) {
         continue;
       }
-      // Defense-in-depth: never paint aside wire as a main user bubble.
-      if (c.role === 'user' && typeof AttentionThreads !== 'undefined' &&
-          AttentionThreads.shouldPaintMainUserText &&
-          !AttentionThreads.shouldPaintMainUserText(c.text)) {
+      // 🎯T250/T264: never paint aside wire as a main user bubble (history flash).
+      if (c.role === 'user' && typeof isMainAsideWireUserText === 'function' &&
+          isMainAsideWireUserText(c.text)) {
         continue;
       }
       const el = buildMsg(c.role, c.text, c.timestamp, { lazy: lazy });
@@ -3951,10 +3960,8 @@ function renderFrames(lines, opts) {
     if (m.type === 'user') {
       const c = m.message && m.message.content;
       if (typeof c === 'string' && c) {
-        // 🎯T250
-        if (typeof AttentionThreads !== 'undefined' &&
-            AttentionThreads.shouldPaintMainUserText &&
-            !AttentionThreads.shouldPaintMainUserText(c)) {
+        // 🎯T250/T264
+        if (typeof isMainAsideWireUserText === 'function' && isMainAsideWireUserText(c)) {
           pending = null;
           continue;
         }
@@ -4141,6 +4148,27 @@ function onSidebarComposerSent(name) {
 // are recorded here for the RHS Transcript tab — never painted on #messages.
 // Keyed by aside/agent id → [{ role:'user', text }].
 let asideWireTurnsCache = Object.create(null);
+
+// 🎯T264: never-paint gate for main #messages (live echo + history + flash).
+// Local prefix fallback so a missing AttentionThreads module cannot flash raw
+// [attention:]/[target-aside:] headers as owner bubbles (self-clear is still fail).
+function isMainAsideWireUserText(text) {
+  if (typeof AttentionThreads !== 'undefined') {
+    if (typeof AttentionThreads.shouldPaintMainUserText === 'function') {
+      return !AttentionThreads.shouldPaintMainUserText(text);
+    }
+    if (typeof AttentionThreads.isAsideWireUserText === 'function') {
+      return !!AttentionThreads.isAsideWireUserText(text);
+    }
+    if (typeof AttentionThreads.looksLikeAsideWireMarker === 'function') {
+      return !!AttentionThreads.looksLikeAsideWireMarker(text);
+    }
+  }
+  const t = String(text == null ? '' : text).replace(/^\s*(?:\[image:\s*[^\]]*\]\s*)+/i, '');
+  if (/^\s*\[attention\s*:/i.test(t)) return true;
+  if (/^\s*\[target-aside\s*:/i.test(t)) return true;
+  return false;
+}
 
 function noteAsideWireFromMain(content) {
   if (typeof AttentionThreads === 'undefined' ||

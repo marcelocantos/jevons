@@ -582,8 +582,35 @@
     return null;
   }
 
+  /**
+   * 🎯T264: prefix-class wire detection (flash-safe). Full parse may miss
+   * image-prefixed bodies or trailing junk; any first non-empty line that
+   * is an attention/target-aside header must never paint on main.
+   */
+  function looksLikeAsideWireMarker(text) {
+    const raw = String(text == null ? '' : text);
+    if (!raw) return false;
+    // Strip leading [image: …] markers (composer prepend) then re-check.
+    let t = raw.replace(/^\s*(?:\[image:\s*[^\]]*\]\s*)+/i, '');
+    t = t.replace(/^\s+/, '');
+    if (/^\[attention\s*:/i.test(t)) return true;
+    if (/^\[target-aside\s*:/i.test(t)) return true;
+    // Multiline: first non-empty line is the wire header.
+    const lines = t.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      if (/^\[attention\s*:/i.test(line)) return true;
+      if (/^\[target-aside\s*:/i.test(line)) return true;
+      return false;
+    }
+    return false;
+  }
+
   function isAsideWireUserText(text) {
-    return parseAsideWireUserText(text) != null;
+    if (parseAsideWireUserText(text) != null) return true;
+    // 🎯T264: never miss a paintable flash on strict-parse failure.
+    return looksLikeAsideWireMarker(text);
   }
 
   /** Main transcript should paint this user body (false for aside wires). */
@@ -927,8 +954,9 @@
     handleComposer: handleComposer,
     prepareSend: prepareSend,
     formatAsideWire: formatAsideWire,
-    // 🎯T250
+    // 🎯T250 / 🎯T264
     parseAsideWireUserText: parseAsideWireUserText,
+    looksLikeAsideWireMarker: looksLikeAsideWireMarker,
     isAsideWireUserText: isAsideWireUserText,
     shouldPaintMainUserText: shouldPaintMainUserText,
     recordAsideWireUserTurn: recordAsideWireUserTurn,
