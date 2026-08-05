@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
 )
 
@@ -20,6 +22,48 @@ import (
 // Moderate: two fleet agents on one workdir (T86 live) + thread
 // spawn → direct → remove.
 // Shell tools: worker must execute run_terminal_command unattended (T97).
+
+// jOverseerToolsAttached proves the overseer's own client can reach jevons
+// tools under the selected provider (🎯T282). J6 checks the producer side
+// (jevonsd serves the tools); this checks the consumer side, which is
+// provider-specific: Grok reads ~/.grok/config.toml, Claude needs
+// `claude mcp add -s user` (🎯T212). A Claude overseer that boots toolless
+// looks perfectly healthy until the owner asks it to do anything.
+func (s *suite) jOverseerToolsAttached() error {
+	if !mcpListedFor(s.provider, mcpName) {
+		return fmt.Errorf("%s not registered with the %s CLI while the isolate runs — overseer would start toolless",
+			mcpName, mcpCLI(s.provider))
+	}
+
+	// And that the registration is live in the conversation, not just on
+	// disk: ask the overseer to use a jevons tool and report what it saw.
+	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
+	defer cancel()
+	conn, frames, err := dialChat(ctx, s.host)
+	if err != nil {
+		return err
+	}
+	defer conn.CloseNow()
+	if _, err := drainReplay(frames, 800*time.Millisecond); err != nil {
+		return err
+	}
+	prompt := "Call the jevons_agent_list tool now, then reply with only the name of the overseer agent it lists."
+	if err := conn.Write(ctx, websocket.MessageText, []byte(prompt)); err != nil {
+		return err
+	}
+	_, text, terminal, err := waitTurn(ctx, frames, "jevons_agent_list", true)
+	if err != nil {
+		return fmt.Errorf("tool turn: %w", err)
+	}
+	if !terminal {
+		return fmt.Errorf("tool turn never completed")
+	}
+	if !strings.Contains(strings.ToLower(text), overseerName) {
+		return fmt.Errorf("overseer could not report its own registry row (tools likely not attached): %s",
+			trim(text, 200))
+	}
+	return nil
+}
 
 func (s *suite) jMCPToolSurface() error {
 	res, err := s.mcp("tools/list", map[string]any{})
