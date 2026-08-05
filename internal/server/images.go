@@ -4,12 +4,14 @@
 package server
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,10 +19,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	// Register standard decoders for image.Decode (PNG/JPEG/GIF).
+	// image/gif, image/jpeg, image/png register decoders via their imports above
+	// (jpeg/png also used for encode). GIF is decode-only here.
 	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 
 	"golang.org/x/image/draw"
 )
@@ -28,6 +29,17 @@ import (
 // ImageThumbMaxEdge is the longest side (px) for browser-delivered thumbs (🎯T224).
 // Full-res stays on disk; clients render compact previews only.
 const ImageThumbMaxEdge = 320
+
+// ImageThumbJPEGQuality is the dual-encode JPEG quality for thumbs (🎯T257).
+// Moderately high (~88–90) so photo-like previews stay sharp while still
+// beating PNG on continuous-tone imagery.
+const ImageThumbJPEGQuality = 89
+
+// ImageThumbJPEGSizeFactor is k in the dual-encode size rule (🎯T257):
+// serve JPEG only when jpeg_bytes * k < png_bytes. Default k=2 means JPEG
+// must be at least ~2× smaller than the lossless PNG to win; otherwise PNG
+// is served (UI/screenshots, flat graphics). Alpha always forces PNG.
+const ImageThumbJPEGSizeFactor = 2
 
 // ImageMarkerPrefix is the journal/chat marker for a stored image (🎯T76/T224).
 const ImageMarkerPrefix = "[image: "
@@ -141,11 +153,10 @@ func (s *Server) handleImageThumbGet(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	thumbPath := s.thumbPath(id)
-	if st, err := os.Stat(thumbPath); err == nil && st.Size() > 0 {
-		w.Header().Set("Content-Type", "image/jpeg")
+	if path, ct, ok := s.findThumb(id); ok {
+		w.Header().Set("Content-Type", ct)
 		w.Header().Set("Cache-Control", "private, max-age=86400")
-		http.ServeFile(w, r, thumbPath)
+		http.ServeFile(w, r, path)
 		return
 	}
 	// Lazy generate from full-res (legacy uploads before T224).
@@ -162,13 +173,26 @@ func (s *Server) handleImageThumbGet(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, full)
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
+	path, ct, ok := s.findThumb(id)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "private, max-age=86400")
-	http.ServeFile(w, r, thumbPath)
+	http.ServeFile(w, r, path)
 }
 
-func (s *Server) thumbPath(id string) string {
-	return filepath.Join(s.thumbsDir(), id+".jpg")
+// findThumb locates an on-disk thumb for id (.jpg or .png after 🎯T257 dual-encode).
+// Prefer JPEG if both exist (legacy dual write should not leave both).
+func (s *Server) findThumb(id string) (path, contentType string, ok bool) {
+	for _, ext := range []string{".jpg", ".png"} {
+		p := filepath.Join(s.thumbsDir(), id+ext)
+		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+			return p, contentTypeForExt(ext), true
+		}
+	}
+	return "", "", false
 }
 
 // findFullImage locates the stored full-res file for id. Skips thumbs/ subdir.
@@ -211,21 +235,99 @@ func (s *Server) writeThumbFromFull(id, fullPath string) error {
 		return err
 	}
 	thumb := resizeMaxEdge(img, ImageThumbMaxEdge)
-	if err := os.MkdirAll(s.thumbsDir(), 0o755); err != nil {
-		return err
-	}
-	tmp := s.thumbPath(id) + ".tmp"
-	out, err := os.Create(tmp)
+	data, ext, err := chooseThumbFormat(thumb)
 	if err != nil {
 		return err
 	}
-	encErr := jpeg.Encode(out, thumb, &jpeg.Options{Quality: 82})
-	_ = out.Close()
-	if encErr != nil {
-		_ = os.Remove(tmp)
-		return encErr
+	return s.writeThumbBytes(id, data, ext)
+}
+
+// chooseThumbFormat dual-encodes PNG + JPEG after resample (🎯T257).
+// Alpha/transparency → PNG only. Otherwise JPEG wins only when
+// jpeg_bytes * ImageThumbJPEGSizeFactor < png_bytes; else PNG.
+func chooseThumbFormat(img image.Image) (data []byte, ext string, err error) {
+	if imageHasAlpha(img) {
+		b, err := encodeThumbPNG(img)
+		if err != nil {
+			return nil, "", err
+		}
+		return b, ".png", nil
 	}
-	return os.Rename(tmp, s.thumbPath(id))
+	pngB, err := encodeThumbPNG(img)
+	if err != nil {
+		return nil, "", err
+	}
+	jpegB, err := encodeThumbJPEG(img)
+	if err != nil {
+		// JPEG encode failure is rare for opaque RGB; keep PNG.
+		return pngB, ".png", nil
+	}
+	if jpegThumbWins(len(jpegB), len(pngB)) {
+		return jpegB, ".jpg", nil
+	}
+	return pngB, ".png", nil
+}
+
+// jpegThumbWins reports whether JPEG should be served under the dual-encode
+// size rule: jpeg_bytes * k < png_bytes (k = ImageThumbJPEGSizeFactor).
+func jpegThumbWins(jpegBytes, pngBytes int) bool {
+	if jpegBytes <= 0 || pngBytes <= 0 {
+		return false
+	}
+	return jpegBytes*ImageThumbJPEGSizeFactor < pngBytes
+}
+
+func encodeThumbPNG(img image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func encodeThumbJPEG(img image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: ImageThumbJPEGQuality}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// imageHasAlpha is true when any pixel is not fully opaque — forces PNG (🎯T257).
+func imageHasAlpha(img image.Image) bool {
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			_, _, _, a := img.At(x, y).RGBA()
+			if a < 0xffff {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// writeThumbBytes atomically writes the chosen thumb bytes and removes the
+// alternate extension so GET is unambiguous (.jpg vs .png).
+func (s *Server) writeThumbBytes(id string, data []byte, ext string) error {
+	if err := os.MkdirAll(s.thumbsDir(), 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(s.thumbsDir(), id+ext)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	alt := ".png"
+	if ext == ".png" {
+		alt = ".jpg"
+	}
+	_ = os.Remove(filepath.Join(s.thumbsDir(), id+alt))
+	return nil
 }
 
 // resizeMaxEdge returns img scaled so max(width,height) <= maxEdge.
