@@ -430,7 +430,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg-expand-tab .chev { display: block; font-size: 13px; line-height: 1; }
 
 /* 🎯T266/T273: top-edge speaker/context tab on target-related owner asks.
-   T273: omit Jevons/overseer; non-overseer = bold purple 〈agent〉 only (no ·).
+   T273: speaker-omit = pure overseer/Jevons only; context chrome always paints
+   (incl. jevons-po as owning PO); non-overseer speaker = bold purple 〈agent〉 (no ·).
    Coordinates with T267 (PO select + frontier highlight) via shared TargetContextChrome. */
 .msg.msg-has-context-tab { margin-top: 0.65rem; }
 .msg-context-tab {
@@ -454,15 +455,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .msg.jevons .msg-context-tab { background: var(--surface-raised); border-color: var(--border); }
 .msg.user .msg-context-tab { background: var(--bg); border-color: var(--user-border); }
-/* 🎯T273: single speaker byline — bold purple 〈agent〉 (accent = product purple) */
+/* 🎯T273: non-overseer speaker byline — bold purple 〈agent〉 */
 .msg-context-tab .ctx-speaker {
   color: var(--accent);
   font-weight: 700;
 }
-/* Legacy T266 classes kept inert if old HTML reappears (no · byline). */
+/* 🎯T266 context chrome (product · owning-PO) — kept for jevons-po context path */
 .msg-context-tab .ctx-repo { color: var(--accent); font-weight: 700; }
-.msg-context-tab .ctx-sep { display: none; }
-.msg-context-tab .ctx-po { color: var(--accent); font-weight: 700; }
+.msg-context-tab .ctx-sep { opacity: 0.55; margin: 0 0.15em; }
+.msg-context-tab .ctx-po { color: var(--text-dim); font-weight: 500; }
 
 /* 🎯T135: opt-in route switch under a user bubble (match suggestion only). */
 .msg.user .route-switch {

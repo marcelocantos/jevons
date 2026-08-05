@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Hermetic unit tests for target-ask context chrome (🎯T266) + speaker paint (🎯T273).
+// Hermetic unit tests for target-ask context chrome (🎯T266) + speaker/context split (🎯T273).
 //   node web/scripts/target_context_chrome_test.js
 
 'use strict';
@@ -53,23 +53,28 @@ test('repoLabelFromPath prefers github org/repo', function () {
   assert.strictEqual(TCC.productFromRepoLabel('marcelocantos/jevons'), 'jevons');
 });
 
-test('T273 isOmittedSpeakerIdentity covers overseer + jevons family', function () {
+// ── 🎯T273 hermetic 1: pure overseer / Jevons speaker → no speaker label ──
+test('T273 isOmittedSpeakerIdentity: pure overseer/Jevons only (not jevons-po)', function () {
   assert.strictEqual(TCC.isOmittedSpeakerIdentity('jevons'), true);
   assert.strictEqual(TCC.isOmittedSpeakerIdentity('Jevons'), true);
-  assert.strictEqual(TCC.isOmittedSpeakerIdentity('jevons-po'), true);
   assert.strictEqual(TCC.isOmittedSpeakerIdentity('overseer'), true);
   assert.strictEqual(TCC.isOmittedSpeakerIdentity(''), true);
+  // Owning PO is context, not bare speaker stamp — never speaker-omit.
+  assert.strictEqual(TCC.isOmittedSpeakerIdentity('jevons-po'), false);
   assert.strictEqual(TCC.isOmittedSpeakerIdentity('bullseye-po'), false);
   assert.strictEqual(TCC.isOmittedSpeakerIdentity('bullseye'), false);
   assert.strictEqual(TCC.isOmittedSpeakerIdentity('jv-t273-speaker'), false);
 });
 
-test('T273 formatSpeakerLabel omits Jevons; paints 〈agent〉 without ·', function () {
+test('T273 overseer speaker alone → no speaker label', function () {
   const LT = TCC.SPEAKER_LT;
   const GT = TCC.SPEAKER_GT;
   assert.strictEqual(TCC.formatSpeakerLabel('jevons'), '');
-  assert.strictEqual(TCC.formatSpeakerLabel('jevons-po'), '');
-  assert.strictEqual(TCC.formatSpeakerLabel({ product: 'jevons', po: 'jevons-po' }), '');
+  assert.strictEqual(TCC.formatSpeakerLabel('Jevons'), '');
+  assert.strictEqual(TCC.formatSpeakerLabel('overseer'), '');
+  assert.strictEqual(TCC.formatSpeakerLabel({ product: 'jevons' }), '');
+  // jevons-po is a valid speaker identity (not omitted); chrome path uses context paint for jevons product.
+  assert.strictEqual(TCC.formatSpeakerLabel('jevons-po'), LT + 'jevons-po' + GT);
   assert.strictEqual(
     TCC.formatSpeakerLabel({ product: 'bullseye', po: 'bullseye-po' }),
     LT + 'bullseye-po' + GT
@@ -80,21 +85,22 @@ test('T273 formatSpeakerLabel omits Jevons; paints 〈agent〉 without ·', func
   );
   const label = TCC.formatSpeakerLabel({ po: 'minicades-po', product: 'squz' });
   assert.strictEqual(label, LT + 'minicades-po' + GT);
-  assert.ok(label.indexOf('\u00b7') < 0, 'no middle-dot in label');
-  assert.ok(label.indexOf(' · ') < 0, 'no · separator');
-  assert.ok(label.indexOf('Jevons') < 0 && label.indexOf('jevons') < 0, 'no Jevons prefix');
+  assert.ok(label.indexOf('\u00b7') < 0, 'no middle-dot in speaker label');
+  assert.ok(label.indexOf(' · ') < 0, 'no · separator in speaker label');
 });
 
-test('T273 formatSpeakerHTML is bold-purple span only', function () {
+test('T273 formatSpeakerHTML is bold-purple span only for non-overseer', function () {
   const html = TCC.formatSpeakerHTML({ po: 'bullseye-po', product: 'bullseye' });
   assert.ok(html.indexOf('ctx-speaker') >= 0, 'ctx-speaker class');
   assert.ok(html.indexOf(TCC.SPEAKER_LT + 'bullseye-po' + TCC.SPEAKER_GT) >= 0);
-  assert.ok(html.indexOf('ctx-sep') < 0, 'no sep span');
-  assert.ok(html.indexOf('\u00b7') < 0, 'no · in HTML');
-  assert.strictEqual(TCC.formatSpeakerHTML({ product: 'jevons', po: 'jevons-po' }), '');
+  assert.ok(html.indexOf('ctx-sep') < 0, 'no sep span on speaker HTML');
+  assert.ok(html.indexOf('\u00b7') < 0, 'no · in speaker HTML');
+  // Pure overseer product alone → no speaker HTML
+  assert.strictEqual(TCC.formatSpeakerHTML({ product: 'jevons' }), '');
 });
 
-test('T273 fixture overseer/jevons target-ask paints no speaker label', function () {
+// ── 🎯T273 hermetic 2: jevons-po context still shows context chrome ──
+test('T273 jevons-po context fixture still shows context chrome', function () {
   const agents = [
     { name: 'jevons', purpose: 'overseer', workdir: '/Users/m/.jevons/jevons' },
     {
@@ -115,20 +121,20 @@ test('T273 fixture overseer/jevons target-ask paints no speaker label', function
     '🎯T266 needs-owner residual? Owner-facing target asks should show ' +
     'built-in context chrome (repo / PO). Accept this design?';
   const model = TCC.chromeModel({ text: text, agents: agents });
-  // Repo still resolves for T267 focus, but painted speaker chrome is omitted.
   assert.strictEqual(model.repo, 'marcelocantos/jevons');
   assert.strictEqual(model.product, 'jevons');
   assert.strictEqual(model.po, 'jevons-po');
-  assert.strictEqual(model.show, false, 'overseer/jevons must not paint speaker chrome');
-  assert.strictEqual(model.label, '');
-  assert.strictEqual(model.innerHTML, '');
-  assert.ok(
-    !model.innerHTML || model.innerHTML.indexOf('\u00b7') < 0,
-    'no · on omitted chrome'
-  );
+  // Context chrome MUST paint — never blanked because PO is jevons-po.
+  assert.strictEqual(model.show, true, 'jevons-po context must show chrome');
+  assert.strictEqual(model.label, 'jevons · jevons-po');
+  assert.ok(model.innerHTML.indexOf('ctx-repo') >= 0, 'ctx-repo present');
+  assert.ok(model.innerHTML.indexOf('jevons-po') >= 0, 'owning PO in context');
+  assert.ok(model.innerHTML.indexOf('ctx-po') >= 0, 'ctx-po span present');
+  assert.ok(model.title.indexOf('T266') >= 0, 'target in title');
 });
 
-test('T273 fixture non-overseer paints 〈name〉 bold purple without ·', function () {
+// ── 🎯T273 hermetic 3: non-overseer speaker → 〈agent〉 bold purple, no · ──
+test('T273 non-overseer speaker paints 〈name〉 bold purple without ·', function () {
   const agents = [
     {
       name: 'bullseye-po',
@@ -162,11 +168,10 @@ test('T273 fixture non-overseer paints 〈name〉 bold purple without ·', funct
   assert.strictEqual(model.label, want);
   assert.ok(model.innerHTML.indexOf('ctx-speaker') >= 0, 'ctx-speaker for bold purple');
   assert.ok(model.innerHTML.indexOf(want) >= 0, '〈bullseye-po〉 in HTML');
-  assert.ok(model.innerHTML.indexOf('\u00b7') < 0, 'no middle-dot in painted chrome');
+  assert.ok(model.innerHTML.indexOf('\u00b7') < 0, 'no middle-dot in speaker paint');
   assert.ok(model.innerHTML.indexOf(' · ') < 0, 'no · separator');
   assert.ok(model.innerHTML.indexOf('Jevons') < 0, 'no Jevons prefix');
-  assert.ok(model.innerHTML.indexOf('jevons') < 0, 'no jevons prefix');
-  assert.ok(model.innerHTML.indexOf('ctx-sep') < 0, 'no ctx-sep');
+  assert.ok(model.innerHTML.indexOf('ctx-sep') < 0, 'no ctx-sep on speaker paint');
 });
 
 test('disambiguates jevons vs bullseye via engaged target_id workdir', function () {
@@ -198,10 +203,11 @@ test('disambiguates jevons vs bullseye via engaged target_id workdir', function 
   assert.strictEqual(ctx.show, true);
   assert.strictEqual(ctx.repo, 'marcelocantos/bullseye');
   assert.strictEqual(ctx.po, 'bullseye-po');
-  assert.strictEqual(ctx.label, TCC.SPEAKER_LT + 'bullseye-po' + TCC.SPEAKER_GT);
+  // resolveTargetContext label is context label (product · po), not speaker paint.
+  assert.strictEqual(ctx.label, 'bullseye · bullseye-po');
 });
 
-test('ledger fallback when no engaged worker — jevons still omitted', function () {
+test('ledger fallback when no engaged worker — jevons-po context still shows', function () {
   const ctx = TCC.resolveTargetContext({
     text: 'Decision packet for 🎯T262.4 — please confirm owner accept.',
     ledger: '/Users/m/work/github.com/marcelocantos/jevons/bullseye.yaml',
@@ -212,8 +218,20 @@ test('ledger fallback when no engaged worker — jevons still omitted', function
     }],
   });
   assert.strictEqual(ctx.repo, 'marcelocantos/jevons');
-  assert.strictEqual(ctx.show, false, 'jevons ledger ask paints no speaker');
-  assert.strictEqual(ctx.label, '');
+  assert.strictEqual(ctx.show, true, 'context-paint gates on ask+repo only');
+  assert.strictEqual(ctx.label, 'jevons · jevons-po');
+  const model = TCC.chromeModel({
+    text: 'Decision packet for 🎯T262.4 — please confirm owner accept.',
+    ledger: '/Users/m/work/github.com/marcelocantos/jevons/bullseye.yaml',
+    agents: [{
+      name: 'jevons-po',
+      purpose: 'work',
+      workdir: '/Users/m/work/github.com/marcelocantos/jevons',
+    }],
+  });
+  assert.strictEqual(model.show, true);
+  assert.ok(model.innerHTML.indexOf('jevons-po') >= 0);
+  assert.ok(model.innerHTML.indexOf('ctx-repo') >= 0);
 });
 
 test('no chrome without repo resolution', function () {
@@ -234,27 +252,43 @@ test('force + explicit non-jevons paints 〈po〉 only', function () {
   assert.strictEqual(model.show, true);
   assert.strictEqual(model.label, TCC.SPEAKER_LT + 'bullseye-po' + TCC.SPEAKER_GT);
   assert.ok(model.innerHTML.indexOf('\u00b7') < 0);
+  assert.ok(model.innerHTML.indexOf('ctx-speaker') >= 0);
 });
 
-test('force + jevons-po omits speaker entirely', function () {
+test('force + jevons-po keeps context chrome (not blanked)', function () {
   const model = TCC.chromeModel({
     force: true,
     targetId: 'T266',
     repo: 'marcelocantos/jevons',
     po: 'jevons-po',
   });
-  assert.strictEqual(model.show, false);
-  assert.strictEqual(model.label, '');
-  assert.strictEqual(model.innerHTML, '');
+  assert.strictEqual(model.show, true, 'must not blank for jevons-po');
+  assert.strictEqual(model.label, 'jevons · jevons-po');
+  assert.ok(model.innerHTML.indexOf('ctx-repo') >= 0);
+  assert.ok(model.innerHTML.indexOf('jevons-po') >= 0);
+  assert.ok(model.innerHTML.indexOf('ctx-po') >= 0);
 });
 
-test('index.html wires TargetContextChrome + T273 ctx-speaker style', function () {
+test('formatContextHTML paints product · po including jevons-po', function () {
+  const html = TCC.formatContextHTML({ product: 'jevons', po: 'jevons-po', repo: 'marcelocantos/jevons' });
+  assert.ok(html.indexOf('ctx-repo') >= 0);
+  assert.ok(html.indexOf('ctx-po') >= 0);
+  assert.ok(html.indexOf('jevons-po') >= 0);
+  assert.ok(html.indexOf('ctx-sep') >= 0);
+  assert.strictEqual(
+    TCC.formatChromeLabel({ product: 'jevons', po: 'jevons-po' }),
+    'jevons · jevons-po'
+  );
+});
+
+test('index.html wires TargetContextChrome + T273 styles', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('scripts/target_context_chrome.js') >= 0, 'script tag');
   assert.ok(html.indexOf('msg-context-tab') >= 0, 'msg-context-tab class');
   assert.ok(html.indexOf('syncTargetContextChrome') >= 0, 'sync attach');
   assert.ok(html.indexOf('TargetContextChrome') >= 0, 'global use');
   assert.ok(html.indexOf('ctx-speaker') >= 0, 'T273 speaker class in CSS');
+  assert.ok(html.indexOf('ctx-repo') >= 0, 'T266 context class in CSS');
   assert.ok(/ctx-speaker[\s\S]*font-weight:\s*700/.test(html) ||
     html.indexOf('font-weight: 700') >= 0, 'bold speaker style present');
 });

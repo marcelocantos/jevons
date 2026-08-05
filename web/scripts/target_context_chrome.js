@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // 🎯T266 — Owner-facing target-ask context chrome (repo / PO / product).
-// 🎯T273 — Speaker/context identity: omit Jevons/overseer; non-overseer as
-// bold-purple 〈agent〉 only (no middle-dot ·, no Jevons prefix).
+// 🎯T273 — Split speaker-omit from context-paint:
+//   • speaker-omit: pure overseer / product name "Jevons" only (not jevons-po).
+//   • context-paint: always keep repo/target/ledger/owning-PO chrome when
+//     resolved — including when context is/includes jevons-po.
+//   • non-overseer speaker (other products): bold-purple 〈agent〉 only (no ·).
 // DOM-free pure helpers; browser attach lives in index.html.
 // T267 may reuse extractTargetIDs / resolveTargetContext for PO focus.
 
@@ -35,20 +38,25 @@
   }
 
   /**
-   * 🎯T273: identities that must not paint as speaker/context chrome.
-   * Overseer name, product "jevons", and jevons-po (default sole Jevons PO).
+   * 🎯T273 speaker-omit: pure overseer / product name "Jevons" only.
+   * Does NOT omit jevons-po (owning PO is context, not a bare speaker stamp).
    */
   function isOmittedSpeakerIdentity(name) {
     var n = String(name == null ? '' : name).trim().toLowerCase();
     if (!n) return true;
     if (n === 'jevons' || n === 'overseer') return true;
-    if (n === 'jevons-po') return true;
     return false;
   }
 
+  /** Product leaf is the Jevons product (context may still paint). */
+  function isJevonsProduct(name) {
+    var n = String(name == null ? '' : name).trim().toLowerCase();
+    return n === 'jevons';
+  }
+
   /**
-   * Prefer non-overseer agent (PO); else product/repo leaf when not Jevons.
-   * Empty ⇒ omit painted speaker label (🎯T273).
+   * Prefer PO / agent; else product when not pure Jevons speaker.
+   * Empty ⇒ omit speaker byline only (context chrome is separate).
    */
   function speakerIdentity(ctx) {
     ctx = ctx && typeof ctx === 'object' ? ctx : {};
@@ -62,7 +70,7 @@
     return '';
   }
 
-  /** Painted label only: 〈agent〉 or empty. Never middle-dot · or Jevons. */
+  /** Speaker byline only: 〈agent〉 or empty. Never middle-dot · or bare Jevons. */
   function formatSpeakerLabel(nameOrCtx) {
     var id = '';
     if (nameOrCtx && typeof nameOrCtx === 'object') {
@@ -75,13 +83,39 @@
     return SPEAKER_LT + id + SPEAKER_GT;
   }
 
-  /** HTML for speaker byline / context tab: bold-purple 〈agent〉 or empty. */
+  /** Speaker byline HTML: bold-purple 〈agent〉 or empty (not context chrome). */
   function formatSpeakerHTML(nameOrCtx) {
     var label = formatSpeakerLabel(nameOrCtx);
     if (!label) return '';
     // Escape only the identity body; brackets are fixed product chrome.
     var id = label.slice(SPEAKER_LT.length, label.length - SPEAKER_GT.length);
     return '<span class="ctx-speaker">' + SPEAKER_LT + escHtml(id) + SPEAKER_GT + '</span>';
+  }
+
+  /**
+   * 🎯T266 context-paint: product/repo + optional owning PO.
+   * Always includes jevons-po when present — never blanked by speaker-omit.
+   */
+  function formatChromeLabel(ctx) {
+    ctx = ctx && typeof ctx === 'object' ? ctx : {};
+    var head = collapse(ctx.product) || collapse(ctx.repo);
+    if (!head) return '';
+    var po = collapse(ctx.po);
+    return po ? head + ' · ' + po : head;
+  }
+
+  /** Context chrome HTML (repo/PO spans). Independent of speaker-omit. */
+  function formatContextHTML(ctx) {
+    ctx = ctx && typeof ctx === 'object' ? ctx : {};
+    var head = collapse(ctx.product) || collapse(ctx.repo);
+    if (!head) return '';
+    var po = collapse(ctx.po);
+    var html = '<span class="ctx-repo">' + escHtml(head) + '</span>';
+    if (po) {
+      html += '<span class="ctx-sep" aria-hidden="true"> · </span>' +
+        '<span class="ctx-po">' + escHtml(po) + '</span>';
+    }
+    return html;
   }
 
   function normalizeTargetID(raw) {
@@ -210,12 +244,7 @@
     return out;
   }
 
-  // 🎯T273: painted chrome is speaker-only (〈agent〉); no product·PO byline.
-  function formatChromeLabel(ctx) {
-    return formatSpeakerLabel(ctx);
-  }
-
-  // Hover/aria title may keep full meta (· separators OK — not painted byline).
+  // Hover/aria title keeps full meta (· separators OK — not speaker byline).
   function formatChromeTitle(ctx) {
     ctx = ctx && typeof ctx === 'object' ? ctx : {};
     var parts = [];
@@ -289,11 +318,25 @@
       }
     }
 
+    // Ledger/cwd-only asks: match owning PO by agent workdir → same repo label.
+    if (!po && repo) {
+      for (var k = 0; k < agents.length; k++) {
+        var pa = agents[k];
+        if (!pa || !isProductOwnerName(pa.name)) continue;
+        var prow = repoLabelFromPath(pa.workdir);
+        if (prow && prow === repo) {
+          po = String(pa.name).trim();
+          break;
+        }
+      }
+    }
+
     if (!product) product = productFromRepoLabel(repo);
     var speaker = speakerIdentity({ repo: repo, po: po, product: product });
-    var label = formatSpeakerLabel({ repo: repo, po: po, product: product });
-    // 🎯T273: only paint when ask + resolved repo + non-Jevons speaker identity.
-    var show = !!(ask && repo && label);
+    // Context label always (product · PO), independent of speaker-omit.
+    var label = formatChromeLabel({ repo: repo, po: po, product: product, targetId: primary });
+    // 🎯T273: context-paint gates on ask + repo only — never on speaker omit.
+    var show = !!(ask && repo);
     var title = formatChromeTitle({
       repo: repo, po: po, product: product, targetId: primary, targetIds: ids,
     });
@@ -311,26 +354,71 @@
     };
   }
 
+  /**
+   * Painted tab model.
+   *  - Context path (show): ask + resolved repo — keeps jevons-po context.
+   *  - Non-overseer other-product speaker: 〈agent〉 bold purple, no ·.
+   *  - Jevons product / pure overseer product context: T266 context chrome
+   *    (product · owning-PO), never blanked because PO is jevons-po.
+   *  - Pure speaker helpers still omit bare Jevons/overseer (formatSpeaker*).
+   */
   function chromeModel(opts) {
     var ctx = resolveTargetContext(opts || {});
-    // 🎯T273: only 〈agent〉 HTML — never product·PO or empty shell.
-    var inner = ctx.show
-      ? formatSpeakerHTML({
-          repo: ctx.repo, po: ctx.po, product: ctx.product, agent: ctx.speaker,
-        })
-      : '';
-    if (inner && (inner.indexOf('\u00b7') >= 0 || inner.indexOf(' · ') >= 0)) {
-      inner = '';
+    if (!ctx.show) {
+      return {
+        show: false,
+        label: '',
+        title: ctx.title,
+        repo: ctx.repo,
+        po: ctx.po,
+        product: ctx.product,
+        speaker: ctx.speaker || '',
+        targetId: ctx.targetId,
+        targetIds: ctx.targetIds,
+        innerHTML: '',
+      };
     }
-    var show = !!(ctx.show && inner);
+
+    var product = collapse(ctx.product) || productFromRepoLabel(ctx.repo);
+    var speaker = collapse(ctx.speaker) || speakerIdentity({
+      repo: ctx.repo, po: ctx.po, product: product, agent: ctx.speaker,
+    });
+    var useSpeakerPaint = !!(speaker && !isJevonsProduct(product) &&
+      !isOmittedSpeakerIdentity(speaker));
+
+    var inner = '';
+    var label = '';
+    if (useSpeakerPaint) {
+      // Non-overseer speaker on other products: 〈agent〉 only (no ·).
+      label = formatSpeakerLabel({
+        repo: ctx.repo, po: ctx.po, product: product, agent: speaker,
+      });
+      inner = formatSpeakerHTML({
+        repo: ctx.repo, po: ctx.po, product: product, agent: speaker,
+      });
+      if (inner && (inner.indexOf('\u00b7') >= 0 || inner.indexOf(' · ') >= 0)) {
+        inner = '';
+        label = '';
+      }
+    } else {
+      // Context chrome (repo/product · owning PO) — includes jevons-po.
+      label = formatChromeLabel({
+        repo: ctx.repo, po: ctx.po, product: product, targetId: ctx.targetId,
+      });
+      inner = formatContextHTML({
+        repo: ctx.repo, po: ctx.po, product: product, targetId: ctx.targetId,
+      });
+    }
+
+    var show = !!(inner);
     return {
       show: show,
-      label: show ? ctx.label : '',
+      label: show ? label : '',
       title: ctx.title,
       repo: ctx.repo,
       po: ctx.po,
       product: ctx.product,
-      speaker: ctx.speaker || '',
+      speaker: speaker || '',
       targetId: ctx.targetId,
       targetIds: ctx.targetIds,
       innerHTML: show ? inner : '',
@@ -345,9 +433,11 @@
     productFromRepoLabel: productFromRepoLabel,
     isProductOwnerName: isProductOwnerName,
     isOmittedSpeakerIdentity: isOmittedSpeakerIdentity,
+    isJevonsProduct: isJevonsProduct,
     speakerIdentity: speakerIdentity,
     formatSpeakerLabel: formatSpeakerLabel,
     formatSpeakerHTML: formatSpeakerHTML,
+    formatContextHTML: formatContextHTML,
     findAgentsByTargetID: findAgentsByTargetID,
     resolvePOForAgent: resolvePOForAgent,
     extractRepoHintsFromText: extractRepoHintsFromText,
