@@ -866,6 +866,31 @@
   }
 
   /**
+   * Owner-facing copy when sidebar send is blocked before HTTP (🎯T275).
+   * Never silent — every reason maps to a loud string.
+   * @param {string|null|undefined} reason
+   */
+  function sidebarSendBlockMessage(reason) {
+    const r = String(reason == null ? '' : reason).trim();
+    if (r === 'no-selection') {
+      return 'No fleet agent selected — pick a worker/PO in the RHS tree first.';
+    }
+    if (r === 'overseer-main-only') {
+      return 'Overseer uses main chat, not the RHS Transcript composer.';
+    }
+    if (r === 'empty') {
+      return 'Message is empty — type something before Send.';
+    }
+    if (r === 'observe-only') {
+      return 'This thread is observe-only — cannot send (read-only residual).';
+    }
+    if (!r) {
+      return 'Send blocked — unknown reason (not a silent drop).';
+    }
+    return 'Send blocked: ' + r;
+  }
+
+  /**
    * Classify Enter chords for the sidebar composer (narrow; main stays on ComposerKeys).
    * Enter → send; Shift+Enter → newline; Ctrl/Cmd+Enter → send (no interject path here).
    * @returns {'send'|'newline'|null}
@@ -1019,6 +1044,7 @@
     isSidebarDraftEmpty: isSidebarDraftEmpty,
     agentSendPath: agentSendPath,
     sidebarSendRequest: sidebarSendRequest,
+    sidebarSendBlockMessage: sidebarSendBlockMessage,
     createAsideRequestBody: createAsideRequestBody,
     freeformAsideCreateOpts: freeformAsideCreateOpts,
     classifySidebarComposerKey: classifySidebarComposerKey,

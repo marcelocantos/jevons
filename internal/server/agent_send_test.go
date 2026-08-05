@@ -76,6 +76,8 @@ func TestHandleAgentSendNotRegistered(t *testing.T) {
 }
 
 func TestHandleAgentSendBusyConflict(t *testing.T) {
+	// Without product hook queue: bare busy still maps to 409 (loud, not silent).
+	// Production wires MCP DeliverAgentMessage → status "queued" (see QueuedOK).
 	s := New("test", t.TempDir())
 	s.SetAgentSendHook(func(name, text string) (string, error) {
 		return "", fmtBusy()
@@ -87,6 +89,35 @@ func TestHandleAgentSendBusyConflict(t *testing.T) {
 	s.handleAgentSend(rr, req)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// 🎯T275: product hook returns queued (busy) → HTTP 200, not silent drop.
+func TestHandleAgentSendQueuedOK(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.SetAgentSendHook(func(name, text string) (string, error) {
+		if name != "jv-t275-worker" || text != "hello worker" {
+			t.Fatalf("hook args name=%q text=%q", name, text)
+		}
+		return "queued", nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/jv-t275-worker/send",
+		strings.NewReader(`{"text":"hello worker"}`))
+	req.SetPathValue("name", "jv-t275-worker")
+	rr := httptest.NewRecorder()
+	s.handleAgentSend(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp agentSendResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != "queued" || resp.Name != "jv-t275-worker" {
+		t.Fatalf("resp=%+v", resp)
+	}
+	if !strings.Contains(resp.Message, "queued") {
+		t.Fatalf("message should mention queued: %q", resp.Message)
 	}
 }
 

@@ -76,6 +76,32 @@ func (s *Server) pendingAgentSends(name string) int {
 	return len(s.agentSendQ[name])
 }
 
+// AgentDeliverResult is the public outcome of DeliverAgentMessage (🎯T275).
+// Status matches MCP jevons_agent_send: sent | queued | interrupted_sent |
+// interrupted_queued | rehydrated_sent.
+type AgentDeliverResult struct {
+	Status  string
+	Message string
+	Queued  int
+}
+
+// DeliverAgentMessage is the product deliver path shared by HTTP
+// POST /api/agents/{name}/send and MCP jevons_agent_send (🎯T275 / 🎯T111.1).
+// When a prompt is already in flight and interrupt is false, the message is
+// queued for after the turn — not a 409 silent dead-end. Does not inject the
+// fleet standing brief (MCP handleAgentSend applies EnsureFleetBrief first).
+func (s *Server) DeliverAgentMessage(name, text string, interrupt bool) (AgentDeliverResult, error) {
+	res, err := s.sendToAgent(name, text, interrupt)
+	if err != nil {
+		return AgentDeliverResult{}, err
+	}
+	return AgentDeliverResult{
+		Status:  res.Status,
+		Message: res.Message,
+		Queued:  res.Queued,
+	}, nil
+}
+
 // sendToAgent rehydrates if needed, optionally interrupts a busy turn,
 // sends text, or queues when the prompt is already in flight (🎯T111.1).
 // Does not inject the fleet standing brief — callers that need it

@@ -13,10 +13,12 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
-// 🎯T182: POST /api/agents/{name}/send — fire-and-forget deliver to a fleet
-// agent (HTTP product path for frontier play → jevons-po kickoff). Matches
-// MCP jevons_agent_send semantics: rehydrate if needed, do not wait for reply.
-// Busy ("prompt already in flight") is returned as a clear error — no silent drop.
+// 🎯T182 / 🎯T275: POST /api/agents/{name}/send — fire-and-forget deliver to a
+// fleet agent (HTTP product path for sidebar Transcript, frontier play, asides).
+// Production wires agentSendHook → mcpserver.DeliverAgentMessage so busy turns
+// queue (same as MCP jevons_agent_send) instead of 409 dead-end. Without a
+// hook, bare registry Send remains for hermetic tests; busy still surfaces as
+// a clear error (no silent drop).
 
 // agentSendRequest is the JSON body for POST /api/agents/{name}/send.
 type agentSendRequest struct {
@@ -26,12 +28,12 @@ type agentSendRequest struct {
 // agentSendResponse is returned on success.
 type agentSendResponse struct {
 	Name    string `json:"name"`
-	Status  string `json:"status"` // sent | rehydrated_sent
+	Status  string `json:"status"` // sent | rehydrated_sent | queued | interrupted_*
 	Message string `json:"message,omitempty"`
 }
 
-// agentSendHook is an optional test seam: (name, text) → (status, error).
-// When set, live registry Launch/Send is skipped.
+// agentSendHook is the product/test deliver seam: (name, text) → (status, error).
+// Production: mcpserver.DeliverAgentMessage (queue-on-busy). Tests: stub.
 func (s *Server) SetAgentSendHook(fn func(name, text string) (status string, err error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -39,8 +41,8 @@ func (s *Server) SetAgentSendHook(fn func(name, text string) (status string, err
 }
 
 // sendToNamedAgent rehydrates a registered fleet agent if needed and sends
-// text fire-and-forget (no WaitForResponse). Returns status "sent" or
-// "rehydrated_sent".
+// text fire-and-forget (no WaitForResponse). Returns status from the product
+// hook (sent | queued | rehydrated_sent | …) or bare registry "sent".
 func (s *Server) sendToNamedAgent(name, text string) (string, error) {
 	name = strings.TrimSpace(name)
 	text = strings.TrimSpace(text)
@@ -74,6 +76,8 @@ func (s *Server) sendToNamedAgent(name, text string) (string, error) {
 		rehydrated = true
 	}
 	if err := proc.Send(text); err != nil {
+		// No product hook: busy is a loud failure (not silent). Production
+		// always sets the MCP deliver hook so busy queues instead (🎯T275).
 		return "", err
 	}
 	if rehydrated {
@@ -137,11 +141,15 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		"name", name,
 		"status", status,
 	)
+	msg := fmt.Sprintf("Message delivered to %q (%s)", name, status)
+	if status == "queued" {
+		msg = fmt.Sprintf("Message queued for %q (prompt in flight; will deliver when the turn ends)", name)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(agentSendResponse{
 		Name:    name,
 		Status:  status,
-		Message: fmt.Sprintf("Message delivered to %q (%s)", name, status),
+		Message: msg,
 	})
 }
 

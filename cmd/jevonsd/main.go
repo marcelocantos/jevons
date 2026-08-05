@@ -516,6 +516,16 @@ func main() {
 	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID, "resume", jevonDef.Materialized)
 
 	srv.SetRegistry(registry)
+	// 🎯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
+	// MCP jevons_agent_send — queue when busy (not 409 dead-end). Drain on
+	// terminal stop is wired in mcpserver agentEventSink (🎯T111.1).
+	srv.SetAgentSendHook(func(name, text string) (string, error) {
+		res, err := mcpSrv.DeliverAgentMessage(name, text, false)
+		if err != nil {
+			return "", err
+		}
+		return res.Status, nil
+	})
 	// 🎯T82: event-driven fleet panel refresh when agents.json mutates.
 	srv.WatchAgentsFile(registryPath)
 

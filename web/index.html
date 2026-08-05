@@ -7824,10 +7824,41 @@ if (agentInspectRefresh) agentInspectRefresh.onclick = function () {
   if (selectedAgent) loadAgentTranscript(selectedAgent, { quiet: false });
 };
 
-// 🎯T251: sidebar Transcript composer → POST /api/agents/{selected}/send
+// 🎯T251 / 🎯T275: sidebar Transcript composer → POST /api/agents/{selected}/send
 // Independent of main #input / transport overseer wire.
+// Product deliver queues when busy (MCP DeliverAgentMessage); never silent no-op.
+function showSidebarSendErr(msg) {
+  const text = String(msg == null ? '' : msg).trim() || 'Send failed (unknown)';
+  if (typeof jLog === 'function') {
+    jLog('warn', 'sidebar_agent_send_blocked', { err: text });
+  }
+  if (!agentInspectBody) return;
+  let errEl = agentInspectBody.querySelector('.ai-err.sidebar-send-err');
+  if (!errEl) {
+    errEl = document.createElement('div');
+    errEl.className = 'ai-err sidebar-send-err';
+    errEl.setAttribute('role', 'alert');
+    agentInspectBody.insertBefore(errEl, agentInspectBody.firstChild);
+  }
+  errEl.textContent = text;
+}
+function clearSidebarSendErr() {
+  if (!agentInspectBody) return;
+  const errEl = agentInspectBody.querySelector('.ai-err.sidebar-send-err');
+  if (errEl && errEl.parentNode) errEl.parentNode.removeChild(errEl);
+}
 function sendSidebarComposer() {
-  if (!agentInspectInput || !selectedAgent) return Promise.resolve(null);
+  if (!agentInspectInput) {
+    showSidebarSendErr('Transcript composer is not available.');
+    return Promise.resolve(null);
+  }
+  if (!selectedAgent) {
+    const msg = (typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendBlockMessage)
+      ? AgentTranscript.sidebarSendBlockMessage('no-selection')
+      : 'No fleet agent selected — pick a worker/PO in the RHS tree first.';
+    showSidebarSendErr(msg);
+    return Promise.resolve(null);
+  }
   const text = agentInspectInput.value;
   let purpose = '';
   if (Array.isArray(lastFleetAgents)) {
@@ -7850,6 +7881,11 @@ function sendSidebarComposer() {
         };
       })();
   if (!req || !req.ok) {
+    const reason = (req && req.reason) || 'unknown';
+    const msg = (typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendBlockMessage)
+      ? AgentTranscript.sidebarSendBlockMessage(reason)
+      : ('Send blocked: ' + reason);
+    showSidebarSendErr(msg);
     syncSidebarSendEnabled();
     return Promise.resolve(null);
   }
@@ -7881,18 +7917,20 @@ function sendSidebarComposer() {
       };
   return Promise.resolve(sendFn(req.url, req.body))
     .then(function (res) {
+      clearSidebarSendErr();
       if (typeof jLog === 'function') {
         jLog('info', 'sidebar_agent_send', {
           name: req.name,
           status: (res && res.status) || 'sent',
         });
       }
-      // Clear draft for this agent after accept.
+      // Clear draft for this agent after accept (sent or queued).
       if (agentInspectInput) {
         agentInspectInput.value = '';
         if (req.name) sidebarDraftByAgent[req.name] = '';
       }
       // 🎯T265: optimistic owner bubble + working chrome (main-chat microcosm).
+      // 🎯T275: also for status=queued — owner sees the turn; not a silent drop.
       if (req.body && req.body.text) {
         if (typeof AgentTranscript !== 'undefined' && AgentTranscript.afterSidebarSendOptimistic) {
           const opt = AgentTranscript.afterSidebarSendOptimistic(
@@ -7938,15 +7976,7 @@ function sendSidebarComposer() {
           err: String(err && err.message || err),
         });
       }
-      if (agentInspectBody) {
-        let errEl = agentInspectBody.querySelector('.ai-err.sidebar-send-err');
-        if (!errEl) {
-          errEl = document.createElement('div');
-          errEl.className = 'ai-err sidebar-send-err';
-          agentInspectBody.insertBefore(errEl, agentInspectBody.firstChild);
-        }
-        errEl.textContent = 'Send failed: ' + String(err && err.message || err);
-      }
+      showSidebarSendErr('Send failed: ' + String(err && err.message || err));
       return null;
     })
     .finally(function () {

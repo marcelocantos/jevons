@@ -1090,6 +1090,38 @@ test('T251 index.html wires sidebar composer DOM + sendSidebarComposer path', fu
   assert.ok(html.indexOf('🎯T251') >= 0 || html.indexOf('T251') >= 0, 'T251 marker');
 });
 
+// ── 🎯T275: RHS Transcript send delivers; no silent no-op ───────────────
+
+test('T275 sidebarSendBlockMessage is loud for every block reason', function () {
+  assert.ok(AT.sidebarSendBlockMessage('no-selection').indexOf('selected') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('overseer-main-only').indexOf('main chat') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('empty').indexOf('empty') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('observe-only').indexOf('observe-only') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('').indexOf('silent') >= 0 ||
+    AT.sidebarSendBlockMessage('').indexOf('unknown') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('custom-x').indexOf('custom-x') >= 0);
+});
+
+test('T275 index.html: no silent no-op on sidebar send block/fail', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('function showSidebarSendErr') >= 0, 'loud err helper');
+  assert.ok(html.indexOf('sidebarSendBlockMessage') >= 0, 'uses pure block copy');
+  assert.ok(html.indexOf('role', 'alert') >= 0 || html.indexOf("setAttribute('role', 'alert')") >= 0 ||
+    html.indexOf('setAttribute("role", "alert")') >= 0 || html.indexOf("role', 'alert'") >= 0,
+    'err is alert-role');
+  // Blocked pre-HTTP path must call showSidebarSendErr (not bare return).
+  const sendFn = html.match(/function sendSidebarComposer\([\s\S]*?\nif \(agentInspectInput\)/);
+  assert.ok(sendFn, 'sendSidebarComposer capturable');
+  assert.ok(sendFn[0].indexOf('showSidebarSendErr') >= 0,
+    'sendSidebarComposer surfaces block/fail loudly');
+  assert.ok(sendFn[0].indexOf('no-selection') >= 0 ||
+    sendFn[0].indexOf('sidebarSendBlockMessage') >= 0,
+    'no-selection is loud');
+  // Product path still posts to agent send API.
+  assert.ok(html.indexOf('/api/agents/') >= 0 && html.indexOf('sidebarSendRequest') >= 0);
+  assert.ok(html.indexOf('T275') >= 0 || html.indexOf('🎯T275') >= 0, 'T275 marker');
+});
+
 // ── 🎯T265: aside/agent Transcript microcosm of main chat ───────────────
 
 test('T265 mergePaneModelWithLines preserves working chrome', function () {
