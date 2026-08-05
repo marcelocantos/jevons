@@ -92,6 +92,7 @@ test-ui:
 	node scripts/chat-ui-test/infinite-scroll-test.js
 	node scripts/chat-ui-test/replay-scroll-test.js
 	node scripts/chat-ui-test/mermaid-test.js
+	node scripts/chat-ui-test/t280-frontier-graph-test.js
 	node scripts/chat-ui-test/agent-note-test.js
 	node scripts/chat-ui-test/t159-seal-test.js
 	node scripts/chat-ui-test/virtual-list-test.js

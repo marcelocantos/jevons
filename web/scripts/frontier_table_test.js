@@ -873,16 +873,18 @@ test('T185/T190 index.html Graph control + large panel + multi-diagram pack CSS'
   assert.ok(/#mermaid-viz-panel\s+\.mvp-body\s+svg\s*\{[^}]*max-width:\s*100%/.test(html)
     || /#mermaid-viz-panel \.mvp-body svg \{[^}]*max-width: 100%/.test(html),
     'mvp-body svg max-width 100%');
-  // 🎯T190/T276: multi-diagram pack blocks + pack+scale (not 320px wrap-grid only).
+  // 🎯T190/T276 residual: multi-diagram pack renderer remains (not owner default — T280).
   assert.ok(html.indexOf('mvp-pack') >= 0, 'mvp-pack class');
   assert.ok(html.indexOf('mvp-pack-block') >= 0, 'mvp-pack-block');
   assert.ok(html.indexOf('function fitMermaidPackToPane') >= 0
     || html.indexOf('planMultiDiagramPackScaleToFill') >= 0,
     'T276 pack+scale path');
   assert.ok(html.indexOf('function renderMermaidDiagramPackInPanel') >= 0,
-    'multi-diagram renderer');
-  assert.ok(html.indexOf('renderMermaidDiagramPackInPanel') >= 0
-    && html.indexOf('model.diagrams') >= 0, 'openFrontierGraph uses diagrams pack');
+    'multi-diagram renderer (residual)');
+  assert.ok(html.indexOf('resolveFrontierGraphOpenPlan') >= 0
+    || html.indexOf('single-primary') >= 0
+    || html.indexOf('renderMermaidSourceInPanel') >= 0,
+    'openFrontierGraph uses single-primary default (T280)');
   // Open path: fetch graph API + openFrontierGraph + wire button.
   assert.ok(html.indexOf('/api/frontier/graph') >= 0, 'graph API path');
   assert.ok(html.indexOf('function openFrontierGraph') >= 0, 'openFrontierGraph defined');
@@ -1400,6 +1402,100 @@ test('T267 index.html wires focusTargetAsk + highlight class + seal path', funct
   assert.ok(focusBody.indexOf('selectAgent') >= 0, 'selects owning PO');
   assert.ok(focusBody.indexOf('frontier') >= 0, 'switches to frontier tab');
   assert.ok(focusBody.indexOf('loadFrontier') >= 0, 'reloads frontier after focus');
+});
+
+// 🎯T280: default Frontier Graph = single primary (not multi tall-empty pack).
+test('T280 pickPrimaryGraphDiagram + resolveFrontierGraphOpenPlan single default', function () {
+  assert.strictEqual(typeof FT.pickPrimaryGraphDiagram, 'function');
+  assert.strictEqual(typeof FT.resolveFrontierGraphOpenPlan, 'function');
+
+  const dSmall = {
+    id: 'c1', kind: 'component', title: 'Small', mermaid: 'flowchart TB\n  A-->B\n',
+    nodeCount: 4, edgeCount: 3,
+  };
+  const dLarge = {
+    id: 'c0', kind: 'component', title: 'Large', mermaid: 'flowchart TB\n  X-->Y\n  Y-->Z\n',
+    nodeCount: 24, edgeCount: 40,
+  };
+  const dOrphans = {
+    id: 'orphans', kind: 'orphans', title: 'Orphans', mermaid: 'flowchart TB\n  O1\n',
+    nodeCount: 8, edgeCount: 0,
+  };
+  // Pick largest by nodes (then edges).
+  const primary = FT.pickPrimaryGraphDiagram([dSmall, dLarge, dOrphans]);
+  assert.ok(primary, 'picks a primary');
+  assert.strictEqual(primary.id, 'c0');
+  assert.strictEqual(FT.pickPrimaryGraphDiagram([]), null);
+  assert.strictEqual(FT.pickPrimaryGraphDiagram(null), null);
+
+  // Empty model.
+  const empty = FT.resolveFrontierGraphOpenPlan({ available: false, diagrams: [], mermaid: '' });
+  assert.strictEqual(empty.mode, 'empty');
+
+  // Single diagram → single mode.
+  const one = FT.resolveFrontierGraphOpenPlan({
+    available: true,
+    diagrams: [dLarge],
+    mermaid: dLarge.mermaid,
+    nodeCount: 24,
+    edgeCount: 40,
+  });
+  assert.strictEqual(one.mode, 'single');
+  assert.strictEqual(one.mermaid, dLarge.mermaid);
+  assert.ok(one.diagramCount === 1);
+
+  // Multi diagrams → single-primary by default (NOT pack).
+  const multi = FT.resolveFrontierGraphOpenPlan({
+    available: true,
+    diagrams: [dSmall, dLarge, dOrphans],
+    mermaid: '%% jevons-frontier-pack pack=wrap-grid diagrams=3 %%\n' + dSmall.mermaid,
+    nodeCount: 36,
+    edgeCount: 43,
+  });
+  assert.strictEqual(multi.mode, 'single-primary', 'owner default is single-primary not pack');
+  assert.strictEqual(multi.primary.id, 'c0');
+  assert.strictEqual(multi.mermaid, dLarge.mermaid);
+  assert.strictEqual(multi.diagramCount, 3);
+  assert.ok(/primary of 3/.test(multi.statusNote), multi.statusNote);
+
+  // Residual pack only when preferPack.
+  const pack = FT.resolveFrontierGraphOpenPlan({
+    available: true,
+    diagrams: [dSmall, dLarge, dOrphans],
+    mermaid: 'joined',
+    nodeCount: 36,
+    edgeCount: 43,
+  }, { preferPack: true });
+  assert.strictEqual(pack.mode, 'pack');
+  assert.strictEqual(pack.diagrams.length, 3);
+
+  // Joined pack blob without diagrams → empty (not unrenderable multi dump).
+  const joinedOnly = FT.resolveFrontierGraphOpenPlan({
+    available: true,
+    diagrams: [],
+    mermaid: '%% jevons-frontier-pack pack=wrap-grid diagrams=2 %%\nflowchart TB\nA-->B\nflowchart TB\nC-->D\n',
+  });
+  assert.strictEqual(joinedOnly.mode, 'empty');
+});
+
+test('T280 index.html openFrontierGraph defaults to single-primary scale-to-fill', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const ofgStart = html.indexOf('function openFrontierGraph');
+  assert.ok(ofgStart >= 0, 'openFrontierGraph defined');
+  const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
+  const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 9000);
+  assert.ok(ofg.indexOf('T280') >= 0, 'T280 marked');
+  assert.ok(ofg.indexOf('resolveFrontierGraphOpenPlan') >= 0, 'uses pure open plan');
+  assert.ok(ofg.indexOf('scaleToFill') >= 0, 'scale-to-fill for single path');
+  assert.ok(ofg.indexOf('renderMermaidSourceInPanel') >= 0, 'single source renderer');
+  // Pack only when preferPack / mode pack — not unconditional multi render.
+  assert.ok(ofg.indexOf('preferPack') >= 0, 'preferPack residual gate');
+  // Must not route multi solely via `if (hasDiagrams) { renderMermaidDiagramPack… }`
+  // without the open-plan resolver (the T276 trainwreck default).
+  assert.ok(
+    !/if\s*\(\s*hasDiagrams\s*\)\s*\{\s*return\s+renderMermaidDiagramPackInPanel/.test(ofg),
+    'must not unconditional pack on hasDiagrams'
+  );
 });
 
 // 🎯T230: frontier re-render must not kill tips while pointer is over card.

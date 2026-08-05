@@ -3075,8 +3075,8 @@ function openVizFromChrome() {
 /**
  * 🎯T185: Frontier Graph — open ~90% panel with entire unachieved dependency graph.
  * Fetches GET /api/frontier/graph (ledger-built Mermaid); renders into #mermaid-viz-panel.
- * 🎯T190: multi-diagram pack (one Mermaid per connected component + orphans block)
- * into wrap-grid blocks — not one mega LR strip / Mermaid-native TD alone.
+ * 🎯T280: DEFAULT = single primary diagram scale-to-fill (T268). Multi-component
+ * pack (T190/T276/T277) is residual only — opt-in via opts.preferPack, not owner default.
  * 🎯T196: 404/5xx/network → actionable error body (HTTP + restart-daily), not empty paste shell.
  */
 function openFrontierGraph(opts) {
@@ -3105,6 +3105,7 @@ function openFrontierGraph(opts) {
   const body = document.getElementById('mvp-body');
   if (body) {
     body.classList.remove('mvp-pack');
+    body.classList.remove('mvp-scale-fill');
     body.innerHTML = '<p class="mvp-empty-body" style="padding:12px">Loading…</p>';
   }
   return fetch(api)
@@ -3136,48 +3137,43 @@ function openFrontierGraph(opts) {
             nodeCount: (payload && payload.node_count) || 0,
             edgeCount: (payload && payload.edge_count) || 0,
           };
-      const hasDiagrams = model.diagrams && model.diagrams.length > 0;
-      if (!model.available || (!model.mermaid && !hasDiagrams)) {
+      // 🎯T280: resolve single-primary default (preferPack residual only).
+      const openPlan = (typeof FrontierTable !== 'undefined' && FrontierTable.resolveFrontierGraphOpenPlan)
+        ? FrontierTable.resolveFrontierGraphOpenPlan(model, { preferPack: o.preferPack === true })
+        : null;
+      if (!openPlan || openPlan.mode === 'empty') {
         // Empty ledger / no graph — not a product fetch failure (distinct from 🎯T196).
         renderMermaidPanelEmpty();
         setMermaidPanelTitle('Unachieved graph');
-        setMermaidPanelStatus(model.error || 'No unachieved graph available');
+        setMermaidPanelStatus(
+          (openPlan && openPlan.statusNote) || model.error || 'No unachieved graph available'
+        );
         return model;
       }
-      const nBlocks = hasDiagrams ? model.diagrams.length : 1;
+      const nBlocks = openPlan.diagramCount || 1;
       const meta = (model.nodeCount || model.edgeCount)
         ? (' · ' + (model.nodeCount || 0) + ' nodes · ' + (model.edgeCount || 0) + ' edges · ' +
            nBlocks + ' diagram' + (nBlocks === 1 ? '' : 's'))
         : '';
-      // 🎯T268: single-graph → scale-to-fill pane.
-      // 🎯T276: multi-diagram → pack+scale (fitMermaidPackToPane after render).
-      if (hasDiagrams && model.diagrams.length === 1) {
-        const only = model.diagrams[0];
-        const singleSrc = (only && only.mermaid) || model.mermaid;
-        return renderMermaidSourceInPanel(singleSrc, {
-          title: 'Unachieved graph',
-          pin: o.pin !== false,
-          large: true,
-          scaleToFill: true,
-          status: 'Unachieved dependency graph' + meta,
-        }).then(function () { return model; });
-      }
-      if (hasDiagrams) {
-        return renderMermaidDiagramPackInPanel(model.diagrams, {
+      const note = openPlan.statusNote ? (' · ' + openPlan.statusNote) : '';
+      // Residual multi-pack only when explicitly requested.
+      if (openPlan.mode === 'pack') {
+        return renderMermaidDiagramPackInPanel(openPlan.diagrams || model.diagrams, {
           title: 'Unachieved graph',
           pinSrc: model.mermaid,
           pin: o.pin !== false,
           large: true,
           pack: model.pack || 'wrap-grid',
-          status: 'Unachieved dependency graph' + meta,
+          status: 'Unachieved dependency graph' + meta + note,
         }).then(function () { return model; });
       }
-      return renderMermaidSourceInPanel(model.mermaid, {
+      // 🎯T268/T280: single / single-primary → scale-to-fill the large pane.
+      return renderMermaidSourceInPanel(openPlan.mermaid, {
         title: 'Unachieved graph',
         pin: o.pin !== false,
         large: true,
         scaleToFill: true,
-        status: 'Unachieved dependency graph' + meta,
+        status: 'Unachieved dependency graph' + meta + note,
       }).then(function () { return model; });
     })
     .catch(function (err) {

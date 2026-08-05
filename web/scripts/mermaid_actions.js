@@ -976,6 +976,86 @@
   }
 
   /**
+   * 🎯T280: tall-empty-column layout oracle (DOM-metric pure).
+   * Owner trainwreck: N tall grey Component columns with tiny SVG content.
+   * Fails (isTallEmpty: true) when ≥2 blocks are tall (h/w ≥ maxAspect)
+   * and SVG area covers < minCover of the block.
+   * @param {Array<{blockW:number,blockH:number,svgW:number,svgH:number}>} blocks
+   * @param {{ maxAspect?: number, minCover?: number, minTallEmpty?: number }} opts
+   * @returns {{
+   *   isTallEmpty: boolean,
+   *   tallEmptyCount: number,
+   *   blockCount: number,
+   *   mode: string,
+   *   details: Array<object>
+   * }}
+   */
+  function assessTallEmptyColumnLayout(blocks, opts) {
+    const o = opts || {};
+    const maxAspect = o.maxAspect != null ? positiveNumber(o.maxAspect) : 2.0;
+    const minCover = o.minCover != null ? positiveNumber(o.minCover) : 0.35;
+    const minTallEmpty = o.minTallEmpty != null ? Math.max(1, Math.floor(o.minTallEmpty)) : 2;
+    const list = Array.isArray(blocks) ? blocks : [];
+    const details = [];
+    let tallEmptyCount = 0;
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i] || {};
+      const blockW = positiveNumber(b.blockW);
+      const blockH = positiveNumber(b.blockH);
+      const svgW = positiveNumber(b.svgW);
+      const svgH = positiveNumber(b.svgH);
+      const aspect = blockW > 0 ? blockH / blockW : 0;
+      const blockArea = blockW * blockH;
+      const svgArea = svgW * svgH;
+      const cover = blockArea > 0 ? svgArea / blockArea : 0;
+      const isTall = aspect >= maxAspect;
+      const lowCover = cover < minCover;
+      const isTallEmpty = isTall && lowCover && blockW > 0 && blockH > 0;
+      if (isTallEmpty) tallEmptyCount++;
+      details.push({
+        i: i,
+        aspect: aspect,
+        cover: cover,
+        isTall: isTall,
+        lowCover: lowCover,
+        isTallEmpty: isTallEmpty,
+      });
+    }
+    return {
+      isTallEmpty: tallEmptyCount >= minTallEmpty,
+      tallEmptyCount: tallEmptyCount,
+      blockCount: list.length,
+      mode: 'tall-empty-columns',
+      details: details,
+    };
+  }
+
+  /**
+   * 🎯T280: single-pane SVG cover oracle — good owner default after scale-to-fill.
+   * Passes when one SVG covers ≥ minCover of the larger pane axis (contain fill).
+   * @param {{ paneW:number, paneH:number, svgDisplayW:number, svgDisplayH:number }} metrics
+   * @param {{ minCover?: number }} opts
+   */
+  function assessSingleGraphPaneCover(metrics, opts) {
+    const o = opts || {};
+    const m = metrics || {};
+    const minCover = o.minCover != null ? positiveNumber(o.minCover) : 0.75;
+    const paneW = positiveNumber(m.paneW);
+    const paneH = positiveNumber(m.paneH);
+    const svgW = positiveNumber(m.svgDisplayW);
+    const svgH = positiveNumber(m.svgDisplayH);
+    if (!paneW || !paneH || !svgW || !svgH) {
+      return { ok: false, cover: 0, mode: 'single-pane-cover' };
+    }
+    const cover = Math.max(svgW / paneW, svgH / paneH);
+    return {
+      ok: cover >= minCover,
+      cover: cover,
+      mode: 'single-pane-cover',
+    };
+  }
+
+  /**
    * Oracle helper: wrap-grid micro-island layout never fills the pane.
    * Models T190 CSS minmax(min(100%, 320px), 1fr) — each cell ≤320, no
    * composite scale. Used by hermetics so the old path fails ≥95% cover.
@@ -1161,5 +1241,8 @@
     planChromeInflatedStretchOracle: planChromeInflatedStretchOracle,
     placementSvgAspectMatchesNatural: placementSvgAspectMatchesNatural,
     applyPackPlacement: applyPackPlacement,
+    // 🎯T280 visual layout oracles
+    assessTallEmptyColumnLayout: assessTallEmptyColumnLayout,
+    assessSingleGraphPaneCover: assessSingleGraphPaneCover,
   };
 }));

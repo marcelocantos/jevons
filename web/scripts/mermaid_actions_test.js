@@ -684,7 +684,7 @@ test('T276 packBoxesIntoPaneAspect returns composite matching pane aspect spirit
   assert.ok(uniqueY.length < 3, 'wide pane should shelf-pack multiple per row, ys=' + ys);
 });
 
-test('T276 index.html wires pack+scale for multi-diagram (not residual only)', function () {
+test('T276 index.html wires pack+scale renderer (residual secondary under T280)', function () {
   const fs = require('fs');
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -695,12 +695,11 @@ test('T276 index.html wires pack+scale for multi-diagram (not residual only)', f
   assert.ok(html.indexOf('fitMermaidPackToPane') >= 0
     && html.indexOf('renderMermaidDiagramPackInPanel') >= 0,
     'pack renderer triggers pack fit');
-  // Must not early-return multi as residual-only.
+  // Pack fit still routes when body has mvp-pack (residual opt-in path).
   const fitStart = html.indexOf('function fitMermaidPanelSvgToPane');
   assert.ok(fitStart >= 0);
   const fitSlice = html.slice(fitStart, fitStart + 1200);
   assert.ok(fitSlice.indexOf('fitMermaidPackToPane') >= 0, 'single fit routes pack to T276');
-  assert.ok(fitSlice.indexOf('multi residual') < 0, 'no multi residual early-return');
   // 🎯T277: natural boxes only (no chrome inflation into pack measure).
   const packStart = html.indexOf('function fitMermaidPackToPane');
   assert.ok(packStart >= 0);
@@ -713,6 +712,13 @@ test('T276 index.html wires pack+scale for multi-diagram (not residual only)', f
     packSlice.indexOf('chromeH') >= 0,
     'chrome passed as fixed option, not baked into box.h before pack'
   );
+  // 🎯T280: openFrontierGraph must NOT unconditionally call pack for multi diagrams.
+  const ofgStart = html.indexOf('function openFrontierGraph');
+  assert.ok(ofgStart >= 0);
+  const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
+  const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 8000);
+  assert.ok(ofg.indexOf('resolveFrontierGraphOpenPlan') >= 0, 'T280 open plan resolver');
+  assert.ok(ofg.indexOf('preferPack') >= 0, 'pack is opt-in residual');
 });
 
 test('T268 applySvgScaleToFill mutates style + data attr', function () {
@@ -746,16 +752,23 @@ test('T268 index.html wires scale-to-fill for single large graph', function () {
   assert.ok(html.indexOf('applySvgScaleToFill') >= 0 || html.indexOf('fitMermaidPanelSvgToPane') >= 0,
     'applies fit after render');
   assert.ok(html.indexOf('mvp-scale-fill') >= 0, 'scale-fill CSS class');
-  // Single diagram from frontier pack routes to single-graph path (not pack grid).
+  // 🎯T280: openFrontierGraph defaults to single / single-primary scale-to-fill.
   const ofgStart = html.indexOf('function openFrontierGraph');
   assert.ok(ofgStart >= 0);
   const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
   const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 8000);
   assert.ok(
-    /diagrams\.length\s*===\s*1|nBlocks\s*===\s*1|length\s*===\s*1/.test(ofg),
-    'single-diagram branch in openFrontierGraph'
+    ofg.indexOf('resolveFrontierGraphOpenPlan') >= 0
+      || ofg.indexOf('scaleToFill: true') >= 0
+      || ofg.indexOf('scaleToFill:true') >= 0,
+    'single scale-to-fill plan in openFrontierGraph'
   );
   assert.ok(ofg.indexOf('renderMermaidSourceInPanel') >= 0, 'single path uses source renderer');
+  // Multi-pack only when preferPack (residual), not bare multi default.
+  assert.ok(
+    ofg.indexOf('preferPack') >= 0 || ofg.indexOf('mode === \'pack\'') >= 0 || ofg.indexOf('mode === "pack"') >= 0,
+    'pack residual gated (not unconditional multi default)'
+  );
 });
 
 // 🎯T274: pause earlier-history while large graph open; render timeout.
@@ -794,6 +807,54 @@ test('T274 withMermaidRenderTimeout rejects hung render', async function () {
   // Fast resolve still wins.
   const ok = await MA.withMermaidRenderTimeout(Promise.resolve({ svg: '<svg/>' }), 500);
   assert.strictEqual(ok.svg, '<svg/>');
+});
+
+// 🎯T280: tall-empty-column oracle FAILS owner trainwreck; single cover PASSES.
+test('T280 assessTallEmptyColumnLayout fails 3 tall empty columns', function () {
+  assert.strictEqual(typeof MA.assessTallEmptyColumnLayout, 'function');
+  assert.strictEqual(typeof MA.assessSingleGraphPaneCover, 'function');
+
+  // Owner orthograph trainwreck: 3 enormous vertical grey columns, tiny SVG.
+  const trainwreck = MA.assessTallEmptyColumnLayout([
+    { blockW: 220, blockH: 720, svgW: 80, svgH: 60 },
+    { blockW: 220, blockH: 720, svgW: 90, svgH: 50 },
+    { blockW: 220, blockH: 720, svgW: 70, svgH: 55 },
+  ]);
+  assert.strictEqual(trainwreck.mode, 'tall-empty-columns');
+  assert.strictEqual(trainwreck.isTallEmpty, true, 'must FAIL tall-empty layout');
+  assert.ok(trainwreck.tallEmptyCount >= 2, 'tallEmptyCount=' + trainwreck.tallEmptyCount);
+  assert.strictEqual(trainwreck.blockCount, 3);
+
+  // Single scale-to-fill pane: one wide SVG covering most of the pane — not tall-empty.
+  const goodSingle = MA.assessTallEmptyColumnLayout([
+    { blockW: 900, blockH: 700, svgW: 880, svgH: 680 },
+  ]);
+  assert.strictEqual(goodSingle.isTallEmpty, false, 'single full SVG is not tall-empty multi');
+
+  // Empty / single short block.
+  assert.strictEqual(MA.assessTallEmptyColumnLayout([]).isTallEmpty, false);
+  assert.strictEqual(
+    MA.assessTallEmptyColumnLayout([{ blockW: 400, blockH: 200, svgW: 380, svgH: 180 }]).isTallEmpty,
+    false
+  );
+
+  // Single pane cover: scale-to-fill should pass ≥75%.
+  const cover = MA.assessSingleGraphPaneCover({
+    paneW: 1000,
+    paneH: 800,
+    svgDisplayW: 1000,
+    svgDisplayH: 500,
+  });
+  assert.strictEqual(cover.ok, true, 'axis cover ≥0.75');
+  assert.ok(cover.cover >= 0.75, 'cover=' + cover.cover);
+
+  const tiny = MA.assessSingleGraphPaneCover({
+    paneW: 1000,
+    paneH: 800,
+    svgDisplayW: 120,
+    svgDisplayH: 80,
+  });
+  assert.strictEqual(tiny.ok, false, 'micro island fails single cover');
 });
 
 Promise.all(pending).then(function () {

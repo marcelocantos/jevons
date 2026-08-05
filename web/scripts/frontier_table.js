@@ -643,6 +643,123 @@
     return buildActiveDependencyDiagrams(targets).mermaid;
   }
 
+  // ── 🎯T280: owner-default Frontier Graph = single primary SVG (not multi-pack) ──
+
+  // pickPrimaryGraphDiagram — largest component by nodes, then edges (stable id).
+  // Multi-diagram pack stays residual; owner Graph opens the primary only.
+  function pickPrimaryGraphDiagram(diagrams) {
+    var list = Array.isArray(diagrams) ? diagrams : [];
+    var best = null;
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i];
+      if (!d || !d.mermaid) continue;
+      if (!best) {
+        best = d;
+        continue;
+      }
+      var dn = typeof d.nodeCount === 'number' ? d.nodeCount : 0;
+      var bn = typeof best.nodeCount === 'number' ? best.nodeCount : 0;
+      if (dn > bn) {
+        best = d;
+        continue;
+      }
+      if (dn < bn) continue;
+      var de = typeof d.edgeCount === 'number' ? d.edgeCount : 0;
+      var be = typeof best.edgeCount === 'number' ? best.edgeCount : 0;
+      if (de > be) {
+        best = d;
+        continue;
+      }
+      if (de < be) continue;
+      // Stable: prefer lower id for ties.
+      var idA = d.id != null ? String(d.id) : '';
+      var idB = best.id != null ? String(best.id) : '';
+      if (idA && idB && idA < idB) best = d;
+    }
+    return best;
+  }
+
+  // resolveFrontierGraphOpenPlan — default owner path is single scale-to-fill.
+  // mode: empty | single | single-primary | pack
+  // pack only when opts.preferPack === true (residual secondary view).
+  function resolveFrontierGraphOpenPlan(model, opts) {
+    var o = opts || {};
+    var m = model || {};
+    var diagrams = Array.isArray(m.diagrams) ? m.diagrams : [];
+    var hasDiagrams = false;
+    var i;
+    for (i = 0; i < diagrams.length; i++) {
+      if (diagrams[i] && diagrams[i].mermaid) {
+        hasDiagrams = true;
+        break;
+      }
+    }
+    var mermaid = m.mermaid != null ? String(m.mermaid) : '';
+    if (!m.available || (!mermaid && !hasDiagrams)) {
+      return {
+        mode: 'empty',
+        mermaid: '',
+        primary: null,
+        diagrams: diagrams,
+        diagramCount: diagrams.length,
+        statusNote: '',
+      };
+    }
+    // Residual multi-pack: explicit only (never owner default).
+    if (o.preferPack === true && diagrams.length > 1) {
+      return {
+        mode: 'pack',
+        mermaid: mermaid,
+        primary: pickPrimaryGraphDiagram(diagrams),
+        diagrams: diagrams,
+        diagramCount: diagrams.length,
+        statusNote: 'multi-pack (residual)',
+      };
+    }
+    if (diagrams.length === 1 && diagrams[0] && diagrams[0].mermaid) {
+      return {
+        mode: 'single',
+        mermaid: diagrams[0].mermaid,
+        primary: diagrams[0],
+        diagrams: diagrams,
+        diagramCount: 1,
+        statusNote: '',
+      };
+    }
+    if (diagrams.length > 1) {
+      var primary = pickPrimaryGraphDiagram(diagrams);
+      if (primary && primary.mermaid) {
+        return {
+          mode: 'single-primary',
+          mermaid: primary.mermaid,
+          primary: primary,
+          diagrams: diagrams,
+          diagramCount: diagrams.length,
+          statusNote: 'primary of ' + diagrams.length + ' components',
+        };
+      }
+    }
+    // Joined multi-pack pin source is not a single Mermaid diagram — refuse.
+    if (mermaid && mermaid.indexOf('jevons-frontier-pack') >= 0) {
+      return {
+        mode: 'empty',
+        mermaid: '',
+        primary: null,
+        diagrams: diagrams,
+        diagramCount: diagrams.length,
+        statusNote: 'joined pack source without renderable primary',
+      };
+    }
+    return {
+      mode: 'single',
+      mermaid: mermaid,
+      primary: null,
+      diagrams: diagrams,
+      diagramCount: diagrams.length || (mermaid ? 1 : 0),
+      statusNote: '',
+    };
+  }
+
   // normalizeGraphPayload(apiJSON|err) → multi-diagram pack model (🎯T185/T190).
   function normalizeGraphPayload(payload, err) {
     if (err) {
@@ -1481,6 +1598,8 @@
     targetIDCompare: targetIDCompare,
     normalizePayload: normalizePayload,
     normalizeGraphPayload: normalizeGraphPayload,
+    pickPrimaryGraphDiagram: pickPrimaryGraphDiagram,
+    resolveFrontierGraphOpenPlan: resolveFrontierGraphOpenPlan,
     formatStatus: formatStatus,
     statusTitle: statusTitle,
     formatFanout: formatFanout,
