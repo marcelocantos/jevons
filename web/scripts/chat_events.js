@@ -118,10 +118,11 @@
     return (parts || []).reduce((acc, p) => joinAssistantSegments(acc, p), '');
   }
 
-  // shouldClearWorking: only end-of-turn signals. Mid-stream text chunks
-  // must NOT clear — clearing early drops workingEl and used to force a
-  // new bubble per token (the "Hello / . / What / do / you / need / ?"
-  // regression).
+  // shouldClearWorking: terminal seal signal (end_turn / system). Mid-stream
+  // text chunks must NOT match — sealing early dropped workingEl and used to
+  // force a new bubble per token (the "Hello / . / What / do / you / need / ?"
+  // regression). Stream seal still keys on this; owner working *chrome* uses
+  // shouldClearWorkingChrome (🎯T260) so tools-only end_turn does not idle UI.
   function shouldClearWorking(m) {
     if (!m || !m.type) return false;
     if (m.type === 'system') return true;
@@ -130,6 +131,79 @@
     // Reject non-array content (raw ACP shapes).
     if (!Array.isArray(content)) return false;
     return TERMINAL_STOPS.has(stopReason(m));
+  }
+
+  /**
+   * Owner working-chrome policy (🎯T260).
+   * Terminal seal ≠ idle chrome. A tools-only ACP end_turn often precedes
+   * agent_note re-prompts and more overseer work; clearing chrome there
+   * made the UI look idle while the response was still coming.
+   *
+   * Clear chrome when:
+   *   - system settle / cancel
+   *   - terminal after owner-visible (non-silent) assistant text
+   *   - terminal on a pure-silent stream (residual: no bubble OK)
+   *   - vacuous terminal (no tools and no visible text — empty settle)
+   * Keep chrome when:
+   *   - terminal after tool/progress activity only (tools-only stop)
+   *
+   * @param {{hadVisible?: boolean, hadTool?: boolean, silent?: boolean}|null|undefined} chrome
+   * @param {object} m wire event
+   * @returns {boolean}
+   */
+  function shouldClearWorkingChrome(chrome, m) {
+    if (!shouldClearWorking(m)) return false;
+    if (m.type === 'system') return true;
+    const c = chrome || {};
+    if (c.hadVisible) return true;
+    if (c.silent) return true;
+    // Tools-only terminal: keep "Jevons is working…" (T260).
+    if (c.hadTool) return false;
+    // Vacuous terminal (no tools, no body): clear so chrome is not stuck.
+    return true;
+  }
+
+  /** Fresh per-owner-send chrome flags for shouldClearWorkingChrome. */
+  function createWorkingChrome() {
+    return { hadVisible: false, hadTool: false, silent: false, open: true };
+  }
+
+  /**
+   * Update chrome flags from one wire event (assistant/user/system).
+   * Does not decide clear — pair with shouldClearWorkingChrome after apply.
+   */
+  function applyWorkingChrome(chrome, m) {
+    if (!chrome || !m || !m.type) return chrome;
+    if (m.type === 'user') {
+      const content = m.message && m.message.content;
+      if (typeof content === 'string' && content) {
+        chrome.hadVisible = false;
+        chrome.hadTool = false;
+        chrome.silent = false;
+        chrome.open = true;
+      }
+      return chrome;
+    }
+    if (m.type === 'system') {
+      return chrome;
+    }
+    if (m.type !== 'assistant') return chrome;
+    const content = m.message && m.message.content;
+    if (!Array.isArray(content)) return chrome;
+    for (let i = 0; i < content.length; i++) {
+      const c = content[i];
+      if (!c) continue;
+      if (c.type === 'tool_use') {
+        chrome.hadTool = true;
+      } else if (c.type === 'text' && c.text) {
+        if (isSilentAssistantText(c.text)) {
+          chrome.silent = true;
+        } else {
+          chrome.hadVisible = true;
+        }
+      }
+    }
+    return chrome;
   }
 
   // Pure stream coalescer — models bubble count without DOM.
@@ -161,11 +235,14 @@
       silentById: Object.create(null),
       // Legacy unlabeled open stream is silent (whole-stream suppress).
       legacySilent: false,
+      // 🎯T260: owner working-chrome flags (see shouldClearWorkingChrome).
+      workingChrome: createWorkingChrome(),
     };
   }
 
   function applyChatEvent(state, m) {
     if (!m || !m.type) return state;
+    if (!state.workingChrome) state.workingChrome = createWorkingChrome();
 
     if (m.type === 'user') {
       const content = m.message && m.message.content;
@@ -174,6 +251,7 @@
         if (last === content) return state; // dedupe echo + ACP user chunk
         state.userTexts.push(content);
         state.working = true;
+        applyWorkingChrome(state.workingChrome, m);
         // 🎯T223: user mid-stream does NOT seal open assistant streams.
         // Streams seal only on terminal stop_reason (or system). Interleave
         // is OK when fragments share stream_id; legacy openStream also stays.
@@ -207,15 +285,27 @@
           if (c.type === 'text' && c.text) {
             // Stream already marked silent — drop body (do not paint).
             if (sid && state.silentById[sid]) {
+              applyWorkingChrome(state.workingChrome, {
+                type: 'assistant',
+                message: { content: [{ type: 'text', text: c.text }] },
+              });
               continue;
             }
             if (!sid && state.legacySilent) {
+              applyWorkingChrome(state.workingChrome, {
+                type: 'assistant',
+                message: { content: [{ type: 'text', text: c.text }] },
+              });
               continue;
             }
             // First fragment (or full turn) that is pure silent: mark + drop.
             if (isSilentAssistantText(c.text)) {
               if (sid) state.silentById[sid] = true;
               else state.legacySilent = true;
+              applyWorkingChrome(state.workingChrome, {
+                type: 'assistant',
+                message: { content: [{ type: 'text', text: c.text }] },
+              });
               continue;
             }
             let idx = -1;
@@ -251,8 +341,20 @@
               state.segmentEdgePending = false;
             }
             textPartsThisEvent += 1;
+            state.workingChrome.hadVisible = true;
+            // Re-arm if a prior tools-only end_turn left chrome up, or if
+            // chrome was wrongly cleared (defense).
+            state.working = true;
+          } else if (c.type === 'tool_use') {
+            state.workingChrome.hadTool = true;
+            state.working = true;
+            if (sid) {
+              if (state.openById[sid]) state.segmentEdgeById[sid] = true;
+            } else if (state.openStream >= 0) {
+              state.segmentEdgePending = true;
+            }
           } else if (c.type && c.type !== 'text') {
-            // tool_use and other non-text content: next text is a new segment
+            // Other non-text content: next text is a new segment
             if (sid) {
               if (state.openById[sid]) state.segmentEdgeById[sid] = true;
             } else if (state.openStream >= 0) {
@@ -262,7 +364,17 @@
         }
       }
       if (shouldClearWorking(m)) {
-        state.working = false;
+        // Seal stream always on terminal; chrome only when policy says so.
+        const chromeSnap = {
+          hadVisible: !!state.workingChrome.hadVisible,
+          hadTool: !!state.workingChrome.hadTool,
+          silent: !!(state.workingChrome.silent || state.legacySilent ||
+            (sid && state.silentById && state.silentById[sid])),
+        };
+        if (shouldClearWorkingChrome(chromeSnap, m)) {
+          state.working = false;
+          state.workingChrome.open = false;
+        }
         if (sid) {
           delete state.openById[sid];
           delete state.segmentEdgeById[sid];
@@ -288,6 +400,7 @@
       state.silentById = Object.create(null);
       state.legacySilent = false;
       state.segmentEdgePending = false;
+      if (state.workingChrome) state.workingChrome.open = false;
     }
     return state;
   }
@@ -319,6 +432,9 @@
     // Alias: only for known segment-edge joins (not token streams).
     coalesceAssistantText: joinAssistantSegments,
     shouldClearWorking,
+    shouldClearWorkingChrome,
+    createWorkingChrome,
+    applyWorkingChrome,
     workingLifecycle,
     createTurnState,
     applyChatEvent,

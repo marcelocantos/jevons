@@ -1589,15 +1589,25 @@ function handle(m) {
   }
   // 🎯T204 / T94: cockpit ready — clear degraded banner AND working chrome so
   // plain Enter is send again (not permanent enqueue while workingEl stuck).
+  // 🎯T260: bare state=idle must NOT clear chrome mid-owner-turn (tools-only
+  // ACP end_turn + note re-prompt still busy). Only recovery / cancel / chrome
+  // policy after visible reply settles idle.
   if (typ === 'status') {
     const stText = m.text != null ? String(m.text) : '';
-    const ready = /overseer is back/i.test(stText) || m.state === 'idle';
-    if (ready && /overseer is back/i.test(stText)) {
+    if (/overseer is back/i.test(stText)) {
       setDegraded(false);
       if (workingEl) setWorking(false);
+      if (typeof ownerWorkingChrome !== 'undefined' && ownerWorkingChrome) {
+        ownerWorkingChrome.open = false;
+      }
     } else if (m.state === 'idle' && workingEl && !/thinking/i.test(stText)) {
-      // Server settled a turn (or forced idle after unstick).
-      setWorking(false);
+      const chrome = (typeof ownerWorkingChrome !== 'undefined') ? ownerWorkingChrome : null;
+      const canIdle = !chrome || !chrome.open || chrome.hadVisible ||
+        /cancel|recovered|stuck|settled/i.test(stText);
+      if (canIdle) {
+        setWorking(false);
+        if (chrome) chrome.open = false;
+      }
     }
   }
 
@@ -1733,7 +1743,13 @@ function handle(m) {
     // Injected agent/system notification (worker reply, budget alert). The
     // owner never sees these as chat bubbles — the overseer decides what to
     // relay. Fold into the turn's activity strip only (🎯T63).
+    // 🎯T260: note re-prompt often follows tools-only end_turn — keep/re-arm
+    // working chrome while the owner turn is still open.
     addTurnItem('agent-note', formatAgentNote(m.text || ''));
+    if (ownerWorkingChrome && ownerWorkingChrome.open) {
+      if (!workingEl) setWorking(true);
+      else if (typeof armWorkingWatch === 'function') armWorkingWatch();
+    }
     return;
   }
 
@@ -1800,12 +1816,22 @@ function handle(m) {
           // per-id edge handled inside appendOrAddJevons via opts
         }
         addTurnItem('tool-use', c.name + (c.input ? ': ' + ToolSummary.summariseInput(c.input) : ''));
+        // 🎯T260: tool activity is mid-turn signal — re-arm chrome if open.
+        if (ownerWorkingChrome) {
+          ownerWorkingChrome.hadTool = true;
+          if (ownerWorkingChrome.open && !workingEl && !historyReplayActive) {
+            setWorking(true);
+          } else if (workingEl && typeof armWorkingWatch === 'function') {
+            armWorkingWatch();
+          }
+        }
       } else if (c.type==='text' && c.text) {
         const alreadySilent = !!(streamId && openStreamSilentById[streamId]);
         const thisSilent = typeof ChatEvents !== 'undefined' && ChatEvents.isSilentAssistantText
           && ChatEvents.isSilentAssistantText(c.text);
         if (alreadySilent || thisSilent) {
           if (streamId) openStreamSilentById[streamId] = true;
+          if (ownerWorkingChrome) ownerWorkingChrome.silent = true;
           // Pure silent: no owner bubble (still process terminal below).
           return;
         }
@@ -1813,14 +1839,28 @@ function handle(m) {
         appendOrAddJevons(c.text, msgTs, { segmentEdge: edge, streamId: streamId });
         streamSegmentEdge = false;
         emittedText = true;
+        if (ownerWorkingChrome) {
+          ownerWorkingChrome.hadVisible = true;
+          if (ownerWorkingChrome.open && !workingEl && !historyReplayActive) {
+            setWorking(true);
+          }
+        }
       }
     });
     if (emittedText) focusComposer();
-    // Only terminal stops clear working (not mid-stream text). Clearing
-    // early used to force one bubble per token.
+    // Seal on terminal stop; clear working chrome only per T260 policy
+    // (tools-only empty end_turn keeps "Jevons is working…").
     if (ChatEvents.shouldClearWorking(m)) {
       sealAssistantStream(streamId);
-      setWorking(false);
+      const chrome = ownerWorkingChrome || { hadVisible: false, hadTool: false, silent: false };
+      if (streamId && openStreamSilentById[streamId]) chrome.silent = true;
+      const clearChrome = (typeof ChatEvents.shouldClearWorkingChrome === 'function')
+        ? ChatEvents.shouldClearWorkingChrome(chrome, m)
+        : true;
+      if (clearChrome) {
+        setWorking(false);
+        if (ownerWorkingChrome) ownerWorkingChrome.open = false;
+      }
     }
   } else if (typ==='tool_result' || typ==='result') {
     // 🎯T161: tool result is a protocol segment boundary for next text.
@@ -1838,6 +1878,7 @@ function handle(m) {
     if (ChatEvents.shouldClearWorking(m)) {
       sealAssistantStream();
       setWorking(false);
+      if (ownerWorkingChrome) ownerWorkingChrome.open = false;
     }
   }
 }
@@ -5504,14 +5545,20 @@ function recallHistory(dir) {
 }
 
 // "Working" indicator: shown from when the user sends until Jevons's
-// reply text arrives, so a long synchronous turn (e.g. directing a
-// worker that runs a test suite) doesn't look like a hang. Only driven
-// by live sends — never by history replay.
+// owner-visible turn actually completes (🎯T260), so a long synchronous
+// turn (e.g. tools-only ACP end_turn then note re-prompt then reply) does
+// not look idle mid-flight. Only driven by live sends — never by history
+// replay.
 // 🎯T71: tool steps surface as progress on this chrome.
 // 🎯T94: stuck-watchdog is an *idle* bound — any real progress (tool step,
 // stream chunk, fleet rollup) resets lastWorkingActivity. Only when no
 // progress arrives for WORKING_STUCK_MS do we interrupt + clear chrome.
 // Never false-recover a long healthy multi-agent turn that is still moving.
+// 🎯T260: per-owner-send flags for shouldClearWorkingChrome (tools-only
+// end_turn keeps chrome; visible text or silent residual clears).
+let ownerWorkingChrome = (typeof ChatEvents !== 'undefined' && ChatEvents.createWorkingChrome)
+  ? ChatEvents.createWorkingChrome()
+  : { hadVisible: false, hadTool: false, silent: false, open: false };
 let workingEl = null;
 let workingProgress = '';
 let workingWatch = 0;
@@ -5558,9 +5605,20 @@ function onWorkingStuck() {
 function setWorking(on, progress, opts) {
   if (on) {
     if (typeof progress === 'string') workingProgress = progress;
+    // Fresh owner-send: new chrome flags. Re-arm while open keeps flags
+    // (tools-only end_turn + agent_note path — 🎯T260).
     if (!workingEl) {
+      if (!ownerWorkingChrome || !ownerWorkingChrome.open) {
+        ownerWorkingChrome = (typeof ChatEvents !== 'undefined' && ChatEvents.createWorkingChrome)
+          ? ChatEvents.createWorkingChrome()
+          : { hadVisible: false, hadTool: false, silent: false, open: true };
+      } else {
+        ownerWorkingChrome.open = true;
+      }
       workingEl = document.createElement('div');
       workingEl.className = 'working-indicator';
+    } else if (ownerWorkingChrome) {
+      ownerWorkingChrome.open = true;
     }
     workingEl.innerHTML = workingLabelHTML();
     msgs.appendChild(workingEl);
@@ -5571,10 +5629,12 @@ function setWorking(on, progress, opts) {
     workingEl = null;
     workingProgress = '';
     clearWorkingWatch();
+    if (ownerWorkingChrome) ownerWorkingChrome.open = false;
     // 🎯T113: when the in-flight turn seals, auto-submit the next queued item.
     if (!(opts && opts.skipDrain)) drainSendQueueIfIdle();
   } else {
     clearWorkingWatch();
+    if (ownerWorkingChrome) ownerWorkingChrome.open = false;
   }
 }
 function updateWorkingProgress(text) {

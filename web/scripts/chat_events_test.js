@@ -67,8 +67,84 @@ test('assistant text with end_turn clears', () => {
   }), true);
 });
 
-test('empty-content end_turn clears (Grok ACP terminal)', () => {
+test('empty-content end_turn is a seal signal (Grok ACP terminal)', () => {
   assert.strictEqual(ChatEvents.shouldClearWorking(endTurn()), true);
+});
+
+// ── 🎯T260 working chrome vs seal ────────────────────────────────
+// toolUse() is defined below with the T159 helpers (name, optional stopReason).
+
+test('T260: tools-only end_turn seals but keeps working chrome', () => {
+  const term = endTurn();
+  assert.strictEqual(ChatEvents.shouldClearWorking(term), true, 'still a seal signal');
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: false, hadTool: true, silent: false }, term),
+    false,
+    'tools-only must not clear owner chrome',
+  );
+});
+
+test('T260: visible text then end_turn clears chrome', () => {
+  const term = endTurn();
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: true, hadTool: true, silent: false }, term),
+    true,
+  );
+});
+
+test('T260: silent-only terminal may clear without bubble (residual)', () => {
+  const term = endTurn();
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: false, hadTool: false, silent: true }, term),
+    true,
+  );
+});
+
+test('T260: vacuous empty end_turn clears chrome', () => {
+  const term = endTurn();
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: false, hadTool: false, silent: false }, term),
+    true,
+  );
+});
+
+test('T260 lifecycle: tools → empty end_turn → note stream → text → end_turn', () => {
+  // Owner repro: CPU dig had tools-only end_turn, then agent_note re-prompt,
+  // then visible "Investigating…" while UI had already gone idle.
+  const events = [
+    user('Why is jevonsd consuming so much CPU?'),
+    toolUse('run_terminal_command'),
+    toolUse('run_terminal_command'),
+    endTurn(), // tools-only ACP stop — must KEEP working
+    // Second stream (note re-prompt): more tools then visible reply
+    toolUse('run_terminal_command'),
+    chunk('Investigating jevonsd CPU.'),
+    endTurn(),
+  ];
+  assert.strictEqual(
+    ChatEvents.workingLifecycle(events.slice(0, 4)),
+    true,
+    'working must stay true after tools-only end_turn',
+  );
+  assert.strictEqual(
+    ChatEvents.workingLifecycle(events),
+    false,
+    'working clears after owner-visible text + end_turn',
+  );
+  const mid = ChatEvents.applyChatEvents(events.slice(0, 4));
+  assert.strictEqual(mid.working, true);
+  assert.strictEqual(mid.openStream, -1, 'tools-only end_turn still seals stream');
+  const done = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(done.working, false);
+  assert.ok(done.assistantBubbles.some((b) => /Investigating/.test(b)));
+});
+
+test('T260: mid-stream text still does not clear; text+end_turn does', () => {
+  assert.strictEqual(ChatEvents.workingLifecycle([user('hi'), chunk('Hello')]), true);
+  assert.strictEqual(
+    ChatEvents.workingLifecycle([user('hi'), chunk('Hello'), endTurn()]),
+    false,
+  );
 });
 
 test('tool_use-only assistant does not clear', () => {
@@ -465,6 +541,26 @@ test('normalised wire samples: mid-stream keeps working, end clears', () => {
   assert.strictEqual(ChatEvents.shouldClearWorking(mid), false);
   assert.strictEqual(ChatEvents.shouldClearWorking(term), true);
   assert.strictEqual(ChatEvents.shouldClearWorking({ type: 'system' }), true);
+  // T260: empty end_turn alone is seal-true; chrome needs hadVisible/silent/vacuous.
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: true }, term),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadTool: true, hadVisible: false }, term),
+    false,
+  );
+});
+
+test('T260 index.html: shouldClearWorkingChrome + agent_note re-arm', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('shouldClearWorkingChrome'), 'must gate chrome on T260 policy');
+  assert.ok(html.includes('ownerWorkingChrome'), 'must track owner-turn chrome flags');
+  assert.ok(
+    /agent_note[\s\S]*?ownerWorkingChrome/.test(html) ||
+      /typ==='agent_note'[\s\S]{0,400}setWorking\(true\)/.test(html),
+    'agent_note must re-arm working while owner turn open',
+  );
 });
 
 // ── index.html wiring ───────────────────────────────────────────
