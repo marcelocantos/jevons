@@ -1021,6 +1021,38 @@
     return !!latched;
   }
 
+  // 🎯T253: Frontier tab follows selected agent workdir ledger.
+  // Empty string → server uses configured primary / process cwd (no ?cwd=).
+  // Overseer / missing agent / blank workdir → primary. Fleet PO/worker with
+  // workdir → that path (server discovers bullseye for it; no ledger → empty).
+  function resolveFrontierCwd(selectedName, agents) {
+    var name = selectedName == null ? '' : String(selectedName).trim();
+    if (!name) return '';
+    var list = Array.isArray(agents) ? agents : [];
+    var row = null;
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (a && String(a.name || '').trim() === name) {
+        row = a;
+        break;
+      }
+    }
+    if (!row) return '';
+    var purpose = String(row.purpose || '').trim().toLowerCase();
+    if (purpose === 'overseer') return '';
+    var wd = row.workdir != null ? String(row.workdir).trim() : '';
+    return wd;
+  }
+
+  // frontierAPIURL(basePath, cwd) — append ?cwd= when non-empty (encodeURIComponent).
+  function frontierAPIURL(basePath, cwd) {
+    var base = basePath == null || basePath === '' ? API_PATH : String(basePath);
+    var c = cwd == null ? '' : String(cwd).trim();
+    if (!c) return base;
+    var sep = base.indexOf('?') >= 0 ? '&' : '?';
+    return base + sep + 'cwd=' + encodeURIComponent(c);
+  }
+
   return {
     TAB_TRANSCRIPT: TAB_TRANSCRIPT,
     TAB_FRONTIER: TAB_FRONTIER,
@@ -1073,6 +1105,8 @@
     applyEngagement: applyEngagement,
     stopEngagementRequest: stopEngagementRequest,
     shouldSkipRerenderWhileTipLatched: shouldSkipRerenderWhileTipLatched,
+    resolveFrontierCwd: resolveFrontierCwd,
+    frontierAPIURL: frontierAPIURL,
   };
 
 }));

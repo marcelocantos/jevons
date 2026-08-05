@@ -863,6 +863,85 @@ test('playKickoff blocked when engaged or closed (🎯T222)', function () {
     'UI handles blocked kickoff');
 });
 
+// 🎯T253: Frontier tab follows selected agent workdir ledger.
+test('T253 resolveFrontierCwd + frontierAPIURL pure', function () {
+  assert.strictEqual(typeof FT.resolveFrontierCwd, 'function');
+  assert.strictEqual(typeof FT.frontierAPIURL, 'function');
+
+  const agents = [
+    { name: 'jevons', purpose: 'overseer', workdir: '/Users/x/.jevons/jevons' },
+    { name: 'jevons-po', purpose: 'work', workdir: '/Users/x/work/github.com/marcelocantos/jevons' },
+    {
+      name: 'yourworld2-po',
+      purpose: 'work',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    { name: 'no-ledger-po', purpose: 'work', workdir: '' },
+    { name: 'orphan-worker', purpose: 'work' },
+  ];
+
+  // No selection / overseer / missing → empty cwd (server primary).
+  assert.strictEqual(FT.resolveFrontierCwd(null, agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('', agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('jevons', agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('unknown-agent', agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('no-ledger-po', agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('orphan-worker', agents), '');
+
+  // PO / worker with workdir → that path.
+  assert.strictEqual(
+    FT.resolveFrontierCwd('jevons-po', agents),
+    '/Users/x/work/github.com/marcelocantos/jevons');
+  assert.strictEqual(
+    FT.resolveFrontierCwd('yourworld2-po', agents),
+    '/Users/x/work/github.com/marcelocantos/yourworld2');
+
+  // Fixture: two ledgers — selection change switches cwd.
+  const cwdA = FT.resolveFrontierCwd('jevons-po', agents);
+  const cwdB = FT.resolveFrontierCwd('yourworld2-po', agents);
+  assert.notStrictEqual(cwdA, cwdB);
+  assert.strictEqual(FT.frontierAPIURL(FT.API_PATH, cwdA),
+    '/api/frontier?cwd=' + encodeURIComponent(cwdA));
+  assert.strictEqual(FT.frontierAPIURL(FT.API_PATH, cwdB),
+    '/api/frontier?cwd=' + encodeURIComponent(cwdB));
+  assert.strictEqual(FT.frontierAPIURL(FT.API_PATH, ''), '/api/frontier');
+  assert.strictEqual(FT.frontierAPIURL(FT.GRAPH_API_PATH, cwdB),
+    '/api/frontier/graph?cwd=' + encodeURIComponent(cwdB));
+  // Spaces / special chars encoded.
+  assert.strictEqual(
+    FT.frontierAPIURL('/api/frontier', '/tmp/My Repo'),
+    '/api/frontier?cwd=' + encodeURIComponent('/tmp/My Repo'));
+});
+
+test('T253 index.html loadFrontier/graph pass selected agent workdir', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const loadStart = html.indexOf('function loadFrontier');
+  assert.ok(loadStart >= 0, 'loadFrontier defined');
+  const loadEnd = html.indexOf('\nfunction ', loadStart + 10);
+  const loadBody = html.slice(loadStart, loadEnd > loadStart ? loadEnd : loadStart + 2500);
+  assert.ok(loadBody.indexOf('resolveFrontierCwd') >= 0, 'loadFrontier resolves cwd');
+  assert.ok(loadBody.indexOf('frontierAPIURL') >= 0, 'loadFrontier builds API URL with cwd');
+  assert.ok(loadBody.indexOf('selectedAgent') >= 0, 'loadFrontier reads selection');
+  assert.ok(loadBody.indexOf('T253') >= 0, 'T253 marked on loadFrontier');
+
+  const graphStart = html.indexOf('function openFrontierGraph');
+  assert.ok(graphStart >= 0, 'openFrontierGraph defined');
+  const graphEnd = html.indexOf('\nfunction ', graphStart + 10);
+  const graphBody = html.slice(graphStart, graphEnd > graphStart ? graphEnd : graphStart + 2000);
+  assert.ok(graphBody.indexOf('resolveFrontierCwd') >= 0, 'graph resolves cwd');
+  assert.ok(graphBody.indexOf('frontierAPIURL') >= 0, 'graph builds URL with cwd');
+
+  // Selection change rebinds frontier (PO switch / deselect / overseer).
+  const selStart = html.indexOf('function selectAgent');
+  assert.ok(selStart >= 0);
+  const selEnd = html.indexOf('\nfunction ', selStart + 10);
+  const selBody = html.slice(selStart, selEnd > selStart ? selEnd : selStart + 3500);
+  assert.ok(selBody.indexOf('loadFrontier') >= 0, 'selectAgent reloads frontier');
+  // Overseer path and deselect path both reload (primary cwd).
+  assert.ok((selBody.match(/loadFrontier\s*\(/g) || []).length >= 2,
+    'selectAgent reloads on overseer/deselect and agent select');
+});
+
 // 🎯T230: frontier re-render must not kill tips while pointer is over card.
 test('T230 skip re-render while InstantTip hover latched', function () {
   assert.strictEqual(typeof FT.shouldSkipRerenderWhileTipLatched, 'function');

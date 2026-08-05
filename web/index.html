@@ -2446,9 +2446,23 @@ function openVizFromChrome() {
  */
 function openFrontierGraph(opts) {
   const o = opts || {};
-  const api = (typeof FrontierTable !== 'undefined' && FrontierTable.GRAPH_API_PATH)
+  // 🎯T253: graph follows selected agent workdir (same as Frontier table).
+  const baseGraph = (typeof FrontierTable !== 'undefined' && FrontierTable.GRAPH_API_PATH)
     ? FrontierTable.GRAPH_API_PATH
     : '/api/frontier/graph';
+  const agentsForCwd = (typeof frontierAgentsCache !== 'undefined' && frontierAgentsCache)
+    ? frontierAgentsCache
+    : (typeof lastFleetAgents !== 'undefined' ? lastFleetAgents : []);
+  const graphCwd = (typeof FrontierTable !== 'undefined' && FrontierTable.resolveFrontierCwd)
+    ? FrontierTable.resolveFrontierCwd(
+        typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+        agentsForCwd)
+    : '';
+  const api = (typeof FrontierTable !== 'undefined' && FrontierTable.frontierAPIURL)
+    ? FrontierTable.frontierAPIURL(baseGraph, graphCwd)
+    : (graphCwd
+      ? baseGraph + '?cwd=' + encodeURIComponent(graphCwd)
+      : baseGraph);
   showMermaidPanelShell({ large: true });
   showMermaidPasteArea(false);
   setMermaidPanelTitle('Unachieved graph');
@@ -5929,6 +5943,8 @@ function selectAgent(name, opts) {
     selectedAgent = null;
     document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
     hideAgentInspect();
+    // 🎯T253: overseer / main → primary ledger frontier.
+    if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
     return;
   }
   const next = (typeof AgentTranscript !== 'undefined')
@@ -5945,6 +5961,8 @@ function selectAgent(name, opts) {
   if (typeof updateComposerPlaceholder === 'function') updateComposerPlaceholder();
   if (!selectedAgent) {
     hideAgentInspect();
+    // 🎯T253: deselect → primary ledger frontier.
+    if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
     return;
   }
   // 🎯T205: new selection → Track + force repaint fingerprint.
@@ -5955,6 +5973,8 @@ function selectAgent(name, opts) {
   setRhsBottomTab((typeof FrontierTable !== 'undefined')
     ? FrontierTable.tabAfterAgentSelect(true)
     : 'transcript');
+  // 🎯T253: rebind Frontier to selected agent workdir (even while Transcript tab shown).
+  if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
   // 🎯T209: primary path = inspect_subscribe on /ws/chat (not HTTP poll).
   subscribeAgentInspect(selectedAgent);
   if (typeof syncSidebarComposer === 'function') syncSidebarComposer();
@@ -6590,9 +6610,23 @@ function stopFrontierEngagement(row, btnEl) {
 function loadFrontier(opts) {
   if (!frontierBodyEl) return;
   const quiet = !!(opts && opts.quiet);
-  const api = (typeof FrontierTable !== 'undefined' && FrontierTable.API_PATH)
+  // 🎯T253: bind frontier fetch to selected agent workdir (primary when none/overseer).
+  const baseApi = (typeof FrontierTable !== 'undefined' && FrontierTable.API_PATH)
     ? FrontierTable.API_PATH
     : '/api/frontier';
+  const agentsForCwd = (typeof frontierAgentsCache !== 'undefined' && frontierAgentsCache && frontierAgentsCache.length)
+    ? frontierAgentsCache
+    : (typeof lastFleetAgents !== 'undefined' ? lastFleetAgents : []);
+  const frontierCwd = (typeof FrontierTable !== 'undefined' && FrontierTable.resolveFrontierCwd)
+    ? FrontierTable.resolveFrontierCwd(
+        typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+        agentsForCwd)
+    : '';
+  const api = (typeof FrontierTable !== 'undefined' && FrontierTable.frontierAPIURL)
+    ? FrontierTable.frontierAPIURL(baseApi, frontierCwd)
+    : (frontierCwd
+      ? baseApi + '?cwd=' + encodeURIComponent(frontierCwd)
+      : baseApi);
   const agentsApi = (typeof FrontierTable !== 'undefined' && FrontierTable.AGENTS_API_PATH)
     ? FrontierTable.AGENTS_API_PATH
     : '/api/agents';
