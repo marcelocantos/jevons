@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // 🎯T266 — Owner-facing target-ask context chrome (repo / PO / product).
+// 🎯T273 — Speaker/context identity: omit Jevons/overseer; non-overseer as
+// bold-purple 〈agent〉 only (no middle-dot ·, no Jevons prefix).
 // DOM-free pure helpers; browser attach lives in index.html.
 // T267 may reuse extractTargetIDs / resolveTargetContext for PO focus.
 
@@ -16,6 +18,9 @@
 
   var TARGET_ID_RE = /(?:🎯|\uD83C\uDFAF)?\s*(T\d+(?:\.\d+)*)\b/gi;
   var ASK_CUE_RE = /needs[-\s]?owner|owner\s+(?:decision|accept|ack|gate|ratify)|decision\s+packet|parked[-\s]?for[-\s]?design|design[-\s]?gated|design[-\s]?discussion|blocked[-\s]?on[-\s]?(?:human|owner)|please\s+(?:confirm|accept|decide|choose|pick)|do\s+you\s+(?:want|accept|approve|prefer)|which\s+(?:repo|ledger|product|po|portfolio)|owner[-\s]?facing|ratif(?:y|ication)|\baccept\b|\bconfirm\b|\bdecide\b/i;
+  // U+2329 LEFT-POINTING ANGLE BRACKET / U+232A RIGHT-POINTING ANGLE BRACKET
+  var SPEAKER_LT = '\u2329';
+  var SPEAKER_GT = '\u232A';
 
   function collapse(s) {
     return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
@@ -27,6 +32,56 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  /**
+   * 🎯T273: identities that must not paint as speaker/context chrome.
+   * Overseer name, product "jevons", and jevons-po (default sole Jevons PO).
+   */
+  function isOmittedSpeakerIdentity(name) {
+    var n = String(name == null ? '' : name).trim().toLowerCase();
+    if (!n) return true;
+    if (n === 'jevons' || n === 'overseer') return true;
+    if (n === 'jevons-po') return true;
+    return false;
+  }
+
+  /**
+   * Prefer non-overseer agent (PO); else product/repo leaf when not Jevons.
+   * Empty ⇒ omit painted speaker label (🎯T273).
+   */
+  function speakerIdentity(ctx) {
+    ctx = ctx && typeof ctx === 'object' ? ctx : {};
+    var po = collapse(ctx.po);
+    if (po && !isOmittedSpeakerIdentity(po)) return po;
+    var product = collapse(ctx.product);
+    if (!product) product = productFromRepoLabel(ctx.repo);
+    if (product && !isOmittedSpeakerIdentity(product)) return product;
+    var agent = collapse(ctx.agent || ctx.speaker || ctx.name);
+    if (agent && !isOmittedSpeakerIdentity(agent)) return agent;
+    return '';
+  }
+
+  /** Painted label only: 〈agent〉 or empty. Never middle-dot · or Jevons. */
+  function formatSpeakerLabel(nameOrCtx) {
+    var id = '';
+    if (nameOrCtx && typeof nameOrCtx === 'object') {
+      id = speakerIdentity(nameOrCtx);
+    } else {
+      id = collapse(nameOrCtx);
+      if (isOmittedSpeakerIdentity(id)) id = '';
+    }
+    if (!id) return '';
+    return SPEAKER_LT + id + SPEAKER_GT;
+  }
+
+  /** HTML for speaker byline / context tab: bold-purple 〈agent〉 or empty. */
+  function formatSpeakerHTML(nameOrCtx) {
+    var label = formatSpeakerLabel(nameOrCtx);
+    if (!label) return '';
+    // Escape only the identity body; brackets are fixed product chrome.
+    var id = label.slice(SPEAKER_LT.length, label.length - SPEAKER_GT.length);
+    return '<span class="ctx-speaker">' + SPEAKER_LT + escHtml(id) + SPEAKER_GT + '</span>';
   }
 
   function normalizeTargetID(raw) {
@@ -155,14 +210,12 @@
     return out;
   }
 
+  // 🎯T273: painted chrome is speaker-only (〈agent〉); no product·PO byline.
   function formatChromeLabel(ctx) {
-    ctx = ctx && typeof ctx === 'object' ? ctx : {};
-    var head = collapse(ctx.product) || collapse(ctx.repo);
-    if (!head) return '';
-    var po = collapse(ctx.po);
-    return po ? head + ' · ' + po : head;
+    return formatSpeakerLabel(ctx);
   }
 
+  // Hover/aria title may keep full meta (· separators OK — not painted byline).
   function formatChromeTitle(ctx) {
     ctx = ctx && typeof ctx === 'object' ? ctx : {};
     var parts = [];
@@ -176,6 +229,8 @@
     }
     var po = collapse(ctx.po);
     if (po) parts.push('PO ' + po);
+    var speaker = speakerIdentity(ctx);
+    if (speaker) parts.push('speaker ' + SPEAKER_LT + speaker + SPEAKER_GT);
     return parts.length ? parts.join(' · ') : 'Target context';
   }
 
@@ -235,8 +290,10 @@
     }
 
     if (!product) product = productFromRepoLabel(repo);
-    var show = !!(ask && repo);
-    var label = formatChromeLabel({ repo: repo, po: po, product: product, targetId: primary });
+    var speaker = speakerIdentity({ repo: repo, po: po, product: product });
+    var label = formatSpeakerLabel({ repo: repo, po: po, product: product });
+    // 🎯T273: only paint when ask + resolved repo + non-Jevons speaker identity.
+    var show = !!(ask && repo && label);
     var title = formatChromeTitle({
       repo: repo, po: po, product: product, targetId: primary, targetIds: ids,
     });
@@ -248,6 +305,7 @@
       repo: repo,
       po: po,
       product: product,
+      speaker: speaker,
       label: label,
       title: title,
     };
@@ -255,24 +313,27 @@
 
   function chromeModel(opts) {
     var ctx = resolveTargetContext(opts || {});
+    // 🎯T273: only 〈agent〉 HTML — never product·PO or empty shell.
+    var inner = ctx.show
+      ? formatSpeakerHTML({
+          repo: ctx.repo, po: ctx.po, product: ctx.product, agent: ctx.speaker,
+        })
+      : '';
+    if (inner && (inner.indexOf('\u00b7') >= 0 || inner.indexOf(' · ') >= 0)) {
+      inner = '';
+    }
+    var show = !!(ctx.show && inner);
     return {
-      show: ctx.show,
-      label: ctx.label,
+      show: show,
+      label: show ? ctx.label : '',
       title: ctx.title,
       repo: ctx.repo,
       po: ctx.po,
       product: ctx.product,
+      speaker: ctx.speaker || '',
       targetId: ctx.targetId,
       targetIds: ctx.targetIds,
-      innerHTML: ctx.show
-        ? (
-            '<span class="ctx-repo">' + escHtml(ctx.product || ctx.repo) + '</span>' +
-            (ctx.po
-              ? '<span class="ctx-sep" aria-hidden="true"> · </span><span class="ctx-po">' +
-                escHtml(ctx.po) + '</span>'
-              : '')
-          )
-        : '',
+      innerHTML: show ? inner : '',
     };
   }
 
@@ -283,6 +344,10 @@
     repoLabelFromPath: repoLabelFromPath,
     productFromRepoLabel: productFromRepoLabel,
     isProductOwnerName: isProductOwnerName,
+    isOmittedSpeakerIdentity: isOmittedSpeakerIdentity,
+    speakerIdentity: speakerIdentity,
+    formatSpeakerLabel: formatSpeakerLabel,
+    formatSpeakerHTML: formatSpeakerHTML,
     findAgentsByTargetID: findAgentsByTargetID,
     resolvePOForAgent: resolvePOForAgent,
     extractRepoHintsFromText: extractRepoHintsFromText,
@@ -290,5 +355,7 @@
     formatChromeLabel: formatChromeLabel,
     formatChromeTitle: formatChromeTitle,
     chromeModel: chromeModel,
+    SPEAKER_LT: SPEAKER_LT,
+    SPEAKER_GT: SPEAKER_GT,
   };
 }));
