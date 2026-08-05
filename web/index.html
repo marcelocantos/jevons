@@ -1398,6 +1398,11 @@ function endHistoryReplayAndPin(reason) {
     _pinningScroll = false;
     endScrollBookkeeping();
   }
+  // 🎯T261: after hard-reload / WS history pin, expand tall messages that
+  // remain in the bottom viewport (mid-replay sat at top and must not leave
+  // end-of-transcript rows collapsed). Collapse still applies above fold.
+  if (latestRaf) { cancelAnimationFrame(latestRaf); latestRaf = 0; }
+  refreshLatestExpansion();
   scheduleVirtualize();
   updateJumpFab();
   // 🎯T21: replay finished — refresh Wispr continuation context from history.
@@ -3501,8 +3506,15 @@ function scheduleLatestExpansion() {
 
 // 🎯T246: collapse non-latest auto-expanded tall bubbles only when fully
 // outside the strict viewport (any on-screen pixel keeps them expanded).
+// 🎯T261: skip while historyReplayActive — scroll is still at top mid-burst;
+// post-pin refreshLatestExpansion applies real geometry.
 // Returns true if any bubble height may have changed.
 function collapseAutoExpandedOffScreen() {
+  if (typeof VirtualList !== 'undefined' && VirtualList.shouldRunOffScreenCollapse) {
+    if (!VirtualList.shouldRunOffScreenCollapse(historyReplayActive)) return false;
+  } else if (historyReplayActive) {
+    return false;
+  }
   const last = lastMsgEl();
   const scrollTop = msgs.scrollTop;
   const clientH = msgs.clientHeight;
@@ -3539,6 +3551,57 @@ function collapseAutoExpandedOffScreen() {
   return changed;
 }
 
+// 🎯T261: when stick-to-bottom / post-history-pin lands near the transcript
+// end, expand every tall bubble that still has any pixel in the viewport
+// (not only the single latest). Manual toggle still wins. Mid-history free
+// scroll (not near end) does not force-open older rows.
+// Walk bottom→top so expanding a row does not invalidate still-pending
+// lower-offset geometry. Returns true if any bubble height may have changed.
+function expandInViewNearEnd() {
+  if (historyReplayActive) return false;
+  const clientH = msgs.clientHeight;
+  let scrollTop = msgs.scrollTop;
+  let scrollH = msgs.scrollHeight;
+  const nearEnd = (typeof VirtualList !== 'undefined' && VirtualList.isNearTranscriptEnd)
+    ? VirtualList.isNearTranscriptEnd(scrollTop, scrollH, clientH)
+    : (scrollTop + clientH >= scrollH - 48);
+  if (!nearEnd) return false;
+  let changed = false;
+  const children = msgs.children;
+  for (let i = children.length - 1; i >= 0; i--) {
+    const el = children[i];
+    if (!el || !el.classList || !el.classList.contains('msg')) continue;
+    if (el._fullText == null) continue;
+    if (el._userToggled) continue;
+    if (el._expanded && el._autoExpanded) continue;
+    // Re-read scroll after prior expands in this pass (height growth).
+    scrollTop = msgs.scrollTop;
+    const top = el.offsetTop;
+    const h = el.offsetHeight;
+    const should = (typeof VirtualList !== 'undefined' && VirtualList.shouldAutoExpandInView)
+      ? VirtualList.shouldAutoExpandInView({
+          tall: true,
+          nearEnd: true,
+          userToggled: false,
+          historyReplayActive: false,
+          top: top,
+          height: h,
+          scrollTop: scrollTop,
+          clientHeight: clientH,
+        })
+      : (top + h > scrollTop && top < scrollTop + clientH);
+    if (!should) continue;
+    if (el.classList.contains('virt-shell')) rematerializeMsg(el);
+    el._autoExpanded = true;
+    el._expanded = true;
+    renderBody(el, el._fullRole || el._layoutRole, el._fullText);
+    changed = true;
+    // Keep stick-to-bottom so "near end" and viewport math stay honest.
+    if (isTracking()) msgs.scrollTop = msgs.scrollHeight;
+  }
+  return changed;
+}
+
 function refreshLatestExpansion() {
   const last = lastMsgEl();
   let heightMayHaveChanged = false;
@@ -3557,11 +3620,17 @@ function refreshLatestExpansion() {
       heightMayHaveChanged = true;
     }
   }
-  // Geometry for T246 "above the fold" must use post-append stick-to-bottom
+  // Geometry for T246/T261 "above the fold" must use post-append stick-to-bottom
   // position. scheduleLatestExpansion and scrollDownThrottled share a rAF
-  // tick; pin synchronously here when Tracking so off-screen collapse sees
-  // the live end (scrollDown still does double-rAF for late markdown layout).
+  // tick; pin synchronously here when Tracking so expand/collapse see the
+  // live end (scrollDown still does double-rAF for late markdown layout).
   if (isTracking() && !historyReplayActive) {
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+  // 🎯T261: expand other tall in-view messages near end (reload pin + stick).
+  if (expandInViewNearEnd()) heightMayHaveChanged = true;
+  // Re-pin after expand growth so collapse uses true end geometry.
+  if (heightMayHaveChanged && isTracking() && !historyReplayActive) {
     msgs.scrollTop = msgs.scrollHeight;
   }
   // Priors fully outside the strict viewport may now collapse (T246).
@@ -4474,6 +4543,9 @@ function virtualizeMessages() {
   _virtualizing = true;
   beginScrollBookkeeping();
   try {
+    // 🎯T261: near-end expand before collapse so reload/hydrate pin does not
+    // leave in-view end messages clipped; T246 collapse only fully off-screen.
+    expandInViewNearEnd();
     // 🎯T246: clip auto-expanded tall bubbles that have left the viewport
     // before dematerialising (dematerialize protects still-auto-expanded).
     collapseAutoExpandedOffScreen();
@@ -4639,6 +4711,7 @@ window.dematerializeMsg = dematerializeMsg;
 window.rematerializeMsg = rematerializeMsg;
 window.scheduleVirtualize = scheduleVirtualize;
 window.collapseAutoExpandedOffScreen = collapseAutoExpandedOffScreen;
+window.expandInViewNearEnd = expandInViewNearEnd;
 window.refreshLatestExpansion = refreshLatestExpansion;
 window.jumpToBottom = jumpToBottom;
 window.updateJumpFab = updateJumpFab;

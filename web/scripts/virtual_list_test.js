@@ -94,6 +94,57 @@ test('T246 shouldAutoCollapseOffScreen: only when fully off-screen, not latest',
   }), true);
 });
 
+// ── 🎯T261: near-end in-view non-collapse ────────────────────────────
+
+test('T261 isNearTranscriptEnd: pin-bottom and mid-scroll', function () {
+  // scrollHeight 1000, client 300 → max scrollTop 700
+  assert.strictEqual(VL.isNearTranscriptEnd(700, 1000, 300), true);
+  assert.strictEqual(VL.isNearTranscriptEnd(680, 1000, 300, 48), true); // within slack
+  assert.strictEqual(VL.isNearTranscriptEnd(600, 1000, 300, 48), false);
+  assert.strictEqual(VL.isNearTranscriptEnd(0, 1000, 300), false);
+  // Empty / short list (no overflow)
+  assert.strictEqual(VL.isNearTranscriptEnd(0, 200, 300), true);
+});
+
+test('T261 shouldAutoExpandInView: only tall + near-end + in viewport', function () {
+  // In view near end → expand
+  assert.strictEqual(VL.shouldAutoExpandInView({
+    tall: true, nearEnd: true, userToggled: false, historyReplayActive: false,
+    top: 700, height: 100, scrollTop: 600, clientHeight: 300,
+  }), true);
+  // Not tall → no
+  assert.strictEqual(VL.shouldAutoExpandInView({
+    tall: false, nearEnd: true, userToggled: false,
+    top: 700, height: 100, scrollTop: 600, clientHeight: 300,
+  }), false);
+  // Mid-history free scroll (not near end) → no force-expand
+  assert.strictEqual(VL.shouldAutoExpandInView({
+    tall: true, nearEnd: false, userToggled: false,
+    top: 100, height: 100, scrollTop: 80, clientHeight: 300,
+  }), false);
+  // Manual toggle wins
+  assert.strictEqual(VL.shouldAutoExpandInView({
+    tall: true, nearEnd: true, userToggled: true,
+    top: 700, height: 100, scrollTop: 600, clientHeight: 300,
+  }), false);
+  // Fully above fold even near end → no
+  assert.strictEqual(VL.shouldAutoExpandInView({
+    tall: true, nearEnd: true, userToggled: false,
+    top: 0, height: 100, scrollTop: 600, clientHeight: 300,
+  }), false);
+  // Mid history-replay → no expand until pin
+  assert.strictEqual(VL.shouldAutoExpandInView({
+    tall: true, nearEnd: true, userToggled: false, historyReplayActive: true,
+    top: 700, height: 100, scrollTop: 600, clientHeight: 300,
+  }), false);
+});
+
+test('T261 shouldRunOffScreenCollapse: suppressed during history replay', function () {
+  assert.strictEqual(VL.shouldRunOffScreenCollapse(true), false);
+  assert.strictEqual(VL.shouldRunOffScreenCollapse(false), true);
+  assert.strictEqual(VL.shouldRunOffScreenCollapse(0), true);
+});
+
 // ── recent-first hydrate ─────────────────────────────────────────────
 
 test('T119 recent-first hydrate lands on latest end', function () {
@@ -575,6 +626,18 @@ test('T119.1 suppress pin during replay; final pin at bottom', function () {
   assert.strictEqual(VL.finalPinScrollTop(1000, 300), 700);
   assert.strictEqual(VL.finalPinScrollTop(100, 300), 0);
   assert.ok(VL.REPLAY_IDLE_END_MS >= 50 && VL.REPLAY_IDLE_END_MS <= 500);
+});
+
+test('index.html wires T261 expandInViewNearEnd + suppress collapse mid-replay', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('expandInViewNearEnd') >= 0, 'expandInViewNearEnd present');
+  assert.ok(html.indexOf('shouldAutoExpandInView') >= 0, 'shouldAutoExpandInView wired');
+  assert.ok(html.indexOf('shouldRunOffScreenCollapse') >= 0, 'shouldRunOffScreenCollapse wired');
+  assert.ok(html.indexOf('isNearTranscriptEnd') >= 0, 'isNearTranscriptEnd wired');
+  assert.ok(/function endHistoryReplayAndPin[\s\S]{0,1500}refreshLatestExpansion\(\)/.test(html),
+    'history pin calls refreshLatestExpansion (T261)');
 });
 
 test('index.html wires historyReplayActive suppress on scrollDown', function () {

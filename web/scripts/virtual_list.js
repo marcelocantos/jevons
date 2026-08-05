@@ -96,6 +96,37 @@
     return !anyPartInViewport(o.top, o.height, o.scrollTop, o.clientHeight);
   }
 
+  // 🎯T261: near the live end of the transcript (stick-to-bottom / post-pin).
+  // Default slack matches typical jump-to-bottom hysteresis (~48px).
+  const NEAR_END_SLACK_PX = 48;
+  function isNearTranscriptEnd(scrollTop, scrollHeight, clientHeight, slackPx) {
+    const slack = slackPx == null ? NEAR_END_SLACK_PX : Number(slackPx);
+    const st = Number(scrollTop) || 0;
+    const sh = Number(scrollHeight) || 0;
+    const ch = Number(clientHeight) || 0;
+    const s = Number.isFinite(slack) ? slack : NEAR_END_SLACK_PX;
+    return st + ch >= sh - s;
+  }
+
+  // 🎯T261: while pinned near end, tall in-view bubbles (not user-toggled)
+  // should be auto-expanded — not only the single latest message. Covers hard
+  // reload after history pin and stick-to-bottom re-render. Mid-history free
+  // scroll stays nearEnd=false so older rows are not force-opened.
+  function shouldAutoExpandInView(opts) {
+    const o = opts || {};
+    if (o.userToggled) return false;
+    if (!o.tall) return false;
+    if (!o.nearEnd) return false;
+    if (o.historyReplayActive) return false;
+    return anyPartInViewport(o.top, o.height, o.scrollTop, o.clientHeight);
+  }
+
+  // Mid history-replay the viewport sits at the top; geometry is not the
+  // post-pin end state. Auto-collapse must wait until pin (🎯T261).
+  function shouldRunOffScreenCollapse(historyReplayActive) {
+    return !historyReplayActive;
+  }
+
   // Count how many items would stay materialised for a long list
   // scrolled to the bottom (oracle for "bounded DOM work").
   function materialisedCount(n, avgHeight, clientHeight, buffer) {
@@ -643,6 +674,10 @@
     anyPartInViewport: anyPartInViewport,
     isFullyAboveViewport: isFullyAboveViewport,
     shouldAutoCollapseOffScreen: shouldAutoCollapseOffScreen,
+    NEAR_END_SLACK_PX: NEAR_END_SLACK_PX,
+    isNearTranscriptEnd: isNearTranscriptEnd,
+    shouldAutoExpandInView: shouldAutoExpandInView,
+    shouldRunOffScreenCollapse: shouldRunOffScreenCollapse,
     materialisedCount: materialisedCount,
     enterLeaveBand: enterLeaveBand,
 
