@@ -762,6 +762,182 @@ test('T136 create-aside dual-write + no attention chip wall', function () {
   assert.ok(html.indexOf('appendThreadChip') === -1, 'no chip loop for asides');
 });
 
+// ── 🎯T252 auto-activate attention asides; sticky draft; next after send ──
+
+test('T252 sidebarDraftIsEmpty treats whitespace as empty', function () {
+  assert.strictEqual(AT.sidebarDraftIsEmpty(''), true);
+  assert.strictEqual(AT.sidebarDraftIsEmpty('   '), true);
+  assert.strictEqual(AT.sidebarDraftIsEmpty(null), true);
+  assert.strictEqual(AT.sidebarDraftIsEmpty('hi'), false);
+  assert.strictEqual(AT.sidebarDraftIsEmpty('  x  '), false);
+});
+
+test('T252 asideRequiresAttention: assistant-last and needs-owner', function () {
+  const aside = { name: 'att-a', purpose: 'aside' };
+  assert.strictEqual(AT.asideRequiresAttention(aside, { lastRole: 'assistant' }), true);
+  assert.strictEqual(AT.asideRequiresAttention(aside, { lastRole: 'user' }), false);
+  assert.strictEqual(AT.asideRequiresAttention(aside, {
+    lines: [
+      { role: 'user', text: 'q' },
+      { role: 'assistant', text: 'a' },
+    ],
+  }), true);
+  assert.strictEqual(AT.asideRequiresAttention(
+    { name: 'att-b', purpose: 'aside', needs_owner: true },
+    { lastRole: 'user' },
+  ), true);
+  assert.strictEqual(AT.asideRequiresAttention(
+    { name: 'worker', purpose: 'work' },
+    { lastRole: 'assistant' },
+  ), false);
+  assert.strictEqual(AT.asideRequiresAttention(
+    { name: 'jevons', purpose: 'overseer' },
+    { lastRole: 'assistant' },
+  ), false);
+});
+
+test('T252 empty-composer + new attention → selection switches', function () {
+  let queue = [];
+  queue = AT.enqueueAttention(queue, 'att-a');
+  // Viewing something else (or main); draft empty; new attention att-a
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: null,
+    draftEmpty: true,
+    reason: 'new-attention',
+    newName: 'att-a',
+  }), 'att-a');
+
+  queue = AT.enqueueAttention(queue, 'att-b');
+  // On att-a with empty draft; att-b newly needs attention → switch to att-b
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draftEmpty: true,
+    reason: 'new-attention',
+    newName: 'att-b',
+  }), 'att-b');
+});
+
+test('T252 non-empty draft → selection sticky (no mid-compose steal)', function () {
+  const queue = ['att-a', 'att-b'];
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draftEmpty: false,
+    reason: 'new-attention',
+    newName: 'att-b',
+  }), 'att-a');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draft: 'working on a reply…',
+    reason: 'new-attention',
+    newName: 'att-b',
+  }), 'att-a');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draftEmpty: false,
+    reason: 'poll',
+  }), 'att-a');
+});
+
+test('T252 post-send empty → next attention selected', function () {
+  let queue = ['att-a', 'att-b', 'att-c'];
+  // User sent on att-a → dequeue att-a, draft empty, after-send
+  queue = AT.dequeueAttention(queue, 'att-a');
+  assert.deepStrictEqual(queue, ['att-b', 'att-c']);
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draftEmpty: true,
+    reason: 'after-send',
+  }), 'att-b');
+
+  // Send on att-b → next att-c
+  queue = AT.dequeueAttention(queue, 'att-b');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-b',
+    draftEmpty: true,
+    reason: 'after-send',
+  }), 'att-c');
+
+  // Last one sent → empty queue → keep current (no forced switch residual)
+  queue = AT.dequeueAttention(queue, 'att-c');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-c',
+    draftEmpty: true,
+    reason: 'after-send',
+  }), 'att-c');
+});
+
+test('T252 residual: no attention asides → no forced switch', function () {
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: [],
+    currentSelection: 'worker-1',
+    draftEmpty: true,
+    reason: 'poll',
+  }), 'worker-1');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: [],
+    currentSelection: null,
+    draftEmpty: true,
+    reason: 'new-attention',
+  }), null);
+});
+
+test('T252 detectNewAttentionAsides busy→idle + needs_owner flag', function () {
+  const prev = [
+    { name: 'att-busy', purpose: 'aside', phase: 'working' },
+    { name: 'att-idle', purpose: 'aside', phase: 'idle' },
+    { name: 'worker', purpose: 'work', phase: 'working' },
+  ];
+  const next = [
+    { name: 'att-busy', purpose: 'aside', phase: 'idle' },
+    { name: 'att-idle', purpose: 'aside', phase: 'idle' },
+    { name: 'worker', purpose: 'work', phase: 'idle' },
+    { name: 'att-flag', purpose: 'aside', needs_owner: true, phase: 'idle' },
+  ];
+  const news = AT.detectNewAttentionAsides(prev, next);
+  assert.ok(news.indexOf('att-busy') >= 0, 'busy→idle aside');
+  assert.ok(news.indexOf('att-flag') >= 0, 'needs_owner rose');
+  assert.ok(news.indexOf('worker') < 0, 'work agents ignored');
+  assert.ok(news.indexOf('att-idle') < 0, 'already idle no new attention');
+});
+
+test('T252 liveFrameSignalsOwnerAttention on terminal assistant stop', function () {
+  assert.strictEqual(AT.liveFrameSignalsOwnerAttention({
+    type: 'assistant',
+    message: { role: 'assistant', content: [], stop_reason: 'end_turn' },
+  }), true);
+  assert.strictEqual(AT.liveFrameSignalsOwnerAttention({
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text: '…' }] },
+  }), false);
+  assert.strictEqual(AT.liveFrameSignalsOwnerAttention({
+    type: 'user',
+    message: { content: 'hi' },
+  }), false);
+});
+
+test('T252 index.html wires attention auto-select + sticky draft', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('pickAttentionAsideSelection') >= 0,
+    'product calls pickAttentionAsideSelection');
+  assert.ok(html.indexOf('asideAttentionQueue') >= 0 ||
+    html.indexOf('enqueueAttention') >= 0,
+    'attention queue state');
+  assert.ok(html.indexOf('T252') >= 0, 'T252 marker in product wire');
+  assert.ok(
+    html.indexOf('isSidebarComposerDraftEmpty') >= 0 ||
+    html.indexOf('sidebarDraftIsEmpty') >= 0,
+    'draft empty gate for sticky',
+  );
+});
+
 // Boot TDZ: updateComposerPlaceholder reads selectedAgent; renderAttention()
 // and refreshAgents run at page load. Late `let selectedAgent` threw, skipped
 // applyTheme + connect → dark stuck + empty transcript.
@@ -781,6 +957,81 @@ test('index.html declares selectedAgent before boot renderAttention/refreshAgent
   assert.ok(bootRefreshAt > decl, 'boot refreshAgents after selectedAgent decl');
   assert.ok(theme > decl, 'applyTheme after selectedAgent decl (script reaches theme)');
   assert.ok(connect > decl, 'connect after selectedAgent decl');
+});
+
+// 🎯T251: sidebar Transcript composer (independent of main #input).
+test('T251 sidebarComposerVisible only on transcript tab with selectable agent', function () {
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'transcript', selectedAgent: 'att-billing', purpose: 'aside',
+  }), true);
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'transcript', selectedAgent: 'jv-t251-worker', purpose: 'work',
+  }), true);
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'frontier', selectedAgent: 'att-billing', purpose: 'aside',
+  }), false, 'frontier tab hides sidebar composer');
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'transcript', selectedAgent: null,
+  }), false, 'no selection → no composer');
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'transcript', selectedAgent: 'jevons', purpose: 'overseer',
+  }), false, 'overseer never uses sidebar composer');
+});
+
+test('T251 sidebarSendRequest targets selected agent send API', function () {
+  const ok = AT.sidebarSendRequest('att-msf-1', '  ship it  ');
+  assert.strictEqual(ok.ok, true);
+  assert.strictEqual(ok.name, 'att-msf-1');
+  assert.strictEqual(ok.method, 'POST');
+  assert.strictEqual(ok.url, '/api/agents/att-msf-1/send');
+  assert.deepStrictEqual(ok.body, { text: 'ship it' });
+  // Encoding for free-form names.
+  const enc = AT.sidebarSendRequest('jv-t27.2-config', 'go');
+  assert.strictEqual(enc.ok, true);
+  assert.strictEqual(enc.url, '/api/agents/' + encodeURIComponent('jv-t27.2-config') + '/send');
+  assert.strictEqual(AT.sidebarSendRequest(null, 'x').ok, false);
+  assert.strictEqual(AT.sidebarSendRequest('att-x', '   ').reason, 'empty');
+  assert.strictEqual(AT.sidebarSendRequest('jevons', 'hi').reason, 'overseer-main-only');
+  assert.strictEqual(AT.agentSendPath('po'), '/api/agents/po/send');
+  assert.strictEqual(AT.isSidebarDraftEmpty(''), true);
+  assert.strictEqual(AT.isSidebarDraftEmpty('  \n'), true);
+  assert.strictEqual(AT.isSidebarDraftEmpty('a'), false);
+});
+
+test('T251 classifySidebarComposerKey Enter sends, Shift+Enter newline', function () {
+  assert.strictEqual(AT.classifySidebarComposerKey({ key: 'Enter' }), 'send');
+  assert.strictEqual(AT.classifySidebarComposerKey({ key: 'Enter', shiftKey: true }), 'newline');
+  assert.strictEqual(AT.classifySidebarComposerKey({ key: 'a' }), null);
+  assert.strictEqual(AT.classifySidebarComposerKey({ key: 'Enter', isComposing: true }), null);
+});
+
+test('T251 index.html wires sidebar composer DOM + sendSidebarComposer path', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('id="agent-inspect-composer"') >= 0, 'composer host in transcript pane');
+  assert.ok(html.indexOf('id="agent-inspect-input"') >= 0, 'sidebar message input');
+  assert.ok(html.indexOf('id="agent-inspect-send"') >= 0, 'sidebar send control');
+  assert.ok(html.indexOf('function sendSidebarComposer') >= 0, 'send handler');
+  assert.ok(html.indexOf('function syncSidebarComposer') >= 0, 'visibility sync');
+  // Send path targets selected agent via AgentTranscript.sidebarSendRequest / agent send API.
+  assert.ok(html.indexOf('sidebarSendRequest') >= 0, 'uses pure send request helper');
+  assert.ok(html.indexOf('__sidebarAgentSend') >= 0, 'hermetic mock seam');
+  // Must not wire sidebar send through main transport / overseer #input.
+  const sendFn = html.match(/function sendSidebarComposer\([\s\S]*?\nfunction |function sendSidebarComposer\([\s\S]*?\nif \(agentInspectInput\)/);
+  assert.ok(sendFn, 'sendSidebarComposer body capturable');
+  assert.ok(!/transport\.send\s*\(/.test(sendFn[0]),
+    'sidebar send must not use main chat transport');
+  assert.ok(!/\binput\.value\b/.test(sendFn[0]) || /agentInspectInput\.value/.test(sendFn[0]),
+    'sidebar send reads agentInspectInput, not main #input alone');
+  // Composer lives inside #agent-inspect (transcript tab panel).
+  const inspectBlock = html.match(/id="agent-inspect"[\s\S]*?id="frontier-pane"|id="agent-inspect"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>\s*<div id="activity-header"/);
+  // Simpler structural: composer markup after agent-inspect-body, before closing agent-inspect.
+  const bodyAt = html.indexOf('id="agent-inspect-body"');
+  const composerAt = html.indexOf('id="agent-inspect-composer"');
+  const frontierAt = html.indexOf('id="frontier-pane"');
+  assert.ok(bodyAt >= 0 && composerAt > bodyAt, 'composer after transcript body');
+  // agent-inspect block is after frontier-pane in markup (sibling panes).
+  assert.ok(composerAt > frontierAt || frontierAt < bodyAt, 'composer is in transcript structure');
+  assert.ok(html.indexOf('🎯T251') >= 0 || html.indexOf('T251') >= 0, 'T251 marker');
 });
 
 if (failed) {

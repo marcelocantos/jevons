@@ -235,6 +235,51 @@ test('T161 tool gap then fence/list uses same structural path (no content sniff)
   assert.strictEqual(list[0].text, 'Items:\n\n- a\n- b');
 });
 
+// ── 🎯T250 aside wires never become main transcript chunks ──────────
+
+test('T250 coalesce skips attention and target-aside user frames', function () {
+  const AT = require('./attention_threads.js');
+  // Ensure VL can see AttentionThreads when running under Node (no browser global).
+  global.AttentionThreads = AT;
+  const frames = [
+    { type: 'user', message: { content: 'main hello' } },
+    {
+      type: 'user',
+      message: { content: '[attention:att-x|billing]\nbilling body' },
+    },
+    {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'main reply' }],
+        stop_reason: 'end_turn',
+      },
+    },
+    {
+      type: 'user',
+      message: {
+        content: '[target-aside: att-y | File this]\nbody\n\n(Ceremony: x)',
+      },
+    },
+    {
+      type: 'user',
+      message: { content: 'still main' },
+    },
+  ];
+  const chunks = VL.coalesceTranscriptFrames(frames);
+  const userTexts = chunks.filter(function (c) { return c.role === 'user'; }).map(function (c) {
+    return c.text;
+  });
+  assert.deepStrictEqual(userTexts, ['main hello', 'still main'],
+    'aside wires excluded from main chunks: ' + JSON.stringify(userTexts));
+  assert.ok(chunks.some(function (c) {
+    return c.role === 'jevons' && c.text === 'main reply';
+  }), 'assistant main reply still present');
+  // Sidebar path still extracts them from the same fixture.
+  const cache = AT.extractAsideWireTurnsFromFrames(frames);
+  assert.ok(cache['att-x'] && cache['att-x'][0].text === 'billing body');
+  assert.ok(cache['att-y'] && cache['att-y'][0].text.indexOf('body') === 0);
+});
+
 // ── 🎯T245 silent-only turns must not leak/coalesce into next bubble ──
 
 test('T245 pure [silent] + agent_note + visible → only second body', function () {

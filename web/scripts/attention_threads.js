@@ -526,6 +526,138 @@
     return '[attention:' + id + '|' + safeTitle + ']\n' + body;
   }
 
+  // ── 🎯T250: aside turns stay off main transcript ────────────────────
+  // Owner-visible bubbles for attention/target-aside wire text belong in the
+  // RHS Transcript tab only (fleet aside chrome). Main #messages must not
+  // paint them. Wire may still reach the overseer for processing.
+
+  /**
+   * Parse a main-chat user body that is an aside wire marker.
+   * Formats:
+   *   [attention:<id>|<title>]\n<body>
+   *   [target-aside: <id> | <title>]\n<body>\n\n(Ceremony: …)
+   * @returns {{ kind: string, id: string, title: string, body: string, displayText: string }|null}
+   */
+  function parseAsideWireUserText(text) {
+    const raw = String(text == null ? '' : text);
+    if (!raw) return null;
+    // attention: compact id|title, no spaces required around |
+    const att = raw.match(
+      /^\s*\[attention\s*:\s*([^|\]\r\n]+)\|([^\]]*)\]\s*(?:\r?\n([\s\S]*))?$/i,
+    );
+    if (att) {
+      const id = String(att[1] || '').trim();
+      const title = String(att[2] || '').trim();
+      const body = String(att[3] != null ? att[3] : '').replace(/^\r?\n/, '');
+      if (!id) return null;
+      const displayText = body.trim() || title || id;
+      return {
+        kind: 'attention',
+        id: id,
+        title: title,
+        body: body,
+        displayText: displayText,
+      };
+    }
+    // target-aside: id | title (spaces around | optional)
+    const tgt = raw.match(
+      /^\s*\[target-aside\s*:\s*([^|\]]+?)\s*\|\s*([^\]]*)\]\s*(?:\r?\n([\s\S]*))?$/i,
+    );
+    if (tgt) {
+      const id = String(tgt[1] || '').trim();
+      const title = String(tgt[2] || '').trim();
+      let body = String(tgt[3] != null ? tgt[3] : '').replace(/^\r?\n/, '');
+      // Strip filing ceremony for owner-facing sidebar display.
+      body = body.replace(/\n\n\(Ceremony:[\s\S]*$/i, '').trim();
+      if (!id) return null;
+      const displayText = body || title || id;
+      return {
+        kind: 'target-aside',
+        id: id,
+        title: title,
+        body: body,
+        displayText: displayText,
+      };
+    }
+    return null;
+  }
+
+  function isAsideWireUserText(text) {
+    return parseAsideWireUserText(text) != null;
+  }
+
+  /** Main transcript should paint this user body (false for aside wires). */
+  function shouldPaintMainUserText(text) {
+    return !isAsideWireUserText(text);
+  }
+
+  /**
+   * Record an aside wire user turn into a cache keyed by aside id.
+   * Dedupes consecutive identical user lines. Mutates cache.
+   * @param {Object} cache map id → [{role,text}]
+   * @param {string} text full wire user content
+   * @returns {{ parsed: object|null, added: boolean }}
+   */
+  function recordAsideWireUserTurn(cache, text) {
+    const p = parseAsideWireUserText(text);
+    if (!p || !p.id || !cache || typeof cache !== 'object') {
+      return { parsed: p, added: false };
+    }
+    const display = p.displayText || p.body || p.title || '';
+    if (!cache[p.id]) cache[p.id] = [];
+    const list = cache[p.id];
+    if (list.length) {
+      const last = list[list.length - 1];
+      if (last && last.role === 'user' && last.text === display) {
+        return { parsed: p, added: false };
+      }
+    }
+    list.push({ role: 'user', text: display });
+    return { parsed: p, added: true };
+  }
+
+  /**
+   * Build aside-id → lines map from chatlog frames (history fixture).
+   * Only user frames with aside wire markers are included.
+   */
+  function extractAsideWireTurnsFromFrames(frames) {
+    const cache = Object.create(null);
+    const list = Array.isArray(frames) ? frames : [];
+    for (let i = 0; i < list.length; i++) {
+      let m = list[i];
+      if (typeof m === 'string') {
+        try { m = JSON.parse(m); } catch (_) { continue; }
+      }
+      if (!m || m.type !== 'user') continue;
+      const content = m.message && m.message.content;
+      if (typeof content !== 'string' || !content) continue;
+      recordAsideWireUserTurn(cache, content);
+    }
+    return cache;
+  }
+
+  /**
+   * Merge process-session inspect lines with main-wire aside cache for an id.
+   * Wire turns first (owner open body), then process turns; dedupe role+text.
+   */
+  function mergeInspectLinesWithAsideWire(processLines, wireLines) {
+    const out = [];
+    const seen = Object.create(null);
+    function push(l) {
+      if (!l) return;
+      const role = l.role === 'user' ? 'user' : (l.role === 'assistant' || l.role === 'jevons' ? 'assistant' : (l.role || 'other'));
+      const text = l.text == null ? '' : String(l.text);
+      if (!text.trim() && role === 'other') return;
+      const k = role + '\0' + text;
+      if (seen[k]) return;
+      seen[k] = true;
+      out.push({ role: role, text: text });
+    }
+    (wireLines || []).forEach(push);
+    (processLines || []).forEach(push);
+    return out;
+  }
+
   // handleComposer: single entry for send / local commands.
   // Returns:
   //   {
@@ -795,6 +927,13 @@
     handleComposer: handleComposer,
     prepareSend: prepareSend,
     formatAsideWire: formatAsideWire,
+    // 🎯T250
+    parseAsideWireUserText: parseAsideWireUserText,
+    isAsideWireUserText: isAsideWireUserText,
+    shouldPaintMainUserText: shouldPaintMainUserText,
+    recordAsideWireUserTurn: recordAsideWireUserTurn,
+    extractAsideWireTurnsFromFrames: extractAsideWireTurnsFromFrames,
+    mergeInspectLinesWithAsideWire: mergeInspectLinesWithAsideWire,
     serialize: serialize,
     deserialize: deserialize,
     load: load,

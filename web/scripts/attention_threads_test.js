@@ -368,6 +368,95 @@ test('T136 chromeStack always empty even with open and parked asides', function 
   assert.ok(AT.routeCandidates(s).length >= 1);
 });
 
+// ── 🎯T250: asides not on main transcript; sidebar path shows them ────
+
+test('T250 parseAsideWireUserText attention + target-aside', function () {
+  const att = AT.parseAsideWireUserText('[attention:att-billing|billing nit]\nbilling body');
+  assert.ok(att);
+  assert.strictEqual(att.kind, 'attention');
+  assert.strictEqual(att.id, 'att-billing');
+  assert.strictEqual(att.title, 'billing nit');
+  assert.strictEqual(att.displayText, 'billing body');
+  assert.ok(AT.isAsideWireUserText(att ? '[attention:att-billing|t]\nx' : ''));
+  assert.ok(!AT.shouldPaintMainUserText('[attention:att-billing|t]\nx'));
+  assert.ok(AT.shouldPaintMainUserText('plain main message'));
+  assert.ok(!AT.isAsideWireUserText('plain main message'));
+
+  const wire = AT.formatTargetWire('att-file', 'Chat paste images', 'Chat paste images work');
+  const tgt = AT.parseAsideWireUserText(wire);
+  assert.ok(tgt);
+  assert.strictEqual(tgt.kind, 'target-aside');
+  assert.strictEqual(tgt.id, 'att-file');
+  assert.ok(tgt.displayText.indexOf('Chat paste images work') === 0);
+  assert.ok(tgt.displayText.indexOf('Ceremony') < 0, 'ceremony stripped from display');
+  assert.ok(!AT.shouldPaintMainUserText(wire));
+});
+
+test('T250 extractAsideWireTurnsFromFrames + merge for sidebar path', function () {
+  const frames = [
+    { type: 'user', message: { content: 'main hello' } },
+    {
+      type: 'user',
+      message: { content: '[attention:att-side|billing]\nbilling nit body' },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'main reply' }] },
+    },
+    {
+      type: 'user',
+      message: {
+        content: '[target-aside: att-file | Target title]\nTarget body\n\n(Ceremony: short-lived…)',
+      },
+    },
+  ];
+  const cache = AT.extractAsideWireTurnsFromFrames(frames);
+  assert.ok(cache['att-side'], 'attention id in cache');
+  assert.strictEqual(cache['att-side'].length, 1);
+  assert.strictEqual(cache['att-side'][0].role, 'user');
+  assert.strictEqual(cache['att-side'][0].text, 'billing nit body');
+  assert.ok(cache['att-file'], 'target-aside id in cache');
+  assert.strictEqual(cache['att-file'][0].text, 'Target body');
+
+  // Sidebar path: empty process transcript still shows wire turns.
+  const emptyProc = AT.mergeInspectLinesWithAsideWire([], cache['att-side']);
+  assert.strictEqual(emptyProc.length, 1);
+  assert.strictEqual(emptyProc[0].text, 'billing nit body');
+
+  // Process turns merge without losing wire.
+  const merged = AT.mergeInspectLinesWithAsideWire(
+    [{ role: 'assistant', text: 'aside agent reply' }],
+    cache['att-side'],
+  );
+  assert.strictEqual(merged.length, 2);
+  assert.strictEqual(merged[0].role, 'user');
+  assert.strictEqual(merged[1].role, 'assistant');
+
+  // Dedupe consecutive record
+  const c2 = Object.create(null);
+  AT.recordAsideWireUserTurn(c2, '[attention:att-side|billing]\nbilling nit body');
+  AT.recordAsideWireUserTurn(c2, '[attention:att-side|billing]\nbilling nit body');
+  assert.strictEqual(c2['att-side'].length, 1, 'dedupe identical consecutive');
+});
+
+test('T250 index.html: main paint filters aside wires; sidebar merge wired', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('shouldPaintMainUserText') >= 0, 'main paint gate');
+  assert.ok(html.indexOf('noteAsideWireFromMain') >= 0, 'records aside wires');
+  assert.ok(html.indexOf('asideWireTurnsCache') >= 0, 'sidebar cache');
+  assert.ok(html.indexOf('mergeModelWithAsideWire') >= 0 ||
+    html.indexOf('mergeInspectLinesWithAsideWire') >= 0,
+    'sidebar merge path');
+  assert.ok(html.indexOf('ingestAsideWiresFromHistoryLines') >= 0,
+    'history hydrate harvests aside wires');
+  // User handle must short-circuit paint for aside wires.
+  assert.ok(/shouldPaintMainUserText/.test(html) &&
+    /noteAsideWireFromMain/.test(html),
+    'handle user path uses T250 helpers');
+});
+
 test('T136 index.html: attention-bar not used for aside wall; fleet register path', function () {
   const fs = require('fs');
   const path = require('path');

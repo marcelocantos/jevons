@@ -634,6 +634,31 @@ body.rhs-resizing-row { cursor: row-resize; }
 #agent-inspect-body > .turn-marker.inject-nugget .inject-label {
   font-family: var(--mono); font-size: 11px;
 }
+/* 🎯T251: dedicated sidebar Transcript composer — independent of main #input */
+#agent-inspect-composer {
+  display: none; flex-shrink: 0; gap: 8px; align-items: flex-end;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)) 10px;
+  border-top: 1px solid var(--border); background: var(--surface);
+  --ai-control-h: calc(1.4 * 12px + 16px);
+}
+#agent-inspect-composer.visible { display: flex; }
+#agent-inspect-composer.disabled { opacity: 0.55; }
+#agent-inspect-input {
+  flex: 1; min-width: 0; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-size: 12px; font-family: var(--sans); outline: none; resize: none;
+  line-height: 1.4; min-height: var(--ai-control-h); max-height: 22vh;
+  overflow-y: hidden;
+}
+#agent-inspect-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+#agent-inspect-input::placeholder { color: var(--text-muted); opacity: 0.5; }
+#agent-inspect-send {
+  min-height: var(--ai-control-h); padding: 7px 12px; border-radius: 6px; border: none;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 600;
+  font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; flex-shrink: 0;
+}
+#agent-inspect-send:hover { opacity: 0.85; }
+#agent-inspect-send:disabled { opacity: 0.3; cursor: not-allowed; }
 /* 🎯T131 / 🎯T173 / 🎯T174: frontier table — headerless; constrained to pane; name ellipsizes */
 #frontier-pane { flex: 1; min-height: 0; min-width: 0; }
 #frontier-toolbar {
@@ -919,6 +944,18 @@ body.rhs-resizing-row { cursor: row-resize; }
             <button type="button" id="agent-inspect-close" title="Clear selection">Close</button>
           </div>
           <div id="agent-inspect-body"></div>
+          <!-- 🎯T251: message + send for selected fleet/aside — not main composer -->
+          <div id="agent-inspect-composer" aria-label="Message the selected agent">
+            <label for="agent-inspect-input" class="sr-only">Message the selected agent or aside</label>
+            <textarea id="agent-inspect-input" rows="1"
+                      placeholder="Message this agent…"
+                      title="Sidebar composer — Enter to send, Shift+Enter for a new line (🎯T251)"
+                      aria-label="Message the selected agent or aside"
+                      aria-multiline="true"
+                      autocomplete="off"
+                      spellcheck="true"></textarea>
+            <button type="button" id="agent-inspect-send" disabled aria-label="Send to selected agent">Send</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1658,14 +1695,23 @@ function handle(m) {
       // Server synthesises a user echo on send; Grok ACP may also
       // publish user_message_chunk for the same prompt. Drop the dupe.
       if (content && msgHistory[msgHistory.length - 1]?.text === content) return;
+      // 🎯T239: user echo = durable ack of a staged wire send (including asides).
+      if (content && typeof ackPendingFromContent === 'function') ackPendingFromContent(content);
+      // 🎯T250: aside wire turns never paint on main #messages — sidebar only.
+      if (typeof AttentionThreads !== 'undefined' &&
+          AttentionThreads.shouldPaintMainUserText &&
+          !AttentionThreads.shouldPaintMainUserText(content)) {
+        noteAsideWireFromMain(content);
+        // Still settle activity chrome as a user boundary (no main bubble).
+        closeTurn();
+        return;
+      }
       // 🎯T223: do NOT seal open assistant streams on user interleave.
       // Join identity is stream_id (and legacy openStreamEl until terminal).
       // Premature seal was the journal/hydrate split of one answer into two.
       closeTurn();
       const uEl = addMsg('user', content, msgTs);
       if (content) msgHistory.push({ text: content, el: uEl });
-      // 🎯T239: user echo = durable ack of a staged wire send.
-      if (content && typeof ackPendingFromContent === 'function') ackPendingFromContent(content);
       // 🎯T135: opt-in "Continue in: «title»" when auto-match suggested a thread.
       // Match is suggestion only — default wire already went to main.
       if (lastRouteSuggestion) {
@@ -3418,12 +3464,22 @@ function renderFrames(lines, opts) {
   const lazy = !!(opts && opts.lazy);
   const frag = document.createDocumentFragment();
   const nodes = [];
+  // 🎯T250: harvest aside wires for sidebar before main coalesce drops them.
+  if (typeof ingestAsideWiresFromHistoryLines === 'function') {
+    try { ingestAsideWiresFromHistoryLines(lines); } catch (_) {}
+  }
   const chunks = (typeof VirtualList !== 'undefined' && VirtualList.coalesceTranscriptFrames)
     ? VirtualList.coalesceTranscriptFrames(lines)
     : null;
   if (chunks) {
     for (const c of chunks) {
       if (typeof VirtualList !== 'undefined' && VirtualList.isWholeChunk && !VirtualList.isWholeChunk(c)) {
+        continue;
+      }
+      // Defense-in-depth: never paint aside wire as a main user bubble.
+      if (c.role === 'user' && typeof AttentionThreads !== 'undefined' &&
+          AttentionThreads.shouldPaintMainUserText &&
+          !AttentionThreads.shouldPaintMainUserText(c.text)) {
         continue;
       }
       const el = buildMsg(c.role, c.text, c.timestamp, { lazy: lazy });
@@ -3441,6 +3497,13 @@ function renderFrames(lines, opts) {
     if (m.type === 'user') {
       const c = m.message && m.message.content;
       if (typeof c === 'string' && c) {
+        // 🎯T250
+        if (typeof AttentionThreads !== 'undefined' &&
+            AttentionThreads.shouldPaintMainUserText &&
+            !AttentionThreads.shouldPaintMainUserText(c)) {
+          pending = null;
+          continue;
+        }
         pending = null;
         const el = buildMsg('user', c, ts, { lazy: lazy });
         nodes.push(el);
@@ -3526,6 +3589,99 @@ let lastFleetAgents = []; // for 🎯T124 auto-select on new aside
 // the TDZ, threw on boot (T136 path), skipped applyTheme + connect → dark
 // FOUC stuck + empty transcript.
 let selectedAgent = null;
+
+// 🎯T250: main-chat aside wire user turns (attention/target-aside markers)
+// are recorded here for the RHS Transcript tab — never painted on #messages.
+// Keyed by aside/agent id → [{ role:'user', text }].
+let asideWireTurnsCache = Object.create(null);
+
+function noteAsideWireFromMain(content) {
+  if (typeof AttentionThreads === 'undefined' ||
+      typeof AttentionThreads.recordAsideWireUserTurn !== 'function') {
+    return;
+  }
+  if (!asideWireTurnsCache || typeof asideWireTurnsCache !== 'object') {
+    asideWireTurnsCache = Object.create(null);
+  }
+  const r = AttentionThreads.recordAsideWireUserTurn(asideWireTurnsCache, content);
+  if (!r || !r.parsed || !r.parsed.id) return;
+  // Live refresh when this aside is the inspect selection.
+  if (selectedAgent && selectedAgent === r.parsed.id && r.added) {
+    refreshAgentInspectAsideWireMerge();
+  }
+}
+
+function asideWireLinesFor(name) {
+  if (!name || !asideWireTurnsCache) return [];
+  const list = asideWireTurnsCache[name];
+  return Array.isArray(list) ? list.slice() : [];
+}
+
+// Merge main-wire aside turns into the current inspect model (process empty OK).
+function mergeModelWithAsideWire(model, name) {
+  const wire = asideWireLinesFor(name || selectedAgent);
+  if (!wire.length || typeof AttentionThreads === 'undefined' ||
+      typeof AttentionThreads.mergeInspectLinesWithAsideWire !== 'function') {
+    return model;
+  }
+  const lines = AttentionThreads.mergeInspectLinesWithAsideWire(model.lines || [], wire);
+  return {
+    title: model.title,
+    empty: lines.length === 0,
+    error: model.error || '',
+    lines: lines,
+    sessionId: model.sessionId || '',
+  };
+}
+
+function refreshAgentInspectAsideWireMerge() {
+  if (!selectedAgent || !agentInspectBody) return;
+  const wire = asideWireLinesFor(selectedAgent);
+  if (!wire.length) return;
+  // Prefer re-merge of current inspect lines + wire.
+  const cur = (_agentInspectLines || []).map(function (l) {
+    return { role: l.role, text: l.text };
+  });
+  const merged = (typeof AttentionThreads !== 'undefined' &&
+      AttentionThreads.mergeInspectLinesWithAsideWire)
+    ? AttentionThreads.mergeInspectLinesWithAsideWire(cur, wire)
+    : wire.concat(cur);
+  _agentInspectLines = merged;
+  // Force re-paint (fingerprint will change when wire added).
+  _agentInspectFp = '';
+  renderAgentInspect({
+    title: selectedAgent,
+    empty: merged.length === 0,
+    error: '',
+    lines: merged,
+  });
+}
+
+function ingestAsideWiresFromHistoryLines(lines) {
+  if (typeof AttentionThreads === 'undefined' ||
+      typeof AttentionThreads.extractAsideWireTurnsFromFrames !== 'function') {
+    return;
+  }
+  const extracted = AttentionThreads.extractAsideWireTurnsFromFrames(lines || []);
+  const ids = Object.keys(extracted);
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    const turns = extracted[id] || [];
+    for (let j = 0; j < turns.length; j++) {
+      const t = turns[j];
+      if (!t || t.role !== 'user') continue;
+      // Rebuild wire-shaped text is unnecessary — store display lines directly.
+      if (!asideWireTurnsCache[id]) asideWireTurnsCache[id] = [];
+      const list = asideWireTurnsCache[id];
+      const text = t.text == null ? '' : String(t.text);
+      if (list.length && list[list.length - 1].role === 'user' &&
+          list[list.length - 1].text === text) {
+        continue;
+      }
+      list.push({ role: 'user', text: text });
+    }
+  }
+}
 function refreshAgents() {
   // 🎯T200: portfolios woven into fleet tree under overseer (not a separate panel).
   Promise.all([
@@ -3561,6 +3717,30 @@ function refreshAgents() {
         selectedAgent = auto;
         autoSelected = true;
       }
+      // 🎯T252: busy→idle / needs_owner asides → attention queue; auto if draft empty.
+      const prevFleet = lastFleetAgents;
+      if (AgentTranscript.detectNewAttentionAsides) {
+        const news = AgentTranscript.detectNewAttentionAsides(prevFleet, agents);
+        news.forEach(function (n) {
+          asideAttentionQueue = AgentTranscript.enqueueAttention(asideAttentionQueue, n);
+        });
+        if (AgentTranscript.pruneAttentionQueue) {
+          asideAttentionQueue = AgentTranscript.pruneAttentionQueue(asideAttentionQueue, agents);
+        }
+        const attReason = news.length ? 'new-attention' : 'poll';
+        const attNew = news.length ? news[news.length - 1] : undefined;
+        const nextAtt = AgentTranscript.pickAttentionAsideSelection({
+          attentionNames: asideAttentionQueue,
+          currentSelection: selectedAgent,
+          draftEmpty: isSidebarComposerDraftEmpty(),
+          reason: attReason,
+          newName: attNew,
+        });
+        if (nextAtt && nextAtt !== selectedAgent) {
+          selectedAgent = nextAtt;
+          autoSelected = true;
+        }
+      }
     }
     lastFleetAgents = agents.slice();
     renderTree(byParent, '', agentsEl, agentsByName);
@@ -3570,6 +3750,12 @@ function refreshAgents() {
     // Only re-subscribe when auto-select changes the focused agent.
     if (autoSelected && selectedAgent && typeof subscribeAgentInspect === 'function') {
       subscribeAgentInspect(selectedAgent);
+      // 🎯T131: open Transcript tab when auto-select lands an attention/aside.
+      if (typeof setRhsBottomTab === 'function') {
+        setRhsBottomTab((typeof FrontierTable !== 'undefined' && FrontierTable.tabAfterAgentSelect)
+          ? FrontierTable.tabAfterAgentSelect(true)
+          : 'transcript');
+      }
     }
   }).catch((err)=>{
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
@@ -4427,6 +4613,8 @@ function submitWireText(t, opts) {
   if (!ok) return false;
   // 🎯T239: stage until user echo / chatlog ack — never silent-drop on restart.
   stagePendingSend(t);
+  // 🎯T250: optimistic sidebar record for aside wires (server echo will dedupe).
+  if (typeof noteAsideWireFromMain === 'function') noteAsideWireFromMain(t);
   histIdx = null; histDraft = ''; setEditingHighlight(null);
   navFocus = { zone: 'live' };
   liveDraftBackup = '';
@@ -5503,6 +5691,9 @@ let termFit = null;
 const agentInspectEl = document.getElementById('agent-inspect');
 const agentInspectName = document.getElementById('agent-inspect-name');
 const agentInspectBody = document.getElementById('agent-inspect-body');
+const agentInspectComposer = document.getElementById('agent-inspect-composer');
+const agentInspectInput = document.getElementById('agent-inspect-input');
+const agentInspectSend = document.getElementById('agent-inspect-send');
 const frontierPaneEl = document.getElementById('frontier-pane');
 const frontierBodyEl = document.getElementById('frontier-body');
 const rhsTabMeta = document.getElementById('rhs-tab-meta');
@@ -5512,6 +5703,9 @@ let frontierPollTimer = 0;
 let _agentInspectFp = '';
 let _agentInspectLines = [];
 let _agentInspectFollow = null;
+// 🎯T251: per-agent sidebar drafts so switching selection does not lose text (T252 sticky).
+const sidebarDraftByAgent = Object.create(null);
+let _sidebarComposerSending = false;
 function agentInspectFollow() {
   if (!_agentInspectFollow) {
     _agentInspectFollow = (typeof AgentTranscript !== 'undefined' && AgentTranscript.createScrollFollow)
@@ -5544,6 +5738,64 @@ let rhsBottomTab = (typeof FrontierTable !== 'undefined')
   ? FrontierTable.TAB_FRONTIER
   : 'frontier';
 
+// 🎯T251: show dedicated sidebar composer when Transcript tab + selected agent.
+function syncSidebarComposer() {
+  if (!agentInspectComposer) return;
+  let purpose = '';
+  if (selectedAgent && Array.isArray(lastFleetAgents)) {
+    const row = lastFleetAgents.find(function (a) {
+      return a && a.name === selectedAgent;
+    });
+    if (row) purpose = row.purpose || '';
+  }
+  const visible = (typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarComposerVisible)
+    ? AgentTranscript.sidebarComposerVisible({
+        tab: rhsBottomTab,
+        selectedAgent: selectedAgent,
+        purpose: purpose,
+      })
+    : (rhsBottomTab === 'transcript' && !!selectedAgent);
+  agentInspectComposer.classList.toggle('visible', !!visible);
+  agentInspectComposer.hidden = !visible;
+  if (agentInspectInput) {
+    agentInspectInput.disabled = !visible;
+    if (visible && selectedAgent) {
+      const saved = sidebarDraftByAgent[selectedAgent];
+      if (typeof saved === 'string' && agentInspectInput.value !== saved) {
+        // Only restore when switching agents leaves empty/stale field.
+        if (!agentInspectInput.dataset.boundAgent ||
+            agentInspectInput.dataset.boundAgent !== selectedAgent) {
+          agentInspectInput.value = saved;
+        }
+      } else if (agentInspectInput.dataset.boundAgent &&
+                 agentInspectInput.dataset.boundAgent !== selectedAgent) {
+        agentInspectInput.value = typeof saved === 'string' ? saved : '';
+      }
+      agentInspectInput.dataset.boundAgent = selectedAgent;
+      const title = (agentInspectName && agentInspectName.textContent)
+        ? agentInspectName.textContent
+        : selectedAgent;
+      agentInspectInput.placeholder = 'Message ' + title + '…';
+    } else if (!visible) {
+      // Persist draft for current bound agent before clearing UI binding.
+      if (agentInspectInput.dataset.boundAgent) {
+        sidebarDraftByAgent[agentInspectInput.dataset.boundAgent] = agentInspectInput.value;
+      }
+    }
+  }
+  syncSidebarSendEnabled();
+}
+
+function syncSidebarSendEnabled() {
+  if (!agentInspectSend || !agentInspectInput) return;
+  const empty = (typeof AgentTranscript !== 'undefined' && AgentTranscript.isSidebarDraftEmpty)
+    ? AgentTranscript.isSidebarDraftEmpty(agentInspectInput.value)
+    : !String(agentInspectInput.value || '').trim();
+  const can = !empty && !!selectedAgent && !_sidebarComposerSending &&
+    rhsBottomTab === 'transcript';
+  agentInspectSend.disabled = !can;
+}
+
 function setRhsBottomTab(tab) {
   const next = (typeof FrontierTable !== 'undefined')
     ? FrontierTable.nextBottomTab(rhsBottomTab, tab)
@@ -5556,6 +5808,7 @@ function setRhsBottomTab(tab) {
   });
   if (frontierPaneEl) frontierPaneEl.classList.toggle('active', next === 'frontier');
   if (agentInspectEl) agentInspectEl.classList.toggle('active', next === 'transcript');
+  if (typeof syncSidebarComposer === 'function') syncSidebarComposer();
   if (next === 'frontier' && typeof loadFrontier === 'function') {
     loadFrontier({ quiet: true });
   }
@@ -5585,6 +5838,11 @@ function selectAgent(name, opts) {
   const next = (typeof AgentTranscript !== 'undefined')
     ? AgentTranscript.nextSelection(selectedAgent, name, { purpose: purpose })
     : (selectedAgent === name ? null : name);
+  // 🎯T251: stash draft for previous selection before switching.
+  if (agentInspectInput && agentInspectInput.dataset.boundAgent &&
+      agentInspectInput.dataset.boundAgent !== next) {
+    sidebarDraftByAgent[agentInspectInput.dataset.boundAgent] = agentInspectInput.value;
+  }
   selectedAgent = next;
   document.querySelectorAll('.agent-node').forEach(n =>
     n.classList.toggle('selected', !!(selectedAgent && n.dataset.agent === selectedAgent)));
@@ -5603,12 +5861,21 @@ function selectAgent(name, opts) {
     : 'transcript');
   // 🎯T209: primary path = inspect_subscribe on /ws/chat (not HTTP poll).
   subscribeAgentInspect(selectedAgent);
+  if (typeof syncSidebarComposer === 'function') syncSidebarComposer();
 }
 
 function hideAgentInspect() {
   unsubscribeAgentInspect();
   if (agentInspectBody) agentInspectBody.innerHTML = '';
   if (agentInspectName) agentInspectName.textContent = '';
+  // 🎯T251: keep drafts in map; clear bound field for clean Frontier view.
+  if (agentInspectInput) {
+    if (agentInspectInput.dataset.boundAgent) {
+      sidebarDraftByAgent[agentInspectInput.dataset.boundAgent] = agentInspectInput.value;
+    }
+    agentInspectInput.value = '';
+    delete agentInspectInput.dataset.boundAgent;
+  }
   _agentInspectFp = '';
   _agentInspectLines = [];
   // Keep RHS bottom visible; return to Frontier tab (T131).
@@ -5616,6 +5883,7 @@ function hideAgentInspect() {
     ? FrontierTable.tabAfterAgentSelect(false)
     : 'frontier');
   if (typeof updateComposerPlaceholder === 'function') updateComposerPlaceholder();
+  if (typeof syncSidebarComposer === 'function') syncSidebarComposer();
 }
 
 // 🎯T209: thin named-agent multiplex on main /ws/chat pipe.
@@ -5644,19 +5912,24 @@ function handleAgentTranscriptWire(m) {
     if (typeof AgentTranscript !== 'undefined' && AgentTranscript.applyInspectLiveFrame) {
       _agentInspectLines = AgentTranscript.applyInspectLiveFrame(_agentInspectLines, m.event);
     }
-    const lines = (_agentInspectLines || []).map(function (l) {
+    let lines = (_agentInspectLines || []).map(function (l) {
       return { role: l.role, text: l.text };
     });
-    renderAgentInspect({
+    // 🎯T250: overlay main-wire aside turns for this agent id.
+    const liveModel = mergeModelWithAsideWire({
       title: selectedAgent,
       empty: lines.length === 0,
       error: '',
       lines: lines,
+    }, selectedAgent);
+    _agentInspectLines = (liveModel.lines || []).map(function (l) {
+      return { role: l.role, text: l.text };
     });
+    renderAgentInspect(liveModel);
     return;
   }
   // kind=history (default): sealed turns — same model as former HTTP payload.
-  const model = (typeof AgentTranscript !== 'undefined')
+  let model = (typeof AgentTranscript !== 'undefined')
     ? AgentTranscript.paneModel(m.name || selectedAgent, m)
     : { title: m.name || selectedAgent, lines: (m.turns) || [], empty: !(m.turns && m.turns.length), error: '' };
   if (m.error && model.empty && !m.denied) {
@@ -5664,6 +5937,9 @@ function handleAgentTranscriptWire(m) {
   } else if (m.denied && m.error) {
     model.error = m.error;
   }
+  // 🎯T250: sidebar shows aside content even when process transcript is empty
+  // (register-only asides still route via overseer [attention:…] wire).
+  model = mergeModelWithAsideWire(model, m.name || selectedAgent);
   _agentInspectLines = (model.lines || []).map(function (l) {
     return { role: l.role, text: l.text };
   });
@@ -6274,6 +6550,154 @@ const agentInspectRefresh = document.getElementById('agent-inspect-refresh');
 if (agentInspectRefresh) agentInspectRefresh.onclick = function () {
   if (selectedAgent) loadAgentTranscript(selectedAgent, { quiet: false });
 };
+
+// 🎯T251: sidebar Transcript composer → POST /api/agents/{selected}/send
+// Independent of main #input / transport overseer wire.
+function sendSidebarComposer() {
+  if (!agentInspectInput || !selectedAgent) return Promise.resolve(null);
+  const text = agentInspectInput.value;
+  let purpose = '';
+  if (Array.isArray(lastFleetAgents)) {
+    const row = lastFleetAgents.find(function (a) {
+      return a && a.name === selectedAgent;
+    });
+    if (row) purpose = row.purpose || '';
+  }
+  const req = (typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendRequest)
+    ? AgentTranscript.sidebarSendRequest(selectedAgent, text, { purpose: purpose })
+    : (function () {
+        const body = String(text || '').trim();
+        if (!body || !selectedAgent) return { ok: false, reason: 'empty' };
+        return {
+          ok: true,
+          name: selectedAgent,
+          url: '/api/agents/' + encodeURIComponent(selectedAgent) + '/send',
+          method: 'POST',
+          body: { text: body },
+        };
+      })();
+  if (!req || !req.ok) {
+    syncSidebarSendEnabled();
+    return Promise.resolve(null);
+  }
+  _sidebarComposerSending = true;
+  syncSidebarSendEnabled();
+  // Hermetic/mock seam (mirrors frontier play).
+  const sendFn = (typeof window !== 'undefined' && typeof window.__sidebarAgentSend === 'function')
+    ? window.__sidebarAgentSend
+    : function (url, body) {
+        return fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }).then(function (r) {
+          return r.json().then(function (j) {
+            if (!r.ok) {
+              const err = new Error((j && j.error) || ('HTTP ' + r.status));
+              err.status = r.status;
+              err.body = j;
+              throw err;
+            }
+            return j;
+          }).catch(function (e) {
+            if (e && e.status) throw e;
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return {};
+          });
+        });
+      };
+  return Promise.resolve(sendFn(req.url, req.body))
+    .then(function (res) {
+      if (typeof jLog === 'function') {
+        jLog('info', 'sidebar_agent_send', {
+          name: req.name,
+          status: (res && res.status) || 'sent',
+        });
+      }
+      // Clear draft for this agent after accept.
+      if (agentInspectInput) {
+        agentInspectInput.value = '';
+        if (req.name) sidebarDraftByAgent[req.name] = '';
+      }
+      // Optimistic owner bubble in inspect pane (wire history will re-sync).
+      if (typeof AgentTranscript !== 'undefined' && req.body && req.body.text) {
+        _agentInspectLines = (_agentInspectLines || []).concat([
+          { role: 'user', text: req.body.text },
+        ]);
+        if (typeof renderAgentInspect === 'function') {
+          renderAgentInspect({
+            title: selectedAgent,
+            empty: false,
+            error: '',
+            lines: (_agentInspectLines || []).map(function (l) {
+              return { role: l.role, text: l.text };
+            }),
+          });
+        }
+      }
+      return res;
+    })
+    .catch(function (err) {
+      if (typeof jLog === 'function') {
+        jLog('warn', 'sidebar_agent_send_failed', {
+          name: req.name,
+          err: String(err && err.message || err),
+        });
+      }
+      if (agentInspectBody) {
+        let errEl = agentInspectBody.querySelector('.ai-err.sidebar-send-err');
+        if (!errEl) {
+          errEl = document.createElement('div');
+          errEl.className = 'ai-err sidebar-send-err';
+          agentInspectBody.insertBefore(errEl, agentInspectBody.firstChild);
+        }
+        errEl.textContent = 'Send failed: ' + String(err && err.message || err);
+      }
+      return null;
+    })
+    .finally(function () {
+      _sidebarComposerSending = false;
+      syncSidebarSendEnabled();
+      if (agentInspectInput && typeof agentInspectInput.focus === 'function') {
+        try { agentInspectInput.focus(); } catch (_) { /* isolated */ }
+      }
+    });
+}
+
+if (agentInspectInput) {
+  agentInspectInput.addEventListener('input', function () {
+    if (selectedAgent) sidebarDraftByAgent[selectedAgent] = agentInspectInput.value;
+    syncSidebarSendEnabled();
+    // Compact auto-grow (sidebar cap).
+    agentInspectInput.style.height = 'auto';
+    const maxPx = Math.round(window.innerHeight * 0.22) || 120;
+    const next = Math.min(agentInspectInput.scrollHeight, maxPx);
+    agentInspectInput.style.height = next + 'px';
+    agentInspectInput.style.overflowY =
+      agentInspectInput.scrollHeight > maxPx + 1 ? 'auto' : 'hidden';
+  });
+  agentInspectInput.addEventListener('keydown', function (e) {
+    const act = (typeof AgentTranscript !== 'undefined' && AgentTranscript.classifySidebarComposerKey)
+      ? AgentTranscript.classifySidebarComposerKey(e)
+      : ((e.key === 'Enter' || e.code === 'Enter')
+        ? (e.shiftKey ? 'newline' : 'send')
+        : null);
+    if (act === 'send') {
+      e.preventDefault();
+      e.stopPropagation();
+      sendSidebarComposer();
+    }
+  });
+}
+if (agentInspectSend) {
+  agentInspectSend.addEventListener('mousedown', function (e) { e.preventDefault(); });
+  agentInspectSend.addEventListener('click', function (e) {
+    e.preventDefault();
+    sendSidebarComposer();
+  });
+}
+if (typeof syncSidebarComposer === 'function') syncSidebarComposer();
+
 const frontierRefresh = document.getElementById('frontier-refresh');
 if (frontierRefresh) frontierRefresh.onclick = function () {
   loadFrontier({ quiet: false });

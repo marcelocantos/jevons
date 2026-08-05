@@ -377,6 +377,17 @@
     return false;
   }
 
+  // 🎯T250: aside wire user bodies never become main transcript chunks.
+  function isAsideWireUserTextLocal(text) {
+    if (typeof AttentionThreads !== 'undefined' && AttentionThreads.isAsideWireUserText) {
+      return AttentionThreads.isAsideWireUserText(text);
+    }
+    const t = String(text == null ? '' : text);
+    if (/^\s*\[attention\s*:/i.test(t)) return true;
+    if (/^\s*\[target-aside\s*:/i.test(t)) return true;
+    return false;
+  }
+
   function isTerminalFrameLocal(m) {
     if (typeof ChatEvents !== 'undefined' && ChatEvents.isTerminalStop) {
       return ChatEvents.isTerminalStop(m);
@@ -396,6 +407,7 @@
   // / system chrome between turns must NOT glue distinct replies (owner
   // screenshot: pure [silent] + next visible across agent_note).
   // 🎯T238 / T245: silent bodies never become display chunks.
+  // 🎯T250: aside wire user bodies never become main display chunks.
   function coalesceTranscriptFrames(frames) {
     const out = [];
     // sid → open chunk ref already pushed to out (still accepting text).
@@ -451,6 +463,8 @@
         const text = extractUserText(m);
         if (!text) continue;
         sealAll();
+        // 🎯T250: attention/target-aside wires → sidebar only, not main.
+        if (isAsideWireUserTextLocal(text)) continue;
         out.push({ role: 'user', text: text, timestamp: ts });
         continue;
       }

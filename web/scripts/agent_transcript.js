@@ -77,6 +77,203 @@
     return null;
   }
 
+  // ── 🎯T252: auto-activate attention asides; sticky draft; next after send ──
+  //
+  // When an aside needs the owner's turn (assistant just finished / needs-owner),
+  // and the sidebar composer draft is empty, auto-select that aside in the
+  // Transcript view. Non-empty draft holds focus (no mid-compose steal). After
+  // send or clear draft, pick the next attention aside if any. Residual: empty
+  // attention queue never forces a switch.
+
+  function isAsidePurpose(purpose) {
+    const p = String(purpose == null ? '' : purpose).trim().toLowerCase();
+    return p === 'aside' || p === 'side' || p === 'side-chat' || p === 'file-target';
+  }
+
+  function isAsideAgent(agent) {
+    if (!agent) return false;
+    if (typeof agent === 'string') return isAsidePurpose(agent);
+    return isAsidePurpose(agent.purpose || agent.role);
+  }
+
+  /** True when sidebar draft has no real text (whitespace-only = empty). */
+  function sidebarDraftIsEmpty(draft) {
+    return !String(draft == null ? '' : draft).trim();
+  }
+
+  /**
+   * Last user|assistant role in inspect lines (skips status/other).
+   * Assistant last ⇒ owner's turn (needs attention).
+   */
+  function lastConversationalRole(lines) {
+    const arr = lines || [];
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const r = arr[i] && arr[i].role;
+      if (r === 'user' || r === 'assistant') return r;
+    }
+    return '';
+  }
+
+  /**
+   * Aside requires owner attention when tagged needs-owner / needsAttention, or
+   * when the last conversational role is assistant (user's turn).
+   * Work agents and overseer never qualify.
+   *
+   * @param {object} agent fleet row {name, purpose, needs_owner?, …}
+   * @param {{ lastRole?: string, lines?: Array, needsOwner?: boolean, purpose?: string }} [opts]
+   */
+  function asideRequiresAttention(agent, opts) {
+    opts = opts || {};
+    if (!agent || !agent.name) return false;
+    const purpose = agent.purpose || agent.role || opts.purpose;
+    if (!isAsidePurpose(purpose) && !isAsideAgent(opts.purpose)) return false;
+    if (isOverseer(agent.name, purpose)) return false;
+    if (opts.needsOwner === true) return true;
+    if (agent.needs_owner || agent.needsOwner || agent.needsAttention || agent.attention === true) {
+      return true;
+    }
+    const last = opts.lastRole != null
+      ? opts.lastRole
+      : lastConversationalRole(opts.lines);
+    return last === 'assistant';
+  }
+
+  /** Turn-busy phase heuristic for fleet rows (working progress). */
+  function isBusyPhase(agent) {
+    if (!agent) return false;
+    if (typeof agent.busy === 'boolean') return agent.busy;
+    const phase = String(agent.phase || '').toLowerCase();
+    if (phase === 'working') return true;
+    if (phase === 'idle' || phase === 'parked') return false;
+    const prog = String(agent.progress || agent.summary || '').toLowerCase().trim();
+    if (!prog) return false;
+    if (prog === 'working' || prog.indexOf('working') === 0) return true;
+    return false;
+  }
+
+  /**
+   * Names of asides that newly need attention between two fleet snapshots.
+   * busy→idle on purpose=aside, or explicit needs_owner flag rising.
+   */
+  function detectNewAttentionAsides(prevList, nextList) {
+    const prevBy = {};
+    (prevList || []).forEach(function (a) {
+      if (a && a.name) prevBy[a.name] = a;
+    });
+    const out = [];
+    (nextList || []).forEach(function (a) {
+      if (!a || !a.name || !isAsideAgent(a)) return;
+      if (isOverseer(a.name, a.purpose)) return;
+      const prev = prevBy[a.name];
+      const nowFlag = !!(a.needs_owner || a.needsOwner || a.needsAttention || a.attention === true);
+      const wasFlag = !!(prev && (prev.needs_owner || prev.needsOwner || prev.needsAttention || prev.attention === true));
+      if (nowFlag && !wasFlag) {
+        out.push(a.name);
+        return;
+      }
+      if (prev && isBusyPhase(prev) && !isBusyPhase(a)) {
+        out.push(a.name);
+      }
+    });
+    return out;
+  }
+
+  /** Immutable enqueue (dedupe, append). */
+  function enqueueAttention(queue, name) {
+    const q = (queue || []).slice();
+    const n = String(name || '');
+    if (!n) return q;
+    if (q.indexOf(n) >= 0) return q;
+    q.push(n);
+    return q;
+  }
+
+  /** Immutable dequeue by name. */
+  function dequeueAttention(queue, name) {
+    const n = String(name || '');
+    return (queue || []).filter(function (x) { return x !== n; });
+  }
+
+  /** Drop queue entries not present in the live agent name set. */
+  function pruneAttentionQueue(queue, agents) {
+    const live = {};
+    (agents || []).forEach(function (a) {
+      if (a && a.name) live[a.name] = true;
+    });
+    return (queue || []).filter(function (n) { return live[n]; });
+  }
+
+  /**
+   * pickAttentionAsideSelection(opts) → next selected name | current
+   *
+   * opts.attentionNames — ordered queue of asides needing owner
+   * opts.currentSelection — current selected agent (may be null)
+   * opts.draftEmpty — boolean; or opts.draft string
+   * opts.reason — 'new-attention' | 'after-send' | 'draft-cleared' | 'poll'
+   * opts.newName — preferred when reason=new-attention
+   *
+   * Residual: empty attention list → keep current (no forced switch).
+   * Sticky: non-empty draft → keep current (never auto-steal mid-compose).
+   */
+  function pickAttentionAsideSelection(opts) {
+    opts = opts || {};
+    const names = [];
+    (opts.attentionNames || []).forEach(function (n) {
+      if (!n) return;
+      if (!shouldOpenTranscript(n, 'aside')) return;
+      if (names.indexOf(n) < 0) names.push(String(n));
+    });
+    const cur = opts.currentSelection || null;
+
+    let empty;
+    if (typeof opts.draftEmpty === 'boolean') {
+      empty = opts.draftEmpty;
+    } else if (opts.draft != null) {
+      empty = sidebarDraftIsEmpty(opts.draft);
+    } else {
+      empty = true;
+    }
+
+    if (!names.length) return cur;
+    if (!empty) return cur;
+
+    const reason = opts.reason || 'poll';
+
+    if (reason === 'after-send' || reason === 'draft-cleared') {
+      // Caller should dequeue the just-served aside before after-send.
+      if (cur) {
+        const idx = names.indexOf(cur);
+        if (idx >= 0) {
+          if (reason === 'after-send' && idx + 1 < names.length) {
+            return names[idx + 1];
+          }
+          return cur;
+        }
+      }
+      return names[0];
+    }
+
+    if (reason === 'new-attention') {
+      const neu = opts.newName ? String(opts.newName) : '';
+      if (neu && names.indexOf(neu) >= 0) return neu;
+      return names[names.length - 1];
+    }
+
+    // poll: stay if current still needs attention; else first in queue
+    if (cur && names.indexOf(cur) >= 0) return cur;
+    return names[0];
+  }
+
+  /**
+   * Live inspect assistant frame with terminal stop_reason ⇒ owner attention.
+   * Pure — used when multiplex is subscribed to an aside.
+   */
+  function liveFrameSignalsOwnerAttention(event) {
+    if (!event || event.type !== 'assistant') return false;
+    const sr = inspectEventStopReason(event);
+    return !!(sr && INSPECT_TERMINAL_STOPS[sr]);
+  }
+
   // turnsToLines(turns) → [{role, text}] for pane render (filters empty).
   function turnsToLines(turns) {
     const out = [];
@@ -560,12 +757,104 @@
     return paneModel(frame.name, frame, frame.error && frame.empty ? null : (frame.error ? new Error(frame.error) : null));
   }
 
+  // ── 🎯T251: sidebar Transcript composer (independent of main #input) ──
+
+  /**
+   * True when the RHS Transcript tab should show a dedicated message input + send.
+   * Requires transcript tab active and a selectable fleet participant (not overseer).
+   * @param {{ tab?: string, selectedAgent?: string|null, purpose?: string }} opts
+   */
+  function sidebarComposerVisible(opts) {
+    const o = opts || {};
+    const tab = String(o.tab || '');
+    if (tab !== 'transcript') return false;
+    const name = o.selectedAgent == null ? '' : String(o.selectedAgent).trim();
+    if (!name) return false;
+    return shouldOpenTranscript(name, o.purpose);
+  }
+
+  /**
+   * True when sidebar draft is empty/whitespace-only (🎯T252 attention focus).
+   * @param {string} text
+   */
+  function isSidebarDraftEmpty(text) {
+    return !String(text == null ? '' : text).trim();
+  }
+
+  /**
+   * Product HTTP path for delivering to a named fleet agent/aside (same as T182).
+   * @param {string} name
+   */
+  function agentSendPath(name) {
+    const n = String(name || '').trim();
+    if (!n) return '';
+    return '/api/agents/' + encodeURIComponent(n) + '/send';
+  }
+
+  /**
+   * Build the sidebar send request for the selected transcript participant.
+   * Returns { ok:true, url, method, body:{text}, name } or { ok:false, reason }.
+   * Does not touch the main chat wire / overseer composer.
+   * @param {string|null|undefined} selectedAgent
+   * @param {string} text
+   * @param {{ purpose?: string }} [opts]
+   */
+  function sidebarSendRequest(selectedAgent, text, opts) {
+    const name = selectedAgent == null ? '' : String(selectedAgent).trim();
+    if (!name) {
+      return { ok: false, reason: 'no-selection' };
+    }
+    if (!shouldOpenTranscript(name, opts && opts.purpose)) {
+      return { ok: false, reason: 'overseer-main-only' };
+    }
+    const body = String(text == null ? '' : text).trim();
+    if (!body) {
+      return { ok: false, reason: 'empty' };
+    }
+    const url = agentSendPath(name);
+    if (!url) {
+      return { ok: false, reason: 'no-selection' };
+    }
+    return {
+      ok: true,
+      name: name,
+      url: url,
+      method: 'POST',
+      body: { text: body },
+    };
+  }
+
+  /**
+   * Classify Enter chords for the sidebar composer (narrow; main stays on ComposerKeys).
+   * Enter → send; Shift+Enter → newline; Ctrl/Cmd+Enter → send (no interject path here).
+   * @returns {'send'|'newline'|null}
+   */
+  function classifySidebarComposerKey(e) {
+    if (!e || (e.key !== 'Enter' && e.code !== 'Enter')) return null;
+    if (e.shiftKey) return 'newline';
+    if (e.isComposing || e.keyCode === 229) return null;
+    return 'send';
+  }
+
   return {
     isOverseer: isOverseer,
     shouldOpenTranscript: shouldOpenTranscript,
     nextSelection: nextSelection,
     detectNewAsides: detectNewAsides,
     pickAutoSelect: pickAutoSelect,
+    // 🎯T252 attention auto-activate + sticky draft
+    isAsidePurpose: isAsidePurpose,
+    isAsideAgent: isAsideAgent,
+    sidebarDraftIsEmpty: sidebarDraftIsEmpty,
+    lastConversationalRole: lastConversationalRole,
+    asideRequiresAttention: asideRequiresAttention,
+    isBusyPhase: isBusyPhase,
+    detectNewAttentionAsides: detectNewAttentionAsides,
+    enqueueAttention: enqueueAttention,
+    dequeueAttention: dequeueAttention,
+    pruneAttentionQueue: pruneAttentionQueue,
+    pickAttentionAsideSelection: pickAttentionAsideSelection,
+    liveFrameSignalsOwnerAttention: liveFrameSignalsOwnerAttention,
     turnsToLines: turnsToLines,
     paneModel: paneModel,
     escapeHtml: escapeHtml,
@@ -586,5 +875,10 @@
     isAgentTranscriptFrame: isAgentTranscriptFrame,
     applyInspectLiveFrame: applyInspectLiveFrame,
     paneModelFromWire: paneModelFromWire,
+    sidebarComposerVisible: sidebarComposerVisible,
+    isSidebarDraftEmpty: isSidebarDraftEmpty,
+    agentSendPath: agentSendPath,
+    sidebarSendRequest: sidebarSendRequest,
+    classifySidebarComposerKey: classifySidebarComposerKey,
   };
 }));
