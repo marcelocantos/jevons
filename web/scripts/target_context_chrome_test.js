@@ -99,6 +99,42 @@ test('T273 formatSpeakerHTML is bold-purple span only for non-overseer', functio
   assert.strictEqual(TCC.formatSpeakerHTML({ product: 'jevons' }), '');
 });
 
+// ── 🎯T273 hermetic: pure overseer speaker must not stamp in painted DOM ──
+// Fails on b81267d residual: product leaf "jevons" painted as ctx-repo head.
+test('T273 pure overseer message: no speaker token; context heading kept', function () {
+  const LT = TCC.SPEAKER_LT;
+  const GT = TCC.SPEAKER_GT;
+  // (a) Pure overseer product + PO context — no 〈jevons〉 / bare "jevons" stamp.
+  const withPo = TCC.chromeModel({
+    force: true,
+    targetId: 'T273',
+    repo: 'marcelocantos/jevons',
+    product: 'jevons',
+    po: 'jevons-po',
+  });
+  assert.strictEqual(withPo.show, true, 'context heading must stay');
+  assert.ok(withPo.innerHTML.indexOf('ctx-speaker') < 0, 'no ctx-speaker for pure overseer');
+  assert.ok(withPo.innerHTML.indexOf(LT + 'jevons' + GT) < 0, 'no 〈jevons〉 speaker token');
+  assert.ok(withPo.innerHTML.indexOf(LT + 'overseer' + GT) < 0, 'no 〈overseer〉');
+  assert.notStrictEqual(withPo.label, 'jevons', 'must not paint pure product leaf as heading');
+  assert.notStrictEqual(withPo.label, LT + 'jevons' + GT, 'must not paint 〈jevons〉 label');
+  assert.ok(withPo.innerHTML.indexOf('jevons-po') >= 0, 'owning PO context kept');
+  assert.ok(withPo.innerHTML.indexOf('ctx-repo') >= 0, 'context chrome kept');
+  assert.ok(withPo.innerHTML.indexOf('ctx-po') >= 0, 'PO span kept');
+  assert.strictEqual(withPo.label, 'marcelocantos/jevons · jevons-po');
+  // Product-only (no PO): still no bare "jevons" speaker stamp; full repo context.
+  const alone = TCC.chromeModel({
+    force: true,
+    repo: 'marcelocantos/jevons',
+    product: 'jevons',
+  });
+  assert.strictEqual(alone.show, true, 'repo context must still paint');
+  assert.strictEqual(alone.label, 'marcelocantos/jevons');
+  assert.ok(alone.innerHTML.indexOf('ctx-speaker') < 0);
+  assert.ok(alone.innerHTML.indexOf(LT + 'jevons' + GT) < 0);
+  assert.notStrictEqual(alone.label, 'jevons');
+});
+
 // ── 🎯T273 hermetic 2: jevons-po context still shows context chrome ──
 test('T273 jevons-po context fixture still shows context chrome', function () {
   const agents = [
@@ -126,10 +162,12 @@ test('T273 jevons-po context fixture still shows context chrome', function () {
   assert.strictEqual(model.po, 'jevons-po');
   // Context chrome MUST paint — never blanked because PO is jevons-po.
   assert.strictEqual(model.show, true, 'jevons-po context must show chrome');
-  assert.strictEqual(model.label, 'jevons · jevons-po');
+  // Repo head (not bare product "jevons") · owning PO.
+  assert.strictEqual(model.label, 'marcelocantos/jevons · jevons-po');
   assert.ok(model.innerHTML.indexOf('ctx-repo') >= 0, 'ctx-repo present');
   assert.ok(model.innerHTML.indexOf('jevons-po') >= 0, 'owning PO in context');
   assert.ok(model.innerHTML.indexOf('ctx-po') >= 0, 'ctx-po span present');
+  assert.ok(model.innerHTML.indexOf('ctx-speaker') < 0, 'no speaker token for overseer product');
   assert.ok(model.title.indexOf('T266') >= 0, 'target in title');
 });
 
@@ -219,7 +257,7 @@ test('ledger fallback when no engaged worker — jevons-po context still shows',
   });
   assert.strictEqual(ctx.repo, 'marcelocantos/jevons');
   assert.strictEqual(ctx.show, true, 'context-paint gates on ask+repo only');
-  assert.strictEqual(ctx.label, 'jevons · jevons-po');
+  assert.strictEqual(ctx.label, 'marcelocantos/jevons · jevons-po');
   const model = TCC.chromeModel({
     text: 'Decision packet for 🎯T262.4 — please confirm owner accept.',
     ledger: '/Users/m/work/github.com/marcelocantos/jevons/bullseye.yaml',
@@ -232,6 +270,7 @@ test('ledger fallback when no engaged worker — jevons-po context still shows',
   assert.strictEqual(model.show, true);
   assert.ok(model.innerHTML.indexOf('jevons-po') >= 0);
   assert.ok(model.innerHTML.indexOf('ctx-repo') >= 0);
+  assert.ok(model.innerHTML.indexOf('ctx-speaker') < 0);
 });
 
 test('no chrome without repo resolution', function () {
@@ -263,21 +302,30 @@ test('force + jevons-po keeps context chrome (not blanked)', function () {
     po: 'jevons-po',
   });
   assert.strictEqual(model.show, true, 'must not blank for jevons-po');
-  assert.strictEqual(model.label, 'jevons · jevons-po');
+  assert.strictEqual(model.label, 'marcelocantos/jevons · jevons-po');
   assert.ok(model.innerHTML.indexOf('ctx-repo') >= 0);
   assert.ok(model.innerHTML.indexOf('jevons-po') >= 0);
   assert.ok(model.innerHTML.indexOf('ctx-po') >= 0);
+  assert.ok(model.innerHTML.indexOf('ctx-speaker') < 0);
 });
 
-test('formatContextHTML paints product · po including jevons-po', function () {
+test('formatContextHTML prefers repo head when product is pure overseer', function () {
   const html = TCC.formatContextHTML({ product: 'jevons', po: 'jevons-po', repo: 'marcelocantos/jevons' });
   assert.ok(html.indexOf('ctx-repo') >= 0);
   assert.ok(html.indexOf('ctx-po') >= 0);
   assert.ok(html.indexOf('jevons-po') >= 0);
   assert.ok(html.indexOf('ctx-sep') >= 0);
+  assert.ok(html.indexOf('marcelocantos/jevons') >= 0, 'repo head not bare jevons');
+  // Bare product leaf alone is speaker-stamp residual — not the painted head.
+  assert.ok(!/^<span class="ctx-repo">jevons<\/span>/.test(html));
   assert.strictEqual(
-    TCC.formatChromeLabel({ product: 'jevons', po: 'jevons-po' }),
-    'jevons · jevons-po'
+    TCC.formatChromeLabel({ product: 'jevons', po: 'jevons-po', repo: 'marcelocantos/jevons' }),
+    'marcelocantos/jevons · jevons-po'
+  );
+  // Non-overseer product still uses product leaf as head.
+  assert.strictEqual(
+    TCC.formatChromeLabel({ product: 'bullseye', po: 'bullseye-po', repo: 'marcelocantos/bullseye' }),
+    'bullseye · bullseye-po'
   );
 });
 

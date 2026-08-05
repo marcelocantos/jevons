@@ -93,12 +93,28 @@
   }
 
   /**
-   * 🎯T266 context-paint: product/repo + optional owning PO.
+   * Context head (repo/product). Never use pure overseer/jevons product leaf
+   * as the painted head — that stamps a speaker-looking "jevons" token
+   * (b81267d residual). Prefer full repo when product is omitted speaker id.
+   */
+  function contextHead(ctx) {
+    ctx = ctx && typeof ctx === 'object' ? ctx : {};
+    var product = collapse(ctx.product);
+    var repo = collapse(ctx.repo);
+    if (product && isOmittedSpeakerIdentity(product)) {
+      return repo || '';
+    }
+    return product || repo;
+  }
+
+  /**
+   * 🎯T266 context-paint: repo/product + optional owning PO.
    * Always includes jevons-po when present — never blanked by speaker-omit.
+   * Pure overseer product leaf is never the painted head (speaker-omit).
    */
   function formatChromeLabel(ctx) {
     ctx = ctx && typeof ctx === 'object' ? ctx : {};
-    var head = collapse(ctx.product) || collapse(ctx.repo);
+    var head = contextHead(ctx);
     if (!head) return '';
     var po = collapse(ctx.po);
     return po ? head + ' · ' + po : head;
@@ -107,7 +123,7 @@
   /** Context chrome HTML (repo/PO spans). Independent of speaker-omit. */
   function formatContextHTML(ctx) {
     ctx = ctx && typeof ctx === 'object' ? ctx : {};
-    var head = collapse(ctx.product) || collapse(ctx.repo);
+    var head = contextHead(ctx);
     if (!head) return '';
     var po = collapse(ctx.po);
     var html = '<span class="ctx-repo">' + escHtml(head) + '</span>';
@@ -357,9 +373,9 @@
   /**
    * Painted tab model.
    *  - Context path (show): ask + resolved repo — keeps jevons-po context.
+   *  - Pure overseer/jevons: omit speaker token only; never stamp product leaf
+   *    "jevons" as the heading (prefer full repo · PO context).
    *  - Non-overseer other-product speaker: 〈agent〉 bold purple, no ·.
-   *  - Jevons product / pure overseer product context: T266 context chrome
-   *    (product · owning-PO), never blanked because PO is jevons-po.
    *  - Pure speaker helpers still omit bare Jevons/overseer (formatSpeaker*).
    */
   function chromeModel(opts) {
@@ -383,6 +399,8 @@
     var speaker = collapse(ctx.speaker) || speakerIdentity({
       repo: ctx.repo, po: ctx.po, product: product, agent: ctx.speaker,
     });
+    // Never speaker-paint pure overseer/jevons — even if product mis-resolves.
+    if (isOmittedSpeakerIdentity(speaker)) speaker = '';
     var useSpeakerPaint = !!(speaker && !isJevonsProduct(product) &&
       !isOmittedSpeakerIdentity(speaker));
 
@@ -396,12 +414,22 @@
       inner = formatSpeakerHTML({
         repo: ctx.repo, po: ctx.po, product: product, agent: speaker,
       });
+      // Defense: never emit pure overseer/jevons speaker token.
+      if (inner && (isOmittedSpeakerIdentity(speaker) ||
+          /〈\s*jevons\s*〉/i.test(inner) ||
+          inner.indexOf(SPEAKER_LT + 'jevons' + SPEAKER_GT) >= 0 ||
+          inner.indexOf(SPEAKER_LT + 'overseer' + SPEAKER_GT) >= 0)) {
+        inner = '';
+        label = '';
+      }
       if (inner && (inner.indexOf('\u00b7') >= 0 || inner.indexOf(' · ') >= 0)) {
         inner = '';
         label = '';
       }
-    } else {
-      // Context chrome (repo/product · owning PO) — includes jevons-po.
+    }
+    if (!inner) {
+      // Context chrome (repo · owning PO) — includes jevons-po; never blank
+      // the whole heading because speaker is pure overseer/Jevons.
       label = formatChromeLabel({
         repo: ctx.repo, po: ctx.po, product: product, targetId: ctx.targetId,
       });
@@ -438,6 +466,7 @@
     formatSpeakerLabel: formatSpeakerLabel,
     formatSpeakerHTML: formatSpeakerHTML,
     formatContextHTML: formatContextHTML,
+    contextHead: contextHead,
     findAgentsByTargetID: findAgentsByTargetID,
     resolvePOForAgent: resolvePOForAgent,
     extractRepoHintsFromText: extractRepoHintsFromText,
