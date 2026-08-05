@@ -944,6 +944,38 @@ body.rhs-resizing-row { cursor: row-resize; }
 /* 🎯T115: aside rows — 💡 title, no path column (description must not bleed into path area) */
 .agent-node.agent-aside .agent-name { color: var(--amber, #d4a017); font-weight: 500; }
 .agent-node.agent-aside .agent-dir { display: none; }
+/* 🎯T269: hover/focus-only dismiss × on the right of purpose=aside rows */
+.agent-node .agent-dismiss {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+.agent-node.agent-aside:hover .agent-dismiss,
+.agent-node.agent-aside:focus-within .agent-dismiss,
+.agent-node .agent-dismiss:focus {
+  opacity: 1;
+}
+.agent-node .agent-dismiss:hover,
+.agent-node .agent-dismiss:focus {
+  background: var(--surface-raised);
+  color: var(--text);
+  outline: none;
+}
+.agent-node .agent-dismiss:focus-visible {
+  outline: 1px solid var(--accent, #6b9fff);
+  outline-offset: 1px;
+}
 .attn-chip.attn-aside .attn-title { color: var(--amber, #d4a017); }
 .agent-children { padding-left: 14px; border-left: 1px solid var(--border); margin-left: 10px; }
 
@@ -4377,6 +4409,7 @@ function asideWireLinesFor(name) {
 }
 
 // Merge main-wire aside turns into the current inspect model (process empty OK).
+// 🎯T265: preserve working (and other microcosm fields) — must not drop in-flight chrome.
 function mergeModelWithAsideWire(model, name) {
   const wire = asideWireLinesFor(name || selectedAgent);
   if (!wire.length || typeof AttentionThreads === 'undefined' ||
@@ -4384,12 +4417,16 @@ function mergeModelWithAsideWire(model, name) {
     return model;
   }
   const lines = AttentionThreads.mergeInspectLinesWithAsideWire(model.lines || [], wire);
+  if (typeof AgentTranscript !== 'undefined' && AgentTranscript.mergePaneModelWithLines) {
+    return AgentTranscript.mergePaneModelWithLines(model, lines);
+  }
   return {
     title: model.title,
     empty: lines.length === 0,
     error: model.error || '',
     lines: lines,
     sessionId: model.sessionId || '',
+    working: !!(model && model.working),
   };
 }
 
@@ -4592,10 +4629,26 @@ function renderTree(byParent, parent, container, agentsByName) {
       const cls = secKind === 'path' ? 'agent-dir' : ('agent-dir agent-' + secKind);
       html += '<span class="'+cls+'">'+secHtml+'</span>';
     }
+    // 🎯T269: hover-gated dismiss × only on purpose=aside rows (not work/PO).
+    if (row.showDismiss && (row.dismissHtml || (typeof FleetRow !== 'undefined' && FleetRow.asideDismissButtonHtml))) {
+      html += row.dismissHtml || FleetRow.asideDismissButtonHtml(a.name);
+    }
     node.innerHTML = html;
     // Virtual portfolio nodes are not selectable agents (display chrome only).
     if (!isPortfolio) {
       node.onclick = () => selectAgent(a.name);
+    }
+    // 🎯T269: × → dismissFleetAside (DELETE /api/asides); do not select row.
+    if (row.showDismiss) {
+      const dismissBtn = node.querySelector('.agent-dismiss');
+      if (dismissBtn) {
+        dismissBtn.onclick = function (e) {
+          if (e) { e.preventDefault(); e.stopPropagation(); }
+          if (typeof dismissFleetAside === 'function') {
+            dismissFleetAside(a.name);
+          }
+        };
+      }
     }
     container.appendChild(node);
     if (byParent[a.name] && byParent[a.name].length) {
@@ -6916,14 +6969,22 @@ function renderAgentInspect(model) {
   if (typeof decorateBodyLinks === 'function') {
     decorateBodyLinks(agentInspectBody); // 🎯T151 belt-and-suspenders
   }
-  // 🎯T263: working/activity chrome while first turn in flight (aside open).
+  // 🎯T263/T265: working/activity chrome while turn open (aside/agent microcosm).
   if (wantWorking) {
     const wi = document.createElement('div');
     wi.className = 'working-indicator';
     wi.setAttribute('data-aside-working', '1');
-    wi.innerHTML = (typeof workingLabelHTML === 'function')
-      ? workingLabelHTML()
-      : '<span class="work-dots" aria-hidden="true"><span></span><span></span><span></span></span> Working…';
+    const dots = '<span class="work-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
+    // Prefer agent-named inspect label (not overseer "Jevons is working").
+    if (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectWorkingLabel) {
+      wi.innerHTML = dots + ' ' + AgentTranscript.escapeHtml(AgentTranscript.inspectWorkingLabel(
+        model.title || selectedAgent || '',
+      ));
+    } else if (typeof workingLabelHTML === 'function') {
+      wi.innerHTML = workingLabelHTML();
+    } else {
+      wi.innerHTML = dots + ' Working…';
+    }
     agentInspectBody.appendChild(wi);
   }
   _agentInspectFp = fp;
@@ -7498,20 +7559,37 @@ function sendSidebarComposer() {
         agentInspectInput.value = '';
         if (req.name) sidebarDraftByAgent[req.name] = '';
       }
-      // Optimistic owner bubble in inspect pane (wire history will re-sync).
-      if (typeof AgentTranscript !== 'undefined' && req.body && req.body.text) {
-        _agentInspectLines = (_agentInspectLines || []).concat([
-          { role: 'user', text: req.body.text },
-        ]);
-        if (typeof renderAgentInspect === 'function') {
-          renderAgentInspect({
-            title: selectedAgent,
-            empty: false,
-            error: '',
-            lines: (_agentInspectLines || []).map(function (l) {
-              return { role: l.role, text: l.text };
-            }),
-          });
+      // 🎯T265: optimistic owner bubble + working chrome (main-chat microcosm).
+      if (req.body && req.body.text) {
+        if (typeof AgentTranscript !== 'undefined' && AgentTranscript.afterSidebarSendOptimistic) {
+          const opt = AgentTranscript.afterSidebarSendOptimistic(
+            _agentInspectLines,
+            req.body.text,
+            { title: selectedAgent },
+          );
+          _agentInspectLines = opt.lines;
+          _agentInspectWorking = true;
+          _agentInspectFp = '';
+          if (typeof renderAgentInspect === 'function') {
+            renderAgentInspect(opt.model);
+          }
+        } else {
+          _agentInspectLines = (_agentInspectLines || []).concat([
+            { role: 'user', text: req.body.text },
+          ]);
+          _agentInspectWorking = true;
+          _agentInspectFp = '';
+          if (typeof renderAgentInspect === 'function') {
+            renderAgentInspect({
+              title: selectedAgent,
+              empty: false,
+              error: '',
+              lines: (_agentInspectLines || []).map(function (l) {
+                return { role: l.role, text: l.text };
+              }),
+              working: true,
+            });
+          }
         }
       }
       // 🎯T252: post-send empty draft → next attention aside if any.

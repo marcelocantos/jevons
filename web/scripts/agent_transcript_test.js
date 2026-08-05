@@ -1074,6 +1074,104 @@ test('T251 index.html wires sidebar composer DOM + sendSidebarComposer path', fu
   assert.ok(html.indexOf('🎯T251') >= 0 || html.indexOf('T251') >= 0, 'T251 marker');
 });
 
+// ── 🎯T265: aside/agent Transcript microcosm of main chat ───────────────
+
+test('T265 mergePaneModelWithLines preserves working chrome', function () {
+  const merged = AT.mergePaneModelWithLines(
+    {
+      title: 'att-x',
+      empty: true,
+      error: '',
+      lines: [],
+      working: true,
+      sessionId: 's1',
+    },
+    [{ role: 'user', text: 'hello' }],
+  );
+  assert.strictEqual(merged.working, true, 'working must survive wire merge');
+  assert.strictEqual(merged.empty, false);
+  assert.strictEqual(merged.title, 'att-x');
+  assert.strictEqual(merged.sessionId, 's1');
+  assert.strictEqual(merged.lines.length, 1);
+  // Dropping working was the T205 residual that killed in-flight chrome.
+  const dropped = AT.mergePaneModelWithLines({ title: 'a', working: false }, []);
+  assert.strictEqual(dropped.working, false);
+  assert.strictEqual(dropped.empty, true);
+});
+
+test('T265 afterSidebarSendOptimistic appends user + opens working', function () {
+  const r = AT.afterSidebarSendOptimistic(
+    [{ role: 'assistant', text: 'hi' }],
+    '  reply please  ',
+    { title: 'att-billing' },
+  );
+  assert.strictEqual(r.model.working, true);
+  assert.strictEqual(r.model.title, 'att-billing');
+  assert.strictEqual(r.model.empty, false);
+  assert.strictEqual(r.lines.length, 2);
+  assert.strictEqual(r.lines[1].role, 'user');
+  assert.strictEqual(r.lines[1].text, 'reply please');
+  // Dedupe consecutive identical owner send.
+  const r2 = AT.afterSidebarSendOptimistic(r.lines, 'reply please', { title: 'att-billing' });
+  assert.strictEqual(r2.lines.length, 2, 'no double user bubble');
+  assert.strictEqual(r2.model.working, true);
+});
+
+test('T265 inspectWorkingLabel uses agent name not Jevons', function () {
+  assert.strictEqual(AT.inspectWorkingLabel('att-msft'), 'att-msft is working');
+  assert.strictEqual(AT.inspectWorkingLabel('jevons'), 'Working');
+  assert.ok(AT.inspectWorkingLabel('a'.repeat(40)).indexOf('…') >= 0);
+  assert.strictEqual(AT.inspectWorkingLabel(''), 'Working');
+});
+
+test('T265 inspectDisplayUserText strips attention wire headers', function () {
+  const body = AT.inspectDisplayUserText(
+    '[attention:att-x|billing nit]\nbilling body',
+  );
+  assert.strictEqual(body, 'billing body');
+  assert.ok(body.indexOf('[attention:') < 0);
+  assert.strictEqual(AT.inspectDisplayUserText('plain owner'), 'plain owner');
+  const tgt = AT.inspectDisplayUserText(
+    '[target-aside: att-y | title]\nfile this\n\n(Ceremony: bullseye)',
+  );
+  assert.ok(tgt.indexOf('file this') >= 0);
+  assert.ok(tgt.indexOf('[target-aside') < 0);
+  assert.ok(tgt.indexOf('Ceremony') < 0);
+});
+
+test('T265 inspect pane is conversation-only (no nested fleet/frontier)', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(AT.inspectPaneIsConversationOnly(html),
+    'agent-inspect must be conversation surface only');
+  // Negative fixture: nested agents host fails oracle.
+  assert.strictEqual(
+    AT.inspectPaneIsConversationOnly(
+      '<div id="agent-inspect"><div id="agents"></div>' +
+      '<div id="agent-inspect-body"></div><div id="agent-inspect-composer"></div></div>',
+    ),
+    false,
+  );
+});
+
+test('T265 index.html: merge preserves working; send opens working chrome', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('mergePaneModelWithLines') >= 0,
+    'mergeModelWithAsideWire must use mergePaneModelWithLines');
+  assert.ok(html.indexOf('afterSidebarSendOptimistic') >= 0,
+    'sendSidebarComposer must use afterSidebarSendOptimistic');
+  assert.ok(html.indexOf('inspectWorkingLabel') >= 0,
+    'inspect working chrome uses inspectWorkingLabel');
+  assert.ok(/working:\s*!!\(model\s*&&\s*model\.working\)/.test(html) ||
+    html.indexOf('mergePaneModelWithLines') >= 0,
+    'fallback path still preserves working');
+  // Microcosm markers present (no recursive shell in inspect paint path).
+  const renderFn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
+  assert.ok(renderFn, 'renderAgentInspect present');
+  assert.ok(renderFn[0].indexOf('id="agents"') < 0, 'render does not inject fleet tree');
+  assert.ok(renderFn[0].indexOf('frontier-table') < 0, 'render does not inject frontier');
+  assert.ok(html.indexOf('🎯T265') >= 0 || html.indexOf('T265') >= 0, 'T265 marker');
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);

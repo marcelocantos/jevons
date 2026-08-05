@@ -868,6 +868,105 @@
     return 'send';
   }
 
+  // ── 🎯T265: microcosm conversation surface (preserve working, send chrome) ──
+
+  /**
+   * Merge inspect pane model after wire overlay without dropping microcosm fields.
+   * T205 residual: rebuilds that only copy title/lines/error drop `working`,
+   * so in-flight chrome vanishes after the first live frame / wire merge.
+   */
+  function mergePaneModelWithLines(model, lines) {
+    const m = model && typeof model === 'object' ? model : {};
+    const nextLines = Array.isArray(lines) ? lines : [];
+    return {
+      title: m.title != null ? m.title : '',
+      empty: nextLines.length === 0,
+      error: m.error || '',
+      lines: nextLines,
+      sessionId: m.sessionId || m.session_id || '',
+      working: !!m.working,
+    };
+  }
+
+  /** Owner-facing working label for RHS inspect (not overseer "Jevons is working"). */
+  function inspectWorkingLabel(agentName) {
+    const n = String(agentName == null ? '' : agentName).trim();
+    if (!n || isOverseer(n)) return 'Working';
+    const shown = n.length > 28 ? n.slice(0, 25) + '…' : n;
+    return shown + ' is working';
+  }
+
+  /**
+   * After successful sidebar send: optimistic owner turn + open working chrome.
+   * Mirrors main chat send → bubble + working (T251/T265).
+   */
+  function afterSidebarSendOptimistic(lines, text, opts) {
+    opts = opts || {};
+    const body = String(text == null ? '' : text).trim();
+    const next = (lines || []).map(function (l) {
+      return l ? { role: l.role, text: l.text } : l;
+    });
+    if (body) {
+      const last = next[next.length - 1];
+      if (!(last && last.role === 'user' && last.text === body)) {
+        next.push({ role: 'user', text: body });
+      }
+    }
+    return {
+      lines: next,
+      model: {
+        title: opts.title != null ? opts.title : '',
+        empty: next.length === 0,
+        error: '',
+        lines: next,
+        working: true,
+      },
+    };
+  }
+
+  /**
+   * Display text for inspect user line: strip raw [attention:]/[target-aside:] headers.
+   */
+  function inspectDisplayUserText(text, deps) {
+    const raw = text == null ? '' : String(text);
+    if (!raw) return '';
+    deps = deps || {};
+    if (typeof deps.parseAsideWireUserText === 'function') {
+      const p = deps.parseAsideWireUserText(raw);
+      if (p && (p.displayText || p.body || p.title)) {
+        return String(p.displayText || p.body || p.title || '').trim() || raw;
+      }
+    }
+    const stripped = raw.replace(
+      /^\s*\[(?:attention|target-aside)\s*:[^\]]*\]\s*(?:\r?\n)?/i,
+      '',
+    );
+    if (stripped !== raw) {
+      const body = stripped.replace(/\n\n\(Ceremony:[\s\S]*$/i, '').trim();
+      return body || raw;
+    }
+    return raw;
+  }
+
+  /**
+   * Structural oracle: inspect pane is conversation-only (no nested fleet/frontier).
+   */
+  function inspectPaneIsConversationOnly(html) {
+    const s = String(html || '');
+    if (s.indexOf('agent-inspect-body') < 0) return false;
+    if (s.indexOf('agent-inspect-composer') < 0) return false;
+    const start = s.indexOf('id="agent-inspect"');
+    if (start < 0) return false;
+    const window = s.slice(start, start + 3500);
+    if (/id="agents"/i.test(window) && window.indexOf('agent-inspect-body') > window.indexOf('id="agents"')) {
+      return false;
+    }
+    if (/id="frontier-body"/i.test(window) || /id="frontier-table"/i.test(window)) {
+      return false;
+    }
+    return true;
+  }
+
   return {
     isOverseer: isOverseer,
     shouldOpenTranscript: shouldOpenTranscript,
@@ -914,5 +1013,11 @@
     createAsideRequestBody: createAsideRequestBody,
     freeformAsideCreateOpts: freeformAsideCreateOpts,
     classifySidebarComposerKey: classifySidebarComposerKey,
+    // 🎯T265 microcosm
+    mergePaneModelWithLines: mergePaneModelWithLines,
+    inspectWorkingLabel: inspectWorkingLabel,
+    afterSidebarSendOptimistic: afterSidebarSendOptimistic,
+    inspectDisplayUserText: inspectDisplayUserText,
+    inspectPaneIsConversationOnly: inspectPaneIsConversationOnly,
   };
 }));
