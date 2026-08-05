@@ -1141,6 +1141,110 @@
     return base + sep + 'cwd=' + encodeURIComponent(c);
   }
 
+  // ── 🎯T267: target-ask → owning PO select + Frontier row highlight ──────
+  // Coordinates with T266 TargetContextChrome when present. Pure helpers stay
+  // hermetic without requiring the chrome module.
+
+  function extractTargetIDs(text) {
+    var s = String(text == null ? '' : text);
+    var out = [];
+    var seen = {};
+    var re = /🎯\s*(T[0-9]+(?:\.[0-9]+)*)/g;
+    var m;
+    while ((m = re.exec(s)) !== null) {
+      var id = normalizeTargetID(m[1]);
+      if (!id || seen[id]) continue;
+      seen[id] = true;
+      out.push(id);
+    }
+    return out;
+  }
+
+  // detectTargetAsk(text) → { targetId, po } | null
+  // Prefer __TARGET_ASK__:Tn[|@po]; also needs-owner / decision-packet prose.
+  function detectTargetAsk(text) {
+    var s = String(text == null ? '' : text);
+    if (!s) return null;
+    var m = s.match(
+      /__TARGET_ASK__\s*:\s*(T[0-9]+(?:\.[0-9]+)*)(?:\s*[|@]\s*([A-Za-z0-9_.\-]+))?/i
+    );
+    if (m) {
+      return {
+        targetId: normalizeTargetID(m[1]),
+        po: m[2] ? String(m[2]).trim() : '',
+      };
+    }
+    var ids = extractTargetIDs(s);
+    if (!ids.length) return null;
+    var askish = /needs[- ]owner|decision\s*packet|owner\s+decision|please\s+(decide|choose|confirm|accept)|needs\s+your\s+(decision|input|call)|awaiting\s+owner|owner\s+call|owner\s+ask/i.test(s);
+    if (!askish) return null;
+    return { targetId: ids[0], po: '' };
+  }
+
+  // resolveOwningPOForTarget — preferredPO → engaged target_id → play-PO walk → default.
+  function resolveOwningPOForTarget(opts) {
+    var o = opts || {};
+    var preferred = o.preferredPO != null ? String(o.preferredPO).trim() : '';
+    if (!preferred && o.po != null) preferred = String(o.po).trim();
+    if (preferred && isProductOwnerName(preferred)) return preferred;
+    if (preferred && preferred.indexOf('-po') > 0) return preferred;
+
+    var agents = Array.isArray(o.agents) ? o.agents : [];
+    var tid = normalizeTargetID(o.targetId != null ? o.targetId : o.id);
+    if (tid) {
+      for (var i = 0; i < agents.length; i++) {
+        var a = agents[i];
+        if (!a) continue;
+        var atid = normalizeTargetID(
+          a.target_id != null ? a.target_id : (a.targetId != null ? a.targetId : '')
+        );
+        if (atid !== tid) continue;
+        var purpose = String(a.purpose || a.role || '').trim().toLowerCase();
+        if (purpose === 'overseer') continue;
+        if (isProductOwnerName(a.name)) return String(a.name).trim();
+        var via = resolvePlayPO({ selectedAgent: a.name, agents: agents });
+        if (via) return via;
+      }
+    }
+    return DEFAULT_PLAY_PO;
+  }
+
+  function rowMatchesHighlight(row, highlightId) {
+    if (!row || !highlightId) return false;
+    var rid = normalizeTargetID(row.id);
+    var hid = normalizeTargetID(highlightId);
+    return !!(rid && hid && rid === hid);
+  }
+
+  // planTargetAskFocus → { targetId, highlightId, po, tab } | null
+  function planTargetAskFocus(opts) {
+    var o = opts || {};
+    var detected = null;
+    if (o.targetId != null && String(o.targetId).trim()) {
+      detected = {
+        targetId: normalizeTargetID(o.targetId),
+        po: o.po != null
+          ? String(o.po).trim()
+          : (o.preferredPO != null ? String(o.preferredPO).trim() : ''),
+      };
+    } else {
+      detected = detectTargetAsk(o.text);
+    }
+    if (!detected || !detected.targetId) return null;
+    var po = resolveOwningPOForTarget({
+      targetId: detected.targetId,
+      agents: o.agents,
+      preferredPO: detected.po || o.po || o.preferredPO,
+    });
+    return {
+      targetId: detected.targetId,
+      highlightId: detected.targetId,
+      po: po,
+      tab: TAB_FRONTIER,
+      selectPO: true,
+    };
+  }
+
   return {
     TAB_TRANSCRIPT: TAB_TRANSCRIPT,
     TAB_FRONTIER: TAB_FRONTIER,
@@ -1197,6 +1301,12 @@
     shouldSkipRerenderWhileTipLatched: shouldSkipRerenderWhileTipLatched,
     resolveFrontierCwd: resolveFrontierCwd,
     frontierAPIURL: frontierAPIURL,
+    // 🎯T267 target-ask focus
+    extractTargetIDs: extractTargetIDs,
+    detectTargetAsk: detectTargetAsk,
+    resolveOwningPOForTarget: resolveOwningPOForTarget,
+    rowMatchesHighlight: rowMatchesHighlight,
+    planTargetAskFocus: planTargetAskFocus,
   };
 
 }));

@@ -1104,6 +1104,132 @@ test('T253 index.html loadFrontier/graph pass selected agent workdir', function 
     'selectAgent reloads on overseer/deselect and agent select');
 });
 
+// 🎯T267: target-ask auto-selects owning PO + highlights Frontier row.
+test('T267 extractTargetIDs + detectTargetAsk + planTargetAskFocus', function () {
+  assert.strictEqual(typeof FT.extractTargetIDs, 'function');
+  assert.strictEqual(typeof FT.detectTargetAsk, 'function');
+  assert.strictEqual(typeof FT.resolveOwningPOForTarget, 'function');
+  assert.strictEqual(typeof FT.rowMatchesHighlight, 'function');
+  assert.strictEqual(typeof FT.planTargetAskFocus, 'function');
+
+  assert.deepStrictEqual(FT.extractTargetIDs('Talk about 🎯T267 and 🎯T10.2 please'), ['T267', 'T10.2']);
+  assert.deepStrictEqual(FT.extractTargetIDs('no targets here T1 bare'), []);
+  assert.strictEqual(FT.detectTargetAsk('status: 🎯T267 is fine'), null);
+
+  const marker = FT.detectTargetAsk('__TARGET_ASK__:T267\nShould we accept residual X?');
+  assert.ok(marker, 'explicit marker detects');
+  assert.strictEqual(marker.targetId, 'T267');
+  assert.strictEqual(marker.po, '');
+
+  const withPO = FT.detectTargetAsk('__TARGET_ASK__:T10.2|yourworld2-po\nDecide?');
+  assert.strictEqual(withPO.targetId, 'T10.2');
+  assert.strictEqual(withPO.po, 'yourworld2-po');
+
+  const atPO = FT.detectTargetAsk('__TARGET_ASK__:T10.2@yourworld2-po');
+  assert.strictEqual(atPO.po, 'yourworld2-po');
+
+  const prose = FT.detectTargetAsk(
+    'Needs-owner call on 🎯T262.4 — please decide whether to accept the packet.');
+  assert.ok(prose, 'needs-owner prose detects');
+  assert.strictEqual(prose.targetId, 'T262.4');
+
+  const agents = [
+    { name: 'jevons', purpose: 'overseer', workdir: '/Users/x/.jevons/jevons' },
+    { name: 'jevons-po', purpose: 'work', workdir: '/Users/x/work/github.com/marcelocantos/jevons' },
+    {
+      name: 'yourworld2-po',
+      purpose: 'work',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    {
+      name: 'yw2-worker',
+      purpose: 'work',
+      parent: 'yourworld2-po',
+      target_id: 'T10.2',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+  ];
+
+  // Fixture target-ask (marker) → default jevons-po when no engagement.
+  const planA = FT.planTargetAskFocus({
+    text: '__TARGET_ASK__:T267\nOwner: confirm residual for context chrome?',
+    agents: agents,
+  });
+  assert.ok(planA, 'fixture plan');
+  assert.strictEqual(planA.targetId, 'T267');
+  assert.strictEqual(planA.highlightId, 'T267');
+  assert.strictEqual(planA.po, 'jevons-po');
+  assert.strictEqual(planA.tab, 'frontier');
+
+  // Engaged worker on T10.2 → owning PO is yourworld2-po.
+  const planB = FT.planTargetAskFocus({
+    text: '__TARGET_ASK__:T10.2\nPlease confirm kickoff scope.',
+    agents: agents,
+  });
+  assert.strictEqual(planB.po, 'yourworld2-po');
+  assert.strictEqual(planB.highlightId, 'T10.2');
+
+  // Marker preferred PO wins over engagement residual.
+  const planC = FT.planTargetAskFocus({
+    text: '__TARGET_ASK__:T10.2|jevons-po',
+    agents: agents,
+  });
+  assert.strictEqual(planC.po, 'jevons-po');
+
+  // Direct targetId fixture (smoke driver without prose).
+  const planD = FT.planTargetAskFocus({ targetId: '🎯T267', agents: agents });
+  assert.strictEqual(planD.targetId, 'T267');
+  assert.strictEqual(planD.po, 'jevons-po');
+
+  assert.strictEqual(FT.rowMatchesHighlight({ id: 'T267' }, 'T267'), true);
+  assert.strictEqual(FT.rowMatchesHighlight({ id: 'T267' }, '🎯T267'), true);
+  assert.strictEqual(FT.rowMatchesHighlight({ id: 'T10.2' }, 'T267'), false);
+  assert.strictEqual(FT.rowMatchesHighlight(null, 'T267'), false);
+});
+
+test('T267 index.html wires focusTargetAsk + highlight class + seal path', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('function focusTargetAsk') >= 0, 'focusTargetAsk defined');
+  assert.ok(html.indexOf('function maybeFocusTargetAsk') >= 0, 'maybeFocusTargetAsk defined');
+  assert.ok(html.indexOf('frontierHighlightId') >= 0, 'highlight state');
+  assert.ok(html.indexOf('ft-highlight') >= 0, 'highlight CSS/class');
+  assert.ok(html.indexOf('data-frontier-highlight') >= 0, 'highlight data attr');
+  assert.ok(html.indexOf('data-target-id') >= 0, 'row target id attr');
+  assert.ok(html.indexOf('maybeFocusTargetAsk') >= 0, 'seal path can focus target ask');
+  assert.ok(html.indexOf('window.focusTargetAsk') >= 0, 'smoke seam exposed');
+  assert.ok(html.indexOf('T267') >= 0, 'T267 marker in product');
+
+  // selectAgent accepts opts.tab so target-ask can land on Frontier (not only Transcript).
+  const selStart = html.indexOf('function selectAgent');
+  assert.ok(selStart >= 0);
+  const selEnd = html.indexOf('\nfunction ', selStart + 10);
+  const selBody = html.slice(selStart, selEnd > selStart ? selEnd : selStart + 4000);
+  assert.ok(selBody.indexOf('opts.tab') >= 0, 'selectAgent honors tab preference for T267');
+  // Default owner pick still lands on Transcript (T208 residual).
+  assert.ok(
+    /setRhsBottomTab\([\s\S]*?tabAfterAgentSelect\(true\)/.test(selBody) ||
+      /setRhsBottomTab\([\s\S]*?['"]transcript['"]/.test(selBody),
+    'selectAgent default still transcript on open inspect');
+
+  // render applies highlight from frontierHighlightId.
+  const renderStart = html.indexOf('function renderFrontierTable');
+  assert.ok(renderStart >= 0);
+  const renderEnd = html.indexOf('function loadFrontier', renderStart);
+  const renderBody = html.slice(renderStart, renderEnd > renderStart ? renderEnd : renderStart + 8000);
+  assert.ok(renderBody.indexOf('frontierHighlightId') >= 0, 'render reads highlight id');
+  assert.ok(renderBody.indexOf('ft-highlight') >= 0, 'render paints highlight class');
+  assert.ok(renderBody.indexOf('scrollIntoView') >= 0, 'highlight row scrolled into view');
+
+  // focusTargetAsk selects PO + frontier tab.
+  const focusStart = html.indexOf('function focusTargetAsk');
+  const focusEnd = html.indexOf('\nfunction ', focusStart + 10);
+  const focusBody = html.slice(focusStart, focusEnd > focusStart ? focusEnd : focusStart + 3500);
+  assert.ok(focusBody.indexOf('planTargetAskFocus') >= 0, 'uses pure plan');
+  assert.ok(focusBody.indexOf('selectAgent') >= 0, 'selects owning PO');
+  assert.ok(focusBody.indexOf('frontier') >= 0, 'switches to frontier tab');
+  assert.ok(focusBody.indexOf('loadFrontier') >= 0, 'reloads frontier after focus');
+});
+
 // 🎯T230: frontier re-render must not kill tips while pointer is over card.
 test('T230 skip re-render while InstantTip hover latched', function () {
   assert.strictEqual(typeof FT.shouldSkipRerenderWhileTipLatched, 'function');

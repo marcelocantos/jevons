@@ -818,6 +818,18 @@ body.rhs-resizing-row { cursor: row-resize; }
 #frontier-table tr.ft-engaged .ft-id {
   opacity: 0.92;
 }
+/* 🎯T267: target-ask focus — emphasized Frontier row (selected/visible) */
+#frontier-table tr.ft-highlight td {
+  background: var(--surface-raised);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+#frontier-table tr.ft-highlight .ft-id {
+  font-weight: 700;
+  color: var(--accent);
+}
+#frontier-table tr.ft-highlight.ft-engaged td {
+  color: var(--text);
+}
 
 /* 🎯T175: instant custom tips (fixed layer; 0ms show — not native title=) */
 /* 🎯T186: sticky hover — tip receives pointer events while shown */
@@ -1605,6 +1617,9 @@ Object.defineProperty(window, 'attentionState', {
 window.ensureFleetAside = ensureFleetAside;
 window.dismissFleetAside = dismissFleetAside;
 window.maybeCloseTargetAside = maybeCloseTargetAside;
+// 🎯T267: smoke/hermetic seam for target-ask PO select + frontier highlight.
+window.focusTargetAsk = focusTargetAsk;
+window.maybeFocusTargetAsk = maybeFocusTargetAsk;
 window.refreshAgents = refreshAgents;
 
 // 🎯T140: client connect spans — join server conn_id + pageCorr + ms.
@@ -2255,7 +2270,12 @@ function sealAssistantStream(streamId) {
     renderBody(el, 'jevons', raw);
     // 🎯T164: terminal seal of a live turn — run filed-marker close once more
     // (stream path may have already closed; idempotent when no open file-target).
-    if (!historyReplayActive) maybeCloseTargetAside(raw);
+    if (!historyReplayActive) {
+      maybeCloseTargetAside(raw);
+      // 🎯T267: seal path focuses target-ask (PO select + frontier highlight).
+      // Mid-stream intentionally skipped — thrash residual (loadFrontier + select).
+      if (typeof maybeFocusTargetAsk === 'function') maybeFocusTargetAsk(raw);
+    }
     unwatchStreamBubble(el);
     scheduleLatestExpansion();
   }
@@ -3360,6 +3380,67 @@ function paintBody(d, role, t) {
     d._body.textContent = t;
   }
 }
+// 🎯T267: live owner ask about a 🎯 → select owning PO + Frontier highlight.
+// History/soft-reconnect firehose must not steal fleet selection (same residual
+// as maybeCloseTargetAside). Explicit __TARGET_ASK__:Tn or needs-owner prose.
+function maybeFocusTargetAsk(text) {
+  if (typeof historyReplayActive !== 'undefined' && historyReplayActive) return false;
+  if (typeof FrontierTable === 'undefined' || !FrontierTable.detectTargetAsk) return false;
+  if (!FrontierTable.detectTargetAsk(text)) return false;
+  return focusTargetAsk(text);
+}
+
+// focusTargetAsk(textOrPlan) — apply PO selection + frontier row highlight.
+// Returns true when a plan was applied. Hermetic/smoke may call with a plan
+// object { targetId, po } or raw fixture text with __TARGET_ASK__:Tn.
+function focusTargetAsk(textOrPlan) {
+  if (typeof FrontierTable === 'undefined' || !FrontierTable.planTargetAskFocus) {
+    return false;
+  }
+  const agents = (typeof lastFleetAgents !== 'undefined' && lastFleetAgents && lastFleetAgents.length)
+    ? lastFleetAgents
+    : ((typeof frontierAgentsCache !== 'undefined' && frontierAgentsCache) ? frontierAgentsCache : []);
+  let plan = null;
+  if (textOrPlan && typeof textOrPlan === 'object' && !Array.isArray(textOrPlan)) {
+    plan = FrontierTable.planTargetAskFocus({
+      targetId: textOrPlan.targetId || textOrPlan.id || textOrPlan.highlightId,
+      po: textOrPlan.po || textOrPlan.preferredPO,
+      agents: agents,
+      selectedAgent: typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+      text: textOrPlan.text,
+    });
+  } else {
+    plan = FrontierTable.planTargetAskFocus({
+      text: textOrPlan,
+      agents: agents,
+      selectedAgent: typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+    });
+  }
+  if (!plan || !plan.targetId) return false;
+  frontierHighlightId = plan.highlightId || plan.targetId;
+  const wantPO = plan.po || (FrontierTable.DEFAULT_PLAY_PO || 'jevons-po');
+  // Select owning PO so T253 rebinds Frontier to that repo's ledger.
+  // Do not toggle-off when already selected (nextSelection would deselect).
+  if (wantPO && typeof selectAgent === 'function') {
+    if (selectedAgent !== wantPO) {
+      selectAgent(wantPO, { tab: 'frontier', purpose: 'work' });
+    } else if (typeof setRhsBottomTab === 'function') {
+      setRhsBottomTab('frontier');
+    }
+  } else if (typeof setRhsBottomTab === 'function') {
+    setRhsBottomTab('frontier');
+  }
+  if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
+  if (typeof jLog === 'function') {
+    jLog('info', 'target_ask_focus', {
+      target: plan.targetId,
+      po: wantPO,
+      tab: 'frontier',
+    });
+  }
+  return true;
+}
+
 // 🎯T95/T152/T164: on live __TARGET_FILED__:Tn, close local file-target chrome
 // and DELETE dual-written purpose=aside fleet row(s). Live path only — history
 // paint must not steal a new open filing aside (live repro att-mscvtpdo-rel53v).
@@ -4269,6 +4350,8 @@ let selectedAgent = null;
 // 🎯T252: ordered queue of asides needing owner attention (user's turn).
 // Auto-select when sidebar draft empty; sticky while non-empty draft.
 let asideAttentionQueue = [];
+// 🎯T267: Frontier row highlight for the active target-ask (🎯 id, normalized).
+let frontierHighlightId = null;
 
 /**
  * 🎯T252: is the sidebar composer draft empty?
@@ -6711,9 +6794,15 @@ function selectAgent(name, opts) {
   _agentInspectLines = [];
   agentInspectFollow().enterTrack();
   // 🎯T131: selecting a fleet agent switches to Transcript tab.
-  setRhsBottomTab((typeof FrontierTable !== 'undefined')
-    ? FrontierTable.tabAfterAgentSelect(true)
-    : 'transcript');
+  // 🎯T267: target-ask focus may pass opts.tab='frontier' so the ready graph
+  // is visible with the highlighted row (not stuck on Transcript).
+  if (opts && opts.tab) {
+    setRhsBottomTab(opts.tab);
+  } else {
+    setRhsBottomTab((typeof FrontierTable !== 'undefined')
+      ? FrontierTable.tabAfterAgentSelect(true)
+      : 'transcript');
+  }
   // 🎯T253: rebind Frontier to selected agent workdir (even while Transcript tab shown).
   if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
   // 🎯T209: primary path = inspect_subscribe on /ws/chat (not HTTP poll).
@@ -7109,15 +7198,33 @@ function renderFrontierTable(model) {
   const rows = (typeof FrontierTable !== 'undefined' && FrontierTable.applyEngagement)
     ? FrontierTable.applyEngagement(model.rows || [], agents)
     : (model.rows || []);
+  // 🎯T267: emphasize row matching frontierHighlightId (target-ask focus).
+  const highlightId = (typeof frontierHighlightId !== 'undefined' && frontierHighlightId)
+    ? frontierHighlightId
+    : '';
   rows.forEach(function (row) {
     const tr = document.createElement('tr');
+    const classes = [];
     if (row.engaged) {
-      tr.className = 'ft-engaged';
+      classes.push('ft-engaged');
       tr.setAttribute('data-engaged', '1');
       if (row.engaged_agents && row.engaged_agents.length) {
         tr.setAttribute('data-engaged-agents', row.engaged_agents.join(','));
       }
     }
+    if (row.id) {
+      tr.setAttribute('data-target-id', String(row.id).replace(/^🎯/, '').trim());
+    }
+    const isHL = (typeof FrontierTable !== 'undefined' && FrontierTable.rowMatchesHighlight)
+      ? FrontierTable.rowMatchesHighlight(row, highlightId)
+      : !!(highlightId && row.id &&
+        String(row.id).replace(/^🎯/, '').trim() === String(highlightId).replace(/^🎯/, '').trim());
+    if (isHL) {
+      classes.push('ft-highlight');
+      tr.setAttribute('data-frontier-highlight', '1');
+      tr.setAttribute('aria-selected', 'true');
+    }
+    if (classes.length) tr.className = classes.join(' ');
     const id = document.createElement('td');
     id.className = 'ft-id';
     id.textContent = '🎯' + row.id;
@@ -7248,6 +7355,11 @@ function renderFrontierTable(model) {
   table.appendChild(tbody);
   frontierBodyEl.innerHTML = '';
   frontierBodyEl.appendChild(table);
+  // 🎯T267: ensure highlighted target-ask row is visible in the pane.
+  const hlRow = tbody.querySelector('tr.ft-highlight');
+  if (hlRow && typeof hlRow.scrollIntoView === 'function') {
+    try { hlRow.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) { /* ignore */ }
+  }
 }
 
 // 🎯T198: latest /api/agents snapshot for frontier engagement merge.
