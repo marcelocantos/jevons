@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Pure RHS fleet-row chrome helpers (🎯T115 / T84 / T118 / T211).
+// Pure RHS fleet-row chrome helpers (🎯T115 / T84 / T118 / T211 / T269).
 // DOM-free so Node hermetic tests can require() it.
 //
 // Rules:
@@ -14,6 +14,8 @@
 //   - 🎯T211: process-alive (status=running) ≠ turn-busy. Bare "running"
 //     progress/status is never chrome as a busy action; phase idle (or no
 //     in-flight prompt/tool) → idle/parked; phase working → action line.
+//   - 🎯T269: purpose=aside rows expose a hover/focus dismiss × (right);
+//     work/PO rows never paint it. Activate → DELETE /api/asides (T152).
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -221,12 +223,40 @@
     return '💡 ' + t;
   }
 
+  // 🎯T269: dismiss × only on purpose=aside (not work/PO/portfolio/overseer).
+  function shouldShowAsideDismiss(agent) {
+    if (!agent || typeof agent !== 'object') return false;
+    if (agent.is_portfolio || agent.purpose === 'portfolio') return false;
+    return isAsidePurpose(agent.purpose || agent.role);
+  }
+
+  // Pure HTML for the hover-gated dismiss control (wired in index renderTree).
+  // Activate → dismissFleetAside → DELETE /api/asides/{id} (T152).
+  function asideDismissButtonHtml(name) {
+    const n = String(name == null ? '' : name).trim();
+    if (!n) return '';
+    const safe = escHtml(n);
+    return '<button type="button" class="agent-dismiss" data-agent-dismiss="'
+      + safe
+      + '" aria-label="Dismiss aside '
+      + safe
+      + '" title="Dismiss">\u00d7</button>';
+  }
+
+  // Product path descriptor for hermetics (matches dismissFleetAside wire).
+  function asideDismissPath(name) {
+    const n = String(name == null ? '' : name).trim();
+    if (!n) return '';
+    return '/api/asides/' + encodeURIComponent(n);
+  }
+
   // ctx: { parentWorkdir, hasChildren }
   function fleetRowModel(agent, ctx) {
     const a = agent && typeof agent === 'object' ? agent : {};
     ctx = ctx && typeof ctx === 'object' ? ctx : {};
     const purpose = a.purpose || a.role || '';
     const isAside = isAsidePurpose(purpose);
+    const showDismiss = shouldShowAsideDismiss(a);
     const omitPath = shouldOmitPath(a);
     const showPath = shouldShowPathSecondary(a, ctx);
     const baseLabel = String(a.description || a.name || '').trim() || (isAside ? 'aside' : '');
@@ -243,7 +273,7 @@
     let secondaryHtml = '';
     let secondaryKind = '';
     if (isAside) {
-      // Aside: title only (T115).
+      // Aside: title only (T115); dismiss × is separate chrome (T269).
     } else if (showPath) {
       secondaryHtml = formatAgentDir(a.workdir || '');
       secondaryKind = secondaryHtml ? 'path' : '';
@@ -261,11 +291,14 @@
 
     // Legacy omitPath: true when no path chrome is emitted (aside/overseer or worker progress).
     const dirHtml = secondaryKind === 'path' ? secondaryHtml : '';
+    const dismissHtml = showDismiss ? asideDismissButtonHtml(a.name) : '';
 
     return {
       name: String(a.name || ''),
       title: title,
       isAside: isAside,
+      showDismiss: showDismiss,
+      dismissHtml: dismissHtml,
       omitPath: omitPath || secondaryKind !== 'path',
       showPath: showPath && secondaryKind === 'path',
       dirHtml: dirHtml,
@@ -286,11 +319,14 @@
     isStateDirOverseerHome: isStateDirOverseerHome,
     shouldOmitPath: shouldOmitPath,
     shouldShowPathSecondary: shouldShowPathSecondary,
+    shouldShowAsideDismiss: shouldShowAsideDismiss,
     isProcessOnlyLabel: isProcessOnlyLabel,
     isBusyAgent: isBusyAgent,
     isActionProgressText: isActionProgressText,
     formatFleetProgress: formatFleetProgress,
     asideTitle: asideTitle,
+    asideDismissButtonHtml: asideDismissButtonHtml,
+    asideDismissPath: asideDismissPath,
     fleetRowModel: fleetRowModel,
     PROGRESS_MAX: PROGRESS_MAX,
   };
