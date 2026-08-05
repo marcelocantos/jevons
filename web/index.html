@@ -877,6 +877,25 @@ body.rhs-resizing-row { cursor: row-resize; }
 #frontier-table .ft-play-btn.ft-stop-btn {
   color: var(--amber, #d4a017);
 }
+/* 🎯T278: immediate kickoff-submitted spinner (before PO reply / engage) */
+#frontier-table .ft-play-btn.ft-submitted-btn {
+  color: var(--accent);
+  opacity: 1;
+  cursor: default;
+}
+#frontier-table .ft-play-btn.ft-submitted-btn .ft-spin {
+  display: inline-block;
+  width: 10px; height: 10px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: ft-kickoff-spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+@keyframes ft-kickoff-spin {
+  to { transform: rotate(360deg); }
+}
 #frontier-table tr.ft-engaged td {
   color: var(--text-dim);
 }
@@ -7532,9 +7551,17 @@ function renderFrontierTable(model) {
   table.setAttribute('aria-label', 'Bullseye frontier');
   const tbody = document.createElement('tbody');
   const agents = (model && model.agents) || frontierAgentsCache || [];
-  const rows = (typeof FrontierTable !== 'undefined' && FrontierTable.applyEngagement)
+  let rows = (typeof FrontierTable !== 'undefined' && FrontierTable.applyEngagement)
     ? FrontierTable.applyEngagement(model.rows || [], agents)
     : (model.rows || []);
+  // 🎯T278: overlay optimistic kickoff-submitted; prune when engagement lands.
+  if (typeof FrontierTable !== 'undefined' && FrontierTable.applyKickoffSubmitted) {
+    if (typeof FrontierTable.pruneKickoffSubmitted === 'function') {
+      frontierKickoffSubmitted = FrontierTable.pruneKickoffSubmitted(
+        frontierKickoffSubmitted, rows);
+    }
+    rows = FrontierTable.applyKickoffSubmitted(rows, frontierKickoffSubmitted);
+  }
   // 🎯T267: emphasize row matching frontierHighlightId (target-ask focus).
   const highlightId = (typeof frontierHighlightId !== 'undefined' && frontierHighlightId)
     ? frontierHighlightId
@@ -7548,6 +7575,10 @@ function renderFrontierTable(model) {
       if (row.engaged_agents && row.engaged_agents.length) {
         tr.setAttribute('data-engaged-agents', row.engaged_agents.join(','));
       }
+    }
+    if (row.kickoff_submitted && !row.engaged) {
+      classes.push('ft-kickoff-submitted');
+      tr.setAttribute('data-kickoff-submitted', '1');
     }
     if (row.id) {
       tr.setAttribute('data-target-id', String(row.id).replace(/^🎯/, '').trim());
@@ -7642,45 +7673,66 @@ function renderFrontierTable(model) {
       const n = row.fanout != null ? row.fanout : 0;
       fan.textContent = n > 0 ? String(n) : '';
     }
-    // 🎯T182/T198: free → play (kickoff PO); engaged → stop (kill by target_id).
+    // 🎯T182/T198/T278: free → play; submitted → spinner; engaged → stop.
     const play = document.createElement('td');
     play.className = 'ft-play';
     const playBtn = document.createElement('button');
     playBtn.type = 'button';
-    const engaged = !!row.engaged;
-    if (engaged) {
-      playBtn.className = 'ft-play-btn ft-stop-btn';
-      playBtn.textContent = (typeof FrontierTable !== 'undefined' && FrontierTable.STOP_GLYPH)
-        ? FrontierTable.STOP_GLYPH
-        : '\u25A0';
-      playBtn.setAttribute('aria-label', 'Stop work on 🎯' + (row.id || ''));
-      playBtn.title = 'Stop engaged worker(s) for this target';
+    const playPO = (typeof FrontierTable !== 'undefined' && FrontierTable.resolvePlayPO)
+      ? FrontierTable.resolvePlayPO({
+          selectedAgent: typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+          agents: agents,
+        })
+      : 'jevons-po';
+    const chrome = (typeof FrontierTable !== 'undefined' && FrontierTable.playChromeSpec)
+      ? FrontierTable.playChromeSpec(row, {
+          po: playPO,
+          selectedAgent: typeof selectedAgent !== 'undefined' ? selectedAgent : null,
+          agents: agents,
+        })
+      : (row.engaged
+        ? {
+            mode: 'stop',
+            className: 'ft-play-btn ft-stop-btn',
+            glyph: '\u25A0',
+            ariaLabel: 'Stop work on 🎯' + (row.id || ''),
+            title: 'Stop engaged worker(s) for this target',
+            disabled: false,
+            spinning: false,
+          }
+        : (row.kickoff_submitted
+          ? {
+              mode: 'submitted',
+              className: 'ft-play-btn ft-submitted-btn',
+              glyph: '',
+              ariaLabel: 'Kickoff submitted for 🎯' + (row.id || ''),
+              title: 'Kickoff submitted to PO — waiting for engagement',
+              disabled: true,
+              spinning: true,
+            }
+          : {
+              mode: 'play',
+              className: 'ft-play-btn',
+              glyph: '\u25B6',
+              ariaLabel: 'Start work on 🎯' + (row.id || ''),
+              title: 'Start work via ' + playPO,
+              disabled: false,
+              spinning: false,
+              po: playPO,
+            }));
+    applyFrontierPlayBtnChrome(playBtn, chrome);
+    if (chrome.mode === 'stop') {
       playBtn.addEventListener('click', function (ev) {
         if (ev) { ev.preventDefault(); ev.stopPropagation(); }
         stopFrontierEngagement(row, playBtn);
       });
-    } else {
-      playBtn.className = 'ft-play-btn';
-      playBtn.textContent = (typeof FrontierTable !== 'undefined' && FrontierTable.PLAY_GLYPH)
-        ? FrontierTable.PLAY_GLYPH
-        : '\u25B6';
-      playBtn.setAttribute('aria-label', 'Start work on 🎯' + (row.id || ''));
-      // 🎯T255: tooltip shows real kickoff recipient (selected product PO, not hard-coded).
-      const playPO = (typeof FrontierTable !== 'undefined' && FrontierTable.resolvePlayPO)
-        ? FrontierTable.resolvePlayPO({
-            selectedAgent: typeof selectedAgent !== 'undefined' ? selectedAgent : null,
-            agents: agents,
-          })
-        : 'jevons-po';
-      playBtn.title = (typeof FrontierTable !== 'undefined' && FrontierTable.playKickoffTitle)
-        ? FrontierTable.playKickoffTitle(playPO)
-        : ('Start work via ' + playPO);
-      playBtn.setAttribute('data-play-po', playPO);
+    } else if (chrome.mode === 'play') {
       playBtn.addEventListener('click', function (ev) {
         if (ev) { ev.preventDefault(); ev.stopPropagation(); }
         playFrontierTarget(row, playBtn);
       });
     }
+    // submitted: no click handler (disabled spinner — not a dead free control).
     play.appendChild(playBtn);
     tr.appendChild(id);
     tr.appendChild(name);
@@ -7701,11 +7753,35 @@ function renderFrontierTable(model) {
 
 // 🎯T198: latest /api/agents snapshot for frontier engagement merge.
 let frontierAgentsCache = [];
+// 🎯T278: ids with kickoff in flight (optimistic submitted chrome until engage/error).
+let frontierKickoffSubmitted = {};
+
+// Paint play/stop/submitted chrome onto an existing button (DOM helper for T278).
+function applyFrontierPlayBtnChrome(btnEl, spec) {
+  if (!btnEl || !spec) return;
+  btnEl.className = spec.className || 'ft-play-btn';
+  btnEl.disabled = !!spec.disabled;
+  if (spec.ariaLabel) btnEl.setAttribute('aria-label', spec.ariaLabel);
+  if (spec.title != null) btnEl.title = spec.title;
+  if (spec.po) btnEl.setAttribute('data-play-po', spec.po);
+  else btnEl.removeAttribute('data-play-po');
+  btnEl.setAttribute('data-play-mode', spec.mode || 'play');
+  btnEl.innerHTML = '';
+  if (spec.spinning) {
+    const spin = document.createElement('span');
+    spin.className = 'ft-spin';
+    spin.setAttribute('aria-hidden', 'true');
+    btnEl.appendChild(spin);
+  } else if (spec.glyph) {
+    btnEl.textContent = spec.glyph;
+  }
+}
 
 // 🎯T182: POST product agent-send path so PO spawns/briefs work on the target.
 // Mock seam: window.__frontierAgentSend(url, body) → Promise (hermetic tests).
 // 🎯T222: blocked when engaged / set_aside / achieved — no second kickoff.
 // 🎯T255: kickoff recipient = selected product PO (not hard-coded jevons-po).
+// 🎯T278: immediately paint submitted spinner before async send resolves.
 function playFrontierTarget(row, btnEl) {
   if (!row || !row.id) return Promise.resolve(null);
   const playOpts = {
@@ -7745,7 +7821,35 @@ function playFrontierTarget(row, btnEl) {
     return Promise.resolve({ status: 'blocked', reason: req.reason, message: req.message });
   }
   if (!req || !req.body || !req.body.text) return Promise.resolve(null);
-  if (btnEl) btnEl.disabled = true;
+  // 🎯T278: mark submitted + paint spinner NOW (sync), before PO/async send.
+  if (typeof FrontierTable !== 'undefined' && FrontierTable.addKickoffSubmitted) {
+    frontierKickoffSubmitted = FrontierTable.addKickoffSubmitted(frontierKickoffSubmitted, row.id);
+  } else {
+    const tid = String(row.id).replace(/^🎯/, '').trim();
+    if (tid) {
+      frontierKickoffSubmitted = Object.assign({}, frontierKickoffSubmitted);
+      frontierKickoffSubmitted[tid] = true;
+    }
+  }
+  if (btnEl) {
+    const subSpec = (typeof FrontierTable !== 'undefined' && FrontierTable.playChromeSpec)
+      ? FrontierTable.playChromeSpec({ id: row.id, kickoff_submitted: true })
+      : {
+          mode: 'submitted',
+          className: 'ft-play-btn ft-submitted-btn',
+          glyph: '',
+          ariaLabel: 'Kickoff submitted for 🎯' + row.id,
+          title: 'Kickoff submitted to PO — waiting for engagement',
+          disabled: true,
+          spinning: true,
+        };
+    applyFrontierPlayBtnChrome(btnEl, subSpec);
+    const tr = btnEl.closest ? btnEl.closest('tr') : null;
+    if (tr) {
+      tr.classList.add('ft-kickoff-submitted');
+      tr.setAttribute('data-kickoff-submitted', '1');
+    }
+  }
   const sendFn = (typeof window !== 'undefined' && typeof window.__frontierAgentSend === 'function')
     ? window.__frontierAgentSend
     : function (url, body) {
@@ -7778,6 +7882,7 @@ function playFrontierTarget(row, btnEl) {
           status: (res && res.status) || 'sent',
         });
       }
+      // Keep submitted chrome until engagement overlay lands (not on mere HTTP OK).
       return res;
     })
     .catch(function (err) {
@@ -7788,10 +7893,42 @@ function playFrontierTarget(row, btnEl) {
           err: String(err && err.message || err),
         });
       }
+      // Restore free play chrome on send failure.
+      if (typeof FrontierTable !== 'undefined' && FrontierTable.removeKickoffSubmitted) {
+        frontierKickoffSubmitted = FrontierTable.removeKickoffSubmitted(
+          frontierKickoffSubmitted, row.id);
+      } else {
+        const tid = String(row.id).replace(/^🎯/, '').trim();
+        if (tid && frontierKickoffSubmitted[tid]) {
+          frontierKickoffSubmitted = Object.assign({}, frontierKickoffSubmitted);
+          delete frontierKickoffSubmitted[tid];
+        }
+      }
+      if (btnEl) {
+        const freeSpec = (typeof FrontierTable !== 'undefined' && FrontierTable.playChromeSpec)
+          ? FrontierTable.playChromeSpec({ id: row.id, engaged: false, kickoff_submitted: false }, {
+              po: req.po,
+              selectedAgent: playOpts.selectedAgent,
+              agents: playOpts.agents,
+            })
+          : {
+              mode: 'play',
+              className: 'ft-play-btn',
+              glyph: '\u25B6',
+              ariaLabel: 'Start work on 🎯' + row.id,
+              title: 'Start work via ' + (req.po || 'jevons-po'),
+              disabled: false,
+              spinning: false,
+              po: req.po,
+            };
+        applyFrontierPlayBtnChrome(btnEl, freeSpec);
+        const tr = btnEl.closest ? btnEl.closest('tr') : null;
+        if (tr) {
+          tr.classList.remove('ft-kickoff-submitted');
+          tr.removeAttribute('data-kickoff-submitted');
+        }
+      }
       return null;
-    })
-    .finally(function () {
-      if (btnEl) btnEl.disabled = false;
     });
 }
 

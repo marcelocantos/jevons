@@ -903,6 +903,10 @@
   var PLAY_GLYPH = '\u25B6'; // ▶
   // 🎯T198: stop when row is engaged (worker has matching target_id).
   var STOP_GLYPH = '\u25A0'; // ■
+  // 🎯T278: submitted/working chrome while kickoff is in flight (before engage).
+  var PLAY_MODE_PLAY = 'play';
+  var PLAY_MODE_STOP = 'stop';
+  var PLAY_MODE_SUBMITTED = 'submitted';
   var DEFAULT_PLAY_PO = 'jevons-po';
   var ENGAGEMENT_STOP_PATH = '/api/agents/engagement/stop';
   var AGENTS_API_PATH = '/api/agents';
@@ -1187,6 +1191,133 @@
     };
   }
 
+  // ── 🎯T278: optimistic kickoff-submitted chrome (before PO reply / engage) ──
+  // Set is a plain { [normalizedId]: true } map so hermetics stay JSON-friendly.
+
+  function addKickoffSubmitted(set, targetId) {
+    var tid = normalizeTargetID(targetId);
+    if (!tid) return set && typeof set === 'object' ? set : {};
+    var out = {};
+    var src = set && typeof set === 'object' ? set : {};
+    for (var k in src) {
+      if (Object.prototype.hasOwnProperty.call(src, k) && src[k]) out[k] = true;
+    }
+    out[tid] = true;
+    return out;
+  }
+
+  function removeKickoffSubmitted(set, targetId) {
+    var tid = normalizeTargetID(targetId);
+    var src = set && typeof set === 'object' ? set : {};
+    if (!tid || !src[tid]) return src;
+    var out = {};
+    for (var k in src) {
+      if (Object.prototype.hasOwnProperty.call(src, k) && src[k] && k !== tid) {
+        out[k] = true;
+      }
+    }
+    return out;
+  }
+
+  function isKickoffSubmitted(set, targetId) {
+    var tid = normalizeTargetID(targetId);
+    return !!(tid && set && typeof set === 'object' && set[tid]);
+  }
+
+  // Drop submitted flags once engagement lands (stop chrome owns the cell).
+  function pruneKickoffSubmitted(set, rows) {
+    var src = set && typeof set === 'object' ? set : {};
+    var list = Array.isArray(rows) ? rows : [];
+    var engaged = {};
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i];
+      if (r && r.engaged) {
+        var eid = normalizeTargetID(r.id);
+        if (eid) engaged[eid] = true;
+      }
+    }
+    var out = {};
+    var changed = false;
+    for (var k in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, k) || !src[k]) continue;
+      if (engaged[k]) {
+        changed = true;
+        continue;
+      }
+      out[k] = true;
+    }
+    return changed ? out : src;
+  }
+
+  // Overlay kickoff_submitted on free rows present in the set.
+  function applyKickoffSubmitted(rows, set) {
+    var list = Array.isArray(rows) ? rows : [];
+    var src = set && typeof set === 'object' ? set : {};
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var row = list[i];
+      if (!row) continue;
+      var copy = Object.assign({}, row);
+      var tid = normalizeTargetID(copy.id);
+      if (tid && src[tid] && !copy.engaged) {
+        copy.kickoff_submitted = true;
+      } else {
+        copy.kickoff_submitted = false;
+      }
+      out.push(copy);
+    }
+    return out;
+  }
+
+  // playChromeMode(row) — stop > submitted > play.
+  function playChromeMode(row) {
+    if (row && row.engaged) return PLAY_MODE_STOP;
+    if (row && row.kickoff_submitted) return PLAY_MODE_SUBMITTED;
+    return PLAY_MODE_PLAY;
+  }
+
+  // playChromeSpec(row, opts) — pure button chrome for hermetic + render.
+  // opts: { po } for play title when free.
+  function playChromeSpec(row, opts) {
+    var o = opts || {};
+    var id = row && row.id != null ? String(row.id).replace(/^🎯/, '').trim() : '';
+    var mode = playChromeMode(row);
+    if (mode === PLAY_MODE_STOP) {
+      return {
+        mode: PLAY_MODE_STOP,
+        className: 'ft-play-btn ft-stop-btn',
+        glyph: STOP_GLYPH,
+        ariaLabel: 'Stop work on 🎯' + id,
+        title: 'Stop engaged worker(s) for this target',
+        disabled: false,
+        spinning: false,
+      };
+    }
+    if (mode === PLAY_MODE_SUBMITTED) {
+      return {
+        mode: PLAY_MODE_SUBMITTED,
+        className: 'ft-play-btn ft-submitted-btn',
+        glyph: '',
+        ariaLabel: 'Kickoff submitted for 🎯' + id,
+        title: 'Kickoff submitted to PO — waiting for engagement',
+        disabled: true,
+        spinning: true,
+      };
+    }
+    var po = o.po != null ? String(o.po).trim() : '';
+    if (!po) po = resolvePlayPO(o);
+    return {
+      mode: PLAY_MODE_PLAY,
+      className: 'ft-play-btn',
+      glyph: PLAY_GLYPH,
+      ariaLabel: 'Start work on 🎯' + id,
+      title: playKickoffTitle(po),
+      disabled: false,
+      spinning: false,
+      po: po,
+    };
+  }
+
   // 🎯T230: quiet poll / re-render must not remount while InstantTip hover is latched.
   // Pure policy for hermetics; index.html calls InstantTip.anyHoverLatched().
   function shouldSkipRerenderWhileTipLatched(latched) {
@@ -1338,6 +1469,9 @@
     FANOUT_MARK: FANOUT_MARK,
     PLAY_GLYPH: PLAY_GLYPH,
     STOP_GLYPH: STOP_GLYPH,
+    PLAY_MODE_PLAY: PLAY_MODE_PLAY,
+    PLAY_MODE_STOP: PLAY_MODE_STOP,
+    PLAY_MODE_SUBMITTED: PLAY_MODE_SUBMITTED,
     DEFAULT_PLAY_PO: DEFAULT_PLAY_PO,
     ENGAGEMENT_STOP_PATH: ENGAGEMENT_STOP_PATH,
     AGENTS_API_PATH: AGENTS_API_PATH,
@@ -1386,6 +1520,13 @@
     engagementIndex: engagementIndex,
     applyEngagement: applyEngagement,
     stopEngagementRequest: stopEngagementRequest,
+    addKickoffSubmitted: addKickoffSubmitted,
+    removeKickoffSubmitted: removeKickoffSubmitted,
+    isKickoffSubmitted: isKickoffSubmitted,
+    pruneKickoffSubmitted: pruneKickoffSubmitted,
+    applyKickoffSubmitted: applyKickoffSubmitted,
+    playChromeMode: playChromeMode,
+    playChromeSpec: playChromeSpec,
     shouldSkipRerenderWhileTipLatched: shouldSkipRerenderWhileTipLatched,
     resolveFrontierCwd: resolveFrontierCwd,
     frontierAPIURL: frontierAPIURL,

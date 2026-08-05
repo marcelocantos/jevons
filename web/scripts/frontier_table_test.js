@@ -1027,6 +1027,112 @@ test('playKickoff blocked when engaged or closed (🎯T222)', function () {
     'UI handles blocked kickoff');
 });
 
+// 🎯T278: optimistic kickoff-submitted chrome (spinner) before PO reply / engage.
+test('T278 kickoff submitted set + playChromeSpec spinning', function () {
+  assert.strictEqual(typeof FT.addKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.removeKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.isKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.pruneKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.applyKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.playChromeMode, 'function');
+  assert.strictEqual(typeof FT.playChromeSpec, 'function');
+  assert.strictEqual(FT.PLAY_MODE_SUBMITTED, 'submitted');
+
+  // Empty / invalid id no-ops.
+  assert.deepStrictEqual(FT.addKickoffSubmitted({}, null), {});
+  assert.strictEqual(FT.isKickoffSubmitted({}, 'T278'), false);
+
+  // Mark submitted immediately (sync set ops — independent of async PO).
+  let set = FT.addKickoffSubmitted({}, '🎯T278');
+  assert.strictEqual(FT.isKickoffSubmitted(set, 'T278'), true);
+  assert.strictEqual(FT.isKickoffSubmitted(set, '🎯T278'), true);
+  set = FT.addKickoffSubmitted(set, 'T10.2');
+  assert.strictEqual(FT.isKickoffSubmitted(set, 'T10.2'), true);
+  assert.strictEqual(FT.isKickoffSubmitted(set, 'T999'), false);
+
+  // Overlay on free rows only.
+  const rows = FT.applyKickoffSubmitted([
+    { id: 'T278', name: 'Spin', engaged: false },
+    { id: 'T10.2', name: 'Peer', engaged: true, engaged_agents: ['w'] },
+    { id: 'T1', name: 'Free', engaged: false },
+  ], set);
+  assert.strictEqual(rows[0].kickoff_submitted, true);
+  assert.strictEqual(rows[1].kickoff_submitted, false); // engaged wins; no submitted flag
+  assert.strictEqual(rows[2].kickoff_submitted, false);
+
+  // Chrome mode priority: stop > submitted > play.
+  assert.strictEqual(FT.playChromeMode({ engaged: true, kickoff_submitted: true }), 'stop');
+  assert.strictEqual(FT.playChromeMode({ kickoff_submitted: true }), 'submitted');
+  assert.strictEqual(FT.playChromeMode({ engaged: false }), 'play');
+
+  const sub = FT.playChromeSpec({ id: 'T278', kickoff_submitted: true });
+  assert.strictEqual(sub.mode, 'submitted');
+  assert.strictEqual(sub.spinning, true);
+  assert.strictEqual(sub.disabled, true);
+  assert.ok(sub.className.indexOf('ft-submitted-btn') >= 0, sub.className);
+  assert.ok(/submitted/i.test(sub.ariaLabel), sub.ariaLabel);
+  assert.ok(/submitted|PO/i.test(sub.title), sub.title);
+  assert.strictEqual(sub.glyph, '');
+
+  const stop = FT.playChromeSpec({ id: 'T10.2', engaged: true });
+  assert.strictEqual(stop.mode, 'stop');
+  assert.strictEqual(stop.spinning, false);
+  assert.strictEqual(stop.glyph, FT.STOP_GLYPH);
+
+  const free = FT.playChromeSpec({ id: 'T1' }, { po: 'jevons-po' });
+  assert.strictEqual(free.mode, 'play');
+  assert.strictEqual(free.spinning, false);
+  assert.strictEqual(free.glyph, FT.PLAY_GLYPH);
+
+  // Prune submitted when engagement lands.
+  const pruned = FT.pruneKickoffSubmitted(set, [
+    { id: 'T278', engaged: false },
+    { id: 'T10.2', engaged: true },
+  ]);
+  assert.strictEqual(FT.isKickoffSubmitted(pruned, 'T278'), true);
+  assert.strictEqual(FT.isKickoffSubmitted(pruned, 'T10.2'), false);
+
+  set = FT.removeKickoffSubmitted(pruned, 'T278');
+  assert.strictEqual(FT.isKickoffSubmitted(set, 'T278'), false);
+});
+
+test('T278 index.html immediate submitted spinner on play path', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+
+  // CSS spinner for submitted chrome.
+  assert.ok(html.indexOf('ft-submitted-btn') >= 0, 'submitted btn class');
+  assert.ok(html.indexOf('ft-spin') >= 0, 'spin element class');
+  assert.ok(html.indexOf('ft-kickoff-spin') >= 0 || /@keyframes\s+ft-kickoff-spin/.test(html),
+    'spin keyframes');
+  assert.ok(html.indexOf('frontierKickoffSubmitted') >= 0, 'submitted set state');
+  assert.ok(html.indexOf('applyKickoffSubmitted') >= 0, 'render overlays submitted');
+  assert.ok(html.indexOf('pruneKickoffSubmitted') >= 0, 'render prunes on engage');
+  assert.ok(html.indexOf('applyFrontierPlayBtnChrome') >= 0, 'paint helper');
+  assert.ok(html.indexOf('playChromeSpec') >= 0, 'uses pure chrome spec');
+
+  // playFrontierTarget marks + paints BEFORE async send (order oracle).
+  const fnStart = html.indexOf('function playFrontierTarget');
+  assert.ok(fnStart >= 0, 'playFrontierTarget present');
+  const fnEnd = html.indexOf('function stopFrontierEngagement', fnStart);
+  const body = html.slice(fnStart, fnEnd > fnStart ? fnEnd : fnStart + 6000);
+  const markIdx = body.indexOf('addKickoffSubmitted');
+  const paintIdx = body.indexOf('applyFrontierPlayBtnChrome');
+  const sendIdx = body.indexOf('sendFn(req.url, req.body)');
+  assert.ok(markIdx >= 0, 'marks submitted set');
+  assert.ok(paintIdx >= 0, 'paints chrome');
+  assert.ok(sendIdx >= 0, 'calls send');
+  assert.ok(markIdx < sendIdx, 'mark before send: mark=' + markIdx + ' send=' + sendIdx);
+  assert.ok(paintIdx < sendIdx, 'paint before send: paint=' + paintIdx + ' send=' + sendIdx);
+  // Success path must NOT restore play (keep spinner until engage).
+  assert.ok(body.indexOf('Kickoff submitted') >= 0 || body.indexOf('kickoff_submitted') >= 0,
+    'submitted language in play path');
+  // Failure restores free chrome via removeKickoffSubmitted.
+  assert.ok(body.indexOf('removeKickoffSubmitted') >= 0, 'clears submitted on error');
+  // data-play-mode for inspectability.
+  assert.ok(html.indexOf('data-play-mode') >= 0, 'data-play-mode attribute');
+  assert.ok(html.indexOf('data-kickoff-submitted') >= 0, 'row data-kickoff-submitted');
+});
+
 // 🎯T253: Frontier tab follows selected agent workdir ledger.
 test('T253 resolveFrontierCwd + frontierAPIURL pure', function () {
   assert.strictEqual(typeof FT.resolveFrontierCwd, 'function');
