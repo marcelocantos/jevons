@@ -2816,7 +2816,7 @@ function applyMermaidPanelContent(opts) {
 /**
  * 🎯T268: scale a single rendered SVG to fill #mvp-body (contain).
  * Used for Frontier Graph large panel / single-component path.
- * Multi-diagram → fitMermaidPackToPane (🎯T276 pack+scale).
+ * Multi-diagram → fitMermaidPackToPane (🎯T276/T277 pack+scale, natural aspect).
  */
 function fitMermaidPanelSvgToPane(opts) {
   const o = opts || {};
@@ -2857,10 +2857,12 @@ function fitMermaidPanelSvgToPane(opts) {
   return plan;
 }
 /**
- * 🎯T276: multi-diagram pack+scale.
- * (1) measure each block SVG natural size
- * (2) pack into pane form-factor rectangle
- * (3) scale composite to fill pane; place blocks absolutely
+ * 🎯T276/T277: multi-diagram pack+scale (aspect-preserving).
+ * (1) measure each block SVG **natural** size (no chrome inflation)
+ * (2) pack natural-aspect boxes into pane form-factor composite
+ * (3) contain-scale composite; place blocks; SVG = natural×scale only
+ * Chrome (title/pad) is fixed on the placement, never baked into SVG aspect.
+ * Diagram count is T190/T274 split+orphans — this path only packs given blocks.
  */
 function fitMermaidPackToPane(opts) {
   const o = opts || {};
@@ -2871,6 +2873,7 @@ function fitMermaidPackToPane(opts) {
   if (!blocks || !blocks.length) return null;
   const boxes = [];
   const blockList = [];
+  let anyTitle = false;
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
     const svg = block.querySelector('svg');
@@ -2888,13 +2891,11 @@ function fitMermaidPackToPane(opts) {
       } catch (_) { /* ignore */ }
     }
     if (!w || !h) continue;
-    // Title chrome ~28px; include so pack doesn't clip labels.
-    const title = block.querySelector('.mvp-pack-title');
-    const titleH = title ? 28 : 0;
-    const padChrome = 20; // block padding
+    // 🎯T277: pack natural SVG only — chrome is fixed after scale.
+    if (block.querySelector('.mvp-pack-title')) anyTitle = true;
     boxes.push({
       w: w,
-      h: h + titleH + padChrome,
+      h: h,
       id: block.getAttribute('data-diagram-id') || ('d' + i),
     });
     blockList.push({ block: block, svg: svg, naturalW: w, naturalH: h });
@@ -2902,12 +2903,19 @@ function fitMermaidPackToPane(opts) {
   if (!boxes.length) return null;
   const paneW = body.clientWidth || 0;
   const paneH = body.clientHeight || 0;
+  // Fixed chrome: title ~28 + pad ~20 when titles present; pad-only otherwise.
+  const chromeH = o.chromeH != null
+    ? o.chromeH
+    : (anyTitle
+      ? (MA.PACK_BLOCK_CHROME_H != null ? MA.PACK_BLOCK_CHROME_H : 48)
+      : 20);
   const plan = MA.planMultiDiagramPackScaleToFill({
     boxes: boxes,
     paneW: paneW,
     paneH: paneH,
     padding: o.padding != null ? o.padding : 0,
     gap: o.gap != null ? o.gap : 12,
+    chromeH: chromeH,
   });
   if (plan.mode !== 'pack-scale-to-fill') return plan;
   body.classList.add('mvp-pack-scaled');
@@ -2920,34 +2928,35 @@ function fitMermaidPackToPane(opts) {
     const pl = plan.placements[p];
     const item = blockList[pl.i];
     if (!item) continue;
-    // Placement box includes title chrome; SVG uses natural aspect within content area.
-    const titleH = item.block.querySelector('.mvp-pack-title') ? 28 * plan.scale : 0;
-    const padChrome = 20 * plan.scale;
-    const contentH = Math.max(1, pl.displayH - titleH - padChrome);
-    const contentW = pl.displayW;
-    // Contain natural SVG into content slot of the placement.
-    const svgScale = MA.computeContainScale(item.naturalW, item.naturalH, contentW, contentH);
-    const svgDispW = item.naturalW * svgScale;
-    const svgDispH = item.naturalH * svgScale;
+    const placed = {
+      i: pl.i,
+      id: pl.id,
+      naturalW: pl.naturalW != null ? pl.naturalW : item.naturalW,
+      naturalH: pl.naturalH != null ? pl.naturalH : item.naturalH,
+      displayX: pl.displayX + offsetX,
+      displayY: pl.displayY + offsetY,
+      displayW: pl.displayW,
+      displayH: pl.displayH,
+      svgDisplayW: pl.svgDisplayW,
+      svgDisplayH: pl.svgDisplayH,
+    };
     if (typeof MA.applyPackPlacement === 'function') {
-      MA.applyPackPlacement(item.block, item.svg, {
-        displayX: pl.displayX + offsetX,
-        displayY: pl.displayY + offsetY,
-        displayW: pl.displayW,
-        displayH: pl.displayH,
-      }, plan.scale);
+      // applyPackPlacement sets SVG to natural aspect (svgDisplay*), not block box.
+      MA.applyPackPlacement(item.block, item.svg, placed, plan.scale);
     } else {
       item.block.style.position = 'absolute';
-      item.block.style.left = (pl.displayX + offsetX) + 'px';
-      item.block.style.top = (pl.displayY + offsetY) + 'px';
-      item.block.style.width = pl.displayW + 'px';
+      item.block.style.left = placed.displayX + 'px';
+      item.block.style.top = placed.displayY + 'px';
+      item.block.style.width = placed.displayW + 'px';
+      if (placed.svgDisplayW > 0 && placed.svgDisplayH > 0) {
+        MA.applySvgScaleToFill(item.svg, {
+          mode: 'scale-to-fill',
+          scale: plan.scale,
+          displayW: placed.svgDisplayW,
+          displayH: placed.svgDisplayH,
+        });
+      }
     }
-    MA.applySvgScaleToFill(item.svg, {
-      mode: 'scale-to-fill',
-      scale: svgScale,
-      displayW: svgDispW,
-      displayH: svgDispH,
-    });
   }
   return plan;
 }

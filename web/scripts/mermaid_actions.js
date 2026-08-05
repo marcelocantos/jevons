@@ -536,11 +536,87 @@
   // tiny graphs floating in empty margins — fail.
   // 🎯T276: multi-diagram = pack natural boxes into pane aspect, then scale
   // the composite (not wrap-grid minmax(320px) micro-islands).
+  // 🎯T277: natural SVG aspect survives every step — uniform scale only.
+  // Never stretch SVG to chrome-inflated placement aspect (T276 false-fix).
+  // Multi-diagram *count* is T190/T274 split+orphans, not T277 inventing boxes.
+
+  /** Fixed title+pad chrome per pack block (not scaled into SVG aspect). 🎯T277 */
+  const PACK_BLOCK_CHROME_H = 48; // title ~28 + block pad ~20
 
   /** Positive finite number or 0. */
   function positiveNumber(n) {
     const x = typeof n === 'number' ? n : parseFloat(n);
     return isFinite(x) && x > 0 ? x : 0;
+  }
+
+  /**
+   * 🎯T277: true when SVG display size preserves natural aspect (uniform scale).
+   * Fails chrome-inflated stretch (displayH includes title/pad empty).
+   */
+  function placementSvgAspectMatchesNatural(placement, eps) {
+    const p = placement || {};
+    const nw = positiveNumber(p.naturalW != null ? p.naturalW : p.w);
+    const nh = positiveNumber(p.naturalH != null ? p.naturalH : p.h);
+    const dw = positiveNumber(p.svgDisplayW != null ? p.svgDisplayW : p.displayW);
+    const dh = positiveNumber(p.svgDisplayH != null ? p.svgDisplayH : p.displayH);
+    if (!nw || !nh || !dw || !dh) return false;
+    const tol = eps != null && isFinite(eps) ? Math.abs(eps) : 1e-6;
+    return Math.abs(dw / dh - nw / nh) <= tol;
+  }
+
+  /**
+   * 🎯T277 false-fix model: pack chrome-inflated boxes then size SVG to the
+   * full placement (title+pad in height). Produces tall-skinny stretch —
+   * placementSvgAspectMatchesNatural must fail.
+   */
+  function planChromeInflatedStretchOracle(boxes, opts) {
+    const o = opts || {};
+    const chromeH = o.chromeH != null ? Math.max(0, positiveNumber(o.chromeH) || 0) : PACK_BLOCK_CHROME_H;
+    const list = Array.isArray(boxes) ? boxes : [];
+    const inflated = [];
+    const naturals = [];
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i] || {};
+      const w = positiveNumber(b.w);
+      const h = positiveNumber(b.h);
+      if (!w || !h) continue;
+      naturals.push({ w: w, h: h, id: b.id, i: i });
+      inflated.push({ w: w, h: h + chromeH, id: b.id });
+    }
+    const packed = packBoxesIntoPaneAspect(inflated, {
+      paneW: o.paneW,
+      paneH: o.paneH,
+      gap: o.gap,
+    });
+    const paneW = positiveNumber(o.paneW);
+    const paneH = positiveNumber(o.paneH);
+    if (!packed.placements.length || !packed.compositeW || !packed.compositeH || !paneW || !paneH) {
+      return { mode: 'chrome-inflated-stretch', placements: [], scale: 1, fillsPane: false };
+    }
+    const scale = computeContainScale(packed.compositeW, packed.compositeH, paneW, paneH);
+    const placements = packed.placements.map(function (p) {
+      const nat = naturals[p.i] || { w: p.w, h: Math.max(1, p.h - chromeH) };
+      return {
+        i: p.i,
+        id: p.id,
+        naturalW: nat.w,
+        naturalH: nat.h,
+        // Bug path: SVG stretched to full placement (chrome in aspect).
+        displayW: p.w * scale,
+        displayH: p.h * scale,
+        svgDisplayW: p.w * scale,
+        svgDisplayH: p.h * scale,
+      };
+    });
+    return {
+      mode: 'chrome-inflated-stretch',
+      scale: scale,
+      placements: placements,
+      fillsPane: Math.max(
+        (packed.compositeW * scale) / paneW,
+        (packed.compositeH * scale) / paneH
+      ) >= 0.95,
+    };
   }
 
   /**
@@ -650,15 +726,18 @@
   }
 
   /**
-   * 🎯T276: shelf-pack natural diagram boxes into a nominal rectangle whose
-   * aspect matches the pane. Simple first-fit decreasing shelf (height-major).
+   * 🎯T276/T277: shelf-pack **natural** diagram boxes into a nominal rectangle
+   * whose aspect matches the pane. First-fit decreasing shelf (height-major).
+   * Boxes must be natural SVG size — do not pre-inflate with title/pad chrome
+   * (chrome is fixed after scale; 🎯T277).
    * @param {Array<{w:number,h:number,id?:string}>} boxes
    * @param {{ paneW: number, paneH: number, gap?: number }} opts
    * @returns {{
-   *   placements: Array<{i:number,id?:string,x:number,y:number,w:number,h:number}>,
+   *   placements: Array<{i:number,id?:string,x:number,y:number,w:number,h:number,row:number}>,
    *   compositeW: number,
    *   compositeH: number,
-   *   shelfWidth: number
+   *   shelfWidth: number,
+   *   rowCount: number
    * }}
    */
   function packBoxesIntoPaneAspect(boxes, opts) {
@@ -676,7 +755,7 @@
       items.push({ i: i, id: b.id, w: w, h: h });
     }
     if (!items.length) {
-      return { placements: [], compositeW: 0, compositeH: 0, shelfWidth: 0 };
+      return { placements: [], compositeW: 0, compositeH: 0, shelfWidth: 0, rowCount: 0 };
     }
     // Target shelf width from pane aspect so packed rows fill a pane-shaped bin.
     // floor at largest box width so every item can sit on a shelf.
@@ -706,6 +785,7 @@
     let shelfH = 0;
     let cursorX = 0;
     let usedW = 0;
+    let row = 0;
     for (let k = 0; k < items.length; k++) {
       const it = items[k];
       if (cursorX > 0 && cursorX + it.w > shelfWidth + 1e-9) {
@@ -713,6 +793,7 @@
         cursorY += shelfH + gap;
         cursorX = 0;
         shelfH = 0;
+        row += 1;
       }
       placements.push({
         i: it.i,
@@ -721,6 +802,7 @@
         y: cursorY,
         w: it.w,
         h: it.h,
+        row: row,
       });
       cursorX += it.w + gap;
       if (it.h > shelfH) shelfH = it.h;
@@ -729,6 +811,7 @@
     }
     const compositeH = cursorY + shelfH;
     const compositeW = Math.max(usedW, maxW);
+    const rowCount = row + 1;
     // Restore placement order by original diagram index.
     placements.sort(function (a, b) { return a.i - b.i; });
     return {
@@ -736,16 +819,23 @@
       compositeW: compositeW,
       compositeH: compositeH,
       shelfWidth: shelfWidth,
+      rowCount: rowCount,
     };
   }
 
   /**
-   * 🎯T276: measure boxes → pack into pane form-factor → contain-scale composite.
-   * Product path for multi-diagram frontier graphs (orthograph 3-block etc.).
+   * 🎯T276/T277: measure natural SVG boxes → pack into pane form-factor →
+   * contain-scale composite. SVG display always preserves natural aspect
+   * (uniform scale). Placement height = scaled natural SVG + **fixed** chrome
+   * (title/pad constant) — never stretch SVG to chrome-inflated aspect.
+   *
+   * Multi-diagram count is T190/T274 split+orphans; this only packs what it
+   * is given.
+   *
    * @param {{
    *   boxes: Array<{w:number,h:number,id?:string}>,
    *   paneW: number, paneH: number,
-   *   padding?: number, gap?: number
+   *   padding?: number, gap?: number, chromeH?: number
    * }} opts
    * @returns {{
    *   mode: 'pack-scale-to-fill'|'skip',
@@ -755,8 +845,13 @@
    *   displayW: number,
    *   displayH: number,
    *   fillsPane: boolean,
-   *   placements: Array<{i:number,id?:string,x:number,y:number,w:number,h:number,
-   *     displayX:number,displayY:number,displayW:number,displayH:number}>
+   *   chromeH: number,
+   *   placements: Array<{
+   *     i:number,id?:string,x:number,y:number,w:number,h:number,row?:number,
+   *     naturalW:number,naturalH:number,
+   *     displayX:number,displayY:number,displayW:number,displayH:number,
+   *     svgDisplayW:number,svgDisplayH:number
+   *   }>
    * }}
    */
   function planMultiDiagramPackScaleToFill(opts) {
@@ -765,6 +860,10 @@
     const paneW = Math.max(0, positiveNumber(o.paneW) - pad);
     const paneH = Math.max(0, positiveNumber(o.paneH) - pad);
     const gap = o.gap != null ? Math.max(0, positiveNumber(o.gap) || 0) : 12;
+    const chromeH = o.chromeH != null
+      ? Math.max(0, positiveNumber(o.chromeH) || 0)
+      : PACK_BLOCK_CHROME_H;
+    // Natural SVG boxes only — chrome is fixed after scale (🎯T277).
     const packed = packBoxesIntoPaneAspect(o.boxes || [], {
       paneW: paneW,
       paneH: paneH,
@@ -779,37 +878,99 @@
         displayW: packed.compositeW || 0,
         displayH: packed.compositeH || 0,
         fillsPane: false,
+        chromeH: chromeH,
         placements: [],
       };
     }
-    const scale = computeContainScale(packed.compositeW, packed.compositeH, paneW, paneH);
-    const displayW = packed.compositeW * scale;
-    const displayH = packed.compositeH * scale;
+    const cW = packed.compositeW;
+    const cH = packed.compositeH;
+    const nRows = packed.rowCount > 0 ? packed.rowCount : 1;
+    // finalW = cW * S; finalH = cH * S + nRows * chromeH (chrome fixed per row).
+    // Solve S so composite fits the pane (contain).
+    let scaleW = paneW / cW;
+    let scaleH;
+    if (chromeH > 0 && nRows * chromeH < paneH) {
+      scaleH = (paneH - nRows * chromeH) / cH;
+    } else if (chromeH <= 0) {
+      scaleH = paneH / cH;
+    } else {
+      // Chrome alone would overflow; shrink SVG aggressively.
+      scaleH = paneH / (cH + nRows * chromeH);
+    }
+    let scale = Math.min(scaleW, scaleH);
+    if (!(scale > 0) || !isFinite(scale)) scale = 1;
+
+    // Group natural placements by shelf row; rebuild Y with fixed chrome so
+    // blocks do not overlap after chrome is added.
+    const byRow = {};
+    const rowOrder = [];
+    for (let pi = 0; pi < packed.placements.length; pi++) {
+      const p = packed.placements[pi];
+      const r = p.row != null ? p.row : 0;
+      if (!byRow[r]) {
+        byRow[r] = [];
+        rowOrder.push(r);
+      }
+      byRow[r].push(p);
+    }
+    rowOrder.sort(function (a, b) { return a - b; });
+
+    const placements = [];
+    let cursorY = 0;
+    let usedW = 0;
+    for (let ri = 0; ri < rowOrder.length; ri++) {
+      const rowPls = byRow[rowOrder[ri]];
+      let rowSvgH = 0;
+      for (let j = 0; j < rowPls.length; j++) {
+        if (rowPls[j].h > rowSvgH) rowSvgH = rowPls[j].h;
+      }
+      const rowSvgDispH = rowSvgH * scale;
+      for (let j = 0; j < rowPls.length; j++) {
+        const p = rowPls[j];
+        const svgDisplayW = p.w * scale;
+        const svgDisplayH = p.h * scale;
+        const displayW = svgDisplayW;
+        const displayH = svgDisplayH + chromeH;
+        const displayX = p.x * scale;
+        const right = displayX + displayW;
+        if (right > usedW) usedW = right;
+        placements.push({
+          i: p.i,
+          id: p.id,
+          x: p.x,
+          y: p.y,
+          w: p.w,
+          h: p.h,
+          row: p.row,
+          naturalW: p.w,
+          naturalH: p.h,
+          displayX: displayX,
+          displayY: cursorY,
+          displayW: displayW,
+          displayH: displayH,
+          svgDisplayW: svgDisplayW,
+          svgDisplayH: svgDisplayH,
+        });
+      }
+      cursorY += rowSvgDispH + chromeH;
+      if (ri < rowOrder.length - 1) cursorY += gap * scale;
+    }
+    placements.sort(function (a, b) { return a.i - b.i; });
+
+    const displayW = usedW > 0 ? usedW : cW * scale;
+    const displayH = cursorY;
     const coverW = displayW / paneW;
     const coverH = displayH / paneH;
     const fillsPane = Math.max(coverW, coverH) >= 0.95;
-    const placements = packed.placements.map(function (p) {
-      return {
-        i: p.i,
-        id: p.id,
-        x: p.x,
-        y: p.y,
-        w: p.w,
-        h: p.h,
-        displayX: p.x * scale,
-        displayY: p.y * scale,
-        displayW: p.w * scale,
-        displayH: p.h * scale,
-      };
-    });
     return {
       mode: 'pack-scale-to-fill',
       scale: scale,
-      compositeW: packed.compositeW,
-      compositeH: packed.compositeH,
+      compositeW: cW,
+      compositeH: cH,
       displayW: displayW,
       displayH: displayH,
       fillsPane: fillsPane,
+      chromeH: chromeH,
       placements: placements,
     };
   }
@@ -899,32 +1060,60 @@
   }
 
   /**
-   * Apply one T276 placement to a pack block + its SVG (DOM-free shape).
+   * Apply one T276/T277 placement to a pack block + its SVG (DOM-free shape).
+   * SVG display uses natural-aspect svgDisplayW×svgDisplayH (or natural×scale).
+   * Never stretches SVG to chrome-inflated block displayH (🎯T277).
    * @returns {boolean}
    */
   function applyPackPlacement(block, svg, placement, scale) {
     if (!placement) return false;
     const s = positiveNumber(scale) || 1;
+    const natW = positiveNumber(
+      placement.naturalW != null ? placement.naturalW : placement.w
+    );
+    const natH = positiveNumber(
+      placement.naturalH != null ? placement.naturalH : placement.h
+    );
+    // Prefer explicit svg display from plan; else natural × uniform scale.
+    let svgW = positiveNumber(placement.svgDisplayW);
+    let svgH = positiveNumber(placement.svgDisplayH);
+    if (!svgW || !svgH) {
+      if (natW && natH) {
+        svgW = natW * s;
+        svgH = natH * s;
+      } else {
+        // Last resort: block content size without assuming chrome stretch.
+        svgW = positiveNumber(placement.displayW);
+        svgH = positiveNumber(placement.displayH);
+      }
+    }
     if (block && block.style && typeof block.style === 'object') {
       block.style.position = 'absolute';
       block.style.left = Math.round(placement.displayX * 1000) / 1000 + 'px';
       block.style.top = Math.round(placement.displayY * 1000) / 1000 + 'px';
       block.style.width = Math.round(placement.displayW * 1000) / 1000 + 'px';
-      block.style.height = 'auto';
+      // Height follows scaled SVG + fixed chrome content; auto avoids empty stretch.
+      block.style.height = placement.displayH > 0
+        ? Math.round(placement.displayH * 1000) / 1000 + 'px'
+        : 'auto';
       block.style.margin = '0';
       block.style.gridColumn = 'auto';
+      block.style.overflow = 'hidden';
     }
-    if (svg) {
+    if (svg && svgW > 0 && svgH > 0) {
       applySvgScaleToFill(svg, {
         mode: 'scale-to-fill',
         scale: s,
-        displayW: placement.displayW,
-        displayH: placement.displayH,
+        displayW: svgW,
+        displayH: svgH,
       });
     }
     if (block && typeof block.setAttribute === 'function') {
       block.setAttribute('data-mvp-pack-placed', '1');
       block.setAttribute('data-mvp-pack-scale', String(s));
+      if (svgW > 0 && svgH > 0) {
+        block.setAttribute('data-mvp-svg-aspect', String(svgW / svgH));
+      }
     }
     return true;
   }
@@ -964,10 +1153,13 @@
     planSingleGraphScaleToFill: planSingleGraphScaleToFill,
     svgScaleToFillStyle: svgScaleToFillStyle,
     applySvgScaleToFill: applySvgScaleToFill,
-    // 🎯T276
+    // 🎯T276 / 🎯T277
+    PACK_BLOCK_CHROME_H: PACK_BLOCK_CHROME_H,
     packBoxesIntoPaneAspect: packBoxesIntoPaneAspect,
     planMultiDiagramPackScaleToFill: planMultiDiagramPackScaleToFill,
     planWrapGridMicroIslandOracle: planWrapGridMicroIslandOracle,
+    planChromeInflatedStretchOracle: planChromeInflatedStretchOracle,
+    placementSvgAspectMatchesNatural: placementSvgAspectMatchesNatural,
     applyPackPlacement: applyPackPlacement,
   };
 }));

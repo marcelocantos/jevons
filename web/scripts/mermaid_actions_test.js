@@ -486,6 +486,7 @@ test('T268 multi diagramCount on single planner skips (use T276 pack path)', fun
 });
 
 // ── 🎯T276: pack natural boxes → pane form-factor → scale composite ──────
+// ── 🎯T277: natural SVG aspect preserved (no chrome-inflated stretch) ───
 
 test('T276 wrap-grid micro-island oracle FAILS ≥95% fill (old path)', function () {
   // Orthograph-class: 3 natural diagram boxes in a large frontier pane.
@@ -503,8 +504,128 @@ test('T276 wrap-grid micro-island oracle FAILS ≥95% fill (old path)', function
   assert.ok(micro.maxCellCover < 0.5, 'max cover with 320px cells=' + micro.maxCellCover);
 });
 
+test('T277 chrome-inflated stretch oracle FAILS natural-aspect check (5dfd3fd path)', function () {
+  // Models T276 false-fix: pack boxes with title+pad baked into height, then
+  // size SVG to full placement → tall-skinny non-natural aspect.
+  const boxes = [
+    { w: 900, h: 600, id: 'c0' },
+    { w: 700, h: 500, id: 'c1' },
+    { w: 500, h: 400, id: 'c2' },
+  ];
+  assert.strictEqual(typeof MA.planChromeInflatedStretchOracle, 'function');
+  assert.strictEqual(typeof MA.placementSvgAspectMatchesNatural, 'function');
+  const stretched = MA.planChromeInflatedStretchOracle(boxes, {
+    paneW: 1400,
+    paneH: 900,
+    gap: 12,
+    chromeH: 48,
+  });
+  assert.strictEqual(stretched.mode, 'chrome-inflated-stretch');
+  assert.strictEqual(stretched.placements.length, 3);
+  let anyFail = false;
+  for (let i = 0; i < stretched.placements.length; i++) {
+    const pl = stretched.placements[i];
+    const ok = MA.placementSvgAspectMatchesNatural(pl, 1e-6);
+    if (!ok) anyFail = true;
+    // Explicit: svg aspect must differ from natural when chrome is in displayH.
+    const natA = pl.naturalW / pl.naturalH;
+    const svgA = pl.svgDisplayW / pl.svgDisplayH;
+    assert.ok(
+      Math.abs(natA - svgA) > 1e-4,
+      'stretch fixture must differ natural vs svg aspect; nat=' + natA + ' svg=' + svgA
+    );
+  }
+  assert.ok(anyFail, 'stretch path must fail placementSvgAspectMatchesNatural');
+  // Cover-only ≥95% is necessary not sufficient — stretch can still "fill".
+  // (Do not use fillsPane alone as T277 acceptance.)
+});
+
+test('T277 pack+scale preserves natural SVG aspect (chrome fixed, not stretch)', function () {
+  const boxes = [
+    { w: 900, h: 600, id: 'c0' },
+    { w: 700, h: 500, id: 'c1' },
+    { w: 500, h: 400, id: 'c2' },
+  ];
+  const paneW = 1400;
+  const paneH = 900;
+  const chromeH = 48;
+  const plan = MA.planMultiDiagramPackScaleToFill({
+    boxes: boxes,
+    paneW: paneW,
+    paneH: paneH,
+    padding: 0,
+    gap: 12,
+    chromeH: chromeH,
+  });
+  assert.strictEqual(plan.mode, 'pack-scale-to-fill');
+  assert.strictEqual(plan.placements.length, 3);
+  assert.ok(plan.scale > 0, 'scale=' + plan.scale);
+  for (let i = 0; i < plan.placements.length; i++) {
+    const pl = plan.placements[i];
+    assert.ok(
+      MA.placementSvgAspectMatchesNatural(pl, 1e-6),
+      'placement ' + i + ' must preserve natural aspect'
+    );
+    assert.strictEqual(pl.naturalW, boxes[i].w);
+    assert.strictEqual(pl.naturalH, boxes[i].h);
+    // SVG display = natural × uniform scale only.
+    assert.ok(Math.abs(pl.svgDisplayW - pl.naturalW * plan.scale) < 1e-6);
+    assert.ok(Math.abs(pl.svgDisplayH - pl.naturalH * plan.scale) < 1e-6);
+    // Block height = scaled SVG + fixed chrome (not proportional empty stretch into SVG).
+    assert.ok(
+      Math.abs(pl.displayH - (pl.svgDisplayH + chromeH)) < 1e-6,
+      'displayH must be svgDisplayH + fixed chrome; got ' + pl.displayH
+    );
+    // SVG must not equal chrome-inflated block height.
+    assert.ok(
+      Math.abs(pl.svgDisplayH - pl.displayH) > 1e-6 || chromeH === 0,
+      'svgDisplayH must not be full placement height when chrome > 0'
+    );
+  }
+});
+
+test('T277 applyPackPlacement sets SVG natural aspect not block box', function () {
+  const plan = MA.planMultiDiagramPackScaleToFill({
+    boxes: [{ w: 400, h: 200, id: 'a' }, { w: 300, h: 300, id: 'b' }],
+    paneW: 1200,
+    paneH: 800,
+    chromeH: 48,
+    gap: 8,
+  });
+  assert.strictEqual(plan.mode, 'pack-scale-to-fill');
+  const pl = plan.placements[0];
+  const attrs = {};
+  const svg = {
+    style: {},
+    removeAttribute: function () {},
+    setAttribute: function (k, v) { attrs[k] = v; },
+  };
+  const block = {
+    style: {},
+    setAttribute: function (k, v) { attrs['block:' + k] = v; },
+  };
+  assert.strictEqual(MA.applyPackPlacement(block, svg, pl, plan.scale), true);
+  const sw = parseFloat(svg.style.width);
+  const sh = parseFloat(svg.style.height);
+  assert.ok(sw > 0 && sh > 0, 'svg sized');
+  // px rounding in applySvgScaleToFill is milli-px; allow small float eps.
+  assert.ok(
+    Math.abs(sw / sh - pl.naturalW / pl.naturalH) < 1e-4,
+    'svg style preserves aspect; got ' + (sw / sh) + ' vs ' + (pl.naturalW / pl.naturalH)
+  );
+  assert.ok(Math.abs(sw - pl.svgDisplayW) < 0.5);
+  assert.ok(Math.abs(sh - pl.svgDisplayH) < 0.5);
+  // Must not use chrome-inflated placement height as SVG height.
+  assert.ok(
+    Math.abs(pl.displayH - pl.svgDisplayH) > 1e-6,
+    'fixture has fixed chrome so block H > svg H'
+  );
+  assert.ok(Math.abs(sh - pl.displayH) > 1, 'svg H ≠ block displayH');
+});
+
 test('T276 pack+scale multi-box fills ≥95% of one pane axis', function () {
   // Same orthograph-class fixture: 3 components, large pane.
+  // Cover ≥95% remains necessary; T277 aspect hermetics are also required.
   const boxes = [
     { w: 900, h: 600, id: 'c0' },
     { w: 700, h: 500, id: 'c1' },
@@ -518,6 +639,7 @@ test('T276 pack+scale multi-box fills ≥95% of one pane axis', function () {
     paneH: paneH,
     padding: 0,
     gap: 12,
+    chromeH: 48,
   });
   assert.strictEqual(plan.mode, 'pack-scale-to-fill');
   assert.strictEqual(plan.placements.length, 3);
@@ -529,10 +651,11 @@ test('T276 pack+scale multi-box fills ≥95% of one pane axis', function () {
   assert.ok(
     Math.abs(plan.displayW - paneW) < 1 || Math.abs(plan.displayH - paneH) < 1 || cover >= 0.95
   );
-  // Placements are non-overlapping in display space (shelf pack).
+  // Placements are non-overlapping in display space (shelf pack + fixed chrome).
   for (let i = 0; i < plan.placements.length; i++) {
     const a = plan.placements[i];
     assert.ok(a.displayW > 0 && a.displayH > 0);
+    assert.ok(MA.placementSvgAspectMatchesNatural(a, 1e-6), 'T277 aspect on cover fixture');
     for (let j = i + 1; j < plan.placements.length; j++) {
       const b = plan.placements[j];
       const sepX = a.displayX + a.displayW <= b.displayX + 1e-6
@@ -554,6 +677,7 @@ test('T276 packBoxesIntoPaneAspect returns composite matching pane aspect spirit
   const packed = MA.packBoxesIntoPaneAspect(boxes, { paneW: 1600, paneH: 800, gap: 0 });
   assert.ok(packed.compositeW > 0 && packed.compositeH > 0);
   assert.strictEqual(packed.placements.length, 3);
+  assert.ok(packed.rowCount >= 1);
   // At least two boxes share a row when shelf is wide enough.
   const ys = packed.placements.map(function (p) { return p.y; });
   const uniqueY = ys.filter(function (y, i) { return ys.indexOf(y) === i; });
@@ -577,6 +701,18 @@ test('T276 index.html wires pack+scale for multi-diagram (not residual only)', f
   const fitSlice = html.slice(fitStart, fitStart + 1200);
   assert.ok(fitSlice.indexOf('fitMermaidPackToPane') >= 0, 'single fit routes pack to T276');
   assert.ok(fitSlice.indexOf('multi residual') < 0, 'no multi residual early-return');
+  // 🎯T277: natural boxes only (no chrome inflation into pack measure).
+  const packStart = html.indexOf('function fitMermaidPackToPane');
+  assert.ok(packStart >= 0);
+  const packSlice = html.slice(packStart, packStart + 2500);
+  assert.ok(
+    packSlice.indexOf('natural') >= 0 || packSlice.indexOf('T277') >= 0,
+    'fitMermaidPackToPane documents natural/T277 aspect path'
+  );
+  assert.ok(
+    packSlice.indexOf('chromeH') >= 0,
+    'chrome passed as fixed option, not baked into box.h before pack'
+  );
 });
 
 test('T268 applySvgScaleToFill mutates style + data attr', function () {
