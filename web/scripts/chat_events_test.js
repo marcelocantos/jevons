@@ -312,6 +312,75 @@ test('T223: interleaved fragments join by stream_id; two ids stay two', () => {
   assert.strictEqual(ChatEvents.streamIdOf(chunkWithId('x', 's-a')), 's-a');
 });
 
+// ── 🎯T249 one stream_id = one growing bubble (never multi mid-stream) ──
+
+test('T249 multi-paragraph stream stays one bubble at every intermediate step', () => {
+  // Owner repro shape: T247 land reply (paragraph-ish splits) — all one stream_id.
+  const sid = '0c38c30e-53f3-4783-8e08-dc633e707850';
+  const tokens = [
+    '**', '🎯', 'T', '247', ' landed', '**', ' —', ' independent', ' check', ' agrees',
+    ' (`', '0', 'fb', 'ce', '59', '`,', ' herm', 'etics', ' green', ').',
+    '\n\n',
+    '**', 'Hard', '-', 'reload', '**', ' so', ' `', 'target', ':`', ' open',
+    '\n\n',
+    'Still', ' in', ' progress', ':', ' **', 'T', '246', '**', ' and', ' **', 'T', '248', '**.',
+  ];
+  const state = ChatEvents.createTurnState();
+  let maxBubbles = 0;
+  ChatEvents.applyChatEvent(state, {
+    type: 'assistant',
+    stream_id: sid,
+    message: {
+      role: 'assistant',
+      content: [{ type: 'tool_use', name: 'run_terminal_command', input: {} }],
+    },
+  });
+  for (const t of tokens) {
+    ChatEvents.applyChatEvent(state, chunkWithId(t, sid));
+    if (state.assistantBubbles.length > maxBubbles) {
+      maxBubbles = state.assistantBubbles.length;
+    }
+    assert.strictEqual(
+      state.assistantBubbles.length,
+      1,
+      `mid-stream bubble count ${state.assistantBubbles.length} after token ${JSON.stringify(t)}`,
+    );
+  }
+  ChatEvents.applyChatEvent(state, endTurnWithId(sid));
+  assert.strictEqual(maxBubbles, 1, 'max mid-stream bubbles must stay 1');
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  const body = state.assistantBubbles[0];
+  assert.ok(body.includes('independent check agrees'), body);
+  assert.ok(body.includes('Hard-reload') || body.includes('Hard'), body);
+  assert.ok(body.includes('Still in progress'), body);
+  assert.ok(body.includes('\n\n'), 'paragraph breaks preserved inside one bubble');
+  assert.strictEqual(state.openById[sid], undefined, 'sealed stream not open');
+});
+
+test('T249 distinct stream_ids stay separate bubbles', () => {
+  const events = [
+    chunkWithId('first turn body', 'sid-1'),
+    endTurnWithId('sid-1'),
+    chunkWithId('second turn body', 'sid-2'),
+    endTurnWithId('sid-2'),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 2);
+  assert.strictEqual(state.assistantBubbles[0], 'first turn body');
+  assert.strictEqual(state.assistantBubbles[1], 'second turn body');
+});
+
+test('T249 index.html: resolveOpenStreamEl re-homes same stream_id (no multi-bubble)', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('resolveOpenStreamEl'), 'must resolve open stream before minting bubble');
+  assert.ok(html.includes('🎯T249') || html.includes('T249'), 'T249 marker in live paint path');
+  // isConnected alone must not mint a second bubble for the same stream_id.
+  assert.ok(
+    !/openStreamById\[streamId\]\.isConnected\s*&&[\s\S]{0,80}typeof openStreamById\[streamId\]\._streamRaw/.test(html),
+    'must not gate join solely on isConnected (T249 re-home path)',
+  );
+});
+
 // ── 🎯T245 silent-only turns do not leak into next visible bubble ──
 
 test('T245 isSilentAssistantText matches [silent] prefix', () => {

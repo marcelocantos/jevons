@@ -1787,8 +1787,58 @@ function clearOpenStreamHandle(streamId) {
   streamSegmentEdge = false;
 }
 
+// resolveOpenStreamEl finds the single open bubble for a stream (🎯T249).
+// Prefer stream_id map; re-home disconnected nodes instead of minting a
+// second bubble; adopt unlabeled openStreamEl when wire id arrives mid-turn;
+// DOM-scan fallback if handles were lost. Never open a second bubble for
+// the same still-open stream_id (owner repro: paragraph-ish multi-bubble
+// that later self-healed after coalesce/reconnect).
+function resolveOpenStreamEl(streamId) {
+  const sid = streamId ? String(streamId) : '';
+  function rehome(el) {
+    if (!el || typeof el._streamRaw !== 'string') return null;
+    if (!el.isConnected && msgs) {
+      try { msgs.appendChild(el); } catch (_) { /* ignore */ }
+    }
+    return el.isConnected ? el : null;
+  }
+  if (sid && openStreamById[sid]) {
+    const el = rehome(openStreamById[sid]);
+    if (el) return el;
+    delete openStreamById[sid];
+  }
+  if (openStreamEl && typeof openStreamEl._streamRaw === 'string') {
+    const unlabeled = !openStreamEl._streamId;
+    const sameId = sid && openStreamEl._streamId === sid;
+    if (!sid || unlabeled || sameId) {
+      const el = rehome(openStreamEl);
+      if (el) {
+        if (sid) {
+          el._streamId = sid;
+          openStreamById[sid] = el;
+        }
+        return el;
+      }
+      openStreamEl = null;
+    }
+  }
+  // Handle lost: any still-open .msg.jevons with this stream_id.
+  if (sid && msgs) {
+    const nodes = msgs.querySelectorAll('.msg.jevons');
+    for (let i = 0; i < nodes.length; i++) {
+      const el = nodes[i];
+      if (el && el._streamId === sid && typeof el._streamRaw === 'string') {
+        openStreamById[sid] = el;
+        openStreamEl = el;
+        return el;
+      }
+    }
+  }
+  return null;
+}
+
 // appendOrAddJevons merges streaming assistant chunks into the open
-// jevons bubble. Merge is keyed on stream_id (🎯T223) or openStreamEl +
+// jevons bubble. Merge is keyed on stream_id (🎯T223 / T249) or openStreamEl +
 // _streamRaw — not lastMessageish / workingEl. Seal only on terminal stop
 // so tool rounds and mid-stream user lines never split one logical reply.
 // opts.segmentEdge: known protocol segment boundary → joinAssistantSegments;
@@ -1797,15 +1847,7 @@ function clearOpenStreamHandle(streamId) {
 function appendOrAddJevons(text, ts, opts) {
   const segmentEdge = !!(opts && opts.segmentEdge);
   const streamId = opts && opts.streamId ? String(opts.streamId) : '';
-  let target = null;
-  if (streamId && openStreamById[streamId] &&
-      openStreamById[streamId].isConnected &&
-      typeof openStreamById[streamId]._streamRaw === 'string') {
-    target = openStreamById[streamId];
-  } else if (!streamId && openStreamEl && openStreamEl.isConnected &&
-      typeof openStreamEl._streamRaw === 'string') {
-    target = openStreamEl;
-  }
+  let target = resolveOpenStreamEl(streamId);
   if (target) {
     // 🎯T161: structural segment join vs bare token append — never sniff text.
     target._streamRaw = segmentEdge
