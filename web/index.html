@@ -3589,6 +3589,99 @@ let lastFleetAgents = []; // for 🎯T124 auto-select on new aside
 // the TDZ, threw on boot (T136 path), skipped applyTheme + connect → dark
 // FOUC stuck + empty transcript.
 let selectedAgent = null;
+// 🎯T252: ordered queue of asides needing owner attention (user's turn).
+// Auto-select when sidebar draft empty; sticky while non-empty draft.
+let asideAttentionQueue = [];
+
+/**
+ * 🎯T252: is the sidebar composer draft empty?
+ * Prefer live #agent-inspect-input; else per-agent draft map for current selection.
+ * Empty/whitespace ⇒ allow auto-activate. Non-empty ⇒ sticky (no mid-compose steal).
+ */
+function isSidebarComposerDraftEmpty() {
+  const emptyFn = (typeof AgentTranscript !== 'undefined')
+    ? (AgentTranscript.sidebarDraftIsEmpty || AgentTranscript.isSidebarDraftEmpty)
+    : null;
+  const isEmpty = function (v) {
+    return emptyFn ? emptyFn(v) : !String(v == null ? '' : v).trim();
+  };
+  const el = document.getElementById('agent-inspect-input');
+  if (el && typeof el.value === 'string') {
+    // Live field is source of truth while mounted (even if bound to another agent).
+    if (el.dataset && el.dataset.boundAgent && selectedAgent &&
+        el.dataset.boundAgent === selectedAgent) {
+      return isEmpty(el.value);
+    }
+    if (el.dataset && el.dataset.boundAgent && selectedAgent &&
+        el.dataset.boundAgent !== selectedAgent) {
+      // Switching mid-flight: check the draft of the *current* selection in the map.
+      if (typeof sidebarDraftByAgent !== 'undefined' && sidebarDraftByAgent &&
+          Object.prototype.hasOwnProperty.call(sidebarDraftByAgent, selectedAgent)) {
+        return isEmpty(sidebarDraftByAgent[selectedAgent]);
+      }
+      // No saved draft for current selection — live field belongs to another agent.
+      return true;
+    }
+    return isEmpty(el.value);
+  }
+  if (selectedAgent && typeof sidebarDraftByAgent !== 'undefined' && sidebarDraftByAgent &&
+      Object.prototype.hasOwnProperty.call(sidebarDraftByAgent, selectedAgent)) {
+    return isEmpty(sidebarDraftByAgent[selectedAgent]);
+  }
+  return true;
+}
+
+/**
+ * 🎯T252: apply attention auto-select when draft allows.
+ * reason: new-attention | after-send | draft-cleared | poll
+ * Returns true when selection changed.
+ */
+function maybeAutoActivateAttention(reason, newName) {
+  if (typeof AgentTranscript === 'undefined' || !AgentTranscript.pickAttentionAsideSelection) {
+    return false;
+  }
+  const draftEmpty = isSidebarComposerDraftEmpty();
+  const next = AgentTranscript.pickAttentionAsideSelection({
+    attentionNames: asideAttentionQueue,
+    currentSelection: selectedAgent,
+    draftEmpty: draftEmpty,
+    reason: reason || 'poll',
+    newName: newName || undefined,
+  });
+  if (!next || next === selectedAgent) return false;
+  if (typeof selectAgent === 'function') {
+    selectAgent(next);
+  } else {
+    selectedAgent = next;
+  }
+  return true;
+}
+
+/**
+ * 🎯T252: mark aside as needing owner; auto-select if draft empty.
+ * Call when assistant turn ends on an aside (live terminal or busy→idle).
+ */
+function markAsideNeedsAttention(name) {
+  if (!name || typeof AgentTranscript === 'undefined') return;
+  if (!AgentTranscript.enqueueAttention) return;
+  const row = (lastFleetAgents || []).find(function (a) { return a && a.name === name; });
+  if (row && AgentTranscript.isAsideAgent && !AgentTranscript.isAsideAgent(row)) return;
+  if (row && AgentTranscript.isOverseer && AgentTranscript.isOverseer(row.name, row.purpose)) return;
+  asideAttentionQueue = AgentTranscript.enqueueAttention(asideAttentionQueue, name);
+  maybeAutoActivateAttention('new-attention', name);
+}
+
+/**
+ * 🎯T252: after successful sidebar send — dequeue served aside, pick next attention.
+ * Draft is already cleared by sendSidebarComposer before this runs.
+ */
+function onSidebarComposerSent(name) {
+  const served = name || selectedAgent;
+  if (typeof AgentTranscript !== 'undefined' && AgentTranscript.dequeueAttention) {
+    asideAttentionQueue = AgentTranscript.dequeueAttention(asideAttentionQueue, served);
+  }
+  maybeAutoActivateAttention('after-send');
+}
 
 // 🎯T250: main-chat aside wire user turns (attention/target-aside markers)
 // are recorded here for the RHS Transcript tab — never painted on #messages.
@@ -3710,11 +3803,14 @@ function refreshAgents() {
     });
     // 🎯T124: new purpose=aside → auto-select and show transcript pane.
     // Use registry agents (not virtual portfolio nodes) for auto-select.
+    // 🎯T252: attention queue may override when draft empty (sticky when not).
     let autoSelected = false;
+    let wantSelect = null;
+    const prevSelected = selectedAgent;
     if (typeof AgentTranscript !== 'undefined') {
       const auto = AgentTranscript.pickAutoSelect(lastFleetAgents, agents, selectedAgent);
       if (auto && auto !== selectedAgent) {
-        selectedAgent = auto;
+        wantSelect = auto;
         autoSelected = true;
       }
       // 🎯T252: busy→idle / needs_owner asides → attention queue; auto if draft empty.
@@ -3731,13 +3827,16 @@ function refreshAgents() {
         const attNew = news.length ? news[news.length - 1] : undefined;
         const nextAtt = AgentTranscript.pickAttentionAsideSelection({
           attentionNames: asideAttentionQueue,
-          currentSelection: selectedAgent,
+          currentSelection: wantSelect || selectedAgent,
           draftEmpty: isSidebarComposerDraftEmpty(),
           reason: attReason,
           newName: attNew,
         });
-        if (nextAtt && nextAtt !== selectedAgent) {
-          selectedAgent = nextAtt;
+        if (nextAtt && nextAtt !== (wantSelect || selectedAgent)) {
+          wantSelect = nextAtt;
+          autoSelected = true;
+        } else if (nextAtt && nextAtt !== selectedAgent && !wantSelect) {
+          wantSelect = nextAtt;
           autoSelected = true;
         }
       }
@@ -3747,15 +3846,12 @@ function refreshAgents() {
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
     // 🎯T209: inspect updates arrive on /ws/chat — no HTTP re-fetch on fleet refresh.
-    // Only re-subscribe when auto-select changes the focused agent.
-    if (autoSelected && selectedAgent && typeof subscribeAgentInspect === 'function') {
+    // Apply auto-select via selectAgent so draft stash + Transcript tab + composer sync.
+    if (autoSelected && wantSelect && wantSelect !== prevSelected &&
+        typeof selectAgent === 'function') {
+      selectAgent(wantSelect);
+    } else if (autoSelected && selectedAgent && typeof subscribeAgentInspect === 'function') {
       subscribeAgentInspect(selectedAgent);
-      // 🎯T131: open Transcript tab when auto-select lands an attention/aside.
-      if (typeof setRhsBottomTab === 'function') {
-        setRhsBottomTab((typeof FrontierTable !== 'undefined' && FrontierTable.tabAfterAgentSelect)
-          ? FrontierTable.tabAfterAgentSelect(true)
-          : 'transcript');
-      }
     }
   }).catch((err)=>{
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
@@ -5926,6 +6022,12 @@ function handleAgentTranscriptWire(m) {
       return { role: l.role, text: l.text };
     });
     renderAgentInspect(liveModel);
+    // 🎯T252: terminal assistant stop on aside ⇒ owner attention (user's turn).
+    if (typeof AgentTranscript !== 'undefined' &&
+        AgentTranscript.liveFrameSignalsOwnerAttention &&
+        AgentTranscript.liveFrameSignalsOwnerAttention(m.event)) {
+      markAsideNeedsAttention(m.name || selectedAgent);
+    }
     return;
   }
   // kind=history (default): sealed turns — same model as former HTTP payload.
@@ -6635,6 +6737,10 @@ function sendSidebarComposer() {
           });
         }
       }
+      // 🎯T252: post-send empty draft → next attention aside if any.
+      if (typeof onSidebarComposerSent === 'function') {
+        onSidebarComposerSent(req.name);
+      }
       return res;
     })
     .catch(function (err) {
@@ -6668,6 +6774,11 @@ if (agentInspectInput) {
   agentInspectInput.addEventListener('input', function () {
     if (selectedAgent) sidebarDraftByAgent[selectedAgent] = agentInspectInput.value;
     syncSidebarSendEnabled();
+    // 🎯T252: draft cleared while queue non-empty → may advance attention.
+    if (typeof isSidebarComposerDraftEmpty === 'function' && isSidebarComposerDraftEmpty() &&
+        typeof maybeAutoActivateAttention === 'function') {
+      maybeAutoActivateAttention('draft-cleared');
+    }
     // Compact auto-grow (sidebar cap).
     agentInspectInput.style.height = 'auto';
     const maxPx = Math.round(window.innerHeight * 0.22) || 120;
