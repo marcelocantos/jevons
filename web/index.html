@@ -293,12 +293,63 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   display: flex; align-items: center; gap: 8px; justify-content: space-between;
 }
 #activity-header.agents-header .ah-label { flex: 1; }
-#open-viz-btn {
+#open-viz-btn,
+#aside-history-btn {
   border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
   font: inherit; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
   text-transform: uppercase; padding: 2px 8px; border-radius: 5px; cursor: pointer;
 }
-#open-viz-btn:hover { color: var(--text); border-color: var(--border-focus); background: var(--surface-raised); }
+#open-viz-btn:hover,
+#aside-history-btn:hover,
+#aside-history-btn[aria-expanded="true"] {
+  color: var(--text); border-color: var(--border-focus); background: var(--surface-raised);
+}
+/* 🎯T270: closed-aside history pane (durable archive, not live 💡 rows) */
+#aside-history-panel {
+  display: none;
+  flex-direction: column;
+  max-height: 40%;
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  overflow: hidden;
+}
+#aside-history-panel.open { display: flex; }
+#aside-history-panel .aside-history-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; font-size: 11px; color: var(--text-muted);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#aside-history-panel .aside-history-head .ah-hist-label { flex: 1; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+#aside-history-close {
+  border: none; background: transparent; color: var(--text-muted);
+  font: inherit; font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 6px;
+}
+#aside-history-close:hover { color: var(--text); }
+#aside-history-body {
+  overflow-y: auto; padding: 6px 8px 10px; min-height: 0; flex: 1;
+  font-size: 12px;
+}
+.aside-history-empty { color: var(--text-dim); padding: 8px 4px; font-size: 12px; }
+.aside-history-list { list-style: none; margin: 0; padding: 0; }
+.aside-history-row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 5px 6px; border-radius: 5px; margin: 2px 0;
+}
+.aside-history-row:hover { background: var(--surface-raised); }
+.aside-history-kind {
+  flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  text-transform: uppercase; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--border); color: var(--text-muted);
+}
+.aside-history-row.aside-hist-target .aside-history-kind {
+  color: var(--amber, #d4a017); border-color: var(--amber, #d4a017);
+}
+.aside-history-row.aside-hist-side .aside-history-kind,
+.aside-history-row.aside-hist-capture .aside-history-kind {
+  color: var(--accent, #6cb6ff); border-color: var(--border-focus, #4a6fa5);
+}
+.aside-history-title { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg.jevons ul, .msg.jevons ol { padding-left: 1.5em; margin: 0.5em 0; }
 .msg.jevons li { margin: 0.2em 0; }
 .msg.jevons h1, .msg.jevons h2, .msg.jevons h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: var(--heading); }
@@ -1035,7 +1086,17 @@ body.rhs-resizing-row { cursor: row-resize; }
     <div id="cost-ticker" title="Token burn rate — click for detail"></div>
     <div id="activity-header" class="agents-header">
       <span class="ah-label">Agents</span>
+      <button type="button" id="aside-history-btn" title="Browse closed / dismissed asides (🎯T270)"
+              aria-expanded="false" aria-controls="aside-history-panel">Closed</button>
       <button type="button" id="open-viz-btn" title="Open project graph viz panel (pinned / paste / chat)">Open viz</button>
+    </div>
+    <!-- 🎯T270: durable closed-aside history (side chat vs target filing) -->
+    <div id="aside-history-panel" role="region" aria-label="Closed asides history" hidden>
+      <div class="aside-history-head">
+        <span class="ah-hist-label">Closed asides</span>
+        <button type="button" id="aside-history-close" title="Close history" aria-label="Close history">×</button>
+      </div>
+      <div id="aside-history-body" data-aside-history-body="1"></div>
     </div>
     <!-- 🎯T248: fleet | frontier/transcript vertical split -->
     <div id="rhs-split">
@@ -1122,6 +1183,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/chat_reconnect.js"></script>
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
+<script src="scripts/aside_history.js"></script>
 <script src="scripts/fleet_row.js"></script>
 <script src="scripts/portfolio_group.js"></script>
 <script src="scripts/agent_transcript.js"></script>
@@ -1349,6 +1411,12 @@ function ensureFleetAside(id, title, opts) {
     title: String(title || 'aside'),
   };
   if (opening) payload.text = opening;
+  // 🎯T270: kind for durable closed-history type (side | capture | target).
+  if (o.kind) {
+    payload.kind = String(o.kind);
+  } else if (typeof AsideHistory !== 'undefined' && AsideHistory.kindFromCommand && o.command) {
+    payload.kind = AsideHistory.kindFromCommand(o.command);
+  }
   const body = JSON.stringify(payload);
   return fetch('/api/asides', {
     method: 'POST',
@@ -1616,6 +1684,70 @@ Object.defineProperty(window, 'attentionState', {
 });
 window.ensureFleetAside = ensureFleetAside;
 window.dismissFleetAside = dismissFleetAside;
+
+// 🎯T270: toggle closed-aside history pane (GET /api/asides/history — durable).
+function setAsideHistoryOpen(open) {
+  const panel = document.getElementById('aside-history-panel');
+  const btn = document.getElementById('aside-history-btn');
+  if (!panel) return;
+  const on = !!open;
+  panel.classList.toggle('open', on);
+  if (on) {
+    panel.removeAttribute('hidden');
+  } else {
+    panel.setAttribute('hidden', '');
+  }
+  if (btn) btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  if (on && typeof loadAsideHistory === 'function') {
+    loadAsideHistory();
+  }
+}
+function loadAsideHistory() {
+  const body = document.getElementById('aside-history-body');
+  if (!body) return Promise.resolve();
+  const path = (typeof AsideHistory !== 'undefined' && AsideHistory.historyPath)
+    ? AsideHistory.historyPath()
+    : '/api/asides/history';
+  body.innerHTML = '<div class="aside-history-empty">Loading…</div>';
+  return fetch(path).then(function (r) {
+    if (!r.ok) throw new Error('history HTTP ' + r.status);
+    return r.json();
+  }).then(function (payload) {
+    const rows = (typeof AsideHistory !== 'undefined' && AsideHistory.recordsFromPayload)
+      ? AsideHistory.recordsFromPayload(payload)
+      : ((payload && payload.asides) || []);
+    if (typeof AsideHistory !== 'undefined' && AsideHistory.historyListHtml) {
+      body.innerHTML = AsideHistory.historyListHtml(rows);
+    } else {
+      body.innerHTML = rows.length
+        ? ('<ul class="aside-history-list">' + rows.map(function (x) {
+          return '<li>' + (x.kind || '') + ' ' + (x.title || x.id || '') + '</li>';
+        }).join('') + '</ul>')
+        : '<div class="aside-history-empty">No closed asides yet</div>';
+    }
+  }).catch(function (err) {
+    body.innerHTML = '<div class="aside-history-empty">Could not load history' +
+      (err && err.message ? (': ' + err.message) : '') + '</div>';
+  });
+}
+window.setAsideHistoryOpen = setAsideHistoryOpen;
+window.loadAsideHistory = loadAsideHistory;
+(function wireAsideHistoryChrome() {
+  const btn = document.getElementById('aside-history-btn');
+  const closeBtn = document.getElementById('aside-history-close');
+  if (btn) {
+    btn.addEventListener('click', function () {
+      const panel = document.getElementById('aside-history-panel');
+      const open = !(panel && panel.classList.contains('open'));
+      setAsideHistoryOpen(open);
+    });
+  }
+  if (closeBtn) {
+    closeBtn.addEventListener('click', function () {
+      setAsideHistoryOpen(false);
+    });
+  }
+})();
 window.maybeCloseTargetAside = maybeCloseTargetAside;
 // 🎯T267: smoke/hermetic seam for target-ask PO select + frontier highlight.
 window.focusTargetAsk = focusTargetAsk;
@@ -5676,6 +5808,17 @@ function send(opts) {
         : (parsedCmd.command === 'aside' && String(openingBody).trim()
           ? { text: String(openingBody).trim(), expectDeliver: true }
           : {});
+      // 🎯T270: persist type on create so closed history delineates filing vs side-chat.
+      if (typeof AsideHistory !== 'undefined' && AsideHistory.kindFromCommand) {
+        createOpts.kind = AsideHistory.kindFromCommand(parsedCmd.command);
+      } else if (parsedCmd.command === 'target') {
+        createOpts.kind = 'target';
+      } else if (parsedCmd.command === 'capture') {
+        createOpts.kind = 'capture';
+      } else {
+        createOpts.kind = createOpts.kind || 'side';
+      }
+      createOpts.command = parsedCmd.command;
       ensureFleetAside(r.threadId, title || 'aside', createOpts).catch(function () {
         // ensureFleetAside already surfaces loud UI for freeform deliver fail.
       });

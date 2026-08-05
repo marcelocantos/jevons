@@ -17,7 +17,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
-// createAsideRequest is the JSON body for POST /api/asides (🎯T136 / 🎯T263).
+// createAsideRequest is the JSON body for POST /api/asides (🎯T136 / 🎯T263 / 🎯T270).
 // Owner create path (aside:/capture:/target:) registers a purpose=aside
 // fleet participant so the RHS tree shows 💡 nodes without top chip chrome.
 // Freeform aside: may also pass Text so the process starts and the opening
@@ -34,6 +34,9 @@ type createAsideRequest struct {
 	// and deliver Text fire-and-forget. Empty → register-only (T136 residual
 	// for capture:/target: dual-write that does not need a live process yet).
 	Text string `json:"text,omitempty"`
+	// Kind delineates side-chat vs capture vs target-filing for closed history (🎯T270).
+	// Values: side | capture | target (aliases: aside, file-target, target-aside).
+	Kind string `json:"kind,omitempty"`
 }
 
 // createAsideResponse is returned on success.
@@ -54,10 +57,12 @@ type createAsideResponse struct {
 // agent without launching a process (AutoStart=false). Tree + inspect use
 // registry identity. 🎯T263: freeform opening text is delivered by
 // handleCreateAside via sendToNamedAgent after this register step.
-func (s *Server) ensureAsideAgent(id, title, parent string) (createAsideResponse, error) {
+// kind is persisted to asides/{id}/meta.json for closed-history type (🎯T270).
+func (s *Server) ensureAsideAgent(id, title, parent, kind string) (createAsideResponse, error) {
 	id = strings.TrimSpace(id)
 	title = strings.TrimSpace(title)
 	parent = strings.TrimSpace(parent)
+	kind = normalizeAsideKind(kind)
 	if id == "" {
 		return createAsideResponse{}, fmt.Errorf("id is required")
 	}
@@ -117,6 +122,14 @@ func (s *Server) ensureAsideAgent(id, title, parent string) (createAsideResponse
 				return createAsideResponse{}, err
 			}
 		}
+		// Refresh open meta kind/title on re-register (🎯T270).
+		if err := s.writeAsideOpenMeta(id, def.Description, kind, def.Parent); err != nil {
+			slog.Warn("aside_meta_write_failed",
+				"component", "aside",
+				"name", id,
+				"err", err.Error(),
+			)
+		}
 		status := "stopped"
 		if proc := reg.Get(id); proc != nil && proc.Alive() {
 			status = "running"
@@ -146,11 +159,20 @@ func (s *Server) ensureAsideAgent(id, title, parent string) (createAsideResponse
 		return createAsideResponse{}, err
 	}
 	created = true
+	// 🎯T270: durable open meta so dismiss can archive type without client memory.
+	if err := s.writeAsideOpenMeta(id, title, kind, parent); err != nil {
+		slog.Warn("aside_meta_write_failed",
+			"component", "aside",
+			"name", id,
+			"err", err.Error(),
+		)
+	}
 	slog.Info("aside registered",
 		"component", "aside",
 		"name", id,
 		"parent", parent,
 		"title", title,
+		"kind", kind,
 	)
 	return createAsideResponse{
 		Name:        id,
@@ -178,7 +200,7 @@ func (s *Server) handleCreateAside(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	out, err := s.ensureAsideAgent(req.ID, req.Title, req.Parent)
+	out, err := s.ensureAsideAgent(req.ID, req.Title, req.Parent, req.Kind)
 	if err != nil {
 		// No registry / bad id → 4xx; other → 500.
 		msg := err.Error()
@@ -242,7 +264,10 @@ func (s *Server) handleCreateAside(w http.ResponseWriter, r *http.Request) {
 // dismissAsideAgent stops and deregisters a purpose=aside fleet agent by id
 // (🎯T152 reverse of ensureAsideAgent / POST /api/asides). Refuses overseer
 // and non-aside purposes so filing auto-close cannot kill workers.
-func (s *Server) dismissAsideAgent(id string) error {
+// 🎯T270: archives a closed-aside record to durable state before Remove so
+// history remains retrievable after the live 💡 row is gone.
+// kindHint is optional (from DELETE ?kind=); open meta fills when empty.
+func (s *Server) dismissAsideAgent(id, kindHint string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return fmt.Errorf("id is required")
@@ -264,10 +289,21 @@ func (s *Server) dismissAsideAgent(id string) error {
 	def := reg.Def(id)
 	if def == nil {
 		// Idempotent: already gone is success for the close path.
+		// Still no new history row (unknown title/kind).
 		return nil
 	}
 	if def.Purpose != claudia.PurposeAside {
 		return fmt.Errorf("agent %q purpose %q is not aside; refuse dismiss", id, def.Purpose)
+	}
+	// Archive before remove so a crash mid-dismiss still leaves history if
+	// remove never runs (owner can re-dismiss). Reverse order would drop history.
+	if err := s.archiveClosedAside(id, def.Description, kindHint, def.Parent, def.WorkDir); err != nil {
+		slog.Warn("aside_history_archive_failed",
+			"component", "aside",
+			"name", id,
+			"err", err.Error(),
+		)
+		// Do not block dismiss chrome on history write failure.
 	}
 	if err := reg.Remove(id); err != nil {
 		return fmt.Errorf("remove aside %q: %w", id, err)
@@ -275,12 +311,14 @@ func (s *Server) dismissAsideAgent(id string) error {
 	slog.Info("aside dismissed",
 		"component", "aside",
 		"name", id,
+		"kind", normalizeAsideKind(kindHint),
 	)
 	return nil
 }
 
 // handleDeleteAside DELETE /api/asides/{id} — stop/deregister a purpose=aside
 // fleet agent so RHS 💡 chrome leaves with the filing close path (🎯T152).
+// Optional ?kind=side|capture|target for 🎯T270 history type when meta missing.
 func (s *Server) handleDeleteAside(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -291,7 +329,8 @@ func (s *Server) handleDeleteAside(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id is required", http.StatusBadRequest)
 		return
 	}
-	if err := s.dismissAsideAgent(id); err != nil {
+	kindHint := r.URL.Query().Get("kind")
+	if err := s.dismissAsideAgent(id, kindHint); err != nil {
 		msg := err.Error()
 		code := http.StatusBadRequest
 		switch {
@@ -308,7 +347,29 @@ func (s *Server) handleDeleteAside(w http.ResponseWriter, r *http.Request) {
 	s.NotifyAgentsChanged()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"name":     id,
+		"name":      id,
 		"dismissed": true,
+	})
+}
+
+// handleListClosedAsides GET /api/asides/history — durable closed/dismissed
+// asides for owner browse (🎯T270). Not live fleet rows.
+func (s *Server) handleListClosedAsides(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	list, err := s.listClosedAsides()
+	if err != nil {
+		http.Error(w, "read aside history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []closedAsideRecord{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"asides": list,
+		"count":  len(list),
 	})
 }

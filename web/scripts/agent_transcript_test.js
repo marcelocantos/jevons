@@ -778,12 +778,28 @@ test('T263 createAsideRequestBody includes opening text when freeform', function
 });
 
 test('T263 freeformAsideCreateOpts only for aside: command', function () {
-  assert.deepStrictEqual(AT.freeformAsideCreateOpts('capture', 'note'), {});
-  assert.deepStrictEqual(AT.freeformAsideCreateOpts('target', 'file this'), {});
-  assert.deepStrictEqual(AT.freeformAsideCreateOpts('aside', '   '), {});
+  // 🎯T270: kind always set for closed-history type; deliver only on freeform aside:.
+  assert.deepStrictEqual(AT.freeformAsideCreateOpts('capture', 'note'), {
+    kind: 'capture', command: 'capture',
+  });
+  assert.deepStrictEqual(AT.freeformAsideCreateOpts('target', 'file this'), {
+    kind: 'target', command: 'target',
+  });
+  assert.deepStrictEqual(AT.freeformAsideCreateOpts('aside', '   '), {
+    kind: 'side', command: 'aside',
+  });
   const o = AT.freeformAsideCreateOpts('aside', 'how does bullseye compare to beads?');
   assert.strictEqual(o.text, 'how does bullseye compare to beads?');
   assert.strictEqual(o.expectDeliver, true);
+  assert.strictEqual(o.kind, 'side');
+});
+
+test('T270 createAsideRequestBody carries kind', function () {
+  const b = AT.createAsideRequestBody('att-x', 'title', '', 'target');
+  assert.strictEqual(b.kind, 'target');
+  assert.strictEqual(b.text, undefined);
+  const bare = AT.createAsideRequestBody('att-y', 't');
+  assert.strictEqual(bare.kind, undefined);
 });
 
 test('T263 index.html freeform create path + working chrome + loud fail', function () {

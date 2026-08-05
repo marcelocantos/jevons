@@ -795,17 +795,21 @@
    * 🎯T263: JSON body for POST /api/asides.
    * Freeform opening text is optional; when present the server starts and
    * delivers in the same request (not register-only empty transcript).
+   * 🎯T270: optional kind (side|capture|target) for closed-history type.
    * @param {string} id
    * @param {string} title
    * @param {string} [text] opening owner prompt
+   * @param {string} [kind] side | capture | target
    */
-  function createAsideRequestBody(id, title, text) {
+  function createAsideRequestBody(id, title, text, kind) {
     const body = {
       id: String(id || ''),
       title: String(title || 'aside'),
     };
     const opening = text == null ? '' : String(text).trim();
     if (opening) body.text = opening;
+    const k = kind == null ? '' : String(kind).trim();
+    if (k) body.kind = k;
     return body;
   }
 
@@ -813,14 +817,19 @@
    * 🎯T263: opts for ensureFleetAside on explicit prefix create.
    * Only freeform aside: passes opening text + expectDeliver.
    * capture:/target: stay register-only (no text).
+   * 🎯T270: always includes kind for durable history type.
    * @param {string} command parsePrefix command
    * @param {string} openingBody
    */
   function freeformAsideCreateOpts(command, openingBody) {
-    if (String(command || '').toLowerCase() !== 'aside') return {};
+    const cmd = String(command || '').toLowerCase();
+    const kind = cmd === 'target' ? 'target' : (cmd === 'capture' ? 'capture' : 'side');
+    if (cmd !== 'aside') {
+      return { kind: kind, command: cmd };
+    }
     const t = String(openingBody == null ? '' : openingBody).trim();
-    if (!t) return {};
-    return { text: t, expectDeliver: true };
+    if (!t) return { kind: kind, command: cmd };
+    return { text: t, expectDeliver: true, kind: kind, command: cmd };
   }
 
   /**
