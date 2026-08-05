@@ -2026,8 +2026,13 @@ function handle(m) {
       try { drainSendQueueIfIdle(); } catch (_) {}
     }
     // Soft reconnect: DOM already has transcript — skip full progressive re-hydrate.
-    // 🎯T209: re-subscribe inspect so sealed history + live resume on this socket.
+    // 🎯T279: user-echo frames were suppressed during soft; re-paint any
+    // unacked main-paintable pending still missing from the transcript.
     if (wasSoft) {
+      if (typeof retainPendingOwnerTurnsVisible === 'function') {
+        try { retainPendingOwnerTurnsVisible(); } catch (_) {}
+      }
+      // 🎯T209: re-subscribe inspect so sealed history + live resume on this socket.
       if (typeof resubscribeAgentInspect === 'function') resubscribeAgentInspect();
       if (!chatConnUiReadyLogged) {
         chatConnUiReadyLogged = true;
@@ -2124,8 +2129,17 @@ function handle(m) {
     const content = m.message?.content;
     if (typeof content === 'string') {
       // Server synthesises a user echo on send; Grok ACP may also
-      // publish user_message_chunk for the same prompt. Drop the dupe.
-      if (content && msgHistory[msgHistory.length - 1]?.text === content) return;
+      // publish user_message_chunk for the same prompt. Drop the dupe
+      // (including 🎯T279 optimistic main paint before echo).
+      const lastHist = msgHistory[msgHistory.length - 1]?.text;
+      const isDupe = (typeof ChatEvents !== 'undefined' && ChatEvents.isDuplicateUserEcho)
+        ? ChatEvents.isDuplicateUserEcho(lastHist, content)
+        : (content && lastHist === content);
+      if (content && isDupe) {
+        // 🎯T239: still ack pending — optimistic bubble already painted.
+        if (typeof ackPendingFromContent === 'function') ackPendingFromContent(content);
+        return;
+      }
       // 🎯T239: user echo = durable ack of a staged wire send (including asides).
       if (content && typeof ackPendingFromContent === 'function') ackPendingFromContent(content);
       // 🎯T250/T264: aside wire turns never paint on main #messages — sidebar only.
@@ -5823,6 +5837,69 @@ function isChatWireOpen() {
   return typeof transport.send === 'function';
 }
 
+// 🎯T279: optimistic owner bubble on main after wire.accept (before server echo).
+// Soft reconnect suppresses user frames until history_meta — without this paint
+// the composer clears and the outbound turn can vanish silently.
+function paintOptimisticMainUser(text) {
+  if (typeof ChatEvents === 'undefined' || !ChatEvents.planOptimisticMainUserPaint) {
+    return null;
+  }
+  const existing = (msgHistory || []).map(function (h) {
+    return { text: h && h.text != null ? h.text : '' };
+  });
+  const isAside = (typeof isMainAsideWireUserText === 'function')
+    ? isMainAsideWireUserText
+    : null;
+  const plan = ChatEvents.planOptimisticMainUserPaint(existing, text, isAside);
+  if (!plan || !plan.paint || !plan.text) return null;
+  try { closeTurn(); } catch (_) { /* isolated */ }
+  const uEl = addMsg('user', plan.text, Date.now());
+  if (!uEl) return null;
+  uEl._optimisticSend = true;
+  msgHistory.push({ text: plan.text, el: uEl });
+  try { startTurn(); } catch (_) { /* isolated */ }
+  return uEl;
+}
+
+// 🎯T279: after soft reconnect / hydrate settle, re-paint any unacked
+// main-paintable pending bodies still missing from the transcript DOM.
+function retainPendingOwnerTurnsVisible() {
+  if (typeof ChatEvents === 'undefined' || !ChatEvents.planRepaintAfterSoftReconnect) {
+    return;
+  }
+  let pending = [];
+  if (typeof ComposerPersist !== 'undefined' && ComposerPersist.unackedTexts) {
+    try { pending = ComposerPersist.unackedTexts(pendingSendState) || []; } catch (_) { pending = []; }
+  }
+  if (!pending.length) return;
+  let painted = [];
+  try {
+    painted = (typeof collectDomOwnerEntries === 'function')
+      ? collectDomOwnerEntries().map(function (e) { return e && e.text; })
+      : (msgHistory || []).map(function (h) { return h && h.text; });
+  } catch (_) {
+    painted = (msgHistory || []).map(function (h) { return h && h.text; });
+  }
+  const isAside = (typeof isMainAsideWireUserText === 'function')
+    ? isMainAsideWireUserText
+    : null;
+  const plan = ChatEvents.planRepaintAfterSoftReconnect({
+    paintedUserTexts: painted,
+    pendingTexts: pending,
+    isAsideWire: isAside,
+  });
+  const need = (plan && plan.repaint) || [];
+  for (let i = 0; i < need.length; i++) {
+    paintOptimisticMainUser(need[i]);
+  }
+  // Aside wires: re-seed RHS cache (never main) so inspect merge still shows body.
+  for (let j = 0; j < pending.length; j++) {
+    if (isAside && isAside(pending[j]) && typeof noteAsideWireFromMain === 'function') {
+      try { noteAsideWireFromMain(pending[j]); } catch (_) { /* isolated */ }
+    }
+  }
+}
+
 // Submit a fully-prepared wire string (interrupt optional). Used by send()
 // and by auto-drain / send-now so queue drain does not re-enter attention.
 // Returns true only when transport accepted the payload (🎯T228 — callers
@@ -5843,6 +5920,8 @@ function submitWireText(t, opts) {
   if (!ok) return false;
   // 🎯T239: stage until user echo / chatlog ack — never silent-drop on restart.
   stagePendingSend(t);
+  // 🎯T279: paint main owner bubble immediately (aside wires skip — T264).
+  paintOptimisticMainUser(t);
   // 🎯T250: optimistic sidebar record for aside wires (server echo will dedupe).
   if (typeof noteAsideWireFromMain === 'function') noteAsideWireFromMain(t);
   histIdx = null; histDraft = ''; setEditingHighlight(null);
@@ -6015,6 +6094,14 @@ function send(opts) {
         createOpts.kind = createOpts.kind || 'side';
       }
       createOpts.command = parsedCmd.command;
+      // 🎯T279: paint owner opening on RHS immediately (target:/aside:/capture:)
+      // so the request never vanishes from UI while register/deliver is in flight.
+      // Freeform aside: still also deliver via ensureFleetAside when text set.
+      if (openingBody && typeof showAsideOpeningWorking === 'function') {
+        try {
+          showAsideOpeningWorking(r.threadId, String(openingBody).trim());
+        } catch (_) { /* inspect may not be mounted */ }
+      }
       ensureFleetAside(r.threadId, title || 'aside', createOpts).catch(function () {
         // ensureFleetAside already surfaces loud UI for freeform deliver fail.
       });

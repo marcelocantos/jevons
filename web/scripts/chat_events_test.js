@@ -843,6 +843,139 @@ test('regression guard: hasText without stop must not clear', () => {
   assert.strictEqual(ChatEvents.shouldClearWorking(m), false);
 });
 
+// ── 🎯T279 post-send owner-turn retention ─────────────────────────
+// Vanish path: wire.accept + clear composer, then soft reconnect suppresses
+// user echo until history_meta → no bubble. Fix: optimistic paint + merge
+// keep pending owner turns across hydrate/WS reconcile.
+
+function isAsideWireFixture(t) {
+  const s = String(t || '');
+  return /^\s*\[(?:attention|target-aside)\s*:/i.test(s);
+}
+
+test('T279 planOptimisticMainUserPaint paints plain owner text', () => {
+  const plan = ChatEvents.planOptimisticMainUserPaint(
+    [{ text: 'earlier' }],
+    'I just submitted a message',
+    isAsideWireFixture,
+  );
+  assert.strictEqual(plan.paint, true);
+  assert.strictEqual(plan.text, 'I just submitted a message');
+  assert.strictEqual(plan.reason, 'optimistic');
+});
+
+test('T279 planOptimisticMainUserPaint skips aside wires (main never paints)', () => {
+  const wire = '[target-aside: att-x | play spin]\nclicking play shows spinner';
+  const plan = ChatEvents.planOptimisticMainUserPaint([], wire, isAsideWireFixture);
+  assert.strictEqual(plan.paint, false);
+  assert.strictEqual(plan.reason, 'aside-wire');
+});
+
+test('T279 planOptimisticMainUserPaint dedupes when already last', () => {
+  const plan = ChatEvents.planOptimisticMainUserPaint(
+    [{ text: 'same body' }],
+    'same body',
+    isAsideWireFixture,
+  );
+  assert.strictEqual(plan.paint, false);
+  assert.strictEqual(plan.reason, 'already-last');
+});
+
+test('T279 planRetainOwnerTurns keeps optimistic missing from shorter hydrate', () => {
+  // Simulate: optimistic painted [a, b, owner-new]; hydrate/WS list shorter omits owner-new.
+  const painted = ['a', 'b', 'owner-new'];
+  const hydrateOnly = ['a', 'b']; // shorter page / reconcile without pending
+  const pending = ['owner-new'];
+  // If reconcile replaced with hydrateOnly, retain must restore pending.
+  const plan = ChatEvents.planRetainOwnerTurns(hydrateOnly, pending);
+  assert.deepStrictEqual(plan.missing, ['owner-new']);
+  assert.deepStrictEqual(plan.keepTexts, ['a', 'b', 'owner-new']);
+  // Already painted: no missing.
+  const plan2 = ChatEvents.planRetainOwnerTurns(painted, pending);
+  assert.deepStrictEqual(plan2.missing, []);
+  assert.deepStrictEqual(plan2.keepTexts, painted);
+});
+
+test('T279 planRepaintAfterSoftReconnect: unacked main body not in DOM → repaint', () => {
+  const plan = ChatEvents.planRepaintAfterSoftReconnect({
+    paintedUserTexts: ['old turn'],
+    pendingTexts: ['vanished owner turn', '[attention:att-1|t]\naside body'],
+    isAsideWire: isAsideWireFixture,
+  });
+  assert.deepStrictEqual(plan.repaint, ['vanished owner turn']);
+  // Already painted → empty.
+  const plan2 = ChatEvents.planRepaintAfterSoftReconnect({
+    paintedUserTexts: ['vanished owner turn'],
+    pendingTexts: ['vanished owner turn'],
+    isAsideWire: isAsideWireFixture,
+  });
+  assert.deepStrictEqual(plan2.repaint, []);
+});
+
+test('T279 isDuplicateUserEcho matches optimistic then server echo', () => {
+  assert.strictEqual(
+    ChatEvents.isDuplicateUserEcho('hello owner', 'hello owner'),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.isDuplicateUserEcho('hello owner', 'different'),
+    false,
+  );
+  assert.strictEqual(ChatEvents.isDuplicateUserEcho('', 'x'), false);
+});
+
+test('T279 applyChatEvents: optimistic-then-echo does not double userTexts', () => {
+  // Pure event model: first user is optimistic equivalent; second is server echo.
+  const state = ChatEvents.applyChatEvents([
+    user('owner outbound'),
+    user('owner outbound'), // dupe echo
+  ]);
+  assert.deepStrictEqual(state.userTexts, ['owner outbound']);
+});
+
+test('T279 vanish path fails without retention; passes with merge', () => {
+  // Without retain: painted loses pending after "hydrate replace".
+  const afterOptimistic = ['prior', 'just submitted'];
+  const afterBadHydrate = ['prior']; // drop — the bug
+  assert.ok(
+    afterBadHydrate.indexOf('just submitted') < 0,
+    'fixture: vanish path drops owner turn',
+  );
+  const retained = ChatEvents.planRetainOwnerTurns(afterBadHydrate, ['just submitted']);
+  assert.ok(
+    retained.keepTexts.indexOf('just submitted') >= 0,
+    'retention merge must keep owner turn',
+  );
+  assert.deepStrictEqual(retained.missing, ['just submitted']);
+});
+
+test('T279 index.html: optimistic paint + soft-reconnect retain wired', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('paintOptimisticMainUser'), 'must paint optimistic main user');
+  assert.ok(html.includes('retainPendingOwnerTurnsVisible'), 'must retain after soft reconnect');
+  assert.ok(html.includes('planOptimisticMainUserPaint'), 'must use pure paint plan');
+  assert.ok(html.includes('planRepaintAfterSoftReconnect'), 'must use pure repaint plan');
+  assert.ok(
+    /submitWireText[\s\S]{0,800}paintOptimisticMainUser/.test(html),
+    'submitWireText must call paintOptimisticMainUser after accept',
+  );
+  assert.ok(
+    /wasSoft[\s\S]{0,600}retainPendingOwnerTurnsVisible/.test(html),
+    'soft history_meta must retain pending owner turns',
+  );
+  assert.ok(
+    /isDuplicateUserEcho|lastHist[\s\S]{0,200}content/.test(html),
+    'user echo must dedupe against optimistic paint',
+  );
+  // target:/aside: create must show opening on RHS immediately (not only freeform deliver).
+  assert.ok(
+    /showAsideOpeningWorking\(r\.threadId/.test(html) ||
+      /showAsideOpeningWorking\(\s*r\.threadId/.test(html),
+    'target/aside create must optimistic-paint RHS opening',
+  );
+  assert.ok(/T279/.test(html) || /🎯T279/.test(html), 'T279 marker in product path');
+});
+
 // ── Go package tests ────────────────────────────────────────────
 
 test('go chat wire + roundtrip tests pass', () => {

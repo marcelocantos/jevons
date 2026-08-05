@@ -453,6 +453,114 @@
     return false;
   }
 
+  // ── 🎯T279 post-send owner-turn retention ──────────────────────────
+  // Soft reconnect suppresses user-echo frames until history_meta (T143).
+  // Without optimistic paint, a flap after wire.accept clears the composer
+  // and never paints the outbound bubble → silent vanish. Hydrate/WS
+  // reconcile must merge/keep optimistic owner turns, not drop them.
+
+  function _entryText(entry) {
+    if (entry == null) return '';
+    if (typeof entry === 'string') return entry;
+    if (typeof entry === 'object' && entry.text != null) return String(entry.text);
+    return '';
+  }
+
+  /**
+   * Plan optimistic main #messages paint after transport.accept.
+   * Aside wires stay off main (T264) — paint:false with reason aside-wire.
+   *
+   * @param {Array<{text?:string}|string>} existing owner turns already painted
+   * @param {string} text wire body accepted by transport
+   * @param {(t:string)=>boolean} [isAsideWire] true when body is attention/target-aside
+   * @returns {{ paint: boolean, text: string, reason: string }}
+   */
+  function planOptimisticMainUserPaint(existing, text, isAsideWire) {
+    const t = String(text == null ? '' : text).trim();
+    if (!t) return { paint: false, text: '', reason: 'empty' };
+    if (typeof isAsideWire === 'function' && isAsideWire(t)) {
+      return { paint: false, text: t, reason: 'aside-wire' };
+    }
+    const list = existing || [];
+    const last = list.length ? _entryText(list[list.length - 1]).trim() : '';
+    if (last === t) return { paint: false, text: t, reason: 'already-last' };
+    return { paint: true, text: t, reason: 'optimistic' };
+  }
+
+  /**
+   * Merge painted owner texts with pending/optimistic tails after
+   * hydrate/WS reconcile. Never drop a pending owner turn that is still
+   * missing from the painted list (shorter hydrate must not win).
+   *
+   * @param {Array<string|{text?:string}>} paintedUserTexts
+   * @param {Array<string|{text?:string}>} pendingTexts
+   * @returns {{ keepTexts: string[], missing: string[] }}
+   */
+  function planRetainOwnerTurns(paintedUserTexts, pendingTexts) {
+    const painted = (paintedUserTexts || []).map(function (e) {
+      return _entryText(e);
+    });
+    const pending = (pendingTexts || []).map(function (e) {
+      return _entryText(e).trim();
+    }).filter(function (t) { return t.length > 0; });
+    const have = Object.create(null);
+    for (let i = 0; i < painted.length; i++) {
+      const k = String(painted[i]).trim();
+      if (k) have[k] = true;
+    }
+    const missing = [];
+    for (let j = 0; j < pending.length; j++) {
+      if (!have[pending[j]]) {
+        missing.push(pending[j]);
+        have[pending[j]] = true;
+      }
+    }
+    return {
+      keepTexts: painted.concat(missing),
+      missing: missing,
+    };
+  }
+
+  /**
+   * After soft reconnect history_meta: which unacked main-paintable bodies
+   * still need a bubble (echo was suppressed; optimistic may have been wiped
+   * only on hard reconnect — soft keeps DOM, but race can still miss).
+   *
+   * @param {{ paintedUserTexts?: Array, pendingTexts?: Array, isAsideWire?: function }} opts
+   * @returns {{ repaint: string[] }}
+   */
+  function planRepaintAfterSoftReconnect(opts) {
+    const o = opts || {};
+    const painted = o.paintedUserTexts || [];
+    const pending = o.pendingTexts || [];
+    const isAside = o.isAsideWire;
+    const have = Object.create(null);
+    for (let i = 0; i < painted.length; i++) {
+      const k = _entryText(painted[i]).trim();
+      if (k) have[k] = true;
+    }
+    const repaint = [];
+    for (let j = 0; j < pending.length; j++) {
+      const t = _entryText(pending[j]).trim();
+      if (!t) continue;
+      if (typeof isAside === 'function' && isAside(t)) continue;
+      if (have[t]) continue;
+      repaint.push(t);
+      have[t] = true;
+    }
+    return { repaint: repaint };
+  }
+
+  /**
+   * Server user echo after optimistic paint: drop when last painted text
+   * already matches (no double bubble).
+   */
+  function isDuplicateUserEcho(lastPaintedText, echoText) {
+    const a = String(lastPaintedText == null ? '' : lastPaintedText).trim();
+    const b = String(echoText == null ? '' : echoText).trim();
+    return !!(a && b && a === b);
+  }
+
   return {
     stopReason,
     isTerminalStop,
@@ -474,6 +582,11 @@
     createTurnState,
     applyChatEvent,
     applyChatEvents,
+    // 🎯T279 retention
+    planOptimisticMainUserPaint,
+    planRetainOwnerTurns,
+    planRepaintAfterSoftReconnect,
+    isDuplicateUserEcho,
     TERMINAL_STOPS,
     SILENT_PREFIX,
   };
