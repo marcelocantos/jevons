@@ -46,6 +46,43 @@ test('target: opens file-target aside, wire, main focus (T93/T95)', function () 
   assert.strictEqual(r.state.threads[0].purpose, 'file-target');
 });
 
+// 🎯T247: explicit open prefixes spawn immediately — no affordance-gated intermediate.
+test('T247 target:/aside:/capture: open path has threadId + no create-gate state', function () {
+  const RS = require('./route_suggest.js');
+  const TR = require('./thread_route.js');
+
+  const target = AT.handleComposer(AT.emptyState(), 'target: Explicit open no chip');
+  assert.ok(target.threadId && target.threadId.indexOf('att-') === 0, 'target: mints aside');
+  assert.strictEqual(target.kind, 'send');
+  assert.strictEqual(target.routed, true);
+  assert.strictEqual(target.purpose, 'file-target');
+  assert.strictEqual(target.state.threads[0].status, 'open');
+  // No intermediate create state in the pure model — open is the only state.
+  assert.ok(RS.shouldSkipRouteSuggest(target), 'no route/create affordance after target:');
+  // Routing the produced wire must not invent a match chip either.
+  const candidates = AT.routeCandidates(target.state);
+  const hit = TR.route(target.text, candidates);
+  assert.strictEqual(hit.reason, 'explicit-prefix');
+  assert.strictEqual(hit.threadId, null);
+  const plan = RS.planAutoRouteAction(hit, {
+    threads: candidates,
+    body: target.text,
+    composerResult: target,
+  });
+  assert.strictEqual(plan.steal, false);
+  assert.strictEqual(plan.suggestion, null);
+
+  const aside = AT.handleComposer(AT.emptyState(), 'aside: ship checklist now');
+  assert.ok(aside.threadId);
+  assert.strictEqual(aside.routed, true);
+  assert.ok(RS.shouldSkipRouteSuggest(aside));
+
+  const cap = AT.handleComposer(AT.emptyState(), 'capture: later idea');
+  assert.ok(cap.threadId);
+  assert.strictEqual(cap.kind, 'local');
+  assert.ok(RS.shouldSkipRouteSuggest(cap));
+});
+
 test('detectTargetFiled + closeTargetAside dismisses filing aside (done, not parked)', function () {
   const open = AT.handleComposer(AT.emptyState(), 'target: Foo bar');
   const id = open.threadId;

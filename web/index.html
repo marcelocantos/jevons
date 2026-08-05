@@ -4376,6 +4376,9 @@ function send(opts) {
     t = t ? (markers + '\n' + t) : markers;
   }
   // 🎯T65/T95 prefix-first: aside:/capture:/park:/main:/pursue:/target:
+  // 🎯T247: when an explicit open prefix already spawns/routes the aside, do not
+  // fall through to T135 "Continue in" / create-affordance after send.
+  let explicitAsideOpened = false;
   if (attentionState && typeof AttentionThreads !== 'undefined') {
     if (!AttentionThreads.isMainFocus(attentionState)) {
       // Don't clobber side-thread body with a command-prefixed draft.
@@ -4421,6 +4424,11 @@ function send(opts) {
         title = AttentionThreads.titleFromBody((th && th.body) || '');
       }
       ensureFleetAside(r.threadId, title || 'aside');
+      // 🎯T247: explicit open prefix already spawned — no post-send route chip.
+      explicitAsideOpened = true;
+    } else if (r.routed) {
+      // Already delivered onto an aside wire (pursue focus / aside: body).
+      explicitAsideOpened = true;
     }
     if (r.kind === 'local' || r.kind === 'empty') {
       if (r.clearComposer) {
@@ -4448,9 +4456,11 @@ function send(opts) {
   // 🎯T134: routeCandidates = open only — never done/archive ghosts.
   // 🎯T135: match is suggestion only; no silent steal — NEVER pursue or
   // rewrite `t` / wire via formatAsideWire on auto-match. Main draft stays main.
-  // ALWAYS log the route hit (T99 opacity / T120 DecisionLog).
+  // 🎯T247: skip entirely when target:/aside:/capture: (or other routed
+  // composer path) already opened the aside — no intermediate create/continue chip.
+  // ALWAYS log the route hit (T99 opacity / T120 DecisionLog) when we do plan.
   let pendingRouteSuggestion = null;
-  if (typeof ThreadRoute !== 'undefined' && attentionState &&
+  if (!explicitAsideOpened && typeof ThreadRoute !== 'undefined' && attentionState &&
       typeof AttentionThreads !== 'undefined' && AttentionThreads.isMainFocus(attentionState)) {
     // Route on seed-stripped draft (🎯T21) so EMPTY_SEED never influences match.
     const ownerDraft = t;

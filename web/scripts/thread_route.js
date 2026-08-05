@@ -60,6 +60,9 @@
   // route(message, threads, opts) → { threadId|null, score, reason }
   // threads: [{ id, title, digest, body, status?, updatedAt? }]
   // Explicit prefixes (aside:, main:, target:, pursue:) disable auto-route.
+  // Wire markers from those prefixes ([target-aside:…], [attention:…]) also
+  // disable auto-route (🎯T247) so a just-opened aside never re-suggests
+  // Continue-in / create affordance on the same send.
   // Skips done/archived even if caller forgot to filter (🎯T134).
   function route(message, threads, opts) {
     opts = opts || {};
@@ -67,6 +70,10 @@
     if (!raw) return { threadId: null, score: 0, reason: 'empty' };
 
     if (/^\s*(aside|capture|park|main|pursue|target)\s*:/i.test(raw)) {
+      return { threadId: null, score: 0, reason: 'explicit-prefix' };
+    }
+    // Already-routed wire from target:/aside: composer paths (🎯T247).
+    if (/^\s*\[(target-aside|attention)\s*:/i.test(raw)) {
       return { threadId: null, score: 0, reason: 'explicit-prefix' };
     }
 

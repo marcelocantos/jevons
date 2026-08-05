@@ -21,6 +21,21 @@
     return id != null && id !== '' && id !== 'main';
   }
 
+  // 🎯T247: after handleComposer for target:/aside:/capture: (or any already-
+  // routed send), never plan a Continue-in / create-aside affordance.
+  // composerResult is the AttentionThreads.handleComposer return value.
+  function shouldSkipRouteSuggest(composerResult) {
+    if (!composerResult || typeof composerResult !== 'object') return false;
+    if (composerResult.routed) return true;
+    if (composerResult.purpose === 'file-target') return true;
+    if (composerResult.threadId &&
+        (composerResult.kind === 'send' || composerResult.kind === 'local')) {
+      // Capture is local+threadId; aside/target are send+threadId+routed.
+      return true;
+    }
+    return false;
+  }
+
   // Label for the affordance: Continue in: «title»
   function formatSwitchLabel(threadOrTitle) {
     let title = '';
@@ -41,6 +56,8 @@
   // planMainSend(routeHit, opts) → always main wire; optional suggestion.
   // opts.threads: optional list to resolve title for the hit threadId.
   // opts.body: optional message body stored on suggestion for later switch.
+  // opts.composerResult: handleComposer outcome — when already open/routed
+  // (🎯T247), suggestion stays null (no create/continue affordance).
   // Default path NEVER rewrites wire into an attention thread (🎯T135).
   function planMainSend(routeHit, opts) {
     opts = opts || {};
@@ -49,6 +66,7 @@
       wireMode: 'main',
       suggestion: null,
     };
+    if (shouldSkipRouteSuggest(opts.composerResult)) return out;
     if (!shouldShowSwitch(hit)) return out;
 
     let title = opts.title != null ? String(opts.title) : '';
@@ -117,6 +135,7 @@
 
   return {
     shouldShowSwitch: shouldShowSwitch,
+    shouldSkipRouteSuggest: shouldSkipRouteSuggest,
     formatSwitchLabel: formatSwitchLabel,
     planMainSend: planMainSend,
     planAutoRouteAction: planAutoRouteAction,
