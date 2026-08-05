@@ -702,9 +702,34 @@
   }
 
   /**
+   * Owner-echo equality key for inspect user lines (🎯T281).
+   * Unwraps <user_query> fleet inject wrappers so optimistic plain text
+   * matches the WS echo when ACP wraps the same body.
+   */
+  function inspectUserDedupeKey(text) {
+    const raw = text == null ? '' : String(text);
+    if (!raw) return '';
+    const unwrapped = unwrapInspectUserText(raw);
+    return String(unwrapped.text != null ? unwrapped.text : raw).trim();
+  }
+
+  /**
+   * True when a new inspect user frame is the same owner submit as the
+   * last painted user line (optimistic + WS double-append guard, 🎯T281).
+   * Consecutive only — intentional resend after an assistant turn paints again.
+   */
+  function isDuplicateInspectUserLine(lastLine, nextUserText) {
+    if (!lastLine || lastLine.role !== 'user') return false;
+    const a = inspectUserDedupeKey(lastLine.text);
+    const b = inspectUserDedupeKey(nextUserText);
+    return !!(a && b && a === b);
+  }
+
+  /**
    * Apply a progressive live event (chat-wire-ish) onto sealed-ish lines.
    * Assistant tokens coalesce into the last streaming assistant line.
    * Terminal stop seals the stream flag. Pure — no DOM.
+   * 🎯T281: user frames dedupe against last user line (optimistic + WS echo).
    *
    * @param {Array<{role:string,text:string,_stream?:boolean}>|null} lines
    * @param {object|null} event
@@ -718,7 +743,13 @@
     if (event.type === 'user') {
       const content = event.message && event.message.content;
       const text = typeof content === 'string' ? content : '';
-      if (text) out.push({ role: 'user', text: text });
+      if (text) {
+        // 🎯T281: one owner submit → one bubble (optimistic then live echo).
+        const last = out[out.length - 1];
+        if (!isDuplicateInspectUserLine(last, text)) {
+          out.push({ role: 'user', text: text });
+        }
+      }
       return out;
     }
     if (event.type === 'assistant') {
@@ -941,8 +972,9 @@
       return l ? { role: l.role, text: l.text } : l;
     });
     if (body) {
+      // 🎯T281: unwrap-aware consecutive dedupe (same as live echo path).
       const last = next[next.length - 1];
-      if (!(last && last.role === 'user' && last.text === body)) {
+      if (!isDuplicateInspectUserLine(last, body)) {
         next.push({ role: 'user', text: body });
       }
     }
@@ -1039,6 +1071,8 @@
     inspectUnsubscribeFrame: inspectUnsubscribeFrame,
     isAgentTranscriptFrame: isAgentTranscriptFrame,
     applyInspectLiveFrame: applyInspectLiveFrame,
+    inspectUserDedupeKey: inspectUserDedupeKey,
+    isDuplicateInspectUserLine: isDuplicateInspectUserLine,
     paneModelFromWire: paneModelFromWire,
     sidebarComposerVisible: sidebarComposerVisible,
     isSidebarDraftEmpty: isSidebarDraftEmpty,

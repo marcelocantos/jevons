@@ -924,6 +924,26 @@ test('T279 isDuplicateUserEcho matches optimistic then server echo', () => {
   assert.strictEqual(ChatEvents.isDuplicateUserEcho('', 'x'), false);
 });
 
+// 🎯T281: unwrap-aware main echo dedupe (optimistic plain vs ACP wrapper).
+test('T281 isDuplicateUserEcho unwraps user_query for equality', () => {
+  assert.strictEqual(
+    ChatEvents.isDuplicateUserEcho(
+      'do a release.',
+      '<user_query>\ndo a release.\n</user_query>',
+    ),
+    true,
+    'wrapped echo matches plain optimistic',
+  );
+  assert.strictEqual(
+    ChatEvents.normalizeOwnerEchoText('<user_query>hi</user_query>'),
+    'hi',
+  );
+  assert.strictEqual(
+    ChatEvents.isDuplicateUserEcho('a', 'b'),
+    false,
+  );
+});
+
 test('T279 applyChatEvents: optimistic-then-echo does not double userTexts', () => {
   // Pure event model: first user is optimistic equivalent; second is server echo.
   const state = ChatEvents.applyChatEvents([

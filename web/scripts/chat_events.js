@@ -552,12 +552,31 @@
   }
 
   /**
+   * Normalize owner echo text for equality (🎯T281 / T279 shared).
+   * Unwraps a single outer <user_query>…</user_query> so optimistic plain
+   * body matches ACP-wrapped server echo without double-painting.
+   */
+  function normalizeOwnerEchoText(text) {
+    let t = String(text == null ? '' : text).trim();
+    if (!t) return '';
+    // One-shot unwrap (same shape as AgentTranscript.unwrapInspectUserText).
+    for (let i = 0; i < 3; i++) {
+      const m = t.match(
+        /^\s*<user_query(?:\s[^>]*)?>\s*([\s\S]*?)\s*<\/user_query>\s*$/i,
+      );
+      if (!m) break;
+      t = String(m[1] || '').trim();
+    }
+    return t;
+  }
+
+  /**
    * Server user echo after optimistic paint: drop when last painted text
-   * already matches (no double bubble).
+   * already matches (no double bubble). Unwrap-aware (🎯T281).
    */
   function isDuplicateUserEcho(lastPaintedText, echoText) {
-    const a = String(lastPaintedText == null ? '' : lastPaintedText).trim();
-    const b = String(echoText == null ? '' : echoText).trim();
+    const a = normalizeOwnerEchoText(lastPaintedText);
+    const b = normalizeOwnerEchoText(echoText);
     return !!(a && b && a === b);
   }
 
@@ -582,10 +601,11 @@
     createTurnState,
     applyChatEvent,
     applyChatEvents,
-    // 🎯T279 retention
+    // 🎯T279 retention / 🎯T281 send-once
     planOptimisticMainUserPaint,
     planRetainOwnerTurns,
     planRepaintAfterSoftReconnect,
+    normalizeOwnerEchoText,
     isDuplicateUserEcho,
     TERMINAL_STOPS,
     SILENT_PREFIX,

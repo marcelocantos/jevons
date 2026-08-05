@@ -1165,6 +1165,86 @@ test('T265 afterSidebarSendOptimistic appends user + opens working', function ()
   assert.strictEqual(r2.model.working, true);
 });
 
+// ── 🎯T281: one owner submit → one bubble (optimistic + WS reconcile) ──
+
+test('T281 applyInspectLiveFrame: optimistic + live user echo → one bubble', function () {
+  // Product path: afterSidebarSendOptimistic then agent_transcript live user.
+  const opt = AT.afterSidebarSendOptimistic([], 'do a release.', { title: 'jevons-po' });
+  assert.strictEqual(opt.lines.length, 1);
+  assert.strictEqual(opt.lines[0].role, 'user');
+  assert.strictEqual(opt.lines[0].text, 'do a release.');
+  const afterEcho = AT.applyInspectLiveFrame(opt.lines, {
+    type: 'user',
+    message: { role: 'user', content: 'do a release.' },
+  });
+  assert.strictEqual(afterEcho.length, 1, 'no double bubble from optimistic+WS');
+  assert.strictEqual(afterEcho[0].text, 'do a release.');
+});
+
+test('T281 applyInspectLiveFrame: unwrap-aware dedupe for user_query wrapper', function () {
+  const opt = AT.afterSidebarSendOptimistic([], 'do a release.', { title: 'po' });
+  const wrapped = AT.applyInspectLiveFrame(opt.lines, {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: '<user_query>\ndo a release.\n</user_query>',
+    },
+  });
+  assert.strictEqual(wrapped.length, 1, 'wrapped echo must not double plain optimistic');
+  // Intentional resend after assistant still paints a second user bubble.
+  let lines = AT.applyInspectLiveFrame(wrapped, {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn',
+    },
+  });
+  lines = AT.afterSidebarSendOptimistic(lines, 'do a release.', { title: 'po' }).lines;
+  assert.strictEqual(
+    lines.filter(function (l) { return l.role === 'user'; }).length,
+    2,
+    'resend after assistant is a new submit',
+  );
+});
+
+test('T281 isDuplicateInspectUserLine consecutive only', function () {
+  assert.ok(AT.isDuplicateInspectUserLine(
+    { role: 'user', text: 'hi' },
+    'hi',
+  ));
+  assert.ok(!AT.isDuplicateInspectUserLine(
+    { role: 'assistant', text: 'ok' },
+    'hi',
+  ));
+  assert.ok(AT.isDuplicateInspectUserLine(
+    { role: 'user', text: '<user_query>hi</user_query>' },
+    'hi',
+  ));
+  assert.strictEqual(AT.inspectUserDedupeKey('  x  '), 'x');
+});
+
+test('T281 index.html: RHS live path uses applyInspectLiveFrame; main uses isDuplicateUserEcho', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('applyInspectLiveFrame') >= 0,
+    'agent_transcript live frames must go through applyInspectLiveFrame');
+  assert.ok(
+    html.indexOf('afterSidebarSendOptimistic') >= 0,
+    'RHS send paints optimistic owner turn',
+  );
+  // Main: T279/T281 shared — optimistic paint + echo dedupe (not ad-hoc only).
+  assert.ok(
+    html.indexOf('isDuplicateUserEcho') >= 0 ||
+      /msgHistory\[msgHistory\.length\s*-\s*1\]/.test(html),
+    'main user echo must dedupe against last painted',
+  );
+  assert.ok(
+    html.indexOf('paintOptimisticMainUser') >= 0 ||
+      html.indexOf('planOptimisticMainUserPaint') >= 0,
+    'main optimistic path present (T279/T281 shared)',
+  );
+});
+
 test('T265 inspectWorkingLabel uses agent name not Jevons', function () {
   assert.strictEqual(AT.inspectWorkingLabel('att-msft'), 'att-msft is working');
   assert.strictEqual(AT.inspectWorkingLabel('jevons'), 'Working');
