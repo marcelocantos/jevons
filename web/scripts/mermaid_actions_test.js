@@ -370,6 +370,148 @@ test('T196 index.html openFrontierGraph catch uses fetch-error path not empty sh
   assert.ok(/\.mvp-error/.test(html), 'mvp-error CSS');
 });
 
+// ── 🎯T268 single-graph scale-to-fill ─────────────────────────────────────
+
+test('T268 computeContainScale scales up small graphs and down large ones', function () {
+  // Small graph in large pane → scale up.
+  assert.strictEqual(MA.computeContainScale(400, 300, 1200, 900), 3);
+  // Large graph in small pane → scale down (fit, not crop).
+  assert.ok(Math.abs(MA.computeContainScale(4000, 3000, 800, 600) - 0.2) < 1e-9);
+  // Aspect mismatch: limited by the tighter axis.
+  assert.strictEqual(MA.computeContainScale(100, 100, 400, 200), 2);
+  assert.strictEqual(MA.computeContainScale(0, 100, 400, 200), 1);
+});
+
+test('T268 parseSvgNaturalSize from width/height and viewBox', function () {
+  assert.deepStrictEqual(
+    MA.parseSvgNaturalSize({ width: '800', height: '600' }),
+    { w: 800, h: 600 }
+  );
+  assert.deepStrictEqual(
+    MA.parseSvgNaturalSize({ viewBox: '0 0 1200 400' }),
+    { w: 1200, h: 400 }
+  );
+  assert.deepStrictEqual(
+    MA.parseSvgNaturalSize({
+      getAttribute: function (k) {
+        if (k === 'width') return '500px';
+        if (k === 'height') return '250';
+        return null;
+      },
+    }),
+    { w: 500, h: 250 }
+  );
+});
+
+test('T268 planSingleGraphScaleToFill fills pane (not tiny island)', function () {
+  // Small mermaid-ish graph in ~90vw×90vh usable pane → must scale up and fill.
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: 420,
+    svgH: 280,
+    paneW: 1400,
+    paneH: 900,
+    padding: 24,
+    diagramCount: 1,
+  });
+  assert.strictEqual(plan.mode, 'scale-to-fill');
+  assert.ok(plan.scale > 1, 'must scale UP: scale=' + plan.scale);
+  assert.strictEqual(plan.fillsPane, true);
+  // Without scale-up (scale=1) margins would dominate — reject that product bug.
+  const unscaledCover = Math.max(420 / (1400 - 24), 280 / (900 - 24));
+  assert.ok(unscaledCover < 0.5, 'fixture would look tiny without fit');
+  assert.ok(plan.scale > 1 / unscaledCover * 0.9 || plan.fillsPane);
+});
+
+test('T268 hermetic 10+ node fixture: dense graph scale-to-fill uses pane', function () {
+  // Simulate Mermaid layout of 12-node orthograph-ish component:
+  // natural SVG ~ 1800×1100; frontier large panel ~ 1280×720 usable.
+  const NODE_COUNT = 12;
+  assert.ok(NODE_COUNT >= 10, 'fixture is 10+ nodes');
+  const naturalW = 1800;
+  const naturalH = 1100;
+  const paneW = 1280;
+  const paneH = 720;
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: naturalW,
+    svgH: naturalH,
+    paneW: paneW,
+    paneH: paneH,
+    padding: 24,
+    diagramCount: 1,
+  });
+  assert.strictEqual(plan.mode, 'scale-to-fill');
+  assert.strictEqual(plan.fillsPane, true);
+  // Display size must track pane on at least one axis (contain).
+  const usableW = paneW - 24;
+  const usableH = paneH - 24;
+  const cover = Math.max(plan.displayW / usableW, plan.displayH / usableH);
+  assert.ok(cover >= 0.95, 'cover=' + cover + ' must fill pane');
+  // Labels stay readable vs micro-text: display width ≥ 40% of pane
+  // (dense shrink still uses full pane; micro-island would be ~natural unscaled).
+  assert.ok(plan.displayW >= usableW * 0.4 || plan.displayH >= usableH * 0.4);
+  // Style plan clears max-width so CSS cannot re-shrink.
+  const style = MA.svgScaleToFillStyle(plan);
+  assert.ok(style, 'style present');
+  assert.strictEqual(style.maxWidth, 'none');
+  assert.ok(/px$/.test(style.width));
+});
+
+test('T268 multi-diagram is pack residual (does not block single path)', function () {
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: 800,
+    svgH: 600,
+    paneW: 1200,
+    paneH: 900,
+    diagramCount: 4,
+  });
+  assert.strictEqual(plan.mode, 'pack-residual');
+  assert.strictEqual(plan.fillsPane, false);
+  assert.ok(/bin-pack|residual|Multi-component/i.test(plan.residual || ''));
+});
+
+test('T268 applySvgScaleToFill mutates style + data attr', function () {
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: 200,
+    svgH: 100,
+    paneW: 800,
+    paneH: 400,
+    padding: 0,
+    diagramCount: 1,
+  });
+  const removed = [];
+  const attrs = {};
+  const svg = {
+    style: {},
+    removeAttribute: function (k) { removed.push(k); },
+    setAttribute: function (k, v) { attrs[k] = v; },
+  };
+  assert.strictEqual(MA.applySvgScaleToFill(svg, plan), true);
+  assert.strictEqual(svg.style.maxWidth, 'none');
+  assert.ok(parseFloat(svg.style.width) >= 799);
+  assert.ok(removed.indexOf('width') >= 0 && removed.indexOf('height') >= 0);
+  assert.ok(attrs['data-mvp-scale-fill']);
+});
+
+test('T268 index.html wires scale-to-fill for single large graph', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('planSingleGraphScaleToFill') >= 0, 'uses pure plan');
+  assert.ok(html.indexOf('applySvgScaleToFill') >= 0 || html.indexOf('fitMermaidPanelSvgToPane') >= 0,
+    'applies fit after render');
+  assert.ok(html.indexOf('mvp-scale-fill') >= 0, 'scale-fill CSS class');
+  // Single diagram from frontier pack routes to single-graph path (not pack grid).
+  const ofgStart = html.indexOf('function openFrontierGraph');
+  assert.ok(ofgStart >= 0);
+  const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
+  const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 8000);
+  assert.ok(
+    /diagrams\.length\s*===\s*1|nBlocks\s*===\s*1|length\s*===\s*1/.test(ofg),
+    'single-diagram branch in openFrontierGraph'
+  );
+  assert.ok(ofg.indexOf('renderMermaidSourceInPanel') >= 0, 'single path uses source renderer');
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

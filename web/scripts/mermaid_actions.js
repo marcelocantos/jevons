@@ -476,6 +476,167 @@
     return String(key || '') === 'Escape' && isMermaidPanelOpen(panel);
   }
 
+  // ── 🎯T268: single-graph scale-to-fill ─────────────────────────────────
+  // Frontier Graph (mvp-large) must expand the rendered SVG to fill the pane
+  // (contain: use full width or height). Shrink-only max-width:100% leaves
+  // tiny graphs floating in empty margins — fail. Multi-component pack is a
+  // residual (later bin-pack shelf/skyline); single graph ships first.
+
+  /** Positive finite number or 0. */
+  function positiveNumber(n) {
+    const x = typeof n === 'number' ? n : parseFloat(n);
+    return isFinite(x) && x > 0 ? x : 0;
+  }
+
+  /**
+   * Natural SVG size from attrs / viewBox (DOM-free input shape).
+   * @param {{ width?: *, height?: *, viewBox?: string|null, getAttribute?: function }} svg
+   * @returns {{ w: number, h: number }}
+   */
+  function parseSvgNaturalSize(svg) {
+    if (!svg || typeof svg !== 'object') return { w: 0, h: 0 };
+    let w = 0;
+    let h = 0;
+    if (typeof svg.getAttribute === 'function') {
+      w = positiveNumber(svg.getAttribute('width'));
+      h = positiveNumber(svg.getAttribute('height'));
+      if ((!w || !h) && svg.getAttribute('viewBox')) {
+        const vb = String(svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/);
+        if (vb.length >= 4) {
+          if (!w) w = positiveNumber(vb[2]);
+          if (!h) h = positiveNumber(vb[3]);
+        }
+      }
+    } else {
+      w = positiveNumber(svg.width);
+      h = positiveNumber(svg.height);
+      if ((!w || !h) && svg.viewBox) {
+        const vb = String(svg.viewBox).trim().split(/[\s,]+/);
+        if (vb.length >= 4) {
+          if (!w) w = positiveNumber(vb[2]);
+          if (!h) h = positiveNumber(vb[3]);
+        }
+      }
+    }
+    return { w: w, h: h };
+  }
+
+  /**
+   * Contain scale: largest scale that keeps the whole graph in the pane.
+   * Scales UP small graphs and DOWN large ones. Never returns 0.
+   * @returns {number}
+   */
+  function computeContainScale(svgW, svgH, paneW, paneH) {
+    const sw = positiveNumber(svgW);
+    const sh = positiveNumber(svgH);
+    const pw = positiveNumber(paneW);
+    const ph = positiveNumber(paneH);
+    if (!sw || !sh || !pw || !ph) return 1;
+    return Math.min(pw / sw, ph / sh);
+  }
+
+  /**
+   * 🎯T268 fit plan for a single graph in the frontier pane.
+   * @param {{
+   *   svgW: number, svgH: number, paneW: number, paneH: number,
+   *   padding?: number, diagramCount?: number
+   * }} opts
+   * @returns {{
+   *   mode: 'scale-to-fill'|'pack-residual'|'skip',
+   *   scale: number,
+   *   displayW: number,
+   *   displayH: number,
+   *   fillsPane: boolean,
+   *   residual?: string
+   * }}
+   */
+  function planSingleGraphScaleToFill(opts) {
+    const o = opts || {};
+    const count = o.diagramCount != null ? Math.floor(o.diagramCount) : 1;
+    if (count > 1) {
+      return {
+        mode: 'pack-residual',
+        scale: 1,
+        displayW: positiveNumber(o.svgW),
+        displayH: positiveNumber(o.svgH),
+        fillsPane: false,
+        residual:
+          'Multi-component: later bin-pack (shelf/skyline) into pane aspect; ' +
+          'single-graph scale-to-fill is the T268 product path.',
+      };
+    }
+    const pad = o.padding != null ? Math.max(0, positiveNumber(o.padding) || 0) : 24;
+    // padding is total inset (both sides); floor at 0 usable.
+    const paneW = Math.max(0, positiveNumber(o.paneW) - pad);
+    const paneH = Math.max(0, positiveNumber(o.paneH) - pad);
+    const svgW = positiveNumber(o.svgW);
+    const svgH = positiveNumber(o.svgH);
+    if (!svgW || !svgH || !paneW || !paneH) {
+      return {
+        mode: 'skip',
+        scale: 1,
+        displayW: svgW,
+        displayH: svgH,
+        fillsPane: false,
+      };
+    }
+    const scale = computeContainScale(svgW, svgH, paneW, paneH);
+    const displayW = svgW * scale;
+    const displayH = svgH * scale;
+    // Fills pane when at least one axis uses ≥95% of usable pane (contain).
+    const coverW = displayW / paneW;
+    const coverH = displayH / paneH;
+    const fillsPane = Math.max(coverW, coverH) >= 0.95;
+    return {
+      mode: 'scale-to-fill',
+      scale: scale,
+      displayW: displayW,
+      displayH: displayH,
+      fillsPane: fillsPane,
+    };
+  }
+
+  /**
+   * Inline style object for the fitted SVG (browser applies after render).
+   * Clears max-width so CSS shrink-only cannot undo scale-up.
+   */
+  function svgScaleToFillStyle(plan) {
+    const p = plan || {};
+    if (p.mode !== 'scale-to-fill' || !(p.displayW > 0) || !(p.displayH > 0)) {
+      return null;
+    }
+    return {
+      width: Math.round(p.displayW * 1000) / 1000 + 'px',
+      height: Math.round(p.displayH * 1000) / 1000 + 'px',
+      maxWidth: 'none',
+      maxHeight: 'none',
+    };
+  }
+
+  /**
+   * Apply plan styles to an SVG-like element (injectable for tests).
+   * @returns {boolean} true when styles were applied
+   */
+  function applySvgScaleToFill(svg, plan) {
+    const style = svgScaleToFillStyle(plan);
+    if (!svg || !style) return false;
+    if (svg.style && typeof svg.style === 'object') {
+      svg.style.width = style.width;
+      svg.style.height = style.height;
+      svg.style.maxWidth = style.maxWidth;
+      svg.style.maxHeight = style.maxHeight;
+    }
+    if (typeof svg.removeAttribute === 'function') {
+      // Mermaid sets absolute width/height attrs that fight CSS scale-up.
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+    }
+    if (typeof svg.setAttribute === 'function') {
+      svg.setAttribute('data-mvp-scale-fill', String(plan.scale));
+    }
+    return true;
+  }
+
   return {
     PIN_STORAGE_KEY: PIN_STORAGE_KEY,
     toolbarButtons: toolbarButtons,
@@ -501,5 +662,11 @@
     openFromChromePlan: openFromChromePlan,
     isMermaidPanelOpen: isMermaidPanelOpen,
     shouldCloseMermaidOnEscape: shouldCloseMermaidOnEscape,
+    // 🎯T268
+    parseSvgNaturalSize: parseSvgNaturalSize,
+    computeContainScale: computeContainScale,
+    planSingleGraphScaleToFill: planSingleGraphScaleToFill,
+    svgScaleToFillStyle: svgScaleToFillStyle,
+    applySvgScaleToFill: applySvgScaleToFill,
   };
 }));
