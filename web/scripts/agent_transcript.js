@@ -792,6 +792,38 @@
   }
 
   /**
+   * 🎯T263: JSON body for POST /api/asides.
+   * Freeform opening text is optional; when present the server starts and
+   * delivers in the same request (not register-only empty transcript).
+   * @param {string} id
+   * @param {string} title
+   * @param {string} [text] opening owner prompt
+   */
+  function createAsideRequestBody(id, title, text) {
+    const body = {
+      id: String(id || ''),
+      title: String(title || 'aside'),
+    };
+    const opening = text == null ? '' : String(text).trim();
+    if (opening) body.text = opening;
+    return body;
+  }
+
+  /**
+   * 🎯T263: opts for ensureFleetAside on explicit prefix create.
+   * Only freeform aside: passes opening text + expectDeliver.
+   * capture:/target: stay register-only (no text).
+   * @param {string} command parsePrefix command
+   * @param {string} openingBody
+   */
+  function freeformAsideCreateOpts(command, openingBody) {
+    if (String(command || '').toLowerCase() !== 'aside') return {};
+    const t = String(openingBody == null ? '' : openingBody).trim();
+    if (!t) return {};
+    return { text: t, expectDeliver: true };
+  }
+
+  /**
    * Build the sidebar send request for the selected transcript participant.
    * Returns { ok:true, url, method, body:{text}, name } or { ok:false, reason }.
    * Does not touch the main chat wire / overseer composer.
@@ -879,6 +911,8 @@
     isSidebarDraftEmpty: isSidebarDraftEmpty,
     agentSendPath: agentSendPath,
     sidebarSendRequest: sidebarSendRequest,
+    createAsideRequestBody: createAsideRequestBody,
+    freeformAsideCreateOpts: freeformAsideCreateOpts,
     classifySidebarComposerKey: classifySidebarComposerKey,
   };
 }));

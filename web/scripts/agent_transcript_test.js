@@ -762,6 +762,46 @@ test('T136 create-aside dual-write + no attention chip wall', function () {
   assert.ok(html.indexOf('appendThreadChip') === -1, 'no chip loop for asides');
 });
 
+// 🎯T263: freeform aside create delivers opening + working chrome (not register-only).
+test('T263 createAsideRequestBody includes opening text when freeform', function () {
+  const bare = AT.createAsideRequestBody('att-x', 'title only');
+  assert.strictEqual(bare.id, 'att-x');
+  assert.strictEqual(bare.title, 'title only');
+  assert.strictEqual(bare.text, undefined, 'register-only has no text');
+  const withOpen = AT.createAsideRequestBody(
+    'att-msftck4l-9sguxj',
+    'how does bullseye compare to beads?',
+    '  how does bullseye compare to beads?  ',
+  );
+  assert.strictEqual(withOpen.text, 'how does bullseye compare to beads?');
+  assert.strictEqual(withOpen.id, 'att-msftck4l-9sguxj');
+});
+
+test('T263 freeformAsideCreateOpts only for aside: command', function () {
+  assert.deepStrictEqual(AT.freeformAsideCreateOpts('capture', 'note'), {});
+  assert.deepStrictEqual(AT.freeformAsideCreateOpts('target', 'file this'), {});
+  assert.deepStrictEqual(AT.freeformAsideCreateOpts('aside', '   '), {});
+  const o = AT.freeformAsideCreateOpts('aside', 'how does bullseye compare to beads?');
+  assert.strictEqual(o.text, 'how does bullseye compare to beads?');
+  assert.strictEqual(o.expectDeliver, true);
+});
+
+test('T263 index.html freeform create path + working chrome + loud fail', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('opts.text') >= 0 || html.indexOf('payload.text') >= 0,
+    'ensureFleetAside posts opening text');
+  assert.ok(html.indexOf('expectDeliver') >= 0, 'freeform expects deliver');
+  assert.ok(html.indexOf('showAsideOpeningWorking') >= 0, 'working chrome helper');
+  assert.ok(html.indexOf('showAsideDeliverError') >= 0, 'loud fail helper');
+  assert.ok(html.indexOf('data-aside-working') >= 0, 'working indicator in inspect');
+  assert.ok(html.indexOf('aside_create_deliver_error') >= 0 ||
+    html.indexOf('start/deliver failed') >= 0,
+    'deliver failure decision/log path');
+  // Composer create path passes text for aside: only.
+  assert.ok(html.indexOf("parsedCmd.command === 'aside'") >= 0);
+  assert.ok(html.indexOf('createOpts.text') >= 0 || html.indexOf('createOpts =') >= 0);
+});
+
 // ── 🎯T252 auto-activate attention asides; sticky draft; next after send ──
 
 test('T252 sidebarDraftIsEmpty treats whitespace as empty', function () {

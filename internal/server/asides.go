@@ -14,11 +14,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
-// createAsideRequest is the JSON body for POST /api/asides (🎯T136).
+// createAsideRequest is the JSON body for POST /api/asides (🎯T136 / 🎯T263).
 // Owner create path (aside:/capture:/target:) registers a purpose=aside
 // fleet participant so the RHS tree shows 💡 nodes without top chip chrome.
+// Freeform aside: may also pass Text so the process starts and the opening
+// prompt is delivered in the same request (not registry-only + empty transcript).
 type createAsideRequest struct {
 	// ID is the stable agent/attention id (e.g. att-… from the client model).
 	ID string `json:"id"`
@@ -26,6 +29,11 @@ type createAsideRequest struct {
 	Title string `json:"title"`
 	// Parent is fleet lineage (default: overseer root).
 	Parent string `json:"parent,omitempty"`
+	// Text is the owner's opening prompt for freeform asides (🎯T263).
+	// When non-empty after trim: register (or update), then start/rehydrate
+	// and deliver Text fire-and-forget. Empty → register-only (T136 residual
+	// for capture:/target: dual-write that does not need a live process yet).
+	Text string `json:"text,omitempty"`
 }
 
 // createAsideResponse is returned on success.
@@ -37,11 +45,15 @@ type createAsideResponse struct {
 	WorkDir     string `json:"workdir"`
 	Status      string `json:"status"`
 	Created     bool   `json:"created"` // true when newly registered
+	// Deliver is set when Text was provided and send succeeded:
+	// "sent" | "rehydrated_sent" (same vocabulary as POST /api/agents/{name}/send).
+	Deliver string `json:"deliver,omitempty"`
 }
 
 // ensureAsideAgent registers (or updates description for) a purpose=aside
 // agent without launching a process (AutoStart=false). Tree + inspect use
-// registry identity; process is disposable later if Direct/Deliver needs it.
+// registry identity. 🎯T263: freeform opening text is delivered by
+// handleCreateAside via sendToNamedAgent after this register step.
 func (s *Server) ensureAsideAgent(id, title, parent string) (createAsideResponse, error) {
 	id = strings.TrimSpace(id)
 	title = strings.TrimSpace(title)
@@ -153,6 +165,9 @@ func (s *Server) ensureAsideAgent(id, title, parent string) (createAsideResponse
 
 // handleCreateAside POST /api/asides — dual-write purpose=aside into the
 // fleet registry so create paths no longer leave only localStorage chips (🎯T136).
+// 🎯T263: when req.Text is non-empty, start/rehydrate and deliver the opening
+// prompt in the same turn. Start/deliver failure is a loud HTTP error (agent
+// may remain registered stopped) — never silent empty transcript + stopped.
 func (s *Server) handleCreateAside(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -174,6 +189,48 @@ func (s *Server) handleCreateAside(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, code)
 		return
 	}
+
+	opening := strings.TrimSpace(req.Text)
+	if opening != "" {
+		// Same deliver path as sidebar / frontier play (rehydrate + Send).
+		deliverStatus, derr := s.sendToNamedAgent(out.Name, opening)
+		if derr != nil {
+			// Loud fail: registry row may exist, but owner must see the error
+			// (not a stopped empty transcript with no indication).
+			s.NotifyAgentsChanged()
+			class, ownerMsg := agenterr.ClassifyAndFormat(derr)
+			if !class.IsFailure() {
+				ownerMsg = derr.Error()
+			}
+			slog.Warn("aside_create_deliver_failed",
+				"component", "aside",
+				"name", out.Name,
+				"failure_class", class.String(),
+				"err", derr.Error(),
+			)
+			code := http.StatusBadGateway
+			msg := derr.Error()
+			if strings.Contains(msg, "not registered") || strings.Contains(msg, "not available") {
+				code = http.StatusNotFound
+			} else if agenterr.IsPromptBusy(derr) {
+				code = http.StatusConflict
+			}
+			// Prefix so UI can distinguish create-register-ok vs deliver fail.
+			writeJSONErrorClass(w, code, "aside created but start/deliver failed: "+ownerMsg, class)
+			return
+		}
+		out.Status = "running"
+		out.Deliver = deliverStatus
+		// Seed glanceable working phase until ACP progress arrives (RHS chrome).
+		_ = s.ObserveAgentProgress(out.Name, claudia.Event{Type: "user"})
+		slog.Info("aside_create_delivered",
+			"component", "aside",
+			"name", out.Name,
+			"deliver", deliverStatus,
+			"created", out.Created,
+		)
+	}
+
 	s.NotifyAgentsChanged()
 	w.Header().Set("Content-Type", "application/json")
 	if out.Created {

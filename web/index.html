@@ -1249,12 +1249,19 @@ function renderAttention() {
 
 // 🎯T136: dual-write create-aside into fleet registry (purpose=aside) so RHS
 // tree shows 💡 nodes; auto-select + inspect follow agents_changed / refresh.
-function ensureFleetAside(id, title) {
+// 🎯T263: opts.text = owner's opening prompt — server starts/rehydrates and
+// delivers in the same request. Deliver failure is loud in the aside inspect
+// pane (not silent empty + stopped). opts.expectDeliver forces surface on fail.
+function ensureFleetAside(id, title, opts) {
   if (!id) return Promise.resolve(null);
-  const body = JSON.stringify({
+  const o = opts || {};
+  const opening = o.text == null ? '' : String(o.text).trim();
+  const payload = {
     id: String(id),
     title: String(title || 'aside'),
-  });
+  };
+  if (opening) payload.text = opening;
+  const body = JSON.stringify(payload);
   return fetch('/api/asides', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1262,7 +1269,14 @@ function ensureFleetAside(id, title) {
   }).then(function (r) {
     if (!r.ok) {
       return r.text().then(function (t) {
-        throw new Error(t || ('aside register HTTP ' + r.status));
+        let msg = t || ('aside register HTTP ' + r.status);
+        try {
+          const j = JSON.parse(t);
+          if (j && j.error) msg = j.error;
+        } catch (_) { /* plain text body */ }
+        const err = new Error(msg);
+        err.status = r.status;
+        throw err;
       });
     }
     return r.json();
@@ -1271,22 +1285,106 @@ function ensureFleetAside(id, title) {
     if (row && row.name) {
       selectedAgent = row.name;
     }
+    // 🎯T263: freeform opening delivered — show owner question + working chrome
+    // in RHS Transcript while the first turn is in flight.
+    if (opening && row && row.deliver) {
+      try {
+        if (typeof showAsideOpeningWorking === 'function') {
+          showAsideOpeningWorking(row.name || id, opening);
+        }
+      } catch (_) { /* inspect may not be mounted yet */ }
+    } else if (opening && row && !row.deliver) {
+      // Server accepted create but did not report deliver — treat as fail for freeform.
+      const err = new Error('aside created but opening was not delivered');
+      err.status = 502;
+      throw err;
+    }
     refreshAgents();
     return row;
   }).catch(function (err) {
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('warn', DecisionLog.decisionMsg('attention'), {
-        decision: 'aside_register_error',
+        decision: opening ? 'aside_create_deliver_error' : 'aside_register_error',
         threadId: id,
         err: err && err.message ? err.message : String(err || 'unknown'),
         corr: pageCorr,
       });
     }
+    // 🎯T263: loud fail in aside/UI when start or deliver fails.
+    if (opening || (o && o.expectDeliver)) {
+      try {
+        if (typeof showAsideDeliverError === 'function') {
+          showAsideDeliverError(id, err && err.message ? err.message : String(err || 'start/deliver failed'));
+        }
+      } catch (_) { /* isolated */ }
+      if (typeof sTxt !== 'undefined' && sTxt) {
+        sTxt.textContent = 'aside start/deliver failed';
+      }
+    }
     // Still refresh in case agents_changed already fired elsewhere.
     try { refreshAgents(); } catch (_) {}
+    // Freeform path: rethrow so callers can see failure (register-only stays soft).
+    if (opening || (o && o.expectDeliver)) {
+      return Promise.reject(err);
+    }
     return null;
   });
 }
+
+// 🎯T263: optimistic owner bubble + working indicator in RHS Transcript after
+// freeform aside create+deliver (until agent_transcript live frames arrive).
+function showAsideOpeningWorking(name, openingText) {
+  if (!name) return;
+  selectedAgent = name;
+  _agentInspectWorking = true;
+  const text = String(openingText || '').trim();
+  if (text) {
+    // Keep wire cache in sync so merge/history reloads still show the question.
+    if (!asideWireTurnsCache[name]) asideWireTurnsCache[name] = [];
+    const list = asideWireTurnsCache[name];
+    if (!list.length || list[list.length - 1].role !== 'user' || list[list.length - 1].text !== text) {
+      list.push({ role: 'user', text: text });
+    }
+    _agentInspectLines = (list || []).map(function (l) {
+      return { role: l.role, text: l.text };
+    });
+  }
+  _agentInspectFp = '';
+  if (typeof renderAgentInspect === 'function') {
+    renderAgentInspect({
+      title: name,
+      empty: !(_agentInspectLines && _agentInspectLines.length),
+      error: '',
+      lines: (_agentInspectLines || []).slice(),
+      working: true,
+    });
+  }
+  if (typeof setRhsBottomTab === 'function') {
+    try { setRhsBottomTab('transcript'); } catch (_) { /* residual */ }
+  }
+}
+
+// 🎯T263: surface create/start/deliver failure in the aside inspect pane.
+function showAsideDeliverError(name, message) {
+  if (name) selectedAgent = name;
+  _agentInspectWorking = false;
+  const msg = String(message || 'aside start/deliver failed');
+  _agentInspectFp = '';
+  if (typeof renderAgentInspect === 'function') {
+    renderAgentInspect({
+      title: name || selectedAgent || 'aside',
+      empty: true,
+      error: msg,
+      lines: [],
+      working: false,
+    });
+  }
+  if (typeof setRhsBottomTab === 'function') {
+    try { setRhsBottomTab('transcript'); } catch (_) { /* residual */ }
+  }
+}
+window.showAsideOpeningWorking = showAsideOpeningWorking;
+window.showAsideDeliverError = showAsideDeliverError;
 
 // 🎯T152: reverse of ensureFleetAside — DELETE /api/asides/{id} deregisters the
 // dual-written purpose=aside fleet agent so RHS 💡 leaves with target-file close.
@@ -5214,6 +5312,8 @@ function send(opts) {
     }
     // 🎯T136: any create that yields an aside id dual-writes to fleet registry
     // so RHS tree shows 💡 + auto-select/inspect (not top chip chrome).
+    // 🎯T263: freeform aside: also pass opening body so server starts + delivers
+    // in the same turn (not registry-only empty transcript).
     if (r.threadId && (parsedCmd && (parsedCmd.command === 'aside' ||
         parsedCmd.command === 'capture' || parsedCmd.command === 'target'))) {
       const th = AttentionThreads.findThread(attentionState, r.threadId);
@@ -5221,7 +5321,16 @@ function send(opts) {
       if (!title && typeof AttentionThreads.titleFromBody === 'function') {
         title = AttentionThreads.titleFromBody((th && th.body) || '');
       }
-      ensureFleetAside(r.threadId, title || 'aside');
+      const openingBody = (th && th.body) || (parsedCmd.body) || '';
+      const createOpts = (typeof AgentTranscript !== 'undefined' &&
+          AgentTranscript.freeformAsideCreateOpts)
+        ? AgentTranscript.freeformAsideCreateOpts(parsedCmd.command, openingBody)
+        : (parsedCmd.command === 'aside' && String(openingBody).trim()
+          ? { text: String(openingBody).trim(), expectDeliver: true }
+          : {});
+      ensureFleetAside(r.threadId, title || 'aside', createOpts).catch(function () {
+        // ensureFleetAside already surfaces loud UI for freeform deliver fail.
+      });
       // 🎯T247: explicit open prefix already spawned — no post-send route chip.
       explicitAsideOpened = true;
     } else if (r.routed) {
@@ -6175,9 +6284,11 @@ const rhsTabMeta = document.getElementById('rhs-tab-meta');
 let frontierPollTimer = 0;
 // 🎯T205: fingerprint + stick/free latch for #agent-inspect-body.
 // 🎯T209: progressive lines held for live wire frames (no setInterval poll).
+// 🎯T263: optimistic working chrome after freeform aside open+deliver.
 let _agentInspectFp = '';
 let _agentInspectLines = [];
 let _agentInspectFollow = null;
+let _agentInspectWorking = false;
 // 🎯T251: per-agent sidebar drafts so switching selection does not lose text (T252 sticky).
 const sidebarDraftByAgent = Object.create(null);
 let _sidebarComposerSending = false;
@@ -6396,21 +6507,27 @@ function handleAgentTranscriptWire(m) {
     let lines = (_agentInspectLines || []).map(function (l) {
       return { role: l.role, text: l.text };
     });
+    // 🎯T252: terminal assistant stop on aside ⇒ owner attention (user's turn).
+    const terminal = typeof AgentTranscript !== 'undefined' &&
+        AgentTranscript.liveFrameSignalsOwnerAttention &&
+        AgentTranscript.liveFrameSignalsOwnerAttention(m.event);
+    if (terminal) {
+      _agentInspectWorking = false;
+    }
     // 🎯T250: overlay main-wire aside turns for this agent id.
+    // 🎯T263: keep working chrome until terminal stop (first-turn activity).
     const liveModel = mergeModelWithAsideWire({
       title: selectedAgent,
       empty: lines.length === 0,
       error: '',
       lines: lines,
+      working: !!_agentInspectWorking && !terminal,
     }, selectedAgent);
     _agentInspectLines = (liveModel.lines || []).map(function (l) {
       return { role: l.role, text: l.text };
     });
     renderAgentInspect(liveModel);
-    // 🎯T252: terminal assistant stop on aside ⇒ owner attention (user's turn).
-    if (typeof AgentTranscript !== 'undefined' &&
-        AgentTranscript.liveFrameSignalsOwnerAttention &&
-        AgentTranscript.liveFrameSignalsOwnerAttention(m.event)) {
+    if (terminal) {
       markAsideNeedsAttention(m.name || selectedAgent);
     }
     return;
@@ -6430,6 +6547,12 @@ function handleAgentTranscriptWire(m) {
   _agentInspectLines = (model.lines || []).map(function (l) {
     return { role: l.role, text: l.text };
   });
+  // History with assistant turns seals optimistic working chrome (🎯T263).
+  const hasAssistant = (_agentInspectLines || []).some(function (l) {
+    return l && (l.role === 'assistant' || l.role === 'jevons');
+  });
+  if (hasAssistant) _agentInspectWorking = false;
+  model.working = !!_agentInspectWorking && !hasAssistant;
   renderAgentInspect(model);
   document.querySelectorAll('.agent-node').forEach(n =>
     n.classList.toggle('selected', n.dataset.agent === selectedAgent));
@@ -6446,6 +6569,7 @@ function renderAgentInspect(model) {
   if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
   if (model.error) {
     _agentInspectFp = '';
+    _agentInspectWorking = false;
     agentInspectBody.innerHTML = '<div class="ai-err"></div><div class="ai-empty"></div>';
     agentInspectBody.querySelector('.ai-err').textContent = model.error;
     agentInspectBody.querySelector('.ai-empty').textContent = model.empty
@@ -6453,8 +6577,9 @@ function renderAgentInspect(model) {
       : '';
     return;
   }
-  if (model.empty) {
+  if (model.empty && !model.working) {
     _agentInspectFp = '';
+    _agentInspectWorking = false;
     agentInspectBody.innerHTML = '';
     const empty = document.createElement('div');
     empty.className = 'ai-empty';
@@ -6463,18 +6588,22 @@ function renderAgentInspect(model) {
     return;
   }
   const lines = model.lines || [];
+  const wantWorking = !!model.working;
   const fp = (typeof AgentTranscript !== 'undefined' && AgentTranscript.linesFingerprint)
-    ? AgentTranscript.linesFingerprint(lines)
+    ? AgentTranscript.linesFingerprint(lines) + (wantWorking ? '|w' : '')
     : String(lines.length) + ':' + lines.map(function (l) {
         return (l && l.role) + '\0' + (l && l.text);
-      }).join('\n');
+      }).join('\n') + (wantWorking ? '|w' : '');
   // Unchanged poll: do not thrash free-scroll or full-replace.
   // 🎯T233: inject-only transcripts may have .inject-nugget and no .msg.
+  // 🎯T263: working chrome is part of fingerprint so open→working repaints.
   if (fp === _agentInspectFp &&
       (agentInspectBody.querySelector('.msg') ||
-       agentInspectBody.querySelector('.inject-nugget'))) {
+       agentInspectBody.querySelector('.inject-nugget') ||
+       agentInspectBody.querySelector('.working-indicator'))) {
     return;
   }
+  _agentInspectWorking = wantWorking;
   const follow = agentInspectFollow();
   const prevTop = agentInspectBody.scrollTop;
   agentInspectBody.innerHTML = '';
@@ -6574,6 +6703,16 @@ function renderAgentInspect(model) {
   });
   if (typeof decorateBodyLinks === 'function') {
     decorateBodyLinks(agentInspectBody); // 🎯T151 belt-and-suspenders
+  }
+  // 🎯T263: working/activity chrome while first turn in flight (aside open).
+  if (wantWorking) {
+    const wi = document.createElement('div');
+    wi.className = 'working-indicator';
+    wi.setAttribute('data-aside-working', '1');
+    wi.innerHTML = (typeof workingLabelHTML === 'function')
+      ? workingLabelHTML()
+      : '<span class="work-dots" aria-hidden="true"><span></span><span></span><span></span></span> Working…';
+    agentInspectBody.appendChild(wi);
   }
   _agentInspectFp = fp;
   // Stickiness: pin only while Tracking; free preserves prevTop.

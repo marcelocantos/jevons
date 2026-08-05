@@ -6,16 +6,19 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
 )
 
 // 🎯T136: POST /api/asides registers purpose=aside in the fleet registry
-// (register-only, no process launch) so the RHS tree can show 💡 nodes.
+// (register-only when no text, no process launch) so the RHS tree can show 💡 nodes.
+// 🎯T263: when text is provided, start/rehydrate and deliver the opening prompt.
 
 func TestEnsureAsideAgentRegistersPurposeAside(t *testing.T) {
 	state := t.TempDir()
@@ -140,6 +143,127 @@ func TestHandleCreateAsideHTTP(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("second status %d want 200", resp2.StatusCode)
+	}
+}
+
+// 🎯T263: freeform aside create with opening text delivers in the same turn
+// (register + start/rehydrate + send) — not registry-only empty transcript.
+func TestHandleCreateAsideWithTextDelivers(t *testing.T) {
+	state := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(state, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons", WorkDir: state, SessionID: "1", Provider: "grok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New("test", state)
+	s.SetOverseerName("jevons")
+	s.SetRegistry(reg)
+
+	var gotName, gotText string
+	s.SetAgentSendHook(func(name, text string) (string, error) {
+		gotName, gotText = name, text
+		return "rehydrated_sent", nil
+	})
+
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	body, _ := json.Marshal(map[string]string{
+		"id":    "att-msftck4l-9sguxj",
+		"title": "how does bullseye compare to beads?",
+		"text":  "how does bullseye compare to beads?",
+	})
+	resp, err := http.Post(srv.URL+"/api/asides", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var out createAsideResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Name != "att-msftck4l-9sguxj" || out.Purpose != "aside" {
+		t.Fatalf("out=%+v", out)
+	}
+	if out.Status != "running" {
+		t.Fatalf("status=%q want running after deliver", out.Status)
+	}
+	if out.Deliver != "rehydrated_sent" {
+		t.Fatalf("deliver=%q", out.Deliver)
+	}
+	if gotName != "att-msftck4l-9sguxj" {
+		t.Fatalf("send name=%q", gotName)
+	}
+	if gotText != "how does bullseye compare to beads?" {
+		t.Fatalf("send text=%q", gotText)
+	}
+	// Opening deliver seeds progress working (RHS activity chrome).
+	prog := s.agentProgress.Get("att-msftck4l-9sguxj")
+	if prog.Phase != "working" {
+		t.Fatalf("progress phase=%q want working", prog.Phase)
+	}
+	// Registry must contain the aside (not empty-session only).
+	if reg.Def("att-msftck4l-9sguxj") == nil {
+		t.Fatal("aside missing from registry after create+deliver")
+	}
+}
+
+// 🎯T263: start/deliver failure is loud (HTTP error), not silent stopped+empty.
+func TestHandleCreateAsideDeliverFailIsLoud(t *testing.T) {
+	state := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(state, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons", WorkDir: state, SessionID: "1", Provider: "grok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New("test", state)
+	s.SetOverseerName("jevons")
+	s.SetRegistry(reg)
+	s.SetAgentSendHook(func(name, text string) (string, error) {
+		return "", fmt.Errorf("agent %q rehydrate failed: transcript not found for session ea056cd8", name)
+	})
+
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	body, _ := json.Marshal(map[string]string{
+		"id":    "att-fail-open",
+		"title": "broken open",
+		"text":  "please answer this",
+	})
+	resp, err := http.Post(srv.URL+"/api/asides", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 400 {
+		t.Fatalf("want loud fail status ≥400, got %d", resp.StatusCode)
+	}
+	var errBody map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&errBody); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errBody["error"], "start/deliver failed") {
+		t.Fatalf("error=%q want start/deliver failed prefix", errBody["error"])
+	}
+	// Agent is registered (partial success) but deliver failed loudly.
+	if reg.Def("att-fail-open") == nil {
+		t.Fatal("aside should remain registered after partial create")
 	}
 }
 
