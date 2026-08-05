@@ -15,12 +15,14 @@
 // 🎯T187: never auto-timeout while over the card. Nested scroll/wheel must
 // not re-arm hide. No setInterval.
 //
-// 🎯T231 OWNER HARD PIN — NO multi-element bridge:
-//   ONE invisible axis-aligned rect = AABB(card ∪ id+name of active row).
-//   Leave that rect → dismiss immediately (HIDE_GRACE_MS = 0).
-//   Product model is pointInHitRect only — not host+tip+bridge flags/grace.
-//   Outside top/bottom of that rect is leave (exit above/below).
-//   Host↔card inside the rect does not dismiss; another row → leave/switch.
+// 🎯T231 / 🎯T271 OWNER HARD PIN — NO multi-element bridge flags/grace:
+//   Product hit region = card ∪ id+name hosts ∪ horizontal corridor between
+//   them (NOT the tall filled AABB of card∪hosts). Tall AABB left a keep-open
+//   zone over other frontier rows when the card is tall — owner residual
+//   (T271): move up/down away from the trigger row must dismiss immediately.
+//   Corridor is only the horizontal gap between card and hosts (vertical span
+//   of card∪hosts in that gap) so host→card travel works; table rows at/right
+//   of hosts are outside. Leave region → dismiss (HIDE_GRACE_MS = 0).
 //   Flicker → fix geometry, never add timeout.
 //
 // 🎯T230: frontier quiet poll / re-render must not tear down a tip while
@@ -102,7 +104,7 @@
     return 0;
   }
 
-  // ─── Pure geometry (🎯T231): one AABB hit rect ─────────────────────────
+  // ─── Pure geometry (🎯T231/T271): multi-part hit region ────────────────
 
   function normalizeRect(r) {
     if (!r || typeof r !== 'object') return null;
@@ -135,7 +137,7 @@
     return { left: left, top: top, right: right, bottom: bottom };
   }
 
-  // Pure: point inside one hit rect (🎯T231 product predicate).
+  // Pure: point inside one axis-aligned rect.
   function pointInHitRect(x, y, rect) {
     var r = normalizeRect(rect);
     if (!r) return false;
@@ -145,11 +147,59 @@
     return px >= r.left && px <= r.right && py >= r.top && py <= r.bottom;
   }
 
-  // Pure: build the single product hit rect from card + host cells.
-  // args: { cardRect, hostRects, tableRect? }
-  // ONE AABB encompassing card ∪ id+name. No bridge. Optional vertical clip
-  // to table so exit above table top / below bottom is outside when the
-  // union would otherwise extend past table (hosts already row-band).
+  // Pure: horizontal corridor between card and hosts (🎯T271).
+  // Only the gap strip — does NOT cover table rows at/right of hosts.
+  // Vertical span = full card∪hosts so diagonal host→card travel works.
+  function bridgeCorridorBetween(cardRect, hostRects) {
+    var card = normalizeRect(cardRect);
+    var hostsUnion = Array.isArray(hostRects)
+      ? unionHitRect(hostRects)
+      : normalizeRect(hostRects);
+    if (!card || !hostsUnion) return null;
+    var top = Math.min(card.top, hostsUnion.top);
+    var bottom = Math.max(card.bottom, hostsUnion.bottom);
+    var left;
+    var right;
+    if (card.right <= hostsUnion.left) {
+      // Product cards: left-of-pointer → card left of hosts.
+      left = card.right;
+      right = hostsUnion.left;
+    } else if (hostsUnion.right <= card.left) {
+      left = hostsUnion.right;
+      right = card.left;
+    } else {
+      return null; // horizontal overlap — no corridor gap
+    }
+    if (!(right > left) || !(bottom > top)) return null;
+    return { left: left, top: top, right: right, bottom: bottom };
+  }
+
+  // Pure: product hit parts = card ∪ hosts ∪ corridor (🎯T271).
+  // aabb is debug envelope only — product predicate is pointInHitParts.
+  function computeHitParts(args) {
+    var a = args || {};
+    var card = normalizeRect(a.cardRect || a.tipRect);
+    var hosts = [];
+    var rawHosts = a.hostRects || [];
+    for (var i = 0; i < rawHosts.length; i++) {
+      var h = normalizeRect(rawHosts[i]);
+      if (h) hosts.push(h);
+    }
+    var corridor = bridgeCorridorBetween(card, hosts);
+    var envelope = [];
+    if (card) envelope.push(card);
+    for (var j = 0; j < hosts.length; j++) envelope.push(hosts[j]);
+    if (corridor) envelope.push(corridor);
+    return {
+      card: card,
+      hosts: hosts,
+      corridor: corridor,
+      aabb: unionHitRect(envelope),
+    };
+  }
+
+  // Pure: AABB envelope of card ∪ hosts (T231 hermetics / debug layer).
+  // Product dismiss uses computeHitParts + pointInHitParts (T271).
   function computeHitRect(args) {
     var a = args || {};
     var parts = [];
@@ -160,23 +210,31 @@
       var h = normalizeRect(hosts[i]);
       if (h) parts.push(h);
     }
-    var rect = unionHitRect(parts);
-    if (!rect) return null;
-    var table = normalizeRect(a.tableRect);
-    if (table) {
-      // Clip only if the union extends past table vertically on the table
-      // side without the card holding that extent. Owner: outside top/bottom
-      // of the hit rect is leave — pure AABB already defines top/bottom.
-      // Do not invent a taller strip; table clip shrinks host contribution
-      // only when hosts fall outside table (degenerate). Keep card extent.
-      // Product: leave rect as AABB(card ∪ hosts) — no vertical invent.
-    }
-    return rect;
+    return unionHitRect(parts);
   }
 
-  // Pure: dismiss when pointer is outside the hit rect.
+  // Pure: point inside product multi-part hit region (🎯T271).
+  // parts may be { card, hosts, corridor } or { rect } for single-rect inject.
+  function pointInHitParts(x, y, parts) {
+    var p = parts || {};
+    if (p.rect) return pointInHitRect(x, y, p.rect);
+    if (pointInHitRect(x, y, p.card)) return true;
+    var hosts = p.hosts || [];
+    for (var i = 0; i < hosts.length; i++) {
+      if (pointInHitRect(x, y, hosts[i])) return true;
+    }
+    if (p.corridor && pointInHitRect(x, y, p.corridor)) return true;
+    return false;
+  }
+
+  // Pure: dismiss when pointer is outside a single rect (hermetic helper).
   function shouldDismissOutsideHitRect(x, y, rect) {
     return !pointInHitRect(x, y, rect);
+  }
+
+  // Pure: dismiss when outside multi-part product region (🎯T271).
+  function shouldDismissOutsideHitParts(x, y, parts) {
+    return !pointInHitParts(x, y, parts);
   }
 
   // Pure hover state for latch / scheduled-hide helpers.
@@ -687,6 +745,8 @@
     var overTip = false;
     var tipEngaged = false;
     var hitRect = o.hitRect ? normalizeRect(o.hitRect) : null;
+    // 🎯T271: multi-part product region; single-rect inject via o.hitRect for tests.
+    var hitParts = hitRect ? { rect: hitRect, aabb: hitRect } : null;
     var insideHitRect = false;
     var hideTimer = null;
     var tracking = false;
@@ -766,12 +826,14 @@
     function recomputeHitRect() {
       if (o.hitRect) {
         hitRect = normalizeRect(o.hitRect);
+        hitParts = hitRect ? { rect: hitRect, aabb: hitRect } : null;
       } else {
-        hitRect = computeHitRect({
+        // 🎯T271: product path uses multi-part region (card ∪ hosts ∪ corridor).
+        hitParts = computeHitParts({
           cardRect: readCardRect(),
           hostRects: readHostRects(),
-          tableRect: resolveTableRect(),
         });
+        hitRect = hitParts && hitParts.aabb ? hitParts.aabb : null;
       }
       if (hitLayer) applyHitLayerLayout(hitLayer, hitRect);
       return hitRect;
@@ -834,18 +896,20 @@
       };
     }
 
-    // 🎯T231: sample pointer against the ONE hit rect — dismiss immediately
-    // when outside. No grace. No multi-flag bridge.
+    // 🎯T231/T271: sample against product hit region — dismiss immediately
+    // when outside. Multi-part = card ∪ hosts ∪ corridor (not tall AABB).
     function samplePointer(x, y) {
       if (!isVisible(tip)) return false;
       recomputeHitRect();
-      var inside = pointInHitRect(x, y, hitRect);
+      var inside = hitParts
+        ? pointInHitParts(x, y, hitParts)
+        : pointInHitRect(x, y, hitRect);
       insideHitRect = inside;
       if (inside) {
         clearHideTimer();
         return true;
       }
-      // Outside hit rect → dismiss now (grace 0).
+      // Outside hit region → dismiss now (grace 0).
       doHide();
       return false;
     }
@@ -867,7 +931,9 @@
       if (useHitGroup) {
         startTracking();
         if (ev && typeof ev.clientX === 'number') {
-          insideHitRect = pointInHitRect(ev.clientX, ev.clientY, hitRect);
+          insideHitRect = hitParts
+            ? pointInHitParts(ev.clientX, ev.clientY, hitParts)
+            : pointInHitRect(ev.clientX, ev.clientY, hitRect);
         } else {
           insideHitRect = true; // host enter without coords — treat latched
         }
@@ -1031,11 +1097,13 @@
     tip._instantTipGetHitRect = function () { return hitRect ? {
       left: hitRect.left, top: hitRect.top, right: hitRect.right, bottom: hitRect.bottom,
     } : null; };
+    tip._instantTipGetHitParts = function () { return hitParts; };
     tip._instantTipRecomputeHitRect = recomputeHitRect;
     tip._instantTipSamplePointer = samplePointer;
     tip._instantTipSetHitRect = function (r) {
       hitRect = normalizeRect(r);
       o.hitRect = hitRect;
+      hitParts = hitRect ? { rect: hitRect, aabb: hitRect } : null;
       if (hitLayer) applyHitLayerLayout(hitLayer, hitRect);
     };
     return tip;
@@ -1059,8 +1127,12 @@
     normalizeRect: normalizeRect,
     unionHitRect: unionHitRect,
     pointInHitRect: pointInHitRect,
+    pointInHitParts: pointInHitParts,
+    bridgeCorridorBetween: bridgeCorridorBetween,
+    computeHitParts: computeHitParts,
     computeHitRect: computeHitRect,
     shouldDismissOutsideHitRect: shouldDismissOutsideHitRect,
+    shouldDismissOutsideHitParts: shouldDismissOutsideHitParts,
     isInsideHitGroup: isInsideHitGroup,
     shouldDismissOnLeaveHitGroup: shouldDismissOnLeaveHitGroup,
     shouldRunScheduledHide: shouldRunScheduledHide,
