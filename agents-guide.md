@@ -222,6 +222,44 @@ workers with `parent=jevons` (or actor=jevons as parent).
 PO spawns. **Residual:** instructional until a later target adds registry
 enforcement (reject wrong parent).
 
+### Domain portfolios default (🎯T200)
+
+RHS fleet tree groups product owners under named **portfolios** via
+declarative path membership in `~/.jevons/config.yaml` — **not**
+agent-name parsing. Portfolio nodes sit under the root overseer
+(`jevons`); POs with matching workdirs nest under their portfolio;
+unassigned POs hang directly under the overseer root.
+
+**Default for marcelocantos POs:** workdirs under
+`github.com/marcelocantos/…` belong in the **personal** portfolio.
+Live config uses the org path fragment so one member entry covers the
+whole org:
+
+```yaml
+portfolios:
+  - id: personal
+    name: Personal
+    members:
+      - github.com/marcelocantos
+  - id: minicades
+    name: Minicades
+    members:
+      - github.com/squz/yourworld2   # example non-default assignment
+```
+
+| When spawning… | Nest under |
+|---|---|
+| New PO in `github.com/marcelocantos/…` | **Personal** (default — ensure config path match) |
+| Owner assigns another domain (e.g. squz / minicades) | That portfolio’s members list |
+| No matching `members` path | Overseer root (unassigned) — **avoid** for marcelocantos POs |
+
+**Standing rule:** when spawning a new marcelocantos PO, they nest under
+Personal — do **not** leave them unassigned under the overseer root
+unless the owner assigns a different portfolio. Membership is config path
+match only; no GM agent required (🎯T201 set aside). Residual:
+instructional spawn hygiene; display reparent is config/registry, not
+kill lineage.
+
 ### Filing reflex (🎯T130) — doctrine first, narrative second
 
 When a **real product gap**, **repeated failure mode**, or **standing
@@ -370,6 +408,7 @@ bullseye achieve.
 | Path | Purpose |
 |---|---|
 | `~/.jevons/` | Data directory |
+| `~/.jevons/config.yaml` | Daemon config incl. `portfolios` (🎯T200 path membership) |
 | `~/.jevons/threads.json` | Durable thread registry |
 | `~/.jevons/usage.db` | Token-spend accounting |
 | `~/.jevons/budget.json` | Spend budgets / thresholds (optional). `disabled` opt-out; `accounting` = `list_price` (default, billable $) or `subscription` (SuperGrok: API-eq $ never enforces — 🎯T137) |

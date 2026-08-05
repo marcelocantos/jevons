@@ -126,6 +126,14 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   (T125). Exception: PO dead/unregistered → rehydrate PO first, then PO
   spawns. Instructional until registry enforcement. Persona + agents-guide
   + fleet brief.
+- **Domain portfolios default (🎯T200):** product owners whose workdir is
+  under `github.com/marcelocantos/…` belong in the **personal** portfolio
+  by default. Membership is declarative path match in
+  `~/.jevons/config.yaml` (org fragment `github.com/marcelocantos` covers
+  the org). When spawning a new marcelocantos PO, they nest under Personal
+  — do **not** leave them unassigned under the overseer root unless the
+  owner assigns a different portfolio (e.g. minicades for squz). RHS tree
+  uses path membership, not agent-name parsing. Agents-guide + fleet brief.
 - **Filing reflex (🎯T130):** when a real product gap, repeated failure
   mode, or standing behavioural rule appears mid-work → **file or
   prompt-file a bullseye target** (name + acceptance) in the **same turn**
