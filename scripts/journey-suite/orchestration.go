@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 )
 
 // Orchestration journeys (MCP-direct against the isolated daemon).
@@ -73,6 +75,14 @@ func (s *suite) jMCPReconnect() error {
 	// Empty config on a minimal isolate is a valid fail-closed path.
 	if strings.Contains(low, "no mcp servers configured") ||
 		strings.Contains(low, "nothing to reconnect") {
+		return nil
+	}
+	// Non-Grok overseer: the tool must name its Grok-only control plane
+	// rather than cycle a config the caller does not use (🎯T282).
+	if strings.Contains(low, "grok control plane") {
+		if s.provider == claudia.ProviderGrok {
+			return fmt.Errorf("grok overseer refused its own control plane: %s", trim(combined, 200))
+		}
 		return nil
 	}
 	if err != nil && !strings.Contains(low, "ok") && !strings.Contains(low, "enable") {
@@ -452,6 +462,52 @@ func (s *suite) jWorkerShellTool() error {
 		return fmt.Errorf("remove: %w", err)
 	}
 	return nil
+}
+
+// jWorkerTranscriptVisible is the 🎯T282 inspect oracle: after a worker has
+// taken a real turn, the RHS inspect path must be able to load its
+// transcript. Session stores differ per provider (Grok sessions tree vs
+// Claude projects tree, 🎯T213), and a discovery path wired to one of them
+// leaves the other's workers showing an empty pane.
+func (s *suite) jWorkerTranscriptVisible() error {
+	id := fmt.Sprintf("orch-tx-%d", time.Now().Unix()%100000)
+	work := filepath.Join(s.stateDir, "transcript-work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id})
+	}()
+
+	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": id, "workdir": work, "description": "journey transcript worker",
+	}); err != nil {
+		return fmt.Errorf("spawn: %w", err)
+	}
+	token := "JOURNEY-TX-OK"
+	if _, err := s.mcpText("jevons_thread_direct", map[string]any{
+		"id": id, "text": "Reply with exactly: " + token,
+	}); err != nil {
+		return fmt.Errorf("direct: %w", err)
+	}
+
+	// The transcript lands via the provider's own store, so poll briefly
+	// rather than assuming it is flushed the instant the turn returns.
+	deadline := time.Now().Add(20 * time.Second)
+	var lastReason string
+	for time.Now().Before(deadline) {
+		payload, err := s.agentTranscriptHTTP(id)
+		if err != nil {
+			return fmt.Errorf("transcript API: %w", err)
+		}
+		if turns, _ := payload["turns"].([]any); len(turns) > 0 {
+			return nil
+		}
+		lastReason, _ = payload["empty_reason"].(string)
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("worker transcript still empty after its turn (empty_reason=%q, provider=%s)",
+		lastReason, s.provider)
 }
 
 // MCP/HTTP helpers live in steps.go (🎯T102 step library).

@@ -50,6 +50,15 @@ type Fleet interface {
 	Remove(id string)
 }
 
+// BusyFleet is the optional half of Fleet that reports turns in flight.
+// A Fleet that implements it protects agents mid-turn from the idle
+// sweep; one that does not keeps the historical transcript-only
+// behaviour (🎯T282).
+type BusyFleet interface {
+	// Busy reports whether a directed turn is awaiting a reply for id.
+	Busy(id string) bool
+}
+
 // Participants is the optional secondary lookup for fleet agents that are
 // not butler threads (🎯T114 / 🎯T111.2). One deliver path addresses any
 // participant by name: thread store first, then this registry.
@@ -442,9 +451,16 @@ func (b *Butler) ReapIdle() []string {
 	if b.fleet == nil {
 		return nil
 	}
+	busy, _ := b.fleet.(BusyFleet)
 	var reaped []string
 	for _, t := range b.store.List() {
 		if t.Kind != thread.KindSpawned || !b.fleet.Alive(t.ID) {
+			continue
+		}
+		// A turn in flight outranks the transcript-derived state: a
+		// worker whose first turn has not produced transcript output yet
+		// reads as idle, and stopping it there kills the turn (🎯T282).
+		if busy != nil && busy.Busy(t.ID) {
 			continue
 		}
 		if b.deriveStatus(t).State == thread.StateIdle {

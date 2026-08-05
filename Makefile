@@ -114,10 +114,15 @@ test-live-suite:
 	go run ./scripts/live-suite -skip-overseer
 
 # Isolated owner-chat user journeys (separate port + state dir + MCP name).
-# Does NOT touch daily-driver stream. Needs Grok CLI; not in default `test`.
+# Does NOT touch daily-driver stream. Needs the selected provider's CLI
+# (Grok by default); not in default `test`.
+#
+# PROVIDER selects the backend for the whole isolate — overseer and every
+# agent the journeys spawn (🎯T282), e.g.:
+#	make test-journey PROVIDER=claude
 .PHONY: test-journey
 test-journey: jevonsd
-	go run ./scripts/journey-suite
+	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER))
 
 test: test-go test-web test-ui
 

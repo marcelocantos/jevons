@@ -438,6 +438,49 @@ clobbered to Grok). New agents without an override use the daemon default.
 Provider strings pass through to claudia (no allow-list) so future ids
 (e.g. Bedrock) are not blocked at the Jevons selection surface.
 
+### Running the whole fleet on Claude (🎯T282)
+
+One setting moves everything — overseer, POs, workers, asides, jwork
+tasks — onto Claude:
+
+```yaml
+# ~/.jevons/config.yaml
+provider: claude
+```
+
+(or `JEVONS_PROVIDER=claude`, or `jevonsd --provider claude`). Restart the
+daemon; already-registered agents keep the backend stored on their
+registry row, so an existing fleet stays on Grok until each agent is
+re-created or started with `provider="claude"`.
+
+Evidence: `make test-journey PROVIDER=claude` runs the isolated
+Universe-B suite — owner chat, cancel, MCP tool surface, worker spawn,
+direct, shell tool, transcript inspect — end to end on Claude.
+
+What changes under Claude:
+
+- **Overseer MCP** is installed with `claude mcp add -s user` instead of
+  `~/.grok/config.toml` (🎯T212).
+- **Transcripts** are discovered under `~/.claude/projects` (🎯T213);
+  `claude_projects:` in config points elsewhere if needed.
+- **`jevons_mcp_reconnect` does not apply** — `grok mcp disable/enable`
+  is a Grok control plane. With Claude selected the tool says so rather
+  than cycling a config the overseer never reads. Re-attach with `/mcp`
+  in-session, or restart jevonsd to re-run the user-scoped install.
+- **Agents launch as tmux sessions.** jevonsd therefore drops the
+  enclosing agent session's identity from its own environment at boot
+  and reconciles claudia's long-lived tmux server, which otherwise hands
+  each new agent the environment of whatever started it — possibly a test
+  run from days earlier. Starting jevonsd from inside a Claude Code
+  session is safe because of this; without it, spawned workers rejoin the
+  parent session and never submit their turns.
+
+Residual: Claude Session readiness is a pane pattern match owned by
+claudia, and Claude Code's startup splash can satisfy it while the TUI is
+still mounting. jevons pays a short settle after launch
+(`internal/fleet.claudeReadySettle`) to keep the first turn from being
+swallowed; the real fix belongs in claudia's readiness detection.
+
 ## Gotchas
 
 - Default remains Grok for empty config/env; set `provider` / `JEVONS_PROVIDER`

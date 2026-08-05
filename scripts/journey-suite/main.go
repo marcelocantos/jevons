@@ -6,18 +6,24 @@
 // so it never pollutes the daily-driver stream on :13705 / ~/.jevons.
 //
 //	make test-journey
-//	go run ./scripts/journey-suite [-keep] [-port 0]
+//	make test-journey PROVIDER=claude
+//	go run ./scripts/journey-suite [-keep] [-port 0] [-provider claude] [-only J10]
 //
-// Journeys (live Grok ACP; owner chat + MCP orchestration):
+// Journeys (live agent backend; owner chat + MCP orchestration):
 //  1. health
 //  2. chat round-trip (idle send → terminal)
 //  3. cancel-and-send (interrupt mid-turn → replacement → terminal)
 //  4. reconnect sealed (second connect sees bounded sealed history)
 //  5. isolation (after teardown)
-//  6–10. orchestration: tool surface, overseer registry, two agents
-//       same workdir, thread spawn→direct→remove, worker shell tool (T97)
+//  6–11. orchestration: tool surface, overseer registry, two agents
+//       same workdir, thread spawn→direct→remove, worker shell tool (T97),
+//       worker transcript visible to inspect (T282)
 //
-// Not part of default `make test` (needs Grok + network).
+// -provider runs the entire isolate — overseer and every agent the
+// journeys spawn — on one backend (🎯T282), so `PROVIDER=claude` is the
+// live evidence that Jevons can run an all-Claude fleet.
+//
+// Not part of default `make test` (needs the provider CLI + network).
 package main
 
 import (
@@ -35,6 +41,8 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
@@ -52,6 +60,8 @@ const (
 type suite struct {
 	host     string
 	stateDir string
+	provider claudia.Provider
+	only     string // when set, run only journeys whose name contains it
 	failures int
 }
 
@@ -59,7 +69,18 @@ func main() {
 	port := flag.Int("port", defaultPort, "isolated listen port (0 = ephemeral)")
 	keep := flag.Bool("keep", false, "keep sandbox state dir after run (for debugging)")
 	bin := flag.String("bin", "", "path to jevonsd (default: bin/jevonsd or PATH)")
+	only := flag.String("only", "",
+		"run only journeys whose name contains this substring (e.g. J10)")
+	providerFlag := flag.String("provider", "",
+		"agent backend for the whole isolate (claudia provider id: grok, claude, …; empty = JEVONS_PROVIDER, else grok)")
 	flag.Parse()
+
+	// 🎯T282: one selector drives the entire isolate — overseer and every
+	// agent the journeys spawn. Resolving through cli.ResolveProvider means
+	// `JEVONS_PROVIDER=claude make test-journey` works without a flag, and
+	// the suite pins the result into the isolate's config so the daemon
+	// cannot silently disagree with the CLI paths used for teardown.
+	provider := cli.ResolveProvider(*providerFlag, "")
 
 	root, err := os.Getwd()
 	if err != nil {
@@ -101,11 +122,15 @@ func main() {
 	// MCP baseline: daily registration must survive the suite if present.
 	// (Daily chatlog mtime is *not* an oracle — a live daily-driver overseer
 	// may write concurrently while this suite runs against its own isolate.)
-	hadDailyMCP := mcpListed(dailyMCPName)
+	hadDailyMCP := mcpListedFor(provider, dailyMCPName)
 
 	cfgPath := filepath.Join(stateDir, "config.yaml")
 	// sessions_dir under sandbox so discovery/scanner stay isolated too.
 	// Overseer cwd is state_dir/jevons → Grok session path is not ~/.jevons/jevons.
+	// claude_projects stays at its default (~/.claude/projects): Claude Code
+	// chooses that tree itself, keyed by workdir, so the sandbox temp workdir
+	// already isolates this run's transcripts — pointing it elsewhere would
+	// only blind discovery (🎯T213).
 	sessionsDir := filepath.Join(stateDir, "sessions")
 	cfg := fmt.Sprintf(`owner_name: JourneyTester
 overseer_name: %s
@@ -115,10 +140,11 @@ state_dir: %q
 sessions_dir: %q
 mcp_server_name: %s
 workdir: %q
+provider: %s
 persona_notes: |
   You are a short-lived journey-test overseer. Prefer one-line text answers.
   Do not spawn workers. For "Reply with exactly: X" prompts, reply with X only.
-`, overseerName, p, stateDir, sessionsDir, mcpName, stateDir)
+`, overseerName, p, stateDir, sessionsDir, mcpName, stateDir, provider)
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		fatal(err)
 	}
@@ -139,8 +165,8 @@ persona_notes: |
 	if err := cmd.Start(); err != nil {
 		fatal(fmt.Errorf("start jevonsd: %w (build with make jevonsd?)", err))
 	}
-	fmt.Printf("started isolated jevonsd pid=%d host=%s state=%s mcp=%s\n",
-		cmd.Process.Pid, host, stateDir, mcpName)
+	fmt.Printf("started isolated jevonsd pid=%d host=%s state=%s mcp=%s provider=%s\n",
+		cmd.Process.Pid, host, stateDir, mcpName, provider)
 
 	// Always tear down daemon + journey MCP. Normal path stops before J5 so
 	// isolation assertions see post-teardown MCP state; defer covers early
@@ -164,10 +190,10 @@ persona_notes: |
 			cmd.Process = nil
 		}
 		_ = logFile.Close()
-		// Remove journey MCP only — never touch the daily MCP name.
-		if grok, err := exec.LookPath("grok"); err == nil {
-			_ = exec.Command(grok, "mcp", "remove", mcpName).Run()
-		}
+		// Remove journey MCP only — never touch the daily MCP name — and
+		// through the CLI that registered it (🎯T282: Claude registers via
+		// `claude mcp add -s user`, not ~/.grok/config.toml).
+		mcpRemoveFor(provider, mcpName)
 		fmt.Println("stopped isolated jevonsd; removed MCP", mcpName)
 		if *keep {
 			fmt.Println("log:", logPath)
@@ -180,7 +206,7 @@ persona_notes: |
 		fatal(fmt.Errorf("daemon not ready: %w", err))
 	}
 
-	s := &suite{host: host, stateDir: stateDir}
+	s := &suite{host: host, stateDir: stateDir, provider: provider, only: *only}
 	s.run("J1-health", s.jHealth)
 	s.run("J2-chat-round-trip", s.jChatRoundTrip)
 	s.run("J3-cancel-and-send", s.jCancelAndSend)
@@ -194,12 +220,13 @@ persona_notes: |
 	s.run("J8b-po-worker-lineage-fanout", s.jPOWorkerLineageFanout)
 	s.run("J9-thread-spawn-direct", s.jThreadSpawnDirectRemove)
 	s.run("J10-worker-shell-tool", s.jWorkerShellTool)
+	s.run("J11-worker-transcript", s.jWorkerTranscriptVisible)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()
 
 	s.run("J5-isolation", func() error {
-		return assertIsolation(hadDailyMCP, stateDir, p)
+		return assertIsolation(provider, hadDailyMCP, stateDir, p)
 	})
 
 	if s.failures > 0 {
@@ -212,7 +239,7 @@ persona_notes: |
 
 // assertIsolation checks path + MCP isolation: journal lives only under the
 // temp state dir, journey MCP is gone, daily MCP still present if it was.
-func assertIsolation(hadDailyMCP bool, stateDir string, port int) error {
+func assertIsolation(provider claudia.Provider, hadDailyMCP bool, stateDir string, port int) error {
 	if err := portguard.RefuseDaily(port); err != nil {
 		return err
 	}
@@ -231,10 +258,10 @@ func assertIsolation(hadDailyMCP bool, stateDir string, port int) error {
 	if st, err := os.Stat(sandboxJournal); err != nil || st.Size() == 0 {
 		return fmt.Errorf("sandbox journal missing under isolate: %s (%v)", sandboxJournal, err)
 	}
-	if mcpListed(mcpName) {
+	if mcpListedFor(provider, mcpName) {
 		return fmt.Errorf("MCP %s still registered after teardown", mcpName)
 	}
-	if hadDailyMCP && !mcpListed(dailyMCPName) {
+	if hadDailyMCP && !mcpListedFor(provider, dailyMCPName) {
 		return fmt.Errorf("daily MCP %s missing after suite (should be untouched)", dailyMCPName)
 	}
 	return nil
@@ -248,26 +275,10 @@ func homeDir() string {
 	return h
 }
 
-func mcpListed(name string) bool {
-	grok, err := exec.LookPath("grok")
-	if err != nil {
-		return false
-	}
-	out, err := exec.Command(grok, "mcp", "list").CombinedOutput()
-	if err != nil {
-		return false
-	}
-	// Lines look like: "  jevonsmcp: http://127.0.0.1:13705/mcp"
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, name+":") || strings.HasPrefix(line, name+" ") {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *suite) run(name string, fn func() error) {
+	if s.only != "" && !strings.Contains(name, s.only) {
+		return
+	}
 	start := time.Now()
 	if err := fn(); err != nil {
 		s.failures++

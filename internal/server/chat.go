@@ -1018,8 +1018,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			if cur := s.CurrentProcess(); cur != nil {
 				if err := cur.Interrupt(); err != nil {
 					slog.Error("chat: interrupt failed", "err", err)
+					continue
 				}
 			}
+			s.settleCancel()
 			continue
 		}
 
@@ -1110,6 +1112,35 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			s.BroadcastChat(string(payload))
 		}
 	}
+}
+
+// settleCancel ends the cancelled turn on the server and tells clients so.
+//
+// Providers disagree about what an interrupted turn emits: Grok's ACP
+// session reports a turn end, while a Claude Session is a TUI that simply
+// stops — no terminal event ever arrives. Waiting for the provider
+// therefore leaves the owner's thinking indicator spinning after Esc on
+// any Claude agent, so the settle signal comes from the server (🎯T282).
+// Clients already treat state=cancel_settled as "not working"
+// (web/scripts/chat_events.js workingLevelFromSample).
+func (s *Server) settleCancel() {
+	s.mu.Lock()
+	s.turnBuf = ""
+	s.waiting = false
+	s.overseerStreamID = ""
+	s.overseerStreamAcc = ""
+	s.overseerStreamSilent = false
+	s.overseerStreamHold = nil
+	s.mu.Unlock()
+
+	s.NoteOverseerProgress()
+	frame := map[string]any{"type": "status", "state": "cancel_settled", "text": "cancelled"}
+	if payload, err := json.Marshal(frame); err == nil {
+		s.BroadcastChat(string(payload))
+	}
+	s.Broadcast(frame)
+	// Notes deferred while the turn held the session can go out now.
+	s.drainOverseerNotes()
 }
 
 // sendHistory reads the JSONL file and sends each line as a raw WebSocket

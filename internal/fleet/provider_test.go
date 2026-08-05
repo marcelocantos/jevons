@@ -136,3 +136,18 @@ func TestClaudeSessionStitchEnsureRegistered(t *testing.T) {
 	}
 }
 
+
+// TestPostReadySettleOnlyForClaude: the launch-path settle exists because
+// Claude Session readiness is a pane pattern match that can fire while the
+// TUI is still mounting, swallowing the first turn's submit (🎯T282). Grok
+// reports ready over ACP and must not pay for it.
+func TestPostReadySettleOnlyForClaude(t *testing.T) {
+	if d := postReadySettle(claudia.ProviderClaude); d <= 0 {
+		t.Errorf("claude settle = %s, want a positive grace period", d)
+	}
+	for _, p := range []claudia.Provider{claudia.ProviderGrok, claudia.ProviderCodex, ""} {
+		if d := postReadySettle(p); d != 0 {
+			t.Errorf("provider %q settle = %s, want 0", p, d)
+		}
+	}
+}

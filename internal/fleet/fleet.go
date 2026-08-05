@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,33 @@ const (
 	defaultReplyTimeout = 10 * time.Minute
 )
 
+// claudeReadySettle is a grace period after claudia reports a Claude
+// Session ready, before jevons sends its first turn (🎯T282).
+//
+// Claude Session is a TUI driven through tmux, and its readiness signal is
+// a pattern match on the rendered pane. Claude Code's startup splash draws
+// a prompt box with placeholder text that matches that pattern, so under
+// load "ready" can be reported a second after launch, while the TUI is
+// still mounting. A turn sent into that window is typed into the composer
+// but its submit keystroke is dropped: the text sits there unsent and the
+// direct blocks until its caller times out (observed as intermittent
+// journey J10 hangs — the composer still held the prompt minutes later).
+//
+// Fixing the readiness signal itself belongs in claudia, which owns the
+// pane. Until then jevons pays a short settle on the launch path, where it
+// costs one second per agent start and nothing per turn.
+const claudeReadySettle = 2 * time.Second
+
+// postReadySettle returns the settle for a provider: only tmux-backed
+// Claude Sessions need it — Grok's ACP handshake is a protocol reply, not
+// a screen scrape, so it reports ready exactly when it is.
+func postReadySettle(provider claudia.Provider) time.Duration {
+	if provider == claudia.ProviderClaude {
+		return claudeReadySettle
+	}
+	return 0
+}
+
 // Claudia adapts a claudia.Registry to the butler.Fleet interface and
 // to butler.Participants (agent-only deliver).
 type Claudia struct {
@@ -33,6 +61,12 @@ type Claudia struct {
 	defaultProvider claudia.Provider
 	readyTimeout    time.Duration
 	replyTimeout    time.Duration
+
+	// inFlight counts turns currently awaiting a reply, per agent id.
+	// Idle-derived reaping consults it (Busy) so a worker mid-turn is
+	// never stopped out from under the caller — see Busy (🎯T282).
+	mu       sync.Mutex
+	inFlight map[string]int
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from
@@ -155,6 +189,9 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 	if err := ag.WaitReady(ctx); err != nil {
 		return fmt.Errorf("agent %q not ready: %w", t.ID, err)
 	}
+	if def := f.reg.Def(t.ID); def != nil {
+		time.Sleep(postReadySettle(def.Provider))
+	}
 
 	if sid := ag.SessionID(); sid != "" {
 		t.SessionID = sid
@@ -169,6 +206,7 @@ func (f *Claudia) Send(id, text string) (string, error) {
 	if ag == nil || !ag.Alive() {
 		return "", fmt.Errorf("no live process for thread %q", id)
 	}
+	defer f.enterTurn(id)()
 	if err := ag.Send(text); err != nil {
 		return "", fmt.Errorf("send to %q: %w", id, err)
 	}
@@ -180,6 +218,41 @@ func (f *Claudia) Send(id, text string) (string, error) {
 		return "", fmt.Errorf("await reply from %q: %w", id, err)
 	}
 	return reply, nil
+}
+
+// enterTurn marks a turn in flight for id and returns the function that
+// clears it. Turn state is tracked here rather than derived from the
+// transcript because the transcript is a lagging, provider-specific
+// signal: a Claude worker writes no JSONL until its first turn produces
+// output, so a freshly directed worker looks idle to DeriveStatus and
+// the process-as-cache sweep would stop it mid-turn (🎯T282).
+func (f *Claudia) enterTurn(id string) func() {
+	f.mu.Lock()
+	if f.inFlight == nil {
+		f.inFlight = map[string]int{}
+	}
+	f.inFlight[id]++
+	f.mu.Unlock()
+	return func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if n := f.inFlight[id] - 1; n > 0 {
+			f.inFlight[id] = n
+		} else {
+			delete(f.inFlight, id)
+		}
+	}
+}
+
+// Busy reports whether a directed turn is currently awaiting a reply for
+// id. The idle sweep uses it to leave working agents alone.
+func (f *Claudia) Busy(id string) bool {
+	if f == nil {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inFlight[id] > 0
 }
 
 // Alive reports whether a live process currently exists for the thread.
@@ -222,6 +295,9 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 	if f.reg.Def(id) == nil {
 		return "", fmt.Errorf("no agent %q", id)
 	}
+	// Count the turn from before the rehydrate: a launch + first turn is
+	// exactly the window in which the idle sweep must not intervene.
+	defer f.enterTurn(id)()
 	ag := f.reg.Get(id)
 	if ag == nil || !ag.Alive() {
 		launched, err := f.reg.Launch(id)
@@ -232,6 +308,9 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 		defer cancel()
 		if err := launched.WaitReady(ctx); err != nil {
 			return "", fmt.Errorf("agent %q not ready: %w", id, err)
+		}
+		if def := f.reg.Def(id); def != nil {
+			time.Sleep(postReadySettle(def.Provider))
 		}
 		ag = launched
 	}

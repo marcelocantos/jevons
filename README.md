@@ -167,7 +167,10 @@ overseer_name: jevons    # the CEO agent's name
 bind_addr: 127.0.0.1     # loopback-only by default; remote devices use the pigeon relay
 port: 13705
 workdir: "."             # default workdir for workers
-provider: ""             # default agent backend: grok | claude | … ("" = JEVONS_PROVIDER or grok)
+provider: ""             # default agent backend for the WHOLE fleet — overseer, workers,
+                         # asides, tasks: grok | claude | … ("" = JEVONS_PROVIDER or grok).
+                         # `claude` is exercised end-to-end by `make test-journey PROVIDER=claude`;
+                         # see agents-guide.md "Running the whole fleet on Claude" for what differs.
 model: ""                # default worker model ("" = provider default)
 overseer_model: ""       # "" = same as model
 state_dir: ~/.jevons

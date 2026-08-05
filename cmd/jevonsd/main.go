@@ -96,6 +96,28 @@ func main() {
 		Level: logLevel,
 	})))
 
+	// 🎯T282: drop any enclosing agent session's identity before anything
+	// spawns. Started from inside a Claude Code session (make run,
+	// make test-journey, an agent-driven dev loop), jevonsd would otherwise
+	// hand CLAUDE_CODE_SESSION_ID and friends to every Claude agent it
+	// launches, and those agents rejoin the parent session's bridge instead
+	// of running as their own — a directed turn then never submits.
+	if cleared := cli.ScrubInheritedSessionEnv(); len(cleared) > 0 {
+		slog.Info("cleared enclosing agent session env so spawned agents start clean",
+			"vars", cleared)
+	}
+	// 🎯T282: and reconcile the claudia tmux server, which hands each new
+	// agent window the environment of whatever started the server —
+	// possibly a test run from days ago, since the anchor session keeps it
+	// alive across daemon restarts.
+	if changed, err := cli.NormalizeAgentTmuxEnv(); err != nil {
+		slog.Warn("could not reconcile claudia tmux server env; agents may inherit stale vars",
+			"err", err)
+	} else if len(changed) > 0 {
+		slog.Info("reconciled claudia tmux server env with the daemon's",
+			"vars", changed, "socket", cli.AgentTmuxSocket())
+	}
+
 	// Structured config (🎯T44): built-in defaults ← config.yaml ← flags.
 	cfgPath := *configPath
 	if cfgPath == "" {
