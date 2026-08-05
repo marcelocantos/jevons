@@ -419,6 +419,40 @@
     return state.working;
   }
 
+  /**
+   * 🎯T272 level-trigger: derive whether owner working chrome should show
+   * from a *current* sample of in-flight state — not from remembering a
+   * send/kickoff edge. Reload/reconnect works because history_meta (or
+   * status) re-samples server truth; pure client edge memory is not SoT.
+   *
+   * @param {object|null|undefined} sample
+   * @param {boolean} [sample.working] server history_meta.working
+   * @param {boolean} [sample.busy]
+   * @param {string} [sample.state] status frame state (thinking|idle|…)
+   * @param {boolean} [sample.promptInFlight]
+   * @param {boolean} [sample.openStream]
+   * @param {boolean} [sample.serverWorking]
+   * @returns {boolean}
+   */
+  function workingLevelFromSample(sample) {
+    if (!sample || typeof sample !== 'object') return false;
+    if (sample.working === true || sample.busy === true ||
+        sample.promptInFlight === true || sample.openStream === true ||
+        sample.serverWorking === true) {
+      return true;
+    }
+    if (sample.working === false || sample.busy === false) {
+      // Explicit idle level — only override if another positive signal.
+      // (state alone handled below when working/busy absent)
+    }
+    const st = sample.state != null ? String(sample.state).toLowerCase() : '';
+    if (st === 'thinking' || st === 'working' || st === 'busy') return true;
+    if (st === 'idle' || st === 'cancel_settled') return false;
+    // history_meta without working key: not in flight (sealed history only).
+    if (sample.working === false || sample.busy === false) return false;
+    return false;
+  }
+
   return {
     stopReason,
     isTerminalStop,
@@ -436,6 +470,7 @@
     createWorkingChrome,
     applyWorkingChrome,
     workingLifecycle,
+    workingLevelFromSample,
     createTurnState,
     applyChatEvent,
     applyChatEvents,

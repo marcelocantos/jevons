@@ -1918,6 +1918,8 @@ function handle(m) {
   // 🎯T260: bare state=idle must NOT clear chrome mid-owner-turn (tools-only
   // ACP end_turn + note re-prompt still busy). Only recovery / cancel / chrome
   // policy after visible reply settles idle.
+  // 🎯T272: status is also a level sample — thinking re-arms; idle still
+  // gated by T260 chrome flags (not edge-only kickoff).
   if (typ === 'status') {
     const stText = m.text != null ? String(m.text) : '';
     if (/overseer is back/i.test(stText)) {
@@ -1926,6 +1928,8 @@ function handle(m) {
       if (typeof ownerWorkingChrome !== 'undefined' && ownerWorkingChrome) {
         ownerWorkingChrome.open = false;
       }
+    } else if (m.state === 'thinking' || m.state === 'working' || m.state === 'busy') {
+      applyWorkingLevelSample({ state: m.state, working: true });
     } else if (m.state === 'idle' && workingEl && !/thinking/i.test(stText)) {
       const chrome = (typeof ownerWorkingChrome !== 'undefined') ? ownerWorkingChrome : null;
       const canIdle = !chrome || !chrome.open || chrome.hadVisible ||
@@ -1975,7 +1979,11 @@ function handle(m) {
       replay_ms: m.replay_ms,
       concurrent: m.concurrent,
       soft: wasSoft,
+      working: !!m.working,
     });
+    // 🎯T272: level-sample in-flight after hydrate/reconnect — re-arm or stay idle.
+    // Must run for both hard and soft reconnect (not edge memory of send).
+    applyWorkingLevelSample(m);
     // 🎯T239: re-queue unacked pending against restored chatlog (no dupes).
     if (typeof reconcilePendingSends === 'function') {
       try { reconcilePendingSends(); } catch (_) {}
@@ -6217,11 +6225,11 @@ function recallHistory(dir) {
   return true;
 }
 
-// "Working" indicator: shown from when the user sends until Jevons's
-// owner-visible turn actually completes (🎯T260), so a long synchronous
-// turn (e.g. tools-only ACP end_turn then note re-prompt then reply) does
-// not look idle mid-flight. Only driven by live sends — never by history
-// replay.
+// "Working" indicator: reflects whether an owner-visible turn is *currently*
+// in flight (🎯T272 level-trigger). Send still opens chrome, but reload/
+// reconnect re-derives from server history_meta.working / status samples —
+// not from remembering the send edge. Sealed history hydrate never leaves
+// stuck working. T260 clear policy still owns mid-turn tools-only seals.
 // 🎯T71: tool steps surface as progress on this chrome.
 // 🎯T94: stuck-watchdog is an *idle* bound — any real progress (tool step,
 // stream chunk, fleet rollup) resets lastWorkingActivity. Only when no
@@ -6275,11 +6283,13 @@ function onWorkingStuck() {
 }
 // opts.skipDrain: clear chrome without auto-submitting the next queued item
 // (disconnect / offline). Normal seal drains FIFO (🎯T113).
+// opts.level: true when paint comes from T272 level sample (not send edge).
 function setWorking(on, progress, opts) {
   if (on) {
     if (typeof progress === 'string') workingProgress = progress;
     // Fresh owner-send: new chrome flags. Re-arm while open keeps flags
-    // (tools-only end_turn + agent_note path — 🎯T260).
+    // (tools-only end_turn + agent_note path — 🎯T260). Level re-arm after
+    // reload also opens chrome without requiring a client send edge (T272).
     if (!workingEl) {
       if (!ownerWorkingChrome || !ownerWorkingChrome.open) {
         ownerWorkingChrome = (typeof ChatEvents !== 'undefined' && ChatEvents.createWorkingChrome)
@@ -6310,6 +6320,21 @@ function setWorking(on, progress, opts) {
     if (ownerWorkingChrome) ownerWorkingChrome.open = false;
   }
 }
+// 🎯T272: paint working chrome from a level sample (history_meta / status).
+// Open-turn fixture → working on; sealed history → idle (no stuck chrome).
+function applyWorkingLevelSample(sample) {
+  const level = (typeof ChatEvents !== 'undefined' && ChatEvents.workingLevelFromSample)
+    ? ChatEvents.workingLevelFromSample(sample)
+    : !!(sample && (sample.working === true || sample.busy === true));
+  if (level) {
+    if (!workingEl) setWorking(true, undefined, { level: true });
+    else if (typeof armWorkingWatch === 'function') armWorkingWatch();
+  } else if (workingEl) {
+    // Idle level after hydrate: clear chrome left over from pre-reconnect.
+    setWorking(false, undefined, { skipDrain: true, level: true });
+  }
+}
+window.applyWorkingLevelSample = applyWorkingLevelSample;
 function updateWorkingProgress(text) {
   if (!workingEl) return;
   workingProgress = text || '';

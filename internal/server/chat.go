@@ -353,6 +353,24 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	s.HandleAgentEvent(ev)
 }
 
+// overseerWorkingLevel reports whether an owner-visible overseer turn is
+// currently in flight (🎯T272). Level-trigger sample for history_meta:
+// waiting flag, open stream id, or claudia PromptInFlight.
+func (s *Server) overseerWorkingLevel() bool {
+	s.mu.RLock()
+	waiting := s.waiting
+	streamOpen := s.overseerStreamID != ""
+	proc := s.proc
+	s.mu.RUnlock()
+	if waiting || streamOpen {
+		return true
+	}
+	if proc != nil && proc.Alive() && proc.PromptInFlight() {
+		return true
+	}
+	return false
+}
+
 // SendToOverseer delivers text to the current overseer process.
 func (s *Server) SendToOverseer(text string) error {
 	// The owner talking to Jevons is the strongest owner-present signal —
@@ -893,9 +911,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.Info("chat: chatlog replay", "conn_id", connID, "frames", frames, "bytes", bytes, "ms", replayMS, "older", start, "total", total)
 			// Always emit history_meta (even when older==0) so the client can
 			// close the connect span without waiting for idle timeout.
+			// 🎯T272: include current in-flight level so clients re-derive working
+			// chrome after reload (level-trigger, not edge memory).
 			meta, _ := json.Marshal(map[string]any{
 				"type": "history_meta", "older": start, "total": total, "start": start,
 				"conn_id": connID, "replay_frames": frames, "replay_bytes": bytes, "replay_ms": replayMS,
+				"working": s.overseerWorkingLevel(),
 			})
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			_ = conn.Write(writeCtx, websocket.MessageText, meta)

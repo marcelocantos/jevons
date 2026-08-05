@@ -563,6 +563,65 @@ test('T260 index.html: shouldClearWorkingChrome + agent_note re-arm', () => {
   );
 });
 
+// ── 🎯T272 level-triggered working after reconnect ───────────────
+
+test('T272 workingLevelFromSample: open-turn fixture → working without send edge', () => {
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ working: true }),
+    true,
+    'history_meta.working true must re-arm',
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ busy: true }),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ state: 'thinking' }),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ promptInFlight: true }),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ openStream: true }),
+    true,
+  );
+});
+
+test('T272 workingLevelFromSample: sealed history-only hydrate → idle', () => {
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ working: false }),
+    false,
+    'clean hydrate must not leave stuck working',
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ type: 'history_meta', older: 0, total: 10 }),
+    false,
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ state: 'idle' }),
+    false,
+  );
+  assert.strictEqual(ChatEvents.workingLevelFromSample(null), false);
+  assert.strictEqual(ChatEvents.workingLevelFromSample({}), false);
+});
+
+test('T272 index.html: history_meta level sample (not edge-only kickoff)', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('applyWorkingLevelSample'), 'must apply level sample after hydrate');
+  assert.ok(html.includes('workingLevelFromSample'), 'must use pure level helper');
+  assert.ok(
+    /history_meta[\s\S]{0,1200}applyWorkingLevelSample/.test(html),
+    'history_meta path must call applyWorkingLevelSample',
+  );
+  // Product model is level re-sample, not "remember send edge across reload".
+  assert.ok(
+    /T272/.test(html) && /level/.test(html),
+    'must document T272 level-trigger in product path',
+  );
+});
+
 // ── index.html wiring ───────────────────────────────────────────
 
 test('index.html wires ChatEvents + stream seal', () => {
