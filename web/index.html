@@ -222,8 +222,22 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   flex: 1; min-height: 0; overflow: auto; padding: 12px; text-align: center;
 }
 #mermaid-viz-panel .mvp-body svg { max-width: 100%; height: auto; }
+/* 🎯T268: single-graph scale-to-fill — expand SVG to pane (not shrink-only). */
+#mermaid-viz-panel .mvp-body.mvp-scale-fill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+#mermaid-viz-panel .mvp-body.mvp-scale-fill svg {
+  max-width: none;
+  max-height: none;
+  height: auto;
+  flex-shrink: 0;
+}
 /* 🎯T190: multi-diagram pack — each connected component is its own Mermaid
-   block; wrap-grid fills the ~90% panel without one mega horizontal strip. */
+   block; wrap-grid fills the ~90% panel without one mega horizontal strip.
+   Residual (T268): multi-component bin-pack into pane aspect later. */
 #mermaid-viz-panel .mvp-body.mvp-pack {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
@@ -308,6 +322,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   --collapsed-max-height: 14rem;
   --expand-tab-height: 1.05rem;
   --expand-tab-clearance: 0.35rem; /* air above tab when expanded (🎯T166) */
+  --context-tab-height: 1.15rem; /* 🎯T266 top-edge target-context chrome */
 }
 /* Collapsed: border butts clipped content (time lives outside). */
 .msg.msg-clipped { padding-bottom: 0; }
@@ -362,6 +377,34 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   z-index: 3;
 }
 .msg-expand-tab .chev { display: block; font-size: 13px; line-height: 1; }
+
+/* 🎯T266: top-edge context tab — repo / PO / product for target-related owner asks.
+   Coordinates with T267 (PO select + frontier highlight) via shared TargetContextChrome. */
+.msg.msg-has-context-tab { margin-top: 0.65rem; }
+.msg-context-tab {
+  display: inline-flex; align-items: center; gap: 0;
+  max-width: calc(100% - 20px);
+  height: var(--context-tab-height);
+  padding: 0 8px;
+  position: absolute; left: 10px; top: -1px;
+  transform: translateY(-50%);
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font: inherit; font-size: 10px; font-weight: 600; line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 3;
+  opacity: 0.95;
+}
+.msg.jevons .msg-context-tab { background: var(--surface-raised); border-color: var(--border); }
+.msg.user .msg-context-tab { background: var(--bg); border-color: var(--user-border); }
+.msg-context-tab .ctx-repo { color: var(--accent); }
+.msg-context-tab .ctx-sep { opacity: 0.55; margin: 0 0.15em; }
+.msg-context-tab .ctx-po { color: var(--text-dim); font-weight: 500; }
 
 /* 🎯T135: opt-in route switch under a user bubble (match suggestion only). */
 .msg.user .route-switch {
@@ -1039,6 +1082,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/portfolio_group.js"></script>
 <script src="scripts/agent_transcript.js"></script>
 <script src="scripts/frontier_table.js"></script>
+<script src="scripts/target_context_chrome.js"></script>
 <script src="scripts/instant_tip.js"></script>
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
@@ -2547,6 +2591,7 @@ function applyMermaidPanelContent(opts) {
   const body = document.getElementById('mvp-body');
   if (!body) return;
   body.classList.remove('mvp-pack');
+  body.classList.remove('mvp-scale-fill');
   const src = MA && MA.stripMermaidFence ? MA.stripMermaidFence(o.src) : String(o.src || '');
   const svgMarkup = String(o.svgMarkup || '');
   const title = String(o.title || 'Graph').trim() || 'Graph';
@@ -2561,6 +2606,47 @@ function applyMermaidPanelContent(opts) {
     return;
   }
   setMermaidPanelTitle(title);
+}
+/**
+ * 🎯T268: scale a single rendered SVG to fill #mvp-body (contain).
+ * Used for Frontier Graph large panel / single-component path.
+ * Multi-diagram pack is residual — leave pack layout alone.
+ */
+function fitMermaidPanelSvgToPane(opts) {
+  const o = opts || {};
+  const MA = window.MermaidActions;
+  const body = document.getElementById('mvp-body');
+  if (!body || !MA || typeof MA.planSingleGraphScaleToFill !== 'function') return null;
+  if (body.classList.contains('mvp-pack')) return null; // multi residual
+  const svg = body.querySelector('svg');
+  if (!svg) return null;
+  const nat = MA.parseSvgNaturalSize(svg);
+  // Fallback: client rect if attrs missing (post-layout).
+  let svgW = nat.w;
+  let svgH = nat.h;
+  if (!svgW || !svgH) {
+    try {
+      const r = svg.getBoundingClientRect && svg.getBoundingClientRect();
+      if (r && r.width > 0 && r.height > 0) {
+        svgW = r.width;
+        svgH = r.height;
+      }
+    } catch (_) { /* ignore */ }
+  }
+  const paneW = body.clientWidth || 0;
+  const paneH = body.clientHeight || 0;
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: svgW,
+    svgH: svgH,
+    paneW: paneW,
+    paneH: paneH,
+    padding: o.padding != null ? o.padding : 0, // body already padded via CSS
+    diagramCount: 1,
+  });
+  if (plan.mode !== 'scale-to-fill') return plan;
+  body.classList.add('mvp-scale-fill');
+  MA.applySvgScaleToFill(svg, plan);
+  return plan;
 }
 function pinMermaidPanelState(extraStatus) {
   const MA = window.MermaidActions;
@@ -2716,6 +2802,19 @@ function openFrontierGraph(opts) {
         ? (' · ' + (model.nodeCount || 0) + ' nodes · ' + (model.edgeCount || 0) + ' edges · ' +
            nBlocks + ' diagram' + (nBlocks === 1 ? '' : 's'))
         : '';
+      // 🎯T268: single-graph → scale-to-fill pane (not pack grid cell).
+      // Multi-diagram pack remains residual (bin-pack later).
+      if (hasDiagrams && model.diagrams.length === 1) {
+        const only = model.diagrams[0];
+        const singleSrc = (only && only.mermaid) || model.mermaid;
+        return renderMermaidSourceInPanel(singleSrc, {
+          title: 'Unachieved graph',
+          pin: o.pin !== false,
+          large: true,
+          scaleToFill: true,
+          status: 'Unachieved dependency graph' + meta,
+        }).then(function () { return model; });
+      }
       if (hasDiagrams) {
         return renderMermaidDiagramPackInPanel(model.diagrams, {
           title: 'Unachieved graph',
@@ -2730,6 +2829,7 @@ function openFrontierGraph(opts) {
         title: 'Unachieved graph',
         pin: o.pin !== false,
         large: true,
+        scaleToFill: true,
         status: 'Unachieved dependency graph' + meta,
       }).then(function () { return model; });
     })
@@ -2877,6 +2977,7 @@ function renderMermaidSourceInPanel(rawSrc, opts) {
   }
   const id = 'mvp-mmd-' + (++mermaidSeq);
   setMermaidPanelStatus(o.status || 'Rendering…');
+  const wantFill = o.scaleToFill === true || o.large === true;
   return Promise.resolve()
     .then(() => m.render(id, src))
     .then(({ svg }) => {
@@ -2885,6 +2986,13 @@ function renderMermaidSourceInPanel(rawSrc, opts) {
         svgMarkup: svg,
         title: o.title || 'Pasted graph',
       });
+      // 🎯T268: large / frontier single-graph → scale-to-fill pane.
+      if (wantFill) {
+        // rAF: body must have layout size after mvp-large is shown.
+        requestAnimationFrame(function () {
+          fitMermaidPanelSvgToPane({ padding: 0 });
+        });
+      }
       if (o.pin !== false) pinMermaidPanelState(o.status || 'Rendered · pinned as last');
       else setMermaidPanelStatus(o.status || 'Rendered');
       return svg;
@@ -3544,10 +3652,13 @@ function renderBody(d, role, text) {
     d._expanded = true;
     d._autoExpanded = true;
     watchStreamBubble(d);
+    // 🎯T266: defer context chrome until stream seals (stable label).
     return;
   }
   // Always paint FULL content (🎯T106). Clip is CSS-only when collapsed.
   paintBody(d, role, text);
+  // 🎯T266: top-edge repo/PO chrome on target-related owner asks.
+  syncTargetContextChrome(d, { role: role, text: text });
   const m = measureCollapse(d, role, text);
   if (!m.tall) {
     // Non-tall: never tab, never fade (pocket chrome is tall-only).
@@ -3558,6 +3669,79 @@ function renderBody(d, role, text) {
   d._fullText = text;
   applyClipState(d, !d._expanded);
   ensureExpandToggle(d);
+}
+
+// 🎯T266: last frontier ledger/cwd for target-ask context resolution.
+// T267 may also read these when focusing PO/frontier for the same ask.
+let lastFrontierLedger = '';
+let lastFrontierCwd = '';
+
+function targetContextChromeOpts(text, extra) {
+  const opts = Object.assign({ text: text == null ? '' : String(text) }, extra || {});
+  if (!opts.agents) {
+    opts.agents = (typeof lastFleetAgents !== 'undefined' && lastFleetAgents)
+      ? lastFleetAgents
+      : ((typeof frontierAgentsCache !== 'undefined' && frontierAgentsCache)
+        ? frontierAgentsCache
+        : []);
+  }
+  if (!opts.ledger && typeof lastFrontierLedger === 'string') opts.ledger = lastFrontierLedger;
+  if (!opts.cwd && typeof lastFrontierCwd === 'string') opts.cwd = lastFrontierCwd;
+  if (!opts.workdir && typeof selectedAgent === 'string' && selectedAgent
+      && Array.isArray(opts.agents)) {
+    const row = opts.agents.find(function (a) { return a && a.name === selectedAgent; });
+    if (row && row.workdir) opts.workdir = String(row.workdir);
+  }
+  return opts;
+}
+
+function syncTargetContextChrome(d, paintOpts) {
+  if (!d || !d.classList) return;
+  paintOpts = paintOpts || {};
+  const role = paintOpts.role || d._layoutRole || '';
+  if (role && role !== 'jevons' && role !== 'user' && role !== 'assistant') {
+    clearTargetContextChrome(d);
+    return;
+  }
+  if (typeof d._streamRaw === 'string') {
+    clearTargetContextChrome(d);
+    return;
+  }
+  if (typeof TargetContextChrome === 'undefined' || !TargetContextChrome.chromeModel) {
+    clearTargetContextChrome(d);
+    return;
+  }
+  const text = paintOpts.text != null ? paintOpts.text : (d._layoutText || '');
+  const model = TargetContextChrome.chromeModel(targetContextChromeOpts(text, paintOpts));
+  if (!model || !model.show || !model.innerHTML) {
+    clearTargetContextChrome(d);
+    return;
+  }
+  let tab = d._contextTab;
+  if (!tab || !tab.isConnected) {
+    tab = document.createElement('div');
+    tab.className = 'msg-context-tab';
+    tab.setAttribute('role', 'note');
+    d.appendChild(tab);
+    d._contextTab = tab;
+  }
+  tab.innerHTML = model.innerHTML;
+  tab.title = model.title || model.label || '';
+  tab.setAttribute('aria-label', model.title || model.label || 'Target context');
+  if (model.targetId) tab.dataset.targetId = model.targetId;
+  if (model.repo) tab.dataset.repo = model.repo;
+  if (model.po) tab.dataset.po = model.po;
+  if (model.product) tab.dataset.product = model.product;
+  d.classList.add('msg-has-context-tab');
+}
+
+function clearTargetContextChrome(d) {
+  if (!d) return;
+  if (d._contextTab) {
+    try { d._contextTab.remove(); } catch (_) { /* isolated */ }
+    d._contextTab = null;
+  }
+  if (d.classList) d.classList.remove('msg-has-context-tab');
 }
 function ensureExpandToggle(d) {
   // Guard: tab only when measure marked this bubble tall (_fullText set).
@@ -6802,6 +6986,11 @@ function loadAgentTranscript(name, opts) {
 
 function renderFrontierTable(model) {
   if (!frontierBodyEl) return;
+  // 🎯T266: cache ledger/cwd for target-ask context chrome resolution.
+  if (model) {
+    lastFrontierLedger = model.ledger ? String(model.ledger) : '';
+    lastFrontierCwd = model.cwd ? String(model.cwd) : '';
+  }
   // 🎯T230: never tear down a latched InstantTip (pointer over tip or host).
   // Quiet poll / frontier_changed used to removeChild every .instant-tip,
   // which felt like an idle auto-timeout while the mouse sat still on the card.
