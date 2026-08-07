@@ -29,32 +29,21 @@ const (
 	defaultReplyTimeout = 10 * time.Minute
 )
 
-// claudeReadySettle is a grace period after claudia reports a Claude
-// Session ready, before jevons sends its first turn (🎯T282).
+// There is deliberately no post-ready settle on the launch path.
 //
-// Claude Session is a TUI driven through tmux, and its readiness signal is
-// a pattern match on the rendered pane. Claude Code's startup splash draws
-// a prompt box with placeholder text that matches that pattern, so under
-// load "ready" can be reported a second after launch, while the TUI is
-// still mounting. A turn sent into that window is typed into the composer
-// but its submit keystroke is dropped: the text sits there unsent and the
-// direct blocks until its caller times out (observed as intermittent
-// journey J10 hangs — the composer still held the prompt minutes later).
+// jevons used to sleep two seconds after claudia reported a Claude Session
+// ready (🎯T282), because Claude Code's startup splash draws a prompt box
+// that satisfied claudia's ready pattern while the TUI was still mounting:
+// a turn sent into that window had its submit keystroke dropped, and the
+// direct blocked until its caller timed out (intermittent journey J10
+// hangs, the composer still holding the prompt minutes later).
 //
-// Fixing the readiness signal itself belongs in claudia, which owns the
-// pane. Until then jevons pays a short settle on the launch path, where it
-// costs one second per agent start and nothing per turn.
-const claudeReadySettle = 2 * time.Second
-
-// postReadySettle returns the settle for a provider: only tmux-backed
-// Claude Sessions need it — Grok's ACP handshake is a protocol reply, not
-// a screen scrape, so it reports ready exactly when it is.
-func postReadySettle(provider claudia.Provider) time.Duration {
-	if provider == claudia.ProviderClaude {
-		return claudeReadySettle
-	}
-	return 0
-}
+// That belonged in claudia, which owns the pane, and now lives there:
+// tmuxagent.MatchReady rejects the splash by its ghost placeholder, so
+// ready means the composer accepts and submits input (🎯T284). Waiting on
+// top of a trustworthy signal only taxes every agent start. If a launch
+// race resurfaces, fix the signal in claudia — do not reintroduce a sleep
+// here.
 
 // Claudia adapts a claudia.Registry to the butler.Fleet interface and
 // to butler.Participants (agent-only deliver).
@@ -198,9 +187,6 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 	if err := ag.WaitReady(ctx); err != nil {
 		return fmt.Errorf("agent %q not ready: %w", t.ID, err)
 	}
-	if def := f.reg.Def(t.ID); def != nil {
-		time.Sleep(postReadySettle(def.Provider))
-	}
 
 	if sid := ag.SessionID(); sid != "" {
 		t.SessionID = sid
@@ -311,9 +297,6 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 		defer cancel()
 		if err := launched.WaitReady(ctx); err != nil {
 			return "", fmt.Errorf("agent %q not ready: %w", id, err)
-		}
-		if def := f.reg.Def(id); def != nil {
-			time.Sleep(postReadySettle(def.Provider))
 		}
 		ag = launched
 	}

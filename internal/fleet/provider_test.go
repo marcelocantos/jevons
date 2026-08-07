@@ -4,6 +4,8 @@
 package fleet
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -136,18 +138,20 @@ func TestClaudeSessionStitchEnsureRegistered(t *testing.T) {
 	}
 }
 
-
-// TestPostReadySettleOnlyForClaude: the launch-path settle exists because
-// Claude Session readiness is a pane pattern match that can fire while the
-// TUI is still mounting, swallowing the first turn's submit (🎯T282). Grok
-// reports ready over ACP and must not pay for it.
-func TestPostReadySettleOnlyForClaude(t *testing.T) {
-	if d := postReadySettle(claudia.ProviderClaude); d <= 0 {
-		t.Errorf("claude settle = %s, want a positive grace period", d)
+// TestNoPostReadySettle is the 🎯T284 ratchet. jevons paid a two-second
+// sleep after every Claude launch to cover an untrustworthy readiness
+// signal (🎯T282); claudia now rejects the startup splash outright, so the
+// tax is gone. Waiting on a signal you trust is pure cost, and the failure
+// it papered over must be fixed where the pane lives — reintroducing a
+// sleep here would re-hide it.
+func TestNoPostReadySettle(t *testing.T) {
+	src, err := os.ReadFile("fleet.go")
+	if err != nil {
+		t.Fatalf("read fleet.go: %v", err)
 	}
-	for _, p := range []claudia.Provider{claudia.ProviderGrok, claudia.ProviderCodex, ""} {
-		if d := postReadySettle(p); d != 0 {
-			t.Errorf("provider %q settle = %s, want 0", p, d)
+	for _, banned := range []string{"claudeReadySettle", "postReadySettle", "time.Sleep("} {
+		if bytes.Contains(src, []byte(banned)) {
+			t.Errorf("fleet.go contains %q: the launch-path settle is gone (🎯T284); fix readiness in claudia instead", banned)
 		}
 	}
 }
