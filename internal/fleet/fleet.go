@@ -216,15 +216,9 @@ func (f *Claudia) Send(id, text string) (string, error) {
 		return "", fmt.Errorf("no live process for thread %q", id)
 	}
 	defer f.enterTurn(id)()
-	if err := ag.Send(text); err != nil {
-		return "", fmt.Errorf("send to %q: %w", id, err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), f.replyTimeout)
-	defer cancel()
-	reply, err := ag.WaitForResponse(ctx)
+	reply, err := f.awaitReply(ag, f.providerOf(id), text)
 	if err != nil {
-		return "", fmt.Errorf("await reply from %q: %w", id, err)
+		return "", fmt.Errorf("direct turn to %q: %w", id, err)
 	}
 	return reply, nil
 }
@@ -323,14 +317,9 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 		}
 		ag = launched
 	}
-	if err := ag.Send(text); err != nil {
-		return "", fmt.Errorf("send to agent %q: %w", id, err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), f.replyTimeout)
-	defer cancel()
-	reply, err := ag.WaitForResponse(ctx)
+	reply, err := f.awaitReply(ag, f.providerOf(id), text)
 	if err != nil {
-		return "", fmt.Errorf("await reply from agent %q: %w", id, err)
+		return "", fmt.Errorf("deliver turn to agent %q: %w", id, err)
 	}
 	return reply, nil
 }
