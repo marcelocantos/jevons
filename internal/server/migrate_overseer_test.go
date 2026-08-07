@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 
@@ -17,6 +20,7 @@ import (
 
 // fakeOverseerMigrator records what the server asked of the registry half.
 type fakeOverseerMigrator struct {
+	mu        sync.Mutex
 	prepared  []string // "name→provider(force)"
 	pending   handover.Pending
 	prepErr   error
@@ -24,6 +28,8 @@ type fakeOverseerMigrator struct {
 }
 
 func (m *fakeOverseerMigrator) PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.prepared = append(m.prepared, name+"→"+string(to))
 	if m.prepErr != nil {
 		return handover.Pending{}, m.prepErr
@@ -36,12 +42,23 @@ func (m *fakeOverseerMigrator) PrepareMigration(name string, to claudia.Provider
 }
 
 func (m *fakeOverseerMigrator) PendingHandover(string) (handover.Pending, bool, error) {
-	return m.pending, m.pending.TranscriptPath != "", nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pending, m.pending.TranscriptPath != "" && !m.pending.Delivered, nil
 }
 
 func (m *fakeOverseerMigrator) MarkHandoverDelivered(string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.delivered = true
+	m.pending.Delivered = true
 	return nil
+}
+
+func (m *fakeOverseerMigrator) wasDelivered() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.delivered
 }
 
 // TestMigrateOverseerRequiresWiring: without a registry or a migrator the
@@ -83,6 +100,113 @@ func TestMigrateOverseerRefusesWhenPrepareFails(t *testing.T) {
 type errRefused struct{}
 
 func (errRefused) Error() string { return "no transcript found for session" }
+
+// waitFor polls until cond holds, so an asynchronous seed does not need a
+// fixed sleep to be observed.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// TestResumePendingHandoverSeedsOnce: the pending record is the retry
+// mechanism, so a successor must be seeded with its predecessor's
+// transcript, and marked delivered exactly once (🎯T285).
+func TestResumePendingHandoverSeedsOnce(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.SetOverseerName("jevons")
+	mig := &fakeOverseerMigrator{pending: handover.Pending{
+		Agent: "jevons", From: "grok", To: "claude",
+		TranscriptPath: "/Users/x/.grok/sessions/abc/chat_history.jsonl",
+	}}
+	s.SetOverseerMigrator(mig)
+
+	var mu sync.Mutex
+	var sent []string
+	s.notifySender = func(text string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		sent = append(sent, text)
+		return nil
+	}
+
+	s.ResumePendingHandover()
+	waitFor(t, "handover marked delivered", mig.wasDelivered)
+
+	mu.Lock()
+	got := append([]string(nil), sent...)
+	mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("seeds sent = %d, want 1: %v", len(got), got)
+	}
+	if !strings.Contains(got[0], "chat_history.jsonl") {
+		t.Fatalf("seed does not name the predecessor's transcript: %s", got[0])
+	}
+
+	// A second attach must not re-seed: the record is now delivered.
+	s.ResumePendingHandover()
+	mu.Lock()
+	n := len(sent)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("delivered handover was seeded again: %d sends", n)
+	}
+}
+
+// TestResumePendingHandoverStaysPendingOnFailure: a send that fails must
+// leave the record undelivered so the next attach retries it — marking on a
+// failed hand-off is how history gets silently lost (🎯T285).
+func TestResumePendingHandoverStaysPendingOnFailure(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.SetOverseerName("jevons")
+	mig := &fakeOverseerMigrator{pending: handover.Pending{
+		Agent: "jevons", From: "grok", To: "claude",
+		TranscriptPath: "/Users/x/.grok/sessions/abc/chat_history.jsonl",
+	}}
+	s.SetOverseerMigrator(mig)
+
+	var attempts int32
+	s.notifySender = func(string) error {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			return errRefused{}
+		}
+		return nil
+	}
+
+	s.ResumePendingHandover()
+	waitFor(t, "first seed attempt", func() bool { return atomic.LoadInt32(&attempts) == 1 })
+	if mig.wasDelivered() {
+		t.Fatal("handover marked delivered despite a failed send")
+	}
+
+	// The retry a later attach performs must succeed and mark it.
+	waitFor(t, "retry to be accepted", func() bool {
+		s.ResumePendingHandover()
+		return mig.wasDelivered()
+	})
+}
+
+// TestResumePendingHandoverNoopsWithoutWork: the ordinary attach path calls
+// this on every launch, so nothing pending must cost nothing.
+func TestResumePendingHandoverNoopsWithoutWork(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.SetOverseerName("jevons")
+	s.notifySender = func(string) error {
+		t.Error("seeded with no pending handover")
+		return nil
+	}
+
+	s.ResumePendingHandover() // no migrator wired
+	s.SetOverseerMigrator(&fakeOverseerMigrator{})
+	s.ResumePendingHandover() // migrator wired, nothing pending
+	time.Sleep(20 * time.Millisecond)
+}
 
 // TestOverseerMigrateEndpointValidates: the owner-facing endpoint requires
 // a provider and reports a refusal as a conflict rather than a success.

@@ -66,16 +66,17 @@ func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) 
 	}
 
 	// The overseer is attached to owner chat by the HTTP server, not by the
-	// registry. Rotating it here would leave a running agent that the chat
-	// is no longer wired to — the owner's session would go quiet with
-	// nothing obviously wrong. Until that attach path is part of migration,
-	// refuse rather than break the one conversation that matters.
+	// registry, so its migration needs the server-side re-attach that this
+	// tool cannot perform. It is also the session answering this very call:
+	// rotating it from here would kill the conversation mid-turn. Both
+	// reasons point at the same place — the owner-driven endpoint.
 	if s.registry != nil {
 		if def := s.registry.Def(name); def != nil && def.Purpose == claudia.PurposeOverseer {
 			return mcp.NewToolResultError(fmt.Sprintf(
-				"%q is the overseer: its migration also has to re-attach owner chat, which this tool "+
-					"does not do yet (🎯T285 residual). Migrating fleet agents is supported; moving the "+
-					"overseer needs the server-side path.", name)), nil
+				"%q is the overseer: migrating it also has to re-attach owner chat, and it is the "+
+					"session answering this call — rotating it from here would end the turn mid-flight. "+
+					"The owner drives it instead: POST /api/overseer/migrate {\"provider\":\"…\"} "+
+					"(🎯T285). Fleet agents migrate normally through this tool.", name)), nil
 		}
 	}
 

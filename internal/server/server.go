@@ -65,6 +65,9 @@ type Server struct {
 	// (🎯T285); this server owns the attach + seed halves. Nil = the
 	// capability is unavailable rather than half-wired.
 	overseerMigrator OverseerMigrator
+	// handoverSeeding is the single-flight guard for delivering a pending
+	// handover (🎯T285); guarded by mu.
+	handoverSeeding bool
 	overseerDownReason string // legible cause when the overseer isn't running (🎯T54); guarded by mu
 	ca                 *auth.CA
 

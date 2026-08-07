@@ -635,6 +635,12 @@ func main() {
 		// swaps the process, so all overseer references stay current.
 		srv.AttachOverseer(jevonProc)
 
+		// A daemon that died between rotating the overseer's row and seeding
+		// its successor leaves the handover on disk; the process is alive at
+		// boot, so converge sees nothing wrong and this is the only retry
+		// (🎯T285). No-op when nothing is pending.
+		srv.ResumePendingHandover()
+
 		// Wire MCP worker-completion + agent-reply notifications into Jevon.
 		// Route through the server so a rewind swap is transparent.
 		send := func(text string) {

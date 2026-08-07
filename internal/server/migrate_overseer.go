@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 
@@ -83,23 +84,78 @@ func (s *Server) MigrateOverseer(to claudia.Provider, force bool) (handover.Pend
 	s.SetOverseerDownReason("")
 	s.NotifyAgentsChanged()
 
-	// Seed asynchronously: reading a predecessor's transcript can take
-	// minutes, and the owner's request should return as soon as their
-	// overseer is back on the wire.
-	if seed := pending.Seed(); seed != "" {
-		go func() {
-			if err := s.SendToOverseer(seed); err != nil {
-				slog.Error("overseer handover not delivered; it stays pending", "err", err)
-				return
-			}
-			if err := mig.MarkHandoverDelivered(name); err != nil {
-				slog.Error("overseer handover delivered but not marked", "err", err)
-			}
-			slog.Info("overseer handover delivered", "detail", pending.Describe())
-		}()
-	}
+	s.ResumePendingHandover()
 	slog.Info("overseer migrated", "detail", pending.Describe())
 	return pending, nil
+}
+
+// ResumePendingHandover delivers the overseer's pending handover, if one is
+// waiting. It is a no-op on every ordinary attach, and the whole recovery
+// story on the ones that matter: a migration whose relaunch failed, or a
+// daemon that died between rotating the row and seeding the successor.
+// Without it the record would sit on disk forever and the successor would
+// run on with no idea it had a predecessor — the silent history loss this
+// path exists to prevent.
+//
+// Delivery goes through sendNotes rather than SendToOverseer because the
+// mark must be honest: SendToOverseer only enqueues, and the queue is
+// in-memory, so marking on enqueue would lose the handover on the next
+// crash. A bare Send is right *here* (unlike the fleet path, which needs
+// Deliver) because AttachOverseer has already subscribed the chat stream to
+// this process, so the ACP response has a consumer.
+func (s *Server) ResumePendingHandover() {
+	s.mu.RLock()
+	mig := s.overseerMigrator
+	name := s.overseerName
+	s.mu.RUnlock()
+	if mig == nil || name == "" {
+		return
+	}
+	pending, ok, err := mig.PendingHandover(name)
+	if err != nil {
+		slog.Error("overseer handover lookup failed", "agent", name, "err", err)
+		return
+	}
+	seed := pending.Seed()
+	if !ok || !pending.Usable() || seed == "" {
+		return
+	}
+
+	// Single-flight: the record stays undelivered until the send returns,
+	// and both migration and cockpit converge can reach this at once.
+	s.mu.Lock()
+	if s.handoverSeeding {
+		s.mu.Unlock()
+		return
+	}
+	s.handoverSeeding = true
+	s.mu.Unlock()
+
+	// Asynchronous because the caller is either an owner HTTP request or the
+	// converge tick, and neither should block on the overseer's send path.
+	go func() {
+		err := s.sendNotes(seed)
+		s.mu.Lock()
+		s.handoverSeeding = false
+		if err == nil {
+			// Mirror a successful drain: a turn is now in flight, so
+			// stuck-busy detection must be able to see it.
+			s.waiting = true
+			s.overseerLastProgress = time.Now()
+		}
+		s.mu.Unlock()
+		if err != nil {
+			// Left pending on purpose — the next attach or relaunch retries.
+			slog.Warn("overseer handover not delivered; it stays pending",
+				"agent", name, "err_class", notifyErrClass(err), "err", err)
+			return
+		}
+		if err := mig.MarkHandoverDelivered(name); err != nil {
+			slog.Error("overseer handover delivered but not marked; it may be seeded twice",
+				"agent", name, "err", err)
+		}
+		slog.Info("overseer handover delivered", "detail", pending.Describe())
+	}()
 }
 
 // handleOverseerMigrate is POST /api/overseer/migrate — owner-driven, not

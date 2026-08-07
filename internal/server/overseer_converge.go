@@ -243,6 +243,9 @@ func (s *Server) cockpitAttach(state *cockpitState) error {
 	}
 	s.AttachOverseer(proc)
 	s.broadcastCockpitReady("overseer is back")
+	// A migration that rotated the row but never got its seed out is only
+	// visible here (🎯T285); no-op otherwise.
+	s.ResumePendingHandover()
 	slog.Info("cockpit: overseer re-attached to chat", "name", name)
 	s.SetOverseerDownReason("")
 	state.mu.Lock()
@@ -372,6 +375,8 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 	state.lastErr = ""
 	state.mu.Unlock()
 	slog.Info("cockpit: overseer launched and attached", "name", name, "session", agent.SessionID())
+	// This is the retry a failed migration relaunch was waiting for (🎯T285).
+	s.ResumePendingHandover()
 	s.NotifyAgentsChanged()
 	s.broadcastCockpitReady("overseer is back")
 	return nil
