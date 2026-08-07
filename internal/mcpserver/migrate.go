@@ -65,6 +65,20 @@ func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) 
 		return mcp.NewToolResultError("name and provider are required"), nil
 	}
 
+	// The overseer is attached to owner chat by the HTTP server, not by the
+	// registry. Rotating it here would leave a running agent that the chat
+	// is no longer wired to — the owner's session would go quiet with
+	// nothing obviously wrong. Until that attach path is part of migration,
+	// refuse rather than break the one conversation that matters.
+	if s.registry != nil {
+		if def := s.registry.Def(name); def != nil && def.Purpose == claudia.PurposeOverseer {
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"%q is the overseer: its migration also has to re-attach owner chat, which this tool "+
+					"does not do yet (🎯T285 residual). Migrating fleet agents is supported; moving the "+
+					"overseer needs the server-side path.", name)), nil
+		}
+	}
+
 	pending, err := s.migrator.PrepareMigration(name, claudia.Provider(target), force)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
