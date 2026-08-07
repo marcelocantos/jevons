@@ -51,11 +51,15 @@
   };
 
   // Company marks, sized by CSS (.model-icon). Anthropic and OpenAI use
-  // their published logomark paths; the xAI mark is a two-stroke X drawn
-  // here (no vendor asset shipped in this repo).
+  // their published logomark paths.
+  //
+  // xAI is Grok's mark, not the X/Twitter one (🎯T293): the crossed-stroke X
+  // named the wrong product entirely. Drawn here as Grok's twin angled blades
+  // — an approximation, since no vendor asset ships in this repo — but it is
+  // unmistakably not the X mark: parallel strokes, nothing crosses.
   const ICON_PATHS = {
     anthropic: '<path fill="currentColor" d="M16.23 5h-3.02l5.507 15h3.02L16.23 5zM7.507 5L2 20h3.08l1.125-3.15h5.761L13.092 20h3.08L10.665 5H7.507zM7.2 14.064l1.885-5.271 1.884 5.271H7.2z"/>',
-    xai: '<path fill="currentColor" d="M3 3h4.2l13.8 18h-4.2L3 3zm13.5 0H21l-5.4 7.05-2.25-2.94L16.5 3zM3 21l5.4-7.05 2.25 2.94L7.5 21H3z"/>',
+    xai: '<path fill="currentColor" d="M13.6 2.6h7L9.4 21.4h-7l11.2-18.8zM6.6 2.6h5.2L7 10.6H1.8l4.8-8z"/>',
     openai: '<path fill="currentColor" d="M12 2.5a5 5 0 0 1 4.33 2.5A5 5 0 0 1 20.66 12a5 5 0 0 1-4.33 7 5 5 0 0 1-8.66 0A5 5 0 0 1 3.34 12 5 5 0 0 1 7.67 5 5 5 0 0 1 12 2.5zm0 3.6L8.9 7.9v3.05L12 9.15l3.1 1.8v-3.05L12 6.1zM6.3 9.55v3.6L9.4 15v-3.6L6.3 9.55zm11.4 0L14.6 11.4V15l3.1-1.85v-3.6zM8.9 16.1v3.05L12 20.95l3.1-1.8V16.1L12 17.9l-3.1-1.8z"/>',
   };
 

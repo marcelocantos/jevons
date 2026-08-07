@@ -222,6 +222,9 @@ func main() {
 	srv.SetChatLog(clog)
 	// 🎯T124 / 🎯T213: RHS fleet transcript inspect reads Grok + Claude stores.
 	srv.SetTranscriptReader(transcript.NewReaderRoots(sessionRoots))
+	// 🎯T293: Grok names no model in its ACP frames, so the RHS badge takes
+	// the model id from Grok's own turn_completed usage in the session log.
+	srv.SetGrokSessionsDir(cfg.SessionsDir)
 
 	// Durable decision/lifecycle journal (🎯T120): browser + server events
 	// under state_dir/logs/events.jsonl — tool-readable without privilege.

@@ -106,7 +106,7 @@ func TestListFleetAgentsCarriesProviderAndModel(t *testing.T) {
 	})
 
 	byName := map[string]agentInfo{}
-	for _, a := range listFleetAgentsNotifying(reg, nil, hub) {
+	for _, a := range listFleetAgentsNotifying(reg, nil, hub, nil) {
 		byName[a.Name] = a
 	}
 

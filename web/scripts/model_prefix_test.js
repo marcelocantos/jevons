@@ -44,6 +44,28 @@ test('grok drops the family letter — one flavour', function () {
   assert.strictEqual(MP.condenseModel('grok'), '');
 });
 
+// 🎯T293: the model id the server now reports for Grok rows comes from Grok's
+// own billing frame ("grok-4.5-build"), not from a hand-typed override. The
+// empty family initial must not swallow the version with it.
+test('grok build ids still condense to the bare version', function () {
+  assert.strictEqual(MP.condenseModel('grok-4.5-build'), '4.5');
+  assert.strictEqual(MP.condenseModel('grok-4-build'), '4');
+  const html = MP.modelPrefixHtml({ provider: 'grok', model: 'grok-4.5-build' });
+  assert.ok(html.indexOf('<sub>4.5</sub>') !== -1, html);
+  assert.ok(html.indexOf('data-company="xai"') !== -1, html);
+});
+
+// 🎯T293: the badge wore the X/Twitter mark, which names the wrong product.
+test('grok wears a Grok mark, not the X mark', function () {
+  const X_MARK = 'M3 3h4.2l13.8 18h-4.2L3 3z';
+  const icon = MP.companyIconHtml('xai');
+  assert.ok(icon.indexOf('<svg class="model-icon"') !== -1, icon);
+  assert.ok(icon.indexOf(X_MARK) === -1, 'still painting the X mark: ' + icon);
+  // Distinct from every other company mark, so the row is not ambiguous.
+  assert.notStrictEqual(icon, MP.companyIconHtml('anthropic'));
+  assert.notStrictEqual(icon, MP.companyIconHtml('openai'));
+});
+
 test('company comes from provider, falling back to the model id', function () {
   assert.strictEqual(MP.companyFor('claude', ''), 'anthropic');
   assert.strictEqual(MP.companyFor('bedrock', ''), 'anthropic');

@@ -715,13 +715,14 @@ type agentInfo struct {
 // recovery runs, NotifyAgentsChanged pushes a live frame so the UI refreshes
 // immediately (not only on the next poll).
 func listFleetAgents(reg *claudia.Registry) []agentInfo {
-	return listFleetAgentsNotifying(reg, nil, nil)
+	return listFleetAgentsNotifying(reg, nil, nil, nil)
 }
 
 // listFleetAgentsNotifying is the same feed with an optional notify hook for
 // recovery events (server wires agents_changed). Used by hermetic tests with
-// notify=nil. progress may be nil (no ACP snapshots).
-func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string), progress *AgentProgressHub) []agentInfo {
+// notify=nil. progress may be nil (no ACP snapshots); grokModels may be nil
+// (no Grok session log lookup — the badge then paints the icon alone).
+func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string), progress *AgentProgressHub, grokModels *grokModelResolver) []agentInfo {
 	if reg == nil {
 		return []agentInfo{}
 	}
@@ -786,6 +787,12 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 				info.Model = m
 			}
 		}
+		// Grok names no model in its ACP frames, so the badge had a company
+		// icon and no version (🎯T293). Fall back to the model Grok itself
+		// billed the session's last turn against.
+		if info.Model == "" && claudia.Provider(info.Provider) == claudia.ProviderGrok {
+			info.Model = grokModels.Model(d.WorkDir, d.SessionID)
+		}
 		agents = append(agents, info)
 	}
 	sort.Slice(agents, func(i, j int) bool {
@@ -811,6 +818,7 @@ func (s *Server) ObserveAgentProgress(name string, ev claudia.Event) bool {
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	reg := s.registry
+	grokModels := s.grokModels
 	s.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -821,7 +829,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	agents := listFleetAgentsNotifying(reg, func(names []string) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
-	}, s.agentProgress)
+	}, s.agentProgress, grokModels)
 	_ = json.NewEncoder(w).Encode(agents)
 }
 
