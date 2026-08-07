@@ -1031,9 +1031,11 @@ body.rhs-resizing-row { cursor: row-resize; }
   margin-right: -4px; color: var(--text-muted); cursor: default;
 }
 .agent-node .model-badge .model-icon { width: 12px; height: 12px; display: block; opacity: 0.8; }
+/* Not mono: at this size a mono capital O is indistinguishable from 0,
+   and O4.8 must not read as 04.8. */
 .agent-node .model-badge sub {
-  position: relative; bottom: -0.2em; font-family: var(--mono); font-size: 8px;
-  line-height: 1; letter-spacing: -0.03em; opacity: 0.9;
+  position: relative; bottom: -0.15em; font-size: 9px; font-weight: 600;
+  line-height: 1; letter-spacing: -0.02em; opacity: 0.9;
 }
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }

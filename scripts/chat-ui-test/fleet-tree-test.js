@@ -62,11 +62,12 @@ function startStaticServer(agentsPayload) {
   let agents = [
     { name: 'zeta-worker', workdir: '/Users/x/work/github.com/org/other', parent: 'po', status: 'running', progress: 'working · xcodebuild' },
     { name: 'alpha-worker', workdir: poRepo, parent: 'po', status: 'stopped', progress: 'stopped' },
-    { name: 'po', workdir: poRepo, parent: 'jevons', status: 'running' },
+    { name: 'po', workdir: poRepo, parent: 'jevons', status: 'running', provider: 'grok', model: 'grok-4.5' },
     // 🎯T115: root overseer state-dir home must not render as path chrome.
-    { name: 'jevons', workdir: '/Users/x/.jevons/jevons', parent: '', status: 'running' },
+    { name: 'jevons', workdir: '/Users/x/.jevons/jevons', parent: '', status: 'running', provider: 'grok' },
     // 🎯T118: same-workdir leaf under po → progress secondary, not path.
-    { name: 'mid-worker', workdir: poRepo, parent: 'po', status: 'running', phase: 'working', step: 'Bash: go test', progress: 'working · Bash: go test' },
+    // 🎯T287: Anthropic worker — company icon + O4.8 subscript.
+    { name: 'mid-worker', workdir: poRepo, parent: 'po', status: 'running', phase: 'working', step: 'Bash: go test', progress: 'working · Bash: go test', provider: 'claude', model: 'claude-opus-4-8' },
     // Aside-purpose row: 💡 title, no path element (description must not bleed).
     { name: 'att-billing', description: 'billing nit', purpose: 'aside', workdir: '/Users/x/.jevons/threads/att-billing', parent: 'jevons', status: 'running' },
   ];
@@ -209,6 +210,56 @@ function startStaticServer(agentsPayload) {
     }
     if (!t118.po || t118.po.secondary !== 'path') {
       failures.push('T118: PO with children keeps path secondary: ' + JSON.stringify(t118.po));
+    }
+
+    // 🎯T287: company icon + condensed model subscript before the bare name.
+    const badgeOf = (name) => page.evaluate((n) => {
+      const node = [...document.querySelectorAll('#agents .agent-node')]
+        .find(el => el.dataset.agent === n);
+      if (!node) return null;
+      const badge = node.querySelector('.model-badge');
+      const nameEl = node.querySelector('.agent-name');
+      return {
+        company: badge ? badge.dataset.company : '',
+        sub: badge && badge.querySelector('sub') ? badge.querySelector('sub').textContent : '',
+        hasIcon: !!(badge && badge.querySelector('svg.model-icon')),
+        title: badge ? badge.getAttribute('title') : '',
+        // Prefix must precede the name in document order.
+        beforeName: !!(badge && nameEl &&
+          (badge.compareDocumentPosition(nameEl) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      };
+    }, name);
+
+    const anth = await badgeOf('mid-worker');
+    if (!anth || anth.company !== 'anthropic' || anth.sub !== 'O4.8' || !anth.hasIcon || !anth.beforeName) {
+      failures.push('T287: Anthropic Opus prefix: ' + JSON.stringify(anth));
+    }
+    const xai = await badgeOf('po');
+    if (!xai || xai.company !== 'xai' || xai.sub !== '4.5' || !xai.hasIcon || !xai.beforeName) {
+      failures.push('T287: Grok prefix (no leading G): ' + JSON.stringify(xai));
+    }
+    // Provider known, model not → icon alone, no invented version.
+    const bare = await badgeOf('jevons');
+    if (!bare || bare.company !== 'xai' || bare.sub !== '' || !bare.hasIcon) {
+      failures.push('T287: unknown model must paint icon alone: ' + JSON.stringify(bare));
+    }
+    // No provider at all → no prefix chrome (row unchanged).
+    const none = await badgeOf('alpha-worker');
+    if (!none || none.company !== '' || none.hasIcon) {
+      failures.push('T287: unknown company must paint nothing: ' + JSON.stringify(none));
+    }
+
+    // Prefix follows a migrate: same agent, new provider/model → repaint.
+    agents = agents.map(a => a.name === 'po'
+      ? { ...a, provider: 'claude', model: 'claude-sonnet-4-5-20250929' }
+      : a);
+    await page.evaluate(() => {
+      try { refreshAgents(); } catch (_) { window.refreshAgents && window.refreshAgents(); }
+    });
+    await page.waitForTimeout(400);
+    const migrated = await badgeOf('po');
+    if (!migrated || migrated.company !== 'anthropic' || migrated.sub !== 'S4.5') {
+      failures.push('T287: prefix did not follow the migrate: ' + JSON.stringify(migrated));
     }
 
     // 🎯T71 thin: working indicator picks up tool progress.

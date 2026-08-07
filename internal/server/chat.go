@@ -695,6 +695,13 @@ type agentInfo struct {
 	Phase    string `json:"phase,omitempty"`
 	Step     string `json:"step,omitempty"`
 	Progress string `json:"progress,omitempty"`
+	// Provider / Model back the RHS company-icon + condensed model prefix
+	// (🎯T287). Provider is the agent's stored backend (claude | grok | …).
+	// Model is the last model an assistant frame reported, else the def's
+	// pinned override; empty means provider default — the UI paints the
+	// company icon alone rather than inventing a version.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // listFleetAgents returns the RHS panel source of truth: every agent
@@ -763,12 +770,20 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			Description: d.Description,
 			TargetID:    strings.TrimSpace(d.TargetID),
 			Status:      status,
+			Provider:    strings.TrimSpace(string(d.Provider)),
+			Model:       strings.TrimSpace(d.Model),
 		}
 		if progress != nil {
-			if p := progress.Get(d.Name); p.Summary != "" || p.Phase != "" || p.Step != "" {
+			p := progress.Get(d.Name)
+			if p.Summary != "" || p.Phase != "" || p.Step != "" {
 				info.Phase = p.Phase
 				info.Step = p.Step
 				info.Progress = p.Summary
+			}
+			// Observed model beats the def's override: it is what the agent
+			// actually ran this session (🎯T287, e.g. after migrate).
+			if m := strings.TrimSpace(p.Model); m != "" {
+				info.Model = m
 			}
 		}
 		agents = append(agents, info)

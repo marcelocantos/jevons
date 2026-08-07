@@ -4,6 +4,7 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +16,14 @@ import (
 // fleet panel (🎯T118). Derived semi-automatically from ACP progress /
 // tool steps and turn lifecycle — not from owner/overseer polling.
 type AgentProgress struct {
-	Phase   string    // working | idle | blocked (empty when unknown)
-	Step    string    // last tool/step title
-	Summary string    // preformatted single-line secondary text
+	Phase   string // working | idle | blocked (empty when unknown)
+	Step    string // last tool/step title
+	Summary string // preformatted single-line secondary text
+	// Model is the last model id an assistant turn reported (🎯T287).
+	// Sticky: frames that name no model never forget the previous one, so
+	// the RHS company-icon + condensed model prefix survives idle frames.
+	// Empty when the provider never names one (Grok ACP).
+	Model   string
 	Updated time.Time
 }
 
@@ -59,11 +65,11 @@ func (h *AgentProgressHub) Observe(name string, ev claudia.Event) bool {
 	if h == nil || name == "" {
 		return false
 	}
+	model := modelFromEvent(ev)
 	next, ok := progressFromEvent(ev)
-	if !ok {
+	if !ok && model == "" {
 		return false
 	}
-	next.Updated = h.clock()
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -71,16 +77,57 @@ func (h *AgentProgressHub) Observe(name string, ev claudia.Event) bool {
 		h.by = make(map[string]AgentProgress)
 	}
 	prev := h.by[name]
+
+	// Model-only frame (no progress signal): learn the model, keep chrome.
+	if !ok {
+		if prev.Model == model {
+			return false
+		}
+		prev.Model = model
+		prev.Updated = h.clock()
+		h.by[name] = prev
+		return true
+	}
+
+	next.Updated = h.clock()
+	next.Model = model
+	if next.Model == "" {
+		next.Model = prev.Model
+	}
 	// Preserve last step across mid-turn assistant frames that only set phase.
 	if next.Step == "" && prev.Step != "" && next.Phase == "working" {
 		next.Step = prev.Step
 		next.Summary = composeProgressSummary(next.Phase, next.Step)
 	}
-	if prev.Summary == next.Summary && prev.Phase == next.Phase && prev.Step == next.Step {
+	if prev.Summary == next.Summary && prev.Phase == next.Phase &&
+		prev.Step == next.Step && prev.Model == next.Model {
 		return false
 	}
 	h.by[name] = next
 	return true
+}
+
+// modelFromEvent extracts the model id an assistant frame reports (🎯T287).
+// Claude Code JSONL carries it at message.model; other shapes may put a bare
+// top-level "model". Empty when the frame names none — the caller keeps the
+// last known model rather than forgetting it.
+func modelFromEvent(ev claudia.Event) string {
+	if len(ev.Raw) == 0 {
+		return ""
+	}
+	var line struct {
+		Model   string `json:"model"`
+		Message struct {
+			Model string `json:"model"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(ev.Raw, &line); err != nil {
+		return ""
+	}
+	if m := strings.TrimSpace(line.Message.Model); m != "" {
+		return m
+	}
+	return strings.TrimSpace(line.Model)
 }
 
 // SetStatus seeds a baseline when the process map knows running/stopped
@@ -112,6 +159,7 @@ func (h *AgentProgressHub) SetStatus(name, status string) {
 	h.by[name] = AgentProgress{
 		Phase:   phase,
 		Summary: summary,
+		Model:   prev.Model, // 🎯T287: liveness baseline never forgets the model
 		Updated: h.clock(),
 	}
 }
