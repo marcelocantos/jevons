@@ -66,7 +66,8 @@ function startStaticServer(agentsPayload) {
     // 🎯T115: root overseer state-dir home must not render as path chrome.
     { name: 'jevons', workdir: '/Users/x/.jevons/jevons', parent: '', status: 'running', provider: 'grok' },
     // 🎯T118: same-workdir leaf under po → progress secondary, not path.
-    // 🎯T287: Anthropic worker — company icon + O4.8 subscript.
+    // 🎯T287: Anthropic worker — company icon + version subscript (🎯T299: the
+    // family initial is gone, so this row reads 4.8, not O4.8).
     { name: 'mid-worker', workdir: poRepo, parent: 'po', status: 'running', phase: 'working', step: 'Bash: go test', progress: 'working · Bash: go test', provider: 'claude', model: 'claude-opus-4-8' },
     // Aside-purpose row: 💡 title, no path element (description must not bleed).
     { name: 'att-billing', description: 'billing nit', purpose: 'aside', workdir: '/Users/x/.jevons/threads/att-billing', parent: 'jevons', status: 'running' },
@@ -231,8 +232,25 @@ function startStaticServer(agentsPayload) {
     }, name);
 
     const anth = await badgeOf('mid-worker');
-    if (!anth || anth.company !== 'anthropic' || anth.sub !== 'O4.8' || !anth.hasIcon || !anth.beforeName) {
+    if (!anth || anth.company !== 'anthropic' || anth.sub !== '4.8' || !anth.hasIcon || !anth.beforeName) {
       failures.push('T287: Anthropic Opus prefix: ' + JSON.stringify(anth));
+    }
+    // 🎯T299: the version is a *subscript* — its foot sits below the mark's,
+    // not level with it and not beside its middle. Measured, because the CSS
+    // that carries it (cross-axis alignment plus a relative offset) only shows
+    // its effect once both boxes are laid out.
+    const drop = await page.evaluate(() => {
+      const node = [...document.querySelectorAll('#agents .agent-node')]
+        .find(el => el.dataset.agent === 'mid-worker');
+      const icon = node && node.querySelector('.model-badge svg.model-icon');
+      const sub = node && node.querySelector('.model-badge sub');
+      if (!icon || !sub) return null;
+      const i = icon.getBoundingClientRect();
+      const s = sub.getBoundingClientRect();
+      return { below: s.bottom - i.bottom, iconH: i.height, subH: s.height };
+    });
+    if (!drop || !(drop.below > 1) || !(drop.below < drop.iconH / 3)) {
+      failures.push('T299: subscript must hang just below the mark: ' + JSON.stringify(drop));
     }
     const xai = await badgeOf('po');
     if (!xai || xai.company !== 'xai' || xai.sub !== '4.5' || !xai.hasIcon || !xai.beforeName) {
@@ -257,8 +275,11 @@ function startStaticServer(agentsPayload) {
       try { refreshAgents(); } catch (_) { window.refreshAgents && window.refreshAgents(); }
     });
     await page.waitForTimeout(400);
+    // 🎯T299: Grok 4.5 and Sonnet 4.5 now wear the same subscript, so the mark
+    // and the hover are what carry the migrate — check those, not the digits.
     const migrated = await badgeOf('po');
-    if (!migrated || migrated.company !== 'anthropic' || migrated.sub !== 'S4.5') {
+    if (!migrated || migrated.company !== 'anthropic' || migrated.sub !== '4.5'
+        || migrated.title !== 'Anthropic · claude-sonnet-4-5-20250929') {
       failures.push('T287: prefix did not follow the migrate: ' + JSON.stringify(migrated));
     }
 

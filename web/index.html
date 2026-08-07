@@ -1028,16 +1028,22 @@ body.rhs-resizing-row { cursor: row-resize; }
    painted between the status dot and the bare agent name. The row gap is 8px;
    the negative margin pulls the badge tight against the name it labels. */
 /* 🎯T296: icon and subscript are one compact word, not two spaced pieces —
-   no flex gap, and the subscript is pulled back onto the mark's right edge. */
+   no flex gap, and the subscript is pulled back onto the mark's right edge.
+   🎯T299: flex-end, not center, so the version hangs off the mark's foot
+   rather than floating beside its middle — that is what makes the negative
+   `bottom` below read as a true subscript instead of a nudge. */
 .agent-node .model-badge {
-  display: inline-flex; align-items: center; gap: 0; flex-shrink: 0;
+  display: inline-flex; align-items: flex-end; gap: 0; flex-shrink: 0;
   margin-right: -4px; color: var(--text-muted); cursor: default;
 }
 .agent-node .model-badge .model-icon { width: 12px; height: 12px; display: block; opacity: 0.8; }
-/* Not mono: at this size a mono capital O is indistinguishable from 0,
-   and O4.8 must not read as 04.8. */
+/* 🎯T299: the subscript sits *below* the mark's baseline. flex-end already
+   levels its box bottom with the icon's foot, so this relative offset drops it
+   the rest of the way — 0.25em of 9px ≈ 2.2px under the mark. Relative
+   positioning, so nothing reflows and the row keeps its height.
+   Not mono: at this size a mono digit run reads as a padded number. */
 .agent-node .model-badge sub {
-  position: relative; bottom: -0.15em; margin-left: -0.5px; font-size: 9px;
+  position: relative; bottom: -0.25em; margin-left: -0.5px; font-size: 9px;
   font-weight: 600; line-height: 1; letter-spacing: -0.04em; opacity: 0.9;
 }
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
