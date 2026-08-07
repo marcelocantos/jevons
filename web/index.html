@@ -1026,16 +1026,18 @@ body.rhs-resizing-row { cursor: row-resize; }
 /* 🎯T287: provider company icon + extremely condensed model subscript,
    painted between the status dot and the bare agent name. The row gap is 8px;
    the negative margin pulls the badge tight against the name it labels. */
+/* 🎯T296: icon and subscript are one compact word, not two spaced pieces —
+   no flex gap, and the subscript is pulled back onto the mark's right edge. */
 .agent-node .model-badge {
-  display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 0; flex-shrink: 0;
   margin-right: -4px; color: var(--text-muted); cursor: default;
 }
 .agent-node .model-badge .model-icon { width: 12px; height: 12px; display: block; opacity: 0.8; }
 /* Not mono: at this size a mono capital O is indistinguishable from 0,
    and O4.8 must not read as 04.8. */
 .agent-node .model-badge sub {
-  position: relative; bottom: -0.15em; font-size: 9px; font-weight: 600;
-  line-height: 1; letter-spacing: -0.02em; opacity: 0.9;
+  position: relative; bottom: -0.15em; margin-left: -0.5px; font-size: 9px;
+  font-weight: 600; line-height: 1; letter-spacing: -0.04em; opacity: 0.9;
 }
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }

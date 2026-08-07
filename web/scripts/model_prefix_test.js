@@ -66,6 +66,40 @@ test('grok wears a Grok mark, not the X mark', function () {
   assert.notStrictEqual(icon, MP.companyIconHtml('openai'));
 });
 
+// 🎯T296: T293's replacement read as a generic pair of blades. The Grok mark
+// is a ring cut by one diagonal slash — and still neither X nor blades.
+test('grok wears the slashed ring', function () {
+  const X_MARK = 'M3 3h4.2l13.8 18h-4.2L3 3z';
+  const BLADE_MARK = 'M13.6 2.6h7L9.4 21.4h-7l11.2-18.8z';
+  const icon = MP.companyIconHtml('xai');
+  assert.ok(icon.indexOf(X_MARK) === -1, 'still painting the X mark: ' + icon);
+  assert.ok(icon.indexOf(BLADE_MARK) === -1, 'still painting the blades: ' + icon);
+  // A ring: an unfilled stroked circle, not a disc.
+  const ring = /<circle\b[^>]*>/.exec(icon);
+  assert.ok(ring, 'no ring in the Grok mark: ' + icon);
+  assert.ok(/fill="none"/.test(ring[0]), 'ring is a filled disc: ' + ring[0]);
+  assert.ok(/stroke="currentColor"/.test(ring[0]), 'ring ignores row colour: ' + ring[0]);
+  // One diagonal slash across it: a single straight segment whose ends differ
+  // on both axes, and which runs the other way from the ring's own centre.
+  const slash = /d="M([\d.]+) ([\d.]+)L([\d.]+) ([\d.]+)"/.exec(icon);
+  assert.ok(slash, 'no slash segment in the Grok mark: ' + icon);
+  const [x1, y1, x2, y2] = slash.slice(1).map(Number);
+  assert.notStrictEqual(x1, x2, 'slash is vertical, not diagonal: ' + slash[0]);
+  assert.notStrictEqual(y1, y2, 'slash is horizontal, not diagonal: ' + slash[0]);
+  // Overshoots the ring on both ends, so the cut reads at 12px.
+  const cx = Number(/cx="([\d.]+)"/.exec(ring[0])[1]);
+  const cy = Number(/cy="([\d.]+)"/.exec(ring[0])[1]);
+  const r = Number(/r="([\d.]+)"/.exec(ring[0])[1]);
+  [[x1, y1], [x2, y2]].forEach(function (pt) {
+    const d = Math.hypot(pt[0] - cx, pt[1] - cy);
+    assert.ok(d > r, 'slash end ' + pt + ' stops inside the ring (r=' + r + ')');
+  });
+  // Still distinct from every other company mark.
+  assert.notStrictEqual(icon, MP.companyIconHtml('anthropic'));
+  assert.notStrictEqual(icon, MP.companyIconHtml('openai'));
+  assert.ok(icon.indexOf('data-mark="grok"') !== -1, icon);
+});
+
 // 🎯T295: the Anthropic slot wore the A-wordmark, which names the vendor's
 // letterhead rather than the model the row is running.
 test('claude wears the splat, not the anthropic wordmark', function () {
@@ -181,4 +215,29 @@ test('index.html wires the prefix ahead of the agent name', function () {
     'model prefix is not painted before the bare name: ' + line[0].trim());
   assert.ok(html.indexOf('.model-badge') !== -1, 'model-badge CSS missing');
   assert.ok(html.indexOf('.model-icon') !== -1, 'model-icon CSS missing');
+});
+
+// 🎯T296: the badge read as two spaced pieces — mark, gap, version — instead of
+// one word. Icon and subscript must sit adjacent with no separating space.
+test('badge CSS keeps icon and subscript as one word', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const badge = /\.agent-node \.model-badge \{([^}]*)\}/.exec(html);
+  assert.ok(badge, '.model-badge rule missing');
+  // The flex gap is what pulled the two apart; nothing separates them now.
+  const gap = /(^|[;{\s])gap:\s*([^;]+);/.exec(badge[1]);
+  if (gap) {
+    assert.ok(/^0(px|em|rem)?$/.test(gap[2].trim()),
+      'badge still spaces icon from subscript: gap: ' + gap[2].trim());
+  }
+
+  const sub = /\.agent-node \.model-badge sub \{([^}]*)\}/.exec(html);
+  assert.ok(sub, '.model-badge sub rule missing');
+  // Subscript sits on the mark's edge, never pushed off it.
+  const ml = /margin-left:\s*(-?[\d.]+)px/.exec(sub[1]);
+  assert.ok(ml, 'subscript declares no margin-left: ' + sub[1].trim());
+  assert.ok(Number(ml[1]) <= 0, 'subscript pushed off the mark: ' + ml[0]);
+  // Tight tracking within the version itself, so it reads as one token.
+  const ls = /letter-spacing:\s*(-?[\d.]+)em/.exec(sub[1]);
+  assert.ok(ls, 'subscript declares no letter-spacing: ' + sub[1].trim());
+  assert.ok(Number(ls[1]) <= -0.03, 'subscript tracking is loose: ' + ls[0]);
 });

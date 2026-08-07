@@ -13,7 +13,9 @@
 //     S4.5. Grok has one flavour, so the family letter is dropped: 4.5.
 //     Version segments are never zero-padded — '05' is version 5 (🎯T295).
 //   - The mark is the product's, not the vendor's letterhead: Claude rows
-//     wear the Claude splat, Grok rows the Grok mark (🎯T295 / 🎯T293).
+//     wear the Claude splat, Grok rows the slashed ring (🎯T295 / 🎯T296).
+//   - Icon and version subscript read as one word, not two pieces: the badge
+//     CSS keeps them adjacent with no gap (🎯T296).
 //   - Unknown model → icon alone. We never invent a version the server did
 //     not report; the icon still identifies the company.
 //   - Unknown company → no prefix at all (row renders exactly as before).
@@ -63,12 +65,13 @@
   // repo — but it is unmistakably not the wordmark: a burst, not a letter.
   //
   // xAI is Grok's mark, not the X/Twitter one (🎯T293): the crossed-stroke X
-  // named the wrong product entirely. Drawn here as Grok's twin angled blades
-  // — an approximation, since no vendor asset ships in this repo — but it is
-  // unmistakably not the X mark: parallel strokes, nothing crosses.
+  // named the wrong product entirely. 🎯T296 replaces T293's twin blades — the
+  // owner read those as a generic chevron pair — with Grok's ring cut by a
+  // single diagonal slash. The slash overshoots the ring on both ends so the
+  // cut still reads at 12px, where a contained stroke closes up into a blob.
   const ICON_PATHS = {
     anthropic: '<path fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" d="M12 12L12 3M12 12L15.89 5.94M12 12L20.19 8.26M12 12L19.13 13.02M12 12L18.8 17.89M12 12L14.03 18.91M12 12L9.46 20.64M12 12L6.56 16.71M12 12L3.09 13.28M12 12L5.45 9.01M12 12L7.13 4.43"/>',
-    xai: '<path fill="currentColor" d="M13.6 2.6h7L9.4 21.4h-7l11.2-18.8zM6.6 2.6h5.2L7 10.6H1.8l4.8-8z"/>',
+    xai: '<circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18.9 5.1L5.1 18.9"/>',
     openai: '<path fill="currentColor" d="M12 2.5a5 5 0 0 1 4.33 2.5A5 5 0 0 1 20.66 12a5 5 0 0 1-4.33 7 5 5 0 0 1-8.66 0A5 5 0 0 1 3.34 12 5 5 0 0 1 7.67 5 5 5 0 0 1 12 2.5zm0 3.6L8.9 7.9v3.05L12 9.15l3.1 1.8v-3.05L12 6.1zM6.3 9.55v3.6L9.4 15v-3.6L6.3 9.55zm11.4 0L14.6 11.4V15l3.1-1.85v-3.6zM8.9 16.1v3.05L12 20.95l3.1-1.8V16.1L12 17.9l-3.1-1.8z"/>',
   };
 
