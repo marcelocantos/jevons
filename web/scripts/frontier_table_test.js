@@ -1444,7 +1444,8 @@ test('T280 pickPrimaryGraphDiagram + resolveFrontierGraphOpenPlan single default
   assert.strictEqual(one.mermaid, dLarge.mermaid);
   assert.ok(one.diagramCount === 1);
 
-  // Multi diagrams → single-primary by default (NOT pack).
+  // 🎯T294 supersedes the T280 single-primary default: opening one component
+  // of three left a wide flat strip alone in a huge pane. Default is the pack.
   const multi = FT.resolveFrontierGraphOpenPlan({
     available: true,
     diagrams: [dSmall, dLarge, dOrphans],
@@ -1452,22 +1453,23 @@ test('T280 pickPrimaryGraphDiagram + resolveFrontierGraphOpenPlan single default
     nodeCount: 36,
     edgeCount: 43,
   });
-  assert.strictEqual(multi.mode, 'single-primary', 'owner default is single-primary not pack');
-  assert.strictEqual(multi.primary.id, 'c0');
-  assert.strictEqual(multi.mermaid, dLarge.mermaid);
+  assert.strictEqual(multi.mode, 'pack', 'T294 owner default packs every component');
+  assert.strictEqual(multi.primary.id, 'c0', 'primary still identified for status/pin');
+  assert.strictEqual(multi.diagrams.length, 3);
   assert.strictEqual(multi.diagramCount, 3);
-  assert.ok(/primary of 3/.test(multi.statusNote), multi.statusNote);
+  assert.ok(/3 components/.test(multi.statusNote), multi.statusNote);
 
-  // Residual pack only when preferPack.
-  const pack = FT.resolveFrontierGraphOpenPlan({
+  // Single-primary remains reachable as an explicit view (T280 residual).
+  const primaryOnly = FT.resolveFrontierGraphOpenPlan({
     available: true,
     diagrams: [dSmall, dLarge, dOrphans],
     mermaid: 'joined',
     nodeCount: 36,
     edgeCount: 43,
-  }, { preferPack: true });
-  assert.strictEqual(pack.mode, 'pack');
-  assert.strictEqual(pack.diagrams.length, 3);
+  }, { preferPrimary: true });
+  assert.strictEqual(primaryOnly.mode, 'single-primary');
+  assert.strictEqual(primaryOnly.mermaid, dLarge.mermaid);
+  assert.ok(/primary of 3/.test(primaryOnly.statusNote), primaryOnly.statusNote);
 
   // Joined pack blob without diagrams → empty (not unrenderable multi dump).
   const joinedOnly = FT.resolveFrontierGraphOpenPlan({
@@ -1478,23 +1480,36 @@ test('T280 pickPrimaryGraphDiagram + resolveFrontierGraphOpenPlan single default
   assert.strictEqual(joinedOnly.mode, 'empty');
 });
 
-test('T280 index.html openFrontierGraph defaults to single-primary scale-to-fill', function () {
+test('T294 index.html openFrontierGraph packs by plan and shouts payload errors', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const ofgStart = html.indexOf('function openFrontierGraph');
   assert.ok(ofgStart >= 0, 'openFrontierGraph defined');
   const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
   const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 9000);
-  assert.ok(ofg.indexOf('T280') >= 0, 'T280 marked');
+  assert.ok(ofg.indexOf('T294') >= 0, 'T294 marked');
   assert.ok(ofg.indexOf('resolveFrontierGraphOpenPlan') >= 0, 'uses pure open plan');
   assert.ok(ofg.indexOf('scaleToFill') >= 0, 'scale-to-fill for single path');
   assert.ok(ofg.indexOf('renderMermaidSourceInPanel') >= 0, 'single source renderer');
-  // Pack only when preferPack / mode pack — not unconditional multi render.
-  assert.ok(ofg.indexOf('preferPack') >= 0, 'preferPack residual gate');
+  assert.ok(ofg.indexOf('renderMermaidDiagramPackInPanel') >= 0, 'pack renderer wired');
   // Must not route multi solely via `if (hasDiagrams) { renderMermaidDiagramPack… }`
   // without the open-plan resolver (the T276 trainwreck default).
   assert.ok(
     !/if\s*\(\s*hasDiagrams\s*\)\s*\{\s*return\s+renderMermaidDiagramPackInPanel/.test(ofg),
     'must not unconditional pack on hasDiagrams'
+  );
+  // 🎯T294 fail class (b): a payload-level error (HTTP 200 + `error`) must take
+  // the loud fetch-error body, never renderMermaidPanelEmpty's paste shell.
+  const emptyBranch = ofg.indexOf("openPlan.mode === 'empty'");
+  assert.ok(emptyBranch >= 0, 'empty branch present');
+  const errGuard = ofg.indexOf('payloadErr');
+  assert.ok(errGuard > emptyBranch, 'payload error guarded inside the empty branch');
+  assert.ok(
+    errGuard < ofg.indexOf('renderMermaidPanelEmpty', emptyBranch),
+    'payload error handled BEFORE falling through to the empty paste shell'
+  );
+  assert.ok(
+    ofg.indexOf('renderMermaidPanelFetchError') > emptyBranch,
+    'payload error uses the loud panel'
   );
 });
 

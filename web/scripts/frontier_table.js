@@ -679,9 +679,14 @@
     return best;
   }
 
-  // resolveFrontierGraphOpenPlan — default owner path is single scale-to-fill.
+  // resolveFrontierGraphOpenPlan — which diagrams the Graph control opens.
   // mode: empty | single | single-primary | pack
-  // pack only when opts.preferPack === true (residual secondary view).
+  //
+  // 🎯T280 made single-primary the owner default. 🎯T294 reverts that: hiding
+  // 6 of 7 components left one wide flat strip in a huge empty pane, and the
+  // pane had nothing to fill the rest with. Default is now the full pack, laid
+  // out by planFrontierGraphFit (pane-aspect pack → scale, or reflow at the
+  // legibility floor). opts.preferPrimary keeps the single-primary view.
   function resolveFrontierGraphOpenPlan(model, opts) {
     var o = opts || {};
     var m = model || {};
@@ -705,15 +710,15 @@
         statusNote: '',
       };
     }
-    // Residual multi-pack: explicit only (never owner default).
-    if (o.preferPack === true && diagrams.length > 1) {
+    // 🎯T294 owner default: show every component, packed into the pane.
+    if (diagrams.length > 1 && o.preferPrimary !== true) {
       return {
         mode: 'pack',
         mermaid: mermaid,
         primary: pickPrimaryGraphDiagram(diagrams),
         diagrams: diagrams,
         diagramCount: diagrams.length,
-        statusNote: 'multi-pack (residual)',
+        statusNote: diagrams.length + ' components packed',
       };
     }
     if (diagrams.length === 1 && diagrams[0] && diagrams[0].mermaid) {

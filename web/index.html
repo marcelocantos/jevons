@@ -225,15 +225,16 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* 🎯T268: single-graph scale-to-fill — expand SVG to pane (not shrink-only). */
 #mermaid-viz-panel .mvp-body.mvp-scale-fill {
   display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: auto;
 }
+/* 🎯T294: centre with auto margins, not align/justify — flex centring clips the
+   leading edge once the graph is held at the legibility floor and overflows. */
 #mermaid-viz-panel .mvp-body.mvp-scale-fill svg {
   max-width: none;
   max-height: none;
   height: auto;
   flex-shrink: 0;
+  margin: auto;
 }
 /* 🎯T190/T276: multi-diagram pack host. T276 places blocks absolutely after
    pack+scale; relative body is the composite coordinate space. */
@@ -2908,6 +2909,9 @@ function fitMermaidPanelSvgToPane(opts) {
   });
   if (plan.mode !== 'scale-to-fill') return plan;
   body.classList.add('mvp-scale-fill');
+  // 🎯T294: expose the fit for the layout oracles (floored = readable, scrolls).
+  body.setAttribute('data-mvp-fit-mode', plan.floored ? 'floored-readable' : 'scale-to-fill');
+  if (plan.labelPx > 0) body.setAttribute('data-mvp-label-px', String(plan.labelPx));
   MA.applySvgScaleToFill(svg, plan);
   return plan;
 }
@@ -2964,21 +2968,44 @@ function fitMermaidPackToPane(opts) {
     : (anyTitle
       ? (MA.PACK_BLOCK_CHROME_H != null ? MA.PACK_BLOCK_CHROME_H : 48)
       : 20);
-  const plan = MA.planMultiDiagramPackScaleToFill({
-    boxes: boxes,
-    paneW: paneW,
-    paneH: paneH,
-    padding: o.padding != null ? o.padding : 0,
-    gap: o.gap != null ? o.gap : 12,
-    chromeH: chromeH,
-  });
-  if (plan.mode !== 'pack-scale-to-fill') return plan;
+  // 🎯T294: contain-scale only while labels stay readable; else reflow at the
+  // legibility floor and let the pane scroll.
+  const plan = (typeof MA.planFrontierGraphFit === 'function')
+    ? MA.planFrontierGraphFit({
+        boxes: boxes,
+        paneW: paneW,
+        paneH: paneH,
+        padding: o.padding != null ? o.padding : 0,
+        gap: o.gap != null ? o.gap : 12,
+        chromeH: chromeH,
+      })
+    : MA.planMultiDiagramPackScaleToFill({
+        boxes: boxes,
+        paneW: paneW,
+        paneH: paneH,
+        padding: o.padding != null ? o.padding : 0,
+        gap: o.gap != null ? o.gap : 12,
+        chromeH: chromeH,
+      });
+  if (plan.mode !== 'pack-scale-to-fill' && plan.mode !== 'reflow-readable') return plan;
   body.classList.add('mvp-pack-scaled');
   body.style.position = 'relative';
-  body.style.minHeight = Math.round(plan.displayH) + 'px';
-  // Center composite in pane when smaller on one axis.
-  const offsetX = Math.max(0, (paneW - plan.displayW) / 2);
-  const offsetY = Math.max(0, (paneH - plan.displayH) / 2);
+  // 🎯T294: do NOT size the scroll container to the composite. The body is a
+  // flex child of the panel, so a min-width/min-height large enough to hold a
+  // reflowed composite grows the panel itself — and then the next measurement
+  // reads that inflated box as "the pane". The absolutely placed blocks already
+  // extend the scrollable overflow region, which is what makes them reachable.
+  body.style.minHeight = '';
+  body.style.minWidth = '';
+  body.setAttribute('data-mvp-fit-mode', plan.mode);
+  if (plan.labelPx > 0) body.setAttribute('data-mvp-label-px', String(plan.labelPx));
+  // 🎯T294: centre only when the whole composite fits. Once it overflows an
+  // axis the reader has to scroll, and centring the other axis just splits the
+  // leftover space into two empty bands above and below the graph — the "huge
+  // empty pane" again. Anchor to the top-left the eye starts from instead.
+  const fits = plan.displayW <= paneW + 1 && plan.displayH <= paneH + 1;
+  const offsetX = fits ? Math.max(0, (paneW - plan.displayW) / 2) : 0;
+  const offsetY = fits ? Math.max(0, (paneH - plan.displayH) / 2) : 0;
   for (let p = 0; p < plan.placements.length; p++) {
     const pl = plan.placements[p];
     const item = blockList[pl.i];
@@ -3164,11 +3191,26 @@ function openFrontierGraph(opts) {
         ? FrontierTable.resolveFrontierGraphOpenPlan(model, { preferPack: o.preferPack === true })
         : null;
       if (!openPlan || openPlan.mode === 'empty') {
-        // Empty ledger / no graph — not a product fetch failure (distinct from 🎯T196).
+        // 🎯T294: the graph API answers HTTP 200 with an `error` field when the
+        // bullseye CLI dies (panic / exit status). That is a failure, not an
+        // empty ledger — the paste shell reads as "unimplemented" and buries
+        // the panic in the status line.
+        const payloadErr = String((model && model.error) || '').trim();
+        if (payloadErr) {
+          renderMermaidPanelFetchError(
+            { message: payloadErr, kind: (typeof MermaidActions !== 'undefined'
+                && typeof MermaidActions.classifyFetchFailureKind === 'function')
+              ? MermaidActions.classifyFetchFailureKind(payloadErr, null)
+              : 'server' },
+            { resource: 'Unachieved graph' }
+          );
+          return model;
+        }
+        // Genuinely empty ledger — no graph yet, nothing failed.
         renderMermaidPanelEmpty();
         setMermaidPanelTitle('Unachieved graph');
         setMermaidPanelStatus(
-          (openPlan && openPlan.statusNote) || model.error || 'No unachieved graph available'
+          (openPlan && openPlan.statusNote) || 'No unachieved graph available'
         );
         return model;
       }

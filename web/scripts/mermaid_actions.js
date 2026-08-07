@@ -309,6 +309,26 @@
   const PRODUCT_FETCH_RECOVERY_SHORT = 'rebuild / restart-daily';
 
   /**
+   * Classify a failure message into an owner-facing kind.
+   * 🎯T294 adds panic/server: the graph API answers HTTP 200 with an `error`
+   * field when the bullseye CLI dies (`exit status 101 … panic graph.rs:704`),
+   * so a status-code-only classifier reads that as "nothing to show".
+   * @returns {'http'|'panic'|'server'|'network'|'unknown'}
+   */
+  function classifyFetchFailureKind(message, httpStatus) {
+    const msg = String(message == null ? '' : message);
+    if (/\bpanic(ked)?\b|\bfatal runtime\b|\bstack backtrace\b/i.test(msg)) return 'panic';
+    if (httpStatus != null) return 'http';
+    if (/failed to fetch|networkerror|network error|load failed|econnrefused/i.test(msg)) {
+      return 'network';
+    }
+    if (/\bexit status\s+\d+|\bsignal:\s|\bexec\b.*\bnot found\b|\bexecutable file not found\b/i.test(msg)) {
+      return 'server';
+    }
+    return msg.trim() ? 'server' : 'unknown';
+  }
+
+  /**
    * 🎯T196: Actionable chrome fetch failure view — HTTP code + recovery.
    * Must never look like emptyStateHtml (generic paste shell).
    *
@@ -342,17 +362,12 @@
       detail = detail.replace(/^HTTP\s+\d{3}\s*[:.\-–—]?\s*/i, '').trim();
     }
     let kind = o.kind || '';
-    if (!kind) {
-      if (httpStatus != null) kind = 'http';
-      else if (/failed to fetch|networkerror|network error|load failed|econnrefused/i.test(detail)) {
-        kind = 'network';
-      } else {
-        kind = 'unknown';
-      }
-    }
+    if (!kind) kind = classifyFetchFailureKind(detail, httpStatus);
     const recovery = String(o.recoveryHint || PRODUCT_FETCH_RECOVERY_HINT).trim()
       || PRODUCT_FETCH_RECOVERY_HINT;
-    const codeLabel = httpStatus != null ? ('HTTP ' + httpStatus) : '';
+    const codeLabel = httpStatus != null
+      ? ('HTTP ' + httpStatus)
+      : (kind === 'panic' ? 'Backend panic' : (kind === 'server' ? 'Backend error' : ''));
     let statusCore;
     if (codeLabel && detail && detail !== codeLabel) {
       statusCore = resource + ' failed: ' + codeLabel + ' — ' + detail;
@@ -381,7 +396,8 @@
     }
 
     const bodyHtml =
-      '<div class="mvp-error" data-mvp-fetch-error="1">' +
+      '<div class="mvp-error" data-mvp-fetch-error="1" data-mvp-error-kind="' +
+      escapeHtml(kind) + '">' +
       '<p class="mvp-error-title">' + escapeHtml(resource) + ' could not load</p>' +
       '<p class="mvp-error-body">' + bodyDetail + '</p>' +
       '<p class="mvp-error-hint">' + escapeHtml(recovery) + '</p>' +
@@ -421,12 +437,7 @@
       const m = /HTTP\s+(\d{3})\b/i.exec(message);
       if (m) status = parseInt(m[1], 10);
     }
-    if (!kind) {
-      if (status != null) kind = 'http';
-      else if (/failed to fetch|networkerror|network error|load failed|econnrefused/i.test(message)) {
-        kind = 'network';
-      }
-    }
+    if (!kind) kind = classifyFetchFailureKind(message, status);
     return productFetchFailureView({
       resource: d.resource || 'Request',
       status: status != null ? status : undefined,
@@ -542,6 +553,134 @@
 
   /** Fixed title+pad chrome per pack block (not scaled into SVG aspect). 🎯T277 */
   const PACK_BLOCK_CHROME_H = 48; // title ~28 + block pad ~20
+
+  // ── 🎯T294: legibility floor ───────────────────────────────────────────
+  // T280 shipped contain-scale as the owner default. For a wide flat mermaid
+  // (many siblings, few ranks) contain fills width only: the graph collapses
+  // to a micro horizontal strip of unreadable text in a huge empty pane, and
+  // the ≥95%-of-one-axis cover oracle still passes. Cover alone is therefore
+  // NOT a fill oracle. Legibility is the binding constraint: never shrink a
+  // graph below the scale at which its node labels stay human-readable.
+
+  /** Mermaid default node-label font size (px) at scale 1. */
+  const MERMAID_LABEL_FONT_PX = 16;
+
+  /** Smallest node-label size (px) an owner can read without zooming. */
+  const MIN_LEGIBLE_LABEL_PX = 11;
+
+  /** Smallest uniform scale that keeps node labels at/above the floor. */
+  function legibilityFloorScale(opts) {
+    const o = opts || {};
+    const natural = positiveNumber(o.naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    const floor = positiveNumber(o.minLabelPx) || MIN_LEGIBLE_LABEL_PX;
+    if (!natural) return 1;
+    return floor / natural;
+  }
+
+  /** Rendered label size (px) at a given uniform scale. */
+  function effectiveLabelPx(scale, naturalFontPx) {
+    const s = positiveNumber(scale);
+    const natural = positiveNumber(naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    return s * natural;
+  }
+
+  /**
+   * 🎯T294 legibility oracle: node labels readable without zoom.
+   * @param {{ scale: number, naturalFontPx?: number, minLabelPx?: number }} m
+   */
+  function assessGraphLegibility(metrics) {
+    const m = metrics || {};
+    const natural = positiveNumber(m.naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    const floorPx = positiveNumber(m.minLabelPx) || MIN_LEGIBLE_LABEL_PX;
+    const scale = positiveNumber(m.scale);
+    const labelPx = effectiveLabelPx(scale, natural);
+    return {
+      ok: labelPx > 0 && labelPx >= floorPx - 1e-9,
+      labelPx: labelPx,
+      minLabelPx: floorPx,
+      floorScale: floorPx / natural,
+      mode: 'label-legibility',
+    };
+  }
+
+  /**
+   * 🎯T294 fail-class (a): micro horizontal illegible strip.
+   * The owner screenshot — content pinned to ~100% of one axis, a sliver of the
+   * other, labels below the readable floor. Conjunction on purpose: a wide
+   * graph shown at a readable scale is not a trainwreck, only an unreadable
+   * one is. Cover-only oracles (T280) miss this entirely.
+   *
+   * @param {{
+   *   paneW:number, paneH:number,
+   *   svgDisplayW:number, svgDisplayH:number,
+   *   scale:number, naturalFontPx?:number, minLabelPx?:number
+   * }} metrics
+   * @param {{ majorCover?:number, minorCover?:number }} [opts]
+   */
+  function assessMicroStripLayout(metrics, opts) {
+    const m = metrics || {};
+    const o = opts || {};
+    const majorMin = o.majorCover != null ? positiveNumber(o.majorCover) : 0.9;
+    const minorMax = o.minorCover != null ? positiveNumber(o.minorCover) : 0.35;
+    const paneW = positiveNumber(m.paneW);
+    const paneH = positiveNumber(m.paneH);
+    const dw = positiveNumber(m.svgDisplayW);
+    const dh = positiveNumber(m.svgDisplayH);
+    const legible = assessGraphLegibility(m);
+    if (!paneW || !paneH || !dw || !dh) {
+      return {
+        isMicroStrip: false,
+        coverW: 0,
+        coverH: 0,
+        legible: legible,
+        mode: 'micro-strip',
+      };
+    }
+    const coverW = dw / paneW;
+    const coverH = dh / paneH;
+    const major = Math.max(coverW, coverH);
+    const minor = Math.min(coverW, coverH);
+    const stripShape = major >= majorMin && minor < minorMax;
+    return {
+      isMicroStrip: stripShape && !legible.ok,
+      stripShape: stripShape,
+      coverW: coverW,
+      coverH: coverH,
+      legible: legible,
+      mode: 'micro-strip',
+    };
+  }
+
+  /**
+   * 🎯T294 fill oracle: how much of the pane carries actual diagram ink.
+   * A single primary strip in a multi-component ledger scores near zero even
+   * when it spans the full width — that is the "huge empty pane" the owner saw.
+   * @param {{ paneW:number, paneH:number }} pane
+   * @param {Array<{w:number,h:number}>} inkBoxes rendered SVG display sizes
+   */
+  function assessPaneInkCover(pane, inkBoxes, opts) {
+    const p = pane || {};
+    const o = opts || {};
+    const minCover = o.minCover != null ? positiveNumber(o.minCover) : 0.25;
+    const paneW = positiveNumber(p.paneW);
+    const paneH = positiveNumber(p.paneH);
+    const list = Array.isArray(inkBoxes) ? inkBoxes : [];
+    let ink = 0;
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i] || {};
+      ink += positiveNumber(b.w) * positiveNumber(b.h);
+    }
+    const paneArea = paneW * paneH;
+    // Content may overflow a scrolling pane; cap at 1 so scroll is not a bonus.
+    const cover = paneArea > 0 ? Math.min(1, ink / paneArea) : 0;
+    return {
+      ok: cover >= minCover,
+      cover: cover,
+      inkArea: ink,
+      paneArea: paneArea,
+      mode: 'pane-ink-cover',
+    };
+  }
 
   /** Positive finite number or 0. */
   function positiveNumber(n) {
@@ -709,16 +848,32 @@
         fillsPane: false,
       };
     }
-    const scale = computeContainScale(svgW, svgH, paneW, paneH);
+    const naturalFontPx = positiveNumber(o.naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    const minLabelPx = positiveNumber(o.minLabelPx) || MIN_LEGIBLE_LABEL_PX;
+    const floorScale = legibilityFloorScale({
+      naturalFontPx: naturalFontPx,
+      minLabelPx: minLabelPx,
+    });
+    const containScale = computeContainScale(svgW, svgH, paneW, paneH);
+    // 🎯T294: never shrink past readable. A wide flat graph contained into the
+    // pane becomes an illegible strip; hold the floor and let the pane scroll.
+    const scale = Math.max(containScale, floorScale);
     const displayW = svgW * scale;
     const displayH = svgH * scale;
-    // Fills pane when at least one axis uses ≥95% of usable pane (contain).
+    // Fills pane when at least one axis uses ≥95% of usable pane.
     const coverW = displayW / paneW;
     const coverH = displayH / paneH;
     const fillsPane = Math.max(coverW, coverH) >= 0.95;
     return {
       mode: 'scale-to-fill',
       scale: scale,
+      containScale: containScale,
+      floorScale: floorScale,
+      labelPx: effectiveLabelPx(scale, naturalFontPx),
+      legible: true,
+      floored: scale > containScale + 1e-9,
+      overflowX: displayW > paneW + 1,
+      overflowY: displayH > paneH + 1,
       displayW: displayW,
       displayH: displayH,
       fillsPane: fillsPane,
@@ -744,16 +899,7 @@
     const o = opts || {};
     const paneW = positiveNumber(o.paneW);
     const paneH = positiveNumber(o.paneH);
-    const gap = o.gap != null ? Math.max(0, positiveNumber(o.gap) || 0) : 12;
-    const list = Array.isArray(boxes) ? boxes : [];
-    const items = [];
-    for (let i = 0; i < list.length; i++) {
-      const b = list[i] || {};
-      const w = positiveNumber(b.w);
-      const h = positiveNumber(b.h);
-      if (!w || !h) continue;
-      items.push({ i: i, id: b.id, w: w, h: h });
-    }
+    const items = shelfItems(boxes);
     if (!items.length) {
       return { placements: [], compositeW: 0, compositeH: 0, shelfWidth: 0, rowCount: 0 };
     }
@@ -775,6 +921,47 @@
       if (paneW >= maxW) shelfWidth = Math.min(Math.max(shelfWidth, maxW), Math.max(paneW, maxW));
       else shelfWidth = maxW;
     }
+    return packBoxesIntoShelfWidth(boxes, {
+      shelfWidth: shelfWidth,
+      gap: o.gap,
+    });
+  }
+
+  /** Normalize + index boxes for shelf packing (drops degenerate entries). */
+  function shelfItems(boxes) {
+    const list = Array.isArray(boxes) ? boxes : [];
+    const items = [];
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i] || {};
+      const w = positiveNumber(b.w);
+      const h = positiveNumber(b.h);
+      if (!w || !h) continue;
+      items.push({ i: i, id: b.id, w: w, h: h });
+    }
+    return items;
+  }
+
+  /**
+   * 🎯T294: first-fit-decreasing shelf pack into an explicit bin width.
+   * packBoxesIntoPaneAspect derives that width from the pane form-factor;
+   * the reflow path (planFrontierGraphFit) derives it from the readable scale.
+   * @param {Array<{w:number,h:number,id?:string}>} boxes
+   * @param {{ shelfWidth: number, gap?: number }} opts
+   */
+  function packBoxesIntoShelfWidth(boxes, opts) {
+    const o = opts || {};
+    const gap = o.gap != null ? Math.max(0, positiveNumber(o.gap) || 0) : 12;
+    const items = shelfItems(boxes);
+    if (!items.length) {
+      return { placements: [], compositeW: 0, compositeH: 0, shelfWidth: 0, rowCount: 0 };
+    }
+    let maxW = 0;
+    for (let j = 0; j < items.length; j++) {
+      if (items[j].w > maxW) maxW = items[j].w;
+    }
+    // Every item must fit on a shelf, so the bin can never be narrower than
+    // the widest box (it simply overflows the pane and the pane scrolls).
+    const shelfWidth = Math.max(maxW, positiveNumber(o.shelfWidth));
     // Sort tallest-first for denser shelves (stable by original index).
     items.sort(function (a, b) {
       if (b.h !== a.h) return b.h - a.h;
@@ -854,6 +1041,73 @@
    *   }>
    * }}
    */
+  /**
+   * Scale a natural shelf pack into display coordinates, rebuilding row Y so
+   * the **fixed** (unscaled) per-block chrome cannot overlap the next row and
+   * never enters the SVG aspect (🎯T277).
+   * @param {{placements:Array,rowCount:number}} packed
+   * @param {{ scale:number, chromeH:number, gap:number }} opts
+   */
+  function placePackedRows(packed, opts) {
+    const o = opts || {};
+    const scale = positiveNumber(o.scale) || 1;
+    const chromeH = Math.max(0, positiveNumber(o.chromeH) || 0);
+    const gap = Math.max(0, positiveNumber(o.gap) || 0);
+    const src = (packed && Array.isArray(packed.placements)) ? packed.placements : [];
+    const byRow = {};
+    const rowOrder = [];
+    for (let pi = 0; pi < src.length; pi++) {
+      const p = src[pi];
+      const r = p.row != null ? p.row : 0;
+      if (!byRow[r]) {
+        byRow[r] = [];
+        rowOrder.push(r);
+      }
+      byRow[r].push(p);
+    }
+    rowOrder.sort(function (a, b) { return a - b; });
+
+    const placements = [];
+    let cursorY = 0;
+    let usedW = 0;
+    for (let ri = 0; ri < rowOrder.length; ri++) {
+      const rowPls = byRow[rowOrder[ri]];
+      let rowSvgH = 0;
+      for (let j = 0; j < rowPls.length; j++) {
+        if (rowPls[j].h > rowSvgH) rowSvgH = rowPls[j].h;
+      }
+      for (let j = 0; j < rowPls.length; j++) {
+        const p = rowPls[j];
+        const svgDisplayW = p.w * scale;
+        const svgDisplayH = p.h * scale;
+        const displayX = p.x * scale;
+        const right = displayX + svgDisplayW;
+        if (right > usedW) usedW = right;
+        placements.push({
+          i: p.i,
+          id: p.id,
+          x: p.x,
+          y: p.y,
+          w: p.w,
+          h: p.h,
+          row: p.row,
+          naturalW: p.w,
+          naturalH: p.h,
+          displayX: displayX,
+          displayY: cursorY,
+          displayW: svgDisplayW,
+          displayH: svgDisplayH + chromeH,
+          svgDisplayW: svgDisplayW,
+          svgDisplayH: svgDisplayH,
+        });
+      }
+      cursorY += rowSvgH * scale + chromeH;
+      if (ri < rowOrder.length - 1) cursorY += gap * scale;
+    }
+    placements.sort(function (a, b) { return a.i - b.i; });
+    return { placements: placements, displayW: usedW, displayH: cursorY };
+  }
+
   function planMultiDiagramPackScaleToFill(opts) {
     const o = opts || {};
     const pad = o.padding != null ? Math.max(0, positiveNumber(o.padding) || 0) : 0;
@@ -900,65 +1154,10 @@
     let scale = Math.min(scaleW, scaleH);
     if (!(scale > 0) || !isFinite(scale)) scale = 1;
 
-    // Group natural placements by shelf row; rebuild Y with fixed chrome so
-    // blocks do not overlap after chrome is added.
-    const byRow = {};
-    const rowOrder = [];
-    for (let pi = 0; pi < packed.placements.length; pi++) {
-      const p = packed.placements[pi];
-      const r = p.row != null ? p.row : 0;
-      if (!byRow[r]) {
-        byRow[r] = [];
-        rowOrder.push(r);
-      }
-      byRow[r].push(p);
-    }
-    rowOrder.sort(function (a, b) { return a - b; });
-
-    const placements = [];
-    let cursorY = 0;
-    let usedW = 0;
-    for (let ri = 0; ri < rowOrder.length; ri++) {
-      const rowPls = byRow[rowOrder[ri]];
-      let rowSvgH = 0;
-      for (let j = 0; j < rowPls.length; j++) {
-        if (rowPls[j].h > rowSvgH) rowSvgH = rowPls[j].h;
-      }
-      const rowSvgDispH = rowSvgH * scale;
-      for (let j = 0; j < rowPls.length; j++) {
-        const p = rowPls[j];
-        const svgDisplayW = p.w * scale;
-        const svgDisplayH = p.h * scale;
-        const displayW = svgDisplayW;
-        const displayH = svgDisplayH + chromeH;
-        const displayX = p.x * scale;
-        const right = displayX + displayW;
-        if (right > usedW) usedW = right;
-        placements.push({
-          i: p.i,
-          id: p.id,
-          x: p.x,
-          y: p.y,
-          w: p.w,
-          h: p.h,
-          row: p.row,
-          naturalW: p.w,
-          naturalH: p.h,
-          displayX: displayX,
-          displayY: cursorY,
-          displayW: displayW,
-          displayH: displayH,
-          svgDisplayW: svgDisplayW,
-          svgDisplayH: svgDisplayH,
-        });
-      }
-      cursorY += rowSvgDispH + chromeH;
-      if (ri < rowOrder.length - 1) cursorY += gap * scale;
-    }
-    placements.sort(function (a, b) { return a.i - b.i; });
-
-    const displayW = usedW > 0 ? usedW : cW * scale;
-    const displayH = cursorY;
+    const laid = placePackedRows(packed, { scale: scale, chromeH: chromeH, gap: gap });
+    const placements = laid.placements;
+    const displayW = laid.displayW > 0 ? laid.displayW : cW * scale;
+    const displayH = laid.displayH;
     const coverW = displayW / paneW;
     const coverH = displayH / paneH;
     const fillsPane = Math.max(coverW, coverH) >= 0.95;
@@ -972,6 +1171,140 @@
       fillsPane: fillsPane,
       chromeH: chromeH,
       placements: placements,
+    };
+  }
+
+  /**
+   * 🎯T294: the owner-facing Frontier Graph fit.
+   *
+   * (1) Pack natural boxes into a pane-aspect bin and contain-scale it (T276/T277).
+   * (2) If that scale renders labels below the legibility floor, **reflow**
+   *     instead of shrinking: fix the scale at the floor and re-pack into a bin
+   *     whose scaled width is the pane width, so rows wrap across the pane and
+   *     the composite grows downward (the pane scrolls).
+   *
+   * Contain-only is what produced the micro strip: it optimizes "everything
+   * visible" and will happily trade all legibility for it. Reflow keeps the
+   * text readable and spends the pane's other axis instead.
+   *
+   * @param {{
+   *   boxes: Array<{w:number,h:number,id?:string}>,
+   *   paneW:number, paneH:number,
+   *   padding?:number, gap?:number, chromeH?:number,
+   *   naturalFontPx?:number, minLabelPx?:number
+   * }} opts
+   */
+  function planFrontierGraphFit(opts) {
+    const o = opts || {};
+    const pad = o.padding != null ? Math.max(0, positiveNumber(o.padding) || 0) : 0;
+    const paneW = Math.max(0, positiveNumber(o.paneW) - pad);
+    const paneH = Math.max(0, positiveNumber(o.paneH) - pad);
+    const gap = o.gap != null ? Math.max(0, positiveNumber(o.gap) || 0) : 12;
+    const chromeH = o.chromeH != null
+      ? Math.max(0, positiveNumber(o.chromeH) || 0)
+      : PACK_BLOCK_CHROME_H;
+    const naturalFontPx = positiveNumber(o.naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    const minLabelPx = positiveNumber(o.minLabelPx) || MIN_LEGIBLE_LABEL_PX;
+    const floorScale = legibilityFloorScale({
+      naturalFontPx: naturalFontPx,
+      minLabelPx: minLabelPx,
+    });
+
+    const fit = planMultiDiagramPackScaleToFill({
+      boxes: o.boxes || [],
+      paneW: paneW,
+      paneH: paneH,
+      padding: 0,
+      gap: gap,
+      chromeH: chromeH,
+    });
+    if (fit.mode !== 'pack-scale-to-fill') {
+      return {
+        mode: 'skip',
+        scale: 1,
+        floorScale: floorScale,
+        labelPx: 0,
+        legible: false,
+        reflowed: false,
+        overflowX: false,
+        overflowY: false,
+        compositeW: fit.compositeW || 0,
+        compositeH: fit.compositeH || 0,
+        displayW: fit.displayW || 0,
+        displayH: fit.displayH || 0,
+        fillsPane: false,
+        chromeH: chromeH,
+        placements: [],
+      };
+    }
+    if (fit.scale >= floorScale - 1e-9) {
+      // Contain fit is already readable — nothing to trade.
+      return {
+        mode: 'pack-scale-to-fill',
+        scale: fit.scale,
+        floorScale: floorScale,
+        labelPx: effectiveLabelPx(fit.scale, naturalFontPx),
+        legible: true,
+        reflowed: false,
+        overflowX: fit.displayW > paneW + 1,
+        overflowY: fit.displayH > paneH + 1,
+        compositeW: fit.compositeW,
+        compositeH: fit.compositeH,
+        displayW: fit.displayW,
+        displayH: fit.displayH,
+        fillsPane: fit.fillsPane,
+        chromeH: chromeH,
+        placements: fit.placements,
+      };
+    }
+
+    // Reflow: hold the scale at the readable floor, re-pack so scaled rows
+    // span the pane width. Natural-unit bin width = paneW / floorScale.
+    const scale = floorScale;
+    const binW = scale > 0 ? paneW / scale : paneW;
+    const packed = packBoxesIntoShelfWidth(o.boxes || [], { shelfWidth: binW, gap: gap });
+    if (!packed.placements.length) {
+      return {
+        mode: 'skip',
+        scale: 1,
+        floorScale: floorScale,
+        labelPx: 0,
+        legible: false,
+        reflowed: false,
+        overflowX: false,
+        overflowY: false,
+        compositeW: 0,
+        compositeH: 0,
+        displayW: 0,
+        displayH: 0,
+        fillsPane: false,
+        chromeH: chromeH,
+        placements: [],
+      };
+    }
+    const laid = placePackedRows(packed, { scale: scale, chromeH: chromeH, gap: gap });
+    const displayW = laid.displayW;
+    const displayH = laid.displayH;
+    // Reflow always uses the full readable scale, so "fills" means the composite
+    // reaches the pane on some axis — including by overflowing into scroll.
+    const fillsPane = paneW > 0 && paneH > 0
+      && Math.max(displayW / paneW, displayH / paneH) >= 0.95;
+    return {
+      mode: 'reflow-readable',
+      scale: scale,
+      floorScale: floorScale,
+      labelPx: effectiveLabelPx(scale, naturalFontPx),
+      legible: true,
+      reflowed: true,
+      overflowX: displayW > paneW + 1,
+      overflowY: displayH > paneH + 1,
+      compositeW: packed.compositeW,
+      compositeH: packed.compositeH,
+      displayW: displayW,
+      displayH: displayH,
+      fillsPane: fillsPane,
+      chromeH: chromeH,
+      placements: laid.placements,
     };
   }
 
@@ -1217,6 +1550,7 @@
     clearPinnedGraph: clearPinnedGraph,
     emptyStateHtml: emptyStateHtml,
     PRODUCT_FETCH_RECOVERY_HINT: PRODUCT_FETCH_RECOVERY_HINT,
+    classifyFetchFailureKind: classifyFetchFailureKind,
     PRODUCT_FETCH_RECOVERY_SHORT: PRODUCT_FETCH_RECOVERY_SHORT,
     productFetchFailureView: productFetchFailureView,
     productFetchFailureFromError: productFetchFailureFromError,
@@ -1244,5 +1578,16 @@
     // 🎯T280 visual layout oracles
     assessTallEmptyColumnLayout: assessTallEmptyColumnLayout,
     assessSingleGraphPaneCover: assessSingleGraphPaneCover,
+    // 🎯T294 legibility floor + reflow fit
+    MERMAID_LABEL_FONT_PX: MERMAID_LABEL_FONT_PX,
+    MIN_LEGIBLE_LABEL_PX: MIN_LEGIBLE_LABEL_PX,
+    legibilityFloorScale: legibilityFloorScale,
+    effectiveLabelPx: effectiveLabelPx,
+    assessGraphLegibility: assessGraphLegibility,
+    assessMicroStripLayout: assessMicroStripLayout,
+    assessPaneInkCover: assessPaneInkCover,
+    packBoxesIntoShelfWidth: packBoxesIntoShelfWidth,
+    placePackedRows: placePackedRows,
+    planFrontierGraphFit: planFrontierGraphFit,
   };
 }));

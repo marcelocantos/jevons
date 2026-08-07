@@ -857,6 +857,184 @@ test('T280 assessTallEmptyColumnLayout fails 3 tall empty columns', function () 
   assert.strictEqual(tiny.ok, false, 'micro island fails single cover');
 });
 
+// ── 🎯T294: legibility floor, reflow fit, loud graph errors ───────────────
+
+// The owner's screenshot in numbers: the primary component of the jevons
+// ledger is a wide flat flowchart (~3000×200 natural) in a ~1600×850 pane.
+const OWNER_STRIP = { w: 3000, h: 200 };
+const OWNER_PANE = { w: 1600, h: 850 };
+
+test('T294 contain-only shrinks the owner strip below readable (fail class a)', function () {
+  const contain = MA.computeContainScale(
+    OWNER_STRIP.w, OWNER_STRIP.h, OWNER_PANE.w, OWNER_PANE.h
+  );
+  // Contain fills the width completely — which is exactly why cover-only
+  // oracles (T280) passed this trainwreck.
+  const cover = MA.assessSingleGraphPaneCover({
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    svgDisplayW: OWNER_STRIP.w * contain,
+    svgDisplayH: OWNER_STRIP.h * contain,
+  });
+  assert.strictEqual(cover.ok, true, 'T280 cover oracle passes the strip — the false fix');
+
+  // The T294 oracles must reject it.
+  const legible = MA.assessGraphLegibility({ scale: contain });
+  assert.strictEqual(legible.ok, false, 'contain scale must read as illegible');
+  assert.ok(legible.labelPx < MA.MIN_LEGIBLE_LABEL_PX, 'labelPx=' + legible.labelPx);
+
+  const strip = MA.assessMicroStripLayout({
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    svgDisplayW: OWNER_STRIP.w * contain,
+    svgDisplayH: OWNER_STRIP.h * contain,
+    scale: contain,
+  });
+  assert.strictEqual(strip.isMicroStrip, true, 'micro-strip oracle must be armed');
+  assert.ok(strip.coverH < 0.35, 'strip wastes the vertical pane: coverH=' + strip.coverH);
+});
+
+test('T294 single-graph fit holds the legibility floor instead of shrinking', function () {
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: OWNER_STRIP.w,
+    svgH: OWNER_STRIP.h,
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    padding: 0,
+  });
+  assert.strictEqual(plan.mode, 'scale-to-fill');
+  assert.strictEqual(plan.floored, true, 'floor must engage for the owner strip');
+  assert.ok(plan.scale > plan.containScale, 'floored scale exceeds contain');
+  assert.ok(
+    plan.labelPx >= MA.MIN_LEGIBLE_LABEL_PX,
+    'labels readable: ' + plan.labelPx
+  );
+  assert.strictEqual(plan.overflowX, true, 'wider than pane → pane scrolls, not shrinks');
+
+  const after = MA.assessMicroStripLayout({
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    svgDisplayW: plan.displayW,
+    svgDisplayH: plan.displayH,
+    scale: plan.scale,
+  });
+  assert.strictEqual(after.isMicroStrip, false, 'fitted graph is no longer a micro strip');
+});
+
+test('T294 a graph that already fits keeps its contain scale', function () {
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: 800,
+    svgH: 600,
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    padding: 0,
+  });
+  assert.strictEqual(plan.floored, false, 'no floor needed when contain scales up');
+  assert.ok(plan.scale > 1, 'small graph still scales up to fill: ' + plan.scale);
+  assert.strictEqual(plan.overflowX, false);
+  assert.strictEqual(plan.overflowY, false);
+});
+
+test('T294 multi-component pack reflows at the floor and fills the pane', function () {
+  const boxes = [{ w: OWNER_STRIP.w, h: OWNER_STRIP.h, id: 'c0' }];
+  for (let i = 1; i < 7; i++) boxes.push({ w: 600, h: 220, id: 'c' + i });
+
+  const plan = MA.planFrontierGraphFit({
+    boxes: boxes,
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    gap: 12,
+    chromeH: 48,
+  });
+  assert.strictEqual(plan.mode, 'reflow-readable', 'contain would be illegible → reflow');
+  assert.strictEqual(plan.reflowed, true);
+  assert.strictEqual(plan.legible, true);
+  assert.ok(plan.labelPx >= MA.MIN_LEGIBLE_LABEL_PX, 'labelPx=' + plan.labelPx);
+  assert.strictEqual(plan.fillsPane, true, 'composite reaches the pane');
+  assert.strictEqual(plan.placements.length, 7, 'every component placed');
+
+  // Uniform scale: no block is stretched off its natural aspect (🎯T277).
+  for (let i = 0; i < plan.placements.length; i++) {
+    assert.strictEqual(
+      MA.placementSvgAspectMatchesNatural(plan.placements[i], 1e-6),
+      true,
+      'placement ' + i + ' preserves natural aspect'
+    );
+  }
+
+  // Ink cover: seven packed components use far more pane than one strip did.
+  const packInk = MA.assessPaneInkCover(
+    { paneW: OWNER_PANE.w, paneH: OWNER_PANE.h },
+    plan.placements.map(function (p) {
+      return { w: p.svgDisplayW, h: p.svgDisplayH };
+    })
+  );
+  const containScale = MA.computeContainScale(
+    OWNER_STRIP.w, OWNER_STRIP.h, OWNER_PANE.w, OWNER_PANE.h
+  );
+  const stripInk = MA.assessPaneInkCover(
+    { paneW: OWNER_PANE.w, paneH: OWNER_PANE.h },
+    [{ w: OWNER_STRIP.w * containScale, h: OWNER_STRIP.h * containScale }]
+  );
+  assert.strictEqual(stripInk.ok, false, 'single strip leaves the pane empty');
+  assert.ok(
+    packInk.cover > stripInk.cover,
+    'pack ink ' + packInk.cover + ' must beat strip ink ' + stripInk.cover
+  );
+});
+
+test('T294 pack keeps contain scale when it is already readable', function () {
+  const boxes = [
+    { w: 500, h: 400, id: 'a' },
+    { w: 480, h: 380, id: 'b' },
+  ];
+  const plan = MA.planFrontierGraphFit({
+    boxes: boxes,
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    gap: 12,
+    chromeH: 48,
+  });
+  assert.strictEqual(plan.mode, 'pack-scale-to-fill');
+  assert.strictEqual(plan.reflowed, false);
+  assert.strictEqual(plan.fillsPane, true);
+  assert.ok(plan.labelPx >= MA.MIN_LEGIBLE_LABEL_PX);
+});
+
+test('T294 shelf pack honours an explicit bin width', function () {
+  const packed = MA.packBoxesIntoShelfWidth(
+    [{ w: 100, h: 50 }, { w: 100, h: 50 }, { w: 100, h: 50 }],
+    { shelfWidth: 220, gap: 10 }
+  );
+  assert.strictEqual(packed.rowCount, 2, 'two per row at width 220');
+  assert.strictEqual(packed.placements.length, 3);
+  // Bin can never be narrower than the widest box.
+  const forced = MA.packBoxesIntoShelfWidth([{ w: 900, h: 50 }], { shelfWidth: 100 });
+  assert.strictEqual(forced.shelfWidth, 900);
+});
+
+test('T294 bullseye panic classifies loud, never as an empty graph', function () {
+  const msg = 'bullseye open: exit status 101 — panic graph.rs:704';
+  assert.strictEqual(MA.classifyFetchFailureKind(msg, null), 'panic');
+  assert.strictEqual(MA.classifyFetchFailureKind('bullseye: exit status 2', null), 'server');
+  assert.strictEqual(MA.classifyFetchFailureKind('Failed to fetch', null), 'network');
+  assert.strictEqual(MA.classifyFetchFailureKind('boom', 500), 'http');
+
+  const view = MA.productFetchFailureFromError(
+    { message: msg },
+    { resource: 'Unachieved graph' }
+  );
+  assert.strictEqual(view.kind, 'panic');
+  assert.ok(/Backend panic/.test(view.status), 'status names the panic: ' + view.status);
+  assert.ok(/graph\.rs:704/.test(view.bodyHtml), 'body carries the panic detail');
+  assert.ok(/data-mvp-fetch-error="1"/.test(view.bodyHtml), 'loud error marker present');
+  assert.ok(/data-mvp-error-kind="panic"/.test(view.bodyHtml), 'error kind exposed');
+  // The failure body must never be the generic paste shell.
+  assert.ok(!/data-mvp-empty/.test(view.bodyHtml), 'must not be the empty paste shell');
+  assert.ok(!/No graph loaded/.test(view.bodyHtml), 'must not read as "nothing yet"');
+  assert.ok(/restart-daily/.test(view.bodyHtml), 'recovery hint retained');
+});
+
 Promise.all(pending).then(function () {
   if (failed) {
     console.error(failed + ' failed');

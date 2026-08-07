@@ -3,11 +3,14 @@
 
 // Hermetic Playwright smoke for 🎯T280: Frontier Graph owner-readable default.
 //
-// After hard-reload orthograph-shaped multi-component payload (3 diagrams),
-// openFrontierGraph must NOT produce tall empty Component columns. Default
-// product path = single primary SVG scale-to-fill (T268). Multi-pack residual.
+// SUPERSEDED IN PART BY 🎯T294. T280's single-primary default was a false fix:
+// opening one component of many left a wide flat graph as an illegible strip in
+// a mostly empty pane, which T280's own cover oracle happily passed. The owner
+// default is now the full multi-component pack (fill + legibility gated by
+// scripts/chat-ui-test/t294-frontier-graph-test.js).
 //
-// Gate: fails on tall-empty multi-column DOM layout; passes single SVG cover.
+// What survives here, and what this file still gates: whatever the default
+// path renders, it must never be the tall-empty-Component-column layout.
 //
 //   node scripts/chat-ui-test/t280-frontier-graph-test.js [--headed]
 
@@ -153,7 +156,7 @@ function startStaticServer() {
       { timeout: 25000 }
     );
 
-    // Pure plan: multi payload → single-primary (not pack) before DOM.
+    // Pure plan: multi payload → pack of all components before DOM (🎯T294).
     const planCheck = await page.evaluate(() => {
       const payload = {
         available: true,
@@ -175,8 +178,9 @@ function startStaticServer() {
         diagramCount: plan.diagramCount,
       };
     });
-    if (planCheck.mode !== 'single-primary') {
-      failures.push('resolveFrontierGraphOpenPlan mode=' + planCheck.mode + ' (want single-primary)');
+    // 🎯T294: default is the full pack; the primary is still identified (status/pin).
+    if (planCheck.mode !== 'pack') {
+      failures.push('resolveFrontierGraphOpenPlan mode=' + planCheck.mode + ' (want pack — T294)');
     }
     if (planCheck.primaryId !== 'c0') {
       failures.push('primary id=' + planCheck.primaryId + ' (want c0 largest)');
@@ -190,7 +194,7 @@ function startStaticServer() {
 
     await page.evaluate(() => window.openFrontierGraph({ pin: false }));
 
-    // Wait for single SVG render (or fail if pack columns appear).
+    // Wait for the component SVGs to render.
     await page.waitForFunction(
       () => {
         const body = document.getElementById('mvp-body');
@@ -269,24 +273,16 @@ function startStaticServer() {
       if (!layout.open) failures.push('panel not open');
       if (!layout.large) failures.push('panel not mvp-large');
 
-      // Product default: must NOT be multi-pack with ≥2 columns.
-      if (layout.isPack && layout.packBlockCount >= 2) {
-        failures.push(
-          'DEFAULT used multi-pack (' + layout.packBlockCount +
-          ' blocks) — T280 requires single primary scale-to-fill'
-        );
-      }
+      // The surviving T280 gate: never tall empty Component columns.
       if (layout.tallEmpty && layout.tallEmpty.isTallEmpty) {
         failures.push(
           'tall-empty-column layout detected (count=' +
           layout.tallEmpty.tallEmptyCount + ') — owner trainwreck'
         );
       }
-      if (layout.svgCount !== 1) {
-        failures.push('expected exactly 1 SVG, got ' + layout.svgCount);
-      }
-      if (!layout.isScaleFill && layout.svgCount === 1) {
-        // Soft: scale-fill class may lag; cover oracle is the hard gate.
+      // 🎯T294: every component is rendered, not just the primary.
+      if (layout.svgCount !== 3) {
+        failures.push('expected 3 component SVGs, got ' + layout.svgCount);
       }
       if (layout.svgCount === 1 && layout.cover && !layout.cover.ok) {
         failures.push(
@@ -333,6 +329,6 @@ function startStaticServer() {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - T280 Frontier Graph single-primary scale-to-fill; tall-empty oracle armed');
+  console.log('ok - T280 Frontier Graph default has no tall-empty columns (fill+legibility: T294)');
   console.log('screenshot: artifacts/t280-frontier-graph.png');
 })();
