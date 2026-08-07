@@ -52,6 +52,8 @@ test-web:
 	node web/scripts/attention_threads_test.js
 	node web/scripts/aside_history_test.js
 	node web/scripts/fleet_row_test.js
+	node web/scripts/fleet_paint_test.js
+	node web/scripts/model_prefix_test.js
 	node web/scripts/portfolio_group_test.js
 	node web/scripts/virtual_list_test.js
 	node web/scripts/thread_route_test.js
@@ -100,6 +102,7 @@ test-ui:
 	node scripts/chat-ui-test/image-lightbox-test.js
 	node scripts/chat-ui-test/t164-aside-dismiss-test.js
 	node scripts/chat-ui-test/t241-alt-enter-test.js
+	node scripts/chat-ui-test/t289-paint-thrash-test.js
 
 .PHONY: test-ui-live
 test-ui-live:

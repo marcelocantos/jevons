@@ -301,9 +301,11 @@ test('T269: index.html wires hover-gated dismiss → dismissFleetAside', functio
       html.indexOf('.agent-aside:hover .agent-dismiss') >= 0,
     'hover-gated opacity for aside rows');
   assert.ok(html.indexOf(':focus-within .agent-dismiss') >= 0, 'keyboard focus path');
-  assert.ok(html.indexOf('row.showDismiss') >= 0, 'renderTree paints only when showDismiss');
-  assert.ok(html.indexOf('dismissFleetAside(a.name)') >= 0 ||
-    /dismissFleetAside\s*\(\s*a\.name\s*\)/.test(html),
+  assert.ok(html.indexOf('row.showDismiss') >= 0, 'tree paints dismiss only when showDismiss');
+  // 🎯T289: the row descriptor carries the agent name as `key`, so the
+  // handler binds dismissFleetAside(d.key) — same product path as the
+  // pre-diff renderTree's dismissFleetAside(a.name).
+  assert.ok(/dismissFleetAside\s*\(\s*(a\.name|d\.key)\s*\)/.test(html),
     'activate calls dismissFleetAside product path');
   assert.ok(html.indexOf('stopPropagation') >= 0 &&
     html.indexOf('agent-dismiss') >= 0,

@@ -1023,6 +1023,18 @@ body.rhs-resizing-row { cursor: row-resize; }
 .agent-node .agent-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 .agent-node .agent-dot.running { background: var(--green); box-shadow: 0 0 4px var(--agent-dot-glow); }
 .agent-node .agent-dot.stopped { background: var(--text-muted); }
+/* 🎯T287: provider company icon + extremely condensed model subscript,
+   painted between the status dot and the bare agent name. The row gap is 8px;
+   the negative margin pulls the badge tight against the name it labels. */
+.agent-node .model-badge {
+  display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0;
+  margin-right: -4px; color: var(--text-muted); cursor: default;
+}
+.agent-node .model-badge .model-icon { width: 12px; height: 12px; display: block; opacity: 0.8; }
+.agent-node .model-badge sub {
+  position: relative; bottom: -0.2em; font-family: var(--mono); font-size: 8px;
+  line-height: 1; letter-spacing: -0.03em; opacity: 0.9;
+}
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }
 /* 🎯T118: progress/status secondary shares path slot without mono path chrome. */
@@ -1218,6 +1230,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/attention_threads.js"></script>
 <script src="scripts/aside_history.js"></script>
 <script src="scripts/fleet_row.js"></script>
+<script src="scripts/model_prefix.js"></script>
+<script src="scripts/fleet_paint.js"></script>
 <script src="scripts/portfolio_group.js"></script>
 <script src="scripts/agent_transcript.js"></script>
 <script src="scripts/frontier_table.js"></script>
@@ -2074,9 +2088,13 @@ function handle(m) {
 
   // 🎯T82: registry file changed — refresh RHS fleet immediately (poll is fallback).
   // 🎯T198: also re-merge frontier engagement (target_id overlay).
+  // 🎯T289: coalesced — a busy fleet pushes agents_changed per progress
+  // change, and answering each with a fetch+repaint was the main stutter.
   if (typ === 'agents_changed') {
-    refreshAgents();
-    if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
+    if (typeof scheduleRefreshAgents === 'function') scheduleRefreshAgents();
+    else refreshAgents();
+    if (typeof scheduleLoadFrontier === 'function') scheduleLoadFrontier();
+    else if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
     return;
   }
 
@@ -4907,7 +4925,8 @@ function refreshAgents() {
   ]).then(function (pair) {
     const agents = Array.isArray(pair[0]) ? pair[0] : [];
     const portfolioPayload = pair[1];
-    agentsEl.innerHTML = '';
+    // 🎯T289: no innerHTML wipe here — paintFleetTree diffs and clears only
+    // when the tree shape actually changed.
     // Display-only weave: virtual portfolio parents under overseer; lineage_parent kept.
     let byParent = {};
     let treeNodes = agents;
@@ -4966,7 +4985,7 @@ function refreshAgents() {
       }
     }
     lastFleetAgents = agents.slice();
-    renderTree(byParent, '', agentsEl, agentsByName);
+    paintFleetTree(buildFleetDescriptors(byParent, '', agentsByName, []));
     // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
     updateFleetProgress(agents);
     // 🎯T209: inspect updates arrive on /ws/chat — no HTTP re-fetch on fleet refresh.
@@ -5000,11 +5019,21 @@ function updateFleetProgress(agents) {
     updateWorkingProgress(next);
   }
 }
-function renderTree(byParent, parent, container, agentsByName) {
+// 🎯T289: fleet paint is descriptor-diffed, not rebuilt per push.
+// agents_changed fires on every progress-summary change across the fleet;
+// the old path answered each one with innerHTML='' + full recursive rebuild.
+// buildFleetDescriptors produces a flat depth-first paint list (pure data);
+// paintFleetTree decides noop / patch-changed-rows / rebuild.
+let _fleetPrevDescs = null;   // descriptors from the last painted tree
+let _fleetNodes = [];         // DOM nodes, index-aligned with _fleetPrevDescs
+const FLEET_DATA_KEYS = ['agent', 'parent', 'purpose', 'secondary'];
+
+function buildFleetDescriptors(byParent, parent, agentsByName, out) {
   // 🎯T68: sibling order is deliberate — name-sorted under each parent,
   // independent of Go map iteration or poll order of the parent group.
   // 🎯T200: portfolio virtual nodes sort with agents; folder lead not status dot.
   agentsByName = agentsByName || {};
+  out = out || [];
   const children = (byParent[parent] || []).slice().sort((a, b) =>
     String(a.name || '').localeCompare(String(b.name || '')));
   children.forEach(a => {
@@ -5028,21 +5057,24 @@ function renderTree(byParent, parent, container, agentsByName) {
     } else {
       row = { title: a.name || '', dirHtml: formatAgentDir(a.workdir || ''), omitPath: false, isAside: false, secondaryHtml: '', secondaryKind: 'path' };
     }
-    const node = document.createElement('div');
-    node.className = 'agent-node'
+    const className = 'agent-node'
       + (a.name === selectedAgent ? ' selected' : '')
       + (row.isAside ? ' agent-aside' : '')
       + (isPortfolio ? ' agent-portfolio' : '');
-    node.dataset.agent = a.name;
-    node.dataset.parent = parent || '';
-    if (row.isAside) node.dataset.purpose = 'aside';
-    if (isPortfolio) node.dataset.purpose = 'portfolio';
-    if (row.secondaryKind) node.dataset.secondary = row.secondaryKind;
+    const dataset = { agent: a.name, parent: parent || '' };
+    if (row.isAside) dataset.purpose = 'aside';
+    if (isPortfolio) dataset.purpose = 'portfolio';
+    if (row.secondaryKind) dataset.secondary = row.secondaryKind;
     // 🎯T200: portfolio → folder icon; agents keep green/grey status dot.
     const lead = (typeof PortfolioGroup !== 'undefined' && PortfolioGroup.rowLeadHtml)
       ? PortfolioGroup.rowLeadHtml(a)
       : ('<span class="agent-dot '+escHtml(a.status || '')+'"></span>');
-    let html = lead + '<span class="agent-name">'+escHtml(row.title)+'</span>';
+    // 🎯T287: company icon + condensed model subscript ahead of the bare
+    // name. Portfolio nodes are virtual folders with no provider — skipped.
+    const modelHtml = (!isPortfolio && typeof ModelPrefix !== 'undefined')
+      ? ModelPrefix.modelPrefixHtml(a)
+      : '';
+    let html = lead + modelHtml + '<span class="agent-name">'+escHtml(row.title)+'</span>';
     // Secondary line: path (T84) or progress/status (T118). Aside/portfolio have none.
     const secHtml = isPortfolio ? '' : (row.secondaryHtml || (row.showPath ? row.dirHtml : ''));
     const secKind = isPortfolio ? '' : (row.secondaryKind || (secHtml ? 'path' : ''));
@@ -5054,31 +5086,104 @@ function renderTree(byParent, parent, container, agentsByName) {
     if (row.showDismiss && (row.dismissHtml || (typeof FleetRow !== 'undefined' && FleetRow.asideDismissButtonHtml))) {
       html += row.dismissHtml || FleetRow.asideDismissButtonHtml(a.name);
     }
-    node.innerHTML = html;
-    // Virtual portfolio nodes are not selectable agents (display chrome only).
-    if (!isPortfolio) {
-      node.onclick = () => selectAgent(a.name);
-    }
-    // 🎯T269: × → dismissFleetAside (DELETE /api/asides); do not select row.
-    if (row.showDismiss) {
-      const dismissBtn = node.querySelector('.agent-dismiss');
-      if (dismissBtn) {
-        dismissBtn.onclick = function (e) {
-          if (e) { e.preventDefault(); e.stopPropagation(); }
-          if (typeof dismissFleetAside === 'function') {
-            dismissFleetAside(a.name);
-          }
-        };
-      }
-    }
-    container.appendChild(node);
-    if (byParent[a.name] && byParent[a.name].length) {
-      const sub = document.createElement('div');
-      sub.className = 'agent-children';
-      container.appendChild(sub);
-      renderTree(byParent, a.name, sub, agentsByName);
+    out.push({
+      key: a.name,
+      parentKey: parent || '',
+      className: className,
+      dataset: dataset,
+      html: html,
+      // Virtual portfolio nodes are not selectable agents (display chrome only).
+      selectable: !isPortfolio,
+      showDismiss: !!row.showDismiss,
+      hasChildren: hasChildren,
+    });
+    if (hasChildren) {
+      buildFleetDescriptors(byParent, a.name, agentsByName, out);
     }
   });
+  return out;
+}
+
+// Bind the per-row handlers. Called on rebuild, and again after a patch
+// rewrites a row's innerHTML (which destroys the dismiss button).
+function bindFleetRow(node, d) {
+  if (d.selectable) {
+    node.onclick = () => selectAgent(d.key);
+  } else {
+    node.onclick = null;
+  }
+  // 🎯T269: × → dismissFleetAside (DELETE /api/asides); do not select row.
+  if (d.showDismiss) {
+    const dismissBtn = node.querySelector('.agent-dismiss');
+    if (dismissBtn) {
+      dismissBtn.onclick = function (e) {
+        if (e) { e.preventDefault(); e.stopPropagation(); }
+        if (typeof dismissFleetAside === 'function') {
+          dismissFleetAside(d.key);
+        }
+      };
+    }
+  }
+}
+
+function applyFleetDataset(node, d) {
+  FLEET_DATA_KEYS.forEach(function (k) {
+    if (Object.prototype.hasOwnProperty.call(d.dataset, k)) {
+      node.dataset[k] = d.dataset[k];
+    } else if (k in node.dataset) {
+      delete node.dataset[k];
+    }
+  });
+}
+
+function paintFleetTree(descs) {
+  const plan = (typeof FleetPaint !== 'undefined')
+    ? FleetPaint.diffPlan(_fleetPrevDescs, descs)
+    : { mode: 'rebuild' };
+
+  if (plan.mode === 'noop') return plan;
+
+  if (plan.mode === 'patch') {
+    // Same tree shape — repaint only the rows whose content actually moved.
+    // Nodes (and their click handlers) survive, so no listener churn and no
+    // full-subtree layout.
+    for (let i = 0; i < plan.patches.length; i++) {
+      const p = plan.patches[i];
+      const node = _fleetNodes[p.index];
+      if (!node) continue;
+      const d = p.descriptor;
+      if (node.className !== d.className) node.className = d.className;
+      applyFleetDataset(node, d);
+      node.innerHTML = d.html;
+      bindFleetRow(node, d);
+    }
+    _fleetPrevDescs = descs;
+    return plan;
+  }
+
+  // Shape changed (spawn / reap / reparent / reorder) — rebuild.
+  agentsEl.innerHTML = '';
+  _fleetNodes = new Array(descs.length);
+  const containerFor = { '': agentsEl };
+  for (let i = 0; i < descs.length; i++) {
+    const d = descs[i];
+    const parentContainer = containerFor[d.parentKey] || agentsEl;
+    const node = document.createElement('div');
+    node.className = d.className;
+    applyFleetDataset(node, d);
+    node.innerHTML = d.html;
+    bindFleetRow(node, d);
+    parentContainer.appendChild(node);
+    if (d.hasChildren) {
+      const sub = document.createElement('div');
+      sub.className = 'agent-children';
+      parentContainer.appendChild(sub);
+      containerFor[d.key] = sub;
+    }
+    _fleetNodes[i] = node;
+  }
+  _fleetPrevDescs = descs;
+  return plan;
 }
 // 🎯T84 / 🎯T115: path chrome lives in fleet_row.js (window.FleetRow).
 function shortDir(d) {
@@ -5089,7 +5194,32 @@ function formatAgentDir(d) {
 }
 // 🎯T82: primary refresh is agents_changed push; slow poll is reconnect fallback only.
 // 🎯T141: fleet refresh must not abort boot (theme/connect).
-setInterval(function () { try { refreshAgents(); } catch (_) {} }, 30000);
+// 🎯T289: agents_changed is pushed per progress-summary change, so a busy
+// fleet delivers bursts. Coalesce them — one fetch+paint per burst instead
+// of one per push — while capping total delay so the tree cannot starve.
+const _fleetCoalescer = (typeof FleetPaint !== 'undefined')
+  ? FleetPaint.makeCoalescer(function () { try { refreshAgents(); } catch (_) {} },
+      { waitMs: 120, maxWaitMs: 600 })
+  : { schedule: function () { try { refreshAgents(); } catch (_) {} }, flush: function () {} };
+function scheduleRefreshAgents() { _fleetCoalescer.schedule(); }
+// Frontier re-merges on the same agents_changed burst (🎯T198) — coalesce
+// it too, on a slower window since the table moves far less often.
+const _frontierCoalescer = (typeof FleetPaint !== 'undefined')
+  ? FleetPaint.makeCoalescer(function () {
+      try {
+        if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
+      } catch (_) {}
+    }, { waitMs: 400, maxWaitMs: 2000 })
+  : null;
+function scheduleLoadFrontier() {
+  if (_frontierCoalescer) _frontierCoalescer.schedule();
+  else if (typeof loadFrontier === 'function') loadFrontier({ quiet: true });
+}
+setInterval(function () {
+  // Fallback poll only — skip entirely while the tab is hidden.
+  if (typeof document !== 'undefined' && document.hidden) return;
+  try { refreshAgents(); } catch (_) {}
+}, 30000);
 try { refreshAgents(); } catch (_) {}
 
 // 🎯T8.2: jwork workers panel — poll + SSE lifecycle stream.
@@ -5139,9 +5269,22 @@ function connectWorkersSSE() {
     es.onerror = () => { /* browser reconnects; poll remains fallback */ };
   } catch (_) {}
 }
-setInterval(refreshWorkers, 10000);
+// 🎯T289: hidden tabs do no poll work (fetch + JSON + full row rebuild).
+setInterval(function () {
+  if (typeof document !== 'undefined' && document.hidden) return;
+  refreshWorkers();
+}, 10000);
 refreshWorkers();
 connectWorkersSSE();
+
+// 🎯T289: hidden tabs skip their polls, so catch everything up the moment
+// the owner comes back — the RHS must never show stale state on return.
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden) return;
+  try { refreshAgents(); } catch (_) {}
+  try { refreshWorkers(); } catch (_) {}
+  try { refreshCost(); } catch (_) {}
+});
 
 // Live token-burn ticker (🎯T137): hidden when disabled; subscription
 // shows API-eq estimates labeled not-billed; list_price shows billable $.
@@ -5166,7 +5309,13 @@ function refreshCost() {
     costEl.style.display = 'none';
   });
 }
-setInterval(refreshCost, 3000);
+// 🎯T289: the 3s ticker was the single most frequent background fetch —
+// 1200 requests/hour in a tab nobody is watching. Skip while hidden; the
+// visibilitychange handler refreshes on return so nothing shows stale.
+setInterval(function () {
+  if (typeof document !== 'undefined' && document.hidden) return;
+  refreshCost();
+}, 3000);
 refreshCost();
 
 // ── Latched stick-to-bottom (Track | Free) ────────────────────────────
@@ -5599,9 +5748,15 @@ function relTime(ms) {
   }
   return dt.toLocaleDateString();
 }
+// 🎯T289: this swept every timestamp in the whole transcript and wrote each
+// one back unconditionally — thousands of textContent writes every 30s, all
+// invalidating layout, almost all writing the identical string (anything
+// older than an hour barely moves). Skip while hidden; write only on change.
 setInterval(() => {
+  if (typeof document !== 'undefined' && document.hidden) return;
   document.querySelectorAll('.msg-time[data-ts]').forEach(el => {
-    el.textContent = relTime(parseInt(el.dataset.ts));
+    const next = relTime(parseInt(el.dataset.ts));
+    if (el.textContent !== next) el.textContent = next;
   });
 }, 30000);
 

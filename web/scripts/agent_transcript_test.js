@@ -1006,7 +1006,12 @@ test('index.html declares selectedAgent before boot renderAttention/refreshAgent
   // Boot refresh may be try-wrapped; match the interval arm + immediate call.
   const bootRefresh = html.indexOf('setInterval(function () { try { refreshAgents(); } catch (_) {} }, 30000);');
   const bootRefreshAlt = html.indexOf('setInterval(refreshAgents, 30000);');
-  const bootRefreshAt = bootRefresh >= 0 ? bootRefresh : bootRefreshAlt;
+  // 🎯T289: the fallback poll became a multi-line block (hidden-tab skip), so
+  // anchor on the immediate boot call — that is what actually runs at load and
+  // what the TDZ guard protects.
+  const bootRefreshImmediate = html.indexOf('\ntry { refreshAgents(); } catch (_) {}');
+  const bootRefreshAt = bootRefresh >= 0 ? bootRefresh
+    : (bootRefreshAlt >= 0 ? bootRefreshAlt : bootRefreshImmediate);
   const theme = html.indexOf("applyTheme((document.cookie");
   const connect = html.indexOf('\nconnect();\n');
   assert.ok(bootRender > decl, 'boot renderAttention after selectedAgent decl');
