@@ -66,6 +66,48 @@ test('grok wears a Grok mark, not the X mark', function () {
   assert.notStrictEqual(icon, MP.companyIconHtml('openai'));
 });
 
+// 🎯T295: the Anthropic slot wore the A-wordmark, which names the vendor's
+// letterhead rather than the model the row is running.
+test('claude wears the splat, not the anthropic wordmark', function () {
+  const WORDMARK = 'M16.23 5h-3.02l5.507 15h3.02L16.23 5z';
+  const icon = MP.companyIconHtml('anthropic');
+  assert.ok(icon.indexOf('<svg class="model-icon"') !== -1, icon);
+  assert.ok(icon.indexOf('data-mark="claude-splat"') !== -1, icon);
+  assert.ok(icon.indexOf(WORDMARK) === -1, 'still painting the wordmark: ' + icon);
+  // The splat is a burst of blades from one centre, not a glyph.
+  assert.ok((icon.match(/M12 12L/g) || []).length >= 8, icon);
+  // Gray splat only: no plate, ring, or outer border around the mark.
+  assert.ok(!/<(circle|rect|ellipse)\b/.test(icon), 'mark carries a border: ' + icon);
+  // Distinct from every other company mark, so the row is not ambiguous.
+  assert.notStrictEqual(icon, MP.companyIconHtml('xai'));
+  assert.notStrictEqual(icon, MP.companyIconHtml('openai'));
+  // Each slot names which mark it wears — 🎯T293's Grok mark stays Grok's.
+  assert.ok(MP.companyIconHtml('xai').indexOf('data-mark="grok"') !== -1);
+});
+
+// 🎯T295: the owner read a padded subscript as a different version. No segment
+// keeps a leading zero; internal zeros are significant.
+test('version segments are never zero-padded', function () {
+  assert.strictEqual(MP.condenseModel('claude-opus-4-05'), 'O4.5');
+  assert.strictEqual(MP.condenseModel('claude-opus-05'), 'O5');
+  assert.strictEqual(MP.condenseModel('claude-sonnet-04-05'), 'S4.5');
+  assert.strictEqual(MP.condenseModel('grok-05'), '5');
+  // Internal zeros survive: 10 is ten, not one.
+  assert.strictEqual(MP.condenseModel('claude-opus-10'), 'O10');
+  assert.strictEqual(MP.condenseModel('claude-opus-4-10'), 'O4.10');
+  assert.strictEqual(MP.condenseModel('grok-10.0'), '10.0');
+  // A lone zero is a real segment, not padding.
+  assert.strictEqual(MP.condenseModel('claude-opus-5-0'), 'O5.0');
+  // Every representative Claude id lands with no zero-padded segment.
+  ['claude-opus-5', 'claude-opus-5[1m]', 'claude-opus-4-8', 'claude-opus-05',
+    'claude-opus-4-5-20250929', 'claude-sonnet-4-5-20250929',
+    'claude-haiku-4-5-20251001', 'us.anthropic.claude-opus-4-5-v1:0',
+  ].forEach(function (id) {
+    const label = MP.condenseModel(id);
+    assert.ok(!/(^|\.)0\d/.test(label), id + ' → padded label ' + label);
+  });
+});
+
 test('company comes from provider, falling back to the model id', function () {
   assert.strictEqual(MP.companyFor('claude', ''), 'anthropic');
   assert.strictEqual(MP.companyFor('bedrock', ''), 'anthropic');

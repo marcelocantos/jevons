@@ -11,6 +11,9 @@
 //   - Label is the model's family initial plus version, as short as it can
 //     be while staying unambiguous: Anthropic Opus 4.8 → O4.8, Sonnet 4.5 →
 //     S4.5. Grok has one flavour, so the family letter is dropped: 4.5.
+//     Version segments are never zero-padded — '05' is version 5 (🎯T295).
+//   - The mark is the product's, not the vendor's letterhead: Claude rows
+//     wear the Claude splat, Grok rows the Grok mark (🎯T295 / 🎯T293).
 //   - Unknown model → icon alone. We never invent a version the server did
 //     not report; the icon still identifies the company.
 //   - Unknown company → no prefix at all (row renders exactly as before).
@@ -50,17 +53,31 @@
     gpt: '',
   };
 
-  // Company marks, sized by CSS (.model-icon). Anthropic and OpenAI use
-  // their published logomark paths.
+  // Company marks, sized by CSS (.model-icon). Each is drawn in currentColor
+  // with no plate, ring, or outer border — the row supplies the colour.
+  //
+  // The Anthropic slot wears **Claude's splat**, not the Anthropic A-wordmark
+  // (🎯T295): these rows name a Claude model, and the wordmark reads as the
+  // company's letterhead rather than the product. Drawn here as the splat's
+  // radiating blades — an approximation, since no vendor asset ships in this
+  // repo — but it is unmistakably not the wordmark: a burst, not a letter.
   //
   // xAI is Grok's mark, not the X/Twitter one (🎯T293): the crossed-stroke X
   // named the wrong product entirely. Drawn here as Grok's twin angled blades
   // — an approximation, since no vendor asset ships in this repo — but it is
   // unmistakably not the X mark: parallel strokes, nothing crosses.
   const ICON_PATHS = {
-    anthropic: '<path fill="currentColor" d="M16.23 5h-3.02l5.507 15h3.02L16.23 5zM7.507 5L2 20h3.08l1.125-3.15h5.761L13.092 20h3.08L10.665 5H7.507zM7.2 14.064l1.885-5.271 1.884 5.271H7.2z"/>',
+    anthropic: '<path fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" d="M12 12L12 3M12 12L15.89 5.94M12 12L20.19 8.26M12 12L19.13 13.02M12 12L18.8 17.89M12 12L14.03 18.91M12 12L9.46 20.64M12 12L6.56 16.71M12 12L3.09 13.28M12 12L5.45 9.01M12 12L7.13 4.43"/>',
     xai: '<path fill="currentColor" d="M13.6 2.6h7L9.4 21.4h-7l11.2-18.8zM6.6 2.6h5.2L7 10.6H1.8l4.8-8z"/>',
     openai: '<path fill="currentColor" d="M12 2.5a5 5 0 0 1 4.33 2.5A5 5 0 0 1 20.66 12a5 5 0 0 1-4.33 7 5 5 0 0 1-8.66 0A5 5 0 0 1 3.34 12 5 5 0 0 1 7.67 5 5 5 0 0 1 12 2.5zm0 3.6L8.9 7.9v3.05L12 9.15l3.1 1.8v-3.05L12 6.1zM6.3 9.55v3.6L9.4 15v-3.6L6.3 9.55zm11.4 0L14.6 11.4V15l3.1-1.85v-3.6zM8.9 16.1v3.05L12 20.95l3.1-1.8V16.1L12 17.9l-3.1-1.8z"/>',
+  };
+
+  // Which mark each slot wears, as a name a test can assert without pinning
+  // the geometry: the bug 🎯T295 fixes is "wrong mark", not "wrong curve".
+  const MARK_ID = {
+    anthropic: 'claude-splat',
+    xai: 'grok',
+    openai: 'openai',
   };
 
   const COMPANY_LABEL = {
@@ -107,9 +124,18 @@
     return hit ? hit[1] : '';
   }
 
+  // Version segments are never zero-padded (🎯T295): a model id that spells a
+  // segment '05' is still version 5, and the subscript is small enough that a
+  // leading zero reads as a different version entirely. Internal zeros are
+  // significant — '10' stays '10', and a lone '0' stays '0'.
+  function unpad(digits) {
+    return digits.replace(/^0+(?=\d)/, '');
+  }
+
   // Version digits that follow the family, joined with dots: 'opus-4-5-2026…'
-  // → '4.5'; 'grok-4.5' → '4.5'; 'opus-5[1m]' → '5'. A release date, a
-  // trailing word ('-preview', '-v1'), or any other break ends the version.
+  // → '4.5'; 'grok-4.5' → '4.5'; 'opus-5[1m]' → '5'; 'opus-4-05' → '4.5'. A
+  // release date, a trailing word ('-preview', '-v1'), or any other break ends
+  // the version.
   function versionAfter(model, family) {
     const m = norm(model);
     if (!family) return '';
@@ -120,8 +146,10 @@
     const parts = [];
     while (tail) {
       const hit = /^(\d+)/.exec(tail);
+      // Length is judged on the raw run: '202605' is a date whether or not it
+      // would survive unpadding.
       if (!hit || hit[1].length >= DATE_DIGITS) break;
-      parts.push(hit[1]);
+      parts.push(unpad(hit[1]));
       tail = tail.slice(hit[1].length);
       if (!/^[.\-_]/.test(tail)) break;
       tail = tail.slice(1);
@@ -148,7 +176,8 @@
   function companyIconHtml(company) {
     const path = ICON_PATHS[company];
     if (!path) return '';
-    return '<svg class="model-icon" viewBox="0 0 24 24" aria-hidden="true">' + path + '</svg>';
+    return '<svg class="model-icon" data-mark="' + escHtml(MARK_ID[company] || company)
+      + '" viewBox="0 0 24 24" aria-hidden="true">' + path + '</svg>';
   }
 
   // { company, label, title } — the pure model behind the HTML.
