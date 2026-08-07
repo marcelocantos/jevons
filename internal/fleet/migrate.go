@@ -91,6 +91,12 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	next.Provider = target
 	next.SessionID = uuid.NewString()
 	next.Materialized = false // a fresh conversation, not a resume
+	// def was snapshotted before Stop, which clears the serve endpoint on
+	// the registry's own copy. Re-registering the snapshot would re-persist
+	// a dead ConnectURL/PID and send the next Launch into a reattach that
+	// resets (the 🎯T204 trap, here reached by a different road).
+	next.ConnectURL = ""
+	next.ConnectPID = 0
 	if err := f.reg.Register(next); err != nil {
 		return handover.Pending{}, fmt.Errorf("migrate %q: register rotated row: %w", name, err)
 	}
@@ -99,6 +105,24 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 		"old_session", oldSession, "new_session", next.SessionID,
 		"transcript", transcript, "cold", transcript == "")
 	return pending, nil
+}
+
+// PendingHandover returns the handover waiting for an agent, if any. The
+// overseer's migration is driven by the HTTP server (it owns chat attach),
+// so it reads the record here and seeds through its own send path.
+func (f *Claudia) PendingHandover(name string) (handover.Pending, bool, error) {
+	if f == nil || f.handovers == nil {
+		return handover.Pending{}, false, nil
+	}
+	return f.handovers.Get(name)
+}
+
+// MarkHandoverDelivered records that a successor received its seed.
+func (f *Claudia) MarkHandoverDelivered(name string) error {
+	if f == nil || f.handovers == nil {
+		return nil
+	}
+	return f.handovers.MarkDelivered(name)
 }
 
 // SeedSuccessor hands a freshly launched successor its one-off handover

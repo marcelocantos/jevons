@@ -4,9 +4,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -699,3 +701,79 @@ func (s *suite) jProviderMigration() error {
 
 // MCP/HTTP helpers live in steps.go (🎯T102 step library).
 
+
+// jOverseerMigration is the 🎯T285 overseer arm: the owner's CEO agent
+// moves backend and keeps working. Unlike a fleet agent it is attached to
+// owner chat, so this asserts BOTH halves — the successor recovered its
+// predecessor's context, and the chat it answers on is still wired to it.
+//
+// The probe fact is planted through owner chat, which is also where the
+// answer must come back, so the journey exercises exactly the path the
+// owner uses.
+func (s *suite) jOverseerMigration() error {
+	to := claudia.ProviderClaude
+	if s.provider == claudia.ProviderClaude {
+		to = claudia.ProviderGrok
+	}
+	const codeword = "TANGERINEHARBOUR77"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*turnTimeout)
+	defer cancel()
+	conn, frames, err := dialChat(ctx, s.host)
+	if err != nil {
+		return err
+	}
+	if _, err := drainReplay(frames, 800*time.Millisecond); err != nil {
+		conn.CloseNow()
+		return err
+	}
+	plant := "Remember this for the rest of our work — the project codeword is " +
+		codeword + ". Reply with exactly: NOTED"
+	if err := conn.Write(ctx, websocket.MessageText, []byte(plant)); err != nil {
+		conn.CloseNow()
+		return err
+	}
+	if _, _, terminal, err := waitTurn(ctx, frames, codeword, true); err != nil || !terminal {
+		conn.CloseNow()
+		return fmt.Errorf("plant codeword: terminal=%v err=%v", terminal, err)
+	}
+	conn.CloseNow()
+
+	body, err := json.Marshal(map[string]any{"provider": string(to)})
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post("http://"+s.host+"/api/overseer/migrate", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("migrate overseer: %w", err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("migrate overseer HTTP %d: %v", resp.StatusCode, out["error"])
+	}
+
+	// Owner chat must still reach the successor — a migration that leaves
+	// the conversation wired to nothing is the failure this arm exists for.
+	conn2, frames2, err := dialChat(ctx, s.host)
+	if err != nil {
+		return fmt.Errorf("reconnect after migration: %w", err)
+	}
+	defer conn2.CloseNow()
+	if _, err := drainReplay(frames2, 1500*time.Millisecond); err != nil {
+		return err
+	}
+	for attempt := 1; attempt <= 5; attempt++ {
+		if err := conn2.Write(ctx, websocket.MessageText,
+			[]byte("What is the project codeword? Reply with the codeword only.")); err != nil {
+			return err
+		}
+		_, text, _, err := waitTurn(ctx, frames2, "codeword", true)
+		if err == nil && strings.Contains(strings.ToUpper(text), codeword) {
+			return nil
+		}
+		time.Sleep(10 * time.Second)
+	}
+	return fmt.Errorf("overseer on %s never recovered the codeword after migration", to)
+}

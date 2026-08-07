@@ -474,6 +474,7 @@ func main() {
 	// 🎯T285: jevons_agent_migrate moves an agent between backends and
 	// hands the successor its predecessor's transcript.
 	mcpSrv.SetMigrator(fleetAdapter)
+	srv.SetOverseerMigrator(fleetAdapter)
 	srv.SetDefaultProvider(defaultProvider)
 	btlrCfg := butler.Config{
 		Store:        threadStore,

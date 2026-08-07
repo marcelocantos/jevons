@@ -224,6 +224,7 @@ persona_notes: |
 	s.run("J10-worker-shell-tool", s.jWorkerShellTool)
 	s.run("J11-worker-transcript", s.jWorkerTranscriptVisible)
 	s.run("J12-provider-migration", s.jProviderMigration)
+	s.run("J13-overseer-migration", s.jOverseerMigration)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()

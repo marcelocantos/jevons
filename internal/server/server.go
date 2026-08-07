@@ -61,6 +61,10 @@ type Server struct {
 	version            string
 	stateDir           string // jevons state root (config-driven, 🎯T44/T49)
 	overseerName       string // registry name of the CEO agent (config-driven, 🎯T44)
+	// overseerMigrator performs the registry half of a provider switch
+	// (🎯T285); this server owns the attach + seed halves. Nil = the
+	// capability is unavailable rather than half-wired.
+	overseerMigrator OverseerMigrator
 	overseerDownReason string // legible cause when the overseer isn't running (🎯T54); guarded by mu
 	ca                 *auth.CA
 
@@ -360,6 +364,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe) // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T285
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
 	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend) // 🎯T182: product agent_send proxy
 	// 🎯T198: stop workers engaged on a frontier target (TargetID equality).
