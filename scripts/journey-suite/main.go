@@ -63,6 +63,9 @@ type suite struct {
 	provider claudia.Provider
 	only     string // when set, run only journeys whose name contains it
 	failures int
+	// outages counts journeys the provider prevented from running (🎯T283).
+	// They are reported separately and do not fail the suite.
+	outages int
 }
 
 func main() {
@@ -238,6 +241,14 @@ persona_notes: |
 		fmt.Printf("FAIL: %d journey(s) failed\n", s.failures)
 		os.Exit(1)
 	}
+	// 🎯T283: outages are not green, but they are not product defects either —
+	// the suite says which it saw rather than letting a backend outage read as
+	// a broken product.
+	if s.outages > 0 {
+		dumpTail(logPath, 30)
+		fmt.Printf("OUTAGE: %d journey(s) could not run — provider backend unavailable, not a product defect. Re-run when the backend is healthy.\n", s.outages)
+		os.Exit(2)
+	}
 	fmt.Println("PASS: journey suite green (isolated; daily stream untouched)")
 }
 
@@ -285,6 +296,13 @@ func (s *suite) run(name string, fn func() error) {
 	}
 	start := time.Now()
 	if err := fn(); err != nil {
+		// 🎯T283: a backend outage did not let the assertion run, so it is
+		// not evidence of a product defect and must not be scored as one.
+		if isOutage(err) {
+			s.outages++
+			fmt.Printf("OUT  %-22s %v (%s)\n", name, err, time.Since(start).Round(time.Millisecond))
+			return
+		}
 		s.failures++
 		fmt.Printf("FAIL %-22s %v (%s)\n", name, err, time.Since(start).Round(time.Millisecond))
 		return

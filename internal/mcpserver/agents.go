@@ -434,7 +434,9 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	// 🎯T111.1: rehydrate + send, or queue/interrupt when prompt in flight.
 	result, err := s.sendToAgent(name, text, interrupt)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		// 🎯T283: deliverToSender already formats send failures; this also
+		// classifies the rehydrate/launch arm, which reaches the provider too.
+		return toolFailure("agent_send", name, err), nil
 	}
 	msg := result.Message
 	if injected {

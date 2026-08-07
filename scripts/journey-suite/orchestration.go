@@ -451,6 +451,9 @@ func (s *suite) jWorkerShellTool() error {
 	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey shell-permission worker",
 	})
+	if out := asOutage("spawn", err); out != nil {
+		return out
+	}
 	if err != nil {
 		return fmt.Errorf("spawn: %w (%s)", err, trim(spawnOut, 80))
 	}
@@ -467,8 +470,17 @@ func (s *suite) jWorkerShellTool() error {
 	directOut, err := s.mcpText("jevons_thread_direct", map[string]any{
 		"id": id, "text": prompt,
 	})
+	// 🎯T283: thread_direct now classifies provider failures, so a backend
+	// outage is distinguishable from the shell tool failing to run. Report the
+	// outage instead of asserting a product defect the evidence cannot support.
+	if out := asOutage("direct shell turn", err); out != nil {
+		return out
+	}
 	if err != nil {
 		return fmt.Errorf("direct shell turn: %w (%s)", err, trim(directOut, 200))
+	}
+	if out := replyOutage("shell turn reply", directOut); out != nil {
+		return out
 	}
 	if strings.Contains(directOut, "unknown permission option") {
 		return fmt.Errorf("shell permission bug still present: %s", trim(directOut, 240))
