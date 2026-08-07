@@ -1231,6 +1231,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/decision_log.js"></script>
 <script src="scripts/transport.js"></script>
 <script src="scripts/chat_reconnect.js"></script>
+<script src="scripts/history_loading.js"></script>
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
 <script src="scripts/aside_history.js"></script>
@@ -2069,6 +2070,9 @@ function handle(m) {
         ms: chatConnMs(),
       }));
     }
+    // 🎯T300: a fresh connect (or reconnect replay) is machinery, never an
+    // owner request — clear any chrome state so hydrate pages stay silent.
+    historyLoadingEvent({ type: 'reset', older: m.older || 0 });
     if ((m.older || 0) > 0) startProgressiveHistoryLoad();
     else {
       if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
@@ -2800,6 +2804,10 @@ function showMermaidPanelShell(opts) {
   // 🎯T185: large overlay for Frontier Graph; default chrome stays compact.
   if (o.large) panel.classList.add('mvp-large');
   else if (o.large === false) panel.classList.remove('mvp-large');
+  // 🎯T274 / T300: opening the large overlay drops any chrome already painted
+  // under it, so nothing lingers above the graph.
+  // (historyLoadingEvent re-reads the panel state on every emit.)
+  if (typeof historyLoadingEvent === 'function') historyLoadingEvent({ type: 'sync' });
   return panel;
 }
 function renderMermaidPanelEmpty() {
@@ -4436,6 +4444,25 @@ let historySentinel = null;
 let historyObserver = null;
 let historyLoadingEl = null;
 
+// 🎯T300: the "Loading earlier…" chrome is owner-facing, so only an
+// owner-triggered load-earlier may raise it. Connect hydrate, the progressive
+// background loop, sentinel nudges and reconnect replays all page silently —
+// before this they toggled the overlay once per page, which is the flashing
+// the owner reported. Policy is pure (web/scripts/history_loading.js); this
+// wrapper feeds it live graph-panel state and paints the result.
+let historyLoadingState = window.HistoryLoading
+  ? window.HistoryLoading.initialState() : null;
+
+function historyLoadingEvent(ev) {
+  const HL = window.HistoryLoading;
+  if (!HL) return;
+  // 🎯T274: large graph panel open suppresses (and drops) the chrome.
+  historyLoadingState = HL.reduce(historyLoadingState,
+    { type: 'graph', open: isLargeGraphPanelOpen() });
+  historyLoadingState = HL.reduce(historyLoadingState, ev);
+  showHistoryLoading(HL.isVisible(historyLoadingState));
+}
+
 function startProgressiveHistoryLoad() {
   if (oldestIndex <= 0) { teardownHistorySentinel(); return; }
   // Optional sentinel while pages remain (does not gate progressive fetch).
@@ -4540,12 +4567,21 @@ function isLargeGraphPanelOpen() {
   return panel.classList.contains('open') && panel.classList.contains('mvp-large');
 }
 
-async function loadEarlier() {
+/**
+ * loadEarlier fetches one older page of history.
+ * 🎯T300: opts.owner marks a load the owner actually asked for — the only
+ * kind that shows chrome. Callers with no owner behind them (progressive
+ * hydrate, sentinel nudge) omit it and page silently.
+ */
+async function loadEarlier(opts) {
   if (loadingEarlier || oldestIndex <= 0) return;
   // 🎯T274: never flash "Loading earlier…" over the large graph panel.
   if (isLargeGraphPanelOpen()) return;
   loadingEarlier = true;
-  showHistoryLoading(true);
+  historyLoadingEvent({
+    type: 'begin',
+    reason: window.HistoryLoading ? window.HistoryLoading.reasonFor(opts) : 'auto',
+  });
   const before = oldestIndex;
   beginScrollBookkeeping();
   try {
@@ -4593,7 +4629,7 @@ async function loadEarlier() {
   } finally {
     endScrollBookkeeping();
   }
-  showHistoryLoading(false);
+  historyLoadingEvent({ type: 'settle', older: oldestIndex });
   loadingEarlier = false;
   if (oldestIndex <= 0) teardownHistorySentinel();
 }
@@ -5698,6 +5734,8 @@ window.renderUserText = renderUserText;
 window.startProgressiveHistoryLoad = startProgressiveHistoryLoad;
 window.setupInfiniteScroll = setupInfiniteScroll;
 window.loadEarlier = loadEarlier;
+// 🎯T300: the owner-triggered seam — the one entry point that shows chrome.
+window.loadEarlierForOwner = function () { return loadEarlier({ owner: true }); };
 
 // Actuator: pin only while Tracking; re-check before every pin (incl. rAF).
 // 🎯T119.1: no-op during history replay burst (suppress parade).

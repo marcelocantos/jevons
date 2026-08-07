@@ -68,6 +68,7 @@ test-web:
 	node web/scripts/rhs_layout_test.js
 	node web/scripts/decision_log_test.js
 	node web/scripts/chat_reconnect_test.js
+	node web/scripts/history_loading_test.js
 	node web/scripts/tool_summary_test.js
 	node web/scripts/working_progress_test.js
 	node web/scripts/tool_tooltip_test.js
