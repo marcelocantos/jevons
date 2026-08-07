@@ -101,6 +101,11 @@ type Server struct {
 	// (🎯T128.1 / T128.4). Same file as GET /api/logs when SetEventJournal is wired.
 	eventJournal *eventlog.Journal
 
+	// migrator moves an existing agent between backends, carrying a
+	// handover to the successor (🎯T285). Nil = jevons_agent_migrate
+	// unregistered rather than half-working.
+	migrator Migrator
+
 	// defaultProvider is the daemon-wide claudia backend for new agents
 	// when agent_start / thread_spawn / jwork omit provider (🎯T148).
 	// Empty means cli.ResolveProvider falls through to env / grok at use time.
@@ -219,6 +224,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 
 	s.registerJwork()
 	s.registerMCPReconnect()
+	s.registerAgentMigrate()
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s

@@ -30,6 +30,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/rsi"
@@ -464,7 +465,15 @@ func main() {
 	// 🎯T148: pluggable default provider for new threads/agents.
 	fleetAdapter := fleet.NewClaudia(registry)
 	fleetAdapter.SetDefaultProvider(defaultProvider)
+	// 🎯T285: provider migration needs the session roots to find a
+	// predecessor's transcript, and a durable store to hold that pointer
+	// across the rotation that overwrites the old session id.
+	fleetAdapter.SetSessionRoots(sessionRoots)
+	fleetAdapter.SetHandoverStore(handover.NewStore(filepath.Join(cfg.StateDir, "handover")))
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
+	// 🎯T285: jevons_agent_migrate moves an agent between backends and
+	// hands the successor its predecessor's transcript.
+	mcpSrv.SetMigrator(fleetAdapter)
 	srv.SetDefaultProvider(defaultProvider)
 	btlrCfg := butler.Config{
 		Store:        threadStore,

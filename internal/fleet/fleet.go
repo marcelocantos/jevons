@@ -18,6 +18,8 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -67,6 +69,13 @@ type Claudia struct {
 	// never stopped out from under the caller — see Busy (🎯T282).
 	mu       sync.Mutex
 	inFlight map[string]int
+
+	// Provider migration (🎯T285): session roots resolve a predecessor's
+	// transcript, and handovers persists the pointer across the rotation
+	// that destroys it. Both optional — without them Launch behaves as
+	// before and migration is unavailable rather than silently cold.
+	roots     discovery.Roots
+	handovers *handover.Store
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from

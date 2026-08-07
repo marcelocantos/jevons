@@ -125,13 +125,14 @@ func main() {
 	hadDailyMCP := mcpListedFor(provider, dailyMCPName)
 
 	cfgPath := filepath.Join(stateDir, "config.yaml")
-	// sessions_dir under sandbox so discovery/scanner stay isolated too.
-	// Overseer cwd is state_dir/jevons → Grok session path is not ~/.jevons/jevons.
-	// claude_projects stays at its default (~/.claude/projects): Claude Code
-	// chooses that tree itself, keyed by workdir, so the sandbox temp workdir
-	// already isolates this run's transcripts — pointing it elsewhere would
-	// only blind discovery (🎯T213).
-	sessionsDir := filepath.Join(stateDir, "sessions")
+	// sessions_dir and claude_projects stay at their defaults (~/.grok/sessions,
+	// ~/.claude/projects). Both CLIs choose those trees themselves, keyed by
+	// workdir, so the sandbox temp workdir already isolates this run's
+	// transcripts — pointing jevons elsewhere isolates nothing and merely
+	// blinds discovery (🎯T213), which is how 🎯T285's migration journey first
+	// failed: the transcripts were there, jevons was looking in an empty
+	// sandbox directory.
+	sessionsDir := filepath.Join(homeDir(), ".grok", "sessions")
 	cfg := fmt.Sprintf(`owner_name: JourneyTester
 overseer_name: %s
 bind_addr: 127.0.0.1
@@ -222,6 +223,7 @@ persona_notes: |
 	s.run("J9-thread-spawn-direct", s.jThreadSpawnDirectRemove)
 	s.run("J10-worker-shell-tool", s.jWorkerShellTool)
 	s.run("J11-worker-transcript", s.jWorkerTranscriptVisible)
+	s.run("J12-provider-migration", s.jProviderMigration)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()

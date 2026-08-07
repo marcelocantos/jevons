@@ -14,6 +14,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // Orchestration journeys (MCP-direct against the isolated daemon).
@@ -552,6 +554,147 @@ func (s *suite) jWorkerTranscriptVisible() error {
 	}
 	return fmt.Errorf("worker transcript still empty after its turn (empty_reason=%q, provider=%s)",
 		lastReason, s.provider)
+}
+
+// jProviderMigration is the 🎯T285 continuity oracle. A session cannot
+// cross backends, so migration always means a new conversation — the test
+// is whether the successor can still do the work.
+//
+// The probe fact is planted in a DIRECT to the worker, so it exists only
+// in that agent's own transcript: not in the owner chatlog, not in the
+// persona, not in the prompt the successor is given. If the successor can
+// state it, it read its predecessor's transcript. A cold control run (no
+// handover) must fail the same probe, or the oracle proves nothing.
+func (s *suite) jProviderMigration() error {
+	id := fmt.Sprintf("orch-mig-%d", time.Now().Unix()%100000)
+	work := filepath.Join(s.stateDir, "migrate-work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id})
+	}()
+
+	// Migrate to whichever backend the isolate is NOT running.
+	to := claudia.ProviderClaude
+	if s.provider == claudia.ProviderClaude {
+		to = claudia.ProviderGrok
+	}
+
+	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": id, "workdir": work, "description": "journey migration worker",
+	}); err != nil {
+		return fmt.Errorf("spawn: %w", err)
+	}
+
+	// Plant the fact. Deliberately arbitrary: no successor could guess it,
+	// and nothing but the predecessor's transcript records it.
+	// One unhyphenated token on purpose: a hyphenated probe came back
+	// truncated at the first hyphen on the Grok direct path (🎯T286), which
+	// would fail this journey for a reply-assembly reason rather than a
+	// continuity one.
+	const passphrase = "BLUEOTTER42"
+	if _, err := s.mcpText("jevons_thread_direct", map[string]any{
+		"id": id,
+		"text": "Remember this for later — the mission passphrase is " + passphrase +
+			". Reply with exactly: STORED",
+	}); err != nil {
+		return fmt.Errorf("plant fact: %w", err)
+	}
+
+	migrateOut, err := s.mcpText("jevons_agent_migrate", map[string]any{
+		"name": id, "provider": string(to),
+	})
+	if err != nil {
+		return fmt.Errorf("migrate %s → %s: %w (%s)", s.provider, to, err, trim(migrateOut, 200))
+	}
+	if strings.Contains(strings.ToUpper(migrateOut), "COLD") {
+		return fmt.Errorf("migration carried nothing: %s", trim(migrateOut, 200))
+	}
+
+	// The successor is a different backend with an empty session. Only its
+	// predecessor's transcript holds the answer.
+	//
+	// Seeding is fire-and-forget by design — reading a long transcript must
+	// not block the migration call — so the first probe can collide with the
+	// read still in flight and come back with its acknowledgement instead of
+	// an answer. Ask again rather than calling that a failure; a successor
+	// that never read the transcript keeps failing every attempt, which is
+	// what the cold control run demonstrates.
+	// Probe with thread_direct: it queues behind the in-flight seed turn and
+	// returns once the successor answers. A busy refusal (Grok ACP) means
+	// "the read is still running", not a failure.
+	const probe = "What is the mission passphrase? Reply with the passphrase only."
+	if _, err := s.mcpText("jevons_thread_direct", map[string]any{"id": id, "text": probe}); err != nil &&
+		!agenterr.IsPromptBusy(err) {
+		return fmt.Errorf("ask successor: %w", err)
+	}
+
+	// Assert on the successor's own transcript rather than the direct's
+	// return value: the seed turn is still streaming when the probe lands,
+	// and the Grok direct path returns only the first chunk of a reply in
+	// that window (🎯T286) — a reply-assembly artefact that says nothing
+	// about continuity. The passphrase appearing anywhere in the
+	// successor's transcript can only have come from its predecessor's.
+	deadline := time.Now().Add(90 * time.Second)
+	found := false
+	for time.Now().Before(deadline) && !found {
+		payload, err := s.agentTranscriptHTTP(id)
+		if err != nil {
+			return fmt.Errorf("successor transcript: %w", err)
+		}
+		if blob, err := json.Marshal(payload); err == nil &&
+			strings.Contains(strings.ToUpper(string(blob)), passphrase) {
+			found = true
+			break
+		}
+		_, _ = s.mcpText("jevons_thread_direct", map[string]any{"id": id, "text": probe})
+		time.Sleep(5 * time.Second)
+	}
+	if !found {
+		return fmt.Errorf("successor on %s never recovered the passphrase from its predecessor's transcript", to)
+	}
+
+	// Control: an agent that received no handover must NOT be able to answer.
+	// Without this, a passphrase leaking through the persona, the standing
+	// brief, or the model's own guesswork would make the probe above pass for
+	// the wrong reason.
+	// The control gets its OWN workdir. Sharing one with the migrated agent
+	// made this control fail honestly on the first run: a resourceful agent
+	// asked for "the mission passphrase" greps what it can reach, and the
+	// predecessor's transcript is keyed by workdir — so it answered without
+	// any handover. Isolating the workdir keeps the control about what the
+	// handover carried, not about what a shell can find.
+	control := id + "-control"
+	controlWork := filepath.Join(s.stateDir, "migrate-control")
+	if err := os.MkdirAll(controlWork, 0o755); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": control})
+	}()
+	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": control, "workdir": controlWork, "description": "journey migration control (no handover)",
+	}); err != nil {
+		return fmt.Errorf("spawn control: %w", err)
+	}
+	// A control that errors or never answers has still not produced the
+	// passphrase, which is all this arm asserts — so only its transcript
+	// is judged, never the call's outcome.
+	_, _ = s.mcpText("jevons_thread_direct", map[string]any{"id": control, "text": probe})
+	controlDeadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(controlDeadline) {
+		payload, err := s.agentTranscriptHTTP(control)
+		if err != nil {
+			return fmt.Errorf("control transcript: %w", err)
+		}
+		if blob, err := json.Marshal(payload); err == nil &&
+			strings.Contains(strings.ToUpper(string(blob)), passphrase) {
+			return fmt.Errorf("control agent produced the passphrase without a handover — the probe proves nothing")
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return nil
 }
 
 // MCP/HTTP helpers live in steps.go (🎯T102 step library).
