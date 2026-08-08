@@ -148,20 +148,18 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(PrependFleetHealth(b.String(), reps)), nil
 }
 
-// notifyFleetHealth injects a fleet outage/recovery note into the overseer
-// when a notify hook is wired (live daemon). Tests may leave notify nil.
+// notifyFleetHealth delivers a fleet outage/recovery note to the overseer
+// through the single deliver-by-name path (🎯T309.3). Tests may leave the
+// overseer seam unwired, in which case delivery fails quietly here — a health
+// note is ambient chatter, not a report someone is waiting on.
 func (s *Server) notifyFleetHealth(line string) {
 	if s == nil || line == "" {
 		return
 	}
-	s.mu.Lock()
-	fn := s.notifyJevon
-	s.mu.Unlock()
-	if fn == nil {
-		return
-	}
 	// Distinct prefix so activity strip / overseer can treat as system note.
-	fn("[Fleet health] " + line)
+	if _, err := s.deliverByName(s.overseerName(), "[Fleet health] "+line, OriginAgent, false); err != nil {
+		slog.Debug("fleet health note undelivered", "err", err)
+	}
 }
 
 func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -574,7 +572,7 @@ func (s *Server) isOverseerAgent(name string) bool {
 	if name == "" {
 		return false
 	}
-	if s.transcript != nil && s.transcript.GetID != nil {
+	if s.transcript != nil && s.transcript.GetID != nil && s.registry != nil {
 		sid := s.transcript.GetID()
 		if sid != "" {
 			if def := s.registry.Def(name); def != nil && def.SessionID == sid {
@@ -582,7 +580,9 @@ func (s *Server) isOverseerAgent(name string) bool {
 			}
 		}
 	}
-	return name == s.overseerName()
+	// 🎯T309.3: name resolution is case-insensitive so an agent addressing
+	// "Jevons" reaches the overseer arm rather than the registry arm.
+	return strings.EqualFold(name, s.overseerName())
 }
 
 func (s *Server) overseerName() string {
@@ -674,22 +674,18 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 	}
 }
 
-// notify injects an agent response notification into Jevon's PTY.
+// notify delivers an agent's turn-complete report to the overseer.
 // Silent ops replies ([silent] prefix) are logged but not sent to the overseer
 // so owner chat is not spammed with "workers fine / no continue needed".
+//
+// 🎯T309.3: a shim over deliverByName addressed to the overseer, not a
+// privileged wire of its own. A worker reporting up and a PO being nudged now
+// travel the same code; the overseer arm keeps the journal + notify-queue
+// semantics that make 🎯T62's silent drop impossible.
 func (s *Server) notify(agentName, text string) {
 	if IsSilentAgentResponse(text) {
 		slog.Info("agent response suppressed (silent)",
 			"agent", agentName, "len", len(text))
-		return
-	}
-
-	s.mu.Lock()
-	fn := s.notifyJevon
-	s.mu.Unlock()
-
-	if fn == nil {
-		slog.Warn("agent response but no notify function set", "agent", agentName)
 		return
 	}
 
@@ -699,8 +695,20 @@ func (s *Server) notify(agentName, text string) {
 	}
 
 	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, text)
-	slog.Info("notifying jevon", "agent", agentName, "len", len(text))
-	fn(msg)
+	overseer := s.overseerName()
+	res, err := s.deliverByName(overseer, msg, OriginAgent, false)
+	if err != nil {
+		// Undeliverable is loud: the reply the owner is waiting on did not
+		// land, and that fact must reach the product log (🎯T61/T62).
+		slog.Error("agent response notify failed",
+			"agent", agentName, "overseer", overseer, "len", len(text), "err", err)
+		s.logLifecycle(compAgentLifecycle, "notify", "error", map[string]any{
+			"agent": agentName, "overseer": overseer, "err": err.Error(),
+		})
+		return
+	}
+	slog.Info("notifying jevon",
+		"agent", agentName, "len", len(text), "status", res.Status)
 }
 
 // broadcastAgentEvent fans a worker event to the optional progress/UI hook

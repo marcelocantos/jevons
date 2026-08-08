@@ -90,8 +90,16 @@ type AgentDeliverResult struct {
 // When a prompt is already in flight and interrupt is false, the message is
 // queued for after the turn — not a 409 silent dead-end. Does not inject the
 // fleet standing brief (MCP handleAgentSend applies EnsureFleetBrief first).
+// Owner origin by default; DeliverAgentMessageAs carries an explicit one.
 func (s *Server) DeliverAgentMessage(name, text string, interrupt bool) (AgentDeliverResult, error) {
-	res, err := s.sendToAgent(name, text, interrupt)
+	return s.DeliverAgentMessageAs(name, text, OriginOwner, interrupt)
+}
+
+// DeliverAgentMessageAs is the origin-carrying form, and the entry point the
+// HTTP send handler uses so owner↔agent and agent↔agent traffic share one
+// implementation addressed by name (🎯T309.3).
+func (s *Server) DeliverAgentMessageAs(name, text string, origin SendOrigin, interrupt bool) (AgentDeliverResult, error) {
+	res, err := s.deliverByName(name, text, origin, interrupt)
 	if err != nil {
 		return AgentDeliverResult{}, err
 	}
@@ -106,19 +114,12 @@ func (s *Server) DeliverAgentMessage(name, text string, interrupt bool) (AgentDe
 // sends text, or queues when the prompt is already in flight (🎯T111.1).
 // Does not inject the fleet standing brief — callers that need it
 // (handleAgentSend) apply EnsureFleetBrief first.
+//
+// 🎯T309.3: a shim over deliverByName, which also resolves the overseer by
+// name. In-fleet callers (worker-idle, daemon-restarted, notify) speak agent
+// origin; the owner's own turns arrive through DeliverAgentMessageAs.
 func (s *Server) sendToAgent(name, text string, interrupt bool) (agentSendResult, error) {
-	if s.registry == nil {
-		return agentSendResult{}, fmt.Errorf("agent registry not available")
-	}
-	if name == "" || text == "" {
-		return agentSendResult{}, fmt.Errorf("name and text are required")
-	}
-
-	proc, rehydrated, err := s.ensureAgentProcess(name)
-	if err != nil {
-		return agentSendResult{}, err
-	}
-	return deliverToSender(s, name, text, interrupt, proc, rehydrated)
+	return s.deliverByName(name, text, OriginAgent, interrupt)
 }
 
 // ensureAgentProcess returns a live process, rehydrating when registered
