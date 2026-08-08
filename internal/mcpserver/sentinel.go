@@ -19,6 +19,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/poproactive"
 	"github.com/marcelocantos/jevons/internal/staffops"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -568,7 +569,10 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 		}
 	}
 
-	// --- Frontier stall ---
+	// --- Frontier stall (🎯T346) ---
+	// Use ClassifyLeaf / LeafReady count, not raw graph frontier depth.
+	// Design-gated / deferred / parked / needs-owner / set_aside-parent /
+	// high-infra hubs must not fire stall:frontier file+PO thrash.
 	workdir := args.Workdir
 	if workdir == "" {
 		// Best-effort: common state is process cwd or empty.
@@ -578,29 +582,40 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 	}
 	if workdir != "" {
 		if leaves, err := loadFrontierLeaves(workdir); err == nil {
-			in.FrontierDepth = len(leaves)
-			resources.FrontierDepth = len(leaves)
-			// Stall: ready leaves exist but no running work agent with target_id.
-			if len(leaves) > 0 {
-				engaged := 0
-				if s.registry != nil {
-					for _, d := range s.registry.List() {
-						if d.Purpose != claudia.PurposeWork {
-							continue
-						}
-						if strings.TrimSpace(d.TargetID) == "" {
-							continue
-						}
-						if proc := s.registry.Get(d.Name); proc != nil && proc.Alive() {
-							engaged++
-						}
+			obs := make([]poproactive.LeafObs, 0, len(leaves))
+			for _, leaf := range leaves {
+				obs = append(obs, poproactive.LeafObs{
+					ID:             leaf.ID,
+					Tags:           leaf.Tags,
+					Name:           leaf.Name,
+					Context:        leaf.Context,
+					Cost:           leaf.Cost,
+					SetAsideDeps:   leaf.SetAsideDeps,
+					ActiveChildren: leaf.ActiveChildren,
+					ForceEngage:    poproactive.IsForceEngageTag(leaf.Tags),
+					AlreadyEngaged: len(workAgentsEngagedOnTarget(s.registry, leaf.ID, "")) > 0,
+				})
+			}
+			readyIDs := poproactive.Classify(obs).ReadyIDs
+			engaged := 0
+			if s.registry != nil {
+				for _, d := range s.registry.List() {
+					if d.Purpose != claudia.PurposeWork {
+						continue
+					}
+					if strings.TrimSpace(d.TargetID) == "" {
+						continue
+					}
+					if proc := s.registry.Get(d.Name); proc != nil && proc.Alive() {
+						engaged++
 					}
 				}
-				if engaged == 0 {
-					in.FrontierStalled = true
-					in.FrontierDetail = fmt.Sprintf("ready leaves=%d engaged_workers=0", len(leaves))
-				}
 			}
+			depth, stalled, detail := staffops.FrontierStallObsWithIDs(readyIDs, engaged)
+			in.FrontierDepth = depth
+			in.FrontierStalled = stalled
+			in.FrontierDetail = detail
+			resources.FrontierDepth = depth
 		}
 	}
 

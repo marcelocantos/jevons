@@ -244,3 +244,145 @@ func TestStaffOpsStillWorksAfterSentinelRegister(t *testing.T) {
 		t.Fatalf("staff ops broken:\n%s", toolText(res))
 	}
 }
+
+// 🎯T346: raw graph frontier of gated/parked hubs must not fire stall:frontier.
+func TestSentinelFrontierStallGatedOnlyNoFilePO(t *testing.T) {
+	dir := t.TempDir()
+	// Fixture mirrors live false-positive class: T254 parked factory, T262.4
+	// needs-owner, T112 design — all graph-ready, zero unattended-ready.
+	ledger := `
+schema_version: 1
+project: test
+targets:
+  T112:
+    name: design-gated OAuth hub
+    status: identified
+    tags: [design-gated]
+    acceptance: ["x"]
+  T254:
+    name: unattended factory hub
+    status: identified
+    tags: [parked-for-design]
+    context: "parked pending owner open"
+    acceptance: ["x"]
+  T254.2:
+    name: factory child parked
+    status: identified
+    tags: [parked]
+    acceptance: ["x"]
+  T262.4:
+    name: second-user needs owner
+    status: identified
+    tags: [needs-owner]
+    acceptance: ["x"]
+  T67:
+    name: design discussion residual
+    status: identified
+    tags: [design-discussion]
+    acceptance: ["x"]
+`
+	if err := os.WriteFile(filepath.Join(dir, "bullseye.yaml"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New("/tmp", nil, nil)
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	sigs, resources := s.sampleSentinel(SentinelLoopArgs{Server: s, Workdir: dir}, now)
+	if resources.FrontierDepth != 0 {
+		t.Fatalf("gated-only frontier_depth=%d want 0 (unattended-ready)", resources.FrontierDepth)
+	}
+	for _, sig := range sigs {
+		if sig.Kind == "frontier_stall" {
+			t.Fatalf("gated-only must not emit frontier_stall: %+v", sig)
+		}
+	}
+	res, _ := s.runSentinelCycle(SentinelLoopArgs{
+		Server: s, Workdir: dir, DryRun: true,
+		Now: func() time.Time { return now },
+	})
+	if res.Primary == staffops.ActionFilePO {
+		// Must not file+PO solely from gated frontier (no cost/other residuals).
+		for _, d := range res.Decisions {
+			if d.Signal.Kind == "frontier_stall" && d.Action == staffops.ActionFilePO {
+				t.Fatalf("gated-only file+PO on frontier_stall: %+v wire=\n%s", d, res.WireText)
+			}
+		}
+	}
+	for _, d := range res.Decisions {
+		if d.Signal.Kind == "frontier_stall" {
+			t.Fatalf("gated-only decisions must omit frontier_stall: %+v", d)
+		}
+	}
+}
+
+// 🎯T346: one true Build leaf among gated hubs → stall depth 1 citing Build id.
+func TestSentinelFrontierStallOneBuildLeafDepth1(t *testing.T) {
+	dir := t.TempDir()
+	ledger := `
+schema_version: 1
+project: test
+targets:
+  T112:
+    name: design-gated hub
+    status: identified
+    tags: [design-gated]
+    acceptance: ["x"]
+  T254:
+    name: parked factory
+    status: identified
+    tags: [parked-for-design]
+    acceptance: ["x"]
+  T262.4:
+    name: needs owner accept
+    status: identified
+    tags: [needs-owner]
+    acceptance: ["x"]
+  T500:
+    name: ordinary ready Build leaf
+    status: identified
+    acceptance: ["ship hermetic fix"]
+`
+	if err := os.WriteFile(filepath.Join(dir, "bullseye.yaml"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New("/tmp", nil, nil)
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	sigs, resources := s.sampleSentinel(SentinelLoopArgs{Server: s, Workdir: dir}, now)
+	if resources.FrontierDepth != 1 {
+		t.Fatalf("mixed frontier_depth=%d want 1 (only T500)", resources.FrontierDepth)
+	}
+	var stall *staffops.Signal
+	for i := range sigs {
+		if sigs[i].Kind == "frontier_stall" {
+			stall = &sigs[i]
+			break
+		}
+	}
+	if stall == nil {
+		t.Fatalf("expected frontier_stall; sigs=%+v", sigs)
+	}
+	if !strings.Contains(stall.Detail, "T500") {
+		t.Fatalf("stall must cite Build leaf T500: %q", stall.Detail)
+	}
+	if strings.Contains(stall.Detail, "T112") || strings.Contains(stall.Detail, "T254") || strings.Contains(stall.Detail, "T262.4") {
+		t.Fatalf("stall must not cite gated hubs: %q", stall.Detail)
+	}
+	// Full cycle should classify file+PO on stall:frontier.
+	res, _ := s.runSentinelCycle(SentinelLoopArgs{
+		Server: s, Workdir: dir, DryRun: true,
+		Now: func() time.Time { return now },
+	})
+	found := false
+	for _, d := range res.Decisions {
+		if d.Signal.Kind == "frontier_stall" && d.Action == staffops.ActionFilePO {
+			found = true
+			if !strings.Contains(d.Signal.Detail, "T500") {
+				t.Fatalf("file+PO detail missing T500: %+v", d)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("want frontier_stall file+PO; primary=%s decisions=%+v", res.Primary, res.Decisions)
+	}
+}

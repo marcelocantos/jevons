@@ -317,6 +317,111 @@ func TestBuildSignalsObserveSurfaces(t *testing.T) {
 	}
 }
 
+// 🎯T346: stall only when unattended-ready depth ≥ 1 (not raw graph depth).
+func TestFrontierStallObsReadyOnly(t *testing.T) {
+	// All gated / parked hubs → depth 0, not stalled (capacity-zero sleep OK).
+	depth, stalled, detail := FrontierStallObs(0, 0)
+	if depth != 0 || stalled {
+		t.Fatalf("gated-only: depth=%d stalled=%v detail=%q", depth, stalled, detail)
+	}
+	// Raw depth must not be faked via FrontierStalled alone without ready count.
+	sigs := BuildSignals(ObserveInput{
+		OverseerAlive:   true,
+		FrontierDepth:   0,
+		FrontierStalled: false,
+		// Simulate mis-set: stalled true but depth 0 must not emit.
+	})
+	for _, s := range sigs {
+		if s.Kind == "frontier_stall" {
+			t.Fatalf("depth=0 must not emit frontier_stall: %+v", s)
+		}
+	}
+	sigs = BuildSignals(ObserveInput{
+		OverseerAlive:   true,
+		FrontierDepth:   0,
+		FrontierStalled: true, // inconsistent — BuildSignals still requires depth>0
+	})
+	for _, s := range sigs {
+		if s.Kind == "frontier_stall" {
+			t.Fatalf("stalled+depth0 must not emit frontier_stall: %+v", s)
+		}
+	}
+
+	// One Build leaf, no engaged workers → stall depth 1.
+	depth, stalled, detail = FrontierStallObs(1, 0)
+	if depth != 1 || !stalled {
+		t.Fatalf("one ready: depth=%d stalled=%v detail=%q", depth, stalled, detail)
+	}
+	if !strings.Contains(detail, "unattended-ready leaves=1") {
+		t.Fatalf("detail=%q", detail)
+	}
+	// Engaged work cancels stall (fleet already working).
+	depth, stalled, _ = FrontierStallObs(3, 1)
+	if depth != 3 || stalled {
+		t.Fatalf("engaged: depth=%d stalled=%v", depth, stalled)
+	}
+
+	depth, stalled, detail = FrontierStallObsWithIDs([]string{"T500"}, 0)
+	if depth != 1 || !stalled {
+		t.Fatalf("with ids: depth=%d stalled=%v", depth, stalled)
+	}
+	if !strings.Contains(detail, "T500") || !strings.Contains(detail, "unattended-ready") {
+		t.Fatalf("detail=%q", detail)
+	}
+
+	// Pipeline: gated-only observe → no file+PO from frontier.
+	depth, stalled, detail = FrontierStallObs(0, 0)
+	sigs = BuildSignals(ObserveInput{
+		OverseerAlive:   true,
+		FrontierDepth:   depth,
+		FrontierStalled: stalled,
+		FrontierDetail:  detail,
+	})
+	for _, s := range sigs {
+		if s.Kind == "frontier_stall" {
+			t.Fatalf("all-gated harness must not file+PO stall: %+v", s)
+		}
+	}
+	res := RunCycle(CycleArgs{
+		Signals:  sigs,
+		Sentinel: true,
+		Now:      time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
+	})
+	if res.Primary == ActionFilePO {
+		t.Fatalf("all-gated primary must not be file+PO: %+v", res)
+	}
+
+	// One Build leaf → stall → file+PO.
+	depth, stalled, detail = FrontierStallObsWithIDs([]string{"T500"}, 0)
+	sigs = BuildSignals(ObserveInput{
+		OverseerAlive:   true,
+		FrontierDepth:   depth,
+		FrontierStalled: stalled,
+		FrontierDetail:  detail,
+	})
+	var stallSig *Signal
+	for i := range sigs {
+		if sigs[i].Kind == "frontier_stall" {
+			stallSig = &sigs[i]
+			break
+		}
+	}
+	if stallSig == nil {
+		t.Fatal("expected frontier_stall for one Build leaf")
+	}
+	if !strings.Contains(stallSig.Detail, "T500") {
+		t.Fatalf("stall detail must cite Build leaf: %q", stallSig.Detail)
+	}
+	res = RunCycle(CycleArgs{
+		Signals:  sigs,
+		Sentinel: true,
+		Now:      time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
+	})
+	if res.Primary != ActionFilePO {
+		t.Fatalf("one Build leaf primary=%s want file+PO decisions=%+v", res.Primary, res.Decisions)
+	}
+}
+
 func TestClusterEventAnomalies(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	rows := []EventRow{

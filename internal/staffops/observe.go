@@ -24,12 +24,57 @@ type ObserveInput struct {
 	Agents []AgentObs
 	// Eventlog anomaly counts in the recent window.
 	Events []EventObs
-	// Frontier stall: ready leaves without engagement.
+	// Frontier stall: unattended-ready leaves without engagement (🎯T346).
+	// FrontierDepth must be the count of ClassifyLeaf/LeafReady leaves after
+	// design/deferred/parked/needs-owner/set_aside-parent filters — not raw
+	// graph frontier depth (which still lists gated hubs).
 	FrontierDepth   int
 	FrontierStalled bool
 	FrontierDetail  string
 	// Cost alerts already shaped as optional residual signals.
 	CostAlerts []CostObs
+}
+
+// FrontierStallObs derives ObserveInput frontier stall fields from an
+// unattended-ready leaf count (🎯T346). readyCount must already exclude
+// design-gated / deferred / parked / needs-owner / set_aside-parent /
+// high-infra / parent-with-active-children leaves (ClassifyLeaf LeafReady
+// only). Raw graph frontier depth must not be passed here.
+//
+// Stall fires only when readyCount ≥ 1 and engagedWorkers == 0.
+// Capacity-zero deliberate PO sleep (T325.1) is not a frontier stall:
+// readyCount 0 (only gated/engaged remain) ⇒ not stalled.
+func FrontierStallObs(readyCount, engagedWorkers int) (depth int, stalled bool, detail string) {
+	if readyCount < 0 {
+		readyCount = 0
+	}
+	if engagedWorkers < 0 {
+		engagedWorkers = 0
+	}
+	depth = readyCount
+	if readyCount > 0 && engagedWorkers == 0 {
+		stalled = true
+		detail = fmt.Sprintf("unattended-ready leaves=%d engaged_workers=0", readyCount)
+	}
+	return depth, stalled, detail
+}
+
+// FrontierStallObsWithIDs is FrontierStallObs with ready leaf ids in Detail
+// (capped) so file+PO missions cite Build leaves, not gated hubs.
+func FrontierStallObsWithIDs(readyIDs []string, engagedWorkers int) (depth int, stalled bool, detail string) {
+	depth, stalled, detail = FrontierStallObs(len(readyIDs), engagedWorkers)
+	if !stalled || len(readyIDs) == 0 {
+		return depth, stalled, detail
+	}
+	const maxIDs = 8
+	ids := readyIDs
+	suffix := ""
+	if len(ids) > maxIDs {
+		ids = ids[:maxIDs]
+		suffix = fmt.Sprintf(" +%d more", len(readyIDs)-maxIDs)
+	}
+	detail = fmt.Sprintf("%s ready=[%s%s]", detail, strings.Join(ids, ","), suffix)
+	return depth, stalled, detail
 }
 
 // AgentObs is one fleet participant observation.
@@ -175,7 +220,7 @@ func BuildSignals(in ObserveInput) []Signal {
 		})
 	}
 
-	// Frontier stall.
+	// Frontier stall (🎯T346): only unattended-ready depth, never raw graph depth.
 	if in.FrontierStalled && in.FrontierDepth > 0 {
 		out = append(out, Signal{
 			Kind:       "frontier_stall",
@@ -183,7 +228,7 @@ func BuildSignals(in ObserveInput) []Signal {
 			Severity:   "high",
 			Mechanical: false,
 			Detail: firstNonEmpty(in.FrontierDetail,
-				fmt.Sprintf("ready leaves=%d with no engaged work", in.FrontierDepth)),
+				fmt.Sprintf("unattended-ready leaves=%d with no engaged work", in.FrontierDepth)),
 		})
 	}
 
