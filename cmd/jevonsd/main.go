@@ -563,6 +563,15 @@ func main() {
 		}
 		return res.Status, nil
 	})
+	// 🎯T309.3: the overseer arm of the fleet's single deliver-by-name path.
+	// Without this, an overseer-addressed send from the fleet layer (a worker
+	// reply, a PO reporting up, jevons_agent_send by name) would reach the
+	// overseer's process directly and bypass the owner chat journal and the
+	// notify queue — the 🎯T62 drop. Delivery itself stays implemented once,
+	// in the HTTP server, which owns those semantics.
+	mcpSrv.SetOverseerDeliver(func(text string, origin mcpserver.SendOrigin) error {
+		return srv.DeliverToOverseerAs(text, string(origin))
+	})
 	// 🎯T82: event-driven fleet panel refresh when agents.json mutates.
 	srv.WatchAgentsFile(registryPath)
 

@@ -317,3 +317,21 @@ func (s *Server) sendToOverseerAsOwner(text string) error {
 func (s *Server) sendToOverseerAsAgent(text string) error {
 	return s.SendToOverseer(text)
 }
+
+// DeliverToOverseerAs is the overseer arm of the fleet layer's single
+// deliver-by-name path (🎯T309.3), wired from main into
+// mcpserver.SetOverseerDeliver. Overseer delivery is implemented once, here:
+// the HTTP send handler reaches it through sendToNamedAgentAs, and every
+// fleet-layer caller (worker reply notify, worker-idle, daemon-restarted,
+// MCP jevons_agent_send addressed to the overseer) reaches this same code
+// through that seam. Neither side re-implements journalling, owner bubbles,
+// or the notify queue.
+//
+// Origin uses the wire values of agentSendRequest.Origin so the two packages
+// share a vocabulary without sharing a type (mcpserver does not import server).
+func (s *Server) DeliverToOverseerAs(text, origin string) error {
+	if origin == sendOriginAgent {
+		return s.sendToOverseerAsAgent(text)
+	}
+	return s.sendToOverseerAsOwner(text)
+}

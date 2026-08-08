@@ -271,3 +271,55 @@ func TestOverseerTurnsFromWireProjection(t *testing.T) {
 		t.Fatalf("second turn=%v (prefix must be stripped)", turns[2])
 	}
 }
+
+// 🎯T309.3: the exported seam main wires into mcpserver.SetOverseerDeliver
+// carries origin through to the same framing the by-name send produces, so a
+// fleet-layer caller reaching the overseer is indistinguishable from an HTTP
+// one. Origin values are the agentSendRequest wire strings.
+func TestDeliverToOverseerAsCarriesOrigin(t *testing.T) {
+	s := overseerFamilyServer(t)
+	var delivered []string
+	s.notifySender = func(text string) error {
+		delivered = append(delivered, text)
+		return nil
+	}
+	ch := make(chan string, 8)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.mu.Unlock()
+
+	// Agent origin: unmarked injection, no owner bubble — worker reply shape.
+	if err := s.DeliverToOverseerAs("worker reply", sendOriginAgent); err != nil {
+		t.Fatalf("agent origin: %v", err)
+	}
+	if len(delivered) != 1 || strings.HasPrefix(delivered[0], userTurnPrefix) {
+		t.Fatalf("delivered=%v, want unmarked notification", delivered)
+	}
+	select {
+	case line := <-ch:
+		t.Fatalf("agent-origin deliver must not paint an owner bubble: %s", line)
+	default:
+	}
+
+	// Owner origin: owner marker + owner bubble.
+	if err := s.DeliverToOverseerAs("owner words", sendOriginOwner); err != nil {
+		t.Fatalf("owner origin: %v", err)
+	}
+	if len(delivered) != 2 || !strings.HasPrefix(delivered[1], userTurnPrefix) {
+		t.Fatalf("delivered=%v, want userTurnPrefix marker", delivered)
+	}
+	select {
+	case <-ch:
+	default:
+		t.Fatal("owner-origin deliver did not broadcast an owner bubble")
+	}
+
+	// An unknown origin must not silently become an unmarked injection:
+	// default is owner, matching the HTTP handler's default.
+	if err := s.DeliverToOverseerAs("unspecified", ""); err != nil {
+		t.Fatalf("default origin: %v", err)
+	}
+	if len(delivered) != 3 || !strings.HasPrefix(delivered[2], userTurnPrefix) {
+		t.Fatalf("delivered=%v, want owner default", delivered)
+	}
+}
