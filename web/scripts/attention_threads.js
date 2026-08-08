@@ -4,9 +4,11 @@
 // Pure attention/aside model for human↔overseer chat (🎯T65 / 🎯T136).
 // DOM-free so Node hermetic tests can require() it.
 //
-// Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:, target:
+// Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:, target:, idea:
 // Case-insensitive; strip prefix before routing. No button-primary API.
 // target: opens a short-lived filing aside (🎯T93/T95).
+// idea: durable idea ledger intake without fleet aside thrash (🎯T325.3).
+// capture: dual-writes aside + idea ledger so sparks are not scrollback-only.
 //
 // 🎯T136: owner-facing chrome for asides lives in the RHS fleet tree, not
 // the top attention chip bar. chromeStack() is always empty; stack() remains
@@ -34,11 +36,11 @@
   // Legacy alias "archived" normalizes to done on clone/load.
 
   // Recognized composer prefixes (voice or type). Order irrelevant.
-  const COMMANDS = new Set(['aside', 'capture', 'park', 'main', 'pursue', 'target']);
+  const COMMANDS = new Set(['aside', 'capture', 'park', 'main', 'pursue', 'target', 'idea']);
 
   // Leading command: optional whitespace, word, optional space, colon, rest.
-  // Matches "aside: foo", "ASIDE:foo", "capture : bar", "target: file this".
-  const PREFIX_RE = /^\s*(aside|capture|park|main|pursue|target)\s*:\s*/i;
+  // Matches "aside: foo", "ASIDE:foo", "capture : bar", "target: file this", "idea: spark".
+  const PREFIX_RE = /^\s*(aside|capture|park|main|pursue|target|idea)\s*:\s*/i;
 
   function now() {
     return Date.now();
@@ -754,6 +756,28 @@
         clearComposer: true,
         composerBody: '',
         threadId: cap.id,
+        // 🎯T325.3: dual-write durable idea ledger (not scrollback-only).
+        ideaCapture: true,
+        ideaSource: 'capture',
+        ideaText: bodyTrim,
+      };
+    }
+
+    // idea: durable idea-ledger only (no fleet aside thrash) — 🎯T325.3.
+    // Focus stays main; ceremony posts to POST /api/ideas from the shell.
+    if (parsed.command === 'idea') {
+      if (!bodyTrim) {
+        return { kind: 'empty', text: '', state: s0, clearComposer: false, composerBody: null };
+      }
+      return {
+        kind: 'local',
+        text: '',
+        state: s0,
+        clearComposer: true,
+        composerBody: '',
+        ideaCapture: true,
+        ideaSource: 'idea',
+        ideaText: bodyTrim,
       };
     }
 

@@ -154,6 +154,10 @@ type Server struct {
 	// idleNudgeSweep is set by StartIdleNudgeLoop for cockpit fleet health
 	// (dead-handle sweep only — no auto-continue ladder).
 	idleNudgeSweep func(postRestart bool)
+
+	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
+	// Empty until SetIdeaStateDir; idea tools stay unregistered.
+	ideaStateDir string
 }
 
 // TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).

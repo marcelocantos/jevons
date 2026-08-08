@@ -480,6 +480,8 @@ func main() {
 	fleetAdapter.SetSessionRoots(sessionRoots)
 	fleetAdapter.SetHandoverStore(handover.NewStore(filepath.Join(cfg.StateDir, "handover")))
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
+	// 🎯T325.3: durable idea intake ledger (state_dir/ideas.json).
+	mcpSrv.SetIdeaStateDir(cfg.StateDir)
 	// 🎯T325.2: multi-provider portfolio soft-cap overlays from budget.json
 	// (session counts only; independent of cost disabled / subscription USD).
 	if bcfg, err := cost.LoadBudgetConfig(filepath.Join(cfg.StateDir, "budget.json")); err == nil && len(bcfg.ProviderSoftCaps) > 0 {

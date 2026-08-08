@@ -156,6 +156,29 @@ an open-ended attention workstream:
 4. **Build targets (🎯T193):** after filing, PO spawns a named worker same
    turn unless design-gated/parked (do not leave ledger-only).
 
+### Idea capture (🎯T325.3) — no scrollback evaporation
+
+Owner sparks must land in a **durable listable** destination within one
+ceremony — never only ephemeral main-chat scrollback.
+
+| Prefix / path | Destination |
+|---------------|-------------|
+| `idea: …` | Idea ledger only (`POST /api/ideas` / `jevons_idea_capture`) |
+| `capture: …` | Fleet aside **and** idea ledger dual-write |
+| `target: …` | Bullseye filing (T93/T95) when already a target assertion |
+| Mid-chat spark | `jevons_idea_capture` then triage |
+
+**Triage** (`jevons_idea_triage` / `PATCH /api/ideas/{id}`):
+
+- **product-shaped → `file`** then `jevons_target_file` (+ T193 spawn if Build)
+- **needs-owner / design → `park`** (no unattended implementer)
+- **life-domain parked (map §7) → `hold`** (capture ok; no implementer)
+- **rare noise → `drop`** (prefer park with reason)
+
+List with `jevons_idea_list`. Full opportunity-cost optimiser and multi
+life-domain automation stay parked. Ceremony doc:
+`docs/design/idea-capture.md`.
+
 ### Event-triggered push (🎯T34 / 🎯T114)
 
 When an observed event should wake a fleet participant (CI green, dependency

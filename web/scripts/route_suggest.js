@@ -28,6 +28,8 @@
     if (!composerResult || typeof composerResult !== 'object') return false;
     if (composerResult.routed) return true;
     if (composerResult.purpose === 'file-target') return true;
+    // 🎯T325.3 idea: local ceremony — no create/continue affordance.
+    if (composerResult.ideaCapture) return true;
     if (composerResult.threadId &&
         (composerResult.kind === 'send' || composerResult.kind === 'local')) {
       // Capture is local+threadId; aside/target are send+threadId+routed.

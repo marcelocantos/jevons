@@ -312,6 +312,20 @@ match only; no GM agent required (🎯T201 set aside). Residual:
 instructional spawn hygiene; display reparent is config/registry, not
 kill lineage.
 
+### Idea capture (🎯T325.3) — durable intake, not scrollback
+
+Owner sparks via `idea:`, `capture:`, aside, or mid-chat must land in a
+**listable** destination within one ceremony:
+
+| Path | Tool / surface |
+|------|----------------|
+| Capture spark | `jevons_idea_capture` or owner `idea:` / dual-write `capture:` |
+| List inbox | `jevons_idea_list` / `GET /api/ideas` |
+| Triage | `jevons_idea_triage`: **file** → then `jevons_target_file` (+ T193 if Build); **park** needs-owner/design; **hold** life-domain parked; **drop** rare |
+
+Do not leave product-shaped sparks as main-chat-only prose. Ceremony:
+`docs/design/idea-capture.md`. Residual: opportunity-cost optimiser parked.
+
 ### Filing reflex (🎯T130) — doctrine first, narrative second
 
 When a **real product gap**, **repeated failure mode**, or **standing

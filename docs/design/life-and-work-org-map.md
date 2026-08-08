@@ -346,7 +346,9 @@ map's job:** ensure every spark has a **bucket** and every bucket has a
 Surfaces: T93/T95 `target:` asides, T65 capture/aside, bullseye track,
 filing reflex T130, coach drip + root RSI cycle (T243). Build child
 **(3)** hardens "no evaporation" with an explicit idea→ledger path and
-oracle (covers product ideas and human-RSI sparks alike).
+oracle (covers product ideas and human-RSI sparks alike) — see
+[idea-capture.md](idea-capture.md) (🎯T325.3: `idea:` / dual-write
+`capture:`, `POST/GET /api/ideas`, `jevons_idea_*`, triage dispositions).
 
 ---
 
