@@ -588,8 +588,9 @@ type IdleNudgeSweepArgs struct {
 	ProcessRunning func(name string) bool
 	// Eligible optionally pre-filters agents before classification (🎯T315).
 	// False ⇒ skip with reason not_open_mission. Nil = every registered agent
-	// is classified. The periodic pressure path uses it to keep the T244 guard
-	// (unbound PO/boss with no work children is standing idle, not a mission).
+	// is classified. The periodic pressure path uses it for T244 (unbound
+	// PO/boss with no work children is standing idle) and T330 (PO/boss with
+	// engaged implementers is sleep-OK — no re-continue thrash).
 	Eligible func(d claudia.AgentDef) bool
 }
 
@@ -1044,9 +1045,17 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		LastTerminalReport: hooks.LooksSatisfied,
 		ProcessRunning:     deps.Running,
 		Eligible: func(d claudia.AgentDef) bool {
-			// 🎯T244 noise guard: an unbound PO/boss with no work children is
-			// standing idle, not an open mission. Implementers still qualify.
-			return HasOpenMissionForIdle(d, hooks.MissionOpen, CountWorkChildren(defs, d.Name))
+			// 🎯T244: unbound PO/boss with no work children is standing idle.
+			// 🎯T330: PO/boss with engaged implementers is sleep-OK (no thrash).
+			phaseOf := func(name string) string {
+				if activity == nil {
+					return ""
+				}
+				return activity.Get(name).Phase
+			}
+			return HasOpenMissionForIdle(d, hooks.MissionOpen,
+				CountWorkChildren(defs, d.Name),
+				CountEngagedWorkChildren(defs, d.Name, phaseOf, hooks.MissionOpen))
 		},
 	})
 
@@ -1172,9 +1181,21 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 	if def == nil {
 		return
 	}
-	// 🎯T244: pass work-child count so unbound POs with zero children skip emit.
-	workKids := CountWorkChildren(s.registry.List(), name)
-	if !HasOpenMissionForIdle(*def, nil, workKids) {
+	// 🎯T244: unbound POs with zero children skip emit.
+	// 🎯T330: PO/boss with engaged implementers is sleep-OK — no parent thrash.
+	defs := s.registry.List()
+	workKids := CountWorkChildren(defs, name)
+	s.mu.Lock()
+	activity := s.idleActivity
+	s.mu.Unlock()
+	phaseOf := func(child string) string {
+		if activity == nil {
+			return ""
+		}
+		return activity.Get(child).Phase
+	}
+	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, nil)
+	if !HasOpenMissionForIdle(*def, nil, workKids, engagedKids) {
 		return
 	}
 	overseer := s.overseerName()

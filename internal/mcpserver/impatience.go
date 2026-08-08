@@ -361,7 +361,18 @@ func (s *Server) observeForImpatience(
 		}
 	} else if purpose == claudia.PurposeWork {
 		// Unbound implementer residual (🎯T244 / T316): open until accounted for.
-		missionOpen = HasOpenMissionForIdle(d, hooks.MissionOpen, CountWorkChildren(defs, d.Name))
+		// 🎯T330: PO/boss with engaged children is not open for parent thrash.
+		phaseOf := func(name string) string {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.idleActivity == nil {
+				return ""
+			}
+			return s.idleActivity.Get(name).Phase
+		}
+		missionOpen = HasOpenMissionForIdle(d, hooks.MissionOpen,
+			CountWorkChildren(defs, d.Name),
+			CountEngagedWorkChildren(defs, d.Name, phaseOf, hooks.MissionOpen))
 	}
 
 	designGated := false

@@ -246,3 +246,63 @@ func TestIdlePressureSweepSkipsUnboundPOWithoutChildren(t *testing.T) {
 		t.Fatalf("want not_open_mission skip, got %+v", r)
 	}
 }
+
+// 🎯T330: idle PO with an engaged implementer child must not be re-pressured
+// (sleep-OK); the child may still receive pressure when it is idle+open.
+func TestIdlePressureSweepSkipsPOWithEngagedChildren(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(3000, 0)
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []claudia.AgentDef{
+		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer,
+			Materialized: true, Provider: "grok", AutoStart: true},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-p", Purpose: claudia.PurposeWork,
+			Materialized: true, Provider: "grok", AutoStart: true},
+		// Mid-turn implementer (target bound + working) — the T329 failure mode.
+		{Name: "jv-t329-inspect", WorkDir: dir, SessionID: "s-w", Purpose: claudia.PurposeWork,
+			Parent: "jevons-po", Materialized: true, Provider: "grok", AutoStart: true, TargetID: "T329"},
+	} {
+		if err := reg.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	activity := NewIdleActivityTracker()
+	activity.by["jevons-po"] = IdleActivity{Phase: "idle", Updated: now.Add(-time.Hour)}
+	activity.by["jv-t329-inspect"] = IdleActivity{Phase: "working", Updated: now}
+	ledger, err := OpenIdleNudgeLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{registry: reg, idleActivity: activity, idleNudgeLedger: ledger}
+
+	var pushed []string
+	reps := s.idlePressureSweep(idlePressureDeps{
+		Now: now,
+		Running: func(name string) bool {
+			return name == "jevons-po" || name == "jv-t329-inspect"
+		},
+		Push: func(target, event, text string) error {
+			pushed = append(pushed, target)
+			return nil
+		},
+	})
+	for _, p := range pushed {
+		if p == "jevons-po" {
+			t.Fatalf("PO with engaged child must not be re-pressured; pushes=%v", pushed)
+		}
+	}
+	if r := reportFor(reps, "jevons-po"); r.Reason != "not_open_mission" {
+		t.Fatalf("want not_open_mission for sleep-OK PO, got %+v", r)
+	}
+	// Working child is in_progress — not nudged either (separate gate).
+	if r := reportFor(reps, "jv-t329-inspect"); r.Reason != "" && r.Reason != "in_progress" && r.Action != IdleNudgeSkip {
+		// Eligible passes for implementer; classifier should skip working.
+		if r.Reason != IdleSkipInProgress {
+			t.Fatalf("working child report=%+v want in_progress skip", r)
+		}
+	}
+}
