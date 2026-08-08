@@ -388,7 +388,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("/ws/provider", s.handleProviderFeed)    // 🎯T27.5 feed channel
-	mux.HandleFunc("GET /api/providers", s.handleProviders) // 🎯T27.3/T27.5 observability
+	mux.HandleFunc("GET /api/providers", s.handleProviders)       // 🎯T27.3/T27.5 observability
+	mux.HandleFunc("GET /api/desktop/head", s.handleDesktopHead) // 🎯T27.7 tray head model
 	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe)          // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T285

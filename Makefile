@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd
+all: jevonsd jevons-head
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -18,6 +18,19 @@ jevonsd: bin/jevonsd
 bin/jevonsd: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
 	go build $(LDFLAGS) -o bin/jevonsd ./cmd/jevonsd
+
+# Desktop menu-bar/tray head (🎯T27.7) — pure-Go model client.
+# macOS chrome: make macos-head (Swift status item).
+.PHONY: jevons-head
+jevons-head: bin/jevons-head
+
+bin/jevons-head: $(GO_SRC)
+	@mkdir -p bin
+	go build $(LDFLAGS) -o bin/jevons-head ./cmd/jevons-head
+
+.PHONY: macos-head
+macos-head:
+	cd macos/JevonsHead && swift build -c release
 
 # ── Run ──────────────────────────────────────────────
 .PHONY: run run-jevonsd

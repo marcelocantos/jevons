@@ -161,13 +161,24 @@ func (r *Registry) ModelFeed(providerID, feed string) []FeedEvent {
 // (in-process) Registered — the wire path: FeedHub stores the surfaces
 // from each attached provider's manifest here so the 🎯T27.6 producer
 // composes them. Surfaces persist across a feed disconnect (last-known
-// UI), matching the model's last-known-state semantics.
+// UI), matching the model's last-known-state semantics — until
+// ClearSurfaces (provider disabled / removed from the desired set).
 func (r *Registry) SetSurfaces(id string, ui []UISurface) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cp := make([]UISurface, len(ui))
 	copy(cp, ui)
 	r.surfaces[id] = cp
+}
+
+// ClearSurfaces drops the composed UI for a provider. Used when a
+// provider is disabled or removed from the desired set so the desktop
+// head's section disappears (🎯T27.7 toggle). Distinct from a transient
+// feed disconnect, which keeps last-known surfaces.
+func (r *Registry) ClearSurfaces(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.surfaces, id)
 }
 
 // ComposedUI returns a map of provider id → surfaces (with roots) for the

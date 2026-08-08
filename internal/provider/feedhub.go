@@ -180,10 +180,12 @@ func NewFeedHub(args FeedHubArgs) *FeedHub {
 // SetDecls seeds/refreshes status placeholders for the declared desired
 // set, so a provider that never attaches its feed channel surfaces as
 // disconnected rather than being invisible. Removed providers' statuses
-// are pruned unless a connection is live.
+// are pruned unless a connection is live. Providers that leave the
+// enabled set also lose their composed UI surfaces so the desktop head
+// (🎯T27.7) drops their section on toggle — distinct from a transient
+// feed disconnect, which keeps last-known surfaces.
 func (h *FeedHub) SetDecls(decls []config.ProviderDecl) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	declared := make(map[string]bool, len(decls))
 	for _, d := range decls {
 		if !d.Enabled() {
@@ -201,6 +203,20 @@ func (h *FeedHub) SetDecls(decls []config.ProviderDecl) {
 		if !declared[id] && h.conns[id] == nil {
 			delete(h.status, id)
 		}
+	}
+	h.mu.Unlock()
+
+	// Clear composed UI for providers not in the enabled desired set so
+	// N enabled → N sections holds under toggle (registry is separate lock).
+	uiChanged := false
+	for pid := range h.registry.ComposedUI() {
+		if !declared[pid] {
+			h.registry.ClearSurfaces(pid)
+			uiChanged = true
+		}
+	}
+	if uiChanged {
+		h.notifyUI()
 	}
 }
 

@@ -434,7 +434,7 @@ Every downstream target and every real provider is verified by
 | MCP client → re-export into `/mcp` | 🎯T27.4 |
 | feed ingestion → aggregated live model | 🎯T27.5 |
 | server-side UI producer, multi-provider compose | 🎯T27.6 |
-| desktop menu-bar/tray head over the aggregate | 🎯T27.7 |
+| desktop menu-bar/tray head over the aggregate | 🎯T27.7 — `internal/desktop` MenuModel (N providers → N sections), `cmd/jevons-head`, `GET /api/desktop/head`, macOS `macos/JevonsHead` status item; mnemo T85/T86/T89 supersession inventory |
 | mnemo as first live provider (passes this suite) | 🎯T27.8 |
 | automation-liveness on provider feeds | 🎯T27.9 |
 
