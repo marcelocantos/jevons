@@ -536,6 +536,111 @@
     return { immediate: near, deferred: far };
   }
 
+  // ── Progressive rematerialize (🎯T336 Page Up) ─────────────────────
+  // Rematerialize is expensive (parseAssistantMarkdown / renderBody). Page Up
+  // brings many dematerialized shells into the band at once; Page Down stays
+  // near the live end where shells are already material — one-sided lag.
+  // Bound work per animation frame; paint strict-viewport first.
+
+  // Soft cap: enough for a short screenful, not a full 800px buffer thrash.
+  const REMATERIALIZE_PER_FRAME = 6;
+
+  // Distance-based priority: 0 = any pixel in strict viewport (paint first);
+  // larger = farther outside (buffer / progressive fill).
+  function rematerializePriority(top, height, scrollTop, clientHeight) {
+    const t = Number(top) || 0;
+    const h = Number(height) || 0;
+    const st = Number(scrollTop) || 0;
+    const ch = Number(clientHeight) || 0;
+    const bot = t + h;
+    const viewBot = st + ch;
+    if (bot > st && t < viewBot) return 0;
+    if (bot <= st) return 1 + (st - bot);
+    return 1 + (t - viewBot);
+  }
+
+  /**
+   * Plan one rAF of rematerializations.
+   * pending: [{ index?, top, height, ...el }] — shells that want content.
+   * Returns thisFrame (≤ maxPerFrame, viewport-first) and remaining.
+   * syncWouldThrash is the oracle flag: unbounded sync rematerialize would
+   * exceed the per-frame budget (Page-Up thrash).
+   */
+  function planRematerializeFrame(pending, scrollTop, clientHeight, maxPerFrame) {
+    const max = maxPerFrame > 0 ? maxPerFrame : REMATERIALIZE_PER_FRAME;
+    const list = Array.isArray(pending) ? pending.slice() : [];
+    list.sort(function (a, b) {
+      const pa = rematerializePriority(a.top, a.height, scrollTop, clientHeight);
+      const pb = rematerializePriority(b.top, b.height, scrollTop, clientHeight);
+      if (pa !== pb) return pa - pb;
+      const ia = a.index != null ? a.index : 0;
+      const ib = b.index != null ? b.index : 0;
+      return ia - ib;
+    });
+    return {
+      thisFrame: list.slice(0, max),
+      remaining: list.slice(max),
+      syncWouldThrash: list.length > max,
+      maxPerFrame: max,
+    };
+  }
+
+  /**
+   * Simulate Page-Up-equivalent band enter after scrolling up by ~0.8 viewport
+   * from a bottom-pinned material set. Oracle for thrash: enter count is large
+   * while a progressive plan bounds thisFrame ≤ REMATERIALIZE_PER_FRAME.
+   *
+   * opts: { n, avgHeight, clientHeight, buffer, pageFactor, maxPerFrame }
+   */
+  function pageUpRematerializeBudget(opts) {
+    const o = opts || {};
+    const n = Math.max(0, o.n | 0);
+    const h = o.avgHeight > 0 ? o.avgHeight : DEFAULT_ESTIMATE_HEIGHT;
+    const ch = o.clientHeight > 0 ? o.clientHeight : 600;
+    const buf = typeof o.buffer === 'number' ? o.buffer : DEFAULT_BUFFER;
+    const pageFactor = o.pageFactor > 0 ? o.pageFactor : 0.8;
+    const maxPerFrame = o.maxPerFrame > 0 ? o.maxPerFrame : REMATERIALIZE_PER_FRAME;
+    if (n === 0) {
+      return {
+        enterCount: 0,
+        thisFrameCount: 0,
+        syncWouldThrash: false,
+        maxPerFrame: maxPerFrame,
+      };
+    }
+    const tops = [];
+    for (let i = 0; i < n; i++) {
+      tops.push({ top: i * h, height: h });
+    }
+    const totalH = n * h;
+    const bottomScroll = Math.max(0, totalH - ch);
+    const materialAtBottom = new Set(visibleIndices(tops, bottomScroll, ch, buf));
+    // Page Up: scroll up by ~0.8 viewport (matches index.html PageUp handler).
+    const pageUpScroll = Math.max(0, bottomScroll - ch * pageFactor);
+    const wantAfter = visibleIndices(tops, pageUpScroll, ch, buf);
+    const enter = [];
+    for (let i = 0; i < wantAfter.length; i++) {
+      const idx = wantAfter[i];
+      if (!materialAtBottom.has(idx)) {
+        enter.push({
+          index: idx,
+          top: tops[idx].top,
+          height: tops[idx].height,
+        });
+      }
+    }
+    const plan = planRematerializeFrame(enter, pageUpScroll, ch, maxPerFrame);
+    return {
+      enterCount: enter.length,
+      thisFrameCount: plan.thisFrame.length,
+      remainingCount: plan.remaining.length,
+      syncWouldThrash: plan.syncWouldThrash,
+      maxPerFrame: maxPerFrame,
+      pageUpScroll: pageUpScroll,
+      bottomScroll: bottomScroll,
+    };
+  }
+
   // ── Events that drive residency (documentation + test oracle) ──────
 
   function residencyDrivers() {
@@ -615,6 +720,12 @@
     shouldInvalidateSizeCache: shouldInvalidateSizeCache,
     remeasureOrder: remeasureOrder,
     residencyDrivers: residencyDrivers,
+
+    // 🎯T336: progressive rematerialize (Page Up thrash bound).
+    REMATERIALIZE_PER_FRAME: REMATERIALIZE_PER_FRAME,
+    rematerializePriority: rematerializePriority,
+    planRematerializeFrame: planRematerializeFrame,
+    pageUpRematerializeBudget: pageUpRematerializeBudget,
 
     // 🎯T119.1 / reload-reconnect: suppress stick-to-bottom during WS
     // chronological replay; one pin after history_meta (or idle end).

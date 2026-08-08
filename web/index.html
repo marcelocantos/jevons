@@ -4527,11 +4527,15 @@ function collapseAutoExpandedOffScreen() {
         })
       : (top + h <= scrollTop || top >= scrollTop + clientH);
     if (!should) continue;
-    // If dematerialised while still expanded, rematerialise before clip so
-    // body/minHeight stay in sync (same care as pre-T246 T77 path).
-    if (el.classList.contains('virt-shell')) rematerializeMsg(el);
+    // 🎯T336: if already a shell, only flip expand flags — rematerialize later
+    // will paint clipped. Avoid sync rematerialize thrash on Page Up when many
+    // auto-expanded tall bubbles leave the fold.
     el._autoExpanded = false;
     el._expanded = false;
+    if (el.classList.contains('virt-shell')) {
+      changed = true;
+      continue;
+    }
     renderBody(el, el._fullRole, el._fullText);
     changed = true;
   }
@@ -5733,12 +5737,17 @@ msgs.addEventListener('scroll', () => {
 
 // 🎯T56/T119: shell+content — dematerialise off-screen bodies; size cache
 // freezes height at measured width so rematerialize does not reflow-jump.
+// 🎯T336: rematerialize is rAF-batched and capped per frame (Page Up thrash);
+// dematerialize stays sync (cheap freeze). Progressive paint: viewport first.
 let _virtRaf = 0;
 let _virtIdSeq = 0;
 const virtSizeCache = (typeof VirtualList !== 'undefined' && VirtualList.createSizeCache)
   ? VirtualList.createSizeCache()
   : Object.create(null);
 let _virtContainerWidth = 0;
+// Progressive rematerialize queue (elements still virt-shell that want content).
+let _rematQueue = [];
+let _rematRaf = 0;
 
 function msgVirtId(el) {
   if (!el._virtId) el._virtId = 'm' + (++_virtIdSeq);
@@ -5755,6 +5764,73 @@ function scheduleVirtualize() {
     virtualizeMessages();
   });
 }
+
+// 🎯T336: enqueue shell for progressive rematerialize (viewport-first, cap/frame).
+// Does not call loadEarlier — paint must not wait on history network.
+function scheduleRematerialize(el) {
+  if (!el || !el.classList || !el.classList.contains('virt-shell')) return;
+  if (el._rematQueued) return;
+  el._rematQueued = true;
+  _rematQueue.push(el);
+  if (!_rematRaf) {
+    _rematRaf = requestAnimationFrame(flushRematerializeFrame);
+  }
+}
+
+function flushRematerializeFrame() {
+  _rematRaf = 0;
+  if (!_rematQueue.length) return;
+  const scrollTop = msgs.scrollTop;
+  const clientH = msgs.clientHeight;
+  const max = (typeof VirtualList !== 'undefined' && VirtualList.REMATERIALIZE_PER_FRAME)
+    ? VirtualList.REMATERIALIZE_PER_FRAME
+    : 6;
+  const pending = [];
+  for (let i = 0; i < _rematQueue.length; i++) {
+    const el = _rematQueue[i];
+    if (!el || !el.isConnected || !el.classList.contains('virt-shell')) {
+      if (el) el._rematQueued = false;
+      continue;
+    }
+    // Live stream: always rematerialize immediately (skip cap).
+    if (typeof el._streamRaw === 'string') {
+      el._rematQueued = false;
+      rematerializeMsg(el);
+      continue;
+    }
+    pending.push({
+      el: el,
+      index: i,
+      top: el.offsetTop,
+      height: el.offsetHeight,
+    });
+  }
+  const plan = (typeof VirtualList !== 'undefined' && VirtualList.planRematerializeFrame)
+    ? VirtualList.planRematerializeFrame(pending, scrollTop, clientH, max)
+    : { thisFrame: pending.slice(0, max), remaining: pending.slice(max) };
+  beginScrollBookkeeping();
+  try {
+    for (let j = 0; j < plan.thisFrame.length; j++) {
+      const item = plan.thisFrame[j];
+      item.el._rematQueued = false;
+      rematerializeMsg(item.el);
+    }
+    _rematQueue = [];
+    for (let k = 0; k < plan.remaining.length; k++) {
+      const rest = plan.remaining[k];
+      // Keep queued flag; re-enqueue for next frame.
+      rest.el._rematQueued = true;
+      _rematQueue.push(rest.el);
+    }
+  } finally {
+    endScrollBookkeeping();
+  }
+  if (_rematQueue.length) {
+    _rematRaf = requestAnimationFrame(flushRematerializeFrame);
+  }
+  updateJumpFab();
+}
+
 let _virtualizing = false;
 function virtualizeMessages() {
   if (typeof VirtualList === 'undefined') return;
@@ -5772,8 +5848,12 @@ function virtualizeMessages() {
     const scrollTop = msgs.scrollTop;
     const clientH = msgs.clientHeight;
     const buffer = VirtualList.DEFAULT_BUFFER || 800;
+    const max = VirtualList.REMATERIALIZE_PER_FRAME || 6;
     const children = msgs.children;
-    // Preserve scrollHeight while swapping shells: measure first.
+    // 🎯T336: collect shells that need content; paint first batch this frame
+    // (viewport-first); defer the rest via rAF progressive fill. Dematerialize
+    // stays synchronous (height freeze is cheap). No loadEarlier here.
+    const pending = [];
     for (let i = 0; i < children.length; i++) {
       const el = children[i];
       if (!el.classList || !el.classList.contains('msg')) continue;
@@ -5786,10 +5866,29 @@ function virtualizeMessages() {
       const h = el.offsetHeight;
       const want = VirtualList.shouldMaterialize(top, h, scrollTop, clientH, buffer);
       if (want) {
-        if (el.classList.contains('virt-shell')) rematerializeMsg(el);
+        if (el.classList.contains('virt-shell')) {
+          pending.push({ el: el, index: i, top: top, height: h });
+        }
       } else if (!el.classList.contains('virt-shell')) {
+        if (el._rematQueued) {
+          el._rematQueued = false;
+          const qi = _rematQueue.indexOf(el);
+          if (qi >= 0) _rematQueue.splice(qi, 1);
+        }
         dematerializeMsg(el);
       }
+    }
+    const plan = VirtualList.planRematerializeFrame
+      ? VirtualList.planRematerializeFrame(pending, scrollTop, clientH, max)
+      : { thisFrame: pending.slice(0, max), remaining: pending.slice(max) };
+    for (let j = 0; j < plan.thisFrame.length; j++) {
+      const item = plan.thisFrame[j];
+      item.el._rematQueued = false;
+      rematerializeMsg(item.el);
+    }
+    // Merge remaining into progressive queue (dedupe via _rematQueued).
+    for (let k = 0; k < plan.remaining.length; k++) {
+      scheduleRematerialize(plan.remaining[k].el);
     }
     // Virtualise can change heights; re-pin only if still Tracking.
     if (isTracking()) scrollDown();
@@ -5925,10 +6024,12 @@ if (jumpBottomBtn) {
   jumpBottomBtn.addEventListener('mousedown', e => e.preventDefault());
 }
 
-// Expose for hermetic tests (🎯T56 / T76 / T119 / T246).
+// Expose for hermetic tests (🎯T56 / T76 / T119 / T246 / T336).
 window.virtualizeMessages = virtualizeMessages;
 window.dematerializeMsg = dematerializeMsg;
 window.rematerializeMsg = rematerializeMsg;
+window.scheduleRematerialize = scheduleRematerialize;
+window.flushRematerializeFrame = flushRematerializeFrame;
 window.scheduleVirtualize = scheduleVirtualize;
 window.collapseAutoExpandedOffScreen = collapseAutoExpandedOffScreen;
 window.expandInViewNearEnd = expandInViewNearEnd;
@@ -7470,6 +7571,9 @@ document.addEventListener('keydown', e => {
     }
   }
   if (e.key === 'PageUp') {
+    // 🎯T336: scroll only — never await history network; paint must not wait.
+    // Sentinel/progressive hydrate stay async. Virtualize on the scroll event
+    // rAF-batches rematerialize (viewport-first, cap/frame).
     e.preventDefault();
     leaveTrackBottom();
     msgs.scrollBy(0, -msgs.clientHeight * 0.8);

@@ -647,6 +647,128 @@ test('T119 estimate height for unmeasured shells (lazy)', function () {
   assert.ok(long <= 480);
 });
 
+// ── 🎯T336 progressive rematerialize / Page Up thrash oracle ─────────
+
+test('T336 rematerializePriority: strict viewport first', function () {
+  // Inside viewport → 0
+  assert.strictEqual(VL.rematerializePriority(100, 50, 0, 300), 0);
+  // Fully above → positive distance
+  assert.ok(VL.rematerializePriority(0, 50, 200, 300) > 0);
+  // Fully below → positive distance
+  assert.ok(VL.rematerializePriority(500, 50, 0, 300) > 0);
+  // Closer above beats farther above
+  const nearAbove = VL.rematerializePriority(100, 50, 200, 300); // bot=150, st=200 → 51
+  const farAbove = VL.rematerializePriority(0, 50, 200, 300);     // bot=50 → 151
+  assert.ok(nearAbove < farAbove);
+});
+
+test('T336 planRematerializeFrame: caps per frame; viewport-first order', function () {
+  const pending = [
+    { index: 0, top: 0, height: 40 },       // far above
+    { index: 1, top: 200, height: 40 },     // in viewport (scroll 180, ch 100)
+    { index: 2, top: 240, height: 40 },     // in viewport
+    { index: 3, top: 400, height: 40 },     // below
+    { index: 4, top: 160, height: 40 },     // near / partial
+    { index: 5, top: 280, height: 40 },     // below-ish
+    { index: 6, top: 320, height: 40 },
+    { index: 7, top: 360, height: 40 },
+  ];
+  const plan = VL.planRematerializeFrame(pending, 180, 100, 3);
+  assert.strictEqual(plan.maxPerFrame, 3);
+  assert.strictEqual(plan.thisFrame.length, 3);
+  assert.strictEqual(plan.remaining.length, pending.length - 3);
+  assert.strictEqual(plan.syncWouldThrash, true);
+  // First batch must prefer in-viewport (priority 0)
+  plan.thisFrame.forEach(function (item) {
+    const p = VL.rematerializePriority(item.top, item.height, 180, 100);
+    assert.strictEqual(p, 0, 'thisFrame item must be strict-viewport, got p=' + p + ' idx=' + item.index);
+  });
+  // Unbounded sync is rejected by oracle
+  const syncAll = VL.planRematerializeFrame(pending, 180, 100, pending.length);
+  assert.strictEqual(syncAll.syncWouldThrash, false);
+  assert.strictEqual(syncAll.thisFrame.length, pending.length);
+});
+
+test('T336 pageUpRematerializeBudget: thrash oracle fails unbounded sync path', function () {
+  // Long transcript, short bubbles, large buffer → many shells enter on Page Up.
+  const budget = VL.pageUpRematerializeBudget({
+    n: 200,
+    avgHeight: 48,
+    clientHeight: 600,
+    buffer: 800,
+    pageFactor: 0.8,
+    maxPerFrame: VL.REMATERIALIZE_PER_FRAME,
+  });
+  assert.ok(budget.enterCount > VL.REMATERIALIZE_PER_FRAME,
+    'Page Up must enter more shells than one frame cap (got enter=' + budget.enterCount + ')');
+  assert.strictEqual(budget.syncWouldThrash, true,
+    'unbounded sync rematerialize of Page-Up enter set must thrash');
+  assert.ok(budget.thisFrameCount <= VL.REMATERIALIZE_PER_FRAME);
+  assert.strictEqual(budget.thisFrameCount, VL.REMATERIALIZE_PER_FRAME);
+  assert.strictEqual(budget.remainingCount, budget.enterCount - budget.thisFrameCount);
+  // Progressive multi-frame fill covers all enters
+  let covered = budget.thisFrameCount;
+  let remaining = budget.enterCount - budget.thisFrameCount;
+  let frames = 1;
+  while (remaining > 0 && frames < 50) {
+    const step = Math.min(VL.REMATERIALIZE_PER_FRAME, remaining);
+    covered += step;
+    remaining -= step;
+    frames++;
+  }
+  assert.strictEqual(covered, budget.enterCount);
+  assert.ok(frames > 1, 'progressive fill spans multiple frames');
+});
+
+test('T336 pageUpRematerializeBudget: small jump does not thrash', function () {
+  // Few messages all already near material band at bottom.
+  const budget = VL.pageUpRematerializeBudget({
+    n: 8,
+    avgHeight: 80,
+    clientHeight: 600,
+    buffer: 800,
+    pageFactor: 0.8,
+    maxPerFrame: VL.REMATERIALIZE_PER_FRAME,
+  });
+  // Entire list fits in band at bottom; Page Up may enter 0–few.
+  assert.ok(budget.enterCount <= VL.REMATERIALIZE_PER_FRAME,
+    'small list enter=' + budget.enterCount);
+  assert.strictEqual(budget.syncWouldThrash, false);
+});
+
+test('T336 REMATERIALIZE_PER_FRAME is a positive bound', function () {
+  assert.ok(VL.REMATERIALIZE_PER_FRAME > 0);
+  assert.ok(VL.REMATERIALIZE_PER_FRAME <= 20, 'cap stays small enough to bound main-thread work');
+});
+
+// Source contract: index.html wires progressive rematerialize + PageUp no loadEarlier.
+test('T336 index wires planRematerializeFrame; PageUp does not call loadEarlier', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('planRematerializeFrame') >= 0, 'virtualize uses planner');
+  assert.ok(html.indexOf('scheduleRematerialize') >= 0, 'progressive remat schedule');
+  assert.ok(html.indexOf('REMATERIALIZE_PER_FRAME') >= 0, 'per-frame cap wired');
+  assert.ok(html.indexOf('flushRematerializeFrame') >= 0, 'rAF flush path');
+  // PageUp handler: scrollBy only — strip comments then forbid loadEarlier calls.
+  const pu = html.indexOf("e.key === 'PageUp'");
+  assert.ok(pu >= 0, 'PageUp handler present');
+  const branchEnd = html.indexOf("e.key === 'PageDown'", pu);
+  const branch = html.slice(pu, branchEnd > pu ? branchEnd : pu + 400);
+  const codeOnly = branch.replace(/\/\/[^\n]*/g, '');
+  assert.ok(codeOnly.indexOf('scrollBy') >= 0, 'PageUp scrolls');
+  assert.ok(!/\bloadEarlier\b/.test(codeOnly), 'PageUp code must not reference loadEarlier');
+  assert.ok(codeOnly.indexOf('leaveTrackBottom') >= 0, 'PageUp leaves track');
+  // Collapse-off-screen must not rematerialize virt-shells synchronously.
+  const colStart = html.indexOf('function collapseAutoExpandedOffScreen');
+  assert.ok(colStart >= 0);
+  const colEnd = html.indexOf('function expandInViewNearEnd', colStart);
+  const colBody = html.slice(colStart, colEnd > colStart ? colEnd : colStart + 2000);
+  // Flag flip without rematerializeMsg on virt-shell path (T336).
+  assert.ok(colBody.indexOf("classList.contains('virt-shell')") >= 0);
+  assert.ok(colBody.indexOf('continue') >= 0, 'shell collapse skips sync paint');
+});
+
 // ── History replay pin suppress (reload/reconnect) ───────────────────
 
 test('T119.1 suppress pin during replay; final pin at bottom', function () {
