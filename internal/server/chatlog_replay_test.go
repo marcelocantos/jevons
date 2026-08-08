@@ -152,14 +152,24 @@ func TestHistoryMetaWorkingLevel(t *testing.T) {
 	}
 	readMeta(false)
 
-	// Open turn level.
+	// Open owner-turn level (🎯T291: waiting alone / fleet chew is not working).
 	s.mu.Lock()
 	s.waiting = true
+	s.overseerOwnerTurn = true
 	s.mu.Unlock()
 	if !s.overseerWorkingLevel() {
-		t.Fatal("expected working level when waiting")
+		t.Fatal("expected working level when owner turn waiting")
 	}
 	readMeta(true)
+
+	// Fleet-only chew must not report working on history_meta.
+	s.mu.Lock()
+	s.overseerOwnerTurn = false
+	s.mu.Unlock()
+	if s.overseerWorkingLevel() {
+		t.Fatal("fleet-only waiting must not be owner working level")
+	}
+	readMeta(false)
 }
 
 // TestChatLogSurvivesServerRestart: a second Server over the same log

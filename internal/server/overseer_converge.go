@@ -286,6 +286,7 @@ func (s *Server) cockpitUnstickBusy(state *cockpitState, obs cockpitObs) error {
 		// Settle server + clients even if interrupt is racy.
 		s.mu.Lock()
 		s.waiting = false
+		s.overseerOwnerTurn = false // 🎯T291
 		s.turnBuf = ""
 		s.overseerLastProgress = time.Now()
 		s.mu.Unlock()
@@ -366,6 +367,7 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 	s.AttachOverseer(agent)
 	s.mu.Lock()
 	s.waiting = false
+	s.overseerOwnerTurn = false // 🎯T291
 	s.turnBuf = ""
 	s.overseerLastProgress = time.Now()
 	s.mu.Unlock()

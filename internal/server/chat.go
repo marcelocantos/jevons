@@ -356,14 +356,22 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 }
 
 // overseerWorkingLevel reports whether an owner-visible overseer turn is
-// currently in flight (🎯T272). Level-trigger sample for history_meta:
-// waiting flag, open stream id, or claudia PromptInFlight.
+// currently in flight (🎯T272 + 🎯T291). Level-trigger sample for history_meta.
+//
+// Fleet note chews set waiting / may keep PromptInFlight, but they must NOT
+// light owner working chrome. Only an in-flight owner turn (overseerOwnerTurn)
+// counts — after the owner's reply seals, chrome stays clear while the
+// overseer drains the fleet backlog.
 func (s *Server) overseerWorkingLevel() bool {
 	s.mu.RLock()
+	ownerTurn := s.overseerOwnerTurn
 	waiting := s.waiting
 	streamOpen := s.overseerStreamID != ""
 	proc := s.proc
 	s.mu.RUnlock()
+	if !ownerTurn {
+		return false
+	}
 	if waiting || streamOpen {
 		return true
 	}
@@ -374,6 +382,11 @@ func (s *Server) overseerWorkingLevel() bool {
 }
 
 // SendToOverseer delivers text to the current overseer process.
+//
+// 🎯T62: never drop on busy — enqueue and drain.
+// 🎯T291: fleet notes coalesce per worker; owner turns jump ahead of the
+// fleet backlog and interrupt a fleet-only in-flight prompt so the owner's
+// words are not deferred behind idle churn.
 func (s *Server) SendToOverseer(text string) error {
 	// The owner talking to Jevons is the strongest owner-present signal —
 	// feed the budget dead-man's switch so it never stops a fleet the
@@ -381,24 +394,66 @@ func (s *Server) SendToOverseer(text string) error {
 	if s.activityHook != nil {
 		s.activityHook()
 	}
-	// Queue rather than send directly: the overseer's ACP session handles
-	// one prompt at a time, so a note delivered while it is mid-turn returns
-	// "prompt already in flight". Historically that error was logged and the
-	// note DROPPED — silently losing worker replies (🎯T62). Enqueue and try
-	// to drain; anything not delivered now is retried on the next
-	// turn-complete (HandleAgentEvent).
+	owner := isOwnerNotifyText(text)
+
 	s.mu.Lock()
-	s.notifyQueue = append(s.notifyQueue, text)
+	if owner {
+		// Owner turns never coalesce with each other; append then peel first
+		// at drain (partition). Keep enqueue order among owners.
+		s.notifyQueue = append(s.notifyQueue, text)
+	} else {
+		s.notifyQueue = coalesceNotifyEnqueue(s.notifyQueue, text)
+	}
 	depth := len(s.notifyQueue)
+	// Fleet-only busy: interrupt so the owner can take the session (T291).
+	// Do not interrupt an owner turn — cancel-and-send is the chat client's job.
+	fleetBusy := s.waiting && !s.overseerOwnerTurn
 	s.mu.Unlock()
+
 	// 🎯T128.3: enqueue is Info so queue growth is visible at production default.
 	slog.Info("notify_queue",
 		"component", "notify_queue",
 		"decision", "enqueue",
 		"depth", depth,
+		"owner", owner,
 	)
+
+	if owner && fleetBusy {
+		s.interruptOverseerForOwner()
+		// Terminal stop will drain with owner-first partition; still try now
+		// in case the session is already free.
+	}
+
 	s.drainOverseerNotes()
 	return nil
+}
+
+// interruptOverseerForOwner cancels a fleet-note chew so an owner turn can
+// claim the ACP session (🎯T291). No-op when notifySender is stubbed (tests
+// drive busy via the seam) or the process is missing.
+func (s *Server) interruptOverseerForOwner() {
+	if s.notifySender != nil {
+		// Hermetic path: tests model busy via notifySender; no real process.
+		// Callers re-drain on simulated terminal / idle.
+		return
+	}
+	proc := s.CurrentProcess()
+	if proc == nil || !proc.Alive() {
+		return
+	}
+	if err := proc.Interrupt(); err != nil {
+		slog.Info("notify_queue",
+			"component", "notify_queue",
+			"decision", "owner_interrupt",
+			"err", err,
+		)
+		return
+	}
+	slog.Info("notify_queue",
+		"component", "notify_queue",
+		"decision", "owner_interrupt",
+		"ok", true,
+	)
 }
 
 // sendNotes delivers one coalesced note batch to the overseer. The
@@ -433,23 +488,34 @@ func notifyErrClass(err error) string {
 	}
 }
 
-// drainOverseerNotes attempts to deliver all queued async notifications to
-// the overseer as a single coalesced prompt. If the overseer is busy
-// ("prompt already in flight") or otherwise unreachable, the batch is
-// requeued at the front and left for the next turn-complete to retry —
-// nothing is dropped. A drain-in-progress guard serializes concurrent
-// callers (a worker reply and a turn-complete can race). Called from
-// SendToOverseer (new note) and HandleAgentEvent (overseer went idle).
+// drainOverseerNotes attempts to deliver queued async notifications.
+//
+// 🎯T291:
+//   - Owner turns drain first, one at a time (never mixed with fleet notes).
+//   - Fleet notes drain as one batch (already coalesced per worker).
+//   - Successful fleet drain with a pending owner interrupts so owner is not
+//     stuck behind the fleet chew.
+//   - overseerOwnerTurn is set only for owner batches (working chrome).
+//
+// Busy / unreachable: requeue at front (coalesced) for the next turn-complete
+// (🎯T62 — nothing dropped). Drain-in-progress serializes concurrent callers.
 func (s *Server) drainOverseerNotes() {
 	s.mu.Lock()
 	if s.notifyDraining || len(s.notifyQueue) == 0 {
 		s.mu.Unlock()
 		return
 	}
-	batch := s.notifyQueue
-	s.notifyQueue = nil
+	batch, rest, ownerBatch := takeNotifyDrainBatch(s.notifyQueue)
+	s.notifyQueue = rest
 	s.notifyDraining = true
 	s.mu.Unlock()
+
+	if len(batch) == 0 {
+		s.mu.Lock()
+		s.notifyDraining = false
+		s.mu.Unlock()
+		return
+	}
 
 	err := s.sendNotes(strings.Join(batch, "\n\n"))
 
@@ -457,8 +523,8 @@ func (s *Server) drainOverseerNotes() {
 	s.notifyDraining = false
 	if err != nil {
 		// Overseer busy or down — put the batch back at the front so order
-		// is preserved, and wait for the next turn-complete to retry.
-		s.notifyQueue = append(batch, s.notifyQueue...)
+		// is preserved, re-coalesce with anything that arrived during send.
+		s.notifyQueue = requeueNotifyFront(batch, s.notifyQueue)
 		depth := len(s.notifyQueue)
 		s.mu.Unlock()
 		// 🎯T128.3: busy-defer must be Info (not Debug) with depth + err_class.
@@ -469,21 +535,29 @@ func (s *Server) drainOverseerNotes() {
 			"deferred", len(batch),
 			"err_class", notifyErrClass(err),
 			"err", err,
+			"owner_batch", ownerBatch,
 		)
 		return
 	}
 	// Successful prompt delivery: mark waiting so stuck-busy can see an
 	// in-flight turn even when only notify/owner notes are on the wire.
 	s.waiting = true
+	s.overseerOwnerTurn = ownerBatch
 	s.overseerLastProgress = time.Now()
 	depth := len(s.notifyQueue)
+	ownerPending := queueHasOwner(s.notifyQueue)
 	s.mu.Unlock()
 	slog.Info("notify_queue",
 		"component", "notify_queue",
 		"decision", "drain",
 		"depth", depth,
 		"drained", len(batch),
+		"owner_batch", ownerBatch,
 	)
+	// Fleet batch just took the session but an owner is waiting — free it.
+	if !ownerBatch && ownerPending {
+		s.interruptOverseerForOwner()
+	}
 }
 
 // handleCost serves the live cost snapshot: burn-rates, the "what is
@@ -1189,6 +1263,7 @@ func (s *Server) settleCancel() {
 	s.mu.Lock()
 	s.turnBuf = ""
 	s.waiting = false
+	s.overseerOwnerTurn = false // 🎯T291
 	s.overseerStreamID = ""
 	s.overseerStreamAcc = ""
 	s.overseerStreamSilent = false

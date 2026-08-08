@@ -150,9 +150,14 @@ type Server struct {
 	// arrives mid-turn is queued here and flushed on the next turn-complete
 	// rather than dropped (🎯T62). Guarded by mu. notifySender is the
 	// delivery seam (nil = live overseer process); overridable in tests.
-	notifyQueue    []string
-	notifyDraining bool
-	notifySender   func(string) error
+	//
+	// 🎯T291: same-worker idle notes coalesce on enqueue; owner turns drain
+	// first and alone; overseerOwnerTurn tracks whether the in-flight prompt
+	// is owner speech (working chrome) vs fleet note chew.
+	notifyQueue       []string
+	notifyDraining    bool
+	notifySender      func(string) error
+	overseerOwnerTurn bool
 
 	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
 	agentsWatchCancel context.CancelFunc
@@ -336,6 +341,7 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		turnText := s.turnBuf
 		s.turnBuf = ""
 		s.waiting = false
+		s.overseerOwnerTurn = false // 🎯T291: seal clears owner-turn chrome level
 		s.overseerStreamID = "" // 🎯T223: terminal settle closes stream label
 		s.overseerStreamAcc = ""
 		s.overseerStreamSilent = false
@@ -737,6 +743,7 @@ func (s *Server) HandleUserMessage(text string) {
 	}
 	s.mu.Lock()
 	s.waiting = true
+	s.overseerOwnerTurn = true // 🎯T291: remote owner speech is an owner turn
 	s.mu.Unlock()
 	s.Broadcast(map[string]any{"type": "status", "state": "thinking"})
 	if err := proc.Send(text); err != nil {
