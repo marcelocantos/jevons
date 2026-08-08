@@ -91,7 +91,7 @@ post-product garnish (§4).
 | **Product Owner (PO)** | e.g. `jevons-po` | Product-scoped proactive Build: spawn workers, gate achieve, stay interruptible | Solo implement Build (T125); own whole-life SWOT; own org-wide RSI control plane (root does) |
 | **Worker** | Named fleet agents | Execute one mission; evidence-gated finish; auto-deregister on done (T165/T195); mid-mission filing reflex when gaps appear | Open Ship; redefine org doctrine mid-flight without filing |
 | **Staff — RSI coach** | T243 coach (structural, not garnish) | **Bounded judgment cycle:** drip-read owner chat (priority) + eventlog + sessions; post judgments to overseer only | File / achieve / set_aside bullseye (root decides); permanent monologue; T92 phrase-list mint on product path |
-| **Staff (other ancillary)** | Sentinel (T219), future ops cycles; **parked** practical security + system management (§8.1) | **Bounded ops cycles** — observe, classify, repair-or-file, snapshot resources; then idle/sleep | Permanent monologue; unparked implementers for §8 domains without owner Build open |
+| **Staff (other ancillary)** | Sentinel (T219), future ops cycles; **parked** practical security + system management + **CEO journal** (§8.1) | **Bounded ops cycles** — observe, classify, repair-or-file, snapshot resources; then idle/sleep | Permanent monologue; unparked implementers for §8 domains without owner Build open |
 | **Aside / capture** | Short-lived attention threads | Arrest ideas, `target:` filings, **and human reflection sparks** without stealing main (T93/T95/T65) | Become multi-day zombie side-chats by default |
 
 **Hard hierarchy (already doctrine):**
@@ -200,6 +200,13 @@ education, finance, health, leisure. On this map that means:
    life+work retro — not only "how agents should behave."
 3. The org **serves** that domain (capture, surface, prioritise); it does
    **not** ambient-automate whole-life OS while §8 domains stay parked.
+4. **Reflection is first-class** (this whole section). The **CEO journal**
+   (§8.1, parked) is the **durable surface** for structured periodic
+   reflection over weeks — sense/decide longitudinal memory for the
+   alter-ego org — distinct from chat scrollback and mnemo raw transcript.
+   Capture sparks still flow through §7; the journal is the periodic
+   written practice, not the spark pipe. **Park implement** until owner
+   opens Build (same ceremony as §8 park table).
 
 ### 4.4 Explicit non-goals for this section
 
@@ -207,6 +214,8 @@ education, finance, health, leisure. On this map that means:
   seat (T243 product path already landed; T92 mint stays residual/off).
 - Do **not** promote phrase-list mint back onto the standing product path.
 - Do **not** make the coach a second CEO that mints the ledger.
+- Do **not** implement CEO journal product code from this docs seat
+  (§8.1 inventory only until owner opens Build).
 
 ---
 
@@ -225,6 +234,7 @@ ops — not demoted to a footnote.
 | **Idea + human-RSI intake** | On capture (product idea *or* owner self-reflection) | Durable record → prioritise or park — no evaporation | T93/T95; §4.3; Build child (3) |
 | **Security / privacy / fraud / practical AI safety** | **Parked** (§8.1) — inventory only | When unparked: alert/file on phishing, money-movement risk, tool exfil, ATO, credential hygiene | T98 (owner ratifies high-stakes); not AGI doom theater |
 | **System management** | **Parked** (§8.1) — inventory only | When unparked: inventory + hygiene + escalate anomalies (inbox, Drive, laptop, subs, finances, share-portfolio) | Not permanent monologue; owner opens Build first |
+| **CEO journal** | **Parked** (§8.1) — inventory only | When unparked: root writes durable structured periodic reflection (longitudinal CEO memory) | §4 RSI cross-link; not chat scrollback / not mnemo raw transcript |
 
 **Anti-patterns (explicit):**
 
@@ -373,6 +383,7 @@ landed; this docs seat does not unpark further RSI product code.
 | **Stalled hardware pursuits** (e.g. cat-flap camera/prism) | Physical + multi-repo; capture as ideas only until owner prioritises | Owner prioritises specific hardware leaf |
 | **Security / privacy / fraud / AI safety (practical)** | Staff/domain function for phishing, money-movement risk, tool exfiltration, account takeover, credential hygiene — **not** existential AGI doom theater. High-stakes money/auth moves need owner ratify (T98 alter-ego still defers irreversible risk). Shape when unparked: bounded sense→alert/file cycles, not permanent monologue | Owner opens Build for practical security staff cycle + acceptance |
 | **System management** | Staff/domain function for inbox, Google Drive, laptop(s), paid subscriptions, finances, share-portfolio cleanup/hygiene. Life-ops surface; easy to thrash or over-automate without owner scope | Owner opens Build for system-management hygiene cycles + acceptance |
+| **CEO journal** | Root regularly writes a **durable journal** for longitudinal memory — famous leaders keep journals. Distinct from chat scrollback and mnemo raw transcript; structured periodic reflection for the alter-ego org (sense/decide over weeks, not one turn). Links human+agent RSI §4 (reflection as first-class; journal is the durable surface for that practice) | Owner opens Build for CEO journal practice + acceptance |
 
 ### 8.1 Parked staff inventory (shape only — no implementers)
 
@@ -387,6 +398,7 @@ ratifies high-stakes money/auth/Ship moves.
 |-------------------------|--------------------------------|----------|
 | **Security / privacy / fraud / practical AI safety** | Bounded sense → classify risk → alert root and/or file → stop; cooldown on re-alert; owner ratifies money moves, credential rotation, account recovery, tool-exfil policy changes | Permanent monologue; existential AGI doom theater; auto money/auth without owner; implement product code "while scanning" |
 | **System management** | Inventory + hygiene cycles (inbox/Drive/laptop/subs/finances/share-portfolio clutter) → compact snapshot or escalate anomalies → idle | Permanent monologue agent; silent bulk delete/spend; whole-life OS without owner scope |
+| **CEO journal** | Bounded periodic write cycle: structured reflection entry (decisions, sense of org health, open tensions, opportunity cost) → durable store → optional root re-read on next cycle / week-of-use; longitudinal memory for alter-ego CEO (weeks, not one turn) | Replace chat scrollback or mnemo raw transcript; permanent monologue "journal spam"; unattended implementers while parked; treat as idea-capture spark pipe (§7 is capture; journal is practice) |
 
 **Allowed while parked:** idea capture, **human RSI / self-reflection
 capture**, opportunity-cost notes, design discussion targets, owner chat.
@@ -445,6 +457,9 @@ child and not further RSI product implementation.
   parked until owner opens Build; not AGI doom theater.
 - System-management staff cycles (inbox, Drive, laptop, subs, finances,
   share-portfolio hygiene) — parked until owner opens Build (§8.1).
+- **CEO journal** (durable periodic reflection / longitudinal CEO memory)
+  — parked staff concept until owner opens Build (§8.1); §4 RSI
+  cross-link only in this note.
 - Optimal control / true dynamic optimisation of owner time.
 - Hard multi-provider scheduler with live vendor quotas.
 - Owner ratification of T98 checklist and this org map before harder
@@ -477,3 +492,8 @@ child and not further RSI product implementation.
   dual halves), sense/decide tables (§3), staff table, ideation pipeline
   (§7). T243 coach never files; T92 mint residual off product path. Docs
   only — no RSI product code this seat. Companion: T98 dimension 8.
+- **2026-08-08** — **CEO journal** parked staff concept (§8 park table +
+  §8.1 inventory + §5 staff row + §4.3 RSI cross-link): durable structured
+  periodic reflection for alter-ego longitudinal memory; distinct from
+  chat scrollback and mnemo raw transcript; park implement until owner
+  opens Build. Docs only — no journal product code this seat.
