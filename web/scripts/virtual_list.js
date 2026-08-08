@@ -921,10 +921,78 @@
   }
 
   // Final scrollTop after one pin to the live end.
+  // NOTE (🎯T351): this is GATE MATH ONLY (distance-from-end decisions).
+  // scrollHeight/clientHeight are integer-rounded by the DOM, so sh − ch can
+  // differ from the true fractional max scrollTop by up to 1px. Pin WRITES
+  // must use pinWriteScrollTop below, never this value.
   function finalPinScrollTop(scrollHeight, clientHeight) {
     const sh = Math.max(0, Number(scrollHeight) || 0);
     const ch = Math.max(0, Number(clientHeight) || 0);
     return Math.max(0, sh - ch);
+  }
+
+  // 🎯T351: the value to ASSIGN when pinning to the live end. Over-assign
+  // the full scrollHeight — the browser clamps to the exact FRACTIONAL max
+  // (contentHeightF − clientHeightF), so the content bottom sits flush with
+  // the viewport bottom regardless of the fractional part of total height.
+  // Writing integer sh − ch instead leaves the viewport at a sub-pixel
+  // offset from the true bottom that CHANGES whenever frac(total height)
+  // drifts (turn-markers 13.1875px, 22.4px lines, hydrate pages) — the
+  // owner-visible residual ~1px jiggle that survived T341/T350.
+  function pinWriteScrollTop(scrollHeight) {
+    return Math.max(0, Number(scrollHeight) || 0);
+  }
+
+  // 🎯T351: pinned-at-end check tolerant of fractional clamp. After an
+  // over-assign pin, scrollTop = fractional max M while the integer target
+  // sh − ch may differ by up to 1px in either direction — |st − target| < 0.5
+  // misreads that as "not pinned" and rewrites every pass. eps 1px covers the
+  // worst rounding gap; over-assign writes are idempotent anyway.
+  const PIN_AT_END_EPS_PX = 1;
+  function isPinnedAtEnd(scrollTop, scrollHeight, clientHeight, epsPx) {
+    const eps = epsPx == null ? PIN_AT_END_EPS_PX : Number(epsPx);
+    const e = Number.isFinite(eps) && eps >= 0 ? eps : PIN_AT_END_EPS_PX;
+    const st = Number(scrollTop) || 0;
+    return Math.abs(finalPinScrollTop(scrollHeight, clientHeight) - st) <= e;
+  }
+
+  // 🎯T351: whole-pixel row lock. Scroll offsets are integer-quantized by
+  // the engine (a scrollTop write cannot express a fraction — measured:
+  // assigning 100.5 reads back 101; over-assign clamps to an integer), so
+  // any row whose border-box height is fractional (22.4px text lines,
+  // 13.1875px turn-markers, mermaid/SVG) makes frac(total content height)
+  // drift as rows come and go — and every integer pin then lands at a
+  // different sub-pixel offset from the true content bottom: the
+  // owner-visible ~1px jiggle. Locking each row's min-height at the ceiling
+  // of its natural height keeps every row box on the pixel grid (≤1px of
+  // invisible slack), so the pinned viewport phase is constant.
+  const ROW_SNAP_EPS_PX = 1 / 128; // rects quantize at 1/64px; tolerate float fuzz
+  function snappedRowLockPx(height) {
+    const h = Number(height);
+    if (!Number.isFinite(h) || h <= 0) return 0;
+    const snapped = Math.ceil(h - ROW_SNAP_EPS_PX);
+    return snapped > 0 ? snapped : 0;
+  }
+
+  // 🎯T351: scroll compensation for a history page inserted ABOVE the
+  // viewport. The integer scrollHeight delta (nextScrollHeight −
+  // prevScrollHeight) loses the inserted page's fractional height, shifting
+  // everything below by the remainder on every hydrate page (~420ms cadence
+  // for minutes after a hard reload). Rect-exact: the anchor row's
+  // getBoundingClientRect().top before/after the insert measures the true
+  // fractional height gained. Falls back to the integer delta only when no
+  // anchor rect is available (empty list).
+  function hydrateCompensatedScrollTop(prevScrollTop, anchorTopBefore, anchorTopAfter,
+                                       prevScrollHeight, nextScrollHeight) {
+    const prev = Number(prevScrollTop) || 0;
+    const before = Number(anchorTopBefore);
+    const after = Number(anchorTopAfter);
+    if (Number.isFinite(before) && Number.isFinite(after)) {
+      return Math.max(0, prev + (after - before));
+    }
+    const prevH = Number(prevScrollHeight) || 0;
+    const nextH = Number(nextScrollHeight) || 0;
+    return Math.max(0, prev + (nextH - prevH));
   }
 
   // Note: shouldPinScroll (above) calls finalPinScrollTop at runtime — both
@@ -995,6 +1063,11 @@
     // chronological replay; one pin after history_meta (or idle end).
     shouldSuppressPinDuringReplay: shouldSuppressPinDuringReplay,
     finalPinScrollTop: finalPinScrollTop,
+    pinWriteScrollTop: pinWriteScrollTop,
+    PIN_AT_END_EPS_PX: PIN_AT_END_EPS_PX,
+    isPinnedAtEnd: isPinnedAtEnd,
+    hydrateCompensatedScrollTop: hydrateCompensatedScrollTop,
+    snappedRowLockPx: snappedRowLockPx,
     // Idle end fallback ms if history_meta never arrives (empty log).
     REPLAY_IDLE_END_MS: REPLAY_IDLE_END_MS,
 

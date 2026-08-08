@@ -127,28 +127,23 @@ function costBody(step) {
     await page.evaluate(() => {
       const msgs = document.getElementById('messages');
       if (!msgs) throw new Error('no #messages');
-      // Clear any boot chrome noise we can; append synthetic bubbles.
       // 🎯T350: enough rows that the top of the transcript is far outside the
       // materialize band (~2400px) — real shells must exist for band churn.
+      // 🎯T351: seed through the REAL append path (addMsg → buildMsg →
+      // renderBody), not hand-rolled divs with raw textContent. The old seed's
+      // heights differed from product paint by up to ~9px, and the virtualize
+      // min-height freeze held every row at the stale seeded height forever —
+      // the oracle measured a geometry the product never renders (greenwash
+      // ingredient #2; #1 was the missing fraction-drift stimulus, covered by
+      // t351-fractional-pin-test).
       for (let i = 0; i < 120; i++) {
-        const d = document.createElement('div');
-        d.className = 'msg ' + (i % 2 === 0 ? 'user' : 'jevons');
-        d._layoutRole = i % 2 === 0 ? 'user' : 'jevons';
-        const body = document.createElement('div');
-        body.className = 'msg-body';
-        // Vary height; a few tall bubbles near the end stress expand/collapse.
         const lines = (i > 114) ? 24 : (2 + (i % 5));
-        body.textContent = ('Line of chat text for bubble ' + i + '.\n').repeat(lines);
-        d.appendChild(body);
-        d._body = body;
-        d._fullText = body.textContent;
-        d._fullRole = d._layoutRole;
-        d._layoutText = body.textContent;
-        if (i > 34) {
-          d._autoExpanded = true;
-          d._expanded = true;
+        const el = window.addMsg(i % 2 === 0 ? 'user' : 'jevons',
+          ('Line of chat text for bubble ' + i + '.\n').repeat(lines));
+        if (el && i > 34) {
+          el._autoExpanded = true;
+          el._expanded = true;
         }
-        msgs.appendChild(d);
       }
       if (typeof window.enterTrackBottom === 'function') window.enterTrackBottom();
       window.scrollDown({ force: true });

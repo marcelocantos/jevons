@@ -156,7 +156,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 .msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; position: relative; }
 /* User/assistant: reserve space under the border for outside timestamp (+ pocket tab when tall). */
-.msg.user, .msg.jevons { margin-bottom: 1.2rem; }
+/* 🎯T351: whole-pixel row margins. Margins sit OUTSIDE the border-box, so
+   the row min-height snap cannot absorb them; 1.2rem = 19.2px added a 0.2px
+   fraction to total height per bubble, phase-shifting every integer scroll
+   pin (~1px random text jiggle). 19px is visually identical. */
+.msg.user, .msg.jevons { margin-bottom: 19px; }
 .msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: normal; word-wrap: break-word; }
 .msg.user .msg-body { white-space: pre-wrap; }
 .msg.user .msg-body blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 0.4em 0; color: var(--text-dim); white-space: pre-wrap; }
@@ -448,7 +452,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    T273: speaker-omit = pure overseer/Jevons only; context chrome always paints
    (incl. jevons-po as owning PO); non-overseer speaker = bold purple 〈agent〉 (no ·).
    Coordinates with T267 (PO select + frontier highlight) via shared TargetContextChrome. */
-.msg.msg-has-context-tab { margin-top: 0.65rem; }
+.msg.msg-has-context-tab { margin-top: 10px; } /* 🎯T351: was 0.65rem = 10.4px — fractional row margin escapes the box snap */
 .msg-context-tab {
   display: inline-flex; align-items: center; gap: 0;
   max-width: calc(100% - 20px);
@@ -1803,10 +1807,11 @@ function endHistoryReplayAndPin(reason) {
   _pinningScroll = true;
   beginScrollBookkeeping();
   try {
-    const top = (typeof VirtualList !== 'undefined' && VirtualList.finalPinScrollTop)
-      ? VirtualList.finalPinScrollTop(msgs.scrollHeight, msgs.clientHeight)
-      : Math.max(0, msgs.scrollHeight - msgs.clientHeight);
-    msgs.scrollTop = top;
+    // 🎯T351: over-assign — browser clamps to the exact FRACTIONAL end.
+    // Integer sh − ch leaves a sub-pixel offset that drifts with content.
+    msgs.scrollTop = (typeof VirtualList !== 'undefined' && VirtualList.pinWriteScrollTop)
+      ? VirtualList.pinWriteScrollTop(msgs.scrollHeight)
+      : msgs.scrollHeight;
     noteScrollMetrics();
   } finally {
     _pinningScroll = false;
@@ -4383,6 +4388,9 @@ function applyClipState(d, clipped) {
     d.classList.remove('msg-clipped');
     if (d._clipFade) { d._clipFade.remove(); d._clipFade = null; }
   }
+  // 🎯T351: clip toggle changes the row's natural height (the user-toggle
+  // path bypasses renderBody) — re-snap to the pixel grid.
+  if (typeof scheduleRowSnap === 'function') scheduleRowSnap(d);
 }
 
 function updateExpandTab(d) {
@@ -4421,11 +4429,15 @@ function renderBody(d, role, text) {
     // Non-tall: never tab, never fade (pocket chrome is tall-only).
     clearClipChrome(d);
     d._fullText = null;
+    // 🎯T351: repaint changed the natural height — re-snap to the pixel grid.
+    if (typeof scheduleRowSnap === 'function') scheduleRowSnap(d);
     return;
   }
   d._fullText = text;
   applyClipState(d, !d._expanded);
   ensureExpandToggle(d);
+  // 🎯T351: repaint / expand / collapse changed the natural height — re-snap.
+  if (typeof scheduleRowSnap === 'function') scheduleRowSnap(d);
 }
 
 // 🎯T266: last frontier ledger/cwd for target-ask context resolution.
@@ -4634,8 +4646,9 @@ function pinToEndGated() {
       scrollTop: st,
     })) return;
   }
-  msgs.scrollTop = (typeof VirtualList !== 'undefined' && VirtualList.finalPinScrollTop)
-    ? VirtualList.finalPinScrollTop(sh, ch)
+  // 🎯T351: over-assign — clamp-exact fractional end (see pinWriteScrollTop).
+  msgs.scrollTop = (typeof VirtualList !== 'undefined' && VirtualList.pinWriteScrollTop)
+    ? VirtualList.pinWriteScrollTop(sh)
     : sh;
 }
 
@@ -4888,12 +4901,23 @@ async function loadEarlier(opts) {
     const lines = data.lines || [];
     const { frag, nodes } = renderFrames(lines, { lazy: true });
     const anchor = historySentinel ? historySentinel.nextSibling : msgs.firstChild;
+    // 🎯T351: rect-exact compensation — the integer scrollHeight delta loses
+    // the inserted page's fractional height, shifting everything below by
+    // the remainder on EVERY hydrate page (~420ms cadence for minutes after
+    // a hard reload): the residual ~1px jiggle that survived T341/T350.
+    const anchorTopBefore = (anchor && anchor.getBoundingClientRect)
+      ? anchor.getBoundingClientRect().top : NaN;
     msgs.insertBefore(frag, anchor);
     layoutMsgList(nodes);   // no-op for unmeasured lazy shells
     oldestIndex = (data.start != null) ? data.start : 0;
-    // Content added ABOVE the viewport — shift scrollTop by the height
-    // gained so the position doesn't jump. Mode unchanged (not a user leave).
-    msgs.scrollTop = prevTop + (msgs.scrollHeight - prevH);
+    // Content added ABOVE the viewport — shift scrollTop by the exact
+    // fractional height gained so the position doesn't move at all. Mode
+    // unchanged (not a user leave).
+    const anchorTopAfter = (anchor && anchor.getBoundingClientRect)
+      ? anchor.getBoundingClientRect().top : NaN;
+    msgs.scrollTop = (typeof VirtualList !== 'undefined' && VirtualList.hydrateCompensatedScrollTop)
+      ? VirtualList.hydrateCompensatedScrollTop(prevTop, anchorTopBefore, anchorTopAfter, prevH, msgs.scrollHeight)
+      : prevTop + (msgs.scrollHeight - prevH);
     noteScrollMetrics();
     // Materialize only shells that entered the anticipation band.
     scheduleVirtualize();
@@ -5991,6 +6015,13 @@ function virtualizeMessages() {
   _virtualizing = true;
   beginScrollBookkeeping();
   try {
+    // 🎯T351: drain pending row snaps BEFORE the read phase — a demat that
+    // freezes a not-yet-snapped (fractional) row would propagate the fraction
+    // into the shell and thrash on the next snap.
+    if (_rowSnapSet.size) {
+      if (_rowSnapRaf) { cancelAnimationFrame(_rowSnapRaf); _rowSnapRaf = 0; }
+      flushRowSnaps();
+    }
     // 🎯T261: near-end expand before collapse so reload/hydrate pin does not
     // leave in-view end messages clipped; T246 collapse only fully off-screen.
     expandInViewNearEnd();
@@ -6146,23 +6177,26 @@ function rematerializeMsg(el) {
   const settle = () => {
     if (!el.isConnected || el.classList.contains('virt-shell')) return;
     // 🎯T350: fractional measure — offsetHeight rounds to int, and a rounded
-    // lock below the natural height leaves material ≠ shell by the fraction.
+    // lock BELOW the natural height leaves material ≠ shell by the fraction.
     const nh = el.getBoundingClientRect().height;
     const nw = msgsContentWidth();
+    // 🎯T351: lock at the whole-pixel CEILING of the natural height (never
+    // below it — T350 still holds). Scroll offsets are integer-quantized, so
+    // fractional row boxes drift frac(total height) and phase-shift every
+    // integer pin by ±1px. The cache records the snapped BOX height so a
+    // later shell freeze equals the material box exactly, on the pixel grid.
+    const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
+      ? VirtualList.snappedRowLockPx(nh)
+      : Math.ceil(nh);
     if (nh > 0 && nw > 0) {
+      const boxH = lock > 0 ? lock : nh;
       if (typeof VirtualList !== 'undefined' && VirtualList.recordSize) {
-        VirtualList.recordSize(virtSizeCache, msgVirtId(el), nh, nw);
+        VirtualList.recordSize(virtSizeCache, msgVirtId(el), boxH, nw);
       }
-      el._virtSize = { height: nh, width: nw };
+      el._virtSize = { height: boxH, width: nw };
     }
-    const thr = (typeof VirtualList !== 'undefined' && VirtualList.PIN_HEIGHT_THRESHOLD_PX != null)
-      ? VirtualList.PIN_HEIGHT_THRESHOLD_PX : 2;
-    const lockPx = parseFloat(el.style.minHeight) || 0;
-    if (nh > 0 && lockPx > 0 && Math.abs(nh - lockPx) <= thr) {
-      el.style.minHeight = nh + 'px';
-    } else {
-      el.style.minHeight = '';
-    }
+    if (lock > 0) el.style.minHeight = lock + 'px';
+    else el.style.minHeight = '';
     delete el._virtH;
     delete el._virtWasExpanded;
   };
@@ -6304,15 +6338,25 @@ function scrollDown(opts) {
           threshold: thr,
         });
     if (!should) return;
-    const target = (typeof VirtualList !== 'undefined' && VirtualList.finalPinScrollTop)
-      ? VirtualList.finalPinScrollTop(sh, ch)
-      : Math.max(0, sh - ch);
-    if (Math.abs(st - target) < 0.5 && Math.abs(sh - _lastPinScrollHeight) < thr) {
+    // 🎯T351: pinned check is fraction-tolerant (after an over-assign pin,
+    // scrollTop = fractional max, which can sit up to 1px from integer
+    // sh − ch); the WRITE over-assigns so the browser clamps to the exact
+    // fractional end — integer targets leave a sub-pixel offset that drifts
+    // with frac(total height) and rasterizes as the residual ~1px jiggle.
+    const pinnedNow = (typeof VirtualList !== 'undefined' && VirtualList.isPinnedAtEnd)
+      ? VirtualList.isPinnedAtEnd(st, sh, ch)
+      : Math.abs(st - Math.max(0, sh - ch)) <= 1;
+    // force always writes: the post-snap corrective pin (🎯T351) exists to
+    // replace a pre-snap rounding that can sit a whole pixel off — the skip
+    // fast-path would swallow exactly that correction.
+    if (!force && pinnedNow && Math.abs(sh - _lastPinScrollHeight) < thr) {
       _lastPinScrollHeight = sh;
       noteScrollMetrics();
       return;
     }
-    msgs.scrollTop = target;
+    msgs.scrollTop = (typeof VirtualList !== 'undefined' && VirtualList.pinWriteScrollTop)
+      ? VirtualList.pinWriteScrollTop(sh)
+      : sh;
     _lastPinScrollHeight = sh;
     if (typeof window.__layoutThrash === 'object' && window.__layoutThrash) {
       window.__layoutThrash.scrollDownPinned =
@@ -6340,6 +6384,97 @@ function scrollDownThrottled() {
   if (historyReplayActive) return;
   if (_scrollRaf) return;
   _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; scrollDown(); });
+}
+
+// ── 🎯T351: whole-pixel row snap ──────────────────────────────────────
+// Scroll offsets are integer-quantized by the engine (a scrollTop write
+// cannot express a fraction; over-assign clamps to an integer), so the
+// scroll layer can NEVER cancel fractional content heights. Any row with a
+// fractional border-box (22.4px text lines, 13.1875px turn-markers,
+// mermaid/SVG, images) drifts frac(total height) as rows come and go, and
+// every integer pin then lands at a different sub-pixel offset from the
+// true content bottom — the owner-visible residual ~1px jiggle that
+// survived T341/T350. Fix at the content layer: lock every #messages row's
+// min-height at the whole-pixel ceiling of its natural height (≤1px of
+// invisible slack), so total height stays on the pixel grid and the pinned
+// viewport phase is constant.
+//
+// Flush is 3-phase (T349 discipline): clear stale locks (write) → measure
+// naturals (batched read) → apply ceilinged locks (write). Clearing first
+// makes shrink transitions (collapse, smaller repaint) safe — a stale tall
+// lock would otherwise hold the box up and hide the shrink from RO.
+// Shells are skipped (their min-height is the demat freeze, which copies
+// the — now integer — material box; T350 shell==material still holds).
+// Live stream bubbles are skipped until seal (renderBody's non-stream tail
+// snaps them after the final paint).
+let _rowSnapSet = new Set();
+let _rowSnapRaf = 0;
+const _rowSnapRO = (typeof ResizeObserver !== 'undefined')
+  ? new ResizeObserver((entries) => {
+      // Async growers (image load, mermaid render, font swap) re-snap.
+      // Self-terminating: snapping puts the box on the grid, so the RO tick
+      // it triggers measures an integer and writes nothing.
+      for (const e of entries) scheduleRowSnap(e.target);
+    })
+  : null;
+function scheduleRowSnap(el) {
+  if (!el || el.nodeType !== 1 || !el.classList) return;
+  _rowSnapSet.add(el);
+  if (!_rowSnapRaf) _rowSnapRaf = requestAnimationFrame(flushRowSnaps);
+}
+function flushRowSnaps() {
+  _rowSnapRaf = 0;
+  const todo = [];
+  _rowSnapSet.forEach((el) => {
+    if (el.isConnected && el.parentNode === msgs &&
+        !el.classList.contains('virt-shell') &&
+        typeof el._streamRaw !== 'string') {
+      todo.push(el);
+    }
+  });
+  _rowSnapSet.clear();
+  if (!todo.length) return;
+  let lockChanged = false;
+  beginScrollBookkeeping();
+  try {
+    const prevLocks = todo.map((el) => el.style.minHeight);
+    for (const el of todo) {
+      if (el.style.minHeight) el.style.minHeight = '';
+    }
+    const naturals = todo.map((el) => el.getBoundingClientRect().height);
+    for (let i = 0; i < todo.length; i++) {
+      const el = todo[i];
+      const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
+        ? VirtualList.snappedRowLockPx(naturals[i])
+        : Math.ceil(naturals[i]);
+      const lockStr = lock > 0 ? lock + 'px' : '';
+      if (lockStr) el.style.minHeight = lockStr;
+      if (lockStr !== prevLocks[i]) lockChanged = true;
+      if (_rowSnapRO && !el._rowSnapObserved) {
+        _rowSnapRO.observe(el);
+        el._rowSnapObserved = true;
+      }
+    }
+  } finally {
+    endScrollBookkeeping();
+  }
+  // A changed lock moved total height. While tracking, force one pin so the
+  // FINAL settled pin is computed against integer geometry — a pin taken
+  // pre-snap (fractional total) rounds scrollTop differently per append,
+  // which is a whole-pixel gap flip. Unchanged locks (repaint touches with
+  // identical geometry) must NOT pin — that would be idle pin thrash.
+  if (lockChanged && isTracking() && !historyReplayActive) scrollDown({ force: true });
+}
+// Every appended #messages child row snaps (bubbles, turn-markers, asides,
+// status rows) — one seam instead of per-creation-site calls.
+if (typeof MutationObserver !== 'undefined') {
+  new MutationObserver((muts) => {
+    for (const m of muts) {
+      for (const n of m.addedNodes) {
+        if (n.nodeType === 1) scheduleRowSnap(n);
+      }
+    }
+  }).observe(msgs, { childList: true });
 }
 // ResizeObserver on the live streaming bubble: re-pin whenever its box
 // grows while Tracking (content growth only — not user scroll-away).

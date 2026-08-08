@@ -1135,4 +1135,90 @@ test('index.html wires T350 fractional freeze + gated expansion pins', function 
     'expandInViewNearEnd has no ungated scrollTop write');
 });
 
+// ── 🎯T351: fractional content vs integer scroll ─────────────────────
+
+test('T351 pinWriteScrollTop over-assigns the full scrollHeight', function () {
+  // Scroll offsets are integer-quantized; writing integer sh − ch leaves a
+  // sub-pixel offset from the true bottom that drifts with frac(total).
+  // The write value is the full scrollHeight — the engine clamps to its max.
+  assert.strictEqual(VL.pinWriteScrollTop(1490), 1490);
+  assert.strictEqual(VL.pinWriteScrollTop(1000.5), 1000.5);
+  assert.strictEqual(VL.pinWriteScrollTop(0), 0);
+  assert.strictEqual(VL.pinWriteScrollTop(-5), 0);
+  assert.strictEqual(VL.pinWriteScrollTop(undefined), 0);
+});
+
+test('T351 isPinnedAtEnd tolerates the fractional-clamp gap', function () {
+  // After an over-assign pin, scrollTop can sit up to 1px from integer
+  // sh − ch (rounding of both sh and ch). |st − target| < 0.5 misreads that
+  // as unpinned and rewrites every pass.
+  assert.strictEqual(VL.isPinnedAtEnd(699, 1490, 791), true, 'exact integer end');
+  assert.strictEqual(VL.isPinnedAtEnd(699.296875, 1490, 791), true, 'fractional max within 1px');
+  assert.strictEqual(VL.isPinnedAtEnd(697.5, 1490, 791), false, 'more than 1px off');
+  assert.strictEqual(VL.isPinnedAtEnd(690, 1490, 791), false, 'clearly unpinned');
+  assert.strictEqual(VL.PIN_AT_END_EPS_PX, 1);
+});
+
+test('T351 hydrateCompensatedScrollTop is rect-exact with integer fallback', function () {
+  // Anchor rect before/after the insert measures the exact fractional height
+  // gained; the integer scrollHeight delta loses the remainder and shifts
+  // everything below by it on every hydrate page.
+  assert.strictEqual(VL.hydrateCompensatedScrollTop(100, 50, 63.1875, 1000, 1013), 113.1875);
+  assert.strictEqual(VL.hydrateCompensatedScrollTop(0, 10, 5, 0, 0), 0, 'clamped at 0');
+  assert.strictEqual(VL.hydrateCompensatedScrollTop(100, NaN, NaN, 1000, 1013), 113,
+    'integer fallback when no anchor rect');
+  assert.strictEqual(VL.hydrateCompensatedScrollTop(100, undefined, undefined, 1000, 1000), 100);
+});
+
+test('T351 snappedRowLockPx ceils fractional row boxes to the pixel grid', function () {
+  assert.strictEqual(VL.snappedRowLockPx(54.8), 55);
+  assert.strictEqual(VL.snappedRowLockPx(13.1875), 14, 'turn-marker natural height');
+  assert.strictEqual(VL.snappedRowLockPx(45), 45, 'integer heights unchanged');
+  assert.strictEqual(VL.snappedRowLockPx(45.0000001), 45, 'float fuzz does not bump');
+  assert.strictEqual(VL.snappedRowLockPx(0), 0);
+  assert.strictEqual(VL.snappedRowLockPx(-3), 0);
+  assert.strictEqual(VL.snappedRowLockPx(NaN), 0);
+});
+
+test('index.html wires T351 whole-pixel geometry', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Pin writes over-assign (clamp-exact); no site writes integer sh − ch.
+  assert.ok(/function pinToEndGated\(\)[\s\S]{0,900}pinWriteScrollTop/.test(html),
+    'pinToEndGated writes via pinWriteScrollTop');
+  assert.ok(/function endHistoryReplayAndPin\(reason\)[\s\S]{0,900}pinWriteScrollTop/.test(html),
+    'endHistoryReplayAndPin writes via pinWriteScrollTop');
+  const pinBody = html.match(/const pin = \(\) => \{[\s\S]{0,2200}?\n  \};/);
+  assert.ok(pinBody && /pinWriteScrollTop/.test(pinBody[0]),
+    'scrollDown pin writes via pinWriteScrollTop');
+  assert.ok(pinBody && /isPinnedAtEnd/.test(pinBody[0]),
+    'scrollDown pinned check is fraction-tolerant');
+  assert.ok(pinBody && /!force && pinnedNow/.test(pinBody[0]),
+    'forced pins bypass the skip fast-path (post-snap correction)');
+  // Hydrate compensation is rect-exact.
+  assert.ok(/hydrateCompensatedScrollTop\(prevTop, anchorTopBefore, anchorTopAfter/.test(html),
+    'loadEarlier compensates via hydrateCompensatedScrollTop');
+  assert.ok(!/msgs\.scrollTop = prevTop \+ \(msgs\.scrollHeight - prevH\);/.test(html),
+    'no bare integer-delta hydrate compensation remains');
+  // Row snap seam: every appended row locks to the pixel grid; repaint and
+  // clip-toggle re-snap; settle locks at the snapped ceiling.
+  assert.ok(/function flushRowSnaps\(\)/.test(html), 'flushRowSnaps exists');
+  assert.ok(/new MutationObserver[\s\S]{0,300}scheduleRowSnap/.test(html),
+    'appended rows snap via the MutationObserver seam');
+  assert.ok(/function renderBody\(d, role, text\)[\s\S]{0,2600}scheduleRowSnap/.test(html),
+    'renderBody re-snaps after repaint');
+  assert.ok(/function applyClipState\(d, clipped\)[\s\S]{0,900}scheduleRowSnap/.test(html),
+    'clip toggle re-snaps');
+  assert.ok(/const settle = \(\) => \{[\s\S]{0,900}snappedRowLockPx/.test(html),
+    'remat settle locks at the snapped ceiling');
+  // Row-level margins must be whole pixels — margins escape the box snap.
+  assert.ok(!/\.msg\.user, \.msg\.jevons \{ margin-bottom: 1\.2rem/.test(html),
+    'bubble margin-bottom no longer fractional 1.2rem');
+  assert.ok(/\.msg\.user, \.msg\.jevons \{ margin-bottom: 19px/.test(html),
+    'bubble margin-bottom is integer px');
+  assert.ok(!/msg-has-context-tab \{ margin-top: 0\.65rem/.test(html),
+    'context-tab margin-top no longer fractional 0.65rem');
+});
+
 console.log(process.exitCode ? 'FAIL' : 'PASS virtual_list_test');
