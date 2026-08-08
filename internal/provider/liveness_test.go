@@ -123,16 +123,100 @@ func TestLivenessProviderFeedSource(t *testing.T) {
 }
 
 func TestLivenessProviderFeedNeverSignalled(t *testing.T) {
+	// Warm-up disabled so an empty feed stalls on first check (genuine
+	// never-configured residual after 🎯T345 warm-up expires).
 	reg := NewRegistry()
 	m := NewLivenessMonitor(LivenessMonitorArgs{
 		Decls: []config.AutomationDecl{livenessDecl("ghost", "1h",
 			config.AutomationSource{Kind: config.AutomationSourceProviderFeed, Provider: "mnemo", Feed: "health"})},
 		Registry: reg,
+		WarmUp:   -1,
 	})
 	m.Check(context.Background())
 	st := m.Statuses()[0]
 	if st.State != AutomationStalled || !strings.Contains(st.Detail, "no signal ever") {
 		t.Fatalf("status=%+v, want stalled with never-signalled detail", st)
+	}
+}
+
+// 🎯T345: empty provider-feed during warm-up is unknown (no owner stall
+// notice); first event within warm-up recovers without ever stalling.
+func TestLivenessProviderFeedWarmUpNoFalseStall(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	now := base
+	const warmUp = 30 * time.Second
+	var notices []AutomationStatus
+	reg := NewRegistry()
+	m := NewLivenessMonitor(LivenessMonitorArgs{
+		Decls: []config.AutomationDecl{livenessDecl("mnemo-feed", "1h",
+			config.AutomationSource{Kind: config.AutomationSourceProviderFeed, Provider: "mnemo", Feed: "health"})},
+		Registry: reg,
+		Now:      func() time.Time { return now },
+		WarmUp:   warmUp,
+		OnNotice: func(st AutomationStatus) { notices = append(notices, st) },
+	})
+	ctx := context.Background()
+
+	// Cold start: empty ModelFeed within warm-up → unknown, no stall notice.
+	m.Check(ctx)
+	st := m.Statuses()[0]
+	if st.State != AutomationUnknown || !strings.Contains(st.Detail, "warming") {
+		t.Fatalf("status=%+v, want unknown warming during warm-up", st)
+	}
+	if len(notices) != 0 {
+		t.Fatalf("notices=%+v, want none during warm-up", notices)
+	}
+
+	// First feed event arrives before warm-up ends (the production incident:
+	// ~3s after liveness ready).
+	now = base.Add(3 * time.Second)
+	reg.Ingest("mnemo", FeedEvent{
+		Feed: "health", Seq: 1, TS: now, Origin: "mnemo", Kind: "tick",
+	})
+	m.Check(ctx)
+	st = m.Statuses()[0]
+	if st.State != AutomationOK {
+		t.Fatalf("state=%q detail=%q, want ok after first feed event", st.State, st.Detail)
+	}
+	if len(notices) != 0 {
+		t.Fatalf("notices=%+v, want no stall/recovery when never stalled", notices)
+	}
+}
+
+// 🎯T345: empty provider-feed still stalls once warm-up elapses.
+func TestLivenessProviderFeedWarmUpThenStall(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	now := base
+	const warmUp = 30 * time.Second
+	var notices []AutomationStatus
+	reg := NewRegistry()
+	m := NewLivenessMonitor(LivenessMonitorArgs{
+		Decls: []config.AutomationDecl{livenessDecl("ghost", "1h",
+			config.AutomationSource{Kind: config.AutomationSourceProviderFeed, Provider: "mnemo", Feed: "health"})},
+		Registry: reg,
+		Now:      func() time.Time { return now },
+		WarmUp:   warmUp,
+		OnNotice: func(st AutomationStatus) { notices = append(notices, st) },
+	})
+	ctx := context.Background()
+
+	m.Check(ctx)
+	if st := m.Statuses()[0]; st.State != AutomationUnknown {
+		t.Fatalf("state=%q, want unknown during warm-up", st.State)
+	}
+	if len(notices) != 0 {
+		t.Fatalf("notices=%+v, want none during warm-up", notices)
+	}
+
+	// Past warm-up, feed still empty → stall + owner notice.
+	now = base.Add(warmUp + time.Second)
+	m.Check(ctx)
+	st := m.Statuses()[0]
+	if st.State != AutomationStalled || !strings.Contains(st.Detail, "no signal ever") {
+		t.Fatalf("status=%+v, want stalled after warm-up", st)
+	}
+	if len(notices) != 1 || notices[0].State != AutomationStalled {
+		t.Fatalf("notices=%+v, want one stall after warm-up", notices)
 	}
 }
 

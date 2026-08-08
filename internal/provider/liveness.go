@@ -50,6 +50,13 @@ const (
 // detected within one interval of their deadline.
 const DefaultLivenessInterval = time.Minute
 
+// DefaultProviderFeedWarmUp is how long an empty provider-feed is treated
+// as warming (unknown) after monitor start before "no signal ever observed"
+// becomes a stall. Covers cold-start attach lag: feed hub attaches and
+// first health events land a few seconds after liveness starts (🎯T345).
+// Genuine never-configured feeds still stall once this bound elapses.
+const DefaultProviderFeedWarmUp = 30 * time.Second
+
 // AutomationStatus is the owner-visible state of one tracked automation.
 type AutomationStatus struct {
 	ID    string `json:"id"`
@@ -90,14 +97,16 @@ type RunCmd func(ctx context.Context, name string, args ...string) (string, erro
 // state transitions into the aggregated model as liveness feed events,
 // and reports stall/recovery transitions to the notification sink.
 type LivenessMonitor struct {
-	decls    []config.AutomationDecl
-	registry *Registry
-	now      func() time.Time
-	interval time.Duration
-	runCmd   RunCmd
-	onEvent  func(ev FeedEvent)
-	onNotice func(st AutomationStatus)
-	log      *slog.Logger
+	decls     []config.AutomationDecl
+	registry  *Registry
+	now       func() time.Time
+	interval  time.Duration
+	warmUp    time.Duration
+	startedAt time.Time
+	runCmd    RunCmd
+	onEvent   func(ev FeedEvent)
+	onNotice  func(st AutomationStatus)
+	log       *slog.Logger
 
 	mu     sync.Mutex
 	states map[string]AutomationStatus
@@ -122,6 +131,11 @@ type LivenessMonitorArgs struct {
 	Now func() time.Time
 	// Interval is the check cadence. Zero uses DefaultLivenessInterval.
 	Interval time.Duration
+	// WarmUp is how long an empty provider-feed stays unknown after
+	// monitor start before "no signal ever observed" stalls (🎯T345).
+	// Zero uses DefaultProviderFeedWarmUp. Negative disables warm-up
+	// (immediate stall on empty feed — useful for hermetic oracles).
+	WarmUp time.Duration
 	// Run executes launchd/git probe commands. Nil uses the real command.
 	Run RunCmd
 	// Logger receives probe warnings. Nil uses slog.Default.
@@ -133,19 +147,29 @@ func NewLivenessMonitor(args LivenessMonitorArgs) *LivenessMonitor {
 	if args.Registry == nil {
 		panic("provider.NewLivenessMonitor: Registry is required")
 	}
-	m := &LivenessMonitor{
-		decls:    args.Decls,
-		registry: args.Registry,
-		now:      args.Now,
-		interval: args.Interval,
-		runCmd:   args.Run,
-		onEvent:  args.OnEvent,
-		onNotice: args.OnNotice,
-		log:      args.Logger,
-		states:   make(map[string]AutomationStatus),
+	nowFn := args.Now
+	if nowFn == nil {
+		nowFn = time.Now
 	}
-	if m.now == nil {
-		m.now = time.Now
+	warmUp := args.WarmUp
+	switch {
+	case warmUp == 0:
+		warmUp = DefaultProviderFeedWarmUp
+	case warmUp < 0:
+		warmUp = 0
+	}
+	m := &LivenessMonitor{
+		decls:     args.Decls,
+		registry:  args.Registry,
+		now:       nowFn,
+		interval:  args.Interval,
+		warmUp:    warmUp,
+		startedAt: nowFn(),
+		runCmd:    args.Run,
+		onEvent:   args.OnEvent,
+		onNotice:  args.OnNotice,
+		log:       args.Logger,
+		states:    make(map[string]AutomationStatus),
 	}
 	if m.interval <= 0 {
 		m.interval = DefaultLivenessInterval
@@ -230,17 +254,23 @@ func (m *LivenessMonitor) checkOne(ctx context.Context, d config.AutomationDecl)
 		st.State = AutomationStalled
 		st.Detail = sig.Detail
 		st.LastSignal = sig.At
+	case sig.At.IsZero():
+		// Never signalled. provider-feed empties are expected during
+		// cold start (feed attach lags monitor start by seconds) —
+		// stay unknown until warm-up elapses, then stall (🎯T345).
+		if d.Source.Kind == config.AutomationSourceProviderFeed && now.Sub(m.startedAt) < m.warmUp {
+			st.State = AutomationUnknown
+			st.Detail = "warming up; waiting for first feed event"
+		} else {
+			st.State = AutomationStalled
+			st.Detail = "no signal ever observed"
+		}
 	case now.Sub(sig.At) > window:
 		st.State = AutomationStalled
 		st.LastSignal = sig.At
 		st.Deadline = sig.At.Add(window)
-		if sig.At.IsZero() {
-			st.Detail = "no signal ever observed"
-			st.Deadline = time.Time{}
-		} else {
-			st.Detail = fmt.Sprintf("no signal for %s (cadence %s × grace %g)",
-				now.Sub(sig.At).Round(time.Second), cadence, grace)
-		}
+		st.Detail = fmt.Sprintf("no signal for %s (cadence %s × grace %g)",
+			now.Sub(sig.At).Round(time.Second), cadence, grace)
 	default:
 		st.State = AutomationOK
 		st.LastSignal = sig.At
