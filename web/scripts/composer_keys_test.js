@@ -133,28 +133,40 @@ test('T149 real draft without seed still field-wide Home/End', function () {
   );
 });
 
-test('T149 Meta/Ctrl+ArrowLeft/Right are field ends', function () {
+// ── 🎯T307 chord split: Home/End = field, Cmd/Ctrl+Arrow = line ──────
+//
+// Supersedes the 🎯T149 'Meta/Ctrl+ArrowLeft/Right are field ends' and
+// 'Meta+Arrow with seed+text uses effective bounds' tests, which encoded
+// the bug the owner reported: aliasing Cmd/Ctrl+Left/Right onto field
+// Home/End collapsed two distinct chords into one behaviour and stole the
+// native line-local caret. Line navigation belongs to the browser/OS.
+
+test('T307 Meta/Ctrl+ArrowLeft/Right are NOT owned — browser does line nav', function () {
   const value = 'abcdef';
-  assert.deepStrictEqual(
+  assert.strictEqual(
     CK.selectionAfterHomeEnd('ArrowLeft', value, 4, 4, { metaKey: true }),
-    { start: 0, end: 0 }
+    null
   );
-  assert.deepStrictEqual(
+  assert.strictEqual(
     CK.selectionAfterHomeEnd('ArrowRight', value, 1, 1, { metaKey: true }),
-    { start: 6, end: 6 }
+    null
   );
-  assert.deepStrictEqual(
+  assert.strictEqual(
     CK.selectionAfterHomeEnd('ArrowLeft', value, 4, 4, { ctrlKey: true }),
-    { start: 0, end: 0 }
+    null
   );
-  assert.deepStrictEqual(
+  assert.strictEqual(
     CK.selectionAfterHomeEnd('ArrowRight', value, 1, 1, { ctrlKey: true }),
-    { start: 6, end: 6 }
+    null
   );
-  // Shift extends.
-  assert.deepStrictEqual(
+  // Shift+Meta+Arrow (line-local extend) is the platform's too.
+  assert.strictEqual(
     CK.selectionAfterHomeEnd('ArrowLeft', value, 4, 4, { metaKey: true, shiftKey: true }),
-    { start: 0, end: 4 }
+    null
+  );
+  assert.strictEqual(
+    CK.selectionAfterHomeEnd('ArrowRight', value, 1, 1, { ctrlKey: true, shiftKey: true }),
+    null
   );
   // Meta+ArrowDown stays null (jump-to-bottom owns it).
   assert.strictEqual(
@@ -163,16 +175,43 @@ test('T149 Meta/Ctrl+ArrowLeft/Right are field ends', function () {
   );
 });
 
-test('T149 Meta+Arrow with seed+text uses effective bounds', function () {
+test('T307 Meta/Ctrl+Arrow stays unowned even with seed+text', function () {
   const value = WC.EMPTY_SEED + 'xyz';
   const opts = seedOpts(value);
-  assert.deepStrictEqual(
+  assert.strictEqual(
     CK.selectionAfterHomeEnd('ArrowLeft', value, value.length, value.length, { metaKey: true }, opts),
+    null
+  );
+  assert.strictEqual(
+    CK.selectionAfterHomeEnd('ArrowRight', value, opts.seedPrefixLen, opts.seedPrefixLen, { ctrlKey: true }, opts),
+    null
+  );
+});
+
+test('T307 multi-line draft: Home/End remain field-wide, not line-local', function () {
+  const value = 'first line\nsecond line\nthird';
+  const opts = seedOpts(value);
+  // Caret parked mid-second-line: Home goes to field start, not line start.
+  const midSecond = value.indexOf('second') + 3;
+  assert.deepStrictEqual(
+    CK.selectionAfterHomeEnd('Home', value, midSecond, midSecond, {}, opts),
+    { start: 0, end: 0 }
+  );
+  assert.deepStrictEqual(
+    CK.selectionAfterHomeEnd('End', value, midSecond, midSecond, {}, opts),
+    { start: value.length, end: value.length }
+  );
+  // Same field-wide bounds with a seed prefix in front of the draft.
+  const seeded = WC.EMPTY_SEED + value;
+  const seededOpts = seedOpts(seeded);
+  const seededMid = seeded.indexOf('second') + 3;
+  assert.deepStrictEqual(
+    CK.selectionAfterHomeEnd('Home', seeded, seededMid, seededMid, {}, seededOpts),
     { start: WC.EMPTY_SEED.length, end: WC.EMPTY_SEED.length }
   );
   assert.deepStrictEqual(
-    CK.selectionAfterHomeEnd('ArrowRight', value, opts.seedPrefixLen, opts.seedPrefixLen, { ctrlKey: true }, opts),
-    { start: value.length, end: value.length }
+    CK.selectionAfterHomeEnd('End', seeded, seededMid, seededMid, {}, seededOpts),
+    { start: seeded.length, end: seeded.length }
   );
 });
 

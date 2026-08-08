@@ -8,7 +8,10 @@
 // 🎯T149: operate on *effective* (Wispr seed-stripped) content bounds so
 // seed-only EMPTY_SEED does not look like a Home/End no-op, and seed+text
 // lands on the visible draft — not inside the invisible seed prefix.
-// Meta/Ctrl+ArrowLeft/Right act as field ends (macOS / cross-platform habit).
+//
+// 🎯T307: Home/End own *field* start/end; Meta|Ctrl+ArrowLeft/Right are
+// left to the browser/OS as *line* start/end. The two chords are
+// deliberately distinct — do not re-alias Cmd/Ctrl+Arrow onto field ends.
 //
 // Enter chords (composer focused):
 //   Ctrl+Enter  → immediate send / interject
@@ -31,8 +34,10 @@
 
   // Field-content policy (owner: start/end of the *message box*, not
   // line-local and not transcript scroll):
-  //   Home / Meta|Ctrl+ArrowLeft  → start of effective content
-  //   End  / Meta|Ctrl+ArrowRight → end of effective content
+  //   Home → start of effective content
+  //   End  → end of effective content
+  // Meta|Ctrl+ArrowLeft/Right are NOT ours (🎯T307) — the platform moves
+  // the caret to the current line's start/end.
   // Seed-only (effective empty): both collapse to the insert point
   // (after seed / value.length) so caret never sits *before* the seed
   // where typed characters would embed inside EMPTY_SEED.
@@ -86,9 +91,10 @@
   }
 
   /**
-   * Pure selection result for Home/End and Meta|Ctrl+ArrowLeft/Right
-   * (and Shift+ variants). Returns null when the key is not a composer
-   * caret key we own (e.g. plain ArrowLeft, Meta+ArrowDown for jump).
+   * Pure selection result for Home/End (and Shift+ variants). Returns null
+   * when the key is not a composer caret key we own — plain ArrowLeft,
+   * Meta+ArrowDown (jump), and, since 🎯T307, Meta|Ctrl+ArrowLeft/Right,
+   * which the browser handles as line start/end.
    *
    * @param {string} key
    * @param {string} value
@@ -102,7 +108,6 @@
     // Alt: leave Option+Arrow paragraph / browser defaults alone.
     if (m.altKey) return null;
 
-    const metaChord = !!(m.metaKey || m.ctrlKey);
     let goHome = false;
     let goEnd = false;
 
@@ -110,12 +115,11 @@
       goHome = true;
     } else if (key === 'End') {
       goEnd = true;
-    } else if (key === 'ArrowLeft' && metaChord) {
-      // macOS Cmd+Left (and Ctrl+Left) → field start of effective content.
-      goHome = true;
-    } else if (key === 'ArrowRight' && metaChord) {
-      goEnd = true;
     } else {
+      // 🎯T307: Meta|Ctrl+ArrowLeft/Right belong to the browser/OS as
+      // *line* start/end. Returning null keeps index.html from
+      // preventDefault-ing them, so the two chords stay distinct:
+      // Home/End = field-wide, Cmd/Ctrl+Arrow = current line.
       return null;
     }
 

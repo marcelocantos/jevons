@@ -6972,11 +6972,14 @@ input.addEventListener('keydown', e => {
       return;
     }
   }
-  // 🎯T126 / 🎯T149: Home/End (and Meta|Ctrl+ArrowLeft/Right) move caret in
-  // the message box on *effective* content bounds — seed-aware so EMPTY_SEED
-  // does not trap Home/End in invisible ZWSP/period. Explicit apply +
-  // preventDefault so macOS does not scroll the transcript and T119
-  // jump-to-bottom never steals plain End while composer focused.
+  // 🎯T126 / 🎯T149: Home/End move the caret in the message box on
+  // *effective* content bounds — seed-aware so EMPTY_SEED does not trap
+  // Home/End in invisible ZWSP/period. Explicit apply + preventDefault so
+  // macOS does not scroll the transcript and T119 jump-to-bottom never
+  // steals plain End while composer focused.
+  // 🎯T307: Meta|Ctrl+ArrowLeft/Right are deliberately NOT handled here —
+  // selectionAfterHomeEnd returns null for them, so we fall through
+  // without preventDefault and the platform does line start/end.
   if (typeof ComposerKeys !== 'undefined' && ComposerKeys.selectionAfterHomeEnd) {
     const seedOpts = (typeof WisprContext !== 'undefined') ? {
       seedPrefixLen: typeof WisprContext.seedPrefixLen === 'function'
