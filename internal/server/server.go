@@ -29,8 +29,10 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/workers"
+	"github.com/marcelocantos/jevons/internal/writconf"
 )
 
 // remoteWriter abstracts over WebSocket and tern relay connections.
@@ -201,6 +203,13 @@ type Server struct {
 	// portfolios is the declarative domain portfolio registry (🎯T200).
 	// Guarded by mu. Empty = calm missing (no RHS portfolio chrome).
 	portfolios []config.Portfolio
+
+	// secAuditor is the standing security interest (🎯T335). Nil = status not ready.
+	secAuditor *secauditor.Interest
+	// writExec runs high-risk argv under writ seatbelt/egress (🎯T335).
+	writExec      writconf.Executor
+	writBin       string
+	writAvailable bool
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -385,6 +394,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/ideas", s.handleListIdeas)              // 🎯T325.3: listable idea surface
 	mux.HandleFunc("PATCH /api/ideas/{id}", s.handleTriageIdea)      // 🎯T325.3: triage ceremony
 	mux.HandleFunc("POST /api/ideas/{id}/triage", s.handleTriageIdea) // alias for clients without PATCH
+	mux.HandleFunc("GET /api/security/status", s.handleSecurityStatus)           // 🎯T335
+	mux.HandleFunc("POST /api/security/confined-exec", s.handleConfinedExec)     // 🎯T335 writ vertical
 	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)    // 🎯T200: domain portfolio groups
 	mux.HandleFunc("GET /api/frontier", s.handleFrontier)            // 🎯T131: live bullseye frontier table
 	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph) // 🎯T185: unachieved dependency Mermaid

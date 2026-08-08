@@ -30,7 +30,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/workers"
+	"github.com/marcelocantos/jevons/internal/writconf"
 )
 
 // ScreenshotFunc requests a screenshot from connected clients and returns the file path.
@@ -142,6 +144,13 @@ type Server struct {
 	// staffOps holds cooldown state for one bounded ops cycle (🎯T325.4).
 	// Nil until registerStaffOpsTools; pure policy in internal/staffops.
 	staffOps *staffOpsState
+
+	// secAuditor is the standing security interest (🎯T335). Nil until wired.
+	secAuditor *secauditor.Interest
+	// writExec confines high-risk fleet exec under writ (🎯T335).
+	writExec      writconf.Executor
+	writBin       string
+	writAvailable bool
 
 	// idleActivity tracks ACP phase for enter-idle detection (🎯T207).
 	// Nil until StartIdleNudgeLoop; broadcastAgentEvent Observes transitions.
@@ -309,6 +318,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerMCPReconnect()
 	s.registerAgentMigrate()
 	s.registerStaffOpsTools()
+	s.registerWritSecurityTools() // 🎯T335 security auditor + writ confinement
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s

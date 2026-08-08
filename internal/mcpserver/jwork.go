@@ -100,6 +100,8 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			"level", policy.Level,
 			"reason", policy.Reason,
 		)
+		// 🎯T335: surface policy deny to standing security auditor (not silent).
+		s.notifySecurityPolicyDeny(workerID, policy.Reason)
 		if s.workers != nil {
 			_ = s.workers.Start(workers.StartArgs{
 				ID: workerID, Task: text, Model: model, Cwd: cwd,

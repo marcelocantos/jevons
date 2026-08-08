@@ -43,6 +43,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/workers"
+	"github.com/marcelocantos/jevons/internal/writconf"
 
 	"github.com/marcelocantos/pigeon"
 	"github.com/marcelocantos/pigeon/crypto"
@@ -356,6 +357,20 @@ func main() {
 	if doitEng != nil {
 		mcpSrv.SetDoitEngine(doitEng)
 	}
+
+	// 🎯T335: writ confinement substrate (CLI) — seatbelt + egress for high-risk exec.
+	writBin := writconf.ResolveWritBin()
+	writAvail := writBin != ""
+	var writEx writconf.Executor
+	if writAvail {
+		writEx = &writconf.CLIExecutor{Bin: writBin}
+		slog.Info("writ confinement ready", "bin", writBin)
+	} else {
+		writEx = writconf.PureExecutor{}
+		slog.Warn("writ binary not found — confined-exec uses pure allowlist only until writ is on PATH")
+	}
+	mcpSrv.SetWritExecutor(writEx, writBin, writAvail)
+	srv.SetWritExecutor(writEx, writBin, writAvail)
 
 	mux := http.NewServeMux()
 
@@ -709,6 +724,18 @@ func main() {
 			"overseer", cfg.OverseerName, "provider", jevonDef.Provider, "likely_cause", reason)
 		srv.SetOverseerDownReason(reason)
 	}
+
+	// 🎯T335: standing security auditor — always on; deliver via overseer when attached.
+	secInterest := mcpserver.NewSecurityInterest(mcpSrv, func(text string) error {
+		if err := srv.SendToOverseer(text); err != nil {
+			slog.Error("security auditor notify failed", "err", err)
+			return err
+		}
+		return nil
+	})
+	mcpSrv.SetSecurityAuditor(secInterest)
+	srv.SetSecurityAuditor(secInterest)
+	slog.Info("security auditor ready", "name", "security-auditor", "writ", writAvail)
 
 	// 🎯T317 impatience ladder (T316 set + T318 attenuation + sinks).
 	// Constructed at the SetIdlePressureHooks seam (2a065e5): RePressure →
