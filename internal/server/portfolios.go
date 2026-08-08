@@ -171,12 +171,12 @@ func (s *Server) handleListPortfolios(w http.ResponseWriter, r *http.Request) {
 	defs := append([]config.Portfolio(nil), s.portfolios...)
 	reg := s.registry
 	progress := s.agentProgress
-	grokModels := s.grokModels
+	models := s.fleetModels
 	s.mu.RUnlock()
 
 	var agents []agentInfo
 	if reg != nil {
-		agents = listFleetAgentsNotifying(reg, nil, progress, grokModels)
+		agents = listFleetAgentsNotifying(reg, nil, progress, models)
 	} else {
 		agents = []agentInfo{}
 	}

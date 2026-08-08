@@ -720,9 +720,9 @@ func listFleetAgents(reg *claudia.Registry) []agentInfo {
 
 // listFleetAgentsNotifying is the same feed with an optional notify hook for
 // recovery events (server wires agents_changed). Used by hermetic tests with
-// notify=nil. progress may be nil (no ACP snapshots); grokModels may be nil
-// (no Grok session log lookup — the badge then paints the icon alone).
-func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string), progress *AgentProgressHub, grokModels *grokModelResolver) []agentInfo {
+// notify=nil. progress may be nil (no ACP snapshots); models may be nil (no
+// session-log lookup — rows then carry only what the live hub saw).
+func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string), progress *AgentProgressHub, models *fleetModelResolver) []agentInfo {
 	if reg == nil {
 		return []agentInfo{}
 	}
@@ -786,7 +786,6 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			TargetID:    strings.TrimSpace(d.TargetID),
 			Status:      status,
 			Provider:    strings.TrimSpace(string(d.Provider)),
-			Model:       strings.TrimSpace(d.Model),
 		}
 		if progress != nil {
 			p := progress.Get(d.Name)
@@ -795,21 +794,22 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 				info.Step = p.Step
 				info.Progress = p.Summary
 			}
-			// The registry pin is the owner's declared intent and wins
-			// (🎯T311): after a re-pin the agent restarts under the new model,
-			// and a sticky observation from the previous run would keep
-			// painting the old badge indefinitely. Observation still fills the
-			// badge for unpinned agents, which is where it was always the only
-			// source (🎯T287).
-			if info.Model == "" {
-				info.Model = strings.TrimSpace(p.Model)
-			}
+			// What the agent is running, seen on the wire this session.
+			info.Model = strings.TrimSpace(p.Model)
 		}
-		// Grok names no model in its ACP frames, so the badge had a company
-		// icon and no version (🎯T293). Fall back to the model Grok itself
-		// billed the session's last turn against.
-		if info.Model == "" && claudia.Provider(info.Provider) == claudia.ProviderGrok {
-			info.Model = grokModels.Model(d.WorkDir, d.SessionID)
+		// Nothing observed live — either the provider names no model in its
+		// frames (Grok, 🎯T293) or this daemon has not seen a turn yet, which
+		// is every agent right after a restart. The harness's own session log
+		// says what the process actually ran, so it seeds the badge at attach
+		// instead of leaving a live agent blank (🎯T311).
+		if info.Model == "" {
+			info.Model = models.Model(d.Provider, d.WorkDir, d.SessionID)
+		}
+		// Last resort: the launch pin. It is intent, not observation — a
+		// process can ignore it or move off it — so it only fills the gap
+		// before the first observation, and never overrides one (🎯T311).
+		if info.Model == "" {
+			info.Model = strings.TrimSpace(d.Model)
 		}
 		agents = append(agents, info)
 	}
@@ -836,7 +836,7 @@ func (s *Server) ObserveAgentProgress(name string, ev claudia.Event) bool {
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	reg := s.registry
-	grokModels := s.grokModels
+	models := s.fleetModels
 	s.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -847,7 +847,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	agents := listFleetAgentsNotifying(reg, func(names []string) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
-	}, s.agentProgress, grokModels)
+	}, s.agentProgress, models)
 	_ = json.NewEncoder(w).Encode(agents)
 }
 

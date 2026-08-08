@@ -171,10 +171,11 @@ type Server struct {
 	// agentProgress is live ACP-derived status for RHS fleet rows (🎯T118).
 	agentProgress *AgentProgressHub
 
-	// grokModels resolves a Grok agent's model from its own session log
-	// (🎯T293) — Grok never names one in the ACP frames the badge reads.
-	// Nil until SetGrokSessionsDir; the badge then paints the icon alone.
-	grokModels *grokModelResolver
+	// fleetModels resolves the model an agent is running from its provider's
+	// own session log: the only source for Grok, which names none on the wire
+	// (🎯T293), and the seed that survives a daemon restart for every provider
+	// (🎯T311). Nil until SetModelSessionRoots; rows then rely on the live hub.
+	fleetModels *fleetModelResolver
 
 	// eventLog is the durable decision/lifecycle journal (🎯T120):
 	// state_dir/logs/events.jsonl — browser + server events, tool-readable.

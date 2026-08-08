@@ -4,10 +4,14 @@
 package server
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/discovery"
 )
 
 // 🎯T287: the RHS fleet prefix (company icon + condensed model) needs the
@@ -84,6 +88,38 @@ func TestAgentProgressModelChangePushesRefresh(t *testing.T) {
 	}
 }
 
+// 🎯T311: the badge names what the agent is RUNNING. Precedence is
+// observation-first — live frames, then the harness's own session log — with
+// the registry Model pin as a placeholder only until something is observed.
+// The owner's bug: jevons-po ran fable for hours while the badge said O5,
+// because a sticky observation from the previous run outlived it.
+
+const (
+	testClaudeSessionA = "019fc1ba-3333-7000-8000-00000000000a"
+	testClaudeSessionB = "019fc1ba-4444-7000-8000-00000000000b"
+)
+
+// writeClaudeSession lays out projects/<encoded workdir>/<session>.jsonl with
+// one assistant frame per model, in order.
+func writeClaudeSession(t *testing.T, projects, workDir, sessionID string, models ...string) {
+	t.Helper()
+	dir := filepath.Join(projects, discovery.EncodeClaudeProject(workDir))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, m := range models {
+		b.WriteString(`{"type":"assistant","message":{"model":"` + m + `","content":[]}}` + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func claudeOnlyModels(projects string) *fleetModelResolver {
+	return newFleetModelResolver(discovery.Roots{ClaudeProjects: projects})
+}
+
 func TestListFleetAgentsCarriesProviderAndModel(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
@@ -91,9 +127,8 @@ func TestListFleetAgentsCarriesProviderAndModel(t *testing.T) {
 	}
 	dir := t.TempDir()
 	for _, d := range []claudia.AgentDef{
-		{Name: "grokker", WorkDir: dir, SessionID: "1", Provider: claudia.ProviderGrok},
-		{Name: "pinned", WorkDir: dir, SessionID: "2", Provider: claudia.ProviderClaude, Model: "opus"},
-		{Name: "observed", WorkDir: dir, SessionID: "3", Provider: claudia.ProviderClaude},
+		{Name: "grokker", WorkDir: dir, SessionID: testGrokSessionID, Provider: claudia.ProviderGrok},
+		{Name: "observed", WorkDir: dir, SessionID: testClaudeSessionA, Provider: claudia.ProviderClaude},
 	} {
 		if err := reg.Register(d); err != nil {
 			t.Fatal(err)
@@ -113,82 +148,137 @@ func TestListFleetAgentsCarriesProviderAndModel(t *testing.T) {
 	if got := byName["grokker"].Provider; got != "grok" {
 		t.Fatalf("grokker provider=%q want grok", got)
 	}
-	// No model reported anywhere → empty, so the UI paints the icon alone
-	// rather than inventing a version.
+	// Nothing pinned, nothing observed, no session root wired → empty, so the
+	// UI paints the icon alone rather than inventing a version.
 	if got := byName["grokker"].Model; got != "" {
 		t.Fatalf("grokker model=%q want empty", got)
 	}
-	if got := byName["pinned"].Model; got != "opus" {
-		t.Fatalf("pinned model=%q want the def override", got)
-	}
-	// Nothing pinned → the observed model is the only source there is.
 	if got := byName["observed"].Model; got != "claude-opus-4-8" {
 		t.Fatalf("observed model=%q want claude-opus-4-8", got)
 	}
 }
 
-// 🎯T311: the fleet badge showed O5 for jevons-po long after it was re-pinned
-// to fable and restarted, because the progress hub's sticky observation
-// overwrote the registry pin on the way out of the listing.
-
-func TestRegistryPinBeatsStickyObservedModel(t *testing.T) {
+// Acceptance 2: a freshly (re)started agent shows its running model at once —
+// the daemon's hub is empty, so the observation is seeded from the session log.
+func TestAttachSeedsRunningModelFromSessionLog(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	def := claudia.AgentDef{
-		Name: "jevons-po", WorkDir: t.TempDir(), SessionID: "s1",
+	projects, work := t.TempDir(), t.TempDir()
+	writeClaudeSession(t, projects, work, testClaudeSessionA, "claude-opus-5", "claude-fable-5")
+	// The owner's row: pinned "fable" at launch, actually running fable-5.
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: work, SessionID: testClaudeSessionA,
 		Provider: claudia.ProviderClaude, Model: "fable",
-	}
-	if err := reg.Register(def); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
-	hub := NewAgentProgressHub()
-	hub.Observe("jevons-po", claudia.Event{
-		Type: "assistant",
-		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
-	})
 
-	got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, nil), "jevons-po")
-	if got != "fable" {
-		t.Fatalf("model=%q, want the registry pin fable (sticky observation masked it)", got)
+	// Hub empty (daemon just restarted) — the badge must not be blank, and
+	// must not fall back to the launch pin when the log knows better.
+	got := modelOf(t, listFleetAgentsNotifying(reg, nil, NewAgentProgressHub(), claudeOnlyModels(projects)), "jevons-po")
+	if got != "claude-fable-5" {
+		t.Fatalf("model=%q want claude-fable-5 seeded from the session log", got)
 	}
 }
 
-func TestKillAndRestartClearsObservedModel(t *testing.T) {
+// Acceptance 1: a live agent is never blank. Even with no session log yet, the
+// launch pin stands in until the first observation.
+func TestLiveAgentNeverReportsEmptyModel(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	// An unpinned agent whose badge comes only from what it was seen running.
+	work := t.TempDir()
 	if err := reg.Register(claudia.AgentDef{
-		Name: "jv-worker", WorkDir: dir, SessionID: "s1", Provider: claudia.ProviderClaude,
+		Name: "jv-fresh", WorkDir: work, SessionID: testClaudeSessionA,
+		Provider: claudia.ProviderClaude, Model: "fable",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Session root wired but the agent has written no turn yet.
+	got := modelOf(t, listFleetAgentsNotifying(reg, nil, NewAgentProgressHub(), claudeOnlyModels(t.TempDir())), "jv-fresh")
+	if got == "" {
+		t.Fatal("live agent reported an empty model — the launch pin should stand in")
+	}
+	if got != "fable" {
+		t.Fatalf("model=%q want the pin as the pre-observation placeholder", got)
+	}
+}
+
+// Acceptance 3 (first half): live frames are fresher than the log they will
+// eventually be written to, so a model change repaints immediately.
+func TestLiveFramesUpdateTheBadgeAheadOfTheLog(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, work := t.TempDir(), t.TempDir()
+	writeClaudeSession(t, projects, work, testClaudeSessionA, "claude-opus-5")
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-worker", WorkDir: work, SessionID: testClaudeSessionA,
+		Provider: claudia.ProviderClaude, Model: "fable",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	hub := NewAgentProgressHub()
+	models := claudeOnlyModels(projects)
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, models), "jv-worker"); got != "claude-opus-5" {
+		t.Fatalf("model=%q want the log's claude-opus-5 before any frame", got)
+	}
+
+	// It answers a turn on fable-5; the badge must follow the wire, not the
+	// pin and not the older log entry.
+	hub.Observe("jv-worker", claudia.Event{
+		Type: "assistant",
+		Raw:  []byte(`{"message":{"model":"claude-fable-5"}}`),
+	})
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, models), "jv-worker"); got != "claude-fable-5" {
+		t.Fatalf("model=%q want claude-fable-5 from the live frame", got)
+	}
+}
+
+// Acceptance 3 (second half): kill clears the sticky observation, and a
+// restart under a different model reports the new one rather than the corpse's.
+func TestKillClearsObservationAndRestartShowsTheNewModel(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, work := t.TempDir(), t.TempDir()
+	writeClaudeSession(t, projects, work, testClaudeSessionA, "claude-opus-5")
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-worker", WorkDir: work, SessionID: testClaudeSessionA,
+		Provider: claudia.ProviderClaude,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hub := NewAgentProgressHub()
+	models := claudeOnlyModels(projects)
 	hub.Observe("jv-worker", claudia.Event{
 		Type: "assistant",
 		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
 	})
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, nil), "jv-worker"); got != "claude-opus-5" {
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, models), "jv-worker"); got != "claude-opus-5" {
 		t.Fatalf("model=%q want the observation while the agent runs", got)
 	}
 
-	// Killed: nothing in the registry to observe, so the hub must let go.
+	// Killed: nothing left in the registry, so the hub must let go of it.
 	if err := reg.Remove("jv-worker"); err != nil {
 		t.Fatal(err)
 	}
-	listFleetAgentsNotifying(reg, nil, hub, nil)
+	listFleetAgentsNotifying(reg, nil, hub, models)
 	if got := hub.Get("jv-worker").Model; got != "" {
-		t.Fatalf("after kill hub still holds model=%q", got)
+		t.Fatalf("after kill the hub still holds model=%q", got)
 	}
 
-	// Restarted on a fresh session: the dead run's model must not come back,
-	// even if a stale observation somehow survived the kill.
+	// Restarted on a fresh session running fable — the dead run's opus must
+	// not come back, even if a stale observation outlived the kill.
+	writeClaudeSession(t, projects, work, testClaudeSessionB, "claude-fable-5")
 	if err := reg.Register(claudia.AgentDef{
-		Name: "jv-worker", WorkDir: dir, SessionID: "s2", Provider: claudia.ProviderClaude,
+		Name: "jv-worker", WorkDir: work, SessionID: testClaudeSessionB,
+		Provider: claudia.ProviderClaude,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -196,9 +286,9 @@ func TestKillAndRestartClearsObservedModel(t *testing.T) {
 		Type: "assistant",
 		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
 	})
-	hub.SyncEpoch("jv-worker", "s1") // pretend the observation was s1's
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, nil), "jv-worker"); got != "" {
-		t.Fatalf("restarted model=%q, want the previous session's observation dropped", got)
+	hub.SyncEpoch("jv-worker", testClaudeSessionA) // stamp it as the dead run's
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, models), "jv-worker"); got != "claude-fable-5" {
+		t.Fatalf("restarted model=%q want claude-fable-5 — stale observation inherited", got)
 	}
 }
 

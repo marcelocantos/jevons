@@ -102,7 +102,7 @@ func TestGrokModelResolverEmptyWhenNoTurnYet(t *testing.T) {
 	if got := newGrokModelResolver("").Model(work, testGrokSessionID); got != "" {
 		t.Fatalf("no sessions dir: Model = %q want empty", got)
 	}
-	if got := (*grokModelResolver)(nil).Model(work, testGrokSessionID); got != "" {
+	if got := (*sessionModelResolver)(nil).Model(work, testGrokSessionID); got != "" {
 		t.Fatalf("nil resolver: Model = %q want empty", got)
 	}
 }
@@ -136,7 +136,7 @@ func TestGrokModelResolverNegativeLookupIsCachedThenRetried(t *testing.T) {
 	if got := r.Model(work, testGrokSessionID); got != "" {
 		t.Fatalf("Model = %q want empty — negative lookup still within TTL", got)
 	}
-	now = now.Add(grokModelLookupTTL + time.Second)
+	now = now.Add(sessionModelLookupTTL + time.Second)
 	if got := r.Model(work, testGrokSessionID); got != "grok-4.5-build" {
 		t.Fatalf("Model after TTL = %q want grok-4.5-build", got)
 	}
@@ -150,7 +150,7 @@ func TestGrokModelResolverReadsPastTheTailWindow(t *testing.T) {
 	b.WriteString(grokTurnLine("grok-4-build") + "\n")
 	filler := `{"method":"_x.ai/session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` +
 		strings.Repeat("x", 4000) + `"}}}}` + "\n"
-	for b.Len() < grokModelTailBytes+len(filler) {
+	for b.Len() < sessionModelTailBytes+len(filler) {
 		b.WriteString(filler)
 	}
 	b.WriteString(grokTurnLine("grok-4.5-build") + "\n")
@@ -184,7 +184,7 @@ func TestListFleetAgentsResolvesGrokModel(t *testing.T) {
 	}
 
 	byName := map[string]agentInfo{}
-	for _, a := range listFleetAgentsNotifying(reg, nil, nil, newGrokModelResolver(sessions)) {
+	for _, a := range listFleetAgentsNotifying(reg, nil, nil, grokOnlyModels(sessions)) {
 		byName[a.Name] = a
 	}
 	if got := byName["grokker"].Model; got != "grok-4.5-build" {
@@ -195,9 +195,17 @@ func TestListFleetAgentsResolvesGrokModel(t *testing.T) {
 	}
 }
 
-// A pinned Model override on the def still wins — the session log is only a
-// fallback for the common "provider default" case.
-func TestListFleetAgentsKeepsPinnedGrokModel(t *testing.T) {
+// grokOnlyModels resolves Grok rows from sessions and answers "" for every
+// other provider.
+func grokOnlyModels(sessions string) *fleetModelResolver {
+	return newFleetModelResolver(discovery.Roots{GrokSessions: sessions})
+}
+
+// 🎯T311 reverses the old precedence: the session log is what the process
+// actually billed its last turn against, so it beats the launch pin, which is
+// only ever intent. (Before T311 the pin won and a re-pinned agent kept
+// painting the model it no longer ran.)
+func TestListFleetAgentsPrefersSessionLogOverPinnedGrokModel(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -211,8 +219,15 @@ func TestListFleetAgentsKeepsPinnedGrokModel(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	agents := listFleetAgentsNotifying(reg, nil, nil, newGrokModelResolver(sessions))
+	agents := listFleetAgentsNotifying(reg, nil, nil, grokOnlyModels(sessions))
+	if len(agents) != 1 || agents[0].Model != "grok-4.5-build" {
+		t.Fatalf("agents=%+v want the running grok-4.5-build, not the grok-4 pin", agents)
+	}
+
+	// With no session log yet, the pin is all there is — better than a blank
+	// badge on a live agent, and it yields the moment a turn is written.
+	agents = listFleetAgentsNotifying(reg, nil, nil, grokOnlyModels(t.TempDir()))
 	if len(agents) != 1 || agents[0].Model != "grok-4" {
-		t.Fatalf("agents=%+v want pinned model grok-4", agents)
+		t.Fatalf("agents=%+v want the pin as the pre-observation placeholder", agents)
 	}
 }
