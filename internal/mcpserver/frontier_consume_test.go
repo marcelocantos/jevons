@@ -748,6 +748,120 @@ func TestSweepFrontierConsumeDeferredForceEngageSpawn(t *testing.T) {
 	}
 }
 
+// 🎯T342: T28-shaped device-voice DSP parks; T27.5 hub leaf still spawns.
+func TestSweepFrontierConsumeDeviceVoiceDSPParkNotSpawn(t *testing.T) {
+	spawned := 0
+	var spawnedIDs []string
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{
+				ID:   "T28",
+				Name: "Adaptive road-noise suppression trains on idle cabin audio and subtracts it during speech",
+				Context: "The car cabin is the primary deployment and road noise is the dominant threat. " +
+					"Slots into the VoicelabKit capture pipeline. iPad-in-car primary.",
+			},
+			{
+				ID:   "T27.5",
+				Name: "jevonsd ingests provider data feeds into an aggregated live model broadcast to clients",
+				Context: "Feed failures degrade gracefully; hub never wedges on stalled provider feeds.",
+				Tags:    []string{"providers", "feeds", "aggregation", "streaming"},
+			},
+		},
+		Now:               frontierNow(),
+		PORegistered:      true,
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(leaf poproactive.LeafObs, _ string) error {
+			spawned++
+			spawnedIDs = append(spawnedIDs, leaf.ID)
+			return nil
+		},
+	})
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	r28 := byID["T28"]
+	if r28.Action != FrontierConsumePark || r28.Reason != FrontierReasonDeferred {
+		t.Fatalf("T28: action=%s reason=%s want park/skip_deferred (%+v)", r28.Action, r28.Reason, r28)
+	}
+	if byID["T27.5"].Action != FrontierConsumeSpawn {
+		t.Fatalf("T27.5 hub must still spawn: %+v", byID["T27.5"])
+	}
+	for _, id := range spawnedIDs {
+		if id == "T28" {
+			t.Fatal("T28 device-voice must not spawn")
+		}
+	}
+	if spawned != 1 {
+		t.Fatalf("spawned=%d want 1 (T27.5 only)", spawned)
+	}
+}
+
+// 🎯T342 assembly: ledger T28-shaped parks; T27.5 may spawn.
+func TestFrontierConsumeSweepAssemblyDeviceVoiceDSP(t *testing.T) {
+	const ledger = `
+targets:
+  T28:
+    name: Adaptive road-noise suppression trains on idle cabin audio and subtracts it during speech
+    status: identified
+    context: The car cabin is the primary deployment and road noise is the dominant threat. Slots into the VoicelabKit capture pipeline ahead of the VAD. iPad continuously samples cabin/road noise.
+  T27.5:
+    name: jevonsd ingests provider data feeds into an aggregated live model broadcast to clients
+    status: identified
+    context: Feed failures degrade gracefully — a slow or stalled provider surfaces as degraded status and never wedges the hub.
+    tags:
+      - providers
+      - feeds
+      - aggregation
+      - streaming
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bullseye.yaml"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: dir, SessionID: "po1",
+		Purpose: claudia.PurposeWork, Parent: "jevons",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(dir, nil, nil)
+	s.SetRegistry(reg)
+	var spawned []string
+	reps := s.frontierConsumeSweep(FrontierConsumeLoopArgs{
+		Server:            s,
+		Workdir:           dir,
+		ParentPO:          "jevons-po",
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(leaf targetfile.FrontierLeaf, workerName, parent string) error {
+			spawned = append(spawned, leaf.ID)
+			return reg.Register(claudia.AgentDef{
+				Name: workerName, WorkDir: dir, SessionID: "spawned",
+				Purpose: claudia.PurposeWork, Parent: parent, TargetID: leaf.ID,
+			})
+		},
+	}, nil)
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	if r := byID["T28"]; r.Action != FrontierConsumePark || r.Reason != FrontierReasonDeferred {
+		t.Fatalf("T28 assembly: %+v", r)
+	}
+	if r := byID["T27.5"]; r.Action != FrontierConsumeSpawn {
+		t.Fatalf("T27.5 assembly must spawn: %+v", r)
+	}
+	for _, id := range spawned {
+		if id == "T28" {
+			t.Fatal("T28 must not be spawned")
+		}
+	}
+}
+
 // 🎯T339 assembly: ledger T22-shaped "Not urgent" never auto-spawns.
 func TestFrontierConsumeSweepAssemblyDeferredNotUrgent(t *testing.T) {
 	const ledger = `

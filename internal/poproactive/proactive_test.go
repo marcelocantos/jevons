@@ -357,3 +357,78 @@ func TestClassifyOnlyDeferredSleeps(t *testing.T) {
 		t.Fatalf("ordinary ready must kick: %+v", d)
 	}
 }
+
+// 🎯T342: T28-shaped car/iPad/VoicelabKit device DSP parks without "not urgent".
+// T27.5-shaped hub feed leaf stays ready (must not false-park on bare voice/feed).
+func TestClassifyLeafDeviceVoiceDSP(t *testing.T) {
+	// Real T28 shape: road-noise / cabin / VoicelabKit / capture pipeline — no "not urgent".
+	t28 := LeafObs{
+		ID:   "T28",
+		Name: "Adaptive road-noise suppression trains on idle cabin audio and subtracts it during speech",
+		Context: "The car cabin is the primary deployment and road noise is the dominant threat. " +
+			"Slots into the VoicelabKit capture pipeline ahead of the VAD. " +
+			"iPad continuously samples cabin/road noise.",
+	}
+	if !IsDeferredDeviceVoiceLeaf(t28.Tags, t28.Name, t28.Context) {
+		t.Fatal("T28-shaped must match IsDeferredDeviceVoiceLeaf")
+	}
+	if !IsDeferredNotUrgentLeaf(t28.Tags, t28.Name, t28.Context) {
+		t.Fatal("T28-shaped must compose into IsDeferredNotUrgentLeaf")
+	}
+	if k := ClassifyLeaf(t28); k != LeafSkipDeferred {
+		t.Fatalf("T28-shaped: got %s want skip_deferred", k)
+	}
+	// Phrase subsets from acceptance.
+	for _, ctx := range []string{
+		"road-noise suppressor stage",
+		"cabin audio adaptive profile",
+		"ipad-in-car primary path",
+		"iPad in car road rumble",
+		"VoicelabKit capture pipeline stage",
+		"voice capture pipeline ahead of VAD",
+	} {
+		if k := ClassifyLeaf(LeafObs{ID: "T28x", Name: "Device DSP residual", Context: ctx}); k != LeafSkipDeferred {
+			t.Fatalf("marker %q: got %s want skip_deferred", ctx, k)
+		}
+	}
+	// Exact device-voice tags.
+	if k := ClassifyLeaf(LeafObs{ID: "T28t", Name: "Voice residual", Tags: []string{"skip_device_voice"}}); k != LeafSkipDeferred {
+		t.Fatalf("tag skip_device_voice: got %s", k)
+	}
+	if k := ClassifyLeaf(LeafObs{ID: "T28t2", Name: "Voice residual", Tags: []string{"device-voice"}}); k != LeafSkipDeferred {
+		t.Fatalf("tag device-voice: got %s", k)
+	}
+	// T27.5 hub leaf: provider feeds / aggregation — must still be ready.
+	t275 := LeafObs{
+		ID:   "T27.5",
+		Name: "jevonsd ingests provider data feeds into an aggregated live model broadcast to clients",
+		Context: "Feed failures degrade gracefully — a slow or stalled provider surfaces as degraded status " +
+			"and never wedges the hub or other providers' feeds. WS fabric broadcast to connected clients.",
+		Tags: []string{"providers", "feeds", "aggregation", "streaming"},
+	}
+	if IsDeferredDeviceVoiceLeaf(t275.Tags, t275.Name, t275.Context) {
+		t.Fatal("T27.5 hub must not match device-voice DSP")
+	}
+	if IsDeferredNotUrgentLeaf(t275.Tags, t275.Name, t275.Context) {
+		t.Fatal("T27.5 hub must not be deferred-class")
+	}
+	if k := ClassifyLeaf(t275); k != LeafReady {
+		t.Fatalf("T27.5 hub: got %s want ready", k)
+	}
+	// unattended-safe / force-engage still open device-voice class (compose T339).
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T28", Name: t28.Name, Context: t28.Context, ForceEngage: true,
+	}); k != LeafReady {
+		t.Fatalf("force_engage T28: got %s want ready", k)
+	}
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T28", Name: t28.Name, Context: t28.Context, Tags: []string{"unattended-safe"},
+	}); k != LeafReady {
+		t.Fatalf("unattended-safe T28: got %s want ready", k)
+	}
+	// Mixed frontier: only T28 parks; T27.5 kicks.
+	d := Classify([]LeafObs{t28, t275})
+	if d.Mode != Kick || len(d.ReadyIDs) != 1 || d.ReadyIDs[0] != "T27.5" {
+		t.Fatalf("mixed T28 park + T27.5 ready: %+v", d)
+	}
+}

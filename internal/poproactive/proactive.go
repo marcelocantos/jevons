@@ -62,8 +62,9 @@ const (
 	// without unattended-safe / force-engage (🎯T338).
 	LeafSkipHighInfra
 	// LeafSkipDeferred: deferred / not-urgent / later-device product leaves
-	// that still look graph-ready (T22 voice class). Unattended consume parks
-	// with skip_deferred (or owner-parked tag) until owner play (🎯T339).
+	// that still look graph-ready (T22 "not urgent" class + T28 car/iPad
+	// voice DSP class). Unattended consume parks with skip_deferred (or
+	// owner-parked / skip_device_voice tag) until owner play (🎯T339 / 🎯T342).
 	LeafSkipDeferred
 )
 
@@ -191,6 +192,8 @@ func IsForceEngageTag(tags []string) bool {
 // deferredNotUrgentMarkers are scanned in name+context (case-insensitive).
 // Prefer explicit owner language over bare "deferred" alone (too common in
 // residual notes). Exact tags are matched separately (IsDeferredNotUrgentLeaf).
+// 🎯T339 "not urgent" phrasing; 🎯T342 device-voice DSP markers live in
+// deviceVoiceDSPMarkers / IsDeferredDeviceVoiceLeaf and compose here.
 var deferredNotUrgentMarkers = []string{
 	"not urgent",
 	"not-urgent",
@@ -203,24 +206,72 @@ var deferredNotUrgentMarkers = []string{
 	"do not auto-spawn",
 }
 
-// deferredExactTags mark a leaf deferred for unattended consume (🎯T339).
+// deferredExactTags mark a leaf deferred for unattended consume (🎯T339 / 🎯T342).
 var deferredExactTags = []string{
 	"deferred",
 	"not-urgent",
 	"later-device",
 	"owner-parked",
 	"skip_deferred",
+	"skip_device_voice",
+	"device-voice",
+	"voice-dsp",
 }
 
-// IsDeferredNotUrgentLeaf reports the 🎯T339 deferred / not-urgent / later-device
-// product class (T22 voice residual). Graph-ready leaves with this prose must
-// park unattended, not auto-spawn. force-engage / unattended-safe override at
-// ClassifyLeaf time, not here. Exact tags and phrase markers both count.
+// deviceVoiceDSPMarkers are T28-class car cabin / road-noise / VoicelabKit /
+// iPad-in-car voice capture pipeline phrases (🎯T342). T339 only caught
+// "not urgent" — T28 had no such phrase but is clearly deferred device DSP.
+// Prefer multi-word / product-specific markers so hub leaves (e.g. T27.5
+// provider feeds) are not false-parked by bare "voice" or "cabin".
+var deviceVoiceDSPMarkers = []string{
+	"road-noise",
+	"road noise",
+	"cabin audio",
+	"cabin/road",
+	"car cabin",
+	"ipad-in-car",
+	"ipad in car",
+	"voicelabkit",
+	"voice capture pipeline",
+}
+
+// IsDeferredDeviceVoiceLeaf reports the 🎯T342 voice/device DSP class (T28
+// residual after T339). Graph-ready leaves whose name/context mention
+// road-noise / cabin / iPad-in-car / VoicelabKit / voice capture pipeline
+// (or exact device-voice tags) park unattended without needing "not urgent"
+// phrasing. force-engage / unattended-safe override at ClassifyLeaf time.
+func IsDeferredDeviceVoiceLeaf(tags []string, name, context string) bool {
+	for _, want := range []string{"skip_device_voice", "device-voice", "voice-dsp"} {
+		if hasTag(tags, want) {
+			return true
+		}
+	}
+	hay := strings.ToLower(strings.TrimSpace(name) + " " + strings.TrimSpace(context))
+	if hay == "" {
+		return false
+	}
+	for _, m := range deviceVoiceDSPMarkers {
+		if strings.Contains(hay, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsDeferredNotUrgentLeaf reports the deferred / not-urgent / later-device /
+// device-voice product class for unattended frontier consume (🎯T339 + 🎯T342).
+// Graph-ready leaves with this prose must park, not auto-spawn.
+// force-engage / unattended-safe override at ClassifyLeaf time, not here.
+// Exact tags and phrase markers both count; device-voice DSP is a sibling
+// class composed here so LeafSkipDeferred covers both.
 func IsDeferredNotUrgentLeaf(tags []string, name, context string) bool {
 	for _, want := range deferredExactTags {
 		if hasTag(tags, want) {
 			return true
 		}
+	}
+	if IsDeferredDeviceVoiceLeaf(tags, name, context) {
+		return true
 	}
 	hay := strings.ToLower(strings.TrimSpace(name) + " " + strings.TrimSpace(context))
 	if hay == "" {
@@ -340,7 +391,8 @@ func ClassifyLeaf(o LeafObs) LeafKind {
 	if !force && HasActiveChildren(o) {
 		return LeafSkipParentActiveChildren
 	}
-	// 🎯T339 before design: "owner-parked" contains design marker "parked".
+	// 🎯T339 / 🎯T342 before design: "owner-parked" contains design marker
+	// "parked"; T28 device-voice DSP parks without "not urgent" phrasing.
 	if !force && !IsUnattendedSafeTag(o.Tags) &&
 		IsDeferredNotUrgentLeaf(o.Tags, o.Name, o.Context) {
 		return LeafSkipDeferred
