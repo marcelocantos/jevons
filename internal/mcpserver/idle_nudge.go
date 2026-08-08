@@ -70,6 +70,19 @@ const (
 	IdleNudgeMaxed IdleNudgeAction = "maxed"
 )
 
+// Skip reasons the 🎯T317 impatience ladder reads back off this sweep. Only
+// these three distinguish "the gap is still open, the actuator is just quiet
+// this tick" from "the agent came back to work"; every other skip reason means
+// the agent is not an impatience gap at all.
+const (
+	// IdleSkipInProgress: phase=working — the satisfaction verdict.
+	IdleSkipInProgress = "in_progress"
+	// IdleSkipBackoff: still idle, actuator waiting out its backoff.
+	IdleSkipBackoff = "backoff"
+	// IdleSkipBelowThreshold: still idle, not yet aged past the threshold.
+	IdleSkipBelowThreshold = "idle_below_threshold"
+)
+
 // IdleNudgeKind is the payload shape once ClassifyIdleNudge returns nudge.
 // Owner pin 🎯T207: first pass is brief-or-verify (full standing + mission
 // brief), never a bare "continue". Short continue only when brief is known
@@ -137,7 +150,7 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 
 	phase := strings.ToLower(strings.TrimSpace(o.Phase))
 	if phase == "working" {
-		return IdleNudgeSkip, "in_progress"
+		return IdleNudgeSkip, IdleSkipInProgress
 	}
 
 	max := o.MaxNudges
@@ -152,7 +165,7 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	if o.EverNudged {
 		need := NextNudgeBackoff(o.NudgeCount, o.Backoffs)
 		if o.SinceLastNudge < need {
-			return IdleNudgeSkip, "backoff"
+			return IdleNudgeSkip, IdleSkipBackoff
 		}
 	}
 
@@ -172,13 +185,13 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 		if o.IdleFor >= threshold {
 			return IdleNudgeNudge, "idle_stuck"
 		}
-		return IdleNudgeSkip, "idle_below_threshold"
+		return IdleNudgeSkip, IdleSkipBelowThreshold
 	default:
 		// Unknown phase strings: treat as idle-ish only when aged out.
 		if o.IdleFor >= threshold {
 			return IdleNudgeNudge, "idle_stuck"
 		}
-		return IdleNudgeSkip, "idle_below_threshold"
+		return IdleNudgeSkip, IdleSkipBelowThreshold
 	}
 }
 
