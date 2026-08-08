@@ -966,6 +966,12 @@ func (s *Server) TriggerIdlePressureSweep() {
 // real brief-or-continue deliver, with no overseer or PO turn in the loop.
 // Backoff and max-nudges come from the durable ledger, so this cannot thrash
 // or run forever.
+//
+// When SetImpatienceEngine is installed (🎯T317), this sweep drives the T316
+// reconcile set and the impatience ladder instead: re-pressure, overseer
+// noise, and human sticky all fire through the ladder sinks. The T315-only
+// SweepIdleNudges path remains for hermetic tests and daemons that have not
+// wired the ladder yet.
 func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 	if s == nil || s.registry == nil {
 		return nil
@@ -979,6 +985,7 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 	activity := s.idleActivity
 	ledger := s.idleNudgeLedger
 	hooks := s.idlePressureHooks
+	eng := s.impatience
 	s.mu.Unlock()
 	if activity == nil {
 		activity = NewIdleActivityTracker()
@@ -991,6 +998,13 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 	if now.IsZero() {
 		now = time.Now()
 	}
+
+	// 🎯T317 path: standing set + ladder owns re-pressure and escalation.
+	if eng != nil {
+		eng.tick(s, deps, hooks)
+		return nil
+	}
+
 	push := deps.Push
 	if push == nil {
 		push = func(target, event, text string) error {

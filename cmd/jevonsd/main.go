@@ -26,6 +26,8 @@ import (
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
+	"github.com/marcelocantos/jevons/internal/converge"
+	"github.com/marcelocantos/jevons/internal/converge/sticky"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
@@ -35,6 +37,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/upgrade"
@@ -698,9 +701,58 @@ func main() {
 		srv.SetOverseerDownReason(reason)
 	}
 
+	// 🎯T317 impatience ladder (T316 set + T318 attenuation + sinks).
+	// Constructed at the SetIdlePressureHooks seam (2a065e5): RePressure →
+	// idle-nudge deliver, Overseer → event_push to root, Human → sticky OS
+	// alert (39802c7). Unwired sticky fails construction, not fire.
+	var humanSink converge.HumanSink
+	if be, err := sticky.NewOSNotifier(); err != nil {
+		slog.Warn("impatience sticky unwired — human rung will error until terminal-notifier is available",
+			"err", err)
+	} else if st := sticky.New(be); st != nil {
+		humanSink = st
+		// Withdraw every raised alert on shutdown so a stale "stuck" does not
+		// outlive the daemon that could have cleared it (🎯T319).
+		defer func() {
+			for _, err := range st.ClearAll() {
+				slog.Warn("impatience sticky clear-all", "err", err)
+			}
+		}()
+	}
+	overseerName := cfg.OverseerName
+	if overseerName == "" {
+		overseerName = "jevons"
+	}
+	mcpSrv.SetImpatienceEngine(mcpserver.NewImpatienceEngine(mcpserver.ImpatienceEngineArgs{
+		Sinks:    mcpserver.NewImpatienceSinks(mcpSrv, overseerName, humanSink),
+		Overseer: overseerName,
+	}))
+	// MissionOpen from the nearest bullseye ledger for each bound target
+	// (workdir of an engaged agent). Unknown ledger row stays open (residual).
+	mcpSrv.SetIdlePressureHooks(mcpserver.IdlePressureHooks{
+		MissionOpen: func(targetID string) bool {
+			tid := strings.TrimSpace(strings.TrimPrefix(targetID, "🎯"))
+			if tid == "" {
+				return true
+			}
+			for _, d := range registry.List() {
+				if strings.TrimSpace(strings.TrimPrefix(d.TargetID, "🎯")) != tid {
+					continue
+				}
+				st, ok := targetfile.LoadTargetStatusFromCwd(d.WorkDir, tid)
+				if !ok {
+					return true
+				}
+				return targetfile.IsOpenStatus(st)
+			}
+			return true
+		},
+	})
+
 	// 🎯T171 dual-path: daemon-restarted → POs+overseer; short resume →
 	// open-mission workers (T207 brief-or-verify); worker-idle transition → PO.
 	// Also wires fleet-health hook for cockpit (T204).
+	// idlePressureSweep (via this loop) drives the T317 ladder when installed.
 	go mcpserver.StartIdleNudgeLoop(ctx, mcpserver.IdleNudgeLoopArgs{
 		Server:       mcpSrv,
 		StateDir:     cfg.StateDir,

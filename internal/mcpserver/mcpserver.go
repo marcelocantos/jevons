@@ -136,6 +136,9 @@ type Server struct {
 	// idlePressureHooks are the optional 🎯T316/T317 collaborator seams for
 	// the idle re-pressure actuator. Zero value = conservative defaults.
 	idlePressureHooks IdlePressureHooks
+	// impatience is the 🎯T317 ladder (T316 set + sinks). Nil = T315-only
+	// SweepIdleNudges path. Installed from main via SetImpatienceEngine.
+	impatience *ImpatienceEngine
 	// idleEventLast debounces worker-idle events per agent name.
 	idleEventLast map[string]time.Time
 	// idleNudgeSweep is set by StartIdleNudgeLoop for cockpit fleet health
