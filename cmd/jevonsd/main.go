@@ -26,9 +26,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
-	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/converge"
 	"github.com/marcelocantos/jevons/internal/converge/sticky"
+	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
@@ -358,17 +358,48 @@ func main() {
 		mcpSrv.SetDoitEngine(doitEng)
 	}
 
-	// 🎯T27.3/🎯T27.4: provider supervisor + MCP tool aggregation. The
-	// lifecycle converges processes/attachments on the desired set; the
-	// aggregator mirrors each Running provider's declared MCP endpoint
-	// (params.mcp_url) into the /mcp surface, namespaced and attributed.
-	// ConfigManager.Reload (admin surface pending) re-converges both.
+	// 🎯T27.3/🎯T27.4/🎯T27.5: provider supervisor + MCP tool aggregation +
+	// feed ingestion. Lifecycle converges processes/attachments; aggregator
+	// mirrors Running providers' MCP endpoints into /mcp; FeedHub serves
+	// /ws/provider, folds events into the live model, and Broadcasts to
+	// clients. ConfigManager.Reload re-converges all three.
 	if providerCfg != nil {
 		provAgg := provider.NewAggregator(provider.AggregatorArgs{Sink: mcpSrv})
 		provLC := provider.NewLifecycle(provider.LifecycleArgs{OnPhase: provAgg.HandlePhase})
+		feedReg := provider.NewRegistry()
+		feedReg.HubID = "jevons" // loop-safety (§5.4): drop self-origin relays
+		feedHub := provider.NewFeedHub(provider.FeedHubArgs{
+			Registry: feedReg,
+			Store:    providerCfg.Store(),
+			OnEvent: func(id string, ev provider.FeedEvent) {
+				srv.Broadcast(map[string]any{
+					"type":     "provider_event",
+					"provider": id,
+					"event":    ev,
+				})
+			},
+			OnStatus: func(st provider.FeedStatus) {
+				srv.Broadcast(map[string]any{
+					"type":   "provider_status",
+					"status": st,
+				})
+			},
+			Allowed: func(id string) bool {
+				for _, d := range providerCfg.Enabled() {
+					if d.ID == id {
+						return true
+					}
+				}
+				return false
+			},
+		})
 		provAgg.SetDecls(providerCfg.Desired())
+		feedHub.SetDecls(providerCfg.Desired())
+		srv.SetProviderFeeds(feedHub)
+		srv.SetProviderHealth(provLC.Health)
 		providerCfg.SetOnChange(func(decls []config.ProviderDecl) {
 			provAgg.SetDecls(decls)
+			feedHub.SetDecls(decls)
 			if err := provLC.Reconcile(decls); err != nil {
 				slog.Error("provider reconcile after config reload failed", "err", err)
 			}
@@ -376,6 +407,7 @@ func main() {
 		if err := provLC.Reconcile(providerCfg.Desired()); err != nil {
 			slog.Error("provider reconcile failed", "err", err)
 		}
+		slog.Info("provider feed hub ready", "desired", len(providerCfg.Desired()))
 		defer func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()

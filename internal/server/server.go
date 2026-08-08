@@ -29,6 +29,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/workers"
@@ -60,16 +61,16 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	version            string
-	stateDir           string // jevons state root (config-driven, 🎯T44/T49)
-	overseerName       string // registry name of the CEO agent (config-driven, 🎯T44)
+	version      string
+	stateDir     string // jevons state root (config-driven, 🎯T44/T49)
+	overseerName string // registry name of the CEO agent (config-driven, 🎯T44)
 	// overseerMigrator performs the registry half of a provider switch
 	// (🎯T285); this server owns the attach + seed halves. Nil = the
 	// capability is unavailable rather than half-wired.
 	overseerMigrator OverseerMigrator
 	// handoverSeeding is the single-flight guard for delivering a pending
 	// handover (🎯T285); guarded by mu.
-	handoverSeeding bool
+	handoverSeeding    bool
 	overseerDownReason string // legible cause when the overseer isn't running (🎯T54); guarded by mu
 	ca                 *auth.CA
 
@@ -172,6 +173,12 @@ type Server struct {
 
 	// agentProgress is live ACP-derived status for RHS fleet rows (🎯T118).
 	agentProgress *AgentProgressHub
+
+	// providerFeeds is the 🎯T27.5 feed-ingestion hub behind /ws/provider;
+	// providerHealth snapshots 🎯T27.3 lifecycle phases for /api/providers.
+	// Both nil until wired from main.
+	providerFeeds  *provider.FeedHub
+	providerHealth func() []provider.Health
 
 	// fleetModels resolves the model an agent is running from its provider's
 	// own session log: the only source for Grok, which names none on the wire
@@ -380,25 +387,27 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
-	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe) // 🎯T10 pure transport residual
+	mux.HandleFunc("/ws/provider", s.handleProviderFeed)    // 🎯T27.5 feed channel
+	mux.HandleFunc("GET /api/providers", s.handleProviders) // 🎯T27.3/T27.5 observability
+	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe)          // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T285
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
 	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend) // 🎯T182: product agent_send proxy
 	// 🎯T198: stop workers engaged on a frontier target (TargetID equality).
 	mux.HandleFunc("POST /api/agents/engagement/stop", s.handleEngagementStop)
-	mux.HandleFunc("POST /api/asides", s.handleCreateAside)          // 🎯T136: register purpose=aside in fleet
-	mux.HandleFunc("GET /api/asides/history", s.handleListClosedAsides) // 🎯T270: closed/dismissed aside archive
-	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)   // 🎯T152: dismiss fleet aside on target filed
-	mux.HandleFunc("POST /api/ideas", s.handleCaptureIdea)           // 🎯T325.3: durable idea intake
-	mux.HandleFunc("GET /api/ideas", s.handleListIdeas)              // 🎯T325.3: listable idea surface
-	mux.HandleFunc("PATCH /api/ideas/{id}", s.handleTriageIdea)      // 🎯T325.3: triage ceremony
-	mux.HandleFunc("POST /api/ideas/{id}/triage", s.handleTriageIdea) // alias for clients without PATCH
-	mux.HandleFunc("GET /api/security/status", s.handleSecurityStatus)           // 🎯T335
-	mux.HandleFunc("POST /api/security/confined-exec", s.handleConfinedExec)     // 🎯T335 writ vertical
-	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)    // 🎯T200: domain portfolio groups
-	mux.HandleFunc("GET /api/frontier", s.handleFrontier)            // 🎯T131: live bullseye frontier table
-	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph) // 🎯T185: unachieved dependency Mermaid
+	mux.HandleFunc("POST /api/asides", s.handleCreateAside)                  // 🎯T136: register purpose=aside in fleet
+	mux.HandleFunc("GET /api/asides/history", s.handleListClosedAsides)      // 🎯T270: closed/dismissed aside archive
+	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)           // 🎯T152: dismiss fleet aside on target filed
+	mux.HandleFunc("POST /api/ideas", s.handleCaptureIdea)                   // 🎯T325.3: durable idea intake
+	mux.HandleFunc("GET /api/ideas", s.handleListIdeas)                      // 🎯T325.3: listable idea surface
+	mux.HandleFunc("PATCH /api/ideas/{id}", s.handleTriageIdea)              // 🎯T325.3: triage ceremony
+	mux.HandleFunc("POST /api/ideas/{id}/triage", s.handleTriageIdea)        // alias for clients without PATCH
+	mux.HandleFunc("GET /api/security/status", s.handleSecurityStatus)       // 🎯T335
+	mux.HandleFunc("POST /api/security/confined-exec", s.handleConfinedExec) // 🎯T335 writ vertical
+	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)            // 🎯T200: domain portfolio groups
+	mux.HandleFunc("GET /api/frontier", s.handleFrontier)                    // 🎯T131: live bullseye frontier table
+	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph)         // 🎯T185: unachieved dependency Mermaid
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
@@ -615,6 +624,19 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		"type":    "init",
 		"version": s.version,
 	})
+
+	// 🎯T27.5: seed the client with the aggregated provider model so it
+	// does not wait for the next live event to learn feed state.
+	s.mu.RLock()
+	feedHub := s.providerFeeds
+	s.mu.RUnlock()
+	if feedHub != nil {
+		s.writeJSON(conn, ctx, map[string]any{
+			"type":  "provider_model",
+			"model": feedHub.Snapshot(),
+			"feeds": feedHub.Statuses(),
+		})
+	}
 
 	// Read loop: process messages from remote.
 	for {
