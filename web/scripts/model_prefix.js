@@ -29,6 +29,14 @@
 //     mark's foot as a true subscript (🎯T296 / 🎯T299).
 //   - Unknown model → icon alone. We never invent a version the server did
 //     not report; the icon still identifies the company.
+//   - An Anthropic family word we have never heard of must not erase the
+//     badge (🎯T348): 'claude-fable-5' painted a bare splat for exactly as
+//     long as 'fable' was missing from FAMILIES (🎯T312), and the next family
+//     rename would do it again. A 'claude-…' id whose family word is not in
+//     the list sniffs the first alphabetic token after 'claude' as the family
+//     — initial from its first letter — and a family-less id ('claude-2')
+//     paints the bare version. The subscript only ever repeats what the id
+//     says; it is the FAMILIES list that stops being load-bearing.
 //   - Unknown company → no prefix at all (row renders exactly as before).
 //   - Provider wins for the company mark; family initial + version paint
 //     only when the model id belongs to that company (🎯T323). Sticky
@@ -157,10 +165,32 @@
     return companyFromModel(model);
   }
 
-  // Model family: the word the version hangs off ('opus', 'grok', …).
+  // Model family: the word the version hangs off ('opus', 'grok', …). When
+  // no listed family matches a 'claude-…' id, the family is sniffed from the
+  // id itself (🎯T348) — a brand-new Anthropic family name must degrade to
+  // its own initial, never to a bare mark. See claudeFamilySniff.
   function familyOf(model) {
-    const hit = FAMILY_RE.exec(norm(model));
-    return hit ? hit[1] : '';
+    const m = norm(model);
+    const hit = FAMILY_RE.exec(m);
+    return hit ? hit[1] : claudeFamilySniff(m);
+  }
+
+  // The first alphabetic token after 'claude' in the id: that position is
+  // where every Anthropic spelling to date has put the family word
+  // ('claude-fable-5', 'us.anthropic.claude-opus-4-5-v1:0'). Digit runs
+  // (versions, dates) and revision markers ('v1') are stepped over; an id
+  // with no such token ('claude-2') has no family and condenses to its bare
+  // version. Empty for non-Claude ids — sniffing stays an Anthropic affair.
+  function claudeFamilySniff(m) {
+    const idx = m.indexOf('claude');
+    if (idx < 0) return '';
+    const tokens = m.slice(idx + 'claude'.length).split(/[^0-9a-z]+/);
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (!t || /^\d/.test(t) || /^v\d+$/.test(t)) continue;
+      return t;
+    }
+    return '';
   }
 
   // A version segment is a number, not a digit run (🎯T295 / 🎯T299): parse it
@@ -213,16 +243,29 @@
     return before ? segmentsFrom(before[1]) : '';
   }
 
-  // The version alone, no family letter: 'claude-opus-5' → '5'.
+  // The version alone, no family letter: 'claude-opus-5' → '5'. A Claude id
+  // with no family word at all ('claude-2') hangs its version off 'claude'
+  // itself (🎯T348) — the version is real and painting it beats a bare mark.
   function versionOf(model) {
     const m = norm(model);
     if (!m) return '';
-    return versionNear(m, familyOf(m));
+    const family = familyOf(m);
+    if (family) return versionNear(m, family);
+    return versionNear(m, 'claude');
   }
 
   // The letter painted ahead of the version: 'claude-opus-5' → 'O' (🎯T302).
+  // A sniffed family not in the map takes its own first letter (🎯T348);
+  // listed non-Anthropic families (grok, gpt) stay deliberately bare — one
+  // family per company, the letter would be noise (🎯T299).
   function familyInitial(model) {
-    return FAMILY_INITIAL[familyOf(model)] || '';
+    const family = familyOf(model);
+    if (!family) return '';
+    if (Object.prototype.hasOwnProperty.call(FAMILY_INITIAL, family)) {
+      return FAMILY_INITIAL[family];
+    }
+    if (FAMILIES.indexOf(family) !== -1) return '';
+    return family.charAt(0).toUpperCase();
   }
 
   // Extremely condensed model label: family initial + version (🎯T287 /

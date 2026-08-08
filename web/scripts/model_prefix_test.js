@@ -159,6 +159,48 @@ test('fable condenses to F5 like the Opus O5', function () {
   assert.strictEqual(p.label, 'F5');
 });
 
+// 🎯T348: the owner's jv-t347-reload-pin row wore the bare splat while its
+// model was known the whole time — the exact failure 🎯T312 fixed for fable,
+// reachable again by any family word the FAMILIES list has not met yet. The
+// list is now a styling preference, not a load-bearing gate: an unlisted
+// family word in a 'claude-…' id is sniffed from the id itself and painted
+// with its own initial, and a family-less id still paints its version. A
+// Claude row with a known model never condenses to nothing.
+test('an unlisted Anthropic family still paints initial + version, never a bare mark', function () {
+  // A family name we have never shipped a FAMILY_INITIAL entry for.
+  assert.strictEqual(MP.condenseModel('claude-zephyr-6'), 'Z6');
+  assert.strictEqual(MP.familyInitial('claude-zephyr-6'), 'Z');
+  assert.strictEqual(MP.versionOf('claude-zephyr-6'), '6');
+  assert.strictEqual(MP.condenseModel('claude-zephyr-4-5'), 'Z4.5');
+  // Bedrock spelling: family sniffed past the prefix, version stops at 'v1'.
+  assert.strictEqual(MP.condenseModel('us.anthropic.claude-nova-4-5-v1:0'), 'N4.5');
+  // Family-less ids paint the bare version — it is real, and beats a mark alone.
+  assert.strictEqual(MP.condenseModel('claude-2'), '2');
+  assert.strictEqual(MP.condenseModel('claude-2.1'), '2.1');
+  assert.strictEqual(MP.familyInitial('claude-2'), '');
+  // 'claude' alone carries no version to repeat: mark-only remains correct.
+  assert.strictEqual(MP.condenseModel('claude'), '');
+
+  // The sniffed family paints the same chrome as a listed one.
+  const html = MP.modelPrefixHtml({ provider: 'claude', model: 'claude-zephyr-6' });
+  assert.ok(html.indexOf('data-mark="claude-splat"') !== -1, html);
+  assert.ok(html.indexOf('<sub><span class="model-family">Z</span>6</sub>') !== -1, html);
+
+  // Production ids: any Claude id that names a version condenses to something.
+  ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001',
+   'claude-fable-5', 'claude-fable-5[1m]', 'claude-zephyr-6',
+   'claude-3-5-sonnet-20240620', 'claude-2'].forEach(function (id) {
+    assert.notStrictEqual(MP.condenseModel(id), '', id + ' condensed to nothing');
+    const p = MP.modelPrefix({ provider: 'claude', model: id });
+    assert.notStrictEqual(p.label, '', id + ' painted a bare mark');
+  });
+
+  // Sniffing is an Anthropic affair: unknown non-Claude ids stay untouched.
+  assert.strictEqual(MP.condenseModel('mystery-9'), '');
+  assert.strictEqual(MP.familyInitial('grok-4.5'), '');
+  assert.strictEqual(MP.familyInitial('gpt-5'), '');
+});
+
 // 🎯T302 restores the initial for Anthropic only. xAI ships one family, so a
 // 'G' would name nothing the mark does not already say — Grok rows keep exactly
 // the bare version 🎯T299 gave them.
