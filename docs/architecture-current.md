@@ -75,6 +75,48 @@ the in-process **MCP server** (`internal/mcpserver`, `jevons_*` tools +
 `jwork`); the tool list and stability grades are in
 [../STABILITY.md](../STABILITY.md).
 
+## The conversation surface (🎯T309.2)
+
+Conversation is **one agent-addressed API family**. Three operations, all
+resolved by agent name, with the overseer as just another addressable
+agent — there is no conversation capability the owner chat wire holds
+exclusively:
+
+| Op | Surface |
+|---|---|
+| transcript | `GET /api/agents/{name}/transcript`, and the `inspect_subscribe` history frame over `/ws/chat` |
+| live | `inspect_subscribe` → `agent_transcript` `kind=live` frames |
+| send | `POST /api/agents/{name}/send` (`origin: owner\|agent`), MCP `jevons_agent_send` |
+
+Turns share one shape (`turn_number`, `role`, `text`) whatever their
+origin; the payload names that origin in `source`:
+
+- `session` — a provider session transcript (fleet agents), read through
+  `internal/transcript`.
+- `chatlog` — the owner chat journal, which is the overseer's durable
+  conversation record. Addressing the overseer by name returns its turns
+  from there; the 🎯T124 refusal ("overseer uses main chat") is gone.
+
+**Transport residual** — what remains overseer-specific is transport and
+durability, not capability:
+
+- `GET /api/history` and the `/ws/chat` replay-on-connect are a paging /
+  transport **compat shim** over the same journal, kept until the
+  transport cutover (🎯T10.6) and the single-widget UI cutover (🎯T309.1)
+  move main chat onto the family.
+- A `/ws/chat` client subscribed to the overseer sees both the main chat
+  line and the `agent_transcript` live frame for one event; de-duping
+  belongs to the single widget (🎯T309.1).
+- Conversation **control** ops (rewind, interrupt) are separate from the
+  conversation family on both sides: the overseer's ride `/ws/chat`
+  control frames, fleet agents' ride MCP (`jevons_transcript_rewind`,
+  `jevons_agent_stop`) and `POST /api/agents/engagement/stop`.
+
+Server↔client event normalization stays in one layer:
+`internal/server/chat_wire.go` ↔ `web/scripts/chat_events.js`. Overseer
+live frames carry chat-wire lines verbatim, so 🎯T240 silent-stream
+suppression and 🎯T223 stream ids are inherited, never re-implemented.
+
 ## The provider seam (🎯T45)
 
 Jevons defaults to Grok via claudia with a pluggable selection surface (🎯T148); the

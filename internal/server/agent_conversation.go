@@ -38,6 +38,12 @@ import (
 //   - A /ws/chat client subscribed to the overseer receives both the main chat
 //     line and the agent_transcript live frame for the same event; de-duping
 //     belongs to the single widget in 🎯T309.1.
+//   - Conversation CONTROL ops (rewind, interrupt) sit outside this family on
+//     both sides — the overseer's ride /ws/chat control frames, fleet agents'
+//     ride MCP (jevons_transcript_rewind, jevons_agent_stop) and
+//     POST /api/agents/engagement/stop. Unifying control is not this slice.
+//
+// Full write-up: docs/architecture-current.md § The conversation surface.
 const (
 	// conversationSourceSession marks turns read from a provider session
 	// transcript (fleet agents).
