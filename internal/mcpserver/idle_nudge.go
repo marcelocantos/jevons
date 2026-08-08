@@ -39,6 +39,12 @@ const (
 	// DefaultIdleNudgeInterval is how often the daemon re-evaluates the fleet.
 	// 30s keeps pressure on idle workers; cockpit also ticks fleet hooks (🎯T204).
 	DefaultIdleNudgeInterval = 30 * time.Second
+	// DefaultIdlePressureInterval is how often the daemon re-evaluates open-mission
+	// work agents for idle re-pressure (🎯T315). Documented bound: a worker that
+	// enters phase=idle with an open mission is re-pressured within
+	// DefaultIdleNudgeThreshold + DefaultIdlePressureInterval (≤ 3m), then per
+	// DefaultIdleNudgeBackoffs, capped at DefaultIdleNudgeMax. Minutes, not hours.
+	DefaultIdlePressureInterval = time.Minute
 	// DefaultPostRestartDelay lets StartAll settle before the first wake sweep.
 	DefaultPostRestartDelay = 15 * time.Second
 
@@ -815,14 +821,31 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		}
 	}
 
-	// Cockpit fleet hook: dead-handle health + T236 outage/stuck recover.
-	// No general idle ladder (T207 event-first); recover is failure/stuck only.
+	// Durable backoff/max ledger for the re-pressure actuator (🎯T315). Opened
+	// here so the periodic path has it before the first tick; the post-restart
+	// sweep reuses it rather than opening a second in-memory copy of the file.
+	if stateDir != "" {
+		if l, err := OpenIdleNudgeLedger(stateDir); err == nil {
+			args.Server.mu.Lock()
+			args.Server.idleNudgeLedger = l
+			args.Server.mu.Unlock()
+		} else {
+			slog.Warn("idle pressure: ledger open failed", "err", err)
+		}
+	}
+
+	// Cockpit fleet hook: dead-handle health + T236 outage/stuck recover +
+	// 🎯T315 open-mission idle re-pressure. Event-first to the parent PO
+	// (emitWorkerIdleToParent) stays for replan/reap, but it is no longer the
+	// only pressure path — a PO that is itself idle or queued used to leave
+	// implementers silent for hours.
 	args.Server.mu.Lock()
 	args.Server.idleNudgeSweep = func(postRestart bool) {
 		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
 			slog.Info("fleet health (cockpit/idle loop)", "report", FormatDeadAgentReport(reps), "post_restart", postRestart)
 		}
 		args.Server.runFleetRecoverSweep(postRestart)
+		args.Server.TriggerIdlePressureSweep()
 	}
 	args.Server.mu.Unlock()
 
@@ -835,12 +858,28 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		args.Server.ResumeOpenMissionWorkers(overseer, stateDir, activity)
 	}
 
-	// Light periodic fleet health only (not idle ladder).
+	// Periodic fleet health + 🎯T315 open-mission idle re-pressure.
 	interval := args.Interval
 	if interval == 0 {
-		interval = time.Minute
+		interval = DefaultIdlePressureInterval
 	}
 	if interval < 0 {
+		<-ctx.Done()
+		return
+	}
+	runIdlePressureLoop(ctx, interval, func() {
+		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
+			slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
+		}
+		args.Server.TriggerIdlePressureSweep()
+	})
+}
+
+// runIdlePressureLoop ticks the actuator until ctx is done. Extracted from
+// StartIdleNudgeLoop so the periodic path is hermetically testable without a
+// daemon, registry, or clock skew (🎯T315).
+func runIdlePressureLoop(ctx context.Context, interval time.Duration, tick func()) {
+	if tick == nil || interval <= 0 {
 		<-ctx.Done()
 		return
 	}
@@ -851,11 +890,143 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
-				slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
+			tick()
+		}
+	}
+}
+
+// IdlePressureHooks are the optional collaborator seams of the 🎯T315
+// actuator. All are nil-safe; nil means the actuator falls back to its own
+// conservative defaults (any bound TargetID counts as an open mission,
+// nothing is design-gated, a maxed agent is logged and left alone).
+//
+//   - MissionOpen / LooksSatisfied: satisfaction semantics — owned by 🎯T316.
+//   - OnMaxed: escalation/noise ladder for an agent that exhausted its nudge
+//     budget while still idle — owned by 🎯T317.
+type IdlePressureHooks struct {
+	MissionOpen    func(targetID string) bool
+	DesignGated    func(targetID string) bool
+	LooksSatisfied func(name string) string // last terminal report, "" = unknown
+	OnMaxed        func(rep IdleNudgeReport)
+}
+
+// SetIdlePressureHooks installs the collaborator seams. Safe to call with a
+// zero value to clear them.
+func (s *Server) SetIdlePressureHooks(h IdlePressureHooks) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.idlePressureHooks = h
+	s.mu.Unlock()
+}
+
+// idlePressureDeps overrides I/O for hermetic tests. Zero value = live path:
+// wall clock, fire-and-forget send, registry process liveness.
+type idlePressureDeps struct {
+	Now     time.Time
+	Push    IdleNudgePusher
+	Running func(name string) bool
+}
+
+// TriggerIdlePressureSweep runs one periodic open-mission idle re-pressure
+// pass over the live fleet (🎯T315). Fire-and-forget; never blocks on a reply.
+func (s *Server) TriggerIdlePressureSweep() {
+	s.idlePressureSweep(idlePressureDeps{})
+}
+
+// idlePressureSweep is the daemon re-pressure actuator: every open-mission
+// work agent that is running and has sat phase=idle past the threshold gets a
+// real brief-or-continue deliver, with no overseer or PO turn in the loop.
+// Backoff and max-nudges come from the durable ledger, so this cannot thrash
+// or run forever.
+func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	overseer := s.overseerName()
+	if overseer == "" {
+		overseer = "jevons"
+	}
+
+	s.mu.Lock()
+	activity := s.idleActivity
+	ledger := s.idleNudgeLedger
+	hooks := s.idlePressureHooks
+	s.mu.Unlock()
+	if activity == nil {
+		activity = NewIdleActivityTracker()
+		s.mu.Lock()
+		s.idleActivity = activity
+		s.mu.Unlock()
+	}
+
+	now := deps.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	push := deps.Push
+	if push == nil {
+		push = func(target, event, text string) error {
+			// interrupt=false: a worker mid-turn is phase=working and never
+			// classified idle, so queueing is the right behaviour if the send
+			// races a turn start. Interrupting live turns is T236's job.
+			_, err := s.sendToAgent(target, formatIdleNudgeWire(event, text), false)
+			return err
+		}
+	}
+
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg:          s.registry,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
+		Now:          now,
+		PostRestart:  false,
+		OverseerName: overseer,
+		BriefPresent: func(name string) bool {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.fleetBriefed != nil && s.fleetBriefed[name]
+		},
+		MarkBriefed: func(name string) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.fleetBriefed == nil {
+				s.fleetBriefed = map[string]bool{}
+			}
+			s.fleetBriefed[name] = true
+		},
+		MissionOpen:        hooks.MissionOpen,
+		DesignGated:        hooks.DesignGated,
+		LastTerminalReport: hooks.LooksSatisfied,
+		ProcessRunning:     deps.Running,
+	})
+
+	delivered, maxed := 0, 0
+	for _, r := range reps {
+		switch {
+		case r.Delivered:
+			delivered++
+			s.logLifecycle(compIdleNudge, "idle_pressure", "ok", map[string]any{
+				"agent": r.Name, "reason": r.Reason, "kind": string(r.Kind),
+			})
+		case r.Error != "":
+			s.logLifecycle(compIdleNudge, "idle_pressure", "error", map[string]any{
+				"agent": r.Name, "reason": r.Reason, "err": r.Error,
+			})
+		case r.Action == IdleNudgeMaxed:
+			maxed++
+			if hooks.OnMaxed != nil {
+				hooks.OnMaxed(r)
 			}
 		}
 	}
+	if delivered > 0 || maxed > 0 {
+		slog.Info("idle pressure sweep",
+			"delivered", delivered, "maxed", maxed, "evaluated", len(reps))
+	}
+	return reps
 }
 
 // runFleetRecoverSweep evaluates open-mission workers for stuck-busy or
@@ -1082,8 +1253,12 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 	if activity == nil {
 		activity = NewIdleActivityTracker()
 	}
-	var ledger *IdleNudgeLedger
-	if stateDir != "" {
+	// Reuse the actuator's ledger when StartIdleNudgeLoop already opened it —
+	// two in-memory copies of the same file lose counts on write.
+	s.mu.Lock()
+	ledger := s.idleNudgeLedger
+	s.mu.Unlock()
+	if ledger == nil && stateDir != "" {
 		if l, err := OpenIdleNudgeLedger(stateDir); err == nil {
 			ledger = l
 			s.mu.Lock()

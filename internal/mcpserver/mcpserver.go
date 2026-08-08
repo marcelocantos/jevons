@@ -66,6 +66,14 @@ type Server struct {
 
 	mu          sync.Mutex
 	notifyJevon NotifyFunc
+	// overseerDeliver is the overseer arm of the single deliver-by-name path
+	// (🎯T309.3). Wired from main to server.DeliverToOverseerAs so an
+	// overseer-addressed send reuses the owner chat journal and notify queue.
+	// Nil falls back to notifyJevon for agent-origin text (see deliverToOverseer).
+	overseerDeliver OverseerDeliverFunc
+	// resolveSender overrides fleet-agent process resolution on that same
+	// path. Nil — the product path — resolves via the registry. Test seam.
+	resolveSender senderResolver
 	// agentEventHook receives every fleet worker event (progress, assistant, …)
 	// so the HTTP server can maintain RHS progress chrome (🎯T118).
 	agentEventHook func(name string, ev claudia.Event)
@@ -122,8 +130,12 @@ type Server struct {
 	// idleActivity tracks ACP phase for enter-idle detection (🎯T207).
 	// Nil until StartIdleNudgeLoop; broadcastAgentEvent Observes transitions.
 	idleActivity *IdleActivityTracker
-	// idleNudgeLedger legacy path (auto-nudge ladder retired); may be nil.
+	// idleNudgeLedger carries durable backoff/max for the 🎯T315 re-pressure
+	// actuator and the post-restart resume sweep; may be nil (no StateDir).
 	idleNudgeLedger *IdleNudgeLedger
+	// idlePressureHooks are the optional 🎯T316/T317 collaborator seams for
+	// the idle re-pressure actuator. Zero value = conservative defaults.
+	idlePressureHooks IdlePressureHooks
 	// idleEventLast debounces worker-idle events per agent name.
 	idleEventLast map[string]time.Time
 	// idleNudgeSweep is set by StartIdleNudgeLoop for cockpit fleet health
