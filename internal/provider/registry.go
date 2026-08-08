@@ -157,6 +157,19 @@ func (r *Registry) ModelFeed(providerID, feed string) []FeedEvent {
 	return out
 }
 
+// SetSurfaces upserts the UI surfaces for a provider that is not
+// (in-process) Registered — the wire path: FeedHub stores the surfaces
+// from each attached provider's manifest here so the 🎯T27.6 producer
+// composes them. Surfaces persist across a feed disconnect (last-known
+// UI), matching the model's last-known-state semantics.
+func (r *Registry) SetSurfaces(id string, ui []UISurface) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := make([]UISurface, len(ui))
+	copy(cp, ui)
+	r.surfaces[id] = cp
+}
+
 // ComposedUI returns a map of provider id → surfaces (with roots) for the
 // multi-provider UI producer (🎯T27.6). Slot name is the surface id.
 func (r *Registry) ComposedUI() map[string][]UISurface {

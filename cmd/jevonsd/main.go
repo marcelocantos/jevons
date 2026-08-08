@@ -384,6 +384,9 @@ func main() {
 					"status": st,
 				})
 			},
+			// 🎯T27.6: recompose and push the provider view on UI-relevant
+			// changes (surface attach, bound-feed events).
+			OnUI: srv.BroadcastProviderView,
 			Allowed: func(id string) bool {
 				for _, d := range providerCfg.Enabled() {
 					if d.ID == id {

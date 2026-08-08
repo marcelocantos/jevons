@@ -638,6 +638,12 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// 🎯T27.6: seed the composed provider view so the client renders
+	// provider surfaces immediately rather than waiting for a change.
+	if msg, ok := s.providerViewMessage(); ok {
+		s.writeJSON(conn, ctx, msg)
+	}
+
 	// Read loop: process messages from remote.
 	for {
 		mt, data, err := conn.Read(ctx)
@@ -750,6 +756,9 @@ func (s *Server) HandleAction(action, value string) {
 
 	case action == "disconnect":
 		slog.Info("disconnect requested via action")
+
+	case s.relayProviderAction(action, value):
+		// 🎯T27.6: routed to the owning provider by surface namespace.
 
 	default:
 		slog.Warn("unknown action", "action", action)

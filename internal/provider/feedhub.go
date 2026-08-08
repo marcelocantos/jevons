@@ -34,6 +34,7 @@ type FeedHub struct {
 	store    *Store
 	onEvent  func(providerID string, ev FeedEvent)
 	onStatus func(FeedStatus)
+	onUI     func()
 	allowed  func(id string) bool
 	log      *slog.Logger
 
@@ -59,6 +60,11 @@ type FeedHubArgs struct {
 	// OnStatus observes feed-status transitions (ok/degraded/disconnected).
 	// Called synchronously from hub goroutines — keep it cheap or hand off.
 	OnStatus func(FeedStatus)
+	// OnUI fires when the composed provider UI may have changed: a
+	// provider with UI surfaces attached, or an event folded on a feed
+	// one of its surfaces binds (🎯T27.6 reactive re-render). Called
+	// synchronously from connection goroutines — keep it cheap.
+	OnUI func()
 	// Allowed gates which manifest ids may attach. Nil allows any id —
 	// wire it to the enabled desired set in production.
 	Allowed func(id string) bool
@@ -134,6 +140,9 @@ type feedFrame struct {
 type feedConn struct {
 	conn  FrameConn
 	queue chan FeedEvent
+	// uiFeeds are feed names bound by this provider's UI surfaces —
+	// folding an event on one of these triggers a UI re-render.
+	uiFeeds map[string]bool
 }
 
 // NewFeedHub returns a hub ready to Attach provider connections.
@@ -158,6 +167,7 @@ func NewFeedHub(args FeedHubArgs) *FeedHub {
 		store:            args.Store,
 		onEvent:          args.OnEvent,
 		onStatus:         args.OnStatus,
+		onUI:             args.OnUI,
 		allowed:          args.Allowed,
 		log:              log,
 		handshakeTimeout: ht,
@@ -273,9 +283,21 @@ func (h *FeedHub) Attach(ctx context.Context, conn FrameConn) error {
 		}
 	}
 
-	fc := &feedConn{conn: conn, queue: make(chan FeedEvent, h.queueSize)}
+	fc := &feedConn{conn: conn, queue: make(chan FeedEvent, h.queueSize), uiFeeds: make(map[string]bool)}
+	for _, s := range m.Capabilities.UI {
+		for _, f := range s.Feeds {
+			fc.uiFeeds[f] = true
+		}
+	}
 	h.adopt(id, fc)
 	defer h.drop(id, fc)
+
+	// 🎯T27.6: store this provider's declared UI surfaces so the
+	// server-side producer composes them, and re-render on attach.
+	if len(m.Capabilities.UI) > 0 {
+		h.registry.SetSurfaces(id, m.Capabilities.UI)
+		h.notifyUI()
+	}
 
 	// Dispatcher: drains the bounded queue into the sink so a slow sink
 	// (e.g. a wedged client write inside Broadcast) never blocks folding.
@@ -412,6 +434,40 @@ func (h *FeedHub) ingest(id string, fc *feedConn, ev FeedEvent) {
 			st.Reason = "dispatch queue full (slow consumer)"
 		})
 	}
+	// Reactive re-render (§6.2): feed event → aggregated model →
+	// surface re-render, for feeds a surface of this provider binds.
+	if fc.uiFeeds[ev.Feed] {
+		h.notifyUI()
+	}
+}
+
+// notifyUI signals the composed provider UI may have changed.
+func (h *FeedHub) notifyUI() {
+	if h.onUI != nil {
+		h.onUI()
+	}
+}
+
+// ComposedUI exposes the aggregated provider surfaces for the 🎯T27.6
+// server-side producer.
+func (h *FeedHub) ComposedUI() map[string][]UISurface {
+	return h.registry.ComposedUI()
+}
+
+// SendAction relays one client UI action to the attached provider that
+// owns the surface (contract §4.1 action frame). Errors if the provider
+// has no live feed connection.
+func (h *FeedHub) SendAction(ctx context.Context, providerID, surface, action, value string) error {
+	h.mu.Lock()
+	fc := h.conns[providerID]
+	h.mu.Unlock()
+	if fc == nil {
+		return fmt.Errorf("provider %q not attached", providerID)
+	}
+	raw, _ := json.Marshal(map[string]string{
+		"op": "action", "surface": surface, "action": action, "value": value,
+	})
+	return fc.conn.WriteFrame(ctx, raw)
 }
 
 // adopt registers the connection as current for id, replacing (and
