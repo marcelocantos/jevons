@@ -135,15 +135,21 @@ func TestSetInspectSubReplaceAndClear(t *testing.T) {
 	}
 }
 
-func TestOverseerInspectHistoryDenied(t *testing.T) {
+// 🎯T309.2: the overseer is addressable on the agent family — the former
+// 🎯T124 refusal ("overseer uses main chat") is gone, and the name resolves to
+// a real transcript payload sourced from the owner chat journal.
+func TestOverseerInspectHistoryNotDenied(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.overseerName = "jevons"
 	payload, ok := s.buildAgentTranscriptPayload("jevons")
 	if !ok {
 		t.Fatal("ok")
 	}
-	if payload["denied"] != true {
-		t.Fatalf("want denied, got %v", payload)
+	if _, denied := payload["denied"]; denied {
+		t.Fatalf("overseer must not be refused by the family: %v", payload)
+	}
+	if payload["source"] != conversationSourceChatlog {
+		t.Fatalf("source=%v, want %q", payload["source"], conversationSourceChatlog)
 	}
 }
 
