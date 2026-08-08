@@ -4615,6 +4615,30 @@ function collapseAutoExpandedOffScreen() {
   return changed;
 }
 
+// 🎯T350: synchronous pin for expand/collapse geometry, gated like scrollDown
+// — a scrollTop already within PIN_HEIGHT_THRESHOLD_PX of the end must NOT be
+// rewritten (the unconditional `scrollTop = scrollHeight` on every message
+// event was a T341 bypass: sub-pixel noise became a visible pin write). Real
+// height changes (a bubble expanding is ≥ one 22.4px line) pass the gate.
+function pinToEndGated() {
+  if (!isTracking() || historyReplayActive) return;
+  const sh = msgs.scrollHeight;
+  const ch = msgs.clientHeight;
+  const st = msgs.scrollTop;
+  if (typeof VirtualList !== 'undefined' && VirtualList.shouldPinScroll) {
+    // prev==next height: only the |scrollTop − end| ≥ threshold branch gates.
+    if (!VirtualList.shouldPinScroll({
+      prevScrollHeight: sh,
+      nextScrollHeight: sh,
+      clientHeight: ch,
+      scrollTop: st,
+    })) return;
+  }
+  msgs.scrollTop = (typeof VirtualList !== 'undefined' && VirtualList.finalPinScrollTop)
+    ? VirtualList.finalPinScrollTop(sh, ch)
+    : sh;
+}
+
 // 🎯T261: when stick-to-bottom / post-history-pin lands near the transcript
 // end, expand every tall bubble that still has any pixel in the viewport
 // (not only the single latest). Manual toggle still wins. Mid-history free
@@ -4661,7 +4685,8 @@ function expandInViewNearEnd() {
     renderBody(el, el._fullRole || el._layoutRole, el._fullText);
     changed = true;
     // Keep stick-to-bottom so "near end" and viewport math stay honest.
-    if (isTracking()) msgs.scrollTop = msgs.scrollHeight;
+    // 🎯T350: gated — a real expand grows ≥ a line, so the pin still fires.
+    pinToEndGated();
   }
   return changed;
 }
@@ -4688,15 +4713,13 @@ function refreshLatestExpansion() {
   // position. scheduleLatestExpansion and scrollDownThrottled share a rAF
   // tick; pin synchronously here when Tracking so expand/collapse see the
   // live end (scrollDown still does double-rAF for late markdown layout).
-  if (isTracking() && !historyReplayActive) {
-    msgs.scrollTop = msgs.scrollHeight;
-  }
+  // 🎯T350: gated — this runs on every message event; an unconditional write
+  // bypassed the T341 sub-threshold gate and jiggled the page under noise.
+  pinToEndGated();
   // 🎯T261: expand other tall in-view messages near end (reload pin + stick).
   if (expandInViewNearEnd()) heightMayHaveChanged = true;
   // Re-pin after expand growth so collapse uses true end geometry.
-  if (heightMayHaveChanged && isTracking() && !historyReplayActive) {
-    msgs.scrollTop = msgs.scrollHeight;
-  }
+  if (heightMayHaveChanged) pinToEndGated();
   // Priors fully outside the strict viewport may now collapse (T246).
   if (collapseAutoExpandedOffScreen()) heightMayHaveChanged = true;
   // Collapse/expand changes layout; off-screen virt-shells that are now
@@ -5904,7 +5927,8 @@ function flushRematerializeFrame() {
       el: el,
       index: i,
       top: el.offsetTop,
-      height: el.offsetHeight,
+      // 🎯T350: fractional height — same read discipline as virtualize.
+      height: el.getBoundingClientRect().height,
     });
   }
   const plan = (typeof VirtualList !== 'undefined' && VirtualList.planRematerializeFrame)
@@ -5999,7 +6023,13 @@ function virtualizeMessages() {
         el: el,
         index: i,
         top: el.offsetTop,
-        height: el.offsetHeight,
+        // 🎯T350: fractional height (getBoundingClientRect), NOT integer
+        // offsetHeight. The demat freeze reuses this value as the shell
+        // minHeight; rounding it makes shell vs material heights differ by
+        // the fraction (line-height 1.6 → 22.4px lines), so every band
+        // demat/remat cycle shifts all content below by ~0.2–0.5px — the
+        // owner-visible random ~1px jiggle T341 chased.
+        height: el.getBoundingClientRect().height,
         shell: el.classList.contains('virt-shell'),
         // dematerializeMsg refuses these — keep them out of the plan so the
         // leftover re-arm below cannot spin on rows that never progress.
@@ -6061,11 +6091,13 @@ function dematerializeMsg(el, knownHeight) {
   // Live / latest auto-expanded: keep real DOM (collapse + stream need it).
   if (typeof el._streamRaw === 'string') return;
   if (el._expanded && el._autoExpanded) return;
-  // 🎯T349: virtualize pre-reads geometry — reading offsetHeight here would
-  // force a reflow per demat inside the write phase (the O(rows²) freeze).
+  // 🎯T349: virtualize pre-reads geometry — reading height here would force
+  // a reflow per demat inside the write phase (the O(rows²) freeze).
+  // 🎯T350: fallback read is fractional (rect), matching the pre-read — an
+  // integer freeze re-introduces the sub-pixel shell/material jiggle.
   const h = (typeof knownHeight === 'number' && knownHeight > 0)
     ? knownHeight
-    : el.offsetHeight;
+    : el.getBoundingClientRect().height;
   const w = msgsContentWidth();
   el._virtH = h;
   el._virtWasExpanded = !!el._expanded;
@@ -6113,7 +6145,9 @@ function rematerializeMsg(el) {
   // is a common scrollHeight micro-oscillation under track pin.
   const settle = () => {
     if (!el.isConnected || el.classList.contains('virt-shell')) return;
-    const nh = el.offsetHeight;
+    // 🎯T350: fractional measure — offsetHeight rounds to int, and a rounded
+    // lock below the natural height leaves material ≠ shell by the fraction.
+    const nh = el.getBoundingClientRect().height;
     const nw = msgsContentWidth();
     if (nh > 0 && nw > 0) {
       if (typeof VirtualList !== 'undefined' && VirtualList.recordSize) {

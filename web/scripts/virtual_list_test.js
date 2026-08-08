@@ -1084,4 +1084,55 @@ test('index.html wires T349 phased virtualize + budgets + fleet frame paint', fu
     'paintFleetTree runs inside the deferred fleet paint job');
 });
 
+test('T350 shouldPinScroll scrollTop-distance branch gates equal-height pins', function () {
+  // prev==next height: only the |scrollTop − end| ≥ threshold branch decides.
+  // This is the gate pinToEndGated relies on — sub-threshold drift is noise.
+  assert.strictEqual(VL.shouldPinScroll({
+    prevScrollHeight: 1000, nextScrollHeight: 1000,
+    clientHeight: 300, scrollTop: 699.5,
+  }), false, '0.5px off end must not pin');
+  assert.strictEqual(VL.shouldPinScroll({
+    prevScrollHeight: 1000, nextScrollHeight: 1000,
+    clientHeight: 300, scrollTop: 699,
+  }), false, '1px off end must not pin');
+  assert.strictEqual(VL.shouldPinScroll({
+    prevScrollHeight: 1000, nextScrollHeight: 1000,
+    clientHeight: 300, scrollTop: 698,
+  }), true, '2px off end pins');
+  assert.strictEqual(VL.shouldPinScroll({
+    prevScrollHeight: 1000, nextScrollHeight: 1000,
+    clientHeight: 300, scrollTop: 700,
+  }), false, 'exactly at end must not pin');
+});
+
+test('index.html wires T350 fractional freeze + gated expansion pins', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Fractional geometry: the virtualize read phase and the demat fallback
+  // must use getBoundingClientRect().height, never integer offsetHeight —
+  // a rounded shell freeze oscillates scrollHeight by the fraction on every
+  // band demat/remat cycle (the owner-visible ~1px jiggle).
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,4500}height: el\.getBoundingClientRect\(\)\.height/.test(html),
+    'virtualize read phase uses fractional rect height');
+  assert.ok(/function dematerializeMsg\(el, knownHeight\)[\s\S]{0,800}getBoundingClientRect\(\)\.height/.test(html),
+    'demat fallback measure is fractional');
+  assert.ok(/const settle = \(\) => \{[\s\S]{0,400}getBoundingClientRect\(\)\.height/.test(html),
+    'remat settle measure is fractional');
+  assert.ok(!/const nh = el\.offsetHeight/.test(html),
+    'settle must not round via offsetHeight');
+  // Gated pins: refreshLatestExpansion / expandInViewNearEnd go through
+  // pinToEndGated (shouldPinScroll), never a bare scrollTop=scrollHeight.
+  assert.ok(/function pinToEndGated\(\)[\s\S]{0,700}shouldPinScroll/.test(html),
+    'pinToEndGated exists and consults shouldPinScroll');
+  assert.ok(/function refreshLatestExpansion\(\)[\s\S]{0,2200}pinToEndGated\(\)/.test(html),
+    'refreshLatestExpansion pins through the gate');
+  const relBody = html.match(/function refreshLatestExpansion\(\)[\s\S]{0,2500}?\n\}/);
+  assert.ok(relBody && relBody[0].indexOf('msgs.scrollTop = msgs.scrollHeight') < 0,
+    'refreshLatestExpansion has no ungated scrollTop write');
+  const eivBody = html.match(/function expandInViewNearEnd\(\)[\s\S]{0,2500}?\n\}/);
+  assert.ok(eivBody && eivBody[0].indexOf('msgs.scrollTop = msgs.scrollHeight') < 0,
+    'expandInViewNearEnd has no ungated scrollTop write');
+});
+
 console.log(process.exitCode ? 'FAIL' : 'PASS virtual_list_test');

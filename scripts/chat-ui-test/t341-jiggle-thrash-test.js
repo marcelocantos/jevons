@@ -128,14 +128,16 @@ function costBody(step) {
       const msgs = document.getElementById('messages');
       if (!msgs) throw new Error('no #messages');
       // Clear any boot chrome noise we can; append synthetic bubbles.
-      for (let i = 0; i < 40; i++) {
+      // 🎯T350: enough rows that the top of the transcript is far outside the
+      // materialize band (~2400px) — real shells must exist for band churn.
+      for (let i = 0; i < 120; i++) {
         const d = document.createElement('div');
         d.className = 'msg ' + (i % 2 === 0 ? 'user' : 'jevons');
         d._layoutRole = i % 2 === 0 ? 'user' : 'jevons';
         const body = document.createElement('div');
         body.className = 'msg-body';
         // Vary height; a few tall bubbles near the end stress expand/collapse.
-        const lines = (i > 34) ? 24 : (2 + (i % 5));
+        const lines = (i > 114) ? 24 : (2 + (i % 5));
         body.textContent = ('Line of chat text for bubble ' + i + '.\n').repeat(lines);
         d.appendChild(body);
         d._body = body;
@@ -172,39 +174,73 @@ function costBody(step) {
     console.log('  boot:', JSON.stringify(boot));
 
     // Reset thrash counters; sample geometry while idle under stress.
+    // 🎯T350: probe BOTH ends — the first message (scroll integrity) and the
+    // last message (owner-visible in-viewport line position). Sub-pixel
+    // height oscillation of rows above the fold shifts the bottom probe
+    // without any scrollTop write; the top probe alone greenwashes it.
     await page.evaluate(() => {
       window.__layoutThrash = { virtualize: 0, scrollDown: 0, scrollDownPinned: 0, refreshAgents: 0 };
       window.__t341Samples = [];
       const msgs = document.getElementById('messages');
       const probe = msgs.querySelector('.msg.jevons') || msgs.querySelector('.msg');
+      const all = msgs.querySelectorAll('.msg');
       window.__t341Probe = probe;
+      window.__t341BotProbe = all.length ? all[all.length - 1] : null;
       window.__t341Timer = setInterval(() => {
         const m = document.getElementById('messages');
         const p = window.__t341Probe;
+        const b = window.__t341BotProbe;
         const r = p ? p.getBoundingClientRect() : null;
+        const rb = b ? b.getBoundingClientRect() : null;
         window.__t341Samples.push({
           t: performance.now(),
           scrollTop: m.scrollTop,
           scrollHeight: m.scrollHeight,
           clientHeight: m.clientHeight,
           probeTop: r ? r.top : null,
+          botTop: rb ? rb.top : null,
         });
       }, 16);
     });
 
     // Stress: fleet refresh (agents_changed path) + virtualize spam while idle.
+    // 🎯T350: also drive the two live-path triggers the original stress missed:
+    //   * refreshLatestExpansion — runs on every message event / remat settle
+    //     and used to pin scrollTop unconditionally while tracking;
+    //   * demat/remat churn of a row above the viewport — the virtualize band
+    //     cycles rows in normal use; an integer-frozen shell height vs the
+    //     fractional natural height (line-height 1.6 → 22.4px lines)
+    //     oscillates scrollHeight by the rounding remainder every cycle:
+    //     the owner-visible ~1px random jiggle.
     const STRESS_MS = 1200;
     const PUSHES = 40;
     for (let i = 0; i < PUSHES; i++) {
       step = i + 1;
-      await page.evaluate(() => {
+      await page.evaluate((arg) => {
         if (typeof window.scheduleRefreshAgents === 'function') window.scheduleRefreshAgents();
         else if (typeof window.refreshAgents === 'function') window.refreshAgents();
-        if (typeof window.scheduleVirtualize === 'function') window.scheduleVirtualize();
-        else if (typeof window.virtualizeMessages === 'function') window.virtualizeMessages();
+        // Band churn, phase-alternated so BOTH states are sampled (a remat
+        // followed by scheduleVirtualize in the same tick round-trips inside
+        // one 16ms sampler interval and hides any material↔shell height gap):
+        //   even step — rematerialize a ROTATING shell (different natural
+        //     heights: fixed row 0 can happen to land on an integer height
+        //     and mask fractional freeze bugs), NO virtualize;
+        //   odd step  — virtualize demats it again (far above the band).
+        if (arg.phase === 0) {
+          const shells = document.querySelectorAll('#messages .msg.virt-shell');
+          if (shells.length && typeof window.rematerializeMsg === 'function') {
+            window.rematerializeMsg(shells[arg.step % shells.length]);
+            window.__t350Churn = (window.__t350Churn || 0) + 1;
+          }
+        } else if (typeof window.scheduleVirtualize === 'function') {
+          window.scheduleVirtualize();
+        } else if (typeof window.virtualizeMessages === 'function') {
+          window.virtualizeMessages();
+        }
+        if (typeof window.refreshLatestExpansion === 'function') window.refreshLatestExpansion();
         // Micro height noise: toggle minHeight on an off-screen shell if any.
         if (typeof window.scrollDown === 'function') window.scrollDown();
-      });
+      }, { phase: i % 2, step: i });
       await page.waitForTimeout(Math.floor(STRESS_MS / PUSHES));
     }
     // Cost ticker text churn
@@ -231,31 +267,66 @@ function costBody(step) {
             Math.abs(samples[i].probeTop - samples[i - 1].probeTop));
         }
       }
-      // Count distinct scrollTop values in the second half (steady-state idle).
+      // Steady-state (second half): first-cycle settles are legitimate; after
+      // that, geometry must be EXACTLY still under churn (🎯T350 maxDelta=0).
       const half = samples.slice(Math.floor(samples.length / 2));
+      let halfMaxTopDelta = 0;
+      let halfMaxProbeDelta = 0;
+      let halfMaxBotDelta = 0;
+      for (let i = 1; i < half.length; i++) {
+        halfMaxTopDelta = Math.max(halfMaxTopDelta,
+          Math.abs(half[i].scrollTop - half[i - 1].scrollTop));
+        if (half[i].probeTop != null && half[i - 1].probeTop != null) {
+          halfMaxProbeDelta = Math.max(halfMaxProbeDelta,
+            Math.abs(half[i].probeTop - half[i - 1].probeTop));
+        }
+        if (half[i].botTop != null && half[i - 1].botTop != null) {
+          halfMaxBotDelta = Math.max(halfMaxBotDelta,
+            Math.abs(half[i].botTop - half[i - 1].botTop));
+        }
+      }
       const tops = new Set(half.map((s) => Math.round(s.scrollTop * 10) / 10));
       const probes = new Set(half.filter((s) => s.probeTop != null)
         .map((s) => Math.round(s.probeTop * 10) / 10));
+      const bots = new Set(half.filter((s) => s.botTop != null)
+        .map((s) => Math.round(s.botTop * 10) / 10));
       return {
         thrash: Object.assign({}, window.__layoutThrash),
+        churn: window.__t350Churn || 0,
+        shells: document.querySelectorAll('#messages .msg.virt-shell').length,
         samples: samples.length,
         maxTopDelta,
         maxHDelta,
         maxProbeDelta,
+        halfMaxTopDelta,
+        halfMaxProbeDelta,
+        halfMaxBotDelta,
         distinctScrollTopsHalf: tops.size,
         distinctProbeTopsHalf: probes.size,
+        distinctBotTopsHalf: bots.size,
         last: samples[samples.length - 1] || null,
       };
     });
 
-    console.log('  thrash:', JSON.stringify(report.thrash));
+    console.log('  thrash:', JSON.stringify(report.thrash),
+      'churn:', report.churn, 'shells:', report.shells);
+    // 🎯T350: the churn stress must actually cycle rows through demat/remat —
+    // a zero-churn run silently reverts to the greenwashing pre-T350 oracle.
+    if (report.churn < 10) {
+      failures.push('band churn did not run (churn=' + report.churn +
+        ', shells=' + report.shells + ') — seed too short for the materialize band?');
+    }
     console.log('  geometry:', JSON.stringify({
       samples: report.samples,
       maxTopDelta: report.maxTopDelta,
       maxHDelta: report.maxHDelta,
       maxProbeDelta: report.maxProbeDelta,
+      halfMaxTopDelta: report.halfMaxTopDelta,
+      halfMaxProbeDelta: report.halfMaxProbeDelta,
+      halfMaxBotDelta: report.halfMaxBotDelta,
       distinctScrollTopsHalf: report.distinctScrollTopsHalf,
       distinctProbeTopsHalf: report.distinctProbeTopsHalf,
+      distinctBotTopsHalf: report.distinctBotTopsHalf,
     }));
 
     // Pure gate: shouldPinScroll must exist and reject 1px.
@@ -288,6 +359,26 @@ function costBody(step) {
     if (report.distinctProbeTopsHalf > 3) {
       failures.push('idle message rect.top oscillated: ' + report.distinctProbeTopsHalf +
         ' distinct values (expected ≤3) — owner-visible jiggle');
+    }
+    // 🎯T350: steady-state geometry is EXACTLY still — zero scrollTop or
+    // probe movement in the second half, under churn + refreshLatestExpansion.
+    // Sub-pixel drift (integer-frozen shell heights, ungated pin writes) is
+    // the owner-visible ~1px random jiggle; a >0 budget here greenwashes it.
+    if (report.halfMaxTopDelta !== 0) {
+      failures.push('steady-state scrollTop moved: halfMaxTopDelta=' +
+        report.halfMaxTopDelta + ' (expected 0)');
+    }
+    if (report.halfMaxProbeDelta !== 0) {
+      failures.push('steady-state top-probe rect.top moved: halfMaxProbeDelta=' +
+        report.halfMaxProbeDelta + ' (expected 0)');
+    }
+    if (report.halfMaxBotDelta !== 0) {
+      failures.push('steady-state bottom-probe rect.top moved (owner-visible ' +
+        'line position): halfMaxBotDelta=' + report.halfMaxBotDelta + ' (expected 0)');
+    }
+    if (report.distinctBotTopsHalf > 1) {
+      failures.push('idle bottom message rect.top oscillated: ' +
+        report.distinctBotTopsHalf + ' distinct values (expected 1)');
     }
     // Continuous pin writes are the smoking gun; allow a small settle budget.
     const pinned = report.thrash.scrollDownPinned || 0;
