@@ -32,6 +32,12 @@ func TestModelFromEvent(t *testing.T) {
 		{"no model named", `{"type":"assistant","message":{"content":[]}}`, ""},
 		{"not json", `not json at all`, ""},
 		{"empty raw", ``, ""},
+		// 🎯T348: Claude Code stamps '<synthetic>' on frames it wrote itself
+		// (API errors, cancellations — clustered around daemon restarts). It
+		// names no real model and must read as "frame names none", exactly as
+		// the session-log parser has treated it since 🎯T311.
+		{"synthetic message.model", `{"type":"assistant","message":{"model":"<synthetic>"}}`, ""},
+		{"synthetic top-level", `{"type":"assistant","model":"<synthetic>"}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,6 +76,48 @@ func TestAgentProgressLearnsModelAndKeepsIt(t *testing.T) {
 	hub.SetStatus("w", "stopped")
 	if got := hub.Get("w").Model; got != "claude-opus-4-8" {
 		t.Fatalf("after SetStatus model=%q, want it sticky", got)
+	}
+}
+
+// 🎯T348: a synthetic frame between real turns must not evict the learned
+// model — the wire filter treats it as "frame names none", so stickiness wins.
+func TestSyntheticFrameNeverEvictsTheLearnedModel(t *testing.T) {
+	hub := NewAgentProgressHub()
+	hub.Observe("w", claudia.Event{Type: "assistant", Raw: []byte(`{"message":{"model":"claude-fable-5"}}`)})
+	hub.Observe("w", claudia.Event{Type: "assistant", Raw: []byte(`{"message":{"model":"<synthetic>"}}`)})
+	if got := hub.Get("w").Model; got != "claude-fable-5" {
+		t.Fatalf("model=%q want claude-fable-5 sticky across the synthetic frame", got)
+	}
+}
+
+// 🎯T348 belt: a hub poisoned with '<synthetic>' (observed live on the daily
+// daemon after a restart window, before the wire filter existed) must never
+// reach /api/agents — the feed drops it, clears the hub, and the pin/log
+// chain stands in, so the badge paints a real version instead of a bare mark
+// with a '<synthetic>' tooltip.
+func TestSyntheticHubResidueNeverReachesTheFeed(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-poisoned", WorkDir: t.TempDir(), SessionID: testClaudeSessionA,
+		Provider: claudia.ProviderClaude, Model: "claude-fable-5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hub := NewAgentProgressHub()
+	hub.by = map[string]AgentProgress{"jv-poisoned": {Model: syntheticModel, Session: testClaudeSessionA}}
+
+	got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, claudeOnlyModels(t.TempDir())), "jv-poisoned")
+	if got == syntheticModel {
+		t.Fatal("feed served '<synthetic>' as a model")
+	}
+	if got != "claude-fable-5" {
+		t.Fatalf("model=%q want the launch pin standing in", got)
+	}
+	if res := hub.Get("jv-poisoned").Model; res != "" {
+		t.Fatalf("hub still holds %q — residue should be cleared so it cannot return", res)
 	}
 }
 

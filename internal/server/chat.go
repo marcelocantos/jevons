@@ -873,6 +873,13 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			}
 			// What the agent is running, seen on the wire this session.
 			info.Model = strings.TrimSpace(p.Model)
+			// 🎯T348 belt: a hub poisoned before the modelFromEvent filter
+			// existed (or by any future synthetic producer) must not serve
+			// '<synthetic>' as a model — drop it so the log/pin chain engages.
+			if info.Model == syntheticModel {
+				progress.ClearModel(d.Name)
+				info.Model = ""
+			}
 			// 🎯T323: drop sticky observations that belong to another company
 			// (Claude-era fable under provider=grok after migrate). Clear the
 			// hub so the next poll does not re-serve the foreign id.

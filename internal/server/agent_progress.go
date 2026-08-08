@@ -189,6 +189,12 @@ func (h *AgentProgressHub) Observe(name string, ev claudia.Event) bool {
 // Claude Code JSONL carries it at message.model; other shapes may put a bare
 // top-level "model". Empty when the frame names none — the caller keeps the
 // last known model rather than forgetting it.
+//
+// "<synthetic>" frames (API error notices, cancellations — clustered around
+// daemon restarts) name no real model and must not poison the sticky
+// observation (🎯T348): the log parser has filtered them since 🎯T311, but the
+// live wire did not, so a restart window could pin '<synthetic>' into the hub
+// and paint a bare mark with a '<synthetic>' tooltip until the next real turn.
 func modelFromEvent(ev claudia.Event) string {
 	if len(ev.Raw) == 0 {
 		return ""
@@ -202,10 +208,14 @@ func modelFromEvent(ev claudia.Event) string {
 	if err := json.Unmarshal(ev.Raw, &line); err != nil {
 		return ""
 	}
-	if m := strings.TrimSpace(line.Message.Model); m != "" {
-		return m
+	m := strings.TrimSpace(line.Message.Model)
+	if m == "" {
+		m = strings.TrimSpace(line.Model)
 	}
-	return strings.TrimSpace(line.Model)
+	if m == syntheticModel {
+		return ""
+	}
+	return m
 }
 
 // SetStatus seeds a baseline when the process map knows running/stopped
