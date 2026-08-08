@@ -144,6 +144,9 @@ type Server struct {
 	// staffOps holds cooldown state for one bounded ops cycle (🎯T325.4).
 	// Nil until registerStaffOpsTools; pure policy in internal/staffops.
 	staffOps *staffOpsState
+	// sentinel holds cooldown/budget/grace state for durable 🎯T219 loop.
+	// Nil until ensureSentinelRuntime / registerSentinelTools.
+	sentinel *sentinelRuntime
 
 	// secAuditor is the standing security interest (🎯T335). Nil until wired.
 	secAuditor *secauditor.Interest
@@ -318,6 +321,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerMCPReconnect()
 	s.registerAgentMigrate()
 	s.registerStaffOpsTools()
+	s.registerSentinelTools()
 	s.registerWritSecurityTools() // 🎯T335 security auditor + writ confinement
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))

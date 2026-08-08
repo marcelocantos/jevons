@@ -917,6 +917,17 @@ func main() {
 	})
 	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
 
+	// 🎯T219: durable sentinel — continuous observe→classify→act while up.
+	// Pure watcher: control-plane repair / file+PO mission; no product implement; no Ship.
+	// Complements T204/T207 mechanical floor and T325.4 one-shot staff ops.
+	go mcpserver.StartSentinelLoop(ctx, mcpserver.SentinelLoopArgs{
+		Server:   mcpSrv,
+		StateDir: cfg.StateDir,
+		Workdir:  cfg.WorkDir,
+		Overseer: cfg.OverseerName,
+		DefaultPO: "jevons-po",
+	})
+
 	// 🎯T50/🎯T54 regression oracle, hoisted out of the attach block so it
 	// fires even when the overseer never launched: if no MCP client has
 	// listed our tools shortly after boot, the overseer is toolless or

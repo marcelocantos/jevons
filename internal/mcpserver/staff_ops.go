@@ -19,7 +19,7 @@ import (
 )
 
 // staffOpsState holds in-memory cooldown for re-file of the same symptom
-// (thin vertical 🎯T325.4; durable sentinel state remains T219 residual).
+// (🎯T325.4 one-shot; shared with durable sentinel 🎯T219 when both run).
 type staffOpsState struct {
 	mu       sync.Mutex
 	cooldown staffops.Cooldown
@@ -27,7 +27,7 @@ type staffOpsState struct {
 
 // registerStaffOpsTools exposes one bounded staff ops cycle (🎯T325.4):
 // sample health + resource snapshot → pure policy → deliver to root.
-// Not a permanent monologue; full sentinel is T219.
+// Not a permanent monologue; continuous loop is jevons_sentinel_cycle / StartSentinelLoop (T219).
 func (s *Server) registerStaffOpsTools() {
 	if s.staffOps == nil {
 		s.staffOps = &staffOpsState{
@@ -39,7 +39,7 @@ func (s *Server) registerStaffOpsTools() {
 	}
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_staff_ops_cycle",
-			mcp.WithDescription("Run one bounded staff ops cycle (🎯T325.4): sample health-of-health (fleet/dead agents, cost alerts) + compact resource snapshot (sessions, burn, agent counts, idle PO heuristic), classify harness-ok|repair|file+PO|ignore with cooldown on re-file, deliver compact brief to root overseer. Not permanent monologue; does not implement product code or open Ship. Thin vertical toward T219."),
+			mcp.WithDescription("Run one bounded staff ops cycle (🎯T325.4): sample health-of-health (fleet/dead agents, cost alerts) + compact resource snapshot (sessions, burn, agent counts, idle PO heuristic), classify harness-ok|repair|file+PO|ignore with cooldown on re-file, deliver compact brief to root overseer. Not permanent monologue; does not implement product code or open Ship. Continuous sentinel is jevons_sentinel_cycle (🎯T219)."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, build classification and wire text without delivering to overseer and without updating cooldown.")),
 			mcp.WithNumber("frontier_depth", mcp.Description("Optional frontier leaf count when caller already knows it (default 0 = unknown/not sampled).")),
 			mcp.WithString("overseer", mcp.Description("Deliver target agent name (default jevons).")),
