@@ -75,6 +75,25 @@ func (h *AgentProgressHub) Forget(name string) {
 	delete(h.by, name)
 }
 
+// ClearModel drops only the sticky model for name (🎯T323). Used when the
+// learned id belongs to a different company than the agent's live provider
+// (Claude-era "fable" under provider=grok after migrate): keep phase/step,
+// forget the foreign model so /api/agents never re-serves it.
+func (h *AgentProgressHub) ClearModel(name string) {
+	if h == nil || name == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	prev, ok := h.by[name]
+	if !ok || prev.Model == "" {
+		return
+	}
+	prev.Model = ""
+	prev.Updated = h.clock()
+	h.by[name] = prev
+}
+
 // Prune forgets every agent not in registered — the kill/remove path seen
 // from the listing side, so no call site has to remember to notify the hub
 // (🎯T311).

@@ -173,6 +173,62 @@ test('grok drops the family letter — one flavour', function () {
   assert.ok(html.indexOf('model-family') === -1, 'grok badge carries a family letter: ' + html);
 });
 
+// 🎯T323: provider wins for the company mark; family/version only when the
+// model id belongs to that company. Owner evidence after mass claude→grok
+// migrate: Grok mark + F (sticky model=fable) — fail closed to mark alone.
+test('migrate residue fable under grok paints mark only — never Grok+F', function () {
+  ['fable', 'claude-fable-5', 'claude-opus-4-8', 'opus', 'sonnet-4-5'].forEach(function (foreign) {
+    const p = MP.modelPrefix({ provider: 'grok', model: foreign });
+    assert.strictEqual(p.company, 'xai', foreign + ' company');
+    assert.strictEqual(p.initial, '', foreign + ' initial');
+    assert.strictEqual(p.version, '', foreign + ' version');
+    assert.strictEqual(p.label, '', foreign + ' label');
+    const html = MP.modelPrefixHtml({ provider: 'grok', model: foreign });
+    assert.ok(html.indexOf('data-company="xai"') !== -1, foreign + ' html company: ' + html);
+    assert.ok(html.indexOf('data-mark="grok"') !== -1, foreign + ' html mark: ' + html);
+    assert.ok(html.indexOf('model-family') === -1, foreign + ' painted a family letter: ' + html);
+    assert.ok(html.indexOf('<sub>') === -1, foreign + ' painted a version sub: ' + html);
+    // Tooltip must not advertise the foreign Anthropic id beside the Grok mark.
+    assert.ok(html.indexOf(foreign) === -1, foreign + ' leaked into tooltip: ' + html);
+  });
+  assert.strictEqual(MP.modelMatchesCompany('xai', 'fable'), false);
+  assert.strictEqual(MP.modelMatchesCompany('xai', 'grok-4.5-build'), true);
+  assert.strictEqual(MP.modelMatchesCompany('anthropic', 'fable'), true);
+});
+
+// 🎯T323 acceptance trio (product cases the owner named):
+//   sticky fable under grok → mark alone
+//   empty model → mark alone
+//   grok-4.5-build → 4.5
+test('T323 product cases: residue / empty / grok-4.5-build', function () {
+  const residue = MP.modelPrefixHtml({ provider: 'grok', model: 'fable' });
+  assert.ok(residue.indexOf('data-mark="grok"') !== -1, residue);
+  assert.ok(residue.indexOf('<sub>') === -1, 'residue painted version: ' + residue);
+  assert.ok(residue.indexOf('F') === -1, 'residue painted F: ' + residue);
+
+  const empty = MP.modelPrefixHtml({ provider: 'grok', model: '' });
+  assert.ok(empty.indexOf('data-mark="grok"') !== -1, empty);
+  assert.ok(empty.indexOf('<sub>') === -1, 'empty painted version: ' + empty);
+
+  const build = MP.modelPrefix({ provider: 'grok', model: 'grok-4.5-build' });
+  assert.strictEqual(build.company, 'xai');
+  assert.strictEqual(build.initial, '');
+  assert.strictEqual(build.version, '4.5');
+  assert.strictEqual(build.label, '4.5');
+  const buildHtml = MP.modelPrefixHtml({ provider: 'grok', model: 'grok-4.5-build' });
+  assert.ok(buildHtml.indexOf('<sub>4.5</sub>') !== -1, buildHtml);
+});
+
+// Symmetric fail-closed: Grok model under Claude mark is also mark-only.
+test('foreign grok model under claude paints mark only', function () {
+  const p = MP.modelPrefix({ provider: 'claude', model: 'grok-4.5-build' });
+  assert.strictEqual(p.company, 'anthropic');
+  assert.strictEqual(p.label, '');
+  const html = MP.modelPrefixHtml({ provider: 'claude', model: 'grok-4.5-build' });
+  assert.ok(html.indexOf('data-company="anthropic"') !== -1, html);
+  assert.ok(html.indexOf('<sub>') === -1, html);
+});
+
 // 🎯T293: the model id the server now reports for Grok rows comes from Grok's
 // own billing frame ("grok-4.5-build"), not from a hand-typed override. The
 // empty family initial must not swallow the version with it.

@@ -30,6 +30,10 @@
 //   - Unknown model → icon alone. We never invent a version the server did
 //     not report; the icon still identifies the company.
 //   - Unknown company → no prefix at all (row renders exactly as before).
+//   - Provider wins for the company mark; family initial + version paint
+//     only when the model id belongs to that company (🎯T323). Sticky
+//     migrate residue (fable under provider=grok) fails closed to mark-only
+//     — never Grok mark + Anthropic F, never a foreign version.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -241,6 +245,16 @@
       + icon.path + '</svg>';
   }
 
+  // True when the model id is empty, unrecognised, or sniffs as the same
+  // company the badge mark names (🎯T323). Provider wins for the mark;
+  // family/version only paint when the model belongs to that company —
+  // otherwise migrate residue (fable under grok) would paint Grok + F.
+  function modelMatchesCompany(company, model) {
+    if (!model || !company) return true;
+    const fromModel = companyFromModel(model);
+    return !fromModel || fromModel === company;
+  }
+
   // { company, initial, version, label, title } — the pure model behind the
   // HTML. Initial and version are kept apart because they are painted apart:
   // the letter gets its own weight and colour (🎯T302).
@@ -250,9 +264,12 @@
     const model = String(a.model || '');
     const company = companyFor(provider, model);
     if (!company) return { company: '', initial: '', version: '', label: '', title: '' };
-    const initial = familyInitial(model);
-    const version = versionOf(model);
-    const shown = model || provider;
+    // 🎯T323 fail-closed: foreign model under this company's mark → mark only.
+    const matched = modelMatchesCompany(company, model);
+    const initial = matched ? familyInitial(model) : '';
+    const version = matched ? versionOf(model) : '';
+    // Tooltip: never advertise a foreign model id beside the wrong mark.
+    const shown = matched && model ? model : provider;
     const title = (COMPANY_LABEL[company] || company) + (shown ? ' · ' + shown : '');
     return {
       company: company, initial: initial, version: version,
@@ -280,6 +297,7 @@
   return {
     companyFor: companyFor,
     companyFromModel: companyFromModel,
+    modelMatchesCompany: modelMatchesCompany,
     familyOf: familyOf,
     familyInitial: familyInitial,
     versionOf: versionOf,

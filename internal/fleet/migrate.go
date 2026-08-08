@@ -91,6 +91,12 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	next.Provider = target
 	next.SessionID = uuid.NewString()
 	next.Materialized = false // a fresh conversation, not a resume
+	// 🎯T323: the launch pin names a model of the *previous* provider
+	// (e.g. "fable" under Claude). Carrying it onto Grok makes /api/agents
+	// report an Anthropic id under provider=grok, and the RHS paints
+	// Grok-mark + F. Empty is correct until the new session observes a
+	// model or the operator pins one for the new provider.
+	next.Model = ""
 	// def was snapshotted before Stop, which clears the serve endpoint on
 	// the registry's own copy. Re-registering the snapshot would re-persist
 	// a dead ConnectURL/PID and send the next Launch into a reattach that

@@ -796,6 +796,13 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			}
 			// What the agent is running, seen on the wire this session.
 			info.Model = strings.TrimSpace(p.Model)
+			// 🎯T323: drop sticky observations that belong to another company
+			// (Claude-era fable under provider=grok after migrate). Clear the
+			// hub so the next poll does not re-serve the foreign id.
+			if info.Model != "" && !modelFitsProvider(info.Provider, info.Model) {
+				progress.ClearModel(d.Name)
+				info.Model = ""
+			}
 		}
 		// Nothing observed live — either the provider names no model in its
 		// frames (Grok, 🎯T293) or this daemon has not seen a turn yet, which
@@ -810,6 +817,12 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		// before the first observation, and never overrides one (🎯T311).
 		if info.Model == "" {
 			info.Model = strings.TrimSpace(d.Model)
+		}
+		// 🎯T323 fail-closed: never report a model id that sniffs as a
+		// different company than the live provider. Empty is correct until
+		// the new session observes one (or a same-company pin is set).
+		if info.Model != "" && !modelFitsProvider(info.Provider, info.Model) {
+			info.Model = ""
 		}
 		agents = append(agents, info)
 	}

@@ -101,6 +101,37 @@ func TestPrepareMigrationPersistsPointerBeforeRotating(t *testing.T) {
 	}
 }
 
+// 🎯T323: a Claude-era model pin must not survive onto the Grok row — that
+// is the residue that made /api/agents report "fable" under provider=grok.
+func TestPrepareMigrationClearsModelPin(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e26"
+	f, _, _ := migrateFixture(t, oldSession, true)
+	// Stamp a Claude-family pin on the pre-migrate Grok→Claude path's
+	// counterpart: start on Claude with Model=fable, migrate to Grok.
+	if err := f.reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: "/work/repo", SessionID: oldSession,
+		Provider: claudia.ProviderClaude, Materialized: true,
+		Purpose: claudia.PurposeWork, Model: "fable",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Fixture roots only know Grok sessions; force the cold switch so we
+	// exercise pin clearing without a Claude transcript on disk.
+	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderGrok, true); err != nil {
+		t.Fatalf("PrepareMigration: %v", err)
+	}
+	def := f.reg.Def("jevons-po")
+	if def == nil {
+		t.Fatal("agent vanished")
+	}
+	if def.Provider != claudia.ProviderGrok {
+		t.Fatalf("provider=%s want grok", def.Provider)
+	}
+	if def.Model != "" {
+		t.Fatalf("Model pin survived migrate: %q — Anthropic residue under Grok", def.Model)
+	}
+}
+
 // TestPrepareMigrationRefusesWhenHistoryCannotBeHandedOver: no transcript
 // means a silent cold start, which is the outcome this path exists to
 // prevent — so it refuses, and leaves the agent untouched.

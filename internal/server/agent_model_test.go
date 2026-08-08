@@ -302,3 +302,90 @@ func modelOf(t *testing.T, agents []agentInfo, name string) string {
 	t.Fatalf("agent %q not listed", name)
 	return ""
 }
+
+// 🎯T323: after claude→grok migrate residue, /api/agents must never still
+// report Anthropic model ids. Sticky hub observation, registry pin, or both.
+func TestListFleetAgentsDropsForeignModelAfterMigrateResidue(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	// Owner evidence shape: provider=grok, sticky/pin Model=fable from Claude.
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: work, SessionID: testGrokSessionID,
+		Provider: claudia.ProviderGrok, Model: "fable",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hub := NewAgentProgressHub()
+	// Hub still holds the Claude-era observation (session never stamped, or
+	// stamped then left as residue).
+	hub.Observe("jevons-po", claudia.Event{
+		Type: "assistant",
+		Raw:  []byte(`{"message":{"model":"claude-fable-5"}}`),
+	})
+
+	got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, nil), "jevons-po")
+	if got != "" {
+		t.Fatalf("model=%q want empty — Anthropic residue under provider=grok", got)
+	}
+	// Hub itself must be scrubbed so the next poll does not re-serve it.
+	if hub.Get("jevons-po").Model != "" {
+		t.Fatalf("hub still holds model=%q after list scrubbed it", hub.Get("jevons-po").Model)
+	}
+}
+
+// 🎯T323: empty model under grok is fine (mark alone); a same-company pin or
+// session-log seed still wins.
+func TestListFleetAgentsKeepsSameCompanyModel(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	if err := reg.Register(claudia.AgentDef{
+		Name: "empty", WorkDir: work, SessionID: "s-empty",
+		Provider: claudia.ProviderGrok,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "pinned", WorkDir: work, SessionID: "s-pin",
+		Provider: claudia.ProviderGrok, Model: "grok-4.5-build",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agents := listFleetAgentsNotifying(reg, nil, NewAgentProgressHub(), nil)
+	if got := modelOf(t, agents, "empty"); got != "" {
+		t.Fatalf("empty model=%q want empty", got)
+	}
+	if got := modelOf(t, agents, "pinned"); got != "grok-4.5-build" {
+		t.Fatalf("pinned model=%q want grok-4.5-build", got)
+	}
+}
+
+func TestModelFitsProvider(t *testing.T) {
+	cases := []struct {
+		provider, model string
+		want            bool
+	}{
+		{"grok", "", true},
+		{"grok", "grok-4.5-build", true},
+		{"grok", "fable", false},
+		{"grok", "claude-fable-5", false},
+		{"grok", "claude-opus-4-8", false},
+		{"claude", "fable", true},
+		{"claude", "claude-opus-5", true},
+		{"claude", "grok-4.5", false},
+		{"bedrock", "claude-sonnet-4-5", true},
+		{"", "fable", true},          // no provider → keep; UI sniffs model
+		{"mystery", "fable", true},   // unknown provider → keep
+		{"grok", "custom-thing", true}, // unrecognised pin → keep
+	}
+	for _, tc := range cases {
+		if got := modelFitsProvider(tc.provider, tc.model); got != tc.want {
+			t.Errorf("modelFitsProvider(%q, %q) = %v want %v", tc.provider, tc.model, got, tc.want)
+		}
+	}
+}
