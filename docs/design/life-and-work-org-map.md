@@ -15,15 +15,16 @@ filed — not the whole org.
 | `internal/config/persona.md` + fleet standing brief | Live load path for CEO/PO/worker behaviour |
 | 🎯T155 / 🎯T254 factory | Unattended frontier kick-off; factory parity parent (**T254 parked**) |
 | 🎯T219 sentinel | Always-on observe→repair/file loop (staff shape) |
-| 🎯T92 / 🎯T243 RSI | Ambient self-improvement: coach judges → overseer decides/files |
+| 🎯T92 / 🎯T243 / 🎯T130 RSI | **First-class org function** (§4): agent RSI (coach → root) + human RSI domain; filing reflex |
 | 🎯T93 / T95 asides | Light idea/target capture without polluting main flow |
 | [supergrok-cost-accounting.md](supergrok-cost-accounting.md) (🎯T137) | Subscription vs list-price cost honesty |
 | [provider-contract.md](provider-contract.md) | Tool providers (feeds/ui/mcp) — orthogonal to LLM harness providers |
 | [attention-threads.md](attention-threads.md) (🎯T65) | Main vs aside attention model |
 
 This note is the **org shape**: who senses, who decides, who acts, how
-resources and ideas flow. It does **not** implement factory, sentinel, or
-RSI code. Whole-org Ship is out of scope.
+resources, ideas, and **reflection (agent + human)** flow. It does **not**
+implement factory, sentinel, or RSI product code. Whole-org Ship is out of
+scope.
 
 ---
 
@@ -31,58 +32,67 @@ RSI code. Whole-org Ship is out of scope.
 
 **Root Jevons is CEO of Marcelo's life-and-work organisation** — an
 always-on sense / decide / act loop with a multi-provider resource
-portfolio, product owners, ancillary staff, and an idea→priority pipeline.
+portfolio, product owners, ancillary staff, an idea→priority pipeline,
+and **first-class recursive self-improvement (RSI) + self-reflection** for
+both the agent org and the human owner.
 
 It is **not**:
 
 - a chat wrapper that goes idle between owner turns
 - a single coding agent with a nicer UI
 - a permanent monologue of staff agents burning tokens without cycles
+- an org that only improves product while treating reflection as garnish
+  after "real" work
 - Gas Town / Beads reimplemented wholesale (factory parity lives under
   parked 🎯T254; escape-hatch evaluation informs this map, does not unpark it)
 
 **Owner test (extends T98):** if the owner watched a silent hour of root
 choices across product *and* life-adjacent capacity (ideas, stall recovery,
-resource allocation), would they mostly say "that's what I would have
-done"? When no — doctrine or product is wrong.
+resource allocation, **agent RSI filings, human reflection capture**), would
+they mostly say "that's what I would have done"? When no — doctrine or
+product is wrong.
 
 **Root remains interruptible CEO.** Owner speech always pre-empts ambient
 cycles. Root does not go dark implementing product (hierarchy T125/T129).
+**Continuous improvement of the org itself is core CEO duty** — not optional
+post-product garnish (§4).
 
 ---
 
 ## 2. Roles
 
 ```text
-                    Owner (ratifies constitution, Ship, taste, credentials)
+                    Owner (ratifies constitution, Ship, taste, credentials;
+                           human RSI / life+work self-reflection — first-class domain)
                                       │
                                       ▼
               ┌─────────────────────────────────────────┐
               │  Root CEO  jevons  (overseer / alter ego) │
-              │  sense · decide · act · interruptible     │
+              │  sense · decide · act · RSI root · interruptible │
               └─────────────────────────────────────────┘
                      │                    │
          ┌───────────┼──────────┐         │ staff (bounded cycles)
          ▼           ▼          ▼         ▼
       Portfolio   Product     Product   Sentinel / ops staff
-      (path)      Owner(s)    Owner(s)  RSI coach (judgment only)
+      (path)      Owner(s)    Owner(s)  RSI coach (judgment only → root)
          │           │          │         │
          │           ▼          ▼         │
-         │        Workers    Workers      └→ brief PO / escalate root
-         │        (Build)    (Build)
+         │        Workers    Workers      └→ judgments / brief PO / escalate
+         │        (Build)    (Build)         root files · never mint ledger
          ▼
    Domain POs (personal / minicades / …) — product-scoped only
 ```
 
 | Role | Who | Mandate | Does not |
 |------|-----|---------|----------|
-| **Owner** | Marcelo | Constitution, Ship plane, taste, MAJOR/PATCH, irreversible risk | Run the factory by hand every day |
-| **Root CEO** | `jevons` overseer | Always-on org control: allocate attention, spawn staff cycles, route to POs, relay outcomes, file when doctrine demands | Implement product code; parent product workers (T129); open Ship ambiently (T104) |
+| **Owner** | Marcelo | Constitution, Ship plane, taste, MAJOR/PATCH, irreversible risk; **human RSI** subject (habits, attention opportunity cost, education-of-self) the org serves | Run the factory by hand every day |
+| **Root CEO** | `jevons` overseer | Always-on org control: allocate attention, spawn staff cycles, route to POs, relay outcomes; **RSI control plane** — receive coach judgments, file/act/ignore (T243), filing reflex (T130); continuous improvement of the org itself | Implement product code; parent product workers (T129); open Ship ambiently (T104); skip RSI until "after product" |
 | **Portfolio** | Config path membership (T200) | Group POs under life/work buckets (e.g. personal `github.com/marcelocantos`) | Parse agent names for membership |
-| **Product Owner (PO)** | e.g. `jevons-po` | Product-scoped proactive Build: spawn workers, gate achieve, stay interruptible | Solo implement Build (T125); own whole-life SWOT |
-| **Worker** | Named fleet agents | Execute one mission; evidence-gated finish; auto-deregister on done (T165/T195) | Open Ship; redefine org doctrine mid-flight without filing |
-| **Staff (ancillary)** | Sentinel (T219), RSI coach (T243), future ops cycles; **parked** practical security + system management (§7.1) | **Bounded ops cycles** — observe, classify, repair-or-file, snapshot resources; then idle/sleep | Permanent monologue; mint ledger without root (RSI coach never files bullseye); unparked implementers for §7 domains without owner Build open |
-| **Aside / capture** | Short-lived attention threads | Arrest ideas and `target:` filings without stealing main (T93/T95/T65) | Become multi-day zombie side-chats by default |
+| **Product Owner (PO)** | e.g. `jevons-po` | Product-scoped proactive Build: spawn workers, gate achieve, stay interruptible | Solo implement Build (T125); own whole-life SWOT; own org-wide RSI control plane (root does) |
+| **Worker** | Named fleet agents | Execute one mission; evidence-gated finish; auto-deregister on done (T165/T195); mid-mission filing reflex when gaps appear | Open Ship; redefine org doctrine mid-flight without filing |
+| **Staff — RSI coach** | T243 coach (structural, not garnish) | **Bounded judgment cycle:** drip-read owner chat (priority) + eventlog + sessions; post judgments to overseer only | File / achieve / set_aside bullseye (root decides); permanent monologue; T92 phrase-list mint on product path |
+| **Staff (other ancillary)** | Sentinel (T219), future ops cycles; **parked** practical security + system management (§8.1) | **Bounded ops cycles** — observe, classify, repair-or-file, snapshot resources; then idle/sleep | Permanent monologue; unparked implementers for §8 domains without owner Build open |
+| **Aside / capture** | Short-lived attention threads | Arrest ideas, `target:` filings, **and human reflection sparks** without stealing main (T93/T95/T65) | Become multi-day zombie side-chats by default |
 
 **Hard hierarchy (already doctrine):**
 
@@ -92,6 +102,10 @@ cycles. Root does not go dark implementing product (hierarchy T125/T129).
 - Multi-slice missions fan out early (T111.4); unattended non-design
   frontier leaves get workers same cycle (T155); file→spawn same turn
   (T193).
+- **RSI control plane is root:** coach never mints the ledger; root files /
+  alerts / briefs PO / ignores (T243). Mid-turn agent half is filing
+  reflex (T130). Phrase-list mint (`JEVONS_RSI_MINT` / residual T92 path)
+  is **not** product path.
 
 ---
 
@@ -105,13 +119,18 @@ Always-on org behaviour is **not** "LLM awake forever." Separate:
 |--------|-----------------|----------------------------|
 | Daemon / health | Process up, HTTP `/health`, port truth | cockpit (T204), restart path (T188/T191) |
 | Fleet registry | Phase, idle, stuck, lineage, model badge truth | agent_list, T118, T324 residual class |
-| Eventlog | lifecycle errors, notify_queue, restart thrash | eventlog + RSI evidence path |
+| Eventlog | lifecycle errors, notify_queue, restart thrash | eventlog + agent-RSI evidence path |
 | Chat usability | busy storms, attach/dead, integrity | T94, T33, T60 |
 | Cost collector | burn rates, session counts, subscription honesty | T137 budget accounting |
 | Frontier / ledger | unblocked leaves, stalls, engagement | bullseye, T198/T222 engage |
-| Coach drip | owner chat priority + eventlog + sessions | T243 RSI coach (judgment out, no mint) |
+| **Coach drip** | owner main chat (priority) + eventlog + session transcripts | T243 RSI coach (judgment out, **no mint**) |
+| **Session retro surfaces** | end-of-session / stop-point friction, repeated failure modes, doctrine slips | mnemo transcripts, eventlog samples, coach extract (sense only) |
+| **Owner capture / reflection** | human sparks: habits, attention cost, life+work retro notes, education-of-self | asides (T93/T95), idea intake (§7), main chat priority |
+| **Week-of-use / habit signal** | recurring owner friction, capacity thrash, "we should always…" patterns across days | coach drip + root RSI cycle; not automatic ledger mint |
 
 These run on timers, hooks, and harness — **no monologue token burn**.
+Reflection sensors are **structural sense inputs**, not a related-targets
+footer.
 
 ### 3.2 Deliberate decide / act (LLM cycles)
 
@@ -121,38 +140,103 @@ These run on timers, hooks, and harness — **no monologue token burn**.
 | PO proactive pass | Frontier non-empty or new leaf | Product PO | Work until frontier empty for *that product*, then **sleep** (first Build child) |
 | Worker mission | Spawn + brief | Worker | One target / slice; finish with oracle evidence |
 | Staff ops cycle | Interval or anomaly spike | Sentinel / ops staff | Observe→classify→repair **or** file+PO **or** snapshot to root; max actions/hour; then stop |
-| RSI judgment cycle | Schedule / drip | Coach → root | Coach posts judgments only; root files / alerts / ignores |
+| **Agent RSI judgment** | Schedule / drip (coach) | Coach → **root** | Coach posts judgments only; root files / alerts / briefs PO / ignores. Coach **never** calls bullseye |
+| **Agent RSI act (filing)** | Judgment accepted, or mid-work gap / standing rule | Root (or worker filing reflex T130) | Same-turn file or prompt-file (name + acceptance); skip one-off flukes; continuous improvement of org doctrine is core duty |
+| **Human RSI / life+work retro** | Owner capture, week-of-use retro, self-reflection spark | Root (or light staff) | Durable capture + triage like ideas (§7): habits, attention opportunity cost, education-of-self — **first-class domain**, not agent-meta-only |
 | Idea triage | Capture / aside / owner ideation | Root (or light staff) | Persist idea; score opportunity cost; route to bullseye/aside — no evaporation |
 
 **Rule:** sensors fire continuously; **LLM cycles are episodic and bounded.**
 Staff that never sleep are a product bug (cost + noise), not ambition.
+RSI cycles that never run (deferred until "after real work") are an
+**org-shape bug**, not thrift.
 
 ---
 
-## 4. Staff functions (bounded ops, not permanent monologue)
+## 4. RSI + self-reflection (first-class, agent + human)
+
+Reflection is **structural** on this map — not a side mention of T92/T243
+in a related-targets table, and not optional garnish after product work.
+
+### 4.1 Two halves (both first-class)
+
+| Half | Subject | What "good" looks like | Product path (landed / residual) |
+|------|---------|------------------------|----------------------------------|
+| **Agent RSI** | The org / fleet / doctrine | Gaps and standing rules become ledger intent same turn; org improves itself under CEO duty | **T243** coach drip → judgments to overseer; overseer alone files/acts. **T130** filing reflex (mid-turn agent half). **T92** phrase-list mint residual **off product path** (`JEVONS_RSI_MINT` opt-in only — not standing ambient) |
+| **Human RSI** | Owner life + work self | Owner self-reflection, habits, attention opportunity cost, education-of-self are captured and triaged like ideas — a **domain the org serves**, not only agent meta | Surfaces: asides, idea pipeline (§7), coach-priority owner chat, week-of-use retro. No ambient auto-implement of life OS (§8 park). Root triages; owner ratifies high-taste moves |
+
+### 4.2 Agent RSI control plane (root decides)
+
+```text
+  sense (coach drip / session retro / eventlog / mid-mission gap)
+       │
+       ▼
+  coach judgment (T243)  ──never──▶  bullseye mint
+       │
+       ▼
+  root overseer (alter ego)
+       │
+       ├── file bullseye (T130 ceremony)
+       ├── alert / brief PO
+       ├── act on Build plane (spawn under PO hierarchy)
+       └── ignore (one-off fluke / noise)
+```
+
+- **Coach never files bullseye.** Root is the intent-ledger control plane.
+- **Filing reflex (T130)** is the agent half mid-turn: real product gap /
+  repeated failure / standing behavioural rule → file or prompt-file same
+  turn — not only "standing rule / going forward / from now on / we should
+  always…" in chat.
+- **Continuous improvement of the org itself is core CEO duty** (T98
+  dimension 8 + this map) — not a side quest after product ships.
+
+### 4.3 Human RSI (domain, not garnish)
+
+Owner intent for T325 already named **RSI-for-human-and-agent** alongside
+education, finance, health, leisure. On this map that means:
+
+1. Human reflection sparks get the **same no-evaporation pipeline** as
+   product ideas (§7) — durable capture → triage → file / park / ask owner.
+2. Topics include habits, opportunity cost of attention, education of self,
+   life+work retro — not only "how agents should behave."
+3. The org **serves** that domain (capture, surface, prioritise); it does
+   **not** ambient-automate whole-life OS while §8 domains stay parked.
+
+### 4.4 Explicit non-goals for this section
+
+- Do **not** unpark or implement further RSI product code from this docs
+  seat (T243 product path already landed; T92 mint stays residual/off).
+- Do **not** promote phrase-list mint back onto the standing product path.
+- Do **not** make the coach a second CEO that mints the ledger.
+
+---
+
+## 5. Staff functions (bounded ops, not permanent monologue)
 
 Staff are **functions with a cycle contract**, not eternal co-workers chatting.
+**RSI coach is a first-class staff function** (see §4), listed with other
+ops — not demoted to a footnote.
 
 | Staff function | Cycle contract | Outputs | Related |
 |----------------|----------------|---------|---------|
+| **RSI coach** | Drip-read (chat priority + eventlog + sessions); episodic judgment cycle | Judgments to overseer **only**; root files/acts/ignores | T243 (landed product path); T130 filing half; **T92 mint residual off product path** |
 | **Health-of-health** | Interval + anomaly interrupt | harness-ok / repair / file+PO / ignore; cooldown on re-file | T219, T90, T204/T207 |
 | **Resource snapshot** | Interval (e.g. shift or N min) | Compact brief to root: sessions, providers load, burn, frontier depth, idle PO count | T137, first staff child |
-| **RSI coach** | Drip-read | Judgments to overseer only | T243 (landed); T92 mint residual off product path |
 | **Factory kick** | New frontier leaf / empty-but-ready | Spawn under PO (not root parent) | T155; T254 family parked |
-| **Idea intake** | On capture | Durable idea record → prioritise or park | T93/T95; Build child (3) |
-| **Security / privacy / fraud / practical AI safety** | **Parked** (§7.1) — inventory only | When unparked: alert/file on phishing, money-movement risk, tool exfil, ATO, credential hygiene | T98 (owner ratifies high-stakes); not AGI doom theater |
-| **System management** | **Parked** (§7.1) — inventory only | When unparked: inventory + hygiene + escalate anomalies (inbox, Drive, laptop, subs, finances, share-portfolio) | Not permanent monologue; owner opens Build first |
+| **Idea + human-RSI intake** | On capture (product idea *or* owner self-reflection) | Durable record → prioritise or park — no evaporation | T93/T95; §4.3; Build child (3) |
+| **Security / privacy / fraud / practical AI safety** | **Parked** (§8.1) — inventory only | When unparked: alert/file on phishing, money-movement risk, tool exfil, ATO, credential hygiene | T98 (owner ratifies high-stakes); not AGI doom theater |
+| **System management** | **Parked** (§8.1) — inventory only | When unparked: inventory + hygiene + escalate anomalies (inbox, Drive, laptop, subs, finances, share-portfolio) | Not permanent monologue; owner opens Build first |
 
 **Anti-patterns (explicit):**
 
 - Staff that re-explain the same healthy state every loop.
 - Staff that implement product code "while they're looking."
 - Staff that file bullseye without root when their job is judgment-only (coach).
+- Treating RSI / self-reflection as optional garnish after product work.
 - Root that stays in unbounded solo plan loops on multi-slice work instead of fanning out.
 
 ---
 
-## 5. Multi-provider resource management
+## 6. Multi-provider resource management
 
 Two different "provider" words must stay distinct:
 
@@ -164,7 +248,7 @@ Two different "provider" words must stay distinct:
 This section is **LLM harness portfolio** (owner: grok / claude / gpt
 pro-max, load spread, task-type cost).
 
-### 5.1 Goals
+### 6.1 Goals
 
 1. **Load spread** — do not pin every mission to one subscription until
    throttle; spread concurrent sessions by capacity and task fit.
@@ -174,7 +258,7 @@ pro-max, load spread, task-type cost).
    list_price ladders.
 4. **Truth-bound badges** — UI model label matches session truth (T324 class).
 
-### 5.2 Task-type cost table — seed (not ratified prices)
+### 6.2 Task-type cost table — seed (not ratified prices)
 
 Seed only for the multi-provider Build child. Numbers are **relative
 preference / estimated burn**, not live billing APIs. Owner ratifies
@@ -208,16 +292,22 @@ quotas / billing APIs; owner-ratified prices; full marketplace OS.
 
 ---
 
-## 6. Ideation, prioritization, opportunity cost
+## 7. Ideation, prioritization, opportunity cost
 
 Owner intent: ideas across education, finance, health, leisure,
-entertainment, RSI-for-human-and-agent, stalled hardware (e.g. cat-flap
-camera/prism), time management — **must not evaporate**.
+entertainment, **RSI-for-human-and-agent** (§4 — first-class, not
+garnish), stalled hardware (e.g. cat-flap camera/prism), time management —
+**must not evaporate**.
 
-### 6.1 Pipeline
+Human self-reflection sparks (habits, attention opportunity cost,
+education-of-self, life+work retro) use the **same pipeline** as product
+ideas — durable capture + triage. That is the human half of RSI on this
+map (§4.3), not a separate afterthought channel.
+
+### 7.1 Pipeline
 
 ```text
-  spark (chat / aside / capture: / ambient)
+  spark (chat / aside / capture: / ambient / week-of-use retro / self-reflection)
        │
        ▼
   durable capture (aside, idea record, or bullseye draft)
@@ -226,12 +316,15 @@ camera/prism), time management — **must not evaporate**.
   triage (root or light staff cycle)
        │
        ├── product-shaped → file bullseye (+ T193 spawn if Build-plane)
+       ├── agent-RSI doctrine gap → root files (T130 / T243 control plane)
+       ├── human-RSI / life reflection → capture + prioritise (domain serve;
+       │     no ambient whole-life OS while §8 domains parked)
        ├── needs-owner / design → park-for-design or design-discussion
-       ├── life-domain parked (see §7) → hold queue, no implementer
+       ├── life-domain parked (see §8) → hold queue, no implementer
        └── drop / ignore (one-off noise) — rare; prefer park with reason
 ```
 
-### 6.2 Opportunity cost (noisy dynamic optimization)
+### 7.2 Opportunity cost (noisy dynamic optimization)
 
 There is **no total order** on the frontier (Beads evaluation residual:
 membership = ready; pick is engagement policy, not a single queue head).
@@ -242,23 +335,32 @@ Opportunity cost is therefore:
 3. **Option value** — small pin of a large idea vs full Build.
 4. **Decay** — ideas without durable capture die; capture without triage
    becomes sludge (must surface top-N to root on staff cycle).
+5. **Attention (human RSI)** — owner focus is a scarce resource the org
+   must protect and help the owner reallocate consciously (T98 attention
+   dimension + §4.3).
 
 **Not this map's job:** solve optimal control for life goals. **Is this
 map's job:** ensure every spark has a **bucket** and every bucket has a
 **next ceremony** (file / park / ask owner).
 
 Surfaces: T93/T95 `target:` asides, T65 capture/aside, bullseye track,
-filing reflex T130. Build child **(3)** hardens "no evaporation" with an
-explicit idea→ledger path and oracle.
+filing reflex T130, coach drip + root RSI cycle (T243). Build child
+**(3)** hardens "no evaporation" with an explicit idea→ledger path and
+oracle (covers product ideas and human-RSI sparks alike).
 
 ---
 
-## 7. Explicit park (owner must open Build)
+## 8. Explicit park (owner must open Build)
 
 Do **not** spawn implementers for these domains until the owner unparks.
 Same ceremony as SWOT / life-domains / device life-app: **map inventory
 only** until owner opens Build — not ambient T325.n Build children, not
 unattended T155 workers.
+
+**Human RSI capture is not parked** — reflection sparks still flow through
+§7 (capture+triage). What is parked is **automated life-domain portfolios**
+and whole-life OS implementers. Agent RSI product path (T243) is already
+landed; this docs seat does not unpark further RSI product code.
 
 | Parked domain | Why parked | Unpark signal |
 |---------------|------------|---------------|
@@ -270,9 +372,9 @@ unattended T155 workers.
 | **Security / privacy / fraud / AI safety (practical)** | Staff/domain function for phishing, money-movement risk, tool exfiltration, account takeover, credential hygiene — **not** existential AGI doom theater. High-stakes money/auth moves need owner ratify (T98 alter-ego still defers irreversible risk). Shape when unparked: bounded sense→alert/file cycles, not permanent monologue | Owner opens Build for practical security staff cycle + acceptance |
 | **System management** | Staff/domain function for inbox, Google Drive, laptop(s), paid subscriptions, finances, share-portfolio cleanup/hygiene. Life-ops surface; easy to thrash or over-automate without owner scope | Owner opens Build for system-management hygiene cycles + acceptance |
 
-### 7.1 Parked staff inventory (shape only — no implementers)
+### 8.1 Parked staff inventory (shape only — no implementers)
 
-These are **staff/domain functions** on the org map (same family as §4
+These are **staff/domain functions** on the org map (same family as §5
 bounded cycles and T219/T243 staff shape). They are **not** new T325.5 /
 T325.6 Build slices unless the owner later files explicit
 `set_aside` / parked-for-design children. Identity cross-link: 🎯T98
@@ -284,13 +386,14 @@ ratifies high-stakes money/auth/Ship moves.
 | **Security / privacy / fraud / practical AI safety** | Bounded sense → classify risk → alert root and/or file → stop; cooldown on re-alert; owner ratifies money moves, credential rotation, account recovery, tool-exfil policy changes | Permanent monologue; existential AGI doom theater; auto money/auth without owner; implement product code "while scanning" |
 | **System management** | Inventory + hygiene cycles (inbox/Drive/laptop/subs/finances/share-portfolio clutter) → compact snapshot or escalate anomalies → idle | Permanent monologue agent; silent bulk delete/spend; whole-life OS without owner scope |
 
-**Allowed while parked:** idea capture, opportunity-cost notes, design
-discussion targets, owner chat. **Forbidden while parked:** unattended
-T155 spawn of implementers for these domains.
+**Allowed while parked:** idea capture, **human RSI / self-reflection
+capture**, opportunity-cost notes, design discussion targets, owner chat.
+**Forbidden while parked:** unattended T155 spawn of implementers for
+these domains.
 
 ---
 
-## 8. First Build slices (children of 🎯T325)
+## 9. First Build slices (children of 🎯T325)
 
 Filed as ledger children (same turn as this map). Implementers may be
 spawned later under `parent=jevons-po` when leaves are non-design and
@@ -300,56 +403,64 @@ unblocked — **not** as part of this design-map seat's ship.
 |---|----------------|-----------------|
 | **(1)** | **PO proactive-until-empty-then-sleep** | When product frontier has ready leaves, PO keeps spawning/briefing until empty or blocked; when empty, PO enters sleep/idle without zombie open-mission thrash; interruptible for owner/overseer directs. Hermetic and/or journey: empty frontier ⇒ no perpetual create thrash; non-empty ⇒ progress. |
 | **(2)** | **Multi-provider load/token portfolio + task-type cost table seed** | Config or design-backed table maps task types → preferred harness provider/model; load/session soft caps; T137 accounting respected; seed table present and wired enough for one routing decision path (even if thin). Residual: live billing APIs. |
-| **(3)** | **Idea capture → bullseye/aside without evaporation** | Owner spark via capture/aside/chat has durable destination within one ceremony; triage path documented + thin product path so ideas do not only exist in scrollback; oracle for "captured ⇒ listed or filed." |
+| **(3)** | **Idea capture → bullseye/aside without evaporation** | Owner spark via capture/aside/chat has durable destination within one ceremony; triage path documented + thin product path so ideas do not only exist in scrollback; oracle for "captured ⇒ listed or filed." Covers product ideas **and** human-RSI / self-reflection sparks (§4.3). |
 | **(4)** | **One staff ops cycle** | Bounded cycle: health-of-health sample + resource snapshot delivered to root (not permanent monologue); classify harness-ok/repair/file/ignore; cooldown; hermetic pure policy tests. Aligns with T219 shape; may be thin vertical not full sentinel. |
 
 Parent 🎯T325 **not self-achieved** by the map author — owner/overseer gates
 acceptance of map + children existence (class-3 residual on full org).
+RSI elevation in this note is **doctrine map only** — not a new Build
+child and not further RSI product implementation.
 
 ---
 
-## 9. Relation to existing targets (do not re-litigate)
+## 10. Relation to existing targets (do not re-litigate)
 
 | Target | Relationship to this map |
 |--------|---------------------------|
-| 🎯T98 | Identity doctrine; this note is **org structure** for that CEO; parked security/system-management staff still defer high-stakes money/auth/Ship to owner |
+| 🎯T98 | Identity doctrine; this note is **org structure** for that CEO; RSI/self-improvement is a first-class dimension (§4) + parked security/system-management staff still defer high-stakes money/auth/Ship to owner |
 | 🎯T104 | Local Build vs Ship unchanged at org scale |
 | 🎯T125 / T129 | PO spawn-only; overseer never parents product workers |
 | 🎯T155 / T193 | Factory kick under PO; file→spawn |
 | 🎯T254.* | Factory physics parent — **parked** |
 | 🎯T219 | Full sentinel; child (4) may thin-slice toward it |
-| 🎯T92 / T243 | RSI coach → root; filing reflex remains agent half |
-| 🎯T93 / T95 / T65 | Capture surfaces for ideation child |
+| 🎯T243 | **Agent RSI product path:** coach drip → judgments to overseer; coach **never** files bullseye; root decides (structural §4.2) |
+| 🎯T130 | Filing reflex — mid-turn agent half of RSI (same-turn file, not chat-only "standing rule") |
+| 🎯T92 | Ambient RSI parent; **phrase-list mint residual off product path** (not standing ambient) |
+| 🎯T93 / T95 / T65 | Capture surfaces for ideation child **and** human-RSI sparks |
 | 🎯T137 | Cost honesty for portfolio child |
 | 🎯T200 | Portfolio path membership for domain POs |
 | 🎯T31 / T31.1 / T194 | Done = evidence; daemon path needs daily probe |
 
 ---
 
-## 10. Residual & non-goals
+## 11. Residual & non-goals
 
 **Residual (class-3 / later):**
 
-- Full life SWOT and multi-domain automation (§7 park).
+- Full life SWOT and multi-domain automation (§8 park).
 - Device life-app.
-- Practical security / privacy / fraud / AI-safety staff cycles (§7.1) —
+- Practical security / privacy / fraud / AI-safety staff cycles (§8.1) —
   parked until owner opens Build; not AGI doom theater.
 - System-management staff cycles (inbox, Drive, laptop, subs, finances,
-  share-portfolio hygiene) — parked until owner opens Build (§7.1).
+  share-portfolio hygiene) — parked until owner opens Build (§8.1).
 - Optimal control / true dynamic optimisation of owner time.
 - Hard multi-provider scheduler with live vendor quotas.
 - Owner ratification of T98 checklist and this org map before harder
   persona law expansion.
+- Richer human-RSI product surfaces (week-of-use retro chrome, habit
+  trackers) — capture+triage doctrine is map-first; Build only when owner
+  opens.
 
 **Non-goals for this note:**
 
-- Implement factory/sentinel/RSI code in the same PR as the map.
+- Implement factory/sentinel/RSI product code in the same change as the map.
+- Unpark T92 phrase-list mint onto the standing product path.
 - Whole-org GitHub PR or Ship plane.
 - Claiming T325 achieved before owner accepts map + children.
 
 ---
 
-## 11. History
+## 12. History
 
 - **2026-08-08** — Owner filed 🎯T325: root as CEO of life-and-work org
   (always-on sense/decide/act; multi-provider portfolio; staff; idea
@@ -357,5 +468,10 @@ acceptance of map + children existence (class-3 residual on full org).
   park SWOT / life-domains / device life-app until owner opens Build.
 - **2026-08-08** — Staff inventory residual: park **practical security /
   privacy / fraud / AI safety** and **system management** as staff/domain
-  functions (§7 table + §7.1); no T325.5/6 Build slices; T98 cross-link;
+  functions (§8 table + §8.1); no T325.5/6 Build slices; T98 cross-link;
   implement only when owner opens Build (T325 residual / owner capture).
+- **2026-08-08** — **RSI + self-reflection first-class (agent + human):**
+  elevated from related-targets garnish to structural §4 (control plane,
+  dual halves), sense/decide tables (§3), staff table, ideation pipeline
+  (§7). T243 coach never files; T92 mint residual off product path. Docs
+  only — no RSI product code this seat. Companion: T98 dimension 8.
