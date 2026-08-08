@@ -984,4 +984,104 @@ test('index.html wires T347 lazy replay + pre-meta re-entry + gated virtualize',
     'seal has a shell branch');
 });
 
+// ── 🎯T349: phased, budgeted virtualize — composer stays responsive ──
+
+test('T349 planVirtualizePass caps demat and remat per frame', function () {
+  const items = [];
+  // 300 material rows above the band, viewport pinned at the end.
+  const n = 300;
+  const h = 72;
+  const ch = 600;
+  const scrollTop = n * h - ch;
+  for (let i = 0; i < n; i++) {
+    items.push({ index: i, top: i * h, height: h, shell: false, dematOk: true });
+  }
+  const plan = VL.planVirtualizePass(items, scrollTop, ch, VL.DEFAULT_BUFFER, {});
+  assert.ok(plan.dematThisFrame.length <= VL.DEMATERIALIZE_PER_FRAME,
+    'demat capped, got ' + plan.dematThisFrame.length);
+  assert.ok(plan.dematThisFrame.length > 0, 'some demat planned');
+  assert.ok(plan.more, 'leftover work flagged for the next frame');
+  const offBand = items.filter(function (it) {
+    return !VL.shouldMaterialize(it.top, it.height, scrollTop, ch, VL.DEFAULT_BUFFER);
+  }).length;
+  assert.strictEqual(plan.dematThisFrame.length + plan.dematRemaining.length, offBand,
+    'every off-band material row is planned exactly once');
+});
+
+test('T349 planVirtualizePass skips stream rows and demat-refusers', function () {
+  const ch = 600;
+  const items = [
+    // Off-band material rows: one live stream, one auto-expanded, one normal.
+    { index: 0, top: 0, height: 100, shell: false, stream: true },
+    { index: 1, top: 100, height: 100, shell: false, dematOk: false },
+    { index: 2, top: 200, height: 100, shell: false, dematOk: true },
+    // In-band shell wants remat.
+    { index: 3, top: 5000, height: 100, shell: true },
+  ];
+  const plan = VL.planVirtualizePass(items, 5000, ch, 0, {});
+  assert.strictEqual(plan.dematThisFrame.length, 1, 'only the eligible row demats');
+  assert.strictEqual(plan.dematThisFrame[0].index, 2);
+  assert.strictEqual(plan.rematThisFrame.length, 1, 'in-band shell remats');
+  assert.strictEqual(plan.rematThisFrame[0].index, 3);
+  assert.strictEqual(plan.more, false,
+    'refusers are excluded — the re-arm loop cannot spin on them');
+});
+
+test('T349 frameBudgetExceeded: budget trips on time, not item count', function () {
+  assert.strictEqual(VL.frameBudgetExceeded(0, VL.FRAME_BUDGET_MS + 1), true);
+  assert.strictEqual(VL.frameBudgetExceeded(0, VL.FRAME_BUDGET_MS - 1), false);
+  assert.strictEqual(VL.frameBudgetExceeded(100, 300, 50), true);
+  assert.strictEqual(VL.frameBudgetExceeded(100, 120, 50), false);
+  // Garbage clocks never trip (fail open — paint continues).
+  assert.strictEqual(VL.frameBudgetExceeded(NaN, 100), false);
+  assert.strictEqual(VL.frameBudgetExceeded(undefined, undefined), false);
+});
+
+test('T349 stress trace: phased pass bounds per-frame writes and reflows', function () {
+  const n = 3000; // long-transcript settle: everything above the band demats
+  const t = VL.virtualizePassTrace({ n: n, avgHeight: 72, clientHeight: 600 });
+  assert.ok(t.converged, 'phased passes converge');
+  assert.ok(t.maxWritesPerPass <= VL.DEMATERIALIZE_PER_FRAME,
+    'per-frame writes capped, got ' + t.maxWritesPerPass);
+  assert.ok(t.reflows <= t.passes, 'reads batched: at most one layout per frame');
+  assert.ok(t.passes <= Math.ceil(n / VL.DEMATERIALIZE_PER_FRAME) + 2,
+    'work spreads over ~n/cap frames, got ' + t.passes);
+});
+
+test('T349 stress trace catches the legacy interleaved freeze', function () {
+  const n = 3000;
+  const legacy = VL.virtualizePassTrace({ n: n, avgHeight: 72, clientHeight: 600, phased: false });
+  // One unbounded sync pass: every demat write forces the next read to
+  // reflow the whole container — O(rows²) layout, the slow-script freeze.
+  assert.strictEqual(legacy.passes, 1);
+  assert.ok(legacy.reflows > n * 0.9,
+    'legacy sim must show ~n interleaved reflows, got ' + legacy.reflows);
+  const phased = VL.virtualizePassTrace({ n: n, avgHeight: 72, clientHeight: 600 });
+  assert.ok(phased.reflows * 20 < legacy.reflows,
+    'phased reflow count is a small fraction of legacy (' +
+    phased.reflows + ' vs ' + legacy.reflows + ')');
+});
+
+test('index.html wires T349 phased virtualize + budgets + fleet frame paint', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,4000}planVirtualizePass/.test(html),
+    'virtualize uses the phased planner');
+  assert.ok(/planVirtualizePass[\s\S]{0,2500}dematerializeMsg\(item\.el, item\.height\)/.test(html),
+    'demat write phase reuses pre-read height (no layout read)');
+  assert.ok(/function dematerializeMsg\(el, knownHeight\)/.test(html),
+    'dematerializeMsg accepts a pre-read height');
+  assert.ok(/function flushRematerializeFrame\(\)[\s\S]{0,3000}frameBudgetExceeded/.test(html),
+    'remat flush is time-budgeted');
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,6000}frameBudgetExceeded/.test(html),
+    'virtualize remat batch is time-budgeted');
+  assert.ok(html.indexOf('dematRemaining.length) scheduleVirtualize()') >= 0,
+    'leftover demats re-arm the next frame');
+  assert.ok(html.indexOf('scheduleFleetPaint') >= 0,
+    'fleet paint lands on a frame boundary');
+  assert.ok(/scheduleFleetPaint\(function \(\) \{[\s\S]{0,200}paintFleetTree/.test(html),
+    'paintFleetTree runs inside the deferred fleet paint job');
+});
+
 console.log(process.exitCode ? 'FAIL' : 'PASS virtual_list_test');

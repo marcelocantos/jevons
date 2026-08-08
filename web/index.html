@@ -5281,6 +5281,23 @@ function ingestAsideWiresFromHistoryLines(lines) {
     }
   }
 }
+// 🎯T349: fleet paints land on frame boundaries, latest fetch wins. A fetch
+// .then can land mid-typing; descriptor build + tree paint must not extend
+// an input task. A newer job replaces a stale queued one (its paint would be
+// overwritten next frame anyway).
+let _fleetPaintRaf = 0;
+let _fleetPaintJob = null;
+function scheduleFleetPaint(job) {
+  _fleetPaintJob = job;
+  if (_fleetPaintRaf) return;
+  _fleetPaintRaf = requestAnimationFrame(function () {
+    _fleetPaintRaf = 0;
+    const j = _fleetPaintJob;
+    _fleetPaintJob = null;
+    if (j) j();
+  });
+}
+
 function refreshAgents() {
   if (typeof window.__layoutThrash === 'object' && window.__layoutThrash) {
     window.__layoutThrash.refreshAgents = (window.__layoutThrash.refreshAgents || 0) + 1;
@@ -5352,17 +5369,21 @@ function refreshAgents() {
       }
     }
     lastFleetAgents = agents.slice();
-    paintFleetTree(buildFleetDescriptors(byParent, '', agentsByName, []));
-    // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
-    updateFleetProgress(agents);
-    // 🎯T209: inspect updates arrive on /ws/chat — no HTTP re-fetch on fleet refresh.
-    // Apply auto-select via selectAgent so draft stash + Transcript tab + composer sync.
-    if (autoSelected && wantSelect && wantSelect !== prevSelected &&
-        typeof selectAgent === 'function') {
-      selectAgent(wantSelect);
-    } else if (autoSelected && selectedAgent && typeof subscribeAgentInspect === 'function') {
-      subscribeAgentInspect(selectedAgent);
-    }
+    // 🎯T349: state above stays per-fetch; the paint tail defers to a frame
+    // boundary so it cannot stretch whatever task the .then landed on.
+    scheduleFleetPaint(function () {
+      paintFleetTree(buildFleetDescriptors(byParent, '', agentsByName, []));
+      // 🎯T89 thin: multi-agent rollup in structured chrome (not chat flood).
+      updateFleetProgress(agents);
+      // 🎯T209: inspect updates arrive on /ws/chat — no HTTP re-fetch on fleet refresh.
+      // Apply auto-select via selectAgent so draft stash + Transcript tab + composer sync.
+      if (autoSelected && wantSelect && wantSelect !== prevSelected &&
+          typeof selectAgent === 'function') {
+        selectAgent(wantSelect);
+      } else if (autoSelected && selectedAgent && typeof subscribeAgentInspect === 'function') {
+        subscribeAgentInspect(selectedAgent);
+      }
+    });
   }).catch((err)=>{
     if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
       jLog('warn', DecisionLog.decisionMsg('fleet'), DecisionLog.formatFleetDecision('refresh_error', {
@@ -5891,12 +5912,28 @@ function flushRematerializeFrame() {
     : { thisFrame: pending.slice(0, max), remaining: pending.slice(max) };
   beginScrollBookkeeping();
   try {
+    // 🎯T349: the 6-item cap bounds count, not time — a few giant markdown
+    // bodies still froze the frame. Check the budget after each paint and
+    // spill unpainted items back to the queue for the next frame.
+    const t0 = performance.now();
+    let stopAt = plan.thisFrame.length;
     for (let j = 0; j < plan.thisFrame.length; j++) {
       const item = plan.thisFrame[j];
       item.el._rematQueued = false;
       rematerializeMsg(item.el);
+      if (j + 1 < plan.thisFrame.length && typeof VirtualList !== 'undefined' &&
+          VirtualList.frameBudgetExceeded &&
+          VirtualList.frameBudgetExceeded(t0, performance.now())) {
+        stopAt = j + 1;
+        break;
+      }
     }
     _rematQueue = [];
+    for (let j = stopAt; j < plan.thisFrame.length; j++) {
+      const spill = plan.thisFrame[j];
+      spill.el._rematQueued = true;
+      _rematQueue.push(spill.el);
+    }
     for (let k = 0; k < plan.remaining.length; k++) {
       const rest = plan.remaining[k];
       // Keep queued flag; re-enqueue for next frame.

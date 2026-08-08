@@ -54,7 +54,13 @@ function startServer() {
       }
       // Pin top so lower half is off-screen.
       document.getElementById('messages').scrollTop = 0;
-      window.virtualizeMessages();
+      // 🎯T349: demat is capped per frame (DEMATERIALIZE_PER_FRAME) so one
+      // pass no longer clears everything — the product re-arms itself via
+      // rAF; this loop is the deterministic stand-in. Convergence within
+      // ~n/cap passes is part of the assertion.
+      const cap = (window.VirtualList && window.VirtualList.DEMATERIALIZE_PER_FRAME) || 40;
+      const passes = Math.ceil((2 * N) / cap) + 2;
+      for (let p = 0; p < passes; p++) window.virtualizeMessages();
       const msgs = [...document.querySelectorAll('#messages > .msg')];
       const shells = msgs.filter(m => m.classList.contains('virt-shell'));
       const heavy = msgs.filter(m => !m.classList.contains('virt-shell'));
