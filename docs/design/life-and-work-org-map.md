@@ -81,7 +81,7 @@ cycles. Root does not go dark implementing product (hierarchy T125/T129).
 | **Portfolio** | Config path membership (T200) | Group POs under life/work buckets (e.g. personal `github.com/marcelocantos`) | Parse agent names for membership |
 | **Product Owner (PO)** | e.g. `jevons-po` | Product-scoped proactive Build: spawn workers, gate achieve, stay interruptible | Solo implement Build (T125); own whole-life SWOT |
 | **Worker** | Named fleet agents | Execute one mission; evidence-gated finish; auto-deregister on done (T165/T195) | Open Ship; redefine org doctrine mid-flight without filing |
-| **Staff (ancillary)** | Sentinel (T219), RSI coach (T243), future ops cycles | **Bounded ops cycles** — observe, classify, repair-or-file, snapshot resources; then idle/sleep | Permanent monologue; mint ledger without root (RSI coach never files bullseye) |
+| **Staff (ancillary)** | Sentinel (T219), RSI coach (T243), future ops cycles; **parked** practical security + system management (§7.1) | **Bounded ops cycles** — observe, classify, repair-or-file, snapshot resources; then idle/sleep | Permanent monologue; mint ledger without root (RSI coach never files bullseye); unparked implementers for §7 domains without owner Build open |
 | **Aside / capture** | Short-lived attention threads | Arrest ideas and `target:` filings without stealing main (T93/T95/T65) | Become multi-day zombie side-chats by default |
 
 **Hard hierarchy (already doctrine):**
@@ -140,6 +140,8 @@ Staff are **functions with a cycle contract**, not eternal co-workers chatting.
 | **RSI coach** | Drip-read | Judgments to overseer only | T243 (landed); T92 mint residual off product path |
 | **Factory kick** | New frontier leaf / empty-but-ready | Spawn under PO (not root parent) | T155; T254 family parked |
 | **Idea intake** | On capture | Durable idea record → prioritise or park | T93/T95; Build child (3) |
+| **Security / privacy / fraud / practical AI safety** | **Parked** (§7.1) — inventory only | When unparked: alert/file on phishing, money-movement risk, tool exfil, ATO, credential hygiene | T98 (owner ratifies high-stakes); not AGI doom theater |
+| **System management** | **Parked** (§7.1) — inventory only | When unparked: inventory + hygiene + escalate anomalies (inbox, Drive, laptop, subs, finances, share-portfolio) | Not permanent monologue; owner opens Build first |
 
 **Anti-patterns (explicit):**
 
@@ -248,7 +250,10 @@ explicit idea→ledger path and oracle.
 
 ## 7. Explicit park (owner must open Build)
 
-Do **not** spawn implementers for these domains until the owner unparks:
+Do **not** spawn implementers for these domains until the owner unparks.
+Same ceremony as SWOT / life-domains / device life-app: **map inventory
+only** until owner opens Build — not ambient T325.n Build children, not
+unattended T155 workers.
 
 | Parked domain | Why parked | Unpark signal |
 |---------------|------------|---------------|
@@ -257,6 +262,22 @@ Do **not** spawn implementers for these domains until the owner unparks:
 | **Device life-app** (parking → life management; Jevons-on-device) | Mobile/thin-client residual; product not design-ready as org staff | Owner opens mobile life-app Build |
 | **T254 factory parity children** | Already parked at parent | Owner opens factory Build |
 | **Stalled hardware pursuits** (e.g. cat-flap camera/prism) | Physical + multi-repo; capture as ideas only until owner prioritises | Owner prioritises specific hardware leaf |
+| **Security / privacy / fraud / AI safety (practical)** | Staff/domain function for phishing, money-movement risk, tool exfiltration, account takeover, credential hygiene — **not** existential AGI doom theater. High-stakes money/auth moves need owner ratify (T98 alter-ego still defers irreversible risk). Shape when unparked: bounded sense→alert/file cycles, not permanent monologue | Owner opens Build for practical security staff cycle + acceptance |
+| **System management** | Staff/domain function for inbox, Google Drive, laptop(s), paid subscriptions, finances, share-portfolio cleanup/hygiene. Life-ops surface; easy to thrash or over-automate without owner scope | Owner opens Build for system-management hygiene cycles + acceptance |
+
+### 7.1 Parked staff inventory (shape only — no implementers)
+
+These are **staff/domain functions** on the org map (same family as §4
+bounded cycles and T219/T243 staff shape). They are **not** new T325.5 /
+T325.6 Build slices unless the owner later files explicit
+`set_aside` / parked-for-design children. Identity cross-link: 🎯T98
+(CEO alter ego) — root may eventually allocate these cycles; owner still
+ratifies high-stakes money/auth/Ship moves.
+
+| Staff function (parked) | Cycle contract (when unparked) | Does not |
+|-------------------------|--------------------------------|----------|
+| **Security / privacy / fraud / practical AI safety** | Bounded sense → classify risk → alert root and/or file → stop; cooldown on re-alert; owner ratifies money moves, credential rotation, account recovery, tool-exfil policy changes | Permanent monologue; existential AGI doom theater; auto money/auth without owner; implement product code "while scanning" |
+| **System management** | Inventory + hygiene cycles (inbox/Drive/laptop/subs/finances/share-portfolio clutter) → compact snapshot or escalate anomalies → idle | Permanent monologue agent; silent bulk delete/spend; whole-life OS without owner scope |
 
 **Allowed while parked:** idea capture, opportunity-cost notes, design
 discussion targets, owner chat. **Forbidden while parked:** unattended
@@ -286,7 +307,7 @@ acceptance of map + children existence (class-3 residual on full org).
 
 | Target | Relationship to this map |
 |--------|---------------------------|
-| 🎯T98 | Identity doctrine; this note is **org structure** for that CEO |
+| 🎯T98 | Identity doctrine; this note is **org structure** for that CEO; parked security/system-management staff still defer high-stakes money/auth/Ship to owner |
 | 🎯T104 | Local Build vs Ship unchanged at org scale |
 | 🎯T125 / T129 | PO spawn-only; overseer never parents product workers |
 | 🎯T155 / T193 | Factory kick under PO; file→spawn |
@@ -306,6 +327,10 @@ acceptance of map + children existence (class-3 residual on full org).
 
 - Full life SWOT and multi-domain automation (§7 park).
 - Device life-app.
+- Practical security / privacy / fraud / AI-safety staff cycles (§7.1) —
+  parked until owner opens Build; not AGI doom theater.
+- System-management staff cycles (inbox, Drive, laptop, subs, finances,
+  share-portfolio hygiene) — parked until owner opens Build (§7.1).
 - Optimal control / true dynamic optimisation of owner time.
 - Hard multi-provider scheduler with live vendor quotas.
 - Owner ratification of T98 checklist and this org map before harder
@@ -325,3 +350,7 @@ acceptance of map + children existence (class-3 residual on full org).
   (always-on sense/decide/act; multi-provider portfolio; staff; idea
   pipeline). Design-map mission: this note + four first Build children;
   park SWOT / life-domains / device life-app until owner opens Build.
+- **2026-08-08** — Staff inventory residual: park **practical security /
+  privacy / fraud / AI safety** and **system management** as staff/domain
+  functions (§7 table + §7.1); no T325.5/6 Build slices; T98 cross-link;
+  implement only when owner opens Build (T325 residual / owner capture).
