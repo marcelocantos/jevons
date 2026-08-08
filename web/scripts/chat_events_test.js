@@ -1096,6 +1096,135 @@ test('T279 index.html: optimistic paint + soft-reconnect retain wired', () => {
   assert.ok(/T279/.test(html) || /🎯T279/.test(html), 'T279 marker in product path');
 });
 
+// ── 🎯T329 ONE shared display coalesce (main + RHS) ──────────────
+
+test('T329 isNonBoundaryUserText: system-reminder / brief / background-task', () => {
+  assert.strictEqual(
+    ChatEvents.isNonBoundaryUserText(
+      '<system-reminder>\nBackground task "x" completed.\n</system-reminder>',
+    ),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.isNonBoundaryUserText('[Jevons fleet standing brief]\nrules'),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.isNonBoundaryUserText('Background task call-abc completed'),
+    true,
+  );
+  assert.strictEqual(ChatEvents.isNonBoundaryUserText('real owner prose'), false);
+  assert.strictEqual(ChatEvents.isNonBoundaryUserText('[event: worker-idle] x'), true);
+});
+
+test('T329 applyLiveDisplayFrame: multi-tool + inject → one assistant bubble', () => {
+  // Real Grok multi-tool shape: text → tool_use → tool_result → system-reminder
+  // user inject → more text → end_turn. One continuous assistant bubble.
+  let lines = [];
+  const sid = 't329-stream';
+  const steps = [
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: { content: [{ type: 'text', text: 'I will read the file.' }] },
+    },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: {
+        content: [{ type: 'tool_use', name: 'read_file', input: { path: 'x' } }],
+        stop_reason: 'tool_use',
+      },
+    },
+    { type: 'tool_result', content: [{ type: 'text', text: 'ok' }] },
+    {
+      type: 'user',
+      message: {
+        content:
+          '<system-reminder>\nBackground task "call-1" completed (exit code: 0).\n</system-reminder>',
+      },
+    },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: { content: [{ type: 'text', text: ' Then edit it.' }] },
+    },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: {
+        content: [{ type: 'tool_use', name: 'search_replace', input: {} }],
+        stop_reason: 'tool_use',
+      },
+    },
+    { type: 'tool_result', content: [{ type: 'text', text: 'done' }] },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: { content: [{ type: 'text', text: ' Done.' }] },
+    },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: { content: [], stop_reason: 'end_turn' },
+    },
+  ];
+  for (const ev of steps) {
+    lines = ChatEvents.applyLiveDisplayFrame(lines, ev);
+  }
+  const asst = lines.filter((l) => l && l.role === 'assistant');
+  assert.strictEqual(
+    asst.length,
+    1,
+    `expected 1 assistant bubble, got ${asst.length}: ${JSON.stringify(lines)}`,
+  );
+  assert.ok(asst[0].text.includes('I will read the file.'));
+  assert.ok(asst[0].text.includes('Then edit it.'));
+  assert.ok(asst[0].text.includes('Done.'));
+  assert.ok(!asst[0]._stream, 'terminal seals stream');
+  // Inject still present as user row for inspect nugget paint.
+  const users = lines.filter((l) => l && l.role === 'user');
+  assert.strictEqual(users.length, 1);
+  assert.ok(users[0].text.indexOf('system-reminder') >= 0);
+});
+
+test('T329 coalesceLiveDisplayFrames: unlabeled multi-turn splits on owner user', () => {
+  const chunks = ChatEvents.coalesceLiveDisplayFrames(
+    [
+      { type: 'user', message: { content: 'hello' } },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'first reply' }] },
+      },
+      { type: 'user', message: { content: 'next' } },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'second reply' }] },
+      },
+    ],
+    { roleMap: { assistant: 'jevons' } },
+  );
+  assert.strictEqual(chunks.length, 4, JSON.stringify(chunks));
+  assert.strictEqual(chunks[1].text, 'first reply');
+  assert.strictEqual(chunks[3].text, 'second reply');
+});
+
+test('T329 applyChatEvents: non-boundary user does not re-arm working chrome', () => {
+  const state = ChatEvents.applyChatEvents([
+    user('owner'),
+    chunk('Working on it'),
+    {
+      type: 'user',
+      message: {
+        content: '<system-reminder>\nBackground task done.\n</system-reminder>',
+      },
+    },
+  ]);
+  assert.strictEqual(state.userTexts.length, 1, 'inject not counted as owner turn');
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  assert.strictEqual(state.working, true, 'still mid-turn after inject');
+});
+
 // ── Go package tests ────────────────────────────────────────────
 
 test('go chat wire + roundtrip tests pass', () => {

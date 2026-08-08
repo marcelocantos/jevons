@@ -90,6 +90,61 @@ func TestExtractTurns_GrokShape(t *testing.T) {
 	}
 }
 
+// 🎯T329: system-reminder / background-task user lines are not owner turn boundaries.
+const t329NonBoundaryFixture = `{"type":"user","content":[{"type":"text","text":"owner ask"}]}
+{"type":"assistant","content":"Part one of answer."}
+{"type":"user","content":[{"type":"text","text":"<system-reminder>\\nBackground task \\"call-1\\" completed (exit code: 0).\\n</system-reminder>"}]}
+{"type":"assistant","content":"Part two after inject."}
+{"type":"user","content":[{"type":"text","text":"Background task call-2 completed"}]}
+{"type":"assistant","content":"Part three after bare background-task user."}
+{"type":"user","content":[{"type":"text","text":"second owner turn"}]}
+{"type":"assistant","content":"New turn reply."}
+`
+
+func TestExtractTurns_T329NonBoundaryUserInject(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chat_history.jsonl")
+	if err := os.WriteFile(path, []byte(t329NonBoundaryFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lines, err := readLines(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := extractTurns(lines)
+	var users, assistants []Turn
+	for _, tr := range turns {
+		if tr.Role == "user" {
+			users = append(users, tr)
+		}
+		if tr.Role == "assistant" {
+			assistants = append(assistants, tr)
+		}
+	}
+	if len(users) != 2 {
+		t.Fatalf("want 2 owner user turns (injects skipped), got %d: %+v", len(users), turns)
+	}
+	if !strings.Contains(users[0].Text, "owner ask") {
+		t.Fatalf("first user: %+v", users[0])
+	}
+	if !strings.Contains(users[1].Text, "second owner turn") {
+		t.Fatalf("second user: %+v", users[1])
+	}
+	// All assistant fragments between the two owner users coalesce into one turn body.
+	if len(assistants) < 1 {
+		t.Fatalf("want assistant turns, got %+v", turns)
+	}
+	if !strings.Contains(assistants[0].Text, "Part one") ||
+		!strings.Contains(assistants[0].Text, "Part two") ||
+		!strings.Contains(assistants[0].Text, "Part three") {
+		t.Fatalf("first assistant must join multi-tool parts across injects: %q", assistants[0].Text)
+	}
+	if strings.Contains(assistants[0].Text, "system-reminder") ||
+		strings.Contains(assistants[0].Text, "Background task") {
+		t.Fatalf("inject body must not land in assistant text: %q", assistants[0].Text)
+	}
+}
+
 func TestExtractTurns_ClaudeShape(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "chat_history.jsonl")

@@ -65,6 +65,53 @@
     return false;
   }
 
+  // ── 🎯T329 non-boundary user lines (harness / fleet injects) ─────
+  // These paint as inject nuggets (inspect) or are skipped as owner turns,
+  // but must NEVER seal an open assistant stream. Real owner prose remains
+  // a boundary for *display* of user rows; stream seal is still terminal-
+  // only (T223). Matches extractTurns / AgentTranscript.classifyInspectUserLine.
+
+  /**
+   * True when a type=user body is harness/fleet inject, not an owner turn.
+   * Mid-turn system-reminder / standing-brief / background-task users must
+   * not open a new assistant bubble after them within the same owner turn.
+   *
+   * @param {string|null|undefined} text
+   * @returns {boolean}
+   */
+  function isNonBoundaryUserText(text) {
+    const raw = text == null ? '' : String(text);
+    if (!raw.trim()) return false;
+    // Unwrap a single outer <user_query> so inject checks see inner body.
+    let display = raw;
+    const uq = raw.match(
+      /^\s*<user_query(?:\s[^>]*)?>\s*([\s\S]*?)\s*<\/user_query>\s*$/i,
+    );
+    if (uq) display = uq[1];
+    const trimmed = String(display).replace(/^\s+/, '');
+    if (
+      /<system-reminder[\s>]/i.test(raw) ||
+      /<\/system-reminder>/i.test(raw) ||
+      /<system-reminder[\s>]/i.test(display)
+    ) {
+      return true;
+    }
+    if (
+      trimmed.indexOf('[Jevons fleet standing brief') === 0 ||
+      /Jevons fleet standing brief/.test(display)
+    ) {
+      return true;
+    }
+    if (/^\[event:\s*[^\]]+\]/i.test(trimmed)) return true;
+    if (trimmed.indexOf('[Daemon restart') === 0) return true;
+    // Background-task / harness walls without full tags (ACP shape variants).
+    if (/^Background task\b/i.test(trimmed)) return true;
+    if (/\bbackground task\b/i.test(trimmed) && /completed/i.test(trimmed)) {
+      return true;
+    }
+    return false;
+  }
+
   // ── Segment-edge join (🎯T161; replaces T147 content sniff) ─────
   // Grok/ACP emits separate assistant *segments* at protocol boundaries
   // (tool rounds, multi-block content parts). Bare concat across those
@@ -247,6 +294,9 @@
     if (m.type === 'user') {
       const content = m.message && m.message.content;
       if (typeof content === 'string' && content) {
+        // 🎯T329: harness inject / system-reminder is not an owner turn — do
+        // not count, do not re-arm working chrome, never seals streams.
+        if (isNonBoundaryUserText(content)) return state;
         const last = state.userTexts[state.userTexts.length - 1];
         if (last === content) return state; // dedupe echo + ACP user chunk
         state.userTexts.push(content);
@@ -618,12 +668,286 @@
     return !!(a && b && a === b);
   }
 
+  // ── 🎯T329 shared display-line coalesce (main + RHS inspect) ─────
+  // ONE model: stream_id join, terminal-stop seal only, tool_use never
+  // seals, non-boundary users never seal. Open assistant is tracked by
+  // _stream / _streamId on lines — NOT by adjacency to the last row
+  // (inject nuggets may sit between fragments of the same turn).
+
+  function copyDisplayLines(lines) {
+    return (lines || []).map(function (l) {
+      if (!l) return l;
+      const c = { role: l.role, text: l.text };
+      if (l.when !== undefined) c.when = l.when;
+      if (l._stream) c._stream = true;
+      if (l._streamId != null && l._streamId !== '') c._streamId = l._streamId;
+      if (l._edgePending) c._edgePending = true;
+      if (l._silent) c._silent = true;
+      if (l.timestamp !== undefined) c.timestamp = l.timestamp;
+      return c;
+    });
+  }
+
+  /**
+   * Index of the open assistant line that should absorb the next text.
+   * Prefers matching stream_id; unlabeled frames join the last open stream.
+   * @param {Array} lines
+   * @param {string} sid
+   * @returns {number}
+   */
+  function findOpenAssistantIndex(lines, sid) {
+    const arr = lines || [];
+    if (sid) {
+      for (let i = arr.length - 1; i >= 0; i--) {
+        const l = arr[i];
+        if (l && l.role === 'assistant' && l._stream && String(l._streamId || '') === sid) {
+          return i;
+        }
+      }
+      return -1;
+    }
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const l = arr[i];
+      if (l && l.role === 'assistant' && l._stream) return i;
+    }
+    return -1;
+  }
+
+  function sealOpenAssistantAt(lines, idx) {
+    if (idx < 0 || !lines[idx]) return;
+    delete lines[idx]._stream;
+    delete lines[idx]._streamId;
+    delete lines[idx]._edgePending;
+    // Empty silent-only trackers are not display rows — drop on seal.
+    if (lines[idx]._silent && !(lines[idx].text && String(lines[idx].text).length)) {
+      lines.splice(idx, 1);
+      return;
+    }
+    delete lines[idx]._silent;
+  }
+
+  function sealOpenAssistantBySid(lines, sid) {
+    if (sid) {
+      const idx = findOpenAssistantIndex(lines, sid);
+      if (idx >= 0) sealOpenAssistantAt(lines, idx);
+      return;
+    }
+    // Seal every open stream. Reverse so splice of empty silent trackers
+    // does not skip the next open index.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i] && lines[i].role === 'assistant' && lines[i]._stream) {
+        sealOpenAssistantAt(lines, i);
+      }
+    }
+  }
+
+  function markSegmentEdges(lines, sid) {
+    if (sid) {
+      const idx = findOpenAssistantIndex(lines, sid);
+      if (idx >= 0) lines[idx]._edgePending = true;
+      return;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i] && lines[i].role === 'assistant' && lines[i]._stream) {
+        lines[i]._edgePending = true;
+      }
+    }
+  }
+
+  function extractAssistantTextParts(m) {
+    const content = m && m.message && m.message.content;
+    if (!Array.isArray(content)) return { texts: [], hasNonText: false };
+    const texts = [];
+    let hasNonText = false;
+    for (let i = 0; i < content.length; i++) {
+      const c = content[i];
+      if (!c) continue;
+      if (c.type === 'text' && c.text) {
+        texts.push(c.text);
+      } else if (c.type && c.type !== 'text') {
+        hasNonText = true;
+      }
+    }
+    return { texts: texts, hasNonText: hasNonText };
+  }
+
+  /**
+   * Apply one chat-wire event onto a display-line list (main + RHS).
+   * Pure — no DOM. Same seal policy as applyChatEvent / T159 / T223 / T249.
+   *
+   * @param {Array<{role:string,text:string,_stream?:boolean,_streamId?:string,when?:number}>|null} lines
+   * @param {object|null} event
+   * @param {{now?: number}} [opts]
+   * @returns {Array}
+   */
+  function applyLiveDisplayFrame(lines, event, opts) {
+    const out = copyDisplayLines(lines);
+    if (!event || !event.type) return out;
+
+    const arrived = (function () {
+      const w = event.when != null ? event.when : event.timestamp;
+      if (w != null && w !== '') {
+        if (typeof w === 'number' && isFinite(w) && w > 0) {
+          return w < 1e11 ? Math.round(w * 1000) : Math.round(w);
+        }
+        const ms = Date.parse(String(w));
+        if (isFinite(ms)) return ms;
+      }
+      if (opts && opts.now !== undefined) {
+        const n = Number(opts.now);
+        return isFinite(n) ? n : Date.now();
+      }
+      return Date.now();
+    })();
+
+    if (event.type === 'user') {
+      const content = event.message && event.message.content;
+      const text = typeof content === 'string' ? content : '';
+      if (!text) return out;
+      const last = out[out.length - 1];
+      // Dedupe consecutive owner echo (optimistic + WS); also consecutive inject.
+      if (last && last.role === 'user') {
+        const a = normalizeOwnerEchoText(last.text);
+        const b = normalizeOwnerEchoText(text);
+        if (a && b && a === b) return out;
+      }
+      // 🎯T329: harness inject / system-reminder paints (inspect nugget) but
+      // never seals an open assistant stream.
+      // Real owner user is a display turn boundary (history hydrate without
+      // stop_reason / stream_id) — seal open streams so the next assistant
+      // is a new bubble. Live applyChatEvent keeps T223 mid-stream policy
+      // separately; this is the shared *display-line* model.
+      if (!isNonBoundaryUserText(text)) {
+        sealOpenAssistantBySid(out, '');
+      }
+      out.push({ role: 'user', text: text, when: arrived });
+      return out;
+    }
+
+    if (event.type === 'tool_result' || event.type === 'result') {
+      markSegmentEdges(out, '');
+      return out;
+    }
+
+    if (event.type === 'system') {
+      sealOpenAssistantBySid(out, '');
+      return out;
+    }
+
+    if (event.type === 'assistant') {
+      const sid = streamIdOf(event);
+      const parts = extractAssistantTextParts(event);
+      if (parts.hasNonText) {
+        markSegmentEdges(out, sid);
+      }
+      for (let p = 0; p < parts.texts.length; p++) {
+        const text = parts.texts[p];
+        if (!text) continue;
+        let idx = findOpenAssistantIndex(out, sid);
+        // 🎯T245 whole-stream silent: once this stream is silent, drop body
+        // until terminal seal (do not paint later fragments as a new bubble).
+        if (idx >= 0 && out[idx]._silent) {
+          continue;
+        }
+        if (isSilentAssistantText(text)) {
+          if (idx >= 0) {
+            out[idx]._silent = true;
+          } else {
+            // Open silent tracker without a visible body so later fragments
+            // of the same stream stay suppressed until seal.
+            const silentLine = {
+              role: 'assistant',
+              text: '',
+              when: arrived,
+              _stream: true,
+              _silent: true,
+            };
+            if (sid) silentLine._streamId = sid;
+            out.push(silentLine);
+          }
+          continue;
+        }
+        if (idx >= 0) {
+          const edge = !!(out[idx]._edgePending || p > 0);
+          out[idx].text = edge
+            ? joinAssistantSegments(out[idx].text, text)
+            : appendAssistantStream(out[idx].text, text);
+          out[idx]._edgePending = false;
+          out[idx].when = arrived;
+          if (sid) out[idx]._streamId = sid;
+        } else {
+          const line = {
+            role: 'assistant',
+            text: text,
+            when: arrived,
+            _stream: true,
+          };
+          if (sid) line._streamId = sid;
+          out.push(line);
+        }
+      }
+      if (isTerminalStop(event) || shouldClearWorking(event)) {
+        sealOpenAssistantBySid(out, sid);
+      }
+      return out;
+    }
+
+    // progress / agent_note / tool_call chrome: do not seal, do not paint.
+    return out;
+  }
+
+  /**
+   * Batch applyLiveDisplayFrame over wire frames (history hydrate / main
+   * coalesceTranscriptFrames). Optionally maps assistant→jevons for main.
+   *
+   * @param {Array} frames
+   * @param {{roleMap?: {assistant?: string}, skipUser?: (text:string)=>boolean}} [opts]
+   * @returns {Array<{role:string,text:string,when?:number,timestamp?:number}>}
+   */
+  function coalesceLiveDisplayFrames(frames, opts) {
+    opts = opts || {};
+    let lines = [];
+    const list = Array.isArray(frames) ? frames : [];
+    for (let i = 0; i < list.length; i++) {
+      let m = list[i];
+      if (typeof m === 'string') {
+        try { m = JSON.parse(m); } catch (_) { continue; }
+      }
+      if (!m || typeof m !== 'object') continue;
+      if (m.type === 'user') {
+        const content = m.message && m.message.content;
+        const text = typeof content === 'string' ? content : '';
+        if (text && typeof opts.skipUser === 'function' && opts.skipUser(text)) {
+          // Aside wires etc.: still must not seal if we skip paint — apply
+          // a no-op path: non-boundary already never seals; for aside we
+          // skip entirely without sealing (T223/T329).
+          continue;
+        }
+      }
+      lines = applyLiveDisplayFrame(lines, m, opts);
+    }
+    const asstRole = (opts.roleMap && opts.roleMap.assistant) || 'assistant';
+    return lines.map(function (l) {
+      if (!l) return l;
+      const role = l.role === 'assistant' ? asstRole : l.role;
+      const row = { role: role, text: l.text };
+      if (l.when !== undefined) {
+        row.when = l.when;
+        row.timestamp = l.when;
+      }
+      return row;
+    }).filter(function (l) {
+      return l && l.text != null && String(l.text).length > 0;
+    });
+  }
+
   return {
     stopReason,
     isTerminalStop,
     assistantTextBlocks,
     hasAssistantText,
     isSilentAssistantText,
+    isNonBoundaryUserText,
     streamIdOf,
     joinAssistantSegments,
     appendAssistantStream,
@@ -642,6 +966,10 @@
     createTurnState,
     applyChatEvent,
     applyChatEvents,
+    // 🎯T329 shared display coalesce (main + RHS)
+    applyLiveDisplayFrame,
+    coalesceLiveDisplayFrames,
+    findOpenAssistantIndex,
     // 🎯T279 retention / 🎯T281 send-once
     planOptimisticMainUserPaint,
     planRetainOwnerTurns,

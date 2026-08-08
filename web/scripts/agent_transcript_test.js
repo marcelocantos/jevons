@@ -1505,6 +1505,96 @@ test('T308 index.html: sidebar feeds buildMsg and keeps timestamps end to end', 
     'sweeper is document-wide — it must see RHS bubbles, not only #messages');
 });
 
+// ── 🎯T329 applyInspectLiveFrame is thin wrap of shared coalesce ──
+
+test('T329 applyInspectLiveFrame: multi-tool + system-reminder inject → one assistant', function () {
+  const CE = require('./chat_events.js');
+  assert.ok(typeof CE.applyLiveDisplayFrame === 'function',
+    'shared coalesce must exist');
+  // Thin wrap: product coalesce is ChatEvents.applyLiveDisplayFrame — no
+  // second adjacency/_stream join body inside applyInspectLiveFrame.
+  const src = fs.readFileSync(path.join(__dirname, 'agent_transcript.js'), 'utf8');
+  assert.ok(/applyLiveDisplayFrame/.test(src),
+    'applyInspectLiveFrame must call ChatEvents.applyLiveDisplayFrame');
+  const wrapFn = src.match(
+    /function applyInspectLiveFrame\([\s\S]*?\n  \}/,
+  );
+  assert.ok(wrapFn, 'applyInspectLiveFrame definition present');
+  assert.ok(
+    wrapFn[0].indexOf('applyLiveDisplayFrame') >= 0,
+    'wrapper body must delegate to applyLiveDisplayFrame',
+  );
+  assert.ok(
+    !/last\.role === 'assistant' && last\._stream/.test(wrapFn[0]),
+    'wrapper must not keep adjacency/_stream dual join logic',
+  );
+
+  let lines = [];
+  const frames = [
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Plan: ' }] },
+    },
+    {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', name: 'run_terminal_command', input: {} }],
+        stop_reason: 'tool_use',
+      },
+    },
+    { type: 'tool_result', content: 'ok' },
+    {
+      type: 'user',
+      message: {
+        content:
+          '<system-reminder>\nBackground task "call-x" completed.\n</system-reminder>',
+      },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'continue mid-sentence' }] },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: ' and finish.' }], stop_reason: 'end_turn' },
+    },
+  ];
+  for (let i = 0; i < frames.length; i++) {
+    lines = AT.applyInspectLiveFrame(lines, frames[i], { now: 1_700_000_000_000 + i });
+  }
+  const asst = lines.filter(function (l) { return l && l.role === 'assistant'; });
+  assert.strictEqual(
+    asst.length,
+    1,
+    'one assistant bubble after multi-tool + inject: ' + JSON.stringify(lines),
+  );
+  assert.ok(asst[0].text.indexOf('Plan:') >= 0);
+  assert.ok(asst[0].text.indexOf('continue mid-sentence') >= 0);
+  assert.ok(asst[0].text.indexOf('and finish.') >= 0);
+  assert.ok(!asst[0]._stream, 'end_turn seals');
+  // Inject is present for nugget paint, not a turn seal.
+  assert.ok(lines.some(function (l) {
+    return l.role === 'user' && /system-reminder/i.test(l.text);
+  }));
+});
+
+test('T329 applyInspectLiveFrame: tool_use body never mints a bubble by itself', function () {
+  let lines = AT.applyInspectLiveFrame([], {
+    type: 'assistant',
+    message: {
+      content: [{ type: 'tool_use', name: 'web_search', input: { query: 'x' } }],
+      stop_reason: 'tool_use',
+    },
+  });
+  assert.strictEqual(lines.length, 0, 'raw tool_use is not an assistant bubble');
+  lines = AT.applyInspectLiveFrame(lines, {
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'After tools.' }] },
+  });
+  assert.strictEqual(lines.length, 1);
+  assert.strictEqual(lines[0].text, 'After tools.');
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);

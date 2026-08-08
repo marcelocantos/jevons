@@ -840,66 +840,43 @@
     return !!(a && b && a === b);
   }
 
+  // 🎯T329: ONE coalesce model — ChatEvents.applyLiveDisplayFrame.
+  // RHS inspect must not keep a second adjacency/_stream coalescer.
+  function loadChatEvents() {
+    if (typeof ChatEvents !== 'undefined') return ChatEvents;
+    if (typeof module === 'object' && module.exports) {
+      try { return require('./chat_events.js'); } catch (_) { return null; }
+    }
+    return null;
+  }
+
   /**
-   * Apply a progressive live event (chat-wire-ish) onto sealed-ish lines.
-   * Assistant tokens coalesce into the last streaming assistant line.
-   * Terminal stop seals the stream flag. Pure — no DOM.
-   * 🎯T281: user frames dedupe against last user line (optimistic + WS echo).
+   * Apply a progressive live event onto inspect lines.
+   * Thin wrapper over ChatEvents.applyLiveDisplayFrame (🎯T329): stream_id
+   * join, terminal-stop seal only, tool_use never seals, non-boundary user
+   * injects (system-reminder / standing brief / …) never seal open assistants.
+   * Pure — no DOM. 🎯T281 dedupe lives in the shared path.
    *
    * @param {Array<{role:string,text:string,_stream?:boolean}>|null} lines
    * @param {object|null} event
+   * @param {{now?: number}} [opts]
    * @returns {Array<{role:string,text:string,_stream?:boolean}>}
    */
   function applyInspectLiveFrame(lines, event, opts) {
-    const out = (lines || []).map(function (l) {
+    const CE = loadChatEvents();
+    if (CE && typeof CE.applyLiveDisplayFrame === 'function') {
+      return CE.applyLiveDisplayFrame(lines, event, opts || {});
+    }
+    // Fail closed only if ChatEvents is missing (broken bundle) — never a
+    // second product coalescer. Identity copy so callers do not crash.
+    return (lines || []).map(function (l) {
       if (!l) return l;
-      const c = { role: l.role, text: l.text, _stream: l._stream };
+      const c = { role: l.role, text: l.text };
       if (l.when !== undefined) c.when = l.when;
+      if (l._stream) c._stream = true;
+      if (l._streamId != null) c._streamId = l._streamId;
       return c;
     });
-    if (!event || !event.type) return out;
-    // 🎯T308: a live turn's arrival time is its timestamp — that is what gives
-    // sidebar bubbles the same 1m/5m labels main gets. opts.now keeps it pure
-    // for tests; the wire's own `when` wins when the server sends one.
-    const arrived = normalizeWhen(event.when) !== undefined
-      ? normalizeWhen(event.when)
-      : (opts && opts.now !== undefined ? normalizeWhen(opts.now) : Date.now());
-    if (event.type === 'user') {
-      const content = event.message && event.message.content;
-      const text = typeof content === 'string' ? content : '';
-      if (text) {
-        // 🎯T281: one owner submit → one bubble (optimistic then live echo).
-        const last = out[out.length - 1];
-        if (!isDuplicateInspectUserLine(last, text)) {
-          out.push({ role: 'user', text: text, when: arrived });
-        }
-      }
-      return out;
-    }
-    if (event.type === 'assistant') {
-      const content = event.message && event.message.content;
-      let text = '';
-      if (Array.isArray(content)) {
-        content.forEach(function (c) {
-          if (c && c.type === 'text' && c.text) text += c.text;
-        });
-      }
-      if (text) {
-        const last = out[out.length - 1];
-        if (last && last.role === 'assistant' && last._stream) {
-          last.text = (last.text || '') + text;
-        } else {
-          out.push({ role: 'assistant', text: text, when: arrived, _stream: true });
-        }
-      }
-      const sr = inspectEventStopReason(event);
-      if (INSPECT_TERMINAL_STOPS[sr] && out.length) {
-        const last = out[out.length - 1];
-        if (last && last._stream) delete last._stream;
-      }
-      return out;
-    }
-    return out;
   }
 
   /**
