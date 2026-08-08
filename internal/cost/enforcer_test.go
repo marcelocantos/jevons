@@ -29,6 +29,7 @@ type enforcerHarness struct {
 	acts    *fakeActions
 	now     time.Time
 	notices []string
+	audits  []ClampDecision
 }
 
 func newHarness(cfg *BudgetConfig) *enforcerHarness {
@@ -41,7 +42,10 @@ func newHarness(cfg *BudgetConfig) *enforcerHarness {
 		Config:   func() *BudgetConfig { return cfg },
 		Actions:  h.acts,
 		Notify:   func(_ Level, msg string) { h.notices = append(h.notices, msg) },
-		Now:      func() time.Time { return h.now },
+		AuditTrail: func(d ClampDecision) {
+			h.audits = append(h.audits, d)
+		},
+		Now: func() time.Time { return h.now },
 	})
 	return h
 }
@@ -134,6 +138,35 @@ func TestProtectedWorkerNeverKilled(t *testing.T) {
 	}
 	if len(h.acts.paused) != 1 || h.acts.paused[0] != "jevons" {
 		t.Fatalf("protected kill did not downgrade to pause: %+v", h.acts)
+	}
+	// 🎯T334 audit trail records protected skip, never a bare kill outcome.
+	var sawProt bool
+	for _, d := range h.audits {
+		if d.Action == ActionProtectedPause || d.Outcome == "skipped_protected" {
+			sawProt = true
+		}
+		if d.Action == ActionKill && d.Target == "jevons" && d.Outcome == "ok" {
+			t.Fatalf("audit logged overseer kill as ok: %+v", d)
+		}
+	}
+	if !sawProt {
+		t.Fatalf("no protected audit entry: %+v", h.audits)
+	}
+}
+
+// TestAuditTrailOnClamp acts once at throttle and expects a structured audit row.
+func TestAuditTrailOnClamp(t *testing.T) {
+	h := newHarness(DefaultBudgetConfig())
+	h.e.Act(alertsOf(AlertWorkerRate, LevelThrottle, "po"))
+	if len(h.audits) == 0 {
+		t.Fatal("no audit trail on throttle clamp")
+	}
+	d := h.audits[len(h.audits)-1]
+	if d.Decision != "action" || d.Level != LevelThrottle {
+		t.Fatalf("audit = %+v", d)
+	}
+	if d.TripClass != TripWorkerRate {
+		t.Fatalf("trip_class = %q", d.TripClass)
 	}
 }
 

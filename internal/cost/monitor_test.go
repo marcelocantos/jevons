@@ -109,6 +109,10 @@ func TestMonitorSnapshotRatesAndSignals(t *testing.T) {
 	if _, ok := got[AlertSessionCount+"/"]; !ok {
 		t.Fatal("session-count signal missing")
 	}
+	// Spawn storm needs ≥ 2× MaxSessions (6); seed has 4 — no storm yet.
+	if _, ok := got[AlertSpawnStorm+"/"]; ok {
+		t.Fatal("spawn-storm should not trip at 4 sessions with MaxSessions=3")
+	}
 	// The orphan (not the foreign owner session) is flagged.
 	if a, ok := got[AlertOrphanSessions+"/"]; !ok || len(a.Sessions) != 1 || a.Sessions[0] != "sess-ghost" {
 		t.Fatalf("orphan signal = %+v, want sess-ghost only", got[AlertOrphanSessions+"/"])
@@ -188,6 +192,70 @@ func TestMonitorHardCeilingAndQuiet(t *testing.T) {
 	}
 	if len(snap.Alerts) != 1 || snap.Alerts[0].Kind != AlertHardCeiling || snap.Alerts[0].Level != LevelKill {
 		t.Fatalf("hard-ceiling alert = %+v", snap.Alerts)
+	}
+}
+
+// TestMonitorSpawnStorm trips when concurrent sessions ≥ 2× MaxSessions.
+func TestMonitorSpawnStorm(t *testing.T) {
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	s, err := OpenStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	// 6 sessions, MaxSessions=3 → storm bound 6.
+	var events []*Event
+	for i := 0; i < 6; i++ {
+		events = append(events, &Event{
+			Timestamp: now.Add(-time.Minute),
+			SessionID: fmt.Sprintf("sess-%d", i),
+			Worker:    fmt.Sprintf("w%d", i),
+			Model:     "claude-opus-4-8",
+			Usage:     Usage{Output: 1},
+			CostUSD:   0.01,
+			RequestID: fmt.Sprintf("r-%d", i),
+		})
+	}
+	if _, err := s.InsertEvents(events); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultBudgetConfig()
+	cfg.MaxSessions = 3
+	cfg.MinEventsForKill = 0
+	// Quiet USD ladders so only session/storm signals fire.
+	cfg.Global = Limits{}
+	cfg.Fleet = Limits{}
+	cfg.Worker = Limits{}
+	cfg.DailyBudgetUSD = 0
+	cfg.HardCeilingUSDPerDay = 0
+
+	m := NewMonitor(&MonitorArgs{
+		Store: s, Config: func() *BudgetConfig { return cfg },
+		Now: func() time.Time { return now },
+	})
+	snap, err := m.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, a := range snap.Alerts {
+		got[a.Kind] = true
+	}
+	if !got[AlertSessionCount] {
+		t.Fatal("session-count missing under storm")
+	}
+	if !got[AlertSpawnStorm] {
+		t.Fatalf("spawn-storm missing: alerts=%+v", snap.Alerts)
+	}
+	trips := ClassifySnapshot(snap, cfg.ProtectedWorkers)
+	var sawStorm bool
+	for _, tr := range trips {
+		if tr.Class == TripSpawnStorm && tr.Action == ActionThrottle {
+			sawStorm = true
+		}
+	}
+	if !sawStorm {
+		t.Fatalf("trip class spawn-storm missing: %+v", trips)
 	}
 }
 

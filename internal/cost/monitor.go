@@ -49,6 +49,7 @@ const (
 	AlertProjection     = "projected-overspend"
 	AlertHardCeiling    = "hard-ceiling"
 	AlertCollectorStale = "collector-stale"
+	// AlertSpawnStorm is defined in auditor.go (🎯T334 standing cost-safety).
 )
 
 // collectorStaleAfter: a collector that hasn't completed a poll pass in
@@ -261,6 +262,18 @@ func (m *Monitor) evaluate(cfg *BudgetConfig, snap *Snapshot, orphans []string, 
 	if cfg.MaxSessions > 0 && len(snap.Sessions) > cfg.MaxSessions {
 		alerts = append(alerts, Alert{Kind: AlertSessionCount, Level: LevelWarn,
 			Detail: fmt.Sprintf("%d billable sessions in window (bound %d)", len(snap.Sessions), cfg.MaxSessions)})
+		// Spawn storm (🎯T334): postmortem signature was dozens of concurrent
+		// sessions. At ≥ SpawnStormFactor × MaxSessions escalate beyond warn
+		// so the standing auditor + enforcer can throttle/pause, not only note.
+		stormBound := cfg.MaxSessions * SpawnStormFactor
+		if stormBound < cfg.MaxSessions+1 {
+			stormBound = cfg.MaxSessions + 1
+		}
+		if len(snap.Sessions) >= stormBound {
+			alerts = append(alerts, Alert{Kind: AlertSpawnStorm, Level: LevelThrottle,
+				Detail: fmt.Sprintf("spawn storm: %d billable sessions (storm bound %d = %dx max_sessions)",
+					len(snap.Sessions), stormBound, SpawnStormFactor)})
+		}
 	}
 	if len(orphans) > 0 {
 		alerts = append(alerts, Alert{Kind: AlertOrphanSessions, Level: LevelWarn, Sessions: orphans,
