@@ -1250,6 +1250,10 @@ func (s *Server) BroadcastChat(line string) {
 		}
 	}
 	s.broadcastChatLive(line)
+	// 🎯T309.2: the same owner-visible line is also the overseer's live frame
+	// on the agent-addressed family, so inspect_subscribe works by name for the
+	// overseer exactly as it does for fleet agents.
+	s.fanOverseerInspectLive(line)
 }
 
 // broadcastChatLive fans a line out to connected clients WITHOUT

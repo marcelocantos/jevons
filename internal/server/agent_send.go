@@ -21,9 +21,20 @@ import (
 // a clear error (no silent drop).
 
 // agentSendRequest is the JSON body for POST /api/agents/{name}/send.
+// Origin marks who is speaking (🎯T309.2): "owner" (default) is an owner turn,
+// "agent" is an injected agent/system notification. It only changes overseer
+// framing today — owner turns carry the userTurnPrefix marker and paint an
+// owner bubble, exactly as the /ws/chat wire does (🎯T63).
 type agentSendRequest struct {
-	Text string `json:"text"`
+	Text   string `json:"text"`
+	Origin string `json:"origin,omitempty"`
 }
+
+// Send origins for agentSendRequest.Origin.
+const (
+	sendOriginOwner = "owner"
+	sendOriginAgent = "agent"
+)
 
 // agentSendResponse is returned on success.
 type agentSendResponse struct {
@@ -43,11 +54,33 @@ func (s *Server) SetAgentSendHook(fn func(name, text string) (status string, err
 // sendToNamedAgent rehydrates a registered fleet agent if needed and sends
 // text fire-and-forget (no WaitForResponse). Returns status from the product
 // hook (sent | queued | rehydrated_sent | …) or bare registry "sent".
+// Origin defaults to owner (see agentSendRequest).
 func (s *Server) sendToNamedAgent(name, text string) (string, error) {
+	return s.sendToNamedAgentAs(name, text, sendOriginOwner)
+}
+
+// sendToNamedAgentAs is the agent-addressed send op of the 🎯T309.2 family:
+// one call reaches ANY agent by name, overseer included. The overseer resolves
+// to the same queue-on-busy delivery /ws/chat uses (never a silent drop), so
+// no send capability is exclusive to the owner wire.
+func (s *Server) sendToNamedAgentAs(name, text, origin string) (string, error) {
 	name = strings.TrimSpace(name)
 	text = strings.TrimSpace(text)
 	if name == "" || text == "" {
 		return "", fmt.Errorf("name and text are required")
+	}
+
+	if s.isOverseerAgent(name) {
+		var err error
+		if origin == sendOriginAgent {
+			err = s.sendToOverseerAsAgent(text)
+		} else {
+			err = s.sendToOverseerAsOwner(text)
+		}
+		if err != nil {
+			return "", err
+		}
+		return "sent", nil
 	}
 
 	s.mu.RLock()
@@ -108,7 +141,7 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := s.sendToNamedAgent(name, text)
+	status, err := s.sendToNamedAgentAs(name, text, strings.TrimSpace(req.Origin))
 	if err != nil {
 		// 🎯T237: structured class for T236 recovery; owner copy beyond bare Internal error.
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
