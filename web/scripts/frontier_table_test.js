@@ -215,10 +215,10 @@ test('T175 frontier cells use InstantTip not native title=', function () {
 
 test('T174 frontier table width constrained to RHS container', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  // Table must not grow past #frontier-body: fixed layout + max-width 100%.
+  // Table must not grow past #frontier-body: max-width 100% + parent min-width:0.
+  // 🎯T340: table-layout:auto (content-sized chrome); still constrained to pane.
   assert.ok(/#frontier-table\s*\{[^}]*max-width:\s*100%/.test(html), 'table max-width 100%');
-  assert.ok(/#frontier-table\s*\{[^}]*table-layout:\s*fixed/.test(html), 'table-layout fixed');
-  assert.ok(!/#frontier-table\s*\{[^}]*table-layout:\s*auto/.test(html), 'not table-layout auto');
+  assert.ok(/#frontier-table\s*\{[^}]*width:\s*100%/.test(html), 'table width 100%');
   // Name cell ellipsizes within remaining space (overflow chain).
   assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*overflow:\s*hidden/.test(html), 'name overflow hidden');
   assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*text-overflow:\s*ellipsis/.test(html), 'name ellipsis');
@@ -234,22 +234,34 @@ test('T174 frontier table width constrained to RHS container', function () {
   assert.ok(!/min-width:\s*\d+(px|rem|em|ch)/.test(tableBlock[0]), 'table has no forcing min-width');
 });
 
-test('T177 chrome cols use explicit rem widths — not 1%/99% under fixed layout', function () {
+test('T177 chrome cols content-sized — not fixed 1%/99% collapse', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  // Explicit rem/ch widths for chrome; name flexes (no width:99%).
-  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*[\d.]+(rem|ch)/.test(html), 'id explicit rem/ch');
-  assert.ok(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*[\d.]+(rem|ch)/.test(html), 'status explicit rem/ch');
-  assert.ok(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*[\d.]+(rem|ch)/.test(html), 'fanout explicit rem/ch');
-  // Forbid collapsed chrome under table-layout:fixed (owner fail: ID paints mid-name).
-  assert.ok(!/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*1%/.test(html), 'id rejects width:1%');
-  assert.ok(!/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*1%/.test(html), 'status rejects width:1%');
-  assert.ok(!/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*1%/.test(html), 'fanout rejects width:1%');
-  assert.ok(!/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*99%/.test(html), 'name rejects width:99%');
-  // Name takes remaining space without a width claim.
-  assert.ok(!/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*[\d.]+%/.test(html), 'name has no percent width');
-  // Id ellipsizes long ids (residual: very long target ids).
-  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*overflow:\s*hidden/.test(html), 'id overflow hidden');
-  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*text-overflow:\s*ellipsis/.test(html), 'id ellipsis');
+  const tableBlock = html.match(/#frontier-table\s*\{[^}]*\}/);
+  const idBlock = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*\}/);
+  const nameBlock = html.match(/#frontier-table\s+\.ft-name\s*\{[^}]*\}/);
+  const stBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
+  const fanBlock = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*\}/);
+  assert.ok(tableBlock, 'frontier-table rule');
+  assert.ok(idBlock, 'ft-id rule');
+  assert.ok(nameBlock, 'ft-name rule');
+  assert.ok(stBlock, 'ft-status rule');
+  assert.ok(fanBlock, 'ft-fanout rule');
+  // 🎯T340: auto layout + width:1% nowrap chrome (content min) + name width:100% fill.
+  // Forbidden: table-layout:fixed + width:1% chrome + name 99% (T177 owner collapse).
+  assert.ok(/table-layout:\s*auto/.test(tableBlock[0]), 'table-layout auto (content chrome)');
+  assert.ok(/white-space:\s*nowrap/.test(idBlock[0]), 'id nowrap');
+  assert.ok(/width:\s*1%/.test(idBlock[0]) || /width:\s*(max-content|fit-content|min-content|0|1px)/.test(idBlock[0]),
+    'id content-min width, got: ' + idBlock[0]);
+  assert.ok(/width:\s*1%/.test(stBlock[0]) || /width:\s*(max-content|fit-content|min-content|0|1px)/.test(stBlock[0]),
+    'status content-min width');
+  assert.ok(/width:\s*1%/.test(fanBlock[0]) || /width:\s*(max-content|fit-content|min-content|0|1px)/.test(fanBlock[0]),
+    'fanout content-min width');
+  // Name claims remainder (100% fill under auto) — not the fixed-layout 99% collapse pair.
+  assert.ok(/width:\s*100%/.test(nameBlock[0]), 'name width 100% (fill remainder under auto)');
+  assert.ok(!/width:\s*99%/.test(nameBlock[0]), 'name rejects width:99% (T177 collapse pair)');
+  // 🎯T340: id must NOT ellipsize / clip hierarchical ids (owner reject of T332 residual).
+  assert.ok(!/text-overflow:\s*ellipsis/.test(idBlock[0]), 'id has no text-overflow:ellipsis');
+  assert.ok(!/overflow:\s*hidden/.test(idBlock[0]), 'id has no overflow:hidden clip');
   // DOM order still id|name|status|fan (class sequence in row builder).
   const rowBuild = html.indexOf("id.className = 'ft-id'");
   const nameBuild = html.indexOf("name.className = 'ft-name'");
@@ -259,9 +271,9 @@ test('T177 chrome cols use explicit rem widths — not 1%/99% under fixed layout
     'DOM order id|name|status|fan');
 });
 
-// 🎯T179: no small-caps status; fanout/status stay compact chrome; dependents tip wiring.
-// 🎯T332: hierarchical ids via ch (≥6ch), not rem-chasm ≥5.25rem.
-test('T179 status normal case + tight widths + dependents tip wiring', function () {
+// 🎯T179: no small-caps status; dependents tip wiring.
+// 🎯T340: chrome content-min (not rem/ch clip columns).
+test('T179 status normal case + content chrome + dependents tip wiring', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const statusBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
   assert.ok(statusBlock, 'ft-status rule');
@@ -269,26 +281,18 @@ test('T179 status normal case + tight widths + dependents tip wiring', function 
   assert.ok(!/#frontier-table\s+\.ft-status\s*\{[^}]*font-variant\s*:\s*small-caps/.test(html),
     'no small-caps anywhere on ft-status');
 
-  const idW = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*([\d.]+)(rem|ch)/);
-  const fanW = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*([\d.]+)(rem|ch)/);
-  const stW = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*([\d.]+)(rem|ch)/);
-  assert.ok(idW, 'id width');
-  assert.ok(fanW, 'fanout width');
-  assert.ok(stW, 'status width');
-  // T332: fit hierarchical Txxx.x in ch; reject rem-chasm pattern from T331.
-  if (idW[2] === 'ch') {
-    assert.ok(parseFloat(idW[1]) >= 6, 'id ≥6ch for Txxx.x, got ' + idW[1] + 'ch');
-    assert.ok(parseFloat(idW[1]) <= 9, 'id ≤9ch (no dead-space column), got ' + idW[1] + 'ch');
-  } else if (idW[2] === 'rem') {
-    assert.ok(parseFloat(idW[1]) < 5.25, 'id rem must not be ≥5.25rem chasm, got ' + idW[1]);
-    assert.ok(parseFloat(idW[1]) >= 4, 'id rem still wide enough for Txxx.x, got ' + idW[1]);
+  const idBlock = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*\}/);
+  assert.ok(idBlock, 'ft-id rule');
+  // Reject T331 rem-chasm and T332 7ch+ellipsis clip pattern.
+  const idRem = idBlock[0].match(/width:\s*([\d.]+)rem/);
+  if (idRem) {
+    assert.ok(parseFloat(idRem[1]) < 5.25, 'id rem must not be ≥5.25rem chasm, got ' + idRem[1]);
   }
-  if (fanW[2] === 'rem') {
-    assert.ok(parseFloat(fanW[1]) < 2.75, 'fanout tighter than 2.75rem, got ' + fanW[1]);
-  }
-  if (stW[2] === 'rem') {
-    assert.ok(parseFloat(stW[1]) <= 2, 'status compact ≤2rem, got ' + stW[1]);
-  }
+  assert.ok(!/width:\s*7ch/.test(idBlock[0]) || !/text-overflow:\s*ellipsis/.test(idBlock[0]),
+    'reject 7ch+ellipsis clip pattern');
+  assert.ok(/width:\s*1%/.test(idBlock[0]) ||
+    /width:\s*(max-content|fit-content|min-content|0|1px)/.test(idBlock[0]),
+    'id content-min for full hierarchical ids');
 
   // Render passes dependents into formatFanout (not fanout-only).
   assert.ok(html.indexOf('formatFanout(row.fanout, row.id, row.dependents)') >= 0 ||
@@ -296,54 +300,62 @@ test('T179 status normal case + tight widths + dependents tip wiring', function 
     'formatFanout receives row.dependents');
 });
 
-// 🎯T332: even gutters; hierarchical ids fit; reject T331 chasm + zero-pad facing-align glue.
-test('T332 even column gutters — fit hierarchical ids; reject chasm and status-fan glue', function () {
+// 🎯T340: CSS shape gates + reject T331/T332 failure modes.
+// Real geometry (scrollWidth / text-ink gutters) lives in Playwright
+// scripts/chat-ui-test/t340-frontier-table-layout-test.js — pad-sum alone is theatre.
+test('T340 no id ellipsis clip; content-sized chrome; shared td pad; reject chasm patterns', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const tableBlock = html.match(/#frontier-table\s*\{[^}]*\}/);
+  const tdBlock = html.match(/#frontier-table\s+td\s*\{[^}]*\}/);
   const idBlock = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*\}/);
   const nameBlock = html.match(/#frontier-table\s+\.ft-name\s*\{[^}]*\}/);
   const stBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
   const fanBlock = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*\}/);
+  assert.ok(tableBlock, '#frontier-table rule');
+  assert.ok(tdBlock, '#frontier-table td rule');
   assert.ok(idBlock, 'ft-id rule');
   assert.ok(nameBlock, 'ft-name rule');
   assert.ok(stBlock, 'ft-status rule');
   assert.ok(fanBlock, 'ft-fanout rule');
 
-  // Extreme A (chasm): fixed rem ≥5.25rem leaves dead space after short ids.
+  // Auto layout for content-min chrome.
+  assert.ok(/table-layout:\s*auto/.test(tableBlock[0]), 'table-layout auto');
+
+  // Shared horizontal padding on every td (not per-column pad-sum theatre).
+  assert.ok(/padding:\s*[\d.]+px\s+[\d.]+px/.test(tdBlock[0]) ||
+    /padding-left:\s*[\d.]+px/.test(tdBlock[0]),
+    'shared td horizontal padding, got: ' + tdBlock[0]);
+
+  // Id: no ellipsis / overflow hidden; content-min; no 7ch+ellipsis; no rem chasm.
+  assert.ok(!/text-overflow:\s*ellipsis/.test(idBlock[0]),
+    'T340: .ft-id must not use text-overflow:ellipsis');
+  assert.ok(!/overflow:\s*hidden/.test(idBlock[0]),
+    'T340: .ft-id must not use overflow:hidden');
+  assert.ok(/overflow:\s*visible/.test(idBlock[0]),
+    'T340: .ft-id overflow visible (or equivalent no-clip)');
+  assert.ok(/white-space:\s*nowrap/.test(idBlock[0]), 'T340: .ft-id nowrap');
+  assert.ok(!/width:\s*7ch/.test(idBlock[0]),
+    'T340: reject width:7ch (border-box pad eats ch → clip)');
+  assert.ok(!/max-width:\s*9ch/.test(idBlock[0]),
+    'T340: reject max-width:9ch clip cap');
   const idRem = idBlock[0].match(/width:\s*([\d.]+)rem/);
   if (idRem) {
     assert.ok(parseFloat(idRem[1]) < 5.25,
       'reject .ft-id width ≥5.25rem chasm pattern, got ' + idRem[1] + 'rem');
   }
-  const idCh = idBlock[0].match(/width:\s*([\d.]+)ch/);
-  assert.ok(idCh, 'id width in ch (shrink-cap), got: ' + idBlock[0]);
-  assert.ok(parseFloat(idCh[1]) >= 6, 'id ≥6ch fits T254.1/T262.3, got ' + idCh[1]);
-  assert.ok(parseFloat(idCh[1]) <= 9, 'id ≤9ch no oversize dead column, got ' + idCh[1]);
 
-  function padPx(block, side) {
-    const re = new RegExp('padding-' + side + ':\\s*(\\d+)px');
-    const m = block.match(re);
-    return m ? parseInt(m[1], 10) : 0;
-  }
-  // Shared half-pads → ~6–8px gutters of same order across column pairs.
-  const idNamePad = padPx(idBlock[0], 'right') + padPx(nameBlock[0], 'left');
-  const nameStPad = padPx(nameBlock[0], 'right') + padPx(stBlock[0], 'left');
-  const stFanPad = padPx(stBlock[0], 'right') + padPx(fanBlock[0], 'left');
-  assert.ok(idNamePad >= 6 && idNamePad <= 10, 'id↔name gutter ~6–8px, got ' + idNamePad);
-  assert.ok(nameStPad >= 6 && nameStPad <= 10, 'name↔status gutter ~6–8px, got ' + nameStPad);
-  // Extreme B (glue): status↔fanout pad sum 0 + facing-align collapse.
-  assert.ok(stFanPad > 0, 'status↔fanout pad sum not 0 (reject glue), got ' + stFanPad);
-  assert.ok(stFanPad >= 6 && stFanPad <= 10, 'status↔fanout gutter ~6–8px, got ' + stFanPad);
-  // Drop T331 facing-align: status right-align + fanout left-align with zero pad.
+  // Status/fan content-min chrome; no facing-align glue.
+  assert.ok(/white-space:\s*nowrap/.test(stBlock[0]), 'status nowrap');
+  assert.ok(/white-space:\s*nowrap/.test(fanBlock[0]), 'fanout nowrap');
   assert.ok(!/text-align:\s*right/.test(stBlock[0]), 'no status text-align:right facing-align');
-  // Fanout may right-align numbers; must not be left-facing against right-aligned status.
   const facingCollapse = /text-align:\s*right/.test(stBlock[0]) && /text-align:\s*left/.test(fanBlock[0]);
   assert.ok(!facingCollapse, 'reject status-right + fanout-left facing-align collapse');
 
-  // T177 retained: fixed layout + name ellipsis.
-  assert.ok(/#frontier-table\s*\{[^}]*table-layout:\s*fixed/.test(html), 'table-layout fixed');
-  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*text-overflow:\s*ellipsis/.test(html), 'name ellipsis');
+  // Name ellipsis retained (may still clip long titles).
+  assert.ok(/text-overflow:\s*ellipsis/.test(nameBlock[0]), 'name ellipsis');
+  assert.ok(/width:\s*100%/.test(nameBlock[0]), 'name fills remainder');
 
-  // Pure helper: longest hierarchical id → clamped ch width.
+  // Pure helper still exported (legacy T332 clamp helper; not product CSS path).
   assert.strictEqual(typeof FT.maxIdChWidth, 'function', 'maxIdChWidth exported');
   assert.strictEqual(FT.maxIdChWidth(['T1', 'T254.1', 'T262.3']), 6, 'T254.1 → 6ch');
   assert.strictEqual(FT.maxIdChWidth(['T1'], 4, 9), 4, 'short id floors at minCh');
@@ -712,17 +724,20 @@ test('T182 tight status/fan CSS + play cell + send path wiring', function () {
 
   const stBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
   const fanBlock = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*\}/);
+  const tdBlock182 = html.match(/#frontier-table\s+td\s*\{[^}]*\}/);
   assert.ok(stBlock, 'ft-status rule');
   assert.ok(fanBlock, 'ft-fanout rule');
-  // 🎯T332: small real gutter status↔fanout (not T331 zero-pad glue).
-  function padPx182(block, side) {
-    const re = new RegExp('padding-' + side + ':\\s*(\\d+)px');
-    const m = block.match(re);
-    return m ? parseInt(m[1], 10) : 0;
-  }
-  const stFanPad182 = padPx182(stBlock[0], 'right') + padPx182(fanBlock[0], 'left');
-  assert.ok(stFanPad182 > 0 && stFanPad182 <= 10,
-    'status↔fanout small real gutter, got ' + stFanPad182 + ': ' + stBlock[0] + ' | ' + fanBlock[0]);
+  assert.ok(tdBlock182, 'td shared pad rule');
+  // 🎯T340: gutter comes from shared #frontier-table td H pad (not zero-pad glue).
+  // Pad-sum on column rules alone is theatre; real geometry is Playwright T340.
+  const sharedH = tdBlock182[0].match(/padding:\s*[\d.]+px\s+([\d.]+)px/);
+  assert.ok(sharedH && parseFloat(sharedH[1]) > 0 && parseFloat(sharedH[1]) <= 8,
+    'shared td H pad >0 and ≤8px (status↔fan gutter), got: ' + tdBlock182[0]);
+  // Status must not zero-out horizontal padding against fan.
+  assert.ok(!/padding:\s*0\b/.test(stBlock[0]) && !/padding-right:\s*0/.test(stBlock[0]),
+    'status does not force zero pad: ' + stBlock[0]);
+  assert.ok(!/padding:\s*0\b/.test(fanBlock[0]) && !/padding-left:\s*0/.test(fanBlock[0]),
+    'fanout does not force zero pad: ' + fanBlock[0]);
 
   assert.ok(/#frontier-table\s+\.ft-play\s*\{/.test(html), 'ft-play column CSS');
   assert.ok(/#frontier-table\s+\.ft-play-btn\s*\{/.test(html) || html.indexOf('ft-play-btn') >= 0,

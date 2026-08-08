@@ -842,41 +842,50 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 #frontier-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px; }
 #frontier-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; padding: 8px 12px; }
-/* fixed + max-width:100%: long names ellipsize instead of growing past #frontier-body */
-/* 🎯T177: explicit rem chrome cols — 1%/99% under fixed layout collapses chrome and paints over name */
+/* max-width:100% + name ellipsis: long names do not grow past #frontier-body */
+/* 🎯T340: table-layout:auto so chrome cols size to content (fixed + ch/rem clips
+   T254.1 under border-box, or leaves T331 chasms). Name width:100% claims remainder. */
 #frontier-table {
   width: 100%; max-width: 100%; border-collapse: collapse; font-family: var(--sans);
-  table-layout: fixed;
+  table-layout: auto;
 }
+/* 🎯T340: shared horizontal pad on every td → uniform text-to-text gutters.
+   Pad-sum hermetics alone are theatre when chrome col width >> content; shared
+   4px half-pads make id↔name / name↔status / status↔fanout the same order. */
 #frontier-table td {
-  padding: 5px 6px; border-bottom: 1px solid var(--border);
+  padding: 5px 4px; border-bottom: 1px solid var(--border);
   color: var(--text); vertical-align: middle;
 }
 #frontier-table tr:hover td { background: var(--surface-raised); }
-/* 🎯T179/T332: hierarchical ids (T254.1) via ch shrink-cap — not 5.25rem id↔name chasm.
-   Uniform ~6–8px gutters (4px + 4px half-pads). Drop T331 facing-align status/fan glue. */
+/* 🎯T340: size .ft-id to content — NO ellipsis clip.
+   T332 7ch max-width:9ch + overflow:hidden + text-overflow:ellipsis under
+   global border-box ate padding into the ch box and truncated 🎯T254.1.
+   white-space:nowrap + no fixed width → column is content-min under auto layout. */
 #frontier-table .ft-id {
   font-family: var(--mono); font-size: 11px; color: var(--accent);
   white-space: nowrap; font-weight: 500;
-  /* ch shrink-cap (table-layout:fixed): T254.1/T262.3 = 6ch; 7ch fits without rem dead space */
-  width: 7ch; max-width: 9ch;
-  overflow: hidden; text-overflow: ellipsis;
-  padding-left: 8px; padding-right: 4px;
+  width: 1%;
+  max-width: none;
+  overflow: visible;
+  /* left edge inset only; H gutter shares the 4px from #frontier-table td */
+  padding-left: 8px;
 }
+/* Name takes remainder; max-width:0 + width:100% is the auto-table fill trick. */
 #frontier-table .ft-name {
+  width: 100%;
+  max-width: 0;
   min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  padding-left: 4px; padding-right: 4px;
 }
-/* 🎯T182/T332: status + fan separate columns with a small real gutter (not zero-pad collapse) */
+/* 🎯T340: status + fan content-min chrome — not fixed rem chasm / glue */
 #frontier-table .ft-status {
   font-size: 10px; color: var(--text-dim); white-space: nowrap;
-  width: 1.75rem; padding-left: 4px; padding-right: 4px;
+  width: 1%;
 }
 #frontier-table .ft-fanout {
   font-family: var(--mono); font-size: 10px; color: var(--text-muted);
   text-align: right; white-space: nowrap;
-  width: 2rem; padding-left: 4px; padding-right: 4px;
+  width: 1%;
 }
 #frontier-table .ft-fanout.ft-fanout-empty {
   color: transparent;
@@ -884,7 +893,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 /* 🎯T182: far-right play control → POST /api/agents/{po}/send */
 /* 🎯T198: engaged row → stop glyph; free stay play */
 #frontier-table .ft-play {
-  width: 1.6rem; padding-left: 0; padding-right: 8px;
+  width: 1%;
+  padding-left: 4px; padding-right: 8px;
   text-align: center; white-space: nowrap;
 }
 #frontier-table .ft-play-btn {
