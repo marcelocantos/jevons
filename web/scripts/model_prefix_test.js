@@ -72,10 +72,11 @@ test('anthropic models carry the family initial ahead of the version', function 
   assert.strictEqual(MP.familyInitial('claude-opus-5'), 'O');
   assert.strictEqual(MP.familyInitial('claude-sonnet-5'), 'S');
   assert.strictEqual(MP.familyInitial('claude-haiku-5'), 'H');
-  const badges = ['opus', 'sonnet', 'haiku'].map(function (f) {
+  assert.strictEqual(MP.familyInitial('claude-fable-5'), 'F');
+  const badges = ['opus', 'sonnet', 'haiku', 'fable'].map(function (f) {
     return MP.condenseModel('claude-' + f + '-4-5');
   });
-  assert.strictEqual(new Set(badges).size, 3, 'two families paint the same badge: ' + badges);
+  assert.strictEqual(new Set(badges).size, 4, 'two families paint the same badge: ' + badges);
   // The version half stays honest: a family with no version paints the letter
   // and nothing else, rather than inventing a number.
   assert.strictEqual(MP.condenseModel('opus'), 'O');
@@ -90,6 +91,7 @@ test('no digit segment can read as zero-padded', function () {
   ['claude-opus-5', 'claude-opus-05', 'claude-opus-5[1m]', 'claude-opus-4-8',
     'claude-opus-4-05', 'claude-opus-4-5-20250929', 'claude-sonnet-04-05',
     'claude-haiku-4-5-20251001', 'us.anthropic.claude-opus-4-5-v1:0',
+    'claude-fable-5', 'claude-fable-5[1m]', 'claude-fable-05',
     'grok-4.5-build', 'grok-05',
   ].forEach(function (id) {
     const version = MP.versionOf(id);
@@ -99,7 +101,7 @@ test('no digit segment can read as zero-padded', function () {
     assert.ok(/^[\d.]*$/.test(version), id + ' → non-numeric version ' + version);
     const label = MP.condenseModel(id);
     assert.strictEqual(label, MP.familyInitial(id) + version, id);
-    assert.ok(/^[OSH]?[\d.]*$/.test(label), id + ' → unexpected label ' + label);
+    assert.ok(/^[OSHF]?[\d.]*$/.test(label), id + ' → unexpected label ' + label);
   });
 });
 
@@ -116,6 +118,45 @@ test('the family initial is painted as its own element, not spliced into the dig
   // A family with no version still gets its letter, wrapped the same way.
   const bare = MP.modelPrefixHtml({ provider: 'claude', model: 'opus' });
   assert.ok(bare.indexOf('<sub><span class="model-family">O</span></sub>') !== -1, bare);
+});
+
+// 🎯T312: the owner's own PO row moved onto claude-fable-5 and painted a bare
+// splat — the family list knew opus/sonnet/haiku only, so an unknown family word
+// condensed to '' and took the version down with it. Fable is an Anthropic
+// family like any other: initial F, version on whichever side of the word it
+// sits, and the same chrome the Opus O wears.
+test('fable condenses to F5 like the Opus O5', function () {
+  assert.strictEqual(MP.condenseModel('claude-fable-5'), 'F5');
+  assert.strictEqual(MP.condenseModel('fable-5'), 'F5');
+  assert.strictEqual(MP.condenseModel('claude-fable-5[1m]'), 'F5');
+  assert.strictEqual(MP.condenseModel('claude-fable-4-5'), 'F4.5');
+  assert.strictEqual(MP.condenseModel('claude-fable-5-20260601'), 'F5');
+  // Version leads the family word on the 3-series spelling (🎯T302's fix
+  // applies here too — the family is new, the extractor is not).
+  assert.strictEqual(MP.condenseModel('claude-3-5-fable'), 'F3.5');
+  // A family with no version paints the bare letter, never an invented number.
+  assert.strictEqual(MP.condenseModel('fable'), 'F');
+  assert.strictEqual(MP.versionOf('fable'), '');
+
+  // The mark is the Claude splat: fable is Anthropic whether the provider says
+  // so or only the model id does.
+  assert.strictEqual(MP.companyFor('claude', 'claude-fable-5'), 'anthropic');
+  assert.strictEqual(MP.companyFor('', 'claude-fable-5'), 'anthropic');
+  assert.strictEqual(MP.companyFromModel('fable-5'), 'anthropic');
+
+  // Same chrome as O5: the letter is its own accented element, the digits are
+  // plain, and the splat rides beside them.
+  const html = MP.modelPrefixHtml({ provider: 'claude', model: 'claude-fable-5' });
+  assert.ok(html.indexOf('data-company="anthropic"') !== -1, html);
+  assert.ok(html.indexOf('data-mark="claude-splat"') !== -1, html);
+  assert.ok(html.indexOf('<sub><span class="model-family">F</span>5</sub>') !== -1, html);
+  assert.ok(!/<sub>[^<]*F/.test(html), 'initial is loose in the subscript text: ' + html);
+  assert.ok(html.indexOf('title="Anthropic · claude-fable-5"') !== -1, html);
+
+  const p = MP.modelPrefix({ provider: 'claude', model: 'claude-fable-5' });
+  assert.strictEqual(p.initial, 'F');
+  assert.strictEqual(p.version, '5');
+  assert.strictEqual(p.label, 'F5');
 });
 
 // 🎯T302 restores the initial for Anthropic only. xAI ships one family, so a

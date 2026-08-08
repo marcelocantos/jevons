@@ -56,8 +56,10 @@
     openai: OPENAI,
   };
 
-  // Model families the version hangs off.
-  const FAMILIES = ['opus', 'sonnet', 'haiku', 'grok', 'gpt'];
+  // Model families the version hangs off. 🎯T312 adds Anthropic's fable line:
+  // an unknown family word condenses to nothing, so a `claude-fable-5` row wore
+  // the splat with no version beside it at all.
+  const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'grok', 'gpt'];
   const FAMILY_RE = new RegExp('(' + FAMILIES.join('|') + ')');
 
   // The initial painted ahead of the version (🎯T302). Anthropic ships three
@@ -65,7 +67,7 @@
   // Opus row from a Sonnet row at a glance. xAI and OpenAI ship one family
   // each, so their initial would be pure noise — they stay bare, as 🎯T299
   // left them.
-  const FAMILY_INITIAL = { opus: 'O', sonnet: 'S', haiku: 'H' };
+  const FAMILY_INITIAL = { opus: 'O', sonnet: 'S', haiku: 'H', fable: 'F' };
 
   // Company marks, sized by CSS (.model-icon), drawn in currentColor with no
   // plate, ring, or outer border — the CSS supplies the colour, keyed on the
@@ -139,7 +141,7 @@
   function companyFromModel(model) {
     const m = norm(model);
     if (!m) return '';
-    if (/claude|opus|sonnet|haiku/.test(m)) return ANTHROPIC;
+    if (/claude|opus|sonnet|haiku|fable/.test(m)) return ANTHROPIC;
     if (/grok/.test(m)) return XAI;
     if (/gpt|codex|^o\d/.test(m)) return OPENAI;
     return '';
