@@ -281,6 +281,32 @@ func TestDefaultPersonaOverseerNeverParentsWorkers(t *testing.T) {
 	}
 }
 
+// 🎯T262.1: frontier = ready set, not next-ticket (doctrine inject).
+func TestDefaultPersonaFrontierReadySet(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Frontier = ready set",
+		"T262.1",
+		"next ticket",
+		"unblocked leaf",
+		"indifferent or policy",
+		"queue is frontier size",
+		"engagement policy",
+		"Anti-pattern",
+		"frontier-as-ready-set.md",
+		"instructional",
+		"T254",
+		"T262.4",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T262.1 marker %q", want)
+		}
+	}
+}
+
 // 🎯T155: new unattended frontier leaves get a worker immediately (parent=jevons-po).
 func TestDefaultPersonaUnattendedFrontierAutoSpawn(t *testing.T) {
 	p, err := Default().Persona()
@@ -477,6 +503,16 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"jevons_target_file",
 		"bullseye_commit",
 		"T92",
+		// 🎯T262.1 frontier = ready set
+		"Frontier = ready set",
+		"T262.1",
+		"next ticket",
+		"unblocked leaf",
+		"indifferent or policy",
+		"queue is frontier size",
+		"engagement policy",
+		"Anti-pattern",
+		"frontier-as-ready-set.md",
 		"Unattended frontier auto-spawn",
 		"T155",
 		"parent=jevons-po",
@@ -598,6 +634,13 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"bullseye_commit",
 		"T92",
 		"same turn",
+		// 🎯T262.1 frontier = ready set
+		"Frontier = ready set",
+		"T262.1",
+		"next ticket",
+		"unblocked ready leaves",
+		"indifferent/policy",
+		"frontier-as-ready-set.md",
 		"Unattended frontier auto-spawn",
 		"T155",
 		"parent=jevons-po",

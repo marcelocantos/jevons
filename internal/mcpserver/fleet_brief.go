@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T325.1 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -74,6 +74,15 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   read/plan loops. Single-agent tasks are fine; multi-slice briefs require fan-out.
 - Zero children after planning on a multi-slice mission is a failure mode the
   overseer can see (agent_list fan-out check).
+
+## Frontier = ready set (🎯T262.1)
+- Frontier = unblocked ready leaves. There is no privileged "next ticket."
+- Queue is special case (capacity mutex / owner ritual / hard depends not yet
+  filed) — not the default. Pick among ready leaves is indifferent or policy.
+- Multi-agent default: one work agent per ready leaf, subject to engagement
+  policy. Anti-pattern: framing bullseye as answering "what is the next ticket?"
+- Design: docs/design/frontier-as-ready-set.md. Residual: instructional.
+  Does not unpark 🎯T254 or claim 🎯T262.4 owner accept.
 
 ## Unattended frontier auto-spawn (🎯T155)
 - New frontier leaves that are not design-gated / needs-owner /

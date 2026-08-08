@@ -358,6 +358,27 @@ spend the session in unbounded solo read/grep/bullseye loops.
   (🎯T111.3). Prefer `jevons_agent_start` over `jevons_thread_spawn` for
   named long-lived PO/worker roles.
 
+### Frontier = ready set (🎯T262.1) — not next-ticket
+
+**Frontier = ready set.** Every unblocked leaf is legitimate work. There
+is no privileged "next ticket." A queue is frontier size ≤1 with invented
+order. Multi-agent default: one work agent per ready leaf, subject to
+engagement policy (capacity, ownership, design/park filters, churn).
+Bullseye records intent and computes readiness; Jevons engages
+implementers. Neither product answers "the next ticket" as a total order.
+
+- **Anti-pattern:** framing bullseye (or `/cv` alone) as the product
+  answer to "what is the next ticket?"
+- **Queue is special case:** capacity mutex, hard product dependency not
+  yet encoded as `depends_on`, or owner ritual — not the default mental
+  model. Pick among ready leaves is **indifferent or policy**, not
+  discovery of a hidden true head.
+- **Related:** 🎯T155 / 🎯T193 consume the set; engagement policy 🎯T198 /
+  🎯T222. Design packet: `docs/design/frontier-as-ready-set.md`.
+- **Residual:** instructional doctrine + fleet brief inject. 🎯T254 factory
+  Build stays parked until owner accept on 🎯T262.4 — this inject does
+  **not** unpark 🎯T254 or claim 🎯T262.4 owner accept.
+
 ### Unattended frontier auto-spawn (🎯T155) — continuous kick-off
 
 When a **new frontier leaf** is filed that is **not** design-gated /

@@ -172,6 +172,13 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Pure `CoverageMap` / `ClassifyDesignClause` helpers. Residual:
   instructional + pure model; not a hard daemon block; T29 UI + owner
   process-fidelity class-3. Design: `docs/design/greenfield-oracle-elicitation.md`.
+- **Frontier = ready set (🎯T262.1):** frontier = unblocked ready leaves;
+  pick among them is indifferent/policy, not discovery of a hidden "next
+  ticket." A queue is frontier size ≤1 with invented order. Multi-agent
+  default: worker per ready leaf subject to engagement policy. Anti-pattern:
+  framing bullseye as "the next ticket" oracle. Design:
+  `docs/design/frontier-as-ready-set.md`. Does not unpark T254 or claim
+  T262.4 owner accept. Persona + agents-guide + fleet standing brief.
 - **Unattended frontier auto-spawn (🎯T155):** when a new frontier leaf is
   filed that is not design-gated / needs-owner / design-discussion /
   parked-for-design, **`jevons-po` spawns a fleet worker** under

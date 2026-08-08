@@ -80,9 +80,9 @@ From bullseye docs (`docs/mcp-triad.md`, agents-guide):
 - [x] This design doc states frontier = unblocked ready leaves; pick is indifferent/policy.
 - [x] Explicit anti-pattern: bullseye as "next ticket" oracle.
 - [x] Queue treated as special case, not general shape.
-- [ ] AGENTS / persona / FleetStandingBrief inject updated (land **after** owner accept or as thin T262.1 follow-up commit — **do not** claim doctrine inject done until greps green).
+- [x] AGENTS / persona / FleetStandingBrief inject updated (land **after** owner accept or as thin T262.1 follow-up commit — **do not** claim doctrine inject done until greps green).
 
-**Recommend for T262.1 close path:** one small docs-only commit (persona + AGENTS + agents-guide + brief markers) once owner accepts wording; hermetic: existing `internal/config` doctrine grep tests extended with a ready-set marker string.
+**T262.1 close path:** thin docs+grep commit (persona + AGENTS + agents-guide + FleetStandingBrief markers); hermetic: `internal/config` + `fleet_brief` doctrine greps for ready-set marker strings. Does **not** achieve T262.4 or unpark T254.
 
 ---
 
