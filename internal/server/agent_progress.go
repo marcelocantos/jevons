@@ -23,7 +23,12 @@ type AgentProgress struct {
 	// Sticky: frames that name no model never forget the previous one, so
 	// the RHS company-icon + condensed model prefix survives idle frames.
 	// Empty when the provider never names one (Grok ACP).
-	Model   string
+	Model string
+	// Session is the registry session id this observation belongs to
+	// (🎯T311). Stamped by SyncEpoch; a different session means a different
+	// run (kill+respawn, migration), so the sticky model is dropped rather
+	// than inherited by whatever now answers to the same name.
+	Session string
 	Updated time.Time
 }
 
@@ -56,6 +61,59 @@ func (h *AgentProgressHub) Get(name string) AgentProgress {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.by[name]
+}
+
+// Forget drops every observation for name (🎯T311). Called when an agent
+// leaves the fleet: the sticky model is a fact about the process that just
+// died, and a later agent registered under the same name must not inherit it.
+func (h *AgentProgressHub) Forget(name string) {
+	if h == nil || name == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.by, name)
+}
+
+// Prune forgets every agent not in registered — the kill/remove path seen
+// from the listing side, so no call site has to remember to notify the hub
+// (🎯T311).
+func (h *AgentProgressHub) Prune(registered map[string]struct{}) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for name := range h.by {
+		if _, ok := registered[name]; !ok {
+			delete(h.by, name)
+		}
+	}
+}
+
+// SyncEpoch ties name's snapshot to the session the registry currently has
+// on its row (🎯T311). The first sighting stamps it; a later sighting under
+// a different session id means the agent was restarted on a fresh
+// conversation — possibly under a new model pin — so the stale observation
+// is dropped instead of masking the pin.
+func (h *AgentProgressHub) SyncEpoch(name, sessionID string) {
+	if h == nil || name == "" || sessionID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	prev, ok := h.by[name]
+	if !ok {
+		return
+	}
+	switch prev.Session {
+	case sessionID:
+	case "":
+		prev.Session = sessionID
+		h.by[name] = prev
+	default:
+		h.by[name] = AgentProgress{Session: sessionID, Updated: h.clock()}
+	}
 }
 
 // Observe updates progress from a claudia agent event.
@@ -94,6 +152,7 @@ func (h *AgentProgressHub) Observe(name string, ev claudia.Event) bool {
 	if next.Model == "" {
 		next.Model = prev.Model
 	}
+	next.Session = prev.Session
 	// Preserve last step across mid-turn assistant frames that only set phase.
 	if next.Step == "" && prev.Step != "" && next.Phase == "working" {
 		next.Step = prev.Step
@@ -160,6 +219,7 @@ func (h *AgentProgressHub) SetStatus(name, status string) {
 		Phase:   phase,
 		Summary: summary,
 		Model:   prev.Model, // 🎯T287: liveness baseline never forgets the model
+		Session: prev.Session,
 		Updated: h.clock(),
 	}
 }

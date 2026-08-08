@@ -749,6 +749,17 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		onRecovered(recovered)
 	}
 	defs := reg.List()
+	// 🎯T311: agents that left the registry (kill/remove) must not leave a
+	// sticky observation behind — the next agent to answer to that name would
+	// inherit the dead one's model. Pruning here covers every kill path
+	// without each one having to notify the hub.
+	if progress != nil {
+		registered := make(map[string]struct{}, len(defs))
+		for _, d := range defs {
+			registered[d.Name] = struct{}{}
+		}
+		progress.Prune(registered)
+	}
 	agents := make([]agentInfo, 0, len(defs))
 	for _, d := range defs {
 		status := "stopped"
@@ -760,7 +771,10 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			purpose = claudia.PurposeWork
 		}
 		// Seed status baseline when no richer ACP snapshot exists yet.
+		// Epoch first (🎯T311): a restart on a fresh session drops the previous
+		// run's observation before the baseline can carry it forward.
 		if progress != nil {
+			progress.SyncEpoch(d.Name, d.SessionID)
 			progress.SetStatus(d.Name, status)
 		}
 		info := agentInfo{
@@ -781,10 +795,14 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 				info.Step = p.Step
 				info.Progress = p.Summary
 			}
-			// Observed model beats the def's override: it is what the agent
-			// actually ran this session (🎯T287, e.g. after migrate).
-			if m := strings.TrimSpace(p.Model); m != "" {
-				info.Model = m
+			// The registry pin is the owner's declared intent and wins
+			// (🎯T311): after a re-pin the agent restarts under the new model,
+			// and a sticky observation from the previous run would keep
+			// painting the old badge indefinitely. Observation still fills the
+			// badge for unpinned agents, which is where it was always the only
+			// source (🎯T287).
+			if info.Model == "" {
+				info.Model = strings.TrimSpace(p.Model)
 			}
 		}
 		// Grok names no model in its ACP frames, so the badge had a company
