@@ -7471,6 +7471,10 @@ if (agentInspectBody) {
     if (f && f.onScroll) f.onScroll(agentInspectBody);
   }, { passive: true });
 }
+// Declared before mount: widget sendEnabled reads rhsBottomTab at sync time (TDZ-safe).
+let rhsBottomTab = (typeof FrontierTable !== 'undefined')
+  ? FrontierTable.TAB_FRONTIER
+  : 'frontier';
 
 // 🎯T309.1: mount both conversation surfaces (same module; density is CSS/param).
 (function mountConversationWidgets() {
@@ -7604,9 +7608,6 @@ if (agentInspectBody) {
     });
   }
 })();
-let rhsBottomTab = (typeof FrontierTable !== 'undefined')
-  ? FrontierTable.TAB_FRONTIER
-  : 'frontier';
 
 // 🎯T251 / 🎯T309.1: show compact widget composer when Transcript tab + selected agent.
 function syncSidebarComposer() {

@@ -106,6 +106,7 @@ test-ui:
 	node scripts/chat-ui-test/t164-aside-dismiss-test.js
 	node scripts/chat-ui-test/t241-alt-enter-test.js
 	node scripts/chat-ui-test/t289-paint-thrash-test.js
+	node scripts/chat-ui-test/t309.1-conversation-widget-test.js
 
 .PHONY: test-ui-live
 test-ui-live:
