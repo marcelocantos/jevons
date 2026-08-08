@@ -108,6 +108,10 @@ type Action struct {
 	Agent   string
 	Mission string
 	Rung    Rung
+	// Class is the event class for a rung that pushes an event to the root
+	// overseer: EventClassImpatient the first time, EventClassFailing once
+	// the same gap has already been shouted about. Empty for other rungs.
+	Class string
 	// Dwell is how long the gap had been unsatisfied when this fired.
 	Dwell time.Duration
 	// Satisfies is always false: no rung on this ladder is satisfaction
@@ -132,6 +136,10 @@ type Incident struct {
 	HumanLit bool
 	// Acked is true if the owner dismissed the sticky before satisfaction.
 	Acked bool
+	// Cause is how the episode ended: a satisfaction verdict from 🎯T316, or
+	// the gap departing the reconcile set. Both are healthy; they tell the
+	// owner different stories, so the postmortem (🎯T319) renders them apart.
+	Cause CloseCause
 }
 
 // agentState is the ladder's memory for one agent across ticks.
@@ -214,6 +222,7 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 			Agent:   g.Agent,
 			Mission: g.Mission,
 			Rung:    rung,
+			Class:   eventClass(rung, st),
 			Dwell:   dwell,
 			Reason:  reasonFor(rung),
 		})
@@ -237,6 +246,10 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 			})
 		}
 		if len(st.rungs) > 0 {
+			cause := ClosedByDeparture
+			if satisfiedIn(set, agent) {
+				cause = ClosedBySatisfaction
+			}
 			closed = append(closed, Incident{
 				Agent:    agent,
 				Mission:  st.mission,
@@ -246,6 +259,7 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 				Rungs:    append([]Rung(nil), st.rungs...),
 				HumanLit: st.humanLit,
 				Acked:    st.acked,
+				Cause:    cause,
 			})
 		}
 		delete(l.agents, agent)
