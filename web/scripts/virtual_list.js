@@ -711,6 +711,215 @@
     return !!replayActive;
   }
 
+  // ── Reload hydrate: end-first, lazy, parade-proof (🎯T347) ─────────
+  // Owner regression: hard-reload of a long chat painted every replayed turn
+  // old→new (full markdown parse each) and, once per-frame work opened >150ms
+  // gaps, the idle fallback ended suppression mid-burst — every remaining
+  // frame then stick-to-bottom pinned: a ~minute-long upward scroll parade.
+  // Model: (a) replay appends are lazy shells (zero parse before pin),
+  // (b) the single pin at history_meta triggers an end-band materialize only,
+  // (c) frames arriving while the connection still awaits history_meta always
+  // re-enter suppression — the fallback can never flip the burst into
+  // per-message pin mode.
+
+  // A server that never sends history_meta must degrade to live behaviour
+  // (otherwise streaming would stay pin-suppressed forever) — time-cap the
+  // re-entry window well above any sane replay burst.
+  const REPLAY_REENTER_MAX_MS = 30000;
+
+  function shouldReenterReplay(opts) {
+    const o = opts || {};
+    if (!o.awaitingHistoryMeta) return false;
+    if (o.historyReplayActive) return false;
+    const ms = Number(o.msSinceConnect);
+    const max = o.maxMs != null ? Number(o.maxMs) : REPLAY_REENTER_MAX_MS;
+    if (Number.isFinite(ms) && Number.isFinite(max) && ms > max) return false;
+    return true;
+  }
+
+  // Replay-burst appends stay lazy shells; paint is post-pin, band-only.
+  function shouldPaintOnReplayAppend(historyReplayActive) {
+    return !historyReplayActive;
+  }
+
+  // Materialization is deferred wholesale during the burst — the pin at
+  // history_meta schedules the one end-band pass.
+  function shouldVirtualizeDuringReplay(historyReplayActive) {
+    return !historyReplayActive;
+  }
+
+  /**
+   * Reload/hydrate oracle: simulate a chronological replay of n turns and the
+   * single end pin. Policy knobs mirror the product wiring so the hermetic
+   * test proves both directions:
+   *   defaults (lazyAppend + suppressPin) → no mid-hydrate scrollTop climb,
+   *     zero paints during replay, end-band-bounded materialize, dist-to-end 0;
+   *   suppressPin:false → midHydrateClimbs > 0 (the parade — caught);
+   *   lazyAppend:false → paintedDuringReplay === n (the slow full-list
+   *     materialize behind the ~60s settle — caught).
+   */
+  function replayHydrateTrace(opts) {
+    const o = opts || {};
+    const n = Math.max(0, o.n | 0);
+    const h = o.avgHeight > 0 ? o.avgHeight : DEFAULT_ESTIMATE_HEIGHT;
+    const ch = o.clientHeight > 0 ? o.clientHeight : 600;
+    const buf = typeof o.buffer === 'number' ? o.buffer : DEFAULT_BUFFER;
+    const lazyAppend = o.lazyAppend !== false;
+    const suppressPin = o.suppressPinDuringReplay !== false;
+    let scrollTop = 0;
+    let climbs = 0;
+    const scrollTops = [];
+    for (let i = 1; i <= n; i++) {
+      if (!suppressPin) {
+        // Per-message stick-to-bottom during the burst (the regression).
+        const next = Math.max(0, i * h - ch);
+        if (next > scrollTop) { scrollTop = next; climbs++; }
+      }
+      scrollTops.push(scrollTop);
+    }
+    const plan = recentFirstMaterializePlan(n, h, ch, buf);
+    scrollTops.push(plan.scrollTop);
+    const totalH = n * h;
+    return {
+      scrollTops: scrollTops,
+      midHydrateClimbs: climbs,
+      paintedDuringReplay: lazyAppend ? 0 : n,
+      materializedAtPin: plan.materialIndices.length,
+      finalDistToBottom: Math.max(0, totalH - ch) - plan.scrollTop,
+      landsOnLatest: plan.landsOnLatest,
+      // Band bound in item units: viewport + buffer both sides + edge slack.
+      materialBandBound: Math.ceil((ch + 2 * buf) / h) + 2,
+    };
+  }
+
+  // ── Main-thread liveness: phased, budgeted virtualize (🎯T349) ──────
+  // Owner regression: composer froze for tens of seconds (blind-typed blobs,
+  // Firefox slow-script dialog) on a long transcript. Root cause: the
+  // virtualize pass interleaved layout reads (offsetTop/offsetHeight of the
+  // next row) with dematerialize writes (class/style/innerHTML of the
+  // previous row). Every write invalidated layout, so each subsequent read
+  // forced a full reflow of the flow container — O(rows²) layout work in one
+  // sync pass when many rows dematerialize at once. Secondary: the
+  // rematerialize cap (6/frame) bounded item count but not time — a few
+  // giant markdown bodies still blocked a frame for seconds.
+  // Model: (a) all geometry reads happen before any write, (b) writes are
+  // capped per frame (DEMATERIALIZE_PER_FRAME) and time-budgeted
+  // (FRAME_BUDGET_MS), (c) leftover work re-arms the next frame — a single
+  // unbounded sync pass no longer exists on the virtualize path.
+
+  // Demat writes are cheap (innerHTML='' + class/style) — a generous cap
+  // still clears thousands of rows within a second of frames.
+  const DEMATERIALIZE_PER_FRAME = 40;
+  // Per-frame paint budget: half a 60Hz frame, leaving room for input,
+  // style/layout, and the browser's own work.
+  const FRAME_BUDGET_MS = 10;
+
+  function frameBudgetExceeded(startMs, nowMs, budgetMs) {
+    const b = budgetMs > 0 ? Number(budgetMs) : FRAME_BUDGET_MS;
+    const s = Number(startMs);
+    const t = Number(nowMs);
+    if (!Number.isFinite(s) || !Number.isFinite(t) || !Number.isFinite(b)) return false;
+    return t - s > b;
+  }
+
+  /**
+   * Plan one phased virtualize frame from pre-read geometry (no DOM here).
+   * items: [{ top, height, shell, stream?, dematOk?, index?, ...el }].
+   *   stream: live streaming bubble — never planned (caller handles).
+   *   dematOk:false — dematerializeMsg would refuse (auto-expanded, no body);
+   *   excluded from the plan so the leftover re-arm cannot spin on rows that
+   *   never make progress.
+   * Returns viewport-first remat ≤ rematPerFrame, demat ≤ dematPerFrame,
+   * and the deferred remainders; `more` re-arms the next frame.
+   */
+  function planVirtualizePass(items, scrollTop, clientHeight, buffer, caps) {
+    const c = caps || {};
+    const dematMax = c.dematPerFrame > 0 ? c.dematPerFrame : DEMATERIALIZE_PER_FRAME;
+    const rematMax = c.rematPerFrame > 0 ? c.rematPerFrame : REMATERIALIZE_PER_FRAME;
+    const rematPending = [];
+    const dematPending = [];
+    const list = Array.isArray(items) ? items : [];
+    for (let i = 0; i < list.length; i++) {
+      const it = list[i];
+      if (!it || it.stream) continue;
+      const want = shouldMaterialize(it.top, it.height, scrollTop, clientHeight, buffer);
+      if (want && it.shell) rematPending.push(it);
+      else if (!want && !it.shell && it.dematOk !== false) dematPending.push(it);
+    }
+    const rplan = planRematerializeFrame(rematPending, scrollTop, clientHeight, rematMax);
+    return {
+      rematThisFrame: rplan.thisFrame,
+      rematRemaining: rplan.remaining,
+      dematThisFrame: dematPending.slice(0, dematMax),
+      dematRemaining: dematPending.slice(dematMax),
+      more: rplan.remaining.length > 0 || dematPending.length > dematMax,
+    };
+  }
+
+  /**
+   * Stress oracle: n materialized rows, viewport pinned at the end, so all
+   * rows above the band want dematerialize at once (long-transcript settle).
+   *   phased (default) → reflows grow with passes (≤1 per frame: reads are
+   *     batched before writes) and maxWritesPerPass ≤ dematPerFrame;
+   *   phased:false → the legacy single pass: every write dirties layout and
+   *     the next row's read reflows — interleavedReflows ≈ n (the freeze).
+   */
+  function virtualizePassTrace(opts) {
+    const o = opts || {};
+    const n = Math.max(0, o.n | 0);
+    const h = o.avgHeight > 0 ? o.avgHeight : DEFAULT_ESTIMATE_HEIGHT;
+    const ch = o.clientHeight > 0 ? o.clientHeight : 600;
+    const buf = typeof o.buffer === 'number' ? o.buffer : DEFAULT_BUFFER;
+    const cap = o.dematPerFrame > 0 ? o.dematPerFrame : DEMATERIALIZE_PER_FRAME;
+    const phased = o.phased !== false;
+    const scrollTop = Math.max(0, n * h - ch);
+    const items = [];
+    for (let i = 0; i < n; i++) {
+      items.push({ index: i, top: i * h, height: h, shell: false, dematOk: true });
+    }
+    if (!phased) {
+      // Legacy interleaved pass: read row i (reflow if a prior write dirtied
+      // layout) → maybe write row i → next read reflows again.
+      let reflows = 0;
+      let writes = 0;
+      let dirty = false;
+      for (let i = 0; i < items.length; i++) {
+        if (dirty) { reflows++; dirty = false; }
+        const it = items[i];
+        const want = shouldMaterialize(it.top, it.height, scrollTop, ch, buf);
+        if (!want && !it.shell) { it.shell = true; writes++; dirty = true; }
+      }
+      return {
+        passes: 1,
+        reflows: reflows,
+        writes: writes,
+        maxWritesPerPass: writes,
+        converged: true,
+      };
+    }
+    let passes = 0;
+    let reflows = 0;
+    let writes = 0;
+    let maxWritesPerPass = 0;
+    for (let guard = 0; ; guard++) {
+      const plan = planVirtualizePass(items, scrollTop, ch, buf, { dematPerFrame: cap });
+      if (!plan.dematThisFrame.length && !plan.rematThisFrame.length) break;
+      passes++;
+      reflows++; // reads batched before writes: at most one layout per frame
+      for (let j = 0; j < plan.dematThisFrame.length; j++) {
+        plan.dematThisFrame[j].shell = true;
+        writes++;
+      }
+      maxWritesPerPass = Math.max(maxWritesPerPass, plan.dematThisFrame.length);
+      if (guard > n + 2) {
+        return { passes: passes, reflows: reflows, writes: writes,
+                 maxWritesPerPass: maxWritesPerPass, converged: false };
+      }
+    }
+    return { passes: passes, reflows: reflows, writes: writes,
+             maxWritesPerPass: maxWritesPerPass, converged: true };
+  }
+
   // Final scrollTop after one pin to the live end.
   function finalPinScrollTop(scrollHeight, clientHeight) {
     const sh = Math.max(0, Number(scrollHeight) || 0);
@@ -788,5 +997,19 @@
     finalPinScrollTop: finalPinScrollTop,
     // Idle end fallback ms if history_meta never arrives (empty log).
     REPLAY_IDLE_END_MS: REPLAY_IDLE_END_MS,
+
+    // 🎯T347: end-first lazy hydrate; parade-proof pre-meta suppression.
+    REPLAY_REENTER_MAX_MS: REPLAY_REENTER_MAX_MS,
+    shouldReenterReplay: shouldReenterReplay,
+    shouldPaintOnReplayAppend: shouldPaintOnReplayAppend,
+    shouldVirtualizeDuringReplay: shouldVirtualizeDuringReplay,
+    replayHydrateTrace: replayHydrateTrace,
+
+    // 🎯T349: phased, budgeted virtualize — composer stays responsive.
+    DEMATERIALIZE_PER_FRAME: DEMATERIALIZE_PER_FRAME,
+    FRAME_BUDGET_MS: FRAME_BUDGET_MS,
+    frameBudgetExceeded: frameBudgetExceeded,
+    planVirtualizePass: planVirtualizePass,
+    virtualizePassTrace: virtualizePassTrace,
   };
 }));

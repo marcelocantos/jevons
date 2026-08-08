@@ -858,6 +858,13 @@ function assertNoShowMoreLess(text, label, failures) {
       } else if (typeof window.handle === 'function') {
         window.handle({ type: 'history_meta', older: 0, start: 0, total: 10 });
       }
+      // 🎯T347: replay appends are lazy shells; virtualisation is stubbed in
+      // this harness (see top), so run the post-pin band materialize by hand
+      // for the near-end pair — the real band pass is virtual-list-test.js's.
+      if (window.rematerializeMsg) {
+        window.rematerializeMsg(nearUser);
+        window.rematerializeMsg(nearAsst);
+      }
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       if (window.refreshLatestExpansion) window.refreshLatestExpansion();
       const viewTop = el.scrollTop;

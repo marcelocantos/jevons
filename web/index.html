@@ -1769,6 +1769,11 @@ let turnCount = 0;
 // history_meta (or idle end). Progressive hydrate still preserves viewport.
 let historyReplayActive = false;
 let historyReplayIdleTimer = 0;
+// 🎯T347: true from hard connect until history_meta. The 150ms idle fallback
+// can fire early inside a slow burst; while this flag holds, the next replay
+// frame re-enters suppression instead of flipping into per-message pin mode
+// (the upward scroll parade the owner reported on hard reload).
+let _awaitingHistoryMeta = false;
 // Declared early so beginHistoryReplay can cancel a pending pin.
 let _scrollRaf = 0;
 
@@ -1829,6 +1834,12 @@ Object.defineProperty(window, 'historyReplayActive', {
   configurable: true,
   get() { return historyReplayActive; },
   set(v) { historyReplayActive = !!v; },
+});
+// 🎯T347: hermetic oracles drive the pre-meta re-entry guard.
+Object.defineProperty(window, 'awaitingHistoryMeta', {
+  configurable: true,
+  get() { return _awaitingHistoryMeta; },
+  set(v) { _awaitingHistoryMeta = !!v; },
 });
 // 🎯T164 hermetic UI oracles (and debug): bridge global-lexical lets so
 // page.evaluate can drive maybeCloseTargetAside / dual-write dismiss.
@@ -1997,6 +2008,9 @@ transport.onOpen = () => {
     for (const k of Object.keys(virtSizeCache)) delete virtSizeCache[k];
   }
   // Suppress stick-to-bottom until recent WS replay finishes (🎯T119.1).
+  // 🎯T347: the hard connect now awaits history_meta — pre-meta frames can
+  // re-enter suppression if the idle fallback fired early (no pin parade).
+  _awaitingHistoryMeta = true;
   beginHistoryReplay();
   updateJumpFab();
   input.value = v;
@@ -2014,6 +2028,7 @@ transport.onClose = () => {
   chatConnId = null;
   chatConnOpenedAt = 0;
   softReconnectActive = false;
+  _awaitingHistoryMeta = false; // 🎯T347: a dead conn must not gate live pins
   // Keep transcript if we had been ready (T143); only status chrome updates.
   dot.className = 'dot off';
   sTxt.textContent = 'reconnecting';
@@ -2119,6 +2134,7 @@ function handle(m) {
   if (typ === 'history_meta') {
     const wasSoft = softReconnectActive;
     softReconnectActive = false;
+    _awaitingHistoryMeta = false; // 🎯T347: replay span is over — live pins OK
     oldestIndex = m.start || 0;
     chatConnHistoryMetaAt = performance.now();
     // End chronological WS replay burst — one pin, then optional progressive hydrate.
@@ -2199,6 +2215,19 @@ function handle(m) {
     // 🎯T209: after main history_meta, re-bind inspect multiplex on this conn.
     if (typeof resubscribeAgentInspect === 'function') resubscribeAgentInspect();
     return;
+  }
+  // 🎯T347: pre-history_meta frames must never pin per message. If the idle
+  // fallback ended suppression mid-burst (a network gap, one heavy frame),
+  // re-enter replay before this frame is processed — otherwise every frame
+  // from here stick-to-bottom pins: the upward scroll parade.
+  if (!historyReplayActive && _awaitingHistoryMeta &&
+      typeof VirtualList !== 'undefined' && VirtualList.shouldReenterReplay &&
+      VirtualList.shouldReenterReplay({
+        awaitingHistoryMeta: _awaitingHistoryMeta,
+        historyReplayActive: historyReplayActive,
+        msSinceConnect: chatConnOpenedAt ? (performance.now() - chatConnOpenedAt) : 0,
+      })) {
+    beginHistoryReplay();
   }
   // During WS replay burst, keep extending idle-end until frames stop.
   if (historyReplayActive) armHistoryReplayIdleEnd();
@@ -2535,6 +2564,20 @@ function scheduleJevonsRender(el) {
   if (el._renderRaf) return;
   el._renderRaf = requestAnimationFrame(() => {
     el._renderRaf = 0;
+    // 🎯T347: a replay-lazy shell accumulates raw text without parsing —
+    // only its estimated height tracks the growing content. The post-pin
+    // band materialize (or virtualize's _streamRaw fast path once live)
+    // does the one real paint.
+    if (el.classList && el.classList.contains('virt-shell') &&
+        typeof el._streamRaw === 'string' && !el._smdSession) {
+      el._layoutText = el._streamRaw;
+      el._layoutRole = 'jevons';
+      if (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText) {
+        el.style.minHeight = VirtualList.estimateHeightFromText(el._streamRaw) + 'px';
+      }
+      if (!historyReplayActive) scheduleVirtualize();
+      return;
+    }
     el._layoutText = el._streamRaw;
     el._layoutRole = 'jevons';
     renderBody(el, 'jevons', el._streamRaw);
@@ -2584,6 +2627,16 @@ function sealAssistantStream(streamId) {
     delete el._streamRaw;                       // clear first so the sealed
     el._layoutText = raw;                       // render draws mermaid (🎯T59)
     el._layoutRole = 'jevons';
+    // 🎯T347: sealing a replay-lazy shell keeps it a shell — final estimated
+    // height only, no parse. The history_meta pin paints the end band.
+    if (historyReplayActive && el.classList && el.classList.contains('virt-shell') &&
+        !el._smdSession) {
+      if (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText) {
+        el.style.minHeight = VirtualList.estimateHeightFromText(raw) + 'px';
+      }
+      clearOpenStreamHandle(streamId || undefined);
+      return;
+    }
     // 🎯T150: end progressive session before full marked seal paint.
     if (el._smdSession) {
       try { el._smdSession.end(); } catch (_) { /* ignore */ }
@@ -2770,7 +2823,15 @@ function addMsg(role, text, when, opts) {
     try { noteAsideWireFromMain(text); } catch (_) { /* isolated */ }
     return null;
   }
-  const d = buildMsg(role, text, when, opts);
+  // 🎯T347: replay-burst appends are lazy shells — estimated height, zero
+  // markdown parse. The single history_meta pin materializes the end band
+  // only (end-first, fill-upward); far-above turns stay shells.
+  const bOpts = (historyReplayActive && !(opts && opts.lazy) &&
+      !(typeof VirtualList !== 'undefined' && VirtualList.shouldPaintOnReplayAppend &&
+        VirtualList.shouldPaintOnReplayAppend(historyReplayActive)))
+    ? Object.assign({}, opts, { lazy: true })
+    : opts;
+  const d = buildMsg(role, text, when, bOpts);
   msgs.appendChild(d);
   layoutMsg(d);
   scheduleLatestExpansion();
@@ -5795,6 +5856,11 @@ function scheduleRematerialize(el) {
 function flushRematerializeFrame() {
   _rematRaf = 0;
   if (!_rematQueue.length) return;
+  // 🎯T347: no paint mid-replay — hold the queue until the history_meta pin.
+  if (historyReplayActive) {
+    _rematRaf = requestAnimationFrame(flushRematerializeFrame);
+    return;
+  }
   const scrollTop = msgs.scrollTop;
   const clientH = msgs.clientHeight;
   const max = (typeof VirtualList !== 'undefined' && VirtualList.REMATERIALIZE_PER_FRAME)
@@ -5842,6 +5908,9 @@ function flushRematerializeFrame() {
   }
   if (_rematQueue.length) {
     _rematRaf = requestAnimationFrame(flushRematerializeFrame);
+  } else if (plan.thisFrame.length) {
+    // 🎯T347: band fully painted — run the tall auto-expand pass (T66/T261).
+    scheduleLatestExpansion();
   }
   updateJumpFab();
 }
@@ -5849,6 +5918,10 @@ function flushRematerializeFrame() {
 let _virtualizing = false;
 function virtualizeMessages() {
   if (typeof VirtualList === 'undefined') return;
+  // 🎯T347: zero materialization during the replay burst — the single pin at
+  // history_meta (endHistoryReplayAndPin) schedules the end-band paint.
+  if (VirtualList.shouldVirtualizeDuringReplay &&
+      !VirtualList.shouldVirtualizeDuringReplay(historyReplayActive)) return;
   // Re-entrancy guard: pin/scroll during virt must not nest another pass.
   if (_virtualizing) return;
   if (typeof window.__layoutThrash === 'object' && window.__layoutThrash) {
@@ -5868,46 +5941,76 @@ function virtualizeMessages() {
     const buffer = VirtualList.DEFAULT_BUFFER || 800;
     const max = VirtualList.REMATERIALIZE_PER_FRAME || 6;
     const children = msgs.children;
-    // 🎯T336: collect shells that need content; paint first batch this frame
-    // (viewport-first); defer the rest via rAF progressive fill. Dematerialize
-    // stays synchronous (height freeze is cheap). No loadEarlier here.
-    const pending = [];
+    // 🎯T349: phase-separated pass — read ALL geometry first (zero writes),
+    // then apply capped writes. The old loop interleaved dematerialize
+    // writes with the next row's offsetTop read: every write invalidated
+    // layout, so each read reflowed the whole container — O(rows²) on a
+    // mass-demat pass, the tens-of-seconds composer freeze / slow-script.
+    // 🎯T336 still holds: viewport-first remat, progressive fill via rAF,
+    // no loadEarlier here.
+    const liveShells = [];
+    const items = [];
     for (let i = 0; i < children.length; i++) {
       const el = children[i];
       if (!el.classList || !el.classList.contains('msg')) continue;
       // Never virtualise the live streaming bubble or working indicator host.
       if (typeof el._streamRaw === 'string') {
-        if (el.classList.contains('virt-shell')) rematerializeMsg(el);
+        if (el.classList.contains('virt-shell')) liveShells.push(el);
         continue;
       }
-      const top = el.offsetTop;
-      const h = el.offsetHeight;
-      const want = VirtualList.shouldMaterialize(top, h, scrollTop, clientH, buffer);
-      if (want) {
-        if (el.classList.contains('virt-shell')) {
-          pending.push({ el: el, index: i, top: top, height: h });
-        }
-      } else if (!el.classList.contains('virt-shell')) {
-        if (el._rematQueued) {
-          el._rematQueued = false;
-          const qi = _rematQueue.indexOf(el);
-          if (qi >= 0) _rematQueue.splice(qi, 1);
-        }
-        dematerializeMsg(el);
-      }
+      items.push({
+        el: el,
+        index: i,
+        top: el.offsetTop,
+        height: el.offsetHeight,
+        shell: el.classList.contains('virt-shell'),
+        // dematerializeMsg refuses these — keep them out of the plan so the
+        // leftover re-arm below cannot spin on rows that never progress.
+        dematOk: !!el._body && !(el._expanded && el._autoExpanded),
+      });
     }
-    const plan = VirtualList.planRematerializeFrame
-      ? VirtualList.planRematerializeFrame(pending, scrollTop, clientH, max)
-      : { thisFrame: pending.slice(0, max), remaining: pending.slice(max) };
-    for (let j = 0; j < plan.thisFrame.length; j++) {
-      const item = plan.thisFrame[j];
+    // Write phase from here on — no layout reads below this line.
+    for (let i = 0; i < liveShells.length; i++) rematerializeMsg(liveShells[i]);
+    const plan = VirtualList.planVirtualizePass
+      ? VirtualList.planVirtualizePass(items, scrollTop, clientH, buffer, { rematPerFrame: max })
+      : { rematThisFrame: [], rematRemaining: [], dematThisFrame: [], dematRemaining: [] };
+    const t0 = performance.now();
+    let rematSpillFrom = plan.rematThisFrame.length;
+    for (let j = 0; j < plan.rematThisFrame.length; j++) {
+      const item = plan.rematThisFrame[j];
       item.el._rematQueued = false;
       rematerializeMsg(item.el);
+      // 🎯T349: the item cap bounds count, not time — a few giant markdown
+      // bodies still blew the frame. Spill the rest to the progressive queue.
+      if (j + 1 < plan.rematThisFrame.length && VirtualList.frameBudgetExceeded &&
+          VirtualList.frameBudgetExceeded(t0, performance.now())) {
+        rematSpillFrom = j + 1;
+        break;
+      }
+    }
+    for (let j = rematSpillFrom; j < plan.rematThisFrame.length; j++) {
+      scheduleRematerialize(plan.rematThisFrame[j].el);
+    }
+    for (let k = 0; k < plan.dematThisFrame.length; k++) {
+      const item = plan.dematThisFrame[k];
+      if (item.el._rematQueued) {
+        item.el._rematQueued = false;
+        const qi = _rematQueue.indexOf(item.el);
+        if (qi >= 0) _rematQueue.splice(qi, 1);
+      }
+      // Height was pre-read above — dematerializeMsg does no layout read.
+      dematerializeMsg(item.el, item.height);
     }
     // Merge remaining into progressive queue (dedupe via _rematQueued).
-    for (let k = 0; k < plan.remaining.length; k++) {
-      scheduleRematerialize(plan.remaining[k].el);
+    for (let k = 0; k < plan.rematRemaining.length; k++) {
+      scheduleRematerialize(plan.rematRemaining[k].el);
     }
+    // 🎯T349: leftover demats continue next frame — never one unbounded pass.
+    if (plan.dematRemaining.length) scheduleVirtualize();
+    // 🎯T347: reload hydrate paints the end band from shells — the freshly
+    // painted latest turn still needs its tall auto-expand pass (T66/T261);
+    // without this the post-pin reply can sit collapsed until a user scroll.
+    if (plan.rematThisFrame.length) scheduleLatestExpansion();
     // 🎯T341: scrollDown gates on sub-threshold height/scrollTop (no-op when idle).
     if (isTracking()) scrollDown();
   } finally {
@@ -5916,12 +6019,16 @@ function virtualizeMessages() {
     updateJumpFab();
   }
 }
-function dematerializeMsg(el) {
+function dematerializeMsg(el, knownHeight) {
   if (!el || !el._body) return;
   // Live / latest auto-expanded: keep real DOM (collapse + stream need it).
   if (typeof el._streamRaw === 'string') return;
   if (el._expanded && el._autoExpanded) return;
-  const h = el.offsetHeight;
+  // 🎯T349: virtualize pre-reads geometry — reading offsetHeight here would
+  // force a reflow per demat inside the write phase (the O(rows²) freeze).
+  const h = (typeof knownHeight === 'number' && knownHeight > 0)
+    ? knownHeight
+    : el.offsetHeight;
   const w = msgsContentWidth();
   el._virtH = h;
   el._virtWasExpanded = !!el._expanded;

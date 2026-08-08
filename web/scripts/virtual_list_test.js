@@ -903,4 +903,85 @@ test('index.html wires historyReplayActive suppress on scrollDown', function () 
     html.indexOf("endHistoryReplayAndPin('history_meta')") >= 0);
 });
 
+// ── 🎯T347: hard-reload end-first pin, lazy replay, parade-proof ─────
+
+test('T347 shouldReenterReplay re-suppresses pre-meta frames only', function () {
+  // Early idle-end mid-burst → the next replay frame re-enters suppression.
+  assert.strictEqual(VL.shouldReenterReplay({
+    awaitingHistoryMeta: true, historyReplayActive: false, msSinceConnect: 900,
+  }), true);
+  // Already suppressed → nothing to do.
+  assert.strictEqual(VL.shouldReenterReplay({
+    awaitingHistoryMeta: true, historyReplayActive: true, msSinceConnect: 900,
+  }), false);
+  // Post-meta (live) frames never re-enter.
+  assert.strictEqual(VL.shouldReenterReplay({
+    awaitingHistoryMeta: false, historyReplayActive: false, msSinceConnect: 900,
+  }), false);
+  // Meta never arrived: degrade to live after the cap (streaming must pin).
+  assert.strictEqual(VL.shouldReenterReplay({
+    awaitingHistoryMeta: true, historyReplayActive: false,
+    msSinceConnect: VL.REPLAY_REENTER_MAX_MS + 1,
+  }), false);
+  assert.ok(VL.REPLAY_REENTER_MAX_MS >= 10000);
+});
+
+test('T347 replay appends stay lazy; virtualize deferred until pin', function () {
+  assert.strictEqual(VL.shouldPaintOnReplayAppend(true), false);
+  assert.strictEqual(VL.shouldPaintOnReplayAppend(false), true);
+  assert.strictEqual(VL.shouldVirtualizeDuringReplay(true), false);
+  assert.strictEqual(VL.shouldVirtualizeDuringReplay(false), true);
+});
+
+test('T347 reload trace: end-first pin, zero climb, band-bounded materialize', function () {
+  const n = 2000;
+  const t = VL.replayHydrateTrace({ n: n, avgHeight: 72, clientHeight: 600 });
+  assert.strictEqual(t.midHydrateClimbs, 0, 'no scrollTop climb during hydrate');
+  assert.strictEqual(t.paintedDuringReplay, 0, 'no markdown paint during replay');
+  assert.strictEqual(t.finalDistToBottom, 0, 'pin lands at the live end');
+  assert.ok(t.landsOnLatest, 'latest turn is in the material set');
+  assert.ok(t.materializedAtPin <= t.materialBandBound,
+    'materialize bounded by viewport+buffer band (' + t.materializedAtPin +
+    ' > ' + t.materialBandBound + ')');
+  assert.ok(t.materializedAtPin < n / 10, 'far-above turns stay shells');
+  // scrollTop is flat through the burst; the only move is the one end pin.
+  for (let i = 0; i < n; i++) assert.strictEqual(t.scrollTops[i], 0);
+  assert.ok(t.scrollTops[n] > 0, 'single pin jump at history_meta');
+});
+
+test('T347 oracle catches both regressions it exists for', function () {
+  // Per-message pin during the burst (early idle-end) → the scroll parade.
+  const parade = VL.replayHydrateTrace({
+    n: 500, avgHeight: 72, clientHeight: 600, suppressPinDuringReplay: false,
+  });
+  assert.ok(parade.midHydrateClimbs > 100,
+    'parade sim must show per-message scrollTop climb, got ' + parade.midHydrateClimbs);
+  // Eager full paint old→new during replay → the ~60s settle class.
+  const eager = VL.replayHydrateTrace({
+    n: 500, avgHeight: 72, clientHeight: 600, lazyAppend: false,
+  });
+  assert.strictEqual(eager.paintedDuringReplay, 500,
+    'eager sim must count full-list materialize');
+});
+
+test('index.html wires T347 lazy replay + pre-meta re-entry + gated virtualize', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('_awaitingHistoryMeta') >= 0, 'awaiting-meta flag present');
+  assert.ok(html.indexOf('shouldReenterReplay') >= 0, 'pre-meta re-entry wired');
+  assert.ok(html.indexOf('shouldPaintOnReplayAppend') >= 0, 'lazy replay append wired');
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,600}shouldVirtualizeDuringReplay/.test(html),
+    'virtualize gated during replay');
+  assert.ok(/function flushRematerializeFrame\(\)[\s\S]{0,500}historyReplayActive/.test(html),
+    'remat queue held during replay');
+  assert.ok(/history_meta'[\s\S]{0,600}_awaitingHistoryMeta = false/.test(html),
+    'history_meta releases the pre-meta guard');
+  // Seal + stream-render replay branches keep shells unpainted (estimate only).
+  assert.ok(/function scheduleJevonsRender[\s\S]{0,900}virt-shell/.test(html),
+    'stream render has a shell branch');
+  assert.ok(/function sealAssistantStream[\s\S]{0,2200}virt-shell/.test(html),
+    'seal has a shell branch');
+});
+
 console.log(process.exitCode ? 'FAIL' : 'PASS virtual_list_test');
