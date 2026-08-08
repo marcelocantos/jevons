@@ -244,6 +244,25 @@ type Adjustment struct {
 	Reason string
 }
 
+// Backoff modulates 🎯T315's actuator: it extends the base wait before the
+// next re-pressure by the delay progress has bought. This is the second
+// consumer seam, and the whole of the T315 adoption:
+//
+//	need := NextNudgeBackoff(o.NudgeCount, o.Backoffs)
+//	need = adj.Backoff(need)
+//
+// The added delay is capped at base, so attenuation can at most double the
+// interval between re-pressures. Re-pressure slows while somebody is visibly
+// working the gap; it never stops, because the gap is still open and the
+// agent is still sitting on it. With no credit this is the identity, so an
+// unattenuated caller is unchanged.
+func (a Adjustment) Backoff(base time.Duration) time.Duration {
+	if a.Credit <= 0 || base <= 0 {
+		return base
+	}
+	return base + min(a.Credit, base)
+}
+
 // Observe folds one signal into the state and returns the next one. Pure: no
 // clock, no I/O. Non-progress signals (notify-only, empty ack) are recorded
 // as seen and change nothing.

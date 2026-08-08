@@ -271,6 +271,39 @@ func TestCeilingOrdinalsMirrorLadderRungs(t *testing.T) {
 	}
 }
 
+// 🎯T318 acceptance 1 against the 🎯T315 seam: progress stretches the
+// actuator's backoff, bounded at double, and never stops it.
+func TestBackoffStretchesTheActuatorButNeverStopsIt(t *testing.T) {
+	p := DefaultPolicy()
+	const base = 5 * time.Minute // DefaultIdleNudgeBackoffs mid-ladder
+
+	// No credit: the identity, so an unattenuated caller is unchanged.
+	if got := (Adjustment{}).Backoff(base); got != base {
+		t.Errorf("no credit: Backoff = %s, want the base %s", got, base)
+	}
+
+	// One signal's credit (8m) exceeds the base, so the cap binds at 2×.
+	s := p.Observe(State{}, Signal{Kind: SignalRestart, At: at(time.Minute)}, at(time.Minute))
+	_, adj := p.Adjust(s, 2*time.Minute, at(2*time.Minute))
+	got := adj.Backoff(base)
+	if got != 2*base {
+		t.Errorf("attenuated: Backoff = %s, want %s (capped at double)", got, 2*base)
+	}
+	if got <= base {
+		t.Error("attenuated backoff did not stretch")
+	}
+
+	// However much credit accumulates, the actuator still fires.
+	for i := range 20 {
+		when := at(time.Duration(i) * time.Minute)
+		s = p.Observe(s, Signal{Kind: SignalSpawn, At: when}, when)
+	}
+	_, loaded := p.Adjust(s, 25*time.Minute, at(25*time.Minute))
+	if b := loaded.Backoff(base); b > 2*base {
+		t.Errorf("saturated: Backoff = %s, want at most %s — re-pressure must never stop", b, 2*base)
+	}
+}
+
 // The Attenuator keeps per-agent state: one agent's progress must not quieten
 // another agent's gap.
 func TestAttenuatorIsolatesAgents(t *testing.T) {
