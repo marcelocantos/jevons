@@ -4970,7 +4970,12 @@ function isMainAsideWireUserText(text) {
   return false;
 }
 
-function noteAsideWireFromMain(content) {
+// 🎯T308: every caller here is a live/optimistic path — the owner just sent
+// the wire, or the server just echoed it — so arrival time IS the turn's
+// timestamp, and the sidebar bubble gets the same .msg-time main would give it.
+// History replay does NOT come through here (see ingestAsideWiresFromHistoryLines,
+// which carries each frame's own time).
+function noteAsideWireFromMain(content, when) {
   if (typeof AttentionThreads === 'undefined' ||
       typeof AttentionThreads.recordAsideWireUserTurn !== 'function') {
     return;
@@ -4978,7 +4983,8 @@ function noteAsideWireFromMain(content) {
   if (!asideWireTurnsCache || typeof asideWireTurnsCache !== 'object') {
     asideWireTurnsCache = Object.create(null);
   }
-  const r = AttentionThreads.recordAsideWireUserTurn(asideWireTurnsCache, content);
+  const at = (typeof when === 'number' && isFinite(when) && when > 0) ? when : Date.now();
+  const r = AttentionThreads.recordAsideWireUserTurn(asideWireTurnsCache, content, at);
   if (!r || !r.parsed || !r.parsed.id) return;
   // Live refresh when this aside is the inspect selection.
   if (selectedAgent && selectedAgent === r.parsed.id && r.added) {
@@ -5056,7 +5062,11 @@ function ingestAsideWiresFromHistoryLines(lines) {
           list[list.length - 1].text === text) {
         continue;
       }
-      list.push({ role: 'user', text: text });
+      // 🎯T308: keep the replayed frame's own time — a reloaded aside turn is
+      // not "now", and a turn with no frame time gets no .msg-time at all.
+      const turn = { role: 'user', text: text };
+      if (t.when !== undefined) turn.when = t.when;
+      list.push(turn);
     }
   }
 }
@@ -7659,6 +7669,59 @@ function handleAgentTranscriptWire(m) {
     n.classList.toggle('selected', n.dataset.agent === selectedAgent));
 }
 
+// 🎯T308: per-turn inspect policy lives in AgentTranscript (pure, hermetic).
+// This wrapper only supplies the two DOM-bound paint deps index.html owns.
+function inspectSpecFor(line) {
+  const deps = {
+    parseAssistantMarkdown: (typeof parseAssistantMarkdown === 'function')
+      ? parseAssistantMarkdown : undefined,
+    renderUserText: (typeof renderUserText === 'function') ? renderUserText : undefined,
+  };
+  if (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectBubbleSpec) {
+    return AgentTranscript.inspectBubbleSpec(line, deps);
+  }
+  return {
+    kind: 'bubble',
+    role: (line && line.role === 'user') ? 'user'
+      : ((line && line.role === 'assistant') ? 'jevons' : 'status'),
+    text: (line && line.text) || '',
+    when: line && line.when,
+    painted: null,
+  };
+}
+
+// 🎯T308: buildMsg's opts.paint for inspect bubbles — the ONLY thing the
+// sidebar does differently from main chat. Assistant turns still land on the
+// shared paintBody (🎯T217: markdown + mermaid/hljs/links, never textContent);
+// user turns take the inspect-only policy already decided in `painted`
+// (🎯T221 MD-shaped fleet injects). Body paint must never throw: one bad turn
+// aborting the loop would blank the whole pane.
+function paintInspectBubbleBody(el, role, text, painted) {
+  try {
+    if (role === 'user' && painted) {
+      if (painted.mode === 'html') {
+        el._body.innerHTML = painted.content;
+        if (typeof decorateBodyLinks === 'function') decorateBodyLinks(el._body);
+      } else {
+        el._body.textContent = painted.content != null ? painted.content : text;
+      }
+      return;
+    }
+    if (typeof paintBody === 'function') {
+      paintBody(el, role, text);
+    } else if (role === 'jevons' && typeof parseAssistantMarkdown === 'function') {
+      el._body.innerHTML = parseAssistantMarkdown(text);
+      if (typeof decorateBodyLinks === 'function') decorateBodyLinks(el._body);
+    } else if (role === 'user' && typeof renderUserText === 'function') {
+      el._body.innerHTML = renderUserText(text);
+    } else {
+      el._body.textContent = text;
+    }
+  } catch (paintErr) {
+    el._body.textContent = text;
+  }
+}
+
 // 🎯T205: RHS inspect = main transcript microcosm — .msg + paintBody (not .ai-turn
 // log panel); stick/free scroll; fingerprint no-op when content unchanged.
 // 🎯T208: body re-paint only — never setRhsBottomTab. Transcript tab is set only
@@ -7708,77 +7771,25 @@ function renderAgentInspect(model) {
   const follow = agentInspectFollow();
   const prevTop = agentInspectBody.scrollTop;
   agentInspectBody.innerHTML = '';
+  // 🎯T308: host loop only — AgentTranscript.inspectBubbleSpec owns every
+  // per-turn decision (role, nugget-vs-bubble, timestamp, inspect-only user
+  // body policy), and buildMsg — the one constructor main #messages uses —
+  // owns the shell, .msg-body and .msg-time.
   lines.forEach(function (line) {
-    const msgRole = (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectToMsgRole)
-      ? AgentTranscript.inspectToMsgRole(line.role)
-      : (line.role === 'user' ? 'user' : (line.role === 'assistant' ? 'jevons' : 'status'));
-    // 🎯T217: assistant/jevons must never land as textContent (raw ** / fences).
-    // Shared main path: paintBody → parseAssistantMarkdown + mermaid/hljs/links.
-    // 🎯T221: inspect user turns that are fleet injects / MD-shaped → marked HTML
-    // (inspect-only; main chat paintBody user path stays plain/renderUserText).
-    // 🎯T233: harness system-reminders / standing brief / event injects → compact
-    // ⋯ nugget chrome (same family as turn-marker), not full user-shaped bubbles.
-    // 🎯T308: the shell, .msg-body and .msg-time all come from buildMsg — the
-    // one bubble constructor main uses. Inspect contributes inputs only:
-    // role, text, the turn's `when`, and a body-policy paint callback.
-    const raw = line.text || '';
-    let painted = null;
-    if (line.role === 'user' && typeof AgentTranscript !== 'undefined'
-        && typeof AgentTranscript.paintInspectLineBody === 'function') {
-      try {
-        painted = AgentTranscript.paintInspectLineBody('user', raw, {
-          parseAssistantMarkdown: (typeof parseAssistantMarkdown === 'function')
-            ? parseAssistantMarkdown : undefined,
-          renderUserText: (typeof renderUserText === 'function')
-            ? renderUserText : undefined,
-        });
-      } catch (_) {
-        painted = null;
-      }
-    }
+    const spec = inspectSpecFor(line);
     // 🎯T233 residual: harness injects stay compact ⋯ nugget chrome (outer
     // turn-marker HTML), deliberately NOT conversational .msg bubbles.
-    if (painted && painted.mode === 'nugget' && painted.content) {
+    if (spec.kind === 'nugget') {
       const wrap = document.createElement('div');
-      wrap.innerHTML = painted.content;
+      wrap.innerHTML = spec.html;
       const node = wrap.firstChild;
       if (node) agentInspectBody.appendChild(node);
       return;
     }
-    const bubbleRole = (painted && painted.msgRole) ? painted.msgRole : msgRole;
-    const d = buildMsg(bubbleRole, raw, line.when, {
+    agentInspectBody.appendChild(buildMsg(spec.role, spec.text, spec.when, {
       timeIfKnown: true,
-      paint: function (d, msgRole, text) {
-        // One bad turn must not abort the forEach — keep remaining turns paintable.
-        try {
-          // 🎯T221: inspect-only user policy (injects / MD-shaped user turns).
-          if (msgRole === 'user' && painted) {
-            if (painted.mode === 'html') {
-              d._body.innerHTML = painted.content;
-              if (typeof decorateBodyLinks === 'function') decorateBodyLinks(d._body);
-            } else {
-              d._body.textContent = painted.content != null ? painted.content : text;
-            }
-            return;
-          }
-          // 🎯T217: assistant/jevons takes the shared main paint path
-          // (parseAssistantMarkdown + mermaid/hljs/links) — never textContent.
-          if (typeof paintBody === 'function') {
-            paintBody(d, msgRole, text);
-          } else if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
-            d._body.innerHTML = parseAssistantMarkdown(text);
-            if (typeof decorateBodyLinks === 'function') decorateBodyLinks(d._body);
-          } else if (msgRole === 'user' && typeof renderUserText === 'function') {
-            d._body.innerHTML = renderUserText(text);
-          } else {
-            d._body.textContent = text;
-          }
-        } catch (paintErr) {
-          d._body.textContent = text;
-        }
-      },
-    });
-    agentInspectBody.appendChild(d);
+      paint: function (el, role, text) { paintInspectBubbleBody(el, role, text, spec.painted); },
+    }));
   });
   if (typeof decorateBodyLinks === 'function') {
     decorateBodyLinks(agentInspectBody); // 🎯T151 belt-and-suspenders

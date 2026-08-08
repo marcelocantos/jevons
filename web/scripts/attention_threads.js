@@ -625,7 +625,10 @@
    * @param {string} text full wire user content
    * @returns {{ parsed: object|null, added: boolean }}
    */
-  function recordAsideWireUserTurn(cache, text) {
+  // 🎯T308: `when` is the aside turn's own timestamp (epoch ms) when the caller
+  // knows one — live wire arrival, or the frame time on history replay. Omitted
+  // rather than defaulted, so a replayed turn never claims to have just arrived.
+  function recordAsideWireUserTurn(cache, text, when) {
     const p = parseAsideWireUserText(text);
     if (!p || !p.id || !cache || typeof cache !== 'object') {
       return { parsed: p, added: false };
@@ -639,7 +642,9 @@
         return { parsed: p, added: false };
       }
     }
-    list.push({ role: 'user', text: display });
+    const turn = { role: 'user', text: display };
+    if (typeof when === 'number' && isFinite(when) && when > 0) turn.when = when;
+    list.push(turn);
     return { parsed: p, added: true };
   }
 
@@ -658,27 +663,63 @@
       if (!m || m.type !== 'user') continue;
       const content = m.message && m.message.content;
       if (typeof content !== 'string' || !content) continue;
-      recordAsideWireUserTurn(cache, content);
+      // 🎯T308: carry the frame's own timestamp so a replayed aside turn keeps
+      // its real time in the sidebar instead of losing .msg-time entirely.
+      recordAsideWireUserTurn(cache, content, frameWhen(m));
     }
     return cache;
+  }
+
+  /** 🎯T308: first defined epoch-ms timestamp on a chatlog frame, else undefined. */
+  function frameWhen(m) {
+    const keys = ['when', 'ts', 'timestamp', 'time', 'created_at'];
+    for (let i = 0; i < keys.length; i++) {
+      const v = m && m[keys[i]];
+      if (typeof v === 'number' && isFinite(v) && v > 0) {
+        return v < 1e11 ? Math.round(v * 1000) : Math.round(v);
+      }
+      if (typeof v === 'string' && v) {
+        const ms = /^\d+$/.test(v) ? Number(v) : Date.parse(v);
+        if (isFinite(ms) && ms > 0) return ms < 1e11 ? Math.round(ms * 1000) : Math.round(ms);
+      }
+    }
+    return undefined;
   }
 
   /**
    * Merge process-session inspect lines with main-wire aside cache for an id.
    * Wire turns first (owner open body), then process turns; dedupe role+text.
+   *
+   * 🎯T308: `when` rides through the merge. This function rebuilt every turn as
+   * a bare {role, text}, so an aside turn that reached the sidebar via the wire
+   * cache arrived at the renderer with no timestamp and no .msg-time — the same
+   * class of drop as the hand-rolled copies in index.html. On a dedupe hit the
+   * earliest known timestamp wins: the wire copy and the process copy are the
+   * same turn, and the earlier reading is the truer one.
    */
   function mergeInspectLinesWithAsideWire(processLines, wireLines) {
     const out = [];
-    const seen = Object.create(null);
+    const at = Object.create(null);
     function push(l) {
       if (!l) return;
       const role = l.role === 'user' ? 'user' : (l.role === 'assistant' || l.role === 'jevons' ? 'assistant' : (l.role || 'other'));
       const text = l.text == null ? '' : String(l.text);
       if (!text.trim() && role === 'other') return;
       const k = role + '\0' + text;
-      if (seen[k]) return;
-      seen[k] = true;
-      out.push({ role: role, text: text });
+      const when = (typeof l.when === 'number' && isFinite(l.when) && l.when > 0)
+        ? l.when : undefined;
+      const prior = at[k];
+      if (prior !== undefined) {
+        const kept = out[prior];
+        if (when !== undefined && (kept.when === undefined || when < kept.when)) {
+          kept.when = when;
+        }
+        return;
+      }
+      at[k] = out.length;
+      const turn = { role: role, text: text };
+      if (when !== undefined) turn.when = when;
+      out.push(turn);
     }
     (wireLines || []).forEach(push);
     (processLines || []).forEach(push);

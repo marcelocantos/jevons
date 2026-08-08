@@ -586,31 +586,72 @@
       + '" title="' + escapeHtml(abs) + '">' + escapeHtml(rel) + '</div>';
   }
 
+  /**
+   * 🎯T308: the whole per-turn policy of the inspect pane, as a pure value.
+   * renderAgentInspect decides nothing about a turn beyond what this returns
+   * — it is a host that appends a nugget or feeds a bubble spec to buildMsg,
+   * the one constructor main #messages also uses.
+   *
+   * Returns either
+   *   {kind:'nugget', html}                          🎯T233 compact ⋯ inject
+   *   {kind:'bubble', role, text, when, painted}     → buildMsg(role, text, when)
+   *
+   * `painted` is computed for user turns only: assistant turns must take the
+   * live paintBody path (mermaid / hljs / link decoration), which no pure
+   * string function can reproduce (🎯T217). `when` is undefined for a turn
+   * that carries no timestamp — the caller must then omit .msg-time rather
+   * than stamp "now" on a sealed turn.
+   * deps: { parseAssistantMarkdown?, renderUserText? }
+   */
+  function inspectBubbleSpec(line, deps) {
+    const role = (line && line.role) || 'other';
+    const text = line && line.text != null ? String(line.text) : '';
+    let painted = null;
+    if (role === 'user') {
+      try {
+        painted = paintInspectLineBody('user', text, deps || {});
+      } catch (_) {
+        painted = null;
+      }
+    }
+    if (painted && painted.mode === 'nugget' && painted.content) {
+      return { kind: 'nugget', html: painted.content };
+    }
+    return {
+      kind: 'bubble',
+      role: (painted && painted.msgRole) || inspectToMsgRole(role),
+      text: text,
+      when: normalizeWhen(line && line.when),
+      painted: painted,
+    };
+  }
+
   // Hermetic HTML fixture for #agent-inspect-body: main .msg bubble chrome (🎯T205)
   // plus 🎯T233 inject nuggets (not full user bubbles).
   // deps.parseAssistantMarkdown / deps.renderUserText mirror index.html paths.
-  // 🎯T308: the fixture mirrors what buildMsg emits, .msg-time included — a
-  // fixture that shows chrome the product lacks is how "shared paint" claims
-  // passed while dual construction survived.
+  // 🎯T308: the fixture takes its role / nugget / timestamp decisions from
+  // inspectBubbleSpec — the same policy the product renderer reads — and emits
+  // buildMsg's chrome, .msg-time included. A fixture that renders chrome the
+  // product lacks is how "shared paint" claims passed while dual construction
+  // survived; it stays a fixture, never a product renderer.
   function paintInspectLinesHTML(lines, deps) {
     deps = deps || {};
     let html = '';
     (lines || []).forEach(function (line) {
       if (!line) return;
-      const role = line.role || 'other';
-      const body = paintInspectLineBody(role, line.text, deps);
-      if (body.mode === 'nugget') {
+      const spec = inspectBubbleSpec(line, deps);
+      if (spec.kind === 'nugget') {
         // Full outer chrome already (turn-marker); no .msg.user wrapper.
-        html += body.content;
+        html += spec.html;
         return;
       }
-      const msgRole = body.msgRole || inspectToMsgRole(role);
+      const body = spec.painted || paintInspectLineBody(line.role || 'other', spec.text, deps);
       const bodyInner = body.mode === 'html'
         ? body.content
         : escapeHtml(body.content);
-      html += '<div class="msg ' + escapeHtml(msgRole) + '">'
+      html += '<div class="msg ' + escapeHtml(spec.role) + '">'
         + '<div class="msg-body">' + bodyInner + '</div>'
-        + msgTimeHTML(line.when, deps)
+        + msgTimeHTML(spec.when, deps)
         + '</div>';
     });
     return html;
@@ -1150,6 +1191,7 @@
     extractSystemReminderBody: extractSystemReminderBody,
     classifyInspectUserLine: classifyInspectUserLine,
     paintInjectNuggetHTML: paintInjectNuggetHTML,
+    inspectBubbleSpec: inspectBubbleSpec,
     paintInspectLineBody: paintInspectLineBody,
     paintInspectLinesHTML: paintInspectLinesHTML,
     linesFingerprint: linesFingerprint,

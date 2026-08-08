@@ -20,6 +20,22 @@ function test(name, fn) {
   }
 }
 
+// 🎯T308: the inspect render path is three top-level functions — the host loop
+// plus the two wrappers it delegates to (per-turn policy → AgentTranscript,
+// body paint → shared paintBody). A guard grep that reads only
+// renderAgentInspect now looks at the wrong altitude and passes vacuously.
+function inspectRenderSource() {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const body = ['inspectSpecFor', 'paintInspectBubbleBody', 'renderAgentInspect']
+    .map(function (name) {
+      const m = html.match(new RegExp('\\nfunction ' + name + '\\([\\s\\S]*?\\n\\}\\n'));
+      assert.ok(m, name + ' present in index.html');
+      return m[0];
+    })
+    .join('\n');
+  return { html: html, body: body };
+}
+
 test('nextSelection toggles off', function () {
   assert.strictEqual(AT.nextSelection(null, 'po'), 'po');
   assert.strictEqual(AT.nextSelection('po', 'po'), null);
@@ -179,20 +195,17 @@ test('T209 inspect wire path: subscribe on select, no setInterval poll', functio
 
 // 🎯T205 / T157: RHS inspect uses shared paintBody + .msg chrome (not .ai-turn fork).
 test('T205 renderAgentInspect uses paintBody + .msg (not .ai-turn log panel)', function () {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(fn, 'renderAgentInspect present before loadAgentTranscript');
-  const body = fn[0];
+  const { html, body } = inspectRenderSource();
   assert.ok(body.indexOf('paintBody') >= 0,
     'must paint via shared paintBody (main sealed path)');
-  assert.ok(body.indexOf('className = \'msg ') >= 0 || body.indexOf('className = "msg ') >= 0 ||
-    body.indexOf("className = 'msg '") >= 0 || /className\s*=\s*['"]msg\s/.test(body) ||
-    body.indexOf("'msg '") >= 0 || body.indexOf('"msg "') >= 0 || body.indexOf('msg ') >= 0,
-    'must use .msg bubble class');
-  // 🎯T308 supersedes "renderAgentInspect builds .msg-body itself": the shell,
-  // .msg-body and .msg-time now all come from the shared buildMsg constructor.
+  // 🎯T308 supersedes "renderAgentInspect builds its own .msg / .msg-body":
+  // the shell, .msg-body and .msg-time all come from the shared buildMsg.
   assert.ok(body.indexOf('buildMsg(') >= 0,
     'bubble shell comes from the shared buildMsg constructor (T308)');
+  assert.ok(!/className\s*=\s*['"]msg[\s'"]/.test(body),
+    'inspect must not hand-build a second .msg shell (T308)');
+  assert.ok(!/className\s*=\s*['"]msg-body['"]/.test(body),
+    'inspect must not hand-build a second .msg-body (T308)');
   assert.ok(body.indexOf('ai-turn') < 0, 'must not build .ai-turn log-panel chrome');
   assert.ok(body.indexOf('applyAfterUpdate') >= 0 || body.indexOf('shouldPin') >= 0,
     'must apply stick/free after update (not unconditional pin only)');
@@ -399,31 +412,35 @@ test('T167 single scroll: no nested overflow-y auto/scroll on turn sections', fu
 // 🎯T221 supersedes prior residual that user dumps stay plain — MD-shaped user
 // and <user_query> injects now mark down on the inspect path only.
 test('T217 renderAgentInspect: assistant→jevons paintBody, never textContent for MD role', function () {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(fn, 'renderAgentInspect present');
-  const body = fn[0];
-  // Role map: assistant must go through inspectToMsgRole → jevons (not user/status).
-  assert.ok(body.indexOf('inspectToMsgRole') >= 0, 'must map via inspectToMsgRole');
-  assert.ok(
-    body.indexOf("line.role === 'assistant' ? 'jevons'") >= 0 ||
-      body.indexOf('inspectToMsgRole(line.role)') >= 0,
-    'assistant maps to jevons for paintBody role',
-  );
-  // Must call paintBody with msgRole for non-user (assistant/status).
-  assert.ok(/paintBody\s*\(\s*d\s*,\s*msgRole\s*,/.test(body),
-    'paintBody(d, msgRole, …) — role must be mapped class, not wire role');
+  const { html, body } = inspectRenderSource();
+  // 🎯T308: role mapping moved into the pure AgentTranscript.inspectBubbleSpec
+  // (asserted directly below) — the DOM path only consumes spec.role.
+  assert.ok(body.indexOf('inspectBubbleSpec') >= 0,
+    'inspect path takes its role/nugget/when decisions from inspectBubbleSpec');
+  assert.strictEqual(AT.inspectBubbleSpec({ role: 'assistant', text: '**hi**' }).role, 'jevons',
+    'assistant maps to jevons for paintBody role');
+  assert.strictEqual(AT.inspectBubbleSpec({ role: 'user', text: 'hi' }).role, 'user');
+  // Must call paintBody with the mapped class role for non-user (assistant/status).
+  assert.ok(/paintBody\s*\(\s*el\s*,\s*role\s*,/.test(body),
+    'paintBody(el, role, …) — role must be mapped class, not wire role');
   // Fallback when paintBody missing: still parseAssistantMarkdown for jevons (T217).
   assert.ok(body.indexOf('parseAssistantMarkdown') >= 0,
     'inspect render has parseAssistantMarkdown fallback for jevons');
-  // 🎯T221: user branch uses paintInspectLineBody (inspect-only MD policy).
-  assert.ok(body.indexOf('paintInspectLineBody') >= 0,
-    'inspect user path uses paintInspectLineBody (T221)');
-  assert.ok(body.indexOf("msgRole === 'user'") >= 0 || body.indexOf('msgRole === "user"') >= 0,
+  // 🎯T221: user body policy still comes from paintInspectLineBody (via the spec).
+  const parseMD = s => '<p>' + String(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') + '</p>';
+  assert.strictEqual(
+    AT.inspectBubbleSpec({ role: 'user', text: '**x**' }, { parseAssistantMarkdown: parseMD })
+      .painted.mode,
+    'html',
+    'inspect user path keeps the paintInspectLineBody MD policy (T221)',
+  );
+  assert.strictEqual(AT.inspectBubbleSpec({ role: 'assistant', text: 'x' }).painted, null,
+    'assistant is NOT pre-painted — it must take the live paintBody path (T217)');
+  assert.ok(body.indexOf("role === 'user'") >= 0 || body.indexOf('role === "user"') >= 0,
     'explicit user branch for inspect MD paint');
   // Must not be the only paint path for all roles: textContent alone for every line.
   // Allowed: textContent for status / last-resort catch — not as sole assistant path.
-  assert.ok(body.indexOf("msgRole === 'jevons'") >= 0 || body.indexOf('msgRole === "jevons"') >= 0,
+  assert.ok(body.indexOf("role === 'jevons'") >= 0 || body.indexOf('role === "jevons"') >= 0,
     'explicit jevons branch for MD paint (not blind textContent)');
   // paintBody itself: jevons uses innerHTML + parseAssistantMarkdown, not textContent.
   const paint = html.match(/function paintBody\([\s\S]*?\nfunction maybeCloseTargetAside/);
@@ -578,12 +595,19 @@ test('T221 owner repro: user_query **Prefer option 2** list → strong/list HTML
 });
 
 test('T221 renderAgentInspect wires paintInspectLineBody for user (inspect-only)', function () {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(fn, 'renderAgentInspect present');
-  const body = fn[0];
-  assert.ok(body.indexOf('paintInspectLineBody') >= 0,
-    'must call paintInspectLineBody for T221 user policy');
+  const { html, body } = inspectRenderSource();
+  // 🎯T308: the user policy is reached via inspectBubbleSpec (which calls
+  // paintInspectLineBody) and applied through buildMsg's opts.paint.
+  assert.ok(body.indexOf('inspectBubbleSpec') >= 0,
+    'inspect path routes user turns through inspectBubbleSpec (T221 policy)');
+  assert.ok(body.indexOf('spec.painted') >= 0 || body.indexOf('painted') >= 0,
+    'painted user body is applied by the inspect paint callback');
+  const inject = AT.inspectBubbleSpec({
+    role: 'user',
+    text: '<user_query>\n**Prefer option 2**\n</user_query>',
+  }, { parseAssistantMarkdown: s => '<p>' + String(s) + '</p>' });
+  assert.strictEqual(inject.kind, 'bubble', 'owner user_query stays a bubble');
+  assert.strictEqual(inject.painted.mode, 'html', 'MD-shaped user turn marks down (T221)');
   assert.ok(body.indexOf('T221') >= 0 || body.indexOf('user_query') >= 0
     || body.indexOf('inspect-only') >= 0,
     'T221 / inspect-only comment present');
@@ -714,12 +738,17 @@ test('T233 paintInspectLineBody mode=nugget for harness injects', function () {
 });
 
 test('T233 renderAgentInspect wires nugget path + fingerprint inject-only', function () {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(fn, 'renderAgentInspect present');
-  const body = fn[0];
-  assert.ok(body.indexOf("mode === 'nugget'") >= 0 || body.indexOf('mode === "nugget"') >= 0,
-    'handles mode=nugget from paintInspectLineBody');
+  const { html, body } = inspectRenderSource();
+  // 🎯T308: the nugget decision is spec.kind now (pure, asserted below); the
+  // host only appends the outer turn-marker HTML it is handed.
+  assert.ok(body.indexOf("kind === 'nugget'") >= 0 || body.indexOf('kind === "nugget"') >= 0,
+    'handles kind=nugget from inspectBubbleSpec');
+  const nug = AT.inspectBubbleSpec({
+    role: 'user',
+    text: '<system-reminder>\nbe good\n</system-reminder>',
+  });
+  assert.strictEqual(nug.kind, 'nugget', 'harness inject → compact nugget, not a bubble');
+  assert.ok(nug.html.indexOf('inject-nugget') >= 0, 'nugget carries turn-marker chrome');
   assert.ok(body.indexOf('inject-nugget') >= 0 || body.indexOf('T233') >= 0,
     'T233 / inject-nugget path present');
   assert.ok(body.indexOf('inject-nugget') >= 0,
@@ -1306,6 +1335,143 @@ test('T265 index.html: merge preserves working; send opens working chrome', func
   assert.ok(renderFn[0].indexOf('id="agents"') < 0, 'render does not inject fleet tree');
   assert.ok(renderFn[0].indexOf('frontier-table') < 0, 'render does not inject frontier');
   assert.ok(html.indexOf('🎯T265') >= 0 || html.indexOf('T265') >= 0, 'T265 marker');
+});
+
+// ── 🎯T308: ONE message-bubble constructor for main #messages and the RHS ──
+
+test('T308 normalizeWhen accepts ms / seconds / ISO, rejects junk', function () {
+  assert.strictEqual(AT.normalizeWhen(1754620000000), 1754620000000, 'epoch ms passes through');
+  assert.strictEqual(AT.normalizeWhen(1754620000), 1754620000000, '10-digit seconds scale up');
+  assert.strictEqual(AT.normalizeWhen('1754620000'), 1754620000000, 'numeric string');
+  assert.strictEqual(AT.normalizeWhen('2026-08-08T01:02:03Z'), Date.parse('2026-08-08T01:02:03Z'));
+  // A turn with no timestamp must stay undefined — never "now" (that is the bug:
+  // a sealed 3-day-old sidebar turn labelled "now" on every repaint).
+  [undefined, null, '', 0, -1, 'not a date', NaN].forEach(function (v) {
+    assert.strictEqual(AT.normalizeWhen(v), undefined, 'no timestamp for ' + JSON.stringify(v));
+  });
+});
+
+test('T308 turnsToLines preserves turn timestamps from wire/HTTP', function () {
+  const lines = AT.turnsToLines([
+    { role: 'user', text: 'a', when: 1754620000000 },
+    { role: 'assistant', text: 'b', ts: 1754620001 },          // seconds spelling
+    { role: 'assistant', text: 'c', created_at: '2026-08-08T01:02:03Z' },
+    { role: 'user', text: 'd' },                                // no timestamp
+  ]);
+  assert.strictEqual(lines.length, 4);
+  assert.strictEqual(lines[0].when, 1754620000000);
+  assert.strictEqual(lines[1].when, 1754620001000);
+  assert.strictEqual(lines[2].when, Date.parse('2026-08-08T01:02:03Z'));
+  assert.ok(!('when' in lines[3]), 'timestamp-free turn carries no when');
+});
+
+test('T308 copyInspectLines keeps when (the copies that used to drop it)', function () {
+  const src = [{ role: 'user', text: 'a', when: 1754620000000 }, { role: 'assistant', text: 'b' }];
+  const out = AT.copyInspectLines(src);
+  assert.strictEqual(out[0].when, 1754620000000, 'when survives the rebuild');
+  assert.ok(!('when' in out[1]), 'absent stays absent');
+  out[0].text = 'mutated';
+  assert.strictEqual(src[0].text, 'a', 'copy, not alias');
+});
+
+test('T308 applyInspectLiveFrame stamps live turns and preserves prior when', function () {
+  const seeded = [{ role: 'user', text: 'old', when: 1754620000000 }];
+  const out = AT.applyInspectLiveFrame(seeded, {
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+  }, { now: 1754620500000 });
+  assert.strictEqual(out[0].when, 1754620000000, 'sealed turn keeps its own time');
+  assert.strictEqual(out[1].when, 1754620500000, 'live turn is stamped with arrival time');
+  // The wire's own timestamp wins over arrival when the server sends one.
+  const wired = AT.applyInspectLiveFrame([], {
+    type: 'user',
+    when: 1754620111000,
+    message: { role: 'user', content: 'yo' },
+  }, { now: 1754620500000 });
+  assert.strictEqual(wired[0].when, 1754620111000);
+});
+
+test('T308 inspectBubbleSpec is the whole per-turn inspect policy', function () {
+  const b = AT.inspectBubbleSpec({ role: 'assistant', text: '**hi**', when: 1754620000000 });
+  assert.strictEqual(b.kind, 'bubble');
+  assert.strictEqual(b.role, 'jevons');
+  assert.strictEqual(b.text, '**hi**');
+  assert.strictEqual(b.when, 1754620000000);
+  assert.strictEqual(b.painted, null, 'assistant takes the live paintBody path (T217)');
+  // Timestamp normalization happens once, in the spec — callers get epoch ms.
+  assert.strictEqual(
+    AT.inspectBubbleSpec({ role: 'user', text: 'x', when: '2026-08-08T01:02:03Z' }).when,
+    Date.parse('2026-08-08T01:02:03Z'),
+  );
+  assert.strictEqual(AT.inspectBubbleSpec({ role: 'user', text: 'x' }).when, undefined,
+    'no timestamp → undefined, so the renderer omits .msg-time');
+  assert.strictEqual(AT.inspectBubbleSpec(null).kind, 'bubble', 'null line does not throw');
+});
+
+test('T308 inspect fixture paints .msg-time when the turn has a timestamp', function () {
+  const deps = {
+    parseAssistantMarkdown: s => '<p>' + String(s) + '</p>',
+    relTime: () => '5m',
+    absTimeTitle: () => '8 Aug 2026, 01:02:03',
+  };
+  const html = AT.paintInspectLinesHTML([
+    { role: 'assistant', text: 'timed', when: 1754620000000 },
+    { role: 'user', text: 'untimed' },
+  ], deps);
+  const timed = html.slice(0, html.indexOf('untimed'));
+  assert.ok(/<div class="msg-time" data-ts="1754620000000" title="8 Aug 2026, 01:02:03">5m<\/div>/
+    .test(timed), 'timed turn gets main .msg-time chrome: data-ts + hover title + rel label');
+  const untimed = html.slice(html.indexOf('untimed'));
+  assert.ok(untimed.indexOf('msg-time') < 0,
+    'timestamp-free turn shows no .msg-time (never a fabricated "now")');
+  // Hover title is the 🎯T91 absolute local time; both are escaped.
+  const evil = AT.paintInspectLinesHTML(
+    [{ role: 'user', text: 'x', when: 1 }],
+    { relTime: () => '<img onerror=1>', absTimeTitle: () => '"><script>' },
+  );
+  assert.ok(evil.indexOf('<img onerror') < 0 && evil.indexOf('<script>') < 0,
+    'time chrome escapes its labels');
+});
+
+test('T308 index.html: buildMsg is the ONE bubble shell for durable turns', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Exactly one place constructs the conversational bubble shell: buildMsg.
+  const shells = html.match(/className\s*=\s*['"]msg\s*['"]\s*\+/g) || [];
+  assert.strictEqual(shells.length, 1,
+    'only buildMsg may build a `msg <role>` shell — found ' + shells.length);
+  const build = html.match(/\nfunction buildMsg\([\s\S]*?\n\}\n/);
+  assert.ok(build, 'buildMsg present');
+  assert.ok(build[0].indexOf("className = 'msg ' + role") >= 0, 'the one shell lives in buildMsg');
+  // opts.paint / opts.timeIfKnown are the only knobs callers get (T308 contract).
+  assert.ok(/opts\s*&&\s*typeof opts\.paint === 'function'/.test(build[0]),
+    'buildMsg honours opts.paint body policy');
+  assert.ok(build[0].indexOf('timeIfKnown') >= 0,
+    'buildMsg honours opts.timeIfKnown (omit .msg-time on timestamp-free turns)');
+  assert.ok(/normalizeWhen/.test(build[0]),
+    'buildMsg normalizes `when` through the shared AgentTranscript helper');
+  // The remaining `msg …` classNames are not conversational turns: a transient
+  // status note and the collapsible <details> worker note (🎯T23).
+  assert.ok(/className = 'msg status'/.test(html) && /className = 'msg worker'/.test(html),
+    'status/worker notes are deliberate non-bubble chrome, not durable turns');
+});
+
+test('T308 index.html: sidebar feeds buildMsg and keeps timestamps end to end', function () {
+  const { html, body } = inspectRenderSource();
+  assert.ok(/buildMsg\(spec\.role,\s*spec\.text,\s*spec\.when/.test(body),
+    'inspect hands the spec straight to buildMsg (role, text, when)');
+  assert.ok(body.indexOf('timeIfKnown: true') >= 0,
+    'inspect omits .msg-time for turns with no timestamp');
+  // Every rebuild of the inspect line model goes through copyInspectLines —
+  // the hand-rolled {role, text} copies are what dropped `when` before the
+  // renderer ever saw it.
+  assert.ok(html.indexOf('inspectLinesCopy') >= 0, 'inspect line model copies via helper');
+  assert.ok(!/_agentInspectLines\s*=\s*\([^)]*\)\.map\(function \(l\) \{\s*return \{ role: l\.role, text: l\.text \};/
+    .test(html), 'no hand-rolled {role, text} copy that strips when');
+  // 🎯T289 sweeper is document-scoped, so sidebar .msg-time relabels too.
+  const sweep = html.match(/setInterval\(\(\) => \{[\s\S]*?\}, 30000\);/);
+  assert.ok(sweep, '30s relTime sweeper present');
+  assert.ok(sweep[0].indexOf("document.querySelectorAll('.msg-time[data-ts]')") >= 0,
+    'sweeper is document-wide — it must see RHS bubbles, not only #messages');
 });
 
 if (failed) {

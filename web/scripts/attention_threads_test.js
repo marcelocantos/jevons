@@ -659,6 +659,74 @@ test('T134 capture dedupes same fingerprint open thread', function () {
   }).length, 1);
 });
 
+// ── 🎯T308: the aside-wire path must not strip turn timestamps ──
+
+test('T308 aside wire cache + merge carry `when` to the sidebar renderer', function () {
+  // Live/optimistic record: caller supplies arrival time.
+  const cache = Object.create(null);
+  AT.recordAsideWireUserTurn(cache, '[attention:att-side|billing]\nbody', 1754620000000);
+  assert.strictEqual(cache['att-side'][0].when, 1754620000000, 'recorded turn keeps its time');
+  // No time supplied (or junk) → no fabricated timestamp.
+  const bare = Object.create(null);
+  AT.recordAsideWireUserTurn(bare, '[attention:att-x|t]\nbody');
+  assert.ok(!('when' in bare['att-x'][0]), 'no when when the caller knows none');
+  AT.recordAsideWireUserTurn(bare, '[attention:att-y|t]\nbody', 'garbage');
+  assert.ok(!('when' in bare['att-y'][0]), 'junk time is not recorded');
+
+  // History replay: each frame's own timestamp rides through, not "now".
+  const replayed = AT.extractAsideWireTurnsFromFrames([
+    { type: 'user', ts: 1754620001, message: { content: '[attention:att-a|t]\nfrom seconds' } },
+    {
+      type: 'user',
+      created_at: '2026-08-08T01:02:03Z',
+      message: { content: '[attention:att-b|t]\nfrom ISO' },
+    },
+    { type: 'user', message: { content: '[attention:att-c|t]\nno time' } },
+  ]);
+  assert.strictEqual(replayed['att-a'][0].when, 1754620001000, 'seconds scale to ms');
+  assert.strictEqual(replayed['att-b'][0].when, Date.parse('2026-08-08T01:02:03Z'));
+  assert.ok(!('when' in replayed['att-c'][0]), 'frame with no time yields no when');
+
+  // Merge is where the sidebar used to lose it: {role, text} rebuild dropped when.
+  const merged = AT.mergeInspectLinesWithAsideWire(
+    [{ role: 'assistant', text: 'reply', when: 1754620009000 }],
+    [{ role: 'user', text: 'body', when: 1754620000000 }],
+  );
+  assert.strictEqual(merged.length, 2);
+  assert.strictEqual(merged[0].when, 1754620000000, 'wire user turn keeps its time');
+  assert.strictEqual(merged[1].when, 1754620009000, 'process turn keeps its time');
+
+  // Dedupe hit: same turn seen twice → earliest known time wins.
+  const dedup = AT.mergeInspectLinesWithAsideWire(
+    [{ role: 'user', text: 'body', when: 1754620000000 }],
+    [{ role: 'user', text: 'body', when: 1754620500000 }],
+  );
+  assert.strictEqual(dedup.length, 1, 'still one turn');
+  assert.strictEqual(dedup[0].when, 1754620000000, 'earliest reading wins on dedupe');
+  // A timeless copy must not erase a known time.
+  const rescued = AT.mergeInspectLinesWithAsideWire(
+    [{ role: 'user', text: 'body', when: 1754620000000 }],
+    [{ role: 'user', text: 'body' }],
+  );
+  assert.strictEqual(rescued[0].when, 1754620000000, 'timeless duplicate does not clear when');
+});
+
+test('T308 index.html: aside wire paths stamp/preserve time, never strip it', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const note = html.match(/\nfunction noteAsideWireFromMain\([\s\S]*?\n\}\n/);
+  assert.ok(note, 'noteAsideWireFromMain present');
+  assert.ok(/recordAsideWireUserTurn\(asideWireTurnsCache, content, at\)/.test(note[0]),
+    'live aside wire records an arrival timestamp (T308)');
+  const ingest = html.match(/\nfunction ingestAsideWiresFromHistoryLines\([\s\S]*?\n\}\n/);
+  assert.ok(ingest, 'ingestAsideWiresFromHistoryLines present');
+  assert.ok(ingest[0].indexOf('turn.when = t.when') >= 0,
+    'history replay keeps each frame time instead of dropping it');
+  assert.ok(!/list\.push\(\{ role: 'user', text: text \}\)/.test(ingest[0]),
+    'no bare {role, text} push that strips when');
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);
