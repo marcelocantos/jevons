@@ -68,6 +68,20 @@ function installMockWebSocket() {
       queueMicrotask(() => {
         this.readyState = MockWebSocket.OPEN;
         if (this.onopen) this.onopen({});
+        // Same product handshake as scripts/chat-ui-test/test.js (🎯T322):
+        // status-text === "connected" requires history_meta after open.
+        // Chat socket only — /ws/reload onmessage reloads the page.
+        if (String(url).indexOf('/ws/chat') !== -1) {
+          this._emit({
+            type: 'history_meta',
+            older: 0,
+            start: 0,
+            total: 0,
+            replay_frames: 0,
+            replay_bytes: 0,
+            replay_ms: 0,
+          });
+        }
       });
       window.__mockSockets = window.__mockSockets || [];
       window.__mockSockets.push(this);
