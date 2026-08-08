@@ -2,11 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // 🎯T266 — Owner-facing target-ask context chrome (repo / PO / product).
-// 🎯T273 — Split speaker-omit from context-paint:
-//   • speaker-omit: pure overseer / product name "Jevons" only (not jevons-po).
-//   • context-paint: always keep repo/target/ledger/owning-PO chrome when
-//     resolved — including when context is/includes jevons-po.
-//   • non-overseer speaker (other products): bold-purple 〈agent〉 only (no ·).
+// 🎯T273 — Split speaker-omit from context-paint.
+// 🎯T314 — The tab is [optional speaker][optional context], in that order,
+//   and nothing else:
+//   • speaker = the PROVEN author of the bubble (opts.author / agent /
+//     speaker / from). Omitted for the root overseer (jevons / overseer), and
+//     never synthesized from repo, product, or the ledger-owning PO. An
+//     org/repo label can never occupy the speaker role.
+//   • context = repo/ledger chrome in its own dim visual role (ctx-context) —
+//     never the bold name-like accent token, and never "· <po>" trailing the
+//     head as a fake second speaker.
+//   • the ledger-owning PO is provenance metadata (hover title + dataset),
+//     not a painted token. It paints only when it is the actual author, in
+//     which case it is the speaker.
 // DOM-free pure helpers; browser attach lives in index.html.
 // T267 may reuse extractTargetIDs / resolveTargetContext for PO focus.
 
@@ -19,11 +27,13 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var TARGET_ID_RE = /(?:🎯|\uD83C\uDFAF)?\s*(T\d+(?:\.\d+)*)\b/gi;
+  // The 🎯 is a surrogate pair: a bare `?` would bind to the low unit alone and
+  // make the high unit mandatory, so the optional prefix must be a group.
+  var TARGET_ID_RE = /(?:🎯)?\s*(T\d+(?:\.\d+)*)\b/gi;
   var ASK_CUE_RE = /needs[-\s]?owner|owner\s+(?:decision|accept|ack|gate|ratify)|decision\s+packet|parked[-\s]?for[-\s]?design|design[-\s]?gated|design[-\s]?discussion|blocked[-\s]?on[-\s]?(?:human|owner)|please\s+(?:confirm|accept|decide|choose|pick)|do\s+you\s+(?:want|accept|approve|prefer)|which\s+(?:repo|ledger|product|po|portfolio)|owner[-\s]?facing|ratif(?:y|ication)|\baccept\b|\bconfirm\b|\bdecide\b/i;
   // U+2329 LEFT-POINTING ANGLE BRACKET / U+232A RIGHT-POINTING ANGLE BRACKET
-  var SPEAKER_LT = '\u2329';
-  var SPEAKER_GT = '\u232A';
+  var SPEAKER_LT = '〈';
+  var SPEAKER_GT = '〉';
 
   function collapse(s) {
     return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
@@ -39,7 +49,8 @@
 
   /**
    * 🎯T273 speaker-omit: pure overseer / product name "Jevons" only.
-   * Does NOT omit jevons-po (owning PO is context, not a bare speaker stamp).
+   * A PO name is a legitimate speaker identity — but only when it is the
+   * proven author (🎯T314); it is never synthesized into the speaker role.
    */
   function isOmittedSpeakerIdentity(name) {
     var n = String(name == null ? '' : name).trim().toLowerCase();
@@ -49,11 +60,18 @@
   }
 
   /**
+   * 🎯T314: an org/repo label ("marcelocantos/jevons") is context, never a
+   * speaker. Guards the speaker role against repo-shaped identities.
+   */
+  function looksLikeRepoLabel(name) {
+    return String(name == null ? '' : name).indexOf('/') >= 0;
+  }
+
+  /**
    * 🎯T306 role gate: the context chrome is PROVENANCE — "this system message
-   * came from repo X / PO Y". On a bubble the owner typed there is no
-   * provenance to state, so the tab is mislabeled by construction. Owner roles
-   * never paint, regardless of 🎯 ids, ambient frontier ledger/cwd, ask cues,
-   * or force.
+   * came from repo X". On a bubble the owner typed there is no provenance to
+   * state, so the tab is mislabeled by construction. Owner roles never paint,
+   * regardless of 🎯 ids, ambient frontier ledger/cwd, ask cues, or force.
    */
   function isOwnerRole(role) {
     var r = String(role == null ? '' : role).trim().toLowerCase();
@@ -67,35 +85,45 @@
   }
 
   /**
-   * Prefer PO / agent; else product when not pure Jevons speaker.
-   * Empty ⇒ omit speaker byline only (context chrome is separate).
+   * 🎯T314 speaker = proven message author only.
+   *
+   * Reads author / authorName / agent / speaker / from — the fields a caller
+   * fills in when it actually knows who wrote the bubble. Repo, product and
+   * the ledger-owning PO are deliberately NOT consulted: inferring a speaker
+   * from ownership is what put "marcelocantos/jevons · jevons-po" in the
+   * speaker role. Empty ⇒ omit the speaker segment.
    */
-  function speakerIdentity(ctx) {
-    ctx = ctx && typeof ctx === 'object' ? ctx : {};
-    var po = collapse(ctx.po);
-    if (po && !isOmittedSpeakerIdentity(po)) return po;
-    var product = collapse(ctx.product);
-    if (!product) product = productFromRepoLabel(ctx.repo);
-    if (product && !isOmittedSpeakerIdentity(product)) return product;
-    var agent = collapse(ctx.agent || ctx.speaker || ctx.name);
-    if (agent && !isOmittedSpeakerIdentity(agent)) return agent;
-    return '';
+  function messageAuthor(opts) {
+    opts = opts && typeof opts === 'object' ? opts : {};
+    var name = collapse(opts.author != null ? opts.author
+      : (opts.authorName != null ? opts.authorName
+        : (opts.agent != null ? opts.agent
+          : (opts.speaker != null ? opts.speaker : opts.from))));
+    if (!name) return '';
+    if (looksLikeRepoLabel(name)) return '';
+    if (isOmittedSpeakerIdentity(name)) return '';
+    return name;
   }
 
-  /** Speaker byline only: 〈agent〉 or empty. Never middle-dot · or bare Jevons. */
+  /** Back-compat alias: the speaker IS the proven author (🎯T314). */
+  function speakerIdentity(ctx) {
+    return messageAuthor(ctx);
+  }
+
+  /** Speaker byline only: 〈author〉 or empty. Never middle-dot · or bare Jevons. */
   function formatSpeakerLabel(nameOrCtx) {
     var id = '';
     if (nameOrCtx && typeof nameOrCtx === 'object') {
-      id = speakerIdentity(nameOrCtx);
+      id = messageAuthor(nameOrCtx);
     } else {
       id = collapse(nameOrCtx);
-      if (isOmittedSpeakerIdentity(id)) id = '';
+      if (looksLikeRepoLabel(id) || isOmittedSpeakerIdentity(id)) id = '';
     }
     if (!id) return '';
     return SPEAKER_LT + id + SPEAKER_GT;
   }
 
-  /** Speaker byline HTML: bold-purple 〈agent〉 or empty (not context chrome). */
+  /** Speaker byline HTML: bold 〈author〉 or empty (not context chrome). */
   function formatSpeakerHTML(nameOrCtx) {
     var label = formatSpeakerLabel(nameOrCtx);
     if (!label) return '';
@@ -105,51 +133,41 @@
   }
 
   /**
-   * Context head (repo/product). Never use pure overseer/jevons product leaf
-   * as the painted head — that stamps a speaker-looking "jevons" token
-   * (b81267d residual). Prefer full repo when product is omitted speaker id.
+   * Context head: the repo/ledger label. Prefer the full org/repo — a bare
+   * product leaf ("jevons") reads as a name, which is the speaker role.
    */
   function contextHead(ctx) {
     ctx = ctx && typeof ctx === 'object' ? ctx : {};
-    var product = collapse(ctx.product);
     var repo = collapse(ctx.repo);
-    if (product && isOmittedSpeakerIdentity(product)) {
-      return repo || '';
-    }
-    return product || repo;
+    if (repo) return repo;
+    var product = collapse(ctx.product);
+    if (product && isOmittedSpeakerIdentity(product)) return '';
+    return product;
   }
 
   /**
-   * 🎯T266 context-paint: repo/product + optional owning PO.
-   * Always includes jevons-po when present — never blanked by speaker-omit.
-   * Pure overseer product leaf is never the painted head (speaker-omit).
+   * 🎯T314 context-paint: repo/ledger chrome only. The owning PO is never
+   * appended — "repo · po" reads as speaker·meta and the PO is inferred from
+   * ownership, not authorship.
    */
   function formatChromeLabel(ctx) {
-    ctx = ctx && typeof ctx === 'object' ? ctx : {};
-    var head = contextHead(ctx);
-    if (!head) return '';
-    var po = collapse(ctx.po);
-    return po ? head + ' · ' + po : head;
+    return contextHead(ctx);
   }
 
-  /** Context chrome HTML (repo/PO spans). Independent of speaker-omit. */
+  /**
+   * Context chrome HTML. Rendered in ctx-context — the tab's own dim role,
+   * visually distinct from the bold ctx-speaker name token.
+   */
   function formatContextHTML(ctx) {
-    ctx = ctx && typeof ctx === 'object' ? ctx : {};
     var head = contextHead(ctx);
     if (!head) return '';
-    var po = collapse(ctx.po);
-    var html = '<span class="ctx-repo">' + escHtml(head) + '</span>';
-    if (po) {
-      html += '<span class="ctx-sep" aria-hidden="true"> · </span>' +
-        '<span class="ctx-po">' + escHtml(po) + '</span>';
-    }
-    return html;
+    return '<span class="ctx-context">' + escHtml(head) + '</span>';
   }
 
   function normalizeTargetID(raw) {
     var s = raw == null ? '' : String(raw).trim();
     if (!s) return '';
-    s = s.replace(/^\uD83C\uDFAF/, '').replace(/^🎯/, '').trim();
+    s = s.replace(/^🎯/, '').trim();
     if (/^t\d/i.test(s)) s = 'T' + s.slice(1);
     return s;
   }
@@ -272,7 +290,9 @@
     return out;
   }
 
-  // Hover/aria title keeps full meta (· separators OK — not speaker byline).
+  // Hover/aria title keeps full meta (· separators OK — not painted chrome).
+  // 🎯T314: the owning PO is labelled "ledger PO" so the tooltip never implies
+  // authorship; the painted tab omits it entirely.
   function formatChromeTitle(ctx) {
     ctx = ctx && typeof ctx === 'object' ? ctx : {};
     var parts = [];
@@ -285,8 +305,8 @@
       parts.push('product ' + product);
     }
     var po = collapse(ctx.po);
-    if (po) parts.push('PO ' + po);
-    var speaker = speakerIdentity(ctx);
+    if (po) parts.push('ledger PO ' + po);
+    var speaker = messageAuthor(ctx);
     if (speaker) parts.push('speaker ' + SPEAKER_LT + speaker + SPEAKER_GT);
     return parts.length ? parts.join(' · ') : 'Target context';
   }
@@ -362,14 +382,17 @@
     }
 
     if (!product) product = productFromRepoLabel(repo);
-    var speaker = speakerIdentity({ repo: repo, po: po, product: product });
-    // Context label always (product · PO), independent of speaker-omit.
-    var label = formatChromeLabel({ repo: repo, po: po, product: product, targetId: primary });
-    // 🎯T273: context-paint gates on ask + repo only — never on speaker omit.
-    // 🎯T306: …and never at all on an owner-authored bubble.
-    var show = !!(ask && repo) && !ownerAuthored;
+    // 🎯T314: speaker is the proven author only — never derived from po/repo.
+    var speaker = messageAuthor(opts);
+    // Context label is repo/ledger chrome alone (no "· PO" tail).
+    var label = formatChromeLabel({ repo: repo, product: product });
+    // 🎯T273: context-paint gates on ask + resolved chrome, never on speaker
+    // omission. 🎯T306: …and never at all on an owner-authored bubble.
+    // 🎯T314: a proven non-overseer author alone is enough to paint.
+    var show = !!(ask && (repo || speaker)) && !ownerAuthored;
     var title = formatChromeTitle({
       repo: repo, po: po, product: product, targetId: primary, targetIds: ids,
+      author: speaker,
     });
 
     return {
@@ -386,12 +409,13 @@
   }
 
   /**
-   * Painted tab model.
-   *  - Context path (show): ask + resolved repo — keeps jevons-po context.
-   *  - Pure overseer/jevons: omit speaker token only; never stamp product leaf
-   *    "jevons" as the heading (prefer full repo · PO context).
-   *  - Non-overseer other-product speaker: 〈agent〉 bold purple, no ·.
-   *  - Pure speaker helpers still omit bare Jevons/overseer (formatSpeaker*).
+   * 🎯T314 painted tab model: [optional speaker][optional context].
+   *  - speaker: 〈author〉 in the bold ctx-speaker role, only when the author is
+   *    proven and is not the root overseer. Repo labels and ledger-owning POs
+   *    never reach this role.
+   *  - context: repo/ledger label in the dim ctx-context role.
+   *  - the two are separated by a plain space — never "·", which reads as a
+   *    second speaker.
    */
   function chromeModel(opts) {
     var ctx = resolveTargetContext(opts || {});
@@ -410,50 +434,21 @@
       };
     }
 
-    var product = collapse(ctx.product) || productFromRepoLabel(ctx.repo);
-    var speaker = collapse(ctx.speaker) || speakerIdentity({
-      repo: ctx.repo, po: ctx.po, product: product, agent: ctx.speaker,
-    });
-    // Never speaker-paint pure overseer/jevons — even if product mis-resolves.
-    if (isOmittedSpeakerIdentity(speaker)) speaker = '';
-    var useSpeakerPaint = !!(speaker && !isJevonsProduct(product) &&
-      !isOmittedSpeakerIdentity(speaker));
+    var speakerLabel = formatSpeakerLabel(ctx.speaker);
+    var speakerHTML = formatSpeakerHTML(ctx.speaker);
+    var contextLabel = formatChromeLabel({ repo: ctx.repo, product: ctx.product });
+    var contextHTML = formatContextHTML({ repo: ctx.repo, product: ctx.product });
 
-    var inner = '';
-    var label = '';
-    if (useSpeakerPaint) {
-      // Non-overseer speaker on other products: 〈agent〉 only (no ·).
-      label = formatSpeakerLabel({
-        repo: ctx.repo, po: ctx.po, product: product, agent: speaker,
-      });
-      inner = formatSpeakerHTML({
-        repo: ctx.repo, po: ctx.po, product: product, agent: speaker,
-      });
-      // Defense: never emit pure overseer/jevons speaker token.
-      if (inner && (isOmittedSpeakerIdentity(speaker) ||
-          /〈\s*jevons\s*〉/i.test(inner) ||
-          inner.indexOf(SPEAKER_LT + 'jevons' + SPEAKER_GT) >= 0 ||
-          inner.indexOf(SPEAKER_LT + 'overseer' + SPEAKER_GT) >= 0)) {
-        inner = '';
-        label = '';
-      }
-      if (inner && (inner.indexOf('\u00b7') >= 0 || inner.indexOf(' · ') >= 0)) {
-        inner = '';
-        label = '';
-      }
-    }
-    if (!inner) {
-      // Context chrome (repo · owning PO) — includes jevons-po; never blank
-      // the whole heading because speaker is pure overseer/Jevons.
-      label = formatChromeLabel({
-        repo: ctx.repo, po: ctx.po, product: product, targetId: ctx.targetId,
-      });
-      inner = formatContextHTML({
-        repo: ctx.repo, po: ctx.po, product: product, targetId: ctx.targetId,
-      });
-    }
+    var joined = !!(speakerHTML && contextHTML);
+    // The tab is an inline-flex row, so a plain space between the two flex
+    // items can be trimmed away entirely — the painted gap is a NBSP. Plain
+    // text (label / aria) keeps an ordinary space.
+    var inner = speakerHTML +
+      (joined ? '<span class="ctx-gap" aria-hidden="true"> </span>' : '') +
+      contextHTML;
+    var label = speakerLabel + (joined ? ' ' : '') + contextLabel;
 
-    var show = !!(inner);
+    var show = !!inner;
     return {
       show: show,
       label: show ? label : '',
@@ -461,7 +456,7 @@
       repo: ctx.repo,
       po: ctx.po,
       product: ctx.product,
-      speaker: speaker || '',
+      speaker: ctx.speaker || '',
       targetId: ctx.targetId,
       targetIds: ctx.targetIds,
       innerHTML: show ? inner : '',
@@ -477,7 +472,9 @@
     isProductOwnerName: isProductOwnerName,
     isOwnerRole: isOwnerRole,
     isOmittedSpeakerIdentity: isOmittedSpeakerIdentity,
+    looksLikeRepoLabel: looksLikeRepoLabel,
     isJevonsProduct: isJevonsProduct,
+    messageAuthor: messageAuthor,
     speakerIdentity: speakerIdentity,
     formatSpeakerLabel: formatSpeakerLabel,
     formatSpeakerHTML: formatSpeakerHTML,
