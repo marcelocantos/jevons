@@ -453,6 +453,44 @@
     return false;
   }
 
+  /**
+   * 🎯T327: whether main #messages working chrome should bind to this
+   * owner send. Aside-routed turns (attention/target-aside wire, or any
+   * composer path that marks routed) leave main idle — the aside pane
+   * owns working state. Main must not show step count / fleet progress
+   * / working dots for work that left main.
+   *
+   * @param {string} wireText accepted wire body
+   * @param {(t: string) => boolean} [isAsideWire] true for attention/target-aside bodies
+   * @param {{ routed?: boolean }|null|undefined} [opts]
+   * @returns {boolean} true → open/keep main WorkingProgress; false → main idle
+   */
+  function shouldBindMainWorkingChrome(wireText, isAsideWire, opts) {
+    if (opts && opts.routed === true) return false;
+    const t = String(wireText == null ? '' : wireText);
+    if (typeof isAsideWire === 'function' && isAsideWire(t)) return false;
+    if (!t.trim()) return false;
+    return true;
+  }
+
+  /**
+   * 🎯T327: plan main working chrome after transport.accept.
+   * Aside routes suppress main chrome for the whole in-flight turn
+   * (level samples / tool re-arms must not re-open main).
+   *
+   * @param {string} wireText
+   * @param {(t: string) => boolean} [isAsideWire]
+   * @param {{ routed?: boolean }|null|undefined} [opts]
+   * @returns {{ openMainWorking: boolean, suppressMainWorking: boolean }}
+   */
+  function planMainWorkingAfterSend(wireText, isAsideWire, opts) {
+    const bind = shouldBindMainWorkingChrome(wireText, isAsideWire, opts);
+    return {
+      openMainWorking: bind,
+      suppressMainWorking: !bind,
+    };
+  }
+
   // ── 🎯T279 post-send owner-turn retention ──────────────────────────
   // Soft reconnect suppresses user-echo frames until history_meta (T143).
   // Without optimistic paint, a flap after wire.accept clears the composer
@@ -598,6 +636,9 @@
     applyWorkingChrome,
     workingLifecycle,
     workingLevelFromSample,
+    // 🎯T327: main chrome does not bind to aside-routed turns
+    shouldBindMainWorkingChrome,
+    planMainWorkingAfterSend,
     createTurnState,
     applyChatEvent,
     applyChatEvents,

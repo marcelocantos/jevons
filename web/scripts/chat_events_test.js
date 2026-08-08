@@ -622,6 +622,106 @@ test('T272 index.html: history_meta level sample (not edge-only kickoff)', () =>
   );
 });
 
+// ── 🎯T327 main working chrome clears / does not bind on aside route ─
+
+function isAsideWireFixture(t) {
+  const s = String(t || '');
+  return /^\s*\[attention\s*:/i.test(s) || /^\s*\[target-aside\s*:/i.test(s) ||
+    /\[attention\s*:/i.test(s.split(/\r?\n/).find(function (l) { return l.trim(); }) || '') ||
+    /\[target-aside\s*:/i.test(s.split(/\r?\n/).find(function (l) { return l.trim(); }) || '');
+}
+
+test('T327 shouldBindMainWorkingChrome: main wire binds', () => {
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome('file a target please', isAsideWireFixture),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome('hello', null),
+    true,
+  );
+});
+
+test('T327 shouldBindMainWorkingChrome: attention / target-aside do not bind', () => {
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome(
+      '[attention:att-1|Title]\nbody',
+      isAsideWireFixture,
+    ),
+    false,
+  );
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome(
+      '[target-aside: att-2 | File this]\nfile X\n\n(Ceremony: …)',
+      isAsideWireFixture,
+    ),
+    false,
+  );
+});
+
+test('T327 shouldBindMainWorkingChrome: routed flag alone suppresses main', () => {
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome('plain body', null, { routed: true }),
+    false,
+  );
+});
+
+test('T327 planMainWorkingAfterSend: aside → open false + suppress true', () => {
+  const att = ChatEvents.planMainWorkingAfterSend(
+    '[attention:att-x|t]\nhello',
+    isAsideWireFixture,
+  );
+  assert.strictEqual(att.openMainWorking, false);
+  assert.strictEqual(att.suppressMainWorking, true);
+
+  const main = ChatEvents.planMainWorkingAfterSend('ship it', isAsideWireFixture);
+  assert.strictEqual(main.openMainWorking, true);
+  assert.strictEqual(main.suppressMainWorking, false);
+
+  // Mutation proof: re-plan same inputs stable; flip isAsideWire flips result.
+  const again = ChatEvents.planMainWorkingAfterSend(
+    '[attention:att-x|t]\nhello',
+    isAsideWireFixture,
+  );
+  assert.deepStrictEqual(again, att);
+  const asMain = ChatEvents.planMainWorkingAfterSend(
+    '[attention:att-x|t]\nhello',
+    function () { return false; },
+  );
+  assert.strictEqual(asMain.openMainWorking, true, 'without aside detector, wire would bind');
+  assert.strictEqual(asMain.suppressMainWorking, false);
+});
+
+test('T327 index.html: route-to-aside path leaves main WorkingProgress not open', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(
+    html.includes('planMainWorkingAfterSend') || html.includes('shouldBindMainWorkingChrome'),
+    'submit path must use T327 pure bind decision',
+  );
+  assert.ok(
+    /mainWorkingSuppressed|suppressMainWorking/.test(html),
+    'must track suppress so level/tool re-arm cannot reopen main mid aside turn',
+  );
+  // submitWireText must not unconditionally setWorking(true) for aside wires.
+  assert.ok(
+    /function submitWireText[\s\S]{0,2500}(planMainWorkingAfterSend|shouldBindMainWorkingChrome)/.test(html),
+    'submitWireText must plan main working (T327)',
+  );
+  assert.ok(
+    /plan\.openMainWorking[\s\S]{0,200}setWorking\(true\)/.test(html) ||
+      /openMainWorking\)\s*\{\s*[\s\S]{0,120}setWorking\(true\)/.test(html),
+    'main working open only when plan says so',
+  );
+  assert.ok(
+    /suppressMainWorking|mainWorkingSuppressed\s*=\s*true/.test(html),
+    'aside route sets suppress so main stays not open',
+  );
+  assert.ok(
+    /T327/.test(html),
+    'product path documents T327',
+  );
+});
+
 // ── index.html wiring ───────────────────────────────────────────
 
 test('index.html wires ChatEvents + stream seal', () => {

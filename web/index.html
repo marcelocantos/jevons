@@ -1022,6 +1022,43 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 /* Compact tip: hide chat-style mermaid toolbar (cards are sticky/scrollable — T186). */
 .instant-tip.instant-tip-card .mermaid-diagram .mermaid-toolbar { display: none; }
+/* 🎯T326: chat 🎯Tn hotspot finger (smaller, left of card) + shared card tip */
+.target-hotspot,
+.target-hotspot-finger {
+  display: inline;
+  cursor: default;
+  color: var(--accent, #7aa2f7);
+  font-weight: 600;
+  font-size: 0.92em; /* smaller finger than surrounding body */
+  border-bottom: 1px dotted color-mix(in srgb, var(--accent, #7aa2f7) 55%, transparent);
+  white-space: nowrap;
+}
+.target-hotspot:hover,
+.target-hotspot:focus {
+  color: var(--strong, #c0caf5);
+  border-bottom-style: solid;
+  outline: none;
+}
+/* Shared card chrome: small left finger pointing at the hotspot (card opens right). */
+.instant-tip.instant-tip-card.target-card-tip {
+  /* slightly tighter than frontier cards — finger is the small host span */
+  max-width: min(440px, 92vw);
+}
+.instant-tip.instant-tip-card.target-card-tip::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 12px;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-right: 6px solid var(--border);
+  pointer-events: none;
+}
+.instant-tip.instant-tip-card.target-card-tip {
+  position: fixed; /* keep fixed from .instant-tip; absolute finger anchors here */
+}
 #frontier-table .ft-status,
 #frontier-table .ft-fanout,
 #frontier-table .ft-name,
@@ -1291,6 +1328,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/conversation_widget.js"></script>
 <script src="scripts/frontier_table.js"></script>
 <script src="scripts/target_context_chrome.js"></script>
+<script src="scripts/target_hotspot.js"></script>
 <script src="scripts/instant_tip.js"></script>
 <script src="scripts/virtual_list.js"></script>
 <script src="scripts/thread_route.js"></script>
@@ -2232,6 +2270,10 @@ function handle(m) {
               AttentionThreads.shouldPaintMainUserText &&
               !AttentionThreads.shouldPaintMainUserText(content))) {
         noteAsideWireFromMain(content);
+        // 🎯T327: server echo of aside wire — main must not bind mid-turn chrome.
+        if (workingEl) setWorking(false, undefined, { skipDrain: true });
+        if (ownerWorkingChrome) ownerWorkingChrome.open = false;
+        mainWorkingSuppressed = true; // re-assert after setWorking(false) clear
         // Still settle activity chrome as a user boundary (no main bubble).
         closeTurn();
         return;
@@ -3776,11 +3818,65 @@ function parseAssistantMarkdown(text) {
   if (typeof LinkSafety !== 'undefined' && LinkSafety.ensureHtmlAnchors) {
     html = LinkSafety.ensureHtmlAnchors(html);
   }
+  // 🎯T326: 🎯Tn → hover hotspots (shared frontier-card render on decorate).
+  if (typeof TargetHotspot !== 'undefined' && TargetHotspot.linkifyTargetIDsInHTML) {
+    html = TargetHotspot.linkifyTargetIDsInHTML(html);
+  }
   return html;
 }
 function decorateBodyLinks(container) {
   if (typeof LinkSafety !== 'undefined' && LinkSafety.decorateContainer) {
     LinkSafety.decorateContainer(container);
+  }
+  // 🎯T326: attach InstantTip cards on .target-hotspot (same card as frontier).
+  if (typeof decorateTargetHotspots === 'function') {
+    decorateTargetHotspots(container);
+  }
+}
+// 🎯T326: resolve frontier row + attach shared formatTargetCardMarkdown tip.
+// Finger (hotspot) left; card opens right (PLACE_RIGHT_OF_HOST).
+function decorateTargetHotspots(container) {
+  if (!container || typeof container.querySelectorAll !== 'function') return;
+  if (typeof TargetHotspot === 'undefined' || typeof InstantTip === 'undefined') return;
+  if (typeof FrontierTable === 'undefined' || !FrontierTable.formatTargetCardMarkdown) return;
+  const nodes = container.querySelectorAll('.target-hotspot[data-target-id]');
+  if (!nodes || !nodes.length) return;
+  const rows = (typeof frontierModel !== 'undefined' && frontierModel && frontierModel.rows)
+    ? frontierModel.rows
+    : [];
+  for (let i = 0; i < nodes.length; i++) {
+    const el = nodes[i];
+    if (!el || el.dataset.tipAttached === '1') continue;
+    const tid = TargetHotspot.normalizeTargetID(el.getAttribute('data-target-id'));
+    if (!tid) continue;
+    let row = TargetHotspot.findRowByTargetID(rows, tid);
+    if (!row) row = TargetHotspot.minimalRowForID(tid);
+    const md = TargetHotspot.cardMarkdownForRow(row, FrontierTable.formatTargetCardMarkdown);
+    if (!md) continue;
+    let html = md;
+    // Shared markdown path with frontier cards (not a forked renderer).
+    try {
+      // Avoid re-linkifying inside the card (would nest hotspots).
+      const raw = (typeof MarkdownNormalize !== 'undefined')
+        ? MarkdownNormalize.ensureFenceNewlines(md)
+        : md;
+      html = marked.parse(raw == null ? '' : raw);
+      if (typeof LinkSafety !== 'undefined' && LinkSafety.ensureHtmlAnchors) {
+        html = LinkSafety.ensureHtmlAnchors(html);
+      }
+    } catch (_) { html = md; }
+    const plain = FrontierTable.formatTargetCardPlain
+      ? FrontierTable.formatTargetCardPlain(row)
+      : md;
+    const opts = TargetHotspot.hotspotCardOpts({
+      ariaLabel: plain,
+      placement: (InstantTip.PLACE_RIGHT_OF_HOST || 'right-of-host'),
+    });
+    const tip = InstantTip.attach(el, html, opts);
+    el.dataset.tipAttached = '1';
+    if (typeof renderMermaidIn === 'function' && tip) {
+      renderMermaidIn(tip);
+    }
   }
 }
 // 🎯T150: progressive stream paint via thetarnav/streaming-markdown (smd).
@@ -6261,7 +6357,28 @@ function submitWireText(t, opts) {
   navFocus = { zone: 'live' };
   liveDraftBackup = '';
   enterTrackBottom();
-  setWorking(true);
+  // 🎯T327: main WorkingProgress binds only to main-bound turns. Aside-routed
+  // wires (attention/target-aside, or opts.routed) leave main idle; aside pane
+  // owns working chrome. Suppress also blocks level/tool re-arm for this turn.
+  const isAside = (typeof isMainAsideWireUserText === 'function')
+    ? isMainAsideWireUserText
+    : null;
+  const plan = (typeof ChatEvents !== 'undefined' && ChatEvents.planMainWorkingAfterSend)
+    ? ChatEvents.planMainWorkingAfterSend(t, isAside, { routed: !!o.routed })
+    : {
+        openMainWorking: !(isAside && isAside(t)) && !(o && o.routed),
+        suppressMainWorking: !!(o && o.routed) || !!(isAside && isAside(t)),
+      };
+  if (plan.openMainWorking) {
+    mainWorkingSuppressed = false;
+    setWorking(true);
+  } else {
+    // Clear sticky main step/fleet/dots chrome so main looks not mid-request.
+    // setWorking(false) drops suppress for seal paths — re-assert after.
+    setWorking(false, undefined, { skipDrain: true });
+    mainWorkingSuppressed = true;
+    if (ownerWorkingChrome) ownerWorkingChrome.open = false;
+  }
   requestAnimationFrame(() => { scrollDown(); });
   if (typeof renderAttention === 'function') renderAttention();
   return true;
@@ -6862,6 +6979,9 @@ function recallHistory(dir) {
 let ownerWorkingChrome = (typeof ChatEvents !== 'undefined' && ChatEvents.createWorkingChrome)
   ? ChatEvents.createWorkingChrome()
   : { hadVisible: false, hadTool: false, silent: false, open: false };
+// 🎯T327: when the last owner send left main for an aside, keep main chrome
+// closed for the rest of that overseer turn (level samples / tool re-arms).
+let mainWorkingSuppressed = false;
 let workingEl = null;
 let workingProgress = '';
 let workingWatch = 0;
@@ -6906,8 +7026,13 @@ function onWorkingStuck() {
 // opts.skipDrain: clear chrome without auto-submitting the next queued item
 // (disconnect / offline). Normal seal drains FIFO (🎯T113).
 // opts.level: true when paint comes from T272 level sample (not send edge).
+// opts.force: open even when mainWorkingSuppressed (reserved; unused in product).
 function setWorking(on, progress, opts) {
   if (on) {
+    // 🎯T327: aside-routed turns own attention — do not open main chrome.
+    if (mainWorkingSuppressed && !(opts && opts.force)) {
+      return;
+    }
     if (typeof progress === 'string') workingProgress = progress;
     // Fresh owner-send: new chrome flags. Re-arm while open keeps flags
     // (tools-only end_turn + agent_note path — 🎯T260). Level re-arm after
@@ -6935,16 +7060,26 @@ function setWorking(on, progress, opts) {
     workingProgress = '';
     clearWorkingWatch();
     if (ownerWorkingChrome) ownerWorkingChrome.open = false;
+    // 🎯T327: non-level clear (seal/stuck/recovery) drops aside suppress.
+    // Level idle must not drop suppress mid aside-routed turn.
+    if (!(opts && opts.level)) mainWorkingSuppressed = false;
     // 🎯T113: when the in-flight turn seals, auto-submit the next queued item.
     if (!(opts && opts.skipDrain)) drainSendQueueIfIdle();
   } else {
     clearWorkingWatch();
     if (ownerWorkingChrome) ownerWorkingChrome.open = false;
+    if (!(opts && opts.level)) mainWorkingSuppressed = false;
   }
 }
 // 🎯T272: paint working chrome from a level sample (history_meta / status).
 // Open-turn fixture → working on; sealed history → idle (no stuck chrome).
+// 🎯T327: suppressed while last send was aside-routed — level must not reopen main.
 function applyWorkingLevelSample(sample) {
+  if (mainWorkingSuppressed) {
+    // Keep main idle for work that left main; do not re-arm from overseer busy.
+    if (workingEl) setWorking(false, undefined, { skipDrain: true, level: true });
+    return;
+  }
   const level = (typeof ChatEvents !== 'undefined' && ChatEvents.workingLevelFromSample)
     ? ChatEvents.workingLevelFromSample(sample)
     : !!(sample && (sample.working === true || sample.busy === true));
@@ -6958,7 +7093,8 @@ function applyWorkingLevelSample(sample) {
 }
 window.applyWorkingLevelSample = applyWorkingLevelSample;
 function updateWorkingProgress(text) {
-  if (!workingEl) return;
+  // 🎯T327: never bind step/fleet progress into main while aside owns the turn.
+  if (!workingEl || mainWorkingSuppressed) return;
   workingProgress = text || '';
   workingEl.innerHTML = workingLabelHTML();
   // Real mid-turn signal — reset idle clock so long healthy turns stay armed.
