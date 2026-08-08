@@ -5,8 +5,11 @@ package mcpserver
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/claudia"
 )
 
 // chainServer builds a Server whose fleet arm resolves to fake senders and
@@ -219,4 +222,135 @@ func TestSendToAgentShimRegistryAbsent(t *testing.T) {
 	if _, err := s.sendToAgent("some-worker", "", false); err == nil {
 		t.Fatal("empty text must error")
 	}
+}
+
+// 🎯T309.3 acceptance 2: authorization is decided on the single path by
+// lineage/policy. Every lineage relationship may talk; what is refused is the
+// identity claim — only the owner surface may speak as the owner.
+func TestAuthorizeDeliverOwnerOriginIsOwnerSurfaceOnly(t *testing.T) {
+	isOverseer := func(n string) bool { return n == "jevons" }
+
+	// The owner surface may assert owner origin.
+	rel, err := AuthorizeDeliver(nil, ActorOwnerSurface, "jevons", OriginOwner, isOverseer)
+	if err != nil {
+		t.Fatalf("owner surface denied: %v", err)
+	}
+	if rel != RelationOwnerSurface {
+		t.Fatalf("relation=%q", rel)
+	}
+
+	// A fleet agent may not — that would put words in the owner's mouth
+	// inside the overseer's session.
+	if _, err := AuthorizeDeliver(nil, "jevons-po", "jevons", OriginOwner, isOverseer); err == nil {
+		t.Fatal("a fleet agent must not be able to send as the owner")
+	}
+
+	// The same agent reaching the same target as itself is fine.
+	rel, err = AuthorizeDeliver(nil, "jevons-po", "jevons", OriginAgent, isOverseer)
+	if err != nil {
+		t.Fatalf("report up denied: %v", err)
+	}
+	if rel != RelationReportUp {
+		t.Fatalf("relation=%q want report_up", rel)
+	}
+}
+
+// Lineage classification: report up, direct down, self, peer — with the
+// overseer as the root that is ancestor of every agent.
+func TestClassifyDeliverLineage(t *testing.T) {
+	reg := newLineageRegistry(t, map[string]string{
+		"jevons-po": "jevons",
+		"worker-a":  "jevons-po",
+		"worker-b":  "jevons-po",
+		"other-po":  "jevons",
+		"worker-c":  "other-po",
+	})
+	isOverseer := func(n string) bool { return n == "jevons" }
+
+	cases := []struct {
+		actor, target string
+		want          DeliverRelation
+	}{
+		{"worker-a", "jevons-po", RelationReportUp},
+		{"worker-a", "jevons", RelationReportUp},
+		{"jevons-po", "worker-a", RelationDirectDown},
+		{"jevons", "worker-a", RelationDirectDown},
+		{"worker-a", "worker-a", RelationSelf},
+		{"worker-a", "worker-b", RelationPeer},
+		{"worker-a", "worker-c", RelationPeer},
+		{ActorOwnerSurface, "worker-a", RelationOwnerSurface},
+	}
+	for _, c := range cases {
+		if got := ClassifyDeliver(reg, c.actor, c.target, isOverseer); got != c.want {
+			t.Errorf("%s→%s = %q, want %q", c.actor, c.target, got, c.want)
+		}
+	}
+}
+
+// Peer traffic is permitted on purpose (🎯T309 acceptance 3): sibling workers
+// coordinating a shared workdir is ordinary, not an escalation.
+func TestAuthorizeDeliverPeersMayTalk(t *testing.T) {
+	reg := newLineageRegistry(t, map[string]string{
+		"jevons-po": "jevons",
+		"worker-a":  "jevons-po",
+		"worker-b":  "jevons-po",
+	})
+	isOverseer := func(n string) bool { return n == "jevons" }
+	rel, err := AuthorizeDeliver(reg, "worker-a", "worker-b", OriginAgent, isOverseer)
+	if err != nil {
+		t.Fatalf("peer messaging must be allowed: %v", err)
+	}
+	if rel != RelationPeer {
+		t.Fatalf("relation=%q want peer", rel)
+	}
+}
+
+// The policy is enforced on the delivery path itself, not only in the pure
+// helper: a fleet actor asserting owner origin is refused before any send.
+func TestDeliverByNameAsRefusesOwnerOriginFromFleet(t *testing.T) {
+	po := &fakeSender{alive: true}
+	s, inbox := chainServer(t, map[string]*fakeSender{"jevons-po": po})
+
+	_, err := s.deliverByNameAs("worker-a", "jevons", "owner says ship it", OriginOwner, false)
+	if err == nil {
+		t.Fatal("fleet actor asserting owner origin must be denied on the path")
+	}
+	if len(inbox.texts) != 0 {
+		t.Fatalf("denied send still delivered: %v", inbox.texts)
+	}
+
+	// The same message as an agent notification is fine.
+	if _, err := s.deliverByNameAs("worker-a", "jevons", "worker: ready to ship", OriginAgent, false); err != nil {
+		t.Fatalf("agent origin denied: %v", err)
+	}
+	if len(inbox.texts) != 1 {
+		t.Fatalf("overseer inbox=%v", inbox.texts)
+	}
+}
+
+// MCP jevons_agent_send cannot express owner origin at all: sendToAgent pins
+// OriginAgent, so the fleet surface has no way to claim the owner's voice.
+func TestSendToAgentCannotClaimOwnerOrigin(t *testing.T) {
+	s, inbox := chainServer(t, nil)
+	if _, err := s.sendToAgent("jevons", "report", false); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(inbox.origins) != 1 || inbox.origins[0] != OriginAgent {
+		t.Fatalf("origins=%v want [agent]", inbox.origins)
+	}
+}
+
+// newLineageRegistry builds a registry with the given name→parent tree.
+func newLineageRegistry(t *testing.T, parents map[string]string) *claudia.Registry {
+	t.Helper()
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, parent := range parents {
+		if _, err := reg.EnsureAgentWithParent(name, "/work/"+name, "", parent, false); err != nil {
+			t.Fatalf("EnsureAgentWithParent %s→%s: %v", name, parent, err)
+		}
+	}
+	return reg
 }

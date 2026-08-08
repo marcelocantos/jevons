@@ -91,10 +91,34 @@ func (s *Server) SetSenderResolver(fn senderResolver) {
 // deliverByName is THE agent-addressed delivery op of the fleet layer:
 // one call reaches ANY agent by name — worker, PO, or overseer — with
 // hierarchy carried by lineage rather than by which API the caller holds.
+// Delivery from the owner surface (and daemon-internal system notes); an
+// in-fleet sender uses deliverByNameAs so its lineage is on the record.
 func (s *Server) deliverByName(name, text string, origin SendOrigin, interrupt bool) (agentSendResult, error) {
+	return s.deliverByNameAs(ActorOwnerSurface, name, text, origin, interrupt)
+}
+
+// deliverByNameAs is the same path with the sender named, so authorization is
+// decided by lineage/policy here (🎯T309.3 acceptance 2) rather than by which
+// API the caller could reach. See deliver_policy.go for the rules.
+func (s *Server) deliverByNameAs(actor, name, text string, origin SendOrigin, interrupt bool) (agentSendResult, error) {
 	name = strings.TrimSpace(name)
+	actor = strings.TrimSpace(actor)
 	if name == "" || strings.TrimSpace(text) == "" {
 		return agentSendResult{}, fmt.Errorf("name and text are required")
+	}
+
+	rel, err := AuthorizeDeliver(s.registry, actor, name, origin, s.isOverseerAgent)
+	if err != nil {
+		slog.Warn("agent_send",
+			"component", "agent_send",
+			"name", name,
+			"actor", actor,
+			"relation", string(rel),
+			"origin", string(origin),
+			"status", "denied",
+			"err", err.Error(),
+		)
+		return agentSendResult{}, err
 	}
 
 	if s.isOverseerAgent(name) {
