@@ -20,6 +20,8 @@ package converge
 import (
 	"sort"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/converge/attenuate"
 )
 
 // Rung is one step on the escalation ladder, ordered by loudness.
@@ -156,6 +158,9 @@ type agentState struct {
 // concurrent use; the converge loop drives it from one goroutine.
 type Ladder struct {
 	agents map[string]*agentState
+	// atten is the optional 🎯T318 progress-attenuation policy. Nil means the
+	// ladder runs at full timing. See attenuation.go.
+	atten *attenuate.Attenuator
 }
 
 // NewLadder returns an empty ladder.
@@ -208,7 +213,10 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 			st.since = g.Since
 		}
 		dwell := now.Sub(st.since)
-		rung := dueRung(dwell, now, st)
+		// 🎯T318: visible progress shifts the thresholds out and caps how loud
+		// the ladder may get. It never removes the gap from the set.
+		effective, ceiling := l.attenuated(g.Agent, dwell, now)
+		rung := dueRung(effective, now, st, ceiling)
 		if rung == RungNone {
 			continue
 		}
@@ -262,6 +270,8 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 				Cause:    cause,
 			})
 		}
+		// 🎯T318: attenuation state dies with the gap, and only with the gap.
+		l.forgetAttenuation(agent)
 		delete(l.agents, agent)
 	}
 
@@ -270,9 +280,14 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 	return actions, closed
 }
 
-// dueRung picks the loudest rung whose dwell threshold has passed and whose
-// anti-thrash interval has elapsed (acceptance 4).
-func dueRung(dwell time.Duration, now time.Time, st *agentState) Rung {
+// dueRung picks the loudest rung at or below ceiling whose dwell threshold has
+// passed and whose anti-thrash interval has elapsed (acceptance 4).
+//
+// ceiling is 🎯T318's attenuation cap. It is an input to the choice rather
+// than a clamp on the result: a rung the ceiling excludes is skipped, and a
+// quieter rung is chosen only if it is itself due and past its own interval.
+// Clamping afterwards would fire the quieter rung out of turn and thrash.
+func dueRung(dwell time.Duration, now time.Time, st *agentState, ceiling Rung) Rung {
 	type step struct {
 		rung  Rung
 		after time.Duration
@@ -283,6 +298,9 @@ func dueRung(dwell time.Duration, now time.Time, st *agentState) Rung {
 		{RungOverseerNoise, OverseerNoiseAfter, OverseerNoiseEvery},
 		{RungRepressure, RepressureAfter, RepressureEvery},
 	} {
+		if s.rung > ceiling {
+			continue
+		}
 		if dwell < s.after {
 			continue
 		}
