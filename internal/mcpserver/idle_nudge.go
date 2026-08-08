@@ -876,11 +876,12 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	args.Server.mu.Unlock()
 
 	// After settle: dual path (events to PO+overseer, short resume to open-mission workers).
+	// 🎯T328: overseer also gets owner-intent-resume when chatlog has open work.
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(postDelay):
-		args.Server.NotifyDaemonRestarted(overseer, defaultPO)
+		args.Server.NotifyDaemonRestarted(overseer, defaultPO, stateDir)
 		args.Server.ResumeOpenMissionWorkers(overseer, stateDir, activity)
 	}
 
@@ -1220,11 +1221,17 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 	})
 }
 
-// NotifyDaemonRestarted sends daemon-restarted once per durable parent PO and
-// to the overseer (cockpit), each with a reattached-children summary (🎯T171).
+// NotifyDaemonRestarted sends restart recovery once per durable parent PO and
+// to the overseer (cockpit) (🎯T171 + 🎯T328).
+//
+//  1. Parent POs always get daemon-restarted (reattached children + silent OK).
+//  2. Overseer: when stateDir/chatlog yields a recoverable open owner
+//     instruction, deliver owner-intent-resume (forces real turn; not
+//     silent-idle-only). Otherwise daemon-restarted status path as before.
+//
 // Fire-and-forget; queues if busy. Does not short-resume workers — that is
-// ResumeOpenMissionWorkers.
-func (s *Server) NotifyDaemonRestarted(overseer, defaultPO string) {
+// ResumeOpenMissionWorkers. Residual: no chatlog / no recoverable intent.
+func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 	if s == nil || s.registry == nil {
 		return
 	}
@@ -1254,30 +1261,56 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO string) {
 	targets := DaemonRestartEventTargets(byParent, overseer, defaultPO)
 	allKids := FlattenWorkChildren(byParent)
 
+	// 🎯T328: recover open owner instruction for overseer resume (chatlog I/O).
+	openIntent := LoadOpenOwnerIntent(stateDir, overseer)
+	if openIntent.Recoverable() {
+		slog.Info("open owner intent recovered for post-restart resume",
+			"overseer", overseer, "runes", utf8RuneCount(openIntent.Text),
+			"source", openIntent.Source)
+	} else {
+		slog.Info("no recoverable open owner intent after restart",
+			"overseer", overseer, "residual", openIntent.Residual)
+	}
+
 	for _, target := range targets {
 		kids := byParent[target]
 		if target == overseer {
 			// Cockpit gets the full reattached fleet summary.
 			kids = allKids
 		}
+		event := eventDaemonRestarted
 		text := FormatDaemonRestartedText(target, kids)
-		msg := formatIdleNudgeWire(eventDaemonRestarted, text)
+		// Overseer only: when open owner work is recoverable, force resume turn.
+		if target == overseer && openIntent.Recoverable() {
+			event = eventOwnerIntentResume
+			text = FormatOverseerOpenIntentResume(openIntent, target, kids)
+		}
+		msg := formatIdleNudgeWire(event, text)
 		// Do not interrupt PO/overseer mid-turn — queue if busy.
 		res, err := s.sendToAgent(target, msg, false)
 		if err != nil {
-			slog.Warn("daemon-restarted event deliver failed",
-				"target", target, "workers", len(kids), "err", err)
-			s.logLifecycle(compIdleNudge, "daemon_restarted", "error", map[string]any{
+			slog.Warn("daemon restart resume event deliver failed",
+				"target", target, "event", event, "workers", len(kids), "err", err)
+			s.logLifecycle(compIdleNudge, event, "error", map[string]any{
 				"target": target, "workers": len(kids), "err": err.Error(),
+				"open_intent": openIntent.Recoverable(), "residual": openIntent.Residual,
 			})
 			continue
 		}
-		slog.Info("daemon-restarted event delivered",
-			"target", target, "workers", len(kids), "status", res.Status, "queued", res.Queued)
-		s.logLifecycle(compIdleNudge, "daemon_restarted", "ok", map[string]any{
+		slog.Info("daemon restart resume event delivered",
+			"target", target, "event", event, "workers", len(kids),
+			"status", res.Status, "queued", res.Queued,
+			"open_intent", openIntent.Recoverable(), "residual", openIntent.Residual)
+		s.logLifecycle(compIdleNudge, event, "ok", map[string]any{
 			"target": target, "workers": len(kids), "status": res.Status, "queued": res.Queued,
+			"open_intent": openIntent.Recoverable(), "residual": openIntent.Residual,
 		})
 	}
+}
+
+// utf8RuneCount is a tiny local helper for NotifyDaemonRestarted logs.
+func utf8RuneCount(s string) int {
+	return len([]rune(s))
 }
 
 // ResumeOpenMissionWorkers fire-and-forget short-resumes open-mission work

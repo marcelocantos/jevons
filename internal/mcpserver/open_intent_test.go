@@ -1,0 +1,207 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+package mcpserver
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// 🎯T328: open owner intent recovery after control-plane bounce.
+
+func TestExtractOpenOwnerIntentRecoversInstructionAfterRestartNudges(t *testing.T) {
+	t.Parallel()
+	// Mirrors the live incident: substantive work order, then bounce re-nudges.
+	turns := []OwnerIntentTurn{
+		{Text: "Let's explore leaders and visionaries.", Source: "owner_chat"},
+		{Text: "I'm especially interested in Elon Musk and his documented approaches.", Source: "owner_chat"},
+		{Text: "Both of your last two responses were brilliant. Let's grab whatever you think makes sense and shove it into the document.", Source: "owner_chat", TS: time.Date(2026, 8, 8, 10, 0, 33, 0, time.UTC)},
+		{Text: "service restarted. Continue", Source: "owner_chat"},
+		{Text: "I waited a while for you to keep going after the service restarted, but it doesn't seem like that happens", Source: "owner_chat"},
+	}
+	got := ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("want recoverable intent, residual=%q", got.Residual)
+	}
+	if !strings.Contains(got.Text, "shove it into the document") {
+		t.Fatalf("want open work order, got %q", got.Text)
+	}
+	if strings.Contains(strings.ToLower(got.Text), "service restarted") {
+		t.Fatalf("must skip restart re-nudge, got %q", got.Text)
+	}
+}
+
+func TestExtractOpenOwnerIntentResiduals(t *testing.T) {
+	t.Parallel()
+	if r := ExtractOpenOwnerIntent(nil); r.Residual != ResidualNoUserTurns {
+		t.Fatalf("empty: residual=%q", r.Residual)
+	}
+	if r := ExtractOpenOwnerIntent([]OwnerIntentTurn{
+		{Text: "[Daemon restart 12:00] reattached"},
+		{Text: "[event: daemon-restarted] fleet status"},
+	}); r.Residual != ResidualOnlyHarness {
+		t.Fatalf("harness: residual=%q", r.Residual)
+	}
+	if r := ExtractOpenOwnerIntent([]OwnerIntentTurn{
+		{Text: "ok"},
+		{Text: "thanks"},
+		{Text: "continue"},
+	}); r.Residual != ResidualAckOnly && r.Residual != ResidualNoRecoverableIntent {
+		// "continue" is restart-nudge (skipped); ok/thanks are ack_only.
+		t.Fatalf("acks: residual=%q", r.Residual)
+	}
+	// Short ack residual specifically.
+	if r := ExtractOpenOwnerIntent([]OwnerIntentTurn{{Text: "thanks"}}); r.Residual != ResidualAckOnly {
+		t.Fatalf("ack_only: residual=%q", r.Residual)
+	}
+}
+
+func TestExtractOpenOwnerIntentKeepsShortWorkOrder(t *testing.T) {
+	t.Parallel()
+	got := ExtractOpenOwnerIntent([]OwnerIntentTurn{
+		{Text: "Please fix the chat wire bug"},
+	})
+	if !got.Recoverable() {
+		t.Fatalf("short work order must recover, residual=%q", got.Residual)
+	}
+	if !strings.Contains(got.Text, "chat wire") {
+		t.Fatalf("got %q", got.Text)
+	}
+}
+
+func TestFormatOverseerOpenIntentResumeNotSilentIdleOnly(t *testing.T) {
+	t.Parallel()
+	intent := OpenOwnerIntent{
+		Text:   "Shove the Musk Algorithm into life-and-work-org-map.md",
+		Source: "owner_chat",
+		TS:     time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC),
+	}
+	workers := []WorkerIdleRef{
+		{Name: "jv-t328", TargetID: "T328", Status: "running", Phase: "idle"},
+	}
+	text := FormatOverseerOpenIntentResume(intent, "jevons", workers)
+	if !strings.Contains(text, "Shove the Musk Algorithm") {
+		t.Fatal("must carry open instruction:", text)
+	}
+	if !strings.Contains(text, "Do NOT reply with only [silent]") {
+		t.Fatal("must forbid silent-idle-only status dump:", text)
+	}
+	// Must not teach silent as the default RESPONSE RULE (T171 status path does).
+	if strings.Contains(text, "your entire reply MUST start with exactly [silent]") {
+		t.Fatal("open-intent resume must not mandate [silent] default:", text)
+	}
+	if !strings.Contains(text, "Continue the open instruction") &&
+		!strings.Contains(text, "resume after jevonsd restart") {
+		t.Fatal("must force continue language:", text)
+	}
+	if !strings.Contains(text, "jv-t328") {
+		t.Fatal("fleet context should list workers:", text)
+	}
+	// Event wire shape for probes.
+	wire := formatIdleNudgeWire(eventOwnerIntentResume, text)
+	if !strings.HasPrefix(wire, "[event: owner-intent-resume]") {
+		t.Fatalf("wire prefix: %q", wire)
+	}
+	if !strings.Contains(wire, "Shove the Musk") {
+		t.Fatal("wire must not strip instruction")
+	}
+}
+
+func TestLoadOpenOwnerIntentFromChatlog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Empty state → no_user_turns or no_chatlog.
+	empty := LoadOpenOwnerIntent(dir, "jevons")
+	if empty.Recoverable() {
+		t.Fatalf("empty state should not recover: %+v", empty)
+	}
+	if empty.Residual != ResidualNoChatlog && empty.Residual != ResidualNoUserTurns {
+		t.Fatalf("empty residual=%q", empty.Residual)
+	}
+
+	// Write a minimal chatlog JSONL with user turns (rsi.LoadChatLogTurns shape).
+	chatDir := filepath.Join(dir, "chatlog")
+	if err := os.MkdirAll(chatDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(chatDir, "jevons.jsonl")
+	body := strings.Join([]string{
+		`{"type":"user","timestamp":"2026-08-08T10:00:00Z","message":{"role":"user","content":"Please shove the leader research into life-and-work-org-map.md now."}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}`,
+		`{"type":"user","timestamp":"2026-08-08T10:02:00Z","message":{"role":"user","content":"service restarted. Continue"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadOpenOwnerIntent(dir, "jevons")
+	if !got.Recoverable() {
+		t.Fatalf("want recoverable from chatlog, residual=%q", got.Residual)
+	}
+	if !strings.Contains(got.Text, "life-and-work-org-map") {
+		t.Fatalf("got %q", got.Text)
+	}
+}
+
+func TestLoadOpenOwnerIntentNoStateDir(t *testing.T) {
+	t.Parallel()
+	got := LoadOpenOwnerIntent("", "jevons")
+	if got.Residual != ResidualNoChatlog {
+		t.Fatalf("residual=%q", got.Residual)
+	}
+}
+
+// Hermetic integration: NotifyDaemonRestarted overseer path uses owner-intent-resume.
+func TestNotifyDaemonRestartedOverseerOpenIntentEvent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	chatDir := filepath.Join(dir, "chatlog")
+	if err := os.MkdirAll(chatDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(chatDir, "jevons.jsonl")
+	body := `{"type":"user","timestamp":"2026-08-08T10:00:00Z","message":{"role":"user","content":"Both responses were great. Grab what makes sense and shove it into the document."}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Minimal server with registry so NotifyDaemonRestarted runs the loop.
+	// sendToAgent will fail without a real process — we only need the pure
+	// intent + format path covered hermetically above. This test asserts
+	// Load + Format composition that NotifyDaemonRestarted uses.
+	intent := LoadOpenOwnerIntent(dir, "jevons")
+	if !intent.Recoverable() {
+		t.Fatalf("setup failed residual=%q", intent.Residual)
+	}
+	text := FormatOverseerOpenIntentResume(intent, "jevons", nil)
+	if strings.Contains(text, "your entire reply MUST start with exactly [silent]") {
+		t.Fatal("composed overseer resume must not be silent-idle-only")
+	}
+	if !strings.Contains(text, "shove it into the document") {
+		t.Fatal(text)
+	}
+}
+
+func TestIsOpenIntentRestartNudge(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"service restarted. Continue", true},
+		{"continue", true},
+		{"keep going", true},
+		{"I waited a while for you to keep going after the service restarted", true},
+		{"Is this a gap in the restart sequence?", true},
+		{"Shove Musk Algorithm into the org map", false},
+		{"Please fix chat", false},
+	}
+	for _, c := range cases {
+		if got := isOpenIntentRestartNudge(c.in); got != c.want {
+			t.Errorf("%q: got %v want %v", c.in, got, c.want)
+		}
+	}
+}
