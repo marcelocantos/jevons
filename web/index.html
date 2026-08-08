@@ -97,7 +97,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    flex-shrink:0 on children — default flex-shrink:1 lets tall .msg items
    compress inside the scroller so scrollHeight under-reports and stick-to-
    bottom pins to a false mid-bubble "bottom" while tokens still arrive. */
-#messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
+/* 🎯T341: scrollbar-gutter:stable — overflow on/off must not shift #messages
+   content width (classic ~1px / gutter jiggle when height oscillates near fold). */
+#messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; scrollbar-gutter: stable; }
 #messages > * { flex-shrink: 0; }
 /* 🎯T56/T119: shell always in DOM; content only near viewport. Far shells
    freeze height (size cache) and drop bodies — content-visibility helps paint.
@@ -5219,6 +5221,9 @@ function ingestAsideWiresFromHistoryLines(lines) {
   }
 }
 function refreshAgents() {
+  if (typeof window.__layoutThrash === 'object' && window.__layoutThrash) {
+    window.__layoutThrash.refreshAgents = (window.__layoutThrash.refreshAgents || 0) + 1;
+  }
   // 🎯T200: portfolios woven into fleet tree under overseer (not a separate panel).
   Promise.all([
     fetch('/api/agents').then(r => r.json()),
@@ -5846,6 +5851,9 @@ function virtualizeMessages() {
   if (typeof VirtualList === 'undefined') return;
   // Re-entrancy guard: pin/scroll during virt must not nest another pass.
   if (_virtualizing) return;
+  if (typeof window.__layoutThrash === 'object' && window.__layoutThrash) {
+    window.__layoutThrash.virtualize = (window.__layoutThrash.virtualize || 0) + 1;
+  }
   _virtualizing = true;
   beginScrollBookkeeping();
   try {
@@ -5900,7 +5908,7 @@ function virtualizeMessages() {
     for (let k = 0; k < plan.remaining.length; k++) {
       scheduleRematerialize(plan.remaining[k].el);
     }
-    // Virtualise can change heights; re-pin only if still Tracking.
+    // 🎯T341: scrollDown gates on sub-threshold height/scrollTop (no-op when idle).
     if (isTracking()) scrollDown();
   } finally {
     endScrollBookkeeping();
@@ -5956,6 +5964,9 @@ function rematerializeMsg(el) {
     ? VirtualList.SHELL_MATERIAL
     : 'material';
   // After layout, record size at current width and release minHeight lock.
+  // 🎯T341: if measured height is within pin threshold of the lock, keep the
+  // lock (set to measured) instead of clearing — releasing a 1px-off lock
+  // is a common scrollHeight micro-oscillation under track pin.
   const settle = () => {
     if (!el.isConnected || el.classList.contains('virt-shell')) return;
     const nh = el.offsetHeight;
@@ -5966,7 +5977,14 @@ function rematerializeMsg(el) {
       }
       el._virtSize = { height: nh, width: nw };
     }
-    el.style.minHeight = '';
+    const thr = (typeof VirtualList !== 'undefined' && VirtualList.PIN_HEIGHT_THRESHOLD_PX != null)
+      ? VirtualList.PIN_HEIGHT_THRESHOLD_PX : 2;
+    const lockPx = parseFloat(el.style.minHeight) || 0;
+    if (nh > 0 && lockPx > 0 && Math.abs(nh - lockPx) <= thr) {
+      el.style.minHeight = nh + 'px';
+    } else {
+      el.style.minHeight = '';
+    }
     delete el._virtH;
     delete el._virtWasExpanded;
   };
@@ -6025,7 +6043,7 @@ function updateJumpFab() {
 }
 function jumpToBottom() {
   enterTrackBottom();
-  scrollDown();
+  scrollDown({ force: true });
   scheduleVirtualize();
   updateJumpFab();
 }
@@ -6034,7 +6052,7 @@ if (jumpBottomBtn) {
   jumpBottomBtn.addEventListener('mousedown', e => e.preventDefault());
 }
 
-// Expose for hermetic tests (🎯T56 / T76 / T119 / T246 / T336).
+// Expose for hermetic tests (🎯T56 / T76 / T119 / T246 / T336 / T341).
 window.virtualizeMessages = virtualizeMessages;
 window.dematerializeMsg = dematerializeMsg;
 window.rematerializeMsg = rematerializeMsg;
@@ -6046,6 +6064,10 @@ window.expandInViewNearEnd = expandInViewNearEnd;
 window.refreshLatestExpansion = refreshLatestExpansion;
 window.jumpToBottom = jumpToBottom;
 window.updateJumpFab = updateJumpFab;
+// 🎯T341: idle thrash counters (Playwright oracle). Reset with __layoutThrash = {}.
+if (typeof window.__layoutThrash !== 'object' || !window.__layoutThrash) {
+  window.__layoutThrash = { virtualize: 0, scrollDown: 0, scrollDownPinned: 0, refreshAgents: 0 };
+}
 window.renderUserText = renderUserText;
 window.startProgressiveHistoryLoad = startProgressiveHistoryLoad;
 window.setupInfiniteScroll = setupInfiniteScroll;
@@ -6055,15 +6077,69 @@ window.loadEarlierForOwner = function () { return loadEarlier({ owner: true }); 
 
 // Actuator: pin only while Tracking; re-check before every pin (incl. rAF).
 // 🎯T119.1: no-op during history replay burst (suppress parade).
-function scrollDown() {
+// 🎯T341: sub-threshold height / scrollTop noise does not rewrite scrollTop
+// (continuous ~1px jiggle). force:true for send / jump / stream growth.
+let _lastPinScrollHeight = 0;
+function scrollDown(opts) {
+  if (typeof window.__layoutThrash === 'object' && window.__layoutThrash) {
+    window.__layoutThrash.scrollDown = (window.__layoutThrash.scrollDown || 0) + 1;
+  }
   if (historyReplayActive) return;
   if (typeof VirtualList !== 'undefined' && VirtualList.shouldSuppressPinDuringReplay(historyReplayActive)) return;
   if (!isTracking()) return;
+  const force = !!(opts && opts.force);
+  const thr = (typeof VirtualList !== 'undefined' && VirtualList.PIN_HEIGHT_THRESHOLD_PX != null)
+    ? VirtualList.PIN_HEIGHT_THRESHOLD_PX
+    : 2;
+  // Fast path: already pinned and height stable — no bookkeeping / rAF thrash.
+  if (!force) {
+    const sh0 = msgs.scrollHeight;
+    const ch0 = msgs.clientHeight;
+    const st0 = msgs.scrollTop;
+    const want = (typeof VirtualList !== 'undefined' && VirtualList.shouldPinScroll)
+      ? VirtualList.shouldPinScroll({
+          force: false,
+          prevScrollHeight: _lastPinScrollHeight,
+          nextScrollHeight: sh0,
+          clientHeight: ch0,
+          scrollTop: st0,
+          threshold: thr,
+        })
+      : true;
+    if (!want) return;
+  }
   _pinningScroll = true;
   beginScrollBookkeeping();
   const pin = () => {
     if (historyReplayActive || !isTracking()) return;
-    msgs.scrollTop = msgs.scrollHeight;
+    const sh = msgs.scrollHeight;
+    const ch = msgs.clientHeight;
+    const st = msgs.scrollTop;
+    const should = force || !(typeof VirtualList !== 'undefined' && VirtualList.shouldPinScroll)
+      ? true
+      : VirtualList.shouldPinScroll({
+          force: force,
+          prevScrollHeight: _lastPinScrollHeight,
+          nextScrollHeight: sh,
+          clientHeight: ch,
+          scrollTop: st,
+          threshold: thr,
+        });
+    if (!should) return;
+    const target = (typeof VirtualList !== 'undefined' && VirtualList.finalPinScrollTop)
+      ? VirtualList.finalPinScrollTop(sh, ch)
+      : Math.max(0, sh - ch);
+    if (Math.abs(st - target) < 0.5 && Math.abs(sh - _lastPinScrollHeight) < thr) {
+      _lastPinScrollHeight = sh;
+      noteScrollMetrics();
+      return;
+    }
+    msgs.scrollTop = target;
+    _lastPinScrollHeight = sh;
+    if (typeof window.__layoutThrash === 'object' && window.__layoutThrash) {
+      window.__layoutThrash.scrollDownPinned =
+        (window.__layoutThrash.scrollDownPinned || 0) + 1;
+    }
     noteScrollMetrics();
   };
   pin();

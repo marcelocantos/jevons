@@ -108,6 +108,7 @@ test-ui:
 	node scripts/chat-ui-test/t164-aside-dismiss-test.js
 	node scripts/chat-ui-test/t241-alt-enter-test.js
 	node scripts/chat-ui-test/t289-paint-thrash-test.js
+	node scripts/chat-ui-test/t341-jiggle-thrash-test.js
 	node scripts/chat-ui-test/t309.1-conversation-widget-test.js
 	node scripts/chat-ui-test/t340-frontier-table-layout-test.js
 

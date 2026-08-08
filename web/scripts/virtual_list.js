@@ -76,6 +76,20 @@
     return bot > st && t < viewBot;
   }
 
+  // Overlap of [top, top+height) with the strict viewport (px). 🎯T341.
+  function visibleOverlapPx(top, height, scrollTop, clientHeight) {
+    const t = Number(top) || 0;
+    const h = Number(height) || 0;
+    const st = Number(scrollTop) || 0;
+    const ch = Number(clientHeight) || 0;
+    if (h <= 0 || ch <= 0) return 0;
+    const bot = t + h;
+    const viewBot = st + ch;
+    const oTop = Math.max(t, st);
+    const oBot = Math.min(bot, viewBot);
+    return Math.max(0, oBot - oTop);
+  }
+
   // Fully scrolled above the fold (typical: newer messages pushed this up).
   function isFullyAboveViewport(top, height, scrollTop) {
     const t = Number(top) || 0;
@@ -99,6 +113,11 @@
   // 🎯T261: near the live end of the transcript (stick-to-bottom / post-pin).
   // Default slack matches typical jump-to-bottom hysteresis (~48px).
   const NEAR_END_SLACK_PX = 48;
+  // 🎯T341: require real ink in view to auto-expand — a 1px edge contact
+  // plus expand→pin→fully-above→collapse is the continuous jiggle loop.
+  // Collapse still uses fully-outside (overlap 0), so enter≥8 / leave=0
+  // hysteresis stops band-edge thrash.
+  const MIN_VISIBLE_PX_FOR_AUTO_EXPAND = 8;
   function isNearTranscriptEnd(scrollTop, scrollHeight, clientHeight, slackPx) {
     const slack = slackPx == null ? NEAR_END_SLACK_PX : Number(slackPx);
     const st = Number(scrollTop) || 0;
@@ -112,13 +131,18 @@
   // should be auto-expanded — not only the single latest message. Covers hard
   // reload after history pin and stick-to-bottom re-render. Mid-history free
   // scroll stays nearEnd=false so older rows are not force-opened.
+  // 🎯T341: min visible px (default MIN_VISIBLE_PX_FOR_AUTO_EXPAND) for enter.
   function shouldAutoExpandInView(opts) {
     const o = opts || {};
     if (o.userToggled) return false;
     if (!o.tall) return false;
     if (!o.nearEnd) return false;
     if (o.historyReplayActive) return false;
-    return anyPartInViewport(o.top, o.height, o.scrollTop, o.clientHeight);
+    const minPx = o.minVisiblePx != null
+      ? Number(o.minVisiblePx)
+      : MIN_VISIBLE_PX_FOR_AUTO_EXPAND;
+    const need = Number.isFinite(minPx) && minPx > 0 ? minPx : MIN_VISIBLE_PX_FOR_AUTO_EXPAND;
+    return visibleOverlapPx(o.top, o.height, o.scrollTop, o.clientHeight) >= need;
   }
 
   // Mid history-replay the viewport sits at the top; geometry is not the
@@ -126,6 +150,28 @@
   function shouldRunOffScreenCollapse(historyReplayActive) {
     return !historyReplayActive;
   }
+
+  // 🎯T341: stick-to-bottom pin gate. Micro height / scrollTop noise (subpixel
+  // remat settle, 1px shell thrash) must not rewrite scrollTop every frame —
+  // that is the continuous whole-page text jiggle while "idle".
+  // force: true always pins (send, jump-to-bottom, stream growth path).
+  const PIN_HEIGHT_THRESHOLD_PX = 2;
+  function shouldPinScroll(opts) {
+    const o = opts || {};
+    if (o.force) return true;
+    const thr = o.threshold != null ? Number(o.threshold) : PIN_HEIGHT_THRESHOLD_PX;
+    const t = Number.isFinite(thr) && thr >= 0 ? thr : PIN_HEIGHT_THRESHOLD_PX;
+    const prevH = Number(o.prevScrollHeight) || 0;
+    const nextH = Number(o.nextScrollHeight) || 0;
+    if (Math.abs(nextH - prevH) >= t) return true;
+    const ch = Number(o.clientHeight) || 0;
+    const st = Number(o.scrollTop) || 0;
+    const target = finalPinScrollTop(nextH, ch);
+    return Math.abs(st - target) >= t;
+  }
+
+  // 🎯T341: ignore sub-pixel container width jitter (scrollbar gutter, flex).
+  const WIDTH_INVALIDATE_EPS_PX = 1;
 
   // Count how many items would stay materialised for a long list
   // scrolled to the bottom (oracle for "bounded DOM work").
@@ -522,7 +568,8 @@
     const next = Number(nextWidth);
     if (!(next > 0)) return false;
     if (!(prev > 0)) return true; // first known width after unknown
-    return prev !== next;
+    // 🎯T341: sub-pixel / scrollbar-gutter jitter must not nuke the size cache.
+    return Math.abs(prev - next) >= WIDTH_INVALIDATE_EPS_PX;
   }
 
   // Near-viewport first remeasure order after width invalidate.
@@ -671,6 +718,9 @@
     return Math.max(0, sh - ch);
   }
 
+  // Note: shouldPinScroll (above) calls finalPinScrollTop at runtime — both
+  // are function declarations in this factory so hoisting is fine.
+
   return {
     DEFAULT_BUFFER: DEFAULT_BUFFER,
     DEFAULT_ESTIMATE_HEIGHT: DEFAULT_ESTIMATE_HEIGHT,
@@ -681,12 +731,17 @@
     visibleIndices: visibleIndices,
     shouldMaterialize: shouldMaterialize,
     anyPartInViewport: anyPartInViewport,
+    visibleOverlapPx: visibleOverlapPx,
     isFullyAboveViewport: isFullyAboveViewport,
     shouldAutoCollapseOffScreen: shouldAutoCollapseOffScreen,
     NEAR_END_SLACK_PX: NEAR_END_SLACK_PX,
+    MIN_VISIBLE_PX_FOR_AUTO_EXPAND: MIN_VISIBLE_PX_FOR_AUTO_EXPAND,
     isNearTranscriptEnd: isNearTranscriptEnd,
     shouldAutoExpandInView: shouldAutoExpandInView,
     shouldRunOffScreenCollapse: shouldRunOffScreenCollapse,
+    PIN_HEIGHT_THRESHOLD_PX: PIN_HEIGHT_THRESHOLD_PX,
+    shouldPinScroll: shouldPinScroll,
+    WIDTH_INVALIDATE_EPS_PX: WIDTH_INVALIDATE_EPS_PX,
     materialisedCount: materialisedCount,
     enterLeaveBand: enterLeaveBand,
 

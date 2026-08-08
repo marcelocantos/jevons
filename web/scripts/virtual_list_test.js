@@ -779,6 +779,104 @@ test('T119.1 suppress pin during replay; final pin at bottom', function () {
   assert.ok(VL.REPLAY_IDLE_END_MS >= 50 && VL.REPLAY_IDLE_END_MS <= 500);
 });
 
+// ── 🎯T341: pin threshold + expand-edge hysteresis + width eps ────────
+
+test('T341 shouldPinScroll: sub-threshold height/scrollTop is no-op; force always', function () {
+  assert.strictEqual(VL.shouldPinScroll({ force: true }), true);
+  // Already at bottom, same height → no pin
+  assert.strictEqual(VL.shouldPinScroll({
+    prevScrollHeight: 1000,
+    nextScrollHeight: 1000,
+    clientHeight: 300,
+    scrollTop: 700,
+  }), false);
+  // 1px height micro-change while already pinned → no pin
+  assert.strictEqual(VL.shouldPinScroll({
+    prevScrollHeight: 1000,
+    nextScrollHeight: 1001,
+    clientHeight: 300,
+    scrollTop: 700,
+  }), false);
+  // ≥2px height growth → pin
+  assert.strictEqual(VL.shouldPinScroll({
+    prevScrollHeight: 1000,
+    nextScrollHeight: 1002,
+    clientHeight: 300,
+    scrollTop: 700,
+  }), true);
+  // Drifted off bottom by ≥ threshold → pin even if height flat
+  assert.strictEqual(VL.shouldPinScroll({
+    prevScrollHeight: 1000,
+    nextScrollHeight: 1000,
+    clientHeight: 300,
+    scrollTop: 698,
+  }), true);
+  // Accumulated growth from last pin height
+  assert.strictEqual(VL.shouldPinScroll({
+    prevScrollHeight: 1000,
+    nextScrollHeight: 1005,
+    clientHeight: 300,
+    scrollTop: 700,
+  }), true);
+});
+
+test('T341 visibleOverlapPx + auto-expand min-visible hysteresis', function () {
+  // Bubble fully in view
+  assert.strictEqual(VL.visibleOverlapPx(100, 50, 0, 300), 50);
+  // 1px edge contact
+  assert.strictEqual(VL.visibleOverlapPx(299, 50, 0, 300), 1);
+  // Fully above
+  assert.strictEqual(VL.visibleOverlapPx(0, 50, 100, 300), 0);
+  // 1px contact must NOT auto-expand (enter threshold 8)
+  assert.strictEqual(VL.shouldAutoExpandInView({
+    tall: true, nearEnd: true, userToggled: false, historyReplayActive: false,
+    top: 299, height: 50, scrollTop: 0, clientHeight: 300,
+  }), false);
+  // ≥8px overlap does expand
+  assert.strictEqual(VL.shouldAutoExpandInView({
+    tall: true, nearEnd: true, userToggled: false, historyReplayActive: false,
+    top: 292, height: 50, scrollTop: 0, clientHeight: 300,
+  }), true);
+  // Collapse still only when fully outside (1px remaining keeps open)
+  assert.strictEqual(VL.shouldAutoCollapseOffScreen({
+    isLatest: false, userToggled: false, autoExpanded: true,
+    top: 299, height: 50, scrollTop: 0, clientHeight: 300,
+  }), false);
+  assert.strictEqual(VL.shouldAutoCollapseOffScreen({
+    isLatest: false, userToggled: false, autoExpanded: true,
+    top: 0, height: 50, scrollTop: 100, clientHeight: 300,
+  }), true);
+  assert.ok(VL.MIN_VISIBLE_PX_FOR_AUTO_EXPAND >= 4);
+  assert.ok(VL.PIN_HEIGHT_THRESHOLD_PX >= 1);
+});
+
+test('T341 shouldInvalidateSizeCache ignores sub-pixel width jitter', function () {
+  assert.strictEqual(VL.shouldInvalidateSizeCache(600, 600), false);
+  assert.strictEqual(VL.shouldInvalidateSizeCache(600, 600.4), false);
+  assert.strictEqual(VL.shouldInvalidateSizeCache(600, 599.6), false);
+  assert.strictEqual(VL.shouldInvalidateSizeCache(600, 601), true);
+  assert.strictEqual(VL.shouldInvalidateSizeCache(600, 480), true);
+  assert.ok(VL.WIDTH_INVALIDATE_EPS_PX >= 1);
+});
+
+test('index.html wires T341 pin gate + scrollbar-gutter + thrash counters', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('shouldPinScroll') >= 0, 'shouldPinScroll wired');
+  assert.ok(html.indexOf('PIN_HEIGHT_THRESHOLD_PX') >= 0, 'pin threshold wired');
+  assert.ok(html.indexOf('scrollbar-gutter: stable') >= 0 || html.indexOf('scrollbar-gutter:stable') >= 0,
+    'scrollbar-gutter stable on #messages');
+  assert.ok(html.indexOf('__layoutThrash') >= 0, 'idle thrash counters exposed');
+  assert.ok(html.indexOf('scrollDownPinned') >= 0, 'pinned-write counter');
+  // work-dots must stay opacity-only (no transform layout shift)
+  const bounce = html.indexOf('@keyframes work-bounce');
+  assert.ok(bounce >= 0);
+  const frame = html.slice(bounce, bounce + 120);
+  assert.ok(frame.indexOf('opacity') >= 0, 'work-bounce uses opacity');
+  assert.ok(frame.indexOf('transform') < 0, 'work-bounce must not transform');
+});
+
 test('index.html wires T261 expandInViewNearEnd + suppress collapse mid-replay', function () {
   const fs = require('fs');
   const path = require('path');
@@ -798,7 +896,7 @@ test('index.html wires historyReplayActive suppress on scrollDown', function () 
   assert.ok(html.indexOf('beginHistoryReplay') >= 0);
   assert.ok(html.indexOf('endHistoryReplayAndPin') >= 0);
   assert.ok(html.indexOf('historyReplayActive') >= 0);
-  assert.ok(/function scrollDown\(\)[\s\S]{0,200}historyReplayActive/.test(html),
+  assert.ok(/function scrollDown\([^)]*\)[\s\S]{0,400}historyReplayActive/.test(html),
     'scrollDown checks historyReplayActive');
   assert.ok(html.indexOf("endHistoryReplayAndPin('history_meta')") >= 0 ||
     html.indexOf('endHistoryReplayAndPin("history_meta")') >= 0 ||
