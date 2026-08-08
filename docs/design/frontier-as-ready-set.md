@@ -156,13 +156,17 @@ Recommendation categories used: **implement under T254.*** / **new leaf** / **al
 1. **Docs/tool copy:** reword `bullseye_convergence` and agents-guide "next most-valuable" → **ready-set focus recommendation** (single-agent / human bottleneck). Keep parallel-frontier recommendation path first-class.
 2. **UX copy:** any CLI/MCP summary that says "the next ticket" → "recommended focus among ready leaves" / list the set.
 3. **assign/unassign:** keep as ownership exclusion (already correct); docs should say exclusion ≠ queue head.
-4. **No** Beads dual-write; **no** factory spawn inside bullseye.
+4. **Frontier ranking:** optional policy signal (unblocking fanout, portfolio WSJF), **not permission** — never a serialisation constraint on spawn or a claim of exclusive readiness.
+5. **No** Beads dual-write; **no** factory spawn inside bullseye.
 
 ### Jevons-side candidates
 
 1. **Doctrine inject** (T262.1 land): ready-set language in persona, AGENTS, fleet brief.
 2. **T254.1–T254.6** remain the factory Build leaves — **parked until owner opens Build after T262.4**.
-3. Spawn caps / factory posture / worktrees / inbox = T254.*, not new T262 Build children unless owner wants a thinner slice.
+3. **Spawn caps / factory posture:** T254.6 (+ optional cap config) — Jevons-side, never a bullseye feature.
+4. **Engagement UI:** overlay, stop, exclusive engage already shipped (T198/T222); deepen only under factory Build, not in the ledger.
+5. **Factory continuity without Beads mail:** structured finish/block notices (T254.4) + stuck/idle patrol (T254.5, on today's T236/T244) — Jevons carries continuity; no mail-bus ledger.
+6. All of the above are T254.*, not new T262 Build children unless owner wants a thinner slice.
 
 ### Out of scope
 

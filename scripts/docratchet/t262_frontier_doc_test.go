@@ -79,3 +79,70 @@ func TestT262FrontierDesignPacket(t *testing.T) {
 		}
 	}
 }
+
+// TestT262CrossProductOwnership ratchets the 🎯T262.3 packet: every
+// Beads-ish surface is assigned to Bullseye / Jevons / neither, the
+// per-product candidate lists stay explicit, and the out-of-scope list
+// (including no Beads dual-write) survives. Not an implementation of any
+// candidate; not an unpark of T254.
+func TestT262CrossProductOwnership(t *testing.T) {
+	body := readRepo(t, "docs/design/frontier-as-ready-set.md")
+
+	// Acceptance 1: the ownership table exists with the three-way split
+	// and rules Beads dual-write out rather than planning it.
+	table := []string{
+		"| Bullseye ledger | Jevons factory | Neither |",
+		"Dual-write Beads ledger",
+		"Beads dual-write",
+		"\"Next ticket\" total order",
+		"**Must not claim**",
+	}
+	for _, m := range table {
+		if !strings.Contains(body, m) {
+			t.Errorf("ownership table missing marker %q", m)
+		}
+	}
+
+	// Acceptance 2: bullseye-side candidates — next-ticket UX language,
+	// assign/unassign semantics, ranking as optional policy not permission.
+	bullseyeSide := []string{
+		"Bullseye-side candidates",
+		"next most-valuable",
+		"assign/unassign",
+		"exclusion ≠ queue head",
+		"Optional policy signal",
+		"not permission",
+	}
+	for _, m := range bullseyeSide {
+		if !strings.Contains(body, m) {
+			t.Errorf("bullseye-side candidates missing marker %q", m)
+		}
+	}
+
+	// Acceptance 3: jevons-side candidates — spawn caps, engagement UI,
+	// factory continuity without a Beads mail bus.
+	jevonsSide := []string{
+		"Jevons-side candidates",
+		"Spawn caps",
+		"Engagement UI",
+		"Factory continuity without Beads mail",
+	}
+	for _, m := range jevonsSide {
+		if !strings.Contains(body, m) {
+			t.Errorf("jevons-side candidates missing marker %q", m)
+		}
+	}
+
+	// Acceptance 4: the out-of-scope list stays explicit.
+	outOfScope := []string{
+		"### Out of scope",
+		"second ledger",
+		"Unparking T254",
+		"Changing bullseye graph math",
+	}
+	for _, m := range outOfScope {
+		if !strings.Contains(body, m) {
+			t.Errorf("out-of-scope list missing marker %q", m)
+		}
+	}
+}
