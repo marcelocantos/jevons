@@ -16,6 +16,7 @@ These tests are **not** user journeys (🎯T107). They do not start
 | T156 relay self-host | That README names URL+token auth (`PIGEON_TOKEN` / `TERN_TOKEN`), self-host-only scope, copy-paste `go build -o pigeon`, and forbids author messaging for tokens / free-tier Fly claims. Not a live deploy. |
 | T191 restart-daily | `scripts/restart-daily-jevonsd.sh` exists, executable, `/bin/bash -n`, `--help`/`--dry-run`, nohup/setsid detach markers; persona/AGENTS/agents-guide carry T188+T191 doctrine. Not a live daily bounce. |
 | T194 daily-path achieve | persona/AGENTS/agents-guide/fleet_brief carry doctrine: daemon/API not achieved on hermetics alone; restart-daily + live probe; `HasDailyPathEvidence`. Pure classifier tests live in `internal/mcpserver`. Not a live daily bounce. |
+| T262.2 frontier map | `docs/design/frontier-as-ready-set.md` keeps the worker-per-leaf map (T155/T193/T198/T222 + T254.1–T254.6 residuals), the policy-on-set classification (capacity / shared-file ownership / design-park filters / churn ≠ global queue), a disposition per residual, and the no-unpark / no-T262.4 non-claims. Not a live spawn. |
 | T197 worker names | Doctrine surfaces + `agents.go` spawn tool keep hierarchical worker-name examples with **literal dots** (`jv-t27.2-config` not `jv-t272-config`); flat residual `jv-t159-seal`. Spawn path hermetic: `TestEnsureAgentPreservesLiteralDotsInName`. |
 | Daily port | Lives in `scripts/journey-suite/portguard` — real function unit test, not a doc grep. |
 

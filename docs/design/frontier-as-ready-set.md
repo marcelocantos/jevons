@@ -112,6 +112,8 @@ for leaf in ready_set:
 | Structured finish → parent | Partial (event push / reap) | **T254.4** fleet ops inbox |
 | Stuck/idle recovery | T236/T244 | **T254.5** standing product path |
 
+**Classification (explicit):** capacity, shared-file ownership, design/parked/needs-owner filters, and frontier churn are **policy-on-set** — filters and rate limits applied to the ready set — **not reasons to restore a global queue**. Each constrains *which* leaves get an implementer *now*; none reintroduces a total order or a privileged "next ticket."
+
 ### Residual recommendations (each residual)
 
 | Residual | Recommendation |
@@ -124,6 +126,8 @@ for leaf in ready_set:
 | Patrol / GUPP | **T254.5** — deepen existing recovery |
 | Ranking as "the answer" | **Already sufficient** as optional focus; fix **language** (bullseye-po) |
 | Beads dual-write for continuity | **Out of scope** — map gaps to T254 family only |
+
+Recommendation categories used: **implement under T254.*** / **new leaf** / **already sufficient** / **defer**. No residual requires a **new leaf**: every gap maps to an existing T254.1–T254.6 child, is already sufficient, or is deferred/out of scope — filing new Build leaves under T262 stays owner-gated (§7).
 
 ---
 
