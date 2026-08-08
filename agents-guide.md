@@ -44,9 +44,12 @@ Same-machine browser use is the supported docs-only path today.
    ```bash
    lsof -iTCP:13705 -sTCP:LISTEN
    ```
-5. **Optional device pair** — `jevonsd --pair <id> --relay <url>` + Jevon iOS
-   app QR scan (source under `ios/`; no App Store binary yet; full
-   onboarding is 🎯T14).
+5. **Optional device pair** — self-host a [pigeon](https://github.com/marcelocantos/pigeon)
+   relay (mint your own `PIGEON_TOKEN` / `TERN_TOKEN`; do not message the
+   author), then `jevonsd --pair <id> --relay <your-url> --relay-token …`
+   + Jevon iOS QR scan (source under `ios/`; no App Store binary yet; full
+   onboarding is 🎯T14). See README [Pair a device](README.md#pair-a-device)
+   (🎯T156).
 6. **MCP attach**: on boot, jevonsd auto-registers its HTTP MCP into the
    overseer's client config when possible. For an external MCP client
    (e.g. Claude Code talking *to* jevons), after restarting that client:

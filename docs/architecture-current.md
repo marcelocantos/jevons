@@ -240,15 +240,18 @@ does not depend on the provider's private store (🎯T30.1).
 ## Security posture (honest)
 
 Built: default bind is **loopback-only** (`127.0.0.1` / 🎯T6) unless
-`bind_addr` / `--bind` deliberately widens it; remote devices use the
-pigeon relay, not LAN exposure; mTLS CA + QR device provisioning
+`bind_addr` / `--bind` deliberately widens it; remote devices use a
+**self-hosted** [pigeon](https://github.com/marcelocantos/pigeon) relay
+(URL + optional bearer token: pigeon `PIGEON_TOKEN` ↔ jevonsd
+`--relay-token` / `TERN_TOKEN` — mint yourself; no author-issued free
+tier, 🎯T156), not LAN exposure; mTLS CA + QR device provisioning
 available when enabled; origin-safe WebSockets and CSRF guards on
 mutating routes (🎯T38); cost clamp-down bypass hardening (🎯T36.1).
 Not yet: mTLS off by default; workers and the overseer still run
 permissions-bypassed (worker execution gating is 🎯T8.3 post-MVP);
-stranger-ready device onboarding (App Store binary + `jevons --init`) is
-still 🎯T14. Treat a default install as single-trusted-operator,
-single-machine.
+stranger-ready device onboarding (App Store binary + `jevons --init` +
+public multi-tenant free-tier relay) is still 🎯T14 / residual of 🎯T47.
+Treat a default install as single-trusted-operator, single-machine.
 
 ## Voice
 
