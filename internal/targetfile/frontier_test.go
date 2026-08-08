@@ -180,3 +180,86 @@ func TestIsSetAsideStatus(t *testing.T) {
 		t.Fatal("achieved/identified must not count as set_aside")
 	}
 }
+
+// 🎯T338: T10 parent with active T10.2–T10.6 children carries ActiveChildren;
+// ready child leaf has empty ActiveChildren.
+const t338ParentChildrenLedger = `
+targets:
+  T10:
+    name: sqlpipe-based state sync
+    status: converging
+    cost: 13
+    value: 20
+    context: needs CGO Peer rebuild
+  T10.2:
+    name: Server Peer + owned tables
+    status: identified
+    cost: 8
+  T10.3:
+    name: Client requests path
+    status: converging
+  T10.6:
+    name: Product cutover
+    status: identified
+    depends_on:
+    - T10.2
+  T11:
+    name: Ordinary ready leaf
+    status: identified
+  T100:
+    name: Unrelated not child of T10
+    status: identified
+`
+
+func TestFrontierLeavesActiveChildrenCarried(t *testing.T) {
+	leaves, err := FrontierLeaves([]byte(t338ParentChildrenLedger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]FrontierLeaf{}
+	for _, l := range leaves {
+		byID[l.ID] = l
+	}
+	t10, ok := byID["T10"]
+	if !ok {
+		t.Fatalf("T10 missing from frontier leaves %v", keysOf(byID))
+	}
+	// Active children only (T10.6 depends on open T10.2 so not frontier-ready,
+	// but still active hierarchical child of T10).
+	wantKids := map[string]bool{"T10.2": true, "T10.3": true, "T10.6": true}
+	if len(t10.ActiveChildren) != 3 {
+		t.Fatalf("T10 ActiveChildren = %v, want 3 kids", t10.ActiveChildren)
+	}
+	for _, c := range t10.ActiveChildren {
+		if !wantKids[c] {
+			t.Fatalf("unexpected child %s in %v", c, t10.ActiveChildren)
+		}
+	}
+	// Ready child leaf T10.2 has no further active descendants.
+	t102, ok := byID["T10.2"]
+	if !ok {
+		t.Fatal("T10.2 must still be a frontier leaf")
+	}
+	if len(t102.ActiveChildren) != 0 {
+		t.Fatalf("T10.2 ActiveChildren = %v, want empty", t102.ActiveChildren)
+	}
+	// Digit-safe: T100 is not a child of T10.
+	for _, c := range t10.ActiveChildren {
+		if c == "T100" {
+			t.Fatal("T100 must not count as child of T10")
+		}
+	}
+	if _, ok := byID["T11"]; !ok {
+		t.Fatal("ordinary ready leaf T11 missing")
+	}
+}
+
+func TestHierarchicalChildOf(t *testing.T) {
+	if !HierarchicalChildOf("T10", "T10.2") || !HierarchicalChildOf("T10", "T10.2.1") {
+		t.Fatal("expected hierarchical children")
+	}
+	if HierarchicalChildOf("T10", "T10") || HierarchicalChildOf("T1", "T10") ||
+		HierarchicalChildOf("T10", "T100") || HierarchicalChildOf("T10", "T11") {
+		t.Fatal("digit-safe / non-child cases")
+	}
+}

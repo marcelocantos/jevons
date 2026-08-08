@@ -499,6 +499,164 @@ targets:
 	}
 }
 
+// 🎯T338: parent with active children parks; ready child leaf still spawns.
+func TestSweepFrontierConsumeParentActiveChildrenParkNotSpawn(t *testing.T) {
+	spawned := 0
+	var spawnedIDs []string
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{
+				ID: "T10", Name: "sqlpipe-based state sync",
+				ActiveChildren: []string{"T10.2", "T10.3", "T10.6"},
+				Cost:           13, Context: "needs CGO Peer",
+			},
+			{ID: "T10.2", Name: "Server Peer + owned tables", Cost: 8},
+			{ID: "T500", Name: "Ordinary ready Build leaf"},
+		},
+		Now:               frontierNow(),
+		PORegistered:      true,
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(leaf poproactive.LeafObs, _ string) error {
+			spawned++
+			spawnedIDs = append(spawnedIDs, leaf.ID)
+			return nil
+		},
+	})
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	r10 := byID["T10"]
+	if r10.Action != FrontierConsumePark || r10.Reason != FrontierReasonParentActiveChildren {
+		t.Fatalf("T10: action=%s reason=%s want park/skip_parent_with_active_children (%+v)",
+			r10.Action, r10.Reason, r10)
+	}
+	if !strings.Contains(r10.Err, "parent-with-active-children") || !strings.Contains(r10.Err, "T10.2") {
+		t.Fatalf("T10 park err should name parent-with-active-children + kids: %q", r10.Err)
+	}
+	if byID["T10.2"].Action != FrontierConsumeSpawn {
+		t.Fatalf("ready child leaf must still spawn: %+v", byID["T10.2"])
+	}
+	if byID["T500"].Action != FrontierConsumeSpawn {
+		t.Fatalf("ordinary ready leaf must still spawn: %+v", byID["T500"])
+	}
+	for _, id := range spawnedIDs {
+		if id == "T10" {
+			t.Fatal("T10 parent must not be spawned")
+		}
+	}
+	if spawned != 2 {
+		t.Fatalf("spawned=%d want 2 (parent parked)", spawned)
+	}
+}
+
+// 🎯T338: high-infra sqlpipe/CGO parks unless unattended-safe / force-engage.
+func TestSweepFrontierConsumeHighInfraPark(t *testing.T) {
+	spawned := 0
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{ID: "T10a", Name: "sqlpipe state sync", Cost: 13, Context: "CGO Peer"},
+			{ID: "T10b", Name: "sqlpipe state sync", Cost: 13, Tags: []string{"unattended-safe"}},
+			{ID: "T10c", Name: "sqlpipe state sync", Cost: 13, Tags: []string{"force-engage"}},
+		},
+		Now:               frontierNow(),
+		PORegistered:      true,
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(poproactive.LeafObs, string) error {
+			spawned++
+			return nil
+		},
+	})
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	if byID["T10a"].Action != FrontierConsumePark || byID["T10a"].Reason != FrontierReasonHighInfra {
+		t.Fatalf("T10a: %+v", byID["T10a"])
+	}
+	if byID["T10b"].Action != FrontierConsumeSpawn {
+		t.Fatalf("unattended-safe must spawn: %+v", byID["T10b"])
+	}
+	if byID["T10c"].Action != FrontierConsumeSpawn {
+		t.Fatalf("force-engage must spawn: %+v", byID["T10c"])
+	}
+	if spawned != 2 {
+		t.Fatalf("spawned=%d want 2", spawned)
+	}
+}
+
+// 🎯T338 assembly: ledger parent+active children never auto-spawns parent;
+// ready child leaf still spawns.
+func TestFrontierConsumeSweepAssemblyParentActiveChildren(t *testing.T) {
+	const ledger = `
+targets:
+  T10:
+    name: sqlpipe-based state sync
+    status: converging
+    cost: 13
+    value: 20
+    context: needs CGO Peer rebuild
+  T10.2:
+    name: Server Peer + owned tables
+    status: identified
+    cost: 8
+  T10.3:
+    name: Client path
+    status: converging
+  T500:
+    name: Ordinary ready leaf
+    status: identified
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bullseye.yaml"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: dir, SessionID: "po1",
+		Purpose: claudia.PurposeWork, Parent: "jevons",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(dir, nil, nil)
+	s.SetRegistry(reg)
+	var spawned []string
+	reps := s.frontierConsumeSweep(FrontierConsumeLoopArgs{
+		Server:            s,
+		Workdir:           dir,
+		ParentPO:          "jevons-po",
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(leaf targetfile.FrontierLeaf, workerName, parent string) error {
+			spawned = append(spawned, leaf.ID)
+			return reg.Register(claudia.AgentDef{
+				Name: workerName, WorkDir: dir, SessionID: "spawned",
+				Purpose: claudia.PurposeWork, Parent: parent, TargetID: leaf.ID,
+			})
+		},
+	}, nil)
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	if r := byID["T10"]; r.Action != FrontierConsumePark || r.Reason != FrontierReasonParentActiveChildren {
+		t.Fatalf("T10 assembly: %+v", r)
+	}
+	if r := byID["T10.2"]; r.Action != FrontierConsumeSpawn {
+		t.Fatalf("T10.2 ready child assembly: %+v", r)
+	}
+	if r := byID["T500"]; r.Action != FrontierConsumeSpawn {
+		t.Fatalf("T500 assembly: %+v", r)
+	}
+	for _, id := range spawned {
+		if id == "T10" {
+			t.Fatal("T10 parent must not be spawned")
+		}
+	}
+}
+
 // PO unregistered → every ready leaf parks; nothing spawns (T129 exception path).
 func TestFrontierConsumeSweepAssemblyPOMissing(t *testing.T) {
 	dir := t.TempDir()

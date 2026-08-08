@@ -55,6 +55,12 @@ const (
 	// LeafSkipHighCostMobile: multi-device / iPad megawork (visual+high cost or
 	// name Mobile app) without unattended-safe / force-engage (🎯T337).
 	LeafSkipHighCostMobile
+	// LeafSkipParentActiveChildren: converging/identified parent with active
+	// hierarchical children (T10 with T10.2–T10.6). Prefer child leaves (🎯T338).
+	LeafSkipParentActiveChildren
+	// LeafSkipHighInfra: sqlpipe/CGO/Peer rebuild class (cost≥13 or markers)
+	// without unattended-safe / force-engage (🎯T338).
+	LeafSkipHighInfra
 )
 
 func (k LeafKind) String() string {
@@ -73,6 +79,10 @@ func (k LeafKind) String() string {
 		return "skip_set_aside_dep"
 	case LeafSkipHighCostMobile:
 		return "skip_high_cost_mobile"
+	case LeafSkipParentActiveChildren:
+		return "skip_parent_with_active_children"
+	case LeafSkipHighInfra:
+		return "skip_high_infra"
 	default:
 		return "unknown"
 	}
@@ -81,6 +91,10 @@ func (k LeafKind) String() string {
 // HighCostMobileThreshold is the cost floor for the optional mobile megawork
 // unattended skip (🎯T337: tags visual + cost≥20, or name Mobile app).
 const HighCostMobileThreshold = 20
+
+// HighInfraCostThreshold is the cost floor for optional high-infra unattended
+// skip (🎯T338: sqlpipe/CGO/Peer rebuild, cost≥13 multi-child sync parents).
+const HighInfraCostThreshold = 13
 
 // LeafObs is a pure observation of one product-scoped frontier leaf.
 type LeafObs struct {
@@ -97,10 +111,14 @@ type LeafObs struct {
 	// SetAsideDeps lists depends_on that are set_aside (not achieved). When
 	// non-empty the leaf is graph-ready but not unattended-safe (🎯T337).
 	SetAsideDeps []string
+	// ActiveChildren lists hierarchical active descendants (T10.2 of T10).
+	// Non-empty ⇒ park parent; ready child leaves still spawn (🎯T338).
+	ActiveChildren []string
 	// Cost is the portfolio cost estimate (0 when unknown/omitted).
 	Cost float64
-	// ForceEngage overrides set_aside-dep and high-cost-mobile parks
-	// (owner/play residual; tag force-engage on the leaf).
+	// ForceEngage overrides set_aside-dep, high-cost-mobile, parent-with-
+	// active-children, and high-infra parks (owner/play residual; tag
+	// force-engage on the leaf).
 	ForceEngage bool
 }
 
@@ -154,12 +172,12 @@ func hasTag(tags []string, want string) bool {
 }
 
 // IsUnattendedSafeTag is true when the leaf is explicitly marked safe for
-// unattended auto-consume (overrides high-cost mobile park only).
+// unattended auto-consume (overrides high-cost mobile and high-infra parks).
 func IsUnattendedSafeTag(tags []string) bool {
 	return hasTag(tags, "unattended-safe")
 }
 
-// IsForceEngageTag is true when the owner/play residual overrides T337 parks.
+// IsForceEngageTag is true when the owner/play residual overrides T337/T338 parks.
 func IsForceEngageTag(tags []string) bool {
 	return hasTag(tags, "force-engage") || hasTag(tags, "force_engage")
 }
@@ -168,6 +186,17 @@ func IsForceEngageTag(tags []string) bool {
 func HasSetAsideDep(o LeafObs) bool {
 	for _, d := range o.SetAsideDeps {
 		if strings.TrimSpace(d) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasActiveChildren is true when the leaf is a hierarchical parent with at
+// least one active (identified|converging) child target (🎯T338).
+func HasActiveChildren(o LeafObs) bool {
+	for _, c := range o.ActiveChildren {
+		if strings.TrimSpace(c) != "" {
 			return true
 		}
 	}
@@ -194,10 +223,51 @@ func IsHighCostMobileLeaf(tags []string, name string, cost float64) bool {
 	return false
 }
 
+// IsHighInfraLeaf reports the 🎯T338 optional infrastructure megawork class:
+// sqlpipe / CGO / Peer rebuild markers, or cost ≥ HighInfraCostThreshold with
+// multi-child parent shape (ActiveChildren ≥ 1). unattended-safe and
+// force-engage override at ClassifyLeaf time, not here.
+func IsHighInfraLeaf(tags []string, name, context string, cost float64, activeChildren []string) bool {
+	hay := strings.ToLower(strings.TrimSpace(name) + " " + strings.TrimSpace(context))
+	for _, t := range tags {
+		hay += " " + strings.ToLower(strings.TrimSpace(t))
+	}
+	// Content markers for the T10 sqlpipe / CGO / Peer class.
+	if strings.Contains(hay, "sqlpipe") || strings.Contains(hay, "cgo") {
+		return true
+	}
+	// "peer" alone is noisy; require peer + rebuild/sync/sqlpipe-adjacent cost.
+	if strings.Contains(hay, "peer") && (strings.Contains(hay, "rebuild") ||
+		strings.Contains(hay, "sync") || cost >= HighInfraCostThreshold) {
+		return true
+	}
+	if hasTag(tags, "infra") || hasTag(tags, "high-infra") {
+		if cost >= HighInfraCostThreshold {
+			return true
+		}
+	}
+	// cost≥13 multi-child sync parents (defense-in-depth with ActiveChildren).
+	if cost >= HighInfraCostThreshold {
+		nActive := 0
+		for _, c := range activeChildren {
+			if strings.TrimSpace(c) != "" {
+				nActive++
+			}
+		}
+		if nActive >= 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // ClassifyLeaf assigns one leaf to ready vs skip for PO proactive / frontier
-// consume. Priority: closed > set_aside_dep > design > high_cost_mobile >
-// blocked > engaged > ready. ForceEngage (or force-engage tag) overrides
-// set_aside_dep and high_cost_mobile only (design/blocked still skip).
+// consume. Priority: closed > set_aside_dep > parent_active_children > design >
+// high_cost_mobile > high_infra > blocked > engaged > ready.
+// ForceEngage (or force-engage tag) overrides set_aside_dep, parent_active_
+// children, high_cost_mobile, and high_infra (design/blocked still skip).
+// unattended-safe overrides high_cost_mobile and high_infra only — not
+// parent-with-active-children (structural; prefer ready child leaves).
 func ClassifyLeaf(o LeafObs) LeafKind {
 	if o.Closed {
 		return LeafSkipClosed
@@ -206,11 +276,18 @@ func ClassifyLeaf(o LeafObs) LeafKind {
 	if !force && HasSetAsideDep(o) {
 		return LeafSkipSetAsideDep
 	}
+	if !force && HasActiveChildren(o) {
+		return LeafSkipParentActiveChildren
+	}
 	if IsDesignGatedLeaf(o.Tags, o.Name, o.Context) {
 		return LeafSkipDesign
 	}
 	if !force && !IsUnattendedSafeTag(o.Tags) && IsHighCostMobileLeaf(o.Tags, o.Name, o.Cost) {
 		return LeafSkipHighCostMobile
+	}
+	if !force && !IsUnattendedSafeTag(o.Tags) &&
+		IsHighInfraLeaf(o.Tags, o.Name, o.Context, o.Cost, o.ActiveChildren) {
+		return LeafSkipHighInfra
 	}
 	if o.Blocked {
 		return LeafSkipBlocked

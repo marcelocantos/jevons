@@ -29,9 +29,11 @@ import (
 // sweep's job), T36 budget clamp (spawnGuard parks the whole cycle), T197
 // literal dots in worker names. 🎯T337: park leaves unblocked only via
 // set_aside deps (T7→T5) and optional high-cost mobile/iPad class unless
-// unattended-safe / force-engage. Anti-thrash: durable per-target spawn
-// ledger (backoff + max auto-spawns) so a worker that finishes without
-// achieving cannot churn the same leaf forever.
+// unattended-safe / force-engage. 🎯T338: park parents with active hierarchical
+// children (T10 with T10.2–T10.6) and optional high-infra class (sqlpipe/CGO/Peer,
+// cost≥13 multi-child) unless force-engage / unattended-safe. Anti-thrash:
+// durable per-target spawn ledger (backoff + max auto-spawns) so a worker that
+// finishes without achieving cannot churn the same leaf forever.
 //
 // Park reasons are lifecycle-logged (eventJournal → GET /api/logs), which is
 // the thin owner-visible chrome; richer frontier-table chrome is residual.
@@ -68,19 +70,21 @@ const (
 
 // Park / skip reason codes (stable for logs and tests).
 const (
-	FrontierReasonSpawned        = "spawned"
-	FrontierReasonDesignGated    = "skip_design"
-	FrontierReasonBlocked        = "skip_blocked"
-	FrontierReasonEngaged        = "skip_engaged"
-	FrontierReasonClosed         = "skip_closed"
-	FrontierReasonSetAsideDep    = "skip_set_aside_dep"    // 🎯T337 T7→T5 class
-	FrontierReasonHighCostMobile = "skip_high_cost_mobile" // 🎯T337 mobile megawork
-	FrontierReasonCapacity       = "park_capacity"
-	FrontierReasonBackoff        = "park_backoff"
-	FrontierReasonMaxAutospawns  = "park_max_autospawns"
-	FrontierReasonPOMissing      = "park_po_unregistered"
-	FrontierReasonSpawnHalted    = "park_spawn_halted"
-	FrontierReasonSpawnFailed    = "park_spawn_failed"
+	FrontierReasonSpawned              = "spawned"
+	FrontierReasonDesignGated          = "skip_design"
+	FrontierReasonBlocked              = "skip_blocked"
+	FrontierReasonEngaged              = "skip_engaged"
+	FrontierReasonClosed               = "skip_closed"
+	FrontierReasonSetAsideDep          = "skip_set_aside_dep"               // 🎯T337 T7→T5 class
+	FrontierReasonHighCostMobile       = "skip_high_cost_mobile"            // 🎯T337 mobile megawork
+	FrontierReasonParentActiveChildren = "skip_parent_with_active_children" // 🎯T338 T10 parent class
+	FrontierReasonHighInfra            = "skip_high_infra"                  // 🎯T338 sqlpipe/CGO/Peer
+	FrontierReasonCapacity             = "park_capacity"
+	FrontierReasonBackoff              = "park_backoff"
+	FrontierReasonMaxAutospawns        = "park_max_autospawns"
+	FrontierReasonPOMissing            = "park_po_unregistered"
+	FrontierReasonSpawnHalted          = "park_spawn_halted"
+	FrontierReasonSpawnFailed          = "park_spawn_failed"
 )
 
 // FrontierConsumeReport is one leaf's sweep outcome.
@@ -279,8 +283,20 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			}
 			out = append(out, rep)
 			continue
+		case poproactive.LeafSkipParentActiveChildren:
+			// Park: prefer ready child leaves over parent mega-mission (🎯T338).
+			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonParentActiveChildren
+			if len(leaf.ActiveChildren) > 0 {
+				rep.Err = "parent-with-active-children: " + strings.Join(leaf.ActiveChildren, ",")
+			}
+			out = append(out, rep)
+			continue
 		case poproactive.LeafSkipHighCostMobile:
 			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonHighCostMobile
+			out = append(out, rep)
+			continue
+		case poproactive.LeafSkipHighInfra:
+			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonHighInfra
 			out = append(out, rep)
 			continue
 		case poproactive.LeafSkipBlocked:
@@ -434,6 +450,7 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			Context:        leaf.Context,
 			Cost:           leaf.Cost,
 			SetAsideDeps:   leaf.SetAsideDeps,
+			ActiveChildren: leaf.ActiveChildren,
 			ForceEngage:    poproactive.IsForceEngageTag(leaf.Tags),
 			AlreadyEngaged: len(workAgentsEngagedOnTarget(s.registry, leaf.ID, "")) > 0,
 		})

@@ -21,6 +21,10 @@ import (
 // 🎯T337: graph-ready leaves that only unblock via set_aside deps still appear
 // here (RHS frontier semantics), but carry SetAsideDeps so the consume
 // classifier can park them (T7→T5 class) instead of auto-spawning.
+//
+// 🎯T338: parents with active hierarchical children (T10 with T10.2–T10.6)
+// still appear when their own depends_on are done, but carry ActiveChildren
+// so unattended consume parks them (true work leaves only).
 
 // FrontierLeaf is one ready frontier target from a ledger.
 type FrontierLeaf struct {
@@ -35,6 +39,9 @@ type FrontierLeaf struct {
 	// SetAsideDeps lists depends_on that are set_aside (not achieved). Graph
 	// still treats them as done; unattended consume must not auto-spawn.
 	SetAsideDeps []string
+	// ActiveChildren lists hierarchical descendants (id + ".") that are still
+	// identified|converging. Unattended consume parks the parent (🎯T338).
+	ActiveChildren []string
 }
 
 type frontierLedgerTarget struct {
@@ -57,6 +64,17 @@ func isFrontierActiveStatus(status string) bool {
 	return s == "identified" || s == "converging"
 }
 
+// HierarchicalChildOf reports whether childID is a hierarchical descendant of
+// parentID (T10.2 of T10, T10.2.1 of T10.2). Digit-safe: T10 is not a child of T1.
+func HierarchicalChildOf(parentID, childID string) bool {
+	parentID = strings.TrimSpace(parentID)
+	childID = strings.TrimSpace(childID)
+	if parentID == "" || childID == "" || parentID == childID {
+		return false
+	}
+	return strings.HasPrefix(childID, parentID+".")
+}
+
 // FrontierLeaves extracts ready leaves from ledger YAML, ordered by natural
 // target-id compare (T2 < T10 < T10.2).
 func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
@@ -75,6 +93,15 @@ func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
 		t, ok := doc.Targets[id]
 		return ok && IsSetAsideStatus(t.Status)
 	}
+	// Pre-index active hierarchical ids for ActiveChildren scans (🎯T338).
+	var activeIDs []string
+	for id, t := range doc.Targets {
+		if isFrontierActiveStatus(t.Status) {
+			activeIDs = append(activeIDs, id)
+		}
+	}
+	sort.Strings(activeIDs)
+
 	var leaves []FrontierLeaf
 	for id, t := range doc.Targets {
 		if !isFrontierActiveStatus(t.Status) {
@@ -98,15 +125,22 @@ func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
 		if !ready {
 			continue
 		}
+		var activeChildren []string
+		for _, other := range activeIDs {
+			if HierarchicalChildOf(id, other) {
+				activeChildren = append(activeChildren, other)
+			}
+		}
 		leaves = append(leaves, FrontierLeaf{
-			ID:           id,
-			Name:         strings.TrimSpace(t.Name),
-			Context:      strings.TrimSpace(t.Context),
-			Tags:         t.Tags,
-			Acceptance:   t.Acceptance,
-			Cost:         t.Cost,
-			Value:        t.Value,
-			SetAsideDeps: setAsideDeps,
+			ID:             id,
+			Name:           strings.TrimSpace(t.Name),
+			Context:        strings.TrimSpace(t.Context),
+			Tags:           t.Tags,
+			Acceptance:     t.Acceptance,
+			Cost:           t.Cost,
+			Value:          t.Value,
+			SetAsideDeps:   setAsideDeps,
+			ActiveChildren: activeChildren,
 		})
 	}
 	sort.Slice(leaves, func(i, j int) bool {

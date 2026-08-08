@@ -218,3 +218,73 @@ func TestClassifyOnlySetAsideDepSleeps(t *testing.T) {
 		t.Fatalf("set_aside-only frontier must sleep: %+v", d)
 	}
 }
+
+// 🎯T338: parent with active children parks; ready child leaf stays ready.
+func TestClassifyLeafParentActiveChildren(t *testing.T) {
+	parent := LeafObs{
+		ID: "T10", Name: "sqlpipe-based state sync",
+		ActiveChildren: []string{"T10.2", "T10.3"}, Cost: 13,
+	}
+	if k := ClassifyLeaf(parent); k != LeafSkipParentActiveChildren {
+		t.Fatalf("parent: got %s want skip_parent_with_active_children", k)
+	}
+	if k := ClassifyLeaf(parent); k.String() != "skip_parent_with_active_children" {
+		t.Fatalf("string: %s", k)
+	}
+	// force-engage residual overrides parent park.
+	parent.ForceEngage = true
+	if k := ClassifyLeaf(parent); k != LeafReady {
+		t.Fatalf("force_engage parent: got %s want ready", k)
+	}
+	// unattended-safe does NOT override structural parent park.
+	parent.ForceEngage = false
+	parent.Tags = []string{"unattended-safe"}
+	if k := ClassifyLeaf(parent); k != LeafSkipParentActiveChildren {
+		t.Fatalf("unattended-safe must not clear parent park: got %s", k)
+	}
+	// Ready child leaf with no children of its own.
+	child := LeafObs{ID: "T10.2", Name: "Server Peer + owned tables", Cost: 8}
+	if k := ClassifyLeaf(child); k != LeafReady {
+		t.Fatalf("ready child: got %s want ready", k)
+	}
+}
+
+// 🎯T338: high-infra sqlpipe/CGO/Peer class parks unless unattended-safe.
+func TestClassifyLeafHighInfra(t *testing.T) {
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T10", Name: "sqlpipe-based state sync", Context: "CGO Peer rebuild", Cost: 13,
+	}); k != LeafSkipHighInfra {
+		t.Fatalf("sqlpipe/cgo: got %s want skip_high_infra", k)
+	}
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T10", Name: "Peer rebuild for sync", Cost: 13,
+	}); k != LeafSkipHighInfra {
+		t.Fatalf("peer+rebuild cost: got %s", k)
+	}
+	// unattended-safe overrides high-infra.
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T10", Name: "sqlpipe sync", Cost: 13, Tags: []string{"unattended-safe"},
+	}); k != LeafReady {
+		t.Fatalf("unattended-safe: got %s want ready", k)
+	}
+	// Ordinary low-cost leaf is fine.
+	if k := ClassifyLeaf(LeafObs{ID: "T500", Name: "Ordinary ready Build leaf", Cost: 3}); k != LeafReady {
+		t.Fatalf("ordinary: got %s want ready", k)
+	}
+}
+
+func TestClassifyOnlyParentWithChildrenSleeps(t *testing.T) {
+	d := Classify([]LeafObs{
+		{ID: "T10", Name: "sqlpipe parent", ActiveChildren: []string{"T10.2"}},
+	})
+	if d.Mode != Sleep || len(d.ReadyIDs) != 0 {
+		t.Fatalf("parent-only frontier must sleep: %+v", d)
+	}
+	d = Classify([]LeafObs{
+		{ID: "T10", Name: "sqlpipe parent", ActiveChildren: []string{"T10.2"}},
+		{ID: "T10.2", Name: "ready child leaf"},
+	})
+	if d.Mode != Kick || len(d.ReadyIDs) != 1 || d.ReadyIDs[0] != "T10.2" {
+		t.Fatalf("ready child must kick: %+v", d)
+	}
+}
