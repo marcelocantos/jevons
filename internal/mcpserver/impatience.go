@@ -17,26 +17,32 @@ import (
 )
 
 // ImpatienceEngine is the daemon-side 🎯T317 ladder: a 🎯T316 reconcile set,
-// a Ladder with 🎯T318 attenuation, and the three impure sinks. The pure
-// packages decide policy; this type is the only place that talks to the fleet.
+// a Ladder with 🎯T318 attenuation, the three impure actuators, and the
+// 🎯T319 postmortem journal/sink. The pure packages decide policy; this type
+// is the only place that talks to the fleet.
 //
 // Driven from idlePressureSweep so every open-mission idle tick both updates
 // the standing set and actuates the due rung. Safe for concurrent use: the
 // converge loop is single-threaded in production, but Set is already concurrent
 // and the ladder is guarded here.
 type ImpatienceEngine struct {
-	mu       sync.Mutex
-	set      *converge.Set
-	ladder   *converge.Ladder
-	sinks    converge.Sinks
-	overseer string
+	mu         sync.Mutex
+	set        *converge.Set
+	ladder     *converge.Ladder
+	sinks      converge.Sinks
+	postmortem converge.PostmortemSink
+	journal    *converge.PostmortemJournal
+	overseer   string
 }
 
 // ImpatienceEngineArgs constructs the engine. Sinks may be partially nil —
 // an unwired rung errors at fire time rather than failing silently.
+// Postmortem may be nil: closed incidents stay pending until a sink is wired
+// (PostmortemJournal.Flush treats nil as leave-pending).
 type ImpatienceEngineArgs struct {
-	Sinks    converge.Sinks
-	Overseer string // empty → "jevons"
+	Sinks      converge.Sinks
+	Postmortem converge.PostmortemSink // 🎯T319 owner-visible close report as root
+	Overseer   string                  // empty → "jevons"
 }
 
 // NewImpatienceEngine builds a standing set + ladder with default attenuation.
@@ -48,10 +54,12 @@ func NewImpatienceEngine(args ImpatienceEngineArgs) *ImpatienceEngine {
 		overseer = "jevons"
 	}
 	return &ImpatienceEngine{
-		set:      converge.NewSet(),
-		ladder:   l,
-		sinks:    args.Sinks,
-		overseer: overseer,
+		set:        converge.NewSet(),
+		ladder:     l,
+		sinks:      args.Sinks,
+		postmortem: args.Postmortem,
+		journal:    converge.NewPostmortemJournal(),
+		overseer:   overseer,
 	}
 }
 
@@ -244,7 +252,8 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 	}
 
 	actions, closed := e.ladder.Reconcile(now, gaps)
-	if len(actions) == 0 && len(closed) == 0 {
+	pendingPostmortem := e.journal != nil && len(e.journal.Pending()) > 0
+	if len(actions) == 0 && len(closed) == 0 && !pendingPostmortem {
 		return
 	}
 
@@ -282,9 +291,18 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 			"actions": len(actions), "errors": nErr, "closed": len(closed), "open": e.set.Len(),
 		})
 	}
-	// Closed incidents: postmortem sink is 🎯T319's concurrent seat — do not
-	// deliver here. Clear is already in actions via ActClearHuman.
-	_ = closed
+
+	// 🎯T319: every closed episode → exactly one owner-visible mini-postmortem
+	// as root, independent of pathway. Clear human chrome is already in
+	// actions via ActClearHuman; the report is never satisfaction.
+	if e.journal != nil {
+		if _, err := e.journal.Flush(closed, e.postmortem); err != nil {
+			slog.Warn("impatience postmortem deliver", "err", err, "closed", len(closed))
+			s.logLifecycle(compIdleNudge, "impatience_postmortem", "error", map[string]any{
+				"closed": len(closed), "err": err.Error(),
+			})
+		}
+	}
 }
 
 func stepKindForAction(a converge.Action) converge.StepKind {

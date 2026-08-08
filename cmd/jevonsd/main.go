@@ -724,8 +724,9 @@ func main() {
 		overseerName = "jevons"
 	}
 	mcpSrv.SetImpatienceEngine(mcpserver.NewImpatienceEngine(mcpserver.ImpatienceEngineArgs{
-		Sinks:    mcpserver.NewImpatienceSinks(mcpSrv, overseerName, humanSink),
-		Overseer: overseerName,
+		Sinks:      mcpserver.NewImpatienceSinks(mcpSrv, overseerName, humanSink),
+		Postmortem: server.NewPostmortemSink(srv), // 🎯T319: closed incident → root report
+		Overseer:   overseerName,
 	}))
 	// MissionOpen from the nearest bullseye ledger for each bound target
 	// (workdir of an engaged agent). Unknown ledger row stays open (residual).

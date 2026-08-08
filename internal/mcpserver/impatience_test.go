@@ -49,6 +49,16 @@ func (r *recordingRepressure) RePressure(agent, mission string) error {
 	return nil
 }
 
+// recordingPostmortem is a hermetic PostmortemSink (fake overseer arm).
+type recordingPostmortem struct {
+	texts []string
+}
+
+func (r *recordingPostmortem) DeliverPostmortem(text string) error {
+	r.texts = append(r.texts, text)
+	return nil
+}
+
 func impatienceFixture(t *testing.T, now time.Time) (*Server, *IdleActivityTracker) {
 	t.Helper()
 	dir := t.TempDir()
@@ -158,6 +168,64 @@ func TestImpatienceEngineEscalatesFromIdlePressureSweep(t *testing.T) {
 	}
 	if len(hum.cleared) != 1 || hum.cleared[0] != "jv-t317-stuck" {
 		t.Fatalf("satisfaction must withdraw sticky: %v", hum.cleared)
+	}
+}
+
+// TestImpatienceEngineClosesWithExactlyOnePostmortem pins 🎯T319 daemon
+// glue: incident close through idlePressureSweep delivers exactly one
+// mini-postmortem via the engine's postmortem sink (fake arm), and a quiet
+// follow-up tick does not re-fire.
+func TestImpatienceEngineClosesWithExactlyOnePostmortem(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(20_000, 0)
+	s, activity := impatienceFixture(t, now)
+
+	rep := &recordingRepressure{}
+	ov := &recordingOverseer{}
+	hum := &recordingHuman{}
+	pm := &recordingPostmortem{}
+	eng := NewImpatienceEngine(ImpatienceEngineArgs{
+		Sinks:      converge.Sinks{RePressure: rep, Overseer: ov, Human: hum},
+		Postmortem: pm,
+	})
+	s.SetImpatienceEngine(eng)
+	s.SetIdlePressureHooks(IdlePressureHooks{
+		MissionOpen: func(string) bool { return true },
+	})
+
+	running := func(name string) bool { return name == "jv-t317-stuck" }
+
+	// Open gap + climb at least one rung so the episode is reportable
+	// (ladder only closes incidents that fired rungs).
+	s.idlePressureSweep(idlePressureDeps{Now: now, Running: running})
+	const attenCredit = 8 * time.Minute
+	tRep := now.Add(converge.RepressureAfter + time.Minute)
+	s.idlePressureSweep(idlePressureDeps{Now: tRep, Running: running})
+	if len(rep.agents) != 1 {
+		t.Fatalf("want re-pressure fire before close, got %v", rep.agents)
+	}
+	if len(pm.texts) != 0 {
+		t.Fatalf("postmortem before close: %v", pm.texts)
+	}
+
+	// Satisfaction: phase=working → set+ladder clear, postmortem fires once.
+	tWork := tRep.Add(time.Minute)
+	activity.by["jv-t317-stuck"] = IdleActivity{Phase: "working", Updated: tWork}
+	s.idlePressureSweep(idlePressureDeps{Now: tWork, Running: running})
+	if len(pm.texts) != 1 {
+		t.Fatalf("want exactly one postmortem on close, got %d: %v", len(pm.texts), pm.texts)
+	}
+	if !strings.Contains(pm.texts[0], "jv-t317-stuck") {
+		t.Fatalf("postmortem missing agent:\n%s", pm.texts[0])
+	}
+	if !strings.Contains(pm.texts[0], "Impatience incident closed") {
+		t.Fatalf("postmortem missing close header:\n%s", pm.texts[0])
+	}
+
+	// Quiet follow-up must not re-deliver the same episode.
+	s.idlePressureSweep(idlePressureDeps{Now: tWork.Add(time.Hour), Running: running})
+	if len(pm.texts) != 1 {
+		t.Fatalf("quiet tick re-reported: %d deliveries", len(pm.texts))
 	}
 }
 

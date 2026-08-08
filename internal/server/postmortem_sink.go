@@ -19,8 +19,8 @@ import (
 // DeliverToOverseerAs), which is the correct framing for a daemon-authored
 // mini-postmortem.
 //
-// jv-t317 owns the daemon wiring point (cmd/jevonsd/main.go); this package
-// only exposes the constructor.
+// Wired from cmd/jevonsd/main.go into ImpatienceEngineArgs.Postmortem; this
+// package only exposes the constructor.
 type PostmortemSink struct {
 	deliver func(text, origin string) error
 }
