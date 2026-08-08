@@ -180,6 +180,10 @@ type Server struct {
 	providerFeeds  *provider.FeedHub
 	providerHealth func() []provider.Health
 
+	// automations snapshots 🎯T27.9 liveness statuses for /api/automations.
+	// Nil until wired from main.
+	automations func() []provider.AutomationStatus
+
 	// fleetModels resolves the model an agent is running from its provider's
 	// own session log: the only source for Grok, which names none on the wire
 	// (🎯T293), and the seed that survives a daemon restart for every provider
@@ -389,6 +393,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("/ws/provider", s.handleProviderFeed)    // 🎯T27.5 feed channel
 	mux.HandleFunc("GET /api/providers", s.handleProviders)       // 🎯T27.3/T27.5 observability
+	mux.HandleFunc("GET /api/automations", s.handleAutomations)   // 🎯T27.9 liveness snapshot
 	mux.HandleFunc("GET /api/desktop/head", s.handleDesktopHead) // 🎯T27.7 tray head model
 	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe)          // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)

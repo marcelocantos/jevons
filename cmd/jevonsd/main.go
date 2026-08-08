@@ -363,6 +363,7 @@ func main() {
 	// mirrors Running providers' MCP endpoints into /mcp; FeedHub serves
 	// /ws/provider, folds events into the live model, and Broadcasts to
 	// clients. ConfigManager.Reload re-converges all three.
+	var liveMon *provider.LivenessMonitor
 	if providerCfg != nil {
 		provAgg := provider.NewAggregator(provider.AggregatorArgs{Sink: mcpSrv})
 		provLC := provider.NewLifecycle(provider.LifecycleArgs{OnPhase: provAgg.HandlePhase})
@@ -400,6 +401,31 @@ func main() {
 		feedHub.SetDecls(providerCfg.Desired())
 		srv.SetProviderFeeds(feedHub)
 		srv.SetProviderHealth(provLC.Health)
+
+		// 🎯T27.9: automation liveness — declared automations are checked
+		// against their signal sources on an interval; a stall folds into
+		// the aggregated model (liveness/automations), broadcasts as a
+		// provider_event, and notifies the owner via the overseer.
+		if len(cfg.Automations) > 0 {
+			liveMon = provider.NewLivenessMonitor(provider.LivenessMonitorArgs{
+				Decls:    cfg.Automations,
+				Registry: feedReg,
+				OnEvent: func(ev provider.FeedEvent) {
+					srv.Broadcast(map[string]any{
+						"type":     "provider_event",
+						"provider": provider.LivenessProviderID,
+						"event":    ev,
+					})
+				},
+				OnNotice: func(st provider.AutomationStatus) {
+					if err := srv.SendToOverseer(provider.FormatAutomationNotice(st)); err != nil {
+						slog.Warn("automation notice delivery failed", "automation", st.ID, "err", err)
+					}
+				},
+			})
+			srv.SetAutomations(liveMon.Statuses)
+			slog.Info("automation liveness ready", "tracked", len(cfg.Automations))
+		}
 		providerCfg.SetOnChange(func(decls []config.ProviderDecl) {
 			provAgg.SetDecls(decls)
 			feedHub.SetDecls(decls)
@@ -458,6 +484,11 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// 🎯T27.9: start the liveness check loop once the daemon context exists.
+	if liveMon != nil {
+		go liveMon.Run(ctx)
+	}
 
 	// 🎯T40: SIGINT/SIGTERM = normal stop (StopAll); SIGHUP = upgrade exit
 	// (skip StopAll, write handles). JEVONS_UPGRADE_EXIT=1 also marks

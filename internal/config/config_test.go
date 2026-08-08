@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 🎯T44 grep oracle: the default persona must carry no owner-specific
@@ -864,6 +865,99 @@ func TestLoadProvidersEmptyIsOK(t *testing.T) {
 	}
 	if len(cfg.Providers) != 0 {
 		t.Fatalf("default providers should be empty, got %+v", cfg.Providers)
+	}
+}
+
+// 🎯T27.9: automations are declarative config — every signal-source kind
+// loads with no bespoke daemon code per entry.
+func TestLoadAutomationsAllSourceKinds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+automations:
+  - id: ytt-daily
+    cadence: 24h
+    grace: 2
+    source:
+      kind: file-mtime
+      path: ~/.local/var/log/ytt.log
+  - id: knowledge-commits
+    cadence: 168h
+    source:
+      kind: git-last-commit
+      repo: ~/think
+  - id: yadm-sync
+    cadence: 30m
+    source:
+      kind: launchd
+      label: com.marcelocantos.yadm-auto-sync
+  - id: artifacts
+    cadence: 24h
+    source:
+      kind: newest-artifact
+      dir: ~/think/knowledge/youtube
+      glob: "*.md"
+  - id: mnemo-activity
+    cadence: 12h
+    source:
+      kind: provider-feed
+      provider: mnemo
+      feed: health
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Automations) != 5 {
+		t.Fatalf("automations len=%d want 5", len(cfg.Automations))
+	}
+	ytt := cfg.Automations[0]
+	if d, err := ytt.CadenceDuration(); err != nil || d != 24*time.Hour {
+		t.Fatalf("cadence=%v err=%v", d, err)
+	}
+	if ytt.GraceMultiple() != 2 {
+		t.Fatalf("grace=%v", ytt.GraceMultiple())
+	}
+	// Omitted grace uses the default multiple.
+	if g := cfg.Automations[1].GraceMultiple(); g != DefaultAutomationGrace {
+		t.Fatalf("default grace=%v want %v", g, DefaultAutomationGrace)
+	}
+}
+
+func TestLoadAutomationsValidationErrors(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		yaml string
+		sub  string
+	}{
+		{"missing id", "automations:\n  - cadence: 1h\n    source: {kind: file-mtime, path: /x}\n", "id is required"},
+		{"dup id", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: file-mtime, path: /x}\n  - id: a\n    cadence: 1h\n    source: {kind: file-mtime, path: /x}\n", "duplicate"},
+		{"bad cadence", "automations:\n  - id: a\n    cadence: sometimes\n    source: {kind: file-mtime, path: /x}\n", "cadence"},
+		{"missing kind", "automations:\n  - id: a\n    cadence: 1h\n    source: {path: /x}\n", "source.kind is required"},
+		{"unknown kind", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: telepathy}\n", "unsupported"},
+		{"file no path", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: file-mtime}\n", "needs source.path"},
+		{"artifact no dir", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: newest-artifact}\n", "needs source.dir"},
+		{"git no repo", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: git-last-commit}\n", "needs source.repo"},
+		{"launchd no label", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: launchd}\n", "needs source.label"},
+		{"feed incomplete", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: provider-feed, provider: mnemo}\n", "needs source.provider and source.feed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tc.sub) {
+				t.Fatalf("err=%v want substring %q", err, tc.sub)
+			}
+		})
 	}
 }
 
