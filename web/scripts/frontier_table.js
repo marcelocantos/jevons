@@ -288,6 +288,26 @@
     return n.slice(0, max - 1) + '…';
   }
 
+  // 🎯T332: recommended .ft-id width in ch from the longest id (clamped).
+  // Hierarchical pins (T254.1, T262.3) are 6ch; floor keeps short ids stable under
+  // table-layout:fixed; ceiling avoids the rem-sized id↔name chasm.
+  function maxIdChWidth(ids, minCh, maxCh) {
+    var lo = typeof minCh === 'number' && isFinite(minCh) ? minCh : 4;
+    var hi = typeof maxCh === 'number' && isFinite(maxCh) ? maxCh : 9;
+    if (lo < 1) lo = 1;
+    if (hi < lo) hi = lo;
+    var n = lo;
+    if (Array.isArray(ids)) {
+      for (var i = 0; i < ids.length; i++) {
+        var len = String(ids[i] == null ? '' : ids[i]).length;
+        if (len > n) n = len;
+      }
+    }
+    if (n > hi) n = hi;
+    if (n < lo) n = lo;
+    return n;
+  }
+
   // emptyMessage for calm unavailable / zero-frontier states.
   function emptyMessage(model) {
     if (!model) return 'Frontier unavailable.';
@@ -1610,6 +1630,7 @@
     formatFanout: formatFanout,
     normalizeDependents: normalizeDependents,
     shortName: shortName,
+    maxIdChWidth: maxIdChWidth,
     emptyMessage: emptyMessage,
     formatTargetCardMarkdown: formatTargetCardMarkdown,
     formatTargetCardPlain: formatTargetCardPlain,

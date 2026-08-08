@@ -260,7 +260,7 @@ test('T177 chrome cols use explicit rem widths — not 1%/99% under fixed layout
 });
 
 // 🎯T179: no small-caps status; fanout/status stay compact chrome; dependents tip wiring.
-// 🎯T331: unlock 4rem id freeze — hierarchical Txxx.x needs ≥5rem (or ch).
+// 🎯T332: hierarchical ids via ch (≥6ch), not rem-chasm ≥5.25rem.
 test('T179 status normal case + tight widths + dependents tip wiring', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const statusBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
@@ -275,11 +275,13 @@ test('T179 status normal case + tight widths + dependents tip wiring', function 
   assert.ok(idW, 'id width');
   assert.ok(fanW, 'fanout width');
   assert.ok(stW, 'status width');
-  // T331: id wide enough for hierarchical Txxx.x (T254.1); no longer freeze <4.5rem.
-  if (idW[2] === 'rem') {
-    assert.ok(parseFloat(idW[1]) >= 5, 'id ≥5rem for Txxx.x, got ' + idW[1] + 'rem');
-  } else if (idW[2] === 'ch') {
+  // T332: fit hierarchical Txxx.x in ch; reject rem-chasm pattern from T331.
+  if (idW[2] === 'ch') {
     assert.ok(parseFloat(idW[1]) >= 6, 'id ≥6ch for Txxx.x, got ' + idW[1] + 'ch');
+    assert.ok(parseFloat(idW[1]) <= 9, 'id ≤9ch (no dead-space column), got ' + idW[1] + 'ch');
+  } else if (idW[2] === 'rem') {
+    assert.ok(parseFloat(idW[1]) < 5.25, 'id rem must not be ≥5.25rem chasm, got ' + idW[1]);
+    assert.ok(parseFloat(idW[1]) >= 4, 'id rem still wide enough for Txxx.x, got ' + idW[1]);
   }
   if (fanW[2] === 'rem') {
     assert.ok(parseFloat(fanW[1]) < 2.75, 'fanout tighter than 2.75rem, got ' + fanW[1]);
@@ -294,8 +296,8 @@ test('T179 status normal case + tight widths + dependents tip wiring', function 
     'formatFanout receives row.dependents');
 });
 
-// 🎯T331: hierarchical ids fit; reclaim id↔name pad; pack status↔fanout.
-test('T331 hierarchical id width + packed id-name and status-fanout gaps', function () {
+// 🎯T332: even gutters; hierarchical ids fit; reject T331 chasm + zero-pad facing-align glue.
+test('T332 even column gutters — fit hierarchical ids; reject chasm and status-fan glue', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const idBlock = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*\}/);
   const nameBlock = html.match(/#frontier-table\s+\.ft-name\s*\{[^}]*\}/);
@@ -306,31 +308,47 @@ test('T331 hierarchical id width + packed id-name and status-fanout gaps', funct
   assert.ok(stBlock, 'ft-status rule');
   assert.ok(fanBlock, 'ft-fanout rule');
 
-  const idW = idBlock[0].match(/width:\s*([\d.]+)(rem|ch)/);
-  assert.ok(idW, 'id width rem/ch');
-  if (idW[2] === 'rem') {
-    assert.ok(parseFloat(idW[1]) >= 5, 'id ≥5rem for T254.1/T262.3, got ' + idW[1]);
-  } else {
-    assert.ok(parseFloat(idW[1]) >= 6, 'id ≥6ch for Txxx.x, got ' + idW[1]);
+  // Extreme A (chasm): fixed rem ≥5.25rem leaves dead space after short ids.
+  const idRem = idBlock[0].match(/width:\s*([\d.]+)rem/);
+  if (idRem) {
+    assert.ok(parseFloat(idRem[1]) < 5.25,
+      'reject .ft-id width ≥5.25rem chasm pattern, got ' + idRem[1] + 'rem');
   }
+  const idCh = idBlock[0].match(/width:\s*([\d.]+)ch/);
+  assert.ok(idCh, 'id width in ch (shrink-cap), got: ' + idBlock[0]);
+  assert.ok(parseFloat(idCh[1]) >= 6, 'id ≥6ch fits T254.1/T262.3, got ' + idCh[1]);
+  assert.ok(parseFloat(idCh[1]) <= 9, 'id ≤9ch no oversize dead column, got ' + idCh[1]);
 
   function padPx(block, side) {
     const re = new RegExp('padding-' + side + ':\\s*(\\d+)px');
     const m = block.match(re);
     return m ? parseInt(m[1], 10) : 0;
   }
-  // Id↔name: sum of id padding-right + name padding-left must stay tight (reclaim, not fat).
+  // Shared half-pads → ~6–8px gutters of same order across column pairs.
   const idNamePad = padPx(idBlock[0], 'right') + padPx(nameBlock[0], 'left');
-  assert.ok(idNamePad <= 6, 'id↔name pad sum ≤6px, got ' + idNamePad);
-  // Status↔fanout: near-zero pad between columns (T179/T182 packed intent).
+  const nameStPad = padPx(nameBlock[0], 'right') + padPx(stBlock[0], 'left');
   const stFanPad = padPx(stBlock[0], 'right') + padPx(fanBlock[0], 'left');
-  assert.ok(stFanPad <= 2, 'status↔fanout pad sum ≤2px, got ' + stFanPad);
-  assert.ok(/padding-right:\s*0/.test(stBlock[0]), 'status padding-right 0');
-  assert.ok(/padding-left:\s*0/.test(fanBlock[0]), 'fanout padding-left 0');
+  assert.ok(idNamePad >= 6 && idNamePad <= 10, 'id↔name gutter ~6–8px, got ' + idNamePad);
+  assert.ok(nameStPad >= 6 && nameStPad <= 10, 'name↔status gutter ~6–8px, got ' + nameStPad);
+  // Extreme B (glue): status↔fanout pad sum 0 + facing-align collapse.
+  assert.ok(stFanPad > 0, 'status↔fanout pad sum not 0 (reject glue), got ' + stFanPad);
+  assert.ok(stFanPad >= 6 && stFanPad <= 10, 'status↔fanout gutter ~6–8px, got ' + stFanPad);
+  // Drop T331 facing-align: status right-align + fanout left-align with zero pad.
+  assert.ok(!/text-align:\s*right/.test(stBlock[0]), 'no status text-align:right facing-align');
+  // Fanout may right-align numbers; must not be left-facing against right-aligned status.
+  const facingCollapse = /text-align:\s*right/.test(stBlock[0]) && /text-align:\s*left/.test(fanBlock[0]);
+  assert.ok(!facingCollapse, 'reject status-right + fanout-left facing-align collapse');
 
   // T177 retained: fixed layout + name ellipsis.
   assert.ok(/#frontier-table\s*\{[^}]*table-layout:\s*fixed/.test(html), 'table-layout fixed');
   assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*text-overflow:\s*ellipsis/.test(html), 'name ellipsis');
+
+  // Pure helper: longest hierarchical id → clamped ch width.
+  assert.strictEqual(typeof FT.maxIdChWidth, 'function', 'maxIdChWidth exported');
+  assert.strictEqual(FT.maxIdChWidth(['T1', 'T254.1', 'T262.3']), 6, 'T254.1 → 6ch');
+  assert.strictEqual(FT.maxIdChWidth(['T1'], 4, 9), 4, 'short id floors at minCh');
+  assert.strictEqual(FT.maxIdChWidth(['T1000.12.3'], 4, 9), 9, 'long id caps at maxCh');
+  assert.strictEqual(FT.maxIdChWidth(null, 4, 9), 4, 'null ids → minCh');
 });
 
 // 🎯T181: rich markdown target card includes acceptance + multi-section markers.
@@ -696,9 +714,15 @@ test('T182 tight status/fan CSS + play cell + send path wiring', function () {
   const fanBlock = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*\}/);
   assert.ok(stBlock, 'ft-status rule');
   assert.ok(fanBlock, 'ft-fanout rule');
-  // Near-zero pad between status and fanout.
-  assert.ok(/padding-right:\s*0/.test(stBlock[0]), 'status padding-right 0: ' + stBlock[0]);
-  assert.ok(/padding-left:\s*0/.test(fanBlock[0]), 'fanout padding-left 0: ' + fanBlock[0]);
+  // 🎯T332: small real gutter status↔fanout (not T331 zero-pad glue).
+  function padPx182(block, side) {
+    const re = new RegExp('padding-' + side + ':\\s*(\\d+)px');
+    const m = block.match(re);
+    return m ? parseInt(m[1], 10) : 0;
+  }
+  const stFanPad182 = padPx182(stBlock[0], 'right') + padPx182(fanBlock[0], 'left');
+  assert.ok(stFanPad182 > 0 && stFanPad182 <= 10,
+    'status↔fanout small real gutter, got ' + stFanPad182 + ': ' + stBlock[0] + ' | ' + fanBlock[0]);
 
   assert.ok(/#frontier-table\s+\.ft-play\s*\{/.test(html), 'ft-play column CSS');
   assert.ok(/#frontier-table\s+\.ft-play-btn\s*\{/.test(html) || html.indexOf('ft-play-btn') >= 0,

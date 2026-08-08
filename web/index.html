@@ -853,28 +853,30 @@ body.rhs-resizing-row { cursor: row-resize; }
   color: var(--text); vertical-align: middle;
 }
 #frontier-table tr:hover td { background: var(--surface-raised); }
-/* 🎯T179/T331: hierarchical ids (T254.1) fit; reclaim id↔name pad, not only name */
+/* 🎯T179/T332: hierarchical ids (T254.1) via ch shrink-cap — not 5.25rem id↔name chasm.
+   Uniform ~6–8px gutters (4px + 4px half-pads). Drop T331 facing-align status/fan glue. */
 #frontier-table .ft-id {
   font-family: var(--mono); font-size: 11px; color: var(--accent);
   white-space: nowrap; font-weight: 500;
-  width: 5.25rem; overflow: hidden; text-overflow: ellipsis;
-  padding-left: 8px; padding-right: 2px;
+  /* ch shrink-cap (table-layout:fixed): T254.1/T262.3 = 6ch; 7ch fits without rem dead space */
+  width: 7ch; max-width: 9ch;
+  overflow: hidden; text-overflow: ellipsis;
+  padding-left: 8px; padding-right: 4px;
 }
 #frontier-table .ft-name {
   min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  padding-left: 2px; padding-right: 4px;
+  padding-left: 4px; padding-right: 4px;
 }
-/* 🎯T182/T331: status + fan packed (near-zero pad between them) */
+/* 🎯T182/T332: status + fan separate columns with a small real gutter (not zero-pad collapse) */
 #frontier-table .ft-status {
   font-size: 10px; color: var(--text-dim); white-space: nowrap;
-  width: 1.5rem; padding-left: 0; padding-right: 0;
-  text-align: right;
+  width: 1.75rem; padding-left: 4px; padding-right: 4px;
 }
 #frontier-table .ft-fanout {
   font-family: var(--mono); font-size: 10px; color: var(--text-muted);
-  text-align: left; white-space: nowrap;
-  width: 1.75rem; padding-left: 0; padding-right: 2px;
+  text-align: right; white-space: nowrap;
+  width: 2rem; padding-left: 4px; padding-right: 4px;
 }
 #frontier-table .ft-fanout.ft-fanout-empty {
   color: transparent;
