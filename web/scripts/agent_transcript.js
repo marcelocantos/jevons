@@ -920,6 +920,15 @@
    * @param {{ tab?: string, selectedAgent?: string|null, purpose?: string }} opts
    */
   function sidebarComposerVisible(opts) {
+    const CW = loadConversationWidget();
+    if (CW && typeof CW.composerVisible === 'function') {
+      return CW.composerVisible({
+        tab: opts && opts.tab,
+        selectedAgent: opts && opts.selectedAgent,
+        purpose: opts && opts.purpose,
+        shouldOpen: shouldOpenTranscript,
+      });
+    }
     const o = opts || {};
     const tab = String(o.tab || '');
     if (tab !== 'transcript') return false;
@@ -933,6 +942,10 @@
    * @param {string} text
    */
   function isSidebarDraftEmpty(text) {
+    const CW = loadConversationWidget();
+    if (CW && typeof CW.isDraftEmpty === 'function') {
+      return CW.isDraftEmpty(text);
+    }
     return !String(text == null ? '' : text).trim();
   }
 
@@ -941,6 +954,10 @@
    * @param {string} name
    */
   function agentSendPath(name) {
+    const CW = loadConversationWidget();
+    if (CW && typeof CW.agentSendPath === 'function') {
+      return CW.agentSendPath(name);
+    }
     const n = String(name || '').trim();
     if (!n) return '';
     return '/api/agents/' + encodeURIComponent(n) + '/send';
@@ -987,6 +1004,17 @@
     return { text: t, expectDeliver: true, kind: kind, command: cmd };
   }
 
+  // 🎯T309.1: sidebar composer pure helpers collapse into ConversationWidget.
+  // AgentTranscript keeps the T251/T265 export names as thin delegates so
+  // existing hermetic tests and residual call sites keep working.
+  function loadConversationWidget() {
+    if (typeof ConversationWidget !== 'undefined') return ConversationWidget;
+    if (typeof module === 'object' && module.exports) {
+      try { return require('./conversation_widget.js'); } catch (_) { return null; }
+    }
+    return null;
+  }
+
   /**
    * Build the sidebar send request for the selected transcript participant.
    * Returns { ok:true, url, method, body:{text}, name } or { ok:false, reason }.
@@ -996,6 +1024,13 @@
    * @param {{ purpose?: string }} [opts]
    */
   function sidebarSendRequest(selectedAgent, text, opts) {
+    const CW = loadConversationWidget();
+    if (CW && typeof CW.buildSendRequest === 'function') {
+      return CW.buildSendRequest(selectedAgent, text, {
+        purpose: opts && opts.purpose,
+        isOverseer: function (n, p) { return isOverseer(n, p); },
+      });
+    }
     const name = selectedAgent == null ? '' : String(selectedAgent).trim();
     if (!name) {
       return { ok: false, reason: 'no-selection' };
@@ -1026,6 +1061,10 @@
    * @param {string|null|undefined} reason
    */
   function sidebarSendBlockMessage(reason) {
+    const CW = loadConversationWidget();
+    if (CW && typeof CW.sendBlockMessage === 'function') {
+      return CW.sendBlockMessage(reason);
+    }
     const r = String(reason == null ? '' : reason).trim();
     if (r === 'no-selection') {
       return 'No fleet agent selected — pick a worker/PO in the RHS tree first.';
@@ -1046,11 +1085,15 @@
   }
 
   /**
-   * Classify Enter chords for the sidebar composer (narrow; main stays on ComposerKeys).
-   * Enter → send; Shift+Enter → newline; Ctrl/Cmd+Enter → send (no interject path here).
+   * Classify Enter chords for the sidebar composer (🎯T309.1 → ConversationWidget
+   * compact density). Enter → send; Shift+Enter → newline.
    * @returns {'send'|'newline'|null}
    */
   function classifySidebarComposerKey(e) {
+    const CW = loadConversationWidget();
+    if (CW && typeof CW.classifyComposerKey === 'function') {
+      return CW.classifyComposerKey(e, { density: 'compact' });
+    }
     if (!e || (e.key !== 'Enter' && e.code !== 'Enter')) return null;
     if (e.shiftKey) return 'newline';
     if (e.isComposing || e.keyCode === 229) return null;
@@ -1087,17 +1130,25 @@
 
   /**
    * After successful sidebar send: optimistic owner turn + open working chrome.
-   * Mirrors main chat send → bubble + working (T251/T265).
+   * 🎯T309.1: delegates to ConversationWidget.afterSendOptimistic (same shape).
    */
   function afterSidebarSendOptimistic(lines, text, opts) {
     opts = opts || {};
+    const CW = loadConversationWidget();
+    if (CW && typeof CW.afterSendOptimistic === 'function') {
+      return CW.afterSendOptimistic(lines, text, {
+        title: opts.title,
+        now: opts.now,
+        // 🎯T281: unwrap-aware consecutive dedupe (same as live echo path).
+        isDuplicate: isDuplicateInspectUserLine,
+        normalizeWhen: normalizeWhen,
+      });
+    }
     const body = String(text == null ? '' : text).trim();
     const next = copyInspectLines(lines);
     if (body) {
-      // 🎯T281: unwrap-aware consecutive dedupe (same as live echo path).
       const last = next[next.length - 1];
       if (!isDuplicateInspectUserLine(last, body)) {
-        // 🎯T308: own send is a live turn — stamp it so the bubble carries time.
         const when = opts.now !== undefined ? normalizeWhen(opts.now) : Date.now();
         next.push({ role: 'user', text: body, when: when });
       }

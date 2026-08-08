@@ -551,11 +551,13 @@
           });
           if (el) messagesEl.appendChild(el);
         } else {
-          // Minimal fallback shell (tests / no DOM paint deps).
+          // Minimal fallback when buildMsg is not injected (hermetic only).
+          // Product durable turns always pass buildMsg (T308 one-shell rule).
           var d = doc.createElement('div');
-          d.className = 'msg ' + (spec.role || 'status');
+          d.classList.add('msg');
+          d.classList.add(spec.role || 'status');
           var body = doc.createElement('div');
-          body.className = 'msg-body';
+          body.classList.add('msg-body');
           body.textContent = spec.text || '';
           d.appendChild(body);
           messagesEl.appendChild(d);
@@ -611,8 +613,11 @@
      */
     function send() {
       var text = getDraft();
+      var purpose = typeof opts.getPurpose === 'function'
+        ? opts.getPurpose(agentId)
+        : opts.purpose;
       var req = buildSendRequest(agentId, text, {
-        purpose: opts.purpose,
+        purpose: purpose,
         allowOverseer: !!opts.allowOverseer,
         isOverseer: opts.isOverseer,
       });
@@ -625,6 +630,11 @@
       }
       if (typeof opts.onSend !== 'function') {
         return Promise.resolve(req);
+      }
+      // Host may own the live line model (inspect wire); pull it before optimistic.
+      if (typeof opts.getLines === 'function') {
+        var hostLines = opts.getLines();
+        if (Array.isArray(hostLines)) _lines = hostLines.slice();
       }
       setSending(true);
       return Promise.resolve(opts.onSend(req))

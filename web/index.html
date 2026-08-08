@@ -7488,13 +7488,13 @@ if (agentInspectBody) {
       buildMsg: typeof buildMsg === 'function' ? buildMsg : undefined,
     });
   }
-  // RHS: adopt inspect body + compact composer; owns key/send/draft for sidebar.
+  // RHS: adopt inspect body + compact composer; widget owns key/draft/optimistic/send.
   if (agentInspectEl) {
     inspectConversation = ConversationWidget.mount(agentInspectEl, {
       agentId: selectedAgent || '',
       density: 'compact',
       adopt: true,
-      wireComposer: false, // wired below via sendSidebarComposer (block/err chrome)
+      wireComposer: true, // 🎯T309.1: one composer implementation (compact = CSS only)
       draftStore: _widgetDraftStore || undefined,
       timeIfKnown: true,
       scrollFollow: agentInspectFollow(),
@@ -7527,22 +7527,34 @@ if (agentInspectBody) {
       normalizeWhen: (typeof AgentTranscript !== 'undefined' && AgentTranscript.normalizeWhen)
         ? AgentTranscript.normalizeWhen
         : undefined,
+      getPurpose: function (name) {
+        if (!name || !Array.isArray(lastFleetAgents)) return '';
+        const row = lastFleetAgents.find(function (a) { return a && a.name === name; });
+        return row ? (row.purpose || '') : '';
+      },
+      getLines: function () {
+        return _agentInspectLines;
+      },
       sendEnabled: function () {
         return !_sidebarComposerSending && rhsBottomTab === 'transcript' && !!selectedAgent;
       },
       onSendBlocked: function (_reason, msg) {
+        // Loud block (T275) — widget path, not silent.
         showSidebarSendErr(msg);
       },
       onSendError: function (err) {
         showSidebarSendErr('Send failed: ' + String(err && err.message || err));
       },
       onAfterOptimistic: function (opt) {
+        // ConversationWidget.afterSendOptimistic / AT.afterSidebarSendOptimistic shape.
         _agentInspectLines = opt.lines;
         _agentInspectWorking = true;
         _agentInspectFp = '';
         if (typeof renderAgentInspect === 'function') renderAgentInspect(opt.model);
       },
       onSend: function (req) {
+        // Product HTTP = ConversationWidget.buildSendRequest / sidebarSendRequest shape.
+        _sidebarComposerSending = true;
         const sendFn = (typeof window !== 'undefined' && typeof window.__sidebarAgentSend === 'function')
           ? window.__sidebarAgentSend
           : function (url, body) {
@@ -7578,6 +7590,8 @@ if (agentInspectBody) {
             onSidebarComposerSent(req.name);
           }
           return res;
+        }).finally(function () {
+          _sidebarComposerSending = false;
         });
       },
       onDraftChange: function (name, text) {
@@ -7912,8 +7926,8 @@ function paintInspectBubbleBody(el, role, text, painted) {
 // by selectAgent (owner picks fleet agent) or explicit Transcript tab click.
 // Quiet wire/refresh must leave Frontier alone while selection remains.
 // 🎯T209: primary delivery is WS agent_transcript; HTTP residual for refresh.
-// 🎯T309.1: renderAgentInspect is a widget mount host — policy flags + header;
-// bubble list + working chrome live on ConversationWidget.renderModel.
+// 🎯T309.1: renderAgentInspect is a widget mount host only — scroll container
+// + policy flags (lineSpec/paintBody) are params on the widget.
 function renderAgentInspect(model) {
   if (!agentInspectEl || !agentInspectBody) return;
   if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
@@ -7922,104 +7936,29 @@ function renderAgentInspect(model) {
     _agentInspectLines = inspectLinesCopy(model.lines);
   }
   // 🎯T308/T221: per-turn policy still via inspectBubbleSpec (inspect-only user
-  // body policy + painted MD); host only mounts the shared widget / buildMsg.
-  // Preferred path: one widget owns the bubble list paint.
-  if (inspectConversation && typeof inspectConversation.renderModel === 'function') {
-    if (inspectConversation.setLines) inspectConversation.setLines(_agentInspectLines);
-    inspectConversation.renderModel(model || {});
-    if (typeof decorateBodyLinks === 'function') {
-      decorateBodyLinks(agentInspectBody);
-    }
-    // Keep legacy fingerprint in sync for residual callers.
-    const lines = (model && model.lines) || [];
-    const wantWorking = !!(model && model.working);
-    _agentInspectFp = (typeof AgentTranscript !== 'undefined' && AgentTranscript.linesFingerprint)
-      ? AgentTranscript.linesFingerprint(lines) + (wantWorking ? '|w' : '')
-      : ((typeof ConversationWidget !== 'undefined' && ConversationWidget.linesFingerprint)
-        ? ConversationWidget.linesFingerprint(lines, wantWorking)
-        : String(lines.length));
-    return;
-  }
-  // Residual fallback if widget failed to mount (should not happen in product).
-  if (model.error) {
-    _agentInspectFp = '';
-    _agentInspectWorking = false;
-    agentInspectBody.innerHTML = '<div class="ai-err"></div><div class="ai-empty"></div>';
-    agentInspectBody.querySelector('.ai-err').textContent = model.error;
-    agentInspectBody.querySelector('.ai-empty').textContent = model.empty
-      ? 'No turns yet — agent may still be starting.'
-      : '';
-    return;
-  }
-  if (model.empty && !model.working) {
-    _agentInspectFp = '';
-    _agentInspectWorking = false;
+  // body policy + painted MD for user_query-shaped injects); host does not
+  // re-implement the bubble loop — ConversationWidget.renderModel + buildMsg.
+  if (!inspectConversation || typeof inspectConversation.renderModel !== 'function') {
+    // Widget required for product path — loud empty residual if mount failed.
     agentInspectBody.innerHTML = '';
-    const empty = document.createElement('div');
-    empty.className = 'ai-empty';
-    empty.textContent = 'No transcript turns yet for this agent.';
-    agentInspectBody.appendChild(empty);
+    const err = document.createElement('div');
+    err.className = 'ai-err';
+    err.textContent = 'Conversation widget unavailable.';
+    agentInspectBody.appendChild(err);
     return;
   }
-  const lines = model.lines || [];
-  const wantWorking = !!model.working;
-  const fp = (typeof AgentTranscript !== 'undefined' && AgentTranscript.linesFingerprint)
-    ? AgentTranscript.linesFingerprint(lines) + (wantWorking ? '|w' : '')
-    : String(lines.length) + ':' + lines.map(function (l) {
-        return (l && l.role) + '\0' + (l && l.text);
-      }).join('\n') + (wantWorking ? '|w' : '');
-  if (fp === _agentInspectFp &&
-      (agentInspectBody.querySelector('.msg') ||
-       agentInspectBody.querySelector('.inject-nugget') ||
-       agentInspectBody.querySelector('.working-indicator'))) {
-    return;
-  }
-  _agentInspectWorking = wantWorking;
-  const follow = agentInspectFollow();
-  const prevTop = agentInspectBody.scrollTop;
-  agentInspectBody.innerHTML = '';
-  lines.forEach(function (line) {
-    const spec = inspectSpecFor(line);
-    if (spec.kind === 'nugget') {
-      const wrap = document.createElement('div');
-      wrap.innerHTML = spec.html;
-      const node = wrap.firstChild;
-      if (node) agentInspectBody.appendChild(node);
-      return;
-    }
-    agentInspectBody.appendChild(buildMsg(spec.role, spec.text, spec.when, {
-      timeIfKnown: true,
-      paint: function (el, role, text) { paintInspectBubbleBody(el, role, text, spec.painted); },
-    }));
-  });
+  if (inspectConversation.setLines) inspectConversation.setLines(_agentInspectLines);
+  inspectConversation.renderModel(model || {});
   if (typeof decorateBodyLinks === 'function') {
     decorateBodyLinks(agentInspectBody);
   }
-  if (wantWorking) {
-    const wi = document.createElement('div');
-    wi.className = 'working-indicator';
-    wi.setAttribute('data-aside-working', '1');
-    const dots = '<span class="work-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
-    if (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectWorkingLabel) {
-      wi.innerHTML = dots + ' ' + AgentTranscript.escapeHtml(AgentTranscript.inspectWorkingLabel(
-        model.title || selectedAgent || '',
-      ));
-    } else if (typeof workingLabelHTML === 'function') {
-      wi.innerHTML = workingLabelHTML();
-    } else {
-      wi.innerHTML = dots + ' Working…';
-    }
-    agentInspectBody.appendChild(wi);
-  }
-  _agentInspectFp = fp;
-  if (follow && follow.applyAfterUpdate) {
-    follow.applyAfterUpdate(agentInspectBody, prevTop);
-    if (follow.shouldPin && follow.shouldPin()) {
-      requestAnimationFrame(function () {
-        if (follow.shouldPin()) follow.applyAfterUpdate(agentInspectBody);
-      });
-    }
-  }
+  const lines = (model && model.lines) || [];
+  const wantWorking = !!(model && model.working);
+  _agentInspectFp = (typeof AgentTranscript !== 'undefined' && AgentTranscript.linesFingerprint)
+    ? AgentTranscript.linesFingerprint(lines) + (wantWorking ? '|w' : '')
+    : ((typeof ConversationWidget !== 'undefined' && ConversationWidget.linesFingerprint)
+      ? ConversationWidget.linesFingerprint(lines, wantWorking)
+      : String(lines.length));
 }
 
 // 🎯T209 residual: manual refresh re-issues inspect_subscribe (wire history),
@@ -8676,11 +8615,13 @@ function clearSidebarSendErr() {
   const errEl = agentInspectBody.querySelector('.ai-err.sidebar-send-err');
   if (errEl && errEl.parentNode) errEl.parentNode.removeChild(errEl);
 }
-// 🎯T309.1: sidebar send collapses into ConversationWidget (classify / draft /
-// optimistic / HTTP send). sendSidebarComposer remains the named product entry
-// for residual tests and hermetic seams (__sidebarAgentSend).
+// 🎯T309.1: sendSidebarComposer is a thin named entry over ConversationWidget.send.
+// Classify / draft / optimistic / HTTP live in the widget (compact density).
+// Hermetic seam remains __sidebarAgentSend via mount onSend. T251 residual names:
+// sidebarSendRequest, afterSidebarSendOptimistic, classifySidebarComposerKey are
+// AgentTranscript delegates → ConversationWidget.
 function sendSidebarComposer() {
-  if (!agentInspectInput && !(inspectConversation && inspectConversation.inputEl)) {
+  if (!inspectConversation || typeof inspectConversation.send !== 'function') {
     showSidebarSendErr('Transcript composer is not available.');
     return Promise.resolve(null);
   }
@@ -8693,205 +8634,13 @@ function sendSidebarComposer() {
     showSidebarSendErr(msg);
     return Promise.resolve(null);
   }
-  const text = inspectConversation && inspectConversation.getDraft
-    ? inspectConversation.getDraft()
-    : agentInspectInput.value;
-  let purpose = '';
-  if (Array.isArray(lastFleetAgents)) {
-    const row = lastFleetAgents.find(function (a) {
-      return a && a.name === selectedAgent;
-    });
-    if (row) purpose = row.purpose || '';
-  }
-  // 🎯T309.1: one buildSendRequest path (widget); AT.sidebarSendRequest is alias residual.
-  const req = (typeof ConversationWidget !== 'undefined' && ConversationWidget.buildSendRequest)
-    ? ConversationWidget.buildSendRequest(selectedAgent, text, {
-        purpose: purpose,
-        isOverseer: (typeof AgentTranscript !== 'undefined' && AgentTranscript.isOverseer)
-          ? function (n, p) { return AgentTranscript.isOverseer(n, p); }
-          : undefined,
-      })
-    : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendRequest)
-      ? AgentTranscript.sidebarSendRequest(selectedAgent, text, { purpose: purpose })
-      : (function () {
-          const body = String(text || '').trim();
-          if (!body || !selectedAgent) return { ok: false, reason: 'empty' };
-          return {
-            ok: true,
-            name: selectedAgent,
-            url: '/api/agents/' + encodeURIComponent(selectedAgent) + '/send',
-            method: 'POST',
-            body: { text: body },
-          };
-        })());
-  if (!req || !req.ok) {
-    const reason = (req && req.reason) || 'unknown';
-    const msg = (typeof ConversationWidget !== 'undefined' && ConversationWidget.sendBlockMessage)
-      ? ConversationWidget.sendBlockMessage(reason)
-      : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendBlockMessage)
-        ? AgentTranscript.sidebarSendBlockMessage(reason)
-        : ('Send blocked: ' + reason));
-    showSidebarSendErr(msg);
-    syncSidebarSendEnabled();
-    return Promise.resolve(null);
-  }
-  _sidebarComposerSending = true;
-  if (inspectConversation) inspectConversation.setSending(true);
-  syncSidebarSendEnabled();
-  // Hermetic/mock seam (mirrors frontier play).
-  const sendFn = (typeof window !== 'undefined' && typeof window.__sidebarAgentSend === 'function')
-    ? window.__sidebarAgentSend
-    : function (url, body) {
-        return fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        }).then(function (r) {
-          return r.json().then(function (j) {
-            if (!r.ok) {
-              const err = new Error((j && j.error) || ('HTTP ' + r.status));
-              err.status = r.status;
-              err.body = j;
-              throw err;
-            }
-            return j;
-          }).catch(function (e) {
-            if (e && e.status) throw e;
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return {};
-          });
-        });
-      };
-  return Promise.resolve(sendFn(req.url, req.body))
-    .then(function (res) {
-      clearSidebarSendErr();
-      if (typeof jLog === 'function') {
-        jLog('info', 'sidebar_agent_send', {
-          name: req.name,
-          status: (res && res.status) || 'sent',
-        });
-      }
-      // Clear draft for this agent after accept (sent or queued).
-      if (inspectConversation && inspectConversation.clearComposer) {
-        inspectConversation.clearComposer();
-      } else if (agentInspectInput) {
-        agentInspectInput.value = '';
-        if (req.name) sidebarDraftSet(req.name, '');
-      }
-      // 🎯T265 / 🎯T309.1: optimistic owner bubble via widget afterSendOptimistic.
-      if (req.body && req.body.text) {
-        const opt = (typeof ConversationWidget !== 'undefined' && ConversationWidget.afterSendOptimistic)
-          ? ConversationWidget.afterSendOptimistic(
-              _agentInspectLines,
-              req.body.text,
-              {
-                title: selectedAgent,
-                isDuplicate: (typeof AgentTranscript !== 'undefined' && AgentTranscript.isDuplicateInspectUserLine)
-                  ? function (last, body) { return AgentTranscript.isDuplicateInspectUserLine(last, body); }
-                  : undefined,
-                normalizeWhen: (typeof AgentTranscript !== 'undefined' && AgentTranscript.normalizeWhen)
-                  ? AgentTranscript.normalizeWhen
-                  : undefined,
-              },
-            )
-          : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.afterSidebarSendOptimistic)
-            ? AgentTranscript.afterSidebarSendOptimistic(
-                _agentInspectLines,
-                req.body.text,
-                { title: selectedAgent },
-              )
-            : {
-                lines: (_agentInspectLines || []).concat([
-                  { role: 'user', text: req.body.text, when: Date.now() },
-                ]),
-                model: {
-                  title: selectedAgent,
-                  empty: false,
-                  error: '',
-                  lines: [],
-                  working: true,
-                },
-              });
-        if (opt.model && (!opt.model.lines || !opt.model.lines.length)) {
-          opt.model.lines = opt.lines;
-        }
-        _agentInspectLines = opt.lines;
-        _agentInspectWorking = true;
-        _agentInspectFp = '';
-        if (inspectConversation) {
-          inspectConversation.invalidatePaint();
-          inspectConversation.setLines(_agentInspectLines);
-        }
-        if (typeof renderAgentInspect === 'function') {
-          renderAgentInspect(opt.model);
-        }
-      }
-      // 🎯T252: post-send empty draft → next attention aside if any.
-      if (typeof onSidebarComposerSent === 'function') {
-        onSidebarComposerSent(req.name);
-      }
-      return res;
-    })
-    .catch(function (err) {
-      if (typeof jLog === 'function') {
-        jLog('warn', 'sidebar_agent_send_failed', {
-          name: req.name,
-          err: String(err && err.message || err),
-        });
-      }
-      showSidebarSendErr('Send failed: ' + String(err && err.message || err));
-      return null;
-    })
-    .finally(function () {
-      _sidebarComposerSending = false;
-      if (inspectConversation) inspectConversation.setSending(false);
-      syncSidebarSendEnabled();
-      if (agentInspectInput && typeof agentInspectInput.focus === 'function') {
-        try { agentInspectInput.focus(); } catch (_) { /* isolated */ }
-      }
-    });
+  inspectConversation.setAgentId(selectedAgent);
+  // Widget path: classifyComposerKey (compact) + buildSendRequest + afterSendOptimistic.
+  return inspectConversation.send();
 }
 
-if (agentInspectInput) {
-  agentInspectInput.addEventListener('input', function () {
-    if (selectedAgent) sidebarDraftSet(selectedAgent, agentInspectInput.value);
-    syncSidebarSendEnabled();
-    // 🎯T252: draft cleared while queue non-empty → may advance attention.
-    if (typeof isSidebarComposerDraftEmpty === 'function' && isSidebarComposerDraftEmpty() &&
-        typeof maybeAutoActivateAttention === 'function') {
-      maybeAutoActivateAttention('draft-cleared');
-    }
-    // Compact auto-grow (sidebar cap) — density styling only (🎯T309.1).
-    agentInspectInput.style.height = 'auto';
-    const maxPx = Math.round(window.innerHeight * 0.22) || 120;
-    const next = Math.min(agentInspectInput.scrollHeight, maxPx);
-    agentInspectInput.style.height = next + 'px';
-    agentInspectInput.style.overflowY =
-      agentInspectInput.scrollHeight > maxPx + 1 ? 'auto' : 'hidden';
-  });
-  agentInspectInput.addEventListener('keydown', function (e) {
-    // 🎯T309.1: one key classifier — ConversationWidget.classifyComposerKey (compact).
-    const act = (typeof ConversationWidget !== 'undefined' && ConversationWidget.classifyComposerKey)
-      ? ConversationWidget.classifyComposerKey(e, { density: 'compact' })
-      : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.classifySidebarComposerKey)
-        ? AgentTranscript.classifySidebarComposerKey(e)
-        : ((e.key === 'Enter' || e.code === 'Enter')
-          ? (e.shiftKey ? 'newline' : 'send')
-          : null));
-    if (act === 'send') {
-      e.preventDefault();
-      e.stopPropagation();
-      sendSidebarComposer();
-    }
-  });
-}
-if (agentInspectSend) {
-  agentInspectSend.addEventListener('mousedown', function (e) { e.preventDefault(); });
-  agentInspectSend.addEventListener('click', function (e) {
-    e.preventDefault();
-    sendSidebarComposer();
-  });
-}
+// Compact key/input/send wiring is ConversationWidget.mount({ wireComposer:true }).
+// No second keydown/send path here (🎯T309.1 collapse).
 if (typeof syncSidebarComposer === 'function') syncSidebarComposer();
 
 const frontierRefresh = document.getElementById('frontier-refresh');

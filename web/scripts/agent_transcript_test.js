@@ -20,12 +20,13 @@ function test(name, fn) {
   }
 }
 
-// 🎯T308: the inspect render path is three top-level functions — the host loop
-// plus the two wrappers it delegates to (per-turn policy → AgentTranscript,
-// body paint → shared paintBody). A guard grep that reads only
-// renderAgentInspect now looks at the wrong altitude and passes vacuously.
+// 🎯T308 / 🎯T309.1: inspect render path is host wrappers + ConversationWidget.
+// renderAgentInspect is a mount host only; bubble loop / nugget / scroll live
+// on ConversationWidget.mount + conversation_widget.js. Guards that read only
+// renderAgentInspect alone would pass vacuously or fail after the collapse.
 function inspectRenderSource() {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
   const body = ['inspectSpecFor', 'paintInspectBubbleBody', 'renderAgentInspect']
     .map(function (name) {
       const m = html.match(new RegExp('\\nfunction ' + name + '\\([\\s\\S]*?\\n\\}\\n'));
@@ -33,7 +34,12 @@ function inspectRenderSource() {
       return m[0];
     })
     .join('\n');
-  return { html: html, body: body };
+  const mount = html.match(/\(function mountConversationWidgets\(\) \{[\s\S]*?\}\)\(\);/);
+  assert.ok(mount, 'mountConversationWidgets IIFE present (T309.1 dual mount)');
+  return {
+    html: html,
+    body: body + '\n' + mount[0] + '\n' + widget,
+  };
 }
 
 test('nextSelection toggles off', function () {
@@ -841,7 +847,13 @@ test('T263 index.html freeform create path + working chrome + loud fail', functi
   assert.ok(html.indexOf('expectDeliver') >= 0, 'freeform expects deliver');
   assert.ok(html.indexOf('showAsideOpeningWorking') >= 0, 'working chrome helper');
   assert.ok(html.indexOf('showAsideDeliverError') >= 0, 'loud fail helper');
-  assert.ok(html.indexOf('data-aside-working') >= 0, 'working indicator in inspect');
+  // 🎯T309.1: working chrome is painted by ConversationWidget.renderModel.
+  assert.ok(
+    html.indexOf('data-aside-working') >= 0 ||
+    fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8')
+      .indexOf('data-aside-working') >= 0,
+    'working indicator in inspect (widget or host)',
+  );
   assert.ok(html.indexOf('aside_create_deliver_error') >= 0 ||
     html.indexOf('start/deliver failed') >= 0,
     'deliver failure decision/log path');
@@ -1105,24 +1117,31 @@ test('T251 index.html wires sidebar composer DOM + sendSidebarComposer path', fu
   assert.ok(html.indexOf('id="agent-inspect-send"') >= 0, 'sidebar send control');
   assert.ok(html.indexOf('function sendSidebarComposer') >= 0, 'send handler');
   assert.ok(html.indexOf('function syncSidebarComposer') >= 0, 'visibility sync');
-  // Send path targets selected agent via AgentTranscript.sidebarSendRequest / agent send API.
-  assert.ok(html.indexOf('sidebarSendRequest') >= 0, 'uses pure send request helper');
+  // 🎯T309.1: product send uses ConversationWidget.buildSendRequest; AT.sidebarSendRequest
+  // remains the pure alias (and residual name in comments / mount onSend).
+  assert.ok(
+    html.indexOf('sidebarSendRequest') >= 0 || html.indexOf('buildSendRequest') >= 0,
+    'uses pure send request helper (widget or AT alias)',
+  );
   assert.ok(html.indexOf('__sidebarAgentSend') >= 0, 'hermetic mock seam');
+  assert.ok(html.indexOf('ConversationWidget.mount') >= 0, 'compact composer via widget mount');
+  assert.ok(html.indexOf("density: 'compact'") >= 0 || html.indexOf('density-compact') >= 0,
+    'compact density param for RHS');
   // Must not wire sidebar send through main transport / overseer #input.
-  const sendFn = html.match(/function sendSidebarComposer\([\s\S]*?\nfunction |function sendSidebarComposer\([\s\S]*?\nif \(agentInspectInput\)/);
+  const sendFn = html.match(/function sendSidebarComposer\([\s\S]*?\nfunction |\nfunction sendSidebarComposer\([\s\S]*?\nif \(typeof syncSidebarComposer/);
   assert.ok(sendFn, 'sendSidebarComposer body capturable');
   assert.ok(!/transport\.send\s*\(/.test(sendFn[0]),
     'sidebar send must not use main chat transport');
-  assert.ok(!/\binput\.value\b/.test(sendFn[0]) || /agentInspectInput\.value/.test(sendFn[0]),
-    'sidebar send reads agentInspectInput, not main #input alone');
+  assert.ok(
+    sendFn[0].indexOf('inspectConversation') >= 0 ||
+    sendFn[0].indexOf('agentInspectInput') >= 0,
+    'sidebar send goes through inspect widget / input, not main #input alone',
+  );
   // Composer lives inside #agent-inspect (transcript tab panel).
-  const inspectBlock = html.match(/id="agent-inspect"[\s\S]*?id="frontier-pane"|id="agent-inspect"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>\s*<div id="activity-header"/);
-  // Simpler structural: composer markup after agent-inspect-body, before closing agent-inspect.
   const bodyAt = html.indexOf('id="agent-inspect-body"');
   const composerAt = html.indexOf('id="agent-inspect-composer"');
   const frontierAt = html.indexOf('id="frontier-pane"');
   assert.ok(bodyAt >= 0 && composerAt > bodyAt, 'composer after transcript body');
-  // agent-inspect block is after frontier-pane in markup (sibling panes).
   assert.ok(composerAt > frontierAt || frontierAt < bodyAt, 'composer is in transcript structure');
   assert.ok(html.indexOf('🎯T251') >= 0 || html.indexOf('T251') >= 0, 'T251 marker');
 });
@@ -1142,20 +1161,28 @@ test('T275 sidebarSendBlockMessage is loud for every block reason', function () 
 test('T275 index.html: no silent no-op on sidebar send block/fail', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('function showSidebarSendErr') >= 0, 'loud err helper');
-  assert.ok(html.indexOf('sidebarSendBlockMessage') >= 0, 'uses pure block copy');
+  assert.ok(
+    html.indexOf('sidebarSendBlockMessage') >= 0 || html.indexOf('sendBlockMessage') >= 0,
+    'uses pure block copy (widget or AT alias)',
+  );
   assert.ok(html.indexOf('role', 'alert') >= 0 || html.indexOf("setAttribute('role', 'alert')") >= 0 ||
     html.indexOf('setAttribute("role", "alert")') >= 0 || html.indexOf("role', 'alert'") >= 0,
     'err is alert-role');
-  // Blocked pre-HTTP path must call showSidebarSendErr (not bare return).
-  const sendFn = html.match(/function sendSidebarComposer\([\s\S]*?\nif \(agentInspectInput\)/);
+  // Blocked pre-HTTP path must call showSidebarSendErr (thin entry or mount onSendBlocked).
+  const sendFn = html.match(/function sendSidebarComposer\([\s\S]*?\nif \(typeof syncSidebarComposer/);
   assert.ok(sendFn, 'sendSidebarComposer capturable');
   assert.ok(sendFn[0].indexOf('showSidebarSendErr') >= 0,
     'sendSidebarComposer surfaces block/fail loudly');
   assert.ok(sendFn[0].indexOf('no-selection') >= 0 ||
-    sendFn[0].indexOf('sidebarSendBlockMessage') >= 0,
+    sendFn[0].indexOf('sidebarSendBlockMessage') >= 0 ||
+    sendFn[0].indexOf('sendBlockMessage') >= 0,
     'no-selection is loud');
-  // Product path still posts to agent send API.
-  assert.ok(html.indexOf('/api/agents/') >= 0 && html.indexOf('sidebarSendRequest') >= 0);
+  // Product path still posts to agent send API (mount onSend + buildSendRequest).
+  assert.ok(html.indexOf('/api/agents/') >= 0);
+  assert.ok(
+    html.indexOf('sidebarSendRequest') >= 0 || html.indexOf('buildSendRequest') >= 0,
+    'agent send request helper present',
+  );
   assert.ok(html.indexOf('T275') >= 0 || html.indexOf('🎯T275') >= 0, 'T275 marker');
 });
 
@@ -1266,8 +1293,9 @@ test('T281 index.html: RHS live path uses applyInspectLiveFrame; main uses isDup
   assert.ok(html.indexOf('applyInspectLiveFrame') >= 0,
     'agent_transcript live frames must go through applyInspectLiveFrame');
   assert.ok(
-    html.indexOf('afterSidebarSendOptimistic') >= 0,
-    'RHS send paints optimistic owner turn',
+    html.indexOf('afterSidebarSendOptimistic') >= 0 ||
+    html.indexOf('afterSendOptimistic') >= 0,
+    'RHS send paints optimistic owner turn (widget or AT alias)',
   );
   // Main: T279/T281 shared — optimistic paint + echo dedupe (not ad-hoc only).
   assert.ok(
@@ -1322,8 +1350,11 @@ test('T265 index.html: merge preserves working; send opens working chrome', func
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('mergePaneModelWithLines') >= 0,
     'mergeModelWithAsideWire must use mergePaneModelWithLines');
-  assert.ok(html.indexOf('afterSidebarSendOptimistic') >= 0,
-    'sendSidebarComposer must use afterSidebarSendOptimistic');
+  assert.ok(
+    html.indexOf('afterSidebarSendOptimistic') >= 0 ||
+    html.indexOf('afterSendOptimistic') >= 0,
+    'send path uses afterSendOptimistic (widget) / AT alias',
+  );
   assert.ok(html.indexOf('inspectWorkingLabel') >= 0,
     'inspect working chrome uses inspectWorkingLabel');
   assert.ok(/working:\s*!!\(model\s*&&\s*model\.working\)/.test(html) ||
