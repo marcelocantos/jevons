@@ -783,31 +783,48 @@ body.rhs-resizing-row { cursor: row-resize; }
 #agent-inspect-body > .turn-marker.inject-nugget .inject-label {
   font-family: var(--mono); font-size: 11px;
 }
+/* 🎯T309.1: conversation widget — compact density is styling only (not a second
+   composer implementation). #agent-inspect-* ids adopted by ConversationWidget.mount. */
 /* 🎯T251: dedicated sidebar Transcript composer — independent of main #input */
-#agent-inspect-composer {
+#agent-inspect-composer,
+.conversation-widget.density-compact .cw-composer {
   display: none; flex-shrink: 0; gap: 8px; align-items: flex-end;
   padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)) 10px;
   border-top: 1px solid var(--border); background: var(--surface);
   --ai-control-h: calc(1.4 * 12px + 16px);
 }
-#agent-inspect-composer.visible { display: flex; }
-#agent-inspect-composer.disabled { opacity: 0.55; }
-#agent-inspect-input {
+#agent-inspect-composer.visible,
+.conversation-widget.density-compact .cw-composer.visible { display: flex; }
+#agent-inspect-composer.disabled,
+.conversation-widget.density-compact .cw-composer.disabled { opacity: 0.55; }
+#agent-inspect-input,
+.conversation-widget.density-compact .cw-composer textarea {
   flex: 1; min-width: 0; padding: 7px 10px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--bg); color: var(--text);
   font-size: 12px; font-family: var(--sans); outline: none; resize: none;
   line-height: 1.4; min-height: var(--ai-control-h); max-height: 22vh;
   overflow-y: hidden;
 }
-#agent-inspect-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
-#agent-inspect-input::placeholder { color: var(--text-muted); opacity: 0.5; }
-#agent-inspect-send {
+#agent-inspect-input:focus,
+.conversation-widget.density-compact .cw-composer textarea:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim);
+}
+#agent-inspect-input::placeholder,
+.conversation-widget.density-compact .cw-composer textarea::placeholder {
+  color: var(--text-muted); opacity: 0.5;
+}
+#agent-inspect-send,
+.conversation-widget.density-compact .cw-composer button {
   min-height: var(--ai-control-h); padding: 7px 12px; border-radius: 6px; border: none;
   background: var(--accent); color: #fff; font-size: 11px; font-weight: 600;
   font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; flex-shrink: 0;
 }
-#agent-inspect-send:hover { opacity: 0.85; }
-#agent-inspect-send:disabled { opacity: 0.3; cursor: not-allowed; }
+#agent-inspect-send:hover,
+.conversation-widget.density-compact .cw-composer button:hover { opacity: 0.85; }
+#agent-inspect-send:disabled,
+.conversation-widget.density-compact .cw-composer button:disabled {
+  opacity: 0.3; cursor: not-allowed;
+}
 /* 🎯T131 / 🎯T173 / 🎯T174: frontier table — headerless; constrained to pane; name ellipsizes */
 #frontier-pane { flex: 1; min-height: 0; min-width: 0; }
 #frontier-toolbar {
@@ -1130,7 +1147,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 <div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span><span id="voice-status"><span class="voice-dot"></span><span id="voice-status-text">listening</span></span><div id="theme-toggle"><button data-t="light" title="Light">&#9788;</button><button data-t="system" title="System" class="active">&#9680;</button><button data-t="dark" title="Dark">&#9790;</button></div></div>
 <div id="degraded-banner" role="status" aria-live="polite"></div>
 <div id="main">
-  <div id="chat-pane">
+  <!-- 🎯T309.1: main conversation widget host (comfortable density; VirtualList residual) -->
+  <div id="chat-pane" class="conversation-widget density-comfortable" data-density="comfortable" data-agent-id="jevons">
     <div id="messages"></div>
     <button type="button" id="jump-bottom" hidden title="Jump to latest (End / ⌘↓)">↓ Latest</button>
     <!-- 🎯T136: attention bar not used for aside wall — asides live in RHS fleet tree -->
@@ -1196,7 +1214,8 @@ body.rhs-resizing-row { cursor: row-resize; }
           <div id="frontier-body"></div>
         </div>
         <!-- 🎯T124: selected fleet agent/aside full transcript (out of band from main chat) -->
-        <div id="agent-inspect" class="rhs-tab-pane" role="tabpanel" aria-label="Selected agent transcript">
+        <!-- 🎯T309.1: RHS conversation widget host (compact density = styling; same module as main) -->
+        <div id="agent-inspect" class="rhs-tab-pane conversation-widget density-compact" data-density="compact" role="tabpanel" aria-label="Selected agent transcript">
           <div id="agent-inspect-header">
             <span class="ai-label">Transcript</span>
             <span class="ai-name" id="agent-inspect-name"></span>
@@ -1204,12 +1223,12 @@ body.rhs-resizing-row { cursor: row-resize; }
             <button type="button" id="agent-inspect-close" title="Clear selection">Close</button>
           </div>
           <div id="agent-inspect-body"></div>
-          <!-- 🎯T251: message + send for selected fleet/aside — not main composer -->
-          <div id="agent-inspect-composer" aria-label="Message the selected agent">
+          <!-- 🎯T251 / 🎯T309.1: composer adopted by ConversationWidget.mount (compact) -->
+          <div id="agent-inspect-composer" class="cw-composer density-compact" aria-label="Message the selected agent">
             <label for="agent-inspect-input" class="sr-only">Message the selected agent or aside</label>
             <textarea id="agent-inspect-input" rows="1"
                       placeholder="Message this agent…"
-                      title="Sidebar composer — Enter to send, Shift+Enter for a new line (🎯T251)"
+                      title="Sidebar composer — Enter to send, Shift+Enter for a new line (🎯T251/T309.1)"
                       aria-label="Message the selected agent or aside"
                       aria-multiline="true"
                       autocomplete="off"
@@ -1268,6 +1287,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/fleet_paint.js"></script>
 <script src="scripts/portfolio_group.js"></script>
 <script src="scripts/agent_transcript.js"></script>
+<script src="scripts/conversation_widget.js"></script>
 <script src="scripts/frontier_table.js"></script>
 <script src="scripts/target_context_chrome.js"></script>
 <script src="scripts/instant_tip.js"></script>
@@ -7400,9 +7420,29 @@ function inspectLinesCopy(lines) {
         return l ? { role: l.role, text: l.text, when: l.when } : l;
       });
 }
-// 🎯T251: per-agent sidebar drafts so switching selection does not lose text (T252 sticky).
+// 🎯T309.1: one ConversationWidget owns draft stash + compact composer + bubble
+// host. sidebarDraftByAgent is the single backing map (shared with the widget
+// draft store) so residual T252 sticky-draft call sites stay valid.
 const sidebarDraftByAgent = Object.create(null);
+const _widgetDraftStore = (typeof ConversationWidget !== 'undefined' && ConversationWidget.createDraftStore)
+  ? ConversationWidget.createDraftStore(sidebarDraftByAgent)
+  : null;
+function sidebarDraftGet(name) {
+  const k = name == null ? '' : String(name);
+  if (_widgetDraftStore) return _widgetDraftStore.get(k);
+  return Object.prototype.hasOwnProperty.call(sidebarDraftByAgent, k)
+    ? sidebarDraftByAgent[k] : '';
+}
+function sidebarDraftSet(name, text) {
+  const k = name == null ? '' : String(name);
+  if (!k) return;
+  if (_widgetDraftStore) _widgetDraftStore.set(k, text);
+  else sidebarDraftByAgent[k] = String(text == null ? '' : text);
+}
 let _sidebarComposerSending = false;
+// 🎯T309.1: RHS compact mount + main comfortable mount (VirtualList residual on main).
+let inspectConversation = null;
+let mainConversation = null;
 function agentInspectFollow() {
   if (!_agentInspectFollow) {
     _agentInspectFollow = (typeof AgentTranscript !== 'undefined' && AgentTranscript.createScrollFollow)
@@ -7431,13 +7471,132 @@ if (agentInspectBody) {
     if (f && f.onScroll) f.onScroll(agentInspectBody);
   }, { passive: true });
 }
+
+// 🎯T309.1: mount both conversation surfaces (same module; density is CSS/param).
+(function mountConversationWidgets() {
+  if (typeof ConversationWidget === 'undefined' || !ConversationWidget.mount) return;
+  // Main: adopt #messages + #input-bar; residual VirtualList/history stay outside.
+  const chatPane = document.getElementById('chat-pane');
+  if (chatPane) {
+    mainConversation = ConversationWidget.mount(chatPane, {
+      agentId: 'jevons',
+      density: 'comfortable',
+      adopt: true,
+      wireComposer: false, // main keeps ComposerKeys + send_queue wiring
+      draftStore: _widgetDraftStore || undefined,
+      timeIfKnown: false,
+      buildMsg: typeof buildMsg === 'function' ? buildMsg : undefined,
+    });
+  }
+  // RHS: adopt inspect body + compact composer; owns key/send/draft for sidebar.
+  if (agentInspectEl) {
+    inspectConversation = ConversationWidget.mount(agentInspectEl, {
+      agentId: selectedAgent || '',
+      density: 'compact',
+      adopt: true,
+      wireComposer: false, // wired below via sendSidebarComposer (block/err chrome)
+      draftStore: _widgetDraftStore || undefined,
+      timeIfKnown: true,
+      scrollFollow: agentInspectFollow(),
+      buildMsg: typeof buildMsg === 'function' ? buildMsg : undefined,
+      lineSpec: function (line) {
+        return typeof inspectSpecFor === 'function'
+          ? inspectSpecFor(line)
+          : { kind: 'bubble', role: 'status', text: (line && line.text) || '', when: line && line.when, painted: null };
+      },
+      paintBody: function (el, role, text, painted) {
+        if (typeof paintInspectBubbleBody === 'function') {
+          paintInspectBubbleBody(el, role, text, painted);
+        }
+      },
+      workingLabel: function (name) {
+        if (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectWorkingLabel) {
+          return AgentTranscript.inspectWorkingLabel(name);
+        }
+        return 'Working…';
+      },
+      escapeHtml: (typeof AgentTranscript !== 'undefined' && AgentTranscript.escapeHtml)
+        ? AgentTranscript.escapeHtml
+        : undefined,
+      isOverseer: (typeof AgentTranscript !== 'undefined' && AgentTranscript.isOverseer)
+        ? function (n, p) { return AgentTranscript.isOverseer(n, p); }
+        : undefined,
+      isDuplicate: (typeof AgentTranscript !== 'undefined' && AgentTranscript.isDuplicateInspectUserLine)
+        ? function (last, body) { return AgentTranscript.isDuplicateInspectUserLine(last, body); }
+        : undefined,
+      normalizeWhen: (typeof AgentTranscript !== 'undefined' && AgentTranscript.normalizeWhen)
+        ? AgentTranscript.normalizeWhen
+        : undefined,
+      sendEnabled: function () {
+        return !_sidebarComposerSending && rhsBottomTab === 'transcript' && !!selectedAgent;
+      },
+      onSendBlocked: function (_reason, msg) {
+        showSidebarSendErr(msg);
+      },
+      onSendError: function (err) {
+        showSidebarSendErr('Send failed: ' + String(err && err.message || err));
+      },
+      onAfterOptimistic: function (opt) {
+        _agentInspectLines = opt.lines;
+        _agentInspectWorking = true;
+        _agentInspectFp = '';
+        if (typeof renderAgentInspect === 'function') renderAgentInspect(opt.model);
+      },
+      onSend: function (req) {
+        const sendFn = (typeof window !== 'undefined' && typeof window.__sidebarAgentSend === 'function')
+          ? window.__sidebarAgentSend
+          : function (url, body) {
+              return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+              }).then(function (r) {
+                return r.json().then(function (j) {
+                  if (!r.ok) {
+                    const err = new Error((j && j.error) || ('HTTP ' + r.status));
+                    err.status = r.status;
+                    err.body = j;
+                    throw err;
+                  }
+                  return j;
+                }).catch(function (e) {
+                  if (e && e.status) throw e;
+                  if (!r.ok) throw new Error('HTTP ' + r.status);
+                  return {};
+                });
+              });
+            };
+        return Promise.resolve(sendFn(req.url, req.body)).then(function (res) {
+          clearSidebarSendErr();
+          if (typeof jLog === 'function') {
+            jLog('info', 'sidebar_agent_send', {
+              name: req.name,
+              status: (res && res.status) || 'sent',
+            });
+          }
+          if (typeof onSidebarComposerSent === 'function') {
+            onSidebarComposerSent(req.name);
+          }
+          return res;
+        });
+      },
+      onDraftChange: function (name, text) {
+        if (name) sidebarDraftSet(name, text);
+        if (typeof isSidebarComposerDraftEmpty === 'function' && isSidebarComposerDraftEmpty() &&
+            typeof maybeAutoActivateAttention === 'function') {
+          maybeAutoActivateAttention('draft-cleared');
+        }
+      },
+    });
+  }
+})();
 let rhsBottomTab = (typeof FrontierTable !== 'undefined')
   ? FrontierTable.TAB_FRONTIER
   : 'frontier';
 
-// 🎯T251: show dedicated sidebar composer when Transcript tab + selected agent.
+// 🎯T251 / 🎯T309.1: show compact widget composer when Transcript tab + selected agent.
 function syncSidebarComposer() {
-  if (!agentInspectComposer) return;
+  if (!agentInspectComposer && !(inspectConversation && inspectConversation.composerEl)) return;
   let purpose = '';
   if (selectedAgent && Array.isArray(lastFleetAgents)) {
     const row = lastFleetAgents.find(function (a) {
@@ -7445,19 +7604,33 @@ function syncSidebarComposer() {
     });
     if (row) purpose = row.purpose || '';
   }
-  const visible = (typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarComposerVisible)
-    ? AgentTranscript.sidebarComposerVisible({
+  const visible = (typeof ConversationWidget !== 'undefined' && ConversationWidget.composerVisible)
+    ? ConversationWidget.composerVisible({
         tab: rhsBottomTab,
         selectedAgent: selectedAgent,
         purpose: purpose,
+        shouldOpen: (typeof AgentTranscript !== 'undefined' && AgentTranscript.shouldOpenTranscript)
+          ? function (n, p) { return AgentTranscript.shouldOpenTranscript(n, p); }
+          : undefined,
       })
-    : (rhsBottomTab === 'transcript' && !!selectedAgent);
-  agentInspectComposer.classList.toggle('visible', !!visible);
-  agentInspectComposer.hidden = !visible;
+    : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarComposerVisible)
+      ? AgentTranscript.sidebarComposerVisible({
+          tab: rhsBottomTab,
+          selectedAgent: selectedAgent,
+          purpose: purpose,
+        })
+      : (rhsBottomTab === 'transcript' && !!selectedAgent));
+  if (inspectConversation) {
+    inspectConversation.setAgentId(selectedAgent || '');
+    inspectConversation.setComposerVisible(!!visible);
+  } else if (agentInspectComposer) {
+    agentInspectComposer.classList.toggle('visible', !!visible);
+    agentInspectComposer.hidden = !visible;
+  }
   if (agentInspectInput) {
     agentInspectInput.disabled = !visible;
     if (visible && selectedAgent) {
-      const saved = sidebarDraftByAgent[selectedAgent];
+      const saved = sidebarDraftGet(selectedAgent);
       if (typeof saved === 'string' && agentInspectInput.value !== saved) {
         // Only restore when switching agents leaves empty/stale field.
         if (!agentInspectInput.dataset.boundAgent ||
@@ -7476,7 +7649,7 @@ function syncSidebarComposer() {
     } else if (!visible) {
       // Persist draft for current bound agent before clearing UI binding.
       if (agentInspectInput.dataset.boundAgent) {
-        sidebarDraftByAgent[agentInspectInput.dataset.boundAgent] = agentInspectInput.value;
+        sidebarDraftSet(agentInspectInput.dataset.boundAgent, agentInspectInput.value);
       }
     }
   }
@@ -7484,10 +7657,16 @@ function syncSidebarComposer() {
 }
 
 function syncSidebarSendEnabled() {
+  if (inspectConversation && inspectConversation.syncSendEnabled) {
+    inspectConversation.syncSendEnabled();
+    return;
+  }
   if (!agentInspectSend || !agentInspectInput) return;
-  const empty = (typeof AgentTranscript !== 'undefined' && AgentTranscript.isSidebarDraftEmpty)
-    ? AgentTranscript.isSidebarDraftEmpty(agentInspectInput.value)
-    : !String(agentInspectInput.value || '').trim();
+  const empty = (typeof ConversationWidget !== 'undefined' && ConversationWidget.isDraftEmpty)
+    ? ConversationWidget.isDraftEmpty(agentInspectInput.value)
+    : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.isSidebarDraftEmpty)
+      ? AgentTranscript.isSidebarDraftEmpty(agentInspectInput.value)
+      : !String(agentInspectInput.value || '').trim());
   const can = !empty && !!selectedAgent && !_sidebarComposerSending &&
     rhsBottomTab === 'transcript';
   agentInspectSend.disabled = !can;
@@ -7537,11 +7716,12 @@ function selectAgent(name, opts) {
   const next = (typeof AgentTranscript !== 'undefined')
     ? AgentTranscript.nextSelection(selectedAgent, name, { purpose: purpose })
     : (selectedAgent === name ? null : name);
-  // 🎯T251: stash draft for previous selection before switching.
+  // 🎯T251 / 🎯T309.1: stash draft for previous selection before switching.
   if (agentInspectInput && agentInspectInput.dataset.boundAgent &&
       agentInspectInput.dataset.boundAgent !== next) {
-    sidebarDraftByAgent[agentInspectInput.dataset.boundAgent] = agentInspectInput.value;
+    sidebarDraftSet(agentInspectInput.dataset.boundAgent, agentInspectInput.value);
   }
+  if (inspectConversation) inspectConversation.setAgentId(next || '');
   selectedAgent = next;
   document.querySelectorAll('.agent-node').forEach(n =>
     n.classList.toggle('selected', !!(selectedAgent && n.dataset.agent === selectedAgent)));
@@ -7577,13 +7757,17 @@ function hideAgentInspect() {
   unsubscribeAgentInspect();
   if (agentInspectBody) agentInspectBody.innerHTML = '';
   if (agentInspectName) agentInspectName.textContent = '';
-  // 🎯T251: keep drafts in map; clear bound field for clean Frontier view.
+  // 🎯T251 / 🎯T309.1: keep drafts in store; clear bound field for clean Frontier view.
   if (agentInspectInput) {
     if (agentInspectInput.dataset.boundAgent) {
-      sidebarDraftByAgent[agentInspectInput.dataset.boundAgent] = agentInspectInput.value;
+      sidebarDraftSet(agentInspectInput.dataset.boundAgent, agentInspectInput.value);
     }
     agentInspectInput.value = '';
     delete agentInspectInput.dataset.boundAgent;
+  }
+  if (inspectConversation) {
+    inspectConversation.setAgentId('');
+    inspectConversation.invalidatePaint();
   }
   _agentInspectFp = '';
   _agentInspectLines = [];
@@ -7728,9 +7912,35 @@ function paintInspectBubbleBody(el, role, text, painted) {
 // by selectAgent (owner picks fleet agent) or explicit Transcript tab click.
 // Quiet wire/refresh must leave Frontier alone while selection remains.
 // 🎯T209: primary delivery is WS agent_transcript; HTTP residual for refresh.
+// 🎯T309.1: renderAgentInspect is a widget mount host — policy flags + header;
+// bubble list + working chrome live on ConversationWidget.renderModel.
 function renderAgentInspect(model) {
   if (!agentInspectEl || !agentInspectBody) return;
   if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
+  _agentInspectWorking = !!(model && model.working);
+  if (model && model.lines) {
+    _agentInspectLines = inspectLinesCopy(model.lines);
+  }
+  // 🎯T308/T221: per-turn policy still via inspectBubbleSpec (inspect-only user
+  // body policy + painted MD); host only mounts the shared widget / buildMsg.
+  // Preferred path: one widget owns the bubble list paint.
+  if (inspectConversation && typeof inspectConversation.renderModel === 'function') {
+    if (inspectConversation.setLines) inspectConversation.setLines(_agentInspectLines);
+    inspectConversation.renderModel(model || {});
+    if (typeof decorateBodyLinks === 'function') {
+      decorateBodyLinks(agentInspectBody);
+    }
+    // Keep legacy fingerprint in sync for residual callers.
+    const lines = (model && model.lines) || [];
+    const wantWorking = !!(model && model.working);
+    _agentInspectFp = (typeof AgentTranscript !== 'undefined' && AgentTranscript.linesFingerprint)
+      ? AgentTranscript.linesFingerprint(lines) + (wantWorking ? '|w' : '')
+      : ((typeof ConversationWidget !== 'undefined' && ConversationWidget.linesFingerprint)
+        ? ConversationWidget.linesFingerprint(lines, wantWorking)
+        : String(lines.length));
+    return;
+  }
+  // Residual fallback if widget failed to mount (should not happen in product).
   if (model.error) {
     _agentInspectFp = '';
     _agentInspectWorking = false;
@@ -7758,9 +7968,6 @@ function renderAgentInspect(model) {
     : String(lines.length) + ':' + lines.map(function (l) {
         return (l && l.role) + '\0' + (l && l.text);
       }).join('\n') + (wantWorking ? '|w' : '');
-  // Unchanged poll: do not thrash free-scroll or full-replace.
-  // 🎯T233: inject-only transcripts may have .inject-nugget and no .msg.
-  // 🎯T263: working chrome is part of fingerprint so open→working repaints.
   if (fp === _agentInspectFp &&
       (agentInspectBody.querySelector('.msg') ||
        agentInspectBody.querySelector('.inject-nugget') ||
@@ -7771,14 +7978,8 @@ function renderAgentInspect(model) {
   const follow = agentInspectFollow();
   const prevTop = agentInspectBody.scrollTop;
   agentInspectBody.innerHTML = '';
-  // 🎯T308: host loop only — AgentTranscript.inspectBubbleSpec owns every
-  // per-turn decision (role, nugget-vs-bubble, timestamp, inspect-only user
-  // body policy), and buildMsg — the one constructor main #messages uses —
-  // owns the shell, .msg-body and .msg-time.
   lines.forEach(function (line) {
     const spec = inspectSpecFor(line);
-    // 🎯T233 residual: harness injects stay compact ⋯ nugget chrome (outer
-    // turn-marker HTML), deliberately NOT conversational .msg bubbles.
     if (spec.kind === 'nugget') {
       const wrap = document.createElement('div');
       wrap.innerHTML = spec.html;
@@ -7792,15 +7993,13 @@ function renderAgentInspect(model) {
     }));
   });
   if (typeof decorateBodyLinks === 'function') {
-    decorateBodyLinks(agentInspectBody); // 🎯T151 belt-and-suspenders
+    decorateBodyLinks(agentInspectBody);
   }
-  // 🎯T263/T265: working/activity chrome while turn open (aside/agent microcosm).
   if (wantWorking) {
     const wi = document.createElement('div');
     wi.className = 'working-indicator';
     wi.setAttribute('data-aside-working', '1');
     const dots = '<span class="work-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
-    // Prefer agent-named inspect label (not overseer "Jevons is working").
     if (typeof AgentTranscript !== 'undefined' && AgentTranscript.inspectWorkingLabel) {
       wi.innerHTML = dots + ' ' + AgentTranscript.escapeHtml(AgentTranscript.inspectWorkingLabel(
         model.title || selectedAgent || '',
@@ -7813,7 +8012,6 @@ function renderAgentInspect(model) {
     agentInspectBody.appendChild(wi);
   }
   _agentInspectFp = fp;
-  // Stickiness: pin only while Tracking; free preserves prevTop.
   if (follow && follow.applyAfterUpdate) {
     follow.applyAfterUpdate(agentInspectBody, prevTop);
     if (follow.shouldPin && follow.shouldPin()) {
@@ -8478,19 +8676,26 @@ function clearSidebarSendErr() {
   const errEl = agentInspectBody.querySelector('.ai-err.sidebar-send-err');
   if (errEl && errEl.parentNode) errEl.parentNode.removeChild(errEl);
 }
+// 🎯T309.1: sidebar send collapses into ConversationWidget (classify / draft /
+// optimistic / HTTP send). sendSidebarComposer remains the named product entry
+// for residual tests and hermetic seams (__sidebarAgentSend).
 function sendSidebarComposer() {
-  if (!agentInspectInput) {
+  if (!agentInspectInput && !(inspectConversation && inspectConversation.inputEl)) {
     showSidebarSendErr('Transcript composer is not available.');
     return Promise.resolve(null);
   }
   if (!selectedAgent) {
-    const msg = (typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendBlockMessage)
-      ? AgentTranscript.sidebarSendBlockMessage('no-selection')
-      : 'No fleet agent selected — pick a worker/PO in the RHS tree first.';
+    const msg = (typeof ConversationWidget !== 'undefined' && ConversationWidget.sendBlockMessage)
+      ? ConversationWidget.sendBlockMessage('no-selection')
+      : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendBlockMessage)
+        ? AgentTranscript.sidebarSendBlockMessage('no-selection')
+        : 'No fleet agent selected — pick a worker/PO in the RHS tree first.');
     showSidebarSendErr(msg);
     return Promise.resolve(null);
   }
-  const text = agentInspectInput.value;
+  const text = inspectConversation && inspectConversation.getDraft
+    ? inspectConversation.getDraft()
+    : agentInspectInput.value;
   let purpose = '';
   if (Array.isArray(lastFleetAgents)) {
     const row = lastFleetAgents.find(function (a) {
@@ -8498,29 +8703,40 @@ function sendSidebarComposer() {
     });
     if (row) purpose = row.purpose || '';
   }
-  const req = (typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendRequest)
-    ? AgentTranscript.sidebarSendRequest(selectedAgent, text, { purpose: purpose })
-    : (function () {
-        const body = String(text || '').trim();
-        if (!body || !selectedAgent) return { ok: false, reason: 'empty' };
-        return {
-          ok: true,
-          name: selectedAgent,
-          url: '/api/agents/' + encodeURIComponent(selectedAgent) + '/send',
-          method: 'POST',
-          body: { text: body },
-        };
-      })();
+  // 🎯T309.1: one buildSendRequest path (widget); AT.sidebarSendRequest is alias residual.
+  const req = (typeof ConversationWidget !== 'undefined' && ConversationWidget.buildSendRequest)
+    ? ConversationWidget.buildSendRequest(selectedAgent, text, {
+        purpose: purpose,
+        isOverseer: (typeof AgentTranscript !== 'undefined' && AgentTranscript.isOverseer)
+          ? function (n, p) { return AgentTranscript.isOverseer(n, p); }
+          : undefined,
+      })
+    : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendRequest)
+      ? AgentTranscript.sidebarSendRequest(selectedAgent, text, { purpose: purpose })
+      : (function () {
+          const body = String(text || '').trim();
+          if (!body || !selectedAgent) return { ok: false, reason: 'empty' };
+          return {
+            ok: true,
+            name: selectedAgent,
+            url: '/api/agents/' + encodeURIComponent(selectedAgent) + '/send',
+            method: 'POST',
+            body: { text: body },
+          };
+        })());
   if (!req || !req.ok) {
     const reason = (req && req.reason) || 'unknown';
-    const msg = (typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendBlockMessage)
-      ? AgentTranscript.sidebarSendBlockMessage(reason)
-      : ('Send blocked: ' + reason);
+    const msg = (typeof ConversationWidget !== 'undefined' && ConversationWidget.sendBlockMessage)
+      ? ConversationWidget.sendBlockMessage(reason)
+      : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendBlockMessage)
+        ? AgentTranscript.sidebarSendBlockMessage(reason)
+        : ('Send blocked: ' + reason));
     showSidebarSendErr(msg);
     syncSidebarSendEnabled();
     return Promise.resolve(null);
   }
   _sidebarComposerSending = true;
+  if (inspectConversation) inspectConversation.setSending(true);
   syncSidebarSendEnabled();
   // Hermetic/mock seam (mirrors frontier play).
   const sendFn = (typeof window !== 'undefined' && typeof window.__sidebarAgentSend === 'function')
@@ -8556,40 +8772,58 @@ function sendSidebarComposer() {
         });
       }
       // Clear draft for this agent after accept (sent or queued).
-      if (agentInspectInput) {
+      if (inspectConversation && inspectConversation.clearComposer) {
+        inspectConversation.clearComposer();
+      } else if (agentInspectInput) {
         agentInspectInput.value = '';
-        if (req.name) sidebarDraftByAgent[req.name] = '';
+        if (req.name) sidebarDraftSet(req.name, '');
       }
-      // 🎯T265: optimistic owner bubble + working chrome (main-chat microcosm).
-      // 🎯T275: also for status=queued — owner sees the turn; not a silent drop.
+      // 🎯T265 / 🎯T309.1: optimistic owner bubble via widget afterSendOptimistic.
       if (req.body && req.body.text) {
-        if (typeof AgentTranscript !== 'undefined' && AgentTranscript.afterSidebarSendOptimistic) {
-          const opt = AgentTranscript.afterSidebarSendOptimistic(
-            _agentInspectLines,
-            req.body.text,
-            { title: selectedAgent },
-          );
-          _agentInspectLines = opt.lines;
-          _agentInspectWorking = true;
-          _agentInspectFp = '';
-          if (typeof renderAgentInspect === 'function') {
-            renderAgentInspect(opt.model);
-          }
-        } else {
-          _agentInspectLines = (_agentInspectLines || []).concat([
-            { role: 'user', text: req.body.text, when: Date.now() }, // 🎯T308
-          ]);
-          _agentInspectWorking = true;
-          _agentInspectFp = '';
-          if (typeof renderAgentInspect === 'function') {
-            renderAgentInspect({
-              title: selectedAgent,
-              empty: false,
-              error: '',
-              lines: inspectLinesCopy(_agentInspectLines),
-              working: true,
-            });
-          }
+        const opt = (typeof ConversationWidget !== 'undefined' && ConversationWidget.afterSendOptimistic)
+          ? ConversationWidget.afterSendOptimistic(
+              _agentInspectLines,
+              req.body.text,
+              {
+                title: selectedAgent,
+                isDuplicate: (typeof AgentTranscript !== 'undefined' && AgentTranscript.isDuplicateInspectUserLine)
+                  ? function (last, body) { return AgentTranscript.isDuplicateInspectUserLine(last, body); }
+                  : undefined,
+                normalizeWhen: (typeof AgentTranscript !== 'undefined' && AgentTranscript.normalizeWhen)
+                  ? AgentTranscript.normalizeWhen
+                  : undefined,
+              },
+            )
+          : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.afterSidebarSendOptimistic)
+            ? AgentTranscript.afterSidebarSendOptimistic(
+                _agentInspectLines,
+                req.body.text,
+                { title: selectedAgent },
+              )
+            : {
+                lines: (_agentInspectLines || []).concat([
+                  { role: 'user', text: req.body.text, when: Date.now() },
+                ]),
+                model: {
+                  title: selectedAgent,
+                  empty: false,
+                  error: '',
+                  lines: [],
+                  working: true,
+                },
+              });
+        if (opt.model && (!opt.model.lines || !opt.model.lines.length)) {
+          opt.model.lines = opt.lines;
+        }
+        _agentInspectLines = opt.lines;
+        _agentInspectWorking = true;
+        _agentInspectFp = '';
+        if (inspectConversation) {
+          inspectConversation.invalidatePaint();
+          inspectConversation.setLines(_agentInspectLines);
+        }
+        if (typeof renderAgentInspect === 'function') {
+          renderAgentInspect(opt.model);
         }
       }
       // 🎯T252: post-send empty draft → next attention aside if any.
@@ -8610,6 +8844,7 @@ function sendSidebarComposer() {
     })
     .finally(function () {
       _sidebarComposerSending = false;
+      if (inspectConversation) inspectConversation.setSending(false);
       syncSidebarSendEnabled();
       if (agentInspectInput && typeof agentInspectInput.focus === 'function') {
         try { agentInspectInput.focus(); } catch (_) { /* isolated */ }
@@ -8619,14 +8854,14 @@ function sendSidebarComposer() {
 
 if (agentInspectInput) {
   agentInspectInput.addEventListener('input', function () {
-    if (selectedAgent) sidebarDraftByAgent[selectedAgent] = agentInspectInput.value;
+    if (selectedAgent) sidebarDraftSet(selectedAgent, agentInspectInput.value);
     syncSidebarSendEnabled();
     // 🎯T252: draft cleared while queue non-empty → may advance attention.
     if (typeof isSidebarComposerDraftEmpty === 'function' && isSidebarComposerDraftEmpty() &&
         typeof maybeAutoActivateAttention === 'function') {
       maybeAutoActivateAttention('draft-cleared');
     }
-    // Compact auto-grow (sidebar cap).
+    // Compact auto-grow (sidebar cap) — density styling only (🎯T309.1).
     agentInspectInput.style.height = 'auto';
     const maxPx = Math.round(window.innerHeight * 0.22) || 120;
     const next = Math.min(agentInspectInput.scrollHeight, maxPx);
@@ -8635,11 +8870,14 @@ if (agentInspectInput) {
       agentInspectInput.scrollHeight > maxPx + 1 ? 'auto' : 'hidden';
   });
   agentInspectInput.addEventListener('keydown', function (e) {
-    const act = (typeof AgentTranscript !== 'undefined' && AgentTranscript.classifySidebarComposerKey)
-      ? AgentTranscript.classifySidebarComposerKey(e)
-      : ((e.key === 'Enter' || e.code === 'Enter')
-        ? (e.shiftKey ? 'newline' : 'send')
-        : null);
+    // 🎯T309.1: one key classifier — ConversationWidget.classifyComposerKey (compact).
+    const act = (typeof ConversationWidget !== 'undefined' && ConversationWidget.classifyComposerKey)
+      ? ConversationWidget.classifyComposerKey(e, { density: 'compact' })
+      : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.classifySidebarComposerKey)
+        ? AgentTranscript.classifySidebarComposerKey(e)
+        : ((e.key === 'Enter' || e.code === 'Enter')
+          ? (e.shiftKey ? 'newline' : 'send')
+          : null));
     if (act === 'send') {
       e.preventDefault();
       e.stopPropagation();

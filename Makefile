@@ -74,6 +74,7 @@ test-web:
 	node web/scripts/tool_tooltip_test.js
 	node web/scripts/instant_tip_test.js
 	node web/scripts/agent_transcript_test.js
+	node web/scripts/conversation_widget_test.js
 	node web/scripts/frontier_table_test.js
 	node web/scripts/target_context_chrome_test.js
 	node web/scripts/mermaid_actions_test.js
