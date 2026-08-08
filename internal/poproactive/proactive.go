@@ -95,6 +95,11 @@ var designGateMarkers = []string{
 	"docs-only",
 	"pure documentation",
 	"t29-class",
+	// 🎯T254.1 owner-parked prose: targets filed with explicit "do not build
+	// yet" language must never be auto-consumed by the daemon sweep.
+	"parked",
+	"file only",
+	"do not implement",
 }
 
 // IsDesignGatedLeaf reports whether tags/name/context mark a design-gated or

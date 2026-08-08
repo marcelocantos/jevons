@@ -83,6 +83,22 @@ type Config struct {
 	// Membership is declarative path fragments matched against agent
 	// workdirs — never agent-name parsing. Empty means no portfolio chrome.
 	Portfolios []Portfolio `yaml:"portfolios"`
+
+	// FrontierConsume tunes the 🎯T254.1 unattended frontier consumption
+	// loop (daemon auto-spawns workers for unengaged ready frontier leaves
+	// under the product PO). Zero value = enabled with conservative defaults.
+	FrontierConsume FrontierConsumeConfig `yaml:"frontier_consume"`
+}
+
+// FrontierConsumeConfig is the 🎯T254.1 enforcement loop tuning. The loop is
+// on by default (the target is daemon enforcement without owner spawn
+// commands); Disabled opts out. Zero numeric fields use compiled defaults
+// (10m interval, 1 spawn per cycle, 3 auto-spawns per target).
+type FrontierConsumeConfig struct {
+	Disabled           bool `yaml:"disabled"`
+	IntervalMinutes    int  `yaml:"interval_minutes"`
+	MaxSpawnsPerCycle  int  `yaml:"max_spawns_per_cycle"`
+	MaxSpawnsPerTarget int  `yaml:"max_spawns_per_target"`
 }
 
 // Portfolio is one named domain group (e.g. personal, minicades, schools).

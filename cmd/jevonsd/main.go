@@ -770,6 +770,24 @@ func main() {
 		DefaultPO:    "jevons-po",
 	})
 
+	// 🎯T254.1: unattended frontier consumption — every non-design-gated ready
+	// frontier leaf gets a worker under jevons-po (or an explicit park reason)
+	// without an owner spawn command. Conservative drip (default 1 spawn per
+	// 10m cycle), durable per-target backoff/max, budget clamp composed.
+	if cfg.FrontierConsume.Disabled {
+		slog.Info("frontier consume loop disabled by config (🎯T254.1)")
+	} else {
+		go mcpserver.StartFrontierConsumeLoop(ctx, mcpserver.FrontierConsumeLoopArgs{
+			Server:             mcpSrv,
+			StateDir:           cfg.StateDir,
+			Workdir:            cfg.WorkDir,
+			ParentPO:           "jevons-po",
+			Interval:           time.Duration(cfg.FrontierConsume.IntervalMinutes) * time.Minute,
+			MaxSpawnsPerCycle:  cfg.FrontierConsume.MaxSpawnsPerCycle,
+			MaxSpawnsPerTarget: cfg.FrontierConsume.MaxSpawnsPerTarget,
+		})
+	}
+
 	// 🎯T204: cockpit converge — overseer Alive+Attach+turn-usable; fleet
 	// dead-handle recovery. Restart dual-path is T171 (not periodic ladder).
 	srv.SetCockpitHooks(server.CockpitHooks{
