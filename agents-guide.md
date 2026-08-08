@@ -127,6 +127,33 @@ purpose=`work`. One registry id space and one deliver path:
 RHS fleet tree (asides use 💡 chrome; 🎯T136) — not a top attention chip
 bar. Same underlying registry records.
 
+### One deliver-by-name path, overseer included (🎯T309.3)
+
+Every message to an agent — `jevons_agent_send`, `POST /api/agents/{name}/send`,
+and the daemon's own worker-reply / worker-idle / daemon-restarted
+notifications — runs the **same** implementation, addressed by agent name.
+**The overseer is just another addressable agent.** It no longer has a
+privileged talk wire of its own, so a PO or worker reporting up by name lands
+in the owner chat journal with queue-on-busy retry behind it, exactly like any
+other delivery.
+
+What this means when you are briefing or reporting:
+
+- **Address by name, not by API.** `jevons_agent_send` with `name="jevons"`
+  reaches the overseer; there is no separate overseer tool to hunt for.
+- **Hierarchy is lineage, not reachability.** Report up (worker→PO→overseer)
+  and direct down (ancestor→descendant) are always allowed; peer messaging
+  between siblings is allowed on purpose. What you *cannot* do is speak as the
+  **owner** — owner-origin turns paint an owner bubble and only the owner's own
+  surface may assert them.
+- **No silent drops.** An unregistered peer, an unreachable overseer, and a
+  failed delivery are **errors you get back**. A busy peer returns `queued`
+  with the message retained (🎯T111.1) — never a discarded send (🎯T61/T62).
+
+`jevons_thread_direct` is **not** a second deliver path: it is the
+*synchronous* request/reply op (it waits for the reply and assembles it), which
+is why it stays separate from the fire-and-forget family above.
+
 **Do not default to** Grok `spawn_subagent` (or worktree subagents that
 die with the parent). Those children are not first-class fleet entries,
 vanish on parent interrupt, and break multi-agent observability.

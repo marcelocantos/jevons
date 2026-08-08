@@ -562,6 +562,16 @@ survive daemon restarts — you never lose one.
   don't poll or wait, just continue working and handle it when it
   arrives. The agent retains full conversation history.
   Required: name, text.
+  **One path, everyone addressable (🎯T309.3):** this is the same
+  implementation the HTTP send API and the daemon's own worker-reply /
+  worker-idle notifications use, and **the overseer is addressable by name
+  through it** like any other agent — it has no privileged talk wire.
+  Hierarchy comes from lineage (report up, direct down, and peer messaging
+  are all allowed), not from which API you can reach. You may **not** send as
+  the *owner*: owner-origin turns paint an owner bubble and only the owner's
+  own surface may assert them. Undeliverable is always an **error you get
+  back** — unregistered peer, unreachable overseer, failed delivery — and a
+  busy peer returns `queued` with the message retained, never a silent drop.
 - **jevons_agent_stop** — Stop a running agent. It resumes later.
   Required: name.
 

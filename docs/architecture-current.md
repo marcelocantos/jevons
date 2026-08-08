@@ -117,6 +117,52 @@ Server↔client event normalization stays in one layer:
 live frames carry chat-wire lines verbatim, so 🎯T240 silent-stream
 suppression and 🎯T223 stream ids are inherited, never re-implemented.
 
+### One deliver path in the fleet layer (🎯T309.3)
+
+The **send** op above bottoms out in a single implementation,
+`mcpserver.deliverByName(name, text, origin, interrupt)`. Everything that
+delivers a message to an agent goes through it:
+
+| Caller | Route |
+|---|---|
+| MCP `jevons_agent_send` | `sendToAgent` → `deliverByName` (origin pinned to `agent`) |
+| `POST /api/agents/{name}/send` | `DeliverAgentMessageAs` → `deliverByName` |
+| worker reply notify, worker-idle, daemon-restarted, fleet health | `notify` / `emit*` → `deliverByName` |
+
+Two arms, one contract. A **fleet** name resolves through the registry
+(rehydrating a stopped agent) and delivers with the 🎯T111.1 busy
+semantics. The **overseer** name resolves to the owner-chat delivery seam
+(`SetOverseerDeliver` → `server.DeliverToOverseerAs`), which owns
+journalling, owner bubbles, and the notify queue. `mcpserver` does not
+import `server`, so the two share the `origin` wire strings rather than a
+type; `main` adapts.
+
+Before this, the overseer had a **privileged wire** — a bare
+`notifyJevon(text)` injection set from `main` — and which peers an agent
+could reach depended on which API it held rather than on the hierarchy.
+That split carried real bugs: `jevons_agent_send` addressed to the
+overseer went straight at its process, bypassing the journal and the
+queue-on-busy retry (the 🎯T62 drop), and `notify` discarded a worker's
+terminal report with a log line when no notify func was set.
+
+**Authorization is decided on the path, by lineage** (`deliver_policy.go`,
+pure): report up and direct down are always allowed, peer messaging is
+allowed on purpose (🎯T309 acceptance 3), and `origin: owner` — which
+paints an owner bubble — may be asserted only by the owner surface. MCP
+`jevons_agent_send` pins `agent` origin, so the fleet has no way to speak
+in the owner's voice. **Residual:** MCP calls from every agent arrive over
+one shared transport, so `jevons_agent_send` cannot yet name its caller
+the way `jevons_agent_kill` does; lineage denial is decidable but not
+enforceable per-caller (🎯T321).
+
+`jevons_thread_direct` is **not** a residual deliver variant. It is the
+*synchronous* request/reply op: it subscribes to the agent's event stream
+**before** sending and assembles the whole reply, an ordering that
+`internal/fleet/reply.go` documents as load-bearing (🎯T286 — subscribing
+after the send loses the front of the reply). Folding it into the
+fire-and-forget path would reintroduce that truncation, so it stays a
+distinct operation rather than a shim.
+
 ## The provider seam (🎯T45)
 
 Jevons defaults to Grok via claudia with a pluggable selection surface (🎯T148); the
