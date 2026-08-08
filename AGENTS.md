@@ -187,6 +187,17 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   parked-for-design / pure documentation. Related: 🎯T155 continuous
   frontier kick-off. Instructional residual. Persona + agents-guide +
   fleet standing brief.
+- **PO proactive-until-empty-then-sleep (🎯T325.1):** when the
+  product-scoped frontier has unblocked ready leaves, the PO continues
+  spawn/brief until empty or blocked — not a one-shot pass that strands
+  work. When empty (or only design-gated / blocked / parked /
+  already-engaged leaves remain), the PO sleeps/idles without open-mission
+  thrash; stays interruptible for owner/overseer directs. Pure helpers:
+  `ClassifyPOProactive` / `ClassifyFrontierLeaf` /
+  `POOpenMissionForProactive`. Design:
+  `docs/design/life-and-work-org-map.md` §8. Complements T155 / T193 /
+  T244. Residual: instructional + pure classifier; hard daemon sleep gate
+  may follow. Persona + agents-guide + fleet standing brief.
 - **Worker names literal dots (🎯T197):** hierarchical target ids in fleet
   worker names keep **literal dots** — never digit-squash
   (`jv-t27.2-config` not `jv-t272-config`). Flat ids unchanged

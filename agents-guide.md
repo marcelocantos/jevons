@@ -223,6 +223,27 @@ unless the target is design-gated or parked.
 - **Related:** 🎯T155 continuous unattended frontier kick-off.
 - **Residual:** instructional; no daemon auto-spawn unless later enforced.
 
+### PO proactive-until-empty-then-sleep (🎯T325.1)
+
+Product owners run **proactive-until-empty-then-sleep**: keep kicking Build
+while the product frontier has ready leaves; sleep/idle without open-mission
+thrash when empty; stay interruptible.
+
+- **Kick while ready:** unblocked ready leaves (not design-gated /
+  needs-owner / design-discussion / parked-for-design / blocked /
+  already-engaged) ⇒ continue spawn/brief until empty or blocked — not a
+  one-shot pass that strands work. Complements 🎯T155.
+- **Sleep when empty:** empty frontier, or only gated/blocked/parked/
+  already-engaged leaves ⇒ sleep/idle without perpetual create thrash or
+  zombie open-mission re-spawn noise (compose 🎯T244).
+- **Interruptible:** PO remains registered for owner/overseer directs while
+  sleeping or mid-pass.
+- **Pure helpers:** `ClassifyPOProactive` / `ClassifyFrontierLeaf` /
+  `POOpenMissionForProactive`. Design:
+  `docs/design/life-and-work-org-map.md` §8 child (1).
+- **Residual:** instructional doctrine + pure classifier; hard daemon sleep
+  gate may follow.
+
 ### PO never implements (🎯T125)
 
 **Stratum-1 product owners never implement themselves** — including small

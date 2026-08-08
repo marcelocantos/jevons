@@ -337,6 +337,32 @@ func TestDefaultPersonaFileToSpawnSameTurn(t *testing.T) {
 	}
 }
 
+// 🎯T325.1: PO proactive-until-empty-then-sleep doctrine on persona surface.
+func TestDefaultPersonaPOProactiveUntilEmptyThenSleep(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"PO proactive-until-empty-then-sleep",
+		"T325.1",
+		"until empty or blocked",
+		"one-shot pass",
+		"sleep/idle",
+		"open-mission",
+		"interruptible",
+		"ClassifyPOProactive",
+		"ClassifyFrontierLeaf",
+		"POOpenMissionForProactive",
+		"life-and-work-org-map.md",
+		"instructional",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T325.1 marker %q", want)
+		}
+	}
+}
+
 // 🎯T197: hierarchical worker names keep literal dots; never digit-squash.
 func TestDefaultPersonaWorkerNamesLiteralDots(t *testing.T) {
 	p, err := Default().Persona()
@@ -472,6 +498,18 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"blocked-on-human",
 		"pure documentation",
 		"docs-only",
+		// 🎯T325.1 PO proactive-until-empty-then-sleep
+		"PO proactive-until-empty-then-sleep",
+		"T325.1",
+		"until empty or blocked",
+		"one-shot pass",
+		"sleep/idle",
+		"open-mission",
+		"interruptible",
+		"ClassifyPOProactive",
+		"ClassifyFrontierLeaf",
+		"POOpenMissionForProactive",
+		"life-and-work-org-map.md",
 		"alter ego", // T98
 		"T98",
 		"ceo-alter-ego.md",
@@ -579,6 +617,18 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"design-gated",
 		"blocked-on-human",
 		"pure documentation",
+		// 🎯T325.1 PO proactive-until-empty-then-sleep
+		"PO proactive-until-empty-then-sleep",
+		"T325.1",
+		"until empty or blocked",
+		"one-shot pass",
+		"sleeps/idles",
+		"open-mission",
+		"interruptible",
+		"ClassifyPOProactive",
+		"ClassifyFrontierLeaf",
+		"POOpenMissionForProactive",
+		"life-and-work-org-map.md",
 		// 🎯T31.1
 		"Oracle-first completion",
 		"T31",

@@ -358,6 +358,29 @@ frontier review.
 - **Residual:** instructional doctrine + brief inject; no daemon auto-spawn
   gate unless a later target adds enforcement.
 
+### PO proactive-until-empty-then-sleep (🎯T325.1)
+
+Product owners run a **proactive pass** while the product frontier has
+ready work, then **sleep** when it does not — without open-mission thrash.
+
+- **Kick while ready:** when the product-scoped frontier has unblocked
+  ready leaves (not design-gated / needs-owner / design-discussion /
+  parked-for-design / blocked / already-engaged), the PO continues
+  spawn/brief until empty or blocked — **not** a single one-shot pass
+  that leaves work stranded. Complements 🎯T155 continuous kick-off.
+- **Sleep when empty:** when the frontier is empty, or only gated /
+  blocked / parked / already-engaged leaves remain, the PO enters
+  sleep/idle without perpetual create thrash or zombie open-mission
+  heuristics that re-spawn noise (compose 🎯T244 unbound PO + zero work
+  children = not open mission).
+- **Interruptible:** PO stays registered and accepts owner/overseer
+  directs while sleeping or mid-pass.
+- **Pure helpers:** `ClassifyPOProactive` / `ClassifyFrontierLeaf` /
+  `POOpenMissionForProactive` (hermetic). Design:
+  `docs/design/life-and-work-org-map.md` §8 child (1).
+- **Residual:** instructional doctrine + pure classifier; hard daemon
+  sleep gate may follow.
+
 
 ## Oracle-first as system property (🎯T31 / 🎯T31.1) — independent gate
 

@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T325.1 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -90,6 +90,22 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Skip design-gated / blocked-on-human / parked-for-design / pure
   documentation (docs-only may file without spawn). Related: 🎯T155.
 - Residual: instructional; no daemon auto-spawn gate.
+
+## PO proactive-until-empty-then-sleep (🎯T325.1)
+- When the product-scoped frontier has unblocked ready leaves, the PO
+  continues spawn/brief (or equivalent kick) until empty or blocked —
+  not a single one-shot pass that leaves work stranded.
+- When the product frontier is empty (or only design-gated / blocked /
+  parked / already-engaged leaves remain), the PO enters sleep/idle
+  without perpetual create thrash or zombie open-mission heuristics that
+  keep re-spawning noise.
+- PO remains interruptible for owner and overseer directs while sleeping
+  or mid-pass (stays registered; accepts directs).
+- Pure helpers: ClassifyPOProactive / ClassifyFrontierLeaf /
+  POOpenMissionForProactive (compose T244 no-thrash when sleep + zero
+  work children). Related: T155 continuous kick-off, T193 file→spawn.
+- Residual: instructional doctrine + pure classifier; hard daemon sleep
+  gate may follow.
 
 ## PO never implements (🎯T125)
 - If you are a Stratum-1 product owner: spawn-only for Build work — never
