@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -48,11 +49,12 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
+			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). When provider is omitted on mint, multi-provider portfolio routing (🎯T325.2) picks harness by task_type (or purpose) preferring fit then under-utilised soft caps — never mid-flight reassignment. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
-			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Empty = keep stored provider on resume, else daemon default (config/env/grok). 🎯T148.")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Empty = keep stored provider on resume; on mint use portfolio routing (🎯T325.2) then daemon default. 🎯T148.")),
+			mcp.WithString("task_type", mcp.Description("LLM portfolio task class for provider routing when provider is omitted on mint (🎯T325.2): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. Empty = derive from purpose (work→code_implement, aside→ideation, overseer→ceo).")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
@@ -169,6 +171,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	workdir, _ := args["workdir"].(string)
 	model, _ := args["model"].(string)
 	providerArg, _ := args["provider"].(string)
+	taskTypeArg, _ := args["task_type"].(string)
 	actor, _ := args["actor"].(string)
 	parent, _ := args["parent"].(string)
 	purpose, _ := args["purpose"].(string)
@@ -258,7 +261,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		}
 	}
 
-	def, existed, err := s.stitchAgentStart(name, workdir, model, providerArg, parent, purpose, targetID)
+	def, existed, routeNote, err := s.stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID)
 	if err != nil {
 		life["err"] = err.Error()
 		life["existed"] = existed
@@ -266,6 +269,9 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
 	life["existed"] = existed
+	if routeNote != "" {
+		life["portfolio_route"] = routeNote
+	}
 
 	// 🎯T313: an agent whose transcript is gone cannot be resumed, and
 	// claudia rightly refuses to paper over that. Rotate it onto a fresh
@@ -311,32 +317,61 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	if def.TargetID != "" {
 		msg += fmt.Sprintf(", target_id: %s", def.TargetID)
 	}
+	if routeNote != "" {
+		msg += fmt.Sprintf(", portfolio: %s", routeNote)
+	}
 	msg += ")"
 	return mcp.NewToolResultText(prefixRehydrate(rehydrated, msg)), nil
 }
 
 // stitchAgentStart mints or updates a fleet agent registry row the same way
-// jevons_agent_start does before registry.Launch (🎯T148 / 🎯T215).
+// jevons_agent_start does before registry.Launch (🎯T148 / 🎯T215 / 🎯T325.2).
 //
-// Hermetic Session stitch surface: Provider selection, SessionID mint,
-// Parent/Purpose/TargetID dual-write — without spawning Grok or Claude.
-// Materialized stays false until a real Launch succeeds in claudia.
-func (s *Server) stitchAgentStart(name, workdir, model, providerArg, parent, purpose, targetID string) (*claudia.AgentDef, bool, error) {
+// Hermetic Session stitch surface: Provider selection (portfolio on mint
+// when provider omitted), SessionID mint, Parent/Purpose/TargetID dual-write
+// — without spawning Grok or Claude. Materialized stays false until a real
+// Launch succeeds in claudia.
+//
+// routeNote is non-empty when portfolio routing chose the provider.
+func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID string) (*claudia.AgentDef, bool, string, error) {
 	if s == nil || s.registry == nil {
-		return nil, false, fmt.Errorf("no agent registry")
+		return nil, false, "", fmt.Errorf("no agent registry")
 	}
 	existed := s.registry.Def(name) != nil
 	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
 	if err != nil {
-		return nil, existed, err
+		return nil, existed, "", err
 	}
 	// Refresh copy after Ensure (Register may have stored a different pointer).
 	if d := s.registry.Def(name); d != nil {
 		def = d
 	}
-	// 🎯T148: ad hoc provider override wins; else keep stored; else default.
-	// Never unconditionally force Grok on resume.
-	def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
+
+	routeNote := ""
+	// 🎯T148 + 🎯T325.2 provider selection:
+	//   1. non-empty providerArg → ad hoc override
+	//   2. resume with stored provider → keep (never mid-flight reassign)
+	//   3. mint with empty provider → portfolio Route(task_type|purpose, load)
+	//   4. else daemon default
+	if strings.TrimSpace(providerArg) != "" {
+		def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
+	} else if existed && def.Provider != "" {
+		def.Provider = cli.SelectAgentProvider("", def.Provider, s.resolvedDefaultProvider())
+	} else if !existed {
+		tt := strings.TrimSpace(taskTypeArg)
+		if tt == "" {
+			tt = cost.TaskTypeFromPurpose(purpose)
+		}
+		dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
+		def.Provider = claudia.Provider(dec.Provider)
+		routeNote = fmt.Sprintf("%s→%s(%s)", dec.TaskType, dec.Provider, dec.Reason)
+		if strings.TrimSpace(model) == "" && strings.TrimSpace(dec.Model) != "" {
+			model = dec.Model
+		}
+	} else {
+		def.Provider = cli.SelectAgentProvider("", def.Provider, s.resolvedDefaultProvider())
+	}
+
 	// 🎯T324: session-truth model binding for this Launch/SessionID.
 	// Explicit pin from the tool arg wins; empty pin on mint (or empty
 	// stored model on resume) gets the provider default so cold Grok
@@ -359,12 +394,12 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, parent, pur
 		def.TargetID = targetID
 	}
 	if err := s.registry.Register(*def); err != nil {
-		return nil, existed, err
+		return nil, existed, "", err
 	}
 	if d := s.registry.Def(name); d != nil {
 		def = d
 	}
-	return def, existed, nil
+	return def, existed, routeNote, nil
 }
 
 // launchConfigFromDef is the Config handoff registry.Launch would pass into

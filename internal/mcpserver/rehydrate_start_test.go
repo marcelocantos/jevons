@@ -37,8 +37,8 @@ func TestAgentStartRehydratesLostSessionBeforeLaunch(t *testing.T) {
 	workdir := t.TempDir()
 	const name = "jv-t313-worker"
 
-	def, _, err := s.stitchAgentStart(name, workdir, "opus",
-		string(claudia.ProviderClaude), "jevons-po", claudia.PurposeWork, "T313")
+	def, _, _, err := s.stitchAgentStart(name, workdir, "opus",
+		string(claudia.ProviderClaude), "", "jevons-po", claudia.PurposeWork, "T313")
 	if err != nil {
 		t.Fatalf("stitchAgentStart: %v", err)
 	}

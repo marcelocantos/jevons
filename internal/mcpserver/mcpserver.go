@@ -119,6 +119,12 @@ type Server struct {
 	// Empty means cli.ResolveProvider falls through to env / grok at use time.
 	defaultProvider string
 
+	// llmPortfolio is the multi-provider task-type routing seed (🎯T325.2).
+	// Nil → cost.DefaultPortfolio(). Soft-cap overlays may come from budget.
+	llmPortfolio *cost.Portfolio
+	// providerSoftCaps overlays portfolio soft caps (from budget.json).
+	providerSoftCaps map[string]int
+
 	// rsiLoop is the residual phrase/eventlog mint path (🎯T92; opt-in product residual).
 	// Nil until SetRSILoop; jevons_rsi_cycle requires it. Product path is rsiCoach (🎯T243).
 	rsiLoop *rsi.Loop
@@ -193,6 +199,53 @@ func (s *Server) SweepFleetHealth(overseerName string) {
 // (cli.ResolveProvider("", cfg.Provider)); empty re-resolves from env at use.
 func (s *Server) SetDefaultProvider(provider string) {
 	s.defaultProvider = strings.TrimSpace(provider)
+}
+
+// SetLLMPortfolio installs the multi-provider routing seed (🎯T325.2).
+// Nil clears to DefaultPortfolio at route time.
+func (s *Server) SetLLMPortfolio(p *cost.Portfolio) {
+	if s == nil {
+		return
+	}
+	s.llmPortfolio = p
+}
+
+// SetProviderSoftCaps overlays session soft caps from budget.json
+// provider_soft_caps (🎯T325.2). Nil/empty leaves compiled defaults.
+func (s *Server) SetProviderSoftCaps(caps map[string]int) {
+	if s == nil {
+		return
+	}
+	s.providerSoftCaps = caps
+}
+
+// effectivePortfolio returns the routing seed with soft-cap overlays applied.
+func (s *Server) effectivePortfolio() *cost.Portfolio {
+	base := cost.DefaultPortfolio()
+	if s != nil && s.llmPortfolio != nil {
+		base = s.llmPortfolio
+	}
+	if s != nil && len(s.providerSoftCaps) > 0 {
+		return base.MergeSoftCaps(s.providerSoftCaps)
+	}
+	return base
+}
+
+// harnessLoadCounts tallies registered agents by claudia provider id
+// (session soft-cap input for portfolio routing — never USD).
+func (s *Server) harnessLoadCounts() cost.LoadCounts {
+	load := cost.LoadCounts{}
+	if s == nil || s.registry == nil {
+		return load
+	}
+	for _, d := range s.registry.List() {
+		p := strings.ToLower(strings.TrimSpace(string(d.Provider)))
+		if p == "" {
+			p = string(cli.DefaultProvider)
+		}
+		load[p]++
+	}
+	return load
 }
 
 // resolvedDefaultProvider returns the effective default for new agents.
