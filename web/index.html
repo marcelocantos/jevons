@@ -4203,7 +4203,18 @@ function syncTargetContextChrome(d, paintOpts) {
   if (!d || !d.classList) return;
   paintOpts = paintOpts || {};
   const role = paintOpts.role || d._layoutRole || '';
-  if (role && role !== 'jevons' && role !== 'user' && role !== 'assistant') {
+  // 🎯T306: the chrome is provenance ("this came from repo X / PO Y"), which is
+  // meaningless on a bubble the owner typed. Gate on role before anything else —
+  // 🎯 ids, ambient ledger/cwd and ask cues in owner text must never resurrect it.
+  const ownerAuthored = (typeof TargetContextChrome !== 'undefined' &&
+    TargetContextChrome.isOwnerRole)
+    ? TargetContextChrome.isOwnerRole(role)
+    : (String(role).trim().toLowerCase() === 'user');
+  if (ownerAuthored) {
+    clearTargetContextChrome(d);
+    return;
+  }
+  if (role && role !== 'jevons' && role !== 'assistant') {
     clearTargetContextChrome(d);
     return;
   }

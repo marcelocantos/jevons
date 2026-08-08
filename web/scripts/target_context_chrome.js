@@ -48,6 +48,18 @@
     return false;
   }
 
+  /**
+   * 🎯T306 role gate: the context chrome is PROVENANCE — "this system message
+   * came from repo X / PO Y". On a bubble the owner typed there is no
+   * provenance to state, so the tab is mislabeled by construction. Owner roles
+   * never paint, regardless of 🎯 ids, ambient frontier ledger/cwd, ask cues,
+   * or force.
+   */
+  function isOwnerRole(role) {
+    var r = String(role == null ? '' : role).trim().toLowerCase();
+    return r === 'user' || r === 'owner' || r === 'me';
+  }
+
   /** Product leaf is the Jevons product (context may still paint). */
   function isJevonsProduct(name) {
     var n = String(name == null ? '' : name).trim().toLowerCase();
@@ -287,6 +299,8 @@
     var primary = normalizeTargetID(opts.targetId) || ids[0] || '';
     if (primary && ids.indexOf(primary) < 0) ids = [primary].concat(ids);
 
+    // 🎯T306: owner-authored bubbles carry no provenance — gate before ask.
+    var ownerAuthored = isOwnerRole(opts.role);
     var force = !!opts.force;
     var ask = force || looksLikeTargetAsk(text);
     if (!ask && (opts.repo || opts.workdir || opts.ledger || opts.cwd) && primary) {
@@ -352,7 +366,8 @@
     // Context label always (product · PO), independent of speaker-omit.
     var label = formatChromeLabel({ repo: repo, po: po, product: product, targetId: primary });
     // 🎯T273: context-paint gates on ask + repo only — never on speaker omit.
-    var show = !!(ask && repo);
+    // 🎯T306: …and never at all on an owner-authored bubble.
+    var show = !!(ask && repo) && !ownerAuthored;
     var title = formatChromeTitle({
       repo: repo, po: po, product: product, targetId: primary, targetIds: ids,
     });
@@ -460,6 +475,7 @@
     repoLabelFromPath: repoLabelFromPath,
     productFromRepoLabel: productFromRepoLabel,
     isProductOwnerName: isProductOwnerName,
+    isOwnerRole: isOwnerRole,
     isOmittedSpeakerIdentity: isOmittedSpeakerIdentity,
     isJevonsProduct: isJevonsProduct,
     speakerIdentity: speakerIdentity,

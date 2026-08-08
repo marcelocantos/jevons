@@ -101,7 +101,8 @@ func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia
 // resume when a stored provider exists. Materialized stays false until a real
 // (or fake-backend) Launch succeeds inside claudia.Registry.
 func (f *Claudia) ensureRegistered(t *thread.Thread) error {
-	purpose := strings.TrimSpace(t.Purpose)
+	threadPurpose := strings.TrimSpace(t.Purpose)
+	purpose := threadPurpose
 	if purpose == "" {
 		purpose = claudia.PurposeAside // thread path → aside by default
 	}
@@ -148,9 +149,20 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 		def.Parent = t.Parent
 		dirty = true
 	}
-	// Backfill purpose for legacy dual-write rows (🎯T114).
-	if def.Purpose == "" && purpose != "" {
-		def.Purpose = purpose
+	// Backfill purpose for legacy dual-write rows (🎯T114) — but only from a
+	// thread that actually carries one. The aside default above belongs to
+	// the MINT branch, where "no purpose" really does mean a new side chat;
+	// applied to an EXISTING row it is a guess written to durable state.
+	//
+	// jevons_agent_migrate relaunches a rotated agent through a bare
+	// thread.Thread{ID: name}, so that guess landed on every row minted
+	// before Purpose existed — rewriting a product owner to aside (🎯T301).
+	// Observed 2026-08-08: bullseye-po was the only PO in the grok→claude
+	// batch whose row had no explicit purpose, and the only one that turned
+	// into a 💡 in the fleet tree. Left empty, /api/agents reads it as work,
+	// which is what it was.
+	if def.Purpose == "" && threadPurpose != "" {
+		def.Purpose = threadPurpose
 		dirty = true
 	}
 	if dirty {

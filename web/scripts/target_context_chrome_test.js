@@ -341,6 +341,107 @@ test('index.html wires TargetContextChrome + T273 styles', function () {
     html.indexOf('font-weight: 700') >= 0, 'bold speaker style present');
 });
 
+// ── 🎯T306: context chrome is PROVENANCE — owner/user bubbles never get it ──
+
+test('T306 isOwnerRole classifies owner-authored roles', function () {
+  assert.strictEqual(TCC.isOwnerRole('user'), true);
+  assert.strictEqual(TCC.isOwnerRole('User'), true);
+  assert.strictEqual(TCC.isOwnerRole(' owner '), true);
+  assert.strictEqual(TCC.isOwnerRole('me'), true);
+  assert.strictEqual(TCC.isOwnerRole('jevons'), false);
+  assert.strictEqual(TCC.isOwnerRole('assistant'), false);
+  assert.strictEqual(TCC.isOwnerRole('system'), false);
+  assert.strictEqual(TCC.isOwnerRole(''), false);
+  assert.strictEqual(TCC.isOwnerRole(null), false);
+});
+
+test('T306 owner line with a 🎯 id + ambient ledger gets NO chrome', function () {
+  const agents = [{
+    name: 'jevons-po',
+    purpose: 'work',
+    workdir: '/Users/m/work/github.com/marcelocantos/jevons',
+  }];
+  const opts = {
+    text: 'T302 is back to life now',
+    ledger: '/Users/m/work/github.com/marcelocantos/jevons/bullseye.yaml',
+    cwd: '/Users/m/work/github.com/marcelocantos/jevons',
+    agents: agents,
+  };
+  // Pre-fix: ask-fallback (primary id + ambient ledger/cwd) made this paint.
+  const asOwner = TCC.resolveTargetContext(Object.assign({ role: 'user' }, opts));
+  assert.strictEqual(asOwner.show, false, 'owner bubble must never show chrome');
+  const ownerModel = TCC.chromeModel(Object.assign({ role: 'user' }, opts));
+  assert.strictEqual(ownerModel.show, false);
+  assert.strictEqual(ownerModel.innerHTML, '', 'no painted chrome for owner');
+  assert.strictEqual(ownerModel.label, '');
+});
+
+test('T306 owner role beats force and explicit repo/po', function () {
+  const model = TCC.chromeModel({
+    role: 'user',
+    force: true,
+    targetId: 'T306',
+    repo: 'marcelocantos/jevons',
+    product: 'jevons',
+    po: 'jevons-po',
+  });
+  assert.strictEqual(model.show, false, 'force must not override the role gate');
+  assert.strictEqual(model.innerHTML, '');
+  assert.ok(model.label.indexOf('jevons-po') < 0, 'no PO tab on owner bubble');
+});
+
+test('T306 owner ask cues still get no chrome', function () {
+  const agents = [{
+    name: 'bullseye-po',
+    purpose: 'work',
+    workdir: '/Users/m/work/github.com/marcelocantos/bullseye',
+  }];
+  const model = TCC.chromeModel({
+    role: 'owner',
+    text: '🎯T57 needs-owner: do you want the graph expansion API?',
+    ledger: '/Users/m/work/github.com/marcelocantos/bullseye/bullseye.yaml',
+    agents: agents,
+  });
+  assert.strictEqual(model.show, false, 'ask cues do not resurrect owner chrome');
+  assert.strictEqual(model.innerHTML, '');
+});
+
+test('T306 assistant/jevons bubbles keep provenance chrome', function () {
+  const agents = [{
+    name: 'jevons-po',
+    purpose: 'work',
+    workdir: '/Users/m/work/github.com/marcelocantos/jevons',
+  }];
+  const base = {
+    text: 'Decision packet for 🎯T262.4 — please confirm owner accept.',
+    ledger: '/Users/m/work/github.com/marcelocantos/jevons/bullseye.yaml',
+    agents: agents,
+  };
+  ['jevons', 'assistant', 'system', ''].forEach(function (role) {
+    const model = TCC.chromeModel(Object.assign({ role: role }, base));
+    assert.strictEqual(model.show, true, 'chrome kept for role "' + role + '"');
+    assert.strictEqual(model.label, 'marcelocantos/jevons · jevons-po');
+    assert.ok(model.innerHTML.indexOf('ctx-repo') >= 0, 'ctx-repo for role ' + role);
+  });
+  // Undeclared role (legacy callers) behaves as before the role gate.
+  const legacy = TCC.chromeModel(base);
+  assert.strictEqual(legacy.show, true);
+});
+
+test('T306 index.html role-gates the paint path on owner bubbles', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('isOwnerRole') >= 0, 'index paint path consults isOwnerRole');
+  const sync = /function syncTargetContextChrome\(d, paintOpts\) \{[\s\S]*?\n\}/.exec(html);
+  assert.ok(sync, 'syncTargetContextChrome found');
+  const body = sync[0];
+  assert.ok(/isOwnerRole/.test(body), 'owner-role gate inside syncTargetContextChrome');
+  const gateAt = body.indexOf('isOwnerRole');
+  const paintAt = body.indexOf('chromeModel');
+  assert.ok(paintAt < 0 || gateAt < paintAt, 'role gate precedes chromeModel paint');
+  assert.ok(/isOwnerRole[\s\S]{0,200}clearTargetContextChrome/.test(body),
+    'owner role clears chrome');
+});
+
 if (!process.exitCode) {
   console.log('all target_context_chrome_test passed');
 }
