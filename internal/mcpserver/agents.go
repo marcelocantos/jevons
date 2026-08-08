@@ -64,9 +64,10 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_send",
-			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text. If a prompt is already in flight, the message is queued for after the turn (not a dead-end). Pass interrupt=true to cancel the in-flight turn and send immediately (🎯T111.1 stuck recovery)."),
+			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text. If a prompt is already in flight, the message is queued for after the turn (not a dead-end). Pass interrupt=true to cancel the in-flight turn and send immediately (🎯T111.1 stuck recovery). Pass actor=your agent name so lineage authorization runs against the real caller (🎯T321)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
+			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is sending). Overseer uses the overseer name (usually 'jevons'). Required so lineage denial is enforceable per-caller (🎯T321).")),
 			mcp.WithBoolean("interrupt", mcp.Description("If true and a prompt is in flight, interrupt that turn then send (stuck recovery without kill). Default false = queue for after the turn.")),
 		),
 		s.handleAgentSend,
@@ -442,10 +443,34 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	text, _ := args["text"].(string)
+	actor, _ := args["actor"].(string)
 	interrupt, _ := args["interrupt"].(bool)
 
 	if name == "" || text == "" {
 		return mcp.NewToolResultError("name and text are required"), nil
+	}
+
+	// 🎯T321: name the caller so AuthorizeDeliver runs against a real actor
+	// rather than the shared-transport blank. Same defaulting pattern as kill:
+	// empty actor may resolve from the overseer session; fleet callers must
+	// pass actor explicitly.
+	actor = strings.TrimSpace(actor)
+	if actor == "" && s.transcript != nil && s.transcript.GetID != nil {
+		sid := s.transcript.GetID()
+		if s.registry != nil {
+			for _, d := range s.registry.List() {
+				if d.SessionID == sid {
+					actor = d.Name
+					break
+				}
+			}
+		}
+		if actor == "" {
+			actor = s.overseerName()
+		}
+	}
+	if actor == "" {
+		return mcp.NewToolResultError("actor is required (pass your agent name; overseer uses the overseer name)"), nil
 	}
 
 	// 🎯T104 under fan-out: first send carries standing local-delivery brief.
@@ -459,8 +484,9 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 		slog.Info("fleet standing brief injected on first send", "name", name)
 	}
 
-	// 🎯T111.1: rehydrate + send, or queue/interrupt when prompt in flight.
-	result, err := s.sendToAgent(name, text, interrupt)
+	// 🎯T111.1 / 🎯T321: rehydrate + send under the caller's lineage, or
+	// queue/interrupt when prompt in flight.
+	result, err := s.sendToAgentAs(actor, name, text, interrupt)
 	if err != nil {
 		// 🎯T283: deliverToSender already formats send failures; this also
 		// classifies the rehydrate/launch arm, which reaches the provider too.

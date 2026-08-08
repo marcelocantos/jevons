@@ -4,10 +4,14 @@
 package mcpserver
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
 )
@@ -337,6 +341,181 @@ func TestSendToAgentCannotClaimOwnerOrigin(t *testing.T) {
 	}
 	if len(inbox.origins) != 1 || inbox.origins[0] != OriginAgent {
 		t.Fatalf("origins=%v want [agent]", inbox.origins)
+	}
+}
+
+// 🎯T321 acceptance 3: a named-actor send that fails policy is refused on the
+// path (before any delivery), and legitimate report-up / direct-down / peer
+// sends with real actors still succeed.
+func TestDeliverByNameAsNamedActorPolicy(t *testing.T) {
+	reg := newLineageRegistry(t, map[string]string{
+		"jevons-po": "jevons",
+		"worker-a":  "jevons-po",
+		"worker-b":  "jevons-po",
+	})
+	po := &fakeSender{alive: true}
+	workerB := &fakeSender{alive: true}
+	s, inbox := chainServer(t, map[string]*fakeSender{
+		"jevons-po": po,
+		"worker-b":  workerB,
+	})
+	s.registry = reg
+
+	// Policy failure (owner origin from a fleet actor) is refused; nothing lands.
+	_, err := s.deliverByNameAs("worker-a", "jevons", "owner says ship", OriginOwner, false)
+	if err == nil {
+		t.Fatal("asserted actor failing policy must be refused on the path")
+	}
+	if !strings.Contains(err.Error(), "may not send as the owner") {
+		t.Fatalf("err=%v should name the identity refusal", err)
+	}
+	if len(inbox.texts) != 0 {
+		t.Fatalf("denied send still delivered: %v", inbox.texts)
+	}
+
+	// Report up: worker → PO.
+	if _, err := s.deliverByNameAs("worker-a", "jevons-po", "worker: report up", OriginAgent, false); err != nil {
+		t.Fatalf("report_up: %v", err)
+	}
+	if len(po.sent) != 1 {
+		t.Fatalf("PO inbox=%v", po.sent)
+	}
+
+	// Direct down: PO → worker-b.
+	if _, err := s.deliverByNameAs("jevons-po", "worker-b", "po: direct down", OriginAgent, false); err != nil {
+		t.Fatalf("direct_down: %v", err)
+	}
+	if len(workerB.sent) != 1 {
+		t.Fatalf("worker-b inbox=%v", workerB.sent)
+	}
+
+	// Peer: worker-a → worker-b (policy permits on purpose).
+	workerB.inFlight = false
+	if _, err := s.deliverByNameAs("worker-a", "worker-b", "peer: coordinate", OriginAgent, false); err != nil {
+		t.Fatalf("peer: %v", err)
+	}
+	if len(workerB.sent) != 2 {
+		t.Fatalf("worker-b inbox after peer=%v", workerB.sent)
+	}
+
+	// Report up to overseer by name under a real actor.
+	if _, err := s.deliverByNameAs("worker-a", "jevons", "worker: done report", OriginAgent, false); err != nil {
+		t.Fatalf("report_up overseer: %v", err)
+	}
+	if len(inbox.texts) != 1 {
+		t.Fatalf("overseer inbox=%v", inbox.texts)
+	}
+}
+
+// 🎯T321 acceptance 1–2: MCP jevons_agent_send carries actor and calls the
+// lineage path with it (not the owner-surface blank).
+func TestHandleAgentSendRequiresActorAndUsesLineage(t *testing.T) {
+	reg := newLineageRegistry(t, map[string]string{
+		"jevons-po": "jevons",
+		"worker-a":  "jevons-po",
+	})
+	po := &fakeSender{alive: true}
+	s, inbox := chainServer(t, map[string]*fakeSender{"jevons-po": po})
+	s.registry = reg
+
+	// Empty actor, no session default → refused before delivery.
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name": "jevons-po",
+		"text": "hello from nowhere",
+	}
+	res, err := s.handleAgentSend(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatal("empty actor must error")
+	}
+	if !strings.Contains(toolText(res), "actor is required") {
+		t.Fatalf("got %q", toolText(res))
+	}
+	if len(po.sent) != 0 {
+		t.Fatalf("send without actor still delivered: %v", po.sent)
+	}
+
+	// Legitimate report-up with named actor succeeds on the MCP path.
+	req.Params.Arguments = map[string]any{
+		"name":  "jevons-po",
+		"text":  "worker: slice landed",
+		"actor": "worker-a",
+	}
+	res, err = s.handleAgentSend(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("report_up MCP send: %s", toolText(res))
+	}
+	if len(po.sent) != 1 || !strings.Contains(po.sent[0], "slice landed") {
+		t.Fatalf("PO inbox=%v", po.sent)
+	}
+
+	// Same actor reporting to overseer by name.
+	req.Params.Arguments = map[string]any{
+		"name":  "jevons",
+		"text":  "worker: ready for review",
+		"actor": "worker-a",
+	}
+	res, err = s.handleAgentSend(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("overseer MCP send: %s", toolText(res))
+	}
+	if len(inbox.texts) != 1 {
+		t.Fatalf("overseer inbox=%v", inbox.texts)
+	}
+	if inbox.origins[0] != OriginAgent {
+		t.Fatalf("origin=%q want agent", inbox.origins[0])
+	}
+}
+
+// 🎯T321: denials on the MCP path log actor + relation (AuthorizeDeliver teeth).
+func TestHandleAgentSendDenialLogsActorAndRelation(t *testing.T) {
+	// Force a policy denial through the path that MCP uses: sendToAgentAs
+	// always pins OriginAgent, so we exercise deliverByNameAs directly with
+	// owner origin under a named actor — the only identity refusal today —
+	// and assert the structured log carries actor + relation.
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	s, inbox := chainServer(t, nil)
+	_, err := s.deliverByNameAs("worker-a", "jevons", "owner voice", OriginOwner, false)
+	if err == nil {
+		t.Fatal("expected denial")
+	}
+	if len(inbox.texts) != 0 {
+		t.Fatalf("denied delivery leaked: %v", inbox.texts)
+	}
+
+	var found map[string]any
+	for _, r := range cap.records {
+		m := attrsMap(r)
+		if m["status"] == "denied" && m["component"] == "agent_send" {
+			found = m
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected denied agent_send slog record")
+	}
+	if found["actor"] != "worker-a" {
+		t.Fatalf("actor=%v want worker-a", found["actor"])
+	}
+	if found["relation"] != string(RelationReportUp) {
+		// worker-a → overseer classifies as report_up even when origin is denied.
+		t.Fatalf("relation=%v want report_up", found["relation"])
+	}
+	if found["name"] != "jevons" {
+		t.Fatalf("name=%v", found["name"])
 	}
 }
 

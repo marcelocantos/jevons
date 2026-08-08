@@ -41,14 +41,19 @@ import (
 // The last rule is the one with teeth today, and the one the unification would
 // otherwise have loosened.
 //
-// RESIDUAL — per-caller identity. MCP tool calls from every agent arrive over
-// one shared transport, so jevons_agent_send cannot yet name its caller the
-// way jevons_agent_kill does (which takes an explicit actor). Lineage denial
-// is therefore decidable but not yet enforceable per-caller: AuthorizeDeliver
-// is called with a known actor from internal fleet callers and with
-// ActorOwnerSurface from the owner-facing paths. Until agent_send carries an
-// actor, an agent could address a peer it has no lineage to — which today's
-// policy permits anyway, so nothing is currently mis-permitted by the gap.
+// 🎯T321 — per-caller actor. jevons_agent_send takes an explicit actor (same
+// shape as jevons_agent_kill) and the MCP path calls deliverByNameAs with it,
+// so AuthorizeDeliver's lineage decision is exercised against a named caller
+// and denials log actor + relation. Daemon-internal and owner-HTTP paths still
+// use ActorOwnerSurface via deliverByName.
+//
+// RESIDUAL — impersonation. MCP tool calls from every fleet agent still arrive
+// over one shared HTTP transport; transcript.GetID is the overseer session,
+// not a per-caller fleet identity. An agent can therefore name a different
+// agent as actor (same trust model as kill's actor param). Session match is
+// used only to *default* an empty actor to the overseer/session agent — it is
+// not a cryptographic binding that rejects mismatches. Accepted residual until
+// the transport can name the caller without self-attestation.
 
 // ActorOwnerSurface is the actor for delivery originating outside the fleet:
 // the owner's HTTP/UI surface and daemon-internal system notes. It is the only

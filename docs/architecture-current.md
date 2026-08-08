@@ -125,9 +125,9 @@ delivers a message to an agent goes through it:
 
 | Caller | Route |
 |---|---|
-| MCP `jevons_agent_send` | `sendToAgent` → `deliverByName` (origin pinned to `agent`) |
-| `POST /api/agents/{name}/send` | `DeliverAgentMessageAs` → `deliverByName` |
-| worker reply notify, worker-idle, daemon-restarted, fleet health | `notify` / `emit*` → `deliverByName` |
+| MCP `jevons_agent_send` | `sendToAgentAs(actor)` → `deliverByNameAs` (origin pinned to `agent`; 🎯T321) |
+| `POST /api/agents/{name}/send` | `DeliverAgentMessageAs` → `deliverByName` (owner surface) |
+| worker reply notify, worker-idle, daemon-restarted, fleet health | `notify` / `emit*` → `deliverByName` (owner surface) |
 
 Two arms, one contract. A **fleet** name resolves through the registry
 (rehydrating a stopped agent) and delivers with the 🎯T111.1 busy
@@ -150,10 +150,13 @@ pure): report up and direct down are always allowed, peer messaging is
 allowed on purpose (🎯T309 acceptance 3), and `origin: owner` — which
 paints an owner bubble — may be asserted only by the owner surface. MCP
 `jevons_agent_send` pins `agent` origin, so the fleet has no way to speak
-in the owner's voice. **Residual:** MCP calls from every agent arrive over
-one shared transport, so `jevons_agent_send` cannot yet name its caller
-the way `jevons_agent_kill` does; lineage denial is decidable but not
-enforceable per-caller (🎯T321).
+in the owner's voice. **Per-caller actor (🎯T321):** `jevons_agent_send`
+takes an explicit `actor` (same shape as `jevons_agent_kill`) and the MCP
+path calls `deliverByNameAs` with it, so `AuthorizeDeliver` is exercised
+against a named caller and denials log `actor` + `relation`. **Residual
+(impersonation):** the shared MCP HTTP transport still cannot
+cryptographically name the calling fleet agent (`transcript.GetID` is the
+overseer session); `actor` is self-attested, matching kill's trust model.
 
 `jevons_thread_direct` is **not** a residual deliver variant. It is the
 *synchronous* request/reply op: it subscribes to the agent's event stream

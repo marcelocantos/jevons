@@ -141,6 +141,10 @@ What this means when you are briefing or reporting:
 
 - **Address by name, not by API.** `jevons_agent_send` with `name="jevons"`
   reaches the overseer; there is no separate overseer tool to hunt for.
+- **Name yourself as `actor` (🎯T321).** Pass `actor` = your agent name on
+  every `jevons_agent_send` (same idea as `jevons_agent_kill`). Lineage
+  authorization runs against that actor; denials log actor + relation. The
+  overseer uses the overseer name (usually `jevons`).
 - **Hierarchy is lineage, not reachability.** Report up (worker→PO→overseer)
   and direct down (ancestor→descendant) are always allowed; peer messaging
   between siblings is allowed on purpose. What you *cannot* do is speak as the

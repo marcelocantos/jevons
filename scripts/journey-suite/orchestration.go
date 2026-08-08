@@ -314,9 +314,11 @@ func (s *suite) jPOWorkerLineageFanout() error {
 	}
 
 	// First send must inject T104 standing brief (shipped path, not persona grep).
+	// 🎯T321: actor names the caller so lineage auth runs on the MCP path.
 	ack, err := s.mcpText("jevons_agent_send", map[string]any{
-		"name": worker,
-		"text": "Reply with exactly: FANOUT_PONG and do not open a PR.",
+		"name":  worker,
+		"text":  "Reply with exactly: FANOUT_PONG and do not open a PR.",
+		"actor": "jevons",
 	})
 	if err != nil {
 		return fmt.Errorf("worker send: %w", err)
@@ -327,8 +329,9 @@ func (s *suite) jPOWorkerLineageFanout() error {
 
 	// Integrator slice: second agent (po) also gets brief on first send.
 	ackPO, err := s.mcpText("jevons_agent_send", map[string]any{
-		"name": po,
-		"text": "Coordinate only; local commits only.",
+		"name":  po,
+		"text":  "Coordinate only; local commits only.",
+		"actor": "jevons",
 	})
 	if err != nil {
 		return fmt.Errorf("po send: %w", err)
@@ -712,7 +715,6 @@ func (s *suite) jProviderMigration() error {
 }
 
 // MCP/HTTP helpers live in steps.go (🎯T102 step library).
-
 
 // jOverseerMigration is the 🎯T285 overseer arm: the owner's CEO agent
 // moves backend and keeps working. Unlike a fleet agent it is attached to

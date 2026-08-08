@@ -116,10 +116,19 @@ func (s *Server) DeliverAgentMessageAs(name, text string, origin SendOrigin, int
 // (handleAgentSend) apply EnsureFleetBrief first.
 //
 // 🎯T309.3: a shim over deliverByName, which also resolves the overseer by
-// name. In-fleet callers (worker-idle, daemon-restarted, notify) speak agent
-// origin; the owner's own turns arrive through DeliverAgentMessageAs.
+// name. Daemon-internal callers (worker-idle, daemon-restarted, RSI coach,
+// fleet health) speak as the owner surface with agent origin; MCP fleet
+// callers use sendToAgentAs so lineage names the real agent (🎯T321).
+// The owner's own turns arrive through DeliverAgentMessageAs.
 func (s *Server) sendToAgent(name, text string, interrupt bool) (agentSendResult, error) {
 	return s.deliverByName(name, text, OriginAgent, interrupt)
+}
+
+// sendToAgentAs is the MCP fleet form of sendToAgent: same busy/queue path
+// and agent origin, but the caller is named so AuthorizeDeliver can decide
+// (and log denials with actor + relation) per-caller (🎯T321).
+func (s *Server) sendToAgentAs(actor, name, text string, interrupt bool) (agentSendResult, error) {
+	return s.deliverByNameAs(actor, name, text, OriginAgent, interrupt)
 }
 
 // ensureAgentProcess returns a live process, rehydrating when registered

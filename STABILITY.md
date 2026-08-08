@@ -52,7 +52,7 @@ thread model and `jwork` are the only worker lifecycles.
 |---|---|---|
 | `jevons_agent_list` | (none) | Fluid |
 | `jevons_agent_start` | `name, workdir, model?, provider?` | Fluid — provider 🎯T148 |
-| `jevons_agent_send` | `name, text` | Fluid — async fire-and-forget since v0.3.0 |
+| `jevons_agent_send` | `name, text, actor` | Fluid — async fire-and-forget since v0.3.0; `actor` required for per-caller lineage (🎯T321) |
 | `jevons_agent_stop` | `name` | Fluid |
 | `jevons_agent_kill` | `name` | Fluid |
 | `jevons_active_work` | `hours?, include_clean?` | Fluid — new in v0.4.0, cross-repo work dashboard |

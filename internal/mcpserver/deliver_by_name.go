@@ -14,10 +14,10 @@ import (
 // deliverByName is the single implementation every message-to-an-agent
 // eventually reaches, whichever door the caller came through:
 //
-//	MCP    jevons_agent_send            → sendToAgent → deliverByName
+//	MCP    jevons_agent_send            → sendToAgentAs(actor) → deliverByNameAs
 //	HTTP   POST /api/agents/{name}/send → DeliverAgentMessageAs → deliverByName
 //	fleet  worker reply notify, worker-idle, daemon-restarted, fleet health
-//	                                     → notify/emit* → deliverByName
+//	                                     → notify/emit* → deliverByName (owner surface)
 //
 // Before this slice the fleet layer had a privileged overseer-only wire:
 // everything addressed to the overseer went through notifyJevon (a bare

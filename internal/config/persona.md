@@ -561,7 +561,9 @@ survive daemon restarts — you never lose one.
   asynchronously as a notification pushed into your conversation —
   don't poll or wait, just continue working and handle it when it
   arrives. The agent retains full conversation history.
-  Required: name, text.
+  Required: name, text, **actor** (your agent name — 🎯T321; overseer uses
+  the overseer name, usually `jevons`). Pass `actor` so lineage authorization
+  runs against you, not a blank shared transport.
   **One path, everyone addressable (🎯T309.3):** this is the same
   implementation the HTTP send API and the daemon's own worker-reply /
   worker-idle notifications use, and **the overseer is addressable by name

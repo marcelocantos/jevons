@@ -157,9 +157,20 @@ func (s *suite) AgentStart(name, workdir, actor, parent string) (string, error) 
 	return s.MCPToolCall("jevons_agent_start", args)
 }
 
-// AgentSend sends text to a running agent.
+// AgentSend sends text to a running agent as actor (🎯T321). Empty actor defaults
+// to "jevons" (journey harness speaks as the overseer surface).
 func (s *suite) AgentSend(name, text string) (string, error) {
-	return s.MCPToolCall("jevons_agent_send", map[string]any{"name": name, "text": text})
+	return s.AgentSendAs("jevons", name, text)
+}
+
+// AgentSendAs is AgentSend with an explicit lineage actor.
+func (s *suite) AgentSendAs(actor, name, text string) (string, error) {
+	if actor == "" {
+		actor = "jevons"
+	}
+	return s.MCPToolCall("jevons_agent_send", map[string]any{
+		"name": name, "text": text, "actor": actor,
+	})
 }
 
 // AgentStop stops a registered agent process.
