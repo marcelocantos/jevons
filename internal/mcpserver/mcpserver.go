@@ -291,7 +291,8 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	if s.transcript != nil {
 		mcpSrv.AddTool(
 			mcp.NewTool("jevons_transcript_read",
-				mcp.WithDescription("Read the Jevon conversation transcript. Returns an array of turns with role and text."),
+				mcp.WithDescription("Read a conversation transcript. With agent=<name>, returns THAT agent's transcript only (registry session_id) — never substitutes the caller's/overseer transcript (🎯T304). Omit agent to read the active overseer/Jevon session. Returns turns with role and text."),
+				mcp.WithString("agent", mcp.Description("Fleet agent name whose transcript to read (e.g. jv-t300-loading-earlier). Required for supervision of workers; omit for the active overseer session.")),
 			),
 			s.handleTranscriptRead,
 		)
@@ -400,20 +401,68 @@ func (s *Server) handleScreenshot(_ context.Context, _ mcp.CallToolRequest) (*mc
 	return mcp.NewToolResultText(path), nil
 }
 
-func (s *Server) handleTranscriptRead(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	sessionID := s.transcript.GetID()
-	if sessionID == "" {
-		return mcp.NewToolResultText("No active Jevon session."), nil
+// handleTranscriptRead returns turns for a named agent or the active overseer
+// session. 🎯T304: agent=<name> must resolve that agent's registry session only;
+// never fall back to GetID (caller/overseer) when a name is given — silent
+// substitution makes supervisors treat another seat's words as the worker's.
+func (s *Server) handleTranscriptRead(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.transcript == nil || s.transcript.Read == nil {
+		return mcp.NewToolResultError("transcript reader unavailable"), nil
 	}
+
+	args := req.GetArguments()
+	agentName := strings.TrimSpace(str(args["agent"]))
+
+	var sessionID string
+	switch {
+	case agentName != "":
+		if s.registry == nil {
+			return mcp.NewToolResultError("agent registry unavailable"), nil
+		}
+		def := s.registry.Def(agentName)
+		if def == nil {
+			// Explicit not-found — do not substitute another agent's transcript.
+			return mcp.NewToolResultError(fmt.Sprintf("agent %q not found", agentName)), nil
+		}
+		sessionID = strings.TrimSpace(def.SessionID)
+		if sessionID == "" {
+			// Explicit empty — no silent substitution of caller/overseer.
+			return mcp.NewToolResultText(fmt.Sprintf(
+				"agent %q has no session yet (empty transcript).", agentName)), nil
+		}
+	default:
+		if s.transcript.GetID == nil {
+			return mcp.NewToolResultText("No active Jevon session."), nil
+		}
+		sessionID = strings.TrimSpace(s.transcript.GetID())
+		if sessionID == "" {
+			return mcp.NewToolResultText("No active Jevon session."), nil
+		}
+	}
+
 	turns, err := s.transcript.Read(sessionID)
 	if err != nil {
+		if agentName != "" {
+			// Named agent: surface not-found/empty explicitly; never retry GetID.
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"agent %q transcript not found (session %s): %v",
+				agentName, sessionDisplay(sessionID), err)), nil
+		}
 		return mcp.NewToolResultError(fmt.Sprintf("read failed: %v", err)), nil
 	}
 	if len(turns) == 0 {
+		if agentName != "" {
+			return mcp.NewToolResultText(fmt.Sprintf(
+				"agent %q transcript is empty.", agentName)), nil
+		}
 		return mcp.NewToolResultText("Transcript is empty."), nil
 	}
 
 	var b strings.Builder
+	if agentName != "" {
+		fmt.Fprintf(&b, "agent=%s session=%s turns=%d\n",
+			agentName, sessionDisplay(sessionID), len(turns))
+	}
 	for i, turn := range turns {
 		role, _ := turn["role"].(string)
 		text, _ := turn["text"].(string)
