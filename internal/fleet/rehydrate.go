@@ -134,10 +134,21 @@ func RehydratedDef(def claudia.AgentDef, newSessionID string) claudia.AgentDef {
 // ok=false with a nil error means nothing was wrong and the caller
 // should proceed to a normal resume.
 func (f *Claudia) RehydrateLostSession(name string) (LostSession, bool, error) {
-	if f == nil || f.reg == nil {
+	if f == nil {
+		return LostSession{}, false, fmt.Errorf("rehydrate: no fleet")
+	}
+	return RehydrateLostSessionIn(f.reg, name)
+}
+
+// RehydrateLostSessionIn is RehydrateLostSession against a registry
+// directly. The MCP agent_start handler holds a *claudia.Registry
+// rather than a Fleet, and recovery has to happen on that path — it is
+// where the dead-end is actually hit.
+func RehydrateLostSessionIn(reg *claudia.Registry, name string) (LostSession, bool, error) {
+	if reg == nil {
 		return LostSession{}, false, fmt.Errorf("rehydrate: no agent registry")
 	}
-	def := f.reg.Def(name)
+	def := reg.Def(name)
 	if def == nil {
 		return LostSession{}, false, fmt.Errorf("rehydrate: no agent %q", name)
 	}
@@ -161,9 +172,9 @@ func (f *Claudia) RehydrateLostSession(name string) (LostSession, bool, error) {
 	// Stop any half-alive process before rotating: the row is about to
 	// point somewhere else, and a survivor would keep writing under the
 	// id we just abandoned.
-	f.reg.Stop(name)
+	reg.Stop(name)
 
-	if err := f.reg.Register(RehydratedDef(*def, lost.NewSession)); err != nil {
+	if err := reg.Register(RehydratedDef(*def, lost.NewSession)); err != nil {
 		return LostSession{}, false, fmt.Errorf("rehydrate %q: register fresh session: %w", name, err)
 	}
 

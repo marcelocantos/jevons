@@ -16,8 +16,20 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
+
+// prefixRehydrate puts the lost-session account in front of whatever
+// agent_start would otherwise have said. It leads because it changes
+// what the caller must do next: the agent is running, but blank, and
+// the brief has to be re-sent (🎯T313).
+func prefixRehydrate(rehydrated, msg string) string {
+	if rehydrated == "" {
+		return msg
+	}
+	return rehydrated + "\n\n" + msg
+}
 
 // NotifyFunc injects a text message into the Jevon overseer's PTY input.
 type NotifyFunc func(text string)
@@ -256,12 +268,30 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	life["existed"] = existed
 
+	// 🎯T313: an agent whose transcript is gone cannot be resumed, and
+	// claudia rightly refuses to paper over that. Rotate it onto a fresh
+	// session here — before Launch — so a start request recovers in one
+	// call instead of dead-ending into a manual kill → start → re-brief.
+	// The rehydrate is reported to the caller, never silent.
+	rehydrated := ""
+	if lost, ok, err := fleet.RehydrateLostSessionIn(s.registry, name); err != nil {
+		slog.Warn("lost-session rehydrate failed; falling through to launch",
+			"name", name, "err", err)
+	} else if ok {
+		rehydrated = lost.Describe()
+		life["rehydrated_from"] = lost.OldSession
+		if d := s.registry.Def(name); d != nil {
+			def = d
+		}
+	}
+
 	proc, err := s.registry.Launch(name)
 	if err != nil {
 		life["err"] = err.Error()
 		life["session_id"] = sessionDisplay(def.SessionID)
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
-		return mcp.NewToolResultError(fmt.Sprintf("start failed: %v", err)), nil
+		return mcp.NewToolResultError(prefixRehydrate(rehydrated,
+			fmt.Sprintf("start failed: %v", err))), nil
 	}
 
 	// Wire events: broadcast to web UI and notify Jevon on agent responses.
@@ -283,7 +313,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		msg += fmt.Sprintf(", target_id: %s", def.TargetID)
 	}
 	msg += ")"
-	return mcp.NewToolResultText(msg), nil
+	return mcp.NewToolResultText(prefixRehydrate(rehydrated, msg)), nil
 }
 
 // stitchAgentStart mints or updates a fleet agent registry row the same way
