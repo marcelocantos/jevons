@@ -205,3 +205,123 @@ func TestIsOpenIntentRestartNudge(t *testing.T) {
 		}
 	}
 }
+
+// 🎯T344: answered owner instructions must not re-fire as open intent.
+
+func TestExtractOpenOwnerIntentAnsweredOrClosedJiggleEvidence(t *testing.T) {
+	t.Parallel()
+	// Live incident shape: owner jiggle question, later overseer evidence for T341.
+	turns := []OwnerIntentTurn{
+		{
+			Role: "user",
+			Text: "Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time? Why is it affecting the layout in such a subtle way?",
+			TS:   time.Date(2026, 8, 8, 15, 43, 49, 0, time.UTC),
+		},
+		{
+			Role: "assistant",
+			Text: "Independent overseer gate: SHA cf4bdce fix(web): stop continuous ~1px main-chat jiggle from pin thrash (T341). Product: shouldPinScroll sub-threshold gate. Hermetic PASS (maxTopDelta=0). Achieved 🎯T341.",
+			TS:   time.Date(2026, 8, 8, 15, 55, 38, 0, time.UTC),
+		},
+	}
+	got := ExtractOpenOwnerIntent(turns)
+	if got.Recoverable() {
+		t.Fatalf("answered jiggle must not recover open work, got text=%q residual=%q", got.Text, got.Residual)
+	}
+	if got.Residual != ResidualAnsweredOrClosed {
+		t.Fatalf("want residual %q, got %q", ResidualAnsweredOrClosed, got.Residual)
+	}
+}
+
+func TestExtractOpenOwnerIntentStillRecoversOpenImplement(t *testing.T) {
+	t.Parallel()
+	turns := []OwnerIntentTurn{
+		{
+			Role: "user",
+			Text: "Please implement open intent answered disposition for restart resume",
+		},
+		{
+			Role: "assistant",
+			Text: "working on it — looking at open_intent.go",
+		},
+	}
+	got := ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("open implement without product evidence must recover, residual=%q", got.Residual)
+	}
+	if !strings.Contains(got.Text, "answered disposition") {
+		t.Fatalf("got %q", got.Text)
+	}
+}
+
+func TestExtractOpenOwnerIntentReAskAfterFixStillRecovers(t *testing.T) {
+	t.Parallel()
+	// Residual: brand-new owner re-ask after fix — newest turn is the re-ask.
+	turns := []OwnerIntentTurn{
+		{
+			Role: "user",
+			Text: "Why is all the text on the page jiggling up and down by a pixel?",
+			TS:   time.Date(2026, 8, 8, 15, 0, 0, 0, time.UTC),
+		},
+		{
+			Role: "assistant",
+			Text: "SHA cf4bdce fix(web): jiggle from pin thrash (T341). Hermetic PASS. Achieved 🎯T341.",
+			TS:   time.Date(2026, 8, 8, 15, 30, 0, 0, time.UTC),
+		},
+		{
+			Role: "user",
+			Text: "The text is still jiggling after hard-reload — please re-check the pin thrash fix",
+			TS:   time.Date(2026, 8, 8, 16, 0, 0, 0, time.UTC),
+		},
+	}
+	got := ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("fresh re-ask must recover, residual=%q", got.Residual)
+	}
+	if !strings.Contains(strings.ToLower(got.Text), "still jiggling") {
+		t.Fatalf("want re-ask text, got %q", got.Text)
+	}
+}
+
+func TestLoadOpenOwnerIntentAnsweredFromChatlogToolUse(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	chatDir := filepath.Join(dir, "chatlog")
+	if err := os.MkdirAll(chatDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(chatDir, "jevons.jsonl")
+	// User jiggle + assistant tool_use achieve attestation (live chatlog shape).
+	body := strings.Join([]string{
+		`{"type":"user","timestamp":"2026-08-08T15:43:49Z","message":{"role":"user","content":"Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time?"}}`,
+		`{"type":"assistant","timestamp":"2026-08-08T15:55:38Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"use_tool","input":{"tool_name":"bullseye__bullseye_commit","tool_input":{"op":"achieve","id":"T341","attestation":"Independent overseer gate: SHA cf4bdce fix(web): stop continuous ~1px main-chat jiggle from pin thrash (T341). Hermetic PASS."}}}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadOpenOwnerIntent(dir, "jevons")
+	if got.Recoverable() {
+		t.Fatalf("tool_use achieve evidence must close jiggle, got text=%q residual=%q", got.Text, got.Residual)
+	}
+	if got.Residual != ResidualAnsweredOrClosed {
+		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)
+	}
+}
+
+func TestOwnerIntentAnsweredWithProductEvidence(t *testing.T) {
+	t.Parallel()
+	owner := "Why is all the text jiggling by a pixel from layout thrash?"
+	if !OwnerIntentAnsweredWithProductEvidence(owner, []string{
+		"SHA cf4bdce fix(web): stop jiggle pin thrash (T341). Hermetic PASS. Achieved.",
+	}) {
+		t.Fatal("expected answered with product evidence")
+	}
+	if OwnerIntentAnsweredWithProductEvidence(owner, []string{"looking into it"}) {
+		t.Fatal("working chatter is not product evidence")
+	}
+	if OwnerIntentAnsweredWithProductEvidence(
+		"Please implement the billing export CSV",
+		[]string{"SHA cf4bdce fix(web): stop jiggle pin thrash (T341). Hermetic PASS. Achieved."},
+	) {
+		t.Fatal("unrelated evidence must not close a different complaint")
+	}
+}
