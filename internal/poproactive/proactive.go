@@ -63,8 +63,10 @@ const (
 	LeafSkipHighInfra
 	// LeafSkipDeferred: deferred / not-urgent / later-device product leaves
 	// that still look graph-ready (T22 "not urgent" class + T28 car/iPad
-	// voice DSP class). Unattended consume parks with skip_deferred (or
-	// owner-parked / skip_device_voice tag) until owner play (🎯T339 / 🎯T342).
+	// voice DSP class + T29 generative-UI / DEFERRED future-work ambition).
+	// Unattended consume parks with skip_deferred (or owner-parked /
+	// skip_device_voice / skip_ambition tag) until owner play
+	// (🎯T339 / 🎯T342 / 🎯T343).
 	LeafSkipDeferred
 )
 
@@ -193,7 +195,9 @@ func IsForceEngageTag(tags []string) bool {
 // Prefer explicit owner language over bare "deferred" alone (too common in
 // residual notes). Exact tags are matched separately (IsDeferredNotUrgentLeaf).
 // 🎯T339 "not urgent" phrasing; 🎯T342 device-voice DSP markers live in
-// deviceVoiceDSPMarkers / IsDeferredDeviceVoiceLeaf and compose here.
+// deviceVoiceDSPMarkers / IsDeferredDeviceVoiceLeaf; 🎯T343 T29-class ambition
+// markers live in deferredAmbitionMarkers / IsDeferredAmbitionLeaf — all compose
+// here.
 var deferredNotUrgentMarkers = []string{
 	"not urgent",
 	"not-urgent",
@@ -206,7 +210,8 @@ var deferredNotUrgentMarkers = []string{
 	"do not auto-spawn",
 }
 
-// deferredExactTags mark a leaf deferred for unattended consume (🎯T339 / 🎯T342).
+// deferredExactTags mark a leaf deferred for unattended consume
+// (🎯T339 / 🎯T342 / 🎯T343).
 var deferredExactTags = []string{
 	"deferred",
 	"not-urgent",
@@ -216,6 +221,9 @@ var deferredExactTags = []string{
 	"skip_device_voice",
 	"device-voice",
 	"voice-dsp",
+	"skip_ambition",
+	"generative-ui-ambition",
+	"t29-class",
 }
 
 // deviceVoiceDSPMarkers are T28-class car cabin / road-noise / VoicelabKit /
@@ -233,6 +241,27 @@ var deviceVoiceDSPMarkers = []string{
 	"ipad in car",
 	"voicelabkit",
 	"voice capture pipeline",
+}
+
+// deferredAmbitionMarkers are T29-class generative-UI / DEFERRED future-work
+// ambition phrases (🎯T343). T339 required "deferred until/to" or "not urgent";
+// T29 context said "DEFERRED / future work" and "not on the initial critical
+// path" plus name "generative rich visual surface" — none of which matched —
+// so frontier-consume auto-spawned jv-t29-auto. Prefer multi-word markers so
+// T27.6-shaped SDUI composition (server-driven multi-provider UI producer) is
+// not false-parked by bare "generative", "UI", or residual "deferred".
+var deferredAmbitionMarkers = []string{
+	"deferred / future work",
+	"deferred/future work",
+	"deferred future work",
+	"not on the initial critical path",
+	"not on initial critical path",
+	"not on the critical path",
+	"generative rich visual surface",
+	"generative rich visual",
+	"generative rich-visual",
+	"generative-ui ambition",
+	"t29-class",
 }
 
 // IsDeferredDeviceVoiceLeaf reports the 🎯T342 voice/device DSP class (T28
@@ -258,12 +287,37 @@ func IsDeferredDeviceVoiceLeaf(tags []string, name, context string) bool {
 	return false
 }
 
+// IsDeferredAmbitionLeaf reports the 🎯T343 T29-class generative-UI /
+// DEFERRED future-work ambition class. Graph-ready leaves whose name/context
+// mark deferred future work, not-on-critical-path, or generative rich visual
+// butler-surface ambition (or exact skip_ambition / t29-class tags) park
+// unattended without needing T339 "not urgent" / "deferred until" phrasing.
+// force-engage / unattended-safe override at ClassifyLeaf time.
+func IsDeferredAmbitionLeaf(tags []string, name, context string) bool {
+	for _, want := range []string{"skip_ambition", "generative-ui-ambition", "t29-class"} {
+		if hasTag(tags, want) {
+			return true
+		}
+	}
+	hay := strings.ToLower(strings.TrimSpace(name) + " " + strings.TrimSpace(context))
+	if hay == "" {
+		return false
+	}
+	for _, m := range deferredAmbitionMarkers {
+		if strings.Contains(hay, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsDeferredNotUrgentLeaf reports the deferred / not-urgent / later-device /
-// device-voice product class for unattended frontier consume (🎯T339 + 🎯T342).
-// Graph-ready leaves with this prose must park, not auto-spawn.
-// force-engage / unattended-safe override at ClassifyLeaf time, not here.
-// Exact tags and phrase markers both count; device-voice DSP is a sibling
-// class composed here so LeafSkipDeferred covers both.
+// device-voice / generative-UI ambition product class for unattended frontier
+// consume (🎯T339 + 🎯T342 + 🎯T343). Graph-ready leaves with this prose must
+// park, not auto-spawn. force-engage / unattended-safe override at ClassifyLeaf
+// time, not here. Exact tags and phrase markers both count; device-voice DSP
+// and T29-class ambition are sibling classes composed here so LeafSkipDeferred
+// covers all three.
 func IsDeferredNotUrgentLeaf(tags []string, name, context string) bool {
 	for _, want := range deferredExactTags {
 		if hasTag(tags, want) {
@@ -271,6 +325,9 @@ func IsDeferredNotUrgentLeaf(tags []string, name, context string) bool {
 		}
 	}
 	if IsDeferredDeviceVoiceLeaf(tags, name, context) {
+		return true
+	}
+	if IsDeferredAmbitionLeaf(tags, name, context) {
 		return true
 	}
 	hay := strings.ToLower(strings.TrimSpace(name) + " " + strings.TrimSpace(context))
@@ -391,8 +448,9 @@ func ClassifyLeaf(o LeafObs) LeafKind {
 	if !force && HasActiveChildren(o) {
 		return LeafSkipParentActiveChildren
 	}
-	// 🎯T339 / 🎯T342 before design: "owner-parked" contains design marker
-	// "parked"; T28 device-voice DSP parks without "not urgent" phrasing.
+	// 🎯T339 / 🎯T342 / 🎯T343 before design: "owner-parked" contains design
+	// marker "parked"; T28 device-voice DSP and T29 generative-UI ambition
+	// park without "not urgent" / "deferred until" phrasing.
 	if !force && !IsUnattendedSafeTag(o.Tags) &&
 		IsDeferredNotUrgentLeaf(o.Tags, o.Name, o.Context) {
 		return LeafSkipDeferred

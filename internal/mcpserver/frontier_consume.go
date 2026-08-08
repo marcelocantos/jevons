@@ -32,8 +32,9 @@ import (
 // unattended-safe / force-engage. 🎯T338: park parents with active hierarchical
 // children (T10 with T10.2–T10.6) and optional high-infra class (sqlpipe/CGO/Peer,
 // cost≥13 multi-child) unless force-engage / unattended-safe. 🎯T339: park
-// deferred / not-urgent / later-device leaves (T22 voice class) and T28-class
-// car/iPad/VoicelabKit device DSP (🎯T342) with skip_deferred or owner-parked
+// deferred / not-urgent / later-device leaves (T22 voice class), T28-class
+// car/iPad/VoicelabKit device DSP (🎯T342), and T29-class generative-UI /
+// DEFERRED future-work ambition (🎯T343) with skip_deferred or owner-parked
 // unless force-engage / unattended-safe.
 // Anti-thrash:
 // durable per-target spawn ledger (backoff + max auto-spawns) so a worker that
@@ -83,7 +84,7 @@ const (
 	FrontierReasonHighCostMobile       = "skip_high_cost_mobile"            // 🎯T337 mobile megawork
 	FrontierReasonParentActiveChildren = "skip_parent_with_active_children" // 🎯T338 T10 parent class
 	FrontierReasonHighInfra            = "skip_high_infra"                  // 🎯T338 sqlpipe/CGO/Peer
-	FrontierReasonDeferred             = "skip_deferred"                    // 🎯T339/T342 not-urgent + device-voice DSP
+	FrontierReasonDeferred             = "skip_deferred"                    // 🎯T339/T342/T343 not-urgent + device-voice + T29 ambition
 	FrontierReasonOwnerParked          = "owner-parked"                     // 🎯T339 explicit owner-parked
 	FrontierReasonCapacity             = "park_capacity"
 	FrontierReasonBackoff              = "park_backoff"

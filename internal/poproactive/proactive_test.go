@@ -432,3 +432,94 @@ func TestClassifyLeafDeviceVoiceDSP(t *testing.T) {
 		t.Fatalf("mixed T28 park + T27.5 ready: %+v", d)
 	}
 }
+
+// 🎯T343: T29-shaped generative-UI / DEFERRED future-work ambition parks without
+// T339 "not urgent" / "deferred until". T27.6-shaped SDUI composition stays ready.
+func TestClassifyLeafDeferredAmbition(t *testing.T) {
+	// Real T29 shape (pre set_aside): DEFERRED/future work + generative rich visual + not critical path.
+	t29 := LeafObs{
+		ID:   "T29",
+		Name: "Jevons interaction is a generative rich visual surface driven by conversation, not a chat log",
+		Context: "DEFERRED / future work (filed 2026-07-04). The near-term butler MVP starts with plain " +
+			"conventional markdown rendering; this target is the ambition it grows into, captured so the " +
+			"design conversation isn't lost. Not on the initial critical path (which is: reliable " +
+			"spawn/monitor/status/direct over plain markdown).",
+	}
+	if !IsDeferredAmbitionLeaf(t29.Tags, t29.Name, t29.Context) {
+		t.Fatal("T29-shaped must match IsDeferredAmbitionLeaf")
+	}
+	if !IsDeferredNotUrgentLeaf(t29.Tags, t29.Name, t29.Context) {
+		t.Fatal("T29-shaped must compose into IsDeferredNotUrgentLeaf")
+	}
+	if k := ClassifyLeaf(t29); k != LeafSkipDeferred {
+		t.Fatalf("T29-shaped: got %s want skip_deferred", k)
+	}
+	// Phrase subsets from acceptance (no "not urgent" / "deferred until").
+	for _, ctx := range []string{
+		"DEFERRED / future work (filed 2026-07-04)",
+		"deferred future work captured for design conversation",
+		"Not on the initial critical path (spawn/monitor first)",
+		"not on the critical path until owner opens",
+		"generative rich visual surface ambition",
+		"generative rich-visual butler surface",
+	} {
+		if k := ClassifyLeaf(LeafObs{ID: "T29x", Name: "Butler surface residual", Context: ctx}); k != LeafSkipDeferred {
+			t.Fatalf("marker %q: got %s want skip_deferred", ctx, k)
+		}
+	}
+	// Name alone with generative rich visual surface.
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T29n", Name: "Jevons interaction is a generative rich visual surface driven by conversation",
+	}); k != LeafSkipDeferred {
+		t.Fatalf("name generative rich visual: got %s", k)
+	}
+	// Exact ambition tags.
+	if k := ClassifyLeaf(LeafObs{ID: "T29t", Name: "Butler residual", Tags: []string{"skip_ambition"}}); k != LeafSkipDeferred {
+		t.Fatalf("tag skip_ambition: got %s", k)
+	}
+	if k := ClassifyLeaf(LeafObs{ID: "T29t2", Name: "Butler residual", Tags: []string{"generative-ui-ambition"}}); k != LeafSkipDeferred {
+		t.Fatalf("tag generative-ui-ambition: got %s", k)
+	}
+	if k := ClassifyLeaf(LeafObs{ID: "T29t3", Name: "Butler residual", Tags: []string{"t29-class"}}); k != LeafSkipDeferred && k != LeafSkipDesign {
+		t.Fatalf("tag t29-class: got %s want skip_deferred or skip_design", k)
+	}
+	// T27.6-shaped SDUI composition: server-driven multi-provider UI — must stay ready.
+	t276 := LeafObs{
+		ID:   "T27.6",
+		Name: "The server-side server-driven-UI producer is rebuilt with multi-provider composition",
+		Context: "Rebuild the server-side half of server-driven UI with multi-provider composition so " +
+			"several providers' UI surfaces compose into one Jevons UI. No generative rich ambition here.",
+		Tags: []string{"providers", "ui", "server-driven", "composition"},
+	}
+	if IsDeferredAmbitionLeaf(t276.Tags, t276.Name, t276.Context) {
+		t.Fatal("T27.6 SDUI must not match IsDeferredAmbitionLeaf")
+	}
+	if IsDeferredNotUrgentLeaf(t276.Tags, t276.Name, t276.Context) {
+		t.Fatal("T27.6 SDUI must not be deferred-class")
+	}
+	if k := ClassifyLeaf(t276); k != LeafReady {
+		t.Fatalf("T27.6 SDUI: got %s want ready", k)
+	}
+	// Bare residual "deferred" / "generative" alone is not enough.
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T1", Name: "Some fix", Context: "Residual: telemetry deferred. generative patch notes later.",
+	}); k != LeafReady {
+		t.Fatalf("bare residual deferred/generative must not park: got %s", k)
+	}
+	// force-engage / unattended-safe residual.
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T29", Name: t29.Name, Context: t29.Context, ForceEngage: true,
+	}); k != LeafReady {
+		t.Fatalf("force_engage T29: got %s want ready", k)
+	}
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T29", Name: t29.Name, Context: t29.Context, Tags: []string{"unattended-safe"},
+	}); k != LeafReady {
+		t.Fatalf("unattended-safe T29: got %s want ready", k)
+	}
+	// Mixed frontier: only T29 parks; T27.6 kicks.
+	d := Classify([]LeafObs{t29, t276})
+	if d.Mode != Kick || len(d.ReadyIDs) != 1 || d.ReadyIDs[0] != "T27.6" {
+		t.Fatalf("mixed T29 park + T27.6 ready: %+v", d)
+	}
+}

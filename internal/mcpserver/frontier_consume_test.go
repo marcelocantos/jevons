@@ -921,6 +921,122 @@ targets:
 	}
 }
 
+// 🎯T343: T29-shaped generative-UI ambition parks; T27.6-shaped SDUI still spawns.
+func TestSweepFrontierConsumeDeferredAmbitionParkNotSpawn(t *testing.T) {
+	spawned := 0
+	var spawnedIDs []string
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{
+				ID:   "T29",
+				Name: "Jevons interaction is a generative rich visual surface driven by conversation, not a chat log",
+				Context: "DEFERRED / future work (filed 2026-07-04). The near-term butler MVP starts with plain " +
+					"conventional markdown rendering. Not on the initial critical path.",
+			},
+			{
+				ID:   "T27.6",
+				Name: "The server-side server-driven-UI producer is rebuilt with multi-provider composition",
+				Context: "Rebuild server-driven UI with multi-provider composition; providers' UI surfaces compose.",
+				Tags:    []string{"providers", "ui", "server-driven", "composition"},
+			},
+		},
+		Now:               frontierNow(),
+		PORegistered:      true,
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(leaf poproactive.LeafObs, _ string) error {
+			spawned++
+			spawnedIDs = append(spawnedIDs, leaf.ID)
+			return nil
+		},
+	})
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	r29 := byID["T29"]
+	if r29.Action != FrontierConsumePark || r29.Reason != FrontierReasonDeferred {
+		t.Fatalf("T29: action=%s reason=%s want park/skip_deferred (%+v)", r29.Action, r29.Reason, r29)
+	}
+	if byID["T27.6"].Action != FrontierConsumeSpawn {
+		t.Fatalf("T27.6 SDUI must still spawn: %+v", byID["T27.6"])
+	}
+	for _, id := range spawnedIDs {
+		if id == "T29" {
+			t.Fatal("T29 ambition must not spawn")
+		}
+	}
+	if spawned != 1 {
+		t.Fatalf("spawned=%d want 1 (T27.6 only)", spawned)
+	}
+}
+
+// 🎯T343 assembly: ledger T29-shaped parks; T27.6 may spawn.
+func TestFrontierConsumeSweepAssemblyDeferredAmbition(t *testing.T) {
+	const ledger = `
+targets:
+  T29:
+    name: Jevons interaction is a generative rich visual surface driven by conversation, not a chat log
+    status: identified
+    context: |-
+      DEFERRED / future work (filed 2026-07-04). The near-term butler MVP starts with plain conventional markdown rendering; this target is the ambition it grows into, captured so the design conversation isn't lost.
+      Not on the initial critical path (which is: reliable spawn/monitor/status/direct over plain markdown).
+  T27.6:
+    name: The server-side server-driven-UI producer is rebuilt with multi-provider composition
+    status: identified
+    context: Rebuild the server-side half of server-driven UI with multi-provider composition so several providers' UI surfaces compose into one Jevons UI.
+    tags:
+      - providers
+      - ui
+      - server-driven
+      - composition
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bullseye.yaml"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: dir, SessionID: "po1",
+		Purpose: claudia.PurposeWork, Parent: "jevons",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(dir, nil, nil)
+	s.SetRegistry(reg)
+	var spawned []string
+	reps := s.frontierConsumeSweep(FrontierConsumeLoopArgs{
+		Server:            s,
+		Workdir:           dir,
+		ParentPO:          "jevons-po",
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(leaf targetfile.FrontierLeaf, workerName, parent string) error {
+			spawned = append(spawned, leaf.ID)
+			return reg.Register(claudia.AgentDef{
+				Name: workerName, WorkDir: dir, SessionID: "spawned",
+				Purpose: claudia.PurposeWork, Parent: parent, TargetID: leaf.ID,
+			})
+		},
+	}, nil)
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	if r := byID["T29"]; r.Action != FrontierConsumePark || r.Reason != FrontierReasonDeferred {
+		t.Fatalf("T29 assembly: %+v", r)
+	}
+	if r := byID["T27.6"]; r.Action != FrontierConsumeSpawn {
+		t.Fatalf("T27.6 assembly must spawn: %+v", r)
+	}
+	for _, id := range spawned {
+		if id == "T29" {
+			t.Fatal("T29 must not be spawned")
+		}
+	}
+}
+
 // PO unregistered → every ready leaf parks; nothing spawns (T129 exception path).
 func TestFrontierConsumeSweepAssemblyPOMissing(t *testing.T) {
 	dir := t.TempDir()
