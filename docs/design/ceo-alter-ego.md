@@ -2,7 +2,7 @@
 
 **Status:** draft for owner review (do not treat as ratified constitution).  
 **Audience:** owner, overseer implementers, PO/workers reading product doctrine.  
-**Companion:** [charter.md](../charter.md) (governance/roles), [grok-cli-embodiment.md](grok-cli-embodiment.md) (voice-first absorb map), `internal/config/persona.md` (live CEO prompt).
+**Companion:** [charter.md](../charter.md) (governance/roles), [grok-cli-embodiment.md](grok-cli-embodiment.md) (voice-first absorb map), `internal/config/persona.md` (live CEO prompt), [life-and-work-org-map.md](life-and-work-org-map.md) (🎯T325 org shape: roles, sensors vs LLM cycles, staff, multi-provider portfolio, idea pipeline).
 
 This note is the **identity doctrine**, not a feature checklist. Thin slices already in persona (impatience, fleet spawn, local delivery, RSI filing) are dimensions of the same person — not a pile of unrelated personality patches.
 
@@ -198,3 +198,5 @@ Until the owner marks this ratified, treat contested calls as **draft guidance**
   `AGENTS.md`, `agents-guide.md`, and `internal/config/persona.md`. Hermetic ratchets:
   `scripts/docratchet` + `internal/config` persona/guide markers. Residual: owner
   ratification checklist above (do not ship contested hard-law expansion without it).
+- **2026-08-08** — Org structure companion: [life-and-work-org-map.md](life-and-work-org-map.md)
+  (🎯T325). Identity (this note) vs always-on life-and-work org (roles/staff/resources/ideas).
