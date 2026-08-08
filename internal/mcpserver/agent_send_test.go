@@ -41,6 +41,8 @@ type fakeSender struct {
 	interrupts int
 	// afterInterruptClears makes the next Send succeed after Interrupt.
 	afterInterruptClears bool
+	// sendErr forces Send to fail (🎯T305 delivery failure hermetic).
+	sendErr error
 }
 
 func (f *fakeSender) Alive() bool { return f.alive }
@@ -48,6 +50,9 @@ func (f *fakeSender) Alive() bool { return f.alive }
 func (f *fakeSender) Send(text string) error {
 	if !f.alive {
 		return fmt.Errorf("not running")
+	}
+	if f.sendErr != nil {
+		return f.sendErr
 	}
 	if f.inFlight {
 		return fmt.Errorf("grok acp: prompt already in flight")

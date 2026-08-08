@@ -87,6 +87,12 @@ type Server struct {
 	// on first jevons_agent_send (🎯T104 under fan-out).
 	fleetBriefed map[string]bool
 
+	// agentTurnBegan tracks agents that have begun ≥1 confirmed turn in
+	// this daemon process (start prompt or successful send — 🎯T305).
+	// Distinct from registry Materialized (durable). Used so agent_list
+	// can report never_briefed vs running for live zero-turn seats.
+	agentTurnBegan map[string]bool
+
 	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
 	selfTestEnv SelfTestEnvFunc
 

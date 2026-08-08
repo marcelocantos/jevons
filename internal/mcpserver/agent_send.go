@@ -189,6 +189,11 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 		}
 		res := agentSendResult{Status: status, Message: msg, Queued: s.pendingAgentSends(name)}
 		logAgentSendResult(name, res, rehydrated)
+		// 🎯T305: confirmed Send (incl. paste-block press-through in claudia)
+		// means a turn began — never_briefed → running for agent_list.
+		if s != nil {
+			s.markAgentTurnBegan(name)
+		}
 		return res, nil
 	}
 
@@ -231,6 +236,9 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 			msg := fmt.Sprintf("Interrupted in-flight turn on %q and sent the new message.", name)
 			res := agentSendResult{Status: "interrupted_sent", Message: msg, Queued: s.pendingAgentSends(name)}
 			logAgentSendResult(name, res, rehydrated)
+			if s != nil {
+				s.markAgentTurnBegan(name)
+			}
 			return res, nil
 		} else if isPromptInFlight(err2) {
 			n := s.enqueueAgentSend(name, text)

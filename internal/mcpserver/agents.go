@@ -60,6 +60,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
 			mcp.WithString("target_id", mcp.Description("Optional bullseye target id this agent is engaged on (e.g. T10.2). Written to registry as target_id for Frontier engagement overlay (🎯T198). Empty = not mission-bound.")),
 			mcp.WithBoolean("force_engage", mcp.Description("If true, allow a second work agent on an already-engaged or closed target (deliberate override 🎯T222). Default false.")),
+			mcp.WithString("prompt", mcp.Description("Optional opening brief delivered after Launch. Confirmed turn-begin required — empty pane / unsubmitted paste fails the tool loudly (🎯T305). Prefer this over start-then-send for unattended spawns.")),
 		),
 		s.handleAgentStart,
 	)
@@ -127,10 +128,9 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	var b strings.Builder
 	for _, d := range defs {
 		proc := s.registry.Get(d.Name)
-		status := "stopped"
-		if proc != nil && proc.Alive() {
-			status = "running"
-		}
+		alive := proc != nil && proc.Alive()
+		// 🎯T305: zero-turn live seats are never_briefed, not running.
+		status := ClassifyAgentListStatus(alive, s.agentHasTurnBegan(d.Name), d.Materialized)
 		parent := d.Parent
 		if parent == "" {
 			parent = "-"
@@ -139,7 +139,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if purpose == "" {
 			purpose = claudia.PurposeWork
 		}
-		fmt.Fprintf(&b, "%-20s %-10s purpose=%-8s parent=%-12s %s (session: %s)\n",
+		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s parent=%-12s %s (session: %s)\n",
 			d.Name, status, purpose, parent, d.WorkDir, sessionDisplay(d.SessionID))
 	}
 	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
@@ -176,6 +176,18 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	parent, _ := args["parent"].(string)
 	purpose, _ := args["purpose"].(string)
 	targetID, _ := args["target_id"].(string)
+	prompt, _ := args["prompt"].(string)
+	// Aliases: text / brief for start prompt (🎯T305).
+	if strings.TrimSpace(prompt) == "" {
+		if v, ok := args["text"].(string); ok {
+			prompt = v
+		}
+	}
+	if strings.TrimSpace(prompt) == "" {
+		if v, ok := args["brief"].(string); ok {
+			prompt = v
+		}
+	}
 	forceEngage := boolArg(args["force_engage"])
 	// Also accept mission / bullseye_target aliases (same field).
 	if targetID == "" {
@@ -302,6 +314,23 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	// Wire events: broadcast to web UI and notify Jevon on agent responses.
 	s.wireAgentEvents(name, proc)
 
+	// 🎯T305 Failure A: optional start prompt must reach the pane and
+	// begin a turn, or start fails loudly (no silent outcome=ok).
+	prompt = strings.TrimSpace(prompt)
+	if prompt != "" {
+		if err := s.deliverStartPrompt(name, prompt); err != nil {
+			// Stop the process so agent_list does not report a phantom
+			// running/never_briefed seat as successful work.
+			s.registry.Stop(name)
+			life["err"] = err.Error()
+			life["session_id"] = sessionDisplay(def.SessionID)
+			s.logLifecycle(compAgentLifecycle, "start", "error", life)
+			return mcp.NewToolResultError(prefixRehydrate(rehydrated,
+				fmt.Sprintf("start failed: %v", err))), nil
+		}
+		life["prompt_delivered"] = true
+	}
+
 	life["session_id"] = sessionDisplay(def.SessionID)
 	life["purpose"] = def.Purpose
 	life["parent"] = def.Parent
@@ -319,6 +348,9 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	if routeNote != "" {
 		msg += fmt.Sprintf(", portfolio: %s", routeNote)
+	}
+	if prompt != "" {
+		msg += ", prompt_delivered=true"
 	}
 	msg += ")"
 	return mcp.NewToolResultText(prefixRehydrate(rehydrated, msg)), nil
@@ -618,7 +650,7 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	desc := s.registry.Descendants(name)
-	if err := killSubtree(s.registry, name); err != nil {
+	if err := s.killSubtreeAndClearTurns(name); err != nil {
 		life["err"] = err.Error()
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", err)), nil

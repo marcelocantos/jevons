@@ -123,3 +123,19 @@ func killSubtree(reg *claudia.Registry, target string) error {
 	}
 	return nil
 }
+
+// killSubtreeAndClearTurns is handleAgentKill's remove path: registry
+// subtree kill plus process-local turn-began flags (🎯T305).
+func (s *Server) killSubtreeAndClearTurns(target string) error {
+	if s == nil || s.registry == nil {
+		return fmt.Errorf("agent registry not available")
+	}
+	names := append(s.registry.Descendants(target), target)
+	if err := killSubtree(s.registry, target); err != nil {
+		return err
+	}
+	for _, n := range names {
+		s.clearAgentTurnBegan(n)
+	}
+	return nil
+}
