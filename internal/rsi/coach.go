@@ -79,6 +79,10 @@ type CoachCycleArgs struct {
 	// FocusFilters optional substrings matched against kind|component|decision|msg
 	// (case-insensitive). Empty = no filter.
 	FocusFilters []string
+	// OutcomeSuppressions maps fingerprints to disposition-derived suppression
+	// (🎯T333 #4): filed-and-open never re-proposes; achieved/set_aside
+	// re-proposes only when the cluster has evidence newer than the outcome.
+	OutcomeSuppressions map[string]Suppression
 	// DryRun builds judgments but does not deliver.
 	DryRun bool
 }
@@ -108,6 +112,36 @@ func RunCoachCycle(args CoachCycleArgs) (CoachCycleResult, error) {
 	// Reuse Dedupe with prior delivered fingerprints (no existing targets —
 	// coach never consults the ledger for placement).
 	keep, skipped := Dedupe(proposed, nil, args.PriorFingerprints)
+
+	// Outcome feed (🎯T333 #4): dispositions suppress re-propose without new evidence.
+	if len(args.OutcomeSuppressions) > 0 {
+		kept := keep[:0]
+		for _, c := range keep {
+			sup, ok := args.OutcomeSuppressions[c.Fingerprint]
+			if !ok {
+				kept = append(kept, c)
+				continue
+			}
+			if sup.Always {
+				skipped = append(skipped, SkipReason{
+					Fingerprint: c.Fingerprint,
+					Name:        c.Name,
+					Reason:      "disposition_filed_open",
+				})
+				continue
+			}
+			if !c.LatestTS.After(sup.After) {
+				skipped = append(skipped, SkipReason{
+					Fingerprint: c.Fingerprint,
+					Name:        c.Name,
+					Reason:      "outcome_suppressed",
+				})
+				continue
+			}
+			kept = append(kept, c)
+		}
+		keep = kept
+	}
 
 	out := CoachCycleResult{Skipped: skipped}
 	judgments := make([]Judgment, 0, len(keep))

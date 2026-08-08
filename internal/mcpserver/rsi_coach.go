@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -59,10 +60,11 @@ func (s *Server) registerRSICoachTools() {
 	)
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_rsi_coach_status",
-			mcp.WithDescription("Show RSI coach config, cursor drip offsets, and system prompt summary (🎯T243)."),
+			mcp.WithDescription("Show RSI coach config, cursor drip offsets, disposition metrics, and system prompt summary (🎯T243/🎯T333)."),
 		),
 		s.handleRSICoachStatus,
 	)
+	s.registerRSIDispositionTool()
 }
 
 func (s *Server) handleRSICoachCycle(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -194,12 +196,23 @@ func (s *Server) handleRSICoachStatus(_ context.Context, _ mcp.CallToolRequest) 
 	if len(preview) > 240 {
 		preview = preview[:240] + "…"
 	}
+	dispLine := "  dispositions: unavailable\n"
+	if store := coach.Dispositions(); store != nil {
+		if m, err := store.Metrics(time.Now().UTC(), 14*24*time.Hour); err == nil {
+			dispLine = fmt.Sprintf(
+				"  dispositions(14d, 🎯T333): total=%d pending=%d filed=%d parked=%d ignored=%d act_other=%d achieved=%d set_aside=%d\n",
+				m.Total, m.Pending, m.Filed, m.Parked, m.Ignored, m.ActOther, m.Achieved, m.SetAside)
+		} else {
+			dispLine = fmt.Sprintf("  dispositions: error: %v\n", err)
+		}
+	}
 	text := fmt.Sprintf(
-		"RSI coach status (🎯T243)\n  name=%s overseer=%s enabled=%v\n  interval_sec=%d rate_cap=%d min_count=%d\n  focus_filters=%v\n  updated_at=%s updated_by=%s\n  cursor: chat_byte=%d event_byte=%d sessions=%d\n  system_prompt_preview:\n%s\n",
+		"RSI coach status (🎯T243)\n  name=%s overseer=%s enabled=%v\n  interval_sec=%d rate_cap=%d min_count=%d\n  focus_filters=%v\n  updated_at=%s updated_by=%s\n  cursor: chat_byte=%d event_byte=%d sessions=%d\n%s  system_prompt_preview:\n%s\n",
 		cfg.EffectiveCoachName(), cfg.EffectiveOverseer(), cfg.Enabled,
 		cfg.IntervalSec, cfg.EffectiveRateCap(), cfg.EffectiveMinCount(),
 		cfg.FocusFilters, cfg.UpdatedAt, cfg.UpdatedBy,
 		cur.ChatLogByte, cur.EventLogByte, len(cur.SessionOffsets),
+		dispLine,
 		preview,
 	)
 	return mcp.NewToolResultText(text), nil

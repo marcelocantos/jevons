@@ -48,10 +48,11 @@ type CoachArgs struct {
 // Coach is the ambient RSI coach schedule: drip-read surfaces, form judgments,
 // deliver to overseer. Durable config is overseer-retunable.
 type Coach struct {
-	args   CoachArgs
-	mu     sync.Mutex
-	stream []Evidence // optional stream buffer (reap, etc.)
-	ledger *Ledger    // judgment fingerprints (reuse mint ledger type)
+	args         CoachArgs
+	mu           sync.Mutex
+	stream       []Evidence // optional stream buffer (reap, etc.)
+	ledger       *Ledger    // judgment fingerprints (reuse mint ledger type)
+	dispositions *DispositionStore
 }
 
 // NewCoach validates args and opens the judgment fingerprint ledger.
@@ -78,7 +79,11 @@ func NewCoach(args CoachArgs) (*Coach, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Coach{args: args, ledger: led}
+	disp, err := OpenDispositionStore(args.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	c := &Coach{args: args, ledger: led, dispositions: disp}
 	if args.SeedEOF {
 		_, _ = SeedCursorAtEOF(args.StateDir, args.ChatLogPath, args.EventLogPath, args.SessionsDir, DefaultSessionLookback)
 	}
@@ -185,6 +190,14 @@ func (c *Coach) StateDir() string {
 	return c.args.StateDir
 }
 
+// Dispositions returns the durable judgment-disposition store (🎯T333).
+func (c *Coach) Dispositions() *DispositionStore {
+	if c == nil {
+		return nil
+	}
+	return c.dispositions
+}
+
 func (c *Coach) runSafe(reason string) {
 	res, err := c.cycle(reason)
 	if err != nil {
@@ -254,15 +267,28 @@ func (c *Coach) cycle(reason string) (CoachCycleResult, error) {
 		return CoachCycleResult{}, err
 	}
 
+	// Outcome feed (🎯T333 #4): pull achieve/set_aside of filed targets into the
+	// store, then suppress re-propose of concluded gaps without new evidence.
+	if n, err := c.dispositions.SyncOutcomes(ReadBullseyeTargetStatus, c.args.Now()); err != nil {
+		slog.Debug("rsi coach outcome sync skipped", "err", err)
+	} else if n > 0 {
+		slog.Info("rsi coach outcomes synced", "updated", n)
+	}
+	suppressions, err := c.dispositions.Suppressions(c.args.Now())
+	if err != nil {
+		return CoachCycleResult{}, err
+	}
+
 	dry := c.args.DryRun || c.args.Deliverer == nil
 	res, err := RunCoachCycle(CoachCycleArgs{
-		Evidence:          ev,
-		PriorFingerprints: prior,
-		Deliverer:         c.args.Deliverer,
-		MinCount:          cfg.EffectiveMinCount(),
-		RateCap:           cfg.EffectiveRateCap(),
-		FocusFilters:      cfg.FocusFilters,
-		DryRun:            dry,
+		Evidence:            ev,
+		PriorFingerprints:   prior,
+		Deliverer:           c.args.Deliverer,
+		MinCount:            cfg.EffectiveMinCount(),
+		RateCap:             cfg.EffectiveRateCap(),
+		FocusFilters:        cfg.FocusFilters,
+		OutcomeSuppressions: suppressions,
+		DryRun:              dry,
 	})
 	if err != nil {
 		return res, err
@@ -278,6 +304,10 @@ func (c *Coach) cycle(reason string) (CoachCycleResult, error) {
 		}
 		if err := c.ledger.Record(filed, c.args.Now()); err != nil {
 			slog.Warn("rsi coach judgment ledger failed", "err", err)
+		}
+		// Disposition loop (🎯T333 #1): every delivered judgment starts pending.
+		if err := c.dispositions.RecordDelivered(res.Delivered, c.args.Now()); err != nil {
+			slog.Warn("rsi coach disposition record failed", "err", err)
 		}
 	}
 	if c.args.OnResult != nil {

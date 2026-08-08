@@ -61,6 +61,9 @@ type Candidate struct {
 	Count       int
 	Kinds       []string
 	EvidenceIDs []string
+	// LatestTS is the newest evidence timestamp in the cluster (zero = unknown).
+	// Outcome suppression (🎯T333) re-proposes only when this is newer than the outcome.
+	LatestTS time.Time
 }
 
 // ExistingTarget is a ledger entry used for near-duplicate suppression.
@@ -196,6 +199,7 @@ type evidenceBucket struct {
 	kinds  map[string]struct{}
 	ids    []string
 	sample Evidence
+	maxTS  time.Time
 }
 
 // ExtractCandidates clusters evidence into improvement candidates.
@@ -224,6 +228,9 @@ func ExtractCandidates(ev []Evidence, minCount int) []Candidate {
 		b.kinds[kind] = struct{}{}
 		if e.SourceID != "" && len(b.ids) < 8 {
 			b.ids = append(b.ids, e.SourceID)
+		}
+		if e.TS.After(b.maxTS) {
+			b.maxTS = e.TS
 		}
 	}
 
@@ -545,6 +552,7 @@ func candidateFromBucket(b *evidenceBucket) Candidate {
 		Count:       b.count,
 		Kinds:       kinds,
 		EvidenceIDs: append([]string{}, b.ids...),
+		LatestTS:    b.maxTS,
 	}
 }
 
