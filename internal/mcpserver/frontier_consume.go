@@ -31,7 +31,10 @@ import (
 // set_aside deps (T7→T5) and optional high-cost mobile/iPad class unless
 // unattended-safe / force-engage. 🎯T338: park parents with active hierarchical
 // children (T10 with T10.2–T10.6) and optional high-infra class (sqlpipe/CGO/Peer,
-// cost≥13 multi-child) unless force-engage / unattended-safe. Anti-thrash:
+// cost≥13 multi-child) unless force-engage / unattended-safe. 🎯T339: park
+// deferred / not-urgent / later-device leaves (T22 voice class) with
+// skip_deferred or owner-parked unless force-engage / unattended-safe.
+// Anti-thrash:
 // durable per-target spawn ledger (backoff + max auto-spawns) so a worker that
 // finishes without achieving cannot churn the same leaf forever.
 //
@@ -79,6 +82,8 @@ const (
 	FrontierReasonHighCostMobile       = "skip_high_cost_mobile"            // 🎯T337 mobile megawork
 	FrontierReasonParentActiveChildren = "skip_parent_with_active_children" // 🎯T338 T10 parent class
 	FrontierReasonHighInfra            = "skip_high_infra"                  // 🎯T338 sqlpipe/CGO/Peer
+	FrontierReasonDeferred             = "skip_deferred"                    // 🎯T339 not-urgent / deferred class
+	FrontierReasonOwnerParked          = "owner-parked"                     // 🎯T339 explicit owner-parked
 	FrontierReasonCapacity             = "park_capacity"
 	FrontierReasonBackoff              = "park_backoff"
 	FrontierReasonMaxAutospawns        = "park_max_autospawns"
@@ -297,6 +302,18 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			continue
 		case poproactive.LeafSkipHighInfra:
 			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonHighInfra
+			out = append(out, rep)
+			continue
+		case poproactive.LeafSkipDeferred:
+			// Park: deferred / not-urgent / later-device without owner open (🎯T339).
+			// Prefer owner-parked when the leaf is explicitly tagged/phrased that way.
+			reason := FrontierReasonDeferred
+			if poproactive.IsOwnerParkedTag(leaf.Tags) ||
+				strings.Contains(strings.ToLower(leaf.Name+" "+leaf.Context), "owner-parked") {
+				reason = FrontierReasonOwnerParked
+			}
+			rep.Action, rep.Reason = FrontierConsumePark, reason
+			rep.Err = "deferred/not-urgent without owner open"
 			out = append(out, rep)
 			continue
 		case poproactive.LeafSkipBlocked:

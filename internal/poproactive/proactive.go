@@ -61,6 +61,10 @@ const (
 	// LeafSkipHighInfra: sqlpipe/CGO/Peer rebuild class (cost≥13 or markers)
 	// without unattended-safe / force-engage (🎯T338).
 	LeafSkipHighInfra
+	// LeafSkipDeferred: deferred / not-urgent / later-device product leaves
+	// that still look graph-ready (T22 voice class). Unattended consume parks
+	// with skip_deferred (or owner-parked tag) until owner play (🎯T339).
+	LeafSkipDeferred
 )
 
 func (k LeafKind) String() string {
@@ -83,6 +87,8 @@ func (k LeafKind) String() string {
 		return "skip_parent_with_active_children"
 	case LeafSkipHighInfra:
 		return "skip_high_infra"
+	case LeafSkipDeferred:
+		return "skip_deferred"
 	default:
 		return "unknown"
 	}
@@ -117,8 +123,8 @@ type LeafObs struct {
 	// Cost is the portfolio cost estimate (0 when unknown/omitted).
 	Cost float64
 	// ForceEngage overrides set_aside-dep, high-cost-mobile, parent-with-
-	// active-children, and high-infra parks (owner/play residual; tag
-	// force-engage on the leaf).
+	// active-children, high-infra, and deferred/not-urgent parks (owner/play
+	// residual; tag force-engage on the leaf).
 	ForceEngage bool
 }
 
@@ -177,9 +183,62 @@ func IsUnattendedSafeTag(tags []string) bool {
 	return hasTag(tags, "unattended-safe")
 }
 
-// IsForceEngageTag is true when the owner/play residual overrides T337/T338 parks.
+// IsForceEngageTag is true when the owner/play residual overrides T337/T338/T339 parks.
 func IsForceEngageTag(tags []string) bool {
 	return hasTag(tags, "force-engage") || hasTag(tags, "force_engage")
+}
+
+// deferredNotUrgentMarkers are scanned in name+context (case-insensitive).
+// Prefer explicit owner language over bare "deferred" alone (too common in
+// residual notes). Exact tags are matched separately (IsDeferredNotUrgentLeaf).
+var deferredNotUrgentMarkers = []string{
+	"not urgent",
+	"not-urgent",
+	"deferred until",
+	"deferred to",
+	"later-device",
+	"later device",
+	"owner-parked",
+	"without owner open",
+	"do not auto-spawn",
+}
+
+// deferredExactTags mark a leaf deferred for unattended consume (🎯T339).
+var deferredExactTags = []string{
+	"deferred",
+	"not-urgent",
+	"later-device",
+	"owner-parked",
+	"skip_deferred",
+}
+
+// IsDeferredNotUrgentLeaf reports the 🎯T339 deferred / not-urgent / later-device
+// product class (T22 voice residual). Graph-ready leaves with this prose must
+// park unattended, not auto-spawn. force-engage / unattended-safe override at
+// ClassifyLeaf time, not here. Exact tags and phrase markers both count.
+func IsDeferredNotUrgentLeaf(tags []string, name, context string) bool {
+	for _, want := range deferredExactTags {
+		if hasTag(tags, want) {
+			return true
+		}
+	}
+	hay := strings.ToLower(strings.TrimSpace(name) + " " + strings.TrimSpace(context))
+	if hay == "" {
+		return false
+	}
+	for _, m := range deferredNotUrgentMarkers {
+		if strings.Contains(hay, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsOwnerParkedTag is true when the leaf carries an explicit owner-parked tag
+// (🎯T339 alternate park reason). Phrase "owner-parked" in context is also
+// deferred-class via IsDeferredNotUrgentLeaf.
+func IsOwnerParkedTag(tags []string) bool {
+	return hasTag(tags, "owner-parked")
 }
 
 // HasSetAsideDep is true when the leaf carries at least one set_aside dep.
@@ -262,11 +321,13 @@ func IsHighInfraLeaf(tags []string, name, context string, cost float64, activeCh
 }
 
 // ClassifyLeaf assigns one leaf to ready vs skip for PO proactive / frontier
-// consume. Priority: closed > set_aside_dep > parent_active_children > design >
-// high_cost_mobile > high_infra > blocked > engaged > ready.
+// consume. Priority: closed > set_aside_dep > parent_active_children >
+// deferred (before design so "owner-parked" is not swallowed by the bare
+// "parked" design marker) > design > high_cost_mobile > high_infra >
+// blocked > engaged > ready.
 // ForceEngage (or force-engage tag) overrides set_aside_dep, parent_active_
-// children, high_cost_mobile, and high_infra (design/blocked still skip).
-// unattended-safe overrides high_cost_mobile and high_infra only — not
+// children, deferred, high_cost_mobile, and high_infra (design/blocked still skip).
+// unattended-safe overrides deferred, high_cost_mobile, and high_infra only — not
 // parent-with-active-children (structural; prefer ready child leaves).
 func ClassifyLeaf(o LeafObs) LeafKind {
 	if o.Closed {
@@ -278,6 +339,11 @@ func ClassifyLeaf(o LeafObs) LeafKind {
 	}
 	if !force && HasActiveChildren(o) {
 		return LeafSkipParentActiveChildren
+	}
+	// 🎯T339 before design: "owner-parked" contains design marker "parked".
+	if !force && !IsUnattendedSafeTag(o.Tags) &&
+		IsDeferredNotUrgentLeaf(o.Tags, o.Name, o.Context) {
+		return LeafSkipDeferred
 	}
 	if IsDesignGatedLeaf(o.Tags, o.Name, o.Context) {
 		return LeafSkipDesign

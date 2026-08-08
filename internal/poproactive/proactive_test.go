@@ -288,3 +288,72 @@ func TestClassifyOnlyParentWithChildrenSleeps(t *testing.T) {
 		t.Fatalf("ready child must kick: %+v", d)
 	}
 }
+
+// 🎯T339: not-urgent / deferred voice class parks; force-engage / unattended-safe override.
+func TestClassifyLeafDeferredNotUrgent(t *testing.T) {
+	// T22-shaped context: "Not urgent" without design-gated tags.
+	t22 := LeafObs{
+		ID: "T22", Name: "Voice traffic flows browser-to-Grok directly",
+		Context: "Not urgent — laptop dev path works fine via the proxy. Raise once iPad becomes primary.",
+	}
+	if k := ClassifyLeaf(t22); k != LeafSkipDeferred {
+		t.Fatalf("not urgent: got %s want skip_deferred", k)
+	}
+	if k := ClassifyLeaf(t22); k.String() != "skip_deferred" {
+		t.Fatalf("string: %s", k)
+	}
+	// deferred until / later-device phrase markers.
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T22b", Name: "Voice residual", Context: "deferred until iPad-in-car; later-device path.",
+	}); k != LeafSkipDeferred {
+		t.Fatalf("deferred until: got %s", k)
+	}
+	// Exact tag.
+	if k := ClassifyLeaf(LeafObs{ID: "T22c", Name: "Voice", Tags: []string{"not-urgent"}}); k != LeafSkipDeferred {
+		t.Fatalf("tag not-urgent: got %s", k)
+	}
+	// owner-parked tag (must not be swallowed as bare design "parked" only).
+	if k := ClassifyLeaf(LeafObs{ID: "T22d", Name: "Voice", Tags: []string{"owner-parked"}}); k != LeafSkipDeferred {
+		t.Fatalf("owner-parked tag: got %s want skip_deferred", k)
+	}
+	if !IsOwnerParkedTag([]string{"owner-parked"}) {
+		t.Fatal("IsOwnerParkedTag")
+	}
+	// force-engage residual.
+	t22.ForceEngage = true
+	if k := ClassifyLeaf(t22); k != LeafReady {
+		t.Fatalf("force_engage: got %s want ready", k)
+	}
+	// unattended-safe overrides deferred.
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T22", Name: "Voice", Context: "Not urgent", Tags: []string{"unattended-safe"},
+	}); k != LeafReady {
+		t.Fatalf("unattended-safe: got %s want ready", k)
+	}
+	// Ordinary ready leaf without deferred prose stays ready.
+	if k := ClassifyLeaf(LeafObs{ID: "T500", Name: "Ordinary ready Build leaf"}); k != LeafReady {
+		t.Fatalf("ordinary: got %s want ready", k)
+	}
+	// Bare residual "deferred" in residual notes alone is not enough (no "deferred until/to").
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T1", Name: "Some fix", Context: "Residual: telemetry deferred.",
+	}); k != LeafReady {
+		t.Fatalf("bare residual deferred must not park: got %s", k)
+	}
+}
+
+func TestClassifyOnlyDeferredSleeps(t *testing.T) {
+	d := Classify([]LeafObs{{
+		ID: "T22", Name: "Voice", Context: "Not urgent — laptop proxy fine.",
+	}})
+	if d.Mode != Sleep || len(d.ReadyIDs) != 0 {
+		t.Fatalf("deferred-only frontier must sleep: %+v", d)
+	}
+	d = Classify([]LeafObs{
+		{ID: "T22", Name: "Voice", Context: "Not urgent"},
+		{ID: "T500", Name: "Ordinary ready leaf"},
+	})
+	if d.Mode != Kick || len(d.ReadyIDs) != 1 || d.ReadyIDs[0] != "T500" {
+		t.Fatalf("ordinary ready must kick: %+v", d)
+	}
+}

@@ -657,6 +657,156 @@ targets:
 	}
 }
 
+// 🎯T339: Not urgent / deferred voice context → park, not spawn.
+func TestSweepFrontierConsumeDeferredNotUrgentParkNotSpawn(t *testing.T) {
+	spawned := 0
+	var spawnedIDs []string
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{
+				ID: "T22", Name: "Voice traffic flows browser-to-Grok directly",
+				Context: "Not urgent — laptop dev path works fine via the proxy.",
+			},
+			{
+				ID: "T22b", Name: "Voice residual",
+				Context: "deferred until iPad; later-device class.",
+			},
+			{
+				ID: "T22c", Name: "Owner parked voice",
+				Tags: []string{"owner-parked"},
+			},
+			{ID: "T500", Name: "Ordinary ready Build leaf"},
+		},
+		Now:               frontierNow(),
+		PORegistered:      true,
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(leaf poproactive.LeafObs, _ string) error {
+			spawned++
+			spawnedIDs = append(spawnedIDs, leaf.ID)
+			return nil
+		},
+	})
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	r22 := byID["T22"]
+	if r22.Action != FrontierConsumePark || r22.Reason != FrontierReasonDeferred {
+		t.Fatalf("T22: action=%s reason=%s want park/skip_deferred (%+v)", r22.Action, r22.Reason, r22)
+	}
+	if byID["T22b"].Action != FrontierConsumePark || byID["T22b"].Reason != FrontierReasonDeferred {
+		t.Fatalf("T22b: %+v", byID["T22b"])
+	}
+	if byID["T22c"].Action != FrontierConsumePark || byID["T22c"].Reason != FrontierReasonOwnerParked {
+		t.Fatalf("T22c owner-parked: %+v", byID["T22c"])
+	}
+	if byID["T500"].Action != FrontierConsumeSpawn {
+		t.Fatalf("ordinary ready leaf must still spawn: %+v", byID["T500"])
+	}
+	for _, id := range spawnedIDs {
+		if id == "T22" || id == "T22b" || id == "T22c" {
+			t.Fatalf("deferred leaf %s must not spawn", id)
+		}
+	}
+	if spawned != 1 {
+		t.Fatalf("spawned=%d want 1", spawned)
+	}
+}
+
+// 🎯T339: force-engage / unattended-safe still spawn deferred leaves.
+func TestSweepFrontierConsumeDeferredForceEngageSpawn(t *testing.T) {
+	spawned := 0
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{ID: "T22a", Name: "Voice", Context: "Not urgent", ForceEngage: true},
+			{ID: "T22b", Name: "Voice", Context: "Not urgent", Tags: []string{"unattended-safe"}},
+			{ID: "T22c", Name: "Voice", Context: "Not urgent"},
+		},
+		Now:               frontierNow(),
+		PORegistered:      true,
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(poproactive.LeafObs, string) error {
+			spawned++
+			return nil
+		},
+	})
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	if byID["T22a"].Action != FrontierConsumeSpawn {
+		t.Fatalf("force_engage must spawn: %+v", byID["T22a"])
+	}
+	if byID["T22b"].Action != FrontierConsumeSpawn {
+		t.Fatalf("unattended-safe must spawn: %+v", byID["T22b"])
+	}
+	if byID["T22c"].Action != FrontierConsumePark || byID["T22c"].Reason != FrontierReasonDeferred {
+		t.Fatalf("plain deferred must park: %+v", byID["T22c"])
+	}
+	if spawned != 2 {
+		t.Fatalf("spawned=%d want 2", spawned)
+	}
+}
+
+// 🎯T339 assembly: ledger T22-shaped "Not urgent" never auto-spawns.
+func TestFrontierConsumeSweepAssemblyDeferredNotUrgent(t *testing.T) {
+	const ledger = `
+targets:
+  T22:
+    name: Voice traffic flows browser-to-Grok directly
+    status: identified
+    context: Not urgent — laptop dev path works fine via the proxy. Raise once iPad becomes primary.
+  T500:
+    name: Ordinary ready leaf
+    status: identified
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bullseye.yaml"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: dir, SessionID: "po1",
+		Purpose: claudia.PurposeWork, Parent: "jevons",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(dir, nil, nil)
+	s.SetRegistry(reg)
+	var spawned []string
+	reps := s.frontierConsumeSweep(FrontierConsumeLoopArgs{
+		Server:            s,
+		Workdir:           dir,
+		ParentPO:          "jevons-po",
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(leaf targetfile.FrontierLeaf, workerName, parent string) error {
+			spawned = append(spawned, leaf.ID)
+			return reg.Register(claudia.AgentDef{
+				Name: workerName, WorkDir: dir, SessionID: "spawned",
+				Purpose: claudia.PurposeWork, Parent: parent, TargetID: leaf.ID,
+			})
+		},
+	}, nil)
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	if r := byID["T22"]; r.Action != FrontierConsumePark || r.Reason != FrontierReasonDeferred {
+		t.Fatalf("T22 assembly: %+v", r)
+	}
+	if r := byID["T500"]; r.Action != FrontierConsumeSpawn {
+		t.Fatalf("T500 assembly: %+v", r)
+	}
+	for _, id := range spawned {
+		if id == "T22" {
+			t.Fatal("T22 must not be spawned")
+		}
+	}
+}
+
 // PO unregistered → every ready leaf parks; nothing spawns (T129 exception path).
 func TestFrontierConsumeSweepAssemblyPOMissing(t *testing.T) {
 	dir := t.TempDir()
