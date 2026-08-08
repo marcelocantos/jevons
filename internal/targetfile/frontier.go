@@ -17,6 +17,10 @@ import (
 // (internal/server): active target (identified|converging) whose depends_on
 // are all achieved/set_aside; unknown deps block conservatively. No bullseye
 // CLI shell-out — nearest in-repo ledger only (external shadow residual).
+//
+// 🎯T337: graph-ready leaves that only unblock via set_aside deps still appear
+// here (RHS frontier semantics), but carry SetAsideDeps so the consume
+// classifier can park them (T7→T5 class) instead of auto-spawning.
 
 // FrontierLeaf is one ready frontier target from a ledger.
 type FrontierLeaf struct {
@@ -25,6 +29,12 @@ type FrontierLeaf struct {
 	Context    string
 	Tags       []string
 	Acceptance []string
+	// Cost / Value are portfolio estimates from the ledger (0 when omitted).
+	Cost  float64
+	Value float64
+	// SetAsideDeps lists depends_on that are set_aside (not achieved). Graph
+	// still treats them as done; unattended consume must not auto-spawn.
+	SetAsideDeps []string
 }
 
 type frontierLedgerTarget struct {
@@ -34,6 +44,8 @@ type frontierLedgerTarget struct {
 	Context    string   `yaml:"context"`
 	Tags       []string `yaml:"tags"`
 	Acceptance []string `yaml:"acceptance"`
+	Cost       float64  `yaml:"cost"`
+	Value      float64  `yaml:"value"`
 }
 
 type frontierLedgerDoc struct {
@@ -59,12 +71,17 @@ func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
 		t, ok := doc.Targets[id]
 		return ok && IsClosedStatus(t.Status)
 	}
+	setAside := func(id string) bool {
+		t, ok := doc.Targets[id]
+		return ok && IsSetAsideStatus(t.Status)
+	}
 	var leaves []FrontierLeaf
 	for id, t := range doc.Targets {
 		if !isFrontierActiveStatus(t.Status) {
 			continue
 		}
 		ready := true
+		var setAsideDeps []string
 		for _, dep := range t.DependsOn {
 			dep = strings.TrimSpace(dep)
 			if dep == "" {
@@ -74,16 +91,22 @@ func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
 				ready = false
 				break
 			}
+			if setAside(dep) {
+				setAsideDeps = append(setAsideDeps, dep)
+			}
 		}
 		if !ready {
 			continue
 		}
 		leaves = append(leaves, FrontierLeaf{
-			ID:         id,
-			Name:       strings.TrimSpace(t.Name),
-			Context:    strings.TrimSpace(t.Context),
-			Tags:       t.Tags,
-			Acceptance: t.Acceptance,
+			ID:           id,
+			Name:         strings.TrimSpace(t.Name),
+			Context:      strings.TrimSpace(t.Context),
+			Tags:         t.Tags,
+			Acceptance:   t.Acceptance,
+			Cost:         t.Cost,
+			Value:        t.Value,
+			SetAsideDeps: setAsideDeps,
 		})
 	}
 	sort.Slice(leaves, func(i, j int) bool {

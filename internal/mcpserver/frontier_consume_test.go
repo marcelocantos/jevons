@@ -359,6 +359,146 @@ func TestFrontierConsumeSweepAssembly(t *testing.T) {
 	}
 }
 
+// 🎯T337: fixture like T7 (depends_on T5 set_aside) → park, not spawn.
+func TestSweepFrontierConsumeSetAsideDepParkNotSpawn(t *testing.T) {
+	spawned := 0
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{
+				ID: "T7", Name: "Mobile app for Jevon",
+				SetAsideDeps: []string{"T5"}, Cost: 20, Tags: []string{"visual"},
+			},
+			{ID: "T500", Name: "Ordinary ready Build leaf"},
+		},
+		Now:               frontierNow(),
+		PORegistered:      true,
+		MaxSpawnsPerCycle: 2,
+		Spawn: func(poproactive.LeafObs, string) error {
+			spawned++
+			return nil
+		},
+	})
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	r7 := byID["T7"]
+	if r7.Action != FrontierConsumePark || r7.Reason != FrontierReasonSetAsideDep {
+		t.Fatalf("T7: action=%s reason=%s want park/skip_set_aside_dep (%+v)", r7.Action, r7.Reason, r7)
+	}
+	if !strings.Contains(r7.Err, "T5") {
+		t.Fatalf("T7 park err should name set_aside dep: %q", r7.Err)
+	}
+	if byID["T500"].Action != FrontierConsumeSpawn {
+		t.Fatalf("ordinary ready leaf must still spawn: %+v", byID["T500"])
+	}
+	if spawned != 1 {
+		t.Fatalf("spawned=%d want 1 (T7 parked)", spawned)
+	}
+}
+
+// 🎯T337: high-cost mobile parks unless unattended-safe / force-engage.
+func TestSweepFrontierConsumeHighCostMobilePark(t *testing.T) {
+	spawned := 0
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{ID: "T7a", Name: "Mobile app", Cost: 20, Tags: []string{"visual"}},
+			{ID: "T7b", Name: "Mobile app", Cost: 20, Tags: []string{"visual", "unattended-safe"}},
+			{ID: "T7c", Name: "Mobile app", Cost: 20, Tags: []string{"visual", "force-engage"}},
+		},
+		Now:               frontierNow(),
+		PORegistered:      true,
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(poproactive.LeafObs, string) error {
+			spawned++
+			return nil
+		},
+	})
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	if byID["T7a"].Action != FrontierConsumePark || byID["T7a"].Reason != FrontierReasonHighCostMobile {
+		t.Fatalf("T7a: %+v", byID["T7a"])
+	}
+	if byID["T7b"].Action != FrontierConsumeSpawn {
+		t.Fatalf("unattended-safe must spawn: %+v", byID["T7b"])
+	}
+	if byID["T7c"].Action != FrontierConsumeSpawn {
+		t.Fatalf("force-engage must spawn: %+v", byID["T7c"])
+	}
+	if spawned != 2 {
+		t.Fatalf("spawned=%d want 2", spawned)
+	}
+}
+
+// 🎯T337 assembly: ledger T7→T5 set_aside is never auto-spawned.
+func TestFrontierConsumeSweepAssemblySetAsideDep(t *testing.T) {
+	const ledger = `
+targets:
+  T5:
+    name: Auth parked
+    status: set_aside
+  T7:
+    name: Mobile app for Jevon
+    status: converging
+    cost: 20
+    value: 20
+    tags:
+    - visual
+    depends_on:
+    - T5
+  T500:
+    name: Ordinary ready leaf
+    status: identified
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bullseye.yaml"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: dir, SessionID: "po1",
+		Purpose: claudia.PurposeWork, Parent: "jevons",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(dir, nil, nil)
+	s.SetRegistry(reg)
+	var spawned []string
+	reps := s.frontierConsumeSweep(FrontierConsumeLoopArgs{
+		Server:            s,
+		Workdir:           dir,
+		ParentPO:          "jevons-po",
+		MaxSpawnsPerCycle: 5,
+		Spawn: func(leaf targetfile.FrontierLeaf, workerName, parent string) error {
+			spawned = append(spawned, leaf.ID)
+			return reg.Register(claudia.AgentDef{
+				Name: workerName, WorkDir: dir, SessionID: "spawned",
+				Purpose: claudia.PurposeWork, Parent: parent, TargetID: leaf.ID,
+			})
+		},
+	}, nil)
+	byID := map[string]FrontierConsumeReport{}
+	for _, r := range reps {
+		byID[r.TargetID] = r
+	}
+	if r := byID["T7"]; r.Action != FrontierConsumePark || r.Reason != FrontierReasonSetAsideDep {
+		t.Fatalf("T7 assembly: %+v", r)
+	}
+	if r := byID["T500"]; r.Action != FrontierConsumeSpawn {
+		t.Fatalf("T500 assembly: %+v", r)
+	}
+	for _, id := range spawned {
+		if id == "T7" {
+			t.Fatal("T7 must not be spawned")
+		}
+	}
+}
+
 // PO unregistered → every ready leaf parks; nothing spawns (T129 exception path).
 func TestFrontierConsumeSweepAssemblyPOMissing(t *testing.T) {
 	dir := t.TempDir()

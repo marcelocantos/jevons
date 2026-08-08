@@ -49,6 +49,12 @@ const (
 	LeafSkipEngaged
 	// LeafSkipClosed: achieved / set_aside (should not be frontier; safe).
 	LeafSkipClosed
+	// LeafSkipSetAsideDep: graph-ready only because depends_on are set_aside
+	// (T7→T5 class). Unattended consume must park, not spawn (🎯T337).
+	LeafSkipSetAsideDep
+	// LeafSkipHighCostMobile: multi-device / iPad megawork (visual+high cost or
+	// name Mobile app) without unattended-safe / force-engage (🎯T337).
+	LeafSkipHighCostMobile
 )
 
 func (k LeafKind) String() string {
@@ -63,10 +69,18 @@ func (k LeafKind) String() string {
 		return "skip_engaged"
 	case LeafSkipClosed:
 		return "skip_closed"
+	case LeafSkipSetAsideDep:
+		return "skip_set_aside_dep"
+	case LeafSkipHighCostMobile:
+		return "skip_high_cost_mobile"
 	default:
 		return "unknown"
 	}
 }
+
+// HighCostMobileThreshold is the cost floor for the optional mobile megawork
+// unattended skip (🎯T337: tags visual + cost≥20, or name Mobile app).
+const HighCostMobileThreshold = 20
 
 // LeafObs is a pure observation of one product-scoped frontier leaf.
 type LeafObs struct {
@@ -80,6 +94,14 @@ type LeafObs struct {
 	AlreadyEngaged bool
 	// Closed is true for achieved / set_aside (defensive; not kickable).
 	Closed bool
+	// SetAsideDeps lists depends_on that are set_aside (not achieved). When
+	// non-empty the leaf is graph-ready but not unattended-safe (🎯T337).
+	SetAsideDeps []string
+	// Cost is the portfolio cost estimate (0 when unknown/omitted).
+	Cost float64
+	// ForceEngage overrides set_aside-dep and high-cost-mobile parks
+	// (owner/play residual; tag force-engage on the leaf).
+	ForceEngage bool
 }
 
 // designGateMarkers are scanned in tags, name, and context (case-insensitive).
@@ -117,14 +139,78 @@ func IsDesignGatedLeaf(tags []string, name, context string) bool {
 	return false
 }
 
-// ClassifyLeaf assigns one leaf to ready vs skip for PO proactive.
-// Priority: closed > design > blocked > engaged > ready.
+// hasTag reports a case-insensitive exact tag match (trimmed).
+func hasTag(tags []string, want string) bool {
+	want = strings.ToLower(strings.TrimSpace(want))
+	if want == "" {
+		return false
+	}
+	for _, t := range tags {
+		if strings.ToLower(strings.TrimSpace(t)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUnattendedSafeTag is true when the leaf is explicitly marked safe for
+// unattended auto-consume (overrides high-cost mobile park only).
+func IsUnattendedSafeTag(tags []string) bool {
+	return hasTag(tags, "unattended-safe")
+}
+
+// IsForceEngageTag is true when the owner/play residual overrides T337 parks.
+func IsForceEngageTag(tags []string) bool {
+	return hasTag(tags, "force-engage") || hasTag(tags, "force_engage")
+}
+
+// HasSetAsideDep is true when the leaf carries at least one set_aside dep.
+func HasSetAsideDep(o LeafObs) bool {
+	for _, d := range o.SetAsideDeps {
+		if strings.TrimSpace(d) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// IsHighCostMobileLeaf reports the 🎯T337 optional mobile/iPad megawork class:
+// (tags include "visual" AND cost ≥ HighCostMobileThreshold) OR name matches
+// Mobile app / iPad product class. unattended-safe and force-engage override
+// at ClassifyLeaf time, not here.
+func IsHighCostMobileLeaf(tags []string, name string, cost float64) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if strings.Contains(n, "mobile app") || strings.Contains(n, "ipad app") {
+		return true
+	}
+	if hasTag(tags, "mobile") || hasTag(tags, "ipad") {
+		if cost >= HighCostMobileThreshold {
+			return true
+		}
+	}
+	if hasTag(tags, "visual") && cost >= HighCostMobileThreshold {
+		return true
+	}
+	return false
+}
+
+// ClassifyLeaf assigns one leaf to ready vs skip for PO proactive / frontier
+// consume. Priority: closed > set_aside_dep > design > high_cost_mobile >
+// blocked > engaged > ready. ForceEngage (or force-engage tag) overrides
+// set_aside_dep and high_cost_mobile only (design/blocked still skip).
 func ClassifyLeaf(o LeafObs) LeafKind {
 	if o.Closed {
 		return LeafSkipClosed
 	}
+	force := o.ForceEngage || IsForceEngageTag(o.Tags)
+	if !force && HasSetAsideDep(o) {
+		return LeafSkipSetAsideDep
+	}
 	if IsDesignGatedLeaf(o.Tags, o.Name, o.Context) {
 		return LeafSkipDesign
+	}
+	if !force && !IsUnattendedSafeTag(o.Tags) && IsHighCostMobileLeaf(o.Tags, o.Name, o.Cost) {
+		return LeafSkipHighCostMobile
 	}
 	if o.Blocked {
 		return LeafSkipBlocked

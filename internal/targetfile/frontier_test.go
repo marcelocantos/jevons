@@ -97,3 +97,86 @@ func TestTargetIDNaturalLess(t *testing.T) {
 		}
 	}
 }
+
+// 🎯T337: T7→T5 class — active leaf depends on set_aside dep is still a
+// frontier leaf (graph-ready) but carries SetAsideDeps for consume park.
+const t337SetAsideDepLedger = `
+targets:
+  T5:
+    name: Auth parked
+    status: set_aside
+    set_aside_reason: parked until iPad resumes
+  T6:
+    name: Delivered dep
+    status: achieved
+  T7:
+    name: Mobile app for Jevon
+    status: converging
+    cost: 20
+    value: 20
+    tags:
+    - visual
+    depends_on:
+    - T5
+  T8:
+    name: Ready after achieved only
+    status: identified
+    depends_on:
+    - T6
+  T9:
+    name: Blocked on open dep
+    status: identified
+    depends_on:
+    - T7
+`
+
+func TestFrontierLeavesSetAsideDepsCarried(t *testing.T) {
+	leaves, err := FrontierLeaves([]byte(t337SetAsideDepLedger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]FrontierLeaf{}
+	for _, l := range leaves {
+		byID[l.ID] = l
+	}
+	// T7 is graph-ready (set_aside unblocks) but must expose SetAsideDeps.
+	t7, ok := byID["T7"]
+	if !ok {
+		t.Fatalf("T7 missing from frontier leaves %v", keysOf(byID))
+	}
+	if len(t7.SetAsideDeps) != 1 || t7.SetAsideDeps[0] != "T5" {
+		t.Fatalf("T7 SetAsideDeps = %v, want [T5]", t7.SetAsideDeps)
+	}
+	if t7.Cost != 20 || t7.Name != "Mobile app for Jevon" {
+		t.Fatalf("T7 fields: cost=%v name=%q", t7.Cost, t7.Name)
+	}
+	// T8 has only achieved dep — no set_aside deps.
+	t8, ok := byID["T8"]
+	if !ok {
+		t.Fatal("T8 missing")
+	}
+	if len(t8.SetAsideDeps) != 0 {
+		t.Fatalf("T8 SetAsideDeps = %v, want empty", t8.SetAsideDeps)
+	}
+	// T9 still blocked on open T7.
+	if _, ok := byID["T9"]; ok {
+		t.Fatal("T9 must not be frontier while T7 is open")
+	}
+}
+
+func keysOf(m map[string]FrontierLeaf) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func TestIsSetAsideStatus(t *testing.T) {
+	if !IsSetAsideStatus("set_aside") || !IsSetAsideStatus("set-aside") {
+		t.Fatal("set_aside variants")
+	}
+	if IsSetAsideStatus("achieved") || IsSetAsideStatus("identified") {
+		t.Fatal("achieved/identified must not count as set_aside")
+	}
+}

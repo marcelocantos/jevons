@@ -165,3 +165,56 @@ func TestModeString(t *testing.T) {
 		t.Fatal("mode strings")
 	}
 }
+
+// 🎯T337: set_aside dep (T7→T5) is not ready for unattended spawn.
+func TestClassifyLeafSetAsideDepParks(t *testing.T) {
+	o := LeafObs{
+		ID: "T7", Name: "Mobile app for Jevon",
+		SetAsideDeps: []string{"T5"}, Cost: 20, Tags: []string{"visual"},
+	}
+	if k := ClassifyLeaf(o); k != LeafSkipSetAsideDep {
+		t.Fatalf("set_aside dep: got %s want skip_set_aside_dep", k)
+	}
+	// force-engage residual overrides.
+	o.ForceEngage = true
+	if k := ClassifyLeaf(o); k != LeafReady {
+		// ForceEngage also clears high-cost mobile; still ready.
+		t.Fatalf("force_engage: got %s want ready", k)
+	}
+	o.ForceEngage = false
+	o.Tags = append(o.Tags, "force-engage")
+	if k := ClassifyLeaf(o); k != LeafReady {
+		t.Fatalf("force-engage tag: got %s want ready", k)
+	}
+}
+
+// 🎯T337: high-cost mobile without unattended-safe parks; tag overrides.
+func TestClassifyLeafHighCostMobile(t *testing.T) {
+	// visual + cost≥20
+	if k := ClassifyLeaf(LeafObs{ID: "T7", Name: "Some UI", Tags: []string{"visual"}, Cost: 20}); k != LeafSkipHighCostMobile {
+		t.Fatalf("visual+cost: got %s", k)
+	}
+	// name Mobile app
+	if k := ClassifyLeaf(LeafObs{ID: "T7", Name: "Mobile app for Jevon", Cost: 5}); k != LeafSkipHighCostMobile {
+		t.Fatalf("name mobile: got %s", k)
+	}
+	// unattended-safe overrides
+	if k := ClassifyLeaf(LeafObs{
+		ID: "T7", Name: "Mobile app", Tags: []string{"visual", "unattended-safe"}, Cost: 20,
+	}); k != LeafReady {
+		t.Fatalf("unattended-safe: got %s want ready", k)
+	}
+	// low-cost visual is fine
+	if k := ClassifyLeaf(LeafObs{ID: "T1", Name: "Tidy CSS", Tags: []string{"visual"}, Cost: 3}); k != LeafReady {
+		t.Fatalf("low-cost visual: got %s want ready", k)
+	}
+}
+
+func TestClassifyOnlySetAsideDepSleeps(t *testing.T) {
+	d := Classify([]LeafObs{{
+		ID: "T7", Name: "Mobile app", SetAsideDeps: []string{"T5"}, Cost: 20, Tags: []string{"visual"},
+	}})
+	if d.Mode != Sleep || len(d.ReadyIDs) != 0 {
+		t.Fatalf("set_aside-only frontier must sleep: %+v", d)
+	}
+}

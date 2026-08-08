@@ -27,9 +27,11 @@ import (
 // engagement (registered work agent bound to the target ⇒ skip), T129
 // lineage (parent=jevons-po; PO unregistered ⇒ park, rehydrate is not this
 // sweep's job), T36 budget clamp (spawnGuard parks the whole cycle), T197
-// literal dots in worker names. Anti-thrash: durable per-target spawn ledger
-// (backoff + max auto-spawns) so a worker that finishes without achieving
-// cannot churn the same leaf forever.
+// literal dots in worker names. 🎯T337: park leaves unblocked only via
+// set_aside deps (T7→T5) and optional high-cost mobile/iPad class unless
+// unattended-safe / force-engage. Anti-thrash: durable per-target spawn
+// ledger (backoff + max auto-spawns) so a worker that finishes without
+// achieving cannot churn the same leaf forever.
 //
 // Park reasons are lifecycle-logged (eventJournal → GET /api/logs), which is
 // the thin owner-visible chrome; richer frontier-table chrome is residual.
@@ -66,17 +68,19 @@ const (
 
 // Park / skip reason codes (stable for logs and tests).
 const (
-	FrontierReasonSpawned       = "spawned"
-	FrontierReasonDesignGated   = "skip_design"
-	FrontierReasonBlocked       = "skip_blocked"
-	FrontierReasonEngaged       = "skip_engaged"
-	FrontierReasonClosed        = "skip_closed"
-	FrontierReasonCapacity      = "park_capacity"
-	FrontierReasonBackoff       = "park_backoff"
-	FrontierReasonMaxAutospawns = "park_max_autospawns"
-	FrontierReasonPOMissing     = "park_po_unregistered"
-	FrontierReasonSpawnHalted   = "park_spawn_halted"
-	FrontierReasonSpawnFailed   = "park_spawn_failed"
+	FrontierReasonSpawned        = "spawned"
+	FrontierReasonDesignGated    = "skip_design"
+	FrontierReasonBlocked        = "skip_blocked"
+	FrontierReasonEngaged        = "skip_engaged"
+	FrontierReasonClosed         = "skip_closed"
+	FrontierReasonSetAsideDep    = "skip_set_aside_dep"    // 🎯T337 T7→T5 class
+	FrontierReasonHighCostMobile = "skip_high_cost_mobile" // 🎯T337 mobile megawork
+	FrontierReasonCapacity       = "park_capacity"
+	FrontierReasonBackoff        = "park_backoff"
+	FrontierReasonMaxAutospawns  = "park_max_autospawns"
+	FrontierReasonPOMissing      = "park_po_unregistered"
+	FrontierReasonSpawnHalted    = "park_spawn_halted"
+	FrontierReasonSpawnFailed    = "park_spawn_failed"
 )
 
 // FrontierConsumeReport is one leaf's sweep outcome.
@@ -266,6 +270,19 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			rep.Action, rep.Reason = FrontierConsumeSkip, FrontierReasonDesignGated
 			out = append(out, rep)
 			continue
+		case poproactive.LeafSkipSetAsideDep:
+			// Park (not skip): explicit reason owner-visible — leaf stays
+			// unconsumed until force_engage / dep reopened (🎯T337).
+			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonSetAsideDep
+			if len(leaf.SetAsideDeps) > 0 {
+				rep.Err = "set_aside deps: " + strings.Join(leaf.SetAsideDeps, ",")
+			}
+			out = append(out, rep)
+			continue
+		case poproactive.LeafSkipHighCostMobile:
+			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonHighCostMobile
+			out = append(out, rep)
+			continue
 		case poproactive.LeafSkipBlocked:
 			rep.Action, rep.Reason = FrontierConsumeSkip, FrontierReasonBlocked
 			out = append(out, rep)
@@ -415,6 +432,9 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			Tags:           leaf.Tags,
 			Name:           leaf.Name,
 			Context:        leaf.Context,
+			Cost:           leaf.Cost,
+			SetAsideDeps:   leaf.SetAsideDeps,
+			ForceEngage:    poproactive.IsForceEngageTag(leaf.Tags),
 			AlreadyEngaged: len(workAgentsEngagedOnTarget(s.registry, leaf.ID, "")) > 0,
 		})
 	}
