@@ -60,6 +60,16 @@ test('index.html wires soft reconnect + degraded banner', function () {
   assert.ok(html.includes('degraded-banner') || html.includes('setDegraded'), 'degraded chrome');
 });
 
+// 🎯T324: soft reconnect refreshes fleet when lastFleetAgents cache exists.
+test('index.html refreshes agents cache on soft reconnect history_meta', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('lastFleetAgents'), 'fleet cache present');
+  assert.ok(
+    /wasSoft[\s\S]{0,400}lastFleetAgents[\s\S]{0,200}(scheduleRefreshAgents|refreshAgents)/.test(html) ||
+      /lastFleetAgents[\s\S]{0,200}wasSoft[\s\S]{0,400}(scheduleRefreshAgents|refreshAgents)/.test(html),
+    'history_meta soft path must refresh agents when cache exists');
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

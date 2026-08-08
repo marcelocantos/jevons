@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/handover"
 )
@@ -101,8 +102,9 @@ func TestPrepareMigrationPersistsPointerBeforeRotating(t *testing.T) {
 	}
 }
 
-// 🎯T323: a Claude-era model pin must not survive onto the Grok row — that
-// is the residue that made /api/agents report "fable" under provider=grok.
+// 🎯T324: migrate claude→grok with prior model=fable never leaves fable under
+// grok — binding is rewritten to the new provider default (or empty when
+// none). Session-truth, not fail-closed sniff.
 func TestPrepareMigrationClearsModelPin(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e26"
 	f, _, _ := migrateFixture(t, oldSession, true)
@@ -116,7 +118,7 @@ func TestPrepareMigrationClearsModelPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Fixture roots only know Grok sessions; force the cold switch so we
-	// exercise pin clearing without a Claude transcript on disk.
+	// exercise pin rewrite without a Claude transcript on disk.
 	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderGrok, true); err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
 	}
@@ -127,8 +129,12 @@ func TestPrepareMigrationClearsModelPin(t *testing.T) {
 	if def.Provider != claudia.ProviderGrok {
 		t.Fatalf("provider=%s want grok", def.Provider)
 	}
-	if def.Model != "" {
+	if def.Model == "fable" || strings.Contains(strings.ToLower(def.Model), "fable") {
 		t.Fatalf("Model pin survived migrate: %q — Anthropic residue under Grok", def.Model)
+	}
+	// Bound to Grok default (condensable), not left as bare empty forever.
+	if def.Model != cli.DefaultGrokModel {
+		t.Fatalf("Model after migrate=%q want provider default %q", def.Model, cli.DefaultGrokModel)
 	}
 }
 

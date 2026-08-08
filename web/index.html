@@ -2070,6 +2070,12 @@ function handle(m) {
     // End chronological WS replay burst — one pin, then optional progressive hydrate.
     if (!wasSoft) endHistoryReplayAndPin('history_meta');
     else if (historyReplayActive) endHistoryReplayAndPin('history_meta');
+    // 🎯T324: client may cache lastFleetAgents; refresh on reconnect when a
+    // cache already exists so launch/migrate/rehydrate truth repaints.
+    if (wasSoft && Array.isArray(lastFleetAgents) && lastFleetAgents.length) {
+      if (typeof scheduleRefreshAgents === 'function') scheduleRefreshAgents();
+      else if (typeof refreshAgents === 'function') refreshAgents();
+    }
     sTxt.textContent = 'connected';
     sendBtn.disabled = false;
     chatEverReady = true;

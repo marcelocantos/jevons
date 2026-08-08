@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 )
 
@@ -148,10 +149,9 @@ func TestListFleetAgentsCarriesProviderAndModel(t *testing.T) {
 	if got := byName["grokker"].Provider; got != "grok" {
 		t.Fatalf("grokker provider=%q want grok", got)
 	}
-	// Nothing pinned, nothing observed, no session root wired → empty, so the
-	// UI paints the icon alone rather than inventing a version.
-	if got := byName["grokker"].Model; got != "" {
-		t.Fatalf("grokker model=%q want empty", got)
+	// 🎯T324: unbound Grok → provider default (condensable), not bare mark.
+	if got := byName["grokker"].Model; got != cli.DefaultGrokModel {
+		t.Fatalf("grokker model=%q want provider default %q", got, cli.DefaultGrokModel)
 	}
 	if got := byName["observed"].Model; got != "claude-opus-4-8" {
 		t.Fatalf("observed model=%q want claude-opus-4-8", got)
@@ -303,8 +303,8 @@ func modelOf(t *testing.T, agents []agentInfo, name string) string {
 	return ""
 }
 
-// 🎯T323: after claude→grok migrate residue, /api/agents must never still
-// report Anthropic model ids. Sticky hub observation, registry pin, or both.
+// 🎯T324 hermetic (1): migrate residue — fable under old must never appear
+// under grok. Feed rewrites to provider default (session truth), not fable.
 func TestListFleetAgentsDropsForeignModelAfterMigrateResidue(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
@@ -327,18 +327,21 @@ func TestListFleetAgentsDropsForeignModelAfterMigrateResidue(t *testing.T) {
 	})
 
 	got := modelOf(t, listFleetAgentsNotifying(reg, nil, hub, nil), "jevons-po")
-	if got != "" {
-		t.Fatalf("model=%q want empty — Anthropic residue under provider=grok", got)
+	if strings.Contains(strings.ToLower(got), "fable") {
+		t.Fatalf("model=%q still carries Anthropic fable under provider=grok", got)
 	}
-	// Hub itself must be scrubbed so the next poll does not re-serve it.
+	// Session-truth fill: after dropping residue, Grok default is bound.
+	if got != cli.DefaultGrokModel {
+		t.Fatalf("model=%q want provider default %q (not fable, not bare empty)", got, cli.DefaultGrokModel)
+	}
+	// Hub itself must be scrubbed so the next poll does not re-serve foreign id.
 	if hub.Get("jevons-po").Model != "" {
 		t.Fatalf("hub still holds model=%q after list scrubbed it", hub.Get("jevons-po").Model)
 	}
 }
 
-// 🎯T323: empty model under grok is fine (mark alone); a same-company pin or
-// session-log seed still wins.
-func TestListFleetAgentsKeepsSameCompanyModel(t *testing.T) {
+// 🎯T324 hermetic (2): Launch-equivalent empty pin under grok → default bound.
+func TestListFleetAgentsBindsGrokDefaultWhenUnbound(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -357,11 +360,32 @@ func TestListFleetAgentsKeepsSameCompanyModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	agents := listFleetAgentsNotifying(reg, nil, NewAgentProgressHub(), nil)
-	if got := modelOf(t, agents, "empty"); got != "" {
-		t.Fatalf("empty model=%q want empty", got)
+	if got := modelOf(t, agents, "empty"); got != cli.DefaultGrokModel {
+		t.Fatalf("empty model=%q want default %q", got, cli.DefaultGrokModel)
 	}
 	if got := modelOf(t, agents, "pinned"); got != "grok-4.5-build" {
 		t.Fatalf("pinned model=%q want grok-4.5-build", got)
+	}
+}
+
+// 🎯T324 hermetic (3): SessionID change drops sticky hub model.
+func TestSyncEpochDropsStickyModelOnSessionChange(t *testing.T) {
+	hub := NewAgentProgressHub()
+	hub.Observe("w", claudia.Event{
+		Type: "assistant",
+		Raw:  []byte(`{"message":{"model":"claude-fable-5"}}`),
+	})
+	hub.SyncEpoch("w", "session-a")
+	if got := hub.Get("w"); got.Model != "claude-fable-5" || got.Session != "session-a" {
+		t.Fatalf("after stamp: model=%q session=%q", got.Model, got.Session)
+	}
+	hub.SyncEpoch("w", "session-b")
+	got := hub.Get("w")
+	if got.Model != "" {
+		t.Fatalf("after SessionID change model=%q want empty (sticky dropped)", got.Model)
+	}
+	if got.Session != "session-b" {
+		t.Fatalf("session=%q want session-b", got.Session)
 	}
 }
 

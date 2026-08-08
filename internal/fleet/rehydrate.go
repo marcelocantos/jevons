@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/cli"
 )
 
 // Lost-session rehydrate (🎯T313).
@@ -108,8 +110,8 @@ func SessionLost(def *claudia.AgentDef) bool {
 // conversation under the same identity.
 //
 // Everything that identifies the agent rides along by value copy —
-// name, workdir, provider, model, parent, purpose, target binding,
-// auto-start. Only the session and the liveness bookkeeping change:
+// name, workdir, provider, parent, purpose, target binding, auto-start.
+// Session and liveness bookkeeping change:
 //
 //   - Materialized=false, so the next Launch mints rather than resumes.
 //   - ConnectURL/ConnectPID cleared. def is snapshotted before Stop
@@ -117,12 +119,16 @@ func SessionLost(def *claudia.AgentDef) bool {
 //     snapshot would persist a dead endpoint and send the next Launch
 //     into a reattach that resets (the 🎯T204 trap, reached here by the
 //     same road as provider migration).
+//   - 🎯T324: model is re-bound for the new SessionID (pin kept when
+//     same-provider, else provider default) — never a sticky observation
+//     from the lost session; the hub SyncEpoch-clears on rotate separately.
 func RehydratedDef(def claudia.AgentDef, newSessionID string) claudia.AgentDef {
 	next := def
 	next.SessionID = newSessionID
 	next.Materialized = false
 	next.ConnectURL = ""
 	next.ConnectPID = 0
+	next.Model = cli.BindSessionModel(def.Model, def.Provider)
 	return next
 }
 

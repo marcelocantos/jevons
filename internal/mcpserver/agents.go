@@ -337,6 +337,15 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, parent, pur
 	// 🎯T148: ad hoc provider override wins; else keep stored; else default.
 	// Never unconditionally force Grok on resume.
 	def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
+	// 🎯T324: session-truth model binding for this Launch/SessionID.
+	// Explicit pin from the tool arg wins; empty pin on mint (or empty
+	// stored model on resume) gets the provider default so cold Grok
+	// agents expose a condensable id, not a bare mark forever.
+	if pin := strings.TrimSpace(model); pin != "" {
+		def.Model = pin
+	} else if !existed || strings.TrimSpace(def.Model) == "" {
+		def.Model = cli.BindSessionModel("", def.Provider)
+	}
 	// Set parent only when minting or when legacy entry has empty parent.
 	if !existed || def.Parent == "" {
 		def.Parent = parent

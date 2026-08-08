@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/handover"
 )
@@ -91,12 +92,12 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	next.Provider = target
 	next.SessionID = uuid.NewString()
 	next.Materialized = false // a fresh conversation, not a resume
-	// 🎯T323: the launch pin names a model of the *previous* provider
-	// (e.g. "fable" under Claude). Carrying it onto Grok makes /api/agents
-	// report an Anthropic id under provider=grok, and the RHS paints
-	// Grok-mark + F. Empty is correct until the new session observes a
-	// model or the operator pins one for the new provider.
-	next.Model = ""
+	// 🎯T324: session-truth binding is rewritten for the new SessionID.
+	// Never inherit the previous provider's pin (e.g. "fable" under Claude
+	// → Grok). Bind the target provider's default so cold agents get a
+	// condensable model, not a bare mark forever (T323 residual cleared
+	// the pin only; fail-closed sniff is not the product strategy).
+	next.Model = cli.BindSessionModel("", target)
 	// def was snapshotted before Stop, which clears the serve endpoint on
 	// the registry's own copy. Re-registering the snapshot would re-persist
 	// a dead ConnectURL/PID and send the next Launch into a reattach that

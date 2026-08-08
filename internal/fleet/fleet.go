@@ -116,10 +116,11 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 			sid = uuid.New().String()
 		}
 		prov := providerForLaunch("", threadProv, f.defaultProvider)
+		// 🎯T324: session-truth model — pin or provider default for this SessionID.
 		if err := f.reg.Register(claudia.AgentDef{
 			Name:      t.ID,
 			WorkDir:   t.WorkDir,
-			Model:     t.Model,
+			Model:     cli.BindSessionModel(t.Model, prov),
 			Provider:  prov,
 			SessionID: sid,
 			AutoStart: true,
@@ -143,6 +144,18 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 	if def.Provider == "" {
 		def.Provider = providerForLaunch("", threadProv, f.defaultProvider)
 		dirty = true
+	}
+	// 🎯T324: bind provider default when the row has no model pin yet
+	// (cold Grok agents must not stay mark-only forever). Explicit pin
+	// from the thread wins when supplied.
+	if pin := strings.TrimSpace(t.Model); pin != "" && def.Model != pin {
+		def.Model = pin
+		dirty = true
+	} else if strings.TrimSpace(def.Model) == "" {
+		if bound := cli.BindSessionModel("", def.Provider); bound != "" {
+			def.Model = bound
+			dirty = true
+		}
 	}
 	// Backfill empty parent when the spawn path now knows the creator.
 	if def.Parent == "" && t.Parent != "" {

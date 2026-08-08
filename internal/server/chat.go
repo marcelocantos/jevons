@@ -20,8 +20,10 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
@@ -697,9 +699,10 @@ type agentInfo struct {
 	Progress string `json:"progress,omitempty"`
 	// Provider / Model back the RHS company-icon + condensed model prefix
 	// (🎯T287). Provider is the agent's stored backend (claude | grok | …).
-	// Model is the last model an assistant frame reported, else the def's
-	// pinned override; empty means provider default — the UI paints the
-	// company icon alone rather than inventing a version.
+	// Model is session truth for the badge (🎯T324): live observation,
+	// else session log, else launch pin / provider default bound at
+	// Launch for this SessionID. Empty only when the backend has no
+	// known default and nothing has been observed yet.
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 }
@@ -812,17 +815,22 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		if info.Model == "" {
 			info.Model = models.Model(d.Provider, d.WorkDir, d.SessionID)
 		}
-		// Last resort: the launch pin. It is intent, not observation — a
-		// process can ignore it or move off it — so it only fills the gap
-		// before the first observation, and never overrides one (🎯T311).
+		// Launch pin / session binding (🎯T311 / 🎯T324). Intent for this
+		// SessionID — fills the gap before the first observation, never
+		// overrides one.
 		if info.Model == "" {
 			info.Model = strings.TrimSpace(d.Model)
 		}
-		// 🎯T323 fail-closed: never report a model id that sniffs as a
-		// different company than the live provider. Empty is correct until
-		// the new session observes one (or a same-company pin is set).
+		// 🎯T323 residual belt: drop foreign-company residue if it still
+		// reaches the feed. Product strategy is session-truth binding at
+		// Launch/migrate (T324), not fail-closed sniff.
 		if info.Model != "" && !modelFitsProvider(info.Provider, info.Model) {
 			info.Model = ""
+		}
+		// 🎯T324: unbound → provider default so cold Grok agents report a
+		// condensable id (badge version), not mark-only forever.
+		if info.Model == "" {
+			info.Model = cli.DefaultModelForProvider(d.Provider)
 		}
 		agents = append(agents, info)
 	}

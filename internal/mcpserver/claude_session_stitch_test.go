@@ -22,6 +22,56 @@ import (
 // claudia 🎯T11.2. This oracle covers registry Provider + Materialized/
 // session handoff fail-closed; it does not replace a real Claude TUI run.
 
+// 🎯T324 hermetic: Launch provider=grok with empty pin → default model bound.
+func TestStitchAgentStartBindsGrokDefaultModel(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	s.SetDefaultProvider(string(claudia.ProviderGrok))
+
+	def, existed, err := s.stitchAgentStart(
+		"cold-grok", t.TempDir(), "", "",
+		"jevons-po", claudia.PurposeWork, "T324",
+	)
+	if err != nil {
+		t.Fatalf("stitchAgentStart: %v", err)
+	}
+	if existed {
+		t.Fatal("mint reported existed")
+	}
+	if def.Provider != claudia.ProviderGrok {
+		t.Fatalf("provider=%s want grok", def.Provider)
+	}
+	if def.Model != cli.DefaultGrokModel {
+		t.Fatalf("Model=%q want default %q (cold Grok must bind condensable model)", def.Model, cli.DefaultGrokModel)
+	}
+	// Resume with empty pin keeps the bound default (not re-emptied).
+	again, existed, err := s.stitchAgentStart(
+		"cold-grok", def.WorkDir, "", "",
+		"jevons-po", claudia.PurposeWork, "T324",
+	)
+	if err != nil || !existed {
+		t.Fatalf("resume: existed=%v err=%v", existed, err)
+	}
+	if again.Model != cli.DefaultGrokModel {
+		t.Fatalf("resume Model=%q want still %q", again.Model, cli.DefaultGrokModel)
+	}
+	// Explicit pin wins over default.
+	pinned, _, err := s.stitchAgentStart(
+		"pinned-grok", t.TempDir(), "grok-4.5-build", string(claudia.ProviderGrok),
+		"jevons-po", claudia.PurposeWork, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.Model != "grok-4.5-build" {
+		t.Fatalf("explicit pin Model=%q", pinned.Model)
+	}
+}
+
 func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
