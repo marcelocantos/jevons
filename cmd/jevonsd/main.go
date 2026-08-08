@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
+	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/converge"
 	"github.com/marcelocantos/jevons/internal/converge/sticky"
 	"github.com/marcelocantos/jevons/internal/discovery"
@@ -479,6 +480,12 @@ func main() {
 	fleetAdapter.SetSessionRoots(sessionRoots)
 	fleetAdapter.SetHandoverStore(handover.NewStore(filepath.Join(cfg.StateDir, "handover")))
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
+	// 🎯T325.2: multi-provider portfolio soft-cap overlays from budget.json
+	// (session counts only; independent of cost disabled / subscription USD).
+	if bcfg, err := cost.LoadBudgetConfig(filepath.Join(cfg.StateDir, "budget.json")); err == nil && len(bcfg.ProviderSoftCaps) > 0 {
+		mcpSrv.SetProviderSoftCaps(bcfg.ProviderSoftCaps)
+		slog.Info("llm portfolio soft caps from budget", "caps", bcfg.ProviderSoftCaps)
+	}
 	// 🎯T285: jevons_agent_migrate moves an agent between backends and
 	// hands the successor its predecessor's transcript.
 	mcpSrv.SetMigrator(fleetAdapter)

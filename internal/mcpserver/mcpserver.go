@@ -127,6 +127,10 @@ type Server struct {
 	// Nil until SetRSICoach.
 	rsiCoach *rsi.Coach
 
+	// staffOps holds cooldown state for one bounded ops cycle (🎯T325.4).
+	// Nil until registerStaffOpsTools; pure policy in internal/staffops.
+	staffOps *staffOpsState
+
 	// idleActivity tracks ACP phase for enter-idle detection (🎯T207).
 	// Nil until StartIdleNudgeLoop; broadcastAgentEvent Observes transitions.
 	idleActivity *IdleActivityTracker
@@ -240,6 +244,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerJwork()
 	s.registerMCPReconnect()
 	s.registerAgentMigrate()
+	s.registerStaffOpsTools()
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s

@@ -198,8 +198,13 @@ before hard policy.
 - Never silently demote an in-flight worker's provider mid-mission without
   rehydrate story (badge/session truth).
 
-Full implementation = Build child **(2)** — table seed in design + thin
-config/surface; not whole portfolio OS in one PR.
+**Product seed (🎯T325.2):** pure table + routing live in
+`internal/cost/portfolio.go` (`DefaultPortfolio`, `Route`, session
+`soft_caps`). Mint path: `jevons_agent_start` with empty `provider` uses
+`task_type` (or purpose-derived class) + registry load counts — prefers
+fit, then under-utilised capacity; never mid-flight reassign. Optional
+`budget.json` `provider_soft_caps` overlays caps. Residual: live vendor
+quotas / billing APIs; owner-ratified prices; full marketplace OS.
 
 ---
 
