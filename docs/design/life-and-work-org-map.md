@@ -20,6 +20,7 @@ filed — not the whole org.
 | [supergrok-cost-accounting.md](supergrok-cost-accounting.md) (🎯T137) | Subscription vs list-price cost honesty |
 | [provider-contract.md](provider-contract.md) | Tool providers (feeds/ui/mcp) — orthogonal to LLM harness providers |
 | [attention-threads.md](attention-threads.md) (🎯T65) | Main vs aside attention model |
+| §12 Leadership methods | Recurring leader practices + Musk Algorithm as process export (not new hierarchy) |
 
 This note is the **org shape**: who senses, who decides, who acts, how
 resources, ideas, and **reflection (agent + human)** flow. It does **not**
@@ -444,6 +445,8 @@ child and not further RSI product implementation.
 | 🎯T137 | Cost honesty for portfolio child |
 | 🎯T200 | Portfolio path membership for domain POs |
 | 🎯T31 / T31.1 / T194 | Done = evidence; daemon path needs daily probe |
+| 🎯T326 / T327 | Simplify surfaces (shared 🎯 hotspot card; main progress clears on aside) — Algorithm step 3 examples |
+| §12 | Leadership methods export (leaders + Algorithm); does not reopen park table |
 
 ---
 
@@ -474,10 +477,145 @@ child and not further RSI product implementation.
 - Unpark T92 phrase-list mint onto the standing product path.
 - Whole-org GitHub PR or Ship plane.
 - Claiming T325 achieved before owner accepts map + children.
+- Implementing §12 product bets (journal-cycle, priority-triage, Algorithm
+  ritual) from this docs seat — inventory + cross-link only until owner
+  opens Build.
 
 ---
 
-## 12. History
+## 12. Leadership methods (leaders + Algorithm)
+
+**Status:** curated doctrine export from overseer research (owner session
+`019fdf9d`) — **not** a new hierarchy and **not** an unpark of §8 domains.
+Maps external leadership patterns onto roles already in §§2–8 and T98/T325.
+Docs only; no product code from this seat.
+
+**Bottom line:** externalize memory, protect think time, run a few
+**rhythmic** forums, delegate execution with ownership, treat reflection
+as work — then apply process first principles in **order** (question
+requirements → delete thrash → simplify → accelerate cycle → automate
+last). Climb **L1/L2** (hierarchy, sensors, delete thrash, local delivery)
+before **L3** life ambitions and automate-everything staff.
+
+### 12.1 Leaders in general (recurring practices)
+
+Recurring patterns from historical leaders (da Vinci notebooks, Franklin,
+Eisenhower-class diaries; notebook culture) and modern CEO habit research
+(priority-few, meeting cadence, journaling, delegation) — curated for
+Jevons, not biography.
+
+| Practice | Core idea | Jevons analogue (existing map) |
+|----------|-----------|--------------------------------|
+| **Externalize thought** | Writing stops thrash; later navigability | CEO journal parked (§4.3, §8.1) — durable synthesis, **not** chatlog/mnemo raw; asides + idea capture (T93/T95, 🎯T325.3) = pocket notebook |
+| **Few priorities** | Ruthless high-impact few; rest is staff or later | Idea pipeline + opportunity cost (§7): capture freely, **promote few** to Build; weekly attention portfolio (taste + capacity), not infinite frontier guilt |
+| **Meeting / cadence rhythm** | Regular review beats ad-hoc crisis only | Episodic LLM cycles (§3.2): staff ops (🎯T325.4 / T219 shape), RSI coach (T243), PO proactive sleep (🎯T325.1), owner digest — **not** permanent monologue |
+| **Delegation with ownership** | Clear who owns what; not abdication | Root routes; **PO spawn-only** (T125); sole product-worker parent = PO (T129); workers execute + evidence finish; owner gates Ship/taste/credentials (T98/T104) |
+| **Protect alone / think time** | Strategy needs uninterrupted blocks | Sensors continuous, LLM episodic (§3); drip when dirty / scheduled strategy — no thrash remints |
+| **Reflection as duty** | What happened / learned / change | Agent RSI + human RSI first-class (§4); coach → root files (T243/T130); not garnish after product |
+| **Character under ego load** | Orchestration, know what you don't know | Structure over shouting: lineage, exclusive engage, fleet tree; hard domains (money, security, Ship) → **owner gate** (§8 park + T98) |
+
+**Five CEO meetings → five product rhythms** (cheap pilot language only;
+aligns existing cycles — does not mint new staff):
+
+| Rhythm | Product surface already on the map |
+|--------|--------------------------------------|
+| Status | Staff ops cycle (🎯T325.4 seed → T219) |
+| All-hands | Optional owner digest (what the fleet did) — residual chrome |
+| 1:1 | PO direct when product stuck |
+| Retro | RSI coach + human reflection (§4) |
+| Wins | Explicit positive capture (morale + learning) — residual |
+
+**Ownership on the mountain (L1 / L2 / L3):**
+
+| Layer | Who | Owns |
+|-------|-----|------|
+| **L1** | Hierarchy + mechanical truth | Roles (T125/T129), oracles (T31), local vs Ship (T104), sensors that do not burn tokens (§3.1) |
+| **L2** | Root + staff cycles + POs | Attention portfolio, staff briefs, RSI control plane, idea triage, journal **when unparked**, multi-provider portfolio seed (🎯T325.2) |
+| **L3** | Owner-gated / parked | Life-domain automation, SWOT OS, device life-app, practical security & system-management implementers, full journal product — **§8 park** until owner opens Build |
+
+Root is **navigator and integrator** (alter ego T98), not permanent
+implementer. Machines sense; agents judge in bounded cycles; hierarchy
+acts. Notebook always at hand (asides/ideas); journal is the bound book
+(periodic synthesis) — same distinction as §4.3 / §8.1.
+
+**What not to copy (leaders lore):** wake-at-4am cosplay; meeting overload
+as virtue (agent failure mode is token thrash on continues, not calendar
+spam); cult of the lone genius (contradicts PO/worker design); existential
+AI-safety theater (practical safety only when unparked).
+
+**Thin product bets** (inventory only — **do not** implement from this
+seat; cross-link, do not fork parallel essays):
+
+1. **Journal-cycle** — already parked as CEO journal (§8.1): first-
+   principles / decision log (requirements questioned, deletes, lessons),
+   not diary cosplay. Unpark when owner opens Build.
+2. **Priority-triage** — harden “capture freely, promote few” on §7 +
+   opportunity cost; optional weekly priority-few habit. Complements
+   🎯T325.3 idea capture without infinite Build.
+3. Wins + retro staff outputs ride RSI (§4) / staff ops — not a third
+   monologue path.
+
+### 12.2 Musk Algorithm (process first principles)
+
+Sibling export: first principles applied to **process**, not factory
+cosplay. **Order is sacred** — most orgs (and agent systems) jump to
+automate (5) or speed (4) first.
+
+| # | Step | Essence |
+|---|------|---------|
+| **1** | **Question requirements** | Every requirement has a **named owner** (human or named target), not a department. Question even smart people's requirements. |
+| **2** | **Delete** | Delete more than is comfortable. **If you never add ~10% back, you didn't delete enough.** |
+| **3** | **Simplify / optimize** | Only *after* delete. Optimizing something that should not exist is the trap. |
+| **4** | **Accelerate cycle time** | Speed *after* 1–3. Accelerating a process you later delete is wasted motion. |
+| **5** | **Automate last** | Automating a bad process makes a faster bad process. |
+
+Underneath: reason from fundamentals, not “what others do” or “what we
+inherited.”
+
+**Decision table → Jevons** (reference targets; do not re-litigate):
+
+| Step | Jevons application |
+|------|--------------------|
+| **1 Requirements** | Named ownership of doctrine, acceptance, long-lived process rules (idle pressure, RSI residual, staff contracts). No “the system requires endless continues.” |
+| **2 Delete** | Delete thrash: open-mission zombie heuristics (🎯T325.1 sleep), bare-status acks, dual progress chrome (🎯T327), dual conversation paths (done class). Prefer fewer staff monologues (§5 anti-patterns). |
+| **3 Simplify** | Org map (this note / 🎯T325) before new staff agents; shared frontier-card for 🎯 hotspots (🎯T326), not a second card. |
+| **4 Cycle time** | Local master (🎯T104) + thin slices; brief→work lands (🎯T305 class) so spawn is one cycle, not paste purgatory. |
+| **5 Automate** | Idle pressure, portfolio routing, idea API, sentinel — **after** delete/simplify. Automate last checklist before new daemon loops. |
+
+**Journal under Algorithm:** periodic write-up of requirements questioned,
+things deleted, cycles accelerated — same first-principles log as §12.1 /
+§8.1, not diary cosplay. **RSI spine matches:** observe failure → change
+the process (coach → root files → product), not only work harder (§4).
+
+**What not to copy:**
+
+- Permanent crisis as culture (burnout / chaos).
+- CEO implements forever (root/PO already spawn-only for product Build —
+  T125/T129).
+- Growth without oracles (T31 / T31.1 / T194 anti-that).
+- Manufacturing-everything when taste / class-3 applies (life domains
+  parked §8).
+
+**Thin product bets** (optional later; not automatic children of T325):
+
+1. **Staff Algorithm ritual** — when stuck: short staff note forced through
+   order 1→5.
+2. **10% restore metric** — a stretch with zero “deleted then re-added”
+   means deletion was too timid.
+3. **Named requirement owner** on every long-lived process rule.
+4. **Automate-last checklist** before new always-on daemon loops.
+
+### 12.3 One ladder (mountain)
+
+**L1/L2 before L3:** delete thrash and fix hierarchy/sensors/local
+delivery (requirements → delete → simplify → cycle time) **before**
+automating staff forever or growing parked L3 life ambitions. Algorithm
+order and leadership cadence are the same climb: **few owned priorities,
+bounded rhythms, subtraction before automation.**
+
+---
+
+## 13. History
 
 - **2026-08-08** — Owner filed 🎯T325: root as CEO of life-and-work org
   (always-on sense/decide/act; multi-provider portfolio; staff; idea
@@ -497,3 +635,10 @@ child and not further RSI product implementation.
   periodic reflection for alter-ego longitudinal memory; distinct from
   chat scrollback and mnemo raw transcript; park implement until owner
   opens Build. Docs only — no journal product code this seat.
+- **2026-08-08** — **§12 Leadership methods (leaders + Algorithm):**
+  dual export from overseer research (session `019fdf9d`) — recurring
+  leader practices (externalize, few priorities, cadence, delegation)
+  mapped to L1/L2/L3 + T98/T325; Musk Algorithm 1→5 as process first
+  principles with Jevons decision table, what-not-to-copy, thin bets.
+  Cross-links journal §8.1, RSI §4, idea §7, T326/T327, T31/T104,
+  T125/T129. Docs only — no product unpark.
