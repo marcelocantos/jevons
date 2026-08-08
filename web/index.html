@@ -4242,31 +4242,39 @@ function stepImageLightbox(delta) {
 function renderUserTextQuotes(s) {
   s = String(s == null ? '' : s);
   if (!s) return '';
+  let html;
   if (!/(^|\n)\s*>\s?/.test(s)) {
     const span = document.createElement('span');
     span.textContent = s;
-    return span.innerHTML;
-  }
-  // Lightweight line-based quote parser (not full markdown).
-  const lines = s.split('\n');
-  let html = '', qBuf = [];
-  const flushQ = () => {
-    if (!qBuf.length) return;
-    html += '<blockquote>' + escHtml(qBuf.join('\n')) + '</blockquote>';
-    qBuf = [];
-  };
-  for (const line of lines) {
-    const m = line.match(/^\s*>\s?(.*)$/);
-    if (m) {
-      qBuf.push(m[1]);
-    } else {
-      flushQ();
-      html += (html && !html.endsWith('>')) ? '\n' : '';
-      html += escHtml(line) + '\n';
+    html = span.innerHTML;
+  } else {
+    // Lightweight line-based quote parser (not full markdown).
+    const lines = s.split('\n');
+    html = '';
+    let qBuf = [];
+    const flushQ = () => {
+      if (!qBuf.length) return;
+      html += '<blockquote>' + escHtml(qBuf.join('\n')) + '</blockquote>';
+      qBuf = [];
+    };
+    for (const line of lines) {
+      const m = line.match(/^\s*>\s?(.*)$/);
+      if (m) {
+        qBuf.push(m[1]);
+      } else {
+        flushQ();
+        html += (html && !html.endsWith('>')) ? '\n' : '';
+        html += escHtml(line) + '\n';
+      }
     }
+    flushQ();
+    html = html.replace(/\n+$/, '');
   }
-  flushQ();
-  return html.replace(/\n+$/, '');
+  // 🎯T326: owner bubbles also surface 🎯Tn as hotspots.
+  if (typeof TargetHotspot !== 'undefined' && TargetHotspot.linkifyTargetIDsInHTML) {
+    html = TargetHotspot.linkifyTargetIDsInHTML(html);
+  }
+  return html;
 }
 function highlightCodeIn(container) {
   if (!container || typeof hljs === 'undefined') return;

@@ -57,14 +57,14 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   only with load-bearing examples (not convenient ones). Pure helpers:
   CoverageMap / ClassifyDesignClause / ParseLoadBearingExample.
 - Residual: instructional + pure map model; not a hard daemon block; rich
-  T29 surface and owner process-fidelity gate remain class-3 / follow-ups.
+  🎯T29 surface and owner process-fidelity gate remain class-3 / follow-ups.
 
 ## Fleet spawn (🎯T78)
 - Create child work via jevons_agent_start / jevons_thread_spawn, not Grok spawn_subagent.
 
 ## Worker names: literal dots for hierarchical ids (🎯T197)
 - When a fleet worker name encodes a hierarchical target id, keep **literal dots** — never digit-squash.
-- Correct: jv-t27.2-config for 🎯T27.2. Wrong: jv-t272-config (ambiguous with T272).
+- Correct: jv-t27.2-config for 🎯T27.2. Wrong: jv-t272-config (ambiguous with 🎯T272).
 - Flat ids unchanged: jv-t159-seal stays flat (no sub-target segment to preserve).
 - Names are free-form; this policy applies only when encoding a target id.
 
@@ -80,13 +80,13 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   design-discussion / parked-for-design get a worker immediately under
   parent=jevons-po — same operational cycle; do not wait for the owner.
 - Standing rule: kick off all non-design frontier work continuously.
-- Skip design-gated (T112 / T67 / T29-class) and blocked targets until
+- Skip design-gated (🎯T112 / 🎯T67 / 🎯T29-class) and blocked targets until
   unblocked or owner opens design. Residual: instructional.
 
 ## File→spawn same turn (🎯T193)
 - When a Build-plane target is filed (owner target: aside or mid-session),
   PO spawns a named worker under parent=jevons-po in the same turn as
-  filing — not ledger-only. T130 files; T193 spawns.
+  filing — not ledger-only. 🎯T130 files; 🎯T193 spawns.
 - Skip design-gated / blocked-on-human / parked-for-design / pure
   documentation (docs-only may file without spawn). Related: 🎯T155.
 - Residual: instructional; no daemon auto-spawn gate.
@@ -102,8 +102,8 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - PO remains interruptible for owner and overseer directs while sleeping
   or mid-pass (stays registered; accepts directs).
 - Pure helpers: ClassifyPOProactive / ClassifyFrontierLeaf /
-  POOpenMissionForProactive (compose T244 no-thrash when sleep + zero
-  work children). Related: T155 continuous kick-off, T193 file→spawn.
+  POOpenMissionForProactive (compose 🎯T244 no-thrash when sleep + zero
+  work children). Related: 🎯T155 continuous kick-off, 🎯T193 file→spawn.
 - Residual: instructional doctrine + pure classifier; hard daemon sleep
   gate may follow.
 

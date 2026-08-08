@@ -78,6 +78,7 @@ test-web:
 	node web/scripts/conversation_widget_test.js
 	node web/scripts/frontier_table_test.js
 	node web/scripts/target_context_chrome_test.js
+	node web/scripts/target_hotspot_test.js
 	node web/scripts/mermaid_actions_test.js
 	node web/scripts/markdown_normalize_test.js
 	node web/scripts/streaming_markdown_test.js

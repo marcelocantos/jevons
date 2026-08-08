@@ -53,6 +53,8 @@
   var HIT_LAYER_CLASS = 'instant-tip-hit';
   var PLACE_ABOVE_HOST = 'above-host';
   var PLACE_LEFT_OF_POINTER = 'left-of-pointer';
+  // 🎯T326: chat target hotspots — smaller finger left, card opens right of host.
+  var PLACE_RIGHT_OF_HOST = 'right-of-host';
   var EDGE_PAD = 4;
   var POINTER_GAP = 12;
   var DEFAULT_CLAMP_GAP = 8;
@@ -289,6 +291,57 @@
     return String(text).trim();
   }
 
+  // placeRightOfHostRect — pure placement math for 🎯T326 chat hotspots.
+  // Finger/host on the left; card opens to the right of the host rect.
+  // Flips left when the right side would clip the viewport.
+  function placeRightOfHostRect(args) {
+    var a = args || {};
+    var host = normalizeRect(a.hostRect) || null;
+    var hx = host
+      ? host.right
+      : (Number(a.pointerX) || 0);
+    var hy = host
+      ? (host.top + host.bottom) / 2
+      : (Number(a.pointerY) || 0);
+    var tw = Math.max(0, Number(a.tipW) || 0);
+    var th = Math.max(0, Number(a.tipH) || 0);
+    var vw = Math.max(0, Number(a.viewW) || 0);
+    var vh = Math.max(0, Number(a.viewH) || 0);
+    var gap = a.gap != null ? Number(a.gap) : POINTER_GAP;
+    var pad = a.pad != null ? Number(a.pad) : EDGE_PAD;
+
+    var side = 'right';
+    var left = hx + gap;
+    if (vw > 0 && left + tw > vw - pad) {
+      // Flip: open left of host when right would clip.
+      var hostLeft = host ? host.left : hx;
+      var leftCandidate = hostLeft - gap - tw;
+      if (leftCandidate >= pad) {
+        side = 'left';
+        left = leftCandidate;
+      } else {
+        left = Math.max(pad, vw - pad - tw);
+      }
+    }
+    if (left < pad) left = pad;
+
+    var top = hy - th / 2;
+    if (vh > 0) {
+      if (top + th > vh - pad) top = Math.max(pad, vh - pad - th);
+      if (top < pad) top = pad;
+    } else if (top < pad) {
+      top = pad;
+    }
+
+    return {
+      left: Math.round(left),
+      top: Math.round(top),
+      side: side,
+      fingerLeftOfCard: side === 'right',
+      cardOpensRightOfHotspot: side === 'right',
+    };
+  }
+
   // placeLeftOfPointerRect — pure placement math for 🎯T181/T186 cards.
   function placeLeftOfPointerRect(args) {
     var a = args || {};
@@ -405,6 +458,42 @@
     if (left < 4) left = 4;
     tip.style.left = Math.round(left) + 'px';
     tip.style.top = Math.round(top) + 'px';
+  }
+
+  function placeTipRightOfHost(tip, opts) {
+    if (!tip) return null;
+    var o = opts || {};
+    var host = o.host || null;
+    var hostRect = null;
+    if (o.hostRect) {
+      hostRect = normalizeRect(o.hostRect);
+    } else if (host && typeof host.getBoundingClientRect === 'function') {
+      try {
+        hostRect = normalizeRect(host.getBoundingClientRect());
+      } catch (_) {
+        hostRect = null;
+      }
+    }
+    var vw = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 0;
+    var vh = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 0;
+    var tipW = tip.offsetWidth || 0;
+    var tipH = tip.offsetHeight || 0;
+    var pos = placeRightOfHostRect({
+      hostRect: hostRect,
+      tipW: tipW,
+      tipH: tipH,
+      viewW: vw,
+      viewH: vh,
+      gap: o.gap,
+      pad: o.pad,
+      pointerX: o.pointerX,
+      pointerY: o.pointerY,
+    });
+    if (tip.style) {
+      tip.style.left = pos.left + 'px';
+      tip.style.top = pos.top + 'px';
+    }
+    return pos;
   }
 
   function placeTipLeftOfPointer(tip, event, opts) {
@@ -584,6 +673,15 @@
         clampGap: o.clampGap,
         doc: o.doc,
       });
+    } else if (placement === PLACE_RIGHT_OF_HOST) {
+      placeTipRightOfHost(tip, {
+        host: host || o.host,
+        hostRect: o.hostRect,
+        gap: o.gap,
+        pad: o.pad,
+        pointerX: o.pointerX,
+        pointerY: o.pointerY,
+      });
     } else if (host) {
       placeTip(tip, host);
     }
@@ -646,6 +744,7 @@
   //   html — when true, set innerHTML instead of textContent (rich cards)
   //   ariaLabel — plain string for aria-label
   //   placement — 'above-host' (default) | 'left-of-pointer' (🎯T181)
+  //                | 'right-of-host' (🎯T326 chat hotspots: finger left, card right)
   //   className — extra class on tip (e.g. instant-tip-card)
   //   sticky — default true: stay open while inside hit rect
   //   hitGroup — 🎯T231 default true for sticky: single hit-rect, grace 0
@@ -1119,6 +1218,7 @@
     HIT_LAYER_CLASS: HIT_LAYER_CLASS,
     PLACE_ABOVE_HOST: PLACE_ABOVE_HOST,
     PLACE_LEFT_OF_POINTER: PLACE_LEFT_OF_POINTER,
+    PLACE_RIGHT_OF_HOST: PLACE_RIGHT_OF_HOST,
     DEFAULT_CLAMP_GAP: DEFAULT_CLAMP_GAP,
     DEFAULT_CLAMP_SELECTORS: DEFAULT_CLAMP_SELECTORS,
     showSchedule: showSchedule,
@@ -1145,8 +1245,10 @@
     relatedStillInside: relatedStillInside,
     tipTextOrEmpty: tipTextOrEmpty,
     placeLeftOfPointerRect: placeLeftOfPointerRect,
+    placeRightOfHostRect: placeRightOfHostRect,
     resolveClampRight: resolveClampRight,
     placeTipLeftOfPointer: placeTipLeftOfPointer,
+    placeTipRightOfHost: placeTipRightOfHost,
     showTip: showTip,
     hideTip: hideTip,
     forceHideTip: forceHideTip,

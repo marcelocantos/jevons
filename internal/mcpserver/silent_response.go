@@ -18,7 +18,7 @@ const silentResponseInstruction = "" +
 	"\nRESPONSE RULE (mandatory):\n" +
 	"- If you only status-check / resume workers and the owner needs no decision, " +
 	"your entire reply MUST start with exactly [silent] (case-insensitive on the filter).\n" +
-	"  Example: [silent] continued jv-t212; T222 already working.\n" +
+	"  Example: [silent] continued jv-t212; 🎯T222 already working.\n" +
 	"- Do NOT write owner-facing \"everything is fine\" chatter without [silent].\n" +
 	"- If you need an owner decision or something is broken beyond your tools, " +
 	"do NOT use [silent] — escalate normally.\n" +

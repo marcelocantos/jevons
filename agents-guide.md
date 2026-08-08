@@ -85,7 +85,7 @@ open http://localhost:13705/
   bold as soon as both delimiters arrive — not raw source, and not delayed
   until end of turn.
 - **Seal:** full `marked` parse (plus mermaid 🎯T59 and highlight.js 🎯T74).
-- **Fence hygiene:** T145 `ensureFenceNewlines` and T147
+- **Fence hygiene:** 🎯T145 `ensureFenceNewlines` and 🎯T147
   `coalesceAssistantText` keep smushed `prose.```lang` from breaking fences.
 - **Never** use plain `textContent` of markdown source as the live stream
   default.
@@ -152,7 +152,7 @@ What this means when you are briefing or reporting:
   surface may assert them.
 - **No silent drops.** An unregistered peer, an unreachable overseer, and a
   failed delivery are **errors you get back**. A busy peer returns `queued`
-  with the message retained (🎯T111.1) — never a discarded send (🎯T61/T62).
+  with the message retained (🎯T111.1) — never a discarded send (🎯T61/🎯T62).
 
 `jevons_thread_direct` is **not** a second deliver path: it is the
 *synchronous* request/reply op (it waits for the reply and assembles it), which
@@ -178,7 +178,7 @@ target id, **keep the literal dots** — never digit-squash.
 | 🎯T47.1 | `jv-t47.1-docs` | `jv-t471-docs` |
 | 🎯T159 (flat) | `jv-t159-seal` | unchanged — flat ids stay flat |
 
-Digit-squash makes `T27.2` vs `T272` (or `T47.1` vs `T471`) ambiguous in
+Digit-squash makes `🎯T27.2` vs `🎯T272` (or `🎯T47.1` vs `🎯T471`) ambiguous in
 the RHS fleet list. Residual: flat ids (no sub-target segment) stay as
 today (`jv-t159-seal`). Optional suffix (`-config`, `-docs`) is free-form.
 
@@ -200,14 +200,14 @@ fleet worker** under **`parent=jevons-po`** in the **same operational cycle**
 - **Standing rule:** kick off all non-design frontier work **continuously**;
   new unattended leaves get a worker **immediately**.
 - Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
-- **Skip:** design-gated (T112 / T67 / T29-class) and blocked targets stay
+- **Skip:** design-gated (🎯T112 / 🎯T67 / 🎯T29-class) and blocked targets stay
   unspawned until unblocked or owner opens design.
 - **Related:** 🎯T193 file→spawn same turn (owner-filed and mid-session Build).
 - **Residual:** instructional; no daemon auto-spawn unless later enforced.
 
 ### File→spawn same turn (🎯T193)
 
-**T130** files the target; **T193** spawns the worker. Do **not** leave
+**🎯T130** files the target; **🎯T193** spawns the worker. Do **not** leave
 Build filings **ledger-only**.
 
 When a **Build-plane** target is filed — owner via `target:` aside /
@@ -217,8 +217,8 @@ unless the target is design-gated or parked.
 
 - **Same turn:** `jevons_agent_start` (or route to PO) before the turn ends.
 - Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
-- **Skip (file without spawn):** design-gated (e.g. OAuth app pins, T112 /
-  T67 / T29-class), blocked-on-human / needs-owner / parked-for-design, and
+- **Skip (file without spawn):** design-gated (e.g. OAuth app pins, 🎯T112 /
+  🎯T67 / 🎯T29-class), blocked-on-human / needs-owner / parked-for-design, and
   pure documentation / docs-only.
 - **Related:** 🎯T155 continuous unattended frontier kick-off.
 - **Residual:** instructional; no daemon auto-spawn unless later enforced.
@@ -268,7 +268,7 @@ workers with `parent=jevons` (or actor=jevons as parent).
 | Role | Spawns product workers with parent= |
 |---|---|
 | **Overseer (`jevons`)** | Does **not** — routes to PO only |
-| **`jevons-po` (sole spawn parent)** | Yes — bosses/workers under T125 |
+| **`jevons-po` (sole spawn parent)** | Yes — bosses/workers under 🎯T125 |
 
 **Exception:** PO dead/unregistered → rehydrate or start PO first, then
 PO spawns. **Residual:** instructional until a later target adds registry
@@ -321,7 +321,7 @@ Owner sparks via `idea:`, `capture:`, aside, or mid-chat must land in a
 |------|----------------|
 | Capture spark | `jevons_idea_capture` or owner `idea:` / dual-write `capture:` |
 | List inbox | `jevons_idea_list` / `GET /api/ideas` |
-| Triage | `jevons_idea_triage`: **file** → then `jevons_target_file` (+ T193 if Build); **park** needs-owner/design; **hold** life-domain parked; **drop** rare |
+| Triage | `jevons_idea_triage`: **file** → then `jevons_target_file` (+ 🎯T193 if Build); **park** needs-owner/design; **hold** life-domain parked; **drop** rare |
 
 Do not leave product-shaped sparks as main-chat-only prose. Ceremony:
 `docs/design/idea-capture.md`. Residual: opportunity-cost optimiser parked.
@@ -386,7 +386,7 @@ Pure helpers: `CoverageMap` / `ClassifyDesignClause` /
 `docs/design/greenfield-oracle-elicitation.md`.
 
 **Residual:** instructional + pure map model; not a hard daemon block;
-rich T29 surface and owner process-fidelity validation remain
+rich 🎯T29 surface and owner process-fidelity validation remain
 class-3 / follow-ups.
 
 ## Status language: in progress vs live (🎯T176)
@@ -424,7 +424,7 @@ registry (RHS / `agent_list` omit the name). When a mission target is
 achieved on the bullseye ledger, work agents engaged on that TargetID are
 also reaped. Residual: POs and overseer stay; multi-target agents without
 a matching TargetID stay; deliberate `jevons_agent_stop` without kill
-still leaves registration for resume; T90 deep anomaly supervisor is separate.
+still leaves registration for resume; 🎯T90 deep anomaly supervisor is separate.
 
 Do **not** re-expand a local merge order into continuous origin/PR
 shipping because a PO already opened remotes. Remote delivery only when
@@ -447,7 +447,7 @@ fleet agent without detach. The script: `make` → `brew services stop jevons`
 → kill `:13705` → `nohup`/`setsid` start `$REPO/bin/jevonsd` with workdir →
 wait `/health` + `/api/frontier` non-404 → exit 0 only when serving.
 Pure static web-only changes may hard-reload only. Residual: session drop
-until T40/T171.
+until 🎯T40/🎯T171.
 
 ## Achieve reports need activated daily path (🎯T194)
 

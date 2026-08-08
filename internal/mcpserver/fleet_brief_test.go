@@ -22,8 +22,9 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"Do NOT open GitHub PRs",
 		"local commits",
 		"Oracle-first completion",
-		"T31",
-		"T31.1",
+		// 🎯T326: inject path always uses emoji prefix (not bare T31).
+		"🎯T31",
+		"🎯T31.1",
 		"Bare \"done\"",
 		"accepted-risk",
 		"class-3",
@@ -31,7 +32,7 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"independent gate",
 		// 🎯T31.2 greenfield elicitation
 		"Greenfield oracle elicitation",
-		"T31.2",
+		"🎯T31.2",
 		"oracle-coverage",
 		"pinned",
 		"fuzzy",
@@ -41,19 +42,19 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"CoverageMap",
 		"spawn_subagent",
 		"Multi-slice fan-out",
-		"T111.4",
+		"🎯T111.4",
 		"Unattended frontier auto-spawn",
-		"T155",
+		"🎯T155",
 		"parent=jevons-po",
 		"needs-owner",
 		"design-discussion",
 		"parked-for-design",
-		"T112",
-		"T67",
-		"T29-class",
+		"🎯T112",
+		"🎯T67",
+		"🎯T29-class",
 		// 🎯T193 file→spawn same turn
 		"File→spawn same turn",
-		"T193",
+		"🎯T193",
 		"Build-plane",
 		"same turn",
 		"named worker",
@@ -64,7 +65,7 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"docs-only",
 		// 🎯T325.1 PO proactive-until-empty-then-sleep
 		"PO proactive-until-empty-then-sleep",
-		"T325.1",
+		"🎯T325.1",
 		"until empty or blocked",
 		"one-shot pass",
 		"sleep/idle",
@@ -74,25 +75,25 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"ClassifyFrontierLeaf",
 		"POOpenMissionForProactive",
 		"PO never implements",
-		"T125",
+		"🎯T125",
 		"spawn-only for Build work",
 		"instructional doctrine",
 		"Overseer never parents product workers",
-		"T129",
+		"🎯T129",
 		"parent=jevons",
 		"jevons-po",
 		"Filing reflex",
-		"T130",
+		"🎯T130",
 		"standing rule",
 		"going forward",
 		"from now on",
 		"we should always",
 		"jevons_target_file",
 		"bullseye_commit",
-		"T92",
+		"🎯T92",
 		// 🎯T176 status language
 		"Status language: in progress vs live",
-		"T176",
+		"🎯T176",
 		"in progress",
 		"not yet owner-visible",
 		"Never call a registered/running worker",
@@ -103,7 +104,7 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"daily path",
 		// 🎯T194 daily-path achieve evidence
 		"Achieve reports need activated daily path",
-		"T194",
+		"🎯T194",
 		"necessary not sufficient",
 		"restart-daily-jevonsd.sh",
 		"live probe",
@@ -112,7 +113,7 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"stale binary",
 		// 🎯T197 worker names: literal dots, never digit-squash
 		"Worker names: literal dots for hierarchical ids",
-		"T197",
+		"🎯T197",
 		"jv-t27.2-config",
 		"jv-t272-config",
 		"digit-squash",
@@ -123,6 +124,9 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+	if HasBareTargetID(out) {
+		t.Error("fleet brief inject still contains bare T-ids (🎯T326)")
 	}
 	out2, inj2 := EnsureFleetBrief(m, "worker", "follow-up")
 	if inj2 {

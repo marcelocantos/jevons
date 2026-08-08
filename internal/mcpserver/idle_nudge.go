@@ -241,7 +241,7 @@ func FormatIdleNudgeText(a IdleNudgeTextArgs) string {
 	if name == "" {
 		name = "worker"
 	}
-	tid := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(a.TargetID), "🎯"))
+	tid := FormatTargetID(a.TargetID)
 	kind := a.Kind
 	if kind == "" {
 		// Fail closed: missing kind ⇒ full brief, never bare continue.
@@ -255,9 +255,9 @@ func FormatIdleNudgeText(a IdleNudgeTextArgs) string {
 		} else {
 			b.WriteString("NUDGE — you are phase=idle with brief already present; continue mid-mission work. ")
 		}
-		b.WriteString("Local master, T104 (no PR). ")
+		b.WriteString("Local master, 🎯T104 (no PR). ")
 		if tid != "" {
-			fmt.Fprintf(&b, "Target 🎯%s. ", tid)
+			fmt.Fprintf(&b, "Target %s. ", tid)
 		}
 		if a.Reason != "" {
 			fmt.Fprintf(&b, "Classifier: %s. ", a.Reason)
@@ -277,14 +277,14 @@ func FormatIdleNudgeText(a IdleNudgeTextArgs) string {
 	b.WriteString("This message injects the standing fleet brief (or confirms it). Do not treat a one-word continue as your brief.\n\n")
 	fmt.Fprintf(&b, "Agent: %s\n", name)
 	if tid != "" {
-		fmt.Fprintf(&b, "Mission target: 🎯%s\n", tid)
+		fmt.Fprintf(&b, "Mission target: %s\n", tid)
 	} else {
 		b.WriteString("Mission target: (none bound — resume open work for this agent name)\n")
 	}
 	if acc := strings.TrimSpace(a.Acceptance); acc != "" {
 		fmt.Fprintf(&b, "Acceptance:\n%s\n", acc)
 	}
-	b.WriteString("\nLocal master only (T104). No PR unless owner opened Ship.\n")
+	b.WriteString("\nLocal master only (🎯T104). No PR unless owner opened Ship.\n")
 	if a.Reason != "" {
 		fmt.Fprintf(&b, "Classifier: %s.\n", a.Reason)
 	}

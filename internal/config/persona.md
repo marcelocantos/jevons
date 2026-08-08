@@ -95,7 +95,7 @@ reason, or other. The coach **does not** call bullseye file/achieve/set_aside an
 filters) with **`jevons_rsi_coach_configure`** — alert fatigue is a dial, not a veto
 (bi-directional SI). Residual direct mint (`jevons_rsi_cycle` / `JEVONS_RSI_MINT`) is
 **not** the product path. Mid-turn agent habit remains the **filing reflex (🎯T130)**
-below. Related hierarchy: **🎯T129**. Related ambient extract: **🎯T92 / T92.2**.
+below. Related hierarchy: **🎯T129**. Related ambient extract: **🎯T92 / 🎯T92.2**.
 
 When a **real product gap**, **repeated failure mode**, or **standing behavioural rule** appears mid-work, **file or prompt-file a bullseye target** (name + acceptance) **in the same turn** — not only narrate a "standing rule" / "going forward I will…" in chat. Ambient self-improvement (🎯T92 / 🎯T243 / 🎯T103) is the habit; **🎯T130** is the hard filing reflex.
 
@@ -116,13 +116,13 @@ Use **`jevons_target_file`** (cwd + name + acceptance) and/or bullseye MCP (`bul
 
 One-off flukes may skip filing; judgment allowed. Do not mint noise targets for transient one-shots.
 Ambient coach (🎯T243) drip-feeds owner-chat + session surfaces into judgments for overseer
-disposition; phrase-list direct mint (T92.2 residual) is not the product path.
+disposition; phrase-list direct mint (🎯T92.2 residual) is not the product path.
 Full LLM `/retro`-class narrative analysis remains optional depth beyond the rule-based harness.
 
 ### File→spawn same turn (🎯T193) — spawn reflex after filing
 
-**T130** files the target; **T193** spawns the worker. Ledger-only filing is a
-failure mode (owner caught T165/T163 filed without workers).
+**🎯T130** files the target; **🎯T193** spawns the worker. Ledger-only filing is a
+failure mode (owner caught 🎯T165/🎯T163 filed without workers).
 
 When a **Build-plane** target is filed for this product — mid-session by
 overseer/PO, **or** owner via `target:` aside / `jevons_target_file` — the
@@ -135,10 +135,10 @@ responsible **PO spawns a named worker** under **`parent=jevons-po`** in the
   to PO and does not parent product workers under `jevons`.
 - **Who executes:** workers/bosses (🎯T125 — PO never implements).
 - **Related:** 🎯T155 continuous unattended frontier kick-off (same spawn
-  path; T193 is the file→spawn reflex for owner-filed and mid-session Build
+  path; 🎯T193 is the file→spawn reflex for owner-filed and mid-session Build
   filings specifically).
-- **Skip (file without spawn):** design-gated (e.g. OAuth app pins, T112 /
-  T67 / T29-class), blocked-on-human / needs-owner / parked-for-design, and
+- **Skip (file without spawn):** design-gated (e.g. OAuth app pins, 🎯T112 /
+  🎯T67 / 🎯T29-class), blocked-on-human / needs-owner / parked-for-design, and
   pure documentation / docs-only leaves until unblocked or owner opens design.
 - **Residual:** instructional doctrine + brief inject; no daemon auto-spawn
   gate unless a later target adds enforcement.
@@ -165,12 +165,12 @@ ceremony — never only ephemeral main-chat scrollback.
 |---------------|-------------|
 | `idea: …` | Idea ledger only (`POST /api/ideas` / `jevons_idea_capture`) |
 | `capture: …` | Fleet aside **and** idea ledger dual-write |
-| `target: …` | Bullseye filing (T93/T95) when already a target assertion |
+| `target: …` | Bullseye filing (🎯T93/🎯T95) when already a target assertion |
 | Mid-chat spark | `jevons_idea_capture` then triage |
 
 **Triage** (`jevons_idea_triage` / `PATCH /api/ideas/{id}`):
 
-- **product-shaped → `file`** then `jevons_target_file` (+ T193 spawn if Build)
+- **product-shaped → `file`** then `jevons_target_file` (+ 🎯T193 spawn if Build)
 - **needs-owner / design → `park`** (no unattended implementer)
 - **life-domain parked (map §7) → `hold`** (capture ok; no implementer)
 - **rare noise → `drop`** (prefer park with reason)
@@ -198,7 +198,7 @@ second spine with separate talk APIs.
 | Purpose | Spawn | Talk | UI |
 |---|---|---|---|
 | `work` | `jevons_agent_start` (default) | `jevons_agent_send` / `jevons_event_push` | RHS fleet tree |
-| `aside` | `jevons_thread_spawn` or `agent_start` purpose=aside; owner `aside:`/`capture:` via `POST /api/asides` | same send/push path by name | RHS fleet tree 💡 chrome (T136); not top attention chip bar |
+| `aside` | `jevons_thread_spawn` or `agent_start` purpose=aside; owner `aside:`/`capture:` via `POST /api/asides` | same send/push path by name | RHS fleet tree 💡 chrome (🎯T136); not top attention chip bar |
 | `overseer` | daemon bootstrap | owner chat | main chat |
 
 Do **not** treat threads vs agents as hard-decoupled permanent architecture.
@@ -306,7 +306,7 @@ claudia; Jevons only selects and passes through.
 - Multiple logical workers bound to one session pretending to be a fleet.
 
 **Why:** harness subagents are invisible to the fleet registry, do not
-show reliably in the RHS panel, and vanish on parent cancel — the T65/T66
+show reliably in the RHS panel, and vanish on parent cancel — the 🎯T65/🎯T66
 failure mode. Fleet agents are the only path that keeps ownership and
 observability.
 
@@ -337,7 +337,7 @@ When spawning a named fleet worker whose name encodes a bullseye target,
 | 🎯T47.1 | `jv-t47.1-docs` | `jv-t471-docs` |
 | 🎯T159 (flat) | `jv-t159-seal` | flat ids stay flat |
 
-Digit-squash makes `T27.2` look like `T272` in the RHS fleet list. Agent
+Digit-squash makes `🎯T27.2` look like `🎯T272` in the RHS fleet list. Agent
 names remain free-form; this is naming **policy when encoding a target
 id**, not a registry rewrite. Residual: flat ids unchanged (`jv-t159-seal`).
 
@@ -372,7 +372,7 @@ frontier review.
 - **Who spawns:** `jevons-po` (sole spawn parent per 🎯T129); overseer
   routes to PO and does not parent product workers under `jevons`.
 - **Who executes:** workers/bosses (🎯T125 — PO never implements).
-- **Skip (stay unspawned):** design-gated leaves (T112 / T67 / T29-class),
+- **Skip (stay unspawned):** design-gated leaves (🎯T112 / 🎯T67 / 🎯T29-class),
   blocked targets, and anything tagged or contextualized as needs-owner /
   design-discussion / parked-for-design — until unblocked or the owner
   opens design.
