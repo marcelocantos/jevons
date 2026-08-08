@@ -573,6 +573,11 @@ type IdleNudgeSweepArgs struct {
 	// ProcessRunning optional override (hermetic tests without OS processes).
 	// Nil → reg.Get(name).Alive().
 	ProcessRunning func(name string) bool
+	// Eligible optionally pre-filters agents before classification (🎯T315).
+	// False ⇒ skip with reason not_open_mission. Nil = every registered agent
+	// is classified. The periodic pressure path uses it to keep the T244 guard
+	// (unbound PO/boss with no work children is standing idle, not a mission).
+	Eligible func(d claudia.AgentDef) bool
 }
 
 // SweepIdleNudges classifies every registered agent and delivers nudges.
@@ -604,6 +609,14 @@ func SweepIdleNudges(args IdleNudgeSweepArgs) []IdleNudgeReport {
 }
 
 func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time) IdleNudgeReport {
+	if args.Eligible != nil && !args.Eligible(d) {
+		return IdleNudgeReport{
+			Name:        d.Name,
+			Action:      IdleNudgeSkip,
+			Reason:      "not_open_mission",
+			PostRestart: args.PostRestart,
+		}
+	}
 	purpose := d.Purpose
 	if purpose == "" {
 		purpose = claudia.PurposeWork
@@ -976,6 +989,7 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		}
 	}
 
+	defs := s.registry.List()
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg:          s.registry,
 		Activity:     activity,
@@ -1001,6 +1015,11 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		DesignGated:        hooks.DesignGated,
 		LastTerminalReport: hooks.LooksSatisfied,
 		ProcessRunning:     deps.Running,
+		Eligible: func(d claudia.AgentDef) bool {
+			// 🎯T244 noise guard: an unbound PO/boss with no work children is
+			// standing idle, not an open mission. Implementers still qualify.
+			return HasOpenMissionForIdle(d, hooks.MissionOpen, CountWorkChildren(defs, d.Name))
+		},
 	})
 
 	delivered, maxed := 0, 0

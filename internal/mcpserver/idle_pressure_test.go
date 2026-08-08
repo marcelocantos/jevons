@@ -169,8 +169,10 @@ func TestIdlePressureSweepRespectsMissionOpenHook(t *testing.T) {
 	if pushes != 0 {
 		t.Fatalf("closed mission must not be re-pressured (pushes=%d)", pushes)
 	}
-	if r := reportFor(reps, "jv-t315-pressure"); r.Reason != "no_open_mission" {
-		t.Fatalf("want no_open_mission skip, got %+v", r)
+	// Either skip reason is correct: the T244 pre-filter consults MissionOpen
+	// first, and the classifier repeats the check for callers without it.
+	if r := reportFor(reps, "jv-t315-pressure"); r.Reason != "not_open_mission" && r.Reason != "no_open_mission" {
+		t.Fatalf("want an open-mission skip, got %+v", r)
 	}
 }
 
@@ -201,4 +203,46 @@ func reportFor(reps []IdleNudgeReport, name string) IdleNudgeReport {
 		}
 	}
 	return IdleNudgeReport{}
+}
+
+// 🎯T244 noise guard on the periodic path: an unbound PO with no work children
+// is standing idle, not an open mission, so the actuator leaves it alone.
+func TestIdlePressureSweepSkipsUnboundPOWithoutChildren(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(3000, 0)
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []claudia.AgentDef{
+		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer,
+			Materialized: true, Provider: "grok", AutoStart: true},
+		{Name: "lonely-po", WorkDir: dir, SessionID: "s-p", Purpose: claudia.PurposeWork,
+			Materialized: true, Provider: "grok", AutoStart: true},
+	} {
+		if err := reg.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	activity := NewIdleActivityTracker()
+	activity.by["lonely-po"] = IdleActivity{Phase: "idle", Updated: now.Add(-time.Hour)}
+	ledger, err := OpenIdleNudgeLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{registry: reg, idleActivity: activity, idleNudgeLedger: ledger}
+
+	pushes := 0
+	reps := s.idlePressureSweep(idlePressureDeps{
+		Now:     now,
+		Running: func(name string) bool { return true },
+		Push:    func(target, event, text string) error { pushes++; return nil },
+	})
+	if pushes != 0 {
+		t.Fatalf("childless unbound PO must not be re-pressured (pushes=%d)", pushes)
+	}
+	if r := reportFor(reps, "lonely-po"); r.Reason != "not_open_mission" {
+		t.Fatalf("want not_open_mission skip, got %+v", r)
+	}
 }
