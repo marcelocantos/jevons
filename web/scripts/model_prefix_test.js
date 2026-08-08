@@ -36,43 +36,100 @@ function indexHtml() {
   return fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 }
 
+// The page's single <style> block, as { selector, body } rules. Bounded to the
+// stylesheet so script braces cannot masquerade as CSS.
+function cssRules() {
+  const html = indexHtml();
+  const open = html.indexOf('<style>');
+  const close = html.indexOf('</style>');
+  assert.ok(open !== -1 && close > open, 'index.html has no <style> block');
+  // Comments out first: they sit between rules, so an unstripped one would be
+  // captured as part of the next selector and a rule could pass a selector
+  // assertion on the strength of its own comment text.
+  const css = html.slice(open + '<style>'.length, close).replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(css))) rules.push({ sel: m[1].trim(), body: m[2] });
+  return rules;
+}
+
 console.log('model_prefix_test (🎯T287)');
 
-// 🎯T299: the family initial is gone. 'O' butted against digits read as a
-// zero, so Opus 5 landed on the owner's screen as '05'. The splat already
-// says Claude; the version alone is what the subscript carries.
-test('anthropic models condense to the bare version — no family initial', function () {
-  assert.strictEqual(MP.condenseModel('claude-opus-4-8'), '4.8');
-  assert.strictEqual(MP.condenseModel('claude-opus-4-5-20250929'), '4.5');
-  assert.strictEqual(MP.condenseModel('claude-opus-5[1m]'), '5');
-  assert.strictEqual(MP.condenseModel('us.anthropic.claude-opus-4-5-v1:0'), '4.5');
-  assert.strictEqual(MP.condenseModel('claude-sonnet-4-5-20250929'), '4.5');
-  assert.strictEqual(MP.condenseModel('claude-haiku-4-5-20251001'), '4.5');
-  // A family with no version says nothing the mark does not already say.
-  assert.strictEqual(MP.condenseModel('opus'), '');
+// 🎯T302 reverses 🎯T299's deletion of the family initial. T299 read 'O5' as a
+// zero-padded five and cut the letter; the owner's correction is that the O was
+// never a numeral — it is Opus, and without it Opus 4.5 and Sonnet 4.5 painted
+// the same badge. Each Anthropic family carries its own letter again.
+test('anthropic models carry the family initial ahead of the version', function () {
+  assert.strictEqual(MP.condenseModel('claude-opus-4-8'), 'O4.8');
+  assert.strictEqual(MP.condenseModel('claude-opus-5'), 'O5');
+  assert.strictEqual(MP.condenseModel('claude-opus-5[1m]'), 'O5');
+  assert.strictEqual(MP.condenseModel('us.anthropic.claude-opus-4-5-v1:0'), 'O4.5');
+  assert.strictEqual(MP.condenseModel('claude-sonnet-4-5-20250929'), 'S4.5');
+  assert.strictEqual(MP.condenseModel('claude-haiku-4-5-20251001'), 'H4.5');
+  // One letter per family, and three different ones — the whole point of
+  // restoring it is that the three stop colliding.
+  assert.strictEqual(MP.familyInitial('claude-opus-5'), 'O');
+  assert.strictEqual(MP.familyInitial('claude-sonnet-5'), 'S');
+  assert.strictEqual(MP.familyInitial('claude-haiku-5'), 'H');
+  const badges = ['opus', 'sonnet', 'haiku'].map(function (f) {
+    return MP.condenseModel('claude-' + f + '-4-5');
+  });
+  assert.strictEqual(new Set(badges).size, 3, 'two families paint the same badge: ' + badges);
+  // The version half stays honest: a family with no version paints the letter
+  // and nothing else, rather than inventing a number.
+  assert.strictEqual(MP.condenseModel('opus'), 'O');
+  assert.strictEqual(MP.versionOf('opus'), '');
 });
 
-// 🎯T298 / 🎯T299: the failure the owner reported was reading, not arithmetic —
-// 'O5' is indistinguishable from '05' at 9px. No label may open with a glyph
-// that can pass for a leading zero.
-test('no label can read as a zero-padded number', function () {
+// 🎯T298 / 🎯T299 / 🎯T302: the reading failure was real — at 9px an O butted
+// against digits can pass for a zero — but deleting the letter was the wrong
+// fix. The letter stays and the *digits* carry no padding of their own, so
+// nothing in the label is a zero that should not be there.
+test('no digit segment can read as zero-padded', function () {
   ['claude-opus-5', 'claude-opus-05', 'claude-opus-5[1m]', 'claude-opus-4-8',
     'claude-opus-4-05', 'claude-opus-4-5-20250929', 'claude-sonnet-04-05',
     'claude-haiku-4-5-20251001', 'us.anthropic.claude-opus-4-5-v1:0',
     'grok-4.5-build', 'grok-05',
   ].forEach(function (id) {
+    const version = MP.versionOf(id);
+    assert.ok(!/(^|\.)0\d/.test(version), id + ' → padded segment: ' + version);
+    // The version half is digits and dots only; the letter is a separate
+    // field, never spliced into the number.
+    assert.ok(/^[\d.]*$/.test(version), id + ' → non-numeric version ' + version);
     const label = MP.condenseModel(id);
-    assert.ok(!/^[Oo0]\d/.test(label), id + ' → label opens as a zero: ' + label);
-    assert.ok(!/(^|\.)0\d/.test(label), id + ' → padded segment in label: ' + label);
-    // Nothing but digits and dots reaches the subscript at all.
-    assert.ok(/^[\d.]*$/.test(label), id + ' → non-numeric label ' + label);
+    assert.strictEqual(label, MP.familyInitial(id) + version, id);
+    assert.ok(/^[OSH]?[\d.]*$/.test(label), id + ' → unexpected label ' + label);
   });
 });
 
+// 🎯T302: the initial is not glued into the digit run — it is its own element,
+// which is what lets the CSS below weight and colour it apart. That separation
+// *is* the O/0 fix; if the letter ever lands as a bare character inside the
+// subscript text, the ambiguity T299 complained about is back.
+test('the family initial is painted as its own element, not spliced into the digits', function () {
+  const html = MP.modelPrefixHtml({ provider: 'claude', model: 'claude-opus-5' });
+  assert.ok(html.indexOf('<sub><span class="model-family">O</span>5</sub>') !== -1, html);
+  // Never a raw 'O5' text run.
+  assert.ok(!/<sub>[^<]*O/.test(html), 'initial is loose in the subscript text: ' + html);
+
+  // A family with no version still gets its letter, wrapped the same way.
+  const bare = MP.modelPrefixHtml({ provider: 'claude', model: 'opus' });
+  assert.ok(bare.indexOf('<sub><span class="model-family">O</span></sub>') !== -1, bare);
+});
+
+// 🎯T302 restores the initial for Anthropic only. xAI ships one family, so a
+// 'G' would name nothing the mark does not already say — Grok rows keep exactly
+// the bare version 🎯T299 gave them.
 test('grok drops the family letter — one flavour', function () {
   assert.strictEqual(MP.condenseModel('grok-4.5'), '4.5');
   assert.strictEqual(MP.condenseModel('grok-4'), '4');
   assert.strictEqual(MP.condenseModel('grok'), '');
+  assert.strictEqual(MP.familyInitial('grok-4.5'), '');
+  assert.strictEqual(MP.familyInitial('gpt-5.1'), '');
+  // No letter element reaches a Grok badge at all.
+  const html = MP.modelPrefixHtml({ provider: 'grok', model: 'grok-4.5' });
+  assert.ok(html.indexOf('model-family') === -1, 'grok badge carries a family letter: ' + html);
 });
 
 // 🎯T293: the model id the server now reports for Grok rows comes from Grok's
@@ -152,19 +209,44 @@ test('no retired mark is ever painted again', function () {
 // Each segment is parsed as an integer and printed back, so padding cannot
 // survive whatever the model id spells. Internal zeros are significant.
 test('version segments are integers, not digit runs', function () {
-  assert.strictEqual(MP.condenseModel('claude-opus-4-05'), '4.5');
-  assert.strictEqual(MP.condenseModel('claude-opus-05'), '5');
-  assert.strictEqual(MP.condenseModel('claude-sonnet-04-05'), '4.5');
-  assert.strictEqual(MP.condenseModel('grok-05'), '5');
-  assert.strictEqual(MP.condenseModel('claude-opus-000-007'), '0.7');
+  assert.strictEqual(MP.versionOf('claude-opus-4-05'), '4.5');
+  assert.strictEqual(MP.versionOf('claude-opus-05'), '5');
+  assert.strictEqual(MP.versionOf('claude-sonnet-04-05'), '4.5');
+  assert.strictEqual(MP.versionOf('grok-05'), '5');
+  assert.strictEqual(MP.versionOf('claude-opus-000-007'), '0.7');
   // Internal zeros survive: 10 is ten, not one.
-  assert.strictEqual(MP.condenseModel('claude-opus-10'), '10');
-  assert.strictEqual(MP.condenseModel('claude-opus-4-10'), '4.10');
-  assert.strictEqual(MP.condenseModel('grok-10.0'), '10.0');
+  assert.strictEqual(MP.versionOf('claude-opus-10'), '10');
+  assert.strictEqual(MP.versionOf('claude-opus-4-10'), '4.10');
+  assert.strictEqual(MP.versionOf('grok-10.0'), '10.0');
   // A lone zero is a real segment, not padding.
-  assert.strictEqual(MP.condenseModel('claude-opus-5-0'), '5.0');
+  assert.strictEqual(MP.versionOf('claude-opus-5-0'), '5.0');
   // A release date is still a date, not a version segment.
-  assert.strictEqual(MP.condenseModel('claude-opus-4-5-20250929'), '4.5');
+  assert.strictEqual(MP.versionOf('claude-opus-4-5-20250929'), '4.5');
+  // Restoring the initial did not re-pad anything: the whole label is the
+  // letter and the unpadded version, nothing else.
+  assert.strictEqual(MP.condenseModel('claude-opus-4-05'), 'O4.5');
+  assert.strictEqual(MP.condenseModel('claude-sonnet-04-05'), 'S4.5');
+});
+
+// 🎯T302: Anthropic has spelled the version on both sides of the family word.
+// The extractor read only the tail, so every 3-series id — where the version
+// *leads* — condensed to nothing and painted a bare mark with no version at
+// all. That is the "why do some Claude rows show no version" the owner saw.
+test('version parses on either side of the family word', function () {
+  assert.strictEqual(MP.versionOf('claude-3-5-sonnet'), '3.5');
+  assert.strictEqual(MP.condenseModel('claude-3-5-sonnet'), 'S3.5');
+  assert.strictEqual(MP.condenseModel('claude-3-5-sonnet-20241022'), 'S3.5');
+  assert.strictEqual(MP.condenseModel('claude-3-opus'), 'O3');
+  assert.strictEqual(MP.condenseModel('claude-3-haiku-20240307'), 'H3');
+  assert.strictEqual(MP.condenseModel('us.anthropic.claude-3-5-sonnet-v1:0'), 'S3.5');
+  // A trailing version still wins where the id carries one — the current
+  // naming puts it there.
+  assert.strictEqual(MP.condenseModel('claude-opus-4-5'), 'O4.5');
+  // A date on the leading side is a date on that side too.
+  assert.strictEqual(MP.versionOf('claude-20240620-sonnet'), '');
+  // Nothing on either side is still nothing — no version is invented.
+  assert.strictEqual(MP.versionOf('claude-sonnet'), '');
+  assert.strictEqual(MP.versionOf('opus'), '');
 });
 
 test('company comes from provider, falling back to the model id', function () {
@@ -183,10 +265,8 @@ test('company comes from provider, falling back to the model id', function () {
 test('owner examples paint icon + subscript label', function () {
   const anth = MP.modelPrefixHtml({ provider: 'claude', model: 'claude-opus-4-8' });
   assert.ok(anth.indexOf('data-company="anthropic"') !== -1, anth);
-  assert.ok(anth.indexOf('<sub>4.8</sub>') !== -1, anth);
+  assert.ok(anth.indexOf('<sub><span class="model-family">O</span>4.8</sub>') !== -1, anth);
   assert.ok(anth.indexOf('<svg class="model-icon"') !== -1, anth);
-  // No leading O — the splat says Claude, and 'O4.8' read as '04.8'.
-  assert.ok(anth.indexOf('O4.8') === -1, anth);
 
   const grok = MP.modelPrefixHtml({ provider: 'grok', model: 'grok-4.5' });
   assert.ok(grok.indexOf('data-company="xai"') !== -1, grok);
@@ -213,12 +293,16 @@ test('prefix follows a migrate — provider/model change repaints', function () 
   const after = MP.modelPrefix({ provider: 'claude', model: 'claude-opus-4-8' });
   assert.strictEqual(before.company, 'xai');
   assert.strictEqual(before.label, '4.5');
+  assert.strictEqual(before.initial, '');
   assert.strictEqual(after.company, 'anthropic');
-  assert.strictEqual(after.label, '4.8');
+  assert.strictEqual(after.label, 'O4.8');
+  assert.strictEqual(after.initial, 'O');
+  assert.strictEqual(after.version, '4.8');
 });
 
-// The subscript no longer names the family, so the hover has to — Opus 4.5 and
-// Sonnet 4.5 paint the same badge and are told apart here.
+// The subscript names the family again (🎯T302), but the hover still carries
+// the full id — the badge is two characters and the date, suffix and vendor
+// prefix live only here.
 test('tooltip carries the full model for hover truth', function () {
   const p = MP.modelPrefix({ provider: 'claude', model: 'claude-opus-4-5-20250929' });
   assert.strictEqual(p.title, 'Anthropic · claude-opus-4-5-20250929');
@@ -312,4 +396,139 @@ test('subscript hangs below the mark baseline', function () {
   // ...and not so far that it falls out of the 6px-padded row.
   assert.ok(dropPx < Number(iconH[1]) / 3,
     'subscript is dropped clear of the mark: ' + dropPx.toFixed(2) + 'px');
+});
+
+// 🎯T302: restoring the letter only works if the letter does not read as a
+// digit. That is carried entirely by the CSS — bolder than the digits beside
+// it, and painted in the --accent *token* rather than a literal colour. The
+// token matters: --accent is purple in the light palette and red in the dark
+// in-car one, so only the token keeps the badge's letter matching the target
+// ids the frontier table paints beside it.
+test('the family initial is bold and carries the accent token', function () {
+  const html = indexHtml();
+  const rule = /\.agent-node \.model-badge sub \.model-family \{([^}]*)\}/.exec(html);
+  assert.ok(rule, '.model-family rule missing — the initial paints as plain digits');
+
+  const colour = /color:\s*([^;]+);/.exec(rule[1]);
+  assert.ok(colour, 'family initial declares no colour: ' + rule[1].trim());
+  assert.strictEqual(colour[1].trim(), 'var(--accent)',
+    'family initial must ride the --accent token, not a fixed colour: ' + colour[1].trim());
+
+  const weight = /font-weight:\s*(\d+)/.exec(rule[1]);
+  assert.ok(weight, 'family initial declares no font-weight: ' + rule[1].trim());
+  const sub = /\.agent-node \.model-badge sub \{([^}]*)\}/.exec(html);
+  const subWeight = /font-weight:\s*(\d+)/.exec(sub[1]);
+  assert.ok(subWeight, 'subscript declares no font-weight: ' + sub[1].trim());
+  assert.ok(Number(weight[1]) >= 700, 'family initial is not bold: ' + weight[0]);
+  assert.ok(Number(weight[1]) > Number(subWeight[1]),
+    'family initial is no heavier than the digits it must be told apart from: '
+    + weight[0] + ' vs ' + subWeight[0]);
+
+  // Both palettes define --accent, so the letter is never left unpainted.
+  const decls = html.match(/--accent:\s*[^;]+;/g) || [];
+  assert.ok(decls.length >= 2, '--accent is not defined per palette: ' + decls.join(' '));
+});
+
+// 🎯T302: Grok reads as a faded version of its standard *black* mark. Claude
+// must read the same way in its own brand colour — a faded Claude *orange*.
+test('the Claude mark paints brand orange, not the muted row colour', function () {
+  const html = indexHtml();
+  // Brand hex from the same Simple Icons record that supplies the path:
+  // icon "Claude", hex D97757.
+  const token = /--anthropic-mark:\s*(#[0-9a-fA-F]{6})\s*;/.exec(html);
+  assert.ok(token, 'no --anthropic-mark token — the splat inherits the gray row colour');
+  assert.strictEqual(token[1].toLowerCase(), '#d97757',
+    'Claude mark is not the Simple Icons brand hex D97757: ' + token[1]);
+
+  // ...and it really is a warm orange, not a colour that merely got named one.
+  const hex = token[1].slice(1);
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  assert.ok(r > g && g > b, 'mark colour is not a warm orange ramp: ' + token[1]);
+  assert.ok(r - b > 60, 'mark colour is too gray to read as orange: ' + token[1]);
+
+  // The token has to reach the Claude mark, keyed on the mark itself.
+  const tinted = cssRules().filter(function (rule) {
+    return /var\(--anthropic-mark\)/.test(rule.body);
+  });
+  assert.ok(tinted.length > 0, '--anthropic-mark is defined but never applied');
+  tinted.forEach(function (rule) {
+    assert.ok(/claude-splat/.test(rule.sel),
+      'brand orange leaks onto a non-Claude mark: ' + rule.sel);
+    assert.ok(/(^|[;{\s])color:\s*var\(--anthropic-mark\)/.test(rule.body),
+      'brand orange is not applied as the glyph colour: ' + rule.body.trim());
+  });
+
+  // The colour only lands if the strokes still take it from CSS.
+  assert.ok(/fill="currentColor"/.test(MP.companyIconHtml('anthropic')),
+    'Claude path does not follow the CSS colour');
+
+  // Same fade as Grok: one opacity rule covers both marks.
+  const iconRule = /\.agent-node \.model-badge \.model-icon \{([^}]*)\}/.exec(html);
+  assert.ok(iconRule, '.model-icon rule missing');
+  const op = /opacity:\s*([\d.]+)/.exec(iconRule[1]);
+  assert.ok(op, 'marks declare no opacity — neither reads as faded: ' + iconRule[1].trim());
+  assert.ok(Number(op[1]) < 1, 'mark is not faded: opacity ' + op[1]);
+});
+
+// 🎯T302, the owner's named failure class: the orange belongs on the splat's
+// strokes over transparent ground. NOT an orange plate with a light or dark
+// mark knocked out of it — that is the vendor's published lockup and the
+// inverse of what this badge wants. Grok is a gray path on nothing; Claude is
+// an orange path on nothing.
+test('the Claude mark is a glyph on transparent ground — no plate, no knock-out', function () {
+  const icon = MP.companyIconHtml('anthropic');
+  // Nothing behind the glyph: a plate would be a rect/circle/ellipse/polygon,
+  // and a full-bleed backdrop path would be a second path.
+  assert.ok(!/<(rect|circle|ellipse|polygon|polyline)\b/.test(icon),
+    'mark carries a plate element: ' + icon);
+  assert.strictEqual((icon.match(/<path\b/g) || []).length, 1,
+    'mark has more than one path — the extra one is a backdrop: ' + icon);
+  // Every fill in the mark is the glyph colour; none is a hardcoded plate or a
+  // knocked-out light mark.
+  const fills = icon.match(/fill="[^"]*"/g) || [];
+  assert.ok(fills.length > 0, 'mark declares no fill at all: ' + icon);
+  fills.forEach(function (f) {
+    assert.strictEqual(f, 'fill="currentColor"', 'mark paints a literal fill: ' + f);
+  });
+  // No ground painted on the svg element itself, either.
+  assert.ok(!/\b(background|fill-opacity|style=)/.test(icon.slice(0, icon.indexOf('>'))),
+    'svg element paints its own ground: ' + icon);
+
+  // ...and none painted by CSS behind the badge or the mark.
+  cssRules().filter(function (rule) {
+    return /model-badge|model-icon|claude-splat/.test(rule.sel);
+  }).forEach(function (rule) {
+    assert.ok(!/(^|[;{\s])background(-color)?:/.test(rule.body),
+      'badge CSS paints a plate behind the mark: ' + rule.sel + ' {' + rule.body.trim() + '}');
+    assert.ok(!/(^|[;{\s])border(-radius)?:/.test(rule.body),
+      'badge CSS gives the mark a tile: ' + rule.sel + ' {' + rule.body.trim() + '}');
+  });
+});
+
+// 🎯T302 is an Anthropic-only change. Grok keeps exactly what 🎯T299 gave it:
+// its own black mark, faded by the muted row colour — never tinted orange,
+// never given a family letter.
+test('Grok is untouched — muted row colour, no orange, no letter', function () {
+  const html = indexHtml();
+  const badge = /\.agent-node \.model-badge \{([^}]*)\}/.exec(html);
+  assert.ok(badge, '.model-badge rule missing');
+  const colour = /(^|[;{\s])color:\s*([^;]+);/.exec(badge[1]);
+  assert.ok(colour, 'badge declares no default colour: ' + badge[1].trim());
+  assert.strictEqual(colour[2].trim(), 'var(--text-muted)',
+    'the default mark colour is no longer the muted row colour: ' + colour[2].trim());
+
+  // No rule tints the Grok mark, by data-mark or by company.
+  cssRules().forEach(function (rule) {
+    if (!/data-mark="grok"|data-company="xai"/.test(rule.sel)) return;
+    assert.ok(!/(^|[;{\s])color:/.test(rule.body),
+      'Grok mark is recoloured: ' + rule.sel + ' {' + rule.body.trim() + '}');
+  });
+
+  const grok = MP.modelPrefixHtml({ provider: 'grok', model: 'grok-4.5-build' });
+  assert.ok(grok.indexOf('data-mark="grok"') !== -1, grok);
+  assert.ok(grok.indexOf('<sub>4.5</sub>') !== -1, 'Grok subscript changed shape: ' + grok);
+  assert.ok(grok.indexOf('model-family') === -1, 'Grok grew a family letter: ' + grok);
+  assert.ok(grok.indexOf('anthropic-mark') === -1, 'Grok badge references the Claude tint: ' + grok);
 });

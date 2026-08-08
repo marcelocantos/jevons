@@ -8,11 +8,17 @@
 //   - Company comes from the agent's stored provider (claude/bedrock →
 //     anthropic, grok → xai, codex → openai). When the provider is missing,
 //     the model id is sniffed as a fallback — never the agent name.
-//   - Label is the bare version, no family letter: Opus 4.8 → 4.8, Grok 4.5
-//     → 4.5. The initial was dropped in 🎯T299 — a capital O butted against
-//     digits reads as a zero, so 'O5' was landing on the owner's screen as
-//     '05'. The mark already says whose model it is; the tooltip carries the
-//     full id when the family matters.
+//   - Label is the Anthropic family initial then the version: Opus 5 → O5,
+//     Sonnet 4.5 → S4.5, Haiku → H. 🎯T299 deleted the initial to stop 'O5'
+//     reading as '05'; 🎯T302 restores it, because the O was never a zero —
+//     it is Opus, and dropping it made Opus 4.5 and Sonnet 4.5 the same badge.
+//     The ambiguity is settled by *styling*: the initial is painted bold in
+//     the --accent token, so it reads as a letter beside plain digits rather
+//     than as another numeral. xAI keeps the bare version (one Grok flavour).
+//   - Version is found on either side of the family word (🎯T302): the newer
+//     ids trail it ('claude-opus-5'), the 3-series lead with it
+//     ('claude-3-5-sonnet'). Reading only the tail lost the whole version for
+//     the latter and painted a bare mark.
 //   - Version segments are integers, not digit runs: each is parsed with
 //     parseInt and re-stringified, so '05' is 5 and '4-05' is 4.5 (🎯T295 /
 //     🎯T299). Internal zeros survive — '10' is ten.
@@ -50,13 +56,23 @@
     openai: OPENAI,
   };
 
-  // Model families the version hangs off. No family initial is painted
-  // (🎯T299) — see the header note on 'O' reading as a zero.
+  // Model families the version hangs off.
   const FAMILIES = ['opus', 'sonnet', 'haiku', 'grok', 'gpt'];
   const FAMILY_RE = new RegExp('(' + FAMILIES.join('|') + ')');
 
+  // The initial painted ahead of the version (🎯T302). Anthropic ships three
+  // families at every version, so the letter is the only thing telling an
+  // Opus row from a Sonnet row at a glance. xAI and OpenAI ship one family
+  // each, so their initial would be pure noise — they stay bare, as 🎯T299
+  // left them.
+  const FAMILY_INITIAL = { opus: 'O', sonnet: 'S', haiku: 'H' };
+
   // Company marks, sized by CSS (.model-icon), drawn in currentColor with no
-  // plate, ring, or outer border — the row supplies the colour. Each mark is
+  // plate, ring, or outer border — the CSS supplies the colour, keyed on the
+  // data-mark below: the muted row colour for Grok, the Claude brand orange
+  // for the splat (🎯T302). Orange rides the strokes over transparent ground;
+  // the vendor's usual orange-field-with-light-mark lockup is inverted here,
+  // so the badge stays a glyph on nothing like every other row. Each mark is
   // the *product's*, not the vendor's letterhead: an Anthropic row names a
   // Claude model, so it wears the Claude splat, not the A-wordmark (🎯T295),
   // and an xAI row wears Grok's mark, not X/Twitter's (🎯T293).
@@ -151,17 +167,11 @@
     return Number.isNaN(n) ? '' : String(n);
   }
 
-  // Version digits that follow the family, joined with dots: 'opus-4-5-2026…'
-  // → '4.5'; 'grok-4.5' → '4.5'; 'opus-5[1m]' → '5'; 'opus-4-05' → '4.5'. A
-  // release date, a trailing word ('-preview', '-v1'), or any other break ends
+  // Segments read off the front of a string, joined with dots: '4-5-20250929'
+  // → '4.5'. A release date, a word ('preview', 'v1'), or any other break ends
   // the version.
-  function versionAfter(model, family) {
-    const m = norm(model);
-    if (!family) return '';
-    const idx = m.indexOf(family);
-    if (idx < 0) return '';
-    // Drop the separator between family and version ('-', '.', ' ', none).
-    let tail = m.slice(idx + family.length).replace(/^[^0-9a-z]+/, '');
+  function segmentsFrom(s) {
+    let tail = s;
     const parts = [];
     while (tail) {
       const hit = /^(\d+)/.exec(tail);
@@ -176,13 +186,49 @@
     return parts.join('.');
   }
 
-  // Extremely condensed model label: the bare version (🎯T287 / 🎯T299).
-  // Empty when the model is unknown or carries no legible version — the mark
-  // alone still names the company, and the tooltip carries the full id.
+  // The version a model id hangs on its family word, from whichever side it
+  // sits (🎯T302). Anthropic has spelled it both ways: 'claude-opus-5' trails
+  // the family, 'claude-3-5-sonnet' leads with it. Reading only the tail —
+  // what 🎯T287 shipped — returned '' for the whole 3-series, which is why
+  // some Claude rows reached the owner as a bare mark with no version.
+  // The tail wins when both sides carry digits, since that is where the
+  // current naming puts it.
+  function versionNear(model, family) {
+    const m = norm(model);
+    if (!family) return '';
+    const idx = m.indexOf(family);
+    if (idx < 0) return '';
+    // Drop the separator between family and version ('-', '.', ' ', none).
+    const after = segmentsFrom(m.slice(idx + family.length).replace(/^[^0-9a-z]+/, ''));
+    if (after) return after;
+    // Nothing after: take the run that butts up against the family word from
+    // the left, separator and all — 'claude-3-5-sonnet' → '3-5' → '3.5'.
+    const before = /(\d+(?:[.\-_]\d+)*)[^0-9a-z]*$/.exec(m.slice(0, idx));
+    return before ? segmentsFrom(before[1]) : '';
+  }
+
+  // The version alone, no family letter: 'claude-opus-5' → '5'.
+  function versionOf(model) {
+    const m = norm(model);
+    if (!m) return '';
+    return versionNear(m, familyOf(m));
+  }
+
+  // The letter painted ahead of the version: 'claude-opus-5' → 'O' (🎯T302).
+  function familyInitial(model) {
+    return FAMILY_INITIAL[familyOf(model)] || '';
+  }
+
+  // Extremely condensed model label: family initial + version (🎯T287 /
+  // 🎯T302) — 'O5', 'S4.5', '4.5' for Grok. Empty when the model is unknown
+  // in both halves; the mark alone still names the company and the tooltip
+  // carries the full id. A family with no version paints the bare letter —
+  // that is read off the id, not invented, and it is the half that separates
+  // Opus from Sonnet.
   function condenseModel(model) {
     const m = norm(model);
     if (!m) return '';
-    return versionAfter(m, familyOf(m));
+    return familyInitial(m) + versionOf(m);
   }
 
   function companyIconHtml(company) {
@@ -193,17 +239,23 @@
       + icon.path + '</svg>';
   }
 
-  // { company, label, title } — the pure model behind the HTML.
+  // { company, initial, version, label, title } — the pure model behind the
+  // HTML. Initial and version are kept apart because they are painted apart:
+  // the letter gets its own weight and colour (🎯T302).
   function modelPrefix(agent) {
     const a = agent && typeof agent === 'object' ? agent : {};
     const provider = String(a.provider || '');
     const model = String(a.model || '');
     const company = companyFor(provider, model);
-    if (!company) return { company: '', label: '', title: '' };
-    const label = condenseModel(model);
+    if (!company) return { company: '', initial: '', version: '', label: '', title: '' };
+    const initial = familyInitial(model);
+    const version = versionOf(model);
     const shown = model || provider;
     const title = (COMPANY_LABEL[company] || company) + (shown ? ' · ' + shown : '');
-    return { company: company, label: label, title: title };
+    return {
+      company: company, initial: initial, version: version,
+      label: initial + version, title: title,
+    };
   }
 
   // Prefix chrome painted before the bare agent name. Empty string when the
@@ -211,10 +263,15 @@
   function modelPrefixHtml(agent) {
     const p = modelPrefix(agent);
     if (!p.company) return '';
+    // The initial is its own element so the CSS can weight and colour it
+    // apart from the digits — that separation is what stops 'O5' reading as
+    // '05' now the letter is back (🎯T302).
+    const sub = (p.initial ? '<span class="model-family">' + escHtml(p.initial) + '</span>' : '')
+      + escHtml(p.version);
     return '<span class="model-badge" data-company="' + escHtml(p.company)
       + '" title="' + escHtml(p.title) + '">'
       + companyIconHtml(p.company)
-      + (p.label ? '<sub>' + escHtml(p.label) + '</sub>' : '')
+      + (sub ? '<sub>' + sub + '</sub>' : '')
       + '</span>';
   }
 
@@ -222,6 +279,8 @@
     companyFor: companyFor,
     companyFromModel: companyFromModel,
     familyOf: familyOf,
+    familyInitial: familyInitial,
+    versionOf: versionOf,
     condenseModel: condenseModel,
     companyIconHtml: companyIconHtml,
     modelPrefix: modelPrefix,

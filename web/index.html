@@ -42,6 +42,12 @@
   --dot-on-glow: rgba(74,222,128,0.5);
   --dot-off-glow: rgba(239,68,68,0.5);
   --agent-dot-glow: rgba(74,222,128,0.4);
+  /* 🎯T302: Claude's brand orange, from the `hex` of the same Simple Icons
+     record that supplies the splat path in web/scripts/model_prefix.js —
+     https://github.com/simple-icons/simple-icons (icon "Claude", hex D97757).
+     One value for both palettes: it reads on the light ground and the dark
+     red one alike. Not overridden in [data-theme="light"] on purpose. */
+  --anthropic-mark: #d97757;
   --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --radius: 10px;
@@ -1037,6 +1043,13 @@ body.rhs-resizing-row { cursor: row-resize; }
   margin-right: -4px; color: var(--text-muted); cursor: default;
 }
 .agent-node .model-badge .model-icon { width: 12px; height: 12px; display: block; opacity: 0.8; }
+/* 🎯T302: Grok reads as a faded version of its own black mark — the muted row
+   colour at the 0.8 above. Claude reads the same way in its own brand orange,
+   same fade, same transparent ground. The colour is on the splat's strokes:
+   there is no plate, tile, or knock-out, so the vendor's orange-field lockup
+   is inverted here and the badge stays a glyph on nothing. Keyed on data-mark
+   so no other company is tinted. */
+.agent-node .model-badge .model-icon[data-mark="claude-splat"] { color: var(--anthropic-mark); }
 /* 🎯T299: the subscript sits *below* the mark's baseline. flex-end already
    levels its box bottom with the icon's foot, so this relative offset drops it
    the rest of the way — 0.25em of 9px ≈ 2.2px under the mark. Relative
@@ -1045,6 +1058,15 @@ body.rhs-resizing-row { cursor: row-resize; }
 .agent-node .model-badge sub {
   position: relative; bottom: -0.25em; margin-left: -0.5px; font-size: 9px;
   font-weight: 600; line-height: 1; letter-spacing: -0.04em; opacity: 0.9;
+}
+/* 🎯T302: the family initial is back — the O in O5 is Opus, not a zero, and
+   without it Opus 4.5 and Sonnet 4.5 painted the same badge. What settles the
+   O/0 reading is styling, not deletion: bolder than the digits and carrying
+   --accent, the same token the frontier table gives target ids, so the letter
+   tracks the palette (purple on light, red on the in-car dark) and reads as a
+   letter beside plain muted numerals. */
+.agent-node .model-badge sub .model-family {
+  color: var(--accent); font-weight: 700; opacity: 1;
 }
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }

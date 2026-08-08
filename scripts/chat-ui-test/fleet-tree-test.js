@@ -66,8 +66,8 @@ function startStaticServer(agentsPayload) {
     // 🎯T115: root overseer state-dir home must not render as path chrome.
     { name: 'jevons', workdir: '/Users/x/.jevons/jevons', parent: '', status: 'running', provider: 'grok' },
     // 🎯T118: same-workdir leaf under po → progress secondary, not path.
-    // 🎯T287: Anthropic worker — company icon + version subscript (🎯T299: the
-    // family initial is gone, so this row reads 4.8, not O4.8).
+    // 🎯T287: Anthropic worker — company icon + version subscript. 🎯T299 cut
+    // the family initial; 🎯T302 restores it, so this row reads O4.8 again.
     { name: 'mid-worker', workdir: poRepo, parent: 'po', status: 'running', phase: 'working', step: 'Bash: go test', progress: 'working · Bash: go test', provider: 'claude', model: 'claude-opus-4-8' },
     // Aside-purpose row: 💡 title, no path element (description must not bleed).
     { name: 'att-billing', description: 'billing nit', purpose: 'aside', workdir: '/Users/x/.jevons/threads/att-billing', parent: 'jevons', status: 'running' },
@@ -232,8 +232,75 @@ function startStaticServer(agentsPayload) {
     }, name);
 
     const anth = await badgeOf('mid-worker');
-    if (!anth || anth.company !== 'anthropic' || anth.sub !== '4.8' || !anth.hasIcon || !anth.beforeName) {
-      failures.push('T287: Anthropic Opus prefix: ' + JSON.stringify(anth));
+    if (!anth || anth.company !== 'anthropic' || anth.sub !== 'O4.8' || !anth.hasIcon || !anth.beforeName) {
+      failures.push('T302: Anthropic Opus prefix: ' + JSON.stringify(anth));
+    }
+
+    // 🎯T302: the restored initial only survives if it does not read as a
+    // digit, and the mark only reads as Claude if it carries the brand orange.
+    // Both are CSS claims, so both are measured off the rendered row rather
+    // than off the rule text: the letter must be heavier than the digits
+    // beside it and painted in the accent the frontier table gives target ids,
+    // and the splat must be orange over transparent ground — no plate behind
+    // it, which is the shape the owner rejected.
+    const paint = await page.evaluate(() => {
+      const node = [...document.querySelectorAll('.agent-node')]
+        .find(n => (n.querySelector('.agent-name') || {}).textContent === 'mid-worker');
+      const badge = node && node.querySelector('.model-badge');
+      const fam = badge && badge.querySelector('sub .model-family');
+      const sub = badge && badge.querySelector('sub');
+      const icon = badge && badge.querySelector('.model-icon');
+      if (!fam || !sub || !icon) return null;
+      const accentSwatch = document.createElement('span');
+      accentSwatch.style.color = 'var(--accent)';
+      document.body.appendChild(accentSwatch);
+      const accent = getComputedStyle(accentSwatch).color;
+      accentSwatch.remove();
+      return {
+        letter: fam.textContent,
+        famColor: getComputedStyle(fam).color,
+        accent: accent,
+        famWeight: Number(getComputedStyle(fam).fontWeight),
+        subWeight: Number(getComputedStyle(sub).fontWeight),
+        iconColor: getComputedStyle(icon).color,
+        iconOpacity: Number(getComputedStyle(icon).opacity),
+        // Anything painted behind the mark would show up here.
+        iconBg: getComputedStyle(icon).backgroundColor,
+        badgeBg: getComputedStyle(badge).backgroundColor,
+        svgChildren: [...icon.children].map(c => c.tagName.toLowerCase()),
+        fills: [...icon.querySelectorAll('[fill]')].map(p => p.getAttribute('fill')),
+      };
+    });
+    if (!paint) {
+      failures.push('T302: no rendered family letter on the Anthropic row');
+    } else {
+      if (paint.letter !== 'O') {
+        failures.push('T302: family letter is not O: ' + JSON.stringify(paint));
+      }
+      // Same colour the frontier table paints target ids — resolved, so a
+      // hardcoded hex that happens to match one palette still fails the other.
+      if (paint.famColor !== paint.accent) {
+        failures.push('T302: family letter is not the accent token: ' + JSON.stringify(paint));
+      }
+      if (!(paint.famWeight >= 700) || !(paint.famWeight > paint.subWeight)) {
+        failures.push('T302: family letter is not bolder than the digits: ' + JSON.stringify(paint));
+      }
+      // Faded orange on the strokes: the glyph colour is the brand orange and
+      // the mark is drawn under 1 opacity, exactly as Grok's neutral mark is.
+      if (paint.iconColor !== 'rgb(217, 119, 87)') {
+        failures.push('T302: Claude mark is not brand orange D97757: ' + JSON.stringify(paint));
+      }
+      if (!(paint.iconOpacity < 1)) {
+        failures.push('T302: Claude mark is not faded: ' + JSON.stringify(paint));
+      }
+      // No plate: nothing but the glyph path inside the svg, no painted ground
+      // on the svg or the badge, and no literal fill knocked out of a tile.
+      const transparent = c => c === 'rgba(0, 0, 0, 0)' || c === 'transparent';
+      if (!paint.svgChildren.every(t => t === 'path')
+          || !paint.fills.every(f => f === 'currentColor')
+          || !transparent(paint.iconBg) || !transparent(paint.badgeBg)) {
+        failures.push('T302: Claude mark sits on a plate: ' + JSON.stringify(paint));
+      }
     }
     // 🎯T299: the version is a *subscript* — its foot sits below the mark's,
     // not level with it and not beside its middle. Measured, because the CSS
@@ -275,12 +342,13 @@ function startStaticServer(agentsPayload) {
       try { refreshAgents(); } catch (_) { window.refreshAgents && window.refreshAgents(); }
     });
     await page.waitForTimeout(400);
-    // 🎯T299: Grok 4.5 and Sonnet 4.5 now wear the same subscript, so the mark
-    // and the hover are what carry the migrate — check those, not the digits.
+    // 🎯T302: the migrate is legible in the subscript again — Grok 4.5 and
+    // Sonnet 4.5 read the same under 🎯T299, but the restored initial tells
+    // them apart, so the letter is part of what proves the repaint.
     const migrated = await badgeOf('po');
-    if (!migrated || migrated.company !== 'anthropic' || migrated.sub !== '4.5'
+    if (!migrated || migrated.company !== 'anthropic' || migrated.sub !== 'S4.5'
         || migrated.title !== 'Anthropic · claude-sonnet-4-5-20250929') {
-      failures.push('T287: prefix did not follow the migrate: ' + JSON.stringify(migrated));
+      failures.push('T302: prefix did not follow the migrate: ' + JSON.stringify(migrated));
     }
 
     // 🎯T71 thin: working indicator picks up tool progress.
