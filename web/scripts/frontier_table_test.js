@@ -259,7 +259,8 @@ test('T177 chrome cols use explicit rem widths — not 1%/99% under fixed layout
     'DOM order id|name|status|fan');
 });
 
-// 🎯T179: no small-caps status; tighter id/fanout than T177 (4.5/2.75); dependents tip wiring.
+// 🎯T179: no small-caps status; fanout/status stay compact chrome; dependents tip wiring.
+// 🎯T331: unlock 4rem id freeze — hierarchical Txxx.x needs ≥5rem (or ch).
 test('T179 status normal case + tight widths + dependents tip wiring', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const statusBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
@@ -274,21 +275,62 @@ test('T179 status normal case + tight widths + dependents tip wiring', function 
   assert.ok(idW, 'id width');
   assert.ok(fanW, 'fanout width');
   assert.ok(stW, 'status width');
-  // Tighter than T177: id < 4.5rem, fanout < 2.75rem; status ~2rem.
+  // T331: id wide enough for hierarchical Txxx.x (T254.1); no longer freeze <4.5rem.
   if (idW[2] === 'rem') {
-    assert.ok(parseFloat(idW[1]) < 4.5, 'id tighter than 4.5rem, got ' + idW[1]);
+    assert.ok(parseFloat(idW[1]) >= 5, 'id ≥5rem for Txxx.x, got ' + idW[1] + 'rem');
+  } else if (idW[2] === 'ch') {
+    assert.ok(parseFloat(idW[1]) >= 6, 'id ≥6ch for Txxx.x, got ' + idW[1] + 'ch');
   }
   if (fanW[2] === 'rem') {
     assert.ok(parseFloat(fanW[1]) < 2.75, 'fanout tighter than 2.75rem, got ' + fanW[1]);
   }
   if (stW[2] === 'rem') {
-    assert.ok(Math.abs(parseFloat(stW[1]) - 2) < 0.5, 'status ~2rem, got ' + stW[1]);
+    assert.ok(parseFloat(stW[1]) <= 2, 'status compact ≤2rem, got ' + stW[1]);
   }
 
   // Render passes dependents into formatFanout (not fanout-only).
   assert.ok(html.indexOf('formatFanout(row.fanout, row.id, row.dependents)') >= 0 ||
     /formatFanout\s*\(\s*row\.fanout\s*,\s*row\.id\s*,\s*row\.dependents\s*\)/.test(html),
     'formatFanout receives row.dependents');
+});
+
+// 🎯T331: hierarchical ids fit; reclaim id↔name pad; pack status↔fanout.
+test('T331 hierarchical id width + packed id-name and status-fanout gaps', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const idBlock = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*\}/);
+  const nameBlock = html.match(/#frontier-table\s+\.ft-name\s*\{[^}]*\}/);
+  const stBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
+  const fanBlock = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*\}/);
+  assert.ok(idBlock, 'ft-id rule');
+  assert.ok(nameBlock, 'ft-name rule');
+  assert.ok(stBlock, 'ft-status rule');
+  assert.ok(fanBlock, 'ft-fanout rule');
+
+  const idW = idBlock[0].match(/width:\s*([\d.]+)(rem|ch)/);
+  assert.ok(idW, 'id width rem/ch');
+  if (idW[2] === 'rem') {
+    assert.ok(parseFloat(idW[1]) >= 5, 'id ≥5rem for T254.1/T262.3, got ' + idW[1]);
+  } else {
+    assert.ok(parseFloat(idW[1]) >= 6, 'id ≥6ch for Txxx.x, got ' + idW[1]);
+  }
+
+  function padPx(block, side) {
+    const re = new RegExp('padding-' + side + ':\\s*(\\d+)px');
+    const m = block.match(re);
+    return m ? parseInt(m[1], 10) : 0;
+  }
+  // Id↔name: sum of id padding-right + name padding-left must stay tight (reclaim, not fat).
+  const idNamePad = padPx(idBlock[0], 'right') + padPx(nameBlock[0], 'left');
+  assert.ok(idNamePad <= 6, 'id↔name pad sum ≤6px, got ' + idNamePad);
+  // Status↔fanout: near-zero pad between columns (T179/T182 packed intent).
+  const stFanPad = padPx(stBlock[0], 'right') + padPx(fanBlock[0], 'left');
+  assert.ok(stFanPad <= 2, 'status↔fanout pad sum ≤2px, got ' + stFanPad);
+  assert.ok(/padding-right:\s*0/.test(stBlock[0]), 'status padding-right 0');
+  assert.ok(/padding-left:\s*0/.test(fanBlock[0]), 'fanout padding-left 0');
+
+  // T177 retained: fixed layout + name ellipsis.
+  assert.ok(/#frontier-table\s*\{[^}]*table-layout:\s*fixed/.test(html), 'table-layout fixed');
+  assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*text-overflow:\s*ellipsis/.test(html), 'name ellipsis');
 });
 
 // 🎯T181: rich markdown target card includes acceptance + multi-section markers.
