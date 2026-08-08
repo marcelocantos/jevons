@@ -274,7 +274,57 @@
     return !!(sr && INSPECT_TERMINAL_STOPS[sr]);
   }
 
-  // turnsToLines(turns) → [{role, text}] for pane render (filters empty).
+  /**
+   * 🎯T308: normalize a wire/HTTP turn timestamp to epoch ms, or undefined
+   * when the turn carries none. Accepts ms, seconds (10-digit), and ISO
+   * strings — the sidebar must never invent "now" for a sealed turn.
+   * @param {*} v
+   * @returns {number|undefined}
+   */
+  function normalizeWhen(v) {
+    if (v == null || v === '') return undefined;
+    if (typeof v === 'number') {
+      if (!isFinite(v) || v <= 0) return undefined;
+      return v < 1e11 ? Math.round(v * 1000) : Math.round(v);
+    }
+    const s = String(v).trim();
+    if (!s) return undefined;
+    if (/^\d+$/.test(s)) return normalizeWhen(Number(s));
+    const ms = Date.parse(s);
+    return isFinite(ms) ? ms : undefined;
+  }
+
+  /** First defined turn timestamp under any of the wire spellings (🎯T308). */
+  function turnWhen(t) {
+    if (!t) return undefined;
+    const keys = ['when', 'ts', 'timestamp', 'time', 'created_at'];
+    for (let i = 0; i < keys.length; i++) {
+      const w = normalizeWhen(t[keys[i]]);
+      if (w !== undefined) return w;
+    }
+    return undefined;
+  }
+
+  /**
+   * 🎯T308: copy inspect lines without dropping `when`. Every rebuild of the
+   * inspect line model goes through here — the old hand-rolled
+   * `{role, text}` copies are what stripped timestamps before the renderer
+   * ever saw them, leaving the sidebar with no .msg-time to paint.
+   * @param {Array<object>} lines
+   * @returns {Array<object>}
+   */
+  function copyInspectLines(lines) {
+    return (lines || []).map(function (l) {
+      if (!l) return l;
+      const out = { role: l.role, text: l.text };
+      if (l.when !== undefined) out.when = l.when;
+      return out;
+    });
+  }
+
+  // turnsToLines(turns) → [{role, text, when?}] for pane render (filters empty).
+  // 🎯T308: `when` survives from wire/HTTP so inspect bubbles get main's
+  // .msg-time chrome from the same constructor.
   function turnsToLines(turns) {
     const out = [];
     (turns || []).forEach(function (t) {
@@ -282,7 +332,10 @@
       const role = t.role === 'user' ? 'user' : (t.role === 'assistant' ? 'assistant' : (t.role || 'other'));
       const text = t.text == null ? '' : String(t.text);
       if (!text.trim() && role === 'other') return;
-      out.push({ role: role, text: text });
+      const line = { role: role, text: text };
+      const when = turnWhen(t);
+      if (when !== undefined) line.when = when;
+      out.push(line);
     });
     return out;
   }
@@ -516,9 +569,29 @@
     return { mode: 'text', content: t, msgRole: msgRole };
   }
 
+  /**
+   * 🎯T308: the .msg-time chrome every bubble gets when its turn has a
+   * timestamp — mirrors index.html buildMsg (data-ts + relative label +
+   * absolute hover title, 🎯T91). Returns '' when the turn has no `when`,
+   * so sealed turns never display a fabricated "now".
+   * deps.relTime / deps.absTimeTitle mirror the index.html helpers.
+   */
+  function msgTimeHTML(when, deps) {
+    deps = deps || {};
+    const ms = normalizeWhen(when);
+    if (ms === undefined) return '';
+    const rel = typeof deps.relTime === 'function' ? deps.relTime(ms) : String(ms);
+    const abs = typeof deps.absTimeTitle === 'function' ? deps.absTimeTitle(ms) : String(ms);
+    return '<div class="msg-time" data-ts="' + escapeHtml(String(ms))
+      + '" title="' + escapeHtml(abs) + '">' + escapeHtml(rel) + '</div>';
+  }
+
   // Hermetic HTML fixture for #agent-inspect-body: main .msg bubble chrome (🎯T205)
   // plus 🎯T233 inject nuggets (not full user bubbles).
   // deps.parseAssistantMarkdown / deps.renderUserText mirror index.html paths.
+  // 🎯T308: the fixture mirrors what buildMsg emits, .msg-time included — a
+  // fixture that shows chrome the product lacks is how "shared paint" claims
+  // passed while dual construction survived.
   function paintInspectLinesHTML(lines, deps) {
     deps = deps || {};
     let html = '';
@@ -537,6 +610,7 @@
         : escapeHtml(body.content);
       html += '<div class="msg ' + escapeHtml(msgRole) + '">'
         + '<div class="msg-body">' + bodyInner + '</div>'
+        + msgTimeHTML(line.when, deps)
         + '</div>';
     });
     return html;
@@ -735,11 +809,20 @@
    * @param {object|null} event
    * @returns {Array<{role:string,text:string,_stream?:boolean}>}
    */
-  function applyInspectLiveFrame(lines, event) {
+  function applyInspectLiveFrame(lines, event, opts) {
     const out = (lines || []).map(function (l) {
-      return l ? { role: l.role, text: l.text, _stream: l._stream } : l;
+      if (!l) return l;
+      const c = { role: l.role, text: l.text, _stream: l._stream };
+      if (l.when !== undefined) c.when = l.when;
+      return c;
     });
     if (!event || !event.type) return out;
+    // 🎯T308: a live turn's arrival time is its timestamp — that is what gives
+    // sidebar bubbles the same 1m/5m labels main gets. opts.now keeps it pure
+    // for tests; the wire's own `when` wins when the server sends one.
+    const arrived = normalizeWhen(event.when) !== undefined
+      ? normalizeWhen(event.when)
+      : (opts && opts.now !== undefined ? normalizeWhen(opts.now) : Date.now());
     if (event.type === 'user') {
       const content = event.message && event.message.content;
       const text = typeof content === 'string' ? content : '';
@@ -747,7 +830,7 @@
         // 🎯T281: one owner submit → one bubble (optimistic then live echo).
         const last = out[out.length - 1];
         if (!isDuplicateInspectUserLine(last, text)) {
-          out.push({ role: 'user', text: text });
+          out.push({ role: 'user', text: text, when: arrived });
         }
       }
       return out;
@@ -765,7 +848,7 @@
         if (last && last.role === 'assistant' && last._stream) {
           last.text = (last.text || '') + text;
         } else {
-          out.push({ role: 'assistant', text: text, _stream: true });
+          out.push({ role: 'assistant', text: text, when: arrived, _stream: true });
         }
       }
       const sr = inspectEventStopReason(event);
@@ -968,14 +1051,14 @@
   function afterSidebarSendOptimistic(lines, text, opts) {
     opts = opts || {};
     const body = String(text == null ? '' : text).trim();
-    const next = (lines || []).map(function (l) {
-      return l ? { role: l.role, text: l.text } : l;
-    });
+    const next = copyInspectLines(lines);
     if (body) {
       // 🎯T281: unwrap-aware consecutive dedupe (same as live echo path).
       const last = next[next.length - 1];
       if (!isDuplicateInspectUserLine(last, body)) {
-        next.push({ role: 'user', text: body });
+        // 🎯T308: own send is a live turn — stamp it so the bubble carries time.
+        const when = opts.now !== undefined ? normalizeWhen(opts.now) : Date.now();
+        next.push({ role: 'user', text: body, when: when });
       }
     }
     return {
@@ -1053,6 +1136,11 @@
     pickAttentionAsideSelection: pickAttentionAsideSelection,
     liveFrameSignalsOwnerAttention: liveFrameSignalsOwnerAttention,
     turnsToLines: turnsToLines,
+    // 🎯T308 one-widget line model: timestamps survive to the renderer
+    normalizeWhen: normalizeWhen,
+    turnWhen: turnWhen,
+    copyInspectLines: copyInspectLines,
+    msgTimeHTML: msgTimeHTML,
     paneModel: paneModel,
     escapeHtml: escapeHtml,
     inspectToMsgRole: inspectToMsgRole,

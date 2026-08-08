@@ -1580,11 +1580,11 @@ function showAsideOpeningWorking(name, openingText) {
     if (!asideWireTurnsCache[name]) asideWireTurnsCache[name] = [];
     const list = asideWireTurnsCache[name];
     if (!list.length || list[list.length - 1].role !== 'user' || list[list.length - 1].text !== text) {
-      list.push({ role: 'user', text: text });
+      // 🎯T308: optimistic owner turn is happening now — stamp it so the
+      // sidebar bubble carries the same .msg-time chrome main gets.
+      list.push({ role: 'user', text: text, when: Date.now() });
     }
-    _agentInspectLines = (list || []).map(function (l) {
-      return { role: l.role, text: l.text };
-    });
+    _agentInspectLines = inspectLinesCopy(list);
   }
   _agentInspectFp = '';
   if (typeof renderAgentInspect === 'function') {
@@ -2588,6 +2588,19 @@ function addTurnItem(cls, text) {
 // document — call layoutMsg after attach (offsetHeight is 0 detached).
 // opts.lazy (🎯T119): shell-only unmeasured placeholder — no markdown paint
 // until first materialization near the viewport (lazy measure).
+//
+// 🎯T308: this is THE bubble constructor — main #messages AND the RHS
+// #agent-inspect-body both build their turns here. Callers vary only by
+// input and two opts:
+//   opts.paint(d, role, text)  — body-policy override (inspect classifies
+//                                user turns differently; assistant still
+//                                lands on the shared paintBody).
+//   opts.timeIfKnown           — omit .msg-time when the turn carries no
+//                                timestamp, instead of stamping "now" on a
+//                                sealed historical turn.
+// Anything that hand-rolls a second `className = 'msg …'` shell is the bug
+// this target exists to kill (T157/T205/T209/T217/T221/T233/T265 each shared
+// a little more paint and left two shells standing).
 function buildMsg(role, text, when, opts) {
   const lazy = !!(opts && opts.lazy);
   const d = document.createElement('div');
@@ -2616,19 +2629,30 @@ function buildMsg(role, text, when, opts) {
   } else {
     // Provisional full paint (no collapse gate) so something shows if layout
     // is deferred; layoutMsg remeasures once connected.
-    paintBody(d, role, d._layoutText);
+    if (opts && typeof opts.paint === 'function') {
+      opts.paint(d, role, d._layoutText); // 🎯T308 caller body policy
+    } else {
+      paintBody(d, role, d._layoutText);
+    }
     d._shellState = (typeof VirtualList !== 'undefined')
       ? VirtualList.SHELL_MATERIAL
       : 'material';
   }
-  const ms = when || Date.now();
-  const ts = document.createElement('div');
-  ts.className = 'msg-time';
-  ts.dataset.ts = String(ms);
-  ts.textContent = relTime(ms);
-  // 🎯T91: absolute local time on hover; relative label stays in chrome.
-  ts.title = absTimeTitle(ms);
-  d.appendChild(ts);
+  // 🎯T308: timeIfKnown callers (inspect) show chrome only for turns that
+  // actually carry a timestamp; live main bubbles keep defaulting to now.
+  const known = (typeof AgentTranscript !== 'undefined' && AgentTranscript.normalizeWhen)
+    ? AgentTranscript.normalizeWhen(when)
+    : (when || undefined);
+  const ms = known !== undefined ? known : ((opts && opts.timeIfKnown) ? null : Date.now());
+  if (ms !== null) {
+    const ts = document.createElement('div');
+    ts.className = 'msg-time';
+    ts.dataset.ts = String(ms);
+    ts.textContent = relTime(ms);
+    // 🎯T91: absolute local time on hover; relative label stays in chrome.
+    ts.title = absTimeTitle(ms);
+    d.appendChild(ts);
+  }
   return d;
 }
 function absTimeTitle(ms) {
@@ -4995,9 +5019,7 @@ function refreshAgentInspectAsideWireMerge() {
   const wire = asideWireLinesFor(selectedAgent);
   if (!wire.length) return;
   // Prefer re-merge of current inspect lines + wire.
-  const cur = (_agentInspectLines || []).map(function (l) {
-    return { role: l.role, text: l.text };
-  });
+  const cur = inspectLinesCopy(_agentInspectLines);
   const merged = (typeof AttentionThreads !== 'undefined' &&
       AttentionThreads.mergeInspectLinesWithAsideWire)
     ? AttentionThreads.mergeInspectLinesWithAsideWire(cur, wire)
@@ -7357,6 +7379,17 @@ let _agentInspectFp = '';
 let _agentInspectLines = [];
 let _agentInspectFollow = null;
 let _agentInspectWorking = false;
+// 🎯T308: every rebuild of the inspect line model goes through here. The
+// hand-rolled `{role, text}` copies this replaces are what dropped the turn
+// timestamp before renderAgentInspect ever saw it, so the sidebar had no
+// .msg-time for the 30s relTime sweeper to update.
+function inspectLinesCopy(lines) {
+  return (typeof AgentTranscript !== 'undefined' && AgentTranscript.copyInspectLines)
+    ? AgentTranscript.copyInspectLines(lines)
+    : (lines || []).map(function (l) {
+        return l ? { role: l.role, text: l.text, when: l.when } : l;
+      });
+}
 // 🎯T251: per-agent sidebar drafts so switching selection does not lose text (T252 sticky).
 const sidebarDraftByAgent = Object.create(null);
 let _sidebarComposerSending = false;
@@ -7578,9 +7611,7 @@ function handleAgentTranscriptWire(m) {
     if (typeof AgentTranscript !== 'undefined' && AgentTranscript.applyInspectLiveFrame) {
       _agentInspectLines = AgentTranscript.applyInspectLiveFrame(_agentInspectLines, m.event);
     }
-    let lines = (_agentInspectLines || []).map(function (l) {
-      return { role: l.role, text: l.text };
-    });
+    let lines = inspectLinesCopy(_agentInspectLines);
     // 🎯T252: terminal assistant stop on aside ⇒ owner attention (user's turn).
     const terminal = typeof AgentTranscript !== 'undefined' &&
         AgentTranscript.liveFrameSignalsOwnerAttention &&
@@ -7597,9 +7628,7 @@ function handleAgentTranscriptWire(m) {
       lines: lines,
       working: !!_agentInspectWorking && !terminal,
     }, selectedAgent);
-    _agentInspectLines = (liveModel.lines || []).map(function (l) {
-      return { role: l.role, text: l.text };
-    });
+    _agentInspectLines = inspectLinesCopy(liveModel.lines);
     renderAgentInspect(liveModel);
     if (terminal) {
       markAsideNeedsAttention(m.name || selectedAgent);
@@ -7618,9 +7647,7 @@ function handleAgentTranscriptWire(m) {
   // 🎯T250: sidebar shows aside content even when process transcript is empty
   // (register-only asides still route via overseer [attention:…] wire).
   model = mergeModelWithAsideWire(model, m.name || selectedAgent);
-  _agentInspectLines = (model.lines || []).map(function (l) {
-    return { role: l.role, text: l.text };
-  });
+  _agentInspectLines = inspectLinesCopy(model.lines);
   // History with assistant turns seals optimistic working chrome (🎯T263).
   const hasAssistant = (_agentInspectLines || []).some(function (l) {
     return l && (l.role === 'assistant' || l.role === 'jevons');
@@ -7691,89 +7718,67 @@ function renderAgentInspect(model) {
     // (inspect-only; main chat paintBody user path stays plain/renderUserText).
     // 🎯T233: harness system-reminders / standing brief / event injects → compact
     // ⋯ nugget chrome (same family as turn-marker), not full user-shaped bubbles.
+    // 🎯T308: the shell, .msg-body and .msg-time all come from buildMsg — the
+    // one bubble constructor main uses. Inspect contributes inputs only:
+    // role, text, the turn's `when`, and a body-policy paint callback.
     const raw = line.text || '';
-    try {
-      if (line.role === 'user' && typeof AgentTranscript !== 'undefined'
-          && typeof AgentTranscript.paintInspectLineBody === 'function') {
-        const painted = AgentTranscript.paintInspectLineBody('user', raw, {
+    let painted = null;
+    if (line.role === 'user' && typeof AgentTranscript !== 'undefined'
+        && typeof AgentTranscript.paintInspectLineBody === 'function') {
+      try {
+        painted = AgentTranscript.paintInspectLineBody('user', raw, {
           parseAssistantMarkdown: (typeof parseAssistantMarkdown === 'function')
             ? parseAssistantMarkdown : undefined,
           renderUserText: (typeof renderUserText === 'function')
             ? renderUserText : undefined,
         });
-        // Compact inject nugget: outer turn-marker HTML (no .msg.user bubble).
-        if (painted && painted.mode === 'nugget' && painted.content) {
-          const wrap = document.createElement('div');
-          wrap.innerHTML = painted.content;
-          const node = wrap.firstChild;
-          if (node) agentInspectBody.appendChild(node);
-          return;
-        }
-        const d = document.createElement('div');
-        d.className = 'msg ' + (painted && painted.msgRole ? painted.msgRole : msgRole);
-        const body = document.createElement('div');
-        body.className = 'msg-body';
-        d.appendChild(body);
-        d._body = body;
-        if (painted && painted.mode === 'html') {
-          body.innerHTML = painted.content;
-          if (typeof decorateBodyLinks === 'function') decorateBodyLinks(body);
-        } else {
-          body.textContent = (painted && painted.content != null) ? painted.content : raw;
-        }
-        agentInspectBody.appendChild(d);
-        return;
-      }
-      const d = document.createElement('div');
-      d.className = 'msg ' + msgRole;
-      const body = document.createElement('div');
-      body.className = 'msg-body';
-      d.appendChild(body);
-      d._body = body;
-      if (typeof paintBody === 'function') {
-        paintBody(d, msgRole, raw);
-      } else if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
-        body.innerHTML = parseAssistantMarkdown(raw);
-        if (typeof decorateBodyLinks === 'function') decorateBodyLinks(body);
-      } else if (msgRole === 'user' && typeof renderUserText === 'function') {
-        body.innerHTML = renderUserText(raw);
-      } else if (msgRole === 'jevons' || msgRole === 'user') {
-        // Last-resort escape (still not textContent for assistant — avoids raw MD look
-        // when marked is absent; escaped HTML is visible as plain).
-        body.textContent = raw;
-      } else {
-        body.textContent = raw;
-      }
-      agentInspectBody.appendChild(d);
-    } catch (paintErr) {
-      // One bad turn must not abort the forEach — keep remaining turns paint-able.
-      try {
-        const d = document.createElement('div');
-        d.className = 'msg ' + msgRole;
-        const body = document.createElement('div');
-        body.className = 'msg-body';
-        d.appendChild(body);
-        if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
-          body.innerHTML = parseAssistantMarkdown(raw);
-        } else if (msgRole === 'user' && typeof parseAssistantMarkdown === 'function'
-            && typeof AgentTranscript !== 'undefined'
-            && AgentTranscript.inspectUserShouldMarkdown
-            && AgentTranscript.inspectUserShouldMarkdown(raw, false)) {
-          body.innerHTML = parseAssistantMarkdown(raw);
-        } else {
-          body.textContent = raw;
-        }
-        agentInspectBody.appendChild(d);
       } catch (_) {
-        const d = document.createElement('div');
-        d.className = 'msg ' + msgRole;
-        const body = document.createElement('div');
-        body.className = 'msg-body';
-        body.textContent = raw;
-        d.appendChild(body);
-        agentInspectBody.appendChild(d);
+        painted = null;
       }
     }
+    // 🎯T233 residual: harness injects stay compact ⋯ nugget chrome (outer
+    // turn-marker HTML), deliberately NOT conversational .msg bubbles.
+    if (painted && painted.mode === 'nugget' && painted.content) {
+      const wrap = document.createElement('div');
+      wrap.innerHTML = painted.content;
+      const node = wrap.firstChild;
+      if (node) agentInspectBody.appendChild(node);
+      return;
+    }
+    const bubbleRole = (painted && painted.msgRole) ? painted.msgRole : msgRole;
+    const d = buildMsg(bubbleRole, raw, line.when, {
+      timeIfKnown: true,
+      paint: function (d, msgRole, text) {
+        // One bad turn must not abort the forEach — keep remaining turns paintable.
+        try {
+          // 🎯T221: inspect-only user policy (injects / MD-shaped user turns).
+          if (msgRole === 'user' && painted) {
+            if (painted.mode === 'html') {
+              d._body.innerHTML = painted.content;
+              if (typeof decorateBodyLinks === 'function') decorateBodyLinks(d._body);
+            } else {
+              d._body.textContent = painted.content != null ? painted.content : text;
+            }
+            return;
+          }
+          // 🎯T217: assistant/jevons takes the shared main paint path
+          // (parseAssistantMarkdown + mermaid/hljs/links) — never textContent.
+          if (typeof paintBody === 'function') {
+            paintBody(d, msgRole, text);
+          } else if (msgRole === 'jevons' && typeof parseAssistantMarkdown === 'function') {
+            d._body.innerHTML = parseAssistantMarkdown(text);
+            if (typeof decorateBodyLinks === 'function') decorateBodyLinks(d._body);
+          } else if (msgRole === 'user' && typeof renderUserText === 'function') {
+            d._body.innerHTML = renderUserText(text);
+          } else {
+            d._body.textContent = text;
+          }
+        } catch (paintErr) {
+          d._body.textContent = text;
+        }
+      },
+    });
+    agentInspectBody.appendChild(d);
   });
   if (typeof decorateBodyLinks === 'function') {
     decorateBodyLinks(agentInspectBody); // 🎯T151 belt-and-suspenders
@@ -7838,9 +7843,7 @@ function loadAgentTranscript(name, opts) {
       if (payload && payload.error && model.empty) {
         model.error = '';
       }
-      _agentInspectLines = (model.lines || []).map(function (l) {
-        return { role: l.role, text: l.text };
-      });
+      _agentInspectLines = inspectLinesCopy(model.lines);
       renderAgentInspect(model);
       document.querySelectorAll('.agent-node').forEach(n =>
         n.classList.toggle('selected', n.dataset.agent === name));
@@ -8563,7 +8566,7 @@ function sendSidebarComposer() {
           }
         } else {
           _agentInspectLines = (_agentInspectLines || []).concat([
-            { role: 'user', text: req.body.text },
+            { role: 'user', text: req.body.text, when: Date.now() }, // 🎯T308
           ]);
           _agentInspectWorking = true;
           _agentInspectFp = '';
@@ -8572,9 +8575,7 @@ function sendSidebarComposer() {
               title: selectedAgent,
               empty: false,
               error: '',
-              lines: (_agentInspectLines || []).map(function (l) {
-                return { role: l.role, text: l.text };
-              }),
+              lines: inspectLinesCopy(_agentInspectLines),
               working: true,
             });
           }
@@ -9052,13 +9053,15 @@ transport.onVoiceEvent = msg => {
   } else if (msg.type === 'error') {
     console.error('voice error:', msg.error);
     voiceStatusText.textContent = 'error';
-    const d = document.createElement('div');
-    d.className = 'msg jevons';
+    // 🎯T308: even the voice error notice is a conversational bubble — one
+    // constructor, red chrome layered on top (no second div.msg shell).
+    const d = buildMsg('jevons', String(msg.error == null ? '' : msg.error), Date.now(), {
+      paint: function (el, role, text) { el._body.textContent = text; },
+    });
     d.style.color = 'var(--red)';
     d.style.border = '1px solid var(--red)';
     d.style.borderRadius = 'var(--radius)';
     d.style.padding = '10px 16px';
-    d.textContent = msg.error;
     msgs.appendChild(d);
     scrollDown();
     stopVoice();

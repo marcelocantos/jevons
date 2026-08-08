@@ -189,7 +189,10 @@ test('T205 renderAgentInspect uses paintBody + .msg (not .ai-turn log panel)', f
     body.indexOf("className = 'msg '") >= 0 || /className\s*=\s*['"]msg\s/.test(body) ||
     body.indexOf("'msg '") >= 0 || body.indexOf('"msg "') >= 0 || body.indexOf('msg ') >= 0,
     'must use .msg bubble class');
-  assert.ok(body.indexOf('msg-body') >= 0, 'must use .msg-body');
+  // 🎯T308 supersedes "renderAgentInspect builds .msg-body itself": the shell,
+  // .msg-body and .msg-time now all come from the shared buildMsg constructor.
+  assert.ok(body.indexOf('buildMsg(') >= 0,
+    'bubble shell comes from the shared buildMsg constructor (T308)');
   assert.ok(body.indexOf('ai-turn') < 0, 'must not build .ai-turn log-panel chrome');
   assert.ok(body.indexOf('applyAfterUpdate') >= 0 || body.indexOf('shouldPin') >= 0,
     'must apply stick/free after update (not unconditional pin only)');
