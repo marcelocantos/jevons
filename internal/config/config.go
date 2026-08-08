@@ -212,6 +212,13 @@ func (p ProviderDecl) LaunchArgv() []string { return p.ParamStringSlice("argv") 
 // ConnectURL is params.url for transport=connect.
 func (p ProviderDecl) ConnectURL() string { return p.ParamString("url") }
 
+// MCPURL is params.mcp_url — the provider's declared MCP endpoint, which
+// the hub MCP client aggregates into jevonsd's /mcp surface (🎯T27.4).
+// Valid for both transports: a launched provider serves MCP on a port it
+// owns; a connect provider serves it beside its main endpoint. Empty
+// means the provider contributes no MCP tools.
+func (p ProviderDecl) MCPURL() string { return p.ParamString("mcp_url") }
+
 // ValidatePortfolios checks Portfolios entries (🎯T200). Empty list is
 // valid (calm missing). Hard errors: missing id, duplicate ids, empty
 // member path strings. Empty members on a portfolio is allowed (calm).

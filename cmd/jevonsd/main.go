@@ -309,8 +309,8 @@ func main() {
 			)
 		}
 	}
-	// providerCfg retained for process lifetime (T27.3 will wire reconcile/reload).
-	_ = providerCfg
+	// providerCfg feeds the 🎯T27.3/T27.4 lifecycle + aggregator wiring
+	// below, once the MCP server (the aggregation sink) exists.
 
 	// 🎯T8.3 execution safety (doit Engine: L1/L2/L3, audit, capabilities).
 	// L3 stays off by default so boot is hermetic without an LLM; L1/L2 +
@@ -356,6 +356,34 @@ func main() {
 	}
 	if doitEng != nil {
 		mcpSrv.SetDoitEngine(doitEng)
+	}
+
+	// 🎯T27.3/🎯T27.4: provider supervisor + MCP tool aggregation. The
+	// lifecycle converges processes/attachments on the desired set; the
+	// aggregator mirrors each Running provider's declared MCP endpoint
+	// (params.mcp_url) into the /mcp surface, namespaced and attributed.
+	// ConfigManager.Reload (admin surface pending) re-converges both.
+	if providerCfg != nil {
+		provAgg := provider.NewAggregator(provider.AggregatorArgs{Sink: mcpSrv})
+		provLC := provider.NewLifecycle(provider.LifecycleArgs{OnPhase: provAgg.HandlePhase})
+		provAgg.SetDecls(providerCfg.Desired())
+		providerCfg.SetOnChange(func(decls []config.ProviderDecl) {
+			provAgg.SetDecls(decls)
+			if err := provLC.Reconcile(decls); err != nil {
+				slog.Error("provider reconcile after config reload failed", "err", err)
+			}
+		})
+		if err := provLC.Reconcile(providerCfg.Desired()); err != nil {
+			slog.Error("provider reconcile failed", "err", err)
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := provLC.Shutdown(ctx); err != nil {
+				slog.Warn("provider lifecycle shutdown", "err", err)
+			}
+			provAgg.Shutdown()
+		}()
 	}
 
 	// 🎯T335: writ confinement substrate (CLI) — seatbelt + egress for high-risk exec.
