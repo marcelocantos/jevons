@@ -1225,12 +1225,129 @@ test('T329 applyChatEvents: non-boundary user does not re-arm working chrome', (
   assert.strictEqual(state.working, true, 'still mid-turn after inject');
 });
 
+// ── 🎯T362 leaked protocol frames never become owner bubbles ─────
+
+const UX_STATE_FRAME = '{"type":"ux_state","composer_blocked":false}';
+const UX_STATE_BLOCKED =
+  '{"type":"ux_state","composer_blocked":true,"reason":"overseer_down"}';
+
+function userFrame(text) {
+  return { type: 'user', message: { role: 'user', content: text } };
+}
+
+test('T362 isProtocolControlFrameText: frames yes, owner prose no', () => {
+  [
+    UX_STATE_FRAME,
+    UX_STATE_BLOCKED,
+    '  ' + UX_STATE_FRAME + '  ',
+    '{"type":"ping"}',
+    '{"type":"interrupt"}',
+    '{"turns":2,"type":"rewind"}',
+    '{"name":"jv-x","type":"inspect_subscribe"}',
+  ].forEach((f) => {
+    assert.strictEqual(ChatEvents.isProtocolControlFrameText(f), true, f);
+  });
+  [
+    '',
+    'Fix the ux_state leak please.',
+    'Look at {"type":"ux_state"} in my chat and kill it.',
+    '{"composer_blocked":false}',
+    '{"type":""}',
+    '{"type":42}',
+    '["type","ux_state"]',
+    '{"type":"ux_state"',
+  ].forEach((p) => {
+    assert.strictEqual(ChatEvents.isProtocolControlFrameText(p), false, p);
+  });
+});
+
+test('T362 live wire: ux_state frame paints no .msg.user bubble', () => {
+  let lines = [];
+  lines = ChatEvents.applyLiveDisplayFrame(lines, userFrame(UX_STATE_FRAME));
+  lines = ChatEvents.applyLiveDisplayFrame(lines, userFrame(UX_STATE_BLOCKED));
+  assert.deepStrictEqual(lines, [], 'control frames must not paint');
+});
+
+test('T362 live wire: leaked frame does not seal an open jevons bubble', () => {
+  let lines = [];
+  const sid = 't362-stream';
+  lines = ChatEvents.applyLiveDisplayFrame(lines, {
+    type: 'assistant',
+    stream_id: sid,
+    message: { content: [{ type: 'text', text: 'Working on ' }] },
+  });
+  lines = ChatEvents.applyLiveDisplayFrame(lines, userFrame(UX_STATE_FRAME));
+  lines = ChatEvents.applyLiveDisplayFrame(lines, {
+    type: 'assistant',
+    stream_id: sid,
+    message: { content: [{ type: 'text', text: 'the leak.' }] },
+  });
+  const users = lines.filter((l) => l.role === 'user');
+  assert.strictEqual(users.length, 0, 'no owner bubble from a frame');
+  const asst = lines.filter((l) => l.role === 'assistant');
+  assert.strictEqual(asst.length, 1, 'frame must not split the stream');
+  assert.strictEqual(asst[0].text, 'Working on the leak.');
+});
+
+test('T362 hydrate: journaled ux_state lines never rehydrate as owner turns', () => {
+  // The frames leaked into the durable journal before the server filtered
+  // them, so reload is the path the owner actually saw them on.
+  const lines = ChatEvents.coalesceLiveDisplayFrames([
+    JSON.stringify(userFrame('kill the ux_state leak')),
+    JSON.stringify(userFrame(UX_STATE_FRAME)),
+    JSON.stringify(userFrame(UX_STATE_BLOCKED)),
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'On it.' }] },
+    }),
+  ]);
+  const users = lines.filter((l) => l.role === 'user');
+  assert.strictEqual(users.length, 1, 'only the real owner turn survives');
+  assert.strictEqual(users[0].text, 'kill the ux_state leak');
+  assert.ok(
+    !lines.some((l) => /ux_state"\s*,/.test(String(l.text))),
+    'no rehydrated frame body in any display line',
+  );
+});
+
+test('T362 turn state: a frame is not an owner turn and re-arms nothing', () => {
+  let state = ChatEvents.createTurnState();
+  state = ChatEvents.applyChatEvent(state, userFrame(UX_STATE_FRAME));
+  assert.strictEqual(state.userTexts.length, 0, 'not counted as an owner turn');
+  assert.strictEqual(state.working, false, 'must not re-arm working chrome');
+
+  // Real prose still arms it — the gate is not swallowing owner turns.
+  state = ChatEvents.applyChatEvent(state, userFrame('real owner prose'));
+  assert.deepStrictEqual(state.userTexts, ['real owner prose']);
+  assert.strictEqual(state.working, true);
+});
+
+test('T362 send + soft reconnect never paint a control frame', () => {
+  assert.strictEqual(
+    ChatEvents.planOptimisticMainUserPaint([], UX_STATE_FRAME).paint,
+    false,
+  );
+  assert.strictEqual(
+    ChatEvents.planOptimisticMainUserPaint([], UX_STATE_FRAME).reason,
+    'protocol-frame',
+  );
+  assert.strictEqual(
+    ChatEvents.planOptimisticMainUserPaint([], 'ship it').paint,
+    true,
+  );
+  const plan = ChatEvents.planRepaintAfterSoftReconnect({
+    paintedUserTexts: [],
+    pendingTexts: [UX_STATE_FRAME, 'ship it'],
+  });
+  assert.deepStrictEqual(plan.repaint, ['ship it']);
+});
+
 // ── Go package tests ────────────────────────────────────────────
 
 test('go chat wire + roundtrip tests pass', () => {
   const r = spawnSync('go', [
     'test', './internal/server/', '-count=1',
-    '-run', 'TestChat|TestDeliver|TestHandleAgent|TestUIContract|TestMultiChunk',
+    '-run', 'TestChat|TestDeliver|TestHandleAgent|TestUIContract|TestMultiChunk|TestUXState|TestNonControlMessages',
   ], {
     cwd: path.join(__dirname, '..', '..'),
     encoding: 'utf8',

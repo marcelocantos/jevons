@@ -79,9 +79,34 @@
    * @param {string|null|undefined} text
    * @returns {boolean}
    */
+  /**
+   * True when a type=user body is really a client protocol control frame —
+   * a bare JSON object with a non-empty string "type" ({"type":"ux_state",…},
+   * ping / rewind / inspect_* wires) (🎯T362).
+   *
+   * These leaked into the owner journal before the server filtered them, so
+   * they arrive on both the live wire and history hydrate. They are machine
+   * wire, never an owner turn: never paint one as a user bubble, never let one
+   * seal a stream. Deliberately generic on shape, not an allowlist of names —
+   * the next control frame the client learns to send must not reopen the hole.
+   *
+   * @param {string|null|undefined} text
+   * @returns {boolean}
+   */
+  function isProtocolControlFrameText(text) {
+    const t = String(text == null ? '' : text).trim();
+    if (t.length < 2 || t[0] !== '{' || t[t.length - 1] !== '}') return false;
+    let obj;
+    try { obj = JSON.parse(t); } catch (_) { return false; }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+    return typeof obj.type === 'string' && obj.type.trim() !== '';
+  }
+
   function isNonBoundaryUserText(text) {
     const raw = text == null ? '' : String(text);
     if (!raw.trim()) return false;
+    // 🎯T362: a leaked protocol frame is never an owner turn boundary.
+    if (isProtocolControlFrameText(raw)) return true;
     // Unwrap a single outer <user_query> so inject checks see inner body.
     let display = raw;
     const uq = raw.match(
@@ -294,6 +319,9 @@
     if (m.type === 'user') {
       const content = m.message && m.message.content;
       if (typeof content === 'string' && content) {
+        // 🎯T362: leaked protocol control frames are not owner turns either —
+        // they must not re-arm working chrome or count as an owner send.
+        if (isProtocolControlFrameText(content)) return state;
         // 🎯T329: harness inject / system-reminder is not an owner turn — do
         // not count, do not re-arm working chrome, never seals streams.
         if (isNonBoundaryUserText(content)) return state;
@@ -566,6 +594,12 @@
   function planOptimisticMainUserPaint(existing, text, isAsideWire) {
     const t = String(text == null ? '' : text).trim();
     if (!t) return { paint: false, text: '', reason: 'empty' };
+    // 🎯T362: a protocol control frame is never an owner bubble, on send or
+    // anywhere else. The wire and the composer share this path, so the send
+    // side is gated here rather than trusting every caller to check.
+    if (isProtocolControlFrameText(t)) {
+      return { paint: false, text: t, reason: 'protocol-frame' };
+    }
     if (typeof isAsideWire === 'function' && isAsideWire(t)) {
       return { paint: false, text: t, reason: 'aside-wire' };
     }
@@ -631,6 +665,8 @@
     for (let j = 0; j < pending.length; j++) {
       const t = _entryText(pending[j]).trim();
       if (!t) continue;
+      // 🎯T362: never resurrect a leaked control frame as an owner bubble.
+      if (isProtocolControlFrameText(t)) continue;
       if (typeof isAside === 'function' && isAside(t)) continue;
       if (have[t]) continue;
       repaint.push(t);
@@ -804,6 +840,10 @@
       const content = event.message && event.message.content;
       const text = typeof content === 'string' ? content : '';
       if (!text) return out;
+      // 🎯T362: a leaked protocol control frame is machine wire — never paint
+      // it as an owner bubble on the live wire or on history hydrate, and
+      // never let it seal an open assistant stream.
+      if (isProtocolControlFrameText(text)) return out;
       const last = out[out.length - 1];
       // Dedupe consecutive owner echo (optimistic + WS); also consecutive inject.
       if (last && last.role === 'user') {
@@ -948,6 +988,8 @@
     hasAssistantText,
     isSilentAssistantText,
     isNonBoundaryUserText,
+    // 🎯T362 leaked-protocol-frame gate (shared by main paint + hydrate)
+    isProtocolControlFrameText,
     streamIdOf,
     joinAssistantSegments,
     appendAssistantStream,

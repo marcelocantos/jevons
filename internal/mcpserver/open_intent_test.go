@@ -325,3 +325,101 @@ func TestOwnerIntentAnsweredWithProductEvidence(t *testing.T) {
 		t.Fatal("unrelated evidence must not close a different complaint")
 	}
 }
+
+// 🎯T362: client protocol control frames that leaked into the owner chatlog
+// (reportComposerState sent ux_state on /ws/chat before the server filtered
+// it) must never be recovered as the open owner instruction. Before this, every
+// restart re-fired {"type":"ux_state","composer_blocked":false} as the mission.
+func TestExtractOpenOwnerIntentIgnoresProtocolJSONTurns(t *testing.T) {
+	t.Parallel()
+
+	// A chatlog of nothing but leaked frames has no owner work in it.
+	only := ExtractOpenOwnerIntent([]OwnerIntentTurn{
+		{Text: `{"type":"ux_state","composer_blocked":false}`},
+		{Text: `{"type":"ux_state","composer_blocked":true,"reason":"overseer_down"}`},
+		{Text: `{"type":"ping"}`},
+	})
+	if only.Recoverable() {
+		t.Fatalf("protocol frames must not be recoverable owner intent: %+v", only)
+	}
+	if only.Residual != ResidualOnlyHarness {
+		t.Fatalf("residual=%q want %q", only.Residual, ResidualOnlyHarness)
+	}
+
+	// A leaked frame arriving after real owner work must not displace it.
+	got := ExtractOpenOwnerIntent([]OwnerIntentTurn{
+		{Text: "Shove the leader research into life-and-work-org-map.md now."},
+		{Text: `{"type":"ux_state","composer_blocked":false}`},
+	})
+	if !got.Recoverable() {
+		t.Fatalf("owner instruction lost behind a protocol frame: %+v", got)
+	}
+	if !strings.Contains(got.Text, "life-and-work-org-map") {
+		t.Fatalf("got %q", got.Text)
+	}
+
+	// Owner prose that merely mentions a frame is still owner prose.
+	prose := ExtractOpenOwnerIntent([]OwnerIntentTurn{
+		{Text: `Please stop {"type":"ux_state","composer_blocked":false} appearing as my chat turns.`},
+	})
+	if !prose.Recoverable() {
+		t.Fatalf("owner prose quoting a frame must stay recoverable: %+v", prose)
+	}
+}
+
+func TestIsOpenIntentProtocolJSON(t *testing.T) {
+	t.Parallel()
+	frames := []string{
+		`{"type":"ux_state","composer_blocked":false}`,
+		`  {"type":"ux_state","composer_blocked":true,"reason":"overseer_down"}  `,
+		`{"type":"ping"}`,
+		`{"type":"interrupt"}`,
+		`{"turns":2,"type":"rewind"}`,
+		`{"name":"jv-x","type":"inspect_subscribe"}`,
+	}
+	for _, f := range frames {
+		if !isOpenIntentProtocolJSON(f) {
+			t.Errorf("want protocol frame: %s", f)
+		}
+	}
+	prose := []string{
+		"",
+		"Fix the ux_state leak please.",
+		`Look at {"type":"ux_state"} in the log and fix it.`,
+		`{"composer_blocked":false}`,
+		`{"type":""}`,
+		`{"type":42}`,
+		`["type","ux_state"]`,
+		`{"type":"ux_state"`,
+	}
+	for _, p := range prose {
+		if isOpenIntentProtocolJSON(p) {
+			t.Errorf("want NOT a protocol frame: %q", p)
+		}
+	}
+}
+
+// End-to-end through the durable chatlog reader: a journal whose only user
+// turns are leaked frames yields a residual, not a resume payload.
+func TestLoadOpenOwnerIntentIgnoresLeakedUXStateChatlog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	chatDir := filepath.Join(dir, "chatlog")
+	if err := os.MkdirAll(chatDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Join([]string{
+		`{"type":"user","timestamp":"2026-08-09T10:00:00Z","message":{"role":"user","content":"{\"type\":\"ux_state\",\"composer_blocked\":false}"}}`,
+		`{"type":"user","timestamp":"2026-08-09T10:01:00Z","message":{"role":"user","content":"{\"type\":\"ux_state\",\"composer_blocked\":true,\"reason\":\"overseer_down\"}"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(chatDir, "jevons.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadOpenOwnerIntent(dir, "jevons")
+	if got.Recoverable() {
+		t.Fatalf("leaked ux_state chatlog must not resume: %+v", got)
+	}
+	if got.Residual == "" {
+		t.Fatal("want a named residual for a frames-only chatlog")
+	}
+}

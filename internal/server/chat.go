@@ -958,6 +958,116 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(agents)
 }
 
+// handleChatControlFrame consumes a client→server protocol frame arriving on
+// /ws/chat and reports whether msg was one.
+//
+// Control frames are machine wire, never an owner turn. A frame that falls
+// through to the owner-turn path below is echoed, journaled as a durable chat
+// bubble, and delivered to the overseer — which is exactly how literal
+// {"type":"ux_state","composer_blocked":false} ended up in the owner's main
+// chat (🎯T362). It lives as its own method so that boundary is decidable
+// without a live overseer process.
+//
+// conn may be nil for frames that never write back (ux_state); every frame
+// that answers the client dereferences it.
+func (s *Server) handleChatControlFrame(ctx context.Context, conn *websocket.Conn, ch chan string, msg string) bool {
+	// Heartbeat ping from the resilient browser transport. Echo
+	// a pong so the watchdog stays quiet; do NOT forward to
+	// Claude (it would be parsed as a chat turn).
+	if msg == `{"type":"ping"}` {
+		// 🎯T355: a ticking client is the level evidence that the owner
+		// can still drive the UI; a frozen main thread stops pinging.
+		s.NoteOwnerUIHeartbeat()
+		writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_ = conn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"pong"}`))
+		cancel()
+		return true
+	}
+	// Interrupt control frame (sent by the client on Esc). A literal
+	// "stop" is NOT special — it's a normal thing to say to Jevons.
+	// Use the CURRENT process, not the one captured at connect, so a
+	// rewind swap mid-connection is transparent.
+	if msg == `{"type":"interrupt"}` {
+		slog.Info("chat: interrupt")
+		if cur := s.CurrentProcess(); cur != nil {
+			if err := cur.Interrupt(); err != nil {
+				slog.Error("chat: interrupt failed", "err", err)
+				return true
+			}
+		}
+		s.settleCancel()
+		return true
+	}
+
+	// Control frames are JSON objects with a "type" field. Match on the
+	// unmarshalled type — never HasPrefix on key order (Go map marshal and
+	// probes may emit {"name":…,"type":"inspect_subscribe"} which must not
+	// fall through into owner chat / overseer as a user turn) (🎯T209).
+	if !strings.HasPrefix(msg, "{") {
+		return false
+	}
+	var ctl struct {
+		Type            string `json:"type"`
+		Name            string `json:"name"`
+		Turns           int    `json:"turns"`
+		ComposerBlocked bool   `json:"composer_blocked"`
+		Reason          string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(msg), &ctl); err != nil || ctl.Type == "" {
+		return false
+	}
+	switch ctl.Type {
+	case "ux_state":
+		// 🎯T361: the client reports whether the owner can actually submit.
+		// Heartbeats only prove the page is ticking — a live tab with a
+		// refusing composer is exactly the UX degrade this level observes.
+		s.NoteOwnerComposerBlocked(ctl.ComposerBlocked, ctl.Reason)
+		return true
+	case "rewind":
+		// Roll conversation back N user turns; tell clients to trim.
+		slog.Info("chat: rewind", "turns", ctl.Turns)
+		if err := s.RewindOverseer(ctl.Turns); err != nil {
+			slog.Error("chat: rewind failed", "err", err)
+			return true
+		}
+		s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
+		return true
+	case "inspect_subscribe", "inspect_unsubscribe":
+		// 🎯T209: RHS agent inspect multiplex on /ws/chat.
+		name := strings.TrimSpace(ctl.Name)
+		if ctl.Type == "inspect_unsubscribe" || name == "" {
+			s.setInspectSub(ch, "")
+			slog.Info("chat: inspect unsubscribe")
+			return true
+		}
+		s.setInspectSub(ch, name)
+		slog.Info("chat: inspect subscribe", "name", name)
+		if line, ok := s.marshalAgentTranscriptHistory(name); ok {
+			writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			_ = conn.Write(writeCtx, websocket.MessageText, []byte(line))
+			cancel()
+		} else {
+			payload, _ := json.Marshal(map[string]any{
+				"type":  "agent_transcript",
+				"kind":  inspectKindHistory,
+				"name":  name,
+				"turns": []any{},
+				"empty": true,
+				"error": "agent not found",
+			})
+			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			_ = conn.Write(writeCtx, websocket.MessageText, payload)
+			cancel()
+		}
+		return true
+	}
+	// An unrecognised typed frame is NOT swallowed: the owner may legitimately
+	// paste JSON into chat, and a silent drop would be a vanished turn. It
+	// falls through to the owner-turn path; the client-side paint filter
+	// (🎯T362) is what keeps a *leaked* frame out of the bubble stream.
+	return false
+}
+
 // handleChat is a direct WebSocket ↔ Claude PTY bridge.
 // Client sends plain text messages, server sends raw JSONL lines.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -1150,94 +1260,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		if msg == "" {
 			continue
 		}
-		// Heartbeat ping from the resilient browser transport. Echo
-		// a pong so the watchdog stays quiet; do NOT forward to
-		// Claude (it would be parsed as a chat turn).
-		if msg == `{"type":"ping"}` {
-			// 🎯T355: a ticking client is the level evidence that the owner
-			// can still drive the UI; a frozen main thread stops pinging.
-			s.NoteOwnerUIHeartbeat()
-			writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			_ = conn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"pong"}`))
-			cancel()
+		if s.handleChatControlFrame(ctx, conn, ch, msg) {
 			continue
-		}
-		// Interrupt control frame (sent by the client on Esc). A literal
-		// "stop" is NOT special — it's a normal thing to say to Jevons.
-		// Use the CURRENT process, not the one captured at connect, so a
-		// rewind swap mid-connection is transparent.
-		if msg == `{"type":"interrupt"}` {
-			slog.Info("chat: interrupt")
-			if cur := s.CurrentProcess(); cur != nil {
-				if err := cur.Interrupt(); err != nil {
-					slog.Error("chat: interrupt failed", "err", err)
-					continue
-				}
-			}
-			s.settleCancel()
-			continue
-		}
-
-		// Control frames are JSON objects with a "type" field. Match on the
-		// unmarshalled type — never HasPrefix on key order (Go map marshal and
-		// probes may emit {"name":…,"type":"inspect_subscribe"} which must not
-		// fall through into owner chat / overseer as a user turn) (🎯T209).
-		if strings.HasPrefix(msg, "{") {
-			var ctl struct {
-				Type            string `json:"type"`
-				Name            string `json:"name"`
-				Turns           int    `json:"turns"`
-				ComposerBlocked bool   `json:"composer_blocked"`
-				Reason          string `json:"reason"`
-			}
-			if err := json.Unmarshal([]byte(msg), &ctl); err == nil && ctl.Type != "" {
-				switch ctl.Type {
-				case "ux_state":
-					// 🎯T361: the client reports whether the owner can
-					// actually submit. Heartbeats only prove the page is
-					// ticking — a live tab with a refusing composer is
-					// exactly the UX degrade this level observes.
-					s.NoteOwnerComposerBlocked(ctl.ComposerBlocked, ctl.Reason)
-					continue
-				case "rewind":
-					// Roll conversation back N user turns; tell clients to trim.
-					slog.Info("chat: rewind", "turns", ctl.Turns)
-					if err := s.RewindOverseer(ctl.Turns); err != nil {
-						slog.Error("chat: rewind failed", "err", err)
-						continue
-					}
-					s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
-					continue
-				case "inspect_subscribe", "inspect_unsubscribe":
-					// 🎯T209: RHS agent inspect multiplex on /ws/chat.
-					name := strings.TrimSpace(ctl.Name)
-					if ctl.Type == "inspect_unsubscribe" || name == "" {
-						s.setInspectSub(ch, "")
-						slog.Info("chat: inspect unsubscribe")
-						continue
-					}
-					s.setInspectSub(ch, name)
-					slog.Info("chat: inspect subscribe", "name", name)
-					if line, ok := s.marshalAgentTranscriptHistory(name); ok {
-						writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-						_ = conn.Write(writeCtx, websocket.MessageText, []byte(line))
-						cancel()
-					} else {
-						payload, _ := json.Marshal(map[string]any{
-							"type":  "agent_transcript",
-							"kind":  inspectKindHistory,
-							"name":  name,
-							"turns": []any{},
-							"empty": true,
-							"error": "agent not found",
-						})
-						writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-						_ = conn.Write(writeCtx, websocket.MessageText, payload)
-						cancel()
-					}
-					continue
-				}
-			}
 		}
 
 		slog.Info("chat: received", "msg", msg)

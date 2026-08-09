@@ -779,6 +779,13 @@ func isOpenIntentHarness(text string) bool {
 	if t == "" {
 		return true
 	}
+	// 🎯T362: client protocol control frames ({"type":"ux_state",…}) that
+	// leaked into the owner chatlog are machine wire, never an instruction.
+	// Resuming one re-fires composer telemetry as the open mission after
+	// every restart — the exact spam this filter stops.
+	if isOpenIntentProtocolJSON(t) {
+		return true
+	}
 	if strings.HasPrefix(t, "[Daemon restart") ||
 		strings.HasPrefix(t, "[Jevons fleet standing brief") ||
 		strings.HasPrefix(t, "[event:") {
@@ -791,6 +798,31 @@ func isOpenIntentHarness(text string) bool {
 		return true
 	}
 	return false
+}
+
+// isOpenIntentProtocolJSON reports whether a chatlog user turn is really a
+// protocol control frame rather than owner prose (🎯T362): a bare JSON object
+// carrying a non-empty string "type" (ux_state, ping, rewind, inspect_*, …).
+// Deliberately generic — the next control frame the client learns to send must
+// not be able to reopen this hole before the server-side filter catches up.
+func isOpenIntentProtocolJSON(text string) bool {
+	t := strings.TrimSpace(text)
+	if len(t) < 2 || t[0] != '{' || t[len(t)-1] != '}' {
+		return false
+	}
+	var probe map[string]json.RawMessage
+	if json.Unmarshal([]byte(t), &probe) != nil {
+		return false
+	}
+	raw, ok := probe["type"]
+	if !ok {
+		return false
+	}
+	var typ string
+	if json.Unmarshal(raw, &typ) != nil {
+		return false
+	}
+	return strings.TrimSpace(typ) != ""
 }
 
 // isOpenIntentRestartNudge skips owner messages that are pure bounce re-prompts
