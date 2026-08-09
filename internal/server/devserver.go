@@ -54,7 +54,16 @@ func RegisterUIRoutes(mux *http.ServeMux, dir string) *DevServer {
 	slog.Info("serving embedded web UI (no on-disk web/)", "checked", dir)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		noCache(w)
-		http.ServeFileFS(w, r, web.FS, "index.html")
+		raw, err := web.FS.ReadFile("index.html")
+		if err != nil {
+			slog.Error("embedded index.html unreadable", "err", err)
+			http.Error(w, "embedded index.html unreadable", http.StatusInternalServerError)
+			return
+		}
+		serveGuardedIndex(w, raw, "embedded", func(ref string) bool {
+			_, err := fs.Stat(web.FS, ref)
+			return err == nil
+		})
 	})
 	scriptsFS, err := fs.Sub(web.FS, "scripts")
 	if err != nil {
@@ -77,7 +86,19 @@ func (ds *DevServer) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		noCache(w)
-		http.ServeFile(w, r, filepath.Join(ds.dir, "index.html"))
+		raw, err := os.ReadFile(filepath.Join(ds.dir, "index.html"))
+		if err != nil {
+			// Loud: the daily cockpit has no index to serve. Silence here
+			// is what 🎯T374 is about.
+			slog.Error("cockpit index.html unreadable", "dir", ds.dir, "err", err)
+			http.Error(w, "cockpit index.html unreadable: "+err.Error(),
+				http.StatusInternalServerError)
+			return
+		}
+		serveGuardedIndex(w, raw, ds.dir, func(ref string) bool {
+			st, err := os.Stat(filepath.Join(ds.dir, filepath.FromSlash(ref)))
+			return err == nil && !st.IsDir()
+		})
 	})
 	// Serve static assets under /scripts/. no-cache on every response so a
 	// jevonsd restart with new assets is picked up by the next page load
