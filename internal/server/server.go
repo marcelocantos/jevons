@@ -434,6 +434,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/ideas/{id}", s.handleTriageIdea)              // 🎯T325.3: triage ceremony
 	mux.HandleFunc("POST /api/ideas/{id}/triage", s.handleTriageIdea)        // alias for clients without PATCH
 	mux.HandleFunc("GET /api/rsi/dispositions", s.handleRSIDispositions)     // 🎯T354: owner-visible coach judgments
+	mux.HandleFunc("GET /api/research/notes", s.handleResearchNotes)         // 🎯T356: durable research notes
+	mux.HandleFunc("GET /api/research/notes/{id}", s.handleResearchNote)     // 🎯T356: one note with revisions
 	mux.HandleFunc("GET /api/security/status", s.handleSecurityStatus)       // 🎯T335
 	mux.HandleFunc("POST /api/security/confined-exec", s.handleConfinedExec) // 🎯T335 writ vertical
 	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)            // 🎯T200: domain portfolio groups

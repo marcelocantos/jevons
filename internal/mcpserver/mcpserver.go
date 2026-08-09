@@ -29,6 +29,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/workers"
@@ -176,6 +177,11 @@ type Server struct {
 	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.
 	ideaStateDir string
+
+	// research is the ambient research staff cycle (🎯T356): periodic context
+	// refresh plus async feed triggers, writing durable versioned notes.
+	// Nil until SetResearchAgent.
+	research *research.Agent
 }
 
 // TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).

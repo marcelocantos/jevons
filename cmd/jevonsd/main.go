@@ -36,6 +36,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/provider"
+	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/targetfile"
@@ -632,6 +633,10 @@ func main() {
 	// Residual 🎯T92 mint remains opt-in (JEVONS_RSI_MINT / DEEPER).
 	rsiCoach := startAmbientRSICoach(ctx, cfg, mcpSrv)
 	rsiLoop := startAmbientRSIMint(ctx, cfg, mcpSrv)
+
+	// 🎯T356 ambient research: periodic context refresh + async feed triggers,
+	// writing durable versioned notes and briefing the overseer.
+	startAmbientResearch(ctx, cfg, mcpSrv)
 
 	// Process-as-cache GC: periodically stop idle spawned threads'
 	// processes (resumably) to free resources. The threads persist and
@@ -1487,6 +1492,76 @@ func startAmbientRSICoach(ctx context.Context, cfg config.Config, mcpSrv *mcpser
 		"ledger", "state_dir/rsi/judged.json",
 	)
 	return coach
+}
+
+// startAmbientResearch wires the 🎯T356 standing research cycle: periodic
+// exploration of the surrounding context (this repo, sibling repos in the same
+// org root, the frontier, the eventlog, sessions) plus an async feed trigger,
+// folded into durable versioned notes under state_dir/research.
+//
+// Feeds ship off: the owner subscribes explicitly with
+// jevons_research_configure, and only subscribed hosts are ever fetched.
+//
+// Env:
+//
+//	JEVONS_RESEARCH=0        — disable the schedule (MCP tools stay registered)
+//	JEVONS_RESEARCH_INTERVAL — duration (default 90m); "0" disables the ticker
+func startAmbientResearch(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *research.Agent {
+	interval := time.Duration(0) // 0 = follow durable config
+	if v := strings.TrimSpace(os.Getenv("JEVONS_RESEARCH_INTERVAL")); v != "" {
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			slog.Warn("JEVONS_RESEARCH_INTERVAL invalid; using config", "value", v)
+		}
+	}
+	// Sibling repositories live beside this one under the same org root.
+	var relatedRoots []string
+	if wd := strings.TrimSpace(cfg.WorkDir); wd != "" {
+		if abs, err := filepath.Abs(wd); err == nil {
+			relatedRoots = append(relatedRoots, filepath.Dir(abs))
+		}
+	}
+	agent, err := research.New(research.Args{
+		StateDir:     cfg.StateDir,
+		Workdir:      cfg.WorkDir,
+		RelatedRoots: relatedRoots,
+		EventLogPath: eventlog.DefaultPath(cfg.StateDir),
+		SessionsDir:  strings.TrimSpace(cfg.SessionsDir),
+		Deliverer:    mcpSrv.NewOverseerBriefDeliverer(cfg.OverseerName),
+		Interval:     interval,
+	})
+	if err != nil {
+		slog.Warn("ambient research disabled", "err", err)
+		return nil
+	}
+	// Ensure a durable default config exists as the overseer retune surface.
+	if _, err := os.Stat(research.ConfigPath(cfg.StateDir)); os.IsNotExist(err) {
+		def := research.DefaultConfig()
+		if name := strings.TrimSpace(cfg.OverseerName); name != "" {
+			def.Overseer = name
+		}
+		def.Workdir = cfg.WorkDir
+		def.RelatedRoots = relatedRoots
+		_ = research.SaveConfig(cfg.StateDir, def)
+	}
+	mcpSrv.SetResearchAgent(agent)
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_RESEARCH"))) {
+	case "0", "false", "no", "off":
+		slog.Info("ambient research schedule disabled by JEVONS_RESEARCH (tools still registered)")
+		return agent
+	}
+	go agent.Run(ctx)
+	slog.Info("ambient research ready",
+		"workdir", cfg.WorkDir,
+		"related_roots", relatedRoots,
+		"overseer", cfg.OverseerName,
+		"config", "state_dir/research/config.json",
+		"notes", "state_dir/research/notes",
+	)
+	return agent
 }
 
 // startAmbientRSIMint wires residual 🎯T92 direct bullseye mint (NOT product path).
