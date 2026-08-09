@@ -24,8 +24,10 @@ Thumbs.db
 .env
 .env.local
 
-# Generated embedded files
-/internal/cli/help_agent.md
+# NOTE: //go:embed inputs must stay tracked (🎯T360) — a gitignored embed
+# input makes a pristine clone fail `go build ./...` before any `make` run.
+# internal/cli/help_agent.md is a committed mirror of agents-guide.md, kept
+# in sync by the Makefile and ratcheted by scripts/docratchet.
 
 # Xcode
 /ios/Jevon.xcodeproj/

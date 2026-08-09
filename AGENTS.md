@@ -80,6 +80,14 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
 - `cmd/` for binaries, `internal/` for packages.
 - Durable state: atomic write-and-rename; malformed state is a hard
   error, never a silent reset. No silent-fail sends/directs.
+- **`//go:embed` inputs stay tracked (🎯T360):** never gitignore a file an
+  embed pattern names. A clean checkout of HEAD must `go build ./...` green
+  with no prior `make` — a gitignored embed input fails a pristine clone, CI
+  runner, or release build with `pattern …: no matching files found` instead
+  of naming the missing generator step. `internal/cli/help_agent.md` is a
+  **committed** mirror of `agents-guide.md`; the Makefile keeps it in sync,
+  and `scripts/docratchet` ratchets both the clean-checkout build and the
+  mirror drift.
 
 ### Web
 - `web/index.html` is self-contained; pure logic lives in
