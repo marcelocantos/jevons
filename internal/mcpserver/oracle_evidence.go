@@ -6,6 +6,8 @@ package mcpserver
 import (
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // CompletionEvidenceClass is a hermetic classification of a finish report
@@ -177,9 +179,49 @@ func hasCompletionClaim(lower string) bool {
 	return false
 }
 
-// containsWordish is a light whole-phrase match (substring after lowercasing).
+// containsWordish matches phrase as a whole word or phrase: the characters
+// flanking it must not be letters or digits.
+//
+// 🎯T395: this was a plain substring match, which made "incomplete" a claim of
+// "complete", "unfinished" a claim of "finished", and "abandoned" a claim of
+// "done" — three words that assert the opposite of completion, read as
+// completion. That is the backwards bias at its purest, and it reaped workers
+// for saying they had not finished. Only completion claims are matched this
+// way; the oracle-evidence and accepted-risk markers stay substring matches,
+// where a partial hit merely means the report gets more scrutiny, not less.
 func containsWordish(lower, phrase string) bool {
-	return strings.Contains(lower, phrase)
+	for i := 0; i+len(phrase) <= len(lower); {
+		j := strings.Index(lower[i:], phrase)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(phrase)
+		if !wordRuneBefore(lower, start) && !wordRuneAt(lower, end) {
+			return true
+		}
+		i = start + 1
+	}
+	return false
+}
+
+func wordRuneBefore(s string, i int) bool {
+	if i <= 0 {
+		return false
+	}
+	r, _ := utf8.DecodeLastRuneInString(s[:i])
+	return isWordRune(r)
+}
+
+func wordRuneAt(s string, i int) bool {
+	if i >= len(s) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(s[i:])
+	return isWordRune(r)
+}
+
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // dailyPathEvidenceMarkers cite activated daily jevonsd path (🎯T194).

@@ -171,6 +171,73 @@ func TestT395AsksAreNotFinishes(t *testing.T) {
 	}
 }
 
+// TestT395NegatedClaimsAreNotClaims covers the words that assert the opposite
+// of completion and were read as completion because the claim match was a
+// substring: "incomplete" contains "complete", "unfinished" contains
+// "finished", "abandoned" contains "done".
+func TestT395NegatedClaimsAreNotClaims(t *testing.T) {
+	for _, report := range []string{
+		"The migration is incomplete.",
+		"Left unfinished; ran out of budget.",
+		"I abandoned the worktree approach and started over.",
+		"Coverage is incomplete for the truncation path.",
+	} {
+		if hasCompletionClaim(strings.ToLower(report)) {
+			t.Errorf("%q reads as a completion claim", report)
+		}
+		if LooksLikeFinishedWorkReport(report) {
+			t.Errorf("%q reads as a finished-work report", report)
+		}
+	}
+	// The words still match when they really are the claim.
+	for _, report := range []string{"Done.", "Complete.", "All finished."} {
+		if !hasCompletionClaim(strings.ToLower(report)) {
+			t.Errorf("%q must still read as a completion claim", report)
+		}
+	}
+}
+
+// TestT395AskVetoIsOneWay is acceptance clause 3 written as an executable
+// property rather than a table: the veto may only ever REMOVE a reap, never
+// add one. Appending an ask to any report — one that would reap and one that
+// would not — must leave it not reaping.
+//
+// This is the difference between a classifier that is merely more accurate and
+// one whose failure direction is safe. A future marker added to either list can
+// make the classifier wrong here, but it cannot make it wrong in the direction
+// that destroys an agent mid-conversation.
+func TestT395AskVetoIsOneWay(t *testing.T) {
+	reports := []string{
+		"Done.",
+		"Complete — commit 9ab3f21, make test green.",
+		"Achieved with accepted risk: owner smoke residual (class-3).",
+		"All finished, ready for review.",
+		"still reading the tree",
+		"",
+	}
+	asks := []string{
+		"Which boundary do you want?",
+		"Say go and I'll land it.",
+		"Holding here per your instruction.",
+		"Reporting before changing anything, as instructed.",
+		"Blocked pending your answer.",
+		"Should I repin claudia first?",
+	}
+	for _, r := range reports {
+		for _, a := range asks {
+			if ClassifyReportAsk(a) == AskNone {
+				t.Fatalf("ask fixture %q is not classified as an ask — the property is vacuous", a)
+			}
+			withAsk := strings.TrimSpace(r + "\n\n" + a)
+			reg := t395Registry(t, "jv-worker")
+			ok, _ := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", withAsk, nil)
+			if ok {
+				t.Errorf("🎯T395 clause 3 violated: %q + ask %q reaps", r, a)
+			}
+		}
+	}
+}
+
 // TestT395TruncatedReportIsNotAFinish composes with 🎯T388: a report that
 // arrives visibly cut may have had its ask in the missing middle, so its intent
 // is unknown — and unknown resolves toward keeping the agent.

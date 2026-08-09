@@ -114,6 +114,10 @@ var decisionRequestMarkers = []string{
 // outrank any completion word elsewhere in the same report: a worker that says
 // it has changed nothing has not finished, whatever else the prose contains.
 var explicitIncompleteMarkers = []string{
+	"incomplete",
+	"unfinished",
+	"far from done",
+	"nowhere near done",
 	"before changing anything",
 	"before i change anything",
 	"without changing anything",
