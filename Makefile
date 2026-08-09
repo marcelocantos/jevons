@@ -82,6 +82,7 @@ test-web:
 	node web/scripts/rhs_layout_test.js
 	node web/scripts/decision_log_test.js
 	node web/scripts/chat_reconnect_test.js
+	node web/scripts/owner_ux_test.js
 	node web/scripts/history_loading_test.js
 	node web/scripts/tool_summary_test.js
 	node web/scripts/working_progress_test.js
@@ -124,6 +125,7 @@ test-ui:
 	node scripts/chat-ui-test/t289-paint-thrash-test.js
 	node scripts/chat-ui-test/t341-jiggle-thrash-test.js
 	node scripts/chat-ui-test/t351-fractional-pin-test.js
+	node scripts/chat-ui-test/t361-owner-ux-test.js
 	node scripts/chat-ui-test/t309.1-conversation-widget-test.js
 	node scripts/chat-ui-test/t340-frontier-table-layout-test.js
 

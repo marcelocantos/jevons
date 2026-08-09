@@ -18,6 +18,7 @@ import "embed"
 //go:embed scripts/decision_log.js
 //go:embed scripts/transport.js
 //go:embed scripts/chat_reconnect.js
+//go:embed scripts/owner_ux.js
 //go:embed scripts/history_loading.js
 //go:embed scripts/chat_events.js
 //go:embed scripts/attention_threads.js

@@ -126,18 +126,58 @@ never asked their own question twice.
   residual; an unrecovered gap escalates to the owner; ACP unstick refuses to
   fire without a prompt in flight; no connected client scopes chrome out.
 
+## Client half (🎯T361)
+
+The three client-side residuals of T355 are closed; the loop now has both
+ends. `web/scripts/owner_ux.js` is the pure layer, `web/index.html` the
+wiring.
+
+- **Yield/hydrate.** A status frame carrying `ux: "yield_hydrate"` makes the
+  page cancel every queued paint callback and forget the work — no layout is
+  read, so the yield itself cannot reflow — then re-hydrate the visible band
+  on a *later* macrotask, through the same phased, budgeted T349 pass. The
+  later task is the point: it hands the browser a full turn for input and
+  paint before the next pass is asked for. A plain level frame never yields.
+- **Sticky class banner.** `owner interaction degraded: …` raises the
+  degraded banner for its own class and stands until the server publishes
+  recovery, because the condition it reports leaves no other visible trace
+  once the error bubble scrolls away. Overseer-down (🎯T138) outranks it in
+  the one banner — a dead overseer explains the degrade, and two lines read
+  as two faults. The alert is journaled, so it is honoured only on a live
+  frame: replaying it on reconnect would re-raise a banner for a gap that may
+  be long closed, and a gap that still stands re-alerts on the next tick.
+- **Recovery frame.** An escalation the owner can see needs a recovery the
+  owner can see, so satisfying a dimension that reached the alert rung
+  broadcasts `{"type":"status","ux":"recovered"}` — live, not journaled. It
+  carries no `state`, so it cannot settle working chrome mid-turn (🎯T260) on
+  its way to clearing the banner, and it survives the soft-reconnect filter
+  (🎯T143) because it is a status.
+- **Composer reporting.** The client sends `{"type":"ux_state",
+  "composer_blocked":…}` so `OwnerObservation.ComposerBlocked` is observed
+  rather than assumed false. Blocked is the owner's question — can I submit a
+  turn right now? — so a disabled send button, a hard-disabled input and the
+  T138 degraded hold all count. The level is *sampled* on a slow tick rather
+  than hooked at every mutation site (a missed hook reports a stale level,
+  which is worse than a late one) and reported on the edge, so a healthy
+  composer costs one frame per connection. A closed socket never reports: it
+  cannot, and the server already sees the connection go.
+
+Oracles: `web/scripts/owner_ux_test.js` (pure policy + wiring gates) and
+`scripts/chat-ui-test/t361-owner-ux-test.js` — Playwright over a mocked
+socket, driving the exact frames `owner_health.go` emits and asserting the
+page yields then hydrates, the banner shows / stays / clears / ignores
+replay, and a blocked composer reaches the wire. Server side:
+`TestOwnerHealthObservesClientReportedBlockedComposer`,
+`TestOwnerHealthUXStepHintsYieldHydrate`,
+`TestOwnerHealthPublishesRecoveryOnlyAfterAnAlert`.
+
 ## Residuals
 
 - **Live owner smoke.** Hermetics cover the loop; the daily seat is the class-3
   gate on wording and feel.
-- **Client-side yield/hydrate (🎯T349).** The server emits the
-  `ux: yield_hydrate` hint on the UX-degrade step; the client half that
-  actually yields and re-hydrates, and a sticky degraded banner for this
-  class (today the alert is a journaled error frame in the owner's chat, not
-  the overseer-down banner), belong with T349's perf work.
-- **Composer-blocked reporting.** `ComposerBlocked` is observable in the
-  model but no client reports it yet; UX degrade is detected from heartbeat
-  staleness alone.
+- **Frozen-tab reporting.** A page whose main thread is genuinely wedged
+  cannot report its own composer either; that class is still observed from
+  heartbeat staleness, which is what the yield/hydrate step exists to break.
 - **Multi-client chrome.** Chrome truth is modelled per server, not per
   connection; a second client with divergent local chrome is not tracked
-  separately.
+  separately, and composer reports from two clients are one level.

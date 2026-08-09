@@ -1184,12 +1184,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// fall through into owner chat / overseer as a user turn) (🎯T209).
 		if strings.HasPrefix(msg, "{") {
 			var ctl struct {
-				Type  string `json:"type"`
-				Name  string `json:"name"`
-				Turns int    `json:"turns"`
+				Type            string `json:"type"`
+				Name            string `json:"name"`
+				Turns           int    `json:"turns"`
+				ComposerBlocked bool   `json:"composer_blocked"`
+				Reason          string `json:"reason"`
 			}
 			if err := json.Unmarshal([]byte(msg), &ctl); err == nil && ctl.Type != "" {
 				switch ctl.Type {
+				case "ux_state":
+					// 🎯T361: the client reports whether the owner can
+					// actually submit. Heartbeats only prove the page is
+					// ticking — a live tab with a refusing composer is
+					// exactly the UX degrade this level observes.
+					s.NoteOwnerComposerBlocked(ctl.ComposerBlocked, ctl.Reason)
+					continue
 				case "rewind":
 					// Roll conversation back N user turns; tell clients to trim.
 					slog.Info("chat: rewind", "turns", ctl.Turns)

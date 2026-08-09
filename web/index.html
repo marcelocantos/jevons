@@ -1381,6 +1381,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/decision_log.js"></script>
 <script src="scripts/transport.js"></script>
 <script src="scripts/chat_reconnect.js"></script>
+<script src="scripts/owner_ux.js"></script>
 <script src="scripts/history_loading.js"></script>
 <script src="scripts/chat_events.js"></script>
 <script src="scripts/attention_threads.js"></script>
@@ -1983,22 +1984,109 @@ let chatConnUiReadyLogged = false;
 let chatEverReady = false;
 let softReconnectActive = false;
 // 🎯T138: degraded cockpit (overseer down) — banner + long reconnect backoff.
+// 🎯T361: the banner now carries two classes. Overseer-down is one; the
+// 🎯T355 owner-interaction alert is its own, and it is STICKY — it stands
+// until the server says the gap was satisfied, because the condition it
+// reports (a turn that never landed, chrome that lies) leaves no other
+// visible trace once the error bubble scrolls away.
 const degradedBannerEl = document.getElementById('degraded-banner');
-function setDegraded(on, reason) {
+const degradedState = { overseerDown: false, overseerReason: '', ownerDegraded: false, ownerReason: '' };
+function renderDegradedBanner() {
   if (transport && typeof transport.setDegradedHold === 'function') {
-    transport.setDegradedHold(!!on);
+    // Only overseer-down holds the reconnect backoff long; an interaction
+    // gap is not a reason to stop reconnecting.
+    transport.setDegradedHold(!!degradedState.overseerDown);
   }
   if (!degradedBannerEl) return;
-  if (on) {
-    degradedBannerEl.textContent = reason
-      ? ('Cockpit degraded: ' + reason + ' — history stays; send blocked until overseer is back.')
-      : 'Cockpit degraded: overseer is not running.';
-    degradedBannerEl.classList.add('visible');
-  } else {
-    degradedBannerEl.textContent = '';
-    degradedBannerEl.classList.remove('visible');
-  }
+  const text = (typeof OwnerUX !== 'undefined' && OwnerUX.bannerText)
+    ? OwnerUX.bannerText(degradedState)
+    : (degradedState.overseerDown ? 'Cockpit degraded: overseer is not running.' : '');
+  degradedBannerEl.textContent = text;
+  degradedBannerEl.classList.toggle('visible', !!text);
 }
+function setDegraded(on, reason) {
+  degradedState.overseerDown = !!on;
+  degradedState.overseerReason = on ? (reason || '') : '';
+  renderDegradedBanner();
+  reportComposerState();
+}
+// 🎯T361: sticky owner-interaction degrade (🎯T355 human-alert rung).
+function setOwnerDegraded(on, reason) {
+  degradedState.ownerDegraded = !!on;
+  degradedState.ownerReason = on ? (reason || '') : '';
+  renderDegradedBanner();
+}
+window.setOwnerDegraded = setOwnerDegraded;
+
+// 🎯T361 / T349: the server's ux:"yield_hydrate" hint is an instruction to
+// this page — drop scheduled paint work so the main thread is released NOW,
+// then re-hydrate the visible band on a later task. A frame that only
+// re-published chrome text would leave the degraded tab exactly as stuck as
+// it was; the yield is the recovery.
+let uxYieldHydrateCount = 0;
+window.__uxYieldHydrate = { yields: 0, hydrates: 0, lastReason: '' };
+function yieldAndHydrate(reason) {
+  uxYieldHydrateCount++;
+  // Yield: cancel every queued paint callback and forget the work. Nothing
+  // here reads layout, so the yield itself cannot reflow.
+  if (_virtRaf) { cancelAnimationFrame(_virtRaf); _virtRaf = 0; }
+  if (_rematRaf) { cancelAnimationFrame(_rematRaf); _rematRaf = 0; }
+  if (typeof _rowSnapRaf !== 'undefined' && _rowSnapRaf) {
+    cancelAnimationFrame(_rowSnapRaf); _rowSnapRaf = 0;
+  }
+  for (let i = 0; i < _rematQueue.length; i++) {
+    if (_rematQueue[i]) _rematQueue[i]._rematQueued = false;
+  }
+  _rematQueue = [];
+  _virtualizing = false;
+  window.__uxYieldHydrate.yields++;
+  window.__uxYieldHydrate.lastReason = reason || '';
+  // Hydrate on a macrotask, not this one: the browser gets a full turn to
+  // paint, run input handlers and drain its own queue before we ask for the
+  // next pass. Re-entry is bounded by the same T349 phased/budgeted pass.
+  setTimeout(() => {
+    window.__uxYieldHydrate.hydrates++;
+    scheduleVirtualize();
+    if (typeof scheduleLatestExpansion === 'function') scheduleLatestExpansion();
+    if (typeof isTracking === 'function' && isTracking() && typeof scrollDown === 'function') {
+      scrollDown();
+    }
+    if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined' && DecisionLog.formatConnectDecision) {
+      jLog('info', DecisionLog.decisionMsg('chat_conn'), DecisionLog.formatConnectDecision('ux_hydrate', {
+        corr: pageCorr,
+        count: uxYieldHydrateCount,
+      }));
+    }
+  }, 0);
+}
+window.yieldAndHydrate = yieldAndHydrate;
+
+// 🎯T361: report the composer level to the server so
+// converge.OwnerObservation.ComposerBlocked is observed rather than assumed
+// false. Edge-triggered: one frame per level change, not per tick.
+let lastComposerBlockedReported = null;
+function composerUXState() {
+  return {
+    sendDisabled: !!(sendBtn && sendBtn.disabled),
+    inputDisabled: !!(input && (input.disabled || input.readOnly)),
+    overseerDown: !!degradedState.overseerDown,
+  };
+}
+function reportComposerState(opts) {
+  if (typeof OwnerUX === 'undefined') return;
+  const open = !!(transport && transport.ws && transport.ws.readyState === 1);
+  const state = composerUXState();
+  const blocked = OwnerUX.composerBlocked(state);
+  const force = !!(opts && opts.force);
+  if (!force && !OwnerUX.shouldReportComposer(lastComposerBlockedReported, blocked, open)) return;
+  if (!open) return;
+  const frame = OwnerUX.composerStateFrame(blocked, OwnerUX.composerBlockedReason(state));
+  try {
+    transport.ws.send(frame);
+    lastComposerBlockedReported = blocked;
+  } catch (_) { /* socket died mid-report; next edge re-reports */ }
+}
+window.reportComposerState = reportComposerState;
 function chatConnMs() {
   return chatConnOpenedAt ? Math.round(performance.now() - chatConnOpenedAt) : 0;
 }
@@ -2086,6 +2174,8 @@ transport.onClose = () => {
   dot.className = 'dot off';
   sTxt.textContent = 'reconnecting';
   sendBtn.disabled = true;
+  // 🎯T361: the next socket must re-report; nothing carries across a conn.
+  lastComposerBlockedReported = null;
   // Clear chrome only — do not auto-drain the send queue while offline (🎯T113).
   setWorking(false, undefined, { skipDrain: true });
 };
@@ -2110,6 +2200,12 @@ transport.onStaleFrame = function (frameGen, currentGen) {
 transport.onMessage = m => handle(m);
 transport.onError = msg => console.error('transport error:', msg);
 
+// 🎯T361: composer level is sampled, not hooked at every mutation site — a
+// missed hook would report a stale level, which is worse than a late one.
+// Reporting is edge-triggered, so a healthy composer costs nothing per tick.
+const COMPOSER_REPORT_MS = 5000;
+setInterval(() => reportComposerState(), COMPOSER_REPORT_MS);
+
 function connect() { transport.connect(); }
 
 function handle(m) {
@@ -2123,6 +2219,8 @@ function handle(m) {
       ms: chatConnMs(),
       soft: !!softReconnectActive,
     });
+    // 🎯T361: a new connection knows nothing about this client's composer.
+    reportComposerState({ force: true });
     return;
   }
 
@@ -2133,6 +2231,14 @@ function handle(m) {
         ChatReconnect.isOverseerDownError(errText)) {
       setDegraded(true, errText);
       logChatConn('degraded', { ms: chatConnMs() });
+    }
+    // 🎯T361: the 🎯T355 human-alert rung is its own degraded class. It is
+    // raised only on a LIVE frame — the alert is journaled, so replaying it
+    // on reconnect would re-raise a banner for a gap that may be long
+    // closed. A gap that still stands re-alerts on the next due tick.
+    if (typeof OwnerUX !== 'undefined' && OwnerUX.isOwnerDegradeAlert(errText) && !historyReplayActive) {
+      setOwnerDegraded(true, OwnerUX.ownerDegradeReason(errText));
+      logChatConn('owner_degraded', { ms: chatConnMs() });
     }
     // Fall through so existing error UI (if any) still runs.
   }
@@ -2145,6 +2251,11 @@ function handle(m) {
   // gated by T260 chrome flags (not edge-only kickoff).
   if (typ === 'status') {
     const stText = m.text != null ? String(m.text) : '';
+    // 🎯T361: owner-health UX coordination rides the level frame.
+    if (typeof OwnerUX !== 'undefined') {
+      if (OwnerUX.isYieldHydrateFrame(m)) yieldAndHydrate('ux_coordinate');
+      if (OwnerUX.isOwnerRecoveredFrame(m)) setOwnerDegraded(false);
+    }
     if (/overseer is back/i.test(stText)) {
       setDegraded(false);
       if (workingEl) setWorking(false);

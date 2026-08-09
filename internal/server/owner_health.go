@@ -62,6 +62,13 @@ type ownerHealthState struct {
 
 	uiHeartbeatAt   time.Time
 	composerBlocked bool
+	composerReason  string
+
+	// alerted records the dimensions whose gap reached the owner-visible
+	// alert rung. The client raises a sticky banner on that alert (🎯T361),
+	// so recovery has to be published too — otherwise the banner outlives
+	// the gap and the owner is left distrusting a healthy chat.
+	alerted map[converge.OwnerDimension]bool
 }
 
 // ownerHealthLocked returns the state with its lazy fields initialised.
@@ -176,6 +183,29 @@ func (s *Server) NoteOwnerUIHeartbeat() {
 	s.ownerHealthLocked().uiHeartbeatAt = now
 }
 
+// NoteOwnerComposerBlocked records the client's own report that the owner
+// cannot submit a turn (🎯T361). A ticking heartbeat says the page is alive;
+// it says nothing about whether the composer will take a turn, so without
+// this the UX-degrade class could only ever be observed as a frozen tab.
+func (s *Server) NoteOwnerComposerBlocked(blocked bool, reason string) {
+	reason = strings.TrimSpace(reason)
+	s.ownerMu.Lock()
+	defer s.ownerMu.Unlock()
+	h := s.ownerHealthLocked()
+	if h.composerBlocked != blocked {
+		slog.Info("owner health: composer level reported",
+			"blocked", blocked, "reason", reason)
+	}
+	h.composerBlocked = blocked
+	if blocked {
+		h.composerReason = reason
+	} else {
+		h.composerReason = ""
+	}
+	// A client that can report is a client that is ticking.
+	h.uiHeartbeatAt = time.Now()
+}
+
 // noteChromePublished records the working level the clients were just told.
 func (s *Server) noteChromePublished(working bool) {
 	s.ownerMu.Lock()
@@ -284,6 +314,7 @@ func (s *Server) ReconcileOwnerHealth(now time.Time) []converge.OwnerOutcome {
 				"steps":     out.Gap.StepCount(),
 				"dwell_ms":  out.Gap.Age(now).Milliseconds(),
 			})
+			s.publishOwnerRecovered(out.Dimension, out.Reason)
 		}
 	}
 
@@ -298,6 +329,41 @@ func (s *Server) ReconcileOwnerHealth(now time.Time) []converge.OwnerOutcome {
 		})
 	}
 	return outcomes
+}
+
+// publishOwnerRecovered closes the loop on an escalation the owner can see.
+// Only a dimension that actually reached the alert rung is announced — a gap
+// that recovered before the owner was ever told does not deserve a
+// "recovered" the owner cannot place.
+//
+// The frame is a status with no state and a ux marker: status survives the
+// soft-reconnect filter (🎯T143), and carrying no state keeps it from
+// settling working chrome mid-turn on its way to clearing the banner
+// (🎯T260). It is live-only, not journaled: chrome truth, not a turn.
+func (s *Server) publishOwnerRecovered(dim converge.OwnerDimension, reason string) {
+	s.ownerMu.Lock()
+	h := s.ownerHealthLocked()
+	alerted := h.alerted[dim]
+	if alerted {
+		delete(h.alerted, dim)
+	}
+	s.ownerMu.Unlock()
+	if !alerted {
+		return
+	}
+
+	text := fmt.Sprintf("owner interaction recovered: %s (%s)", dim, reason)
+	payload, err := json.Marshal(map[string]any{
+		"type": "status",
+		"ux":   "recovered",
+		"text": text,
+	})
+	if err != nil {
+		slog.Error("owner health: marshal recovery frame", "err", err)
+		return
+	}
+	slog.Info("owner health: alerted gap recovered", "dimension", dim, "reason", reason)
+	s.broadcastChatLive(string(payload))
 }
 
 // OwnerHealthGaps is the standing owner-interaction gap set (diagnostics).
@@ -444,5 +510,14 @@ func (a ownerActuator) humanAlert(g converge.OwnerGap, now time.Time) error {
 	slog.Error("owner health: unrecovered gap surfaced to the owner",
 		"dimension", g.Dimension, "kind", g.Kind, "dwell", g.Age(now).String())
 	a.s.BroadcastChat(string(payload))
+	// 🎯T361: the client raises a sticky banner on this alert, so remember
+	// that this dimension owes the owner a recovery notice.
+	a.s.ownerMu.Lock()
+	h := a.s.ownerHealthLocked()
+	if h.alerted == nil {
+		h.alerted = map[converge.OwnerDimension]bool{}
+	}
+	h.alerted[g.Dimension] = true
+	a.s.ownerMu.Unlock()
 	return nil
 }

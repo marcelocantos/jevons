@@ -353,6 +353,105 @@ func TestOwnerHealthEscalatesUnrecoveredGapToOwner(t *testing.T) {
 	}
 }
 
+// 🎯T361: the client's own report of a blocked composer opens the UX-degrade
+// dimension on a page that is still ticking. Without the reporter this level
+// was always false and only a frozen main thread could ever be seen.
+func TestOwnerHealthObservesClientReportedBlockedComposer(t *testing.T) {
+	s, _ := ownerHealthServer(t, func(string) error { return nil })
+	s.NoteOwnerComposerBlocked(true, "overseer_down")
+
+	now := time.Now()
+	obs := s.ObserveOwnerInteraction(now)
+	if !obs.ComposerBlocked {
+		t.Fatal("client-reported blocked composer was not observed")
+	}
+	// A reporting client is a ticking client: the heartbeat must not be the
+	// thing that opens the gap here.
+	if obs.SinceUIHeartbeat > time.Minute {
+		t.Fatalf("SinceUIHeartbeat = %v, want fresh from the report", obs.SinceUIHeartbeat)
+	}
+
+	s.ReconcileOwnerHealth(now)
+	g, open := gapFor(s, converge.OwnerDimInteractive)
+	if !open {
+		t.Fatal("blocked composer did not open the interaction gap")
+	}
+	if g.Kind != converge.OwnerGapUXDegraded || g.Reason != "composer_blocked" {
+		t.Fatalf("gap = %s/%s, want ux_degraded/composer_blocked", g.Kind, g.Reason)
+	}
+
+	// The unblock report is what satisfies it — the step never does.
+	s.NoteOwnerComposerBlocked(false, "")
+	s.ReconcileOwnerHealth(now.Add(time.Second))
+	if _, open := gapFor(s, converge.OwnerDimInteractive); open {
+		t.Fatal("unblocked composer left the interaction gap standing")
+	}
+}
+
+// 🎯T361: the UX-degrade step must carry the yield/hydrate hint on a status
+// frame — that hint is the whole client-side recovery, not decoration.
+func TestOwnerHealthUXStepHintsYieldHydrate(t *testing.T) {
+	s, frames := ownerHealthServer(t, func(string) error { return nil })
+	drainFrames(frames)
+
+	err := ownerActuator{s}.Step(
+		converge.OwnerGap{Dimension: converge.OwnerDimInteractive, Kind: converge.OwnerGapUXDegraded},
+		converge.StepUXCoordinate, time.Now())
+	if err != nil {
+		t.Fatalf("ux coordinate step: %v", err)
+	}
+	if _, ok := frameMatching(drainFrames(frames), func(m map[string]any) bool {
+		return m["type"] == "status" && m["ux"] == "yield_hydrate"
+	}); !ok {
+		t.Fatal(`no status frame carried ux:"yield_hydrate"`)
+	}
+}
+
+// 🎯T361: an alert the owner can see needs a recovery the owner can see. The
+// client's banner for this class is sticky, so satisfying an escalated gap
+// must publish, and a gap that never reached the owner must stay quiet.
+func TestOwnerHealthPublishesRecoveryOnlyAfterAnAlert(t *testing.T) {
+	s, frames := ownerHealthServer(t, func(string) error { return nil })
+
+	// Never alerted: satisfying the dimension says nothing to the owner.
+	s.publishOwnerRecovered(converge.OwnerDimInteractive, "interaction_usable")
+	if _, ok := frameMatching(drainFrames(frames), func(m map[string]any) bool {
+		return m["ux"] == "recovered"
+	}); ok {
+		t.Fatal("recovery announced for a gap the owner was never told about")
+	}
+
+	now := time.Now()
+	if err := (ownerActuator{s}).Step(
+		converge.OwnerGap{Dimension: converge.OwnerDimInteractive, Kind: converge.OwnerGapUXDegraded},
+		converge.StepHumanAlert, now); err != nil {
+		t.Fatalf("human alert step: %v", err)
+	}
+	drainFrames(frames)
+
+	s.publishOwnerRecovered(converge.OwnerDimInteractive, "interaction_usable")
+	rec, ok := frameMatching(drainFrames(frames), func(m map[string]any) bool {
+		return m["type"] == "status" && m["ux"] == "recovered"
+	})
+	if !ok {
+		t.Fatal("an alerted gap recovered without telling the owner — sticky banner would outlive the gap")
+	}
+	if _, hasState := rec["state"]; hasState {
+		t.Error("recovery frame carries a state — it could settle working chrome mid-turn (🎯T260)")
+	}
+	if text, _ := rec["text"].(string); !strings.Contains(text, "owner interaction recovered") {
+		t.Errorf("recovery text = %q, want the class the banner matches", text)
+	}
+
+	// One alert, one recovery: a second call must not re-announce.
+	s.publishOwnerRecovered(converge.OwnerDimInteractive, "interaction_usable")
+	if _, ok := frameMatching(drainFrames(frames), func(m map[string]any) bool {
+		return m["ux"] == "recovered"
+	}); ok {
+		t.Fatal("recovery re-announced without a new alert")
+	}
+}
+
 // A stalled prompt is unstuck only when one is genuinely in flight: with no
 // process there is nothing to interrupt, and the step must not be spent.
 func TestOwnerHealthACPUnstickRequiresPromptInFlight(t *testing.T) {
