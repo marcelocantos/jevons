@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/ownerqa"
 )
 
 // Owner-interaction convergence (🎯T355).
@@ -61,6 +63,9 @@ const (
 	OwnerDimReplyOrResidual OwnerDimension = "reply_or_residual"
 	// OwnerDimInteractive: the owner can actually drive the client.
 	OwnerDimInteractive OwnerDimension = "interaction_usable"
+	// OwnerDimQuestionAnswered: an owner turn that *asked something* received
+	// owner-visible prose, not merely a seal (🎯T378).
+	OwnerDimQuestionAnswered OwnerDimension = "question_answered"
 )
 
 // OwnerDimensions is every dimension, in classification order.
@@ -69,6 +74,7 @@ var OwnerDimensions = []OwnerDimension{
 	OwnerDimChromeTruthful,
 	OwnerDimReplyOrResidual,
 	OwnerDimInteractive,
+	OwnerDimQuestionAnswered,
 }
 
 // OwnerGapKind is the outage class behind a standing owner gap. It is what
@@ -97,6 +103,14 @@ const (
 	// OwnerGapUXDegraded: the client cannot be driven (composer blocked or
 	// the main thread stopped ticking).
 	OwnerGapUXDegraded OwnerGapKind = "ux_degraded"
+	// OwnerGapQuestionUnanswered: the owner asked something and the turn
+	// produced no owner-visible prose at all (🎯T378).
+	OwnerGapQuestionUnanswered OwnerGapKind = "owner_question_unanswered"
+	// OwnerGapNoOpLoop: unanswered, and the overseer has burned a run of
+	// consecutive turns painting nothing — the degenerate-output-loop class
+	// from session 019fe5e8. Louder than the plain unanswered kind because
+	// the provider is demonstrably spinning rather than merely quiet.
+	OwnerGapNoOpLoop OwnerGapKind = "owner_question_noop_loop"
 )
 
 // OwnerBounds are the documented tolerances of the contract. They are the
@@ -117,6 +131,15 @@ type OwnerBounds struct {
 	ACPStall time.Duration
 	// UIHeartbeat: how stale a client heartbeat may get while connected.
 	UIHeartbeat time.Duration
+	// Answer: how long an owner *question* may stand with nothing
+	// owner-visible painted (🎯T378). Deliberately far longer than Reply: a
+	// question often needs a fleet round-trip before there is anything
+	// honest to say, and this dimension must not nag a working overseer.
+	// The no-op-loop gate below is what catches the pathological case early.
+	Answer time.Duration
+	// NoOpTurns is how many consecutive zero-owner-visible-text overseer
+	// turns, *with a question outstanding*, read as a degenerate loop.
+	NoOpTurns int
 }
 
 // DefaultOwnerBounds is the shipped contract.
@@ -127,6 +150,8 @@ func DefaultOwnerBounds() OwnerBounds {
 		Reply:       90 * time.Second,
 		ACPStall:    2 * time.Minute,
 		UIHeartbeat: 90 * time.Second,
+		Answer:      5 * time.Minute,
+		NoOpTurns:   ownerqa.DefaultNoOpTurns,
 	}
 }
 
@@ -147,6 +172,12 @@ func (b OwnerBounds) withDefaults() OwnerBounds {
 	if b.UIHeartbeat <= 0 {
 		b.UIHeartbeat = d.UIHeartbeat
 	}
+	if b.Answer <= 0 {
+		b.Answer = d.Answer
+	}
+	if b.NoOpTurns <= 0 {
+		b.NoOpTurns = d.NoOpTurns
+	}
 	return b
 }
 
@@ -162,6 +193,8 @@ func (b OwnerBounds) For(kind OwnerGapKind) time.Duration {
 		return b.ACPStall
 	case OwnerGapUXDegraded:
 		return b.UIHeartbeat
+	case OwnerGapQuestionUnanswered, OwnerGapNoOpLoop:
+		return b.Reply
 	default:
 		return b.Reply
 	}
@@ -224,6 +257,20 @@ type OwnerObservation struct {
 	SinceUIHeartbeat time.Duration
 	// ComposerBlocked is a client-reported inability to submit.
 	ComposerBlocked bool
+
+	// --- question-answered (🎯T378) ---
+
+	// OwnerAskedQuestion is ownerqa.IsQuestion over the newest owner turn.
+	// False scopes the whole dimension out, which is what keeps a routine
+	// status turn answered [silent] from ever being a gap.
+	OwnerAskedQuestion bool
+	// OwnerVisibleReplyAt is when owner-visible assistant prose was last
+	// painted. Distinct from ReplySealedAt on purpose: a seal is not an
+	// answer, and conflating them is the defect 🎯T378 exists for.
+	OwnerVisibleReplyAt time.Time
+	// NoOpTurnsSinceOwnerTurn counts overseer turns that sealed since the
+	// owner's turn without painting anything owner-visible.
+	NoOpTurnsSinceOwnerTurn int
 }
 
 // OwnerChromeMismatch reports whether published chrome disagrees with level
@@ -249,7 +296,49 @@ func ClassifyOwnerInteraction(o OwnerObservation, now time.Time, b OwnerBounds) 
 		classifyOwnerChrome(o, now, b),
 		classifyOwnerReply(o, now, b),
 		classifyOwnerInteractive(o, b),
+		classifyOwnerQuestion(o, now, b),
 	}
+}
+
+// classifyOwnerQuestion decides whether an owner *question* is still owed an
+// owner-visible answer (🎯T378).
+//
+// This is deliberately not a stricter reply-or-residual. That dimension is
+// satisfied by a seal, and correctly so — most owner turns are directives, and
+// a directive answered [silent] while the overseer gets on with the work is
+// healthy traffic that must never raise a gap. What that dimension cannot see
+// is the case where the owner *asked* something: there, a seal with nothing
+// painted is not a quiet success, it is the question evaporating.
+//
+// So the gate is the owner's own words, not the shape of the reply. If the
+// owner did not ask, this dimension has no opinion at all.
+func classifyOwnerQuestion(o OwnerObservation, now time.Time, b OwnerBounds) OwnerVerdict {
+	v := OwnerVerdict{Dimension: OwnerDimQuestionAnswered}
+	switch {
+	case o.OwnerTurnAt.IsZero():
+		v.Condition, v.Reason = ConditionOutOfScope, "no_owner_turn"
+	case !o.OwnerAskedQuestion:
+		// The whole point: silence is a legitimate answer to everything else.
+		v.Condition, v.Reason = ConditionOutOfScope, "owner_turn_not_a_question"
+	case o.OwnerVisibleReplyAt.After(o.OwnerTurnAt):
+		v.Condition, v.Reason = ConditionSatisfied, "answered_owner_visible"
+	case strings.TrimSpace(o.Residual) != "" && o.ResidualAt.After(o.OwnerTurnAt):
+		// A named residual is an honest outcome; the owner is not left waiting.
+		v.Condition, v.Reason = ConditionSatisfied, "residual:"+strings.TrimSpace(o.Residual)
+	case o.NoOpTurnsSinceOwnerTurn >= b.NoOpTurns:
+		// The 019fe5e8 shape. Checked *before* the in-flight and bound cases
+		// on purpose: that session was busy and progressing the entire time it
+		// was failing, so "the provider is doing something" must not be
+		// allowed to excuse a question the owner never got back.
+		v.Condition, v.Kind, v.Reason = ConditionGap, OwnerGapNoOpLoop, "consecutive_turns_painted_nothing"
+	case o.PromptInFlight && o.SinceACPProgress < b.ACPStall:
+		v.Condition, v.Reason = ConditionSatisfied, "answer_turn_progressing"
+	case now.Sub(o.OwnerTurnAt) < b.Answer:
+		v.Condition, v.Reason = ConditionSatisfied, "within_answer_bound"
+	default:
+		v.Condition, v.Kind, v.Reason = ConditionGap, OwnerGapQuestionUnanswered, "question_never_answered_owner_visible"
+	}
+	return v
 }
 
 func classifyOwnerSend(o OwnerObservation, now time.Time, b OwnerBounds) OwnerVerdict {
@@ -358,7 +447,12 @@ const OwnerMaxPrimarySteps = 3
 // OwnerPrimaryStep is the actuator that directly addresses one gap kind.
 func OwnerPrimaryStep(kind OwnerGapKind) StepKind {
 	switch kind {
-	case OwnerGapSendNotLanded, OwnerGapSendNotDelivered, OwnerGapTurnStall:
+	case OwnerGapSendNotLanded, OwnerGapSendNotDelivered, OwnerGapTurnStall,
+		// 🎯T378: re-pressuring an unanswered question means putting the
+		// owner's own words back in front of the overseer. The escalation
+		// ladder above this (overseer noise, then owner-visible alert) is
+		// what makes the question impossible to age out of scrollback.
+		OwnerGapQuestionUnanswered, OwnerGapNoOpLoop:
 		return StepRequeueOwnerSend
 	case OwnerGapFalseWorking, OwnerGapFalseIdle:
 		return StepPublishLevelTruth

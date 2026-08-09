@@ -373,6 +373,11 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		if wasOwnerTurn || strings.TrimSpace(turnText) != "" {
 			s.NoteOwnerReplySealed()
 		}
+		// 🎯T378: close this turn in the no-op ledger. A seal satisfies
+		// reply-or-residual above whether or not anything was painted — that
+		// is the gap 019fe5e8 fell through — so the question dimension keeps
+		// its own count of turns that ended having shown the owner nothing.
+		s.noteOverseerTurnSealed()
 		// The overseer's ACP session is now idle — flush any async notes
 		// (worker replies, budget alerts) that arrived while it was busy and
 		// got "prompt already in flight". Runs on every terminal stop, even

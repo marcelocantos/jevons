@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/converge"
+	"github.com/marcelocantos/jevons/internal/ownerqa"
 )
 
 // Owner-interaction convergence, server half (🎯T355).
@@ -59,6 +60,16 @@ type ownerHealthState struct {
 	replySealedAt time.Time
 	residual      string
 	residualAt    time.Time
+
+	// 🎯T378 question-answered. askedQuestion gates the whole dimension on
+	// what the owner actually said; visibleReplyAt is the only field that
+	// records prose the owner could *read*, as opposed to a turn that ended.
+	askedQuestion  bool
+	visibleReplyAt time.Time
+	// noOpTurns counts overseer turns sealed since the owner's turn without
+	// painting anything; turnVisible tracks the turn currently streaming.
+	noOpTurns   int
+	turnVisible bool
 
 	uiHeartbeatAt   time.Time
 	composerBlocked bool
@@ -119,6 +130,12 @@ func (s *Server) NoteOwnerSend(text, echo string) {
 	h.replySealedAt = time.Time{}
 	h.residual = ""
 	h.residualAt = time.Time{}
+	// 🎯T378: a new turn re-opens the question ledger. IsQuestion runs on the
+	// owner's clean text — the transport marker is not added until delivery.
+	h.askedQuestion = ownerqa.IsQuestion(text)
+	h.visibleReplyAt = time.Time{}
+	h.noOpTurns = 0
+	h.turnVisible = false
 	// The client paints working chrome on its own send edge (🎯T272).
 	h.chromeWorking = true
 	h.mismatchSince = time.Time{}
@@ -155,6 +172,42 @@ func (s *Server) NoteOwnerReplySealed() {
 	// The reply is visible; the client settles its chrome on the seal.
 	h.chromeWorking = false
 	h.mismatchSince = time.Time{}
+}
+
+// noteOwnerVisibleText records that assistant prose actually reached the
+// owner's transcript (🎯T378). This is the observation NoteOwnerReplySealed
+// cannot make: a seal fires on every terminal stop, including the ~100
+// consecutive turns in session 019fe5e8 that painted nothing at all. Only text
+// the owner can read answers a question.
+//
+// Called from the chat wire's owner-visible assistant paths, which is the one
+// place that already knows a [silent] stream from a real one.
+func (s *Server) noteOwnerVisibleText(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	now := time.Now()
+	s.ownerMu.Lock()
+	defer s.ownerMu.Unlock()
+	h := s.ownerHealthLocked()
+	h.visibleReplyAt = now
+	h.turnVisible = true
+	// Prose broke the streak; a loop that produces output is not degenerate.
+	h.noOpTurns = 0
+}
+
+// noteOverseerTurnSealed closes one overseer turn for the no-op ledger
+// (🎯T378). A turn that sealed without painting anything increments the
+// streak; the streak only *means* anything while an owner question is
+// outstanding, which is where classifyOwnerQuestion applies the gate.
+func (s *Server) noteOverseerTurnSealed() {
+	s.ownerMu.Lock()
+	defer s.ownerMu.Unlock()
+	h := s.ownerHealthLocked()
+	if !h.turnVisible {
+		h.noOpTurns++
+	}
+	h.turnVisible = false
 }
 
 // NoteOwnerResidual records a named reason no reply is owed (cancelled by the
@@ -263,6 +316,9 @@ func (s *Server) ObserveOwnerInteraction(now time.Time) converge.OwnerObservatio
 	o.Residual = h.residual
 	o.ResidualAt = h.residualAt
 	o.ComposerBlocked = h.composerBlocked
+	o.OwnerAskedQuestion = h.askedQuestion
+	o.OwnerVisibleReplyAt = h.visibleReplyAt
+	o.NoOpTurnsSinceOwnerTurn = h.noOpTurns
 	if !h.uiHeartbeatAt.IsZero() {
 		o.SinceUIHeartbeat = now.Sub(h.uiHeartbeatAt)
 	}
@@ -404,7 +460,15 @@ func (a ownerActuator) requeueOwnerSend(g converge.OwnerGap, now time.Time) erro
 	a.s.ownerMu.Lock()
 	h := a.s.ownerHealthLocked()
 	text := h.sendText
-	sealed := !h.replySealedAt.IsZero() && h.replySealedAt.After(h.ownerTurnAt)
+	// What counts as "already answered" depends on the gap. For most kinds a
+	// seal is enough. For an unanswered question it is emphatically not:
+	// 🎯T378's whole incident sealed every one of its ~100 empty turns, so
+	// keying off replySealedAt here would skip the re-pressure step precisely
+	// when the owner most needs it. Only painted prose closes that one.
+	answered := !h.replySealedAt.IsZero() && h.replySealedAt.After(h.ownerTurnAt)
+	if g.Kind == converge.OwnerGapQuestionUnanswered || g.Kind == converge.OwnerGapNoOpLoop {
+		answered = !h.visibleReplyAt.IsZero() && h.visibleReplyAt.After(h.ownerTurnAt)
+	}
 	// Two dimensions can stand open over one lost turn; only the first of
 	// them re-injects it this round.
 	recent := h.requeuedID == h.sendID && !h.requeuedAt.IsZero() &&
@@ -414,7 +478,7 @@ func (a ownerActuator) requeueOwnerSend(g converge.OwnerGap, now time.Time) erro
 	}
 	a.s.ownerMu.Unlock()
 
-	if strings.TrimSpace(text) == "" || sealed || recent {
+	if strings.TrimSpace(text) == "" || answered || recent {
 		return converge.ErrOwnerStepNotApplicable
 	}
 	// Text still sitting in the notify queue will be delivered by the drain.

@@ -338,9 +338,15 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 			s.mu.Lock()
 			held := s.overseerStreamHold
 			s.overseerStreamHold = nil
+			acc := s.overseerStreamAcc
 			s.mu.Unlock()
 			for _, h := range held {
 				s.BroadcastChat(h)
+			}
+			// 🎯T378: held fragments proved visible on seal — the owner can
+			// read them, so this turn answered.
+			if len(held) > 0 {
+				s.noteOwnerVisibleText(acc)
 			}
 		}
 	}
@@ -353,6 +359,13 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 		// we did not already return above, chatWireLine drops body; terminal
 		// empty end_turn still ok.
 		s.BroadcastChat(line)
+		// 🎯T378: reaching here with assistant prose means the stream was not
+		// silent — every silent path returned above — so this is text the
+		// owner actually sees, which is the only thing that answers a
+		// question. A seal alone never gets to make that claim.
+		if ev.Type == "assistant" {
+			s.noteOwnerVisibleText(ev.Text)
+		}
 	}
 	if ev.IsTerminalStop() {
 		s.clearOverseerStreamID()

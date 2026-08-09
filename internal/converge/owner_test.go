@@ -23,15 +23,22 @@ func ownerVerdict(t *testing.T, vs []OwnerVerdict, dim OwnerDimension) OwnerVerd
 // healthyOwner is a plant where every dimension holds: the newest send is
 // durable and acked, the reply sealed, chrome agrees with an idle server, and
 // a client is connected and ticking.
+//
+// The owner asked a question and got owner-visible prose back (🎯T378). That
+// is deliberately the healthy baseline rather than a bare directive: a fixture
+// whose turn asks nothing would scope the question dimension out, and an
+// out-of-scope dimension proves nothing about a plant that works.
 func healthyOwner(now time.Time) OwnerObservation {
 	return OwnerObservation{
-		ClientsConnected: 1,
-		SendID:           "s1",
-		SendAt:           now.Add(-time.Minute),
-		SendJournaled:    true,
-		SendDelivered:    true,
-		OwnerTurnAt:      now.Add(-time.Minute),
-		ReplySealedAt:    now.Add(-30 * time.Second),
+		ClientsConnected:    1,
+		SendID:              "s1",
+		SendAt:              now.Add(-time.Minute),
+		SendJournaled:       true,
+		SendDelivered:       true,
+		OwnerTurnAt:         now.Add(-time.Minute),
+		ReplySealedAt:       now.Add(-30 * time.Second),
+		OwnerAskedQuestion:  true,
+		OwnerVisibleReplyAt: now.Add(-30 * time.Second),
 	}
 }
 
@@ -444,5 +451,107 @@ func TestOwnerGapLadderView(t *testing.T) {
 	}
 	if !gaps[0].Since.Equal(now) {
 		t.Errorf("Since = %v, want the gap open time %v", gaps[0].Since, now)
+	}
+}
+
+// 🎯T378. The dimension exists because reply-or-residual is satisfied by a
+// *seal*, and session 019fe5e8 sealed ~100 turns that painted nothing while
+// the owner's question went unanswered. These cases pin the distinction that
+// makes the detector survivable: silence answers everything except a question.
+func TestClassifyOwnerQuestionAnswered(t *testing.T) {
+	now := time.Now()
+	b := DefaultOwnerBounds()
+
+	// The load-bearing negative. A routine turn answered [silent] is healthy
+	// traffic; if this ever becomes a gap the detector fires all day.
+	routine := healthyOwner(now)
+	routine.OwnerAskedQuestion = false
+	routine.OwnerTurnAt = now.Add(-time.Hour)
+	routine.OwnerVisibleReplyAt = time.Time{}
+	routine.ReplySealedAt = now.Add(-59 * time.Minute)
+	routine.NoOpTurnsSinceOwnerTurn = 50
+	if v := ownerVerdict(t, ClassifyOwnerInteraction(routine, now, b), OwnerDimQuestionAnswered); v.Condition != ConditionOutOfScope {
+		t.Errorf("routine [silent] turn = %s (%s), want out_of_scope — silence is a legitimate answer to everything but a question", v.Condition, v.Reason)
+	}
+
+	// The incident: the owner asked, every turn sealed, nothing was painted.
+	// Note the seal — reply-or-residual is *satisfied* here, which is exactly
+	// why this dimension had to exist.
+	incident := healthyOwner(now)
+	incident.OwnerTurnAt = now.Add(-30 * time.Minute)
+	incident.OwnerVisibleReplyAt = time.Time{}
+	incident.ReplySealedAt = now.Add(-29 * time.Minute)
+	incident.NoOpTurnsSinceOwnerTurn = 100
+	vs := ClassifyOwnerInteraction(incident, now, b)
+	if v := ownerVerdict(t, vs, OwnerDimReplyOrResidual); v.Condition != ConditionSatisfied {
+		t.Fatalf("reply_or_residual = %s (%s), want satisfied — if the seal stopped satisfying it, this test no longer proves why T378 exists", v.Condition, v.Reason)
+	}
+	v := ownerVerdict(t, vs, OwnerDimQuestionAnswered)
+	if v.Condition != ConditionGap || v.Kind != OwnerGapNoOpLoop {
+		t.Errorf("incident = %s/%s (%s), want gap owner_question_noop_loop", v.Condition, v.Kind, v.Reason)
+	}
+
+	// A busy provider must not excuse an unanswered question. 019fe5e8 was
+	// burning tool calls the whole time it was failing, so the no-op streak
+	// is checked ahead of the in-flight escape hatch.
+	busy := incident
+	busy.PromptInFlight = true
+	busy.SinceACPProgress = time.Second
+	if v := ownerVerdict(t, ClassifyOwnerInteraction(busy, now, b), OwnerDimQuestionAnswered); v.Condition != ConditionGap || v.Kind != OwnerGapNoOpLoop {
+		t.Errorf("busy no-op loop = %s/%s (%s), want gap — visible progress must not excuse an unanswered question", v.Condition, v.Kind, v.Reason)
+	}
+
+	// Below the streak bar but past the answer bound: a plain unanswered
+	// question, the milder half of acceptance 1.
+	stale := incident
+	stale.NoOpTurnsSinceOwnerTurn = 1
+	if v := ownerVerdict(t, ClassifyOwnerInteraction(stale, now, b), OwnerDimQuestionAnswered); v.Condition != ConditionGap || v.Kind != OwnerGapQuestionUnanswered {
+		t.Errorf("stale question = %s/%s (%s), want gap owner_question_unanswered", v.Condition, v.Kind, v.Reason)
+	}
+
+	// Owner-visible prose answers it, however brief.
+	answered := incident
+	answered.OwnerVisibleReplyAt = now.Add(-time.Minute)
+	if v := ownerVerdict(t, ClassifyOwnerInteraction(answered, now, b), OwnerDimQuestionAnswered); v.Condition != ConditionSatisfied || v.Reason != "answered_owner_visible" {
+		t.Errorf("answered question = %s (%s), want satisfied answered_owner_visible", v.Condition, v.Reason)
+	}
+
+	// A named residual is an honest outcome — the owner is not left waiting.
+	residual := incident
+	residual.Residual = "cancelled_by_owner"
+	residual.ResidualAt = now.Add(-time.Minute)
+	if v := ownerVerdict(t, ClassifyOwnerInteraction(residual, now, b), OwnerDimQuestionAnswered); v.Condition != ConditionSatisfied {
+		t.Errorf("named residual = %s (%s), want satisfied", v.Condition, v.Reason)
+	}
+
+	// A question still inside its bound, quietly being worked, is not a gap.
+	fresh := incident
+	fresh.OwnerTurnAt = now.Add(-b.Answer / 2)
+	fresh.NoOpTurnsSinceOwnerTurn = 1
+	if v := ownerVerdict(t, ClassifyOwnerInteraction(fresh, now, b), OwnerDimQuestionAnswered); v.Condition != ConditionSatisfied || v.Reason != "within_answer_bound" {
+		t.Errorf("fresh question = %s (%s), want satisfied within_answer_bound", v.Condition, v.Reason)
+	}
+}
+
+// 🎯T378 acceptance 2: a detected unanswered question must actually be acted
+// on. Both kinds route to the owner's own words going back in front of the
+// overseer, then escalate to noise and an owner-visible alert.
+func TestOwnerQuestionGapEscalates(t *testing.T) {
+	for _, kind := range []OwnerGapKind{OwnerGapQuestionUnanswered, OwnerGapNoOpLoop} {
+		if got := OwnerPrimaryStep(kind); got != StepRequeueOwnerSend {
+			t.Errorf("OwnerPrimaryStep(%s) = %q, want %q", kind, got, StepRequeueOwnerSend)
+		}
+		g := OwnerGap{Dimension: OwnerDimQuestionAnswered, Kind: kind, StepsByKind: map[StepKind]int{}}
+		if got := PlanOwnerStep(g); got != StepRequeueOwnerSend {
+			t.Errorf("%s first step = %q, want re-pressure", kind, got)
+		}
+		g.StepsByKind[StepRequeueOwnerSend] = OwnerMaxPrimarySteps
+		if got := PlanOwnerStep(g); got != StepOverseerNoise {
+			t.Errorf("%s after re-pressure = %q, want overseer noise", kind, got)
+		}
+		g.StepsByKind[StepOverseerNoise] = 1
+		if got := PlanOwnerStep(g); got != StepHumanAlert {
+			t.Errorf("%s after noise = %q, want the owner alert — a question must not age out of scrollback", kind, got)
+		}
 	}
 }
