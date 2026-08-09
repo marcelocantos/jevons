@@ -59,7 +59,7 @@ composer and send path. Everything in F-UI-2..4 follows from it.
   path. Owns none of the above.
 
 **F-UI-3 — Two pending-owner-turn implementations (same concept, different
-durability).**
+durability).** — **CLOSED at `29e69e8`** (see §6).
 - Main: `web/scripts/composer_persist.js:270` `stagePending()` +
   `:252` `savePending()` + `:231` `loadPending()`, replayed by
   `web/index.html:7333` `retainPendingOwnerTurnsVisible()`. Backed by
@@ -169,6 +169,10 @@ files. Its in-flight diff:
 contract that **main also adopts**, rather than a sidebar-local mirror of
 main's behaviour. The unification test in §5 should fail if the two drift.
 
+**Resolved.** T371's fix landed at `12c3c73`; T372 then collapsed the two
+implementations at `29e69e8` (§6). The ask above is discharged — T371 keeps
+its cure, and main now runs the same code rather than its own copy.
+
 ---
 
 ## 5. Oracle direction (hermetics fail if main vs agent diverge)
@@ -189,7 +193,48 @@ Per the mission: parity is the oracle, not prose. Planned hermetic shape —
 
 ---
 
-## 6. Provenance
+## 6. Landed so far
+
+**`29e69e8` — F-UI-3 closed: one pending-owner-turn contract.**
+
+`web/scripts/pending_turns.js` is now the single implementation, keyed by
+**agent**, with main as simply the agent `PendingTurns.MAIN_AGENT`. Locked
+principle 3 is expressed in the data model rather than in prose: the algorithm
+cannot distinguish root `jevons` from a worker pane.
+
+- `ConversationWidget`'s five pending helpers are direct **bindings** to it
+  (identity, not lookalikes); ~150 lines of duplicate deleted.
+- `ComposerPersist` keeps what is genuinely main's — localStorage durability
+  and send-queue restore planning — and delegates stage/ack/apply. Its
+  agent-free public signatures are unchanged, so `index.html` and its own
+  suite are untouched and green.
+- Legacy main pending (`{id, text, stagedAt}`) migrates on read.
+
+Oracle: `web/scripts/pending_turns_test.js` (in `make test-web`). §3 is a
+**parity table** — six send/display/rehydrate scenarios driven through *both*
+public surfaces, deep-equalled on the owner-visible outcome. §4 asserts the
+stronger invariant that the surfaces are the **same code**, greps both
+adopters for re-grown local definitions, and pins script load order. It has
+already caught a concurrent edit that dropped the `index.html` script tag.
+
+**No exception was locked.** EC-5 is deliberately reduced from "two
+implementations with different durability" to a **one-line choice of store per
+surface** — so the owner's ruling is now a parameter, not another rewrite.
+
+### What is still blocked on owner EC rulings
+
+The remaining forks all bottom out in `wireComposer: false` (F-UI-1), and
+removing that escape hatch means main adopting the widget's composer — which
+is precisely EC-2 (Enter-chord richness), EC-3 (command prefixes) and EC-4
+(send queue + images). Those cannot be collapsed without inventing exceptions,
+so they are **parked**, per the standing default rather than resolved by
+implementer judgment. EC-6 (overseer refused by the shared widget) and EC-5
+remain the two highest-value rulings: they are what still keep root `jevons` a
+special class and agent owner-turns less durable than main's.
+
+---
+
+## 7. Provenance
 
 Inventory built by reading the tree at `master` (working tree carried
 uncommitted T371 edits, noted inline). Every claim above is a verified
