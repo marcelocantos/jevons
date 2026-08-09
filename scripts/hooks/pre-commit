@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Shared-index commit guard (🎯T377) — git pre-commit hook.
+#
+# Thin wrapper only: it locates bin/commitscope and execs it. All policy lives
+# in internal/commitscope, because "which index is this commit built from, and
+# what would it therefore contain" is a decision that deserves tests.
+#
+# Exit status contract, inherited from the binary:
+#   0  allow    1  guard broken (visible, not a silent pass)    2  refused
+set -uo pipefail
+
+root="${CLAUDE_PROJECT_DIR:-}"
+if [[ -z "$root" ]]; then
+    root="$(cd "$(dirname "$0")/../.." && pwd)"
+fi
+
+# Tests point this at a prebuilt binary so they exercise this shim rather than
+# a copy of it.
+bin="${JEVONS_COMMITSCOPE_BIN:-$root/bin/commitscope}"
+
+if [[ ! -x "$bin" ]]; then
+    # Self-healing: the guard is worth ~200ms of warm `go build` per commit,
+    # and a fleet worker that has to remember `make` before it can commit is
+    # exactly the kind of habit this target exists to replace.
+    if ! (cd "$root" && go build -o "$bin" ./cmd/commitscope) 2>/dev/null; then
+        printf 'commitscope: %s missing and `go build ./cmd/commitscope` failed — shared-index guard INACTIVE.\n' \
+            "$bin" >&2
+        exit 1
+    fi
+fi
+
+exec "$bin" "$@"

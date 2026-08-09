@@ -257,6 +257,22 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   missing binary reports a visible non-blocking error rather than degrading to
   no guard. Sibling: 🎯T377 (shared `.git` index — stage and commit with
   explicit paths, never `git add -A`).
+- **Commit only your own paths (🎯T377):** the clone has one index, so `git add`
+  writes shared state and a bare `git commit` turns whatever every worker has
+  staged into one tree under one worker's message. That is how `29e69e8`
+  ("refactor(web): T372 …") came to contain the whole of 🎯T370 —
+  `git log --diff-filter=A -- web/scripts/fleet_cycle.js` still answers 29e69e8,
+  and reverting T372 would silently revert T370. Commit as
+  `git commit --only <your paths>`, then confirm with `git show --stat HEAD`;
+  a worker-owned `GIT_INDEX_FILE` is equally sound. The `pre-commit` hook
+  (`scripts/hooks/pre-commit` → `internal/commitscope`) refuses the sweeping
+  forms — bare `git commit`, `-a`, `-i` — by reading which index git is
+  committing from, and names the paths that would have gone in. Deliberate
+  whole-index commits are `JEVONS_COMMIT_SCOPE=off git commit …`, never
+  `--no-verify` reflexively. Install it in a fresh clone with
+  `cp scripts/hooks/pre-commit .git/hooks/` (do **not** redirect
+  `core.hooksPath` — that would disable git-lfs's own hooks). Sibling: 🎯T376
+  (same root cause, working tree rather than index).
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /
