@@ -464,13 +464,73 @@ test('T217 renderAgentInspect: assistant→jevons paintBody, never textContent f
   assert.ok(jevonsBlock, 'jevons if-block present');
   assert.ok(jevonsBlock[0].indexOf('textContent') < 0,
     'paintBody jevons branch must not assign textContent (raw ** bug)');
-  // Main chat paintBody user path stays non-MD (T221 inspect-only).
+  // 🎯T381 supersedes the flat T221/T217 rule that main paintBody's user branch
+  // never marks down. The rule is now conditional on PROVENANCE, and BOTH halves
+  // are load-bearing, so this guard must fail in both mutation directions:
+  //   • markdown on the user branch with no provenance test → RED. That is the
+  //     naive fix T381 forbids: the owner who types "**Commit:**" or pastes a
+  //     pipe table must still see his own characters.
+  //   • no markdown on the user branch at all → RED. That is T381's own
+  //     regression: an agent report shares the user role on the wire but is a
+  //     document, and paints through the same renderer a jevons bubble uses.
+  // A guard green in both states would be worthless, so neither assertion below
+  // may be dropped in favour of the other.
   const userBlock = pb.match(/else if\s*\(\s*role\s*===\s*['"]user['"]\s*\)\s*\{[\s\S]*?\}\s*else/);
   assert.ok(userBlock, 'paintBody user branch present');
-  assert.ok(userBlock[0].indexOf('renderUserText') >= 0,
+  // Comments are stripped so a mention of the rule cannot be mistaken for the
+  // rule: "guarded" has to be structure, not two strings co-occurring.
+  const ub = userBlock[0]
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  // Enumerate `if (<cond>) { … }` spans in the branch with their conditions.
+  const ifSpans = [];
+  for (let i = ub.indexOf('if'); i >= 0; i = ub.indexOf('if', i + 1)) {
+    if (/[\w$]/.test(ub[i - 1] || '') || /[\w$]/.test(ub[i + 2] || '')) continue;
+    const open = ub.indexOf('(', i);
+    if (open < 0) continue;
+    let depth = 0;
+    let close = -1;
+    for (let j = open; j < ub.length; j++) {
+      if (ub[j] === '(') depth++;
+      else if (ub[j] === ')' && --depth === 0) { close = j; break; }
+    }
+    if (close < 0) continue;
+    const brace = ub.indexOf('{', close);
+    // Only block bodies; a single-statement `if (…) foo();` has no span.
+    if (brace < 0 || ub.slice(close + 1, brace).trim() !== '') continue;
+    depth = 0;
+    let end = -1;
+    for (let j = brace; j < ub.length; j++) {
+      if (ub[j] === '{') depth++;
+      else if (ub[j] === '}' && --depth === 0) { end = j; break; }
+    }
+    if (end < 0) continue;
+    ifSpans.push({ cond: ub.slice(open + 1, close), start: brace, end: end });
+  }
+  const PROVENANCE = /isAgentOrigin|turnOrigin|turn_origin|_origin\b/;
+  const indicesOf = needle => {
+    const out = [];
+    for (let i = ub.indexOf(needle); i >= 0; i = ub.indexOf(needle, i + 1)) out.push(i);
+    return out;
+  };
+  const guardedBy = at => ifSpans.some(
+    s => at > s.start && at < s.end && PROVENANCE.test(s.cond));
+  const mdCalls = indicesOf('parseAssistantMarkdown');
+  assert.ok(mdCalls.length >= 1,
+    'main paintBody user branch must still render agent-origin reports through ' +
+    'parseAssistantMarkdown (T381) — a plain-text-only user branch is the regression');
+  mdCalls.forEach(at => assert.ok(guardedBy(at),
+    'main paintBody user markdown must sit inside a provenance test ' +
+    '(isAgentOriginBubble / turn_origin) — unconditional markdown on the user ' +
+    'branch is the T381 anti-fix that reinterprets the owner\'s own keystrokes'));
+  // Owner-origin turns keep the verbatim renderer, and keep it OUTSIDE the
+  // agent-origin guard — otherwise owner text falls through to markdown.
+  const verbatim = indicesOf('renderUserText');
+  assert.ok(verbatim.length >= 1,
     'main paintBody user still uses renderUserText (not product-wide MD)');
-  assert.ok(userBlock[0].indexOf('parseAssistantMarkdown') < 0,
-    'main paintBody user must not call parseAssistantMarkdown');
+  assert.ok(verbatim.some(at => !guardedBy(at)),
+    'renderUserText must be the UNGUARDED default on the user branch so an ' +
+    'owner turn with no agent provenance stays verbatim (T221 half of T381)');
 });
 
 test('T217 paintInspectLinesHTML: fixture **bold**/fence → strong/pre (not raw stars)', function () {
