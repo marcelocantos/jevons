@@ -43,7 +43,7 @@ func collectGrok(args *CollectArgs) (Report, error) {
 		return isGrokUpdatesJSONL(path)
 	}, func(path string) error {
 		sid := sessionIDFromGrokPath(path)
-		return forEachJSONLLine(path, func(line []byte) error {
+		return forEachJSONLLineErr(path, func(line []byte) error {
 			ev := cost.ParseLine(line, sid, args.now())
 			if ev == nil {
 				return nil

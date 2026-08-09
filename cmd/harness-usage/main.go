@@ -41,6 +41,8 @@ func run(args []string) int {
 	codexRoot := fs.String("codex-root", "", "override Codex data root (~/.codex)")
 	maxFiles := fs.Int("max-files", 0, "cap session files walked per harness (0=unlimited)")
 	since := fs.String("since", "", "RFC3339 lower bound on event timestamps")
+	spend := fs.Bool("spend", false, "fleet spend decomposition: turns x calls x context, coordinator split (🎯T392.6)")
+	until := fs.String("until", "", "RFC3339 upper bound (spend mode; default now)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -70,8 +72,12 @@ func run(args []string) int {
 		cargs.Since = &t
 	}
 
-	var reports []harnessusage.Report
 	h := strings.TrimSpace(strings.ToLower(*harness))
+	if *spend {
+		return runSpend(cargs, h, *since, *until, *jsonOut)
+	}
+
+	var reports []harnessusage.Report
 	if h == "" || h == "all" || h == "*" {
 		reports = harnessusage.CollectAll(cargs)
 	} else {

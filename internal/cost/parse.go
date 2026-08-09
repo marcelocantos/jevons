@@ -25,9 +25,10 @@ type claudeLine struct {
 	RequestID string          `json:"requestId"`
 	CostUSD   *float64        `json:"costUSD"` // older Claude Code versions precompute this
 	Message   struct {
-		ID    string `json:"id"`
-		Model string `json:"model"`
-		Usage *Usage `json:"usage"`
+		ID         string `json:"id"`
+		Model      string `json:"model"`
+		StopReason string `json:"stop_reason"`
+		Usage      *Usage `json:"usage"`
 	} `json:"message"`
 }
 
@@ -42,11 +43,13 @@ type grokUpdateLine struct {
 		Update    struct {
 			SessionUpdate string `json:"sessionUpdate"`
 			PromptID      string `json:"prompt_id"`
+			StopReason    string `json:"stop_reason"`
 			Usage         *struct {
 				InputTokens         int64                      `json:"inputTokens"`
 				OutputTokens        int64                      `json:"outputTokens"`
 				CachedReadTokens    int64                      `json:"cachedReadTokens"`
 				CacheCreationTokens int64                      `json:"cacheCreationTokens"`
+				ModelCalls          int64                      `json:"modelCalls"`
 				CostUsdTicks        *float64                   `json:"costUsdTicks"`
 				ModelUsage          map[string]json.RawMessage `json:"modelUsage"`
 			} `json:"usage"`
@@ -98,6 +101,10 @@ func parseClaudeLine(line []byte, fallbackSession string, now time.Time) *Event 
 		Model:     l.Message.Model,
 		Usage:     u,
 		RequestID: l.RequestID,
+		// Claude Code bills one API call per assistant frame, so the frame
+		// is the call and its input tokens are the context it carried.
+		ModelCalls: 1,
+		StopReason: l.Message.StopReason,
 	}
 	if e.SessionID == "" {
 		e.SessionID = fallbackSession
@@ -144,11 +151,18 @@ func parseGrokUpdate(line []byte, fallbackSession string, now time.Time) *Event 
 	}
 
 	e := &Event{
-		Timestamp: parseFlexibleTime(l.Timestamp, now),
-		SessionID: l.Params.SessionID,
-		Model:     firstModel(gu.ModelUsage),
-		Usage:     u,
-		RequestID: l.Params.Update.PromptID,
+		Timestamp:  parseFlexibleTime(l.Timestamp, now),
+		SessionID:  l.Params.SessionID,
+		Model:      firstModel(gu.ModelUsage),
+		Usage:      u,
+		RequestID:  l.Params.Update.PromptID,
+		ModelCalls: gu.ModelCalls,
+		StopReason: l.Params.Update.StopReason,
+	}
+	// A turn always billed at least one call; a provider that omits the
+	// count must not make the context per call read as zero (🎯T392.6).
+	if e.ModelCalls <= 0 {
+		e.ModelCalls = 1
 	}
 	if e.SessionID == "" {
 		e.SessionID = fallbackSession

@@ -44,7 +44,7 @@ func collectClaude(args *CollectArgs) (Report, error) {
 		return isClaudeSessionJSONL(path)
 	}, func(path string) error {
 		sid := sessionIDFromClaudePath(path)
-		return forEachJSONLLine(path, func(line []byte) error {
+		return forEachJSONLLineErr(path, func(line []byte) error {
 			ev := cost.ParseLine(line, sid, args.now())
 			if ev == nil {
 				return nil

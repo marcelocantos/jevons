@@ -83,7 +83,7 @@ func collectCodex(args *CollectArgs) (Report, error) {
 		return isCodexRolloutJSONL(path)
 	}, func(path string) error {
 		sid := codexSessionIDFromPath(path)
-		return forEachJSONLLine(path, func(line []byte) error {
+		return forEachJSONLLineErr(path, func(line []byte) error {
 			var l codexLine
 			if err := json.Unmarshal(line, &l); err != nil {
 				return nil

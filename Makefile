@@ -72,6 +72,7 @@ test-go:
 # and attention-thread model (🎯T65).
 test-web:
 	node web/scripts/chat_events_test.js
+	node web/scripts/owner_turn_shape_test.js
 	node web/scripts/attention_threads_test.js
 	node web/scripts/idea_capture_test.js
 	node web/scripts/aside_history_test.js
@@ -173,6 +174,27 @@ test-journey: jevonsd
 	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER))
 
 test: test-go test-web test-ui
+
+# ── Fleet spend (🎯T392.6) ──────────────────────────
+# Decomposes spend into the levers that act on it:
+#   tokens = turns × calls-per-turn × context-per-call
+# Reported in tokens, not dollars — a plan is decremented in tokens, and
+# the provider's USD field is an estimate against a rate card we do not
+# control (🎯T394).
+#
+#	make spend			# last 24h, every harness
+#	make spend HARNESS=grok SINCE=... UNTIL=...
+#	make spend-baseline		# the frozen 🎯T392 reference window
+.PHONY: spend spend-baseline
+spend:
+	@go run ./cmd/harness-usage -spend \
+	  $(if $(HARNESS),-harness $(HARNESS)) \
+	  -since $(if $(SINCE),$(SINCE),$(shell date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)) \
+	  $(if $(UNTIL),-until $(UNTIL))
+
+spend-baseline:
+	@go run ./cmd/harness-usage -spend -harness grok \
+	  -since 2026-08-08T01:53:00Z -until 2026-08-09T11:53:00Z
 
 # ── Standing invariants (bullseye) ──────────────────
 .PHONY: bullseye

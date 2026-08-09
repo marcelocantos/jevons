@@ -68,4 +68,24 @@ type Event struct {
 	Usage     Usage
 	CostUSD   float64
 	RequestID string // dedup key: requestId, else message.id; "" = none
+
+	// ModelCalls is how many provider API calls the turn billed (🎯T392.6).
+	// Every call resends the whole conversation, so Usage.Input is the sum
+	// across calls and Input/ModelCalls is the context each one carried —
+	// the quantity a context ceiling actually binds. Grok reports it per
+	// turn; Claude bills one call per assistant frame, so it is 1 there.
+	ModelCalls int64
+	// StopReason is how the turn ended ("end_turn", "cancelled", "error").
+	// Cancelled turns bill a full context for work that is discarded, which
+	// is why the spend report separates them rather than summing them in.
+	StopReason string
+}
+
+// Context is the conversation size each of the turn's API calls carried.
+// Zero when the provider reported no call count.
+func (e Event) Context() float64 {
+	if e.ModelCalls <= 0 {
+		return 0
+	}
+	return float64(e.Usage.Input) / float64(e.ModelCalls)
 }
