@@ -116,7 +116,8 @@ func TestChatWireRoundTripOverWebSocket(t *testing.T) {
 
 	// User bubble content.
 	um, _ := got[0]["message"].(map[string]any)
-	if um["content"] != "ping" {
+	// 🎯T384: typed blocks, the same shape the assistant bubble uses below.
+	if userBlockText(um["content"]) != "ping" {
 		t.Fatalf("user content=%v", um["content"])
 	}
 	// Assistant text under content[].

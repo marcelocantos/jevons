@@ -217,8 +217,13 @@ func TestChatUserEcho(t *testing.T) {
 		t.Fatalf("type=%v", probe["type"])
 	}
 	msg, _ := probe["message"].(map[string]any)
-	if msg["content"] != "hello world" {
+	// 🎯T384: the owner echo carries typed blocks, not a bare string, so a
+	// block-walking consumer can read the owner's own words.
+	if userBlockText(msg["content"]) != "hello world" {
 		t.Fatalf("content=%v", msg["content"])
+	}
+	if _, isString := msg["content"].(string); isString {
+		t.Fatal("owner echo regressed to the bare-string shape (🎯T384)")
 	}
 }
 

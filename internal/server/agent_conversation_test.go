@@ -181,7 +181,8 @@ func TestOverseerSendByNameOwnerOrigin(t *testing.T) {
 			t.Fatal(err)
 		}
 		msg, _ := m["message"].(map[string]any)
-		if m["type"] != "user" || msg["content"] != "do the thing" {
+		// 🎯T384: content is typed blocks, like every assistant turn.
+		if m["type"] != "user" || userBlockText(msg["content"]) != "do the thing" {
 			t.Fatalf("owner bubble=%v", m)
 		}
 	default:

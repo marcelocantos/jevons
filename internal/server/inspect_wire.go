@@ -298,8 +298,13 @@ func inspectLiveEvent(ev claudia.Event) (event map[string]any, ok bool) {
 			"type":      "user",
 			"timestamp": ts,
 			"message": map[string]any{
-				"role":    "user",
-				"content": ev.Text,
+				"role": "user",
+				// 🎯T384: same typed-block shape as the assistant branch below,
+				// so one consumer serves both roles on the live wire as well as
+				// in the journal.
+				"content": []map[string]any{
+					{"type": "text", "text": ev.Text},
+				},
 			},
 		}, true
 	case "assistant":

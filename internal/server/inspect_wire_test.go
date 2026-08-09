@@ -20,7 +20,9 @@ func TestInspectLiveEventUserAndAssistant(t *testing.T) {
 		t.Fatalf("user: ok=%v ev=%v", ok, ev)
 	}
 	msg, _ := ev["message"].(map[string]any)
-	if msg["content"] != "do the thing" {
+	// 🎯T384: the live user frame carries typed blocks, matching the assistant
+	// frame below, so the sidebar's display model reads one shape for both.
+	if userBlockText(msg["content"]) != "do the thing" {
 		t.Fatalf("user content=%v", msg)
 	}
 
