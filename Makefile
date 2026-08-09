@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard runlock
+all: jevonsd jevons-head treeguard commitscope runlock
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -37,6 +37,17 @@ treeguard: bin/treeguard
 bin/treeguard: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/treeguard ./cmd/treeguard
+
+# Shared-index commit guard (🎯T377). The git pre-commit hook execs this, so
+# `make all` builds it; the hook self-builds if it is missing, and this target
+# only saves that cost on the first commit after a fresh clone. Install the
+# hook itself with: cp scripts/hooks/pre-commit .git/hooks/
+.PHONY: commitscope
+commitscope: bin/commitscope
+
+bin/commitscope: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/commitscope ./cmd/commitscope
 
 # Restart serialiser (🎯T392.5). restart-daily-jevonsd re-execs itself under
 # this, so a missing binary means concurrent restarts race — which is how
