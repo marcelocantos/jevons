@@ -4,6 +4,8 @@
 package main
 
 import (
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 
@@ -18,7 +20,7 @@ import (
 // on session/load — the exact failure this target eliminates.
 func TestGrokMCPServerSpec(t *testing.T) {
 	cfg := config.Config{MCPServerName: "jevonsmcp", Port: 13705}
-	name, url := grokMCPServerSpec(cfg, "127.0.0.1")
+	name, url := overseerMCPServerSpec(cfg, "127.0.0.1", 13705)
 	if name != "jevonsmcp" {
 		t.Errorf("name = %q, want jevonsmcp", name)
 	}
@@ -34,9 +36,53 @@ func TestGrokMCPServerSpec(t *testing.T) {
 
 	// Non-default name and port propagate.
 	cfg2 := config.Config{MCPServerName: "custom", Port: 9999}
-	name2, url2 := grokMCPServerSpec(cfg2, "10.0.0.5")
+	name2, url2 := overseerMCPServerSpec(cfg2, "10.0.0.5", 9999)
 	if name2 != "custom" || url2 != "http://10.0.0.5:9999/mcp" {
 		t.Errorf("spec = (%q,%q), want (custom, http://10.0.0.5:9999/mcp)", name2, url2)
+	}
+}
+
+// 🎯T379 acceptance 3: the advertised MCP URL is derived from the port the
+// daemon actually serves, so a registration cannot drift from the daemon.
+//
+// The live failure this pins: cfg asks for one port, the bind lands on
+// another (ephemeral cfg.Port == 0) or would have failed outright. Writing
+// the registration from cfg.Port in that situation advertises an endpoint
+// nothing is behind — a dead registration manufactured by the daemon itself.
+func TestAdvertisedMCPURLFollowsTheServedPort(t *testing.T) {
+	// A real bind on an ephemeral port: cfg says 0, the kernel says
+	// something else, and the registration must name what the kernel said.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	served := servedPort(ln.Addr())
+	if served == 0 {
+		t.Fatalf("servedPort did not read the bound port from %v", ln.Addr())
+	}
+
+	cfg := config.Config{MCPServerName: "jevonsmcp", Port: 0}
+	_, url := overseerMCPServerSpec(cfg, "127.0.0.1", served)
+
+	want := fmt.Sprintf("http://127.0.0.1:%d/mcp", served)
+	if url != want {
+		t.Errorf("advertised %q, want %q (the port actually served)", url, want)
+	}
+	if strings.Contains(url, ":0/") {
+		t.Errorf("advertised the configured placeholder port, not the served one: %q", url)
+	}
+
+	// And the drift case proper: a config port that is NOT the served port
+	// must never appear in the registration.
+	drifted := config.Config{MCPServerName: "jevonsmcp", Port: 13715}
+	_, url2 := overseerMCPServerSpec(drifted, "127.0.0.1", served)
+	if strings.Contains(url2, "13715") {
+		t.Errorf("advertised the configured port 13715 over the served port %d: %q", served, url2)
+	}
+	if url2 != want {
+		t.Errorf("advertised %q, want %q", url2, want)
 	}
 }
 
@@ -128,16 +174,12 @@ func TestGrokMCPAddArgs(t *testing.T) {
 // Shared name/URL spec for Grok and Claude ensure paths (🎯T212).
 func TestOverseerMCPServerSpec(t *testing.T) {
 	cfg := config.Config{MCPServerName: "jevonsmcp", Port: 13705}
-	name, url := overseerMCPServerSpec(cfg, "127.0.0.1")
+	name, url := overseerMCPServerSpec(cfg, "127.0.0.1", 13705)
 	if name != "jevonsmcp" || url != "http://127.0.0.1:13705/mcp" {
 		t.Fatalf("spec = (%q,%q)", name, url)
 	}
 	if strings.Contains(url, "localhost") {
 		t.Fatalf("must not use localhost: %q", url)
-	}
-	n2, u2 := grokMCPServerSpec(cfg, "127.0.0.1")
-	if n2 != name || u2 != url {
-		t.Fatalf("grokMCPServerSpec diverged from overseerMCPServerSpec")
 	}
 }
 

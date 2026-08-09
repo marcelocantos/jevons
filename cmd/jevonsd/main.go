@@ -693,15 +693,8 @@ func main() {
 		jevonDef.Purpose = claudia.PurposeOverseer
 	}
 
-	// Overseer MCP tools: user-scoped install for the selected overseer
-	// provider (🎯T58 Grok, 🎯T212 Claude). Register before launch so tools
-	// are present on session/new and session/load (resume keeps tools).
-	// Default fleet/overseer remains Grok unless provider is explicitly
-	// claude (or other); this does not flip the compile-time default.
-	if err := ensureOverseerMCPServer(cfg, mcpHost, jevonDef.Provider); err != nil {
-		slog.Warn("could not register overseer MCP server — overseer may start toolless",
-			"provider", jevonDef.Provider, "err", err)
-	}
+	// Overseer MCP registration happens after the listener is bound, so the
+	// advertised URL names the port actually served (🎯T379). See below.
 	if err := registry.Register(*jevonDef); err != nil {
 		slog.Error("jevon agent register failed", "err", err)
 		os.Exit(1)
@@ -749,6 +742,24 @@ func main() {
 	if err != nil {
 		slog.Error("listen failed", "err", err)
 		os.Exit(1)
+	}
+
+	// Overseer MCP tools: user-scoped install for the selected overseer
+	// provider (🎯T58 Grok, 🎯T212 Claude), registered before launch so tools
+	// are present on session/new and session/load (resume keeps tools).
+	// Default fleet/overseer remains Grok unless provider is explicitly
+	// claude (or other); this does not flip the compile-time default.
+	//
+	// 🎯T379: this must come *after* the bind, and must advertise
+	// servedPort(ln) rather than cfg.Port. Registering first meant that a
+	// daemon which then failed to listen — the port already held by another
+	// instance — exited having just written a registration for an endpoint
+	// it never served, and every agent inheriting that entry waited on it
+	// forever. Deriving the URL from the live listener makes that drift
+	// unrepresentable, and also handles cfg.Port == 0 (kernel-assigned).
+	if err := ensureOverseerMCPServer(cfg, mcpHost, servedPort(ln.Addr()), jevonDef.Provider); err != nil {
+		slog.Warn("could not register overseer MCP server — overseer may start toolless",
+			"provider", jevonDef.Provider, "err", err)
 	}
 
 	if *enableTLS {
@@ -1236,14 +1247,14 @@ func overseerMCPKindForProvider(provider claudia.Provider) overseerMCPKind {
 // `claude mcp add -s user`. Idempotent remove-then-add so port/bind changes
 // always land. Residual: codex/bedrock return a clear skip error (class-3
 // until a durable install path exists); live Claude smoke remains optional.
-func ensureOverseerMCPServer(cfg config.Config, host string, provider claudia.Provider) error {
+func ensureOverseerMCPServer(cfg config.Config, host string, port int, provider claudia.Provider) error {
 	switch overseerMCPKindForProvider(provider) {
 	case overseerMCPClaude:
-		return ensureClaudeMCPServer(cfg, host)
+		return ensureClaudeMCPServer(cfg, host, port)
 	case overseerMCPNone:
 		return fmt.Errorf("overseer provider %q has no user-scoped MCP ensure path yet (residual; overseer may start toolless)", provider)
 	default:
-		return ensureGrokMCPServer(cfg, host)
+		return ensureGrokMCPServer(cfg, host, port)
 	}
 }
 
@@ -1253,8 +1264,8 @@ func ensureOverseerMCPServer(cfg config.Config, host string, provider claudia.Pr
 // restarts (🎯T58) instead of the old rotate-and-recap hack. Idempotent:
 // removes any prior entry (ignoring the not-found error) then re-adds the
 // current URL, so a changed port/bind is always reflected.
-func ensureGrokMCPServer(cfg config.Config, host string) error {
-	name, url := overseerMCPServerSpec(cfg, host)
+func ensureGrokMCPServer(cfg config.Config, host string, port int) error {
+	name, url := overseerMCPServerSpec(cfg, host, port)
 	grok := grokBin()
 	args := grokMCPAddArgs(name, url)
 	_ = exec.Command(grok, "mcp", "remove", name).Run()
@@ -1272,8 +1283,8 @@ func ensureGrokMCPServer(cfg config.Config, host string) error {
 // Claude overseer gets jevons tools on session start and resume (🎯T212).
 // Idempotent remove-then-add. Residual: live Claude overseer smoke is
 // class-3/owner-gated; hermetics cover kind routing + argv shape.
-func ensureClaudeMCPServer(cfg config.Config, host string) error {
-	name, url := overseerMCPServerSpec(cfg, host)
+func ensureClaudeMCPServer(cfg config.Config, host string, port int) error {
+	name, url := overseerMCPServerSpec(cfg, host, port)
 	bin := claudeBin()
 	args := claudeMCPAddArgs(name, url)
 	_ = exec.Command(bin, "mcp", "remove", "-s", "user", name).Run()
@@ -1290,13 +1301,25 @@ func ensureClaudeMCPServer(cfg config.Config, host string) error {
 // endpoint URL for the overseer. The path must be exactly /mcp (mcpserver
 // mount) and the host a concrete address — never "localhost" (::1 vs
 // 127.0.0.1; 🎯T6/🎯T58). Shared by Grok and Claude ensure paths (🎯T212).
-func overseerMCPServerSpec(cfg config.Config, host string) (name, url string) {
-	return cfg.MCPServerName, fmt.Sprintf("http://%s:%d/mcp", host, cfg.Port)
+//
+// port is the port the daemon actually serves, not the configured one
+// (🎯T379). Those differ whenever the listen fails or the config asks for an
+// ephemeral port, and a registration written from the intended value in
+// either case advertises an endpoint no process is behind — which is the
+// silent-dead-registration failure this target exists to prevent.
+func overseerMCPServerSpec(cfg config.Config, host string, port int) (name, url string) {
+	return cfg.MCPServerName, fmt.Sprintf("http://%s:%d/mcp", host, port)
 }
 
-// grokMCPServerSpec is the historical name for overseerMCPServerSpec (tests).
-func grokMCPServerSpec(cfg config.Config, host string) (name, url string) {
-	return overseerMCPServerSpec(cfg, host)
+// servedPort reports the TCP port a bound listener actually occupies. It is
+// the only honest source for the advertised URL: cfg.Port may be 0
+// (ephemeral, resolved by the kernel) and, until the bind succeeds, may be a
+// port another process holds.
+func servedPort(addr net.Addr) int {
+	if tcp, ok := addr.(*net.TCPAddr); ok {
+		return tcp.Port
+	}
+	return 0
 }
 
 // grokMCPAddArgs is the pure argv for `grok mcp add` after the binary
