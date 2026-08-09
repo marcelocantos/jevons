@@ -127,6 +127,9 @@ type Server struct {
 	// snapshot for GET /api/cost. Both default to no-ops.
 	activityHook func()
 	costSource   func() any
+	// capacitySource returns the background-work admission picture for
+	// GET /api/capacity (🎯T359). Nil until the governor is wired.
+	capacitySource func() any
 
 	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
 	tokenLimiter *tokenRateLimiter
@@ -443,6 +446,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph)         // 🎯T185: unachieved dependency Mermaid
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
+	mux.HandleFunc("GET /api/capacity", s.handleCapacity) // 🎯T359: background admission
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("GET /api/logs", s.handleLogsTail)
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)

@@ -168,6 +168,21 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `jevons_rsi_coach_configure`. Retro never advances the drip cursor and
   never calls bullseye.
 
+- **Capacity-aware background (🎯T359):** ambient cycles (research T356,
+  audits T357, coach T243/T353, sentinel extras) are admitted / degraded /
+  deferred by one holistic read of remaining budget and concurrent load
+  (`internal/capacity` pure policy + daemon governor), not by each loop's own
+  soft cap. **Owner turns and open Build missions outrank all ambient
+  background**; control-plane repair is the load-bearing background class and
+  stands down last. Ladder: elevated → reduced pass; tight → load-bearing
+  only; critical → owner/Build only + one **sticky** owner notice. Composes
+  🎯T36 (clamp remains the safety net), 🎯T137 (subscription USD is an
+  estimate and never denies work; tokens and load do), 🎯T325.2 provider soft
+  caps. Surfaces: `jevons_capacity_status`, `GET /api/capacity`,
+  `~/.jevons/capacity.json` (`daily_token_budget` unset = unknown, never
+  invented). Residual: exact vendor quotas class-3; preemption advisory (defer,
+  not mid-pass kill); not optimal scheduling. Design:
+  `docs/design/capacity-aware-background.md`.
 - **Oracle-first completion (🎯T31 / 🎯T31.1):** bare "done" / complete /
   finished without **oracle evidence** (named test + green, and/or
   commit SHA) or **explicit accepted-risk / class-3** language is **not

@@ -24,6 +24,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
@@ -182,6 +183,11 @@ type Server struct {
 	// refresh plus async feed triggers, writing durable versioned notes.
 	// Nil until SetResearchAgent.
 	research *research.Agent
+
+	// capacityGov admits, defers, or degrades background work against the
+	// remaining budget and concurrent load (🎯T359). Nil until
+	// SetCapacityGovernor — ambient loops then run ungated, as before.
+	capacityGov *capacity.Governor
 }
 
 // TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).

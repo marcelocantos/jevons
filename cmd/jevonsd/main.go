@@ -23,6 +23,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
@@ -631,12 +632,16 @@ func main() {
 
 	// 🎯T243 ambient RSI coach (product path): judgments → overseer.
 	// Residual 🎯T92 mint remains opt-in (JEVONS_RSI_MINT / DEEPER).
-	rsiCoach := startAmbientRSICoach(ctx, cfg, mcpSrv)
+	// 🎯T359: holistic background admission — ambient cycles ask before each
+	// tick so owner turns and open Build missions keep their room.
+	capGov := startCapacityGovernor(cfg, guard, mcpSrv, srv)
+
+	rsiCoach := startAmbientRSICoach(ctx, cfg, mcpSrv, capacityGate(capGov))
 	rsiLoop := startAmbientRSIMint(ctx, cfg, mcpSrv)
 
 	// 🎯T356 ambient research: periodic context refresh + async feed triggers,
 	// writing durable versioned notes and briefing the overseer.
-	startAmbientResearch(ctx, cfg, mcpSrv)
+	startAmbientResearch(ctx, cfg, mcpSrv, capacityGate(capGov))
 
 	// Process-as-cache GC: periodically stop idle spawned threads'
 	// processes (resumably) to free resources. The threads persist and
@@ -926,10 +931,10 @@ func main() {
 	// Pure watcher: control-plane repair / file+PO mission; no product implement; no Ship.
 	// Complements T204/T207 mechanical floor and T325.4 one-shot staff ops.
 	go mcpserver.StartSentinelLoop(ctx, mcpserver.SentinelLoopArgs{
-		Server:   mcpSrv,
-		StateDir: cfg.StateDir,
-		Workdir:  cfg.WorkDir,
-		Overseer: cfg.OverseerName,
+		Server:    mcpSrv,
+		StateDir:  cfg.StateDir,
+		Workdir:   cfg.WorkDir,
+		Overseer:  cfg.OverseerName,
 		DefaultPO: "jevons-po",
 	})
 
@@ -1413,7 +1418,7 @@ func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop
 //	JEVONS_RSI_COACH_INTERVAL — duration (default 15m); "0" disables ticker
 //	JEVONS_RSI_NO_CHAT       — "1" skip owner-chatlog surface
 //	JEVONS_RSI_NO_SESSION    — "1" skip session-transcript surface
-func startAmbientRSICoach(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Coach {
+func startAmbientRSICoach(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server, gate capacity.Gate) *rsi.Coach {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_RSI_COACH"))) {
 	case "0", "false", "no", "off":
 		slog.Info("ambient RSI coach disabled by JEVONS_RSI_COACH")
@@ -1458,6 +1463,7 @@ func startAmbientRSICoach(ctx context.Context, cfg config.Config, mcpSrv *mcpser
 	deliverer := mcpSrv.NewOverseerJudgmentDeliverer(cfg.OverseerName)
 	coach, err := rsi.NewCoach(rsi.CoachArgs{
 		StateDir:     cfg.StateDir,
+		Capacity:     gate,
 		ChatLogPath:  chatLogPath,
 		SessionsDir:  sessionsDir,
 		Interval:     interval,
@@ -1506,7 +1512,7 @@ func startAmbientRSICoach(ctx context.Context, cfg config.Config, mcpSrv *mcpser
 //
 //	JEVONS_RESEARCH=0        — disable the schedule (MCP tools stay registered)
 //	JEVONS_RESEARCH_INTERVAL — duration (default 90m); "0" disables the ticker
-func startAmbientResearch(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *research.Agent {
+func startAmbientResearch(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server, gate capacity.Gate) *research.Agent {
 	interval := time.Duration(0) // 0 = follow durable config
 	if v := strings.TrimSpace(os.Getenv("JEVONS_RESEARCH_INTERVAL")); v != "" {
 		if v == "0" {
@@ -1526,6 +1532,7 @@ func startAmbientResearch(ctx context.Context, cfg config.Config, mcpSrv *mcpser
 	}
 	agent, err := research.New(research.Args{
 		StateDir:     cfg.StateDir,
+		Capacity:     gate,
 		Workdir:      cfg.WorkDir,
 		RelatedRoots: relatedRoots,
 		EventLogPath: eventlog.DefaultPath(cfg.StateDir),

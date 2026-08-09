@@ -378,6 +378,23 @@ phrase-friction before anything reaches the overseer. On demand:
 `jevons_rsi_coach_configure`; last pass visible in `jevons_rsi_coach_status`.
 Retro never advances the drip cursor and never calls bullseye.
 
+**Capacity-aware background (🎯T359):** ambient cycles (research, audits,
+coach, sentinel) are **admitted, degraded, or deferred** against one holistic
+read of remaining budget and concurrent load — not each loop's own soft cap.
+Priority is explicit: **owner turns and open Build missions outrank all ambient
+background**; among background, control-plane repair is load-bearing and stands
+down last. Pressure ladder: *elevated* → ambient runs a reduced pass; *tight* →
+load-bearing only; *critical* → owner and Build work only, plus **one sticky
+owner notice** (not one per tick). Composes 🎯T36 (the clamp stays the safety
+net, capacity acts before it), 🎯T137 (under subscription accounting USD is an
+estimate and never denies work — tokens and load do), and 🎯T325.2 provider
+soft caps. Ask `jevons_capacity_status` — or `GET /api/capacity` — when a
+background cycle looks quiet: it reports pressure, headroom by dimension, and
+what each class would be granted right now. Dials live in
+`~/.jevons/capacity.json` (`daily_token_budget` is **unset by default**: an
+unknown ceiling is reported as unknown, never invented). Design:
+`docs/design/capacity-aware-background.md`.
+
 ## Oracle-first completion (🎯T31 / 🎯T31.1)
 
 **Bare "done" is not accepted.** Finish reports must carry either:

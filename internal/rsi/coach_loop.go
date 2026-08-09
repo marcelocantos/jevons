@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 )
 
@@ -35,6 +36,10 @@ type CoachArgs struct {
 	Interval time.Duration
 	// Deliverer posts to overseer (required for non-dry delivery).
 	Deliverer JudgmentDeliverer
+	// Capacity admits or defers scheduled cycles against the fleet's
+	// remaining budget and load (🎯T359). Nil runs every scheduled cycle, as
+	// before. Owner/overseer-invoked cycles (MCP, tests) are never gated.
+	Capacity capacity.Gate
 	// DryRun never delivers.
 	DryRun bool
 	// SeedEOF when true seeds cursor to EOF on first load (avoid history flood).
@@ -205,7 +210,18 @@ func (c *Coach) Dispositions() *DispositionStore {
 	return c.dispositions
 }
 
+// runSafe runs one scheduled coach cycle, subject to capacity admission
+// (🎯T359). A deferred tick is dropped, not queued: the coach is level-
+// triggered, so the next cycle sees everything this one would have.
 func (c *Coach) runSafe(reason string) {
+	verdict, release := capacity.Ask(c.args.Capacity, capacity.ClassCoach, reason)
+	defer release()
+	if !verdict.Admitted() {
+		slog.Info("rsi coach cycle deferred by capacity",
+			"reason", reason, "verdict", verdict.Verdict, "cause", verdict.Reason,
+			"pressure", verdict.Pressure.String(), "detail", verdict.Detail)
+		return
+	}
 	res, err := c.cycle(reason)
 	if err != nil {
 		slog.Warn("rsi coach cycle failed", "reason", reason, "err", err)

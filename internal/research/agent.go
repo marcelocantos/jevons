@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/capacity"
 )
 
 // EventSource labels research briefs on the wire to the overseer.
@@ -43,6 +45,10 @@ type Args struct {
 	SessionsDir  string
 	// Deliverer posts briefs to the overseer. Nil means notes-only.
 	Deliverer BriefDeliverer
+	// Capacity admits or defers scheduled passes against the fleet's
+	// remaining budget and load (🎯T359). Nil runs every scheduled pass, as
+	// before. Owner-invoked cycles (MCP, tests) are never gated.
+	Capacity capacity.Gate
 	// Fetcher retrieves feed bodies (default: bounded HTTP fetcher).
 	Fetcher Fetcher
 	// Interval overrides the config cadence when non-zero.
@@ -280,15 +286,36 @@ func (a *Agent) runFeedSchedule(ctx context.Context) {
 				interval = d
 				ticker = time.NewTicker(interval)
 			}
-			if _, err := a.PollFeeds(ctx, "schedule"); err != nil {
+			// The feed trigger competes for the same ambient capacity as the
+			// context pass (🎯T359) — one research cycle at a time, and none
+			// while the owner or Build work needs the room.
+			verdict, release := capacity.Ask(a.args.Capacity, capacity.ClassResearch, "feed_schedule")
+			if !verdict.Admitted() {
+				release()
+				a.noteCapacitySkip("feed_schedule", verdict)
+				continue
+			}
+			_, err = a.PollFeeds(ctx, "schedule")
+			release()
+			if err != nil {
 				slog.Warn("research feed poll failed", "err", err)
 			}
 		}
 	}
 }
 
+// runContextSafe runs one scheduled pass, subject to capacity admission
+// (🎯T359): when the fleet is short of budget or busy with owner work, this
+// tick is skipped (and the skip recorded) rather than queued behind everything
+// else. An elevated-pressure pass still runs, at a reduced scope.
 func (a *Agent) runContextSafe(reason string) {
-	res, err := a.RunOnce(reason)
+	verdict, release := capacity.Ask(a.args.Capacity, capacity.ClassResearch, reason)
+	defer release()
+	if !verdict.Admitted() {
+		a.noteCapacitySkip(reason, verdict)
+		return
+	}
+	res, err := a.runOnce(reason, verdict.Tier)
 	if err != nil {
 		slog.Warn("research cycle failed", "reason", reason, "err", err)
 		return
@@ -304,8 +331,36 @@ func (a *Agent) runContextSafe(reason string) {
 	}
 }
 
-// RunOnce executes one context-refresh cycle now (schedule, MCP, or tests).
+// RunOnce executes one context-refresh cycle now (schedule, MCP, or tests) at
+// full scope. Scheduled passes go through runContextSafe, which may run this
+// at a reduced scope when capacity is elevated (🎯T359).
 func (a *Agent) RunOnce(reason string) (CycleResult, error) {
+	return a.runOnce(reason, capacity.TierFull)
+}
+
+// noteCapacitySkip records a deferred tick durably, so "why did research go
+// quiet?" is answerable from state.json and the log rather than guessed at.
+func (a *Agent) noteCapacitySkip(reason string, d capacity.Decision) {
+	slog.Info("research cycle deferred by capacity",
+		"reason", reason, "verdict", d.Verdict, "cause", d.Reason,
+		"pressure", d.Pressure.String(), "detail", d.Detail)
+	st, _ := LoadState(a.store.Dir())
+	st.LastSkipReason = fmt.Sprintf("capacity %s: %s (%s)", d.Verdict, d.Reason, d.Detail)
+	if err := SaveState(a.store.Dir(), st); err != nil {
+		slog.Warn("research state save failed", "err", err)
+	}
+}
+
+// reducedFactor shrinks a bound for a degraded pass: half the lookback and
+// half the mining budget still refreshes the notes, at roughly half the cost.
+func reducedFactor(n int) int {
+	if n <= 1 {
+		return n
+	}
+	return n / 2
+}
+
+func (a *Agent) runOnce(reason, tier string) (CycleResult, error) {
 	if a == nil {
 		return CycleResult{}, fmt.Errorf("research: nil agent")
 	}
@@ -323,14 +378,18 @@ func (a *Agent) RunOnce(reason string) (CycleResult, error) {
 	if len(roots) == 0 {
 		roots = a.args.RelatedRoots
 	}
+	lookback, maxCommits, maxRepos := cfg.Lookback(), cfg.EffectiveMaxCommits(), cfg.EffectiveMaxRepos()
+	if tier == capacity.TierReduced {
+		lookback, maxCommits, maxRepos = lookback/2, reducedFactor(maxCommits), reducedFactor(maxRepos)
+	}
 	scan, err := Scan(ScanArgs{
 		Workdir:      workdir,
 		RelatedRoots: roots,
 		EventLogPath: a.args.EventLogPath,
 		SessionsDir:  a.args.SessionsDir,
-		Since:        now.Add(-cfg.Lookback()),
-		MaxCommits:   cfg.EffectiveMaxCommits(),
-		MaxRepos:     cfg.EffectiveMaxRepos(),
+		Since:        now.Add(-lookback),
+		MaxCommits:   maxCommits,
+		MaxRepos:     maxRepos,
 		Now:          now,
 	})
 	if err != nil {

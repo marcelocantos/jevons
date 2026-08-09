@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/capacity"
 )
 
 // retroFirstDelay is how long after boot the first retrospective pass runs.
@@ -175,7 +177,18 @@ func (c *Coach) runRetroSchedule(ctx context.Context) {
 	}
 }
 
+// runRetroSafe runs one scheduled retrospective pass, subject to capacity
+// admission (🎯T359). The backward pass is the coach's most expensive work and
+// its cadence is measured in hours, so a deferred tick costs almost nothing.
 func (c *Coach) runRetroSafe(reason string) {
+	verdict, release := capacity.Ask(c.args.Capacity, capacity.ClassCoach, "retro_"+reason)
+	defer release()
+	if !verdict.Admitted() {
+		slog.Info("rsi retro cycle deferred by capacity",
+			"reason", reason, "verdict", verdict.Verdict, "cause", verdict.Reason,
+			"pressure", verdict.Pressure.String(), "detail", verdict.Detail)
+		return
+	}
 	res, err := c.retroCycle(reason)
 	if err != nil {
 		slog.Warn("rsi retro cycle failed", "reason", reason, "err", err)

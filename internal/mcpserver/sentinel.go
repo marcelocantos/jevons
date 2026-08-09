@@ -17,6 +17,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/poproactive"
@@ -42,12 +43,12 @@ const (
 
 // SentinelLoopArgs configures StartSentinelLoop.
 type SentinelLoopArgs struct {
-	Server     *Server
-	StateDir   string
-	Workdir    string // bullseye ledger cwd for frontier depth (optional)
-	Overseer   string // default jevons
-	DefaultPO  string // default jevons-po
-	Interval   time.Duration
+	Server      *Server
+	StateDir    string
+	Workdir     string // bullseye ledger cwd for frontier depth (optional)
+	Overseer    string // default jevons
+	DefaultPO   string // default jevons-po
+	Interval    time.Duration
 	EventWindow time.Duration
 	// MaxActionsPerHour overrides staffops.DefaultMaxActionsPerHour when >0.
 	MaxActionsPerHour int
@@ -61,11 +62,11 @@ type SentinelLoopArgs struct {
 
 // SentinelActResult is what the harness did after pure classification.
 type SentinelActResult struct {
-	Repaired   bool
-	FiledToPO  bool
-	Delivered  bool
-	Skipped    string // why no act (empty when acted or healthy)
-	AuditNote  string
+	Repaired  bool
+	FiledToPO bool
+	Delivered bool
+	Skipped   string // why no act (empty when acted or healthy)
+	AuditNote string
 }
 
 // sentinelRuntime holds durable-in-process cooldown/budget for the loop + MCP.
@@ -206,6 +207,17 @@ func StartSentinelLoop(ctx context.Context, args SentinelLoopArgs) {
 				slog.Error("sentinel: cycle panic", "recover", r, "reason", reason)
 			}
 		}()
+		// 🎯T359: the sentinel is load-bearing background — it keeps running
+		// while ambient work defers, and stands down only when capacity has
+		// narrowed to owner and Build work.
+		verdict, release := capacity.Ask(args.Server.CapacityGovernor(), capacity.ClassControlRepair, reason)
+		defer release()
+		if !verdict.Admitted() {
+			slog.Info("sentinel: cycle deferred by capacity",
+				"reason", reason, "verdict", verdict.Verdict, "cause", verdict.Reason,
+				"pressure", verdict.Pressure.String(), "detail", verdict.Detail)
+			return
+		}
 		res, act := args.Server.runSentinelCycle(args)
 		slog.Info("sentinel: cycle",
 			"reason", reason,

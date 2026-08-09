@@ -26,6 +26,11 @@ import (
 type costGuard struct {
 	monitor  *cost.Monitor
 	enforcer *cost.Enforcer
+	// store is the usage spine, shared with capacity admission (🎯T359) for
+	// today's token total — the honest lever under subscription accounting.
+	store *cost.Store
+	// config reports the live budget policy (session bound, daily lines).
+	config func() *cost.BudgetConfig
 }
 
 // startCostGuard constructs and starts the clamp-down loops. It returns
@@ -154,7 +159,7 @@ func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Reg
 	slog.Info("cost clamp-down started", "budget", budgetPath, "fleet_socket", sock,
 		"cost_safety", "T334", "protected", cfg.ProtectedWorkers)
 
-	return &costGuard{monitor: monitor, enforcer: enforcer}
+	return &costGuard{monitor: monitor, enforcer: enforcer, store: store, config: config}
 }
 
 // fleetSessionSet returns the set of Grok session ids currently hosted

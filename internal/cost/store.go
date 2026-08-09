@@ -156,6 +156,21 @@ func (s *Store) SpentUSD(from, to time.Time) (float64, error) {
 	return spent.Float64, err
 }
 
+// SpentTokens returns the total billable tokens in [from, to).
+//
+// Tokens are the honest budget lever under subscription accounting (🎯T137):
+// USD there is an API-equivalent estimate, but the token count is what was
+// actually consumed. Capacity admission (🎯T359) reads this.
+func (s *Store) SpentTokens(from, to time.Time) (int64, error) {
+	var spent sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT SUM(max(input_tokens, 0) + max(output_tokens, 0) +
+		            max(cache_create_tokens, 0) + max(cache_read_tokens, 0))
+		 FROM usage_events WHERE ts >= ? AND ts < ?`,
+		from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano)).Scan(&spent)
+	return spent.Int64, err
+}
+
 // WorkerSpentUSD returns one worker's cost in [from, to).
 func (s *Store) WorkerSpentUSD(worker string, from, to time.Time) (float64, error) {
 	var spent sql.NullFloat64
