@@ -594,6 +594,14 @@ func main() {
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
 	// 🎯T325.3: durable idea intake ledger (state_dir/ideas.json).
 	mcpSrv.SetIdeaStateDir(cfg.StateDir)
+	// 🎯T388: durable agent-report store (state_dir/agent-reports/) so a
+	// terminal report survives the 🎯T165/T195 reap of the agent that wrote it,
+	// and an over-bound delivery can name a call that returns the whole text.
+	mcpSrv.SetAgentReportDir(cfg.StateDir)
+	// 🎯T392.2: coalesce machine-generated wakes into one digest per
+	// recipient. Owner turns and worker replies are never batched — only
+	// events the fleet generates about itself, whose content is additive.
+	mcpSrv.SetWakeBatchWindow(mcpserver.DefaultWakeBatchWindow)
 	// 🎯T325.2: task-type → harness routing seed. The compiled default is a
 	// design-map seed, not owner policy: when a subscription runs dry the
 	// owner must be able to steer new mints without a rebuild, so an
