@@ -13,6 +13,9 @@
 // document keydown + focusComposer() call sites in index.html.
 // 🎯T153: aggressive return-to-composer after pointer chrome (send, expand
 // tab, route-switch, aside dismiss) — separate from the `/` hotkey.
+// 🎯T366: Tab cycles the two message boxes (main #input ↔ sidebar
+// #agent-inspect-input) when the sidebar composer is visible; when it is
+// hidden the chord is not claimed, so normal focus order is untouched.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -123,6 +126,119 @@
     return { didFocus: true, reason: 'focused' };
   }
 
+  // ── 🎯T366 Tab cycle: main composer ↔ sidebar composer ────────────
+  //
+  // Two stops only. Tab and Shift+Tab both toggle: in a two-element cycle
+  // forward and reverse land on the same partner, so the reverse chord is
+  // the documented way back rather than a third state.
+  //
+  // The cycle is claimed only when focus already sits in one of the two
+  // message boxes AND the partner can take focus. Anywhere else — and any
+  // time the sidebar composer is hidden, collapsed, or disabled — the plan
+  // is null and the caller leaves the browser's own focus order alone. That
+  // is what keeps a missing sidebar from trapping Tab.
+
+  const TAB_CYCLE_HINT = 'Tab switches between the main and sidebar message boxes';
+  const TAB_CYCLE_DOC =
+    'With the sidebar Transcript composer visible, Tab moves focus from the main ' +
+    'message box to the sidebar message box; Tab (or Shift+Tab) moves it back. ' +
+    'When the sidebar composer is hidden the chord is not claimed and Tab keeps ' +
+    'its normal document focus order.';
+
+  // Tab with no Meta/Ctrl/Alt. Shift is allowed (documented reverse).
+  function isComposerTabChord(key, mods) {
+    const m = modsOf(mods);
+    const code = mods && mods.code != null ? String(mods.code) : '';
+    if (key !== 'Tab' && code !== 'Tab') return false;
+    return !(m.metaKey || m.ctrlKey || m.altKey);
+  }
+
+  // True when an element can be focused as a cycle stop. Element-shaped but
+  // reads only `.focus`, `.disabled`, `.hidden`, and `.classList.contains`,
+  // so hermetic tests pass plain mocks instead of a live DOM.
+  function isCycleStopFocusable(el, opts) {
+    if (!el || typeof el.focus !== 'function') return false;
+    if (el.disabled === true || el.hidden === true) return false;
+    const o = opts || {};
+    // Sidebar composer wrapper: hidden attribute or missing `visible` class
+    // means the box is not on screen (collapsed pane, no agent selected).
+    const wrap = o.composerEl;
+    if (wrap) {
+      if (wrap.hidden === true) return false;
+      if (wrap.classList && typeof wrap.classList.contains === 'function' &&
+          !wrap.classList.contains('visible')) {
+        return false;
+      }
+    }
+    // RHS tab pane: only the active pane is displayed.
+    const pane = o.paneEl;
+    if (pane) {
+      if (pane.hidden === true) return false;
+      if (pane.classList && typeof pane.classList.contains === 'function' &&
+          !pane.classList.contains('active')) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Decide where Tab should land. Pure: never focuses anything.
+   *
+   * @param {object} eventLike { key, code, metaKey, ctrlKey, altKey, shiftKey }
+   * @param {object} ctx {
+   *   activeElement, mainEl, sidebarEl,
+   *   sidebarComposerEl?, sidebarPaneEl?,
+   *   sidebarFocusable?  // explicit override for callers that already know
+   * }
+   * @returns {{ target: 'main'|'sidebar'|null, focusEl: *, preventDefault: boolean, reason: string }}
+   */
+  function planComposerTabCycle(eventLike, ctx) {
+    const ev = eventLike || {};
+    const c = ctx || {};
+    const none = function (reason) {
+      return { target: null, focusEl: null, preventDefault: false, reason: reason };
+    };
+    if (!isComposerTabChord(ev.key, ev)) return none('not-tab');
+
+    const active = c.activeElement;
+    const main = c.mainEl;
+    const side = c.sidebarEl;
+    if (!active) return none('not-in-cycle');
+
+    const sideOk = typeof c.sidebarFocusable === 'boolean'
+      ? c.sidebarFocusable
+      : isCycleStopFocusable(side, {
+        composerEl: c.sidebarComposerEl,
+        paneEl: c.sidebarPaneEl,
+      });
+
+    if (main && active === main) {
+      if (!sideOk) return none('sidebar-unavailable');
+      return { target: 'sidebar', focusEl: side, preventDefault: true, reason: 'to-sidebar' };
+    }
+    if (side && active === side) {
+      // Leaving the sidebar does not depend on the sidebar's own visibility —
+      // focus is already there — only on the main box being focusable.
+      if (!isCycleStopFocusable(main)) return none('main-unavailable');
+      return { target: 'main', focusEl: main, preventDefault: true, reason: 'to-main' };
+    }
+    return none('not-in-cycle');
+  }
+
+  /**
+   * Apply the Tab cycle: focus the partner box when the plan claims the
+   * chord. Returns the plan (with `didFocus`) for hermetic assertions.
+   */
+  function applyComposerTabCycle(eventLike, ctx) {
+    const plan = planComposerTabCycle(eventLike, ctx);
+    if (!plan.target || !plan.focusEl) {
+      return { target: plan.target, focusEl: plan.focusEl, preventDefault: plan.preventDefault, reason: plan.reason, didFocus: false };
+    }
+    plan.focusEl.focus();
+    return { target: plan.target, focusEl: plan.focusEl, preventDefault: true, reason: plan.reason, didFocus: true };
+  }
+
   return {
     HOTKEY: HOTKEY,
     HOTKEY_HINT: HOTKEY_HINT,
@@ -132,5 +248,12 @@
     shouldFocusComposer: shouldFocusComposer,
     tryFocusComposer: tryFocusComposer,
     focusComposer: focusComposer,
+    // 🎯T366
+    TAB_CYCLE_HINT: TAB_CYCLE_HINT,
+    TAB_CYCLE_DOC: TAB_CYCLE_DOC,
+    isComposerTabChord: isComposerTabChord,
+    isCycleStopFocusable: isCycleStopFocusable,
+    planComposerTabCycle: planComposerTabCycle,
+    applyComposerTabCycle: applyComposerTabCycle,
   };
 }));

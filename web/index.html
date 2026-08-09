@@ -1255,7 +1255,7 @@ body.rhs-resizing-row { cursor: row-resize; }
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
                 placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter force-sends draft or next queued, Shift+Enter for a new line. / focuses box when not typing."
-                title="Message box — / focuses here when focus is elsewhere (🎯T127)"
+                title="Message box — / focuses here when focus is elsewhere (🎯T127); Tab / Shift+Tab switches to the sidebar message box when it is visible (🎯T366)"
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
                 aria-describedby="input-hint wispr-context"
@@ -1332,7 +1332,7 @@ body.rhs-resizing-row { cursor: row-resize; }
             <label for="agent-inspect-input" class="sr-only">Message the selected agent or aside</label>
             <textarea id="agent-inspect-input" rows="1"
                       placeholder="Message this agent…"
-                      title="Sidebar composer — Enter to send, Shift+Enter for a new line (🎯T251/T309.1)"
+                      title="Sidebar composer — Enter to send, Shift+Enter for a new line (🎯T251/T309.1); Tab / Shift+Tab returns to the main message box (🎯T366)"
                       aria-label="Message the selected agent or aside"
                       aria-multiline="true"
                       autocomplete="off"
@@ -8226,6 +8226,26 @@ enterTrackBottom();
 }, d));
 
 document.addEventListener('keydown', e => {
+  // 🎯T366: Tab cycles the two message boxes (main ↔ sidebar Transcript).
+  // Claimed only while focus is already in one of them and the partner can
+  // take focus, so a hidden/collapsed sidebar leaves Tab's normal document
+  // order untouched instead of trapping it on a missing control.
+  if (typeof ComposerFocus !== 'undefined' && ComposerFocus.applyComposerTabCycle) {
+    const side = (inspectConversation && inspectConversation.inputEl) || agentInspectInput;
+    const sideWrap = (inspectConversation && inspectConversation.composerEl) || agentInspectComposer;
+    const r = ComposerFocus.applyComposerTabCycle(e, {
+      activeElement: document.activeElement,
+      mainEl: input,
+      sidebarEl: side,
+      sidebarComposerEl: sideWrap,
+      sidebarPaneEl: agentInspectEl,
+    });
+    if (r.didFocus) {
+      e.preventDefault();
+      if (r.target === 'main') ensureWisprSeed();
+      return;
+    }
+  }
   // 🎯T127: plain / focuses main composer when not in an editable field.
   // Documented in placeholder + title + input-hint. No auto-refocus.
   if (typeof ComposerFocus !== 'undefined' && ComposerFocus.tryFocusComposer) {

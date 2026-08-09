@@ -315,6 +315,150 @@ test('T106: .msg-expand-tab still uses background: var(--bg) (no regress)', func
   );
 });
 
+// ── 🎯T366: Tab cycles main ↔ sidebar message boxes ────────────
+
+// Minimal element mocks: only the properties isCycleStopFocusable reads.
+function mkBox(extra) {
+  const el = Object.assign({ focused: 0 }, extra || {});
+  el.focus = function () { el.focused++; };
+  return el;
+}
+function mkWrap(classes, extra) {
+  const set = new Set(classes || []);
+  return Object.assign({
+    classList: { contains: function (c) { return set.has(c); } },
+  }, extra || {});
+}
+
+// Standard shape: sidebar visible, Transcript pane active.
+function visibleCtx(over) {
+  const main = mkBox();
+  const side = mkBox();
+  return Object.assign({
+    activeElement: main,
+    mainEl: main,
+    sidebarEl: side,
+    sidebarComposerEl: mkWrap(['cw-composer', 'visible']),
+    sidebarPaneEl: mkWrap(['rhs-tab-pane', 'active']),
+  }, over || {});
+}
+
+test('T366: Tab from main composer focuses the sidebar composer', function () {
+  const ctx = visibleCtx();
+  const r = CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
+  assert.strictEqual(r.target, 'sidebar');
+  assert.strictEqual(r.didFocus, true);
+  assert.strictEqual(r.preventDefault, true);
+  assert.strictEqual(ctx.sidebarEl.focused, 1);
+  assert.strictEqual(ctx.mainEl.focused, 0);
+});
+
+test('T366: Tab from sidebar composer returns to main — stable two-stop cycle', function () {
+  const ctx = visibleCtx();
+  CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
+  ctx.activeElement = ctx.sidebarEl;
+  const back = CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
+  assert.strictEqual(back.target, 'main');
+  assert.strictEqual(ctx.mainEl.focused, 1);
+  // Third press cycles out to the sidebar again — never a third stop.
+  ctx.activeElement = ctx.mainEl;
+  const again = CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
+  assert.strictEqual(again.target, 'sidebar');
+  assert.strictEqual(ctx.sidebarEl.focused, 2);
+});
+
+test('T366: Shift+Tab is the documented reverse — also toggles the pair', function () {
+  const ctx = visibleCtx();
+  ctx.activeElement = ctx.sidebarEl;
+  const r = CF.applyComposerTabCycle({ key: 'Tab', shiftKey: true }, ctx);
+  assert.strictEqual(r.target, 'main');
+  assert.strictEqual(ctx.mainEl.focused, 1);
+  ctx.activeElement = ctx.mainEl;
+  const fwd = CF.applyComposerTabCycle({ key: 'Tab', shiftKey: true }, ctx);
+  assert.strictEqual(fwd.target, 'sidebar');
+});
+
+test('T366: hidden sidebar composer does not claim Tab (no trap)', function () {
+  // Composer wrapper without `visible` = collapsed / no agent selected.
+  const ctx = visibleCtx({ sidebarComposerEl: mkWrap(['cw-composer']) });
+  const r = CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
+  assert.strictEqual(r.target, null);
+  assert.strictEqual(r.didFocus, false);
+  assert.strictEqual(r.preventDefault, false, 'must leave normal focus order alone');
+  assert.strictEqual(r.reason, 'sidebar-unavailable');
+  assert.strictEqual(ctx.sidebarEl.focused, 0);
+});
+
+test('T366: inactive Transcript pane does not claim Tab', function () {
+  const ctx = visibleCtx({ sidebarPaneEl: mkWrap(['rhs-tab-pane']) });
+  const r = CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
+  assert.strictEqual(r.target, null);
+  assert.strictEqual(r.preventDefault, false);
+});
+
+test('T366: disabled or missing sidebar input does not claim Tab', function () {
+  const disabled = visibleCtx();
+  disabled.sidebarEl.disabled = true;
+  assert.strictEqual(CF.applyComposerTabCycle({ key: 'Tab' }, disabled).target, null);
+
+  const absent = visibleCtx({ sidebarEl: null });
+  const r = CF.applyComposerTabCycle({ key: 'Tab' }, absent);
+  assert.strictEqual(r.target, null);
+  assert.strictEqual(r.preventDefault, false);
+});
+
+test('T366: focus outside both boxes is left to the browser', function () {
+  const ctx = visibleCtx({ activeElement: mkBox() });
+  const r = CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
+  assert.strictEqual(r.target, null);
+  assert.strictEqual(r.reason, 'not-in-cycle');
+});
+
+test('T366: modified Tab (Cmd/Ctrl/Alt) is not the cycle chord', function () {
+  ['metaKey', 'ctrlKey', 'altKey'].forEach(function (mod) {
+    const ev = { key: 'Tab' };
+    ev[mod] = true;
+    const r = CF.applyComposerTabCycle(ev, visibleCtx());
+    assert.strictEqual(r.target, null, mod + '+Tab must not cycle');
+    assert.strictEqual(r.reason, 'not-tab');
+  });
+});
+
+test('T366: non-Tab keys never enter the cycle', function () {
+  ['/', 'Enter', 'a', 'ArrowDown'].forEach(function (k) {
+    assert.strictEqual(CF.applyComposerTabCycle({ key: k }, visibleCtx()).target, null, k);
+  });
+  // code fallback still recognised (layouts that leave key unset).
+  assert.strictEqual(CF.isComposerTabChord('', { code: 'Tab' }), true);
+});
+
+test('T366: sidebar exit only needs the main box focusable', function () {
+  // Sidebar hidden mid-cycle (pane switched) — focus is already there, so
+  // Tab must still be able to get back out to main.
+  const ctx = visibleCtx({ sidebarComposerEl: mkWrap(['cw-composer']) });
+  ctx.activeElement = ctx.sidebarEl;
+  const r = CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
+  assert.strictEqual(r.target, 'main');
+  assert.strictEqual(ctx.mainEl.focused, 1);
+});
+
+test('T366: index.html wires the Tab cycle on the document keydown path', function () {
+  assert.ok(
+    /ComposerFocus\.applyComposerTabCycle/.test(html),
+    'index.html must call ComposerFocus.applyComposerTabCycle'
+  );
+  const call = html.slice(html.indexOf('ComposerFocus.applyComposerTabCycle'));
+  assert.ok(/mainEl:\s*input/.test(call.slice(0, 600)), 'main composer passed as mainEl');
+  assert.ok(
+    /sidebarEl:\s*side/.test(call.slice(0, 600)),
+    'sidebar composer passed as sidebarEl'
+  );
+  assert.ok(
+    /sidebarPaneEl:\s*agentInspectEl/.test(call.slice(0, 600)),
+    'Transcript pane passed so a collapsed pane cannot trap Tab'
+  );
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);
