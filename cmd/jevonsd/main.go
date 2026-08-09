@@ -598,6 +598,10 @@ func main() {
 	// terminal report survives the 🎯T165/T195 reap of the agent that wrote it,
 	// and an over-bound delivery can name a call that returns the whole text.
 	mcpSrv.SetAgentReportDir(cfg.StateDir)
+	// 🎯T388: durable agent-report store (state_dir/agent-reports/) so a
+	// terminal report survives the 🎯T165/T195 reap of the agent that wrote it,
+	// and an over-bound delivery can name a call that returns the whole text.
+	mcpSrv.SetAgentReportDir(cfg.StateDir)
 	// 🎯T392.2: coalesce machine-generated wakes into one digest per
 	// recipient. Owner turns and worker replies are never batched — only
 	// events the fleet generates about itself, whose content is additive.

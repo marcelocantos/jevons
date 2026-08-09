@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agentreport"
 )
 
 // 🎯T46: the CEO prompt tells the overseer that worker replies arrive as
@@ -94,17 +95,22 @@ func TestNotifyWithoutSinkIsSafe(t *testing.T) {
 	s.notify("orphan", "hello")
 }
 
-// Overlong replies are truncated, not dropped.
-func TestNotifyTruncatesLongReplies(t *testing.T) {
+// Overlong replies are bounded, not dropped — and after 🎯T388 the cut is
+// explicit. This test previously asserted the marker was "...", which is
+// exactly the defect: three dots are indistinguishable from an author's own
+// ellipsis, so a reader could not tell content was missing. The bound stays;
+// the silence does not. Retrieval and tail-preservation are pinned in
+// agent_report_test.go.
+func TestNotifyBoundsLongRepliesWithAVisibleCut(t *testing.T) {
 	s := &Server{}
 	var got string
 	s.SetNotify(func(text string) { got = text })
 
 	s.notify("w", strings.Repeat("x", 5000))
 	if len(got) > 2100 {
-		t.Fatalf("notification not truncated: len = %d", len(got))
+		t.Fatalf("notification not bounded: len = %d", len(got))
 	}
-	if !strings.Contains(got, "...") {
-		t.Fatalf("truncated notification lacks ellipsis marker: %q", got)
+	if !agentreport.IsTruncatedDelivery(got) {
+		t.Fatalf("bounded notification carries no explicit truncation marker: %q", got)
 	}
 }
