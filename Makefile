@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard
+all: jevonsd jevons-head treeguard runlock
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -37,6 +37,17 @@ treeguard: bin/treeguard
 bin/treeguard: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/treeguard ./cmd/treeguard
+
+# Restart serialiser (🎯T392.5). restart-daily-jevonsd re-execs itself under
+# this, so a missing binary means concurrent restarts race — which is how
+# the daemon was left down on 2026-08-09. Built by `make all`, and the
+# script fails closed rather than restarting unserialised.
+.PHONY: runlock
+runlock: bin/runlock
+
+bin/runlock: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/runlock ./cmd/runlock
 
 .PHONY: macos-head
 macos-head:

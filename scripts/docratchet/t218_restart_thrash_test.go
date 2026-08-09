@@ -106,6 +106,19 @@ func newThrashEnv(t *testing.T) *thrashEnv {
 		t.Fatal(err)
 	}
 
+	// 🎯T392.5: the script re-execs itself under bin/runlock and refuses to
+	// run unserialised if that binary is missing. The script's own env has
+	// a bare PATH with no `go`, so build the REAL binary here, with the
+	// test's environment, rather than substituting a stub — a stub that
+	// merely execs its command would let every concurrent caller through
+	// and quietly turn the coalescing assertions below into no-ops.
+	build := exec.Command("go", "build", "-o",
+		filepath.Join(root, "bin", "runlock"),
+		filepath.Join(repoRoot(t), "cmd", "runlock"))
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build runlock for the harness: %v\n%s", err, out)
+	}
+
 	// Fake daemon module, rebuilt per variant.
 	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(fakeDaemonSrc), 0o644); err != nil {
 		t.Fatal(err)
@@ -349,28 +362,25 @@ func TestRestartThrashPolicy(t *testing.T) {
 	}
 
 	// --- a dead lock holder must not wedge the fleet forever --------------
+	//
+	// 🎯T392.5 changed how this is guaranteed. The old mkdir mutex had to
+	// detect a corpse and break the lock by hand, and the window between
+	// creating the directory and writing the pid file was itself the bug:
+	// a second caller read an empty pid, called a live holder stale, and
+	// deleted the lock out from under it. flock(2) has no such window —
+	// the kernel drops the lock when the holder dies, however it dies — so
+	// the test is now that a leftover lock *file* is not a held lock.
 	lock := filepath.Join(e.home, "restart.lock")
-	if err := os.MkdirAll(lock, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A pid that cannot be alive: claim the lock on behalf of a corpse.
-	dead := deadPID(t)
-	if err := os.WriteFile(filepath.Join(lock, "pid"), []byte(strconv.Itoa(dead)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(lock, []byte(strconv.Itoa(deadPID(t))+" corpse\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	e.build("d")
 	out, err = e.run(0)
 	if err != nil {
-		t.Fatalf("stale-lock run failed: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "breaking stale lock") {
-		t.Errorf("stale lock was not broken; a crashed holder would wedge every future restart:\n%s", out)
+		t.Fatalf("run behind a dead holder's leftover lock file failed: %v\n%s", err, out)
 	}
 	if got := e.variantServed(); got != "d" {
-		t.Errorf("after breaking the stale lock, :%d serves variant %q, want %q", e.port, got, "d")
-	}
-	if _, err := os.Stat(lock); err == nil {
-		t.Errorf("lock dir %s survived a successful run; the next caller would wait on a ghost", lock)
+		t.Errorf("a leftover lock file wedged the restart: :%d serves variant %q, want %q", e.port, got, "d")
 	}
 }
 

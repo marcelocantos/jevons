@@ -90,11 +90,37 @@ STAMP_FILE="${JEVONS_RESTART_STAMP:-$HOME/.jevons/restart-daily.last}"
 # 🎯T218: identity of the daemon this script last started ("<pid> <sha256>"),
 # so a caller whose build is already serving can no-op instead of bouncing.
 ACTIVE_FILE="${JEVONS_RESTART_ACTIVE:-$HOME/.jevons/restart-daily.active}"
-# 🎯T218: mkdir-based mutex so concurrent workers coalesce into one bounce
-# instead of racing to kill the same port.
-LOCK_DIR="${JEVONS_RESTART_LOCK:-$HOME/.jevons/restart-daily.lock}"
+# 🎯T392.5: serialise concurrent restarts under one exclusive lock.
+#
+# This replaces a mkdir-based mutex that raced. Between `mkdir` succeeding
+# and the holder writing its pid file, a second caller read an empty pid,
+# concluded the live holder was stale, rm -rf'd the lock and proceeded.
+# On 2026-08-09 five restarts fired in 17 minutes, the last two 59s apart;
+# the second killed the first mid-flight and left the daily daemon down.
+# Every agent turn in flight was cancelled, and cancelled turns bill a full
+# context for discarded work — 6.6% of the 🎯T392 baseline.
+#
+# flock(2) has no such window and the kernel releases it when the holder
+# dies, so a crashed run cannot wedge the fleet. Locking is a Go binary
+# because a mutex in shell is a race per line (shared bash doctrine).
+LOCK_FILE="${JEVONS_RESTART_LOCK:-$HOME/.jevons/restart-daily.lock}"
 LOCK_WAIT_SEC="${JEVONS_RESTART_LOCK_WAIT_SEC:-240}"
-HELD_LOCK=0
+RUNLOCK="$ROOT/bin/runlock"
+
+# Re-exec under the lock unless we are already the locked child. Fails
+# closed: restarting unserialised is the failure mode this exists to stop,
+# so a missing runlock is built, and an unbuildable one aborts.
+if [[ "${JEVONS_RESTART_LOCKED:-0}" != "1" && "${JEVONS_RESTART_NO_LOCK:-0}" != "1" ]]; then
+  if [[ ! -x "$RUNLOCK" ]]; then
+    (cd "$ROOT" && go build -o "$RUNLOCK" ./cmd/runlock) || {
+      echo "restart-daily-jevonsd: cannot build $RUNLOCK — refusing to restart unserialised" >&2
+      exit 2
+    }
+  fi
+  export JEVONS_RESTART_LOCKED=1
+  exec "$RUNLOCK" -timeout "${LOCK_WAIT_SEC}s" "$LOCK_FILE" "$0" "$@"
+fi
+
 BIN="$ROOT/bin/jevonsd"
 DRY_RUN=0
 SKIP_MAKE="${JEVONS_RESTART_SKIP_MAKE:-0}"
@@ -210,43 +236,6 @@ running_sha() {
     return 0
   fi
   printf '%s' "$recorded_sha"
-}
-
-release_lock() {
-  if [[ "$HELD_LOCK" -eq 1 ]]; then
-    rm -rf "$LOCK_DIR" 2>/dev/null || true
-    HELD_LOCK=0
-  fi
-}
-
-acquire_lock() {
-  # mkdir is atomic on POSIX filesystems: exactly one caller creates it.
-  # Returns 0 with the lock held, 1 if the wait timed out.
-  local waited=0 holder
-  mkdir -p "$(dirname "$LOCK_DIR")" 2>/dev/null || true
-  while :; do
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-      HELD_LOCK=1
-      printf '%s\n' "$$" >"$LOCK_DIR/pid" 2>/dev/null || true
-      return 0
-    fi
-    holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
-    # A crashed or killed holder must not wedge the fleet forever.
-    if [[ -z "$holder" ]] || ! kill -0 "$holder" 2>/dev/null; then
-      log "🎯T218 breaking stale lock (holder=${holder:-none} not alive)"
-      rm -rf "$LOCK_DIR" 2>/dev/null || true
-      continue
-    fi
-    if [[ "$waited" -ge "$LOCK_WAIT_SEC" ]]; then
-      log "🎯T218 lock wait exceeded ${LOCK_WAIT_SEC}s (holder=$holder)"
-      return 1
-    fi
-    if [[ "$waited" -eq 0 ]]; then
-      log "🎯T218 restart already in flight (holder=$holder); waiting up to ${LOCK_WAIT_SEC}s to coalesce"
-    fi
-    sleep 2
-    waited=$((waited + 2))
-  done
 }
 
 await_min_interval() {
@@ -407,7 +396,7 @@ log "🎯T191 restart-daily-jevonsd: root=$ROOT port=$PORT workdir=$WORKDIR dry_
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: make (bin/jevonsd) unless SKIP_MAKE=$SKIP_MAKE"
   log "[dry-run] would: 🎯T218 no-op if the running daemon already serves this build (already activated)"
-  log "[dry-run] would: 🎯T218 take lock $LOCK_DIR so concurrent restarts coalesce"
+  log "[dry-run] would: 🎯T392.5 hold $LOCK_FILE via runlock so concurrent restarts serialise"
   log "[dry-run] would: 🎯T218 wait out the ${MIN_INTERVAL_SEC}s thrash window rather than skip a changed binary"
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
   log "[dry-run] would: kill listeners on :$PORT"
@@ -446,22 +435,14 @@ if already_activated; then
   exit 0
 fi
 
-# Serialise: never two restarts fighting over one port.
-trap release_lock EXIT INT TERM
-if ! acquire_lock; then
-  # The holder may have activated our binary while we waited.
-  if already_activated; then
-    log "🎯T218 coalesced: in-flight restart activated this build; no restart needed"
-    exit 0
-  fi
-  die "another restart holds $LOCK_DIR and this build is still not serving; not racing it"
-fi
-
+# Serialisation happens in runlock, which this script re-execs itself under
+# (🎯T392.5) — by the time we reach here the lock is held for the whole
+# run and the kernel releases it even if we are killed.
+#
 # Re-check under the lock: whoever we queued behind has now finished, and
 # they were very likely activating the same build we wanted.
 if already_activated; then
   log "🎯T218 coalesced: preceding restart activated this build; no restart needed"
-  release_lock
   exit 0
 fi
 
@@ -479,5 +460,4 @@ log "OK: daily jevonsd serving on :$PORT (workdir=$WORKDIR)"
 # 🎯T218: stamp successful restart to open the next thrash window.
 mkdir -p "$(dirname "$STAMP_FILE")" 2>/dev/null || true
 date +%s >"$STAMP_FILE" 2>/dev/null || true
-release_lock
 exit 0
