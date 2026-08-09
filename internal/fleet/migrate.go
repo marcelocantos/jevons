@@ -60,15 +60,50 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	if def.Provider == target {
 		return handover.Pending{}, fmt.Errorf("migrate %q: already on %s", name, target)
 	}
+	return f.rotate(name, target, force, "migrate")
+}
+
+// PrepareCompaction rotates an agent onto a fresh session on the SAME
+// provider, handing the successor its predecessor's transcript (🎯T392.1).
+//
+// This is the context ceiling's only enforcement action, and it is the
+// migration path with the provider held constant — deliberately, because
+// the hard part of both is identical: resolve and persist the transcript
+// pointer before the rotation overwrites the session id that finds it.
+// Asking the model to compact itself was the alternative and it is not
+// one, since a model deciding when its own context is too large is the
+// judgement call the ceiling exists to replace.
+//
+// The cost of a compaction is one turn at the ceiling plus the re-reads
+// that follow it. That is charged knowingly: a replay of the 🎯T392
+// baseline puts a 100k ceiling at -63% net of 56 such compactions.
+func (f *Claudia) PrepareCompaction(name string, force bool) (handover.Pending, error) {
+	if f == nil || f.reg == nil {
+		return handover.Pending{}, fmt.Errorf("compact: no agent registry")
+	}
+	def := f.reg.Def(name)
+	if def == nil {
+		return handover.Pending{}, fmt.Errorf("compact: no agent %q", name)
+	}
+	return f.rotate(name, def.Provider, force, "compact")
+}
+
+// rotate is the shared body of migration and compaction. kind only
+// colours the errors and the log line; the mechanics are the same.
+func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind string) (handover.Pending, error) {
+	def := f.reg.Def(name)
+	if def == nil {
+		return handover.Pending{}, fmt.Errorf("%s: no agent %q", kind, name)
+	}
 
 	// Resolve the pointer while the old session id is still on the row.
 	oldSession := def.SessionID
 	transcript := discovery.TranscriptPath(f.roots, oldSession)
 	if transcript == "" && !force {
 		return handover.Pending{}, fmt.Errorf(
-			"migrate %q: no transcript found for session %s under the configured session roots — "+
+			"%s %q: no transcript found for session %s under the configured session roots — "+
 				"its history cannot be handed over; pass force to switch cold anyway",
-			name, oldSession)
+			kind, name, oldSession)
 	}
 
 	pending := handover.Pending{
@@ -82,7 +117,7 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	// predecessor's transcript is.
 	if f.handovers != nil {
 		if err := f.handovers.Put(pending); err != nil {
-			return handover.Pending{}, fmt.Errorf("migrate %q: %w", name, err)
+			return handover.Pending{}, fmt.Errorf("%s %q: %w", kind, name, err)
 		}
 	}
 
@@ -97,7 +132,16 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	// → Grok). Bind the target provider's default so cold agents get a
 	// condensable model, not a bare mark forever (T323 residual cleared
 	// the pin only; fail-closed sniff is not the product strategy).
-	next.Model = cli.BindSessionModel("", target)
+	// A cross-provider move must not inherit the old provider's pin (e.g.
+	// "fable" under Claude → Grok). A same-provider compaction must keep
+	// it: the agent is the same agent on the same backend, and silently
+	// re-defaulting its model would make a context rotation change what
+	// the agent is.
+	if target == def.Provider {
+		next.Model = cli.BindSessionModel(def.Model, target)
+	} else {
+		next.Model = cli.BindSessionModel("", target)
+	}
 	// def was snapshotted before Stop, which clears the serve endpoint on
 	// the registry's own copy. Re-registering the snapshot would re-persist
 	// a dead ConnectURL/PID and send the next Launch into a reattach that
@@ -105,10 +149,10 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	next.ConnectURL = ""
 	next.ConnectPID = 0
 	if err := f.reg.Register(next); err != nil {
-		return handover.Pending{}, fmt.Errorf("migrate %q: register rotated row: %w", name, err)
+		return handover.Pending{}, fmt.Errorf("%s %q: register rotated row: %w", kind, name, err)
 	}
-	slog.Info("agent provider migration prepared",
-		"name", name, "from", pending.From, "to", pending.To,
+	slog.Info("agent session rotation prepared",
+		"kind", kind, "name", name, "from", pending.From, "to", pending.To,
 		"old_session", oldSession, "new_session", next.SessionID,
 		"transcript", transcript, "cold", transcript == "")
 	return pending, nil

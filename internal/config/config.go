@@ -52,6 +52,16 @@ type Config struct {
 	Model         string `yaml:"model"`          // default worker model ("" = provider default)
 	OverseerModel string `yaml:"overseer_model"` // "" = same as Model
 
+	// ContextCeilingTokens bounds the conversation any agent carries into
+	// a model call (🎯T392.1). Every call resends the whole conversation,
+	// so a session's cost is quadratic in its length and fleet spend is
+	// linear in how long agents run before compacting. 0 = the ctxcap
+	// default (100k); see internal/ctxcap for why that number.
+	ContextCeilingTokens int64 `yaml:"context_ceiling_tokens"`
+	// ContextCeilingDisabled stops enforcement but keeps observation, so
+	// the spend report still shows what the ceiling would have done.
+	ContextCeilingDisabled bool `yaml:"context_ceiling_disabled"`
+
 	StateDir    string `yaml:"state_dir"`    // jevons state (registry, threads, usage.db, …)
 	SessionsDir string `yaml:"sessions_dir"` // Grok sessions tree (~/.grok/sessions)
 	// ClaudeProjects is the Claude Code projects tree (~/.claude/projects)

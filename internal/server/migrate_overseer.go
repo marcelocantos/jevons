@@ -30,6 +30,7 @@ import (
 // half-wired.
 type OverseerMigrator interface {
 	PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error)
+	PrepareCompaction(name string, force bool) (handover.Pending, error)
 	PendingHandover(name string) (handover.Pending, bool, error)
 	MarkHandoverDelivered(name string) error
 }
@@ -52,20 +53,48 @@ func (s *Server) MigrateOverseer(to claudia.Provider, force bool) (handover.Pend
 	if target == "" {
 		return handover.Pending{}, fmt.Errorf("migrate overseer: target provider is required")
 	}
+	return s.rotateOverseer("migrate", func(mig OverseerMigrator, name string) (handover.Pending, error) {
+		return mig.PrepareMigration(name, target, force)
+	})
+}
+
+// CompactOverseer rotates the overseer onto a fresh session on the same
+// backend when its context has grown past the ceiling (🎯T392.1).
+//
+// The overseer is the fleet's largest single consumer — 35.5% of the
+// 🎯T392 baseline at a 192k mean context — precisely because everything
+// the fleet says lands in it. It also cannot use the fleet compaction
+// path: owner chat is attached by this server, not the registry, so a
+// rotation has to re-attach here or the cockpit goes silent.
+//
+// Until this existed the only thing bounding the overseer's context was
+// accidental daemon restarts, roughly one every five hours.
+func (s *Server) CompactOverseer(force bool) (handover.Pending, error) {
+	return s.rotateOverseer("compact", func(mig OverseerMigrator, name string) (handover.Pending, error) {
+		return mig.PrepareCompaction(name, force)
+	})
+}
+
+// rotateOverseer is the shared rotate/relaunch/re-attach/seed sequence.
+// Only the prepare step differs between a provider migration and a
+// context compaction; everything after the row is rotated is identical,
+// including the failure handling that keeps a half-rotation legible.
+func (s *Server) rotateOverseer(kind string,
+	prepare func(OverseerMigrator, string) (handover.Pending, error)) (handover.Pending, error) {
 	s.mu.RLock()
 	reg := s.registry
 	mig := s.overseerMigrator
 	name := s.overseerName
 	s.mu.RUnlock()
 	if reg == nil {
-		return handover.Pending{}, fmt.Errorf("migrate overseer: no registry")
+		return handover.Pending{}, fmt.Errorf("%s overseer: no registry", kind)
 	}
 	if mig == nil {
-		return handover.Pending{}, fmt.Errorf("migrate overseer: migration is not wired")
+		return handover.Pending{}, fmt.Errorf("%s overseer: rotation is not wired", kind)
 	}
 
 	// Rotate + persist the transcript pointer (shared with the fleet path).
-	pending, err := mig.PrepareMigration(name, target, force)
+	pending, err := prepare(mig, name)
 	if err != nil {
 		return handover.Pending{}, err
 	}
@@ -75,17 +104,17 @@ func (s *Server) MigrateOverseer(to claudia.Provider, force bool) (handover.Pend
 	// on disk, and cockpit converge (🎯T204) keeps retrying the launch.
 	agent, lerr := reg.Launch(name)
 	if lerr != nil {
-		s.SetOverseerDownReason("provider migration relaunch failed: " + lerr.Error())
+		s.SetOverseerDownReason("overseer " + kind + " relaunch failed: " + lerr.Error())
 		s.NotifyAgentsChanged()
-		return pending, fmt.Errorf("migrate overseer: relaunch on %s failed: %w (handover stays pending)",
-			target, lerr)
+		return pending, fmt.Errorf("%s overseer: relaunch failed: %w (handover stays pending)",
+			kind, lerr)
 	}
 	s.AttachOverseer(agent)
 	s.SetOverseerDownReason("")
 	s.NotifyAgentsChanged()
 
 	s.ResumePendingHandover()
-	slog.Info("overseer migrated", "detail", pending.Describe())
+	slog.Info("overseer rotated", "kind", kind, "detail", pending.Describe())
 	return pending, nil
 }
 

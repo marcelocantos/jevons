@@ -651,6 +651,12 @@ func main() {
 	// tick so owner turns and open Build missions keep their room.
 	capGov := startCapacityGovernor(cfg, guard, mcpSrv, srv)
 
+	// 🎯T392.1: bound the conversation every agent carries into a model
+	// call. Deliberately not gated by the capacity governor — this loop
+	// exists to *reduce* spend, so deferring it when budget is tight is
+	// exactly backwards.
+	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv)
+
 	rsiCoach := startAmbientRSICoach(ctx, cfg, mcpSrv, capacityGate(capGov))
 	rsiLoop := startAmbientRSIMint(ctx, cfg, mcpSrv)
 

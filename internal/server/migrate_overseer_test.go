@@ -41,6 +41,23 @@ func (m *fakeOverseerMigrator) PrepareMigration(name string, to claudia.Provider
 	return m.pending, nil
 }
 
+// PrepareCompaction is the same rotation with the provider held constant
+// (🎯T392.1) — the fake records it distinctly so a test can tell a context
+// rotation from a backend switch.
+func (m *fakeOverseerMigrator) PrepareCompaction(name string, force bool) (handover.Pending, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prepared = append(m.prepared, name+"↻compact")
+	if m.prepErr != nil {
+		return handover.Pending{}, m.prepErr
+	}
+	m.pending = handover.Pending{
+		Agent: name, From: "grok", To: "grok",
+		TranscriptPath: "/Users/x/.grok/sessions/abc/chat_history.jsonl",
+	}
+	return m.pending, nil
+}
+
 func (m *fakeOverseerMigrator) PendingHandover(string) (handover.Pending, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
