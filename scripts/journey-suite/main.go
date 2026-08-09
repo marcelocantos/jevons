@@ -203,7 +203,11 @@ persona_notes: |
 			fmt.Println("log:", logPath)
 		}
 	}
-	defer stop()
+	// 🎯T379: registered, not deferred. A defer covers the happy path
+	// only; fatal() exits without unwinding and a signal does not unwind at
+	// all, and both of those leak the MCP registration.
+	cleanups.Add(stop)
+	catchSignals()
 
 	if err := waitReady(host, readyTimeout); err != nil {
 		dumpTail(logPath, 40)
@@ -239,7 +243,7 @@ persona_notes: |
 	if s.failures > 0 {
 		dumpTail(logPath, 60)
 		fmt.Printf("FAIL: %d journey(s) failed\n", s.failures)
-		os.Exit(1)
+		exitNow(1)
 	}
 	// 🎯T283: outages are not green, but they are not product defects either —
 	// the suite says which it saw rather than letting a backend outage read as
@@ -247,7 +251,7 @@ persona_notes: |
 	if s.outages > 0 {
 		dumpTail(logPath, 30)
 		fmt.Printf("OUTAGE: %d journey(s) could not run — provider backend unavailable, not a product defect. Re-run when the backend is healthy.\n", s.outages)
-		os.Exit(2)
+		exitNow(2)
 	}
 	fmt.Println("PASS: journey suite green (isolated; daily stream untouched)")
 }
@@ -675,5 +679,8 @@ func trim(s string, n int) string {
 
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "fatal:", err)
-	os.Exit(1)
+	// 🎯T379: teardown BEFORE exiting. os.Exit skips defers, so the
+	// pre-fix `defer stop()` never ran on this path and the run leaked its
+	// user-scoped MCP registration onto the owner's machine.
+	exitNow(1)
 }
