@@ -67,6 +67,10 @@ type Candidate struct {
 	// Phrase is the friction phrase (chat/session kinds) or commit subject
 	// (git kinds) of the sample. The retro value bar (🎯T353) reads it.
 	Phrase string
+	// ClusterKey identifies the evidence bucket this candidate came from, so
+	// evidence pointers cite the cluster's own rows rather than anything that
+	// merely shares a kind. Empty for hand-built candidates.
+	ClusterKey string
 }
 
 // ExistingTarget is a ledger entry used for near-duplicate suppression.
@@ -565,6 +569,7 @@ func candidateFromBucket(b *evidenceBucket) Candidate {
 		EvidenceIDs: append([]string{}, b.ids...),
 		LatestTS:    b.maxTS,
 		Phrase:      phraseFromSample(e),
+		ClusterKey:  b.key,
 	}
 }
 

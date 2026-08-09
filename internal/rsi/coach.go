@@ -405,16 +405,24 @@ func evidenceRefsForCandidate(c Candidate, all []Evidence) []EvidenceRef {
 		if len(refs) >= 6 {
 			break
 		}
+		// Exact cluster match when the candidate came from ExtractCandidates:
+		// a shared kind is not shared provenance. Without it, a git_rework
+		// judgment about one scope would cite commits from every other scope.
 		match := false
-		if e.SourceID != "" {
-			if _, ok := idSet[e.SourceID]; ok {
-				match = true
+		switch {
+		case c.ClusterKey != "":
+			match = clusterKey(e) == c.ClusterKey
+		default:
+			if e.SourceID != "" {
+				if _, ok := idSet[e.SourceID]; ok {
+					match = true
+				}
 			}
-		}
-		if !match && len(kindSet) > 0 {
-			if _, ok := kindSet[e.Kind]; ok {
-				// Loose match by kind when ids missing; require component token in name.
-				match = true
+			if !match && len(kindSet) > 0 {
+				if _, ok := kindSet[e.Kind]; ok {
+					// Loose match by kind when ids are missing.
+					match = true
+				}
 			}
 		}
 		if !match {

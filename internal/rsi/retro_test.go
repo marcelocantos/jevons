@@ -517,3 +517,39 @@ func TestTailEventLogRowsBoundedByWindow(t *testing.T) {
 		t.Fatalf("missing journal must be empty+nil: %d %v", len(missing), err)
 	}
 }
+
+// TestJudgmentEvidenceCitesOwnCluster guards the provenance bug the first live
+// retro pass exposed: a git_rework judgment about one scope cited commits from
+// every other scope, because evidence matched on kind alone.
+func TestJudgmentEvidenceCitesOwnCluster(t *testing.T) {
+	at := time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)
+	// One commit touching two scopes, plus repeat churn in each — so kind and
+	// SHA are both shared across clusters and only the cluster key separates them.
+	commits := []GitCommit{
+		{SHA: "aaaa1111", Subject: "fix(a): one", At: at, Files: []string{"internal/alpha/a.go", "internal/beta/b.go"}},
+		{SHA: "bbbb2222", Subject: "fix(a): two", At: at, Files: []string{"internal/alpha/a.go"}},
+		{SHA: "cccc3333", Subject: "fix(a): three", At: at, Files: []string{"internal/alpha/a.go"}},
+		{SHA: "dddd4444", Subject: "fix(b): two", At: at, Files: []string{"internal/beta/b.go"}},
+		{SHA: "eeee5555", Subject: "fix(b): three", At: at, Files: []string{"internal/beta/b.go"}},
+	}
+	ev := GitCommitsToEvidence(commits)
+	cands := ExtractCandidates(ev, retroExtractMinCount)
+	if len(cands) != 2 {
+		t.Fatalf("want alpha + beta clusters, got %+v", cands)
+	}
+	for _, c := range cands {
+		j := CandidateToJudgment(c, ev)
+		want := "internal/alpha"
+		if strings.Contains(c.Name, "beta") {
+			want = "internal/beta"
+		}
+		if len(j.Evidence) == 0 {
+			t.Fatalf("%q: no evidence pointers", j.Name)
+		}
+		for _, e := range j.Evidence {
+			if !strings.Contains(e.Quote, want) {
+				t.Fatalf("%q cites evidence from another cluster: %+v", j.Name, e)
+			}
+		}
+	}
+}
