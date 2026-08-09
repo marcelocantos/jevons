@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Claude Code hook shim for the shared-file write guard (🎯T376).
+#
+# Thin wrapper only: it locates bin/treeguard and execs it. All policy lives in
+# internal/treeguard, because a cursor-and-hash ledger shared by concurrent
+# processes is exactly what shell must not own.
+#
+# A missing binary degrades to a VISIBLE non-blocking error rather than a
+# silently disabled guard: exit 1 is reported to the agent, exit 2 is reserved
+# for a real refusal, so tooling problems never block the fleet.
+set -uo pipefail
+
+root="${CLAUDE_PROJECT_DIR:-}"
+if [[ -z "$root" ]]; then
+    root="$(cd "$(dirname "$0")/../.." && pwd)"
+fi
+bin="$root/bin/treeguard"
+
+if [[ ! -x "$bin" ]]; then
+    printf 'treeguard: %s not built — shared-file write guard INACTIVE. Run: make treeguard\n' \
+        "$bin" >&2
+    exit 1
+fi
+
+exec "$bin" "$@"

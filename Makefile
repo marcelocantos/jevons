@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head
+all: jevonsd jevons-head treeguard
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -27,6 +27,16 @@ jevons-head: bin/jevons-head
 bin/jevons-head: $(GO_SRC)
 	@mkdir -p bin
 	go build $(LDFLAGS) -o bin/jevons-head ./cmd/jevons-head
+
+# Shared-file write guard (🎯T376). The Claude Code hook in .claude/settings.json
+# execs this binary on every Write/Edit, so `make all` builds it: without it the
+# hook reports a visible non-blocking error instead of guarding anything.
+.PHONY: treeguard
+treeguard: bin/treeguard
+
+bin/treeguard: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/treeguard ./cmd/treeguard
 
 .PHONY: macos-head
 macos-head:

@@ -245,6 +245,18 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   (`jv-t27.2-config` not `jv-t272-config`). Flat ids unchanged
   (`jv-t159-seal`). Names free-form otherwise. Persona + agents-guide +
   fleet standing brief.
+- **Shared hot files are compare-and-swap (🎯T376):** concurrent workers share
+  one working tree, so a full-file `Write` derived from an older `Read` silently
+  reverts whatever another worker landed in between — it happened three times
+  while landing 🎯T370, on `web/index.html`. `internal/treeguard` + the
+  `PreToolUse` hook in `.claude/settings.json` refuse such a write and **name
+  the lines that would be lost**; recover by re-reading and re-applying on top
+  of current content, never by disabling the guard. Guarded set:
+  `treeguard.DefaultGuardedPaths` (cockpit HTML, Makefile, embed.go, the
+  instruction files, `bullseye.yaml`). `make all` builds `bin/treeguard`; a
+  missing binary reports a visible non-blocking error rather than degrading to
+  no guard. Sibling: 🎯T377 (shared `.git` index — stage and commit with
+  explicit paths, never `git add -A`).
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /
