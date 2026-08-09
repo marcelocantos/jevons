@@ -324,6 +324,10 @@ func (s *Server) broadcastCockpitReady(text string) {
 	}
 	s.Broadcast(map[string]any{"type": "status", "state": "idle", "text": text})
 	s.NoteOverseerProgress()
+	// 🎯T355: recovery chrome is idle chrome. The owner's unanswered turn is
+	// deliberately NOT given a residual here — a relaunch mid-turn is exactly
+	// the case the requeue actuator exists to re-inject.
+	s.noteChromePublished(false)
 }
 
 func (s *Server) cockpitLaunch(state *cockpitState) error {
@@ -436,6 +440,9 @@ func (s *Server) StartCockpitConverge(ctx context.Context, interval time.Duratio
 			case <-ctx.Done():
 				return
 			case <-t.C:
+				// 🎯T355: owner-interaction health rides the same tick as
+				// process health — a live overseer is not a usable chat.
+				s.ReconcileOwnerHealth(time.Now())
 				if err := s.EnsureOverseer(state); err != nil {
 					state.mu.Lock()
 					phase := state.lastPhase

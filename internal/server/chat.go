@@ -547,6 +547,11 @@ func (s *Server) drainOverseerNotes() {
 	depth := len(s.notifyQueue)
 	ownerPending := queueHasOwner(s.notifyQueue)
 	s.mu.Unlock()
+	if ownerBatch {
+		// 🎯T355: the prompt left the queue into the overseer's session —
+		// the server-ack half of send-landed.
+		s.NoteOwnerDelivered()
+	}
 	slog.Info("notify_queue",
 		"component", "notify_queue",
 		"decision", "drain",
@@ -1059,7 +1064,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			meta, _ := json.Marshal(map[string]any{
 				"type": "history_meta", "older": start, "total": total, "start": start,
 				"conn_id": connID, "replay_frames": frames, "replay_bytes": bytes, "replay_ms": replayMS,
-				"working": s.overseerWorkingLevel(),
+				// 🎯T355: this sample is also what the client will paint,
+				// so it is the chrome level the server has published.
+				"working": s.publishedWorkingLevel(),
 			})
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			_ = conn.Write(writeCtx, websocket.MessageText, meta)
@@ -1147,6 +1154,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// a pong so the watchdog stays quiet; do NOT forward to
 		// Claude (it would be parsed as a chat turn).
 		if msg == `{"type":"ping"}` {
+			// 🎯T355: a ticking client is the level evidence that the owner
+			// can still drive the UI; a frozen main thread stops pinging.
+			s.NoteOwnerUIHeartbeat()
 			writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			_ = conn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"pong"}`))
 			cancel()
@@ -1225,7 +1235,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// Echo the clean owner turn into the transcript as the single source
 		// of the owner bubble; the ACP echo of the same turn (which arrives
 		// prefixed) is dropped by chatWireLine to avoid a duplicate.
-		s.BroadcastChat(chatUserEcho(msg))
+		echo := chatUserEcho(msg)
+		// 🎯T355: open the owner-interaction episode before the echo, so
+		// send-landed is observed against this exact journal line.
+		s.NoteOwnerSend(msg, echo)
+		s.BroadcastChat(echo)
 		// Deliver to the overseer with the userTurnPrefix marker so the wire
 		// layer can tell owner turns from injected notifications, and the
 		// overseer can relay per the owner's instructions (🎯T63).
@@ -1253,6 +1267,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 			payload, _ := json.Marshal(frame)
 			s.BroadcastChat(string(payload))
+			// 🎯T355: a surfaced delivery failure is a *named* residual —
+			// the owner is owed no reply for a turn that never left.
+			s.NoteOwnerResidual("delivery_failed")
 		}
 	}
 }
@@ -1278,6 +1295,10 @@ func (s *Server) settleCancel() {
 	s.mu.Unlock()
 
 	s.NoteOverseerProgress()
+	// 🎯T355: a cancelled turn owes no reply — that is a named residual,
+	// and the settle frame is the chrome level the clients now paint.
+	s.NoteOwnerResidual("cancelled_by_owner")
+	s.noteChromePublished(false)
 	frame := map[string]any{"type": "status", "state": "cancel_settled", "text": "cancelled"}
 	if payload, err := json.Marshal(frame); err == nil {
 		s.BroadcastChat(string(payload))
@@ -1350,6 +1371,10 @@ func (s *Server) BroadcastChat(line string) {
 	if clog != nil {
 		if err := clog.Append(line); err != nil {
 			slog.Error("chat: DURABILITY FAILURE — chat log append failed", "err", err)
+		} else {
+			// 🎯T355: the owner's own echo reaching the journal is the
+			// observed half of send-landed — never inferred from the send.
+			s.noteChatJournaled(line)
 		}
 	}
 	s.broadcastChatLive(line)

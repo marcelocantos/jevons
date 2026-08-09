@@ -159,6 +159,14 @@ type Server struct {
 	notifySender      func(string) error
 	overseerOwnerTurn bool
 
+	// ownerHealth is the 🎯T355 owner-interaction level truth and standing
+	// gap set (send-landed, chrome-truthful, reply-or-residual, usable
+	// client). ownerMu guards it and is deliberately separate from mu: the
+	// recovery actuators call back into the server, so this lock is never
+	// held across a broadcast or an enqueue.
+	ownerMu     sync.Mutex
+	ownerHealth ownerHealthState
+
 	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
 	agentsWatchCancel context.CancelFunc
 
@@ -338,6 +346,7 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 	case "system":
 		s.mu.Lock()
 		wasWaiting := s.waiting
+		wasOwnerTurn := s.overseerOwnerTurn
 		turnText := s.turnBuf
 		s.turnBuf = ""
 		s.waiting = false
@@ -347,6 +356,15 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		s.overseerStreamSilent = false
 		s.overseerStreamHold = nil // 🎯T240 silent stream state
 		s.mu.Unlock()
+		// 🎯T355: a sealed reply is the satisfying observation for
+		// reply-or-residual. Credit it on an owner-turn seal *or* on any
+		// seal that produced visible assistant text: a fleet note drained
+		// between the owner's prompt and its seal clears overseerOwnerTurn
+		// (🎯T291), and treating that as silence would re-inject a question
+		// the owner already had answered.
+		if wasOwnerTurn || strings.TrimSpace(turnText) != "" {
+			s.NoteOwnerReplySealed()
+		}
 		// The overseer's ACP session is now idle — flush any async notes
 		// (worker replies, budget alerts) that arrived while it was busy and
 		// got "prompt already in flight". Runs on every terminal stop, even
