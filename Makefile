@@ -130,6 +130,7 @@ test-ui:
 	node scripts/chat-ui-test/t309.1-conversation-widget-test.js
 	node scripts/chat-ui-test/t340-frontier-table-layout-test.js
 	node scripts/chat-ui-test/t366-composer-tab-cycle-test.js
+	node scripts/chat-ui-test/t368-image-prefix-route-test.js
 
 .PHONY: test-ui-live
 test-ui-live:

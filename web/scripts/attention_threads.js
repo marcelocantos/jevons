@@ -42,6 +42,27 @@
   // Matches "aside: foo", "ASIDE:foo", "capture : bar", "target: file this", "idea: spark".
   const PREFIX_RE = /^\s*(aside|capture|park|main|pursue|target|idea)\s*:\s*/i;
 
+  // 🎯T368: the composer prepends "[image: id]" markers ahead of the owner's
+  // draft when images are attached, which pushes the command off the start of
+  // the string and silently defeated PREFIX_RE. Skip a leading run of markers
+  // before matching, and carry them alongside so the routed body keeps its
+  // images. Without attachments nothing here fires and behaviour is unchanged.
+  const LEADING_IMAGE_MARKERS_RE = /^\s*(?:\[image:\s*[^\]]*\]\s*)+/i;
+
+  // Normalize a stripped marker run to a single space-separated line.
+  function normalizeImageMarkers(run) {
+    return String(run || '').trim().replace(/\s+/g, ' ');
+  }
+
+  // Re-attach markers to a routed body (trailing, so titleFromBody still sees
+  // the owner's own first line rather than "[image: …]").
+  function withImageMarkers(body, markers) {
+    const b = String(body || '').trim();
+    const m = normalizeImageMarkers(markers);
+    if (!m) return b;
+    return b ? (b + '\n' + m) : m;
+  }
+
   function now() {
     return Date.now();
   }
@@ -147,21 +168,39 @@
     return !state || !state.focusId || state.focusId === MAIN_ID;
   }
 
-  // parsePrefix: { command|null, body, raw }
+  // parsePrefix: { command|null, body, raw, images }
+  // images is the leading "[image: …]" run skipped to find the command ('' when
+  // none). With no command the draft is returned untouched — markers included.
   function parsePrefix(draft) {
     const raw = String(draft || '');
-    const m = raw.match(PREFIX_RE);
+    let rest = raw;
+    let images = '';
+    let m = raw.match(PREFIX_RE);
     if (!m) {
-      return { command: null, body: raw.replace(/^\s+/, ''), raw: raw };
+      // 🎯T368: retry past attached-image markers before giving up.
+      const im = raw.match(LEADING_IMAGE_MARKERS_RE);
+      if (im) {
+        const after = raw.slice(im[0].length);
+        const m2 = after.match(PREFIX_RE);
+        if (m2 && COMMANDS.has(m2[1].toLowerCase())) {
+          rest = after;
+          images = normalizeImageMarkers(im[0]);
+          m = m2;
+        }
+      }
+    }
+    if (!m) {
+      return { command: null, body: raw.replace(/^\s+/, ''), raw: raw, images: '' };
     }
     const command = m[1].toLowerCase();
     if (!COMMANDS.has(command)) {
-      return { command: null, body: raw.replace(/^\s+/, ''), raw: raw };
+      return { command: null, body: raw.replace(/^\s+/, ''), raw: raw, images: '' };
     }
     return {
       command: command,
-      body: raw.slice(m[0].length),
+      body: rest.slice(m[0].length),
       raw: raw,
+      images: images,
     };
   }
 
@@ -743,12 +782,15 @@
     const parsed = parsePrefix(draft);
     const body = parsed.body;
     const bodyTrim = String(body || '').trim();
+    // 🎯T368: content commands carry their attached images into the routed
+    // body; park/pursue take bodyTrim alone because that is a match query.
+    const contentBody = withImageMarkers(bodyTrim, parsed.images);
 
     if (parsed.command === 'capture') {
-      if (!bodyTrim) {
+      if (!contentBody) {
         return { kind: 'empty', text: '', state: s0, clearComposer: false, composerBody: null };
       }
-      const cap = capture(s0, bodyTrim);
+      const cap = capture(s0, contentBody);
       return {
         kind: 'local',
         text: '',
@@ -759,14 +801,14 @@
         // 🎯T325.3: dual-write durable idea ledger (not scrollback-only).
         ideaCapture: true,
         ideaSource: 'capture',
-        ideaText: bodyTrim,
+        ideaText: contentBody,
       };
     }
 
     // idea: durable idea-ledger only (no fleet aside thrash) — 🎯T325.3.
     // Focus stays main; ceremony posts to POST /api/ideas from the shell.
     if (parsed.command === 'idea') {
-      if (!bodyTrim) {
+      if (!contentBody) {
         return { kind: 'empty', text: '', state: s0, clearComposer: false, composerBody: null };
       }
       return {
@@ -777,7 +819,7 @@
         composerBody: '',
         ideaCapture: true,
         ideaSource: 'idea',
-        ideaText: bodyTrim,
+        ideaText: contentBody,
       };
     }
 
@@ -806,7 +848,7 @@
 
     if (parsed.command === 'main') {
       const next = focusMain(s0);
-      if (!bodyTrim) {
+      if (!contentBody) {
         return {
           kind: 'local',
           text: '',
@@ -817,7 +859,7 @@
       }
       return {
         kind: 'send',
-        text: bodyTrim,
+        text: contentBody,
         state: next,
         clearComposer: true,
         composerBody: '',
@@ -826,12 +868,12 @@
     }
 
     if (parsed.command === 'aside') {
-      if (!bodyTrim) {
+      if (!contentBody) {
         return { kind: 'empty', text: '', state: s0, clearComposer: false, composerBody: null };
       }
-      const cap = capture(s0, bodyTrim);
+      const cap = capture(s0, contentBody);
       const t = findThread(cap.state, cap.id);
-      const wire = formatAsideWire(cap.id, t ? t.title : titleFromBody(bodyTrim), bodyTrim);
+      const wire = formatAsideWire(cap.id, t ? t.title : titleFromBody(contentBody), contentBody);
       return {
         kind: 'send',
         text: wire,
@@ -845,12 +887,12 @@
 
     // target: short-lived filing aside (🎯T93/T95) — not a general T65 workstream.
     if (parsed.command === 'target') {
-      if (!bodyTrim) {
+      if (!contentBody) {
         return { kind: 'empty', text: '', state: s0, clearComposer: false, composerBody: null };
       }
-      const cap = openTargetAside(s0, bodyTrim);
+      const cap = openTargetAside(s0, contentBody);
       const t = findThread(cap.state, cap.id);
-      const wire = formatTargetWire(cap.id, t ? t.title : titleFromBody(bodyTrim), bodyTrim);
+      const wire = formatTargetWire(cap.id, t ? t.title : titleFromBody(contentBody), contentBody);
       return {
         kind: 'send',
         text: wire,

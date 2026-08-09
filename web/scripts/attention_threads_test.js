@@ -727,6 +727,96 @@ test('T308 index.html: aside wire paths stamp/preserve time, never strip it', fu
     'no bare {role, text} push that strips when');
 });
 
+// 🎯T368: the composer prepends "[image: id]" markers, which used to push the
+// command off the start of the draft so target:/aside:/capture:/idea: fell
+// through to main. Markers must be skipped for the match and kept in the body.
+test('T368 parsePrefix skips leading [image: …] markers', function () {
+  const a = AT.parsePrefix('[image: d592b0380b1a9e9b]\ntarget: virtualise history');
+  assert.strictEqual(a.command, 'target');
+  assert.strictEqual(a.body, 'virtualise history');
+  assert.strictEqual(a.images, '[image: d592b0380b1a9e9b]');
+  // Multiple markers, single-line prepend, odd spacing.
+  const b = AT.parsePrefix('[image: aaa111] [image: bbb222]  ASIDE : two shots');
+  assert.strictEqual(b.command, 'aside');
+  assert.strictEqual(b.body, 'two shots');
+  assert.strictEqual(b.images, '[image: aaa111] [image: bbb222]');
+  // No images: unchanged, and no command still returns the draft verbatim.
+  const c = AT.parsePrefix('capture: side thought');
+  assert.strictEqual(c.command, 'capture');
+  assert.strictEqual(c.body, 'side thought');
+  assert.strictEqual(c.images, '');
+  const d = AT.parsePrefix('[image: aaa111]\nplain body');
+  assert.strictEqual(d.command, null);
+  assert.strictEqual(d.body, '[image: aaa111]\nplain body', 'no command keeps markers in body');
+  assert.strictEqual(d.images, '');
+});
+
+test('T368 image + target: opens filing aside, not main', function () {
+  const withImg = AT.handleComposer(AT.emptyState(),
+    '[image: d592b0380b1a9e9b]\ntarget: Chat paste images work');
+  const textOnly = AT.handleComposer(AT.emptyState(), 'target: Chat paste images work');
+  assert.strictEqual(withImg.kind, 'send');
+  assert.strictEqual(withImg.routed, true, 'routed to the aside wire, not main');
+  assert.strictEqual(withImg.purpose, 'file-target');
+  assert.ok(withImg.threadId && withImg.threadId.indexOf('att-') === 0);
+  assert.ok(withImg.text.indexOf('[target-aside:') === 0);
+  assert.strictEqual(withImg.state.threads[0].purpose, textOnly.state.threads[0].purpose);
+  // Title comes from the owner's words, and the image ref survives in the body.
+  assert.strictEqual(withImg.state.threads[0].title, textOnly.state.threads[0].title);
+  assert.ok(withImg.state.threads[0].body.indexOf('[image: d592b0380b1a9e9b]') >= 0,
+    'attached image stays with the filing body');
+  assert.ok(withImg.text.indexOf('[image: d592b0380b1a9e9b]') > 0, 'wire carries the marker');
+});
+
+test('T368 image + aside:/capture:/idea: route the same as text-only', function () {
+  const marker = '[image: aaa111bbb222ccc3]';
+  const aside = AT.handleComposer(AT.emptyState(), marker + '\naside: look at this');
+  assert.strictEqual(aside.kind, 'send');
+  assert.strictEqual(aside.routed, true);
+  assert.ok(aside.text.indexOf('[attention:') === 0, 'aside wire, not a main send');
+  assert.ok(aside.state.threads[0].body.indexOf(marker) >= 0);
+
+  const cap = AT.handleComposer(AT.emptyState(), marker + '\ncapture: park this thought');
+  assert.strictEqual(cap.kind, 'local');
+  assert.strictEqual(cap.ideaCapture, true);
+  assert.strictEqual(cap.ideaSource, 'capture');
+  assert.ok(cap.threadId && cap.threadId.indexOf('att-') === 0);
+  assert.ok(cap.ideaText.indexOf('park this thought') === 0);
+  assert.ok(cap.ideaText.indexOf(marker) > 0);
+
+  const idea = AT.handleComposer(AT.emptyState(), marker + '\nIDEA: spark');
+  assert.strictEqual(idea.kind, 'local');
+  assert.strictEqual(idea.ideaCapture, true);
+  assert.strictEqual(idea.ideaSource, 'idea');
+  assert.ok(idea.ideaText.indexOf('spark') === 0);
+  assert.ok(idea.ideaText.indexOf(marker) > 0);
+
+  // Image-only command still opens the aside rather than falling through.
+  const imgOnly = AT.handleComposer(AT.emptyState(), marker + '\ntarget:');
+  assert.strictEqual(imgOnly.kind, 'send');
+  assert.strictEqual(imgOnly.purpose, 'file-target');
+
+  // No marker at all: main send, unchanged.
+  const plain = AT.handleComposer(AT.emptyState(), 'just talking to Jevons');
+  assert.strictEqual(plain.routed, false);
+  assert.strictEqual(plain.text, 'just talking to Jevons');
+  // Marker without a command: still a plain main send with the marker intact.
+  const imgPlain = AT.handleComposer(AT.emptyState(), marker + '\njust talking');
+  assert.strictEqual(imgPlain.routed, false);
+  assert.strictEqual(imgPlain.text, marker + '\njust talking');
+});
+
+test('T368 index.html: local command clears attached image chips', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const i = html.indexOf("if (r.kind === 'local' || r.kind === 'empty') {");
+  assert.ok(i > 0, 'local/empty composer branch present');
+  const branch = html.slice(i, i + 900);
+  assert.ok(/pendingImages\.length = 0;/.test(branch),
+    'capture:/idea: with attachments drops the chips (markers already consumed)');
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);

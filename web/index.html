@@ -7356,6 +7356,15 @@ function send(opts) {
     if (r.kind === 'local' || r.kind === 'empty') {
       if (r.clearComposer) {
         input.value = r.composerBody != null ? r.composerBody : '';
+        // 🎯T368: markers were consumed into the capture/idea body — drop the
+        // chips too, or the next send re-attaches the same images.
+        if (pendingImages.length) {
+          pendingImages.forEach(img => {
+            if (img.objectUrl) try { URL.revokeObjectURL(img.objectUrl); } catch (_) {}
+          });
+          pendingImages.length = 0;
+          renderComposerImages();
+        }
       }
       if (AttentionThreads.isMainFocus(attentionState)) {
         mainDraftBackup = (typeof WisprContext !== 'undefined')
