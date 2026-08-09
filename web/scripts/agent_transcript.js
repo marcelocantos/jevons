@@ -214,6 +214,13 @@
    *
    * Residual: empty attention list → keep current (no forced switch).
    * Sticky: non-empty draft → keep current (never auto-steal mid-compose).
+   * Sticky (🎯T371): reason='after-send' NEVER switches away from a current
+   * selection. The owner just sent a turn to that aside and must watch their
+   * own bubble land; 🎯T252's "advance to the next attention aside" stole the
+   * pane on the very send that produced the message, so the bubble was painted
+   * into a pane already rebound to another agent and vanished on its next
+   * history frame. Advancing still happens — on poll / new-attention, once the
+   * owner is no longer looking at the turn they just sent.
    */
   function pickAttentionAsideSelection(opts) {
     opts = opts || {};
@@ -240,16 +247,10 @@
     const reason = opts.reason || 'poll';
 
     if (reason === 'after-send' || reason === 'draft-cleared') {
-      // Caller should dequeue the just-served aside before after-send.
-      if (cur) {
-        const idx = names.indexOf(cur);
-        if (idx >= 0) {
-          if (reason === 'after-send' && idx + 1 < names.length) {
-            return names[idx + 1];
-          }
-          return cur;
-        }
-      }
+      // 🎯T371: dequeue-and-stay. A send is not permission to move the pane
+      // off the conversation the owner is having; only an empty selection is
+      // filled from the queue here.
+      if (cur) return cur;
       return names[0];
     }
 

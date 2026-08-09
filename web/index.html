@@ -1458,6 +1458,9 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/fleet_paint.js"></script>
 <script src="scripts/portfolio_group.js"></script>
 <script src="scripts/agent_transcript.js"></script>
+<!-- 🎯T372: one pending-owner-turn contract; must precede its adopters
+     (conversation_widget for agent panes, composer_persist for main). -->
+<script src="scripts/pending_turns.js"></script>
 <script src="scripts/conversation_widget.js"></script>
 <script src="scripts/frontier_table.js"></script>
 <script src="scripts/rsi_dispositions.js"></script>
@@ -5609,6 +5612,10 @@ function markAsideNeedsAttention(name) {
 /**
  * 🎯T252: after successful sidebar send — dequeue served aside, pick next attention.
  * Draft is already cleared by sendSidebarComposer before this runs.
+ *
+ * 🎯T371: dequeue only. The 'after-send' reason no longer moves a live selection
+ * (pickAttentionAsideSelection), so this cannot pull the pane off the turn the
+ * owner just sent; the next attention aside is picked on a later poll instead.
  */
 function onSidebarComposerSent(name) {
   const served = name || selectedAgent;
@@ -8637,6 +8644,26 @@ let _agentInspectFp = '';
 let _agentInspectLines = [];
 let _agentInspectFollow = null;
 let _agentInspectWorking = false;
+// 🎯T371: pending owner turns per agent — the sidebar half of main's 🎯T239
+// staging + 🎯T279 repaint. Staged on send, acked when a frame carries the
+// turn, re-applied onto every history frame so a server payload that has not
+// sealed the turn yet cannot delete the owner's own bubble.
+let _sidebarPending = (typeof ConversationWidget !== 'undefined' && ConversationWidget.emptyPending)
+  ? ConversationWidget.emptyPending()
+  : { items: [] };
+
+// Re-apply unacked owner turns for `name` onto a fresh line set, then ack
+// whatever the frame already carries. Every path that REPLACES the inspect
+// line model must go through here — that is the no-vanish invariant.
+function reconcileInspectPending(name, lines) {
+  if (typeof ConversationWidget === 'undefined' ||
+      typeof ConversationWidget.applyPendingOwnerTurns !== 'function') {
+    return lines || [];
+  }
+  const acked = ConversationWidget.ackPendingOwnerTurns(_sidebarPending, name, lines || []);
+  _sidebarPending = acked.state;
+  return ConversationWidget.applyPendingOwnerTurns(lines || [], _sidebarPending, name);
+}
 // 🎯T308: every rebuild of the inspect line model goes through here. The
 // hand-rolled `{role, text}` copies this replaces are what dropped the turn
 // timestamp before renderAgentInspect ever saw it, so the sidebar had no
@@ -8783,6 +8810,25 @@ let rhsBottomTab = (typeof FrontierTable !== 'undefined')
         _agentInspectWorking = true;
         _agentInspectFp = '';
         if (typeof renderAgentInspect === 'function') renderAgentInspect(opt.model);
+      },
+      onStagePending: function (name, text) {
+        // 🎯T371: durable-in-memory owner turn before the transport runs.
+        _sidebarPending = ConversationWidget.stagePendingOwnerTurn(_sidebarPending, name, text);
+        const items = ConversationWidget.pendingOwnerTurnsFor(_sidebarPending, name);
+        return items.length ? items[items.length - 1] : null;
+      },
+      onSendFailed: function (name, staged, err) {
+        // Bubble stays (marked failed) — 🎯T275 loud, 🎯T371 never a vanish.
+        if (staged && staged.id) {
+          _sidebarPending = ConversationWidget.markPendingOwnerTurnFailed(_sidebarPending, staged.id);
+        }
+        if (typeof jLog === 'function') {
+          jLog('warn', 'sidebar_agent_send', {
+            name: name,
+            status: 'failed',
+            err: String((err && err.message) || err || 'unknown'),
+          });
+        }
       },
       onSend: function (req) {
         // Product HTTP = ConversationWidget.buildSendRequest / sidebarSendRequest shape.
@@ -9071,6 +9117,10 @@ function handleAgentTranscriptWire(m) {
       lines: lines,
       working: !!_agentInspectWorking && !terminal,
     }, selectedAgent);
+    // 🎯T371: a live frame acks the owner turn it carries and keeps any that
+    // are still unsealed visible.
+    liveModel.lines = reconcileInspectPending(selectedAgent, liveModel.lines);
+    liveModel.empty = !(liveModel.lines && liveModel.lines.length);
     _agentInspectLines = inspectLinesCopy(liveModel.lines);
     renderAgentInspect(liveModel);
     if (terminal) {
@@ -9090,6 +9140,10 @@ function handleAgentTranscriptWire(m) {
   // 🎯T250: sidebar shows aside content even when process transcript is empty
   // (register-only asides still route via overseer [attention:…] wire).
   model = mergeModelWithAsideWire(model, m.name || selectedAgent);
+  // 🎯T371: this is the wholesale replace that used to delete owner bubbles.
+  // Sealed server turns still win; unsealed owner turns are re-applied.
+  model.lines = reconcileInspectPending(m.name || selectedAgent, model.lines);
+  model.empty = !(model.lines && model.lines.length);
   _agentInspectLines = inspectLinesCopy(model.lines);
   // History with assistant turns seals optimistic working chrome (🎯T263).
   const hasAssistant = (_agentInspectLines || []).some(function (l) {
@@ -9226,6 +9280,9 @@ function loadAgentTranscript(name, opts) {
       if (payload && payload.error && model.empty) {
         model.error = '';
       }
+      // 🎯T371: same no-vanish invariant on the HTTP residual path.
+      model.lines = reconcileInspectPending(name, model.lines);
+      model.empty = !(model.lines && model.lines.length);
       _agentInspectLines = inspectLinesCopy(model.lines);
       renderAgentInspect(model);
       document.querySelectorAll('.agent-node').forEach(n =>

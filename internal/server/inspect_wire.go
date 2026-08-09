@@ -165,7 +165,36 @@ func (s *Server) buildAgentTranscriptPayload(name string) (payload map[string]an
 		}
 	}
 	if !found {
-		return nil, false
+		// 🎯T371: deregistration is not erasure. A stopped-and-reaped aside
+		// (🎯T165) or an agent removed between paint and rehydrate still has a
+		// 🎯T367 journal on disk holding the owner's own turns, and the caller's
+		// only alternative here was an "agent not found" frame with zero turns —
+		// which the client applied over the pane, deleting a conversation that
+		// was durably recorded. Serve the journal when one exists; a genuinely
+		// unknown name (no registry entry, no journal) still reports not-found.
+		journalOnly, jerr := s.agentJournalTurns(name)
+		if jerr != nil {
+			slog.Warn("agent_chatlog_read_failed",
+				"component", "agent_chatlog",
+				"name", name,
+				"err", jerr.Error(),
+			)
+			return nil, false
+		}
+		if len(journalOnly) == 0 {
+			return nil, false
+		}
+		return map[string]any{
+			"type":          "agent_transcript",
+			"kind":          inspectKindHistory,
+			"name":          name,
+			"source":        conversationSourceAgentJournal,
+			"turns":         renumberTurns(journalOnly),
+			"journal_turns": len(journalOnly),
+			"empty":         false,
+			"unregistered":  true,
+			"note":          "agent is no longer registered; serving jevons journal",
+		}, true
 	}
 	base := map[string]any{
 		"type":       "agent_transcript",

@@ -322,3 +322,73 @@ func TestOverseerTranscriptUnaffectedByAgentJournal(t *testing.T) {
 		t.Fatalf("overseer must not get a per-agent journal (err=%v)", err)
 	}
 }
+
+// TestDeregisteredAgentStillServesJournal is the 🎯T371 server oracle:
+// deregistration is not erasure.
+//
+// The vanish this closes: a fleet aside is stopped and reaped (🎯T165), or is
+// removed between the pane painting and its next rehydrate. buildAgentTranscriptPayload
+// used to return ok=false for any name missing from the registry — BEFORE
+// reading the journal — so the wire pushed {"error":"agent not found","turns":[]}
+// and the client applied that empty model over the pane, deleting owner turns
+// that were sitting durably on disk the whole time (the att-msln9k27 /
+// "Discuss T364" class). Send already rehydrates a stopped agent; display now
+// matches it.
+func TestDeregisteredAgentStillServesJournal(t *testing.T) {
+	dir := t.TempDir()
+	const name = "att-t371-deregistered"
+	const ownerMsg = "does this send?"
+	const reply = "yes — and it stays visible"
+
+	f := newSidebarFixture(t, dir, name, "sess-t371")
+	if rr := f.send(t, ownerMsg); rr.Code != http.StatusOK {
+		t.Fatalf("send status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	f.srv.DeliverInspectLive(name, claudia.Event{
+		Type: "assistant", Text: reply, StopReason: "end_turn",
+	})
+	f.srv.CloseAgentJournals()
+
+	// Reap the agent the way 🎯T165 auto-deregister does, then rebuild the
+	// server over the same state dir with the name absent from the registry.
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Remove(name); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if reg.Def(name) != nil {
+		t.Fatal("agent still registered after Remove")
+	}
+	srv := New("test", dir)
+	srv.SetRegistry(reg)
+	srv.SetTranscriptReader(transcript.NewReader(filepath.Join(dir, "sessions")))
+
+	payload, ok := srv.buildAgentTranscriptPayload(name)
+	if !ok {
+		t.Fatal("deregistered agent with a journal must still serve its conversation")
+	}
+	rows := turnTexts(t, payload)
+	if !containsRow(rows, "user: "+ownerMsg) {
+		t.Fatalf("owner turn lost after deregistration: %v", rows)
+	}
+	if !containsRow(rows, "assistant: "+reply) {
+		t.Fatalf("agent reply lost after deregistration: %v", rows)
+	}
+	if empty, _ := payload["empty"].(bool); empty {
+		t.Fatal("payload reported empty while carrying journal turns")
+	}
+	if unreg, _ := payload["unregistered"].(bool); !unreg {
+		t.Fatal("payload must mark the agent unregistered so the UI can say so")
+	}
+	if src, _ := payload["source"].(string); src != conversationSourceAgentJournal {
+		t.Fatalf("source=%q want %q", src, conversationSourceAgentJournal)
+	}
+
+	// A genuinely unknown name (no registry entry, no journal) is still
+	// not-found — this must not become a catch-all that invents panes.
+	if _, ok := srv.buildAgentTranscriptPayload("att-never-existed"); ok {
+		t.Fatal("unknown name with no journal must remain not-found")
+	}
+}

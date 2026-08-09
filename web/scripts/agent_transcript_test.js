@@ -943,9 +943,13 @@ test('T252 non-empty draft → selection sticky (no mid-compose steal)', functio
   }), 'att-a');
 });
 
-test('T252 post-send empty → next attention selected', function () {
+// 🎯T371 supersedes the 🎯T252 "advance on send" behaviour asserted here
+// before: advancing stole the pane on the very send that produced the owner's
+// message, so the optimistic bubble landed in a pane already rebound to another
+// aside and vanished on its next history frame (owner repro: Discuss T364 /
+// att-msln9k27). Dequeue still happens; the pane stays put.
+test('T371 post-send stays on the aside just sent to (no selection steal)', function () {
   let queue = ['att-a', 'att-b', 'att-c'];
-  // User sent on att-a → dequeue att-a, draft empty, after-send
   queue = AT.dequeueAttention(queue, 'att-a');
   assert.deepStrictEqual(queue, ['att-b', 'att-c']);
   assert.strictEqual(AT.pickAttentionAsideSelection({
@@ -953,25 +957,48 @@ test('T252 post-send empty → next attention selected', function () {
     currentSelection: 'att-a',
     draftEmpty: true,
     reason: 'after-send',
-  }), 'att-b');
+  }), 'att-a', 'after-send must not move off the aside the owner just sent to');
 
-  // Send on att-b → next att-c
-  queue = AT.dequeueAttention(queue, 'att-b');
+  // Still true when the current selection is itself still queued.
   assert.strictEqual(AT.pickAttentionAsideSelection({
-    attentionNames: queue,
+    attentionNames: ['att-b', 'att-c'],
     currentSelection: 'att-b',
     draftEmpty: true,
     reason: 'after-send',
-  }), 'att-c');
+  }), 'att-b');
 
-  // Last one sent → empty queue → keep current (no forced switch residual)
-  queue = AT.dequeueAttention(queue, 'att-c');
+  // draft-cleared is equally non-stealing.
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: ['att-b', 'att-c'],
+    currentSelection: 'att-a',
+    draftEmpty: true,
+    reason: 'draft-cleared',
+  }), 'att-a');
+
+  // Empty queue → keep current (unchanged residual).
+  queue = AT.dequeueAttention(AT.dequeueAttention(queue, 'att-b'), 'att-c');
   assert.strictEqual(AT.pickAttentionAsideSelection({
     attentionNames: queue,
     currentSelection: 'att-c',
     draftEmpty: true,
     reason: 'after-send',
   }), 'att-c');
+
+  // No selection at all → the queue may still fill the empty pane.
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: ['att-b', 'att-c'],
+    currentSelection: null,
+    draftEmpty: true,
+    reason: 'after-send',
+  }), 'att-b');
+
+  // Attention advance still happens — just on a later poll, not on send.
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: ['att-b', 'att-c'],
+    currentSelection: 'att-a',
+    draftEmpty: true,
+    reason: 'poll',
+  }), 'att-b');
 });
 
 test('T252 residual: no attention asides → no forced switch', function () {

@@ -261,6 +261,153 @@
     };
   }
 
+  // ── 🎯T371: pending owner turns (sidebar parity with main 🎯T239/🎯T279) ──
+  //
+  // Main chat cannot lose an owner bubble to a hydrate: every outbound turn is
+  // staged (ComposerPersist.stagePending), acked when it reappears in history,
+  // and re-painted if a replay/reconnect arrives without it
+  // (retainPendingOwnerTurnsVisible). The sidebar had no such set, so a
+  // kind=history frame that wholesale replaces the line model dropped any owner
+  // turn the server had not yet sealed into the transcript.
+  //
+  // These helpers are the DOM-free half of that contract, keyed per agent so
+  // selection churn cannot cross-contaminate panes. Same dedupe rule as
+  // ComposerPersist: exact match on trimmed text, one history line consumes one
+  // pending item.
+
+  /** Empty pending-owner-turn state. */
+  function emptyPending() {
+    return { items: [] };
+  }
+
+  /** Dedupe key for an owner turn body. */
+  function pendingKey(text) {
+    return String(text == null ? '' : text).trim();
+  }
+
+  /**
+   * Stage an owner turn as pending for agentId. Idempotent per (agent, body)
+   * while unacked, so a retry does not double-paint.
+   * @param {{items?: Array}} state
+   * @param {string} agentId
+   * @param {string} text
+   * @param {{ now?: number, id?: string }} [opts]
+   */
+  function stagePendingOwnerTurn(state, agentId, text, opts) {
+    opts = opts || {};
+    var s = state && Array.isArray(state.items) ? state : emptyPending();
+    var name = String(agentId == null ? '' : agentId).trim();
+    var body = pendingKey(text);
+    if (!name || !body) return s;
+    for (var i = 0; i < s.items.length; i++) {
+      if (s.items[i].agent === name && s.items[i].text === body) return s;
+    }
+    var when = opts.now !== undefined ? opts.now : Date.now();
+    var id = opts.id || ('sp' + when.toString(36) + '-' + s.items.length);
+    return {
+      items: s.items.concat([{
+        id: id,
+        agent: name,
+        text: body,
+        when: when,
+        failed: false,
+      }]),
+    };
+  }
+
+  /**
+   * Drop pending turns for agentId that now appear as user lines. Every other
+   * agent's pending set is untouched.
+   * @returns {{ state: {items: Array}, acked: Array }}
+   */
+  function ackPendingOwnerTurns(state, agentId, lines) {
+    var s = state && Array.isArray(state.items) ? state : emptyPending();
+    var name = String(agentId == null ? '' : agentId).trim();
+    if (!s.items.length || !name) return { state: s, acked: [] };
+    var seen = [];
+    (lines || []).forEach(function (l) {
+      if (l && l.role === 'user') seen.push(pendingKey(l.text));
+    });
+    var used = {};
+    var remaining = [];
+    var acked = [];
+    for (var i = 0; i < s.items.length; i++) {
+      var it = s.items[i];
+      if (it.agent !== name) {
+        remaining.push(it);
+        continue;
+      }
+      var found = false;
+      for (var h = 0; h < seen.length; h++) {
+        if (used[h] || seen[h] !== it.text) continue;
+        used[h] = true;
+        found = true;
+        break;
+      }
+      if (found) acked.push(it);
+      else remaining.push(it);
+    }
+    return { state: { items: remaining }, acked: acked };
+  }
+
+  /**
+   * Re-apply still-unacked owner turns for agentId onto a line set. This is what
+   * makes a history frame non-destructive: the server's sealed turns win, and
+   * anything the owner sent that the server has not sealed yet is appended back
+   * rather than silently dropped.
+   * @returns {Array} lines (copy) with unacked owner turns appended
+   */
+  function applyPendingOwnerTurns(lines, state, agentId) {
+    var s = state && Array.isArray(state.items) ? state : emptyPending();
+    var name = String(agentId == null ? '' : agentId).trim();
+    var out = (lines || []).map(function (l) {
+      return l ? { role: l.role, text: l.text, when: l.when } : l;
+    });
+    if (!name || !s.items.length) return out;
+    var present = {};
+    out.forEach(function (l) {
+      if (l && l.role === 'user') {
+        var k = pendingKey(l.text);
+        present[k] = (present[k] || 0) + 1;
+      }
+    });
+    for (var i = 0; i < s.items.length; i++) {
+      var it = s.items[i];
+      if (it.agent !== name) continue;
+      if (present[it.text]) {
+        present[it.text] -= 1;
+        continue;
+      }
+      out.push({ role: 'user', text: it.text, when: it.when, _pending: true });
+    }
+    return out;
+  }
+
+  /** Mark a staged turn failed (kept visible — a failed send is not a vanish). */
+  function markPendingOwnerTurnFailed(state, id) {
+    var s = state && Array.isArray(state.items) ? state : emptyPending();
+    var key = String(id == null ? '' : id);
+    if (!key) return s;
+    return {
+      items: s.items.map(function (it) {
+        return it.id === key ? {
+          id: it.id,
+          agent: it.agent,
+          text: it.text,
+          when: it.when,
+          failed: true,
+        } : it;
+      }),
+    };
+  }
+
+  /** Unacked owner turns for agentId (product: retry / diagnostics). */
+  function pendingOwnerTurnsFor(state, agentId) {
+    var s = state && Array.isArray(state.items) ? state : emptyPending();
+    var name = String(agentId == null ? '' : agentId).trim();
+    return s.items.filter(function (it) { return it.agent === name; });
+  }
+
   /**
    * Whether the compact sidebar composer should be visible.
    * @param {{ tab?: string, selectedAgent?: string|null, purpose?: string,
@@ -608,7 +755,14 @@
     }
 
     /**
-     * Build request + call onSend; optimistic path via afterSendOptimistic.
+     * Build request, stage + paint the owner turn, then call onSend.
+     *
+     * 🎯T371: the optimistic bubble and the pending stage happen on ACCEPT —
+     * before the transport resolves — which is the contract main has had since
+     * 🎯T279. Painting only in the success handler left a window in which the
+     * pane could be rebound (after-send attention switch) or overwritten (a
+     * history frame) before the owner's own turn ever reached the DOM, and a
+     * failed send painted nothing at all.
      * @returns {Promise}
      */
     function send() {
@@ -637,25 +791,40 @@
         if (Array.isArray(hostLines)) _lines = hostLines.slice();
       }
       setSending(true);
+      // Stage first: the turn is durable in the pending set before any
+      // transport can fail, and re-applied onto every later history frame.
+      var sentAgent = req.name;
+      var staged = null;
+      if (typeof opts.onStagePending === 'function') {
+        staged = opts.onStagePending(sentAgent, req.body.text);
+      }
+      // Paint on accept (🎯T279 parity), not on 200.
+      clearComposer();
+      var opt = afterSendOptimistic(_lines, req.body.text, {
+        title: sentAgent,
+        isDuplicate: opts.isDuplicate,
+        normalizeWhen: opts.normalizeWhen,
+      });
+      _lines = opt.lines;
+      _working = true;
+      invalidatePaint();
+      if (typeof opts.onAfterOptimistic === 'function') {
+        opts.onAfterOptimistic(opt);
+      } else {
+        renderModel(opt.model);
+      }
       return Promise.resolve(opts.onSend(req))
         .then(function (res) {
-          clearComposer();
-          var opt = afterSendOptimistic(_lines, req.body.text, {
-            title: agentId,
-            isDuplicate: opts.isDuplicate,
-            normalizeWhen: opts.normalizeWhen,
-          });
-          _lines = opt.lines;
-          _working = true;
-          invalidatePaint();
-          if (typeof opts.onAfterOptimistic === 'function') {
-            opts.onAfterOptimistic(opt);
-          } else {
-            renderModel(opt.model);
+          if (typeof opts.onSendAccepted === 'function') {
+            opts.onSendAccepted(sentAgent, res);
           }
           return res;
         })
         .catch(function (err) {
+          // A failed send keeps its bubble (marked failed) — never a vanish.
+          if (typeof opts.onSendFailed === 'function') {
+            opts.onSendFailed(sentAgent, staged, err);
+          }
           if (typeof opts.onSendError === 'function') {
             opts.onSendError(err);
           }
@@ -750,6 +919,12 @@
     buildSendRequest: buildSendRequest,
     sendBlockMessage: sendBlockMessage,
     afterSendOptimistic: afterSendOptimistic,
+    emptyPending: emptyPending,
+    stagePendingOwnerTurn: stagePendingOwnerTurn,
+    ackPendingOwnerTurns: ackPendingOwnerTurns,
+    applyPendingOwnerTurns: applyPendingOwnerTurns,
+    markPendingOwnerTurnFailed: markPendingOwnerTurnFailed,
+    pendingOwnerTurnsFor: pendingOwnerTurnsFor,
     composerVisible: composerVisible,
     rootClassName: rootClassName,
     linesFingerprint: linesFingerprint,
