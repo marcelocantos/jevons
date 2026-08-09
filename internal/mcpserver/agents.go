@@ -15,7 +15,6 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/fleet"
@@ -797,30 +796,12 @@ func (s *Server) notify(agentName, text string) {
 		return
 	}
 
-	// 🎯T388: store the report BEFORE delivering it and before the 🎯T165/T195
-	// reap can remove the agent, so the full text outlives its author. When
-	// jv-t372-auto was asked to resend, jevons_agent_send answered "agent is
-	// not running" and the content survived only because that worker happened
-	// to have committed its reasoning to a design doc.
-	handle := s.storeAgentReport(agentName, text)
-
-	// Fit the report to the delivery bound. This used to be text[:1997]+"...",
-	// which lost the tail behind a marker indistinguishable from the author's
-	// own ellipsis — and reports put their conclusions and asks at the end, so
-	// a head-only cut ate exactly the part worth sending. Elide keeps both
-	// ends, marks the gap unmistakably, and names the call that returns the
-	// whole thing.
-	elision := agentreport.Elide(text, agentreport.DeliveryBound, handle)
-	if elision.Truncated {
-		slog.Warn("agent report elided for delivery",
-			"agent", agentName,
-			"total_bytes", elision.TotalBytes,
-			"elided_bytes", elision.ElidedBytes,
-			"report_id", handle.ReportID,
-			"retrievable", !handle.Empty())
+	// Truncate very long responses for the notification.
+	if len(text) > 2000 {
+		text = text[:1997] + "..."
 	}
 
-	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, elision.Text)
+	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, text)
 	overseer := s.overseerName()
 	res, err := s.deliverByName(overseer, msg, OriginAgent, false)
 	if err != nil {
