@@ -45,8 +45,11 @@ type DispositionEntry struct {
 	TargetID      string    `json:"target_id,omitempty"`
 	TargetCwd     string    `json:"target_cwd,omitempty"`
 	Evidence      string    `json:"evidence,omitempty"`
-	Outcome       string    `json:"outcome,omitempty"`
-	OutcomeAt     time.Time `json:"outcome_at,omitzero"`
+	// Mode is "" for the forward drip, RetroModeLabel for the retrospective
+	// history pass (🎯T353) — owner-visible provenance in the T354 list.
+	Mode      string    `json:"mode,omitempty"`
+	Outcome   string    `json:"outcome,omitempty"`
+	OutcomeAt time.Time `json:"outcome_at,omitzero"`
 }
 
 // DispositionStore is the durable judgment→disposition ledger (🎯T333).
@@ -109,6 +112,11 @@ func (s *DispositionStore) RecordDelivered(js []Judgment, now time.Time) error {
 			entries[i].Name = j.Name
 			entries[i].Observation = j.Observation
 			entries[i].Severity = j.Severity
+			entries[i].Mode = j.Mode
+			// Never clobber an overseer-written evidence note (SetDisposition).
+			if entries[i].Evidence == "" {
+				entries[i].Evidence = SummarizeEvidence(j.Evidence)
+			}
 			if entries[i].Outcome != "" {
 				entries[i].Disposition = DispositionPending
 				entries[i].DispositionAt = time.Time{}
@@ -125,9 +133,53 @@ func (s *DispositionStore) RecordDelivered(js []Judgment, now time.Time) error {
 			Severity:    j.Severity,
 			DeliveredAt: now,
 			Disposition: DispositionPending,
+			Evidence:    SummarizeEvidence(j.Evidence),
+			Mode:        j.Mode,
 		})
 	}
 	return s.save(entries)
+}
+
+// MaxEvidenceSummaryRefs is how many evidence pointers the owner-visible
+// summary names before collapsing the rest into a "+N more" tail (🎯T354).
+const MaxEvidenceSummaryRefs = 3
+
+// SummarizeEvidence renders judgment evidence pointers as one short owner-
+// readable line: "owner_chat:chatlog-2026-08-09 (chat_gap); session:abc (+2 more)".
+// Pure: no store, no clock.
+func SummarizeEvidence(refs []EvidenceRef) string {
+	var parts []string
+	for _, r := range refs {
+		src := strings.TrimSpace(r.Source)
+		id := strings.TrimSpace(r.SourceID)
+		kind := strings.TrimSpace(r.Kind)
+		var b strings.Builder
+		switch {
+		case src != "" && id != "":
+			b.WriteString(src + ":" + id)
+		case src != "":
+			b.WriteString(src)
+		case id != "":
+			b.WriteString(id)
+		default:
+			continue
+		}
+		if kind != "" {
+			b.WriteString(" (" + kind + ")")
+		}
+		parts = append(parts, b.String())
+		if len(parts) == MaxEvidenceSummaryRefs {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	out := strings.Join(parts, "; ")
+	if rest := len(refs) - len(parts); rest > 0 {
+		out += fmt.Sprintf(" (+%d more)", rest)
+	}
+	return out
 }
 
 // SetDispositionArgs is the overseer's disposition record for one judgment.
