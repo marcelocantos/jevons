@@ -86,6 +86,29 @@ needed a silent-omission detector, because in their settings a bad cheap-tier de
 Corollary, and the design's central hazard: **the cheapest expressible rule is "handle
 everything, escalate nothing"**, and optimising token cost finds it immediately.
 
+### 3.1 The mandatory-response contract dissolves this (owner, 2026-08-10)
+
+Everything above is true only if a tier that handles a request produces nothing. Require
+that **every tier responds or escalates, never passing through silently**, and the regime
+changes rather than being mitigated: a tier that wrongly handles something now emits a
+*bad response* — a worse artifact of the same kind, sitting where a critic, the model or the
+owner can read it. That is precisely the row every other system in the table occupies, which
+makes their demotion machinery applicable rather than insufficient.
+
+This is the single most important structural decision in the design. Annotation (§5) and
+escalation-rate monitoring become refinements on top of it rather than the whole defence.
+
+Two consequences to hold onto:
+
+- **It is not a strict either/or.** A tier may contribute *and* escalate — resolve entities,
+  annotate, assemble a brief, then hand upward. The contract is *respond, or escalate
+  carrying what you added*. Silent pass-through is the only forbidden case.
+- **Journal always, surface selectively.** Mandatory responses manufacture volume, and
+  🎯T392.2 exists to suppress volume. These are only in conflict if the channels are
+  conflated: the response is durable and auditable, the notification is batched. Conflate
+  them and you either flood the cockpit (🎯T403.10) or lose the artifact the architecture
+  depends on.
+
 ## 4. Design constraints, and where each came from
 
 ### From motor learning (owner)
