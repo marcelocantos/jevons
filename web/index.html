@@ -383,6 +383,71 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons a { color: var(--accent); text-decoration: none; }
 .msg.jevons a:hover { text-decoration: underline; }
 
+/* 🎯T369: bounded owner choice matrices render as a selectable card instead of
+   a markdown table the owner has to answer in prose. The source table is kept
+   (hidden behind "Table") — the card is a lens on it, never a replacement that
+   loses information. */
+.decision-matrix {
+  margin: 0.6em 0; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); overflow: hidden;
+}
+.decision-matrix .dm-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-raised);
+}
+.decision-matrix .dm-badge {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-dim); border-radius: 4px; padding: 2px 6px;
+}
+.decision-matrix .dm-title { font-weight: 600; color: var(--strong); font-size: 0.95em; min-width: 0; }
+.decision-matrix .dm-options { display: flex; flex-direction: column; }
+.decision-matrix .dm-option {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left;
+  padding: 9px 12px; border: none; border-top: 1px solid var(--border);
+  background: transparent; color: var(--text); font: inherit; cursor: pointer;
+  transition: background 0.12s;
+}
+.decision-matrix .dm-options .dm-option:first-child { border-top: none; }
+.decision-matrix .dm-option:hover { background: var(--surface-raised); }
+.decision-matrix .dm-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.decision-matrix .dm-option[aria-checked="true"] { background: var(--accent-dim); }
+.decision-matrix .dm-key {
+  flex: 0 0 auto; min-width: 1.4em; height: 1.4em; display: inline-flex;
+  align-items: center; justify-content: center; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--bg);
+  font-family: var(--mono); font-size: 0.8em; font-weight: 700; color: var(--text-dim);
+}
+.decision-matrix .dm-option[aria-checked="true"] .dm-key {
+  border-color: var(--accent); background: var(--accent); color: #fff;
+}
+.decision-matrix .dm-main { min-width: 0; flex: 1 1 auto; }
+.decision-matrix .dm-label { display: block; font-weight: 600; color: var(--strong); }
+.decision-matrix .dm-cells {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 3px;
+  font-size: 0.85em; color: var(--text-dim);
+}
+.decision-matrix .dm-cell-name { text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.85em; opacity: 0.75; margin-right: 4px; }
+.decision-matrix .dm-rec {
+  flex: 0 0 auto; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 1px 5px; white-space: nowrap;
+}
+.decision-matrix .dm-foot {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-top: 1px solid var(--border); background: var(--surface-raised);
+}
+.decision-matrix .dm-status { flex: 1 1 auto; min-width: 0; font-size: 0.85em; color: var(--text-dim); }
+.decision-matrix .dm-foot button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-dim);
+  font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 5px; cursor: pointer;
+}
+.decision-matrix .dm-foot button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.decision-matrix .dm-foot button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.decision-matrix .dm-send { color: var(--accent); border-color: var(--accent) !important; }
+.decision-matrix .dm-send:disabled { opacity: 0.45; cursor: default; color: var(--text-dim); border-color: var(--border) !important; }
+.decision-matrix .dm-raw { padding: 0 12px 8px; }
+.decision-matrix .dm-raw table { margin: 8px 0 0; }
+
 /* Oversized content (🎯T106): full marked/HTML always mounted; collapse is
    CSS max-height + overflow:hidden on .msg-body (clip), never truncated
    re-parse. --collapsed-max-height must match COLLAPSED_MAX_HEIGHT in JS.
@@ -1414,6 +1479,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/working_progress.js"></script>
 <script src="scripts/mermaid_actions.js"></script>
 <script src="scripts/markdown_normalize.js"></script>
+<script src="scripts/decision_matrix.js"></script>
 <script src="scripts/link_safety.js"></script>
 <script src="scripts/image_lightbox.js"></script>
 <script src="scripts/smd.js"></script>
@@ -4120,6 +4186,195 @@ function decorateTargetHotspots(container) {
     }
   }
 }
+// 🎯T369: structured design-choice UX. A sealed assistant body whose markdown
+// table is a bounded owner choice (A/B/C… with an optional recommendation)
+// gets a selectable card in place of the table. Pure model + store live in
+// scripts/decision_matrix.js; this is the DOM/composer half.
+//
+// Only sealed bodies are decorated — a half-streamed table is not yet a
+// question, and swapping cards mid-stream would thrash the scroll anchor.
+function loadDecisionStore() {
+  if (typeof DecisionMatrix === 'undefined') return null;
+  let raw = '';
+  try { raw = localStorage.getItem(DecisionMatrix.STORAGE_KEY) || ''; } catch (_) { raw = ''; }
+  return DecisionMatrix.parseStore(raw);
+}
+function saveDecisionStore(store) {
+  if (typeof DecisionMatrix === 'undefined') return;
+  try { localStorage.setItem(DecisionMatrix.STORAGE_KEY, DecisionMatrix.serializeStore(store)); } catch (_) { /* quota/private mode */ }
+}
+// Table → {headers, rows} of raw cell text, plus the nearest preceding
+// heading/paragraph as the question the owner is being asked.
+function decisionGridFromTable(table) {
+  const rows = Array.from(table.rows || []);
+  if (!rows.length) return null;
+  const cellsOf = (tr) => Array.from(tr.cells || []).map(td => (td.textContent || '').trim());
+  const headRow = (table.tHead && table.tHead.rows[0]) || rows[0];
+  const headers = cellsOf(headRow);
+  const body = rows.filter(tr => tr !== headRow).map(cellsOf);
+  return { headers, rows: body };
+}
+function decisionTitleForTable(table, container) {
+  let node = table.previousElementSibling;
+  while (node) {
+    const t = (node.textContent || '').trim();
+    if (t && /^(H[1-6]|P|BLOCKQUOTE)$/.test(node.tagName)) return t.split('\n').pop().trim();
+    node = node.previousElementSibling;
+  }
+  const first = container && container.firstElementChild;
+  return first ? (first.textContent || '').trim() : '';
+}
+function sendDecisionReply(text) {
+  if (!input || typeof send !== 'function' || !text) return false;
+  input.value = text;
+  if (typeof autoGrow === 'function') autoGrow();
+  try { send(); } catch (_) { return false; }
+  return true;
+}
+function buildDecisionCard(model, table) {
+  const card = document.createElement('div');
+  card.className = 'decision-matrix';
+  card.setAttribute('data-matrix-id', model.id);
+
+  const head = document.createElement('div');
+  head.className = 'dm-head';
+  const badge = document.createElement('span');
+  badge.className = 'dm-badge';
+  badge.textContent = 'Decision';
+  const title = document.createElement('span');
+  title.className = 'dm-title';
+  title.textContent = model.title;
+  head.append(badge, title);
+
+  const list = document.createElement('div');
+  list.className = 'dm-options';
+  list.setAttribute('role', 'radiogroup');
+  list.setAttribute('aria-label', model.title);
+
+  const foot = document.createElement('div');
+  foot.className = 'dm-foot';
+  const status = document.createElement('span');
+  status.className = 'dm-status';
+  const sendBtn = document.createElement('button');
+  sendBtn.type = 'button';
+  sendBtn.className = 'dm-send';
+  sendBtn.textContent = 'Send choice';
+  const tableBtn = document.createElement('button');
+  tableBtn.type = 'button';
+  tableBtn.className = 'dm-table-toggle';
+  tableBtn.textContent = 'Table';
+  tableBtn.setAttribute('aria-expanded', 'false');
+  foot.append(status, tableBtn, sendBtn);
+
+  // Source table stays in the DOM — the card is a lens, not a truncation.
+  const raw = document.createElement('div');
+  raw.className = 'dm-raw';
+  raw.hidden = true;
+  raw.appendChild(table);
+  tableBtn.addEventListener('click', () => {
+    raw.hidden = !raw.hidden;
+    tableBtn.setAttribute('aria-expanded', raw.hidden ? 'false' : 'true');
+  });
+
+  const buttons = model.options.map(opt => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dm-option';
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', 'false');
+    b.setAttribute('data-option-key', opt.key);
+    const key = document.createElement('span');
+    key.className = 'dm-key';
+    key.textContent = opt.key;
+    const main = document.createElement('span');
+    main.className = 'dm-main';
+    const label = document.createElement('span');
+    label.className = 'dm-label';
+    label.textContent = opt.label;
+    main.appendChild(label);
+    if (opt.cells.length) {
+      const cells = document.createElement('span');
+      cells.className = 'dm-cells';
+      opt.cells.forEach(c => {
+        const s = document.createElement('span');
+        s.className = 'dm-cell';
+        if (c.name) {
+          const n = document.createElement('span');
+          n.className = 'dm-cell-name';
+          n.textContent = c.name;
+          s.appendChild(n);
+        }
+        s.appendChild(document.createTextNode(c.value));
+        cells.appendChild(s);
+      });
+      main.appendChild(cells);
+    }
+    b.append(key, main);
+    if (opt.recommended) {
+      const rec = document.createElement('span');
+      rec.className = 'dm-rec';
+      rec.textContent = 'recommended';
+      b.appendChild(rec);
+    }
+    list.appendChild(b);
+    return b;
+  });
+
+  let choice = null;
+  function paint() {
+    buttons.forEach(b => {
+      const on = !!choice && b.getAttribute('data-option-key') === choice.key;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    status.textContent = DecisionMatrix.statusText(model, choice);
+    sendBtn.disabled = !choice || !!choice.sent;
+  }
+  function select(key, opts) {
+    const store = loadDecisionStore();
+    if (!store) return;
+    const next = DecisionMatrix.recordChoice(store, model, key, Date.now(), opts);
+    saveDecisionStore(next);
+    choice = DecisionMatrix.choiceFor(next, model.id);
+    paint();
+  }
+  buttons.forEach(b => {
+    b.addEventListener('click', () => select(b.getAttribute('data-option-key')));
+  });
+  sendBtn.addEventListener('click', () => {
+    if (!choice) return;
+    if (sendDecisionReply(DecisionMatrix.replyText(model, choice.key))) {
+      select(choice.key, { sent: true });
+    }
+  });
+
+  const store = loadDecisionStore();
+  choice = store ? DecisionMatrix.choiceFor(store, model.id) : null;
+  paint();
+
+  card.append(head, list, foot, raw);
+  return card;
+}
+function decorateDecisionMatrices(container) {
+  if (!container || typeof container.querySelectorAll !== 'function') return;
+  if (typeof DecisionMatrix === 'undefined') return;
+  const tables = container.querySelectorAll('table');
+  for (let i = 0; i < tables.length; i++) {
+    const table = tables[i];
+    if (table.closest('.decision-matrix')) continue;
+    const grid = decisionGridFromTable(table);
+    if (!grid) continue;
+    grid.title = decisionTitleForTable(table, container);
+    let model = null;
+    try { model = DecisionMatrix.parseTable(grid); } catch (_) { model = null; }
+    if (!model) continue;
+    // buildDecisionCard adopts the table, so remember where it sat first.
+    const parent = table.parentNode;
+    const next = table.nextSibling;
+    if (!parent) continue;
+    parent.insertBefore(buildDecisionCard(model, table), next);
+  }
+}
+window.decorateDecisionMatrices = decorateDecisionMatrices;
 // 🎯T150: progressive stream paint via thetarnav/streaming-markdown (smd).
 // Mid-stream: delta parser_write into per-bubble session (closed **…** live).
 // Seal: destroy session + full marked (mermaid T59 + highlight T74).
@@ -4170,6 +4425,7 @@ function paintBody(d, role, t) {
       decorateBodyLinks(d._body); // 🎯T151 belt-and-suspenders
       renderMermaidIn(d._body);   // sealed content only
       highlightCodeIn(d._body);   // 🎯T74
+      decorateDecisionMatrices(d._body); // 🎯T369 sealed choice matrices only
     }
     // 🎯T164: do NOT auto-close here — paintBody runs for history replay and
     // lazy rematerialize. Live stream/seal calls maybeCloseTargetAside only.

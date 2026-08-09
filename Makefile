@@ -96,6 +96,7 @@ test-web:
 	node web/scripts/target_hotspot_test.js
 	node web/scripts/mermaid_actions_test.js
 	node web/scripts/markdown_normalize_test.js
+	node web/scripts/decision_matrix_test.js
 	node web/scripts/streaming_markdown_test.js
 	node web/scripts/cost_display_test.js
 	node web/scripts/link_safety_test.js
@@ -130,6 +131,7 @@ test-ui:
 	node scripts/chat-ui-test/t309.1-conversation-widget-test.js
 	node scripts/chat-ui-test/t340-frontier-table-layout-test.js
 	node scripts/chat-ui-test/t366-composer-tab-cycle-test.js
+	node scripts/chat-ui-test/t369-decision-matrix-test.js
 	node scripts/chat-ui-test/t368-image-prefix-route-test.js
 
 .PHONY: test-ui-live
