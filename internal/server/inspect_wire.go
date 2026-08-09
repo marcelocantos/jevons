@@ -5,11 +5,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
 )
+
+// errNoTranscriptReader stands in for a provider read failure when no reader is
+// attached at all, so the 🎯T367 journal merge takes the same path either way.
+var errNoTranscriptReader = errors.New("transcript reader unavailable")
 
 // 🎯T209: fleet agent inspect multiplexes over /ws/chat (same wire class as
 // main owner chat). Client control frames:
@@ -133,14 +139,18 @@ func (s *Server) buildAgentTranscriptPayload(name string) (payload map[string]an
 		}, true
 	}
 	if tr == nil {
-		return map[string]any{
-			"type":  "agent_transcript",
-			"kind":  inspectKindHistory,
-			"name":  name,
-			"turns": []any{},
-			"empty": true,
-			"error": "transcript reader unavailable",
-		}, true
+		// 🎯T367: a missing provider reader is no longer fatal to the pane when
+		// jevons has its own record — fall through and serve the journal.
+		if jt, _ := s.agentJournalTurns(name); len(jt) == 0 {
+			return map[string]any{
+				"type":  "agent_transcript",
+				"kind":  inspectKindHistory,
+				"name":  name,
+				"turns": []any{},
+				"empty": true,
+				"error": "transcript reader unavailable",
+			}, true
+		}
 	}
 
 	var sessionID, purpose, workdir string
@@ -166,30 +176,66 @@ func (s *Server) buildAgentTranscriptPayload(name string) (payload map[string]an
 		"session_id": sessionID,
 		"source":     conversationSourceSession, // 🎯T309.2 family origin
 	}
-	if sessionID == "" {
-		s.logTranscriptEmpty(emptyReasonNoSession, name, "", "")
-		base["turns"] = []any{}
-		base["empty"] = true
-		base["empty_reason"] = emptyReasonNoSession
-		base["note"] = "no session_id yet"
-		return base, true
+
+	// 🎯T367: the jevons-owned per-agent journal is read first and merged over
+	// whatever the provider store yields, so sidebar rehydrate survives a
+	// missing session id, an unreadable session file, and a daemon restart —
+	// the same guarantee 🎯T30.1 gives main chat.
+	journalTurns, jerr := s.agentJournalTurns(name)
+	if jerr != nil {
+		slog.Warn("agent_chatlog_read_failed",
+			"component", "agent_chatlog",
+			"name", name,
+			"err", jerr.Error(),
+		)
+		journalTurns = nil
 	}
-	turns, err := tr.Read(sessionID)
-	if err != nil {
-		s.logTranscriptEmpty(emptyReasonReadError, name, sessionID, err.Error())
-		base["turns"] = []any{}
-		base["empty"] = true
-		base["empty_reason"] = emptyReasonReadError
-		base["error"] = err.Error()
-		return base, true
+
+	var turns []map[string]any
+	var readErr error
+	switch {
+	case sessionID == "":
+		base["note"] = "no session_id yet"
+	case tr == nil:
+		readErr = errNoTranscriptReader
+	default:
+		turns, readErr = tr.Read(sessionID)
+		if readErr != nil {
+			turns = nil
+		}
 	}
 	if turns == nil {
 		turns = []map[string]any{}
 	}
-	empty := len(turns) == 0
-	base["turns"] = turns
-	base["empty"] = empty
-	if empty {
+
+	merged, journalUsed := mergeAgentTurns(turns, journalTurns)
+	if journalUsed {
+		base["source"] = conversationSourceAgentJournal
+	}
+	base["journal_turns"] = len(journalTurns)
+	base["turns"] = merged
+	base["empty"] = len(merged) == 0
+
+	// Soft-empty fingerprints stay attached to the reason the SESSION was
+	// short, so `rg empty_reason=` still explains a thin pane (🎯T128.2) — but
+	// a payload the journal filled is no longer reported as empty.
+	switch {
+	case sessionID == "":
+		if len(merged) == 0 {
+			s.logTranscriptEmpty(emptyReasonNoSession, name, "", "")
+			base["empty_reason"] = emptyReasonNoSession
+		}
+	case readErr != nil:
+		if len(merged) == 0 {
+			s.logTranscriptEmpty(emptyReasonReadError, name, sessionID, readErr.Error())
+			base["empty_reason"] = emptyReasonReadError
+			// Only a pane the journal could not fill carries the provider's
+			// read error; a rehydrated one is not decorated with ai-err chrome.
+			base["error"] = readErr.Error()
+		} else {
+			base["session_error"] = readErr.Error()
+		}
+	case len(merged) == 0:
 		s.logTranscriptEmpty(emptyReasonZeroTurns, name, sessionID, "")
 		base["empty_reason"] = emptyReasonZeroTurns
 	}
@@ -266,7 +312,14 @@ func inspectLiveEvent(ev claudia.Event) (event map[string]any, ok bool) {
 // pane resyncs with the durable transcript after stream coalescing.
 // Safe from agent event hooks (any goroutine).
 func (s *Server) DeliverInspectLive(name string, ev claudia.Event) {
-	if s == nil || name == "" || !s.inspectHasSubscribers(name) {
+	if s == nil || name == "" {
+		return
+	}
+	// 🎯T367: journal first, unconditionally. Durability must not depend on a
+	// sidebar happening to be open — this is the fleet mirror of BroadcastChat
+	// appending every owner-chat line to the 🎯T30.1 journal.
+	s.journalAgentEvent(name, ev)
+	if !s.inspectHasSubscribers(name) {
 		return
 	}
 	if event, ok := inspectLiveEvent(ev); ok {

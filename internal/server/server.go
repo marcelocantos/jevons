@@ -121,6 +121,11 @@ type Server struct {
 	registry       *claudia.Registry
 	chatListeners  []chan string
 	chatLog        *chatlog.Log // durable conversation record (🎯T30.1)
+	// agentJournals is the per-agent arm of the same durability mechanism
+	// (🎯T367): one chatlog.Log per fleet agent / aside, so sidebar
+	// conversations survive reload and daemon restart exactly as main chat
+	// does. Lazily created; see agent_chatlog.go.
+	agentJournals *agentJournals
 
 	// activityHook fires on owner activity (a chat message), feeding the
 	// budget dead-man's switch. costSource returns the latest cost

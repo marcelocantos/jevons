@@ -83,6 +83,12 @@ func (s *Server) sendToNamedAgentAs(name, text, origin string) (string, error) {
 		return "sent", nil
 	}
 
+	// 🎯T367: journal the turn BEFORE delivery, the fleet mirror of the owner
+	// wire's journal-then-send. A message the owner typed into the sidebar is
+	// durable even if delivery fails, the provider never flushes its session,
+	// or the daemon is bounced in the next second.
+	s.journalAgentUserTurn(name, text)
+
 	s.mu.RLock()
 	hook := s.agentSendHook
 	reg := s.registry
