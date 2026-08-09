@@ -30,6 +30,7 @@ import "embed"
 //go:embed scripts/agent_transcript.js
 //go:embed scripts/conversation_widget.js
 //go:embed scripts/frontier_table.js
+//go:embed scripts/rsi_dispositions.js
 //go:embed scripts/target_context_chrome.js
 //go:embed scripts/target_hotspot.js
 //go:embed scripts/instant_tip.js
