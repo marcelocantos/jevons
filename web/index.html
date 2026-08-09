@@ -1488,6 +1488,14 @@ body.rhs-resizing-row { cursor: row-resize; }
   </div>
   <div class="mvp-status" id="mvp-status"></div>
 </div>
+<!-- 🎯T375: first, ahead of every other local module. index.html is one giant
+     inline script, so a throw at its top level aborts the rest and leaves the
+     page's already-registered timers firing against dead bindings forever.
+     The sentinel watches for a boot that never completes and fails loudly
+     with owner-visible recovery instead. It can only do that if it is
+     already loaded when the fault happens — hence ahead of jlog too. -->
+<script src="scripts/boot_sentinel.js"></script>
+<script>if (typeof BootSentinel !== 'undefined') BootSentinel.install(window, document);</script>
 <script src="scripts/jlog.js"></script>
 <script src="scripts/decision_log.js"></script>
 <script src="scripts/transport.js"></script>
@@ -10657,6 +10665,14 @@ transport.onVoiceEvent = msg => {
   };
   open();
 })();
+
+// 🎯T375: the last statement of the last inline script. Reaching it is the
+// only proof this ~9000-line script ran to completion. If a top-level throw
+// above aborted it, this never runs and the sentinel tears the page's timers
+// down and tells the owner why, rather than letting the dead bindings emit a
+// recurring window.onerror cascade on every fleet poll. Nothing load-bearing
+// may be added below this line.
+if (typeof BootSentinel !== 'undefined' && window.__jevonsBoot) window.__jevonsBoot.markBooted();
 </script>
 </body>
 </html>

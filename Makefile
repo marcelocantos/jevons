@@ -93,6 +93,7 @@ test-go:
 # Hermetic Node tests for chat working-indicator lifecycle (🎯T39)
 # and attention-thread model (🎯T65).
 test-web:
+	node web/scripts/boot_sentinel_test.js
 	node web/scripts/chat_events_test.js
 	node web/scripts/owner_turn_shape_test.js
 	node web/scripts/attention_threads_test.js
@@ -167,6 +168,7 @@ test-ui:
 	node scripts/chat-ui-test/t340-frontier-table-layout-test.js
 	node scripts/chat-ui-test/t366-composer-tab-cycle-test.js
 	node scripts/chat-ui-test/t374-no-onerror-test.js
+	node scripts/chat-ui-test/t375-boot-sentinel-test.js
 	node scripts/chat-ui-test/t370-fleet-cycle-test.js
 	node scripts/chat-ui-test/t369-decision-matrix-test.js
 	node scripts/chat-ui-test/t368-image-prefix-route-test.js
