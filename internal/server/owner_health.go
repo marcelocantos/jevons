@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -355,13 +356,7 @@ func (a ownerActuator) requeueOwnerSend(g converge.OwnerGap, now time.Time) erro
 	// standing instead, and escalates if the queue never moves.
 	wire := userTurnPrefix + text
 	a.s.mu.RLock()
-	queued := false
-	for _, q := range a.s.notifyQueue {
-		if q == wire {
-			queued = true
-			break
-		}
-	}
+	queued := slices.Contains(a.s.notifyQueue, wire)
 	a.s.mu.RUnlock()
 	if queued {
 		return converge.ErrOwnerStepNotApplicable
