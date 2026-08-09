@@ -47,7 +47,7 @@ const ImageMarkerPrefix = "[image: "
 // registerImageRoutes mounts image upload/serve under /api/images (🎯T76/T224).
 // Full-res residual: GET /api/images/{id}
 // Browser default:   GET /api/images/{id}/thumb
-func (s *Server) registerImageRoutes(mux *http.ServeMux) {
+func (s *Server) registerImageRoutes(mux router) {
 	mux.HandleFunc("POST /api/images", s.handleImageUpload)
 	mux.HandleFunc("GET /api/images/{id}/thumb", s.handleImageThumbGet)
 	mux.HandleFunc("GET /api/images/{id}", s.handleImageGet)

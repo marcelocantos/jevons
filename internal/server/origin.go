@@ -34,20 +34,31 @@ func wsAcceptOptions() *websocket.AcceptOptions {
 
 // isCrossSite reports whether r looks like a browser cross-site request
 // (CSRF / drive-by POST). Same-origin browser fetches and non-browser
-// clients (no Origin, Sec-Fetch-Site absent or "none") are allowed.
+// clients (no Origin, no Referer, Sec-Fetch-Site absent or "none") are
+// allowed.
 func isCrossSite(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" {
 		return true
 	}
-	origin := r.Header.Get("Origin")
-	if origin == "" {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return !sameHost(origin, r.Host)
+	}
+	// Origin is omitted by some browsers on navigational form POSTs, but
+	// Referer still names the initiating page (🎯T385).
+	if ref := r.Header.Get("Referer"); ref != "" {
+		return !sameHost(ref, r.Host)
+	}
+	return false
+}
+
+// sameHost reports whether the absolute URL rawURL points at host. A URL
+// that will not parse, or that carries no host, is never treated as same-host.
+func sameHost(rawURL, host string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
 		return false
 	}
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
-		return true
-	}
-	return !strings.EqualFold(u.Host, r.Host)
+	return strings.EqualFold(u.Host, host)
 }
 
 // rejectCrossSite writes 403 and returns true when the request is cross-site.

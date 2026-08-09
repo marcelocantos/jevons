@@ -12,7 +12,7 @@ import (
 )
 
 // registerSelfTestRoutes mounts 🎯T110 self-test kick paths.
-func (s *Server) registerSelfTestRoutes(mux *http.ServeMux) {
+func (s *Server) registerSelfTestRoutes(mux router) {
 	mux.HandleFunc("POST /api/self_test/run", s.handleSelfTestRun)
 	mux.HandleFunc("GET /api/self_test/packs", s.handleSelfTestPacks)
 }

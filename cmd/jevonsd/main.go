@@ -728,9 +728,13 @@ func main() {
 	listenAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.Port)
 
 	// Build the handler, optionally wrapping with mTLS middleware.
-	var handler http.Handler = mux
+	// 🎯T385: the cross-site guard wraps the whole mux, so route groups
+	// mounted outside internal/server — the MCP endpoint (which exposes
+	// jevons_writ_exec) and the dev server's static routes — are covered on
+	// the same terms as the server's own routes.
+	var handler http.Handler = server.GuardCrossSite(mux)
 	if *enableTLS {
-		handler = server.ClientCertMiddleware(mux, "/health", "/api/provision")
+		handler = server.ClientCertMiddleware(handler, "/health", "/api/provision")
 	}
 	httpSrv := &http.Server{Addr: listenAddr, Handler: handler}
 

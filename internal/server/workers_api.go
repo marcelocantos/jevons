@@ -21,7 +21,7 @@ func (s *Server) SetWorkersTracker(t *workers.Tracker) {
 }
 
 // registerWorkerRoutes adds GET /api/workers and SSE /api/workers/events.
-func (s *Server) registerWorkerRoutes(mux *http.ServeMux) {
+func (s *Server) registerWorkerRoutes(mux router) {
 	mux.HandleFunc("GET /api/workers", s.handleListWorkers)
 	mux.HandleFunc("GET /api/workers/{id}/events", s.handleWorkerEvents)
 	mux.HandleFunc("GET /api/workers/events", s.handleWorkersSSE)

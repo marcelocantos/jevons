@@ -418,7 +418,11 @@ func (s *Server) BroadcastBinary(data []byte) {
 // RegisterRoutes adds HTTP and WebSocket routes to the mux.
 // Additional routes (e.g. MCP server) should be registered separately.
 // Static file serving is handled by DevServer.
-func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+func (s *Server) RegisterRoutes(m *http.ServeMux) {
+	// 🎯T385: every route below is registered through the guarding router, so
+	// a state-changing handler is cross-site guarded by where it is mounted
+	// rather than by its author remembering to call rejectCrossSite.
+	mux := guardedRouter{m}
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
