@@ -21,6 +21,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/audit"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/capacity"
@@ -642,6 +643,10 @@ func main() {
 	// 🎯T356 ambient research: periodic context refresh + async feed triggers,
 	// writing durable versioned notes and briefing the overseer.
 	startAmbientResearch(ctx, cfg, mcpSrv, capacityGate(capGov))
+
+	// 🎯T357 periodic full-scan audit: bounded advanced-model passes over
+	// code, skills, and prompts, folded into durable residue.
+	startPeriodicAudit(ctx, cfg, mcpSrv, capacityGate(capGov))
 
 	// Process-as-cache GC: periodically stop idle spawned threads'
 	// processes (resumably) to free resources. The threads persist and
@@ -1569,6 +1574,76 @@ func startAmbientResearch(ctx context.Context, cfg config.Config, mcpSrv *mcpser
 		"notes", "state_dir/research/notes",
 	)
 	return agent
+}
+
+// startPeriodicAudit wires the 🎯T357 standing full-scan audit: a bounded,
+// scheduled pass that scopes product code, the skills trees, and agent
+// prompts, hands the manifest to an advanced-tier auditor, and folds the
+// findings into durable residue under state_dir/audit.
+//
+// The auditor suggests and the overseer disposes: critical findings notify
+// the overseer in the same cycle, but nothing here files a bullseye target
+// or rewrites a line of source.
+//
+// Env:
+//
+//	JEVONS_AUDIT=0         — disable the schedule (MCP tools stay registered)
+//	JEVONS_AUDIT_INTERVAL  — duration (default 24h); "0" disables the ticker
+func startPeriodicAudit(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server, gate capacity.Gate) *audit.Auditor {
+	interval := time.Duration(0) // 0 = follow durable config
+	if v := strings.TrimSpace(os.Getenv("JEVONS_AUDIT_INTERVAL")); v != "" {
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			slog.Warn("JEVONS_AUDIT_INTERVAL invalid; using config", "value", v)
+		}
+	}
+	home, _ := os.UserHomeDir()
+	auditor, err := audit.New(audit.Args{
+		StateDir:  cfg.StateDir,
+		Workdir:   cfg.WorkDir,
+		Home:      home,
+		Runner:    audit.ExecRunner{},
+		Deliverer: mcpSrv.NewOverseerAuditDeliverer(cfg.OverseerName),
+		Capacity:  gate,
+		Interval:  interval,
+	})
+	if err != nil {
+		slog.Warn("periodic audit disabled", "err", err)
+		return nil
+	}
+	// Ensure a durable default config exists as the overseer retune surface.
+	// The advanced-tier model pin lives here, not at the call site, so it is
+	// inspectable and retunable rather than hardcoded (🎯T357 acceptance #2).
+	if _, err := os.Stat(audit.ConfigPath(cfg.StateDir)); os.IsNotExist(err) {
+		def := audit.DefaultConfig(cfg.WorkDir, home)
+		if name := strings.TrimSpace(cfg.OverseerName); name != "" {
+			def.Overseer = name
+		}
+		if err := audit.SaveConfig(cfg.StateDir, def); err != nil {
+			slog.Warn("audit default config save failed", "err", err)
+		}
+	}
+	mcpSrv.SetAuditor(auditor)
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_AUDIT"))) {
+	case "0", "false", "no", "off":
+		slog.Info("periodic audit schedule disabled by JEVONS_AUDIT (tools still registered)")
+		return auditor
+	}
+	go auditor.Run(ctx)
+	acfg, _ := auditor.Config()
+	slog.Info("periodic audit ready",
+		"workdir", cfg.WorkDir,
+		"model", acfg.EffectiveModel(),
+		"interval", acfg.IntervalDuration(),
+		"overseer", acfg.EffectiveOverseer(),
+		"config", "state_dir/audit/config.json",
+		"residue", "state_dir/audit/residue.json",
+		"reports", "state_dir/audit/reports",
+	)
+	return auditor
 }
 
 // startAmbientRSIMint wires residual 🎯T92 direct bullseye mint (NOT product path).

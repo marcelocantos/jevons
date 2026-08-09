@@ -23,6 +23,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/audit"
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cli"
@@ -183,6 +184,11 @@ type Server struct {
 	// refresh plus async feed triggers, writing durable versioned notes.
 	// Nil until SetResearchAgent.
 	research *research.Agent
+
+	// auditor is the periodic full-scan audit cycle (🎯T357): bounded passes
+	// over code, skills, and prompts on an advanced-tier model, folded into
+	// durable residue. Nil until SetAuditor.
+	auditor *audit.Auditor
 
 	// capacityGov admits, defers, or degrades background work against the
 	// remaining budget and concurrent load (🎯T359). Nil until
