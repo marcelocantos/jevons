@@ -1221,4 +1221,85 @@ test('index.html wires T351 whole-pixel geometry', function () {
     'context-tab margin-top no longer fractional 0.65rem');
 });
 
+// ── 🎯T363: viewport anchoring for above-the-fold height changes ─────
+
+test('T363 anchorPreservedScrollTop keeps the anchor row still', function () {
+  // Rows above the anchor grew by 332.5px: scrollTop must move by the same
+  // amount or the text under the owner's eyes slides by it.
+  assert.strictEqual(VL.anchorPreservedScrollTop(300, 120, 452.5), 632.5);
+  // Rows above shrank (a lazy shell's estimate was too tall) — the case the
+  // owner sees as the viewport jumping UP.
+  assert.strictEqual(VL.anchorPreservedScrollTop(1000, 120, -131), 749);
+  assert.strictEqual(VL.anchorPreservedScrollTop(10, 100, -500), 0, 'clamped at 0');
+  assert.strictEqual(VL.anchorPreservedScrollTop(300, NaN, 400), 300,
+    'no anchor rect → leave scrollTop alone (never guess)');
+});
+
+test('T363 pickScrollAnchorIndex picks the row crossing the viewport top', function () {
+  const items = [{ top: 0, height: 100 }, { top: 100, height: 100 }, { top: 200, height: 100 }];
+  assert.strictEqual(VL.pickScrollAnchorIndex(items, 150), 1, 'row the top edge cuts');
+  assert.strictEqual(VL.pickScrollAnchorIndex(items, 0), 0);
+  assert.strictEqual(VL.pickScrollAnchorIndex(items, 100), 1, 'exact boundary → the row below');
+  assert.strictEqual(VL.pickScrollAnchorIndex(items, 99999), 2, 'past the end → last row');
+  assert.strictEqual(VL.pickScrollAnchorIndex([], 10), -1);
+});
+
+test('T363 shouldCompensateAnchor ignores sub-pixel corrections', function () {
+  // scrollTop is integer-quantized: a 0.2px correction cannot be written and
+  // the attempt only burns a scroll event (the T341 thrash lesson).
+  assert.strictEqual(VL.shouldCompensateAnchor(100, 100.2), false);
+  assert.strictEqual(VL.shouldCompensateAnchor(100, 100.5), true);
+  assert.strictEqual(VL.shouldCompensateAnchor(100, 87), true);
+  assert.strictEqual(VL.shouldCompensateAnchor(100, NaN), false);
+});
+
+test('T363 scrollUpAnchorTrace: uncompensated wheel-up drifts, compensated does not', function () {
+  // Model of the owner's report: wheel up through a transcript of lazy
+  // shells frozen at an estimate; band entry above the viewport swaps in the
+  // real height and moves everything below.
+  const bad = VL.scrollUpAnchorTrace({ compensate: false });
+  assert.ok(bad.maxAnchorDriftPx > 100,
+    'uncompensated pass must drift visibly (got ' + bad.maxAnchorDriftPx + ')');
+  assert.ok(bad.jumpSteps > 0, 'uncompensated pass must jump on multiple steps');
+  const good = VL.scrollUpAnchorTrace({ compensate: true });
+  assert.strictEqual(good.maxAnchorDriftPx, 0, 'compensated pass is perfectly still');
+  assert.strictEqual(good.jumpSteps, 0);
+  assert.strictEqual(good.steps, bad.steps, 'same stimulus, both directions');
+  // Shrinking rows (estimate too tall) are the jump-UP the owner reported.
+  const shrink = VL.scrollUpAnchorTrace({ compensate: false, estimateHeight: 400, naturalHeight: 120 });
+  assert.ok(shrink.maxAnchorDriftPx > 0, 'shrink direction drifts too');
+  assert.strictEqual(
+    VL.scrollUpAnchorTrace({ compensate: true, estimateHeight: 400, naturalHeight: 120 }).maxAnchorDriftPx,
+    0, 'compensation covers shrink as well as growth');
+});
+
+test('index.html wires T363 anchor preservation on every height-writing pass', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(/function withAnchorPreservedScroll\(fn\)/.test(html),
+    'withAnchorPreservedScroll exists');
+  assert.ok(/function pickTopAnchorEl\(scrollTop\)[\s\S]{0,700}offsetTop <= scrollTop/.test(html),
+    'anchor pick is a binary search on offsetTop (no O(n) rect scan per pass)');
+  assert.ok(/withAnchorPreservedScroll[\s\S]{0,900}anchorPreservedScrollTop/.test(html),
+    'compensation goes through the pure helper');
+  // The four passes that change row heights. flushRowSnaps is the one that
+  // actually swapped a lazy shell's estimated lock for its real height —
+  // wrapping only virtualize/rematerialize left the stutter fully intact.
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,1400}withAnchorPreservedScroll/.test(html),
+    'virtualize pass is anchored');
+  assert.ok(/function flushRematerializeFrame\(\)[\s\S]{0,2600}withAnchorPreservedScroll/.test(html),
+    'progressive rematerialize frame is anchored');
+  assert.ok(/function flushRowSnaps\(\)[\s\S]{0,1600}withAnchorPreservedScroll/.test(html),
+    'row snap pass is anchored (the lock swap that moved content above the fold)');
+  assert.ok(/function flushRowSettles\(\)[\s\S]{0,600}withAnchorPreservedScroll/.test(html),
+    'batched settle pass is anchored');
+  assert.ok(/function queueRowSettle\(fn\)/.test(html) &&
+    /const settle = \(\) => \{[\s\S]{0,1400}queueRowSettle\(settle\);/.test(html),
+    'per-row settle rAFs batch into one anchored flush');
+  // Tracking pins to the live end — a second scrollTop writer would fight it.
+  assert.ok(/function withAnchorPreservedScroll\(fn\)[\s\S]{0,400}isTracking\(\)/.test(html),
+    'track mode is exempt from anchoring');
+});
+
 console.log(process.exitCode ? 'FAIL' : 'PASS virtual_list_test');

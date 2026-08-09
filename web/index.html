@@ -6068,6 +6068,71 @@ function scheduleVirtualize() {
   });
 }
 
+// ── Viewport anchoring for above-the-fold height changes (🎯T363) ─────
+// Owner regression: wheel-scrolling UP stuttered — the viewport "jumped up
+// randomly". Cause: history rows arrive as lazy shells frozen at an
+// ESTIMATED height (estimateHeightFromText). Scrolling up drags shells into
+// the 800px anticipation band ABOVE the viewport top; each rematerialize
+// swaps the estimate for the real rendered height — commonly hundreds of px
+// different — and every row below it, including the text under the owner's
+// eyes, slides by that delta. Auto-collapse of an off-screen tall bubble
+// above the viewport shrinks a row the same way. #messages runs
+// overflow-anchor:none deliberately (browser scroll anchoring fights the
+// follow-scroll pin, see the CSS), so nothing re-anchors the viewport: the
+// pass that changed the height must do it. Same rule as the T351 hydrate
+// prepend compensation, one layer down.
+//
+// Mechanics: remember one visible row's screen position across the writes
+// and restore it. Track mode is exempt — it pins to the live end anyway and
+// a second scrollTop writer would fight the pin.
+const ANCHOR_COMPENSATE_MIN_PX = (typeof VirtualList !== 'undefined' &&
+  VirtualList.ANCHOR_COMPENSATE_MIN_PX) || 0.5;
+
+// The row the viewport's top edge cuts through. Binary search on offsetTop
+// (monotone in document order) — an O(n) rect scan per virtualize pass on a
+// thousand-row transcript is exactly the layout cost T349 just removed.
+function pickTopAnchorEl(scrollTop) {
+  const kids = msgs.children;
+  if (!kids.length) return null;
+  let lo = 0, hi = kids.length - 1, best = kids[0];
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (kids[mid].offsetTop <= scrollTop) { best = kids[mid]; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return best;
+}
+
+/**
+ * Run fn (a batch of height-changing writes) with the viewport anchored.
+ * Reads the anchor rect BEFORE any write, so callers that already batch
+ * their geometry reads (T349) keep their read/write phase separation.
+ */
+function withAnchorPreservedScroll(fn) {
+  if (typeof VirtualList === 'undefined' || !VirtualList.anchorPreservedScrollTop ||
+      (typeof isTracking === 'function' && isTracking())) {
+    return fn();
+  }
+  const anchor = pickTopAnchorEl(msgs.scrollTop);
+  const before = anchor ? anchor.getBoundingClientRect().top : NaN;
+  try {
+    return fn();
+  } finally {
+    if (anchor && anchor.isConnected && Number.isFinite(before)) {
+      const st = msgs.scrollTop;
+      const next = VirtualList.anchorPreservedScrollTop(
+        st, before, anchor.getBoundingClientRect().top);
+      // Sub-pixel corrections cannot be written (scrollTop is integer-
+      // quantized) — attempting them only burns a scroll event (🎯T341).
+      if (Math.abs(next - st) >= ANCHOR_COMPENSATE_MIN_PX) {
+        beginScrollBookkeeping();
+        msgs.scrollTop = next;
+        endScrollBookkeeping();
+      }
+    }
+  }
+}
+
 // 🎯T336: enqueue shell for progressive rematerialize (viewport-first, cap/frame).
 // Does not call loadEarlier — paint must not wait on history network.
 function scheduleRematerialize(el) {
@@ -6124,17 +6189,21 @@ function flushRematerializeFrame() {
     // spill unpainted items back to the queue for the next frame.
     const t0 = performance.now();
     let stopAt = plan.thisFrame.length;
-    for (let j = 0; j < plan.thisFrame.length; j++) {
-      const item = plan.thisFrame[j];
-      item.el._rematQueued = false;
-      rematerializeMsg(item.el);
-      if (j + 1 < plan.thisFrame.length && typeof VirtualList !== 'undefined' &&
-          VirtualList.frameBudgetExceeded &&
-          VirtualList.frameBudgetExceeded(t0, performance.now())) {
-        stopAt = j + 1;
-        break;
+    // 🎯T363: painting a shell above the viewport replaces its estimated
+    // height with the real one — anchor the visible text across the batch.
+    withAnchorPreservedScroll(function () {
+      for (let j = 0; j < plan.thisFrame.length; j++) {
+        const item = plan.thisFrame[j];
+        item.el._rematQueued = false;
+        rematerializeMsg(item.el);
+        if (j + 1 < plan.thisFrame.length && typeof VirtualList !== 'undefined' &&
+            VirtualList.frameBudgetExceeded &&
+            VirtualList.frameBudgetExceeded(t0, performance.now())) {
+          stopAt = j + 1;
+          break;
+        }
       }
-    }
+    });
     _rematQueue = [];
     for (let j = stopAt; j < plan.thisFrame.length; j++) {
       const spill = plan.thisFrame[j];
@@ -6174,6 +6243,10 @@ function virtualizeMessages() {
   _virtualizing = true;
   beginScrollBookkeeping();
   try {
+    // 🎯T363: every write below can change the height of a row ABOVE the
+    // viewport (first materialize of an estimated shell, off-screen collapse,
+    // demat freeze). Anchor the visible text across the whole pass.
+    withAnchorPreservedScroll(function () {
     // 🎯T351: drain pending row snaps BEFORE the read phase — a demat that
     // freezes a not-yet-snapped (fractional) row would propagate the fraction
     // into the shell and thrash on the next snap.
@@ -6270,6 +6343,7 @@ function virtualizeMessages() {
     if (plan.rematThisFrame.length) scheduleLatestExpansion();
     // 🎯T341: scrollDown gates on sub-threshold height/scrollTop (no-op when idle).
     if (isTracking()) scrollDown();
+    });
   } finally {
     endScrollBookkeeping();
     _virtualizing = false;
@@ -6359,10 +6433,31 @@ function rematerializeMsg(el) {
     delete el._virtH;
     delete el._virtWasExpanded;
   };
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(settle);
-  } else {
-    settle();
+  queueRowSettle(settle);
+}
+
+// 🎯T363: the settle pass releases each row's minHeight lock to its measured
+// whole-pixel height — another above-the-fold height change, one frame after
+// the paint. Batching the per-row rAFs into one anchored flush both keeps the
+// viewport still and drops a rAF per rematerialized row.
+const _rowSettleQueue = [];
+let _rowSettleRaf = 0;
+function queueRowSettle(fn) {
+  if (typeof requestAnimationFrame !== 'function') { fn(); return; }
+  _rowSettleQueue.push(fn);
+  if (!_rowSettleRaf) _rowSettleRaf = requestAnimationFrame(flushRowSettles);
+}
+function flushRowSettles() {
+  _rowSettleRaf = 0;
+  const batch = _rowSettleQueue.splice(0, _rowSettleQueue.length);
+  if (!batch.length) return;
+  beginScrollBookkeeping();
+  try {
+    withAnchorPreservedScroll(function () {
+      for (let i = 0; i < batch.length; i++) batch[i]();
+    });
+  } finally {
+    endScrollBookkeeping();
   }
 }
 
@@ -6596,24 +6691,32 @@ function flushRowSnaps() {
   let lockChanged = false;
   beginScrollBookkeeping();
   try {
-    const prevLocks = todo.map((el) => el.style.minHeight);
-    for (const el of todo) {
-      if (el.style.minHeight) el.style.minHeight = '';
-    }
-    const naturals = todo.map((el) => el.getBoundingClientRect().height);
-    for (let i = 0; i < todo.length; i++) {
-      const el = todo[i];
-      const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
-        ? VirtualList.snappedRowLockPx(naturals[i])
-        : Math.ceil(naturals[i]);
-      const lockStr = lock > 0 ? lock + 'px' : '';
-      if (lockStr) el.style.minHeight = lockStr;
-      if (lockStr !== prevLocks[i]) lockChanged = true;
-      if (_rowSnapRO && !el._rowSnapObserved) {
-        _rowSnapRO.observe(el);
-        el._rowSnapObserved = true;
+    // 🎯T363: this is where a freshly materialized row swaps its ESTIMATED
+    // lock for its real height — routinely hundreds of px, and routinely on
+    // a row above the viewport (the band reaches 800px up). Unanchored, that
+    // delta slides everything below it, which is the owner's scroll-up
+    // stutter. Tracking mode is pinned by lockChanged below; free mode needs
+    // the anchor.
+    withAnchorPreservedScroll(function () {
+      const prevLocks = todo.map((el) => el.style.minHeight);
+      for (const el of todo) {
+        if (el.style.minHeight) el.style.minHeight = '';
       }
-    }
+      const naturals = todo.map((el) => el.getBoundingClientRect().height);
+      for (let i = 0; i < todo.length; i++) {
+        const el = todo[i];
+        const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
+          ? VirtualList.snappedRowLockPx(naturals[i])
+          : Math.ceil(naturals[i]);
+        const lockStr = lock > 0 ? lock + 'px' : '';
+        if (lockStr) el.style.minHeight = lockStr;
+        if (lockStr !== prevLocks[i]) lockChanged = true;
+        if (_rowSnapRO && !el._rowSnapObserved) {
+          _rowSnapRO.observe(el);
+          el._rowSnapObserved = true;
+        }
+      }
+    });
   } finally {
     endScrollBookkeeping();
   }

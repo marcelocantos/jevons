@@ -974,6 +974,59 @@
     return snapped > 0 ? snapped : 0;
   }
 
+  // ── Viewport anchoring (🎯T351 hydrate, 🎯T363 virtualize) ─────────
+  // One rule covers both: when content ABOVE the viewport changes height,
+  // scrollTop must move by the same amount or the text under the owner's
+  // eyes slides. #messages runs overflow-anchor:none on purpose (browser
+  // scroll anchoring fights the follow-scroll pin), so the code that made
+  // the height change owns the compensation — nothing else will do it.
+
+  /**
+   * Rect-exact compensation: keep the anchor row's screen position fixed.
+   * before/after are the anchor's getBoundingClientRect().top measured
+   * around the writes; the delta is the exact (fractional) height gained or
+   * lost above it.
+   */
+  function anchorPreservedScrollTop(prevScrollTop, anchorTopBefore, anchorTopAfter) {
+    const prev = Number(prevScrollTop) || 0;
+    const before = Number(anchorTopBefore);
+    const after = Number(anchorTopAfter);
+    if (!Number.isFinite(before) || !Number.isFinite(after)) return prev;
+    return Math.max(0, prev + (after - before));
+  }
+
+  /**
+   * 🎯T363: which row to anchor on — the first whose bottom is below the
+   * viewport top, i.e. the row the top edge cuts through (the text the owner
+   * is reading). Anchoring lower down would let rows between it and the top
+   * edge still shift the visible text; anchoring higher would pin content
+   * that is already off-screen. -1 for an empty list.
+   */
+  function pickScrollAnchorIndex(items, scrollTop) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return -1;
+    const st = Number(scrollTop) || 0;
+    for (let i = 0; i < list.length; i++) {
+      const it = list[i] || {};
+      const top = Number(it.top) || 0;
+      const h = Number(it.height) || 0;
+      if (top + h > st) return i;
+    }
+    return list.length - 1;
+  }
+
+  // scrollTop is integer-quantized by the engine, so a sub-pixel correction
+  // cannot be expressed — writing one only burns a scroll event.
+  const ANCHOR_COMPENSATE_MIN_PX = 0.5;
+  function shouldCompensateAnchor(prevScrollTop, nextScrollTop, minPx) {
+    const m = minPx == null ? ANCHOR_COMPENSATE_MIN_PX : Number(minPx);
+    const eps = Number.isFinite(m) && m >= 0 ? m : ANCHOR_COMPENSATE_MIN_PX;
+    const prev = Number(prevScrollTop);
+    const next = Number(nextScrollTop);
+    if (!Number.isFinite(prev) || !Number.isFinite(next)) return false;
+    return Math.abs(next - prev) >= eps;
+  }
+
   // 🎯T351: scroll compensation for a history page inserted ABOVE the
   // viewport. The integer scrollHeight delta (nextScrollHeight −
   // prevScrollHeight) loses the inserted page's fractional height, shifting
@@ -988,11 +1041,85 @@
     const before = Number(anchorTopBefore);
     const after = Number(anchorTopAfter);
     if (Number.isFinite(before) && Number.isFinite(after)) {
-      return Math.max(0, prev + (after - before));
+      return anchorPreservedScrollTop(prev, before, after);
     }
     const prevH = Number(prevScrollHeight) || 0;
     const nextH = Number(nextScrollHeight) || 0;
     return Math.max(0, prev + (nextH - prevH));
+  }
+
+  /**
+   * 🎯T363 oracle: wheel-scroll up through a virtualized transcript whose
+   * older rows are lazy shells frozen at an ESTIMATED height. Each step,
+   * shells entering the anticipation band swap estimate → natural height;
+   * the ones above the viewport top move everything below them.
+   *
+   * Reports the anchor row's screen-position drift — how far the text under
+   * the owner's eyes moved beyond what the wheel asked for.
+   *   compensate:true  → maxAnchorDriftPx === 0 (viewport tracks the wheel)
+   *   compensate:false → drift on every step a shell above grew (the stutter)
+   */
+  function scrollUpAnchorTrace(opts) {
+    const o = opts || {};
+    const n = o.n > 0 ? o.n | 0 : 200;
+    const est = o.estimateHeight > 0 ? Number(o.estimateHeight) : DEFAULT_ESTIMATE_HEIGHT;
+    const natural = o.naturalHeight > 0 ? Number(o.naturalHeight) : 260;
+    const ch = o.clientHeight > 0 ? Number(o.clientHeight) : 700;
+    const buf = typeof o.buffer === 'number' ? o.buffer : DEFAULT_BUFFER;
+    const step = o.stepPx > 0 ? Number(o.stepPx) : 240;
+    const steps = o.steps > 0 ? o.steps | 0 : 20;
+    const compensate = !!o.compensate;
+
+    const heights = new Array(n).fill(est);
+    const material = new Array(n).fill(false);
+    const topsOf = function () {
+      const tops = [];
+      let y = 0;
+      for (let i = 0; i < n; i++) { tops.push({ top: y, height: heights[i] }); y += heights[i]; }
+      return tops;
+    };
+    const materializeBand = function (tops, scrollTop) {
+      const want = visibleIndices(tops, scrollTop, ch, buf);
+      for (let k = 0; k < want.length; k++) {
+        const i = want[k];
+        if (!material[i]) { material[i] = true; heights[i] = natural; }
+      }
+    };
+
+    // Start pinned at the live end with the end band already painted.
+    let tops = topsOf();
+    let total = tops.length ? tops[n - 1].top + tops[n - 1].height : 0;
+    let scrollTop = Math.max(0, total - ch);
+    materializeBand(topsOf(), scrollTop);
+
+    let maxDrift = 0;
+    let totalDrift = 0;
+    let jumps = 0;
+    const drifts = [];
+    for (let s = 0; s < steps && scrollTop > 0; s++) {
+      scrollTop = Math.max(0, scrollTop - step);
+      tops = topsOf();
+      const ai = pickScrollAnchorIndex(tops, scrollTop);
+      const anchorBefore = tops[ai].top - scrollTop; // screen-relative
+      materializeBand(tops, scrollTop);
+      const after = topsOf();
+      if (compensate) {
+        scrollTop = anchorPreservedScrollTop(scrollTop, tops[ai].top, after[ai].top);
+      }
+      const anchorAfter = after[ai].top - scrollTop;
+      const drift = anchorAfter - anchorBefore;
+      drifts.push(drift);
+      if (Math.abs(drift) > 0) jumps++;
+      totalDrift += Math.abs(drift);
+      maxDrift = Math.max(maxDrift, Math.abs(drift));
+    }
+    return {
+      maxAnchorDriftPx: maxDrift,
+      totalAnchorDriftPx: totalDrift,
+      jumpSteps: jumps,
+      steps: drifts.length,
+      drifts: drifts,
+    };
   }
 
   // Note: shouldPinScroll (above) calls finalPinScrollTop at runtime — both
@@ -1068,6 +1195,13 @@
     isPinnedAtEnd: isPinnedAtEnd,
     hydrateCompensatedScrollTop: hydrateCompensatedScrollTop,
     snappedRowLockPx: snappedRowLockPx,
+
+    // 🎯T363: viewport anchoring for height changes above the scroll position.
+    anchorPreservedScrollTop: anchorPreservedScrollTop,
+    pickScrollAnchorIndex: pickScrollAnchorIndex,
+    ANCHOR_COMPENSATE_MIN_PX: ANCHOR_COMPENSATE_MIN_PX,
+    shouldCompensateAnchor: shouldCompensateAnchor,
+    scrollUpAnchorTrace: scrollUpAnchorTrace,
     // Idle end fallback ms if history_meta never arrives (empty log).
     REPLAY_IDLE_END_MS: REPLAY_IDLE_END_MS,
 
