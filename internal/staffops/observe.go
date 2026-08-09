@@ -260,7 +260,57 @@ type EventRow struct {
 	Component string
 	Decision  string
 	Level     string
-	TS        time.Time
+	Source    string
+	// Drill is true when the row carries an explicit synthetic marker
+	// (eventlog fields.drill truthy). Set by the harness projection.
+	Drill bool
+	TS    time.Time
+}
+
+// drillToken is the normalized source/component stamp used by synthetic RSI
+// ops drills (source=rsi-drill, component=rsi_drill).
+const drillToken = "rsi_drill"
+
+// drillMsgMarker is the message marker synthetic RSI drills carry.
+const drillMsgMarker = "rsi_ops_live_drill"
+
+// drillDecision is the eventlog decision stamped by RSI ops live drills.
+const drillDecision = "live_drill"
+
+// normalizeDrillToken lowercases and folds '-' to '_' so rsi-drill and
+// rsi_drill compare equal. Exact token match only — a real error from a
+// component merely containing "rsi" must not be swallowed.
+func normalizeDrillToken(s string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", "_")
+}
+
+// IsSyntheticDrillRow reports whether an eventlog row is a synthetic RSI ops
+// drill stimulus rather than a real product anomaly (🎯T352). Drill rows are
+// appended deliberately to exercise the coach loop (🎯T243/🎯T333); the
+// sentinel must ignore them instead of classifying file+PO / daemon_error.
+//
+// Pure: matches the drill markers only — source or component exactly
+// rsi-drill/rsi_drill, msg containing rsi_ops_live_drill, decision live_drill
+// from a drill source, or an explicit fields.drill marker.
+func IsSyntheticDrillRow(r EventRow) bool {
+	if r.Drill {
+		return true
+	}
+	src := normalizeDrillToken(r.Source)
+	comp := normalizeDrillToken(r.Component)
+	if src == drillToken || comp == drillToken {
+		return true
+	}
+	if strings.Contains(strings.ToLower(r.Msg), drillMsgMarker) {
+		return true
+	}
+	// decision=live_drill alone is not enough — require a drill-ish origin so a
+	// real component that ever emits that decision still classifies normally.
+	if normalizeDrillToken(r.Decision) == drillDecision &&
+		(strings.Contains(src, "drill") || strings.Contains(comp, "drill")) {
+		return true
+	}
+	return false
 }
 
 // ClusterEventAnomalies reduces recent eventlog rows into EventObs for BuildSignals.
@@ -296,6 +346,10 @@ func ClusterEventAnomalies(rows []EventRow, now time.Time, window time.Duration)
 
 	for _, r := range rows {
 		if !r.TS.IsZero() && r.TS.Before(cut) {
+			continue
+		}
+		// Synthetic RSI drill stimulus is not a product anomaly (🎯T352).
+		if IsSyntheticDrillRow(r) {
 			continue
 		}
 		msg := strings.ToLower(r.Msg + " " + r.Component + " " + r.Decision + " " + r.Level)

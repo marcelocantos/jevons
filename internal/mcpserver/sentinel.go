@@ -533,18 +533,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 		if err == nil {
 			rows := make([]staffops.EventRow, 0, len(evs))
 			for _, e := range evs {
-				row := staffops.EventRow{
-					Msg: e.Msg, Component: e.Component,
-					Decision: e.Decision, Level: e.Level,
-				}
-				if e.TS != "" {
-					if t, err := time.Parse(time.RFC3339Nano, e.TS); err == nil {
-						row.TS = t
-					} else if t, err := time.Parse(time.RFC3339, e.TS); err == nil {
-						row.TS = t
-					}
-				}
-				rows = append(rows, row)
+				rows = append(rows, eventRowFromEvent(e))
 			}
 			in.Events = staffops.ClusterEventAnomalies(rows, now, window)
 		}
@@ -554,16 +543,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 		if evs, err := eventlog.Tail(path, eventlog.TailOptions{Limit: 200}); err == nil {
 			rows := make([]staffops.EventRow, 0, len(evs))
 			for _, e := range evs {
-				row := staffops.EventRow{
-					Msg: e.Msg, Component: e.Component,
-					Decision: e.Decision, Level: e.Level,
-				}
-				if e.TS != "" {
-					if t, err := time.Parse(time.RFC3339Nano, e.TS); err == nil {
-						row.TS = t
-					}
-				}
-				rows = append(rows, row)
+				rows = append(rows, eventRowFromEvent(e))
 			}
 			in.Events = staffops.ClusterEventAnomalies(rows, now, window)
 		}
@@ -653,6 +633,30 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 	}
 
 	return staffops.BuildSignals(in), resources
+}
+
+// eventRowFromEvent projects an eventlog row into the pure clustering shape.
+// Source and the fields.drill marker travel with it so synthetic RSI drill
+// stimulus can be ignored rather than classified as a product anomaly (🎯T352).
+func eventRowFromEvent(e eventlog.Event) staffops.EventRow {
+	row := staffops.EventRow{
+		Msg: e.Msg, Component: e.Component,
+		Decision: e.Decision, Level: e.Level, Source: e.Source,
+	}
+	switch v := e.Fields["drill"].(type) {
+	case bool:
+		row.Drill = v
+	case string:
+		row.Drill = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if e.TS != "" {
+		if t, err := time.Parse(time.RFC3339Nano, e.TS); err == nil {
+			row.TS = t
+		} else if t, err := time.Parse(time.RFC3339, e.TS); err == nil {
+			row.TS = t
+		}
+	}
+	return row
 }
 
 func loadFrontierLeaves(workdir string) ([]targetfile.FrontierLeaf, error) {

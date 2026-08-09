@@ -386,3 +386,88 @@ targets:
 		t.Fatalf("want frontier_stall file+PO; primary=%s decisions=%+v", res.Primary, res.Decisions)
 	}
 }
+
+// 🎯T352: the synthetic RSI ops drill rows the owner appended on 2026-08-09
+// must not become an event:error:rsi_drill file+PO, while real daemon errors
+// beside them still classify.
+func TestSentinelIgnoresRSIDrillEventRows(t *testing.T) {
+	dir := t.TempDir()
+	path := eventlog.DefaultPath(dir)
+	j, err := eventlog.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	ts := now.Format(time.RFC3339Nano)
+	for i := 0; i < 2; i++ {
+		if err := j.Append(eventlog.Event{
+			TS:        ts,
+			Source:    "rsi-drill",
+			Level:     "error",
+			Msg:       "rsi_ops_live_drill: synthetic coach stimulus (safe to ignore)",
+			Component: "rsi_drill",
+			Decision:  "live_drill",
+			Fields:    map[string]any{"drill": "true", "purpose": "exercise T243/T333 closed loop"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := j.Append(eventlog.Event{
+			TS:        ts,
+			Source:    "server",
+			Level:     "error",
+			Msg:       "butler send failed",
+			Component: "butler",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = j.Close()
+
+	s := New("/tmp", nil, nil)
+	s.SetEventLogTailer(func(opt eventlog.TailOptions) ([]eventlog.Event, string, error) {
+		ev, err := eventlog.Tail(path, opt)
+		return ev, path, err
+	})
+
+	sigs, _ := s.sampleSentinel(SentinelLoopArgs{Server: s, StateDir: dir}, now)
+	realFound := false
+	for _, sig := range sigs {
+		if strings.Contains(sig.Symptom, "rsi_drill") || strings.Contains(sig.Detail, "rsi_ops_live_drill") {
+			t.Fatalf("drill row classified as anomaly: %+v", sig)
+		}
+		if sig.Symptom == "event:error:butler" {
+			realFound = true
+		}
+	}
+	if !realFound {
+		t.Fatalf("real daemon error no longer classified: %+v", sigs)
+	}
+}
+
+func TestEventRowFromEventCarriesDrillMarkers(t *testing.T) {
+	row := eventRowFromEvent(eventlog.Event{
+		TS: "2026-08-09T06:03:04.778Z", Source: "rsi-drill", Level: "error",
+		Msg: "rsi_ops_live_drill: synthetic coach stimulus", Component: "rsi_drill",
+		Decision: "live_drill", Fields: map[string]any{"drill": "true"},
+	})
+	if row.Source != "rsi-drill" || !row.Drill {
+		t.Fatalf("drill markers lost in projection: %+v", row)
+	}
+	if row.TS.IsZero() {
+		t.Fatalf("TS not parsed: %+v", row)
+	}
+	if !staffops.IsSyntheticDrillRow(row) {
+		t.Fatalf("projected row not recognised as drill: %+v", row)
+	}
+
+	plain := eventRowFromEvent(eventlog.Event{
+		TS: "2026-08-09T06:03:04Z", Source: "server", Level: "error",
+		Msg: "butler send failed", Component: "butler",
+	})
+	if plain.Drill || staffops.IsSyntheticDrillRow(plain) {
+		t.Fatalf("real row flagged as drill: %+v", plain)
+	}
+	if plain.TS.IsZero() {
+		t.Fatalf("RFC3339 TS not parsed: %+v", plain)
+	}
+}
