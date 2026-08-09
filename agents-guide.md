@@ -366,6 +366,18 @@ op=track / file tools). Related: ambient RSI coach **🎯T243** (judgments →
 overseer; not direct mint), residual **🎯T92**, hierarchy **🎯T129**.
 **Residual:** one-off flukes may skip filing; judgment allowed.
 
+**Retrospective coach mine (🎯T353):** the coach does not only wait for new
+appends. On a slow cadence (default 6h, 7d window) it makes a **bounded pass
+over history** — git repair churn and reverts, the eventlog tail, owner chat,
+session transcripts — and posts sparse judgments marked `Mode: retrospective`
+with commit SHAs / session ids as evidence. *Fine sensors, coarse conclusions:*
+extraction stays sensitive, but a value bar drops one-off git noise and bare
+phrase-friction before anything reaches the overseer. On demand:
+`jevons_rsi_coach_cycle mode=retro|both`; dials (`retro_lookback_hours`,
+`retro_interval_sec`, `retro_rate_cap`, `retro_min_count`, `retro_workdir`) via
+`jevons_rsi_coach_configure`; last pass visible in `jevons_rsi_coach_status`.
+Retro never advances the drip cursor and never calls bullseye.
+
 ## Oracle-first completion (🎯T31 / 🎯T31.1)
 
 **Bare "done" is not accepted.** Finish reports must carry either:

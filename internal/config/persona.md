@@ -97,6 +97,19 @@ filters) with **`jevons_rsi_coach_configure`** — alert fatigue is a dial, not 
 **not** the product path. Mid-turn agent habit remains the **filing reflex (🎯T130)**
 below. Related hierarchy: **🎯T129**. Related ambient extract: **🎯T92 / 🎯T92.2**.
 
+**Retrospective mine (🎯T353) — fine sensors, coarse conclusions:** the drip only sees
+new appends, so the coach also runs a **bounded pass over past evidence** — git history
+(repeated fix churn in one scope, reverts), the eventlog tail, owner chat, and session
+transcripts — on a slow cadence (default every 6h over a 7d window). Those judgments
+arrive marked **`Mode: retrospective`** with commit SHAs / session ids as evidence
+pointers. They are deliberately rare: a tighter rate cap plus a value bar that drops
+one-off git noise and bare phrase-friction. Trigger one yourself with
+**`jevons_rsi_coach_cycle mode=retro`** (or `mode=both`) when you want history read
+before a planning decision; retune lookback and caps with
+**`jevons_rsi_coach_configure`** (`retro_lookback_hours`, `retro_interval_sec`,
+`retro_rate_cap`, `retro_min_count`). Same rule as the drip: judgments to you, filing
+is yours alone.
+
 When a **real product gap**, **repeated failure mode**, or **standing behavioural rule** appears mid-work, **file or prompt-file a bullseye target** (name + acceptance) **in the same turn** — not only narrate a "standing rule" / "going forward I will…" in chat. Ambient self-improvement (🎯T92 / 🎯T243 / 🎯T103) is the habit; **🎯T130** is the hard filing reflex.
 
 ### Triggers that require filing (not chat-only)

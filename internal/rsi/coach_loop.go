@@ -38,7 +38,12 @@ type CoachArgs struct {
 	// DryRun never delivers.
 	DryRun bool
 	// SeedEOF when true seeds cursor to EOF on first load (avoid history flood).
+	// The forward drip starts at EOF; history before it is reached by the
+	// bounded retrospective pass (🎯T353), not by re-reading the journals.
 	SeedEOF bool
+	// RetroWorkdir is the git repository mined by the retrospective pass.
+	// Empty (and no config override) = no git surface; other surfaces still run.
+	RetroWorkdir string
 	// Now optional clock.
 	Now func() time.Time
 	// OnResult optional hook after each cycle.
@@ -110,6 +115,8 @@ func (c *Coach) Run(ctx context.Context) {
 	if c == nil {
 		return
 	}
+	// Batch history analysis runs on its own (much slower) cadence.
+	go c.runRetroSchedule(ctx)
 	// Short first delay so boot is not blocked on a long interval.
 	cfg, _ := LoadCoachConfig(c.args.StateDir)
 	interval := c.args.Interval

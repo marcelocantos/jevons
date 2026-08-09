@@ -39,8 +39,9 @@ func (s *Server) RSICoach() *rsi.Coach {
 func (s *Server) registerRSICoachTools() {
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_rsi_coach_cycle",
-			mcp.WithDescription("Run one RSI coach cycle now (🎯T243): drip-read owner chat + eventlog + session transcripts, form structured judgments, deliver to overseer. Coach never files bullseye — overseer alone decides file/alert/brief PO/ignore. Prefer harness schedule for ambient operation."),
+			mcp.WithDescription("Run one RSI coach cycle now: drip (🎯T243) reads new appends since the cursor; retro (🎯T353) makes a bounded pass over history — git commits, eventlog tail, owner chat, session transcripts — within the configured lookback. Coach never files bullseye — overseer alone decides file/alert/brief PO/ignore."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, form judgments and return wire text without delivering to overseer.")),
+			mcp.WithString("mode", mcp.Description("drip (default) | retro | both. retro runs the bounded retrospective history pass (🎯T353).")),
 		),
 		s.handleRSICoachCycle,
 	)
@@ -55,6 +56,15 @@ func (s *Server) registerRSICoachTools() {
 			mcp.WithString("focus_filters", mcp.Description("Comma-separated focus filters (kind/component/message substrings). Empty string clears.")),
 			mcp.WithString("overseer", mcp.Description("Deliver target agent name (default jevons).")),
 			mcp.WithString("updated_by", mcp.Description("Who is retuning (default: overseer name / jevons).")),
+			mcp.WithBoolean("retro_enabled", mcp.Description("🎯T353: enable the scheduled retrospective history pass.")),
+			mcp.WithNumber("retro_interval_sec", mcp.Description("🎯T353: retro schedule period in seconds (default 21600 = 6h; negative disables the retro ticker).")),
+			mcp.WithNumber("retro_lookback_hours", mcp.Description("🎯T353: how far back one retrospective pass reaches (default 168 = 7d). This bounds the whole pass — history is never re-scanned in full on the drip cadence.")),
+			mcp.WithNumber("retro_rate_cap", mcp.Description("🎯T353: max judgments delivered per retrospective pass (default 2).")),
+			mcp.WithNumber("retro_min_count", mcp.Description("🎯T353: coarse-conclusion threshold for the retro value bar (default 3).")),
+			mcp.WithNumber("retro_max_commits", mcp.Description("🎯T353: max commits mined per pass (default 400).")),
+			mcp.WithNumber("retro_max_event_rows", mcp.Description("🎯T353: max eventlog rows scanned per pass (default 2000).")),
+			mcp.WithNumber("retro_max_sessions", mcp.Description("🎯T353: max session transcripts scanned per pass (default 12).")),
+			mcp.WithString("retro_workdir", mcp.Description("🎯T353: git repository mined for history (empty string clears to the daemon workdir).")),
 		),
 		s.handleRSICoachConfigure,
 	)
@@ -77,21 +87,52 @@ func (s *Server) handleRSICoachCycle(_ context.Context, req mcp.CallToolRequest)
 	if v, ok := args["dry_run"].(bool); ok {
 		dryHint = v
 	}
+	mode := "drip"
+	if v, ok := args["mode"].(string); ok && strings.TrimSpace(v) != "" {
+		mode = strings.ToLower(strings.TrimSpace(v))
+	}
+	switch mode {
+	case "drip", "retro", "both":
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("unknown mode %q (want drip | retro | both)", mode)), nil
+	}
 
-	res, err := coach.RunOnce("mcp")
-	if err != nil {
-		s.logLifecycle("rsi_coach", "cycle", "error", map[string]any{"err": err.Error()})
-		return mcp.NewToolResultError(fmt.Sprintf("rsi coach cycle failed: %v", err)), nil
+	var res rsi.CoachCycleResult
+	if mode == "drip" || mode == "both" {
+		r, err := coach.RunOnce("mcp")
+		if err != nil {
+			s.logLifecycle("rsi_coach", "cycle", "error", map[string]any{"err": err.Error(), "mode": mode})
+			return mcp.NewToolResultError(fmt.Sprintf("rsi coach cycle failed: %v", err)), nil
+		}
+		res = r
+	}
+	if mode == "retro" || mode == "both" {
+		r, err := coach.RunRetroOnce("mcp")
+		if err != nil {
+			s.logLifecycle("rsi_coach", "retro_cycle", "error", map[string]any{"err": err.Error()})
+			return mcp.NewToolResultError(fmt.Sprintf("rsi coach retro cycle failed: %v", err)), nil
+		}
+		res.Judgments = append(res.Judgments, r.Judgments...)
+		res.Delivered = append(res.Delivered, r.Delivered...)
+		res.Skipped = append(res.Skipped, r.Skipped...)
+		res.WireTexts = append(res.WireTexts, r.WireTexts...)
 	}
 	s.logLifecycle("rsi_coach", "cycle", "ok", map[string]any{
+		"mode":      mode,
 		"judgments": len(res.Judgments),
 		"delivered": len(res.Delivered),
 		"skipped":   len(res.Skipped),
 	})
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("RSI coach cycle: judgments=%d delivered=%d skipped=%d\n",
-		len(res.Judgments), len(res.Delivered), len(res.Skipped)))
+	b.WriteString(fmt.Sprintf("RSI coach cycle (mode=%s): judgments=%d delivered=%d skipped=%d\n",
+		mode, len(res.Judgments), len(res.Delivered), len(res.Skipped)))
+	if mode != "drip" {
+		if st, err := coach.RetroState(); err == nil {
+			b.WriteString(fmt.Sprintf("  retro window: since=%s commits=%d event_rows=%d chat_turns=%d session_turns=%d\n",
+				st.LastWindowStart, st.LastCommits, st.LastEventRows, st.LastChatTurns, st.LastSessionTurns))
+		}
+	}
 	if dryHint && len(res.Delivered) > 0 {
 		b.WriteString("(note: dry_run arg is a hint when the coach deliverer is live; use coach DryRun for guaranteed no-deliver)\n")
 	}
@@ -161,6 +202,28 @@ func (s *Server) handleRSICoachConfigure(_ context.Context, req mcp.CallToolRequ
 		o := strings.TrimSpace(v)
 		patch.Overseer = &o
 	}
+	// Retrospective dials (🎯T353).
+	if v, ok := args["retro_enabled"].(bool); ok {
+		patch.RetroEnabled = &v
+	}
+	for key, dst := range map[string]**int{
+		"retro_interval_sec":   &patch.RetroIntervalSec,
+		"retro_lookback_hours": &patch.RetroLookbackHours,
+		"retro_rate_cap":       &patch.RetroRateCap,
+		"retro_min_count":      &patch.RetroMinCount,
+		"retro_max_commits":    &patch.RetroMaxCommits,
+		"retro_max_event_rows": &patch.RetroMaxEventRows,
+		"retro_max_sessions":   &patch.RetroMaxSessions,
+	} {
+		if v, ok := args[key].(float64); ok {
+			n := int(v)
+			*dst = &n
+		}
+	}
+	if v, ok := args["retro_workdir"].(string); ok {
+		w := strings.TrimSpace(v)
+		patch.RetroWorkdir = &w
+	}
 
 	cfg, err := coach.PatchConfig(patch)
 	if err != nil {
@@ -172,9 +235,14 @@ func (s *Server) handleRSICoachConfigure(_ context.Context, req mcp.CallToolRequ
 		"rate_cap":   cfg.RateCap,
 	})
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"RSI coach retuned: enabled=%v interval_sec=%d rate_cap=%d min_count=%d focus=%v overseer=%s updated_by=%s\nSystem prompt length=%d (effective uses override when non-empty).",
+		"RSI coach retuned: enabled=%v interval_sec=%d rate_cap=%d min_count=%d focus=%v overseer=%s updated_by=%s\n"+
+			"retro (🎯T353): enabled=%v interval_sec=%d lookback_hours=%d rate_cap=%d min_count=%d max_commits=%d workdir=%q\n"+
+			"System prompt length=%d (effective uses override when non-empty).",
 		cfg.Enabled, cfg.IntervalSec, cfg.EffectiveRateCap(), cfg.EffectiveMinCount(),
-		cfg.FocusFilters, cfg.EffectiveOverseer(), cfg.UpdatedBy, len(cfg.SystemPrompt),
+		cfg.FocusFilters, cfg.EffectiveOverseer(), cfg.UpdatedBy,
+		cfg.RetroEnabled, cfg.RetroIntervalSec, int(cfg.RetroLookback()/time.Hour),
+		cfg.EffectiveRetroRateCap(), cfg.EffectiveRetroMinCount(), cfg.RetroMaxCommits, cfg.RetroWorkdir,
+		len(cfg.SystemPrompt),
 	)), nil
 }
 
@@ -206,13 +274,25 @@ func (s *Server) handleRSICoachStatus(_ context.Context, _ mcp.CallToolRequest) 
 			dispLine = fmt.Sprintf("  dispositions: error: %v\n", err)
 		}
 	}
+	retroLine := "  retro(🎯T353): state unavailable\n"
+	if st, err := coach.RetroState(); err == nil {
+		retroLine = fmt.Sprintf(
+			"  retro(🎯T353): enabled=%v interval_sec=%d lookback_hours=%d rate_cap=%d min_count=%d workdir=%q\n"+
+				"    last_run=%s window_start=%s runs=%d commits=%d event_rows=%d chat_turns=%d session_turns=%d judgments=%d delivered=%d suppressed=%d\n",
+			cfg.RetroEnabled, cfg.RetroIntervalSec, int(cfg.RetroLookback()/time.Hour),
+			cfg.EffectiveRetroRateCap(), cfg.EffectiveRetroMinCount(), cfg.RetroWorkdir,
+			st.LastRunAt, st.LastWindowStart, st.Runs, st.LastCommits, st.LastEventRows,
+			st.LastChatTurns, st.LastSessionTurns, st.LastJudgments, st.LastDelivered, st.LastSuppressed,
+		)
+	}
 	text := fmt.Sprintf(
-		"RSI coach status (🎯T243)\n  name=%s overseer=%s enabled=%v\n  interval_sec=%d rate_cap=%d min_count=%d\n  focus_filters=%v\n  updated_at=%s updated_by=%s\n  cursor: chat_byte=%d event_byte=%d sessions=%d\n%s  system_prompt_preview:\n%s\n",
+		"RSI coach status (🎯T243)\n  name=%s overseer=%s enabled=%v\n  interval_sec=%d rate_cap=%d min_count=%d\n  focus_filters=%v\n  updated_at=%s updated_by=%s\n  cursor: chat_byte=%d event_byte=%d sessions=%d\n%s%s  system_prompt_preview:\n%s\n",
 		cfg.EffectiveCoachName(), cfg.EffectiveOverseer(), cfg.Enabled,
 		cfg.IntervalSec, cfg.EffectiveRateCap(), cfg.EffectiveMinCount(),
 		cfg.FocusFilters, cfg.UpdatedAt, cfg.UpdatedBy,
 		cur.ChatLogByte, cur.EventLogByte, len(cur.SessionOffsets),
 		dispLine,
+		retroLine,
 		preview,
 	)
 	return mcp.NewToolResultText(text), nil

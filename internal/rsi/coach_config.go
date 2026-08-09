@@ -35,17 +35,54 @@ type CoachConfig struct {
 	UpdatedAt string `json:"updated_at,omitempty"`
 	// UpdatedBy records who retuned (e.g. jevons).
 	UpdatedBy string `json:"updated_by,omitempty"`
+
+	// Retrospective history dials (🎯T353). The drip dials above govern the
+	// forward cursor; these govern the bounded backward pass. They are separate
+	// on purpose: observe fine and often, conclude coarse and rarely.
+
+	// RetroEnabled turns the scheduled retrospective pass on (default true).
+	RetroEnabled bool `json:"retro_enabled"`
+	// RetroIntervalSec is the retro schedule period (0 = 6h default; negative
+	// disables the retro ticker — MCP-triggered passes still work).
+	RetroIntervalSec int `json:"retro_interval_sec"`
+	// RetroLookbackHours is how far back one pass reaches (0 = 168h / 7d).
+	// This is the whole window: a pass never scans beyond it, so history is
+	// never re-read in full on the drip cadence.
+	RetroLookbackHours int `json:"retro_lookback_hours"`
+	// RetroRateCap is max judgments delivered per retro pass (0 = 2).
+	RetroRateCap int `json:"retro_rate_cap"`
+	// RetroMinCount is the coarse-conclusion threshold applied by the retro
+	// value bar after fine-grained extraction (0 = 3).
+	RetroMinCount int `json:"retro_min_count"`
+	// RetroMaxCommits / RetroMaxEventRows / RetroMaxSessions /
+	// RetroMaxTurnsPerSession bound each surface per pass (0 = defaults).
+	RetroMaxCommits         int `json:"retro_max_commits"`
+	RetroMaxEventRows       int `json:"retro_max_event_rows"`
+	RetroMaxSessions        int `json:"retro_max_sessions"`
+	RetroMaxTurnsPerSession int `json:"retro_max_turns_per_session"`
+	// RetroWorkdir overrides the git repository mined for history (empty = the
+	// daemon's configured workdir; non-git paths simply yield no git evidence).
+	RetroWorkdir string `json:"retro_workdir,omitempty"`
 }
 
 // DefaultCoachConfig returns production defaults.
 func DefaultCoachConfig() CoachConfig {
 	return CoachConfig{
-		Enabled:     true,
-		IntervalSec: int(DefaultCoachInterval / time.Second),
-		RateCap:     DefaultCoachRateCap,
-		MinCount:    DefaultMinCount,
-		Overseer:    "jevons",
-		CoachName:   DefaultCoachName,
+		Enabled:                 true,
+		IntervalSec:             int(DefaultCoachInterval / time.Second),
+		RateCap:                 DefaultCoachRateCap,
+		MinCount:                DefaultMinCount,
+		Overseer:                "jevons",
+		CoachName:               DefaultCoachName,
+		RetroEnabled:            true,
+		RetroIntervalSec:        int(DefaultRetroInterval / time.Second),
+		RetroLookbackHours:      int(DefaultRetroLookback / time.Hour),
+		RetroRateCap:            DefaultRetroRateCap,
+		RetroMinCount:           DefaultRetroMinCount,
+		RetroMaxCommits:         DefaultRetroMaxCommits,
+		RetroMaxEventRows:       DefaultRetroMaxEventRows,
+		RetroMaxSessions:        DefaultRetroMaxSessions,
+		RetroMaxTurnsPerSession: DefaultRetroTurnCap,
 	}
 }
 
@@ -66,6 +103,17 @@ type coachConfigWire struct {
 	CoachName    *string  `json:"coach_name,omitempty"`
 	UpdatedAt    string   `json:"updated_at,omitempty"`
 	UpdatedBy    string   `json:"updated_by,omitempty"`
+
+	RetroEnabled            *bool   `json:"retro_enabled"`
+	RetroIntervalSec        *int    `json:"retro_interval_sec"`
+	RetroLookbackHours      *int    `json:"retro_lookback_hours"`
+	RetroRateCap            *int    `json:"retro_rate_cap"`
+	RetroMinCount           *int    `json:"retro_min_count"`
+	RetroMaxCommits         *int    `json:"retro_max_commits"`
+	RetroMaxEventRows       *int    `json:"retro_max_event_rows"`
+	RetroMaxSessions        *int    `json:"retro_max_sessions"`
+	RetroMaxTurnsPerSession *int    `json:"retro_max_turns_per_session"`
+	RetroWorkdir            *string `json:"retro_workdir,omitempty"`
 }
 
 // LoadCoachConfig reads durable config; missing file → defaults.
@@ -116,6 +164,36 @@ func LoadCoachConfig(stateDir string) (CoachConfig, error) {
 	if w.UpdatedBy != "" {
 		cfg.UpdatedBy = w.UpdatedBy
 	}
+	if w.RetroEnabled != nil {
+		cfg.RetroEnabled = *w.RetroEnabled
+	}
+	if w.RetroIntervalSec != nil {
+		cfg.RetroIntervalSec = *w.RetroIntervalSec
+	}
+	if w.RetroLookbackHours != nil {
+		cfg.RetroLookbackHours = *w.RetroLookbackHours
+	}
+	if w.RetroRateCap != nil {
+		cfg.RetroRateCap = *w.RetroRateCap
+	}
+	if w.RetroMinCount != nil {
+		cfg.RetroMinCount = *w.RetroMinCount
+	}
+	if w.RetroMaxCommits != nil {
+		cfg.RetroMaxCommits = *w.RetroMaxCommits
+	}
+	if w.RetroMaxEventRows != nil {
+		cfg.RetroMaxEventRows = *w.RetroMaxEventRows
+	}
+	if w.RetroMaxSessions != nil {
+		cfg.RetroMaxSessions = *w.RetroMaxSessions
+	}
+	if w.RetroMaxTurnsPerSession != nil {
+		cfg.RetroMaxTurnsPerSession = *w.RetroMaxTurnsPerSession
+	}
+	if w.RetroWorkdir != nil {
+		cfg.RetroWorkdir = *w.RetroWorkdir
+	}
 	return cfg, nil
 }
 
@@ -158,6 +236,18 @@ type CoachConfigPatch struct {
 	CoachName    *string
 	UpdatedBy    string
 	Now          time.Time
+
+	// Retrospective dials (🎯T353).
+	RetroEnabled            *bool
+	RetroIntervalSec        *int
+	RetroLookbackHours      *int
+	RetroRateCap            *int
+	RetroMinCount           *int
+	RetroMaxCommits         *int
+	RetroMaxEventRows       *int
+	RetroMaxSessions        *int
+	RetroMaxTurnsPerSession *int
+	RetroWorkdir            *string
 }
 
 // PatchCoachConfig applies a patch and persists.
@@ -189,6 +279,36 @@ func PatchCoachConfig(stateDir string, patch CoachConfigPatch) (CoachConfig, err
 	}
 	if patch.CoachName != nil {
 		cfg.CoachName = strings.TrimSpace(*patch.CoachName)
+	}
+	if patch.RetroEnabled != nil {
+		cfg.RetroEnabled = *patch.RetroEnabled
+	}
+	if patch.RetroIntervalSec != nil {
+		cfg.RetroIntervalSec = *patch.RetroIntervalSec
+	}
+	if patch.RetroLookbackHours != nil {
+		cfg.RetroLookbackHours = *patch.RetroLookbackHours
+	}
+	if patch.RetroRateCap != nil {
+		cfg.RetroRateCap = *patch.RetroRateCap
+	}
+	if patch.RetroMinCount != nil {
+		cfg.RetroMinCount = *patch.RetroMinCount
+	}
+	if patch.RetroMaxCommits != nil {
+		cfg.RetroMaxCommits = *patch.RetroMaxCommits
+	}
+	if patch.RetroMaxEventRows != nil {
+		cfg.RetroMaxEventRows = *patch.RetroMaxEventRows
+	}
+	if patch.RetroMaxSessions != nil {
+		cfg.RetroMaxSessions = *patch.RetroMaxSessions
+	}
+	if patch.RetroMaxTurnsPerSession != nil {
+		cfg.RetroMaxTurnsPerSession = *patch.RetroMaxTurnsPerSession
+	}
+	if patch.RetroWorkdir != nil {
+		cfg.RetroWorkdir = strings.TrimSpace(*patch.RetroWorkdir)
 	}
 	now := patch.Now
 	if now.IsZero() {
@@ -253,4 +373,55 @@ func (c CoachConfig) EffectiveMinCount() int {
 		return DefaultMinCount
 	}
 	return c.MinCount
+}
+
+// RetroIntervalDuration maps RetroIntervalSec to a duration
+// (0 → default; negative → -1, meaning "no retro ticker").
+func (c CoachConfig) RetroIntervalDuration() time.Duration {
+	if c.RetroIntervalSec < 0 {
+		return -1
+	}
+	if c.RetroIntervalSec == 0 {
+		return DefaultRetroInterval
+	}
+	return time.Duration(c.RetroIntervalSec) * time.Second
+}
+
+// RetroLookback is the bounded window one retrospective pass reaches back over.
+func (c CoachConfig) RetroLookback() time.Duration {
+	if c.RetroLookbackHours <= 0 {
+		return DefaultRetroLookback
+	}
+	return time.Duration(c.RetroLookbackHours) * time.Hour
+}
+
+// EffectiveRetroRateCap returns the retro delivery cap with default.
+func (c CoachConfig) EffectiveRetroRateCap() int {
+	if c.RetroRateCap <= 0 {
+		return DefaultRetroRateCap
+	}
+	return c.RetroRateCap
+}
+
+// EffectiveRetroMinCount returns the coarse-conclusion threshold with default.
+func (c CoachConfig) EffectiveRetroMinCount() int {
+	if c.RetroMinCount <= 0 {
+		return DefaultRetroMinCount
+	}
+	return c.RetroMinCount
+}
+
+// RetroWindowAt builds the bounded pass window from the dials.
+func (c CoachConfig) RetroWindowAt(now time.Time) RetroWindow {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return RetroWindow{
+		Since:              now.Add(-c.RetroLookback()),
+		Now:                now,
+		MaxCommits:         c.RetroMaxCommits,
+		MaxEventRows:       c.RetroMaxEventRows,
+		MaxSessions:        c.RetroMaxSessions,
+		MaxTurnsPerSession: c.RetroMaxTurnsPerSession,
+	}
 }

@@ -207,42 +207,15 @@ func DripEventLogRows(path string, cur CoachCursor, maxRows int) ([]EventRow, Co
 	}
 
 	var rows []EventRow
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	sc := newJSONLScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
 		}
-		var raw map[string]any
-		if json.Unmarshal([]byte(line), &raw) != nil {
+		row, ok := parseEventLine(line)
+		if !ok {
 			continue
-		}
-		row := EventRow{
-			TS:        asString(raw["ts"]),
-			Level:     asString(raw["level"]),
-			Msg:       asString(raw["msg"]),
-			Component: asString(raw["component"]),
-			Decision:  asString(raw["decision"]),
-			Corr:      asString(raw["corr"]),
-		}
-		if outcome, ok := raw["outcome"].(string); ok {
-			row.Outcome = outcome
-		}
-		if fields, ok := raw["fields"].(map[string]any); ok {
-			row.Fields = map[string]string{}
-			for k, v := range fields {
-				row.Fields[k] = fmt.Sprint(v)
-				if k == "outcome" && row.Outcome == "" {
-					row.Outcome = fmt.Sprint(v)
-				}
-			}
-		}
-		// Some journals nest outcome only in fields.
-		if row.Outcome == "" {
-			if o, ok := raw["outcome"].(string); ok {
-				row.Outcome = o
-			}
 		}
 		rows = append(rows, row)
 	}
@@ -333,6 +306,43 @@ func dripOneSession(path string, offset int64, maxTurns int) ([]ChatTurn, int64,
 		pos = size
 	}
 	return turns, pos, nil
+}
+
+// newJSONLScanner is the shared line reader for journals with long lines.
+func newJSONLScanner(f *os.File) *bufio.Scanner {
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	return sc
+}
+
+// parseEventLine parses one eventlog JSONL line into an EventRow.
+// Shared by the drip cursor and the retrospective tail reader (🎯T353).
+func parseEventLine(line string) (EventRow, bool) {
+	var raw map[string]any
+	if json.Unmarshal([]byte(line), &raw) != nil {
+		return EventRow{}, false
+	}
+	row := EventRow{
+		TS:        asString(raw["ts"]),
+		Level:     asString(raw["level"]),
+		Msg:       asString(raw["msg"]),
+		Component: asString(raw["component"]),
+		Decision:  asString(raw["decision"]),
+		Corr:      asString(raw["corr"]),
+	}
+	if outcome, ok := raw["outcome"].(string); ok {
+		row.Outcome = outcome
+	}
+	if fields, ok := raw["fields"].(map[string]any); ok {
+		row.Fields = map[string]string{}
+		for k, v := range fields {
+			row.Fields[k] = fmt.Sprint(v)
+			if k == "outcome" && row.Outcome == "" {
+				row.Outcome = fmt.Sprint(v)
+			}
+		}
+	}
+	return row, true
 }
 
 func fileSize(path string) int64 {

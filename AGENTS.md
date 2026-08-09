@@ -147,6 +147,18 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   files / alerts / briefs PO / ignores. Coach never calls bullseye. Residual
   phrase-list mint (`JEVONS_RSI_MINT` / `jevons_rsi_cycle`) is not product
   path. Filing reflex is the mid-turn agent half of the same mission.
+- **Retrospective coach mine (🎯T353):** *fine sensors, coarse conclusions.*
+  The drip cursor starts at EOF, so the coach also makes a **bounded backward
+  pass** over history — git commits (repair churn, reverts), the eventlog
+  tail, owner chat, and session transcripts — on its own slow cadence
+  (`retro_interval_sec`, default 6h; `retro_lookback_hours`, default 7d).
+  Judgments carry commit SHAs / session ids as evidence and are marked
+  `Mode: retrospective`. Delivery stays sparse: retro rate cap + the retro
+  value bar (one-off git noise and bare phrase-friction never reach the
+  overseer) + T333 disposition suppressions. Run by hand with
+  `jevons_rsi_coach_cycle mode=retro|both`; dials via
+  `jevons_rsi_coach_configure`. Retro never advances the drip cursor and
+  never calls bullseye.
 
 - **Oracle-first completion (🎯T31 / 🎯T31.1):** bare "done" / complete /
   finished without **oracle evidence** (named test + green, and/or

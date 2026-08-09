@@ -64,6 +64,9 @@ type Candidate struct {
 	// LatestTS is the newest evidence timestamp in the cluster (zero = unknown).
 	// Outcome suppression (🎯T333) re-proposes only when this is newer than the outcome.
 	LatestTS time.Time
+	// Phrase is the friction phrase (chat/session kinds) or commit subject
+	// (git kinds) of the sample. The retro value bar (🎯T353) reads it.
+	Phrase string
 }
 
 // ExistingTarget is a ledger entry used for near-duplicate suppression.
@@ -372,7 +375,8 @@ func actionable(e Evidence) bool {
 	kind := strings.TrimSpace(e.Kind)
 	switch kind {
 	case "lifecycle_error", "tool_failure", "event_push_error",
-		"stuck_work", "cost_anomaly", "chat_gap", "transcript_friction":
+		"stuck_work", "cost_anomaly", "chat_gap", "transcript_friction",
+		"git_rework", "git_revert":
 		return true
 	case "reaped_idle":
 		// Stream marker alone is not a mint signal (noise); only clusters with errors matter.
@@ -533,6 +537,13 @@ func candidateFromBucket(b *evidenceBucket) Candidate {
 	if _, ok := b.kinds["transcript_friction"]; ok {
 		name = fmt.Sprintf("Session transcript friction (%s) is diagnosed or eliminated", phraseFromSample(e))
 	}
+	// History-derived kinds (🎯T353 retrospective mine).
+	if _, ok := b.kinds["git_rework"]; ok {
+		name = fmt.Sprintf("Repeated fix churn in %s is diagnosed or eliminated at the root", comp)
+	}
+	if _, ok := b.kinds["git_revert"]; ok {
+		name = fmt.Sprintf("Reverted changes in %s stop recurring (root cause understood)", comp)
+	}
 
 	acceptance := []string{
 		fmt.Sprintf("Repeated %s/%s signals (kind=%s, n≥%d in an ambient RSI window) no longer accumulate without a filed target, fix, or explicit set-aside.",
@@ -553,6 +564,7 @@ func candidateFromBucket(b *evidenceBucket) Candidate {
 		Kinds:       kinds,
 		EvidenceIDs: append([]string{}, b.ids...),
 		LatestTS:    b.maxTS,
+		Phrase:      phraseFromSample(e),
 	}
 }
 

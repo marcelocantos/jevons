@@ -41,6 +41,9 @@ type Judgment struct {
 	Name  string
 	Count int
 	Kinds []string
+	// Mode is "" for the forward drip and RetroModeLabel for a bounded
+	// retrospective history pass (🎯T353).
+	Mode string
 }
 
 // EvidenceRef is a pointer into a transcript or event surface.
@@ -83,6 +86,13 @@ type CoachCycleArgs struct {
 	// (🎯T333 #4): filed-and-open never re-proposes; achieved/set_aside
 	// re-proposes only when the cluster has evidence newer than the outcome.
 	OutcomeSuppressions map[string]Suppression
+	// Retro marks this as a bounded retrospective history pass (🎯T353):
+	// judgments carry Mode=retro and must clear the retro value bar
+	// (ClassifyRetroValue) before delivery.
+	Retro bool
+	// RetroCoarseCount is the coarse-conclusion threshold for the retro value
+	// bar (0 = DefaultRetroMinCount). Extraction stays fine-grained.
+	RetroCoarseCount int
 	// DryRun builds judgments but does not deliver.
 	DryRun bool
 }
@@ -105,6 +115,9 @@ func RunCoachCycle(args CoachCycleArgs) (CoachCycleResult, error) {
 	rateCap := args.RateCap
 	if rateCap <= 0 {
 		rateCap = DefaultCoachRateCap
+		if args.Retro {
+			rateCap = DefaultRetroRateCap
+		}
 	}
 
 	ev := filterEvidenceByFocus(args.Evidence, args.FocusFilters)
@@ -143,10 +156,32 @@ func RunCoachCycle(args CoachCycleArgs) (CoachCycleResult, error) {
 		keep = kept
 	}
 
+	// Retro value bar (🎯T353): coarse conclusions only — one-off git noise and
+	// bare phrase-friction never reach the overseer from a history pass.
+	if args.Retro {
+		kept := keep[:0]
+		for _, c := range keep {
+			if v := ClassifyRetroValue(c, args.RetroCoarseCount); !v.OK {
+				skipped = append(skipped, SkipReason{
+					Fingerprint: c.Fingerprint,
+					Name:        c.Name,
+					Reason:      v.Reason,
+				})
+				continue
+			}
+			kept = append(kept, c)
+		}
+		keep = kept
+	}
+
 	out := CoachCycleResult{Skipped: skipped}
 	judgments := make([]Judgment, 0, len(keep))
 	for _, c := range keep {
-		judgments = append(judgments, CandidateToJudgment(c, ev))
+		j := CandidateToJudgment(c, ev)
+		if args.Retro {
+			j.Mode = RetroModeLabel
+		}
+		judgments = append(judgments, j)
 	}
 	out.Judgments = judgments
 
@@ -227,6 +262,9 @@ func FormatJudgmentMessage(j Judgment) string {
 		sev = "medium"
 	}
 	b.WriteString(fmt.Sprintf("RSI coach judgment (severity=%s)\n\n", sev))
+	if j.Mode == RetroModeLabel {
+		b.WriteString("Mode: retrospective (bounded history pass over transcripts, git, eventlog — 🎯T353)\n")
+	}
 	b.WriteString("Observation: ")
 	b.WriteString(strings.TrimSpace(j.Observation))
 	b.WriteByte('\n')
@@ -326,6 +364,18 @@ func severityForCandidate(c Candidate) string {
 		return "medium"
 	}
 	if _, ok := kinds["transcript_friction"]; ok {
+		return "medium"
+	}
+	if _, ok := kinds["git_revert"]; ok {
+		if c.Count >= 3 {
+			return "high"
+		}
+		return "medium"
+	}
+	if _, ok := kinds["git_rework"]; ok {
+		if c.Count >= 6 {
+			return "high"
+		}
 		return "medium"
 	}
 	if c.Count >= 5 {
@@ -429,6 +479,10 @@ func solutionSketches(c Candidate) []string {
 			out = append(out, "Verify idle-nudge / fleet-recover already acted; escalate residual stuck mission to PO.")
 		case "cost_anomaly":
 			out = append(out, "Inspect cost monitor; clamp or explain burn before more fleet spawn.")
+		case "git_rework":
+			out = append(out, "Read the cited commits together: repeated repair in one scope usually means a missing oracle, not a missing fix.")
+		case "git_revert":
+			out = append(out, "Check whether the reverted change lacked a gate; a target with acceptance beats a re-attempt.")
 		}
 	}
 	if len(out) == 0 {

@@ -1443,15 +1443,23 @@ func startAmbientRSICoach(ctx context.Context, cfg config.Config, mcpSrv *mcpser
 	if !envTruthy("JEVONS_RSI_NO_SESSION") {
 		sessionsDir = strings.TrimSpace(cfg.SessionsDir)
 	}
+	// Retrospective history mine (🎯T353): the drip starts at EOF, so past
+	// evidence is reached by bounded backward passes over this repo's git
+	// history plus the journal tails.
+	retroWorkdir := strings.TrimSpace(os.Getenv("JEVONS_RSI_RETRO_WORKDIR"))
+	if retroWorkdir == "" {
+		retroWorkdir = strings.TrimSpace(cfg.WorkDir)
+	}
 	deliverer := mcpSrv.NewOverseerJudgmentDeliverer(cfg.OverseerName)
 	coach, err := rsi.NewCoach(rsi.CoachArgs{
-		StateDir:    cfg.StateDir,
-		ChatLogPath: chatLogPath,
-		SessionsDir: sessionsDir,
-		Interval:    interval,
-		Deliverer:   deliverer,
-		SeedEOF:     true, // continuous drip: only new appends after boot
-		DryRun:      false,
+		StateDir:     cfg.StateDir,
+		ChatLogPath:  chatLogPath,
+		SessionsDir:  sessionsDir,
+		Interval:     interval,
+		Deliverer:    deliverer,
+		SeedEOF:      true, // continuous drip: only new appends after boot
+		RetroWorkdir: retroWorkdir,
+		DryRun:       false,
 	})
 	if err != nil {
 		slog.Warn("ambient RSI coach disabled", "err", err)
@@ -1471,6 +1479,8 @@ func startAmbientRSICoach(ctx context.Context, cfg config.Config, mcpSrv *mcpser
 		"interval", interval.String(),
 		"chatlog", chatLogPath != "",
 		"sessions", sessionsDir != "",
+		"retro_workdir", retroWorkdir,
+		"retro_interval", rsi.DefaultRetroInterval.String(),
 		"overseer", cfg.OverseerName,
 		"config", "state_dir/rsi/coach_config.json",
 		"cursor", "state_dir/rsi/coach_cursor.json",
