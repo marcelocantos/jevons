@@ -20,12 +20,21 @@ import (
 // under 🎯T31.1; reaping ≠ accepting the work.
 // Mid-turn status with a SHA or "go test" alone does not match — a completion
 // claim is required so WIP progress does not reap the worker.
+//
+// 🎯T395: a completion word is necessary but not sufficient. A report that asks
+// the overseer for a decision, states it has not acted yet, or arrives visibly
+// cut is not a finish however confidently the rest of it reads — see
+// ClassifyReportAsk. The veto is one-way on purpose: reaping is destructive and
+// irreversible, keeping is cheap, so ambiguity resolves toward keeping.
 func LooksLikeFinishedWorkReport(report string) bool {
 	s := strings.ToLower(strings.TrimSpace(report))
 	if s == "" {
 		return false
 	}
-	return hasCompletionClaim(s)
+	if !hasCompletionClaim(s) {
+		return false
+	}
+	return !ReportAwaitsOverseer(report)
 }
 
 // finishedWorkReapReason classifies why a finished-work report is reaping.
@@ -76,6 +85,12 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if reg == nil || name == "" {
 		return false, "no_registry_or_name"
 	}
+	// 🎯T395 before the generic no-claim case: a report that asks for a decision
+	// is the opposite of a completion claim, and the lifecycle log should say so
+	// rather than lumping it in with ordinary mid-turn chatter.
+	if ask := ClassifyReportAsk(report); ask != AskNone {
+		return false, "awaits_overseer_" + ask.String()
+	}
 	if !LooksLikeFinishedWorkReport(report) {
 		return false, "not_finished_work_report"
 	}
@@ -115,6 +130,17 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	}
 	ok, reason := ShouldAutoReapDoneWorkAgent(s.registry, name, report, s.isOverseerAgent)
 	if !ok {
+		// 🎯T395 near-miss: the report carried completion language and would
+		// have reaped under the old classifier. Log the save so the veto is
+		// visible in the lifecycle stream rather than silently absent.
+		if strings.HasPrefix(reason, "awaits_overseer_") &&
+			hasCompletionClaim(strings.ToLower(report)) {
+			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", map[string]any{
+				"name": name, "reason": reason,
+			})
+			slog.Info("T395 kept agent that asked rather than finished",
+				"agent", name, "reason", reason)
+		}
 		return
 	}
 	if err := killSubtree(s.registry, name); err != nil {
