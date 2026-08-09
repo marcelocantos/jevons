@@ -155,6 +155,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
 
 .msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; position: relative; }
+/* 🎯T381: no bubble content may push the transcript sideways. `anywhere` (not
+   `break-word`) is required: it also shrinks the intrinsic min-content width,
+   so an unbroken 400-character path or a bare URL in an agent report wraps
+   instead of widening the flex row. Long lines wrap in the bubble; #messages
+   never grows a horizontal scrollbar. */
+.msg > .msg-body { min-width: 0; overflow-wrap: anywhere; }
 /* User/assistant: reserve space under the border for outside timestamp (+ pocket tab when tall). */
 /* 🎯T351: whole-pixel row margins. Margins sit OUTSIDE the border-box, so
    the row min-height snap cannot absorb them; 1.2rem = 19.2px added a 0.2px
@@ -167,6 +173,45 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.user .msg-body p { margin: 0.35em 0; }
 .msg.user .msg-body p:first-child { margin-top: 0; }
 .msg.user .msg-body p:last-child { margin-bottom: 0; }
+/* 🎯T381: an agent/system report arrives on the user-turn wire but is NOT
+   owner input — it is a document, so it gets the markdown chrome the jevons
+   bubble has. Deliberately a separate block rather than more selectors on the
+   .msg.jevons rules: the two roles share a renderer, not a layout, and the
+   report keeps the owner-side bubble it is delivered in. pre-wrap must go —
+   marked already emitted block structure, so preserving the source newlines
+   on top of it double-spaces every paragraph. */
+.msg.user.agent-report .msg-body { white-space: normal; }
+.msg.user.agent-report .msg-body p { margin: 0.5em 0; }
+.msg.user.agent-report .msg-body h1,
+.msg.user.agent-report .msg-body h2,
+.msg.user.agent-report .msg-body h3 { margin: 0.6em 0 0.3em; line-height: 1.3; }
+.msg.user.agent-report .msg-body h1 { font-size: 1.25em; }
+.msg.user.agent-report .msg-body h2 { font-size: 1.15em; }
+.msg.user.agent-report .msg-body h3 { font-size: 1.05em; }
+.msg.user.agent-report .msg-body ul,
+.msg.user.agent-report .msg-body ol { margin: 0.4em 0; padding-left: 1.4em; }
+.msg.user.agent-report .msg-body code {
+  background: var(--surface-raised); padding: 2px 6px; border-radius: 4px;
+  font-family: var(--mono); font-size: 0.88em; color: var(--accent);
+}
+.msg.user.agent-report .msg-body pre {
+  background: var(--surface); border: 1px solid var(--border);
+  padding: 12px 14px; border-radius: 8px; margin: 0.6em 0;
+  max-width: 100%; overflow-x: auto;
+}
+.msg.user.agent-report .msg-body pre code { background: none; padding: 0; color: var(--text); }
+.msg.user.agent-report .msg-body table {
+  border-collapse: collapse; margin: 0.5em 0; font-size: 0.9em;
+}
+.msg.user.agent-report .msg-body th,
+.msg.user.agent-report .msg-body td {
+  border: 1px solid var(--border); padding: 4px 10px; text-align: left;
+}
+/* 🎯T381: a report's own table or code block scrolls INSIDE the bubble.
+   display:block is what lets a wide table become its own scroll port —
+   a table in normal flow refuses to shrink below its content width and
+   pushes the whole transcript sideways instead. */
+.msg.user.agent-report .msg-body table { display: block; max-width: 100%; overflow-x: auto; }
 /* The message currently being edited via up/down recall. Brighter bg +
    full-accent border (same 1px width → no reflow) + a box-shadow ring
    to "thicken" the border without shifting geometry. */
@@ -2525,8 +2570,16 @@ function handle(m) {
   }
 
   if (typ==='user') {
-    const content = m.message?.content;
-    if (typeof content === 'string') {
+    const rawContent = m.message?.content;
+    // 🎯T384: owner turns now arrive as typed blocks — the same shape every
+    // assistant turn has always used — while journals written before the fix
+    // still carry a bare string. Read both. The tool_result walk below still
+    // owns structured content that carries no owner prose, so a block list of
+    // pure tool_result falls through to it exactly as it used to.
+    const content = (typeof ChatEvents !== 'undefined' && ChatEvents.userContentText)
+      ? ChatEvents.userContentText(m)
+      : (typeof rawContent === 'string' ? rawContent : '');
+    if (content || typeof rawContent === 'string') {
       // Server synthesises a user echo on send; Grok ACP may also
       // publish user_message_chunk for the same prompt. Drop the dupe
       // (including 🎯T279 optimistic main paint before echo).
@@ -2561,8 +2614,14 @@ function handle(m) {
       // Join identity is stream_id (and legacy openStreamEl until terminal).
       // Premature seal was the journal/hydrate split of one answer into two.
       closeTurn();
-      const uEl = addMsg('user', content, msgTs);
-      if (content) msgHistory.push({ text: content, el: uEl });
+      // 🎯T381: carry the wire's provenance into the bubble so paintBody can
+      // tell an agent's report from the owner's own words.
+      const turnOrigin = (typeof ChatEvents !== 'undefined' && ChatEvents.turnOriginOf)
+        ? ChatEvents.turnOriginOf(m) : 'owner';
+      const uEl = addMsg('user', content, msgTs, { turnOrigin: turnOrigin });
+      // Recall (up-arrow) is the owner's OWN outbox — an agent report is not
+      // something he typed, so it never enters the recall ring.
+      if (content && turnOrigin !== 'agent') msgHistory.push({ text: content, el: uEl });
       // 🎯T135: opt-in "Continue in: «title»" when auto-match suggested a thread.
       // Match is suggestion only — default wire already went to main.
       if (lastRouteSuggestion) {
@@ -2570,8 +2629,8 @@ function handle(m) {
         lastRouteSuggestion = null;
       }
       startTurn();
-    } else if (Array.isArray(content)) {
-      content.forEach(c => {
+    } else if (Array.isArray(rawContent)) {
+      rawContent.forEach(c => {
         if (c.type==='tool_result') {
           const inner = c.content;
           if (typeof inner === 'string') addTurnItem('tool-result', truncate(inner, 120));
@@ -2983,6 +3042,14 @@ function buildMsg(role, text, when, opts) {
   d._body = body;
   d._layoutRole = role;
   d._layoutText = text == null ? '' : text;
+  // 🎯T381: provenance is fixed at build time and read by every later paint.
+  // Unmarked is the owner — verbatim is the safe default, so a history line
+  // written before the field existed can never turn the owner's own asterisks
+  // into formatting.
+  d._turnOrigin = (typeof ChatEvents !== 'undefined' && ChatEvents.turnOriginOf)
+    ? ChatEvents.turnOriginOf({ turn_origin: opts && opts.turnOrigin })
+    : (((opts && opts.turnOrigin) === 'agent') ? 'agent' : 'owner');
+  if (role === 'user' && d._turnOrigin === 'agent') d.classList.add('agent-report');
   // 🎯T150: live stream bubbles paint progressive MD from the first frame.
   if (opts && opts.streamOpen) {
     d._streamRaw = d._layoutText;
@@ -4419,6 +4486,17 @@ function paintStreamBody(d, t) {
   d._smdSession.writeFull(t, streamNormalize);
   decorateBodyLinks(d._body);
 }
+// 🎯T381: is this bubble carrying an agent/system report rather than the
+// owner's own keystrokes? The answer is provenance stamped on the wire and
+// parked on the element at build time — buildMsg is the only writer, so the
+// answer cannot change under a repaint, a rematerialize or a collapse.
+function isAgentOriginBubble(d) {
+  const origin = d && d._turnOrigin;
+  if (typeof ChatEvents !== 'undefined' && ChatEvents.bubblePaintsMarkdown) {
+    return ChatEvents.bubblePaintsMarkdown('user', origin);
+  }
+  return origin === 'agent';
+}
 function paintBody(d, role, t) {
   if (role === 'jevons') {
     if (typeof d._streamRaw === 'string') {
@@ -4434,6 +4512,18 @@ function paintBody(d, role, t) {
     // 🎯T164: do NOT auto-close here — paintBody runs for history replay and
     // lazy rematerialize. Live stream/seal calls maybeCloseTargetAside only.
   } else if (role === 'user') {
+    // 🎯T381: an agent/system report shares the user role on the wire but is
+    // not owner input — it is a document, and paints through the same markdown
+    // renderer a jevons bubble uses. The branch keys on the turn's PROVENANCE
+    // (stamped server-side as turn_origin), never on what the body looks like:
+    // an owner who types "**Commit:**" or pastes a pipe table must still see
+    // his own characters, which is the whole point of the split.
+    if (isAgentOriginBubble(d)) {
+      d._body.innerHTML = parseAssistantMarkdown(t);
+      decorateBodyLinks(d._body);
+      highlightCodeIn(d._body); // 🎯T74 — reports carry fenced code
+      return;
+    }
     // 🎯T75: quote notation as blockquotes; 🎯T76: [image: id] → <img>.
     d._body.innerHTML = renderUserText(t);
     decorateBodyLinks(d._body);
@@ -5421,7 +5511,9 @@ function renderFrames(lines, opts) {
           isMainAsideWireUserText(c.text)) {
         continue;
       }
-      const el = buildMsg(c.role, c.text, c.timestamp, { lazy: lazy });
+      // 🎯T381: history hydrate paints from the same provenance the live wire
+      // carried, so a reload does not re-raw an agent report.
+      const el = buildMsg(c.role, c.text, c.timestamp, { lazy: lazy, turnOrigin: c.origin });
       nodes.push(el);
       frag.appendChild(el);
     }
@@ -5434,15 +5526,18 @@ function renderFrames(lines, opts) {
     try { m = (typeof line === 'string') ? JSON.parse(line) : line; } catch { continue; }
     const ts = m.timestamp ? new Date(m.timestamp).getTime() : Date.now();
     if (m.type === 'user') {
-      const c = m.message && m.message.content;
-      if (typeof c === 'string' && c) {
+      const c = ChatEvents.userContentText(m); // 🎯T384: either content shape
+      if (c) {
         // 🎯T250/T264
         if (typeof isMainAsideWireUserText === 'function' && isMainAsideWireUserText(c)) {
           pending = null;
           continue;
         }
         pending = null;
-        const el = buildMsg('user', c, ts, { lazy: lazy });
+        const el = buildMsg('user', c, ts, {
+          lazy: lazy,
+          turnOrigin: ChatEvents.turnOriginOf(m), // 🎯T381
+        });
         nodes.push(el);
         frag.appendChild(el);
       }

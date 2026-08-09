@@ -20,6 +20,48 @@
 
   const TERMINAL_STOPS = new Set(['end_turn', 'stop_sequence', 'max_tokens']);
 
+  // 🎯T381: turn origin carried on the wire. Agent/system reports (worker
+  // seal reports, budget alerts) share the ACP "user" role with the owner's
+  // own words, so role alone cannot decide how a bubble paints. The server
+  // stamps turn_origin on user-role lines; owner turns stay verbatim and
+  // agent turns paint markdown. Provenance, never a sniff of the body — an
+  // owner who types "**Commit:**" must still see "**Commit:**".
+  const TURN_ORIGIN_OWNER = 'owner';
+  const TURN_ORIGIN_AGENT = 'agent';
+
+  /**
+   * Classify a wire event (or an already-coalesced display line) by who
+   * spoke it. Anything unmarked is the owner: verbatim is the safe default,
+   * so an old journal line or a provider that never learned the field can
+   * never cause owner input to be reinterpreted as formatting.
+   *
+   * @param {object|null} event
+   * @returns {'owner'|'agent'}
+   */
+  function turnOriginOf(event) {
+    if (!event || typeof event !== 'object') return TURN_ORIGIN_OWNER;
+    const raw = event.turn_origin !== undefined ? event.turn_origin
+      : (event.turnOrigin !== undefined ? event.turnOrigin : event.origin);
+    if (typeof raw !== 'string') return TURN_ORIGIN_OWNER;
+    return raw.trim().toLowerCase() === TURN_ORIGIN_AGENT
+      ? TURN_ORIGIN_AGENT : TURN_ORIGIN_OWNER;
+  }
+
+  /**
+   * Does a bubble of this role/origin paint through the markdown renderer?
+   * Assistant always does; a user-role bubble does only when the turn came
+   * from an agent, never when the owner typed it.
+   *
+   * @param {string} role  display role ('user' | 'jevons' | 'assistant' | …)
+   * @param {string} origin  'owner' | 'agent'
+   * @returns {boolean}
+   */
+  function bubblePaintsMarkdown(role, origin) {
+    if (role === 'jevons' || role === 'assistant') return true;
+    if (role !== 'user') return false;
+    return origin === TURN_ORIGIN_AGENT;
+  }
+
   function stopReason(m) {
     const msg = m && m.message;
     if (!msg) return '';
@@ -38,6 +80,36 @@
 
   function hasAssistantText(m) {
     return assistantTextBlocks(m).length > 0;
+  }
+
+  /**
+   * 🎯T384: the owner's words out of a user-role wire message, in EITHER
+   * content shape.
+   *
+   * The server now writes owner turns as typed blocks — the same shape every
+   * assistant turn has always used — because a bare string was the one thing
+   * in the journal that a block-walking consumer could not read, and the
+   * owner's own message therefore painted empty and vanished from asides.
+   *
+   * Reading both shapes is the load-bearing half. Every agent chatlog and
+   * owner journal already on disk holds bare-string owner content, so a
+   * reader that accepted only the new shape would trade one vanish for a far
+   * worse one: the owner's entire history. Bare string in, blocks in, same
+   * text out.
+   *
+   * @param {object|null} m wire message ({message:{content}})
+   * @returns {string} the owner's text, or '' when there is none
+   */
+  function userContentText(m) {
+    const content = m && m.message && m.message.content;
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    let out = '';
+    for (let i = 0; i < content.length; i++) {
+      const c = content[i];
+      if (c && c.type === 'text' && typeof c.text === 'string') out += c.text;
+    }
+    return out;
   }
 
   // ── Silent overseer ops replies (🎯T238 / T240 / T245) ──────────
@@ -247,8 +319,8 @@
   function applyWorkingChrome(chrome, m) {
     if (!chrome || !m || !m.type) return chrome;
     if (m.type === 'user') {
-      const content = m.message && m.message.content;
-      if (typeof content === 'string' && content) {
+      const content = userContentText(m); // 🎯T384: either content shape
+      if (content) {
         chrome.hadVisible = false;
         chrome.hadTool = false;
         chrome.silent = false;
@@ -317,8 +389,8 @@
     if (!state.workingChrome) state.workingChrome = createWorkingChrome();
 
     if (m.type === 'user') {
-      const content = m.message && m.message.content;
-      if (typeof content === 'string' && content) {
+      const content = userContentText(m); // 🎯T384: either content shape
+      if (content) {
         // 🎯T362: leaked protocol control frames are not owner turns either —
         // they must not re-arm working chrome or count as an owner send.
         if (isProtocolControlFrameText(content)) return state;
@@ -837,8 +909,10 @@
     })();
 
     if (event.type === 'user') {
-      const content = event.message && event.message.content;
-      const text = typeof content === 'string' ? content : '';
+      // 🎯T384: either content shape. This is the sidebar/aside display model
+      // — the exact place the owner's block-shaped turn would otherwise read
+      // as '' and never reach the pane.
+      const text = userContentText(event);
       if (!text) return out;
       // 🎯T362: a leaked protocol control frame is machine wire — never paint
       // it as an owner bubble on the live wire or on history hydrate, and
@@ -860,7 +934,12 @@
       if (!isNonBoundaryUserText(text)) {
         sealOpenAssistantBySid(out, '');
       }
-      out.push({ role: 'user', text: text, when: arrived });
+      const line = { role: 'user', text: text, when: arrived };
+      // 🎯T381: provenance rides the display line so a reload paints the turn
+      // the same way the live wire did. Owner lines stay unmarked — the
+      // absence of the field IS the owner default, everywhere.
+      if (turnOriginOf(event) === TURN_ORIGIN_AGENT) line.origin = TURN_ORIGIN_AGENT;
+      out.push(line);
       return out;
     }
 
@@ -955,8 +1034,7 @@
       }
       if (!m || typeof m !== 'object') continue;
       if (m.type === 'user') {
-        const content = m.message && m.message.content;
-        const text = typeof content === 'string' ? content : '';
+        const text = userContentText(m); // 🎯T384: either content shape
         if (text && typeof opts.skipUser === 'function' && opts.skipUser(text)) {
           // Aside wires etc.: still must not seal if we skip paint — apply
           // a no-op path: non-boundary already never seals; for aside we
@@ -971,6 +1049,7 @@
       if (!l) return l;
       const role = l.role === 'assistant' ? asstRole : l.role;
       const row = { role: role, text: l.text };
+      if (l.origin) row.origin = l.origin; // 🎯T381 provenance survives hydrate
       if (l.when !== undefined) {
         row.when = l.when;
         row.timestamp = l.when;
@@ -986,10 +1065,16 @@
     isTerminalStop,
     assistantTextBlocks,
     hasAssistantText,
+    userContentText,
     isSilentAssistantText,
     isNonBoundaryUserText,
     // 🎯T362 leaked-protocol-frame gate (shared by main paint + hydrate)
     isProtocolControlFrameText,
+    // 🎯T381 turn provenance: who spoke, and therefore how it paints
+    turnOriginOf,
+    bubblePaintsMarkdown,
+    TURN_ORIGIN_OWNER,
+    TURN_ORIGIN_AGENT,
     streamIdOf,
     joinAssistantSegments,
     appendAssistantStream,

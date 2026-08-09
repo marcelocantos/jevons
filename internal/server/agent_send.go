@@ -22,9 +22,11 @@ import (
 
 // agentSendRequest is the JSON body for POST /api/agents/{name}/send.
 // Origin marks who is speaking (🎯T309.2): "owner" (default) is an owner turn,
-// "agent" is an injected agent/system notification. It only changes overseer
-// framing today — owner turns carry the userTurnPrefix marker and paint an
-// owner bubble, exactly as the /ws/chat wire does (🎯T63).
+// "agent" is an injected agent/system notification. Owner turns carry the
+// userTurnPrefix marker and paint an owner bubble, exactly as the /ws/chat
+// wire does (🎯T63). Since 🎯T381 the origin also travels to the browser on
+// the wire's turn_origin field, where it decides how the turn paints: the
+// owner's words verbatim, an agent's report through markdown.
 type agentSendRequest struct {
 	Text   string `json:"text"`
 	Origin string `json:"origin,omitempty"`
@@ -87,7 +89,7 @@ func (s *Server) sendToNamedAgentAs(name, text, origin string) (string, error) {
 	// wire's journal-then-send. A message the owner typed into the sidebar is
 	// durable even if delivery fails, the provider never flushes its session,
 	// or the daemon is bounced in the next second.
-	s.journalAgentUserTurn(name, text)
+	s.journalAgentUserTurnAs(name, text, origin)
 
 	s.mu.RLock()
 	hook := s.agentSendHook

@@ -1342,6 +1342,63 @@ test('T362 send + soft reconnect never paint a control frame', () => {
   assert.deepStrictEqual(plan.repaint, ['ship it']);
 });
 
+// ── 🎯T381 turn provenance decides how a user-role bubble paints ──
+
+test('T381: turn origin is read from the wire, and unmarked means owner', () => {
+  const agentReport = {
+    type: 'user',
+    turn_origin: 'agent',
+    message: { role: 'user', content: '## Oracle evidence' },
+  };
+  const ownerTyped = {
+    type: 'user',
+    message: { role: 'user', content: '## and this stays literal' },
+  };
+  assert.strictEqual(ChatEvents.turnOriginOf(agentReport), 'agent');
+  assert.strictEqual(ChatEvents.turnOriginOf(ownerTyped), 'owner');
+  // Verbatim is the safe default everywhere it is not stated otherwise: a
+  // journal line written before the field existed, a provider that never
+  // learned it, junk, or nothing at all.
+  assert.strictEqual(ChatEvents.turnOriginOf(null), 'owner');
+  assert.strictEqual(ChatEvents.turnOriginOf({ turn_origin: '' }), 'owner');
+  assert.strictEqual(ChatEvents.turnOriginOf({ turn_origin: 'nonsense' }), 'owner');
+  assert.strictEqual(ChatEvents.turnOriginOf({ turn_origin: ' AGENT ' }), 'agent');
+});
+
+test('T381: only an agent-origin user bubble paints markdown', () => {
+  assert.strictEqual(ChatEvents.bubblePaintsMarkdown('user', 'agent'), true);
+  // The half a careless fix breaks: owner input is verbatim ON PURPOSE.
+  assert.strictEqual(ChatEvents.bubblePaintsMarkdown('user', 'owner'), false);
+  assert.strictEqual(ChatEvents.bubblePaintsMarkdown('user', undefined), false);
+  // Assistant turns were never in question.
+  assert.strictEqual(ChatEvents.bubblePaintsMarkdown('jevons', 'owner'), true);
+  assert.strictEqual(ChatEvents.bubblePaintsMarkdown('assistant', 'owner'), true);
+  // Status/chrome rows are not bubbles at all.
+  assert.strictEqual(ChatEvents.bubblePaintsMarkdown('status', 'agent'), false);
+});
+
+test('T381: provenance survives display coalesce, so a reload paints the same', () => {
+  const report = [
+    '🎯T22 SEALED',
+    '',
+    '**Commit:** `bec51ca`',
+    '',
+    '| Criterion | Status |',
+    '| --- | --- |',
+    '| 1 | green |',
+  ].join('\n');
+  const rows = ChatEvents.coalesceLiveDisplayFrames([
+    { type: 'user', message: { role: 'user', content: 'why is **this** literal?' } },
+    { type: 'user', turn_origin: 'agent', message: { role: 'user', content: report } },
+  ], { roleMap: { assistant: 'jevons' } });
+  assert.strictEqual(rows.length, 2, 'both turns hydrate');
+  assert.strictEqual(rows[0].role, 'user');
+  assert.ok(!rows[0].origin, 'owner row carries no origin marker — absence IS owner');
+  assert.strictEqual(rows[1].role, 'user');
+  assert.strictEqual(rows[1].origin, 'agent', 'agent report keeps its provenance through hydrate');
+  assert.strictEqual(rows[1].text, report, 'report text is not rewritten, only classified');
+});
+
 // ── Go package tests ────────────────────────────────────────────
 
 test('go chat wire + roundtrip tests pass', () => {

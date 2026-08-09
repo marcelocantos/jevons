@@ -147,6 +147,7 @@ test-ui:
 	node scripts/chat-ui-test/t370-fleet-cycle-test.js
 	node scripts/chat-ui-test/t369-decision-matrix-test.js
 	node scripts/chat-ui-test/t368-image-prefix-route-test.js
+	node scripts/chat-ui-test/t381-agent-report-markdown-test.js
 
 .PHONY: test-ui-live
 test-ui-live:

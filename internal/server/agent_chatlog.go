@@ -159,6 +159,13 @@ func (j *agentJournals) logFor(name string) *chatlog.Log {
 // appendUser journals a user-role turn, skipping a repeat of the text last
 // journaled for this agent (the provider's ACP echo of our own send).
 func (j *agentJournals) appendUser(name, text string) {
+	j.appendUserAs(name, text, sendOriginOwner)
+}
+
+// appendUserAs journals the turn with its provenance (🎯T381), so a report an
+// agent sent into this conversation replays as a document rather than as the
+// owner's literal keystrokes.
+func (j *agentJournals) appendUserAs(name, text, origin string) {
 	text = strings.TrimSpace(text)
 	if j == nil || text == "" {
 		return
@@ -174,7 +181,7 @@ func (j *agentJournals) appendUser(name, text string) {
 	}
 	j.lastUser[name] = text
 	j.mu.Unlock()
-	if err := l.Append(chatUserEcho(text)); err != nil {
+	if err := l.Append(chatUserEchoAs(text, origin)); err != nil {
 		slog.Warn("agent_chatlog_append_failed",
 			"component", "agent_chatlog",
 			"name", name,
@@ -273,12 +280,20 @@ func (s *Server) agentJournalsFor() *agentJournals {
 // delivered, so the message is durable even if delivery, the provider, or the
 // daemon dies immediately after. Mirrors the owner wire's journal-then-send.
 func (s *Server) journalAgentUserTurn(name, text string) {
+	s.journalAgentUserTurnAs(name, text, sendOriginOwner)
+}
+
+// journalAgentUserTurnAs records the turn together with who spoke it, so the
+// sidebar transcript can tell the owner's words from an agent's report the
+// same way main chat does (🎯T381). A turn addressed to a fleet agent carries
+// no userTurnPrefix marker, so provenance has to travel on the line itself.
+func (s *Server) journalAgentUserTurnAs(name, text, origin string) {
 	if s.isOverseerAgent(name) {
 		// The overseer's durable record is the owner chat journal; a second
 		// copy here would double-paint main chat's own history.
 		return
 	}
-	s.agentJournalsFor().appendUser(name, text)
+	s.agentJournalsFor().appendUserAs(name, text, origin)
 }
 
 // journalAgentEvent records one agent event in that agent's durable journal.

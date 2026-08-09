@@ -299,20 +299,54 @@ func stampStreamID(line, streamID string) string {
 	return string(b)
 }
 
-// chatUserEcho builds the user-bubble wire line for a client-sent
+// wireTurnOriginKey names the provenance field carried on every user-role
+// chat line (🎯T381). Its values are agentSendRequest.Origin's: "owner" for
+// words the owner actually typed, "agent" for an injected agent/system report
+// that shares the ACP user role (a worker seal report, a budget alert).
+//
+// The browser needs this because role alone cannot decide how a bubble paints.
+// Owner turns must stay verbatim — an owner who types "**Commit:**" has to see
+// "**Commit:**", not bold — while an agent report is a document and paints
+// through the markdown renderer. Provenance is CARRIED, never sniffed: keying
+// the paint off a regex over the body is exactly the mistake that would eat
+// the owner's asterisks the first time he pastes a table.
+const wireTurnOriginKey = "turn_origin"
+
+// chatUserEcho builds the owner-bubble wire line for a client-sent
 // prompt. Grok ACP does not echo the prompt as a user event, so the
 // chat handler synthesises one before forwarding to the overseer.
 func chatUserEcho(text string) string {
+	return chatUserEchoAs(text, sendOriginOwner)
+}
+
+// chatUserEchoAs builds a user-role wire line stamped with who spoke it.
+// Anything other than the agent origin is recorded as the owner: verbatim is
+// the safe default, so a caller that has not been taught about provenance can
+// never cause the owner's own words to be reinterpreted as formatting.
+func chatUserEchoAs(text, origin string) string {
+	if origin != sendOriginAgent {
+		origin = sendOriginOwner
+	}
 	b, err := json.Marshal(map[string]any{
-		"type":      "user",
-		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"type":            "user",
+		"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
+		wireTurnOriginKey: origin,
 		"message": map[string]any{
-			"role":    "user",
-			"content": text,
+			"role": "user",
+			// 🎯T384: typed blocks, the same shape every assistant turn uses.
+			// This used to be a bare string, which made the owner's own words
+			// the one thing in the journal a block-walking consumer could not
+			// read — his message reached the agent, painted empty, and
+			// vanished. Readers still accept the bare string (wireContentText,
+			// userTurnText, ChatEvents.messageContentText) so every chatlog
+			// already on disk keeps rendering.
+			"content": []map[string]any{
+				{"type": "text", "text": text},
+			},
 		},
 	})
 	if err != nil {
-		return `{"type":"user","message":{"role":"user","content":""}}`
+		return `{"type":"user","message":{"role":"user","content":[]}}`
 	}
 	return string(b)
 }
