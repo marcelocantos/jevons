@@ -27,6 +27,7 @@ import "embed"
 //go:embed scripts/fleet_row.js
 //go:embed scripts/model_prefix.js
 //go:embed scripts/fleet_paint.js
+//go:embed scripts/fleet_cycle.js
 //go:embed scripts/portfolio_group.js
 //go:embed scripts/agent_transcript.js
 //go:embed scripts/conversation_widget.js
@@ -43,6 +44,7 @@ import "embed"
 //go:embed scripts/composer_focus.js
 //go:embed scripts/wispr_context.js
 //go:embed scripts/send_queue.js
+//go:embed scripts/pending_turns.js
 //go:embed scripts/composer_persist.js
 //go:embed scripts/rhs_layout.js
 //go:embed scripts/layout_probe.js

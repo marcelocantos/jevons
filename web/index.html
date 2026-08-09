@@ -1320,7 +1320,7 @@ body.rhs-resizing-row { cursor: row-resize; }
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
                 placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter force-sends draft or next queued, Shift+Enter for a new line. / focuses box when not typing."
-                title="Message box — / focuses here when focus is elsewhere (🎯T127); Tab / Shift+Tab switches to the sidebar message box when it is visible (🎯T366)"
+                title="Message box — / focuses here when focus is elsewhere (🎯T127); Tab / Shift+Tab switches to the sidebar message box when it is visible (🎯T366); ⌘⇧] / ⌘⇧[ cycle the fleet tree selection, landing here on the root overseer (🎯T370)"
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
                 aria-describedby="input-hint wispr-context"
@@ -1456,6 +1456,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/fleet_row.js"></script>
 <script src="scripts/model_prefix.js"></script>
 <script src="scripts/fleet_paint.js"></script>
+<script src="scripts/fleet_cycle.js"></script>
 <script src="scripts/portfolio_group.js"></script>
 <script src="scripts/agent_transcript.js"></script>
 <!-- 🎯T372: one pending-owner-turn contract; must precede its adopters
@@ -8498,6 +8499,49 @@ enterTrackBottom();
 }, d));
 
 document.addEventListener('keydown', e => {
+  // 🎯T370: ⌘⇧] / ⌘⇧[ walk the fleet tree selection, root overseer included.
+  // Rows come from the painted tree so the order is exactly what the owner
+  // sees; virtual portfolio folders (🎯T200) are chrome, not stops. Landing
+  // on root selects nothing and focuses the main box — the overseer stream
+  // *is* the main view (🎯T124), so there is no sidebar to focus there.
+  // Selection goes through the one selectAgent path and focus through the
+  // two existing composers: no second chat surface (🎯T372).
+  if (typeof FleetCycle !== 'undefined' && FleetCycle.planFleetCycle) {
+    const fleetRows = agentsEl
+      ? Array.prototype.map.call(agentsEl.querySelectorAll('.agent-node'), function (n) {
+          return {
+            name: n.dataset.agent || '',
+            purpose: n.dataset.purpose || '',
+            selectable: !n.classList.contains('agent-portfolio'),
+          };
+        })
+      : [];
+    const plan = FleetCycle.planFleetCycle(e, {
+      rows: fleetRows,
+      selected: selectedAgent,
+    });
+    if (plan.claim) {
+      e.preventDefault();
+      if (plan.select && typeof selectAgent === 'function') selectAgent(plan.target);
+      // Keep the newly selected row on screen in a long fleet.
+      if (agentsEl && plan.target) {
+        const rowEl = Array.prototype.find.call(
+          agentsEl.querySelectorAll('.agent-node'),
+          function (n) { return n.dataset.agent === plan.target; }
+        );
+        if (rowEl && rowEl.scrollIntoView) {
+          try { rowEl.scrollIntoView({ block: 'nearest' }); } catch (_) {}
+        }
+      }
+      if (plan.focus === 'main') {
+        if (input && input.focus) { input.focus(); ensureWisprSeed(); }
+      } else {
+        const cycleSide = (inspectConversation && inspectConversation.inputEl) || agentInspectInput;
+        if (cycleSide && cycleSide.focus) cycleSide.focus();
+      }
+      return;
+    }
+  }
   // 🎯T366: Tab cycles the two message boxes (main ↔ sidebar Transcript).
   // Claimed only while focus is already in one of them and the partner can
   // take focus, so a hidden/collapsed sidebar leaves Tab's normal document

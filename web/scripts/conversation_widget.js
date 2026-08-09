@@ -14,11 +14,12 @@
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
+    module.exports = factory(require('./pending_turns.js'));
   } else {
-    root.ConversationWidget = factory();
+    // Browser: pending_turns.js must load before this script.
+    root.ConversationWidget = factory(root.PendingTurns);
   }
-}(typeof self !== 'undefined' ? self : this, function () {
+}(typeof self !== 'undefined' ? self : this, function (PendingTurns) {
   'use strict';
 
   var DENSITY_COMPACT = 'compact';
@@ -261,152 +262,20 @@
     };
   }
 
-  // ── 🎯T371: pending owner turns (sidebar parity with main 🎯T239/🎯T279) ──
+  // ── Pending owner turns: THE shared contract (🎯T372) ──────────────
   //
-  // Main chat cannot lose an owner bubble to a hydrate: every outbound turn is
-  // staged (ComposerPersist.stagePending), acked when it reappears in history,
-  // and re-painted if a replay/reconnect arrives without it
-  // (retainPendingOwnerTurnsVisible). The sidebar had no such set, so a
-  // kind=history frame that wholesale replaces the line model dropped any owner
-  // turn the server had not yet sealed into the transcript.
+  // 🎯T371 fixed the sidebar vanish by giving agent panes the staging +
+  // repaint that main has had since 🎯T239/🎯T279 — but as a SECOND
+  // implementation of it. 🎯T372 collapsed both into web/scripts/pending_turns.js,
+  // which is agent-keyed (main is simply the agent `PendingTurns.MAIN_AGENT`),
+  // so the widget and main chat now run the identical algorithm rather than two
+  // that merely agree. The names below stay the widget's public surface; they
+  // are bindings, not definitions. Re-defining any of them here re-forks the
+  // contract and fails pending_turns_test.js §4.
   //
-  // These helpers are the DOM-free half of that contract, keyed per agent so
-  // selection churn cannot cross-contaminate panes. Same dedupe rule as
-  // ComposerPersist: exact match on trimmed text, one history line consumes one
-  // pending item.
-
-  /** Empty pending-owner-turn state. */
-  function emptyPending() {
-    return { items: [] };
-  }
-
-  /** Dedupe key for an owner turn body. */
-  function pendingKey(text) {
-    return String(text == null ? '' : text).trim();
-  }
-
-  /**
-   * Stage an owner turn as pending for agentId. Idempotent per (agent, body)
-   * while unacked, so a retry does not double-paint.
-   * @param {{items?: Array}} state
-   * @param {string} agentId
-   * @param {string} text
-   * @param {{ now?: number, id?: string }} [opts]
-   */
-  function stagePendingOwnerTurn(state, agentId, text, opts) {
-    opts = opts || {};
-    var s = state && Array.isArray(state.items) ? state : emptyPending();
-    var name = String(agentId == null ? '' : agentId).trim();
-    var body = pendingKey(text);
-    if (!name || !body) return s;
-    for (var i = 0; i < s.items.length; i++) {
-      if (s.items[i].agent === name && s.items[i].text === body) return s;
-    }
-    var when = opts.now !== undefined ? opts.now : Date.now();
-    var id = opts.id || ('sp' + when.toString(36) + '-' + s.items.length);
-    return {
-      items: s.items.concat([{
-        id: id,
-        agent: name,
-        text: body,
-        when: when,
-        failed: false,
-      }]),
-    };
-  }
-
-  /**
-   * Drop pending turns for agentId that now appear as user lines. Every other
-   * agent's pending set is untouched.
-   * @returns {{ state: {items: Array}, acked: Array }}
-   */
-  function ackPendingOwnerTurns(state, agentId, lines) {
-    var s = state && Array.isArray(state.items) ? state : emptyPending();
-    var name = String(agentId == null ? '' : agentId).trim();
-    if (!s.items.length || !name) return { state: s, acked: [] };
-    var seen = [];
-    (lines || []).forEach(function (l) {
-      if (l && l.role === 'user') seen.push(pendingKey(l.text));
-    });
-    var used = {};
-    var remaining = [];
-    var acked = [];
-    for (var i = 0; i < s.items.length; i++) {
-      var it = s.items[i];
-      if (it.agent !== name) {
-        remaining.push(it);
-        continue;
-      }
-      var found = false;
-      for (var h = 0; h < seen.length; h++) {
-        if (used[h] || seen[h] !== it.text) continue;
-        used[h] = true;
-        found = true;
-        break;
-      }
-      if (found) acked.push(it);
-      else remaining.push(it);
-    }
-    return { state: { items: remaining }, acked: acked };
-  }
-
-  /**
-   * Re-apply still-unacked owner turns for agentId onto a line set. This is what
-   * makes a history frame non-destructive: the server's sealed turns win, and
-   * anything the owner sent that the server has not sealed yet is appended back
-   * rather than silently dropped.
-   * @returns {Array} lines (copy) with unacked owner turns appended
-   */
-  function applyPendingOwnerTurns(lines, state, agentId) {
-    var s = state && Array.isArray(state.items) ? state : emptyPending();
-    var name = String(agentId == null ? '' : agentId).trim();
-    var out = (lines || []).map(function (l) {
-      return l ? { role: l.role, text: l.text, when: l.when } : l;
-    });
-    if (!name || !s.items.length) return out;
-    var present = {};
-    out.forEach(function (l) {
-      if (l && l.role === 'user') {
-        var k = pendingKey(l.text);
-        present[k] = (present[k] || 0) + 1;
-      }
-    });
-    for (var i = 0; i < s.items.length; i++) {
-      var it = s.items[i];
-      if (it.agent !== name) continue;
-      if (present[it.text]) {
-        present[it.text] -= 1;
-        continue;
-      }
-      out.push({ role: 'user', text: it.text, when: it.when, _pending: true });
-    }
-    return out;
-  }
-
-  /** Mark a staged turn failed (kept visible — a failed send is not a vanish). */
-  function markPendingOwnerTurnFailed(state, id) {
-    var s = state && Array.isArray(state.items) ? state : emptyPending();
-    var key = String(id == null ? '' : id);
-    if (!key) return s;
-    return {
-      items: s.items.map(function (it) {
-        return it.id === key ? {
-          id: it.id,
-          agent: it.agent,
-          text: it.text,
-          when: it.when,
-          failed: true,
-        } : it;
-      }),
-    };
-  }
-
-  /** Unacked owner turns for agentId (product: retry / diagnostics). */
-  function pendingOwnerTurnsFor(state, agentId) {
-    var s = state && Array.isArray(state.items) ? state : emptyPending();
-    var name = String(agentId == null ? '' : agentId).trim();
-    return s.items.filter(function (it) { return it.agent === name; });
-  }
+  // Durability (main localStorage vs agent in-memory) is EC-5 in
+  // docs/design/one-chat-widget-fork-inventory.md — an OWNER ruling, and a
+  // choice of store, not of algorithm.
 
   /**
    * Whether the compact sidebar composer should be visible.
@@ -919,12 +788,13 @@
     buildSendRequest: buildSendRequest,
     sendBlockMessage: sendBlockMessage,
     afterSendOptimistic: afterSendOptimistic,
-    emptyPending: emptyPending,
-    stagePendingOwnerTurn: stagePendingOwnerTurn,
-    ackPendingOwnerTurns: ackPendingOwnerTurns,
-    applyPendingOwnerTurns: applyPendingOwnerTurns,
-    markPendingOwnerTurnFailed: markPendingOwnerTurnFailed,
-    pendingOwnerTurnsFor: pendingOwnerTurnsFor,
+    // 🎯T372: bindings to the one contract — never re-define these here.
+    emptyPending: PendingTurns.empty,
+    stagePendingOwnerTurn: PendingTurns.stage,
+    ackPendingOwnerTurns: PendingTurns.ack,
+    applyPendingOwnerTurns: PendingTurns.apply,
+    markPendingOwnerTurnFailed: PendingTurns.markFailed,
+    pendingOwnerTurnsFor: PendingTurns.forAgent,
     composerVisible: composerVisible,
     rootClassName: rootClassName,
     linesFingerprint: linesFingerprint,

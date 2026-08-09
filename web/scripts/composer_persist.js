@@ -22,11 +22,12 @@
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
+    module.exports = factory(require('./pending_turns.js'));
   } else {
-    root.ComposerPersist = factory();
+    // Browser: pending_turns.js must load before this script.
+    root.ComposerPersist = factory(root.PendingTurns);
   }
-}(typeof self !== 'undefined' ? self : this, function () {
+}(typeof self !== 'undefined' ? self : this, function (PendingTurns) {
   'use strict';
 
   const DRAFT_KEY = 'jevons-composer-draft-v1';
@@ -39,7 +40,7 @@
   }
 
   function emptyPending() {
-    return { items: [] };
+    return PendingTurns.empty();
   }
 
   function normalizeText(t) {
@@ -175,57 +176,21 @@
     return { ok: true, text: text, present: !!text.trim() || primary.present, migrated: migrated };
   }
 
-  // ── Pending (unacked wire sends) ─────────────────────────────────
+  // ── Pending (unacked owner turns) ───────────────────
+  //
+  // 🎯T372: the ALGORITHM lives in PendingTurns, shared with every agent
+  // surface; main is just the agent `PendingTurns.MAIN_AGENT`. What stays here
+  // is the part that is genuinely main's: localStorage durability and the
+  // send-queue restore plan. These wrappers keep main's historical call
+  // signatures (agent-free) so index.html and this module's tests are
+  // unchanged, while the behaviour underneath is the one shared contract.
 
   function serializePending(state) {
-    const s = state || emptyPending();
-    const items = (s.items || []).map(function (it) {
-      return {
-        id: String(it && it.id != null ? it.id : ''),
-        text: normalizeText(it && it.text),
-        stagedAt: typeof (it && it.stagedAt) === 'number' ? it.stagedAt : 0,
-      };
-    }).filter(function (it) { return it.id.length > 0 && it.text.trim().length > 0; });
-    return JSON.stringify({ items: items });
+    return PendingTurns.serialize(state);
   }
 
   function deserializePending(raw) {
-    if (raw == null || raw === '') {
-      return { ok: true, state: emptyPending(), present: false };
-    }
-    try {
-      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (!parsed || typeof parsed !== 'object') {
-        return {
-          ok: false,
-          state: emptyPending(),
-          present: true,
-          error: 'pending: not an object',
-        };
-      }
-      const items = [];
-      if (Array.isArray(parsed.items)) {
-        for (let i = 0; i < parsed.items.length; i++) {
-          const it = parsed.items[i];
-          if (!it || it.id == null || it.id === '') continue;
-          const text = normalizeText(it.text);
-          if (!text.trim()) continue;
-          items.push({
-            id: String(it.id),
-            text: text,
-            stagedAt: typeof it.stagedAt === 'number' ? it.stagedAt : 0,
-          });
-        }
-      }
-      return { ok: true, state: { items: items }, present: true };
-    } catch (e) {
-      return {
-        ok: false,
-        state: emptyPending(),
-        present: true,
-        error: 'pending: parse failed — ' + (e && e.message ? e.message : String(e)),
-      };
-    }
+    return PendingTurns.deserialize(raw);
   }
 
   function loadPending(storage) {
@@ -268,66 +233,24 @@
   }
 
   function stagePending(state, text) {
-    const s = state || emptyPending();
-    const t = normalizeText(text).trim();
-    if (!t) return s;
-    // Avoid staging the same body twice while waiting for ack.
-    for (let i = 0; i < (s.items || []).length; i++) {
-      if (s.items[i].text === t) return s;
-    }
-    const id = 'p' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
-    return {
-      items: (s.items || []).concat([{ id: id, text: t, stagedAt: Date.now() }]),
-    };
+    return PendingTurns.stage(state, PendingTurns.MAIN_AGENT, text);
   }
 
   // Drop pending items whose text appears in chatlog/history user bodies.
-  // Exact match on trimmed text; first occurrence consumes one pending.
   function ackPendingAgainstHistory(state, historyTexts) {
-    const s = state || emptyPending();
-    const hist = (historyTexts || []).map(function (t) {
-      return normalizeText(t).trim();
-    }).filter(function (t) { return t.length > 0; });
-    if (!s.items || !s.items.length) return { state: emptyPending(), acked: [] };
-    const remaining = [];
-    const acked = [];
-    const used = {};
-    for (let i = 0; i < s.items.length; i++) {
-      const it = s.items[i];
-      let found = false;
-      for (let h = 0; h < hist.length; h++) {
-        if (used[h]) continue;
-        if (hist[h] === it.text) {
-          used[h] = true;
-          found = true;
-          acked.push(it);
-          break;
-        }
-      }
-      if (!found) remaining.push(it);
-    }
-    return { state: { items: remaining }, acked: acked };
+    return PendingTurns.ackTexts(state, PendingTurns.MAIN_AGENT, historyTexts);
   }
 
   // Texts still unacked — re-queue these (caller enqueues into SendQueue).
   function unackedTexts(state) {
-    const s = state || emptyPending();
-    return (s.items || []).map(function (it) { return it.text; });
+    return PendingTurns.unackedTexts(state, PendingTurns.MAIN_AGENT);
   }
 
   // True when history already contains text (merge / no-dupe helper).
   function historyHasText(historyTexts, text) {
-    const t = normalizeText(text).trim();
-    if (!t) return false;
-    const hist = historyTexts || [];
-    for (let i = 0; i < hist.length; i++) {
-      if (normalizeText(hist[i]).trim() === t) return true;
-    }
-    return false;
+    return PendingTurns.hasText(historyTexts, text);
   }
 
-  // Plan restore after reload: draft text + which pending bodies to
-  // re-enqueue (not already in history and not already in queue).
   function planRestore(opts) {
     const o = opts || {};
     const draftText = normalizeText(o.draftText);

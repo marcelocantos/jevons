@@ -67,6 +67,7 @@ test-web:
 	node web/scripts/aside_history_test.js
 	node web/scripts/fleet_row_test.js
 	node web/scripts/fleet_paint_test.js
+	node web/scripts/fleet_cycle_test.js
 	node web/scripts/model_prefix_test.js
 	node web/scripts/portfolio_group_test.js
 	node web/scripts/virtual_list_test.js
@@ -79,6 +80,7 @@ test-web:
 	node web/scripts/wispr_context_test.js
 	node web/scripts/send_queue_test.js
 	node web/scripts/composer_persist_test.js
+	node web/scripts/pending_turns_test.js
 	node web/scripts/rhs_layout_test.js
 	node web/scripts/decision_log_test.js
 	node web/scripts/chat_reconnect_test.js
@@ -131,6 +133,7 @@ test-ui:
 	node scripts/chat-ui-test/t309.1-conversation-widget-test.js
 	node scripts/chat-ui-test/t340-frontier-table-layout-test.js
 	node scripts/chat-ui-test/t366-composer-tab-cycle-test.js
+	node scripts/chat-ui-test/t370-fleet-cycle-test.js
 	node scripts/chat-ui-test/t369-decision-matrix-test.js
 	node scripts/chat-ui-test/t368-image-prefix-route-test.js
 
