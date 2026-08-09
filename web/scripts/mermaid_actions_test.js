@@ -11,15 +11,32 @@ const assert = require('assert');
 const MA = require('./mermaid_actions.js');
 
 let failed = 0;
+const pending = [];
 function test(name, fn) {
+  // Supports sync tests and async tests that return a Promise (🎯T274 timeout race).
+  let result;
   try {
-    fn();
-    console.log('ok  -', name);
+    result = fn();
   } catch (e) {
     failed++;
     console.error('FAIL-', name);
     console.error('    ', e && e.stack ? e.stack.split('\n').slice(0, 4).join('\n     ') : e);
+    return;
   }
+  if (result && typeof result.then === 'function') {
+    pending.push(
+      result.then(
+        function () { console.log('ok  -', name); },
+        function (e) {
+          failed++;
+          console.error('FAIL-', name);
+          console.error('    ', e && e.stack ? e.stack.split('\n').slice(0, 4).join('\n     ') : e);
+        }
+      )
+    );
+    return;
+  }
+  console.log('ok  -', name);
 }
 
 test('toolbar has Open, Copy source, Copy image', function () {
@@ -370,8 +387,661 @@ test('T196 index.html openFrontierGraph catch uses fetch-error path not empty sh
   assert.ok(/\.mvp-error/.test(html), 'mvp-error CSS');
 });
 
-if (failed) {
-  console.error(failed + ' failed');
+// ── 🎯T268 single-graph scale-to-fill ─────────────────────────────────────
+
+test('T268 computeContainScale scales up small graphs and down large ones', function () {
+  // Small graph in large pane → scale up.
+  assert.strictEqual(MA.computeContainScale(400, 300, 1200, 900), 3);
+  // Large graph in small pane → scale down (fit, not crop).
+  assert.ok(Math.abs(MA.computeContainScale(4000, 3000, 800, 600) - 0.2) < 1e-9);
+  // Aspect mismatch: limited by the tighter axis.
+  assert.strictEqual(MA.computeContainScale(100, 100, 400, 200), 2);
+  assert.strictEqual(MA.computeContainScale(0, 100, 400, 200), 1);
+});
+
+test('T268 parseSvgNaturalSize from width/height and viewBox', function () {
+  assert.deepStrictEqual(
+    MA.parseSvgNaturalSize({ width: '800', height: '600' }),
+    { w: 800, h: 600 }
+  );
+  assert.deepStrictEqual(
+    MA.parseSvgNaturalSize({ viewBox: '0 0 1200 400' }),
+    { w: 1200, h: 400 }
+  );
+  assert.deepStrictEqual(
+    MA.parseSvgNaturalSize({
+      getAttribute: function (k) {
+        if (k === 'width') return '500px';
+        if (k === 'height') return '250';
+        return null;
+      },
+    }),
+    { w: 500, h: 250 }
+  );
+});
+
+test('T268 planSingleGraphScaleToFill fills pane (not tiny island)', function () {
+  // Small mermaid-ish graph in ~90vw×90vh usable pane → must scale up and fill.
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: 420,
+    svgH: 280,
+    paneW: 1400,
+    paneH: 900,
+    padding: 24,
+    diagramCount: 1,
+  });
+  assert.strictEqual(plan.mode, 'scale-to-fill');
+  assert.ok(plan.scale > 1, 'must scale UP: scale=' + plan.scale);
+  assert.strictEqual(plan.fillsPane, true);
+  // Without scale-up (scale=1) margins would dominate — reject that product bug.
+  const unscaledCover = Math.max(420 / (1400 - 24), 280 / (900 - 24));
+  assert.ok(unscaledCover < 0.5, 'fixture would look tiny without fit');
+  assert.ok(plan.scale > 1 / unscaledCover * 0.9 || plan.fillsPane);
+});
+
+test('T268 hermetic 10+ node fixture: dense graph scale-to-fill uses pane', function () {
+  // Simulate Mermaid layout of 12-node orthograph-ish component:
+  // natural SVG ~ 1800×1100; frontier large panel ~ 1280×720 usable.
+  const NODE_COUNT = 12;
+  assert.ok(NODE_COUNT >= 10, 'fixture is 10+ nodes');
+  const naturalW = 1800;
+  const naturalH = 1100;
+  const paneW = 1280;
+  const paneH = 720;
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: naturalW,
+    svgH: naturalH,
+    paneW: paneW,
+    paneH: paneH,
+    padding: 24,
+    diagramCount: 1,
+  });
+  assert.strictEqual(plan.mode, 'scale-to-fill');
+  assert.strictEqual(plan.fillsPane, true);
+  // Display size must track pane on at least one axis (contain).
+  const usableW = paneW - 24;
+  const usableH = paneH - 24;
+  const cover = Math.max(plan.displayW / usableW, plan.displayH / usableH);
+  assert.ok(cover >= 0.95, 'cover=' + cover + ' must fill pane');
+  // Labels stay readable vs micro-text: display width ≥ 40% of pane
+  // (dense shrink still uses full pane; micro-island would be ~natural unscaled).
+  assert.ok(plan.displayW >= usableW * 0.4 || plan.displayH >= usableH * 0.4);
+  // Style plan clears max-width so CSS cannot re-shrink.
+  const style = MA.svgScaleToFillStyle(plan);
+  assert.ok(style, 'style present');
+  assert.strictEqual(style.maxWidth, 'none');
+  assert.ok(/px$/.test(style.width));
+});
+
+test('T268 multi diagramCount on single planner skips (use T276 pack path)', function () {
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: 800,
+    svgH: 600,
+    paneW: 1200,
+    paneH: 900,
+    diagramCount: 4,
+  });
+  assert.strictEqual(plan.mode, 'skip');
+  assert.strictEqual(plan.fillsPane, false);
+});
+
+// ── 🎯T276: pack natural boxes → pane form-factor → scale composite ──────
+// ── 🎯T277: natural SVG aspect preserved (no chrome-inflated stretch) ───
+
+test('T276 wrap-grid micro-island oracle FAILS ≥95% fill (old path)', function () {
+  // Orthograph-class: 3 natural diagram boxes in a large frontier pane.
+  // Old wrap-grid minmax(320px) leaves micro-islands — must NOT fill pane.
+  const boxes = [
+    { w: 900, h: 600 },
+    { w: 700, h: 500 },
+    { w: 500, h: 400 },
+  ];
+  const paneW = 1400;
+  const paneH = 900;
+  const micro = MA.planWrapGridMicroIslandOracle(boxes, { paneW: paneW, paneH: paneH, cellMax: 320 });
+  assert.strictEqual(micro.mode, 'wrap-grid-micro');
+  assert.strictEqual(micro.fillsPane, false, 'wrap-grid micro-islands must fail fill oracle');
+  assert.ok(micro.maxCellCover < 0.5, 'max cover with 320px cells=' + micro.maxCellCover);
+});
+
+test('T277 chrome-inflated stretch oracle FAILS natural-aspect check (5dfd3fd path)', function () {
+  // Models T276 false-fix: pack boxes with title+pad baked into height, then
+  // size SVG to full placement → tall-skinny non-natural aspect.
+  const boxes = [
+    { w: 900, h: 600, id: 'c0' },
+    { w: 700, h: 500, id: 'c1' },
+    { w: 500, h: 400, id: 'c2' },
+  ];
+  assert.strictEqual(typeof MA.planChromeInflatedStretchOracle, 'function');
+  assert.strictEqual(typeof MA.placementSvgAspectMatchesNatural, 'function');
+  const stretched = MA.planChromeInflatedStretchOracle(boxes, {
+    paneW: 1400,
+    paneH: 900,
+    gap: 12,
+    chromeH: 48,
+  });
+  assert.strictEqual(stretched.mode, 'chrome-inflated-stretch');
+  assert.strictEqual(stretched.placements.length, 3);
+  let anyFail = false;
+  for (let i = 0; i < stretched.placements.length; i++) {
+    const pl = stretched.placements[i];
+    const ok = MA.placementSvgAspectMatchesNatural(pl, 1e-6);
+    if (!ok) anyFail = true;
+    // Explicit: svg aspect must differ from natural when chrome is in displayH.
+    const natA = pl.naturalW / pl.naturalH;
+    const svgA = pl.svgDisplayW / pl.svgDisplayH;
+    assert.ok(
+      Math.abs(natA - svgA) > 1e-4,
+      'stretch fixture must differ natural vs svg aspect; nat=' + natA + ' svg=' + svgA
+    );
+  }
+  assert.ok(anyFail, 'stretch path must fail placementSvgAspectMatchesNatural');
+  // Cover-only ≥95% is necessary not sufficient — stretch can still "fill".
+  // (Do not use fillsPane alone as T277 acceptance.)
+});
+
+test('T277 pack+scale preserves natural SVG aspect (chrome fixed, not stretch)', function () {
+  const boxes = [
+    { w: 900, h: 600, id: 'c0' },
+    { w: 700, h: 500, id: 'c1' },
+    { w: 500, h: 400, id: 'c2' },
+  ];
+  const paneW = 1400;
+  const paneH = 900;
+  const chromeH = 48;
+  const plan = MA.planMultiDiagramPackScaleToFill({
+    boxes: boxes,
+    paneW: paneW,
+    paneH: paneH,
+    padding: 0,
+    gap: 12,
+    chromeH: chromeH,
+  });
+  assert.strictEqual(plan.mode, 'pack-scale-to-fill');
+  assert.strictEqual(plan.placements.length, 3);
+  assert.ok(plan.scale > 0, 'scale=' + plan.scale);
+  for (let i = 0; i < plan.placements.length; i++) {
+    const pl = plan.placements[i];
+    assert.ok(
+      MA.placementSvgAspectMatchesNatural(pl, 1e-6),
+      'placement ' + i + ' must preserve natural aspect'
+    );
+    assert.strictEqual(pl.naturalW, boxes[i].w);
+    assert.strictEqual(pl.naturalH, boxes[i].h);
+    // SVG display = natural × uniform scale only.
+    assert.ok(Math.abs(pl.svgDisplayW - pl.naturalW * plan.scale) < 1e-6);
+    assert.ok(Math.abs(pl.svgDisplayH - pl.naturalH * plan.scale) < 1e-6);
+    // Block height = scaled SVG + fixed chrome (not proportional empty stretch into SVG).
+    assert.ok(
+      Math.abs(pl.displayH - (pl.svgDisplayH + chromeH)) < 1e-6,
+      'displayH must be svgDisplayH + fixed chrome; got ' + pl.displayH
+    );
+    // SVG must not equal chrome-inflated block height.
+    assert.ok(
+      Math.abs(pl.svgDisplayH - pl.displayH) > 1e-6 || chromeH === 0,
+      'svgDisplayH must not be full placement height when chrome > 0'
+    );
+  }
+});
+
+test('T277 applyPackPlacement sets SVG natural aspect not block box', function () {
+  const plan = MA.planMultiDiagramPackScaleToFill({
+    boxes: [{ w: 400, h: 200, id: 'a' }, { w: 300, h: 300, id: 'b' }],
+    paneW: 1200,
+    paneH: 800,
+    chromeH: 48,
+    gap: 8,
+  });
+  assert.strictEqual(plan.mode, 'pack-scale-to-fill');
+  const pl = plan.placements[0];
+  const attrs = {};
+  const svg = {
+    style: {},
+    removeAttribute: function () {},
+    setAttribute: function (k, v) { attrs[k] = v; },
+  };
+  const block = {
+    style: {},
+    setAttribute: function (k, v) { attrs['block:' + k] = v; },
+  };
+  assert.strictEqual(MA.applyPackPlacement(block, svg, pl, plan.scale), true);
+  const sw = parseFloat(svg.style.width);
+  const sh = parseFloat(svg.style.height);
+  assert.ok(sw > 0 && sh > 0, 'svg sized');
+  // px rounding in applySvgScaleToFill is milli-px; allow small float eps.
+  assert.ok(
+    Math.abs(sw / sh - pl.naturalW / pl.naturalH) < 1e-4,
+    'svg style preserves aspect; got ' + (sw / sh) + ' vs ' + (pl.naturalW / pl.naturalH)
+  );
+  assert.ok(Math.abs(sw - pl.svgDisplayW) < 0.5);
+  assert.ok(Math.abs(sh - pl.svgDisplayH) < 0.5);
+  // Must not use chrome-inflated placement height as SVG height.
+  assert.ok(
+    Math.abs(pl.displayH - pl.svgDisplayH) > 1e-6,
+    'fixture has fixed chrome so block H > svg H'
+  );
+  assert.ok(Math.abs(sh - pl.displayH) > 1, 'svg H ≠ block displayH');
+});
+
+test('T276 pack+scale multi-box fills ≥95% of one pane axis', function () {
+  // Same orthograph-class fixture: 3 components, large pane.
+  // Cover ≥95% remains necessary; T277 aspect hermetics are also required.
+  const boxes = [
+    { w: 900, h: 600, id: 'c0' },
+    { w: 700, h: 500, id: 'c1' },
+    { w: 500, h: 400, id: 'c2' },
+  ];
+  const paneW = 1400;
+  const paneH = 900;
+  const plan = MA.planMultiDiagramPackScaleToFill({
+    boxes: boxes,
+    paneW: paneW,
+    paneH: paneH,
+    padding: 0,
+    gap: 12,
+    chromeH: 48,
+  });
+  assert.strictEqual(plan.mode, 'pack-scale-to-fill');
+  assert.strictEqual(plan.placements.length, 3);
+  assert.ok(plan.scale > 0, 'scale=' + plan.scale);
+  assert.strictEqual(plan.fillsPane, true, 'composite must fill pane');
+  const cover = Math.max(plan.displayW / paneW, plan.displayH / paneH);
+  assert.ok(cover >= 0.95, 'cover=' + cover + ' must be ≥0.95');
+  // Display composite uses full contain — at least one axis nearly pane.
+  assert.ok(
+    Math.abs(plan.displayW - paneW) < 1 || Math.abs(plan.displayH - paneH) < 1 || cover >= 0.95
+  );
+  // Placements are non-overlapping in display space (shelf pack + fixed chrome).
+  for (let i = 0; i < plan.placements.length; i++) {
+    const a = plan.placements[i];
+    assert.ok(a.displayW > 0 && a.displayH > 0);
+    assert.ok(MA.placementSvgAspectMatchesNatural(a, 1e-6), 'T277 aspect on cover fixture');
+    for (let j = i + 1; j < plan.placements.length; j++) {
+      const b = plan.placements[j];
+      const sepX = a.displayX + a.displayW <= b.displayX + 1e-6
+        || b.displayX + b.displayW <= a.displayX + 1e-6;
+      const sepY = a.displayY + a.displayH <= b.displayY + 1e-6
+        || b.displayY + b.displayH <= a.displayY + 1e-6;
+      assert.ok(sepX || sepY, 'placements ' + i + ',' + j + ' must not overlap');
+    }
+  }
+});
+
+test('T276 packBoxesIntoPaneAspect returns composite matching pane aspect spirit', function () {
+  const boxes = [
+    { w: 400, h: 300 },
+    { w: 400, h: 300 },
+    { w: 400, h: 300 },
+  ];
+  // Wide pane → shelf width should allow side-by-side packing.
+  const packed = MA.packBoxesIntoPaneAspect(boxes, { paneW: 1600, paneH: 800, gap: 0 });
+  assert.ok(packed.compositeW > 0 && packed.compositeH > 0);
+  assert.strictEqual(packed.placements.length, 3);
+  assert.ok(packed.rowCount >= 1);
+  // At least two boxes share a row when shelf is wide enough.
+  const ys = packed.placements.map(function (p) { return p.y; });
+  const uniqueY = ys.filter(function (y, i) { return ys.indexOf(y) === i; });
+  assert.ok(uniqueY.length < 3, 'wide pane should shelf-pack multiple per row, ys=' + ys);
+});
+
+test('T276 index.html wires pack+scale renderer (residual secondary under T280)', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('planMultiDiagramPackScaleToFill') >= 0
+    || html.indexOf('fitMermaidPackToPane') >= 0,
+    'multi pack fit wired');
+  assert.ok(html.indexOf('function fitMermaidPackToPane') >= 0, 'fitMermaidPackToPane defined');
+  assert.ok(html.indexOf('fitMermaidPackToPane') >= 0
+    && html.indexOf('renderMermaidDiagramPackInPanel') >= 0,
+    'pack renderer triggers pack fit');
+  // Pack fit still routes when body has mvp-pack (residual opt-in path).
+  const fitStart = html.indexOf('function fitMermaidPanelSvgToPane');
+  assert.ok(fitStart >= 0);
+  const fitSlice = html.slice(fitStart, fitStart + 1200);
+  assert.ok(fitSlice.indexOf('fitMermaidPackToPane') >= 0, 'single fit routes pack to T276');
+  // 🎯T277: natural boxes only (no chrome inflation into pack measure).
+  const packStart = html.indexOf('function fitMermaidPackToPane');
+  assert.ok(packStart >= 0);
+  const packSlice = html.slice(packStart, packStart + 2500);
+  assert.ok(
+    packSlice.indexOf('natural') >= 0 || packSlice.indexOf('T277') >= 0,
+    'fitMermaidPackToPane documents natural/T277 aspect path'
+  );
+  assert.ok(
+    packSlice.indexOf('chromeH') >= 0,
+    'chrome passed as fixed option, not baked into box.h before pack'
+  );
+  // 🎯T280: openFrontierGraph must NOT unconditionally call pack for multi diagrams.
+  const ofgStart = html.indexOf('function openFrontierGraph');
+  assert.ok(ofgStart >= 0);
+  const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
+  const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 8000);
+  assert.ok(ofg.indexOf('resolveFrontierGraphOpenPlan') >= 0, 'T280 open plan resolver');
+  assert.ok(ofg.indexOf('preferPack') >= 0, 'pack is opt-in residual');
+});
+
+test('T268 applySvgScaleToFill mutates style + data attr', function () {
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: 200,
+    svgH: 100,
+    paneW: 800,
+    paneH: 400,
+    padding: 0,
+    diagramCount: 1,
+  });
+  const removed = [];
+  const attrs = {};
+  const svg = {
+    style: {},
+    removeAttribute: function (k) { removed.push(k); },
+    setAttribute: function (k, v) { attrs[k] = v; },
+  };
+  assert.strictEqual(MA.applySvgScaleToFill(svg, plan), true);
+  assert.strictEqual(svg.style.maxWidth, 'none');
+  assert.ok(parseFloat(svg.style.width) >= 799);
+  assert.ok(removed.indexOf('width') >= 0 && removed.indexOf('height') >= 0);
+  assert.ok(attrs['data-mvp-scale-fill']);
+});
+
+test('T268 index.html wires scale-to-fill for single large graph', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('planSingleGraphScaleToFill') >= 0, 'uses pure plan');
+  assert.ok(html.indexOf('applySvgScaleToFill') >= 0 || html.indexOf('fitMermaidPanelSvgToPane') >= 0,
+    'applies fit after render');
+  assert.ok(html.indexOf('mvp-scale-fill') >= 0, 'scale-fill CSS class');
+  // 🎯T280: openFrontierGraph defaults to single / single-primary scale-to-fill.
+  const ofgStart = html.indexOf('function openFrontierGraph');
+  assert.ok(ofgStart >= 0);
+  const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
+  const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 8000);
+  assert.ok(
+    ofg.indexOf('resolveFrontierGraphOpenPlan') >= 0
+      || ofg.indexOf('scaleToFill: true') >= 0
+      || ofg.indexOf('scaleToFill:true') >= 0,
+    'single scale-to-fill plan in openFrontierGraph'
+  );
+  assert.ok(ofg.indexOf('renderMermaidSourceInPanel') >= 0, 'single path uses source renderer');
+  // Multi-pack only when preferPack (residual), not bare multi default.
+  assert.ok(
+    ofg.indexOf('preferPack') >= 0 || ofg.indexOf('mode === \'pack\'') >= 0 || ofg.indexOf('mode === "pack"') >= 0,
+    'pack residual gated (not unconditional multi default)'
+  );
+});
+
+// 🎯T274: pause earlier-history while large graph open; render timeout.
+test('T274 shouldPauseHistoryHydrate only for open mvp-large', function () {
+  assert.strictEqual(typeof MA.shouldPauseHistoryHydrate, 'function');
+  assert.strictEqual(MA.shouldPauseHistoryHydrate(null), false);
+  assert.strictEqual(
+    MA.shouldPauseHistoryHydrate(mockPanel({ hidden: false, classes: ['open'] })),
+    false,
+    'compact open does not pause'
+  );
+  assert.strictEqual(
+    MA.shouldPauseHistoryHydrate(mockPanel({ hidden: false, classes: ['open', 'mvp-large'] })),
+    true,
+    'large graph pauses hydrate'
+  );
+  assert.strictEqual(
+    MA.shouldPauseHistoryHydrate(mockPanel({ hidden: true, classes: ['open', 'mvp-large'] })),
+    false,
+    'hidden does not pause'
+  );
+});
+
+test('T274 withMermaidRenderTimeout rejects hung render', async function () {
+  assert.strictEqual(typeof MA.withMermaidRenderTimeout, 'function');
+  assert.ok(MA.MERMAID_RENDER_TIMEOUT_MS >= 1000);
+  const hung = new Promise(function () { /* never settles */ });
+  let rejected = null;
+  try {
+    await MA.withMermaidRenderTimeout(hung, 30);
+  } catch (e) {
+    rejected = e;
+  }
+  assert.ok(rejected, 'timeout rejects');
+  assert.strictEqual(rejected.kind, 'timeout');
+  // Fast resolve still wins.
+  const ok = await MA.withMermaidRenderTimeout(Promise.resolve({ svg: '<svg/>' }), 500);
+  assert.strictEqual(ok.svg, '<svg/>');
+});
+
+// 🎯T280: tall-empty-column oracle FAILS owner trainwreck; single cover PASSES.
+test('T280 assessTallEmptyColumnLayout fails 3 tall empty columns', function () {
+  assert.strictEqual(typeof MA.assessTallEmptyColumnLayout, 'function');
+  assert.strictEqual(typeof MA.assessSingleGraphPaneCover, 'function');
+
+  // Owner orthograph trainwreck: 3 enormous vertical grey columns, tiny SVG.
+  const trainwreck = MA.assessTallEmptyColumnLayout([
+    { blockW: 220, blockH: 720, svgW: 80, svgH: 60 },
+    { blockW: 220, blockH: 720, svgW: 90, svgH: 50 },
+    { blockW: 220, blockH: 720, svgW: 70, svgH: 55 },
+  ]);
+  assert.strictEqual(trainwreck.mode, 'tall-empty-columns');
+  assert.strictEqual(trainwreck.isTallEmpty, true, 'must FAIL tall-empty layout');
+  assert.ok(trainwreck.tallEmptyCount >= 2, 'tallEmptyCount=' + trainwreck.tallEmptyCount);
+  assert.strictEqual(trainwreck.blockCount, 3);
+
+  // Single scale-to-fill pane: one wide SVG covering most of the pane — not tall-empty.
+  const goodSingle = MA.assessTallEmptyColumnLayout([
+    { blockW: 900, blockH: 700, svgW: 880, svgH: 680 },
+  ]);
+  assert.strictEqual(goodSingle.isTallEmpty, false, 'single full SVG is not tall-empty multi');
+
+  // Empty / single short block.
+  assert.strictEqual(MA.assessTallEmptyColumnLayout([]).isTallEmpty, false);
+  assert.strictEqual(
+    MA.assessTallEmptyColumnLayout([{ blockW: 400, blockH: 200, svgW: 380, svgH: 180 }]).isTallEmpty,
+    false
+  );
+
+  // Single pane cover: scale-to-fill should pass ≥75%.
+  const cover = MA.assessSingleGraphPaneCover({
+    paneW: 1000,
+    paneH: 800,
+    svgDisplayW: 1000,
+    svgDisplayH: 500,
+  });
+  assert.strictEqual(cover.ok, true, 'axis cover ≥0.75');
+  assert.ok(cover.cover >= 0.75, 'cover=' + cover.cover);
+
+  const tiny = MA.assessSingleGraphPaneCover({
+    paneW: 1000,
+    paneH: 800,
+    svgDisplayW: 120,
+    svgDisplayH: 80,
+  });
+  assert.strictEqual(tiny.ok, false, 'micro island fails single cover');
+});
+
+// ── 🎯T294: legibility floor, reflow fit, loud graph errors ───────────────
+
+// The owner's screenshot in numbers: the primary component of the jevons
+// ledger is a wide flat flowchart (~3000×200 natural) in a ~1600×850 pane.
+const OWNER_STRIP = { w: 3000, h: 200 };
+const OWNER_PANE = { w: 1600, h: 850 };
+
+test('T294 contain-only shrinks the owner strip below readable (fail class a)', function () {
+  const contain = MA.computeContainScale(
+    OWNER_STRIP.w, OWNER_STRIP.h, OWNER_PANE.w, OWNER_PANE.h
+  );
+  // Contain fills the width completely — which is exactly why cover-only
+  // oracles (T280) passed this trainwreck.
+  const cover = MA.assessSingleGraphPaneCover({
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    svgDisplayW: OWNER_STRIP.w * contain,
+    svgDisplayH: OWNER_STRIP.h * contain,
+  });
+  assert.strictEqual(cover.ok, true, 'T280 cover oracle passes the strip — the false fix');
+
+  // The T294 oracles must reject it.
+  const legible = MA.assessGraphLegibility({ scale: contain });
+  assert.strictEqual(legible.ok, false, 'contain scale must read as illegible');
+  assert.ok(legible.labelPx < MA.MIN_LEGIBLE_LABEL_PX, 'labelPx=' + legible.labelPx);
+
+  const strip = MA.assessMicroStripLayout({
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    svgDisplayW: OWNER_STRIP.w * contain,
+    svgDisplayH: OWNER_STRIP.h * contain,
+    scale: contain,
+  });
+  assert.strictEqual(strip.isMicroStrip, true, 'micro-strip oracle must be armed');
+  assert.ok(strip.coverH < 0.35, 'strip wastes the vertical pane: coverH=' + strip.coverH);
+});
+
+test('T294 single-graph fit holds the legibility floor instead of shrinking', function () {
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: OWNER_STRIP.w,
+    svgH: OWNER_STRIP.h,
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    padding: 0,
+  });
+  assert.strictEqual(plan.mode, 'scale-to-fill');
+  assert.strictEqual(plan.floored, true, 'floor must engage for the owner strip');
+  assert.ok(plan.scale > plan.containScale, 'floored scale exceeds contain');
+  assert.ok(
+    plan.labelPx >= MA.MIN_LEGIBLE_LABEL_PX,
+    'labels readable: ' + plan.labelPx
+  );
+  assert.strictEqual(plan.overflowX, true, 'wider than pane → pane scrolls, not shrinks');
+
+  const after = MA.assessMicroStripLayout({
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    svgDisplayW: plan.displayW,
+    svgDisplayH: plan.displayH,
+    scale: plan.scale,
+  });
+  assert.strictEqual(after.isMicroStrip, false, 'fitted graph is no longer a micro strip');
+});
+
+test('T294 a graph that already fits keeps its contain scale', function () {
+  const plan = MA.planSingleGraphScaleToFill({
+    svgW: 800,
+    svgH: 600,
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    padding: 0,
+  });
+  assert.strictEqual(plan.floored, false, 'no floor needed when contain scales up');
+  assert.ok(plan.scale > 1, 'small graph still scales up to fill: ' + plan.scale);
+  assert.strictEqual(plan.overflowX, false);
+  assert.strictEqual(plan.overflowY, false);
+});
+
+test('T294 multi-component pack reflows at the floor and fills the pane', function () {
+  const boxes = [{ w: OWNER_STRIP.w, h: OWNER_STRIP.h, id: 'c0' }];
+  for (let i = 1; i < 7; i++) boxes.push({ w: 600, h: 220, id: 'c' + i });
+
+  const plan = MA.planFrontierGraphFit({
+    boxes: boxes,
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    gap: 12,
+    chromeH: 48,
+  });
+  assert.strictEqual(plan.mode, 'reflow-readable', 'contain would be illegible → reflow');
+  assert.strictEqual(plan.reflowed, true);
+  assert.strictEqual(plan.legible, true);
+  assert.ok(plan.labelPx >= MA.MIN_LEGIBLE_LABEL_PX, 'labelPx=' + plan.labelPx);
+  assert.strictEqual(plan.fillsPane, true, 'composite reaches the pane');
+  assert.strictEqual(plan.placements.length, 7, 'every component placed');
+
+  // Uniform scale: no block is stretched off its natural aspect (🎯T277).
+  for (let i = 0; i < plan.placements.length; i++) {
+    assert.strictEqual(
+      MA.placementSvgAspectMatchesNatural(plan.placements[i], 1e-6),
+      true,
+      'placement ' + i + ' preserves natural aspect'
+    );
+  }
+
+  // Ink cover: seven packed components use far more pane than one strip did.
+  const packInk = MA.assessPaneInkCover(
+    { paneW: OWNER_PANE.w, paneH: OWNER_PANE.h },
+    plan.placements.map(function (p) {
+      return { w: p.svgDisplayW, h: p.svgDisplayH };
+    })
+  );
+  const containScale = MA.computeContainScale(
+    OWNER_STRIP.w, OWNER_STRIP.h, OWNER_PANE.w, OWNER_PANE.h
+  );
+  const stripInk = MA.assessPaneInkCover(
+    { paneW: OWNER_PANE.w, paneH: OWNER_PANE.h },
+    [{ w: OWNER_STRIP.w * containScale, h: OWNER_STRIP.h * containScale }]
+  );
+  assert.strictEqual(stripInk.ok, false, 'single strip leaves the pane empty');
+  assert.ok(
+    packInk.cover > stripInk.cover,
+    'pack ink ' + packInk.cover + ' must beat strip ink ' + stripInk.cover
+  );
+});
+
+test('T294 pack keeps contain scale when it is already readable', function () {
+  const boxes = [
+    { w: 500, h: 400, id: 'a' },
+    { w: 480, h: 380, id: 'b' },
+  ];
+  const plan = MA.planFrontierGraphFit({
+    boxes: boxes,
+    paneW: OWNER_PANE.w,
+    paneH: OWNER_PANE.h,
+    gap: 12,
+    chromeH: 48,
+  });
+  assert.strictEqual(plan.mode, 'pack-scale-to-fill');
+  assert.strictEqual(plan.reflowed, false);
+  assert.strictEqual(plan.fillsPane, true);
+  assert.ok(plan.labelPx >= MA.MIN_LEGIBLE_LABEL_PX);
+});
+
+test('T294 shelf pack honours an explicit bin width', function () {
+  const packed = MA.packBoxesIntoShelfWidth(
+    [{ w: 100, h: 50 }, { w: 100, h: 50 }, { w: 100, h: 50 }],
+    { shelfWidth: 220, gap: 10 }
+  );
+  assert.strictEqual(packed.rowCount, 2, 'two per row at width 220');
+  assert.strictEqual(packed.placements.length, 3);
+  // Bin can never be narrower than the widest box.
+  const forced = MA.packBoxesIntoShelfWidth([{ w: 900, h: 50 }], { shelfWidth: 100 });
+  assert.strictEqual(forced.shelfWidth, 900);
+});
+
+test('T294 bullseye panic classifies loud, never as an empty graph', function () {
+  const msg = 'bullseye open: exit status 101 — panic graph.rs:704';
+  assert.strictEqual(MA.classifyFetchFailureKind(msg, null), 'panic');
+  assert.strictEqual(MA.classifyFetchFailureKind('bullseye: exit status 2', null), 'server');
+  assert.strictEqual(MA.classifyFetchFailureKind('Failed to fetch', null), 'network');
+  assert.strictEqual(MA.classifyFetchFailureKind('boom', 500), 'http');
+
+  const view = MA.productFetchFailureFromError(
+    { message: msg },
+    { resource: 'Unachieved graph' }
+  );
+  assert.strictEqual(view.kind, 'panic');
+  assert.ok(/Backend panic/.test(view.status), 'status names the panic: ' + view.status);
+  assert.ok(/graph\.rs:704/.test(view.bodyHtml), 'body carries the panic detail');
+  assert.ok(/data-mvp-fetch-error="1"/.test(view.bodyHtml), 'loud error marker present');
+  assert.ok(/data-mvp-error-kind="panic"/.test(view.bodyHtml), 'error kind exposed');
+  // The failure body must never be the generic paste shell.
+  assert.ok(!/data-mvp-empty/.test(view.bodyHtml), 'must not be the empty paste shell');
+  assert.ok(!/No graph loaded/.test(view.bodyHtml), 'must not read as "nothing yet"');
+  assert.ok(/restart-daily/.test(view.bodyHtml), 'recovery hint retained');
+});
+
+Promise.all(pending).then(function () {
+  if (failed) {
+    console.error(failed + ' failed');
+    process.exit(1);
+  }
+  console.log('all mermaid_actions tests passed');
+}).catch(function (e) {
+  console.error('suite error', e);
   process.exit(1);
-}
-console.log('all mermaid_actions tests passed');
+});

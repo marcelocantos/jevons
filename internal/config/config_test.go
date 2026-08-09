@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 🎯T44 grep oracle: the default persona must carry no owner-specific
@@ -128,14 +129,16 @@ func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 		"T92",
 		"T129",
 		"One-off flukes",
-		// 🎯T92 / T92.2 ambient: schedule/stream + deeper chat/session surfaces
+		// 🎯T243 coach + T92 residual: judgments → overseer; not direct mint product path
 		"not only `/retro`",
 		"periodic schedule",
-		"jevons_rsi_cycle",
-		"mint bullseye targets",
-		"owner-chatlog friction",
+		"jevons_rsi_coach_cycle",
+		"T243",
+		"You alone decide",
+		"jevons_rsi_coach_configure",
+		"owner main chat",
 		"session transcripts",
-		"T92.2",
+		"T92",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("persona missing impatience/RSI/T130 marker %q", want)
@@ -278,6 +281,32 @@ func TestDefaultPersonaOverseerNeverParentsWorkers(t *testing.T) {
 	}
 }
 
+// 🎯T262.1: frontier = ready set, not next-ticket (doctrine inject).
+func TestDefaultPersonaFrontierReadySet(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Frontier = ready set",
+		"T262.1",
+		"next ticket",
+		"unblocked leaf",
+		"indifferent or policy",
+		"queue is frontier size",
+		"engagement policy",
+		"Anti-pattern",
+		"frontier-as-ready-set.md",
+		"instructional",
+		"T254",
+		"T262.4",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T262.1 marker %q", want)
+		}
+	}
+}
+
 // 🎯T155: new unattended frontier leaves get a worker immediately (parent=jevons-po).
 func TestDefaultPersonaUnattendedFrontierAutoSpawn(t *testing.T) {
 	p, err := Default().Persona()
@@ -331,6 +360,32 @@ func TestDefaultPersonaFileToSpawnSameTurn(t *testing.T) {
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("default persona missing T193 marker %q", want)
+		}
+	}
+}
+
+// 🎯T325.1: PO proactive-until-empty-then-sleep doctrine on persona surface.
+func TestDefaultPersonaPOProactiveUntilEmptyThenSleep(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"PO proactive-until-empty-then-sleep",
+		"T325.1",
+		"until empty or blocked",
+		"one-shot pass",
+		"sleep/idle",
+		"open-mission",
+		"interruptible",
+		"ClassifyPOProactive",
+		"ClassifyFrontierLeaf",
+		"POOpenMissionForProactive",
+		"life-and-work-org-map.md",
+		"instructional",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T325.1 marker %q", want)
 		}
 	}
 }
@@ -448,6 +503,16 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"jevons_target_file",
 		"bullseye_commit",
 		"T92",
+		// 🎯T262.1 frontier = ready set
+		"Frontier = ready set",
+		"T262.1",
+		"next ticket",
+		"unblocked leaf",
+		"indifferent or policy",
+		"queue is frontier size",
+		"engagement policy",
+		"Anti-pattern",
+		"frontier-as-ready-set.md",
 		"Unattended frontier auto-spawn",
 		"T155",
 		"parent=jevons-po",
@@ -470,6 +535,18 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"blocked-on-human",
 		"pure documentation",
 		"docs-only",
+		// 🎯T325.1 PO proactive-until-empty-then-sleep
+		"PO proactive-until-empty-then-sleep",
+		"T325.1",
+		"until empty or blocked",
+		"one-shot pass",
+		"sleep/idle",
+		"open-mission",
+		"interruptible",
+		"ClassifyPOProactive",
+		"ClassifyFrontierLeaf",
+		"POOpenMissionForProactive",
+		"life-and-work-org-map.md",
 		"alter ego", // T98
 		"T98",
 		"ceo-alter-ego.md",
@@ -557,6 +634,13 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"bullseye_commit",
 		"T92",
 		"same turn",
+		// 🎯T262.1 frontier = ready set
+		"Frontier = ready set",
+		"T262.1",
+		"next ticket",
+		"unblocked ready leaves",
+		"indifferent/policy",
+		"frontier-as-ready-set.md",
 		"Unattended frontier auto-spawn",
 		"T155",
 		"parent=jevons-po",
@@ -577,6 +661,18 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"design-gated",
 		"blocked-on-human",
 		"pure documentation",
+		// 🎯T325.1 PO proactive-until-empty-then-sleep
+		"PO proactive-until-empty-then-sleep",
+		"T325.1",
+		"until empty or blocked",
+		"one-shot pass",
+		"sleeps/idles",
+		"open-mission",
+		"interruptible",
+		"ClassifyPOProactive",
+		"ClassifyFrontierLeaf",
+		"POOpenMissionForProactive",
+		"life-and-work-org-map.md",
 		// 🎯T31.1
 		"Oracle-first completion",
 		"T31",
@@ -812,6 +908,99 @@ func TestLoadProvidersEmptyIsOK(t *testing.T) {
 	}
 	if len(cfg.Providers) != 0 {
 		t.Fatalf("default providers should be empty, got %+v", cfg.Providers)
+	}
+}
+
+// 🎯T27.9: automations are declarative config — every signal-source kind
+// loads with no bespoke daemon code per entry.
+func TestLoadAutomationsAllSourceKinds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+automations:
+  - id: ytt-daily
+    cadence: 24h
+    grace: 2
+    source:
+      kind: file-mtime
+      path: ~/.local/var/log/ytt.log
+  - id: knowledge-commits
+    cadence: 168h
+    source:
+      kind: git-last-commit
+      repo: ~/think
+  - id: yadm-sync
+    cadence: 30m
+    source:
+      kind: launchd
+      label: com.marcelocantos.yadm-auto-sync
+  - id: artifacts
+    cadence: 24h
+    source:
+      kind: newest-artifact
+      dir: ~/think/knowledge/youtube
+      glob: "*.md"
+  - id: mnemo-activity
+    cadence: 12h
+    source:
+      kind: provider-feed
+      provider: mnemo
+      feed: health
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Automations) != 5 {
+		t.Fatalf("automations len=%d want 5", len(cfg.Automations))
+	}
+	ytt := cfg.Automations[0]
+	if d, err := ytt.CadenceDuration(); err != nil || d != 24*time.Hour {
+		t.Fatalf("cadence=%v err=%v", d, err)
+	}
+	if ytt.GraceMultiple() != 2 {
+		t.Fatalf("grace=%v", ytt.GraceMultiple())
+	}
+	// Omitted grace uses the default multiple.
+	if g := cfg.Automations[1].GraceMultiple(); g != DefaultAutomationGrace {
+		t.Fatalf("default grace=%v want %v", g, DefaultAutomationGrace)
+	}
+}
+
+func TestLoadAutomationsValidationErrors(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		yaml string
+		sub  string
+	}{
+		{"missing id", "automations:\n  - cadence: 1h\n    source: {kind: file-mtime, path: /x}\n", "id is required"},
+		{"dup id", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: file-mtime, path: /x}\n  - id: a\n    cadence: 1h\n    source: {kind: file-mtime, path: /x}\n", "duplicate"},
+		{"bad cadence", "automations:\n  - id: a\n    cadence: sometimes\n    source: {kind: file-mtime, path: /x}\n", "cadence"},
+		{"missing kind", "automations:\n  - id: a\n    cadence: 1h\n    source: {path: /x}\n", "source.kind is required"},
+		{"unknown kind", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: telepathy}\n", "unsupported"},
+		{"file no path", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: file-mtime}\n", "needs source.path"},
+		{"artifact no dir", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: newest-artifact}\n", "needs source.dir"},
+		{"git no repo", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: git-last-commit}\n", "needs source.repo"},
+		{"launchd no label", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: launchd}\n", "needs source.label"},
+		{"feed incomplete", "automations:\n  - id: a\n    cadence: 1h\n    source: {kind: provider-feed, provider: mnemo}\n", "needs source.provider and source.feed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tc.sub) {
+				t.Fatalf("err=%v want substring %q", err, tc.sub)
+			}
+		})
 	}
 }
 

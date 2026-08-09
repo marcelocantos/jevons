@@ -158,6 +158,22 @@ func TestReplayTailAndReadRange(t *testing.T) {
 	if out, _, _ := l.ReadRange(6, 3); out != nil {
 		t.Fatalf("reversed range should be empty, got %v", out)
 	}
+	// Mid-window page (progressive hydrate shape): only materialises the slice.
+	mid, total3, err := l.ReadRange(2, 5)
+	if err != nil {
+		t.Fatalf("ReadRange mid: %v", err)
+	}
+	if total3 != 8 || len(mid) != 3 || !strings.Contains(mid[0], "q1") {
+		t.Fatalf("ReadRange(2,5): total=%d n=%d first=%q", total3, len(mid), mid)
+	}
+	// Empty / out-of-range still reports total (client stall guard uses start).
+	empty, total4, err := l.ReadRange(100, 120)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total4 != 8 || empty != nil {
+		t.Fatalf("out-of-range: total=%d out=%v", total4, empty)
+	}
 }
 
 func itoa(i int) string { return string(rune('0' + i)) }

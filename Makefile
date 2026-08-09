@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd
+all: jevonsd jevons-head
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -18,6 +18,19 @@ jevonsd: bin/jevonsd
 bin/jevonsd: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
 	go build $(LDFLAGS) -o bin/jevonsd ./cmd/jevonsd
+
+# Desktop menu-bar/tray head (🎯T27.7) — pure-Go model client.
+# macOS chrome: make macos-head (Swift status item).
+.PHONY: jevons-head
+jevons-head: bin/jevons-head
+
+bin/jevons-head: $(GO_SRC)
+	@mkdir -p bin
+	go build $(LDFLAGS) -o bin/jevons-head ./cmd/jevons-head
+
+.PHONY: macos-head
+macos-head:
+	cd macos/JevonsHead && swift build -c release
 
 # ── Run ──────────────────────────────────────────────
 .PHONY: run run-jevonsd
@@ -50,7 +63,11 @@ test-go:
 test-web:
 	node web/scripts/chat_events_test.js
 	node web/scripts/attention_threads_test.js
+	node web/scripts/idea_capture_test.js
+	node web/scripts/aside_history_test.js
 	node web/scripts/fleet_row_test.js
+	node web/scripts/fleet_paint_test.js
+	node web/scripts/model_prefix_test.js
 	node web/scripts/portfolio_group_test.js
 	node web/scripts/virtual_list_test.js
 	node web/scripts/thread_route_test.js
@@ -61,19 +78,26 @@ test-web:
 	node web/scripts/composer_focus_test.js
 	node web/scripts/wispr_context_test.js
 	node web/scripts/send_queue_test.js
+	node web/scripts/composer_persist_test.js
+	node web/scripts/rhs_layout_test.js
 	node web/scripts/decision_log_test.js
 	node web/scripts/chat_reconnect_test.js
+	node web/scripts/history_loading_test.js
 	node web/scripts/tool_summary_test.js
 	node web/scripts/working_progress_test.js
 	node web/scripts/tool_tooltip_test.js
 	node web/scripts/instant_tip_test.js
 	node web/scripts/agent_transcript_test.js
+	node web/scripts/conversation_widget_test.js
 	node web/scripts/frontier_table_test.js
+	node web/scripts/target_context_chrome_test.js
+	node web/scripts/target_hotspot_test.js
 	node web/scripts/mermaid_actions_test.js
 	node web/scripts/markdown_normalize_test.js
 	node web/scripts/streaming_markdown_test.js
 	node web/scripts/cost_display_test.js
 	node web/scripts/link_safety_test.js
+	node web/scripts/image_lightbox_test.js
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright
 # from scripts/browser-loop-test). Live: make test-ui-live.
@@ -87,11 +111,20 @@ test-ui:
 	node scripts/chat-ui-test/infinite-scroll-test.js
 	node scripts/chat-ui-test/replay-scroll-test.js
 	node scripts/chat-ui-test/mermaid-test.js
+	node scripts/chat-ui-test/t280-frontier-graph-test.js
+	node scripts/chat-ui-test/t294-frontier-graph-test.js
 	node scripts/chat-ui-test/agent-note-test.js
 	node scripts/chat-ui-test/t159-seal-test.js
 	node scripts/chat-ui-test/virtual-list-test.js
 	node scripts/chat-ui-test/image-paste-test.js
+	node scripts/chat-ui-test/image-lightbox-test.js
 	node scripts/chat-ui-test/t164-aside-dismiss-test.js
+	node scripts/chat-ui-test/t241-alt-enter-test.js
+	node scripts/chat-ui-test/t289-paint-thrash-test.js
+	node scripts/chat-ui-test/t341-jiggle-thrash-test.js
+	node scripts/chat-ui-test/t351-fractional-pin-test.js
+	node scripts/chat-ui-test/t309.1-conversation-widget-test.js
+	node scripts/chat-ui-test/t340-frontier-table-layout-test.js
 
 .PHONY: test-ui-live
 test-ui-live:
@@ -106,10 +139,15 @@ test-live-suite:
 	go run ./scripts/live-suite -skip-overseer
 
 # Isolated owner-chat user journeys (separate port + state dir + MCP name).
-# Does NOT touch daily-driver stream. Needs Grok CLI; not in default `test`.
+# Does NOT touch daily-driver stream. Needs the selected provider's CLI
+# (Grok by default); not in default `test`.
+#
+# PROVIDER selects the backend for the whole isolate — overseer and every
+# agent the journeys spawn (🎯T282), e.g.:
+#	make test-journey PROVIDER=claude
 .PHONY: test-journey
 test-journey: jevonsd
-	go run ./scripts/journey-suite
+	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER))
 
 test: test-go test-web test-ui
 

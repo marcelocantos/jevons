@@ -125,12 +125,14 @@ function startStaticServer() {
 
     // ── T88 Enter rewinds when editing ──────────────────────────────
     const t88 = await page.evaluate(() => {
-      // Structural: keydown handler source includes rewind on editingEl
-      const src = input.onkeydown ? String(input.onkeydown) : '';
-      // Handlers are addEventListener — inspect script text
+      // Structural: keydown handler source includes rewind on editingEl.
+      // Product form (post Alt+Enter/interrupt split): 
+      //   if (editingEl && !interrupt && !e.metaKey) rewindAndResend();
+      // Older form: editingEl && !(e.metaKey || e.ctrlKey)) rewindAndResend
       const html = document.documentElement.innerHTML;
       return {
-        rewindPrimary: /editingEl && !\(e\.metaKey \|\| e\.ctrlKey\)\) rewindAndResend/.test(html)
+        rewindPrimary: /editingEl\s*&&\s*!interrupt\s*&&\s*!e\.metaKey\)\s*rewindAndResend/.test(html)
+          || /editingEl && !\(e\.metaKey \|\| e\.ctrlKey\)\) rewindAndResend/.test(html)
           || /editingEl && !\(e\.metaKey/.test(html),
         escClears: /setEditingHighlight\(null\)/.test(html) && /Escape/.test(html),
       };

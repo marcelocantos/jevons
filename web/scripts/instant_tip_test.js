@@ -717,6 +717,125 @@ test('T231 index wiring: hitGroup + groupHosts + no bridge', function () {
   assert.ok(html.indexOf('T231') >= 0);
 });
 
+// ─── 🎯T271: multi-part region — vertical leave on table dismisses ───────
+
+test('T271 pure: corridor is horizontal gap only (not tall AABB fill)', function () {
+  const card = { left: 100, top: 50, right: 300, bottom: 400 };
+  const hosts = [
+    { left: 320, top: 200, right: 360, bottom: 220 },
+    { left: 360, top: 200, right: 500, bottom: 220 },
+  ];
+  const corridor = IT.bridgeCorridorBetween(card, hosts);
+  assert.ok(corridor, 'corridor exists');
+  assert.strictEqual(corridor.left, 300);
+  assert.strictEqual(corridor.right, 320);
+  assert.strictEqual(corridor.top, 50);
+  assert.strictEqual(corridor.bottom, 400);
+  // Table-side point (same X as hosts, Y within card but off row) is NOT in corridor.
+  assert.strictEqual(IT.pointInHitRect(400, 100, corridor), false, 'table not corridor');
+});
+
+test('T271 pure: pointInHitParts = card ∪ hosts ∪ corridor (not filled AABB)', function () {
+  const parts = IT.computeHitParts({
+    cardRect: { left: 100, top: 50, right: 300, bottom: 400 },
+    hostRects: [
+      { left: 320, top: 200, right: 360, bottom: 220 },
+      { left: 360, top: 200, right: 500, bottom: 220 },
+    ],
+  });
+  assert.ok(parts.card);
+  assert.ok(parts.hosts && parts.hosts.length === 2);
+  assert.ok(parts.corridor);
+  // Inside card / hosts / corridor → stay
+  assert.strictEqual(IT.pointInHitParts(200, 100, parts), true, 'on card');
+  assert.strictEqual(IT.pointInHitParts(340, 210, parts), true, 'on id');
+  assert.strictEqual(IT.pointInHitParts(400, 210, parts), true, 'on name');
+  assert.strictEqual(IT.pointInHitParts(310, 210, parts), true, 'corridor at host Y');
+  assert.strictEqual(IT.pointInHitParts(310, 100, parts), true, 'corridor tall span');
+  // Tall AABB would keep these open — multi-part must dismiss (vertical leave on table)
+  assert.strictEqual(IT.pointInHitParts(400, 100, parts), false, 'above row on table');
+  assert.strictEqual(IT.pointInHitParts(400, 350, parts), false, 'below row on table');
+  assert.strictEqual(IT.pointInHitParts(340, 30, parts), false, 'above envelope');
+  assert.strictEqual(IT.pointInHitParts(340, 450, parts), false, 'below envelope');
+  assert.strictEqual(IT.shouldDismissOutsideHitParts(400, 100, parts), true);
+  assert.strictEqual(IT.shouldDismissOutsideHitParts(200, 100, parts), false);
+});
+
+test('T271: vertical leave over other table rows dismisses (product path, no inject)', function () {
+  const doc = mockDoc();
+  const id = mockEl('td');
+  const name = mockEl('td');
+  id.ownerDocument = doc;
+  name.ownerDocument = doc;
+  // Hosts: row band y=200–220, x=320–500
+  id._rect = { left: 320, top: 200, right: 360, bottom: 220, width: 40, height: 20 };
+  name._rect = { left: 360, top: 200, right: 500, bottom: 220, width: 140, height: 20 };
+  const timers = mockTimers();
+  const tip = IT.attach(id, '<p>Rich card</p>', {
+    doc: doc, mount: doc.body, html: true, sticky: true, hitGroup: true,
+    groupHosts: [id, name], timers: timers, className: IT.CARD_CLASS,
+    placement: IT.PLACE_LEFT_OF_POINTER, clampSelectors: [],
+  });
+  // Tall card left of hosts (product placement)
+  tip.offsetWidth = 200;
+  tip.offsetHeight = 350;
+  tip.style.left = '100px';
+  tip.style.top = '50px';
+  tip._rect = { left: 100, top: 50, right: 300, bottom: 400, width: 200, height: 350 };
+  tip.getBoundingClientRect = function () { return Object.assign({}, tip._rect); };
+
+  id.dispatch('pointerenter', { clientX: 340, clientY: 210 });
+  assert.strictEqual(IT.isVisible(tip), true, 'open on id');
+
+  // Host → card via corridor stays open
+  assert.strictEqual(tip._instantTipSamplePointer(310, 210), true, 'corridor stay');
+  assert.strictEqual(IT.isVisible(tip), true);
+  assert.strictEqual(tip._instantTipSamplePointer(150, 100), true, 'on card stay');
+  assert.strictEqual(IT.isVisible(tip), true);
+
+  // Vertical leave: same host X, Y within tall card span but off the row → dismiss
+  // (old AABB(card∪hosts) would keep this open — T271 regression fix)
+  assert.strictEqual(tip._instantTipSamplePointer(400, 100), false, 'above row on table');
+  assert.strictEqual(IT.isVisible(tip), false, 'vertical leave dismisses');
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0, '0 grace');
+});
+
+test('T271: below row on table dismisses; id/name stay', function () {
+  const doc = mockDoc();
+  const id = mockEl('td');
+  id.ownerDocument = doc;
+  id._rect = { left: 320, top: 200, right: 500, bottom: 220, width: 180, height: 20 };
+  const timers = mockTimers();
+  const tip = IT.attach(id, 'Card', {
+    doc: doc, mount: doc.body, sticky: true, hitGroup: true, timers: timers,
+    placement: IT.PLACE_LEFT_OF_POINTER, clampSelectors: [],
+  });
+  tip.offsetWidth = 200;
+  tip.offsetHeight = 350;
+  tip.style.left = '100px';
+  tip.style.top = '50px';
+  tip._rect = { left: 100, top: 50, right: 300, bottom: 400, width: 200, height: 350 };
+  tip.getBoundingClientRect = function () { return Object.assign({}, tip._rect); };
+
+  id.dispatch('pointerenter', { clientX: 400, clientY: 210 });
+  assert.strictEqual(IT.isVisible(tip), true);
+  assert.strictEqual(tip._instantTipSamplePointer(400, 210), true, 'on host stay');
+  assert.strictEqual(tip._instantTipSamplePointer(400, 350), false, 'below row on table');
+  assert.strictEqual(IT.isVisible(tip), false);
+  assert.strictEqual(timers.pending.filter(Boolean).length, 0);
+});
+
+test('T271 source: multi-part product path present', function () {
+  const src = fs.readFileSync(path.join(__dirname, 'instant_tip.js'), 'utf8');
+  assert.ok(src.indexOf('pointInHitParts') >= 0);
+  assert.ok(src.indexOf('computeHitParts') >= 0);
+  assert.ok(src.indexOf('bridgeCorridorBetween') >= 0);
+  assert.ok(src.indexOf('T271') >= 0);
+  assert.ok(/HIDE_GRACE_MS\s*=\s*0/.test(src));
+  assert.ok(src.indexOf('instant-tip-bridge') < 0);
+  assert.ok(src.indexOf('overBridge') < 0);
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

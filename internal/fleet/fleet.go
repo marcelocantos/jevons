@@ -11,12 +11,15 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -26,6 +29,22 @@ const (
 	defaultReplyTimeout = 10 * time.Minute
 )
 
+// There is deliberately no post-ready settle on the launch path.
+//
+// jevons used to sleep two seconds after claudia reported a Claude Session
+// ready (🎯T282), because Claude Code's startup splash draws a prompt box
+// that satisfied claudia's ready pattern while the TUI was still mounting:
+// a turn sent into that window had its submit keystroke dropped, and the
+// direct blocked until its caller timed out (intermittent journey J10
+// hangs, the composer still holding the prompt minutes later).
+//
+// That belonged in claudia, which owns the pane, and now lives there:
+// tmuxagent.MatchReady rejects the splash by its ghost placeholder, so
+// ready means the composer accepts and submits input (🎯T284). Waiting on
+// top of a trustworthy signal only taxes every agent start. If a launch
+// race resurfaces, fix the signal in claudia — do not reintroduce a sleep
+// here.
+
 // Claudia adapts a claudia.Registry to the butler.Fleet interface and
 // to butler.Participants (agent-only deliver).
 type Claudia struct {
@@ -33,6 +52,19 @@ type Claudia struct {
 	defaultProvider claudia.Provider
 	readyTimeout    time.Duration
 	replyTimeout    time.Duration
+
+	// inFlight counts turns currently awaiting a reply, per agent id.
+	// Idle-derived reaping consults it (Busy) so a worker mid-turn is
+	// never stopped out from under the caller — see Busy (🎯T282).
+	mu       sync.Mutex
+	inFlight map[string]int
+
+	// Provider migration (🎯T285): session roots resolve a predecessor's
+	// transcript, and handovers persists the pointer across the rotation
+	// that destroys it. Both optional — without them Launch behaves as
+	// before and migration is unavailable rather than silently cold.
+	roots     discovery.Roots
+	handovers *handover.Store
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from
@@ -69,7 +101,8 @@ func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia
 // resume when a stored provider exists. Materialized stays false until a real
 // (or fake-backend) Launch succeeds inside claudia.Registry.
 func (f *Claudia) ensureRegistered(t *thread.Thread) error {
-	purpose := strings.TrimSpace(t.Purpose)
+	threadPurpose := strings.TrimSpace(t.Purpose)
+	purpose := threadPurpose
 	if purpose == "" {
 		purpose = claudia.PurposeAside // thread path → aside by default
 	}
@@ -83,10 +116,11 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 			sid = uuid.New().String()
 		}
 		prov := providerForLaunch("", threadProv, f.defaultProvider)
+		// 🎯T324: session-truth model — pin or provider default for this SessionID.
 		if err := f.reg.Register(claudia.AgentDef{
 			Name:      t.ID,
 			WorkDir:   t.WorkDir,
-			Model:     t.Model,
+			Model:     cli.BindSessionModel(t.Model, prov),
 			Provider:  prov,
 			SessionID: sid,
 			AutoStart: true,
@@ -111,14 +145,37 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 		def.Provider = providerForLaunch("", threadProv, f.defaultProvider)
 		dirty = true
 	}
+	// 🎯T324: bind provider default when the row has no model pin yet
+	// (cold Grok agents must not stay mark-only forever). Explicit pin
+	// from the thread wins when supplied.
+	if pin := strings.TrimSpace(t.Model); pin != "" && def.Model != pin {
+		def.Model = pin
+		dirty = true
+	} else if strings.TrimSpace(def.Model) == "" {
+		if bound := cli.BindSessionModel("", def.Provider); bound != "" {
+			def.Model = bound
+			dirty = true
+		}
+	}
 	// Backfill empty parent when the spawn path now knows the creator.
 	if def.Parent == "" && t.Parent != "" {
 		def.Parent = t.Parent
 		dirty = true
 	}
-	// Backfill purpose for legacy dual-write rows (🎯T114).
-	if def.Purpose == "" && purpose != "" {
-		def.Purpose = purpose
+	// Backfill purpose for legacy dual-write rows (🎯T114) — but only from a
+	// thread that actually carries one. The aside default above belongs to
+	// the MINT branch, where "no purpose" really does mean a new side chat;
+	// applied to an EXISTING row it is a guess written to durable state.
+	//
+	// jevons_agent_migrate relaunches a rotated agent through a bare
+	// thread.Thread{ID: name}, so that guess landed on every row minted
+	// before Purpose existed — rewriting a product owner to aside (🎯T301).
+	// Observed 2026-08-08: bullseye-po was the only PO in the grok→claude
+	// batch whose row had no explicit purpose, and the only one that turned
+	// into a 💡 in the fleet tree. Left empty, /api/agents reads it as work,
+	// which is what it was.
+	if def.Purpose == "" && threadPurpose != "" {
+		def.Purpose = threadPurpose
 		dirty = true
 	}
 	if dirty {
@@ -169,17 +226,47 @@ func (f *Claudia) Send(id, text string) (string, error) {
 	if ag == nil || !ag.Alive() {
 		return "", fmt.Errorf("no live process for thread %q", id)
 	}
-	if err := ag.Send(text); err != nil {
-		return "", fmt.Errorf("send to %q: %w", id, err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), f.replyTimeout)
-	defer cancel()
-	reply, err := ag.WaitForResponse(ctx)
+	defer f.enterTurn(id)()
+	reply, err := f.awaitReply(ag, f.providerOf(id), text)
 	if err != nil {
-		return "", fmt.Errorf("await reply from %q: %w", id, err)
+		return "", fmt.Errorf("direct turn to %q: %w", id, err)
 	}
 	return reply, nil
+}
+
+// enterTurn marks a turn in flight for id and returns the function that
+// clears it. Turn state is tracked here rather than derived from the
+// transcript because the transcript is a lagging, provider-specific
+// signal: a Claude worker writes no JSONL until its first turn produces
+// output, so a freshly directed worker looks idle to DeriveStatus and
+// the process-as-cache sweep would stop it mid-turn (🎯T282).
+func (f *Claudia) enterTurn(id string) func() {
+	f.mu.Lock()
+	if f.inFlight == nil {
+		f.inFlight = map[string]int{}
+	}
+	f.inFlight[id]++
+	f.mu.Unlock()
+	return func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if n := f.inFlight[id] - 1; n > 0 {
+			f.inFlight[id] = n
+		} else {
+			delete(f.inFlight, id)
+		}
+	}
+}
+
+// Busy reports whether a directed turn is currently awaiting a reply for
+// id. The idle sweep uses it to leave working agents alone.
+func (f *Claudia) Busy(id string) bool {
+	if f == nil {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inFlight[id] > 0
 }
 
 // Alive reports whether a live process currently exists for the thread.
@@ -222,6 +309,9 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 	if f.reg.Def(id) == nil {
 		return "", fmt.Errorf("no agent %q", id)
 	}
+	// Count the turn from before the rehydrate: a launch + first turn is
+	// exactly the window in which the idle sweep must not intervene.
+	defer f.enterTurn(id)()
 	ag := f.reg.Get(id)
 	if ag == nil || !ag.Alive() {
 		launched, err := f.reg.Launch(id)
@@ -235,14 +325,9 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 		}
 		ag = launched
 	}
-	if err := ag.Send(text); err != nil {
-		return "", fmt.Errorf("send to agent %q: %w", id, err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), f.replyTimeout)
-	defer cancel()
-	reply, err := ag.WaitForResponse(ctx)
+	reply, err := f.awaitReply(ag, f.providerOf(id), text)
 	if err != nil {
-		return "", fmt.Errorf("await reply from agent %q: %w", id, err)
+		return "", fmt.Errorf("deliver turn to agent %q: %w", id, err)
 	}
 	return reply, nil
 }

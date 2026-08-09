@@ -45,6 +45,23 @@ test('target: prefix never auto-routes', function () {
   assert.strictEqual(r.reason, 'explicit-prefix');
 });
 
+// 🎯T247: already-routed wire markers must not re-suggest Continue-in / create.
+test('T247 target-aside and attention wire markers never auto-route', function () {
+  const wireTarget = '[target-aside: att-xyz | Chat paste images work]\nChat paste images work\n\n(Ceremony: …)';
+  const r1 = TR.route(wireTarget, [
+    { id: 'att-xyz', title: 'Chat paste images work', body: 'Chat paste images work' },
+  ]);
+  assert.strictEqual(r1.reason, 'explicit-prefix');
+  assert.strictEqual(r1.threadId, null);
+
+  const wireAtt = '[attention:att-xyz|billing nit]\nbilling nit body';
+  const r2 = TR.route(wireAtt, [
+    { id: 'att-xyz', title: 'billing nit', body: 'billing nit body' },
+  ]);
+  assert.strictEqual(r2.reason, 'explicit-prefix');
+  assert.strictEqual(r2.threadId, null);
+});
+
 // 🎯T134: never silent-match done/archive ghosts (even if passed raw).
 test('T134 route ignores done status ghosts', function () {
   const mixed = [

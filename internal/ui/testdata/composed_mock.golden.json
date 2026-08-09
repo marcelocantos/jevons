@@ -1,0 +1,57 @@
+{
+  "type": "vstack",
+  "id": "providers.root",
+  "props": {
+    "alignment": "leading",
+    "spacing": 12
+  },
+  "children": [
+    {
+      "type": "vstack",
+      "id": "provider/mock/mock.status",
+      "props": {
+        "alignment": "leading",
+        "spacing": 6
+      },
+      "children": [
+        {
+          "type": "text",
+          "id": "provider/mock/mock.status/title",
+          "props": {
+            "color": "secondary",
+            "font": "caption",
+            "text": "mock",
+            "weight": "semibold"
+          }
+        },
+        {
+          "type": "vstack",
+          "id": "mock/mock.root",
+          "props": {
+            "spacing": 8
+          },
+          "children": [
+            {
+              "type": "text",
+              "id": "mock/mock.title",
+              "props": {
+                "color": "primary",
+                "font": "headline",
+                "text": "mock provider"
+              }
+            },
+            {
+              "type": "button",
+              "id": "mock/mock.refresh",
+              "props": {
+                "action": "provider/mock/mock.status/refresh",
+                "style": "bordered",
+                "text": "Refresh"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

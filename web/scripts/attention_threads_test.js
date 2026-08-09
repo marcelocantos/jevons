@@ -46,6 +46,43 @@ test('target: opens file-target aside, wire, main focus (T93/T95)', function () 
   assert.strictEqual(r.state.threads[0].purpose, 'file-target');
 });
 
+// 🎯T247: explicit open prefixes spawn immediately — no affordance-gated intermediate.
+test('T247 target:/aside:/capture: open path has threadId + no create-gate state', function () {
+  const RS = require('./route_suggest.js');
+  const TR = require('./thread_route.js');
+
+  const target = AT.handleComposer(AT.emptyState(), 'target: Explicit open no chip');
+  assert.ok(target.threadId && target.threadId.indexOf('att-') === 0, 'target: mints aside');
+  assert.strictEqual(target.kind, 'send');
+  assert.strictEqual(target.routed, true);
+  assert.strictEqual(target.purpose, 'file-target');
+  assert.strictEqual(target.state.threads[0].status, 'open');
+  // No intermediate create state in the pure model — open is the only state.
+  assert.ok(RS.shouldSkipRouteSuggest(target), 'no route/create affordance after target:');
+  // Routing the produced wire must not invent a match chip either.
+  const candidates = AT.routeCandidates(target.state);
+  const hit = TR.route(target.text, candidates);
+  assert.strictEqual(hit.reason, 'explicit-prefix');
+  assert.strictEqual(hit.threadId, null);
+  const plan = RS.planAutoRouteAction(hit, {
+    threads: candidates,
+    body: target.text,
+    composerResult: target,
+  });
+  assert.strictEqual(plan.steal, false);
+  assert.strictEqual(plan.suggestion, null);
+
+  const aside = AT.handleComposer(AT.emptyState(), 'aside: ship checklist now');
+  assert.ok(aside.threadId);
+  assert.strictEqual(aside.routed, true);
+  assert.ok(RS.shouldSkipRouteSuggest(aside));
+
+  const cap = AT.handleComposer(AT.emptyState(), 'capture: later idea');
+  assert.ok(cap.threadId);
+  assert.strictEqual(cap.kind, 'local');
+  assert.ok(RS.shouldSkipRouteSuggest(cap));
+});
+
 test('detectTargetFiled + closeTargetAside dismisses filing aside (done, not parked)', function () {
   const open = AT.handleComposer(AT.emptyState(), 'target: Foo bar');
   const id = open.threadId;
@@ -331,6 +368,148 @@ test('T136 chromeStack always empty even with open and parked asides', function 
   assert.ok(AT.routeCandidates(s).length >= 1);
 });
 
+// ── 🎯T250: asides not on main transcript; sidebar path shows them ────
+
+test('T250 parseAsideWireUserText attention + target-aside', function () {
+  const att = AT.parseAsideWireUserText('[attention:att-billing|billing nit]\nbilling body');
+  assert.ok(att);
+  assert.strictEqual(att.kind, 'attention');
+  assert.strictEqual(att.id, 'att-billing');
+  assert.strictEqual(att.title, 'billing nit');
+  assert.strictEqual(att.displayText, 'billing body');
+  assert.ok(AT.isAsideWireUserText(att ? '[attention:att-billing|t]\nx' : ''));
+  assert.ok(!AT.shouldPaintMainUserText('[attention:att-billing|t]\nx'));
+  assert.ok(AT.shouldPaintMainUserText('plain main message'));
+  assert.ok(!AT.isAsideWireUserText('plain main message'));
+
+  const wire = AT.formatTargetWire('att-file', 'Chat paste images', 'Chat paste images work');
+  const tgt = AT.parseAsideWireUserText(wire);
+  assert.ok(tgt);
+  assert.strictEqual(tgt.kind, 'target-aside');
+  assert.strictEqual(tgt.id, 'att-file');
+  assert.ok(tgt.displayText.indexOf('Chat paste images work') === 0);
+  assert.ok(tgt.displayText.indexOf('Ceremony') < 0, 'ceremony stripped from display');
+  assert.ok(!AT.shouldPaintMainUserText(wire));
+});
+
+test('T250 extractAsideWireTurnsFromFrames + merge for sidebar path', function () {
+  const frames = [
+    { type: 'user', message: { content: 'main hello' } },
+    {
+      type: 'user',
+      message: { content: '[attention:att-side|billing]\nbilling nit body' },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'main reply' }] },
+    },
+    {
+      type: 'user',
+      message: {
+        content: '[target-aside: att-file | Target title]\nTarget body\n\n(Ceremony: short-lived…)',
+      },
+    },
+  ];
+  const cache = AT.extractAsideWireTurnsFromFrames(frames);
+  assert.ok(cache['att-side'], 'attention id in cache');
+  assert.strictEqual(cache['att-side'].length, 1);
+  assert.strictEqual(cache['att-side'][0].role, 'user');
+  assert.strictEqual(cache['att-side'][0].text, 'billing nit body');
+  assert.ok(cache['att-file'], 'target-aside id in cache');
+  assert.strictEqual(cache['att-file'][0].text, 'Target body');
+
+  // Sidebar path: empty process transcript still shows wire turns.
+  const emptyProc = AT.mergeInspectLinesWithAsideWire([], cache['att-side']);
+  assert.strictEqual(emptyProc.length, 1);
+  assert.strictEqual(emptyProc[0].text, 'billing nit body');
+
+  // Process turns merge without losing wire.
+  const merged = AT.mergeInspectLinesWithAsideWire(
+    [{ role: 'assistant', text: 'aside agent reply' }],
+    cache['att-side'],
+  );
+  assert.strictEqual(merged.length, 2);
+  assert.strictEqual(merged[0].role, 'user');
+  assert.strictEqual(merged[1].role, 'assistant');
+
+  // Dedupe consecutive record
+  const c2 = Object.create(null);
+  AT.recordAsideWireUserTurn(c2, '[attention:att-side|billing]\nbilling nit body');
+  AT.recordAsideWireUserTurn(c2, '[attention:att-side|billing]\nbilling nit body');
+  assert.strictEqual(c2['att-side'].length, 1, 'dedupe identical consecutive');
+});
+
+test('T250 index.html: main paint filters aside wires; sidebar merge wired', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('shouldPaintMainUserText') >= 0, 'main paint gate');
+  assert.ok(html.indexOf('noteAsideWireFromMain') >= 0, 'records aside wires');
+  assert.ok(html.indexOf('asideWireTurnsCache') >= 0, 'sidebar cache');
+  assert.ok(html.indexOf('mergeModelWithAsideWire') >= 0 ||
+    html.indexOf('mergeInspectLinesWithAsideWire') >= 0,
+    'sidebar merge path');
+  assert.ok(html.indexOf('ingestAsideWiresFromHistoryLines') >= 0,
+    'history hydrate harvests aside wires');
+  // User handle must short-circuit paint for aside wires.
+  assert.ok(/shouldPaintMainUserText/.test(html) &&
+    /noteAsideWireFromMain/.test(html),
+    'handle user path uses T250 helpers');
+});
+
+// ── 🎯T264: flash-class never-paint (self-clear after paint still fails) ─
+
+test('T264 looksLikeAsideWireMarker + never paint incident / image-prefix flash', function () {
+  // Owner incident fixture (att-msftck4l freeform aside).
+  const incident =
+    '[attention:att-msftck4l-9sguxj|how does bullseye compare to beads?]\n' +
+    'how does bullseye compare to beads?';
+  assert.ok(AT.looksLikeAsideWireMarker(incident), 'incident marker class');
+  assert.ok(AT.isAsideWireUserText(incident));
+  assert.ok(!AT.shouldPaintMainUserText(incident), 'never paint main');
+
+  // Header-only flash (truncated bubble title class).
+  const headerOnly = '[attention:att-msftck4l-9sguxj|how does…]';
+  assert.ok(!AT.shouldPaintMainUserText(headerOnly));
+
+  // Image prepend before wire must not open a paint path (flash class).
+  const withImage =
+    '[image: d592b0380b1a9e9b]\n' +
+    '[attention:att-x|billing nit]\nbilling body';
+  assert.ok(AT.looksLikeAsideWireMarker(withImage), 'image-prefix still wire');
+  assert.ok(AT.isAsideWireUserText(withImage));
+  assert.ok(!AT.shouldPaintMainUserText(withImage), 'image+attention never paints');
+
+  // target-aside full wire
+  const tgt = AT.formatTargetWire('att-file', 'title', 'body');
+  assert.ok(!AT.shouldPaintMainUserText(tgt));
+
+  // Plain owner text still paints.
+  assert.ok(AT.shouldPaintMainUserText('how does bullseye compare to beads?'));
+  assert.ok(AT.shouldPaintMainUserText('[image: abc]\nplain body'));
+});
+
+test('T264 index.html: isMainAsideWireUserText + addMsg flash gate', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('function isMainAsideWireUserText') >= 0,
+    'local never-paint helper');
+  assert.ok(html.indexOf('isMainAsideWireUserText') >= 0);
+  // Live handle uses the flash-safe gate (not only soft AttentionThreads &&).
+  assert.ok(/isMainAsideWireUserText\(content\)/.test(html),
+    'handle user path calls isMainAsideWireUserText');
+  // addMsg last-line defense (optimistic/live flash).
+  assert.ok(/function addMsg\([\s\S]*?isMainAsideWireUserText/.test(html),
+    'addMsg gates user role before insert');
+  assert.ok(/role === ['"]user['"][\s\S]{0,200}?isMainAsideWireUserText/.test(html),
+    'addMsg user branch never-paints aside wire');
+  // renderFrames history path
+  assert.ok(/isMainAsideWireUserText\(c\.text\)/.test(html) ||
+    /isMainAsideWireUserText\(c\)/.test(html),
+    'history renderFrames uses never-paint gate');
+});
+
 test('T136 index.html: attention-bar not used for aside wall; fleet register path', function () {
   const fs = require('fs');
   const path = require('path');
@@ -478,6 +657,74 @@ test('T134 capture dedupes same fingerprint open thread', function () {
   assert.strictEqual(AT.stack(s).filter(function (t) {
     return (t.body || '').toLowerCase().indexOf('restic') !== -1;
   }).length, 1);
+});
+
+// ── 🎯T308: the aside-wire path must not strip turn timestamps ──
+
+test('T308 aside wire cache + merge carry `when` to the sidebar renderer', function () {
+  // Live/optimistic record: caller supplies arrival time.
+  const cache = Object.create(null);
+  AT.recordAsideWireUserTurn(cache, '[attention:att-side|billing]\nbody', 1754620000000);
+  assert.strictEqual(cache['att-side'][0].when, 1754620000000, 'recorded turn keeps its time');
+  // No time supplied (or junk) → no fabricated timestamp.
+  const bare = Object.create(null);
+  AT.recordAsideWireUserTurn(bare, '[attention:att-x|t]\nbody');
+  assert.ok(!('when' in bare['att-x'][0]), 'no when when the caller knows none');
+  AT.recordAsideWireUserTurn(bare, '[attention:att-y|t]\nbody', 'garbage');
+  assert.ok(!('when' in bare['att-y'][0]), 'junk time is not recorded');
+
+  // History replay: each frame's own timestamp rides through, not "now".
+  const replayed = AT.extractAsideWireTurnsFromFrames([
+    { type: 'user', ts: 1754620001, message: { content: '[attention:att-a|t]\nfrom seconds' } },
+    {
+      type: 'user',
+      created_at: '2026-08-08T01:02:03Z',
+      message: { content: '[attention:att-b|t]\nfrom ISO' },
+    },
+    { type: 'user', message: { content: '[attention:att-c|t]\nno time' } },
+  ]);
+  assert.strictEqual(replayed['att-a'][0].when, 1754620001000, 'seconds scale to ms');
+  assert.strictEqual(replayed['att-b'][0].when, Date.parse('2026-08-08T01:02:03Z'));
+  assert.ok(!('when' in replayed['att-c'][0]), 'frame with no time yields no when');
+
+  // Merge is where the sidebar used to lose it: {role, text} rebuild dropped when.
+  const merged = AT.mergeInspectLinesWithAsideWire(
+    [{ role: 'assistant', text: 'reply', when: 1754620009000 }],
+    [{ role: 'user', text: 'body', when: 1754620000000 }],
+  );
+  assert.strictEqual(merged.length, 2);
+  assert.strictEqual(merged[0].when, 1754620000000, 'wire user turn keeps its time');
+  assert.strictEqual(merged[1].when, 1754620009000, 'process turn keeps its time');
+
+  // Dedupe hit: same turn seen twice → earliest known time wins.
+  const dedup = AT.mergeInspectLinesWithAsideWire(
+    [{ role: 'user', text: 'body', when: 1754620000000 }],
+    [{ role: 'user', text: 'body', when: 1754620500000 }],
+  );
+  assert.strictEqual(dedup.length, 1, 'still one turn');
+  assert.strictEqual(dedup[0].when, 1754620000000, 'earliest reading wins on dedupe');
+  // A timeless copy must not erase a known time.
+  const rescued = AT.mergeInspectLinesWithAsideWire(
+    [{ role: 'user', text: 'body', when: 1754620000000 }],
+    [{ role: 'user', text: 'body' }],
+  );
+  assert.strictEqual(rescued[0].when, 1754620000000, 'timeless duplicate does not clear when');
+});
+
+test('T308 index.html: aside wire paths stamp/preserve time, never strip it', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const note = html.match(/\nfunction noteAsideWireFromMain\([\s\S]*?\n\}\n/);
+  assert.ok(note, 'noteAsideWireFromMain present');
+  assert.ok(/recordAsideWireUserTurn\(asideWireTurnsCache, content, at\)/.test(note[0]),
+    'live aside wire records an arrival timestamp (T308)');
+  const ingest = html.match(/\nfunction ingestAsideWiresFromHistoryLines\([\s\S]*?\n\}\n/);
+  assert.ok(ingest, 'ingestAsideWiresFromHistoryLines present');
+  assert.ok(ingest[0].indexOf('turn.when = t.when') >= 0,
+    'history replay keeps each frame time instead of dropping it');
+  assert.ok(!/list\.push\(\{ role: 'user', text: text \}\)/.test(ingest[0]),
+    'no bare {role, text} push that strips when');
 });
 
 if (failed) {

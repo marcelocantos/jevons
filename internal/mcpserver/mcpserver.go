@@ -30,7 +30,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/workers"
+	"github.com/marcelocantos/jevons/internal/writconf"
 )
 
 // ScreenshotFunc requests a screenshot from connected clients and returns the file path.
@@ -64,8 +66,16 @@ type Server struct {
 
 	toolsListCount int64
 
-	mu           sync.Mutex
-	notifyJevon  NotifyFunc
+	mu          sync.Mutex
+	notifyJevon NotifyFunc
+	// overseerDeliver is the overseer arm of the single deliver-by-name path
+	// (🎯T309.3). Wired from main to server.DeliverToOverseerAs so an
+	// overseer-addressed send reuses the owner chat journal and notify queue.
+	// Nil falls back to notifyJevon for agent-origin text (see deliverToOverseer).
+	overseerDeliver OverseerDeliverFunc
+	// resolveSender overrides fleet-agent process resolution on that same
+	// path. Nil — the product path — resolves via the registry. Test seam.
+	resolveSender senderResolver
 	// agentEventHook receives every fleet worker event (progress, assistant, …)
 	// so the HTTP server can maintain RHS progress chrome (🎯T118).
 	agentEventHook func(name string, ev claudia.Event)
@@ -78,6 +88,12 @@ type Server struct {
 	// fleetBriefed tracks agents that already received FleetStandingBrief
 	// on first jevons_agent_send (🎯T104 under fan-out).
 	fleetBriefed map[string]bool
+
+	// agentTurnBegan tracks agents that have begun ≥1 confirmed turn in
+	// this daemon process (start prompt or successful send — 🎯T305).
+	// Distinct from registry Materialized (durable). Used so agent_list
+	// can report never_briefed vs running for live zero-turn seats.
+	agentTurnBegan map[string]bool
 
 	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
 	selfTestEnv SelfTestEnvFunc
@@ -101,28 +117,69 @@ type Server struct {
 	// (🎯T128.1 / T128.4). Same file as GET /api/logs when SetEventJournal is wired.
 	eventJournal *eventlog.Journal
 
+	// migrator moves an existing agent between backends, carrying a
+	// handover to the successor (🎯T285). Nil = jevons_agent_migrate
+	// unregistered rather than half-working.
+	migrator Migrator
+
 	// defaultProvider is the daemon-wide claudia backend for new agents
 	// when agent_start / thread_spawn / jwork omit provider (🎯T148).
 	// Empty means cli.ResolveProvider falls through to env / grok at use time.
 	defaultProvider string
 
-	// rsiLoop is the ambient recursive self-improvement schedule/stream (🎯T92).
-	// Nil until SetRSILoop; jevons_rsi_cycle requires it.
+	// llmPortfolio is the multi-provider task-type routing seed (🎯T325.2).
+	// Nil → cost.DefaultPortfolio(). Soft-cap overlays may come from budget.
+	llmPortfolio *cost.Portfolio
+	// providerSoftCaps overlays portfolio soft caps (from budget.json).
+	providerSoftCaps map[string]int
+
+	// rsiLoop is the residual phrase/eventlog mint path (🎯T92; opt-in product residual).
+	// Nil until SetRSILoop; jevons_rsi_cycle requires it. Product path is rsiCoach (🎯T243).
 	rsiLoop *rsi.Loop
+
+	// rsiCoach posts judgments to the overseer; never files bullseye (🎯T243).
+	// Nil until SetRSICoach.
+	rsiCoach *rsi.Coach
+
+	// staffOps holds cooldown state for one bounded ops cycle (🎯T325.4).
+	// Nil until registerStaffOpsTools; pure policy in internal/staffops.
+	staffOps *staffOpsState
+	// sentinel holds cooldown/budget/grace state for durable 🎯T219 loop.
+	// Nil until ensureSentinelRuntime / registerSentinelTools.
+	sentinel *sentinelRuntime
+
+	// secAuditor is the standing security interest (🎯T335). Nil until wired.
+	secAuditor *secauditor.Interest
+	// writExec confines high-risk fleet exec under writ (🎯T335).
+	writExec      writconf.Executor
+	writBin       string
+	writAvailable bool
 
 	// idleActivity tracks ACP phase for enter-idle detection (🎯T207).
 	// Nil until StartIdleNudgeLoop; broadcastAgentEvent Observes transitions.
 	idleActivity *IdleActivityTracker
-	// idleNudgeLedger legacy path (auto-nudge ladder retired); may be nil.
+	// idleNudgeLedger carries durable backoff/max for the 🎯T315 re-pressure
+	// actuator and the post-restart resume sweep; may be nil (no StateDir).
 	idleNudgeLedger *IdleNudgeLedger
+	// idlePressureHooks are the optional 🎯T316/T317 collaborator seams for
+	// the idle re-pressure actuator. Zero value = conservative defaults.
+	idlePressureHooks IdlePressureHooks
+	// impatience is the 🎯T317 ladder (T316 set + sinks). Nil = T315-only
+	// SweepIdleNudges path. Installed from main via SetImpatienceEngine.
+	impatience *ImpatienceEngine
 	// idleEventLast debounces worker-idle events per agent name.
 	idleEventLast map[string]time.Time
 	// idleNudgeSweep is set by StartIdleNudgeLoop for cockpit fleet health
 	// (dead-handle sweep only — no auto-continue ladder).
 	idleNudgeSweep func(postRestart bool)
+
+	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
+	// Empty until SetIdeaStateDir; idea tools stay unregistered.
+	ideaStateDir string
 }
 
-// TriggerIdleNudgeSweep runs one idle-nudge sweep (postRestart=false).
+// TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).
+// 🎯T236: also re-pressures open-mission workers after stuck-busy / terminal failure.
 // No-op until StartIdleNudgeLoop has registered the actuator.
 func (s *Server) TriggerIdleNudgeSweep() {
 	if s == nil {
@@ -134,6 +191,15 @@ func (s *Server) TriggerIdleNudgeSweep() {
 	if f != nil {
 		f(false)
 	}
+}
+
+// TriggerFleetRecoverSweep runs one open-mission stuck/failure recover pass (🎯T236).
+// Safe for cockpit hooks; no-op when registry unset.
+func (s *Server) TriggerFleetRecoverSweep() {
+	if s == nil || s.registry == nil {
+		return
+	}
+	s.runFleetRecoverSweep(false)
 }
 
 // SweepFleetHealth runs SweepDeadAgents for the given overseer name
@@ -155,6 +221,53 @@ func (s *Server) SweepFleetHealth(overseerName string) {
 // (cli.ResolveProvider("", cfg.Provider)); empty re-resolves from env at use.
 func (s *Server) SetDefaultProvider(provider string) {
 	s.defaultProvider = strings.TrimSpace(provider)
+}
+
+// SetLLMPortfolio installs the multi-provider routing seed (🎯T325.2).
+// Nil clears to DefaultPortfolio at route time.
+func (s *Server) SetLLMPortfolio(p *cost.Portfolio) {
+	if s == nil {
+		return
+	}
+	s.llmPortfolio = p
+}
+
+// SetProviderSoftCaps overlays session soft caps from budget.json
+// provider_soft_caps (🎯T325.2). Nil/empty leaves compiled defaults.
+func (s *Server) SetProviderSoftCaps(caps map[string]int) {
+	if s == nil {
+		return
+	}
+	s.providerSoftCaps = caps
+}
+
+// effectivePortfolio returns the routing seed with soft-cap overlays applied.
+func (s *Server) effectivePortfolio() *cost.Portfolio {
+	base := cost.DefaultPortfolio()
+	if s != nil && s.llmPortfolio != nil {
+		base = s.llmPortfolio
+	}
+	if s != nil && len(s.providerSoftCaps) > 0 {
+		return base.MergeSoftCaps(s.providerSoftCaps)
+	}
+	return base
+}
+
+// harnessLoadCounts tallies registered agents by claudia provider id
+// (session soft-cap input for portfolio routing — never USD).
+func (s *Server) harnessLoadCounts() cost.LoadCounts {
+	load := cost.LoadCounts{}
+	if s == nil || s.registry == nil {
+		return load
+	}
+	for _, d := range s.registry.List() {
+		p := strings.ToLower(strings.TrimSpace(string(d.Provider)))
+		if p == "" {
+			p = string(cli.DefaultProvider)
+		}
+		load[p]++
+	}
+	return load
 }
 
 // resolvedDefaultProvider returns the effective default for new agents.
@@ -190,7 +303,8 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	if s.transcript != nil {
 		mcpSrv.AddTool(
 			mcp.NewTool("jevons_transcript_read",
-				mcp.WithDescription("Read the Jevon conversation transcript. Returns an array of turns with role and text."),
+				mcp.WithDescription("Read a conversation transcript. With agent=<name>, returns THAT agent's transcript only (registry session_id) — never substitutes the caller's/overseer transcript (🎯T304). Omit agent to read the active overseer/Jevon session. Returns turns with role and text."),
+				mcp.WithString("agent", mcp.Description("Fleet agent name whose transcript to read (e.g. jv-t300-loading-earlier). Required for supervision of workers; omit for the active overseer session.")),
 			),
 			s.handleTranscriptRead,
 		)
@@ -205,6 +319,10 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 
 	s.registerJwork()
 	s.registerMCPReconnect()
+	s.registerAgentMigrate()
+	s.registerStaffOpsTools()
+	s.registerSentinelTools()
+	s.registerWritSecurityTools() // 🎯T335 security auditor + writ confinement
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s
@@ -297,20 +415,68 @@ func (s *Server) handleScreenshot(_ context.Context, _ mcp.CallToolRequest) (*mc
 	return mcp.NewToolResultText(path), nil
 }
 
-func (s *Server) handleTranscriptRead(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	sessionID := s.transcript.GetID()
-	if sessionID == "" {
-		return mcp.NewToolResultText("No active Jevon session."), nil
+// handleTranscriptRead returns turns for a named agent or the active overseer
+// session. 🎯T304: agent=<name> must resolve that agent's registry session only;
+// never fall back to GetID (caller/overseer) when a name is given — silent
+// substitution makes supervisors treat another seat's words as the worker's.
+func (s *Server) handleTranscriptRead(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.transcript == nil || s.transcript.Read == nil {
+		return mcp.NewToolResultError("transcript reader unavailable"), nil
 	}
+
+	args := req.GetArguments()
+	agentName := strings.TrimSpace(str(args["agent"]))
+
+	var sessionID string
+	switch {
+	case agentName != "":
+		if s.registry == nil {
+			return mcp.NewToolResultError("agent registry unavailable"), nil
+		}
+		def := s.registry.Def(agentName)
+		if def == nil {
+			// Explicit not-found — do not substitute another agent's transcript.
+			return mcp.NewToolResultError(fmt.Sprintf("agent %q not found", agentName)), nil
+		}
+		sessionID = strings.TrimSpace(def.SessionID)
+		if sessionID == "" {
+			// Explicit empty — no silent substitution of caller/overseer.
+			return mcp.NewToolResultText(fmt.Sprintf(
+				"agent %q has no session yet (empty transcript).", agentName)), nil
+		}
+	default:
+		if s.transcript.GetID == nil {
+			return mcp.NewToolResultText("No active Jevon session."), nil
+		}
+		sessionID = strings.TrimSpace(s.transcript.GetID())
+		if sessionID == "" {
+			return mcp.NewToolResultText("No active Jevon session."), nil
+		}
+	}
+
 	turns, err := s.transcript.Read(sessionID)
 	if err != nil {
+		if agentName != "" {
+			// Named agent: surface not-found/empty explicitly; never retry GetID.
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"agent %q transcript not found (session %s): %v",
+				agentName, sessionDisplay(sessionID), err)), nil
+		}
 		return mcp.NewToolResultError(fmt.Sprintf("read failed: %v", err)), nil
 	}
 	if len(turns) == 0 {
+		if agentName != "" {
+			return mcp.NewToolResultText(fmt.Sprintf(
+				"agent %q transcript is empty.", agentName)), nil
+		}
 		return mcp.NewToolResultText("Transcript is empty."), nil
 	}
 
 	var b strings.Builder
+	if agentName != "" {
+		fmt.Fprintf(&b, "agent=%s session=%s turns=%d\n",
+			agentName, sessionDisplay(sessionID), len(turns))
+	}
 	for i, turn := range turns {
 		role, _ := turn["role"].(string)
 		text, _ := turn["text"].(string)

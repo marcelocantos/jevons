@@ -1,13 +1,22 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package rsi implements the ambient recursive self-improvement loop
-// (🎯T92 / 🎯T92.2): evidence from activity → improvement candidates →
-// noise-controlled bullseye filing. Surfaces: eventlog lifecycle, stream
-// (idle-reap), owner-chat friction (chatlog), and session transcripts
-// (mnemo-indexed chat_history). Schedule/stream hooks live in the daemon;
-// this package is pure + injectable so hermetic tests prove the mint path
-// without Grok.
+// Package rsi implements ambient recursive self-improvement (🎯T92 / 🎯T243).
+//
+// Product path (🎯T243): Coach drip-reads owner chat (priority), eventlog, and
+// session transcripts; forms structured Judgments; delivers them to the
+// overseer. The coach never files bullseye — overseer alone decides file /
+// alert / brief PO / ignore. Overseer retunes coach prompt + runtime dials
+// (bi-directional SI). Continuous read uses a durable byte-offset cursor
+// (not full history re-ingest each cycle).
+//
+// Residual mint path (🎯T92 / T92.2): ExtractCandidates + RunCycle + Loop may
+// still file bullseye when explicitly opted in (JEVONS_RSI_MINT / DEEPER).
+// Phrase-list direct mint is not the product path; extract may feed coach
+// proposals only.
+//
+// Schedule/stream hooks live in the daemon; this package is pure + injectable
+// so hermetic tests prove coach→overseer without Grok.
 package rsi
 
 import (
@@ -52,6 +61,16 @@ type Candidate struct {
 	Count       int
 	Kinds       []string
 	EvidenceIDs []string
+	// LatestTS is the newest evidence timestamp in the cluster (zero = unknown).
+	// Outcome suppression (🎯T333) re-proposes only when this is newer than the outcome.
+	LatestTS time.Time
+	// Phrase is the friction phrase (chat/session kinds) or commit subject
+	// (git kinds) of the sample. The retro value bar (🎯T353) reads it.
+	Phrase string
+	// ClusterKey identifies the evidence bucket this candidate came from, so
+	// evidence pointers cite the cluster's own rows rather than anything that
+	// merely shares a kind. Empty for hand-built candidates.
+	ClusterKey string
 }
 
 // ExistingTarget is a ledger entry used for near-duplicate suppression.
@@ -187,6 +206,7 @@ type evidenceBucket struct {
 	kinds  map[string]struct{}
 	ids    []string
 	sample Evidence
+	maxTS  time.Time
 }
 
 // ExtractCandidates clusters evidence into improvement candidates.
@@ -215,6 +235,9 @@ func ExtractCandidates(ev []Evidence, minCount int) []Candidate {
 		b.kinds[kind] = struct{}{}
 		if e.SourceID != "" && len(b.ids) < 8 {
 			b.ids = append(b.ids, e.SourceID)
+		}
+		if e.TS.After(b.maxTS) {
+			b.maxTS = e.TS
 		}
 	}
 
@@ -356,7 +379,8 @@ func actionable(e Evidence) bool {
 	kind := strings.TrimSpace(e.Kind)
 	switch kind {
 	case "lifecycle_error", "tool_failure", "event_push_error",
-		"stuck_work", "cost_anomaly", "chat_gap", "transcript_friction":
+		"stuck_work", "cost_anomaly", "chat_gap", "transcript_friction",
+		"git_rework", "git_revert":
 		return true
 	case "reaped_idle":
 		// Stream marker alone is not a mint signal (noise); only clusters with errors matter.
@@ -517,6 +541,13 @@ func candidateFromBucket(b *evidenceBucket) Candidate {
 	if _, ok := b.kinds["transcript_friction"]; ok {
 		name = fmt.Sprintf("Session transcript friction (%s) is diagnosed or eliminated", phraseFromSample(e))
 	}
+	// History-derived kinds (🎯T353 retrospective mine).
+	if _, ok := b.kinds["git_rework"]; ok {
+		name = fmt.Sprintf("Repeated fix churn in %s is diagnosed or eliminated at the root", comp)
+	}
+	if _, ok := b.kinds["git_revert"]; ok {
+		name = fmt.Sprintf("Reverted changes in %s stop recurring (root cause understood)", comp)
+	}
 
 	acceptance := []string{
 		fmt.Sprintf("Repeated %s/%s signals (kind=%s, n≥%d in an ambient RSI window) no longer accumulate without a filed target, fix, or explicit set-aside.",
@@ -536,6 +567,9 @@ func candidateFromBucket(b *evidenceBucket) Candidate {
 		Count:       b.count,
 		Kinds:       kinds,
 		EvidenceIDs: append([]string{}, b.ids...),
+		LatestTS:    b.maxTS,
+		Phrase:      phraseFromSample(e),
+		ClusterKey:  b.key,
 	}
 }
 

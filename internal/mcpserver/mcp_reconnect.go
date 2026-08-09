@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -31,7 +32,9 @@ func (s *Server) registerMCPReconnect() {
 				"Reconnect dropped MCP servers mid-session without leaving chat or rotating the session. "+
 					"Cycles each target via `grok mcp disable` then `grok mcp enable` so the Grok client "+
 					"re-attaches tools in the live overseer conversation (not only TUI /mcps). "+
-					"Omit server to reconnect all configured servers; pass server to reconnect one by name."),
+					"Omit server to reconnect all configured servers; pass server to reconnect one by name. "+
+					"Grok overseers only (🎯T282): with any other provider selected this reports the "+
+					"provider-appropriate remedy instead of cycling Grok's config."),
 			mcp.WithString("server",
 				mcp.Description("Optional MCP server name (e.g. github, gmail). Empty = reconnect all configured servers.")),
 		),
@@ -51,10 +54,35 @@ func (s *Server) handleMCPReconnect(ctx context.Context, req mcp.CallToolRequest
 	return mcp.NewToolResultText(report), nil
 }
 
+// mcpReconnectUnsupported is the pure oracle for which overseer providers
+// this control plane applies to (🎯T282). `grok mcp disable/enable` toggles
+// servers for a Grok client only; cycling it for a Claude overseer would
+// report success while re-attaching nothing the caller can see. Rather
+// than that silent lie, non-Grok overseers get a message naming the real
+// remedy. It returns ok=true when the cycle may proceed.
+func mcpReconnectUnsupported(provider claudia.Provider) (string, bool) {
+	switch provider {
+	case claudia.ProviderGrok, "":
+		return "", true
+	case claudia.ProviderClaude:
+		return "mcp reconnect is a Grok control plane (`grok mcp disable/enable`); " +
+			"the overseer provider is claude, which has no live disable/enable — " +
+			"re-attach with /mcp in the session, or restart jevonsd to re-run the " +
+			"user-scoped `claude mcp add` (🎯T212)", false
+	default:
+		return fmt.Sprintf("mcp reconnect is a Grok control plane (`grok mcp disable/enable`); "+
+			"the overseer provider is %s, which jevonsd cannot cycle — restart jevonsd "+
+			"to re-register its MCP endpoint for that client", provider), false
+	}
+}
+
 // reconnectMCPServers reconnects one named server, or all configured
 // servers when name is empty. Returns a human-readable multi-line report.
 // Fails closed if the CLI path is a no-op (zero actions taken).
 func (s *Server) reconnectMCPServers(ctx context.Context, name string) (string, error) {
+	if msg, ok := mcpReconnectUnsupported(s.resolvedDefaultProvider()); !ok {
+		return "", fmt.Errorf("%s", msg)
+	}
 	run := s.grokRun
 	if run == nil {
 		run = defaultGrokRun

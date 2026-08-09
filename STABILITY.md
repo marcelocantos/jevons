@@ -10,7 +10,7 @@ right before locking them in.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.11.0 (surface catalogue still growing pre-1.0; last full table base was v0.5.0).
+Snapshot as of v0.12.0 (surface catalogue still growing pre-1.0; last full table base was v0.5.0).
 
 ### CLI: `jevonsd`
 
@@ -18,8 +18,8 @@ Snapshot as of v0.11.0 (surface catalogue still growing pre-1.0; last full table
 |---|---|---|---|
 | `--port` | int | `13705` | Stable |
 | `--bind` | string | `127.0.0.1` | Stable — loopback-only default (🎯T6); widen deliberately |
-| `--relay` | string | `""` | Fluid — URL format and registration protocol may change |
-| `--relay-token` | string | `""` | Fluid — also `TERN_TOKEN` env |
+| `--relay` | string | `""` | Fluid — URL of a pigeon relay you operate (self-host; 🎯T156). URL format and registration protocol may change |
+| `--relay-token` | string | `""` | Fluid — also `TERN_TOKEN` env; same value as the relay's `PIGEON_TOKEN` when auth is enabled. Not an author-issued secret |
 | `--instance-id` | string | `""` | Fluid |
 | `--pair` | string | `""` | Fluid — mint PairingArtifact + QR for peer instance id (one-shot) |
 | `--add-credential` | string | `""` | Fluid — ingest server-side PairingRecord JSON (one-shot) |
@@ -52,7 +52,7 @@ thread model and `jwork` are the only worker lifecycles.
 |---|---|---|
 | `jevons_agent_list` | (none) | Fluid |
 | `jevons_agent_start` | `name, workdir, model?, provider?` | Fluid — provider 🎯T148 |
-| `jevons_agent_send` | `name, text` | Fluid — async fire-and-forget since v0.3.0 |
+| `jevons_agent_send` | `name, text, actor` | Fluid — async fire-and-forget since v0.3.0; `actor` required for per-caller lineage (🎯T321) |
 | `jevons_agent_stop` | `name` | Fluid |
 | `jevons_agent_kill` | `name` | Fluid |
 | `jevons_active_work` | `hours?, include_clean?` | Fluid — new in v0.4.0, cross-repo work dashboard |

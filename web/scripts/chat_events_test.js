@@ -67,8 +67,84 @@ test('assistant text with end_turn clears', () => {
   }), true);
 });
 
-test('empty-content end_turn clears (Grok ACP terminal)', () => {
+test('empty-content end_turn is a seal signal (Grok ACP terminal)', () => {
   assert.strictEqual(ChatEvents.shouldClearWorking(endTurn()), true);
+});
+
+// ── 🎯T260 working chrome vs seal ────────────────────────────────
+// toolUse() is defined below with the T159 helpers (name, optional stopReason).
+
+test('T260: tools-only end_turn seals but keeps working chrome', () => {
+  const term = endTurn();
+  assert.strictEqual(ChatEvents.shouldClearWorking(term), true, 'still a seal signal');
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: false, hadTool: true, silent: false }, term),
+    false,
+    'tools-only must not clear owner chrome',
+  );
+});
+
+test('T260: visible text then end_turn clears chrome', () => {
+  const term = endTurn();
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: true, hadTool: true, silent: false }, term),
+    true,
+  );
+});
+
+test('T260: silent-only terminal may clear without bubble (residual)', () => {
+  const term = endTurn();
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: false, hadTool: false, silent: true }, term),
+    true,
+  );
+});
+
+test('T260: vacuous empty end_turn clears chrome', () => {
+  const term = endTurn();
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: false, hadTool: false, silent: false }, term),
+    true,
+  );
+});
+
+test('T260 lifecycle: tools → empty end_turn → note stream → text → end_turn', () => {
+  // Owner repro: CPU dig had tools-only end_turn, then agent_note re-prompt,
+  // then visible "Investigating…" while UI had already gone idle.
+  const events = [
+    user('Why is jevonsd consuming so much CPU?'),
+    toolUse('run_terminal_command'),
+    toolUse('run_terminal_command'),
+    endTurn(), // tools-only ACP stop — must KEEP working
+    // Second stream (note re-prompt): more tools then visible reply
+    toolUse('run_terminal_command'),
+    chunk('Investigating jevonsd CPU.'),
+    endTurn(),
+  ];
+  assert.strictEqual(
+    ChatEvents.workingLifecycle(events.slice(0, 4)),
+    true,
+    'working must stay true after tools-only end_turn',
+  );
+  assert.strictEqual(
+    ChatEvents.workingLifecycle(events),
+    false,
+    'working clears after owner-visible text + end_turn',
+  );
+  const mid = ChatEvents.applyChatEvents(events.slice(0, 4));
+  assert.strictEqual(mid.working, true);
+  assert.strictEqual(mid.openStream, -1, 'tools-only end_turn still seals stream');
+  const done = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(done.working, false);
+  assert.ok(done.assistantBubbles.some((b) => /Investigating/.test(b)));
+});
+
+test('T260: mid-stream text still does not clear; text+end_turn does', () => {
+  assert.strictEqual(ChatEvents.workingLifecycle([user('hi'), chunk('Hello')]), true);
+  assert.strictEqual(
+    ChatEvents.workingLifecycle([user('hi'), chunk('Hello'), endTurn()]),
+    false,
+  );
 });
 
 test('tool_use-only assistant does not clear', () => {
@@ -312,6 +388,115 @@ test('T223: interleaved fragments join by stream_id; two ids stay two', () => {
   assert.strictEqual(ChatEvents.streamIdOf(chunkWithId('x', 's-a')), 's-a');
 });
 
+// ── 🎯T249 one stream_id = one growing bubble (never multi mid-stream) ──
+
+test('T249 multi-paragraph stream stays one bubble at every intermediate step', () => {
+  // Owner repro shape: T247 land reply (paragraph-ish splits) — all one stream_id.
+  const sid = '0c38c30e-53f3-4783-8e08-dc633e707850';
+  const tokens = [
+    '**', '🎯', 'T', '247', ' landed', '**', ' —', ' independent', ' check', ' agrees',
+    ' (`', '0', 'fb', 'ce', '59', '`,', ' herm', 'etics', ' green', ').',
+    '\n\n',
+    '**', 'Hard', '-', 'reload', '**', ' so', ' `', 'target', ':`', ' open',
+    '\n\n',
+    'Still', ' in', ' progress', ':', ' **', 'T', '246', '**', ' and', ' **', 'T', '248', '**.',
+  ];
+  const state = ChatEvents.createTurnState();
+  let maxBubbles = 0;
+  ChatEvents.applyChatEvent(state, {
+    type: 'assistant',
+    stream_id: sid,
+    message: {
+      role: 'assistant',
+      content: [{ type: 'tool_use', name: 'run_terminal_command', input: {} }],
+    },
+  });
+  for (const t of tokens) {
+    ChatEvents.applyChatEvent(state, chunkWithId(t, sid));
+    if (state.assistantBubbles.length > maxBubbles) {
+      maxBubbles = state.assistantBubbles.length;
+    }
+    assert.strictEqual(
+      state.assistantBubbles.length,
+      1,
+      `mid-stream bubble count ${state.assistantBubbles.length} after token ${JSON.stringify(t)}`,
+    );
+  }
+  ChatEvents.applyChatEvent(state, endTurnWithId(sid));
+  assert.strictEqual(maxBubbles, 1, 'max mid-stream bubbles must stay 1');
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  const body = state.assistantBubbles[0];
+  assert.ok(body.includes('independent check agrees'), body);
+  assert.ok(body.includes('Hard-reload') || body.includes('Hard'), body);
+  assert.ok(body.includes('Still in progress'), body);
+  assert.ok(body.includes('\n\n'), 'paragraph breaks preserved inside one bubble');
+  assert.strictEqual(state.openById[sid], undefined, 'sealed stream not open');
+});
+
+test('T249 distinct stream_ids stay separate bubbles', () => {
+  const events = [
+    chunkWithId('first turn body', 'sid-1'),
+    endTurnWithId('sid-1'),
+    chunkWithId('second turn body', 'sid-2'),
+    endTurnWithId('sid-2'),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 2);
+  assert.strictEqual(state.assistantBubbles[0], 'first turn body');
+  assert.strictEqual(state.assistantBubbles[1], 'second turn body');
+});
+
+test('T249 index.html: resolveOpenStreamEl re-homes same stream_id (no multi-bubble)', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('resolveOpenStreamEl'), 'must resolve open stream before minting bubble');
+  assert.ok(html.includes('🎯T249') || html.includes('T249'), 'T249 marker in live paint path');
+  // isConnected alone must not mint a second bubble for the same stream_id.
+  assert.ok(
+    !/openStreamById\[streamId\]\.isConnected\s*&&[\s\S]{0,80}typeof openStreamById\[streamId\]\._streamRaw/.test(html),
+    'must not gate join solely on isConnected (T249 re-home path)',
+  );
+});
+
+// ── 🎯T245 silent-only turns do not leak into next visible bubble ──
+
+test('T245 isSilentAssistantText matches [silent] prefix', () => {
+  assert.ok(ChatEvents.isSilentAssistantText('[silent] PO re-pressured'));
+  assert.ok(ChatEvents.isSilentAssistantText('  [SILENT] ops ok'));
+  assert.ok(!ChatEvents.isSilentAssistantText('Owner needs this'));
+  assert.ok(!ChatEvents.isSilentAssistantText(''));
+});
+
+test('T245 pure silent stream + agent_note + visible → only second bubble', () => {
+  const events = [
+    chunkWithId('[silent] PO already re-pressured jv-t244; no further action.', 's-silent'),
+    endTurnWithId('s-silent'),
+    { type: 'agent_note', text: 'worker note' },
+    chunkWithId('**🎯T244 landed.**', 's-vis'),
+    endTurnWithId('s-vis'),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(
+    state.assistantBubbles.length,
+    1,
+    `want 1 bubble, got ${JSON.stringify(state.assistantBubbles)}`,
+  );
+  assert.strictEqual(state.assistantBubbles[0], '**🎯T244 landed.**');
+  assert.ok(state.assistantBubbles[0].indexOf('[silent]') < 0);
+});
+
+test('T245 multi-fragment silent then visible: only visible body', () => {
+  const events = [
+    chunkWithId('[silent]', 's9'),
+    chunkWithId(' continued jv-t245', 's9'),
+    endTurnWithId('s9'),
+    chunkWithId('Owner needs this.', 's10'),
+    endTurnWithId('s10'),
+  ];
+  const state = ChatEvents.applyChatEvents(events);
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  assert.strictEqual(state.assistantBubbles[0], 'Owner needs this.');
+});
+
 test('T223 index.html: no seal on user; join keys stream_id', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.includes('openStreamById'), 'must keep stream_id → el map');
@@ -356,6 +541,185 @@ test('normalised wire samples: mid-stream keeps working, end clears', () => {
   assert.strictEqual(ChatEvents.shouldClearWorking(mid), false);
   assert.strictEqual(ChatEvents.shouldClearWorking(term), true);
   assert.strictEqual(ChatEvents.shouldClearWorking({ type: 'system' }), true);
+  // T260: empty end_turn alone is seal-true; chrome needs hadVisible/silent/vacuous.
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadVisible: true }, term),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.shouldClearWorkingChrome({ hadTool: true, hadVisible: false }, term),
+    false,
+  );
+});
+
+test('T260 index.html: shouldClearWorkingChrome + agent_note re-arm', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('shouldClearWorkingChrome'), 'must gate chrome on T260 policy');
+  assert.ok(html.includes('ownerWorkingChrome'), 'must track owner-turn chrome flags');
+  assert.ok(
+    /agent_note[\s\S]*?ownerWorkingChrome/.test(html) ||
+      /typ==='agent_note'[\s\S]{0,400}setWorking\(true\)/.test(html),
+    'agent_note must re-arm working while owner turn open',
+  );
+});
+
+// ── 🎯T272 level-triggered working after reconnect ───────────────
+
+test('T272 workingLevelFromSample: open-turn fixture → working without send edge', () => {
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ working: true }),
+    true,
+    'history_meta.working true must re-arm',
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ busy: true }),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ state: 'thinking' }),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ promptInFlight: true }),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ openStream: true }),
+    true,
+  );
+});
+
+test('T272 workingLevelFromSample: sealed history-only hydrate → idle', () => {
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ working: false }),
+    false,
+    'clean hydrate must not leave stuck working',
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ type: 'history_meta', older: 0, total: 10 }),
+    false,
+  );
+  assert.strictEqual(
+    ChatEvents.workingLevelFromSample({ state: 'idle' }),
+    false,
+  );
+  assert.strictEqual(ChatEvents.workingLevelFromSample(null), false);
+  assert.strictEqual(ChatEvents.workingLevelFromSample({}), false);
+});
+
+test('T272 index.html: history_meta level sample (not edge-only kickoff)', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('applyWorkingLevelSample'), 'must apply level sample after hydrate');
+  assert.ok(html.includes('workingLevelFromSample'), 'must use pure level helper');
+  assert.ok(
+    /history_meta[\s\S]{0,1200}applyWorkingLevelSample/.test(html),
+    'history_meta path must call applyWorkingLevelSample',
+  );
+  // Product model is level re-sample, not "remember send edge across reload".
+  assert.ok(
+    /T272/.test(html) && /level/.test(html),
+    'must document T272 level-trigger in product path',
+  );
+});
+
+// ── 🎯T327 main working chrome clears / does not bind on aside route ─
+
+function isAsideWireFixture(t) {
+  const s = String(t || '');
+  return /^\s*\[attention\s*:/i.test(s) || /^\s*\[target-aside\s*:/i.test(s) ||
+    /\[attention\s*:/i.test(s.split(/\r?\n/).find(function (l) { return l.trim(); }) || '') ||
+    /\[target-aside\s*:/i.test(s.split(/\r?\n/).find(function (l) { return l.trim(); }) || '');
+}
+
+test('T327 shouldBindMainWorkingChrome: main wire binds', () => {
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome('file a target please', isAsideWireFixture),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome('hello', null),
+    true,
+  );
+});
+
+test('T327 shouldBindMainWorkingChrome: attention / target-aside do not bind', () => {
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome(
+      '[attention:att-1|Title]\nbody',
+      isAsideWireFixture,
+    ),
+    false,
+  );
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome(
+      '[target-aside: att-2 | File this]\nfile X\n\n(Ceremony: …)',
+      isAsideWireFixture,
+    ),
+    false,
+  );
+});
+
+test('T327 shouldBindMainWorkingChrome: routed flag alone suppresses main', () => {
+  assert.strictEqual(
+    ChatEvents.shouldBindMainWorkingChrome('plain body', null, { routed: true }),
+    false,
+  );
+});
+
+test('T327 planMainWorkingAfterSend: aside → open false + suppress true', () => {
+  const att = ChatEvents.planMainWorkingAfterSend(
+    '[attention:att-x|t]\nhello',
+    isAsideWireFixture,
+  );
+  assert.strictEqual(att.openMainWorking, false);
+  assert.strictEqual(att.suppressMainWorking, true);
+
+  const main = ChatEvents.planMainWorkingAfterSend('ship it', isAsideWireFixture);
+  assert.strictEqual(main.openMainWorking, true);
+  assert.strictEqual(main.suppressMainWorking, false);
+
+  // Mutation proof: re-plan same inputs stable; flip isAsideWire flips result.
+  const again = ChatEvents.planMainWorkingAfterSend(
+    '[attention:att-x|t]\nhello',
+    isAsideWireFixture,
+  );
+  assert.deepStrictEqual(again, att);
+  const asMain = ChatEvents.planMainWorkingAfterSend(
+    '[attention:att-x|t]\nhello',
+    function () { return false; },
+  );
+  assert.strictEqual(asMain.openMainWorking, true, 'without aside detector, wire would bind');
+  assert.strictEqual(asMain.suppressMainWorking, false);
+});
+
+test('T327 index.html: route-to-aside path leaves main WorkingProgress not open', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(
+    html.includes('planMainWorkingAfterSend') || html.includes('shouldBindMainWorkingChrome'),
+    'submit path must use T327 pure bind decision',
+  );
+  assert.ok(
+    /mainWorkingSuppressed|suppressMainWorking/.test(html),
+    'must track suppress so level/tool re-arm cannot reopen main mid aside turn',
+  );
+  // submitWireText must not unconditionally setWorking(true) for aside wires.
+  assert.ok(
+    /function submitWireText[\s\S]{0,2500}(planMainWorkingAfterSend|shouldBindMainWorkingChrome)/.test(html),
+    'submitWireText must plan main working (T327)',
+  );
+  assert.ok(
+    /plan\.openMainWorking[\s\S]{0,200}setWorking\(true\)/.test(html) ||
+      /openMainWorking\)\s*\{\s*[\s\S]{0,120}setWorking\(true\)/.test(html),
+    'main working open only when plan says so',
+  );
+  assert.ok(
+    /suppressMainWorking|mainWorkingSuppressed\s*=\s*true/.test(html),
+    'aside route sets suppress so main stays not open',
+  );
+  assert.ok(
+    /T327/.test(html),
+    'product path documents T327',
+  );
 });
 
 // ── index.html wiring ───────────────────────────────────────────
@@ -577,6 +941,288 @@ test('regression guard: hasText without stop must not clear', () => {
   assert.strictEqual(ChatEvents.hasAssistantText(m), true);
   assert.strictEqual(ChatEvents.stopReason(m), '');
   assert.strictEqual(ChatEvents.shouldClearWorking(m), false);
+});
+
+// ── 🎯T279 post-send owner-turn retention ─────────────────────────
+// Vanish path: wire.accept + clear composer, then soft reconnect suppresses
+// user echo until history_meta → no bubble. Fix: optimistic paint + merge
+// keep pending owner turns across hydrate/WS reconcile.
+
+function isAsideWireFixture(t) {
+  const s = String(t || '');
+  return /^\s*\[(?:attention|target-aside)\s*:/i.test(s);
+}
+
+test('T279 planOptimisticMainUserPaint paints plain owner text', () => {
+  const plan = ChatEvents.planOptimisticMainUserPaint(
+    [{ text: 'earlier' }],
+    'I just submitted a message',
+    isAsideWireFixture,
+  );
+  assert.strictEqual(plan.paint, true);
+  assert.strictEqual(plan.text, 'I just submitted a message');
+  assert.strictEqual(plan.reason, 'optimistic');
+});
+
+test('T279 planOptimisticMainUserPaint skips aside wires (main never paints)', () => {
+  const wire = '[target-aside: att-x | play spin]\nclicking play shows spinner';
+  const plan = ChatEvents.planOptimisticMainUserPaint([], wire, isAsideWireFixture);
+  assert.strictEqual(plan.paint, false);
+  assert.strictEqual(plan.reason, 'aside-wire');
+});
+
+test('T279 planOptimisticMainUserPaint dedupes when already last', () => {
+  const plan = ChatEvents.planOptimisticMainUserPaint(
+    [{ text: 'same body' }],
+    'same body',
+    isAsideWireFixture,
+  );
+  assert.strictEqual(plan.paint, false);
+  assert.strictEqual(plan.reason, 'already-last');
+});
+
+test('T279 planRetainOwnerTurns keeps optimistic missing from shorter hydrate', () => {
+  // Simulate: optimistic painted [a, b, owner-new]; hydrate/WS list shorter omits owner-new.
+  const painted = ['a', 'b', 'owner-new'];
+  const hydrateOnly = ['a', 'b']; // shorter page / reconcile without pending
+  const pending = ['owner-new'];
+  // If reconcile replaced with hydrateOnly, retain must restore pending.
+  const plan = ChatEvents.planRetainOwnerTurns(hydrateOnly, pending);
+  assert.deepStrictEqual(plan.missing, ['owner-new']);
+  assert.deepStrictEqual(plan.keepTexts, ['a', 'b', 'owner-new']);
+  // Already painted: no missing.
+  const plan2 = ChatEvents.planRetainOwnerTurns(painted, pending);
+  assert.deepStrictEqual(plan2.missing, []);
+  assert.deepStrictEqual(plan2.keepTexts, painted);
+});
+
+test('T279 planRepaintAfterSoftReconnect: unacked main body not in DOM → repaint', () => {
+  const plan = ChatEvents.planRepaintAfterSoftReconnect({
+    paintedUserTexts: ['old turn'],
+    pendingTexts: ['vanished owner turn', '[attention:att-1|t]\naside body'],
+    isAsideWire: isAsideWireFixture,
+  });
+  assert.deepStrictEqual(plan.repaint, ['vanished owner turn']);
+  // Already painted → empty.
+  const plan2 = ChatEvents.planRepaintAfterSoftReconnect({
+    paintedUserTexts: ['vanished owner turn'],
+    pendingTexts: ['vanished owner turn'],
+    isAsideWire: isAsideWireFixture,
+  });
+  assert.deepStrictEqual(plan2.repaint, []);
+});
+
+test('T279 isDuplicateUserEcho matches optimistic then server echo', () => {
+  assert.strictEqual(
+    ChatEvents.isDuplicateUserEcho('hello owner', 'hello owner'),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.isDuplicateUserEcho('hello owner', 'different'),
+    false,
+  );
+  assert.strictEqual(ChatEvents.isDuplicateUserEcho('', 'x'), false);
+});
+
+// 🎯T281: unwrap-aware main echo dedupe (optimistic plain vs ACP wrapper).
+test('T281 isDuplicateUserEcho unwraps user_query for equality', () => {
+  assert.strictEqual(
+    ChatEvents.isDuplicateUserEcho(
+      'do a release.',
+      '<user_query>\ndo a release.\n</user_query>',
+    ),
+    true,
+    'wrapped echo matches plain optimistic',
+  );
+  assert.strictEqual(
+    ChatEvents.normalizeOwnerEchoText('<user_query>hi</user_query>'),
+    'hi',
+  );
+  assert.strictEqual(
+    ChatEvents.isDuplicateUserEcho('a', 'b'),
+    false,
+  );
+});
+
+test('T279 applyChatEvents: optimistic-then-echo does not double userTexts', () => {
+  // Pure event model: first user is optimistic equivalent; second is server echo.
+  const state = ChatEvents.applyChatEvents([
+    user('owner outbound'),
+    user('owner outbound'), // dupe echo
+  ]);
+  assert.deepStrictEqual(state.userTexts, ['owner outbound']);
+});
+
+test('T279 vanish path fails without retention; passes with merge', () => {
+  // Without retain: painted loses pending after "hydrate replace".
+  const afterOptimistic = ['prior', 'just submitted'];
+  const afterBadHydrate = ['prior']; // drop — the bug
+  assert.ok(
+    afterBadHydrate.indexOf('just submitted') < 0,
+    'fixture: vanish path drops owner turn',
+  );
+  const retained = ChatEvents.planRetainOwnerTurns(afterBadHydrate, ['just submitted']);
+  assert.ok(
+    retained.keepTexts.indexOf('just submitted') >= 0,
+    'retention merge must keep owner turn',
+  );
+  assert.deepStrictEqual(retained.missing, ['just submitted']);
+});
+
+test('T279 index.html: optimistic paint + soft-reconnect retain wired', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('paintOptimisticMainUser'), 'must paint optimistic main user');
+  assert.ok(html.includes('retainPendingOwnerTurnsVisible'), 'must retain after soft reconnect');
+  assert.ok(html.includes('planOptimisticMainUserPaint'), 'must use pure paint plan');
+  assert.ok(html.includes('planRepaintAfterSoftReconnect'), 'must use pure repaint plan');
+  assert.ok(
+    /submitWireText[\s\S]{0,800}paintOptimisticMainUser/.test(html),
+    'submitWireText must call paintOptimisticMainUser after accept',
+  );
+  assert.ok(
+    /wasSoft[\s\S]{0,600}retainPendingOwnerTurnsVisible/.test(html),
+    'soft history_meta must retain pending owner turns',
+  );
+  assert.ok(
+    /isDuplicateUserEcho|lastHist[\s\S]{0,200}content/.test(html),
+    'user echo must dedupe against optimistic paint',
+  );
+  // target:/aside: create must show opening on RHS immediately (not only freeform deliver).
+  assert.ok(
+    /showAsideOpeningWorking\(r\.threadId/.test(html) ||
+      /showAsideOpeningWorking\(\s*r\.threadId/.test(html),
+    'target/aside create must optimistic-paint RHS opening',
+  );
+  assert.ok(/T279/.test(html) || /🎯T279/.test(html), 'T279 marker in product path');
+});
+
+// ── 🎯T329 ONE shared display coalesce (main + RHS) ──────────────
+
+test('T329 isNonBoundaryUserText: system-reminder / brief / background-task', () => {
+  assert.strictEqual(
+    ChatEvents.isNonBoundaryUserText(
+      '<system-reminder>\nBackground task "x" completed.\n</system-reminder>',
+    ),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.isNonBoundaryUserText('[Jevons fleet standing brief]\nrules'),
+    true,
+  );
+  assert.strictEqual(
+    ChatEvents.isNonBoundaryUserText('Background task call-abc completed'),
+    true,
+  );
+  assert.strictEqual(ChatEvents.isNonBoundaryUserText('real owner prose'), false);
+  assert.strictEqual(ChatEvents.isNonBoundaryUserText('[event: worker-idle] x'), true);
+});
+
+test('T329 applyLiveDisplayFrame: multi-tool + inject → one assistant bubble', () => {
+  // Real Grok multi-tool shape: text → tool_use → tool_result → system-reminder
+  // user inject → more text → end_turn. One continuous assistant bubble.
+  let lines = [];
+  const sid = 't329-stream';
+  const steps = [
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: { content: [{ type: 'text', text: 'I will read the file.' }] },
+    },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: {
+        content: [{ type: 'tool_use', name: 'read_file', input: { path: 'x' } }],
+        stop_reason: 'tool_use',
+      },
+    },
+    { type: 'tool_result', content: [{ type: 'text', text: 'ok' }] },
+    {
+      type: 'user',
+      message: {
+        content:
+          '<system-reminder>\nBackground task "call-1" completed (exit code: 0).\n</system-reminder>',
+      },
+    },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: { content: [{ type: 'text', text: ' Then edit it.' }] },
+    },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: {
+        content: [{ type: 'tool_use', name: 'search_replace', input: {} }],
+        stop_reason: 'tool_use',
+      },
+    },
+    { type: 'tool_result', content: [{ type: 'text', text: 'done' }] },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: { content: [{ type: 'text', text: ' Done.' }] },
+    },
+    {
+      type: 'assistant',
+      stream_id: sid,
+      message: { content: [], stop_reason: 'end_turn' },
+    },
+  ];
+  for (const ev of steps) {
+    lines = ChatEvents.applyLiveDisplayFrame(lines, ev);
+  }
+  const asst = lines.filter((l) => l && l.role === 'assistant');
+  assert.strictEqual(
+    asst.length,
+    1,
+    `expected 1 assistant bubble, got ${asst.length}: ${JSON.stringify(lines)}`,
+  );
+  assert.ok(asst[0].text.includes('I will read the file.'));
+  assert.ok(asst[0].text.includes('Then edit it.'));
+  assert.ok(asst[0].text.includes('Done.'));
+  assert.ok(!asst[0]._stream, 'terminal seals stream');
+  // Inject still present as user row for inspect nugget paint.
+  const users = lines.filter((l) => l && l.role === 'user');
+  assert.strictEqual(users.length, 1);
+  assert.ok(users[0].text.indexOf('system-reminder') >= 0);
+});
+
+test('T329 coalesceLiveDisplayFrames: unlabeled multi-turn splits on owner user', () => {
+  const chunks = ChatEvents.coalesceLiveDisplayFrames(
+    [
+      { type: 'user', message: { content: 'hello' } },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'first reply' }] },
+      },
+      { type: 'user', message: { content: 'next' } },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'second reply' }] },
+      },
+    ],
+    { roleMap: { assistant: 'jevons' } },
+  );
+  assert.strictEqual(chunks.length, 4, JSON.stringify(chunks));
+  assert.strictEqual(chunks[1].text, 'first reply');
+  assert.strictEqual(chunks[3].text, 'second reply');
+});
+
+test('T329 applyChatEvents: non-boundary user does not re-arm working chrome', () => {
+  const state = ChatEvents.applyChatEvents([
+    user('owner'),
+    chunk('Working on it'),
+    {
+      type: 'user',
+      message: {
+        content: '<system-reminder>\nBackground task done.\n</system-reminder>',
+      },
+    },
+  ]);
+  assert.strictEqual(state.userTexts.length, 1, 'inject not counted as owner turn');
+  assert.strictEqual(state.assistantBubbles.length, 1);
+  assert.strictEqual(state.working, true, 'still mid-turn after inject');
 });
 
 // ── Go package tests ────────────────────────────────────────────

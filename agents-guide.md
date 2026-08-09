@@ -44,9 +44,12 @@ Same-machine browser use is the supported docs-only path today.
    ```bash
    lsof -iTCP:13705 -sTCP:LISTEN
    ```
-5. **Optional device pair** — `jevonsd --pair <id> --relay <url>` + Jevon iOS
-   app QR scan (source under `ios/`; no App Store binary yet; full
-   onboarding is 🎯T14).
+5. **Optional device pair** — self-host a [pigeon](https://github.com/marcelocantos/pigeon)
+   relay (mint your own `PIGEON_TOKEN` / `TERN_TOKEN`; do not message the
+   author), then `jevonsd --pair <id> --relay <your-url> --relay-token …`
+   + Jevon iOS QR scan (source under `ios/`; no App Store binary yet; full
+   onboarding is 🎯T14). See README [Pair a device](README.md#pair-a-device)
+   (🎯T156).
 6. **MCP attach**: on boot, jevonsd auto-registers its HTTP MCP into the
    overseer's client config when possible. For an external MCP client
    (e.g. Claude Code talking *to* jevons), after restarting that client:
@@ -85,7 +88,7 @@ open http://localhost:13705/
   bold as soon as both delimiters arrive — not raw source, and not delayed
   until end of turn.
 - **Seal:** full `marked` parse (plus mermaid 🎯T59 and highlight.js 🎯T74).
-- **Fence hygiene:** T145 `ensureFenceNewlines` and T147
+- **Fence hygiene:** 🎯T145 `ensureFenceNewlines` and 🎯T147
   `coalesceAssistantText` keep smushed `prose.```lang` from breaking fences.
 - **Never** use plain `textContent` of markdown source as the live stream
   default.
@@ -127,6 +130,37 @@ purpose=`work`. One registry id space and one deliver path:
 RHS fleet tree (asides use 💡 chrome; 🎯T136) — not a top attention chip
 bar. Same underlying registry records.
 
+### One deliver-by-name path, overseer included (🎯T309.3)
+
+Every message to an agent — `jevons_agent_send`, `POST /api/agents/{name}/send`,
+and the daemon's own worker-reply / worker-idle / daemon-restarted
+notifications — runs the **same** implementation, addressed by agent name.
+**The overseer is just another addressable agent.** It no longer has a
+privileged talk wire of its own, so a PO or worker reporting up by name lands
+in the owner chat journal with queue-on-busy retry behind it, exactly like any
+other delivery.
+
+What this means when you are briefing or reporting:
+
+- **Address by name, not by API.** `jevons_agent_send` with `name="jevons"`
+  reaches the overseer; there is no separate overseer tool to hunt for.
+- **Name yourself as `actor` (🎯T321).** Pass `actor` = your agent name on
+  every `jevons_agent_send` (same idea as `jevons_agent_kill`). Lineage
+  authorization runs against that actor; denials log actor + relation. The
+  overseer uses the overseer name (usually `jevons`).
+- **Hierarchy is lineage, not reachability.** Report up (worker→PO→overseer)
+  and direct down (ancestor→descendant) are always allowed; peer messaging
+  between siblings is allowed on purpose. What you *cannot* do is speak as the
+  **owner** — owner-origin turns paint an owner bubble and only the owner's own
+  surface may assert them.
+- **No silent drops.** An unregistered peer, an unreachable overseer, and a
+  failed delivery are **errors you get back**. A busy peer returns `queued`
+  with the message retained (🎯T111.1) — never a discarded send (🎯T61/🎯T62).
+
+`jevons_thread_direct` is **not** a second deliver path: it is the
+*synchronous* request/reply op (it waits for the reply and assembles it), which
+is why it stays separate from the fire-and-forget family above.
+
 **Do not default to** Grok `spawn_subagent` (or worktree subagents that
 die with the parent). Those children are not first-class fleet entries,
 vanish on parent interrupt, and break multi-agent observability.
@@ -147,7 +181,7 @@ target id, **keep the literal dots** — never digit-squash.
 | 🎯T47.1 | `jv-t47.1-docs` | `jv-t471-docs` |
 | 🎯T159 (flat) | `jv-t159-seal` | unchanged — flat ids stay flat |
 
-Digit-squash makes `T27.2` vs `T272` (or `T47.1` vs `T471`) ambiguous in
+Digit-squash makes `🎯T27.2` vs `🎯T272` (or `🎯T47.1` vs `🎯T471`) ambiguous in
 the RHS fleet list. Residual: flat ids (no sub-target segment) stay as
 today (`jv-t159-seal`). Optional suffix (`-config`, `-docs`) is free-form.
 
@@ -159,6 +193,25 @@ exploration. Single-agent tasks remain fine. Zero children after planning
 on a multi-slice brief is a failure mode (`jevons_agent_list` fan-out
 check). Prefer agents over threads for named long-lived workers.
 
+### Frontier = ready set (🎯T262.1)
+
+**Frontier = ready set.** Every unblocked leaf is legitimate work. There is
+no privileged "next ticket." A queue is frontier size ≤1 with invented
+order. Multi-agent default: one work agent per ready leaf, subject to
+engagement policy (capacity, ownership, design/park filters, churn).
+Bullseye records intent and computes readiness; Jevons engages implementers.
+Neither product answers "the next ticket" as a total order.
+
+- **Anti-pattern:** framing bullseye (or `/cv` alone) as answering "what is
+  the next ticket?"
+- **Queue is special case:** capacity mutex, hard product dependency not yet
+  in `depends_on`, or owner ritual — not the default. Pick among ready
+  leaves is **indifferent or policy**, not discovery of a true head.
+- **Related:** 🎯T155 / 🎯T193 consume the set; 🎯T198 / 🎯T222 engagement.
+  Design: `docs/design/frontier-as-ready-set.md`.
+- **Residual:** instructional doctrine + brief inject. Does **not** unpark
+  🎯T254 or claim 🎯T262.4 owner accept.
+
 ### Unattended frontier auto-spawn (🎯T155)
 
 When a **new frontier leaf** is filed that is **not** design-gated /
@@ -169,14 +222,14 @@ fleet worker** under **`parent=jevons-po`** in the **same operational cycle**
 - **Standing rule:** kick off all non-design frontier work **continuously**;
   new unattended leaves get a worker **immediately**.
 - Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
-- **Skip:** design-gated (T112 / T67 / T29-class) and blocked targets stay
+- **Skip:** design-gated (🎯T112 / 🎯T67 / 🎯T29-class) and blocked targets stay
   unspawned until unblocked or owner opens design.
 - **Related:** 🎯T193 file→spawn same turn (owner-filed and mid-session Build).
 - **Residual:** instructional; no daemon auto-spawn unless later enforced.
 
 ### File→spawn same turn (🎯T193)
 
-**T130** files the target; **T193** spawns the worker. Do **not** leave
+**🎯T130** files the target; **🎯T193** spawns the worker. Do **not** leave
 Build filings **ledger-only**.
 
 When a **Build-plane** target is filed — owner via `target:` aside /
@@ -186,11 +239,32 @@ unless the target is design-gated or parked.
 
 - **Same turn:** `jevons_agent_start` (or route to PO) before the turn ends.
 - Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
-- **Skip (file without spawn):** design-gated (e.g. OAuth app pins, T112 /
-  T67 / T29-class), blocked-on-human / needs-owner / parked-for-design, and
+- **Skip (file without spawn):** design-gated (e.g. OAuth app pins, 🎯T112 /
+  🎯T67 / 🎯T29-class), blocked-on-human / needs-owner / parked-for-design, and
   pure documentation / docs-only.
 - **Related:** 🎯T155 continuous unattended frontier kick-off.
 - **Residual:** instructional; no daemon auto-spawn unless later enforced.
+
+### PO proactive-until-empty-then-sleep (🎯T325.1)
+
+Product owners run **proactive-until-empty-then-sleep**: keep kicking Build
+while the product frontier has ready leaves; sleep/idle without open-mission
+thrash when empty; stay interruptible.
+
+- **Kick while ready:** unblocked ready leaves (not design-gated /
+  needs-owner / design-discussion / parked-for-design / blocked /
+  already-engaged) ⇒ continue spawn/brief until empty or blocked — not a
+  one-shot pass that strands work. Complements 🎯T155.
+- **Sleep when empty:** empty frontier, or only gated/blocked/parked/
+  already-engaged leaves ⇒ sleep/idle without perpetual create thrash or
+  zombie open-mission re-spawn noise (compose 🎯T244).
+- **Interruptible:** PO remains registered for owner/overseer directs while
+  sleeping or mid-pass.
+- **Pure helpers:** `ClassifyPOProactive` / `ClassifyFrontierLeaf` /
+  `POOpenMissionForProactive`. Design:
+  `docs/design/life-and-work-org-map.md` §8 child (1).
+- **Residual:** instructional doctrine + pure classifier; hard daemon sleep
+  gate may follow.
 
 ### PO never implements (🎯T125)
 
@@ -216,11 +290,63 @@ workers with `parent=jevons` (or actor=jevons as parent).
 | Role | Spawns product workers with parent= |
 |---|---|
 | **Overseer (`jevons`)** | Does **not** — routes to PO only |
-| **`jevons-po` (sole spawn parent)** | Yes — bosses/workers under T125 |
+| **`jevons-po` (sole spawn parent)** | Yes — bosses/workers under 🎯T125 |
 
 **Exception:** PO dead/unregistered → rehydrate or start PO first, then
 PO spawns. **Residual:** instructional until a later target adds registry
 enforcement (reject wrong parent).
+
+### Domain portfolios default (🎯T200)
+
+RHS fleet tree groups product owners under named **portfolios** via
+declarative path membership in `~/.jevons/config.yaml` — **not**
+agent-name parsing. Portfolio nodes sit under the root overseer
+(`jevons`); POs with matching workdirs nest under their portfolio;
+unassigned POs hang directly under the overseer root.
+
+**Default for marcelocantos POs:** workdirs under
+`github.com/marcelocantos/…` belong in the **personal** portfolio.
+Live config uses the org path fragment so one member entry covers the
+whole org:
+
+```yaml
+portfolios:
+  - id: personal
+    name: Personal
+    members:
+      - github.com/marcelocantos
+  - id: minicades
+    name: Minicades
+    members:
+      - github.com/squz/yourworld2   # example non-default assignment
+```
+
+| When spawning… | Nest under |
+|---|---|
+| New PO in `github.com/marcelocantos/…` | **Personal** (default — ensure config path match) |
+| Owner assigns another domain (e.g. squz / minicades) | That portfolio’s members list |
+| No matching `members` path | Overseer root (unassigned) — **avoid** for marcelocantos POs |
+
+**Standing rule:** when spawning a new marcelocantos PO, they nest under
+Personal — do **not** leave them unassigned under the overseer root
+unless the owner assigns a different portfolio. Membership is config path
+match only; no GM agent required (🎯T201 set aside). Residual:
+instructional spawn hygiene; display reparent is config/registry, not
+kill lineage.
+
+### Idea capture (🎯T325.3) — durable intake, not scrollback
+
+Owner sparks via `idea:`, `capture:`, aside, or mid-chat must land in a
+**listable** destination within one ceremony:
+
+| Path | Tool / surface |
+|------|----------------|
+| Capture spark | `jevons_idea_capture` or owner `idea:` / dual-write `capture:` |
+| List inbox | `jevons_idea_list` / `GET /api/ideas` |
+| Triage | `jevons_idea_triage`: **file** → then `jevons_target_file` (+ 🎯T193 if Build); **park** needs-owner/design; **hold** life-domain parked; **drop** rare |
+
+Do not leave product-shaped sparks as main-chat-only prose. Ceremony:
+`docs/design/idea-capture.md`. Residual: opportunity-cost optimiser parked.
 
 ### Filing reflex (🎯T130) — doctrine first, narrative second
 
@@ -236,8 +362,21 @@ target** (name + acceptance) in the **same turn** — not only chat promises.
 - plus: repeated failure, hierarchy slip, logging gap, UX pain, fleet doctrine
 
 **Ceremony:** `jevons_target_file` and/or bullseye MCP (`bullseye_commit`
-op=track / file tools). Related: ambient RSI **🎯T92**, hierarchy **🎯T129**.
+op=track / file tools). Related: ambient RSI coach **🎯T243** (judgments →
+overseer; not direct mint), residual **🎯T92**, hierarchy **🎯T129**.
 **Residual:** one-off flukes may skip filing; judgment allowed.
+
+**Retrospective coach mine (🎯T353):** the coach does not only wait for new
+appends. On a slow cadence (default 6h, 7d window) it makes a **bounded pass
+over history** — git repair churn and reverts, the eventlog tail, owner chat,
+session transcripts — and posts sparse judgments marked `Mode: retrospective`
+with commit SHAs / session ids as evidence. *Fine sensors, coarse conclusions:*
+extraction stays sensitive, but a value bar drops one-off git noise and bare
+phrase-friction before anything reaches the overseer. On demand:
+`jevons_rsi_coach_cycle mode=retro|both`; dials (`retro_lookback_hours`,
+`retro_interval_sec`, `retro_rate_cap`, `retro_min_count`, `retro_workdir`) via
+`jevons_rsi_coach_configure`; last pass visible in `jevons_rsi_coach_status`.
+Retro never advances the drip cursor and never calls bullseye.
 
 ## Oracle-first completion (🎯T31 / 🎯T31.1)
 
@@ -281,7 +420,7 @@ Pure helpers: `CoverageMap` / `ClassifyDesignClause` /
 `docs/design/greenfield-oracle-elicitation.md`.
 
 **Residual:** instructional + pure map model; not a hard daemon block;
-rich T29 surface and owner process-fidelity validation remain
+rich 🎯T29 surface and owner process-fidelity validation remain
 class-3 / follow-ups.
 
 ## Status language: in progress vs live (🎯T176)
@@ -319,7 +458,7 @@ registry (RHS / `agent_list` omit the name). When a mission target is
 achieved on the bullseye ledger, work agents engaged on that TargetID are
 also reaped. Residual: POs and overseer stay; multi-target agents without
 a matching TargetID stay; deliberate `jevons_agent_stop` without kill
-still leaves registration for resume; T90 deep anomaly supervisor is separate.
+still leaves registration for resume; 🎯T90 deep anomaly supervisor is separate.
 
 Do **not** re-expand a local merge order into continuous origin/PR
 shipping because a PO already opened remotes. Remote delivery only when
@@ -342,7 +481,7 @@ fleet agent without detach. The script: `make` → `brew services stop jevons`
 → kill `:13705` → `nohup`/`setsid` start `$REPO/bin/jevonsd` with workdir →
 wait `/health` + `/api/frontier` non-404 → exit 0 only when serving.
 Pure static web-only changes may hard-reload only. Residual: session drop
-until T40/T171.
+until 🎯T40/🎯T171.
 
 ## Achieve reports need activated daily path (🎯T194)
 
@@ -369,6 +508,7 @@ bullseye achieve.
 | Path | Purpose |
 |---|---|
 | `~/.jevons/` | Data directory |
+| `~/.jevons/config.yaml` | Daemon config incl. `portfolios` (🎯T200 path membership) |
 | `~/.jevons/threads.json` | Durable thread registry |
 | `~/.jevons/usage.db` | Token-spend accounting |
 | `~/.jevons/budget.json` | Spend budgets / thresholds (optional). `disabled` opt-out; `accounting` = `list_price` (default, billable $) or `subscription` (SuperGrok: API-eq $ never enforces — 🎯T137) |
@@ -397,6 +537,49 @@ Empty `provider` on resume keeps the **registry-stored** backend (not
 clobbered to Grok). New agents without an override use the daemon default.
 Provider strings pass through to claudia (no allow-list) so future ids
 (e.g. Bedrock) are not blocked at the Jevons selection surface.
+
+### Running the whole fleet on Claude (🎯T282)
+
+One setting moves everything — overseer, POs, workers, asides, jwork
+tasks — onto Claude:
+
+```yaml
+# ~/.jevons/config.yaml
+provider: claude
+```
+
+(or `JEVONS_PROVIDER=claude`, or `jevonsd --provider claude`). Restart the
+daemon; already-registered agents keep the backend stored on their
+registry row, so an existing fleet stays on Grok until each agent is
+re-created or started with `provider="claude"`.
+
+Evidence: `make test-journey PROVIDER=claude` runs the isolated
+Universe-B suite — owner chat, cancel, MCP tool surface, worker spawn,
+direct, shell tool, transcript inspect — end to end on Claude.
+
+What changes under Claude:
+
+- **Overseer MCP** is installed with `claude mcp add -s user` instead of
+  `~/.grok/config.toml` (🎯T212).
+- **Transcripts** are discovered under `~/.claude/projects` (🎯T213);
+  `claude_projects:` in config points elsewhere if needed.
+- **`jevons_mcp_reconnect` does not apply** — `grok mcp disable/enable`
+  is a Grok control plane. With Claude selected the tool says so rather
+  than cycling a config the overseer never reads. Re-attach with `/mcp`
+  in-session, or restart jevonsd to re-run the user-scoped install.
+- **Agents launch as tmux sessions.** jevonsd therefore drops the
+  enclosing agent session's identity from its own environment at boot
+  and reconciles claudia's long-lived tmux server, which otherwise hands
+  each new agent the environment of whatever started it — possibly a test
+  run from days earlier. Starting jevonsd from inside a Claude Code
+  session is safe because of this; without it, spawned workers rejoin the
+  parent session and never submit their turns.
+
+Residual: Claude Session readiness is a pane pattern match owned by
+claudia, and Claude Code's startup splash can satisfy it while the TUI is
+still mounting. jevons pays a short settle after launch
+(`internal/fleet.claudeReadySettle`) to keep the first turn from being
+swallowed; the real fix belongs in claudia's readiness detection.
 
 ## Gotchas
 

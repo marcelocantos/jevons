@@ -12,16 +12,17 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/server"
 )
 
-// costGuard is the wired-up token-spend clamp-down (🎯T36): a collector
-// tailing every active session JSONL, a monitor computing burn-rates and
-// runaway signals, and an enforcer that escalates to the fleet and the
-// launchd-detached-reaching kill-switch.
+// costGuard is the wired-up token-spend clamp-down (🎯T36) plus standing
+// cost-safety auditor posture (🎯T334): collector → monitor → enforcer on
+// one usage.db spine, with eventlog audit trail and overseer-visible alerts
+// on trip. Overseer is always in ProtectedWorkers (never budget-killed).
 type costGuard struct {
 	monitor  *cost.Monitor
 	enforcer *cost.Enforcer
@@ -114,9 +115,25 @@ func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Reg
 		CollectorLastPoll: collector.LastPoll,
 	})
 
+	// Notify: UI cost_alert + overseer-visible alert (🎯T334). Structured
+	// audit trail is dual-written via AuditTrail → eventlog cost_clamp.
 	notify := func(level cost.Level, msg string) {
 		slog.Warn("budget clamp-down", "level", level, "msg", msg)
 		srv.Broadcast(map[string]any{"type": "cost_alert", "level": level.String(), "message": msg})
+		// Overseer channel: fire-and-forget so clamp path never blocks on LLM.
+		// Rate-limited by enforcer (only on level transitions / acts).
+		if level >= cost.LevelWarn {
+			body := butler.FormatEventPush(cost.EventSource, cost.FormatOverseerAlert(level, msg))
+			if err := srv.DeliverToOverseerAs(body, "agent"); err != nil {
+				slog.Warn("cost-safety: overseer alert deliver failed", "err", err, "level", level)
+			}
+		}
+	}
+	auditTrail := func(d cost.ClampDecision) {
+		fields := cost.AuditFields(d)
+		fields["decision"] = d.Decision
+		// Durable journal: component=cost_clamp for jevons_logs_tail /api/logs.
+		srv.LogEvent(cost.AuditComponent, d.Decision, fields)
 	}
 
 	enforcer := cost.NewEnforcer(&cost.EnforcerArgs{
@@ -125,15 +142,17 @@ func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Reg
 		Actions: &fleetActions{
 			registry:   registry,
 			killswitch: &cost.TmuxKillSwitch{Socket: sock},
-			// 🎯T139: never stop the overseer on fleet pause/StopAll.
+			// 🎯T139 / T334: never stop or kill the overseer on budget clamp.
 			protect: append([]string{}, cfg.ProtectedWorkers...),
 		},
-		Notify: notify,
+		Notify:     notify,
+		AuditTrail: auditTrail,
 	})
 
 	go collector.Run(ctx, cost.DefaultScanInterval, cost.DefaultPollInterval)
 	go enforcer.Run(ctx, 0)
-	slog.Info("cost clamp-down started", "budget", budgetPath, "fleet_socket", sock)
+	slog.Info("cost clamp-down started", "budget", budgetPath, "fleet_socket", sock,
+		"cost_safety", "T334", "protected", cfg.ProtectedWorkers)
 
 	return &costGuard{monitor: monitor, enforcer: enforcer}
 }

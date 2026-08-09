@@ -110,27 +110,17 @@ func (s *Server) buildAgentTranscriptPayload(name string) (payload map[string]an
 	if name == "" {
 		return nil, false
 	}
+	// 🎯T309.2: the overseer is addressable like any other agent. This replaces
+	// the 🎯T124 refusal ("overseer uses main chat"); its conversation is read
+	// from the owner chat journal and projected into the same turn shape.
+	if s.isOverseerAgent(name) {
+		return s.buildOverseerTranscriptPayload(name), true
+	}
+
 	s.mu.RLock()
 	reg := s.registry
 	tr := s.transcriptReader
-	overseer := s.overseerName
-	if overseer == "" {
-		overseer = defaultOverseerName
-	}
 	s.mu.RUnlock()
-
-	// 🎯T124: overseer never lands in RHS inspect — main chat is that stream.
-	if strings.EqualFold(name, overseer) {
-		return map[string]any{
-			"type":   "agent_transcript",
-			"kind":   inspectKindHistory,
-			"name":   name,
-			"turns":  []any{},
-			"empty":  true,
-			"error":  "overseer uses main chat (not RHS inspect)",
-			"denied": true,
-		}, true
-	}
 
 	if reg == nil {
 		return map[string]any{
@@ -174,6 +164,7 @@ func (s *Server) buildAgentTranscriptPayload(name string) (payload map[string]an
 		"purpose":    purpose,
 		"workdir":    workdir,
 		"session_id": sessionID,
+		"source":     conversationSourceSession, // 🎯T309.2 family origin
 	}
 	if sessionID == "" {
 		s.logTranscriptEmpty(emptyReasonNoSession, name, "", "")

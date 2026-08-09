@@ -165,22 +165,61 @@ func (l *Log) ReplayTail(maxTurns int, fn func(line string) error) (start, total
 // ReadRange returns the journal lines in [start, end) plus the total line
 // count — the backing read for "load earlier" pagination (🎯T57). Bounds
 // are clamped; an empty or reversed range yields no lines.
+//
+// 🎯T259: streams the file without JSON-unmarshalling every line (turn
+// detection is only needed for ReplayTail/TruncateTurns). Only the window
+// is materialised — progressive hydrate must not allocate the full journal
+// on every page.
 func (l *Log) ReadRange(start, end int) (out []string, total int, err error) {
-	lines, _, err := l.snapshot()
-	if err != nil {
-		return nil, 0, err
-	}
-	total = len(lines)
 	if start < 0 {
 		start = 0
 	}
-	if end > total {
-		end = total
+	if end < start {
+		// Still need total for the client; scan counts only.
+		end = start
 	}
-	if start >= end {
+	f, err := os.Open(l.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, 0, nil
+		}
+		return nil, 0, fmt.Errorf("chatlog: ReadRange open: %w", err)
+	}
+	defer f.Close()
+
+	// Cap window capacity when the caller asked for a finite range.
+	capHint := 0
+	if end > start {
+		capHint = end - start
+		if capHint > 4096 {
+			capHint = 4096
+		}
+	}
+	if capHint > 0 {
+		out = make([]string, 0, capHint)
+	}
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	i := 0
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			continue
+		}
+		if i >= start && i < end {
+			out = append(out, line)
+		}
+		i++
+	}
+	if err := sc.Err(); err != nil {
+		return nil, 0, fmt.Errorf("chatlog: ReadRange scan: %w", err)
+	}
+	total = i
+	if start >= total || start >= end {
 		return nil, total, nil
 	}
-	return append([]string(nil), lines[start:end]...), total, nil
+	return out, total, nil
 }
 
 // TruncateTurns removes the last n user turns (and everything after

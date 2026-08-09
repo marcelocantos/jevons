@@ -64,6 +64,115 @@
     return bot >= viewTop && top <= viewBot;
   }
 
+  // 🎯T246: strict viewport intersection (no materialize buffer).
+  // Any overlap keeps a newly arrived auto-expanded bubble open.
+  function anyPartInViewport(top, height, scrollTop, clientHeight) {
+    const t = Number(top) || 0;
+    const h = Number(height) || 0;
+    const st = Number(scrollTop) || 0;
+    const ch = Number(clientHeight) || 0;
+    const bot = t + h;
+    const viewBot = st + ch;
+    return bot > st && t < viewBot;
+  }
+
+  // Overlap of [top, top+height) with the strict viewport (px). 🎯T341.
+  function visibleOverlapPx(top, height, scrollTop, clientHeight) {
+    const t = Number(top) || 0;
+    const h = Number(height) || 0;
+    const st = Number(scrollTop) || 0;
+    const ch = Number(clientHeight) || 0;
+    if (h <= 0 || ch <= 0) return 0;
+    const bot = t + h;
+    const viewBot = st + ch;
+    const oTop = Math.max(t, st);
+    const oBot = Math.min(bot, viewBot);
+    return Math.max(0, oBot - oTop);
+  }
+
+  // Fully scrolled above the fold (typical: newer messages pushed this up).
+  function isFullyAboveViewport(top, height, scrollTop) {
+    const t = Number(top) || 0;
+    const h = Number(height) || 0;
+    const st = Number(scrollTop) || 0;
+    return t + h <= st;
+  }
+
+  // Auto-collapse policy for tall bubbles that were auto-expanded (T66/T246).
+  // Latest always stays expanded. Manual toggle (_userToggled) never auto-collapses.
+  // Non-latest auto-expanded may collapse only when fully outside the strict
+  // viewport (any remaining pixel on-screen keeps it expanded).
+  function shouldAutoCollapseOffScreen(opts) {
+    const o = opts || {};
+    if (o.isLatest) return false;
+    if (o.userToggled) return false;
+    if (!o.autoExpanded) return false;
+    return !anyPartInViewport(o.top, o.height, o.scrollTop, o.clientHeight);
+  }
+
+  // 🎯T261: near the live end of the transcript (stick-to-bottom / post-pin).
+  // Default slack matches typical jump-to-bottom hysteresis (~48px).
+  const NEAR_END_SLACK_PX = 48;
+  // 🎯T341: require real ink in view to auto-expand — a 1px edge contact
+  // plus expand→pin→fully-above→collapse is the continuous jiggle loop.
+  // Collapse still uses fully-outside (overlap 0), so enter≥8 / leave=0
+  // hysteresis stops band-edge thrash.
+  const MIN_VISIBLE_PX_FOR_AUTO_EXPAND = 8;
+  function isNearTranscriptEnd(scrollTop, scrollHeight, clientHeight, slackPx) {
+    const slack = slackPx == null ? NEAR_END_SLACK_PX : Number(slackPx);
+    const st = Number(scrollTop) || 0;
+    const sh = Number(scrollHeight) || 0;
+    const ch = Number(clientHeight) || 0;
+    const s = Number.isFinite(slack) ? slack : NEAR_END_SLACK_PX;
+    return st + ch >= sh - s;
+  }
+
+  // 🎯T261: while pinned near end, tall in-view bubbles (not user-toggled)
+  // should be auto-expanded — not only the single latest message. Covers hard
+  // reload after history pin and stick-to-bottom re-render. Mid-history free
+  // scroll stays nearEnd=false so older rows are not force-opened.
+  // 🎯T341: min visible px (default MIN_VISIBLE_PX_FOR_AUTO_EXPAND) for enter.
+  function shouldAutoExpandInView(opts) {
+    const o = opts || {};
+    if (o.userToggled) return false;
+    if (!o.tall) return false;
+    if (!o.nearEnd) return false;
+    if (o.historyReplayActive) return false;
+    const minPx = o.minVisiblePx != null
+      ? Number(o.minVisiblePx)
+      : MIN_VISIBLE_PX_FOR_AUTO_EXPAND;
+    const need = Number.isFinite(minPx) && minPx > 0 ? minPx : MIN_VISIBLE_PX_FOR_AUTO_EXPAND;
+    return visibleOverlapPx(o.top, o.height, o.scrollTop, o.clientHeight) >= need;
+  }
+
+  // Mid history-replay the viewport sits at the top; geometry is not the
+  // post-pin end state. Auto-collapse must wait until pin (🎯T261).
+  function shouldRunOffScreenCollapse(historyReplayActive) {
+    return !historyReplayActive;
+  }
+
+  // 🎯T341: stick-to-bottom pin gate. Micro height / scrollTop noise (subpixel
+  // remat settle, 1px shell thrash) must not rewrite scrollTop every frame —
+  // that is the continuous whole-page text jiggle while "idle".
+  // force: true always pins (send, jump-to-bottom, stream growth path).
+  const PIN_HEIGHT_THRESHOLD_PX = 2;
+  function shouldPinScroll(opts) {
+    const o = opts || {};
+    if (o.force) return true;
+    const thr = o.threshold != null ? Number(o.threshold) : PIN_HEIGHT_THRESHOLD_PX;
+    const t = Number.isFinite(thr) && thr >= 0 ? thr : PIN_HEIGHT_THRESHOLD_PX;
+    const prevH = Number(o.prevScrollHeight) || 0;
+    const nextH = Number(o.nextScrollHeight) || 0;
+    if (Math.abs(nextH - prevH) >= t) return true;
+    const ch = Number(o.clientHeight) || 0;
+    const st = Number(o.scrollTop) || 0;
+    const target = finalPinScrollTop(nextH, ch);
+    return Math.abs(st - target) >= t;
+  }
+
+  // 🎯T341: ignore sub-pixel container width jitter (scrollbar gutter, flex).
+  const WIDTH_INVALIDATE_EPS_PX = 1;
+
   // Count how many items would stay materialised for a long list
   // scrolled to the bottom (oracle for "bounded DOM work").
   function materialisedCount(n, avgHeight, clientHeight, buffer) {
@@ -320,53 +429,95 @@
     return '';
   }
 
+  function streamIdOfFrame(m) {
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.streamIdOf) {
+      return ChatEvents.streamIdOf(m);
+    }
+    if (!m) return '';
+    const id = m.stream_id != null ? m.stream_id : m.streamId;
+    return id == null ? '' : String(id).trim();
+  }
+
+  function isSilentTextLocal(text) {
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.isSilentAssistantText) {
+      return ChatEvents.isSilentAssistantText(text);
+    }
+    const t = String(text == null ? '' : text).trim();
+    if (!t) return false;
+    const lower = t.toLowerCase();
+    if (lower.startsWith('[silent]')) return true;
+    const head = t.length > 80 ? t.slice(0, 80) : t;
+    const lines = head.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim().toLowerCase().startsWith('[silent]')) return true;
+    }
+    return false;
+  }
+
+  // 🎯T250/T264: aside wire user bodies never become main transcript chunks.
+  function isAsideWireUserTextLocal(text) {
+    if (typeof AttentionThreads !== 'undefined') {
+      if (AttentionThreads.isAsideWireUserText) {
+        return AttentionThreads.isAsideWireUserText(text);
+      }
+      if (AttentionThreads.looksLikeAsideWireMarker) {
+        return AttentionThreads.looksLikeAsideWireMarker(text);
+      }
+    }
+    const t = String(text == null ? '' : text).replace(/^\s*(?:\[image:\s*[^\]]*\]\s*)+/i, '');
+    if (/^\s*\[attention\s*:/i.test(t)) return true;
+    if (/^\s*\[target-aside\s*:/i.test(t)) return true;
+    return false;
+  }
+
+  function isTerminalFrameLocal(m) {
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.isTerminalStop) {
+      return ChatEvents.isTerminalStop(m);
+    }
+    if (!m || m.type !== 'assistant') return false;
+    const msg = m.message || {};
+    const stop = msg.stop_reason || msg.stopReason || '';
+    return stop === 'end_turn' || stop === 'stop_sequence' || stop === 'max_tokens';
+  }
+
   // frames: array of wire objects (or JSON strings). Returns whole chunks:
   //   { role: 'user'|'jevons', text: string, timestamp?: number }
-  // Consecutive assistant text frames coalesce into one chunk.
-  // 🎯T161: bare-concat continuous text frames; segment-join after
-  // tool_use/tool_result gaps (protocol edge, not content sniff).
+  // 🎯T329: ONE path — ChatEvents.coalesceLiveDisplayFrames (same model as
+  // applyInspectLiveFrame / applyLiveDisplayFrame). No dual-stack residual.
+  // 🎯T161/T223/T245/T250 policies live in ChatEvents; main only maps roles
+  // and skips aside-wire user bodies.
   function coalesceTranscriptFrames(frames) {
-    const out = [];
-    let pending = null; // { role, text, timestamp }
-    let segmentEdgePending = false;
-    const list = Array.isArray(frames) ? frames : [];
-    for (let i = 0; i < list.length; i++) {
-      let m = list[i];
-      if (typeof m === 'string') {
-        try { m = JSON.parse(m); } catch (_) { continue; }
-      }
-      if (!m || typeof m !== 'object') continue;
-      const ts = m.timestamp ? new Date(m.timestamp).getTime() : undefined;
-      if (m.type === 'user') {
-        const text = extractUserText(m);
-        if (!text) continue;
-        pending = null;
-        segmentEdgePending = false;
-        out.push({ role: 'user', text: text, timestamp: ts });
-      } else if (m.type === 'tool_result' || m.type === 'result') {
-        if (pending) segmentEdgePending = true;
-        // omitted from transcript window units
-      } else if (m.type === 'assistant') {
-        if (frameHasNonTextAssistant(m) && pending) {
-          segmentEdgePending = true;
-        }
-        const text = extractAssistantText(m);
-        if (!text) continue;
-        if (pending && pending.role === 'jevons') {
-          pending.text = segmentEdgePending
-            ? joinAssistantSegmentsLocal(pending.text, text)
-            : appendAssistantStreamLocal(pending.text, text);
-          segmentEdgePending = false;
-          if (ts != null) pending.timestamp = ts;
-        } else {
-          pending = { role: 'jevons', text: text, timestamp: ts };
-          out.push(pending);
-          segmentEdgePending = false;
-        }
-      }
-      // system / agent_note omitted from transcript window units
+    if (typeof ChatEvents !== 'undefined' && ChatEvents.coalesceLiveDisplayFrames) {
+      return ChatEvents.coalesceLiveDisplayFrames(frames, {
+        roleMap: { assistant: 'jevons' },
+        skipUser: function (text) {
+          // 🎯T250: attention/target-aside wires → sidebar only, not main.
+          if (isAsideWireUserTextLocal(text)) return true;
+          // 🎯T329: harness injects are non-boundaries; omit from main window.
+          if (ChatEvents.isNonBoundaryUserText && ChatEvents.isNonBoundaryUserText(text)) {
+            return true;
+          }
+          return false;
+        },
+      });
     }
-    return out;
+    // Node require path: load ChatEvents sibling when not on window.
+    if (typeof module === 'object' && module.exports) {
+      try {
+        const CE = require('./chat_events.js');
+        if (CE && CE.coalesceLiveDisplayFrames) {
+          return CE.coalesceLiveDisplayFrames(frames, {
+            roleMap: { assistant: 'jevons' },
+            skipUser: function (text) {
+              if (isAsideWireUserTextLocal(text)) return true;
+              if (CE.isNonBoundaryUserText && CE.isNonBoundaryUserText(text)) return true;
+              return false;
+            },
+          });
+        }
+      } catch (_) { /* fall through empty */ }
+    }
+    return [];
   }
 
   // Reject partial markdown "frames" as display units: a chunk must be a
@@ -417,7 +568,8 @@
     const next = Number(nextWidth);
     if (!(next > 0)) return false;
     if (!(prev > 0)) return true; // first known width after unknown
-    return prev !== next;
+    // 🎯T341: sub-pixel / scrollbar-gutter jitter must not nuke the size cache.
+    return Math.abs(prev - next) >= WIDTH_INVALIDATE_EPS_PX;
   }
 
   // Near-viewport first remeasure order after width invalidate.
@@ -429,6 +581,111 @@
       if (!nearSet.has(i)) far.push(i);
     }
     return { immediate: near, deferred: far };
+  }
+
+  // ── Progressive rematerialize (🎯T336 Page Up) ─────────────────────
+  // Rematerialize is expensive (parseAssistantMarkdown / renderBody). Page Up
+  // brings many dematerialized shells into the band at once; Page Down stays
+  // near the live end where shells are already material — one-sided lag.
+  // Bound work per animation frame; paint strict-viewport first.
+
+  // Soft cap: enough for a short screenful, not a full 800px buffer thrash.
+  const REMATERIALIZE_PER_FRAME = 6;
+
+  // Distance-based priority: 0 = any pixel in strict viewport (paint first);
+  // larger = farther outside (buffer / progressive fill).
+  function rematerializePriority(top, height, scrollTop, clientHeight) {
+    const t = Number(top) || 0;
+    const h = Number(height) || 0;
+    const st = Number(scrollTop) || 0;
+    const ch = Number(clientHeight) || 0;
+    const bot = t + h;
+    const viewBot = st + ch;
+    if (bot > st && t < viewBot) return 0;
+    if (bot <= st) return 1 + (st - bot);
+    return 1 + (t - viewBot);
+  }
+
+  /**
+   * Plan one rAF of rematerializations.
+   * pending: [{ index?, top, height, ...el }] — shells that want content.
+   * Returns thisFrame (≤ maxPerFrame, viewport-first) and remaining.
+   * syncWouldThrash is the oracle flag: unbounded sync rematerialize would
+   * exceed the per-frame budget (Page-Up thrash).
+   */
+  function planRematerializeFrame(pending, scrollTop, clientHeight, maxPerFrame) {
+    const max = maxPerFrame > 0 ? maxPerFrame : REMATERIALIZE_PER_FRAME;
+    const list = Array.isArray(pending) ? pending.slice() : [];
+    list.sort(function (a, b) {
+      const pa = rematerializePriority(a.top, a.height, scrollTop, clientHeight);
+      const pb = rematerializePriority(b.top, b.height, scrollTop, clientHeight);
+      if (pa !== pb) return pa - pb;
+      const ia = a.index != null ? a.index : 0;
+      const ib = b.index != null ? b.index : 0;
+      return ia - ib;
+    });
+    return {
+      thisFrame: list.slice(0, max),
+      remaining: list.slice(max),
+      syncWouldThrash: list.length > max,
+      maxPerFrame: max,
+    };
+  }
+
+  /**
+   * Simulate Page-Up-equivalent band enter after scrolling up by ~0.8 viewport
+   * from a bottom-pinned material set. Oracle for thrash: enter count is large
+   * while a progressive plan bounds thisFrame ≤ REMATERIALIZE_PER_FRAME.
+   *
+   * opts: { n, avgHeight, clientHeight, buffer, pageFactor, maxPerFrame }
+   */
+  function pageUpRematerializeBudget(opts) {
+    const o = opts || {};
+    const n = Math.max(0, o.n | 0);
+    const h = o.avgHeight > 0 ? o.avgHeight : DEFAULT_ESTIMATE_HEIGHT;
+    const ch = o.clientHeight > 0 ? o.clientHeight : 600;
+    const buf = typeof o.buffer === 'number' ? o.buffer : DEFAULT_BUFFER;
+    const pageFactor = o.pageFactor > 0 ? o.pageFactor : 0.8;
+    const maxPerFrame = o.maxPerFrame > 0 ? o.maxPerFrame : REMATERIALIZE_PER_FRAME;
+    if (n === 0) {
+      return {
+        enterCount: 0,
+        thisFrameCount: 0,
+        syncWouldThrash: false,
+        maxPerFrame: maxPerFrame,
+      };
+    }
+    const tops = [];
+    for (let i = 0; i < n; i++) {
+      tops.push({ top: i * h, height: h });
+    }
+    const totalH = n * h;
+    const bottomScroll = Math.max(0, totalH - ch);
+    const materialAtBottom = new Set(visibleIndices(tops, bottomScroll, ch, buf));
+    // Page Up: scroll up by ~0.8 viewport (matches index.html PageUp handler).
+    const pageUpScroll = Math.max(0, bottomScroll - ch * pageFactor);
+    const wantAfter = visibleIndices(tops, pageUpScroll, ch, buf);
+    const enter = [];
+    for (let i = 0; i < wantAfter.length; i++) {
+      const idx = wantAfter[i];
+      if (!materialAtBottom.has(idx)) {
+        enter.push({
+          index: idx,
+          top: tops[idx].top,
+          height: tops[idx].height,
+        });
+      }
+    }
+    const plan = planRematerializeFrame(enter, pageUpScroll, ch, maxPerFrame);
+    return {
+      enterCount: enter.length,
+      thisFrameCount: plan.thisFrame.length,
+      remainingCount: plan.remaining.length,
+      syncWouldThrash: plan.syncWouldThrash,
+      maxPerFrame: maxPerFrame,
+      pageUpScroll: pageUpScroll,
+      bottomScroll: bottomScroll,
+    };
   }
 
   // ── Events that drive residency (documentation + test oracle) ──────
@@ -454,12 +711,292 @@
     return !!replayActive;
   }
 
+  // ── Reload hydrate: end-first, lazy, parade-proof (🎯T347) ─────────
+  // Owner regression: hard-reload of a long chat painted every replayed turn
+  // old→new (full markdown parse each) and, once per-frame work opened >150ms
+  // gaps, the idle fallback ended suppression mid-burst — every remaining
+  // frame then stick-to-bottom pinned: a ~minute-long upward scroll parade.
+  // Model: (a) replay appends are lazy shells (zero parse before pin),
+  // (b) the single pin at history_meta triggers an end-band materialize only,
+  // (c) frames arriving while the connection still awaits history_meta always
+  // re-enter suppression — the fallback can never flip the burst into
+  // per-message pin mode.
+
+  // A server that never sends history_meta must degrade to live behaviour
+  // (otherwise streaming would stay pin-suppressed forever) — time-cap the
+  // re-entry window well above any sane replay burst.
+  const REPLAY_REENTER_MAX_MS = 30000;
+
+  function shouldReenterReplay(opts) {
+    const o = opts || {};
+    if (!o.awaitingHistoryMeta) return false;
+    if (o.historyReplayActive) return false;
+    const ms = Number(o.msSinceConnect);
+    const max = o.maxMs != null ? Number(o.maxMs) : REPLAY_REENTER_MAX_MS;
+    if (Number.isFinite(ms) && Number.isFinite(max) && ms > max) return false;
+    return true;
+  }
+
+  // Replay-burst appends stay lazy shells; paint is post-pin, band-only.
+  function shouldPaintOnReplayAppend(historyReplayActive) {
+    return !historyReplayActive;
+  }
+
+  // Materialization is deferred wholesale during the burst — the pin at
+  // history_meta schedules the one end-band pass.
+  function shouldVirtualizeDuringReplay(historyReplayActive) {
+    return !historyReplayActive;
+  }
+
+  /**
+   * Reload/hydrate oracle: simulate a chronological replay of n turns and the
+   * single end pin. Policy knobs mirror the product wiring so the hermetic
+   * test proves both directions:
+   *   defaults (lazyAppend + suppressPin) → no mid-hydrate scrollTop climb,
+   *     zero paints during replay, end-band-bounded materialize, dist-to-end 0;
+   *   suppressPin:false → midHydrateClimbs > 0 (the parade — caught);
+   *   lazyAppend:false → paintedDuringReplay === n (the slow full-list
+   *     materialize behind the ~60s settle — caught).
+   */
+  function replayHydrateTrace(opts) {
+    const o = opts || {};
+    const n = Math.max(0, o.n | 0);
+    const h = o.avgHeight > 0 ? o.avgHeight : DEFAULT_ESTIMATE_HEIGHT;
+    const ch = o.clientHeight > 0 ? o.clientHeight : 600;
+    const buf = typeof o.buffer === 'number' ? o.buffer : DEFAULT_BUFFER;
+    const lazyAppend = o.lazyAppend !== false;
+    const suppressPin = o.suppressPinDuringReplay !== false;
+    let scrollTop = 0;
+    let climbs = 0;
+    const scrollTops = [];
+    for (let i = 1; i <= n; i++) {
+      if (!suppressPin) {
+        // Per-message stick-to-bottom during the burst (the regression).
+        const next = Math.max(0, i * h - ch);
+        if (next > scrollTop) { scrollTop = next; climbs++; }
+      }
+      scrollTops.push(scrollTop);
+    }
+    const plan = recentFirstMaterializePlan(n, h, ch, buf);
+    scrollTops.push(plan.scrollTop);
+    const totalH = n * h;
+    return {
+      scrollTops: scrollTops,
+      midHydrateClimbs: climbs,
+      paintedDuringReplay: lazyAppend ? 0 : n,
+      materializedAtPin: plan.materialIndices.length,
+      finalDistToBottom: Math.max(0, totalH - ch) - plan.scrollTop,
+      landsOnLatest: plan.landsOnLatest,
+      // Band bound in item units: viewport + buffer both sides + edge slack.
+      materialBandBound: Math.ceil((ch + 2 * buf) / h) + 2,
+    };
+  }
+
+  // ── Main-thread liveness: phased, budgeted virtualize (🎯T349) ──────
+  // Owner regression: composer froze for tens of seconds (blind-typed blobs,
+  // Firefox slow-script dialog) on a long transcript. Root cause: the
+  // virtualize pass interleaved layout reads (offsetTop/offsetHeight of the
+  // next row) with dematerialize writes (class/style/innerHTML of the
+  // previous row). Every write invalidated layout, so each subsequent read
+  // forced a full reflow of the flow container — O(rows²) layout work in one
+  // sync pass when many rows dematerialize at once. Secondary: the
+  // rematerialize cap (6/frame) bounded item count but not time — a few
+  // giant markdown bodies still blocked a frame for seconds.
+  // Model: (a) all geometry reads happen before any write, (b) writes are
+  // capped per frame (DEMATERIALIZE_PER_FRAME) and time-budgeted
+  // (FRAME_BUDGET_MS), (c) leftover work re-arms the next frame — a single
+  // unbounded sync pass no longer exists on the virtualize path.
+
+  // Demat writes are cheap (innerHTML='' + class/style) — a generous cap
+  // still clears thousands of rows within a second of frames.
+  const DEMATERIALIZE_PER_FRAME = 40;
+  // Per-frame paint budget: half a 60Hz frame, leaving room for input,
+  // style/layout, and the browser's own work.
+  const FRAME_BUDGET_MS = 10;
+
+  function frameBudgetExceeded(startMs, nowMs, budgetMs) {
+    const b = budgetMs > 0 ? Number(budgetMs) : FRAME_BUDGET_MS;
+    const s = Number(startMs);
+    const t = Number(nowMs);
+    if (!Number.isFinite(s) || !Number.isFinite(t) || !Number.isFinite(b)) return false;
+    return t - s > b;
+  }
+
+  /**
+   * Plan one phased virtualize frame from pre-read geometry (no DOM here).
+   * items: [{ top, height, shell, stream?, dematOk?, index?, ...el }].
+   *   stream: live streaming bubble — never planned (caller handles).
+   *   dematOk:false — dematerializeMsg would refuse (auto-expanded, no body);
+   *   excluded from the plan so the leftover re-arm cannot spin on rows that
+   *   never make progress.
+   * Returns viewport-first remat ≤ rematPerFrame, demat ≤ dematPerFrame,
+   * and the deferred remainders; `more` re-arms the next frame.
+   */
+  function planVirtualizePass(items, scrollTop, clientHeight, buffer, caps) {
+    const c = caps || {};
+    const dematMax = c.dematPerFrame > 0 ? c.dematPerFrame : DEMATERIALIZE_PER_FRAME;
+    const rematMax = c.rematPerFrame > 0 ? c.rematPerFrame : REMATERIALIZE_PER_FRAME;
+    const rematPending = [];
+    const dematPending = [];
+    const list = Array.isArray(items) ? items : [];
+    for (let i = 0; i < list.length; i++) {
+      const it = list[i];
+      if (!it || it.stream) continue;
+      const want = shouldMaterialize(it.top, it.height, scrollTop, clientHeight, buffer);
+      if (want && it.shell) rematPending.push(it);
+      else if (!want && !it.shell && it.dematOk !== false) dematPending.push(it);
+    }
+    const rplan = planRematerializeFrame(rematPending, scrollTop, clientHeight, rematMax);
+    return {
+      rematThisFrame: rplan.thisFrame,
+      rematRemaining: rplan.remaining,
+      dematThisFrame: dematPending.slice(0, dematMax),
+      dematRemaining: dematPending.slice(dematMax),
+      more: rplan.remaining.length > 0 || dematPending.length > dematMax,
+    };
+  }
+
+  /**
+   * Stress oracle: n materialized rows, viewport pinned at the end, so all
+   * rows above the band want dematerialize at once (long-transcript settle).
+   *   phased (default) → reflows grow with passes (≤1 per frame: reads are
+   *     batched before writes) and maxWritesPerPass ≤ dematPerFrame;
+   *   phased:false → the legacy single pass: every write dirties layout and
+   *     the next row's read reflows — interleavedReflows ≈ n (the freeze).
+   */
+  function virtualizePassTrace(opts) {
+    const o = opts || {};
+    const n = Math.max(0, o.n | 0);
+    const h = o.avgHeight > 0 ? o.avgHeight : DEFAULT_ESTIMATE_HEIGHT;
+    const ch = o.clientHeight > 0 ? o.clientHeight : 600;
+    const buf = typeof o.buffer === 'number' ? o.buffer : DEFAULT_BUFFER;
+    const cap = o.dematPerFrame > 0 ? o.dematPerFrame : DEMATERIALIZE_PER_FRAME;
+    const phased = o.phased !== false;
+    const scrollTop = Math.max(0, n * h - ch);
+    const items = [];
+    for (let i = 0; i < n; i++) {
+      items.push({ index: i, top: i * h, height: h, shell: false, dematOk: true });
+    }
+    if (!phased) {
+      // Legacy interleaved pass: read row i (reflow if a prior write dirtied
+      // layout) → maybe write row i → next read reflows again.
+      let reflows = 0;
+      let writes = 0;
+      let dirty = false;
+      for (let i = 0; i < items.length; i++) {
+        if (dirty) { reflows++; dirty = false; }
+        const it = items[i];
+        const want = shouldMaterialize(it.top, it.height, scrollTop, ch, buf);
+        if (!want && !it.shell) { it.shell = true; writes++; dirty = true; }
+      }
+      return {
+        passes: 1,
+        reflows: reflows,
+        writes: writes,
+        maxWritesPerPass: writes,
+        converged: true,
+      };
+    }
+    let passes = 0;
+    let reflows = 0;
+    let writes = 0;
+    let maxWritesPerPass = 0;
+    for (let guard = 0; ; guard++) {
+      const plan = planVirtualizePass(items, scrollTop, ch, buf, { dematPerFrame: cap });
+      if (!plan.dematThisFrame.length && !plan.rematThisFrame.length) break;
+      passes++;
+      reflows++; // reads batched before writes: at most one layout per frame
+      for (let j = 0; j < plan.dematThisFrame.length; j++) {
+        plan.dematThisFrame[j].shell = true;
+        writes++;
+      }
+      maxWritesPerPass = Math.max(maxWritesPerPass, plan.dematThisFrame.length);
+      if (guard > n + 2) {
+        return { passes: passes, reflows: reflows, writes: writes,
+                 maxWritesPerPass: maxWritesPerPass, converged: false };
+      }
+    }
+    return { passes: passes, reflows: reflows, writes: writes,
+             maxWritesPerPass: maxWritesPerPass, converged: true };
+  }
+
   // Final scrollTop after one pin to the live end.
+  // NOTE (🎯T351): this is GATE MATH ONLY (distance-from-end decisions).
+  // scrollHeight/clientHeight are integer-rounded by the DOM, so sh − ch can
+  // differ from the true fractional max scrollTop by up to 1px. Pin WRITES
+  // must use pinWriteScrollTop below, never this value.
   function finalPinScrollTop(scrollHeight, clientHeight) {
     const sh = Math.max(0, Number(scrollHeight) || 0);
     const ch = Math.max(0, Number(clientHeight) || 0);
     return Math.max(0, sh - ch);
   }
+
+  // 🎯T351: the value to ASSIGN when pinning to the live end. Over-assign
+  // the full scrollHeight — the browser clamps to the exact FRACTIONAL max
+  // (contentHeightF − clientHeightF), so the content bottom sits flush with
+  // the viewport bottom regardless of the fractional part of total height.
+  // Writing integer sh − ch instead leaves the viewport at a sub-pixel
+  // offset from the true bottom that CHANGES whenever frac(total height)
+  // drifts (turn-markers 13.1875px, 22.4px lines, hydrate pages) — the
+  // owner-visible residual ~1px jiggle that survived T341/T350.
+  function pinWriteScrollTop(scrollHeight) {
+    return Math.max(0, Number(scrollHeight) || 0);
+  }
+
+  // 🎯T351: pinned-at-end check tolerant of fractional clamp. After an
+  // over-assign pin, scrollTop = fractional max M while the integer target
+  // sh − ch may differ by up to 1px in either direction — |st − target| < 0.5
+  // misreads that as "not pinned" and rewrites every pass. eps 1px covers the
+  // worst rounding gap; over-assign writes are idempotent anyway.
+  const PIN_AT_END_EPS_PX = 1;
+  function isPinnedAtEnd(scrollTop, scrollHeight, clientHeight, epsPx) {
+    const eps = epsPx == null ? PIN_AT_END_EPS_PX : Number(epsPx);
+    const e = Number.isFinite(eps) && eps >= 0 ? eps : PIN_AT_END_EPS_PX;
+    const st = Number(scrollTop) || 0;
+    return Math.abs(finalPinScrollTop(scrollHeight, clientHeight) - st) <= e;
+  }
+
+  // 🎯T351: whole-pixel row lock. Scroll offsets are integer-quantized by
+  // the engine (a scrollTop write cannot express a fraction — measured:
+  // assigning 100.5 reads back 101; over-assign clamps to an integer), so
+  // any row whose border-box height is fractional (22.4px text lines,
+  // 13.1875px turn-markers, mermaid/SVG) makes frac(total content height)
+  // drift as rows come and go — and every integer pin then lands at a
+  // different sub-pixel offset from the true content bottom: the
+  // owner-visible ~1px jiggle. Locking each row's min-height at the ceiling
+  // of its natural height keeps every row box on the pixel grid (≤1px of
+  // invisible slack), so the pinned viewport phase is constant.
+  const ROW_SNAP_EPS_PX = 1 / 128; // rects quantize at 1/64px; tolerate float fuzz
+  function snappedRowLockPx(height) {
+    const h = Number(height);
+    if (!Number.isFinite(h) || h <= 0) return 0;
+    const snapped = Math.ceil(h - ROW_SNAP_EPS_PX);
+    return snapped > 0 ? snapped : 0;
+  }
+
+  // 🎯T351: scroll compensation for a history page inserted ABOVE the
+  // viewport. The integer scrollHeight delta (nextScrollHeight −
+  // prevScrollHeight) loses the inserted page's fractional height, shifting
+  // everything below by the remainder on every hydrate page (~420ms cadence
+  // for minutes after a hard reload). Rect-exact: the anchor row's
+  // getBoundingClientRect().top before/after the insert measures the true
+  // fractional height gained. Falls back to the integer delta only when no
+  // anchor rect is available (empty list).
+  function hydrateCompensatedScrollTop(prevScrollTop, anchorTopBefore, anchorTopAfter,
+                                       prevScrollHeight, nextScrollHeight) {
+    const prev = Number(prevScrollTop) || 0;
+    const before = Number(anchorTopBefore);
+    const after = Number(anchorTopAfter);
+    if (Number.isFinite(before) && Number.isFinite(after)) {
+      return Math.max(0, prev + (after - before));
+    }
+    const prevH = Number(prevScrollHeight) || 0;
+    const nextH = Number(nextScrollHeight) || 0;
+    return Math.max(0, prev + (nextH - prevH));
+  }
+
+  // Note: shouldPinScroll (above) calls finalPinScrollTop at runtime — both
+  // are function declarations in this factory so hoisting is fine.
 
   return {
     DEFAULT_BUFFER: DEFAULT_BUFFER,
@@ -470,6 +1007,18 @@
 
     visibleIndices: visibleIndices,
     shouldMaterialize: shouldMaterialize,
+    anyPartInViewport: anyPartInViewport,
+    visibleOverlapPx: visibleOverlapPx,
+    isFullyAboveViewport: isFullyAboveViewport,
+    shouldAutoCollapseOffScreen: shouldAutoCollapseOffScreen,
+    NEAR_END_SLACK_PX: NEAR_END_SLACK_PX,
+    MIN_VISIBLE_PX_FOR_AUTO_EXPAND: MIN_VISIBLE_PX_FOR_AUTO_EXPAND,
+    isNearTranscriptEnd: isNearTranscriptEnd,
+    shouldAutoExpandInView: shouldAutoExpandInView,
+    shouldRunOffScreenCollapse: shouldRunOffScreenCollapse,
+    PIN_HEIGHT_THRESHOLD_PX: PIN_HEIGHT_THRESHOLD_PX,
+    shouldPinScroll: shouldPinScroll,
+    WIDTH_INVALIDATE_EPS_PX: WIDTH_INVALIDATE_EPS_PX,
     materialisedCount: materialisedCount,
     enterLeaveBand: enterLeaveBand,
 
@@ -504,11 +1053,36 @@
     remeasureOrder: remeasureOrder,
     residencyDrivers: residencyDrivers,
 
+    // 🎯T336: progressive rematerialize (Page Up thrash bound).
+    REMATERIALIZE_PER_FRAME: REMATERIALIZE_PER_FRAME,
+    rematerializePriority: rematerializePriority,
+    planRematerializeFrame: planRematerializeFrame,
+    pageUpRematerializeBudget: pageUpRematerializeBudget,
+
     // 🎯T119.1 / reload-reconnect: suppress stick-to-bottom during WS
     // chronological replay; one pin after history_meta (or idle end).
     shouldSuppressPinDuringReplay: shouldSuppressPinDuringReplay,
     finalPinScrollTop: finalPinScrollTop,
+    pinWriteScrollTop: pinWriteScrollTop,
+    PIN_AT_END_EPS_PX: PIN_AT_END_EPS_PX,
+    isPinnedAtEnd: isPinnedAtEnd,
+    hydrateCompensatedScrollTop: hydrateCompensatedScrollTop,
+    snappedRowLockPx: snappedRowLockPx,
     // Idle end fallback ms if history_meta never arrives (empty log).
     REPLAY_IDLE_END_MS: REPLAY_IDLE_END_MS,
+
+    // 🎯T347: end-first lazy hydrate; parade-proof pre-meta suppression.
+    REPLAY_REENTER_MAX_MS: REPLAY_REENTER_MAX_MS,
+    shouldReenterReplay: shouldReenterReplay,
+    shouldPaintOnReplayAppend: shouldPaintOnReplayAppend,
+    shouldVirtualizeDuringReplay: shouldVirtualizeDuringReplay,
+    replayHydrateTrace: replayHydrateTrace,
+
+    // 🎯T349: phased, budgeted virtualize — composer stays responsive.
+    DEMATERIALIZE_PER_FRAME: DEMATERIALIZE_PER_FRAME,
+    FRAME_BUDGET_MS: FRAME_BUDGET_MS,
+    frameBudgetExceeded: frameBudgetExceeded,
+    planVirtualizePass: planVirtualizePass,
+    virtualizePassTrace: virtualizePassTrace,
   };
 }));

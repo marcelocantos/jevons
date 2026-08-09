@@ -13,8 +13,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/rsi"
 )
 
-// SetRSILoop attaches the ambient RSI loop (🎯T92) and registers
-// jevons_rsi_cycle for on-demand retrospective minting.
+// SetRSILoop attaches the residual RSI mint loop (🎯T92) and registers
+// jevons_rsi_cycle. Product path is the coach (🎯T243 / jevons_rsi_coach_*);
+// mint is opt-in residual and must not be the standing ambient product path.
 func (s *Server) SetRSILoop(loop *rsi.Loop) {
 	s.rsiLoop = loop
 	if loop == nil {
@@ -26,8 +27,8 @@ func (s *Server) SetRSILoop(loop *rsi.Loop) {
 func (s *Server) registerRSITools() {
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_rsi_cycle",
-			mcp.WithDescription("Run one ambient RSI retrospective cycle now (🎯T92/T92.2): sample lifecycle/eventlog evidence, owner-chatlog friction, session transcripts (mnemo surface), + stream buffer; extract improvement candidates; apply noise control; file bullseye targets when not dry-run. Prefer harness schedule/stream for ambient operation; use this to force a cycle or inspect proposals."),
-			mcp.WithBoolean("dry_run", mcp.Description("If true, extract+dedupe only — do not file targets (overrides loop dry-run for this call only when the loop supports it via RunOnce still filing based on loop config; prefer loop DryRun for global).")),
+			mcp.WithDescription("RESIDUAL (🎯T92 mint): run one direct bullseye-mint cycle. Product path is jevons_rsi_coach_cycle (🎯T243) — coach posts judgments to overseer; overseer alone files. This tool files only when the residual mint loop is configured (JEVONS_RSI_MINT/DEEPER). Prefer coach for ambient RSI."),
+			mcp.WithBoolean("dry_run", mcp.Description("If true, extract+dedupe only — do not file targets (advisory; loop DryRun owns filing).")),
 		),
 		s.handleRSICycle,
 	)

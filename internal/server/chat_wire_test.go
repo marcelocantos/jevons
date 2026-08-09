@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/chatlog"
 )
 
 // 🎯T64: product path is claudia handleSessionUpdate → Event.Raw → chatWireLine.
@@ -87,6 +88,14 @@ func TestChatWireLineGrokACPShapes(t *testing.T) {
 			wantOK:   true,
 			wantType: "assistant",
 			wantText: `"text":"pong"`,
+		},
+		{
+			// 🎯T237: bare Internal error is rewritten with class, not left as-is.
+			name:     "internal error classified on wire",
+			ev:       claudia.Event{Type: "assistant", Text: "Internal error", StopReason: "end_turn", Raw: acpEndRaw},
+			wantOK:   true,
+			wantType: "assistant",
+			wantText: `backend_unavailable`,
 		},
 		{
 			name:     "empty-text end_turn from ACP",
@@ -423,5 +432,363 @@ func TestUIContractEndTurnClearsWithoutText(t *testing.T) {
 	terminal := m.Message.StopReason == "end_turn"
 	if !terminal {
 		t.Fatal("not terminal")
+	}
+}
+
+// 🎯T238: overseer [silent] assistant text must not become owner chat wire.
+func TestChatWireLineSuppressesSilentAssistant(t *testing.T) {
+	t.Parallel()
+	line, ok := chatWireLine(claudia.Event{
+		Type: "assistant",
+		Text: "[silent] continued jv-t212; T222 already working.",
+		Raw:  []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"[silent] continued"}}}`),
+	})
+	if ok {
+		t.Fatalf("silent assistant must not wire; got ok=true line=%s", line)
+	}
+	if strings.Contains(line, "[silent]") {
+		t.Fatalf("silent text must not leak: %s", line)
+	}
+
+	// Case / trim still suppressed.
+	_, ok = chatWireLine(claudia.Event{
+		Type: "assistant",
+		Text: "  [SILENT] ops ok",
+	})
+	if ok {
+		t.Fatal("case-insensitive silent must suppress")
+	}
+
+	// Non-silent still delivered.
+	line, ok = chatWireLine(claudia.Event{
+		Type: "assistant",
+		Text: "Owner needs this reply.",
+	})
+	if !ok || !strings.Contains(line, "Owner needs this reply") {
+		t.Fatalf("non-silent assistant still delivered: ok=%v line=%s", ok, line)
+	}
+}
+
+// 🎯T238: silent + terminal → empty end_turn (clear working), no silent body.
+func TestChatWireLineSilentTerminalClearsWithoutBody(t *testing.T) {
+	t.Parallel()
+	line, ok := chatWireLine(claudia.Event{
+		Type:       "assistant",
+		Text:       "[silent] continued workers",
+		StopReason: "end_turn",
+	})
+	if !ok {
+		t.Fatal("silent terminal must still emit end_turn so UI clears working")
+	}
+	if strings.Contains(line, "[silent]") || strings.Contains(line, "continued") {
+		t.Fatalf("silent body must be stripped: %s", line)
+	}
+	var m struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content    []any  `json:"content"`
+			StopReason string `json:"stop_reason"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Type != "assistant" || m.Message.StopReason != "end_turn" {
+		t.Fatalf("want empty terminal assistant: %s", line)
+	}
+	if len(m.Message.Content) != 0 {
+		t.Fatalf("content must be empty, got %v", m.Message.Content)
+	}
+}
+
+// 🎯T242: multi-fragment visible + empty end_turn → journal coalesce keeps body.
+func TestDeliverOverseerEventVisibleStreamEmptyEndTurnSealedBodyNonEmpty(t *testing.T) {
+	dir := t.TempDir()
+	s := New("test", dir)
+	ch := make(chan string, 32)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.waiting = true
+	s.mu.Unlock()
+
+	for _, frag := range []string{"Hel", "lo owner", " stays."} {
+		s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: frag})
+	}
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		Text:       "",
+		StopReason: "end_turn",
+	})
+
+	var lines []string
+	deadline := time.After(2 * time.Second)
+	for len(lines) < 4 {
+		select {
+		case l := <-ch:
+			lines = append(lines, l)
+		case <-deadline:
+			t.Fatalf("timeout; lines=%v", lines)
+		}
+	}
+	// Live wire must carry body fragments (flash path) and empty end_turn.
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Hel") || !strings.Contains(joined, " stays.") {
+		t.Fatalf("live fragments missing: %v", lines)
+	}
+
+	// Seal+replay path: CoalesceStreamLines on journaled lines → non-empty body.
+	sealed := chatlog.CoalesceStreamLines(lines)
+	if len(sealed) != 1 {
+		t.Fatalf("sealed count=%d want 1: %v", len(sealed), sealed)
+	}
+	if !strings.Contains(sealed[0], "Hello owner stays.") {
+		t.Fatalf("sealed body empty/wiped: %s", sealed[0])
+	}
+	var m struct {
+		Message struct {
+			Content    []map[string]any `json:"content"`
+			StopReason string           `json:"stop_reason"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(sealed[0]), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Message.StopReason != "end_turn" {
+		t.Fatalf("stop=%q", m.Message.StopReason)
+	}
+	if len(m.Message.Content) == 0 {
+		t.Fatalf("sealed content empty (T242 vanish): %s", sealed[0])
+	}
+}
+
+// 🎯T240: multi-fragment stream "[silent]" + " continued" → no owner body.
+func TestDeliverOverseerEventSuppressesMultiFragmentSilentStream(t *testing.T) {
+	s := New("test", t.TempDir())
+	ch := make(chan string, 32)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.waiting = true
+	s.mu.Unlock()
+
+	// Token-split silent turn (the T238 residual: later fragments lack prefix).
+	for _, frag := range []string{"[silent]", " continued", " jv-t240"} {
+		s.DeliverOverseerEvent(claudia.Event{
+			Type: "assistant",
+			Text: frag,
+		})
+	}
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		Text:       "",
+		StopReason: "end_turn",
+	})
+	// Non-silent control.
+	s.DeliverOverseerEvent(claudia.Event{
+		Type: "assistant",
+		Text: "Hello owner",
+	})
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		Text:       "",
+		StopReason: "end_turn",
+	})
+
+	var lines []string
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case l := <-ch:
+			if strings.Contains(l, "continued") || strings.Contains(l, "[silent]") {
+				t.Fatalf("silent fragment leaked: %s", l)
+			}
+			lines = append(lines, l)
+			if strings.Contains(l, "Hello owner") {
+				// wait one more for possible end_turn
+				select {
+				case l2 := <-ch:
+					lines = append(lines, l2)
+				case <-time.After(200 * time.Millisecond):
+				}
+				goto done
+			}
+		case <-deadline:
+			t.Fatalf("timeout; lines=%v", lines)
+		}
+	}
+done:
+	sawHello := false
+	sawEmptyTerminal := false
+	for _, l := range lines {
+		if strings.Contains(l, "Hello owner") {
+			sawHello = true
+		}
+		if strings.Contains(l, `"stop_reason":"end_turn"`) && !strings.Contains(l, "Hello") {
+			// empty content terminal for silent stream
+			var m struct {
+				Message struct {
+					Content []any `json:"content"`
+				} `json:"message"`
+			}
+			if json.Unmarshal([]byte(l), &m) == nil && len(m.Message.Content) == 0 {
+				sawEmptyTerminal = true
+			}
+		}
+	}
+	if !sawHello {
+		t.Fatalf("non-silent missing: %v", lines)
+	}
+	if !sawEmptyTerminal {
+		t.Fatalf("expected empty end_turn for silent stream among %v", lines)
+	}
+}
+
+// 🎯T245: silent turn then agent_note then visible — live wire has no silent
+// body; journal coalesce keeps only the visible owner reply body.
+func TestDeliverOverseerEventSilentThenVisibleOnlySecondBody(t *testing.T) {
+	dir := t.TempDir()
+	s := New("test", dir)
+	ch := make(chan string, 64)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.waiting = true
+	s.mu.Unlock()
+
+	// Turn A: pure silent.
+	s.DeliverOverseerEvent(claudia.Event{
+		Type: "assistant",
+		Text: "[silent] PO already re-pressured jv-t244; no further action.",
+	})
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		Text:       "",
+		StopReason: "end_turn",
+	})
+	// agent_note intervenes on the wire (owner-invisible).
+	s.BroadcastChat(`{"type":"agent_note","text":"[Agent jevons-po responded] Independent gate"}`)
+	// Turn B: visible.
+	s.DeliverOverseerEvent(claudia.Event{
+		Type: "assistant",
+		Text: "**🎯T244 landed.**",
+	})
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		Text:       "",
+		StopReason: "end_turn",
+	})
+
+	var lines []string
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case l := <-ch:
+			if strings.Contains(l, "[silent]") || strings.Contains(l, "re-pressured") {
+				t.Fatalf("silent leaked on live wire: %s", l)
+			}
+			lines = append(lines, l)
+			if strings.Contains(l, "T244 landed") {
+				// drain short tail for end_turn
+				select {
+				case l2 := <-ch:
+					lines = append(lines, l2)
+				case <-time.After(200 * time.Millisecond):
+				}
+				goto done
+			}
+		case <-deadline:
+			t.Fatalf("timeout; lines=%v", lines)
+		}
+	}
+done:
+	sealed := chatlog.CoalesceStreamLines(lines)
+	// Expect agent_note + visible sealed (silent empty may also appear).
+	var visibleBodies []string
+	for _, ln := range sealed {
+		if strings.Contains(ln, "re-pressured") || strings.Contains(ln, "[silent]") {
+			t.Fatalf("silent in sealed view: %s", ln)
+		}
+		var m struct {
+			Type    string `json:"type"`
+			Message *struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(ln), &m) != nil {
+			continue
+		}
+		if m.Type == "assistant" && m.Message != nil {
+			for _, c := range m.Message.Content {
+				if c.Text != "" {
+					visibleBodies = append(visibleBodies, c.Text)
+				}
+			}
+		}
+	}
+	if len(visibleBodies) != 1 || !strings.Contains(visibleBodies[0], "T244 landed") {
+		t.Fatalf("want single visible body with T244 landed; got %v sealed=%v", visibleBodies, sealed)
+	}
+}
+
+// 🎯T238: DeliverOverseerEvent → BroadcastChat/journal path drops silent body.
+func TestDeliverOverseerEventSuppressesSilentAssistantJournal(t *testing.T) {
+	s := New("test", t.TempDir())
+	ch := make(chan string, 16)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.waiting = true
+	s.mu.Unlock()
+
+	s.DeliverOverseerEvent(claudia.Event{
+		Type: "assistant",
+		Text: "[silent] continued jv-x after worker-idle",
+		Raw:  []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"[silent] continued"}}}`),
+	})
+	s.DeliverOverseerEvent(claudia.Event{
+		Type:       "assistant",
+		Text:       "",
+		StopReason: "end_turn",
+		Raw:        []byte(`{"stopReason":"end_turn"}`),
+	})
+
+	// Non-silent control: must still deliver.
+	s.DeliverOverseerEvent(claudia.Event{
+		Type: "assistant",
+		Text: "Hello owner",
+		Raw:  []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello owner"}}}`),
+	})
+
+	var lines []string
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case l := <-ch:
+			if strings.Contains(l, "[silent]") {
+				t.Fatalf("silent leaked to owner wire/journal path: %s", l)
+			}
+			lines = append(lines, l)
+			if strings.Contains(l, "Hello owner") {
+				goto done
+			}
+		case <-deadline:
+			t.Fatalf("timeout; lines=%v", lines)
+		}
+	}
+done:
+	sawHello := false
+	sawTerminal := false
+	for _, l := range lines {
+		if strings.Contains(l, "Hello owner") {
+			sawHello = true
+		}
+		if strings.Contains(l, `"stop_reason":"end_turn"`) {
+			sawTerminal = true
+		}
+	}
+	if !sawHello {
+		t.Fatalf("non-silent assistant missing: %v", lines)
+	}
+	if !sawTerminal {
+		t.Fatalf("expected terminal end_turn frame among %v", lines)
 	}
 }

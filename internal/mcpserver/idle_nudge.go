@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // 🎯T207: auto-nudge stuck/idle fleet work agents (esp. after jevonsd restart).
@@ -38,6 +39,12 @@ const (
 	// DefaultIdleNudgeInterval is how often the daemon re-evaluates the fleet.
 	// 30s keeps pressure on idle workers; cockpit also ticks fleet hooks (🎯T204).
 	DefaultIdleNudgeInterval = 30 * time.Second
+	// DefaultIdlePressureInterval is how often the daemon re-evaluates open-mission
+	// work agents for idle re-pressure (🎯T315). Documented bound: a worker that
+	// enters phase=idle with an open mission is re-pressured within
+	// DefaultIdleNudgeThreshold + DefaultIdlePressureInterval (≤ 3m), then per
+	// DefaultIdleNudgeBackoffs, capped at DefaultIdleNudgeMax. Minutes, not hours.
+	DefaultIdlePressureInterval = time.Minute
 	// DefaultPostRestartDelay lets StartAll settle before the first wake sweep.
 	DefaultPostRestartDelay = 15 * time.Second
 
@@ -61,6 +68,19 @@ const (
 	IdleNudgeSkip  IdleNudgeAction = "skip"
 	IdleNudgeNudge IdleNudgeAction = "nudge"
 	IdleNudgeMaxed IdleNudgeAction = "maxed"
+)
+
+// Skip reasons the 🎯T317 impatience ladder reads back off this sweep. Only
+// these three distinguish "the gap is still open, the actuator is just quiet
+// this tick" from "the agent came back to work"; every other skip reason means
+// the agent is not an impatience gap at all.
+const (
+	// IdleSkipInProgress: phase=working — the satisfaction verdict.
+	IdleSkipInProgress = "in_progress"
+	// IdleSkipBackoff: still idle, actuator waiting out its backoff.
+	IdleSkipBackoff = "backoff"
+	// IdleSkipBelowThreshold: still idle, not yet aged past the threshold.
+	IdleSkipBelowThreshold = "idle_below_threshold"
 )
 
 // IdleNudgeKind is the payload shape once ClassifyIdleNudge returns nudge.
@@ -130,7 +150,7 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 
 	phase := strings.ToLower(strings.TrimSpace(o.Phase))
 	if phase == "working" {
-		return IdleNudgeSkip, "in_progress"
+		return IdleNudgeSkip, IdleSkipInProgress
 	}
 
 	max := o.MaxNudges
@@ -145,7 +165,7 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	if o.EverNudged {
 		need := NextNudgeBackoff(o.NudgeCount, o.Backoffs)
 		if o.SinceLastNudge < need {
-			return IdleNudgeSkip, "backoff"
+			return IdleNudgeSkip, IdleSkipBackoff
 		}
 	}
 
@@ -165,13 +185,13 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 		if o.IdleFor >= threshold {
 			return IdleNudgeNudge, "idle_stuck"
 		}
-		return IdleNudgeSkip, "idle_below_threshold"
+		return IdleNudgeSkip, IdleSkipBelowThreshold
 	default:
 		// Unknown phase strings: treat as idle-ish only when aged out.
 		if o.IdleFor >= threshold {
 			return IdleNudgeNudge, "idle_stuck"
 		}
-		return IdleNudgeSkip, "idle_below_threshold"
+		return IdleNudgeSkip, IdleSkipBelowThreshold
 	}
 }
 
@@ -221,7 +241,7 @@ func FormatIdleNudgeText(a IdleNudgeTextArgs) string {
 	if name == "" {
 		name = "worker"
 	}
-	tid := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(a.TargetID), "🎯"))
+	tid := FormatTargetID(a.TargetID)
 	kind := a.Kind
 	if kind == "" {
 		// Fail closed: missing kind ⇒ full brief, never bare continue.
@@ -235,9 +255,9 @@ func FormatIdleNudgeText(a IdleNudgeTextArgs) string {
 		} else {
 			b.WriteString("NUDGE — you are phase=idle with brief already present; continue mid-mission work. ")
 		}
-		b.WriteString("Local master, T104 (no PR). ")
+		b.WriteString("Local master, 🎯T104 (no PR). ")
 		if tid != "" {
-			fmt.Fprintf(&b, "Target 🎯%s. ", tid)
+			fmt.Fprintf(&b, "Target %s. ", tid)
 		}
 		if a.Reason != "" {
 			fmt.Fprintf(&b, "Classifier: %s. ", a.Reason)
@@ -257,14 +277,14 @@ func FormatIdleNudgeText(a IdleNudgeTextArgs) string {
 	b.WriteString("This message injects the standing fleet brief (or confirms it). Do not treat a one-word continue as your brief.\n\n")
 	fmt.Fprintf(&b, "Agent: %s\n", name)
 	if tid != "" {
-		fmt.Fprintf(&b, "Mission target: 🎯%s\n", tid)
+		fmt.Fprintf(&b, "Mission target: %s\n", tid)
 	} else {
 		b.WriteString("Mission target: (none bound — resume open work for this agent name)\n")
 	}
 	if acc := strings.TrimSpace(a.Acceptance); acc != "" {
 		fmt.Fprintf(&b, "Acceptance:\n%s\n", acc)
 	}
-	b.WriteString("\nLocal master only (T104). No PR unless owner opened Ship.\n")
+	b.WriteString("\nLocal master only (🎯T104). No PR unless owner opened Ship.\n")
 	if a.Reason != "" {
 		fmt.Fprintf(&b, "Classifier: %s.\n", a.Reason)
 	}
@@ -310,10 +330,17 @@ func SessionLooksBriefed(priorUserText string) bool {
 
 // --- activity tracker (last progress per agent) ---
 
-// IdleActivity is the last glanceable phase/time for idle classification.
+// IdleActivity is the last glanceable phase/time for idle classification
+// and fleet recover (🎯T236) latches.
 type IdleActivity struct {
 	Phase   string
 	Updated time.Time
+	// FailureClass is the last structured terminal failure (agenterr / T237).
+	FailureClass agenterr.Class
+	// NeedsRecover is true after terminal error/empty until ClearRecover.
+	NeedsRecover bool
+	// TerminalEmpty is true when the last terminal stop had empty text.
+	TerminalEmpty bool
 }
 
 // IdleActivityTracker records ACP-derived phase for the idle-nudge sweep.
@@ -359,7 +386,20 @@ func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (
 	prev := t.by[name]
 	prevPhase = prev.Phase
 	nextPhase = phase
-	t.by[name] = IdleActivity{Phase: phase, Updated: t.clock()}
+	// Preserve T236 recover latches across mid-turn working updates;
+	// NoteTerminalOutcome sets them on end_turn; ClearRecover clears.
+	next := IdleActivity{
+		Phase:         phase,
+		Updated:       t.clock(),
+		FailureClass:  prev.FailureClass,
+		NeedsRecover:  prev.NeedsRecover,
+		TerminalEmpty: prev.TerminalEmpty,
+	}
+	// Fresh working progress clears stale recover latch only when we see
+	// real tool/assistant activity after a prior recover cycle was delivered
+	// (NeedsRecover already false). If NeedsRecover is still true, keep it
+	// until ClearRecover so a flappy assistant crumb cannot drop the signal.
+	t.by[name] = next
 	enteredIdle = nextPhase == "idle" && strings.ToLower(strings.TrimSpace(prevPhase)) == "working"
 	return prevPhase, nextPhase, enteredIdle
 }
@@ -546,6 +586,12 @@ type IdleNudgeSweepArgs struct {
 	// ProcessRunning optional override (hermetic tests without OS processes).
 	// Nil → reg.Get(name).Alive().
 	ProcessRunning func(name string) bool
+	// Eligible optionally pre-filters agents before classification (🎯T315).
+	// False ⇒ skip with reason not_open_mission. Nil = every registered agent
+	// is classified. The periodic pressure path uses it for T244 (unbound
+	// PO/boss with no work children is standing idle) and T330 (PO/boss with
+	// engaged implementers is sleep-OK — no re-continue thrash).
+	Eligible func(d claudia.AgentDef) bool
 }
 
 // SweepIdleNudges classifies every registered agent and delivers nudges.
@@ -577,6 +623,14 @@ func SweepIdleNudges(args IdleNudgeSweepArgs) []IdleNudgeReport {
 }
 
 func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time) IdleNudgeReport {
+	if args.Eligible != nil && !args.Eligible(d) {
+		return IdleNudgeReport{
+			Name:        d.Name,
+			Action:      IdleNudgeSkip,
+			Reason:      "not_open_mission",
+			PostRestart: args.PostRestart,
+		}
+	}
 	purpose := d.Purpose
 	if purpose == "" {
 		purpose = claudia.PurposeWork
@@ -729,13 +783,9 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 	// poisoned re-nudge forever when ACP never observed a real turn (live:
 	// post-nudge workers stayed phase=idle in UI but classifier skipped
 	// in_progress). Backoff/max already prevent thrash.
+	// Preserve T236 FailureClass; clear NeedsRecover via ClearRecover shape.
 	if args.Activity != nil {
-		args.Activity.mu.Lock()
-		if args.Activity.by == nil {
-			args.Activity.by = make(map[string]IdleActivity)
-		}
-		args.Activity.by[d.Name] = IdleActivity{Phase: "idle", Updated: now}
-		args.Activity.mu.Unlock()
+		args.Activity.ClearRecover(d.Name, now)
 	}
 	slog.Info("idle nudge delivered",
 		"agent", d.Name, "reason", reason, "kind", kind, "post_restart", args.PostRestart)
@@ -798,30 +848,66 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		}
 	}
 
-	// Cockpit fleet hook: health only (no auto-nudge ladder poll).
+	// Durable backoff/max ledger for the re-pressure actuator (🎯T315). Opened
+	// here so the periodic path has it before the first tick; the post-restart
+	// sweep reuses it rather than opening a second in-memory copy of the file.
+	if stateDir != "" {
+		if l, err := OpenIdleNudgeLedger(stateDir); err == nil {
+			args.Server.mu.Lock()
+			args.Server.idleNudgeLedger = l
+			args.Server.mu.Unlock()
+		} else {
+			slog.Warn("idle pressure: ledger open failed", "err", err)
+		}
+	}
+
+	// Cockpit fleet hook: dead-handle health + T236 outage/stuck recover +
+	// 🎯T315 open-mission idle re-pressure. Event-first to the parent PO
+	// (emitWorkerIdleToParent) stays for replan/reap, but it is no longer the
+	// only pressure path — a PO that is itself idle or queued used to leave
+	// implementers silent for hours.
 	args.Server.mu.Lock()
 	args.Server.idleNudgeSweep = func(postRestart bool) {
 		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
 			slog.Info("fleet health (cockpit/idle loop)", "report", FormatDeadAgentReport(reps), "post_restart", postRestart)
 		}
+		args.Server.runFleetRecoverSweep(postRestart)
+		args.Server.TriggerIdlePressureSweep()
 	}
 	args.Server.mu.Unlock()
 
 	// After settle: dual path (events to PO+overseer, short resume to open-mission workers).
+	// 🎯T328: overseer also gets owner-intent-resume when chatlog has open work.
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(postDelay):
-		args.Server.NotifyDaemonRestarted(overseer, defaultPO)
+		args.Server.NotifyDaemonRestarted(overseer, defaultPO, stateDir)
 		args.Server.ResumeOpenMissionWorkers(overseer, stateDir, activity)
 	}
 
-	// Light periodic fleet health only (not idle ladder).
+	// Periodic fleet health + 🎯T315 open-mission idle re-pressure.
 	interval := args.Interval
 	if interval == 0 {
-		interval = time.Minute
+		interval = DefaultIdlePressureInterval
 	}
 	if interval < 0 {
+		<-ctx.Done()
+		return
+	}
+	runIdlePressureLoop(ctx, interval, func() {
+		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
+			slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
+		}
+		args.Server.TriggerIdlePressureSweep()
+	})
+}
+
+// runIdlePressureLoop ticks the actuator until ctx is done. Extracted from
+// StartIdleNudgeLoop so the periodic path is hermetically testable without a
+// daemon, registry, or clock skew (🎯T315).
+func runIdlePressureLoop(ctx context.Context, interval time.Duration, tick func()) {
+	if tick == nil || interval <= 0 {
 		<-ctx.Done()
 		return
 	}
@@ -832,10 +918,256 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
-				slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
+			tick()
+		}
+	}
+}
+
+// IdlePressureHooks are the optional collaborator seams of the 🎯T315
+// actuator. All are nil-safe; nil means the actuator falls back to its own
+// conservative defaults (any bound TargetID counts as an open mission,
+// nothing is design-gated, a maxed agent is logged and left alone).
+//
+//   - MissionOpen / LooksSatisfied: satisfaction semantics — owned by 🎯T316.
+//   - OnMaxed: escalation/noise ladder for an agent that exhausted its nudge
+//     budget while still idle — owned by 🎯T317.
+type IdlePressureHooks struct {
+	MissionOpen    func(targetID string) bool
+	DesignGated    func(targetID string) bool
+	LooksSatisfied func(name string) string // last terminal report, "" = unknown
+	OnMaxed        func(rep IdleNudgeReport)
+}
+
+// SetIdlePressureHooks installs the collaborator seams. Safe to call with a
+// zero value to clear them.
+func (s *Server) SetIdlePressureHooks(h IdlePressureHooks) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.idlePressureHooks = h
+	s.mu.Unlock()
+}
+
+// idlePressureDeps overrides I/O for hermetic tests. Zero value = live path:
+// wall clock, fire-and-forget send, registry process liveness.
+type idlePressureDeps struct {
+	Now     time.Time
+	Push    IdleNudgePusher
+	Running func(name string) bool
+}
+
+// TriggerIdlePressureSweep runs one periodic open-mission idle re-pressure
+// pass over the live fleet (🎯T315). Fire-and-forget; never blocks on a reply.
+func (s *Server) TriggerIdlePressureSweep() {
+	s.idlePressureSweep(idlePressureDeps{})
+}
+
+// idlePressureSweep is the daemon re-pressure actuator: every open-mission
+// work agent that is running and has sat phase=idle past the threshold gets a
+// real brief-or-continue deliver, with no overseer or PO turn in the loop.
+// Backoff and max-nudges come from the durable ledger, so this cannot thrash
+// or run forever.
+//
+// When SetImpatienceEngine is installed (🎯T317), this sweep drives the T316
+// reconcile set and the impatience ladder instead: re-pressure, overseer
+// noise, and human sticky all fire through the ladder sinks. The T315-only
+// SweepIdleNudges path remains for hermetic tests and daemons that have not
+// wired the ladder yet.
+func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	overseer := s.overseerName()
+	if overseer == "" {
+		overseer = "jevons"
+	}
+
+	s.mu.Lock()
+	activity := s.idleActivity
+	ledger := s.idleNudgeLedger
+	hooks := s.idlePressureHooks
+	eng := s.impatience
+	s.mu.Unlock()
+	if activity == nil {
+		activity = NewIdleActivityTracker()
+		s.mu.Lock()
+		s.idleActivity = activity
+		s.mu.Unlock()
+	}
+
+	now := deps.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	// 🎯T317 path: standing set + ladder owns re-pressure and escalation.
+	if eng != nil {
+		eng.tick(s, deps, hooks)
+		return nil
+	}
+
+	push := deps.Push
+	if push == nil {
+		push = func(target, event, text string) error {
+			// interrupt=false: a worker mid-turn is phase=working and never
+			// classified idle, so queueing is the right behaviour if the send
+			// races a turn start. Interrupting live turns is T236's job.
+			_, err := s.sendToAgent(target, formatIdleNudgeWire(event, text), false)
+			return err
+		}
+	}
+
+	defs := s.registry.List()
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg:          s.registry,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
+		Now:          now,
+		PostRestart:  false,
+		OverseerName: overseer,
+		BriefPresent: func(name string) bool {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.fleetBriefed != nil && s.fleetBriefed[name]
+		},
+		MarkBriefed: func(name string) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.fleetBriefed == nil {
+				s.fleetBriefed = map[string]bool{}
+			}
+			s.fleetBriefed[name] = true
+		},
+		MissionOpen:        hooks.MissionOpen,
+		DesignGated:        hooks.DesignGated,
+		LastTerminalReport: hooks.LooksSatisfied,
+		ProcessRunning:     deps.Running,
+		Eligible: func(d claudia.AgentDef) bool {
+			// 🎯T244: unbound PO/boss with no work children is standing idle.
+			// 🎯T330: PO/boss with engaged implementers is sleep-OK (no thrash).
+			phaseOf := func(name string) string {
+				if activity == nil {
+					return ""
+				}
+				return activity.Get(name).Phase
+			}
+			return HasOpenMissionForIdle(d, hooks.MissionOpen,
+				CountWorkChildren(defs, d.Name),
+				CountEngagedWorkChildren(defs, d.Name, phaseOf, hooks.MissionOpen))
+		},
+	})
+
+	delivered, maxed := 0, 0
+	for _, r := range reps {
+		switch {
+		case r.Delivered:
+			delivered++
+			s.logLifecycle(compIdleNudge, "idle_pressure", "ok", map[string]any{
+				"agent": r.Name, "reason": r.Reason, "kind": string(r.Kind),
+			})
+		case r.Error != "":
+			s.logLifecycle(compIdleNudge, "idle_pressure", "error", map[string]any{
+				"agent": r.Name, "reason": r.Reason, "err": r.Error,
+			})
+		case r.Action == IdleNudgeMaxed:
+			maxed++
+			if hooks.OnMaxed != nil {
+				hooks.OnMaxed(r)
 			}
 		}
+	}
+	if delivered > 0 || maxed > 0 {
+		slog.Info("idle pressure sweep",
+			"delivered", delivered, "maxed", maxed, "evaluated", len(reps))
+	}
+	return reps
+}
+
+// runFleetRecoverSweep evaluates open-mission workers for stuck-busy or
+// terminal failure re-pressure (🎯T236). Fire-and-forget deliver.
+func (s *Server) runFleetRecoverSweep(postRestart bool) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	overseer := s.overseerName()
+	if overseer == "" {
+		overseer = "jevons"
+	}
+	s.mu.Lock()
+	activity := s.idleActivity
+	ledger := s.idleNudgeLedger
+	s.mu.Unlock()
+	if activity == nil {
+		activity = NewIdleActivityTracker()
+		s.mu.Lock()
+		s.idleActivity = activity
+		s.mu.Unlock()
+	}
+
+	push := func(target string, interrupt bool, event, text string) error {
+		msg := formatIdleNudgeWire(event, text)
+		_, err := s.sendToAgent(target, msg, interrupt)
+		return err
+	}
+	interruptFn := func(name string) error {
+		proc := s.registry.Get(name)
+		if proc == nil || !proc.Alive() {
+			return fmt.Errorf("not running")
+		}
+		return proc.Interrupt()
+	}
+
+	reps := SweepFleetRecover(FleetRecoverSweepArgs{
+		Reg:          s.registry,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
+		Interrupt:    interruptFn,
+		Now:          time.Now(),
+		OverseerName: overseer,
+		StuckTimeout: DefaultFleetStuckTimeout,
+		BriefPresent: func(name string) bool {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.fleetBriefed != nil && s.fleetBriefed[name]
+		},
+		MarkBriefed: func(name string) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.fleetBriefed == nil {
+				s.fleetBriefed = map[string]bool{}
+			}
+			s.fleetBriefed[name] = true
+		},
+	})
+	delivered := 0
+	for _, r := range reps {
+		if r.Delivered {
+			delivered++
+			s.logLifecycle(compFleetRecover, string(r.Action), "ok", map[string]any{
+				"agent":         r.Name,
+				"reason":        r.Reason,
+				"failure_class": string(r.FailureClass),
+				"kind":          string(r.Kind),
+				"interrupted":   r.Interrupted,
+				"post_restart":  postRestart,
+			})
+		} else if r.Error != "" {
+			s.logLifecycle(compFleetRecover, string(r.Action), "error", map[string]any{
+				"agent":         r.Name,
+				"reason":        r.Reason,
+				"failure_class": string(r.FailureClass),
+				"err":           r.Error,
+			})
+		}
+	}
+	if delivered > 0 {
+		slog.Info("fleet recover sweep",
+			"summary", FormatFleetRecoverSummary(reps),
+			"post_restart", postRestart,
+		)
 	}
 }
 
@@ -849,7 +1181,21 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 	if def == nil {
 		return
 	}
-	if !HasOpenMissionForIdle(*def, nil) {
+	// 🎯T244: unbound POs with zero children skip emit.
+	// 🎯T330: PO/boss with engaged implementers is sleep-OK — no parent thrash.
+	defs := s.registry.List()
+	workKids := CountWorkChildren(defs, name)
+	s.mu.Lock()
+	activity := s.idleActivity
+	s.mu.Unlock()
+	phaseOf := func(child string) string {
+		if activity == nil {
+			return ""
+		}
+		return activity.Get(child).Phase
+	}
+	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, nil)
+	if !HasOpenMissionForIdle(*def, nil, workKids, engagedKids) {
 		return
 	}
 	overseer := s.overseerName()
@@ -896,11 +1242,17 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 	})
 }
 
-// NotifyDaemonRestarted sends daemon-restarted once per durable parent PO and
-// to the overseer (cockpit), each with a reattached-children summary (🎯T171).
+// NotifyDaemonRestarted sends restart recovery once per durable parent PO and
+// to the overseer (cockpit) (🎯T171 + 🎯T328).
+//
+//  1. Parent POs always get daemon-restarted (reattached children + silent OK).
+//  2. Overseer: when stateDir/chatlog yields a recoverable open owner
+//     instruction, deliver owner-intent-resume (forces real turn; not
+//     silent-idle-only). Otherwise daemon-restarted status path as before.
+//
 // Fire-and-forget; queues if busy. Does not short-resume workers — that is
-// ResumeOpenMissionWorkers.
-func (s *Server) NotifyDaemonRestarted(overseer, defaultPO string) {
+// ResumeOpenMissionWorkers. Residual: no chatlog / no recoverable intent.
+func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 	if s == nil || s.registry == nil {
 		return
 	}
@@ -930,30 +1282,56 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO string) {
 	targets := DaemonRestartEventTargets(byParent, overseer, defaultPO)
 	allKids := FlattenWorkChildren(byParent)
 
+	// 🎯T328: recover open owner instruction for overseer resume (chatlog I/O).
+	openIntent := LoadOpenOwnerIntent(stateDir, overseer)
+	if openIntent.Recoverable() {
+		slog.Info("open owner intent recovered for post-restart resume",
+			"overseer", overseer, "runes", utf8RuneCount(openIntent.Text),
+			"source", openIntent.Source)
+	} else {
+		slog.Info("no recoverable open owner intent after restart",
+			"overseer", overseer, "residual", openIntent.Residual)
+	}
+
 	for _, target := range targets {
 		kids := byParent[target]
 		if target == overseer {
 			// Cockpit gets the full reattached fleet summary.
 			kids = allKids
 		}
+		event := eventDaemonRestarted
 		text := FormatDaemonRestartedText(target, kids)
-		msg := formatIdleNudgeWire(eventDaemonRestarted, text)
+		// Overseer only: when open owner work is recoverable, force resume turn.
+		if target == overseer && openIntent.Recoverable() {
+			event = eventOwnerIntentResume
+			text = FormatOverseerOpenIntentResume(openIntent, target, kids)
+		}
+		msg := formatIdleNudgeWire(event, text)
 		// Do not interrupt PO/overseer mid-turn — queue if busy.
 		res, err := s.sendToAgent(target, msg, false)
 		if err != nil {
-			slog.Warn("daemon-restarted event deliver failed",
-				"target", target, "workers", len(kids), "err", err)
-			s.logLifecycle(compIdleNudge, "daemon_restarted", "error", map[string]any{
+			slog.Warn("daemon restart resume event deliver failed",
+				"target", target, "event", event, "workers", len(kids), "err", err)
+			s.logLifecycle(compIdleNudge, event, "error", map[string]any{
 				"target": target, "workers": len(kids), "err": err.Error(),
+				"open_intent": openIntent.Recoverable(), "residual": openIntent.Residual,
 			})
 			continue
 		}
-		slog.Info("daemon-restarted event delivered",
-			"target", target, "workers", len(kids), "status", res.Status, "queued", res.Queued)
-		s.logLifecycle(compIdleNudge, "daemon_restarted", "ok", map[string]any{
+		slog.Info("daemon restart resume event delivered",
+			"target", target, "event", event, "workers", len(kids),
+			"status", res.Status, "queued", res.Queued,
+			"open_intent", openIntent.Recoverable(), "residual", openIntent.Residual)
+		s.logLifecycle(compIdleNudge, event, "ok", map[string]any{
 			"target": target, "workers": len(kids), "status": res.Status, "queued": res.Queued,
+			"open_intent": openIntent.Recoverable(), "residual": openIntent.Residual,
 		})
 	}
+}
+
+// utf8RuneCount is a tiny local helper for NotifyDaemonRestarted logs.
+func utf8RuneCount(s string) int {
+	return len([]rune(s))
 }
 
 // ResumeOpenMissionWorkers fire-and-forget short-resumes open-mission work
@@ -975,8 +1353,12 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 	if activity == nil {
 		activity = NewIdleActivityTracker()
 	}
-	var ledger *IdleNudgeLedger
-	if stateDir != "" {
+	// Reuse the actuator's ledger when StartIdleNudgeLoop already opened it —
+	// two in-memory copies of the same file lose counts on write.
+	s.mu.Lock()
+	ledger := s.idleNudgeLedger
+	s.mu.Unlock()
+	if ledger == nil && stateDir != "" {
 		if l, err := OpenIdleNudgeLedger(stateDir); err == nil {
 			ledger = l
 			s.mu.Lock()

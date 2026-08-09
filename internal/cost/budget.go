@@ -104,6 +104,11 @@ type BudgetConfig struct {
 	// MaxSessions bounds distinct billable sessions per window before
 	// the fleet-size signal trips.
 	MaxSessions int `json:"max_sessions"`
+	// ProviderSoftCaps soft-limits concurrent registered agents per LLM
+	// harness provider (grok/claude/codex) for 🎯T325.2 portfolio spread.
+	// Session-count only — never derived from API-equivalent USD (T137).
+	// Empty = use compiled DefaultPortfolio soft caps. 0 removes a cap.
+	ProviderSoftCaps map[string]int `json:"provider_soft_caps,omitempty"`
 	// DailyBudgetUSD is the projection target: projected end-of-day
 	// spend above it trips the projected-overspend signal.
 	DailyBudgetUSD float64 `json:"daily_budget_usd"`

@@ -126,6 +126,14 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   (T125). Exception: PO dead/unregistered → rehydrate PO first, then PO
   spawns. Instructional until registry enforcement. Persona + agents-guide
   + fleet brief.
+- **Domain portfolios default (🎯T200):** product owners whose workdir is
+  under `github.com/marcelocantos/…` belong in the **personal** portfolio
+  by default. Membership is declarative path match in
+  `~/.jevons/config.yaml` (org fragment `github.com/marcelocantos` covers
+  the org). When spawning a new marcelocantos PO, they nest under Personal
+  — do **not** leave them unassigned under the overseer root unless the
+  owner assigns a different portfolio (e.g. minicades for squz). RHS tree
+  uses path membership, not agent-name parsing. Agents-guide + fleet brief.
 - **Filing reflex (🎯T130):** when a real product gap, repeated failure
   mode, or standing behavioural rule appears mid-work → **file or
   prompt-file a bullseye target** (name + acceptance) in the **same turn**
@@ -133,12 +141,25 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   "we should always…" in chat. Ceremony: `jevons_target_file` and/or
   bullseye MCP (`bullseye_commit` track). Related: 🎯T92 ambient RSI,
   🎯T129 hierarchy. Residual: one-off flukes may skip filing.
-- **Ambient RSI (🎯T92 / 🎯T92.2):** harness schedule + idle-reap stream mint
-  improvement targets from eventlog, **owner-chatlog friction**, and
-  **session transcripts** (`internal/rsi`, `jevons_rsi_cycle`); not only
-  owner `/retro`. Noise control (min count, fingerprint ledger, max-per-cycle)
-  still caps flooding when deeper extract proposes more. Filing reflex is the
-  mid-turn agent half of the same mission.
+- **Ambient RSI coach (🎯T243 / T92):** harness coach drip-reads owner main
+  chat (priority), eventlog, and session transcripts; posts **judgments** to
+  the overseer (`jevons_rsi_coach_cycle` / configure / status). Overseer alone
+  files / alerts / briefs PO / ignores. Coach never calls bullseye. Residual
+  phrase-list mint (`JEVONS_RSI_MINT` / `jevons_rsi_cycle`) is not product
+  path. Filing reflex is the mid-turn agent half of the same mission.
+- **Retrospective coach mine (🎯T353):** *fine sensors, coarse conclusions.*
+  The drip cursor starts at EOF, so the coach also makes a **bounded backward
+  pass** over history — git commits (repair churn, reverts), the eventlog
+  tail, owner chat, and session transcripts — on its own slow cadence
+  (`retro_interval_sec`, default 6h; `retro_lookback_hours`, default 7d).
+  Judgments carry commit SHAs / session ids as evidence and are marked
+  `Mode: retrospective`. Delivery stays sparse: retro rate cap + the retro
+  value bar (one-off git noise and bare phrase-friction never reach the
+  overseer) + T333 disposition suppressions. Run by hand with
+  `jevons_rsi_coach_cycle mode=retro|both`; dials via
+  `jevons_rsi_coach_configure`. Retro never advances the drip cursor and
+  never calls bullseye.
+
 - **Oracle-first completion (🎯T31 / 🎯T31.1):** bare "done" / complete /
   finished without **oracle evidence** (named test + green, and/or
   commit SHA) or **explicit accepted-risk / class-3** language is **not
@@ -163,6 +184,13 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Pure `CoverageMap` / `ClassifyDesignClause` helpers. Residual:
   instructional + pure model; not a hard daemon block; T29 UI + owner
   process-fidelity class-3. Design: `docs/design/greenfield-oracle-elicitation.md`.
+- **Frontier = ready set (🎯T262.1):** frontier = unblocked ready leaves;
+  pick among them is indifferent/policy, not discovery of a hidden "next
+  ticket." A queue is frontier size ≤1 with invented order. Multi-agent
+  default: worker per ready leaf subject to engagement policy. Anti-pattern:
+  framing bullseye as "the next ticket" oracle. Design:
+  `docs/design/frontier-as-ready-set.md`. Does not unpark T254 or claim
+  T262.4 owner accept. Persona + agents-guide + fleet standing brief.
 - **Unattended frontier auto-spawn (🎯T155):** when a new frontier leaf is
   filed that is not design-gated / needs-owner / design-discussion /
   parked-for-design, **`jevons-po` spawns a fleet worker** under
@@ -178,6 +206,17 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   parked-for-design / pure documentation. Related: 🎯T155 continuous
   frontier kick-off. Instructional residual. Persona + agents-guide +
   fleet standing brief.
+- **PO proactive-until-empty-then-sleep (🎯T325.1):** when the
+  product-scoped frontier has unblocked ready leaves, the PO continues
+  spawn/brief until empty or blocked — not a one-shot pass that strands
+  work. When empty (or only design-gated / blocked / parked /
+  already-engaged leaves remain), the PO sleeps/idles without open-mission
+  thrash; stays interruptible for owner/overseer directs. Pure helpers:
+  `ClassifyPOProactive` / `ClassifyFrontierLeaf` /
+  `POOpenMissionForProactive`. Design:
+  `docs/design/life-and-work-org-map.md` §8. Complements T155 / T193 /
+  T244. Residual: instructional + pure classifier; hard daemon sleep gate
+  may follow. Persona + agents-guide + fleet standing brief.
 - **Worker names literal dots (🎯T197):** hierarchical target ids in fleet
   worker names keep **literal dots** — never digit-squash
   (`jv-t27.2-config` not `jv-t272-config`). Flat ids unchanged

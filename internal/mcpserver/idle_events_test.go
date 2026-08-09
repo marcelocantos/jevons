@@ -33,6 +33,140 @@ func TestShouldEmitWorkerIdle(t *testing.T) {
 	}
 }
 
+// 🎯T244: unbound PO with zero work children is not open mission — no worker-idle thrash.
+func TestHasOpenMissionForIdleUnboundPO(t *testing.T) {
+	t.Parallel()
+	po := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork}
+	if HasOpenMissionForIdle(po, nil, 0, 0) {
+		t.Fatal("unbound PO with zero work children must not be open mission")
+	}
+	// Compose with ShouldEmitWorkerIdle (acceptance oracle).
+	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, HasOpenMissionForIdle(po, nil, 0, 0)) {
+		t.Fatal("ShouldEmitWorkerIdle must be false for unbound empty-children PO")
+	}
+	// Unengaged work children only (count>0, engaged=0): PO still open to reap/rebrief.
+	if !HasOpenMissionForIdle(po, nil, 1, 0) {
+		t.Fatal("PO with only unengaged work children must stay open mission")
+	}
+	// 🎯T330: engaged children ⇒ sleep-OK, not open for parent thrash.
+	if HasOpenMissionForIdle(po, nil, 1, 1) {
+		t.Fatal("PO with engaged work children must not be open mission (T330)")
+	}
+	// Residual: PO with bound target_id still open even with zero children.
+	bound := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork, TargetID: "T99"}
+	if !HasOpenMissionForIdle(bound, nil, 0, 0) {
+		t.Fatal("PO with target_id must stay open mission")
+	}
+	// 🎯T330: bound PO with engaged children still sleep-OK (children own WIP).
+	if HasOpenMissionForIdle(bound, nil, 1, 1) {
+		t.Fatal("bound PO with engaged children must not thrash (T330)")
+	}
+	// Unbound implementer (not PO-shaped) still open so parent can reap.
+	worker := claudia.AgentDef{Name: "jv-t244", Purpose: claudia.PurposeWork}
+	if !HasOpenMissionForIdle(worker, nil, 0, 0) {
+		t.Fatal("unbound implementer must remain open mission")
+	}
+	// Aside / non-work never open.
+	aside := claudia.AgentDef{Name: "aside-1", Purpose: claudia.PurposeAside}
+	if HasOpenMissionForIdle(aside, nil, 0, 0) {
+		t.Fatal("aside must not be open mission")
+	}
+	// missionOpen can close a bound target.
+	if HasOpenMissionForIdle(bound, func(string) bool { return false }, 0, 0) {
+		t.Fatal("missionOpen false must close bound target")
+	}
+}
+
+// 🎯T330: pure classifier — parent idle + engaged child → no re-pressure.
+func TestSuppressParentIdleThrashT330(t *testing.T) {
+	t.Parallel()
+	if !SuppressParentIdleThrash("jevons-po", 1) {
+		t.Fatal("PO with engaged child must suppress thrash")
+	}
+	if !SuppressParentIdleThrash("slice-boss", 2) {
+		t.Fatal("boss with engaged children must suppress thrash")
+	}
+	if SuppressParentIdleThrash("jevons-po", 0) {
+		t.Fatal("orphan PO (zero engaged) must not suppress — residual pressures")
+	}
+	if SuppressParentIdleThrash("jv-t329-inspect", 1) {
+		t.Fatal("implementer name must never suppress via parent gate")
+	}
+}
+
+// 🎯T330: engaged = bound open target and/or phase=working.
+func TestIsEngagedWorkChildAndCount(t *testing.T) {
+	t.Parallel()
+	bound := claudia.AgentDef{Name: "jv-t329", Purpose: claudia.PurposeWork, TargetID: "T329", Parent: "jevons-po"}
+	if !IsEngagedWorkChild(bound, "idle", nil) {
+		t.Fatal("bound target must count engaged")
+	}
+	if IsEngagedWorkChild(bound, "idle", func(string) bool { return false }) {
+		t.Fatal("closed mission must not count engaged")
+	}
+	wip := claudia.AgentDef{Name: "jv-wip", Purpose: claudia.PurposeWork, Parent: "jevons-po"}
+	if !IsEngagedWorkChild(wip, "working", nil) {
+		t.Fatal("phase=working unbound implementer is WIP engaged")
+	}
+	if IsEngagedWorkChild(wip, "idle", nil) {
+		t.Fatal("unbound idle implementer is not engaged (PO may reap under open-mission)")
+	}
+	aside := claudia.AgentDef{Name: "a", Purpose: claudia.PurposeAside, Parent: "jevons-po"}
+	if IsEngagedWorkChild(aside, "working", nil) {
+		t.Fatal("aside never engaged work child")
+	}
+
+	defs := []claudia.AgentDef{
+		{Name: "jevons-po", Purpose: claudia.PurposeWork},
+		bound,
+		wip,
+		{Name: "jv-idle-unbound", Purpose: claudia.PurposeWork, Parent: "jevons-po"},
+		aside,
+	}
+	phase := map[string]string{
+		"jv-t329":         "idle",
+		"jv-wip":          "working",
+		"jv-idle-unbound": "idle",
+	}
+	phaseOf := func(n string) string { return phase[n] }
+	if n := CountEngagedWorkChildren(defs, "jevons-po", phaseOf, nil); n != 2 {
+		t.Fatalf("engaged children=%d want 2 (bound + working)", n)
+	}
+	// Compose open-mission gate: PO with those kids is sleep-OK.
+	po := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork}
+	engaged := CountEngagedWorkChildren(defs, "jevons-po", phaseOf, nil)
+	total := CountWorkChildren(defs, "jevons-po")
+	if total != 3 {
+		t.Fatalf("work children=%d want 3", total)
+	}
+	if HasOpenMissionForIdle(po, nil, total, engaged) {
+		t.Fatal("parent idle + engaged children must not be open mission")
+	}
+	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, HasOpenMissionForIdle(po, nil, total, engaged)) {
+		t.Fatal("worker-idle must not fire for sleep-OK PO with engaged kids")
+	}
+}
+
+func TestCountWorkChildren(t *testing.T) {
+	t.Parallel()
+	defs := []claudia.AgentDef{
+		{Name: "jevons-po", Purpose: claudia.PurposeWork, Parent: "jevons"},
+		{Name: "jv-a", Purpose: claudia.PurposeWork, Parent: "jevons-po"},
+		{Name: "jv-b", Purpose: claudia.PurposeWork, Parent: "jevons-po"},
+		{Name: "aside-1", Purpose: claudia.PurposeAside, Parent: "jevons-po"},
+		{Name: "other", Purpose: claudia.PurposeWork, Parent: "other-po"},
+	}
+	if n := CountWorkChildren(defs, "jevons-po"); n != 2 {
+		t.Fatalf("work children=%d want 2 (aside excluded)", n)
+	}
+	if n := CountWorkChildren(defs, "other-po"); n != 1 {
+		t.Fatalf("other-po children=%d want 1", n)
+	}
+	if n := CountWorkChildren(defs, "missing"); n != 0 {
+		t.Fatalf("missing parent children=%d", n)
+	}
+}
+
 func TestResolveEventParent(t *testing.T) {
 	t.Parallel()
 	d := claudia.AgentDef{Name: "jv-x", Parent: "jevons-po"}

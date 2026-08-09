@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -79,10 +80,33 @@ type Config struct {
 	// provider.ConfigManager without a full daemon restart.
 	Providers []ProviderDecl `yaml:"providers"`
 
+	// Automations is the desired set of tracked automations for the
+	// 🎯T27.9 liveness capability: each entry declares a signal source, a
+	// cadence, and a grace multiple; jevonsd surfaces a stall when the
+	// signal goes silent past cadence×grace. Adding an automation is
+	// config-only — no bespoke daemon code per entry.
+	Automations []AutomationDecl `yaml:"automations"`
+
 	// Portfolios are named domain groups of repos/products (🎯T200).
 	// Membership is declarative path fragments matched against agent
 	// workdirs — never agent-name parsing. Empty means no portfolio chrome.
 	Portfolios []Portfolio `yaml:"portfolios"`
+
+	// FrontierConsume tunes the 🎯T254.1 unattended frontier consumption
+	// loop (daemon auto-spawns workers for unengaged ready frontier leaves
+	// under the product PO). Zero value = enabled with conservative defaults.
+	FrontierConsume FrontierConsumeConfig `yaml:"frontier_consume"`
+}
+
+// FrontierConsumeConfig is the 🎯T254.1 enforcement loop tuning. The loop is
+// on by default (the target is daemon enforcement without owner spawn
+// commands); Disabled opts out. Zero numeric fields use compiled defaults
+// (10m interval, 1 spawn per cycle, 3 auto-spawns per target).
+type FrontierConsumeConfig struct {
+	Disabled           bool `yaml:"disabled"`
+	IntervalMinutes    int  `yaml:"interval_minutes"`
+	MaxSpawnsPerCycle  int  `yaml:"max_spawns_per_cycle"`
+	MaxSpawnsPerTarget int  `yaml:"max_spawns_per_target"`
 }
 
 // Portfolio is one named domain group (e.g. personal, minicades, schools).
@@ -195,6 +219,155 @@ func (p ProviderDecl) LaunchArgv() []string { return p.ParamStringSlice("argv") 
 
 // ConnectURL is params.url for transport=connect.
 func (p ProviderDecl) ConnectURL() string { return p.ParamString("url") }
+
+// MCPURL is params.mcp_url — the provider's declared MCP endpoint, which
+// the hub MCP client aggregates into jevonsd's /mcp surface (🎯T27.4).
+// Valid for both transports: a launched provider serves MCP on a port it
+// owns; a connect provider serves it beside its main endpoint. Empty
+// means the provider contributes no MCP tools.
+func (p ProviderDecl) MCPURL() string { return p.ParamString("mcp_url") }
+
+// Automation signal-source kinds (🎯T27.9). Each kind is generic code in
+// internal/provider; a config entry composes a kind with its params.
+const (
+	// AutomationSourceFileMtime signals via one file's modification time
+	// (e.g. an automation's log file).
+	AutomationSourceFileMtime = "file-mtime"
+	// AutomationSourceNewestArtifact signals via the newest file under a
+	// directory (optionally narrowed by a glob pattern).
+	AutomationSourceNewestArtifact = "newest-artifact"
+	// AutomationSourceGitLastCommit signals via the last commit time of a
+	// git repository.
+	AutomationSourceGitLastCommit = "git-last-commit"
+	// AutomationSourceLaunchd signals via a launchd job's LastExitStatus:
+	// loaded with exit 0 is healthy; missing or non-zero is a stall.
+	AutomationSourceLaunchd = "launchd"
+	// AutomationSourceProviderFeed signals via the last event timestamp on
+	// an aggregated provider feed (e.g. mnemo's activity feed).
+	AutomationSourceProviderFeed = "provider-feed"
+)
+
+// DefaultAutomationGrace is the stall multiple applied to cadence when a
+// declaration omits grace: silent past cadence×grace ⇒ stalled.
+const DefaultAutomationGrace = 2.0
+
+// AutomationDecl is one tracked automation (🎯T27.9).
+//
+// YAML example:
+//
+//	automations:
+//	  - id: ytt-daily
+//	    cadence: 24h
+//	    grace: 2
+//	    source:
+//	      kind: file-mtime
+//	      path: ~/.local/var/log/ytt.log
+//	  - id: mnemo-activity
+//	    cadence: 12h
+//	    source:
+//	      kind: provider-feed
+//	      provider: mnemo
+//	      feed: health
+type AutomationDecl struct {
+	ID string `yaml:"id" json:"id"`
+	// Cadence is the expected signal interval (Go duration, e.g. "24h").
+	Cadence string `yaml:"cadence" json:"cadence"`
+	// Grace multiplies Cadence to give the stall deadline. Zero/omitted
+	// uses DefaultAutomationGrace.
+	Grace  float64          `yaml:"grace,omitempty" json:"grace,omitempty"`
+	Source AutomationSource `yaml:"source" json:"source"`
+}
+
+// AutomationSource declares where an automation's liveness signal comes
+// from. Kind selects the generic prober; the remaining fields are
+// kind-specific parameters.
+type AutomationSource struct {
+	Kind string `yaml:"kind" json:"kind"`
+	// Path is the watched file for file-mtime.
+	Path string `yaml:"path,omitempty" json:"path,omitempty"`
+	// Dir is the artifact directory for newest-artifact.
+	Dir string `yaml:"dir,omitempty" json:"dir,omitempty"`
+	// Glob optionally narrows newest-artifact to matching names.
+	Glob string `yaml:"glob,omitempty" json:"glob,omitempty"`
+	// Repo is the repository path for git-last-commit.
+	Repo string `yaml:"repo,omitempty" json:"repo,omitempty"`
+	// Label is the launchd job label for launchd.
+	Label string `yaml:"label,omitempty" json:"label,omitempty"`
+	// Provider and Feed name the aggregated feed for provider-feed.
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Feed     string `yaml:"feed,omitempty" json:"feed,omitempty"`
+}
+
+// CadenceDuration parses the declared cadence.
+func (a AutomationDecl) CadenceDuration() (time.Duration, error) {
+	d, err := time.ParseDuration(a.Cadence)
+	if err != nil {
+		return 0, fmt.Errorf("automation %q: cadence %q: %w", a.ID, a.Cadence, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("automation %q: cadence %q must be positive", a.ID, a.Cadence)
+	}
+	return d, nil
+}
+
+// GraceMultiple returns the effective stall multiple.
+func (a AutomationDecl) GraceMultiple() float64 {
+	if a.Grace <= 0 {
+		return DefaultAutomationGrace
+	}
+	return a.Grace
+}
+
+// ValidateAutomations checks Automations entries (🎯T27.9). Empty list is
+// valid. Hard errors: missing/duplicate id, unparseable cadence, negative
+// grace, unknown source kind, or a kind missing its required parameter.
+func ValidateAutomations(list []AutomationDecl) error {
+	seen := make(map[string]struct{}, len(list))
+	for i, a := range list {
+		id := strings.TrimSpace(a.ID)
+		if id == "" {
+			return fmt.Errorf("config: automations[%d]: id is required", i)
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("config: automations: duplicate id %q", id)
+		}
+		seen[id] = struct{}{}
+		if _, err := a.CadenceDuration(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		if a.Grace < 0 {
+			return fmt.Errorf("config: automation %q: grace must be >= 0", id)
+		}
+		src := a.Source
+		switch src.Kind {
+		case AutomationSourceFileMtime:
+			if src.Path == "" {
+				return fmt.Errorf("config: automation %q: %s needs source.path", id, src.Kind)
+			}
+		case AutomationSourceNewestArtifact:
+			if src.Dir == "" {
+				return fmt.Errorf("config: automation %q: %s needs source.dir", id, src.Kind)
+			}
+		case AutomationSourceGitLastCommit:
+			if src.Repo == "" {
+				return fmt.Errorf("config: automation %q: %s needs source.repo", id, src.Kind)
+			}
+		case AutomationSourceLaunchd:
+			if src.Label == "" {
+				return fmt.Errorf("config: automation %q: %s needs source.label", id, src.Kind)
+			}
+		case AutomationSourceProviderFeed:
+			if src.Provider == "" || src.Feed == "" {
+				return fmt.Errorf("config: automation %q: %s needs source.provider and source.feed", id, src.Kind)
+			}
+		case "":
+			return fmt.Errorf("config: automation %q: source.kind is required", id)
+		default:
+			return fmt.Errorf("config: automation %q: source.kind %q unsupported", id, src.Kind)
+		}
+	}
+	return nil
+}
 
 // ValidatePortfolios checks Portfolios entries (🎯T200). Empty list is
 // valid (calm missing). Hard errors: missing id, duplicate ids, empty
@@ -328,6 +501,9 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	if err := ValidatePortfolios(cfg.Portfolios); err != nil {
+		return cfg, err
+	}
+	if err := ValidateAutomations(cfg.Automations); err != nil {
 		return cfg, err
 	}
 	return cfg, nil

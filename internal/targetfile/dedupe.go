@@ -34,6 +34,14 @@ func IsClosedStatus(status string) bool {
 	return s == "set_aside" || s == "set-aside" || s == "achieved"
 }
 
+// IsSetAsideStatus reports set_aside (parked / deferred / wont_fix) only —
+// not achieved. 🎯T337: graph-unblocked via set_aside deps must not be
+// auto-consumed as if the dep were delivered.
+func IsSetAsideStatus(status string) bool {
+	s := strings.ToLower(strings.TrimSpace(status))
+	return s == "set_aside" || s == "set-aside"
+}
+
 // --- Ledger load (status lookup for kickoff) ---
 
 type ledgerDoc struct {

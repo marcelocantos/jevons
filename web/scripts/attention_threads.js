@@ -4,9 +4,11 @@
 // Pure attention/aside model for human↔overseer chat (🎯T65 / 🎯T136).
 // DOM-free so Node hermetic tests can require() it.
 //
-// Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:, target:
+// Prefix-first / voice-first: aside:, capture:, park:, main:, pursue:, target:, idea:
 // Case-insensitive; strip prefix before routing. No button-primary API.
 // target: opens a short-lived filing aside (🎯T93/T95).
+// idea: durable idea ledger intake without fleet aside thrash (🎯T325.3).
+// capture: dual-writes aside + idea ledger so sparks are not scrollback-only.
 //
 // 🎯T136: owner-facing chrome for asides lives in the RHS fleet tree, not
 // the top attention chip bar. chromeStack() is always empty; stack() remains
@@ -34,11 +36,11 @@
   // Legacy alias "archived" normalizes to done on clone/load.
 
   // Recognized composer prefixes (voice or type). Order irrelevant.
-  const COMMANDS = new Set(['aside', 'capture', 'park', 'main', 'pursue', 'target']);
+  const COMMANDS = new Set(['aside', 'capture', 'park', 'main', 'pursue', 'target', 'idea']);
 
   // Leading command: optional whitespace, word, optional space, colon, rest.
-  // Matches "aside: foo", "ASIDE:foo", "capture : bar", "target: file this".
-  const PREFIX_RE = /^\s*(aside|capture|park|main|pursue|target)\s*:\s*/i;
+  // Matches "aside: foo", "ASIDE:foo", "capture : bar", "target: file this", "idea: spark".
+  const PREFIX_RE = /^\s*(aside|capture|park|main|pursue|target|idea)\s*:\s*/i;
 
   function now() {
     return Date.now();
@@ -526,6 +528,206 @@
     return '[attention:' + id + '|' + safeTitle + ']\n' + body;
   }
 
+  // ── 🎯T250: aside turns stay off main transcript ────────────────────
+  // Owner-visible bubbles for attention/target-aside wire text belong in the
+  // RHS Transcript tab only (fleet aside chrome). Main #messages must not
+  // paint them. Wire may still reach the overseer for processing.
+
+  /**
+   * Parse a main-chat user body that is an aside wire marker.
+   * Formats:
+   *   [attention:<id>|<title>]\n<body>
+   *   [target-aside: <id> | <title>]\n<body>\n\n(Ceremony: …)
+   * @returns {{ kind: string, id: string, title: string, body: string, displayText: string }|null}
+   */
+  function parseAsideWireUserText(text) {
+    const raw = String(text == null ? '' : text);
+    if (!raw) return null;
+    // attention: compact id|title, no spaces required around |
+    const att = raw.match(
+      /^\s*\[attention\s*:\s*([^|\]\r\n]+)\|([^\]]*)\]\s*(?:\r?\n([\s\S]*))?$/i,
+    );
+    if (att) {
+      const id = String(att[1] || '').trim();
+      const title = String(att[2] || '').trim();
+      const body = String(att[3] != null ? att[3] : '').replace(/^\r?\n/, '');
+      if (!id) return null;
+      const displayText = body.trim() || title || id;
+      return {
+        kind: 'attention',
+        id: id,
+        title: title,
+        body: body,
+        displayText: displayText,
+      };
+    }
+    // target-aside: id | title (spaces around | optional)
+    const tgt = raw.match(
+      /^\s*\[target-aside\s*:\s*([^|\]]+?)\s*\|\s*([^\]]*)\]\s*(?:\r?\n([\s\S]*))?$/i,
+    );
+    if (tgt) {
+      const id = String(tgt[1] || '').trim();
+      const title = String(tgt[2] || '').trim();
+      let body = String(tgt[3] != null ? tgt[3] : '').replace(/^\r?\n/, '');
+      // Strip filing ceremony for owner-facing sidebar display.
+      body = body.replace(/\n\n\(Ceremony:[\s\S]*$/i, '').trim();
+      if (!id) return null;
+      const displayText = body || title || id;
+      return {
+        kind: 'target-aside',
+        id: id,
+        title: title,
+        body: body,
+        displayText: displayText,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * 🎯T264: prefix-class wire detection (flash-safe). Full parse may miss
+   * image-prefixed bodies or trailing junk; any first non-empty line that
+   * is an attention/target-aside header must never paint on main.
+   */
+  function looksLikeAsideWireMarker(text) {
+    const raw = String(text == null ? '' : text);
+    if (!raw) return false;
+    // Strip leading [image: …] markers (composer prepend) then re-check.
+    let t = raw.replace(/^\s*(?:\[image:\s*[^\]]*\]\s*)+/i, '');
+    t = t.replace(/^\s+/, '');
+    if (/^\[attention\s*:/i.test(t)) return true;
+    if (/^\[target-aside\s*:/i.test(t)) return true;
+    // Multiline: first non-empty line is the wire header.
+    const lines = t.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      if (/^\[attention\s*:/i.test(line)) return true;
+      if (/^\[target-aside\s*:/i.test(line)) return true;
+      return false;
+    }
+    return false;
+  }
+
+  function isAsideWireUserText(text) {
+    if (parseAsideWireUserText(text) != null) return true;
+    // 🎯T264: never miss a paintable flash on strict-parse failure.
+    return looksLikeAsideWireMarker(text);
+  }
+
+  /** Main transcript should paint this user body (false for aside wires). */
+  function shouldPaintMainUserText(text) {
+    return !isAsideWireUserText(text);
+  }
+
+  /**
+   * Record an aside wire user turn into a cache keyed by aside id.
+   * Dedupes consecutive identical user lines. Mutates cache.
+   * @param {Object} cache map id → [{role,text}]
+   * @param {string} text full wire user content
+   * @returns {{ parsed: object|null, added: boolean }}
+   */
+  // 🎯T308: `when` is the aside turn's own timestamp (epoch ms) when the caller
+  // knows one — live wire arrival, or the frame time on history replay. Omitted
+  // rather than defaulted, so a replayed turn never claims to have just arrived.
+  function recordAsideWireUserTurn(cache, text, when) {
+    const p = parseAsideWireUserText(text);
+    if (!p || !p.id || !cache || typeof cache !== 'object') {
+      return { parsed: p, added: false };
+    }
+    const display = p.displayText || p.body || p.title || '';
+    if (!cache[p.id]) cache[p.id] = [];
+    const list = cache[p.id];
+    if (list.length) {
+      const last = list[list.length - 1];
+      if (last && last.role === 'user' && last.text === display) {
+        return { parsed: p, added: false };
+      }
+    }
+    const turn = { role: 'user', text: display };
+    if (typeof when === 'number' && isFinite(when) && when > 0) turn.when = when;
+    list.push(turn);
+    return { parsed: p, added: true };
+  }
+
+  /**
+   * Build aside-id → lines map from chatlog frames (history fixture).
+   * Only user frames with aside wire markers are included.
+   */
+  function extractAsideWireTurnsFromFrames(frames) {
+    const cache = Object.create(null);
+    const list = Array.isArray(frames) ? frames : [];
+    for (let i = 0; i < list.length; i++) {
+      let m = list[i];
+      if (typeof m === 'string') {
+        try { m = JSON.parse(m); } catch (_) { continue; }
+      }
+      if (!m || m.type !== 'user') continue;
+      const content = m.message && m.message.content;
+      if (typeof content !== 'string' || !content) continue;
+      // 🎯T308: carry the frame's own timestamp so a replayed aside turn keeps
+      // its real time in the sidebar instead of losing .msg-time entirely.
+      recordAsideWireUserTurn(cache, content, frameWhen(m));
+    }
+    return cache;
+  }
+
+  /** 🎯T308: first defined epoch-ms timestamp on a chatlog frame, else undefined. */
+  function frameWhen(m) {
+    const keys = ['when', 'ts', 'timestamp', 'time', 'created_at'];
+    for (let i = 0; i < keys.length; i++) {
+      const v = m && m[keys[i]];
+      if (typeof v === 'number' && isFinite(v) && v > 0) {
+        return v < 1e11 ? Math.round(v * 1000) : Math.round(v);
+      }
+      if (typeof v === 'string' && v) {
+        const ms = /^\d+$/.test(v) ? Number(v) : Date.parse(v);
+        if (isFinite(ms) && ms > 0) return ms < 1e11 ? Math.round(ms * 1000) : Math.round(ms);
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Merge process-session inspect lines with main-wire aside cache for an id.
+   * Wire turns first (owner open body), then process turns; dedupe role+text.
+   *
+   * 🎯T308: `when` rides through the merge. This function rebuilt every turn as
+   * a bare {role, text}, so an aside turn that reached the sidebar via the wire
+   * cache arrived at the renderer with no timestamp and no .msg-time — the same
+   * class of drop as the hand-rolled copies in index.html. On a dedupe hit the
+   * earliest known timestamp wins: the wire copy and the process copy are the
+   * same turn, and the earlier reading is the truer one.
+   */
+  function mergeInspectLinesWithAsideWire(processLines, wireLines) {
+    const out = [];
+    const at = Object.create(null);
+    function push(l) {
+      if (!l) return;
+      const role = l.role === 'user' ? 'user' : (l.role === 'assistant' || l.role === 'jevons' ? 'assistant' : (l.role || 'other'));
+      const text = l.text == null ? '' : String(l.text);
+      if (!text.trim() && role === 'other') return;
+      const k = role + '\0' + text;
+      const when = (typeof l.when === 'number' && isFinite(l.when) && l.when > 0)
+        ? l.when : undefined;
+      const prior = at[k];
+      if (prior !== undefined) {
+        const kept = out[prior];
+        if (when !== undefined && (kept.when === undefined || when < kept.when)) {
+          kept.when = when;
+        }
+        return;
+      }
+      at[k] = out.length;
+      const turn = { role: role, text: text };
+      if (when !== undefined) turn.when = when;
+      out.push(turn);
+    }
+    (wireLines || []).forEach(push);
+    (processLines || []).forEach(push);
+    return out;
+  }
+
   // handleComposer: single entry for send / local commands.
   // Returns:
   //   {
@@ -554,6 +756,28 @@
         clearComposer: true,
         composerBody: '',
         threadId: cap.id,
+        // 🎯T325.3: dual-write durable idea ledger (not scrollback-only).
+        ideaCapture: true,
+        ideaSource: 'capture',
+        ideaText: bodyTrim,
+      };
+    }
+
+    // idea: durable idea-ledger only (no fleet aside thrash) — 🎯T325.3.
+    // Focus stays main; ceremony posts to POST /api/ideas from the shell.
+    if (parsed.command === 'idea') {
+      if (!bodyTrim) {
+        return { kind: 'empty', text: '', state: s0, clearComposer: false, composerBody: null };
+      }
+      return {
+        kind: 'local',
+        text: '',
+        state: s0,
+        clearComposer: true,
+        composerBody: '',
+        ideaCapture: true,
+        ideaSource: 'idea',
+        ideaText: bodyTrim,
       };
     }
 
@@ -795,6 +1019,14 @@
     handleComposer: handleComposer,
     prepareSend: prepareSend,
     formatAsideWire: formatAsideWire,
+    // 🎯T250 / 🎯T264
+    parseAsideWireUserText: parseAsideWireUserText,
+    looksLikeAsideWireMarker: looksLikeAsideWireMarker,
+    isAsideWireUserText: isAsideWireUserText,
+    shouldPaintMainUserText: shouldPaintMainUserText,
+    recordAsideWireUserTurn: recordAsideWireUserTurn,
+    extractAsideWireTurnsFromFrames: extractAsideWireTurnsFromFrames,
+    mergeInspectLinesWithAsideWire: mergeInspectLinesWithAsideWire,
     serialize: serialize,
     deserialize: deserialize,
     load: load,

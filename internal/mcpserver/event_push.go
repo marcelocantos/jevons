@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // registerEventPushTools exposes 🎯T34 event-triggered push via MCP so
@@ -51,8 +53,16 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	reply, err := s.butler.PushEvent(target, event, text)
 	if err != nil {
 		life["err"] = err.Error()
+		life["failure_class"] = agenterr.Classify(err).String()
 		s.logLifecycle(compEventPush, "push", "error", life)
-		return mcp.NewToolResultError(err.Error()), nil
+		// 🎯T283: same classification the owner chat path gets.
+		return toolFailure("event_push", target, err), nil
+	}
+	if class, ownerMsg, ok := agenterr.ReplyFailure(reply); ok {
+		life["failure_class"] = class.String()
+		s.logLifecycle(compEventPush, "push", "error", life)
+		logProviderFailure("event_push", target, class, reply)
+		return mcp.NewToolResultError(ownerMsg), nil
 	}
 	s.logLifecycle(compEventPush, "push", "ok", life)
 	return mcp.NewToolResultText(fmt.Sprintf("Pushed event %q to %q.\n\n%s", event, target, reply)), nil

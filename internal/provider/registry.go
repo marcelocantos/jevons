@@ -121,7 +121,14 @@ func (r *Registry) fold(providerID string, ev FeedEvent) bool {
 	if r.model[providerID] == nil {
 		r.model[providerID] = make(map[string][]FeedEvent)
 	}
-	r.model[providerID][ev.Feed] = append(r.model[providerID][ev.Feed], ev)
+	// The model is last-known derived state (§5.3), not durability — the
+	// provider owns history. Cap retention so long-lived feeds cannot
+	// grow the hub without bound (🎯T27.5).
+	evs := append(r.model[providerID][ev.Feed], ev)
+	if len(evs) > modelCap {
+		evs = evs[len(evs)-modelCap:]
+	}
+	r.model[providerID][ev.Feed] = evs
 	return true
 }
 
@@ -148,6 +155,30 @@ func (r *Registry) ModelFeed(providerID, feed string) []FeedEvent {
 	out := make([]FeedEvent, len(src))
 	copy(out, src)
 	return out
+}
+
+// SetSurfaces upserts the UI surfaces for a provider that is not
+// (in-process) Registered — the wire path: FeedHub stores the surfaces
+// from each attached provider's manifest here so the 🎯T27.6 producer
+// composes them. Surfaces persist across a feed disconnect (last-known
+// UI), matching the model's last-known-state semantics — until
+// ClearSurfaces (provider disabled / removed from the desired set).
+func (r *Registry) SetSurfaces(id string, ui []UISurface) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := make([]UISurface, len(ui))
+	copy(cp, ui)
+	r.surfaces[id] = cp
+}
+
+// ClearSurfaces drops the composed UI for a provider. Used when a
+// provider is disabled or removed from the desired set so the desktop
+// head's section disappears (🎯T27.7 toggle). Distinct from a transient
+// feed disconnect, which keeps last-known surfaces.
+func (r *Registry) ClearSurfaces(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.surfaces, id)
 }
 
 // ComposedUI returns a map of provider id → surfaces (with roots) for the

@@ -219,6 +219,40 @@ truth. It is fully reconstructable by replaying retained history of all
 `replay:true` feeds (plus any hub snapshot), which is the operational
 meaning of *Jevons never remembers*.
 
+### 5.3.1 Hub capability: automation liveness (🎯T27.9)
+
+The hub consumes its own aggregated model (and local signal probes) to
+track **automation liveness**: each declared automation names a signal
+source, a cadence, and a grace multiple; a signal silent past
+cadence×grace folds a `stall` event into the aggregated model under the
+synthetic `liveness/automations` feed, broadcasts as a `provider_event`,
+and notifies the owner via the overseer. A fresh signal folds `clear`
+and notifies recovery. `GET /api/automations` is the pollable snapshot.
+
+Signal-source kinds are generic (`file-mtime`, `newest-artifact`,
+`git-last-commit`, `launchd` LastExitStatus, `provider-feed` — e.g.
+mnemo's feed as the signal); adding an automation is config-only:
+
+```yaml
+automations:
+  - id: ytt-daily
+    cadence: 24h
+    grace: 2
+    source:
+      kind: file-mtime
+      path: ~/.local/var/log/ytt.log
+  - id: mnemo-activity
+    cadence: 12h
+    source:
+      kind: provider-feed
+      provider: mnemo
+      feed: health
+```
+
+Reborn from the former mnemo-T98 nine-day silent ytt stall; the
+fault-injection oracle lives in
+`internal/server/automation_liveness_test.go`.
+
 ### 5.4 Loop-safety (decidable)
 
 jevonsd drops any inbound event where:
@@ -434,7 +468,7 @@ Every downstream target and every real provider is verified by
 | MCP client → re-export into `/mcp` | 🎯T27.4 |
 | feed ingestion → aggregated live model | 🎯T27.5 |
 | server-side UI producer, multi-provider compose | 🎯T27.6 |
-| desktop menu-bar/tray head over the aggregate | 🎯T27.7 |
+| desktop menu-bar/tray head over the aggregate | 🎯T27.7 — `internal/desktop` MenuModel (N providers → N sections), `cmd/jevons-head`, `GET /api/desktop/head`, macOS `macos/JevonsHead` status item; mnemo T85/T86/T89 supersession inventory |
 | mnemo as first live provider (passes this suite) | 🎯T27.8 |
 | automation-liveness on provider feeds | 🎯T27.9 |
 

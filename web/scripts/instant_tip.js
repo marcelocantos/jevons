@@ -15,12 +15,14 @@
 // 🎯T187: never auto-timeout while over the card. Nested scroll/wheel must
 // not re-arm hide. No setInterval.
 //
-// 🎯T231 OWNER HARD PIN — NO multi-element bridge:
-//   ONE invisible axis-aligned rect = AABB(card ∪ id+name of active row).
-//   Leave that rect → dismiss immediately (HIDE_GRACE_MS = 0).
-//   Product model is pointInHitRect only — not host+tip+bridge flags/grace.
-//   Outside top/bottom of that rect is leave (exit above/below).
-//   Host↔card inside the rect does not dismiss; another row → leave/switch.
+// 🎯T231 / 🎯T271 OWNER HARD PIN — NO multi-element bridge flags/grace:
+//   Product hit region = card ∪ id+name hosts ∪ horizontal corridor between
+//   them (NOT the tall filled AABB of card∪hosts). Tall AABB left a keep-open
+//   zone over other frontier rows when the card is tall — owner residual
+//   (T271): move up/down away from the trigger row must dismiss immediately.
+//   Corridor is only the horizontal gap between card and hosts (vertical span
+//   of card∪hosts in that gap) so host→card travel works; table rows at/right
+//   of hosts are outside. Leave region → dismiss (HIDE_GRACE_MS = 0).
 //   Flicker → fix geometry, never add timeout.
 //
 // 🎯T230: frontier quiet poll / re-render must not tear down a tip while
@@ -51,6 +53,8 @@
   var HIT_LAYER_CLASS = 'instant-tip-hit';
   var PLACE_ABOVE_HOST = 'above-host';
   var PLACE_LEFT_OF_POINTER = 'left-of-pointer';
+  // 🎯T326: chat target hotspots — smaller finger left, card opens right of host.
+  var PLACE_RIGHT_OF_HOST = 'right-of-host';
   var EDGE_PAD = 4;
   var POINTER_GAP = 12;
   var DEFAULT_CLAMP_GAP = 8;
@@ -102,7 +106,7 @@
     return 0;
   }
 
-  // ─── Pure geometry (🎯T231): one AABB hit rect ─────────────────────────
+  // ─── Pure geometry (🎯T231/T271): multi-part hit region ────────────────
 
   function normalizeRect(r) {
     if (!r || typeof r !== 'object') return null;
@@ -135,7 +139,7 @@
     return { left: left, top: top, right: right, bottom: bottom };
   }
 
-  // Pure: point inside one hit rect (🎯T231 product predicate).
+  // Pure: point inside one axis-aligned rect.
   function pointInHitRect(x, y, rect) {
     var r = normalizeRect(rect);
     if (!r) return false;
@@ -145,11 +149,59 @@
     return px >= r.left && px <= r.right && py >= r.top && py <= r.bottom;
   }
 
-  // Pure: build the single product hit rect from card + host cells.
-  // args: { cardRect, hostRects, tableRect? }
-  // ONE AABB encompassing card ∪ id+name. No bridge. Optional vertical clip
-  // to table so exit above table top / below bottom is outside when the
-  // union would otherwise extend past table (hosts already row-band).
+  // Pure: horizontal corridor between card and hosts (🎯T271).
+  // Only the gap strip — does NOT cover table rows at/right of hosts.
+  // Vertical span = full card∪hosts so diagonal host→card travel works.
+  function bridgeCorridorBetween(cardRect, hostRects) {
+    var card = normalizeRect(cardRect);
+    var hostsUnion = Array.isArray(hostRects)
+      ? unionHitRect(hostRects)
+      : normalizeRect(hostRects);
+    if (!card || !hostsUnion) return null;
+    var top = Math.min(card.top, hostsUnion.top);
+    var bottom = Math.max(card.bottom, hostsUnion.bottom);
+    var left;
+    var right;
+    if (card.right <= hostsUnion.left) {
+      // Product cards: left-of-pointer → card left of hosts.
+      left = card.right;
+      right = hostsUnion.left;
+    } else if (hostsUnion.right <= card.left) {
+      left = hostsUnion.right;
+      right = card.left;
+    } else {
+      return null; // horizontal overlap — no corridor gap
+    }
+    if (!(right > left) || !(bottom > top)) return null;
+    return { left: left, top: top, right: right, bottom: bottom };
+  }
+
+  // Pure: product hit parts = card ∪ hosts ∪ corridor (🎯T271).
+  // aabb is debug envelope only — product predicate is pointInHitParts.
+  function computeHitParts(args) {
+    var a = args || {};
+    var card = normalizeRect(a.cardRect || a.tipRect);
+    var hosts = [];
+    var rawHosts = a.hostRects || [];
+    for (var i = 0; i < rawHosts.length; i++) {
+      var h = normalizeRect(rawHosts[i]);
+      if (h) hosts.push(h);
+    }
+    var corridor = bridgeCorridorBetween(card, hosts);
+    var envelope = [];
+    if (card) envelope.push(card);
+    for (var j = 0; j < hosts.length; j++) envelope.push(hosts[j]);
+    if (corridor) envelope.push(corridor);
+    return {
+      card: card,
+      hosts: hosts,
+      corridor: corridor,
+      aabb: unionHitRect(envelope),
+    };
+  }
+
+  // Pure: AABB envelope of card ∪ hosts (T231 hermetics / debug layer).
+  // Product dismiss uses computeHitParts + pointInHitParts (T271).
   function computeHitRect(args) {
     var a = args || {};
     var parts = [];
@@ -160,23 +212,31 @@
       var h = normalizeRect(hosts[i]);
       if (h) parts.push(h);
     }
-    var rect = unionHitRect(parts);
-    if (!rect) return null;
-    var table = normalizeRect(a.tableRect);
-    if (table) {
-      // Clip only if the union extends past table vertically on the table
-      // side without the card holding that extent. Owner: outside top/bottom
-      // of the hit rect is leave — pure AABB already defines top/bottom.
-      // Do not invent a taller strip; table clip shrinks host contribution
-      // only when hosts fall outside table (degenerate). Keep card extent.
-      // Product: leave rect as AABB(card ∪ hosts) — no vertical invent.
-    }
-    return rect;
+    return unionHitRect(parts);
   }
 
-  // Pure: dismiss when pointer is outside the hit rect.
+  // Pure: point inside product multi-part hit region (🎯T271).
+  // parts may be { card, hosts, corridor } or { rect } for single-rect inject.
+  function pointInHitParts(x, y, parts) {
+    var p = parts || {};
+    if (p.rect) return pointInHitRect(x, y, p.rect);
+    if (pointInHitRect(x, y, p.card)) return true;
+    var hosts = p.hosts || [];
+    for (var i = 0; i < hosts.length; i++) {
+      if (pointInHitRect(x, y, hosts[i])) return true;
+    }
+    if (p.corridor && pointInHitRect(x, y, p.corridor)) return true;
+    return false;
+  }
+
+  // Pure: dismiss when pointer is outside a single rect (hermetic helper).
   function shouldDismissOutsideHitRect(x, y, rect) {
     return !pointInHitRect(x, y, rect);
+  }
+
+  // Pure: dismiss when outside multi-part product region (🎯T271).
+  function shouldDismissOutsideHitParts(x, y, parts) {
+    return !pointInHitParts(x, y, parts);
   }
 
   // Pure hover state for latch / scheduled-hide helpers.
@@ -229,6 +289,57 @@
   function tipTextOrEmpty(text) {
     if (text == null) return '';
     return String(text).trim();
+  }
+
+  // placeRightOfHostRect — pure placement math for 🎯T326 chat hotspots.
+  // Finger/host on the left; card opens to the right of the host rect.
+  // Flips left when the right side would clip the viewport.
+  function placeRightOfHostRect(args) {
+    var a = args || {};
+    var host = normalizeRect(a.hostRect) || null;
+    var hx = host
+      ? host.right
+      : (Number(a.pointerX) || 0);
+    var hy = host
+      ? (host.top + host.bottom) / 2
+      : (Number(a.pointerY) || 0);
+    var tw = Math.max(0, Number(a.tipW) || 0);
+    var th = Math.max(0, Number(a.tipH) || 0);
+    var vw = Math.max(0, Number(a.viewW) || 0);
+    var vh = Math.max(0, Number(a.viewH) || 0);
+    var gap = a.gap != null ? Number(a.gap) : POINTER_GAP;
+    var pad = a.pad != null ? Number(a.pad) : EDGE_PAD;
+
+    var side = 'right';
+    var left = hx + gap;
+    if (vw > 0 && left + tw > vw - pad) {
+      // Flip: open left of host when right would clip.
+      var hostLeft = host ? host.left : hx;
+      var leftCandidate = hostLeft - gap - tw;
+      if (leftCandidate >= pad) {
+        side = 'left';
+        left = leftCandidate;
+      } else {
+        left = Math.max(pad, vw - pad - tw);
+      }
+    }
+    if (left < pad) left = pad;
+
+    var top = hy - th / 2;
+    if (vh > 0) {
+      if (top + th > vh - pad) top = Math.max(pad, vh - pad - th);
+      if (top < pad) top = pad;
+    } else if (top < pad) {
+      top = pad;
+    }
+
+    return {
+      left: Math.round(left),
+      top: Math.round(top),
+      side: side,
+      fingerLeftOfCard: side === 'right',
+      cardOpensRightOfHotspot: side === 'right',
+    };
   }
 
   // placeLeftOfPointerRect — pure placement math for 🎯T181/T186 cards.
@@ -347,6 +458,42 @@
     if (left < 4) left = 4;
     tip.style.left = Math.round(left) + 'px';
     tip.style.top = Math.round(top) + 'px';
+  }
+
+  function placeTipRightOfHost(tip, opts) {
+    if (!tip) return null;
+    var o = opts || {};
+    var host = o.host || null;
+    var hostRect = null;
+    if (o.hostRect) {
+      hostRect = normalizeRect(o.hostRect);
+    } else if (host && typeof host.getBoundingClientRect === 'function') {
+      try {
+        hostRect = normalizeRect(host.getBoundingClientRect());
+      } catch (_) {
+        hostRect = null;
+      }
+    }
+    var vw = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 0;
+    var vh = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 0;
+    var tipW = tip.offsetWidth || 0;
+    var tipH = tip.offsetHeight || 0;
+    var pos = placeRightOfHostRect({
+      hostRect: hostRect,
+      tipW: tipW,
+      tipH: tipH,
+      viewW: vw,
+      viewH: vh,
+      gap: o.gap,
+      pad: o.pad,
+      pointerX: o.pointerX,
+      pointerY: o.pointerY,
+    });
+    if (tip.style) {
+      tip.style.left = pos.left + 'px';
+      tip.style.top = pos.top + 'px';
+    }
+    return pos;
   }
 
   function placeTipLeftOfPointer(tip, event, opts) {
@@ -526,6 +673,15 @@
         clampGap: o.clampGap,
         doc: o.doc,
       });
+    } else if (placement === PLACE_RIGHT_OF_HOST) {
+      placeTipRightOfHost(tip, {
+        host: host || o.host,
+        hostRect: o.hostRect,
+        gap: o.gap,
+        pad: o.pad,
+        pointerX: o.pointerX,
+        pointerY: o.pointerY,
+      });
     } else if (host) {
       placeTip(tip, host);
     }
@@ -588,6 +744,7 @@
   //   html — when true, set innerHTML instead of textContent (rich cards)
   //   ariaLabel — plain string for aria-label
   //   placement — 'above-host' (default) | 'left-of-pointer' (🎯T181)
+  //                | 'right-of-host' (🎯T326 chat hotspots: finger left, card right)
   //   className — extra class on tip (e.g. instant-tip-card)
   //   sticky — default true: stay open while inside hit rect
   //   hitGroup — 🎯T231 default true for sticky: single hit-rect, grace 0
@@ -687,6 +844,8 @@
     var overTip = false;
     var tipEngaged = false;
     var hitRect = o.hitRect ? normalizeRect(o.hitRect) : null;
+    // 🎯T271: multi-part product region; single-rect inject via o.hitRect for tests.
+    var hitParts = hitRect ? { rect: hitRect, aabb: hitRect } : null;
     var insideHitRect = false;
     var hideTimer = null;
     var tracking = false;
@@ -766,12 +925,14 @@
     function recomputeHitRect() {
       if (o.hitRect) {
         hitRect = normalizeRect(o.hitRect);
+        hitParts = hitRect ? { rect: hitRect, aabb: hitRect } : null;
       } else {
-        hitRect = computeHitRect({
+        // 🎯T271: product path uses multi-part region (card ∪ hosts ∪ corridor).
+        hitParts = computeHitParts({
           cardRect: readCardRect(),
           hostRects: readHostRects(),
-          tableRect: resolveTableRect(),
         });
+        hitRect = hitParts && hitParts.aabb ? hitParts.aabb : null;
       }
       if (hitLayer) applyHitLayerLayout(hitLayer, hitRect);
       return hitRect;
@@ -834,18 +995,20 @@
       };
     }
 
-    // 🎯T231: sample pointer against the ONE hit rect — dismiss immediately
-    // when outside. No grace. No multi-flag bridge.
+    // 🎯T231/T271: sample against product hit region — dismiss immediately
+    // when outside. Multi-part = card ∪ hosts ∪ corridor (not tall AABB).
     function samplePointer(x, y) {
       if (!isVisible(tip)) return false;
       recomputeHitRect();
-      var inside = pointInHitRect(x, y, hitRect);
+      var inside = hitParts
+        ? pointInHitParts(x, y, hitParts)
+        : pointInHitRect(x, y, hitRect);
       insideHitRect = inside;
       if (inside) {
         clearHideTimer();
         return true;
       }
-      // Outside hit rect → dismiss now (grace 0).
+      // Outside hit region → dismiss now (grace 0).
       doHide();
       return false;
     }
@@ -867,7 +1030,9 @@
       if (useHitGroup) {
         startTracking();
         if (ev && typeof ev.clientX === 'number') {
-          insideHitRect = pointInHitRect(ev.clientX, ev.clientY, hitRect);
+          insideHitRect = hitParts
+            ? pointInHitParts(ev.clientX, ev.clientY, hitParts)
+            : pointInHitRect(ev.clientX, ev.clientY, hitRect);
         } else {
           insideHitRect = true; // host enter without coords — treat latched
         }
@@ -1031,11 +1196,13 @@
     tip._instantTipGetHitRect = function () { return hitRect ? {
       left: hitRect.left, top: hitRect.top, right: hitRect.right, bottom: hitRect.bottom,
     } : null; };
+    tip._instantTipGetHitParts = function () { return hitParts; };
     tip._instantTipRecomputeHitRect = recomputeHitRect;
     tip._instantTipSamplePointer = samplePointer;
     tip._instantTipSetHitRect = function (r) {
       hitRect = normalizeRect(r);
       o.hitRect = hitRect;
+      hitParts = hitRect ? { rect: hitRect, aabb: hitRect } : null;
       if (hitLayer) applyHitLayerLayout(hitLayer, hitRect);
     };
     return tip;
@@ -1051,6 +1218,7 @@
     HIT_LAYER_CLASS: HIT_LAYER_CLASS,
     PLACE_ABOVE_HOST: PLACE_ABOVE_HOST,
     PLACE_LEFT_OF_POINTER: PLACE_LEFT_OF_POINTER,
+    PLACE_RIGHT_OF_HOST: PLACE_RIGHT_OF_HOST,
     DEFAULT_CLAMP_GAP: DEFAULT_CLAMP_GAP,
     DEFAULT_CLAMP_SELECTORS: DEFAULT_CLAMP_SELECTORS,
     showSchedule: showSchedule,
@@ -1059,8 +1227,12 @@
     normalizeRect: normalizeRect,
     unionHitRect: unionHitRect,
     pointInHitRect: pointInHitRect,
+    pointInHitParts: pointInHitParts,
+    bridgeCorridorBetween: bridgeCorridorBetween,
+    computeHitParts: computeHitParts,
     computeHitRect: computeHitRect,
     shouldDismissOutsideHitRect: shouldDismissOutsideHitRect,
+    shouldDismissOutsideHitParts: shouldDismissOutsideHitParts,
     isInsideHitGroup: isInsideHitGroup,
     shouldDismissOnLeaveHitGroup: shouldDismissOnLeaveHitGroup,
     shouldRunScheduledHide: shouldRunScheduledHide,
@@ -1073,8 +1245,10 @@
     relatedStillInside: relatedStillInside,
     tipTextOrEmpty: tipTextOrEmpty,
     placeLeftOfPointerRect: placeLeftOfPointerRect,
+    placeRightOfHostRect: placeRightOfHostRect,
     resolveClampRight: resolveClampRight,
     placeTipLeftOfPointer: placeTipLeftOfPointer,
+    placeTipRightOfHost: placeTipRightOfHost,
     showTip: showTip,
     hideTip: hideTip,
     forceHideTip: forceHideTip,

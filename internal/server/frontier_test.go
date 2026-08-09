@@ -6,6 +6,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -626,6 +627,110 @@ func TestMermaidSafeNodeID(t *testing.T) {
 	}
 	if got := mermaidSafeNodeID("9bad"); got != "n_9bad" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// 🎯T274: oversized single component must re-split for Mermaid renderability.
+func TestTargetRootFamily(t *testing.T) {
+	cases := map[string]string{
+		"T1":     "T1",
+		"T1.2":   "T1",
+		"T1.2.3": "T1",
+		"T10.1":  "T10",
+		"GH12":   "GH12",
+		"":       "",
+	}
+	for in, want := range cases {
+		if got := targetRootFamily(in); got != want {
+			t.Fatalf("targetRootFamily(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+func TestSplitOversizedComponents(t *testing.T) {
+	// Small component passes through.
+	small := splitOversizedComponents([][]string{{"T1", "T1.1", "T2"}}, 24)
+	if len(small) != 1 || len(small[0]) != 3 {
+		t.Fatalf("small=%v", small)
+	}
+	// Build one mega component spanning many root families (orthograph-shaped).
+	var mega []string
+	for i := 1; i <= 15; i++ {
+		root := fmt.Sprintf("T%d", i)
+		mega = append(mega, root)
+		for j := 1; j <= 3; j++ {
+			mega = append(mega, fmt.Sprintf("T%d.%d", i, j))
+		}
+	}
+	// 15*4 = 60 nodes, one connected list.
+	if len(mega) != 60 {
+		t.Fatalf("fixture nodes=%d", len(mega))
+	}
+	parts := splitOversizedComponents([][]string{mega}, mermaidMaxNodesPerDiagram)
+	if len(parts) < 2 {
+		t.Fatalf("want re-split of 60-node mega, got %d parts", len(parts))
+	}
+	total := 0
+	for _, p := range parts {
+		if len(p) > mermaidMaxNodesPerDiagram {
+			t.Fatalf("part len %d > max %d: %v", len(p), mermaidMaxNodesPerDiagram, p)
+		}
+		total += len(p)
+	}
+	if total != 60 {
+		t.Fatalf("lost nodes: total=%d want 60", total)
+	}
+	// Hard-chunk: one family of 40 nodes → multiple chunks of ≤ max.
+	var fat []string
+	for i := 0; i < 40; i++ {
+		fat = append(fat, fmt.Sprintf("T1.%d", i))
+	}
+	fat = append([]string{"T1"}, fat...)
+	chunks := splitOversizedComponents([][]string{fat}, 24)
+	if len(chunks) < 2 {
+		t.Fatalf("fat family should chunk, got %d", len(chunks))
+	}
+	for _, c := range chunks {
+		if len(c) > 24 {
+			t.Fatalf("chunk too big: %d", len(c))
+		}
+	}
+}
+
+func TestPackActiveGraphSplitsOversizedLedger(t *testing.T) {
+	// Orthograph-shaped: one connected chain of many hierarchical targets.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bullseye.yaml")
+	var b strings.Builder
+	b.WriteString("targets:\n")
+	// 30 targets in one depends_on chain → single connected component of 30.
+	for i := 1; i <= 30; i++ {
+		id := fmt.Sprintf("T%d", i)
+		fmt.Fprintf(&b, "  %s:\n    name: Node %d\n    status: identified\n", id, i)
+		if i > 1 {
+			fmt.Fprintf(&b, "    depends_on: [T%d]\n", i-1)
+		}
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pack, err := computeActiveGraphPackFromLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.NodeCount != 30 {
+		t.Fatalf("nodes=%d want 30", pack.NodeCount)
+	}
+	if len(pack.Diagrams) < 2 {
+		t.Fatalf("30-node chain must re-split into multiple diagrams, got %d", len(pack.Diagrams))
+	}
+	for _, d := range pack.Diagrams {
+		if d.NodeCount > mermaidMaxNodesPerDiagram {
+			t.Fatalf("diagram %s has %d nodes > max %d", d.ID, d.NodeCount, mermaidMaxNodesPerDiagram)
+		}
+		if d.Mermaid == "" {
+			t.Fatalf("empty mermaid for %s", d.ID)
+		}
 	}
 }
 

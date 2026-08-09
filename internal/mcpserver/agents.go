@@ -16,8 +16,21 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
+
+// prefixRehydrate puts the lost-session account in front of whatever
+// agent_start would otherwise have said. It leads because it changes
+// what the caller must do next: the agent is running, but blank, and
+// the brief has to be re-sent (🎯T313).
+func prefixRehydrate(rehydrated, msg string) string {
+	if rehydrated == "" {
+		return msg
+	}
+	return rehydrated + "\n\n" + msg
+}
 
 // NotifyFunc injects a text message into the Jevon overseer's PTY input.
 type NotifyFunc func(text string)
@@ -36,25 +49,28 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
+			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). When provider is omitted on mint, multi-provider portfolio routing (🎯T325.2) picks harness by task_type (or purpose) preferring fit then under-utilised soft caps — never mid-flight reassignment. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
-			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Empty = keep stored provider on resume, else daemon default (config/env/grok). 🎯T148.")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Empty = keep stored provider on resume; on mint use portfolio routing (🎯T325.2) then daemon default. 🎯T148.")),
+			mcp.WithString("task_type", mcp.Description("LLM portfolio task class for provider routing when provider is omitted on mint (🎯T325.2): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. Empty = derive from purpose (work→code_implement, aside→ideation, overseer→ceo).")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
 			mcp.WithString("target_id", mcp.Description("Optional bullseye target id this agent is engaged on (e.g. T10.2). Written to registry as target_id for Frontier engagement overlay (🎯T198). Empty = not mission-bound.")),
 			mcp.WithBoolean("force_engage", mcp.Description("If true, allow a second work agent on an already-engaged or closed target (deliberate override 🎯T222). Default false.")),
+			mcp.WithString("prompt", mcp.Description("Optional opening brief delivered after Launch. Confirmed turn-begin required — empty pane / unsubmitted paste fails the tool loudly (🎯T305). Prefer this over start-then-send for unattended spawns.")),
 		),
 		s.handleAgentStart,
 	)
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_send",
-			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text. If a prompt is already in flight, the message is queued for after the turn (not a dead-end). Pass interrupt=true to cancel the in-flight turn and send immediately (🎯T111.1 stuck recovery)."),
+			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text. If a prompt is already in flight, the message is queued for after the turn (not a dead-end). Pass interrupt=true to cancel the in-flight turn and send immediately (🎯T111.1 stuck recovery). Pass actor=your agent name so lineage authorization runs against the real caller (🎯T321)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
+			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is sending). Overseer uses the overseer name (usually 'jevons'). Required so lineage denial is enforceable per-caller (🎯T321).")),
 			mcp.WithBoolean("interrupt", mcp.Description("If true and a prompt is in flight, interrupt that turn then send (stuck recovery without kill). Default false = queue for after the turn.")),
 		),
 		s.handleAgentSend,
@@ -112,10 +128,9 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	var b strings.Builder
 	for _, d := range defs {
 		proc := s.registry.Get(d.Name)
-		status := "stopped"
-		if proc != nil && proc.Alive() {
-			status = "running"
-		}
+		alive := proc != nil && proc.Alive()
+		// 🎯T305: zero-turn live seats are never_briefed, not running.
+		status := ClassifyAgentListStatus(alive, s.agentHasTurnBegan(d.Name), d.Materialized)
 		parent := d.Parent
 		if parent == "" {
 			parent = "-"
@@ -124,7 +139,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if purpose == "" {
 			purpose = claudia.PurposeWork
 		}
-		fmt.Fprintf(&b, "%-20s %-10s purpose=%-8s parent=%-12s %s (session: %s)\n",
+		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s parent=%-12s %s (session: %s)\n",
 			d.Name, status, purpose, parent, d.WorkDir, sessionDisplay(d.SessionID))
 	}
 	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
@@ -136,20 +151,18 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(PrependFleetHealth(b.String(), reps)), nil
 }
 
-// notifyFleetHealth injects a fleet outage/recovery note into the overseer
-// when a notify hook is wired (live daemon). Tests may leave notify nil.
+// notifyFleetHealth delivers a fleet outage/recovery note to the overseer
+// through the single deliver-by-name path (🎯T309.3). Tests may leave the
+// overseer seam unwired, in which case delivery fails quietly here — a health
+// note is ambient chatter, not a report someone is waiting on.
 func (s *Server) notifyFleetHealth(line string) {
 	if s == nil || line == "" {
 		return
 	}
-	s.mu.Lock()
-	fn := s.notifyJevon
-	s.mu.Unlock()
-	if fn == nil {
-		return
-	}
 	// Distinct prefix so activity strip / overseer can treat as system note.
-	fn("[Fleet health] " + line)
+	if _, err := s.deliverByName(s.overseerName(), "[Fleet health] "+line, OriginAgent, false); err != nil {
+		slog.Debug("fleet health note undelivered", "err", err)
+	}
 }
 
 func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -158,10 +171,23 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	workdir, _ := args["workdir"].(string)
 	model, _ := args["model"].(string)
 	providerArg, _ := args["provider"].(string)
+	taskTypeArg, _ := args["task_type"].(string)
 	actor, _ := args["actor"].(string)
 	parent, _ := args["parent"].(string)
 	purpose, _ := args["purpose"].(string)
 	targetID, _ := args["target_id"].(string)
+	prompt, _ := args["prompt"].(string)
+	// Aliases: text / brief for start prompt (🎯T305).
+	if strings.TrimSpace(prompt) == "" {
+		if v, ok := args["text"].(string); ok {
+			prompt = v
+		}
+	}
+	if strings.TrimSpace(prompt) == "" {
+		if v, ok := args["brief"].(string); ok {
+			prompt = v
+		}
+	}
 	forceEngage := boolArg(args["force_engage"])
 	// Also accept mission / bullseye_target aliases (same field).
 	if targetID == "" {
@@ -247,7 +273,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		}
 	}
 
-	def, existed, err := s.stitchAgentStart(name, workdir, model, providerArg, parent, purpose, targetID)
+	def, existed, routeNote, err := s.stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID)
 	if err != nil {
 		life["err"] = err.Error()
 		life["existed"] = existed
@@ -255,17 +281,55 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
 	life["existed"] = existed
+	if routeNote != "" {
+		life["portfolio_route"] = routeNote
+	}
+
+	// 🎯T313: an agent whose transcript is gone cannot be resumed, and
+	// claudia rightly refuses to paper over that. Rotate it onto a fresh
+	// session here — before Launch — so a start request recovers in one
+	// call instead of dead-ending into a manual kill → start → re-brief.
+	// The rehydrate is reported to the caller, never silent.
+	rehydrated := ""
+	if lost, ok, err := fleet.RehydrateLostSessionIn(s.registry, name); err != nil {
+		slog.Warn("lost-session rehydrate failed; falling through to launch",
+			"name", name, "err", err)
+	} else if ok {
+		rehydrated = lost.Describe()
+		life["rehydrated_from"] = lost.OldSession
+		if d := s.registry.Def(name); d != nil {
+			def = d
+		}
+	}
 
 	proc, err := s.registry.Launch(name)
 	if err != nil {
 		life["err"] = err.Error()
 		life["session_id"] = sessionDisplay(def.SessionID)
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
-		return mcp.NewToolResultError(fmt.Sprintf("start failed: %v", err)), nil
+		return mcp.NewToolResultError(prefixRehydrate(rehydrated,
+			fmt.Sprintf("start failed: %v", err))), nil
 	}
 
 	// Wire events: broadcast to web UI and notify Jevon on agent responses.
 	s.wireAgentEvents(name, proc)
+
+	// 🎯T305 Failure A: optional start prompt must reach the pane and
+	// begin a turn, or start fails loudly (no silent outcome=ok).
+	prompt = strings.TrimSpace(prompt)
+	if prompt != "" {
+		if err := s.deliverStartPrompt(name, prompt); err != nil {
+			// Stop the process so agent_list does not report a phantom
+			// running/never_briefed seat as successful work.
+			s.registry.Stop(name)
+			life["err"] = err.Error()
+			life["session_id"] = sessionDisplay(def.SessionID)
+			s.logLifecycle(compAgentLifecycle, "start", "error", life)
+			return mcp.NewToolResultError(prefixRehydrate(rehydrated,
+				fmt.Sprintf("start failed: %v", err))), nil
+		}
+		life["prompt_delivered"] = true
+	}
 
 	life["session_id"] = sessionDisplay(def.SessionID)
 	life["purpose"] = def.Purpose
@@ -282,32 +346,73 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	if def.TargetID != "" {
 		msg += fmt.Sprintf(", target_id: %s", def.TargetID)
 	}
+	if routeNote != "" {
+		msg += fmt.Sprintf(", portfolio: %s", routeNote)
+	}
+	if prompt != "" {
+		msg += ", prompt_delivered=true"
+	}
 	msg += ")"
-	return mcp.NewToolResultText(msg), nil
+	return mcp.NewToolResultText(prefixRehydrate(rehydrated, msg)), nil
 }
 
 // stitchAgentStart mints or updates a fleet agent registry row the same way
-// jevons_agent_start does before registry.Launch (🎯T148 / 🎯T215).
+// jevons_agent_start does before registry.Launch (🎯T148 / 🎯T215 / 🎯T325.2).
 //
-// Hermetic Session stitch surface: Provider selection, SessionID mint,
-// Parent/Purpose/TargetID dual-write — without spawning Grok or Claude.
-// Materialized stays false until a real Launch succeeds in claudia.
-func (s *Server) stitchAgentStart(name, workdir, model, providerArg, parent, purpose, targetID string) (*claudia.AgentDef, bool, error) {
+// Hermetic Session stitch surface: Provider selection (portfolio on mint
+// when provider omitted), SessionID mint, Parent/Purpose/TargetID dual-write
+// — without spawning Grok or Claude. Materialized stays false until a real
+// Launch succeeds in claudia.
+//
+// routeNote is non-empty when portfolio routing chose the provider.
+func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID string) (*claudia.AgentDef, bool, string, error) {
 	if s == nil || s.registry == nil {
-		return nil, false, fmt.Errorf("no agent registry")
+		return nil, false, "", fmt.Errorf("no agent registry")
 	}
 	existed := s.registry.Def(name) != nil
 	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
 	if err != nil {
-		return nil, existed, err
+		return nil, existed, "", err
 	}
 	// Refresh copy after Ensure (Register may have stored a different pointer).
 	if d := s.registry.Def(name); d != nil {
 		def = d
 	}
-	// 🎯T148: ad hoc provider override wins; else keep stored; else default.
-	// Never unconditionally force Grok on resume.
-	def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
+
+	routeNote := ""
+	// 🎯T148 + 🎯T325.2 provider selection:
+	//   1. non-empty providerArg → ad hoc override
+	//   2. resume with stored provider → keep (never mid-flight reassign)
+	//   3. mint with empty provider → portfolio Route(task_type|purpose, load)
+	//   4. else daemon default
+	if strings.TrimSpace(providerArg) != "" {
+		def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
+	} else if existed && def.Provider != "" {
+		def.Provider = cli.SelectAgentProvider("", def.Provider, s.resolvedDefaultProvider())
+	} else if !existed {
+		tt := strings.TrimSpace(taskTypeArg)
+		if tt == "" {
+			tt = cost.TaskTypeFromPurpose(purpose)
+		}
+		dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
+		def.Provider = claudia.Provider(dec.Provider)
+		routeNote = fmt.Sprintf("%s→%s(%s)", dec.TaskType, dec.Provider, dec.Reason)
+		if strings.TrimSpace(model) == "" && strings.TrimSpace(dec.Model) != "" {
+			model = dec.Model
+		}
+	} else {
+		def.Provider = cli.SelectAgentProvider("", def.Provider, s.resolvedDefaultProvider())
+	}
+
+	// 🎯T324: session-truth model binding for this Launch/SessionID.
+	// Explicit pin from the tool arg wins; empty pin on mint (or empty
+	// stored model on resume) gets the provider default so cold Grok
+	// agents expose a condensable id, not a bare mark forever.
+	if pin := strings.TrimSpace(model); pin != "" {
+		def.Model = pin
+	} else if !existed || strings.TrimSpace(def.Model) == "" {
+		def.Model = cli.BindSessionModel("", def.Provider)
+	}
 	// Set parent only when minting or when legacy entry has empty parent.
 	if !existed || def.Parent == "" {
 		def.Parent = parent
@@ -321,12 +426,12 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, parent, pur
 		def.TargetID = targetID
 	}
 	if err := s.registry.Register(*def); err != nil {
-		return nil, existed, err
+		return nil, existed, "", err
 	}
 	if d := s.registry.Def(name); d != nil {
 		def = d
 	}
-	return def, existed, nil
+	return def, existed, routeNote, nil
 }
 
 // launchConfigFromDef is the Config handoff registry.Launch would pass into
@@ -414,10 +519,34 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	text, _ := args["text"].(string)
+	actor, _ := args["actor"].(string)
 	interrupt, _ := args["interrupt"].(bool)
 
 	if name == "" || text == "" {
 		return mcp.NewToolResultError("name and text are required"), nil
+	}
+
+	// 🎯T321: name the caller so AuthorizeDeliver runs against a real actor
+	// rather than the shared-transport blank. Same defaulting pattern as kill:
+	// empty actor may resolve from the overseer session; fleet callers must
+	// pass actor explicitly.
+	actor = strings.TrimSpace(actor)
+	if actor == "" && s.transcript != nil && s.transcript.GetID != nil {
+		sid := s.transcript.GetID()
+		if s.registry != nil {
+			for _, d := range s.registry.List() {
+				if d.SessionID == sid {
+					actor = d.Name
+					break
+				}
+			}
+		}
+		if actor == "" {
+			actor = s.overseerName()
+		}
+	}
+	if actor == "" {
+		return mcp.NewToolResultError("actor is required (pass your agent name; overseer uses the overseer name)"), nil
 	}
 
 	// 🎯T104 under fan-out: first send carries standing local-delivery brief.
@@ -431,10 +560,13 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 		slog.Info("fleet standing brief injected on first send", "name", name)
 	}
 
-	// 🎯T111.1: rehydrate + send, or queue/interrupt when prompt in flight.
-	result, err := s.sendToAgent(name, text, interrupt)
+	// 🎯T111.1 / 🎯T321: rehydrate + send under the caller's lineage, or
+	// queue/interrupt when prompt in flight.
+	result, err := s.sendToAgentAs(actor, name, text, interrupt)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		// 🎯T283: deliverToSender already formats send failures; this also
+		// classifies the rehydrate/launch arm, which reaches the provider too.
+		return toolFailure("agent_send", name, err), nil
 	}
 	msg := result.Message
 	if injected {
@@ -518,7 +650,7 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	desc := s.registry.Descendants(name)
-	if err := killSubtree(s.registry, name); err != nil {
+	if err := s.killSubtreeAndClearTurns(name); err != nil {
 		life["err"] = err.Error()
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", err)), nil
@@ -542,7 +674,7 @@ func (s *Server) isOverseerAgent(name string) bool {
 	if name == "" {
 		return false
 	}
-	if s.transcript != nil && s.transcript.GetID != nil {
+	if s.transcript != nil && s.transcript.GetID != nil && s.registry != nil {
 		sid := s.transcript.GetID()
 		if sid != "" {
 			if def := s.registry.Def(name); def != nil && def.SessionID == sid {
@@ -550,7 +682,9 @@ func (s *Server) isOverseerAgent(name string) bool {
 			}
 		}
 	}
-	return name == s.overseerName()
+	// 🎯T309.3: name resolution is case-insensitive so an agent addressing
+	// "Jevons" reaches the overseer arm rather than the registry arm.
+	return strings.EqualFold(name, s.overseerName())
 }
 
 func (s *Server) overseerName() string {
@@ -620,6 +754,14 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		if ev.IsTerminalStop() {
 			text := responseText.String()
 			responseText.Reset()
+			// 🎯T236: latch structured failure class / empty terminal so fleet
+			// recover can re-pressure without owner continue (T237 class).
+			s.mu.Lock()
+			tracker := s.idleActivity
+			s.mu.Unlock()
+			if tracker != nil {
+				tracker.NoteTerminalOutcome(name, text)
+			}
 			if text != "" {
 				// Notify overseer first so the done report is delivered before
 				// the worker leaves the registry (🎯T165) — unless [silent]
@@ -634,22 +776,18 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 	}
 }
 
-// notify injects an agent response notification into Jevon's PTY.
+// notify delivers an agent's turn-complete report to the overseer.
 // Silent ops replies ([silent] prefix) are logged but not sent to the overseer
 // so owner chat is not spammed with "workers fine / no continue needed".
+//
+// 🎯T309.3: a shim over deliverByName addressed to the overseer, not a
+// privileged wire of its own. A worker reporting up and a PO being nudged now
+// travel the same code; the overseer arm keeps the journal + notify-queue
+// semantics that make 🎯T62's silent drop impossible.
 func (s *Server) notify(agentName, text string) {
 	if IsSilentAgentResponse(text) {
 		slog.Info("agent response suppressed (silent)",
 			"agent", agentName, "len", len(text))
-		return
-	}
-
-	s.mu.Lock()
-	fn := s.notifyJevon
-	s.mu.Unlock()
-
-	if fn == nil {
-		slog.Warn("agent response but no notify function set", "agent", agentName)
 		return
 	}
 
@@ -659,8 +797,20 @@ func (s *Server) notify(agentName, text string) {
 	}
 
 	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, text)
-	slog.Info("notifying jevon", "agent", agentName, "len", len(text))
-	fn(msg)
+	overseer := s.overseerName()
+	res, err := s.deliverByName(overseer, msg, OriginAgent, false)
+	if err != nil {
+		// Undeliverable is loud: the reply the owner is waiting on did not
+		// land, and that fact must reach the product log (🎯T61/T62).
+		slog.Error("agent response notify failed",
+			"agent", agentName, "overseer", overseer, "len", len(text), "err", err)
+		s.logLifecycle(compAgentLifecycle, "notify", "error", map[string]any{
+			"agent": agentName, "overseer": overseer, "err": err.Error(),
+		})
+		return
+	}
+	slog.Info("notifying jevon",
+		"agent", agentName, "len", len(text), "status", res.Status)
 }
 
 // broadcastAgentEvent fans a worker event to the optional progress/UI hook

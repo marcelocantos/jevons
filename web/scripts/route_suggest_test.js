@@ -53,6 +53,79 @@ test('T135 planMainSend explicit-prefix → main, no suggestion', function () {
   assert.strictEqual(plan.suggestion, null);
 });
 
+// 🎯T247: target:/aside:/capture: open immediately — no create/continue affordance.
+test('T247 shouldSkipRouteSuggest on target:/aside:/capture: composer open', function () {
+  const AT = require('./attention_threads.js');
+  const target = AT.handleComposer(AT.emptyState(), 'target: File me without chip');
+  assert.ok(target.threadId, 'target: spawns aside id');
+  assert.strictEqual(target.routed, true);
+  assert.strictEqual(target.purpose, 'file-target');
+  assert.strictEqual(RS.shouldSkipRouteSuggest(target), true,
+    'target: open must skip route/create affordance');
+
+  const aside = AT.handleComposer(AT.emptyState(), 'aside: billing nit');
+  assert.ok(aside.threadId);
+  assert.strictEqual(aside.routed, true);
+  assert.strictEqual(RS.shouldSkipRouteSuggest(aside), true);
+
+  const cap = AT.handleComposer(AT.emptyState(), 'capture: parked thought');
+  assert.ok(cap.threadId);
+  assert.strictEqual(cap.kind, 'local');
+  assert.strictEqual(RS.shouldSkipRouteSuggest(cap), true);
+
+  const plain = AT.handleComposer(AT.emptyState(), 'Hello main no prefix');
+  assert.strictEqual(plain.routed, false);
+  assert.strictEqual(RS.shouldSkipRouteSuggest(plain), false,
+    'plain main send may still get match suggestion');
+});
+
+test('T247 planMainSend with target: composerResult never suggests continue/create', function () {
+  const AT = require('./attention_threads.js');
+  const opened = AT.handleComposer(AT.emptyState(), 'target: Chat paste images work');
+  // Simulate a naive route hit against the just-created aside (pre-T247 bug).
+  const fakeHit = {
+    threadId: opened.threadId,
+    score: 0.99,
+    reason: 'match',
+  };
+  const plan = RS.planMainSend(fakeHit, {
+    threads: [{ id: opened.threadId, title: 'Chat paste images work' }],
+    body: opened.text,
+    composerResult: opened,
+  });
+  assert.strictEqual(plan.wireMode, 'main');
+  assert.strictEqual(plan.suggestion, null,
+    'explicit target: open must not gate on Continue-in / create chip');
+
+  // Wire marker itself is explicit-prefix for ThreadRoute (defense in depth).
+  const wireHit = TR.route(opened.text, [
+    { id: opened.threadId, title: 'Chat paste images work', body: 'Chat paste images work' },
+  ]);
+  assert.strictEqual(wireHit.reason, 'explicit-prefix');
+  assert.strictEqual(wireHit.threadId, null);
+});
+
+test('T247 index.html: explicit open skips route-suggest fall-through', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(
+    /explicitAsideOpened/.test(html),
+    'send() must track explicitAsideOpened for T247'
+  );
+  assert.ok(
+    /!explicitAsideOpened/.test(html) || /explicitAsideOpened\s*&&/.test(html) === false &&
+      /if\s*\(\s*!explicitAsideOpened/.test(html),
+    'ThreadRoute block must skip when explicitAsideOpened'
+  );
+  assert.ok(
+    /if\s*\(\s*!explicitAsideOpened/.test(html),
+    'route suggest gated on !explicitAsideOpened'
+  );
+  // ensureFleetAside still dual-writes on create (spawn path, not affordance).
+  assert.ok(html.indexOf('ensureFleetAside') >= 0);
+});
+
 test('T135 planMainSend never rewrites wire (no aside text)', function () {
   const hit = { threadId: 'att-x', score: 0.9, reason: 'match' };
   const plan = RS.planMainSend(hit, { body: 'hello restic', title: 'x' });

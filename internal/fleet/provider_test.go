@@ -4,6 +4,8 @@
 package fleet
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -136,3 +138,20 @@ func TestClaudeSessionStitchEnsureRegistered(t *testing.T) {
 	}
 }
 
+// TestNoPostReadySettle is the 🎯T284 ratchet. jevons paid a two-second
+// sleep after every Claude launch to cover an untrustworthy readiness
+// signal (🎯T282); claudia now rejects the startup splash outright, so the
+// tax is gone. Waiting on a signal you trust is pure cost, and the failure
+// it papered over must be fixed where the pane lives — reintroducing a
+// sleep here would re-hide it.
+func TestNoPostReadySettle(t *testing.T) {
+	src, err := os.ReadFile("fleet.go")
+	if err != nil {
+		t.Fatalf("read fleet.go: %v", err)
+	}
+	for _, banned := range []string{"claudeReadySettle", "postReadySettle", "time.Sleep("} {
+		if bytes.Contains(src, []byte(banned)) {
+			t.Errorf("fleet.go contains %q: the launch-path settle is gone (🎯T284); fix readiness in claudia instead", banned)
+		}
+	}
+}

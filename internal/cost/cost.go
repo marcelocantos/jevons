@@ -15,12 +15,20 @@
 // Pricing-table fallback only when the provider omits a cost figure.
 //
 // Layer 2 (monitor): rolling burn-rates per worker/fleet/global, a
-// one-query "what is burning right now" view, and runaway signals.
+// one-query "what is burning right now" view, and runaway signals
+// (including spawn-storm for concurrent session storms).
 //
 // Layer 3 (budget/enforcer/killswitch): budgets with warn → throttle →
 // pause → kill escalation, a hard ceiling that stops spawning, a global
 // kill-switch that reaches launchd-detached tmux fleets, a dead-man's
 // switch, and an auto-resume guard.
+//
+// Standing cost-safety auditor (🎯T334): trip-class policy (auditor.go)
+// names sensor trips, resolves overseer protection (never budget-killed),
+// dual-writes clamp decisions to eventlog (component=cost_clamp), and
+// surfaces overseer-visible alerts on the same T36 spine — not a second
+// shadow ledger. Optional LLM auditor is residual; harness sensors+clamp
+// are the product path.
 //
 // Accounting honesty (🎯T137): budget.json accounting=list_price (default)
 // treats USD as billable for enforcement. accounting=subscription

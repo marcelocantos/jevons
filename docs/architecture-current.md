@@ -75,6 +75,97 @@ the in-process **MCP server** (`internal/mcpserver`, `jevons_*` tools +
 `jwork`); the tool list and stability grades are in
 [../STABILITY.md](../STABILITY.md).
 
+## The conversation surface (🎯T309.2)
+
+Conversation is **one agent-addressed API family**. Three operations, all
+resolved by agent name, with the overseer as just another addressable
+agent — there is no conversation capability the owner chat wire holds
+exclusively:
+
+| Op | Surface |
+|---|---|
+| transcript | `GET /api/agents/{name}/transcript`, and the `inspect_subscribe` history frame over `/ws/chat` |
+| live | `inspect_subscribe` → `agent_transcript` `kind=live` frames |
+| send | `POST /api/agents/{name}/send` (`origin: owner\|agent`), MCP `jevons_agent_send` |
+
+Turns share one shape (`turn_number`, `role`, `text`) whatever their
+origin; the payload names that origin in `source`:
+
+- `session` — a provider session transcript (fleet agents), read through
+  `internal/transcript`.
+- `chatlog` — the owner chat journal, which is the overseer's durable
+  conversation record. Addressing the overseer by name returns its turns
+  from there; the 🎯T124 refusal ("overseer uses main chat") is gone.
+
+**Transport residual** — what remains overseer-specific is transport and
+durability, not capability:
+
+- `GET /api/history` and the `/ws/chat` replay-on-connect are a paging /
+  transport **compat shim** over the same journal, kept until the
+  transport cutover (🎯T10.6) and the single-widget UI cutover (🎯T309.1)
+  move main chat onto the family.
+- A `/ws/chat` client subscribed to the overseer sees both the main chat
+  line and the `agent_transcript` live frame for one event; de-duping
+  belongs to the single widget (🎯T309.1).
+- Conversation **control** ops (rewind, interrupt) are separate from the
+  conversation family on both sides: the overseer's ride `/ws/chat`
+  control frames, fleet agents' ride MCP (`jevons_transcript_rewind`,
+  `jevons_agent_stop`) and `POST /api/agents/engagement/stop`.
+
+Server↔client event normalization stays in one layer:
+`internal/server/chat_wire.go` ↔ `web/scripts/chat_events.js`. Overseer
+live frames carry chat-wire lines verbatim, so 🎯T240 silent-stream
+suppression and 🎯T223 stream ids are inherited, never re-implemented.
+
+### One deliver path in the fleet layer (🎯T309.3)
+
+The **send** op above bottoms out in a single implementation,
+`mcpserver.deliverByName(name, text, origin, interrupt)`. Everything that
+delivers a message to an agent goes through it:
+
+| Caller | Route |
+|---|---|
+| MCP `jevons_agent_send` | `sendToAgentAs(actor)` → `deliverByNameAs` (origin pinned to `agent`; 🎯T321) |
+| `POST /api/agents/{name}/send` | `DeliverAgentMessageAs` → `deliverByName` (owner surface) |
+| worker reply notify, worker-idle, daemon-restarted, fleet health | `notify` / `emit*` → `deliverByName` (owner surface) |
+
+Two arms, one contract. A **fleet** name resolves through the registry
+(rehydrating a stopped agent) and delivers with the 🎯T111.1 busy
+semantics. The **overseer** name resolves to the owner-chat delivery seam
+(`SetOverseerDeliver` → `server.DeliverToOverseerAs`), which owns
+journalling, owner bubbles, and the notify queue. `mcpserver` does not
+import `server`, so the two share the `origin` wire strings rather than a
+type; `main` adapts.
+
+Before this, the overseer had a **privileged wire** — a bare
+`notifyJevon(text)` injection set from `main` — and which peers an agent
+could reach depended on which API it held rather than on the hierarchy.
+That split carried real bugs: `jevons_agent_send` addressed to the
+overseer went straight at its process, bypassing the journal and the
+queue-on-busy retry (the 🎯T62 drop), and `notify` discarded a worker's
+terminal report with a log line when no notify func was set.
+
+**Authorization is decided on the path, by lineage** (`deliver_policy.go`,
+pure): report up and direct down are always allowed, peer messaging is
+allowed on purpose (🎯T309 acceptance 3), and `origin: owner` — which
+paints an owner bubble — may be asserted only by the owner surface. MCP
+`jevons_agent_send` pins `agent` origin, so the fleet has no way to speak
+in the owner's voice. **Per-caller actor (🎯T321):** `jevons_agent_send`
+takes an explicit `actor` (same shape as `jevons_agent_kill`) and the MCP
+path calls `deliverByNameAs` with it, so `AuthorizeDeliver` is exercised
+against a named caller and denials log `actor` + `relation`. **Residual
+(impersonation):** the shared MCP HTTP transport still cannot
+cryptographically name the calling fleet agent (`transcript.GetID` is the
+overseer session); `actor` is self-attested, matching kill's trust model.
+
+`jevons_thread_direct` is **not** a residual deliver variant. It is the
+*synchronous* request/reply op: it subscribes to the agent's event stream
+**before** sending and assembles the whole reply, an ordering that
+`internal/fleet/reply.go` documents as load-bearing (🎯T286 — subscribing
+after the send loses the front of the reply). Folding it into the
+fire-and-forget path would reintroduce that truncation, so it stays a
+distinct operation rather than a shim.
+
 ## The provider seam (🎯T45)
 
 Jevons defaults to Grok via claudia with a pluggable selection surface (🎯T148); the
@@ -149,15 +240,18 @@ does not depend on the provider's private store (🎯T30.1).
 ## Security posture (honest)
 
 Built: default bind is **loopback-only** (`127.0.0.1` / 🎯T6) unless
-`bind_addr` / `--bind` deliberately widens it; remote devices use the
-pigeon relay, not LAN exposure; mTLS CA + QR device provisioning
+`bind_addr` / `--bind` deliberately widens it; remote devices use a
+**self-hosted** [pigeon](https://github.com/marcelocantos/pigeon) relay
+(URL + optional bearer token: pigeon `PIGEON_TOKEN` ↔ jevonsd
+`--relay-token` / `TERN_TOKEN` — mint yourself; no author-issued free
+tier, 🎯T156), not LAN exposure; mTLS CA + QR device provisioning
 available when enabled; origin-safe WebSockets and CSRF guards on
 mutating routes (🎯T38); cost clamp-down bypass hardening (🎯T36.1).
 Not yet: mTLS off by default; workers and the overseer still run
 permissions-bypassed (worker execution gating is 🎯T8.3 post-MVP);
-stranger-ready device onboarding (App Store binary + `jevons --init`) is
-still 🎯T14. Treat a default install as single-trusted-operator,
-single-machine.
+stranger-ready device onboarding (App Store binary + `jevons --init` +
+public multi-tenant free-tier relay) is still 🎯T14 / residual of 🎯T47.
+Treat a default install as single-trusted-operator, single-machine.
 
 ## Voice
 

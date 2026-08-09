@@ -26,18 +26,24 @@ import (
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
+	"github.com/marcelocantos/jevons/internal/converge"
+	"github.com/marcelocantos/jevons/internal/converge/sticky"
+	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/workers"
+	"github.com/marcelocantos/jevons/internal/writconf"
 
 	"github.com/marcelocantos/pigeon"
 	"github.com/marcelocantos/pigeon/crypto"
@@ -95,6 +101,28 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: logLevel,
 	})))
+
+	// 🎯T282: drop any enclosing agent session's identity before anything
+	// spawns. Started from inside a Claude Code session (make run,
+	// make test-journey, an agent-driven dev loop), jevonsd would otherwise
+	// hand CLAUDE_CODE_SESSION_ID and friends to every Claude agent it
+	// launches, and those agents rejoin the parent session's bridge instead
+	// of running as their own — a directed turn then never submits.
+	if cleared := cli.ScrubInheritedSessionEnv(); len(cleared) > 0 {
+		slog.Info("cleared enclosing agent session env so spawned agents start clean",
+			"vars", cleared)
+	}
+	// 🎯T282: and reconcile the claudia tmux server, which hands each new
+	// agent window the environment of whatever started the server —
+	// possibly a test run from days ago, since the anchor session keeps it
+	// alive across daemon restarts.
+	if changed, err := cli.NormalizeAgentTmuxEnv(); err != nil {
+		slog.Warn("could not reconcile claudia tmux server env; agents may inherit stale vars",
+			"err", err)
+	} else if len(changed) > 0 {
+		slog.Info("reconciled claudia tmux server env with the daemon's",
+			"vars", changed, "socket", cli.AgentTmuxSocket())
+	}
 
 	// Structured config (🎯T44): built-in defaults ← config.yaml ← flags.
 	cfgPath := *configPath
@@ -199,6 +227,11 @@ func main() {
 	srv.SetChatLog(clog)
 	// 🎯T124 / 🎯T213: RHS fleet transcript inspect reads Grok + Claude stores.
 	srv.SetTranscriptReader(transcript.NewReaderRoots(sessionRoots))
+	// 🎯T293 / 🎯T311: the RHS badge names the model an agent is RUNNING. Live
+	// frames are the freshest source, but the hub they feed dies with the
+	// daemon — so each provider's own session log (Grok turn_completed usage,
+	// Claude message.model) re-seeds it at attach.
+	srv.SetModelSessionRoots(sessionRoots)
 
 	// Durable decision/lifecycle journal (🎯T120): browser + server events
 	// under state_dir/logs/events.jsonl — tool-readable without privilege.
@@ -276,8 +309,8 @@ func main() {
 			)
 		}
 	}
-	// providerCfg retained for process lifetime (T27.3 will wire reconcile/reload).
-	_ = providerCfg
+	// providerCfg feeds the 🎯T27.3/T27.4 lifecycle + aggregator wiring
+	// below, once the MCP server (the aggregation sink) exists.
 
 	// 🎯T8.3 execution safety (doit Engine: L1/L2/L3, audit, capabilities).
 	// L3 stays off by default so boot is hermetic without an LLM; L1/L2 +
@@ -325,6 +358,109 @@ func main() {
 		mcpSrv.SetDoitEngine(doitEng)
 	}
 
+	// 🎯T27.3/🎯T27.4/🎯T27.5: provider supervisor + MCP tool aggregation +
+	// feed ingestion. Lifecycle converges processes/attachments; aggregator
+	// mirrors Running providers' MCP endpoints into /mcp; FeedHub serves
+	// /ws/provider, folds events into the live model, and Broadcasts to
+	// clients. ConfigManager.Reload re-converges all three.
+	var liveMon *provider.LivenessMonitor
+	if providerCfg != nil {
+		provAgg := provider.NewAggregator(provider.AggregatorArgs{Sink: mcpSrv})
+		provLC := provider.NewLifecycle(provider.LifecycleArgs{OnPhase: provAgg.HandlePhase})
+		feedReg := provider.NewRegistry()
+		feedReg.HubID = "jevons" // loop-safety (§5.4): drop self-origin relays
+		feedHub := provider.NewFeedHub(provider.FeedHubArgs{
+			Registry: feedReg,
+			Store:    providerCfg.Store(),
+			OnEvent: func(id string, ev provider.FeedEvent) {
+				srv.Broadcast(map[string]any{
+					"type":     "provider_event",
+					"provider": id,
+					"event":    ev,
+				})
+			},
+			OnStatus: func(st provider.FeedStatus) {
+				srv.Broadcast(map[string]any{
+					"type":   "provider_status",
+					"status": st,
+				})
+			},
+			// 🎯T27.6: recompose and push the provider view on UI-relevant
+			// changes (surface attach, bound-feed events).
+			OnUI: srv.BroadcastProviderView,
+			Allowed: func(id string) bool {
+				for _, d := range providerCfg.Enabled() {
+					if d.ID == id {
+						return true
+					}
+				}
+				return false
+			},
+		})
+		provAgg.SetDecls(providerCfg.Desired())
+		feedHub.SetDecls(providerCfg.Desired())
+		srv.SetProviderFeeds(feedHub)
+		srv.SetProviderHealth(provLC.Health)
+
+		// 🎯T27.9: automation liveness — declared automations are checked
+		// against their signal sources on an interval; a stall folds into
+		// the aggregated model (liveness/automations), broadcasts as a
+		// provider_event, and notifies the owner via the overseer.
+		if len(cfg.Automations) > 0 {
+			liveMon = provider.NewLivenessMonitor(provider.LivenessMonitorArgs{
+				Decls:    cfg.Automations,
+				Registry: feedReg,
+				OnEvent: func(ev provider.FeedEvent) {
+					srv.Broadcast(map[string]any{
+						"type":     "provider_event",
+						"provider": provider.LivenessProviderID,
+						"event":    ev,
+					})
+				},
+				OnNotice: func(st provider.AutomationStatus) {
+					if err := srv.SendToOverseer(provider.FormatAutomationNotice(st)); err != nil {
+						slog.Warn("automation notice delivery failed", "automation", st.ID, "err", err)
+					}
+				},
+			})
+			srv.SetAutomations(liveMon.Statuses)
+			slog.Info("automation liveness ready", "tracked", len(cfg.Automations))
+		}
+		providerCfg.SetOnChange(func(decls []config.ProviderDecl) {
+			provAgg.SetDecls(decls)
+			feedHub.SetDecls(decls)
+			if err := provLC.Reconcile(decls); err != nil {
+				slog.Error("provider reconcile after config reload failed", "err", err)
+			}
+		})
+		if err := provLC.Reconcile(providerCfg.Desired()); err != nil {
+			slog.Error("provider reconcile failed", "err", err)
+		}
+		slog.Info("provider feed hub ready", "desired", len(providerCfg.Desired()))
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := provLC.Shutdown(ctx); err != nil {
+				slog.Warn("provider lifecycle shutdown", "err", err)
+			}
+			provAgg.Shutdown()
+		}()
+	}
+
+	// 🎯T335: writ confinement substrate (CLI) — seatbelt + egress for high-risk exec.
+	writBin := writconf.ResolveWritBin()
+	writAvail := writBin != ""
+	var writEx writconf.Executor
+	if writAvail {
+		writEx = &writconf.CLIExecutor{Bin: writBin}
+		slog.Info("writ confinement ready", "bin", writBin)
+	} else {
+		writEx = writconf.PureExecutor{}
+		slog.Warn("writ binary not found — confined-exec uses pure allowlist only until writ is on PATH")
+	}
+	mcpSrv.SetWritExecutor(writEx, writBin, writAvail)
+	srv.SetWritExecutor(writEx, writBin, writAvail)
+
 	mux := http.NewServeMux()
 
 	// Dev server: serve web/ from disk with hot reload.
@@ -348,6 +484,11 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// 🎯T27.9: start the liveness check loop once the daemon context exists.
+	if liveMon != nil {
+		go liveMon.Run(ctx)
+	}
 
 	// 🎯T40: SIGINT/SIGTERM = normal stop (StopAll); SIGHUP = upgrade exit
 	// (skip StopAll, write handles). JEVONS_UPGRADE_EXIT=1 also marks
@@ -442,7 +583,24 @@ func main() {
 	// 🎯T148: pluggable default provider for new threads/agents.
 	fleetAdapter := fleet.NewClaudia(registry)
 	fleetAdapter.SetDefaultProvider(defaultProvider)
+	// 🎯T285: provider migration needs the session roots to find a
+	// predecessor's transcript, and a durable store to hold that pointer
+	// across the rotation that overwrites the old session id.
+	fleetAdapter.SetSessionRoots(sessionRoots)
+	fleetAdapter.SetHandoverStore(handover.NewStore(filepath.Join(cfg.StateDir, "handover")))
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
+	// 🎯T325.3: durable idea intake ledger (state_dir/ideas.json).
+	mcpSrv.SetIdeaStateDir(cfg.StateDir)
+	// 🎯T325.2: multi-provider portfolio soft-cap overlays from budget.json
+	// (session counts only; independent of cost disabled / subscription USD).
+	if bcfg, err := cost.LoadBudgetConfig(filepath.Join(cfg.StateDir, "budget.json")); err == nil && len(bcfg.ProviderSoftCaps) > 0 {
+		mcpSrv.SetProviderSoftCaps(bcfg.ProviderSoftCaps)
+		slog.Info("llm portfolio soft caps from budget", "caps", bcfg.ProviderSoftCaps)
+	}
+	// 🎯T285: jevons_agent_migrate moves an agent between backends and
+	// hands the successor its predecessor's transcript.
+	mcpSrv.SetMigrator(fleetAdapter)
+	srv.SetOverseerMigrator(fleetAdapter)
 	srv.SetDefaultProvider(defaultProvider)
 	btlrCfg := butler.Config{
 		Store:        threadStore,
@@ -470,13 +628,15 @@ func main() {
 		srv.SetActivityHook(guard.enforcer.Heartbeat)
 	}
 
-	// 🎯T92 ambient RSI: schedule + stream (reap) mint improvement targets.
-	rsiLoop := startAmbientRSI(ctx, cfg, mcpSrv)
+	// 🎯T243 ambient RSI coach (product path): judgments → overseer.
+	// Residual 🎯T92 mint remains opt-in (JEVONS_RSI_MINT / DEEPER).
+	rsiCoach := startAmbientRSICoach(ctx, cfg, mcpSrv)
+	rsiLoop := startAmbientRSIMint(ctx, cfg, mcpSrv)
 
 	// Process-as-cache GC: periodically stop idle spawned threads'
 	// processes (resumably) to free resources. The threads persist and
-	// rehydrate on the next Direct. Stream-feeds ambient RSI on reap.
-	go reapIdleThreads(ctx, btlr, rsiLoop)
+	// rehydrate on the next Direct. Stream-feeds coach (+ residual mint).
+	go reapIdleThreads(ctx, btlr, rsiLoop, rsiCoach)
 
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
@@ -514,6 +674,25 @@ func main() {
 	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID, "resume", jevonDef.Materialized)
 
 	srv.SetRegistry(registry)
+	// 🎯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
+	// MCP jevons_agent_send — queue when busy (not 409 dead-end). Drain on
+	// terminal stop is wired in mcpserver agentEventSink (🎯T111.1).
+	srv.SetAgentSendHook(func(name, text string) (string, error) {
+		res, err := mcpSrv.DeliverAgentMessage(name, text, false)
+		if err != nil {
+			return "", err
+		}
+		return res.Status, nil
+	})
+	// 🎯T309.3: the overseer arm of the fleet's single deliver-by-name path.
+	// Without this, an overseer-addressed send from the fleet layer (a worker
+	// reply, a PO reporting up, jevons_agent_send by name) would reach the
+	// overseer's process directly and bypass the owner chat journal and the
+	// notify queue — the 🎯T62 drop. Delivery itself stays implemented once,
+	// in the HTTP server, which owns those semantics.
+	mcpSrv.SetOverseerDeliver(func(text string, origin mcpserver.SendOrigin) error {
+		return srv.DeliverToOverseerAs(text, string(origin))
+	})
 	// 🎯T82: event-driven fleet panel refresh when agents.json mutates.
 	srv.WatchAgentsFile(registryPath)
 
@@ -591,6 +770,12 @@ func main() {
 		// swaps the process, so all overseer references stay current.
 		srv.AttachOverseer(jevonProc)
 
+		// A daemon that died between rotating the overseer's row and seeding
+		// its successor leaves the handover on disk; the process is alive at
+		// boot, so converge sees nothing wrong and this is the only retry
+		// (🎯T285). No-op when nothing is pending.
+		srv.ResumePendingHandover()
+
 		// Wire MCP worker-completion + agent-reply notifications into Jevon.
 		// Route through the server so a rewind swap is transparent.
 		send := func(text string) {
@@ -634,15 +819,95 @@ func main() {
 		srv.SetOverseerDownReason(reason)
 	}
 
+	// 🎯T335: standing security auditor — always on; deliver via overseer when attached.
+	secInterest := mcpserver.NewSecurityInterest(mcpSrv, func(text string) error {
+		if err := srv.SendToOverseer(text); err != nil {
+			slog.Error("security auditor notify failed", "err", err)
+			return err
+		}
+		return nil
+	})
+	mcpSrv.SetSecurityAuditor(secInterest)
+	srv.SetSecurityAuditor(secInterest)
+	slog.Info("security auditor ready", "name", "security-auditor", "writ", writAvail)
+
+	// 🎯T317 impatience ladder (T316 set + T318 attenuation + sinks).
+	// Constructed at the SetIdlePressureHooks seam (2a065e5): RePressure →
+	// idle-nudge deliver, Overseer → event_push to root, Human → sticky OS
+	// alert (39802c7). Unwired sticky fails construction, not fire.
+	var humanSink converge.HumanSink
+	if be, err := sticky.NewOSNotifier(); err != nil {
+		slog.Warn("impatience sticky unwired — human rung will error until terminal-notifier is available",
+			"err", err)
+	} else if st := sticky.New(be); st != nil {
+		humanSink = st
+		// Withdraw every raised alert on shutdown so a stale "stuck" does not
+		// outlive the daemon that could have cleared it (🎯T319).
+		defer func() {
+			for _, err := range st.ClearAll() {
+				slog.Warn("impatience sticky clear-all", "err", err)
+			}
+		}()
+	}
+	overseerName := cfg.OverseerName
+	if overseerName == "" {
+		overseerName = "jevons"
+	}
+	mcpSrv.SetImpatienceEngine(mcpserver.NewImpatienceEngine(mcpserver.ImpatienceEngineArgs{
+		Sinks:      mcpserver.NewImpatienceSinks(mcpSrv, overseerName, humanSink),
+		Postmortem: server.NewPostmortemSink(srv), // 🎯T319: closed incident → root report
+		Overseer:   overseerName,
+	}))
+	// MissionOpen from the nearest bullseye ledger for each bound target
+	// (workdir of an engaged agent). Unknown ledger row stays open (residual).
+	mcpSrv.SetIdlePressureHooks(mcpserver.IdlePressureHooks{
+		MissionOpen: func(targetID string) bool {
+			tid := strings.TrimSpace(strings.TrimPrefix(targetID, "🎯"))
+			if tid == "" {
+				return true
+			}
+			for _, d := range registry.List() {
+				if strings.TrimSpace(strings.TrimPrefix(d.TargetID, "🎯")) != tid {
+					continue
+				}
+				st, ok := targetfile.LoadTargetStatusFromCwd(d.WorkDir, tid)
+				if !ok {
+					return true
+				}
+				return targetfile.IsOpenStatus(st)
+			}
+			return true
+		},
+	})
+
 	// 🎯T171 dual-path: daemon-restarted → POs+overseer; short resume →
 	// open-mission workers (T207 brief-or-verify); worker-idle transition → PO.
 	// Also wires fleet-health hook for cockpit (T204).
+	// idlePressureSweep (via this loop) drives the T317 ladder when installed.
 	go mcpserver.StartIdleNudgeLoop(ctx, mcpserver.IdleNudgeLoopArgs{
 		Server:       mcpSrv,
 		StateDir:     cfg.StateDir,
 		OverseerName: cfg.OverseerName,
 		DefaultPO:    "jevons-po",
 	})
+
+	// 🎯T254.1: unattended frontier consumption — every non-design-gated ready
+	// frontier leaf gets a worker under jevons-po (or an explicit park reason)
+	// without an owner spawn command. Conservative drip (default 1 spawn per
+	// 10m cycle), durable per-target backoff/max, budget clamp composed.
+	if cfg.FrontierConsume.Disabled {
+		slog.Info("frontier consume loop disabled by config (🎯T254.1)")
+	} else {
+		go mcpserver.StartFrontierConsumeLoop(ctx, mcpserver.FrontierConsumeLoopArgs{
+			Server:             mcpSrv,
+			StateDir:           cfg.StateDir,
+			Workdir:            cfg.WorkDir,
+			ParentPO:           "jevons-po",
+			Interval:           time.Duration(cfg.FrontierConsume.IntervalMinutes) * time.Minute,
+			MaxSpawnsPerCycle:  cfg.FrontierConsume.MaxSpawnsPerCycle,
+			MaxSpawnsPerTarget: cfg.FrontierConsume.MaxSpawnsPerTarget,
+		})
+	}
 
 	// 🎯T204: cockpit converge — overseer Alive+Attach+turn-usable; fleet
 	// dead-handle recovery. Restart dual-path is T171 (not periodic ladder).
@@ -651,6 +916,17 @@ func main() {
 		FleetNudge:  func() { mcpSrv.TriggerIdleNudgeSweep() }, // health only
 	})
 	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
+
+	// 🎯T219: durable sentinel — continuous observe→classify→act while up.
+	// Pure watcher: control-plane repair / file+PO mission; no product implement; no Ship.
+	// Complements T204/T207 mechanical floor and T325.4 one-shot staff ops.
+	go mcpserver.StartSentinelLoop(ctx, mcpserver.SentinelLoopArgs{
+		Server:   mcpSrv,
+		StateDir: cfg.StateDir,
+		Workdir:  cfg.WorkDir,
+		Overseer: cfg.OverseerName,
+		DefaultPO: "jevons-po",
+	})
 
 	// 🎯T50/🎯T54 regression oracle, hoisted out of the attach block so it
 	// fires even when the overseer never launched: if no MCP client has
@@ -1102,8 +1378,8 @@ func overseerUnavailableReason(provider claudia.Provider) string {
 const reapIdleGCInterval = 2 * time.Minute
 
 // reapIdleThreads runs the process-as-cache GC sweep until ctx is done.
-// When rsiLoop is non-nil, reaped thread ids are stream-fed into ambient RSI (🎯T92).
-func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop) {
+// Reaped thread ids stream-feed the RSI coach (🎯T243) and residual mint loop (🎯T92).
+func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop, rsiCoach *rsi.Coach) {
 	ticker := time.NewTicker(reapIdleGCInterval)
 	defer ticker.Stop()
 	for {
@@ -1113,6 +1389,9 @@ func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop
 		case <-ticker.C:
 			if reaped := btlr.ReapIdle(); len(reaped) > 0 {
 				slog.Info("reaped idle thread processes", "threads", reaped)
+				if rsiCoach != nil {
+					rsiCoach.NoteReaped(reaped)
+				}
 				if rsiLoop != nil {
 					rsiLoop.NoteReaped(reaped)
 				}
@@ -1121,15 +1400,110 @@ func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop
 	}
 }
 
-// startAmbientRSI wires the 🎯T92 schedule/stream loop and MCP jevons_rsi_cycle.
+// startAmbientRSICoach wires the 🎯T243 product path: drip-read surfaces →
+// structured judgments → overseer (never bullseye file).
 // Env:
 //
-//	JEVONS_RSI_INTERVAL   — duration (default 30m); "0" or negative disables ticker
-//	JEVONS_RSI_MINT_CWD   — bullseye repo to file into (default: discover product repo)
-//	JEVONS_RSI_DRY_RUN    — "1"/"true" extract only, never file
-//	JEVONS_RSI_NO_CHAT    — "1" skip owner-chatlog deeper surface (🎯T92.2)
-//	JEVONS_RSI_NO_SESSION — "1" skip session-transcript deeper surface (🎯T92.2)
-func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Loop {
+//	JEVONS_RSI_COACH=0       — disable coach schedule (MCP tools still register if started)
+//	JEVONS_RSI_COACH_INTERVAL — duration (default 15m); "0" disables ticker
+//	JEVONS_RSI_NO_CHAT       — "1" skip owner-chatlog surface
+//	JEVONS_RSI_NO_SESSION    — "1" skip session-transcript surface
+func startAmbientRSICoach(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Coach {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_RSI_COACH"))) {
+	case "0", "false", "no", "off":
+		slog.Info("ambient RSI coach disabled by JEVONS_RSI_COACH")
+		return nil
+	}
+	interval := rsi.DefaultCoachInterval
+	if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_COACH_INTERVAL")); v != "" {
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			slog.Warn("JEVONS_RSI_COACH_INTERVAL invalid; using default", "value", v, "default", rsi.DefaultCoachInterval)
+		}
+	} else if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_INTERVAL")); v != "" {
+		// Shared interval env still honoured for coach when coach-specific unset.
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		}
+	}
+	chatLogPath := ""
+	if !envTruthy("JEVONS_RSI_NO_CHAT") {
+		name := cfg.OverseerName
+		if name == "" {
+			name = "jevons"
+		}
+		chatLogPath = filepath.Join(cfg.StateDir, "chatlog", name+".jsonl")
+	}
+	sessionsDir := ""
+	if !envTruthy("JEVONS_RSI_NO_SESSION") {
+		sessionsDir = strings.TrimSpace(cfg.SessionsDir)
+	}
+	// Retrospective history mine (🎯T353): the drip starts at EOF, so past
+	// evidence is reached by bounded backward passes over this repo's git
+	// history plus the journal tails.
+	retroWorkdir := strings.TrimSpace(os.Getenv("JEVONS_RSI_RETRO_WORKDIR"))
+	if retroWorkdir == "" {
+		retroWorkdir = strings.TrimSpace(cfg.WorkDir)
+	}
+	deliverer := mcpSrv.NewOverseerJudgmentDeliverer(cfg.OverseerName)
+	coach, err := rsi.NewCoach(rsi.CoachArgs{
+		StateDir:     cfg.StateDir,
+		ChatLogPath:  chatLogPath,
+		SessionsDir:  sessionsDir,
+		Interval:     interval,
+		Deliverer:    deliverer,
+		SeedEOF:      true, // continuous drip: only new appends after boot
+		RetroWorkdir: retroWorkdir,
+		DryRun:       false,
+	})
+	if err != nil {
+		slog.Warn("ambient RSI coach disabled", "err", err)
+		return nil
+	}
+	// Ensure durable default config exists for overseer retune surface.
+	if _, err := os.Stat(rsi.CoachConfigPath(cfg.StateDir)); os.IsNotExist(err) {
+		def := rsi.DefaultCoachConfig()
+		if name := strings.TrimSpace(cfg.OverseerName); name != "" {
+			def.Overseer = name
+		}
+		_ = rsi.SaveCoachConfig(cfg.StateDir, def)
+	}
+	mcpSrv.SetRSICoach(coach)
+	go coach.Run(ctx)
+	slog.Info("ambient RSI coach ready",
+		"interval", interval.String(),
+		"chatlog", chatLogPath != "",
+		"sessions", sessionsDir != "",
+		"retro_workdir", retroWorkdir,
+		"retro_interval", rsi.DefaultRetroInterval.String(),
+		"overseer", cfg.OverseerName,
+		"config", "state_dir/rsi/coach_config.json",
+		"cursor", "state_dir/rsi/coach_cursor.json",
+		"ledger", "state_dir/rsi/judged.json",
+	)
+	return coach
+}
+
+// startAmbientRSIMint wires residual 🎯T92 direct bullseye mint (NOT product path).
+// Product path is the coach (🎯T243). Phrase-list / mint only when explicitly opted in:
+//
+//	JEVONS_RSI_MINT=1  — enable eventlog mint loop (still subject to DRY_RUN)
+//	JEVONS_RSI_DEEPER=1 — also feed chatlog+session phrase extract into mint (noisy)
+//	JEVONS_RSI_INTERVAL, JEVONS_RSI_MINT_CWD, JEVONS_RSI_DRY_RUN as before
+//
+// When neither MINT nor DEEPER is set, the mint loop is not started (coach only).
+func startAmbientRSIMint(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server) *rsi.Loop {
+	mintOn := envTruthy("JEVONS_RSI_MINT")
+	deeper := envTruthy("JEVONS_RSI_DEEPER")
+	if !mintOn && !deeper {
+		slog.Info("ambient RSI mint residual off (product path is coach 🎯T243); set JEVONS_RSI_MINT=1 to enable")
+		return nil
+	}
 	interval := rsi.DefaultInterval
 	if v := strings.TrimSpace(os.Getenv("JEVONS_RSI_INTERVAL")); v != "" {
 		if v == "0" {
@@ -1150,12 +1524,14 @@ func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.S
 		dry = true
 	}
 	chatLogPath := ""
-	if !envTruthy("JEVONS_RSI_NO_CHAT") {
-		chatLogPath = filepath.Join(cfg.StateDir, "chatlog", cfg.OverseerName+".jsonl")
-	}
 	sessionsDir := ""
-	if !envTruthy("JEVONS_RSI_NO_SESSION") {
-		sessionsDir = strings.TrimSpace(cfg.SessionsDir)
+	if deeper {
+		if !envTruthy("JEVONS_RSI_NO_CHAT") {
+			chatLogPath = filepath.Join(cfg.StateDir, "chatlog", cfg.OverseerName+".jsonl")
+		}
+		if !envTruthy("JEVONS_RSI_NO_SESSION") {
+			sessionsDir = strings.TrimSpace(cfg.SessionsDir)
+		}
 	}
 	loop, err := rsi.NewLoop(rsi.LoopArgs{
 		StateDir:    cfg.StateDir,
@@ -1166,15 +1542,16 @@ func startAmbientRSI(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.S
 		SessionsDir: sessionsDir,
 	})
 	if err != nil {
-		slog.Warn("ambient RSI disabled", "err", err)
+		slog.Warn("ambient RSI mint residual disabled", "err", err)
 		return nil
 	}
 	mcpSrv.SetRSILoop(loop)
 	go loop.Run(ctx)
-	slog.Info("ambient RSI ready",
+	slog.Info("ambient RSI mint residual ready (not product path)",
 		"interval", interval.String(),
 		"mint_cwd", mintCwd,
 		"dry_run", dry,
+		"deeper_phrase_mint", deeper,
 		"chatlog", chatLogPath != "",
 		"sessions", sessionsDir != "",
 		"ledger", "state_dir/rsi/minted.json",

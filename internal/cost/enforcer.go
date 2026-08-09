@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,24 +30,29 @@ type Actions interface {
 // EnforcerArgs parameterises NewEnforcer. Snapshot, Config, and Actions
 // are required; production passes Monitor.Snapshot. Notify surfaces
 // enforcement actions to the owner (chat broadcast + log); nil = log
-// only. Now is injected for deterministic tests.
+// only. AuditTrail records structured clamp decisions for the durable
+// eventlog (🎯T334 standing cost-safety); nil skips structured audit.
+// Now is injected for deterministic tests.
 type EnforcerArgs struct {
-	Snapshot func() (*Snapshot, error)
-	Config   func() *BudgetConfig
-	Actions  Actions
-	Notify   func(level Level, msg string)
-	Now      func() time.Time
+	Snapshot   func() (*Snapshot, error)
+	Config     func() *BudgetConfig
+	Actions    Actions
+	Notify     func(level Level, msg string)
+	AuditTrail func(ClampDecision)
+	Now        func() time.Time
 }
 
 // Enforcer turns monitor alerts into clamp-down actions with
 // warn → throttle → pause → kill escalation, enforces the spawn-halting
 // hard ceiling, runs the dead-man's switch, and gates auto-resumes.
+// Standing cost-safety (🎯T334) dual-writes clamp decisions via AuditTrail.
 type Enforcer struct {
-	snapshot func() (*Snapshot, error)
-	config   func() *BudgetConfig
-	actions  Actions
-	notify   func(Level, string)
-	now      func() time.Time
+	snapshot   func() (*Snapshot, error)
+	config     func() *BudgetConfig
+	actions    Actions
+	notify     func(Level, string)
+	auditTrail func(ClampDecision)
+	now        func() time.Time
 
 	mu sync.Mutex
 	// lastLevel tracks the acted-on level per target ("" = fleet/global)
@@ -88,6 +94,7 @@ func NewEnforcer(args *EnforcerArgs) *Enforcer {
 		config:         args.Config,
 		actions:        args.Actions,
 		notify:         args.Notify,
+		auditTrail:     args.AuditTrail,
 		now:            args.Now,
 		lastLevel:      map[string]Level{},
 		resumeAt:       map[string]time.Time{},
@@ -99,6 +106,9 @@ func NewEnforcer(args *EnforcerArgs) *Enforcer {
 	}
 	if e.notify == nil {
 		e.notify = func(Level, string) {}
+	}
+	if e.auditTrail == nil {
+		e.auditTrail = func(ClampDecision) {}
 	}
 	e.lastHeartbeat = e.now()
 	return e
@@ -223,9 +233,15 @@ func (e *Enforcer) Act(snap *Snapshot) {
 			} else {
 				hardCeiling = true
 			}
-		case AlertSessionCount, AlertOrphanSessions, AlertProjection, AlertCollectorStale:
+		case AlertSessionCount, AlertOrphanSessions, AlertProjection, AlertCollectorStale, AlertSpawnStorm:
+			// Spawn storm (🎯T334) is notify-level here; session hygiene does
+			// not alone fire kill-switch — fleet/worker rate ladders do.
 			infoSeen["!"+a.Kind] = true
-			e.notifyOnce("!"+a.Kind, LevelWarn, a.Detail)
+			lvl := a.Level
+			if lvl == LevelNone {
+				lvl = LevelWarn
+			}
+			e.notifyOnce("!"+a.Kind, lvl, a.Detail)
 		}
 	}
 	// Cleared informational signals re-arm so the next episode notifies.
@@ -258,15 +274,17 @@ func (e *Enforcer) Act(snap *Snapshot) {
 		switch lvl {
 		case LevelWarn:
 			e.lastLevel[w] = lvl
-			e.notify(lvl, fmt.Sprintf("budget: worker %s over warn threshold", w))
+			msg := fmt.Sprintf("budget: worker %s over warn threshold", w)
+			e.notify(lvl, msg)
+			e.recordAudit(lvl, "notify", ActionWarn, w, msg, "ok")
 		case LevelThrottle:
 			e.lastLevel[w] = lvl
 			e.resumeAt[w] = e.now().Add(ThrottleCooldown)
-			e.act(lvl, fmt.Sprintf("budget: throttling worker %s (paused %s)", w, ThrottleCooldown),
+			e.act(lvl, w, fmt.Sprintf("budget: throttling worker %s (paused %s)", w, ThrottleCooldown),
 				func() error { return e.actions.PauseWorker(w) })
 		case LevelPause:
 			e.lastLevel[w] = lvl
-			e.act(lvl, fmt.Sprintf("budget: pausing worker %s until spend clears", w),
+			e.act(lvl, w, fmt.Sprintf("budget: pausing worker %s until spend clears", w),
 				func() error { return e.actions.PauseWorker(w) })
 		case LevelKill:
 			key := "w:" + w
@@ -274,16 +292,16 @@ func (e *Enforcer) Act(snap *Snapshot) {
 				// Never deregister the butler's own brain — kill
 				// downgrades to pause for protected workers.
 				e.lastLevel[w] = LevelPause
-				e.act(LevelKill, fmt.Sprintf("budget: worker %s over KILL threshold — protected, pausing instead", w),
+				e.act(LevelKill, w, fmt.Sprintf("budget: worker %s over KILL threshold — protected, pausing instead", w),
 					func() error { return e.actions.PauseWorker(w) })
 			} else if e.killReady(key) {
 				e.lastLevel[w] = LevelKill
-				e.act(LevelKill, fmt.Sprintf("budget: KILLING worker %s (kill breach confirmed)", w),
+				e.act(LevelKill, w, fmt.Sprintf("budget: KILLING worker %s (kill breach confirmed)", w),
 					func() error { return e.actions.KillWorker(w) })
 			} else {
 				// Pending: stop the burn reversibly, keep re-evaluating.
 				e.lastLevel[w] = LevelPause
-				e.act(LevelPause, fmt.Sprintf("budget: worker %s at KILL threshold — pausing pending confirmation (%d/%d)", w, e.killStreak[key], e.confirmTicks()),
+				e.act(LevelPause, w, fmt.Sprintf("budget: worker %s at KILL threshold — pausing pending confirmation (%d/%d)", w, e.killStreak[key], e.confirmTicks()),
 					func() error { return e.actions.PauseWorker(w) })
 			}
 		}
@@ -310,7 +328,9 @@ func (e *Enforcer) Act(snap *Snapshot) {
 		func() error { return e.actions.StopFleet() },
 		func() error {
 			if attended {
-				e.notify(LevelKill, "budget: fleet burn over KILL threshold — owner present, so fleet stopped resumably instead of firing the kill-switch; fire it manually if needed")
+				msg := "budget: fleet burn over KILL threshold — owner present, so fleet stopped resumably instead of firing the kill-switch; fire it manually if needed"
+				e.notify(LevelKill, msg)
+				e.recordAudit(LevelKill, "action", ActionPause, "@fleet", msg, "ok")
 				return e.actions.StopFleet()
 			}
 			return e.actions.KillSwitch()
@@ -322,7 +342,9 @@ func (e *Enforcer) Act(snap *Snapshot) {
 	if globalLevel != e.lastGlobalInfo {
 		e.lastGlobalInfo = globalLevel
 		if globalLevel != LevelNone {
-			e.notify(globalLevel, fmt.Sprintf("total machine burn is %s-level (%.2f USD/hr) — informational; jevons clamps its own fleet, not your sessions", globalLevel, snap.GlobalUSDPerHour))
+			msg := fmt.Sprintf("total machine burn is %s-level (%.2f USD/hr) — informational; jevons clamps its own fleet, not your sessions", globalLevel, snap.GlobalUSDPerHour)
+			e.notify(globalLevel, msg)
+			e.recordAudit(globalLevel, "informational", ActionInformational, "@global", msg, "ok")
 		}
 	}
 
@@ -333,10 +355,14 @@ func (e *Enforcer) Act(snap *Snapshot) {
 	haltSpawning := hardCeiling || fleetLevel == LevelKill
 	if haltSpawning && !e.spawnHalted {
 		e.spawnHalted = true
-		e.notify(LevelKill, "budget: spawning halted (global kill breach or hard daily ceiling)")
+		msg := "budget: spawning halted (global kill breach or hard daily ceiling)"
+		e.notify(LevelKill, msg)
+		e.recordAudit(LevelKill, "spawn_halt", ActionSpawnHalt, "", msg, "ok")
 	} else if !haltSpawning && e.spawnHalted {
 		e.spawnHalted = false
-		e.notify(LevelWarn, "budget: clamp cleared — spawning re-enabled")
+		msg := "budget: clamp cleared — spawning re-enabled"
+		e.notify(LevelWarn, msg)
+		e.recordAudit(LevelWarn, "spawn_resume", ActionNone, "", msg, "ok")
 	}
 
 	// Dead-man's switch: a burning fleet with no owner contact for the
@@ -345,7 +371,7 @@ func (e *Enforcer) Act(snap *Snapshot) {
 		e.now().Sub(e.lastHeartbeat) > cfg.DeadManIdle.Std() &&
 		(snap.FleetUSDPerHour > 0 || snap.GlobalUSDPerHour > 0) {
 		e.deadManFired = true
-		e.act(LevelPause, fmt.Sprintf("dead-man's switch: no owner contact for %s while burning — stopping fleet resumably", cfg.DeadManIdle.Std()),
+		e.act(LevelPause, "@fleet", fmt.Sprintf("dead-man's switch: no owner contact for %s while burning — stopping fleet resumably", cfg.DeadManIdle.Std()),
 			func() error { return e.actions.StopFleet() })
 	}
 }
@@ -368,17 +394,19 @@ func (e *Enforcer) escalateScope(scope string, lvl Level, pause, kill func() err
 	switch lvl {
 	case LevelWarn:
 		e.lastLevel[scope] = lvl
-		e.notify(lvl, fmt.Sprintf("budget: %s burn over warn threshold", scope[1:]))
+		msg := fmt.Sprintf("budget: %s burn over warn threshold", scope[1:])
+		e.notify(lvl, msg)
+		e.recordAudit(lvl, "notify", ActionWarn, scope, msg, "ok")
 	case LevelThrottle, LevelPause:
 		e.lastLevel[scope] = lvl
-		e.act(lvl, fmt.Sprintf("budget: %s burn over %s threshold — stopping fleet resumably", scope[1:], lvl), pause)
+		e.act(lvl, scope, fmt.Sprintf("budget: %s burn over %s threshold — stopping fleet resumably", scope[1:], lvl), pause)
 	case LevelKill:
 		if e.killReady(scope) {
 			e.lastLevel[scope] = LevelKill
-			e.act(LevelKill, fmt.Sprintf("budget: %s burn over KILL threshold (confirmed) — firing kill-switch", scope[1:]), kill)
+			e.act(LevelKill, scope, fmt.Sprintf("budget: %s burn over KILL threshold (confirmed) — firing kill-switch", scope[1:]), kill)
 		} else {
 			e.lastLevel[scope] = LevelPause
-			e.act(LevelPause, fmt.Sprintf("budget: %s burn over KILL threshold — stopping fleet resumably pending confirmation (%d/%d)", scope[1:], e.killStreak[scope], e.confirmTicks()), pause)
+			e.act(LevelPause, scope, fmt.Sprintf("budget: %s burn over KILL threshold — stopping fleet resumably pending confirmation (%d/%d)", scope[1:], e.killStreak[scope], e.confirmTicks()), pause)
 		}
 	}
 }
@@ -423,15 +451,18 @@ func (e *Enforcer) decayKillStreaks(workerLevel map[string]Level, fleetLevel, gl
 }
 
 // act runs one enforcement action, notifying either way — a failed
-// clamp-down must be loud, never silent.
-func (e *Enforcer) act(lvl Level, msg string, f func() error) {
+// clamp-down must be loud, never silent. Dual-writes the audit trail (🎯T334).
+func (e *Enforcer) act(lvl Level, target, msg string, f func() error) {
+	outcome := "ok"
 	if err := f(); err != nil {
 		msg = fmt.Sprintf("%s — ACTION FAILED: %v", msg, err)
 		slog.Error("cost enforcer", "msg", msg)
+		outcome = "error"
 	} else {
 		slog.Warn("cost enforcer", "msg", msg)
 	}
 	e.notify(lvl, msg)
+	e.recordAudit(lvl, "action", actionForLevel(lvl), target, msg, outcome)
 }
 
 // notifyOnce rate-limits informational signals to level transitions so
@@ -441,7 +472,25 @@ func (e *Enforcer) notifyOnce(kind string, lvl Level, detail string) {
 		return
 	}
 	e.lastLevel[kind] = lvl
-	e.notify(lvl, "budget: "+detail)
+	msg := "budget: " + detail
+	e.notify(lvl, msg)
+	e.recordAudit(lvl, "notify", actionForLevel(lvl), "", msg, "ok")
+}
+
+// recordAudit emits one structured clamp decision for the eventlog path.
+func (e *Enforcer) recordAudit(lvl Level, decision, action, target, msg, outcome string) {
+	if action == "" {
+		action = actionForLevel(lvl)
+	}
+	// Protected-worker kill paths leave lastLevel at pause and msg says protected.
+	if strings.Contains(strings.ToLower(msg), "protected") {
+		action = ActionProtectedPause
+		if outcome == "ok" {
+			outcome = "skipped_protected"
+		}
+	}
+	d := NewClampDecision(e.now(), lvl, decision, action, target, msg, outcome)
+	e.auditTrail(d)
 }
 
 // Run drives the enforcement loop until ctx is cancelled.

@@ -20,7 +20,11 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
 // defaultOverseerName is the fallback registry name of the persistent
@@ -35,7 +39,18 @@ const historyReplayTurns = 30
 // (🎯T57): GET /api/history?end=<idx>&limit=<n> returns the window
 // [end-limit, end) as a JSON array of raw wire frames, plus the new
 // window start and the total line count. The client prepends them.
+//
+// 🎯T259: concurrent handlers are serialised via historyGate so a large
+// chatlog progressive hydrate cannot burn more than one core. Successful
+// pages log at Debug (sampled Info every historyInfoEvery) to avoid
+// hydrate_page INFO spam on multi-100k-line journals.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	s.historyGate.acquire()
+	defer s.historyGate.release()
+	if s.historySlowHook != nil {
+		s.historySlowHook()
+	}
+
 	s.mu.RLock()
 	clog := s.chatLog
 	s.mu.RUnlock()
@@ -53,14 +68,28 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"history read failed"}`, http.StatusInternalServerError)
 		return
 	}
-	raw := make([]json.RawMessage, len(lines))
-	for i, ln := range lines {
+	// 🎯T240: display path coalesces token streams and strips silent sealed
+	// assistant bodies (same view as ReplayTailSealed). Raw journal unchanged.
+	// start/total still describe the raw window for paging.
+	display := chatlog.CoalesceStreamLines(lines)
+	raw := make([]json.RawMessage, len(display))
+	for i, ln := range display {
 		raw[i] = json.RawMessage(ln)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"start": end - len(lines), "total": total, "lines": raw,
 	})
+	// 🎯T259: Debug per page; sample Info so large progressive hydrates do not
+	// flood the decision/event log at production default.
+	n := s.historyPageSeq.Add(1)
+	if n == 1 || n%historyInfoEvery == 0 {
+		slog.Info("history hydrate page",
+			"end", end, "limit", limit, "lines", len(lines), "total", total, "seq", n)
+	} else {
+		slog.Debug("history hydrate page",
+			"end", end, "limit", limit, "lines", len(lines), "total", total, "seq", n)
+	}
 }
 
 // SetProcess attaches the persistent Claude process for the /ws/chat endpoint.
@@ -176,26 +205,62 @@ func (s *Server) AttachOverseer(agent *claudia.Agent) {
 }
 
 // ensureOverseerStreamIDLocked returns the open response stream id, minting
-// one if needed (🎯T223). Caller must hold s.mu.
+// one if needed (🎯T223 / 🎯T242). Caller must hold s.mu.
+//
+// IDs are globally unique (UUID), not "s1"/"s2" restart counters. Short
+// sequential ids reused after every daemon bounce caused CoalesceStreamLines
+// to glue many real turns into one stream on history replay — and if any
+// reincarnation started with [silent], the whole blob was stripped (owner
+// saw replies flash live then vanish on seal/reload as consecutive users).
 func (s *Server) ensureOverseerStreamIDLocked() string {
 	if s.overseerStreamID == "" {
-		s.overseerStreamSeq++
-		s.overseerStreamID = "s" + strconv.FormatUint(s.overseerStreamSeq, 10)
+		s.overseerStreamSeq++ // kept for metrics / debug ordering only
+		s.overseerStreamID = uuid.NewString()
 	}
 	return s.overseerStreamID
 }
 
-// clearOverseerStreamID drops the open stream label after a terminal stop.
+// clearOverseerStreamID drops the open stream label and 🎯T240 silent state
+// after a terminal stop.
 func (s *Server) clearOverseerStreamID() {
 	s.mu.Lock()
 	s.overseerStreamID = ""
+	s.overseerStreamAcc = ""
+	s.overseerStreamSilent = false
+	s.overseerStreamHold = nil
 	s.mu.Unlock()
+}
+
+// emptyEndTurnWire builds a body-less terminal assistant frame so the UI
+// clears working without painting prose (🎯T238 / 🎯T240).
+func emptyEndTurnWire(stopReason, streamID string) string {
+	if stopReason == "" {
+		stopReason = "end_turn"
+	}
+	b, err := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"message": map[string]any{
+			"role":        "assistant",
+			"content":     []any{},
+			"stop_reason": stopReason,
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	return stampStreamID(string(b), streamID)
 }
 
 // DeliverOverseerEvent is the live event path for the overseer: normalise
 // to the chat wire shape, broadcast to /ws/chat listeners, then update
 // turn/idle status. Extracted so tests can drive the same path without
 // a live claudia.Agent.
+//
+// 🎯T240: assistant text is classified as a whole stream (accumulated
+// deltas per stream_id). Once silentresponse marks the stream Silent,
+// body fragments are neither journaled nor broadcast; only an empty
+// end_turn is emitted on terminal so the UI clears working.
 func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	// Any ACP traffic resets stuck-busy idle (🎯T204).
 	s.NoteOverseerProgress()
@@ -211,10 +276,77 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 		streamID = s.ensureOverseerStreamIDLocked()
 		s.mu.Unlock()
 	}
+
+	// 🎯T240 whole-stream silent: accumulate assistant text, suppress body.
+	if ev.Type == "assistant" && (ev.Text != "" || ev.IsTerminalStop()) {
+		s.mu.Lock()
+		if ev.Text != "" {
+			s.overseerStreamAcc += ev.Text
+			switch silentresponse.Classify(s.overseerStreamAcc) {
+			case silentresponse.Silent:
+				s.overseerStreamSilent = true
+				s.overseerStreamHold = nil // drop any incomplete-prefix hold
+			case silentresponse.Visible:
+				// Flush any held prefix fragments now that we know visible.
+				for _, held := range s.overseerStreamHold {
+					s.mu.Unlock()
+					s.BroadcastChat(held)
+					s.mu.Lock()
+				}
+				s.overseerStreamHold = nil
+			}
+		}
+		silent := s.overseerStreamSilent
+		class := silentresponse.Classify(s.overseerStreamAcc)
+		s.mu.Unlock()
+
+		if silent {
+			if ev.IsTerminalStop() {
+				if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
+					s.BroadcastChat(line)
+				}
+				s.clearOverseerStreamID()
+			}
+			// Body fragments: drop (not journaled).
+			s.HandleAgentEvent(ev)
+			return
+		}
+
+		if class == silentresponse.Pending && ev.Text != "" && !ev.IsTerminalStop() {
+			// Hold wire until prefix completes or stream proves visible.
+			if line, ok := chatWireLine(ev); ok {
+				if streamID != "" {
+					line = stampStreamID(line, streamID)
+				}
+				s.mu.Lock()
+				s.overseerStreamHold = append(s.overseerStreamHold, line)
+				s.mu.Unlock()
+			}
+			s.HandleAgentEvent(ev)
+			return
+		}
+
+		// Terminal while still Pending with empty/non-silent acc: flush hold
+		// then normal wire (empty end_turn). Pending with incomplete "[" only
+		// is rare; treat as visible on seal.
+		if ev.IsTerminalStop() && class == silentresponse.Pending {
+			s.mu.Lock()
+			held := s.overseerStreamHold
+			s.overseerStreamHold = nil
+			s.mu.Unlock()
+			for _, h := range held {
+				s.BroadcastChat(h)
+			}
+		}
+	}
+
 	if line, ok := chatWireLine(ev); ok {
 		if streamID != "" {
 			line = stampStreamID(line, streamID)
 		}
+		// If this full-text event is silent (T238 single-fragment path) and
+		// we did not already return above, chatWireLine drops body; terminal
+		// empty end_turn still ok.
 		s.BroadcastChat(line)
 	}
 	if ev.IsTerminalStop() {
@@ -223,7 +355,38 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	s.HandleAgentEvent(ev)
 }
 
+// overseerWorkingLevel reports whether an owner-visible overseer turn is
+// currently in flight (🎯T272 + 🎯T291). Level-trigger sample for history_meta.
+//
+// Fleet note chews set waiting / may keep PromptInFlight, but they must NOT
+// light owner working chrome. Only an in-flight owner turn (overseerOwnerTurn)
+// counts — after the owner's reply seals, chrome stays clear while the
+// overseer drains the fleet backlog.
+func (s *Server) overseerWorkingLevel() bool {
+	s.mu.RLock()
+	ownerTurn := s.overseerOwnerTurn
+	waiting := s.waiting
+	streamOpen := s.overseerStreamID != ""
+	proc := s.proc
+	s.mu.RUnlock()
+	if !ownerTurn {
+		return false
+	}
+	if waiting || streamOpen {
+		return true
+	}
+	if proc != nil && proc.Alive() && proc.PromptInFlight() {
+		return true
+	}
+	return false
+}
+
 // SendToOverseer delivers text to the current overseer process.
+//
+// 🎯T62: never drop on busy — enqueue and drain.
+// 🎯T291: fleet notes coalesce per worker; owner turns jump ahead of the
+// fleet backlog and interrupt a fleet-only in-flight prompt so the owner's
+// words are not deferred behind idle churn.
 func (s *Server) SendToOverseer(text string) error {
 	// The owner talking to Jevons is the strongest owner-present signal —
 	// feed the budget dead-man's switch so it never stops a fleet the
@@ -231,24 +394,66 @@ func (s *Server) SendToOverseer(text string) error {
 	if s.activityHook != nil {
 		s.activityHook()
 	}
-	// Queue rather than send directly: the overseer's ACP session handles
-	// one prompt at a time, so a note delivered while it is mid-turn returns
-	// "prompt already in flight". Historically that error was logged and the
-	// note DROPPED — silently losing worker replies (🎯T62). Enqueue and try
-	// to drain; anything not delivered now is retried on the next
-	// turn-complete (HandleAgentEvent).
+	owner := isOwnerNotifyText(text)
+
 	s.mu.Lock()
-	s.notifyQueue = append(s.notifyQueue, text)
+	if owner {
+		// Owner turns never coalesce with each other; append then peel first
+		// at drain (partition). Keep enqueue order among owners.
+		s.notifyQueue = append(s.notifyQueue, text)
+	} else {
+		s.notifyQueue = coalesceNotifyEnqueue(s.notifyQueue, text)
+	}
 	depth := len(s.notifyQueue)
+	// Fleet-only busy: interrupt so the owner can take the session (T291).
+	// Do not interrupt an owner turn — cancel-and-send is the chat client's job.
+	fleetBusy := s.waiting && !s.overseerOwnerTurn
 	s.mu.Unlock()
+
 	// 🎯T128.3: enqueue is Info so queue growth is visible at production default.
 	slog.Info("notify_queue",
 		"component", "notify_queue",
 		"decision", "enqueue",
 		"depth", depth,
+		"owner", owner,
 	)
+
+	if owner && fleetBusy {
+		s.interruptOverseerForOwner()
+		// Terminal stop will drain with owner-first partition; still try now
+		// in case the session is already free.
+	}
+
 	s.drainOverseerNotes()
 	return nil
+}
+
+// interruptOverseerForOwner cancels a fleet-note chew so an owner turn can
+// claim the ACP session (🎯T291). No-op when notifySender is stubbed (tests
+// drive busy via the seam) or the process is missing.
+func (s *Server) interruptOverseerForOwner() {
+	if s.notifySender != nil {
+		// Hermetic path: tests model busy via notifySender; no real process.
+		// Callers re-drain on simulated terminal / idle.
+		return
+	}
+	proc := s.CurrentProcess()
+	if proc == nil || !proc.Alive() {
+		return
+	}
+	if err := proc.Interrupt(); err != nil {
+		slog.Info("notify_queue",
+			"component", "notify_queue",
+			"decision", "owner_interrupt",
+			"err", err,
+		)
+		return
+	}
+	slog.Info("notify_queue",
+		"component", "notify_queue",
+		"decision", "owner_interrupt",
+		"ok", true,
+	)
 }
 
 // sendNotes delivers one coalesced note batch to the overseer. The
@@ -283,23 +488,34 @@ func notifyErrClass(err error) string {
 	}
 }
 
-// drainOverseerNotes attempts to deliver all queued async notifications to
-// the overseer as a single coalesced prompt. If the overseer is busy
-// ("prompt already in flight") or otherwise unreachable, the batch is
-// requeued at the front and left for the next turn-complete to retry —
-// nothing is dropped. A drain-in-progress guard serializes concurrent
-// callers (a worker reply and a turn-complete can race). Called from
-// SendToOverseer (new note) and HandleAgentEvent (overseer went idle).
+// drainOverseerNotes attempts to deliver queued async notifications.
+//
+// 🎯T291:
+//   - Owner turns drain first, one at a time (never mixed with fleet notes).
+//   - Fleet notes drain as one batch (already coalesced per worker).
+//   - Successful fleet drain with a pending owner interrupts so owner is not
+//     stuck behind the fleet chew.
+//   - overseerOwnerTurn is set only for owner batches (working chrome).
+//
+// Busy / unreachable: requeue at front (coalesced) for the next turn-complete
+// (🎯T62 — nothing dropped). Drain-in-progress serializes concurrent callers.
 func (s *Server) drainOverseerNotes() {
 	s.mu.Lock()
 	if s.notifyDraining || len(s.notifyQueue) == 0 {
 		s.mu.Unlock()
 		return
 	}
-	batch := s.notifyQueue
-	s.notifyQueue = nil
+	batch, rest, ownerBatch := takeNotifyDrainBatch(s.notifyQueue)
+	s.notifyQueue = rest
 	s.notifyDraining = true
 	s.mu.Unlock()
+
+	if len(batch) == 0 {
+		s.mu.Lock()
+		s.notifyDraining = false
+		s.mu.Unlock()
+		return
+	}
 
 	err := s.sendNotes(strings.Join(batch, "\n\n"))
 
@@ -307,8 +523,8 @@ func (s *Server) drainOverseerNotes() {
 	s.notifyDraining = false
 	if err != nil {
 		// Overseer busy or down — put the batch back at the front so order
-		// is preserved, and wait for the next turn-complete to retry.
-		s.notifyQueue = append(batch, s.notifyQueue...)
+		// is preserved, re-coalesce with anything that arrived during send.
+		s.notifyQueue = requeueNotifyFront(batch, s.notifyQueue)
 		depth := len(s.notifyQueue)
 		s.mu.Unlock()
 		// 🎯T128.3: busy-defer must be Info (not Debug) with depth + err_class.
@@ -319,21 +535,29 @@ func (s *Server) drainOverseerNotes() {
 			"deferred", len(batch),
 			"err_class", notifyErrClass(err),
 			"err", err,
+			"owner_batch", ownerBatch,
 		)
 		return
 	}
 	// Successful prompt delivery: mark waiting so stuck-busy can see an
 	// in-flight turn even when only notify/owner notes are on the wire.
 	s.waiting = true
+	s.overseerOwnerTurn = ownerBatch
 	s.overseerLastProgress = time.Now()
 	depth := len(s.notifyQueue)
+	ownerPending := queueHasOwner(s.notifyQueue)
 	s.mu.Unlock()
 	slog.Info("notify_queue",
 		"component", "notify_queue",
 		"decision", "drain",
 		"depth", depth,
 		"drained", len(batch),
+		"owner_batch", ownerBatch,
 	)
+	// Fleet batch just took the session but an owner is waiting — free it.
+	if !ownerBatch && ownerPending {
+		s.interruptOverseerForOwner()
+	}
 }
 
 // handleCost serves the live cost snapshot: burn-rates, the "what is
@@ -547,6 +771,14 @@ type agentInfo struct {
 	Phase    string `json:"phase,omitempty"`
 	Step     string `json:"step,omitempty"`
 	Progress string `json:"progress,omitempty"`
+	// Provider / Model back the RHS company-icon + condensed model prefix
+	// (🎯T287). Provider is the agent's stored backend (claude | grok | …).
+	// Model is session truth for the badge (🎯T324): live observation,
+	// else session log, else launch pin / provider default bound at
+	// Launch for this SessionID. Empty only when the backend has no
+	// known default and nothing has been observed yet.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // listFleetAgents returns the RHS panel source of truth: every agent
@@ -560,13 +792,14 @@ type agentInfo struct {
 // recovery runs, NotifyAgentsChanged pushes a live frame so the UI refreshes
 // immediately (not only on the next poll).
 func listFleetAgents(reg *claudia.Registry) []agentInfo {
-	return listFleetAgentsNotifying(reg, nil, nil)
+	return listFleetAgentsNotifying(reg, nil, nil, nil)
 }
 
 // listFleetAgentsNotifying is the same feed with an optional notify hook for
 // recovery events (server wires agents_changed). Used by hermetic tests with
-// notify=nil. progress may be nil (no ACP snapshots).
-func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string), progress *AgentProgressHub) []agentInfo {
+// notify=nil. progress may be nil (no ACP snapshots); models may be nil (no
+// session-log lookup — rows then carry only what the live hub saw).
+func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string), progress *AgentProgressHub, models *fleetModelResolver) []agentInfo {
 	if reg == nil {
 		return []agentInfo{}
 	}
@@ -593,6 +826,17 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		onRecovered(recovered)
 	}
 	defs := reg.List()
+	// 🎯T311: agents that left the registry (kill/remove) must not leave a
+	// sticky observation behind — the next agent to answer to that name would
+	// inherit the dead one's model. Pruning here covers every kill path
+	// without each one having to notify the hub.
+	if progress != nil {
+		registered := make(map[string]struct{}, len(defs))
+		for _, d := range defs {
+			registered[d.Name] = struct{}{}
+		}
+		progress.Prune(registered)
+	}
 	agents := make([]agentInfo, 0, len(defs))
 	for _, d := range defs {
 		status := "stopped"
@@ -604,7 +848,10 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			purpose = claudia.PurposeWork
 		}
 		// Seed status baseline when no richer ACP snapshot exists yet.
+		// Epoch first (🎯T311): a restart on a fresh session drops the previous
+		// run's observation before the baseline can carry it forward.
 		if progress != nil {
+			progress.SyncEpoch(d.Name, d.SessionID)
 			progress.SetStatus(d.Name, status)
 		}
 		info := agentInfo{
@@ -615,13 +862,56 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			Description: d.Description,
 			TargetID:    strings.TrimSpace(d.TargetID),
 			Status:      status,
+			Provider:    strings.TrimSpace(string(d.Provider)),
 		}
 		if progress != nil {
-			if p := progress.Get(d.Name); p.Summary != "" || p.Phase != "" || p.Step != "" {
+			p := progress.Get(d.Name)
+			if p.Summary != "" || p.Phase != "" || p.Step != "" {
 				info.Phase = p.Phase
 				info.Step = p.Step
 				info.Progress = p.Summary
 			}
+			// What the agent is running, seen on the wire this session.
+			info.Model = strings.TrimSpace(p.Model)
+			// 🎯T348 belt: a hub poisoned before the modelFromEvent filter
+			// existed (or by any future synthetic producer) must not serve
+			// '<synthetic>' as a model — drop it so the log/pin chain engages.
+			if info.Model == syntheticModel {
+				progress.ClearModel(d.Name)
+				info.Model = ""
+			}
+			// 🎯T323: drop sticky observations that belong to another company
+			// (Claude-era fable under provider=grok after migrate). Clear the
+			// hub so the next poll does not re-serve the foreign id.
+			if info.Model != "" && !modelFitsProvider(info.Provider, info.Model) {
+				progress.ClearModel(d.Name)
+				info.Model = ""
+			}
+		}
+		// Nothing observed live — either the provider names no model in its
+		// frames (Grok, 🎯T293) or this daemon has not seen a turn yet, which
+		// is every agent right after a restart. The harness's own session log
+		// says what the process actually ran, so it seeds the badge at attach
+		// instead of leaving a live agent blank (🎯T311).
+		if info.Model == "" {
+			info.Model = models.Model(d.Provider, d.WorkDir, d.SessionID)
+		}
+		// Launch pin / session binding (🎯T311 / 🎯T324). Intent for this
+		// SessionID — fills the gap before the first observation, never
+		// overrides one.
+		if info.Model == "" {
+			info.Model = strings.TrimSpace(d.Model)
+		}
+		// 🎯T323 residual belt: drop foreign-company residue if it still
+		// reaches the feed. Product strategy is session-truth binding at
+		// Launch/migrate (T324), not fail-closed sniff.
+		if info.Model != "" && !modelFitsProvider(info.Provider, info.Model) {
+			info.Model = ""
+		}
+		// 🎯T324: unbound → provider default so cold Grok agents report a
+		// condensable id (badge version), not mark-only forever.
+		if info.Model == "" {
+			info.Model = cli.DefaultModelForProvider(d.Provider)
 		}
 		agents = append(agents, info)
 	}
@@ -648,6 +938,7 @@ func (s *Server) ObserveAgentProgress(name string, ev claudia.Event) bool {
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	reg := s.registry
+	models := s.fleetModels
 	s.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -658,7 +949,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	agents := listFleetAgentsNotifying(reg, func(names []string) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
-	}, s.agentProgress)
+	}, s.agentProgress, models)
 	_ = json.NewEncoder(w).Encode(agents)
 }
 
@@ -763,9 +1054,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.Info("chat: chatlog replay", "conn_id", connID, "frames", frames, "bytes", bytes, "ms", replayMS, "older", start, "total", total)
 			// Always emit history_meta (even when older==0) so the client can
 			// close the connect span without waiting for idle timeout.
+			// 🎯T272: include current in-flight level so clients re-derive working
+			// chrome after reload (level-trigger, not edge memory).
 			meta, _ := json.Marshal(map[string]any{
 				"type": "history_meta", "older": start, "total": total, "start": start,
 				"conn_id": connID, "replay_frames": frames, "replay_bytes": bytes, "replay_ms": replayMS,
+				"working": s.overseerWorkingLevel(),
 			})
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			_ = conn.Write(writeCtx, websocket.MessageText, meta)
@@ -867,8 +1161,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			if cur := s.CurrentProcess(); cur != nil {
 				if err := cur.Interrupt(); err != nil {
 					slog.Error("chat: interrupt failed", "err", err)
+					continue
 				}
 			}
+			s.settleCancel()
 			continue
 		}
 
@@ -938,14 +1234,57 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			// in the server log (🎯T49; live drill found "prompt already
 			// in flight" vanishing silently). Broadcast so every client —
 			// and the journal — records that this turn was not delivered.
-			slog.Error("chat: send to overseer failed", "err", err)
-			payload, _ := json.Marshal(map[string]string{
+			// 🎯T237: structured failure_class + owner copy beyond bare Internal error.
+			class, ownerMsg := agenterr.ClassifyAndFormat(err)
+			if !class.IsFailure() {
+				ownerMsg = err.Error()
+			}
+			slog.Error("chat: send to overseer failed",
+				"err", err,
+				"failure_class", class.String(),
+				"transient", class.IsTransient(),
+			)
+			frame := map[string]string{
 				"type":  "error",
-				"error": "message not delivered: " + err.Error(),
-			})
+				"error": "message not delivered: " + ownerMsg,
+			}
+			if class.IsFailure() {
+				frame["failure_class"] = class.String()
+			}
+			payload, _ := json.Marshal(frame)
 			s.BroadcastChat(string(payload))
 		}
 	}
+}
+
+// settleCancel ends the cancelled turn on the server and tells clients so.
+//
+// Providers disagree about what an interrupted turn emits: Grok's ACP
+// session reports a turn end, while a Claude Session is a TUI that simply
+// stops — no terminal event ever arrives. Waiting for the provider
+// therefore leaves the owner's thinking indicator spinning after Esc on
+// any Claude agent, so the settle signal comes from the server (🎯T282).
+// Clients already treat state=cancel_settled as "not working"
+// (web/scripts/chat_events.js workingLevelFromSample).
+func (s *Server) settleCancel() {
+	s.mu.Lock()
+	s.turnBuf = ""
+	s.waiting = false
+	s.overseerOwnerTurn = false // 🎯T291
+	s.overseerStreamID = ""
+	s.overseerStreamAcc = ""
+	s.overseerStreamSilent = false
+	s.overseerStreamHold = nil
+	s.mu.Unlock()
+
+	s.NoteOverseerProgress()
+	frame := map[string]any{"type": "status", "state": "cancel_settled", "text": "cancelled"}
+	if payload, err := json.Marshal(frame); err == nil {
+		s.BroadcastChat(string(payload))
+	}
+	s.Broadcast(frame)
+	// Notes deferred while the turn held the session can go out now.
+	s.drainOverseerNotes()
 }
 
 // sendHistory reads the JSONL file and sends each line as a raw WebSocket
@@ -1014,6 +1353,10 @@ func (s *Server) BroadcastChat(line string) {
 		}
 	}
 	s.broadcastChatLive(line)
+	// 🎯T309.2: the same owner-visible line is also the overseer's live frame
+	// on the agent-addressed family, so inspect_subscribe works by name for the
+	// overseer exactly as it does for fleet agents.
+	s.fanOverseerInspectLive(line)
 }
 
 // broadcastChatLive fans a line out to connected clients WITHOUT

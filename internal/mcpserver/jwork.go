@@ -18,6 +18,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/workers"
@@ -99,6 +100,8 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			"level", policy.Level,
 			"reason", policy.Reason,
 		)
+		// 🎯T335: surface policy deny to standing security auditor (not silent).
+		s.notifySecurityPolicyDeny(workerID, policy.Reason)
 		if s.workers != nil {
 			_ = s.workers.Start(workers.StartArgs{
 				ID: workerID, Task: text, Model: model, Cwd: cwd,
@@ -171,7 +174,14 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 
 	events, err := task.Run(ctx, prompt)
 	if err != nil {
-		slog.Error("jwork: dispatch failed", "worker", workerID, "err", err)
+		// 🎯T283: name the class so the caller can tell an outage from a bad task.
+		dispatchClass, dispatchMsg := agenterr.ClassifyAndFormat(err)
+		slog.Error("jwork: dispatch failed",
+			"worker", workerID,
+			"err", err,
+			"failure_class", dispatchClass.String(),
+			"transient", dispatchClass.IsTransient(),
+		)
 		if s.workers != nil {
 			_ = s.workers.Finish(workers.FinishArgs{
 				ID: workerID, Status: workers.StatusFailed,
@@ -185,6 +195,10 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 				},
 			})
 		}
+		if dispatchClass.IsFailure() {
+			logProviderFailure("jwork", workerID, dispatchClass, err.Error())
+			return mcp.NewToolResultError("worker dispatch failed: " + dispatchMsg), nil
+		}
 		return mcp.NewToolResultError(fmt.Sprintf("worker dispatch failed: %v", err)), nil
 	}
 
@@ -192,6 +206,8 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	var textParts []string
 	var inputTok, outputTok int64
 	var costUSD float64
+	var errClass agenterr.Class
+	var errRaw string
 	hb := &heartbeatTracker{}
 
 	for ev := range events {
@@ -227,7 +243,17 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 				textParts = append(textParts, ev.Content)
 			}
 		case claudia.TaskEventError:
-			slog.Warn("jwork: worker error", "worker", workerID, "error", ev.ErrorMsg)
+			// 🎯T283: keep the strongest class seen. Previously these were
+			// logged and dropped, so a backend outage surfaced to the caller
+			// as "Worker finished (no output)" — a product defect, apparently.
+			if c := agenterr.ClassifyText(ev.ErrorMsg); c.IsFailure() {
+				errClass, errRaw = c, ev.ErrorMsg
+			}
+			slog.Warn("jwork: worker error",
+				"worker", workerID,
+				"error", ev.ErrorMsg,
+				"failure_class", agenterr.ClassifyText(ev.ErrorMsg).String(),
+			)
 			if s.workers != nil {
 				_ = s.workers.Progress(workerID, "error: "+ev.ErrorMsg)
 			}
@@ -238,6 +264,31 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if result == "" {
 		result = strings.Join(textParts, "")
 	}
+
+	failClass, failMsg := jworkFailure(errClass, errRaw, result)
+	if failClass.IsFailure() {
+		logProviderFailure("jwork", workerID, failClass, failMsg)
+		if s.workers != nil {
+			_ = s.workers.Finish(workers.FinishArgs{
+				ID: workerID, Status: workers.StatusFailed,
+				Outcome:      truncate(failMsg, 500),
+				InputTokens:  inputTok,
+				OutputTokens: outputTok,
+				CostUSD:      costUSD,
+			})
+		}
+		return mcp.NewToolResultStructured(map[string]any{
+			"result":        failMsg,
+			"worker_id":     workerID,
+			"status":        workers.StatusFailed,
+			"failure_class": failClass.String(),
+			"transient":     failClass.IsTransient(),
+			"input_tokens":  inputTok,
+			"output_tokens": outputTok,
+			"cost_usd":      costUSD,
+		}, failMsg), nil
+	}
+
 	if result == "" {
 		result = "Worker finished (no output)."
 	}
@@ -268,10 +319,14 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	// Text remains the primary human/agent payload; structuredContent carries
 	// policy + worker id for machine consumers (🎯T8.3 metadata).
 	truncated := truncate(result, 4000)
+	// 🎯T283: a run that hit provider errors but still produced output carries
+	// the class so the caller can tell a clean run from a recovered one.
 	return mcp.NewToolResultStructured(map[string]any{
 		"result":         truncated,
 		"worker_id":      workerID,
 		"status":         workers.StatusCompleted,
+		"failure_class":  errClass.String(),
+		"transient":      errClass.IsTransient(),
 		"input_tokens":   inputTok,
 		"output_tokens":  outputTok,
 		"cost_usd":       costUSD,

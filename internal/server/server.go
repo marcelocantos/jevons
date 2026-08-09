@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marcelocantos/pigeon"
@@ -28,8 +29,11 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/provider"
+	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/workers"
+	"github.com/marcelocantos/jevons/internal/writconf"
 )
 
 // remoteWriter abstracts over WebSocket and tern relay connections.
@@ -57,9 +61,16 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	version            string
-	stateDir           string // jevons state root (config-driven, 🎯T44/T49)
-	overseerName       string // registry name of the CEO agent (config-driven, 🎯T44)
+	version      string
+	stateDir     string // jevons state root (config-driven, 🎯T44/T49)
+	overseerName string // registry name of the CEO agent (config-driven, 🎯T44)
+	// overseerMigrator performs the registry half of a provider switch
+	// (🎯T285); this server owns the attach + seed halves. Nil = the
+	// capability is unavailable rather than half-wired.
+	overseerMigrator OverseerMigrator
+	// handoverSeeding is the single-flight guard for delivering a pending
+	// handover (🎯T285); guarded by mu.
+	handoverSeeding    bool
 	overseerDownReason string // legible cause when the overseer isn't running (🎯T54); guarded by mu
 	ca                 *auth.CA
 
@@ -75,6 +86,16 @@ type Server struct {
 	overseerStreamID string
 	// overseerStreamSeq is a monotonic counter for short stream ids.
 	overseerStreamSeq uint64
+	// overseerStreamAcc concatenates assistant text deltas for the open
+	// stream so 🎯T240 can classify [silent] across token splits.
+	overseerStreamAcc string
+	// overseerStreamSilent is true once the open stream is known silent
+	// (marker complete); further body fragments are dropped (🎯T240).
+	overseerStreamSilent bool
+	// overseerStreamHold buffers wire lines while Classify is still
+	// Pending (incomplete "[silent]" prefix). Flushed on Visible; dropped
+	// on Silent (🎯T240).
+	overseerStreamHold []string
 
 	// overseerLastProgress is the last ACP/event/activity time for stuck-busy
 	// detection (🎯T204). Zero means never observed.
@@ -110,6 +131,16 @@ type Server struct {
 	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
 	tokenLimiter *tokenRateLimiter
 
+	// historyGate bounds concurrent GET /api/history so progressive hydrate
+	// of a multi-megabyte chatlog cannot peg more than one core (🎯T259).
+	historyGate *historyHydrateGate
+	// historyPageSeq counts successful /api/history responses for sampled
+	// Info logging (🎯T259 spam reduction).
+	historyPageSeq atomic.Uint64
+	// historySlowHook is set only in hermetic tests to hold the gate while
+	// concurrent requests pile up (proves max in-flight ≤ capacity).
+	historySlowHook func()
+
 	// peerSessionFactory builds pure sqlpipe Peer sessions for /ws/sqlpipe
 	// (🎯T10 pure transport residual). Nil → endpoint fails closed.
 	peerSessionFactory PeerSessionFactory
@@ -119,9 +150,14 @@ type Server struct {
 	// arrives mid-turn is queued here and flushed on the next turn-complete
 	// rather than dropped (🎯T62). Guarded by mu. notifySender is the
 	// delivery seam (nil = live overseer process); overridable in tests.
-	notifyQueue    []string
-	notifyDraining bool
-	notifySender   func(string) error
+	//
+	// 🎯T291: same-worker idle notes coalesce on enqueue; owner turns drain
+	// first and alone; overseerOwnerTurn tracks whether the in-flight prompt
+	// is owner speech (working chrome) vs fleet note chew.
+	notifyQueue       []string
+	notifyDraining    bool
+	notifySender      func(string) error
+	overseerOwnerTurn bool
 
 	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
 	agentsWatchCancel context.CancelFunc
@@ -142,6 +178,22 @@ type Server struct {
 
 	// agentProgress is live ACP-derived status for RHS fleet rows (🎯T118).
 	agentProgress *AgentProgressHub
+
+	// providerFeeds is the 🎯T27.5 feed-ingestion hub behind /ws/provider;
+	// providerHealth snapshots 🎯T27.3 lifecycle phases for /api/providers.
+	// Both nil until wired from main.
+	providerFeeds  *provider.FeedHub
+	providerHealth func() []provider.Health
+
+	// automations snapshots 🎯T27.9 liveness statuses for /api/automations.
+	// Nil until wired from main.
+	automations func() []provider.AutomationStatus
+
+	// fleetModels resolves the model an agent is running from its provider's
+	// own session log: the only source for Grok, which names none on the wire
+	// (🎯T293), and the seed that survives a daemon restart for every provider
+	// (🎯T311). Nil until SetModelSessionRoots; rows then rely on the live hub.
+	fleetModels *fleetModelResolver
 
 	// eventLog is the durable decision/lifecycle journal (🎯T120):
 	// state_dir/logs/events.jsonl — browser + server events, tool-readable.
@@ -167,6 +219,13 @@ type Server struct {
 	// portfolios is the declarative domain portfolio registry (🎯T200).
 	// Guarded by mu. Empty = calm missing (no RHS portfolio chrome).
 	portfolios []config.Portfolio
+
+	// secAuditor is the standing security interest (🎯T335). Nil = status not ready.
+	secAuditor *secauditor.Interest
+	// writExec runs high-risk argv under writ seatbelt/egress (🎯T335).
+	writExec      writconf.Executor
+	writBin       string
+	writAvailable bool
 }
 
 // SetActivityHook registers a callback fired on owner activity — the
@@ -242,6 +301,7 @@ func New(version, stateDir string) *Server {
 		inspectByCh:   make(map[chan string]string),
 		inspectChans:  make(map[string]map[chan string]struct{}),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
+		historyGate:   newHistoryHydrateGate(maxHistoryHydrateConcurrent),
 		agentProgress: NewAgentProgressHub(),
 	}
 
@@ -281,7 +341,11 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		turnText := s.turnBuf
 		s.turnBuf = ""
 		s.waiting = false
+		s.overseerOwnerTurn = false // 🎯T291: seal clears owner-turn chrome level
 		s.overseerStreamID = "" // 🎯T223: terminal settle closes stream label
+		s.overseerStreamAcc = ""
+		s.overseerStreamSilent = false
+		s.overseerStreamHold = nil // 🎯T240 silent stream state
 		s.mu.Unlock()
 		// The overseer's ACP session is now idle — flush any async notes
 		// (worker replies, budget alerts) that arrived while it was busy and
@@ -333,17 +397,30 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
-	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe) // 🎯T10 pure transport residual
+	mux.HandleFunc("/ws/provider", s.handleProviderFeed)    // 🎯T27.5 feed channel
+	mux.HandleFunc("GET /api/providers", s.handleProviders)       // 🎯T27.3/T27.5 observability
+	mux.HandleFunc("GET /api/automations", s.handleAutomations)   // 🎯T27.9 liveness snapshot
+	mux.HandleFunc("GET /api/desktop/head", s.handleDesktopHead) // 🎯T27.7 tray head model
+	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe)          // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T285
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
 	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend) // 🎯T182: product agent_send proxy
 	// 🎯T198: stop workers engaged on a frontier target (TargetID equality).
 	mux.HandleFunc("POST /api/agents/engagement/stop", s.handleEngagementStop)
-	mux.HandleFunc("POST /api/asides", s.handleCreateAside)          // 🎯T136: register purpose=aside in fleet
-	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)   // 🎯T152: dismiss fleet aside on target filed
-	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)    // 🎯T200: domain portfolio groups
-	mux.HandleFunc("GET /api/frontier", s.handleFrontier)            // 🎯T131: live bullseye frontier table
-	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph) // 🎯T185: unachieved dependency Mermaid
+	mux.HandleFunc("POST /api/asides", s.handleCreateAside)                  // 🎯T136: register purpose=aside in fleet
+	mux.HandleFunc("GET /api/asides/history", s.handleListClosedAsides)      // 🎯T270: closed/dismissed aside archive
+	mux.HandleFunc("DELETE /api/asides/{id}", s.handleDeleteAside)           // 🎯T152: dismiss fleet aside on target filed
+	mux.HandleFunc("POST /api/ideas", s.handleCaptureIdea)                   // 🎯T325.3: durable idea intake
+	mux.HandleFunc("GET /api/ideas", s.handleListIdeas)                      // 🎯T325.3: listable idea surface
+	mux.HandleFunc("PATCH /api/ideas/{id}", s.handleTriageIdea)              // 🎯T325.3: triage ceremony
+	mux.HandleFunc("POST /api/ideas/{id}/triage", s.handleTriageIdea)        // alias for clients without PATCH
+	mux.HandleFunc("GET /api/rsi/dispositions", s.handleRSIDispositions)     // 🎯T354: owner-visible coach judgments
+	mux.HandleFunc("GET /api/security/status", s.handleSecurityStatus)       // 🎯T335
+	mux.HandleFunc("POST /api/security/confined-exec", s.handleConfinedExec) // 🎯T335 writ vertical
+	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)            // 🎯T200: domain portfolio groups
+	mux.HandleFunc("GET /api/frontier", s.handleFrontier)                    // 🎯T131: live bullseye frontier table
+	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph)         // 🎯T185: unachieved dependency Mermaid
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
@@ -561,6 +638,25 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		"version": s.version,
 	})
 
+	// 🎯T27.5: seed the client with the aggregated provider model so it
+	// does not wait for the next live event to learn feed state.
+	s.mu.RLock()
+	feedHub := s.providerFeeds
+	s.mu.RUnlock()
+	if feedHub != nil {
+		s.writeJSON(conn, ctx, map[string]any{
+			"type":  "provider_model",
+			"model": feedHub.Snapshot(),
+			"feeds": feedHub.Statuses(),
+		})
+	}
+
+	// 🎯T27.6: seed the composed provider view so the client renders
+	// provider surfaces immediately rather than waiting for a change.
+	if msg, ok := s.providerViewMessage(); ok {
+		s.writeJSON(conn, ctx, msg)
+	}
+
 	// Read loop: process messages from remote.
 	for {
 		mt, data, err := conn.Read(ctx)
@@ -648,6 +744,7 @@ func (s *Server) HandleUserMessage(text string) {
 	}
 	s.mu.Lock()
 	s.waiting = true
+	s.overseerOwnerTurn = true // 🎯T291: remote owner speech is an owner turn
 	s.mu.Unlock()
 	s.Broadcast(map[string]any{"type": "status", "state": "thinking"})
 	if err := proc.Send(text); err != nil {
@@ -673,6 +770,9 @@ func (s *Server) HandleAction(action, value string) {
 
 	case action == "disconnect":
 		slog.Info("disconnect requested via action")
+
+	case s.relayProviderAction(action, value):
+		// 🎯T27.6: routed to the owning provider by surface namespace.
 
 	default:
 		slog.Warn("unknown action", "action", action)

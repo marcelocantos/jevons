@@ -123,25 +123,84 @@ Remote phone/tablet clients reach jevonsd through a
 bind is loopback-only — the daemon is not opened to the LAN). Same-Mac
 browser use does **not** need this step.
 
-1. Run a pigeon relay you control (or use a shared one with a token you
-   hold). See the pigeon README for `https://carrier-pigeon.fly.dev` and
-   self-hosting. Jevonsd accepts the token via `--relay-token` or the
-   `TERN_TOKEN` environment variable.
-2. Mint a pairing artifact and QR (writes
-   `~/.jevons/credential.json` and prints the artifact):
+#### Auth model (URL + token)
+
+| Piece | Role |
+|---|---|
+| **Relay URL** | HTTPS base of *your* pigeon relay (WebTransport entry `GET /pigeon`) |
+| **Bearer token** | Optional shared secret on the relay. When set, backends must present it to **register**. Mint it yourself; never message the author for one. |
+| **Pairing credential** | Separate E2E layer (`PairingArtifact` / `~/.jevons/credential.json`). The relay forwards ciphertext only. |
+
+| Surface | Env / flag | Notes |
+|---|---|---|
+| Pigeon relay process | `PIGEON_TOKEN` | If **unset**, registration is open (anyone can register a backend). Prefer setting a token you mint. |
+| `jevonsd` | `--relay-token` or `TERN_TOKEN` | Pass the **same** value you set as `PIGEON_TOKEN` on the relay. |
+
+`TERN_TOKEN` is a historical env name on the Jevons side; it is **not** a
+private author secret and is **not** issued by messaging the project
+owner. You choose the string when you start the relay.
+
+#### Scope: self-host only (🎯T156)
+
+Device pair for a second user is **self-host-only**. There is **no**
+published free-tier / self-serve multi-tenant pigeon that a stranger can
+mint without their own infrastructure. The hostname
+`https://carrier-pigeon.fly.dev` appears in flag help and historical
+examples as the *shape* of a relay URL; it is the author's private Fly
+app (not a public free tier) and not something you obtain a token for by
+contacting the author.
+
+#### Self-host a relay (copy-paste from public pigeon docs)
+
+Public steps live in the pigeon README sections **Running the Relay
+Server** and **Configuration**
+(`https://github.com/marcelocantos/pigeon#running-the-relay-server`,
+`https://github.com/marcelocantos/pigeon#configuration`) covering
+`PIGEON_TOKEN`, `--cert` / `--key`, and Fly `fly.toml` + `Dockerfile`.
+Minimal local path:
+
+```bash
+git clone https://github.com/marcelocantos/pigeon.git
+cd pigeon
+go build -o pigeon ./cmd/pigeon
+
+# Mint your own token — do not ask the author for TERN_TOKEN / PIGEON_TOKEN.
+export PIGEON_TOKEN="$(openssl rand -hex 32)"
+export TERN_TOKEN="$PIGEON_TOKEN"   # same value for jevonsd
+
+# Dev: self-signed cert (or pass production --cert / --key PEM files).
+PORT=4433 ./pigeon
+# Production TLS example from pigeon docs:
+#   ./pigeon --cert cert.pem --key key.pem
+# Optional: deploy *your own* Fly app from pigeon fly.toml + Dockerfile
+# (set fly secrets set PIGEON_TOKEN=… yourself). Not carrier-pigeon.
+```
+
+Health check once listening: `curl -k https://127.0.0.1:4433/health`
+(or your public URL without `-k` when using real certs). Point
+`--relay` at that base URL (e.g. `https://relay.example.com` or a
+tunnelled `https://…`).
+
+#### Pair and run jevonsd against *your* relay
+
+1. Mint a pairing artifact and QR (writes `~/.jevons/credential.json`
+   and prints the artifact):
 
    ```bash
-   jevonsd --pair <device-instance-id> --relay https://carrier-pigeon.fly.dev
+   export TERN_TOKEN="$PIGEON_TOKEN"   # if not already exported
+   jevonsd --pair <device-instance-id> \
+     --relay https://YOUR-RELAY-HOST \
+     --relay-token "$TERN_TOKEN"
    ```
 
-3. Scan the QR with the **Jevon** iOS app (source under `ios/`; build with
+2. Scan the QR with the **Jevon** iOS app (source under `ios/`; build with
    `make ios` + Xcode — there is no App Store / TestFlight binary yet).
    The app UI prompts you to scan the QR from `jevonsd`.
-4. Start the daemon with the same relay settings so the paired channel
-   stays encrypted:
+3. Start the daemon with the same relay URL + token so the paired channel
+   stays registered:
 
    ```bash
-   jevonsd --relay https://carrier-pigeon.fly.dev \
+   jevonsd --relay https://YOUR-RELAY-HOST \
      --relay-token "$TERN_TOKEN" \
      --instance-id <stable-id>
    ```
@@ -150,10 +209,11 @@ Out-of-band server records (e.g. from `pigeon pair`) can be ingested with
 `jevonsd --add-credential <path-to-server-record.json>`.
 
 **Honest residual (🎯T47 / 🎯T14):** polished one-shot onboarding
-(`jevons --init`, App Store install, public multi-tenant relay for
-strangers) is not shipped yet. Browser-on-the-same-Mac is the supported
+(`jevons --init`, App Store install, public multi-tenant free-tier relay
+for strangers) is not shipped. Browser-on-the-same-Mac is the supported
 docs-only path today; device pairing works for developers who can build
-the iOS client and operate a relay.
+the iOS client and **self-host a pigeon relay** (steps above — no author
+messaging for tokens).
 
 ### Configuration
 
@@ -167,7 +227,10 @@ overseer_name: jevons    # the CEO agent's name
 bind_addr: 127.0.0.1     # loopback-only by default; remote devices use the pigeon relay
 port: 13705
 workdir: "."             # default workdir for workers
-provider: ""             # default agent backend: grok | claude | … ("" = JEVONS_PROVIDER or grok)
+provider: ""             # default agent backend for the WHOLE fleet — overseer, workers,
+                         # asides, tasks: grok | claude | … ("" = JEVONS_PROVIDER or grok).
+                         # `claude` is exercised end-to-end by `make test-journey PROVIDER=claude`;
+                         # see agents-guide.md "Running the whole fleet on Claude" for what differs.
 model: ""                # default worker model ("" = provider default)
 overseer_model: ""       # "" = same as model
 state_dir: ~/.jevons

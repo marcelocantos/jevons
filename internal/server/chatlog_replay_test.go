@@ -87,6 +87,91 @@ func TestChatReplaysFromJevonsLogWithDeadOverseer(t *testing.T) {
 	}
 }
 
+// TestHistoryMetaWorkingLevel reports current in-flight level on connect (🎯T272).
+// Open-turn (waiting) → working:true; sealed idle → working:false.
+func TestHistoryMetaWorkingLevel(t *testing.T) {
+	dir := t.TempDir()
+	l, err := chatlog.Open(filepath.Join(dir, "chatlog", "jevons.jsonl"))
+	if err != nil {
+		t.Fatalf("chatlog.Open: %v", err)
+	}
+	defer l.Close()
+
+	s := New("test", dir)
+	s.SetChatLog(l)
+	s.BroadcastChat(`{"type":"user","message":{"role":"user","content":"hi"}}`)
+
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	readMeta := func(wantWorking bool) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/chat", nil)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer conn.CloseNow()
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case <-deadline:
+				t.Fatal("timeout waiting for history_meta")
+			default:
+			}
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			raw := string(data)
+			if !strings.Contains(raw, `"type":"history_meta"`) && !strings.Contains(raw, `"type": "history_meta"`) {
+				continue
+			}
+			if wantWorking {
+				if !strings.Contains(raw, `"working":true`) && !strings.Contains(raw, `"working": true`) {
+					t.Fatalf("want working:true in meta, got %s", raw)
+				}
+			} else {
+				if strings.Contains(raw, `"working":true`) || strings.Contains(raw, `"working": true`) {
+					t.Fatalf("want working:false, got %s", raw)
+				}
+				if !strings.Contains(raw, `"working":false`) && !strings.Contains(raw, `"working": false`) {
+					t.Fatalf("meta missing working field: %s", raw)
+				}
+			}
+			return
+		}
+	}
+
+	// Idle: sealed history only.
+	if s.overseerWorkingLevel() {
+		t.Fatal("expected idle level before waiting")
+	}
+	readMeta(false)
+
+	// Open owner-turn level (🎯T291: waiting alone / fleet chew is not working).
+	s.mu.Lock()
+	s.waiting = true
+	s.overseerOwnerTurn = true
+	s.mu.Unlock()
+	if !s.overseerWorkingLevel() {
+		t.Fatal("expected working level when owner turn waiting")
+	}
+	readMeta(true)
+
+	// Fleet-only chew must not report working on history_meta.
+	s.mu.Lock()
+	s.overseerOwnerTurn = false
+	s.mu.Unlock()
+	if s.overseerWorkingLevel() {
+		t.Fatal("fleet-only waiting must not be owner working level")
+	}
+	readMeta(false)
+}
+
 // TestChatLogSurvivesServerRestart: a second Server over the same log
 // path (daemon restart) replays what the first one recorded.
 func TestChatLogSurvivesServerRestart(t *testing.T) {

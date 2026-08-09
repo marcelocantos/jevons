@@ -282,10 +282,100 @@ func FlattenWorkChildren(byParent map[string][]WorkerIdleRef) []WorkerIdleRef {
 	return out
 }
 
-// HasOpenMissionForIdle is the default open-mission heuristic for enter-idle:
-// work purpose with any TargetID, or work purpose always (PO may reap).
-// Callers may tighten with MissionOpen(targetID).
-func HasOpenMissionForIdle(d claudia.AgentDef, missionOpen func(targetID string) bool) bool {
+// CountWorkChildren returns how many purpose=work agents list parentName as Parent.
+// Used by the enter-idle open-mission gate (🎯T244) so unbound POs with zero
+// work children are not treated as open mission.
+func CountWorkChildren(defs []claudia.AgentDef, parentName string) int {
+	parentName = strings.TrimSpace(parentName)
+	if parentName == "" {
+		return 0
+	}
+	n := 0
+	for _, c := range defs {
+		if strings.TrimSpace(c.Parent) != parentName {
+			continue
+		}
+		purpose := strings.TrimSpace(c.Purpose)
+		if purpose == "" {
+			purpose = claudia.PurposeWork
+		}
+		if purpose == claudia.PurposeWork {
+			n++
+		}
+	}
+	return n
+}
+
+// IsEngagedWorkChild reports whether a purpose=work child is engaged on open
+// mission work: target_id bound (and still open via missionOpen if set)
+// and/or phase=working (mid-turn WIP). 🎯T330.
+//
+// phaseByName and missionOpen may be nil. Empty phase does not count as WIP;
+// closed missions (missionOpen false) do not count as bound-open.
+func IsEngagedWorkChild(c claudia.AgentDef, phase string, missionOpen func(targetID string) bool) bool {
+	purpose := strings.TrimSpace(c.Purpose)
+	if purpose == "" {
+		purpose = claudia.PurposeWork
+	}
+	if purpose != claudia.PurposeWork {
+		return false
+	}
+	tid := strings.TrimSpace(c.TargetID)
+	if tid != "" {
+		if missionOpen != nil {
+			return missionOpen(tid)
+		}
+		return true
+	}
+	// Open mission WIP: mid-turn implementer (the T329 failure mode).
+	return strings.ToLower(strings.TrimSpace(phase)) == "working"
+}
+
+// CountEngagedWorkChildren counts purpose=work children of parentName that are
+// engaged (bound open target and/or phase=working). 🎯T330.
+// phaseByName and missionOpen may be nil.
+func CountEngagedWorkChildren(defs []claudia.AgentDef, parentName string, phaseByName func(string) string, missionOpen func(string) bool) int {
+	parentName = strings.TrimSpace(parentName)
+	if parentName == "" {
+		return 0
+	}
+	n := 0
+	for _, c := range defs {
+		if strings.TrimSpace(c.Parent) != parentName {
+			continue
+		}
+		phase := ""
+		if phaseByName != nil {
+			phase = phaseByName(c.Name)
+		}
+		if IsEngagedWorkChild(c, phase, missionOpen) {
+			n++
+		}
+	}
+	return n
+}
+
+// SuppressParentIdleThrash is the pure 🎯T330 gate: a PO/boss with ≥1 engaged
+// work children must not be re-continue-thrashed by idle-pressure or
+// worker-idle open-mission classification (sleep-OK while implementers work).
+func SuppressParentIdleThrash(name string, engagedChildCount int) bool {
+	return looksLikePOOrBoss(name) && engagedChildCount > 0
+}
+
+// HasOpenMissionForIdle is the default open-mission heuristic for enter-idle
+// and idle-pressure eligibility.
+//
+// purpose=work with a bound TargetID is open (callers may tighten with
+// missionOpen). Unbound implementers stay open so the parent PO can reap.
+//
+// 🎯T244: unbound PO/boss-shaped agents with zero work children are NOT open
+// mission — long-lived standing idle must not thrash the overseer.
+//
+// 🎯T330: PO/boss with ≥1 engaged work children is sleep-OK — not open mission
+// for parent re-continue thrash; children own progress. Residual: orphan PO
+// idle with zero children still uses T244; open-frontier kick remains T325.1.
+// engagedChildCount 0 preserves pre-T330 behaviour when callers omit it.
+func HasOpenMissionForIdle(d claudia.AgentDef, missionOpen func(targetID string) bool, workChildCount, engagedChildCount int) bool {
 	purpose := d.Purpose
 	if purpose == "" {
 		purpose = claudia.PurposeWork
@@ -293,9 +383,17 @@ func HasOpenMissionForIdle(d claudia.AgentDef, missionOpen func(targetID string)
 	if purpose != claudia.PurposeWork {
 		return false
 	}
+	// 🎯T330: supervising engaged implementers ⇒ sleep-OK, no parent thrash.
+	if SuppressParentIdleThrash(d.Name, engagedChildCount) {
+		return false
+	}
 	tid := strings.TrimSpace(d.TargetID)
 	if tid == "" {
-		return true // unbound work still visible to PO
+		// 🎯T244: unbound PO/boss with no work children = standing idle, not open mission.
+		if looksLikePOOrBoss(d.Name) && workChildCount <= 0 {
+			return false
+		}
+		return true // unbound implementer, or PO with only unengaged kids (reap)
 	}
 	if missionOpen != nil {
 		return missionOpen(tid)

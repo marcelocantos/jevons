@@ -215,10 +215,10 @@ test('T175 frontier cells use InstantTip not native title=', function () {
 
 test('T174 frontier table width constrained to RHS container', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  // Table must not grow past #frontier-body: fixed layout + max-width 100%.
+  // Table must not grow past #frontier-body: max-width 100% + parent min-width:0.
+  // 🎯T340: table-layout:auto (content-sized chrome); still constrained to pane.
   assert.ok(/#frontier-table\s*\{[^}]*max-width:\s*100%/.test(html), 'table max-width 100%');
-  assert.ok(/#frontier-table\s*\{[^}]*table-layout:\s*fixed/.test(html), 'table-layout fixed');
-  assert.ok(!/#frontier-table\s*\{[^}]*table-layout:\s*auto/.test(html), 'not table-layout auto');
+  assert.ok(/#frontier-table\s*\{[^}]*width:\s*100%/.test(html), 'table width 100%');
   // Name cell ellipsizes within remaining space (overflow chain).
   assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*overflow:\s*hidden/.test(html), 'name overflow hidden');
   assert.ok(/#frontier-table\s+\.ft-name\s*\{[^}]*text-overflow:\s*ellipsis/.test(html), 'name ellipsis');
@@ -234,22 +234,34 @@ test('T174 frontier table width constrained to RHS container', function () {
   assert.ok(!/min-width:\s*\d+(px|rem|em|ch)/.test(tableBlock[0]), 'table has no forcing min-width');
 });
 
-test('T177 chrome cols use explicit rem widths — not 1%/99% under fixed layout', function () {
+test('T177 chrome cols content-sized — not fixed 1%/99% collapse', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  // Explicit rem/ch widths for chrome; name flexes (no width:99%).
-  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*[\d.]+(rem|ch)/.test(html), 'id explicit rem/ch');
-  assert.ok(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*[\d.]+(rem|ch)/.test(html), 'status explicit rem/ch');
-  assert.ok(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*[\d.]+(rem|ch)/.test(html), 'fanout explicit rem/ch');
-  // Forbid collapsed chrome under table-layout:fixed (owner fail: ID paints mid-name).
-  assert.ok(!/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*1%/.test(html), 'id rejects width:1%');
-  assert.ok(!/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*1%/.test(html), 'status rejects width:1%');
-  assert.ok(!/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*1%/.test(html), 'fanout rejects width:1%');
-  assert.ok(!/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*99%/.test(html), 'name rejects width:99%');
-  // Name takes remaining space without a width claim.
-  assert.ok(!/#frontier-table\s+\.ft-name\s*\{[^}]*width:\s*[\d.]+%/.test(html), 'name has no percent width');
-  // Id ellipsizes long ids (residual: very long target ids).
-  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*overflow:\s*hidden/.test(html), 'id overflow hidden');
-  assert.ok(/#frontier-table\s+\.ft-id\s*\{[^}]*text-overflow:\s*ellipsis/.test(html), 'id ellipsis');
+  const tableBlock = html.match(/#frontier-table\s*\{[^}]*\}/);
+  const idBlock = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*\}/);
+  const nameBlock = html.match(/#frontier-table\s+\.ft-name\s*\{[^}]*\}/);
+  const stBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
+  const fanBlock = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*\}/);
+  assert.ok(tableBlock, 'frontier-table rule');
+  assert.ok(idBlock, 'ft-id rule');
+  assert.ok(nameBlock, 'ft-name rule');
+  assert.ok(stBlock, 'ft-status rule');
+  assert.ok(fanBlock, 'ft-fanout rule');
+  // 🎯T340: auto layout + width:1% nowrap chrome (content min) + name width:100% fill.
+  // Forbidden: table-layout:fixed + width:1% chrome + name 99% (T177 owner collapse).
+  assert.ok(/table-layout:\s*auto/.test(tableBlock[0]), 'table-layout auto (content chrome)');
+  assert.ok(/white-space:\s*nowrap/.test(idBlock[0]), 'id nowrap');
+  assert.ok(/width:\s*1%/.test(idBlock[0]) || /width:\s*(max-content|fit-content|min-content|0|1px)/.test(idBlock[0]),
+    'id content-min width, got: ' + idBlock[0]);
+  assert.ok(/width:\s*1%/.test(stBlock[0]) || /width:\s*(max-content|fit-content|min-content|0|1px)/.test(stBlock[0]),
+    'status content-min width');
+  assert.ok(/width:\s*1%/.test(fanBlock[0]) || /width:\s*(max-content|fit-content|min-content|0|1px)/.test(fanBlock[0]),
+    'fanout content-min width');
+  // Name claims remainder (100% fill under auto) — not the fixed-layout 99% collapse pair.
+  assert.ok(/width:\s*100%/.test(nameBlock[0]), 'name width 100% (fill remainder under auto)');
+  assert.ok(!/width:\s*99%/.test(nameBlock[0]), 'name rejects width:99% (T177 collapse pair)');
+  // 🎯T340: id must NOT ellipsize / clip hierarchical ids (owner reject of T332 residual).
+  assert.ok(!/text-overflow:\s*ellipsis/.test(idBlock[0]), 'id has no text-overflow:ellipsis');
+  assert.ok(!/overflow:\s*hidden/.test(idBlock[0]), 'id has no overflow:hidden clip');
   // DOM order still id|name|status|fan (class sequence in row builder).
   const rowBuild = html.indexOf("id.className = 'ft-id'");
   const nameBuild = html.indexOf("name.className = 'ft-name'");
@@ -259,8 +271,9 @@ test('T177 chrome cols use explicit rem widths — not 1%/99% under fixed layout
     'DOM order id|name|status|fan');
 });
 
-// 🎯T179: no small-caps status; tighter id/fanout than T177 (4.5/2.75); dependents tip wiring.
-test('T179 status normal case + tight widths + dependents tip wiring', function () {
+// 🎯T179: no small-caps status; dependents tip wiring.
+// 🎯T340: chrome content-min (not rem/ch clip columns).
+test('T179 status normal case + content chrome + dependents tip wiring', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const statusBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
   assert.ok(statusBlock, 'ft-status rule');
@@ -268,27 +281,86 @@ test('T179 status normal case + tight widths + dependents tip wiring', function 
   assert.ok(!/#frontier-table\s+\.ft-status\s*\{[^}]*font-variant\s*:\s*small-caps/.test(html),
     'no small-caps anywhere on ft-status');
 
-  const idW = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*width:\s*([\d.]+)(rem|ch)/);
-  const fanW = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*width:\s*([\d.]+)(rem|ch)/);
-  const stW = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*width:\s*([\d.]+)(rem|ch)/);
-  assert.ok(idW, 'id width');
-  assert.ok(fanW, 'fanout width');
-  assert.ok(stW, 'status width');
-  // Tighter than T177: id < 4.5rem, fanout < 2.75rem; status ~2rem.
-  if (idW[2] === 'rem') {
-    assert.ok(parseFloat(idW[1]) < 4.5, 'id tighter than 4.5rem, got ' + idW[1]);
+  const idBlock = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*\}/);
+  assert.ok(idBlock, 'ft-id rule');
+  // Reject T331 rem-chasm and T332 7ch+ellipsis clip pattern.
+  const idRem = idBlock[0].match(/width:\s*([\d.]+)rem/);
+  if (idRem) {
+    assert.ok(parseFloat(idRem[1]) < 5.25, 'id rem must not be ≥5.25rem chasm, got ' + idRem[1]);
   }
-  if (fanW[2] === 'rem') {
-    assert.ok(parseFloat(fanW[1]) < 2.75, 'fanout tighter than 2.75rem, got ' + fanW[1]);
-  }
-  if (stW[2] === 'rem') {
-    assert.ok(Math.abs(parseFloat(stW[1]) - 2) < 0.5, 'status ~2rem, got ' + stW[1]);
-  }
+  assert.ok(!/width:\s*7ch/.test(idBlock[0]) || !/text-overflow:\s*ellipsis/.test(idBlock[0]),
+    'reject 7ch+ellipsis clip pattern');
+  assert.ok(/width:\s*1%/.test(idBlock[0]) ||
+    /width:\s*(max-content|fit-content|min-content|0|1px)/.test(idBlock[0]),
+    'id content-min for full hierarchical ids');
 
   // Render passes dependents into formatFanout (not fanout-only).
   assert.ok(html.indexOf('formatFanout(row.fanout, row.id, row.dependents)') >= 0 ||
     /formatFanout\s*\(\s*row\.fanout\s*,\s*row\.id\s*,\s*row\.dependents\s*\)/.test(html),
     'formatFanout receives row.dependents');
+});
+
+// 🎯T340: CSS shape gates + reject T331/T332 failure modes.
+// Real geometry (scrollWidth / text-ink gutters) lives in Playwright
+// scripts/chat-ui-test/t340-frontier-table-layout-test.js — pad-sum alone is theatre.
+test('T340 no id ellipsis clip; content-sized chrome; shared td pad; reject chasm patterns', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const tableBlock = html.match(/#frontier-table\s*\{[^}]*\}/);
+  const tdBlock = html.match(/#frontier-table\s+td\s*\{[^}]*\}/);
+  const idBlock = html.match(/#frontier-table\s+\.ft-id\s*\{[^}]*\}/);
+  const nameBlock = html.match(/#frontier-table\s+\.ft-name\s*\{[^}]*\}/);
+  const stBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
+  const fanBlock = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*\}/);
+  assert.ok(tableBlock, '#frontier-table rule');
+  assert.ok(tdBlock, '#frontier-table td rule');
+  assert.ok(idBlock, 'ft-id rule');
+  assert.ok(nameBlock, 'ft-name rule');
+  assert.ok(stBlock, 'ft-status rule');
+  assert.ok(fanBlock, 'ft-fanout rule');
+
+  // Auto layout for content-min chrome.
+  assert.ok(/table-layout:\s*auto/.test(tableBlock[0]), 'table-layout auto');
+
+  // Shared horizontal padding on every td (not per-column pad-sum theatre).
+  assert.ok(/padding:\s*[\d.]+px\s+[\d.]+px/.test(tdBlock[0]) ||
+    /padding-left:\s*[\d.]+px/.test(tdBlock[0]),
+    'shared td horizontal padding, got: ' + tdBlock[0]);
+
+  // Id: no ellipsis / overflow hidden; content-min; no 7ch+ellipsis; no rem chasm.
+  assert.ok(!/text-overflow:\s*ellipsis/.test(idBlock[0]),
+    'T340: .ft-id must not use text-overflow:ellipsis');
+  assert.ok(!/overflow:\s*hidden/.test(idBlock[0]),
+    'T340: .ft-id must not use overflow:hidden');
+  assert.ok(/overflow:\s*visible/.test(idBlock[0]),
+    'T340: .ft-id overflow visible (or equivalent no-clip)');
+  assert.ok(/white-space:\s*nowrap/.test(idBlock[0]), 'T340: .ft-id nowrap');
+  assert.ok(!/width:\s*7ch/.test(idBlock[0]),
+    'T340: reject width:7ch (border-box pad eats ch → clip)');
+  assert.ok(!/max-width:\s*9ch/.test(idBlock[0]),
+    'T340: reject max-width:9ch clip cap');
+  const idRem = idBlock[0].match(/width:\s*([\d.]+)rem/);
+  if (idRem) {
+    assert.ok(parseFloat(idRem[1]) < 5.25,
+      'reject .ft-id width ≥5.25rem chasm pattern, got ' + idRem[1] + 'rem');
+  }
+
+  // Status/fan content-min chrome; no facing-align glue.
+  assert.ok(/white-space:\s*nowrap/.test(stBlock[0]), 'status nowrap');
+  assert.ok(/white-space:\s*nowrap/.test(fanBlock[0]), 'fanout nowrap');
+  assert.ok(!/text-align:\s*right/.test(stBlock[0]), 'no status text-align:right facing-align');
+  const facingCollapse = /text-align:\s*right/.test(stBlock[0]) && /text-align:\s*left/.test(fanBlock[0]);
+  assert.ok(!facingCollapse, 'reject status-right + fanout-left facing-align collapse');
+
+  // Name ellipsis retained (may still clip long titles).
+  assert.ok(/text-overflow:\s*ellipsis/.test(nameBlock[0]), 'name ellipsis');
+  assert.ok(/width:\s*100%/.test(nameBlock[0]), 'name fills remainder');
+
+  // Pure helper still exported (legacy T332 clamp helper; not product CSS path).
+  assert.strictEqual(typeof FT.maxIdChWidth, 'function', 'maxIdChWidth exported');
+  assert.strictEqual(FT.maxIdChWidth(['T1', 'T254.1', 'T262.3']), 6, 'T254.1 → 6ch');
+  assert.strictEqual(FT.maxIdChWidth(['T1'], 4, 9), 4, 'short id floors at minCh');
+  assert.strictEqual(FT.maxIdChWidth(['T1000.12.3'], 4, 9), 9, 'long id caps at maxCh');
+  assert.strictEqual(FT.maxIdChWidth(null, 4, 9), 4, 'null ids → minCh');
 });
 
 // 🎯T181: rich markdown target card includes acceptance + multi-section markers.
@@ -484,17 +556,188 @@ test('playKickoffRequest messages jevons-po with full brief (🎯T182)', functio
   assert.strictEqual(FT.buildPlayKickoffText({}), '');
 });
 
+// 🎯T255: resolvePlayPO binds to selected product PO (not hard-coded jevons-po).
+test('T255 resolvePlayPO selected PO / worker parent / residual default', function () {
+  assert.strictEqual(typeof FT.resolvePlayPO, 'function');
+  assert.strictEqual(typeof FT.isProductOwnerName, 'function');
+  assert.strictEqual(typeof FT.playKickoffTitle, 'function');
+  assert.strictEqual(FT.isProductOwnerName('yourworld2-po'), true);
+  assert.strictEqual(FT.isProductOwnerName('jevons-po'), true);
+  assert.strictEqual(FT.isProductOwnerName('jv-t44.1-worker'), false);
+  assert.strictEqual(FT.isProductOwnerName('jevons'), false);
+  assert.strictEqual(FT.isProductOwnerName(''), false);
+
+  const agents = [
+    { name: 'jevons', purpose: 'overseer', workdir: '/Users/x/.jevons/jevons' },
+    {
+      name: 'jevons-po',
+      purpose: 'work',
+      parent: 'jevons',
+      workdir: '/Users/x/work/github.com/marcelocantos/jevons',
+    },
+    {
+      name: 'yourworld2-po',
+      purpose: 'work',
+      parent: 'jevons',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    {
+      name: 'yw2-worker',
+      purpose: 'work',
+      parent: 'yourworld2-po',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    {
+      name: 'jv-worker',
+      purpose: 'work',
+      parent: 'jevons-po',
+      workdir: '/Users/x/work/github.com/marcelocantos/jevons',
+    },
+    {
+      name: 'yw2-boss',
+      purpose: 'work',
+      parent: 'yourworld2-po',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    {
+      name: 'yw2-leaf',
+      purpose: 'work',
+      parent: 'yw2-boss',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+  ];
+
+  // No selection / overseer → residual default jevons-po.
+  assert.strictEqual(FT.resolvePlayPO(), 'jevons-po');
+  assert.strictEqual(FT.resolvePlayPO({}), 'jevons-po');
+  assert.strictEqual(FT.resolvePlayPO({ selectedAgent: null, agents: agents }), 'jevons-po');
+  assert.strictEqual(FT.resolvePlayPO({ selectedAgent: '', agents: agents }), 'jevons-po');
+  assert.strictEqual(FT.resolvePlayPO({ selectedAgent: 'jevons', agents: agents }), 'jevons-po');
+
+  // Selected is product owner → that PO.
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'yourworld2-po', agents: agents }),
+    'yourworld2-po');
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'jevons-po', agents: agents }),
+    'jevons-po');
+
+  // Selected worker → parent PO.
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'yw2-worker', agents: agents }),
+    'yourworld2-po');
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'jv-worker', agents: agents }),
+    'jevons-po');
+
+  // Walk parent chain (leaf → boss → PO).
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'yw2-leaf', agents: agents }),
+    'yourworld2-po');
+
+  // Explicit po override wins.
+  assert.strictEqual(
+    FT.resolvePlayPO({
+      po: 'explicit-po',
+      selectedAgent: 'yourworld2-po',
+      agents: agents,
+    }),
+    'explicit-po');
+
+  // Dual-agent fixture: playKickoffRequest hits selected product PO, not jevons-po.
+  const ywReq = FT.playKickoffRequest(
+    { id: 'T44.1', name: 'Externalize overseer prompt', status: 'Converging' },
+    { selectedAgent: 'yourworld2-po', agents: agents }
+  );
+  assert.strictEqual(ywReq.blocked, false);
+  assert.strictEqual(ywReq.po, 'yourworld2-po');
+  assert.strictEqual(ywReq.url, '/api/agents/yourworld2-po/send');
+  assert.ok(ywReq.body.text.indexOf('parent=yourworld2-po') >= 0, ywReq.body.text);
+  assert.ok(ywReq.body.text.indexOf('T44.1') >= 0);
+
+  const jvReq = FT.playKickoffRequest(
+    { id: 'T255', name: 'Play PO routing', status: 'Converging' },
+    { selectedAgent: 'jevons-po', agents: agents }
+  );
+  assert.strictEqual(jvReq.po, 'jevons-po');
+  assert.strictEqual(jvReq.url, '/api/agents/jevons-po/send');
+  assert.ok(jvReq.body.text.indexOf('parent=jevons-po') >= 0);
+
+  // Worker selection routes kickoff to parent PO send path.
+  const workerReq = FT.playKickoffRequest(
+    { id: 'T99', name: 'Worker selection', status: 'Converging' },
+    { selectedAgent: 'yw2-worker', agents: agents }
+  );
+  assert.strictEqual(workerReq.po, 'yourworld2-po');
+  assert.strictEqual(workerReq.url, '/api/agents/yourworld2-po/send');
+
+  // Tooltip title shows real recipient.
+  assert.strictEqual(FT.playKickoffTitle('yourworld2-po'), 'Start work via yourworld2-po');
+  assert.strictEqual(FT.playKickoffTitle('jevons-po'), 'Start work via jevons-po');
+  assert.strictEqual(FT.playKickoffTitle(''), 'Start work via jevons-po');
+  assert.strictEqual(FT.playKickoffTitle(null), 'Start work via jevons-po');
+
+  // Name-only (not in list) still honors *-po shape.
+  assert.strictEqual(
+    FT.resolvePlayPO({ selectedAgent: 'other-product-po', agents: [] }),
+    'other-product-po');
+});
+
+// 🎯T255: index.html wires selectedAgent into playKickoff + real tooltip recipient.
+test('T255 index.html play path uses resolvePlayPO + selectedAgent', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+
+  // Tooltip not hard-coded to jevons-po alone.
+  assert.ok(html.indexOf("playBtn.title = 'Start work via jevons-po'") < 0,
+    'must not hard-code play tooltip to jevons-po');
+  assert.ok(html.indexOf('playKickoffTitle') >= 0 || html.indexOf('resolvePlayPO') >= 0,
+    'play title uses resolvePlayPO / playKickoffTitle');
+  assert.ok(html.indexOf('data-play-po') >= 0, 'data-play-po on button for probe');
+
+  // playFrontierTarget passes selection + agents into playKickoffRequest.
+  const start = html.indexOf('function playFrontierTarget');
+  assert.ok(start >= 0, 'playFrontierTarget defined');
+  // Include preceding T255 comment block.
+  const regionStart = Math.max(0, start - 200);
+  const end = html.indexOf('\nfunction ', start + 10);
+  const body = html.slice(regionStart, end > start ? end : start + 3500);
+  assert.ok(body.indexOf('selectedAgent') >= 0, 'playFrontierTarget reads selectedAgent');
+  assert.ok(body.indexOf('playKickoffRequest(row, playOpts)') >= 0 ||
+    /playKickoffRequest\s*\(\s*row\s*,/.test(body),
+    'playKickoffRequest receives opts with selection');
+  assert.ok(body.indexOf('T255') >= 0, 'T255 marked on playFrontierTarget');
+  assert.ok(body.indexOf('frontierAgentsCache') >= 0 || body.indexOf('lastFleetAgents') >= 0,
+    'agents list passed for parent-PO walk');
+
+  // Render path sets title from resolvePlayPO.
+  const renderStart = html.indexOf('function renderFrontierTable');
+  assert.ok(renderStart >= 0);
+  const renderEnd = html.indexOf('function loadFrontier', renderStart);
+  const region = html.slice(renderStart, renderEnd > renderStart ? renderEnd : renderStart + 9000);
+  assert.ok(region.indexOf('resolvePlayPO') >= 0, 'render resolves play PO');
+  assert.ok(region.indexOf('selectedAgent') >= 0, 'render uses selectedAgent for play title');
+});
+
 // 🎯T182: CSS tight status/fan + play column + wiring (mockable send path).
 test('T182 tight status/fan CSS + play cell + send path wiring', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
   const stBlock = html.match(/#frontier-table\s+\.ft-status\s*\{[^}]*\}/);
   const fanBlock = html.match(/#frontier-table\s+\.ft-fanout\s*\{[^}]*\}/);
+  const tdBlock182 = html.match(/#frontier-table\s+td\s*\{[^}]*\}/);
   assert.ok(stBlock, 'ft-status rule');
   assert.ok(fanBlock, 'ft-fanout rule');
-  // Near-zero pad between status and fanout.
-  assert.ok(/padding-right:\s*0/.test(stBlock[0]), 'status padding-right 0: ' + stBlock[0]);
-  assert.ok(/padding-left:\s*0/.test(fanBlock[0]), 'fanout padding-left 0: ' + fanBlock[0]);
+  assert.ok(tdBlock182, 'td shared pad rule');
+  // 🎯T340: gutter comes from shared #frontier-table td H pad (not zero-pad glue).
+  // Pad-sum on column rules alone is theatre; real geometry is Playwright T340.
+  const sharedH = tdBlock182[0].match(/padding:\s*[\d.]+px\s+([\d.]+)px/);
+  assert.ok(sharedH && parseFloat(sharedH[1]) > 0 && parseFloat(sharedH[1]) <= 8,
+    'shared td H pad >0 and ≤8px (status↔fan gutter), got: ' + tdBlock182[0]);
+  // Status must not zero-out horizontal padding against fan.
+  assert.ok(!/padding:\s*0\b/.test(stBlock[0]) && !/padding-right:\s*0/.test(stBlock[0]),
+    'status does not force zero pad: ' + stBlock[0]);
+  assert.ok(!/padding:\s*0\b/.test(fanBlock[0]) && !/padding-left:\s*0/.test(fanBlock[0]),
+    'fanout does not force zero pad: ' + fanBlock[0]);
 
   assert.ok(/#frontier-table\s+\.ft-play\s*\{/.test(html), 'ft-play column CSS');
   assert.ok(/#frontier-table\s+\.ft-play-btn\s*\{/.test(html) || html.indexOf('ft-play-btn') >= 0,
@@ -711,14 +954,18 @@ test('T185/T190 index.html Graph control + large panel + multi-diagram pack CSS'
   assert.ok(/#mermaid-viz-panel\s+\.mvp-body\s+svg\s*\{[^}]*max-width:\s*100%/.test(html)
     || /#mermaid-viz-panel \.mvp-body svg \{[^}]*max-width: 100%/.test(html),
     'mvp-body svg max-width 100%');
-  // 🎯T190: multi-diagram wrap-grid pack blocks.
+  // 🎯T190/T276 residual: multi-diagram pack renderer remains (not owner default — T280).
   assert.ok(html.indexOf('mvp-pack') >= 0, 'mvp-pack class');
   assert.ok(html.indexOf('mvp-pack-block') >= 0, 'mvp-pack-block');
-  assert.ok(html.indexOf('auto-fill') >= 0, 'wrap-grid columns');
+  assert.ok(html.indexOf('function fitMermaidPackToPane') >= 0
+    || html.indexOf('planMultiDiagramPackScaleToFill') >= 0,
+    'T276 pack+scale path');
   assert.ok(html.indexOf('function renderMermaidDiagramPackInPanel') >= 0,
-    'multi-diagram renderer');
-  assert.ok(html.indexOf('renderMermaidDiagramPackInPanel') >= 0
-    && html.indexOf('model.diagrams') >= 0, 'openFrontierGraph uses diagrams pack');
+    'multi-diagram renderer (residual)');
+  assert.ok(html.indexOf('resolveFrontierGraphOpenPlan') >= 0
+    || html.indexOf('single-primary') >= 0
+    || html.indexOf('renderMermaidSourceInPanel') >= 0,
+    'openFrontierGraph uses single-primary default (T280)');
   // Open path: fetch graph API + openFrontierGraph + wire button.
   assert.ok(html.indexOf('/api/frontier/graph') >= 0, 'graph API path');
   assert.ok(html.indexOf('function openFrontierGraph') >= 0, 'openFrontierGraph defined');
@@ -861,6 +1108,490 @@ test('playKickoff blocked when engaged or closed (🎯T222)', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('req.blocked') >= 0 || html.indexOf('frontier_play_blocked') >= 0,
     'UI handles blocked kickoff');
+});
+
+// 🎯T278: optimistic kickoff-submitted chrome (spinner) before PO reply / engage.
+test('T278 kickoff submitted set + playChromeSpec spinning', function () {
+  assert.strictEqual(typeof FT.addKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.removeKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.isKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.pruneKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.applyKickoffSubmitted, 'function');
+  assert.strictEqual(typeof FT.playChromeMode, 'function');
+  assert.strictEqual(typeof FT.playChromeSpec, 'function');
+  assert.strictEqual(FT.PLAY_MODE_SUBMITTED, 'submitted');
+
+  // Empty / invalid id no-ops.
+  assert.deepStrictEqual(FT.addKickoffSubmitted({}, null), {});
+  assert.strictEqual(FT.isKickoffSubmitted({}, 'T278'), false);
+
+  // Mark submitted immediately (sync set ops — independent of async PO).
+  let set = FT.addKickoffSubmitted({}, '🎯T278');
+  assert.strictEqual(FT.isKickoffSubmitted(set, 'T278'), true);
+  assert.strictEqual(FT.isKickoffSubmitted(set, '🎯T278'), true);
+  set = FT.addKickoffSubmitted(set, 'T10.2');
+  assert.strictEqual(FT.isKickoffSubmitted(set, 'T10.2'), true);
+  assert.strictEqual(FT.isKickoffSubmitted(set, 'T999'), false);
+
+  // Overlay on free rows only.
+  const rows = FT.applyKickoffSubmitted([
+    { id: 'T278', name: 'Spin', engaged: false },
+    { id: 'T10.2', name: 'Peer', engaged: true, engaged_agents: ['w'] },
+    { id: 'T1', name: 'Free', engaged: false },
+  ], set);
+  assert.strictEqual(rows[0].kickoff_submitted, true);
+  assert.strictEqual(rows[1].kickoff_submitted, false); // engaged wins; no submitted flag
+  assert.strictEqual(rows[2].kickoff_submitted, false);
+
+  // Chrome mode priority: stop > submitted > play.
+  assert.strictEqual(FT.playChromeMode({ engaged: true, kickoff_submitted: true }), 'stop');
+  assert.strictEqual(FT.playChromeMode({ kickoff_submitted: true }), 'submitted');
+  assert.strictEqual(FT.playChromeMode({ engaged: false }), 'play');
+
+  const sub = FT.playChromeSpec({ id: 'T278', kickoff_submitted: true });
+  assert.strictEqual(sub.mode, 'submitted');
+  assert.strictEqual(sub.spinning, true);
+  assert.strictEqual(sub.disabled, true);
+  assert.ok(sub.className.indexOf('ft-submitted-btn') >= 0, sub.className);
+  assert.ok(/submitted/i.test(sub.ariaLabel), sub.ariaLabel);
+  assert.ok(/submitted|PO/i.test(sub.title), sub.title);
+  assert.strictEqual(sub.glyph, '');
+
+  const stop = FT.playChromeSpec({ id: 'T10.2', engaged: true });
+  assert.strictEqual(stop.mode, 'stop');
+  assert.strictEqual(stop.spinning, false);
+  assert.strictEqual(stop.glyph, FT.STOP_GLYPH);
+
+  const free = FT.playChromeSpec({ id: 'T1' }, { po: 'jevons-po' });
+  assert.strictEqual(free.mode, 'play');
+  assert.strictEqual(free.spinning, false);
+  assert.strictEqual(free.glyph, FT.PLAY_GLYPH);
+
+  // Prune submitted when engagement lands.
+  const pruned = FT.pruneKickoffSubmitted(set, [
+    { id: 'T278', engaged: false },
+    { id: 'T10.2', engaged: true },
+  ]);
+  assert.strictEqual(FT.isKickoffSubmitted(pruned, 'T278'), true);
+  assert.strictEqual(FT.isKickoffSubmitted(pruned, 'T10.2'), false);
+
+  set = FT.removeKickoffSubmitted(pruned, 'T278');
+  assert.strictEqual(FT.isKickoffSubmitted(set, 'T278'), false);
+});
+
+test('T278 index.html immediate submitted spinner on play path', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+
+  // CSS spinner for submitted chrome.
+  assert.ok(html.indexOf('ft-submitted-btn') >= 0, 'submitted btn class');
+  assert.ok(html.indexOf('ft-spin') >= 0, 'spin element class');
+  assert.ok(html.indexOf('ft-kickoff-spin') >= 0 || /@keyframes\s+ft-kickoff-spin/.test(html),
+    'spin keyframes');
+  assert.ok(html.indexOf('frontierKickoffSubmitted') >= 0, 'submitted set state');
+  assert.ok(html.indexOf('applyKickoffSubmitted') >= 0, 'render overlays submitted');
+  assert.ok(html.indexOf('pruneKickoffSubmitted') >= 0, 'render prunes on engage');
+  assert.ok(html.indexOf('applyFrontierPlayBtnChrome') >= 0, 'paint helper');
+  assert.ok(html.indexOf('playChromeSpec') >= 0, 'uses pure chrome spec');
+
+  // playFrontierTarget marks + paints BEFORE async send (order oracle).
+  const fnStart = html.indexOf('function playFrontierTarget');
+  assert.ok(fnStart >= 0, 'playFrontierTarget present');
+  const fnEnd = html.indexOf('function stopFrontierEngagement', fnStart);
+  const body = html.slice(fnStart, fnEnd > fnStart ? fnEnd : fnStart + 6000);
+  const markIdx = body.indexOf('addKickoffSubmitted');
+  const paintIdx = body.indexOf('applyFrontierPlayBtnChrome');
+  const sendIdx = body.indexOf('sendFn(req.url, req.body)');
+  assert.ok(markIdx >= 0, 'marks submitted set');
+  assert.ok(paintIdx >= 0, 'paints chrome');
+  assert.ok(sendIdx >= 0, 'calls send');
+  assert.ok(markIdx < sendIdx, 'mark before send: mark=' + markIdx + ' send=' + sendIdx);
+  assert.ok(paintIdx < sendIdx, 'paint before send: paint=' + paintIdx + ' send=' + sendIdx);
+  // Success path must NOT restore play (keep spinner until engage).
+  assert.ok(body.indexOf('Kickoff submitted') >= 0 || body.indexOf('kickoff_submitted') >= 0,
+    'submitted language in play path');
+  // Failure restores free chrome via removeKickoffSubmitted.
+  assert.ok(body.indexOf('removeKickoffSubmitted') >= 0, 'clears submitted on error');
+  // data-play-mode for inspectability.
+  assert.ok(html.indexOf('data-play-mode') >= 0, 'data-play-mode attribute');
+  assert.ok(html.indexOf('data-kickoff-submitted') >= 0, 'row data-kickoff-submitted');
+});
+
+// 🎯T253: Frontier tab follows selected agent workdir ledger.
+test('T253 resolveFrontierCwd + frontierAPIURL pure', function () {
+  assert.strictEqual(typeof FT.resolveFrontierCwd, 'function');
+  assert.strictEqual(typeof FT.frontierAPIURL, 'function');
+
+  const agents = [
+    { name: 'jevons', purpose: 'overseer', workdir: '/Users/x/.jevons/jevons' },
+    { name: 'jevons-po', purpose: 'work', workdir: '/Users/x/work/github.com/marcelocantos/jevons' },
+    {
+      name: 'yourworld2-po',
+      purpose: 'work',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    { name: 'no-ledger-po', purpose: 'work', workdir: '' },
+    { name: 'orphan-worker', purpose: 'work' },
+  ];
+
+  // No selection / overseer / missing → empty cwd (server primary).
+  assert.strictEqual(FT.resolveFrontierCwd(null, agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('', agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('jevons', agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('unknown-agent', agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('no-ledger-po', agents), '');
+  assert.strictEqual(FT.resolveFrontierCwd('orphan-worker', agents), '');
+
+  // PO / worker with workdir → that path.
+  assert.strictEqual(
+    FT.resolveFrontierCwd('jevons-po', agents),
+    '/Users/x/work/github.com/marcelocantos/jevons');
+  assert.strictEqual(
+    FT.resolveFrontierCwd('yourworld2-po', agents),
+    '/Users/x/work/github.com/marcelocantos/yourworld2');
+
+  // Fixture: two ledgers — selection change switches cwd.
+  const cwdA = FT.resolveFrontierCwd('jevons-po', agents);
+  const cwdB = FT.resolveFrontierCwd('yourworld2-po', agents);
+  assert.notStrictEqual(cwdA, cwdB);
+  assert.strictEqual(FT.frontierAPIURL(FT.API_PATH, cwdA),
+    '/api/frontier?cwd=' + encodeURIComponent(cwdA));
+  assert.strictEqual(FT.frontierAPIURL(FT.API_PATH, cwdB),
+    '/api/frontier?cwd=' + encodeURIComponent(cwdB));
+  assert.strictEqual(FT.frontierAPIURL(FT.API_PATH, ''), '/api/frontier');
+  assert.strictEqual(FT.frontierAPIURL(FT.GRAPH_API_PATH, cwdB),
+    '/api/frontier/graph?cwd=' + encodeURIComponent(cwdB));
+  // Spaces / special chars encoded.
+  assert.strictEqual(
+    FT.frontierAPIURL('/api/frontier', '/tmp/My Repo'),
+    '/api/frontier?cwd=' + encodeURIComponent('/tmp/My Repo'));
+});
+
+test('T253 index.html loadFrontier/graph pass selected agent workdir', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const loadStart = html.indexOf('function loadFrontier');
+  assert.ok(loadStart >= 0, 'loadFrontier defined');
+  const loadEnd = html.indexOf('\nfunction ', loadStart + 10);
+  const loadBody = html.slice(loadStart, loadEnd > loadStart ? loadEnd : loadStart + 2500);
+  assert.ok(loadBody.indexOf('resolveFrontierCwd') >= 0, 'loadFrontier resolves cwd');
+  assert.ok(loadBody.indexOf('frontierAPIURL') >= 0, 'loadFrontier builds API URL with cwd');
+  assert.ok(loadBody.indexOf('selectedAgent') >= 0, 'loadFrontier reads selection');
+  assert.ok(loadBody.indexOf('T253') >= 0, 'T253 marked on loadFrontier');
+
+  const graphStart = html.indexOf('function openFrontierGraph');
+  assert.ok(graphStart >= 0, 'openFrontierGraph defined');
+  const graphEnd = html.indexOf('\nfunction ', graphStart + 10);
+  const graphBody = html.slice(graphStart, graphEnd > graphStart ? graphEnd : graphStart + 2000);
+  assert.ok(graphBody.indexOf('resolveFrontierCwd') >= 0, 'graph resolves cwd');
+  assert.ok(graphBody.indexOf('frontierAPIURL') >= 0, 'graph builds URL with cwd');
+
+  // Selection change rebinds frontier (PO switch / deselect / overseer).
+  const selStart = html.indexOf('function selectAgent');
+  assert.ok(selStart >= 0);
+  const selEnd = html.indexOf('\nfunction ', selStart + 10);
+  const selBody = html.slice(selStart, selEnd > selStart ? selEnd : selStart + 3500);
+  assert.ok(selBody.indexOf('loadFrontier') >= 0, 'selectAgent reloads frontier');
+  // Overseer path and deselect path both reload (primary cwd).
+  assert.ok((selBody.match(/loadFrontier\s*\(/g) || []).length >= 2,
+    'selectAgent reloads on overseer/deselect and agent select');
+});
+
+// 🎯T274: oversized single component (orthograph-shaped) re-splits for Mermaid.
+test('T274 splitOversizedComponents caps nodes per diagram', function () {
+  assert.strictEqual(FT.MERMAID_MAX_NODES_PER_DIAGRAM, 24);
+  assert.strictEqual(FT.targetRootFamily('T1.2.3'), 'T1');
+  assert.strictEqual(FT.targetRootFamily('T10'), 'T10');
+  // Small component passes through.
+  const small = FT.splitOversizedComponents([['T1', 'T1.1', 'T2']], 24);
+  assert.strictEqual(small.length, 1);
+  assert.strictEqual(small[0].length, 3);
+  // Mega component spanning many root families.
+  const mega = [];
+  for (let i = 1; i <= 15; i++) {
+    mega.push('T' + i);
+    for (let j = 1; j <= 3; j++) mega.push('T' + i + '.' + j);
+  }
+  assert.strictEqual(mega.length, 60);
+  const parts = FT.splitOversizedComponents([mega], FT.MERMAID_MAX_NODES_PER_DIAGRAM);
+  assert.ok(parts.length >= 2, 're-split 60-node mega, got ' + parts.length);
+  let total = 0;
+  parts.forEach(function (p) {
+    assert.ok(p.length <= FT.MERMAID_MAX_NODES_PER_DIAGRAM, 'part len ' + p.length);
+    total += p.length;
+  });
+  assert.strictEqual(total, 60);
+});
+
+test('T274 buildActiveDependencyDiagrams re-splits orthograph-sized chain', function () {
+  const targets = [];
+  for (let i = 1; i <= 30; i++) {
+    const row = { id: 'T' + i, name: 'Node ' + i };
+    if (i > 1) row.depends_on = [{ id: 'T' + (i - 1) }];
+    targets.push(row);
+  }
+  const pack = FT.buildActiveDependencyDiagrams(targets);
+  assert.strictEqual(pack.nodeCount, 30);
+  assert.ok(pack.diagrams.length >= 2,
+    '30-node chain must produce multiple diagrams, got ' + pack.diagrams.length);
+  pack.diagrams.forEach(function (d) {
+    assert.ok(d.nodeCount <= FT.MERMAID_MAX_NODES_PER_DIAGRAM,
+      d.id + ' has ' + d.nodeCount + ' nodes');
+    assert.ok(d.mermaid && d.mermaid.indexOf('flowchart') >= 0, d.id + ' has mermaid');
+  });
+});
+
+test('T274 index.html pauses history hydrate while large graph open', function () {
+  const html = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  assert.ok(html.indexOf('function isLargeGraphPanelOpen') >= 0, 'isLargeGraphPanelOpen');
+  assert.ok(html.indexOf('shouldPauseHistoryHydrate') >= 0, 'uses pure pause helper');
+  assert.ok(html.indexOf('isLargeGraphPanelOpen()') >= 0, 'wired into hydrate path');
+  assert.ok(html.indexOf('withMermaidRenderTimeout') >= 0, 'render timeout wired');
+  // loadEarlier must refuse while large graph open (no Loading earlier flash).
+  const leStart = html.indexOf('async function loadEarlier');
+  assert.ok(leStart >= 0);
+  const leEnd = html.indexOf('\nfunction ', leStart + 10);
+  const leBody = html.slice(leStart, leEnd > leStart ? leEnd : leStart + 2500);
+  assert.ok(leBody.indexOf('isLargeGraphPanelOpen') >= 0, 'loadEarlier checks large panel');
+  // showHistoryLoading suppresses overlay while large panel open.
+  const shStart = html.indexOf('function showHistoryLoading');
+  assert.ok(shStart >= 0);
+  const shEnd = html.indexOf('\nfunction ', shStart + 10);
+  const shBody = html.slice(shStart, shEnd > shStart ? shEnd : shStart + 1200);
+  assert.ok(shBody.indexOf('isLargeGraphPanelOpen') >= 0, 'showHistoryLoading suppresses');
+});
+
+// 🎯T267: target-ask auto-selects owning PO + highlights Frontier row.
+test('T267 extractTargetIDs + detectTargetAsk + planTargetAskFocus', function () {
+  assert.strictEqual(typeof FT.extractTargetIDs, 'function');
+  assert.strictEqual(typeof FT.detectTargetAsk, 'function');
+  assert.strictEqual(typeof FT.resolveOwningPOForTarget, 'function');
+  assert.strictEqual(typeof FT.rowMatchesHighlight, 'function');
+  assert.strictEqual(typeof FT.planTargetAskFocus, 'function');
+
+  assert.deepStrictEqual(FT.extractTargetIDs('Talk about 🎯T267 and 🎯T10.2 please'), ['T267', 'T10.2']);
+  assert.deepStrictEqual(FT.extractTargetIDs('no targets here T1 bare'), []);
+  assert.strictEqual(FT.detectTargetAsk('status: 🎯T267 is fine'), null);
+
+  const marker = FT.detectTargetAsk('__TARGET_ASK__:T267\nShould we accept residual X?');
+  assert.ok(marker, 'explicit marker detects');
+  assert.strictEqual(marker.targetId, 'T267');
+  assert.strictEqual(marker.po, '');
+
+  const withPO = FT.detectTargetAsk('__TARGET_ASK__:T10.2|yourworld2-po\nDecide?');
+  assert.strictEqual(withPO.targetId, 'T10.2');
+  assert.strictEqual(withPO.po, 'yourworld2-po');
+
+  const atPO = FT.detectTargetAsk('__TARGET_ASK__:T10.2@yourworld2-po');
+  assert.strictEqual(atPO.po, 'yourworld2-po');
+
+  const prose = FT.detectTargetAsk(
+    'Needs-owner call on 🎯T262.4 — please decide whether to accept the packet.');
+  assert.ok(prose, 'needs-owner prose detects');
+  assert.strictEqual(prose.targetId, 'T262.4');
+
+  const agents = [
+    { name: 'jevons', purpose: 'overseer', workdir: '/Users/x/.jevons/jevons' },
+    { name: 'jevons-po', purpose: 'work', workdir: '/Users/x/work/github.com/marcelocantos/jevons' },
+    {
+      name: 'yourworld2-po',
+      purpose: 'work',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+    {
+      name: 'yw2-worker',
+      purpose: 'work',
+      parent: 'yourworld2-po',
+      target_id: 'T10.2',
+      workdir: '/Users/x/work/github.com/marcelocantos/yourworld2',
+    },
+  ];
+
+  // Fixture target-ask (marker) → default jevons-po when no engagement.
+  const planA = FT.planTargetAskFocus({
+    text: '__TARGET_ASK__:T267\nOwner: confirm residual for context chrome?',
+    agents: agents,
+  });
+  assert.ok(planA, 'fixture plan');
+  assert.strictEqual(planA.targetId, 'T267');
+  assert.strictEqual(planA.highlightId, 'T267');
+  assert.strictEqual(planA.po, 'jevons-po');
+  assert.strictEqual(planA.tab, 'frontier');
+
+  // Engaged worker on T10.2 → owning PO is yourworld2-po.
+  const planB = FT.planTargetAskFocus({
+    text: '__TARGET_ASK__:T10.2\nPlease confirm kickoff scope.',
+    agents: agents,
+  });
+  assert.strictEqual(planB.po, 'yourworld2-po');
+  assert.strictEqual(planB.highlightId, 'T10.2');
+
+  // Marker preferred PO wins over engagement residual.
+  const planC = FT.planTargetAskFocus({
+    text: '__TARGET_ASK__:T10.2|jevons-po',
+    agents: agents,
+  });
+  assert.strictEqual(planC.po, 'jevons-po');
+
+  // Direct targetId fixture (smoke driver without prose).
+  const planD = FT.planTargetAskFocus({ targetId: '🎯T267', agents: agents });
+  assert.strictEqual(planD.targetId, 'T267');
+  assert.strictEqual(planD.po, 'jevons-po');
+
+  assert.strictEqual(FT.rowMatchesHighlight({ id: 'T267' }, 'T267'), true);
+  assert.strictEqual(FT.rowMatchesHighlight({ id: 'T267' }, '🎯T267'), true);
+  assert.strictEqual(FT.rowMatchesHighlight({ id: 'T10.2' }, 'T267'), false);
+  assert.strictEqual(FT.rowMatchesHighlight(null, 'T267'), false);
+});
+
+test('T267 index.html wires focusTargetAsk + highlight class + seal path', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('function focusTargetAsk') >= 0, 'focusTargetAsk defined');
+  assert.ok(html.indexOf('function maybeFocusTargetAsk') >= 0, 'maybeFocusTargetAsk defined');
+  assert.ok(html.indexOf('frontierHighlightId') >= 0, 'highlight state');
+  assert.ok(html.indexOf('ft-highlight') >= 0, 'highlight CSS/class');
+  assert.ok(html.indexOf('data-frontier-highlight') >= 0, 'highlight data attr');
+  assert.ok(html.indexOf('data-target-id') >= 0, 'row target id attr');
+  assert.ok(html.indexOf('maybeFocusTargetAsk') >= 0, 'seal path can focus target ask');
+  assert.ok(html.indexOf('window.focusTargetAsk') >= 0, 'smoke seam exposed');
+  assert.ok(html.indexOf('T267') >= 0, 'T267 marker in product');
+
+  // selectAgent accepts opts.tab so target-ask can land on Frontier (not only Transcript).
+  const selStart = html.indexOf('function selectAgent');
+  assert.ok(selStart >= 0);
+  const selEnd = html.indexOf('\nfunction ', selStart + 10);
+  const selBody = html.slice(selStart, selEnd > selStart ? selEnd : selStart + 4000);
+  assert.ok(selBody.indexOf('opts.tab') >= 0, 'selectAgent honors tab preference for T267');
+  // Default owner pick still lands on Transcript (T208 residual).
+  assert.ok(
+    /setRhsBottomTab\([\s\S]*?tabAfterAgentSelect\(true\)/.test(selBody) ||
+      /setRhsBottomTab\([\s\S]*?['"]transcript['"]/.test(selBody),
+    'selectAgent default still transcript on open inspect');
+
+  // render applies highlight from frontierHighlightId.
+  const renderStart = html.indexOf('function renderFrontierTable');
+  assert.ok(renderStart >= 0);
+  const renderEnd = html.indexOf('function loadFrontier', renderStart);
+  const renderBody = html.slice(renderStart, renderEnd > renderStart ? renderEnd : renderStart + 8000);
+  assert.ok(renderBody.indexOf('frontierHighlightId') >= 0, 'render reads highlight id');
+  assert.ok(renderBody.indexOf('ft-highlight') >= 0, 'render paints highlight class');
+  assert.ok(renderBody.indexOf('scrollIntoView') >= 0, 'highlight row scrolled into view');
+
+  // focusTargetAsk selects PO + frontier tab.
+  const focusStart = html.indexOf('function focusTargetAsk');
+  const focusEnd = html.indexOf('\nfunction ', focusStart + 10);
+  const focusBody = html.slice(focusStart, focusEnd > focusStart ? focusEnd : focusStart + 3500);
+  assert.ok(focusBody.indexOf('planTargetAskFocus') >= 0, 'uses pure plan');
+  assert.ok(focusBody.indexOf('selectAgent') >= 0, 'selects owning PO');
+  assert.ok(focusBody.indexOf('frontier') >= 0, 'switches to frontier tab');
+  assert.ok(focusBody.indexOf('loadFrontier') >= 0, 'reloads frontier after focus');
+});
+
+// 🎯T280: default Frontier Graph = single primary (not multi tall-empty pack).
+test('T280 pickPrimaryGraphDiagram + resolveFrontierGraphOpenPlan single default', function () {
+  assert.strictEqual(typeof FT.pickPrimaryGraphDiagram, 'function');
+  assert.strictEqual(typeof FT.resolveFrontierGraphOpenPlan, 'function');
+
+  const dSmall = {
+    id: 'c1', kind: 'component', title: 'Small', mermaid: 'flowchart TB\n  A-->B\n',
+    nodeCount: 4, edgeCount: 3,
+  };
+  const dLarge = {
+    id: 'c0', kind: 'component', title: 'Large', mermaid: 'flowchart TB\n  X-->Y\n  Y-->Z\n',
+    nodeCount: 24, edgeCount: 40,
+  };
+  const dOrphans = {
+    id: 'orphans', kind: 'orphans', title: 'Orphans', mermaid: 'flowchart TB\n  O1\n',
+    nodeCount: 8, edgeCount: 0,
+  };
+  // Pick largest by nodes (then edges).
+  const primary = FT.pickPrimaryGraphDiagram([dSmall, dLarge, dOrphans]);
+  assert.ok(primary, 'picks a primary');
+  assert.strictEqual(primary.id, 'c0');
+  assert.strictEqual(FT.pickPrimaryGraphDiagram([]), null);
+  assert.strictEqual(FT.pickPrimaryGraphDiagram(null), null);
+
+  // Empty model.
+  const empty = FT.resolveFrontierGraphOpenPlan({ available: false, diagrams: [], mermaid: '' });
+  assert.strictEqual(empty.mode, 'empty');
+
+  // Single diagram → single mode.
+  const one = FT.resolveFrontierGraphOpenPlan({
+    available: true,
+    diagrams: [dLarge],
+    mermaid: dLarge.mermaid,
+    nodeCount: 24,
+    edgeCount: 40,
+  });
+  assert.strictEqual(one.mode, 'single');
+  assert.strictEqual(one.mermaid, dLarge.mermaid);
+  assert.ok(one.diagramCount === 1);
+
+  // 🎯T294 supersedes the T280 single-primary default: opening one component
+  // of three left a wide flat strip alone in a huge pane. Default is the pack.
+  const multi = FT.resolveFrontierGraphOpenPlan({
+    available: true,
+    diagrams: [dSmall, dLarge, dOrphans],
+    mermaid: '%% jevons-frontier-pack pack=wrap-grid diagrams=3 %%\n' + dSmall.mermaid,
+    nodeCount: 36,
+    edgeCount: 43,
+  });
+  assert.strictEqual(multi.mode, 'pack', 'T294 owner default packs every component');
+  assert.strictEqual(multi.primary.id, 'c0', 'primary still identified for status/pin');
+  assert.strictEqual(multi.diagrams.length, 3);
+  assert.strictEqual(multi.diagramCount, 3);
+  assert.ok(/3 components/.test(multi.statusNote), multi.statusNote);
+
+  // Single-primary remains reachable as an explicit view (T280 residual).
+  const primaryOnly = FT.resolveFrontierGraphOpenPlan({
+    available: true,
+    diagrams: [dSmall, dLarge, dOrphans],
+    mermaid: 'joined',
+    nodeCount: 36,
+    edgeCount: 43,
+  }, { preferPrimary: true });
+  assert.strictEqual(primaryOnly.mode, 'single-primary');
+  assert.strictEqual(primaryOnly.mermaid, dLarge.mermaid);
+  assert.ok(/primary of 3/.test(primaryOnly.statusNote), primaryOnly.statusNote);
+
+  // Joined pack blob without diagrams → empty (not unrenderable multi dump).
+  const joinedOnly = FT.resolveFrontierGraphOpenPlan({
+    available: true,
+    diagrams: [],
+    mermaid: '%% jevons-frontier-pack pack=wrap-grid diagrams=2 %%\nflowchart TB\nA-->B\nflowchart TB\nC-->D\n',
+  });
+  assert.strictEqual(joinedOnly.mode, 'empty');
+});
+
+test('T294 index.html openFrontierGraph packs by plan and shouts payload errors', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const ofgStart = html.indexOf('function openFrontierGraph');
+  assert.ok(ofgStart >= 0, 'openFrontierGraph defined');
+  const ofgEnd = html.indexOf('\nfunction ', ofgStart + 10);
+  const ofg = html.slice(ofgStart, ofgEnd > ofgStart ? ofgEnd : ofgStart + 9000);
+  assert.ok(ofg.indexOf('T294') >= 0, 'T294 marked');
+  assert.ok(ofg.indexOf('resolveFrontierGraphOpenPlan') >= 0, 'uses pure open plan');
+  assert.ok(ofg.indexOf('scaleToFill') >= 0, 'scale-to-fill for single path');
+  assert.ok(ofg.indexOf('renderMermaidSourceInPanel') >= 0, 'single source renderer');
+  assert.ok(ofg.indexOf('renderMermaidDiagramPackInPanel') >= 0, 'pack renderer wired');
+  // Must not route multi solely via `if (hasDiagrams) { renderMermaidDiagramPack… }`
+  // without the open-plan resolver (the T276 trainwreck default).
+  assert.ok(
+    !/if\s*\(\s*hasDiagrams\s*\)\s*\{\s*return\s+renderMermaidDiagramPackInPanel/.test(ofg),
+    'must not unconditional pack on hasDiagrams'
+  );
+  // 🎯T294 fail class (b): a payload-level error (HTTP 200 + `error`) must take
+  // the loud fetch-error body, never renderMermaidPanelEmpty's paste shell.
+  const emptyBranch = ofg.indexOf("openPlan.mode === 'empty'");
+  assert.ok(emptyBranch >= 0, 'empty branch present');
+  const errGuard = ofg.indexOf('payloadErr');
+  assert.ok(errGuard > emptyBranch, 'payload error guarded inside the empty branch');
+  assert.ok(
+    errGuard < ofg.indexOf('renderMermaidPanelEmpty', emptyBranch),
+    'payload error handled BEFORE falling through to the empty paste shell'
+  );
+  assert.ok(
+    ofg.indexOf('renderMermaidPanelFetchError') > emptyBranch,
+    'payload error uses the loud panel'
+  );
 });
 
 // 🎯T230: frontier re-render must not kill tips while pointer is over card.

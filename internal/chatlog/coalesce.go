@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
 // terminalStops match chat_events.js TERMINAL_STOPS — seal a turn.
@@ -143,6 +145,13 @@ func CoalesceStreamLines(lines []string) []string {
 	// legacyOpen is the key of the unlabeled open stream, or "".
 	legacyOpen := ""
 	legacyN := 0
+	// openByWire maps wire stream_id → current open streams map key.
+	// 🎯T242: after a terminal seal, the same wire stream_id must open a
+	// new stream instance. Daemon restarts reuse s1,s2,… so joining all
+	// historical fragments under one id merged silent + visible turns and
+	// silentresponse.Is wiped the whole body (replies flash then vanish).
+	openByWire := make(map[string]string)
+	wireGen := 0
 	// lineIsAssistantFragment[i] = stream key if line i is absorbed into a stream.
 	lineIsAssistantFragment := make([]string, len(lines))
 
@@ -154,6 +163,39 @@ func CoalesceStreamLines(lines []string) []string {
 		st = &streamAcc{key: key, firstIdx: idx, streamID: wireID}
 		streams[key] = st
 		return st
+	}
+
+	// openWireStream returns the map key for this wire stream_id, minting a
+	// new generation when the prior instance was already terminal-sealed.
+	// Always consult streams[] so a cleared openByWire (system settle) cannot
+	// re-bind "id:sN" onto an already-sealed generation (🎯T242).
+	openWireStream := func(wireID string, idx int) string {
+		if cur, ok := openByWire[wireID]; ok {
+			if st := streams[cur]; st != nil && st.stop == "" {
+				return cur
+			}
+		}
+		base := "id:" + wireID
+		if st, ok := streams[base]; !ok {
+			ensureStream(base, wireID, idx)
+			openByWire[wireID] = base
+			return base
+		} else if st.stop == "" {
+			openByWire[wireID] = base
+			return base
+		}
+		// base already sealed — allocate a new generation key.
+		var key string
+		for {
+			wireGen++
+			key = fmt.Sprintf("id:%s#%d", wireID, wireGen)
+			if _, exists := streams[key]; !exists {
+				break
+			}
+		}
+		ensureStream(key, wireID, idx)
+		openByWire[wireID] = key
+		return key
 	}
 
 	markEdgeOpen := func() {
@@ -175,6 +217,7 @@ func CoalesceStreamLines(lines []string) []string {
 				}
 			}
 			legacyOpen = ""
+			openByWire = make(map[string]string)
 			continue
 		}
 
@@ -192,6 +235,7 @@ func CoalesceStreamLines(lines []string) []string {
 				}
 			}
 			legacyOpen = ""
+			openByWire = make(map[string]string)
 			continue
 		}
 
@@ -209,8 +253,7 @@ func CoalesceStreamLines(lines []string) []string {
 
 		var key string
 		if wireID != "" {
-			key = "id:" + wireID
-			ensureStream(key, wireID, i)
+			key = openWireStream(wireID, i)
 		} else {
 			if legacyOpen == "" {
 				legacyOpen = fmt.Sprintf("legacy-%d", legacyN)
@@ -232,6 +275,8 @@ func CoalesceStreamLines(lines []string) []string {
 			if key == legacyOpen {
 				legacyOpen = ""
 			}
+			// Keep openByWire pointing at this sealed key; next fragment with
+			// the same wire id will mint a new generation (🎯T242).
 		}
 	}
 
@@ -259,13 +304,25 @@ func CoalesceStreamLines(lines []string) []string {
 		if stop == "" {
 			stop = "end_turn"
 		}
+		// 🎯T240: sealed turn whose concatenated text is silent — emit
+		// empty body only (history/replay display path). Durable journal
+		// is not rewritten; this is a view filter.
+		body := st.acc.String()
+		var content []any
+		if silentresponse.Is(body) {
+			content = []any{}
+		} else if body != "" {
+			content = []any{
+				map[string]any{"type": "text", "text": body},
+			}
+		} else {
+			content = []any{}
+		}
 		msg := map[string]any{
 			"type": "assistant",
 			"message": map[string]any{
-				"role": "assistant",
-				"content": []any{
-					map[string]any{"type": "text", "text": st.acc.String()},
-				},
+				"role":        "assistant",
+				"content":     content,
 				"stop_reason": stop,
 			},
 		}

@@ -4,12 +4,15 @@
 package mcpserver
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/cost"
 )
 
 // 🎯T215: Hermetic Jevons→claudia Session stitch for provider=claude.
@@ -21,6 +24,58 @@ import (
 // Residual (documented): live Claude Session smoke remains optional /
 // claudia 🎯T11.2. This oracle covers registry Provider + Materialized/
 // session handoff fail-closed; it does not replace a real Claude TUI run.
+
+// 🎯T324 hermetic: Launch provider=grok with empty pin → default model bound.
+func TestStitchAgentStartBindsGrokDefaultModel(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	s.SetDefaultProvider(string(claudia.ProviderGrok))
+
+	// Explicit provider=grok so portfolio routing (🎯T325.2) does not
+	// reassign code_implement → claude; this oracle pins T324 model bind.
+	def, existed, _, err := s.stitchAgentStart(
+		"cold-grok", t.TempDir(), "", string(claudia.ProviderGrok), "",
+		"jevons-po", claudia.PurposeWork, "T324",
+	)
+	if err != nil {
+		t.Fatalf("stitchAgentStart: %v", err)
+	}
+	if existed {
+		t.Fatal("mint reported existed")
+	}
+	if def.Provider != claudia.ProviderGrok {
+		t.Fatalf("provider=%s want grok", def.Provider)
+	}
+	if def.Model != cli.DefaultGrokModel {
+		t.Fatalf("Model=%q want default %q (cold Grok must bind condensable model)", def.Model, cli.DefaultGrokModel)
+	}
+	// Resume with empty pin keeps the bound default (not re-emptied).
+	again, existed, _, err := s.stitchAgentStart(
+		"cold-grok", def.WorkDir, "", "", "",
+		"jevons-po", claudia.PurposeWork, "T324",
+	)
+	if err != nil || !existed {
+		t.Fatalf("resume: existed=%v err=%v", existed, err)
+	}
+	if again.Model != cli.DefaultGrokModel {
+		t.Fatalf("resume Model=%q want still %q", again.Model, cli.DefaultGrokModel)
+	}
+	// Explicit pin wins over default.
+	pinned, _, _, err := s.stitchAgentStart(
+		"pinned-grok", t.TempDir(), "grok-4.5-build", string(claudia.ProviderGrok), "",
+		"jevons-po", claudia.PurposeWork, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.Model != "grok-4.5-build" {
+		t.Fatalf("explicit pin Model=%q", pinned.Model)
+	}
+}
 
 func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
@@ -35,8 +90,8 @@ func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 	workdir := t.TempDir()
 	const name = "jv-t215-claude-worker"
 
-	def, existed, err := s.stitchAgentStart(
-		name, workdir, "", string(claudia.ProviderClaude),
+	def, existed, _, err := s.stitchAgentStart(
+		name, workdir, "", string(claudia.ProviderClaude), "",
 		"jevons-po", claudia.PurposeWork, "T215",
 	)
 	if err != nil {
@@ -98,8 +153,8 @@ func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 	}
 
 	// Resume path: empty providerArg + daemon default Grok must keep claude.
-	resumed, existed, err := s.stitchAgentStart(
-		name, workdir, "", "", // no provider override
+	resumed, existed, _, err := s.stitchAgentStart(
+		name, workdir, "", "", "", // no provider override
 		"jevons-po", claudia.PurposeWork, "",
 	)
 	if err != nil {
@@ -142,9 +197,10 @@ func TestClaudeSessionStitchFailsClosedOnGrokClobber(t *testing.T) {
 	}
 }
 
-// Empty provider uses daemon default — claude is not forced everywhere
-// (default fleet remains Grok until product adapters land).
-func TestClaudeSessionStitchDefaultRemainsGrok(t *testing.T) {
+// 🎯T325.2: empty provider on mint uses portfolio routing by task type
+// (work/code_implement → prefer claude when under soft cap), not only
+// the daemon default. Explicit provider= still wins (T148).
+func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -153,14 +209,51 @@ func TestClaudeSessionStitchDefaultRemainsGrok(t *testing.T) {
 	s.SetRegistry(reg)
 	s.SetDefaultProvider(string(claudia.ProviderGrok))
 
-	def, _, err := s.stitchAgentStart(
-		"jv-default-worker", t.TempDir(), "", "",
+	def, _, note, err := s.stitchAgentStart(
+		"jv-portfolio-worker", t.TempDir(), "", "", "",
 		"jevons-po", claudia.PurposeWork, "",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderGrok {
-		t.Fatalf("empty provider → %q, want grok default", def.Provider)
+	if def.Provider != claudia.ProviderClaude {
+		t.Fatalf("empty provider work mint → %q, want claude (portfolio code_implement)", def.Provider)
+	}
+	if note == "" || !strings.Contains(note, "code_implement") {
+		t.Fatalf("portfolio route note missing: %q", note)
+	}
+
+	// task_type=mechanical prefers cheapest capable (grok).
+	mech, _, note, err := s.stitchAgentStart(
+		"jv-mech-worker", t.TempDir(), "", "", "mechanical",
+		"jevons-po", claudia.PurposeWork, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mech.Provider != claudia.ProviderGrok {
+		t.Fatalf("mechanical → %q want grok; note=%q", mech.Provider, note)
+	}
+
+	// Soft-cap spread: fill claude, next code_implement mint → codex.
+	p := s.effectivePortfolio()
+	capClaude := p.SoftCaps[cost.HarnessClaude]
+	for i := 0; i < capClaude; i++ {
+		if err := reg.Register(claudia.AgentDef{
+			Name: fmt.Sprintf("fill-claude-%d", i), WorkDir: t.TempDir(),
+			SessionID: fmt.Sprintf("s%d", i), Provider: claudia.ProviderClaude,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spread, _, note, err := s.stitchAgentStart(
+		"jv-spread-worker", t.TempDir(), "", "", "code_implement",
+		"jevons-po", claudia.PurposeWork, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spread.Provider != claudia.ProviderCodex {
+		t.Fatalf("after claude at soft cap → %q want codex; note=%q", spread.Provider, note)
 	}
 }

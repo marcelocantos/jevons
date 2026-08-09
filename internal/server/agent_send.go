@@ -13,25 +13,38 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
-// 🎯T182: POST /api/agents/{name}/send — fire-and-forget deliver to a fleet
-// agent (HTTP product path for frontier play → jevons-po kickoff). Matches
-// MCP jevons_agent_send semantics: rehydrate if needed, do not wait for reply.
-// Busy ("prompt already in flight") is returned as a clear error — no silent drop.
+// 🎯T182 / 🎯T275: POST /api/agents/{name}/send — fire-and-forget deliver to a
+// fleet agent (HTTP product path for sidebar Transcript, frontier play, asides).
+// Production wires agentSendHook → mcpserver.DeliverAgentMessage so busy turns
+// queue (same as MCP jevons_agent_send) instead of 409 dead-end. Without a
+// hook, bare registry Send remains for hermetic tests; busy still surfaces as
+// a clear error (no silent drop).
 
 // agentSendRequest is the JSON body for POST /api/agents/{name}/send.
+// Origin marks who is speaking (🎯T309.2): "owner" (default) is an owner turn,
+// "agent" is an injected agent/system notification. It only changes overseer
+// framing today — owner turns carry the userTurnPrefix marker and paint an
+// owner bubble, exactly as the /ws/chat wire does (🎯T63).
 type agentSendRequest struct {
-	Text string `json:"text"`
+	Text   string `json:"text"`
+	Origin string `json:"origin,omitempty"`
 }
+
+// Send origins for agentSendRequest.Origin.
+const (
+	sendOriginOwner = "owner"
+	sendOriginAgent = "agent"
+)
 
 // agentSendResponse is returned on success.
 type agentSendResponse struct {
 	Name    string `json:"name"`
-	Status  string `json:"status"` // sent | rehydrated_sent
+	Status  string `json:"status"` // sent | rehydrated_sent | queued | interrupted_*
 	Message string `json:"message,omitempty"`
 }
 
-// agentSendHook is an optional test seam: (name, text) → (status, error).
-// When set, live registry Launch/Send is skipped.
+// agentSendHook is the product/test deliver seam: (name, text) → (status, error).
+// Production: mcpserver.DeliverAgentMessage (queue-on-busy). Tests: stub.
 func (s *Server) SetAgentSendHook(fn func(name, text string) (status string, err error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -39,13 +52,35 @@ func (s *Server) SetAgentSendHook(fn func(name, text string) (status string, err
 }
 
 // sendToNamedAgent rehydrates a registered fleet agent if needed and sends
-// text fire-and-forget (no WaitForResponse). Returns status "sent" or
-// "rehydrated_sent".
+// text fire-and-forget (no WaitForResponse). Returns status from the product
+// hook (sent | queued | rehydrated_sent | …) or bare registry "sent".
+// Origin defaults to owner (see agentSendRequest).
 func (s *Server) sendToNamedAgent(name, text string) (string, error) {
+	return s.sendToNamedAgentAs(name, text, sendOriginOwner)
+}
+
+// sendToNamedAgentAs is the agent-addressed send op of the 🎯T309.2 family:
+// one call reaches ANY agent by name, overseer included. The overseer resolves
+// to the same queue-on-busy delivery /ws/chat uses (never a silent drop), so
+// no send capability is exclusive to the owner wire.
+func (s *Server) sendToNamedAgentAs(name, text, origin string) (string, error) {
 	name = strings.TrimSpace(name)
 	text = strings.TrimSpace(text)
 	if name == "" || text == "" {
 		return "", fmt.Errorf("name and text are required")
+	}
+
+	if s.isOverseerAgent(name) {
+		var err error
+		if origin == sendOriginAgent {
+			err = s.sendToOverseerAsAgent(text)
+		} else {
+			err = s.sendToOverseerAsOwner(text)
+		}
+		if err != nil {
+			return "", err
+		}
+		return "sent", nil
 	}
 
 	s.mu.RLock()
@@ -74,6 +109,8 @@ func (s *Server) sendToNamedAgent(name, text string) (string, error) {
 		rehydrated = true
 	}
 	if err := proc.Send(text); err != nil {
+		// No product hook: busy is a loud failure (not silent). Production
+		// always sets the MCP deliver hook so busy queues instead (🎯T275).
 		return "", err
 	}
 	if rehydrated {
@@ -104,11 +141,18 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := s.sendToNamedAgent(name, text)
+	status, err := s.sendToNamedAgentAs(name, text, strings.TrimSpace(req.Origin))
 	if err != nil {
+		// 🎯T237: structured class for T236 recovery; owner copy beyond bare Internal error.
+		class, ownerMsg := agenterr.ClassifyAndFormat(err)
+		if !class.IsFailure() {
+			ownerMsg = err.Error()
+		}
 		slog.Warn("agent_send_http",
 			"component", "agent_send",
 			"name", name,
+			"failure_class", class.String(),
+			"transient", class.IsTransient(),
 			"err", err.Error(),
 		)
 		// Map common cases to status codes.
@@ -121,7 +165,7 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		} else if agenterr.IsPromptBusy(err) {
 			code = http.StatusConflict
 		}
-		writeJSONError(w, code, msg)
+		writeJSONErrorClass(w, code, ownerMsg, class)
 		return
 	}
 
@@ -130,17 +174,30 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		"name", name,
 		"status", status,
 	)
+	msg := fmt.Sprintf("Message delivered to %q (%s)", name, status)
+	if status == "queued" {
+		msg = fmt.Sprintf("Message queued for %q (prompt in flight; will deliver when the turn ends)", name)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(agentSendResponse{
 		Name:    name,
 		Status:  status,
-		Message: fmt.Sprintf("Message delivered to %q (%s)", name, status),
+		Message: msg,
 	})
 }
 
 // writeJSONError writes {"error": msg} with the given status.
 func writeJSONError(w http.ResponseWriter, code int, msg string) {
+	writeJSONErrorClass(w, code, msg, agenterr.ClassNone)
+}
+
+// writeJSONErrorClass writes {"error": msg, "failure_class": …} for 🎯T237.
+func writeJSONErrorClass(w http.ResponseWriter, code int, msg string, class agenterr.Class) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	body := map[string]string{"error": msg}
+	if class.IsFailure() {
+		body["failure_class"] = class.String()
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }

@@ -101,6 +101,23 @@ function installMockWebSocket({ tokens }) {
       queueMicrotask(() => {
         this.readyState = MockWebSocket.OPEN;
         if (this.onopen) this.onopen({});
+        // Product only flips status-text to "connected" on history_meta
+        // (web/index.html after #61 / 4cbad51). Mirror the server shape from
+        // internal/server/chat.go so the hermetic path exercises the real gate
+        // rather than bypassing it (🎯T322).
+        // Chat socket only — /ws/reload onmessage does location.reload(), and
+        // a history_meta there would infinite-loop page load.
+        if (String(url).indexOf('/ws/chat') !== -1) {
+          this._emit({
+            type: 'history_meta',
+            older: 0,
+            start: 0,
+            total: 0,
+            replay_frames: 0,
+            replay_bytes: 0,
+            replay_ms: 0,
+          });
+        }
       });
       window.__mockSockets = window.__mockSockets || [];
       window.__mockSockets.push(this);

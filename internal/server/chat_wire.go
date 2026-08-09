@@ -5,10 +5,13 @@ package server
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
 // userTurnPrefix marks a turn delivered to the overseer as a genuine owner
@@ -64,20 +67,63 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 
 	case "assistant":
 		if ev.Text != "" {
+			// 🎯T238 / 🎯T240: overseer ops replies marked [silent] must not
+			// paint as owner-visible assistant bubbles. Single-fragment
+			// Is() still applies here; multi-delta streams are suppressed
+			// in DeliverOverseerEvent via accumulated Classify (stream seal).
+			// Worker→overseer silent suppress remains on mcpserver notify.
+			if silentresponse.Is(ev.Text) {
+				// Terminal silent still needs end_turn so the UI clears working.
+				if ev.IsTerminalStop() {
+					b, err := json.Marshal(map[string]any{
+						"type":      "assistant",
+						"timestamp": ts,
+						"message": map[string]any{
+							"role":        "assistant",
+							"content":     []any{},
+							"stop_reason": ev.StopReason,
+						},
+					})
+					if err != nil {
+						return "", false
+					}
+					return string(b), true
+				}
+				return "", false
+			}
+			// 🎯T237: rewrite bare provider failure prose (e.g. "Internal error")
+			// so owner-visible copy carries class; structured slog for T236.
+			displayText := ev.Text
+			var failClass agenterr.Class
+			if class := agenterr.ClassifyText(ev.Text); class.IsFailure() {
+				failClass = class
+				displayText = agenterr.OwnerCopy(class, ev.Text)
+				slog.Warn("provider_failure",
+					"component", "provider_failure",
+					"failure_class", class.String(),
+					"transient", class.IsTransient(),
+					"surface", "chat_wire",
+					"raw", strings.TrimSpace(ev.Text),
+				)
+			}
 			msg := map[string]any{
 				"role": "assistant",
 				"content": []map[string]any{
-					{"type": "text", "text": ev.Text},
+					{"type": "text", "text": displayText},
 				},
 			}
 			if ev.StopReason != "" {
 				msg["stop_reason"] = ev.StopReason
 			}
-			b, err := json.Marshal(map[string]any{
+			wire := map[string]any{
 				"type":      "assistant",
 				"timestamp": ts,
 				"message":   msg,
-			})
+			}
+			if failClass.IsFailure() {
+				wire["failure_class"] = failClass.String()
+			}
+			b, err := json.Marshal(wire)
 			if err != nil {
 				return "", false
 			}

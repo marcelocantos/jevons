@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -57,14 +57,14 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   only with load-bearing examples (not convenient ones). Pure helpers:
   CoverageMap / ClassifyDesignClause / ParseLoadBearingExample.
 - Residual: instructional + pure map model; not a hard daemon block; rich
-  T29 surface and owner process-fidelity gate remain class-3 / follow-ups.
+  🎯T29 surface and owner process-fidelity gate remain class-3 / follow-ups.
 
 ## Fleet spawn (🎯T78)
 - Create child work via jevons_agent_start / jevons_thread_spawn, not Grok spawn_subagent.
 
 ## Worker names: literal dots for hierarchical ids (🎯T197)
 - When a fleet worker name encodes a hierarchical target id, keep **literal dots** — never digit-squash.
-- Correct: jv-t27.2-config for 🎯T27.2. Wrong: jv-t272-config (ambiguous with T272).
+- Correct: jv-t27.2-config for 🎯T27.2. Wrong: jv-t272-config (ambiguous with 🎯T272).
 - Flat ids unchanged: jv-t159-seal stays flat (no sub-target segment to preserve).
 - Names are free-form; this policy applies only when encoding a target id.
 
@@ -75,21 +75,46 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Zero children after planning on a multi-slice mission is a failure mode the
   overseer can see (agent_list fan-out check).
 
+## Frontier = ready set (🎯T262.1)
+- Frontier = unblocked ready leaves. There is no privileged "next ticket."
+- Queue is special case (capacity mutex / owner ritual / hard depends not yet
+  filed) — not the default. Pick among ready leaves is indifferent or policy.
+- Multi-agent default: one work agent per ready leaf, subject to engagement
+  policy. Anti-pattern: framing bullseye as answering "what is the next ticket?"
+- Design: docs/design/frontier-as-ready-set.md. Residual: instructional.
+  Does not unpark 🎯T254 or claim 🎯T262.4 owner accept.
+
 ## Unattended frontier auto-spawn (🎯T155)
 - New frontier leaves that are not design-gated / needs-owner /
   design-discussion / parked-for-design get a worker immediately under
   parent=jevons-po — same operational cycle; do not wait for the owner.
 - Standing rule: kick off all non-design frontier work continuously.
-- Skip design-gated (T112 / T67 / T29-class) and blocked targets until
+- Skip design-gated (🎯T112 / 🎯T67 / 🎯T29-class) and blocked targets until
   unblocked or owner opens design. Residual: instructional.
 
 ## File→spawn same turn (🎯T193)
 - When a Build-plane target is filed (owner target: aside or mid-session),
   PO spawns a named worker under parent=jevons-po in the same turn as
-  filing — not ledger-only. T130 files; T193 spawns.
+  filing — not ledger-only. 🎯T130 files; 🎯T193 spawns.
 - Skip design-gated / blocked-on-human / parked-for-design / pure
   documentation (docs-only may file without spawn). Related: 🎯T155.
 - Residual: instructional; no daemon auto-spawn gate.
+
+## PO proactive-until-empty-then-sleep (🎯T325.1)
+- When the product-scoped frontier has unblocked ready leaves, the PO
+  continues spawn/brief (or equivalent kick) until empty or blocked —
+  not a single one-shot pass that leaves work stranded.
+- When the product frontier is empty (or only design-gated / blocked /
+  parked / already-engaged leaves remain), the PO enters sleep/idle
+  without perpetual create thrash or zombie open-mission heuristics that
+  keep re-spawning noise.
+- PO remains interruptible for owner and overseer directs while sleeping
+  or mid-pass (stays registered; accepts directs).
+- Pure helpers: ClassifyPOProactive / ClassifyFrontierLeaf /
+  POOpenMissionForProactive (compose 🎯T244 no-thrash when sleep + zero
+  work children). Related: 🎯T155 continuous kick-off, 🎯T193 file→spawn.
+- Residual: instructional doctrine + pure classifier; hard daemon sleep
+  gate may follow.
 
 ## PO never implements (🎯T125)
 - If you are a Stratum-1 product owner: spawn-only for Build work — never

@@ -20,6 +20,28 @@ function test(name, fn) {
   }
 }
 
+// 🎯T308 / 🎯T309.1: inspect render path is host wrappers + ConversationWidget.
+// renderAgentInspect is a mount host only; bubble loop / nugget / scroll live
+// on ConversationWidget.mount + conversation_widget.js. Guards that read only
+// renderAgentInspect alone would pass vacuously or fail after the collapse.
+function inspectRenderSource() {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  const body = ['inspectSpecFor', 'paintInspectBubbleBody', 'renderAgentInspect']
+    .map(function (name) {
+      const m = html.match(new RegExp('\\nfunction ' + name + '\\([\\s\\S]*?\\n\\}\\n'));
+      assert.ok(m, name + ' present in index.html');
+      return m[0];
+    })
+    .join('\n');
+  const mount = html.match(/\(function mountConversationWidgets\(\) \{[\s\S]*?\}\)\(\);/);
+  assert.ok(mount, 'mountConversationWidgets IIFE present (T309.1 dual mount)');
+  return {
+    html: html,
+    body: body + '\n' + mount[0] + '\n' + widget,
+  };
+}
+
 test('nextSelection toggles off', function () {
   assert.strictEqual(AT.nextSelection(null, 'po'), 'po');
   assert.strictEqual(AT.nextSelection('po', 'po'), null);
@@ -179,17 +201,17 @@ test('T209 inspect wire path: subscribe on select, no setInterval poll', functio
 
 // 🎯T205 / T157: RHS inspect uses shared paintBody + .msg chrome (not .ai-turn fork).
 test('T205 renderAgentInspect uses paintBody + .msg (not .ai-turn log panel)', function () {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(fn, 'renderAgentInspect present before loadAgentTranscript');
-  const body = fn[0];
+  const { html, body } = inspectRenderSource();
   assert.ok(body.indexOf('paintBody') >= 0,
     'must paint via shared paintBody (main sealed path)');
-  assert.ok(body.indexOf('className = \'msg ') >= 0 || body.indexOf('className = "msg ') >= 0 ||
-    body.indexOf("className = 'msg '") >= 0 || /className\s*=\s*['"]msg\s/.test(body) ||
-    body.indexOf("'msg '") >= 0 || body.indexOf('"msg "') >= 0 || body.indexOf('msg ') >= 0,
-    'must use .msg bubble class');
-  assert.ok(body.indexOf('msg-body') >= 0, 'must use .msg-body');
+  // 🎯T308 supersedes "renderAgentInspect builds its own .msg / .msg-body":
+  // the shell, .msg-body and .msg-time all come from the shared buildMsg.
+  assert.ok(body.indexOf('buildMsg(') >= 0,
+    'bubble shell comes from the shared buildMsg constructor (T308)');
+  assert.ok(!/className\s*=\s*['"]msg[\s'"]/.test(body),
+    'inspect must not hand-build a second .msg shell (T308)');
+  assert.ok(!/className\s*=\s*['"]msg-body['"]/.test(body),
+    'inspect must not hand-build a second .msg-body (T308)');
   assert.ok(body.indexOf('ai-turn') < 0, 'must not build .ai-turn log-panel chrome');
   assert.ok(body.indexOf('applyAfterUpdate') >= 0 || body.indexOf('shouldPin') >= 0,
     'must apply stick/free after update (not unconditional pin only)');
@@ -396,31 +418,35 @@ test('T167 single scroll: no nested overflow-y auto/scroll on turn sections', fu
 // 🎯T221 supersedes prior residual that user dumps stay plain — MD-shaped user
 // and <user_query> injects now mark down on the inspect path only.
 test('T217 renderAgentInspect: assistant→jevons paintBody, never textContent for MD role', function () {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(fn, 'renderAgentInspect present');
-  const body = fn[0];
-  // Role map: assistant must go through inspectToMsgRole → jevons (not user/status).
-  assert.ok(body.indexOf('inspectToMsgRole') >= 0, 'must map via inspectToMsgRole');
-  assert.ok(
-    body.indexOf("line.role === 'assistant' ? 'jevons'") >= 0 ||
-      body.indexOf('inspectToMsgRole(line.role)') >= 0,
-    'assistant maps to jevons for paintBody role',
-  );
-  // Must call paintBody with msgRole for non-user (assistant/status).
-  assert.ok(/paintBody\s*\(\s*d\s*,\s*msgRole\s*,/.test(body),
-    'paintBody(d, msgRole, …) — role must be mapped class, not wire role');
+  const { html, body } = inspectRenderSource();
+  // 🎯T308: role mapping moved into the pure AgentTranscript.inspectBubbleSpec
+  // (asserted directly below) — the DOM path only consumes spec.role.
+  assert.ok(body.indexOf('inspectBubbleSpec') >= 0,
+    'inspect path takes its role/nugget/when decisions from inspectBubbleSpec');
+  assert.strictEqual(AT.inspectBubbleSpec({ role: 'assistant', text: '**hi**' }).role, 'jevons',
+    'assistant maps to jevons for paintBody role');
+  assert.strictEqual(AT.inspectBubbleSpec({ role: 'user', text: 'hi' }).role, 'user');
+  // Must call paintBody with the mapped class role for non-user (assistant/status).
+  assert.ok(/paintBody\s*\(\s*el\s*,\s*role\s*,/.test(body),
+    'paintBody(el, role, …) — role must be mapped class, not wire role');
   // Fallback when paintBody missing: still parseAssistantMarkdown for jevons (T217).
   assert.ok(body.indexOf('parseAssistantMarkdown') >= 0,
     'inspect render has parseAssistantMarkdown fallback for jevons');
-  // 🎯T221: user branch uses paintInspectLineBody (inspect-only MD policy).
-  assert.ok(body.indexOf('paintInspectLineBody') >= 0,
-    'inspect user path uses paintInspectLineBody (T221)');
-  assert.ok(body.indexOf("msgRole === 'user'") >= 0 || body.indexOf('msgRole === "user"') >= 0,
+  // 🎯T221: user body policy still comes from paintInspectLineBody (via the spec).
+  const parseMD = s => '<p>' + String(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') + '</p>';
+  assert.strictEqual(
+    AT.inspectBubbleSpec({ role: 'user', text: '**x**' }, { parseAssistantMarkdown: parseMD })
+      .painted.mode,
+    'html',
+    'inspect user path keeps the paintInspectLineBody MD policy (T221)',
+  );
+  assert.strictEqual(AT.inspectBubbleSpec({ role: 'assistant', text: 'x' }).painted, null,
+    'assistant is NOT pre-painted — it must take the live paintBody path (T217)');
+  assert.ok(body.indexOf("role === 'user'") >= 0 || body.indexOf('role === "user"') >= 0,
     'explicit user branch for inspect MD paint');
   // Must not be the only paint path for all roles: textContent alone for every line.
   // Allowed: textContent for status / last-resort catch — not as sole assistant path.
-  assert.ok(body.indexOf("msgRole === 'jevons'") >= 0 || body.indexOf('msgRole === "jevons"') >= 0,
+  assert.ok(body.indexOf("role === 'jevons'") >= 0 || body.indexOf('role === "jevons"') >= 0,
     'explicit jevons branch for MD paint (not blind textContent)');
   // paintBody itself: jevons uses innerHTML + parseAssistantMarkdown, not textContent.
   const paint = html.match(/function paintBody\([\s\S]*?\nfunction maybeCloseTargetAside/);
@@ -474,13 +500,13 @@ test('T217 paintInspectLinesHTML: fixture **bold**/fence → strong/pre (not raw
   assert.ok(jevonsChunks[0].indexOf('<strong>') >= 0, 'jevons chunk has strong');
   assert.ok(!/Done with \*\*bold\*\* work/.test(jevonsChunks[0]),
     'assistant must not leave literal **bold** in HTML');
-  // Residual: pure system-reminder without MD markers stays plain (no <strong>).
-  const userChunks = out.match(/<div class="msg user">[\s\S]*?<\/div>/g) || [];
-  assert.ok(userChunks.length >= 1);
-  assert.ok(userChunks[0].indexOf('<strong>') < 0,
-    'plain system-reminder residual: no marked <strong>');
-  assert.ok(userChunks[0].indexOf('plain wall only') >= 0,
-    'plain system-reminder text still visible');
+  // 🎯T233: pure system-reminder is a compact inject nugget, not a .msg.user bubble.
+  assert.ok(out.indexOf('inject-nugget') >= 0, 'system-reminder → inject-nugget');
+  assert.ok(out.indexOf('⋯ system') >= 0, 'system-reminder label ⋯ system');
+  assert.ok(out.indexOf('plain wall only') >= 0,
+    'system-reminder detail still available (hover tip)');
+  assert.ok(!/<div class="msg user">[\s\S]*plain wall only/.test(out),
+    'system-reminder must not paint as full user bubble');
   // Role map pure unit (no assistant→user).
   assert.strictEqual(AT.inspectToMsgRole('assistant'), 'jevons');
   assert.strictEqual(AT.inspectToMsgRole('user'), 'user');
@@ -575,12 +601,19 @@ test('T221 owner repro: user_query **Prefer option 2** list → strong/list HTML
 });
 
 test('T221 renderAgentInspect wires paintInspectLineBody for user (inspect-only)', function () {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const fn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(fn, 'renderAgentInspect present');
-  const body = fn[0];
-  assert.ok(body.indexOf('paintInspectLineBody') >= 0,
-    'must call paintInspectLineBody for T221 user policy');
+  const { html, body } = inspectRenderSource();
+  // 🎯T308: the user policy is reached via inspectBubbleSpec (which calls
+  // paintInspectLineBody) and applied through buildMsg's opts.paint.
+  assert.ok(body.indexOf('inspectBubbleSpec') >= 0,
+    'inspect path routes user turns through inspectBubbleSpec (T221 policy)');
+  assert.ok(body.indexOf('spec.painted') >= 0 || body.indexOf('painted') >= 0,
+    'painted user body is applied by the inspect paint callback');
+  const inject = AT.inspectBubbleSpec({
+    role: 'user',
+    text: '<user_query>\n**Prefer option 2**\n</user_query>',
+  }, { parseAssistantMarkdown: s => '<p>' + String(s) + '</p>' });
+  assert.strictEqual(inject.kind, 'bubble', 'owner user_query stays a bubble');
+  assert.strictEqual(inject.painted.mode, 'html', 'MD-shaped user turn marks down (T221)');
   assert.ok(body.indexOf('T221') >= 0 || body.indexOf('user_query') >= 0
     || body.indexOf('inspect-only') >= 0,
     'T221 / inspect-only comment present');
@@ -589,6 +622,152 @@ test('T221 renderAgentInspect wires paintInspectLineBody for user (inspect-only)
   assert.ok(paint, 'paintBody present');
   assert.ok(/role\s*===\s*['"]user['"][\s\S]*renderUserText/.test(paint[0]),
     'main paintBody user path still renderUserText');
+});
+
+// ── 🎯T233: harness injects → compacted ⋯ nuggets (inspect), owner prose bubbles ──
+
+test('T233 classifyInspectUserLine: system-reminder / brief / event / owner residual', function () {
+  const sys = AT.classifyInspectUserLine(
+    '<system-reminder>\nBackground task done.\nUse get_output.\n</system-reminder>',
+  );
+  assert.strictEqual(sys.kind, 'inject');
+  assert.strictEqual(sys.injectKind, 'system-reminder');
+  assert.strictEqual(sys.label, '⋯ system');
+  assert.ok(sys.detail.indexOf('Background task done') >= 0);
+  assert.ok(sys.detail.indexOf('<system-reminder>') < 0, 'tags stripped from detail');
+
+  const brief = AT.classifyInspectUserLine(
+    '[Jevons fleet standing brief — apply for this whole assignment]\n\n## Delivery\n- local only\n\n[PO brief]\nDo the thing.',
+  );
+  assert.strictEqual(brief.kind, 'inject');
+  assert.strictEqual(brief.injectKind, 'standing-brief');
+  assert.strictEqual(brief.label, '⋯ brief');
+  assert.ok(brief.detail.indexOf('PO brief') >= 0);
+
+  const ev = AT.classifyInspectUserLine('[event: worker-finished] slice A landed');
+  assert.strictEqual(ev.kind, 'inject');
+  assert.strictEqual(ev.injectKind, 'event');
+  assert.strictEqual(ev.label, '⋯ worker-finished');
+  assert.ok(ev.detail.indexOf('slice A landed') >= 0);
+
+  const daemon = AT.classifyInspectUserLine('[Daemon restart 12:00] sessions rehydrated');
+  assert.strictEqual(daemon.kind, 'inject');
+  assert.strictEqual(daemon.injectKind, 'daemon');
+  assert.strictEqual(daemon.label, '⋯ system');
+
+  // Owner prose residual — including MD-shaped user_query design pins (T221).
+  const owner = AT.classifyInspectUserLine('Please fix the inspect chrome.');
+  assert.strictEqual(owner.kind, 'owner');
+  assert.strictEqual(owner.detail, 'Please fix the inspect chrome.');
+
+  const pin = AT.classifyInspectUserLine(
+    '<user_query>\n**Prefer option 2**\n\n- Keep inspect chrome\n</user_query>',
+  );
+  assert.strictEqual(pin.kind, 'owner', 'design pin stays owner bubble');
+  assert.ok(pin.wasWrapped);
+  assert.ok(pin.detail.indexOf('**Prefer option 2**') >= 0);
+
+  // user_query wrapping a standing brief still classifies as inject.
+  const wrappedBrief = AT.classifyInspectUserLine(
+    '<user_query>\n[Jevons fleet standing brief — apply]\nLocal only.\n</user_query>',
+  );
+  assert.strictEqual(wrappedBrief.kind, 'inject');
+  assert.strictEqual(wrappedBrief.injectKind, 'standing-brief');
+});
+
+test('T233 paintInjectNuggetHTML: turn-marker family + escaped hover detail', function () {
+  const html = AT.paintInjectNuggetHTML(
+    '⋯ system',
+    'Background <script>alert(1)</script> done',
+    'system-reminder',
+  );
+  assert.ok(html.indexOf('class="turn-marker inject-nugget"') >= 0, 'turn-marker family');
+  assert.ok(html.indexOf('data-inject="system-reminder"') >= 0);
+  assert.ok(html.indexOf('class="inject-label"') >= 0);
+  assert.ok(html.indexOf('⋯ system') >= 0);
+  assert.ok(html.indexOf('class="turn-tip"') >= 0, 'hover tip present');
+  assert.ok(html.indexOf('class="turn-item inject-detail"') >= 0, 'detail path');
+  assert.ok(html.indexOf('<script>') < 0, 'no live script');
+  assert.ok(html.indexOf('&lt;script&gt;') >= 0, 'script escaped in tip');
+});
+
+test('T233 paintInspectLinesHTML: inject → nugget; owner → .msg.user', function () {
+  const lines = [
+    {
+      role: 'user',
+      text: '<system-reminder>\nBackground task "call-abc" completed (exit code: 0).\n</system-reminder>',
+    },
+    {
+      role: 'user',
+      text: '[Jevons fleet standing brief — apply for this whole assignment]\n\n## Status language',
+    },
+    { role: 'user', text: '[event: idle-nudge-brief] continue T233' },
+    { role: 'user', text: 'Owner prose stays a normal bubble.' },
+    { role: 'assistant', text: 'Working on it.' },
+  ];
+  const out = AT.paintInspectLinesHTML(lines, {
+    parseAssistantMarkdown: function (t) { return '<p>' + AT.escapeHtml(t) + '</p>'; },
+    renderUserText: function (t) { return AT.escapeHtml(t); },
+  });
+  // Injects: nugget chrome, not full user bubbles.
+  assert.strictEqual((out.match(/inject-nugget/g) || []).length, 3, 'three inject nuggets');
+  assert.ok(out.indexOf('⋯ system') >= 0);
+  assert.ok(out.indexOf('⋯ brief') >= 0);
+  assert.ok(out.indexOf('⋯ idle-nudge-brief') >= 0 || out.indexOf('⋯ event') >= 0);
+  assert.ok(out.indexOf('Background task') >= 0, 'system detail in tip');
+  assert.ok(out.indexOf('Status language') >= 0, 'brief detail in tip');
+  // Owner residual: normal user bubble.
+  assert.ok(out.indexOf('class="msg user"') >= 0, 'owner → .msg.user');
+  assert.ok(out.indexOf('Owner prose stays a normal bubble.') >= 0);
+  // No user bubble wrapping the system-reminder wall.
+  assert.ok(!/<div class="msg user">[\s\S]*Background task/.test(out),
+    'system-reminder not inside .msg.user');
+  assert.ok(!/<div class="msg user">[\s\S]*fleet standing brief/.test(out),
+    'standing brief not inside .msg.user');
+  // Assistant still jevons bubble.
+  assert.ok(out.indexOf('class="msg jevons"') >= 0);
+});
+
+test('T233 paintInspectLineBody mode=nugget for harness injects', function () {
+  const n = AT.paintInspectLineBody(
+    'user',
+    '<system-reminder>\nplain wall only\n</system-reminder>',
+  );
+  assert.strictEqual(n.mode, 'nugget');
+  assert.strictEqual(n.injectKind, 'system-reminder');
+  assert.ok(n.content.indexOf('inject-nugget') >= 0);
+  assert.ok(n.content.indexOf('plain wall only') >= 0);
+
+  const o = AT.paintInspectLineBody('user', 'hello owner');
+  assert.notStrictEqual(o.mode, 'nugget');
+  assert.strictEqual(o.msgRole, 'user');
+});
+
+test('T233 renderAgentInspect wires nugget path + fingerprint inject-only', function () {
+  const { html, body } = inspectRenderSource();
+  // 🎯T308: the nugget decision is spec.kind now (pure, asserted below); the
+  // host only appends the outer turn-marker HTML it is handed.
+  assert.ok(body.indexOf("kind === 'nugget'") >= 0 || body.indexOf('kind === "nugget"') >= 0,
+    'handles kind=nugget from inspectBubbleSpec');
+  const nug = AT.inspectBubbleSpec({
+    role: 'user',
+    text: '<system-reminder>\nbe good\n</system-reminder>',
+  });
+  assert.strictEqual(nug.kind, 'nugget', 'harness inject → compact nugget, not a bubble');
+  assert.ok(nug.html.indexOf('inject-nugget') >= 0, 'nugget carries turn-marker chrome');
+  assert.ok(body.indexOf('inject-nugget') >= 0 || body.indexOf('T233') >= 0,
+    'T233 / inject-nugget path present');
+  assert.ok(body.indexOf('inject-nugget') >= 0,
+    'fingerprint skip covers inject-only transcripts');
+  // CSS: inspect hosts turn-marker inject nuggets.
+  assert.ok(/#agent-inspect-body\s*>\s*\.turn-marker\.inject-nugget/.test(html) ||
+    html.indexOf('inject-nugget') >= 0,
+    'inspect CSS for inject-nugget');
+  // Main chat paintBody user path unchanged (product residual: inspect-first).
+  const paint = html.match(/function paintBody\([\s\S]*?\nfunction maybeCloseTargetAside/);
+  assert.ok(paint, 'paintBody present');
+  assert.ok(paint[0].indexOf('nugget') < 0,
+    'main paintBody does not take T233 nugget path (inspect-first residual)');
 });
 
 test('T217 turnsToLines preserves assistant role (no silent map to user/other)', function () {
@@ -621,6 +800,244 @@ test('T136 create-aside dual-write + no attention chip wall', function () {
   assert.ok(html.indexOf('appendThreadChip') === -1, 'no chip loop for asides');
 });
 
+// 🎯T263: freeform aside create delivers opening + working chrome (not register-only).
+test('T263 createAsideRequestBody includes opening text when freeform', function () {
+  const bare = AT.createAsideRequestBody('att-x', 'title only');
+  assert.strictEqual(bare.id, 'att-x');
+  assert.strictEqual(bare.title, 'title only');
+  assert.strictEqual(bare.text, undefined, 'register-only has no text');
+  const withOpen = AT.createAsideRequestBody(
+    'att-msftck4l-9sguxj',
+    'how does bullseye compare to beads?',
+    '  how does bullseye compare to beads?  ',
+  );
+  assert.strictEqual(withOpen.text, 'how does bullseye compare to beads?');
+  assert.strictEqual(withOpen.id, 'att-msftck4l-9sguxj');
+});
+
+test('T263 freeformAsideCreateOpts only for aside: command', function () {
+  // 🎯T270: kind always set for closed-history type; deliver only on freeform aside:.
+  assert.deepStrictEqual(AT.freeformAsideCreateOpts('capture', 'note'), {
+    kind: 'capture', command: 'capture',
+  });
+  assert.deepStrictEqual(AT.freeformAsideCreateOpts('target', 'file this'), {
+    kind: 'target', command: 'target',
+  });
+  assert.deepStrictEqual(AT.freeformAsideCreateOpts('aside', '   '), {
+    kind: 'side', command: 'aside',
+  });
+  const o = AT.freeformAsideCreateOpts('aside', 'how does bullseye compare to beads?');
+  assert.strictEqual(o.text, 'how does bullseye compare to beads?');
+  assert.strictEqual(o.expectDeliver, true);
+  assert.strictEqual(o.kind, 'side');
+});
+
+test('T270 createAsideRequestBody carries kind', function () {
+  const b = AT.createAsideRequestBody('att-x', 'title', '', 'target');
+  assert.strictEqual(b.kind, 'target');
+  assert.strictEqual(b.text, undefined);
+  const bare = AT.createAsideRequestBody('att-y', 't');
+  assert.strictEqual(bare.kind, undefined);
+});
+
+test('T263 index.html freeform create path + working chrome + loud fail', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('opts.text') >= 0 || html.indexOf('payload.text') >= 0,
+    'ensureFleetAside posts opening text');
+  assert.ok(html.indexOf('expectDeliver') >= 0, 'freeform expects deliver');
+  assert.ok(html.indexOf('showAsideOpeningWorking') >= 0, 'working chrome helper');
+  assert.ok(html.indexOf('showAsideDeliverError') >= 0, 'loud fail helper');
+  // 🎯T309.1: working chrome is painted by ConversationWidget.renderModel.
+  assert.ok(
+    html.indexOf('data-aside-working') >= 0 ||
+    fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8')
+      .indexOf('data-aside-working') >= 0,
+    'working indicator in inspect (widget or host)',
+  );
+  assert.ok(html.indexOf('aside_create_deliver_error') >= 0 ||
+    html.indexOf('start/deliver failed') >= 0,
+    'deliver failure decision/log path');
+  // Composer create path passes text for aside: only.
+  assert.ok(html.indexOf("parsedCmd.command === 'aside'") >= 0);
+  assert.ok(html.indexOf('createOpts.text') >= 0 || html.indexOf('createOpts =') >= 0);
+});
+
+// ── 🎯T252 auto-activate attention asides; sticky draft; next after send ──
+
+test('T252 sidebarDraftIsEmpty treats whitespace as empty', function () {
+  assert.strictEqual(AT.sidebarDraftIsEmpty(''), true);
+  assert.strictEqual(AT.sidebarDraftIsEmpty('   '), true);
+  assert.strictEqual(AT.sidebarDraftIsEmpty(null), true);
+  assert.strictEqual(AT.sidebarDraftIsEmpty('hi'), false);
+  assert.strictEqual(AT.sidebarDraftIsEmpty('  x  '), false);
+});
+
+test('T252 asideRequiresAttention: assistant-last and needs-owner', function () {
+  const aside = { name: 'att-a', purpose: 'aside' };
+  assert.strictEqual(AT.asideRequiresAttention(aside, { lastRole: 'assistant' }), true);
+  assert.strictEqual(AT.asideRequiresAttention(aside, { lastRole: 'user' }), false);
+  assert.strictEqual(AT.asideRequiresAttention(aside, {
+    lines: [
+      { role: 'user', text: 'q' },
+      { role: 'assistant', text: 'a' },
+    ],
+  }), true);
+  assert.strictEqual(AT.asideRequiresAttention(
+    { name: 'att-b', purpose: 'aside', needs_owner: true },
+    { lastRole: 'user' },
+  ), true);
+  assert.strictEqual(AT.asideRequiresAttention(
+    { name: 'worker', purpose: 'work' },
+    { lastRole: 'assistant' },
+  ), false);
+  assert.strictEqual(AT.asideRequiresAttention(
+    { name: 'jevons', purpose: 'overseer' },
+    { lastRole: 'assistant' },
+  ), false);
+});
+
+test('T252 empty-composer + new attention → selection switches', function () {
+  let queue = [];
+  queue = AT.enqueueAttention(queue, 'att-a');
+  // Viewing something else (or main); draft empty; new attention att-a
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: null,
+    draftEmpty: true,
+    reason: 'new-attention',
+    newName: 'att-a',
+  }), 'att-a');
+
+  queue = AT.enqueueAttention(queue, 'att-b');
+  // On att-a with empty draft; att-b newly needs attention → switch to att-b
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draftEmpty: true,
+    reason: 'new-attention',
+    newName: 'att-b',
+  }), 'att-b');
+});
+
+test('T252 non-empty draft → selection sticky (no mid-compose steal)', function () {
+  const queue = ['att-a', 'att-b'];
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draftEmpty: false,
+    reason: 'new-attention',
+    newName: 'att-b',
+  }), 'att-a');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draft: 'working on a reply…',
+    reason: 'new-attention',
+    newName: 'att-b',
+  }), 'att-a');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draftEmpty: false,
+    reason: 'poll',
+  }), 'att-a');
+});
+
+test('T252 post-send empty → next attention selected', function () {
+  let queue = ['att-a', 'att-b', 'att-c'];
+  // User sent on att-a → dequeue att-a, draft empty, after-send
+  queue = AT.dequeueAttention(queue, 'att-a');
+  assert.deepStrictEqual(queue, ['att-b', 'att-c']);
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-a',
+    draftEmpty: true,
+    reason: 'after-send',
+  }), 'att-b');
+
+  // Send on att-b → next att-c
+  queue = AT.dequeueAttention(queue, 'att-b');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-b',
+    draftEmpty: true,
+    reason: 'after-send',
+  }), 'att-c');
+
+  // Last one sent → empty queue → keep current (no forced switch residual)
+  queue = AT.dequeueAttention(queue, 'att-c');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: queue,
+    currentSelection: 'att-c',
+    draftEmpty: true,
+    reason: 'after-send',
+  }), 'att-c');
+});
+
+test('T252 residual: no attention asides → no forced switch', function () {
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: [],
+    currentSelection: 'worker-1',
+    draftEmpty: true,
+    reason: 'poll',
+  }), 'worker-1');
+  assert.strictEqual(AT.pickAttentionAsideSelection({
+    attentionNames: [],
+    currentSelection: null,
+    draftEmpty: true,
+    reason: 'new-attention',
+  }), null);
+});
+
+test('T252 detectNewAttentionAsides busy→idle + needs_owner flag', function () {
+  const prev = [
+    { name: 'att-busy', purpose: 'aside', phase: 'working' },
+    { name: 'att-idle', purpose: 'aside', phase: 'idle' },
+    { name: 'worker', purpose: 'work', phase: 'working' },
+  ];
+  const next = [
+    { name: 'att-busy', purpose: 'aside', phase: 'idle' },
+    { name: 'att-idle', purpose: 'aside', phase: 'idle' },
+    { name: 'worker', purpose: 'work', phase: 'idle' },
+    { name: 'att-flag', purpose: 'aside', needs_owner: true, phase: 'idle' },
+  ];
+  const news = AT.detectNewAttentionAsides(prev, next);
+  assert.ok(news.indexOf('att-busy') >= 0, 'busy→idle aside');
+  assert.ok(news.indexOf('att-flag') >= 0, 'needs_owner rose');
+  assert.ok(news.indexOf('worker') < 0, 'work agents ignored');
+  assert.ok(news.indexOf('att-idle') < 0, 'already idle no new attention');
+});
+
+test('T252 liveFrameSignalsOwnerAttention on terminal assistant stop', function () {
+  assert.strictEqual(AT.liveFrameSignalsOwnerAttention({
+    type: 'assistant',
+    message: { role: 'assistant', content: [], stop_reason: 'end_turn' },
+  }), true);
+  assert.strictEqual(AT.liveFrameSignalsOwnerAttention({
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text: '…' }] },
+  }), false);
+  assert.strictEqual(AT.liveFrameSignalsOwnerAttention({
+    type: 'user',
+    message: { content: 'hi' },
+  }), false);
+});
+
+test('T252 index.html wires attention auto-select + sticky draft', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('pickAttentionAsideSelection') >= 0,
+    'product calls pickAttentionAsideSelection');
+  assert.ok(html.indexOf('asideAttentionQueue') >= 0 ||
+    html.indexOf('enqueueAttention') >= 0,
+    'attention queue state');
+  assert.ok(html.indexOf('T252') >= 0, 'T252 marker in product wire');
+  assert.ok(
+    html.indexOf('isSidebarComposerDraftEmpty') >= 0 ||
+    html.indexOf('sidebarDraftIsEmpty') >= 0,
+    'draft empty gate for sticky',
+  );
+});
+
 // Boot TDZ: updateComposerPlaceholder reads selectedAgent; renderAttention()
 // and refreshAgents run at page load. Late `let selectedAgent` threw, skipped
 // applyTheme + connect → dark stuck + empty transcript.
@@ -633,13 +1050,549 @@ test('index.html declares selectedAgent before boot renderAttention/refreshAgent
   // Boot refresh may be try-wrapped; match the interval arm + immediate call.
   const bootRefresh = html.indexOf('setInterval(function () { try { refreshAgents(); } catch (_) {} }, 30000);');
   const bootRefreshAlt = html.indexOf('setInterval(refreshAgents, 30000);');
-  const bootRefreshAt = bootRefresh >= 0 ? bootRefresh : bootRefreshAlt;
+  // 🎯T289: the fallback poll became a multi-line block (hidden-tab skip), so
+  // anchor on the immediate boot call — that is what actually runs at load and
+  // what the TDZ guard protects.
+  const bootRefreshImmediate = html.indexOf('\ntry { refreshAgents(); } catch (_) {}');
+  const bootRefreshAt = bootRefresh >= 0 ? bootRefresh
+    : (bootRefreshAlt >= 0 ? bootRefreshAlt : bootRefreshImmediate);
   const theme = html.indexOf("applyTheme((document.cookie");
   const connect = html.indexOf('\nconnect();\n');
   assert.ok(bootRender > decl, 'boot renderAttention after selectedAgent decl');
   assert.ok(bootRefreshAt > decl, 'boot refreshAgents after selectedAgent decl');
   assert.ok(theme > decl, 'applyTheme after selectedAgent decl (script reaches theme)');
   assert.ok(connect > decl, 'connect after selectedAgent decl');
+});
+
+// 🎯T251: sidebar Transcript composer (independent of main #input).
+test('T251 sidebarComposerVisible only on transcript tab with selectable agent', function () {
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'transcript', selectedAgent: 'att-billing', purpose: 'aside',
+  }), true);
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'transcript', selectedAgent: 'jv-t251-worker', purpose: 'work',
+  }), true);
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'frontier', selectedAgent: 'att-billing', purpose: 'aside',
+  }), false, 'frontier tab hides sidebar composer');
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'transcript', selectedAgent: null,
+  }), false, 'no selection → no composer');
+  assert.strictEqual(AT.sidebarComposerVisible({
+    tab: 'transcript', selectedAgent: 'jevons', purpose: 'overseer',
+  }), false, 'overseer never uses sidebar composer');
+});
+
+test('T251 sidebarSendRequest targets selected agent send API', function () {
+  const ok = AT.sidebarSendRequest('att-msf-1', '  ship it  ');
+  assert.strictEqual(ok.ok, true);
+  assert.strictEqual(ok.name, 'att-msf-1');
+  assert.strictEqual(ok.method, 'POST');
+  assert.strictEqual(ok.url, '/api/agents/att-msf-1/send');
+  assert.deepStrictEqual(ok.body, { text: 'ship it' });
+  // Encoding for free-form names.
+  const enc = AT.sidebarSendRequest('jv-t27.2-config', 'go');
+  assert.strictEqual(enc.ok, true);
+  assert.strictEqual(enc.url, '/api/agents/' + encodeURIComponent('jv-t27.2-config') + '/send');
+  assert.strictEqual(AT.sidebarSendRequest(null, 'x').ok, false);
+  assert.strictEqual(AT.sidebarSendRequest('att-x', '   ').reason, 'empty');
+  assert.strictEqual(AT.sidebarSendRequest('jevons', 'hi').reason, 'overseer-main-only');
+  assert.strictEqual(AT.agentSendPath('po'), '/api/agents/po/send');
+  assert.strictEqual(AT.isSidebarDraftEmpty(''), true);
+  assert.strictEqual(AT.isSidebarDraftEmpty('  \n'), true);
+  assert.strictEqual(AT.isSidebarDraftEmpty('a'), false);
+});
+
+test('T251 classifySidebarComposerKey Enter sends, Shift+Enter newline', function () {
+  assert.strictEqual(AT.classifySidebarComposerKey({ key: 'Enter' }), 'send');
+  assert.strictEqual(AT.classifySidebarComposerKey({ key: 'Enter', shiftKey: true }), 'newline');
+  assert.strictEqual(AT.classifySidebarComposerKey({ key: 'a' }), null);
+  assert.strictEqual(AT.classifySidebarComposerKey({ key: 'Enter', isComposing: true }), null);
+});
+
+test('T251 index.html wires sidebar composer DOM + sendSidebarComposer path', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('id="agent-inspect-composer"') >= 0, 'composer host in transcript pane');
+  assert.ok(html.indexOf('id="agent-inspect-input"') >= 0, 'sidebar message input');
+  assert.ok(html.indexOf('id="agent-inspect-send"') >= 0, 'sidebar send control');
+  assert.ok(html.indexOf('function sendSidebarComposer') >= 0, 'send handler');
+  assert.ok(html.indexOf('function syncSidebarComposer') >= 0, 'visibility sync');
+  // 🎯T309.1: product send uses ConversationWidget.buildSendRequest; AT.sidebarSendRequest
+  // remains the pure alias (and residual name in comments / mount onSend).
+  assert.ok(
+    html.indexOf('sidebarSendRequest') >= 0 || html.indexOf('buildSendRequest') >= 0,
+    'uses pure send request helper (widget or AT alias)',
+  );
+  assert.ok(html.indexOf('__sidebarAgentSend') >= 0, 'hermetic mock seam');
+  assert.ok(html.indexOf('ConversationWidget.mount') >= 0, 'compact composer via widget mount');
+  assert.ok(html.indexOf("density: 'compact'") >= 0 || html.indexOf('density-compact') >= 0,
+    'compact density param for RHS');
+  // Must not wire sidebar send through main transport / overseer #input.
+  const sendFn = html.match(/function sendSidebarComposer\([\s\S]*?\nfunction |\nfunction sendSidebarComposer\([\s\S]*?\nif \(typeof syncSidebarComposer/);
+  assert.ok(sendFn, 'sendSidebarComposer body capturable');
+  assert.ok(!/transport\.send\s*\(/.test(sendFn[0]),
+    'sidebar send must not use main chat transport');
+  assert.ok(
+    sendFn[0].indexOf('inspectConversation') >= 0 ||
+    sendFn[0].indexOf('agentInspectInput') >= 0,
+    'sidebar send goes through inspect widget / input, not main #input alone',
+  );
+  // Composer lives inside #agent-inspect (transcript tab panel).
+  const bodyAt = html.indexOf('id="agent-inspect-body"');
+  const composerAt = html.indexOf('id="agent-inspect-composer"');
+  const frontierAt = html.indexOf('id="frontier-pane"');
+  assert.ok(bodyAt >= 0 && composerAt > bodyAt, 'composer after transcript body');
+  assert.ok(composerAt > frontierAt || frontierAt < bodyAt, 'composer is in transcript structure');
+  assert.ok(html.indexOf('🎯T251') >= 0 || html.indexOf('T251') >= 0, 'T251 marker');
+});
+
+// ── 🎯T275: RHS Transcript send delivers; no silent no-op ───────────────
+
+test('T275 sidebarSendBlockMessage is loud for every block reason', function () {
+  assert.ok(AT.sidebarSendBlockMessage('no-selection').indexOf('selected') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('overseer-main-only').indexOf('main chat') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('empty').indexOf('empty') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('observe-only').indexOf('observe-only') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('').indexOf('silent') >= 0 ||
+    AT.sidebarSendBlockMessage('').indexOf('unknown') >= 0);
+  assert.ok(AT.sidebarSendBlockMessage('custom-x').indexOf('custom-x') >= 0);
+});
+
+test('T275 index.html: no silent no-op on sidebar send block/fail', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('function showSidebarSendErr') >= 0, 'loud err helper');
+  assert.ok(
+    html.indexOf('sidebarSendBlockMessage') >= 0 || html.indexOf('sendBlockMessage') >= 0,
+    'uses pure block copy (widget or AT alias)',
+  );
+  assert.ok(html.indexOf('role', 'alert') >= 0 || html.indexOf("setAttribute('role', 'alert')") >= 0 ||
+    html.indexOf('setAttribute("role", "alert")') >= 0 || html.indexOf("role', 'alert'") >= 0,
+    'err is alert-role');
+  // Blocked pre-HTTP path must call showSidebarSendErr (thin entry or mount onSendBlocked).
+  const sendFn = html.match(/function sendSidebarComposer\([\s\S]*?\nif \(typeof syncSidebarComposer/);
+  assert.ok(sendFn, 'sendSidebarComposer capturable');
+  assert.ok(sendFn[0].indexOf('showSidebarSendErr') >= 0,
+    'sendSidebarComposer surfaces block/fail loudly');
+  assert.ok(sendFn[0].indexOf('no-selection') >= 0 ||
+    sendFn[0].indexOf('sidebarSendBlockMessage') >= 0 ||
+    sendFn[0].indexOf('sendBlockMessage') >= 0,
+    'no-selection is loud');
+  // Product path still posts to agent send API (mount onSend + buildSendRequest).
+  assert.ok(html.indexOf('/api/agents/') >= 0);
+  assert.ok(
+    html.indexOf('sidebarSendRequest') >= 0 || html.indexOf('buildSendRequest') >= 0,
+    'agent send request helper present',
+  );
+  assert.ok(html.indexOf('T275') >= 0 || html.indexOf('🎯T275') >= 0, 'T275 marker');
+});
+
+// ── 🎯T265: aside/agent Transcript microcosm of main chat ───────────────
+
+test('T265 mergePaneModelWithLines preserves working chrome', function () {
+  const merged = AT.mergePaneModelWithLines(
+    {
+      title: 'att-x',
+      empty: true,
+      error: '',
+      lines: [],
+      working: true,
+      sessionId: 's1',
+    },
+    [{ role: 'user', text: 'hello' }],
+  );
+  assert.strictEqual(merged.working, true, 'working must survive wire merge');
+  assert.strictEqual(merged.empty, false);
+  assert.strictEqual(merged.title, 'att-x');
+  assert.strictEqual(merged.sessionId, 's1');
+  assert.strictEqual(merged.lines.length, 1);
+  // Dropping working was the T205 residual that killed in-flight chrome.
+  const dropped = AT.mergePaneModelWithLines({ title: 'a', working: false }, []);
+  assert.strictEqual(dropped.working, false);
+  assert.strictEqual(dropped.empty, true);
+});
+
+test('T265 afterSidebarSendOptimistic appends user + opens working', function () {
+  const r = AT.afterSidebarSendOptimistic(
+    [{ role: 'assistant', text: 'hi' }],
+    '  reply please  ',
+    { title: 'att-billing' },
+  );
+  assert.strictEqual(r.model.working, true);
+  assert.strictEqual(r.model.title, 'att-billing');
+  assert.strictEqual(r.model.empty, false);
+  assert.strictEqual(r.lines.length, 2);
+  assert.strictEqual(r.lines[1].role, 'user');
+  assert.strictEqual(r.lines[1].text, 'reply please');
+  // Dedupe consecutive identical owner send.
+  const r2 = AT.afterSidebarSendOptimistic(r.lines, 'reply please', { title: 'att-billing' });
+  assert.strictEqual(r2.lines.length, 2, 'no double user bubble');
+  assert.strictEqual(r2.model.working, true);
+});
+
+// ── 🎯T281: one owner submit → one bubble (optimistic + WS reconcile) ──
+
+test('T281 applyInspectLiveFrame: optimistic + live user echo → one bubble', function () {
+  // Product path: afterSidebarSendOptimistic then agent_transcript live user.
+  const opt = AT.afterSidebarSendOptimistic([], 'do a release.', { title: 'jevons-po' });
+  assert.strictEqual(opt.lines.length, 1);
+  assert.strictEqual(opt.lines[0].role, 'user');
+  assert.strictEqual(opt.lines[0].text, 'do a release.');
+  const afterEcho = AT.applyInspectLiveFrame(opt.lines, {
+    type: 'user',
+    message: { role: 'user', content: 'do a release.' },
+  });
+  assert.strictEqual(afterEcho.length, 1, 'no double bubble from optimistic+WS');
+  assert.strictEqual(afterEcho[0].text, 'do a release.');
+});
+
+test('T281 applyInspectLiveFrame: unwrap-aware dedupe for user_query wrapper', function () {
+  const opt = AT.afterSidebarSendOptimistic([], 'do a release.', { title: 'po' });
+  const wrapped = AT.applyInspectLiveFrame(opt.lines, {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: '<user_query>\ndo a release.\n</user_query>',
+    },
+  });
+  assert.strictEqual(wrapped.length, 1, 'wrapped echo must not double plain optimistic');
+  // Intentional resend after assistant still paints a second user bubble.
+  let lines = AT.applyInspectLiveFrame(wrapped, {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn',
+    },
+  });
+  lines = AT.afterSidebarSendOptimistic(lines, 'do a release.', { title: 'po' }).lines;
+  assert.strictEqual(
+    lines.filter(function (l) { return l.role === 'user'; }).length,
+    2,
+    'resend after assistant is a new submit',
+  );
+});
+
+test('T281 isDuplicateInspectUserLine consecutive only', function () {
+  assert.ok(AT.isDuplicateInspectUserLine(
+    { role: 'user', text: 'hi' },
+    'hi',
+  ));
+  assert.ok(!AT.isDuplicateInspectUserLine(
+    { role: 'assistant', text: 'ok' },
+    'hi',
+  ));
+  assert.ok(AT.isDuplicateInspectUserLine(
+    { role: 'user', text: '<user_query>hi</user_query>' },
+    'hi',
+  ));
+  assert.strictEqual(AT.inspectUserDedupeKey('  x  '), 'x');
+});
+
+test('T281 index.html: RHS live path uses applyInspectLiveFrame; main uses isDuplicateUserEcho', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('applyInspectLiveFrame') >= 0,
+    'agent_transcript live frames must go through applyInspectLiveFrame');
+  assert.ok(
+    html.indexOf('afterSidebarSendOptimistic') >= 0 ||
+    html.indexOf('afterSendOptimistic') >= 0,
+    'RHS send paints optimistic owner turn (widget or AT alias)',
+  );
+  // Main: T279/T281 shared — optimistic paint + echo dedupe (not ad-hoc only).
+  assert.ok(
+    html.indexOf('isDuplicateUserEcho') >= 0 ||
+      /msgHistory\[msgHistory\.length\s*-\s*1\]/.test(html),
+    'main user echo must dedupe against last painted',
+  );
+  assert.ok(
+    html.indexOf('paintOptimisticMainUser') >= 0 ||
+      html.indexOf('planOptimisticMainUserPaint') >= 0,
+    'main optimistic path present (T279/T281 shared)',
+  );
+});
+
+test('T265 inspectWorkingLabel uses agent name not Jevons', function () {
+  assert.strictEqual(AT.inspectWorkingLabel('att-msft'), 'att-msft is working');
+  assert.strictEqual(AT.inspectWorkingLabel('jevons'), 'Working');
+  assert.ok(AT.inspectWorkingLabel('a'.repeat(40)).indexOf('…') >= 0);
+  assert.strictEqual(AT.inspectWorkingLabel(''), 'Working');
+});
+
+test('T265 inspectDisplayUserText strips attention wire headers', function () {
+  const body = AT.inspectDisplayUserText(
+    '[attention:att-x|billing nit]\nbilling body',
+  );
+  assert.strictEqual(body, 'billing body');
+  assert.ok(body.indexOf('[attention:') < 0);
+  assert.strictEqual(AT.inspectDisplayUserText('plain owner'), 'plain owner');
+  const tgt = AT.inspectDisplayUserText(
+    '[target-aside: att-y | title]\nfile this\n\n(Ceremony: bullseye)',
+  );
+  assert.ok(tgt.indexOf('file this') >= 0);
+  assert.ok(tgt.indexOf('[target-aside') < 0);
+  assert.ok(tgt.indexOf('Ceremony') < 0);
+});
+
+test('T265 inspect pane is conversation-only (no nested fleet/frontier)', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(AT.inspectPaneIsConversationOnly(html),
+    'agent-inspect must be conversation surface only');
+  // Negative fixture: nested agents host fails oracle.
+  assert.strictEqual(
+    AT.inspectPaneIsConversationOnly(
+      '<div id="agent-inspect"><div id="agents"></div>' +
+      '<div id="agent-inspect-body"></div><div id="agent-inspect-composer"></div></div>',
+    ),
+    false,
+  );
+});
+
+test('T265 index.html: merge preserves working; send opens working chrome', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('mergePaneModelWithLines') >= 0,
+    'mergeModelWithAsideWire must use mergePaneModelWithLines');
+  assert.ok(
+    html.indexOf('afterSidebarSendOptimistic') >= 0 ||
+    html.indexOf('afterSendOptimistic') >= 0,
+    'send path uses afterSendOptimistic (widget) / AT alias',
+  );
+  assert.ok(html.indexOf('inspectWorkingLabel') >= 0,
+    'inspect working chrome uses inspectWorkingLabel');
+  assert.ok(/working:\s*!!\(model\s*&&\s*model\.working\)/.test(html) ||
+    html.indexOf('mergePaneModelWithLines') >= 0,
+    'fallback path still preserves working');
+  // Microcosm markers present (no recursive shell in inspect paint path).
+  const renderFn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
+  assert.ok(renderFn, 'renderAgentInspect present');
+  assert.ok(renderFn[0].indexOf('id="agents"') < 0, 'render does not inject fleet tree');
+  assert.ok(renderFn[0].indexOf('frontier-table') < 0, 'render does not inject frontier');
+  assert.ok(html.indexOf('🎯T265') >= 0 || html.indexOf('T265') >= 0, 'T265 marker');
+});
+
+// ── 🎯T308: ONE message-bubble constructor for main #messages and the RHS ──
+
+test('T308 normalizeWhen accepts ms / seconds / ISO, rejects junk', function () {
+  assert.strictEqual(AT.normalizeWhen(1754620000000), 1754620000000, 'epoch ms passes through');
+  assert.strictEqual(AT.normalizeWhen(1754620000), 1754620000000, '10-digit seconds scale up');
+  assert.strictEqual(AT.normalizeWhen('1754620000'), 1754620000000, 'numeric string');
+  assert.strictEqual(AT.normalizeWhen('2026-08-08T01:02:03Z'), Date.parse('2026-08-08T01:02:03Z'));
+  // A turn with no timestamp must stay undefined — never "now" (that is the bug:
+  // a sealed 3-day-old sidebar turn labelled "now" on every repaint).
+  [undefined, null, '', 0, -1, 'not a date', NaN].forEach(function (v) {
+    assert.strictEqual(AT.normalizeWhen(v), undefined, 'no timestamp for ' + JSON.stringify(v));
+  });
+});
+
+test('T308 turnsToLines preserves turn timestamps from wire/HTTP', function () {
+  const lines = AT.turnsToLines([
+    { role: 'user', text: 'a', when: 1754620000000 },
+    { role: 'assistant', text: 'b', ts: 1754620001 },          // seconds spelling
+    { role: 'assistant', text: 'c', created_at: '2026-08-08T01:02:03Z' },
+    { role: 'user', text: 'd' },                                // no timestamp
+  ]);
+  assert.strictEqual(lines.length, 4);
+  assert.strictEqual(lines[0].when, 1754620000000);
+  assert.strictEqual(lines[1].when, 1754620001000);
+  assert.strictEqual(lines[2].when, Date.parse('2026-08-08T01:02:03Z'));
+  assert.ok(!('when' in lines[3]), 'timestamp-free turn carries no when');
+});
+
+test('T308 copyInspectLines keeps when (the copies that used to drop it)', function () {
+  const src = [{ role: 'user', text: 'a', when: 1754620000000 }, { role: 'assistant', text: 'b' }];
+  const out = AT.copyInspectLines(src);
+  assert.strictEqual(out[0].when, 1754620000000, 'when survives the rebuild');
+  assert.ok(!('when' in out[1]), 'absent stays absent');
+  out[0].text = 'mutated';
+  assert.strictEqual(src[0].text, 'a', 'copy, not alias');
+});
+
+test('T308 applyInspectLiveFrame stamps live turns and preserves prior when', function () {
+  const seeded = [{ role: 'user', text: 'old', when: 1754620000000 }];
+  const out = AT.applyInspectLiveFrame(seeded, {
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+  }, { now: 1754620500000 });
+  assert.strictEqual(out[0].when, 1754620000000, 'sealed turn keeps its own time');
+  assert.strictEqual(out[1].when, 1754620500000, 'live turn is stamped with arrival time');
+  // The wire's own timestamp wins over arrival when the server sends one.
+  const wired = AT.applyInspectLiveFrame([], {
+    type: 'user',
+    when: 1754620111000,
+    message: { role: 'user', content: 'yo' },
+  }, { now: 1754620500000 });
+  assert.strictEqual(wired[0].when, 1754620111000);
+});
+
+test('T308 inspectBubbleSpec is the whole per-turn inspect policy', function () {
+  const b = AT.inspectBubbleSpec({ role: 'assistant', text: '**hi**', when: 1754620000000 });
+  assert.strictEqual(b.kind, 'bubble');
+  assert.strictEqual(b.role, 'jevons');
+  assert.strictEqual(b.text, '**hi**');
+  assert.strictEqual(b.when, 1754620000000);
+  assert.strictEqual(b.painted, null, 'assistant takes the live paintBody path (T217)');
+  // Timestamp normalization happens once, in the spec — callers get epoch ms.
+  assert.strictEqual(
+    AT.inspectBubbleSpec({ role: 'user', text: 'x', when: '2026-08-08T01:02:03Z' }).when,
+    Date.parse('2026-08-08T01:02:03Z'),
+  );
+  assert.strictEqual(AT.inspectBubbleSpec({ role: 'user', text: 'x' }).when, undefined,
+    'no timestamp → undefined, so the renderer omits .msg-time');
+  assert.strictEqual(AT.inspectBubbleSpec(null).kind, 'bubble', 'null line does not throw');
+});
+
+test('T308 inspect fixture paints .msg-time when the turn has a timestamp', function () {
+  const deps = {
+    parseAssistantMarkdown: s => '<p>' + String(s) + '</p>',
+    relTime: () => '5m',
+    absTimeTitle: () => '8 Aug 2026, 01:02:03',
+  };
+  const html = AT.paintInspectLinesHTML([
+    { role: 'assistant', text: 'timed', when: 1754620000000 },
+    { role: 'user', text: 'untimed' },
+  ], deps);
+  const timed = html.slice(0, html.indexOf('untimed'));
+  assert.ok(/<div class="msg-time" data-ts="1754620000000" title="8 Aug 2026, 01:02:03">5m<\/div>/
+    .test(timed), 'timed turn gets main .msg-time chrome: data-ts + hover title + rel label');
+  const untimed = html.slice(html.indexOf('untimed'));
+  assert.ok(untimed.indexOf('msg-time') < 0,
+    'timestamp-free turn shows no .msg-time (never a fabricated "now")');
+  // Hover title is the 🎯T91 absolute local time; both are escaped.
+  const evil = AT.paintInspectLinesHTML(
+    [{ role: 'user', text: 'x', when: 1 }],
+    { relTime: () => '<img onerror=1>', absTimeTitle: () => '"><script>' },
+  );
+  assert.ok(evil.indexOf('<img onerror') < 0 && evil.indexOf('<script>') < 0,
+    'time chrome escapes its labels');
+});
+
+test('T308 index.html: buildMsg is the ONE bubble shell for durable turns', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // Exactly one place constructs the conversational bubble shell: buildMsg.
+  const shells = html.match(/className\s*=\s*['"]msg\s*['"]\s*\+/g) || [];
+  assert.strictEqual(shells.length, 1,
+    'only buildMsg may build a `msg <role>` shell — found ' + shells.length);
+  const build = html.match(/\nfunction buildMsg\([\s\S]*?\n\}\n/);
+  assert.ok(build, 'buildMsg present');
+  assert.ok(build[0].indexOf("className = 'msg ' + role") >= 0, 'the one shell lives in buildMsg');
+  // opts.paint / opts.timeIfKnown are the only knobs callers get (T308 contract).
+  assert.ok(/opts\s*&&\s*typeof opts\.paint === 'function'/.test(build[0]),
+    'buildMsg honours opts.paint body policy');
+  assert.ok(build[0].indexOf('timeIfKnown') >= 0,
+    'buildMsg honours opts.timeIfKnown (omit .msg-time on timestamp-free turns)');
+  assert.ok(/normalizeWhen/.test(build[0]),
+    'buildMsg normalizes `when` through the shared AgentTranscript helper');
+  // The remaining `msg …` classNames are not conversational turns: a transient
+  // status note and the collapsible <details> worker note (🎯T23).
+  assert.ok(/className = 'msg status'/.test(html) && /className = 'msg worker'/.test(html),
+    'status/worker notes are deliberate non-bubble chrome, not durable turns');
+});
+
+test('T308 index.html: sidebar feeds buildMsg and keeps timestamps end to end', function () {
+  const { html, body } = inspectRenderSource();
+  assert.ok(/buildMsg\(spec\.role,\s*spec\.text,\s*spec\.when/.test(body),
+    'inspect hands the spec straight to buildMsg (role, text, when)');
+  assert.ok(body.indexOf('timeIfKnown: true') >= 0,
+    'inspect omits .msg-time for turns with no timestamp');
+  // Every rebuild of the inspect line model goes through copyInspectLines —
+  // the hand-rolled {role, text} copies are what dropped `when` before the
+  // renderer ever saw it.
+  assert.ok(html.indexOf('inspectLinesCopy') >= 0, 'inspect line model copies via helper');
+  assert.ok(!/_agentInspectLines\s*=\s*\([^)]*\)\.map\(function \(l\) \{\s*return \{ role: l\.role, text: l\.text \};/
+    .test(html), 'no hand-rolled {role, text} copy that strips when');
+  // 🎯T289 sweeper is document-scoped, so sidebar .msg-time relabels too.
+  const sweep = html.match(/setInterval\(\(\) => \{[\s\S]*?\}, 30000\);/);
+  assert.ok(sweep, '30s relTime sweeper present');
+  assert.ok(sweep[0].indexOf("document.querySelectorAll('.msg-time[data-ts]')") >= 0,
+    'sweeper is document-wide — it must see RHS bubbles, not only #messages');
+});
+
+// ── 🎯T329 applyInspectLiveFrame is thin wrap of shared coalesce ──
+
+test('T329 applyInspectLiveFrame: multi-tool + system-reminder inject → one assistant', function () {
+  const CE = require('./chat_events.js');
+  assert.ok(typeof CE.applyLiveDisplayFrame === 'function',
+    'shared coalesce must exist');
+  // Thin wrap: product coalesce is ChatEvents.applyLiveDisplayFrame — no
+  // second adjacency/_stream join body inside applyInspectLiveFrame.
+  const src = fs.readFileSync(path.join(__dirname, 'agent_transcript.js'), 'utf8');
+  assert.ok(/applyLiveDisplayFrame/.test(src),
+    'applyInspectLiveFrame must call ChatEvents.applyLiveDisplayFrame');
+  const wrapFn = src.match(
+    /function applyInspectLiveFrame\([\s\S]*?\n  \}/,
+  );
+  assert.ok(wrapFn, 'applyInspectLiveFrame definition present');
+  assert.ok(
+    wrapFn[0].indexOf('applyLiveDisplayFrame') >= 0,
+    'wrapper body must delegate to applyLiveDisplayFrame',
+  );
+  assert.ok(
+    !/last\.role === 'assistant' && last\._stream/.test(wrapFn[0]),
+    'wrapper must not keep adjacency/_stream dual join logic',
+  );
+
+  let lines = [];
+  const frames = [
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Plan: ' }] },
+    },
+    {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', name: 'run_terminal_command', input: {} }],
+        stop_reason: 'tool_use',
+      },
+    },
+    { type: 'tool_result', content: 'ok' },
+    {
+      type: 'user',
+      message: {
+        content:
+          '<system-reminder>\nBackground task "call-x" completed.\n</system-reminder>',
+      },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'continue mid-sentence' }] },
+    },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: ' and finish.' }], stop_reason: 'end_turn' },
+    },
+  ];
+  for (let i = 0; i < frames.length; i++) {
+    lines = AT.applyInspectLiveFrame(lines, frames[i], { now: 1_700_000_000_000 + i });
+  }
+  const asst = lines.filter(function (l) { return l && l.role === 'assistant'; });
+  assert.strictEqual(
+    asst.length,
+    1,
+    'one assistant bubble after multi-tool + inject: ' + JSON.stringify(lines),
+  );
+  assert.ok(asst[0].text.indexOf('Plan:') >= 0);
+  assert.ok(asst[0].text.indexOf('continue mid-sentence') >= 0);
+  assert.ok(asst[0].text.indexOf('and finish.') >= 0);
+  assert.ok(!asst[0]._stream, 'end_turn seals');
+  // Inject is present for nugget paint, not a turn seal.
+  assert.ok(lines.some(function (l) {
+    return l.role === 'user' && /system-reminder/i.test(l.text);
+  }));
+});
+
+test('T329 applyInspectLiveFrame: tool_use body never mints a bubble by itself', function () {
+  let lines = AT.applyInspectLiveFrame([], {
+    type: 'assistant',
+    message: {
+      content: [{ type: 'tool_use', name: 'web_search', input: { query: 'x' } }],
+      stop_reason: 'tool_use',
+    },
+  });
+  assert.strictEqual(lines.length, 0, 'raw tool_use is not an assistant bubble');
+  lines = AT.applyInspectLiveFrame(lines, {
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'After tools.' }] },
+  });
+  assert.strictEqual(lines.length, 1);
+  assert.strictEqual(lines[0].text, 'After tools.');
 });
 
 if (failed) {

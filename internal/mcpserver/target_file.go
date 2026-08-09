@@ -11,8 +11,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/marcelocantos/jevons/internal/rsi"
 )
 
 // registerTargetFileTool exposes light-path bullseye filing for 🎯T93/T95
@@ -21,11 +24,13 @@ import (
 func (s *Server) registerTargetFileTool() {
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_target_file",
-			mcp.WithDescription("File a bullseye target in a repo ledger (light path for owner target: asides — 🎯T93/T95). Requires bullseye CLI on PATH. Always allocates a new 🎯 id (🎯T226: no near-duplicate attach). After success, confirm the id to the owner; the UI auto-closes the filing aside when it sees the confirmation marker."),
+			mcp.WithDescription("File a bullseye target in a repo ledger (light path for owner target: asides — 🎯T93/T95). Requires bullseye CLI on PATH. Always allocates a new 🎯 id (🎯T226: no near-duplicate attach). After success, confirm the id to the owner; the UI auto-closes the filing aside when it sees the confirmation marker. For filings that answer an RSI coach judgment, pass fingerprint= (from the judgment wire text) + evidence=: the 🎯T333 quality bar then applies (no bare phrase-friction leaves; concrete acceptance + evidence pointer required) and the disposition is recorded automatically."),
 			mcp.WithString("cwd", mcp.Required(), mcp.Description("Repo directory containing bullseye.yaml (or parent to discover)")),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Desired-state assertion (target name)")),
 			mcp.WithString("acceptance", mcp.Description("Acceptance criterion (single string; more can be space-separated or repeated via context)")),
 			mcp.WithString("context", mcp.Description("Optional context / why.")),
+			mcp.WithString("fingerprint", mcp.Description("RSI coach judgment fingerprint this filing answers (🎯T333). Enables the quality bar and auto-records disposition=file.")),
+			mcp.WithString("evidence", mcp.Description("Evidence pointer (session/event id). Required when fingerprint is set.")),
 		),
 		s.handleTargetFile,
 	)
@@ -37,11 +42,28 @@ func (s *Server) handleTargetFile(_ context.Context, req mcp.CallToolRequest) (*
 	name := strings.TrimSpace(str(args["name"]))
 	acceptance := strings.TrimSpace(str(args["acceptance"]))
 	contextText := strings.TrimSpace(str(args["context"]))
+	fingerprint := strings.TrimSpace(str(args["fingerprint"]))
+	evidence := strings.TrimSpace(str(args["evidence"]))
 	if cwd == "" || name == "" {
 		return mcp.NewToolResultError("cwd and name are required"), nil
 	}
+
+	// 🎯T333 quality bar: coach-linked filings must carry a mechanism, concrete
+	// acceptance, and an evidence pointer — bare phrase-friction leaves are refused.
+	qualityNote := ""
+	if fingerprint != "" {
+		q := rsi.ClassifyFilingQuality(name, []string{acceptance}, evidence)
+		if !q.OK {
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"filing refused by 🎯T333 quality bar:\n  - %s\nRewrite as a desired-state assertion with a mechanism, add concrete acceptance, and cite evidence (session/event id).",
+				strings.Join(q.Reasons, "\n  - "))), nil
+		}
+	} else if rsi.IsBarePhraseFrictionName(name) {
+		qualityNote = "\n⚠ 🎯T333 quality note: this name reads as a bare phrase-friction leaf. Prefer a desired-state assertion with a mechanism, concrete acceptance, and an evidence pointer."
+	}
+
 	if acceptance == "" {
-		acceptance = "Owner confirms the desired state is met."
+		acceptance = rsi.DefaultFilingAcceptance
 	}
 	if strings.HasPrefix(cwd, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -74,10 +96,32 @@ func (s *Server) handleTargetFile(_ context.Context, req mcp.CallToolRequest) (*
 	if id == "" {
 		// Still success if bullseye printed something useful.
 		return mcp.NewToolResultText(fmt.Sprintf(
-			"Target filed (parse id from output).\n__TARGET_FILED__:unknown\n\n%s", out)), nil
+			"Target filed (parse id from output).%s\n__TARGET_FILED__:unknown\n\n%s", qualityNote, out)), nil
+	}
+
+	// 🎯T333: close the judgment loop — record disposition=file automatically.
+	dispositionNote := ""
+	if fingerprint != "" {
+		if coach := s.RSICoach(); coach != nil && coach.Dispositions() != nil {
+			_, derr := coach.Dispositions().SetDisposition(rsi.SetDispositionArgs{
+				Fingerprint: fingerprint,
+				Disposition: rsi.DispositionFile,
+				TargetID:    id,
+				TargetCwd:   abs,
+				Evidence:    evidence,
+				Now:         time.Now().UTC(),
+			})
+			if derr != nil {
+				dispositionNote = fmt.Sprintf("\n⚠ disposition record failed (🎯T333): %v", derr)
+			} else {
+				dispositionNote = fmt.Sprintf("\nDisposition recorded (🎯T333): fp=%s → file 🎯%s", fingerprint, id)
+			}
+		} else {
+			dispositionNote = "\n⚠ disposition not recorded: rsi coach store unavailable"
+		}
 	}
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Filed 🎯%s — %s\n__TARGET_FILED__:%s\n\n%s", id, name, id, out)), nil
+		"Filed 🎯%s — %s%s%s\n__TARGET_FILED__:%s\n\n%s", id, name, dispositionNote, qualityNote, id, out)), nil
 }
 
 // boolArg coerces MCP JSON bool / string into bool.

@@ -4,6 +4,7 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +16,19 @@ import (
 // fleet panel (🎯T118). Derived semi-automatically from ACP progress /
 // tool steps and turn lifecycle — not from owner/overseer polling.
 type AgentProgress struct {
-	Phase   string    // working | idle | blocked (empty when unknown)
-	Step    string    // last tool/step title
-	Summary string    // preformatted single-line secondary text
+	Phase   string // working | idle | blocked (empty when unknown)
+	Step    string // last tool/step title
+	Summary string // preformatted single-line secondary text
+	// Model is the last model id an assistant turn reported (🎯T287).
+	// Sticky: frames that name no model never forget the previous one, so
+	// the RHS company-icon + condensed model prefix survives idle frames.
+	// Empty when the provider never names one (Grok ACP).
+	Model string
+	// Session is the registry session id this observation belongs to
+	// (🎯T311). Stamped by SyncEpoch; a different session means a different
+	// run (kill+respawn, migration), so the sticky model is dropped rather
+	// than inherited by whatever now answers to the same name.
+	Session string
 	Updated time.Time
 }
 
@@ -52,6 +63,78 @@ func (h *AgentProgressHub) Get(name string) AgentProgress {
 	return h.by[name]
 }
 
+// Forget drops every observation for name (🎯T311). Called when an agent
+// leaves the fleet: the sticky model is a fact about the process that just
+// died, and a later agent registered under the same name must not inherit it.
+func (h *AgentProgressHub) Forget(name string) {
+	if h == nil || name == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.by, name)
+}
+
+// ClearModel drops only the sticky model for name (🎯T323). Used when the
+// learned id belongs to a different company than the agent's live provider
+// (Claude-era "fable" under provider=grok after migrate): keep phase/step,
+// forget the foreign model so /api/agents never re-serves it.
+func (h *AgentProgressHub) ClearModel(name string) {
+	if h == nil || name == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	prev, ok := h.by[name]
+	if !ok || prev.Model == "" {
+		return
+	}
+	prev.Model = ""
+	prev.Updated = h.clock()
+	h.by[name] = prev
+}
+
+// Prune forgets every agent not in registered — the kill/remove path seen
+// from the listing side, so no call site has to remember to notify the hub
+// (🎯T311).
+func (h *AgentProgressHub) Prune(registered map[string]struct{}) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for name := range h.by {
+		if _, ok := registered[name]; !ok {
+			delete(h.by, name)
+		}
+	}
+}
+
+// SyncEpoch ties name's snapshot to the session the registry currently has
+// on its row (🎯T311). The first sighting stamps it; a later sighting under
+// a different session id means the agent was restarted on a fresh
+// conversation — possibly under a new model pin — so the stale observation
+// is dropped instead of masking the pin.
+func (h *AgentProgressHub) SyncEpoch(name, sessionID string) {
+	if h == nil || name == "" || sessionID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	prev, ok := h.by[name]
+	if !ok {
+		return
+	}
+	switch prev.Session {
+	case sessionID:
+	case "":
+		prev.Session = sessionID
+		h.by[name] = prev
+	default:
+		h.by[name] = AgentProgress{Session: sessionID, Updated: h.clock()}
+	}
+}
+
 // Observe updates progress from a claudia agent event.
 // Returns true when the glanceable summary changed (callers may push
 // agents_changed so the RHS refreshes without poll).
@@ -59,11 +142,11 @@ func (h *AgentProgressHub) Observe(name string, ev claudia.Event) bool {
 	if h == nil || name == "" {
 		return false
 	}
+	model := modelFromEvent(ev)
 	next, ok := progressFromEvent(ev)
-	if !ok {
+	if !ok && model == "" {
 		return false
 	}
-	next.Updated = h.clock()
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -71,16 +154,68 @@ func (h *AgentProgressHub) Observe(name string, ev claudia.Event) bool {
 		h.by = make(map[string]AgentProgress)
 	}
 	prev := h.by[name]
+
+	// Model-only frame (no progress signal): learn the model, keep chrome.
+	if !ok {
+		if prev.Model == model {
+			return false
+		}
+		prev.Model = model
+		prev.Updated = h.clock()
+		h.by[name] = prev
+		return true
+	}
+
+	next.Updated = h.clock()
+	next.Model = model
+	if next.Model == "" {
+		next.Model = prev.Model
+	}
+	next.Session = prev.Session
 	// Preserve last step across mid-turn assistant frames that only set phase.
 	if next.Step == "" && prev.Step != "" && next.Phase == "working" {
 		next.Step = prev.Step
 		next.Summary = composeProgressSummary(next.Phase, next.Step)
 	}
-	if prev.Summary == next.Summary && prev.Phase == next.Phase && prev.Step == next.Step {
+	if prev.Summary == next.Summary && prev.Phase == next.Phase &&
+		prev.Step == next.Step && prev.Model == next.Model {
 		return false
 	}
 	h.by[name] = next
 	return true
+}
+
+// modelFromEvent extracts the model id an assistant frame reports (🎯T287).
+// Claude Code JSONL carries it at message.model; other shapes may put a bare
+// top-level "model". Empty when the frame names none — the caller keeps the
+// last known model rather than forgetting it.
+//
+// "<synthetic>" frames (API error notices, cancellations — clustered around
+// daemon restarts) name no real model and must not poison the sticky
+// observation (🎯T348): the log parser has filtered them since 🎯T311, but the
+// live wire did not, so a restart window could pin '<synthetic>' into the hub
+// and paint a bare mark with a '<synthetic>' tooltip until the next real turn.
+func modelFromEvent(ev claudia.Event) string {
+	if len(ev.Raw) == 0 {
+		return ""
+	}
+	var line struct {
+		Model   string `json:"model"`
+		Message struct {
+			Model string `json:"model"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(ev.Raw, &line); err != nil {
+		return ""
+	}
+	m := strings.TrimSpace(line.Message.Model)
+	if m == "" {
+		m = strings.TrimSpace(line.Model)
+	}
+	if m == syntheticModel {
+		return ""
+	}
+	return m
 }
 
 // SetStatus seeds a baseline when the process map knows running/stopped
@@ -112,6 +247,8 @@ func (h *AgentProgressHub) SetStatus(name, status string) {
 	h.by[name] = AgentProgress{
 		Phase:   phase,
 		Summary: summary,
+		Model:   prev.Model, // 🎯T287: liveness baseline never forgets the model
+		Session: prev.Session,
 		Updated: h.clock(),
 	}
 }

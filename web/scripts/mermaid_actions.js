@@ -309,6 +309,26 @@
   const PRODUCT_FETCH_RECOVERY_SHORT = 'rebuild / restart-daily';
 
   /**
+   * Classify a failure message into an owner-facing kind.
+   * 🎯T294 adds panic/server: the graph API answers HTTP 200 with an `error`
+   * field when the bullseye CLI dies (`exit status 101 … panic graph.rs:704`),
+   * so a status-code-only classifier reads that as "nothing to show".
+   * @returns {'http'|'panic'|'server'|'network'|'unknown'}
+   */
+  function classifyFetchFailureKind(message, httpStatus) {
+    const msg = String(message == null ? '' : message);
+    if (/\bpanic(ked)?\b|\bfatal runtime\b|\bstack backtrace\b/i.test(msg)) return 'panic';
+    if (httpStatus != null) return 'http';
+    if (/failed to fetch|networkerror|network error|load failed|econnrefused/i.test(msg)) {
+      return 'network';
+    }
+    if (/\bexit status\s+\d+|\bsignal:\s|\bexec\b.*\bnot found\b|\bexecutable file not found\b/i.test(msg)) {
+      return 'server';
+    }
+    return msg.trim() ? 'server' : 'unknown';
+  }
+
+  /**
    * 🎯T196: Actionable chrome fetch failure view — HTTP code + recovery.
    * Must never look like emptyStateHtml (generic paste shell).
    *
@@ -342,17 +362,12 @@
       detail = detail.replace(/^HTTP\s+\d{3}\s*[:.\-–—]?\s*/i, '').trim();
     }
     let kind = o.kind || '';
-    if (!kind) {
-      if (httpStatus != null) kind = 'http';
-      else if (/failed to fetch|networkerror|network error|load failed|econnrefused/i.test(detail)) {
-        kind = 'network';
-      } else {
-        kind = 'unknown';
-      }
-    }
+    if (!kind) kind = classifyFetchFailureKind(detail, httpStatus);
     const recovery = String(o.recoveryHint || PRODUCT_FETCH_RECOVERY_HINT).trim()
       || PRODUCT_FETCH_RECOVERY_HINT;
-    const codeLabel = httpStatus != null ? ('HTTP ' + httpStatus) : '';
+    const codeLabel = httpStatus != null
+      ? ('HTTP ' + httpStatus)
+      : (kind === 'panic' ? 'Backend panic' : (kind === 'server' ? 'Backend error' : ''));
     let statusCore;
     if (codeLabel && detail && detail !== codeLabel) {
       statusCore = resource + ' failed: ' + codeLabel + ' — ' + detail;
@@ -381,7 +396,8 @@
     }
 
     const bodyHtml =
-      '<div class="mvp-error" data-mvp-fetch-error="1">' +
+      '<div class="mvp-error" data-mvp-fetch-error="1" data-mvp-error-kind="' +
+      escapeHtml(kind) + '">' +
       '<p class="mvp-error-title">' + escapeHtml(resource) + ' could not load</p>' +
       '<p class="mvp-error-body">' + bodyDetail + '</p>' +
       '<p class="mvp-error-hint">' + escapeHtml(recovery) + '</p>' +
@@ -421,12 +437,7 @@
       const m = /HTTP\s+(\d{3})\b/i.exec(message);
       if (m) status = parseInt(m[1], 10);
     }
-    if (!kind) {
-      if (status != null) kind = 'http';
-      else if (/failed to fetch|networkerror|network error|load failed|econnrefused/i.test(message)) {
-        kind = 'network';
-      }
-    }
+    if (!kind) kind = classifyFetchFailureKind(message, status);
     return productFetchFailureView({
       resource: d.resource || 'Request',
       status: status != null ? status : undefined,
@@ -476,6 +487,1050 @@
     return String(key || '') === 'Escape' && isMermaidPanelOpen(panel);
   }
 
+  /**
+   * 🎯T274: pause chat earlier-history hydrate while the large Frontier Graph
+   * overlay is open. Layout thrash + IntersectionObserver re-fire was flashing
+   * "Loading earlier…" above the empty/slow orthograph graph panel.
+   * Compact chrome (mvp-large absent) does not pause hydrate.
+   * @param {{ classList?: { contains: (c: string) => boolean }, hidden?: boolean }|null} panel
+   */
+  function shouldPauseHistoryHydrate(panel) {
+    if (!isMermaidPanelOpen(panel)) return false;
+    const cl = panel && panel.classList;
+    if (cl && typeof cl.contains === 'function') {
+      return !!cl.contains('mvp-large');
+    }
+    return false;
+  }
+
+  /** Default Mermaid render budget for frontier/panel diagrams (🎯T274). */
+  var MERMAID_RENDER_TIMEOUT_MS = 12000;
+
+  /**
+   * Race a render promise against a timeout so the panel never infinite-loads
+   * on a hung dagre layout (large single-component residual).
+   * @param {Promise} renderPromise
+   * @param {number} [ms]
+   * @returns {Promise}
+   */
+  function withMermaidRenderTimeout(renderPromise, ms) {
+    var budget = typeof ms === 'number' && ms > 0 ? ms : MERMAID_RENDER_TIMEOUT_MS;
+    var p = renderPromise && typeof renderPromise.then === 'function'
+      ? renderPromise
+      : Promise.resolve(renderPromise);
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        var err = new Error('Mermaid render timed out after ' + budget + 'ms');
+        err.kind = 'timeout';
+        reject(err);
+      }, budget);
+      p.then(function (v) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(v);
+      }, function (e) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(e);
+      });
+    });
+  }
+
+  // ── 🎯T268: single-graph scale-to-fill ─────────────────────────────────
+  // Frontier Graph (mvp-large) must expand the rendered SVG to fill the pane
+  // (contain: use full width or height). Shrink-only max-width:100% leaves
+  // tiny graphs floating in empty margins — fail.
+  // 🎯T276: multi-diagram = pack natural boxes into pane aspect, then scale
+  // the composite (not wrap-grid minmax(320px) micro-islands).
+  // 🎯T277: natural SVG aspect survives every step — uniform scale only.
+  // Never stretch SVG to chrome-inflated placement aspect (T276 false-fix).
+  // Multi-diagram *count* is T190/T274 split+orphans, not T277 inventing boxes.
+
+  /** Fixed title+pad chrome per pack block (not scaled into SVG aspect). 🎯T277 */
+  const PACK_BLOCK_CHROME_H = 48; // title ~28 + block pad ~20
+
+  // ── 🎯T294: legibility floor ───────────────────────────────────────────
+  // T280 shipped contain-scale as the owner default. For a wide flat mermaid
+  // (many siblings, few ranks) contain fills width only: the graph collapses
+  // to a micro horizontal strip of unreadable text in a huge empty pane, and
+  // the ≥95%-of-one-axis cover oracle still passes. Cover alone is therefore
+  // NOT a fill oracle. Legibility is the binding constraint: never shrink a
+  // graph below the scale at which its node labels stay human-readable.
+
+  /** Mermaid default node-label font size (px) at scale 1. */
+  const MERMAID_LABEL_FONT_PX = 16;
+
+  /** Smallest node-label size (px) an owner can read without zooming. */
+  const MIN_LEGIBLE_LABEL_PX = 11;
+
+  /** Smallest uniform scale that keeps node labels at/above the floor. */
+  function legibilityFloorScale(opts) {
+    const o = opts || {};
+    const natural = positiveNumber(o.naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    const floor = positiveNumber(o.minLabelPx) || MIN_LEGIBLE_LABEL_PX;
+    if (!natural) return 1;
+    return floor / natural;
+  }
+
+  /** Rendered label size (px) at a given uniform scale. */
+  function effectiveLabelPx(scale, naturalFontPx) {
+    const s = positiveNumber(scale);
+    const natural = positiveNumber(naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    return s * natural;
+  }
+
+  /**
+   * 🎯T294 legibility oracle: node labels readable without zoom.
+   * @param {{ scale: number, naturalFontPx?: number, minLabelPx?: number }} m
+   */
+  function assessGraphLegibility(metrics) {
+    const m = metrics || {};
+    const natural = positiveNumber(m.naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    const floorPx = positiveNumber(m.minLabelPx) || MIN_LEGIBLE_LABEL_PX;
+    const scale = positiveNumber(m.scale);
+    const labelPx = effectiveLabelPx(scale, natural);
+    return {
+      ok: labelPx > 0 && labelPx >= floorPx - 1e-9,
+      labelPx: labelPx,
+      minLabelPx: floorPx,
+      floorScale: floorPx / natural,
+      mode: 'label-legibility',
+    };
+  }
+
+  /**
+   * 🎯T294 fail-class (a): micro horizontal illegible strip.
+   * The owner screenshot — content pinned to ~100% of one axis, a sliver of the
+   * other, labels below the readable floor. Conjunction on purpose: a wide
+   * graph shown at a readable scale is not a trainwreck, only an unreadable
+   * one is. Cover-only oracles (T280) miss this entirely.
+   *
+   * @param {{
+   *   paneW:number, paneH:number,
+   *   svgDisplayW:number, svgDisplayH:number,
+   *   scale:number, naturalFontPx?:number, minLabelPx?:number
+   * }} metrics
+   * @param {{ majorCover?:number, minorCover?:number }} [opts]
+   */
+  function assessMicroStripLayout(metrics, opts) {
+    const m = metrics || {};
+    const o = opts || {};
+    const majorMin = o.majorCover != null ? positiveNumber(o.majorCover) : 0.9;
+    const minorMax = o.minorCover != null ? positiveNumber(o.minorCover) : 0.35;
+    const paneW = positiveNumber(m.paneW);
+    const paneH = positiveNumber(m.paneH);
+    const dw = positiveNumber(m.svgDisplayW);
+    const dh = positiveNumber(m.svgDisplayH);
+    const legible = assessGraphLegibility(m);
+    if (!paneW || !paneH || !dw || !dh) {
+      return {
+        isMicroStrip: false,
+        coverW: 0,
+        coverH: 0,
+        legible: legible,
+        mode: 'micro-strip',
+      };
+    }
+    const coverW = dw / paneW;
+    const coverH = dh / paneH;
+    const major = Math.max(coverW, coverH);
+    const minor = Math.min(coverW, coverH);
+    const stripShape = major >= majorMin && minor < minorMax;
+    return {
+      isMicroStrip: stripShape && !legible.ok,
+      stripShape: stripShape,
+      coverW: coverW,
+      coverH: coverH,
+      legible: legible,
+      mode: 'micro-strip',
+    };
+  }
+
+  /**
+   * 🎯T294 fill oracle: how much of the pane carries actual diagram ink.
+   * A single primary strip in a multi-component ledger scores near zero even
+   * when it spans the full width — that is the "huge empty pane" the owner saw.
+   * @param {{ paneW:number, paneH:number }} pane
+   * @param {Array<{w:number,h:number}>} inkBoxes rendered SVG display sizes
+   */
+  function assessPaneInkCover(pane, inkBoxes, opts) {
+    const p = pane || {};
+    const o = opts || {};
+    const minCover = o.minCover != null ? positiveNumber(o.minCover) : 0.25;
+    const paneW = positiveNumber(p.paneW);
+    const paneH = positiveNumber(p.paneH);
+    const list = Array.isArray(inkBoxes) ? inkBoxes : [];
+    let ink = 0;
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i] || {};
+      ink += positiveNumber(b.w) * positiveNumber(b.h);
+    }
+    const paneArea = paneW * paneH;
+    // Content may overflow a scrolling pane; cap at 1 so scroll is not a bonus.
+    const cover = paneArea > 0 ? Math.min(1, ink / paneArea) : 0;
+    return {
+      ok: cover >= minCover,
+      cover: cover,
+      inkArea: ink,
+      paneArea: paneArea,
+      mode: 'pane-ink-cover',
+    };
+  }
+
+  /** Positive finite number or 0. */
+  function positiveNumber(n) {
+    const x = typeof n === 'number' ? n : parseFloat(n);
+    return isFinite(x) && x > 0 ? x : 0;
+  }
+
+  /**
+   * 🎯T277: true when SVG display size preserves natural aspect (uniform scale).
+   * Fails chrome-inflated stretch (displayH includes title/pad empty).
+   */
+  function placementSvgAspectMatchesNatural(placement, eps) {
+    const p = placement || {};
+    const nw = positiveNumber(p.naturalW != null ? p.naturalW : p.w);
+    const nh = positiveNumber(p.naturalH != null ? p.naturalH : p.h);
+    const dw = positiveNumber(p.svgDisplayW != null ? p.svgDisplayW : p.displayW);
+    const dh = positiveNumber(p.svgDisplayH != null ? p.svgDisplayH : p.displayH);
+    if (!nw || !nh || !dw || !dh) return false;
+    const tol = eps != null && isFinite(eps) ? Math.abs(eps) : 1e-6;
+    return Math.abs(dw / dh - nw / nh) <= tol;
+  }
+
+  /**
+   * 🎯T277 false-fix model: pack chrome-inflated boxes then size SVG to the
+   * full placement (title+pad in height). Produces tall-skinny stretch —
+   * placementSvgAspectMatchesNatural must fail.
+   */
+  function planChromeInflatedStretchOracle(boxes, opts) {
+    const o = opts || {};
+    const chromeH = o.chromeH != null ? Math.max(0, positiveNumber(o.chromeH) || 0) : PACK_BLOCK_CHROME_H;
+    const list = Array.isArray(boxes) ? boxes : [];
+    const inflated = [];
+    const naturals = [];
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i] || {};
+      const w = positiveNumber(b.w);
+      const h = positiveNumber(b.h);
+      if (!w || !h) continue;
+      naturals.push({ w: w, h: h, id: b.id, i: i });
+      inflated.push({ w: w, h: h + chromeH, id: b.id });
+    }
+    const packed = packBoxesIntoPaneAspect(inflated, {
+      paneW: o.paneW,
+      paneH: o.paneH,
+      gap: o.gap,
+    });
+    const paneW = positiveNumber(o.paneW);
+    const paneH = positiveNumber(o.paneH);
+    if (!packed.placements.length || !packed.compositeW || !packed.compositeH || !paneW || !paneH) {
+      return { mode: 'chrome-inflated-stretch', placements: [], scale: 1, fillsPane: false };
+    }
+    const scale = computeContainScale(packed.compositeW, packed.compositeH, paneW, paneH);
+    const placements = packed.placements.map(function (p) {
+      const nat = naturals[p.i] || { w: p.w, h: Math.max(1, p.h - chromeH) };
+      return {
+        i: p.i,
+        id: p.id,
+        naturalW: nat.w,
+        naturalH: nat.h,
+        // Bug path: SVG stretched to full placement (chrome in aspect).
+        displayW: p.w * scale,
+        displayH: p.h * scale,
+        svgDisplayW: p.w * scale,
+        svgDisplayH: p.h * scale,
+      };
+    });
+    return {
+      mode: 'chrome-inflated-stretch',
+      scale: scale,
+      placements: placements,
+      fillsPane: Math.max(
+        (packed.compositeW * scale) / paneW,
+        (packed.compositeH * scale) / paneH
+      ) >= 0.95,
+    };
+  }
+
+  /**
+   * Natural SVG size from attrs / viewBox (DOM-free input shape).
+   * @param {{ width?: *, height?: *, viewBox?: string|null, getAttribute?: function }} svg
+   * @returns {{ w: number, h: number }}
+   */
+  function parseSvgNaturalSize(svg) {
+    if (!svg || typeof svg !== 'object') return { w: 0, h: 0 };
+    let w = 0;
+    let h = 0;
+    if (typeof svg.getAttribute === 'function') {
+      w = positiveNumber(svg.getAttribute('width'));
+      h = positiveNumber(svg.getAttribute('height'));
+      if ((!w || !h) && svg.getAttribute('viewBox')) {
+        const vb = String(svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/);
+        if (vb.length >= 4) {
+          if (!w) w = positiveNumber(vb[2]);
+          if (!h) h = positiveNumber(vb[3]);
+        }
+      }
+    } else {
+      w = positiveNumber(svg.width);
+      h = positiveNumber(svg.height);
+      if ((!w || !h) && svg.viewBox) {
+        const vb = String(svg.viewBox).trim().split(/[\s,]+/);
+        if (vb.length >= 4) {
+          if (!w) w = positiveNumber(vb[2]);
+          if (!h) h = positiveNumber(vb[3]);
+        }
+      }
+    }
+    return { w: w, h: h };
+  }
+
+  /**
+   * Contain scale: largest scale that keeps the whole graph in the pane.
+   * Scales UP small graphs and DOWN large ones. Never returns 0.
+   * @returns {number}
+   */
+  function computeContainScale(svgW, svgH, paneW, paneH) {
+    const sw = positiveNumber(svgW);
+    const sh = positiveNumber(svgH);
+    const pw = positiveNumber(paneW);
+    const ph = positiveNumber(paneH);
+    if (!sw || !sh || !pw || !ph) return 1;
+    return Math.min(pw / sw, ph / sh);
+  }
+
+  /**
+   * 🎯T268 fit plan for a single graph in the frontier pane.
+   * Multi-diagram goes through planMultiDiagramPackScaleToFill (🎯T276).
+   * @param {{
+   *   svgW: number, svgH: number, paneW: number, paneH: number,
+   *   padding?: number, diagramCount?: number
+   * }} opts
+   * @returns {{
+   *   mode: 'scale-to-fill'|'skip',
+   *   scale: number,
+   *   displayW: number,
+   *   displayH: number,
+   *   fillsPane: boolean
+   * }}
+   */
+  function planSingleGraphScaleToFill(opts) {
+    const o = opts || {};
+    const count = o.diagramCount != null ? Math.floor(o.diagramCount) : 1;
+    if (count > 1) {
+      // Caller should use planMultiDiagramPackScaleToFill; keep single-path pure.
+      return {
+        mode: 'skip',
+        scale: 1,
+        displayW: positiveNumber(o.svgW),
+        displayH: positiveNumber(o.svgH),
+        fillsPane: false,
+      };
+    }
+    const pad = o.padding != null ? Math.max(0, positiveNumber(o.padding) || 0) : 24;
+    // padding is total inset (both sides); floor at 0 usable.
+    const paneW = Math.max(0, positiveNumber(o.paneW) - pad);
+    const paneH = Math.max(0, positiveNumber(o.paneH) - pad);
+    const svgW = positiveNumber(o.svgW);
+    const svgH = positiveNumber(o.svgH);
+    if (!svgW || !svgH || !paneW || !paneH) {
+      return {
+        mode: 'skip',
+        scale: 1,
+        displayW: svgW,
+        displayH: svgH,
+        fillsPane: false,
+      };
+    }
+    const naturalFontPx = positiveNumber(o.naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    const minLabelPx = positiveNumber(o.minLabelPx) || MIN_LEGIBLE_LABEL_PX;
+    const floorScale = legibilityFloorScale({
+      naturalFontPx: naturalFontPx,
+      minLabelPx: minLabelPx,
+    });
+    const containScale = computeContainScale(svgW, svgH, paneW, paneH);
+    // 🎯T294: never shrink past readable. A wide flat graph contained into the
+    // pane becomes an illegible strip; hold the floor and let the pane scroll.
+    const scale = Math.max(containScale, floorScale);
+    const displayW = svgW * scale;
+    const displayH = svgH * scale;
+    // Fills pane when at least one axis uses ≥95% of usable pane.
+    const coverW = displayW / paneW;
+    const coverH = displayH / paneH;
+    const fillsPane = Math.max(coverW, coverH) >= 0.95;
+    return {
+      mode: 'scale-to-fill',
+      scale: scale,
+      containScale: containScale,
+      floorScale: floorScale,
+      labelPx: effectiveLabelPx(scale, naturalFontPx),
+      legible: true,
+      floored: scale > containScale + 1e-9,
+      overflowX: displayW > paneW + 1,
+      overflowY: displayH > paneH + 1,
+      displayW: displayW,
+      displayH: displayH,
+      fillsPane: fillsPane,
+    };
+  }
+
+  /**
+   * 🎯T276/T277: shelf-pack **natural** diagram boxes into a nominal rectangle
+   * whose aspect matches the pane. First-fit decreasing shelf (height-major).
+   * Boxes must be natural SVG size — do not pre-inflate with title/pad chrome
+   * (chrome is fixed after scale; 🎯T277).
+   * @param {Array<{w:number,h:number,id?:string}>} boxes
+   * @param {{ paneW: number, paneH: number, gap?: number }} opts
+   * @returns {{
+   *   placements: Array<{i:number,id?:string,x:number,y:number,w:number,h:number,row:number}>,
+   *   compositeW: number,
+   *   compositeH: number,
+   *   shelfWidth: number,
+   *   rowCount: number
+   * }}
+   */
+  function packBoxesIntoPaneAspect(boxes, opts) {
+    const o = opts || {};
+    const paneW = positiveNumber(o.paneW);
+    const paneH = positiveNumber(o.paneH);
+    const items = shelfItems(boxes);
+    if (!items.length) {
+      return { placements: [], compositeW: 0, compositeH: 0, shelfWidth: 0, rowCount: 0 };
+    }
+    // Target shelf width from pane aspect so packed rows fill a pane-shaped bin.
+    // floor at largest box width so every item can sit on a shelf.
+    let maxW = 0;
+    let area = 0;
+    for (let j = 0; j < items.length; j++) {
+      if (items[j].w > maxW) maxW = items[j].w;
+      area += items[j].w * items[j].h;
+    }
+    let shelfWidth = maxW;
+    if (paneW > 0 && paneH > 0) {
+      // Ideal width for a bin with pane aspect and total area (plus gap slack).
+      const aspect = paneW / paneH;
+      const idealW = Math.sqrt(area * aspect);
+      shelfWidth = Math.max(maxW, idealW);
+      // Prefer not wider than pane natural; still ≥ maxW.
+      if (paneW >= maxW) shelfWidth = Math.min(Math.max(shelfWidth, maxW), Math.max(paneW, maxW));
+      else shelfWidth = maxW;
+    }
+    return packBoxesIntoShelfWidth(boxes, {
+      shelfWidth: shelfWidth,
+      gap: o.gap,
+    });
+  }
+
+  /** Normalize + index boxes for shelf packing (drops degenerate entries). */
+  function shelfItems(boxes) {
+    const list = Array.isArray(boxes) ? boxes : [];
+    const items = [];
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i] || {};
+      const w = positiveNumber(b.w);
+      const h = positiveNumber(b.h);
+      if (!w || !h) continue;
+      items.push({ i: i, id: b.id, w: w, h: h });
+    }
+    return items;
+  }
+
+  /**
+   * 🎯T294: first-fit-decreasing shelf pack into an explicit bin width.
+   * packBoxesIntoPaneAspect derives that width from the pane form-factor;
+   * the reflow path (planFrontierGraphFit) derives it from the readable scale.
+   * @param {Array<{w:number,h:number,id?:string}>} boxes
+   * @param {{ shelfWidth: number, gap?: number }} opts
+   */
+  function packBoxesIntoShelfWidth(boxes, opts) {
+    const o = opts || {};
+    const gap = o.gap != null ? Math.max(0, positiveNumber(o.gap) || 0) : 12;
+    const items = shelfItems(boxes);
+    if (!items.length) {
+      return { placements: [], compositeW: 0, compositeH: 0, shelfWidth: 0, rowCount: 0 };
+    }
+    let maxW = 0;
+    for (let j = 0; j < items.length; j++) {
+      if (items[j].w > maxW) maxW = items[j].w;
+    }
+    // Every item must fit on a shelf, so the bin can never be narrower than
+    // the widest box (it simply overflows the pane and the pane scrolls).
+    const shelfWidth = Math.max(maxW, positiveNumber(o.shelfWidth));
+    // Sort tallest-first for denser shelves (stable by original index).
+    items.sort(function (a, b) {
+      if (b.h !== a.h) return b.h - a.h;
+      return a.i - b.i;
+    });
+    const placements = [];
+    let cursorY = 0;
+    let shelfH = 0;
+    let cursorX = 0;
+    let usedW = 0;
+    let row = 0;
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k];
+      if (cursorX > 0 && cursorX + it.w > shelfWidth + 1e-9) {
+        // New shelf.
+        cursorY += shelfH + gap;
+        cursorX = 0;
+        shelfH = 0;
+        row += 1;
+      }
+      placements.push({
+        i: it.i,
+        id: it.id,
+        x: cursorX,
+        y: cursorY,
+        w: it.w,
+        h: it.h,
+        row: row,
+      });
+      cursorX += it.w + gap;
+      if (it.h > shelfH) shelfH = it.h;
+      const rowRight = cursorX - gap;
+      if (rowRight > usedW) usedW = rowRight;
+    }
+    const compositeH = cursorY + shelfH;
+    const compositeW = Math.max(usedW, maxW);
+    const rowCount = row + 1;
+    // Restore placement order by original diagram index.
+    placements.sort(function (a, b) { return a.i - b.i; });
+    return {
+      placements: placements,
+      compositeW: compositeW,
+      compositeH: compositeH,
+      shelfWidth: shelfWidth,
+      rowCount: rowCount,
+    };
+  }
+
+  /**
+   * 🎯T276/T277: measure natural SVG boxes → pack into pane form-factor →
+   * contain-scale composite. SVG display always preserves natural aspect
+   * (uniform scale). Placement height = scaled natural SVG + **fixed** chrome
+   * (title/pad constant) — never stretch SVG to chrome-inflated aspect.
+   *
+   * Multi-diagram count is T190/T274 split+orphans; this only packs what it
+   * is given.
+   *
+   * @param {{
+   *   boxes: Array<{w:number,h:number,id?:string}>,
+   *   paneW: number, paneH: number,
+   *   padding?: number, gap?: number, chromeH?: number
+   * }} opts
+   * @returns {{
+   *   mode: 'pack-scale-to-fill'|'skip',
+   *   scale: number,
+   *   compositeW: number,
+   *   compositeH: number,
+   *   displayW: number,
+   *   displayH: number,
+   *   fillsPane: boolean,
+   *   chromeH: number,
+   *   placements: Array<{
+   *     i:number,id?:string,x:number,y:number,w:number,h:number,row?:number,
+   *     naturalW:number,naturalH:number,
+   *     displayX:number,displayY:number,displayW:number,displayH:number,
+   *     svgDisplayW:number,svgDisplayH:number
+   *   }>
+   * }}
+   */
+  /**
+   * Scale a natural shelf pack into display coordinates, rebuilding row Y so
+   * the **fixed** (unscaled) per-block chrome cannot overlap the next row and
+   * never enters the SVG aspect (🎯T277).
+   * @param {{placements:Array,rowCount:number}} packed
+   * @param {{ scale:number, chromeH:number, gap:number }} opts
+   */
+  function placePackedRows(packed, opts) {
+    const o = opts || {};
+    const scale = positiveNumber(o.scale) || 1;
+    const chromeH = Math.max(0, positiveNumber(o.chromeH) || 0);
+    const gap = Math.max(0, positiveNumber(o.gap) || 0);
+    const src = (packed && Array.isArray(packed.placements)) ? packed.placements : [];
+    const byRow = {};
+    const rowOrder = [];
+    for (let pi = 0; pi < src.length; pi++) {
+      const p = src[pi];
+      const r = p.row != null ? p.row : 0;
+      if (!byRow[r]) {
+        byRow[r] = [];
+        rowOrder.push(r);
+      }
+      byRow[r].push(p);
+    }
+    rowOrder.sort(function (a, b) { return a - b; });
+
+    const placements = [];
+    let cursorY = 0;
+    let usedW = 0;
+    for (let ri = 0; ri < rowOrder.length; ri++) {
+      const rowPls = byRow[rowOrder[ri]];
+      let rowSvgH = 0;
+      for (let j = 0; j < rowPls.length; j++) {
+        if (rowPls[j].h > rowSvgH) rowSvgH = rowPls[j].h;
+      }
+      for (let j = 0; j < rowPls.length; j++) {
+        const p = rowPls[j];
+        const svgDisplayW = p.w * scale;
+        const svgDisplayH = p.h * scale;
+        const displayX = p.x * scale;
+        const right = displayX + svgDisplayW;
+        if (right > usedW) usedW = right;
+        placements.push({
+          i: p.i,
+          id: p.id,
+          x: p.x,
+          y: p.y,
+          w: p.w,
+          h: p.h,
+          row: p.row,
+          naturalW: p.w,
+          naturalH: p.h,
+          displayX: displayX,
+          displayY: cursorY,
+          displayW: svgDisplayW,
+          displayH: svgDisplayH + chromeH,
+          svgDisplayW: svgDisplayW,
+          svgDisplayH: svgDisplayH,
+        });
+      }
+      cursorY += rowSvgH * scale + chromeH;
+      if (ri < rowOrder.length - 1) cursorY += gap * scale;
+    }
+    placements.sort(function (a, b) { return a.i - b.i; });
+    return { placements: placements, displayW: usedW, displayH: cursorY };
+  }
+
+  function planMultiDiagramPackScaleToFill(opts) {
+    const o = opts || {};
+    const pad = o.padding != null ? Math.max(0, positiveNumber(o.padding) || 0) : 0;
+    const paneW = Math.max(0, positiveNumber(o.paneW) - pad);
+    const paneH = Math.max(0, positiveNumber(o.paneH) - pad);
+    const gap = o.gap != null ? Math.max(0, positiveNumber(o.gap) || 0) : 12;
+    const chromeH = o.chromeH != null
+      ? Math.max(0, positiveNumber(o.chromeH) || 0)
+      : PACK_BLOCK_CHROME_H;
+    // Natural SVG boxes only — chrome is fixed after scale (🎯T277).
+    const packed = packBoxesIntoPaneAspect(o.boxes || [], {
+      paneW: paneW,
+      paneH: paneH,
+      gap: gap,
+    });
+    if (!packed.placements.length || !packed.compositeW || !packed.compositeH || !paneW || !paneH) {
+      return {
+        mode: 'skip',
+        scale: 1,
+        compositeW: packed.compositeW || 0,
+        compositeH: packed.compositeH || 0,
+        displayW: packed.compositeW || 0,
+        displayH: packed.compositeH || 0,
+        fillsPane: false,
+        chromeH: chromeH,
+        placements: [],
+      };
+    }
+    const cW = packed.compositeW;
+    const cH = packed.compositeH;
+    const nRows = packed.rowCount > 0 ? packed.rowCount : 1;
+    // finalW = cW * S; finalH = cH * S + nRows * chromeH (chrome fixed per row).
+    // Solve S so composite fits the pane (contain).
+    let scaleW = paneW / cW;
+    let scaleH;
+    if (chromeH > 0 && nRows * chromeH < paneH) {
+      scaleH = (paneH - nRows * chromeH) / cH;
+    } else if (chromeH <= 0) {
+      scaleH = paneH / cH;
+    } else {
+      // Chrome alone would overflow; shrink SVG aggressively.
+      scaleH = paneH / (cH + nRows * chromeH);
+    }
+    let scale = Math.min(scaleW, scaleH);
+    if (!(scale > 0) || !isFinite(scale)) scale = 1;
+
+    const laid = placePackedRows(packed, { scale: scale, chromeH: chromeH, gap: gap });
+    const placements = laid.placements;
+    const displayW = laid.displayW > 0 ? laid.displayW : cW * scale;
+    const displayH = laid.displayH;
+    const coverW = displayW / paneW;
+    const coverH = displayH / paneH;
+    const fillsPane = Math.max(coverW, coverH) >= 0.95;
+    return {
+      mode: 'pack-scale-to-fill',
+      scale: scale,
+      compositeW: cW,
+      compositeH: cH,
+      displayW: displayW,
+      displayH: displayH,
+      fillsPane: fillsPane,
+      chromeH: chromeH,
+      placements: placements,
+    };
+  }
+
+  /**
+   * 🎯T294: the owner-facing Frontier Graph fit.
+   *
+   * (1) Pack natural boxes into a pane-aspect bin and contain-scale it (T276/T277).
+   * (2) If that scale renders labels below the legibility floor, **reflow**
+   *     instead of shrinking: fix the scale at the floor and re-pack into a bin
+   *     whose scaled width is the pane width, so rows wrap across the pane and
+   *     the composite grows downward (the pane scrolls).
+   *
+   * Contain-only is what produced the micro strip: it optimizes "everything
+   * visible" and will happily trade all legibility for it. Reflow keeps the
+   * text readable and spends the pane's other axis instead.
+   *
+   * @param {{
+   *   boxes: Array<{w:number,h:number,id?:string}>,
+   *   paneW:number, paneH:number,
+   *   padding?:number, gap?:number, chromeH?:number,
+   *   naturalFontPx?:number, minLabelPx?:number
+   * }} opts
+   */
+  function planFrontierGraphFit(opts) {
+    const o = opts || {};
+    const pad = o.padding != null ? Math.max(0, positiveNumber(o.padding) || 0) : 0;
+    const paneW = Math.max(0, positiveNumber(o.paneW) - pad);
+    const paneH = Math.max(0, positiveNumber(o.paneH) - pad);
+    const gap = o.gap != null ? Math.max(0, positiveNumber(o.gap) || 0) : 12;
+    const chromeH = o.chromeH != null
+      ? Math.max(0, positiveNumber(o.chromeH) || 0)
+      : PACK_BLOCK_CHROME_H;
+    const naturalFontPx = positiveNumber(o.naturalFontPx) || MERMAID_LABEL_FONT_PX;
+    const minLabelPx = positiveNumber(o.minLabelPx) || MIN_LEGIBLE_LABEL_PX;
+    const floorScale = legibilityFloorScale({
+      naturalFontPx: naturalFontPx,
+      minLabelPx: minLabelPx,
+    });
+
+    const fit = planMultiDiagramPackScaleToFill({
+      boxes: o.boxes || [],
+      paneW: paneW,
+      paneH: paneH,
+      padding: 0,
+      gap: gap,
+      chromeH: chromeH,
+    });
+    if (fit.mode !== 'pack-scale-to-fill') {
+      return {
+        mode: 'skip',
+        scale: 1,
+        floorScale: floorScale,
+        labelPx: 0,
+        legible: false,
+        reflowed: false,
+        overflowX: false,
+        overflowY: false,
+        compositeW: fit.compositeW || 0,
+        compositeH: fit.compositeH || 0,
+        displayW: fit.displayW || 0,
+        displayH: fit.displayH || 0,
+        fillsPane: false,
+        chromeH: chromeH,
+        placements: [],
+      };
+    }
+    if (fit.scale >= floorScale - 1e-9) {
+      // Contain fit is already readable — nothing to trade.
+      return {
+        mode: 'pack-scale-to-fill',
+        scale: fit.scale,
+        floorScale: floorScale,
+        labelPx: effectiveLabelPx(fit.scale, naturalFontPx),
+        legible: true,
+        reflowed: false,
+        overflowX: fit.displayW > paneW + 1,
+        overflowY: fit.displayH > paneH + 1,
+        compositeW: fit.compositeW,
+        compositeH: fit.compositeH,
+        displayW: fit.displayW,
+        displayH: fit.displayH,
+        fillsPane: fit.fillsPane,
+        chromeH: chromeH,
+        placements: fit.placements,
+      };
+    }
+
+    // Reflow: hold the scale at the readable floor, re-pack so scaled rows
+    // span the pane width. Natural-unit bin width = paneW / floorScale.
+    const scale = floorScale;
+    const binW = scale > 0 ? paneW / scale : paneW;
+    const packed = packBoxesIntoShelfWidth(o.boxes || [], { shelfWidth: binW, gap: gap });
+    if (!packed.placements.length) {
+      return {
+        mode: 'skip',
+        scale: 1,
+        floorScale: floorScale,
+        labelPx: 0,
+        legible: false,
+        reflowed: false,
+        overflowX: false,
+        overflowY: false,
+        compositeW: 0,
+        compositeH: 0,
+        displayW: 0,
+        displayH: 0,
+        fillsPane: false,
+        chromeH: chromeH,
+        placements: [],
+      };
+    }
+    const laid = placePackedRows(packed, { scale: scale, chromeH: chromeH, gap: gap });
+    const displayW = laid.displayW;
+    const displayH = laid.displayH;
+    // Reflow always uses the full readable scale, so "fills" means the composite
+    // reaches the pane on some axis — including by overflowing into scroll.
+    const fillsPane = paneW > 0 && paneH > 0
+      && Math.max(displayW / paneW, displayH / paneH) >= 0.95;
+    return {
+      mode: 'reflow-readable',
+      scale: scale,
+      floorScale: floorScale,
+      labelPx: effectiveLabelPx(scale, naturalFontPx),
+      legible: true,
+      reflowed: true,
+      overflowX: displayW > paneW + 1,
+      overflowY: displayH > paneH + 1,
+      compositeW: packed.compositeW,
+      compositeH: packed.compositeH,
+      displayW: displayW,
+      displayH: displayH,
+      fillsPane: fillsPane,
+      chromeH: chromeH,
+      placements: laid.placements,
+    };
+  }
+
+  /**
+   * 🎯T280: tall-empty-column layout oracle (DOM-metric pure).
+   * Owner trainwreck: N tall grey Component columns with tiny SVG content.
+   * Fails (isTallEmpty: true) when ≥2 blocks are tall (h/w ≥ maxAspect)
+   * and SVG area covers < minCover of the block.
+   * @param {Array<{blockW:number,blockH:number,svgW:number,svgH:number}>} blocks
+   * @param {{ maxAspect?: number, minCover?: number, minTallEmpty?: number }} opts
+   * @returns {{
+   *   isTallEmpty: boolean,
+   *   tallEmptyCount: number,
+   *   blockCount: number,
+   *   mode: string,
+   *   details: Array<object>
+   * }}
+   */
+  function assessTallEmptyColumnLayout(blocks, opts) {
+    const o = opts || {};
+    const maxAspect = o.maxAspect != null ? positiveNumber(o.maxAspect) : 2.0;
+    const minCover = o.minCover != null ? positiveNumber(o.minCover) : 0.35;
+    const minTallEmpty = o.minTallEmpty != null ? Math.max(1, Math.floor(o.minTallEmpty)) : 2;
+    const list = Array.isArray(blocks) ? blocks : [];
+    const details = [];
+    let tallEmptyCount = 0;
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i] || {};
+      const blockW = positiveNumber(b.blockW);
+      const blockH = positiveNumber(b.blockH);
+      const svgW = positiveNumber(b.svgW);
+      const svgH = positiveNumber(b.svgH);
+      const aspect = blockW > 0 ? blockH / blockW : 0;
+      const blockArea = blockW * blockH;
+      const svgArea = svgW * svgH;
+      const cover = blockArea > 0 ? svgArea / blockArea : 0;
+      const isTall = aspect >= maxAspect;
+      const lowCover = cover < minCover;
+      const isTallEmpty = isTall && lowCover && blockW > 0 && blockH > 0;
+      if (isTallEmpty) tallEmptyCount++;
+      details.push({
+        i: i,
+        aspect: aspect,
+        cover: cover,
+        isTall: isTall,
+        lowCover: lowCover,
+        isTallEmpty: isTallEmpty,
+      });
+    }
+    return {
+      isTallEmpty: tallEmptyCount >= minTallEmpty,
+      tallEmptyCount: tallEmptyCount,
+      blockCount: list.length,
+      mode: 'tall-empty-columns',
+      details: details,
+    };
+  }
+
+  /**
+   * 🎯T280: single-pane SVG cover oracle — good owner default after scale-to-fill.
+   * Passes when one SVG covers ≥ minCover of the larger pane axis (contain fill).
+   * @param {{ paneW:number, paneH:number, svgDisplayW:number, svgDisplayH:number }} metrics
+   * @param {{ minCover?: number }} opts
+   */
+  function assessSingleGraphPaneCover(metrics, opts) {
+    const o = opts || {};
+    const m = metrics || {};
+    const minCover = o.minCover != null ? positiveNumber(o.minCover) : 0.75;
+    const paneW = positiveNumber(m.paneW);
+    const paneH = positiveNumber(m.paneH);
+    const svgW = positiveNumber(m.svgDisplayW);
+    const svgH = positiveNumber(m.svgDisplayH);
+    if (!paneW || !paneH || !svgW || !svgH) {
+      return { ok: false, cover: 0, mode: 'single-pane-cover' };
+    }
+    const cover = Math.max(svgW / paneW, svgH / paneH);
+    return {
+      ok: cover >= minCover,
+      cover: cover,
+      mode: 'single-pane-cover',
+    };
+  }
+
+  /**
+   * Oracle helper: wrap-grid micro-island layout never fills the pane.
+   * Models T190 CSS minmax(min(100%, 320px), 1fr) — each cell ≤320, no
+   * composite scale. Used by hermetics so the old path fails ≥95% cover.
+   * @param {Array<{w:number,h:number}>} boxes
+   * @param {{ paneW: number, paneH: number, cellMax?: number }} opts
+   * @returns {{ fillsPane: boolean, maxCellCover: number, mode: string }}
+   */
+  function planWrapGridMicroIslandOracle(boxes, opts) {
+    const o = opts || {};
+    const paneW = positiveNumber(o.paneW);
+    const paneH = positiveNumber(o.paneH);
+    const cellMax = o.cellMax != null ? positiveNumber(o.cellMax) : 320;
+    const list = Array.isArray(boxes) ? boxes : [];
+    if (!paneW || !paneH || !list.length) {
+      return { fillsPane: false, maxCellCover: 0, mode: 'wrap-grid-micro' };
+    }
+    // Each diagram sits in a ≤cellMax column; SVG max-width 100% of cell, no scale-up.
+    let maxCover = 0;
+    for (let i = 0; i < list.length; i++) {
+      const bw = positiveNumber(list[i] && list[i].w);
+      const bh = positiveNumber(list[i] && list[i].h);
+      if (!bw || !bh) continue;
+      const cellW = Math.min(cellMax, paneW);
+      // Shrink-only into cell; no scale-up past natural.
+      const s = Math.min(1, cellW / bw);
+      const dw = bw * s;
+      const dh = bh * s;
+      const cover = Math.max(dw / paneW, dh / paneH);
+      if (cover > maxCover) maxCover = cover;
+    }
+    return {
+      fillsPane: maxCover >= 0.95,
+      maxCellCover: maxCover,
+      mode: 'wrap-grid-micro',
+    };
+  }
+
+  /**
+   * Inline style object for the fitted SVG (browser applies after render).
+   * Clears max-width so CSS shrink-only cannot undo scale-up.
+   * Accepts scale-to-fill (T268) and pack-scale-to-fill placements (T276).
+   */
+  function svgScaleToFillStyle(plan) {
+    const p = plan || {};
+    if (
+      (p.mode !== 'scale-to-fill' && p.mode !== 'pack-scale-to-fill') ||
+      !(p.displayW > 0) ||
+      !(p.displayH > 0)
+    ) {
+      return null;
+    }
+    return {
+      width: Math.round(p.displayW * 1000) / 1000 + 'px',
+      height: Math.round(p.displayH * 1000) / 1000 + 'px',
+      maxWidth: 'none',
+      maxHeight: 'none',
+    };
+  }
+
+  /**
+   * Apply plan styles to an SVG-like element (injectable for tests).
+   * @returns {boolean} true when styles were applied
+   */
+  function applySvgScaleToFill(svg, plan) {
+    const style = svgScaleToFillStyle(plan);
+    if (!svg || !style) return false;
+    if (svg.style && typeof svg.style === 'object') {
+      svg.style.width = style.width;
+      svg.style.height = style.height;
+      svg.style.maxWidth = style.maxWidth;
+      svg.style.maxHeight = style.maxHeight;
+    }
+    if (typeof svg.removeAttribute === 'function') {
+      // Mermaid sets absolute width/height attrs that fight CSS scale-up.
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+    }
+    if (typeof svg.setAttribute === 'function') {
+      svg.setAttribute('data-mvp-scale-fill', String(plan.scale));
+    }
+    return true;
+  }
+
+  /**
+   * Apply one T276/T277 placement to a pack block + its SVG (DOM-free shape).
+   * SVG display uses natural-aspect svgDisplayW×svgDisplayH (or natural×scale).
+   * Never stretches SVG to chrome-inflated block displayH (🎯T277).
+   * @returns {boolean}
+   */
+  function applyPackPlacement(block, svg, placement, scale) {
+    if (!placement) return false;
+    const s = positiveNumber(scale) || 1;
+    const natW = positiveNumber(
+      placement.naturalW != null ? placement.naturalW : placement.w
+    );
+    const natH = positiveNumber(
+      placement.naturalH != null ? placement.naturalH : placement.h
+    );
+    // Prefer explicit svg display from plan; else natural × uniform scale.
+    let svgW = positiveNumber(placement.svgDisplayW);
+    let svgH = positiveNumber(placement.svgDisplayH);
+    if (!svgW || !svgH) {
+      if (natW && natH) {
+        svgW = natW * s;
+        svgH = natH * s;
+      } else {
+        // Last resort: block content size without assuming chrome stretch.
+        svgW = positiveNumber(placement.displayW);
+        svgH = positiveNumber(placement.displayH);
+      }
+    }
+    if (block && block.style && typeof block.style === 'object') {
+      block.style.position = 'absolute';
+      block.style.left = Math.round(placement.displayX * 1000) / 1000 + 'px';
+      block.style.top = Math.round(placement.displayY * 1000) / 1000 + 'px';
+      block.style.width = Math.round(placement.displayW * 1000) / 1000 + 'px';
+      // Height follows scaled SVG + fixed chrome content; auto avoids empty stretch.
+      block.style.height = placement.displayH > 0
+        ? Math.round(placement.displayH * 1000) / 1000 + 'px'
+        : 'auto';
+      block.style.margin = '0';
+      block.style.gridColumn = 'auto';
+      block.style.overflow = 'hidden';
+    }
+    if (svg && svgW > 0 && svgH > 0) {
+      applySvgScaleToFill(svg, {
+        mode: 'scale-to-fill',
+        scale: s,
+        displayW: svgW,
+        displayH: svgH,
+      });
+    }
+    if (block && typeof block.setAttribute === 'function') {
+      block.setAttribute('data-mvp-pack-placed', '1');
+      block.setAttribute('data-mvp-pack-scale', String(s));
+      if (svgW > 0 && svgH > 0) {
+        block.setAttribute('data-mvp-svg-aspect', String(svgW / svgH));
+      }
+    }
+    return true;
+  }
+
   return {
     PIN_STORAGE_KEY: PIN_STORAGE_KEY,
     toolbarButtons: toolbarButtons,
@@ -495,11 +1550,44 @@
     clearPinnedGraph: clearPinnedGraph,
     emptyStateHtml: emptyStateHtml,
     PRODUCT_FETCH_RECOVERY_HINT: PRODUCT_FETCH_RECOVERY_HINT,
+    classifyFetchFailureKind: classifyFetchFailureKind,
     PRODUCT_FETCH_RECOVERY_SHORT: PRODUCT_FETCH_RECOVERY_SHORT,
     productFetchFailureView: productFetchFailureView,
     productFetchFailureFromError: productFetchFailureFromError,
     openFromChromePlan: openFromChromePlan,
     isMermaidPanelOpen: isMermaidPanelOpen,
     shouldCloseMermaidOnEscape: shouldCloseMermaidOnEscape,
+    // 🎯T274
+    shouldPauseHistoryHydrate: shouldPauseHistoryHydrate,
+    MERMAID_RENDER_TIMEOUT_MS: MERMAID_RENDER_TIMEOUT_MS,
+    withMermaidRenderTimeout: withMermaidRenderTimeout,
+    // 🎯T268
+    parseSvgNaturalSize: parseSvgNaturalSize,
+    computeContainScale: computeContainScale,
+    planSingleGraphScaleToFill: planSingleGraphScaleToFill,
+    svgScaleToFillStyle: svgScaleToFillStyle,
+    applySvgScaleToFill: applySvgScaleToFill,
+    // 🎯T276 / 🎯T277
+    PACK_BLOCK_CHROME_H: PACK_BLOCK_CHROME_H,
+    packBoxesIntoPaneAspect: packBoxesIntoPaneAspect,
+    planMultiDiagramPackScaleToFill: planMultiDiagramPackScaleToFill,
+    planWrapGridMicroIslandOracle: planWrapGridMicroIslandOracle,
+    planChromeInflatedStretchOracle: planChromeInflatedStretchOracle,
+    placementSvgAspectMatchesNatural: placementSvgAspectMatchesNatural,
+    applyPackPlacement: applyPackPlacement,
+    // 🎯T280 visual layout oracles
+    assessTallEmptyColumnLayout: assessTallEmptyColumnLayout,
+    assessSingleGraphPaneCover: assessSingleGraphPaneCover,
+    // 🎯T294 legibility floor + reflow fit
+    MERMAID_LABEL_FONT_PX: MERMAID_LABEL_FONT_PX,
+    MIN_LEGIBLE_LABEL_PX: MIN_LEGIBLE_LABEL_PX,
+    legibilityFloorScale: legibilityFloorScale,
+    effectiveLabelPx: effectiveLabelPx,
+    assessGraphLegibility: assessGraphLegibility,
+    assessMicroStripLayout: assessMicroStripLayout,
+    assessPaneInkCover: assessPaneInkCover,
+    packBoxesIntoShelfWidth: packBoxesIntoShelfWidth,
+    placePackedRows: placePackedRows,
+    planFrontierGraphFit: planFrontierGraphFit,
   };
 }));

@@ -48,6 +48,26 @@ func (s *suite) ListAgentsHTTP() ([]AgentInfo, error) {
 // listAgentsHTTP is a legacy alias used by existing journeys.
 func (s *suite) listAgentsHTTP() ([]AgentInfo, error) { return s.ListAgentsHTTP() }
 
+// agentTranscriptHTTP GETs one agent's transcript payload — the same
+// provider-aware discovery the RHS inspect pane depends on (🎯T124/🎯T213).
+// A soft-empty response is a normal 200 carrying empty_reason, so the
+// caller inspects the payload rather than the status code.
+func (s *suite) agentTranscriptHTTP(name string) (map[string]any, error) {
+	resp, err := http.Get("http://" + s.host + "/api/agents/" + name + "/transcript")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("/api/agents/%s/transcript HTTP %d", name, resp.StatusCode)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
 // ── MCP steps ─────────────────────────────────────────────────────────
 
 // MCPJSONRPC posts a JSON-RPC method to the isolate /mcp endpoint.
@@ -137,9 +157,20 @@ func (s *suite) AgentStart(name, workdir, actor, parent string) (string, error) 
 	return s.MCPToolCall("jevons_agent_start", args)
 }
 
-// AgentSend sends text to a running agent.
+// AgentSend sends text to a running agent as actor (🎯T321). Empty actor defaults
+// to "jevons" (journey harness speaks as the overseer surface).
 func (s *suite) AgentSend(name, text string) (string, error) {
-	return s.MCPToolCall("jevons_agent_send", map[string]any{"name": name, "text": text})
+	return s.AgentSendAs("jevons", name, text)
+}
+
+// AgentSendAs is AgentSend with an explicit lineage actor.
+func (s *suite) AgentSendAs(actor, name, text string) (string, error) {
+	if actor == "" {
+		actor = "jevons"
+	}
+	return s.MCPToolCall("jevons_agent_send", map[string]any{
+		"name": name, "text": text, "actor": actor,
+	})
 }
 
 // AgentStop stops a registered agent process.

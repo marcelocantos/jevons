@@ -288,6 +288,26 @@
     return n.slice(0, max - 1) + '…';
   }
 
+  // 🎯T332: recommended .ft-id width in ch from the longest id (clamped).
+  // Hierarchical pins (T254.1, T262.3) are 6ch; floor keeps short ids stable under
+  // table-layout:fixed; ceiling avoids the rem-sized id↔name chasm.
+  function maxIdChWidth(ids, minCh, maxCh) {
+    var lo = typeof minCh === 'number' && isFinite(minCh) ? minCh : 4;
+    var hi = typeof maxCh === 'number' && isFinite(maxCh) ? maxCh : 9;
+    if (lo < 1) lo = 1;
+    if (hi < lo) hi = lo;
+    var n = lo;
+    if (Array.isArray(ids)) {
+      for (var i = 0; i < ids.length; i++) {
+        var len = String(ids[i] == null ? '' : ids[i]).length;
+        if (len > n) n = len;
+      }
+    }
+    if (n > hi) n = hi;
+    if (n < lo) n = lo;
+    return n;
+  }
+
   // emptyMessage for calm unavailable / zero-frontier states.
   function emptyMessage(model) {
     if (!model) return 'Frontier unavailable.';
@@ -319,9 +339,12 @@
   }
 
   // 🎯T190: Mermaid layout knobs per component diagram; panel packs blocks.
+  // 🎯T274: cap nodes/diagram — browser Mermaid hangs on 60+ node single graphs
+  // (orthograph external ledger was one 64-node component → empty viewer).
   var MERMAID_NODE_SPACING = 28;
   var MERMAID_RANK_SPACING = 36;
   var MERMAID_WRAPPING_WIDTH = 180;
+  var MERMAID_MAX_NODES_PER_DIAGRAM = 24;
   var FRONTIER_GRAPH_PACK = 'wrap-grid';
   var GRAPH_DIAGRAM_KIND_COMPONENT = 'component';
   var GRAPH_DIAGRAM_KIND_ORPHANS = 'orphans';
@@ -399,6 +422,75 @@
     return { connected: connected, orphans: orphans };
   }
 
+  // targetRootFamily — T1.2.3 → T1 (🎯T274 hierarchical re-split).
+  function targetRootFamily(id) {
+    var s = String(id == null ? '' : id).trim();
+    if (!s) return s;
+    var dot = s.indexOf('.');
+    return dot >= 0 ? s.slice(0, dot) : s;
+  }
+
+  // chunkIDList — hard slices of maxNodes (🎯T274).
+  function chunkIDList(ids, maxNodes) {
+    var max = maxNodes > 0 ? maxNodes : MERMAID_MAX_NODES_PER_DIAGRAM;
+    var list = Array.isArray(ids) ? ids : [];
+    if (!list.length) return [];
+    if (list.length <= max) return [list.slice()];
+    var out = [];
+    for (var i = 0; i < list.length; i += max) {
+      out.push(list.slice(i, i + max));
+    }
+    return out;
+  }
+
+  // splitOversizedComponents — re-partition components > maxNodes (🎯T274).
+  // Prefer hierarchical root-family groups packed into bins ≤ max; hard-chunk
+  // if a single family is still huge (avoids one diagram per tiny root).
+  function splitOversizedComponents(connected, maxNodes) {
+    var max = maxNodes > 0 ? maxNodes : MERMAID_MAX_NODES_PER_DIAGRAM;
+    var comps = Array.isArray(connected) ? connected : [];
+    var out = [];
+    for (var c = 0; c < comps.length; c++) {
+      var comp = comps[c];
+      if (!comp || !comp.length) continue;
+      if (comp.length <= max) {
+        out.push(comp.slice());
+        continue;
+      }
+      var groups = {};
+      var roots = [];
+      for (var i = 0; i < comp.length; i++) {
+        var id = comp[i];
+        var root = targetRootFamily(id);
+        if (!Object.prototype.hasOwnProperty.call(groups, root)) {
+          groups[root] = [];
+          roots.push(root);
+        }
+        groups[root].push(id);
+      }
+      roots.sort(targetIDCompare);
+      var bin = [];
+      function flush() {
+        if (!bin.length) return;
+        out.push(bin);
+        bin = [];
+      }
+      for (var r = 0; r < roots.length; r++) {
+        var ids = groups[roots[r]].slice().sort(targetIDCompare);
+        if (ids.length > max) {
+          flush();
+          var chunks = chunkIDList(ids, max);
+          for (var k = 0; k < chunks.length; k++) out.push(chunks[k]);
+          continue;
+        }
+        if (bin.length + ids.length > max) flush();
+        bin = bin.concat(ids);
+      }
+      flush();
+    }
+    return out;
+  }
+
   // emitMermaidForNodes — one flowchart TB for a node set + among-set edges.
   function emitMermaidForNodes(ids, byId, rawEdges) {
     var lines = [mermaidActiveGraphHeader()];
@@ -458,17 +550,24 @@
         edgeCount: emitted.edgeCount,
       });
     }
+    // 🎯T274: cap orphan strips the same way (large orphan list also hangs Mermaid).
     var orph = Array.isArray(orphans) ? orphans : [];
     if (orph.length) {
-      var oe = emitMermaidForNodes(orph, byId, rawEdges);
-      blocks.push({
-        id: 'orphans',
-        kind: GRAPH_DIAGRAM_KIND_ORPHANS,
-        title: 'Orphans (' + orph.length + ')',
-        mermaid: oe.mermaid,
-        nodeCount: orph.length,
-        edgeCount: oe.edgeCount,
-      });
+      var ochunks = chunkIDList(orph, MERMAID_MAX_NODES_PER_DIAGRAM);
+      for (var oi = 0; oi < ochunks.length; oi++) {
+        var chunk = ochunks[oi];
+        var oe = emitMermaidForNodes(chunk, byId, rawEdges);
+        blocks.push({
+          id: ochunks.length > 1 ? ('orphans_' + oi) : 'orphans',
+          kind: GRAPH_DIAGRAM_KIND_ORPHANS,
+          title: ochunks.length > 1
+            ? ('Orphans part ' + (oi + 1) + ' (' + chunk.length + ')')
+            : ('Orphans (' + chunk.length + ')'),
+          mermaid: oe.mermaid,
+          nodeCount: chunk.length,
+          edgeCount: oe.edgeCount,
+        });
+      }
     }
     return blocks;
   }
@@ -529,8 +628,13 @@
 
     var islands = packActiveGraphIslands(ids, rawEdges);
     var split = splitOrphanComponents(islands);
-    var diagrams = packActiveGraphDiagrams(
+    // 🎯T274: re-split oversized components before emit (external large ledgers).
+    var connected = splitOversizedComponents(
       split.connected,
+      MERMAID_MAX_NODES_PER_DIAGRAM
+    );
+    var diagrams = packActiveGraphDiagrams(
+      connected,
       split.orphans,
       byId,
       rawEdges
@@ -557,6 +661,128 @@
   // buildActiveDependencyMermaid(targets) — joined multi-diagram pin source (🎯T185/T190).
   function buildActiveDependencyMermaid(targets) {
     return buildActiveDependencyDiagrams(targets).mermaid;
+  }
+
+  // ── 🎯T280: owner-default Frontier Graph = single primary SVG (not multi-pack) ──
+
+  // pickPrimaryGraphDiagram — largest component by nodes, then edges (stable id).
+  // Multi-diagram pack stays residual; owner Graph opens the primary only.
+  function pickPrimaryGraphDiagram(diagrams) {
+    var list = Array.isArray(diagrams) ? diagrams : [];
+    var best = null;
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i];
+      if (!d || !d.mermaid) continue;
+      if (!best) {
+        best = d;
+        continue;
+      }
+      var dn = typeof d.nodeCount === 'number' ? d.nodeCount : 0;
+      var bn = typeof best.nodeCount === 'number' ? best.nodeCount : 0;
+      if (dn > bn) {
+        best = d;
+        continue;
+      }
+      if (dn < bn) continue;
+      var de = typeof d.edgeCount === 'number' ? d.edgeCount : 0;
+      var be = typeof best.edgeCount === 'number' ? best.edgeCount : 0;
+      if (de > be) {
+        best = d;
+        continue;
+      }
+      if (de < be) continue;
+      // Stable: prefer lower id for ties.
+      var idA = d.id != null ? String(d.id) : '';
+      var idB = best.id != null ? String(best.id) : '';
+      if (idA && idB && idA < idB) best = d;
+    }
+    return best;
+  }
+
+  // resolveFrontierGraphOpenPlan — which diagrams the Graph control opens.
+  // mode: empty | single | single-primary | pack
+  //
+  // 🎯T280 made single-primary the owner default. 🎯T294 reverts that: hiding
+  // 6 of 7 components left one wide flat strip in a huge empty pane, and the
+  // pane had nothing to fill the rest with. Default is now the full pack, laid
+  // out by planFrontierGraphFit (pane-aspect pack → scale, or reflow at the
+  // legibility floor). opts.preferPrimary keeps the single-primary view.
+  function resolveFrontierGraphOpenPlan(model, opts) {
+    var o = opts || {};
+    var m = model || {};
+    var diagrams = Array.isArray(m.diagrams) ? m.diagrams : [];
+    var hasDiagrams = false;
+    var i;
+    for (i = 0; i < diagrams.length; i++) {
+      if (diagrams[i] && diagrams[i].mermaid) {
+        hasDiagrams = true;
+        break;
+      }
+    }
+    var mermaid = m.mermaid != null ? String(m.mermaid) : '';
+    if (!m.available || (!mermaid && !hasDiagrams)) {
+      return {
+        mode: 'empty',
+        mermaid: '',
+        primary: null,
+        diagrams: diagrams,
+        diagramCount: diagrams.length,
+        statusNote: '',
+      };
+    }
+    // 🎯T294 owner default: show every component, packed into the pane.
+    if (diagrams.length > 1 && o.preferPrimary !== true) {
+      return {
+        mode: 'pack',
+        mermaid: mermaid,
+        primary: pickPrimaryGraphDiagram(diagrams),
+        diagrams: diagrams,
+        diagramCount: diagrams.length,
+        statusNote: diagrams.length + ' components packed',
+      };
+    }
+    if (diagrams.length === 1 && diagrams[0] && diagrams[0].mermaid) {
+      return {
+        mode: 'single',
+        mermaid: diagrams[0].mermaid,
+        primary: diagrams[0],
+        diagrams: diagrams,
+        diagramCount: 1,
+        statusNote: '',
+      };
+    }
+    if (diagrams.length > 1) {
+      var primary = pickPrimaryGraphDiagram(diagrams);
+      if (primary && primary.mermaid) {
+        return {
+          mode: 'single-primary',
+          mermaid: primary.mermaid,
+          primary: primary,
+          diagrams: diagrams,
+          diagramCount: diagrams.length,
+          statusNote: 'primary of ' + diagrams.length + ' components',
+        };
+      }
+    }
+    // Joined multi-pack pin source is not a single Mermaid diagram — refuse.
+    if (mermaid && mermaid.indexOf('jevons-frontier-pack') >= 0) {
+      return {
+        mode: 'empty',
+        mermaid: '',
+        primary: null,
+        diagrams: diagrams,
+        diagramCount: diagrams.length,
+        statusNote: 'joined pack source without renderable primary',
+      };
+    }
+    return {
+      mode: 'single',
+      mermaid: mermaid,
+      primary: null,
+      diagrams: diagrams,
+      diagramCount: diagrams.length || (mermaid ? 1 : 0),
+      statusNote: '',
+    };
   }
 
   // normalizeGraphPayload(apiJSON|err) → multi-diagram pack model (🎯T185/T190).
@@ -819,16 +1045,108 @@
   var PLAY_GLYPH = '\u25B6'; // ▶
   // 🎯T198: stop when row is engaged (worker has matching target_id).
   var STOP_GLYPH = '\u25A0'; // ■
+  // 🎯T278: submitted/working chrome while kickoff is in flight (before engage).
+  var PLAY_MODE_PLAY = 'play';
+  var PLAY_MODE_STOP = 'stop';
+  var PLAY_MODE_SUBMITTED = 'submitted';
   var DEFAULT_PLAY_PO = 'jevons-po';
   var ENGAGEMENT_STOP_PATH = '/api/agents/engagement/stop';
   var AGENTS_API_PATH = '/api/agents';
 
-  // resolvePlayPO — residual multi-PO: default jevons-po for jevons ledger.
+  // Product owners conventionally end with -po (jevons-po, yourworld2-po).
+  function isProductOwnerName(name) {
+    var n = String(name || '').trim().toLowerCase();
+    if (!n || n.length < 4) return false;
+    return n.slice(-3) === '-po';
+  }
+
+  function findAgentByName(agents, name) {
+    var want = String(name || '').trim();
+    if (!want) return null;
+    var list = Array.isArray(agents) ? agents : [];
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (a && String(a.name || '').trim() === want) return a;
+    }
+    return null;
+  }
+
+  // resolvePlayPO — 🎯T255: bind kickoff recipient to selected product PO.
+  // Priority:
+  //   1. explicit opts.po
+  //   2. legacy opts.agent when no selection/agents (direct PO name)
+  //   3. selectedAgent is *-po / product owner → that agent
+  //   4. selected is worker with parent PO in agents list → parent PO (walk up)
+  //   5. selected non-overseer with workdir and *-po sibling/same-path residual:
+  //      if selected itself is non-overseer with workdir and name is PO-shaped, use it
+  //   6. no selection / overseer / unresolved → DEFAULT_PLAY_PO (jevons-po)
   function resolvePlayPO(opts) {
     var o = opts || {};
-    if (o.po) return String(o.po).trim() || DEFAULT_PLAY_PO;
-    if (o.agent) return String(o.agent).trim() || DEFAULT_PLAY_PO;
+    if (o.po != null && String(o.po).trim()) {
+      return String(o.po).trim();
+    }
+
+    var agents = Array.isArray(o.agents) ? o.agents : [];
+    var selected = '';
+    if (o.selectedAgent != null) selected = String(o.selectedAgent).trim();
+    else if (o.selected != null) selected = String(o.selected).trim();
+
+    // Legacy: opts.agent was a direct PO name when no selection wiring existed.
+    if (!selected && agents.length === 0 && o.agent != null && String(o.agent).trim()) {
+      return String(o.agent).trim();
+    }
+    // If caller still passes agent as selection without selectedAgent, accept it.
+    if (!selected && o.agent != null) selected = String(o.agent).trim();
+
+    if (!selected) return DEFAULT_PLAY_PO;
+
+    var row = findAgentByName(agents, selected);
+    if (row) {
+      var purpose = String(row.purpose || row.role || '').trim().toLowerCase();
+      if (purpose === 'overseer') return DEFAULT_PLAY_PO;
+
+      // Selected is a product owner → kickoff that agent.
+      if (isProductOwnerName(row.name)) {
+        return String(row.name).trim();
+      }
+
+      // Worker / boss: walk parent chain for a product owner in the agents list.
+      var seen = {};
+      var cur = row;
+      var hops = 0;
+      while (cur && hops < 16) {
+        hops++;
+        var parentName = String(cur.parent || '').trim();
+        if (!parentName || seen[parentName]) break;
+        seen[parentName] = true;
+        if (isProductOwnerName(parentName)) return parentName;
+        var parentRow = findAgentByName(agents, parentName);
+        if (!parentRow) {
+          // Parent name known but not in list — still honor *-po shape.
+          break;
+        }
+        var pp = String(parentRow.purpose || parentRow.role || '').trim().toLowerCase();
+        if (pp === 'overseer') break;
+        if (isProductOwnerName(parentRow.name)) {
+          return String(parentRow.name).trim();
+        }
+        cur = parentRow;
+      }
+
+      // Non-overseer with workdir but not PO-shaped and no parent PO → residual default.
+      // (Do not POST to a random worker; kickoff must land on a PO.)
+      return DEFAULT_PLAY_PO;
+    }
+
+    // Selection name known but not in agents list: honor *-po shape, else default.
+    if (isProductOwnerName(selected)) return selected;
     return DEFAULT_PLAY_PO;
+  }
+
+  // playKickoffTitle(po) — tooltip / title for the play button (real recipient).
+  function playKickoffTitle(po) {
+    var n = String(po || DEFAULT_PLAY_PO).trim() || DEFAULT_PLAY_PO;
+    return 'Start work via ' + n;
   }
 
   // agentSendPath(name) — product HTTP proxy for fleet agent_send (🎯T182).
@@ -1015,10 +1333,273 @@
     };
   }
 
+  // ── 🎯T278: optimistic kickoff-submitted chrome (before PO reply / engage) ──
+  // Set is a plain { [normalizedId]: true } map so hermetics stay JSON-friendly.
+
+  function addKickoffSubmitted(set, targetId) {
+    var tid = normalizeTargetID(targetId);
+    if (!tid) return set && typeof set === 'object' ? set : {};
+    var out = {};
+    var src = set && typeof set === 'object' ? set : {};
+    for (var k in src) {
+      if (Object.prototype.hasOwnProperty.call(src, k) && src[k]) out[k] = true;
+    }
+    out[tid] = true;
+    return out;
+  }
+
+  function removeKickoffSubmitted(set, targetId) {
+    var tid = normalizeTargetID(targetId);
+    var src = set && typeof set === 'object' ? set : {};
+    if (!tid || !src[tid]) return src;
+    var out = {};
+    for (var k in src) {
+      if (Object.prototype.hasOwnProperty.call(src, k) && src[k] && k !== tid) {
+        out[k] = true;
+      }
+    }
+    return out;
+  }
+
+  function isKickoffSubmitted(set, targetId) {
+    var tid = normalizeTargetID(targetId);
+    return !!(tid && set && typeof set === 'object' && set[tid]);
+  }
+
+  // Drop submitted flags once engagement lands (stop chrome owns the cell).
+  function pruneKickoffSubmitted(set, rows) {
+    var src = set && typeof set === 'object' ? set : {};
+    var list = Array.isArray(rows) ? rows : [];
+    var engaged = {};
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i];
+      if (r && r.engaged) {
+        var eid = normalizeTargetID(r.id);
+        if (eid) engaged[eid] = true;
+      }
+    }
+    var out = {};
+    var changed = false;
+    for (var k in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, k) || !src[k]) continue;
+      if (engaged[k]) {
+        changed = true;
+        continue;
+      }
+      out[k] = true;
+    }
+    return changed ? out : src;
+  }
+
+  // Overlay kickoff_submitted on free rows present in the set.
+  function applyKickoffSubmitted(rows, set) {
+    var list = Array.isArray(rows) ? rows : [];
+    var src = set && typeof set === 'object' ? set : {};
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var row = list[i];
+      if (!row) continue;
+      var copy = Object.assign({}, row);
+      var tid = normalizeTargetID(copy.id);
+      if (tid && src[tid] && !copy.engaged) {
+        copy.kickoff_submitted = true;
+      } else {
+        copy.kickoff_submitted = false;
+      }
+      out.push(copy);
+    }
+    return out;
+  }
+
+  // playChromeMode(row) — stop > submitted > play.
+  function playChromeMode(row) {
+    if (row && row.engaged) return PLAY_MODE_STOP;
+    if (row && row.kickoff_submitted) return PLAY_MODE_SUBMITTED;
+    return PLAY_MODE_PLAY;
+  }
+
+  // playChromeSpec(row, opts) — pure button chrome for hermetic + render.
+  // opts: { po } for play title when free.
+  function playChromeSpec(row, opts) {
+    var o = opts || {};
+    var id = row && row.id != null ? String(row.id).replace(/^🎯/, '').trim() : '';
+    var mode = playChromeMode(row);
+    if (mode === PLAY_MODE_STOP) {
+      return {
+        mode: PLAY_MODE_STOP,
+        className: 'ft-play-btn ft-stop-btn',
+        glyph: STOP_GLYPH,
+        ariaLabel: 'Stop work on 🎯' + id,
+        title: 'Stop engaged worker(s) for this target',
+        disabled: false,
+        spinning: false,
+      };
+    }
+    if (mode === PLAY_MODE_SUBMITTED) {
+      return {
+        mode: PLAY_MODE_SUBMITTED,
+        className: 'ft-play-btn ft-submitted-btn',
+        glyph: '',
+        ariaLabel: 'Kickoff submitted for 🎯' + id,
+        title: 'Kickoff submitted to PO — waiting for engagement',
+        disabled: true,
+        spinning: true,
+      };
+    }
+    var po = o.po != null ? String(o.po).trim() : '';
+    if (!po) po = resolvePlayPO(o);
+    return {
+      mode: PLAY_MODE_PLAY,
+      className: 'ft-play-btn',
+      glyph: PLAY_GLYPH,
+      ariaLabel: 'Start work on 🎯' + id,
+      title: playKickoffTitle(po),
+      disabled: false,
+      spinning: false,
+      po: po,
+    };
+  }
+
   // 🎯T230: quiet poll / re-render must not remount while InstantTip hover is latched.
   // Pure policy for hermetics; index.html calls InstantTip.anyHoverLatched().
   function shouldSkipRerenderWhileTipLatched(latched) {
     return !!latched;
+  }
+
+  // 🎯T253: Frontier tab follows selected agent workdir ledger.
+  // Empty string → server uses configured primary / process cwd (no ?cwd=).
+  // Overseer / missing agent / blank workdir → primary. Fleet PO/worker with
+  // workdir → that path (server discovers bullseye for it; no ledger → empty).
+  function resolveFrontierCwd(selectedName, agents) {
+    var name = selectedName == null ? '' : String(selectedName).trim();
+    if (!name) return '';
+    var list = Array.isArray(agents) ? agents : [];
+    var row = null;
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (a && String(a.name || '').trim() === name) {
+        row = a;
+        break;
+      }
+    }
+    if (!row) return '';
+    var purpose = String(row.purpose || '').trim().toLowerCase();
+    if (purpose === 'overseer') return '';
+    var wd = row.workdir != null ? String(row.workdir).trim() : '';
+    return wd;
+  }
+
+  // frontierAPIURL(basePath, cwd) — append ?cwd= when non-empty (encodeURIComponent).
+  function frontierAPIURL(basePath, cwd) {
+    var base = basePath == null || basePath === '' ? API_PATH : String(basePath);
+    var c = cwd == null ? '' : String(cwd).trim();
+    if (!c) return base;
+    var sep = base.indexOf('?') >= 0 ? '&' : '?';
+    return base + sep + 'cwd=' + encodeURIComponent(c);
+  }
+
+  // ── 🎯T267: target-ask → owning PO select + Frontier row highlight ──────
+  // Coordinates with T266 TargetContextChrome when present. Pure helpers stay
+  // hermetic without requiring the chrome module.
+
+  function extractTargetIDs(text) {
+    var s = String(text == null ? '' : text);
+    var out = [];
+    var seen = {};
+    var re = /🎯\s*(T[0-9]+(?:\.[0-9]+)*)/g;
+    var m;
+    while ((m = re.exec(s)) !== null) {
+      var id = normalizeTargetID(m[1]);
+      if (!id || seen[id]) continue;
+      seen[id] = true;
+      out.push(id);
+    }
+    return out;
+  }
+
+  // detectTargetAsk(text) → { targetId, po } | null
+  // Prefer __TARGET_ASK__:Tn[|@po]; also needs-owner / decision-packet prose.
+  function detectTargetAsk(text) {
+    var s = String(text == null ? '' : text);
+    if (!s) return null;
+    var m = s.match(
+      /__TARGET_ASK__\s*:\s*(T[0-9]+(?:\.[0-9]+)*)(?:\s*[|@]\s*([A-Za-z0-9_.\-]+))?/i
+    );
+    if (m) {
+      return {
+        targetId: normalizeTargetID(m[1]),
+        po: m[2] ? String(m[2]).trim() : '',
+      };
+    }
+    var ids = extractTargetIDs(s);
+    if (!ids.length) return null;
+    var askish = /needs[- ]owner|decision\s*packet|owner\s+decision|please\s+(decide|choose|confirm|accept)|needs\s+your\s+(decision|input|call)|awaiting\s+owner|owner\s+call|owner\s+ask/i.test(s);
+    if (!askish) return null;
+    return { targetId: ids[0], po: '' };
+  }
+
+  // resolveOwningPOForTarget — preferredPO → engaged target_id → play-PO walk → default.
+  function resolveOwningPOForTarget(opts) {
+    var o = opts || {};
+    var preferred = o.preferredPO != null ? String(o.preferredPO).trim() : '';
+    if (!preferred && o.po != null) preferred = String(o.po).trim();
+    if (preferred && isProductOwnerName(preferred)) return preferred;
+    if (preferred && preferred.indexOf('-po') > 0) return preferred;
+
+    var agents = Array.isArray(o.agents) ? o.agents : [];
+    var tid = normalizeTargetID(o.targetId != null ? o.targetId : o.id);
+    if (tid) {
+      for (var i = 0; i < agents.length; i++) {
+        var a = agents[i];
+        if (!a) continue;
+        var atid = normalizeTargetID(
+          a.target_id != null ? a.target_id : (a.targetId != null ? a.targetId : '')
+        );
+        if (atid !== tid) continue;
+        var purpose = String(a.purpose || a.role || '').trim().toLowerCase();
+        if (purpose === 'overseer') continue;
+        if (isProductOwnerName(a.name)) return String(a.name).trim();
+        var via = resolvePlayPO({ selectedAgent: a.name, agents: agents });
+        if (via) return via;
+      }
+    }
+    return DEFAULT_PLAY_PO;
+  }
+
+  function rowMatchesHighlight(row, highlightId) {
+    if (!row || !highlightId) return false;
+    var rid = normalizeTargetID(row.id);
+    var hid = normalizeTargetID(highlightId);
+    return !!(rid && hid && rid === hid);
+  }
+
+  // planTargetAskFocus → { targetId, highlightId, po, tab } | null
+  function planTargetAskFocus(opts) {
+    var o = opts || {};
+    var detected = null;
+    if (o.targetId != null && String(o.targetId).trim()) {
+      detected = {
+        targetId: normalizeTargetID(o.targetId),
+        po: o.po != null
+          ? String(o.po).trim()
+          : (o.preferredPO != null ? String(o.preferredPO).trim() : ''),
+      };
+    } else {
+      detected = detectTargetAsk(o.text);
+    }
+    if (!detected || !detected.targetId) return null;
+    var po = resolveOwningPOForTarget({
+      targetId: detected.targetId,
+      agents: o.agents,
+      preferredPO: detected.po || o.po || o.preferredPO,
+    });
+    return {
+      targetId: detected.targetId,
+      highlightId: detected.targetId,
+      po: po,
+      tab: TAB_FRONTIER,
+      selectPO: true,
+    };
   }
 
   return {
@@ -1030,6 +1611,9 @@
     FANOUT_MARK: FANOUT_MARK,
     PLAY_GLYPH: PLAY_GLYPH,
     STOP_GLYPH: STOP_GLYPH,
+    PLAY_MODE_PLAY: PLAY_MODE_PLAY,
+    PLAY_MODE_STOP: PLAY_MODE_STOP,
+    PLAY_MODE_SUBMITTED: PLAY_MODE_SUBMITTED,
     DEFAULT_PLAY_PO: DEFAULT_PLAY_PO,
     ENGAGEMENT_STOP_PATH: ENGAGEMENT_STOP_PATH,
     AGENTS_API_PATH: AGENTS_API_PATH,
@@ -1039,11 +1623,14 @@
     targetIDCompare: targetIDCompare,
     normalizePayload: normalizePayload,
     normalizeGraphPayload: normalizeGraphPayload,
+    pickPrimaryGraphDiagram: pickPrimaryGraphDiagram,
+    resolveFrontierGraphOpenPlan: resolveFrontierGraphOpenPlan,
     formatStatus: formatStatus,
     statusTitle: statusTitle,
     formatFanout: formatFanout,
     normalizeDependents: normalizeDependents,
     shortName: shortName,
+    maxIdChWidth: maxIdChWidth,
     emptyMessage: emptyMessage,
     formatTargetCardMarkdown: formatTargetCardMarkdown,
     formatTargetCardPlain: formatTargetCardPlain,
@@ -1053,6 +1640,9 @@
     mermaidActiveGraphHeader: mermaidActiveGraphHeader,
     packActiveGraphIslands: packActiveGraphIslands,
     splitOrphanComponents: splitOrphanComponents,
+    splitOversizedComponents: splitOversizedComponents,
+    targetRootFamily: targetRootFamily,
+    chunkIDList: chunkIDList,
     packActiveGraphDiagrams: packActiveGraphDiagrams,
     joinGraphDiagramSources: joinGraphDiagramSources,
     emitMermaidForNodes: emitMermaidForNodes,
@@ -1062,8 +1652,11 @@
     MERMAID_NODE_SPACING: MERMAID_NODE_SPACING,
     MERMAID_RANK_SPACING: MERMAID_RANK_SPACING,
     MERMAID_WRAPPING_WIDTH: MERMAID_WRAPPING_WIDTH,
+    MERMAID_MAX_NODES_PER_DIAGRAM: MERMAID_MAX_NODES_PER_DIAGRAM,
     mermaidNodeId: mermaidNodeId,
+    isProductOwnerName: isProductOwnerName,
     resolvePlayPO: resolvePlayPO,
+    playKickoffTitle: playKickoffTitle,
     agentSendPath: agentSendPath,
     canPlayKickoff: canPlayKickoff,
     buildPlayKickoffText: buildPlayKickoffText,
@@ -1072,7 +1665,22 @@
     engagementIndex: engagementIndex,
     applyEngagement: applyEngagement,
     stopEngagementRequest: stopEngagementRequest,
+    addKickoffSubmitted: addKickoffSubmitted,
+    removeKickoffSubmitted: removeKickoffSubmitted,
+    isKickoffSubmitted: isKickoffSubmitted,
+    pruneKickoffSubmitted: pruneKickoffSubmitted,
+    applyKickoffSubmitted: applyKickoffSubmitted,
+    playChromeMode: playChromeMode,
+    playChromeSpec: playChromeSpec,
     shouldSkipRerenderWhileTipLatched: shouldSkipRerenderWhileTipLatched,
+    resolveFrontierCwd: resolveFrontierCwd,
+    frontierAPIURL: frontierAPIURL,
+    // 🎯T267 target-ask focus
+    extractTargetIDs: extractTargetIDs,
+    detectTargetAsk: detectTargetAsk,
+    resolveOwningPOForTarget: resolveOwningPOForTarget,
+    rowMatchesHighlight: rowMatchesHighlight,
+    planTargetAskFocus: planTargetAskFocus,
   };
 
 }));

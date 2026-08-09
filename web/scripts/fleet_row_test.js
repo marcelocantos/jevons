@@ -21,7 +21,7 @@ function test(name, fn) {
   }
 }
 
-console.log('fleet_row_test (🎯T115 + 🎯T118 + 🎯T211)');
+console.log('fleet_row_test (🎯T115 + 🎯T118 + 🎯T211 + 🎯T269)');
 
 test('overseer state-dir home omits path', function () {
   const row = FR.fleetRowModel({
@@ -240,8 +240,80 @@ test('T211: bare status=running with no phase → idle not busy', function () {
   assert.strictEqual(FR.formatFleetProgress({ status: 'running', progress: 'running' }), 'idle');
 });
 
+// ── 🎯T269 hover-only aside dismiss × ─────────────────────────────
+
+test('T269: aside fixture paints dismiss; work/PO/portfolio do not', function () {
+  const aside = FR.fleetRowModel({
+    name: 'att-t269',
+    description: 'park thought',
+    purpose: 'aside',
+    workdir: '/Users/x/.jevons/threads/att-t269',
+    status: 'running',
+  });
+  assert.strictEqual(aside.isAside, true);
+  assert.strictEqual(aside.showDismiss, true);
+  assert.ok(aside.dismissHtml.indexOf('agent-dismiss') >= 0, 'dismiss class');
+  assert.ok(aside.dismissHtml.indexOf('\u00d7') >= 0 || aside.dismissHtml.indexOf('×') >= 0, '× glyph');
+  assert.ok(aside.dismissHtml.indexOf('data-agent-dismiss="att-t269"') >= 0, 'id on control');
+  assert.ok(FR.shouldShowAsideDismiss({ purpose: 'aside', name: 'a' }));
+  assert.ok(FR.shouldShowAsideDismiss({ role: 'side-chat', name: 'a' }));
+
+  const work = FR.fleetRowModel({
+    name: 'jv-t269',
+    workdir: '/Users/x/work/github.com/org/repo',
+    parent: 'jevons-po',
+    status: 'running',
+    purpose: 'work',
+  }, { parentWorkdir: '/Users/x/work/github.com/org/repo', hasChildren: false });
+  assert.strictEqual(work.showDismiss, false);
+  assert.strictEqual(work.dismissHtml, '');
+
+  const po = FR.fleetRowModel({
+    name: 'jevons-po',
+    workdir: '/Users/x/work/github.com/org/repo',
+    parent: 'jevons',
+    status: 'running',
+  }, { hasChildren: true });
+  assert.strictEqual(po.showDismiss, false);
+  assert.ok(!FR.shouldShowAsideDismiss({ purpose: 'work' }));
+  assert.ok(!FR.shouldShowAsideDismiss({ purpose: 'portfolio', is_portfolio: true }));
+  assert.ok(!FR.shouldShowAsideDismiss(null));
+});
+
+test('T269: dismiss path is DELETE /api/asides/{id}', function () {
+  assert.strictEqual(FR.asideDismissPath('att-x'), '/api/asides/att-x');
+  assert.strictEqual(FR.asideDismissPath('a/b'), '/api/asides/a%2Fb');
+  assert.strictEqual(FR.asideDismissPath(''), '');
+  const html = FR.asideDismissButtonHtml('att-x');
+  assert.ok(html.indexOf('type="button"') >= 0);
+  assert.ok(html.indexOf('aria-label="Dismiss aside att-x"') >= 0);
+  assert.strictEqual(FR.asideDismissButtonHtml(''), '');
+  assert.strictEqual(FR.asideDismissButtonHtml(null), '');
+});
+
+test('T269: index.html wires hover-gated dismiss → dismissFleetAside', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('agent-dismiss') >= 0, 'dismiss class in CSS/DOM');
+  assert.ok(
+    html.indexOf('.agent-node.agent-aside:hover .agent-dismiss') >= 0 ||
+      html.indexOf('.agent-aside:hover .agent-dismiss') >= 0,
+    'hover-gated opacity for aside rows');
+  assert.ok(html.indexOf(':focus-within .agent-dismiss') >= 0, 'keyboard focus path');
+  assert.ok(html.indexOf('row.showDismiss') >= 0, 'tree paints dismiss only when showDismiss');
+  // 🎯T289: the row descriptor carries the agent name as `key`, so the
+  // handler binds dismissFleetAside(d.key) — same product path as the
+  // pre-diff renderTree's dismissFleetAside(a.name).
+  assert.ok(/dismissFleetAside\s*\(\s*(a\.name|d\.key)\s*\)/.test(html),
+    'activate calls dismissFleetAside product path');
+  assert.ok(html.indexOf('stopPropagation') >= 0 &&
+    html.indexOf('agent-dismiss') >= 0,
+    'click does not select row');
+});
+
 if (process.exitCode) {
   console.error('fleet_row_test: FAILED');
   process.exit(1);
 }
-console.log('ok - fleet_row_test (🎯T115 + 🎯T118 + 🎯T211)');
+console.log('ok - fleet_row_test (🎯T115 + 🎯T118 + 🎯T211 + 🎯T269)');

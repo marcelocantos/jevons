@@ -76,23 +76,59 @@ func (s *Server) pendingAgentSends(name string) int {
 	return len(s.agentSendQ[name])
 }
 
+// AgentDeliverResult is the public outcome of DeliverAgentMessage (🎯T275).
+// Status matches MCP jevons_agent_send: sent | queued | interrupted_sent |
+// interrupted_queued | rehydrated_sent.
+type AgentDeliverResult struct {
+	Status  string
+	Message string
+	Queued  int
+}
+
+// DeliverAgentMessage is the product deliver path shared by HTTP
+// POST /api/agents/{name}/send and MCP jevons_agent_send (🎯T275 / 🎯T111.1).
+// When a prompt is already in flight and interrupt is false, the message is
+// queued for after the turn — not a 409 silent dead-end. Does not inject the
+// fleet standing brief (MCP handleAgentSend applies EnsureFleetBrief first).
+// Owner origin by default; DeliverAgentMessageAs carries an explicit one.
+func (s *Server) DeliverAgentMessage(name, text string, interrupt bool) (AgentDeliverResult, error) {
+	return s.DeliverAgentMessageAs(name, text, OriginOwner, interrupt)
+}
+
+// DeliverAgentMessageAs is the origin-carrying form, and the entry point the
+// HTTP send handler uses so owner↔agent and agent↔agent traffic share one
+// implementation addressed by name (🎯T309.3).
+func (s *Server) DeliverAgentMessageAs(name, text string, origin SendOrigin, interrupt bool) (AgentDeliverResult, error) {
+	res, err := s.deliverByName(name, text, origin, interrupt)
+	if err != nil {
+		return AgentDeliverResult{}, err
+	}
+	return AgentDeliverResult{
+		Status:  res.Status,
+		Message: res.Message,
+		Queued:  res.Queued,
+	}, nil
+}
+
 // sendToAgent rehydrates if needed, optionally interrupts a busy turn,
 // sends text, or queues when the prompt is already in flight (🎯T111.1).
 // Does not inject the fleet standing brief — callers that need it
 // (handleAgentSend) apply EnsureFleetBrief first.
+//
+// 🎯T309.3: a shim over deliverByName, which also resolves the overseer by
+// name. Daemon-internal callers (worker-idle, daemon-restarted, RSI coach,
+// fleet health) speak as the owner surface with agent origin; MCP fleet
+// callers use sendToAgentAs so lineage names the real agent (🎯T321).
+// The owner's own turns arrive through DeliverAgentMessageAs.
 func (s *Server) sendToAgent(name, text string, interrupt bool) (agentSendResult, error) {
-	if s.registry == nil {
-		return agentSendResult{}, fmt.Errorf("agent registry not available")
-	}
-	if name == "" || text == "" {
-		return agentSendResult{}, fmt.Errorf("name and text are required")
-	}
+	return s.deliverByName(name, text, OriginAgent, interrupt)
+}
 
-	proc, rehydrated, err := s.ensureAgentProcess(name)
-	if err != nil {
-		return agentSendResult{}, err
-	}
-	return deliverToSender(s, name, text, interrupt, proc, rehydrated)
+// sendToAgentAs is the MCP fleet form of sendToAgent: same busy/queue path
+// and agent origin, but the caller is named so AuthorizeDeliver can decide
+// (and log denials with actor + relation) per-caller (🎯T321).
+func (s *Server) sendToAgentAs(actor, name, text string, interrupt bool) (agentSendResult, error) {
+	return s.deliverByNameAs(actor, name, text, OriginAgent, interrupt)
 }
 
 // ensureAgentProcess returns a live process, rehydrating when registered
@@ -153,11 +189,29 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 		}
 		res := agentSendResult{Status: status, Message: msg, Queued: s.pendingAgentSends(name)}
 		logAgentSendResult(name, res, rehydrated)
+		// 🎯T305: confirmed Send (incl. paste-block press-through in claudia)
+		// means a turn began — never_briefed → running for agent_list.
+		if s != nil {
+			s.markAgentTurnBegan(name)
+		}
 		return res, nil
 	}
 
 	if !isPromptInFlight(err) {
-		return agentSendResult{}, fmt.Errorf("send failed: %v", err)
+		// 🎯T237: structured class + owner-visible copy (not bare Internal error).
+		class, ownerMsg := agenterr.ClassifyAndFormat(err)
+		if !class.IsFailure() {
+			ownerMsg = err.Error()
+		}
+		slog.Warn("agent_send",
+			"component", "agent_send",
+			"name", name,
+			"status", "failed",
+			"failure_class", class.String(),
+			"transient", class.IsTransient(),
+			"err", err.Error(),
+		)
+		return agentSendResult{}, fmt.Errorf("send failed: %s", ownerMsg)
 	}
 
 	// Busy path (🎯T111.1): interrupt then send, or queue for after turn.
@@ -182,6 +236,9 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 			msg := fmt.Sprintf("Interrupted in-flight turn on %q and sent the new message.", name)
 			res := agentSendResult{Status: "interrupted_sent", Message: msg, Queued: s.pendingAgentSends(name)}
 			logAgentSendResult(name, res, rehydrated)
+			if s != nil {
+				s.markAgentTurnBegan(name)
+			}
 			return res, nil
 		} else if isPromptInFlight(err2) {
 			n := s.enqueueAgentSend(name, text)
@@ -196,7 +253,19 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 			logAgentSendResult(name, res, rehydrated)
 			return res, nil
 		} else {
-			return agentSendResult{}, fmt.Errorf("send after interrupt failed: %v", err2)
+			class, ownerMsg := agenterr.ClassifyAndFormat(err2)
+			if !class.IsFailure() {
+				ownerMsg = err2.Error()
+			}
+			slog.Warn("agent_send",
+				"component", "agent_send",
+				"name", name,
+				"status", "failed_after_interrupt",
+				"failure_class", class.String(),
+				"transient", class.IsTransient(),
+				"err", err2.Error(),
+			)
+			return agentSendResult{}, fmt.Errorf("send after interrupt failed: %s", ownerMsg)
 		}
 	}
 
@@ -242,7 +311,13 @@ func (s *Server) drainAgentSendQueue(name string) {
 			s.mu.Unlock()
 			return
 		}
-		slog.Warn("agent send queue: drain send failed", "name", name, "err", err)
+		class := agenterr.Classify(err)
+		slog.Warn("agent send queue: drain send failed",
+			"name", name,
+			"err", err,
+			"failure_class", class.String(),
+			"transient", class.IsTransient(),
+		)
 		return
 	}
 	slog.Info("agent send queue: drained one message", "name", name, "remaining", s.pendingAgentSends(name))

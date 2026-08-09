@@ -688,10 +688,16 @@ func escapeMermaidLabel(s string) string {
 // Tight spacing + useMaxWidth keep ~30–50 nodes inside each component diagram;
 // wrappingWidth softens wide labels. Multi-diagram wrap-grid packing lives
 // in the panel CSS — Mermaid-native TD alone is rejected as the sole fix.
+//
+// mermaidMaxNodesPerDiagram (🎯T274): browser Mermaid/dagre hangs or never
+// paints a single dense flowchart of 60+ nodes (orthograph external ledger
+// was one 64-node component → empty viewer). Cap forces hierarchical re-split
+// so each diagram stays renderable. Jevons-scale islands stay under the cap.
 const (
-	mermaidNodeSpacing   = 28
-	mermaidRankSpacing   = 36
-	mermaidWrappingWidth = 180
+	mermaidNodeSpacing         = 28
+	mermaidRankSpacing         = 36
+	mermaidWrappingWidth       = 180
+	mermaidMaxNodesPerDiagram  = 24
 )
 
 // mermaidActiveGraphHeader is the init + direction prefix for one unachieved
@@ -768,6 +774,111 @@ func splitOrphanComponents(islands [][]string) (connected [][]string, orphans []
 		return targetIDLess(orphans[i], orphans[j])
 	})
 	return connected, orphans
+}
+
+// targetRootFamily maps hierarchical bullseye ids to their top-level root
+// (T1.2.3 → T1, T10.1 → T10). Flat ids are their own family. Used when
+// re-splitting oversized connected components for Mermaid (🎯T274).
+func targetRootFamily(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return id
+	}
+	if i := strings.IndexByte(id, '.'); i >= 0 {
+		return id[:i]
+	}
+	return id
+}
+
+// splitOversizedComponents re-partitions connected components that exceed
+// maxNodes so each Mermaid diagram stays browser-renderable (🎯T274).
+// Prefer hierarchical root-family groups packed into bins of ≤ maxNodes;
+// hard-chunk when a single family still exceeds the cap.
+// maxNodes ≤ 0 uses mermaidMaxNodesPerDiagram.
+func splitOversizedComponents(connected [][]string, maxNodes int) [][]string {
+	if maxNodes <= 0 {
+		maxNodes = mermaidMaxNodesPerDiagram
+	}
+	var out [][]string
+	for _, comp := range connected {
+		if len(comp) == 0 {
+			continue
+		}
+		if len(comp) <= maxNodes {
+			out = append(out, comp)
+			continue
+		}
+		// Group by root family (stable order by first-seen root, then sort).
+		groups := make(map[string][]string)
+		var roots []string
+		seenRoot := make(map[string]bool)
+		for _, id := range comp {
+			root := targetRootFamily(id)
+			if !seenRoot[root] {
+				seenRoot[root] = true
+				roots = append(roots, root)
+			}
+			groups[root] = append(groups[root], id)
+		}
+		sort.Slice(roots, func(i, j int) bool {
+			return targetIDLess(roots[i], roots[j])
+		})
+		// Pack whole families into bins ≤ maxNodes (avoids one diagram per root
+		// when families are tiny). Oversized families hard-chunk alone.
+		var bin []string
+		flush := func() {
+			if len(bin) == 0 {
+				return
+			}
+			out = append(out, bin)
+			bin = nil
+		}
+		for _, root := range roots {
+			ids := groups[root]
+			sort.Slice(ids, func(i, j int) bool {
+				return targetIDLess(ids[i], ids[j])
+			})
+			if len(ids) > maxNodes {
+				flush()
+				for i := 0; i < len(ids); i += maxNodes {
+					end := i + maxNodes
+					if end > len(ids) {
+						end = len(ids)
+					}
+					out = append(out, append([]string(nil), ids[i:end]...))
+				}
+				continue
+			}
+			if len(bin)+len(ids) > maxNodes {
+				flush()
+			}
+			bin = append(bin, ids...)
+		}
+		flush()
+	}
+	return out
+}
+
+// chunkIDList splits a sorted id list into maxNodes-sized slices (🎯T274).
+func chunkIDList(ids []string, maxNodes int) [][]string {
+	if maxNodes <= 0 {
+		maxNodes = mermaidMaxNodesPerDiagram
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if len(ids) <= maxNodes {
+		return [][]string{ids}
+	}
+	var out [][]string
+	for i := 0; i < len(ids); i += maxNodes {
+		end := i + maxNodes
+		if end > len(ids) {
+			end = len(ids)
+		}
+		out = append(out, append([]string(nil), ids[i:end]...))
+	}
+	return out
 }
 
 // countEdgesInSet returns how many directed raw edges have both ends in set.
@@ -863,16 +974,26 @@ func packActiveGraphDiagrams(
 			EdgeCount: ec,
 		})
 	}
+	// 🎯T274: cap orphan diagrams the same way — a 50-orphan strip also hangs.
 	if len(orphans) > 0 {
-		src, ec := emitMermaidForNodes(orphans, nameOf, edges)
-		blocks = append(blocks, GraphDiagramBlock{
-			ID:        "orphans",
-			Kind:      graphDiagramKindOrphans,
-			Title:     fmt.Sprintf("Orphans (%d)", len(orphans)),
-			Mermaid:   src,
-			NodeCount: len(orphans),
-			EdgeCount: ec,
-		})
+		chunks := chunkIDList(orphans, mermaidMaxNodesPerDiagram)
+		for i, chunk := range chunks {
+			src, ec := emitMermaidForNodes(chunk, nameOf, edges)
+			id := "orphans"
+			title := fmt.Sprintf("Orphans (%d)", len(chunk))
+			if len(chunks) > 1 {
+				id = fmt.Sprintf("orphans_%d", i)
+				title = fmt.Sprintf("Orphans part %d (%d)", i+1, len(chunk))
+			}
+			blocks = append(blocks, GraphDiagramBlock{
+				ID:        id,
+				Kind:      graphDiagramKindOrphans,
+				Title:     title,
+				Mermaid:   src,
+				NodeCount: len(chunk),
+				EdgeCount: ec,
+			})
+		}
 	}
 	return blocks
 }
@@ -980,6 +1101,9 @@ func computeActiveGraphPackFromLedger(ledgerPath string) (activeGraphPack, error
 
 	islands := packIslandsFromAdj(activeIDs, adj)
 	connected, orphans := splitOrphanComponents(islands)
+	// 🎯T274: one mega connected component (e.g. orthograph 64-node ledger)
+	// is not browser-renderable as a single Mermaid diagram — re-split.
+	connected = splitOversizedComponents(connected, mermaidMaxNodesPerDiagram)
 	blocks := packActiveGraphDiagrams(connected, orphans, nameOf, rawEdges)
 
 	// Empty active set after filter: still return pack shell.
