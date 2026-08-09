@@ -188,3 +188,49 @@ func TestPortfolioSpreadIndependentOfAccountingMode(t *testing.T) {
 		t.Fatal("should spread off capped claude regardless of subscription accounting")
 	}
 }
+
+// A drained subscription is steered from the override file, not a rebuild:
+// every work route moves to one provider, its cap is lifted to 0 so a large
+// fleet never spreads back onto the drained harness, and the route's model
+// pin reaches the decision. Regression net for the owner's llm-portfolio.json
+// after Grok ran out of tokens (2026-08-09).
+func TestOverrideFileStrandsDrainedProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "llm-portfolio.json")
+	if err := os.WriteFile(path, []byte(`{
+  "default_provider": "claude",
+  "soft_caps": {"claude": 0},
+  "routes": {
+    "ceo":            {"prefer": ["claude"], "model": "claude-opus-5"},
+    "code_implement": {"prefer": ["claude"], "model": "claude-opus-5"},
+    "mechanical":     {"prefer": ["claude"], "model": "claude-opus-5"},
+    "design_prose":   {"prefer": ["claude"], "model": "claude-opus-5"},
+    "ops_classify":   {"prefer": ["claude"], "model": "claude-opus-5"},
+    "ideation":       {"prefer": ["claude"], "model": "claude-opus-5"}
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadPortfolioFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Far past the compiled claude cap of 8: a lifted cap must not spread.
+	load := LoadCounts{HarnessClaude: 40}
+	for _, tt := range []string{
+		TaskCEO, TaskCodeImplement, TaskMechanical,
+		TaskDesignProse, TaskOpsClassify, TaskIdeation,
+	} {
+		d := p.Route(tt, load)
+		if d.Provider != HarnessClaude {
+			t.Errorf("%s routed to %q, want claude", tt, d.Provider)
+		}
+		if d.Model != "claude-opus-5" {
+			t.Errorf("%s model pin %q, want claude-opus-5", tt, d.Model)
+		}
+	}
+	// The provider-under-test oracle path is untouched by the override.
+	if d := p.Route(TaskJourneyGrok, load); d.Provider != HarnessGrok {
+		t.Errorf("journey_grok routed to %q, want grok", d.Provider)
+	}
+}

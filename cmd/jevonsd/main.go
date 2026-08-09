@@ -594,6 +594,20 @@ func main() {
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
 	// 🎯T325.3: durable idea intake ledger (state_dir/ideas.json).
 	mcpSrv.SetIdeaStateDir(cfg.StateDir)
+	// 🎯T325.2: task-type → harness routing seed. The compiled default is a
+	// design-map seed, not owner policy: when a subscription runs dry the
+	// owner must be able to steer new mints without a rebuild, so an
+	// optional state_dir/llm-portfolio.json overrides it (missing file =
+	// compiled seed).
+	portfolioPath := filepath.Join(cfg.StateDir, "llm-portfolio.json")
+	if pf, err := cost.LoadPortfolioFile(portfolioPath); err != nil {
+		slog.Error("llm portfolio override unreadable — using compiled seed",
+			"path", portfolioPath, "err", err)
+	} else {
+		mcpSrv.SetLLMPortfolio(pf)
+		slog.Info("llm portfolio routing seed", "path", portfolioPath,
+			"default_provider", pf.DefaultProvider)
+	}
 	// 🎯T325.2: multi-provider portfolio soft-cap overlays from budget.json
 	// (session counts only; independent of cost disabled / subscription USD).
 	if bcfg, err := cost.LoadBudgetConfig(filepath.Join(cfg.StateDir, "budget.json")); err == nil && len(bcfg.ProviderSoftCaps) > 0 {
