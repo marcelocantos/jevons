@@ -5,10 +5,13 @@ package mcpserver
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
 
 // 🎯T171 dual-path post-restart recovery (builds on 🎯T207 event path):
@@ -399,4 +402,73 @@ func HasOpenMissionForIdle(d claudia.AgentDef, missionOpen func(targetID string)
 		return missionOpen(tid)
 	}
 	return true
+}
+
+// Wake batching (🎯T392.2).
+//
+// DefaultWakeBatchWindow is how long machine-generated events accumulate
+// before one digest is delivered. Three minutes is chosen against the
+// idle-nudge threshold (2m) and pressure interval (1m): long enough that a
+// sweep's worth of idle workers lands in one digest, short enough that a
+// genuinely stuck fleet is surfaced in single-digit minutes.
+const DefaultWakeBatchWindow = 3 * time.Minute
+
+// SetWakeBatchWindow enables coalescing. Zero disables it, restoring
+// immediate per-event delivery.
+func (s *Server) SetWakeBatchWindow(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d <= 0 {
+		s.wakeBatch = nil
+		return
+	}
+	s.wakeBatch = wakebatch.New(d)
+}
+
+// FlushWakeBatches delivers every digest whose window has elapsed. Returns
+// how many recipients were woken — far fewer than the events they carry,
+// which is the entire point.
+//
+// Delivery failures drop the digest rather than retrying: these are idle
+// notices, and the next sweep re-observes the same idle workers anyway. A
+// retry queue here would be machinery for events that regenerate on their
+// own.
+func (s *Server) FlushWakeBatches() int {
+	s.mu.Lock()
+	batcher := s.wakeBatch
+	s.mu.Unlock()
+	if batcher == nil {
+		return 0
+	}
+	now := time.Now()
+	s.mu.Lock()
+	due := batcher.Due(now)
+	pending := make(map[string][]wakebatch.Event, len(due))
+	for _, recipient := range due {
+		pending[recipient] = batcher.Take(recipient)
+	}
+	s.mu.Unlock()
+
+	woken := 0
+	for _, recipient := range due {
+		evs := pending[recipient]
+		text := wakebatch.FormatDigest(evs)
+		if text == "" {
+			continue
+		}
+		res, err := s.sendToAgent(recipient, formatIdleNudgeWire(eventWorkerIdle, text), false)
+		if err != nil {
+			slog.Warn("wake digest deliver failed",
+				"recipient", recipient, "events", len(evs), "err", err)
+			continue
+		}
+		woken++
+		slog.Info("wake digest delivered",
+			"recipient", recipient, "events", len(evs),
+			"turns_saved", len(evs)-1, "status", res.Status, "queued", res.Queued)
+		s.logLifecycle(compIdleNudge, "wake_digest", "ok", map[string]any{
+			"recipient": recipient, "events": len(evs), "turns_saved": len(evs) - 1,
+		})
+	}
+	return woken
 }

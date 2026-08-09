@@ -34,6 +34,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
+	"github.com/marcelocantos/jevons/internal/wakebatch"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
 )
@@ -172,6 +173,13 @@ type Server struct {
 	impatience *ImpatienceEngine
 	// idleEventLast debounces worker-idle events per agent name.
 	idleEventLast map[string]time.Time
+
+	// wakeBatch coalesces machine-generated events into one digest per
+	// recipient (🎯T392.2). Debouncing above is per-worker and stops the
+	// same worker firing twice; this is per-recipient and stops four
+	// different workers each buying a full coordinator turn. Nil means
+	// batching is off and every event delivers immediately.
+	wakeBatch *wakebatch.Batcher
 	// idleNudgeSweep is set by StartIdleNudgeLoop for cockpit fleet health
 	// (dead-handle sweep only — no auto-continue ladder).
 	idleNudgeSweep func(postRestart bool)
@@ -179,6 +187,13 @@ type Server struct {
 	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.
 	ideaStateDir string
+
+	// agentReportDir roots the durable agent-report store (🎯T388) so a
+	// terminal report outlives the agent that wrote it. Empty until
+	// SetAgentReportDir; jevons_agent_report_read stays unregistered and an
+	// over-bound report is marked as cut without a retrieval handle.
+	// Guarded by mu.
+	agentReportDir string
 
 	// research is the ambient research staff cycle (🎯T356): periodic context
 	// refresh plus async feed triggers, writing durable versioned notes.

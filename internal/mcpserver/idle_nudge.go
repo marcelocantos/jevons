@@ -16,6 +16,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
 
 // 🎯T207: auto-nudge stuck/idle fleet work agents (esp. after jevonsd restart).
@@ -900,6 +901,11 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 			slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
 		}
 		args.Server.TriggerIdlePressureSweep()
+		// 🎯T392.2: deliver any digests whose window has elapsed. Driven
+		// from the sweep that generates the events rather than its own
+		// timer — a second ticker would be a second thing to get wrong,
+		// and the flush is cheap when nothing is pending.
+		args.Server.FlushWakeBatches()
 	})
 }
 
@@ -1224,6 +1230,29 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 		Phase:    "idle",
 	}
 	text := FormatWorkerIdleText(ref)
+
+	// 🎯T392.2: four idle workers under one PO should cost one coordinator
+	// turn, not four. The debounce above is per-worker; this is
+	// per-recipient. Batching off (nil batcher) delivers immediately, which
+	// is the pre-T392.2 behaviour.
+	s.mu.Lock()
+	batcher := s.wakeBatch
+	s.mu.Unlock()
+	if batcher != nil {
+		s.mu.Lock()
+		deliverNow := batcher.Add(wakebatch.Event{
+			Recipient: parent, Kind: eventWorkerIdle, Subject: name,
+			Detail: text, At: now,
+		})
+		queued := batcher.Pending(parent)
+		s.mu.Unlock()
+		if !deliverNow {
+			slog.Info("worker-idle event batched",
+				"worker", name, "parent", parent, "pending", queued)
+			return
+		}
+	}
+
 	msg := formatIdleNudgeWire(eventWorkerIdle, text)
 	// Do not interrupt PO mid-turn — queue if busy (T111.1).
 	res, err := s.sendToAgent(parent, msg, false)
