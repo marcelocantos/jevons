@@ -769,6 +769,12 @@ type agentInfo struct {
 	Parent      string `json:"parent,omitempty"`
 	Purpose     string `json:"purpose,omitempty"`
 	Description string `json:"description,omitempty"`
+	// AsideKind delineates purpose=aside rows (side | capture | target) from
+	// the create-time meta beside the aside workdir (🎯T365). The RHS paints
+	// 🎯 chrome on target filings and 💡 on idea/capture asides; serving it
+	// from the feed keeps the icon right across a hard reload. Empty for
+	// non-asides and for pre-🎯T270 asides with no meta.
+	AsideKind string `json:"aside_kind,omitempty"`
 	// TargetID is the bullseye target this agent is engaged on (🎯T198).
 	// Empty when not mission-bound. UI merges with /api/frontier by equality.
 	TargetID string `json:"target_id,omitempty"`
@@ -868,6 +874,11 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			TargetID:    strings.TrimSpace(d.TargetID),
 			Status:      status,
 			Provider:    strings.TrimSpace(string(d.Provider)),
+		}
+		// 🎯T365: target filings and idea/capture asides share purpose=aside;
+		// the create-time meta beside the workdir is what tells them apart.
+		if purpose == claudia.PurposeAside {
+			info.AsideKind = asideKindFromWorkDir(d.WorkDir)
 		}
 		if progress != nil {
 			p := progress.Get(d.Name)

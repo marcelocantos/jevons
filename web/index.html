@@ -1191,7 +1191,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 .agent-node .agent-dir.agent-progress { color: var(--text-muted); }
 .agent-node .agent-dir.agent-status { color: var(--text-muted); opacity: 0.85; }
-/* 🎯T115: aside rows — 💡 title, no path column (description must not bleed into path area) */
+/* 🎯T115: aside rows — icon title, no path column (description must not bleed into path area).
+   🎯T365: the icon is kind-dependent (data-aside-kind=target → 🎯, else 💡). */
 .agent-node.agent-aside .agent-name { color: var(--amber, #d4a017); font-weight: 500; }
 .agent-node.agent-aside .agent-dir { display: none; }
 /* 🎯T269: hover/focus-only dismiss × on the right of purpose=aside rows */
@@ -5620,7 +5621,7 @@ function updateFleetProgress(agents) {
 // paintFleetTree decides noop / patch-changed-rows / rebuild.
 let _fleetPrevDescs = null;   // descriptors from the last painted tree
 let _fleetNodes = [];         // DOM nodes, index-aligned with _fleetPrevDescs
-const FLEET_DATA_KEYS = ['agent', 'parent', 'purpose', 'secondary'];
+const FLEET_DATA_KEYS = ['agent', 'parent', 'purpose', 'secondary', 'asideKind'];
 
 function buildFleetDescriptors(byParent, parent, agentsByName, out) {
   // 🎯T68: sibling order is deliberate — name-sorted under each parent,
@@ -5657,6 +5658,10 @@ function buildFleetDescriptors(byParent, parent, agentsByName, out) {
       + (isPortfolio ? ' agent-portfolio' : '');
     const dataset = { agent: a.name, parent: parent || '' };
     if (row.isAside) dataset.purpose = 'aside';
+    // 🎯T365: target filings paint 🎯, idea/capture asides 💡. Kind rides the
+    // feed (aside_kind) so a hard reload keeps the right icon; the attribute
+    // is the hook smoke tests and CSS read.
+    if (row.isAside && row.asideKind) dataset.asideKind = row.asideKind;
     if (isPortfolio) dataset.purpose = 'portfolio';
     if (row.secondaryKind) dataset.secondary = row.secondaryKind;
     // 🎯T200: portfolio → folder icon; agents keep green/grey status dot.

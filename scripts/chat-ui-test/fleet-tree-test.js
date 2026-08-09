@@ -71,6 +71,8 @@ function startStaticServer(agentsPayload) {
     { name: 'mid-worker', workdir: poRepo, parent: 'po', status: 'running', phase: 'working', step: 'Bash: go test', progress: 'working · Bash: go test', provider: 'claude', model: 'claude-opus-4-8' },
     // Aside-purpose row: 💡 title, no path element (description must not bleed).
     { name: 'att-billing', description: 'billing nit', purpose: 'aside', workdir: '/Users/x/.jevons/threads/att-billing', parent: 'jevons', status: 'running' },
+    // 🎯T365: target-filing aside — same purpose, 🎯 chrome from aside_kind.
+    { name: 'att-filing', description: 'safe mode', purpose: 'aside', aside_kind: 'target', workdir: '/Users/x/.jevons/asides/att-filing', parent: 'jevons', status: 'running' },
   ];
   const { srv, base } = await startStaticServer(() => agents);
   const browser = await chromium.launch({ headless: !HEADED });
@@ -101,8 +103,8 @@ function startStaticServer(agentsPayload) {
       }));
     });
 
-    if (tree.length !== 6) {
-      failures.push(`expected 6 agent nodes (completeness), got ${tree.length}: ${JSON.stringify(tree)}`);
+    if (tree.length !== 7) {
+      failures.push(`expected 7 agent nodes (completeness), got ${tree.length}: ${JSON.stringify(tree)}`);
     }
     const names = tree.map(t => t.name);
     if (!names.includes('zeta-worker') || !names.includes('alpha-worker') || !names.includes('jevons') || !names.includes('att-billing')) {
@@ -137,9 +139,15 @@ function startStaticServer(agentsPayload) {
           hasDir: !!dir,
           dirText: dir ? (dir.textContent || '') : '',
           isAsideClass: n.classList.contains('agent-aside'),
+          asideKind: n.dataset.asideKind || '',
         };
       }
-      return { jevons: row('jevons'), aside: row('att-billing'), po: row('po') };
+      return {
+        jevons: row('jevons'),
+        aside: row('att-billing'),
+        filing: row('att-filing'),
+        po: row('po'),
+      };
     });
     if (!chrome.jevons) {
       failures.push('T115: jevons row missing');
@@ -163,6 +171,29 @@ function startStaticServer(agentsPayload) {
       if (!chrome.aside.isAsideClass) {
         failures.push('T115: aside missing agent-aside class');
       }
+    }
+    // 🎯T365: same purpose=aside, different kind — filings paint 🎯, ideas 💡.
+    if (!chrome.filing) {
+      failures.push('T365: target-filing aside row missing');
+    } else {
+      if (!/^🎯\s*safe mode$/.test(chrome.filing.nameText)) {
+        failures.push('T365: filing wants 🎯 safe mode: ' + JSON.stringify(chrome.filing.nameText));
+      }
+      if (/💡/.test(chrome.filing.nameText)) {
+        failures.push('T365: filing must not carry the light bulb: ' + JSON.stringify(chrome.filing.nameText));
+      }
+      if (chrome.filing.asideKind !== 'target') {
+        failures.push('T365: filing data-aside-kind=' + JSON.stringify(chrome.filing.asideKind));
+      }
+      if (!chrome.filing.isAsideClass) {
+        failures.push('T365: filing still needs aside row chrome (class)');
+      }
+      if (chrome.filing.hasDir || chrome.filing.dirText) {
+        failures.push('T365: filing must have no path element: ' + JSON.stringify(chrome.filing));
+      }
+    }
+    if (chrome.aside && /🎯/.test(chrome.aside.nameText)) {
+      failures.push('T365: idea aside must keep 💡, not 🎯: ' + JSON.stringify(chrome.aside.nameText));
     }
     if (!chrome.po || !chrome.po.hasDir || !/org\/po-repo/.test(chrome.po.dirText)) {
       failures.push('T115: work agent (PO) must keep path chrome: ' + JSON.stringify(chrome.po));

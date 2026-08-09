@@ -153,6 +153,32 @@ func (s *Server) readAsideOpenMeta(id string) (asideOpenMeta, bool) {
 	return m, true
 }
 
+// asideKindFromWorkDir reads the create-time kind for a *live* aside straight
+// off its workdir (…/asides/{id}/meta.json), without needing the Server's
+// state dir. The fleet feed uses it so RHS rows can paint target-filing 🎯
+// chrome instead of the idea/capture 💡 (🎯T365) — including after a hard
+// reload, where the browser has no memory of the create command.
+// Returns "" when no meta exists (pre-🎯T270 asides) so callers keep their
+// own default rather than inventing a kind.
+func asideKindFromWorkDir(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, asideMetaFileName))
+	if err != nil {
+		return ""
+	}
+	var m asideOpenMeta
+	if err := json.Unmarshal(data, &m); err != nil {
+		return ""
+	}
+	if strings.TrimSpace(m.Kind) == "" {
+		return ""
+	}
+	return normalizeAsideKind(m.Kind)
+}
+
 // archiveClosedAside records a dismissed aside into durable history.
 // kindHint may come from DELETE query/body; open meta and defaults fill gaps.
 func (s *Server) archiveClosedAside(id, title, kindHint, parent, workdir string) error {

@@ -564,6 +564,94 @@ func TestHandleListClosedAsidesHTTP(t *testing.T) {
 	}
 }
 
+// 🎯T365: the RHS needs to tell a target filing from an idea/capture aside
+// after a hard reload, when the browser remembers nothing about the create
+// command. The fleet feed carries the create-time kind for that.
+func TestFleetFeedCarriesAsideKind(t *testing.T) {
+	state := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(state, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons", WorkDir: state, SessionID: "s-o", Provider: "grok", AutoStart: true,
+		Purpose: claudia.PurposeOverseer,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New("test", state)
+	s.SetOverseerName("jevons")
+	s.SetRegistry(reg)
+
+	// One aside per kind, plus a work agent that must stay unmarked.
+	if _, err := s.ensureAsideAgent("att-filing", "safe mode", "", "target"); err != nil {
+		t.Fatalf("create target aside: %v", err)
+	}
+	if _, err := s.ensureAsideAgent("att-idea", "an idea", "", "capture"); err != nil {
+		t.Fatalf("create capture aside: %v", err)
+	}
+	if _, err := s.ensureAsideAgent("att-chat", "side chat", "", ""); err != nil {
+		t.Fatalf("create side aside: %v", err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t365-chrome", WorkDir: state, SessionID: "s-w", Provider: "grok",
+		Parent: "jevons", Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	byName := map[string]agentInfo{}
+	for _, a := range listFleetAgents(reg) {
+		byName[a.Name] = a
+	}
+	want := map[string]string{
+		"att-filing":     asideKindTarget,
+		"att-idea":       asideKindCapture,
+		"att-chat":       asideKindSide,
+		"jv-t365-chrome": "", // work rows carry no aside kind
+	}
+	for name, kind := range want {
+		got, ok := byName[name]
+		if !ok {
+			t.Fatalf("%s missing from fleet feed", name)
+		}
+		if got.AsideKind != kind {
+			t.Fatalf("%s aside_kind=%q want %q", name, got.AsideKind, kind)
+		}
+	}
+
+	// The kind must also survive the JSON the browser actually reads.
+	body, err := json.Marshal(byName["att-filing"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"aside_kind":"target"`) {
+		t.Fatalf("wire body missing aside_kind: %s", body)
+	}
+}
+
+// An aside registered before 🎯T270 has no meta.json; the feed must leave the
+// kind empty (client defaults to 💡) rather than inventing a filing.
+func TestFleetFeedAsideKindEmptyWithoutMeta(t *testing.T) {
+	state := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(state, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "att-legacy", WorkDir: filepath.Join(state, "asides", "att-legacy"),
+		SessionID: "s-l", Provider: "grok", Purpose: claudia.PurposeAside,
+		Description: "old aside",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range listFleetAgents(reg) {
+		if a.Name == "att-legacy" && a.AsideKind != "" {
+			t.Fatalf("aside_kind=%q want empty (no meta on disk)", a.AsideKind)
+		}
+	}
+}
+
 func TestNormalizeAsideKind(t *testing.T) {
 	cases := map[string]string{
 		"":            asideKindSide,

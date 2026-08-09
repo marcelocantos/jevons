@@ -16,6 +16,9 @@
 //     in-flight prompt/tool) → idle/parked; phase working → action line.
 //   - 🎯T269: purpose=aside rows expose a hover/focus dismiss × (right);
 //     work/PO rows never paint it. Activate → DELETE /api/asides (T152).
+//   - 🎯T365: the aside icon follows the aside kind — target filings get 🎯,
+//     idea/capture asides keep 💡. Kind comes from the feed (aside_kind,
+//     served from create-time meta) so a hard reload paints the same icon.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -27,6 +30,13 @@
   'use strict';
 
   const ASIDE_PURPOSES = new Set(['aside', 'side', 'side-chat', 'file-target']);
+  // 🎯T365: aside kinds and their row icons. Same closed set as the durable
+  // history taxonomy (AsideHistory.normalizeKind / Go normalizeAsideKind).
+  const ASIDE_KIND_SIDE = 'side';
+  const ASIDE_KIND_CAPTURE = 'capture';
+  const ASIDE_KIND_TARGET = 'target';
+  const ASIDE_ICON_IDEA = '💡';
+  const ASIDE_ICON_TARGET = '🎯';
   const PROGRESS_MAX = 48;
   // Process / non-action labels: never treat as busy work chrome (🎯T211).
   const PROCESS_LABELS = new Set(['running', 'stopped', 'idle', 'parked']);
@@ -217,10 +227,44 @@
     return '';
   }
 
-  function asideTitle(title) {
-    const t = String(title == null ? '' : title).replace(/^\s+|\s+$/g, '') || 'aside';
-    if (/^💡\s*/.test(t)) return t.replace(/^💡\s*/, '💡 ');
-    return '💡 ' + t;
+  // 🎯T365: free-form kind tag → closed set. Mirrors AsideHistory.normalizeKind
+  // and the Go normalizeAsideKind so one create writes one vocabulary.
+  function normalizeAsideKind(kind) {
+    const k = String(kind == null ? '' : kind).trim().toLowerCase();
+    if (k === ASIDE_KIND_TARGET || k === 'file-target' || k === 'file_target'
+        || k === 'target-aside' || k === 'filing') {
+      return ASIDE_KIND_TARGET;
+    }
+    if (k === ASIDE_KIND_CAPTURE) return ASIDE_KIND_CAPTURE;
+    return ASIDE_KIND_SIDE;
+  }
+
+  // Kind of an aside row: explicit feed field first (aside_kind, from the
+  // create-time meta), else the purpose tag for the file-target spelling.
+  function asideKindOf(agent) {
+    const a = agent && typeof agent === 'object' ? agent : {};
+    const explicit = a.aside_kind || a.asideKind || a.kind || '';
+    if (String(explicit).trim()) return normalizeAsideKind(explicit);
+    return normalizeAsideKind(a.purpose || a.role || '');
+  }
+
+  function asideIcon(kind) {
+    return normalizeAsideKind(kind) === ASIDE_KIND_TARGET
+      ? ASIDE_ICON_TARGET
+      : ASIDE_ICON_IDEA;
+  }
+
+  // Title with the kind's icon. A chrome icon already prefixed (from an earlier
+  // render or a server label) is replaced rather than stacked, so a kind change
+  // never strands the wrong icon. Only a *spaced* leading icon counts as
+  // chrome — an owner title like "🎯T365 chrome" keeps its own text.
+  function asideTitle(title, kind) {
+    const icon = asideIcon(kind);
+    let t = String(title == null ? '' : title).replace(/^\s+|\s+$/g, '');
+    t = t.replace(/^(?:💡|🎯)\s+/, '');
+    if (!t) t = 'aside';
+    if (t.indexOf(icon) === 0) return t;
+    return icon + ' ' + t;
   }
 
   // 🎯T269: dismiss × only on purpose=aside (not work/PO/portfolio/overseer).
@@ -256,11 +300,12 @@
     ctx = ctx && typeof ctx === 'object' ? ctx : {};
     const purpose = a.purpose || a.role || '';
     const isAside = isAsidePurpose(purpose);
+    const asideKind = isAside ? asideKindOf(a) : '';
     const showDismiss = shouldShowAsideDismiss(a);
     const omitPath = shouldOmitPath(a);
     const showPath = shouldShowPathSecondary(a, ctx);
     const baseLabel = String(a.description || a.name || '').trim() || (isAside ? 'aside' : '');
-    const title = isAside ? asideTitle(baseLabel) : baseLabel;
+    const title = isAside ? asideTitle(baseLabel, asideKind) : baseLabel;
     const progressText = isAside ? '' : formatFleetProgress(a);
     const busy = !isAside && isBusyAgent(a);
     // Rich action chrome only for real ACP actions — not phase=idle or bare running.
@@ -297,6 +342,10 @@
       name: String(a.name || ''),
       title: title,
       isAside: isAside,
+      // 🎯T365: kind + icon so the row (and its data-aside-kind hook) can tell
+      // a target filing from an idea/capture aside.
+      asideKind: asideKind,
+      asideIcon: isAside ? asideIcon(asideKind) : '',
       showDismiss: showDismiss,
       dismissHtml: dismissHtml,
       omitPath: omitPath || secondaryKind !== 'path',
@@ -324,7 +373,12 @@
     isBusyAgent: isBusyAgent,
     isActionProgressText: isActionProgressText,
     formatFleetProgress: formatFleetProgress,
+    normalizeAsideKind: normalizeAsideKind,
+    asideKindOf: asideKindOf,
+    asideIcon: asideIcon,
     asideTitle: asideTitle,
+    ASIDE_ICON_IDEA: ASIDE_ICON_IDEA,
+    ASIDE_ICON_TARGET: ASIDE_ICON_TARGET,
     asideDismissButtonHtml: asideDismissButtonHtml,
     asideDismissPath: asideDismissPath,
     fleetRowModel: fleetRowModel,

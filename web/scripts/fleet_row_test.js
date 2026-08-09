@@ -312,6 +312,90 @@ test('T269: index.html wires hover-gated dismiss → dismissFleetAside', functio
     'click does not select row');
 });
 
+// ── 🎯T365: target filings paint 🎯, idea/capture asides keep 💡 ────────
+
+test('T365: aside_kind=target gives 🎯 title; capture/side stay 💡', function () {
+  function titleFor(kind) {
+    return FR.fleetRowModel({
+      name: 'att-1',
+      description: 'safe mode for the UI',
+      purpose: 'aside',
+      aside_kind: kind,
+      workdir: '/Users/x/.jevons/asides/att-1',
+      status: 'running',
+    }).title;
+  }
+  assert.strictEqual(titleFor('target'), '🎯 safe mode for the UI');
+  assert.strictEqual(titleFor('capture'), '💡 safe mode for the UI');
+  assert.strictEqual(titleFor('side'), '💡 safe mode for the UI');
+  // No kind on the row (pre-T270 aside, no meta) → idea chrome, not target.
+  assert.strictEqual(titleFor(''), '💡 safe mode for the UI');
+  assert.strictEqual(titleFor(undefined), '💡 safe mode for the UI');
+});
+
+test('T365: row model exposes kind + icon for the data-aside-kind hook', function () {
+  const target = FR.fleetRowModel({
+    name: 'att-t', description: 'file a target', purpose: 'aside', aside_kind: 'target',
+  });
+  assert.strictEqual(target.asideKind, 'target');
+  assert.strictEqual(target.asideIcon, '🎯');
+  const idea = FR.fleetRowModel({
+    name: 'att-i', description: 'an idea', purpose: 'aside', aside_kind: 'capture',
+  });
+  assert.strictEqual(idea.asideKind, 'capture');
+  assert.strictEqual(idea.asideIcon, '💡');
+  // Work rows carry neither.
+  const work = FR.fleetRowModel({ name: 'jv-t365', purpose: 'work', workdir: '/w' });
+  assert.strictEqual(work.asideKind, '');
+  assert.strictEqual(work.asideIcon, '');
+});
+
+test('T365: kind vocabulary matches the create/history taxonomy', function () {
+  assert.strictEqual(FR.normalizeAsideKind('target'), 'target');
+  assert.strictEqual(FR.normalizeAsideKind('file-target'), 'target');
+  assert.strictEqual(FR.normalizeAsideKind('file_target'), 'target');
+  assert.strictEqual(FR.normalizeAsideKind('target-aside'), 'target');
+  assert.strictEqual(FR.normalizeAsideKind('Filing'), 'target');
+  assert.strictEqual(FR.normalizeAsideKind('capture'), 'capture');
+  assert.strictEqual(FR.normalizeAsideKind('aside'), 'side');
+  assert.strictEqual(FR.normalizeAsideKind(''), 'side');
+  assert.strictEqual(FR.normalizeAsideKind('nonsense'), 'side');
+  // Same vocabulary as the durable closed-aside history model.
+  const AH = require('./aside_history.js');
+  ['target', 'file-target', 'target-aside', 'capture', 'aside', '', 'nonsense']
+    .forEach(function (k) {
+      assert.strictEqual(FR.normalizeAsideKind(k), AH.normalizeKind(k),
+        'kind vocabulary drift for ' + JSON.stringify(k));
+    });
+});
+
+test('T365: purpose=file-target alone still reads as a target filing', function () {
+  const row = FR.fleetRowModel({ name: 'att-f', description: 'filing', purpose: 'file-target' });
+  assert.strictEqual(row.isAside, true);
+  assert.strictEqual(row.asideKind, 'target');
+  assert.strictEqual(row.title, '🎯 filing');
+});
+
+test('T365: icon swaps rather than stacks; owner emoji survives', function () {
+  assert.strictEqual(FR.asideTitle('💡 was an idea', 'target'), '🎯 was an idea');
+  assert.strictEqual(FR.asideTitle('🎯 already filed', 'target'), '🎯 already filed');
+  assert.strictEqual(FR.asideTitle('🎯 misfiled', 'capture'), '💡 misfiled');
+  assert.strictEqual(FR.asideTitle('', 'target'), '🎯 aside');
+  // Owner text that starts with the icon glued to a word is not chrome.
+  assert.strictEqual(FR.asideTitle('🎯T365 chrome', 'target'), '🎯T365 chrome');
+  assert.strictEqual(FR.asideTitle('🎯T365 chrome', 'capture'), '💡 🎯T365 chrome');
+});
+
+test('T365: index.html paints data-aside-kind from the row model', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('dataset.asideKind = row.asideKind') >= 0,
+    'tree sets dataset.asideKind from the fleet row model');
+  assert.ok(/FLEET_DATA_KEYS\s*=\s*\[[^\]]*'asideKind'/.test(html),
+    'asideKind is a painted dataset key (survives patch repaints)');
+});
+
 if (process.exitCode) {
   console.error('fleet_row_test: FAILED');
   process.exit(1);
