@@ -17,13 +17,21 @@
 
   var TAB_TRANSCRIPT = 'transcript';
   var TAB_FRONTIER = 'frontier';
+  var TAB_COACH = 'coach'; // 🎯T354: RSI coach judgments + dispositions
   var POLL_MS = 8000;
 
-  // nextBottomTab(prev, click) — tab ids only; unknown → frontier.
+  function isBottomTab(t) {
+    return t === TAB_TRANSCRIPT || t === TAB_FRONTIER || t === TAB_COACH;
+  }
+
+  // nextBottomTab(prev, click) — tab ids only; an unknown click keeps the
+  // current pane (never yanks the owner off coach/transcript), and an
+  // unknown prev falls back to frontier.
   function nextBottomTab(prev, click) {
     var t = String(click || '').toLowerCase();
-    if (t === TAB_TRANSCRIPT || t === TAB_FRONTIER) return t;
-    return prev === TAB_TRANSCRIPT ? TAB_TRANSCRIPT : TAB_FRONTIER;
+    if (isBottomTab(t)) return t;
+    var p = String(prev || '').toLowerCase();
+    return isBottomTab(p) ? p : TAB_FRONTIER;
   }
 
   // 🎯T199: natural/version compare for bullseye-style target ids.
@@ -1605,6 +1613,7 @@
   return {
     TAB_TRANSCRIPT: TAB_TRANSCRIPT,
     TAB_FRONTIER: TAB_FRONTIER,
+    TAB_COACH: TAB_COACH,
     POLL_MS: POLL_MS,
     API_PATH: API_PATH,
     GRAPH_API_PATH: GRAPH_API_PATH,

@@ -848,6 +848,42 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 #frontier-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px; }
 #frontier-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; padding: 8px 12px; }
+/* 🎯T354: RSI coach judgment list — same pane chrome as the frontier tab. */
+#coach-pane { flex: 1; min-height: 0; min-width: 0; }
+#coach-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 4px 12px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#coach-counts { flex: 1; min-width: 0; font-size: 10px; color: var(--text-muted); }
+#coach-toolbar button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-muted);
+  font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: var(--sans);
+}
+#coach-toolbar button:hover { color: var(--text); border-color: var(--border-focus); }
+#coach-body {
+  flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto;
+  font-size: 11px; font-family: var(--sans);
+}
+#coach-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px; }
+#coach-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; padding: 8px 12px; }
+.coach-row { padding: 6px 12px; border-bottom: 1px solid var(--border); min-width: 0; }
+.coach-row:hover { background: var(--surface-raised); }
+.coach-row-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.coach-title {
+  flex: 1; min-width: 0; color: var(--text); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.coach-chip {
+  flex-shrink: 0; font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); color: var(--text-muted);
+}
+/* Pending is the state that wants the owner's eye: it is the only loud chip. */
+.coach-chip.coach-pending { color: var(--amber, #d4a017); border-color: var(--amber, #d4a017); }
+.coach-sev { flex-shrink: 0; font-size: 9px; color: var(--text-muted); }
+.coach-sev.coach-sev-high { color: var(--amber, #d4a017); }
+.coach-obs { color: var(--text-dim); margin-top: 2px; line-height: 1.35; overflow-wrap: anywhere; }
+.coach-meta { color: var(--text-muted); font-size: 10px; margin-top: 2px; overflow-wrap: anywhere; }
+.coach-detail { color: var(--text-dim); font-size: 10px; margin-top: 2px; overflow-wrap: anywhere; }
 /* max-width:100% + name ellipsis: long names do not grow past #frontier-body */
 /* 🎯T340: table-layout:auto so chrome cols size to content (fixed + ch/rem clips
    T254.1 under border-box, or leaves T331 chasms). Name width:100% claims remainder. */
@@ -1260,6 +1296,9 @@ body.rhs-resizing-row { cursor: row-resize; }
         <div id="rhs-bottom-tabs" role="tablist">
           <button type="button" role="tab" data-tab="frontier" id="rhs-tab-frontier" class="active" aria-selected="true">Frontier</button>
           <button type="button" role="tab" data-tab="transcript" id="rhs-tab-transcript" aria-selected="false">Transcript</button>
+          <!-- 🎯T354: what the RSI coach judged, and what the overseer did with it -->
+          <button type="button" role="tab" data-tab="coach" id="rhs-tab-coach" aria-selected="false"
+                  title="RSI coach judgments and their dispositions (🎯T354)">Coach</button>
           <span class="rhs-tab-meta" id="rhs-tab-meta" title="Ledger path from bullseye discovery"></span>
         </div>
         <div id="frontier-pane" class="rhs-tab-pane active" role="tabpanel" aria-label="Bullseye frontier">
@@ -1268,6 +1307,14 @@ body.rhs-resizing-row { cursor: row-resize; }
             <button type="button" id="frontier-refresh" title="Manual reload if live watch/WS missed a change">Refresh</button>
           </div>
           <div id="frontier-body"></div>
+        </div>
+        <!-- 🎯T354: bare owner-visible list of RSI coach judgments + dispositions -->
+        <div id="coach-pane" class="rhs-tab-pane" role="tabpanel" aria-label="RSI coach judgments">
+          <div id="coach-toolbar">
+            <span id="coach-counts" title="Judgments delivered / still awaiting a disposition"></span>
+            <button type="button" id="coach-refresh" title="Reload the coach disposition ledger">Refresh</button>
+          </div>
+          <div id="coach-body"></div>
         </div>
         <!-- 🎯T124: selected fleet agent/aside full transcript (out of band from main chat) -->
         <!-- 🎯T309.1: RHS conversation widget host (compact density = styling; same module as main) -->
@@ -1346,6 +1393,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/agent_transcript.js"></script>
 <script src="scripts/conversation_widget.js"></script>
 <script src="scripts/frontier_table.js"></script>
+<script src="scripts/rsi_dispositions.js"></script>
 <script src="scripts/target_context_chrome.js"></script>
 <script src="scripts/target_hotspot.js"></script>
 <script src="scripts/instant_tip.js"></script>
@@ -8073,6 +8121,11 @@ const frontierPaneEl = document.getElementById('frontier-pane');
 const frontierBodyEl = document.getElementById('frontier-body');
 const rhsTabMeta = document.getElementById('rhs-tab-meta');
 let frontierPollTimer = 0;
+// 🎯T354: RSI coach judgment list (bare v1).
+const coachPaneEl = document.getElementById('coach-pane');
+const coachBodyEl = document.getElementById('coach-body');
+const coachCountsEl = document.getElementById('coach-counts');
+let coachPollTimer = 0;
 // 🎯T205: fingerprint + stick/free latch for #agent-inspect-body.
 // 🎯T209: progressive lines held for live wire frames (no setInterval poll).
 // 🎯T263: optimistic working chrome after freeform aside open+deliver.
@@ -8370,9 +8423,15 @@ function setRhsBottomTab(tab) {
   });
   if (frontierPaneEl) frontierPaneEl.classList.toggle('active', next === 'frontier');
   if (agentInspectEl) agentInspectEl.classList.toggle('active', next === 'transcript');
+  if (coachPaneEl) coachPaneEl.classList.toggle('active', next === 'coach');
   if (typeof syncSidebarComposer === 'function') syncSidebarComposer();
   if (next === 'frontier' && typeof loadFrontier === 'function') {
     loadFrontier({ quiet: true });
+  }
+  // 🎯T354: opening the pane is a loud load — a stale/blank coach list would
+  // read as "the coach found nothing", so surface failures here.
+  if (next === 'coach' && typeof loadCoachList === 'function') {
+    loadCoachList({});
   }
 }
 
@@ -9255,6 +9314,109 @@ function loadFrontier(opts) {
       model.agents = frontierAgentsCache || [];
       renderFrontierTable(model);
     });
+}
+
+// 🎯T354: RSI coach judgments + dispositions. Bare list v1 — the owner sees
+// what the coach judged (T243/T353) and what the overseer did with it (T333).
+// Built with textContent, never innerHTML: judgment text is model-authored.
+function renderCoachList(model) {
+  if (!coachBodyEl) return;
+  coachBodyEl.textContent = '';
+  if (coachCountsEl) {
+    coachCountsEl.textContent = RSIDispositions.countsText(model);
+  }
+  if (model.error) {
+    const err = document.createElement('div');
+    err.className = 'ai-err';
+    err.textContent = 'Coach ledger unavailable: ' + model.error;
+    coachBodyEl.appendChild(err);
+    return;
+  }
+  if (model.empty) {
+    const empty = document.createElement('div');
+    empty.className = 'ai-empty';
+    empty.textContent = RSIDispositions.emptyText();
+    coachBodyEl.appendChild(empty);
+    return;
+  }
+  model.rows.forEach(function (r) {
+    const row = document.createElement('div');
+    row.className = 'coach-row';
+    row.title = r.fingerprint;
+
+    const head = document.createElement('div');
+    head.className = 'coach-row-head';
+    const title = document.createElement('span');
+    title.className = 'coach-title';
+    title.textContent = (r.retro ? '⏮ ' : '') + r.title;
+    head.appendChild(title);
+    if (r.severity) {
+      const sev = document.createElement('span');
+      sev.className = 'coach-sev' + (r.severity === 'high' ? ' coach-sev-high' : '');
+      sev.textContent = r.severity;
+      head.appendChild(sev);
+    }
+    const chip = document.createElement('span');
+    chip.className = 'coach-chip' + (r.pending ? ' coach-pending' : '');
+    chip.textContent = r.dispositionLabel;
+    head.appendChild(chip);
+    row.appendChild(head);
+
+    // Title already shows the observation when the judgment carried no name.
+    if (r.observation && r.observation !== r.title) {
+      const obs = document.createElement('div');
+      obs.className = 'coach-obs';
+      obs.textContent = r.observation;
+      row.appendChild(obs);
+    }
+    const detail = RSIDispositions.detailText(r);
+    if (detail) {
+      const det = document.createElement('div');
+      det.className = 'coach-detail';
+      det.textContent = detail;
+      row.appendChild(det);
+    }
+    const meta = [];
+    if (r.deliveredAt) meta.push(new Date(r.deliveredAt).toLocaleString());
+    if (r.evidence) meta.push(r.evidence);
+    if (meta.length) {
+      const m = document.createElement('div');
+      m.className = 'coach-meta';
+      m.textContent = meta.join(' · ');
+      row.appendChild(m);
+    }
+    coachBodyEl.appendChild(row);
+  });
+}
+
+function loadCoachList(opts) {
+  const quiet = !!(opts && opts.quiet);
+  if (!coachBodyEl || typeof RSIDispositions === 'undefined') return;
+  fetch(RSIDispositions.API_PATH)
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (payload) {
+      renderCoachList(RSIDispositions.normalizePayload(payload));
+      if (!coachPollTimer) {
+        coachPollTimer = setInterval(function () {
+          // Poll only while the owner is watching the pane (v1: poll is fine).
+          if (rhsBottomTab === 'coach') loadCoachList({ quiet: true });
+        }, RSIDispositions.POLL_MS);
+      }
+    })
+    .catch(function (err) {
+      // Quiet polls keep the last good list rather than blanking it, but a
+      // failed explicit open must show the error — never a false empty.
+      if (quiet) return;
+      renderCoachList(RSIDispositions.normalizePayload(null, err));
+    });
+}
+
+const coachRefreshBtn = document.getElementById('coach-refresh');
+if (coachRefreshBtn) {
+  coachRefreshBtn.addEventListener('click', function () { loadCoachList({}); });
 }
 
 const agentInspectClose = document.getElementById('agent-inspect-close');
