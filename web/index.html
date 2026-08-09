@@ -1397,7 +1397,7 @@ body.rhs-resizing-row { cursor: row-resize; }
             <label for="agent-inspect-input" class="sr-only">Message the selected agent or aside</label>
             <textarea id="agent-inspect-input" rows="1"
                       placeholder="Message this agent…"
-                      title="Sidebar composer — Enter to send, Shift+Enter for a new line (🎯T251/T309.1); Tab / Shift+Tab returns to the main message box (🎯T366)"
+                      title="Sidebar composer — Enter to send, Shift+Enter for a new line (🎯T251/T309.1); Tab / Shift+Tab returns to the main message box (🎯T366); ⌘⇧] / ⌘⇧[ cycle the fleet tree selection (🎯T370)"
                       aria-label="Message the selected agent or aside"
                       aria-multiline="true"
                       autocomplete="off"
@@ -8033,6 +8033,15 @@ let ownerWorkingChrome = (typeof ChatEvents !== 'undefined' && ChatEvents.create
 // 🎯T327: when the last owner send left main for an aside, keep main chrome
 // closed for the rest of that overseer turn (level samples / tool re-arms).
 let mainWorkingSuppressed = false;
+// 🎯T374: these stay `let` and stay here. The recurring "can't access lexical
+// declaration 'workingEl' before initialization" seen live was NOT a
+// declaration-order bug — it was fallout. A top-level throw earlier in this
+// script (ComposerPersist.loadPending, when pending_turns.js failed to load)
+// aborted the rest of the script, so every `let` below the throw stayed
+// uninitialized while already-registered listeners kept firing. Hoisting these
+// would only have muffled the symptom. The cause is guarded by
+// TestEmbeddedScriptsCoverIndex (embed_test.go) and by the embed-gated
+// t374-no-onerror smoke.
 let workingEl = null;
 let workingProgress = '';
 let workingWatch = 0;
