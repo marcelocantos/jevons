@@ -37,7 +37,8 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 
 	switch ev.Type {
 	case "user":
-		if ev.Text == "" {
+		text, prose := userTurnText(ev)
+		if !prose {
 			// Pass through already-shaped Claude user lines (tool_result, etc.).
 			if isClaudeShaped(ev.Raw) {
 				return string(ev.Raw), true
@@ -45,10 +46,10 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 			return "", false
 		}
 		// A genuine owner turn carries userTurnPrefix. The browser already
-		// rendered its clean bubble via chatUserEcho on send, so this ACP
+		// rendered its clean bubble via chatUserEcho on send, so this provider
 		// echo is a duplicate — drop it (also de-dups the journal, which
-		// used to store the owner turn twice: echo + ACP echo).
-		if strings.HasPrefix(ev.Text, userTurnPrefix) {
+		// used to store the owner turn twice: echo + provider echo).
+		if strings.HasPrefix(text, userTurnPrefix) {
 			return "", false
 		}
 		// No marker → an injected agent/system notification (a worker reply,
@@ -58,7 +59,7 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		b, err := json.Marshal(map[string]any{
 			"type":      "agent_note",
 			"timestamp": ts,
-			"text":      ev.Text,
+			"text":      text,
 		})
 		if err != nil {
 			return "", false
@@ -201,6 +202,80 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		}
 		return "", false
 	}
+}
+
+// userTurnText extracts the prose of a user-role turn from a provider event,
+// reporting prose=false for user lines that are not prose at all (tool_result
+// blocks and other structured payloads the chat UI dispatches on directly).
+//
+// 🎯T382: the two providers deliver the same turn in different places.
+// claudia's parseEvent fills Event.Text for assistant events only, so a Grok
+// ACP user turn arrives with Text set (grok_acp.go synthesises it) while a
+// Claude session-transcript user turn arrives with Text empty and its words
+// only in the Claude-shaped Raw line. Reading both is what makes the paint
+// decision below provider-agnostic: without it, the Claude echo of the
+// prompt we just delivered skipped the userTurnPrefix check, fell into the
+// Claude-shaped pass-through, and painted the owner's message a second time
+// — attachments and the internal "[user]" marker included.
+func userTurnText(ev claudia.Event) (text string, prose bool) {
+	if ev.Text != "" {
+		return ev.Text, true
+	}
+	var probe struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(ev.Raw, &probe); err != nil {
+		return "", false
+	}
+	if probe.Type != "user" || len(probe.Message.Content) == 0 {
+		return "", false
+	}
+	// Claude writes a plain owner turn as a bare string.
+	var s string
+	if err := json.Unmarshal(probe.Message.Content, &s); err == nil {
+		if s == "" {
+			return "", false
+		}
+		return s, true
+	}
+	// Typed blocks: prose only when every block is text. A single
+	// tool_result block makes the line structured, not a turn to paint.
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(probe.Message.Content, &blocks); err != nil || len(blocks) == 0 {
+		return "", false
+	}
+	texts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Type != "text" {
+			return "", false
+		}
+		texts = append(texts, b.Text)
+	}
+	text = strings.Join(texts, "\n")
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+// echoedOwnerTurnLine reports whether a stored chat wire line is a provider
+// echo of an owner turn — a user-role line whose prose still carries the
+// internal userTurnPrefix marker (🎯T382).
+//
+// Live traffic no longer produces these, but journals written before the fix
+// contain them, and replaying one repaints the owner's message — its
+// attachments and a literal "[user]" line with it. Both replay paths filter
+// on this so history shows what live now emits.
+func echoedOwnerTurnLine(line string) bool {
+	text, prose := userTurnText(claudia.Event{Raw: []byte(line)})
+	return prose && strings.HasPrefix(text, userTurnPrefix)
 }
 
 // stampStreamID injects stream_id onto a chat wire JSON object (🎯T223).

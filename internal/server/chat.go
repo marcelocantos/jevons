@@ -72,9 +72,14 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	// assistant bodies (same view as ReplayTailSealed). Raw journal unchanged.
 	// start/total still describe the raw window for paging.
 	display := chatlog.CoalesceStreamLines(lines)
-	raw := make([]json.RawMessage, len(display))
-	for i, ln := range display {
-		raw[i] = json.RawMessage(ln)
+	raw := make([]json.RawMessage, 0, len(display))
+	for _, ln := range display {
+		// 🎯T382: pre-fix journals hold provider echoes of owner turns;
+		// paging one back would repaint the message a second time.
+		if echoedOwnerTurnLine(ln) {
+			continue
+		}
+		raw = append(raw, json.RawMessage(ln))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -1147,6 +1152,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		var bytes int
 		// 🎯T142: sealed-turn replay — merge token stream into one frame/turn.
 		start, total, err := clog.ReplayTailSealed(historyReplayTurns, func(line string) error {
+			// 🎯T382: pre-fix journals hold provider echoes of owner turns;
+			// replaying one repaints the message (marker and images) twice.
+			if echoedOwnerTurnLine(line) {
+				return nil
+			}
 			frames++
 			bytes += len(line) + 1
 			writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
