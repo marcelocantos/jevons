@@ -106,6 +106,10 @@ ACTIVE_FILE="${JEVONS_RESTART_ACTIVE:-$HOME/.jevons/restart-daily.active}"
 LOCK_FILE="${JEVONS_RESTART_LOCK:-$HOME/.jevons/restart-daily.lock}"
 LOCK_WAIT_SEC="${JEVONS_RESTART_LOCK_WAIT_SEC:-240}"
 RUNLOCK="$ROOT/bin/runlock"
+# 🎯T254.2: the daemon is compiled from a detached worktree at HEAD, not from
+# the shared clone. Kept between runs so the Go build cache stays warm.
+BUILDSNAP="$ROOT/bin/buildsnap"
+SNAP_DIR="${JEVONS_RESTART_SNAP_DIR:-$HOME/.jevons/build-snapshot}"
 
 # Re-exec under the lock unless we are already the locked child. Fails
 # closed: restarting unserialised is the failure mode this exists to stop,
@@ -394,7 +398,7 @@ wait_until_serving() {
 log "🎯T191 restart-daily-jevonsd: root=$ROOT port=$PORT workdir=$WORKDIR dry_run=$DRY_RUN force=$FORCE"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  log "[dry-run] would: make (bin/jevonsd) unless SKIP_MAKE=$SKIP_MAKE"
+  log "[dry-run] would: 🎯T254.2 build bin/jevonsd from committed HEAD in $SNAP_DIR (never the shared tree) unless SKIP_MAKE=$SKIP_MAKE"
   log "[dry-run] would: 🎯T218 no-op if the running daemon already serves this build (already activated)"
   log "[dry-run] would: 🎯T392.5 hold $LOCK_FILE via runlock so concurrent restarts serialise"
   log "[dry-run] would: 🎯T218 wait out the ${MIN_INTERVAL_SEC}s thrash window rather than skip a changed binary"
@@ -407,8 +411,23 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 if [[ "$SKIP_MAKE" != "1" ]]; then
-  log "rebuild: make bin/jevonsd"
-  make -C "$ROOT" bin/jevonsd
+  # 🎯T254.2: build committed HEAD in a throwaway worktree, never the shared
+  # clone. A dozen fleet workers edit this tree at once, so `make -C $ROOT`
+  # compiles whatever any of them has half-written: on 2026-08-09 a restart
+  # could not rebuild at all because another worker's uncommitted chat.go
+  # called a method that did not exist, and the worker running the restart
+  # had no way to activate their own landed change. Uncommitted work is
+  # deliberately NOT built — commit, then restart.
+  #
+  # Fails closed, like the runlock above: building the shared tree as a
+  # fallback would silently restore the exact failure this removes.
+  if [[ ! -x "$BUILDSNAP" ]]; then
+    (cd "$ROOT" && go build -o "$BUILDSNAP" ./cmd/buildsnap) || \
+      die "cannot build $BUILDSNAP — refusing to rebuild from the shared tree"
+  fi
+  log "rebuild: bin/jevonsd from committed HEAD (snapshot $SNAP_DIR)"
+  "$BUILDSNAP" -root "$ROOT" -snap "$SNAP_DIR" \
+    -target bin/jevonsd -artifact bin/jevonsd -dest "$BIN"
 else
   log "skip make (JEVONS_RESTART_SKIP_MAKE=1)"
   [[ -x "$BIN" ]] || die "no binary at $BIN"

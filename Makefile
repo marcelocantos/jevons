@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope runlock
+all: jevonsd jevons-head treeguard commitscope runlock buildsnap
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -59,6 +59,15 @@ runlock: bin/runlock
 bin/runlock: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/runlock ./cmd/runlock
+
+# 🎯T254.2: builds the daily daemon from committed HEAD in a throwaway
+# worktree, so one worker's uncommitted edits cannot stop another rebuilding.
+.PHONY: buildsnap
+buildsnap: bin/buildsnap
+
+bin/buildsnap: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/buildsnap ./cmd/buildsnap
 
 .PHONY: macos-head
 macos-head:
