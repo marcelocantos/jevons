@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // DeadAgentReport is one silent-death finding (🎯T85).
@@ -62,7 +63,7 @@ func (c claudiaSweep) ProcState(name string) (hasProc, alive bool) {
 }
 
 func (c claudiaSweep) Launch(name string) error {
-	_, err := c.reg.Launch(name)
+	_, err := fleet.LaunchRecovering(c.reg, name)
 	return err
 }
 

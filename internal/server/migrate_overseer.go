@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/handover"
 )
 
@@ -102,7 +103,7 @@ func (s *Server) rotateOverseer(kind string,
 	// From here the row is already rotated, so failures must leave a
 	// legible state rather than pretend nothing happened: the handover is
 	// on disk, and cockpit converge (🎯T204) keeps retrying the launch.
-	agent, lerr := reg.Launch(name)
+	agent, lerr := fleet.LaunchRecovering(reg, name)
 	if lerr != nil {
 		s.SetOverseerDownReason("overseer " + kind + " relaunch failed: " + lerr.Error())
 		s.NotifyAgentsChanged()

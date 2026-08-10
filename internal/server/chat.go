@@ -24,6 +24,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
@@ -701,7 +702,7 @@ func (s *Server) RewindOverseer(n int) error {
 	if err := reg.Register(next); err != nil {
 		return fmt.Errorf("rewind: register session: %w", err)
 	}
-	agent, lerr := reg.Launch(s.overseerName)
+	agent, lerr := fleet.LaunchRecovering(reg, s.overseerName)
 	if lerr != nil {
 		// Leave stopped + clean def; cockpit converge (🎯T204) will retry.
 		s.SetOverseerDownReason("rewind relaunch failed: " + lerr.Error())

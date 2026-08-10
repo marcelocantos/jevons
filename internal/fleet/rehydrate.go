@@ -190,3 +190,32 @@ func RehydrateLostSessionIn(reg *claudia.Registry, name string) (LostSession, bo
 		"provider", string(lost.Provider), "target_id", lost.TargetID)
 	return lost, true, nil
 }
+
+// LaunchRecovering is registry.Launch with lost-session recovery in
+// front of it (🎯T409).
+//
+// claudia fails closed when a row is Materialized and its transcript is
+// gone, which is correct — silently minting a replacement would discard
+// history without saying so. But every caller then has to know to
+// rehydrate first, and on 2026-08-10 three separate paths did not:
+// jevons_agent_start had it, ensureAgentProcess did not (the impatience
+// ladder retried the same error on a timer forever), and cockpit
+// converge did not (the overseer failed eight launches and gave up,
+// taking owner chat and the fleet's animus with it).
+//
+// Thirteen call sites reach registry.Launch. Recovery belongs here, once,
+// rather than in each of them — a guard that every caller must remember
+// is a guard that some caller will forget.
+func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error) {
+	if reg == nil {
+		return nil, fmt.Errorf("launch %q: no agent registry", name)
+	}
+	if lost, ok, err := RehydrateLostSessionIn(reg, name); err != nil {
+		// Not fatal: fall through and let Launch report the real problem.
+		slog.Warn("lost-session rehydrate failed; launching anyway",
+			"name", name, "err", err)
+	} else if ok {
+		slog.Info("launch rehydrated lost session", "name", name, "detail", lost.Describe())
+	}
+	return reg.Launch(name)
+}

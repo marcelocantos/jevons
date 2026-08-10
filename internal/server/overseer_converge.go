@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // Cockpit convergence (🎯T204): desired state is a *usable* owner chat and
@@ -109,13 +110,13 @@ func clearConnectEndpoint(def claudia.AgentDef) claudia.AgentDef {
 
 // cockpitState tracks per-streak Launch failures and unstick attempts.
 type cockpitState struct {
-	mu             sync.Mutex
-	attempts       int
-	lastErr        string
-	lastPhase      cockpitPhase
-	unstickCount   int
-	tick           int
-	lastUnstick    time.Time
+	mu           sync.Mutex
+	attempts     int
+	lastErr      string
+	lastPhase    cockpitPhase
+	unstickCount int
+	tick         int
+	lastUnstick  time.Time
 	// maxUnstickPerHour soft-cap before escalate-to-relaunch only.
 	maxUnstickBurst int
 }
@@ -352,10 +353,10 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 		}
 	}
 
-	agent, err := reg.Launch(name)
+	agent, err := fleet.LaunchRecovering(reg, name)
 	if err != nil {
 		_ = reg.Register(clearConnectEndpoint(cleared))
-		agent, err = reg.Launch(name)
+		agent, err = fleet.LaunchRecovering(reg, name)
 	}
 	if err != nil {
 		state.mu.Lock()
