@@ -60,10 +60,12 @@ func RegisterUIRoutes(mux *http.ServeMux, dir string) *DevServer {
 			http.Error(w, "embedded index.html unreadable", http.StatusInternalServerError)
 			return
 		}
+		// An embedded tree is frozen at build time, so nothing in it can be
+		// mid-write — the 🎯T375 settle pass has no work to do here.
 		serveGuardedIndex(w, raw, "embedded", func(ref string) bool {
 			_, err := fs.Stat(web.FS, ref)
 			return err == nil
-		})
+		}, nil)
 	})
 	scriptsFS, err := fs.Sub(web.FS, "scripts")
 	if err != nil {
@@ -95,10 +97,20 @@ func (ds *DevServer) RegisterRoutes(mux *http.ServeMux) {
 				http.StatusInternalServerError)
 			return
 		}
+		// 🎯T375: N fleet workers write into this same tree, so the read
+		// above may have caught a file mid-write. Wait for the reference set
+		// to hold still; if it settles, re-read so the bytes we serve are the
+		// settled ones rather than the ones we happened to catch.
+		moving := settleServingTree(ds.dir, web.IndexScriptRefs(raw))
+		if len(moving) == 0 {
+			if settled, err := os.ReadFile(filepath.Join(ds.dir, "index.html")); err == nil {
+				raw = settled
+			}
+		}
 		serveGuardedIndex(w, raw, ds.dir, func(ref string) bool {
 			st, err := os.Stat(filepath.Join(ds.dir, filepath.FromSlash(ref)))
 			return err == nil && !st.IsDir()
-		})
+		}, moving)
 	})
 	// Serve static assets under /scripts/. no-cache on every response so a
 	// jevonsd restart with new assets is picked up by the next page load
