@@ -47,6 +47,13 @@ func chainServer(t *testing.T, fleet map[string]*fakeSender) (*Server, *overseer
 		}
 		return fs, false, nil
 	})
+	// 🎯T416: delivery is now reported from evidence about the agent, and a
+	// fakeSender is not an agent — with no witness every leg here would come
+	// back delivered_unconfirmed. These tests are about ROUTING (which arm a
+	// name resolves to, whose origin is carried), so they witness the payload
+	// landing and let the confirmation be pinned where it belongs, in
+	// send_turn_begin_test.go.
+	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, PayloadSeen: true}))
 	return s, inbox
 }
 
@@ -93,7 +100,13 @@ func TestDeliverByNameWorkerToPOToOverseerChain(t *testing.T) {
 	if inbox.origins[1] != OriginOwner {
 		t.Fatalf("origin=%q want owner", inbox.origins[1])
 	}
+	// The turn started by leg 1 ends. Both halves are needed since 🎯T416:
+	// the fake stops refusing sends, AND the daemon observes the boundary —
+	// in production that second half is the event sink's terminal stop, and
+	// without it the daemon holds this message in its own queue rather than
+	// stacking it in a composer.
 	po.inFlight = false
+	s.noteTurnEnded("jevons-po")
 	if _, err := s.deliverByName("jevons-po", "owner: direct to PO", OriginOwner, false); err != nil {
 		t.Fatalf("owner→PO: %v", err)
 	}
@@ -389,8 +402,11 @@ func TestDeliverByNameAsNamedActorPolicy(t *testing.T) {
 		t.Fatalf("worker-b inbox=%v", workerB.sent)
 	}
 
-	// Peer: worker-a → worker-b (policy permits on purpose).
+	// Peer: worker-a → worker-b (policy permits on purpose). The previous
+	// turn ends first — see the note in the chain test on why the daemon has
+	// to be told as well as the fake (🎯T416).
 	workerB.inFlight = false
+	s.noteTurnEnded("worker-b")
 	if _, err := s.deliverByNameAs("worker-a", "worker-b", "peer: coordinate", OriginAgent, false); err != nil {
 		t.Fatalf("peer: %v", err)
 	}

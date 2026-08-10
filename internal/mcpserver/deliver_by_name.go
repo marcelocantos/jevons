@@ -88,6 +88,26 @@ func (s *Server) SetSenderResolver(fn senderResolver) {
 	s.resolveSender = fn
 }
 
+// sendConfirmation says WHO decides whether a send became a turn (🎯T416).
+//
+// Two confirmations on one send is not twice as safe, it is a contradiction
+// waiting to fire: the spawn path opened its own watch before the send
+// (🎯T387) and reads the returned status, so if the send path also judged, the
+// spawn would see a status its own predicate does not recognise and fail a
+// healthy brief. Whoever opened the watch owns the verdict.
+type sendConfirmation int
+
+const (
+	// confirmHere: deliverToSender judges, against this payload.
+	confirmHere sendConfirmation = iota
+	// confirmByCaller: the caller opened a watch before calling and will
+	// judge the outcome itself. Only the spawn path does this, and only
+	// because its evidence question is the different one — a fresh seat has
+	// an empty composer, so "did the agent stir" cannot be confused with an
+	// earlier message finally being submitted.
+	confirmByCaller
+)
+
 // deliverByName is THE agent-addressed delivery op of the fleet layer:
 // one call reaches ANY agent by name — worker, PO, or overseer — with
 // hierarchy carried by lineage rather than by which API the caller holds.
@@ -97,10 +117,21 @@ func (s *Server) deliverByName(name, text string, origin SendOrigin, interrupt b
 	return s.deliverByNameAs(ActorOwnerSurface, name, text, origin, interrupt)
 }
 
+// deliverByNameConfirmedByCaller is deliverByName for a caller that has
+// already opened its own turn watch — the spawn path, and nothing else.
+func (s *Server) deliverByNameConfirmedByCaller(name, text string, origin SendOrigin, interrupt bool) (agentSendResult, error) {
+	return s.deliverByNameWith(ActorOwnerSurface, name, text, origin, interrupt, confirmByCaller)
+}
+
 // deliverByNameAs is the same path with the sender named, so authorization is
 // decided by lineage/policy here (🎯T309.3 acceptance 2) rather than by which
 // API the caller could reach. See deliver_policy.go for the rules.
 func (s *Server) deliverByNameAs(actor, name, text string, origin SendOrigin, interrupt bool) (agentSendResult, error) {
+	return s.deliverByNameWith(actor, name, text, origin, interrupt, confirmHere)
+}
+
+// deliverByNameWith is deliverByNameAs with the confirmation owner named.
+func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, interrupt bool, confirm sendConfirmation) (agentSendResult, error) {
 	name = strings.TrimSpace(name)
 	actor = strings.TrimSpace(actor)
 	if name == "" || strings.TrimSpace(text) == "" {
@@ -146,7 +177,7 @@ func (s *Server) deliverByNameAs(actor, name, text string, origin SendOrigin, in
 	if err != nil {
 		return agentSendResult{}, err
 	}
-	return deliverToSender(s, name, text, interrupt, proc, rehydrated)
+	return deliverToSenderWith(s, name, text, interrupt, proc, rehydrated, confirm)
 }
 
 // deliverToOverseer is the overseer arm of the single path. Delivery itself
@@ -175,6 +206,20 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		return agentSendResult{}, fmt.Errorf("overseer %q is not reachable: no delivery seam wired", name)
 	}
 
+	// 🎯T416 clause 5. The overseer is the fleet's reporting sink, so a silent
+	// drop here loses every escalation in the hierarchy at once — and it did:
+	// its composer was found holding four accumulated pastes, each of which had
+	// been answered "Message delivered to overseer". The seam returning nil
+	// means the text was accepted into the notify queue, which is a statement
+	// about the queue and not about the overseer.
+	//
+	// The overseer's turn boundaries are not visible from this package (its
+	// event stream is owned by the chat layer, not the fleet event sink), so
+	// its flight state is permanently unknown here. That is the honest input:
+	// a payload that appears is confirmed, and one that does not is reported
+	// unconfirmed rather than delivered — never as the defect, because a note
+	// legitimately waiting behind an owner turn looks identical from here.
+	watch := s.watchAgentTurnFor(name, text)
 	if err := deliver(text, origin); err != nil {
 		slog.Warn("agent_send",
 			"component", "agent_send",
@@ -186,9 +231,21 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		return agentSendResult{}, fmt.Errorf("send to overseer %q failed: %w", name, err)
 	}
 
+	ev := watch()
+	outcome := ClassifySendOutcome(FlightUnknown, ev)
 	res := agentSendResult{
 		Status:  "sent",
 		Message: fmt.Sprintf("Message delivered to overseer %q.", name),
+	}
+	if outcome != OutcomeBegun {
+		res = agentSendResult{
+			Status: "delivered_unconfirmed",
+			Message: fmt.Sprintf(
+				"Message accepted for overseer %q but NOT confirmed as a turn: %s. "+
+					"It may be waiting behind an in-flight turn, or it may be sitting unsubmitted. "+
+					"Treat as undelivered until the overseer acts on it.",
+				name, evidenceDetail(ev)),
+		}
 	}
 	slog.Info("agent_send",
 		"component", "agent_send",
@@ -197,6 +254,9 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		"status", res.Status,
 		"queued", 0,
 		"rehydrated", false,
+		"outcome", string(outcome),
+		"payload_seen", ev.PayloadSeen,
+		"evidence", ev.Detail,
 	)
 	return res, nil
 }

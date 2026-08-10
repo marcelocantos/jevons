@@ -83,14 +83,18 @@ func (s *Server) agentHasTurnBegan(name string) bool {
 	return s.agentTurnBegan[name]
 }
 
-// clearAgentTurnBegan drops process-local evidence (on kill/remove).
+// clearAgentTurnBegan drops process-local evidence (on kill/remove). It also
+// forgets what was known about the agent's turn (🎯T416): a seat that has gone
+// away must not leave an in-flight record behind, or the next send to a
+// re-minted agent of the same name is held in a queue that nothing will drain.
 func (s *Server) clearAgentTurnBegan(name string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	delete(s.agentTurnBegan, name)
+	delete(s.agentFlight, name)
+	s.mu.Unlock()
 }
 
 // deliverStartPrompt injects the optional jevons_agent_start prompt after
@@ -118,7 +122,12 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 	// result alone was never evidence of anything about the agent.
 	watch := s.watchAgentTurn(name)
 
-	res, err := s.sendToAgent(name, text, false)
+	// This watch owns the verdict (🎯T416): the send path must not also judge,
+	// or a healthy brief comes back with a status ConfirmTurnBegan does not
+	// recognise. The spawn asks the easier question and is entitled to: a seat
+	// this daemon just launched has an empty composer and an empty transcript,
+	// so nothing else can be writing the growth it sees.
+	res, err := s.deliverByNameConfirmedByCaller(name, text, OriginAgent, false)
 	if confErr := ConfirmTurnBegan(res.Status, err, watch()); confErr != nil {
 		// deliverToSender marks turn-began off its own successful Send, which
 		// is the same send-call inference this target exists to remove. The

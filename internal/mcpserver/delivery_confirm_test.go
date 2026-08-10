@@ -122,6 +122,16 @@ func TestDeliverLargeSendMarksTurnBegan(t *testing.T) {
 		return fs, false, nil
 	})
 
+	// 🎯T416: a large send is exactly the case that stuck, so "marks turn
+	// began" is now earned from the payload appearing in the transcript
+	// rather than from fakeSender returning nil. Same assertions, real
+	// evidence — the unwitnessed version of this fixture is a stuck send and
+	// is asserted as one in send_turn_begin_test.go.
+	s.SetTurnWitness(witnessYielding(TurnEvidence{
+		Observed: true, PayloadSeen: true,
+		Detail: "transcript gained a user message carrying this payload",
+	}))
+
 	// Above claudia pasteBlockThreshold (400) and multi-line — same class
 	// as fleet standing brief + mission brief.
 	large := strings.Repeat("mission line\n", 80) // ~1040 bytes

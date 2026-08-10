@@ -103,6 +103,11 @@ type Server struct {
 	// can report never_briefed vs running for live zero-turn seats.
 	agentTurnBegan map[string]bool
 
+	// agentFlight tracks whether a turn is KNOWN to be running per agent
+	// (🎯T416). Absent means unknown, which is a real answer and not a
+	// default — see turn_flight.go. Guarded by mu.
+	agentFlight map[string]TurnFlight
+
 	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
 	selfTestEnv SelfTestEnvFunc
 

@@ -180,6 +180,10 @@ func TestDeliverToSenderQueuesWhenBusy(t *testing.T) {
 
 func TestDeliverToSenderInterruptThenSend(t *testing.T) {
 	s := &Server{}
+	// 🎯T416: an interrupt clears the turn, so the send that follows is judged
+	// strictly. Witness the payload landing — the point here is the interrupt
+	// mechanics, not the confirmation.
+	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, PayloadSeen: true}))
 	fs := &fakeSender{alive: true, inFlight: true, afterInterruptClears: true}
 	res, err := deliverToSender(s, "po", "force nudge", true, fs, false)
 	if err != nil {
@@ -219,6 +223,7 @@ func TestDeliverToSenderHappyPath(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	s := &Server{}
+	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, PayloadSeen: true}))
 	fs := &fakeSender{alive: true}
 	res, err := deliverToSender(s, "w", "hello", false, fs, true)
 	if err != nil {

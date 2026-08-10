@@ -65,6 +65,12 @@ type Claudia struct {
 	// before and migration is unavailable rather than silently cold.
 	roots     discovery.Roots
 	handovers *handover.Store
+
+	// seedDeliver overrides how a handover seed reaches its successor
+	// (🎯T416). Nil is the product path, Deliver. Test seam: the handover
+	// dispatcher's fail-closed arm is one of clause 9's two exercised
+	// instruments, and asserting on it must not need a live tmux agent.
+	seedDeliver func(name, seed string) (string, error)
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from

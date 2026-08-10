@@ -161,6 +161,65 @@ What this means when you are briefing or reporting:
 *synchronous* request/reply op (it waits for the reply and assembles it), which
 is why it stays separate from the fire-and-forget family above.
 
+### A send is confirmed, not assumed (🎯T416)
+
+`jevons_agent_send` used to answer **"Message sent"** whenever the keystrokes
+left the daemon. That is a statement about the send call. On 2026-08-10 a
+multi-KB paste routinely landed in the receiver's composer and stayed there,
+unsubmitted, while every sender was told delivery succeeded — including five
+overseer↔PO messages, three of which are in no transcript on disk.
+
+The send path now reports what it **observed of the agent**, in four answers:
+
+| Status | What it means | What to do |
+|---|---|---|
+| `sent` | The payload appeared in the receiver's transcript as a user message. It became a turn. | Nothing. |
+| `queued` | A turn was already running. The daemon holds the message itself and delivers it on the next turn boundary — it is **not** pasted into a composer that could merge or destroy it. | Nothing. |
+| `delivered_unconfirmed` | Handed over, not seen to land, and the daemon does not know whether a turn was already running (that record does not survive a restart). | Treat as **undelivered** until the agent acts. |
+| error: *not submitted* | The agent was known idle and the payload never became a turn. It is sitting in that agent's composer. | Do not re-send — that stacks a second copy. |
+
+**Never** read a `not submitted` error as a provider refusal, a spend limit, or
+an agent with nothing to say. Confusing those cost thirteen hours of
+misdiagnosis on a worker that was neither broken nor billed out.
+
+#### Checking a delivery by hand — the two instruments that work
+
+Three instruments were consulted on 2026-08-10 and **all three passed while
+being wrong**. Do not reach for them:
+
+- ❌ **Transcript growth.** A send's Enter submits whatever the composer already
+  held, so the payload that lands is never the one you just sent. Growth
+  confirms *somebody else's* message.
+- ❌ **A raw grep of the session file.** Agents capture their own panes into
+  their transcripts, so an unsubmitted payload appears in the file inside a
+  `tool_result`. That is how a real loss was retracted as a phantom.
+- ❌ **The receiver's behaviour.** An ack, or the agent doing what it was told,
+  proves only that it **saw** the text — and an agent can read its own
+  unsubmitted composer. It inverts: an ack to a message that never became a
+  turn is evidence the message was lost.
+
+Two instruments are sound, and both were sitting unused:
+
+- ✅ **Payload-match at user-message level.** Read the receiving session's JSONL
+  and look for your payload in a record whose `message.role` is `user`, over
+  authored content only (a plain string, or `text` blocks) — never
+  `tool_result` blocks. Sound at the instant of reading (🎯T417 bounds it after).
+- ✅ **Transcript-file absence.** A session's JSONL is created by its **first
+  submit**, so a registry-named session with **no file at all** has never begun
+  a turn. Cheap, needs no tmux, and it is a *positive* born-stuck test rather
+  than a failure to observe. Use it **with** payload-match, never instead:
+  file-exists says nothing about which message landed.
+
+Together they separate the two failure shapes: **file absent** ⇒ born-stuck,
+whole backlog unsubmitted; **file present but no payload** ⇒ either a mid-turn
+read (🎯T417) or genuinely lost.
+
+The handover dispatcher (`fleet.SeedSuccessor`) is a fourth caller of this path
+and was always honest — it waits for the reply, so it fails closed and logs
+`handover hand-off failed; it stays pending for the next launch`. Read that
+line; it is a true delivery-failure signal. Its recovery — a seed parked until
+a launch that may never come — is 🎯T418.
+
 **Do not default to** Grok `spawn_subagent` (or worktree subagents that
 die with the parent). Those children are not first-class fleet entries,
 vanish on parent interrupt, and break multi-agent observability.

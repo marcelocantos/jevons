@@ -59,6 +59,33 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Residual: instructional + pure map model; not a hard daemon block; rich
   🎯T29 surface and owner process-fidelity gate remain class-3 / follow-ups.
 
+## A send is confirmed, not assumed (🎯T416)
+- jevons_agent_send reports what was OBSERVED of the receiver, in four answers:
+  **sent** (your payload appeared in its transcript as a user message —
+  delivered), **queued** (a turn was running; the daemon holds the message
+  itself and delivers it on the next turn boundary), **delivered_unconfirmed**
+  (handed over, not seen to land, and the daemon cannot tell queued from stuck
+  — treat as UNDELIVERED until the agent acts), and an ERROR naming the message
+  as **not submitted** (it is sitting in that agent's composer; do NOT re-send,
+  that stacks a second copy).
+- A "not submitted" error is NOT a provider refusal, NOT a spend limit, and NOT
+  an agent with nothing to say. Reading it as one of those cost thirteen hours.
+- CHECKING A DELIVERY BY HAND — three instruments passed while WRONG on
+  2026-08-10 and must not be used: transcript GROWTH (a send's Enter submits the
+  previous backlog, so growth confirms somebody else's message), a RAW GREP of
+  the session file (agents quote their own pane captures into their transcripts,
+  so an unsubmitted payload appears inside a tool_result), and the receiver's
+  BEHAVIOUR (an ack proves it SAW the text, and an agent can read its own
+  unsubmitted composer — an ack to a message that never became a turn is
+  evidence the message was LOST).
+- The two that work, and use them together: (1) PAYLOAD-MATCH AT USER-MESSAGE
+  LEVEL in the receiving session's JSONL, over authored content only (a plain
+  string, or text blocks — never tool_result); (2) TRANSCRIPT-FILE ABSENCE — a
+  session's JSONL is created by its first submit, so a registry-named session
+  with no file at all has never begun a turn. File absent ⇒ born-stuck, whole
+  backlog unsubmitted. File present but no payload ⇒ mid-turn read (🎯T417) or
+  genuinely lost. File-exists alone says nothing about WHICH message landed.
+
 ## Fleet spawn (🎯T78)
 - Create child work via jevons_agent_start / jevons_thread_spawn, not Grok spawn_subagent.
 

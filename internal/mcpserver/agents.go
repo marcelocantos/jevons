@@ -764,6 +764,12 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		if ev.IsTerminalStop() {
 			text := responseText.String()
 			responseText.Reset()
+			// 🎯T416: the turn boundary the send path needs. This is the only
+			// place the daemon learns an agent is idle — it never infers it
+			// from a registry row or from having launched something, because a
+			// pane can outlive the daemon and a pooled window was never
+			// watched by this process.
+			s.noteTurnEnded(name)
 			// 🎯T236: latch structured failure class / empty terminal so fleet
 			// recover can re-pressure without owner continue (T237 class).
 			s.mu.Lock()
@@ -779,7 +785,10 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 				s.notify(name, text)
 			}
 			// 🎯T111.1: deliver any nudges queued while the prompt was in flight.
-			s.drainAgentSendQueue(name)
+			// Off the event goroutine since 🎯T416: the drain now waits for the
+			// message to become a turn, and blocking an agent's event stream
+			// for that window would stall its own progress reporting.
+			go s.drainAgentSendQueue(name)
 			// 🎯T165: finished work agents auto stop+Remove (not persona-only).
 			s.maybeReapDoneWorkAgent(name, text)
 		}

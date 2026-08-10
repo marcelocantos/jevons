@@ -194,6 +194,24 @@ func (f *Claudia) MarkHandoverDelivered(name string) error {
 //
 // The record is marked delivered only once the turn actually completes,
 // so a failed hand-off stays pending for the next launch.
+//
+// 🎯T416 — THIS IS THE FOURTH CALLER OF THE STUCK SEND PATH, and the only one
+// that was already telling the truth.
+//
+// The other three (deliverToSender, deliverToOverseer, drainAgentSendQueue)
+// inferred success from proc.Send() returning nil and reported "Message sent"
+// for a payload that never left the composer. This one waits for the reply, so
+// a paste that is never submitted times out and says so, in handOffSeed's
+// ERROR line. On 2026-08-10 at 18:21 that line was emitted verbatim for
+// jv-t416-send-turn-begin — a true delivery failure, correctly reported, that
+// nobody read. Every instrument consulted that day lied; the one that was
+// honest was unconsulted.
+//
+// So this arm needs no honesty added, and the fix is to bring the other three
+// up to it rather than to touch it. What it still lacks is RECOVERY: "it stays
+// pending for the next launch" is why that worker sat dark for 43 minutes, and
+// a launch that may never come is not a retry. That half is 🎯T418 clause 5 and
+// is deliberately not done here.
 func (f *Claudia) SeedSuccessor(name string) (handover.Pending, bool, error) {
 	if f == nil || f.handovers == nil {
 		return handover.Pending{}, false, nil
@@ -211,18 +229,36 @@ func (f *Claudia) SeedSuccessor(name string) (handover.Pending, bool, error) {
 		return pending, false, fmt.Errorf("seed %q: no live process to hand the transcript to", name)
 	}
 
-	go func() {
-		if _, err := f.Deliver(name, pending.Seed()); err != nil {
-			slog.Error("handover hand-off failed; it stays pending for the next launch",
-				"name", name, "err", err)
-			return
-		}
-		if err := f.handovers.MarkDelivered(name); err != nil {
-			slog.Error("handover delivered but not marked — successor may be seeded twice",
-				"name", name, "err", err)
-		}
-		slog.Info("handover delivered", "detail", pending.Describe())
-	}()
+	go f.handOffSeed(name, pending)
 	slog.Info("handover dispatched", "detail", pending.Describe())
 	return pending, true, nil
+}
+
+// handOffSeed is the dispatched turn, extracted from SeedSuccessor's goroutine
+// so the fail-closed arm can be exercised without a live provider process
+// (🎯T416 clause 9, instrument A). The suite asserts on the ERROR line itself,
+// because that line IS the instrument: it is what an operator would have had to
+// read to catch the 18:21 hand-off failure at the time, and an instrument
+// nothing asserts on is one the next refactor quietly drops.
+func (f *Claudia) handOffSeed(name string, pending handover.Pending) {
+	if _, err := f.deliverSeed(name, pending.Seed()); err != nil {
+		slog.Error("handover hand-off failed; it stays pending for the next launch",
+			"name", name, "err", err)
+		return
+	}
+	if err := f.handovers.MarkDelivered(name); err != nil {
+		slog.Error("handover delivered but not marked — successor may be seeded twice",
+			"name", name, "err", err)
+	}
+	slog.Info("handover delivered", "detail", pending.Describe())
+}
+
+// deliverSeed is how the seed reaches the successor: Deliver on the product
+// path, overridable for the oracle. A test seam rather than an option — nothing
+// but a test ever sets it.
+func (f *Claudia) deliverSeed(name, seed string) (string, error) {
+	if f.seedDeliver != nil {
+		return f.seedDeliver(name, seed)
+	}
+	return f.Deliver(name, seed)
 }

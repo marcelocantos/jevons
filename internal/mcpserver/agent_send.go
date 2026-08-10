@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -189,31 +190,190 @@ func logAgentSendResult(name string, res agentSendResult, rehydrated bool) {
 	)
 }
 
+// logAgentSendOutcome is logAgentSendResult plus what the daemon actually
+// observed (🎯T416). status=sent was the log line that made this defect
+// invisible for thirteen hours, so the record now carries the evidence the
+// status was derived from — an operator reading logs can tell a confirmed
+// delivery from an unconfirmed one without re-deriving it from a transcript.
+func logAgentSendOutcome(name string, res agentSendResult, rehydrated bool, outcome SendOutcome, flight TurnFlight, ev TurnEvidence) {
+	slog.Info("agent_send",
+		"component", "agent_send",
+		"name", name,
+		"status", res.Status,
+		"queued", res.Queued,
+		"rehydrated", rehydrated,
+		"outcome", string(outcome),
+		"flight", flight.String(),
+		"payload_seen", ev.PayloadSeen,
+		"evidence", ev.Detail,
+	)
+}
+
+// reportSendOutcome turns an outcome into what the caller is told, and is the
+// single place the send path is allowed to claim delivery (🎯T416).
+//
+// interrupted distinguishes the two wire statuses for a begun turn; rehydrated
+// the two for a fresh process. Neither changes the decision — only its name.
+func (s *Server) reportSendOutcome(name string, outcome SendOutcome, flight TurnFlight, ev TurnEvidence, rehydrated, interrupted bool) (agentSendResult, error) {
+	switch outcome {
+	case OutcomeBegun:
+		msg := fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)
+		switch {
+		case interrupted:
+			msg = fmt.Sprintf("Interrupted in-flight turn on %q and sent the new message.", name)
+		case rehydrated:
+			msg += " (rehydrated after dead/stopped process)"
+		}
+		res := agentSendResult{Status: sentStatus(rehydrated, interrupted), Message: msg, Queued: s.pendingAgentSends(name)}
+		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
+		// 🎯T305: never_briefed → running. Now earned from the payload
+		// arriving rather than from the send call returning.
+		s.markAgentTurnBegan(name)
+		s.noteTurnInFlight(name)
+		return res, nil
+
+	case OutcomeUnconfirmed:
+		// The one answer that exists because state can be lost. Not success:
+		// the caller must not read this as delivered. Not a defect either:
+		// after a restart the daemon has no record of a turn it never saw
+		// start, and a healthy send to a busy agent looks exactly like this.
+		res := agentSendResult{
+			Status: "delivered_unconfirmed",
+			Message: fmt.Sprintf(
+				"Message handed to %q but NOT confirmed as a turn: %s. "+
+					"This daemon has no record of whether %[1]q already had a turn running "+
+					"(that record does not survive a restart), so it cannot tell a message waiting "+
+					"behind a live turn from one left sitting in the composer. Treat as undelivered "+
+					"until the agent responds; confirm by reading its transcript for the payload.",
+				name, evidenceDetail(ev)),
+			Queued: s.pendingAgentSends(name),
+		}
+		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
+		return res, nil
+
+	case OutcomeQueuedBehindTurn:
+		res := agentSendResult{
+			Status: "queued",
+			Message: fmt.Sprintf(
+				"busy: %q had a turn in flight; message queued (%d pending) for delivery when it ends.",
+				name, s.pendingAgentSends(name)),
+			Queued: s.pendingAgentSends(name),
+		}
+		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
+		return res, nil
+
+	default: // OutcomeNotSubmitted
+		// The defect, named as itself. Clause 3: an operator reading this must
+		// not confuse it with a provider refusal or an agent that had nothing
+		// to say — the thirteen-hour misdiagnosis was exactly that confusion.
+		slog.Warn("agent_send",
+			"component", "agent_send",
+			"name", name,
+			"status", "not_submitted",
+			"outcome", string(outcome),
+			"flight", flight.String(),
+			"evidence", ev.Detail,
+		)
+		return agentSendResult{}, fmt.Errorf(
+			"message not submitted to %q: the send call succeeded and %s. "+
+				"The payload was handed to an idle agent and never became a turn — "+
+				"pasted into the composer without a submit, not refused by the provider "+
+				"and not an empty reply. The text is in %[1]q's composer: re-sending will "+
+				"stack a second copy behind it",
+			name, evidenceDetail(ev))
+	}
+}
+
+// sentStatus names a begun turn on the wire. The three spellings are the
+// caller-visible history of how the send got there (fresh, after a rehydrate,
+// after an interrupt); ConfirmSendBeganTurn treats all three as begun.
+func sentStatus(rehydrated, interrupted bool) string {
+	switch {
+	case interrupted:
+		return "interrupted_sent"
+	case rehydrated:
+		return "rehydrated_sent"
+	default:
+		return "sent"
+	}
+}
+
+// evidenceDetail renders what was observed, never leaving the operator with an
+// unexplained verdict.
+func evidenceDetail(ev TurnEvidence) string {
+	if d := strings.TrimSpace(ev.Detail); d != "" {
+		return d
+	}
+	return "nothing was observed of the agent"
+}
+
 // deliverToSender is the pure-ish busy/queue/interrupt path used by
 // sendToAgent and hermetic tests with a fake sender.
+//
+// 🎯T416: a send is no longer reported from its own return value. The call
+// returning nil means the keystrokes left; it has never meant the agent read
+// them. What the caller is told now comes from ClassifySendOutcome, over
+// evidence gathered about THIS PAYLOAD — see turn_flight.go for why three
+// answers were not enough and turn_evidence.go for why transcript growth is
+// not one of them.
 func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSender, rehydrated bool) (agentSendResult, error) {
+	return deliverToSenderWith(s, name, text, interrupt, proc, rehydrated, confirmHere)
+}
+
+// deliverToSenderWith is deliverToSender with the confirmation owner named.
+func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
 	if proc == nil || !proc.Alive() {
 		return agentSendResult{}, fmt.Errorf("agent %q is not running", name)
 	}
 
+	// A turn known to be running is not offered to the provider CLI at all.
+	// Handing it over would work — the CLI queues it — but into a store the
+	// daemon can neither see nor replay: it merges silently with later sends
+	// and dies with the pane at the next rotation or restart (🎯T418). The
+	// daemon's own queue drains on terminal stop, one message per turn.
+	if s.flightState(name) == FlightInFlight {
+		n := s.enqueueAgentSend(name, text)
+		res := agentSendResult{
+			Status: "queued",
+			Message: fmt.Sprintf(
+				"busy: %q has a turn in flight; message queued (%d pending) for delivery when it ends — "+
+					"held by the daemon, not pasted into the agent's composer. "+
+					"To cut the current turn short instead: jevons_agent_send with interrupt=true.",
+				name, n),
+			Queued: n,
+		}
+		logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightInFlight, TurnEvidence{})
+		return res, nil
+	}
+
 	trySend := func() error { return proc.Send(text) }
+
+	// Opened BEFORE the send so "the payload arrived" is measured against a
+	// pre-send baseline, never against what an earlier session left on disk.
+	flight := s.flightState(name)
+	var watch turnWatch
+	if confirm == confirmHere {
+		watch = s.watchAgentTurnFor(name, text)
+	}
 
 	err := trySend()
 	if err == nil {
-		status := "sent"
-		msg := fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)
-		if rehydrated {
-			status = "rehydrated_sent"
-			msg += " (rehydrated after dead/stopped process)"
-		}
-		res := agentSendResult{Status: status, Message: msg, Queued: s.pendingAgentSends(name)}
-		logAgentSendResult(name, res, rehydrated)
-		// 🎯T305: confirmed Send (incl. paste-block press-through in claudia)
-		// means a turn began — never_briefed → running for agent_list.
-		if s != nil {
+		if confirm == confirmByCaller {
+			// The spawn path judges this one; reporting a verdict here would
+			// hand it a status its own predicate does not know.
+			res := agentSendResult{
+				Status:  sentStatus(rehydrated, false),
+				Message: fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name),
+				Queued:  s.pendingAgentSends(name),
+			}
+			logAgentSendResult(name, res, rehydrated)
 			s.markAgentTurnBegan(name)
+			s.noteTurnInFlight(name)
+			return res, nil
 		}
-		return res, nil
+		ev := watch()
+		outcome := ClassifySendOutcome(flight, ev)
+		return s.reportSendOutcome(name, outcome, flight, ev, rehydrated, false)
 	}
 
 	if !isPromptInFlight(err) {
@@ -251,14 +411,15 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 		}
 		// Brief yield so ACP can clear promptID after session/cancel.
 		time.Sleep(50 * time.Millisecond)
+		// A successful interrupt ends the turn that was running, so the agent
+		// is known idle for this send and the strict answer applies: after
+		// cutting a turn short, "it went into the composer and stayed there"
+		// is precisely the outcome the caller must not hear as success.
+		watch2 := s.watchAgentTurnFor(name, text)
 		if err2 := trySend(); err2 == nil {
-			msg := fmt.Sprintf("Interrupted in-flight turn on %q and sent the new message.", name)
-			res := agentSendResult{Status: "interrupted_sent", Message: msg, Queued: s.pendingAgentSends(name)}
-			logAgentSendResult(name, res, rehydrated)
-			if s != nil {
-				s.markAgentTurnBegan(name)
-			}
-			return res, nil
+			ev := watch2()
+			outcome := ClassifySendOutcome(FlightIdle, ev)
+			return s.reportSendOutcome(name, outcome, FlightIdle, ev, rehydrated, true)
 		} else if isPromptInFlight(err2) {
 			n := s.enqueueAgentSend(name, text)
 			res := agentSendResult{
@@ -302,6 +463,32 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 	return res, nil
 }
 
+// liveSender finds the process already running for name, without rehydrating.
+// The drain fires on a turn boundary, so a missing process means the agent went
+// away mid-queue: the message waits for the next launch rather than resurrecting
+// one. The deliver seam is consulted first, which is what lets clause 4's
+// no-duplicate rule be exercised without a provider process (🎯T416).
+func (s *Server) liveSender(name string) (agentSender, bool) {
+	s.mu.Lock()
+	resolve := s.resolveSender
+	s.mu.Unlock()
+	if resolve != nil {
+		proc, _, err := resolve(name)
+		if err != nil || proc == nil || !proc.Alive() {
+			return nil, false
+		}
+		return proc, true
+	}
+	if s.registry == nil {
+		return nil, false
+	}
+	proc := s.registry.Get(name)
+	if proc == nil || !proc.Alive() {
+		return nil, false
+	}
+	return proc, true
+}
+
 // drainAgentSendQueue delivers the next queued message after a terminal
 // stop. Called from the agent event sink (🎯T111.1).
 func (s *Server) drainAgentSendQueue(name string) {
@@ -309,16 +496,17 @@ func (s *Server) drainAgentSendQueue(name string) {
 	if text == "" {
 		return
 	}
-	if s.registry == nil {
-		return
-	}
-	proc := s.registry.Get(name)
-	if proc == nil || !proc.Alive() {
+	proc, live := s.liveSender(name)
+	if !live {
 		// Put back — process gone mid-queue; next send/rehydrate can retry.
 		s.enqueueAgentSend(name, text)
 		slog.Warn("agent send queue: process not alive; re-queued", "name", name)
 		return
 	}
+	// The drain runs on a turn boundary, so the agent is idle by construction
+	// and the strict answer applies — this is the one moment the daemon is
+	// certain what the agent was doing.
+	watch := s.watchAgentTurnFor(name, text)
 	if err := proc.Send(text); err != nil {
 		if isPromptInFlight(err) {
 			// Still busy (nested tool pause edge): put at front by re-queue.
@@ -339,5 +527,32 @@ func (s *Server) drainAgentSendQueue(name string) {
 		)
 		return
 	}
+	ev := watch()
+	if ClassifySendOutcome(FlightIdle, ev) != OutcomeBegun {
+		// 🎯T416 clause 4: a drained message that stuck is NOT re-queued. It is
+		// sitting in the agent's composer, and re-queueing would deliver a
+		// second copy the moment anything submits the first — the silent merge
+		// this target exists to end. The backlog becomes visible instead:
+		// pending count, the payload's fate, and a fleet-health notice, so an
+		// undelivered queue is something an operator is told about rather than
+		// something they infer from an agent that never answers.
+		remaining := s.pendingAgentSends(name)
+		slog.Error("agent send queue: drained message not submitted",
+			"component", "agent_send",
+			"name", name,
+			"status", "not_submitted",
+			"evidence", ev.Detail,
+			"remaining", remaining,
+			"bytes", len(text),
+		)
+		s.notifyFleetHealth(fmt.Sprintf(
+			"Undelivered backlog on %q: a queued message (%d bytes) was pasted after its turn ended and never became a turn — %s. "+
+				"It is in that agent's composer, not lost, and %d more are still queued behind it. "+
+				"It has NOT been re-queued: that would deliver a duplicate once anything submits the first copy.",
+			name, len(text), evidenceDetail(ev), remaining))
+		return
+	}
+	s.markAgentTurnBegan(name)
+	s.noteTurnInFlight(name)
 	slog.Info("agent send queue: drained one message", "name", name, "remaining", s.pendingAgentSends(name))
 }

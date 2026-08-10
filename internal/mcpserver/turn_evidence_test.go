@@ -82,7 +82,7 @@ func (f *fakeObserver) publish(ev claudia.Event) {
 
 // witnessYielding builds a turnWitness that always reports ev.
 func witnessYielding(ev TurnEvidence) turnWitness {
-	return func(string) turnWatch {
+	return func(string, string) turnWatch {
 		return func() TurnEvidence { return ev }
 	}
 }
