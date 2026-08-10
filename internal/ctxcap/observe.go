@@ -61,9 +61,29 @@ func (o Observer) Observe(a AgentRef) Observation {
 	if ev == nil || ev.ModelCalls <= 0 {
 		return obs
 	}
-	obs.Context = ev.Usage.Input / ev.ModelCalls
+	obs.Context = contextTokens(a.Provider, ev.Usage) / ev.ModelCalls
 	obs.HasContext = true
 	return obs
+}
+
+// contextTokens is the conversation a call actually carried, which is not
+// the same field on both providers. Grok's inputTokens is INCLUSIVE of
+// cachedReadTokens; Claude reports input_tokens fresh-only with cache
+// reads alongside — typically tens of tokens against hundreds of
+// thousands served from cache.
+//
+// Reading Usage.Input directly is therefore correct for Grok and
+// catastrophic for Claude: every agent looks near-empty, never crosses
+// the ceiling, and is never compacted. The ceiling shipped that way and
+// was inert on Claude until the 🎯T392 post-change measurement showed
+// mean context RISING to 205k under a 100k cap.
+func contextTokens(provider string, u cost.Usage) int64 {
+	switch provider {
+	case "grok", "xai":
+		return u.Input
+	default:
+		return u.Input + u.CacheRead + u.CacheCreate
+	}
 }
 
 // usagePath locates the file carrying the session's usage frames. Grok

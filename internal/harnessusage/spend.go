@@ -144,7 +144,22 @@ func CollectSpend(args SpendArgs) (SpendReport, error) {
 	sessions := map[string]struct{}{}
 	seenReq := map[string]struct{}{}
 
-	add := func(ev *cost.Event, fallbackSession string) {
+	// Context processed is not the same field on both providers. Grok's
+	// inputTokens is INCLUSIVE of cachedReadTokens; Claude reports
+	// input_tokens fresh-only with cache reads and creations alongside.
+	// Summing Usage.Input across both under-counts Claude by whatever its
+	// cache served — which in practice is nearly all of it, and the first
+	// Claude run of this report showed 0.1M against a real figure two
+	// orders of magnitude larger.
+	contextOf := func(h Harness, u cost.Usage) int64 {
+		if h == HarnessGrok {
+			return u.Input
+		}
+		return u.Input + u.CacheRead + u.CacheCreate
+	}
+
+	add := func(h Harness, ev *cost.Event, fallbackSession string) {
+		ctx := contextOf(h, ev.Usage)
 		sid := ev.SessionID
 		if sid == "" {
 			sid = fallbackSession
@@ -173,24 +188,24 @@ func CollectSpend(args SpendArgs) (SpendReport, error) {
 		agentSessions[key][sid] = struct{}{}
 		a.Turns++
 		a.ModelCalls += ev.ModelCalls
-		a.Input += ev.Usage.Input
+		a.Input += ctx
 
 		rep.Turns++
 		rep.ModelCalls += ev.ModelCalls
-		rep.Input += ev.Usage.Input
+		rep.Input += ctx
 		rep.Output += ev.Usage.Output
 		rep.CacheRead += ev.Usage.CacheRead
 		switch {
 		case name == "":
-			rep.UnattributedInput += ev.Usage.Input
+			rep.UnattributedInput += ctx
 		case key.coord:
-			rep.CoordinatorInput += ev.Usage.Input
+			rep.CoordinatorInput += ctx
 		default:
-			rep.ImplementerInput += ev.Usage.Input
+			rep.ImplementerInput += ctx
 		}
 		if strings.EqualFold(ev.StopReason, "cancelled") {
 			rep.CancelledTurns++
-			rep.CancelledInput += ev.Usage.Input
+			rep.CancelledInput += ctx
 		}
 	}
 
@@ -225,7 +240,7 @@ func CollectSpend(args SpendArgs) (SpendReport, error) {
 				if ev == nil || !inWindow(ev.Timestamp) {
 					return nil
 				}
-				add(ev, sid)
+				add(h, ev, sid)
 				return nil
 			})
 			unparsed += skipped
