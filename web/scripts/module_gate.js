@@ -272,6 +272,12 @@
     return out;
   }
 
+  // The handle from the most recent install(). index.html seals through the
+  // module namespace (`ModuleGate.seal()`) rather than holding the handle,
+  // because the two calls are 45 script tags apart and a variable carried
+  // across them would have to live in the very inline script this protects.
+  var installed = null;
+
   function install(win, doc, opts) {
     var o = opts || {};
     var failures = [];
@@ -394,6 +400,7 @@
       sealed: function () { return sealed; },
     };
     win.__jevonsModuleGate = handle;
+    installed = handle;
     if (o.autoSeal) seal();
     return handle;
   }
@@ -408,5 +415,10 @@
     isStandIn: isStandIn,
     plan: plan,
     install: install,
+    // Seals the installed gate. A no-op when install() never ran, so a page
+    // that loaded this module but not its installer cannot be broken by the
+    // seal call itself — the one thing a containment module must never do is
+    // become the fault.
+    seal: function () { return installed ? installed.seal() : []; },
   };
 }));

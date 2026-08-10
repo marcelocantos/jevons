@@ -136,6 +136,117 @@ test('a stand-in is identifiable, and a real module is not', function () {
   assert.ok(!MG.isStandIn('PendingTurns'));
 });
 
+// ── install / seal against a fake document ───────────────────────
+//
+// The browser oracle covers what only a real document can decide — script
+// ordering, TDZ, whether the page still boots. What it must NOT be is the
+// only thing exercising install() and seal() at all, because a full browser
+// run is slow and easy to skip, and the first defect here was exactly that
+// shape: index.html calls ModuleGate.seal() on the module namespace, which
+// had no seal, so the seal silently never ran anywhere. These tests are the
+// cheap net under that class.
+
+function fakeElement(tag) {
+  return {
+    tagName: String(tag).toUpperCase(),
+    attrs: {},
+    children: [],
+    style: { cssType: '', cssText: '' },
+    textContent: '',
+    type: '',
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
+    appendChild(c) { this.children.push(c); return c; },
+    addEventListener() {},
+    // Mirrors how the DOM renders a subtree, which is what the banner
+    // assertions in the browser oracle read.
+    get text() {
+      return this.textContent + this.children.map((c) => c.text).join(' ');
+    },
+  };
+}
+
+function fakeDoc(scriptSrcs) {
+  const scripts = scriptSrcs.map((src) => {
+    const el = fakeElement('script');
+    el.setAttribute('src', src);
+    return el;
+  });
+  const body = fakeElement('body');
+  return {
+    body,
+    documentElement: fakeElement('html'),
+    createElement: (t) => fakeElement(t),
+    querySelectorAll: () => scripts,
+    querySelector: (sel) => {
+      const want = sel.replace(/^\[|\]$/g, '');
+      return body.children.find((c) => c.getAttribute(want) !== null) || null;
+    },
+  };
+}
+
+function fakeWin(globals) {
+  return Object.assign({
+    addEventListener() {},
+    location: { reload() {} },
+    console: { error() {} },
+  }, globals);
+}
+
+test('the namespace exposes seal — that is what index.html calls', function () {
+  // 45 script tags separate install() from seal(); a handle carried between
+  // them would have to live in the inline script this module protects.
+  assert.strictEqual(typeof MG.seal, 'function');
+});
+
+test('sealing without installing is a no-op, not a throw', function () {
+  // A containment module whose own API can throw is the fault it exists to
+  // prevent.
+  assert.doesNotThrow(() => MG.seal());
+});
+
+test('seal stands in for an absent module and names it in the banner', function () {
+  const doc = fakeDoc(['scripts/fleet_row.js', 'scripts/pending_turns.js']);
+  const win = fakeWin({ FleetRow: { render() { return 'row'; } } });
+  const gate = MG.install(win, doc);
+  const failures = gate.seal();
+
+  assert.deepStrictEqual(failures.map((f) => f.src), ['scripts/pending_turns.js']);
+  assert.ok(MG.isStandIn(win.PendingTurns), 'absent module got no stand-in');
+  assert.strictEqual(win.FleetRow.render(), 'row', 'present module was overwritten');
+
+  const banner = doc.querySelector('[' + MG.BANNER_ATTR + ']');
+  assert.ok(banner, 'no banner: the degradation is silent');
+  assert.ok(banner.text.indexOf('scripts/pending_turns.js') >= 0,
+    'banner does not name the missing module: ' + banner.text);
+});
+
+test('seal is inert on a healthy document', function () {
+  const doc = fakeDoc(['scripts/fleet_row.js', 'scripts/smd.js']);
+  const win = fakeWin({ FleetRow: {}, smd: {} });
+  const gate = MG.install(win, doc);
+  assert.deepStrictEqual(gate.seal(), []);
+  assert.strictEqual(doc.querySelector('[' + MG.BANNER_ATTR + ']'), null,
+    'a healthy page was bannered');
+});
+
+test('seal reports each absence once, however often it is called', function () {
+  const doc = fakeDoc(['scripts/pending_turns.js']);
+  const win = fakeWin({});
+  const gate = MG.install(win, doc);
+  const first = gate.seal();
+  assert.strictEqual(first.length, 1);
+  assert.deepStrictEqual(gate.seal(), first, 'a second seal re-reported the same absence');
+});
+
+test('seal ignores CDN tags — marked and mermaid are not ours to replace', function () {
+  const doc = fakeDoc(['https://cdn.jsdelivr.net/npm/marked/marked.min.js']);
+  const win = fakeWin({});
+  const gate = MG.install(win, doc);
+  assert.deepStrictEqual(gate.seal(), []);
+  assert.strictEqual(win.Marked, undefined);
+});
+
 // ── Anti-drift: the rule against the actual sources ──────────────
 //
 // The gated SET is read from the document at runtime, so a new module is
