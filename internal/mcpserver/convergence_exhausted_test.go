@@ -115,12 +115,14 @@ func TestExhaustionRenotifyWindow(t *testing.T) {
 	}
 }
 
-// The other half of 🎯T415's oracle: when spawning IS possible, the
-// recovery agent is actually created — and the stuck agent is not
-// touched. Both were asserted in the target's acceptance and neither was
-// covered by the first test, which only proved the notice survives when
-// spawning is impossible.
-func TestRecoveryAgentIsCreatedAndStuckAgentUntouched(t *testing.T) {
+// The stuck agent must survive diagnosis untouched — recovery destroys
+// the evidence, which is the whole reason it is left alone.
+//
+// Since 🎯T415.1 the diagnostician is a DETACHED PROCESS, not a fleet
+// agent, so this also asserts the absence of a registry row: a recovery
+// agent parented to the daemon dies with it and could never diagnose
+// "the daemon is broken".
+func TestRecoveryLeavesTheStuckAgentUntouched(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -137,27 +139,19 @@ func TestRecoveryAgentIsCreatedAndStuckAgentUntouched(t *testing.T) {
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
 	s.SetOwnerNotifier(&recordingNotifier{})
+	// A harmless stand-in for bin/recover: the dispatch is what is under
+	// test, not what the diagnostician then does.
+	s.SetRecoverBin("/usr/bin/true", t.TempDir())
 
-	rep := IdleNudgeReport{Name: stuck, Action: IdleNudgeMaxed, Reason: "max_nudges"}
-	// Called directly rather than via OnConvergenceExhausted, which
-	// dispatches it in a goroutine. Launch will fail or start something
-	// real; neither matters here — what matters is the registry row.
-	defer reg.Stop(RecoveryAgentName(stuck))
-	s.spawnRecoveryAgent(rep)
+	s.spawnRecoveryAgent(IdleNudgeReport{Name: stuck, Action: IdleNudgeMaxed, Reason: "max_nudges"})
 
-	rec := reg.Def(RecoveryAgentName(stuck))
-	if rec == nil {
-		t.Fatal("no recovery agent was registered — the diagnosis half never happens")
-	}
-	if rec.Purpose != claudia.PurposeAside {
-		t.Errorf("recovery purpose=%q want aside — it is disposable, not a work agent", rec.Purpose)
-	}
-	if rec.Name == stuck {
-		t.Fatal("recovery agent collided with the stuck agent")
+	// The diagnostician is a detached process, so it must NOT appear as a
+	// fleet agent. A registry row here means it is a child of the daemon
+	// again and would die with it.
+	if rec := reg.Def(RecoveryAgentName(stuck)); rec != nil {
+		t.Errorf("recovery registered as a fleet agent (%s) — it must be detached, not parented to the daemon", rec.Name)
 	}
 
-	// The stuck agent must be exactly as it was. Recovery destroys the
-	// evidence, which is the whole reason it is left alone.
 	after := reg.Def(stuck)
 	if after == nil {
 		t.Fatal("the stuck agent was removed")
@@ -168,6 +162,21 @@ func TestRecoveryAgentIsCreatedAndStuckAgentUntouched(t *testing.T) {
 	}
 	if !after.Materialized {
 		t.Error("stuck agent's Materialized was cleared — something tried to recover it")
+	}
+}
+
+// With no diagnostician wired, dispatch is a no-op and must not disturb
+// anything. The owner notice has already gone out by this point.
+func TestRecoveryWithoutBinaryIsHarmless(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	s.spawnRecoveryAgent(IdleNudgeReport{Name: "jv-x", Action: IdleNudgeMaxed})
+	if len(reg.List()) != 0 {
+		t.Error("dispatch without a recover binary registered something")
 	}
 }
 
