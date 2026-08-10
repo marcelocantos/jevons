@@ -598,10 +598,6 @@ func main() {
 	// terminal report survives the 🎯T165/T195 reap of the agent that wrote it,
 	// and an over-bound delivery can name a call that returns the whole text.
 	mcpSrv.SetAgentReportDir(cfg.StateDir)
-	// 🎯T388: durable agent-report store (state_dir/agent-reports/) so a
-	// terminal report survives the 🎯T165/T195 reap of the agent that wrote it,
-	// and an over-bound delivery can name a call that returns the whole text.
-	mcpSrv.SetAgentReportDir(cfg.StateDir)
 	// 🎯T392.2: coalesce machine-generated wakes into one digest per
 	// recipient. Owner turns and worker replies are never batched — only
 	// events the fleet generates about itself, whose content is additive.
@@ -940,7 +936,18 @@ func main() {
 			}
 			return true
 		},
+		// 🎯T415: convergence gave up. The notice inside is deterministic
+		// and depends on no agent; the recovery agent it also dispatches
+		// is allowed to fail, including failing to spawn.
+		OnMaxed: mcpSrv.OnConvergenceExhausted,
 	})
+
+	// 🎯T415: the owner-notice path writes straight to the owner's journal.
+	// Deliberately NOT via the overseer, unlike every other fleet-health
+	// signal: any failure that stops the overseer would otherwise stop the
+	// report of it, which is how the 2026-08-10 outage stayed invisible for
+	// hours while the sentinel logged overseer:down with outcome=ok.
+	mcpSrv.SetOwnerNotifier(mcpserver.NewOwnerNotifier(srv.NotifyOwnerNote))
 
 	// 🎯T171 dual-path: daemon-restarted → POs+overseer; short resume →
 	// open-mission workers (T207 brief-or-verify); worker-idle transition → PO.

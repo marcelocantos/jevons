@@ -178,6 +178,14 @@ type Server struct {
 	// idleEventLast debounces worker-idle events per agent name.
 	idleEventLast map[string]time.Time
 
+	// ownerNotifier writes deterministic owner notices that depend on no
+	// agent (🎯T415). Nil means exhaustion is logged but not reported,
+	// which is the pre-T415 behaviour and is said loudly at the point of
+	// use rather than discovered later.
+	ownerNotifier OwnerNotifier
+	// exhaustion dedups repeated convergence exhaustion per agent.
+	exhaustion exhaustionState
+
 	// wakeBatch coalesces machine-generated events into one digest per
 	// recipient (🎯T392.2). Debouncing above is per-worker and stops the
 	// same worker firing twice; this is per-recipient and stops four
