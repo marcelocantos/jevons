@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope runlock buildsnap recover detach jevons-watchdog
+all: jevonsd jevons-head treeguard commitscope runlock buildsnap recover gate
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -76,36 +76,17 @@ bin/recover: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/recover ./cmd/recover
 
-# Self-detach helper (🎯T405). restart-daily-jevonsd re-execs itself through
-# this into a fresh session, so the caller's death — including the agent that
-# the restart's own kill is about to stop — cannot cancel the bounce. Built by
-# `make all`, and the script fails closed rather than restarting attached.
-.PHONY: detach
-detach: bin/detach
+# Gate runner (🎯T386 / 🎯T396). Runs a gate as a process — no shell, no
+# pipeline — and records the status the process itself exited with, so a
+# worker can cite a green it actually got and a misreported background run can
+# be read back in band (`bin/gate last`). Built by `make all` because the
+# fleet brief tells every worker to run gates through it.
+.PHONY: gate
+gate: bin/gate
 
-bin/detach: $(GO_SRC)
+bin/gate: $(GO_SRC)
 	@mkdir -p bin
-	go build -o bin/detach ./cmd/detach
-
-# Daily-daemon supervisor (🎯T405). launchd runs this every 30s, outside every
-# process tree a restart tears down, and calls the restart script when the port
-# stays dead. `make watchdog-install` writes and loads the LaunchAgent.
-.PHONY: jevons-watchdog
-jevons-watchdog: bin/jevons-watchdog
-
-bin/jevons-watchdog: $(GO_SRC)
-	@mkdir -p bin
-	go build -o bin/jevons-watchdog ./cmd/jevons-watchdog
-
-.PHONY: watchdog-install watchdog-uninstall watchdog-status
-watchdog-install: bin/jevons-watchdog
-	bin/jevons-watchdog -install
-
-watchdog-uninstall: bin/jevons-watchdog
-	bin/jevons-watchdog -uninstall
-
-watchdog-status: bin/jevons-watchdog
-	@bin/jevons-watchdog -status
+	go build -o bin/gate ./cmd/gate
 
 # 🎯T254.2: builds the daily daemon from committed HEAD in a throwaway
 # worktree, so one worker's uncommitted edits cannot stop another rebuilding.
@@ -279,10 +260,17 @@ spend-baseline:
 	  -since 2026-08-08T01:53:00Z -until 2026-08-09T11:53:00Z
 
 # ── Standing invariants (bullseye) ──────────────────
+#
+# The test step runs under bin/gate (🎯T386): the status recorded is go test's
+# own, and a suite that exits zero while printing a timeout panic comes out
+# SUSPECT rather than being echoed as a tick. The claudia incident that raised
+# the target was this recipe's sibling running `go test -race ./... | tail -n 5
+# && echo "✓ tests"`, which printed the tick over a failed suite. Cite the
+# GATE line this prints, not the tick.
 .PHONY: bullseye
-bullseye:
+bullseye: bin/gate
 	@go build ./... && echo "✓ build"
-	@go test ./... && echo "✓ tests"
+	@bin/gate -name bullseye-test -- go test ./... && echo "✓ tests"
 	@go vet ./... && echo "✓ vet"
 	@test -z "$$(git status --porcelain)" && echo "✓ clean" || \
 	 (echo "✗ dirty tree"; git status --short; exit 1)

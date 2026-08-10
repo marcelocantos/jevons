@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -31,6 +31,30 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   The overseer (who did not do the work) is the independent gate (rule 9).
 - Residual: instructional doctrine + pure classifier; not a hard daemon
   block.
+
+## Run gates so the status survives (🎯T386 / 🎯T396)
+- Run every gate through the gate runner, and cite the line it prints:
+      bin/gate -- make test-go
+      GATE make-test-go exit=0 GREEN id=9f13c0a2 out=6b1d9e4f2a01 dur=42.1s
+  It runs the command as a process (no shell, no pipeline), exits with the
+  command's own status, and records that status under ~/.jevons/gates.
+- NEVER pipe a gate and cite the result: "go test ./... | tail -20" reports
+  TAIL's status, which is always 0. That is how a suite that died on a
+  timeout panic was reported as green.
+- **The zsh trap.** This harness runs zsh. bash's PIPESTATUS does not exist
+  there, so 'echo "EXIT=${PIPESTATUS[0]}"' prints a bare "EXIT=" — a status
+  never read at all. zsh spells it "pipestatus" AND indexes from 1, so
+  "${pipestatus[0]}" is empty too. An empty status is not zero.
+- A background or long-running gate is read back in band, not from whatever
+  the harness said about it: "bin/gate last" (or "bin/gate show <id>") prints
+  the status the process actually exited with.
+- exit=unknown is NOT a pass. GREEN is the only verdict you may cite as one;
+  SUSPECT means the status said zero while the output showed a panic, a
+  timeout, a data race or a FAIL.
+- The daemon runs the same check on your finish report ("bin/gate check" by
+  hand) and prepends a FALSE-GREEN banner to the overseer when your own
+  cited evidence contradicts the pass you claim. Fabricating a GATE line is
+  flagged: the id is looked up, and an id with no record behind it says so.
 
 ## Achieve reports need activated daily path (🎯T194)
 - Daemon/API product (HTTP API, compiled server, non-static) is **not

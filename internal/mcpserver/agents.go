@@ -19,6 +19,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
@@ -834,6 +835,21 @@ func (s *Server) notify(agentName, text string) {
 	}
 
 	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, elision.Text)
+
+	// 🎯T386: a green the report's own evidence does not support is flagged
+	// here, in front of the report, before the overseer can accept it and
+	// before a target retires on it. The banner rides outside the elision so
+	// a long report cannot push the warning off the end.
+	if flags := FalseGreenFlags(text); len(flags) > 0 {
+		kinds := falseGreenKinds(flags)
+		slog.Warn("T386 false-green flags on agent report",
+			"agent", agentName, "flags", kinds)
+		s.logLifecycle(compAgentLifecycle, "false_green", "flagged", map[string]any{
+			"agent": agentName, "flags": kinds,
+		})
+		msg = gate.Banner(flags) + "\n\n" + msg
+	}
+
 	overseer := s.overseerName()
 	res, err := s.deliverByName(overseer, msg, OriginAgent, false)
 	if err != nil {

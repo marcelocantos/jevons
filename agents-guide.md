@@ -577,6 +577,44 @@ wait `/health` + `/api/frontier` non-404 → exit 0 only when serving.
 Pure static web-only changes may hard-reload only. Residual: session drop
 until 🎯T40/🎯T171.
 
+## Run gates so the status survives (🎯T386 / 🎯T396)
+
+A pipeline's exit status is the **last** command's. `go test ./... |
+tail -20` therefore reports tail's status, which is always zero — that is
+how a suite that died on a timeout panic was reported as green, twice in
+one session. Two siblings of the same defect: bash's `PIPESTATUS` does not
+exist in the zsh this harness runs (`${PIPESTATUS[0]}` expands to nothing,
+and zsh's own `pipestatus` indexes from 1, so `${pipestatus[0]}` is empty
+too), and the harness has relayed a background gate as "exit code 0" for a
+`go test` that exited 1.
+
+Run every gate through `bin/gate` and cite the line it prints:
+
+```bash
+bin/gate -- make test-go
+GATE make-test-go exit=0 GREEN id=9f13c0a2 out=6b1d9e4f2a01 dur=42.1s
+```
+
+`gate` runs the command as a process — no shell, no pipeline — exits with
+the command's own status (so it drops into a Makefile recipe or an `&&`
+chain unchanged), and writes a record under `~/.jevons/gates`.
+
+| Rule | Why |
+|---|---|
+| Never pipe a gate and cite the result | Nothing after the command owns its status |
+| `exit=unknown` is not a pass | A status that could not be established never renders as zero |
+| Only `GREEN` may be cited as a pass | `SUSPECT` = zero exit over panic/timeout/race/FAIL output |
+| Read background gates back with `bin/gate last` | In band, off disk, independent of what the harness claimed |
+
+`bin/gate check` reads a finish report on stdin and flags a green its own
+evidence does not support; the daemon runs the same check on the notify
+path and prepends a **FALSE-GREEN banner** in front of the report to the
+overseer. A fabricated `GATE` line is caught too — the id is looked up,
+and an id with no record behind it says so. Pure helpers:
+`gate.FlagFalseGreen` / `gate.Banner` (`internal/gate`).
+
+**Residual:** the banner marks a report, it does not block delivery.
+
 ## Achieve reports need activated daily path (🎯T194)
 
 Daemon/API product is **not achieved on hermetics alone**. When the

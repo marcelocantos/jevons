@@ -3,11 +3,9 @@
 #
 # Purpose: overseer/PO/worker bounce after daemon-path Build without asking
 # the owner to restart by hand (🎯T188). Session death must not cancel the
-# bounce, and since 🎯T405 that no longer depends on the caller: the script
-# re-execs itself into its own session unconditionally (see SELF-DETACH).
+# bounce — invoke this script *detached* (see BLESSED INVOKE below).
 #
 # Steps:
-#   0. re-exec into our own session (🎯T405 SELF-DETACH below)
 #   1. make / rebuild bin/jevonsd
 #   2. decide whether a restart is needed at all (🎯T218 thrash policy below)
 #   3. brew services stop jevons (so Cellar KeepAlive cannot reclaim :13705)
@@ -46,41 +44,17 @@
 # So: identical build → free no-op; new build → always activated, at most
 # one bounce per MIN_INTERVAL_SEC. --force overrides all three (owner debug).
 #
-# SELF-DETACH (🎯T405) — being invoked wrongly cannot cause an outage.
-#
-# This script kills the daily daemon, and the daemon's shutdown stops
-# every agent — including the agent that invoked the restart. On
-# 2026-08-10 the script died with its invoker five seconds after the
-# kill, before it reached the step that starts the replacement, and the
-# fleet stayed down until the owner opened the cockpit and found it dead.
-#
-# The hazard was documented here from the first version, as an
-# instruction to callers: invoke me detached. A correctness property that
-# depends on every caller remembering a convention is not a property, and
-# the one caller who forgot took the fleet down.
-#
-# So the first thing the script does is re-exec itself through bin/detach,
-# which runs it in a fresh session (setsid) with its output on a file
-# rather than an inheritable pipe. Nothing aimed at the caller's process
-# group — SIGHUP, SIGTERM, SIGKILL — reaches the bounce. The caller still
-# waits and still gets the exit status; if the caller dies, the bounce
-# finishes anyway with nobody to report to.
-#
-# BLESSED INVOKE (fleet agent / overseer) is unchanged and still
-# preferred, because it also stops the caller BLOCKING on the bounce:
+# BLESSED INVOKE (fleet agent / overseer — survive parent death):
 #   nohup "$REPO/scripts/restart-daily-jevonsd.sh" \
 #     >>"$HOME/.jevons/restart-daily.log" 2>&1 &
 # Prefer nohup (portable). If setsid is available:
 #   setsid "$REPO/scripts/restart-daily-jevonsd.sh" \
 #     >>"$HOME/.jevons/restart-daily.log" 2>&1 < /dev/null &
 #
-# The daemon itself is also started under nohup/setsid so it outlives
-# this script (reparented to init).
-#
-# SUPERVISION (🎯T405): the launchd job com.marcelocantos.jevons-watchdog
-# probes :$PORT every 30s and calls this script when the port stays dead —
-# so a bounce that fails for any other reason is also recovered without
-# the owner. Install with `make watchdog-install`.
+# NEVER run this script as a foreground child of a fleet agent without
+# detach. Agent SIGHUP/SIGTERM will kill the bounce mid-flight and leave
+# the owner on a dead or stale binary. The daemon itself is also started
+# under nohup/setsid so it outlives this script (reparented to init).
 #
 # macOS bash 3.2 safe (no mapfile/associative arrays/bash-4isms).
 #
@@ -99,20 +73,13 @@
 #   JEVONS_RESTART_LOCK_WAIT_SEC     wait for an in-flight restart, default 240
 #   JEVONS_RESTART_STAMP    epoch of last successful restart
 #   JEVONS_RESTART_ACTIVE   "<pid> <sha256>" of the daemon we started
-#   JEVONS_RESTART_BIN      daemon binary to start (default: $REPO/bin/jevonsd)
-#   JEVONS_RESTART_NO_DETACH=1  skip the 🎯T405 self-detach re-exec
-#   JEVONS_RESTART_DETACH_LOG   where the detached run writes (default
-#                               ~/.jevons/restart-daily.log)
-#   JEVONS_RESTART_FAULT=after-kill  test seam: die between freeing the
-#                               port and starting the daemon (🎯T405 oracle)
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-DAILY_PORT=13705
-PORT="${JEVONS_RESTART_PORT:-$DAILY_PORT}"
+PORT="${JEVONS_RESTART_PORT:-13705}"
 WORKDIR="${JEVONS_RESTART_WORKDIR:-$ROOT}"
 LOG="${JEVONS_RESTART_LOG:-$HOME/.jevons/daily-jevonsd.log}"
 WAIT_SEC="${JEVONS_RESTART_WAIT_SEC:-90}"
@@ -144,42 +111,10 @@ RUNLOCK="$ROOT/bin/runlock"
 BUILDSNAP="$ROOT/bin/buildsnap"
 SNAP_DIR="${JEVONS_RESTART_SNAP_DIR:-$HOME/.jevons/build-snapshot}"
 
-# 🎯T405 SELF-DETACH: re-exec into our own session before anything else,
-# so the caller's death cannot cancel the bounce. Outermost on purpose —
-# the lock below must be held from inside the detached session, or a
-# killed caller would take the lock holder with it.
-#
-# Fails closed like the lock: a restart that can still be killed by its
-# own caller is the failure this removes, so an unbuildable helper aborts
-# rather than quietly restoring the old behaviour.
-DETACH="$ROOT/bin/detach"
-DETACH_LOG="${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-daily.log}"
-
-# --help and --dry-run touch nothing, so they neither detach nor take the
-# lock: introspection that blocks behind a live restart, or that appends
-# to the restart log, is a trap for anyone debugging one.
-WANTS_WORK=1
-for _arg in ${@+"$@"}; do
-  case "$_arg" in
-    -h|--help|--dry-run) WANTS_WORK=0 ;;
-  esac
-done
-
-if [[ "$WANTS_WORK" == "1" && "${JEVONS_RESTART_DETACHED:-0}" != "1" && "${JEVONS_RESTART_NO_DETACH:-0}" != "1" ]]; then
-  if [[ ! -x "$DETACH" ]]; then
-    (cd "$ROOT" && go build -o "$DETACH" ./cmd/detach) || {
-      echo "restart-daily-jevonsd: cannot build $DETACH — refusing to restart where the caller's death can cancel it" >&2
-      exit 2
-    }
-  fi
-  export JEVONS_RESTART_DETACHED=1
-  exec "$DETACH" -log "$DETACH_LOG" -- "$0" "$@"
-fi
-
 # Re-exec under the lock unless we are already the locked child. Fails
 # closed: restarting unserialised is the failure mode this exists to stop,
 # so a missing runlock is built, and an unbuildable one aborts.
-if [[ "$WANTS_WORK" == "1" && "${JEVONS_RESTART_LOCKED:-0}" != "1" && "${JEVONS_RESTART_NO_LOCK:-0}" != "1" ]]; then
+if [[ "${JEVONS_RESTART_LOCKED:-0}" != "1" && "${JEVONS_RESTART_NO_LOCK:-0}" != "1" ]]; then
   if [[ ! -x "$RUNLOCK" ]]; then
     (cd "$ROOT" && go build -o "$RUNLOCK" ./cmd/runlock) || {
       echo "restart-daily-jevonsd: cannot build $RUNLOCK — refusing to restart unserialised" >&2
@@ -190,7 +125,7 @@ if [[ "$WANTS_WORK" == "1" && "${JEVONS_RESTART_LOCKED:-0}" != "1" && "${JEVONS_
   exec "$RUNLOCK" -timeout "${LOCK_WAIT_SEC}s" "$LOCK_FILE" "$0" "$@"
 fi
 
-BIN="${JEVONS_RESTART_BIN:-$ROOT/bin/jevonsd}"
+BIN="$ROOT/bin/jevonsd"
 DRY_RUN=0
 SKIP_MAKE="${JEVONS_RESTART_SKIP_MAKE:-0}"
 FORCE=0
@@ -229,23 +164,11 @@ Env:
   JEVONS_RESTART_STAMP             Stamp file for last success (default ~/.jevons/restart-daily.last)
   JEVONS_RESTART_ACTIVE            Running-daemon identity (default ~/.jevons/restart-daily.active)
   JEVONS_RESTART_LOCK              Lock dir (default ~/.jevons/restart-daily.lock)
-  JEVONS_RESTART_BIN               Daemon binary (default $REPO/bin/jevonsd)
-  JEVONS_RESTART_NO_DETACH         If 1, skip the 🎯T405 self-detach re-exec
-  JEVONS_RESTART_DETACH_LOG        Detached run's log (default ~/.jevons/restart-daily.log)
 
-SELF-DETACH (🎯T405): this script re-execs itself through bin/detach into
-its own session before doing anything, so the caller's death — including
-the agent that this restart's own kill is about to stop — cannot cancel
-the bounce. A caller that is still alive still gets the exit status.
-
-BLESSED INVOKE (survive agent/overseer death AND stop the caller blocking
-on the bounce; the self-detach above covers the first half on its own):
+BLESSED INVOKE (survive agent/overseer death):
   nohup ./scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
 
-SUPERVISION (🎯T405): com.marcelocantos.jevons-watchdog probes the port
-every 30s and calls this script when it stays dead — so a bounce that
-fails for any other reason is recovered without the owner. Install it
-with: make watchdog-install
+Never run as a foreground child of a fleet agent without detach (🎯T191).
 EOF
 }
 
@@ -383,15 +306,6 @@ kill_port_listeners() {
 stop_brew_jevons() {
   # Cellar launchd KeepAlive will reclaim :13705 if brew service is loaded.
   # Stop it whenever brew is present so repo bin/jevonsd owns the daily port.
-  #
-  # Only for the daily port: the Cellar service is configured for :13705 and
-  # can never be holding a throwaway one, so stopping it on behalf of a test
-  # bounce would take the owner's daemon down to fix a port it does not have
-  # (🎯T405 — the oracle drives this script on a scratch port).
-  if [[ "$PORT" != "$DAILY_PORT" ]]; then
-    log "port :$PORT is not the daily :$DAILY_PORT; leaving brew services alone"
-    return 0
-  fi
   if ! command -v brew >/dev/null 2>&1; then
     log "brew not on PATH; skip brew services stop"
     return 0
@@ -486,7 +400,6 @@ log "🎯T191 restart-daily-jevonsd: root=$ROOT port=$PORT workdir=$WORKDIR dry_
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T254.2 build bin/jevonsd from committed HEAD in $SNAP_DIR (never the shared tree) unless SKIP_MAKE=$SKIP_MAKE"
   log "[dry-run] would: 🎯T218 no-op if the running daemon already serves this build (already activated)"
-  log "[dry-run] would: 🎯T405 re-exec through $DETACH into its own session so the caller's death cannot cancel the bounce"
   log "[dry-run] would: 🎯T392.5 hold $LOCK_FILE via runlock so concurrent restarts serialise"
   log "[dry-run] would: 🎯T218 wait out the ${MIN_INTERVAL_SEC}s thrash window rather than skip a changed binary"
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
@@ -558,17 +471,6 @@ await_min_interval
 
 stop_brew_jevons
 kill_port_listeners
-
-# 🎯T405 TEST SEAM. The window between freeing the port and starting the
-# replacement is where this script died on 2026-08-10; the supervisor
-# oracle has to be able to reproduce that exactly, and waiting to catch
-# a real run in a sub-second window is not a test. Inert unless the
-# variable is set to this exact value.
-if [[ "${JEVONS_RESTART_FAULT:-}" == "after-kill" ]]; then
-  log "🎯T405 fault injection: dying after freeing :$PORT and before starting the daemon"
-  kill -9 $$
-fi
-
 start_daemon_detached
 wait_until_serving
 record_active_identity

@@ -284,6 +284,28 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   leaving the clone unguarded. Do **not** redirect `core.hooksPath` — that
   would disable git-lfs's own hooks. Sibling: 🎯T376 (same root cause, working
   tree rather than index).
+- **Run gates so the status survives (🎯T386 / 🎯T396):** a pipeline's exit
+  status is the **last** command's, so `go test ./... | tail -20` reports
+  tail's success — which is unconditional. That is how a suite that died on a
+  timeout panic was cited as a green, twice in one session; a fabricated green
+  is worse than no test, because it retires a target. Two siblings: bash's
+  `PIPESTATUS` does not exist in the zsh this harness runs (and zsh's own
+  `pipestatus` indexes from 1, so `${pipestatus[0]}` is empty too — an empty
+  status is not zero), and the harness has itself relayed a background gate as
+  "exit code 0" for a `go test` that exited 1. Run every gate as
+  `bin/gate -- make test-go` and cite the `GATE … exit=0 GREEN id=…` line it
+  prints: it runs the command as a process (no shell, no pipeline), exits with
+  the command's own status, and records that status under `~/.jevons/gates`
+  where `bin/gate last` reads it back **in band** — independent of what the
+  harness claimed about a background run. `exit=unknown` is never a pass, and
+  `GREEN` is the only verdict citable as one (`SUSPECT` = zero exit over
+  panic/timeout/race/FAIL output). `make bullseye`'s test step runs under the
+  gate. Report time closes the loop: `bin/gate check` reads a finish report and
+  the daemon runs the same check on the notify path, prepending a FALSE-GREEN
+  banner ahead of a report whose own cited evidence — piped gate, empty status,
+  quoted failure, or a `GATE` id with no record behind it — contradicts the
+  pass it claims. Ratcheted by `scripts/docratchet`. Residual: the banner marks
+  a report, it does not block delivery.
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /

@@ -555,6 +555,49 @@ agent without detach. Blessed path is always `nohup` (or `setsid`) +
 background. The script itself starts `bin/jevonsd` under nohup/setsid so
 the daemon outlives the script.
 
+## Run gates so the status survives (🎯T386 / 🎯T396) — hard rule
+
+Oracle-first (🎯T31) demands cited evidence and assumes the citation is
+honestly read. Three ways that assumption broke in one session, all of
+them sincere: a pipeline's status is the **last** command's, so
+`go test ./... | tail -20` reports tail's success while the suite dies on
+a timeout panic; bash's `PIPESTATUS` does not exist in the zsh this
+harness runs, so `${PIPESTATUS[0]}` expands to nothing and the status is
+never read at all (zsh spells it `pipestatus` **and** indexes from 1, so
+`${pipestatus[0]}` is empty too); and the harness itself relayed a
+background gate as "exit code 0" for a `go test` that exited 1.
+
+**Run every gate through the gate runner and cite the line it prints:**
+
+```bash
+bin/gate -- make test-go
+GATE make-test-go exit=0 GREEN id=9f13c0a2 out=6b1d9e4f2a01 dur=42.1s
+```
+
+It runs the command as a **process** — no shell, no pipeline, nothing
+between the command and its wait status — exits with the command's own
+status, and records that status under `~/.jevons/gates`.
+
+1. **Never pipe a gate and cite the result.** There is nothing after the
+   command to own the status.
+2. **`exit=unknown` is not a pass.** A wrapper that cannot vouch for a
+   status says so; unknown never renders as zero.
+3. **`GREEN` is the only verdict citable as a pass.** `SUSPECT` means the
+   status said zero while the output showed a panic, timeout, data race
+   or FAIL — the exact shape that nearly retired a target on a dead suite.
+4. **Background and long-running gates are read back in band** with
+   `bin/gate last` / `bin/gate show <id>`, not from whatever the harness
+   said about the process.
+
+**The daemon checks your finish report** (`bin/gate check` by hand) and
+prepends a **FALSE-GREEN banner** ahead of the report when the cited
+evidence contradicts the pass claimed — piped gate, empty status,
+quoted failure output, or a `GATE` id with no record behind it.
+Pure helpers: `gate.FlagFalseGreen` / `gate.Banner` (`internal/gate`).
+**Residual:** the banner marks a report, it does not block delivery;
+detection is textual and narrow on purpose (a checker that flags honest
+reports gets skimmed past, which launders the next real false green).
+
 ## Achieve reports need activated daily path (🎯T194) — hard rule
 
 A target whose **product path is served by daily jevonsd** (HTTP API,
