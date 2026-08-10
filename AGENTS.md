@@ -319,10 +319,36 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   restarts by hand. Do not claim a daemon-path fix done until restart
   succeeds. Invoke **detached**:
   `nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &`
-  Never foreground the script under a fleet agent (session death kills
-  the bounce). Script path: `scripts/restart-daily-jevonsd.sh`. Pure
+  Detached is still the blessed invoke because it stops the caller
+  blocking on the bounce — since 🎯T405 it is no longer what makes the
+  bounce survive. Script path: `scripts/restart-daily-jevonsd.sh`. Pure
   static web-only may hard-reload only. Residual: session drop until
   T40/T171. Persona + agents-guide.
+- **The restart is supervised (🎯T405):** on 2026-08-10 a worker's restart
+  killed the daemon, the daemon's shutdown stopped that worker, and the
+  script died with it five seconds before the step that starts the
+  replacement — the fleet stayed down until the owner opened the cockpit
+  and found it dead. The script had documented that exact hazard since its
+  first version, as an instruction to callers (*invoke me detached*), and a
+  correctness property that depends on every caller remembering a
+  convention is not a property. So the script now **re-execs itself into
+  its own session** through `bin/detach` before doing anything: being
+  invoked wrongly cannot cause an outage. The deeper finding was that
+  nothing watched the result at all — thrash policy (T218), lock
+  serialisation (T392.5) and HEAD build snapshots (T254.2) are elaborate
+  about restarting and silent about whether anything is serving
+  afterwards. The launchd job **`com.marcelocantos.jevons-watchdog`**
+  (`make watchdog-install`, `make watchdog-status`) probes the port every
+  30s from outside every process tree a restart tears down, restarts
+  through the same script once an outage outlives the grace window, paces
+  its attempts and never gives up. An outage the owner hears about twice:
+  out of band while it is down, and in owner chat once the daemon is back
+  to report it — the watchdog cannot write a chat line into a daemon that
+  is not running, so the recovery is recorded to disk and the daemon
+  reports it on the way up (`internal/supervise`). Oracles kill a real
+  restart mid-bounce and SIGKILL a real foreground caller's process group
+  (`cmd/jevons-watchdog/oracle_test.go`, with a control that shows the
+  test still detects the regression). Persona + agents-guide.
 - **Achieve reports need activated daily path (🎯T194):** a target whose
   product path is served by daily jevonsd (HTTP API, compiled server,
   non-static) is **not achieved** until detached `restart-daily-jevonsd`

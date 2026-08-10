@@ -550,10 +550,26 @@ session death does not cancel the bounce:
 nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
 ```
 
-Never run `restart-daily-jevonsd.sh` as a foreground child of a fleet
-agent without detach. Blessed path is always `nohup` (or `setsid`) +
-background. The script itself starts `bin/jevonsd` under nohup/setsid so
-the daemon outlives the script.
+Blessed path is always `nohup` (or `setsid`) + background. The script
+itself starts `bin/jevonsd` under nohup/setsid so the daemon outlives the
+script.
+
+**Supervision — the restart is no longer a trapeze act (🎯T405).** Two
+things changed after the 2026-08-10 outage, in which a worker's restart
+killed the daemon, the daemon's shutdown stopped that worker, and the
+script died with it five seconds before the step that starts the
+replacement. First, the script **re-execs itself into its own session**
+through `bin/detach` before doing anything, so invoking it wrongly can no
+longer cause an outage — the blessed `nohup` invoke stays preferred
+because it also stops the caller *blocking* on the bounce, but
+correctness no longer depends on anyone remembering it. Second, the
+launchd job **`com.marcelocantos.jevons-watchdog`** probes the daily port
+every 30s from outside every process tree a restart tears down, and
+restarts through this same script when the port stays dead past a grace
+window — so a bounce that fails for any *other* reason is recovered
+without the owner too. Install with `make watchdog-install`, inspect with
+`make watchdog-status`. A recovered outage is recorded to disk and
+reported into owner chat by the daemon once it is serving again.
 
 ## Run gates so the status survives (🎯T386 / 🎯T396) — hard rule
 

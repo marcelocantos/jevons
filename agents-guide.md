@@ -570,12 +570,29 @@ by hand. Do not report the fix done until the restart succeeds.
 nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
 ```
 
-Never run `scripts/restart-daily-jevonsd.sh` as a foreground child of a
-fleet agent without detach. The script: `make` → `brew services stop jevons`
-→ kill `:13705` → `nohup`/`setsid` start `$REPO/bin/jevonsd` with workdir →
-wait `/health` + `/api/frontier` non-404 → exit 0 only when serving.
-Pure static web-only changes may hard-reload only. Residual: session drop
-until 🎯T40/🎯T171.
+The script: re-exec into its own session (🎯T405) → `make` →
+`brew services stop jevons` → kill `:13705` → `nohup`/`setsid` start
+`$REPO/bin/jevonsd` with workdir → wait `/health` + `/api/frontier`
+non-404 → exit 0 only when serving. Pure static web-only changes may
+hard-reload only. Residual: session drop until 🎯T40/🎯T171.
+
+**Supervision (🎯T405).** On 2026-08-10 a worker's restart killed the
+daemon, the daemon's shutdown stopped that worker, and the script died
+with it five seconds before the step that starts the replacement — the
+fleet stayed down until the owner noticed. Two things now stop that. The
+script **re-execs itself through `bin/detach` into its own session**
+before doing anything, so being invoked wrongly cannot cause an outage:
+the hazard was documented here as an instruction to callers from the
+first version, and a correctness property that depends on every caller
+remembering a convention is not a property. And the launchd job
+**`com.marcelocantos.jevons-watchdog`** probes the port every 30s from
+outside every process tree a restart tears down, restarting through this
+same script when it stays dead past a grace window, pacing its attempts
+and never giving up. `make watchdog-install` / `make watchdog-status`.
+A recovered outage reaches the owner twice: out of band while it is
+down, and in owner chat once the daemon is back to report it. The
+blessed invoke above is still preferred — it stops the caller *blocking*
+on the bounce — it is just no longer what makes the bounce survive.
 
 ## Run gates so the status survives (🎯T386 / 🎯T396)
 
