@@ -39,7 +39,7 @@
 // (same accelerator table, separate app from the owner's Chrome): the tab
 // switched and the page's keydown counter never moved. It is a pre-target
 // accelerator — there is no event to preventDefault. Nothing in this file
-// can change that; a Blink-safe second chord is 🎯T421, not this target.
+// can change that; a Blink-safe second chord is 🎯T436, not this target.
 //
 // FIREFOX (the owner's browser): the page wins, and it is not an accident.
 // The chord is deliberately *not* a XUL <key> element and not reserved —
