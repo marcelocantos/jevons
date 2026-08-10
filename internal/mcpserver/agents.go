@@ -321,8 +321,12 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	if prompt != "" {
 		if err := s.deliverStartPrompt(name, prompt); err != nil {
 			// Stop the process so agent_list does not report a phantom
-			// running/never_briefed seat as successful work.
-			s.registry.Stop(name)
+			// running/never_briefed seat as successful work, and (🎯T387)
+			// retire a row this call minted so the target is not left
+			// engaged by a worker that never ran.
+			if s.releaseUnbriefedSeat(name, existed) {
+				life["seat_released"] = true
+			}
 			life["err"] = err.Error()
 			life["session_id"] = sessionDisplay(def.SessionID)
 			s.logLifecycle(compAgentLifecycle, "start", "error", life)

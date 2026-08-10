@@ -80,6 +80,10 @@ type Server struct {
 	// resolveSender overrides fleet-agent process resolution on that same
 	// path. Nil — the product path — resolves via the registry. Test seam.
 	resolveSender senderResolver
+	// observeTurnWitness overrides turn-evidence observation (🎯T387): what
+	// the AGENT did after a send, as opposed to what the send call returned.
+	// Nil — the product path — watches the live claudia process. Test seam.
+	observeTurnWitness turnWitness
 	// agentEventHook receives every fleet worker event (progress, assistant, …)
 	// so the HTTP server can maintain RHS progress chrome (🎯T118).
 	agentEventHook func(name string, ev claudia.Event)

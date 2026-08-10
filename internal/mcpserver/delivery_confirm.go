@@ -112,8 +112,20 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 		// not double the standing brief on a later send.
 	}
 
+	// 🎯T387: open the observation BEFORE the send, so transcript growth is
+	// measured against a pre-send baseline rather than against whatever an
+	// earlier session left on disk. See turn_evidence.go for why the send
+	// result alone was never evidence of anything about the agent.
+	watch := s.watchAgentTurn(name)
+
 	res, err := s.sendToAgent(name, text, false)
-	if confErr := ConfirmSendBeganTurn(res.Status, err); confErr != nil {
+	if confErr := ConfirmTurnBegan(res.Status, err, watch()); confErr != nil {
+		// deliverToSender marks turn-began off its own successful Send, which
+		// is the same send-call inference this target exists to remove. The
+		// spawn owns this agent's first turn, so it must not leave behind a
+		// mark it did not earn — otherwise agent_list reports "running" for a
+		// worker whose brief demonstrably never landed (🎯T387).
+		s.clearAgentTurnBegan(name)
 		return fmt.Errorf("start prompt not delivered to %q: %w", name, confErr)
 	}
 	s.markAgentTurnBegan(name)

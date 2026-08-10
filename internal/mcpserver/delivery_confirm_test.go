@@ -70,6 +70,14 @@ func TestDeliverStartPromptMarksTurnBegan(t *testing.T) {
 		return fs, false, nil
 	})
 
+	// 🎯T387: a clean send is no longer sufficient on its own, so this
+	// fixture must now supply the evidence the product path observes of the
+	// agent. The assertions below are unchanged — what changed is that they
+	// are earned rather than inferred from fakeSender returning nil.
+	s.SetTurnWitness(witnessYielding(TurnEvidence{
+		ConversationGrew: true, Detail: "transcript grew 0→744 bytes",
+	}))
+
 	prompt := "Execute 🎯T305 — fix both delivery failures."
 	if err := s.deliverStartPrompt("jv-t305-a", prompt); err != nil {
 		t.Fatalf("deliverStartPrompt: %v", err)

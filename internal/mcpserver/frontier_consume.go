@@ -536,7 +536,7 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	if name == "" || workdir == "" {
 		return fmt.Errorf("worker name and workdir required")
 	}
-	def, _, _, err := s.stitchAgentStart(name, workdir, "", "", "", parent, "work", normalizeAgentTargetID(targetID))
+	def, existed, _, err := s.stitchAgentStart(name, workdir, "", "", "", parent, "work", normalizeAgentTargetID(targetID))
 	if err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
@@ -547,8 +547,11 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	s.wireAgentEvents(name, proc)
 	if err := s.deliverStartPrompt(name, brief); err != nil {
 		// No silent phantom seat: stop the process so agent_list does not
-		// report an unbriefed worker as consumption (same as agent_start).
-		s.registry.Stop(name)
+		// report an unbriefed worker as consumption (same as agent_start),
+		// and (🎯T387) release a row this sweep minted so the leaf stays
+		// unconsumed for the next pass rather than being permanently masked
+		// by a worker that never ran.
+		s.releaseUnbriefedSeat(name, existed)
 		return err
 	}
 	slog.Info("frontier consume: worker auto-spawned",
