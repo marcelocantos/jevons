@@ -41,6 +41,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
+	"github.com/marcelocantos/jevons/internal/supervise"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -487,6 +488,14 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// 🎯T405: tell the owner about any outage the watchdog recovered.
+	// The watchdog cannot tell them itself — while the daemon is down
+	// there is nothing to write a chat line into, and by the time it
+	// sees serving resume, the daemon it would tell is a process that
+	// started seconds ago knowing nothing. The record on disk is the
+	// handover between them, and this loop is the daemon reading it.
+	go supervise.ReportLoop(ctx, supervise.Dir(cfg.StateDir), 0, srv.NotifyOwnerNote)
 
 	// ð¯T27.9: start the liveness check loop once the daemon context exists.
 	if liveMon != nil {
