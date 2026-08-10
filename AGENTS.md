@@ -92,6 +92,14 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
 ### Web
 - `web/index.html` is self-contained; pure logic lives in
   `web/scripts/*.js` (DOM-free where possible so Node tests can require it).
+- **Green in the shared clone is not green on master (🎯T398):** many workers
+  share one working copy, so `make test-web` there reads everyone's
+  uncommitted edits. A suite held green by WIP is red for a fresh clone, a CI
+  runner, and the next worker to check master out — master was red from
+  8297ae6 until 🎯T388's gate tripped over it. Before calling a web change
+  done, run the suite in a detached `git worktree` of HEAD; `scripts/docratchet`
+  ratchets that (`TestT398CleanCheckoutWebTestsPass`), as it does the T360
+  build. Same shared-clone family as 🎯T376 and 🎯T377.
 - Server↔client chat events go through the normalization layer
   (`internal/server/chat_wire.go` + `web/scripts/chat_events.js`) — keep
   both sides in sync and covered by the hermetic tests.
