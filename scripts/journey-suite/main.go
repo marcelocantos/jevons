@@ -166,11 +166,6 @@ persona_notes: |
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	if err := cmd.Start(); err != nil {
-		fatal(fmt.Errorf("start jevonsd: %w (build with make jevonsd?)", err))
-	}
-	fmt.Printf("started isolated jevonsd pid=%d host=%s state=%s mcp=%s provider=%s\n",
-		cmd.Process.Pid, host, stateDir, mcpName, provider)
 
 	// Always tear down daemon + journey MCP. Normal path stops before J5 so
 	// isolation assertions see post-teardown MCP state; defer covers early
@@ -181,7 +176,8 @@ persona_notes: |
 			return
 		}
 		stopped = true
-		if cmd.Process != nil {
+		started := cmd.Process != nil
+		if started {
 			_ = cmd.Process.Signal(os.Interrupt)
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
@@ -198,16 +194,32 @@ persona_notes: |
 		// through the CLI that registered it (🎯T282: Claude registers via
 		// `claude mcp add -s user`, not ~/.grok/config.toml).
 		mcpRemoveFor(provider, mcpName)
-		fmt.Println("stopped isolated jevonsd; removed MCP", mcpName)
+		if started {
+			fmt.Println("stopped isolated jevonsd; removed MCP", mcpName)
+		} else {
+			fmt.Println("isolate never started; removed MCP", mcpName)
+		}
 		if *keep {
 			fmt.Println("log:", logPath)
 		}
 	}
-	// 🎯T379: registered, not deferred. A defer covers the happy path
-	// only; fatal() exits without unwinding and a signal does not unwind at
-	// all, and both of those leak the MCP registration.
+	// 🎯T379: registered, not deferred, and registered BEFORE the daemon is
+	// started rather than after. A defer covers the happy path only — fatal()
+	// exits without unwinding and a signal does not unwind at all, and both of
+	// those leak the MCP registration. Ordering matters for the same reason:
+	// the daemon writes the user-scoped `jevonsmcp-journey` entry during its
+	// own boot, so a Ctrl-C landing between Start and this registration would
+	// leak exactly the entry this target exists to stop leaking. Teardown that
+	// runs before the process exists is harmless: stop skips a nil Process and
+	// the removal is a no-op (or reclaims a previous run's stale entry).
 	cleanups.Add(stop)
 	catchSignals()
+
+	if err := cmd.Start(); err != nil {
+		fatal(fmt.Errorf("start jevonsd: %w (build with make jevonsd?)", err))
+	}
+	fmt.Printf("started isolated jevonsd pid=%d host=%s state=%s mcp=%s provider=%s\n",
+		cmd.Process.Pid, host, stateDir, mcpName, provider)
 
 	if err := waitReady(host, readyTimeout); err != nil {
 		dumpTail(logPath, 40)

@@ -190,6 +190,42 @@ func TestPanickingCleanupDoesNotStrandTheRest(t *testing.T) {
 	}
 }
 
+// The teardown must be ARMED BEFORE the daemon is launched, not after it.
+// jevonsd writes the user-scoped `jevonsmcp-journey` entry during its own
+// boot, so a Ctrl-C landing between `cmd.Start()` and the arming call leaks
+// precisely the registration 🎯T379 exists to stop leaking. That window is a
+// race no runtime test can reliably enter, but it is decidable from source
+// order, so this reads the program rather than running it.
+func TestTeardownIsArmedBeforeTheDaemonStarts(t *testing.T) {
+	// The source under inspection is overridable so the oracle can be shown
+	// red against the pre-fix tree (`git show HEAD~:…/main.go`) — a source-order
+	// invariant is otherwise untestable by mutation. Unset everywhere real.
+	path := os.Getenv("JOURNEY_MAIN_SRC")
+	if path == "" {
+		path = "main.go"
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	text := string(src)
+
+	start := strings.Index(text, "cmd.Start()")
+	if start < 0 {
+		t.Fatal("no cmd.Start() in main.go — this oracle is pinned to the wrong call")
+	}
+	for _, arm := range []string{"cleanups.Add(stop)", "catchSignals()"} {
+		at := strings.Index(text, arm)
+		if at < 0 {
+			t.Errorf("%s is gone — the suite no longer arms teardown at all", arm)
+			continue
+		}
+		if at > start {
+			t.Errorf("%s runs AFTER cmd.Start(): a signal in that window leaks the MCP registration (🎯T379)", arm)
+		}
+	}
+}
+
 // Over-broadness guard: teardown removes the JOURNEY registration and never
 // the daily one. An over-eager cleanup that removed `jevonsmcp` would take
 // the owner's real overseer tools out with it — a far worse failure than the
