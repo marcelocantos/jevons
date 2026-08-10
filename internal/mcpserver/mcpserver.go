@@ -185,6 +185,11 @@ type Server struct {
 	ownerNotifier OwnerNotifier
 	// exhaustion dedups repeated convergence exhaustion per agent.
 	exhaustion exhaustionState
+	// recoverBin is the detached diagnostician (🎯T415.1); stateDir is
+	// what it reads. Empty leaves diagnosis unavailable, which the
+	// deterministic notice does not depend on.
+	recoverBin string
+	stateDir   string
 
 	// wakeBatch coalesces machine-generated events into one digest per
 	// recipient (🎯T392.2). Debouncing above is per-worker and stops the

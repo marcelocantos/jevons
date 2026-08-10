@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope runlock buildsnap
+all: jevonsd jevons-head treeguard commitscope runlock buildsnap recover
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -64,6 +64,17 @@ runlock: bin/runlock
 bin/runlock: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/runlock ./cmd/runlock
+
+# Detached diagnostician (🎯T415.1). jevonsd launches this setsid'd when
+# convergence gives up on an agent, so it outlives the daemon and can even
+# restart it. A missing binary skips diagnosis only — the deterministic
+# owner notice does not depend on it.
+.PHONY: recover
+recover: bin/recover
+
+bin/recover: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/recover ./cmd/recover
 
 # 🎯T254.2: builds the daily daemon from committed HEAD in a throwaway
 # worktree, so one worker's uncommitted edits cannot stop another rebuilding.

@@ -6,7 +6,9 @@ package mcpserver
 import (
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -132,29 +134,42 @@ func (s *Server) OnConvergenceExhausted(rep IdleNudgeReport) {
 // Its brief is to diagnose and report, not to repair. It may hand work
 // onward, but is required to succeed at nothing.
 func (s *Server) spawnRecoveryAgent(rep IdleNudgeReport) {
-	if s == nil || s.registry == nil {
+	if s == nil {
 		return
 	}
-	name := RecoveryAgentName(rep.Name)
-	brief := FormatRecoveryBrief(rep)
-
-	def, _, _, err := s.stitchAgentStart(name, s.workerWD, "", "", "ops_classify", s.overseerName(), "aside", "")
-	if err != nil {
-		slog.Warn("recovery agent not created; the owner notice already went out",
+	bin := s.recoverBin
+	if bin == "" {
+		slog.Warn("no recover binary wired; diagnosis skipped (the owner notice already went out)",
+			"stuck", rep.Name)
+		return
+	}
+	cmd := exec.Command(bin, "-stuck", rep.Name, "-state", s.stateDir, "-repo", s.workerWD)
+	// DETACHED: its own session and process group, so killing or
+	// restarting jevonsd does not kill it. A recovery agent parented to
+	// the daemon cannot diagnose "the daemon is broken", which is among
+	// the faults it most needs to handle — the same shape that took the
+	// daemon down twice on 2026-08-09/10, when restart-daily-jevonsd died
+	// with the agent whose shutdown it had caused.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		slog.Warn("recovery process not started; the owner notice already went out",
 			"stuck", rep.Name, "err", err)
 		return
 	}
-	if _, err := s.registry.Launch(def.Name); err != nil {
-		slog.Warn("recovery agent not launched; the owner notice already went out",
-			"stuck", rep.Name, "recovery", def.Name, "err", err)
-		return
+	// Release it: we neither wait for it nor own it.
+	if err := cmd.Process.Release(); err != nil {
+		slog.Debug("recovery process release", "err", err)
 	}
-	if _, err := s.sendToAgent(def.Name, brief, false); err != nil {
-		slog.Warn("recovery agent not briefed; the owner notice already went out",
-			"stuck", rep.Name, "recovery", def.Name, "err", err)
-		return
-	}
-	slog.Info("recovery agent dispatched", "stuck", rep.Name, "recovery", def.Name)
+	slog.Info("detached recovery dispatched", "stuck", rep.Name, "pid", cmd.Process.Pid)
+}
+
+// SetRecoverBin wires the detached diagnostician (🎯T415.1). Empty
+// leaves diagnosis unavailable, which is survivable because the
+// deterministic owner notice does not depend on it.
+func (s *Server) SetRecoverBin(path, stateDir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recoverBin, s.stateDir = path, stateDir
 }
 
 // RecoveryAgentName is the disposable diagnostician's name for one
