@@ -10,6 +10,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // agentSendResult is the outcome of sendToAgent (🎯T111.1).
@@ -149,6 +150,24 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 	if s.registry.Def(name) == nil {
 		return nil, false, fmt.Errorf("agent %q is not running", name)
 	}
+
+	// 🎯T409: the same lost-session recovery agent_start performs (🎯T313),
+	// on the path that actually needs it. Launch fails closed when the row
+	// is Materialized and the transcript is gone, and this path is reached
+	// by the impatience ladder — which retries on a timer, hits the
+	// identical error every time, and never escapes.
+	//
+	// Observed 2026-08-10: 10 of 16 agents carried a session id with no
+	// file on disk after a token-exhaustion event, because Materialized is
+	// set at launch while the transcript only appears once a session
+	// produces a turn. Every repressure of those agents failed forever.
+	if lost, ok, err := fleet.RehydrateLostSessionIn(s.registry, name); err != nil {
+		slog.Warn("lost-session rehydrate failed; falling through to launch",
+			"name", name, "err", err)
+	} else if ok {
+		slog.Info("agent send rehydrated lost session", "name", name, "detail", lost.Describe())
+	}
+
 	p2, err := s.registry.Launch(name)
 	if err != nil {
 		return nil, false, fmt.Errorf("agent %q is not running and rehydrate failed: %v", name, err)
