@@ -135,17 +135,8 @@ func (s *Server) spawnRecoveryAgent(rep IdleNudgeReport) {
 	if s == nil || s.registry == nil {
 		return
 	}
-	name := "recover-" + rep.Name
-	brief := fmt.Sprintf(
-		"You are a disposable recovery agent. One job: work out WHY %q stopped making progress, and report it.\n\n"+
-			"What is known: convergence gave up after %d nudges. Last verdict: %s. Last error: %s.\n\n"+
-			"DO NOT restart, kill, or otherwise unstick %[1]q. It has been left in its failed state deliberately"+
-			" so the cause is still visible; repairing it first destroys the evidence.\n\n"+
-			"Look at its session, its transcript, the daemon log, and its mission. Decide whether the cause is the"+
-			" agent, its session, its mission, or the machinery around it. File a bullseye target for what you find"+
-			" (name + acceptance), then report back in one paragraph. If you cannot determine a cause, say so"+
-			" plainly — an honest 'unknown' is worth more than a plausible guess.",
-		rep.Name, DefaultIdleNudgeMax, orNone(rep.Reason), orNone(rep.Error))
+	name := RecoveryAgentName(rep.Name)
+	brief := FormatRecoveryBrief(rep)
 
 	def, _, _, err := s.stitchAgentStart(name, s.workerWD, "", "", "ops_classify", s.overseerName(), "aside", "")
 	if err != nil {
@@ -164,6 +155,27 @@ func (s *Server) spawnRecoveryAgent(rep IdleNudgeReport) {
 		return
 	}
 	slog.Info("recovery agent dispatched", "stuck", rep.Name, "recovery", def.Name)
+}
+
+// RecoveryAgentName is the disposable diagnostician's name for one
+// incident. Derived from the stuck agent so a second exhaustion of the
+// same agent reuses the seat rather than accumulating corpses.
+func RecoveryAgentName(stuck string) string { return "recover-" + stuck }
+
+// FormatRecoveryBrief is the diagnostician's one-shot instruction. Pure,
+// so the wording — which carries the load-bearing "do not repair it"
+// instruction — is testable without spawning anything.
+func FormatRecoveryBrief(rep IdleNudgeReport) string {
+	return fmt.Sprintf(
+		"You are a disposable recovery agent. One job: work out WHY %q stopped making progress, and report it.\n\n"+
+			"What is known: convergence gave up after %d nudges. Last verdict: %s. Last error: %s.\n\n"+
+			"DO NOT restart, kill, or otherwise unstick %[1]q. It has been left in its failed state deliberately"+
+			" so the cause is still visible; repairing it first destroys the evidence.\n\n"+
+			"Look at its session, its transcript, the daemon log, and its mission. Decide whether the cause is the"+
+			" agent, its session, its mission, or the machinery around it. File a bullseye target for what you find"+
+			" (name + acceptance), then report back in one paragraph. If you cannot determine a cause, say so"+
+			" plainly — an honest 'unknown' is worth more than a plausible guess.",
+		rep.Name, DefaultIdleNudgeMax, orNone(rep.Reason), orNone(rep.Error))
 }
 
 func orNone(s string) string {

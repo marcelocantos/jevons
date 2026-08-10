@@ -4,10 +4,13 @@
 package mcpserver
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 )
 
 type recordingNotifier struct {
@@ -109,5 +112,87 @@ func TestExhaustionRenotifyWindow(t *testing.T) {
 	}
 	if !e.shouldNotify("a", now.Add(61*time.Minute), time.Hour) {
 		t.Error("did not re-notify after the window — a still-stuck agent is worth repeating eventually")
+	}
+}
+
+// The other half of 🎯T415's oracle: when spawning IS possible, the
+// recovery agent is actually created — and the stuck agent is not
+// touched. Both were asserted in the target's acceptance and neither was
+// covered by the first test, which only proved the notice survives when
+// spawning is impossible.
+func TestRecoveryAgentIsCreatedAndStuckAgentUntouched(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := "jv-t999-stuck"
+	stuckSession := "11111111-2222-3333-4444-555555555555"
+	if err := reg.Register(claudia.AgentDef{
+		Name: stuck, WorkDir: t.TempDir(), SessionID: stuckSession,
+		Provider: claudia.ProviderClaude, Materialized: true, Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	s.SetOwnerNotifier(&recordingNotifier{})
+
+	rep := IdleNudgeReport{Name: stuck, Action: IdleNudgeMaxed, Reason: "max_nudges"}
+	// Called directly rather than via OnConvergenceExhausted, which
+	// dispatches it in a goroutine. Launch will fail or start something
+	// real; neither matters here — what matters is the registry row.
+	defer reg.Stop(RecoveryAgentName(stuck))
+	s.spawnRecoveryAgent(rep)
+
+	rec := reg.Def(RecoveryAgentName(stuck))
+	if rec == nil {
+		t.Fatal("no recovery agent was registered — the diagnosis half never happens")
+	}
+	if rec.Purpose != claudia.PurposeAside {
+		t.Errorf("recovery purpose=%q want aside — it is disposable, not a work agent", rec.Purpose)
+	}
+	if rec.Name == stuck {
+		t.Fatal("recovery agent collided with the stuck agent")
+	}
+
+	// The stuck agent must be exactly as it was. Recovery destroys the
+	// evidence, which is the whole reason it is left alone.
+	after := reg.Def(stuck)
+	if after == nil {
+		t.Fatal("the stuck agent was removed")
+	}
+	if after.SessionID != stuckSession {
+		t.Errorf("stuck agent session changed %s → %s; it was rotated, not diagnosed",
+			stuckSession, after.SessionID)
+	}
+	if !after.Materialized {
+		t.Error("stuck agent's Materialized was cleared — something tried to recover it")
+	}
+}
+
+// The brief carries the instruction the whole design rests on. If this
+// wording is lost, the recovery agent will helpfully repair the evidence.
+func TestRecoveryBriefForbidsRepair(t *testing.T) {
+	brief := FormatRecoveryBrief(IdleNudgeReport{
+		Name: "jv-t999-stuck", Reason: "max_nudges", Error: "turn not submitted",
+	})
+	for _, want := range []string{
+		"DO NOT restart, kill, or otherwise unstick",
+		"repairing it first destroys the evidence",
+		"File a bullseye target",
+		"honest 'unknown' is worth more than a plausible guess",
+		"jv-t999-stuck", "max_nudges", "turn not submitted",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief missing %q", want)
+		}
+	}
+}
+
+func TestRecoveryBriefNamesMissingDetail(t *testing.T) {
+	brief := FormatRecoveryBrief(IdleNudgeReport{Name: "a"})
+	if !strings.Contains(brief, "(none)") {
+		t.Error("an absent reason/error should read as (none), not as an empty gap")
 	}
 }
