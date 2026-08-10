@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope runlock buildsnap recover
+all: jevonsd jevons-head treeguard commitscope runlock buildsnap recover detach jevons-watchdog
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -75,6 +75,37 @@ recover: bin/recover
 bin/recover: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/recover ./cmd/recover
+
+# Self-detach helper (🎯T405). restart-daily-jevonsd re-execs itself through
+# this into a fresh session, so the caller's death — including the agent that
+# the restart's own kill is about to stop — cannot cancel the bounce. Built by
+# `make all`, and the script fails closed rather than restarting attached.
+.PHONY: detach
+detach: bin/detach
+
+bin/detach: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/detach ./cmd/detach
+
+# Daily-daemon supervisor (🎯T405). launchd runs this every 30s, outside every
+# process tree a restart tears down, and calls the restart script when the port
+# stays dead. `make watchdog-install` writes and loads the LaunchAgent.
+.PHONY: jevons-watchdog
+jevons-watchdog: bin/jevons-watchdog
+
+bin/jevons-watchdog: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/jevons-watchdog ./cmd/jevons-watchdog
+
+.PHONY: watchdog-install watchdog-uninstall watchdog-status
+watchdog-install: bin/jevons-watchdog
+	bin/jevons-watchdog -install
+
+watchdog-uninstall: bin/jevons-watchdog
+	bin/jevons-watchdog -uninstall
+
+watchdog-status: bin/jevons-watchdog
+	@bin/jevons-watchdog -status
 
 # 🎯T254.2: builds the daily daemon from committed HEAD in a throwaway
 # worktree, so one worker's uncommitted edits cannot stop another rebuilding.
