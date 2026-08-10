@@ -568,6 +568,10 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	text, injected := EnsureFleetBrief(s.fleetBriefed, name, text)
 	s.mu.Unlock()
 	if injected {
+		// 🎯T425: the brief is the daemon's own prose and it is almost entirely
+		// role-conditional, so it opens by naming the role its reader occupies.
+		// The sender's message below is untouched.
+		text = s.withIdentity(name, text)
 		slog.Info("fleet standing brief injected on first send", "name", name)
 	}
 

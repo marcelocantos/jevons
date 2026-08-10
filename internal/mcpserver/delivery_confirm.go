@@ -115,6 +115,10 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 		// Same inject-once as first agent_send so start-with-prompt does
 		// not double the standing brief on a later send.
 	}
+	// 🎯T425: a spawn opening prompt is daemon-composed and is the first thing
+	// this seat ever reads — the one message where "who am I" is least
+	// answerable from anything already in the session.
+	text = s.withIdentity(name, text)
 
 	// 🎯T387: open the observation BEFORE the send, so transcript growth is
 	// measured against a pre-send baseline rather than against whatever an

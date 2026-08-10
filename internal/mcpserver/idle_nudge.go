@@ -1019,7 +1019,7 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 			// interrupt=false: a worker mid-turn is phase=working and never
 			// classified idle, so queueing is the right behaviour if the send
 			// races a turn start. Interrupting live turns is T236's job.
-			_, err := s.sendToAgent(target, formatIdleNudgeWire(event, text), false)
+			_, err := s.sendDaemonComposed(target, formatIdleNudgeWire(event, text), false)
 			return err
 		}
 	}
@@ -1114,7 +1114,7 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 
 	push := func(target string, interrupt bool, event, text string) error {
 		msg := formatIdleNudgeWire(event, text)
-		_, err := s.sendToAgent(target, msg, interrupt)
+		_, err := s.sendDaemonComposed(target, msg, interrupt)
 		return err
 	}
 	interruptFn := func(name string) error {
@@ -1255,7 +1255,7 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 
 	msg := formatIdleNudgeWire(eventWorkerIdle, text)
 	// Do not interrupt PO mid-turn — queue if busy (T111.1).
-	res, err := s.sendToAgent(parent, msg, false)
+	res, err := s.sendDaemonComposed(parent, msg, false)
 	if err != nil {
 		slog.Warn("worker-idle event deliver failed",
 			"worker", name, "parent", parent, "err", err)
@@ -1337,7 +1337,7 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 		}
 		msg := formatIdleNudgeWire(event, text)
 		// Do not interrupt PO/overseer mid-turn — queue if busy.
-		res, err := s.sendToAgent(target, msg, false)
+		res, err := s.sendDaemonComposed(target, msg, false)
 		if err != nil {
 			slog.Warn("daemon restart resume event deliver failed",
 				"target", target, "event", event, "workers", len(kids), "err", err)
@@ -1403,7 +1403,7 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 		msg := formatIdleNudgeWire(event, text)
 		// interrupt=true: if prompt in flight after reattach, clear stuck turn (T171).
 		// When idle/send succeeds first try, interrupt is never invoked.
-		_, err := s.sendToAgent(target, msg, true)
+		_, err := s.sendDaemonComposed(target, msg, true)
 		return err
 	}
 
