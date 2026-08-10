@@ -40,10 +40,15 @@ bin/treeguard: $(GO_SRC)
 
 # Shared-index commit guard (🎯T377). The git pre-commit hook execs this, so
 # `make all` builds it; the hook self-builds if it is missing, and this target
-# only saves that cost on the first commit after a fresh clone. Install the
-# hook itself with: cp scripts/hooks/pre-commit .git/hooks/
+# only saves that cost on the first commit after a fresh clone.
+#
+# --install also puts the hook into this clone, because git never populates
+# .git/hooks from the tree: a guard that waits to be copied by hand is absent
+# in exactly the fresh checkout that needs it. It leaves a pre-commit hook it
+# did not write alone, and says so.
 .PHONY: commitscope
 commitscope: bin/commitscope
+	@bin/commitscope --install
 
 bin/commitscope: $(GO_SRC)
 	@mkdir -p bin

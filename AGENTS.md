@@ -269,10 +269,13 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   forms — bare `git commit`, `-a`, `-i` — by reading which index git is
   committing from, and names the paths that would have gone in. Deliberate
   whole-index commits are `JEVONS_COMMIT_SCOPE=off git commit …`, never
-  `--no-verify` reflexively. Install it in a fresh clone with
-  `cp scripts/hooks/pre-commit .git/hooks/` (do **not** redirect
-  `core.hooksPath` — that would disable git-lfs's own hooks). Sibling: 🎯T376
-  (same root cause, working tree rather than index).
+  `--no-verify` reflexively. `make` installs the hook (`bin/commitscope
+  --install`), since git never populates `.git/hooks` from the tree and a guard
+  waiting to be copied by hand is absent in the fresh clone that needs it; a
+  pre-commit hook this repo did not write is left alone and reported as
+  leaving the clone unguarded. Do **not** redirect `core.hooksPath` — that
+  would disable git-lfs's own hooks. Sibling: 🎯T376 (same root cause, working
+  tree rather than index).
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /
