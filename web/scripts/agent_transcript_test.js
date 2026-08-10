@@ -1682,6 +1682,140 @@ test('T329 applyInspectLiveFrame: tool_use body never mints a bubble by itself',
   assert.strictEqual(lines[0].text, 'After tools.');
 });
 
+// ── 🎯T372: the sidebar aliases the one widget; it never re-implements it ──
+//
+// The forbidden shape is the local "if the widget is missing, do it myself"
+// fallback. It is one concept with two code paths, and the copy runs only when
+// nobody is watching — so it drifts unseen. That is how the sidebar came to
+// hold its own opinion about block copy, send URLs and repaint dedupe while
+// nominally "sharing" ConversationWidget.
+//
+// These tests assert identity, not agreement: each entry point must BE the
+// widget's function today and after any future edit, and its absence must be
+// a loud throw rather than a quiet second implementation.
+
+// AT export → ConversationWidget export → a representative call.
+const T372_ALIASES = [
+  {
+    at: 'sidebarComposerVisible',
+    cw: 'composerVisible',
+    call: function (f) { return f({ tab: 'transcript', selectedAgent: 'jv-x', purpose: '' }); },
+  },
+  { at: 'isSidebarDraftEmpty', cw: 'isDraftEmpty', call: function (f) { return f('hi'); } },
+  { at: 'agentSendPath', cw: 'agentSendPath', call: function (f) { return f('jv-x'); } },
+  {
+    at: 'sidebarSendRequest',
+    cw: 'buildSendRequest',
+    call: function (f) { return f('jv-x', 'hi', { purpose: 'worker' }); },
+  },
+  { at: 'sidebarSendBlockMessage', cw: 'sendBlockMessage', call: function (f) { return f('empty'); } },
+  {
+    at: 'classifySidebarComposerKey',
+    cw: 'classifyComposerKey',
+    call: function (f) { return f({ key: 'Enter' }); },
+  },
+  {
+    at: 'afterSidebarSendOptimistic',
+    cw: 'afterSendOptimistic',
+    call: function (f) { return f([], 'hi', {}); },
+  },
+  {
+    at: 'linesFingerprint',
+    cw: 'linesFingerprint',
+    call: function (f) { return f([{ role: 'user', text: 'hi' }], false); },
+  },
+];
+
+// agent_transcript.js resolves the widget off the global in a browser, so a
+// stub here is exactly what the product path sees.
+function withStubWidget(stub, fn) {
+  const had = Object.prototype.hasOwnProperty.call(global, 'ConversationWidget');
+  const prev = global.ConversationWidget;
+  global.ConversationWidget = stub;
+  try {
+    return fn();
+  } finally {
+    if (had) global.ConversationWidget = prev;
+    else delete global.ConversationWidget;
+  }
+}
+
+test('T372 every sidebar entry point returns the widget function verbatim', function () {
+  T372_ALIASES.forEach(function (a) {
+    const sentinel = { t372: a.cw };
+    const seen = [];
+    const stub = {};
+    stub[a.cw] = function () {
+      seen.push(Array.prototype.slice.call(arguments));
+      return sentinel;
+    };
+    const got = withStubWidget(stub, function () { return a.call(AT[a.at]); });
+    assert.strictEqual(
+      got,
+      sentinel,
+      'AgentTranscript.' + a.at + ' must return ConversationWidget.' + a.cw
+      + "'s result untouched — a different value means a local implementation ran",
+    );
+    assert.strictEqual(seen.length, 1, a.at + ' calls the widget exactly once');
+  });
+});
+
+test('T372 compact density is a parameter to the one widget, not a second contract', function () {
+  let opts = null;
+  const stub = {
+    classifyComposerKey: function (_e, o) { opts = o; return 'send'; },
+  };
+  withStubWidget(stub, function () {
+    return AT.classifySidebarComposerKey({ key: 'Enter' });
+  });
+  assert.ok(opts && opts.density === 'compact',
+    'sidebar asks the widget for compact behaviour (EC-1 param), it does not re-derive it');
+});
+
+test('T372 a missing widget throws loudly — there is no fallback to fall back to', function () {
+  T372_ALIASES.forEach(function (a) {
+    assert.throws(
+      function () { withStubWidget({}, function () { return a.call(AT[a.at]); }); },
+      function (e) {
+        const m = String((e && e.message) || '');
+        return /T372/.test(m) && m.indexOf(a.cw) >= 0;
+      },
+      a.at + ' must throw naming ConversationWidget.' + a.cw + ' when the widget is absent',
+    );
+  });
+});
+
+test('T372 no fallback implementation has re-grown in agent_transcript.js', function () {
+  const src = fs.readFileSync(path.join(__dirname, 'agent_transcript.js'), 'utf8');
+  // Exactly one place may resolve the widget: the cw() alias helper.
+  const resolves = src.match(/(?<!function )loadConversationWidget\(\)/g) || [];
+  assert.strictEqual(resolves.length, 1,
+    'only cw() may resolve ConversationWidget — a second resolver is a fallback in disguise');
+  T372_ALIASES.forEach(function (a) {
+    const m = src.match(new RegExp('\\n  function ' + a.at + '\\([^)]*\\) \\{([\\s\\S]*?)\\n  \\}'));
+    assert.ok(m, a.at + ' present in agent_transcript.js');
+    const body = m[1];
+    assert.ok(body.indexOf("cw('" + a.cw + "')") >= 0,
+      a.at + ' must delegate through cw(' + a.cw + ')');
+    assert.ok(!/typeof CW\.|CW &&/.test(body),
+      a.at + ' must not re-grow an "if the widget is missing, do it myself" branch');
+  });
+});
+
+test('T372 index.html calls the widget directly — no per-site fallback chain', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // The chain shape was: ConversationWidget.x ? … : AgentTranscript.y ? … : <inline copy>.
+  // Its tell is a ConversationWidget existence test used as a ternary guard.
+  const guards = html.match(/typeof ConversationWidget !== 'undefined' &&/g) || [];
+  assert.strictEqual(guards.length, 0,
+    "index.html must not guard-and-fork on ConversationWidget's presence: "
+    + guards.length + ' site(s) remain');
+  ['sidebarComposerVisible', 'isSidebarDraftEmpty', 'sidebarSendBlockMessage'].forEach(function (n) {
+    assert.ok(html.indexOf('AgentTranscript.' + n) < 0,
+      'index.html must reach the widget directly, not through the ' + n + ' fallback rung');
+  });
+});
+
 if (failed) {
   console.error('\n' + failed + ' failed');
   process.exit(1);

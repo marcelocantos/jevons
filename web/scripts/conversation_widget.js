@@ -304,7 +304,10 @@
   }
 
   /**
-   * Lines fingerprint for no-op repaint (mirrors AgentTranscript.linesFingerprint shape).
+   * Lines fingerprint for no-op repaint — the one definition (🎯T372).
+   * AgentTranscript.linesFingerprint is an alias onto this; it used to be a
+   * separate copy that omitted `when`, so host and widget could disagree about
+   * whether a re-timestamped line set had changed. Do not re-mirror it.
    * @param {Array} lines
    * @param {boolean} [working]
    */

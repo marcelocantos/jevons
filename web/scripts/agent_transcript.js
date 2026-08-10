@@ -659,13 +659,14 @@
   }
 
   // Stable fingerprint for poll no-op (skip full replace when content unchanged).
-  function linesFingerprint(lines) {
-    let s = '';
-    (lines || []).forEach(function (l, i) {
-      if (!l) return;
-      s += i + '\0' + (l.role || '') + '\0' + (l.text == null ? '' : String(l.text)) + '\n';
-    });
-    return s;
+  //
+  // 🎯T372: a binding to ConversationWidget.linesFingerprint, not a second
+  // implementation of it. The widget's own repaint dedupe already computes
+  // this; a private copy here meant the host and the widget could disagree
+  // about whether a line set had changed. The copy also ignored `when`, so a
+  // re-timestamped turn read as unchanged.
+  function linesFingerprint(lines, working) {
+    return cw('linesFingerprint')(lines, working);
   }
 
   // 🎯T205: latched stick-to-bottom policy (Track | Free) — pure, reusable for
@@ -898,21 +899,12 @@
    * @param {{ tab?: string, selectedAgent?: string|null, purpose?: string }} opts
    */
   function sidebarComposerVisible(opts) {
-    const CW = loadConversationWidget();
-    if (CW && typeof CW.composerVisible === 'function') {
-      return CW.composerVisible({
-        tab: opts && opts.tab,
-        selectedAgent: opts && opts.selectedAgent,
-        purpose: opts && opts.purpose,
-        shouldOpen: shouldOpenTranscript,
-      });
-    }
-    const o = opts || {};
-    const tab = String(o.tab || '');
-    if (tab !== 'transcript') return false;
-    const name = o.selectedAgent == null ? '' : String(o.selectedAgent).trim();
-    if (!name) return false;
-    return shouldOpenTranscript(name, o.purpose);
+    return cw('composerVisible')({
+      tab: opts && opts.tab,
+      selectedAgent: opts && opts.selectedAgent,
+      purpose: opts && opts.purpose,
+      shouldOpen: shouldOpenTranscript,
+    });
   }
 
   /**
@@ -920,11 +912,7 @@
    * @param {string} text
    */
   function isSidebarDraftEmpty(text) {
-    const CW = loadConversationWidget();
-    if (CW && typeof CW.isDraftEmpty === 'function') {
-      return CW.isDraftEmpty(text);
-    }
-    return !String(text == null ? '' : text).trim();
+    return cw('isDraftEmpty')(text);
   }
 
   /**
@@ -932,13 +920,7 @@
    * @param {string} name
    */
   function agentSendPath(name) {
-    const CW = loadConversationWidget();
-    if (CW && typeof CW.agentSendPath === 'function') {
-      return CW.agentSendPath(name);
-    }
-    const n = String(name || '').trim();
-    if (!n) return '';
-    return '/api/agents/' + encodeURIComponent(n) + '/send';
+    return cw('agentSendPath')(name);
   }
 
   /**
@@ -993,6 +975,27 @@
     return null;
   }
 
+  // 🎯T372: the sidebar composer has NO second implementation. Every entry
+  // point below is a name alias for the ConversationWidget function of the
+  // same concept — identity, not a lookalike. Each one used to carry a local
+  // "if the widget is missing, do it myself" fallback; that is the exact
+  // one-concept-two-code-paths shape T372 forbids, and it drifts silently
+  // because the fallback only runs when nobody is looking.
+  //
+  // Resolution stays LAZY because index.html loads agent_transcript.js
+  // (line 1461) before conversation_widget.js (line 1465) — binding at module
+  // init would capture undefined. Absence is a loud throw, never a quiet fork.
+  function cw(fn) {
+    const CW = loadConversationWidget();
+    if (!CW || typeof CW[fn] !== 'function') {
+      throw new Error(
+        'AgentTranscript: ConversationWidget.' + fn + ' is unavailable. The '
+        + 'sidebar composer deliberately has no fallback implementation '
+        + '(🎯T372: one widget, one code path) — load conversation_widget.js.');
+    }
+    return CW[fn];
+  }
+
   /**
    * Build the sidebar send request for the selected transcript participant.
    * Returns { ok:true, url, method, body:{text}, name } or { ok:false, reason }.
@@ -1002,35 +1005,10 @@
    * @param {{ purpose?: string }} [opts]
    */
   function sidebarSendRequest(selectedAgent, text, opts) {
-    const CW = loadConversationWidget();
-    if (CW && typeof CW.buildSendRequest === 'function') {
-      return CW.buildSendRequest(selectedAgent, text, {
-        purpose: opts && opts.purpose,
-        isOverseer: function (n, p) { return isOverseer(n, p); },
-      });
-    }
-    const name = selectedAgent == null ? '' : String(selectedAgent).trim();
-    if (!name) {
-      return { ok: false, reason: 'no-selection' };
-    }
-    if (!shouldOpenTranscript(name, opts && opts.purpose)) {
-      return { ok: false, reason: 'overseer-main-only' };
-    }
-    const body = String(text == null ? '' : text).trim();
-    if (!body) {
-      return { ok: false, reason: 'empty' };
-    }
-    const url = agentSendPath(name);
-    if (!url) {
-      return { ok: false, reason: 'no-selection' };
-    }
-    return {
-      ok: true,
-      name: name,
-      url: url,
-      method: 'POST',
-      body: { text: body },
-    };
+    return cw('buildSendRequest')(selectedAgent, text, {
+      purpose: opts && opts.purpose,
+      isOverseer: function (n, p) { return isOverseer(n, p); },
+    });
   }
 
   /**
@@ -1039,27 +1017,7 @@
    * @param {string|null|undefined} reason
    */
   function sidebarSendBlockMessage(reason) {
-    const CW = loadConversationWidget();
-    if (CW && typeof CW.sendBlockMessage === 'function') {
-      return CW.sendBlockMessage(reason);
-    }
-    const r = String(reason == null ? '' : reason).trim();
-    if (r === 'no-selection') {
-      return 'No fleet agent selected — pick a worker/PO in the RHS tree first.';
-    }
-    if (r === 'overseer-main-only') {
-      return 'Overseer uses main chat, not the RHS Transcript composer.';
-    }
-    if (r === 'empty') {
-      return 'Message is empty — type something before Send.';
-    }
-    if (r === 'observe-only') {
-      return 'This thread is observe-only — cannot send (read-only residual).';
-    }
-    if (!r) {
-      return 'Send blocked — unknown reason (not a silent drop).';
-    }
-    return 'Send blocked: ' + r;
+    return cw('sendBlockMessage')(reason);
   }
 
   /**
@@ -1068,14 +1026,7 @@
    * @returns {'send'|'newline'|null}
    */
   function classifySidebarComposerKey(e) {
-    const CW = loadConversationWidget();
-    if (CW && typeof CW.classifyComposerKey === 'function') {
-      return CW.classifyComposerKey(e, { density: 'compact' });
-    }
-    if (!e || (e.key !== 'Enter' && e.code !== 'Enter')) return null;
-    if (e.shiftKey) return 'newline';
-    if (e.isComposing || e.keyCode === 229) return null;
-    return 'send';
+    return cw('classifyComposerKey')(e, { density: 'compact' });
   }
 
   // ── 🎯T265: microcosm conversation surface (preserve working, send chrome) ──
@@ -1112,35 +1063,13 @@
    */
   function afterSidebarSendOptimistic(lines, text, opts) {
     opts = opts || {};
-    const CW = loadConversationWidget();
-    if (CW && typeof CW.afterSendOptimistic === 'function') {
-      return CW.afterSendOptimistic(lines, text, {
-        title: opts.title,
-        now: opts.now,
-        // 🎯T281: unwrap-aware consecutive dedupe (same as live echo path).
-        isDuplicate: isDuplicateInspectUserLine,
-        normalizeWhen: normalizeWhen,
-      });
-    }
-    const body = String(text == null ? '' : text).trim();
-    const next = copyInspectLines(lines);
-    if (body) {
-      const last = next[next.length - 1];
-      if (!isDuplicateInspectUserLine(last, body)) {
-        const when = opts.now !== undefined ? normalizeWhen(opts.now) : Date.now();
-        next.push({ role: 'user', text: body, when: when });
-      }
-    }
-    return {
-      lines: next,
-      model: {
-        title: opts.title != null ? opts.title : '',
-        empty: next.length === 0,
-        error: '',
-        lines: next,
-        working: true,
-      },
-    };
+    return cw('afterSendOptimistic')(lines, text, {
+      title: opts.title,
+      now: opts.now,
+      // 🎯T281: unwrap-aware consecutive dedupe (same as live echo path).
+      isDuplicate: isDuplicateInspectUserLine,
+      normalizeWhen: normalizeWhen,
+    });
   }
 
   /**

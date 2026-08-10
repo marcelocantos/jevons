@@ -5641,12 +5641,10 @@ let frontierHighlightId = null;
  * Empty/whitespace ⇒ allow auto-activate. Non-empty ⇒ sticky (no mid-compose steal).
  */
 function isSidebarComposerDraftEmpty() {
-  const emptyFn = (typeof AgentTranscript !== 'undefined')
-    ? (AgentTranscript.sidebarDraftIsEmpty || AgentTranscript.isSidebarDraftEmpty)
-    : null;
-  const isEmpty = function (v) {
-    return emptyFn ? emptyFn(v) : !String(v == null ? '' : v).trim();
-  };
+  // 🎯T372: "is this draft empty" has one answer, the widget's. The chain this
+  // replaces named a function that does not exist (sidebarDraftIsEmpty), so it
+  // always fell through — first to the alias, then to a local trim().
+  const isEmpty = function (v) { return ConversationWidget.isDraftEmpty(v); };
   const el = document.getElementById('agent-inspect-input');
   if (el && typeof el.value === 'string') {
     // Live field is source of truth while mounted (even if bound to another agent).
@@ -8804,18 +8802,16 @@ let _agentInspectWorking = false;
 // staging + 🎯T279 repaint. Staged on send, acked when a frame carries the
 // turn, re-applied onto every history frame so a server payload that has not
 // sealed the turn yet cannot delete the owner's own bubble.
-let _sidebarPending = (typeof ConversationWidget !== 'undefined' && ConversationWidget.emptyPending)
-  ? ConversationWidget.emptyPending()
-  : { items: [] };
+// 🎯T372: the widget is a hard dependency of this surface, not a maybe. The
+// `{ items: [] }` fallback that used to sit here was a second (empty, silently
+// wrong) pending model that only ran when conversation_widget.js failed to
+// load — i.e. precisely when nobody could see it drop owner turns.
+let _sidebarPending = ConversationWidget.emptyPending();
 
 // Re-apply unacked owner turns for `name` onto a fresh line set, then ack
 // whatever the frame already carries. Every path that REPLACES the inspect
 // line model must go through here — that is the no-vanish invariant.
 function reconcileInspectPending(name, lines) {
-  if (typeof ConversationWidget === 'undefined' ||
-      typeof ConversationWidget.applyPendingOwnerTurns !== 'function') {
-    return lines || [];
-  }
   const acked = ConversationWidget.ackPendingOwnerTurns(_sidebarPending, name, lines || []);
   _sidebarPending = acked.state;
   return ConversationWidget.applyPendingOwnerTurns(lines || [], _sidebarPending, name);
@@ -8835,20 +8831,17 @@ function inspectLinesCopy(lines) {
 // host. sidebarDraftByAgent is the single backing map (shared with the widget
 // draft store) so residual T252 sticky-draft call sites stay valid.
 const sidebarDraftByAgent = Object.create(null);
-const _widgetDraftStore = (typeof ConversationWidget !== 'undefined' && ConversationWidget.createDraftStore)
-  ? ConversationWidget.createDraftStore(sidebarDraftByAgent)
-  : null;
+// 🎯T372: one draft store, always the widget's. The map-poking branch below
+// used to be a parallel implementation of get/set that skipped whatever
+// normalization the store does.
+const _widgetDraftStore = ConversationWidget.createDraftStore(sidebarDraftByAgent);
 function sidebarDraftGet(name) {
-  const k = name == null ? '' : String(name);
-  if (_widgetDraftStore) return _widgetDraftStore.get(k);
-  return Object.prototype.hasOwnProperty.call(sidebarDraftByAgent, k)
-    ? sidebarDraftByAgent[k] : '';
+  return _widgetDraftStore.get(name == null ? '' : String(name));
 }
 function sidebarDraftSet(name, text) {
   const k = name == null ? '' : String(name);
   if (!k) return;
-  if (_widgetDraftStore) _widgetDraftStore.set(k, text);
-  else sidebarDraftByAgent[k] = String(text == null ? '' : text);
+  _widgetDraftStore.set(k, text);
 }
 let _sidebarComposerSending = false;
 // 🎯T309.1: RHS compact mount + main comfortable mount (VirtualList residual on main).
@@ -9049,22 +9042,14 @@ function syncSidebarComposer() {
     });
     if (row) purpose = row.purpose || '';
   }
-  const visible = (typeof ConversationWidget !== 'undefined' && ConversationWidget.composerVisible)
-    ? ConversationWidget.composerVisible({
-        tab: rhsBottomTab,
-        selectedAgent: selectedAgent,
-        purpose: purpose,
-        shouldOpen: (typeof AgentTranscript !== 'undefined' && AgentTranscript.shouldOpenTranscript)
-          ? function (n, p) { return AgentTranscript.shouldOpenTranscript(n, p); }
-          : undefined,
-      })
-    : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarComposerVisible)
-      ? AgentTranscript.sidebarComposerVisible({
-          tab: rhsBottomTab,
-          selectedAgent: selectedAgent,
-          purpose: purpose,
-        })
-      : (rhsBottomTab === 'transcript' && !!selectedAgent));
+  // 🎯T372: one composer-visibility rule. The two fallback rungs this replaces
+  // disagreed with it — the last one showed the composer for the overseer.
+  const visible = ConversationWidget.composerVisible({
+    tab: rhsBottomTab,
+    selectedAgent: selectedAgent,
+    purpose: purpose,
+    shouldOpen: function (n, p) { return AgentTranscript.shouldOpenTranscript(n, p); },
+  });
   if (inspectConversation) {
     inspectConversation.setAgentId(selectedAgent || '');
     inspectConversation.setComposerVisible(!!visible);
@@ -9107,11 +9092,7 @@ function syncSidebarSendEnabled() {
     return;
   }
   if (!agentInspectSend || !agentInspectInput) return;
-  const empty = (typeof ConversationWidget !== 'undefined' && ConversationWidget.isDraftEmpty)
-    ? ConversationWidget.isDraftEmpty(agentInspectInput.value)
-    : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.isSidebarDraftEmpty)
-      ? AgentTranscript.isSidebarDraftEmpty(agentInspectInput.value)
-      : !String(agentInspectInput.value || '').trim());
+  const empty = ConversationWidget.isDraftEmpty(agentInspectInput.value);
   const can = !empty && !!selectedAgent && !_sidebarComposerSending &&
     rhsBottomTab === 'transcript';
   agentInspectSend.disabled = !can;
@@ -9399,11 +9380,10 @@ function renderAgentInspect(model) {
   }
   const lines = (model && model.lines) || [];
   const wantWorking = !!(model && model.working);
-  _agentInspectFp = (typeof AgentTranscript !== 'undefined' && AgentTranscript.linesFingerprint)
-    ? AgentTranscript.linesFingerprint(lines) + (wantWorking ? '|w' : '')
-    : ((typeof ConversationWidget !== 'undefined' && ConversationWidget.linesFingerprint)
-      ? ConversationWidget.linesFingerprint(lines, wantWorking)
-      : String(lines.length));
+  // 🎯T372: the host dedupes on exactly the fingerprint the widget dedupes on.
+  // The AgentTranscript copy this replaces ignored `when`, so the host could
+  // call a re-timestamped line set unchanged while the widget repainted it.
+  _agentInspectFp = ConversationWidget.linesFingerprint(lines, wantWorking);
 }
 
 // 🎯T209 residual: manual refresh re-issues inspect_subscribe (wire history),
@@ -10177,12 +10157,7 @@ function sendSidebarComposer() {
     return Promise.resolve(null);
   }
   if (!selectedAgent) {
-    const msg = (typeof ConversationWidget !== 'undefined' && ConversationWidget.sendBlockMessage)
-      ? ConversationWidget.sendBlockMessage('no-selection')
-      : ((typeof AgentTranscript !== 'undefined' && AgentTranscript.sidebarSendBlockMessage)
-        ? AgentTranscript.sidebarSendBlockMessage('no-selection')
-        : 'No fleet agent selected — pick a worker/PO in the RHS tree first.');
-    showSidebarSendErr(msg);
+    showSidebarSendErr(ConversationWidget.sendBlockMessage('no-selection'));
     return Promise.resolve(null);
   }
   inspectConversation.setAgentId(selectedAgent);
