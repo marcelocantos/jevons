@@ -8624,6 +8624,19 @@ enterTrackBottom();
   if (d >= 250) refreshWisprContext();
 }, d));
 
+// 🎯T370: Firefox decides whether to switch tabs in a *keypress* listener in
+// the system group, which bails when the event is already cancelled — so the
+// keydown handler below is not enough on its own. Whether Gecko marks the
+// keypress cancelled after a cancelled keydown is an engine internal we
+// cannot observe here, so both events are cancelled rather than one guessed.
+// Nothing is selected or focused here; the keydown path owns the behaviour.
+document.addEventListener('keypress', e => {
+  if (typeof FleetCycle !== 'undefined' && FleetCycle.claimsChordKeypress &&
+      FleetCycle.claimsChordKeypress(e)) {
+    e.preventDefault();
+  }
+});
+
 document.addEventListener('keydown', e => {
   // 🎯T370: ⌘⇧] / ⌘⇧[ walk the fleet tree selection, root overseer included.
   // Rows come from the painted tree so the order is exactly what the owner

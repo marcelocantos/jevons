@@ -25,6 +25,42 @@
 //
 // DOM-free so Node hermetic tests can require(); index.html collects the
 // painted rows and does the selecting/focusing. Same split as 🎯T366.
+//
+// ── Whether the chord reaches the page at all: adjudicated, not assumed ──
+//
+// ⌘⇧[ / ⌘⇧] is also the macOS tab-switch chord, so the whole feature rests
+// on a question no synthetic-key test can answer: does the *browser* keep
+// the chord for itself? Playwright dispatches events Gecko/Blink never see
+// as accelerators, so a green browser oracle here proves nothing — the two
+// engines were adjudicated separately instead.
+//
+// CHROME (and Blink generally): the browser wins, unrecoverably. Probed
+// with real OS keystrokes into an isolated "Google Chrome for Testing"
+// (same accelerator table, separate app from the owner's Chrome): the tab
+// switched and the page's keydown counter never moved. It is a pre-target
+// accelerator — there is no event to preventDefault. Nothing in this file
+// can change that; a Blink-safe second chord is 🎯T421, not this target.
+//
+// FIREFOX (the owner's browser): the page wins, and it is not an accident.
+// The chord is deliberately *not* a XUL <key> element and not reserved —
+// it is handled in JS, late, and behind an explicit content-wins guard:
+//   tabbrowser.js  document.addEventListener("keypress", this,
+//                                            { mozSystemGroup: true })
+//   tabbrowser.js  on_keypress() { if (aEvent.defaultCancelled) return; …
+//                                  case NEXT_TAB / PREVIOUS_TAB }
+//   ShortcutUtils.sys.mjs  getSystemActionForEvent(): on macosx, metaKey &&
+//                          !altKey && charCode '}' → NEXT_TAB, '{' → PREVIOUS
+// (read out of the shipped omni.ja of the installed Firefox). The system
+// group runs *after* the default group, so a page listener that cancels
+// first makes `defaultCancelled` true and the tab switch is skipped.
+//
+// Which is why the wiring cancels BOTH keydown and keypress. Gecko's guard
+// inspects the *keypress*, and whether a cancelled keydown marks its
+// keypress cancelled is an engine internal this repo cannot observe. Both
+// branches are covered instead of one being guessed: if Gecko suppresses
+// the keypress entirely, the keydown cancel already won; if it dispatches
+// one, we cancel that too and the guard sees it. Cancelling only keydown
+// would leave the losing branch live and unfalsifiable.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -80,6 +116,26 @@
     if (code === 'BracketRight' || k === ']' || k === '}') return FORWARD;
     if (code === 'BracketLeft' || k === '[' || k === '{') return BACKWARD;
     return 0;
+  }
+
+  /**
+   * Is this `keypress` the chord's, and must its default be cancelled?
+   *
+   * The keydown handler already did the work; this exists only to satisfy
+   * Firefox's tab-switch guard, which reads `defaultCancelled` on the
+   * *keypress* (see the header note). Cancelling it is therefore not a
+   * second implementation of the chord — nothing is selected or focused
+   * here, and the caller must not act on it beyond preventDefault.
+   *
+   * Deliberately as narrow as the keydown predicate: without Meta+Shift, or
+   * with Ctrl/Alt, ordinary typing of brackets and braces is untouched.
+   *
+   * @param {{key?:string, code?:string, metaKey?:boolean, ctrlKey?:boolean, altKey?:boolean, shiftKey?:boolean}} eventLike
+   * @returns {boolean}
+   */
+  function claimsChordKeypress(eventLike) {
+    const ev = eventLike || {};
+    return fleetCycleDirection(ev.key, ev) !== 0;
   }
 
   /**
@@ -230,6 +286,7 @@
     CHORD_DOC: CHORD_DOC,
     isOverseerName: isOverseerName,
     fleetCycleDirection: fleetCycleDirection,
+    claimsChordKeypress: claimsChordKeypress,
     fleetCycleOrder: fleetCycleOrder,
     currentCycleNode: currentCycleNode,
     stepFleetCycle: stepFleetCycle,

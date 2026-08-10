@@ -293,6 +293,50 @@ test('overseer match is case-insensitive', function () {
   assert.ok(!FC.isOverseerName('jevons-po'));
 });
 
+// ── keypress suppression: Firefox's tab switch reads the keypress ──────
+//
+// Gecko decides NEXT_TAB/PREVIOUS_TAB in a system-group `keypress` listener
+// that returns early when the event is already cancelled. Cancelling only
+// the keydown leaves that outcome dependent on an engine internal this repo
+// cannot observe, so the chord's keypress is cancelled too. These pin the
+// predicate that drives it — including that it stays narrow enough to leave
+// ordinary bracket typing alone.
+
+test('the chord keypress is claimed for suppression, both directions', function () {
+  assert.ok(FC.claimsChordKeypress({ key: '}', code: 'BracketRight', metaKey: true, shiftKey: true }));
+  assert.ok(FC.claimsChordKeypress({ key: '{', code: 'BracketLeft', metaKey: true, shiftKey: true }));
+});
+
+test('keypress suppression is as narrow as the keydown chord', function () {
+  // Plain typing of brackets/braces must survive untouched.
+  assert.ok(!FC.claimsChordKeypress({ key: ']', code: 'BracketRight' }));
+  assert.ok(!FC.claimsChordKeypress({ key: '}', code: 'BracketRight', shiftKey: true }));
+  // Meta without Shift is the browser's own bracket chord (back/forward).
+  assert.ok(!FC.claimsChordKeypress({ key: ']', code: 'BracketRight', metaKey: true }));
+  // Ctrl/Alt variants belong to other bindings.
+  assert.ok(!FC.claimsChordKeypress({ key: '}', code: 'BracketRight', metaKey: true, shiftKey: true, ctrlKey: true }));
+  assert.ok(!FC.claimsChordKeypress({ key: '}', code: 'BracketRight', metaKey: true, shiftKey: true, altKey: true }));
+  // Unrelated keys, and junk.
+  assert.ok(!FC.claimsChordKeypress({ key: 'a', code: 'KeyA', metaKey: true, shiftKey: true }));
+  assert.ok(!FC.claimsChordKeypress(null));
+  assert.ok(!FC.claimsChordKeypress({}));
+});
+
+test('index.html cancels the chord keypress as well as the keydown', function () {
+  assert.ok(/addEventListener\('keypress'/.test(html),
+    'index.html must register a keypress listener for the chord');
+  const at = html.indexOf('FleetCycle.claimsChordKeypress');
+  assert.ok(at > 0, 'index.html must consult FleetCycle.claimsChordKeypress');
+  const near = html.slice(at, at + 400);
+  assert.ok(/preventDefault\(\)/.test(near),
+    'a claimed chord keypress must be cancelled so Firefox skips the tab switch');
+  // The keypress path is suppression only — the keydown path owns behaviour.
+  assert.ok(!/selectAgent\(/.test(near),
+    'the keypress path must not select anything (keydown already did)');
+  assert.ok(!/\.focus\(\)/.test(near),
+    'the keypress path must not move focus (keydown already did)');
+});
+
 // ── index.html wiring ───────────────────────────────────────────
 
 test('index.html loads fleet_cycle.js', function () {
