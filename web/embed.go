@@ -15,6 +15,7 @@ import "embed"
 //
 //go:embed index.html
 //go:embed scripts/boot_sentinel.js
+//go:embed scripts/module_gate.js
 //go:embed scripts/jlog.js
 //go:embed scripts/decision_log.js
 //go:embed scripts/transport.js

@@ -1496,6 +1496,17 @@ body.rhs-resizing-row { cursor: row-resize; }
      already loaded when the fault happens — hence ahead of jlog too. -->
 <script src="scripts/boot_sentinel.js"></script>
 <script>if (typeof BootSentinel !== 'undefined') BootSentinel.install(window, document);</script>
+<!-- 🎯T374: second, ahead of every gated module. The sentinel above reports a
+     boot that never finished; this keeps the boot finishing at all. Its
+     capture-phase listener sees a <script src="scripts/…"> fail to load and
+     publishes an inert stand-in under that module's global BEFORE the next
+     blocking script executes — so a peer that captures it at load time
+     (composer_persist.js:28) closes over the stand-in rather than undefined,
+     and the top-level call at :7209 returns instead of aborting the ~9000-line
+     inline script below it. Modules that ARE present are never touched, and
+     their errors still reach window.onerror. -->
+<script src="scripts/module_gate.js"></script>
+<script>if (typeof ModuleGate !== 'undefined') ModuleGate.install(window, document);</script>
 <script src="scripts/jlog.js"></script>
 <script src="scripts/decision_log.js"></script>
 <script src="scripts/transport.js"></script>
@@ -1542,6 +1553,11 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/smd.js"></script>
 <script src="scripts/streaming_markdown.js"></script>
 <script src="scripts/cost_display.js"></script>
+<!-- 🎯T374: last module tag is above, the big inline script is below. Sealing
+     here catches the other absence shape — a module that loaded but whose
+     factory threw, so its global was never assigned and no load error ever
+     fired — while there is still time to contain it for the inline script. -->
+<script>if (typeof ModuleGate !== 'undefined') ModuleGate.seal();</script>
 <script>
 // 🎯T110.1 layout probe — packs grade via window.JevonsProbe.snapshot().
 if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
