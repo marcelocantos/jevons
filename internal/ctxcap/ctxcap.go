@@ -22,7 +22,10 @@
 // and performs the rotation.
 package ctxcap
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // DefaultCeiling is the per-call context ceiling in tokens.
 //
@@ -51,6 +54,11 @@ const (
 	// an unknown: a missing measurement is not evidence of a small
 	// context, and acting on it would rotate agents at random.
 	VerdictUnknown Verdict = "unknown"
+	// VerdictHold — over the ceiling, but compacted too recently to do it
+	// again without thrashing. Distinct from OK so a persistent hold is
+	// visible as "this agent lives above the ceiling" rather than passing
+	// as healthy.
+	VerdictHold Verdict = "hold"
 )
 
 // Decision is one agent's evaluation, carrying its own explanation so the
@@ -75,7 +83,28 @@ type Observation struct {
 	// Exempt marks agents the ceiling must not rotate. The owner's own
 	// chat continuity is not a spend lever.
 	Exempt bool
+	// SinceLastCompaction is how long ago this agent was last rotated by
+	// the ceiling. Zero means never, or unknown.
+	SinceLastCompaction time.Duration
+	// Now is the observation time, used only to interpret the above.
+	Now time.Time
 }
+
+// DefaultMinInterval is the floor on how often one agent may be
+// compacted (🎯T392.1 hysteresis).
+//
+// Compaction hands the successor its predecessor's transcript, which it
+// reads — so an agent whose steady-state context exceeds the ceiling
+// rotates, re-reads, re-exceeds, and rotates again. Observed 2026-08-10
+// with no interval at all: the overseer rotated five times in 23 minutes
+// (13:08, 13:12, 13:16, 13:23, 13:31) and then stayed down. Each cycle
+// costs a full read and discards continuity, so the treadmill is worse
+// than the unbounded context it was meant to fix.
+//
+// A ceiling only helps agents whose context grows THROUGH it. For one
+// that lives above it, the honest answer is a higher ceiling or a
+// cheaper handover, not more rotations.
+const DefaultMinInterval = 30 * time.Minute
 
 // Policy is the configured ceiling.
 type Policy struct {
@@ -86,6 +115,21 @@ type Policy struct {
 	// Disabled turns enforcement off entirely, leaving observation intact
 	// so the spend report still shows what the ceiling would have done.
 	Disabled bool
+	// MinInterval is the floor between compactions of the SAME agent.
+	// Zero means DefaultMinInterval; negative disables hysteresis, which
+	// is what produced the observed treadmill and exists only for tests.
+	MinInterval time.Duration
+}
+
+// EffectiveMinInterval resolves the configured hysteresis.
+func (p Policy) EffectiveMinInterval() time.Duration {
+	if p.MinInterval == 0 {
+		return DefaultMinInterval
+	}
+	if p.MinInterval < 0 {
+		return 0
+	}
+	return p.MinInterval
 }
 
 // EffectiveCeiling resolves the configured value against the defaults.
@@ -113,6 +157,17 @@ func (p Policy) Evaluate(obs Observation) Decision {
 	case obs.Exempt:
 		d.Verdict = VerdictOK
 		d.Reason = "exempt from the ceiling"
+	case obs.Context > ceiling && obs.SinceLastCompaction > 0 &&
+		obs.SinceLastCompaction < p.EffectiveMinInterval():
+		// Over the ceiling, but rotated too recently. Compacting again
+		// would be a treadmill: the successor re-reads its predecessor
+		// and re-exceeds immediately. Hold, and say so loudly enough
+		// that a ceiling which is simply too low for this agent shows up
+		// as a repeated hold rather than as silent thrash.
+		d.Verdict = VerdictHold
+		d.Reason = fmt.Sprintf(
+			"context %d exceeds ceiling %d but last compaction was %s ago (min %s) — holding rather than thrashing",
+			obs.Context, ceiling, obs.SinceLastCompaction.Round(time.Second), p.EffectiveMinInterval())
 	case obs.Context > ceiling:
 		d.Verdict = VerdictCompact
 		d.Reason = fmt.Sprintf("context %d exceeds ceiling %d", obs.Context, ceiling)

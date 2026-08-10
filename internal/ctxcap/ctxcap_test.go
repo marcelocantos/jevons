@@ -3,7 +3,10 @@
 
 package ctxcap
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestEvaluateCompactsOnlyAboveTheCeiling(t *testing.T) {
 	p := Policy{Ceiling: 100_000}
@@ -93,5 +96,55 @@ func TestBaselineCoordinatorContextsAllExceedDefault(t *testing.T) {
 	ds := p.EvaluateAll(observed)
 	if got := Compactions(ds); got != len(observed) {
 		t.Fatalf("compactions=%d want %d — every baseline coordinator ran over 100k", got, len(observed))
+	}
+}
+
+// The treadmill this exists to stop. Observed 2026-08-10 with no
+// hysteresis: the overseer rotated five times in 23 minutes (13:08,
+// 13:12, 13:16, 13:23, 13:31) and then stayed down. Compaction hands the
+// successor its predecessor's transcript, which it reads, which puts it
+// straight back over the ceiling.
+func TestRecentCompactionHoldsRatherThanThrashing(t *testing.T) {
+	p := Policy{Ceiling: 100_000, MinInterval: 30 * time.Minute}
+	over := Observation{Agent: "jevons", Context: 250_000, HasContext: true}
+
+	// Never compacted: act.
+	if got := p.Evaluate(over).Verdict; got != VerdictCompact {
+		t.Errorf("first compaction verdict=%s want compact", got)
+	}
+	// Compacted four minutes ago and already back over: hold, do not
+	// rotate again — that is the treadmill.
+	recent := over
+	recent.SinceLastCompaction = 4 * time.Minute
+	d := p.Evaluate(recent)
+	if d.Verdict != VerdictHold {
+		t.Fatalf("verdict=%s want hold", d.Verdict)
+	}
+	if Compactions([]Decision{d}) != 0 {
+		t.Error("a hold must not count as a compaction")
+	}
+	// A hold is NOT ok: an agent living above the ceiling must stay
+	// visible rather than passing as healthy.
+	if d.Verdict == VerdictOK {
+		t.Error("hold collapsed into ok — a persistent hold is a configuration signal")
+	}
+	// Past the interval: act again.
+	old := over
+	old.SinceLastCompaction = 31 * time.Minute
+	if got := p.Evaluate(old).Verdict; got != VerdictCompact {
+		t.Errorf("after the interval verdict=%s want compact", got)
+	}
+}
+
+func TestMinIntervalDefaultsAndDisable(t *testing.T) {
+	if got := (Policy{}).EffectiveMinInterval(); got != DefaultMinInterval {
+		t.Errorf("unset=%s want %s", got, DefaultMinInterval)
+	}
+	// Negative disables hysteresis — tests only; it is what produced the
+	// observed treadmill.
+	p := Policy{Ceiling: 100_000, MinInterval: -1}
+	obs := Observation{Agent: "a", Context: 200_000, HasContext: true, SinceLastCompaction: time.Second}
+	if got := p.Evaluate(obs).Verdict; got != VerdictCompact {
+		t.Errorf("hysteresis disabled verdict=%s want compact", got)
 	}
 }

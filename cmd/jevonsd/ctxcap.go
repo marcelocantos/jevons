@@ -40,6 +40,9 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 		Disabled: cfg.ContextCeilingDisabled,
 	}
 	obs := ctxcap.Observer{Roots: roots}
+	// Last-compaction times, so an agent whose steady-state context lives
+	// above the ceiling holds instead of rotating forever (🎯T392.1).
+	lastCompaction := map[string]time.Time{}
 	slog.Info("context ceiling governor",
 		"ceiling", pol.EffectiveCeiling(), "disabled", pol.Disabled,
 		"interval", ctxCapInterval)
@@ -52,7 +55,7 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				contextCeilingPass(cfg, pol, obs, reg, fleetAdapter, srv)
+				contextCeilingPass(cfg, pol, obs, reg, fleetAdapter, srv, lastCompaction)
 			}
 		}
 	}()
@@ -60,7 +63,8 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 
 // contextCeilingPass evaluates the fleet once and compacts what is over.
 func contextCeilingPass(cfg config.Config, pol ctxcap.Policy, obs ctxcap.Observer,
-	reg *claudia.Registry, fleetAdapter *fleet.Claudia, srv *server.Server) {
+	reg *claudia.Registry, fleetAdapter *fleet.Claudia, srv *server.Server,
+	lastCompaction map[string]time.Time) {
 	if reg == nil {
 		return
 	}
@@ -70,12 +74,26 @@ func contextCeilingPass(cfg config.Config, pol ctxcap.Policy, obs ctxcap.Observe
 		if reg.Get(def.Name) == nil {
 			continue
 		}
-		d := pol.Evaluate(obs.Observe(ctxcap.AgentRef{
+		o := obs.Observe(ctxcap.AgentRef{
 			Name:      def.Name,
 			Provider:  string(def.Provider),
 			WorkDir:   def.WorkDir,
 			SessionID: def.SessionID,
-		}))
+		})
+		o.Now = time.Now()
+		if last, ok := lastCompaction[def.Name]; ok {
+			o.SinceLastCompaction = o.Now.Sub(last)
+		}
+		d := pol.Evaluate(o)
+		if d.Verdict == ctxcap.VerdictHold {
+			// Loud on purpose: a repeated hold means the ceiling is simply
+			// too low for this agent, which is a configuration answer, not
+			// something more rotations can fix.
+			slog.Warn("context ceiling held — agent lives above the ceiling",
+				"agent", def.Name, "context", d.Context, "ceiling", d.Ceiling,
+				"since_last_compaction", o.SinceLastCompaction.Round(time.Second))
+			continue
+		}
 		if d.Verdict != ctxcap.VerdictCompact {
 			continue
 		}
@@ -96,8 +114,12 @@ func contextCeilingPass(cfg config.Config, pol ctxcap.Policy, obs ctxcap.Observe
 			// failure. The handover (if the row rotated) stays on disk.
 			slog.Error("context compaction failed",
 				"agent", def.Name, "context", d.Context, "err", err)
+			// Record the attempt regardless: a compaction that fails and is
+			// retried every pass is the same treadmill by another road.
+			lastCompaction[def.Name] = time.Now()
 			continue
 		}
+		lastCompaction[def.Name] = time.Now()
 		_ = cfg // reserved: per-purpose ceilings
 	}
 }
