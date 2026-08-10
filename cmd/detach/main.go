@@ -143,11 +143,23 @@ func run(argv []string) int {
 	}
 
 	done := make(chan struct{})
+	// Drained before returning: os.Exit does not wait for goroutines, so
+	// signalling the tail and returning immediately truncates the child's
+	// last lines — including the "OK: … serving" that says the bounce
+	// worked. A foreground caller would read a successful restart as an
+	// unfinished one.
+	drained := make(chan struct{})
 	if stream {
-		go tail(out.Name(), from, done)
+		go func() {
+			defer close(drained)
+			tail(out.Name(), from, done)
+		}()
+	} else {
+		close(drained)
 	}
 	waitErr := cmd.Wait()
 	close(done)
+	<-drained
 
 	if waitErr != nil {
 		if ee, ok := errors.AsType[*exec.ExitError](waitErr); ok {

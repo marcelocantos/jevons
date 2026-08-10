@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -106,17 +107,21 @@ func newThrashEnv(t *testing.T) *thrashEnv {
 		t.Fatal(err)
 	}
 
-	// 🎯T392.5: the script re-execs itself under bin/runlock and refuses to
-	// run unserialised if that binary is missing. The script's own env has
-	// a bare PATH with no `go`, so build the REAL binary here, with the
-	// test's environment, rather than substituting a stub — a stub that
-	// merely execs its command would let every concurrent caller through
-	// and quietly turn the coalescing assertions below into no-ops.
-	build := exec.Command("go", "build", "-o",
-		filepath.Join(root, "bin", "runlock"),
-		filepath.Join(repoRoot(t), "cmd", "runlock"))
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build runlock for the harness: %v\n%s", err, out)
+	// 🎯T392.5 (runlock) and 🎯T405 (detach): the script re-execs itself
+	// through both and refuses to run when either binary is missing. The
+	// script's own env has a bare PATH with no `go`, so build the REAL
+	// binaries here, with the test's environment, rather than substituting
+	// stubs — a stub runlock that merely execs its command would let every
+	// concurrent caller through and quietly turn the coalescing assertions
+	// below into no-ops, and a stub detach would drop the property that the
+	// bounce outlives its caller.
+	for _, helper := range []string{"runlock", "detach"} {
+		build := exec.Command("go", "build", "-o",
+			filepath.Join(root, "bin", helper),
+			filepath.Join(repoRoot(t), "cmd", helper))
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build %s for the harness: %v\n%s", helper, err, out)
+		}
 	}
 
 	// Fake daemon module, rebuilt per variant.
@@ -166,9 +171,23 @@ func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
 		"JEVONS_RESTART_STAMP="+filepath.Join(e.home, "restart.last"),
 		"JEVONS_RESTART_ACTIVE="+filepath.Join(e.home, "restart.active"),
 		"JEVONS_RESTART_LOCK="+filepath.Join(e.home, "restart.lock"),
+		// 🎯T405: one detach log per caller. The detached child writes to
+		// this file and the parent streams it back to us, so callers sharing
+		// one log read each other's lines — and the assertions below, which
+		// ask what THIS caller did, would count a neighbour's "OK: serving"
+		// as their own.
+		"JEVONS_RESTART_DETACH_LOG="+filepath.Join(e.home, "detach", nextDetachLog()),
 	)
 	b, err := cmd.CombinedOutput()
 	return string(b), err
+}
+
+// detachLogSeq names each run's detach log; the concurrency case below
+// runs several at once, so the counter is atomic.
+var detachLogSeq atomic.Int64
+
+func nextDetachLog() string {
+	return fmt.Sprintf("run-%d.log", detachLogSeq.Add(1))
 }
 
 // listenerPID is the pid currently holding the test port, or 0.
