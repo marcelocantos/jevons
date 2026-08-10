@@ -4,6 +4,8 @@
 package mcpserver
 
 import (
+	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -115,14 +117,64 @@ func TestExhaustionRenotifyWindow(t *testing.T) {
 	}
 }
 
-// The stuck agent must survive diagnosis untouched — recovery destroys
-// the evidence, which is the whole reason it is left alone.
+// fakeRecoverBin writes an executable stand-in for bin/recover that
+// records the argv it was called with, and returns its path. A real
+// diagnostician would drive an agent for twenty minutes; what is under
+// test is the dispatch, so the stand-in only has to be observable.
+func fakeRecoverBin(t *testing.T, argvFile string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-recover")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argvFile + "'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// awaitArgv waits for the stand-in to record want arguments. The
+// diagnostician is Start()ed and Release()d, never waited on — the
+// product deliberately does not own it — so the test does the waiting the
+// product refuses to do.
+func awaitArgv(t *testing.T, argvFile string, want int) []string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if b, err := os.ReadFile(argvFile); err == nil {
+			var argv []string
+			for ln := range strings.SplitSeq(string(b), "\n") {
+				if ln != "" {
+					argv = append(argv, ln)
+				}
+			}
+			if len(argv) >= want {
+				return argv
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the diagnostician was never invoked: %s has fewer than %d arguments after 10s",
+				argvFile, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// ARM 1 — a diagnostician IS wired: the dispatch is an INVOCATION, and
+// that is what this asserts.
 //
-// Since 🎯T415.1 the diagnostician is a DETACHED PROCESS, not a fleet
-// agent, so this also asserts the absence of a registry row: a recovery
-// agent parented to the daemon dies with it and could never diagnose
-// "the daemon is broken".
-func TestRecoveryLeavesTheStuckAgentUntouched(t *testing.T) {
+// Deliberately no assertion about a registry row. 🎯T415 covered this half
+// by asserting a row under RecoveryAgentName(stuck); 🎯T415.1 replaced the
+// in-registry agent with a detached OS process, exactly so it outlives the
+// daemon that may itself be the fault, and it registers nothing in either
+// arm. The old assertion could not pass by any fixture and held master red
+// for a day. Restoring a registry row to satisfy it would re-introduce the
+// corpse accumulation 🎯T415.1 removed (🎯T420), so the row's absence is
+// asserted the other way round: the registry ends with exactly the agent
+// the test put in it.
+//
+// The flags are load-bearing, not decoration — cmd/recover exits 2 without
+// -stuck, and -state/-repo are how a process that has outlived jevonsd
+// finds the state it must diagnose without jevonsmcp.
+func TestRecoveryDispatchesTheDetachedDiagnostician(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -136,22 +188,34 @@ func TestRecoveryLeavesTheStuckAgentUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(t.TempDir(), nil, nil)
+	repo := t.TempDir()
+	stateDir := t.TempDir()
+	argvFile := filepath.Join(t.TempDir(), "argv")
+
+	s := New(repo, nil, nil)
 	s.SetRegistry(reg)
 	s.SetOwnerNotifier(&recordingNotifier{})
-	// A harmless stand-in for bin/recover: the dispatch is what is under
-	// test, not what the diagnostician then does.
-	s.SetRecoverBin("/usr/bin/true", t.TempDir())
+	s.SetRecoverBin(fakeRecoverBin(t, argvFile), stateDir)
 
 	s.spawnRecoveryAgent(IdleNudgeReport{Name: stuck, Action: IdleNudgeMaxed, Reason: "max_nudges"})
 
-	// The diagnostician is a detached process, so it must NOT appear as a
-	// fleet agent. A registry row here means it is a child of the daemon
-	// again and would die with it.
-	if rec := reg.Def(RecoveryAgentName(stuck)); rec != nil {
-		t.Errorf("recovery registered as a fleet agent (%s) — it must be detached, not parented to the daemon", rec.Name)
+	argv := awaitArgv(t, argvFile, 6)
+	flags := map[string]string{}
+	for i := 0; i+1 < len(argv); i += 2 {
+		flags[argv[i]] = argv[i+1]
+	}
+	for flag, want := range map[string]string{
+		"-stuck": stuck,
+		"-state": stateDir,
+		"-repo":  repo,
+	} {
+		if got := flags[flag]; got != want {
+			t.Errorf("%s=%q want %q (argv=%q)", flag, got, want, argv)
+		}
 	}
 
+	// The stuck agent must survive diagnosis untouched — recovery destroys
+	// the evidence, which is the whole reason it is left alone.
 	after := reg.Def(stuck)
 	if after == nil {
 		t.Fatal("the stuck agent was removed")
@@ -163,18 +227,52 @@ func TestRecoveryLeavesTheStuckAgentUntouched(t *testing.T) {
 	if !after.Materialized {
 		t.Error("stuck agent's Materialized was cleared — something tried to recover it")
 	}
+	if n := len(reg.List()); n != 1 {
+		t.Errorf("registry holds %d agents, want only the stuck one — the diagnostician is a detached"+
+			" process and must not be parented to the daemon it may have to restart", n)
+	}
 }
 
-// With no diagnostician wired, dispatch is a no-op and must not disturb
-// anything. The owner notice has already gone out by this point.
-func TestRecoveryWithoutBinaryIsHarmless(t *testing.T) {
+// ARM 2 — no diagnostician is wired, which is EVERY hermetic construction:
+// New(...) leaves recoverBin empty, so any test that does not call
+// SetRecoverBin exercises this branch and proves nothing about arm 1.
+// Production is wired at cmd/jevonsd/main.go:963.
+//
+// Asserting the WARN is the point. "Nothing was registered" is vacuously
+// true here — nothing registers in either arm — so it cannot tell the
+// early return apart from a dispatch that silently failed, and that
+// indistinguishability is how the diagnosis half stayed a hermetic no-op
+// unnoticed (🎯T420).
+func TestRecoveryWithoutBinaryTakesTheWarnPath(t *testing.T) {
+	cap := &captureHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
+
 	s.spawnRecoveryAgent(IdleNudgeReport{Name: "jv-x", Action: IdleNudgeMaxed})
+
+	var warned, dispatched bool
+	for _, r := range cap.records {
+		if r.Level == slog.LevelWarn && strings.Contains(r.Message, "no recover binary wired") {
+			warned = true
+		}
+		if strings.Contains(r.Message, "detached recovery dispatched") {
+			dispatched = true
+		}
+	}
+	if !warned {
+		t.Error("no WARN that diagnosis was skipped — an unwired diagnostician must say so, not fail quietly")
+	}
+	if dispatched {
+		t.Error("dispatch was reported with no binary wired")
+	}
 	if len(reg.List()) != 0 {
 		t.Error("dispatch without a recover binary registered something")
 	}

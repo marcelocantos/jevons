@@ -133,6 +133,17 @@ func (s *Server) OnConvergenceExhausted(rep IdleNudgeReport) {
 //
 // Its brief is to diagnose and report, not to repair. It may hand work
 // onward, but is required to succeed at nothing.
+//
+// IT DOES NOT MULTIPLY, and the mechanism that enforces that is upstream
+// of this function rather than in it: OnConvergenceExhausted gates on
+// exhaustion.shouldNotify(rep.Name, now, DefaultExhaustionRenotify), so
+// the same agent failing the same way dispatches at most one
+// diagnostician per renotify window. Nothing here dedups, and nothing in
+// the naming does either — 🎯T415 bounded multiplication by reusing an
+// in-registry seat named RecoveryAgentName(stuck), and 🎯T415.1 removed
+// that agent in favour of the detached process below. The name outlived
+// its mechanism by a day, describing seat reuse that no longer existed,
+// and was deleted with it (🎯T420).
 func (s *Server) spawnRecoveryAgent(rep IdleNudgeReport) {
 	if s == nil {
 		return
@@ -171,11 +182,6 @@ func (s *Server) SetRecoverBin(path, stateDir string) {
 	defer s.mu.Unlock()
 	s.recoverBin, s.stateDir = path, stateDir
 }
-
-// RecoveryAgentName is the disposable diagnostician's name for one
-// incident. Derived from the stuck agent so a second exhaustion of the
-// same agent reuses the seat rather than accumulating corpses.
-func RecoveryAgentName(stuck string) string { return "recover-" + stuck }
 
 // FormatRecoveryBrief is the diagnostician's one-shot instruction. Pure,
 // so the wording — which carries the load-bearing "do not repair it"
