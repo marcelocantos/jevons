@@ -277,6 +277,12 @@ func (s *Server) SetTurnWitness(fn turnWitness) {
 // on a resumed session — the case in which the start path used it and got a
 // confirmed delivery that had not happened. Reaching for it in product code is
 // reaching for the mutant.
+//
+// The suite that keeps this sentence honest is
+// TestGrowthWatchAndPayloadWatchDisagreeOnAResumedSeat in
+// send_turn_begin_test.go. Named here because for one commit it was NOT true:
+// the retention rationale was written while nothing called this at all, which
+// is dead code wearing a justification. If that test goes, so does this.
 func (s *Server) watchAgentTurn(name string) turnWatch {
 	return s.watchAgentTurnFor(name, "")
 }

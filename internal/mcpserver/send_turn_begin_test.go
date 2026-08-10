@@ -626,6 +626,51 @@ func TestResumedSeatGrowthDoesNotConfirmAStartPromptThatStuck(t *testing.T) {
 	}
 }
 
+// The same mutant one level down, at the instrument rather than the call site.
+// The test above proves the START PATH no longer uses growth; this one holds the
+// two watches side by side on one resumed session and proves they give OPPOSITE
+// answers about the same payload — which is the claim that makes "growth is not
+// confirmation" a fact about the instruments rather than a fact about one caller.
+//
+// It also discharges what watchAgentTurn is kept FOR. That constructor has no
+// product caller any more (🎯T416 finding 3) and its doc says it survives so the
+// suite can hold it next to a payload watch. Until this test existed, that was a
+// false statement in committed prose guarding dead code — the same failure class
+// clause 2 made this target kill a stale comment in migrate.go for.
+func TestGrowthWatchAndPayloadWatchDisagreeOnAResumedSeat(t *testing.T) {
+	tr := newSessionLog(t)
+	tr.submitted("158 lines of an earlier session, resumed")
+	agent := &sendingAgent{alive: true, onPaste: func(string) {
+		// The seat stirs on resume and the file grows. The brief itself is
+		// still in the composer: nothing here carries the payload.
+		tr.replied("resuming; reading my previous context")
+	}}
+	s, _ := sendFixture(t, agent, tr)
+
+	// Both watches are opened BEFORE the send, over the same file, and awaited
+	// after it. The only difference between them is whether they were told what
+	// to look for.
+	growth := s.watchAgentTurn("jv-t416-worker")
+	payload := s.watchAgentTurnFor("jv-t416-worker", brief)
+	if err := agent.Send(brief); err != nil {
+		t.Fatal(err)
+	}
+
+	if g := growth(); !g.ConversationGrew {
+		t.Fatal("the growth watch did not fire — the fixture is not reproducing mutant (i)")
+	}
+	p := payload()
+	if p.PayloadSeen || p.PayloadEnteredTurn || p.PayloadQueued {
+		t.Errorf("the payload watch confirmed a brief that never left the composer: %+v", p)
+	}
+	if !p.Observed {
+		t.Error("the payload watch answered without saying an instrument ran")
+	}
+	if p.TranscriptAbsent {
+		t.Error("a resumed seat's transcript exists; reporting it absent would read as born-stuck")
+	}
+}
+
 // And its over-broadness pair: the same path must still confirm a start prompt
 // that DID become a turn, or every spawn fails closed and the fleet stops.
 func TestStartPromptThatBecomesATurnIsStillConfirmed(t *testing.T) {
