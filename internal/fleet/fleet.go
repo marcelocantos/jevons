@@ -71,6 +71,13 @@ type Claudia struct {
 	// dispatcher's fail-closed arm is one of clause 9's two exercised
 	// instruments, and asserting on it must not need a live tmux agent.
 	seedDeliver func(name, seed string) (string, error)
+
+	// seedTranscript resolves the successor's transcript, which is what
+	// decides whether a seed arrived (🎯T416). Nil reads the live claudia
+	// process. Test seam for the same reason as seedDeliver: the predicate
+	// this arm now uses is a file on the RECEIVER's disk, and a fixture must
+	// be able to write that file without launching a provider.
+	seedTranscript func(name string) string
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from

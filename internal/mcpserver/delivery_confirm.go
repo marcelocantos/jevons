@@ -120,13 +120,32 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 	// measured against a pre-send baseline rather than against whatever an
 	// earlier session left on disk. See turn_evidence.go for why the send
 	// result alone was never evidence of anything about the agent.
-	watch := s.watchAgentTurn(name)
+	// 🎯T416 finding 3 — AND IT LOOKS FOR THIS PAYLOAD, not merely for signs of
+	// life. This line used to be watchAgentTurn(name), i.e. growth-based
+	// confirmation, on the licence that "a seat this daemon just launched has
+	// an empty composer and an empty transcript, so nothing else can be writing
+	// the growth it sees."
+	//
+	// TRUE FOR A FRESH SEAT, VOID FOR A RESUMED ONE, and the spawn path
+	// launches both. Counter-example, live, one hour before this was written:
+	// this target's own worker was stopped mid-turn at 19:32:08 and restarted
+	// at 19:32:18 onto the SAME session, which already held 158 lines on disk.
+	// At 19:32:20 the daemon logged prompt_delivered=true — while the payload
+	// sat unsubmitted in the composer as `[Pasted text #1 +10 lines]`, and the
+	// transcript gained nothing for the next four minutes until a human pressed
+	// Enter. A resumed session's startup writes are "a sign of life", so growth
+	// confirmed a delivery that had not happened: clause 9's EXCLUDED mutant
+	// (i), alive on the start path.
+	//
+	// The fix is to stop asking the easier question rather than to qualify when
+	// it may be asked. The payload is right here; passing it removes the
+	// licence argument entirely and makes the start path answer the same
+	// question as the other four callers.
+	watch := s.watchAgentTurnFor(name, text)
 
 	// This watch owns the verdict (🎯T416): the send path must not also judge,
 	// or a healthy brief comes back with a status ConfirmTurnBegan does not
-	// recognise. The spawn asks the easier question and is entitled to: a seat
-	// this daemon just launched has an empty composer and an empty transcript,
-	// so nothing else can be writing the growth it sees.
+	// recognise.
 	res, err := s.deliverByNameConfirmedByCaller(name, text, OriginAgent, false)
 	if confErr := ConfirmTurnBegan(res.Status, err, watch()); confErr != nil {
 		// deliverToSender marks turn-began off its own successful Send, which

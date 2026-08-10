@@ -38,6 +38,21 @@ import "strings"
 // shape this whole family of bugs is made of; adding one more instance of it
 // while fixing one would be its own joke.
 //
+// AND THE RECEIVER TURNS OUT TO KEEP THE RECORD ITSELF, which is better than
+// either horn of that dilemma. The CLI writes its queue bookkeeping into the
+// same session JSONL: `queue-operation` enqueue when it accepts a message
+// behind a live turn, remove/dequeue when it drains one, and a
+// `queued_command` attachment when the drained message enters the turn. So
+// "was a turn running" does not have to be remembered by the sender at all —
+// it can be READ, from the receiver's disk, after any number of restarts. That
+// is 36,668 enqueue records and 4,005 queued_command attachments across the
+// session corpus, not one CLI version's quirk.
+//
+// This demotes the flight record rather than retiring it: it is still what
+// answers a send whose payload is too short to identify (Needle gives up under
+// 16 runes) and a live-stream backend with no transcript at all. But on the
+// ordinary Claude-shaped path the answer now comes from the world.
+//
 // Hence FlightUnknown is a first-class answer, not a default that collapses
 // into one of the others. The daemon leaves an agent unknown until it has
 // itself observed a boundary: it does not infer idleness from having a
@@ -126,6 +141,21 @@ func ClassifySendOutcome(flight TurnFlight, ev TurnEvidence) SendOutcome {
 		// Identifies the message itself. Nothing the daemon believes about
 		// the agent's state can outrank seeing the payload arrive.
 		return OutcomeBegun
+	}
+	if ev.PayloadEnteredTurn {
+		// The receiver's queue records show it draining into the turn. It
+		// will never appear as a user message — a queued message is replayed
+		// as an attachment — so demanding one here is the false negative that
+		// reported ABSENT for a message already being worked on.
+		return OutcomeBegun
+	}
+	if ev.PayloadQueued {
+		// A POSITIVE reading of the queued state, taken from the RECEIVER's
+		// disk rather than from this process's memory of what the agent was
+		// doing. That is what makes it survive a restart: the record is
+		// written by the agent that holds the message, and jevonsd restarting
+		// three times in a day cannot erase it.
+		return OutcomeQueuedBehindTurn
 	}
 	if !ev.Observed {
 		// No instrument ran — no process to watch. "I did not look" is not a

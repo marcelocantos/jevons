@@ -4,16 +4,14 @@
 package mcpserver
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T387 — a spawned worker's opening brief is confirmed from evidence
@@ -129,9 +127,26 @@ type TurnEvidence struct {
 	// SessionEvent: the agent published a live session event after the send.
 	SessionEvent bool
 	// PayloadSeen: the durable transcript gained a USER MESSAGE carrying this
-	// very payload (🎯T416). The only evidence that identifies the message
-	// rather than the agent.
+	// very payload (🎯T416). The strongest evidence there is — it identifies
+	// the message rather than the agent, and says a turn began on it.
 	PayloadSeen bool
+	// PayloadEnteredTurn: the receiver's own queue records show this payload
+	// leaving the queue into a turn — a dequeue/remove record, or the
+	// queued_command attachment the CLI writes when it drains one.
+	//
+	// It exists because PayloadSeen has a false negative and it is the ORDINARY
+	// case, not an edge: a message accepted behind a live turn is replayed into
+	// that turn as an attachment and NEVER becomes a user message, so reading
+	// user messages only reports absent for a message the receiver already has.
+	// The overseer hit this against this target's own worker at 09:31:24Z and
+	// the daemon repeated it twice, both times 21 seconds after the queue had
+	// already drained the payload into the running turn.
+	PayloadEnteredTurn bool
+	// PayloadQueued: an enqueue record carries the payload. The receiver has
+	// accepted it behind a live turn and not yet drained it — the legitimate
+	// third outcome, and now a POSITIVE finding rather than an inference from
+	// this daemon's own memory of what the agent was doing.
+	PayloadQueued bool
 	// Observed: an instrument existed at all — there was a live process to
 	// watch. False means nothing was measured, which is NOT the same as
 	// measuring nothing, and must never be read as a stuck paste (🎯T416).
@@ -153,8 +168,17 @@ type TurnEvidence struct {
 	Detail string
 }
 
-// Positive reports whether anything at all was observed of the agent.
-func (e TurnEvidence) Positive() bool { return e.ConversationGrew || e.SessionEvent || e.PayloadSeen }
+// Positive reports whether the observation settled anything.
+//
+// The two queue findings count. A brief the receiver has enqueued or drained
+// into its turn is not a dropped brief, and 🎯T387's whole purpose is to catch
+// dropped briefs — refusing a seat whose message the receiver demonstrably
+// holds is the over-strictness clause 9 pins as its own mutant. What must not
+// count is the absence of any of them.
+func (e TurnEvidence) Positive() bool {
+	return e.ConversationGrew || e.SessionEvent || e.PayloadSeen ||
+		e.PayloadEnteredTurn || e.PayloadQueued
+}
 
 // ConfirmTurnBegan decides whether an opening brief actually began a turn.
 //
@@ -244,10 +268,15 @@ func (s *Server) SetTurnWitness(fn turnWitness) {
 	s.observeTurnWitness = fn
 }
 
-// watchAgentTurn opens the observation used to confirm the next start prompt
-// to name. Call it before the send; call the returned watch after. The spawn
-// path identifies its prompt by agent activity alone (🎯T387): the composer is
-// empty at that point, so there is no earlier backlog to confuse growth with.
+// watchAgentTurn opens an observation that will settle for ANY sign of life
+// from the agent. Call it before the send; call the returned watch after.
+//
+// NO PRODUCT PATH USES THIS ANY MORE (🎯T416 finding 3). It is the shape of
+// clause 9's excluded mutant (i), and it is kept only so the suite can hold a
+// growth-only watch next to a payload watch and prove they answer differently
+// on a resumed session — the case in which the start path used it and got a
+// confirmed delivery that had not happened. Reaching for it in product code is
+// reaching for the mutant.
 func (s *Server) watchAgentTurn(name string) turnWatch {
 	return s.watchAgentTurnFor(name, "")
 }
@@ -288,10 +317,10 @@ func observeTurnFor(obs turnObserver, payload string, window time.Duration) turn
 	}
 
 	path := strings.TrimSpace(obs.JSONLPath())
-	baseline, hadTranscript := transcriptSize(path)
+	baseline, hadTranscript := turnev.Size(path)
 	needle := ""
 	if path != "" {
-		needle = payloadNeedle(payload)
+		needle = turnev.Needle(payload)
 	}
 
 	// Live-stream backends only: see the file header on why a durable
@@ -327,7 +356,7 @@ func observeTurnFor(obs turnObserver, payload string, window time.Duration) turn
 		grew := false
 		for {
 			if path != "" {
-				if size, ok := transcriptSize(path); ok && (!hadTranscript || size > baseline) {
+				if size, ok := turnev.Size(path); ok && (!hadTranscript || size > baseline) {
 					if needle == "" {
 						return measured(TurnEvidence{
 							ConversationGrew: true,
@@ -339,23 +368,29 @@ func observeTurnFor(obs turnObserver, payload string, window time.Duration) turn
 					// that just arrived are as likely to be an earlier stuck
 					// payload finally submitted by this send's Enter.
 					grew = true
-					if transcriptCarriesPayload(path, baseline, hadTranscript, needle) {
-						return measured(TurnEvidence{
-							PayloadSeen: true,
-							Detail:      fmt.Sprintf("transcript %s gained a user message carrying this payload", path),
-						})
+					if ev, ok := fateEvidence(path, baseline, hadTranscript, needle); ok {
+						return measured(ev)
 					}
 				}
 			}
 			if !obs.Alive() {
 				return measured(TurnEvidence{
-					TranscriptAbsent: transcriptMissing(path),
+					TranscriptAbsent: turnev.Missing(path),
 					Detail:           "the agent process exited before it did anything",
 				})
 			}
 			if time.Now().After(deadline) {
+				// One last look before condemning it, because the queue
+				// records are written by the receiver at its own pace and a
+				// message can be accepted without the file growing in a way
+				// this loop noticed. The whole region since the baseline is
+				// re-read, so this is one extra scan and NOT a longer clock
+				// (🎯T416 clause 10 forbids widening either window).
+				if ev, ok := fateEvidence(path, baseline, hadTranscript, needle); ok {
+					return measured(ev)
+				}
 				return measured(TurnEvidence{
-					TranscriptAbsent: transcriptMissing(path),
+					TranscriptAbsent: turnev.Missing(path),
 					Detail:           describePayloadAbsent(path, hadTranscript, baseline, grew, needle != "", window),
 				})
 			}
@@ -372,139 +407,36 @@ func observeTurnFor(obs turnObserver, payload string, window time.Duration) turn
 	}
 }
 
-// payloadNeedleLen bounds the needle in runes. The daemon prepends the fleet
-// standing brief to an agent's first send, so a multi-KB payload is mostly
-// boilerplate that every other agent also received; the distinguishing part is
-// the caller's own text at the END. Taking the tail therefore identifies the
-// message rather than the brief, and keeps the scan cheap.
-const payloadNeedleLen = 512
-
-// payloadNeedle reduces a payload to what will be looked for in the
-// transcript. Empty when there is nothing distinctive enough to recognise —
-// which disables payload matching rather than asserting a match on noise.
-func payloadNeedle(payload string) string {
-	norm := normalizeForMatch(payload)
-	if len([]rune(norm)) < 16 {
-		// Too short to identify: "ok", "continue", a bare ack. Matching on
-		// these would confirm from an unrelated message that happens to
-		// contain the word.
-		return ""
-	}
-	r := []rune(norm)
-	if len(r) > payloadNeedleLen {
-		r = r[len(r)-payloadNeedleLen:]
-	}
-	return string(r)
-}
-
-// normalizeForMatch collapses whitespace so a payload still matches after the
-// CLI has re-wrapped or re-indented it. Both sides of the comparison run
-// through this; nothing else is altered, because anything more aggressive
-// starts matching messages that merely resemble the payload.
-func normalizeForMatch(s string) string {
-	return strings.Join(strings.Fields(s), " ")
-}
-
-// transcriptCarriesPayload reports whether the region appended since the send
-// contains a user message carrying the payload.
+// fateEvidence turns one scan of the receiver's transcript into the answer
+// about THIS payload, and reports whether the scan settled anything.
 //
-// It reads from the pre-send baseline so an earlier occurrence of the same
-// text — a resend of a message that DID land before — cannot confirm this one.
-func transcriptCarriesPayload(path string, baseline int64, hadTranscript bool, needle string) bool {
-	from := baseline
-	if !hadTranscript {
-		from = 0
+// The three positives are separate fields rather than one enum because they
+// are separate claims and the operator's account differs: a turn began on it,
+// the receiver's queue handed it into a turn, or the receiver is holding it
+// behind a live turn. A queued payload is deliberately settling — it stops the
+// watch — because there is nothing further to wait for: the receiver has it,
+// and waiting past that point only invents a failure out of a healthy send.
+func fateEvidence(path string, baseline int64, hadTranscript bool, needle string) (TurnEvidence, bool) {
+	switch turnev.Scan(path, baseline, hadTranscript, needle) {
+	case turnev.FateUserMessage:
+		return TurnEvidence{
+			PayloadSeen: true,
+			Detail:      fmt.Sprintf("transcript %s gained a user message carrying this payload", path),
+		}, true
+	case turnev.FateEnteredTurn:
+		return TurnEvidence{
+			PayloadEnteredTurn: true,
+			Detail: fmt.Sprintf("transcript %s shows this payload leaving the receiver's queue into a turn "+
+				"(a queued message is replayed as an attachment and never becomes a user message)", path),
+		}, true
+	case turnev.FateQueued:
+		return TurnEvidence{
+			PayloadQueued: true,
+			Detail: fmt.Sprintf("transcript %s shows this payload enqueued behind a live turn "+
+				"(accepted by the receiver, not yet begun)", path),
+		}, true
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	if from > 0 {
-		if _, err := f.Seek(from, io.SeekStart); err != nil {
-			return false
-		}
-	}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), transcriptScanMax)
-	first := true
-	for sc.Scan() {
-		line := sc.Bytes()
-		if first && from > 0 {
-			// The baseline may have landed mid-record if a write was in
-			// flight. That partial line is an earlier record, never ours.
-			first = false
-			if !json.Valid(line) {
-				continue
-			}
-		}
-		first = false
-		if text, ok := authoredUserText(line); ok {
-			if strings.Contains(normalizeForMatch(text), needle) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// transcriptScanMax bounds a single transcript record. Records carrying large
-// tool results run big; a record longer than this is not a user message we
-// need to read, and refusing to buffer it keeps a runaway line from being an
-// allocation hazard.
-const transcriptScanMax = 8 * 1024 * 1024
-
-// authoredUserText extracts what was actually SAID to the agent in one
-// transcript record, and reports whether the record is such a message at all.
-//
-// This is the distinction that clause 1 turns on. A user-role record can carry
-// two very different things: text the sender authored, and tool_result blocks
-// holding whatever the agent's own tools returned — pane captures, file reads,
-// command output. An agent investigating a stuck send captures its own
-// composer, and the unsubmitted payload lands in its transcript inside a
-// tool_result. A raw file grep, or any check that reads a record's bytes
-// without asking which part of it was authored, calls that delivery. It is not
-// delivery; it is the agent looking at the message it never received.
-func authoredUserText(line []byte) (string, bool) {
-	var rec struct {
-		IsSidechain bool `json:"isSidechain"`
-		Message     *struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-	if err := json.Unmarshal(line, &rec); err != nil || rec.Message == nil {
-		return "", false
-	}
-	if rec.Message.Role != "user" {
-		return "", false
-	}
-	if rec.IsSidechain {
-		// A subagent's own conversation, not the agent we addressed.
-		return "", false
-	}
-	var asString string
-	if err := json.Unmarshal(rec.Message.Content, &asString); err == nil {
-		return asString, true
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(rec.Message.Content, &blocks); err != nil {
-		return "", false
-	}
-	var b strings.Builder
-	for _, blk := range blocks {
-		if blk.Type == "text" {
-			b.WriteString(blk.Text)
-			b.WriteString("\n")
-		}
-	}
-	if b.Len() == 0 {
-		return "", false
-	}
-	return b.String(), true
+	return TurnEvidence{}, false
 }
 
 // releaseUnbriefedSeat tears down a seat whose opening brief could not be
@@ -535,35 +467,6 @@ func (s *Server) releaseUnbriefedSeat(name string, existed bool) bool {
 	}
 	s.clearAgentTurnBegan(name)
 	return true
-}
-
-// transcriptSize reports the size of a durable transcript, and whether one
-// exists. An empty path (live-stream backend) is reported as absent.
-func transcriptSize(path string) (int64, bool) {
-	if strings.TrimSpace(path) == "" {
-		return 0, false
-	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		return 0, false
-	}
-	return fi.Size(), true
-}
-
-// transcriptMissing reports the born-stuck positive: this agent keeps a durable
-// transcript, and no such file exists.
-//
-// Read the two guards together. An empty path is a live-stream backend, which
-// has no transcript to be missing — reporting absence there would turn every
-// healthy Grok send into a born-stuck finding. A non-empty path with no file is
-// the real thing: the session was named, the pane is up, and nothing has ever
-// been submitted into it.
-func transcriptMissing(path string) bool {
-	if strings.TrimSpace(path) == "" {
-		return false
-	}
-	_, exists := transcriptSize(path)
-	return !exists
 }
 
 // describePayloadAbsent renders the operator-facing account of a window that

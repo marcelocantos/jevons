@@ -4,6 +4,7 @@
 package fleet
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // Provider migration (🎯T285).
@@ -192,26 +194,45 @@ func (f *Claudia) MarkHandoverDelivered(name string) error {
 //     session with a bare "Internal error" (observed migrating claude →
 //     grok before this was fixed).
 //
-// The record is marked delivered only once the turn actually completes,
-// so a failed hand-off stays pending for the next launch.
+// The record is marked delivered only once the seed is confirmed to have
+// reached the successor, so a failed hand-off stays pending for the next
+// launch.
 //
-// 🎯T416 — THIS IS THE FOURTH CALLER OF THE STUCK SEND PATH, and the only one
-// that was already telling the truth.
+// 🎯T416 — THIS IS THE FOURTH CALLER OF THE STUCK SEND PATH, and it was the
+// only one that failed CLOSED. That is not the same as being right, and an
+// earlier revision of this comment said it was.
 //
-// The other three (deliverToSender, deliverToOverseer, drainAgentSendQueue)
-// inferred success from proc.Send() returning nil and reported "Message sent"
-// for a payload that never left the composer. This one waits for the reply, so
-// a paste that is never submitted times out and says so, in handOffSeed's
-// ERROR line. On 2026-08-10 at 18:21 that line was emitted verbatim for
-// jv-t416-send-turn-begin — a true delivery failure, correctly reported, that
+// WHAT WAS TRUE. The other three (deliverToSender, deliverToOverseer,
+// drainAgentSendQueue) inferred success from proc.Send() returning nil and
+// reported "Message sent" for a payload that never left the composer. This one
+// waited for the reply, so an unsubmitted paste ran out the clock and said so
+// in handOffSeed's ERROR line — emitted verbatim at 18:21 on 2026-08-10 for
+// jv-t416-send-turn-begin, a true delivery failure, correctly reported, that
 // nobody read. Every instrument consulted that day lied; the one that was
 // honest was unconsulted.
 //
-// So this arm needs no honesty added, and the fix is to bring the other three
-// up to it rather than to touch it. What it still lacks is RECOVERY: "it stays
-// pending for the next launch" is why that worker sat dark for 43 minutes, and
-// a launch that may never come is not a retry. That half is 🎯T418 clause 5 and
-// is deliberately not done here.
+// WHY THAT MADE IT LOOK CORRECT, AND WHY IT IS NOT. It did not test whether a
+// turn began. It tested whether a REPLY COMPLETED inside defaultReplyTimeout
+// (fleet.go, applied in awaitReply). In the born-stuck case those agree, for
+// the wrong reason — a turn that never begins never completes — which is
+// exactly why the arm read as truthful. In the SLOW case they part company,
+// and it produced a false negative on the very worker it was seeding: the seed
+// was dispatched 08:57:04Z, a human flushed the composer, it landed as a user
+// message at 09:07:10Z, and this code had already logged `hand-off failed` at
+// 09:07:04Z — six seconds earlier. A predicate that condemns a delivery for
+// outlasting a timeout is not a delivery predicate.
+//
+// SO ALL FOUR CALLERS NOW LAND ON TURN-BEGIN, read from the receiver's own
+// transcript (internal/turnev). Not by widening defaultReplyTimeout — clause 10
+// forbids that as explicitly as it forbids widening the 45s window; the defect
+// is the predicate, not the length of the clock. Deliver is still what carries
+// the seed, because a bare Send breaks Grok's ACP request/response cycle, but
+// its error no longer decides the verdict on a backend that keeps a transcript.
+//
+// What this arm still lacks is RECOVERY: "it stays pending for the next launch"
+// is why that worker sat dark for 43 minutes, and a launch that may never come
+// is not a retry. That half is 🎯T418 clause 5 and is deliberately not done
+// here.
 func (f *Claudia) SeedSuccessor(name string) (handover.Pending, bool, error) {
 	if f == nil || f.handovers == nil {
 		return handover.Pending{}, false, nil
@@ -240,8 +261,34 @@ func (f *Claudia) SeedSuccessor(name string) (handover.Pending, bool, error) {
 // because that line IS the instrument: it is what an operator would have had to
 // read to catch the 18:21 hand-off failure at the time, and an instrument
 // nothing asserts on is one the next refactor quietly drops.
+//
+// THE VERDICT COMES FROM THE RECEIVER, not from Deliver's error (🎯T416). The
+// order matters and is the whole mechanism: snapshot the successor's transcript
+// BEFORE handing the seed over, then read the region appended since, so an
+// earlier copy of the same seed — a resumed migration, a re-launch — cannot
+// confirm this one.
+//
+// The observation window is however long the delivery attempt itself took. That
+// is deliberately not a new clock: one scan before, one scan after, and clause
+// 10's prohibition on widening either existing clock is untouched.
 func (f *Claudia) handOffSeed(name string, pending handover.Pending) {
-	if _, err := f.deliverSeed(name, pending.Seed()); err != nil {
+	seed := pending.Seed()
+	look := f.watchSeedArrival(name, seed)
+
+	_, err := f.deliverSeed(name, seed)
+
+	// A reply that came back is not the question, and a reply that timed out is
+	// not the answer: ask the receiver. arrived is false on a live-stream
+	// backend with no transcript to read, where Deliver's own error remains the
+	// best available evidence exactly as it is on the spawn path.
+	arrived, why, decidable := look()
+	if decidable {
+		if !arrived {
+			slog.Error("handover hand-off failed; it stays pending for the next launch",
+				"name", name, "err", handoffFailure(why, err))
+			return
+		}
+	} else if err != nil {
 		slog.Error("handover hand-off failed; it stays pending for the next launch",
 			"name", name, "err", err)
 		return
@@ -250,7 +297,71 @@ func (f *Claudia) handOffSeed(name string, pending handover.Pending) {
 		slog.Error("handover delivered but not marked — successor may be seeded twice",
 			"name", name, "err", err)
 	}
-	slog.Info("handover delivered", "detail", pending.Describe())
+	slog.Info("handover delivered", "detail", pending.Describe(), "evidence", why)
+}
+
+// handoffFailure renders why the seed is being called undelivered. It carries
+// the transcript finding first, because that is what decided it, and the reply
+// error only as corroboration — reversing the two is how a reply timeout came
+// to be read as a delivery failure in the first place.
+func handoffFailure(why string, err error) error {
+	if err == nil {
+		return errors.New(why)
+	}
+	return fmt.Errorf("%s (the delivery attempt also returned: %w)", why, err)
+}
+
+// watchSeedArrival snapshots the successor's transcript and returns a reader
+// that says whether the seed reached it.
+//
+// decidable=false means there was nothing to read — a live-stream backend, no
+// live process, or a seed too short to identify — and the caller must fall back
+// rather than treat "I could not look" as "it did not arrive". That distinction
+// is the same one TurnEvidence.Observed carries on the MCP side, and it exists
+// because an unmeasured send reported as a defect is itself a false accusation.
+func (f *Claudia) watchSeedArrival(name, seed string) func() (arrived bool, why string, decidable bool) {
+	undecidable := func() (bool, string, bool) { return false, "", false }
+	if f == nil {
+		return undecidable
+	}
+	path := strings.TrimSpace(f.successorTranscript(name))
+	needle := turnev.Needle(seed)
+	if path == "" || needle == "" {
+		return undecidable
+	}
+	baseline, had := turnev.Size(path)
+	return func() (bool, string, bool) {
+		fate := turnev.Scan(path, baseline, had, needle)
+		if fate.Delivered() {
+			return true, fmt.Sprintf("the successor's transcript %s carries the seed (%s)", path, fate), true
+		}
+		if fate == turnev.FateQueued {
+			// The successor has it and is mid-turn. Marking it delivered is
+			// right: the record exists to stop a successor coming up cold, and
+			// a seed sitting in the receiver's own queue will be drained by it.
+			return true, fmt.Sprintf("the successor's transcript %s shows the seed enqueued behind a live turn", path), true
+		}
+		if turnev.Missing(path) {
+			return false, fmt.Sprintf("no transcript was ever created at %s — the successor has never begun a turn", path), true
+		}
+		return false, fmt.Sprintf("transcript %s never gained the seed", path), true
+	}
+}
+
+// successorTranscript is where the successor records what it was told: the
+// live process's JSONL on the product path, overridable for the oracle.
+func (f *Claudia) successorTranscript(name string) string {
+	if f.seedTranscript != nil {
+		return f.seedTranscript(name)
+	}
+	if f.reg == nil {
+		return ""
+	}
+	ag := f.reg.Get(name)
+	if ag == nil {
+		return ""
+	}
+	return ag.JSONLPath()
 }
 
 // deliverSeed is how the seed reaches the successor: Deliver on the product

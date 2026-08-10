@@ -198,27 +198,45 @@ being wrong**. Do not reach for them:
   unsubmitted composer. It inverts: an ack to a message that never became a
   turn is evidence the message was lost.
 
-Two instruments are sound, and both were sitting unused:
+Three instruments are sound, and all three were sitting unused:
 
 - ✅ **Payload-match at user-message level.** Read the receiving session's JSONL
   and look for your payload in a record whose `message.role` is `user`, over
   authored content only (a plain string, or `text` blocks) — never
   `tool_result` blocks. Sound at the instant of reading (🎯T417 bounds it after).
+- ✅ **The receiver's own queue records.** In the same JSONL:
+  `{"type":"queue-operation","operation":"enqueue|dequeue|remove|popAll","content":…}`
+  and `{"type":"attachment","attachment":{"type":"queued_command","prompt":…}}`.
+  **enqueue** carrying your payload is a *positive* reading of the queued state;
+  a **remove/dequeue** or a **queued_command** attachment means it entered the
+  turn. It survives daemon restarts, because it is written by the receiver.
 - ✅ **Transcript-file absence.** A session's JSONL is created by its **first
   submit**, so a registry-named session with **no file at all** has never begun
   a turn. Cheap, needs no tmux, and it is a *positive* born-stuck test rather
   than a failure to observe. Use it **with** payload-match, never instead:
   file-exists says nothing about which message landed.
 
-Together they separate the two failure shapes: **file absent** ⇒ born-stuck,
-whole backlog unsubmitted; **file present but no payload** ⇒ either a mid-turn
+⚠️ **ABSENT AT USER-MESSAGE LEVEL IS NOT UNDELIVERED — READ THE QUEUE RECORDS
+FIRST.** A message the receiver accepts behind a live turn is replayed into that
+turn as a `queued_command` **attachment** and *never* becomes a user message. So
+payload-match alone reports absent for a message already being worked on. It did,
+live and twice, and hand-flushing on that reading would have delivered a second
+copy of a message that had already landed.
+
+Together they separate the failure shapes: **file absent** ⇒ born-stuck, whole
+backlog unsubmitted; **queue record present** ⇒ delivered (queued, or already in
+the turn); **file present, no payload and no queue record** ⇒ either a mid-turn
 read (🎯T417) or genuinely lost.
 
-The handover dispatcher (`fleet.SeedSuccessor`) is a fourth caller of this path
-and was always honest — it waits for the reply, so it fails closed and logs
-`handover hand-off failed; it stays pending for the next launch`. Read that
-line; it is a true delivery-failure signal. Its recovery — a seed parked until
-a launch that may never come — is 🎯T418.
+The handover dispatcher (`fleet.SeedSuccessor`) is a fourth caller of this path,
+and it now uses the same turn-begin evidence as the other three. It used to fail
+*closed* on a different predicate — whether the **reply completed** inside ten
+minutes — which looks right on a born-stuck agent (a turn that never begins
+never completes) and is wrong on a slow one: it condemned a seed at 09:07:04Z
+that landed at 09:07:10Z. Its fail-closed line,
+`handover hand-off failed; it stays pending for the next launch`, is still the
+one to read, and now says which transcript finding produced it. Its recovery —
+a seed parked until a launch that may never come — is 🎯T418.
 
 **Do not default to** Grok `spawn_subagent` (or worktree subagents that
 die with the parent). Those children are not first-class fleet entries,

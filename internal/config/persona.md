@@ -665,11 +665,16 @@ survive daemon restarts — you never lose one.
   Checking by hand, three instruments lie — transcript growth (a send's Enter
   submits the previous backlog), a raw grep of the session file (agents quote
   their own pane captures into their transcripts), and the receiver's behaviour
-  (an ack proves only that it SAW the text, off its own composer). Two work, and
-  are used together: payload-match at **user-message** level over authored
-  content only, and **transcript-file absence** — a session's JSONL is created
-  by its first submit, so a registry-named session with no file has never begun
-  a turn.
+  (an ack proves only that it SAW the text, off its own composer). Three work,
+  and are used together: payload-match at **user-message** level over authored
+  content only; the receiver's own **queue records** (`queue-operation` enqueue /
+  remove / dequeue, and the `queued_command` attachment); and **transcript-file
+  absence** — a session's JSONL is created by its first submit, so a
+  registry-named session with no file has never begun a turn. **Absent at
+  user-message level is not undelivered:** a message accepted behind a live turn
+  is replayed into that turn as an attachment and never becomes a user message,
+  so read the queue records before concluding anything is lost — flushing by
+  hand on that reading delivers a second copy.
 - **jevons_agent_stop** — Stop a running agent. It resumes later.
   Required: name.
 

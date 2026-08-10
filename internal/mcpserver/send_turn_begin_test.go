@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T416 — jevons_agent_send must not say "Message sent" for a payload that was
@@ -102,6 +104,36 @@ func (x *sessionLog) paneCapture(text string) {
 				"content":     "$ tmux capture-pane -p\n> " + text + "\n  [Pasted text #24]",
 			},
 		}},
+	})
+}
+
+// enqueued is what the receiving CLI writes when it accepts a message while a
+// turn is already running: queue bookkeeping in the same session file, carrying
+// the payload verbatim. Note what it is NOT — a user message. A check that
+// reads user messages only reports this payload absent, which is precisely the
+// false negative the overseer hit at 09:31:24Z against this target's own worker
+// and the daemon repeated twice more.
+func (x *sessionLog) enqueued(text string) {
+	x.append(map[string]any{
+		"type":      "queue-operation",
+		"operation": "enqueue",
+		"content":   text,
+	})
+}
+
+// drained is the queue handing a message into the turn: the remove record, and
+// the queued_command attachment the CLI writes as the turn takes it up. The
+// payload NEVER becomes a user message — this is the whole of the evidence
+// that it was delivered.
+func (x *sessionLog) drained(text string) {
+	x.append(map[string]any{
+		"type":      "queue-operation",
+		"operation": "remove",
+		"content":   text,
+	})
+	x.append(map[string]any{
+		"isSidechain": false,
+		"attachment":  map[string]any{"type": "queued_command", "prompt": text},
 	})
 }
 
@@ -297,7 +329,7 @@ func TestPayloadQuotedInAPaneCaptureIsNotDelivery(t *testing.T) {
 	// record whose role is "user". Asserting that is the point — without it
 	// this test would also pass against a grep that merely happened not to
 	// match, and would stop killing the mutant the moment the fixture drifted.
-	needle := payloadNeedle(payload)
+	needle := turnev.Needle(payload)
 	if needle == "" {
 		t.Fatal("fixture payload is not distinctive enough to be looked for")
 	}
@@ -371,7 +403,7 @@ func TestNoTranscriptFileIsAPositiveBornStuckFinding(t *testing.T) {
 	if err == nil {
 		t.Fatal("a born-stuck agent — no transcript at all — was reported as delivered")
 	}
-	if _, exists := transcriptSize(tr.path); exists {
+	if _, exists := turnev.Size(tr.path); exists {
 		t.Fatal("fixture created a transcript; it is not born-stuck")
 	}
 }
@@ -496,6 +528,117 @@ func TestDrainedMessageThatSticksIsNotRequeuedAndIsSurfaced(t *testing.T) {
 		if !strings.Contains(note, want) {
 			t.Errorf("fleet-health note missing %q: %q", want, note)
 		}
+	}
+}
+
+// ── EXERCISED (C): the receiver's own queue records ────────────────────
+
+// The false negative that payload-match-at-user-message-level cannot see, and
+// it is the ORDINARY case rather than an edge.
+//
+// A message accepted behind a live turn is replayed into that turn as a
+// queued_command attachment and NEVER becomes a user message. Read user
+// messages only — correct against an agent quoting its own pane capture — and
+// a message the receiver has already begun working on reads as absent. Live,
+// twice: the overseer payload-matched a correction to this target's worker at
+// 09:31:24Z and got ABSENT for a message the queue had already drained, and
+// the daemon logged delivered_unconfirmed twice more, 21 seconds after the fact.
+//
+// A raw-file grep would also pass this fixture, which is why the mutant it
+// kills is stated precisely: the excluded instrument is a grep that accepts a
+// payload QUOTED in a tool_result (still killed, above); the included one reads
+// the receiver's own queue bookkeeping.
+func TestDrainedQueuedPayloadIsReportedBegunThoughNoUserMessageCarriesIt(t *testing.T) {
+	tr := newSessionLog(t)
+	tr.submitted("the turn that was running when this arrived")
+	payload := strings.Repeat(brief, 20)
+	agent := &sendingAgent{alive: true, onPaste: func(text string) {
+		// The receiver accepts it behind the live turn, then drains it in.
+		tr.enqueued(text)
+		tr.drained(text)
+	}}
+	s, _ := sendFixture(t, agent, tr)
+	// No flight record: this daemon has restarted since the turn began, which
+	// is exactly when the old discriminator fell through to "unconfirmed".
+	res, err := s.deliverByName("w", payload, OriginAgent, false)
+	if err != nil {
+		t.Fatalf("a payload the receiver drained into its turn was reported failed: %v", err)
+	}
+	if res.Status != "sent" {
+		t.Fatalf("status=%q want sent — the receiver's queue records show it entered the turn", res.Status)
+	}
+	// The discriminator must be the queue records, not a lucky user message.
+	if strings.Contains(tr.raw(), `"role":"user","content":"Execute`) {
+		t.Fatal("fixture wrote a user message; it is no longer the queued case")
+	}
+}
+
+// The other half, and the one that stops instrument (C) from being a rubber
+// stamp: an enqueue with no drain is QUEUED, not begun. The receiver has it and
+// has not started on it — reporting that as sent would be the same lie one step
+// later, and reporting it as not-submitted would accuse a healthy send.
+func TestEnqueuedPayloadIsReportedQueuedWithoutAnyFlightRecord(t *testing.T) {
+	tr := newSessionLog(t)
+	tr.submitted("the turn that is currently running")
+	agent := &sendingAgent{alive: true, onPaste: func(text string) { tr.enqueued(text) }}
+	s, _ := sendFixture(t, agent, tr)
+	// Deliberately no flight record — the fact comes off the receiver's disk.
+	res, err := s.deliverByName("w", strings.Repeat(brief, 20), OriginAgent, false)
+	if err != nil {
+		t.Fatalf("an enqueued message must not be reported as a failure: %v", err)
+	}
+	if res.Status != "queued" {
+		t.Fatalf("status=%q want queued — enqueue is a POSITIVE reading of the queued state", res.Status)
+	}
+}
+
+// ── EXCLUDED (i) on the START path: 🎯T387's licence, revoked ───────────
+
+// deliverStartPrompt used to confirm with a growth-only watch, licensed by "a
+// seat this daemon just launched has an empty composer and an empty transcript".
+// The spawn path also RESUMES seats, and a resumed session's file already
+// exists and is written to at startup.
+//
+// Live counter-example this fixture is built from: this target's own worker was
+// stopped mid-turn and restarted onto the same session, which already held 158
+// lines. The daemon logged prompt_delivered=true while the brief sat in the
+// composer as `[Pasted text #1 +10 lines]`, and the transcript gained nothing
+// for four minutes until a human pressed Enter.
+func TestResumedSeatGrowthDoesNotConfirmAStartPromptThatStuck(t *testing.T) {
+	tr := newSessionLog(t)
+	tr.submitted("158 lines of an earlier session, resumed")
+	agent := &sendingAgent{alive: true, onPaste: func(string) {
+		// Startup writes on a resumed session: the agent stirs, the file grows,
+		// and the brief is still sitting in the composer.
+		tr.replied("resuming; reading my previous context")
+	}}
+	s, _ := sendFixture(t, agent, tr)
+
+	err := s.deliverStartPrompt("jv-t416-worker", "Continue 🎯T416: the fourth caller's predicate. Local master only.")
+	if err == nil {
+		t.Fatal("a start prompt that never left the composer was confirmed delivered — mutant (i) is alive on the start path")
+	}
+	if !strings.Contains(err.Error(), "start prompt not delivered") {
+		t.Fatalf("failure does not name itself: %v", err)
+	}
+	if s.agentHasTurnBegan("jv-t416-worker") {
+		t.Fatal("turn-began marked from growth that was not this payload")
+	}
+}
+
+// And its over-broadness pair: the same path must still confirm a start prompt
+// that DID become a turn, or every spawn fails closed and the fleet stops.
+func TestStartPromptThatBecomesATurnIsStillConfirmed(t *testing.T) {
+	tr := newSessionLog(t)
+	tr.submitted("an earlier session, resumed")
+	agent := &sendingAgent{alive: true, onPaste: func(text string) { tr.submitted(text) }}
+	s, _ := sendFixture(t, agent, tr)
+
+	if err := s.deliverStartPrompt("jv-t416-worker", "Continue 🎯T416: the fourth caller's predicate. Local master only."); err != nil {
+		t.Fatalf("a delivered start prompt was refused: %v", err)
+	}
+	if !s.agentHasTurnBegan("jv-t416-worker") {
+		t.Fatal("turn-began not marked for a start prompt that reached the transcript")
 	}
 }
 

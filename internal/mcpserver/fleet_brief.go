@@ -78,13 +78,23 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   BEHAVIOUR (an ack proves it SAW the text, and an agent can read its own
   unsubmitted composer — an ack to a message that never became a turn is
   evidence the message was LOST).
-- The two that work, and use them together: (1) PAYLOAD-MATCH AT USER-MESSAGE
+- The three that work, and use them TOGETHER: (1) PAYLOAD-MATCH AT USER-MESSAGE
   LEVEL in the receiving session's JSONL, over authored content only (a plain
-  string, or text blocks — never tool_result); (2) TRANSCRIPT-FILE ABSENCE — a
+  string, or text blocks — never tool_result); (2) THE RECEIVER'S OWN QUEUE
+  RECORDS in that same file — {"type":"queue-operation","operation":"enqueue|
+  dequeue|remove|popAll","content":…} and {"type":"attachment","attachment":
+  {"type":"queued_command","prompt":…}}; (3) TRANSCRIPT-FILE ABSENCE — a
   session's JSONL is created by its first submit, so a registry-named session
-  with no file at all has never begun a turn. File absent ⇒ born-stuck, whole
-  backlog unsubmitted. File present but no payload ⇒ mid-turn read (🎯T417) or
-  genuinely lost. File-exists alone says nothing about WHICH message landed.
+  with no file at all has never begun a turn.
+- ABSENT AT USER-MESSAGE LEVEL IS NOT UNDELIVERED. A message accepted behind a
+  live turn is replayed into it as a queued_command ATTACHMENT and never becomes
+  a user message, so payload-match alone reports absent for a message already
+  being worked on — observed live twice. Read the queue records BEFORE
+  concluding a message is lost: hand-flushing on that reading delivers a second
+  copy. File absent ⇒ born-stuck, whole backlog unsubmitted. Queue record
+  present ⇒ delivered (queued, or already in the turn). File present with
+  neither ⇒ mid-turn read (🎯T417) or genuinely lost. File-exists alone says
+  nothing about WHICH message landed.
 
 ## Fleet spawn (🎯T78)
 - Create child work via jevons_agent_start / jevons_thread_spawn, not Grok spawn_subagent.
