@@ -221,6 +221,36 @@ already caught a concurrent edit that dropped the `index.html` script tag.
 implementations with different durability" to a **one-line choice of store per
 surface** — so the owner's ruling is now a parameter, not another rewrite.
 
+**`1244b44` — the sidebar's shadow copies deleted: alias, not lookalike.**
+
+Every sidebar composer entry point in `agent_transcript.js` and `index.html`
+carried a local *"if the widget is missing, do it myself"* fallback. Nominally
+shared, materially forked — and the copies only ran when the widget failed to
+load, i.e. exactly when nobody could see them. They had already drifted:
+
+- `AgentTranscript.linesFingerprint` omitted `when`, so the host could call a
+  re-timestamped line set unchanged while the widget repainted it;
+- the last composer-visibility rung showed the composer **for the overseer** —
+  silently deciding EC-6 in the opposite direction to the refusal at
+  `conversation_widget.js:180`;
+- `index.html`'s draft-empty chain named `sidebarDraftIsEmpty`, which does not
+  exist, so it always fell through to a local `trim()`.
+
+Each entry point is now a binding to the `ConversationWidget` function of the
+same concept. A missing widget is a **loud throw naming the export**, never a
+quiet second implementation.
+
+Oracle: five tests in `web/scripts/agent_transcript_test.js` (in `make test`).
+Three assert identity — the alias returns the widget's result verbatim, density
+is a *parameter* to the one widget, absence throws. Two are **ratchets**: no
+fallback branch may re-grow in `agent_transcript.js`, and `index.html` may hold
+zero `typeof ConversationWidget !== 'undefined' &&` ternary guards — that guard
+shape *is* the fork's tell.
+
+No exception was locked. The density assertion pins only that the sidebar
+*asks* the widget for compact (EC-1's "param-only" reading); what compact then
+means for the chord set is EC-2, still open and untouched.
+
 ### What is still blocked on owner EC rulings
 
 The remaining forks all bottom out in `wireComposer: false` (F-UI-1), and
