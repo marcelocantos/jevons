@@ -51,12 +51,32 @@ func installAgent(repo string, port int, state string) int {
 		return 1
 	}
 
+	// 🎯T434: the job's PATH is written into the plist, because launchd's
+	// own reaches neither the toolchain the restart script builds its
+	// helpers with nor the blurter that would say so if it could not.
+	agentPath, missing := supervise.AgentPATH(exec.LookPath, supervise.RestartTools)
+	for _, tool := range missing {
+		if tool == "go" {
+			// Installing anyway would produce a supervisor that cannot
+			// restart anything the moment bin/ is cleaned, and cannot
+			// report that either. Refuse while a human is watching.
+			fmt.Fprintf(os.Stderr, "jevons-watchdog: no `go` on this PATH (%s) — "+
+				"the watchdog builds the restart script's helpers with it, so a job installed "+
+				"now would refuse every restart. Put the toolchain on PATH and re-run.\n",
+				os.Getenv("PATH"))
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "jevons-watchdog: warning: no %s on this PATH — "+
+			"the watchdog will restart the daemon but cannot tell you it happened\n", tool)
+	}
+
 	spec := supervise.AgentSpec{
 		Binary:   binary,
 		Repo:     repo,
 		StateDir: state,
 		Port:     port,
 		LogPath:  supervise.AgentLogPath(state),
+		PathEnv:  agentPath,
 	}
 	if err := os.MkdirAll(supervise.Dir(state), 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "jevons-watchdog: %v\n", err)
@@ -68,16 +88,18 @@ func installAgent(repo string, port int, state string) int {
 		return 1
 	}
 	fmt.Printf("wrote %s\n", path)
+	fmt.Printf("  PATH %s\n", agentPath)
 
-	domain := fmt.Sprintf("gui/%d", os.Getuid())
-	// bootout first so a reinstall picks up new arguments; a job that is
-	// not loaded makes this fail, which is not an error here.
-	_ = exec.Command("launchctl", "bootout", domain+"/"+supervise.AgentLabel).Run()
-	if out, err := exec.Command("launchctl", "bootstrap", domain, path).CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "jevons-watchdog: launchctl bootstrap: %v: %s\n", err, strings.TrimSpace(string(out)))
+	// One implementation of "make launchd hold this job", shared with the
+	// daemon's reinstatement path, so the two cannot drift into different
+	// definitions of loaded. It also bootstraps before it boots out, so a
+	// failed install leaves the working job alone instead of leaving the
+	// machine unsupervised (see supervise.LoadAgent).
+	if err := supervise.LoadAgent(path, supervise.AgentLabel); err != nil {
+		fmt.Fprintf(os.Stderr, "jevons-watchdog: %v\n", err)
 		return 1
 	}
-	out, err := exec.Command("launchctl", "print", domain+"/"+supervise.AgentLabel).CombinedOutput()
+	out, err := exec.Command("launchctl", "print", supervise.AgentDomain()+"/"+supervise.AgentLabel).CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "jevons-watchdog: loaded, but launchctl print failed: %v\n", err)
 		return 1
@@ -99,8 +121,10 @@ func uninstallAgent() int {
 		fmt.Fprintf(os.Stderr, "jevons-watchdog: %v\n", err)
 		return 1
 	}
-	domain := fmt.Sprintf("gui/%d", os.Getuid())
-	_ = exec.Command("launchctl", "bootout", domain+"/"+supervise.AgentLabel).Run()
+	if err := supervise.UnloadAgent(supervise.AgentLabel); err != nil {
+		fmt.Fprintf(os.Stderr, "jevons-watchdog: %v\n", err)
+		return 1
+	}
 	path := supervise.AgentPlistPath(home)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "jevons-watchdog: %v\n", err)

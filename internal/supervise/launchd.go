@@ -32,6 +32,11 @@ type AgentSpec struct {
 	Port int
 	// LogPath is where launchd sends the job's output.
 	LogPath string
+	// PathEnv is the PATH the job runs with (🎯T434). Empty leaves the
+	// plist silent, which means launchd's default — and a restart that
+	// cannot find the Go toolchain it builds its helpers with. Install
+	// fills this from AgentPATH.
+	PathEnv string
 }
 
 // AgentPlistPath is where the LaunchAgent lives for the current user.
@@ -69,6 +74,14 @@ func PlistXML(spec AgentSpec) string {
 		b.WriteString("        <string>" + esc(a) + "</string>\n")
 	}
 	b.WriteString("    </array>\n")
+	// 🎯T434: without this the job runs on LaunchdDefaultPATH, where there
+	// is no `go` to build the restart script's helpers with and no blurter
+	// to tell the owner that the restart therefore refused.
+	if spec.PathEnv != "" {
+		b.WriteString("    <key>EnvironmentVariables</key>\n    <dict>\n")
+		b.WriteString("        <key>PATH</key>\n        <string>" + esc(spec.PathEnv) + "</string>\n")
+		b.WriteString("    </dict>\n")
+	}
 	fmt.Fprintf(&b, "    <key>StartInterval</key>\n    <integer>%d</integer>\n", AgentInterval)
 	// RunAtLoad so a login, or an install, checks immediately instead of
 	// leaving a dead daemon dead for the first interval.

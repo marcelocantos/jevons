@@ -110,6 +110,13 @@ func run() int {
 		notify(d, *port, "")
 	}
 
+	// 🎯T405: the heartbeat, written by every cycle including the quiet
+	// ones. It is the only evidence anyone outside this process has that
+	// the supervisor ran at all — the daemon reads it to decide whether
+	// it still has a supervisor, and on 2026-08-10 nothing did, so a job
+	// that launchd had silently stopped holding went unnoticed for five
+	// days behind a plist that looked perfectly healthy on disk.
+	next.LastProbe = now
 	if err := supervise.SaveState(dir, next); err != nil {
 		logf("ERROR saving state: %v", err)
 		return 1
@@ -156,13 +163,28 @@ func restart(repo string, port int) string {
 	if bin := filepath.Join(repo, "bin", "jevonsd"); executable(bin) {
 		cmd.Env = append(cmd.Env, "JEVONS_RESTART_SKIP_MAKE=1")
 	}
+	// 🎯T434: a restart that cannot succeed must say why, not just that it
+	// failed. The script fails closed when it cannot build the helpers it
+	// re-execs through, and the reason it cannot is almost always that
+	// launchd handed this process a PATH with no toolchain on it — which
+	// the owner can only act on if it reaches them.
+	blocker := supervise.RestartBlocker(repo, exec.LookPath, os.Getenv("PATH"))
+	if blocker != "" {
+		logf("restart is blocked before it starts: %s", blocker)
+	}
+
 	out, err := cmd.CombinedOutput()
 	logf("restart-daily-jevonsd --force exited: %v", errText(err))
 	for _, line := range lastLines(string(out), 20) {
 		logf("  | %s", line)
 	}
 	if err != nil {
-		return fmt.Sprintf("The restart script failed (%s); the watchdog will keep trying.", errText(err))
+		detail := fmt.Sprintf("The restart script failed (%s): %s The watchdog will keep trying.",
+			errText(err), refusal(string(out)))
+		if blocker != "" {
+			detail += " " + blocker
+		}
+		return detail
 	}
 	if !probe(port) {
 		return "The restart script succeeded but the port is still not serving."
@@ -252,6 +274,24 @@ func errText(err error) string {
 		return "ok"
 	}
 	return err.Error()
+}
+
+// refusal is the last thing the restart script said before giving up —
+// the one line worth putting in front of the owner (🎯T434). Its own
+// timestamped log prefix is dropped: what matters is the sentence.
+func refusal(out string) string {
+	lines := lastLines(out, 20)
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if _, rest, ok := strings.Cut(line, "restart-daily-jevonsd: "); ok {
+			return strings.TrimSpace(rest)
+		}
+		return line
+	}
+	return "it said nothing"
 }
 
 func lastLines(s string, n int) []string {

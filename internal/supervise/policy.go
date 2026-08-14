@@ -109,6 +109,15 @@ type State struct {
 	// Escalated records that the owner has been told recovery is not
 	// taking — the second and last notice of any single outage.
 	Escalated bool `json:"escalated,omitempty"`
+	// LastProbe is when the watchdog last completed a cycle: the
+	// supervisor's own heartbeat, and the only evidence anyone else has
+	// that it is running (🎯T405). Written by every cycle including the
+	// healthy ones, which is why it lives here rather than in the
+	// outage-shaped fields above — a supervisor that only left a trace
+	// when something was wrong could not be distinguished from one that
+	// was not there. Decide never sets it; the effect layer does, so the
+	// policy stays a pure function of what was observed.
+	LastProbe time.Time `json:"last_probe,omitzero"`
 }
 
 // Down reports whether an outage is currently open.
