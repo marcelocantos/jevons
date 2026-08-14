@@ -72,6 +72,14 @@ const (
 	// not be started, or died in a way that yields no code). Renders as
 	// "exit=unknown" and is never a green — 🎯T396 acceptance 3.
 	VerdictUnknown Verdict = "UNKNOWN"
+	// VerdictVoid: the record exists but attests nothing, and has been moved
+	// out of the citable store (🎯T441). A run is voided when what it measured
+	// was not the gate its name suggests — the archetype is a mistyped
+	// subcommand that ran an unrelated program off PATH and recorded the
+	// result under a plausible-looking name. Never a green, and deliberately
+	// not the same answer as "no such record": the run happened, it just does
+	// not attest what a reader would take it to attest.
+	VerdictVoid Verdict = "VOID"
 )
 
 // IsGreen reports whether v may be cited as a pass. Exactly one verdict may.

@@ -58,8 +58,21 @@ type Record struct {
 	// by a signal that yields no code).
 	StatusNote string `json:"status_note,omitempty"`
 
+	// Explicit records that the run was asked for in the separated form
+	// (`gate -- cmd args`), which since 🎯T441 is the only form that runs a
+	// command at all. Its absence therefore dates a record to the binary that
+	// would run anything typed at it, which is what SubcommandGuessReason
+	// needs in order to tell a mistyped subcommand from a deliberate gate.
+	Explicit bool `json:"explicit,omitempty"`
+
 	Verdict   Verdict   `json:"verdict"`
 	Anomalies []Anomaly `json:"anomalies,omitempty"`
+
+	// VoidReason and VoidedAt are set when a record is moved to the voided
+	// store (🎯T441). They are additive: a record written before voiding
+	// existed unmarshals with both zero, which is what every real gate run is.
+	VoidReason string    `json:"void_reason,omitempty"`
+	VoidedAt   time.Time `json:"voided_at,omitzero"`
 
 	OutputBytes  int    `json:"output_bytes"`
 	OutputSHA256 string `json:"output_sha256"`
@@ -116,6 +129,9 @@ func (r *Record) Summary() string {
 	for _, a := range r.Anomalies {
 		fmt.Fprintf(&b, "\n  output contradicts a pass (%s): %s", a.Marker, a.Line)
 	}
+	if r.VoidReason != "" {
+		fmt.Fprintf(&b, "\n  voided: %s", r.VoidReason)
+	}
 	if r.OutputPath != "" {
 		fmt.Fprintf(&b, "\n  output: %s", r.OutputPath)
 	}
@@ -125,7 +141,7 @@ func (r *Record) Summary() string {
 // attestationRe parses the line back out of a finish report. Tolerant of
 // surrounding prose and markdown, strict about the fields.
 var attestationRe = regexp.MustCompile(
-	`GATE\s+(\S+)\s+exit=(\S+)\s+(GREEN|RED|SUSPECT|UNKNOWN)\s+id=([0-9a-zA-Z]+)`)
+	`GATE\s+(\S+)\s+exit=(\S+)\s+(GREEN|RED|SUSPECT|UNKNOWN|VOID)\s+id=([0-9a-zA-Z]+)`)
 
 // Attestation is a claim found in a report: what the worker says a gate did.
 // Whether it is true is a question for the Store.
@@ -184,6 +200,14 @@ func OpenStore(root string) (*Store, error) {
 	return &Store{Root: root}, nil
 }
 
+// VoidedDir is the subdirectory holding records that attest nothing. It is a
+// subdirectory rather than a deletion for two reasons: Recent skips
+// directories, so a voided record leaves the citable store the moment it is
+// moved; and this package's whole posture is that evidence must not quietly
+// disappear (see Load, which treats a malformed record as a hard error rather
+// than a silent miss). A voided run is still a thing that happened.
+const VoidedDir = "voided"
+
 func (s *Store) recordPath(id string) string {
 	return filepath.Join(s.Root, id+".json")
 }
@@ -191,6 +215,14 @@ func (s *Store) recordPath(id string) string {
 // LogPath is where a run's captured output lives.
 func (s *Store) LogPath(id string) string {
 	return filepath.Join(s.Root, id+".log")
+}
+
+func (s *Store) voidedRecordPath(id string) string {
+	return filepath.Join(s.Root, VoidedDir, id+".json")
+}
+
+func (s *Store) voidedLogPath(id string) string {
+	return filepath.Join(s.Root, VoidedDir, id+".log")
 }
 
 // Save writes rec atomically. The caller has already written the log.
@@ -226,6 +258,96 @@ func (s *Store) Load(id string) (*Record, bool, error) {
 	return &rec, true, nil
 }
 
+// LoadVoided returns a record that was voided, or ok=false when id names no
+// voided run. Kept separate from Load so that everything reading the citable
+// store — Recent, `gate last`, `gate show` — has to ask for a voided record by
+// name rather than receive one by accident.
+func (s *Store) LoadVoided(id string) (*Record, bool, error) {
+	if s == nil || id == "" {
+		return nil, false, nil
+	}
+	blob, err := os.ReadFile(s.voidedRecordPath(id))
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("gate load voided %s: %w", id, err)
+	}
+	var rec Record
+	if err := json.Unmarshal(blob, &rec); err != nil {
+		return nil, false, fmt.Errorf("gate load voided %s: malformed record: %w", id, err)
+	}
+	return &rec, true, nil
+}
+
+// Void moves a record out of the citable store, stamping it VOID with the
+// reason it attests nothing (🎯T441).
+//
+// The reason is required. A record that disappears from `gate last` with no
+// stated cause is indistinguishable from evidence being tidied away, which is
+// the failure this package exists to make hard — so voiding is a deliberate,
+// self-describing act or it does not happen.
+//
+// The quarantined copy is written before the citable one is removed. A crash
+// between the two leaves the record in both places, which is visible and
+// recoverable; the other order would lose it.
+func (s *Store) Void(id, reason string, now func() time.Time) (*Record, error) {
+	if s == nil {
+		return nil, fmt.Errorf("gate void: no store")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("gate void %s: a reason is required", id)
+	}
+	if now == nil {
+		now = time.Now
+	}
+	rec, ok, err := s.Load(id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		if _, voided, verr := s.LoadVoided(id); verr == nil && voided {
+			return nil, fmt.Errorf("gate void %s: already voided", id)
+		}
+		return nil, fmt.Errorf("gate void %s: no such record in %s", id, s.Root)
+	}
+
+	rec.Verdict = VerdictVoid
+	rec.VoidReason = strings.TrimSpace(reason)
+	rec.VoidedAt = now()
+	// Point at where the log is about to be, not where it was. A quarantined
+	// record whose stored OutputPath still names the citable store sends its
+	// one remaining reader — someone asking what the run actually did — to a
+	// file that is no longer there. Keyed on the log existing rather than on
+	// the field being set, so a record that lost track of its own output still
+	// ends up pointing at it.
+	if _, err := os.Stat(s.LogPath(id)); err == nil {
+		rec.OutputPath = s.voidedLogPath(id)
+	} else {
+		rec.OutputPath = ""
+	}
+
+	if err := os.MkdirAll(filepath.Join(s.Root, VoidedDir), 0o755); err != nil {
+		return nil, fmt.Errorf("gate void %s: %w", id, err)
+	}
+	blob, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("gate void %s: %w", id, err)
+	}
+	if err := writeAtomic(s.voidedRecordPath(id), append(blob, '\n'), 0o644); err != nil {
+		return nil, err
+	}
+	// The log moves with the record: the output is the only remaining way to
+	// see what the mistyped run actually did.
+	if err := os.Rename(s.LogPath(id), s.voidedLogPath(id)); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("gate void %s: move log: %w", id, err)
+	}
+	if err := os.Remove(s.recordPath(id)); err != nil {
+		return nil, fmt.Errorf("gate void %s: %w", id, err)
+	}
+	return rec, nil
+}
+
 // Recent returns the most recent limit records, newest first.
 func (s *Store) Recent(limit int) ([]*Record, error) {
 	if s == nil {
@@ -259,8 +381,18 @@ func (s *Store) Recent(limit int) ([]*Record, error) {
 
 // Lookup adapts a store to the FlagFalseGreen signature. A store that errors
 // answers "no such record" rather than vouching for anything.
+//
+// Voided records are looked up too, and this is the point of voiding rather
+// than deleting: a report citing one gets flagged for what is actually wrong
+// with it — the run attested nothing — instead of the weaker and slightly
+// false "no such record exists here". The record carries VerdictVoid, so no
+// reader can mistake it for a pass.
 func (s *Store) Lookup(id string) (*Record, bool) {
 	rec, ok, err := s.Load(id)
+	if err == nil && ok {
+		return rec, true
+	}
+	rec, ok, err = s.LoadVoided(id)
 	if err != nil || !ok {
 		return nil, false
 	}

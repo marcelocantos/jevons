@@ -33,6 +33,12 @@ type RunArgs struct {
 	// Store persists the record and the captured log. Nil runs the gate
 	// without leaving evidence, which is only ever right in tests.
 	Store *Store
+	// Explicit says the caller asked for this run in the separated form
+	// (`gate -- cmd args`) rather than being handed an argv from somewhere
+	// looser. The CLI sets it because the allowlist leaves no other way to
+	// reach a run; it is recorded so a later sweep can tell a deliberate gate
+	// from a record minted by the binary that had no allowlist (🎯T441).
+	Explicit bool
 	// Now defaults to time.Now; tests pin it.
 	Now func() time.Time
 }
@@ -63,10 +69,11 @@ func Run(args *RunArgs) (*Record, error) {
 
 	started := now()
 	rec := &Record{
-		Name:    gateName(args.Name, args.Command),
-		Command: append([]string(nil), args.Command...),
-		Dir:     args.Dir,
-		Started: started,
+		Name:     gateName(args.Name, args.Command),
+		Command:  append([]string(nil), args.Command...),
+		Dir:      args.Dir,
+		Started:  started,
+		Explicit: args.Explicit,
 	}
 	rec.ID = newID(rec.Command, started)
 
