@@ -190,18 +190,47 @@ func hasCompletionClaim(lower string) bool {
 // way; the oracle-evidence and accepted-risk markers stay substring matches,
 // where a partial hit merely means the report gets more scrutiny, not less.
 func containsWordish(lower, phrase string) bool {
+	return indexWordish(lower, phrase) >= 0
+}
+
+// indexWordish is containsWordish returning where the phrase matched, or -1.
+func indexWordish(lower, phrase string) int {
 	for i := 0; i+len(phrase) <= len(lower); {
 		j := strings.Index(lower[i:], phrase)
 		if j < 0 {
-			return false
+			return -1
 		}
 		start, end := i+j, i+j+len(phrase)
 		if !wordRuneBefore(lower, start) && !wordRuneAt(lower, end) {
-			return true
+			return start
 		}
 		i = start + 1
 	}
-	return false
+	return -1
+}
+
+// FindCompletionClaim locates the completion word that makes report read as a
+// claim, and the span of text around it (🎯T439). Reported so a reap can say in
+// the lifecycle log which words it fired on, rather than leaving a worker's
+// disappearance from the fleet unexplained.
+//
+// Diagnostic only: no decision is taken from this, so a miss costs an empty
+// span in a log line and nothing more.
+func FindCompletionClaim(report string) (marker, span string, offset int, ok bool) {
+	lower := asciiLower(report)
+	best, at := "", -1
+	for _, m := range completionClaimMarkers {
+		i := indexWordish(lower, m)
+		if i < 0 || (at >= 0 && i >= at) {
+			continue
+		}
+		best, at = m, i
+	}
+	if at < 0 {
+		return "", "", 0, false
+	}
+	span, offset = excerptAround(report, at, at+len(best))
+	return best, span, offset, true
 }
 
 func wordRuneBefore(s string, i int) bool {

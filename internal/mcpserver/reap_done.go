@@ -135,9 +135,8 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		// visible in the lifecycle stream rather than silently absent.
 		if strings.HasPrefix(reason, "awaits_overseer_") &&
 			hasCompletionClaim(strings.ToLower(report)) {
-			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", map[string]any{
-				"name": name, "reason": reason,
-			})
+			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped",
+				reapDecisionFields(name, reason, report))
 			slog.Info("T395 kept agent that asked rather than finished",
 				"agent", name, "reason", reason)
 		}
@@ -145,13 +144,42 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	}
 	if err := killSubtree(s.registry, name); err != nil {
 		slog.Warn("T165/T195 auto-reap failed", "agent", name, "reason", reason, "err", err)
-		s.logLifecycle(compAgentLifecycle, "reap_done", "error", map[string]any{
-			"name": name, "reason": reason, "err": err.Error(),
-		})
+		fields := reapDecisionFields(name, reason, report)
+		fields["err"] = err.Error()
+		s.logLifecycle(compAgentLifecycle, "reap_done", "error", fields)
 		return
 	}
-	s.logLifecycle(compAgentLifecycle, "reap_done", "ok", map[string]any{
-		"name": name, "reason": reason,
-	})
+	s.logLifecycle(compAgentLifecycle, "reap_done", "ok",
+		reapDecisionFields(name, reason, report))
 	slog.Info("auto-reaped finished work agent", "agent", name, "reason", reason)
+}
+
+// reapDecisionFields is the lifecycle-log evidence for a reap decision (🎯T439):
+// which classifier fired, on which phrase, and the span of report text around
+// it. A reap removes an agent from the fleet irreversibly, and jv-t435 showed
+// what the absence of this costs — a worker that had asked for its brief
+// vanished as bare_done_completion, and the log recorded only that reason, so
+// nothing in the record said which words had been read as a finish.
+//
+// The span reads differently either way round, and both are worth having: on a
+// reap it is the completion phrase that fired, on a skip it is the ask that
+// vetoed. Diagnostic only — nothing decides on these fields — so a missing span
+// weakens a log line and never a decision.
+func reapDecisionFields(name, reason, report string) map[string]any {
+	fields := map[string]any{"name": name, "reason": reason}
+	if ask := ClassifyReportAskDetail(report); ask.Class != AskNone {
+		fields["ask_class"] = ask.Class.String()
+		if ask.Marker != "" {
+			fields["ask_marker"] = ask.Marker
+		}
+		fields["report_span"] = ask.Span
+		fields["report_offset"] = ask.Offset
+		return fields
+	}
+	if marker, span, offset, ok := FindCompletionClaim(report); ok {
+		fields["claim_marker"] = marker
+		fields["report_span"] = span
+		fields["report_offset"] = offset
+	}
+	return fields
 }
