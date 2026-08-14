@@ -68,15 +68,53 @@ func main() {
 }
 `
 
+// 🎯T442 — the thrash window is injected, never inferred from real time.
+//
+// The window is a comparison between two clock readings: the epoch the script
+// stamped after its last successful restart, and `date +%s` when the next
+// caller asks. Read from the real clock, the gap is whatever the machine took
+// to get from one to the other — four no-op script runs and a `go build`, here
+// — so "inside a 6s window" was a statement about this laptop's load, and the
+// ratchet went red once at HEAD (gate cde5b3e4) with the restart log showing a
+// perfectly healthy bounce. A longer window would only lower the firing rate;
+// the reading has to stop being a race.
+//
+// So the harness owns the clock: a `date` shim first on the script's PATH
+// answers `+%s` from a file the test writes, and delegates every other format
+// (the log timestamps) to the real thing. Elapsed is then exactly what the
+// test set, however slow the machine is, and the assertions below can name the
+// arithmetic — "2s ago (min 6s); waiting 4s" — instead of hoping for a
+// substring. Remove the shim and those numbers become real-clock noise, so the
+// exact match is also what guards the injection.
+const (
+	fixedClockEpoch  = 1700000000 // frozen "now"; no real time enters the window
+	thrashWindowSec  = 6          // MIN_INTERVAL_SEC for the changed-build run
+	thrashElapsedSec = 2          // injected age of the last restart stamp
+	thrashRemainSec  = thrashWindowSec - thrashElapsedSec
+)
+
+// dateShim answers `date +%s` from clockFile and delegates everything else to
+// the real date. Written per-env so nothing outside this test sees it.
+const dateShim = `#!/bin/bash
+# 🎯T442 fixed-clock shim — see t218_restart_thrash_test.go.
+if [ "$#" -eq 1 ] && [ "$1" = "+%%s" ]; then
+  cat %q
+  exit 0
+fi
+exec %q "$@"
+`
+
 // thrashEnv is one hermetic universe: a copied script, a throwaway port, a
-// private HOME, and its own stamp/lock/active files.
+// private HOME, its own stamp/lock/active files, and its own clock.
 type thrashEnv struct {
-	t      *testing.T
-	root   string // fake repo root (script's ROOT, so BIN = root/bin/jevonsd)
-	home   string
-	port   int
-	script string
-	srcDir string
+	t         *testing.T
+	root      string // fake repo root (script's ROOT, so BIN = root/bin/jevonsd)
+	home      string
+	port      int
+	script    string
+	srcDir    string
+	shimDir   string // 🎯T442: holds the `date` shim, first on the script's PATH
+	clockFile string // 🎯T442: the epoch that shim answers `date +%s` with
 }
 
 func newThrashEnv(t *testing.T) *thrashEnv {
@@ -132,7 +170,28 @@ func newThrashEnv(t *testing.T) *thrashEnv {
 		t.Fatal(err)
 	}
 
-	e := &thrashEnv{t: t, root: root, home: home, port: port, script: script, srcDir: srcDir}
+	// 🎯T442: the injected clock. realDate is resolved here, from the test's
+	// own PATH, because the shim's PATH deliberately does not contain itself.
+	realDate, err := exec.LookPath("date")
+	if err != nil {
+		t.Skipf("no date binary to delegate to: %v", err)
+	}
+	shimDir := filepath.Join(root, "clockshim")
+	if err := os.MkdirAll(shimDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clockFile := filepath.Join(home, "clock.epoch")
+	shim := fmt.Sprintf(dateShim, clockFile, realDate)
+	if err := os.WriteFile(filepath.Join(shimDir, "date"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	e := &thrashEnv{
+		t: t, root: root, home: home, port: port,
+		script: script, srcDir: srcDir,
+		shimDir: shimDir, clockFile: clockFile,
+	}
+	e.setClock(fixedClockEpoch)
 	t.Cleanup(e.killDaemon)
 	return e
 }
@@ -151,6 +210,16 @@ func (e *thrashEnv) build(variant string) {
 	}
 }
 
+// setClock moves the injected clock. Every `date +%s` the script runs after
+// this — the stamp it writes, and the elapsed it computes next time — reads
+// this value, so the thrash window is arithmetic the test chose.
+func (e *thrashEnv) setClock(epoch int) {
+	e.t.Helper()
+	if err := os.WriteFile(e.clockFile, []byte(strconv.Itoa(epoch)+"\n"), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 // run invokes the script and returns its combined output.
 func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
 	e.t.Helper()
@@ -159,7 +228,8 @@ func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
 	// A bare PATH keeps `brew` out of reach: the real script would otherwise
 	// run `brew services stop jevons` and stop the owner's daily service.
 	cmd.Env = append(os.Environ(),
-		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+		// 🎯T442: the shim dir goes first so `date +%s` is the injected clock.
+		"PATH="+e.shimDir+":/usr/bin:/bin:/usr/sbin:/sbin",
 		"HOME="+e.home,
 		"JEVONS_RESTART_PORT="+strconv.Itoa(e.port),
 		"JEVONS_RESTART_WORKDIR="+e.root,
@@ -317,8 +387,13 @@ func TestRestartThrashPolicy(t *testing.T) {
 
 	// --- changed build inside the window: wait, never skip (🎯T194) -------
 	e.build("b")
+	// 🎯T442: put the caller inside the window by moving the clock, not by
+	// racing to arrive before it closes. The cold start stamped
+	// fixedClockEpoch; thrashElapsedSec later is inside a thrashWindowSec
+	// window on any machine, at any load, however long the builds above took.
+	e.setClock(fixedClockEpoch + thrashElapsedSec)
 	start := time.Now()
-	out, err = e.run(6)
+	out, err = e.run(thrashWindowSec)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("changed-build run failed: %v\n%s", err, out)
@@ -326,14 +401,22 @@ func TestRestartThrashPolicy(t *testing.T) {
 	if strings.Contains(out, "already activated") {
 		t.Fatalf("changed build was treated as already activated:\n%s", out)
 	}
-	if !strings.Contains(out, "thrash window") {
-		t.Errorf("changed build inside the window did not report waiting:\n%s", out)
+	// The exact arithmetic, not a substring: these three numbers are only
+	// reproducible because the clock is injected, so matching them is what
+	// keeps a future edit from quietly going back to real time.
+	wantWait := fmt.Sprintf("thrash window: last restart %ds ago (min %ds); waiting %ds",
+		thrashElapsedSec, thrashWindowSec, thrashRemainSec)
+	if !strings.Contains(out, wantWait) {
+		t.Errorf("changed build inside the window did not report waiting %q:\n%s", wantWait, out)
 	}
 	if !strings.Contains(out, "OK: daily jevonsd serving") {
 		t.Fatalf("changed build was skipped instead of activated — a stale binary would keep serving:\n%s", out)
 	}
-	if elapsed < 2*time.Second {
-		t.Errorf("restart took %v; expected to wait out the thrash window", elapsed)
+	// A real `sleep thrashRemainSec` cannot come back early, so this bound is
+	// one-sided and load-proof: waiting longer never fails it.
+	if elapsed < thrashRemainSec*time.Second {
+		t.Errorf("restart took %v; expected to wait out the %ds remaining of the thrash window",
+			elapsed, thrashRemainSec)
 	}
 	second := e.listenerPID()
 	if second == first || second == 0 {
