@@ -8,6 +8,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,10 +18,50 @@ import (
 	"github.com/marcelocantos/jevons/internal/converge"
 )
 
+// ownerClock is the clock these oracles run on. Time moves when the test says
+// so and at no other moment, which is the whole of 🎯T437: the fixture used to
+// stamp its edges from the wall clock and then classify from a logical `now`,
+// so on a loaded machine the real gap between two statements could exceed the
+// bound under test and the verdict stopped being a function of the tree.
+type ownerClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+// newOwnerClock starts at the wall clock so that server state stamped outside
+// the owner-health subsystem (overseer progress, chatlog timestamps) stays in
+// the same era; nothing here reads it as a duration.
+func newOwnerClock() *ownerClock { return &ownerClock{t: time.Now()} }
+
+func (c *ownerClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+// Advance moves the clock and returns the new reading, so a reconcile pass
+// reads `clk.Advance(d)` — one statement that says both when it happens and
+// that time passed to get there.
+func (c *ownerClock) Advance(d time.Duration) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+	return c.t
+}
+
 // ownerHealthServer builds a hermetic server with a durable chatlog, one
 // connected chat client, and a stubbed overseer delivery seam. No process, no
 // provider, no daemon (🎯T355 hermetics).
-func ownerHealthServer(t *testing.T, send func(string) error) (*Server, chan string) {
+//
+// The bounds are the shipped ones. They used to be flattened to 10ms each so
+// the suite would not sit through a 90-second reply grace, which cost twice:
+// real elapsed time could cross them (🎯T437), and flattening also destroyed
+// the proportions the contract is written in — a chrome grace covers a
+// send→drain race, a reply bound covers a whole turn, and collapsing both to
+// one value let dimensions open in an order the daemon would never produce.
+// With a controlled clock the grace costs nothing to wait out, so there is no
+// reason to test anything but the contract as shipped.
+func ownerHealthServer(t *testing.T, send func(string) error) (*Server, chan string, *ownerClock) {
 	t.Helper()
 	dir := t.TempDir()
 	s := New("test", dir)
@@ -38,15 +79,9 @@ func ownerHealthServer(t *testing.T, send func(string) error) (*Server, chan str
 	s.notifySender = send
 	s.mu.Unlock()
 
-	// Tight bounds: the contract is the same, the patience is not.
-	s.SetOwnerHealthBounds(converge.OwnerBounds{
-		SendLand:    10 * time.Millisecond,
-		ChromeTruth: 10 * time.Millisecond,
-		Reply:       10 * time.Millisecond,
-		ACPStall:    10 * time.Millisecond,
-		UIHeartbeat: time.Hour,
-	})
-	return s, frames
+	clk := newOwnerClock()
+	s.SetOwnerHealthClock(clk.Now)
+	return s, frames, clk
 }
 
 // ownerSend replays what handleChat does with an accepted owner turn.
@@ -88,13 +123,13 @@ func frameMatching(frames []string, pred func(map[string]any) bool) (map[string]
 // A healthy owner turn — journaled, delivered, sealed — leaves no standing
 // gap. The reconciler must not manufacture work on a working chat.
 func TestOwnerHealthHealthyTurnLeavesNoGaps(t *testing.T) {
-	s, _ := ownerHealthServer(t, func(string) error { return nil })
+	s, _, clk := ownerHealthServer(t, func(string) error { return nil })
 	ownerSend(t, s, "how is the fleet?")
 
 	// Seal the turn the way a provider does.
 	s.HandleAgentEvent(claudia.Event{Type: "system"})
 
-	if got := s.ReconcileOwnerHealth(time.Now().Add(time.Minute)); len(got) == 0 {
+	if got := s.ReconcileOwnerHealth(clk.Advance(time.Minute)); len(got) == 0 {
 		t.Fatal("no verdicts produced")
 	}
 	if gaps := s.OwnerHealthGaps(); len(gaps) != 0 {
@@ -106,7 +141,7 @@ func TestOwnerHealthHealthyTurnLeavesNoGaps(t *testing.T) {
 // flight. The recovery step is a level-truth sample, and the *next
 // observation* — not the step — is what satisfies the gap.
 func TestOwnerHealthClearsFalseWorkingChrome(t *testing.T) {
-	s, frames := ownerHealthServer(t, func(string) error { return nil })
+	s, frames, clk := ownerHealthServer(t, func(string) error { return nil })
 
 	// An owner send lights client chrome; the turn then vanishes without a
 	// seal (the daemon-bounce / lost-session shape) so level truth is idle.
@@ -117,15 +152,17 @@ func TestOwnerHealthClearsFalseWorkingChrome(t *testing.T) {
 	s.mu.Unlock()
 	drainFrames(frames)
 
-	now := time.Now()
 	// First pass stamps the mismatch edge; the grace has not elapsed.
-	s.ReconcileOwnerHealth(now)
+	s.ReconcileOwnerHealth(clk.Now())
 	if _, open := gapFor(s, converge.OwnerDimChromeTruthful); open {
 		t.Fatal("chrome gap opened inside its grace window")
 	}
 
-	// Past the grace: the gap opens and the actuator publishes level truth.
-	s.ReconcileOwnerHealth(now.Add(time.Second))
+	// Past the chrome grace and still inside the reply bound, which is the
+	// window this dimension owns: the gap opens and the actuator publishes
+	// level truth. Both offsets are the shipped contract's, so the dimensions
+	// open in the order the daemon would open them in.
+	s.ReconcileOwnerHealth(clk.Advance(20 * time.Second))
 	frame, ok := frameMatching(drainFrames(frames), func(m map[string]any) bool {
 		return m["type"] == "status" && m["state"] == "idle"
 	})
@@ -139,7 +176,9 @@ func TestOwnerHealthClearsFalseWorkingChrome(t *testing.T) {
 	}
 
 	// The step alone did not satisfy anything — the next observation does.
-	s.ReconcileOwnerHealth(now.Add(2 * time.Second))
+	// Far enough on that the unanswered turn behind the spinner is past its
+	// own bound, which is what the last assertion is about.
+	s.ReconcileOwnerHealth(clk.Advance(80 * time.Second))
 	if g, open := gapFor(s, converge.OwnerDimChromeTruthful); open {
 		t.Fatalf("chrome gap still standing after truth was published: %+v", g)
 	}
@@ -166,7 +205,7 @@ func gapFor(s *Server, dim converge.OwnerDimension) (converge.OwnerGap, bool) {
 func TestOwnerHealthQueuedTurnIsNotAskedTwice(t *testing.T) {
 	var sent []string
 	down := true
-	s, _ := ownerHealthServer(t, func(text string) error {
+	s, _, clk := ownerHealthServer(t, func(text string) error {
 		if down {
 			return errors.New("prompt already in flight")
 		}
@@ -179,8 +218,7 @@ func TestOwnerHealthQueuedTurnIsNotAskedTwice(t *testing.T) {
 		t.Fatal("gap opened before any reconcile")
 	}
 
-	now := time.Now()
-	s.ReconcileOwnerHealth(now.Add(time.Second))
+	s.ReconcileOwnerHealth(clk.Advance(10 * time.Second))
 	g, open := gapFor(s, converge.OwnerDimSendLanded)
 	if !open {
 		t.Fatal("undelivered owner turn did not open a send-landed gap")
@@ -202,7 +240,7 @@ func TestOwnerHealthQueuedTurnIsNotAskedTwice(t *testing.T) {
 		t.Errorf("delivered text = %q, want the owner's words", sent[0])
 	}
 
-	s.ReconcileOwnerHealth(now.Add(2 * time.Second))
+	s.ReconcileOwnerHealth(clk.Advance(10 * time.Second))
 	if _, open := gapFor(s, converge.OwnerDimSendLanded); open {
 		t.Fatal("send-landed gap still standing after the turn was acked")
 	}
@@ -214,7 +252,7 @@ func TestOwnerHealthQueuedTurnIsNotAskedTwice(t *testing.T) {
 // prompt finally landed — not the step — closes the gap.
 func TestOwnerHealthRequeuesLostOwnerTurn(t *testing.T) {
 	var sent []string
-	s, _ := ownerHealthServer(t, func(text string) error {
+	s, _, clk := ownerHealthServer(t, func(text string) error {
 		sent = append(sent, text)
 		return nil
 	})
@@ -227,13 +265,12 @@ func TestOwnerHealthRequeuesLostOwnerTurn(t *testing.T) {
 	s.notifyQueue = nil
 	s.mu.Unlock()
 
-	now := time.Now()
-	s.ReconcileOwnerHealth(now.Add(time.Second))
+	s.ReconcileOwnerHealth(clk.Advance(10 * time.Second))
 	if len(sent) != 1 || !strings.Contains(sent[0], "what is the frontier?") {
 		t.Fatalf("lost owner turn was not re-injected: %v", sent)
 	}
 
-	s.ReconcileOwnerHealth(now.Add(2 * time.Second))
+	s.ReconcileOwnerHealth(clk.Advance(10 * time.Second))
 	if _, open := gapFor(s, converge.OwnerDimSendLanded); open {
 		t.Fatal("send-landed gap still standing after re-injection was acked")
 	}
@@ -243,7 +280,7 @@ func TestOwnerHealthRequeuesLostOwnerTurn(t *testing.T) {
 // it — but the owner is asked their own question at most once per round.
 func TestOwnerHealthDoesNotReinjectOncePerOpenDimension(t *testing.T) {
 	var sent []string
-	s, _ := ownerHealthServer(t, func(text string) error {
+	s, _, clk := ownerHealthServer(t, func(text string) error {
 		sent = append(sent, text)
 		return nil
 	})
@@ -255,8 +292,10 @@ func TestOwnerHealthDoesNotReinjectOncePerOpenDimension(t *testing.T) {
 	s.notifyQueue = nil
 	s.mu.Unlock()
 
-	now := time.Now()
-	s.ReconcileOwnerHealth(now.Add(time.Second))
+	// Past the reply bound as well as the send bound, so both dimensions are
+	// genuinely standing when the dedupe is measured — that is the case the
+	// dedupe exists for.
+	s.ReconcileOwnerHealth(clk.Advance(100 * time.Second))
 	open := 0
 	for _, dim := range []converge.OwnerDimension{converge.OwnerDimSendLanded, converge.OwnerDimReplyOrResidual} {
 		if _, ok := gapFor(s, dim); ok {
@@ -275,7 +314,7 @@ func TestOwnerHealthDoesNotReinjectOncePerOpenDimension(t *testing.T) {
 // though nothing is in flight — the stall class a live-but-useless daemon
 // hides. A named residual satisfies it; silence never does.
 func TestOwnerHealthTurnStallSatisfiedOnlyByReplyOrResidual(t *testing.T) {
-	s, _ := ownerHealthServer(t, func(string) error { return nil })
+	s, _, clk := ownerHealthServer(t, func(string) error { return nil })
 	ownerSend(t, s, "what happened to the fleet?")
 	// Delivered, then the session evaporates without sealing.
 	s.mu.Lock()
@@ -283,8 +322,7 @@ func TestOwnerHealthTurnStallSatisfiedOnlyByReplyOrResidual(t *testing.T) {
 	s.overseerOwnerTurn = false
 	s.mu.Unlock()
 
-	now := time.Now()
-	s.ReconcileOwnerHealth(now.Add(time.Second))
+	s.ReconcileOwnerHealth(clk.Advance(100 * time.Second))
 	g, open := gapFor(s, converge.OwnerDimReplyOrResidual)
 	if !open {
 		t.Fatal("evaporated owner turn did not open a reply-or-residual gap")
@@ -294,13 +332,13 @@ func TestOwnerHealthTurnStallSatisfiedOnlyByReplyOrResidual(t *testing.T) {
 	}
 
 	// Steps keep it standing; only an observation closes it.
-	s.ReconcileOwnerHealth(now.Add(2 * time.Second))
+	s.ReconcileOwnerHealth(clk.Advance(100 * time.Second))
 	if _, open := gapFor(s, converge.OwnerDimReplyOrResidual); !open {
 		t.Fatal("reply gap closed without a reply or a residual")
 	}
 
 	s.NoteOwnerResidual("overseer_unreachable")
-	s.ReconcileOwnerHealth(now.Add(3 * time.Second))
+	s.ReconcileOwnerHealth(clk.Advance(100 * time.Second))
 	if _, open := gapFor(s, converge.OwnerDimReplyOrResidual); open {
 		t.Fatal("named residual did not satisfy reply-or-residual")
 	}
@@ -311,23 +349,19 @@ func TestOwnerHealthTurnStallSatisfiedOnlyByReplyOrResidual(t *testing.T) {
 // stimulus is a client that stopped ticking — the coordinate step runs, the
 // plant stays broken, and the ladder walks to the owner-visible rung.
 func TestOwnerHealthEscalatesUnrecoveredGapToOwner(t *testing.T) {
-	s, frames := ownerHealthServer(t, func(string) error { return nil })
-	s.SetOwnerHealthBounds(converge.OwnerBounds{
-		SendLand:    10 * time.Millisecond,
-		ChromeTruth: 10 * time.Millisecond,
-		Reply:       10 * time.Millisecond,
-		ACPStall:    10 * time.Millisecond,
-		UIHeartbeat: 10 * time.Millisecond,
-	})
+	s, frames, clk := ownerHealthServer(t, func(string) error { return nil })
 	s.NoteOwnerUIHeartbeat()
 	s.ownerMu.Lock()
-	s.ownerHealth.uiHeartbeatAt = time.Now().Add(-time.Hour) // main thread stopped
+	s.ownerHealth.uiHeartbeatAt = clk.Now().Add(-time.Hour) // main thread stopped
 	s.ownerMu.Unlock()
 	drainFrames(frames)
 
-	now := time.Now()
-	for i := 1; i <= 8; i++ {
-		s.ReconcileOwnerHealth(now.Add(time.Duration(i) * time.Second))
+	// Each pass is spaced by more than the step spacing this kind carries
+	// (the heartbeat bound), so all eight are due and the ladder actually
+	// walks: three coordinate steps, one overseer report, then the owner.
+	for range 8 {
+		now := clk.Advance(2 * time.Minute)
+		s.ReconcileOwnerHealth(now)
 		s.ownerMu.Lock()
 		s.ownerHealth.uiHeartbeatAt = now.Add(-time.Hour) // still frozen
 		s.ownerMu.Unlock()
@@ -357,10 +391,10 @@ func TestOwnerHealthEscalatesUnrecoveredGapToOwner(t *testing.T) {
 // dimension on a page that is still ticking. Without the reporter this level
 // was always false and only a frozen main thread could ever be seen.
 func TestOwnerHealthObservesClientReportedBlockedComposer(t *testing.T) {
-	s, _ := ownerHealthServer(t, func(string) error { return nil })
+	s, _, clk := ownerHealthServer(t, func(string) error { return nil })
 	s.NoteOwnerComposerBlocked(true, "overseer_down")
 
-	now := time.Now()
+	now := clk.Now()
 	obs := s.ObserveOwnerInteraction(now)
 	if !obs.ComposerBlocked {
 		t.Fatal("client-reported blocked composer was not observed")
@@ -382,7 +416,7 @@ func TestOwnerHealthObservesClientReportedBlockedComposer(t *testing.T) {
 
 	// The unblock report is what satisfies it — the step never does.
 	s.NoteOwnerComposerBlocked(false, "")
-	s.ReconcileOwnerHealth(now.Add(time.Second))
+	s.ReconcileOwnerHealth(clk.Advance(time.Second))
 	if _, open := gapFor(s, converge.OwnerDimInteractive); open {
 		t.Fatal("unblocked composer left the interaction gap standing")
 	}
@@ -391,12 +425,12 @@ func TestOwnerHealthObservesClientReportedBlockedComposer(t *testing.T) {
 // 🎯T361: the UX-degrade step must carry the yield/hydrate hint on a status
 // frame — that hint is the whole client-side recovery, not decoration.
 func TestOwnerHealthUXStepHintsYieldHydrate(t *testing.T) {
-	s, frames := ownerHealthServer(t, func(string) error { return nil })
+	s, frames, clk := ownerHealthServer(t, func(string) error { return nil })
 	drainFrames(frames)
 
 	err := ownerActuator{s}.Step(
 		converge.OwnerGap{Dimension: converge.OwnerDimInteractive, Kind: converge.OwnerGapUXDegraded},
-		converge.StepUXCoordinate, time.Now())
+		converge.StepUXCoordinate, clk.Now())
 	if err != nil {
 		t.Fatalf("ux coordinate step: %v", err)
 	}
@@ -411,7 +445,7 @@ func TestOwnerHealthUXStepHintsYieldHydrate(t *testing.T) {
 // client's banner for this class is sticky, so satisfying an escalated gap
 // must publish, and a gap that never reached the owner must stay quiet.
 func TestOwnerHealthPublishesRecoveryOnlyAfterAnAlert(t *testing.T) {
-	s, frames := ownerHealthServer(t, func(string) error { return nil })
+	s, frames, clk := ownerHealthServer(t, func(string) error { return nil })
 
 	// Never alerted: satisfying the dimension says nothing to the owner.
 	s.publishOwnerRecovered(converge.OwnerDimInteractive, "interaction_usable")
@@ -421,10 +455,9 @@ func TestOwnerHealthPublishesRecoveryOnlyAfterAnAlert(t *testing.T) {
 		t.Fatal("recovery announced for a gap the owner was never told about")
 	}
 
-	now := time.Now()
 	if err := (ownerActuator{s}).Step(
 		converge.OwnerGap{Dimension: converge.OwnerDimInteractive, Kind: converge.OwnerGapUXDegraded},
-		converge.StepHumanAlert, now); err != nil {
+		converge.StepHumanAlert, clk.Now()); err != nil {
 		t.Fatalf("human alert step: %v", err)
 	}
 	drainFrames(frames)
@@ -455,10 +488,10 @@ func TestOwnerHealthPublishesRecoveryOnlyAfterAnAlert(t *testing.T) {
 // A stalled prompt is unstuck only when one is genuinely in flight: with no
 // process there is nothing to interrupt, and the step must not be spent.
 func TestOwnerHealthACPUnstickRequiresPromptInFlight(t *testing.T) {
-	s, _ := ownerHealthServer(t, func(string) error { return nil })
+	s, _, clk := ownerHealthServer(t, func(string) error { return nil })
 	err := ownerActuator{s}.Step(
 		converge.OwnerGap{Dimension: converge.OwnerDimReplyOrResidual, Kind: converge.OwnerGapACPStall},
-		converge.StepACPUnstick, time.Now())
+		converge.StepACPUnstick, clk.Now())
 	if !errors.Is(err, converge.ErrOwnerStepNotApplicable) {
 		t.Fatalf("unstick with no in-flight prompt = %v, want not-applicable", err)
 	}
@@ -467,7 +500,7 @@ func TestOwnerHealthACPUnstickRequiresPromptInFlight(t *testing.T) {
 // With nobody watching, chrome and interaction are out of scope — the
 // reconciler must not broadcast recovery frames into an empty room.
 func TestOwnerHealthNoClientScopesOutChrome(t *testing.T) {
-	s, frames := ownerHealthServer(t, func(string) error { return nil })
+	s, frames, clk := ownerHealthServer(t, func(string) error { return nil })
 	ownerSend(t, s, "hello")
 	s.mu.Lock()
 	s.chatListeners = nil
@@ -476,13 +509,83 @@ func TestOwnerHealthNoClientScopesOutChrome(t *testing.T) {
 	s.mu.Unlock()
 	drainFrames(frames)
 
-	now := time.Now()
-	s.ReconcileOwnerHealth(now)
-	s.ReconcileOwnerHealth(now.Add(time.Second))
+	s.ReconcileOwnerHealth(clk.Now())
+	s.ReconcileOwnerHealth(clk.Advance(100 * time.Second))
 	if _, open := gapFor(s, converge.OwnerDimChromeTruthful); open {
 		t.Error("chrome gap opened with no connected client")
 	}
 	if _, open := gapFor(s, converge.OwnerDimInteractive); open {
 		t.Error("interaction gap opened with no connected client")
+	}
+}
+
+// 🎯T437, stated directly: every owner-health edge is stamped from the clock
+// the test also classifies from, so wall time cannot get between an edge and
+// the verdict about it. Without this the subsystem reads two clocks — edges
+// from time.Now, classification from the caller's `now` — and the distance
+// between them is whatever the machine was busy doing, which is what made
+// TestOwnerHealthClearsFalseWorkingChrome report on the fleet's load.
+func TestOwnerHealthEdgesAreStampedFromTheClassifyingClock(t *testing.T) {
+	s, _, clk := ownerHealthServer(t, func(string) error { return nil })
+	ownerSend(t, s, "status please")
+	s.NoteOwnerUIHeartbeat()
+	s.NoteOwnerResidual("checked")
+
+	// The wall clock moves; the one this fixture reasons about does not.
+	time.Sleep(25 * time.Millisecond)
+
+	now := clk.Now()
+	obs := s.ObserveOwnerInteraction(now)
+	for _, e := range []struct {
+		name string
+		at   time.Time
+	}{
+		{"SendAt", obs.SendAt},
+		{"OwnerTurnAt", obs.OwnerTurnAt},
+		{"ResidualAt", obs.ResidualAt},
+	} {
+		if !e.at.Equal(now) {
+			t.Errorf("%s = %v, want the clock's own reading %v (off by %v of real time)",
+				e.name, e.at, now, now.Sub(e.at))
+		}
+	}
+	if obs.SinceUIHeartbeat != 0 {
+		t.Errorf("SinceUIHeartbeat = %v, want 0 — the heartbeat was stamped at this very reading", obs.SinceUIHeartbeat)
+	}
+}
+
+// 🎯T437's reproducer, made hermetic. The target's version needed 2×CPU busy
+// loops and eight batches to catch this a quarter of the time; all that load
+// ever did was put real time between the owner's send and the reconcile pass,
+// and a sleep is that on demand. 25ms is far past the 10ms bounds the fixture
+// used to run, which is where the red came from: pass 1 opened the *reply*
+// dimension instead, its requeue step put a turn back in flight, and by pass 2
+// the chrome was truthfully working — so the level-truth step never ran and
+// the idle frame the test waits for was never published.
+func TestOwnerHealthVerdictSurvivesRealElapsedTime(t *testing.T) {
+	s, frames, clk := ownerHealthServer(t, func(string) error { return nil })
+
+	ownerSend(t, s, "status please")
+	s.mu.Lock()
+	s.waiting = false
+	s.overseerOwnerTurn = false
+	s.mu.Unlock()
+	drainFrames(frames)
+
+	time.Sleep(25 * time.Millisecond)
+	s.ReconcileOwnerHealth(clk.Now())
+	if g, open := gapFor(s, converge.OwnerDimReplyOrResidual); open {
+		t.Fatalf("real elapsed time opened %s/%s — the verdict is reading the machine, not the tree", g.Dimension, g.Kind)
+	}
+	if _, open := gapFor(s, converge.OwnerDimChromeTruthful); open {
+		t.Fatal("chrome gap opened inside its grace window after a real-time delay")
+	}
+
+	time.Sleep(25 * time.Millisecond)
+	s.ReconcileOwnerHealth(clk.Advance(20 * time.Second))
+	if _, ok := frameMatching(drainFrames(frames), func(m map[string]any) bool {
+		return m["type"] == "status" && m["state"] == "idle"
+	}); !ok {
+		t.Fatal("no idle level-truth frame published to clear false working chrome")
 	}
 }

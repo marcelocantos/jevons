@@ -19,22 +19,13 @@ import (
 // *seal*, so ~100 consecutive turns that painted nothing still satisfied
 // reply-or-residual and the owner's question evaporated in silence.
 
-// questionServer is ownerHealthServer with the question dimension's bounds
-// tightened too, so the oracle does not sit through the shipped 5-minute
-// answer grace.
-func questionServer(t *testing.T, send func(string) error) (*Server, chan string) {
+// questionServer is ownerHealthServer under its own name. It used to tighten
+// the bounds so the oracle would not sit through the shipped 5-minute answer
+// grace; with a controlled clock (🎯T437) waiting the grace out costs nothing,
+// so these oracles run against the contract as shipped.
+func questionServer(t *testing.T, send func(string) error) (*Server, chan string, *ownerClock) {
 	t.Helper()
-	s, frames := ownerHealthServer(t, send)
-	s.SetOwnerHealthBounds(converge.OwnerBounds{
-		SendLand:    10 * time.Millisecond,
-		ChromeTruth: 10 * time.Millisecond,
-		Reply:       10 * time.Millisecond,
-		ACPStall:    10 * time.Millisecond,
-		UIHeartbeat: time.Hour,
-		Answer:      10 * time.Millisecond,
-		NoOpTurns:   3,
-	})
-	return s, frames
+	return ownerHealthServer(t, send)
 }
 
 // sealEmptyTurn is one overseer turn that ends having painted nothing — the
@@ -63,15 +54,14 @@ func questionGap(t *testing.T, s *Server) (converge.OwnerGap, bool) {
 // burns turn after turn producing nothing owner-visible. Every one of those
 // turns seals, so the pre-🎯T378 daemon saw a perfectly healthy chat.
 func TestOwnerQuestionUnansweredIsDetectedDespiteSeals(t *testing.T) {
-	s, _ := questionServer(t, func(string) error { return nil })
+	s, _, clk := questionServer(t, func(string) error { return nil })
 	ownerSend(t, s, "Orthograph is giving Pippa a 127.0.0.1 address... haven't we integrated pigeon?")
 
 	for range 5 {
 		sealEmptyTurn(s)
 	}
 
-	now := time.Now().Add(time.Minute)
-	s.ReconcileOwnerHealth(now)
+	s.ReconcileOwnerHealth(clk.Advance(time.Minute))
 
 	// The point of the target, stated as an assertion: the *old* dimension is
 	// satisfied. If this ever flips, this test stops proving anything.
@@ -95,7 +85,7 @@ func TestOwnerQuestionUnansweredIsDetectedDespiteSeals(t *testing.T) {
 // incident — so this asserts the owner's own words reach the overseer again.
 func TestOwnerQuestionGapRepressuresWithTheOwnersWords(t *testing.T) {
 	sent := make(chan string, 16)
-	s, _ := questionServer(t, func(text string) error {
+	s, _, clk := questionServer(t, func(text string) error {
 		sent <- text
 		return nil
 	})
@@ -106,7 +96,7 @@ func TestOwnerQuestionGapRepressuresWithTheOwnersWords(t *testing.T) {
 	for range 5 {
 		sealEmptyTurn(s)
 	}
-	s.ReconcileOwnerHealth(time.Now().Add(time.Minute))
+	s.ReconcileOwnerHealth(clk.Advance(time.Minute))
 
 	var requeued bool
 	for {
@@ -131,12 +121,12 @@ func TestOwnerQuestionGapRepressuresWithTheOwnersWords(t *testing.T) {
 func TestOwnerRoutineTurnAnsweredSilentIsNeverAGap(t *testing.T) {
 	for _, turn := range []string{"continue", "ship it", "fix the build", "ok"} {
 		t.Run(turn, func(t *testing.T) {
-			s, _ := questionServer(t, func(string) error { return nil })
+			s, _, clk := questionServer(t, func(string) error { return nil })
 			ownerSend(t, s, turn)
 			for range 10 {
 				sealEmptyTurn(s)
 			}
-			s.ReconcileOwnerHealth(time.Now().Add(time.Hour))
+			s.ReconcileOwnerHealth(clk.Advance(time.Hour))
 			if g, ok := questionGap(t, s); ok {
 				t.Fatalf("routine turn %q opened %s — [silent] is legitimate for everything but a question", turn, g.Kind)
 			}
@@ -147,14 +137,14 @@ func TestOwnerRoutineTurnAnsweredSilentIsNeverAGap(t *testing.T) {
 // A question answered with owner-visible prose closes the dimension, even if
 // the overseer went quiet for a while first.
 func TestOwnerQuestionAnsweredByVisibleProse(t *testing.T) {
-	s, _ := questionServer(t, func(string) error { return nil })
+	s, _, clk := questionServer(t, func(string) error { return nil })
 	ownerSend(t, s, "haven't we integrated pigeon?")
 
 	sealEmptyTurn(s)
 	sealEmptyTurn(s)
 	sealVisibleTurn(s, "We have — Pippa needs re-pairing. Steps: …")
 
-	s.ReconcileOwnerHealth(time.Now().Add(time.Minute))
+	s.ReconcileOwnerHealth(clk.Advance(time.Minute))
 	if g, ok := questionGap(t, s); ok {
 		t.Fatalf("answered question still opened %s (%s)", g.Kind, g.Reason)
 	}
@@ -164,7 +154,7 @@ func TestOwnerQuestionAnsweredByVisibleProse(t *testing.T) {
 // rests on: the same body that legitimately closes a routine turn must not
 // close a question, because the owner never sees it.
 func TestOwnerQuestionIsNotAnsweredBySilentReply(t *testing.T) {
-	s, _ := questionServer(t, func(string) error { return nil })
+	s, _, clk := questionServer(t, func(string) error { return nil })
 	ownerSend(t, s, "haven't we integrated pigeon?")
 
 	// A whole-stream [silent] ops reply: suppressed on the wire, sealed as an
@@ -175,7 +165,7 @@ func TestOwnerQuestionIsNotAnsweredBySilentReply(t *testing.T) {
 		sealEmptyTurn(s)
 	}
 
-	s.ReconcileOwnerHealth(time.Now().Add(time.Minute))
+	s.ReconcileOwnerHealth(clk.Advance(time.Minute))
 	if _, ok := questionGap(t, s); !ok {
 		t.Fatal("a [silent] reply closed an owner question — the owner saw nothing, so the question is still unanswered")
 	}

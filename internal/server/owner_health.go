@@ -36,6 +36,17 @@ type ownerHealthState struct {
 	set    *converge.OwnerSet
 	bounds converge.OwnerBounds
 
+	// clock is where every edge below is stamped from. It exists because this
+	// subsystem reads time twice: the observation edges are stamped as they
+	// happen, while classification is handed an explicit `now`. In the daemon
+	// both are the wall clock and the split is invisible. In a test the second
+	// half is controlled and the first is not, so a verdict became a function
+	// of how long the machine took to get between two statements — which is how
+	// TestOwnerHealthClearsFalseWorkingChrome came to report on the machine's
+	// load rather than on the tree (🎯T437). One injectable clock closes the
+	// split: nil means time.Now, which is what the daemon always uses.
+	clock func() time.Time
+
 	// Newest owner submission. echo is the exact journal line we expect to
 	// see land, which is how send-landed is observed rather than assumed.
 	sendSeq       int
@@ -95,11 +106,30 @@ func (s *Server) ownerHealthLocked() *ownerHealthState {
 	return h
 }
 
+// now reads the one clock this subsystem is stamped from. Caller holds ownerMu.
+func (h *ownerHealthState) now() time.Time {
+	if h.clock == nil {
+		return time.Now()
+	}
+	return h.clock()
+}
+
 // SetOwnerHealthBounds overrides the shipped tolerances (hermetic tests).
 func (s *Server) SetOwnerHealthBounds(b converge.OwnerBounds) {
 	s.ownerMu.Lock()
 	defer s.ownerMu.Unlock()
 	s.ownerHealthLocked().bounds = b
+}
+
+// SetOwnerHealthClock replaces the clock the owner-interaction edges are
+// stamped from (hermetic tests). A test that also passes its readings to
+// ReconcileOwnerHealth is then comparing two readings of one clock, so its
+// verdict is a function of the tree and not of the machine's load (🎯T437).
+// The daemon never calls this: nil is time.Now.
+func (s *Server) SetOwnerHealthClock(clock func() time.Time) {
+	s.ownerMu.Lock()
+	defer s.ownerMu.Unlock()
+	s.ownerHealthLocked().clock = clock
 }
 
 // hasChatLog reports whether a durable owner journal is configured.
@@ -113,10 +143,10 @@ func (s *Server) hasChatLog() bool {
 // reply, the client has just lit its own working chrome, and neither
 // durability nor delivery has been observed yet.
 func (s *Server) NoteOwnerSend(text, echo string) {
-	now := time.Now()
 	s.ownerMu.Lock()
 	defer s.ownerMu.Unlock()
 	h := s.ownerHealthLocked()
+	now := h.now()
 	h.sendSeq++
 	h.sendID = fmt.Sprintf("send-%d", h.sendSeq)
 	h.sendText = text
@@ -164,11 +194,10 @@ func (s *Server) NoteOwnerDelivered() {
 // NoteOwnerReplySealed records a sealed assistant reply for the open owner
 // turn — the satisfying observation for reply-or-residual.
 func (s *Server) NoteOwnerReplySealed() {
-	now := time.Now()
 	s.ownerMu.Lock()
 	defer s.ownerMu.Unlock()
 	h := s.ownerHealthLocked()
-	h.replySealedAt = now
+	h.replySealedAt = h.now()
 	// The reply is visible; the client settles its chrome on the seal.
 	h.chromeWorking = false
 	h.mismatchSince = time.Time{}
@@ -186,11 +215,10 @@ func (s *Server) noteOwnerVisibleText(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	now := time.Now()
 	s.ownerMu.Lock()
 	defer s.ownerMu.Unlock()
 	h := s.ownerHealthLocked()
-	h.visibleReplyAt = now
+	h.visibleReplyAt = h.now()
 	h.turnVisible = true
 	// Prose broke the streak; a loop that produces output is not degenerate.
 	h.noOpTurns = 0
@@ -218,22 +246,21 @@ func (s *Server) NoteOwnerResidual(name string) {
 	if name == "" {
 		return
 	}
-	now := time.Now()
 	s.ownerMu.Lock()
 	defer s.ownerMu.Unlock()
 	h := s.ownerHealthLocked()
 	h.residual = name
-	h.residualAt = now
+	h.residualAt = h.now()
 }
 
 // NoteOwnerUIHeartbeat records a client heartbeat (the chat transport ping).
 // A browser whose main thread has stopped also stops pinging, which is how
 // the UX-degrade class is observed server-side.
 func (s *Server) NoteOwnerUIHeartbeat() {
-	now := time.Now()
 	s.ownerMu.Lock()
 	defer s.ownerMu.Unlock()
-	s.ownerHealthLocked().uiHeartbeatAt = now
+	h := s.ownerHealthLocked()
+	h.uiHeartbeatAt = h.now()
 }
 
 // NoteOwnerComposerBlocked records the client's own report that the owner
@@ -256,7 +283,7 @@ func (s *Server) NoteOwnerComposerBlocked(blocked bool, reason string) {
 		h.composerReason = ""
 	}
 	// A client that can report is a client that is ticking.
-	h.uiHeartbeatAt = time.Now()
+	h.uiHeartbeatAt = h.now()
 }
 
 // noteChromePublished records the working level the clients were just told.
