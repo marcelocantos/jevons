@@ -710,30 +710,16 @@ func (s *Server) overseerName() string {
 // wireAgentEvents sets up the event handler for an agent process.
 // It broadcasts to the web UI and notifies Jevon when the agent
 // produces a text response.
+//
+// 🎯T426: idempotent per process object, so a launch road may call it without
+// knowing whether some other road already did. Every launch road goes through
+// this one function — see agent_wiring.go for why the wiring is now asserted
+// as an invariant rather than performed as a step.
 func (s *Server) wireAgentEvents(name string, proc *claudia.Agent) {
-	proc.SubscribeEvents(s.agentEventSink(name))
-}
-
-// WireRunningAgents subscribes the completion-notify sink for every
-// currently-running agent except the overseer. Agents auto-started at boot
-// via registry.StartAll are launched WITHOUT going through handleAgentStart,
-// so their events were never wired — a worker that existed before a restart
-// (e.g. a resumed jevons-po) would finish its work but its reply would never
-// reach the overseer. Call once after StartAll (🎯T61). The overseer is
-// excluded because it gets its own event stream via Server.AttachOverseer.
-func (s *Server) WireRunningAgents(overseerName string) {
-	if s.registry == nil {
+	if proc == nil {
 		return
 	}
-	for _, def := range s.registry.List() {
-		if def.Name == overseerName {
-			continue
-		}
-		if proc := s.registry.Get(def.Name); proc != nil && proc.Alive() {
-			s.wireAgentEvents(def.Name, proc)
-			slog.Info("wired completion-notify for auto-started agent", "agent", def.Name)
-		}
-	}
+	s.attachAgentSink(name, proc)
 }
 
 // agentEventSink returns the per-agent event handler: it broadcasts every

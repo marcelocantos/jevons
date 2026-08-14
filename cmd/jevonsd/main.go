@@ -633,6 +633,14 @@ func main() {
 	}
 	// ð¯T285: jevons_agent_migrate moves an agent between backends and
 	// hands the successor its predecessor's transcript.
+	// 🎯T426: every launch this adapter performs — context-ceiling compaction,
+	// provider migration, thread launch, deliver-rehydrate — attaches the MCP
+	// event sink to the process it just brought up. Without it a rotated agent
+	// keeps its name and its registry row while its turn ends, send-queue
+	// drain, upward reports and 🎯T165 auto-deregistration all go dark.
+	fleetAdapter.SetLaunchHook(func(name string) {
+		mcpSrv.EnsureAgentEventsWired(name)
+	})
 	mcpSrv.SetMigrator(fleetAdapter)
 	srv.SetOverseerMigrator(fleetAdapter)
 	srv.SetDefaultProvider(defaultProvider)
@@ -868,6 +876,14 @@ func main() {
 		// handleAgentStart, so without this a resumed worker's reply would
 		// never reach the overseer.
 		mcpSrv.WireRunningAgents(cfg.OverseerName)
+
+		// 🎯T426: and keep asserting it. The boot pass above was 🎯T61's
+		// answer to ONE unwired launch road; the compaction governor turned
+		// out to be a second, on the same agent the T61 comment names. A
+		// standing sweep repairs road six within one interval instead of
+		// never, and says so out loud when it finds one.
+		mcpserver.StartAgentWireSweep(ctx, mcpSrv, cfg.OverseerName,
+			mcpserver.DefaultAgentWireInterval)
 
 		// No recap needed: the overseer resumes its real session on
 		// restart (via config.toml MCP tools that survive session/load,

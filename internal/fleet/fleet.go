@@ -78,6 +78,18 @@ type Claudia struct {
 	// this arm now uses is a file on the RECEIVER's disk, and a fixture must
 	// be able to write that file without launching a provider.
 	seedTranscript func(name string) string
+
+	// onLaunch runs after this adapter brings a process up for an agent
+	// (🎯T426). The host attaches whatever must ride EVERY launch — today
+	// the mcpserver event sink, whose absence takes an agent's turn ends,
+	// send-queue drain, upward reports and auto-deregistration with it.
+	//
+	// This adapter is the shared road for compaction (the context ceiling
+	// governor), provider migration, thread launches and deliver-rehydrate,
+	// so the hook lands once instead of at four call sites that each have to
+	// remember. Name only, deliberately: the host resolves the process from
+	// the registry it already owns, and fleet stays free of mcpserver.
+	onLaunch func(name string)
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from
@@ -90,6 +102,23 @@ func NewClaudia(reg *claudia.Registry) *Claudia {
 		readyTimeout:    defaultReadyTimeout,
 		replyTimeout:    defaultReplyTimeout,
 	}
+}
+
+// SetLaunchHook installs the per-launch host callback (🎯T426). Nil clears it.
+func (f *Claudia) SetLaunchHook(fn func(name string)) {
+	if f == nil {
+		return
+	}
+	f.onLaunch = fn
+}
+
+// launched notifies the host that name now has a live process. Called after
+// the readiness handshake, so the hook never sees a half-started pane.
+func (f *Claudia) launched(name string) {
+	if f == nil || f.onLaunch == nil {
+		return
+	}
+	f.onLaunch(name)
 }
 
 // SetDefaultProvider sets the daemon-wide backend for new threads when
@@ -229,6 +258,12 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 	if sid := ag.SessionID(); sid != "" {
 		t.SessionID = sid
 	}
+	// 🎯T426: a rotation replaces the process object while the name, the
+	// registry row and the workdir all stay put, so nothing downstream can
+	// tell that this is a different conversation. The host is told here,
+	// before the caller seeds the successor — the seed's own turn end is the
+	// first boundary that must be observed.
+	f.launched(t.ID)
 	return nil
 }
 
@@ -336,6 +371,7 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 		if err := launched.WaitReady(ctx); err != nil {
 			return "", fmt.Errorf("agent %q not ready: %w", id, err)
 		}
+		f.launched(id) // 🎯T426: rehydrate is a launch road too.
 		ag = launched
 	}
 	reply, err := f.awaitReply(ag, f.providerOf(id), text)

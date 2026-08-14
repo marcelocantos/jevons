@@ -95,6 +95,10 @@ func (s *Server) clearAgentTurnBegan(name string) {
 	delete(s.agentTurnBegan, name)
 	delete(s.agentFlight, name)
 	s.mu.Unlock()
+	// 🎯T426: the sink subscription is a claim about the same departed seat.
+	// Outside the lock on purpose — the wiring mutex is never taken under mu
+	// (see attachAgentSink on lock order).
+	s.forgetAgentWiring(name)
 }
 
 // deliverStartPrompt injects the optional jevons_agent_start prompt after

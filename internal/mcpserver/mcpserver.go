@@ -80,6 +80,9 @@ type Server struct {
 	// resolveSender overrides fleet-agent process resolution on that same
 	// path. Nil — the product path — resolves via the registry. Test seam.
 	resolveSender senderResolver
+	// resolveProc overrides which claudia process carries an agent's event
+	// sink (🎯T426). Nil — the product path — reads the live registry.
+	resolveProc agentProcResolver
 	// observeTurnWitness overrides turn-evidence observation (🎯T387): what
 	// the AGENT did after a send, as opposed to what the send call returned.
 	// Nil — the product path — watches the live claudia process. Test seam.
@@ -107,6 +110,13 @@ type Server struct {
 	// (🎯T416). Absent means unknown, which is a real answer and not a
 	// default — see turn_flight.go. Guarded by mu.
 	agentFlight map[string]TurnFlight
+
+	// wiredSinks records which process object currently carries this
+	// daemon's event sink, per agent (🎯T426). Guarded by wireMu and NOT by
+	// mu: the sink reaches into mu while claudia holds the agent lock, so
+	// wiring under mu would close a lock cycle — see attachAgentSink.
+	wireMu     sync.Mutex
+	wiredSinks map[string]wiredSink
 
 	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
 	selfTestEnv SelfTestEnvFunc

@@ -332,16 +332,36 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 	// and dies with the pane at the next rotation or restart (🎯T418). The
 	// daemon's own queue drains on terminal stop, one message per turn.
 	if s.flightState(name) == FlightInFlight {
+		// 🎯T426 clause 3: "in flight" is a claim this process wrote when it
+		// last saw a send begin, and it is only worth anything while the sink
+		// that would retract it is still attached. Attaching one HERE means it
+		// was not: a turn may have begun and ended with nobody watching, and
+		// the queue this send is about to join has been held across a boundary
+		// the daemon never observed. Say so, to the log and to the sender —
+		// reporting a cheerful "queued" over a dark event stream is the exact
+		// silence that let six messages stack behind a compacted jevons-po.
+		darkStream := s.EnsureAgentEventsWired(name)
 		n := s.enqueueAgentSend(name, text)
-		res := agentSendResult{
-			Status: "queued",
-			Message: fmt.Sprintf(
-				"busy: %q has a turn in flight; message queued (%d pending) for delivery when it ends — "+
-					"held by the daemon, not pasted into the agent's composer. "+
-					"To cut the current turn short instead: jevons_agent_send with interrupt=true.",
-				name, n),
-			Queued: n,
+		msg := fmt.Sprintf(
+			"busy: %q has a turn in flight; message queued (%d pending) for delivery when it ends — "+
+				"held by the daemon, not pasted into the agent's composer. "+
+				"To cut the current turn short instead: jevons_agent_send with interrupt=true.",
+			name, n)
+		if darkStream {
+			slog.Warn("🎯T426 queued behind an unobserved turn boundary — event stream was dark",
+				"agent", name, "queued", n,
+				"detail", "in_flight was written before the sink detached; re-attached on this send")
+			msg = fmt.Sprintf(
+				"queued (%d pending) for %q, BUT ITS IN-FLIGHT RECORD IS NOT TRUSTWORTHY: the daemon had lost "+
+					"this agent's event stream (a rotation or restart replaced its process without wiring it), "+
+					"so a turn may have ended unobserved and this queue may have been stalled rather than waiting. "+
+					"The stream is re-attached now and the queue drains at the next observed turn end. "+
+					"If nothing moves, that agent's turn already ended before the re-attach: confirm from ITS "+
+					"transcript (terminal assistant message + turn_duration, file not growing) and then use "+
+					"jevons_agent_send with interrupt=true.",
+				n, name)
 		}
+		res := agentSendResult{Status: "queued", Message: msg, Queued: n}
 		logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightInFlight, TurnEvidence{})
 		return res, nil
 	}
