@@ -1521,6 +1521,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/model_prefix.js"></script>
 <script src="scripts/fleet_paint.js"></script>
 <script src="scripts/fleet_cycle.js"></script>
+<!-- 🎯T383: sticky selection policy; must precede the fleet refresh tail. -->
+<script src="scripts/fleet_selection.js"></script>
 <script src="scripts/portfolio_group.js"></script>
 <script src="scripts/agent_transcript.js"></script>
 <!-- 🎯T372: one pending-owner-turn contract; must precede its adopters
@@ -5645,6 +5647,15 @@ let lastFleetAgents = []; // for 🎯T124 auto-select on new aside
 // the TDZ, threw on boot (T136 path), skipped applyTheme + connect → dark
 // FOUC stuck + empty transcript.
 let selectedAgent = null;
+// 🎯T383: who chose the current selection — 'owner' (a click, the ⌘⇧[/⌘⇧]
+// chord, a target-ask focus, an aside the owner created) or 'auto' (the page
+// filled an empty selection on their behalf). An owner selection is immovable
+// by background repaints; an auto one may still be advanced by auto-select.
+// The 5-15s "it jumped to the first aside on its own" was 🎯T252's poll branch
+// answering `names[0]` for a selection it had no business touching.
+const SEL_OWNER = (typeof FleetSelection !== 'undefined') ? FleetSelection.OWNER : 'owner';
+const SEL_AUTO = (typeof FleetSelection !== 'undefined') ? FleetSelection.AUTO : 'auto';
+let selectionOrigin = SEL_AUTO;
 // 🎯T252: ordered queue of asides needing owner attention (user's turn).
 // Auto-select when sidebar draft empty; sticky while non-empty draft.
 let asideAttentionQueue = [];
@@ -5696,6 +5707,13 @@ function maybeAutoActivateAttention(reason, newName) {
   if (typeof AgentTranscript === 'undefined' || !AgentTranscript.pickAttentionAsideSelection) {
     return false;
   }
+  // 🎯T383: an aside raising its hand does not move a selection the owner
+  // made. The queue keeps its order and its badge; the owner arrives when
+  // they choose to, not when the page decides for them.
+  if (typeof FleetSelection !== 'undefined' &&
+      !FleetSelection.backgroundMayMove({ selected: selectedAgent, origin: selectionOrigin })) {
+    return false;
+  }
   const draftEmpty = isSidebarComposerDraftEmpty();
   const next = AgentTranscript.pickAttentionAsideSelection({
     attentionNames: asideAttentionQueue,
@@ -5706,7 +5724,8 @@ function maybeAutoActivateAttention(reason, newName) {
   });
   if (!next || next === selectedAgent) return false;
   if (typeof selectAgent === 'function') {
-    selectAgent(next);
+    // 🎯T383: page-chosen, so a later auto pass may still advance it.
+    selectAgent(next, { auto: true });
   } else {
     selectedAgent = next;
   }
@@ -5956,6 +5975,24 @@ function refreshAgents() {
         }
       }
     }
+    // 🎯T383: everything above proposes a *candidate*; one policy decides what
+    // a background repaint may actually do with it. An owner-chosen selection
+    // is pinned, a page-chosen one may still advance, and a selection whose
+    // agent left the tree clears rather than landing the owner on a stranger's
+    // transcript. Presence is by name against `agents` (the registry rows) —
+    // never by row index, so a row inserted above cannot drag the selection.
+    let clearSelection = false;
+    if (typeof FleetSelection !== 'undefined') {
+      const verdict = FleetSelection.resolveSelection({
+        selected: selectedAgent,
+        origin: selectionOrigin,
+        agents: agents,
+        candidate: wantSelect,
+      });
+      clearSelection = verdict.reason === 'gone';
+      autoSelected = !clearSelection && verdict.changed && !!verdict.selected;
+      wantSelect = autoSelected ? verdict.selected : null;
+    }
     lastFleetAgents = agents.slice();
     // 🎯T349: state above stays per-fetch; the paint tail defers to a frame
     // boundary so it cannot stretch whatever task the .then landed on.
@@ -5965,9 +6002,16 @@ function refreshAgents() {
       updateFleetProgress(agents);
       // 🎯T209: inspect updates arrive on /ws/chat — no HTTP re-fetch on fleet refresh.
       // Apply auto-select via selectAgent so draft stash + Transcript tab + composer sync.
-      if (autoSelected && wantSelect && wantSelect !== prevSelected &&
+      if (clearSelection && selectedAgent && typeof selectAgent === 'function') {
+        // 🎯T383 (4): the selected agent is no longer in the tree. Toggle it
+        // off through the normal path — draft stashed, pane closed, frontier
+        // rebound — so the owner SEES the selection go, rather than finding
+        // the pane quietly repainted with somebody else's transcript.
+        selectAgent(selectedAgent);
+      } else if (autoSelected && wantSelect && wantSelect !== prevSelected &&
           typeof selectAgent === 'function') {
-        selectAgent(wantSelect);
+        // 🎯T383: page-chosen, so it stays advanceable by the next auto pass.
+        selectAgent(wantSelect, { auto: true });
       } else if (autoSelected && selectedAgent && typeof subscribeAgentInspect === 'function') {
         subscribeAgentInspect(selectedAgent);
       }
@@ -9168,6 +9212,7 @@ function selectAgent(name, opts) {
   if (typeof AgentTranscript !== 'undefined' && name &&
       !AgentTranscript.shouldOpenTranscript(name, purpose)) {
     selectedAgent = null;
+    selectionOrigin = SEL_AUTO;   // 🎯T383: an empty selection is fillable again
     document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
     hideAgentInspect();
     // 🎯T253: overseer / main → primary ledger frontier.
@@ -9184,6 +9229,10 @@ function selectAgent(name, opts) {
   }
   if (inspectConversation) inspectConversation.setAgentId(next || '');
   selectedAgent = next;
+  // 🎯T383: a selection the owner made is pinned against background repaints.
+  // Auto-select paths pass {auto:true} and stay advanceable; everything else
+  // here is owner input — a click, the ⌘⇧[/⌘⇧] chord, a target-ask focus.
+  selectionOrigin = (!next || (opts && opts.auto)) ? SEL_AUTO : SEL_OWNER;
   document.querySelectorAll('.agent-node').forEach(n =>
     n.classList.toggle('selected', !!(selectedAgent && n.dataset.agent === selectedAgent)));
   if (typeof updateComposerPlaceholder === 'function') updateComposerPlaceholder();

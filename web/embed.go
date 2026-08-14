@@ -30,6 +30,7 @@ import "embed"
 //go:embed scripts/model_prefix.js
 //go:embed scripts/fleet_paint.js
 //go:embed scripts/fleet_cycle.js
+//go:embed scripts/fleet_selection.js
 //go:embed scripts/portfolio_group.js
 //go:embed scripts/agent_transcript.js
 //go:embed scripts/conversation_widget.js
