@@ -56,6 +56,11 @@ type SentinelLoopArgs struct {
 	DryRun bool
 	// Now optional clock.
 	Now func() time.Time
+	// ProcessRunning optionally overrides liveness for the PO fan-out read
+	// (🎯T380), mirroring IdleNudgeSweepArgs.ProcessRunning: hermetic fixtures
+	// register agent defs without OS processes behind them. Nil → registry
+	// Get(name).Alive().
+	ProcessRunning func(name string) bool
 	// OnResult optional hook after each cycle (tests).
 	OnResult func(staffops.CycleResult, SentinelActResult)
 }
@@ -76,6 +81,10 @@ type sentinelRuntime struct {
 	budget   staffops.ActionBudget
 	// firstSeen maps mechanical symptom → first observation time (grace).
 	firstSeen map[string]time.Time
+	// poFanout maps product-owner name → cross-cycle fan-out bookkeeping
+	// (🎯T380): whether a turn completed since the last cycle, and the child
+	// count it began with. One sample cannot see a turn; two can.
+	poFanout map[string]poFanoutState
 	// lastPrimary / lastTick for status tool.
 	lastPrimary staffops.Action
 	lastTick    time.Time
@@ -93,6 +102,7 @@ func newSentinelRuntime(maxPerHour int) *sentinelRuntime {
 		},
 		budget:    staffops.ActionBudget{MaxPerHour: maxPerHour},
 		firstSeen: make(map[string]time.Time),
+		poFanout:  make(map[string]poFanoutState),
 	}
 }
 
@@ -608,6 +618,12 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			in.FrontierStalled = stalled
 			in.FrontierDetail = detail
 			resources.FrontierDepth = depth
+
+			// --- PO fan-out fault (🎯T380) ---
+			// Same leaves, read against the POs answerable for them: a stall
+			// on this frontier has an owner, and silence from that owner is a
+			// fault rather than the sleep 🎯T325.1 blesses.
+			in.POFanout = s.samplePOFanout(rt, obs, overseer, workdir, now, grace, args.ProcessRunning)
 		}
 	}
 

@@ -31,9 +31,35 @@ type ObserveInput struct {
 	FrontierDepth   int
 	FrontierStalled bool
 	FrontierDetail  string
+	// POFanout carries product owners whose idleness the ledger says is a
+	// fault rather than 🎯T325.1 sleep (🎯T380). Built by the harness from
+	// internal/pofanout; staffops keeps the verdict as a string so the pure
+	// policy layer stays a leaf package.
+	POFanout []POFanoutObs
 	// Cost alerts already shaped as optional residual signals.
 	CostAlerts []CostObs
 }
+
+// POFanoutObs is one product-owner fan-out fault (🎯T380). Only faults belong
+// here — a legitimately sleeping PO produces no observation at all, which is
+// what keeps a correctly-idle PO out of the wire report.
+type POFanoutObs struct {
+	Name string
+	// Verdict is the pofanout verdict: stalled | turn_no_fanout.
+	Verdict string
+	// Reason is the stable code behind the verdict.
+	Reason string
+	// ReadyCount is how many ready, unengaged, non-gated leaves are stranded.
+	ReadyCount int
+	// Detail is the compact evidence line (phase, children, ready ids).
+	Detail string
+}
+
+// POFanoutTurnNoFanout is the verdict for a PO that ran a turn and ended it
+// idle with zero new children while ready leaves waited — the fan-out order
+// that evaporated. Escalated above a plain stall: the PO was demonstrably
+// awake.
+const POFanoutTurnNoFanout = "turn_no_fanout"
 
 // FrontierStallObs derives ObserveInput frontier stall fields from an
 // unattended-ready leaf count (🎯T346). readyCount must already exclude
@@ -229,6 +255,28 @@ func BuildSignals(in ObserveInput) []Signal {
 			Mechanical: false,
 			Detail: firstNonEmpty(in.FrontierDetail,
 				fmt.Sprintf("unattended-ready leaves=%d with no engaged work", in.FrontierDepth)),
+		})
+	}
+
+	// PO fan-out fault (🎯T380): idle PO on a frontier the ledger says is
+	// kickable. Non-mechanical — no harness path rehydrates intent, so this is
+	// a file+PO residual the overseer must see rather than ordinary idle.
+	for _, p := range in.POFanout {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			continue
+		}
+		sev := "high"
+		if strings.TrimSpace(p.Verdict) == POFanoutTurnNoFanout {
+			sev = "critical"
+		}
+		out = append(out, Signal{
+			Kind:       "po_fanout_stall",
+			Symptom:    "po_stall:" + name,
+			Severity:   sev,
+			Mechanical: false,
+			Detail: firstNonEmpty(p.Detail,
+				fmt.Sprintf("%s: %s ready=%d", p.Verdict, p.Reason, p.ReadyCount)),
 		})
 	}
 

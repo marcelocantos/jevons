@@ -482,3 +482,61 @@ func TestObserveThenClassifyPipeline(t *testing.T) {
 		}
 	}
 }
+
+// 🎯T380: a PO fan-out fault reaches the wire as a non-mechanical residual the
+// overseer must decide on. Only faults are ever passed in — a legitimately
+// sleeping PO produces no observation, so a correctly-idle PO can never appear
+// in the report at all.
+func TestBuildSignalsPOFanoutFault(t *testing.T) {
+	sigs := BuildSignals(ObserveInput{
+		OverseerAlive: true, OverseerAttached: true,
+		POFanout: []POFanoutObs{
+			{Name: "jevons-po", Verdict: "stalled", Reason: "idle_on_ready_leaves",
+				ReadyCount: 2, Detail: "po=jevons-po ready=2 [T500,T501]"},
+			{Name: "squz-po", Verdict: POFanoutTurnNoFanout, Reason: "turn_ended_zero_new_children",
+				ReadyCount: 1},
+			{Name: "  ", Verdict: "stalled"},
+		},
+	})
+
+	var stalled, silent *Signal
+	for i := range sigs {
+		if sigs[i].Kind != "po_fanout_stall" {
+			continue
+		}
+		switch sigs[i].Symptom {
+		case "po_stall:jevons-po":
+			stalled = &sigs[i]
+		case "po_stall:squz-po":
+			silent = &sigs[i]
+		default:
+			t.Fatalf("unexpected fan-out symptom %q (blank names must be dropped)", sigs[i].Symptom)
+		}
+	}
+	if stalled == nil || silent == nil {
+		t.Fatalf("want both fan-out faults on the wire; got %+v", sigs)
+	}
+	if stalled.Mechanical {
+		t.Fatal("fan-out silence is not a class T204/T207/T85 already owns")
+	}
+	if stalled.Severity != "high" {
+		t.Fatalf("stalled severity=%q want high", stalled.Severity)
+	}
+	if silent.Severity != "critical" {
+		t.Fatalf("turn-no-fanout severity=%q want critical — the PO was awake", silent.Severity)
+	}
+	if stalled.Detail != "po=jevons-po ready=2 [T500,T501]" {
+		t.Fatalf("supplied detail must survive verbatim: %q", stalled.Detail)
+	}
+	if !strings.Contains(silent.Detail, "turn_ended_zero_new_children") ||
+		!strings.Contains(silent.Detail, "ready=1") {
+		t.Fatalf("missing detail must be synthesised from the verdict: %q", silent.Detail)
+	}
+
+	// Both must classify file+PO: nothing mechanical repairs a PO's judgement.
+	for _, sig := range []*Signal{stalled, silent} {
+		if got := Classify(*sig); got.Action != ActionFilePO {
+			t.Fatalf("%s → %s want %s", sig.Symptom, got.Action, ActionFilePO)
+		}
+	}
+}
