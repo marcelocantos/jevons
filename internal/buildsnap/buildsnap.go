@@ -193,6 +193,11 @@ func prepareSnapshot(cfg Config, head string) (recreated bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(cfg.SnapDir), 0o755); err != nil {
 		return false, fmt.Errorf("create snapshot parent: %w", err)
 	}
+	// 🎯T440 //worktreereap:exempt — the snapshot is a permanent worktree the
+	// sweeper protects by path, and it outlives every process that recreates
+	// it. Stamping it with the pid of a daemon that restarts several times a
+	// day would record an owner that is dead by design, turning a
+	// deliberately long-lived tree into one that looks abandoned every hour.
 	if _, err := git(cfg.RepoRoot, "worktree", "add", "--detach", cfg.SnapDir, head); err != nil {
 		return false, fmt.Errorf("create snapshot worktree: %w", err)
 	}

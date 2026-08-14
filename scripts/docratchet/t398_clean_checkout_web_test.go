@@ -19,6 +19,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/worktreereap"
 )
 
 // TestT398CleanCheckoutWebTestsPass checks HEAD out into a detached worktree
@@ -37,6 +39,13 @@ func TestT398CleanCheckoutWebTestsPass(t *testing.T) {
 	wt := filepath.Join(t.TempDir(), "head")
 	if out, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", wt, "HEAD").CombinedOutput(); err != nil {
 		t.Fatalf("git worktree add: %v\n%s", err, out)
+	}
+	// 🎯T440: stamp the owner, so a run killed before the cleanup below is
+	// reaped from outside rather than left on disk for the sweeper to guess
+	// about. `make test-web` is the longer of the two ratchets and therefore
+	// the likelier one to be killed by a timeout.
+	if err := worktreereap.Mark(&worktreereap.MarkArgs{Worktree: wt, Note: t.Name()}); err != nil {
+		t.Fatalf("mark worktree owner: %v", err)
 	}
 	t.Cleanup(func() {
 		// TempDir removal leaves .git/worktrees metadata behind; prune it.

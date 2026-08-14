@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/worktreereap"
 )
 
 // gitRepo reports whether repoRoot is inside a git work tree, skipping the
@@ -43,6 +45,15 @@ func TestT360CleanCheckoutBuilds(t *testing.T) {
 	wt := filepath.Join(t.TempDir(), "head")
 	if out, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", wt, "HEAD").CombinedOutput(); err != nil {
 		t.Fatalf("git worktree add: %v\n%s", err, out)
+	}
+	// 🎯T440: stamp the owner so the sweeper can reap this tree when the
+	// cleanup below does not run. It did not run three times: a timeout
+	// panic, a SIGKILL and a dropped session each skip t.Cleanup entirely,
+	// and the leaked directories still exist, so `git worktree prune`
+	// considers them healthy. The Mark is the half of the lifetime that
+	// survives this process; the sweep decides the rest from outside.
+	if err := worktreereap.Mark(&worktreereap.MarkArgs{Worktree: wt, Note: t.Name()}); err != nil {
+		t.Fatalf("mark worktree owner: %v", err)
 	}
 	t.Cleanup(func() {
 		// TempDir removal leaves .git/worktrees metadata behind; prune it.

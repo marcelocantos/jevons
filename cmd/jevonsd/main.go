@@ -682,6 +682,11 @@ func main() {
 	// exactly backwards.
 	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv)
 
+	// 🎯T440: reap verification worktrees whose owner is gone, from outside
+	// the processes that create them — their own cleanup does not run when
+	// they are killed. Ungated for the same reason as the loop above.
+	startWorktreeReap(ctx, cfg)
+
 	rsiCoach := startAmbientRSICoach(ctx, cfg, mcpSrv, capacityGate(capGov))
 	rsiLoop := startAmbientRSIMint(ctx, cfg, mcpSrv)
 
