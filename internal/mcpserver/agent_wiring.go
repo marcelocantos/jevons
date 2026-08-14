@@ -41,9 +41,10 @@ import (
 //   - fleet.Claudia carries a launch hook (SetLaunchHook), so compaction,
 //     provider migration, thread launches and butler deliver-rehydrates are
 //     covered at their shared chokepoint rather than one at a time.
-//   - WireRunningAgents is no longer a boot-time one-shot but a standing
-//     sweep (StartAgentWireSweep). A launch road nobody wired — road six —
-//     is repaired within one interval instead of never.
+//   - the fleet-wide pass is no longer a boot-time one-shot: the same body
+//     runs as a standing sweep (StartAgentWireSweep). A launch road nobody
+//     wired — road six — is repaired within one interval instead of never.
+//     It found one on its first day: jv-t383-auto, two minutes after boot.
 //
 // The true chokepoint is claudia.Registry.Launch itself, which would catch
 // StartAll and every future caller at the source. It is not taken here because
@@ -179,45 +180,75 @@ func (s *Server) forgetAgentWiring(name string) {
 	delete(s.wiredSinks, name)
 }
 
-// WireRunningAgents asserts the invariant across the whole fleet: every live
-// registered agent except the overseer carries the sink. Idempotent, so it is
-// both the boot-time pass after registry.StartAll (🎯T61) and the body of the
-// standing sweep (🎯T426).
+// wireFleet asserts the invariant across the whole fleet — every live
+// registered agent except the overseer carries the sink — and returns the names
+// it had to attach. Idempotent, so it is the body of both fleet-wide passes.
 //
-// Returns the number of agents whose stream was dark and has now been
-// re-attached. In steady state that is zero; anything else is a launch road
-// that does not wire, and it is logged as one.
-func (s *Server) WireRunningAgents(overseerName string) int {
+// It does not log. What an attach MEANS is the whole difference between its two
+// callers, and only they know it (see EnsureAgentEventsWired's bool).
+func (s *Server) wireFleet(overseerName string) []string {
 	if s == nil || s.registry == nil {
-		return 0
+		return nil
 	}
-	repaired := 0
+	var attached []string
 	for _, def := range s.registry.List() {
 		if def.Name == overseerName {
 			continue
 		}
-		if !s.EnsureAgentEventsWired(def.Name) {
-			continue
+		if s.EnsureAgentEventsWired(def.Name) {
+			attached = append(attached, def.Name)
 		}
-		repaired++
+	}
+	return attached
+}
+
+// WireRunningAgents is the boot-time pass after registry.StartAll (🎯T61).
+//
+// Every resumed agent attaches here, because at boot nothing has wired anything
+// yet — this pass IS the wiring, not a repair of one. Reporting seventeen
+// resumed workers as seventeen faults is how the one real fault goes unread:
+// on 2026-08-15 the boot pass warned about all 17 agents at 08:27:47, and the
+// sweep's genuine find two minutes later (jv-t383-auto, a launch road that does
+// not wire) arrived looking exactly like the noise above it. So the boot pass
+// states its count once, at INFO, and the WARN vocabulary stays scarce enough
+// to mean something.
+func (s *Server) WireRunningAgents(overseerName string) int {
+	attached := s.wireFleet(overseerName)
+	if len(attached) > 0 {
+		slog.Info("🎯T61 wired event streams for agents resumed at boot",
+			"count", len(attached))
+	}
+	return len(attached)
+}
+
+// sweepAgentWiring is the standing pass (🎯T426), and by then an attach is a
+// fault: the daemon has been running, so an agent that was dark had a turn the
+// daemon could have missed.
+//
+// Returns the number of agents whose stream was dark and has now been
+// re-attached. In steady state that is zero; anything else is a launch road
+// that does not wire, and it is logged as one.
+func (s *Server) sweepAgentWiring(overseerName string) int {
+	attached := s.wireFleet(overseerName)
+	for _, name := range attached {
 		// Loud, and with the cost named. A sweep that attaches a sink to an
 		// already-running agent has found an agent the daemon could not see
 		// turn boundaries for, and the queue depth is how much of the fleet's
 		// traffic was stranded behind that blindness.
-		if pending := s.pendingAgentSends(def.Name); pending > 0 {
+		if pending := s.pendingAgentSends(name); pending > 0 {
 			slog.Warn("🎯T426 agent event stream was dark — messages held across an unobserved turn boundary",
-				"agent", def.Name, "queued", pending,
+				"agent", name, "queued", pending,
 				"detail", "re-attached; the queue drains at this agent's next observed terminal stop")
 		} else {
 			slog.Warn("🎯T426 agent event stream was dark — re-attached",
-				"agent", def.Name,
+				"agent", name,
 				"detail", "a launch road did not wire this process; turn ends were not being observed")
 		}
 	}
-	return repaired
+	return len(attached)
 }
 
-// StartAgentWireSweep runs WireRunningAgents on a ticker until ctx is done.
+// StartAgentWireSweep runs sweepAgentWiring on a ticker until ctx is done.
 // This is the backstop for launch roads that do not yet call the hook — the
 // reason 🎯T426 is not simply a fifth call site.
 func StartAgentWireSweep(ctx context.Context, s *Server, overseerName string, interval time.Duration) {
@@ -236,7 +267,7 @@ func StartAgentWireSweep(ctx context.Context, s *Server, overseerName string, in
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				s.WireRunningAgents(overseerName)
+				s.sweepAgentWiring(overseerName)
 			}
 		}
 	}()

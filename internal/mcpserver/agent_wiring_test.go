@@ -339,7 +339,7 @@ func TestT426SweepRepairsAnUnwiredLaunchRoadAndSaysSo(t *testing.T) {
 	s.noteTurnInFlight(name)
 	s.enqueueAgentSend(name, "brief that has been waiting")
 
-	if n := s.WireRunningAgents("jevons"); n != 1 {
+	if n := s.sweepAgentWiring("jevons"); n != 1 {
 		t.Fatalf("sweep repaired %d want 1", n)
 	}
 	if n := proc.EventSubscriberCount(); n != 1 {
@@ -350,7 +350,7 @@ func TestT426SweepRepairsAnUnwiredLaunchRoadAndSaysSo(t *testing.T) {
 	}
 	// Steady state is silent: a sweep that keeps reporting repairs is a sweep
 	// that is not repairing anything.
-	if n := s.WireRunningAgents("jevons"); n != 0 {
+	if n := s.sweepAgentWiring("jevons"); n != 0 {
 		t.Fatalf("second sweep repaired %d want 0", n)
 	}
 
@@ -381,6 +381,74 @@ func TestT426SweepRepairsAnUnwiredLaunchRoadAndSaysSo(t *testing.T) {
 	waitFor(t, "the swept agent's queue to drain", func() bool {
 		return len(sender.delivered()) == 1
 	})
+}
+
+// Clause 3 has a second edge, found by the fix's own first boot: an alarm that
+// fires for the normal state of the world is not a loud signal, it is a quiet
+// one. At 08:27:47 on 2026-08-15 the boot pass warned that all 17 resumed
+// agents had dark streams — they had, in the sense that nothing had wired them
+// yet, which is what a boot IS — and at 08:29:47 the sweep found a real
+// unwired launch road (jv-t383-auto) whose warning was indistinguishable from
+// the seventeen above it. The boot pass must therefore be quiet, and the sweep
+// must stay loud, in the same suite: either one alone can be satisfied by
+// silencing both.
+func TestT426BootPassIsQuietAndTheSweepStaysLoud(t *testing.T) {
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const name = "jv-t426-booted"
+	s, procs, _, _ := t426Fixture(t, name)
+	procs.set(name, &claudia.Agent{})
+	for _, other := range []string{"jv-t426-booted-2", "jv-t426-booted-3"} {
+		if err := s.registry.Register(claudia.AgentDef{
+			Name: other, WorkDir: t.TempDir(), SessionID: "s-" + other,
+			Materialized: true, Provider: "claude",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		procs.set(other, &claudia.Agent{})
+	}
+
+	if n := s.WireRunningAgents("jevons"); n != 3 {
+		t.Fatalf("boot pass wired %d want 3", n)
+	}
+	for _, r := range cap.records {
+		if r.Level >= slog.LevelWarn {
+			t.Fatalf("boot pass raised %v: %q %v — resuming the fleet is not a fault",
+				r.Level, r.Message, attrsMap(r))
+		}
+	}
+	// Quiet is not silent: the count is stated once, so a boot that wires
+	// nothing at all is still distinguishable from one that wires the fleet.
+	var counted bool
+	for _, r := range cap.records {
+		if attrsMap(r)["count"] != nil && equalsInt(attrsMap(r)["count"], 3) {
+			counted = true
+		}
+	}
+	if !counted {
+		t.Fatal("boot pass did not report how many streams it wired")
+	}
+
+	// Now the daemon has been running, and a rotation lands on a road that
+	// does not wire. That one is a fault, and it must be audible over a log
+	// the boot pass no longer filled.
+	mark := len(cap.records)
+	procs.set(name, &claudia.Agent{})
+	if n := s.sweepAgentWiring("jevons"); n != 1 {
+		t.Fatalf("sweep repaired %d want 1", n)
+	}
+	var warned bool
+	for _, r := range cap.records[mark:] {
+		if r.Level == slog.LevelWarn && attrsMap(r)["agent"] == name {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatal("the sweep's real find was silenced along with the boot noise")
+	}
 }
 
 // Clause 3: the failure mode is silence, so a send queued over a stream the
