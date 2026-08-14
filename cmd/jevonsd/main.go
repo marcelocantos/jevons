@@ -637,10 +637,10 @@ func main() {
 	// provider migration, thread launch, deliver-rehydrate — attaches the MCP
 	// event sink to the process it just brought up. Without it a rotated agent
 	// keeps its name and its registry row while its turn ends, send-queue
-	// drain, upward reports and 🎯T165 auto-deregistration all go dark.
-	fleetAdapter.SetLaunchHook(func(name string) {
-		mcpSrv.EnsureAgentEventsWired(name)
-	})
+	// drain, upward reports and 🎯T165 auto-deregistration all go dark. The
+	// hook brackets the launch rather than trailing it, so the standing sweep
+	// can tell a process that is still coming up from one nobody wired.
+	fleetAdapter.SetLaunchHook(mcpSrv.NoteAgentLaunch)
 	mcpSrv.SetMigrator(fleetAdapter)
 	srv.SetOverseerMigrator(fleetAdapter)
 	srv.SetDefaultProvider(defaultProvider)

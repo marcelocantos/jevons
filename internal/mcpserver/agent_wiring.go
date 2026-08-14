@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -60,6 +61,21 @@ import (
 // is reported: a WARN naming the queue it was holding, and, when a sender is
 // standing right there being told "queued", the truth in its reply. A launch
 // is exempt: a brand-new process has no history to have missed.
+//
+// AND A LAUNCH IN PROGRESS IS EXEMPT TOO, which the first version got wrong in
+// the other direction and production said so within three minutes. The
+// registry carries the successor's process the moment reg.Launch returns, but
+// the hook wires it only after the readiness handshake — two seconds later, on
+// the far side of WaitReady. On 2026-08-15 the sweep landed in that gap:
+// jv-t435-reap-eventlog was compacted at 08:41:23, the sweep ran at 08:41:26
+// and reported its stream dark with a message "held across an unobserved turn
+// boundary", and the compaction completed normally at 08:41:26.295. Nothing
+// was wrong, and the WARN said something false about a queue that drained
+// fine. That is the same defect the boot pass had — an alarm that fires for
+// the normal state of the world — so the fleet adapter now brackets each
+// launch (NoteAgentLaunch returns the function that ends it), and the sweep
+// still ATTACHES during that window, because attaching early is free, but
+// calls it what it is.
 
 // DefaultAgentWireInterval is how often the standing sweep re-asserts the
 // invariant. Unhurried on purpose, like the ceiling governor it backstops: a
@@ -169,6 +185,54 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	return true
 }
 
+// NoteAgentLaunch marks a launch in flight for name and returns the function
+// that ends it, wiring the successor's process on the way out (🎯T426).
+//
+// This is the shape the fleet adapter's launch hook takes, and the bracket is
+// not decoration: between reg.Launch and the readiness handshake the successor
+// is registered, alive and unwired, which is indistinguishable from the outage
+// this target is about unless someone says a launch is running.
+//
+// The wiring happens BEFORE the in-flight mark is dropped, so a sweep that
+// races the end of a launch finds the sink already attached rather than the
+// mark already gone.
+func (s *Server) NoteAgentLaunch(name string) func() {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return func() {}
+	}
+	s.wireMu.Lock()
+	if s.launching == nil {
+		s.launching = map[string]int{}
+	}
+	s.launching[name]++
+	s.wireMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.EnsureAgentEventsWired(name)
+			s.wireMu.Lock()
+			defer s.wireMu.Unlock()
+			if s.launching[name] <= 1 {
+				delete(s.launching, name)
+			} else {
+				s.launching[name]--
+			}
+		})
+	}
+}
+
+// launchInFlight reports whether a launch is currently bringing name's process
+// up, which is the difference between "nobody wired this road" and "not yet".
+func (s *Server) launchInFlight(name string) bool {
+	if s == nil {
+		return false
+	}
+	s.wireMu.Lock()
+	defer s.wireMu.Unlock()
+	return s.launching[name] > 0
+}
+
 // forgetAgentWiring drops the wiring record for a torn-down seat. Must not be
 // called while holding Server.mu — see attachAgentSink on lock order.
 func (s *Server) forgetAgentWiring(name string) {
@@ -231,6 +295,17 @@ func (s *Server) WireRunningAgents(overseerName string) int {
 func (s *Server) sweepAgentWiring(overseerName string) int {
 	attached := s.wireFleet(overseerName)
 	for _, name := range attached {
+		// Unless a launch is bringing that process up right now, in which case
+		// the sweep has simply arrived first — inside the two seconds between
+		// reg.Launch and the readiness handshake — and there is no unobserved
+		// boundary behind it. Wired early, said plainly, and the count below
+		// still reports it so a sweep doing this constantly is visible.
+		if s.launchInFlight(name) {
+			slog.Info("🎯T426 wired a launch already in flight",
+				"agent", name,
+				"detail", "the sweep reached the successor before its launch finished; not a dark stream")
+			continue
+		}
 		// Loud, and with the cost named. A sweep that attaches a sink to an
 		// already-running agent has found an agent the daemon could not see
 		// turn boundaries for, and the queue depth is how much of the fleet's

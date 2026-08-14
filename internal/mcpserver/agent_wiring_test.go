@@ -503,6 +503,80 @@ func TestT426QueuedSendOverADarkStreamIsFailLoud(t *testing.T) {
 	}
 }
 
+// Clause 3's third edge, and this one production found within three minutes of
+// the fix landing. The registry carries the successor the instant reg.Launch
+// returns, but the sink goes on after WaitReady — two seconds later. On
+// 2026-08-15 the sweep ran at 08:41:26 inside exactly that gap for
+// jv-t435-reap-eventlog, which had been compacted at 08:41:23 and completed
+// normally at 08:41:26.295, and reported its stream dark with a queue "held
+// across an unobserved turn boundary". Nothing was held: the launch finished
+// and the queue drained. A launch in progress must therefore be wired (early
+// is free) and NOT called a fault — while an agent nobody is launching still
+// is, in the same test, because silencing both is the failure this pins.
+func TestT426ALaunchInFlightIsNotADarkStream(t *testing.T) {
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const name = "jv-t426-launching"
+	s, procs, sender, _ := t426Fixture(t, name)
+
+	// The compaction: the predecessor's seat is gone, a fresh process is in
+	// the registry, and the launch has not yet reached its readiness
+	// handshake — so nothing has wired it. A brief is queued behind the turn
+	// the predecessor was running, exactly as on 2026-08-10.
+	endLaunch := s.NoteAgentLaunch(name)
+	successor := &claudia.Agent{}
+	procs.set(name, successor)
+	s.noteTurnInFlight(name)
+	s.enqueueAgentSend(name, "brief queued across the rotation")
+
+	if n := s.sweepAgentWiring(name + "-no-overseer-here"); n != 1 {
+		t.Fatalf("sweep wired %d want 1 — a launch in flight must still be wired, just not blamed", n)
+	}
+	if n := successor.EventSubscriberCount(); n != 1 {
+		t.Fatalf("successor subscribers=%d want 1", n)
+	}
+	for _, r := range cap.records {
+		if r.Level >= slog.LevelWarn {
+			t.Fatalf("sweep raised %v: %q %v — a launch in progress is not an outage",
+				r.Level, r.Message, attrsMap(r))
+		}
+	}
+
+	// The launch completes. Its own wiring call is a no-op on the process the
+	// sweep already attached, and the queue drains at the successor's first
+	// observed terminal stop — which is the whole point of wiring it early.
+	endLaunch()
+	if s.launchInFlight(name) {
+		t.Fatal("launch still marked in flight after it ended")
+	}
+	if n := successor.EventSubscriberCount(); n != 1 {
+		t.Fatalf("launch completion double-wired the successor: subscribers=%d want 1", n)
+	}
+	successor.PublishEvent(terminalStop(""))
+	waitFor(t, "the successor's queue to drain", func() bool {
+		return len(sender.delivered()) == 1
+	})
+
+	// And with no launch to explain it, the same shape is a fault again.
+	mark := len(cap.records)
+	procs.set(name, &claudia.Agent{})
+	if n := s.sweepAgentWiring(name + "-no-overseer-here"); n != 1 {
+		t.Fatalf("sweep wired %d want 1", n)
+	}
+	var warned bool
+	for _, r := range cap.records[mark:] {
+		if r.Level == slog.LevelWarn && attrsMap(r)["agent"] == name {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatal("a genuinely unwired launch road was silenced along with the in-flight launch")
+	}
+}
+
 func equalsInt(v any, want int) bool {
 	switch n := v.(type) {
 	case int:

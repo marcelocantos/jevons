@@ -118,6 +118,13 @@ type Server struct {
 	wireMu     sync.Mutex
 	wiredSinks map[string]wiredSink
 
+	// launching counts the launches currently in flight per agent (🎯T426).
+	// A process that is registered and alive but not yet wired is a fault
+	// only if nobody is in the middle of bringing it up; while a launch is
+	// running it is simply a launch. Guarded by wireMu, with wiredSinks,
+	// because the two are read together by the sweep.
+	launching map[string]int
+
 	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
 	selfTestEnv SelfTestEnvFunc
 

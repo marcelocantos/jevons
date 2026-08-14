@@ -79,17 +79,24 @@ type Claudia struct {
 	// be able to write that file without launching a provider.
 	seedTranscript func(name string) string
 
-	// onLaunch runs after this adapter brings a process up for an agent
-	// (🎯T426). The host attaches whatever must ride EVERY launch — today
-	// the mcpserver event sink, whose absence takes an agent's turn ends,
+	// onLaunch brackets a launch this adapter performs (🎯T426). It is called
+	// BEFORE the process comes up and returns the function to call once it
+	// has. The host attaches whatever must ride EVERY launch — today the
+	// mcpserver event sink, whose absence takes an agent's turn ends,
 	// send-queue drain, upward reports and auto-deregistration with it.
+	//
+	// A bracket rather than a notification because the host also has to know
+	// about the WINDOW: from reg.Launch to the readiness handshake the
+	// successor is registered, alive and not yet wired, and a watcher that
+	// cannot tell that state from a launch road nobody wired reports a
+	// healthy compaction as an outage.
 	//
 	// This adapter is the shared road for compaction (the context ceiling
 	// governor), provider migration, thread launches and deliver-rehydrate,
 	// so the hook lands once instead of at four call sites that each have to
 	// remember. Name only, deliberately: the host resolves the process from
 	// the registry it already owns, and fleet stays free of mcpserver.
-	onLaunch func(name string)
+	onLaunch func(name string) func()
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from
@@ -105,20 +112,25 @@ func NewClaudia(reg *claudia.Registry) *Claudia {
 }
 
 // SetLaunchHook installs the per-launch host callback (🎯T426). Nil clears it.
-func (f *Claudia) SetLaunchHook(fn func(name string)) {
+func (f *Claudia) SetLaunchHook(fn func(name string) func()) {
 	if f == nil {
 		return
 	}
 	f.onLaunch = fn
 }
 
-// launched notifies the host that name now has a live process. Called after
-// the readiness handshake, so the hook never sees a half-started pane.
-func (f *Claudia) launched(name string) {
+// launching tells the host a launch has begun for name and returns the
+// function that ends it. The completion runs after the readiness handshake, so
+// the host never wires a half-started pane, and the span between the two is
+// the host's answer to "is this unwired process a fault or a launch".
+func (f *Claudia) launching(name string) func() {
 	if f == nil || f.onLaunch == nil {
-		return
+		return func() {}
 	}
-	f.onLaunch(name)
+	if done := f.onLaunch(name); done != nil {
+		return done
+	}
+	return func() {}
 }
 
 // SetDefaultProvider sets the daemon-wide backend for new threads when
@@ -244,6 +256,15 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 		return err
 	}
 
+	// 🎯T426: a rotation replaces the process object while the name, the
+	// registry row and the workdir all stay put, so nothing downstream can
+	// tell that this is a different conversation. The host is bracketed
+	// around the whole launch — told that one is running before the registry
+	// carries the new process, and told it is done before the caller seeds
+	// the successor, because the seed's own turn end is the first boundary
+	// that must be observed.
+	defer f.launching(t.ID)()
+
 	ag, err := f.reg.Launch(t.ID)
 	if err != nil {
 		return fmt.Errorf("launch agent %q: %w", t.ID, err)
@@ -258,12 +279,6 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 	if sid := ag.SessionID(); sid != "" {
 		t.SessionID = sid
 	}
-	// 🎯T426: a rotation replaces the process object while the name, the
-	// registry row and the workdir all stay put, so nothing downstream can
-	// tell that this is a different conversation. The host is told here,
-	// before the caller seeds the successor — the seed's own turn end is the
-	// first boundary that must be observed.
-	f.launched(t.ID)
 	return nil
 }
 
@@ -362,16 +377,23 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 	defer f.enterTurn(id)()
 	ag := f.reg.Get(id)
 	if ag == nil || !ag.Alive() {
+		// 🎯T426: rehydrate is a launch road too. Ended as soon as the process
+		// is ready rather than deferred to the end of this function, because
+		// the turn that follows can run for minutes and a launch that is
+		// "in flight" for all of it would mute the sweep for all of it.
+		endLaunch := f.launching(id)
 		launched, err := f.reg.Launch(id)
 		if err != nil {
+			endLaunch()
 			return "", fmt.Errorf("could not rehydrate agent %q: %w", id, err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), f.readyTimeout)
 		defer cancel()
-		if err := launched.WaitReady(ctx); err != nil {
+		err = launched.WaitReady(ctx)
+		endLaunch()
+		if err != nil {
 			return "", fmt.Errorf("agent %q not ready: %w", id, err)
 		}
-		f.launched(id) // 🎯T426: rehydrate is a launch road too.
 		ag = launched
 	}
 	reply, err := f.awaitReply(ag, f.providerOf(id), text)
