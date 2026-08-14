@@ -135,11 +135,11 @@ func TestWorkAgentsEngagedOnTargetSkipsAsideAndSelf(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := workAgentsEngagedOnTarget(reg, "T1", "jv-worker")
+	got := workAgentsEngagedOnTarget(reg, "T1", dir, "jv-worker")
 	if len(got) != 0 {
 		t.Fatalf("self excluded: %v", got)
 	}
-	got = workAgentsEngagedOnTarget(reg, "T1", "new-one")
+	got = workAgentsEngagedOnTarget(reg, "T1", dir, "new-one")
 	if len(got) != 1 || got[0] != "jv-worker" {
 		t.Fatalf("got %v", got)
 	}

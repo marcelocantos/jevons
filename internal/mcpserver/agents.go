@@ -466,17 +466,27 @@ func normalizeAgentTargetID(raw string) string {
 }
 
 // workAgentsEngagedOnTarget returns registered work agents bound to targetID
-// (TargetID equality), excluding excludeName (same-name resume). Skips
-// overseer purpose. 🎯T222.
-func workAgentsEngagedOnTarget(reg *claudia.Registry, targetID, excludeName string) []string {
+// **in the ledger that scopeWorkdir resolves to**, excluding excludeName
+// (same-name resume). Skips overseer purpose. 🎯T222, scoped by 🎯T389.
+//
+// scopeWorkdir is the workdir of the work being asked about — the spawning
+// agent's, or the repo whose frontier is being swept. An agent bound to
+// claudia 🎯T19 is not an implementer of orthograph 🎯T19, so it neither
+// blocks that spawn nor answers to that id. Empty scopeWorkdir asks
+// unscoped (the pre-T389 reading) and matches every ledger.
+func workAgentsEngagedOnTarget(reg *claudia.Registry, targetID, scopeWorkdir, excludeName string) []string {
 	want := normalizeAgentTargetID(targetID)
 	if reg == nil || want == "" {
 		return nil
 	}
+	wantLedger := targetfile.LedgerKey(scopeWorkdir)
 	excludeName = strings.TrimSpace(excludeName)
 	var names []string
 	for _, d := range reg.List() {
 		if normalizeAgentTargetID(d.TargetID) != want {
+			continue
+		}
+		if !targetfile.SameLedger(wantLedger, targetfile.LedgerKey(d.WorkDir)) {
 			continue
 		}
 		if d.Purpose == claudia.PurposeOverseer || d.Name == "jevons" {
@@ -516,7 +526,7 @@ func (s *Server) refuseEngagedOrClosedTarget(name, workdir, targetID string, for
 	}
 	var engaged []string
 	if s != nil && s.registry != nil {
-		engaged = workAgentsEngagedOnTarget(s.registry, targetID, name)
+		engaged = workAgentsEngagedOnTarget(s.registry, targetID, workdir, name)
 	}
 	status, _ := loadTargetStatusForKickoff(workdir, targetID)
 	dec := targetfile.GateKickoff(status, engaged, force)

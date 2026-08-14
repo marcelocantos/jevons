@@ -9523,8 +9523,11 @@ function renderFrontierTable(model) {
   table.setAttribute('aria-label', 'Bullseye frontier');
   const tbody = document.createElement('tbody');
   const agents = (model && model.agents) || frontierAgentsCache || [];
+  // 🎯T389: scope the merge to this ledger — the fleet spans several repos and
+  // target ids are per-ledger, so another repo's T19 worker must not mark this
+  // repo's T19 row engaged.
   let rows = (typeof FrontierTable !== 'undefined' && FrontierTable.applyEngagement)
-    ? FrontierTable.applyEngagement(model.rows || [], agents)
+    ? FrontierTable.applyEngagement(model.rows || [], agents, model.ledgerKey || '')
     : (model.rows || []);
   // 🎯T278: overlay optimistic kickoff-submitted; prune when engagement lands.
   if (typeof FrontierTable !== 'undefined' && FrontierTable.applyKickoffSubmitted) {
@@ -9908,8 +9911,9 @@ function playFrontierTarget(row, btnEl) {
 // Mock seam: window.__frontierEngagementStop(url, body) → Promise.
 function stopFrontierEngagement(row, btnEl) {
   if (!row || !row.id) return Promise.resolve(null);
+  // 🎯T389: stop within the ledger the table is bound to (🎯T253 rebinds it).
   const req = (typeof FrontierTable !== 'undefined' && FrontierTable.stopEngagementRequest)
-    ? FrontierTable.stopEngagementRequest(row.id)
+    ? FrontierTable.stopEngagementRequest(row.id, lastFrontierCwd)
     : {
         url: '/api/agents/engagement/stop',
         method: 'POST',

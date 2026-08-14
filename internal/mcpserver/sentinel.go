@@ -585,7 +585,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 					SetAsideDeps:   leaf.SetAsideDeps,
 					ActiveChildren: leaf.ActiveChildren,
 					ForceEngage:    poproactive.IsForceEngageTag(leaf.Tags),
-					AlreadyEngaged: len(workAgentsEngagedOnTarget(s.registry, leaf.ID, "")) > 0,
+					AlreadyEngaged: len(workAgentsEngagedOnTarget(s.registry, leaf.ID, workdir, "")) > 0,
 				})
 			}
 			readyIDs := poproactive.Classify(obs).ReadyIDs

@@ -1038,6 +1038,62 @@ test('applyEngagement by target_id sinks engaged bottom + stop request (🎯T198
   assert.ok(text.indexOf('target_id=T10.2') >= 0, 'target_id in brief: ' + text);
 });
 
+// 🎯T389: the overlay merges on (ledger, target_id). The fleet spans several
+// repos and ids are allocated per ledger, so claudia's T19 worker must not
+// mark orthograph's T19 row engaged — and stopping from a rebound table
+// (🎯T253) must say which repo it means.
+test('applyEngagement is scoped to its own ledger (🎯T389)', function () {
+  const CLAUDIA = '/w/claudia/bullseye.yaml';
+  const ORTHO = '/w/orthograph/bullseye.yaml';
+  const agents = [
+    { name: 'cl-t19-worker', purpose: 'work', target_id: 'T19', ledger: CLAUDIA },
+    { name: 'og-t19-worker', purpose: 'work', target_id: 'T19', ledger: ORTHO },
+  ];
+
+  // Control: the pre-T389 question — unscoped — still sees both, so the
+  // scoped assertions below are not vacuous.
+  assert.deepStrictEqual(FT.engagementIndex(agents)['T19'].agents,
+    ['cl-t19-worker', 'og-t19-worker']);
+
+  assert.deepStrictEqual(FT.engagementIndex(agents, CLAUDIA)['T19'].agents, ['cl-t19-worker']);
+  assert.deepStrictEqual(FT.engagementIndex(agents, ORTHO)['T19'].agents, ['og-t19-worker']);
+  // A third repo holding the same number has nobody on it.
+  assert.strictEqual(FT.engagementIndex(agents, '/w/jevons/bullseye.yaml')['T19'], undefined);
+
+  const rows = [{ id: 'T19', name: 'Local work' }];
+  const out = FT.applyEngagement(rows, agents, ORTHO);
+  assert.strictEqual(out[0].engaged, true);
+  assert.deepStrictEqual(out[0].engaged_agents, ['og-t19-worker']);
+
+  // An agent with no ledger at all stays visible to every scope (unknown is
+  // not distinct — it must not become an unreapable invisible row).
+  const legacy = [{ name: 'old-worker', purpose: 'work', target_id: 'T19' }];
+  assert.deepStrictEqual(FT.engagementIndex(legacy, CLAUDIA)['T19'].agents, ['old-worker']);
+
+  // The payload carries the canonical key beside the display path.
+  const model = FT.normalizePayload({
+    available: true,
+    ledger: ORTHO,
+    ledger_key: ORTHO,
+    cwd: '/w/orthograph',
+    targets: [{ id: 'T19', name: 'Local work', status: 'open' }],
+  });
+  assert.strictEqual(model.ledgerKey, ORTHO);
+
+  // Stop names the repo it means; omitted cwd leaves the server default.
+  const scoped = FT.stopEngagementRequest('🎯T19', '/w/orthograph');
+  assert.deepStrictEqual(scoped.body, { target_id: 'T19', cwd: '/w/orthograph' });
+  assert.deepStrictEqual(FT.stopEngagementRequest('T19').body, { target_id: 'T19' });
+});
+
+test('T389 index.html passes ledger scope into the engagement merge', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('applyEngagement(model.rows || [], agents, model.ledgerKey') >= 0,
+    'render must scope applyEngagement by ledger key');
+  assert.ok(html.indexOf('stopEngagementRequest(row.id, lastFrontierCwd)') >= 0,
+    'stop must carry the cwd the table is bound to');
+});
+
 test('T198 index.html engaged stop wiring + agents merge', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('applyEngagement') >= 0, 'applyEngagement in render');

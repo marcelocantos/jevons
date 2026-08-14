@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -46,7 +47,12 @@ func durableFleetAgentForAchieve(name, purpose string, isOverseer func(string) b
 // ReapWorkAgentsOnTargetAchieve removes non-durable work agents whose
 // TargetID matches the achieved target (and their descendant subtrees).
 // Returns names removed. No-ops when none engaged or only durable roles match.
-func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, targetID string, isOverseer func(string) bool) ([]string, error) {
+//
+// 🎯T389: scopeWorkdir is a path inside the repo whose ledger recorded the
+// achieve. This is the reaping direction of the collision, and the damaging
+// one — without it, achieving 🎯T19 in claudia kills orthograph's 🎯T19 worker
+// mid-flight.
+func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, targetID, scopeWorkdir string, isOverseer func(string) bool) ([]string, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("agent registry not available")
 	}
@@ -54,7 +60,7 @@ func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, targetID string, isOve
 	if want == "" {
 		return nil, fmt.Errorf("target_id is required")
 	}
-	engaged := AgentsEngagedOnTarget(reg, want)
+	engaged := AgentsEngagedOnTarget(reg, want, scopeWorkdir)
 	if len(engaged) == 0 {
 		return nil, nil
 	}
@@ -186,9 +192,13 @@ func (s *Server) maybeReapOnLedgerAchieve(ledgerPath string) {
 		return
 	}
 	isO := func(n string) bool { return n == overseer }
+	// 🎯T389: the achieve belongs to this ledger, and so does every id in it.
+	// The ledger's own directory is the scope — never the daemon's cwd, which
+	// is some other repo whenever the watch fires for a second ledger.
+	scope := filepath.Dir(ledgerPath)
 	var anyRemoved bool
 	for _, tid := range newly {
-		removed, err := ReapWorkAgentsOnTargetAchieve(reg, tid, isO)
+		removed, err := ReapWorkAgentsOnTargetAchieve(reg, tid, scope, isO)
 		if err != nil {
 			slog.Warn("T195 reap on achieve failed", "target_id", tid, "err", err)
 			continue

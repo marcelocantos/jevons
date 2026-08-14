@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // defaultOverseerName is the fallback registry name of the persistent
@@ -797,6 +798,12 @@ type agentInfo struct {
 	// TargetID is the bullseye target this agent is engaged on (🎯T198).
 	// Empty when not mission-bound. UI merges with /api/frontier by equality.
 	TargetID string `json:"target_id,omitempty"`
+	// Ledger is the ledger key that owns TargetID — derived from WorkDir, not
+	// declared (🎯T389). The overlay merges on (ledger, target_id), because
+	// ids are per-ledger: without this, claudia's 🎯T19 worker marks
+	// orthograph's 🎯T19 row engaged. Empty only when WorkDir is empty, and an
+	// empty key matches every ledger (unscoped, pre-T389 reading).
+	Ledger string `json:"ledger,omitempty"`
 	Status   string `json:"status"`
 	Phase    string `json:"phase,omitempty"`
 	Step     string `json:"step,omitempty"`
@@ -868,6 +875,10 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		progress.Prune(registered)
 	}
 	agents := make([]agentInfo, 0, len(defs))
+	// 🎯T389: resolving a workdir to its ledger walks the filesystem, and this
+	// feed is rebuilt on every poll. Fleets are workdir-clustered, so one memo
+	// per rebuild collapses the walk to one per repo.
+	ledgerOf := make(map[string]string, len(defs))
 	for _, d := range defs {
 		status := "stopped"
 		if proc := reg.Get(d.Name); proc != nil && proc.Alive() {
@@ -884,6 +895,11 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			progress.SyncEpoch(d.Name, d.SessionID)
 			progress.SetStatus(d.Name, status)
 		}
+		ledger, seen := ledgerOf[d.WorkDir]
+		if !seen {
+			ledger = targetfile.LedgerKey(d.WorkDir)
+			ledgerOf[d.WorkDir] = ledger
+		}
 		info := agentInfo{
 			Name:        d.Name,
 			WorkDir:     d.WorkDir,
@@ -891,6 +907,7 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			Purpose:     purpose,
 			Description: d.Description,
 			TargetID:    strings.TrimSpace(d.TargetID),
+			Ledger:      ledger,
 			Status:      status,
 			Provider:    strings.TrimSpace(string(d.Provider)),
 		}

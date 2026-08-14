@@ -471,7 +471,9 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			SetAsideDeps:   leaf.SetAsideDeps,
 			ActiveChildren: leaf.ActiveChildren,
 			ForceEngage:    poproactive.IsForceEngageTag(leaf.Tags),
-			AlreadyEngaged: len(workAgentsEngagedOnTarget(s.registry, leaf.ID, "")) > 0,
+			// 🎯T389: this sweep's ledger only — another repo's worker on the
+			// same id must not make this leaf look consumed.
+			AlreadyEngaged: len(workAgentsEngagedOnTarget(s.registry, leaf.ID, args.Workdir, "")) > 0,
 		})
 	}
 

@@ -22,6 +22,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
+
+	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // 🎯T131: live bullseye frontier for the RHS bottom pane.
@@ -66,8 +68,13 @@ type FrontierRow struct {
 
 // FrontierResponse is GET /api/frontier JSON.
 type FrontierResponse struct {
-	Available bool          `json:"available"`
-	Ledger    string        `json:"ledger,omitempty"`
+	Available bool   `json:"available"`
+	Ledger    string `json:"ledger,omitempty"`
+	// LedgerKey is Ledger canonicalized the same way an agent's workdir is
+	// (🎯T389), so the RHS can tell whether an agent bound to this id belongs
+	// to this ledger at all. Ledger itself stays exactly as discovered — it is
+	// the watch path and the string the owner reads.
+	LedgerKey string        `json:"ledger_key,omitempty"`
 	Cwd       string        `json:"cwd,omitempty"`
 	Targets   []FrontierRow `json:"targets"`
 	Error     string        `json:"error,omitempty"`
@@ -559,6 +566,7 @@ func loadFrontier(cwd string) FrontierResponse {
 		return resp
 	}
 	resp.Ledger = ledger
+	resp.LedgerKey = targetfile.LedgerKey(abs)
 
 	rows, err := computeFrontierFromLedger(ledger)
 	if err != nil {

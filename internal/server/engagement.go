@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // 🎯T198: frontier engagement — explicit AgentDef.TargetID, never name parse.
@@ -30,17 +32,27 @@ func NormalizeTargetID(raw string) string {
 }
 
 // AgentsEngagedOnTarget returns registered agent names whose TargetID matches
-// targetID (after NormalizeTargetID). Name is never parsed for T-ids.
-// Overseer is skipped. purpose=aside is included only if it has a TargetID
-// (unusual; residual multi-agent attribution).
-func AgentsEngagedOnTarget(reg *claudia.Registry, targetID string) []string {
+// targetID (after NormalizeTargetID) **within one ledger**. Name is never
+// parsed for T-ids. Overseer is skipped. purpose=aside is included only if it
+// has a TargetID (unusual; residual multi-agent attribution).
+//
+// 🎯T389: scopeWorkdir is any path inside the repo whose ledger allocated the
+// id — the ledger's own directory, the frontier cwd, the asking agent's
+// workdir. Ids are per-ledger, so an unscoped answer names other repos'
+// workers; empty scopeWorkdir keeps the pre-T389 unscoped reading. Both sides
+// go through targetfile.LedgerKey so one canonicalization decides the match.
+func AgentsEngagedOnTarget(reg *claudia.Registry, targetID, scopeWorkdir string) []string {
 	want := NormalizeTargetID(targetID)
 	if reg == nil || want == "" {
 		return nil
 	}
+	wantLedger := targetfile.LedgerKey(scopeWorkdir)
 	var names []string
 	for _, d := range reg.List() {
 		if NormalizeTargetID(d.TargetID) != want {
+			continue
+		}
+		if !targetfile.SameLedger(wantLedger, targetfile.LedgerKey(d.WorkDir)) {
 			continue
 		}
 		// Never kill/stop the overseer via engagement stop.
@@ -53,10 +65,11 @@ func AgentsEngagedOnTarget(reg *claudia.Registry, targetID string) []string {
 	return names
 }
 
-// stopEngagement removes engaged agents for targetID (and their descendant
-// subtrees). Owner-UI authority: no lineage check (product control surface).
-// Returns names that were still registered and removed.
-func stopEngagement(reg *claudia.Registry, targetID string) ([]string, error) {
+// stopEngagement removes engaged agents for targetID in scopeWorkdir's ledger
+// (and their descendant subtrees). Owner-UI authority: no lineage check
+// (product control surface). Returns names that were still registered and
+// removed.
+func stopEngagement(reg *claudia.Registry, targetID, scopeWorkdir string) ([]string, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("agent registry not available")
 	}
@@ -64,7 +77,7 @@ func stopEngagement(reg *claudia.Registry, targetID string) ([]string, error) {
 	if want == "" {
 		return nil, fmt.Errorf("target_id is required")
 	}
-	names := AgentsEngagedOnTarget(reg, want)
+	names := AgentsEngagedOnTarget(reg, want, scopeWorkdir)
 	if len(names) == 0 {
 		return nil, nil
 	}
@@ -94,6 +107,12 @@ func stopEngagement(reg *claudia.Registry, targetID string) ([]string, error) {
 // engagementStopRequest is POST /api/agents/engagement/stop JSON body.
 type engagementStopRequest struct {
 	TargetID string `json:"target_id"`
+	// Cwd names the repo the id belongs to (🎯T389). The frontier table is
+	// bound to one ledger at a time (🎯T253), so the default — the daemon's
+	// current frontier cwd — is the ledger the owner is looking at when the
+	// stop button is theirs to press. Sent explicitly by any caller that
+	// knows better.
+	Cwd string `json:"cwd,omitempty"`
 }
 
 // engagementStopResponse is the success body.
@@ -129,11 +148,13 @@ func (s *Server) handleEngagementStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stopped, err := stopEngagement(reg, tid)
+	scope := s.frontierCwdOr(req.Cwd)
+	stopped, err := stopEngagement(reg, tid, scope)
 	if err != nil {
 		slog.Warn("engagement_stop",
 			"component", "engagement",
 			"target_id", tid,
+			"cwd", scope,
 			"err", err.Error(),
 		)
 		writeJSONError(w, http.StatusInternalServerError, err.Error())

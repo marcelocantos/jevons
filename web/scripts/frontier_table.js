@@ -142,6 +142,7 @@
       return {
         available: false,
         ledger: '',
+        ledgerKey: '',
         cwd: '',
         rows: [],
         empty: true,
@@ -186,6 +187,10 @@
     return {
       available: available,
       ledger: p.ledger ? String(p.ledger) : '',
+      // 🎯T389: canonical scope key for the engagement merge; ledger stays the
+      // discovered path the owner reads in the tab title.
+      ledgerKey: p.ledger_key ? String(p.ledger_key)
+        : (p.ledgerKey ? String(p.ledgerKey) : ''),
       cwd: p.cwd ? String(p.cwd) : '',
       rows: rows,
       empty: !available || rows.length === 0,
@@ -1173,10 +1178,17 @@
     return s.trim();
   }
 
-  // engagementIndex(agents) — map target_id → { agents: [name,...] }.
+  // engagementIndex(agents, ledgerKey) — map target_id → { agents: [name,...] }.
   // Uses agent.target_id only (explicit registry field). No name parsing.
-  function engagementIndex(agents) {
+  //
+  // 🎯T389: a target id names work only within its own ledger, and the fleet
+  // spans several repos at once, so an agent's ledger must match the one this
+  // frontier came from before it can mark a row engaged. Either side unknown
+  // (no ledgerKey on the payload, no workdir on the agent) falls back to the
+  // unscoped pre-T389 match rather than hiding engagement.
+  function engagementIndex(agents, ledgerKey) {
     var list = Array.isArray(agents) ? agents : [];
+    var want = ledgerKey == null ? '' : String(ledgerKey).trim();
     var by = {};
     for (var i = 0; i < list.length; i++) {
       var a = list[i];
@@ -1185,6 +1197,9 @@
         a.target_id != null ? a.target_id : (a.targetId != null ? a.targetId : '')
       );
       if (!tid) continue;
+      var mine = a.ledger != null ? String(a.ledger).trim()
+        : (a.ledgerKey != null ? String(a.ledgerKey).trim() : '');
+      if (want && mine && mine !== want) continue;
       var purpose = String(a.purpose || 'work').trim().toLowerCase();
       if (purpose === 'overseer') continue;
       var name = String(a.name || '').trim();
@@ -1198,11 +1213,12 @@
     return by;
   }
 
-  // applyEngagement(rows, agents) — overlay engaged flag + sink engaged rows
-  // to bottom. Free frontier items keep relative order; engaged keep relative
-  // order among themselves after free. Pure Jevons UI overlay (not bullseye status).
-  function applyEngagement(rows, agents) {
-    var index = engagementIndex(agents);
+  // applyEngagement(rows, agents, ledgerKey) — overlay engaged flag + sink
+  // engaged rows to bottom. Free frontier items keep relative order; engaged
+  // keep relative order among themselves after free. Pure Jevons UI overlay
+  // (not bullseye status). ledgerKey scopes the merge to this repo (🎯T389).
+  function applyEngagement(rows, agents, ledgerKey) {
+    var index = engagementIndex(agents, ledgerKey);
     var list = Array.isArray(rows) ? rows : [];
     var free = [];
     var engaged = [];
@@ -1330,14 +1346,23 @@
     };
   }
 
-  // stopEngagementRequest(targetId) — pure POST body for stop (🎯T198).
-  function stopEngagementRequest(targetId) {
+  // stopEngagementRequest(targetId, cwd) — pure POST body for stop (🎯T198).
+  //
+  // 🎯T389: cwd names the ledger the id came from. The table follows the
+  // selected agent's repo (🎯T253), so the displayed ledger is often not the
+  // daemon's own cwd — without this the owner's stop would land on whatever
+  // repo happens to hold the same number. Omitted → server default.
+  function stopEngagementRequest(targetId, cwd) {
     var tid = normalizeTargetID(targetId);
+    var body = { target_id: tid };
+    var dir = cwd == null ? '' : String(cwd).trim();
+    if (dir) body.cwd = dir;
     return {
       url: ENGAGEMENT_STOP_PATH,
       method: 'POST',
-      body: { target_id: tid },
+      body: body,
       target_id: tid,
+      cwd: dir,
     };
   }
 

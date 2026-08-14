@@ -81,7 +81,7 @@ func TestAgentsEngagedOnTargetNoNameParse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	names := AgentsEngagedOnTarget(reg, "T10.2")
+	names := AgentsEngagedOnTarget(reg, "T10.2", dir)
 	if len(names) != 1 || names[0] != "jv-real" {
 		t.Fatalf("engaged=%v want [jv-real] (name-parse of T10.2-worker forbidden)", names)
 	}
@@ -102,7 +102,7 @@ func TestStopEngagementKillsByTargetID(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stopped, err := stopEngagement(reg, "T10.2")
+	stopped, err := stopEngagement(reg, "T10.2", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,9 @@ func TestHandleEngagementStopHTTP(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	body, _ := json.Marshal(map[string]string{"target_id": "T10.2"})
+	// 🎯T389: the stop names the ledger it means — the frontier table is bound
+	// to one repo at a time and the owner is pressing stop on that repo's row.
+	body, _ := json.Marshal(map[string]string{"target_id": "T10.2", "cwd": dir})
 	resp, err := http.Post(srv.URL+"/api/agents/engagement/stop", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
