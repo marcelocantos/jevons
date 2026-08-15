@@ -42,6 +42,20 @@ type Policy struct {
 	// back to DefaultMaxPerClass. 0 = unbounded for that class.
 	MaxPerClass map[Class]int `json:"max_per_class,omitempty"`
 
+	// LoadPerCoreCritical is the 1-minute load average per core at which the
+	// host itself is out of capacity (🎯T463). 0 falls back to
+	// DefaultLoadPerCoreCritical. Configurable and per-core on purpose: the
+	// same binary runs on a 16-core laptop and on whatever CI provides.
+	LoadPerCoreCritical float64 `json:"load_per_core_critical,omitempty"`
+	// SwapCriticalFraction is the share of configured swap in use at which the
+	// host is treated as out of memory. 0 falls back to
+	// DefaultSwapCriticalFraction.
+	SwapCriticalFraction float64 `json:"swap_critical_fraction,omitempty"`
+	// ProviderCapFallback is the concurrency cap for a provider that publishes
+	// no soft cap. 0 in a cap table means unpublished, never unlimited
+	// (🎯T463); 0 here falls back to DefaultProviderCapFallback.
+	ProviderCapFallback int `json:"provider_cap_fallback,omitempty"`
+
 	// LoadBearing are the background classes that keep running at
 	// PressureTight — the ones whose absence leaves the fleet stuck.
 	LoadBearing []Class `json:"load_bearing,omitempty"`
@@ -73,6 +87,9 @@ func DefaultPolicy() *Policy {
 	return &Policy{
 		OwnerReserveFraction:      0.20,
 		DegradeFraction:           0.40,
+		LoadPerCoreCritical:       DefaultLoadPerCoreCritical,
+		SwapCriticalFraction:      DefaultSwapCriticalFraction,
+		ProviderCapFallback:       DefaultProviderCapFallback,
 		MaxConcurrentBackground:   3,
 		MaxPerClass:               map[Class]int{},
 		LoadBearing:               []Class{ClassControlRepair},
@@ -109,6 +126,12 @@ type Assessment struct {
 	CostHeadroom  float64 `json:"cost_headroom"`
 	TokenHeadroom float64 `json:"token_headroom"`
 	LoadHeadroom  float64 `json:"load_headroom"`
+	// HostHeadroom is what the host itself has left — run-queue length per
+	// core and swap occupancy (🎯T463) — or -1 when nothing read it. It is
+	// folded into LoadHeadroom rather than kept beside it, because "load" is
+	// the dimension a saturated host saturates; reported separately so a
+	// pinned host can be told apart from a pinned provider cap.
+	HostHeadroom float64 `json:"host_headroom"`
 	// OwnerOnly is true when nothing but owner and Build work fits.
 	OwnerOnly bool `json:"owner_only"`
 	// Reasons are the human sentences behind the pressure, most significant
@@ -152,6 +175,7 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 		CostHeadroom:  unknownHeadroom,
 		TokenHeadroom: unknownHeadroom,
 		LoadHeadroom:  unknownHeadroom,
+		HostHeadroom:  unknownHeadroom,
 		Headroom:      1,
 	}
 
@@ -179,12 +203,22 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 	loadUsed, loadLimit := float64(snap.ActiveSessions), float64(snap.MaxSessions)
 	a.LoadHeadroom = fraction(loadUsed, loadLimit)
 	for prov, capN := range snap.ProviderSoftCaps {
-		if capN <= 0 {
-			continue
-		}
-		h := fraction(float64(snap.ProviderLoad[strings.ToLower(strings.TrimSpace(prov))]), float64(capN))
+		// A published 0 is an unpublished cap, not an unlimited one (🎯T463):
+		// judge it against the fallback rather than skipping the provider.
+		h := fraction(float64(snap.ProviderLoad[strings.ToLower(strings.TrimSpace(prov))]), float64(pol.providerCap(capN)))
 		if h != unknownHeadroom && (a.LoadHeadroom == unknownHeadroom || h < a.LoadHeadroom) {
 			a.LoadHeadroom = h
+		}
+	}
+
+	// The host is a load dimension too, and the one that actually runs out
+	// first under fan-out (🎯T463): fold it into load headroom so the 🎯T359
+	// ladder decides, and keep the separate figure for tracing.
+	hostH, hostReason := hostHeadroom(snap, pol)
+	if hostH != unknownHeadroom {
+		a.HostHeadroom = hostH
+		if a.LoadHeadroom == unknownHeadroom || hostH < a.LoadHeadroom {
+			a.LoadHeadroom = hostH
 		}
 	}
 
@@ -219,6 +253,12 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 		a.Pressure = PressureElevated
 		a.Reasons = append(a.Reasons, fmt.Sprintf("headroom %.0f%% is below the %.0f%% degrade line",
 			a.Headroom*100, pol.DegradeFraction*100))
+	}
+	// Name the host reading when it is what bound, so a deferral says "load
+	// average 247 on 16 cores" rather than a bare percentage that reads like a
+	// budget figure (🎯T463).
+	if a.Pressure > PressureNormal && hostBound(a) && hostReason != "" {
+		a.Reasons = append(a.Reasons, hostReason)
 	}
 	if ap := alertPressure(snap.HighestAlert); ap > a.Pressure {
 		a.Pressure = ap
@@ -331,12 +371,12 @@ func decide(req Request, snap Snapshot, pol *Policy, a Assessment,
 
 	switch a.Pressure {
 	case PressureCritical:
-		d.Verdict, d.Reason = VerdictDefer, ReasonCriticalOwnerOnly
+		d.Verdict, d.Reason = VerdictDefer, deferReason(a, ReasonCriticalOwnerOnly)
 		d.Detail = "only owner and Build work fits: " + joinReasons(a.Reasons)
 		return d
 	case PressureTight:
 		if !loadBearing {
-			d.Verdict, d.Reason = VerdictDefer, ReasonTightLoadBearing
+			d.Verdict, d.Reason = VerdictDefer, deferReason(a, ReasonTightLoadBearing)
 			d.Detail = "capacity tight: " + joinReasons(a.Reasons) + "; load-bearing background only"
 			return d
 		}

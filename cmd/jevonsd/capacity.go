@@ -11,6 +11,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/config"
+	"github.com/marcelocantos/jevons/internal/hostload"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
 )
@@ -48,6 +49,9 @@ func startCapacityGovernor(cfg config.Config, guard *costGuard, mcpSrv *mcpserve
 		ProviderLoad:     mcpSrv.HarnessLoad,
 		ProviderSoftCaps: mcpSrv.EffectiveProviderSoftCaps,
 		DailyTokens:      func() int64 { return pol.DailyTokenBudget },
+		// The host itself, cached so a status call and an ambient tick in the
+		// same second share one sysctl (🎯T463).
+		HostLoad: hostload.Cached(0),
 	}
 	if guard != nil {
 		args.Cost = guard.monitor.Snapshot

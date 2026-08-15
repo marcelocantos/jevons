@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/hostload"
 )
 
 // SetCapacityGovernor attaches the background-work admission governor
@@ -85,6 +86,7 @@ func (s *Server) handleCapacityStatus(_ context.Context, _ mcp.CallToolRequest) 
 		headroomText(st.Assessment.CostHeadroom),
 		headroomText(st.Assessment.TokenHeadroom),
 		headroomText(st.Assessment.LoadHeadroom))
+	b.WriteString(hostLoadText(st.Snapshot))
 	if st.Snapshot.Accounting != "" {
 		fmt.Fprintf(&b, "  accounting: %s (billable=%v)\n", st.Snapshot.Accounting, st.Snapshot.Billable)
 	}
@@ -147,6 +149,10 @@ type CapacitySnapshotArgs struct {
 	// ProviderLoad / ProviderSoftCaps are the 🎯T325.2 portfolio spread.
 	ProviderLoad     func() map[string]int
 	ProviderSoftCaps func() map[string]int
+	// HostLoad reads the host's own saturation — run-queue length per core and
+	// swap occupancy (🎯T463). It is the dimension that runs out first under
+	// fan-out, and the one admission was blind to on 2026-08-15.
+	HostLoad func() hostload.Sample
 }
 
 // CapacitySnapshot builds one capacity snapshot from live sources. It is the
@@ -191,6 +197,9 @@ func CapacitySnapshot(args CapacitySnapshotArgs) capacity.Snapshot {
 	}
 	if args.ProviderSoftCaps != nil {
 		snap.ProviderSoftCaps = args.ProviderSoftCaps()
+	}
+	if args.HostLoad != nil {
+		applyHostLoad(&snap, args.HostLoad())
 	}
 	return snap
 }

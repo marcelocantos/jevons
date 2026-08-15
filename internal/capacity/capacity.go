@@ -190,6 +190,22 @@ type Snapshot struct {
 	// OpenBuildMissions is the count of engaged Build implementers.
 	OpenBuildMissions int `json:"open_build_missions,omitempty"`
 
+	// HostLoad1 / HostCores are the host's own saturation: the 1-minute
+	// run-queue length and the core count it must be judged against (🎯T463).
+	// Zero means unread — the fleet melted a 16-core host at load 247 while
+	// every dimension this snapshot did carry said normal, so the host is a
+	// first-class dimension here rather than something inferred from agent
+	// counts. Cores is read at runtime by the producer, never assumed.
+	HostLoad1 float64 `json:"host_load1,omitempty"`
+	HostCores int     `json:"host_cores,omitempty"`
+	// HostSwapUsedBytes / HostSwapTotalBytes are swap occupancy. A zero total
+	// is unknown (or a host with no swap), not a full one.
+	HostSwapUsedBytes  int64 `json:"host_swap_used_bytes,omitempty"`
+	HostSwapTotalBytes int64 `json:"host_swap_total_bytes,omitempty"`
+	// HostSource names how the reading was obtained ("darwin sysctl"), so a
+	// surprising number can be traced to its origin.
+	HostSource string `json:"host_source,omitempty"`
+
 	// SpawnHalted is the 🎯T36 clamp: the budget has already stopped launches.
 	SpawnHalted bool `json:"spawn_halted,omitempty"`
 	// HighestAlert is the top cost alert level in the snapshot
@@ -272,6 +288,7 @@ const (
 	ReasonBackgroundSlots   = "background_saturated"
 	ReasonClassSlots        = "class_saturated"
 	ReasonTokenReserve      = "token_reserve"
+	ReasonHostSaturated     = "host_saturated"
 	ReasonPreempted         = "preempted_for_capacity"
 )
 
