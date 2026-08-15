@@ -809,16 +809,24 @@ body.rhs-resizing-row { cursor: row-resize; }
 #cost-ticker { display: none; padding: 6px 16px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); letter-spacing: -0.02em; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #cost-ticker.cost-warn { color: var(--amber); }
 #cost-ticker.cost-kill { color: #fff; background: #b3261e; font-weight: 600; }
-/* 🎯T390 plan-usage ticker: subscription allowance left, per backend. Same
-   shape as the cost ticker directly above it — they answer the two halves of
-   "what is this fleet spending". */
-#plan-ticker { display: none; padding: 6px 16px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); letter-spacing: -0.02em; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#plan-ticker.plan-stale { color: var(--text-muted); font-style: italic; }
+/* 🎯T390 plan remaining: always-visible compact bars in #status, next to
+   the theme toggle. Never display:none — a missing fetch is not a reason
+   to hide the slot. */
+#plan-ticker { margin-left: auto; display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; }
+#plan-ticker .plan-chip { display: inline-flex; align-items: center; gap: 4px; }
+#plan-ticker .plan-sep { color: var(--text-muted); user-select: none; }
+#plan-ticker .plan-bar { display: inline-block; width: 22px; height: 6px; background: var(--surface-high); border: 1px solid var(--border); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+#plan-ticker .plan-bar-fill { display: block; height: 100%; background: var(--green); }
+#plan-ticker .plan-chip.plan-low .plan-bar-fill { background: var(--amber); }
+#plan-ticker .plan-chip.plan-crit .plan-bar-fill { background: var(--red); }
+#plan-ticker .plan-chip.plan-unavail { color: var(--text-muted); }
+#plan-ticker .plan-chip.plan-stale { color: var(--text-muted); font-style: italic; }
+#plan-ticker.plan-stale { color: var(--text-muted); }
 #plan-ticker.plan-low { color: var(--amber); }
-#plan-ticker.plan-crit { color: #fff; background: #b3261e; font-weight: 600; }
+#plan-ticker.plan-crit { color: var(--red); }
 
 /* Theme toggle */
-#theme-toggle { margin-left: auto; display: flex; gap: 2px; background: var(--surface-raised); border-radius: 5px; padding: 2px; }
+#theme-toggle { display: flex; gap: 2px; background: var(--surface-raised); border-radius: 5px; padding: 2px; flex-shrink: 0; }
 #theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
 #theme-toggle button:hover { color: var(--text-dim); }
 #theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
@@ -1354,7 +1362,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 </style>
 </head>
 <body>
-<div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span><span id="voice-status"><span class="voice-dot"></span><span id="voice-status-text">listening</span></span><div id="theme-toggle"><button data-t="light" title="Light">&#9788;</button><button data-t="system" title="System" class="active">&#9680;</button><button data-t="dark" title="Dark">&#9790;</button></div></div>
+<div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span><span id="voice-status"><span class="voice-dot"></span><span id="voice-status-text">listening</span></span><div id="plan-ticker" title="Plan remaining — hover for rollover and detail"></div><div id="theme-toggle"><button data-t="light" title="Light">&#9788;</button><button data-t="system" title="System" class="active">&#9680;</button><button data-t="dark" title="Dark">&#9790;</button></div></div>
 <div id="degraded-banner" role="status" aria-live="polite"></div>
 <div id="main">
   <!-- 🎯T309.1: main conversation widget host (comfortable density; VirtualList residual) -->
@@ -1390,9 +1398,6 @@ body.rhs-resizing-row { cursor: row-resize; }
     <div id="rhs-width-handle" role="separator" aria-orientation="vertical"
          aria-label="Resize sidebar width" title="Drag to resize sidebar" tabindex="0"></div>
     <div id="cost-ticker" title="Token burn rate — click for detail"></div>
-    <!-- 🎯T390: subscription allowance left per backend. Hover for the exact
-         rollover times and for the backends the fleet is not running on. -->
-    <div id="plan-ticker" title="Subscription plan usage — hover for detail"></div>
     <div id="activity-header" class="agents-header">
       <span class="ah-label">Agents</span>
       <button type="button" id="aside-history-btn" title="Browse closed / dismissed asides (🎯T270)"
@@ -6354,37 +6359,34 @@ setInterval(function () {
 }, 3000);
 refreshCost();
 
-// Subscription plan usage (🎯T390): how much allowance each backend the
-// fleet is running on has left, and when it rolls over. The producer
-// (claudia 🎯T18) and the consumer both existed while this line did not, so
-// the owner ran dozens of agents with no view of what they were spending and
-// had to ask whether the metering he commissioned had been built.
+// Subscription plan usage (🎯T390): compact remaining bars in #status,
+// next to #theme-toggle. Always visible. A publisher is painted even when
+// no agent of that provider is running; Grok/Bedrock say "unavailable".
 //
 // Polled far more slowly than the cost ticker: a plan window is hours long,
 // and the daemon only re-reads the backends every few minutes anyway, so a
 // faster poll would buy nothing but requests.
 const planEl = document.getElementById('plan-ticker');
 const PLAN_POLL_MS = 60000;
+let planPainted = false;
+function paintPlanUsageView(view) {
+  if (!planEl || typeof PlanUsage === 'undefined') return;
+  if (typeof PlanUsage.paintPlanUsage === 'function') {
+    PlanUsage.paintPlanUsage(planEl, view);
+  } else {
+    planEl.textContent = (view && view.text) || '';
+    planEl.title = (view && view.title) || '';
+    planEl.style.display = 'flex';
+  }
+  planPainted = true;
+}
 function refreshPlanUsage() {
-  if (!planEl) return;
-  const fmt = (typeof PlanUsage !== 'undefined' && PlanUsage.formatPlanUsage)
-    ? PlanUsage.formatPlanUsage
-    : null;
+  if (!planEl || typeof PlanUsage === 'undefined') return;
+  if (!planPainted) paintPlanUsageView(PlanUsage.formatPlanUsage({ pending: true }));
   fetch('/api/plan-usage').then(function (r) { return r.json(); }).then(function (p) {
-    const view = fmt ? fmt(p) : { visible: false };
-    if (!view.visible) {
-      planEl.style.display = 'none';
-      planEl.textContent = '';
-      return;
-    }
-    planEl.style.display = 'block';
-    planEl.className = view.className || '';
-    planEl.textContent = view.text || '';
-    planEl.title = view.title || '';
+    paintPlanUsageView(PlanUsage.formatPlanUsage(p));
   }).catch(function () {
-    // A failed fetch is not an answer about the allowance, so say nothing
-    // rather than leave a number on screen that no longer has a source.
-    planEl.style.display = 'none';
+    paintPlanUsageView(PlanUsage.formatPlanUsage({ error: 'fetch failed' }));
   });
 }
 setInterval(function () {

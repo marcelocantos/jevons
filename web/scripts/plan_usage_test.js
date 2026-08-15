@@ -9,9 +9,14 @@
 // half the target is named for — the producer, the consumer and the API all
 // existed while the cockpit still displayed nothing at all.
 //
-//   clause 1  a running backend shows BOTH window percentages and the rollover
+//   clause 1  a published window renders as `cl/s 62%` (abbrev + percent)
 //   clause 2  a backend publishing nothing says "unavailable" — never blank/0
 //   clause 5c a reading that has aged out is marked stale, not served as current
+//
+// Owner pin 2026-08-15: the bar is in #status next to #theme-toggle, always
+// visible, compact bars. A publisher is on the bar even with no agent running.
+// These placement / idle-publisher checks are red against the pre-fix tree
+// (RHS #plan-ticker, display:none, running-only filter).
 //
 // Every property carries a CONTROL: an input mutated so the property must
 // fail. Two of these three regressions are silent — they draw a plausible
@@ -94,6 +99,14 @@ function windowFor(row, name) {
   return null;
 }
 
+function chipFor(view, key) {
+  const chips = view.chips || [];
+  for (let i = 0; i < chips.length; i++) {
+    if (chips[i].key === key) return chips[i];
+  }
+  return null;
+}
+
 // rendersBothWindows is clause 1 as a predicate, so the control can assert it
 // goes false rather than duplicating the check with its sense flipped.
 function rendersBothWindows(row) {
@@ -106,6 +119,17 @@ function rendersBothWindows(row) {
   }
   return true;
 }
+
+// ── abbreviations ───────────────────────────────────────────────────────────
+
+test('provider and window abbreviations match the owner pin', function () {
+  assert.strictEqual(PU.providerAbbrev('claude'), 'cl');
+  assert.strictEqual(PU.providerAbbrev('codex'), 'cx');
+  assert.strictEqual(PU.providerAbbrev('grok'), 'gk');
+  assert.strictEqual(PU.providerAbbrev('bedrock'), 'bd');
+  assert.strictEqual(PU.windowAbbrev('session'), 's');
+  assert.strictEqual(PU.windowAbbrev('weekly'), 'w');
+});
 
 // ── clause 1 ────────────────────────────────────────────────────────────────
 
@@ -126,13 +150,19 @@ test('clause 1: a running backend renders both percentages and the rollover', fu
   assert.strictEqual(weekly.remainingText, '29%');
   assert.strictEqual(weekly.rollsInText, '2d 4h', '52 hours out');
 
-  // The ticker line itself carries all three facts, not just the model.
-  assert.ok(view.text.indexOf('62% session') >= 0, 'line must show session remaining: ' + view.text);
-  assert.ok(view.text.indexOf('29% weekly') >= 0, 'line must show weekly remaining: ' + view.text);
-  assert.ok(view.text.indexOf('1h37m') >= 0, 'line must show the next rollover: ' + view.text);
-  // And the absolute rollover time, which the line only had room to give as
-  // a duration, is in the hover detail.
+  // Compact header form: abbrev + percent, not "62% session".
+  assert.ok(view.text.indexOf('cl/s 62%') >= 0, 'line must show session remaining: ' + view.text);
+  assert.ok(view.text.indexOf('cl/w 29%') >= 0, 'line must show weekly remaining: ' + view.text);
+  const clS = chipFor(view, 'cl/s');
+  assert.ok(clS, 'session chip must exist');
+  assert.strictEqual(clS.remainingPercent, 62, 'bar width is the published remaining, not decoration');
+  const clW = chipFor(view, 'cl/w');
+  assert.ok(clW, 'weekly chip must exist');
+  assert.strictEqual(clW.remainingPercent, 29);
+  // The absolute rollover time lives in the hover detail — the bar only
+  // has room for the percentage.
   assert.ok(view.title.indexOf('rolls over') >= 0, 'title must give the absolute rollover: ' + view.title);
+  assert.ok(view.title.indexOf('1h37m') < 0 || view.title.indexOf('rolls over') >= 0);
 
   // CONTROL: the same backend with its windows withheld. If the predicate
   // passed on this too it would be measuring nothing, and a producer that
@@ -141,34 +171,34 @@ test('clause 1: a running backend renders both percentages and the rollover', fu
   const ctl = rowFor(stripped, 'claude');
   assert.ok(!rendersBothWindows(ctl), 'control: a backend with no windows must not render as a reading');
   assert.strictEqual(ctl.available, false, 'control: available-with-no-windows is not available');
+  assert.strictEqual(chipFor(stripped, 'cl/s'), null, 'control: no invented session chip');
 });
 
-test('clause 1: the line covers the backends the fleet is running on, others go to the tooltip', function () {
+test('clause 1: a backend that publishes remaining % is on the bar even if idle', function () {
   const idleCodex = {
     provider: 'codex',
     status: 'available',
     fleet_agents: 0,
     fetched_at: iso(NOW),
     age_seconds: 0,
-    windows: [{ name: 'session', remaining_percent: 4, used_percent: 96, resets_at: iso(NOW + HOUR) }]
+    windows: [{ name: 'weekly', remaining_percent: 100, used_percent: 0, resets_at: iso(NOW + HOUR) }]
   };
   const view = PU.formatPlanUsage(snapshot([claudeBackend(), idleCodex]), NOW);
 
-  assert.deepStrictEqual(view.rows.map(function (r) { return r.provider; }), ['claude'],
-    'only backends with running agents belong on the line');
-  assert.deepStrictEqual(view.others.map(function (r) { return r.provider; }), ['codex']);
-  assert.ok(view.text.indexOf('codex') < 0, 'an idle backend must not crowd the line: ' + view.text);
-  assert.ok(view.title.indexOf('codex') >= 0, 'an idle backend is still an answer, in the tooltip');
-  // An exhausted allowance on a backend nobody is running is not a reason to
-  // paint the line red — the same judgment capacity makes (🎯T390 clause 4).
-  assert.strictEqual(view.className, '', 'an idle backend must not colour the line: ' + view.className);
+  assert.ok(view.text.indexOf('cl/s 62%') >= 0, view.text);
+  assert.ok(view.text.indexOf('cl/w 29%') >= 0, view.text);
+  assert.ok(view.text.indexOf('cx/w 100%') >= 0,
+    'an idle publisher must still occupy the bar: ' + view.text);
+  assert.ok(chipFor(view, 'cx/w'), 'idle weekly chip');
+  assert.strictEqual(chipFor(view, 'cx/w').remainingPercent, 100);
+  assert.deepStrictEqual(view.others, [], 'nothing is hidden in a tooltip-only bucket');
 
-  // CONTROL: an idle fleet would leave the line empty, which reads as
-  // breakage rather than as an answer, so with nothing running it shows all.
+  // CONTROL: an idle fleet would previously have been the only path that
+  // showed idle publishers. That control now has to stay green too — the
+  // bar is the same whether anyone is running.
   const idle = PU.formatPlanUsage(snapshot([claudeBackend({ fleet_agents: 0 })]), NOW);
   assert.strictEqual(idle.visible, true);
-  assert.deepStrictEqual(idle.rows.map(function (r) { return r.provider; }), ['claude'],
-    'control: with no backend running, show them all rather than nothing');
+  assert.ok(idle.text.indexOf('cl/s 62%') >= 0, 'control: idle claude still on the bar: ' + idle.text);
 });
 
 // ── clause 2 ────────────────────────────────────────────────────────────────
@@ -180,7 +210,7 @@ test('clause 2: an unavailable backend says so out loud, never a blank or a zero
   assert.strictEqual(g.available, false);
   assert.strictEqual(g.status, PU.STATUS_UNAVAILABLE);
   assert.ok(g.text.indexOf('unavailable') >= 0, 'the row must say the word: ' + g.text);
-  assert.ok(view.text.indexOf('grok unavailable') >= 0,
+  assert.ok(view.text.indexOf('gk unavailable') >= 0,
     'the visible line — not only the model — must say it: ' + view.text);
   assert.ok(view.title.indexOf('SuperGrok publishes no plan-remaining API') >= 0,
     "the provider's own reason must reach the owner: " + view.title);
@@ -189,6 +219,10 @@ test('clause 2: an unavailable backend says so out loud, never a blank or a zero
   assert.strictEqual(g.text.indexOf('%'), -1, 'no invented percentage: ' + g.text);
   assert.deepStrictEqual(g.windows, [], 'an unavailable backend publishes no windows');
   assert.strictEqual(windowFor(g, 'session'), null, 'no invented session window');
+  const gk = chipFor(view, 'gk');
+  assert.ok(gk, 'unavailable chip occupies the bar');
+  assert.strictEqual(gk.remainingPercent, null, 'unavailable chip carries no number for a bar fill');
+  assert.ok(gk.text.indexOf('unavailable') >= 0, gk.text);
 
   // CONTROL: a real published zero. This is the distinction the whole clause
   // turns on — 0% remaining is a true and different statement from "nobody
@@ -205,6 +239,7 @@ test('clause 2: an unavailable backend says so out loud, never a blank or a zero
   assert.strictEqual(z.available, true, 'control: a published zero is a reading, not an absence');
   assert.strictEqual(windowFor(z, 'session').remainingText, '0%',
     'control: a real zero renders as 0%');
+  assert.ok(exhausted.text.indexOf('cl/s 0%') >= 0, 'control: ' + exhausted.text);
   assert.ok(z.text.indexOf('unavailable') < 0,
     'control: an exhausted plan is not an unavailable plan: ' + z.text);
   assert.strictEqual(exhausted.className, 'plan-crit', 'control: an exhausted plan colours the line');
@@ -220,6 +255,39 @@ test('clause 2: a producer claiming available while publishing nothing is downgr
     'the downgrade must say why it happened: ' + view.title);
 });
 
+test('clause 2: Grok and Bedrock both occupy the bar as the word, never a number', function () {
+  const bedrock = {
+    provider: 'bedrock',
+    status: 'unavailable',
+    reason: 'AWS Bedrock does not publish Claude-style session/weekly subscription remaining',
+    fetched_at: iso(NOW),
+    age_seconds: 0
+  };
+  const view = PU.formatPlanUsage(snapshot([
+    grokBackend({ fleet_agents: 3 }),
+    bedrock,
+    claudeBackend({ fleet_agents: 0 }),
+    {
+      provider: 'codex',
+      status: 'available',
+      fleet_agents: 0,
+      fetched_at: iso(NOW),
+      age_seconds: 0,
+      windows: [{ name: 'weekly', remaining_percent: 100, used_percent: 0, resets_at: iso(NOW + HOUR) }]
+    }
+  ]), NOW);
+
+  // Owner example shape: cl/s · cl/w · cx/w, plus the two unavailables.
+  assert.ok(view.text.indexOf('cl/s 62%') >= 0, view.text);
+  assert.ok(view.text.indexOf('cl/w 29%') >= 0, view.text);
+  assert.ok(view.text.indexOf('cx/w 100%') >= 0, view.text);
+  assert.ok(view.text.indexOf('gk unavailable') >= 0, view.text);
+  assert.ok(view.text.indexOf('bd unavailable') >= 0, view.text);
+  assert.ok(view.text.indexOf('grok') < 0, 'header uses the abbrev, not the full name: ' + view.text);
+  assert.strictEqual(chipFor(view, 'gk').remainingPercent, null);
+  assert.strictEqual(chipFor(view, 'bd').remainingPercent, null);
+});
+
 // ── clause 5c ───────────────────────────────────────────────────────────────
 
 test('clause 5c: an aged reading is marked stale rather than shown as current', function () {
@@ -233,7 +301,7 @@ test('clause 5c: an aged reading is marked stale rather than shown as current', 
   const row = rowFor(view, 'claude');
   assert.strictEqual(row.stale, true);
   assert.strictEqual(row.ageText, '40m', 'the owner reads the age, not just the flag');
-  assert.ok(view.text.indexOf('stale 40m') >= 0, 'the line must carry the staleness: ' + view.text);
+  assert.ok(view.text.indexOf('stale') >= 0, 'the line must carry the staleness: ' + view.text);
   assert.ok(view.title.indexOf('shown stale rather than as current') >= 0, view.title);
   // Staleness must not blank the reading: "we last saw 62% forty minutes ago"
   // beats showing nothing at all.
@@ -265,6 +333,7 @@ test('a daemon without plan usage hides the line; a query failure states itself'
   const failed = PU.formatPlanUsage({ error: 'claudia refused the arguments' }, NOW);
   assert.strictEqual(failed.visible, true);
   assert.ok(failed.text.indexOf('claudia refused the arguments') >= 0, failed.text);
+  assert.ok(failed.text.indexOf('unavailable') >= 0, failed.text);
 });
 
 test('low and critical thresholds colour the line, and the tightest window wins', function () {
@@ -276,6 +345,7 @@ test('low and critical thresholds colour the line, and the tightest window wins'
   })]), NOW);
   assert.strictEqual(low.className, 'plan-low', 'the tightest window decides, not the first');
   assert.strictEqual(rowFor(low, 'claude').lowestRemaining, PU.LOW_PERCENT - 1);
+  assert.strictEqual(chipFor(low, 'cl/w').className, 'plan-low');
 
   const crit = PU.formatPlanUsage(snapshot([claudeBackend({
     windows: [{ name: 'session', remaining_percent: PU.CRITICAL_PERCENT - 1, resets_at: iso(NOW + HOUR) }]
@@ -302,14 +372,45 @@ test('percentText refuses to invent a number', function () {
   assert.strictEqual(PU.percentText(NaN), null);
 });
 
-// ── the wiring itself ───────────────────────────────────────────────────────
+// ── the wiring itself (red against the pre-fix RHS ticker) ──────────────────
 
-test('index.html loads plan_usage.js, fetches the API, and renders it', function () {
+test('index.html loads plan_usage.js, fetches the API, and paints chips', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('scripts/plan_usage.js') >= 0, 'must script-src plan_usage.js');
   assert.ok(html.indexOf('formatPlanUsage') >= 0, 'must call formatPlanUsage');
+  assert.ok(html.indexOf('paintPlanUsage') >= 0, 'must paint chips, not only set textContent');
   assert.ok(html.indexOf('/api/plan-usage') >= 0, 'must fetch the served payload');
-  assert.ok(html.indexOf('plan-ticker') >= 0, 'must have somewhere to render it');
+  assert.ok(html.indexOf('id="plan-ticker"') >= 0, 'must have somewhere to render it');
+});
+
+test('index.html mounts the plan bar in #status next to #theme-toggle, not the RHS', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const statusAt = html.indexOf('id="status"');
+  const planAt = html.indexOf('id="plan-ticker"');
+  const themeAt = html.indexOf('id="theme-toggle"');
+  const activityAt = html.indexOf('id="activity-pane"');
+  assert.ok(statusAt >= 0 && planAt >= 0 && themeAt >= 0, 'status, plan bar, and theme toggle must exist');
+  assert.ok(statusAt < planAt && planAt < themeAt,
+    'plan bar must sit inside #status immediately before #theme-toggle');
+  assert.ok(activityAt < 0 || planAt < activityAt,
+    'plan bar must not live in the RHS activity pane');
+
+  // A second plan-ticker in the activity pane would be the old ticker left behind.
+  const second = html.indexOf('id="plan-ticker"', planAt + 1);
+  assert.strictEqual(second, -1, 'exactly one #plan-ticker');
+});
+
+test('index.html never hides #plan-ticker pending a fetch, and styles compact bars', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(!/#plan-ticker\s*\{[^}]*display\s*:\s*none/.test(html),
+    '#plan-ticker must not start as display:none (the pre-fix tree hid it)');
+  assert.ok(html.indexOf('.plan-bar') >= 0, 'compact bar indicator CSS');
+  assert.ok(html.indexOf('.plan-bar-fill') >= 0, 'bar fill for remaining %');
+  assert.ok(html.indexOf('display: none') < 0 || !/#plan-ticker\s*\{[^}]*display\s*:\s*none/.test(html));
+  // The paint path must not re-hide the slot on a failed fetch.
+  const paintBlock = html.slice(html.indexOf('function refreshPlanUsage'), html.indexOf('function refreshPlanUsage') + 1200);
+  assert.ok(paintBlock.indexOf("display = 'none'") < 0 && paintBlock.indexOf('display = "none"') < 0,
+    'refreshPlanUsage must not set display:none: ' + paintBlock.slice(0, 400));
 });
 
 test('web/embed.go embeds plan_usage.js so a released binary serves it', function () {
