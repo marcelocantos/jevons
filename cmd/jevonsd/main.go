@@ -882,9 +882,10 @@ func main() {
 	}()
 
 	// Now start agents — MCP server is reachable.
-	// Drain boot (no handoff): Launch reaps leftovers and creates.
-	// Upgrade boot (handoff present): adopt leftover processes; Launch
-	// only for sessions that actually exited.
+	// Ordinary start (no handoff): Launch creates. Leftovers from a
+	// leaky exit are not reaped — they stay visible.
+	// Upgrade start (handoff present): adopt leftover processes;
+	// Launch only for sessions that actually exited.
 	if upgradeSnap != nil {
 		registry.StartAllPreferAdopt()
 		if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
