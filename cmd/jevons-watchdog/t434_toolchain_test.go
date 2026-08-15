@@ -49,6 +49,12 @@ import (
 func newColdRepo(t *testing.T, r *rig) string {
 	t.Helper()
 	root := t.TempDir()
+	// The restart this test provokes detaches its daemon, so the throwaway
+	// jevonsd outlives the cycle that started it and is reparented to init.
+	// Nothing here used to reap it: one was found alive on the owner's Mac
+	// two hours after the run, and the same omission in the 🎯T218 harness
+	// stranded seven. Registered after TempDir so it runs before the removal.
+	t.Cleanup(func() { reapUnder(t, root) })
 	for _, dir := range []string{"scripts", "bin"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
 			t.Fatal(err)
@@ -78,6 +84,50 @@ func newColdRepo(t *testing.T, r *rig) string {
 	// restoring service beats freshness.
 	copyFile(t, r.stub, filepath.Join(root, "bin", "jevonsd"), 0o755)
 	return root
+}
+
+// reapUnder kills every live process whose executable lives under dir, and
+// fails the test if any survives. Matching on the executable path is what
+// makes the sweep total — a detached daemon has no parent left to walk down
+// from, and is not necessarily holding a port to be found by — while keeping
+// the owner's real jevonsd, which lives outside any TempDir, unreachable.
+func reapUnder(t *testing.T, dir string) {
+	t.Helper()
+	prefix := dir + string(os.PathSeparator)
+	live := func() []int {
+		out, err := exec.Command("ps", "-Ao", "pid=,comm=").Output()
+		if err != nil {
+			return nil
+		}
+		var pids []int
+		for _, line := range strings.Split(string(out), "\n") {
+			// Split on the first space only: paths may contain spaces.
+			line = strings.TrimSpace(line)
+			sp := strings.IndexByte(line, ' ')
+			if sp < 0 || !strings.HasPrefix(strings.TrimSpace(line[sp+1:]), prefix) {
+				continue
+			}
+			if pid, err := strconv.Atoi(line[:sp]); err == nil && pid != os.Getpid() {
+				pids = append(pids, pid)
+			}
+		}
+		return pids
+	}
+	for range 10 {
+		pids := live()
+		if len(pids) == 0 {
+			return
+		}
+		for _, pid := range pids {
+			if p, err := os.FindProcess(pid); err == nil {
+				_ = p.Kill()
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if left := live(); len(left) > 0 {
+		t.Errorf("leaked %d process(es) from %s that outlived the test: %v", len(left), dir, left)
+	}
 }
 
 func copyFile(t *testing.T, src, dst string, mode os.FileMode) {
