@@ -27,6 +27,11 @@ func TestT455ClassifyFromFixturePairs(t *testing.T) {
 		{"rate limit", "429 Too Many Requests", agenterr.ClassRateLimit},
 		{"auth", "401 Unauthorized", agenterr.ClassAuth},
 		{"client bug", "grok acp: no session", agenterr.ClassClientBug},
+		// Live banner on :13705: Grok streams the word "failed" as its own
+		// chunk; ClassifyText residual maps it to ClassUnknown and OwnerCopy
+		// replaced the sentence. Authored must stay none.
+		{"failed earlier slices", "failed earlier slices", agenterr.ClassUnknown},
+		{"bare failed token", "failed", agenterr.ClassUnknown},
 		{
 			name: "quoted internal error in a report",
 			msg:  `The backend said "Internal error" but that was last hour; the fleet is working now.`,
@@ -99,6 +104,8 @@ func TestT455ClassifyFromDoesNotBlindDetector(t *testing.T) {
 		"429 Too Many Requests",
 		"401 Unauthorized",
 		"grok acp: no session",
+		"failed",
+		"failed earlier slices",
 	} {
 		want := agenterr.ClassifyText(msg)
 		if !want.IsFailure() {

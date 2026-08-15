@@ -866,6 +866,26 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			wantTextExact: "Internal error",
 		},
 		{
+			// The :13705 banner: one Grok word-chunk containing "failed"
+			// became the whole T237 OwnerCopy. Must paint verbatim.
+			name: "failed earlier slices as ACP chunk stays verbatim",
+			ev: claudia.Event{
+				Type: "assistant",
+				Text: "failed earlier slices",
+				Raw:  acpChunk,
+			},
+			wantTextExact: "failed earlier slices",
+		},
+		{
+			name: "bare failed token as ACP chunk stays verbatim",
+			ev: claudia.Event{
+				Type: "assistant",
+				Text: "failed",
+				Raw:  acpChunk,
+			},
+			wantTextExact: "failed",
+		},
+		{
 			name: "quoted Internal error in a report is authored",
 			ev: claudia.Event{
 				Type: "assistant",
