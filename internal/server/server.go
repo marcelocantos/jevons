@@ -135,6 +135,9 @@ type Server struct {
 	// capacitySource returns the background-work admission picture for
 	// GET /api/capacity (🎯T359). Nil until the governor is wired.
 	capacitySource func() any
+	// planUsageSource returns the subscription plan-usage picture for
+	// GET /api/plan-usage (🎯T390). Nil until the reader is wired.
+	planUsageSource func() any
 
 	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
 	tokenLimiter *tokenRateLimiter
@@ -359,7 +362,7 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		s.turnBuf = ""
 		s.waiting = false
 		s.overseerOwnerTurn = false // 🎯T291: seal clears owner-turn chrome level
-		s.overseerStreamID = "" // 🎯T223: terminal settle closes stream label
+		s.overseerStreamID = ""     // 🎯T223: terminal settle closes stream label
 		s.overseerStreamAcc = ""
 		s.overseerStreamSilent = false
 		s.overseerStreamHold = nil // 🎯T240 silent stream state
@@ -432,11 +435,11 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
-	mux.HandleFunc("/ws/provider", s.handleProviderFeed)    // 🎯T27.5 feed channel
-	mux.HandleFunc("GET /api/providers", s.handleProviders)       // 🎯T27.3/T27.5 observability
-	mux.HandleFunc("GET /api/automations", s.handleAutomations)   // 🎯T27.9 liveness snapshot
+	mux.HandleFunc("/ws/provider", s.handleProviderFeed)         // 🎯T27.5 feed channel
+	mux.HandleFunc("GET /api/providers", s.handleProviders)      // 🎯T27.3/T27.5 observability
+	mux.HandleFunc("GET /api/automations", s.handleAutomations)  // 🎯T27.9 liveness snapshot
 	mux.HandleFunc("GET /api/desktop/head", s.handleDesktopHead) // 🎯T27.7 tray head model
-	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe)          // 🎯T10 pure transport residual
+	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe)               // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T285
 	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
@@ -460,7 +463,8 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph)         // 🎯T185: unachieved dependency Mermaid
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
-	mux.HandleFunc("GET /api/capacity", s.handleCapacity) // 🎯T359: background admission
+	mux.HandleFunc("GET /api/capacity", s.handleCapacity)    // 🎯T359: background admission
+	mux.HandleFunc("GET /api/plan-usage", s.handlePlanUsage) // 🎯T390: subscription plan remaining
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("GET /api/logs", s.handleLogsTail)
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
