@@ -54,6 +54,19 @@ const (
 	DefaultProviderCapFallback = 12
 )
 
+// DefaultInferredCapFloor is the lowest headroom an assumed cap may report.
+//
+// It exists because the fix for a blind spot must not become a new outage. A
+// provider that publishes no cap is judged against a number this package made
+// up, and a made-up number that reaches zero headroom would put the fleet at
+// PressureCritical — where even load-bearing control repair stands down, and
+// nothing is left running that could unstick it. Measurements (host load,
+// swap, a published cap, spent tokens) may halt the fleet; an assumption may
+// only slow it down. The floor sits below OwnerReserveFraction so an assumed
+// cap still reaches PressureTight: ambient background yields, control repair
+// and Build and the owner keep running.
+const DefaultInferredCapFloor = 0.10
+
 // providerCap resolves the effective concurrency cap for a provider whose
 // published soft cap is capN. A non-positive published cap is unpublished, not
 // unlimited (🎯T463).
@@ -65,6 +78,19 @@ func (p *Policy) providerCap(capN int) int {
 		return p.ProviderCapFallback
 	}
 	return DefaultProviderCapFallback
+}
+
+// inferredFloor bounds a headroom derived from an assumed cap, so an
+// assumption throttles the fleet without ever halting it.
+func inferredFloor(h float64, pol *Policy) float64 {
+	if h == unknownHeadroom {
+		return h
+	}
+	floor := pol.OwnerReserveFraction / 2
+	if floor <= 0 || floor >= pol.OwnerReserveFraction {
+		floor = DefaultInferredCapFloor
+	}
+	return max(h, floor)
 }
 
 // hostHeadroom is the fraction of host capacity left, and the sentence

@@ -147,11 +147,33 @@ func TestT463ProviderZeroCapIsNotUnlimited(t *testing.T) {
 		ProviderLoad:     map[string]int{"claude": 47, "codex": 1, "grok": 2},
 	}
 	a := Assess(snap, pol)
-	if a.LoadHeadroom != 0 {
-		t.Errorf("load headroom %v with 47 agents on an uncapped provider, want 0", a.LoadHeadroom)
+	if a.LoadHeadroom >= pol.OwnerReserveFraction {
+		t.Errorf("load headroom %v with 47 agents on an uncapped provider, want inside the %v owner reserve",
+			a.LoadHeadroom, pol.OwnerReserveFraction)
 	}
-	if a.Pressure != PressureCritical {
-		t.Errorf("pressure %s, want critical: %+v", a.Pressure, a)
+
+	// An assumed cap throttles and never halts: ambient background yields, but
+	// load-bearing control repair — the loop that unsticks the fleet — keeps
+	// running. A fix for a blind spot that parks the repair loop has traded one
+	// outage for another.
+	if a.Pressure != PressureTight {
+		t.Errorf("pressure %s on an assumed cap, want tight: %+v", a.Pressure, a)
+	}
+	if d := Admit(Request{Class: ClassResearch}, snap, pol); d.Verdict != VerdictDefer {
+		t.Errorf("research verdict %q, want defer", d.Verdict)
+	}
+	if d := Admit(Request{Class: ClassControlRepair}, snap, pol); !d.Admitted() {
+		t.Errorf("control repair was %q under an assumed cap, want admitted (%s)", d.Verdict, d.Detail)
+	}
+
+	// A published cap is a measurement, not an assumption: breaching it may
+	// halt background work outright.
+	published := Snapshot{
+		ProviderSoftCaps: map[string]int{"codex": 6},
+		ProviderLoad:     map[string]int{"codex": 12},
+	}
+	if a := Assess(published, pol); a.Pressure != PressureCritical {
+		t.Errorf("published cap breached 2× assessed as %s, want critical: %+v", a.Pressure, a)
 	}
 
 	// Control: the same uncapped provider carrying a normal number of agents

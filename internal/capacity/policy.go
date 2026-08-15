@@ -204,8 +204,13 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 	a.LoadHeadroom = fraction(loadUsed, loadLimit)
 	for prov, capN := range snap.ProviderSoftCaps {
 		// A published 0 is an unpublished cap, not an unlimited one (🎯T463):
-		// judge it against the fallback rather than skipping the provider.
+		// judge it against the fallback rather than skipping the provider —
+		// but an assumed cap only throttles, since halting the fleet on a
+		// number this package invented would trade one outage for another.
 		h := fraction(float64(snap.ProviderLoad[strings.ToLower(strings.TrimSpace(prov))]), float64(pol.providerCap(capN)))
+		if capN <= 0 {
+			h = inferredFloor(h, pol)
+		}
 		if h != unknownHeadroom && (a.LoadHeadroom == unknownHeadroom || h < a.LoadHeadroom) {
 			a.LoadHeadroom = h
 		}
