@@ -11,7 +11,8 @@
 #   1. make / rebuild bin/jevonsd
 #   2. decide whether a restart is needed at all (🎯T218 thrash policy below)
 #   3. brew services stop jevons (so Cellar KeepAlive cannot reclaim :13705)
-#   4. kill listeners on the daily port
+#   4. SIGHUP listeners on the daily port — 🎯T40 upgrade exit, so agent
+#      turns in flight are NOT cancelled by the bounce (🎯T392.5)
 #   5. start $REPO/bin/jevonsd with workdir set (detached: nohup/setsid)
 #   6. wait until HTTP /health is ok and /api/frontier is not 404
 #   7. exit 0 only when the new process is serving
@@ -94,6 +95,8 @@
 #   JEVONS_RESTART_WORKDIR  default: repo root
 #   JEVONS_RESTART_LOG      default: ~/.jevons/daily-jevonsd.log
 #   JEVONS_RESTART_WAIT_SEC default 90
+#   JEVONS_RESTART_STOP_WAIT_SEC  grace for the 🎯T392.5 upgrade exit to
+#                               release the port before SIGKILL, default 20
 #   JEVONS_RESTART_SKIP_MAKE=1  skip rebuild (use existing bin/jevonsd)
 #   JEVONS_RESTART_MIN_INTERVAL_SEC  thrash window, default 180 (🎯T218)
 #   JEVONS_RESTART_LOCK_WAIT_SEC     wait for an in-flight restart, default 240
@@ -116,6 +119,9 @@ PORT="${JEVONS_RESTART_PORT:-$DAILY_PORT}"
 WORKDIR="${JEVONS_RESTART_WORKDIR:-$ROOT}"
 LOG="${JEVONS_RESTART_LOG:-$HOME/.jevons/daily-jevonsd.log}"
 WAIT_SEC="${JEVONS_RESTART_WAIT_SEC:-90}"
+# 🎯T392.5: how long to let the upgrade exit (SIGHUP) release the port
+# before escalating to SIGKILL. See kill_port_listeners.
+STOP_WAIT_SEC="${JEVONS_RESTART_STOP_WAIT_SEC:-20}"
 # 🎯T218: min seconds between successful restarts (debounce thrash from
 # concurrent workers each bouncing daily after every land).
 MIN_INTERVAL_SEC="${JEVONS_RESTART_MIN_INTERVAL_SEC:-180}"
@@ -223,6 +229,8 @@ Env:
   JEVONS_RESTART_WORKDIR           -workdir for jevonsd (default: repo root)
   JEVONS_RESTART_LOG               Daemon log file (default ~/.jevons/daily-jevonsd.log)
   JEVONS_RESTART_WAIT_SEC          Health wait seconds (default 90)
+  JEVONS_RESTART_STOP_WAIT_SEC     Grace for the upgrade exit to free the port
+                                   before SIGKILL (default 20; 🎯T392.5)
   JEVONS_RESTART_SKIP_MAKE         If 1, skip make rebuild
   JEVONS_RESTART_MIN_INTERVAL_SEC  Thrash window (default 180; 🎯T218)
   JEVONS_RESTART_LOCK_WAIT_SEC     Wait for in-flight restart (default 240; 🎯T218)
@@ -356,20 +364,72 @@ list_listen_pids() {
 }
 
 kill_port_listeners() {
-  local pids
+  # 🎯T392.5: ASK FOR AN UPGRADE EXIT, NOT A DRAIN.
+  #
+  # This script bounces the daemon on every daemon-path land, by design
+  # (🎯T188/🎯T191 make restarts routine and unattended, and that must
+  # stay). What it must not do is charge the fleet for the privilege.
+  #
+  # jevonsd has told two different stories apart since 🎯T40:
+  #
+  #   SIGINT/SIGTERM → ModeNormal  → registry.StopAll(). Every agent
+  #     process is stopped, so every turn in flight is cancelled. A
+  #     cancelled turn has already billed its whole context and produces
+  #     nothing — 120 of 1,070 turns and 59.7M input tokens (6.6%) went
+  #     this way in the 🎯T392 baseline, with daemon restarts landing
+  #     mid-flight one of the two dominant sources.
+  #
+  #   SIGHUP        → ModeUpgrade → StopAll is SKIPPED and reattach
+  #     handles are written (internal/upgrade). Agents are detached
+  #     `grok agent serve` processes (CLAUDIA_GROK_CONNECT=1, set by the
+  #     daemon itself) precisely so they outlive the coordinator, and
+  #     the successor merges the handles back in at boot.
+  #
+  # The upgrade path was built for exactly this and this script never
+  # asked for it: a plain `kill` is SIGTERM, so every routine bounce took
+  # the drain. One signal is the whole fix — the turns keep running
+  # across the bounce and reattach to the new coordinator.
+  #
+  # ESCALATION. SIGHUP is a request; freeing the port is still mandatory
+  # (🎯T194 — a restart that reports success while the old binary serves
+  # is the failure this script exists to prevent). So we poll for release
+  # up to STOP_WAIT_SEC and then SIGKILL. There is deliberately no SIGTERM
+  # rung between them: the daemon's handler reads ONE signal off sigCh and
+  # returns, so a second signal after SIGHUP is never read and cannot help.
+  # Reaching SIGKILL means the upgrade exit was already wedged, and the
+  # agents survive it anyway (they are not in this process group) — they
+  # just lose the reattach handles the graceful path would have written.
+  #
+  # NOT the owner's stop button. This is the restart script's own signal
+  # to the coordinator. Owner cancellation is a different path entirely
+  # (agent kill/stop, the 🎯T36 killswitch) and is untouched here: it stays
+  # immediate and unconditional, which is a hard constraint of 🎯T392.5.
+  local pids waited
   pids="$(list_listen_pids)"
   if [[ -z "$pids" ]]; then
     log "no listeners on :$PORT"
     return 0
   fi
-  log "killing listeners on :$PORT: $(echo "$pids" | tr '\n' ' ')"
+  log "🎯T392.5 upgrade-exit (SIGHUP) to listeners on :$PORT: $(echo "$pids" | tr '\n' ' ') — in-flight agent turns keep running across the bounce"
   # Word-split is intentional: kill accepts multiple PIDs.
   # shellcheck disable=SC2086
-  kill $pids 2>/dev/null || true
-  sleep 1
+  kill -HUP $pids 2>/dev/null || true
+
+  # Poll rather than sleep a fixed grace: the upgrade exit closes the
+  # listener and then writes handles, so the port usually frees in well
+  # under a second and waiting the whole window would be pure latency
+  # added to every land.
+  waited=0
+  while [[ "$waited" -lt "$STOP_WAIT_SEC" ]]; do
+    pids="$(list_listen_pids)"
+    [[ -n "$pids" ]] || break
+    sleep 1
+    waited=$((waited + 1))
+  done
+
   pids="$(list_listen_pids)"
   if [[ -n "$pids" ]]; then
-    log "force-killing remaining on :$PORT: $(echo "$pids" | tr '\n' ' ')"
+    log "🎯T392.5 upgrade exit did not free :$PORT within ${STOP_WAIT_SEC}s; force-killing: $(echo "$pids" | tr '\n' ' ')"
     # shellcheck disable=SC2086
     kill -9 $pids 2>/dev/null || true
     sleep 0.5
@@ -490,7 +550,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T392.5 hold $LOCK_FILE via runlock so concurrent restarts serialise"
   log "[dry-run] would: 🎯T218 wait out the ${MIN_INTERVAL_SEC}s thrash window rather than skip a changed binary"
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
-  log "[dry-run] would: kill listeners on :$PORT"
+  log "[dry-run] would: 🎯T392.5 SIGHUP listeners on :$PORT (upgrade exit — in-flight agent turns survive), SIGKILL only if the port is still held after ${STOP_WAIT_SEC}s"
   log "[dry-run] would: nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG"
   log "[dry-run] would: wait for /health 200 and /api/frontier non-404"
   log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-daily-jevonsd.sh >>\$HOME/.jevons/restart-daily.log 2>&1 &"
