@@ -93,7 +93,10 @@ func (s *Store) Prune(maxAge time.Duration, now time.Time) error {
 		return err
 	}
 	for _, e := range entries {
-		if !e.IsDir() {
+		// The journal is fleet-wide and not a session, so session TTL does not
+		// apply to it: expiring it would silently reset the one record that
+		// says what the guard has already seen (🎯T391).
+		if !e.IsDir() || e.Name() == journalDir {
 			continue
 		}
 		dir := filepath.Join(s.Root, e.Name())

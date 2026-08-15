@@ -58,6 +58,12 @@ var DefaultGuardedPaths = []string{
 // observation source (see ObservingTools).
 var MutatingTools = []string{"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
+// ToolBash is the tool whose payload carries a shell command rather than a
+// file path. It is not in MutatingTools because whether it mutates anything is
+// a property of the command, not of the tool: command.go answers that, and
+// DecideArgs.Form carries the answer here (🎯T391).
+const ToolBash = "Bash"
+
 // ObservingTools establish or refresh a session's base for a path. Read is the
 // normal entry point; the mutating tools are included because a successful
 // write leaves the session holding the content it just wrote.
@@ -112,13 +118,29 @@ type DecideArgs struct {
 	// Edit and MultiEdit do not, because their result depends on the file
 	// they are applied to.
 	Proposed []byte
+	// Form names the shell construct that makes a Bash call a write (🎯T391),
+	// e.g. FormInPlace. Empty for the tool path, where Tool alone decides.
+	// A non-empty Form is what makes ToolBash mutating.
+	Form string
+}
+
+// what names the write for a worker reading a refusal: "Write", or the shell
+// construct behind a Bash call. Quoting the whole command back would bury the
+// one part the worker has to change.
+func (a *DecideArgs) what() string {
+	if a.Form == "" {
+		return a.Tool
+	}
+	return a.Tool + " (" + a.Form + ")"
 }
 
 // Decide is the whole policy. It is deliberately one readable function: the
 // order of the checks *is* the policy, and splitting it into predicates would
 // hide that.
 func Decide(args *DecideArgs) Decision {
-	if !slices.Contains(MutatingTools, args.Tool) {
+	// A recognized write form (🎯T391) is what makes a Bash call mutating; for
+	// every other tool the name alone decides.
+	if args.Form == "" && !slices.Contains(MutatingTools, args.Tool) {
 		return Decision{Verdict: Allow, Reason: "tool-not-mutating"}
 	}
 	guarded := args.Guarded
@@ -138,7 +160,7 @@ func Decide(args *DecideArgs) Decision {
 		return Decision{
 			Verdict: Deny,
 			Reason:  "never-observed",
-			Message: "treeguard: refusing " + args.Tool + " to " + args.RelPath +
+			Message: "treeguard: refusing " + args.what() + " to " + args.RelPath +
 				" — this session has never read the file, so the write cannot" +
 				" preserve whatever another fleet worker put there.\n" +
 				"Read " + args.RelPath + " first, then write.",
@@ -159,14 +181,23 @@ func Decide(args *DecideArgs) Decision {
 		Verdict: Deny,
 		Reason:  "stale-base",
 		AtRisk:  atRisk,
-		Message: "treeguard: refusing " + args.Tool + " to " + args.RelPath +
+		Message: "treeguard: refusing " + args.what() + " to " + args.RelPath +
 			" — another fleet worker changed it since this session read it" +
 			" (observed " + shortHash(args.Observed.Hash) + ", on disk " +
 			shortHash(diskHash) + "), and this write would drop their lines:\n" +
 			"  " + strings.Join(atRisk, "\n  ") + "\n" +
 			"Re-read " + args.RelPath + " and re-apply your change on top of" +
-			" the current content (🎯T376).",
+			" the current content (" + args.cite() + ").",
 	}
+}
+
+// cite names the target a refusal comes from: the tool boundary is 🎯T376's,
+// the shell boundary 🎯T391's. Both, for a worker chasing the rule.
+func (a *DecideArgs) cite() string {
+	if a.Form == "" {
+		return "🎯T376"
+	}
+	return "🎯T376 / 🎯T391"
 }
 
 // DetectLostAdditions returns lines that exist on disk now, did not exist when
