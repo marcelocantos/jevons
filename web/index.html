@@ -2653,7 +2653,7 @@ function handle(m) {
         return;
       }
       // 🎯T223: do NOT seal open assistant streams on user interleave.
-      // Join identity is stream_id (and legacy openStreamEl until terminal).
+      // Join identity is stream_id (widget open handle until terminal).
       // Premature seal was the journal/hydrate split of one answer into two.
       closeTurn();
       // 🎯T381: carry the wire's provenance into the bubble so paintBody can
@@ -2700,9 +2700,6 @@ function handle(m) {
     content.forEach(c => {
       if (c.type==='tool_use') {
         streamSegmentEdge = true;
-        if (streamId && openStreamById[streamId]) {
-          // per-id edge handled inside appendOrAddJevons via opts
-        }
         addTurnItem('tool-use', c.name + (c.input ? ': ' + ToolSummary.summariseInput(c.input) : ''));
         // 🎯T260: tool activity is mid-turn signal — re-arm chrome if open.
         if (ownerWorkingChrome) {
@@ -2783,13 +2780,9 @@ function lastMessageish() {
   return el;
 }
 
-// 🎯T159 / 🎯T223: open-stream handles. Bubble boundary = terminal
-// stop_reason (not user interleave). Join key is stream_id when present;
-// legacy openStreamEl for unlabeled frames. Never rediscover via
-// lastMessageish — tool chrome and worker notes can insert .msg nodes.
-let openStreamEl = null;
-// stream_id → open jevons element (🎯T223).
-const openStreamById = Object.create(null);
+// 🎯T372: grow-one-bubble lives in ConversationWidget. These names stay as
+// call-site delegates so handleChat / wipe / tests keep a stable entry.
+// Join identity (open handle, stream_id map, _streamRaw merge) is NOT here.
 // 🎯T245: stream_id → true once this open stream is pure-silent (drop body).
 const openStreamSilentById = Object.create(null);
 // 🎯T161: next assistant text after tool_use/tool_result is a new segment
@@ -2797,99 +2790,20 @@ const openStreamSilentById = Object.create(null);
 let streamSegmentEdge = false;
 
 function clearOpenStreamHandle(streamId) {
-  if (streamId) {
-    const el = openStreamById[streamId];
-    delete openStreamById[streamId];
-    delete openStreamSilentById[streamId];
-    if (openStreamEl === el) openStreamEl = null;
-  } else {
-    openStreamEl = null;
-    for (const k of Object.keys(openStreamById)) delete openStreamById[k];
+  if (streamId) delete openStreamSilentById[streamId];
+  else {
     for (const k of Object.keys(openStreamSilentById)) delete openStreamSilentById[k];
   }
   streamSegmentEdge = false;
+  if (mainConversation && typeof mainConversation.clearStreamHandles === 'function') {
+    mainConversation.clearStreamHandles(streamId);
+  }
 }
 
-// resolveOpenStreamEl finds the single open bubble for a stream (🎯T249).
-// Prefer stream_id map; re-home disconnected nodes instead of minting a
-// second bubble; adopt unlabeled openStreamEl when wire id arrives mid-turn;
-// DOM-scan fallback if handles were lost. Never open a second bubble for
-// the same still-open stream_id (owner repro: paragraph-ish multi-bubble
-// that later self-healed after coalesce/reconnect).
-function resolveOpenStreamEl(streamId) {
-  const sid = streamId ? String(streamId) : '';
-  function rehome(el) {
-    if (!el || typeof el._streamRaw !== 'string') return null;
-    if (!el.isConnected && msgs) {
-      try { msgs.appendChild(el); } catch (_) { /* ignore */ }
-    }
-    return el.isConnected ? el : null;
-  }
-  if (sid && openStreamById[sid]) {
-    const el = rehome(openStreamById[sid]);
-    if (el) return el;
-    delete openStreamById[sid];
-  }
-  if (openStreamEl && typeof openStreamEl._streamRaw === 'string') {
-    const unlabeled = !openStreamEl._streamId;
-    const sameId = sid && openStreamEl._streamId === sid;
-    if (!sid || unlabeled || sameId) {
-      const el = rehome(openStreamEl);
-      if (el) {
-        if (sid) {
-          el._streamId = sid;
-          openStreamById[sid] = el;
-        }
-        return el;
-      }
-      openStreamEl = null;
-    }
-  }
-  // Handle lost: any still-open .msg.jevons with this stream_id.
-  if (sid && msgs) {
-    const nodes = msgs.querySelectorAll('.msg.jevons');
-    for (let i = 0; i < nodes.length; i++) {
-      const el = nodes[i];
-      if (el && el._streamId === sid && typeof el._streamRaw === 'string') {
-        openStreamById[sid] = el;
-        openStreamEl = el;
-        return el;
-      }
-    }
-  }
-  return null;
-}
-
-// appendOrAddJevons merges streaming assistant chunks into the open
-// jevons bubble. Merge is keyed on stream_id (🎯T223 / T249) or openStreamEl +
-// _streamRaw — not lastMessageish / workingEl. Seal only on terminal stop
-// so tool rounds and mid-stream user lines never split one logical reply.
-// opts.segmentEdge: known protocol segment boundary → joinAssistantSegments;
-// opts.streamId: wire stream_id for join-by-identity.
-// otherwise bare appendAssistantStream (intra-segment tokens).
+// 🎯T372 / T159 / T223 / T249: widget owns the open-stream handle.
 function appendOrAddJevons(text, ts, opts) {
-  const segmentEdge = !!(opts && opts.segmentEdge);
-  const streamId = opts && opts.streamId ? String(opts.streamId) : '';
-  let target = resolveOpenStreamEl(streamId);
-  if (target) {
-    // 🎯T161: structural segment join vs bare token append — never sniff text.
-    target._streamRaw = segmentEdge
-      ? ChatEvents.joinAssistantSegments(target._streamRaw, text)
-      : ChatEvents.appendAssistantStream(target._streamRaw, text);
-    scheduleJevonsRender(target);   // rAF-debounced: coalesce burst chunks into ONE parse (🎯T57)
-    return;
-  }
-  // 🎯T150: open stream flag before first paint so progressive markdown
-  // applies from frame 0 (not a marked flash then smd restart).
-  const el = addMsg('jevons', text, ts, { streamOpen: true });
-  // _streamRaw already set in buildMsg when streamOpen; keep assign for clarity.
-  el._streamRaw = typeof el._streamRaw === 'string' ? el._streamRaw : text;
-  if (streamId) {
-    el._streamId = streamId;
-    openStreamById[streamId] = el;
-  }
-  openStreamEl = el;
-  streamSegmentEdge = false;
+  if (!mainConversation || typeof mainConversation.appendAssistant !== 'function') return;
+  return mainConversation.appendAssistant(text, ts, opts);
 }
 
 // scheduleJevonsRender coalesces streamed chunks: instead of re-parsing
@@ -2935,66 +2849,41 @@ function scheduleJevonsRender(el) {
   });
 }
 
-// sealAssistantStream closes an open coalesced bubble so the next
-// turn starts a new one — flushing any pending debounced render first.
-// 🎯T159 / 🎯T223: only terminal stop_reason / system call this — never
-// tool_use progress, and never owner user interleave (join by stream_id).
-// streamId: seal that labeled stream only; omit to seal the legacy handle
-// (and all labeled opens on hard wipe paths).
-function sealAssistantStream(streamId) {
-  let el = null;
-  if (streamId && openStreamById[streamId] &&
-      typeof openStreamById[streamId]._streamRaw === 'string') {
-    el = openStreamById[streamId];
-  } else if (!streamId && openStreamEl && typeof openStreamEl._streamRaw === 'string') {
-    el = openStreamEl;
+// Host seal paint (VirtualList shells, mermaid, target-aside). The widget
+// already cleared _streamRaw and the open handle (🎯T372).
+function paintSealedJevons(el, raw, streamId) {
+  if (!el) return;
+  el._layoutText = raw;
+  el._layoutRole = 'jevons';
+  // 🎯T347: sealing a replay-lazy shell keeps it a shell — final estimated
+  // height only, no parse. The history_meta pin paints the end band.
+  if (historyReplayActive && el.classList && el.classList.contains('virt-shell') &&
+      !el._smdSession) {
+    if (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText) {
+      el.style.minHeight = VirtualList.estimateHeightFromText(raw) + 'px';
+    }
+    return;
   }
-  // Fallback: scan for a still-open stream if the handle was lost (e.g.
-  // soft reconnect residual) — still never invent continuity without _streamRaw.
-  if (!el && !streamId) {
-    const tail = lastMessageish();
-    if (tail && tail.classList.contains('jevons') && typeof tail._streamRaw === 'string') {
-      el = tail;
-    }
+  // 🎯T150: end progressive session before full marked seal paint.
+  if (el._smdSession) {
+    try { el._smdSession.end(); } catch (_) { /* ignore */ }
   }
-  if (el && typeof el._streamRaw === 'string') {
-    if (el._renderRaf) { cancelAnimationFrame(el._renderRaf); el._renderRaf = 0; }
-    const raw = el._streamRaw;
-    delete el._streamRaw;                       // clear first so the sealed
-    el._layoutText = raw;                       // render draws mermaid (🎯T59)
-    el._layoutRole = 'jevons';
-    // 🎯T347: sealing a replay-lazy shell keeps it a shell — final estimated
-    // height only, no parse. The history_meta pin paints the end band.
-    if (historyReplayActive && el.classList && el.classList.contains('virt-shell') &&
-        !el._smdSession) {
-      if (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText) {
-        el.style.minHeight = VirtualList.estimateHeightFromText(raw) + 'px';
-      }
-      clearOpenStreamHandle(streamId || undefined);
-      return;
-    }
-    // 🎯T150: end progressive session before full marked seal paint.
-    if (el._smdSession) {
-      try { el._smdSession.end(); } catch (_) { /* ignore */ }
-    }
-    destroyStreamSession(el);
-    // Stay expanded through seal so measure/paint never flashes a preview
-    // into the live latest bubble (would freeze follow at a mid offset).
-    el._expanded = true;
-    el._autoExpanded = true;
-    renderBody(el, 'jevons', raw);
-    // 🎯T164: terminal seal of a live turn — run filed-marker close once more
-    // (stream path may have already closed; idempotent when no open file-target).
-    if (!historyReplayActive) {
-      maybeCloseTargetAside(raw);
-      // 🎯T267: seal path focuses target-ask (PO select + frontier highlight).
-      // Mid-stream intentionally skipped — thrash residual (loadFrontier + select).
-      if (typeof maybeFocusTargetAsk === 'function') maybeFocusTargetAsk(raw);
-    }
-    unwatchStreamBubble(el);
-    scheduleLatestExpansion();
+  destroyStreamSession(el);
+  // Stay expanded through seal so measure/paint never flashes a preview
+  // into the live latest bubble (would freeze follow at a mid offset).
+  el._expanded = true;
+  el._autoExpanded = true;
+  renderBody(el, 'jevons', raw);
+  // 🎯T164: terminal seal of a live turn — run filed-marker close once more
+  // (stream path may have already closed; idempotent when no open file-target).
+  if (!historyReplayActive) {
+    maybeCloseTargetAside(raw);
+    // 🎯T267: seal path focuses target-ask (PO select + frontier highlight).
+    // Mid-stream intentionally skipped — thrash residual (loadFrontier + select).
+    if (typeof maybeFocusTargetAsk === 'function') maybeFocusTargetAsk(raw);
   }
-  clearOpenStreamHandle(streamId || undefined);
+  unwatchStreamBubble(el);
+  scheduleLatestExpansion();
   // Final layout (markdown / mermaid / highlight) often grows after the
   // last stream pin — re-follow so the user never needs a manual nudge.
   if (isTracking()) {
@@ -3003,6 +2892,13 @@ function sealAssistantStream(streamId) {
   }
   // 🎯T21: sealed assistant text is durable context for Wispr document mode.
   refreshWisprContext();
+}
+
+// 🎯T372: seal is the widget's. Host only paints (paintSealedJevons via onSeal).
+function sealAssistantStream(streamId) {
+  if (mainConversation && typeof mainConversation.sealAssistant === 'function') {
+    mainConversation.sealAssistant(streamId);
+  }
 }
 
 function startTurn() {
@@ -7722,9 +7618,11 @@ function send(opts) {
     }
   }
   // 🎯T21: strip empty-composer seed before wire; never invent grammar/`?`.
+  // 🎯T372: widget.send may pass the draft as opts.text (composer already read).
+  const rawDraft = (opts && opts.text != null) ? String(opts.text) : input.value;
   let t = (typeof WisprContext !== 'undefined')
-    ? WisprContext.prepareWireText(input.value).trim()
-    : input.value.trim();
+    ? WisprContext.prepareWireText(rawDraft).trim()
+    : rawDraft.trim();
   // 🎯T76: allow send with only images attached.
   if (!t && !pendingImages.length) return;
   // Prepend image markers so the overseer receives durable references.
@@ -8413,56 +8311,9 @@ input.addEventListener('keydown', e => {
   const enterByCode = e.code === 'Enter' || e.code === 'NumpadEnter';
   const isEnter = e.key === 'Enter' || enterByCode;
   if (isEnter) {
-    const composerEmpty = (typeof WisprContext !== 'undefined' && WisprContext.isEffectivelyEmpty)
-      ? WisprContext.isEffectivelyEmpty(input.value)
-      : !String(input.value || '').trim();
-    const queueLen = (typeof sendQueueState !== 'undefined' && sendQueueState && sendQueueState.items)
-      ? sendQueueState.items.length
-      : 0;
-    // Option/Alt: some layouts set altKey false but getModifierState('Alt').
-    const altHeld = !!(e.altKey || (typeof e.getModifierState === 'function' && e.getModifierState('Alt')));
-    const mods = {
-      shiftKey: !!e.shiftKey,
-      ctrlKey: !!e.ctrlKey,
-      altKey: altHeld,
-      metaKey: !!e.metaKey,
-      code: e.code,
-    };
-    const action = (typeof ComposerKeys !== 'undefined' && ComposerKeys.classifyEnterAction)
-      ? ComposerKeys.classifyEnterAction(e.key, mods, {
-          composerEmpty: composerEmpty,
-          code: e.code,
-          queueLen: queueLen,
-        })
-      : (mods.shiftKey ? 'newline'
-        : (mods.ctrlKey ? 'interrupt'
-          : (mods.altKey
-            ? (!composerEmpty ? 'force_send'
-              : (queueLen > 0 ? 'send_queue_now' : 'noop'))
-            : 'send')));
-    if (action === 'newline' || action == null) return; // Shift+Enter → native newline
-    e.preventDefault();
-    if (action === 'noop') return; // empty Alt+Enter with no queue
-    // 🎯T241: Alt+Enter never pop_last — history is Alt+Up/Down only.
-    if (action === 'send_queue_now') {
-      const items = (sendQueueState && sendQueueState.items) || [];
-      if (!items.length) return;
-      let id = null;
-      if (navFocus.zone === 'queue' && items[navFocus.index | 0]) {
-        id = items[navFocus.index | 0].id;
-      } else {
-        id = items[0].id; // FIFO head when none focused
-      }
-      if (id && typeof sendQueueNow === 'function') sendQueueNow(id);
-      return;
-    }
-    // force_send (Alt+Enter draft) and interrupt (Ctrl+Enter) both interject.
-    const interrupt = action === 'interrupt' || action === 'force_send';
-    // 🎯T88: primary send while a recalled bubble is highlighted rewinds
-    // and resends (destructive redo). Escape clears edit mode first for
-    // safe append; Cmd/Ctrl+Enter also forces safe append.
-    if (editingEl && !interrupt && !e.metaKey) rewindAndResend();
-    else send({ interrupt: interrupt });
+    // 🎯T372: Enter-family chords are ConversationWidget's. Leave Shift+Enter
+    // as native newline; other Enter chords are stopPropagation'd on the
+    // widget listener (same node, registered first at mount).
     return;
   }
   // 🎯T133: Backspace on seed-only clears whole seed once (no period thrash).
@@ -8670,7 +8521,7 @@ function tidyDictationInsert(s) {
   if (!/[.?!]$/.test(t)) t += '.';
   return t;
 }
-sendBtn.addEventListener('click', send);
+// 🎯T372: send click is ConversationWidget's (mount wires #send).
 if (typeof renderAttention === 'function') renderAttention();
 // Keep focus in the textarea when clicking toolbar buttons: preventing
 // the mousedown default blocks the focus shift while still firing click.
@@ -9016,10 +8867,45 @@ let rhsBottomTab = (typeof FrontierTable !== 'undefined')
       agentId: 'jevons',
       density: 'comfortable',
       adopt: true,
-      wireComposer: false, // main keeps ComposerKeys + send_queue wiring
       draftStore: _widgetDraftStore || undefined,
       timeIfKnown: false,
       buildMsg: typeof buildMsg === 'function' ? buildMsg : undefined,
+      addMsg: typeof addMsg === 'function' ? addMsg : undefined,
+      onStreamFrame: typeof scheduleJevonsRender === 'function' ? scheduleJevonsRender : undefined,
+      onSeal: typeof paintSealedJevons === 'function' ? paintSealedJevons : undefined,
+      ComposerKeys: typeof ComposerKeys !== 'undefined' ? ComposerKeys : undefined,
+      isComposerEmpty: function (v) {
+        return (typeof WisprContext !== 'undefined' && WisprContext.isEffectivelyEmpty)
+          ? WisprContext.isEffectivelyEmpty(v)
+          : !String(v || '').trim();
+      },
+      queueLen: function () {
+        return (typeof sendQueueState !== 'undefined' && sendQueueState && sendQueueState.items)
+          ? sendQueueState.items.length : 0;
+      },
+      onSendQueueNow: function () {
+        const items = (sendQueueState && sendQueueState.items) || [];
+        if (!items.length) return;
+        let id = null;
+        if (navFocus.zone === 'queue' && items[navFocus.index | 0]) {
+          id = items[navFocus.index | 0].id;
+        } else {
+          id = items[0].id;
+        }
+        if (id && typeof sendQueueNow === 'function') sendQueueNow(id);
+      },
+      onComposerAction: function (payload) {
+        // 🎯T88: primary send while a recalled bubble is highlighted rewinds
+        // and resends. Interrupt chords force a safe append.
+        if (editingEl && !payload.interrupt) {
+          rewindAndResend();
+          return;
+        }
+        return send({
+          interrupt: !!payload.interrupt,
+          text: payload.text,
+        });
+      },
     });
   }
   // RHS: adopt inspect body + compact composer; widget owns key/draft/optimistic/send.
@@ -9028,8 +8914,8 @@ let rhsBottomTab = (typeof FrontierTable !== 'undefined')
       agentId: selectedAgent || '',
       density: 'compact',
       adopt: true,
-      wireComposer: true, // 🎯T309.1: one composer implementation (compact = CSS only)
       draftStore: _widgetDraftStore || undefined,
+      ComposerKeys: typeof ComposerKeys !== 'undefined' ? ComposerKeys : undefined,
       timeIfKnown: true,
       scrollFollow: agentInspectFollow(),
       buildMsg: typeof buildMsg === 'function' ? buildMsg : undefined,
@@ -9362,13 +9248,16 @@ function resubscribeAgentInspect() {
 }
 
 // Apply agent_transcript WS frames to RHS inspect (not main #messages).
+// 🎯T372: live frames grow bubbles on the widget — they do not remount
+// via copyInspectLines / renderAgentInspect (T479: that drop of _stream
+// minted one bubble per Grok word).
 function handleAgentTranscriptWire(m) {
   if (!m || !selectedAgent || m.name !== selectedAgent) return;
   if (m.kind === 'live' && m.event) {
-    if (typeof AgentTranscript !== 'undefined' && AgentTranscript.applyInspectLiveFrame) {
-      _agentInspectLines = AgentTranscript.applyInspectLiveFrame(_agentInspectLines, m.event);
+    if (inspectConversation && typeof inspectConversation.applyWireEvent === 'function') {
+      inspectConversation.applyWireEvent(m.event);
+      _agentInspectLines = inspectConversation.getLines();
     }
-    let lines = inspectLinesCopy(_agentInspectLines);
     // 🎯T252: terminal assistant stop on aside ⇒ owner attention (user's turn).
     const terminal = typeof AgentTranscript !== 'undefined' &&
         AgentTranscript.liveFrameSignalsOwnerAttention &&
@@ -9376,21 +9265,14 @@ function handleAgentTranscriptWire(m) {
     if (terminal) {
       _agentInspectWorking = false;
     }
-    // 🎯T250: overlay main-wire aside turns for this agent id.
-    // 🎯T263: keep working chrome until terminal stop (first-turn activity).
-    const liveModel = mergeModelWithAsideWire({
-      title: selectedAgent,
-      empty: lines.length === 0,
-      error: '',
-      lines: lines,
-      working: !!_agentInspectWorking && !terminal,
-    }, selectedAgent);
-    // 🎯T371: a live frame acks the owner turn it carries and keeps any that
-    // are still unsealed visible.
-    liveModel.lines = reconcileInspectPending(selectedAgent, liveModel.lines);
-    liveModel.empty = !(liveModel.lines && liveModel.lines.length);
-    _agentInspectLines = inspectLinesCopy(liveModel.lines);
-    renderAgentInspect(liveModel);
+    if (m.event && m.event.type === 'user') {
+      const acked = ConversationWidget.ackPendingOwnerTurns(
+        _sidebarPending, selectedAgent, _agentInspectLines || []);
+      _sidebarPending = acked.state;
+    }
+    if (inspectConversation && inspectConversation.setWorking) {
+      inspectConversation.setWorking(!!_agentInspectWorking && !terminal);
+    }
     if (terminal) {
       markAsideNeedsAttention(m.name || selectedAgent);
     }
@@ -10300,8 +10182,8 @@ function sendSidebarComposer() {
   return inspectConversation.send();
 }
 
-// Compact key/input/send wiring is ConversationWidget.mount({ wireComposer:true }).
-// No second keydown/send path here (🎯T309.1 collapse).
+// Composer key/input/send wiring is ConversationWidget.mount (🎯T372).
+// No second keydown/send path here.
 if (typeof syncSidebarComposer === 'function') syncSidebarComposer();
 
 const frontierRefresh = document.getElementById('frontier-refresh');

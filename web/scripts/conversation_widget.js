@@ -1,10 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Conversation widget (🎯T309.1): ONE surface for bubble list + message box +
-// send. Main root chat and RHS sidebar both mount this module with params
-// (agent id, density compact|comfortable). Compact is CSS/param only — not a
-// second composer implementation.
+// Conversation widget (🎯T309.1 / 🎯T372): ONE surface for bubble list +
+// message box + send. Main and sidebar Transcript are this module — same
+// grow-one-bubble, same send entry, same rehydrate. Density is CSS/param
+// only; role chrome is presentation only. wireComposer:false is gone.
 //
 // Pure helpers are DOM-free so Node hermetic tests can require(); mount() is
 // the browser path that binds host nodes and wires input/send/keydown.
@@ -105,10 +105,9 @@
   }
 
   /**
-   * Enter-chord classification for the widget composer.
-   * Compact density (RHS): Enter → send, Shift+Enter → newline (no interject).
-   * Comfortable density: richer chords when ComposerKeys is available;
-   * otherwise same Enter/Shift+Enter base as compact.
+   * Enter-chord classification for the widget composer (🎯T372: one chord
+   * table, both surfaces). Density does not fork the chord set — ComposerKeys
+   * when present; otherwise Enter / Shift+Enter.
    *
    * @param {{ key?: string, code?: string, shiftKey?: boolean, ctrlKey?: boolean,
    *           metaKey?: boolean, altKey?: boolean, isComposing?: boolean, keyCode?: number }} e
@@ -119,26 +118,20 @@
   function classifyComposerKey(e, opts) {
     opts = opts || {};
     if (!e) return null;
-    var density = normalizeDensity(opts.density);
     var key = e.key;
     var code = e.code;
     var isEnter = key === 'Enter' || code === 'Enter' || code === 'NumpadEnter';
     if (!isEnter) return null;
     if (e.isComposing || e.keyCode === 229) return null;
 
-    if (density === DENSITY_COMPACT) {
-      if (e.shiftKey) return 'newline';
-      return 'send';
-    }
-
-    // Comfortable: prefer shared ComposerKeys when present (main path).
     var CK = opts.ComposerKeys;
     if (CK && typeof CK.classifyEnterAction === 'function') {
+      var altHeld = !!(e.altKey || (typeof e.getModifierState === 'function' && e.getModifierState('Alt')));
       return CK.classifyEnterAction(key, {
         shiftKey: !!e.shiftKey,
         ctrlKey: !!e.ctrlKey,
         metaKey: !!e.metaKey,
-        altKey: !!e.altKey,
+        altKey: altHeld,
         code: code,
       }, {
         composerEmpty: !!opts.composerEmpty,
@@ -146,7 +139,6 @@
         code: code,
       });
     }
-    // Fallback without ComposerKeys: Enter / Shift+Enter only.
     if (e.shiftKey) return 'newline';
     return 'send';
   }
@@ -318,6 +310,380 @@
     return parts.join('\n') + (working ? '|w' : '');
   }
 
+  function loadChatEvents() {
+    if (typeof ChatEvents !== 'undefined') return ChatEvents;
+    if (typeof module === 'object' && module.exports) {
+      try { return require('./chat_events.js'); } catch (_) { return null; }
+    }
+    return null;
+  }
+
+  function nextFrame(fn, raf) {
+    var impl = raf;
+    if (typeof impl !== 'function') {
+      impl = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+    }
+    if (typeof impl === 'function') return impl(fn);
+    fn();
+    return 0;
+  }
+
+  function cancelFrame(id, caf) {
+    var impl = caf;
+    if (typeof impl !== 'function') {
+      impl = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : null;
+    }
+    if (typeof impl === 'function' && id) impl(id);
+  }
+
+  /**
+   * One grow-one-bubble join (🎯T372). Both surfaces call this — not a
+   * helper shared by two painters. Join identity is stream_id / openEl +
+   * _streamRaw. Grok word-chunks (Plan / remaining / is / …) stay one bubble.
+   *
+   * @param {{
+   *   messagesEl?: Element,
+   *   document?: Document,
+   *   buildMsg?: function,
+   *   addMsg?: function,
+   *   paintBody?: function,
+   *   onStreamFrame?: function,
+   *   onSeal?: function,
+   *   onUser?: function,
+   *   timeIfKnown?: boolean,
+   *   requestAnimationFrame?: function,
+   *   cancelAnimationFrame?: function,
+   *   isDuplicateUser?: function
+   * }} [opts]
+   */
+  function createStreamJoin(opts) {
+    opts = opts || {};
+    var openEl = null;
+    var byId = Object.create(null);
+    var silentById = Object.create(null);
+    var segmentEdge = false;
+    var lines = [];
+    var messagesEl = opts.messagesEl || null;
+    var doc = opts.document || (typeof document !== 'undefined' ? document : null);
+
+    function rehome(el) {
+      if (!el || typeof el._streamRaw !== 'string') return null;
+      // Node hermetic fakes omit isConnected — treat missing as connected.
+      if (el.isConnected === false && messagesEl) {
+        try { messagesEl.appendChild(el); } catch (_) { /* ignore */ }
+      }
+      return el.isConnected === false ? null : el;
+    }
+
+    function resolveOpen(streamId) {
+      var sid = streamId ? String(streamId) : '';
+      if (sid && byId[sid]) {
+        var mapped = rehome(byId[sid]);
+        if (mapped) return mapped;
+        delete byId[sid];
+      }
+      if (openEl && typeof openEl._streamRaw === 'string') {
+        var unlabeled = !openEl._streamId;
+        var sameId = sid && openEl._streamId === sid;
+        if (!sid || unlabeled || sameId) {
+          var adopted = rehome(openEl);
+          if (adopted) {
+            if (sid) {
+              adopted._streamId = sid;
+              byId[sid] = adopted;
+            }
+            return adopted;
+          }
+          openEl = null;
+        }
+      }
+      if (sid && messagesEl && messagesEl.querySelectorAll) {
+        var nodes = messagesEl.querySelectorAll('.msg.jevons');
+        for (var i = 0; i < nodes.length; i++) {
+          var el = nodes[i];
+          if (el && el._streamId === sid && typeof el._streamRaw === 'string') {
+            byId[sid] = el;
+            openEl = el;
+            return el;
+          }
+        }
+      }
+      return null;
+    }
+
+    function clearHandles(streamId) {
+      if (streamId) {
+        var el = byId[streamId];
+        delete byId[streamId];
+        delete silentById[streamId];
+        if (openEl === el) openEl = null;
+      } else {
+        openEl = null;
+        Object.keys(byId).forEach(function (k) { delete byId[k]; });
+        Object.keys(silentById).forEach(function (k) { delete silentById[k]; });
+      }
+      segmentEdge = false;
+    }
+
+    function markLineSealed(streamId) {
+      var sid = streamId ? String(streamId) : '';
+      for (var i = lines.length - 1; i >= 0; i--) {
+        var l = lines[i];
+        if (!l || (l.role !== 'assistant' && l.role !== 'jevons')) continue;
+        if (!l._stream) continue;
+        if (!sid || l._streamId === sid) {
+          delete l._stream;
+          return;
+        }
+      }
+    }
+
+    function growLine(text, streamId, edge) {
+      var sid = streamId ? String(streamId) : '';
+      for (var i = lines.length - 1; i >= 0; i--) {
+        var l = lines[i];
+        if (!l || (l.role !== 'assistant' && l.role !== 'jevons')) continue;
+        if (!l._stream) continue;
+        if (sid && l._streamId && l._streamId !== sid) continue;
+        var CE = loadChatEvents();
+        l.text = edge
+          ? (CE ? CE.joinAssistantSegments(l.text, text) : (l.text + '\n\n' + text))
+          : (CE ? CE.appendAssistantStream(l.text, text) : (l.text + text));
+        if (sid) l._streamId = sid;
+        return;
+      }
+      var row = { role: 'assistant', text: text, _stream: true };
+      if (sid) row._streamId = sid;
+      lines.push(row);
+    }
+
+    function scheduleRender(el) {
+      if (!el || el._renderRaf) return;
+      el._renderRaf = nextFrame(function () {
+        el._renderRaf = 0;
+        if (typeof opts.onStreamFrame === 'function') {
+          opts.onStreamFrame(el);
+          return;
+        }
+        if (el._body) {
+          if (typeof opts.paintBody === 'function') {
+            opts.paintBody(el, 'jevons', el._streamRaw);
+          } else {
+            el._body.textContent = el._streamRaw || '';
+          }
+        }
+      }, opts.requestAnimationFrame);
+    }
+
+    function mintBubble(text, ts) {
+      var el = null;
+      if (typeof opts.addMsg === 'function') {
+        el = opts.addMsg('jevons', text, ts, { streamOpen: true });
+      } else if (typeof opts.buildMsg === 'function') {
+        el = opts.buildMsg('jevons', text, ts, {
+          streamOpen: true,
+          timeIfKnown: !!opts.timeIfKnown,
+        });
+        if (el && messagesEl && typeof messagesEl.appendChild === 'function') {
+          messagesEl.appendChild(el);
+        }
+      } else if (doc && typeof doc.createElement === 'function') {
+        el = doc.createElement('div');
+        if (el.classList && el.classList.add) {
+          el.classList.add('msg');
+          el.classList.add('jevons');
+        }
+        var body = doc.createElement('div');
+        if (body.classList && body.classList.add) body.classList.add('msg-body');
+        body.textContent = text;
+        el._body = body;
+        el.appendChild(body);
+        if (messagesEl && typeof messagesEl.appendChild === 'function') {
+          messagesEl.appendChild(el);
+        }
+      }
+      if (el) {
+        el._streamRaw = typeof el._streamRaw === 'string' ? el._streamRaw : text;
+        if (el.isConnected === undefined) el.isConnected = true;
+      }
+      return el;
+    }
+
+    function appendAssistant(text, ts, appendOpts) {
+      appendOpts = appendOpts || {};
+      var chunk = text == null ? '' : String(text);
+      if (!chunk) return null;
+      var streamId = appendOpts.streamId ? String(appendOpts.streamId) : '';
+      var edge = !!(appendOpts.segmentEdge);
+      var CE = loadChatEvents();
+      var target = resolveOpen(streamId);
+      if (target) {
+        target._streamRaw = edge
+          ? (CE ? CE.joinAssistantSegments(target._streamRaw, chunk) : (target._streamRaw + '\n\n' + chunk))
+          : (CE ? CE.appendAssistantStream(target._streamRaw, chunk) : (target._streamRaw + chunk));
+        growLine(chunk, streamId, edge);
+        scheduleRender(target);
+        return target;
+      }
+      var el = mintBubble(chunk, ts);
+      if (!el) return null;
+      if (streamId) {
+        el._streamId = streamId;
+        byId[streamId] = el;
+      }
+      openEl = el;
+      segmentEdge = false;
+      growLine(chunk, streamId, false);
+      return el;
+    }
+
+    function appendUser(text, ts, userOpts) {
+      userOpts = userOpts || {};
+      var body = text == null ? '' : String(text);
+      if (!body) return null;
+      var last = lines[lines.length - 1];
+      var dup = typeof opts.isDuplicateUser === 'function'
+        ? opts.isDuplicateUser(last, body)
+        : !!(last && last.role === 'user' && String(last.text || '').trim() === body.trim());
+      if (dup) return null;
+      var row = { role: 'user', text: body };
+      if (ts != null) row.when = ts;
+      if (userOpts.origin) row.origin = userOpts.origin;
+      lines.push(row);
+      if (typeof opts.onUser === 'function') {
+        return opts.onUser(body, ts, userOpts);
+      }
+      if (typeof opts.buildMsg === 'function' && messagesEl) {
+        var el = opts.buildMsg('user', body, ts, { timeIfKnown: !!opts.timeIfKnown });
+        if (el) messagesEl.appendChild(el);
+        return el;
+      }
+      if (doc && messagesEl) {
+        var d = doc.createElement('div');
+        if (d.classList && d.classList.add) {
+          d.classList.add('msg');
+          d.classList.add('user');
+        }
+        var b = doc.createElement('div');
+        if (b.classList && b.classList.add) b.classList.add('msg-body');
+        b.textContent = body;
+        d._body = b;
+        d.appendChild(b);
+        messagesEl.appendChild(d);
+        return d;
+      }
+      return null;
+    }
+
+    function sealAssistant(streamId) {
+      var sid = streamId ? String(streamId) : '';
+      var el = null;
+      if (sid && byId[sid] && typeof byId[sid]._streamRaw === 'string') {
+        el = byId[sid];
+      } else if (!sid && openEl && typeof openEl._streamRaw === 'string') {
+        el = openEl;
+      } else {
+        el = resolveOpen(sid);
+      }
+      if (el && typeof el._streamRaw === 'string') {
+        cancelFrame(el._renderRaf, opts.cancelAnimationFrame);
+        el._renderRaf = 0;
+        var raw = el._streamRaw;
+        delete el._streamRaw;
+        el._layoutText = raw;
+        el._layoutRole = 'jevons';
+        if (typeof opts.onSeal === 'function') {
+          opts.onSeal(el, raw, sid);
+        } else if (el._body) {
+          if (typeof opts.paintBody === 'function') {
+            opts.paintBody(el, 'jevons', raw);
+          } else {
+            el._body.textContent = raw;
+          }
+        }
+      }
+      markLineSealed(sid);
+      clearHandles(sid || undefined);
+      return el;
+    }
+
+    function applyWireEvent(event) {
+      var CE = loadChatEvents();
+      if (!event || !CE) return;
+      var ts = event.when != null ? event.when
+        : (event.timestamp ? new Date(event.timestamp).getTime() : Date.now());
+      if (event.type === 'user') {
+        var utext = CE.userContentText ? CE.userContentText(event) : '';
+        if (!utext) return;
+        if (CE.isProtocolControlFrameText && CE.isProtocolControlFrameText(utext)) return;
+        appendUser(utext, ts, {
+          origin: CE.turnOriginOf ? CE.turnOriginOf(event) : undefined,
+        });
+        return;
+      }
+      if (event.type === 'tool_result' || event.type === 'result') {
+        segmentEdge = true;
+        return;
+      }
+      if (event.type === 'system') {
+        if (CE.shouldClearWorking && CE.shouldClearWorking(event)) sealAssistant();
+        return;
+      }
+      if (event.type !== 'assistant') return;
+      var sid = CE.streamIdOf ? CE.streamIdOf(event) : String(event.stream_id || event.streamId || '');
+      var content = event.message && event.message.content;
+      if (!Array.isArray(content)) return;
+      var emitted = false;
+      for (var i = 0; i < content.length; i++) {
+        var c = content[i];
+        if (!c) continue;
+        if (c.type === 'tool_use') {
+          segmentEdge = true;
+          continue;
+        }
+        if (c.type !== 'text' || !c.text) continue;
+        var alreadySilent = !!(sid && silentById[sid]);
+        var thisSilent = CE.isSilentAssistantText && CE.isSilentAssistantText(c.text);
+        if (alreadySilent || thisSilent) {
+          if (sid) silentById[sid] = true;
+          continue;
+        }
+        var edge = segmentEdge || emitted;
+        appendAssistant(c.text, ts, { streamId: sid, segmentEdge: edge });
+        segmentEdge = false;
+        emitted = true;
+      }
+      if (CE.shouldClearWorking && CE.shouldClearWorking(event)) {
+        sealAssistant(sid);
+      }
+    }
+
+    function setLines(next) {
+      lines = Array.isArray(next) ? next.slice() : [];
+    }
+
+    function getLines() {
+      return lines.slice();
+    }
+
+    function setMessagesEl(el) {
+      messagesEl = el || null;
+    }
+
+    return {
+      appendAssistant: appendAssistant,
+      appendUser: appendUser,
+      sealAssistant: sealAssistant,
+      applyWireEvent: applyWireEvent,
+      resolveOpen: resolveOpen,
+      clearHandles: clearHandles,
+      getOpenEl: function () { return openEl; },
+      getLines: getLines,
+      setLines: setLines,
+      setMessagesEl: setMessagesEl,
+    };
+  }
+
   /**
    * Mount (or adopt) a conversation widget into a host element.
    *
@@ -383,6 +749,21 @@
           : doc.getElementById(ids.send))
         : null;
     }
+
+    var stream = createStreamJoin({
+      messagesEl: messagesEl,
+      document: doc,
+      buildMsg: opts.buildMsg,
+      addMsg: opts.addMsg,
+      paintBody: opts.paintBody,
+      onStreamFrame: opts.onStreamFrame,
+      onSeal: opts.onSeal,
+      onUser: opts.onUser,
+      timeIfKnown: opts.timeIfKnown,
+      requestAnimationFrame: opts.requestAnimationFrame,
+      cancelAnimationFrame: opts.cancelAnimationFrame,
+      isDuplicateUser: opts.isDuplicate,
+    });
 
     // Tag host as widget mount (density is styling only).
     if (host.classList) {
@@ -490,6 +871,8 @@
     function renderModel(model) {
       model = model || {};
       if (!messagesEl) return;
+      stream.clearHandles();
+      if (model.lines) stream.setLines(model.lines);
 
       if (model.error) {
         _fp = '';
@@ -637,7 +1020,18 @@
      * failed send painted nothing at all.
      * @returns {Promise}
      */
-    function send() {
+    function send(sendOpts) {
+      sendOpts = sendOpts || {};
+      // Host-owned transport + prefixes + queue (main). Widget is still
+      // the only composer send entry — chords land here first (🎯T372).
+      if (typeof opts.onComposerAction === 'function') {
+        return Promise.resolve(opts.onComposerAction({
+          text: getDraft(),
+          action: sendOpts.action || 'send',
+          interrupt: !!sendOpts.interrupt,
+          agentId: agentId,
+        }));
+      }
       var text = getDraft();
       var purpose = typeof opts.getPurpose === 'function'
         ? opts.getPurpose(agentId)
@@ -710,38 +1104,48 @@
         });
     }
 
-    // Wire composer events when nodes exist (compact path owns keys fully;
-    // comfortable main may keep its own richer handlers and only adopt nodes).
-    if (inputEl && opts.wireComposer !== false && density === DENSITY_COMPACT) {
+    // 🎯T372: one composer wiring. wireComposer:false is gone — both
+    // densities bind keys + send here. Host may add Home/End / history
+    // listeners; Enter-family chords are this widget's.
+    if (inputEl) {
       inputEl.addEventListener('input', function () {
         if (agentId) draftStore.set(agentId, inputEl.value);
         syncSendEnabled();
         if (typeof opts.onDraftChange === 'function') {
           opts.onDraftChange(agentId, inputEl.value);
         }
-        // Compact auto-grow.
-        inputEl.style.height = 'auto';
-        var maxPx = Math.round((opts.viewportHeight || (typeof window !== 'undefined' ? window.innerHeight : 600)) * 0.22) || 120;
-        var next = Math.min(inputEl.scrollHeight, maxPx);
-        inputEl.style.height = next + 'px';
-        inputEl.style.overflowY =
-          inputEl.scrollHeight > maxPx + 1 ? 'auto' : 'hidden';
+        if (density === DENSITY_COMPACT) {
+          inputEl.style.height = 'auto';
+          var maxPx = Math.round((opts.viewportHeight || (typeof window !== 'undefined' ? window.innerHeight : 600)) * 0.22) || 120;
+          var nextH = Math.min(inputEl.scrollHeight, maxPx);
+          inputEl.style.height = nextH + 'px';
+          inputEl.style.overflowY =
+            inputEl.scrollHeight > maxPx + 1 ? 'auto' : 'hidden';
+        }
       });
       inputEl.addEventListener('keydown', function (e) {
+        var empty = typeof opts.isComposerEmpty === 'function'
+          ? !!opts.isComposerEmpty(inputEl.value)
+          : isDraftEmpty(inputEl.value);
+        var qLen = typeof opts.queueLen === 'function' ? (opts.queueLen() | 0) : (opts.queueLen | 0);
         var act = classifyComposerKey(e, {
           density: density,
           ComposerKeys: opts.ComposerKeys,
-          composerEmpty: isDraftEmpty(inputEl.value),
-          queueLen: opts.queueLen | 0,
+          composerEmpty: empty,
+          queueLen: qLen,
         });
-        if (act === 'send') {
-          e.preventDefault();
-          e.stopPropagation();
-          send();
+        if (act === 'newline' || act == null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (act === 'noop') return;
+        if (act === 'send_queue_now') {
+          if (typeof opts.onSendQueueNow === 'function') opts.onSendQueueNow();
+          return;
         }
+        send({ interrupt: act === 'interrupt' || act === 'force_send', action: act });
       });
     }
-    if (sendBtn && opts.wireComposer !== false && density === DENSITY_COMPACT) {
+    if (sendBtn) {
       sendBtn.addEventListener('mousedown', function (e) { e.preventDefault(); });
       sendBtn.addEventListener('click', function (e) {
         e.preventDefault();
@@ -776,6 +1180,38 @@
       send: send,
       isSending: function () { return sending; },
       ids: ids,
+      appendAssistant: function (text, ts, aopts) {
+        var el = stream.appendAssistant(text, ts, aopts);
+        _lines = stream.getLines();
+        return el;
+      },
+      appendUser: function (text, ts, uopts) {
+        var el = stream.appendUser(text, ts, uopts);
+        _lines = stream.getLines();
+        return el;
+      },
+      sealAssistant: function (streamId) {
+        var el = stream.sealAssistant(streamId);
+        _lines = stream.getLines();
+        return el;
+      },
+      applyWireEvent: function (event) {
+        stream.applyWireEvent(event);
+        _lines = stream.getLines();
+      },
+      clearStreamHandles: function (streamId) { stream.clearHandles(streamId); },
+      getOpenStreamEl: function () { return stream.getOpenEl(); },
+      setWorking: function (want) {
+        _working = !!want;
+        if (!messagesEl) return;
+        var existing = messagesEl.querySelector
+          ? messagesEl.querySelector('.working-indicator') : null;
+        if (_working && !existing) {
+          renderModel({ lines: _lines, working: true, title: agentId });
+        } else if (!_working && existing && existing.parentNode) {
+          existing.parentNode.removeChild(existing);
+        }
+      },
     };
   }
 
@@ -801,6 +1237,7 @@
     composerVisible: composerVisible,
     rootClassName: rootClassName,
     linesFingerprint: linesFingerprint,
+    createStreamJoin: createStreamJoin,
     mount: mount,
   };
 }));

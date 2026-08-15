@@ -540,14 +540,16 @@ test('T227 resolveLastOwnerEntry still works for history tooling (not Alt+Enter 
 test('T241 index.html wires Alt+Enter force_send / send_queue_now (not pop_last)', function () {
   const htmlPath = path.join(__dirname, '..', 'index.html');
   const html = fs.readFileSync(htmlPath, 'utf8');
-  assert.ok(html.includes('classifyEnterAction'),
+  const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  const wired = html + '\n' + widget;
+  assert.ok(wired.includes('classifyEnterAction'),
     'must use classifyEnterAction Enter policy');
-  assert.ok(html.includes('send_queue_now') || html.includes('sendQueueNow'),
+  assert.ok(wired.includes('send_queue_now') || wired.includes('sendQueueNow'),
     'must wire Alt+Enter queue send-now path');
-  assert.ok(html.includes('force_send') || /action === 'force_send'/.test(html),
+  assert.ok(wired.includes('force_send') || /action === 'force_send'/.test(wired),
     'must wire Alt+Enter force_send for draft');
   assert.ok(
-    /queueLen/.test(html),
+    /queueLen/.test(wired),
     'must pass queueLen into classifyEnterAction'
   );
   assert.ok(
@@ -564,18 +566,19 @@ test('T241 index.html wires Alt+Enter force_send / send_queue_now (not pop_last)
   );
   // 🎯T192: empty check must use isEffectivelyEmpty (not bare !value / trim-only).
   assert.ok(
-    /composerEmpty[\s\S]{0,120}isEffectivelyEmpty/.test(html) ||
-      /isEffectivelyEmpty\(input\.value\)/.test(html),
-    'composerEmpty must come from WisprContext.isEffectivelyEmpty(input.value)'
+    /composerEmpty[\s\S]{0,120}isEffectivelyEmpty/.test(wired) ||
+      /isEffectivelyEmpty\(input\.value\)/.test(wired) ||
+      /isEffectivelyEmpty\(v\)/.test(wired),
+    'composerEmpty must come from WisprContext.isEffectivelyEmpty'
   );
   assert.ok(
-    !/composerEmpty\s*=\s*!\s*input\.value/.test(html) &&
-      !/composerEmpty\s*=\s*!\s*String\(input\.value/.test(html),
+    !/composerEmpty\s*=\s*!\s*input\.value/.test(wired) &&
+      !/composerEmpty\s*=\s*!\s*String\(input\.value/.test(wired),
     'must not set composerEmpty from bare !input.value (seed looks non-empty)'
   );
   // Product path: Alt+Enter must not call popLast on the enter chord.
-  const enterBlock = html.match(/input\.addEventListener\('keydown'[\s\S]{0,2500}?if \(isEnter\)[\s\S]{0,1800}/);
-  assert.ok(enterBlock, 'must have enter keydown handler');
+  const enterBlock = widget.match(/addEventListener\('keydown'[\s\S]{0,1800}send\(/);
+  assert.ok(enterBlock, 'widget must have enter keydown handler');
   assert.ok(
     !/popLastOwnerAsInterjection\s*\(/.test(enterBlock[0]),
     'Alt+Enter enter handler must not call popLastOwnerAsInterjection'
@@ -749,22 +752,25 @@ test('T241 non-empty draft Alt+Enter is force_send (not noop)', function () {
 test('T235 index.html still has planPopLastOwner helpers + Option+Enter code path', function () {
   const htmlPath = path.join(__dirname, '..', 'index.html');
   const html = fs.readFileSync(htmlPath, 'utf8');
+  const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  const wired = html + '\n' + widget;
   // Helpers may remain for residual tooling; Alt+Enter product is T241 force-send.
   assert.ok(html.includes('planPopLastOwner') || html.includes('resolveLastOwnerEntry'),
     'history resolve helpers may still exist');
-  assert.ok(html.includes('e.code') || html.includes('code: e.code'),
+  assert.ok(wired.includes('e.code') || wired.includes('code: e.code') || wired.includes('code === \'Enter\''),
     'must pass code for Option+Enter');
   assert.ok(html.includes('addStatusMsg'), 'fail loud via addStatusMsg');
   assert.ok(
-    /getModifierState\s*\(\s*['"]Alt['"]\s*\)/.test(html) || /altHeld/.test(html),
+    /getModifierState\s*\(\s*['"]Alt['"]\s*\)/.test(wired) || /altHeld/.test(wired),
     'must detect Option/Alt via getModifierState or altHeld'
   );
   assert.ok(
-    /code\s*===\s*['"]Enter['"]/.test(html) || /e\.code/.test(html),
+    /code\s*===\s*['"]Enter['"]/.test(wired) || /e\.code/.test(wired),
     'must consider e.code for Enter (macOS Option+Enter)'
   );
   assert.ok(
-    /composerEmpty[\s\S]{0,200}isEffectivelyEmpty/.test(html),
+    /composerEmpty[\s\S]{0,200}isEffectivelyEmpty/.test(wired) ||
+      /isEffectivelyEmpty\(v\)/.test(wired),
     'seed-empty still via isEffectivelyEmpty'
   );
 });

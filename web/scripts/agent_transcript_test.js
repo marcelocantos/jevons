@@ -1375,10 +1375,10 @@ test('T281 isDuplicateInspectUserLine consecutive only', function () {
   assert.strictEqual(AT.inspectUserDedupeKey('  x  '), 'x');
 });
 
-test('T281 index.html: RHS live path uses applyInspectLiveFrame; main uses isDuplicateUserEcho', function () {
+test('T281 index.html: RHS live path uses widget applyWireEvent; main uses isDuplicateUserEcho', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(html.indexOf('applyInspectLiveFrame') >= 0,
-    'agent_transcript live frames must go through applyInspectLiveFrame');
+  assert.ok(html.indexOf('applyWireEvent') >= 0,
+    'agent_transcript live frames must grow via the widget (🎯T372)');
   assert.ok(
     html.indexOf('afterSidebarSendOptimistic') >= 0 ||
     html.indexOf('afterSendOptimistic') >= 0,

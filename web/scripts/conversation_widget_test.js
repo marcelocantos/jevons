@@ -263,8 +263,27 @@ function fakeEl(id) {
     addEventListener: function (t, fn) { (this._listeners[t] = this._listeners[t] || []).push(fn); },
     appendChild: function (c) { this.children.push(c); return c; },
     removeChild: function (c) { this.children = this.children.filter((x) => x !== c); return c; },
-    querySelector: function () { return null; },
-    querySelectorAll: function () { return []; },
+    querySelector: function (sel) {
+      const kids = this.children || [];
+      if (sel === '.working-indicator') {
+        return kids.find(function (c) { return c.className && String(c.className).indexOf('working-indicator') >= 0; }) || null;
+      }
+      return null;
+    },
+    querySelectorAll: function (sel) {
+      const kids = this.children || [];
+      if (sel === '.msg.jevons') {
+        return kids.filter(function (c) {
+          return c.classList && c.classList.contains('jevons');
+        });
+      }
+      if (sel === '.msg') {
+        return kids.filter(function (c) {
+          return c.classList && c.classList.contains('msg');
+        });
+      }
+      return [];
+    },
     focus: function () {},
     scrollTo: function () {},
   };
@@ -398,7 +417,6 @@ test('T371 send paints the owner bubble on accept, not on HTTP 200', function ()
     document: dom.doc,
     density: 'compact',
     agentId: 'att-a',
-    wireComposer: false,
     onStagePending: function (name, text) {
       pending = CW.stagePendingOwnerTurn(pending, name, text);
       events.push('stage');
@@ -444,7 +462,6 @@ test('T371 a failed send keeps the bubble and reports loudly (no vanish)', funct
     document: dom.doc,
     density: 'compact',
     agentId: 'att-a',
-    wireComposer: false,
     onStagePending: function (name, text) {
       pending = CW.stagePendingOwnerTurn(pending, name, text);
       return CW.pendingOwnerTurnsFor(pending, name).slice(-1)[0];
@@ -478,17 +495,105 @@ test('T371 index.html: every inspect line replace reconciles pending turns', fun
   assert.ok(html.indexOf('function reconcileInspectPending') >= 0,
     'host defines the pending reconcile seam');
 
-  // The wire handler is where the wholesale replace lives — it must reconcile.
-  const wire = html.match(/function handleAgentTranscriptWire\([\s\S]*?\n}/);
+  // History replace still reconciles. Live frames grow on the widget and
+  // only ack pending on user events (🎯T372 — remount is not grow).
+  const wire = html.match(/function handleAgentTranscriptWire\([\s\S]*?\nfunction inspectSpecFor/);
   assert.ok(wire, 'handleAgentTranscriptWire present');
-  const reconciles = (wire[0].match(/reconcileInspectPending\(/g) || []).length;
-  assert.ok(reconciles >= 2,
-    'both the live and history branches reconcile pending owner turns (found ' + reconciles + ')');
+  assert.ok(wire[0].indexOf('applyWireEvent') >= 0,
+    'live frames grow via the widget, not a second painter');
+  assert.ok((wire[0].match(/reconcileInspectPending\(/g) || []).length >= 1,
+    'history replace still reconciles pending owner turns');
 
   // Staging is wired into the mount, not reimplemented host-side (🎯T372).
   assert.ok(html.indexOf('ConversationWidget.stagePendingOwnerTurn') >= 0,
     'staging uses the shared widget helper, not a sidebar-local stack');
   assert.ok(html.indexOf('onStagePending') >= 0, 'mount wires onStagePending');
+});
+
+// ── 🎯T372: one widget, one grow, one send ──────────────────────────
+
+function grokWordChunks() {
+  return ['Plan', ' remaining', ' is', ' on', ' the', ' header', ' bar'];
+}
+
+test('T372 Grok word-chunks are one assistant bubble (both densities)', function () {
+  ['compact', 'comfortable'].forEach(function (density) {
+    const dom = fakeDom(density);
+    const ctl = CW.mount(dom.host, {
+      document: dom.doc,
+      density: density,
+      agentId: density === 'compact' ? 'jv-t390-plan-usage' : 'jevons',
+    });
+    grokWordChunks().forEach(function (word, i) {
+      ctl.applyWireEvent({
+        type: 'assistant',
+        stream_id: 'sid-t372',
+        message: { content: [{ type: 'text', text: word }] },
+      });
+    });
+    ctl.applyWireEvent({
+      type: 'assistant',
+      stream_id: 'sid-t372',
+      message: { content: [], stop_reason: 'end_turn' },
+    });
+    const asst = ctl.getLines().filter(function (l) {
+      return l && (l.role === 'assistant' || l.role === 'jevons');
+    });
+    assert.strictEqual(asst.length, 1, density + ': one assistant line, got ' + asst.length);
+    assert.strictEqual(asst[0].text, grokWordChunks().join(''));
+    assert.ok(!asst[0]._stream, density + ': terminal seals');
+    const bubbles = (dom.byId[ctl.ids.messages] && dom.byId[ctl.ids.messages].children) || [];
+    const jevons = bubbles.filter(function (c) {
+      return c.classList && c.classList.contains('jevons');
+    });
+    assert.strictEqual(jevons.length, 1, density + ': one DOM bubble');
+  });
+});
+
+test('T372 createStreamJoin is the one grow implementation', function () {
+  assert.strictEqual(typeof CW.createStreamJoin, 'function');
+  const src = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  assert.ok(/function createStreamJoin\(/.test(src), 'join body lives in the widget');
+  assert.ok(/function appendAssistant\(/.test(src), 'widget grows via appendAssistant');
+});
+
+test('T372 index.html: wireComposer:false is gone', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(!/wireComposer\s*:\s*false/.test(html),
+    'main must not opt out of the widget composer');
+  assert.ok(!/opts\.wireComposer/.test(fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8')),
+    'widget must not honour a wireComposer escape hatch');
+});
+
+test('T372 index.html: no second grow-bubble implementation', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(!/function resolveOpenStreamEl\(/.test(html),
+    'resolveOpenStreamEl join body must not remain in index.html');
+  assert.ok(!/\blet openStreamEl\b/.test(html),
+    'openStreamEl must live in the widget, not as a second handle in index.html');
+  assert.ok(!/const openStreamById/.test(html),
+    'openStreamById map must not be a second join in index.html');
+  const append = html.match(/function appendOrAddJevons\([\s\S]*?\n\}/);
+  assert.ok(append, 'appendOrAddJevons remains as a named delegate');
+  assert.ok(append[0].indexOf('appendAssistant') >= 0,
+    'appendOrAddJevons must delegate to the widget');
+  assert.ok(append[0].indexOf('_streamRaw') < 0,
+    'appendOrAddJevons must not merge _streamRaw itself');
+  const live = html.match(/if \(m\.kind === 'live' && m\.event\) \{[\s\S]*?\n    return;\n  \}/);
+  assert.ok(live, 'live branch present');
+  assert.ok(live[0].indexOf('applyWireEvent') >= 0, 'live path calls widget.applyWireEvent');
+  assert.ok(live[0].indexOf('copyInspectLines') < 0 && live[0].indexOf('inspectLinesCopy') < 0,
+    'live path must not copy lines (drops _stream — T479)');
+  assert.ok(live[0].indexOf('renderAgentInspect') < 0,
+    'live path must not remount via renderAgentInspect');
+});
+
+test('T372 index.html: send click is the widget, not a second composer send', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(!/sendBtn\.addEventListener\(\s*['"]click['"]\s*,\s*send\s*\)/.test(html),
+    'main send button must not bind a second send()');
+  assert.ok(html.indexOf('onComposerAction') >= 0,
+    'main send enters the widget, then the host transport');
 });
 
 Promise.all(asyncTests).then(function () {

@@ -558,7 +558,7 @@ test('T152/T164 maybeCloseTargetAside dismisses fleet aside on __TARGET_FILED__'
     'live stream scheduleJevonsRender calls maybeCloseTargetAside');
   assert.ok(html.indexOf('maybeCloseTargetAside(raw)') >= 0 ||
     /maybeCloseTargetAside\(\s*raw\s*\)/.test(html),
-    'sealAssistantStream calls maybeCloseTargetAside');
+    'seal paint calls maybeCloseTargetAside');
   // paintBody must not *call* maybeCloseTargetAside (history/lazy-safe).
   // Comment may still mention the name; only an invocation is banned.
   const paintFn = html.match(/function paintBody\([\s\S]*?\nfunction maybeCloseTargetAside/);

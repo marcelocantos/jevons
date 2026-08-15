@@ -980,8 +980,8 @@ test('index.html wires T347 lazy replay + pre-meta re-entry + gated virtualize',
   // Seal + stream-render replay branches keep shells unpainted (estimate only).
   assert.ok(/function scheduleJevonsRender[\s\S]{0,900}virt-shell/.test(html),
     'stream render has a shell branch');
-  assert.ok(/function sealAssistantStream[\s\S]{0,2200}virt-shell/.test(html),
-    'seal has a shell branch');
+  assert.ok(/function paintSealedJevons[\s\S]{0,2200}virt-shell/.test(html),
+    'seal paint has a shell branch');
 });
 
 // ── 🎯T349: phased, budgeted virtualize — composer stays responsive ──

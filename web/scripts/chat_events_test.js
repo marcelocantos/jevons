@@ -446,13 +446,15 @@ test('T249 distinct stream_ids stay separate bubbles', () => {
   assert.strictEqual(state.assistantBubbles[1], 'second turn body');
 });
 
-test('T249 index.html: resolveOpenStreamEl re-homes same stream_id (no multi-bubble)', () => {
+test('T249 conversation_widget.js: resolveOpen re-homes same stream_id (no multi-bubble)', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(html.includes('resolveOpenStreamEl'), 'must resolve open stream before minting bubble');
-  assert.ok(html.includes('🎯T249') || html.includes('T249'), 'T249 marker in live paint path');
+  assert.ok(/function resolveOpen\(/.test(src), 'widget must resolve open stream before minting bubble');
+  assert.ok(html.includes('🎯T249') || html.includes('T249') || src.includes('T249'),
+    'T249 marker on the live join path');
   // isConnected alone must not mint a second bubble for the same stream_id.
   assert.ok(
-    !/openStreamById\[streamId\]\.isConnected\s*&&[\s\S]{0,80}typeof openStreamById\[streamId\]\._streamRaw/.test(html),
+    !/openStreamById\[streamId\]\.isConnected\s*&&[\s\S]{0,80}typeof openStreamById\[streamId\]\._streamRaw/.test(src),
     'must not gate join solely on isConnected (T249 re-home path)',
   );
 });
@@ -499,7 +501,9 @@ test('T245 multi-fragment silent then visible: only visible body', () => {
 
 test('T223 index.html: no seal on user; join keys stream_id', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(html.includes('openStreamById'), 'must keep stream_id → el map');
+  const src = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  assert.ok(/var byId = Object\.create\(null\)/.test(src) || /byId\[sid\]/.test(src),
+    'widget must keep stream_id → el map');
   assert.ok(html.includes('stream_id') || html.includes('streamId'), 'must read wire stream id');
   // User path must not call sealAssistantStream (T223 pin).
   const userBlock = html.match(/if\s*\(\s*typ\s*===\s*['"]user['"]\s*\)\s*\{[\s\S]*?\} else if\s*\(\s*typ\s*===\s*['"]assistant['"]/);
@@ -737,9 +741,10 @@ test('index.html wires ChatEvents + stream seal', () => {
   );
 });
 
-test('T159 index.html: openStreamEl handle + seal only via shouldClearWorking', () => {
+test('T159 index.html: open-stream handle + seal only via shouldClearWorking', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(html.includes('openStreamEl'), 'must keep explicit open-stream handle (🎯T159)');
+  const src = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  assert.ok(/var openEl = null/.test(src), 'widget must keep explicit open-stream handle (🎯T159)');
   assert.ok(html.includes('clearOpenStreamHandle'), 'must clear handle on seal/wipe');
   // Seal path must gate on shouldClearWorking (terminal stops), not bare tool_use.
   assert.ok(
@@ -898,16 +903,17 @@ test('T161 applyChatEvents: multi-block text parts join as segments', () => {
 
 test('T161 index.html: segment-edge join wired; no bare += / join(\'\')', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
   assert.ok(
-    html.includes('ChatEvents.joinAssistantSegments'),
-    'must wire ChatEvents.joinAssistantSegments',
+    widget.includes('joinAssistantSegments'),
+    'widget must wire ChatEvents.joinAssistantSegments',
   );
   assert.ok(
-    html.includes('ChatEvents.appendAssistantStream'),
-    'must wire ChatEvents.appendAssistantStream',
+    widget.includes('appendAssistantStream'),
+    'widget must wire ChatEvents.appendAssistantStream',
   );
   assert.ok(
-    html.includes('ChatEvents.joinAssistantTexts'),
+    html.includes('ChatEvents.joinAssistantTexts') || widget.includes('joinAssistantTexts'),
     'must wire ChatEvents.joinAssistantTexts',
   );
   assert.ok(
