@@ -89,6 +89,29 @@ func TestDecide(t *testing.T) {
 		},
 		want: ActionHold, reason: "modified tracked files",
 	}, {
+		// The ratchet's corpse: t.TempDir()'s removal was killed partway
+		// through, so every tracked file reads as changed and none of the
+		// content is anywhere but HEAD. Held on that evidence it pins its
+		// commit forever, which is the leak 🎯T440 exists to end.
+		name: "a tree whose tracked files are all merely missing is not work",
+		obs: Observation{
+			Entry: detached("/tmp/wt"), Exists: true, DirtyTracked: true, Hollow: true,
+			Owner: Owner{Kind: OwnerMarker, PID: deadPID},
+			Idle:  9 * time.Hour,
+		},
+		want: ActionRemove, reason: "every tracked file in it is simply missing",
+	}, {
+		// One real edit among the deletions and the guard is back: the
+		// hollow case is an exception for a corpse, not a way around the
+		// guard for any tree with a lot of deletions in it.
+		name: "one real edit among the deletions still holds the tree",
+		obs: Observation{
+			Entry: detached("/tmp/wt"), Exists: true, DirtyTracked: true, Hollow: false,
+			Owner: Owner{Kind: OwnerMarker, PID: deadPID},
+			Idle:  9 * time.Hour,
+		},
+		want: ActionHold, reason: "modified tracked files",
+	}, {
 		name: "a live session keeps its worktree",
 		obs: Observation{
 			Entry: detached("/tmp/" + liveSess + "/scratchpad/wt"),
@@ -195,6 +218,33 @@ func TestSessionFromPath(t *testing.T) {
 		if got := SessionFromPath(path); got != want {
 			t.Errorf("SessionFromPath(%q) = %q, want %q", path, got, want)
 		}
+	}
+}
+
+// classifyStatus is where the hollow-tree exception is decided, so it is worth
+// its own table: everything downstream of it trusts the two booleans.
+func TestClassifyStatus(t *testing.T) {
+	cases := []struct {
+		name        string
+		out         string
+		dirty, holl bool
+	}{
+		{"a clean tree", "", false, false},
+		{"trailing newline only", "\n", false, false},
+		{"a half-deleted corpse", " D Makefile\n D docs/x.md\n D internal/a/b.go\n", true, true},
+		{"one edit among the deletions", " D Makefile\n M web/index.html\n D docs/x.md\n", true, false},
+		{"a staged deletion is a decision, not a corpse", "D  Makefile\n", true, false},
+		{"a rename", "R  old.go -> new.go\n", true, false},
+		{"a conflict", "UU internal/a/b.go\n", true, false},
+		{"a staged add whose file then vanished", "AD scratch.go\n", true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dirty, holl := classifyStatus(c.out)
+			if dirty != c.dirty || holl != c.holl {
+				t.Fatalf("classifyStatus(%q) = (%v, %v), want (%v, %v)", c.out, dirty, holl, c.dirty, c.holl)
+			}
+		})
 	}
 }
 

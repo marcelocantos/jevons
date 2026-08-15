@@ -186,11 +186,36 @@ func observe(e Entry, markers markerIndex) Observation {
 	// --untracked-files=no on purpose: a verification worktree is expected
 	// to be full of build output, and treating that as "somebody's work"
 	// would hold every entry the sweeper exists to remove.
-	if out, err := git(e.Path, "status", "--porcelain", "--untracked-files=no"); err == nil {
-		obs.DirtyTracked = strings.TrimSpace(out) != ""
+	// gitRaw, not git: the trim would eat the leading column this reads.
+	if out, err := gitRaw(e.Path, "status", "--porcelain", "--untracked-files=no"); err == nil {
+		obs.DirtyTracked, obs.Hollow = classifyStatus(out)
 	}
 
 	return obs
+}
+
+// classifyStatus reads `git status --porcelain` and answers the two questions
+// the policy asks of it: whether the worktree has tracked changes at all, and
+// whether every one of them is a file that has vanished from disk with the
+// index left untouched — porcelain's " D".
+//
+// Only that exact code counts as hollow. A staged deletion ("D "), a rename, a
+// conflict, or anything modified is somebody having done something on purpose,
+// and one of those among a thousand deletions is enough to hold the tree.
+func classifyStatus(out string) (dirty, hollow bool) {
+	hollow = true
+	for line := range strings.SplitSeq(out, "\n") {
+		// A porcelain record is "XY <path>"; anything shorter is the
+		// blank line at the end of the output.
+		if len(line) < 4 {
+			continue
+		}
+		dirty = true
+		if line[:2] != " D" {
+			hollow = false
+		}
+	}
+	return dirty, dirty && hollow
 }
 
 // walkDepth bounds how far into a worktree newestWrite descends, and walkCap
@@ -358,6 +383,18 @@ func Snapshot() (Liveness, error) {
 // git runs a git command and returns trimmed stdout, folding stderr into the
 // error because a git failure here is always something an operator must read.
 func git(dir string, args ...string) (string, error) {
+	out, err := gitRaw(dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+// gitRaw is git without the trim, for the one caller that reads a format whose
+// leading whitespace is load-bearing. `git status --porcelain` puts the index
+// status in column 1 and the worktree status in column 2, so a file that is
+// merely deleted reads " D" — and TrimSpace turns the first such line into
+// "D ", a staged deletion, which is a different fact entirely. The oracle
+// caught this; the parser's own table did not, because a table feeds it the
+// output git produced rather than the output this package handed it.
+func gitRaw(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	var stderr strings.Builder
@@ -366,7 +403,7 @@ func git(dir string, args ...string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
 
 // Paths returns the worktree paths a result saw, sorted, for tests and for

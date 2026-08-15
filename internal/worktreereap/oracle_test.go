@@ -197,6 +197,56 @@ func TestT440SweepHoldsAWorktreeWithModifiedTrackedFiles(t *testing.T) {
 	}
 }
 
+// TestT440SweepReapsAHalfDeletedTree is the second half of the leak, and the
+// half the first sweeper could not clean. The ratchet's tree survived every
+// sweep on the daily clone for hours: `t.TempDir()`'s removal was killed
+// partway through its own walk, git reported all 558 tracked files as changed,
+// and the dirty guard held 15MB of absence forever. A tree with nothing left in
+// it is not somebody's work.
+func TestT440SweepReapsAHalfDeletedTree(t *testing.T) {
+	root := tempRepo(t)
+	wt := addWorktree(t, root, "head")
+	if err := Mark(&MarkArgs{Worktree: wt, PID: 1}); err != nil {
+		t.Fatalf("mark worktree: %v", err)
+	}
+	writeMarkerCmd(t, wt, "go test ./scripts/docratchet")
+
+	// THE CONTROL, and it is the one that matters here: the same tree, one
+	// file edited rather than deleted, must still be held. Without it this
+	// test would pass against a sweeper that had simply dropped the guard.
+	if err := os.WriteFile(filepath.Join(wt, "file.txt"), []byte("real work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Sweep(aggressive(root))
+	if err != nil {
+		t.Fatalf("control sweep: %v", err)
+	}
+	if v := find(t, res, wt); v.Decision.Action != ActionHold {
+		t.Fatalf("an edited tree was %s: %s\n%s", v.Decision.Action, v.Decision.Reason, res.Report())
+	}
+
+	// Now the corpse: the file is gone rather than changed, which is all a
+	// dying RemoveAll leaves behind.
+	if err := os.Remove(filepath.Join(wt, "file.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err = Sweep(aggressive(root))
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	v := find(t, res, wt)
+	if !v.Removed {
+		t.Fatalf("a half-deleted tree was %s: %s\n%s", v.Decision.Action, v.Decision.Reason, res.Report())
+	}
+	if !strings.Contains(v.Decision.Reason, "simply missing") {
+		t.Fatalf("the removal does not say why the dirty guard did not apply: %s", v.Decision.Reason)
+	}
+	if listed(t, root, wt) {
+		t.Fatalf("`git worktree list` still names %s after the sweep", wt)
+	}
+}
+
 // TestT440SweepIgnoresUntrackedBuildOutput: the previous test's guard must not
 // fire on the ordinary contents of a verification worktree, or every entry the
 // sweeper exists to remove would be held forever.

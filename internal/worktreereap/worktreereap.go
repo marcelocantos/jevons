@@ -56,6 +56,17 @@
 // three are reported rather than silently retained, so an entry that survives
 // a sweep still says why — a reaper whose refusals are invisible is a reaper
 // nobody can trust with --force.
+//
+// ONE EXCEPTION to the modified-files guard, and it is the whole reason the
+// leak the target names survived the first sweeper: a tree whose tracked
+// changes are ALL FILES SIMPLY MISSING is not somebody's work, it is a
+// directory removal that died partway through. `t.TempDir()` deletes its tree
+// on cleanup; when that cleanup is killed mid-walk the worktree is left half
+// eaten, and `git status` reports every vanished file as a modification. Held
+// on that evidence, the corpse pins its commit forever — the ratchet's leaked
+// tree read as 558 modified files and 15MB of nothing. Removing it loses no
+// content, because every deleted file's content is still in HEAD. A tree with
+// even one real edit alongside the deletions is held as before.
 package worktreereap
 
 import (
@@ -128,6 +139,12 @@ type Observation struct {
 	// DirtyTracked reports modified tracked files. Untracked build output
 	// does not count: a verification worktree is expected to be full of it.
 	DirtyTracked bool
+
+	// Hollow is true when DirtyTracked is true and every one of those
+	// changes is a tracked file that has simply vanished from disk. That is
+	// the signature of a cleanup that was killed partway through its own
+	// walk, not of work: the content is still in HEAD.
+	Hollow bool
 }
 
 // Liveness is one snapshot of the process table, taken once per sweep so that
@@ -306,9 +323,17 @@ func Decide(o Observation, live Liveness, pol Policy) Decision {
 // guardDirty converts a removal into a held report when the worktree has
 // modified tracked files. A detached verification tree should have none; if it
 // does, somebody edited in there, and deleting it would destroy the only copy.
+//
+// Unless every change is a file that is merely gone, in which case there is no
+// copy to destroy and the guard would hold a corpse forever. The removal still
+// says so out loud: a tree with hundreds of changed files being reaped is
+// exactly the report an operator should be able to talk themselves through.
 func guardDirty(o Observation, remove Decision) Decision {
 	if !o.DirtyTracked {
 		return remove
+	}
+	if o.Hollow {
+		return Decision{ActionRemove, remove.Reason + ", and every tracked file in it is simply missing — a cleanup that died partway through leaves no content to lose"}
 	}
 	return Decision{ActionHold, remove.Reason + ", but it has modified tracked files — not removed"}
 }
