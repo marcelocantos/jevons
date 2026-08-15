@@ -82,11 +82,15 @@ func (s *Server) handleCapacityStatus(_ context.Context, _ mcp.CallToolRequest) 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Background capacity (🎯T359) at %s\n", st.At)
 	fmt.Fprintf(&b, "  pressure: %s (headroom %.0f%%)\n", st.Assessment.Pressure, st.Assessment.Headroom*100)
-	fmt.Fprintf(&b, "  headroom: cost=%s tokens=%s load=%s\n",
+	fmt.Fprintf(&b, "  headroom: cost=%s tokens=%s load=%s plan=%s\n",
 		headroomText(st.Assessment.CostHeadroom),
 		headroomText(st.Assessment.TokenHeadroom),
-		headroomText(st.Assessment.LoadHeadroom))
+		headroomText(st.Assessment.LoadHeadroom),
+		headroomText(st.Assessment.PlanHeadroom))
 	b.WriteString(hostLoadText(st.Snapshot))
+	if st.Snapshot.PlanSource != "" {
+		fmt.Fprintf(&b, "  plan source: %s (🎯T390)\n", st.Snapshot.PlanSource)
+	}
 	if st.Snapshot.Accounting != "" {
 		fmt.Fprintf(&b, "  accounting: %s (billable=%v)\n", st.Snapshot.Accounting, st.Snapshot.Billable)
 	}
@@ -149,6 +153,11 @@ type CapacitySnapshotArgs struct {
 	// ProviderLoad / ProviderSoftCaps are the 🎯T325.2 portfolio spread.
 	ProviderLoad     func() map[string]int
 	ProviderSoftCaps func() map[string]int
+	// PlanRemaining is the 🎯T390 subscription-plan lever: the tightest
+	// published remaining fraction across backends the fleet is running on,
+	// and what produced it. A nil fraction means no running backend publishes
+	// remaining — which stays unknown rather than becoming a confident 100%.
+	PlanRemaining func() (*float64, string)
 	// HostLoad reads the host's own saturation — run-queue length per core and
 	// swap occupancy (🎯T463). It is the dimension that runs out first under
 	// fan-out, and the one admission was blind to on 2026-08-15.
@@ -197,6 +206,9 @@ func CapacitySnapshot(args CapacitySnapshotArgs) capacity.Snapshot {
 	}
 	if args.ProviderSoftCaps != nil {
 		snap.ProviderSoftCaps = args.ProviderSoftCaps()
+	}
+	if args.PlanRemaining != nil {
+		snap.PlanRemaining, snap.PlanSource = args.PlanRemaining()
 	}
 	if args.HostLoad != nil {
 		applyHostLoad(&snap, args.HostLoad())

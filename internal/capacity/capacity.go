@@ -190,6 +190,21 @@ type Snapshot struct {
 	// OpenBuildMissions is the count of engaged Build implementers.
 	OpenBuildMissions int `json:"open_build_missions,omitempty"`
 
+	// PlanRemaining is the tightest published subscription-plan remaining
+	// fraction in [0,1] across the backends the fleet is actually running on
+	// (🎯T390), and PlanSource names what produced it ("claude session").
+	//
+	// A pointer, not a bare float, because 0 is a real reading — the plan is
+	// exhausted — and nil is a different statement: no running backend
+	// publishes remaining. Collapsing the two is precisely how admission came
+	// to report 100% headroom on an account that had already hit its limit
+	// (🎯T406): every dollar dimension was unknown, and unknown rendered as
+	// fine. Plan remaining is the one dimension a flat subscription does
+	// publish, so it binds in every accounting mode — unlike USD (🎯T137),
+	// which is an estimate here, and like tokens, which are counted.
+	PlanRemaining *float64 `json:"plan_remaining,omitempty"`
+	PlanSource    string   `json:"plan_source,omitempty"`
+
 	// HostLoad1 / HostCores are the host's own saturation: the 1-minute
 	// run-queue length and the core count it must be judged against (🎯T463).
 	// Zero means unread — the fleet melted a 16-core host at load 247 while

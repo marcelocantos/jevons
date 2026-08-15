@@ -13,6 +13,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/hostload"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/server"
 )
 
@@ -29,7 +30,7 @@ const capacityEventComponent = "capacity"
 // supply the per-provider load headroom. With no cost spine (usage.db
 // unavailable, or budget.json disabled) admission degrades to slot-based
 // bounds — which is still better than every loop running blind.
-func startCapacityGovernor(cfg config.Config, guard *costGuard, mcpSrv *mcpserver.Server, srv *server.Server) *capacity.Governor {
+func startCapacityGovernor(cfg config.Config, guard *costGuard, plans *planusage.Reader, mcpSrv *mcpserver.Server, srv *server.Server) *capacity.Governor {
 	path := capacity.ConfigPath(cfg.StateDir)
 	pol, err := capacity.LoadPolicy(path)
 	if err != nil {
@@ -52,6 +53,9 @@ func startCapacityGovernor(cfg config.Config, guard *costGuard, mcpSrv *mcpserve
 		// The host itself, cached so a status call and an ambient tick in the
 		// same second share one sysctl (🎯T463).
 		HostLoad: hostload.Cached(0),
+	}
+	if plans != nil {
+		args.PlanRemaining = plans.CapacityRemaining
 	}
 	if guard != nil {
 		args.Cost = guard.monitor.Snapshot

@@ -698,7 +698,11 @@ func main() {
 	// Residual ð¯T92 mint remains opt-in (JEVONS_RSI_MINT / DEEPER).
 	// ð¯T359: holistic background admission â ambient cycles ask before each
 	// tick so owner turns and open Build missions keep their room.
-	capGov := startCapacityGovernor(cfg, guard, mcpSrv, srv)
+	// 🎯T390: subscription plan remaining, per backend, for the cockpit and
+	// as capacity's one honest budget dimension under a flat subscription.
+	plans := startPlanUsage(ctx, mcpSrv, srv)
+
+	capGov := startCapacityGovernor(cfg, guard, plans, mcpSrv, srv)
 
 	// ð¯T392.1: bound the conversation every agent carries into a model
 	// call. Deliberately not gated by the capacity governor â this loop

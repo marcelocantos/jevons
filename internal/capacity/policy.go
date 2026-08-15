@@ -120,9 +120,9 @@ type Assessment struct {
 	// Headroom is the tightest known fraction of remaining capacity in
 	// [0,1]; 1 when nothing is known (no budget configured, no load).
 	Headroom float64 `json:"headroom"`
-	// CostHeadroom / TokenHeadroom / LoadHeadroom are the three inputs, or
-	// -1 when that dimension is unknown (or not honest to use: USD under
-	// subscription accounting).
+	// CostHeadroom / TokenHeadroom / LoadHeadroom / PlanHeadroom are the four
+	// inputs, or -1 when that dimension is unknown (or not honest to use: USD
+	// under subscription accounting).
 	CostHeadroom  float64 `json:"cost_headroom"`
 	TokenHeadroom float64 `json:"token_headroom"`
 	LoadHeadroom  float64 `json:"load_headroom"`
@@ -132,6 +132,9 @@ type Assessment struct {
 	// the dimension a saturated host saturates; reported separately so a
 	// pinned host can be told apart from a pinned provider cap.
 	HostHeadroom float64 `json:"host_headroom"`
+	// PlanHeadroom is the fraction of the tightest subscription plan window
+	// still available on a backend the fleet is running on (🎯T390).
+	PlanHeadroom float64 `json:"plan_headroom"`
 	// OwnerOnly is true when nothing but owner and Build work fits.
 	OwnerOnly bool `json:"owner_only"`
 	// Reasons are the human sentences behind the pressure, most significant
@@ -176,6 +179,7 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 		TokenHeadroom: unknownHeadroom,
 		LoadHeadroom:  unknownHeadroom,
 		HostHeadroom:  unknownHeadroom,
+		PlanHeadroom:  unknownHeadroom,
 		Headroom:      1,
 	}
 
@@ -227,8 +231,15 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 		}
 	}
 
+	// Subscription plan remaining (🎯T390). Unlike USD it is published by the
+	// provider rather than priced by us, so it binds under every accounting
+	// mode — it is the one honest budget dimension a flat subscription has.
+	if snap.PlanRemaining != nil {
+		a.PlanHeadroom = min(max(*snap.PlanRemaining, 0), 1)
+	}
+
 	known := false
-	for _, h := range []float64{a.CostHeadroom, a.TokenHeadroom, a.LoadHeadroom} {
+	for _, h := range []float64{a.CostHeadroom, a.TokenHeadroom, a.LoadHeadroom, a.PlanHeadroom} {
 		if h == unknownHeadroom {
 			continue
 		}
@@ -264,6 +275,12 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 	// budget figure (🎯T463).
 	if a.Pressure > PressureNormal && hostBound(a) && hostReason != "" {
 		a.Reasons = append(a.Reasons, hostReason)
+	}
+	// Name the plan window when it is what bound, so the owner reads "claude
+	// session is down to 12%" rather than a bare percentage he cannot trace.
+	if a.Pressure > PressureNormal && a.PlanHeadroom != unknownHeadroom && a.PlanHeadroom == a.Headroom && snap.PlanSource != "" {
+		a.Reasons = append(a.Reasons, fmt.Sprintf("tightest dimension is subscription plan remaining: %s at %.0f%% (🎯T390)",
+			snap.PlanSource, a.PlanHeadroom*100))
 	}
 	if ap := alertPressure(snap.HighestAlert); ap > a.Pressure {
 		a.Pressure = ap
