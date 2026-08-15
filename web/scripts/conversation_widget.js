@@ -1,10 +1,12 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Conversation widget (🎯T309.1 / 🎯T372): ONE surface for bubble list +
-// message box + send. Main and sidebar Transcript are this module — same
-// grow-one-bubble, same send entry, same rehydrate. Density is CSS/param
-// only; role chrome is presentation only. wireComposer:false is gone.
+// Conversation widget (🎯T309.1 / 🎯T372 / 🎯T480): ONE surface for bubble
+// list + message box + send + T106 size clip. Main and sidebar Transcript
+// are this module — same grow-one-bubble, same send entry, same rehydrate,
+// same measure+clip. Density is CSS/param only; role chrome is presentation
+// only. Collapse is size-only (tall → pocket tab; short → no tab).
+// wireComposer:false is gone.
 //
 // Pure helpers are DOM-free so Node hermetic tests can require(); mount() is
 // the browser path that binds host nodes and wires input/send/keydown.
@@ -336,6 +338,240 @@
     if (typeof impl === 'function' && id) impl(id);
   }
 
+  // 🎯T480 / T106: size-only clip. Tall → pocket tab; short → no tab.
+  // Role, inject kind, harness bootstrap, and "what it was sent for" do
+  // not decide collapse. T233 nuggets stay nuggets (not this path).
+  // --collapsed-max-height in CSS must match COLLAPSED_MAX_HEIGHT.
+  var COLLAPSED_MAX_HEIGHT = '14rem';
+  var COLLAPSE_HEIGHT_EPSILON_PX = 6;
+
+  function collapsedMaxHeightPx(opts) {
+    opts = opts || {};
+    var named = opts.collapsedMaxHeight || COLLAPSED_MAX_HEIGHT;
+    var m = /^([\d.]+)rem$/i.exec(named);
+    if (m) {
+      var root = opts.rootFontPx;
+      if (root == null && typeof document !== 'undefined' && document.documentElement
+          && typeof getComputedStyle === 'function') {
+        try {
+          root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+        } catch (_) {
+          root = 16;
+        }
+      }
+      if (root == null || !(root > 0)) root = 16;
+      return parseFloat(m[1]) * root;
+    }
+    var px = /^([\d.]+)px$/i.exec(named);
+    return px ? parseFloat(px[1]) : 224;
+  }
+
+  function liveBodyHeight(d) {
+    if (!d || !d._body) return 0;
+    return d._body.scrollHeight || d._body.offsetHeight || 0;
+  }
+
+  function probeFullHeight(d, role, text, opts) {
+    opts = opts || {};
+    var doc = opts.document || (d && d.ownerDocument)
+      || (typeof document !== 'undefined' ? document : null);
+    var container = opts.container;
+    if (!container && d && d.parentNode) container = d.parentNode;
+    if (!doc || !container || typeof doc.createElement !== 'function') return 0;
+    var width = (d && (d.clientWidth || (d._body && d._body.clientWidth))) || 0;
+    var probe = doc.createElement('div');
+    var cls = (d && d.className) || ('msg ' + (role || ''));
+    probe.className = String(cls).replace(/\bmsg-clipped\b/g, '').trim();
+    probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:0;top:0;width:'
+      + (width > 0 ? width + 'px' : '100%') + ';max-width:85%;box-sizing:border-box;';
+    var probeBody = doc.createElement('div');
+    if (probeBody.classList && probeBody.classList.add) probeBody.classList.add('msg-body');
+    probe.appendChild(probeBody);
+    container.appendChild(probe);
+    // Size-only: copy already-painted HTML. Do not fork on role to decide
+    // what to measure — paintProbe is wrap geometry only.
+    if (d && d._body && d._body.innerHTML) {
+      probeBody.innerHTML = d._body.innerHTML;
+    } else if (typeof opts.paintProbe === 'function') {
+      opts.paintProbe(probeBody, role, text);
+    } else if (text != null) {
+      probeBody.textContent = text;
+    }
+    var fullH = probeBody.offsetHeight || probeBody.scrollHeight || 0;
+    if (probe.parentNode && typeof probe.parentNode.removeChild === 'function') {
+      probe.parentNode.removeChild(probe);
+    } else if (typeof probe.remove === 'function') {
+      probe.remove();
+    }
+    return fullH;
+  }
+
+  /**
+   * Measure whether a bubble is tall enough to warrant the T106 pocket.
+   * `role` and `text` are unused for the tall decision (🎯T480 size-only);
+   * they remain in the signature so index.html / collapse-test keep calling
+   * measureCollapse(d, role, text).
+   * @returns {{ tall: boolean, fullH: number, collapsedH: number }}
+   */
+  function measureCollapse(d, role, text, opts) {
+    opts = opts || {};
+    var collapsedH = collapsedMaxHeightPx(opts);
+    var fullH = 0;
+    if (opts.fullH != null) {
+      fullH = Number(opts.fullH) || 0;
+    } else {
+      fullH = liveBodyHeight(d);
+      if (fullH <= 0) fullH = probeFullHeight(d, role, text, opts);
+    }
+    if (collapsedH <= 0 || fullH <= 0) {
+      return { tall: false, fullH: fullH, collapsedH: collapsedH };
+    }
+    return {
+      tall: fullH > collapsedH + COLLAPSE_HEIGHT_EPSILON_PX,
+      fullH: fullH,
+      collapsedH: collapsedH,
+    };
+  }
+
+  function clearClipChrome(d) {
+    if (!d) return;
+    if (d.classList && d.classList.remove) d.classList.remove('msg-clipped');
+    if (d._clipFade) {
+      try {
+        if (d._clipFade.remove) d._clipFade.remove();
+        else if (d._clipFade.parentNode) d._clipFade.parentNode.removeChild(d._clipFade);
+      } catch (_) { /* isolated */ }
+      d._clipFade = null;
+    }
+    if (d._expandBtn) {
+      try {
+        if (d._expandBtn.remove) d._expandBtn.remove();
+        else if (d._expandBtn.parentNode) d._expandBtn.parentNode.removeChild(d._expandBtn);
+      } catch (_) { /* isolated */ }
+      d._expandBtn = null;
+    }
+  }
+
+  function applyClipState(d, clipped) {
+    if (!d || !d._body) return;
+    var doc = d.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (clipped) {
+      if (d.classList && d.classList.add) d.classList.add('msg-clipped');
+      if (!d._clipFade && doc && typeof doc.createElement === 'function') {
+        var fade = doc.createElement('div');
+        fade.className = 'msg-clip-fade';
+        if (fade.setAttribute) fade.setAttribute('aria-hidden', 'true');
+        if (d._body.after) d._body.after(fade);
+        else d.appendChild(fade);
+        d._clipFade = fade;
+      } else if (d._clipFade && d._clipFade.parentNode !== d) {
+        if (d._body.after) d._body.after(d._clipFade);
+      }
+    } else {
+      if (d.classList && d.classList.remove) d.classList.remove('msg-clipped');
+      if (d._clipFade) {
+        try {
+          if (d._clipFade.remove) d._clipFade.remove();
+          else if (d._clipFade.parentNode) d._clipFade.parentNode.removeChild(d._clipFade);
+        } catch (_) { /* isolated */ }
+        d._clipFade = null;
+      }
+    }
+  }
+
+  function updateExpandTab(d) {
+    if (!d || !d._expandBtn) return;
+    var expanded = !!d._expanded;
+    var btn = d._expandBtn;
+    if (btn.setAttribute) {
+      btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      btn.setAttribute('aria-label', expanded ? 'Collapse' : 'Expand');
+    }
+    btn.title = expanded ? 'Collapse' : 'Expand';
+    btn.innerHTML = '<span class="chev" aria-hidden="true">'
+      + (expanded ? '\u25B4' : '\u25BE') + '</span>';
+  }
+
+  function ensureExpandToggle(d, opts) {
+    opts = opts || {};
+    if (!d || d._fullText == null) {
+      if (d && d._expandBtn) {
+        try {
+          if (d._expandBtn.remove) d._expandBtn.remove();
+          else if (d._expandBtn.parentNode) d._expandBtn.parentNode.removeChild(d._expandBtn);
+        } catch (_) { /* isolated */ }
+        d._expandBtn = null;
+      }
+      return;
+    }
+    if (!d._expandBtn) {
+      var doc = opts.document || d.ownerDocument
+        || (typeof document !== 'undefined' ? document : null);
+      if (!doc || typeof doc.createElement !== 'function') return;
+      var btn = doc.createElement('button');
+      btn.type = 'button';
+      btn.className = 'msg-expand-tab';
+      btn.tabIndex = -1;
+      if (typeof btn.addEventListener === 'function') {
+        btn.addEventListener('mousedown', function (e) {
+          if (e && e.preventDefault) e.preventDefault();
+        });
+        btn.addEventListener('click', function () {
+          d._expanded = !d._expanded;
+          d._userToggled = true;
+          applyClipState(d, !d._expanded);
+          updateExpandTab(d);
+          if (typeof opts.onToggle === 'function') opts.onToggle(d);
+          if (typeof opts.onAfterLayout === 'function') opts.onAfterLayout(d);
+        });
+      }
+      if (d._clipFade && d._clipFade.after) d._clipFade.after(btn);
+      else if (d._body && d._body.after) d._body.after(btn);
+      else d.appendChild(btn);
+      d._expandBtn = btn;
+    } else if (d._clipFade && d._expandBtn.previousSibling !== d._clipFade
+        && d._clipFade.after) {
+      d._clipFade.after(d._expandBtn);
+    } else if (!d._clipFade && d._body && d._expandBtn.previousSibling !== d._body
+        && d._body.after) {
+      d._body.after(d._expandBtn);
+    }
+    if (d._expandBtn) d._expandBtn.tabIndex = -1;
+    updateExpandTab(d);
+  }
+
+  /**
+   * After attach: measure by size and apply T106 clip + pocket tab.
+   * Lazy unmeasured shells and mid-stream bubbles skip (T119 / T30.2).
+   */
+  function layoutSizeClip(d, opts) {
+    opts = opts || {};
+    if (!d) return null;
+    if (d.isConnected === false) return null;
+    if (d.classList && d.classList.contains('virt-shell') && !d._virtSize) return null;
+    if (typeof d._streamRaw === 'string') {
+      clearClipChrome(d);
+      d._fullText = null;
+      d._expanded = true;
+      d._autoExpanded = true;
+      return { tall: false, streamed: true, fullH: 0, collapsedH: collapsedMaxHeightPx(opts) };
+    }
+    var role = d._layoutRole;
+    var text = d._layoutText;
+    var m = measureCollapse(d, role, text, opts);
+    if (!m.tall) {
+      clearClipChrome(d);
+      d._fullText = null;
+      if (typeof opts.onAfterLayout === 'function') opts.onAfterLayout(d, m);
+      return m;
+    }
+    d._fullText = text != null ? text : (d._body && d._body.textContent) || '';
+    applyClipState(d, !d._expanded);
+    ensureExpandToggle(d, opts);
+    if (typeof opts.onAfterLayout === 'function') opts.onAfterLayout(d, m);
+    return m;
+  }
+
   /**
    * One grow-one-bubble join (🎯T372). Both surfaces call this — not a
    * helper shared by two painters. Join identity is stream_id / openEl +
@@ -365,6 +601,22 @@
     var lines = [];
     var messagesEl = opts.messagesEl || null;
     var doc = opts.document || (typeof document !== 'undefined' ? document : null);
+
+    function clipOpts() {
+      return {
+        container: messagesEl,
+        document: doc,
+        onToggle: opts.onClipToggle,
+        onAfterLayout: opts.onAfterClip,
+        paintProbe: opts.paintProbe,
+      };
+    }
+
+    function clipAttached(el) {
+      if (!el) return el;
+      layoutSizeClip(el, clipOpts());
+      return el;
+    }
 
     function rehome(el) {
       if (!el || typeof el._streamRaw !== 'string') return null;
@@ -556,7 +808,7 @@
       if (typeof opts.buildMsg === 'function' && messagesEl) {
         var el = opts.buildMsg('user', body, ts, { timeIfKnown: !!opts.timeIfKnown });
         if (el) messagesEl.appendChild(el);
-        return el;
+        return clipAttached(el);
       }
       if (doc && messagesEl) {
         var d = doc.createElement('div');
@@ -568,9 +820,11 @@
         if (b.classList && b.classList.add) b.classList.add('msg-body');
         b.textContent = body;
         d._body = b;
+        d._layoutRole = 'user';
+        d._layoutText = body;
         d.appendChild(b);
         messagesEl.appendChild(d);
-        return d;
+        return clipAttached(d);
       }
       return null;
     }
@@ -600,6 +854,9 @@
           } else {
             el._body.textContent = raw;
           }
+          // Host onSeal (main renderBody) applies the same clip. Inspect
+          // has no onSeal — clip here after the default paint.
+          clipAttached(el);
         }
       }
       markLineSealed(sid);
@@ -750,6 +1007,16 @@
         : null;
     }
 
+    function sizeClipOpts() {
+      return {
+        container: messagesEl,
+        document: doc,
+        onToggle: opts.onClipToggle,
+        onAfterLayout: opts.onAfterClip,
+        paintProbe: opts.paintProbe,
+      };
+    }
+
     var stream = createStreamJoin({
       messagesEl: messagesEl,
       document: doc,
@@ -763,6 +1030,9 @@
       requestAnimationFrame: opts.requestAnimationFrame,
       cancelAnimationFrame: opts.cancelAnimationFrame,
       isDuplicateUser: opts.isDuplicate,
+      onClipToggle: opts.onClipToggle,
+      onAfterClip: opts.onAfterClip,
+      paintProbe: opts.paintProbe,
     });
 
     // Tag host as widget mount (density is styling only).
@@ -935,6 +1205,7 @@
               painted: null,
             };
         if (spec.kind === 'nugget') {
+          // 🎯T233 nuggets stay nuggets — T480 is about bubbles.
           var wrap = doc.createElement('div');
           wrap.innerHTML = spec.html || '';
           var node = wrap.firstChild;
@@ -951,7 +1222,10 @@
               ? function (d, role, text) { paintBody(d, role, text, painted); }
               : undefined,
           });
-          if (el) messagesEl.appendChild(el);
+          if (el) {
+            messagesEl.appendChild(el);
+            layoutSizeClip(el, sizeClipOpts());
+          }
         } else {
           // Minimal fallback when buildMsg is not injected (hermetic only).
           // Product durable turns always pass buildMsg (T308 one-shell rule).
@@ -961,8 +1235,12 @@
           var body = doc.createElement('div');
           body.classList.add('msg-body');
           body.textContent = spec.text || '';
+          d._body = body;
+          d._layoutRole = spec.role || 'status';
+          d._layoutText = spec.text || '';
           d.appendChild(body);
           messagesEl.appendChild(d);
+          layoutSizeClip(d, sizeClipOpts());
         }
       }
 
@@ -1239,5 +1517,15 @@
     linesFingerprint: linesFingerprint,
     createStreamJoin: createStreamJoin,
     mount: mount,
+    // 🎯T480 / T106: one size-clip implementation for main and Transcript.
+    COLLAPSED_MAX_HEIGHT: COLLAPSED_MAX_HEIGHT,
+    COLLAPSE_HEIGHT_EPSILON_PX: COLLAPSE_HEIGHT_EPSILON_PX,
+    collapsedMaxHeightPx: collapsedMaxHeightPx,
+    measureCollapse: measureCollapse,
+    clearClipChrome: clearClipChrome,
+    applyClipState: applyClipState,
+    updateExpandTab: updateExpandTab,
+    ensureExpandToggle: ensureExpandToggle,
+    layoutSizeClip: layoutSizeClip,
   };
 }));

@@ -717,8 +717,9 @@ function assertNoShowMoreLess(text, label, failures) {
       // ~12 user lines at default metrics ≈ 14–20rem (under old 1.5× gate).
       const medUser = Array.from({ length: 12 }, (_, i) =>
         `medium user line ${i}: request body exceeds the 14rem clip pocket`).join('\n');
-      // ~6 list items ≈ medium-tall assistant (not the huge 60-item fixtures).
-      const medAsst = Array.from({ length: 6 }, (_, i) =>
+      // Live list metrics: 6 items ≈ 178px < 14rem clip. 10 items lands in
+      // (collapsedH+eps, 1.5×collapsedH) under the T480 live-height measure.
+      const medAsst = Array.from({ length: 10 }, (_, i) =>
         `- medium_item_${i} with a bit of padding`).join('\n');
       const uMed = window.addMsg('user', medUser);
       const jMed = window.addMsg('jevons', '### medium\n' + medAsst);
@@ -849,7 +850,7 @@ function assertNoShowMoreLess(text, label, failures) {
       const nearUser = window.addMsg('user', tall(14, 'near-user'));
       await new Promise((r) => requestAnimationFrame(r));
       const nearAsst = window.addMsg('jevons', '### near end\n' +
-        Array.from({ length: 8 }, (_, i) => `- near_item_${i} padding`).join('\n'));
+        Array.from({ length: 12 }, (_, i) => `- near_item_${i} padding`).join('\n'));
       await new Promise((r) => requestAnimationFrame(r));
       // Mid-replay: near-end messages must not be force-collapsed yet (geometry at top).
       const midCollapsed = !!(nearUser._fullText && nearUser._expanded !== true && nearUser.classList.contains('msg-clipped'));

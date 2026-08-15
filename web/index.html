@@ -907,6 +907,13 @@ body.rhs-resizing-row { cursor: row-resize; }
 #agent-inspect-body > .msg { max-width: 100%; }
 /* 🎯T167: per-turn .msg must not nest vertical scroll traps. */
 #agent-inspect-body > .msg .msg-body { overflow-y: visible; max-height: none; }
+/* 🎯T480: T106 size clip still applies — overflow:hidden is a clip, not a
+   nested scroll trap. More specific than the T167 unclip so a tall Transcript
+   bubble actually pockets. */
+#agent-inspect-body > .msg.msg-clipped > .msg-body {
+  max-height: var(--collapsed-max-height);
+  overflow: hidden;
+}
 /* 🎯T233: harness injects as compact ⋯ nuggets (family of main-chat turn-marker). */
 #agent-inspect-body > .turn-marker.inject-nugget {
   align-self: flex-start; margin: 2px 0;
@@ -3096,63 +3103,18 @@ function addMsg(role, text, when, opts) {
 // auto-expanded tall bubbles stay expanded while any part remains in the
 // strict viewport; they may auto-collapse only after newer messages (or
 // scroll) push them fully out of sight. Manual toggle still wins.
-// Single named clip height — keep in sync with :root --collapsed-max-height.
-const COLLAPSED_MAX_HEIGHT = '14rem';
-// Subpixel slack so fullH == collapsedH (or 1–2px over from layout) is not
-// spuriously tall; content must clearly exceed the clip box.
-const COLLAPSE_HEIGHT_EPSILON_PX = 6;
+// 🎯T480: T106 size clip lives in ConversationWidget (one implementation).
+// Named height stays aliased so :root --collapsed-max-height comments and
+// window.measureCollapse (collapse-test) keep a stable entry.
+const COLLAPSED_MAX_HEIGHT = ConversationWidget.COLLAPSED_MAX_HEIGHT;
+const COLLAPSE_HEIGHT_EPSILON_PX = ConversationWidget.COLLAPSE_HEIGHT_EPSILON_PX;
 
 function collapsedMaxHeightPx() {
-  const m = /^([\d.]+)rem$/i.exec(COLLAPSED_MAX_HEIGHT);
-  if (m) {
-    const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-    return parseFloat(m[1]) * root;
-  }
-  const px = /^([\d.]+)px$/i.exec(COLLAPSED_MAX_HEIGHT);
-  return px ? parseFloat(px[1]) : 224;
+  return ConversationWidget.collapsedMaxHeightPx();
 }
 
-// Measure whether full render is tall enough to warrant collapse.
-// Full height is measured on an off-DOM-width probe so we never thrash the
-// live body as an intermediate step (stick-to-bottom — 🎯T30.2). Collapsed
-// height is the named clip box (COLLAPSED_MAX_HEIGHT), not a re-parsed
-// preview. Returns { tall, fullH, collapsedH }. Does NOT leave d painted.
 function measureCollapse(d, role, text) {
-  const collapsedH = collapsedMaxHeightPx();
-  // Use the bubble's outer width (not body clientWidth): the probe is a .msg
-  // with the same padding, so matching outer width keeps content-box width
-  // (and wrap) aligned with the live body. Body-only width under-pads and
-  // can double-count wrapped lines.
-  const width = d.clientWidth || (d._body && d._body.clientWidth) || 0;
-  // Probe shares .msg / role classes so markdown CSS applies; absolute so
-  // it cannot change #messages.scrollHeight while we measure.
-  const probe = document.createElement('div');
-  probe.className = (d.className || ('msg ' + role)).replace(/\bmsg-clipped\b/g, '').trim();
-  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:0;top:0;width:' +
-    (width > 0 ? width + 'px' : '100%') + ';max-width:85%;box-sizing:border-box;';
-  const probeBody = document.createElement('div');
-  probeBody.className = 'msg-body';
-  probe.appendChild(probeBody);
-  // Attach under #messages so CSS variables / inheritance match live bubbles.
-  msgs.appendChild(probe);
-  // Full render only — never a truncated preview path.
-  if (role === 'jevons') {
-    probeBody.innerHTML = parseAssistantMarkdown(text);
-  } else if (role === 'user') {
-    probeBody.innerHTML = renderUserText(text);
-  } else {
-    probeBody.textContent = text;
-  }
-  const fullH = probeBody.offsetHeight || 0;
-  probe.remove();
-  // Avoid zero-layout (hidden tab): treat as not tall.
-  if (collapsedH <= 0 || fullH <= 0) {
-    return { tall: false, fullH, collapsedH };
-  }
-  // Tall when content exceeds the clip box (+epsilon). Do not use 1.5× —
-  // that was for preview-vs-full height under the old truncated model.
-  const tall = fullH > collapsedH + COLLAPSE_HEIGHT_EPSILON_PX;
-  return { tall, fullH, collapsedH };
+  return ConversationWidget.measureCollapse(d, role, text, { container: msgs });
 }
 // Mermaid diagrams (🎯T59): assistant markdown may carry ```mermaid
 // fences, which marked emits as <pre><code class="language-mermaid">. We
@@ -4812,44 +4774,20 @@ function highlightCodeIn(container) {
   });
 }
 function clearClipChrome(d) {
-  if (!d) return;
-  d.classList.remove('msg-clipped');
-  if (d._clipFade) { d._clipFade.remove(); d._clipFade = null; }
-  if (d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
+  ConversationWidget.clearClipChrome(d);
 }
 
 // 🎯T106: clip state only — full body HTML is never swapped for a preview.
+// Implementation is ConversationWidget.applyClipState (🎯T480). Host re-snaps.
 function applyClipState(d, clipped) {
-  if (!d || !d._body) return;
-  if (clipped) {
-    d.classList.add('msg-clipped');
-    if (!d._clipFade) {
-      const fade = document.createElement('div');
-      fade.className = 'msg-clip-fade';
-      fade.setAttribute('aria-hidden', 'true');
-      d._body.after(fade);
-      d._clipFade = fade;
-    } else if (d._clipFade.parentNode !== d) {
-      d._body.after(d._clipFade);
-    }
-  } else {
-    d.classList.remove('msg-clipped');
-    if (d._clipFade) { d._clipFade.remove(); d._clipFade = null; }
-  }
+  ConversationWidget.applyClipState(d, clipped);
   // 🎯T351: clip toggle changes the row's natural height (the user-toggle
   // path bypasses renderBody) — re-snap to the pixel grid.
   if (typeof scheduleRowSnap === 'function') scheduleRowSnap(d);
 }
 
 function updateExpandTab(d) {
-  if (!d || !d._expandBtn) return;
-  const expanded = !!d._expanded;
-  d._expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-  d._expandBtn.setAttribute('aria-label', expanded ? 'Collapse' : 'Expand');
-  d._expandBtn.title = expanded ? 'Collapse' : 'Expand';
-  // Inside-edge pocket tab: down when collapsed (reveal more), up when expanded.
-  d._expandBtn.innerHTML = '<span class="chev" aria-hidden="true">' +
-    (expanded ? '\u25B4' : '\u25BE') + '</span>';
+  ConversationWidget.updateExpandTab(d);
 }
 
 function renderBody(d, role, text) {
@@ -4872,20 +4810,18 @@ function renderBody(d, role, text) {
   paintBody(d, role, text);
   // 🎯T266: top-edge repo/PO chrome on target-related owner asks.
   syncTargetContextChrome(d, { role: role, text: text });
-  const m = measureCollapse(d, role, text);
-  if (!m.tall) {
-    // Non-tall: never tab, never fade (pocket chrome is tall-only).
-    clearClipChrome(d);
-    d._fullText = null;
-    // 🎯T351: repaint changed the natural height — re-snap to the pixel grid.
-    if (typeof scheduleRowSnap === 'function') scheduleRowSnap(d);
-    return;
-  }
-  d._fullText = text;
-  applyClipState(d, !d._expanded);
-  ensureExpandToggle(d);
-  // 🎯T351: repaint / expand / collapse changed the natural height — re-snap.
-  if (typeof scheduleRowSnap === 'function') scheduleRowSnap(d);
+  // 🎯T480: one measure+clip — ConversationWidget, not an inspect skip.
+  ConversationWidget.layoutSizeClip(d, {
+    container: msgs,
+    onToggle: function () {
+      if (d._expanded) scrollDownThrottled();
+      scheduleVirtualize();
+      focusComposer();
+    },
+    onAfterLayout: function () {
+      if (typeof scheduleRowSnap === 'function') scheduleRowSnap(d);
+    },
+  });
 }
 
 // 🎯T266: last frontier ledger/cwd for target-ask context resolution.
@@ -4972,43 +4908,18 @@ function clearTargetContextChrome(d) {
   if (d.classList) d.classList.remove('msg-has-context-tab');
 }
 function ensureExpandToggle(d) {
-  // Guard: tab only when measure marked this bubble tall (_fullText set).
-  if (!d || d._fullText == null) {
-    if (d && d._expandBtn) { d._expandBtn.remove(); d._expandBtn = null; }
-    return;
-  }
-  if (!d._expandBtn) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'msg-expand-tab';
-    // 🎯T153: pointer-only pocket tab — not a sequential Tab stop.
-    btn.tabIndex = -1;
-    // Prevent mousedown from parking focus on the tab (composer-first).
-    btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
-    btn.addEventListener('click', () => {
-      d._expanded = !d._expanded;
-      d._userToggled = true;   // manual choice wins over auto-expand-latest
-      // Clip toggle only — never re-parse a truncated preview (🎯T106).
-      applyClipState(d, !d._expanded);
-      updateExpandTab(d);
+  // 🎯T480: pocket tab lives in ConversationWidget. Host onToggle keeps
+  // T153 composer-first + T106 scroll/virtualize side effects.
+  ConversationWidget.ensureExpandToggle(d, {
+    onToggle: function () {
       if (d._expanded) scrollDownThrottled();
       scheduleVirtualize();
-      // 🎯T153: return focus to main composer after expand/collapse.
       focusComposer();
-    });
-    // Absolute pocket tab; DOM after body/fade keeps a11y order sensible.
-    if (d._clipFade) d._clipFade.after(btn);
-    else if (d._body) d._body.after(btn);
-    else d.appendChild(btn);
-    d._expandBtn = btn;
-  } else if (d._clipFade && d._expandBtn.previousSibling !== d._clipFade) {
-    d._clipFade.after(d._expandBtn);
-  } else if (!d._clipFade && d._body && d._expandBtn.previousSibling !== d._body) {
-    d._body.after(d._expandBtn);
-  }
-  // Keep pointer-only even if an older tab instance is reused.
-  if (d._expandBtn) d._expandBtn.tabIndex = -1;
-  updateExpandTab(d);
+    },
+    onAfterLayout: function () {
+      if (typeof scheduleRowSnap === 'function') scheduleRowSnap(d);
+    },
+  });
 }
 
 // The newest message renders expanded by default (T66). Prior auto-expanded

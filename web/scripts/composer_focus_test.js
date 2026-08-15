@@ -214,10 +214,11 @@ test('T153: focusComposer no-ops without a composer', function () {
 // ── 🎯T153 wiring greps (index.html) ────────────────────────────
 
 test('T153: expand tab creation sets tabIndex = -1 (not a Tab stop)', function () {
-  // ensureExpandToggle must create a pointer-only pocket tab.
-  const ensureIdx = html.indexOf('function ensureExpandToggle');
-  assert.ok(ensureIdx >= 0, 'ensureExpandToggle must exist');
-  const slice = html.slice(ensureIdx, ensureIdx + 1800);
+  // 🎯T480: pocket tab lives in ConversationWidget (one implementation).
+  const cw = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  const ensureIdx = cw.indexOf('function ensureExpandToggle');
+  assert.ok(ensureIdx >= 0, 'ensureExpandToggle must exist on ConversationWidget');
+  const slice = cw.slice(ensureIdx, ensureIdx + 1800);
   assert.ok(
     /btn\.tabIndex\s*=\s*-1/.test(slice) || /tabindex\s*=\s*["']-1["']/.test(slice),
     'expand tab must set tabIndex=-1 in ensureExpandToggle'
@@ -230,10 +231,11 @@ test('T153: expand tab creation sets tabIndex = -1 (not a Tab stop)', function (
 
 test('T153: expand click path calls focusComposer', function () {
   const ensureIdx = html.indexOf('function ensureExpandToggle');
-  const slice = html.slice(ensureIdx, ensureIdx + 1800);
+  assert.ok(ensureIdx >= 0, 'host keep ensureExpandToggle as the T153 seam');
+  const slice = html.slice(ensureIdx, ensureIdx + 900);
   assert.ok(
-    /addEventListener\(\s*['"]click['"][\s\S]*?focusComposer\s*\(/.test(slice),
-    'expand/collapse click must call focusComposer()'
+    /onToggle[\s\S]*?focusComposer\s*\(/.test(slice),
+    'expand/collapse onToggle must call focusComposer()'
   );
 });
 

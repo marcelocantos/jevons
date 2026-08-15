@@ -261,8 +261,22 @@ function fakeEl(id) {
       contains: function (c) { return !!this._s[c]; },
     },
     addEventListener: function (t, fn) { (this._listeners[t] = this._listeners[t] || []).push(fn); },
-    appendChild: function (c) { this.children.push(c); return c; },
+    appendChild: function (c) { this.children.push(c); if (c) c.parentNode = this; return c; },
     removeChild: function (c) { this.children = this.children.filter((x) => x !== c); return c; },
+    remove: function () {
+      if (this.parentNode && this.parentNode.removeChild) this.parentNode.removeChild(this);
+    },
+    after: function (n) {
+      if (!this.parentNode) return;
+      const kids = this.parentNode.children || [];
+      const i = kids.indexOf(this);
+      if (i < 0) this.parentNode.appendChild(n);
+      else {
+        kids.splice(i + 1, 0, n);
+        if (n) n.parentNode = this.parentNode;
+      }
+    },
+    setAttribute: function (k, v) { this['attr:' + k] = v; },
     querySelector: function (sel) {
       const kids = this.children || [];
       if (sel === '.working-indicator') {
@@ -594,6 +608,180 @@ test('T372 index.html: send click is the widget, not a second composer send', fu
     'main send button must not bind a second send()');
   assert.ok(html.indexOf('onComposerAction') >= 0,
     'main send enters the widget, then the host transport');
+});
+
+// ── 🎯T480: size-only T106 clip (one implementation, both surfaces) ──
+
+function fakeBubble(opts) {
+  opts = opts || {};
+  const h = opts.fullH != null ? opts.fullH : 20;
+  const body = fakeEl('body');
+  body.className = 'msg-body';
+  body.offsetHeight = h;
+  body.scrollHeight = h;
+  body.clientWidth = 280;
+  body.innerHTML = opts.html != null ? opts.html : '';
+  body.textContent = opts.text || '';
+  const d = fakeEl('msg');
+  d.className = 'msg ' + (opts.role || 'user');
+  d.classList.add('msg');
+  d.classList.add(opts.role || 'user');
+  d._body = body;
+  d._layoutRole = opts.role || 'user';
+  d._layoutText = opts.text || '';
+  d.clientWidth = 300;
+  d.isConnected = true;
+  d.ownerDocument = {
+    createElement: function (tag) { return fakeEl(tag); },
+  };
+  d.appendChild(body);
+  return d;
+}
+
+test('T480 short fixture → no tab', function () {
+  const d = fakeBubble({ role: 'user', text: 'hi', fullH: 40 });
+  const m = CW.layoutSizeClip(d, { fullH: 40 });
+  assert.strictEqual(m.tall, false);
+  assert.ok(!d.classList.contains('msg-clipped'), 'short must not clip');
+  assert.ok(!d._expandBtn, 'short must not grow a pocket tab');
+  assert.strictEqual(d._fullText, null);
+});
+
+test('T480 tall user → clipped + tab', function () {
+  const d = fakeBubble({ role: 'user', text: 'tall user request\n'.repeat(20) });
+  const m = CW.layoutSizeClip(d, { fullH: 400 });
+  assert.strictEqual(m.tall, true);
+  assert.ok(d.classList.contains('msg-clipped'), 'tall user must clip');
+  assert.ok(d._expandBtn, 'tall user must have pocket tab');
+  assert.strictEqual(d._expandBtn.className, 'msg-expand-tab');
+  assert.strictEqual(d._expandBtn.tabIndex, -1);
+});
+
+test('T480 tall assistant → clipped + tab', function () {
+  const d = fakeBubble({ role: 'jevons', text: '### reply\n- item\n'.repeat(12) });
+  const m = CW.layoutSizeClip(d, { fullH: 400 });
+  assert.strictEqual(m.tall, true);
+  assert.ok(d.classList.contains('msg-clipped'), 'tall assistant must clip');
+  assert.ok(d._expandBtn, 'tall assistant must have pocket tab');
+});
+
+test('T480 <user_info>…</rules> wall is tall → clipped', function () {
+  const wall = '<user_info>\n' + 'Agents.md line\n'.repeat(80) + '</rules>';
+  const d = fakeBubble({ role: 'user', text: wall });
+  const m = CW.layoutSizeClip(d, { fullH: 2400 });
+  assert.strictEqual(m.tall, true, 'harness wall is just a tall bubble');
+  assert.ok(d.classList.contains('msg-clipped'));
+  assert.ok(d._expandBtn);
+});
+
+test('T480 size-only: same height same clip regardless of role', function () {
+  const u = CW.measureCollapse(fakeBubble({ role: 'user' }), 'user', 'x', { fullH: 400 });
+  const j = CW.measureCollapse(fakeBubble({ role: 'jevons' }), 'jevons', 'x', { fullH: 400 });
+  const s = CW.measureCollapse(fakeBubble({ role: 'status' }), 'status', 'x', { fullH: 40 });
+  assert.strictEqual(u.tall, true);
+  assert.strictEqual(j.tall, u.tall);
+  assert.strictEqual(u.fullH, j.fullH);
+  assert.strictEqual(s.tall, false);
+});
+
+test('T480 clip source does not classify by role / inject / harness', function () {
+  const src = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  const start = src.indexOf('// 🎯T480 / T106: size-only clip');
+  const end = src.indexOf('function createStreamJoin');
+  assert.ok(start >= 0 && end > start, 'T480 clip block present');
+  const block = src.slice(start, end);
+  assert.ok(!/user_info|git_status|classifyInspect|system-reminder|injectKind|standing-brief/.test(block),
+    'size clip must not branch on harness / inject tags');
+  assert.ok(!/if\s*\(\s*role\s*===/.test(block),
+    'size clip must not fork the tall decision on role');
+});
+
+test('T480 renderModel applies size clip; nuggets stay nuggets', function () {
+  const src = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  const rm = src.match(/function renderModel\(model\) \{[\s\S]*?\n    function invalidatePaint/);
+  assert.ok(rm, 'renderModel present');
+  assert.ok(rm[0].indexOf("kind === 'nugget'") >= 0, 'nuggets still short-circuit');
+  assert.ok(rm[0].indexOf('layoutSizeClip') >= 0,
+    'renderModel must run the widget size clip after attach');
+  assert.ok(rm[0].indexOf('continue') >= 0 &&
+    rm[0].indexOf("kind === 'nugget'") < rm[0].indexOf('layoutSizeClip'),
+    'nuggets skip clip — T480 is about bubbles');
+});
+
+test('T480 index.html layoutMsg is not a second inspector-only skip', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('ConversationWidget.layoutSizeClip') >= 0,
+    'main renderBody must call the widget clip');
+  assert.ok(html.indexOf('ConversationWidget.measureCollapse') >= 0,
+    'window.measureCollapse is a widget alias, not a second probe');
+  assert.ok(!/function measureCollapse\(d, role, text\) \{[\s\S]{0,400}parseAssistantMarkdown/.test(html),
+    'index.html must not keep a second role-painting probe');
+  assert.ok(/#agent-inspect-body\s*>\s*\.msg\.msg-clipped\s*>\s*\.msg-body/.test(html),
+    'inspect CSS must let T106 clip win over the T167 unclip');
+});
+
+test('T480 renderModel clips a tall bubble and leaves a short one alone', function () {
+  const dom = fakeDom('compact');
+  const ctl = CW.mount(dom.host, {
+    document: dom.doc,
+    density: 'compact',
+    agentId: 'jv-t480',
+    buildMsg: function (role, text) {
+      const tall = String(text || '').length > 80;
+      return fakeBubble({ role: role, text: text, fullH: tall ? 400 : 24 });
+    },
+    lineSpec: function (line) {
+      if (line && line.nugget) {
+        return { kind: 'nugget', html: '<div class="turn-marker inject-nugget">⋯</div>' };
+      }
+      return {
+        kind: 'bubble',
+        role: line.role === 'assistant' ? 'jevons' : (line.role || 'user'),
+        text: line.text || '',
+        when: line.when,
+      };
+    },
+  });
+  // fakeDom createElement for nugget wrap: set innerHTML + firstChild.
+  const origCreate = dom.doc.createElement;
+  dom.doc.createElement = function (tag) {
+    const el = origCreate(tag);
+    Object.defineProperty(el, 'innerHTML', {
+      configurable: true,
+      set: function (html) {
+        this._html = html;
+        if (html && String(html).indexOf('inject-nugget') >= 0) {
+          const n = fakeEl('nugget');
+          n.className = 'turn-marker inject-nugget';
+          this.firstChild = n;
+        }
+      },
+      get: function () { return this._html || ''; },
+    });
+    return el;
+  };
+  const wall = '<user_info>\n' + 'line\n'.repeat(40) + '</rules>';
+  ctl.renderModel({
+    lines: [
+      { role: 'user', text: 'hi' },
+      { role: 'user', text: wall },
+      { role: 'assistant', text: '### reply\n' + '- item\n'.repeat(20) },
+      { role: 'user', text: 'ignored', nugget: true },
+    ],
+  });
+  const kids = (dom.byId[ctl.ids.messages] && dom.byId[ctl.ids.messages].children) || [];
+  const bubbles = kids.filter(function (c) { return c.classList && c.classList.contains('msg'); });
+  const nuggets = kids.filter(function (c) {
+    return c.className && String(c.className).indexOf('inject-nugget') >= 0;
+  });
+  assert.strictEqual(bubbles.length, 3, 'three bubbles (nugget is not a bubble)');
+  assert.strictEqual(nuggets.length, 1, 'T233 nugget still a nugget');
+  assert.ok(!bubbles[0].classList.contains('msg-clipped'), 'short user unclipped');
+  assert.ok(!bubbles[0]._expandBtn, 'short user no tab');
+  assert.ok(bubbles[1].classList.contains('msg-clipped'), 'user_info wall clipped');
+  assert.ok(bubbles[1]._expandBtn, 'user_info wall has tab');
+  assert.ok(bubbles[2].classList.contains('msg-clipped'), 'tall assistant clipped');
+  assert.ok(bubbles[2]._expandBtn, 'tall assistant has tab');
 });
 
 Promise.all(asyncTests).then(function () {

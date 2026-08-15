@@ -134,6 +134,47 @@ function startStaticServer() {
     if (key.send !== 'send') failures.push('compact Enter should send, got ' + key.send);
     if (key.nl !== 'newline') failures.push('compact Shift+Enter should newline, got ' + key.nl);
 
+    // 🎯T480 main: size-only clip via addMsg → widget layoutSizeClip.
+    const t480Main = await page.evaluate(() => {
+      const wall = '<user_info>\n'
+        + Array.from({ length: 80 }, (_, i) =>
+          'Agents.md line ' + i + ': ' + 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx').join('\n')
+        + '\n</rules>';
+      const tallAsst = '### reply\n' + Array.from({ length: 40 }, (_, i) =>
+        '- item_' + i + ' with enough padding to exceed the 14rem clip').join('\n');
+      function snap(el) {
+        if (!el) return { missing: true };
+        return {
+          clipped: el.classList.contains('msg-clipped'),
+          tab: !!(el._expandBtn || el.querySelector('.msg-expand-tab')),
+          bodyH: el._body ? el._body.scrollHeight : 0,
+        };
+      }
+      const msgs = document.getElementById('messages');
+      if (msgs) msgs.innerHTML = '';
+      const mainShort = window.addMsg ? window.addMsg('user', 'Short.') : null;
+      const mainWall = window.addMsg ? window.addMsg('user', wall) : null;
+      const mainAsst = window.addMsg ? window.addMsg('jevons', tallAsst) : null;
+      return {
+        api: typeof ConversationWidget !== 'undefined'
+          && typeof ConversationWidget.layoutSizeClip === 'function',
+        mainShort: snap(mainShort),
+        mainWall: snap(mainWall),
+        mainAsst: snap(mainAsst),
+      };
+    });
+    if (!t480Main.api) failures.push('T480: ConversationWidget.layoutSizeClip missing');
+    if (t480Main.mainShort.tab || t480Main.mainShort.clipped) {
+      failures.push('T480 main short sprouted tab/clip ' + JSON.stringify(t480Main.mainShort));
+    }
+    // Main T66/T261 may keep in-view tall bubbles expanded — tab is the signal.
+    if (!t480Main.mainWall.tab) {
+      failures.push('T480 main <user_info> wall missing pocket tab ' + JSON.stringify(t480Main.mainWall));
+    }
+    if (!t480Main.mainAsst.tab) {
+      failures.push('T480 main tall assistant missing pocket tab ' + JSON.stringify(t480Main.mainAsst));
+    }
+
     // Drive selectAgent directly (avoids depending on fleet paint timing).
     const afterSelect = await page.evaluate(() => {
       if (typeof selectAgent === 'function') {
@@ -160,6 +201,64 @@ function startStaticServer() {
       if (!afterSelect.transcriptTab && !afterSelect.inspectActive) {
         failures.push('Transcript tab / inspect pane not active after worker select');
       }
+    }
+
+    // 🎯T480 inspect: same size clip after the pane has width (post-select).
+    const t480Side = await page.evaluate(() => {
+      const wall = '<user_info>\n'
+        + Array.from({ length: 80 }, (_, i) =>
+          'Agents.md line ' + i + ': ' + 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx').join('\n')
+        + '\n</rules>';
+      const tallAsst = '### reply\n' + Array.from({ length: 40 }, (_, i) =>
+        '- item_' + i + ' with enough padding to exceed the 14rem clip').join('\n');
+      function snap(el) {
+        if (!el) return { missing: true };
+        return {
+          clipped: el.classList.contains('msg-clipped'),
+          tab: !!(el._expandBtn || el.querySelector('.msg-expand-tab')),
+          bodyH: el._body ? el._body.scrollHeight : 0,
+          w: el.clientWidth || 0,
+        };
+      }
+      if (typeof renderAgentInspect === 'function') {
+        renderAgentInspect({
+          title: 'jv-t309.1-worker',
+          lines: [
+            { role: 'user', text: 'Short.', when: Date.now() - 3000 },
+            { role: 'user', text: wall, when: Date.now() - 2000 },
+            { role: 'assistant', text: tallAsst, when: Date.now() - 1000 },
+          ],
+        });
+      }
+      const body = document.getElementById('agent-inspect-body');
+      const sideMsgs = body ? Array.prototype.filter.call(body.children || [], function (c) {
+        return c.classList && c.classList.contains('msg');
+      }) : [];
+      return {
+        inspectHasRender: typeof renderAgentInspect === 'function',
+        sideCount: sideMsgs.length,
+        sideNuggets: body ? body.querySelectorAll('.inject-nugget').length : -1,
+        bodyW: body ? body.clientWidth : 0,
+        sideShort: snap(sideMsgs[0]),
+        sideWall: snap(sideMsgs[1]),
+        sideAsst: snap(sideMsgs[2]),
+      };
+    });
+    if (!t480Side.inspectHasRender) failures.push('T480: renderAgentInspect not on page');
+    if (t480Side.sideCount !== 3) {
+      failures.push('T480 inspect expected 3 bubbles, got ' + t480Side.sideCount);
+    }
+    if (t480Side.sideNuggets !== 0) {
+      failures.push('T480 <user_info> must stay a bubble, not a nugget (count=' + t480Side.sideNuggets + ')');
+    }
+    if (t480Side.sideShort.tab || t480Side.sideShort.clipped) {
+      failures.push('T480 inspect short sprouted tab/clip ' + JSON.stringify(t480Side.sideShort));
+    }
+    if (!t480Side.sideWall.clipped || !t480Side.sideWall.tab) {
+      failures.push('T480 inspect <user_info> wall not clipped+tab ' + JSON.stringify(t480Side.sideWall));
+    }
+    if (!t480Side.sideAsst.clipped || !t480Side.sideAsst.tab) {
+      failures.push('T480 inspect tall assistant not clipped+tab ' + JSON.stringify(t480Side.sideAsst));
     }
 
     if (failures.length) {
