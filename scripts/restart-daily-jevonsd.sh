@@ -515,6 +515,23 @@ if [[ "$SKIP_MAKE" != "1" ]]; then
   log "rebuild: bin/jevonsd from committed HEAD (snapshot $SNAP_DIR)"
   "$BUILDSNAP" -root "$ROOT" -snap "$SNAP_DIR" \
     -target bin/jevonsd -artifact bin/jevonsd -dest "$BIN"
+
+  # 🎯T405: the supervisor is part of the deployment, not something a
+  # human installed once. bin/jevons-watchdog was built by hand on
+  # 2026-08-10 and every bounce since rebuilt the daemon around it,
+  # leaving the one process responsible for the daemon being up as the
+  # one process that never received a fix. launchd re-execs the program
+  # each interval, and install() lands it by rename, so replacing the
+  # file here is picked up on the next probe with no reload.
+  #
+  # Not fatal, unlike the daemon build above: a watchdog that will not
+  # compile is a reason to bring the daemon up unsupervised and say so,
+  # never a reason to leave it down.
+  log "rebuild: bin/jevons-watchdog from committed HEAD"
+  "$BUILDSNAP" -root "$ROOT" -snap "$SNAP_DIR" \
+    -target bin/jevons-watchdog -artifact bin/jevons-watchdog \
+    -dest "$ROOT/bin/jevons-watchdog" ||
+    log "WARNING: the watchdog did not rebuild — the daemon is coming up supervised by whatever build is on disk"
 else
   log "skip make (JEVONS_RESTART_SKIP_MAKE=1)"
   [[ -x "$BIN" ]] || die "no binary at $BIN"

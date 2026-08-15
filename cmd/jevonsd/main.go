@@ -497,6 +497,23 @@ func main() {
 	// handover between them, and this loop is the daemon reading it.
 	go supervise.ReportLoop(ctx, supervise.Dir(cfg.StateDir), 0, srv.NotifyOwnerNote)
 
+	// 🎯T405: and the other direction — the daemon supervises its own
+	// supervisor. The watchdog was installed on 2026-08-10 and stopped
+	// being held by launchd fourteen minutes later; the plist stayed on
+	// disk, the machine never rebooted, and for five days and four
+	// daemon bounces nothing noticed, because the only thing watching
+	// the watchdog was the owner. A supervisor whose absence has no
+	// alarm supervises nothing the moment it is the thing that broke.
+	// These two loops make each process responsible for the other, and
+	// they live in different process trees precisely so that whatever
+	// takes one down cannot take the other with it.
+	go supervise.WatchAgentLoop(ctx, supervise.AgentPaths{
+		StateDir: cfg.StateDir,
+		Home:     supervise.HomeDir(),
+		Repo:     supervise.RepoRoot(),
+		Port:     cfg.Port,
+	}, supervise.DefaultAgentConfig(), 0, srv.NotifyOwnerNote)
+
 	// ð¯T27.9: start the liveness check loop once the daemon context exists.
 	if liveMon != nil {
 		go liveMon.Run(ctx)
