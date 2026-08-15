@@ -353,19 +353,22 @@ func (p *Portfolio) clone() *Portfolio {
 	return out
 }
 
-// LoadPortfolioFile reads an optional JSON portfolio override.
-// Missing file → DefaultPortfolio (not an error). Malformed → error.
-func LoadPortfolioFile(path string) (*Portfolio, error) {
+// LoadPortfolioOverride reads an optional JSON portfolio override.
+// loaded is true only when the file existed and parsed. Missing file
+// returns the compiled seed with loaded=false (not an error). Malformed
+// is an error. 🎯T476 needs loaded so a leftover file can be named as
+// a losing knob instead of being indistinguishable from the seed.
+func LoadPortfolioOverride(path string) (p *Portfolio, loaded bool, err error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return DefaultPortfolio(), nil
+		return DefaultPortfolio(), false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	p := DefaultPortfolio()
+	p = DefaultPortfolio()
 	if err := json.Unmarshal(data, p); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if p.DefaultProvider == "" {
 		p.DefaultProvider = HarnessGrok
@@ -373,7 +376,14 @@ func LoadPortfolioFile(path string) (*Portfolio, error) {
 	if p.Routes == nil {
 		p.Routes = DefaultPortfolio().Routes
 	}
-	return p, nil
+	return p, true, nil
+}
+
+// LoadPortfolioFile reads an optional JSON portfolio override.
+// Missing file → DefaultPortfolio (not an error). Malformed → error.
+func LoadPortfolioFile(path string) (*Portfolio, error) {
+	p, _, err := LoadPortfolioOverride(path)
+	return p, err
 }
 
 // ProviderSoftCapsField is the budget.json key for soft-cap overlays

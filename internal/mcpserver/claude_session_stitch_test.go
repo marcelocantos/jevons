@@ -35,8 +35,8 @@ func TestStitchAgentStartBindsGrokDefaultModel(t *testing.T) {
 	s.SetRegistry(reg)
 	s.SetDefaultProvider(string(claudia.ProviderGrok))
 
-	// Explicit provider=grok so portfolio routing (🎯T325.2) does not
-	// reassign code_implement → claude; this oracle pins T324 model bind.
+	// Explicit provider=grok (T148). Omit-provider now follows config
+	// (🎯T476); keep the pin so this oracle stays about T324 model bind.
 	def, existed, _, err := s.stitchAgentStart(
 		"cold-grok", t.TempDir(), "", string(claudia.ProviderGrok), "",
 		"jevons-po", claudia.PurposeWork, "T324",
@@ -197,9 +197,11 @@ func TestClaudeSessionStitchFailsClosedOnGrokClobber(t *testing.T) {
 	}
 }
 
-// 🎯T325.2: empty provider on mint uses portfolio routing by task type
-// (work/code_implement → prefer claude when under soft cap), not only
-// the daemon default. Explicit provider= still wins (T148).
+// 🎯T476: empty provider on mint follows the daemon default (config.yaml),
+// not T325.2 portfolio routing. The compiled seed still prefers claude
+// for code_implement; that is the losing knob, cited on the start note.
+// Explicit provider= still wins (T148). Route() itself is covered in
+// internal/cost (soft-cap spread is not the omit-provider mint path).
 func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
@@ -216,14 +218,19 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderClaude {
-		t.Fatalf("empty provider work mint → %q, want claude (portfolio code_implement)", def.Provider)
+	if def.Provider != claudia.ProviderGrok {
+		t.Fatalf("empty provider work mint → %q, want grok (config); note=%q", def.Provider, note)
 	}
-	if note == "" || !strings.Contains(note, "code_implement") {
-		t.Fatalf("portfolio route note missing: %q", note)
+	if !strings.Contains(note, "provider_knob: config") {
+		t.Fatalf("provider knob cite missing: %q", note)
+	}
+	if !strings.Contains(note, "compiled_seed would have picked claude") {
+		t.Fatalf("losing compiled seed not cited: %q", note)
 	}
 
-	// task_type=mechanical prefers cheapest capable (grok).
+	// task_type=mechanical is recorded for the loser citation but does
+	// not override config.yaml (mechanical's compiled prefer is grok,
+	// so they agree and no loser is named).
 	mech, _, note, err := s.stitchAgentStart(
 		"jv-mech-worker", t.TempDir(), "", "", "mechanical",
 		"jevons-po", claudia.PurposeWork, "",
@@ -232,10 +239,13 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 		t.Fatal(err)
 	}
 	if mech.Provider != claudia.ProviderGrok {
-		t.Fatalf("mechanical → %q want grok; note=%q", mech.Provider, note)
+		t.Fatalf("mechanical omit-provider → %q want grok; note=%q", mech.Provider, note)
+	}
+	if !strings.Contains(note, "provider_knob: config") {
+		t.Fatalf("mechanical knob cite missing: %q", note)
 	}
 
-	// Soft-cap spread: fill claude, next code_implement mint → codex.
+	// Soft-cap fill must not reassign an omit-provider mint off config.
 	p := s.effectivePortfolio()
 	capClaude := p.SoftCaps[cost.HarnessClaude]
 	for i := 0; i < capClaude; i++ {
@@ -253,7 +263,7 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spread.Provider != claudia.ProviderCodex {
-		t.Fatalf("after claude at soft cap → %q want codex; note=%q", spread.Provider, note)
+	if spread.Provider != claudia.ProviderGrok {
+		t.Fatalf("after claude at soft cap, omit mint → %q want config grok; note=%q", spread.Provider, note)
 	}
 }

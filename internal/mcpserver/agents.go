@@ -17,8 +17,9 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -51,12 +52,12 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). When provider is omitted on mint, multi-provider portfolio routing (🎯T325.2) picks harness by task_type (or purpose) preferring fit then under-utilised soft caps — never mid-flight reassignment. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
+			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). When provider is omitted on mint, the owner-visible default (config.yaml provider, then JEVONS_PROVIDER, then grok) wins — a leftover llm-portfolio.json or the compiled T325.2 seed must not silently override it (🎯T476). The start result cites which knob selected the provider. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
-			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Empty = keep stored provider on resume; on mint use portfolio routing (🎯T325.2) then daemon default. 🎯T148.")),
-			mcp.WithString("task_type", mcp.Description("LLM portfolio task class for provider routing when provider is omitted on mint (🎯T325.2): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. Empty = derive from purpose (work→code_implement, aside→ideation, overseer→ceo).")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Empty = keep stored provider on resume; on mint follow config.yaml / daemon default (🎯T476). The start result cites which knob won (explicit vs config vs leftover portfolio file). 🎯T148.")),
+			mcp.WithString("task_type", mcp.Description("LLM portfolio task class (🎯T325.2): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. Recorded for capacity tables and loser-knob citation; omitted provider on mint follows config.yaml (🎯T476), not this class. Empty = derive from purpose (work→code_implement, aside→ideation, overseer→ceo).")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
@@ -80,10 +81,23 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_stop",
-			mcp.WithDescription("Stop a running agent process only. The agent stays registered and can be started again (resume). Not the same as kill."),
+			mcp.WithDescription("Stop a running agent process and park it (🎯T414): the agent stays registered, and the park is a standing instruction that outlives the process — no delivery, restart, idle sweep or repair mission revives it until the park is lifted with jevons_fleet_intent state=working. Not the same as kill (which deregisters)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
+			mcp.WithString("actor", mcp.Description("Your agent name (who is parking it). Default: the overseer.")),
+			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it.")),
 		),
 		s.handleAgentStop,
+	)
+
+	s.mcpSrv.AddTool(
+		mcp.NewTool("jevons_fleet_intent",
+			mcp.WithDescription("Read or set the deliberate answer to \"should this agent be running?\" (🎯T414). Every fleet control — spawn, nudge, revive, repressure, repair mission, delivery start, worker-idle notification — reads this and declines when it says do not run, naming the intent. Observed process state alone never authorises a start. States: working, parked, blocked_provider, blocked_owner, reaped. Omit state to read the current intent; omit name to set the fleet-wide intent (a provider wall stands the whole fleet down)."),
+			mcp.WithString("name", mcp.Description("Agent name. Omit to read everything, or (with state) to set the FLEET-WIDE intent.")),
+			mcp.WithString("state", mcp.Description("working | parked | blocked_provider | blocked_owner | reaped. Omit to read.")),
+			mcp.WithString("actor", mcp.Description("Who is deciding (owner, overseer, a product path). Recorded with the intent.")),
+			mcp.WithString("reason", mcp.Description("Why — recorded so the cockpit can say what is holding an agent down, not merely that something is.")),
+		),
+		s.handleFleetIntent,
 	)
 
 	s.mcpSrv.AddTool(
@@ -116,15 +130,21 @@ func (s *Server) SetAgentEventHook(fn func(name string, ev claudia.Event)) {
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
 	// (and overseer notify), not only logs.
-	reps := SweepDeadAgents(s.registry, s.overseerName())
+	reps := SweepDeadAgents(s.registry, s.overseerName(), s.fleetIntent())
 	if len(reps) > 0 {
 		line := FormatDeadAgentReport(reps)
 		slog.Info(line)
 		s.notifyFleetHealth(line)
 	}
+	// 🎯T435 clause 2: rows that recently LEFT are part of the answer to
+	// "what is my fleet". A PO whose worker was reaped on its own achieve
+	// otherwise sees a shorter list and no cause, which is the reading that
+	// manufactured a phantom orphaning incident on 2026-08-10.
+	notices := s.RemovalAccount().Recent(0)
 	defs := s.registry.List()
 	if len(defs) == 0 {
-		return mcp.NewToolResultText(PrependFleetHealth("No agents registered.", reps)), nil
+		return mcp.NewToolResultText(fleetlog.PrependNotices(
+			PrependFleetHealth("No agents registered.", reps), notices)), nil
 	}
 
 	var b strings.Builder
@@ -152,7 +172,8 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		b.WriteString("\n")
 		b.WriteString(hints)
 	}
-	return mcp.NewToolResultText(PrependFleetHealth(b.String(), reps)), nil
+	return mcp.NewToolResultText(fleetlog.PrependNotices(
+		PrependFleetHealth(b.String(), reps), notices)), nil
 }
 
 // notifyFleetHealth delivers a fleet outage/recovery note to the overseer
@@ -230,6 +251,31 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		return blocked, nil
 	}
 
+	// 🎯T414: a start is the control this target is named for, so it asks the
+	// same question as the rest — should this agent be running? A standing
+	// park or a provider wall declines it here, naming the intent, because
+	// otherwise every automated caller (frontier consume, PO proactive, the
+	// restart reattach) reaches a parked fleet through this one door.
+	//
+	// Reaped is the exception, and the distinction is the registry row rather
+	// than the name: resurrecting the row that was reaped is the 🎯T413 bug,
+	// while starting a fresh agent under a name the fleet once used is
+	// ordinary re-use — jv-t414-intent-not-process is spawned, finishes,
+	// is reaped, and is spawned again next week.
+	rowExisted := s.registry != nil && s.registry.Def(name) != nil
+	if dec := s.AllowFleetControl(name, fleetintent.ControlSpawn); !dec.Allow {
+		if dec.Blocking != fleetintent.Reaped || rowExisted {
+			life["err"] = dec.Reason
+			s.logLifecycle(compAgentLifecycle, "start", "error", life)
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"refusing to start %q — %s (%s). Lift it with jevons_fleet_intent state=working before starting.",
+				name, fleetintent.Describe(dec.Blocking), dec.Reason)), nil
+		}
+		// Fresh row under a reaped name: the reap was about the row that is
+		// gone, so the stamp is cleared rather than obeyed.
+		s.MarkAgentWorking(name, actor, "fresh start under a previously reaped name")
+	}
+
 	// Expand ~ in workdir.
 	if strings.HasPrefix(workdir, "~/") {
 		home, _ := os.UserHomeDir()
@@ -286,7 +332,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	life["existed"] = existed
 	if routeNote != "" {
-		life["portfolio_route"] = routeNote
+		life["provider_knob"] = routeNote
 	}
 
 	// 🎯T313: an agent whose transcript is gone cannot be resumed, and
@@ -348,19 +394,8 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	s.logLifecycle(compAgentLifecycle, "start", "ok", life)
 
-	msg := fmt.Sprintf(
-		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, provider: %s",
-		name, sessionDisplay(def.SessionID), def.WorkDir, def.Parent, def.Purpose, def.Provider)
-	if def.TargetID != "" {
-		msg += fmt.Sprintf(", target_id: %s", def.TargetID)
-	}
-	if routeNote != "" {
-		msg += fmt.Sprintf(", portfolio: %s", routeNote)
-	}
-	if prompt != "" {
-		msg += ", prompt_delivered=true"
-	}
-	msg += ")"
+	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), def.TargetID,
+		string(def.Provider), sessionDisplay(def.SessionID), routeNote, prompt)
 	// 🎯T379: the agent has just inherited the provider's user-scoped MCP
 	// list. Any entry pointing at a port nothing serves will sit in "still
 	// connecting" forever, silently costing this agent those tools — so say
@@ -369,15 +404,34 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	return mcp.NewToolResultText(prefixRehydrate(rehydrated, msg)), nil
 }
 
+// formatAgentStartResult is the owner-visible jevons_agent_start text.
+// 🎯T476: routeNote must already cite which knob selected the provider.
+func formatAgentStartResult(name, workdir, parent, purpose, targetID, provider, session, routeNote, prompt string) string {
+	msg := fmt.Sprintf(
+		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, provider: %s",
+		name, session, workdir, parent, purpose, provider)
+	if targetID != "" {
+		msg += fmt.Sprintf(", target_id: %s", targetID)
+	}
+	if routeNote != "" {
+		msg += fmt.Sprintf(", %s", routeNote)
+	}
+	if prompt != "" {
+		msg += ", prompt_delivered=true"
+	}
+	msg += ")"
+	return msg
+}
+
 // stitchAgentStart mints or updates a fleet agent registry row the same way
-// jevons_agent_start does before registry.Launch (🎯T148 / 🎯T215 / 🎯T325.2).
+// jevons_agent_start does before registry.Launch (🎯T148 / 🎯T215 / 🎯T476).
 //
-// Hermetic Session stitch surface: Provider selection (portfolio on mint
-// when provider omitted), SessionID mint, Parent/Purpose/TargetID dual-write
-// — without spawning Grok or Claude. Materialized stays false until a real
-// Launch succeeds in claudia.
+// Hermetic Session stitch surface: Provider selection (config.yaml on mint
+// when provider omitted — 🎯T476), SessionID mint, Parent/Purpose/TargetID
+// dual-write — without spawning Grok or Claude. Materialized stays false
+// until a real Launch succeeds in claudia.
 //
-// routeNote is non-empty when portfolio routing chose the provider.
+// routeNote always cites which knob selected the provider.
 func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID string) (*claudia.AgentDef, bool, string, error) {
 	if s == nil || s.registry == nil {
 		return nil, false, "", fmt.Errorf("no agent registry")
@@ -392,30 +446,20 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def = d
 	}
 
-	routeNote := ""
-	// 🎯T148 + 🎯T325.2 provider selection:
-	//   1. non-empty providerArg → ad hoc override
-	//   2. resume with stored provider → keep (never mid-flight reassign)
-	//   3. mint with empty provider → portfolio Route(task_type|purpose, load)
-	//   4. else daemon default
-	if strings.TrimSpace(providerArg) != "" {
-		def.Provider = cli.SelectAgentProvider(providerArg, def.Provider, s.resolvedDefaultProvider())
-	} else if existed && def.Provider != "" {
-		def.Provider = cli.SelectAgentProvider("", def.Provider, s.resolvedDefaultProvider())
-	} else if !existed {
-		tt := strings.TrimSpace(taskTypeArg)
-		if tt == "" {
-			tt = cost.TaskTypeFromPurpose(purpose)
-		}
-		dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
-		def.Provider = claudia.Provider(dec.Provider)
-		routeNote = fmt.Sprintf("%s→%s(%s)", dec.TaskType, dec.Provider, dec.Reason)
-		if strings.TrimSpace(model) == "" && strings.TrimSpace(dec.Model) != "" {
-			model = dec.Model
-		}
-	} else {
-		def.Provider = cli.SelectAgentProvider("", def.Provider, s.resolvedDefaultProvider())
+	// 🎯T148 + 🎯T476 provider selection:
+	//   1. non-empty providerArg → ad hoc override (knob=explicit)
+	//   2. resume with stored provider → keep (knob=resume)
+	//   3. mint with empty provider → config.yaml / daemon default
+	//      (knob=config). Leftover llm-portfolio.json and the compiled
+	//      T325.2 seed are named as losers when they would have disagreed.
+	//      Portfolio model pins do not apply when config won.
+	stored := ""
+	if def != nil {
+		stored = string(def.Provider)
 	}
+	pick := s.mintProviderPick(providerArg, stored, existed, taskTypeArg, purpose)
+	def.Provider = claudia.Provider(pick.Provider)
+	routeNote := pick.Cite()
 
 	// 🎯T324: session-truth model binding for this Launch/SessionID.
 	// Explicit pin from the tool arg wins; empty pin on mint (or empty
@@ -613,8 +657,20 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 
 	s.registry.Stop(name)
-	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name})
-	return mcp.NewToolResultText(fmt.Sprintf("Agent %q stopped (still registered; start again to resume).", name)), nil
+	// 🎯T408 via 🎯T414: stopping without killing is an instruction, and the
+	// instruction is the part that used to evaporate. The process ends here;
+	// the park outlives it, the delivery that would restart the agent, and the
+	// daemon restart that would reattach it.
+	actor, _ := args["actor"].(string)
+	if strings.TrimSpace(actor) == "" {
+		actor = s.overseerName()
+	}
+	reason, _ := args["reason"].(string)
+	s.MarkAgentParked(name, actor, strings.TrimSpace(reason))
+	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name, "actor": actor})
+	return mcp.NewToolResultText(fmt.Sprintf(
+		"Agent %q stopped and parked (still registered; nothing revives it — not a delivery, not a restart, not the idle sweep — until the park is lifted with jevons_fleet_intent name=%q state=working).",
+		name, name)), nil
 }
 
 func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -695,23 +751,66 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 }
 
 // isOverseerAgent reports whether name is the owner-chat overseer.
-// Prefer session-id match via transcript ops; fall back to the conventional
-// overseer name used by default config.
+//
+// 🎯T309.3: name resolution is case-insensitive so an agent addressing
+// "Jevons" reaches the overseer arm rather than the registry arm. The session
+// match remains for a config-renamed overseer, whose row the conventional name
+// does not find.
+//
+// 🎯T452 — THIS FUNCTION CHOOSES A DESTINATION, so a wrong answer here does not
+// misidentify an agent, it misdelivers to one. On 2026-08-15 a post-restart
+// brief composed for jv-t443-red-as-proof arrived in the overseer's composer,
+// in a window full of session rotation; a subordinate row still carrying the
+// session id the overseer process now reports is enough to produce exactly
+// that, because the match below used to be the whole test. A session id is a
+// claim about a pane, and the seat guard is what stops it outranking every
+// other thing the registry knows about the row.
 func (s *Server) isOverseerAgent(name string) bool {
 	if name == "" {
 		return false
+	}
+	if strings.EqualFold(name, s.overseerName()) {
+		return true
 	}
 	if s.transcript != nil && s.transcript.GetID != nil && s.registry != nil {
 		sid := s.transcript.GetID()
 		if sid != "" {
 			if def := s.registry.Def(name); def != nil && def.SessionID == sid {
-				return true
+				if isOverseerSeatRow(*def) {
+					return true
+				}
+				// Loud, because the alternative is silent misdelivery and
+				// because this is evidence of a registry the daemon can no
+				// longer trust for routing: two rows claim one session.
+				slog.Error("🎯T452 refused a session-id claim on the overseer seat",
+					"component", "agent_send",
+					"name", name,
+					"parent", def.Parent,
+					"purpose", def.Purpose,
+					"session_id", sid,
+					"detail", "this row carries the overseer's session id but is a subordinate — "+
+						"treating it as the overseer would deliver its brief into owner chat",
+				)
 			}
 		}
 	}
-	// 🎯T309.3: name resolution is case-insensitive so an agent addressing
-	// "Jevons" reaches the overseer arm rather than the registry arm.
-	return strings.EqualFold(name, s.overseerName())
+	return false
+}
+
+// isOverseerSeatRow reports whether a registry row could be the overseer at all.
+//
+// Two answers, and neither is the session id: an explicit purpose=overseer, or
+// a root row. Every worker, boss and product owner in this fleet is registered
+// with a parent — the overseer is the one agent with none — so a row naming a
+// parent is answering the question itself, whatever session id it happens to
+// carry. Kept permissive about purpose because the live registry stores
+// purpose=work for rows that are plainly not work (every PO), and a renamed
+// overseer registered the same way must still be reachable.
+func isOverseerSeatRow(d claudia.AgentDef) bool {
+	if strings.EqualFold(strings.TrimSpace(d.Purpose), claudia.PurposeOverseer) {
+		return true
+	}
+	return strings.TrimSpace(d.Parent) == ""
 }
 
 func (s *Server) overseerName() string {
@@ -753,6 +852,12 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 	return func(ev claudia.Event) {
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
+
+		// 🎯T392.4: count this turn's tool calls and act at the ceiling.
+		// Before the lock below, not under it: the fallback interrupts a live
+		// process, and holding the sink's own mutex across a provider call
+		// would stall the stream that reports the interrupt taking effect.
+		s.observeTurnDepth(name, ev)
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -878,9 +983,12 @@ func (s *Server) broadcastAgentEvent(name string, ev claudia.Event) {
 	tracker := s.idleActivity
 	s.mu.Unlock()
 	if tracker != nil {
-		_, _, enteredIdle := tracker.ObserveTransition(name, ev)
+		prevPhase, nextPhase, enteredIdle := tracker.ObserveTransition(name, ev)
 		if enteredIdle {
-			s.emitWorkerIdleToParent(name)
+			// 🎯T414: the transition travels with the call so the emitter can
+			// put the real edge through ShouldEmitWorkerIdle — the gate that
+			// reads intent — rather than asserting the edge it assumes.
+			s.emitWorkerIdleToParent(name, prevPhase, nextPhase)
 		}
 	}
 	if hook != nil {

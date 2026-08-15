@@ -31,9 +31,13 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
+	"github.com/marcelocantos/jevons/internal/sendq"
+	"github.com/marcelocantos/jevons/internal/turndepth"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -77,6 +81,11 @@ type Server struct {
 	// overseer-addressed send reuses the owner chat journal and notify queue.
 	// Nil falls back to notifyJevon for agent-origin text (see deliverToOverseer).
 	overseerDeliver OverseerDeliverFunc
+	// notifyReplay remembers which notification batches the overseer already
+	// holds, so the one channel every source funnels through refuses to
+	// re-deliver byte-identical content (🎯T428). Nil until first use; see
+	// notifyReplays(), which is the only reader of this field.
+	notifyReplay *notifyReplayLedger
 	// resolveSender overrides fleet-agent process resolution on that same
 	// path. Nil — the product path — resolves via the registry. Test seam.
 	resolveSender senderResolver
@@ -125,6 +134,18 @@ type Server struct {
 	// because the two are read together by the sweep.
 	launching map[string]int
 
+	// turnDepth counts how deep each agent's current turn has run, and
+	// turnDepthPolicy is the ceiling it is judged against (🎯T392.4). Both
+	// guarded by mu; the counter is created on first use so a Server built
+	// without SetTurnDepthPolicy still records depth with the defaults.
+	turnDepth       *turndepth.Counter
+	turnDepthPolicy turndepth.Policy
+	// turnDepthInterrupt overrides how the disarmed-by-default fallback cuts
+	// a turn. Test seam: the real path resolves a live process, and a test
+	// that had to start one to watch the fallback fire would be testing the
+	// provider rather than the policy.
+	turnDepthInterrupt func(string) error
+
 	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
 	selfTestEnv SelfTestEnvFunc
 
@@ -135,8 +156,11 @@ type Server struct {
 	doitEng *doit.Engine
 
 	// agentSendQ is a per-agent FIFO of pending sends when the ACP session is
-	// busy (🎯T115). Guarded by mu. Nil until first enqueue.
-	agentSendQ map[string][]string
+	// busy (🎯T115), durable across a daemon restart once SetSendQueueDir has
+	// rooted it on disk (🎯T418) — an in-memory queue moves the loss of an
+	// accepted message rather than removing it. Nil until first use; see
+	// sendQueue(), which is the only reader of this field.
+	agentSendQ *sendq.Store
 
 	// eventLogTail tails durable product logs (🎯T120). Nil = tool unregistered.
 	eventLogTail EventLogTailFunc
@@ -147,10 +171,25 @@ type Server struct {
 	// (🎯T128.1 / T128.4). Same file as GET /api/logs when SetEventJournal is wired.
 	eventJournal *eventlog.Journal
 
+	// removals is the accounted-removal chokepoint (🎯T435), shared with the
+	// HTTP server so a reap decided on that side is legible on the fleet
+	// surfaces read on this one. Guarded by mu; nil until first use.
+	removals *fleetlog.Account
+
 	// migrator moves an existing agent between backends, carrying a
 	// handover to the successor (🎯T285). Nil = jevons_agent_migrate
 	// unregistered rather than half-working.
 	migrator Migrator
+
+	// handoverKeeper is the pending-handover store as the retry sweep reads
+	// it (🎯T418 clause 5). Nil = no handover recovery, which is what a
+	// daemon without migration wired has always had.
+	handoverKeeper HandoverKeeper
+	// handoverAttempts is this daemon's retry ledger for undelivered seeds,
+	// keyed by agent. Deliberately in memory: a new daemon SHOULD try again
+	// from scratch, since the reason the last one gave up died with it.
+	// Guarded by mu.
+	handoverAttempts map[string]*handoverAttempt
 
 	// defaultProvider is the daemon-wide claudia backend for new agents
 	// when agent_start / thread_spawn / jwork omit provider (🎯T148).
@@ -159,7 +198,12 @@ type Server struct {
 
 	// llmPortfolio is the multi-provider task-type routing seed (🎯T325.2).
 	// Nil → cost.DefaultPortfolio(). Soft-cap overlays may come from budget.
+	// 🎯T476: omit-provider mint follows config.yaml, not this table;
+	// the seed remains for capacity soft caps and for naming a loser.
 	llmPortfolio *cost.Portfolio
+	// llmPortfolioFromFile is true when llmPortfolio came from
+	// state_dir/llm-portfolio.json rather than the compiled seed.
+	llmPortfolioFromFile bool
 	// providerSoftCaps overlays portfolio soft caps (from budget.json).
 	providerSoftCaps map[string]int
 
@@ -212,6 +256,12 @@ type Server struct {
 	// deterministic notice does not depend on.
 	recoverBin string
 	stateDir   string
+
+	// intent is the 🎯T414 fleet-intent store: the deliberate answer to
+	// "should this agent be running?", read by every control that spawns,
+	// nudges, revives, repressures, or repairs. Nil resolves to all-working,
+	// which is the pre-T414 behaviour. See fleet_intent.go.
+	intent *fleetintent.Store
 
 	// wakeBatch coalesces machine-generated events into one digest per
 	// recipient (🎯T392.2). Debouncing above is per-worker and stops the
@@ -283,7 +333,7 @@ func (s *Server) SweepFleetHealth(overseerName string) {
 	if overseerName == "" {
 		overseerName = "jevons"
 	}
-	if reps := SweepDeadAgents(s.registry, overseerName); len(reps) > 0 {
+	if reps := SweepDeadAgents(s.registry, overseerName, s.fleetIntent()); len(reps) > 0 {
 		slog.Info("cockpit fleet health", "report", FormatDeadAgentReport(reps))
 	}
 }
@@ -296,12 +346,20 @@ func (s *Server) SetDefaultProvider(provider string) {
 }
 
 // SetLLMPortfolio installs the multi-provider routing seed (🎯T325.2).
-// Nil clears to DefaultPortfolio at route time.
+// Nil clears to DefaultPortfolio at route time. Marks the seed as
+// compiled (not a leftover file).
 func (s *Server) SetLLMPortfolio(p *cost.Portfolio) {
+	s.SetLLMPortfolioSource(p, false)
+}
+
+// SetLLMPortfolioSource installs the routing seed and records whether
+// it came from state_dir/llm-portfolio.json (🎯T476 loser naming).
+func (s *Server) SetLLMPortfolioSource(p *cost.Portfolio, fromFile bool) {
 	if s == nil {
 		return
 	}
 	s.llmPortfolio = p
+	s.llmPortfolioFromFile = fromFile && p != nil
 }
 
 // SetProviderSoftCaps overlays session soft caps from budget.json
@@ -347,6 +405,28 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 	// defaultProvider is the config-resolved value from main; pass as cfg
 	// so env is only consulted when main left it empty.
 	return cli.ResolveProvider("", s.defaultProvider)
+}
+
+// mintProviderPick is the 🎯T476 decision for stitchAgentStart: config.yaml
+// wins on omit-provider mint; leftover file / compiled seed are losers.
+func (s *Server) mintProviderPick(providerArg, stored string, existed bool, taskTypeArg, purpose string) cost.MintProviderPick {
+	tt := strings.TrimSpace(taskTypeArg)
+	if tt == "" {
+		tt = cost.TaskTypeFromPurpose(purpose)
+	}
+	dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
+	fromFile := false
+	if s != nil {
+		fromFile = s.llmPortfolioFromFile
+	}
+	return cost.PickMintProvider(cost.MintProviderArgs{
+		ProviderArg:       providerArg,
+		Existed:           existed,
+		StoredProvider:    stored,
+		ConfigProvider:    string(s.resolvedDefaultProvider()),
+		Portfolio:         dec,
+		PortfolioFromFile: fromFile,
+	})
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable

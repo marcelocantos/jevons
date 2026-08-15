@@ -295,11 +295,15 @@ before hard policy.
 
 **Product seed (🎯T325.2):** pure table + routing live in
 `internal/cost/portfolio.go` (`DefaultPortfolio`, `Route`, session
-`soft_caps`). Mint path: `jevons_agent_start` with empty `provider` uses
-`task_type` (or purpose-derived class) + registry load counts — prefers
-fit, then under-utilised capacity; never mid-flight reassign. Optional
-`budget.json` `provider_soft_caps` overlays caps. Residual: live vendor
-quotas / billing APIs; owner-ratified prices; full marketplace OS.
+`soft_caps`). Soft-cap overlays still come from optional `budget.json`
+`provider_soft_caps`. **Mint path (🎯T476):** `jevons_agent_start` with
+empty `provider` follows `config.yaml` / the daemon default, not this
+table and not a leftover `~/.jevons/llm-portfolio.json`. The start
+result cites which knob won (`config` vs `explicit` vs leftover file).
+The compiled seed still prefers Claude for `code_implement` /
+`design_prose`; that preference is a named loser, not the mint selector.
+Never mid-flight reassign. Residual: live vendor quotas / billing APIs;
+owner-ratified prices; full marketplace OS.
 
 ---
 
