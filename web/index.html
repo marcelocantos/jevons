@@ -5050,7 +5050,12 @@ function expandInViewNearEnd() {
           clientHeight: clientH,
         })
       : (top + h > scrollTop && top < scrollTop + clientH);
-    if (!should) continue;
+    if (!should) {
+      // 🎯T119.2: bottom→top walk; fully above means the rest are further
+      // above — stop measuring. Rows still below the fold are skipped.
+      if (top + h <= scrollTop) break;
+      continue;
+    }
     if (el.classList.contains('virt-shell')) rematerializeMsg(el);
     el._autoExpanded = true;
     el._expanded = true;
@@ -6518,6 +6523,74 @@ function flushRematerializeFrame() {
   updateJumpFab();
 }
 
+// 🎯T119.2: layout-free height for off-window rows — last cache, frozen
+// minHeight, or the same text estimate lazy shells already carry. Window
+// finding uses a binary search on offsetTop; these values never force a
+// rect read on the prefix.
+function virtualizeRowHeight(el) {
+  if (!el) return 72;
+  if (el._virtSize && el._virtSize.height > 0) return el._virtSize.height;
+  const mh = parseFloat(el.style.minHeight);
+  if (mh > 0) return mh;
+  if (el.classList && el.classList.contains('msg') &&
+      typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText) {
+    return VirtualList.estimateHeightFromText(el._layoutText || '');
+  }
+  return (typeof VirtualList !== 'undefined' && VirtualList.DEFAULT_ESTIMATE_HEIGHT)
+    ? VirtualList.DEFAULT_ESTIMATE_HEIGHT
+    : 72;
+}
+
+function virtualizeMeasureRange(children, scrollTop, clientH, buffer) {
+  const n = children.length;
+  if (!n) return { first: -1, last: -1, count: 0, probes: 0 };
+  const win = (typeof VirtualList !== 'undefined' && VirtualList.measureWindowBounds)
+    ? VirtualList.measureWindowBounds(scrollTop, clientH, buffer)
+    : { top: scrollTop - buffer, bot: scrollTop + clientH + buffer };
+  // Real offsetTop, not the estimated prefix. Lazy-shell estimates are
+  // often hundreds of px off the painted height (T363); summing them
+  // places the window at the wrong end of the list and page-up never
+  // rematerializes the band above the fold. Binary search is O(log N)
+  // offsetTop reads; the O(N) cost we refuse is a rect per row.
+  const raw = (typeof VirtualList !== 'undefined' && VirtualList.findIntersectingIndexRange)
+    ? VirtualList.findIntersectingIndexRange(n, function (i) { return children[i].offsetTop; }, win.top, win.bot)
+    : { first: 0, last: n - 1, count: n, probes: 0 };
+  return (typeof VirtualList !== 'undefined' && VirtualList.widenMeasureRange)
+    ? VirtualList.widenMeasureRange(raw, n, VirtualList.MEASURE_INDEX_SLACK)
+    : raw;
+}
+
+// Off-window material rows: class-only scan, cached/estimate height,
+// sentinel tops. No offsetTop / rect — the planner demats them without
+// a layout read. Shells stay on estimate (T119 data still in memory).
+function pushOffWindowDematItems(items, liveShells, children, first, last) {
+  const n = children.length;
+  const estH = (typeof VirtualList !== 'undefined' && VirtualList.DEFAULT_ESTIMATE_HEIGHT)
+    ? VirtualList.DEFAULT_ESTIMATE_HEIGHT : 72;
+  const above = (typeof VirtualList !== 'undefined' && VirtualList.offWindowSentinelTop)
+    ? VirtualList.offWindowSentinelTop(false) : -1e9;
+  const below = (typeof VirtualList !== 'undefined' && VirtualList.offWindowSentinelTop)
+    ? VirtualList.offWindowSentinelTop(true) : 1e9;
+  for (let i = 0; i < n; i++) {
+    if (i >= first && i <= last) continue;
+    const el = children[i];
+    if (!el.classList || !el.classList.contains('msg')) continue;
+    if (typeof el._streamRaw === 'string') {
+      if (el.classList.contains('virt-shell')) liveShells.push(el);
+      continue;
+    }
+    if (el.classList.contains('virt-shell')) continue;
+    items.push({
+      el: el,
+      index: i,
+      top: i < first ? above : below,
+      height: virtualizeRowHeight(el) || estH,
+      shell: false,
+      dematOk: !!el._body && !(el._expanded && el._autoExpanded),
+    });
+  }
+}
+
 let _virtualizing = false;
 function virtualizeMessages() {
   if (typeof VirtualList === 'undefined') return;
@@ -6555,16 +6628,28 @@ function virtualizeMessages() {
     const buffer = VirtualList.DEFAULT_BUFFER || 800;
     const max = VirtualList.REMATERIALIZE_PER_FRAME || 6;
     const children = msgs.children;
-    // 🎯T349: phase-separated pass — read ALL geometry first (zero writes),
+    // 🎯T349: phase-separated pass — read window geometry first (zero writes),
     // then apply capped writes. The old loop interleaved dematerialize
     // writes with the next row's offsetTop read: every write invalidated
     // layout, so each read reflowed the whole container — O(rows²) on a
     // mass-demat pass, the tens-of-seconds composer freeze / slow-script.
     // 🎯T336 still holds: viewport-first remat, progressive fill via rAF,
     // no loadEarlier here.
+    // 🎯T119.2: measure only viewport + band. Far rows stay on estimate
+    // or last cache — a pass over N history never reads O(N) layout.
     const liveShells = [];
     const items = [];
-    for (let i = 0; i < children.length; i++) {
+    const range = virtualizeMeasureRange(children, scrollTop, clientH, buffer);
+    const first = range.first < 0 ? 0 : range.first;
+    const last = range.last < 0 ? -1 : range.last;
+    if (typeof window.__measureBackfill === 'object' && window.__measureBackfill) {
+      window.__measureBackfill.count = range.count;
+      window.__measureBackfill.probes = range.probes;
+      window.__measureBackfill.oldestIndex = range.first;
+      window.__measureBackfill.newestIndex = range.last;
+      window.__measureBackfill.n = children.length;
+    }
+    for (let i = first; i <= last; i++) {
       const el = children[i];
       if (!el.classList || !el.classList.contains('msg')) continue;
       // Never virtualise the live streaming bubble or working indicator host.
@@ -6589,6 +6674,7 @@ function virtualizeMessages() {
         dematOk: !!el._body && !(el._expanded && el._autoExpanded),
       });
     }
+    pushOffWindowDematItems(items, liveShells, children, first, last);
     // Write phase from here on — no layout reads below this line.
     for (let i = 0; i < liveShells.length; i++) rematerializeMsg(liveShells[i]);
     const plan = VirtualList.planVirtualizePass

@@ -792,6 +792,140 @@
     };
   }
 
+  // ── Windowed height backfill (🎯T119.2) ─────────────────────────────
+  // History may grow without limit; computing the view must not. A pass
+  // over N shells measures only the viewport + anticipation band. Rows
+  // outside stay on last cache or estimate. Paging up slides the window
+  // back and backfill resumes; jump-to-bottom does not re-measure the
+  // prefix. T119 data-in-memory is unchanged.
+
+  // Extra rows each side of the estimated window — estimates can drift
+  // a row or two from real offsetTop.
+  const MEASURE_INDEX_SLACK = 2;
+
+  function measureWindowBounds(scrollTop, clientHeight, buffer) {
+    const buf = typeof buffer === 'number' ? buffer : DEFAULT_BUFFER;
+    const st = Number(scrollTop) || 0;
+    const ch = Number(clientHeight) || 0;
+    const b = Number.isFinite(buf) ? buf : DEFAULT_BUFFER;
+    return { top: st - b, bot: st + ch + b, buffer: b };
+  }
+
+  /**
+   * Inclusive [first, last] of items whose top intersects [winTop, winBot].
+   * getTop(i) is caller-provided (estimated prefix or DOM offsetTop).
+   * Binary search + linear walk of the window — O(log N + window) probes.
+   * The row immediately before the first top ≥ winTop is included (it may
+   * still overlap the window).
+   */
+  function findIntersectingIndexRange(n, getTop, winTop, winBot) {
+    const count = Math.max(0, n | 0);
+    if (!count || typeof getTop !== 'function') {
+      return { first: -1, last: -1, count: 0, probes: 0 };
+    }
+    const wt = Number(winTop);
+    const wb = Number(winBot);
+    const viewTop = Number.isFinite(wt) ? wt : 0;
+    const viewBot = Number.isFinite(wb) ? wb : 0;
+    let probes = 0;
+    let lo = 0, hi = count - 1, firstAtOrPast = count;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      probes++;
+      const top = Number(getTop(mid)) || 0;
+      if (top >= viewTop) {
+        firstAtOrPast = mid;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    let first = firstAtOrPast > 0 ? firstAtOrPast - 1 : firstAtOrPast;
+    if (first >= count) return { first: -1, last: -1, count: 0, probes: probes };
+    if (first < 0) first = 0;
+    let last = first;
+    let sawInside = false;
+    for (let i = first; i < count; i++) {
+      probes++;
+      const top = Number(getTop(i)) || 0;
+      if (top > viewBot) break;
+      last = i;
+      sawInside = true;
+    }
+    if (!sawInside) return { first: -1, last: -1, count: 0, probes: probes };
+    return { first: first, last: last, count: last - first + 1, probes: probes };
+  }
+
+  function widenMeasureRange(range, n, slack) {
+    const count = Math.max(0, n | 0);
+    const s = slack == null ? MEASURE_INDEX_SLACK : Math.max(0, slack | 0);
+    if (!range || range.first < 0 || range.last < 0 || !count) {
+      return { first: -1, last: -1, count: 0, probes: range ? range.probes : 0 };
+    }
+    const first = Math.max(0, range.first - s);
+    const last = Math.min(count - 1, range.last + s);
+    return {
+      first: first,
+      last: last,
+      count: last - first + 1,
+      probes: range.probes || 0,
+    };
+  }
+
+  /**
+   * Sentinel top for an off-window row so planVirtualizePass demats it
+   * without a layout read. below:true → far past the live end.
+   */
+  function offWindowSentinelTop(below) {
+    return below ? 1e9 : -1e9;
+  }
+
+  /**
+   * Oracle: thousands of shells, view at the live end, then a page-up,
+   * then jump-to-bottom. Measure count stays O(viewport + band); the
+   * oldest measured index recedes on page-up and the prefix is not
+   * re-measured after the jump.
+   */
+  function measureBackfillTrace(opts) {
+    const o = opts || {};
+    const n = o.n > 0 ? o.n | 0 : 3000;
+    const h = o.avgHeight > 0 ? Number(o.avgHeight) : DEFAULT_ESTIMATE_HEIGHT;
+    const ch = o.clientHeight > 0 ? Number(o.clientHeight) : 600;
+    const buf = typeof o.buffer === 'number' ? o.buffer : DEFAULT_BUFFER;
+    const pageFactor = o.pageFactor > 0 ? Number(o.pageFactor) : 0.8;
+    const tops = new Array(n);
+    for (let i = 0; i < n; i++) tops[i] = i * h;
+    const getTop = function (i) { return tops[i]; };
+    const windowPx = ch + 2 * buf;
+    const maxCount = Math.ceil(windowPx / h) + 2;
+    const logBound = Math.ceil(Math.log(n + 1) / Math.log(2)) + 4;
+    function at(scrollTop) {
+      const w = measureWindowBounds(scrollTop, ch, buf);
+      const r = findIntersectingIndexRange(n, getTop, w.top, w.bot);
+      return {
+        scrollTop: scrollTop,
+        first: r.first,
+        last: r.last,
+        count: r.count,
+        probes: r.probes,
+        maxCount: maxCount,
+        bounded: r.count <= maxCount && r.probes <= maxCount + logBound,
+      };
+    }
+    const endST = Math.max(0, n * h - ch);
+    const atEnd = at(endST);
+    const afterPageUp = at(Math.max(0, endST - ch * pageFactor));
+    const afterJumpToBottom = at(endST);
+    return {
+      n: n,
+      atEnd: atEnd,
+      afterPageUp: afterPageUp,
+      afterJumpToBottom: afterJumpToBottom,
+      receded: afterPageUp.first >= 0 && atEnd.first >= 0 && afterPageUp.first < atEnd.first,
+      jumpDoesNotRemeasurePrefix: afterJumpToBottom.first === atEnd.first && atEnd.first > 0,
+    };
+  }
+
   // ── Main-thread liveness: phased, budgeted virtualize (🎯T349) ──────
   // Owner regression: composer froze for tens of seconds (blind-typed blobs,
   // Firefox slow-script dialog) on a long transcript. Root cause: the
@@ -1211,6 +1345,14 @@
     shouldPaintOnReplayAppend: shouldPaintOnReplayAppend,
     shouldVirtualizeDuringReplay: shouldVirtualizeDuringReplay,
     replayHydrateTrace: replayHydrateTrace,
+
+    // 🎯T119.2: height backfill is windowed around the viewport.
+    MEASURE_INDEX_SLACK: MEASURE_INDEX_SLACK,
+    measureWindowBounds: measureWindowBounds,
+    findIntersectingIndexRange: findIntersectingIndexRange,
+    widenMeasureRange: widenMeasureRange,
+    offWindowSentinelTop: offWindowSentinelTop,
+    measureBackfillTrace: measureBackfillTrace,
 
     // 🎯T349: phased, budgeted virtualize — composer stays responsive.
     DEMATERIALIZE_PER_FRAME: DEMATERIALIZE_PER_FRAME,

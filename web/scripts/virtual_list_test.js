@@ -1066,7 +1066,7 @@ test('index.html wires T349 phased virtualize + budgets + fleet frame paint', fu
   const fs = require('fs');
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,4000}planVirtualizePass/.test(html),
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,5500}planVirtualizePass/.test(html),
     'virtualize uses the phased planner');
   assert.ok(/planVirtualizePass[\s\S]{0,2500}dematerializeMsg\(item\.el, item\.height\)/.test(html),
     'demat write phase reuses pre-read height (no layout read)');
@@ -1300,6 +1300,122 @@ test('index.html wires T363 anchor preservation on every height-writing pass', f
   // Tracking pins to the live end — a second scrollTop writer would fight it.
   assert.ok(/function withAnchorPreservedScroll\(fn\)[\s\S]{0,400}isTracking\(\)/.test(html),
     'track mode is exempt from anchoring');
+});
+
+// ── 🎯T119.2: height backfill is windowed around the viewport ────────
+
+test('T119.2 measureWindowBounds is viewport plus band', function () {
+  const w = VL.measureWindowBounds(2000, 600, 800);
+  assert.strictEqual(w.top, 1200);
+  assert.strictEqual(w.bot, 3400);
+  assert.strictEqual(w.buffer, 800);
+  const def = VL.measureWindowBounds(0, 500);
+  assert.strictEqual(def.top, -VL.DEFAULT_BUFFER);
+  assert.strictEqual(def.bot, 500 + VL.DEFAULT_BUFFER);
+});
+
+test('T119.2 findIntersectingIndexRange is O(log N + window), not O(N)', function () {
+  const n = 4000;
+  const h = 72;
+  const tops = [];
+  for (let i = 0; i < n; i++) tops.push(i * h);
+  const getTop = function (i) { return tops[i]; };
+  const w = VL.measureWindowBounds(n * h - 600, 600, 800);
+  const r = VL.findIntersectingIndexRange(n, getTop, w.top, w.bot);
+  assert.ok(r.count > 0, 'window is non-empty at the live end');
+  assert.ok(r.count < 80, 'measure window << N, got ' + r.count);
+  assert.ok(r.first > n - 80, 'window sits at the live end, first=' + r.first);
+  assert.strictEqual(r.last, n - 1);
+  assert.ok(r.probes < 80, 'probes stay with the window + log N, got ' + r.probes);
+  assert.ok(r.probes < n / 10, 'probes are not a full scan');
+});
+
+test('T119.2 findIntersectingIndexRange empty / degenerate', function () {
+  const empty = VL.findIntersectingIndexRange(0, function () { return 0; }, 0, 100);
+  assert.strictEqual(empty.first, -1);
+  assert.strictEqual(empty.count, 0);
+  const noFn = VL.findIntersectingIndexRange(10, null, 0, 100);
+  assert.strictEqual(noFn.count, 0);
+});
+
+test('T119.2 widenMeasureRange adds slack without escaping the list', function () {
+  const raw = { first: 10, last: 20, count: 11, probes: 8 };
+  const w = VL.widenMeasureRange(raw, 25, 2);
+  assert.strictEqual(w.first, 8);
+  assert.strictEqual(w.last, 22);
+  assert.strictEqual(w.count, 15);
+  const edge = VL.widenMeasureRange({ first: 0, last: 2, count: 3, probes: 3 }, 5, 4);
+  assert.strictEqual(edge.first, 0);
+  assert.strictEqual(edge.last, 4);
+});
+
+test('T119.2 offWindowSentinelTop is outside any real viewport', function () {
+  assert.ok(VL.offWindowSentinelTop(false) < -1e6);
+  assert.ok(VL.offWindowSentinelTop(true) > 1e6);
+  assert.strictEqual(VL.shouldMaterialize(VL.offWindowSentinelTop(false), 72, 2000, 600, 800), false);
+  assert.strictEqual(VL.shouldMaterialize(VL.offWindowSentinelTop(true), 72, 2000, 600, 800), false);
+});
+
+test('T119.2 measureBackfillTrace: long list at live end is window-bounded', function () {
+  const t = VL.measureBackfillTrace({ n: 3000, avgHeight: 72, clientHeight: 600, buffer: 800 });
+  assert.strictEqual(t.n, 3000);
+  assert.ok(t.atEnd.bounded, 'end-of-list measure stays inside the window');
+  assert.ok(t.atEnd.count <= t.atEnd.maxCount,
+    'measure count ' + t.atEnd.count + ' > window max ' + t.atEnd.maxCount);
+  assert.ok(t.atEnd.first > 2900, 'view at live end does not measure the prefix');
+  assert.ok(t.atEnd.count < 80);
+});
+
+test('T119.2 measureBackfillTrace: page-up recedes and backfill resumes', function () {
+  const t = VL.measureBackfillTrace({ n: 3000, avgHeight: 72, clientHeight: 600, buffer: 800 });
+  assert.ok(t.receded, 'page-up oldest measured index recedes (end=' +
+    t.atEnd.first + ' page=' + t.afterPageUp.first + ')');
+  assert.ok(t.afterPageUp.bounded, 'page-up measure is still window-bounded');
+  assert.ok(t.afterPageUp.count > 0, 'backfill runs again after page-up');
+  assert.ok(t.afterPageUp.first < t.atEnd.first);
+});
+
+test('T119.2 measureBackfillTrace: jump-to-bottom does not re-measure prefix', function () {
+  const t = VL.measureBackfillTrace({ n: 3000, avgHeight: 72, clientHeight: 600, buffer: 800 });
+  assert.ok(t.jumpDoesNotRemeasurePrefix,
+    'jump-to-bottom first=' + t.afterJumpToBottom.first + ' end first=' + t.atEnd.first);
+  assert.strictEqual(t.afterJumpToBottom.first, t.atEnd.first);
+  assert.strictEqual(t.afterJumpToBottom.count, t.atEnd.count);
+  assert.ok(t.afterJumpToBottom.first > 0);
+});
+
+test('index.html wires T119.2 windowed measure; no O(N) offsetTop scan', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('function virtualizeMeasureRange') >= 0,
+    'virtualizeMeasureRange helper present');
+  assert.ok(html.indexOf('function virtualizeRowHeight') >= 0,
+    'layout-free row height helper present');
+  assert.ok(html.indexOf('function pushOffWindowDematItems') >= 0,
+    'off-window demat uses cache/estimate, not layout');
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,5000}virtualizeMeasureRange/.test(html),
+    'virtualizeMessages uses the measure window');
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,5500}pushOffWindowDematItems/.test(html),
+    'off-window rows are class-scanned, not measured');
+  assert.ok(html.indexOf('__measureBackfill') >= 0,
+    'measure-count probe exposed for hermetic/UI oracles');
+  // The old O(N) read: for (let i = 0; i < children.length; i++) + offsetTop
+  // inside virtualizeMessages. Windowed loop is `i = first; i <= last`.
+  const virtStart = html.indexOf('function virtualizeMessages()');
+  assert.ok(virtStart >= 0);
+  const virtEnd = html.indexOf('\nfunction dematerializeMsg', virtStart);
+  const virtBody = html.slice(virtStart, virtEnd > virtStart ? virtEnd : virtStart + 8000);
+  assert.ok(/for \(let i = first; i <= last; i\+\+\)/.test(virtBody),
+    'measure loop walks only the window');
+  assert.ok(!/for \(let i = 0; i < children\.length; i\+\+\)[\s\S]{0,400}offsetTop/.test(virtBody),
+    'virtualizeMessages must not offsetTop-scan every child');
+  // Near-end expand stops measuring once fully above the fold.
+  const eiv = html.indexOf('function expandInViewNearEnd');
+  const eivEnd = html.indexOf('\nfunction refreshLatestExpansion', eiv);
+  const eivBody = html.slice(eiv, eivEnd > eiv ? eivEnd : eiv + 3000);
+  assert.ok(/top \+ h <= scrollTop\) break/.test(eivBody),
+    'expandInViewNearEnd breaks once fully above the viewport');
 });
 
 console.log(process.exitCode ? 'FAIL' : 'PASS virtual_list_test');
