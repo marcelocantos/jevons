@@ -5,6 +5,13 @@ package upgrade
 
 import "github.com/marcelocantos/claudia"
 
+func processReattachable(h Handle) bool {
+	if h.ConnectURL != "" && h.PID > 0 {
+		return true
+	}
+	return h.TmuxWindowID != ""
+}
+
 // FromRegistry builds upgrade handles from a live claudia registry.
 // Alive reflects a live control session in *this* coordinator. PID and
 // ConnectURL come from Grok connect-mode (claudia serve); zero/empty
@@ -35,6 +42,9 @@ func FromRegistry(reg *claudia.Registry) []Handle {
 			if p := proc.PID(); p > 0 {
 				h.PID = p
 			}
+			if w := proc.WindowID(); w != "" {
+				h.TmuxWindowID = w
+			}
 		}
 		out = append(out, h)
 	}
@@ -61,7 +71,7 @@ func PlanReattach(snap *Snapshot) ReattachPlan {
 	}
 	possible := false
 	for _, a := range snap.Agents {
-		if a.ConnectURL != "" && a.PID > 0 {
+		if processReattachable(a) {
 			possible = true
 			break
 		}

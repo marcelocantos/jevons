@@ -75,6 +75,10 @@ type Handle struct {
 	Alive      bool   `json:"alive"`
 	PID        int    `json:"pid,omitempty"`
 	ConnectURL string `json:"connect_url,omitempty"`
+	// TmuxWindowID is the Claude session window left running on upgrade
+	// exit (e.g. "@3"). Empty when the agent was never tmux-backed or
+	// had already exited.
+	TmuxWindowID string `json:"tmux_window_id,omitempty"`
 }
 
 // Snapshot is the on-disk upgrade handoff for the next coordinator.
@@ -91,7 +95,7 @@ type Snapshot struct {
 
 // ResidualConnectMode is the standing gap when no connect-mode endpoints
 // were externalized (stdio-only Grok or agents never launched durable).
-const ResidualConnectMode = "no connect-mode endpoints in handoff: Grok agents need CLAUDIA_GROK_CONNECT / Config.GrokConnect (detached grok agent serve + WebSocket) so the process survives coordinator exit; conversation reattach by session_id still works"
+const ResidualConnectMode = "no process-reattach handles in handoff: Claude needs a live tmux window id, Grok needs CLAUDIA_GROK_CONNECT (detached serve + WebSocket); conversation reattach by session_id still works"
 
 // SnapshotPath returns StateDir/upgrade-handles.json.
 func SnapshotPath(stateDir string) string {
@@ -103,7 +107,7 @@ func SnapshotPath(stateDir string) string {
 func BuildSnapshot(agents []Handle, coordinatorPID int) Snapshot {
 	residual := ResidualConnectMode
 	for _, a := range agents {
-		if a.ConnectURL != "" && a.PID > 0 {
+		if processReattachable(a) {
 			residual = ""
 			break
 		}
@@ -136,6 +140,18 @@ func SaveSnapshot(path string, snap Snapshot) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("upgrade snapshot rename: %w", err)
+	}
+	return nil
+}
+
+// ConsumeSnapshot removes a handoff after the successor has acted on
+// it, so a later drain boot is not mistaken for an upgrade.
+func ConsumeSnapshot(path string) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("upgrade snapshot remove: %w", err)
 	}
 	return nil
 }

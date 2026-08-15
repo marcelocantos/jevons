@@ -101,6 +101,37 @@ func TestPlanReattachResidual(t *testing.T) {
 	}
 }
 
+func TestPlanReattachTmuxWindow(t *testing.T) {
+	plan := PlanReattach(&Snapshot{
+		Agents: []Handle{{
+			Name: "worker", SessionID: "s1", TmuxWindowID: "@4",
+		}},
+	})
+	if !plan.ProcessReattachPossible {
+		t.Fatal("tmux window id should make process reattach possible")
+	}
+	if plan.Residual != "" {
+		t.Fatalf("residual = %q", plan.Residual)
+	}
+}
+
+func TestConsumeSnapshot(t *testing.T) {
+	path := SnapshotPath(t.TempDir())
+	if err := SaveSnapshot(path, BuildSnapshot([]Handle{{Name: "a", SessionID: "s"}}, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := ConsumeSnapshot(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadSnapshot(path)
+	if err != nil || got != nil {
+		t.Fatalf("after consume: (%v, %v)", got, err)
+	}
+	if err := ConsumeSnapshot(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPlanReattachConnectMode(t *testing.T) {
 	plan := PlanReattach(&Snapshot{
 		Agents: []Handle{{

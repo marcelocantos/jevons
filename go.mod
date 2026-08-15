@@ -55,3 +55,6 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+// Local T34/T40 Claude adopt until this claudia is published.
+replace github.com/marcelocantos/claudia => ../claudia
