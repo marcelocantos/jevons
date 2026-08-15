@@ -22,16 +22,15 @@ func TestSeedMessageNamesTranscriptAndDoesNotAssignAWalk(t *testing.T) {
 	if seed == "" {
 		t.Fatal("no seed produced for a known transcript")
 	}
-	if !strings.Contains(seed, path) {
-		t.Errorf("seed does not name the transcript path:\n%s", seed)
+	if strings.Contains(seed, path) {
+		t.Errorf("work-session seed must not point at the predecessor file:\n%s", seed)
 	}
 	low := strings.ToLower(seed)
 	for _, want := range []string{
 		"grok", "claude",
-		"no memory of the previous session",
+		"provider switch",
 		"cannot be resumed",
-		"do not redo",
-		"lookup only",
+		"do not read the predecessor",
 	} {
 		if !strings.Contains(low, want) {
 			t.Errorf("seed missing %q:\n%s", want, seed)
@@ -157,6 +156,49 @@ func TestStoreMarkDeliveredPreventsDoubleSeeding(t *testing.T) {
 	}
 	if got.TranscriptPath != "/t.jsonl" {
 		t.Fatalf("MarkDelivered altered the pointer: %q", got.TranscriptPath)
+	}
+}
+
+// TestStoreListReturnsOldestFirstAndSurfacesCorruptAlongside: HEAD
+// fleet.PendingHandovers calls Store.List. A missing method does not
+// compile; an implementation that drops good records on the first bad
+// file hides every pending handover behind one corrupt file.
+func TestStoreListReturnsOldestFirstAndSurfacesCorruptAlongside(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "handover")
+	s := handover.NewStore(dir)
+	if err := s.Put(handover.Pending{
+		Agent: "young", TranscriptPath: "/y.jsonl",
+		CreatedAt: "2026-08-15T12:00:00Z",
+	}); err != nil {
+		t.Fatalf("Put young: %v", err)
+	}
+	if err := s.Put(handover.Pending{
+		Agent: "old", TranscriptPath: "/o.jsonl",
+		CreatedAt: "2026-08-15T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("Put old: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "rotten.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.List()
+	if err == nil {
+		t.Fatal("List hid the corrupt record")
+	}
+	if !strings.Contains(err.Error(), "rotten") {
+		t.Fatalf("error did not name the bad record: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("List dropped good records: %+v", got)
+	}
+	if got[0].Agent != "old" || got[1].Agent != "young" {
+		t.Fatalf("not oldest-first: %q then %q", got[0].Agent, got[1].Agent)
+	}
+
+	empty, err := handover.NewStore(filepath.Join(t.TempDir(), "missing")).List()
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty store: got %d err=%v", len(empty), err)
 	}
 }
 

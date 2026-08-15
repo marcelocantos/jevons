@@ -5,9 +5,11 @@ package handover
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -100,6 +102,67 @@ func (s *Store) MarkDelivered(agent string) error {
 	}
 	p.Delivered = true
 	return s.Put(p)
+}
+
+// List returns every record in the store, oldest first, so the fleet's
+// undelivered seeds are one read rather than a walk each caller invents
+// (🎯T418 clause 5). Records with no readable created_at sort last: an
+// unknown age is not a young one.
+//
+// A record that cannot be read or parsed is reported ALONGSIDE the ones
+// that could — the error names it and the good records still come back.
+// Returning nothing on the first bad file would let one corrupt record
+// hide every pending handover behind it, which is the failure this store
+// exists to prevent, one level up.
+func (s *Store) List() ([]Pending, error) {
+	ents, err := os.ReadDir(s.dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("handover: list %s: %w", s.dir, err)
+	}
+	var (
+		out  []Pending
+		bad  []string
+		errs []error
+	)
+	for _, ent := range ents {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".json") {
+			continue // .tmp from an interrupted write
+		}
+		agent := strings.TrimSuffix(ent.Name(), ".json")
+		p, ok, err := s.Get(agent)
+		if err != nil {
+			bad = append(bad, agent)
+			errs = append(errs, err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(p.Agent) == "" {
+			p.Agent = agent
+		}
+		out = append(out, p)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, aok := out[i].Created()
+		b, bok := out[j].Created()
+		switch {
+		case aok && bok:
+			return a.Before(b)
+		case aok != bok:
+			return aok // a known age sorts ahead of an unknown one
+		default:
+			return out[i].Agent < out[j].Agent
+		}
+	})
+	if len(errs) > 0 {
+		return out, fmt.Errorf("handover: %d unreadable record(s) (%s): %w",
+			len(bad), strings.Join(bad, ", "), errors.Join(errs...))
+	}
+	return out, nil
 }
 
 // Clear removes a record once it is no longer needed. A missing file is
