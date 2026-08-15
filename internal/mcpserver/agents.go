@@ -132,7 +132,9 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		proc := s.registry.Get(d.Name)
 		alive := proc != nil && proc.Alive()
 		// 🎯T305: zero-turn live seats are never_briefed, not running.
-		status := ClassifyAgentListStatus(alive, s.agentHasTurnBegan(d.Name), d.Materialized)
+		// 🎯T444: and the seat's own session records break the tie, because
+		// both of the other inputs go stale across a backend re-mint.
+		status := s.agentPhase(d, alive)
 		parent := d.Parent
 		if parent == "" {
 			parent = "-"
