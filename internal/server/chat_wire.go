@@ -94,9 +94,12 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 			}
 			// 🎯T237: rewrite bare provider failure prose (e.g. "Internal error")
 			// so owner-visible copy carries class; structured slog for T236.
+			// 🎯T455: only when the frame that carried it was the backend's own
+			// answer — authored prose is never classified, so a sentence with
+			// the word "failed" in it stays the sentence the agent wrote.
 			displayText := ev.Text
 			var failClass agenterr.Class
-			if class := agenterr.ClassifyText(ev.Text); class.IsFailure() {
+			if class := agenterr.ClassifyFrom(assistantTextSource(ev), ev.Text); class.IsFailure() {
 				failClass = class
 				displayText = agenterr.OwnerCopy(class, ev.Text)
 				slog.Warn("provider_failure",
@@ -202,6 +205,67 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		}
 		return "", false
 	}
+}
+
+// assistantTextSource reports which side of the wire an assistant event's text
+// came from, so the classifier can refuse to read authored prose (🎯T455).
+//
+// Both arrive as Type "assistant" with the words on Event.Text, which is why
+// classifying the text was ever plausible. The frames are not alike at all:
+//
+//   - A streamed word chunk is an ACP session/update — claudia's
+//     handleSessionUpdate puts the update params on Raw. The agent composed
+//     every character.
+//   - A provider failure that kills the turn is the JSON-RPC error object the
+//     backend returned to session/prompt — publishPromptResult marshals that
+//     error onto Raw ({"code":…,"message":…}) and copies its message to Text.
+//     No agent composed it; it is the answer the call got.
+//
+// Claude's transcript flags its own API failures instead (is_api_error_message
+// / a top-level error string), which claudia surfaces as Event.IsError — an
+// equally transport-level fact, and the reason this is not a Grok-only test.
+//
+// Anything else is authored. Fail-closed is deliberate and is the direction
+// that matters: an unrecognised frame paints its text verbatim, which costs a
+// missing banner. Guessing the other way costs a manufactured outage record in
+// the signal 🎯T406/🎯T407 read to decide whether the fleet may work at all.
+func assistantTextSource(ev claudia.Event) agenterr.Source {
+	if ev.IsError {
+		return agenterr.SourceTransport
+	}
+	if isRPCErrorFrame(ev.Raw) {
+		return agenterr.SourceTransport
+	}
+	return agenterr.SourceAuthored
+}
+
+// isRPCErrorFrame reports whether raw is a bare JSON-RPC/ACP error object —
+// a numeric code beside a message string, with none of the envelope a session
+// update or a Claude-shaped transcript line carries. An agent cannot author
+// this frame: it is written by the peer that refused the call.
+func isRPCErrorFrame(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var probe struct {
+		Code          *json.Number    `json:"code"`
+		Message       *string         `json:"message"`
+		Type          string          `json:"type"`
+		SessionUpdate string          `json:"sessionUpdate"`
+		Update        json.RawMessage `json:"update"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	if probe.Code == nil || probe.Message == nil {
+		return false
+	}
+	// A session update or an already-shaped transcript line is content, even
+	// when something nested inside it happens to be called "message".
+	if probe.Type != "" || probe.SessionUpdate != "" || len(probe.Update) > 0 {
+		return false
+	}
+	return true
 }
 
 // userTurnText extracts the prose of a user-role turn from a provider event,

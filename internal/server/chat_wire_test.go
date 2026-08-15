@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 )
 
@@ -70,6 +71,9 @@ func TestChatWireLineGrokACPShapes(t *testing.T) {
 	// session/update params for chunks, bare stopReason for prompt end.
 	acpChunkRaw := []byte(`{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"pong"}}}`)
 	acpEndRaw := []byte(`{"stopReason":"end_turn"}`)
+	// 🎯T455: the frame claudia's publishPromptResult emits when session/prompt
+	// comes back a JSON-RPC error — the backend's own answer, not agent prose.
+	acpErrorRaw := []byte(`{"code":-32603,"message":"Internal error"}`)
 	acpUserRaw := []byte(`{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"}}}`)
 	acpToolRaw := []byte(`{"sessionId":"s1","update":{"sessionUpdate":"tool_call","title":"Bash","kind":"execute"}}`)
 
@@ -91,11 +95,22 @@ func TestChatWireLineGrokACPShapes(t *testing.T) {
 		},
 		{
 			// 🎯T237: bare Internal error is rewritten with class, not left as-is.
+			// 🎯T455: and it is the error FRAME that says so — Raw is the JSON-RPC
+			// error the backend returned, which is the evidence being classified.
 			name:     "internal error classified on wire",
-			ev:       claudia.Event{Type: "assistant", Text: "Internal error", StopReason: "end_turn", Raw: acpEndRaw},
+			ev:       claudia.Event{Type: "assistant", Text: "Internal error", StopReason: "end_turn", Raw: acpErrorRaw},
 			wantOK:   true,
 			wantType: "assistant",
 			wantText: `backend_unavailable`,
+		},
+		{
+			// 🎯T455: the same words with no error frame behind them are an
+			// agent talking about an outage. Verbatim, no banner.
+			name:     "internal error as authored prose stays verbatim",
+			ev:       claudia.Event{Type: "assistant", Text: "Internal error", StopReason: "end_turn", Raw: acpEndRaw},
+			wantOK:   true,
+			wantType: "assistant",
+			wantText: `"text":"Internal error"`,
 		},
 		{
 			name:     "empty-text end_turn from ACP",
@@ -142,9 +157,9 @@ func TestChatWireLineGrokACPShapes(t *testing.T) {
 		{
 			name: "already Claude-shaped assistant passed through",
 			ev: claudia.Event{
-				Type: "assistant",
-				Text: "hello",
-				Raw:  []byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn"}}`),
+				Type:       "assistant",
+				Text:       "hello",
+				Raw:        []byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn"}}`),
 				StopReason: "end_turn",
 			},
 			wantOK:   true,
@@ -795,5 +810,176 @@ done:
 	}
 	if !sawTerminal {
 		t.Fatalf("expected terminal end_turn frame among %v", lines)
+	}
+}
+
+// 🎯T455: provider_failure on the chat wire is decided by the frame, not
+// the words. Same refusal string: backend response records the event;
+// authored content records nothing. A classifier that records nothing
+// at all fails the transport arm; the pre-fix ClassifyText-only tree
+// fails the authored arm.
+func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
+	t.Parallel()
+
+	acpChunk := []byte(`{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Internal error"}}}`)
+	acpError := []byte(`{"code":-32603,"message":"Internal error"}`)
+	quoted := `The backend said "Internal error" but that was last hour; the fleet is working now.`
+	incident := "**The whole fleet is dead — Claude account monthly spend limit reached.**"
+
+	cases := []struct {
+		name          string
+		ev            claudia.Event
+		wantClass     string // empty → no failure_class on the wire
+		wantTextExact string
+		wantTextSub   string
+	}{
+		{
+			name: "Grok ACP JSON-RPC error frame is transport",
+			ev: claudia.Event{
+				Type:       "assistant",
+				Text:       "Internal error",
+				StopReason: "end_turn",
+				Raw:        acpError,
+			},
+			wantClass:   "backend_unavailable",
+			wantTextSub: "backend_unavailable",
+		},
+		{
+			name: "Claude IsError flag is transport",
+			ev: claudia.Event{
+				Type:       "assistant",
+				Text:       "Internal error",
+				StopReason: "end_turn",
+				IsError:    true,
+			},
+			wantClass:   "backend_unavailable",
+			wantTextSub: "backend_unavailable",
+		},
+		{
+			name: "ACP chunk with the same words is authored",
+			ev: claudia.Event{
+				Type:       "assistant",
+				Text:       "Internal error",
+				StopReason: "end_turn",
+				Raw:        acpChunk,
+			},
+			wantTextExact: "Internal error",
+		},
+		{
+			name: "quoted Internal error in a report is authored",
+			ev: claudia.Event{
+				Type: "assistant",
+				Text: quoted,
+				Raw:  acpChunk,
+			},
+			wantTextExact: quoted,
+		},
+		{
+			name: "overseer spend-limit status is authored",
+			ev: claudia.Event{
+				Type: "assistant",
+				Text: incident,
+				Raw:  acpChunk,
+			},
+			wantTextExact: incident,
+		},
+		{
+			name: "session/update that happens to nest code+message is authored",
+			ev: claudia.Event{
+				Type: "assistant",
+				Text: "Internal error",
+				Raw:  []byte(`{"sessionId":"s1","sessionUpdate":"agent_message_chunk","code":-32603,"message":"Internal error","update":{"sessionUpdate":"agent_message_chunk"}}`),
+			},
+			wantTextExact: "Internal error",
+		},
+	}
+
+	sawTransportRecord := false
+	sawAuthoredRefusal := false
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			line, ok := chatWireLine(tc.ev)
+			if !ok {
+				t.Fatal("expected a wire line")
+			}
+			var probe struct {
+				FailureClass string `json:"failure_class"`
+				Message      struct {
+					Content []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(line), &probe); err != nil {
+				t.Fatalf("wire not JSON: %v\n%s", err, line)
+			}
+			var text string
+			for _, c := range probe.Message.Content {
+				if c.Type == "text" {
+					text = c.Text
+					break
+				}
+			}
+			if probe.FailureClass != tc.wantClass {
+				t.Fatalf("failure_class=%q want %q\n%s", probe.FailureClass, tc.wantClass, line)
+			}
+			if tc.wantTextExact != "" && text != tc.wantTextExact {
+				t.Fatalf("text=%q want exact %q", text, tc.wantTextExact)
+			}
+			if tc.wantTextSub != "" && !strings.Contains(text, tc.wantTextSub) {
+				t.Fatalf("text %q missing %q", text, tc.wantTextSub)
+			}
+			if tc.wantClass != "" {
+				sawTransportRecord = true
+			} else {
+				sawAuthoredRefusal = true
+			}
+		})
+	}
+	if !sawTransportRecord {
+		t.Fatal("over-broadness: at least one transport frame must record provider_failure")
+	}
+	if !sawAuthoredRefusal {
+		t.Fatal("oracle too weak: at least one authored refusal must record nothing")
+	}
+}
+
+func TestAssistantTextSource(t *testing.T) {
+	t.Parallel()
+	if got := assistantTextSource(claudia.Event{IsError: true}); got != agenterr.SourceTransport {
+		t.Fatalf("IsError: %q", got)
+	}
+	if got := assistantTextSource(claudia.Event{Raw: []byte(`{"code":-32603,"message":"Internal error"}`)}); got != agenterr.SourceTransport {
+		t.Fatalf("rpc error: %q", got)
+	}
+	if got := assistantTextSource(claudia.Event{Raw: []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk"}}`)}); got != agenterr.SourceAuthored {
+		t.Fatalf("session update: %q", got)
+	}
+	if got := assistantTextSource(claudia.Event{}); got != agenterr.SourceAuthored {
+		t.Fatalf("empty: %q", got)
+	}
+}
+
+func TestIsRPCErrorFrame(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{`{"code":-32603,"message":"Internal error"}`, true},
+		{`{"code":-32603,"message":"Internal error","data":{"retry":true}}`, true},
+		{`{"message":"Internal error"}`, false},
+		{`{"code":-32603}`, false},
+		{`{"type":"assistant","code":-32603,"message":"Internal error"}`, false},
+		{`{"sessionUpdate":"agent_message_chunk","code":-32603,"message":"x"}`, false},
+		{`{"code":-32603,"message":"x","update":{"sessionUpdate":"agent_message_chunk"}}`, false},
+		{``, false},
+		{`not-json`, false},
+	}
+	for _, tc := range cases {
+		if got := isRPCErrorFrame([]byte(tc.raw)); got != tc.want {
+			t.Errorf("isRPCErrorFrame(%s)=%v want %v", tc.raw, got, tc.want)
+		}
 	}
 }
