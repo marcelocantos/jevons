@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // DefaultChatLookback is how many recent owner-chat user turns to sample.
@@ -299,46 +301,40 @@ func parseChatlogLine(line, path string) (ChatTurn, bool) {
 	}, true
 }
 
+// parseSessionLine reads one provider session-JSONL line into a coach turn.
+//
+// 🎯T422 clause 1: the line's SHAPE is turnev's answer, not this file's. This
+// was the coach's own copy of the session decoder — a top-level content for
+// Grok, a nested message for Claude, type=error for a harness notice — and a
+// second reader of a file is a second answer waiting to disagree with the
+// first. What it got wrong is what every hand-rolled copy got wrong: a prompt
+// accepted behind a live turn is replayed as a queued_command ATTACHMENT and
+// never becomes a user message, so the coach reading a BUSY agent's session
+// saw none of the prompts it was actually given. Of 33 queued payloads
+// measured on 2026-08-10, 32 arrived that way and none as a user record.
+//
+// What stays here is the coach's own policy, which is not about the file:
+// which roles are friction-bearing, the harness-inject filter, and the length
+// cap that keeps a skill dump from being read as owner pain.
 func parseSessionLine(line, sessionID string) (ChatTurn, bool) {
-	var d struct {
-		Type      string          `json:"type"`
-		Timestamp string          `json:"timestamp"`
-		Content   json.RawMessage `json:"content"`
-		Message   *struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-	if json.Unmarshal([]byte(line), &d) != nil {
+	rec, ok := turnev.Decode([]byte(line))
+	if !ok {
 		return ChatTurn{}, false
 	}
-	typ := strings.ToLower(strings.TrimSpace(d.Type))
 	var role string
-	var content json.RawMessage
-	if d.Message != nil {
-		role = d.Message.Role
-		content = d.Message.Content
-	} else {
-		content = d.Content
-		switch typ {
-		case "user":
-			role = "user"
-		case "assistant":
-			role = "assistant"
-		case "error":
-			role = "error"
-		default:
-			return ChatTurn{}, false
-		}
-	}
-	role = strings.ToLower(strings.TrimSpace(role))
-	if role != "user" && role != "error" && typ != "error" {
+	switch rec.Kind {
+	case turnev.KindUserMessage, turnev.KindQueuedCommand:
+		// A queued command is a prompt the agent received; the CLI just wrote
+		// it as an attachment rather than as a user record.
+		role = "user"
+	case turnev.KindError:
+		role = "error"
+	default:
+		// A tool_result is not authored (clause 3), an assistant turn is not
+		// friction, and queue bookkeeping is not a prompt.
 		return ChatTurn{}, false
 	}
-	if typ == "error" {
-		role = "error"
-	}
-	text := extractContentText(content)
+	text := strings.TrimSpace(rec.Text)
 	if text == "" {
 		return ChatTurn{}, false
 	}
@@ -346,20 +342,12 @@ func parseSessionLine(line, sessionID string) (ChatTurn, bool) {
 	if isHarnessInject(text) || len(text) > 4000 {
 		return ChatTurn{}, false
 	}
-	var ts time.Time
-	if d.Timestamp != "" {
-		if t, err := time.Parse(time.RFC3339Nano, d.Timestamp); err == nil {
-			ts = t
-		} else if t, err := time.Parse(time.RFC3339, d.Timestamp); err == nil {
-			ts = t
-		}
-	}
 	return ChatTurn{
 		Role:     role,
 		Text:     text,
 		Source:   "session",
 		SourceID: sessionID,
-		TS:       ts,
+		TS:       rec.Timestamp,
 	}, true
 }
 

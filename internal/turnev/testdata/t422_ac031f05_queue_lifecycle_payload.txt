@@ -1,0 +1,12 @@
+[Jevons fleet standing brief — apply for this whole assignment]
+
+## Status language: in progress vs live (🎯T176)
+- Always say **"in progress"** when a worker is running but product is not yet owner-visible.
+- Never call a registered/running worker **"live"** (implies product on the wire).
+- **"Live" / "landed" / "shipped"** only with product evidence: commit SHA + hard-reloadable UI, or proven API
+…[middle elided for fixture; head and tail are verbatim]…
+ly MUST start with exactly [silent] (case-insensitive on the filter).
+  Example: [silent] continued jv-t212; 🎯T222 already working.
+- Do NOT write owner-facing "everything is fine" chatter without [silent].
+- If you need an owner decision or something is broken beyond your tools, do NOT use [silent] — escalate normally.
+- Prefer acting (continue / re-brief / restart workers) over narrating health.

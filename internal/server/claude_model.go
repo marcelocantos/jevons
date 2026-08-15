@@ -14,11 +14,17 @@ package server
 // attach — same trick as Grok's billing frames (🎯T293), same shared caching
 // machinery (session_model.go). 🎯T311.
 
+// 🎯T422 clause 1: the line shape is not decoded here. This file knew that a
+// Claude assistant turn carries message.model and a synthetic frame carries a
+// top-level one, which made it the second reader of the session file — and a
+// second reader of one file is a second answer waiting to disagree with the
+// first. It asks internal/turnev what the line IS and reads the field off the
+// record.
 import (
 	"bytes"
-	"encoding/json"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // syntheticModel is what Claude Code stamps on frames it wrote itself (API
@@ -52,27 +58,21 @@ func claudeTranscriptPath(projectsDir, workDir, sessionID string) string {
 func claudeModelFromTail(data []byte) string {
 	model := ""
 	for _, line := range bytes.Split(data, []byte("\n")) {
-		// Fast reject before the decode: tool results and user turns dominate.
+		// Fast reject before the decode: tool results and user turns dominate,
+		// and none of them name a model. This is a byte test on the raw line,
+		// not a second opinion about its shape — what the line IS, and which
+		// of its two model fields wins, is turnev's answer alone.
 		if !bytes.Contains(line, []byte(`"model"`)) {
 			continue
 		}
-		var l struct {
-			Model   string `json:"model"`
-			Message struct {
-				Model string `json:"model"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal(line, &l); err != nil {
+		rec, ok := turnev.Decode(line)
+		if !ok {
 			continue
 		}
-		m := l.Message.Model
-		if m == "" {
-			m = l.Model
-		}
-		if m == "" || m == syntheticModel {
+		if rec.Model == "" || rec.Model == syntheticModel {
 			continue
 		}
-		model = m
+		model = rec.Model
 	}
 	return model
 }

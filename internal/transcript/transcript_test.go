@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // Grok Build chat_history.jsonl shapes (real sessions under ~/.grok/sessions).
@@ -55,7 +56,7 @@ func TestExtractTurns_GrokShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turns := extractTurns(lines)
+	turns := extractTurns(lines, false)
 	// 2 user turns → user+assistant pairs (second assistant may be multi-line within turn 1)
 	if len(turns) < 4 {
 		t.Fatalf("want ≥4 turn entries (2 user + assistants), got %d: %+v", len(turns), turns)
@@ -82,9 +83,9 @@ func TestExtractTurns_GrokShape(t *testing.T) {
 	}
 	// Pure tool_result / reasoning must not become user turns
 	for _, l := range lines {
-		if l.typ == "tool_result" || l.typ == "reasoning" {
+		if l.rec.Type == "tool_result" || l.rec.Type == "reasoning" {
 			if l.isUserTurn {
-				t.Fatalf("%s must not be isUserTurn", l.typ)
+				t.Fatalf("%s must not be isUserTurn", l.rec.Type)
 			}
 		}
 	}
@@ -111,7 +112,7 @@ func TestExtractTurns_T329NonBoundaryUserInject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turns := extractTurns(lines)
+	turns := extractTurns(lines, false)
 	var users, assistants []Turn
 	for _, tr := range turns {
 		if tr.Role == "user" {
@@ -155,7 +156,7 @@ func TestExtractTurns_ClaudeShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turns := extractTurns(lines)
+	turns := extractTurns(lines, false)
 	// tool_result-as-user-content is NOT a turn boundary → 2 user turns
 	userCount := 0
 	for _, tr := range turns {
@@ -229,21 +230,44 @@ func TestReader_Read_ClaudeSessionOnly(t *testing.T) {
 	}
 }
 
-func TestReader_Read_UnrecognizedFormatErrors(t *testing.T) {
+// 🎯T422 clause 7 reverses the old contract this test used to pin. A session
+// whose prompts this reader cannot see is not an unreadable session: the
+// replies are there, they are the conversation, and erroring on them is how a
+// live 286KB file came to be reported as having no content at all. The error
+// is now reserved for a file with nothing decodable in it, and it names what
+// it saw instead of guessing "unrecognized format?".
+func TestReader_Read_RendersRepliesWithoutVisiblePrompts(t *testing.T) {
 	sessions := t.TempDir()
 	sid := "019fc1c6-9c23-7261-b8e0-c7bc5967a745"
-	// Lines present but no extractable user turns (old bug shape was similar).
 	body := `{"type":"assistant","content":"orphan reply"}
 {"type":"tool_result","tool_call_id":"x","content":"y"}
 `
 	writeSession(t, sessions, sid, body)
-	r := NewReader(sessions)
-	_, err := r.Read(sid)
-	if err == nil {
-		t.Fatal("expected error when file has payload but no user turns")
+	turns, err := NewReader(sessions).Read(sid)
+	if err != nil {
+		t.Fatalf("a session with replies must not read as unreadable: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no user turns") {
-		t.Fatalf("err=%v", err)
+	if len(turns) != 1 {
+		t.Fatalf("want the reply rendered, got %d turns: %+v", len(turns), turns)
+	}
+	if role, _ := turns[0]["role"].(string); role != "assistant" {
+		t.Fatalf("role=%v", turns[0])
+	}
+	if text, _ := turns[0]["text"].(string); text != "orphan reply" {
+		t.Fatalf("text=%q", text)
+	}
+}
+
+func TestReader_Read_NamesWhatItCannotParse(t *testing.T) {
+	sessions := t.TempDir()
+	sid := "019fc1c6-9c23-7261-b8e0-c7bc5967a746"
+	writeSession(t, sessions, sid, "not json at all\nnor is this\n")
+	_, err := NewReader(sessions).Read(sid)
+	if err == nil {
+		t.Fatal("a file of unreadable lines must say so, not read as an empty conversation")
+	}
+	if !strings.Contains(err.Error(), "not-json=2") {
+		t.Fatalf("the error must name what it saw: %v", err)
 	}
 }
 
@@ -274,18 +298,29 @@ func TestParseEntries_GrokTopLevel(t *testing.T) {
 	}
 }
 
+// Assistant display text, both provider shapes. 🎯T422 moved the decode itself
+// into turnev; this package's job is now the projection, so the assertion runs
+// where the projection does.
 func TestExtractAssistantText_GrokStringAndClaudeBlocks(t *testing.T) {
+	assistantText := func(raw string) string {
+		t.Helper()
+		rec, ok := turnev.Decode([]byte(raw))
+		if !ok {
+			t.Fatalf("undecodable line: %s", raw)
+		}
+		return entryFrom(rec).Text
+	}
 	grok := `{"type":"assistant","content":"plain reply","tool_calls":[]}`
-	if got := extractAssistantText(grok); got != "plain reply" {
+	if got := assistantText(grok); got != "plain reply" {
 		t.Fatalf("grok string: %q", got)
 	}
 	claude := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"block a"},{"type":"text","text":"block b"}]}}`
-	if got := extractAssistantText(claude); got != "block a\nblock b" {
+	if got := assistantText(claude); got != "block a\nblock b" {
 		t.Fatalf("claude blocks: %q", got)
 	}
 	// Empty content + tool_calls only → no display text
 	empty := `{"type":"assistant","content":"","tool_calls":[{"id":"1"}]}`
-	if got := extractAssistantText(empty); got != "" {
+	if got := assistantText(empty); got != "" {
 		t.Fatalf("empty content want \"\", got %q", got)
 	}
 }

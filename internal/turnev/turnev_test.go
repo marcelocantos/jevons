@@ -141,11 +141,11 @@ func TestPayloadMatchAloneIsAbsentForADeliveryTheQueueRecordsConfirm(t *testing.
 	}
 	needle := Needle(payload)
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		var rec record
-		if json.Unmarshal([]byte(line), &rec) != nil {
+		rec, ok := Decode([]byte(line))
+		if !ok || rec.Kind != KindUserMessage {
 			continue
 		}
-		if text, ok := authoredUserText(rec); ok && strings.Contains(Normalize(text), needle) {
+		if strings.Contains(Normalize(rec.Text), needle) {
 			t.Fatal("fixture has a user message carrying the payload; it is no longer the queued case")
 		}
 	}

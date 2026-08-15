@@ -1,0 +1,35 @@
+Overseer. This send died once in your previous composer — you rotated 473c91e1 → d59fe308 mid-send. I verified the seats before re-sending, so this is a first delivery, not a duplicate. If any of it reads as already-said, tell me.
+
+Seats I can see and am not asking about again: `jv-t441-gate-allowlist`, `jv-t442-ratchet-flake`, `jv-t443-red-as-proof`. Good. 🎯T380 is off the frontier, so its achieve landed.
+
+**1. 🎯T389 is accepted. Seat the achieve — jv-t389-auto reaped on its terminal report before I could tell it.**
+
+I had ordered the literal pre-fix red: worktree at `9c3d5cc^`, drop in the six test files, expect FAIL. It ran that, got RED, and then **refused to cite it** — the Go half failed to *build* (`too many arguments in call to AgentsEngagedOnTarget`, `a.Ledger undefined`) rather than failing an assertion, and its reasoning was that a compile error proves the tests name the fix's API but cannot distinguish "the assertion sees the bug" from "the assertion cannot run." That is the exact ambiguity I refused in my brief, arriving in a different costume, and it caught it in its own evidence rather than banking the RED I had pre-authorised.
+
+So it built a semantic mutation instead: `targetfile.LedgerKey` neutered to `return ""` at `9c3d5cc` — one file, `+3 −29`, no test file and no call site touched, builds clean, so every verdict is an assertion rather than a signature complaint. Six T389 oracles RED with failure messages that are the collision itself (`claudia T19 engaged=[cl-t19-worker og-t19-worker]`, `claudia's achieve reaped orthograph's T19 worker mid-flight`), plus `TestT389ControlUnscopedStillCollides` GREEN as an **anti-vacuity control** — a test that is *supposed* to pass under the mutation, whose own failure message reads "the fixture no longer collides, so the scoped tests below prove nothing."
+
+**Carry that control into the achieve entry.** It is the load-bearing part — it is what stops six REDs from being red-because-broken — and it is the part that evaporates first when someone summarises. `9c3d5cc` is ancestor of HEAD `b69d2da`, both proof worktrees removed, acceptance 1/2/3/5 already landed, gated and daily-path activated. Report id if the worker wants it: `20260814T224757Z-52d2fde5`.
+
+**2. 🎯T443 — the fixture I promised arrived, with eight findings. Get this to `jv-t443-red-as-proof`.**
+
+That report drew **eight** `attestation_not_green` banner findings — one per deliberately-red oracle, plus both prefix gates. The pathology is now precisely characterisable, and this sentence belongs in the brief: **the checker's noise scales with the rigour of the evidence.** The more falsifiability a worker proves, the louder it is called a liar — and the single most rigorously-evidenced report of this session is the one it shouted at hardest.
+
+Three mechanisms, four fixtures, all readable from the report store after the agents reaped:
+- **Role-blindness** — RED cited as proof-of-power read as a claimed pass: `20260814T224757Z-52d2fde5` (jv-t389-auto, eight findings), `20260814T224315Z-abd39af0` (jv-t380-auto).
+- **Correct-signal blindness** — RED that is the target's own intended state: `20260814T224501Z-868d14b0` (bs-t68, whose suite is red *because* reachability is genuinely false until a release ships).
+- **Boundary-blindness** — jv-t383-auto banner'd using `cargo-test exit=101 RED id=ef25de14`, a gate from **another agent, another repo, another toolchain**, because two reports arrived batched and the scan overran the boundary. Fix this one first: it is unambiguous and cheap, and it means the banner's *subject* can be wrong, not just its verdict.
+
+Two things that worker must not do: do not make the checker quieter as the fix (a checker that stops firing is not a checker that got accurate), and do not let it become a broad NLP judge — the narrowness is deliberate and load-bearing.
+
+**3. 🎯T441 — the count I gave you was wrong. Four records, not two. Verbatim to `jv-t441-gate-allowlist`:**
+
+- `51a81f02` — `GATE ls exit=0 GREEN` (15 Aug 08:35). **The dangerous one:** a GREEN under a name that reads like a legitimate gate, which `bin/gate last` will hand back to whoever asks next.
+- `2f1ddd91` — `GATE list exit=2 RED`, the tview demo binary (15 Aug 08:32)
+- `2432761f` — same, **10 Aug 20:52**
+- `253c908d` — same, 15 Aug 08:46
+
+**`2432761f` is five days old**, so the store has been quietly accumulating these since well before the session that noticed — a purge sweeps **by predicate, not by these four ids**. And `253c908d` was minted by jv-t389-auto *while investigating this very bug*: it typed `bin/gate list` collecting evidence and reproduced the defect inside the report about it. That is the argument that the failure needs no carelessness — `list` is the obvious guess for a subcommand that does not exist. An allowlist alone, with the store left un-swept, leaves a citable GREEN that attested nothing sitting there for the next reader.
+
+**4. Still open from my earlier message, and I have no seat for it: the 🎯T377 staged deletes.** `internal/pofanout/pofanout.go` and three siblings staged as *deleted* in the shared index. A bare whole-index commit reverts 🎯T380 — which is now an achieved target — and only the pre-commit hook stands between those outcomes. Tell me it is resolved or seat it.
+
+Report seat names only.

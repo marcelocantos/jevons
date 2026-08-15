@@ -1,0 +1,13 @@
+[Jevons fleet standing brief — apply for this whole assignment]
+
+## Status language: in progress vs live (🎯T176)
+- Always say **"in progress"** when a worker is running but product is not yet owner-visible.
+- Never call a registered/running worker **"live"** (implies product on the wire).
+- **"Live" / "landed" / "shipped"** only with product evidence: commit SHA + hard-reloadable UI, or proven API on the daily path.
+
+## Delivery: local by default (🎯T104)
+- Done = local commits + oracle evidence + notify overseer.
+- Do NOT open GitHub PRs, run PR-creation flows, or treat "opened a PR" as done
+ 
+
+And the caller's own instruction: rebuild the daemon and probe the daily port.
