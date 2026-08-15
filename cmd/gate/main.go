@@ -9,7 +9,8 @@
 //	bin/gate -name web -- make test-web
 //	bin/gate last                   # the most recent run's attestation
 //	bin/gate show <id>              # one run, with the reason it is not green
-//	bin/gate check < report.md      # flag a finish report's false green
+//	bin/gate check report.md        # flag a finish report's false green
+//	bin/gate check < report.md      # …the same, from stdin
 //	bin/gate sweep [-void]          # records that attest nothing (🎯T441)
 //	bin/gate void <id> <reason>     # take one record out of the citable store
 //
@@ -30,6 +31,24 @@
 // could mint a green that attested nothing, in the one tool built to stop
 // exactly that. The separator is the only thing that can tell "run this" from
 // "I meant a subcommand", so it is no longer optional.
+//
+// 🎯T453 closes the other half of that hole: arguments a *known* subcommand
+// cannot honour. `gate last extra-junk-arg` printed the newest record and
+// exited 0, discarding the argument silently — and the caller who typed it
+// cites the output of a command that did not do what was asked. Worse,
+// `gate check /path/to/report.md` — the form a reader naturally types after
+// seeing a report on disk, and the form the stdin example above invites them
+// to get wrong — ignored the path and blocked on stdin with nothing printed.
+// Under a background gate that is indistinguishable from a hung suite: the
+// harness reports a failure with no reason and nothing points at the command
+// line. So `check` now reads a path when given one, and every subcommand
+// refuses an argument it will not act on rather than proceeding beside it.
+//
+// A caveat this deliberately does not cover: bare `gate check` with no path
+// still waits on stdin, which is correct for a filter and is what the honoured
+// `gate check < report` form needs. The observed hang was not a terminal — it
+// was a pipe that never closed — so a TTY check would not have caught it,
+// while the path argument does.
 package main
 
 import (
@@ -89,6 +108,52 @@ func main() {
 // subcommands is the allowlist. A word outside it is a typo, not a gate.
 var subcommands = []string{"last", "show", "check", "sweep", "void", "help"}
 
+// usageForms is the shape each subcommand accepts, quoted back at a caller
+// whose arguments do not fit it. It lives next to the allowlist so that adding
+// a subcommand without saying how to call it is visibly incomplete.
+var usageForms = map[string]string{
+	"last":  "gate last",
+	"show":  "gate show <id>",
+	"check": "gate check [report-path]   (or: gate check < report)",
+	"sweep": "gate sweep [-void]",
+	"void":  "gate void <id> <reason>",
+}
+
+// refuseSurplus rejects arguments a known subcommand cannot honour (🎯T453).
+//
+// The alternative is what the tool used to do: perform the part it understood
+// and exit 0, discarding the rest. That is a false green in miniature — the
+// caller reads a success from a command that did not do what they asked, and
+// under 🎯T386 that output is evidence. Naming the argument is the whole
+// remedy: the reader needs to be pointed at their own command line.
+func refuseSurplus(sub string, extra []string) int {
+	fmt.Fprintf(os.Stderr, "gate %s: unexpected argument %s\n  usage: %s\n",
+		sub, strings.Join(quoteAll(extra), " "), usageForms[sub])
+	return exitUsage
+}
+
+// refuseFlag rejects an unrecognised flag where an operand was expected. It is
+// separate from refuseSurplus because `gate void -x id reason` used to read the
+// flag as the record id and fail with "no such record" — an error that blames
+// the store for what the command line got wrong.
+func refuseFlag(sub, flag string) int {
+	fmt.Fprintf(os.Stderr, "gate %s: %q is not a %s flag\n  usage: %s\n",
+		sub, flag, sub, usageForms[sub])
+	return exitUsage
+}
+
+func quoteAll(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = fmt.Sprintf("%q", a)
+	}
+	return out
+}
+
+// isFlag reports whether an argument was meant as a flag rather than an
+// operand. A bare "-" is a conventional stdin operand, not a flag.
+func isFlag(arg string) bool { return strings.HasPrefix(arg, "-") && arg != "-" }
+
 // separated reports whether the caller used `--`. flag.Parse stops at the
 // separator and consumes it, so the arguments it left are the tail of os.Args
 // and the separator, if there was one, is the element immediately before them.
@@ -101,25 +166,38 @@ func separated(osArgs, rest []string) bool {
 // the point: it exits non-zero, says which word it did not recognise, and
 // writes nothing to the store.
 func cmdSubcommand(args []string, storeDir string) int {
-	switch args[0] {
+	sub, rest := args[0], args[1:]
+	switch sub {
 	case "last":
+		if len(rest) > 0 {
+			return refuseSurplus(sub, rest)
+		}
 		return cmdLast(storeDir)
 	case "show":
-		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "gate show: need a record id")
+		if len(rest) == 0 {
+			fmt.Fprintln(os.Stderr, "gate show: need a record id\n  usage:", usageForms[sub])
 			return exitUsage
 		}
-		return cmdShow(storeDir, args[1])
+		if isFlag(rest[0]) {
+			return refuseFlag(sub, rest[0])
+		}
+		if len(rest) > 1 {
+			return refuseSurplus(sub, rest[1:])
+		}
+		return cmdShow(storeDir, rest[0])
 	case "check":
-		return cmdCheck(storeDir)
+		return cmdCheck(storeDir, rest)
 	case "sweep":
-		return cmdSweep(args[1:], storeDir)
+		return cmdSweep(rest, storeDir)
 	case "void":
-		if len(args) < 3 {
-			fmt.Fprintln(os.Stderr, "gate void: need a record id and a reason")
+		if len(rest) > 0 && isFlag(rest[0]) {
+			return refuseFlag(sub, rest[0])
+		}
+		if len(rest) < 2 {
+			fmt.Fprintln(os.Stderr, "gate void: need a record id and a reason\n  usage:", usageForms[sub])
 			return exitUsage
 		}
-		return cmdVoid(storeDir, args[1], strings.Join(args[2:], " "))
+		return cmdVoid(storeDir, rest[0], strings.Join(rest[1:], " "))
 	case "help":
 		usage()
 		return 0
@@ -136,12 +214,13 @@ func usage() {
   gate [flags] -- <command> [args...]   run a gate and attest its real status
   gate last                             show the most recent run
   gate show <id>                        show one run
-  gate check                            read a finish report on stdin, flag false greens
+  gate check [report-path]              flag a finish report's false greens (stdin if no path)
   gate sweep [-void]                    list records that attest nothing; -void quarantines them
   gate void <id> <reason>               take one record out of the citable store
 
 The -- is required to run a command: without it a mistyped subcommand would be
-executed and recorded as though it were a gate (🎯T441).
+executed and recorded as though it were a gate (🎯T441). A subcommand given an
+argument it cannot honour is refused rather than performed in part (🎯T453).
 
 flags:
 `)
@@ -243,7 +322,16 @@ func cmdSweep(args []string, storeDir string) int {
 	fs := flag.NewFlagSet("sweep", flag.ContinueOnError)
 	doVoid := fs.Bool("void", false, "move the listed records out of the citable store")
 	if err := fs.Parse(args); err != nil {
+		// fs has already named the flag it did not recognise; add the form that
+		// would have worked, since the reader is here because they guessed.
+		fmt.Fprintln(os.Stderr, "  usage:", usageForms["sweep"])
 		return exitUsage
+	}
+	// A sweep decides which evidence stops being citable. An operand it does
+	// not understand might have been meant to narrow that, so proceeding over
+	// the whole store would be the opposite of what was asked.
+	if fs.NArg() > 0 {
+		return refuseSurplus("sweep", fs.Args())
 	}
 	store, err := gate.OpenStore(storeDir)
 	if err != nil {
@@ -298,8 +386,25 @@ func cmdVoid(storeDir, id, reason string) int {
 	return 0
 }
 
-func cmdCheck(storeDir string) int {
-	report, err := io.ReadAll(os.Stdin)
+// cmdCheck reads a finish report — from a named file, or from stdin when no
+// file is named — and flags a green its own cited evidence does not support.
+//
+// The path form exists because it is what a reader types (🎯T453). Taking the
+// path silently and then waiting on stdin was the worst shape available: no
+// output, no progress, and a wait with no bound, which under a background gate
+// reads as a hung suite rather than as a misuse. Reading the file cannot block.
+func cmdCheck(storeDir string, args []string) int {
+	if len(args) > 0 && isFlag(args[0]) {
+		return refuseFlag("check", args[0])
+	}
+	if len(args) > 1 {
+		return refuseSurplus("check", args[1:])
+	}
+	read := func() ([]byte, error) { return io.ReadAll(os.Stdin) }
+	if len(args) == 1 && args[0] != "-" {
+		read = func() ([]byte, error) { return os.ReadFile(args[0]) }
+	}
+	report, err := read()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gate check:", err)
 		return exitError

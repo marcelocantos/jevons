@@ -622,9 +622,11 @@ chain unchanged), and writes a record under `~/.jevons/gates`.
 | `exit=unknown` is not a pass | A status that could not be established never renders as zero |
 | Only `GREEN` may be cited as a pass | `SUSPECT` = zero exit over panic/timeout/race/FAIL output |
 | Read background gates back with `bin/gate last` | In band, off disk, independent of what the harness claimed |
+| A refused invocation is not a gate | An argument `gate` cannot honour is named and rejected, never performed in part (🎯T453) |
 
-`bin/gate check` reads a finish report on stdin and flags a green its own
-evidence does not support; the daemon runs the same check on the notify
+`bin/gate check <report-path>` — or `bin/gate check < report` — reads a
+finish report and flags a green its own evidence does not support; the
+daemon runs the same check on the notify
 path and prepends a **FALSE-GREEN banner** in front of the report to the
 overseer. A fabricated `GATE` line is caught too — the id is looked up,
 and an id with no record behind it says so. Pure helpers:
