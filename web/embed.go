@@ -61,5 +61,6 @@ import "embed"
 //go:embed scripts/smd.js
 //go:embed scripts/streaming_markdown.js
 //go:embed scripts/cost_display.js
+//go:embed scripts/plan_usage.js
 //go:embed scripts/tool_tooltip.js
 var FS embed.FS

@@ -809,6 +809,13 @@ body.rhs-resizing-row { cursor: row-resize; }
 #cost-ticker { display: none; padding: 6px 16px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); letter-spacing: -0.02em; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #cost-ticker.cost-warn { color: var(--amber); }
 #cost-ticker.cost-kill { color: #fff; background: #b3261e; font-weight: 600; }
+/* 🎯T390 plan-usage ticker: subscription allowance left, per backend. Same
+   shape as the cost ticker directly above it — they answer the two halves of
+   "what is this fleet spending". */
+#plan-ticker { display: none; padding: 6px 16px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); letter-spacing: -0.02em; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#plan-ticker.plan-stale { color: var(--text-muted); font-style: italic; }
+#plan-ticker.plan-low { color: var(--amber); }
+#plan-ticker.plan-crit { color: #fff; background: #b3261e; font-weight: 600; }
 
 /* Theme toggle */
 #theme-toggle { margin-left: auto; display: flex; gap: 2px; background: var(--surface-raised); border-radius: 5px; padding: 2px; }
@@ -1383,6 +1390,9 @@ body.rhs-resizing-row { cursor: row-resize; }
     <div id="rhs-width-handle" role="separator" aria-orientation="vertical"
          aria-label="Resize sidebar width" title="Drag to resize sidebar" tabindex="0"></div>
     <div id="cost-ticker" title="Token burn rate — click for detail"></div>
+    <!-- 🎯T390: subscription allowance left per backend. Hover for the exact
+         rollover times and for the backends the fleet is not running on. -->
+    <div id="plan-ticker" title="Subscription plan usage — hover for detail"></div>
     <div id="activity-header" class="agents-header">
       <span class="ah-label">Agents</span>
       <button type="button" id="aside-history-btn" title="Browse closed / dismissed asides (🎯T270)"
@@ -1555,6 +1565,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/smd.js"></script>
 <script src="scripts/streaming_markdown.js"></script>
 <script src="scripts/cost_display.js"></script>
+<script src="scripts/plan_usage.js"></script>
 <!-- 🎯T374: last module tag is above, the big inline script is below. Sealing
      here catches the other absence shape — a module that loaded but whose
      factory threw, so its global was never assigned and no load error ever
@@ -6308,6 +6319,7 @@ document.addEventListener('visibilitychange', function () {
   try { refreshAgents(); } catch (_) {}
   try { refreshWorkers(); } catch (_) {}
   try { refreshCost(); } catch (_) {}
+  try { refreshPlanUsage(); } catch (_) {}
 });
 
 // Live token-burn ticker (🎯T137): hidden when disabled; subscription
@@ -6341,6 +6353,45 @@ setInterval(function () {
   refreshCost();
 }, 3000);
 refreshCost();
+
+// Subscription plan usage (🎯T390): how much allowance each backend the
+// fleet is running on has left, and when it rolls over. The producer
+// (claudia 🎯T18) and the consumer both existed while this line did not, so
+// the owner ran dozens of agents with no view of what they were spending and
+// had to ask whether the metering he commissioned had been built.
+//
+// Polled far more slowly than the cost ticker: a plan window is hours long,
+// and the daemon only re-reads the backends every few minutes anyway, so a
+// faster poll would buy nothing but requests.
+const planEl = document.getElementById('plan-ticker');
+const PLAN_POLL_MS = 60000;
+function refreshPlanUsage() {
+  if (!planEl) return;
+  const fmt = (typeof PlanUsage !== 'undefined' && PlanUsage.formatPlanUsage)
+    ? PlanUsage.formatPlanUsage
+    : null;
+  fetch('/api/plan-usage').then(function (r) { return r.json(); }).then(function (p) {
+    const view = fmt ? fmt(p) : { visible: false };
+    if (!view.visible) {
+      planEl.style.display = 'none';
+      planEl.textContent = '';
+      return;
+    }
+    planEl.style.display = 'block';
+    planEl.className = view.className || '';
+    planEl.textContent = view.text || '';
+    planEl.title = view.title || '';
+  }).catch(function () {
+    // A failed fetch is not an answer about the allowance, so say nothing
+    // rather than leave a number on screen that no longer has a source.
+    planEl.style.display = 'none';
+  });
+}
+setInterval(function () {
+  if (typeof document !== 'undefined' && document.hidden) return;
+  refreshPlanUsage();
+}, PLAN_POLL_MS);
+refreshPlanUsage();
 
 // ── Latched stick-to-bottom (Track | Free) ────────────────────────────
 // Policy lives above the DOM. Mode is never re-derived from distance on

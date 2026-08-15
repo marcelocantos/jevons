@@ -205,6 +205,7 @@ test-web:
 	node web/scripts/decision_matrix_test.js
 	node web/scripts/streaming_markdown_test.js
 	node web/scripts/cost_display_test.js
+	node web/scripts/plan_usage_test.js
 	node web/scripts/link_safety_test.js
 	node web/scripts/image_lightbox_test.js
 
