@@ -12,13 +12,12 @@ import (
 	"github.com/marcelocantos/jevons/internal/handover"
 )
 
-// TestSeedMessageNamesTranscriptAndOrdersTheRead: the whole handover is
-// this prompt, so it must carry the path, say the session cannot be
-// resumed, and tell the successor to read from the END — a long-lived
-// agent's transcript is large, and a front-to-back crawl would burn the
-// context the handover exists to preserve (🎯T285).
-func TestSeedMessageNamesTranscriptAndOrdersTheRead(t *testing.T) {
-	path := "/Users/marcelo/.grok/sessions/019fd13d/chat_history.jsonl"
+// TestSeedMessageNamesTranscriptAndDoesNotAssignAWalk: 🎯T392.1.1 retired
+// the T285 "read from the END" assignment. A migrate seed still names
+// the backends and cites the path; it must not tell the successor to
+// walk the file.
+func TestSeedMessageNamesTranscriptAndDoesNotAssignAWalk(t *testing.T) {
+	path := filepath.Join("testdata", "predecessor.jsonl")
 	seed := handover.SeedMessage("grok", "claude", path)
 	if seed == "" {
 		t.Fatal("no seed produced for a known transcript")
@@ -31,11 +30,16 @@ func TestSeedMessageNamesTranscriptAndOrdersTheRead(t *testing.T) {
 		"grok", "claude",
 		"no memory of the previous session",
 		"cannot be resumed",
-		"start at the end",
-		"do not redo work",
+		"do not redo",
+		"lookup only",
 	} {
 		if !strings.Contains(low, want) {
 			t.Errorf("seed missing %q:\n%s", want, seed)
+		}
+	}
+	for _, bad := range []string{"start at the end", "work backwards", "read it before doing anything else"} {
+		if strings.Contains(low, bad) {
+			t.Errorf("seed still assigns a walk (%q):\n%s", bad, seed)
 		}
 	}
 }

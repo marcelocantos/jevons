@@ -1,0 +1,7 @@
+{"type":"system","content":"You are Grok."}
+{"type":"user","content":[{"type":"text","text":"Restart the jevons PO and instruct it not to start any work. Hard stop holds."}]}
+{"type":"assistant","content":"I'll restart jevons-po with a hard-stop brief. Open: llm-portfolio.json still pins Opus."}
+{"type":"user","content":[{"type":"text","text":"Why is it starting in Opus 5?"}]}
+{"type":"assistant","content":"Two knobs. config.yaml provider=grok is the daemon default. The portfolio file still wins on mint. Next: flip llm-portfolio.json if you want Grok on the next spawn."}
+{"type":"user","content":[{"type":"text","text":"Migrate it."}]}
+{"type":"assistant","content":"Migrating jevons-po to Grok. Hard-stop brief is queued behind the handover turn."}

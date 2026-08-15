@@ -65,6 +65,7 @@ type Claudia struct {
 	// before and migration is unavailable rather than silently cold.
 	roots     discovery.Roots
 	handovers *handover.Store
+	rotations *handover.RotationStore
 
 	// seedDeliver overrides how a handover seed reaches its successor
 	// (🎯T416). Nil is the product path, Deliver. Test seam: the handover

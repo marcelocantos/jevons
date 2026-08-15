@@ -37,6 +37,9 @@ func (f *Claudia) SetSessionRoots(r discovery.Roots) { f.roots = r }
 // SetHandoverStore attaches the durable pending-handover store.
 func (f *Claudia) SetHandoverStore(s *handover.Store) { f.handovers = s }
 
+// SetRotationStore attaches the durable last-rotation store (🎯T392.1.1).
+func (f *Claudia) SetRotationStore(s *handover.RotationStore) { f.rotations = s }
+
 // PrepareMigration rotates an agent onto a new session under provider
 // `to`, after recording where its predecessor's transcript lives. It does
 // NOT launch: the caller launches and then calls SeedSuccessor, so a
@@ -112,6 +115,7 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 		Agent:          name,
 		From:           string(def.Provider),
 		To:             string(target),
+		Kind:           kind,
 		OldSessionID:   oldSession,
 		TranscriptPath: transcript,
 	}
@@ -120,6 +124,11 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 	if f.handovers != nil {
 		if err := f.handovers.Put(pending); err != nil {
 			return handover.Pending{}, fmt.Errorf("%s %q: %w", kind, name, err)
+		}
+	}
+	if f.rotations != nil {
+		if err := f.rotations.Put(handover.Rotation{Agent: name, Kind: kind}); err != nil {
+			return handover.Pending{}, fmt.Errorf("%s %q: persist last rotation: %w", kind, name, err)
 		}
 	}
 

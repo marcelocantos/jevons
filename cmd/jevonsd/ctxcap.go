@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/ctxcap"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
@@ -34,14 +35,16 @@ const ctxCapInterval = 2 * time.Minute
 // startContextCeiling launches the governor. Returns immediately; the loop
 // runs until ctx is cancelled.
 func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery.Roots,
-	reg *claudia.Registry, fleetAdapter *fleet.Claudia, srv *server.Server) {
+	reg *claudia.Registry, fleetAdapter *fleet.Claudia, srv *server.Server,
+	rotations *handover.RotationStore) {
 	pol := ctxcap.Policy{
 		Ceiling:  cfg.ContextCeilingTokens,
 		Disabled: cfg.ContextCeilingDisabled,
 	}
 	obs := ctxcap.Observer{Roots: roots}
-	// Last-compaction times, so an agent whose steady-state context lives
-	// above the ceiling holds instead of rotating forever (🎯T392.1).
+	// In-memory last-compaction is a cache. The hold key is the durable
+	// rotation store: a SIGHUP that wipes this map must still hold
+	// (🎯T392.1.1).
 	lastCompaction := map[string]time.Time{}
 	slog.Info("context ceiling governor",
 		"ceiling", pol.EffectiveCeiling(), "disabled", pol.Disabled,
@@ -55,7 +58,7 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				contextCeilingPass(cfg, pol, obs, reg, fleetAdapter, srv, lastCompaction)
+				contextCeilingPass(cfg, pol, obs, reg, fleetAdapter, srv, lastCompaction, rotations)
 			}
 		}
 	}()
@@ -64,7 +67,7 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 // contextCeilingPass evaluates the fleet once and compacts what is over.
 func contextCeilingPass(cfg config.Config, pol ctxcap.Policy, obs ctxcap.Observer,
 	reg *claudia.Registry, fleetAdapter *fleet.Claudia, srv *server.Server,
-	lastCompaction map[string]time.Time) {
+	lastCompaction map[string]time.Time, rotations *handover.RotationStore) {
 	if reg == nil {
 		return
 	}
@@ -74,16 +77,21 @@ func contextCeilingPass(cfg config.Config, pol ctxcap.Policy, obs ctxcap.Observe
 		if reg.Get(def.Name) == nil {
 			continue
 		}
-		o := obs.Observe(ctxcap.AgentRef{
+		ref := ctxcap.AgentRef{
 			Name:      def.Name,
 			Provider:  string(def.Provider),
 			WorkDir:   def.WorkDir,
 			SessionID: def.SessionID,
-		})
+		}
+		o := obs.Observe(ref)
 		o.Now = time.Now()
+		o.SeedOnly = obs.SeedOnly(ref)
 		if last, ok := lastCompaction[def.Name]; ok {
 			o.SinceLastCompaction = o.Now.Sub(last)
 		}
+		// Durable last-rotation wins over a wiped in-memory map (SIGHUP).
+		since, ok := rotations.Observe(def.Name, o.Now)
+		o = ctxcap.ApplyPersistedRotation(o, since, ok)
 		d := pol.Evaluate(o)
 		if d.Verdict == ctxcap.VerdictHold {
 			// Loud on purpose: a repeated hold means the ceiling is simply

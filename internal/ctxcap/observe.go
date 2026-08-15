@@ -10,6 +10,8 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/transcript"
 )
 
 // Observation of live context (🎯T392.1).
@@ -64,6 +66,32 @@ func (o Observer) Observe(a AgentRef) Observation {
 	obs.Context = contextTokens(a.Provider, ev.Usage) / ev.ModelCalls
 	obs.HasContext = true
 	return obs
+}
+
+// SeedOnly reports a successor whose only user turns are rotation seeds.
+func (o Observer) SeedOnly(a AgentRef) bool {
+	if a.SessionID == "" {
+		return false
+	}
+	path := discovery.TranscriptPath(o.Roots, a.SessionID)
+	if path == "" {
+		return false
+	}
+	turns, err := transcript.ReadPath(path)
+	if err != nil || len(turns) == 0 {
+		return false
+	}
+	users := 0
+	for _, t := range turns {
+		if t.Role != "user" {
+			continue
+		}
+		users++
+		if !handover.LooksLikeSeed(t.Text) {
+			return false
+		}
+	}
+	return users > 0
 }
 
 // contextTokens is the conversation a call actually carried, which is not

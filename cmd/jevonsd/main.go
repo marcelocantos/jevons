@@ -624,6 +624,8 @@ func main() {
 	// across the rotation that overwrites the old session id.
 	fleetAdapter.SetSessionRoots(sessionRoots)
 	fleetAdapter.SetHandoverStore(handover.NewStore(filepath.Join(cfg.StateDir, "handover")))
+	rotationStore := handover.NewRotationStore(filepath.Join(cfg.StateDir, "rotations"))
+	fleetAdapter.SetRotationStore(rotationStore)
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
 	// ð¯T325.3: durable idea intake ledger (state_dir/ideas.json).
 	mcpSrv.SetIdeaStateDir(cfg.StateDir)
@@ -708,7 +710,7 @@ func main() {
 	// call. Deliberately not gated by the capacity governor â this loop
 	// exists to *reduce* spend, so deferring it when budget is tight is
 	// exactly backwards.
-	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv)
+	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv, rotationStore)
 
 	// 🎯T440: reap verification worktrees whose owner is gone, from outside
 	// the processes that create them — their own cleanup does not run when
