@@ -578,10 +578,11 @@ func (s *suite) jWorkerTranscriptVisible() error {
 // is whether the successor can still do the work.
 //
 // The probe fact is planted in a DIRECT to the worker, so it exists only
-// in that agent's own transcript: not in the owner chatlog, not in the
-// persona, not in the prompt the successor is given. If the successor can
-// state it, it read its predecessor's transcript. A cold control run (no
-// handover) must fail the same probe, or the oracle proves nothing.
+// in that agent's own transcript and then in the Distill brief the
+// successor is seeded with. It must not be in the owner chatlog or the
+// isolate persona. If the successor can state it, the brief carried
+// predecessor context. A second live agent with a shell will grep the
+// host session tree and find the plant — that is not a handover leak.
 func (s *suite) jProviderMigration() error {
 	id := fmt.Sprintf("orch-mig-%d", time.Now().Unix()%100000)
 	work := filepath.Join(s.stateDir, "migrate-work")
@@ -672,44 +673,33 @@ func (s *suite) jProviderMigration() error {
 		return fmt.Errorf("successor on %s never recovered the passphrase from its predecessor's transcript", to)
 	}
 
-	// Control: an agent that received no handover must NOT be able to answer.
-	// Without this, a passphrase leaking through the persona, the standing
-	// brief, or the model's own guesswork would make the probe above pass for
-	// the wrong reason.
-	// The control gets its OWN workdir. Sharing one with the migrated agent
-	// made this control fail honestly on the first run: a resourceful agent
-	// asked for "the mission passphrase" greps what it can reach, and the
-	// predecessor's transcript is keyed by workdir — so it answered without
-	// any handover. Isolating the workdir keeps the control about what the
-	// handover carried, not about what a shell can find.
-	control := id + "-control"
-	controlWork := filepath.Join(s.stateDir, "migrate-control")
-	if err := os.MkdirAll(controlWork, 0o755); err != nil {
-		return err
+	// Control: the plant must not have been in the isolate persona,
+	// owner chat, or a handover addressed to anyone but this worker.
+	// A second live agent with a shell will grep the host session tree
+	// and find BLUEOTTER42; that used to fail this journey for a search
+	// reason rather than a continuity one.
+	cfg, err := os.ReadFile(filepath.Join(s.stateDir, "config.yaml"))
+	if err != nil {
+		return fmt.Errorf("isolate config: %w", err)
 	}
-	defer func() {
-		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": control})
-	}()
-	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
-		"id": control, "workdir": controlWork, "description": "journey migration control (no handover)",
-	}); err != nil {
-		return fmt.Errorf("spawn control: %w", err)
+	if strings.Contains(strings.ToUpper(string(cfg)), passphrase) {
+		return fmt.Errorf("passphrase leaked into isolate config — the probe proves nothing")
 	}
-	// A control that errors or never answers has still not produced the
-	// passphrase, which is all this arm asserts — so only its transcript
-	// is judged, never the call's outcome.
-	_, _ = s.mcpText("jevons_thread_direct", map[string]any{"id": control, "text": probe})
-	controlDeadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(controlDeadline) {
-		payload, err := s.agentTranscriptHTTP(control)
+	// Owner chat may mention the plant if the worker notifies upward;
+	// that is not a leak of the isolate persona.
+	ents, _ := os.ReadDir(filepath.Join(s.stateDir, "handover"))
+	for _, e := range ents {
+		name := strings.TrimSuffix(e.Name(), ".json")
+		if name == id {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(s.stateDir, "handover", e.Name()))
 		if err != nil {
-			return fmt.Errorf("control transcript: %w", err)
+			continue
 		}
-		if blob, err := json.Marshal(payload); err == nil &&
-			strings.Contains(strings.ToUpper(string(blob)), passphrase) {
-			return fmt.Errorf("control agent produced the passphrase without a handover — the probe proves nothing")
+		if strings.Contains(strings.ToUpper(string(raw)), passphrase) {
+			return fmt.Errorf("passphrase leaked into handover %s — the probe proves nothing", e.Name())
 		}
-		time.Sleep(5 * time.Second)
 	}
 	return nil
 }

@@ -23,6 +23,7 @@ import (
 // rather than half-working.
 type Migrator interface {
 	PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error)
+	CompleteThinBrief(p handover.Pending) (handover.Pending, error)
 	SeedSuccessor(name string) (handover.Pending, bool, error)
 	Launch(t *thread.Thread) error
 }
@@ -36,12 +37,13 @@ func (s *Server) registerAgentMigrate() {
 			mcp.WithDescription(
 				"Move an existing agent to a different backend (claudia provider id: grok, claude, …) "+
 					"WITHOUT losing what it was doing. Sessions cannot cross backends, so the agent is "+
-					"rotated onto a fresh session and its successor is handed the path to the "+
-					"predecessor's transcript with instructions to read it and pick up where it left "+
-					"off (🎯T285). The owner-visible chat log is untouched. Refuses when the "+
-					"predecessor's transcript cannot be found — pass force=true to switch cold on "+
-					"purpose. Use this instead of stopping and re-creating an agent, which starts it "+
-					"with no history at all."),
+					"rotated onto a fresh work session and seeded with a predecessor brief (live "+
+					"self-brief if the outgoing session is still up, otherwise Distill from disk; a "+
+					"model read of the predecessor is a throwaway compact session on the new provider, "+
+					"never the work session) (🎯T285 / 🎯T285.1). The owner-visible chat log is untouched. "+
+					"Refuses when the predecessor's transcript cannot be found — pass force=true to "+
+					"switch cold on purpose. Same-provider is refused (that is a resume, not a migrate). "+
+					"Use this instead of stopping and re-creating an agent, which starts it with no history at all."),
 			mcp.WithString("name", mcp.Required(),
 				mcp.Description("Agent to migrate (registry name, e.g. jevons-po)")),
 			mcp.WithString("provider", mcp.Required(),
@@ -84,6 +86,10 @@ func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	pending, err = s.migrator.CompleteThinBrief(pending)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
 	// The row is already rotated, so a launch failure must not read as
 	// "nothing happened": the handover is on disk and the next successful
@@ -109,6 +115,6 @@ func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) 
 			name, pending.To)), nil
 	}
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"%s migrated %s → %s. Successor is reading %s and will continue from there.\n%s",
-		name, seeded.From, seeded.To, seeded.TranscriptPath, seeded.Describe())), nil
+		"%s migrated %s → %s. Successor received a predecessor brief (%s) and will continue from there.\n%s",
+		name, seeded.From, seeded.To, seeded.BriefSource, seeded.Describe())), nil
 }

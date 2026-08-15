@@ -66,6 +66,15 @@ type suite struct {
 	// outages counts journeys the provider prevented from running (🎯T283).
 	// They are reported separately and do not fail the suite.
 	outages int
+
+	// Isolate daemon — J14 bounces this process against the same state.
+	daemonBin string
+	cfgPath   string
+	logPath   string
+	workdir   string
+	port      int
+	cmd       *exec.Cmd
+	logFile   *os.File
 }
 
 func main() {
@@ -158,14 +167,11 @@ persona_notes: |
 	if err != nil {
 		fatal(err)
 	}
-	cmd := exec.Command(daemon,
-		"-config", cfgPath,
-		"-port", fmt.Sprint(p),
-		"-bind", "127.0.0.1",
-		"-workdir", stateDir,
-	)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	s := &suite{
+		host: host, stateDir: stateDir, provider: provider, only: *only,
+		daemonBin: daemon, cfgPath: cfgPath, logPath: logPath,
+		workdir: stateDir, port: p, logFile: logFile,
+	}
 
 	// Always tear down daemon + journey MCP. Normal path stops before J5 so
 	// isolation assertions see post-teardown MCP state; defer covers early
@@ -176,19 +182,8 @@ persona_notes: |
 			return
 		}
 		stopped = true
-		started := cmd.Process != nil
-		if started {
-			_ = cmd.Process.Signal(os.Interrupt)
-			done := make(chan error, 1)
-			go func() { done <- cmd.Wait() }()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				_ = cmd.Process.Kill()
-				<-done
-			}
-			cmd.Process = nil
-		}
+		started := s.cmd != nil && s.cmd.Process != nil
+		_ = s.signalStop(5 * time.Second)
 		_ = logFile.Close()
 		// Remove journey MCP only — never touch the daily MCP name — and
 		// through the CLI that registered it (🎯T282: Claude registers via
@@ -215,18 +210,12 @@ persona_notes: |
 	cleanups.Add(stop)
 	catchSignals()
 
-	if err := cmd.Start(); err != nil {
+	if err := s.startDaemon(); err != nil {
+		dumpTail(logPath, 40)
 		fatal(fmt.Errorf("start jevonsd: %w (build with make jevonsd?)", err))
 	}
 	fmt.Printf("started isolated jevonsd pid=%d host=%s state=%s mcp=%s provider=%s\n",
-		cmd.Process.Pid, host, stateDir, mcpName, provider)
-
-	if err := waitReady(host, readyTimeout); err != nil {
-		dumpTail(logPath, 40)
-		fatal(fmt.Errorf("daemon not ready: %w", err))
-	}
-
-	s := &suite{host: host, stateDir: stateDir, provider: provider, only: *only}
+		s.cmd.Process.Pid, host, stateDir, mcpName, provider)
 	s.run("J1-health", s.jHealth)
 	s.run("J2-chat-round-trip", s.jChatRoundTrip)
 	s.run("J3-cancel-and-send", s.jCancelAndSend)
@@ -244,6 +233,8 @@ persona_notes: |
 	s.run("J11-worker-transcript", s.jWorkerTranscriptVisible)
 	s.run("J12-provider-migration", s.jProviderMigration)
 	s.run("J13-overseer-migration", s.jOverseerMigration)
+	s.run("J14-bounce-resume", s.jBounceResume)
+	s.run("J15-switch-seed-shape", s.jSwitchSeedShape)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()

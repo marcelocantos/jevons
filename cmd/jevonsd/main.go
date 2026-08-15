@@ -844,17 +844,16 @@ func main() {
 	}()
 
 	// Now start agents — MCP server is reachable.
-	// Ordinary start (no handoff): Launch creates. Leftovers from a
-	// leaky exit are not reaped — they stay visible.
-	// Upgrade start (handoff present): adopt leftover processes;
-	// Launch only for sessions that actually exited.
+	// 🎯T40.2: every return adopts leftover processes, then resumes
+	// what exited. Launch itself still only creates; leftovers are
+	// not reaped. Upgrade handoff is consumed so a later drain start
+	// is not mistaken for an upgrade — it no longer chooses the start
+	// method.
+	upgrade.ReattachFleet(registry)
 	if upgradeSnap != nil {
-		registry.StartAllPreferAdopt()
 		if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
 			slog.Warn("could not consume upgrade handoff", "err", err)
 		}
-	} else {
-		registry.StartAll()
 	}
 
 	// Exit policy: normal â StopAll; upgrade (SIGHUP / JEVONS_UPGRADE_EXIT) â leave

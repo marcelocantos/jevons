@@ -41,6 +41,10 @@ func (m *fakeOverseerMigrator) PrepareMigration(name string, to claudia.Provider
 	return m.pending, nil
 }
 
+func (m *fakeOverseerMigrator) CompleteThinBrief(p handover.Pending) (handover.Pending, error) {
+	return p, nil
+}
+
 // PrepareCompaction is the same rotation with the provider held constant
 // (🎯T392.1) — the fake records it distinctly so a test can tell a context
 // rotation from a backend switch.
@@ -80,6 +84,15 @@ func (m *fakeOverseerMigrator) wasDelivered() bool {
 
 // TestMigrateOverseerRequiresWiring: without a registry or a migrator the
 // call must refuse, not half-rotate the owner's CEO agent (🎯T285).
+func TestCompactOverseerWithdrawn(t *testing.T) {
+	s := New("test", t.TempDir())
+	if _, err := s.CompactOverseer(false); err == nil {
+		t.Fatal("CompactOverseer succeeded — remint is withdrawn")
+	} else if !strings.Contains(err.Error(), "withdrawn") {
+		t.Fatalf("CompactOverseer err=%v want withdrawn", err)
+	}
+}
+
 func TestMigrateOverseerRequiresWiring(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.SetOverseerName("jevons")
@@ -162,8 +175,12 @@ func TestResumePendingHandoverSeedsOnce(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("seeds sent = %d, want 1: %v", len(got), got)
 	}
-	if !strings.Contains(got[0], "chat_history.jsonl") {
-		t.Fatalf("seed does not name the predecessor's transcript: %s", got[0])
+	low := strings.ToLower(got[0])
+	if !strings.Contains(low, "provider switch") || !strings.Contains(low, "what was in flight") {
+		t.Fatalf("seed is not brief-shaped: %s", got[0])
+	}
+	if strings.Contains(got[0], "chat_history.jsonl") || strings.Contains(low, "start at the end") {
+		t.Fatalf("work seed still assigns a transcript walk: %s", got[0])
 	}
 
 	// A second attach must not re-seed: the record is now delivered.

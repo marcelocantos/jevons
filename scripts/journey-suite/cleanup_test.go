@@ -192,7 +192,7 @@ func TestPanickingCleanupDoesNotStrandTheRest(t *testing.T) {
 
 // The teardown must be ARMED BEFORE the daemon is launched, not after it.
 // jevonsd writes the user-scoped `jevonsmcp-journey` entry during its own
-// boot, so a Ctrl-C landing between `cmd.Start()` and the arming call leaks
+// boot, so a Ctrl-C landing between `s.startDaemon()` and the arming call leaks
 // precisely the registration 🎯T379 exists to stop leaking. That window is a
 // race no runtime test can reliably enter, but it is decidable from source
 // order, so this reads the program rather than running it.
@@ -210,9 +210,9 @@ func TestTeardownIsArmedBeforeTheDaemonStarts(t *testing.T) {
 	}
 	text := string(src)
 
-	start := strings.Index(text, "cmd.Start()")
+	start := strings.Index(text, "s.startDaemon()")
 	if start < 0 {
-		t.Fatal("no cmd.Start() in main.go — this oracle is pinned to the wrong call")
+		t.Fatal("no s.startDaemon() in main.go — this oracle is pinned to the wrong call")
 	}
 	for _, arm := range []string{"cleanups.Add(stop)", "catchSignals()"} {
 		at := strings.Index(text, arm)

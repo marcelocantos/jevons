@@ -80,6 +80,12 @@ type Claudia struct {
 	// be able to write that file without launching a provider.
 	seedTranscript func(name string) string
 
+	// selfBrief / compactBrief are T285.1 gather hooks. Nil is the
+	// product path (try the live outgoing session; throwaway compact
+	// on the new provider). Tests inject dead/live/thin fixtures.
+	selfBrief    func(p handover.Pending) (string, error)
+	compactBrief func(p handover.Pending) (sessionID, text string, err error)
+
 	// onLaunch brackets a launch this adapter performs (🎯T426). It is called
 	// BEFORE the process comes up and returns the function to call once it
 	// has. The host attaches whatever must ride EVERY launch — today the

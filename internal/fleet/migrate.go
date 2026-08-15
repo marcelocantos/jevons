@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
@@ -15,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -39,6 +41,31 @@ func (f *Claudia) SetHandoverStore(s *handover.Store) { f.handovers = s }
 
 // SetRotationStore attaches the durable last-rotation store (🎯T392.1.1).
 func (f *Claudia) SetRotationStore(s *handover.RotationStore) { f.rotations = s }
+
+// PendingHandovers is every record the store holds, oldest first. It is how
+// the daemon's sweep finds a seed nobody delivered without knowing which
+// agents ever migrated (🎯T418 clause 5): "pending for the next launch" is
+// only a state with an owner if something reads the pending set.
+//
+// No store wired is an empty list rather than an error: a daemon without
+// migration configured has no handovers to retry, which is not a fault.
+func (f *Claudia) PendingHandovers() ([]handover.Pending, error) {
+	if f == nil || f.handovers == nil {
+		return nil, nil
+	}
+	return f.handovers.List()
+}
+
+// ClearHandover drops a record the sweep has finished with — delivered and
+// past its double-seed window, or addressed to an agent that has left the
+// fleet. Exposed here rather than reaching for the store directly so the
+// registry-facing caller keeps one collaborator.
+func (f *Claudia) ClearHandover(name string) error {
+	if f == nil || f.handovers == nil {
+		return nil
+	}
+	return f.handovers.Clear(name)
+}
 
 // PrepareMigration rotates an agent onto a new session under provider
 // `to`, after recording where its predecessor's transcript lives. It does
@@ -65,32 +92,102 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	if def.Provider == target {
 		return handover.Pending{}, fmt.Errorf("migrate %q: already on %s", name, target)
 	}
-	return f.rotate(name, target, force, "migrate")
+
+	// Gather the work-session brief BEFORE rotate stops the outgoing
+	// process. Live self-brief needs that process; Distill and the
+	// throwaway compact do not. Rotate then mints the WORK session
+	// — a different id from any compact session (🎯T285.1).
+	oldSession := def.SessionID
+	transcript := discovery.TranscriptPath(f.roots, oldSession)
+	if transcript == "" && !force {
+		return handover.Pending{}, fmt.Errorf(
+			"migrate %q: no transcript found for session %s under the configured session roots — "+
+				"its history cannot be handed over; pass force to switch cold anyway",
+			name, oldSession)
+	}
+	draft := handover.Pending{
+		Agent:          name,
+		From:           string(def.Provider),
+		To:             string(target),
+		Kind:           handover.KindMigrate,
+		OldSessionID:   oldSession,
+		TranscriptPath: transcript,
+	}
+	brief := handover.GatherBrief(draft, handover.GatherHooks{
+		SelfBrief: f.trySelfBrief,
+		// Compact is the test hook only. The product throwaway session
+		// is launched from CompleteThinBrief after PrepareMigration, so
+		// hermetic rotate tests never block on a live provider.
+		Compact: f.compactBrief,
+	})
+	draft.Brief = brief.Text
+	draft.BriefSource = string(brief.Source)
+	draft.CompactSessionID = brief.CompactSessionID
+
+	pending, err := f.rotate(name, target, force, "migrate")
+	if err != nil {
+		return pending, err
+	}
+	pending.Brief = draft.Brief
+	pending.BriefSource = draft.BriefSource
+	pending.CompactSessionID = draft.CompactSessionID
+	if f.handovers != nil {
+		if err := f.handovers.Put(pending); err != nil {
+			return pending, fmt.Errorf("migrate %q: persist brief: %w", name, err)
+		}
+	}
+	if def := f.reg.Def(name); def != nil && pending.CompactSessionID != "" &&
+		def.SessionID == pending.CompactSessionID {
+		next := *def
+		next.SessionID = uuid.NewString()
+		if err := f.reg.Register(next); err != nil {
+			return pending, fmt.Errorf("migrate %q: separate work session from compact: %w", name, err)
+		}
+	}
+	return pending, nil
 }
 
-// PrepareCompaction rotates an agent onto a fresh session on the SAME
-// provider, handing the successor its predecessor's transcript (🎯T392.1).
-//
-// This is the context ceiling's only enforcement action, and it is the
-// migration path with the provider held constant — deliberately, because
-// the hard part of both is identical: resolve and persist the transcript
-// pointer before the rotation overwrites the session id that finds it.
-// Asking the model to compact itself was the alternative and it is not
-// one, since a model deciding when its own context is too large is the
-// judgement call the ceiling exists to replace.
-//
-// The cost of a compaction is one turn at the ceiling plus the re-reads
-// that follow it. That is charged knowingly: a replay of the 🎯T392
-// baseline puts a 100k ceiling at -63% net of 56 such compactions.
+// CompleteThinBrief runs the throwaway compact session when Distill
+// extracted nothing useful. Failure falls through — the switch must not
+// stall. The work session id on the registry row is kept distinct from
+// the compact session (🎯T285.1).
+func (f *Claudia) CompleteThinBrief(p handover.Pending) (handover.Pending, error) {
+	if !handover.ProviderSwitch(p.From, p.To) {
+		return p, nil
+	}
+	if p.BriefSource == string(handover.SourceSelf) || strings.TrimSpace(p.CompactSessionID) != "" {
+		return p, nil
+	}
+	if !handover.DistillTooThin(p.Brief) && !handover.DistillTooThin(handover.Distill(p.TranscriptPath)) {
+		return p, nil
+	}
+	sid, text, err := f.runThrowawayCompact(p)
+	if err != nil || strings.TrimSpace(text) == "" {
+		return p, nil
+	}
+	p.Brief = strings.TrimSpace(text)
+	p.BriefSource = string(handover.SourceCompact)
+	p.CompactSessionID = strings.TrimSpace(sid)
+	if f.handovers != nil {
+		if err := f.handovers.Put(p); err != nil {
+			return p, fmt.Errorf("compact brief persist: %w", err)
+		}
+	}
+	if def := f.reg.Def(p.Agent); def != nil && p.CompactSessionID != "" &&
+		def.SessionID == p.CompactSessionID {
+		next := *def
+		next.SessionID = uuid.NewString()
+		if err := f.reg.Register(next); err != nil {
+			return p, fmt.Errorf("separate work session from compact: %w", err)
+		}
+	}
+	return p, nil
+}
+
+// PrepareCompaction is withdrawn (🎯T40.2). A same-provider remint is
+// not how a conversation continues and not how burn is controlled.
 func (f *Claudia) PrepareCompaction(name string, force bool) (handover.Pending, error) {
-	if f == nil || f.reg == nil {
-		return handover.Pending{}, fmt.Errorf("compact: no agent registry")
-	}
-	def := f.reg.Def(name)
-	if def == nil {
-		return handover.Pending{}, fmt.Errorf("compact: no agent %q", name)
-	}
-	return f.rotate(name, def.Provider, force, "compact")
+	return handover.Pending{}, fmt.Errorf("compact %q: withdrawn (T40.2) — same-provider remint is not a product operation", name)
 }
 
 // rotate is the shared body of migration and compaction. kind only
@@ -381,4 +478,86 @@ func (f *Claudia) deliverSeed(name, seed string) (string, error) {
 		return f.seedDeliver(name, seed)
 	}
 	return f.Deliver(name, seed)
+}
+
+func (f *Claudia) trySelfBrief(p handover.Pending) (string, error) {
+	if f.selfBrief != nil {
+		return f.selfBrief(p)
+	}
+	ag := f.reg.Get(p.Agent)
+	if ag == nil || !ag.Alive() {
+		return "", errOutgoingDead
+	}
+	// Bounded: a live outgoing that is busy or slow must not stall the
+	// switch. Timeout falls through to Distill (🎯T285.1).
+	type reply struct {
+		text string
+		err  error
+	}
+	ch := make(chan reply, 1)
+	go func() {
+		text, err := f.Deliver(p.Agent, selfBriefPrompt)
+		ch <- reply{text, err}
+	}()
+	select {
+	case got := <-ch:
+		if got.err != nil {
+			return "", got.err
+		}
+		return strings.TrimSpace(got.text), nil
+	case <-time.After(15 * time.Second):
+		return "", fmt.Errorf("self-brief timeout")
+	}
+}
+
+func (f *Claudia) runThrowawayCompact(p handover.Pending) (string, string, error) {
+	if f.compactBrief != nil {
+		return f.compactBrief(p)
+	}
+	return f.launchThrowawayCompact(p)
+}
+
+const selfBriefPrompt = "Write a short brief of in-flight work only (promises, open threads, last decision). No preamble. Do not continue the work."
+
+var errOutgoingDead = errors.New("outgoing session is not live")
+
+// launchThrowawayCompact starts a throwaway session on the NEW provider
+// whose only job is to read the predecessor file. The work session is a
+// later Start on a different session_id.
+func (f *Claudia) launchThrowawayCompact(p handover.Pending) (string, string, error) {
+	if f == nil || f.reg == nil {
+		return "", "", fmt.Errorf("throwaway compact: no registry")
+	}
+	def := f.reg.Def(p.Agent)
+	if def == nil {
+		return "", "", fmt.Errorf("throwaway compact: no agent %q", p.Agent)
+	}
+	sid := uuid.NewString()
+	temp := "jv-compact-" + sid[:8]
+	tempDef := *def
+	tempDef.Name = temp
+	tempDef.SessionID = sid
+	tempDef.Provider = claudia.Provider(p.To)
+	tempDef.Materialized = false
+	tempDef.AutoStart = false
+	tempDef.ConnectURL = ""
+	tempDef.ConnectPID = 0
+	if err := f.reg.Register(tempDef); err != nil {
+		return "", "", err
+	}
+	defer func() {
+		f.reg.Stop(temp)
+		_ = f.reg.Remove(temp)
+	}()
+	if err := f.Launch(&thread.Thread{ID: temp}); err != nil {
+		return "", "", err
+	}
+	prompt := fmt.Sprintf(
+		"This is a throwaway compact session. Read the predecessor transcript at %s and reply with a short brief of in-flight work only. Do not continue the work.",
+		p.TranscriptPath)
+	text, err := f.Deliver(temp, prompt)
+	if err != nil {
+		return sid, "", err
+	}
+	return sid, strings.TrimSpace(text), nil
 }

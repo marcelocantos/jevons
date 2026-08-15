@@ -16,19 +16,14 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/server"
-	"github.com/marcelocantos/jevons/internal/thread"
 )
 
-// Context ceiling governor (🎯T392.1).
+// Context ceiling governor (🎯T392.1 observation / 🎯T40.2 remint withdrawn).
 //
 // Observes every registered agent's live context from the provider's own
-// usage frames and rotates the ones over the ceiling onto a fresh session,
-// handing each successor its predecessor's transcript.
-//
-// The check interval is deliberately unhurried. A ceiling is not a
-// tripwire that must fire the instant it is crossed — an agent a little
-// over budget for a minute costs a rounding error, while a governor that
-// polls aggressively spends real tokens of its own doing nothing.
+// usage frames. A conversation that has grown large is logged. It is
+// never rotated onto a fresh session: remint is not how a conversation
+// continues and not how burn is controlled.
 
 const ctxCapInterval = 2 * time.Minute
 
@@ -42,13 +37,10 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 		Disabled: cfg.ContextCeilingDisabled,
 	}
 	obs := ctxcap.Observer{Roots: roots}
-	// In-memory last-compaction is a cache. The hold key is the durable
-	// rotation store: a SIGHUP that wipes this map must still hold
-	// (🎯T392.1.1).
 	lastCompaction := map[string]time.Time{}
 	slog.Info("context ceiling governor",
 		"ceiling", pol.EffectiveCeiling(), "disabled", pol.Disabled,
-		"interval", ctxCapInterval)
+		"interval", ctxCapInterval, "remint", "withdrawn")
 
 	go func() {
 		t := time.NewTicker(ctxCapInterval)
@@ -64,16 +56,17 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 	}()
 }
 
-// contextCeilingPass evaluates the fleet once and compacts what is over.
+// contextCeilingPass evaluates the fleet once. It does not mint or seed.
 func contextCeilingPass(cfg config.Config, pol ctxcap.Policy, obs ctxcap.Observer,
 	reg *claudia.Registry, fleetAdapter *fleet.Claudia, srv *server.Server,
 	lastCompaction map[string]time.Time, rotations *handover.RotationStore) {
 	if reg == nil {
 		return
 	}
+	_ = fleetAdapter
+	_ = srv
+	_ = cfg
 	for _, def := range reg.List() {
-		// A stopped agent is carrying no context into anything. Rotating it
-		// would only discard a session it may still resume from.
 		if reg.Get(def.Name) == nil {
 			continue
 		}
@@ -89,64 +82,16 @@ func contextCeilingPass(cfg config.Config, pol ctxcap.Policy, obs ctxcap.Observe
 		if last, ok := lastCompaction[def.Name]; ok {
 			o.SinceLastCompaction = o.Now.Sub(last)
 		}
-		// Durable last-rotation wins over a wiped in-memory map (SIGHUP).
 		since, ok := rotations.Observe(def.Name, o.Now)
 		o = ctxcap.ApplyPersistedRotation(o, since, ok)
 		d := pol.Evaluate(o)
-		if d.Verdict == ctxcap.VerdictHold {
-			// Loud on purpose: a repeated hold means the ceiling is simply
-			// too low for this agent, which is a configuration answer, not
-			// something more rotations can fix.
-			slog.Warn("context ceiling held — agent lives above the ceiling",
-				"agent", def.Name, "context", d.Context, "ceiling", d.Ceiling,
-				"since_last_compaction", o.SinceLastCompaction.Round(time.Second))
+		if ctxcap.ActionFor(d) != ctxcap.ActionObserve {
 			continue
 		}
-		if d.Verdict != ctxcap.VerdictCompact {
-			continue
-		}
-		slog.Info("context ceiling exceeded — compacting",
-			"agent", def.Name, "context", d.Context, "ceiling", d.Ceiling)
-
-		var err error
-		if def.Purpose == claudia.PurposeOverseer {
-			// Owner chat is attached by the server, so the overseer's
-			// rotation has to re-attach there or the cockpit goes quiet.
-			_, err = srv.CompactOverseer(false)
-		} else {
-			err = compactFleetAgent(fleetAdapter, def.Name)
-		}
-		if err != nil {
-			// Loud, not fatal: a compaction that cannot complete leaves the
-			// agent running over budget, which is the status quo, not a new
-			// failure. The handover (if the row rotated) stays on disk.
-			slog.Error("context compaction failed",
-				"agent", def.Name, "context", d.Context, "err", err)
-			// Record the attempt regardless: a compaction that fails and is
-			// retried every pass is the same treadmill by another road.
-			lastCompaction[def.Name] = time.Now()
-			continue
-		}
-		lastCompaction[def.Name] = time.Now()
-		_ = cfg // reserved: per-purpose ceilings
+		// Loud on purpose: a large conversation used to remint. That
+		// path is withdrawn — stay in this session.
+		slog.Info("context large — not reminting",
+			"agent", def.Name, "verdict", d.Verdict, "context", d.Context,
+			"ceiling", d.Ceiling, "reason", d.Reason)
 	}
-}
-
-// compactFleetAgent runs the rotate → launch → seed sequence, the same one
-// jevons_agent_migrate uses, with the provider held constant.
-func compactFleetAgent(f *fleet.Claudia, name string) error {
-	pending, err := f.PrepareCompaction(name, false)
-	if err != nil {
-		return err
-	}
-	if err := f.Launch(&thread.Thread{ID: name}); err != nil {
-		// The row is already rotated and the handover is on disk, so the
-		// next successful launch still delivers the predecessor's history.
-		return err
-	}
-	if _, _, err := f.SeedSuccessor(name); err != nil {
-		return err
-	}
-	slog.Info("agent compacted", "agent", name, "detail", pending.Describe())
-	return nil
 }

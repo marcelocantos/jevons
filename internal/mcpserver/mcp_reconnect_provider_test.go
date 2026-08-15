@@ -106,6 +106,9 @@ func (m refusingMigrator) PrepareMigration(string, claudia.Provider, bool) (hand
 	m.t.Fatal("PrepareMigration called for the overseer")
 	return handover.Pending{}, nil
 }
+func (m refusingMigrator) CompleteThinBrief(p handover.Pending) (handover.Pending, error) {
+	return p, nil
+}
 func (m refusingMigrator) SeedSuccessor(string) (handover.Pending, bool, error) {
 	return handover.Pending{}, false, nil
 }

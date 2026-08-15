@@ -31,6 +31,7 @@ import (
 // half-wired.
 type OverseerMigrator interface {
 	PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error)
+	CompleteThinBrief(p handover.Pending) (handover.Pending, error)
 	PrepareCompaction(name string, force bool) (handover.Pending, error)
 	PendingHandover(name string) (handover.Pending, bool, error)
 	MarkHandoverDelivered(name string) error
@@ -55,25 +56,18 @@ func (s *Server) MigrateOverseer(to claudia.Provider, force bool) (handover.Pend
 		return handover.Pending{}, fmt.Errorf("migrate overseer: target provider is required")
 	}
 	return s.rotateOverseer("migrate", func(mig OverseerMigrator, name string) (handover.Pending, error) {
-		return mig.PrepareMigration(name, target, force)
+		pending, err := mig.PrepareMigration(name, target, force)
+		if err != nil {
+			return pending, err
+		}
+		return mig.CompleteThinBrief(pending)
 	})
 }
 
-// CompactOverseer rotates the overseer onto a fresh session on the same
-// backend when its context has grown past the ceiling (🎯T392.1).
-//
-// The overseer is the fleet's largest single consumer — 35.5% of the
-// 🎯T392 baseline at a 192k mean context — precisely because everything
-// the fleet says lands in it. It also cannot use the fleet compaction
-// path: owner chat is attached by this server, not the registry, so a
-// rotation has to re-attach here or the cockpit goes silent.
-//
-// Until this existed the only thing bounding the overseer's context was
-// accidental daemon restarts, roughly one every five hours.
+// CompactOverseer is withdrawn (🎯T40.2). Same-provider remint is not a
+// product operation: a restart resumes the session, a migrate is explicit.
 func (s *Server) CompactOverseer(force bool) (handover.Pending, error) {
-	return s.rotateOverseer("compact", func(mig OverseerMigrator, name string) (handover.Pending, error) {
-		return mig.PrepareCompaction(name, force)
-	})
+	return handover.Pending{}, fmt.Errorf("compact overseer: withdrawn (T40.2) — same-provider remint is not a product operation")
 }
 
 // rotateOverseer is the shared rotate/relaunch/re-attach/seed sequence.

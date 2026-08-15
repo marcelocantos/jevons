@@ -10,11 +10,11 @@
 // existing agent to another provider therefore always means a NEW
 // conversation for it — the question is only what the successor is told.
 //
-// The successor is handed a bounded brief distilled from that file
-// (🎯T392.1.1), not an instruction to walk it. The path is cited for
-// lookup. Nothing is asked of the outgoing session — by migration time
-// it is often already dead, and a handover that depends on interviewing
-// a corpse is a handover that fails when it is needed most.
+// The successor is handed a bounded brief distilled from that file,
+// not an instruction to walk it. Nothing is asked of the outgoing
+// session — it may already be dead or out of tokens (🎯T285.1). A
+// handover that depends on interviewing a corpse fails when it is
+// needed most.
 package handover
 
 import (
@@ -39,8 +39,9 @@ func TranscriptFormat(fromProvider string) string {
 	}
 }
 
-// Rotation kinds. Compact and upgrade are same-provider remints;
-// migrate is the only provider switch.
+// Rotation kinds. Only migrate is a provider switch. Compact/upgrade
+// kinds remain on disk from earlier remints; they must not produce a
+// migrate seed.
 const (
 	KindMigrate = "migrate"
 	KindCompact = "compact"
@@ -56,13 +57,10 @@ func ProviderSwitch(from, to string) bool {
 	return a != "" && b != "" && a != b
 }
 
-// SeedMessage is the one-off prompt handed to a migrate successor. Same-
-// provider arguments are forced onto the compact seed: the provider-switch
-// story must not fire unless the backends actually differ (🎯T392.1.1).
-//
-// It returns "" when there is no transcript to point at, which the caller
-// must treat as "refuse or deliberately cold-start" rather than sending a
-// handover that names nothing.
+// SeedMessage is the one-off prompt handed to a migrate successor.
+// Same-provider arguments produce nothing: that is a restart, not a
+// switch (🎯T40.2). Empty path also yields "" — the caller must refuse
+// or cold-start deliberately.
 func SeedMessage(fromProvider, toProvider, transcriptPath string) string {
 	return ComposeSeed(Pending{
 		From:           fromProvider,
@@ -72,56 +70,38 @@ func SeedMessage(fromProvider, toProvider, transcriptPath string) string {
 	})
 }
 
-// ComposeSeed is the shipped seed-construction path (🎯T392.1.1).
+// ComposeSeed is the shipped migrate seed. It is empty unless this is
+// a real provider switch with a brief or a transcript to distill.
 func ComposeSeed(p Pending) string {
-	path := strings.TrimSpace(p.TranscriptPath)
-	if path == "" {
+	if !ProviderSwitch(p.From, p.To) {
 		return ""
 	}
-	kind := p.EffectiveKind()
-	brief := Distill(path)
-	cite := fmt.Sprintf(
-		"Predecessor transcript (lookup only if this brief is insufficient; do not read or walk the file):\n  %s\n  (%s)",
-		path, TranscriptFormat(p.From))
-	body := brief
-	if body == "" {
-		body = "(no distillable turns — honour any in-flight work named below, and do not reconstruct from the file.)"
+	brief := strings.TrimSpace(p.Brief)
+	if brief == "" {
+		brief = Distill(p.TranscriptPath)
 	}
-	switch kind {
-	case KindCompact, KindUpgrade:
-		return compactSeed(body, cite)
-	default:
-		return migrateSeed(p.From, p.To, body, cite)
+	if brief == "" && strings.TrimSpace(p.TranscriptPath) == "" && strings.TrimSpace(p.Brief) == "" {
+		return ""
 	}
-}
-
-func compactSeed(brief, cite string) string {
-	return "[Context compact — same backend, new session. You were rotated because the previous conversation crossed the context ceiling. This is not a provider switch.]\n\n" +
-		"Predecessor brief:\n\n" + brief + "\n\n" + cite + "\n\n" +
-		"Pick up exactly where that left off: finish what was in flight, honour what it promised, and do not redo completed work.\n\n" +
-		"Acknowledge in ONE short sentence, or say nothing. Do not narrate reconstruction."
-}
-
-func migrateSeed(from, to, brief, cite string) string {
+	if brief == "" {
+		brief = "(no distillable turns — honour any in-flight work you can see, and do not reconstruct from the predecessor file.)"
+	}
 	return fmt.Sprintf(
-		"[Session handover — you have been restarted on a different agent backend (%s → %s). "+
-			"You have no memory of the previous session, and it cannot be resumed: the two "+
-			"backends keep separate session stores.]\n\n"+
-			"Predecessor brief:\n\n%s\n\n%s\n\n"+
-			"Pick up exactly where that left off: finish what was in flight, honour what it promised, and do not redo completed work.\n\n"+
-			"Acknowledge in ONE short sentence naming what you are continuing. Do not narrate reconstruction.",
-		providerLabel(from), providerLabel(to), brief, cite)
+		"[Provider switch — %s → %s. This is a new conversation on the new backend. "+
+			"The previous session cannot be resumed there. The outgoing provider was not asked to summarise: it may be dead or out of tokens.]\n\n"+
+			"What was in flight:\n\n%s\n\n"+
+			"Continue from that. Do not read the predecessor transcript. Acknowledge the switch in ONE short sentence, then work.",
+		providerLabel(p.From), providerLabel(p.To), brief)
 }
 
-// LooksLikeSeed reports a user turn that is a rotation seed, so a
-// successor whose only user turns are seeds has not grown through the
-// ceiling (🎯T392.1.1).
+// LooksLikeSeed reports a migrate seed so a successor's first turn is
+// not mistaken for owner work.
 func LooksLikeSeed(text string) bool {
 	low := strings.ToLower(text)
-	return strings.Contains(low, "[session handover") ||
-		strings.Contains(low, "[context compact") ||
+	return strings.Contains(low, "[provider switch") ||
+		strings.Contains(low, "[session handover") ||
 		strings.Contains(low, "predecessor brief:") ||
-		strings.Contains(low, "predecessor's transcript is on disk")
+		strings.Contains(low, "what was in flight:")
 }
 
 // AssignedReadAssignment is the retired T285 instruction, kept as a
@@ -152,6 +132,15 @@ type Pending struct {
 	OldSessionID   string `json:"old_session_id"`  // predecessor's session
 	TranscriptPath string `json:"transcript_path"` // resolved before rotation
 	CreatedAt      string `json:"created_at"`      // RFC3339, informational
+	// Brief is the text the work session receives (self-brief, Distill,
+	// or throwaway-compact). Empty means ComposeSeed Distills the path.
+	Brief string `json:"brief,omitempty"`
+	// BriefSource is self-brief | distill | throwaway-compact.
+	BriefSource string `json:"brief_source,omitempty"`
+	// CompactSessionID is the throwaway new-provider session that read
+	// the predecessor when Distill was too thin. The work session id
+	// on the registry row must differ (🎯T285.1).
+	CompactSessionID string `json:"compact_session_id,omitempty"`
 	// Delivered records that the successor received its seed, so a
 	// migration resumed after a crash does not seed it twice.
 	Delivered bool `json:"delivered,omitempty"`
@@ -218,10 +207,9 @@ func (p Pending) DescribeAge(now time.Time) string {
 // Seed renders the prompt for this record.
 func (p Pending) Seed() string { return ComposeSeed(p) }
 
-// OwnerVisible is what the cockpit may paint for this rotation.
-// Compact is silent: reconstruction is not an owner-facing turn.
+// OwnerVisible is the one cockpit line for an actual provider switch.
 func (p Pending) OwnerVisible() string {
-	if p.EffectiveKind() != KindMigrate {
+	if !ProviderSwitch(p.From, p.To) {
 		return ""
 	}
 	return fmt.Sprintf("Continuing on %s (migrated from %s).",
