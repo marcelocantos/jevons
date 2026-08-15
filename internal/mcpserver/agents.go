@@ -18,8 +18,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleet"
-	"github.com/marcelocantos/jevons/internal/fleetintent"
-	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -81,23 +79,10 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_stop",
-			mcp.WithDescription("Stop a running agent process and park it (🎯T414): the agent stays registered, and the park is a standing instruction that outlives the process — no delivery, restart, idle sweep or repair mission revives it until the park is lifted with jevons_fleet_intent state=working. Not the same as kill (which deregisters)."),
+			mcp.WithDescription("Stop a running agent process only. The agent stays registered and can be started again (resume). Not the same as kill."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
-			mcp.WithString("actor", mcp.Description("Your agent name (who is parking it). Default: the overseer.")),
-			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it.")),
 		),
 		s.handleAgentStop,
-	)
-
-	s.mcpSrv.AddTool(
-		mcp.NewTool("jevons_fleet_intent",
-			mcp.WithDescription("Read or set the deliberate answer to \"should this agent be running?\" (🎯T414). Every fleet control — spawn, nudge, revive, repressure, repair mission, delivery start, worker-idle notification — reads this and declines when it says do not run, naming the intent. Observed process state alone never authorises a start. States: working, parked, blocked_provider, blocked_owner, reaped. Omit state to read the current intent; omit name to set the fleet-wide intent (a provider wall stands the whole fleet down)."),
-			mcp.WithString("name", mcp.Description("Agent name. Omit to read everything, or (with state) to set the FLEET-WIDE intent.")),
-			mcp.WithString("state", mcp.Description("working | parked | blocked_provider | blocked_owner | reaped. Omit to read.")),
-			mcp.WithString("actor", mcp.Description("Who is deciding (owner, overseer, a product path). Recorded with the intent.")),
-			mcp.WithString("reason", mcp.Description("Why — recorded so the cockpit can say what is holding an agent down, not merely that something is.")),
-		),
-		s.handleFleetIntent,
 	)
 
 	s.mcpSrv.AddTool(
@@ -130,21 +115,15 @@ func (s *Server) SetAgentEventHook(fn func(name string, ev claudia.Event)) {
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
 	// (and overseer notify), not only logs.
-	reps := SweepDeadAgents(s.registry, s.overseerName(), s.fleetIntent())
+	reps := SweepDeadAgents(s.registry, s.overseerName())
 	if len(reps) > 0 {
 		line := FormatDeadAgentReport(reps)
 		slog.Info(line)
 		s.notifyFleetHealth(line)
 	}
-	// 🎯T435 clause 2: rows that recently LEFT are part of the answer to
-	// "what is my fleet". A PO whose worker was reaped on its own achieve
-	// otherwise sees a shorter list and no cause, which is the reading that
-	// manufactured a phantom orphaning incident on 2026-08-10.
-	notices := s.RemovalAccount().Recent(0)
 	defs := s.registry.List()
 	if len(defs) == 0 {
-		return mcp.NewToolResultText(fleetlog.PrependNotices(
-			PrependFleetHealth("No agents registered.", reps), notices)), nil
+		return mcp.NewToolResultText(PrependFleetHealth("No agents registered.", reps)), nil
 	}
 
 	var b strings.Builder
@@ -172,8 +151,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		b.WriteString("\n")
 		b.WriteString(hints)
 	}
-	return mcp.NewToolResultText(fleetlog.PrependNotices(
-		PrependFleetHealth(b.String(), reps), notices)), nil
+	return mcp.NewToolResultText(PrependFleetHealth(b.String(), reps)), nil
 }
 
 // notifyFleetHealth delivers a fleet outage/recovery note to the overseer
@@ -249,31 +227,6 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 			"name": name, "err": "resume_halted",
 		})
 		return blocked, nil
-	}
-
-	// 🎯T414: a start is the control this target is named for, so it asks the
-	// same question as the rest — should this agent be running? A standing
-	// park or a provider wall declines it here, naming the intent, because
-	// otherwise every automated caller (frontier consume, PO proactive, the
-	// restart reattach) reaches a parked fleet through this one door.
-	//
-	// Reaped is the exception, and the distinction is the registry row rather
-	// than the name: resurrecting the row that was reaped is the 🎯T413 bug,
-	// while starting a fresh agent under a name the fleet once used is
-	// ordinary re-use — jv-t414-intent-not-process is spawned, finishes,
-	// is reaped, and is spawned again next week.
-	rowExisted := s.registry != nil && s.registry.Def(name) != nil
-	if dec := s.AllowFleetControl(name, fleetintent.ControlSpawn); !dec.Allow {
-		if dec.Blocking != fleetintent.Reaped || rowExisted {
-			life["err"] = dec.Reason
-			s.logLifecycle(compAgentLifecycle, "start", "error", life)
-			return mcp.NewToolResultError(fmt.Sprintf(
-				"refusing to start %q — %s (%s). Lift it with jevons_fleet_intent state=working before starting.",
-				name, fleetintent.Describe(dec.Blocking), dec.Reason)), nil
-		}
-		// Fresh row under a reaped name: the reap was about the row that is
-		// gone, so the stamp is cleared rather than obeyed.
-		s.MarkAgentWorking(name, actor, "fresh start under a previously reaped name")
 	}
 
 	// Expand ~ in workdir.
@@ -657,20 +610,8 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 
 	s.registry.Stop(name)
-	// 🎯T408 via 🎯T414: stopping without killing is an instruction, and the
-	// instruction is the part that used to evaporate. The process ends here;
-	// the park outlives it, the delivery that would restart the agent, and the
-	// daemon restart that would reattach it.
-	actor, _ := args["actor"].(string)
-	if strings.TrimSpace(actor) == "" {
-		actor = s.overseerName()
-	}
-	reason, _ := args["reason"].(string)
-	s.MarkAgentParked(name, actor, strings.TrimSpace(reason))
-	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name, "actor": actor})
-	return mcp.NewToolResultText(fmt.Sprintf(
-		"Agent %q stopped and parked (still registered; nothing revives it — not a delivery, not a restart, not the idle sweep — until the park is lifted with jevons_fleet_intent name=%q state=working).",
-		name, name)), nil
+	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name})
+	return mcp.NewToolResultText(fmt.Sprintf("Agent %q stopped (still registered; start again to resume).", name)), nil
 }
 
 func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -751,66 +692,23 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 }
 
 // isOverseerAgent reports whether name is the owner-chat overseer.
-//
-// 🎯T309.3: name resolution is case-insensitive so an agent addressing
-// "Jevons" reaches the overseer arm rather than the registry arm. The session
-// match remains for a config-renamed overseer, whose row the conventional name
-// does not find.
-//
-// 🎯T452 — THIS FUNCTION CHOOSES A DESTINATION, so a wrong answer here does not
-// misidentify an agent, it misdelivers to one. On 2026-08-15 a post-restart
-// brief composed for jv-t443-red-as-proof arrived in the overseer's composer,
-// in a window full of session rotation; a subordinate row still carrying the
-// session id the overseer process now reports is enough to produce exactly
-// that, because the match below used to be the whole test. A session id is a
-// claim about a pane, and the seat guard is what stops it outranking every
-// other thing the registry knows about the row.
+// Prefer session-id match via transcript ops; fall back to the conventional
+// overseer name used by default config.
 func (s *Server) isOverseerAgent(name string) bool {
 	if name == "" {
 		return false
-	}
-	if strings.EqualFold(name, s.overseerName()) {
-		return true
 	}
 	if s.transcript != nil && s.transcript.GetID != nil && s.registry != nil {
 		sid := s.transcript.GetID()
 		if sid != "" {
 			if def := s.registry.Def(name); def != nil && def.SessionID == sid {
-				if isOverseerSeatRow(*def) {
-					return true
-				}
-				// Loud, because the alternative is silent misdelivery and
-				// because this is evidence of a registry the daemon can no
-				// longer trust for routing: two rows claim one session.
-				slog.Error("🎯T452 refused a session-id claim on the overseer seat",
-					"component", "agent_send",
-					"name", name,
-					"parent", def.Parent,
-					"purpose", def.Purpose,
-					"session_id", sid,
-					"detail", "this row carries the overseer's session id but is a subordinate — "+
-						"treating it as the overseer would deliver its brief into owner chat",
-				)
+				return true
 			}
 		}
 	}
-	return false
-}
-
-// isOverseerSeatRow reports whether a registry row could be the overseer at all.
-//
-// Two answers, and neither is the session id: an explicit purpose=overseer, or
-// a root row. Every worker, boss and product owner in this fleet is registered
-// with a parent — the overseer is the one agent with none — so a row naming a
-// parent is answering the question itself, whatever session id it happens to
-// carry. Kept permissive about purpose because the live registry stores
-// purpose=work for rows that are plainly not work (every PO), and a renamed
-// overseer registered the same way must still be reachable.
-func isOverseerSeatRow(d claudia.AgentDef) bool {
-	if strings.EqualFold(strings.TrimSpace(d.Purpose), claudia.PurposeOverseer) {
-		return true
-	}
-	return strings.TrimSpace(d.Parent) == ""
+	// 🎯T309.3: name resolution is case-insensitive so an agent addressing
+	// "Jevons" reaches the overseer arm rather than the registry arm.
+	return strings.EqualFold(name, s.overseerName())
 }
 
 func (s *Server) overseerName() string {
@@ -852,12 +750,6 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 	return func(ev claudia.Event) {
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
-
-		// 🎯T392.4: count this turn's tool calls and act at the ceiling.
-		// Before the lock below, not under it: the fallback interrupts a live
-		// process, and holding the sink's own mutex across a provider call
-		// would stall the stream that reports the interrupt taking effect.
-		s.observeTurnDepth(name, ev)
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -983,12 +875,9 @@ func (s *Server) broadcastAgentEvent(name string, ev claudia.Event) {
 	tracker := s.idleActivity
 	s.mu.Unlock()
 	if tracker != nil {
-		prevPhase, nextPhase, enteredIdle := tracker.ObserveTransition(name, ev)
+		_, _, enteredIdle := tracker.ObserveTransition(name, ev)
 		if enteredIdle {
-			// 🎯T414: the transition travels with the call so the emitter can
-			// put the real edge through ShouldEmitWorkerIdle — the gate that
-			// reads intent — rather than asserting the edge it assumes.
-			s.emitWorkerIdleToParent(name, prevPhase, nextPhase)
+			s.emitWorkerIdleToParent(name)
 		}
 	}
 	if hook != nil {

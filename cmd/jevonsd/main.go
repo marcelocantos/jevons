@@ -42,9 +42,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/supervise"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
-	"github.com/marcelocantos/jevons/internal/turndepth"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -599,25 +599,6 @@ func main() {
 	if elog != nil {
 		mcpSrv.SetEventJournal(elog)
 	}
-	// 🎯T435: one accounted-removal chokepoint for the whole process. The
-	// HTTP server decides the achieve-reap and the MCP server answers
-	// agent_list, so they must share the Account or a reap decided on one
-	// side is a mystery on the other — which is the incident this target
-	// was filed for.
-	removals := srv.RemovalAccount()
-	mcpSrv.SetRemovalAccount(removals)
-
-	// 🎯T414: the shared answer to "should this agent be running?", opened
-	// before any control can ask it. Durable and opened here rather than
-	// lazily, because a daemon restart is one of the three things that
-	// resurrected a deliberately parked fleet on 2026-08-10 — an intent the
-	// restart cannot read is an intent the restart overrides. After
-	// SetRemovalAccount, so the reap stamp lands on the process-wide 🎯T435
-	// Account rather than on a private one.
-	if err := mcpSrv.OpenFleetIntent(cfg.StateDir); err != nil {
-		slog.Error("fleet intent store failed", "err", err)
-		os.Exit(1)
-	}
 
 	// Butler: durable-thread orchestrator over the thread store, the
 	// session scanner (non-invasive observation), and the transcript
@@ -638,7 +619,6 @@ func main() {
 	// ð¯T148: pluggable default provider for new threads/agents.
 	fleetAdapter := fleet.NewClaudia(registry)
 	fleetAdapter.SetDefaultProvider(defaultProvider)
-	fleetAdapter.SetRemovalAccount(removals)
 	// ð¯T285: provider migration needs the session roots to find a
 	// predecessor's transcript, and a durable store to hold that pointer
 	// across the rotation that overwrites the old session id.
@@ -653,30 +633,10 @@ func main() {
 	// terminal report survives the ð¯T165/T195 reap of the agent that wrote it,
 	// and an over-bound delivery can name a call that returns the whole text.
 	mcpSrv.SetAgentReportDir(cfg.StateDir)
-	// 🎯T418: the backlog of messages accepted for a busy agent lives in
-	// state_dir/sendq, so a restart between accepting one and delivering it no
-	// longer eats it. Rooted before the fleet starts, and reported once the
-	// registry is loaded, so a message the previous daemon accepted is already
-	// readable when the first turn boundary arrives.
-	mcpSrv.SetSendQueueDir(cfg.StateDir)
 	// ð¯T392.2: coalesce machine-generated wakes into one digest per
 	// recipient. Owner turns and worker replies are never batched â only
 	// events the fleet generates about itself, whose content is additive.
 	mcpSrv.SetWakeBatchWindow(mcpserver.DefaultWakeBatchWindow)
-	// 🎯T392.4: the per-turn tool-call depth ceiling, resolved from the same
-	// environment the in-band hook reads so the two halves cannot disagree
-	// about where the ceiling is. The interrupt fallback stays disarmed
-	// unless JEVONS_TURNDEPTH_INTERRUPT says otherwise — an agent whose
-	// harness has no hook never hears the ask, and cutting its turn without
-	// having asked first is the cancellation cost this design exists to
-	// avoid. Counting and recording happen either way, so the histogram
-	// shows what an armed ceiling would have done.
-	turnDepthPolicy := turndepth.PolicyFromEnv(os.Getenv)
-	mcpSrv.SetTurnDepthPolicy(turnDepthPolicy)
-	slog.Info("turn depth ceiling", "enabled", !turnDepthPolicy.Disabled,
-		"ceiling", turnDepthPolicy.EffectiveCeiling(),
-		"grace", turnDepthPolicy.EffectiveGrace(),
-		"interrupt_fallback", turnDepthPolicy.InterruptEnabled)
 	// T325.2: task-type → harness routing seed (soft caps / capacity).
 	// T476: omit-provider mint follows config.yaml, not this file and not
 	// the compiled seed. The file still loads for caps and for naming a
@@ -877,12 +837,6 @@ func main() {
 			"provider", jevonDef.Provider, "err", err)
 	}
 
-	// 🎯T464: the registration above covers the overseer's provider only,
-	// which left every Claude fleet agent started outside the jevons repo
-	// with no jevons_* tools at all — and one of them reported that absence
-	// as a dead control plane. Same served port, for the same reason.
-	ensureFleetMCPUserScope(cfg, mcpHost, servedPort(ln.Addr()))
-
 	if *enableTLS {
 		tlsHosts := []string{"localhost", "127.0.0.1", qr.LanIP()}
 		tlsCfg, err := ca.TLSConfig(tlsHosts)
@@ -916,13 +870,6 @@ func main() {
 			slog.Warn("could not consume upgrade handoff", "err", err)
 		}
 	}
-
-	// 🎯T418: say what the last daemon left undelivered. A backlog that
-	// survives silently is indistinguishable, to every observer, from one that
-	// was delivered — which is how six messages came to stack behind an agent
-	// while every send reported success. Delivery itself is the fleet sweep's
-	// job (SweepSendBacklogs); this is only the report.
-	mcpSrv.ReportRecoveredBacklog()
 
 	// Exit policy: normal â StopAll; upgrade (SIGHUP / JEVONS_UPGRADE_EXIT) â leave
 	// agents alone and write handles. See docs/design/upgrade-without-drain.md.
@@ -1057,9 +1004,23 @@ func main() {
 	// MissionOpen from the nearest bullseye ledger for each bound target
 	// (workdir of an engaged agent). Unknown ledger row stays open (residual).
 	mcpSrv.SetIdlePressureHooks(mcpserver.IdlePressureHooks{
-		// T451: owner-parked closes the mission the same way achieved does;
-		// the classifier is shared with the oracle rather than copied here.
-		MissionOpen: mcpserver.NewLedgerMissionOpen(registry.List),
+		MissionOpen: func(targetID string) bool {
+			tid := strings.TrimSpace(strings.TrimPrefix(targetID, "ð¯"))
+			if tid == "" {
+				return true
+			}
+			for _, d := range registry.List() {
+				if strings.TrimSpace(strings.TrimPrefix(d.TargetID, "ð¯")) != tid {
+					continue
+				}
+				st, ok := targetfile.LoadTargetStatusFromCwd(d.WorkDir, tid)
+				if !ok {
+					return true
+				}
+				return targetfile.IsOpenStatus(st)
+			}
+			return true
+		},
 		// ð¯T415: convergence gave up. The notice inside is deterministic
 		// and depends on no agent; the recovery agent it also dispatches
 		// is allowed to fail, including failing to spawn.
