@@ -40,7 +40,7 @@ func TestT195ReapOnTargetAchieveHermetic(t *testing.T) {
 	}
 
 	// Achieve path: mission target achieved → reap engaged implementer.
-	removed, err := ReapWorkAgentsOnTargetAchieve(reg, "T195", dir, isO)
+	removed, err := ReapWorkAgentsOnTargetAchieve(reg, nil, "T195", dir, isO)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestT195AchieveDoesNotReapPOEvenWithTargetID(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := ReapWorkAgentsOnTargetAchieve(reg, "T195", dir, func(n string) bool { return n == "jevons" })
+	removed, err := ReapWorkAgentsOnTargetAchieve(reg, nil, "T195", dir, func(n string) bool { return n == "jevons" })
 	if err != nil {
 		t.Fatal(err)
 	}

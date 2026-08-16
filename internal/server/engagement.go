@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
@@ -69,7 +70,11 @@ func AgentsEngagedOnTarget(reg *claudia.Registry, targetID, scopeWorkdir string)
 // (and their descendant subtrees). Owner-UI authority: no lineage check
 // (product control surface). Returns names that were still registered and
 // removed.
-func stopEngagement(reg *claudia.Registry, targetID, scopeWorkdir string) ([]string, error) {
+//
+// 🎯T435: acct accounts for every row that leaves. The owner pressing stop
+// knows why these agents went away; the overseer reading the fleet an hour
+// later does not, unless the removal said so at the time.
+func stopEngagement(reg *claudia.Registry, acct *fleetlog.Account, targetID, scopeWorkdir string) ([]string, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("agent registry not available")
 	}
@@ -83,23 +88,22 @@ func stopEngagement(reg *claudia.Registry, targetID, scopeWorkdir string) ([]str
 	}
 	// Kill only roots among the matching set first: if both parent and child
 	// match, killing parent removes the child. Re-check Def before Remove.
+	rm := fleetlog.Removal{
+		Reason: fleetlog.ReasonStopEngagement,
+		Detail: fmt.Sprintf("owner stopped engagement on 🎯%s", want),
+		Actor:  "owner",
+		Fields: map[string]any{"engagement_target_id": want},
+	}
 	var removed []string
 	for _, name := range names {
 		if reg.Def(name) == nil {
 			continue
 		}
-		// Descendants first (DFS reverse of Descendants list).
-		desc := reg.Descendants(name)
-		for i := len(desc) - 1; i >= 0; i-- {
-			if err := reg.Remove(desc[i]); err != nil {
-				return removed, fmt.Errorf("kill descendant %q of %q: %w", desc[i], name, err)
-			}
-			removed = append(removed, desc[i])
-		}
-		if err := reg.Remove(name); err != nil {
+		gone, err := acct.RemoveSubtree(reg, name, rm)
+		removed = append(removed, gone...)
+		if err != nil {
 			return removed, fmt.Errorf("kill %q: %w", name, err)
 		}
-		removed = append(removed, name)
 	}
 	return removed, nil
 }
@@ -149,7 +153,7 @@ func (s *Server) handleEngagementStop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scope := s.frontierCwdOr(req.Cwd)
-	stopped, err := stopEngagement(reg, tid, scope)
+	stopped, err := stopEngagement(reg, s.RemovalAccount(), tid, scope)
 	if err != nil {
 		slog.Warn("engagement_stop",
 			"component", "engagement",

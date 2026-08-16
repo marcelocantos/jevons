@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 )
 
 // createAsideRequest is the JSON body for POST /api/asides (🎯T136 / 🎯T263 / 🎯T270).
@@ -305,7 +306,14 @@ func (s *Server) dismissAsideAgent(id, kindHint string) error {
 		)
 		// Do not block dismiss chrome on history write failure.
 	}
-	if err := reg.Remove(id); err != nil {
+	// 🎯T435: the aside row leaving the registry is accounted for like every
+	// other removal, so a fleet diff that lost a 💡 row explains itself.
+	if _, err := s.RemovalAccount().Remove(reg, id, fleetlog.Removal{
+		Reason: fleetlog.ReasonAsideDismiss,
+		Detail: "aside dismissed (" + normalizeAsideKind(kindHint) + ")",
+		Actor:  "owner",
+		Fields: map[string]any{"kind": normalizeAsideKind(kindHint)},
+	}); err != nil {
 		return fmt.Errorf("remove aside %q: %w", id, err)
 	}
 	slog.Info("aside dismissed",

@@ -19,6 +19,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -136,8 +137,10 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		s.notifyFleetHealth(line)
 	}
 	defs := s.registry.List()
+	notices := s.RemovalAccount().Recent(0)
 	if len(defs) == 0 {
-		return mcp.NewToolResultText(PrependFleetHealth("No agents registered.", reps)), nil
+		return mcp.NewToolResultText(fleetlog.PrependNotices(
+			PrependFleetHealth("No agents registered.", reps), notices)), nil
 	}
 
 	var b strings.Builder
@@ -165,7 +168,8 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		b.WriteString("\n")
 		b.WriteString(hints)
 	}
-	return mcp.NewToolResultText(PrependFleetHealth(b.String(), reps)), nil
+	return mcp.NewToolResultText(fleetlog.PrependNotices(
+		PrependFleetHealth(b.String(), reps), notices)), nil
 }
 
 // notifyFleetHealth delivers a fleet outage/recovery note to the overseer

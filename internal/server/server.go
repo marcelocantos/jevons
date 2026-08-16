@@ -29,6 +29,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -217,6 +218,11 @@ type Server struct {
 	// eventLog is the durable decision/lifecycle journal (🎯T120):
 	// state_dir/logs/events.jsonl — browser + server events, tool-readable.
 	eventLog *eventlog.Journal
+
+	// removals is the accounted-removal chokepoint (🎯T435). Shared with the
+	// fleet MCP server so a reap here and the fleet surface there tell one
+	// story about why a registry row is gone. Nil = slog-only accounting.
+	removals *fleetlog.Account
 
 	// transcriptReader reads Grok session chat_history for RHS inspect (🎯T124).
 	transcriptReader *transcript.Reader

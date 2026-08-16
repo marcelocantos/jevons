@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -466,7 +467,11 @@ func (s *Server) releaseUnbriefedSeat(name string, existed bool) bool {
 	if existed {
 		return false
 	}
-	if err := s.registry.Remove(name); err != nil {
+	// 🎯T435: the seat leaving the registry is accounted for.
+	if _, err := s.RemovalAccount().Remove(s.registry, name, fleetlog.Removal{
+		Reason: fleetlog.ReasonUnbriefedSeat,
+		Detail: "opening brief never landed",
+	}); err != nil {
 		slog.Warn("unbriefed seat left registered after failed opening brief",
 			"component", compAgentLifecycle, "name", name, "err", err)
 		return false

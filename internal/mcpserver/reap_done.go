@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 )
 
 // LooksLikeFinishedWorkReport is true when a terminal agent response claims
@@ -110,15 +112,28 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 // ReapDoneWorkAgent stops and deregisters name when ShouldAutoReapDoneWorkAgent
 // is true. Returns (true, nil) when the agent left the registry.
 // No-ops (false, nil) when the report is not a finished-work reaping case.
-func ReapDoneWorkAgent(reg *claudia.Registry, name, report string, isOverseer func(string) bool) (bool, error) {
+// 🎯T435: acct accounts for the removal in the event log, naming the
+// classifier that fired. A nil acct still reaps (slog-only).
+func ReapDoneWorkAgent(reg *claudia.Registry, acct *fleetlog.Account, name, report string, isOverseer func(string) bool) (bool, error) {
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, name, report, isOverseer)
 	if !ok {
 		return false, nil
 	}
-	if err := killSubtree(reg, name); err != nil {
+	if err := killSubtree(reg, acct, name, reapDoneRemoval(reason)); err != nil {
 		return false, fmt.Errorf("reap done %q (%s): %w", name, reason, err)
 	}
 	return true, nil
+}
+
+// reapDoneRemoval is the accounted cause for a 🎯T165/🎯T195 hygiene reap:
+// the row went away because this agent said it had finished, and the
+// classifier that read it that way is named so the reader can disagree.
+func reapDoneRemoval(reason string) fleetlog.Removal {
+	return fleetlog.Removal{
+		Reason: fleetlog.ReasonReapDone,
+		Detail: fmt.Sprintf("reaped on a finished-work report (%s)", reason),
+		Fields: map[string]any{"reap_reason": reason},
+	}
 }
 
 // maybeReapDoneWorkAgent runs after a terminal worker turn is notified to the
@@ -142,14 +157,13 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		}
 		return
 	}
-	if err := killSubtree(s.registry, name); err != nil {
+	if err := killSubtree(s.registry, s.RemovalAccount(), name, reapDoneRemoval(reason)); err != nil {
 		slog.Warn("T165/T195 auto-reap failed", "agent", name, "reason", reason, "err", err)
 		fields := reapDecisionFields(name, reason, report)
 		fields["err"] = err.Error()
 		s.logLifecycle(compAgentLifecycle, "reap_done", "error", fields)
 		return
 	}
-	s.MarkAgentReaped(name, "product:t165", reason)
 	s.logLifecycle(compAgentLifecycle, "reap_done", "ok",
 		reapDecisionFields(name, reason, report))
 	slog.Info("auto-reaped finished work agent", "agent", name, "reason", reason)

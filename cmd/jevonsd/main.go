@@ -604,6 +604,10 @@ func main() {
 		mcpSrv.SetEventJournal(elog)
 	}
 
+	// 🎯T435: one accounted-removal chokepoint for the whole process.
+	removals := srv.RemovalAccount()
+	mcpSrv.SetRemovalAccount(removals)
+
 	// 🎯T414: the shared answer to "should this agent be running?", opened
 	// before any control can ask it. Durable and opened here rather than
 	// lazily, because a daemon restart is one of the three things that
@@ -632,6 +636,7 @@ func main() {
 	// (agent-only names) so Deliver/PushEvent share one id space.
 	// ð¯T148: pluggable default provider for new threads/agents.
 	fleetAdapter := fleet.NewClaudia(registry)
+	fleetAdapter.SetRemovalAccount(removals)
 	fleetAdapter.SetDefaultProvider(defaultProvider)
 	// ð¯T285: provider migration needs the session roots to find a
 	// predecessor's transcript, and a durable store to hold that pointer

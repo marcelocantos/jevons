@@ -102,7 +102,7 @@ func TestStopEngagementKillsByTargetID(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stopped, err := stopEngagement(reg, "T10.2", dir)
+	stopped, err := stopEngagement(reg, nil, "T10.2", dir)
 	if err != nil {
 		t.Fatal(err)
 	}

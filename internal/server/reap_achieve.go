@@ -13,6 +13,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"gopkg.in/yaml.v3"
+
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 )
 
 // 🎯T195: after a mission target is achieved on the bullseye ledger, reap
@@ -52,7 +54,12 @@ func durableFleetAgentForAchieve(name, purpose string, isOverseer func(string) b
 // achieve. This is the reaping direction of the collision, and the damaging
 // one — without it, achieving 🎯T19 in claudia kills orthograph's 🎯T19 worker
 // mid-flight.
-func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, targetID, scopeWorkdir string, isOverseer func(string) bool) ([]string, error) {
+//
+// 🎯T435: acct accounts for each removal in the event log. This is the path
+// that ran twice on 2026-08-10 while saying nothing the overseer could read,
+// and a correct reap that looks like an orphaning costs more than it saves.
+// A nil acct still reaps (slog-only) so unwired callers are not blocked.
+func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, acct *fleetlog.Account, targetID, scopeWorkdir string, isOverseer func(string) bool) ([]string, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("agent registry not available")
 	}
@@ -82,22 +89,21 @@ func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, targetID, scopeWorkdir
 		return nil, nil
 	}
 	sort.Strings(toReap)
+	rm := fleetlog.Removal{
+		Reason: fleetlog.ReasonReapAchieve,
+		Detail: fmt.Sprintf("reaped on achieve of 🎯%s", want),
+		Fields: map[string]any{"achieved_target_id": want},
+	}
 	var removed []string
 	for _, name := range toReap {
 		if reg.Def(name) == nil {
 			continue
 		}
-		desc := reg.Descendants(name)
-		for i := len(desc) - 1; i >= 0; i-- {
-			if err := reg.Remove(desc[i]); err != nil {
-				return removed, fmt.Errorf("reap achieve descendant %q of %q: %w", desc[i], name, err)
-			}
-			removed = append(removed, desc[i])
-		}
-		if err := reg.Remove(name); err != nil {
+		names, err := acct.RemoveSubtree(reg, name, rm)
+		removed = append(removed, names...)
+		if err != nil {
 			return removed, fmt.Errorf("reap achieve %q: %w", name, err)
 		}
-		removed = append(removed, name)
 	}
 	return removed, nil
 }
@@ -196,9 +202,10 @@ func (s *Server) maybeReapOnLedgerAchieve(ledgerPath string) {
 	// The ledger's own directory is the scope — never the daemon's cwd, which
 	// is some other repo whenever the watch fires for a second ledger.
 	scope := filepath.Dir(ledgerPath)
+	acct := s.RemovalAccount()
 	var anyRemoved bool
 	for _, tid := range newly {
-		removed, err := ReapWorkAgentsOnTargetAchieve(reg, tid, scope, isO)
+		removed, err := ReapWorkAgentsOnTargetAchieve(reg, acct, tid, scope, isO)
 		if err != nil {
 			slog.Warn("T195 reap on achieve failed", "target_id", tid, "err", err)
 			continue

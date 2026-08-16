@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/server"
 )
 
@@ -148,7 +149,8 @@ func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Reg
 			registry:   registry,
 			killswitch: &cost.TmuxKillSwitch{Socket: sock},
 			// 🎯T139 / T334: never stop or kill the overseer on budget clamp.
-			protect: append([]string{}, cfg.ProtectedWorkers...),
+			protect:  append([]string{}, cfg.ProtectedWorkers...),
+			removals: srv.RemovalAccount(),
 		},
 		Notify:     notify,
 		AuditTrail: auditTrail,
@@ -188,6 +190,10 @@ type fleetActions struct {
 	// protect: agent names never stopped by fleet pause / PauseWorker (🎯T139).
 	// KillWorker still may remove non-overseer workers; protect blocks Stop.
 	protect []string
+	// removals accounts for each budget kill in the event log (🎯T435).
+	// A clamp-down that empties the fleet is the largest registry diff this
+	// product can produce, and the one most likely to be read as a collapse.
+	removals *fleetlog.Account
 }
 
 func (a *fleetActions) isProtected(id string) bool {
@@ -215,7 +221,12 @@ func (a *fleetActions) KillWorker(id string) error {
 		return nil
 	}
 	a.registry.Stop(id)
-	return a.registry.Remove(id)
+	_, err := a.removals.Remove(a.registry, id, fleetlog.Removal{
+		Reason: fleetlog.ReasonBudgetKill,
+		Detail: "destroyed by the budget clamp-down kill-switch (🎯T36)",
+		Actor:  "cost-enforcer",
+	})
+	return err
 }
 
 func (a *fleetActions) StopFleet() error {

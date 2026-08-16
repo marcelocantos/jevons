@@ -103,7 +103,7 @@ func TestT389EngagementOverlayShowsOnlyItsOwnLedger(t *testing.T) {
 func TestT389StopEngagementKillsOnlyItsOwnRepo(t *testing.T) {
 	repoA, repoB, _, _, reg := twoRepoRegistry(t, "T19")
 
-	stopped, err := stopEngagement(reg, "T19", repoB)
+	stopped, err := stopEngagement(reg, nil, "T19", repoB)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/turnev"
@@ -547,7 +548,10 @@ func (f *Claudia) launchThrowawayCompact(p handover.Pending) (string, string, er
 	}
 	defer func() {
 		f.reg.Stop(temp)
-		_ = f.reg.Remove(temp)
+		_, _ = f.removals.Remove(f.reg, temp, fleetlog.Removal{
+			Reason: fleetlog.ReasonRotationDrop,
+			Detail: "throwaway compact session",
+		})
 	}()
 	if err := f.Launch(&thread.Thread{ID: temp}); err != nil {
 		return "", "", err

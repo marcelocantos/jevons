@@ -32,6 +32,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
@@ -83,6 +84,11 @@ type Server struct {
 	// re-deliver byte-identical content (🎯T428). Nil until first use; see
 	// notifyReplays(), which is the only reader of this field.
 	notifyReplay *notifyReplayLedger
+
+	// removals is the accounted-removal chokepoint (🎯T435), shared with the
+	// HTTP server so a reap decided on that side is legible on the fleet
+	// surfaces read on this one. Guarded by mu; nil until first use.
+	removals *fleetlog.Account
 	// resolveSender overrides fleet-agent process resolution on that same
 	// path. Nil — the product path — resolves via the registry. Test seam.
 	resolveSender senderResolver

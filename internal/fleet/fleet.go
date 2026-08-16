@@ -19,6 +19,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
@@ -104,6 +105,12 @@ type Claudia struct {
 	// remember. Name only, deliberately: the host resolves the process from
 	// the registry it already owns, and fleet stays free of mcpserver.
 	onLaunch func(name string) func()
+
+	// removals is the accounted-removal chokepoint (🎯T435). A thread that
+	// drops its registry row disappears from the fleet surface, and a
+	// disappearance nobody can explain is read as an orphaning. Nil is safe
+	// — the removal still happens, it simply has no journal to reach.
+	removals *fleetlog.Account
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from
@@ -116,6 +123,16 @@ func NewClaudia(reg *claudia.Registry) *Claudia {
 		readyTimeout:    defaultReadyTimeout,
 		replyTimeout:    defaultReplyTimeout,
 	}
+}
+
+// SetRemovalAccount installs the accounted-removal chokepoint (🎯T435). The
+// daemon builds one Account for the process and gives every removal path the
+// same one, so a row leaving here is explained on the surfaces read elsewhere.
+func (f *Claudia) SetRemovalAccount(a *fleetlog.Account) {
+	if f == nil {
+		return
+	}
+	f.removals = a
 }
 
 // SetLaunchHook installs the per-launch host callback (🎯T426). Nil clears it.
@@ -356,8 +373,13 @@ func (f *Claudia) Stop(id string) {
 // intact (only jevons's ownership is dropped).
 func (f *Claudia) Remove(id string) {
 	f.reg.Stop(id)
-	if err := f.reg.Remove(id); err != nil {
-		// A thread with no registry def (observe-only) is a normal no-op.
+	// 🎯T435: the drop is accounted for. A thread with no registry def
+	// (observe-only) is a normal no-op and not a registry diff, so the
+	// chokepoint emits nothing for it.
+	if _, err := f.removals.Remove(f.reg, id, fleetlog.Removal{
+		Reason: fleetlog.ReasonThreadRemove,
+		Detail: "thread removed by name",
+	}); err != nil {
 		return
 	}
 }

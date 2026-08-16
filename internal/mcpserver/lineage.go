@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 )
 
 // canKill reports whether actor may kill target under the parent→descendant
@@ -108,17 +110,13 @@ func nearestCommonAncestor(reg *claudia.Registry, a, b string) string {
 
 // killSubtree removes target and all its descendants (children first).
 // Caller must have already authorized kill of target.
-func killSubtree(reg *claudia.Registry, target string) error {
-	desc := reg.Descendants(target)
-	// Remove leaves-first-ish: reverse order from Descendants DFS so
-	// children tend to precede parents; also remove any remaining child
-	// before parent by iterating until stable if needed.
-	for i := len(desc) - 1; i >= 0; i-- {
-		if err := reg.Remove(desc[i]); err != nil {
-			return fmt.Errorf("kill descendant %q: %w", desc[i], err)
-		}
-	}
-	if err := reg.Remove(target); err != nil {
+//
+// 🎯T435: acct accounts for every row that leaves, under rm's reason — a
+// subtree kill is one decision that empties several registry lines, and a
+// reader of the fleet needs the whole set explained by the one cause. A nil
+// acct still removes; the rows simply reach no journal.
+func killSubtree(reg *claudia.Registry, acct *fleetlog.Account, target string, rm fleetlog.Removal) error {
+	if _, err := acct.RemoveSubtree(reg, target, rm); err != nil {
 		return fmt.Errorf("kill %q: %w", target, err)
 	}
 	return nil
@@ -131,7 +129,10 @@ func (s *Server) killSubtreeAndClearTurns(target string) error {
 		return fmt.Errorf("agent registry not available")
 	}
 	names := append(s.registry.Descendants(target), target)
-	if err := killSubtree(s.registry, target); err != nil {
+	if err := killSubtree(s.registry, s.RemovalAccount(), target, fleetlog.Removal{
+		Reason: fleetlog.ReasonKill,
+		Detail: "killed by explicit request",
+	}); err != nil {
 		return err
 	}
 	for _, n := range names {

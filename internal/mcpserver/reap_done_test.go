@@ -86,7 +86,7 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 
 	// Done path: finished report with oracle evidence → stop+Remove.
 	report := "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS"
-	reaped, err := ReapDoneWorkAgent(reg, "jv-t165-reap-done", report, isO)
+	reaped, err := ReapDoneWorkAgent(reg, nil, "jv-t165-reap-done", report, isO)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 	}
 
 	// PO finished-style report must not auto-reap durable PO.
-	reapedPO, err := ReapDoneWorkAgent(reg, "jevons-po", report, isO)
+	reapedPO, err := ReapDoneWorkAgent(reg, nil, "jevons-po", report, isO)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 func TestT195BareDoneReapsWorkAgent(t *testing.T) {
 	reg := regWithTree(t)
 	// "worker" from fixture is purpose-empty (defaults to work) and not durable.
-	reaped, err := ReapDoneWorkAgent(reg, "worker", "Done. All finished.", func(string) bool { return false })
+	reaped, err := ReapDoneWorkAgent(reg, nil, "worker", "Done. All finished.", func(string) bool { return false })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestT195ImperfectDoneReportHermetic(t *testing.T) {
 
 	// Imperfect done report (no oracle markers) → stop+Remove.
 	report := "Done. Mission complete. Target achieved."
-	reaped, err := ReapDoneWorkAgent(reg, "jv-t195-reap-imperfect", report, isO)
+	reaped, err := ReapDoneWorkAgent(reg, nil, "jv-t195-reap-imperfect", report, isO)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestT195ImperfectDoneReportHermetic(t *testing.T) {
 	}
 
 	// PO imperfect report must not auto-reap durable PO.
-	reapedPO, err := ReapDoneWorkAgent(reg, "jevons-po", report, isO)
+	reapedPO, err := ReapDoneWorkAgent(reg, nil, "jevons-po", report, isO)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestT165HasDescendantsDoesNotReap(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := "Done. SHA abcdef0123456. go test ./... PASS"
-	reaped, err := ReapDoneWorkAgent(reg, "boss-slice", report, func(n string) bool { return n == "jevons" })
+	reaped, err := ReapDoneWorkAgent(reg, nil, "boss-slice", report, func(n string) bool { return n == "jevons" })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 )
 
 // 🎯T414: the daemon's half of the shared intent representation. The pure
@@ -32,17 +33,35 @@ func (s *Server) SetFleetIntentStore(st *fleetintent.Store) {
 	s.intent = st
 }
 
-// OpenFleetIntent opens <stateDir>/fleet/intent.json and installs it.
+// OpenFleetIntent opens <stateDir>/fleet/intent.json, installs it, and
+// attaches the one stamping hook the daemon cannot do without.
 //
-// Reap stamps land at the existing T165/T195 call site (MarkAgentReaped).
-// The later T435 RemovalAccount hook is the single chokepoint for every
-// removal; this target does not take that dependency.
+// Call it after [Server.SetRemovalAccount], so the hook lands on the
+// process-wide 🎯T435 Account rather than on a private one this call would
+// otherwise create.
 func (s *Server) OpenFleetIntent(stateDir string) error {
 	st, err := fleetintent.Open(stateDir)
 	if err != nil {
 		return err
 	}
 	s.SetFleetIntentStore(st)
+
+	// Every accounted removal is a deliberate decision that this name should
+	// not be running, so every accounted removal stamps it. One hook on the
+	// chokepoint rather than a stamp at each of the eight removal call sites
+	// across two packages: a per-caller convention is exactly the arrangement
+	// that produced three subsystems with three different answers.
+	s.RemovalAccount().SetRemovedHook(func(name string, rm fleetlog.Removal) {
+		by := strings.TrimSpace(rm.Actor)
+		if by == "" {
+			reason := strings.TrimSpace(rm.Reason)
+			if reason == "" {
+				reason = fleetlog.ReasonUnaccounted
+			}
+			by = "product:" + reason
+		}
+		s.MarkAgentReaped(name, by, strings.TrimSpace(rm.Detail))
+	})
 
 	snap := st.Snapshot()
 	slog.Info("fleet intent store opened",
