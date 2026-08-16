@@ -239,6 +239,7 @@ persona_notes: |
 	s.run("J16-t3924-checkpoint-resume", s.jT3924CheckpointResume)
 	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
 	s.run("J18-t418-handover-mute", s.jT418HandoverMute)
+	s.run("J19-root-history-paint", s.j19RootHistoryPaint)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()

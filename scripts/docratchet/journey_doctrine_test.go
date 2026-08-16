@@ -131,6 +131,7 @@ func TestJourneyInventoryRegistered(t *testing.T) {
 		"J8-two-agents-same-workdir",
 		"J9-thread-spawn-direct",
 		"J10-worker-shell-tool",
+		"J19-root-history-paint",
 	} {
 		if !strings.Contains(readme, id) {
 			t.Errorf("README inventory missing %s", id)

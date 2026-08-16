@@ -79,6 +79,7 @@ every run today; live is the default truth.
 2. **J2-chat-round-trip** — idle send → terminal
 3. **J3-cancel-and-send** — long turn → interrupt → settle → replacement → terminal
 4. **J4-reconnect-sealed** — seed turn → reconnect → bounded replay + sandbox journal only
+4b. **J19-root-history-paint** — seed ≥12 distinct sealed owner turns → live overseer send → Playwright census of `__transcriptRows` / `_vIndex` / `top` (🎯T491; red on the stacked-at-top-0 collapse)
 
 ### Orchestration (MCP-direct on the isolate)
 5. **J6-mcp-tool-surface** — agent + thread tools registered
