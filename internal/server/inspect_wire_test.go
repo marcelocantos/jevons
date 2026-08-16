@@ -40,8 +40,25 @@ func TestInspectLiveEventUserAndAssistant(t *testing.T) {
 		t.Fatalf("stop_reason=%v", msg)
 	}
 
-	if _, ok := inspectLiveEvent(claudia.Event{Type: "progress", ProgressType: "tool_use"}); ok {
-		t.Fatal("progress should not be inspect live text")
+	ev, ok = inspectLiveEvent(claudia.Event{
+		Type:         "progress",
+		ProgressType: "tool_use",
+		Raw:          []byte(`{"sessionUpdate":"tool_call","title":"Read","rawInput":{"path":"x"}}`),
+	})
+	if !ok {
+		t.Fatal("tool_use progress must be inspect live so apply can emit ⋯ n steps")
+	}
+	if ev["type"] != "assistant" {
+		t.Fatalf("tool_use wire type=%v", ev["type"])
+	}
+	msg, _ = ev["message"].(map[string]any)
+	content, _ := msg["content"].([]map[string]any)
+	if len(content) == 0 {
+		// json unmarshal of []map from []any
+		raw, _ := msg["content"].([]any)
+		if len(raw) == 0 {
+			t.Fatalf("tool_use content=%v", msg["content"])
+		}
 	}
 }
 
@@ -68,6 +85,31 @@ func TestDeliverInspectLiveFansToSubscriber(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for inspect live frame")
+	}
+
+	s.DeliverInspectLive("worker-a", claudia.Event{
+		Type:         "progress",
+		ProgressType: "tool_use",
+		Raw:          []byte(`{"sessionUpdate":"tool_call","title":"Read","rawInput":{"path":"x"}}`),
+	})
+	select {
+	case line := <-ch:
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		ev, _ := m["event"].(map[string]any)
+		msg, _ := ev["message"].(map[string]any)
+		raw, _ := msg["content"].([]any)
+		if len(raw) == 0 {
+			t.Fatalf("expected tool_use live event, got %v", ev)
+		}
+		blk, _ := raw[0].(map[string]any)
+		if blk["type"] != "tool_use" {
+			t.Fatalf("expected tool_use block, got %v", blk)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for tool_use inspect live frame")
 	}
 
 	// Unrelated agent must not fan.

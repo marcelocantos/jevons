@@ -125,6 +125,13 @@ func (s *Server) buildOverseerTranscriptPayload(name string) map[string]any {
 		lines = append(lines, line)
 		return nil
 	})
+	var raw []string
+	if _, _, rerr := clog.ReplayTailRaw(overseerTranscriptMaxTurns, func(line string) error {
+		raw = append(raw, line)
+		return nil
+	}); rerr != nil {
+		raw = nil
+	}
 	if err != nil {
 		s.logTranscriptEmpty(emptyReasonReadError, name, "", err.Error())
 		base["turns"] = []any{}
@@ -136,6 +143,11 @@ func (s *Server) buildOverseerTranscriptPayload(name string) map[string]any {
 
 	turns := overseerTurnsFromWire(lines)
 	base["turns"] = turns
+	if len(raw) > 0 {
+		base["events"] = wireEventsFromLines(raw)
+	} else {
+		base["events"] = wireEventsFromLines(lines)
+	}
 	base["empty"] = len(turns) == 0
 	// Paging parity with the /api/history compat shim: journal line indices,
 	// not turn indices — a client fetching earlier windows uses these.
@@ -234,6 +246,24 @@ func overseerTurnsFromWire(lines []string) []map[string]any {
 		}
 	}
 	flush()
+	return out
+}
+
+// wireEventsFromLines parses journal/chatlog lines into chat-wire events
+// for applyEventTape. Turns drop tool_use; events do not.
+func wireEventsFromLines(lines []string) []map[string]any {
+	out := make([]map[string]any, 0, len(lines))
+	for _, ln := range lines {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(ln), &ev); err != nil {
+			continue
+		}
+		typ, _ := ev["type"].(string)
+		if typ == "" {
+			continue
+		}
+		out = append(out, ev)
+	}
 	return out
 }
 

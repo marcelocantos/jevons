@@ -184,7 +184,7 @@ func (s *Server) buildAgentTranscriptPayload(name string) (payload map[string]an
 		if len(journalOnly) == 0 {
 			return nil, false
 		}
-		return map[string]any{
+		payload := map[string]any{
 			"type":          "agent_transcript",
 			"kind":          inspectKindHistory,
 			"name":          name,
@@ -194,7 +194,11 @@ func (s *Server) buildAgentTranscriptPayload(name string) (payload map[string]an
 			"empty":         false,
 			"unregistered":  true,
 			"note":          "agent is no longer registered; serving jevons journal",
-		}, true
+		}
+		if evs, eerr := s.agentJournalsFor().events(name); eerr == nil && len(evs) > 0 {
+			payload["events"] = evs
+		}
+		return payload, true
 	}
 	base := map[string]any{
 		"type":       "agent_transcript",
@@ -244,6 +248,9 @@ func (s *Server) buildAgentTranscriptPayload(name string) (payload map[string]an
 	base["journal_turns"] = len(journalTurns)
 	base["turns"] = merged
 	base["empty"] = len(merged) == 0
+	if evs, eerr := s.agentJournalsFor().events(name); eerr == nil && len(evs) > 0 {
+		base["events"] = evs
+	}
 
 	// Soft-empty fingerprints stay attached to the reason the SESSION was
 	// short, so `rg empty_reason=` still explains a thin pane (🎯T128.2) — but
@@ -292,6 +299,13 @@ func inspectLiveEvent(ev claudia.Event) (event map[string]any, ok bool) {
 	switch ev.Type {
 	case "user":
 		if ev.Text == "" {
+			if isClaudeShaped(ev.Raw) {
+				var event map[string]any
+				if err := json.Unmarshal(ev.Raw, &event); err != nil {
+					return nil, false
+				}
+				return event, true
+			}
 			return nil, false
 		}
 		return map[string]any{
@@ -336,7 +350,27 @@ func inspectLiveEvent(ev claudia.Event) (event map[string]any, ok bool) {
 			}, true
 		}
 		return nil, false
+	case "progress":
+		// Same chat-wire tool_use frame the overseer apply already understands
+		// (chatWireLine). Without this, fleet subscribe never delivers tools
+		// and ⋯ n steps cannot appear on jevons-po.
+		line, ok := chatWireLine(ev)
+		if !ok {
+			return nil, false
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			return nil, false
+		}
+		return event, true
 	default:
+		if isClaudeShaped(ev.Raw) {
+			var event map[string]any
+			if err := json.Unmarshal(ev.Raw, &event); err != nil {
+				return nil, false
+			}
+			return event, true
+		}
 		return nil, false
 	}
 }

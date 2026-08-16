@@ -69,6 +69,27 @@ func TestOverseerTranscriptThroughAgentFamily(t *testing.T) {
 	if turns[1]["role"] != "assistant" || turns[1]["text"] != "on it" {
 		t.Fatalf("assistant row=%v (tool_use must not leak as prose)", turns[1])
 	}
+	events, _ := payload["events"].([]map[string]any)
+	if len(events) < 3 {
+		t.Fatalf("want wire events including tool_use, got %v", payload["events"])
+	}
+	var sawTool bool
+	for _, ev := range events {
+		if ev["type"] != "assistant" {
+			continue
+		}
+		msg, _ := ev["message"].(map[string]any)
+		raw, _ := msg["content"].([]any)
+		for _, blk := range raw {
+			m, _ := blk.(map[string]any)
+			if m["type"] == "tool_use" && m["name"] == "Bash" {
+				sawTool = true
+			}
+		}
+	}
+	if !sawTool {
+		t.Fatalf("history events must carry tool_use for applyEventTape, got %v", events)
+	}
 	if turns[2]["role"] != "agent_note" {
 		t.Fatalf("note row=%v", turns[2])
 	}

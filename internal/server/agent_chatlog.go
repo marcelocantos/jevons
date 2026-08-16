@@ -244,6 +244,36 @@ func (j *agentJournals) turns(name string) ([]map[string]any, error) {
 	return overseerTurnsFromWire(lines), nil
 }
 
+// events replays the same tail as turns and returns the raw chat-wire
+// frames so the client can applyEventTape (including tool_use).
+func (j *agentJournals) events(name string) ([]map[string]any, error) {
+	if j == nil {
+		return nil, nil
+	}
+	path := j.path(name)
+	if path == "" {
+		return nil, nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	l := j.logFor(name)
+	if l == nil {
+		return nil, nil
+	}
+	var lines []string
+	if _, _, err := l.ReplayTailRaw(agentJournalMaxTurns, func(line string) error {
+		lines = append(lines, line)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return wireEventsFromLines(lines), nil
+}
+
 // closeAll closes every open journal (daemon shutdown / test cleanup).
 func (j *agentJournals) closeAll() {
 	if j == nil {

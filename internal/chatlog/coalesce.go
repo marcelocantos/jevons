@@ -393,3 +393,24 @@ func (l *Log) ReplayTailSealed(maxTurns int, fn func(line string) error) (start,
 	}
 	return cut, total, nil
 }
+
+// ReplayTailRaw is ReplayTail without sealed-turn coalescing. History
+// apply needs the original tool_use frames; CoalesceStreamLines drops
+// them into a text-only sealed assistant.
+func (l *Log) ReplayTailRaw(maxTurns int, fn func(line string) error) (start, total int, err error) {
+	lines, starts, err := l.snapshot()
+	if err != nil {
+		return 0, 0, err
+	}
+	total = len(lines)
+	cut := 0
+	if maxTurns > 0 && len(starts) > maxTurns {
+		cut = starts[len(starts)-maxTurns]
+	}
+	for _, ln := range lines[cut:] {
+		if err := fn(ln); err != nil {
+			return cut, total, err
+		}
+	}
+	return cut, total, nil
+}

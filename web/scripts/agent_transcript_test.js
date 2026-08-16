@@ -104,6 +104,34 @@ test('paneModel maps turns; empty and error', function () {
   assert.ok(err.error.indexOf('no transcript') >= 0);
 });
 
+test('paneModel applies events through applyEventTape (turn-slot survives reload)', function () {
+  const m = AT.paneModel('jevons-po', {
+    name: 'jevons-po',
+    turns: [
+      { role: 'user', text: 'do the thing' },
+      { role: 'assistant', text: 'done' },
+    ],
+    events: [
+      { type: 'user', message: { content: 'do the thing' }, timestamp: 1 },
+      {
+        type: 'assistant',
+        stream_id: 'sid-hist',
+        message: { content: [{ type: 'tool_use', name: 'Read' }] },
+      },
+      {
+        type: 'assistant',
+        stream_id: 'sid-hist',
+        message: { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' },
+      },
+    ],
+  });
+  const kinds = m.lines.map(function (l) { return l.kind || l.role; });
+  assert.ok(kinds.indexOf('turn-slot') >= 0, 'history apply must emit turn-slot, got ' + kinds.join(','));
+  const slot = m.lines.filter(function (l) { return l.kind === 'turn-slot'; })[0];
+  assert.ok(slot.items && slot.items.length >= 1, 'slot has tool items');
+  assert.ok(/step/.test(slot.text || ''), '⋯ n steps label');
+});
+
 test('main chat rule constant is owner-overseer only', function () {
   assert.strictEqual(AT.MAIN_CHAT_IS_OWNER_OVERSEER_ONLY, true);
 });

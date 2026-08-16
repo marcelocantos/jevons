@@ -353,7 +353,10 @@
         lines: [],
       };
     }
-    const lines = turnsToLines(payload && payload.turns);
+    const events = payload && payload.events;
+    const lines = (Array.isArray(events) && events.length)
+      ? cw('applyEventTape')(events)
+      : turnsToLines(payload && payload.turns);
     return {
       title: (payload && payload.name) || name || '',
       empty: lines.length === 0,
