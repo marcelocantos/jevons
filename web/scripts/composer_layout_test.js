@@ -142,6 +142,27 @@ test('empty composer min-height pins to --control-h (matches #send)', function (
   );
 });
 
+test('T478 empty autoGrow uses control height not placeholder scrollHeight', function () {
+  const CL = require('./composer_layout.js');
+  const placeholderScroll = 96; // wrapping placeholder, Firefox
+  const controlH = 44;
+  assert.strictEqual(
+    CL.emptyComposerUsedHeight(placeholderScroll, controlH, true),
+    controlH,
+    'empty must ignore placeholder scrollHeight'
+  );
+  assert.strictEqual(
+    CL.emptyComposerUsedHeight(72, controlH, false),
+    72,
+    'non-empty still uses content scrollHeight'
+  );
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const grow = html.match(/function autoGrow\(\) \{[\s\S]*?\n\}/);
+  assert.ok(grow, 'autoGrow must exist');
+  assert.ok(/isEffectivelyEmpty/.test(grow[0]), 'autoGrow must treat seed-only as empty');
+  assert.ok(/getElementById\('send'\)/.test(grow[0]), 'empty height must match #send');
+});
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

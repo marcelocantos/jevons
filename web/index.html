@@ -3303,6 +3303,10 @@ function sealAssistantStream(streamId) {
 }
 
 function startTurn() {
+  // 🎯T119.6: one open slot is one marker. paintOptimisticMainUser and
+  // onTurnSlotOpen both used to mint; a second append shared the first
+  // marker's prefix-sum top and stacked "⋯ n steps" labels.
+  if (turnDetails && turnDetails.isConnected) return;
   // A compact, non-expanding marker: a one-line label whose tool detail
   // lives in a .turn-tip that only appears on hover.
   turnDetails = document.createElement('div');
@@ -8054,7 +8058,8 @@ function paintOptimisticMainUser(text) {
   if (!uEl) return null;
   uEl._optimisticSend = true;
   msgHistory.push({ text: plan.text, el: uEl });
-  try { startTurn(); } catch (_) { /* isolated */ }
+  // 🎯T119.6: do not pre-open a turn slot. onTurnSlotOpen opens one when
+  // the first tool arrives; a slot here became a second overlapping marker.
   return uEl;
 }
 
@@ -8912,6 +8917,20 @@ function updateWorkingProgress(text) {
 function autoGrow() {
   const prevH = input.offsetHeight;
   input.classList.remove('composer-scroll');
+  // 🎯T478: empty / Wispr-seed-only must stay one control tall. Firefox
+  // sizes an empty textarea's scrollHeight to the wrapping placeholder,
+  // and writing that as inline height is what left a tall empty box
+  // after send until the first keystroke.
+  const empty = (typeof WisprContext !== 'undefined' && WisprContext.isEffectivelyEmpty)
+    ? WisprContext.isEffectivelyEmpty(input.value)
+    : !String(input.value || '').trim();
+  if (empty) {
+    input.style.height = '';
+    const sendEl = document.getElementById('send');
+    const controlPx = sendEl ? sendEl.offsetHeight : 0;
+    if (controlPx > 0) input.style.height = controlPx + 'px';
+    return;
+  }
   input.style.height = 'auto';
   const maxPx = Math.round(window.innerHeight * 0.28);
   const h = Math.min(input.scrollHeight, maxPx);

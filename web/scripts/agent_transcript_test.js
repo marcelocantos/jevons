@@ -1511,6 +1511,57 @@ test('T308 turnsToLines preserves turn timestamps from wire/HTTP', function () {
   assert.ok(!('when' in lines[3]), 'timestamp-free turn carries no when');
 });
 
+test('T479 copyInspectLines keeps stream join keys', function () {
+  const src = [{ role: 'assistant', text: '`', _stream: true, _streamId: 's1' }];
+  const out = AT.copyInspectLines(src);
+  assert.strictEqual(out[0]._stream, true);
+  assert.strictEqual(out[0]._streamId, 's1');
+  out[0]._streamId = 'mutated';
+  assert.strictEqual(src[0]._streamId, 's1', 'copy, not alias');
+});
+
+test('T479 four inline-code tokens stay one bubble', function () {
+  const tokens = ['`', 'index', '.html', '`'];
+  let lines = [];
+  tokens.forEach(function (tok) {
+    lines = AT.applyInspectLiveFrame(lines, {
+      type: 'assistant',
+      stream_id: 's-inline',
+      message: { role: 'assistant', content: [{ type: 'text', text: tok }] },
+    });
+  });
+  const asst = lines.filter(function (l) { return l.role === 'assistant'; });
+  assert.strictEqual(asst.length, 1, 'same stream_id must stay one bubble, got ' + asst.length);
+  assert.strictEqual(asst[0].text, '`index.html`');
+
+  let noId = [];
+  tokens.forEach(function (tok) {
+    noId = AT.applyInspectLiveFrame(noId, {
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: tok }] },
+    });
+  });
+  const asst2 = noId.filter(function (l) { return l.role === 'assistant'; });
+  assert.strictEqual(asst2.length, 1, 'missing stream_id must still join, got ' + asst2.length);
+  assert.strictEqual(asst2[0].text, '`index.html`');
+
+  // Remount mid-stream via copyInspectLines must not lose the open handle.
+  let mid = [];
+  mid = AT.applyInspectLiveFrame(mid, {
+    type: 'assistant',
+    stream_id: 's-inline',
+    message: { role: 'assistant', content: [{ type: 'text', text: '`' }] },
+  });
+  mid = AT.copyInspectLines(mid);
+  mid = AT.applyInspectLiveFrame(mid, {
+    type: 'assistant',
+    stream_id: 's-inline',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'index.html`' }] },
+  });
+  const asst3 = mid.filter(function (l) { return l.role === 'assistant'; });
+  assert.strictEqual(asst3.length, 1, 'copyInspectLines remount must still join');
+});
+
 test('T308 copyInspectLines keeps when (the copies that used to drop it)', function () {
   const src = [{ role: 'user', text: 'a', when: 1754620000000 }, { role: 'assistant', text: 'b' }];
   const out = AT.copyInspectLines(src);

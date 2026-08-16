@@ -750,6 +750,36 @@ test('T372 index.html: no second grow-bubble implementation', function () {
     'live path must not remount via renderAgentInspect');
 });
 
+test('T119.6 startTurn twice leaves one canvas child', function () {
+  const CW = require('./conversation_widget.js');
+  const canvas = { children: [] };
+  let slot = CW.ensureTurnSlot(canvas, null);
+  slot = CW.ensureTurnSlot(canvas, slot);
+  slot = CW.ensureTurnSlot(canvas, slot);
+  assert.strictEqual(canvas.children.length, 1, 'second startTurn must not append');
+  assert.strictEqual(slot, canvas.children[0]);
+  assert.strictEqual(CW.shouldMintTurnSlot(slot, true), false);
+  assert.strictEqual(CW.shouldMintTurnSlot(null, false), true);
+  // Mutation: always-create.
+  function alwaysMint(canvas) {
+    const el = { id: canvas.children.length };
+    canvas.children.push(el);
+    return el;
+  }
+  const mutant = { children: [] };
+  alwaysMint(mutant);
+  alwaysMint(mutant);
+  assert.strictEqual(mutant.children.length, 2, 'mutant must be the failure mode the oracle detects');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.match(/function startTurn\(\) \{[\s\S]*?\n\}/);
+  assert.ok(start, 'startTurn exists');
+  assert.ok(/isConnected/.test(start[0]), 'startTurn is idempotent while the slot is connected');
+  const opt = html.match(/function paintOptimisticMainUser\([\s\S]*?\n\}/);
+  assert.ok(opt, 'paintOptimisticMainUser exists');
+  assert.ok(!/startTurn\(\)/.test(opt[0]),
+    'optimistic user paint must not pre-open a slot that onTurnSlotOpen will open');
+});
+
 test('T372 index.html: send click is the widget, not a second composer send', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(!/sendBtn\.addEventListener\(\s*['"]click['"]\s*,\s*send\s*\)/.test(html),

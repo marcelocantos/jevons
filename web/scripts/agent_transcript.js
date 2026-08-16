@@ -321,6 +321,11 @@
       if (l.when !== undefined) out.when = l.when;
       if (l.kind) out.kind = l.kind;
       if (l.items) out.items = l.items;
+      // 🎯T479: dropping _stream/_streamId is what minted one bubble per
+      // Grok token after inspectLinesCopy — the next chunk could not find
+      // the open assistant.
+      if (l._stream) out._stream = l._stream;
+      if (l._streamId != null) out._streamId = l._streamId;
       return out;
     });
   }

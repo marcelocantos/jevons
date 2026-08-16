@@ -69,9 +69,17 @@
     return coveredWithout && visibleWith;
   }
 
+  // 🎯T478: used height for an empty / seed-only composer is the control
+  // height, never the wrapping placeholder's scrollHeight.
+  function emptyComposerUsedHeight(scrollHeight, controlH, isEmpty) {
+    if (isEmpty) return Number(controlH) || 0;
+    return Number(scrollHeight) || 0;
+  }
+
   return {
     scrollTopAfterComposerGrow: scrollTopAfterComposerGrow,
     lastMessageFullyVisible: lastMessageFullyVisible,
     growthWithoutCoverHolds: growthWithoutCoverHolds,
+    emptyComposerUsedHeight: emptyComposerUsedHeight,
   };
 }));

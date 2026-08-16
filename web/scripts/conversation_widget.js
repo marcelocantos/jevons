@@ -578,6 +578,22 @@
     return '⋯ ' + n + (n === 1 ? ' step' : ' steps');
   }
 
+  // 🎯T119.6: a second startTurn while a slot is already on the canvas
+  // must not mint. Mutation: always-create fails this.
+  function shouldMintTurnSlot(existing, connected) {
+    return !(existing && connected);
+  }
+
+  function ensureTurnSlot(canvas, existing) {
+    var kids = canvas && canvas.children ? canvas.children : [];
+    if (!shouldMintTurnSlot(existing, existing && kids.indexOf(existing) >= 0)) {
+      return existing;
+    }
+    var el = { id: kids.length };
+    kids.push(el);
+    return el;
+  }
+
   function summariseToolUse(c) {
     var name = (c && c.name) ? String(c.name) : 'tool';
     var extra = '';
@@ -1813,6 +1829,8 @@
     displayFromEvents: displayFromEvents,
     createStreamJoin: createStreamJoin,
     turnSlotLabel: turnSlotLabel,
+    shouldMintTurnSlot: shouldMintTurnSlot,
+    ensureTurnSlot: ensureTurnSlot,
     createTurnMarkerEl: createTurnMarkerEl,
     mount: mount,
     // 🎯T480 / T106: one size-clip implementation for main and Transcript.
