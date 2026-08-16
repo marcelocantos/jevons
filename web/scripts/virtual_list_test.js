@@ -1325,6 +1325,26 @@ test('T351 hydrateCompensatedScrollTop is rect-exact with integer fallback', fun
   assert.strictEqual(VL.hydrateCompensatedScrollTop(100, undefined, undefined, 1000, 1000), 100);
 });
 
+test('T482 second snap of the same natural does not rewrite minHeight', function () {
+  const first = VL.nextSnappedMinHeightCss('', 54.8);
+  assert.strictEqual(first.lock, 55);
+  assert.strictEqual(first.css, '55px');
+  assert.ok(first.changed, 'first lock must write');
+  const second = VL.nextSnappedMinHeightCss('55px', 54.8);
+  assert.strictEqual(second.css, '55px');
+  assert.strictEqual(second.changed, false, 'already-snapped lock is a no-op write');
+  const shrink = VL.nextSnappedMinHeightCss('55px', 40);
+  assert.strictEqual(shrink.css, '40px');
+  assert.ok(shrink.changed, 'a real shrink must still write');
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('nextSnappedMinHeightCss') >= 0,
+    'noteRowHeightChange uses the no-op lock helper');
+  assert.ok(/_rowSnapQuiet/.test(html) && /unobserve\(el\)/.test(html),
+    'snap unobserves the row so Firefox RO cannot re-enter on the clear');
+});
+
 test('T351 snappedRowLockPx ceils fractional row boxes to the pixel grid', function () {
   assert.strictEqual(VL.snappedRowLockPx(54.8), 55);
   assert.strictEqual(VL.snappedRowLockPx(13.1875), 14, 'turn-marker natural height');
@@ -1367,7 +1387,7 @@ test('index.html wires T351 whole-pixel geometry', function () {
     'renderBody re-snaps after repaint');
   assert.ok(/function applyClipState\(d, clipped\)[\s\S]{0,900}scheduleRowSnap/.test(html),
     'clip toggle re-snaps');
-  assert.ok(/function noteRowHeightChange[\s\S]{0,5000}snappedRowLockPx/.test(html),
+  assert.ok(/function noteRowHeightChange[\s\S]{0,5000}nextSnappedMinHeightCss/.test(html),
     'row measure locks at the snapped ceiling of the natural box');
   // Row-level margins must be whole pixels — margins escape the box snap.
   assert.ok(!/\.msg\.user, \.msg\.jevons \{ margin-bottom: 1\.2rem/.test(html),

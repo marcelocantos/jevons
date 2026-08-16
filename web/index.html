@@ -1677,6 +1677,9 @@ if (typeof LayoutProbe !== 'undefined') LayoutProbe.bind(window);
 </script>
 <script>
 const msgs = document.getElementById('messages');
+// 🎯T482: declared early so noteRowHeightChange can unobserve during a snap
+// without hitting the temporal dead zone of a later const.
+let _rowSnapRO = null;
 // 🎯T119.3: absolute canvas + prefix-sum layout. Rows live in transcriptRows;
 // only the viewport band has .msg nodes. Mid-list collapse is layoutSetHeight.
 const msgsCanvas = (function () {
@@ -1745,6 +1748,13 @@ function noteRowHeightChange(el) {
   // previous extent, snap) floors the rect; adding chrome on that box is
   // the gap ratchet — tight on reload, then growing while the page stays
   // open. Clear the lock, measure, lock the natural box, store f(natural).
+  const prevLock = el.style.minHeight || '';
+  const ro = (typeof _rowSnapRO !== 'undefined') ? _rowSnapRO : null;
+  const wasObserved = !!(ro && el._rowSnapObserved);
+  if (wasObserved) {
+    el._rowSnapQuiet = true;
+    ro.unobserve(el);
+  }
   el.style.minHeight = '';
   const boxRect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
   const box = boxRect ? boxRect.height : el.offsetHeight;
@@ -1796,11 +1806,16 @@ function noteRowHeightChange(el) {
   // Lock the NATURAL box, never the chromed extent. The cache that remat
   // copies into minHeight must be that same natural or the next measure
   // stacks chrome again.
-  const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
-    ? VirtualList.snappedRowLockPx(box)
-    : Math.ceil(box || 0);
-  if (lock > 0) el.style.minHeight = lock + 'px';
-  else el.style.minHeight = '';
+  const snap = (typeof VirtualList !== 'undefined' && VirtualList.nextSnappedMinHeightCss)
+    ? VirtualList.nextSnappedMinHeightCss(prevLock, box)
+    : { lock: Math.ceil(box || 0), css: (Math.ceil(box || 0) > 0 ? Math.ceil(box || 0) + 'px' : ''), changed: true };
+  const lock = snap.lock;
+  if (snap.changed) el.style.minHeight = snap.css;
+  else el.style.minHeight = prevLock;
+  if (wasObserved && el.isConnected) {
+    ro.observe(el);
+    el._rowSnapQuiet = false;
+  }
   if (box > 0 && typeof msgsContentWidth === 'function') {
     const nw = msgsContentWidth();
     if (nw > 0) {
@@ -7599,12 +7614,16 @@ function scrollDownThrottled() {
 // snaps them after the final paint).
 let _rowSnapSet = new Set();
 let _rowSnapRaf = 0;
-const _rowSnapRO = (typeof ResizeObserver !== 'undefined')
+_rowSnapRO = (typeof ResizeObserver !== 'undefined')
   ? new ResizeObserver((entries) => {
       // Async growers (image load, mermaid render, font swap) re-snap.
-      // Self-terminating: snapping puts the box on the grid, so the RO tick
-      // it triggers measures an integer and writes nothing.
-      for (const e of entries) scheduleRowSnap(e.target);
+      // 🎯T482: a snap that writes ceil(natural) must not re-enter from the
+      // observation of its own write. Quiet rows and no-op locks break the
+      // Firefox loop (54.8 → 55 → clear → 54.8).
+      for (const e of entries) {
+        if (e.target && e.target._rowSnapQuiet) continue;
+        scheduleRowSnap(e.target);
+      }
     })
   : null;
 function scheduleRowSnap(el) {
@@ -7641,12 +7660,17 @@ function flushRowSnaps() {
         if (el._vIndex != null && typeof noteRowHeightChange === 'function') {
           noteRowHeightChange(el);
         } else {
+          const prev = el.style.minHeight || '';
           if (el.style.minHeight) el.style.minHeight = '';
           const natural = el.getBoundingClientRect().height;
-          const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
-            ? VirtualList.snappedRowLockPx(natural)
-            : Math.ceil(natural);
-          el.style.minHeight = lock > 0 ? lock + 'px' : '';
+          const snap = (typeof VirtualList !== 'undefined' && VirtualList.nextSnappedMinHeightCss)
+            ? VirtualList.nextSnappedMinHeightCss(prev, natural)
+            : null;
+          if (snap) el.style.minHeight = snap.changed ? snap.css : prev;
+          else {
+            const lock = Math.ceil(natural);
+            el.style.minHeight = lock > 0 ? lock + 'px' : '';
+          }
         }
         if (el.style.minHeight !== prevLocks[i]) lockChanged = true;
         if (_rowSnapRO && !el._rowSnapObserved) {

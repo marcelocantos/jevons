@@ -1178,6 +1178,16 @@
     return snapped > 0 ? snapped : 0;
   }
 
+  // 🎯T482: writing minHeight on every snap is a ResizeObserver loop in
+  // Firefox. Clear-then-ceil(natural) always looks like a change (54.8 → 55)
+  // even when the lock is already 55. The second pass must be a no-op write.
+  function nextSnappedMinHeightCss(prevCss, naturalPx) {
+    const lock = snappedRowLockPx(naturalPx);
+    const css = lock > 0 ? lock + 'px' : '';
+    const prev = prevCss == null ? '' : String(prevCss);
+    return { lock: lock, css: css, changed: css !== prev };
+  }
+
   // ── Viewport anchoring (🎯T351 hydrate, 🎯T363 virtualize) ─────────
   // One rule covers both: when content ABOVE the viewport changes height,
   // scrollTop must move by the same amount or the text under the owner's
@@ -1802,6 +1812,7 @@
     isPinnedAtEnd: isPinnedAtEnd,
     hydrateCompensatedScrollTop: hydrateCompensatedScrollTop,
     snappedRowLockPx: snappedRowLockPx,
+    nextSnappedMinHeightCss: nextSnappedMinHeightCss,
 
     // 🎯T363: viewport anchoring for height changes above the scroll position.
     anchorPreservedScrollTop: anchorPreservedScrollTop,
