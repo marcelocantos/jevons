@@ -924,6 +924,15 @@
       if (typeof opts.onUser === 'function') {
         return opts.onUser(body, ts, userOpts);
       }
+      // Prefer addMsg (host list/canvas) over buildMsg+append to messagesEl.
+      // Main passes both; appending to #messages parks bubbles AFTER the
+      // canvas — a stack of left-aligned owner lines at the live end.
+      if (typeof opts.addMsg === 'function') {
+        return opts.addMsg('user', body, ts, {
+          turnOrigin: userOpts.origin,
+          timeIfKnown: !!opts.timeIfKnown,
+        });
+      }
       if (typeof opts.buildMsg === 'function' && messagesEl) {
         var el = opts.buildMsg('user', body, ts, { timeIfKnown: !!opts.timeIfKnown });
         if (el) messagesEl.appendChild(el);
@@ -992,6 +1001,7 @@
         var utext = CE.userContentText ? CE.userContentText(event) : '';
         if (!utext) return;
         if (CE.isProtocolControlFrameText && CE.isProtocolControlFrameText(utext)) return;
+        closeTurnSlot();
         appendUser(utext, ts, {
           origin: CE.turnOriginOf ? CE.turnOriginOf(event) : undefined,
         });
@@ -1028,8 +1038,6 @@
       var sid = CE.streamIdOf ? CE.streamIdOf(event) : String(event.stream_id || event.streamId || '');
       var content = event.message && event.message.content;
       if (!Array.isArray(content)) return;
-      var anyText = CE.hasAssistantText ? CE.hasAssistantText(event) : false;
-      if (anyText) closeTurnSlot();
       var emitted = false;
       for (var i = 0; i < content.length; i++) {
         var c = content[i];
@@ -1052,7 +1060,9 @@
         emitted = true;
       }
       if (CE.shouldClearWorking && CE.shouldClearWorking(event)) {
-        closeTurnSlot();
+        // Do not close the turn-slot here. Tools-only end_turn is common
+        // between tool_use frames (T260); closing minted a new ⋯ 1 step
+        // per tool. The slot stays open until the next owner user.
         sealAssistant(sid);
       }
     }
@@ -1172,6 +1182,9 @@
       requestAnimationFrame: opts.requestAnimationFrame,
       cancelAnimationFrame: opts.cancelAnimationFrame,
       isDuplicateUser: opts.isDuplicate,
+      onTurnSlotOpen: opts.onTurnSlotOpen,
+      onTurnSlotItem: opts.onTurnSlotItem,
+      onTurnSlotCancel: opts.onTurnSlotCancel,
       onClipToggle: opts.onClipToggle,
       onAfterClip: opts.onAfterClip,
       paintProbe: opts.paintProbe,

@@ -572,6 +572,46 @@ test('one apply: jevons and another agent emit the same row kinds including turn
   assert.strictEqual(asst[0].text, 'done');
 });
 
+test('turn-slot coalesces tools across tools-only end_turn (not one strip per tool)', function () {
+  const stream = CW.createStreamJoin({});
+  const tape = [
+    { type: 'user', message: { content: 'investigate' }, timestamp: 1 },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+    { type: 'assistant', message: { content: [], stop_reason: 'end_turn' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } },
+    { type: 'assistant', message: { content: [], stop_reason: 'end_turn' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Grep' }] } },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'report' }], stop_reason: 'end_turn' },
+    },
+  ];
+  tape.forEach(function (ev) { stream.applyWireEvent(ev); });
+  const slots = stream.getLines().filter(function (l) { return l.kind === 'turn-slot'; });
+  assert.strictEqual(slots.length, 1, 'one strip per owner turn, got ' + slots.length);
+  assert.strictEqual(slots[0].items.length, 3, 'all three tools in that strip');
+  assert.strictEqual(slots[0].text, '⋯ 3 steps');
+});
+
+test('appendUser prefers addMsg over buildMsg+messagesEl (canvas vs leftover stack)', function () {
+  const added = [];
+  const stream = CW.createStreamJoin({
+    addMsg: function (role, text) {
+      added.push({ role: role, text: text, via: 'addMsg' });
+      return { className: 'msg ' + role };
+    },
+    buildMsg: function (role, text) {
+      added.push({ role: role, text: text, via: 'buildMsg' });
+      return { className: 'msg ' + role };
+    },
+    messagesEl: { appendChild: function () { added.push({ via: 'append' }); } },
+  });
+  stream.appendUser('hello owner', 1, { origin: 'owner' });
+  assert.strictEqual(added.length, 1);
+  assert.strictEqual(added[0].via, 'addMsg');
+  assert.strictEqual(added[0].role, 'user');
+});
+
 test('T372 Grok word-chunks are one assistant bubble (both densities)', function () {
   ['compact', 'comfortable'].forEach(function (density) {
     const dom = fakeDom(density);

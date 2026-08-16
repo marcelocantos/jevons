@@ -735,7 +735,7 @@ test('index.html wires ChatEvents + stream seal', () => {
   const src = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
   assert.ok(html.includes('scripts/chat_events.js'), 'must load chat_events.js');
   assert.ok(html.includes('ChatEvents.shouldClearWorking'), 'must call shouldClearWorking');
-  assert.ok(src.includes('hasAssistantText'), 'apply uses hasAssistantText');
+  assert.ok(src.includes('isSilentAssistantText'), 'apply uses isSilentAssistantText');
   assert.ok(html.includes('appendOrAddJevons'), 'must stream-merge assistant chunks');
   assert.ok(html.includes('mainConversation.applyWireEvent'), 'main live ingest is the shared apply');
   assert.ok(

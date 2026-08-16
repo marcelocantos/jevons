@@ -9395,6 +9395,16 @@ let rhsBottomTab = (typeof FrontierTable !== 'undefined')
       timeIfKnown: false,
       buildMsg: typeof buildMsg === 'function' ? buildMsg : undefined,
       addMsg: typeof addMsg === 'function' ? addMsg : undefined,
+      isDuplicate: function (last, body) {
+        const t = String(body || '').trim();
+        if (!t) return true;
+        if (last && last.role === 'user' && String(last.text || '').trim() === t) return true;
+        for (let i = 0; i < transcriptRows.length; i++) {
+          const r = transcriptRows[i];
+          if (r && r.role === 'user' && String(r.text || '').trim() === t) return true;
+        }
+        return false;
+      },
       onTurnSlotOpen: function (slot) {
         startTurn();
         if (slot && turnDetails) slot.el = turnDetails;
