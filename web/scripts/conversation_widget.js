@@ -578,6 +578,152 @@
     return '⋯ ' + n + (n === 1 ? ' step' : ' steps');
   }
 
+  function summariseToolUse(c) {
+    var name = (c && c.name) ? String(c.name) : 'tool';
+    var extra = '';
+    if (c && c.input && typeof ToolSummary !== 'undefined' && ToolSummary.summariseInput) {
+      extra = ToolSummary.summariseInput(c.input);
+    }
+    return extra ? (name + ': ' + extra) : name;
+  }
+
+  function summariseToolResult(c) {
+    if (!c) return '';
+    var inner = c.content;
+    if (typeof inner === 'string') return inner.slice(0, 120);
+    if (Array.isArray(inner)) {
+      var bits = [];
+      for (var i = 0; i < inner.length; i++) {
+        if (inner[i] && inner[i].type === 'text' && inner[i].text) {
+          bits.push(String(inner[i].text).slice(0, 120));
+        }
+      }
+      return bits.join(' ');
+    }
+    return '';
+  }
+
+  /**
+   * Display model f(raw events). Consecutive tools with no other row
+   * between them are one turn-slot (⋯ n steps, including n=1). A user
+   * or visible assistant row breaks the scope. Tools-only end_turn does
+   * not. Residual: full replay (🎯T119.5 will fold).
+   */
+  function displayFromEvents(events, CE) {
+    CE = CE || loadChatEvents();
+    var out = [];
+    var open = null;
+    var silentById = Object.create(null);
+    function closeOpen() {
+      open = null;
+    }
+    function addTool(cls, text, ts) {
+      var body = text == null ? '' : String(text);
+      if (!body) return;
+      if (!open) {
+        open = { kind: 'turn-slot', role: 'turn-slot', items: [], text: '', when: ts };
+        out.push(open);
+      }
+      open.items.push({ cls: cls || '', text: body });
+      open.text = turnSlotLabel(open.items);
+    }
+    function growAssistant(text, streamId, edge, ts) {
+      var sid = streamId ? String(streamId) : '';
+      for (var i = out.length - 1; i >= 0; i--) {
+        var l = out[i];
+        if (!l || (l.role !== 'assistant' && l.role !== 'jevons')) continue;
+        if (!l._stream) continue;
+        if (sid && l._streamId && l._streamId !== sid) continue;
+        l.text = edge
+          ? (CE && CE.joinAssistantSegments ? CE.joinAssistantSegments(l.text, text) : (l.text + '\n\n' + text))
+          : (CE && CE.appendAssistantStream ? CE.appendAssistantStream(l.text, text) : (l.text + text));
+        if (sid) l._streamId = sid;
+        return;
+      }
+      var row = { role: 'assistant', text: text, _stream: true, when: ts };
+      if (sid) row._streamId = sid;
+      out.push(row);
+    }
+    var tape = Array.isArray(events) ? events : [];
+    var segmentEdge = false;
+    for (var ei = 0; ei < tape.length; ei++) {
+      var event = tape[ei];
+      if (!event || !CE) continue;
+      var ts = event.when != null ? event.when
+        : (event.timestamp ? new Date(event.timestamp).getTime() : undefined);
+      if (event.type === 'user') {
+        var utext = CE.userContentText ? CE.userContentText(event) : '';
+        if (!utext) continue;
+        if (CE.isProtocolControlFrameText && CE.isProtocolControlFrameText(utext)) continue;
+        closeOpen();
+        var urow = { role: 'user', text: utext };
+        if (ts != null) urow.when = ts;
+        if (CE.turnOriginOf) urow.origin = CE.turnOriginOf(event);
+        var last = out[out.length - 1];
+        if (last && last.role === 'user' && String(last.text || '').trim() === utext.trim()) continue;
+        out.push(urow);
+        continue;
+      }
+      if (event.type === 'agent_note') {
+        addTool('agent-note', event.text || '', ts);
+        continue;
+      }
+      if (event.type === 'tool_result' || event.type === 'result') {
+        segmentEdge = true;
+        var raw = event.message && event.message.content;
+        if (Array.isArray(raw)) {
+          for (var ri = 0; ri < raw.length; ri++) {
+            if (raw[ri] && raw[ri].type === 'tool_result') {
+              addTool('tool-result', summariseToolResult(raw[ri]), ts);
+            }
+          }
+        } else {
+          addTool('tool-result', summariseToolResult(event), ts);
+        }
+        continue;
+      }
+      if (event.type === 'system') {
+        closeOpen();
+        continue;
+      }
+      if (event.type !== 'assistant') continue;
+      var sid = CE.streamIdOf ? CE.streamIdOf(event) : String(event.stream_id || event.streamId || '');
+      var content = event.message && event.message.content;
+      if (!Array.isArray(content)) continue;
+      var emitted = false;
+      for (var i = 0; i < content.length; i++) {
+        var c = content[i];
+        if (!c) continue;
+        if (c.type === 'tool_use') {
+          segmentEdge = true;
+          addTool('tool-use', summariseToolUse(c), ts);
+          continue;
+        }
+        if (c.type !== 'text' || !c.text) continue;
+        var alreadySilent = !!(sid && silentById[sid]);
+        var thisSilent = CE.isSilentAssistantText && CE.isSilentAssistantText(c.text);
+        if (alreadySilent || thisSilent) {
+          if (sid) silentById[sid] = true;
+          continue;
+        }
+        closeOpen();
+        var edge = segmentEdge || emitted;
+        growAssistant(c.text, sid, edge, ts);
+        segmentEdge = false;
+        emitted = true;
+      }
+      if (CE.shouldClearWorking && CE.shouldClearWorking(event)) {
+        for (var si = out.length - 1; si >= 0; si--) {
+          if (out[si] && out[si]._stream && (!sid || out[si]._streamId === sid)) {
+            delete out[si]._stream;
+            break;
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   function createTurnMarkerEl(doc, slot) {
     if (!doc || typeof doc.createElement !== 'function') return null;
     slot = slot || { items: [] };
@@ -629,34 +775,9 @@
     var silentById = Object.create(null);
     var segmentEdge = false;
     var lines = [];
-    var turnSlot = null;
+    var events = [];
     var messagesEl = opts.messagesEl || null;
     var doc = opts.document || (typeof document !== 'undefined' ? document : null);
-
-    function summariseToolUse(c) {
-      var name = (c && c.name) ? String(c.name) : 'tool';
-      var extra = '';
-      if (c && c.input && typeof ToolSummary !== 'undefined' && ToolSummary.summariseInput) {
-        extra = ToolSummary.summariseInput(c.input);
-      }
-      return extra ? (name + ': ' + extra) : name;
-    }
-
-    function summariseToolResult(c) {
-      if (!c) return '';
-      var inner = c.content;
-      if (typeof inner === 'string') return inner.slice(0, 120);
-      if (Array.isArray(inner)) {
-        var bits = [];
-        for (var i = 0; i < inner.length; i++) {
-          if (inner[i] && inner[i].type === 'text' && inner[i].text) {
-            bits.push(String(inner[i].text).slice(0, 120));
-          }
-        }
-        return bits.join(' ');
-      }
-      return '';
-    }
 
     function paintTurnSlotEl(slot) {
       if (!slot || !slot.el) return;
@@ -992,79 +1113,86 @@
       return el;
     }
 
-    function applyWireEvent(event) {
-      var CE = loadChatEvents();
-      if (!event || !CE) return;
-      var ts = event.when != null ? event.when
-        : (event.timestamp ? new Date(event.timestamp).getTime() : Date.now());
-      if (event.type === 'user') {
-        var utext = CE.userContentText ? CE.userContentText(event) : '';
-        if (!utext) return;
-        if (CE.isProtocolControlFrameText && CE.isProtocolControlFrameText(utext)) return;
-        closeTurnSlot();
-        appendUser(utext, ts, {
-          origin: CE.turnOriginOf ? CE.turnOriginOf(event) : undefined,
-        });
-        openTurnSlot(ts);
-        return;
-      }
-      if (event.type === 'agent_note') {
-        addTurnSlotItem('agent-note', event.text || '', ts);
-        return;
-      }
-      if (event.type === 'tool_result' || event.type === 'result') {
-        segmentEdge = true;
-        var raw = event.message && event.message.content;
-        if (Array.isArray(raw)) {
-          for (var ri = 0; ri < raw.length; ri++) {
-            if (raw[ri] && raw[ri].type === 'tool_result') {
-              addTurnSlotItem('tool-result', summariseToolResult(raw[ri]), ts);
-            }
+    function paintNewDisplayRow(row) {
+      if (!row) return;
+      if (row.kind === 'turn-slot') {
+        if (typeof opts.onTurnSlotOpen === 'function') opts.onTurnSlotOpen(row);
+        else if (messagesEl) {
+          var el = mintTurnMarkerEl(row);
+          if (el && typeof messagesEl.appendChild === 'function') messagesEl.appendChild(el);
+        }
+        if (typeof opts.onTurnSlotItem === 'function') {
+          for (var ti = 0; ti < (row.items || []).length; ti++) {
+            opts.onTurnSlotItem(row, row.items[ti].cls, row.items[ti].text);
           }
         } else {
-          var one = summariseToolResult(event);
-          if (one) addTurnSlotItem('tool-result', one, ts);
+          paintTurnSlotEl(row);
         }
         return;
       }
-      if (event.type === 'system') {
-        if (CE.shouldClearWorking && CE.shouldClearWorking(event)) {
-          closeTurnSlot();
-          sealAssistant();
+      if (row.role === 'user') {
+        if (typeof opts.onUser === 'function') {
+          opts.onUser(row.text, row.when, { origin: row.origin });
+        } else if (typeof opts.addMsg === 'function') {
+          opts.addMsg('user', row.text, row.when, { turnOrigin: row.origin });
+        } else if (typeof opts.buildMsg === 'function' && messagesEl) {
+          var uel = opts.buildMsg('user', row.text, row.when, { timeIfKnown: !!opts.timeIfKnown });
+          if (uel) messagesEl.appendChild(uel);
         }
         return;
       }
-      if (event.type !== 'assistant') return;
-      var sid = CE.streamIdOf ? CE.streamIdOf(event) : String(event.stream_id || event.streamId || '');
-      var content = event.message && event.message.content;
-      if (!Array.isArray(content)) return;
-      var emitted = false;
-      for (var i = 0; i < content.length; i++) {
-        var c = content[i];
-        if (!c) continue;
-        if (c.type === 'tool_use') {
-          segmentEdge = true;
-          addTurnSlotItem('tool-use', summariseToolUse(c), ts);
-          continue;
+      if (row.role === 'assistant' || row.role === 'jevons') {
+        var bel = mintBubble(row.text, row.when);
+        if (bel) {
+          bel._streamRaw = row.text;
+          if (row._streamId) {
+            bel._streamId = row._streamId;
+            byId[row._streamId] = bel;
+          }
+          openEl = bel;
         }
-        if (c.type !== 'text' || !c.text) continue;
-        var alreadySilent = !!(sid && silentById[sid]);
-        var thisSilent = CE.isSilentAssistantText && CE.isSilentAssistantText(c.text);
-        if (alreadySilent || thisSilent) {
-          if (sid) silentById[sid] = true;
-          continue;
+      }
+    }
+
+    function syncDisplay(prev, next) {
+      prev = prev || [];
+      next = next || [];
+      if (next.length === prev.length && next.length) {
+        var a = prev[prev.length - 1];
+        var b = next[next.length - 1];
+        if (a && b && a.kind === 'turn-slot' && b.kind === 'turn-slot') {
+          var oldN = (a.items || []).length;
+          var newN = (b.items || []).length;
+          if (newN > oldN) {
+            if (typeof opts.onTurnSlotItem === 'function') {
+              for (var i = oldN; i < newN; i++) {
+                opts.onTurnSlotItem(b, b.items[i].cls, b.items[i].text);
+              }
+            } else {
+              paintTurnSlotEl(b);
+            }
+          }
+          return;
         }
-        var edge = segmentEdge || emitted;
-        appendAssistant(c.text, ts, { streamId: sid, segmentEdge: edge });
-        segmentEdge = false;
-        emitted = true;
+        if (a && b && (b.role === 'assistant' || b.role === 'jevons') && a.text !== b.text) {
+          var target = resolveOpen(b._streamId || '');
+          if (target) {
+            target._streamRaw = b.text;
+            scheduleRender(target);
+          }
+        }
+        return;
       }
-      if (CE.shouldClearWorking && CE.shouldClearWorking(event)) {
-        // Do not close the turn-slot here. Tools-only end_turn is common
-        // between tool_use frames (T260); closing minted a new ⋯ 1 step
-        // per tool. The slot stays open until the next owner user.
-        sealAssistant(sid);
+      if (next.length > prev.length) {
+        for (var j = prev.length; j < next.length; j++) paintNewDisplayRow(next[j]);
       }
+    }
+
+    function applyWireEvent(event) {
+      if (event) events.push(event);
+      var prev = lines;
+      lines = displayFromEvents(events);
+      syncDisplay(prev, lines);
     }
 
     function setLines(next) {
@@ -1678,12 +1806,10 @@
     composerVisible: composerVisible,
     rootClassName: rootClassName,
     linesFingerprint: linesFingerprint,
-    applyEventTape: function (events, streamOpts) {
-      var stream = createStreamJoin(streamOpts || {});
-      var tape = Array.isArray(events) ? events : [];
-      for (var i = 0; i < tape.length; i++) stream.applyWireEvent(tape[i]);
-      return stream.getLines();
+    applyEventTape: function (events) {
+      return displayFromEvents(events);
     },
+    displayFromEvents: displayFromEvents,
     createStreamJoin: createStreamJoin,
     turnSlotLabel: turnSlotLabel,
     createTurnMarkerEl: createTurnMarkerEl,

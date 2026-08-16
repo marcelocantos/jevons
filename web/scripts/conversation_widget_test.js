@@ -591,6 +591,58 @@ test('turn-slot coalesces tools across tools-only end_turn (not one strip per to
   assert.strictEqual(slots.length, 1, 'one strip per owner turn, got ' + slots.length);
   assert.strictEqual(slots[0].items.length, 3, 'all three tools in that strip');
   assert.strictEqual(slots[0].text, '⋯ 3 steps');
+  const kinds = stream.getLines().map(function (l) { return l.kind || l.role; });
+  assert.deepStrictEqual(kinds, ['user', 'turn-slot', 'assistant']);
+});
+
+test('displayFromEvents is f(raw): 1 step is already ⋯ 1 step; consecutive tools coalesce', function () {
+  const CE = require('./chat_events.js');
+  const tape = [
+    { type: 'user', message: { content: 'go' }, timestamp: 1 },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+    { type: 'assistant', message: { content: [], stop_reason: 'end_turn' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Grep' }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'later' }] } },
+  ];
+  const full = CW.displayFromEvents(tape);
+  let acc = [];
+  for (let i = 0; i < tape.length; i++) {
+    acc.push(tape[i]);
+    const folded = CW.displayFromEvents(acc);
+    const prefix = CW.displayFromEvents(tape.slice(0, i + 1));
+    assert.deepStrictEqual(
+      folded.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+      prefix.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+      'fold prefix ' + i,
+    );
+  }
+  const kinds = full.map(function (l) { return l.kind || l.role; });
+  assert.deepStrictEqual(kinds, ['user', 'turn-slot', 'assistant', 'turn-slot', 'assistant']);
+  assert.strictEqual(full[1].text, '⋯ 2 steps');
+  assert.strictEqual(full[3].text, '⋯ 1 step');
+  const one = CW.displayFromEvents([
+    { type: 'user', message: { content: 'x' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+  ]);
+  assert.strictEqual(one[1].text, '⋯ 1 step');
+});
+
+test('turn-slot after a response is a new strip (chronology)', function () {
+  const stream = CW.createStreamJoin({});
+  [
+    { type: 'user', message: { content: 'go' }, timestamp: 1 },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'first' }], stop_reason: 'end_turn' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'second' }], stop_reason: 'end_turn' } },
+  ].forEach(function (ev) { stream.applyWireEvent(ev); });
+  const kinds = stream.getLines().map(function (l) { return l.kind || l.role; });
+  assert.deepStrictEqual(kinds, ['user', 'assistant', 'turn-slot', 'assistant']);
+  const slot = stream.getLines().filter(function (l) { return l.kind === 'turn-slot'; })[0];
+  assert.strictEqual(slot.items.length, 2);
+  assert.strictEqual(slot.text, '⋯ 2 steps');
 });
 
 test('appendUser prefers addMsg over buildMsg+messagesEl (canvas vs leftover stack)', function () {
