@@ -33,27 +33,42 @@ func (s *suite) jT3924CheckpointResume() error {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
-	defer func() { _, _ = s.AgentKill(name, "jevons") }()
+	defer func() {
+		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": name})
+	}()
 
-	if _, err := s.AgentStart(name, work, "jevons", "jevons"); err != nil {
-		return fmt.Errorf("start: %w", err)
+	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": name, "workdir": work, "description": "T392.4 checkpoint journey worker",
+	})
+	if out := asOutage("spawn", err); out != nil {
+		return out
 	}
-	if err := s.MustAgentRunning(name); err != nil {
-		return err
+	if err != nil {
+		return fmt.Errorf("start: %w (%s)", err, trim(spawnOut, 80))
 	}
 
-	// Control: a below-ceiling turn still completes.
-	out, err := s.AgentSend(name, "Reply with exactly PONG and do not call any tools.")
+	// Control: a below-ceiling turn still completes (no tools).
+	ctrl, err := s.mcpText("jevons_thread_direct", map[string]any{
+		"id": name, "text": "Reply with exactly PONG and do not call any tools.",
+	})
+	if out := asOutage("control", err); out != nil {
+		return out
+	}
 	if err != nil {
 		return fmt.Errorf("control send: %w", err)
 	}
-	if strings.Contains(strings.ToLower(out), "not delivered") && strings.Contains(strings.ToLower(out), "not queued") {
-		return fmt.Errorf("control send refused: %s", trim(out, 200))
+	if strings.TrimSpace(ctrl) == "" {
+		return fmt.Errorf("control turn produced no reply")
 	}
 
-	// Deep turn: ask for several shell calls so the daemon sees tool_use.
-	deep := "Call the shell four times in this turn: echo T3924-A, then echo T3924-B, then echo T3924-C, then echo T3924-D. Do not stop after the first call."
-	if _, err := s.AgentSend(name, deep); err != nil {
+	// Deep turn: several shell calls so the daemon sees tool_use progress.
+	deep := "You MUST use run_terminal_command four times in this turn: echo T3924-A, then echo T3924-B, then echo T3924-C, then echo T3924-D. Do not stop after the first call."
+	if _, err := s.mcpText("jevons_thread_direct", map[string]any{
+		"id": name, "text": deep,
+	}); err != nil {
+		if out := asOutage("deep", err); out != nil {
+			return out
+		}
 		return fmt.Errorf("deep send: %w", err)
 	}
 
@@ -104,20 +119,33 @@ func (s *suite) jT418QueueBounce() error {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
-	defer func() { _, _ = s.AgentKill(name, "jevons") }()
+	defer func() {
+		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": name})
+	}()
 
-	if _, err := s.AgentStart(name, work, "jevons", "jevons"); err != nil {
-		return fmt.Errorf("start: %w", err)
+	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": name, "workdir": work, "description": "T418 queue-bounce worker",
+	})
+	if out := asOutage("spawn", err); out != nil {
+		return out
 	}
-	if err := s.MustAgentRunning(name); err != nil {
-		return err
+	if err != nil {
+		return fmt.Errorf("start: %w (%s)", err, trim(spawnOut, 80))
 	}
 
 	// Occupy the turn so the second send queues.
-	if _, err := s.AgentSend(name, "Think for a while: count slowly from 1 to 20 in your reply, then say DONE."); err != nil {
-		return fmt.Errorf("occupy: %w", err)
+	go func() {
+		_, _ = s.mcpText("jevons_thread_direct", map[string]any{
+			"id": name, "text": "Count slowly from 1 to 30 in your reply, then say DONE.",
+		})
+	}()
+	time.Sleep(1500 * time.Millisecond)
+	queued, err := s.mcpText("jevons_agent_send", map[string]any{
+		"name": name, "text": "QUEUED-TOKEN-T418-SURVIVE after the bounce.", "actor": "jevons",
+	})
+	if out := asOutage("queue send", err); out != nil {
+		return out
 	}
-	queued, err := s.AgentSend(name, "QUEUED-TOKEN-T418-SURVIVE after the bounce.")
 	if err != nil {
 		return fmt.Errorf("queue send: %w", err)
 	}
@@ -170,10 +198,18 @@ func (s *suite) jT418HandoverMute() error {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
-	defer func() { _, _ = s.AgentKill(name, "jevons") }()
+	defer func() {
+		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": name})
+	}()
 
-	if _, err := s.AgentStart(name, work, "jevons", "jevons"); err != nil {
-		return fmt.Errorf("start: %w", err)
+	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": name, "workdir": work, "description": "T418 handover-mute worker",
+	})
+	if out := asOutage("spawn", err); out != nil {
+		return out
+	}
+	if err != nil {
+		return fmt.Errorf("start: %w (%s)", err, trim(spawnOut, 80))
 	}
 
 	store := handover.NewStore(filepath.Join(s.stateDir, "handover"))
