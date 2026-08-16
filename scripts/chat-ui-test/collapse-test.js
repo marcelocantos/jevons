@@ -446,7 +446,8 @@ function assertNoShowMoreLess(text, label, failures) {
 
     // ── Scenario B (T66 stream): small first chunk, grow until tall, seal ──
     await page.evaluate(() => {
-      document.getElementById('messages').innerHTML = '';
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      else document.getElementById('messages').innerHTML = '';
       window.appendOrAddJevons('hi'); // small open
     });
     await page.waitForTimeout(50);
@@ -498,7 +499,8 @@ function assertNoShowMoreLess(text, label, failures) {
     // Stick-to-bottom puts the prior fully above the fold → auto-collapse.
     // Explicit enterTrackBottom: earlier scenarios may leave Free mode.
     await page.evaluate(() => {
-      document.getElementById('messages').innerHTML = '';
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      else document.getElementById('messages').innerHTML = '';
       if (window.enterTrackBottom) window.enterTrackBottom();
       const bigUser = Array.from({ length: 80 }, (_, i) => `user line ${i}`).join('\n');
       const bigAsst = Array.from({ length: 60 }, (_, i) => `- asst_${i}`).join('\n');
@@ -552,7 +554,8 @@ function assertNoShowMoreLess(text, label, failures) {
 
     // ── Scenario D (T246): large assistant then large user — assistant off-screen collapses ──
     await page.evaluate(() => {
-      document.getElementById('messages').innerHTML = '';
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      else document.getElementById('messages').innerHTML = '';
       if (window.enterTrackBottom) window.enterTrackBottom();
       const bigAsst = Array.from({ length: 60 }, (_, i) => `- prior_${i}`).join('\n');
       const bigUser = Array.from({ length: 80 }, (_, i) => `next user ${i}`).join('\n');
@@ -618,7 +621,8 @@ function assertNoShowMoreLess(text, label, failures) {
     // Phase 2: free-scroll fillers for room, then scroll prior fully above
     // → may collapse.
     await page.evaluate(() => {
-      document.getElementById('messages').innerHTML = '';
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      else document.getElementById('messages').innerHTML = '';
       if (window.enterTrackBottom) window.enterTrackBottom();
       const tall = Array.from({ length: 50 }, (_, i) => `- stay_${i}`).join('\n');
       const prior = window.addMsg('jevons', '### stay open\n' + tall);
@@ -712,7 +716,8 @@ function assertNoShowMoreLess(text, label, failures) {
     // 🎯T261: when near end these stay in the viewport → expanded. Clip chrome
     // is checked after free-scroll pushes them fully above the fold.
     await page.evaluate(() => {
-      document.getElementById('messages').innerHTML = '';
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      else document.getElementById('messages').innerHTML = '';
       if (window.enterTrackBottom) window.enterTrackBottom();
       // ~12 user lines at default metrics ≈ 14–20rem (under old 1.5× gate).
       const medUser = Array.from({ length: 12 }, (_, i) =>
@@ -837,7 +842,8 @@ function assertNoShowMoreLess(text, label, failures) {
     // as "below fold" then stay clipped after pin.
     const t261Replay = await page.evaluate(async () => {
       const el = document.getElementById('messages');
-      el.innerHTML = '';
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      else el.innerHTML = '';
       if (typeof window.beginHistoryReplay === 'function') window.beginHistoryReplay();
       const tall = (n, prefix) => Array.from({ length: n }, (_, i) =>
         `${prefix} line ${i}: durable conversation record padding text`).join('\n');
@@ -918,7 +924,8 @@ function assertNoShowMoreLess(text, label, failures) {
     // Two tall bubbles that both fit in the viewport stay expanded (not only latest).
     const t261Stick = await page.evaluate(async () => {
       const el = document.getElementById('messages');
-      el.innerHTML = '';
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      else el.innerHTML = '';
       if (window.enterTrackBottom) window.enterTrackBottom();
       const bodyA = Array.from({ length: 10 }, (_, i) =>
         `stick A line ${i}: request body exceeds the clip pocket slightly`).join('\n');

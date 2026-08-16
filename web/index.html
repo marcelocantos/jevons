@@ -111,11 +111,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #messages-canvas > .msg.status { left: 50%; transform: translateX(-50%); }
 #messages > .turn-marker,
 #messages > #messages-end { position: relative; }
-/* User/assistant bubbles keep content-visibility:visible so pocket tab +
-   outside timestamp (top:100% chrome) are not paint-contained/clipped (T106). */
-#messages-canvas > .msg { content-visibility: auto; contain-intrinsic-size: auto 72px; }
-#messages-canvas > .msg.user,
-#messages-canvas > .msg.jevons { content-visibility: visible; }
+/* Absolute rows already skip off-band work; content-visibility:auto on an
+   abs child of a tall canvas reports 0×0 rects and we detach the row the
+   owner is looking at. Always visible. */
+#messages-canvas > .msg { content-visibility: visible; }
 #messages-canvas > .msg.virt-shell { content-visibility: visible; }
 #messages-canvas > .msg.virt-shell > * { display: none !important; }
 .composer-images { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 6px; }
@@ -1800,12 +1799,8 @@ function detachTranscriptRow(index) {
   row.autoExpanded = !!row.el._autoExpanded;
   row.userToggled = !!row.el._userToggled;
   if (row.el._layoutText != null) row.text = row.el._layoutText;
-  let h = 0;
-  if (row.el._virtSize && row.el._virtSize.height > 0) h = row.el._virtSize.height;
-  else if (row.el.getBoundingClientRect) h = row.el.getBoundingClientRect().height;
-  if (h > 0 && typeof VirtualList !== 'undefined' && VirtualList.layoutSetHeight) {
-    VirtualList.layoutSetHeight(transcriptLayout, index | 0, h);
-  }
+  // Do not write height here — a 0×0 rect (or a clip) would shift the
+  // prefix of every row below without T363 compensation.
   try { row.el.remove(); } catch (_) { /* isolated */ }
   row.el = null;
 }
@@ -6973,18 +6968,51 @@ function virtualizeMessages() {
       window.__measureBackfill.n = transcriptRows.length;
     }
     const viewRect = msgs.getBoundingClientRect();
+    const keep = VirtualList.layoutAttachRange
+      ? VirtualList.layoutAttachRange(transcriptLayout, scrollTop, clientH, buffer * 2)
+      : { first: first, last: last };
+    const keepFirst = keep.first < 0 ? first : keep.first;
+    const keepLast = keep.last < 0 ? last : keep.last;
+    // Read visibility BEFORE any detach (T349: no interleaved write/read).
+    const visibleKeep = {};
+    const keepEls = [];
+    const anchorItems = [];
+    for (let i = 0; i < transcriptRows.length; i++) {
+      const el = transcriptRows[i] && transcriptRows[i].el;
+      const top = VirtualList.layoutTop(transcriptLayout, i);
+      const h = transcriptLayout.heights[i] || 0;
+      anchorItems.push({ top: top, height: h });
+      if (!el || !el.isConnected) continue;
+      const r = el.getBoundingClientRect();
+      if (r.bottom > viewRect.top && r.top < viewRect.bottom) {
+        visibleKeep[i] = true;
+        keepEls.push(el);
+      }
+    }
+    const anchorIdx = VirtualList.pickScrollAnchorIndex
+      ? VirtualList.pickScrollAnchorIndex(anchorItems, scrollTop)
+      : -1;
+    if (anchorIdx >= 0) visibleKeep[anchorIdx] = true;
     for (let i = 0; i < transcriptRows.length; i++) {
       if (i >= first && i <= last) {
         attachTranscriptRow(i, { lazy: true });
         continue;
       }
-      // Prefix estimates can be hundreds of px off (T363). Never drop a
-      // row that is still on screen — including a mid-list bubble that
-      // just expanded and shoved the prefix out from under itself.
-      const row = transcriptRows[i];
-      if (row && row.el && row.el.isConnected) {
-        const r = row.el.getBoundingClientRect();
-        if (r.bottom > viewRect.top && r.top < viewRect.bottom) continue;
+      // Hysteresis: stay attached out to 2× buffer so a mid-list
+      // collapse/expand or estimate correction cannot drop a row the
+      // owner is still looking at (T119.3 / T363).
+      if (i >= keepFirst && i <= keepLast && transcriptRows[i] && transcriptRows[i].el) {
+        continue;
+      }
+      if (visibleKeep[i]) continue;
+      const hold = transcriptRows[i] && transcriptRows[i].el;
+      if (hold && keepEls.indexOf(hold) >= 0) continue;
+      if (hold && hold.style) {
+        const cssTop = parseFloat(hold.style.top);
+        const cssH = transcriptLayout.heights[i] || hold.offsetHeight || 0;
+        if (Number.isFinite(cssTop) && cssTop + cssH > scrollTop && cssTop < scrollTop + clientH) {
+          continue;
+        }
       }
       detachTranscriptRow(i);
     }

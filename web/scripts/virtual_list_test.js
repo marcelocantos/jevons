@@ -1138,7 +1138,7 @@ test('index.html wires T349 phased virtualize + budgets + fleet frame paint', fu
   const fs = require('fs');
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,5500}planVirtualizePass/.test(html),
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,12000}planVirtualizePass/.test(html),
     'virtualize uses the phased planner');
   assert.ok(/planVirtualizePass[\s\S]{0,2500}dematerializeMsg\(item\.el, item\.height\)/.test(html),
     'demat write phase reuses pre-read height (no layout read)');
@@ -1146,7 +1146,7 @@ test('index.html wires T349 phased virtualize + budgets + fleet frame paint', fu
     'dematerializeMsg accepts a pre-read height');
   assert.ok(/function flushRematerializeFrame\(\)[\s\S]{0,3000}frameBudgetExceeded/.test(html),
     'remat flush is time-budgeted');
-  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,6000}frameBudgetExceeded/.test(html),
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,14000}frameBudgetExceeded/.test(html),
     'virtualize remat batch is time-budgeted');
   assert.ok(html.indexOf('dematRemaining.length) scheduleVirtualize()') >= 0,
     'leftover demats re-arm the next frame');
@@ -1185,7 +1185,7 @@ test('index.html wires T350 fractional freeze + gated expansion pins', function 
   // must use getBoundingClientRect().height, never integer offsetHeight —
   // a rounded shell freeze oscillates scrollHeight by the fraction on every
   // band demat/remat cycle (the owner-visible ~1px jiggle).
-  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,4500}height: el\.getBoundingClientRect\(\)\.height/.test(html),
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,12000}height: el\.getBoundingClientRect\(\)\.height/.test(html),
     'virtualize read phase uses fractional rect height');
   assert.ok(/function dematerializeMsg\(el, knownHeight\)[\s\S]{0,800}getBoundingClientRect\(\)\.height/.test(html),
     'demat fallback measure is fractional');

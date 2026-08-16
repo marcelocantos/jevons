@@ -157,7 +157,8 @@ function costBody(step) {
       return {
         mode: window.followMode,
         dist: msgs.scrollHeight - msgs.clientHeight - msgs.scrollTop,
-        n: msgs.querySelectorAll('.msg').length,
+        n: (window.__transcriptRows && window.__transcriptRows.length) ||
+          msgs.querySelectorAll('.msg').length,
         gutter: getComputedStyle(msgs).scrollbarGutter,
       };
     });
@@ -222,9 +223,21 @@ function costBody(step) {
         //     and mask fractional freeze bugs), NO virtualize;
         //   odd step  — virtualize demats it again (far above the band).
         if (arg.phase === 0) {
-          const shells = document.querySelectorAll('#messages .msg.virt-shell');
-          if (shells.length && typeof window.rematerializeMsg === 'function') {
-            window.rematerializeMsg(shells[arg.step % shells.length]);
+          const attached = document.querySelectorAll('#messages-canvas > .msg');
+          const layout = window.__transcriptLayout;
+          const st = document.getElementById('messages').scrollTop;
+          const above = [];
+          for (let i = 0; i < attached.length; i++) {
+            const el = attached[i];
+            const top = (window.VirtualList && window.VirtualList.layoutTop && layout)
+              ? window.VirtualList.layoutTop(layout, el._vIndex)
+              : el.offsetTop;
+            const h = (layout && layout.heights && layout.heights[el._vIndex]) || el.offsetHeight;
+            if (top + h < st) above.push(el);
+          }
+          const pool = above.length ? above : attached;
+          if (pool.length && typeof window.rematerializeMsg === 'function') {
+            window.rematerializeMsg(pool[arg.step % pool.length]);
             window.__t350Churn = (window.__t350Churn || 0) + 1;
           }
         } else if (typeof window.scheduleVirtualize === 'function') {

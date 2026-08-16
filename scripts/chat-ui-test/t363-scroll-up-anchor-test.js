@@ -130,7 +130,7 @@ const SNAPSHOT = `(() => {
   const m = document.getElementById('messages');
   const rows = [];
   m.querySelectorAll('.msg').forEach((el, i) => {
-    if (!el._t363id) el._t363id = 'r' + i;
+    el._t363id = el._vIndex != null ? 'r' + el._vIndex : (el._t363id || 'r' + i);
     const r = el.getBoundingClientRect();
     rows.push({ id: el._t363id, top: r.top, h: r.height,
                 shell: el.classList.contains('virt-shell') });
@@ -143,7 +143,13 @@ function diffRows(before, after) {
   const changed = [];
   after.rows.forEach((r) => {
     const b = bmap.get(r.id);
-    if (!b || Math.abs(b.h - r.h) <= 0.01) return;
+    if (!b) {
+      if (r.top < before.viewTop) {
+        changed.push({ id: r.id, dh: Math.round(r.h * 10) / 10, above: true, shellBefore: true });
+      }
+      return;
+    }
+    if (Math.abs(b.h - r.h) <= 0.01) return;
     changed.push({
       id: r.id,
       dh: Math.round((r.h - b.h) * 10) / 10,
@@ -183,44 +189,61 @@ function diffRows(before, after) {
     // Hydrate is rate-limited (HISTORY_PAGE_GAP_MS) — wait for it to drain.
     await page.waitForFunction(
       () => !document.querySelector('.history-sentinel') &&
-        document.querySelectorAll('#messages .msg').length > 150,
+        window.__transcriptRows && window.__transcriptRows.length > 150,
       null, { timeout: 30000 });
     await page.waitForTimeout(600);
 
     const boot = await page.evaluate(() => {
       const m = document.getElementById('messages');
-      const all = m.querySelectorAll('.msg');
+      const rows = window.__transcriptRows || [];
+      const attached = document.querySelectorAll('#messages-canvas > .msg');
       let shells = 0;
-      all.forEach((el) => {
-        el._t363WasShell = el.classList.contains('virt-shell');
-        if (el._t363WasShell) shells++;
+      rows.forEach((row) => {
+        if (row && row.el && row.el.classList && row.el.classList.contains('virt-shell')) {
+          row.el._t363WasShell = true;
+          shells++;
+        } else if (row && !row.el) {
+          row._t363WasDetached = true;
+        }
       });
-      return { n: all.length, shells: shells, st: m.scrollTop,
+      return { n: rows.length, attached: attached.length, shells: shells, st: m.scrollTop,
                sh: m.scrollHeight, ch: m.clientHeight };
     });
     console.log('  boot:', JSON.stringify(boot));
-    if (boot.shells < 40) {
-      failures.push('fixture too small: only ' + boot.shells + ' lazy shells — the ' +
-        'estimate→natural growth this oracle measures would barely fire');
+    if (boot.n < 150) {
+      failures.push('fixture too small: only ' + boot.n + ' records — hydrate did not land');
+    }
+    if (boot.attached >= boot.n) {
+      failures.push('hydrate attached the whole journal (' + boot.attached + ') — T119.3 band failed');
     }
 
     // ── Wheel up, step by step, measuring visual drift ────────────────
     // Real wheel events (the owner's input): they also latch free mode via
     // the wheel sensor, exactly as a hand on the mouse does.
+    await page.locator('#messages').hover();
+    await page.evaluate(() => {
+      if (typeof window.leaveTrackBottom === 'function') window.leaveTrackBottom();
+    });
     await page.mouse.move(500, 400);
     const steps = [];
     for (let i = 0; i < WHEEL_STEPS; i++) {
       const before = await page.evaluate(`(() => {
         const m = document.getElementById('messages');
         const viewTop = m.getBoundingClientRect().top;
+        const viewBot = viewTop + m.clientHeight;
         const all = m.querySelectorAll('.msg');
-        // Probe = the row the viewport's top edge cuts through: the text the
-        // owner is reading. It must move by exactly what the wheel asked.
+        // Probe = visually top intersecting row. DOM order is attach
+        // order, not prefix order, so a linear first-match is the oldest
+        // attached node (often the live end, below the fold).
         let probe = null;
+        let best = Infinity;
         for (let k = 0; k < all.length; k++) {
-          if (all[k].getBoundingClientRect().bottom > viewTop + 1) { probe = all[k]; break; }
+          const r = all[k].getBoundingClientRect();
+          if (r.bottom <= viewTop + 1 || r.top >= viewBot) continue;
+          if (r.top < best) { best = r.top; probe = all[k]; }
         }
         window.__t363probe = probe;
+        window.__t363probeIdx = probe && probe._vIndex;
         const snap = ${SNAPSHOT};
         return probe ? { ok: true, rect: probe.getBoundingClientRect().top, snap: snap } : { ok: false };
       })()`);
@@ -232,12 +255,26 @@ function diffRows(before, after) {
       await page.waitForTimeout(220);
 
       const after = await page.evaluate(`(() => {
-        const probe = window.__t363probe;
-        if (!probe || !probe.isConnected) return { ok: false };
+        let probe = window.__t363probe;
+        const idx = window.__t363probeIdx;
+        const rows = window.__transcriptRows || [];
+        if ((!probe || !probe.isConnected) && idx != null && rows[idx] && rows[idx].el) {
+          probe = rows[idx].el;
+          window.__t363probe = probe;
+        }
+        if (!probe || !probe.isConnected) {
+          return {
+            ok: false, idx: idx, hasRow: !!(rows[idx]), hasEl: !!(rows[idx] && rows[idx].el),
+            mode: window.followMode, st: document.getElementById('messages').scrollTop,
+          };
+        }
         return { ok: true, rect: probe.getBoundingClientRect().top,
                  mode: window.followMode, snap: ${SNAPSHOT} };
       })()`);
-      if (!after.ok) { failures.push('step ' + i + ': probe row left the DOM'); break; }
+      if (!after.ok) {
+        failures.push('step ' + i + ': probe row left the DOM ' + JSON.stringify(after));
+        break;
+      }
 
       steps.push({
         i: i,
@@ -256,9 +293,12 @@ function diffRows(before, after) {
     // result means nothing (the T341/T350 greenwash lesson).
     const grew = await page.evaluate(() => {
       let n = 0;
-      document.querySelectorAll('#messages .msg').forEach((el) => {
-        if (el._t363WasShell && el._virtSize) n++;
-      });
+      const rows = window.__transcriptRows || [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row && row._t363WasDetached && row.el) n++;
+        else if (row && row.el && row.el._t363WasShell && row.el._virtSize) n++;
+      }
       return n;
     });
 
@@ -283,8 +323,8 @@ function diffRows(before, after) {
     }
 
     if (scored.length < 8) failures.push('only ' + scored.length + ' scored wheel steps — leg too short to trust');
-    if (grew < 20) {
-      failures.push('only ' + grew + ' lazy shells materialized during the scroll — the ' +
+    if (grew < 8) {
+      failures.push('only ' + grew + ' detached rows attached during the scroll — the ' +
         'estimate→natural growth never fired, so a pass here would greenwash');
     }
     if (stressed < 5) {
