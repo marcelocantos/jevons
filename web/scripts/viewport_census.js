@@ -79,6 +79,31 @@
     return (Number(visibleBubbles) || 0) < need;
   }
 
+  // Largest empty band between consecutive ink boxes (top-sorted).
+  // The owner screenshot: two leftover turns and a viewport of void.
+  function maxInkGapPx(rects) {
+    const boxes = (rects || []).filter(function (r) {
+      return r && Number.isFinite(Number(r.top)) && Number.isFinite(Number(r.bottom));
+    }).slice().sort(function (a, b) { return Number(a.top) - Number(b.top); });
+    let max = 0;
+    for (let i = 1; i < boxes.length; i++) {
+      const gap = Number(boxes[i].top) - Number(boxes[i - 1].bottom);
+      if (gap > max) max = gap;
+    }
+    return max;
+  }
+
+  // More than a quarter of the pane empty between two consecutive
+  // bubbles is "I took one look and something is horribly wrong."
+  const DESERT_GAP_FRAC = 0.25;
+  const DESERT_GAP_MIN_PX = 120;
+  function desertGapFail(maxGap, clientHeight) {
+    const ch = Number(clientHeight) || 0;
+    const g = Number(maxGap) || 0;
+    const cap = Math.max(DESERT_GAP_MIN_PX, ch * DESERT_GAP_FRAC);
+    return g > cap;
+  }
+
   // Pin target and canvas-end must be the same live end (ε = Latest band).
   function liveEndDisagreeFail(pinWant, canvasEndPin, epsPx) {
     const eps = epsPx == null ? 16 : Number(epsPx);
@@ -145,6 +170,8 @@
         hitTag: hit ? String(hit.tagName || '') : '',
         w: r.width,
         h: r.height,
+        top: r.top,
+        bottom: r.bottom,
       });
     }
 
@@ -158,9 +185,11 @@
     const visibleInScroller = visible.length;
     const visibleCheckOk = visible.filter(function (v) { return v.checkVisibility; }).length;
     const visibleHitOk = visible.filter(function (v) { return v.hitOk; }).length;
-    const visibleBubbles = visible.filter(function (v) {
+    const bubbleRects = visible.filter(function (v) {
       return v.role === 'user' || v.role === 'assistant';
-    }).length;
+    });
+    const visibleBubbles = bubbleRects.length;
+    const maxInkGap = maxInkGapPx(bubbleRects);
     const iw = typeof window !== 'undefined' ? window.innerWidth : 0;
     const ih = typeof window !== 'undefined' ? window.innerHeight : 0;
     const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 0;
@@ -215,6 +244,8 @@
       emptyPane: emptyPaneFail(rows.length, visibleInScroller),
       emptySlotDesert: emptySlotDesertFail(emptySlots),
       packedPaneFail: packedPaneFail(visibleBubbles, 2),
+      maxInkGap: maxInkGap,
+      desertGap: desertGapFail(maxInkGap, ch),
       latestOnHardReload: latestOnHardReloadFail({
         fabHidden: fabHidden,
         followMode: followMode,
@@ -254,6 +285,10 @@
     latestOnHardReloadFail: latestOnHardReloadFail,
     emptySlotDesertFail: emptySlotDesertFail,
     packedPaneFail: packedPaneFail,
+    maxInkGapPx: maxInkGapPx,
+    desertGapFail: desertGapFail,
+    DESERT_GAP_FRAC: DESERT_GAP_FRAC,
+    DESERT_GAP_MIN_PX: DESERT_GAP_MIN_PX,
     liveEndDisagreeFail: liveEndDisagreeFail,
     viewportPinned: viewportPinned,
     collect: collect,

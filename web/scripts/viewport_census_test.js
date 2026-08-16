@@ -82,6 +82,25 @@ test('T494.1 packed pane needs two bubbles on the oracle viewport', function () 
   assert.strictEqual(VC.packedPaneFail(3, 2), false);
 });
 
+test('T494.1 maxInkGap is the void between consecutive bubbles', function () {
+  // Owner screenshot: leftover turn near the top, leftover turn near
+  // the bottom, hundreds of px of empty canvas between them.
+  const desert = VC.maxInkGapPx([
+    { top: 80, bottom: 150 },
+    { top: 900, bottom: 970 },
+  ]);
+  assert.strictEqual(desert, 750);
+  assert.strictEqual(VC.desertGapFail(desert, 1000), true);
+  const packed = VC.maxInkGapPx([
+    { top: 100, bottom: 180 },
+    { top: 188, bottom: 260 },
+    { top: 268, bottom: 340 },
+  ]);
+  assert.strictEqual(packed, 8);
+  assert.strictEqual(VC.desertGapFail(packed, 689), false);
+  assert.strictEqual(VC.maxInkGapPx([{ top: 0, bottom: 80 }]), 0, 'one bubble is packedPane, not a gap');
+});
+
 test('T494.1 pin and canvas-end must agree', function () {
   assert.strictEqual(VC.liveEndDisagreeFail(22366.6, 22585, 16), true, '218px tail');
   assert.strictEqual(VC.liveEndDisagreeFail(22585, 22585, 16), false);

@@ -11,7 +11,9 @@
 //        --prefix ROOThist- --screenshot /tmp/j19.png
 //
 // Exit 0 only when the model is not collapsed AND the pane is not empty
-// AND the T493 DOM gates pass. Exit 2 on usage / daily-port.
+// AND the T493 DOM gates pass AND the T494.1 visual desert is absent
+// (Latest hidden, no empty slots, no void between bubbles).
+// Exit 2 on usage / daily-port.
 
 'use strict';
 
@@ -137,6 +139,7 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     const latestFail = !!census.latestOnHardReload;
     const desertFail = !!census.emptySlotDesert;
     const packedFail = !!census.packedPaneFail;
+    const desertGapFail = !!census.desertGap;
     const liveEndFail = !!census.liveEndDisagree;
 
     // Programmatic stand-in for the stuck wheel: if we are tracking and
@@ -160,7 +163,8 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
 
     const ok = !collapsed && !missingSeed && !emptyPane && !gatesFail &&
       !viewportDrift && !noVisibleSeed &&
-      !latestFail && !desertFail && !packedFail && !liveEndFail && !wheelStuck &&
+      !latestFail && !desertFail && !packedFail && !desertGapFail &&
+      !liveEndFail && !wheelStuck &&
       census.transcriptRows >= MIN_MARKERS &&
       census.uniqueVIndex >= MIN_MARKERS &&
       census.uniqueTops >= MIN_MARKERS &&
@@ -186,6 +190,7 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
       latestFail: latestFail,
       desertFail: desertFail,
       packedFail: packedFail,
+      desertGapFail: desertGapFail,
       liveEndFail: liveEndFail,
       wheelStuck: wheelStuck,
       wheel: wheel,
@@ -240,6 +245,11 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     if (packedFail) {
       die(1, 'J19 pane not packed (🎯T494.1): visibleBubbles=' +
         census.visibleBubbles + ' visibleInScroller=' + census.visibleInScroller);
+    }
+    if (desertGapFail) {
+      die(1, 'J19 void between bubbles (🎯T494.1): maxInkGap=' +
+        census.maxInkGap + ' clientH=' + census.clientHeight +
+        ' visibleBubbles=' + census.visibleBubbles);
     }
     if (liveEndFail) {
       die(1, 'J19 two bottoms (🎯T494.1): pinWant=' + census.pinWant +
