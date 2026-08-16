@@ -1342,10 +1342,9 @@
   const BUBBLE_BOTTOM_CHROME_PX = 19;
 
   /**
-   * Layout height of one transcript row: border-box plus overflowing
-   * chrome. `.msg-time` sits at top:100%; `.msg-context-tab` sits above
-   * the top edge (translateY(-50%)). Absolute siblings ignore CSS
-   * margin, so the prefix must own that ink. Turn-markers have none.
+   * Extent of one row: border-box plus overflowing chrome the host
+   * measured (or reserved). The planner does not know roles or
+   * timestamps — the host passes overflows / margins (🎯T119.4).
    *
    * Do NOT pass a minHeight-inflated box here — settle must measure
    * the natural border-box or chrome is stacked on every remat.
@@ -1354,28 +1353,119 @@
     const box = Number(borderBoxHeight);
     const h = Number.isFinite(box) && box > 0 ? box : 0;
     const o = opts || {};
-    const role = o.role == null ? '' : String(o.role);
-    if (role === 'turn-marker' || role === 'status' || role === 'worker') {
-      return h;
-    }
     const time = Number(o.timeOverflowPx);
     const overflow = Number.isFinite(time) && time > 0 ? time : 0;
     const tab = Number(o.tabOverflowPx);
     const above = Number.isFinite(tab) && tab > 0 ? tab : 0;
     const mb = Number(o.marginBottomPx);
     const mt = Number(o.marginTopPx);
-    const bottomChrome = Number.isFinite(mb) && mb > 0 ? mb : BUBBLE_BOTTOM_CHROME_PX;
-    const topChrome = Number.isFinite(mt) && mt > 0 ? mt : 0;
-    if (role === 'user' || role === 'jevons' || role === '') {
-      return h + Math.max(overflow, bottomChrome) + Math.max(above, topChrome);
-    }
-    return h + overflow + above;
+    const bottom = Number.isFinite(mb) && mb > 0 ? mb : 0;
+    const top = Number.isFinite(mt) && mt > 0 ? mt : 0;
+    return h + Math.max(overflow, bottom) + Math.max(above, top);
   }
 
-  function isParkedListElement(role) {
-    // Every attached row parks its real node. Rebuild via buildMsg drops
-    // context chrome and locks estimate minHeight as empty bubble space.
-    return !!role || role === '';
+  function isParkedListElement() {
+    return true;
+  }
+
+  // 🎯T119.4: specialized reconciler. Left schema = rows. IR = attach +
+  // geometry. Kind is an opaque string — this file does not interpret it.
+  function createTranscriptModel(opts) {
+    return {
+      layout: createTranscriptLayout(opts),
+      rows: [],
+      seq: 0,
+    };
+  }
+
+  function modelPush(model, spec) {
+    const M = model || createTranscriptModel();
+    const s = spec || {};
+    const id = s.id != null && String(s.id) !== '' ? String(s.id) : ('r' + (++M.seq));
+    const kind = s.kind != null && String(s.kind) !== '' ? String(s.kind) : 'item';
+    const h = Number(s.height);
+    const height = Number.isFinite(h) && h > 0 ? h : 72;
+    layoutPush(M.layout, height);
+    const row = { id: id, kind: kind, height: height };
+    M.rows.push(row);
+    return row;
+  }
+
+  function modelUnshiftMany(model, specs) {
+    const M = model || createTranscriptModel();
+    const list = Array.isArray(specs) ? specs : [];
+    if (!list.length) return [];
+    const heights = [];
+    const added = [];
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i] || {};
+      const h = Number(s.height);
+      heights.push(Number.isFinite(h) && h > 0 ? h : 72);
+      added.push({
+        id: s.id != null && String(s.id) !== '' ? String(s.id) : ('r' + (++M.seq)),
+        kind: s.kind != null && String(s.kind) !== '' ? String(s.kind) : 'item',
+        height: heights[i],
+      });
+    }
+    layoutUnshiftMany(M.layout, heights);
+    for (let i = added.length - 1; i >= 0; i--) M.rows.unshift(added[i]);
+    return added;
+  }
+
+  function modelRemoveAt(model, index) {
+    const M = model || createTranscriptModel();
+    const i = index | 0;
+    if (i < 0 || i >= M.rows.length) return null;
+    const gone = M.rows.splice(i, 1)[0];
+    layoutRemoveAt(M.layout, i);
+    return gone;
+  }
+
+  function modelTruncateFrom(model, index) {
+    const M = model || createTranscriptModel();
+    const i = Math.max(0, index | 0);
+    if (i >= M.rows.length) return [];
+    const gone = M.rows.splice(i);
+    layoutTruncateFrom(M.layout, i);
+    return gone;
+  }
+
+  function modelSetHeight(model, index, height) {
+    const M = model || createTranscriptModel();
+    const r = layoutSetHeight(M.layout, index, height);
+    if (M.rows[index]) M.rows[index].height = M.layout.heights[index];
+    return r;
+  }
+
+  /**
+   * Desired view vs model. Not an element tree: which row ids mount,
+   * their tops, and the canvas height. Host parks/unparks owned nodes.
+   */
+  function planApply(model, scrollTop, clientHeight, buffer) {
+    const M = model || createTranscriptModel();
+    const buf = typeof buffer === 'number' ? buffer : DEFAULT_BUFFER;
+    const range = layoutAttachRange(M.layout, scrollTop, clientHeight, buf);
+    const keep = layoutAttachRange(M.layout, scrollTop, clientHeight, buf * 2);
+    const first = range.first < 0 ? 0 : range.first;
+    const last = range.last < 0 ? -1 : range.last;
+    const attach = [];
+    const tops = {};
+    for (let i = first; i <= last; i++) {
+      const row = M.rows[i];
+      if (!row) continue;
+      attach.push({ id: row.id, index: i, kind: row.kind, top: layoutTop(M.layout, i) });
+      tops[row.id] = layoutTop(M.layout, i);
+    }
+    return {
+      attach: attach,
+      tops: tops,
+      canvasH: layoutTotal(M.layout),
+      first: first,
+      last: last,
+      keepFirst: keep.first < 0 ? first : keep.first,
+      keepLast: keep.last < 0 ? last : keep.last,
+      count: attach.length,
+    };
   }
 
   function createTranscriptLayout(opts) {
@@ -1724,5 +1814,14 @@
     layoutAttachRange: layoutAttachRange,
     scrollAfterRowHeightChange: scrollAfterRowHeightChange,
     collapseHeightChangeTrace: collapseHeightChangeTrace,
+
+    // 🎯T119.4: model (left) + planApply IR (attach + geometry).
+    createTranscriptModel: createTranscriptModel,
+    modelPush: modelPush,
+    modelUnshiftMany: modelUnshiftMany,
+    modelRemoveAt: modelRemoveAt,
+    modelTruncateFrom: modelTruncateFrom,
+    modelSetHeight: modelSetHeight,
+    planApply: planApply,
   };
 }));

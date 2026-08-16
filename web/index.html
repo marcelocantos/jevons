@@ -1652,10 +1652,11 @@ const msgsCanvas = (function () {
   }
   return el;
 })();
-const transcriptLayout = (typeof VirtualList !== 'undefined' && VirtualList.createTranscriptLayout)
-  ? VirtualList.createTranscriptLayout({ gap: 8 })
-  : { heights: [], prefix: [0], gap: 8 };
-const transcriptRows = [];
+const transcriptModel = (typeof VirtualList !== 'undefined' && VirtualList.createTranscriptModel)
+  ? VirtualList.createTranscriptModel({ gap: 8 })
+  : { layout: { heights: [], prefix: [0], gap: 8 }, rows: [], seq: 0 };
+const transcriptLayout = transcriptModel.layout;
+const transcriptRows = transcriptModel.rows;
 function syncTranscriptCanvas() {
   if (!msgsCanvas) return;
   const h = (typeof VirtualList !== 'undefined' && VirtualList.layoutTotal)
@@ -1678,7 +1679,9 @@ function applyRowHeight(index, newH) {
   if (typeof VirtualList === 'undefined' || !VirtualList.layoutSetHeight) return null;
   const i = index | 0;
   const oldH = transcriptLayout.heights[i] || 0;
-  const r = VirtualList.layoutSetHeight(transcriptLayout, i, newH);
+  const r = (VirtualList.modelSetHeight)
+    ? VirtualList.modelSetHeight(transcriptModel, i, newH)
+    : VirtualList.layoutSetHeight(transcriptLayout, i, newH);
   if (!r || r.delta === 0) return r;
   syncTranscriptCanvas();
   positionAttachedFrom(i);
@@ -1730,12 +1733,15 @@ function noteRowHeightChange(el) {
   const ecs = csOf(el);
   const mb = ecs ? parseFloat(ecs.marginBottom) || 0 : 0;
   const mt = ecs ? parseFloat(ecs.marginTop) || 0 : 0;
+  const reserveBottom = (role === 'user' || role === 'jevons')
+    ? Math.max(mb, (typeof VirtualList !== 'undefined' && VirtualList.BUBBLE_BOTTOM_CHROME_PX)
+      ? VirtualList.BUBBLE_BOTTOM_CHROME_PX : 19)
+    : mb;
   const h = (typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
     ? VirtualList.rowLayoutHeight(box, {
-      role: role,
       timeOverflowPx: timeOverflow,
       tabOverflowPx: tabOverflow,
-      marginBottomPx: mb,
+      marginBottomPx: reserveBottom,
       marginTopPx: mt,
     })
     : box;
@@ -1746,31 +1752,34 @@ function registerTranscriptRow(role, text, when, opts) {
   const estBox = (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText)
     ? VirtualList.estimateHeightFromText(text || '')
     : 72;
+  const reserve = (role === 'user' || role === 'jevons')
+    ? ((typeof VirtualList !== 'undefined' && VirtualList.BUBBLE_BOTTOM_CHROME_PX)
+      ? VirtualList.BUBBLE_BOTTOM_CHROME_PX : 19)
+    : 0;
   const est = (typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
-    ? VirtualList.rowLayoutHeight(estBox, { role: role })
+    ? VirtualList.rowLayoutHeight(estBox, { marginBottomPx: reserve })
     : estBox;
-  const idx = (typeof VirtualList !== 'undefined' && VirtualList.layoutPush)
-    ? VirtualList.layoutPush(transcriptLayout, est)
-    : transcriptRows.length;
-  const row = {
-    role: role,
-    text: text,
-    when: when,
-    origin: o.turnOrigin,
-    streamOpen: !!o.streamOpen,
-    expanded: true,
-    autoExpanded: false,
-    userToggled: false,
-    el: null,
-  };
-  transcriptRows.push(row);
+  const kind = role === 'turn-marker' ? 'turn-slot' : (role || 'item');
+  const row = (typeof VirtualList !== 'undefined' && VirtualList.modelPush)
+    ? VirtualList.modelPush(transcriptModel, { kind: kind, height: est })
+    : { id: 'r' + transcriptRows.length, kind: kind, height: est };
+  if (!VirtualList || !VirtualList.modelPush) transcriptRows.push(row);
+  row.role = role;
+  row.text = text;
+  row.when = when;
+  row.origin = o.turnOrigin;
+  row.streamOpen = !!o.streamOpen;
+  row.expanded = true;
+  row.autoExpanded = false;
+  row.userToggled = false;
+  row.el = null;
   syncTranscriptCanvas();
   return row;
 }
 function prependTranscriptRecords(records) {
   const list = Array.isArray(records) ? records : [];
   if (!list.length) return 0;
-  const heights = [];
+  const specs = [];
   for (let i = 0; i < list.length; i++) {
     const r = list[i];
     const box = r && r.estHeight > 0
@@ -1778,32 +1787,34 @@ function prependTranscriptRecords(records) {
       : ((typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText)
         ? VirtualList.estimateHeightFromText((r && r.text) || '')
         : 72);
-    heights.push((typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
-      ? VirtualList.rowLayoutHeight(box, { role: r && r.role })
-      : box);
-  }
-  if (typeof VirtualList !== 'undefined' && VirtualList.layoutUnshiftMany) {
-    VirtualList.layoutUnshiftMany(transcriptLayout, heights);
-  }
-  const added = [];
-  for (let i = 0; i < list.length; i++) {
-    const r = list[i];
-    added.push({
-      role: r.role,
-      text: r.text,
-      when: r.timestamp,
-      origin: r.origin,
-      streamOpen: false,
-      expanded: false,
-      autoExpanded: false,
-      userToggled: false,
-      el: null,
+    const reserve = (r && (r.role === 'user' || r.role === 'jevons'))
+      ? ((typeof VirtualList !== 'undefined' && VirtualList.BUBBLE_BOTTOM_CHROME_PX)
+        ? VirtualList.BUBBLE_BOTTOM_CHROME_PX : 19)
+      : 0;
+    const height = (typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
+      ? VirtualList.rowLayoutHeight(box, { marginBottomPx: reserve })
+      : box;
+    specs.push({
+      kind: r && r.role === 'turn-marker' ? 'turn-slot' : ((r && r.role) || 'item'),
+      height: height,
     });
   }
-  for (let i = 0; i < transcriptRows.length; i++) {
-    if (transcriptRows[i].el) transcriptRows[i].el._vIndex = i + added.length;
+  const added = (typeof VirtualList !== 'undefined' && VirtualList.modelUnshiftMany)
+    ? VirtualList.modelUnshiftMany(transcriptModel, specs)
+    : specs;
+  for (let i = 0; i < list.length; i++) {
+    const r = list[i];
+    const row = added[i];
+    row.role = r.role;
+    row.text = r.text;
+    row.when = r.timestamp;
+    row.origin = r.origin;
+    row.streamOpen = false;
+    row.expanded = false;
+    row.autoExpanded = false;
+    row.userToggled = false;
+    row.el = null;
   }
-  transcriptRows.unshift.apply(transcriptRows, added);
   for (let i = 0; i < transcriptRows.length; i++) {
     if (transcriptRows[i].el) transcriptRows[i].el._vIndex = i;
   }
@@ -1834,7 +1845,7 @@ function attachTranscriptRow(index, opts) {
   }
   // A turn-marker is only the real startTurn node. Never buildMsg it —
   // that mints .msg.turn-marker + .msg-time ("now") for an unused slot.
-  if (row.role === 'turn-marker') return null;
+  if (row.kind === 'turn-slot' || row.role === 'turn-marker') return null;
   const o = opts || {};
   const lazy = o.lazy !== false;
   const el = buildMsg(row.role, row.text, row.when, {
@@ -1879,9 +1890,11 @@ function removeTranscriptRow(index) {
     try { row.el.remove(); } catch (_) { /* isolated */ }
     row.el = null;
   }
-  transcriptRows.splice(i, 1);
-  if (typeof VirtualList !== 'undefined' && VirtualList.layoutRemoveAt) {
-    VirtualList.layoutRemoveAt(transcriptLayout, i);
+  if (typeof VirtualList !== 'undefined' && VirtualList.modelRemoveAt) {
+    VirtualList.modelRemoveAt(transcriptModel, i);
+  } else {
+    transcriptRows.splice(i, 1);
+    if (VirtualList && VirtualList.layoutRemoveAt) VirtualList.layoutRemoveAt(transcriptLayout, i);
   }
   for (let k = i; k < transcriptRows.length; k++) {
     if (transcriptRows[k].el) transcriptRows[k].el._vIndex = k;
@@ -1897,17 +1910,21 @@ function truncateTranscriptFrom(index) {
       transcriptRows[k].el = null;
     }
   }
-  transcriptRows.length = i;
-  if (typeof VirtualList !== 'undefined' && VirtualList.layoutTruncateFrom) {
-    VirtualList.layoutTruncateFrom(transcriptLayout, i);
+  if (typeof VirtualList !== 'undefined' && VirtualList.modelTruncateFrom) {
+    VirtualList.modelTruncateFrom(transcriptModel, i);
+  } else {
+    transcriptRows.length = i;
+    if (VirtualList && VirtualList.layoutTruncateFrom) VirtualList.layoutTruncateFrom(transcriptLayout, i);
   }
   syncTranscriptCanvas();
 }
 window.__transcriptRows = transcriptRows;
 window.__transcriptLayout = transcriptLayout;
+window.__transcriptModel = transcriptModel;
 window.noteRowHeightChange = noteRowHeightChange;
 window.resetTranscript = function () {
   transcriptRows.length = 0;
+  transcriptModel.seq = 0;
   if (typeof VirtualList !== 'undefined' && VirtualList.createTranscriptLayout) {
     const fresh = VirtualList.createTranscriptLayout({ gap: 8 });
     transcriptLayout.heights = fresh.heights;
@@ -2602,6 +2619,7 @@ transport.onOpen = () => {
   sendBtn.disabled = false;
   msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
   transcriptRows.length = 0;
+  transcriptModel.seq = 0;
   if (typeof VirtualList !== 'undefined' && VirtualList.createTranscriptLayout) {
     const fresh = VirtualList.createTranscriptLayout({ gap: 8 });
     transcriptLayout.heights = fresh.heights;
@@ -7082,9 +7100,12 @@ function virtualizeMessages() {
     // Off-band rows leave the DOM (detach); they are not virt-shells in flow.
     const liveShells = [];
     const items = [];
-    const range = VirtualList.layoutAttachRange
+    const ir = VirtualList.planApply
+      ? VirtualList.planApply(transcriptModel, scrollTop, clientH, buffer)
+      : null;
+    const range = ir || (VirtualList.layoutAttachRange
       ? VirtualList.layoutAttachRange(transcriptLayout, scrollTop, clientH, buffer)
-      : virtualizeMeasureRange(msgsCanvas ? msgsCanvas.children : msgs.children, scrollTop, clientH, buffer);
+      : virtualizeMeasureRange(msgsCanvas ? msgsCanvas.children : msgs.children, scrollTop, clientH, buffer));
     const first = range.first < 0 ? 0 : range.first;
     const last = range.last < 0 ? -1 : range.last;
     if (typeof window.__measureBackfill === 'object' && window.__measureBackfill) {
@@ -7095,11 +7116,9 @@ function virtualizeMessages() {
       window.__measureBackfill.n = transcriptRows.length;
     }
     const viewRect = msgs.getBoundingClientRect();
-    const keep = VirtualList.layoutAttachRange
-      ? VirtualList.layoutAttachRange(transcriptLayout, scrollTop, clientH, buffer * 2)
-      : { first: first, last: last };
-    const keepFirst = keep.first < 0 ? first : keep.first;
-    const keepLast = keep.last < 0 ? last : keep.last;
+    const keepFirst = ir ? ir.keepFirst : first;
+    const keepLast = ir ? ir.keepLast : last;
+    if (ir && msgsCanvas) msgsCanvas.style.height = Math.max(0, ir.canvasH) + 'px';
     // Read visibility BEFORE any detach (T349: no interleaved write/read).
     const visibleKeep = {};
     const keepEls = [];

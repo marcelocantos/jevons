@@ -543,30 +543,49 @@ test('T119.3 layoutRemoveAt drops one unused slot and closes the gap', function 
   assert.strictEqual(VL.layoutTotal(L), 188);
 });
 
-test('T119.3 rowLayoutHeight reserves timestamp chrome; turn-markers do not', function () {
+test('T119.4 rowLayoutHeight is measured extent, not a role table', function () {
   assert.strictEqual(VL.BUBBLE_BOTTOM_CHROME_PX, 19);
-  assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons' }), 287);
-  assert.strictEqual(VL.rowLayoutHeight(220, { role: 'user' }), 239);
-  assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons', timeOverflowPx: 13 }), 287,
-    '19px margin covers a 13px timestamp');
-  assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons', timeOverflowPx: 24 }), 292,
-    'a taller overflow wins over the 19px reserve');
-  assert.strictEqual(VL.rowLayoutHeight(13.2, { role: 'turn-marker' }), 13.2);
-  assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons', tabOverflowPx: 10, marginTopPx: 10 }), 297);
-  assert.ok(VL.isParkedListElement('turn-marker'));
-  assert.ok(VL.isParkedListElement('jevons'), 'rebuild drops context chrome — park every row');
+  assert.strictEqual(VL.rowLayoutHeight(268), 268);
+  assert.strictEqual(VL.rowLayoutHeight(268, { marginBottomPx: 19 }), 287);
+  assert.strictEqual(VL.rowLayoutHeight(268, { marginBottomPx: 19, timeOverflowPx: 13 }), 287);
+  assert.strictEqual(VL.rowLayoutHeight(268, { marginBottomPx: 19, timeOverflowPx: 24 }), 292);
+  assert.strictEqual(VL.rowLayoutHeight(13.2), 13.2);
+  assert.strictEqual(VL.rowLayoutHeight(268, { tabOverflowPx: 10, marginTopPx: 10, marginBottomPx: 19 }), 297);
 });
 
 test('T119.3 remat must not stack chrome on an inflated minHeight box', function () {
-  // Natural box 268. A leftover estimate/chrome lock of 287 must not become
-  // the next prefix (287+19). Settle measures with minHeight cleared.
   const natural = 268;
-  const inflated = VL.rowLayoutHeight(natural, { role: 'jevons' });
+  const inflated = VL.rowLayoutHeight(natural, { marginBottomPx: 19 });
   assert.strictEqual(inflated, 287);
-  const stacked = VL.rowLayoutHeight(inflated, { role: 'jevons' });
+  const stacked = VL.rowLayoutHeight(inflated, { marginBottomPx: 19 });
   assert.ok(stacked > inflated, 'measuring a chrome-inflated box would stack');
-  assert.strictEqual(VL.rowLayoutHeight(natural, { role: 'jevons' }), 287,
-    'natural box + chrome is stable');
+  assert.strictEqual(VL.rowLayoutHeight(natural, { marginBottomPx: 19 }), 287);
+});
+
+test('T119.4 planApply attach-set is exactly the rows in range; remove never reappears', function () {
+  const M = VL.createTranscriptModel({ gap: 8 });
+  for (let i = 0; i < 40; i++) {
+    VL.modelPush(M, { kind: i === 3 ? 'turn-slot' : 'item', height: 80 });
+  }
+  assert.strictEqual(M.rows[3].kind, 'turn-slot');
+  const ir = VL.planApply(M, 0, 600, 80);
+  assert.ok(ir.attach.length > 0 && ir.attach.length < 40);
+  assert.strictEqual(ir.canvasH, VL.layoutTotal(M.layout));
+  for (let i = 0; i < ir.attach.length; i++) {
+    const item = ir.attach[i];
+    assert.strictEqual(item.id, M.rows[item.index].id);
+    assert.strictEqual(item.kind, M.rows[item.index].kind);
+    assert.strictEqual(item.top, VL.layoutTop(M.layout, item.index));
+    assert.strictEqual(ir.tops[item.id], item.top);
+  }
+  const gone = VL.modelRemoveAt(M, 3);
+  assert.strictEqual(gone.kind, 'turn-slot');
+  const after = VL.planApply(M, 0, 600, 80);
+  for (let i = 0; i < after.attach.length; i++) {
+    assert.notStrictEqual(after.attach[i].id, gone.id);
+    assert.notStrictEqual(after.attach[i].kind, 'turn-slot');
+  }
+  assert.ok(after.attach.every(function (a) { return a.kind === 'item'; }));
 });
 
 test('T119.3 index.html parks turn-markers and measures chrome into the prefix', function () {
@@ -577,7 +596,8 @@ test('T119.3 index.html parks turn-markers and measures chrome into the prefix',
   assert.ok(html.indexOf('isParkedListElement') >= 0, 'detach parks real nodes');
   assert.ok(/row\.el && !row\.el\.isConnected/.test(html),
     'attach re-homes a parked node instead of buildMsg');
-  assert.ok(/if \(row\.role === 'turn-marker'\) return null/.test(html),
+  assert.ok(/row\.kind === 'turn-slot'/.test(html) &&
+    /return null/.test(html.slice(html.indexOf("row.kind === 'turn-slot'"), html.indexOf("row.kind === 'turn-slot'") + 120)),
     'attach never rebuilds an unused turn slot as .msg + clock');
   assert.ok(/function removeTranscriptRow/.test(html) &&
     /function closeTurn\(\)[\s\S]{0,500}removeTranscriptRow/.test(html),
@@ -636,9 +656,9 @@ test('T119.3 index.html is an absolute canvas list, not a spacer of shells', fun
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('messages-canvas') >= 0, 'canvas host exists');
-  assert.ok(html.indexOf('createTranscriptLayout') >= 0, 'product owns a prefix layout');
+  assert.ok(html.indexOf('createTranscriptModel') >= 0, 'product owns a row model');
+  assert.ok(html.indexOf('planApply') >= 0, 'virtualize applies model→IR, not offsetTop of siblings');
   assert.ok(html.indexOf('scrollAfterRowHeightChange') >= 0, 'collapse/expand goes through height-delta policy');
-  assert.ok(html.indexOf('layoutAttachRange') >= 0, 'attach band comes from prefix, not offsetTop of 11k siblings');
   assert.ok(html.indexOf('history-spacer-before') < 0, 'spacer model is gone');
 });
 
@@ -1520,8 +1540,8 @@ test('index.html wires T119.2/T119.3 prefix attach; no O(N) offsetTop scan', fun
   const fs = require('fs');
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,5000}layoutAttachRange/.test(html),
-    'virtualizeMessages uses prefix attach range');
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,5000}planApply/.test(html),
+    'virtualizeMessages applies the model IR');
   assert.ok(html.indexOf('__measureBackfill') >= 0,
     'measure-count probe exposed for hermetic/UI oracles');
   const virtStart = html.indexOf('function virtualizeMessages()');
