@@ -290,8 +290,20 @@ func (s *suite) jT418HandoverMute() error {
 	if len(agents) == 0 {
 		return fmt.Errorf("mute fixture: no registered agents")
 	}
+	var overseer string
+	var others []string
 	for _, a := range agents {
-		_, _ = s.AgentStop(a.Name)
+		if a.Name == "jevons" {
+			overseer = a.Name
+			continue
+		}
+		others = append(others, a.Name)
+	}
+	for _, n := range others {
+		_, _ = s.AgentStop(n)
+	}
+	if overseer != "" {
+		_, _ = s.AgentStop(overseer)
 	}
 
 	wait := time.Now().Add(30 * time.Second)

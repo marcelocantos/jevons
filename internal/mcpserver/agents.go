@@ -661,6 +661,10 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	reason, _ := args["reason"].(string)
 	s.MarkAgentParked(name, actor, strings.TrimSpace(reason))
 	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name, "actor": actor})
+	// 🎯T418 clause 6: if this stop left the fleet with queued work and
+	// nobody live to press Enter, say so now — the cockpit may relaunch
+	// the overseer on the next tick.
+	s.reportFleetMuteIfNeeded()
 	return mcp.NewToolResultText(fmt.Sprintf(
 		"Agent %q stopped and parked (still registered; nothing revives it — not a delivery, not a restart, not the idle sweep — until the park is lifted with jevons_fleet_intent name=%q state=working).",
 		name, name)), nil
