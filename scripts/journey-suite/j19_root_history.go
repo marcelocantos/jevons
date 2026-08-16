@@ -69,14 +69,11 @@ func (s *suite) j19RootHistoryPaint() error {
 		}
 		return fmt.Errorf("pre-send replay drain: %w", err)
 	}
+	// T107: deliver one owner turn onto the live overseer wire. The
+	// paint census is the T491 oracle; a Grok hang after accept is not
+	// the collapse this journey exists to catch (J2 owns terminal).
 	prompt := "Reply with exactly: " + j19LiveToken
 	sendErr := conn.Write(ctx, websocket.MessageText, []byte(prompt))
-	if sendErr == nil {
-		gotUser, _, _, waitErr := waitTurn(ctx, frames, j19LiveToken, true)
-		if waitErr != nil && !gotUser {
-			sendErr = waitErr
-		}
-	}
 	conn.CloseNow()
 
 	if paintErr != nil {
@@ -86,7 +83,7 @@ func (s *suite) j19RootHistoryPaint() error {
 		if out := asOutage("j19 live send", sendErr); out != nil {
 			return out
 		}
-		return fmt.Errorf("live send: %w", sendErr)
+		return fmt.Errorf("live send write: %w", sendErr)
 	}
 	return nil
 }

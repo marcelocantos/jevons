@@ -694,6 +694,46 @@ test('appendUser prefers addMsg over buildMsg+messagesEl (canvas vs leftover sta
   assert.strictEqual(added[0].role, 'user');
 });
 
+// 🎯T491: fold.out is mutated in place. applyWireEvent must snapshot the
+// previous display before fold, or syncDisplay sees equal lengths and
+// paints only the first user (J19: 16 seeded turns → 1 leftover bubble).
+test('T491 applyWireEvent paints every distinct user+assistant, not only the first', function () {
+  const painted = [];
+  const stream = CW.createStreamJoin({
+    addMsg: function (role, text) {
+      painted.push({ role: role, text: String(text || '') });
+      return { className: 'msg ' + role, _streamRaw: text };
+    },
+  });
+  const n = 8;
+  for (let i = 0; i < n; i++) {
+    const tok = 'ROOThist-' + String(i).padStart(2, '0');
+    stream.applyWireEvent({
+      type: 'user',
+      timestamp: i * 2,
+      message: { role: 'user', content: tok + ' distinctive owner turn ' + i },
+    });
+    stream.applyWireEvent({
+      type: 'assistant',
+      timestamp: i * 2 + 1,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'ack ' + tok }],
+        stop_reason: 'end_turn',
+      },
+    });
+  }
+  const users = painted.filter(function (p) { return p.role === 'user'; });
+  const asst = painted.filter(function (p) { return p.role === 'jevons' || p.role === 'assistant'; });
+  assert.strictEqual(users.length, n, 'painted users=' + users.length + ' want ' + n +
+    ' (aliasing prev=fold.out paints only the first)');
+  assert.strictEqual(asst.length, n, 'painted assistants=' + asst.length + ' want ' + n);
+  assert.strictEqual(users[0].text.indexOf('ROOThist-00'), 0);
+  assert.ok(users[n - 1].text.indexOf('ROOThist-07') === 0, users[n - 1] && users[n - 1].text);
+  const lines = stream.getLines();
+  assert.strictEqual(lines.filter(function (l) { return l.role === 'user'; }).length, n);
+});
+
 test('T372 Grok word-chunks are one assistant bubble (both densities)', function () {
   ['compact', 'comfortable'].forEach(function (density) {
     const dom = fakeDom(density);

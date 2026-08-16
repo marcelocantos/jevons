@@ -1221,9 +1221,28 @@
       }
     }
 
+    // fold.out is mutated in place. Aliasing prev to that array makes
+    // syncDisplay see equal lengths after the first row and skip paint
+    // (🎯T491: connect replay left one leftover bubble). Snapshot the
+    // previous length and the last row's identity *before* fold.
+    function snapshotDisplay(rows) {
+      rows = rows || [];
+      var copy = rows.slice();
+      if (!copy.length) return copy;
+      var last = copy[copy.length - 1];
+      copy[copy.length - 1] = {
+        kind: last.kind,
+        role: last.role,
+        text: last.text,
+        items: last.items ? last.items.slice() : undefined,
+        _streamId: last._streamId,
+      };
+      return copy;
+    }
+
     function applyWireEvent(event) {
       if (event) events.push(event);
-      var prev = lines;
+      var prev = snapshotDisplay(lines);
       if (event) foldDisplayEvent(fold, event);
       lines = fold.out;
       syncDisplay(prev, lines);
