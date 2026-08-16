@@ -5605,9 +5605,16 @@ function historyLoadingEvent(ev) {
 
 function startProgressiveHistoryLoad() {
   if (oldestIndex <= 0) { teardownHistorySentinel(); return; }
-  // Optional sentinel while pages remain (does not gate progressive fetch).
+  // 🎯T483: do not walk remaining older lines in the background. The
+  // connect tail is already on the list; further pages wait for the
+  // owner at the top. T259's 400ms gap is a rate cap, not a volume cap.
   setupHistorySentinel();
-  progressiveLoadRemainingHistory();
+}
+
+function isOwnerNearHistoryTop() {
+  if (!msgs) return false;
+  if (typeof isTracking === 'function' && isTracking()) return false;
+  return (msgs.scrollTop || 0) < 48;
 }
 
 function setupHistorySentinel() {
@@ -5623,10 +5630,11 @@ function setupHistorySentinel() {
       // 🎯T274: do not thrash earlier-history while large graph overlay is open.
       if (typeof isLargeGraphPanelOpen === 'function' && isLargeGraphPanelOpen()) return;
       // Residual: if progressive lag and owner is near top, nudge a page.
-      // 🎯T119.3: prefer attaching already-fetched detached records over
-      // another insert of a page the cap already refused.
-      if (entries.some(e => e.isIntersecting)) {
-        loadEarlier();
+      // 🎯T483: a 400px rootMargin on a short tail is not owner intent —
+      // only fetch when they have actually left stick-to-bottom and are
+      // at the top. Background AUTO pages are volume-capped at 0.
+      if (entries.some(e => e.isIntersecting) && isOwnerNearHistoryTop()) {
+        loadEarlier({ owner: true });
       }
     }, { root: msgs, rootMargin: '400px 0px 0px 0px', threshold: 0 });
     historyObserver.observe(historySentinel);
@@ -5661,8 +5669,11 @@ async function progressiveLoadRemainingHistory() {
   if (progressiveHistoryRunning) return;
   progressiveHistoryRunning = true;
   hydratePageSeq = 0;
+  let autoPages = 0;
   try {
-    while (oldestIndex > 0) {
+    // 🎯T483: the volume cap. T259's gap still applies if AUTO_PAGES_MAX > 0.
+    const HL = window.HistoryLoading;
+    while (oldestIndex > 0 && (!HL || HL.mayAutoPage(autoPages))) {
       // 🎯T274: pause hydrate while Frontier Graph large panel is open so
       // "Loading earlier…" does not flash above a slow/empty graph viewer.
       if (typeof isLargeGraphPanelOpen === 'function' && isLargeGraphPanelOpen()) {
@@ -5671,6 +5682,7 @@ async function progressiveLoadRemainingHistory() {
       }
       const before = oldestIndex;
       await loadEarlier();
+      autoPages++;
       // Stall guard: if a page did not advance, stop to avoid tight loop.
       if (oldestIndex >= before) break;
       // 🎯T259: yield + rate-limit — rAF alone was ~180ms and still burned CPU.

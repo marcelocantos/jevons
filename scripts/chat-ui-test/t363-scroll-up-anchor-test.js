@@ -186,11 +186,15 @@ function diffRows(before, after) {
       window.handle({ type: 'history_meta', older: n, start: n, total: n + 60 });
     }, HISTORY_LINES);
 
-    // Hydrate is rate-limited (HISTORY_PAGE_GAP_MS) — wait for it to drain.
-    await page.waitForFunction(
-      () => !document.querySelector('.history-sentinel') &&
-        window.__transcriptRows && window.__transcriptRows.length > 150,
-      null, { timeout: 30000 });
+    // 🎯T483: auto hydrate no longer walks remaining pages. Pull a few
+    // owner pages so the list is long enough to rematerialize above the fold.
+    await page.evaluate(async () => {
+      for (let i = 0; i < 4; i++) {
+        if (typeof window.loadEarlierForOwner === 'function') {
+          await window.loadEarlierForOwner();
+        }
+      }
+    });
     await page.waitForTimeout(600);
 
     const boot = await page.evaluate(() => {

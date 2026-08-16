@@ -5,9 +5,10 @@
 //
 // The chrome exists for one case only: the owner asked for older history and
 // is waiting on a fetch. Everything else that pages /api/history — connect
-// hydrate, the T119 progressive background loop, the top IntersectionObserver
-// sentinel, reconnect replays — is machinery the owner never asked for, so it
-// must page silently. Before this policy each background page flipped the
+// hydrate, reconnect replays — is machinery the owner never asked for, so it
+// must page silently. 🎯T483 stopped the T119 progressive walk; the sentinel
+// only fetches when the owner is at the top. Before this policy each
+// background page flipped the
 // overlay on and off (~one strobe per HISTORY_PAGE_GAP_MS), which is the
 // flashing the owner reported.
 //
@@ -32,6 +33,12 @@
   const OWNER = 'owner';
   /** Machinery: connect hydrate, progressive loop, sentinel nudge, reconnect. */
   const AUTO = 'auto';
+
+  // 🎯T483: auto/background pages after the connect tail. 0 = do not walk
+  // the rest of a 260k-line journal; owner-near-top / {owner:true} is
+  // uncapped. T259 only rate-limited (400ms); this is the volume cap the
+  // T119.3 comment already referred to as "the cap already refused".
+  const AUTO_PAGES_MAX = 0;
 
   function initialState() {
     return {
@@ -107,6 +114,17 @@
   }
 
   /**
+   * mayAutoPage is the volume cap. Owner-triggered pages always proceed.
+   * Auto pages (progressive loop, false-positive sentinel) stop once
+   * autoPagesUsed reaches AUTO_PAGES_MAX.
+   */
+  function mayAutoPage(autoPagesUsed, opts) {
+    if (opts && opts.owner) return true;
+    const used = Number(autoPagesUsed) || 0;
+    return used < AUTO_PAGES_MAX;
+  }
+
+  /**
    * run replays a scripted event sequence and reports the visibility trace —
    * the thrash oracle's primitive. `shows` counts off→on transitions, so a
    * silent sequence is shows === 0 and a well-behaved owner load is shows === 1.
@@ -129,6 +147,8 @@
   return {
     OWNER: OWNER,
     AUTO: AUTO,
+    AUTO_PAGES_MAX: AUTO_PAGES_MAX,
+    mayAutoPage: mayAutoPage,
     initialState: initialState,
     reduce: reduce,
     isVisible: isVisible,

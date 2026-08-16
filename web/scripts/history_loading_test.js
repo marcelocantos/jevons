@@ -124,6 +124,18 @@ test('T274 graph suppress: owner load behind the panel stays hidden', function (
   assert.strictEqual(closed.visible, false, 'no stale overlay after close');
 });
 
+test('T483 auto pages are volume-capped at 0; owner pages are not', function () {
+  assert.strictEqual(HL.AUTO_PAGES_MAX, 0, 'connect tail only');
+  assert.strictEqual(HL.mayAutoPage(0), false, 'first auto page refused');
+  assert.strictEqual(HL.mayAutoPage(0, {}), false);
+  assert.strictEqual(HL.mayAutoPage(0, { owner: false }), false);
+  assert.strictEqual(HL.mayAutoPage(99, { owner: true }), true, 'owner is uncapped');
+  // A 263k-line leftover must not produce a single auto fetch.
+  let auto = 0;
+  while (HL.mayAutoPage(auto)) auto++;
+  assert.strictEqual(auto, 0);
+});
+
 test('reasonFor maps loadEarlier options', function () {
   assert.strictEqual(HL.reasonFor(), HL.AUTO);
   assert.strictEqual(HL.reasonFor({}), HL.AUTO);
@@ -153,6 +165,13 @@ test('index.html routes the chrome through the policy', function () {
     'loadEarlier no longer forces the chrome on every page');
   // 🎯T274 suppression stays wired on both the fetch and the paint paths.
   assert.ok(leBody.indexOf('isLargeGraphPanelOpen') >= 0, 'T274 fetch guard kept');
+  assert.ok(html.indexOf('isOwnerNearHistoryTop') >= 0, 'T483 sentinel is owner-at-top');
+  assert.ok(html.indexOf('mayAutoPage') >= 0, 'T483 volume cap is wired');
+  const start = html.indexOf('function startProgressiveHistoryLoad');
+  const startEnd = html.indexOf('\nfunction ', start + 10);
+  const startBody = html.slice(start, startEnd > start ? startEnd : start + 800);
+  assert.ok(startBody.indexOf('progressiveLoadRemainingHistory()') < 0,
+    'connect must not start the unbounded while (oldestIndex > 0) walk');
   const shStart = html.indexOf('function showHistoryLoading');
   assert.ok(shStart >= 0);
   const shEnd = html.indexOf('\nfunction ', shStart + 10);
