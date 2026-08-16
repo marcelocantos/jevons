@@ -11,8 +11,8 @@
 // Pure helpers are DOM-free so Node hermetic tests can require(); mount() is
 // the browser path that binds host nodes and wires input/send/keydown.
 //
-// Residual (ledger-allowed): VirtualList / history-scale stay main-host params
-// and may be supplied by the main adopter rather than reimplemented here.
+// Residual: VirtualList geometry is a comfortable-density param (T119.4).
+// Ingest is not: both mounts call applyWireEvent.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -572,6 +572,36 @@
     return m;
   }
 
+  function turnSlotLabel(items) {
+    var n = items && items.length ? items.length : 0;
+    if (!n) return '';
+    return '⋯ ' + n + (n === 1 ? ' step' : ' steps');
+  }
+
+  function createTurnMarkerEl(doc, slot) {
+    if (!doc || typeof doc.createElement !== 'function') return null;
+    slot = slot || { items: [] };
+    var el = doc.createElement('div');
+    el.className = 'turn-marker';
+    var label = doc.createElement('span');
+    el.appendChild(label);
+    var tip = doc.createElement('div');
+    tip.className = 'turn-tip';
+    el.appendChild(tip);
+    el._label = label;
+    el._items = tip;
+    var items = slot.items || [];
+    label.textContent = slot.text || turnSlotLabel(items);
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var d = doc.createElement('div');
+      d.className = 'turn-item ' + ((it && it.cls) || '');
+      d.textContent = (it && it.text) || '';
+      tip.appendChild(d);
+    }
+    return el;
+  }
+
   /**
    * One grow-one-bubble join (🎯T372). Both surfaces call this — not a
    * helper shared by two painters. Join identity is stream_id / openEl +
@@ -599,8 +629,97 @@
     var silentById = Object.create(null);
     var segmentEdge = false;
     var lines = [];
+    var turnSlot = null;
     var messagesEl = opts.messagesEl || null;
     var doc = opts.document || (typeof document !== 'undefined' ? document : null);
+
+    function summariseToolUse(c) {
+      var name = (c && c.name) ? String(c.name) : 'tool';
+      var extra = '';
+      if (c && c.input && typeof ToolSummary !== 'undefined' && ToolSummary.summariseInput) {
+        extra = ToolSummary.summariseInput(c.input);
+      }
+      return extra ? (name + ': ' + extra) : name;
+    }
+
+    function summariseToolResult(c) {
+      if (!c) return '';
+      var inner = c.content;
+      if (typeof inner === 'string') return inner.slice(0, 120);
+      if (Array.isArray(inner)) {
+        var bits = [];
+        for (var i = 0; i < inner.length; i++) {
+          if (inner[i] && inner[i].type === 'text' && inner[i].text) {
+            bits.push(String(inner[i].text).slice(0, 120));
+          }
+        }
+        return bits.join(' ');
+      }
+      return '';
+    }
+
+    function paintTurnSlotEl(slot) {
+      if (!slot || !slot.el) return;
+      var label = turnSlotLabel(slot.items);
+      slot.text = label;
+      if (slot.el._label) slot.el._label.textContent = label;
+      if (slot.el._items && doc) {
+        slot.el._items.innerHTML = '';
+        for (var i = 0; i < slot.items.length; i++) {
+          var it = slot.items[i];
+          var d = doc.createElement('div');
+          d.className = 'turn-item ' + (it.cls || '');
+          d.textContent = it.text || '';
+          slot.el._items.appendChild(d);
+        }
+      }
+    }
+
+    function mintTurnMarkerEl(slot) {
+      var el = createTurnMarkerEl(doc, slot);
+      if (el) slot.el = el;
+      return el;
+    }
+
+    function openTurnSlot(ts) {
+      if (turnSlot) return turnSlot;
+      turnSlot = { kind: 'turn-slot', role: 'turn-slot', items: [], text: '', when: ts };
+      lines.push(turnSlot);
+      if (typeof opts.onTurnSlotOpen === 'function') {
+        opts.onTurnSlotOpen(turnSlot);
+      } else if (doc && messagesEl) {
+        var el = mintTurnMarkerEl(turnSlot);
+        if (el && typeof messagesEl.appendChild === 'function') messagesEl.appendChild(el);
+      }
+      return turnSlot;
+    }
+
+    function addTurnSlotItem(cls, text, ts) {
+      var body = text == null ? '' : String(text);
+      if (!body) return;
+      openTurnSlot(ts);
+      turnSlot.items.push({ cls: cls || '', text: body });
+      turnSlot.text = turnSlotLabel(turnSlot.items);
+      if (typeof opts.onTurnSlotItem === 'function') {
+        opts.onTurnSlotItem(turnSlot, cls, body);
+      } else {
+        paintTurnSlotEl(turnSlot);
+      }
+    }
+
+    function closeTurnSlot() {
+      if (!turnSlot) return;
+      if (!turnSlot.items.length) {
+        var idx = lines.indexOf(turnSlot);
+        if (idx >= 0) lines.splice(idx, 1);
+        if (typeof opts.onTurnSlotCancel === 'function') {
+          opts.onTurnSlotCancel(turnSlot);
+        } else if (turnSlot.el && turnSlot.el.parentNode) {
+          try { turnSlot.el.parentNode.removeChild(turnSlot.el); } catch (_) { /* isolated */ }
+        }
+      }
+      turnSlot = null;
+    }
 
     function clipOpts() {
       return {
@@ -778,6 +897,7 @@
         return target;
       }
       var el = mintBubble(chunk, ts);
+      growLine(chunk, streamId, false);
       if (!el) return null;
       if (streamId) {
         el._streamId = streamId;
@@ -785,7 +905,6 @@
       }
       openEl = el;
       segmentEdge = false;
-      growLine(chunk, streamId, false);
       return el;
     }
 
@@ -876,26 +995,48 @@
         appendUser(utext, ts, {
           origin: CE.turnOriginOf ? CE.turnOriginOf(event) : undefined,
         });
+        openTurnSlot(ts);
+        return;
+      }
+      if (event.type === 'agent_note') {
+        addTurnSlotItem('agent-note', event.text || '', ts);
         return;
       }
       if (event.type === 'tool_result' || event.type === 'result') {
         segmentEdge = true;
+        var raw = event.message && event.message.content;
+        if (Array.isArray(raw)) {
+          for (var ri = 0; ri < raw.length; ri++) {
+            if (raw[ri] && raw[ri].type === 'tool_result') {
+              addTurnSlotItem('tool-result', summariseToolResult(raw[ri]), ts);
+            }
+          }
+        } else {
+          var one = summariseToolResult(event);
+          if (one) addTurnSlotItem('tool-result', one, ts);
+        }
         return;
       }
       if (event.type === 'system') {
-        if (CE.shouldClearWorking && CE.shouldClearWorking(event)) sealAssistant();
+        if (CE.shouldClearWorking && CE.shouldClearWorking(event)) {
+          closeTurnSlot();
+          sealAssistant();
+        }
         return;
       }
       if (event.type !== 'assistant') return;
       var sid = CE.streamIdOf ? CE.streamIdOf(event) : String(event.stream_id || event.streamId || '');
       var content = event.message && event.message.content;
       if (!Array.isArray(content)) return;
+      var anyText = CE.hasAssistantText ? CE.hasAssistantText(event) : false;
+      if (anyText) closeTurnSlot();
       var emitted = false;
       for (var i = 0; i < content.length; i++) {
         var c = content[i];
         if (!c) continue;
         if (c.type === 'tool_use') {
           segmentEdge = true;
+          addTurnSlotItem('tool-use', summariseToolUse(c), ts);
           continue;
         }
         if (c.type !== 'text' || !c.text) continue;
@@ -911,6 +1052,7 @@
         emitted = true;
       }
       if (CE.shouldClearWorking && CE.shouldClearWorking(event)) {
+        closeTurnSlot();
         sealAssistant(sid);
       }
     }
@@ -1210,6 +1352,14 @@
           wrap.innerHTML = spec.html || '';
           var node = wrap.firstChild;
           if (node) messagesEl.appendChild(node);
+          continue;
+        }
+        if (spec.kind === 'turn-slot' || line.kind === 'turn-slot' || line.role === 'turn-slot') {
+          var marker = createTurnMarkerEl(doc, {
+            items: spec.items || line.items || [],
+            text: spec.text || line.text || '',
+          });
+          if (marker) messagesEl.appendChild(marker);
           continue;
         }
         if (typeof buildMsg === 'function') {
@@ -1515,7 +1665,15 @@
     composerVisible: composerVisible,
     rootClassName: rootClassName,
     linesFingerprint: linesFingerprint,
+    applyEventTape: function (events, streamOpts) {
+      var stream = createStreamJoin(streamOpts || {});
+      var tape = Array.isArray(events) ? events : [];
+      for (var i = 0; i < tape.length; i++) stream.applyWireEvent(tape[i]);
+      return stream.getLines();
+    },
     createStreamJoin: createStreamJoin,
+    turnSlotLabel: turnSlotLabel,
+    createTurnMarkerEl: createTurnMarkerEl,
     mount: mount,
     // 🎯T480 / T106: one size-clip implementation for main and Transcript.
     COLLAPSED_MAX_HEIGHT: COLLAPSED_MAX_HEIGHT,

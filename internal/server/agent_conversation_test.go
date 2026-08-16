@@ -216,6 +216,39 @@ func TestOverseerSendByNameAgentOrigin(t *testing.T) {
 	}
 }
 
+// Root and another name share the same HTTP handlers (not a second product).
+func TestNamedAgentsShareTranscriptAndSendHandlers(t *testing.T) {
+	s := overseerFamilyServer(t)
+	s.notifySender = func(string) error { return nil }
+
+	for _, name := range []string{"jevons", "jevons-po"} {
+		tr := httptest.NewRequest(http.MethodGet, "/api/agents/"+name+"/transcript", nil)
+		tr.SetPathValue("name", name)
+		trec := httptest.NewRecorder()
+		s.handleAgentTranscript(trec, tr)
+		if name == "jevons" && trec.Code != http.StatusOK {
+			t.Fatalf("%s transcript status=%d body=%s", name, trec.Code, trec.Body.String())
+		}
+		// jevons-po may be 404 (not registered) — still the same handler.
+		if trec.Code != http.StatusOK && trec.Code != http.StatusNotFound &&
+			trec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s transcript unexpected status=%d body=%s", name, trec.Code, trec.Body.String())
+		}
+
+		sr := httptest.NewRequest(http.MethodPost, "/api/agents/"+name+"/send",
+			strings.NewReader(`{"text":"ping"}`))
+		sr.SetPathValue("name", name)
+		srec := httptest.NewRecorder()
+		s.handleAgentSend(srec, sr)
+		if name == "jevons" && srec.Code != http.StatusOK {
+			t.Fatalf("%s send status=%d body=%s", name, srec.Code, srec.Body.String())
+		}
+		if srec.Code != http.StatusOK && srec.Code != http.StatusNotFound && srec.Code != http.StatusBadGateway {
+			t.Fatalf("%s send unexpected status=%d body=%s", name, srec.Code, srec.Body.String())
+		}
+	}
+}
+
 // The HTTP send member routes the overseer too (no 404 "not registered").
 func TestOverseerSendHTTPByName(t *testing.T) {
 	s := overseerFamilyServer(t)

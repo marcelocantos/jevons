@@ -128,11 +128,13 @@ test('null / empty / no useful values do not throw', function () {
 
 test('index.html loads ToolSummary and uses summariseInput from it', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
   assert.ok(html.includes('scripts/tool_summary.js'), 'must load tool_summary.js');
-  assert.ok(html.includes('ToolSummary'), 'must reference ToolSummary');
+  assert.ok(html.includes('ToolSummary') || widget.includes('ToolSummary'),
+    'must reference ToolSummary');
   assert.ok(
-    /ToolSummary\.summariseInput/.test(html),
-    'activity strip must call ToolSummary.summariseInput'
+    /ToolSummary\.summariseInput/.test(widget),
+    'shared apply must call ToolSummary.summariseInput'
   );
   // Local naive implementation must be gone (T116 extraction).
   assert.ok(

@@ -319,6 +319,8 @@
       if (!l) return l;
       const out = { role: l.role, text: l.text };
       if (l.when !== undefined) out.when = l.when;
+      if (l.kind) out.kind = l.kind;
+      if (l.items) out.items = l.items;
       return out;
     });
   }
@@ -605,6 +607,14 @@
    * deps: { parseAssistantMarkdown?, renderUserText? }
    */
   function inspectBubbleSpec(line, deps) {
+    if (line && (line.kind === 'turn-slot' || line.role === 'turn-slot')) {
+      return {
+        kind: 'turn-slot',
+        items: line.items || [],
+        text: line.text || '',
+        when: normalizeWhen(line.when),
+      };
+    }
     const role = (line && line.role) || 'other';
     const text = line && line.text != null ? String(line.text) : '';
     let painted = null;

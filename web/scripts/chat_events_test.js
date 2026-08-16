@@ -506,12 +506,14 @@ test('T223 index.html: no seal on user; join keys stream_id', () => {
     'widget must keep stream_id → el map');
   assert.ok(html.includes('stream_id') || html.includes('streamId'), 'must read wire stream id');
   // User path must not call sealAssistantStream (T223 pin).
-  const userBlock = html.match(/if\s*\(\s*typ\s*===\s*['"]user['"]\s*\)\s*\{[\s\S]*?\} else if\s*\(\s*typ\s*===\s*['"]assistant['"]/);
+  const userBlock = html.match(/if \(typ === 'user'\) \{[\s\S]*?\n    return;\n  \}/);
   assert.ok(userBlock, 'user handle block must exist');
   assert.ok(
     !/sealAssistantStream\s*\(/.test(userBlock[0]),
     'user mid-stream must not sealAssistantStream',
   );
+  assert.ok(userBlock[0].indexOf('applyWireEvent') >= 0,
+    'user ingest is the shared apply, not a second painter');
 });
 
 test('text+end_turn in one event: one bubble and clear', () => {
@@ -730,13 +732,14 @@ test('T327 index.html: route-to-aside path leaves main WorkingProgress not open'
 
 test('index.html wires ChatEvents + stream seal', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
   assert.ok(html.includes('scripts/chat_events.js'), 'must load chat_events.js');
   assert.ok(html.includes('ChatEvents.shouldClearWorking'), 'must call shouldClearWorking');
-  assert.ok(html.includes('ChatEvents.hasAssistantText'), 'must use hasAssistantText');
+  assert.ok(src.includes('hasAssistantText'), 'apply uses hasAssistantText');
   assert.ok(html.includes('appendOrAddJevons'), 'must stream-merge assistant chunks');
-  assert.ok(html.includes('sealAssistantStream'), 'must seal stream on terminal');
+  assert.ok(html.includes('mainConversation.applyWireEvent'), 'main live ingest is the shared apply');
   assert.ok(
-    html.includes('_streamRaw'),
+    src.includes('_streamRaw'),
     'merge must key on _streamRaw (not only workingEl)',
   );
 });

@@ -929,6 +929,7 @@ body.rhs-resizing-row { cursor: row-resize; }
   overflow: hidden;
 }
 /* 🎯T233: harness injects as compact ⋯ nuggets (family of main-chat turn-marker). */
+#agent-inspect-body > .turn-marker { margin: 4px 0 2px; }
 #agent-inspect-body > .turn-marker.inject-nugget {
   align-self: flex-start; margin: 2px 0;
 }
@@ -2935,132 +2936,92 @@ function handle(m) {
 
   const msgTs = m.timestamp ? new Date(m.timestamp).getTime() : Date.now();
 
-  if (typ==='agent_note') {
-    // Injected agent/system notification (worker reply, budget alert). The
-    // owner never sees these as chat bubbles — the overseer decides what to
-    // relay. Fold into the turn's activity strip only (🎯T63).
-    // 🎯T260: note re-prompt often follows tools-only end_turn — keep/re-arm
-    // working chrome while the owner turn is still open.
-    addTurnItem('agent-note', formatAgentNote(m.text || ''));
+  // Transcript rows (user / assistant / tools / notes) go through the
+  // same apply as the sidebar. Host-only: aside gate, recall, working chrome.
+  if (typ === 'agent_note') {
     if (ownerWorkingChrome && ownerWorkingChrome.open) {
       if (!workingEl) setWorking(true);
       else if (typeof armWorkingWatch === 'function') armWorkingWatch();
     }
+    if (mainConversation && typeof mainConversation.applyWireEvent === 'function') {
+      mainConversation.applyWireEvent({
+        type: 'agent_note',
+        text: formatAgentNote(m.text || ''),
+        timestamp: m.timestamp,
+      });
+    }
     return;
   }
 
-  if (typ==='user') {
+  if (typ === 'user') {
     const rawContent = m.message?.content;
-    // 🎯T384: owner turns now arrive as typed blocks — the same shape every
-    // assistant turn has always used — while journals written before the fix
-    // still carry a bare string. Read both. The tool_result walk below still
-    // owns structured content that carries no owner prose, so a block list of
-    // pure tool_result falls through to it exactly as it used to.
     const content = (typeof ChatEvents !== 'undefined' && ChatEvents.userContentText)
       ? ChatEvents.userContentText(m)
       : (typeof rawContent === 'string' ? rawContent : '');
     if (content || typeof rawContent === 'string') {
-      // Server synthesises a user echo on send; Grok ACP may also
-      // publish user_message_chunk for the same prompt. Drop the dupe
-      // (including 🎯T279 optimistic main paint before echo).
       const lastHist = msgHistory[msgHistory.length - 1]?.text;
       const isDupe = (typeof ChatEvents !== 'undefined' && ChatEvents.isDuplicateUserEcho)
         ? ChatEvents.isDuplicateUserEcho(lastHist, content)
         : (content && lastHist === content);
       if (content && isDupe) {
-        // 🎯T239: still ack pending — optimistic bubble already painted.
         if (typeof ackPendingFromContent === 'function') ackPendingFromContent(content);
         return;
       }
-      // 🎯T239: user echo = durable ack of a staged wire send (including asides).
       if (content && typeof ackPendingFromContent === 'function') ackPendingFromContent(content);
-      // 🎯T250/T264: aside wire turns never paint on main #messages — sidebar only.
-      // Flash-class: gate before any addMsg (self-clear after paint still fails acceptance).
       if (typeof isMainAsideWireUserText === 'function'
           ? isMainAsideWireUserText(content)
           : (typeof AttentionThreads !== 'undefined' &&
               AttentionThreads.shouldPaintMainUserText &&
               !AttentionThreads.shouldPaintMainUserText(content))) {
         noteAsideWireFromMain(content);
-        // 🎯T327: server echo of aside wire — main must not bind mid-turn chrome.
         if (workingEl) setWorking(false, undefined, { skipDrain: true });
         if (ownerWorkingChrome) ownerWorkingChrome.open = false;
-        mainWorkingSuppressed = true; // re-assert after setWorking(false) clear
-        // Still settle activity chrome as a user boundary (no main bubble).
+        mainWorkingSuppressed = true;
         closeTurn();
         return;
       }
-      // 🎯T223: do NOT seal open assistant streams on user interleave.
-      // Join identity is stream_id (widget open handle until terminal).
-      // Premature seal was the journal/hydrate split of one answer into two.
       closeTurn();
-      // 🎯T381: carry the wire's provenance into the bubble so paintBody can
-      // tell an agent's report from the owner's own words.
       const turnOrigin = (typeof ChatEvents !== 'undefined' && ChatEvents.turnOriginOf)
         ? ChatEvents.turnOriginOf(m) : 'owner';
-      const uEl = addMsg('user', content, msgTs, { turnOrigin: turnOrigin });
-      // Recall (up-arrow) is the owner's OWN outbox — an agent report is not
-      // something he typed, so it never enters the recall ring.
+      if (mainConversation && typeof mainConversation.applyWireEvent === 'function') {
+        mainConversation.applyWireEvent(m);
+      }
+      const uEl = lastMessageish();
       if (content && turnOrigin !== 'agent') msgHistory.push({ text: content, el: uEl });
-      // 🎯T135: opt-in "Continue in: «title»" when auto-match suggested a thread.
-      // Match is suggestion only — default wire already went to main.
       if (lastRouteSuggestion) {
         attachRouteSwitch(uEl, lastRouteSuggestion);
         lastRouteSuggestion = null;
       }
-      startTurn();
-    } else if (Array.isArray(rawContent)) {
-      rawContent.forEach(c => {
-        if (c.type==='tool_result') {
-          const inner = c.content;
-          if (typeof inner === 'string') addTurnItem('tool-result', truncate(inner, 120));
-          else if (Array.isArray(inner)) inner.forEach(ic => {
-            if (ic.type==='text' && ic.text) addTurnItem('tool-result', truncate(ic.text, 120));
-          });
-        }
-      });
+    } else if (Array.isArray(rawContent) && mainConversation) {
+      mainConversation.applyWireEvent(m);
     }
-  } else if (typ==='assistant') {
+    return;
+  }
+
+  if (typ === 'assistant') {
     const content = m.message?.content;
     if (!Array.isArray(content)) return;
-    // 🎯T161: single ordered walk. Non-text (tool_use) marks a segment edge
-    // for the *following* text only; multi-block text parts are segment edges
-    // between them. Continuous single-block frames bare-concat (tokens).
-    // 🎯T223: stream_id joins fragments into one bubble across interleave.
     const streamId = (typeof ChatEvents !== 'undefined' && ChatEvents.streamIdOf)
       ? ChatEvents.streamIdOf(m)
       : (m.stream_id || m.streamId || '');
     let emittedText = false;
-    const anyText = ChatEvents.hasAssistantText(m);
-    if (anyText) closeTurn();
-    // 🎯T245: client defense — never paint pure [silent] body even if a
-    // fragment slipped past server suppress (or history carried raw body).
     content.forEach(c => {
-      if (c.type==='tool_use') {
-        streamSegmentEdge = true;
-        addTurnItem('tool-use', c.name + (c.input ? ': ' + ToolSummary.summariseInput(c.input) : ''));
-        // 🎯T260: tool activity is mid-turn signal — re-arm chrome if open.
-        if (ownerWorkingChrome) {
-          ownerWorkingChrome.hadTool = true;
-          if (ownerWorkingChrome.open && !workingEl && !historyReplayActive) {
-            setWorking(true);
-          } else if (workingEl && typeof armWorkingWatch === 'function') {
-            armWorkingWatch();
-          }
+      if (c && c.type === 'tool_use' && ownerWorkingChrome) {
+        ownerWorkingChrome.hadTool = true;
+        if (ownerWorkingChrome.open && !workingEl && !historyReplayActive) {
+          setWorking(true);
+        } else if (workingEl && typeof armWorkingWatch === 'function') {
+          armWorkingWatch();
         }
-      } else if (c.type==='text' && c.text) {
+      } else if (c && c.type === 'text' && c.text) {
         const alreadySilent = !!(streamId && openStreamSilentById[streamId]);
         const thisSilent = typeof ChatEvents !== 'undefined' && ChatEvents.isSilentAssistantText
           && ChatEvents.isSilentAssistantText(c.text);
         if (alreadySilent || thisSilent) {
           if (streamId) openStreamSilentById[streamId] = true;
           if (ownerWorkingChrome) ownerWorkingChrome.silent = true;
-          // Pure silent: no owner bubble (still process terminal below).
           return;
         }
-        const edge = streamSegmentEdge || emittedText;
-        appendOrAddJevons(c.text, msgTs, { segmentEdge: edge, streamId: streamId });
-        streamSegmentEdge = false;
         emittedText = true;
         if (ownerWorkingChrome) {
           ownerWorkingChrome.hadVisible = true;
@@ -3070,11 +3031,11 @@ function handle(m) {
         }
       }
     });
+    if (mainConversation && typeof mainConversation.applyWireEvent === 'function') {
+      mainConversation.applyWireEvent(m);
+    }
     if (emittedText) focusComposer();
-    // Seal on terminal stop; clear working chrome only per T260 policy
-    // (tools-only empty end_turn keeps "Jevons is working…").
     if (ChatEvents.shouldClearWorking(m)) {
-      sealAssistantStream(streamId);
       const chrome = ownerWorkingChrome || { hadVisible: false, hadTool: false, silent: false };
       if (streamId && openStreamSilentById[streamId]) chrome.silent = true;
       const clearChrome = (typeof ChatEvents.shouldClearWorkingChrome === 'function')
@@ -3085,21 +3046,22 @@ function handle(m) {
         if (ownerWorkingChrome) ownerWorkingChrome.open = false;
       }
     }
-  } else if (typ==='tool_result' || typ==='result') {
-    // 🎯T161: tool result is a protocol segment boundary for next text.
+    return;
+  }
+
+  if (typ === 'tool_result' || typ === 'result') {
     streamSegmentEdge = true;
-    const content = m.content || m.message?.content;
-    if (Array.isArray(content)) {
-      content.forEach(c => {
-        if (c.type==='text' && c.text) addTurnItem('tool-result', truncate(c.text, 120));
-      });
-    } else if (typeof content === 'string') {
-      addTurnItem('tool-result', truncate(content, 120));
+    if (mainConversation && typeof mainConversation.applyWireEvent === 'function') {
+      mainConversation.applyWireEvent(m);
     }
-  } else if (typ==='system') {
-    closeTurn();
+    return;
+  }
+
+  if (typ === 'system') {
+    if (mainConversation && typeof mainConversation.applyWireEvent === 'function') {
+      mainConversation.applyWireEvent(m);
+    }
     if (ChatEvents.shouldClearWorking(m)) {
-      sealAssistantStream();
       setWorking(false);
       if (ownerWorkingChrome) ownerWorkingChrome.open = false;
     }
@@ -5697,13 +5659,28 @@ async function loadEarlier(opts) {
     const incoming = chunks ? chunks.length : lines.length;
     // 🎯T119.3: prepend records only — canvas height holds the prefix.
     // No insertBefore of a page of shells; virtualize attaches the band.
-    if (chunks && chunks.length) {
-      const recs = (typeof VirtualList !== 'undefined' && VirtualList.recordsFromChunks)
-        ? VirtualList.recordsFromChunks(chunks)
-        : chunks.map(function (c) {
-          return { role: c.role, text: c.text, timestamp: c.timestamp, origin: c.origin, estHeight: 72 };
-        });
-      prependTranscriptRecords(recs);
+    if (chunks && chunks.length && ConversationWidget.applyEventTape) {
+      const evs = [];
+      for (let li = 0; li < lines.length; li++) {
+        let ev = lines[li];
+        if (typeof ev === 'string') {
+          try { ev = JSON.parse(ev); } catch (e) { continue; }
+        }
+        if (ev && ev.type) evs.push(ev);
+      }
+      const applied = ConversationWidget.applyEventTape(evs);
+      const recs = applied.map(function (l) {
+        if (l.kind === 'turn-slot') {
+          return { role: 'turn-marker', text: l.text, timestamp: l.when, items: l.items, estHeight: 16 };
+        }
+        return {
+          role: l.role === 'assistant' ? 'jevons' : (l.role || 'jevons'),
+          text: l.text,
+          timestamp: l.when,
+          origin: l.origin,
+        };
+      });
+      if (recs.length) prependTranscriptRecords(recs);
     } else if (lines.length) {
       const { nodes } = renderFrames(lines, { lazy: true });
       const recs = [];
@@ -9418,6 +9395,16 @@ let rhsBottomTab = (typeof FrontierTable !== 'undefined')
       timeIfKnown: false,
       buildMsg: typeof buildMsg === 'function' ? buildMsg : undefined,
       addMsg: typeof addMsg === 'function' ? addMsg : undefined,
+      onTurnSlotOpen: function (slot) {
+        startTurn();
+        if (slot && turnDetails) slot.el = turnDetails;
+      },
+      onTurnSlotItem: function (slot, cls, text) {
+        addTurnItem(cls, text);
+      },
+      onTurnSlotCancel: function () {
+        closeTurn();
+      },
       onStreamFrame: typeof scheduleJevonsRender === 'function' ? scheduleJevonsRender : undefined,
       onSeal: typeof paintSealedJevons === 'function' ? paintSealedJevons : undefined,
       ComposerKeys: typeof ComposerKeys !== 'undefined' ? ComposerKeys : undefined,

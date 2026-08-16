@@ -66,8 +66,9 @@ test('index.html turn-tip uses wide max-content policy', function () {
 });
 
 test('addTurnItem uses ToolSummary path in index.html', function () {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(html.indexOf('ToolSummary.summariseInput') >= 0);
+  const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  assert.ok(widget.indexOf('ToolSummary.summariseInput') >= 0,
+    'shared apply summarises tool_use via ToolSummary');
 });
 
 if (failed) {

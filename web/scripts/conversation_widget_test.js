@@ -530,6 +530,48 @@ function grokWordChunks() {
   return ['Plan', ' remaining', ' is', ' on', ' the', ' header', ' bar'];
 }
 
+function toolTape() {
+  return [
+    { type: 'user', message: { content: 'do the thing' }, timestamp: 1 },
+    {
+      type: 'assistant',
+      stream_id: 'sid-tools',
+      message: { content: [{ type: 'tool_use', name: 'Read', input: { path: 'x' } }] },
+    },
+    {
+      type: 'assistant',
+      stream_id: 'sid-tools',
+      message: { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' },
+    },
+  ];
+}
+
+test('one apply: jevons and another agent emit the same row kinds including turn-slot', function () {
+  const tape = toolTape();
+  function run(agentId, density) {
+    const stream = CW.createStreamJoin({});
+    tape.forEach(function (ev) { stream.applyWireEvent(ev); });
+    return stream.getLines();
+  }
+  const root = run('jevons', 'comfortable');
+  const other = run('jevons-po', 'compact');
+  function kinds(lines) {
+    return lines.map(function (l) {
+      return l.kind || l.role;
+    });
+  }
+  assert.deepStrictEqual(kinds(root), kinds(other));
+  const slots = root.filter(function (l) { return l.kind === 'turn-slot'; });
+  assert.strictEqual(slots.length, 1, 'one turn-slot from tool_use');
+  assert.ok(slots[0].items && slots[0].items.length >= 1, 'slot has tool items');
+  assert.ok(/step/.test(slots[0].text || CW.turnSlotLabel(slots[0].items)), '⋯ n steps label');
+  const users = root.filter(function (l) { return l.role === 'user'; });
+  const asst = root.filter(function (l) { return l.role === 'assistant' || l.role === 'jevons'; });
+  assert.strictEqual(users.length, 1);
+  assert.strictEqual(asst.length, 1);
+  assert.strictEqual(asst[0].text, 'done');
+});
+
 test('T372 Grok word-chunks are one assistant bubble (both densities)', function () {
   ['compact', 'comfortable'].forEach(function (density) {
     const dom = fakeDom(density);
@@ -596,6 +638,11 @@ test('T372 index.html: no second grow-bubble implementation', function () {
   const live = html.match(/if \(m\.kind === 'live' && m\.event\) \{[\s\S]*?\n    return;\n  \}/);
   assert.ok(live, 'live branch present');
   assert.ok(live[0].indexOf('applyWireEvent') >= 0, 'live path calls widget.applyWireEvent');
+  const mainLive = html.match(/if \(typ === 'assistant'\) \{[\s\S]*?\n    return;\n  \}/);
+  assert.ok(html.indexOf('mainConversation.applyWireEvent') >= 0,
+    'main live ingest uses the same apply, not a second tool branch');
+  assert.ok(!/if \(c\.type==='tool_use'\) \{[\s\S]{0,200}addTurnItem\('tool-use'/.test(html),
+    'main must not addTurnItem from a host tool_use walk');
   assert.ok(live[0].indexOf('copyInspectLines') < 0 && live[0].indexOf('inspectLinesCopy') < 0,
     'live path must not copy lines (drops _stream — T479)');
   assert.ok(live[0].indexOf('renderAgentInspect') < 0,
