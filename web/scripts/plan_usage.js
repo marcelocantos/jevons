@@ -53,9 +53,17 @@
   const PACE_AHEAD_RATIO = 1.0;
   const PACE_HOT_RATIO = 1.5;
 
+  // 🎯T390.1.1 weekly waste (owner pick C). Same 15 as remaining-low;
+  // discussable. Continuation = leftover if pace does not change.
+  // Locked = leftover even at a 1.5× sprint. Weekly only.
+  const PACE_UNDER_WASTE = 15;
+  const PACE_LOCKED_WASTE = 15;
+
   const PACE_OK = 'ok';
   const PACE_AHEAD = 'ahead';
   const PACE_HOT = 'hot';
+  const PACE_UNDER = 'under';
+  const PACE_LOCKED = 'locked';
 
   const CLASS_CRITICAL = 'plan-crit';
   const CLASS_LOW = 'plan-low';
@@ -63,6 +71,8 @@
   const CLASS_UNAVAIL = 'plan-unavail';
   const CLASS_AHEAD = 'plan-ahead';
   const CLASS_HOT = 'plan-hot';
+  const CLASS_UNDER = 'plan-under';
+  const CLASS_LOCKED = 'plan-locked';
 
   const MS_PER_SECOND = 1000;
   const SECONDS_PER_MINUTE = 60;
@@ -194,16 +204,46 @@
   }
 
   /**
+   * weeklyWaste is the two C quantities, as percents of the weekly pool.
+   *
+   *   continuation  leftover if used/elapsed does not change
+   *   locked        leftover even if the rest of the week runs at 1.5×
+   *
+   * Nulls when the inputs cannot support the arithmetic — never invented.
+   */
+  function weeklyWaste(usedPercent, remainingPercent, remainingTimePercent) {
+    if (typeof remainingTimePercent !== 'number' || !isFinite(remainingTimePercent)) {
+      return { continuation: null, locked: null };
+    }
+    const rem = (typeof remainingPercent === 'number' && isFinite(remainingPercent))
+      ? remainingPercent : null;
+    const used = (typeof usedPercent === 'number' && isFinite(usedPercent))
+      ? usedPercent
+      : (rem !== null ? 100 - rem : null);
+    const elapsed = 100 - remainingTimePercent;
+    let continuation = null;
+    if (used !== null && elapsed > 0) {
+      continuation = Math.max(0, 100 - (used / elapsed) * 100);
+    }
+    const locked = rem === null ? null : Math.max(0, rem - PACE_HOT_RATIO * remainingTimePercent);
+    return { continuation: continuation, locked: locked };
+  }
+
+  /**
    * classifyPace compares token spend to elapsed time.
    *
-   *   ok     used/elapsed ≤ 1 (on or behind the clock)
-   *   ahead  used/elapsed > 1 (spend outstrips time) → orange
-   *   hot    used/elapsed > 1.5, or remaining is 0   → red
+   *   ok      on pace (or session under-spend — sessions do not waste)
+   *   ahead   used/elapsed > 1                         → orange
+   *   hot     used/elapsed > 1.5, or remaining is 0    → red
+   *   under   weekly continuation waste ≥ 15%          → blue
+   *   locked  weekly locked waste ≥ 15%                → purple
    *
    * No time signal → empty string (caller falls back to remaining-low).
    * First PACE_WARMUP_PERCENT of elapsed does not flash.
+   * windowName is required for under/locked; anything other than weekly
+   * keeps the overspend colours only (🎯T390.1.1).
    */
-  function classifyPace(usedPercent, remainingPercent, remainingTimePercent) {
+  function classifyPace(usedPercent, remainingPercent, remainingTimePercent, windowName) {
     if (typeof remainingPercent === 'number' && remainingPercent <= 0) return PACE_HOT;
     if (typeof remainingTimePercent !== 'number' || !isFinite(remainingTimePercent)) return '';
     const used = (typeof usedPercent === 'number' && isFinite(usedPercent))
@@ -215,13 +255,32 @@
     const burn = used / elapsed;
     if (burn > PACE_HOT_RATIO) return PACE_HOT;
     if (burn > PACE_AHEAD_RATIO) return PACE_AHEAD;
+    const weekly = String(windowName || '').toLowerCase() === WINDOW_WEEKLY;
+    if (weekly) {
+      const w = weeklyWaste(used, remainingPercent, remainingTimePercent);
+      if (w.locked !== null && w.locked >= PACE_LOCKED_WASTE) return PACE_LOCKED;
+      if (w.continuation !== null && w.continuation >= PACE_UNDER_WASTE) return PACE_UNDER;
+    }
     return PACE_OK;
   }
 
   function paceClassName(pace) {
     if (pace === PACE_HOT) return CLASS_HOT;
     if (pace === PACE_AHEAD) return CLASS_AHEAD;
+    if (pace === PACE_LOCKED) return CLASS_LOCKED;
+    if (pace === PACE_UNDER) return CLASS_UNDER;
     return '';
+  }
+
+  function hotterPace(current, next) {
+    const rank = {};
+    rank[PACE_HOT] = 4;
+    rank[PACE_AHEAD] = 3;
+    rank[PACE_LOCKED] = 2;
+    rank[PACE_UNDER] = 1;
+    const a = rank[current] || 0;
+    const b = rank[next] || 0;
+    return b > a ? next : current;
   }
 
   function chipClassForRemaining(remaining, stale) {
@@ -251,6 +310,8 @@
       rollsAtText: null,
       limitWindowSeconds: null,
       remainingTimePercent: null,
+      continuationWaste: null,
+      lockedWaste: null,
       pace: '',
       paceClass: ''
     };
@@ -266,7 +327,12 @@
         }
       }
     }
-    out.pace = classifyPace(out.usedPercent, out.remainingPercent, out.remainingTimePercent);
+    if (String(out.name || '').toLowerCase() === WINDOW_WEEKLY && out.remainingTimePercent !== null) {
+      const waste = weeklyWaste(out.usedPercent, out.remainingPercent, out.remainingTimePercent);
+      out.continuationWaste = waste.continuation;
+      out.lockedWaste = waste.locked;
+    }
+    out.pace = classifyPace(out.usedPercent, out.remainingPercent, out.remainingTimePercent, out.name);
     out.paceClass = paceClassName(out.pace);
     return out;
   }
@@ -368,13 +434,15 @@
       if (row.lowestRemaining === null || w.remainingPercent < row.lowestRemaining) {
         row.lowestRemaining = w.remainingPercent;
       }
-      if (w.pace === PACE_HOT) row.hottestPace = PACE_HOT;
-      else if (w.pace === PACE_AHEAD && row.hottestPace !== PACE_HOT) row.hottestPace = PACE_AHEAD;
+      row.hottestPace = hotterPace(row.hottestPace, w.pace);
       const wAbbrev = windowAbbrev(w.name);
       const key = abbrev + '/' + wAbbrev;
       let chipText = key + ' ' + w.remainingText;
       if (stale && row.ageText) chipText += ' stale';
-      const chipClass = w.paceClass || chipClassForRemaining(w.remainingPercent, stale);
+      // Remaining-low only when there is no pace reading. An on-pace
+      // weekly at 13% left is green, not amber — that leftover is the
+      // fair remainder, not a waste or an exhaustion risk.
+      const chipClass = w.pace ? w.paceClass : chipClassForRemaining(w.remainingPercent, stale);
       const chip = {
         key: key,
         provider: provider,
@@ -401,6 +469,10 @@
       row.className = CLASS_HOT;
     } else if (row.hottestPace === PACE_AHEAD) {
       row.className = CLASS_AHEAD;
+    } else if (row.hottestPace === PACE_LOCKED) {
+      row.className = CLASS_LOCKED;
+    } else if (row.hottestPace === PACE_UNDER) {
+      row.className = CLASS_UNDER;
     } else if (row.lowestRemaining !== null && row.lowestRemaining <= CRITICAL_PERCENT) {
       row.className = CLASS_CRITICAL;
     } else if (row.lowestRemaining !== null && row.lowestRemaining <= LOW_PERCENT) {
@@ -472,17 +544,19 @@
 
     const text = chips.map(function (c) { return c.text; }).join(SEP_CHIP);
 
+    const classRank = {};
+    classRank[CLASS_HOT] = 5;
+    classRank[CLASS_CRITICAL] = 5;
+    classRank[CLASS_AHEAD] = 4;
+    classRank[CLASS_LOW] = 4;
+    classRank[CLASS_LOCKED] = 3;
+    classRank[CLASS_UNDER] = 2;
+    classRank[CLASS_STALE] = 1;
     let className = '';
     for (let i = 0; i < all.length; i++) {
       if (!showOnBar(all[i])) continue;
-      if (all[i].className === CLASS_HOT || all[i].className === CLASS_CRITICAL) {
+      if ((classRank[all[i].className] || 0) > (classRank[className] || 0)) {
         className = all[i].className;
-        break;
-      }
-      if (all[i].className === CLASS_AHEAD || all[i].className === CLASS_LOW) {
-        if (className !== CLASS_AHEAD && className !== CLASS_LOW) className = all[i].className;
-      } else if (all[i].className === CLASS_STALE && className === '') {
-        className = CLASS_STALE;
       }
     }
 
@@ -510,7 +584,7 @@
         remainingTimePercent: w.remainingTimePercent,
         usedPercent: w.usedPercent,
         pace: w.pace,
-        className: w.paceClass || chipClassForRemaining(w.remainingPercent, row.stale)
+        className: w.pace ? w.paceClass : chipClassForRemaining(w.remainingPercent, row.stale)
       });
     }
     return {
@@ -569,6 +643,11 @@
       if (w.rollsAtText) bit += ', rolls over ' + w.rollsAtText;
       if (w.pace === PACE_HOT) bit += ' — spend far ahead of time';
       else if (w.pace === PACE_AHEAD) bit += ' — spend ahead of time';
+      else if (w.pace === PACE_LOCKED) {
+        bit += ' — ' + Math.round(w.lockedWaste) + '% of the week already unrecoverable at 1.5×';
+      } else if (w.pace === PACE_UNDER) {
+        bit += ' — on track to leave ' + Math.round(w.continuationWaste) + '% of the week unused';
+      }
       bits.push(bit);
     }
     let out = head + ':\n' + bits.join('\n');
@@ -695,6 +774,7 @@
     providerCompany: providerCompany,
     windowAbbrev: windowAbbrev,
     classifyPace: classifyPace,
+    weeklyWaste: weeklyWaste,
     limitSecondsFor: limitSecondsFor,
     showOnBar: showOnBar,
     WINDOW_SESSION: WINDOW_SESSION,
@@ -706,9 +786,13 @@
     PACE_WARMUP_PERCENT: PACE_WARMUP_PERCENT,
     PACE_AHEAD_RATIO: PACE_AHEAD_RATIO,
     PACE_HOT_RATIO: PACE_HOT_RATIO,
+    PACE_UNDER_WASTE: PACE_UNDER_WASTE,
+    PACE_LOCKED_WASTE: PACE_LOCKED_WASTE,
     PACE_OK: PACE_OK,
     PACE_AHEAD: PACE_AHEAD,
     PACE_HOT: PACE_HOT,
+    PACE_UNDER: PACE_UNDER,
+    PACE_LOCKED: PACE_LOCKED,
     SESSION_LIMIT_SECONDS: SESSION_LIMIT_SECONDS,
     WEEKLY_LIMIT_SECONDS: WEEKLY_LIMIT_SECONDS
   };

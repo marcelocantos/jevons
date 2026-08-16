@@ -323,6 +323,20 @@ function startServer() {
       failures.push('grok must paint as a real weekly bar, got ' + JSON.stringify(grok));
     }
 
+    const claudeSess = claude && claude.windows.find((w) => w.window === 'session');
+    if (claudeSess && (claudeSess.pace === 'under' || claudeSess.pace === 'locked')) {
+      failures.push('session must not paint weekly waste, pace=' + claudeSess.pace);
+    }
+    const grokWin = grok && grok.windows[0];
+    if (grokWin && grokWin.pace !== 'under') {
+      failures.push('fixture grok weekly should be continuation-blue, pace=' + (grokWin && grokWin.pace));
+    }
+    const cx = layout.groups.find((g) => g.provider === 'codex');
+    const cxWin = cx && cx.windows[0];
+    if (cxWin && cxWin.pace !== 'locked') {
+      failures.push('fixture codex weekly (1h left, unused) should be locked-purple, pace=' + (cxWin && cxWin.pace));
+    }
+
     const shot = path.join(OUT_DIR, 't390.1-plan-ticker.png');
     await page.locator('#status').screenshot({ path: shot });
 

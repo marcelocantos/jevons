@@ -37,6 +37,8 @@
   --green: #4ade80;
   --red: #ef4444;
   --amber: #fbbf24;
+  --plan-under: #60a5fa;
+  --plan-locked: #c084fc;
   --heading: #fff5f5;
   --strong: #ffffff;
   --dot-on-glow: rgba(74,222,128,0.5);
@@ -71,6 +73,8 @@
   --green: #10b981;
   --red: #ef4444;
   --amber: #d97706;
+  --plan-under: #2563eb;
+  --plan-locked: #7c3aed;
   --heading: #1a1a22;
   --strong: #1a1a22;
   --dot-on-glow: rgba(16,185,129,0.3);
@@ -827,7 +831,9 @@ body.rhs-resizing-row { cursor: row-resize; }
    next to the theme toggle. Never display:none — a missing fetch is not a
    reason to hide the slot. One group per provider: T287 company mark +
    boxed session/weekly remaining bars. Triangle under each bar is remaining
-   time; orange when spend outstrips time, red when it outstrips by a lot. */
+   time; orange when spend outstrips time, red when it outstrips by a lot.
+   Weekly only (🎯T390.1.1): blue = on track to leave ≥15% unused,
+   purple = ≥15% already unrecoverable even at 1.5×. */
 #plan-ticker { margin-left: auto; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; padding-top: 2px; }
 #plan-ticker .plan-group { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 #plan-ticker .plan-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); }
@@ -846,6 +852,10 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-win.plan-crit .plan-bar-fill { background: var(--red); }
 #plan-ticker .plan-win.plan-hot .plan-tri,
 #plan-ticker .plan-win.plan-crit .plan-tri { border-bottom-color: var(--red); }
+#plan-ticker .plan-win.plan-under .plan-bar-fill { background: var(--plan-under); }
+#plan-ticker .plan-win.plan-under .plan-tri { border-bottom-color: var(--plan-under); }
+#plan-ticker .plan-win.plan-locked .plan-bar-fill { background: var(--plan-locked); }
+#plan-ticker .plan-win.plan-locked .plan-tri { border-bottom-color: var(--plan-locked); }
 #plan-ticker .plan-win.plan-low .plan-bar-fill { background: var(--amber); }
 #plan-ticker .plan-win.plan-low .plan-tri { border-bottom-color: var(--amber); }
 #plan-ticker .plan-group.plan-unavail { opacity: 0.4; }
@@ -857,6 +867,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker.plan-ahead { color: var(--amber); }
 #plan-ticker.plan-crit,
 #plan-ticker.plan-hot { color: var(--red); }
+#plan-ticker.plan-under { color: var(--plan-under); }
+#plan-ticker.plan-locked { color: var(--plan-locked); }
 
 /* Theme toggle */
 #theme-toggle { display: flex; gap: 2px; background: var(--surface-raised); border-radius: 5px; padding: 2px; flex-shrink: 0; }

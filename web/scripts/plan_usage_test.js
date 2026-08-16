@@ -419,6 +419,8 @@ test('index.html never hides #plan-ticker pending a fetch, and styles grouped ba
   assert.ok(html.indexOf('.plan-tri') >= 0, 'time-remaining triangle CSS');
   assert.ok(html.indexOf('.plan-box') >= 0, 'per-provider window box CSS');
   assert.ok(html.indexOf('.plan-icon') >= 0, 'company-mark CSS');
+  assert.ok(html.indexOf('.plan-under') >= 0 && html.indexOf('--plan-under') >= 0, 'continuation-waste blue');
+  assert.ok(html.indexOf('.plan-locked') >= 0 && html.indexOf('--plan-locked') >= 0, 'locked-waste purple');
   assert.ok(/#plan-ticker \.plan-icon \.model-icon\s*\{[^}]*width:\s*17px/.test(html),
     'T287 marks on the ticker are 50% larger than the original 11px');
   assert.ok(/#plan-ticker \.plan-group\s*\{[^}]*align-items:\s*center/.test(html),
@@ -542,6 +544,43 @@ test('T390.1: pace is green / orange / red at the 1.0 and 1.5 burn ratios', func
   // CONTROL: flip used and elapsed so the 1.5 assertion would fail if the
   // threshold were wired backwards (remaining vs used).
   assert.strictEqual(PU.classifyPace(24, 76, 50), PU.PACE_OK, 'control: under-spend is green, not hot');
+});
+
+test('T390.1.1: weekly continuation is blue, locked is purple, session is exempt', function () {
+  // Codex today: 0 used, 19% elapsed, 81% time left. Continuation 100%,
+  // locked = 100 − 1.5×81 < 0 → blue, not purple.
+  assert.strictEqual(PU.classifyPace(0, 100, 81, 'weekly'), PU.PACE_UNDER,
+    'idle weekly early in the window is continuation waste');
+  const early = PU.weeklyWaste(0, 100, 81);
+  assert.ok(early.continuation >= PU.PACE_UNDER_WASTE, early);
+  assert.ok(early.locked < PU.PACE_LOCKED_WASTE, 'nothing locked yet: ' + early.locked);
+
+  // Same idle week at 50% elapsed: locked = 100 − 1.5×50 = 25 ≥ 15 → purple.
+  assert.strictEqual(PU.classifyPace(0, 100, 50, 'weekly'), PU.PACE_LOCKED,
+    'idle weekly past ~43% elapsed is already unrecoverable at 1.5×');
+  const late = PU.weeklyWaste(0, 100, 50);
+  assert.ok(late.locked >= PU.PACE_LOCKED_WASTE, late);
+
+  // Warmup: 3% elapsed, 0 used. Do not flash.
+  assert.strictEqual(PU.classifyPace(0, 100, 97, 'weekly'), PU.PACE_OK,
+    'first 5% of the week does not paint waste');
+
+  // Session with the same numbers stays green — a dead session is not a waste.
+  assert.strictEqual(PU.classifyPace(0, 100, 50, 'session'), PU.PACE_OK,
+    'session under-spend is not weekly waste');
+  assert.strictEqual(PU.classifyPace(0, 100, 81, 'session'), PU.PACE_OK);
+
+  // On-pace weekly is still green (1.4% continuation is below 15%).
+  assert.strictEqual(PU.classifyPace(87, 13, 12, 'weekly'), PU.PACE_OK,
+    'claude-today shape: ~on pace, not blue');
+
+  // Overspend still wins — a weekly burning hot is red, not a waste colour.
+  assert.strictEqual(PU.classifyPace(80, 20, 60, 'weekly'), PU.PACE_HOT);
+
+  // CONTROL: continuation just under 15% is green; just over is blue.
+  // elapsed 50: used 43 → leftover 14%; used 42 → leftover 16%.
+  assert.strictEqual(PU.classifyPace(43, 57, 50, 'weekly'), PU.PACE_OK, 'control: 14% leftover is not blue');
+  assert.strictEqual(PU.classifyPace(42, 58, 50, 'weekly'), PU.PACE_UNDER, 'control: 16% leftover is blue');
 });
 
 test('T390.1: a published Grok weekly window is a real group, not the word unavailable', function () {
