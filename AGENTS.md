@@ -47,10 +47,13 @@ tests and doc greps are not journeys (see `scripts/docratchet/`,
 `scripts/journey-suite/portguard/`). After a successful live run, caching
 the agent interaction for replay is allowed (🎯T107).
 
-Hermetic `make test` (Go + Node + Playwright UI with mocks) is the fast
-gate and is **distinct from** journeys: it never needs Grok or a daemon.
-Journeys are opt-in live Grok against a throwaway isolate (`go run
-./scripts/journey-suite` / `make test-journey`).
+`make test` is the full product net (🎯T492): hermetic Go + Node +
+Playwright UI, then Universe-B journeys. Hermetic layers are **distinct from**
+journeys (no Grok, no daemon) but they are not a substitute — both run.
+A journey's need for a signed-in provider CLI, a throwaway daemon, or
+network is a **dependency of the suite**, not a reason to omit the gate.
+A missing provider is OUTAGE (exit 2), not skip-and-green.
+Direct invoke remains `go run ./scripts/journey-suite` / `make test-journey`.
 
 **Journey-or-exception:** when an owner-visible product failure mode is
 fixed, land a journey that covers it, **or** an explicit exception in the
@@ -63,7 +66,7 @@ Attaching to a running daily daemon (`make test-live-suite`, chat-smoke*)
 is intentional-only, not routine.
 
 ```bash
-make test         # All: Go + web hermetic (Node) + Playwright UI (hermetic)
+make test         # All: Go + web hermetic + Playwright UI + Universe-B journeys (🎯T492)
 make test-go      # go test ./...
 make test-web     # node web/scripts/chat_events_test.js
 make test-ui      # Playwright perceptual chat UI (mocked WS)

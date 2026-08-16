@@ -4,9 +4,12 @@
 interaction with the product that runs end-to-end and must interact with an agent** (overseer and/or fleet worker). Grepping docs, pure helper unit tests,
 and hermetic UI mocks are **not** journeys.
 
-**Standing product doctrine (🎯T101):** this suite is the **preferred E2E net**
-for owner-visible chat/fleet behaviour. It is **distinct from** hermetic
-`make test` (Go/Node/Playwright mocks — no Grok, no isolate).
+**Standing product doctrine (🎯T101 / 🎯T492):** this suite is the **preferred E2E net**
+for owner-visible chat/fleet behaviour and is part of `make test`. Hermetic
+Go/Node/Playwright mocks are **distinct from** journeys (no Grok, no isolate)
+but they are not a substitute. Needing a signed-in provider CLI is a
+dependency of `make test`, not a reason to omit this net. A missing
+provider is OUTAGE (exit 2), not skip-and-green.
 
 **Agent interaction:** each journey drives a real isolate (`jevonsd` + Grok ACP
 or fleet tools that reach an agent). After a **successful** live run, caching
@@ -50,7 +53,7 @@ go run ./scripts/journey-suite -port 0        # ephemeral port
 go run ./scripts/journey-suite -bin ./bin/jevonsd
 ```
 
-Needs: Grok CLI signed in (same as daily jevonsd). Not part of default `make test`.
+Needs: Grok CLI signed in (same as daily jevonsd). Part of `make test` (🎯T492).
 
 Hermetic meta-checks (doc inventory, port guard) live outside this section:
 `scripts/docratchet/` and `scripts/journey-suite/portguard/` — **not** journeys.

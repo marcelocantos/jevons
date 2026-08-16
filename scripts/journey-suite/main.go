@@ -23,7 +23,8 @@
 // journeys spawn — on one backend (🎯T282), so `PROVIDER=claude` is the
 // live evidence that Jevons can run an all-Claude fleet.
 //
-// Not part of default `make test` (needs the provider CLI + network).
+// Part of `make test` (🎯T492). Needs the provider CLI + network; that is
+// a suite dependency, not a reason to omit the owner-visible net.
 package main
 
 import (

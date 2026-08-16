@@ -61,12 +61,36 @@ func TestJourneyDoctrineMarkers(t *testing.T) {
 			"must interact with an agent",
 			"13705",
 			"refuses",
+			"dependency of `make test`",
+			"OUTAGE",
 		}},
 	} {
 		for _, m := range doc.need {
 			if !strings.Contains(doc.body, m) {
 				t.Errorf("%s missing doctrine marker %q", doc.name, m)
 			}
+		}
+	}
+}
+
+// TestMakeTestRunsJourneys (🎯T492) fails if someone "helpfully" drops
+// journeys from `make test` because they need Grok. That need is a
+// suite dependency, not a reason to omit the gate.
+func TestMakeTestRunsJourneys(t *testing.T) {
+	mk := readRepo(t, "Makefile")
+	// The default `test` recipe must invoke test-journey. A comment is
+	// not enough — the dependency line is the gate.
+	if !strings.Contains(mk, "test: test-go test-web test-ui test-journey") {
+		t.Fatal("Makefile `test` must run test-journey (🎯T492); a gate's dependency is not a reason to omit the gate")
+	}
+	agents := readRepo(t, "AGENTS.md")
+	for _, want := range []string{
+		"dependency of the suite",
+		"not a reason to omit the gate",
+		"T492",
+	} {
+		if !strings.Contains(agents, want) {
+			t.Errorf("AGENTS.md missing T492 doctrine marker %q", want)
 		}
 	}
 }

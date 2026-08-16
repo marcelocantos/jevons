@@ -306,8 +306,9 @@ test-live-suite:
 	go run ./scripts/live-suite -skip-overseer
 
 # Isolated owner-chat user journeys (separate port + state dir + MCP name).
-# Does NOT touch daily-driver stream. Needs the selected provider's CLI
-# (Grok by default); not in default `test`.
+# Does NOT touch daily-driver stream. Part of `make test` (🎯T492): needing
+# a signed-in provider CLI is a dependency of the suite, not a reason to
+# omit the owner-visible net. Missing provider is OUTAGE (exit 2), not skip.
 #
 # PROVIDER selects the backend for the whole isolate — overseer and every
 # agent the journeys spawn (🎯T282), e.g.:
@@ -316,7 +317,8 @@ test-live-suite:
 test-journey: jevonsd
 	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER))
 
-test: test-go test-web test-ui
+# Full product net (🎯T492): hermetic layers first, then Universe-B journeys.
+test: test-go test-web test-ui test-journey
 
 # ── Fleet spend (🎯T392.6) ──────────────────────────
 # Decomposes spend into the levers that act on it:
