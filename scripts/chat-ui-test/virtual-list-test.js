@@ -159,7 +159,9 @@ function startServer() {
     // "⋯ n steps"). Bubble height includes the outside timestamp chrome.
     const marker = await page.evaluate(() => {
       if (typeof window.resetTranscript === 'function') window.resetTranscript();
-      window.addMsg('jevons', 'before marker\n' + 'x'.repeat(40));
+      const probe = window.addMsg('jevons', '🎯T119.3 context chrome must survive page-up\n' + 'x'.repeat(40));
+      if (typeof window.layoutMsg === 'function') window.layoutMsg(probe);
+      window._t1193Probe = probe;
       if (typeof window.startTurn === 'function') window.startTurn();
       if (typeof window.addTurnItem === 'function') {
         window.addTurnItem('tool-use', 'Read');
@@ -190,6 +192,8 @@ function startServer() {
       const ui = user ? user.el._vIndex : -1;
       const userH = ui >= 0 ? window.__transcriptLayout.heights[ui] : 0;
       const userBox = user && user.el ? user.el.getBoundingClientRect().height : 0;
+      const parked = window._t1193Probe;
+      const probeRow = rows.find((r) => r && r.el === parked);
       return {
         markerRows: markers.length,
         fakeMsgMarkers: fake,
@@ -197,6 +201,9 @@ function startServer() {
         userH: userH,
         userBox: userBox,
         chrome: window.VirtualList && window.VirtualList.BUBBLE_BOTTOM_CHROME_PX,
+        parkedSameNode: !!(parked && probeRow && probeRow.el === parked),
+        probeConnected: !!(parked && parked.isConnected),
+        probeIsMsgRebuild: !!(parked && probeRow && probeRow.el && probeRow.el !== parked),
       };
     });
     if (marker.markerRows < 1) failures.push('expected a turn-marker row, got ' + marker.markerRows);
@@ -210,6 +217,11 @@ function startServer() {
     if (marker.chrome && marker.userBox > 0 && marker.userH < marker.userBox + marker.chrome - 1) {
       failures.push('user row height missing timestamp chrome ' + JSON.stringify({
         userH: marker.userH, userBox: marker.userBox, chrome: marker.chrome,
+      }));
+    }
+    if (!marker.parkedSameNode || marker.probeIsMsgRebuild) {
+      failures.push('page-up rebuilt the jevons bubble instead of parking it ' + JSON.stringify({
+        parkedSameNode: marker.parkedSameNode, probeIsMsgRebuild: marker.probeIsMsgRebuild,
       }));
     }
 

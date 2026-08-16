@@ -1342,10 +1342,13 @@
   const BUBBLE_BOTTOM_CHROME_PX = 19;
 
   /**
-   * Layout height of one transcript row: border-box plus reserved
-   * bottom chrome. `.msg-time` sits outside the border box (top:100%),
-   * so a raw getBoundingClientRect().height lets the next row land on
-   * the timestamp. Turn-markers have no chrome.
+   * Layout height of one transcript row: border-box plus overflowing
+   * chrome. `.msg-time` sits at top:100%; `.msg-context-tab` sits above
+   * the top edge (translateY(-50%)). Absolute siblings ignore CSS
+   * margin, so the prefix must own that ink. Turn-markers have none.
+   *
+   * Do NOT pass a minHeight-inflated box here — settle must measure
+   * the natural border-box or chrome is stacked on every remat.
    */
   function rowLayoutHeight(borderBoxHeight, opts) {
     const box = Number(borderBoxHeight);
@@ -1357,16 +1360,22 @@
     }
     const time = Number(o.timeOverflowPx);
     const overflow = Number.isFinite(time) && time > 0 ? time : 0;
+    const tab = Number(o.tabOverflowPx);
+    const above = Number.isFinite(tab) && tab > 0 ? tab : 0;
     const mb = Number(o.marginBottomPx);
-    const chrome = Number.isFinite(mb) && mb > 0 ? mb : BUBBLE_BOTTOM_CHROME_PX;
+    const mt = Number(o.marginTopPx);
+    const bottomChrome = Number.isFinite(mb) && mb > 0 ? mb : BUBBLE_BOTTOM_CHROME_PX;
+    const topChrome = Number.isFinite(mt) && mt > 0 ? mt : 0;
     if (role === 'user' || role === 'jevons' || role === '') {
-      return h + Math.max(overflow, chrome);
+      return h + Math.max(overflow, bottomChrome) + Math.max(above, topChrome);
     }
-    return h + overflow;
+    return h + overflow + above;
   }
 
   function isParkedListElement(role) {
-    return String(role || '') === 'turn-marker';
+    // Every attached row parks its real node. Rebuild via buildMsg drops
+    // context chrome and locks estimate minHeight as empty bubble space.
+    return !!role || role === '';
   }
 
   function createTranscriptLayout(opts) {

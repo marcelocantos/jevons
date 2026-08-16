@@ -1695,25 +1695,43 @@ function applyRowHeight(index, newH) {
 }
 function noteRowHeightChange(el) {
   if (!el || el._vIndex == null) return;
-  const box = el.getBoundingClientRect ? el.getBoundingClientRect().height : el.offsetHeight;
+  if (el.classList && el.classList.contains('virt-shell')) return;
+  const boxRect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+  const box = boxRect ? boxRect.height : el.offsetHeight;
   const row = transcriptRows[el._vIndex];
   const role = row ? row.role : (el.classList && el.classList.contains('user') ? 'user'
     : (el.classList && el.classList.contains('turn-marker') ? 'turn-marker' : 'jevons'));
+  const view = el.ownerDocument && el.ownerDocument.defaultView;
+  const csOf = function (node) {
+    return (view && view.getComputedStyle) ? view.getComputedStyle(node) : null;
+  };
   let timeOverflow = 0;
-  const time = el.querySelector && el.querySelector('.msg-time');
-  if (time && time.getBoundingClientRect && el.getBoundingClientRect) {
-    const cs = time.ownerDocument && time.ownerDocument.defaultView
-      && time.ownerDocument.defaultView.getComputedStyle
-      ? time.ownerDocument.defaultView.getComputedStyle(time) : null;
-    if (!cs || cs.display !== 'none') {
-      timeOverflow = Math.max(0, time.getBoundingClientRect().bottom - el.getBoundingClientRect().bottom);
+  let tabOverflow = 0;
+  if (boxRect) {
+    const extras = el.querySelectorAll ? el.querySelectorAll('.msg-time, .msg-context-tab') : [];
+    for (let i = 0; i < extras.length; i++) {
+      const node = extras[i];
+      const cs = csOf(node);
+      if (cs && cs.display === 'none') continue;
+      const r = node.getBoundingClientRect();
+      if (node.classList && node.classList.contains('msg-time')) {
+        timeOverflow = Math.max(timeOverflow, r.bottom - boxRect.bottom);
+      } else {
+        tabOverflow = Math.max(tabOverflow, boxRect.top - r.top);
+      }
     }
   }
-  const mb = (el.ownerDocument && el.ownerDocument.defaultView && el.ownerDocument.defaultView.getComputedStyle)
-    ? parseFloat(el.ownerDocument.defaultView.getComputedStyle(el).marginBottom) || 0
-    : 0;
+  const ecs = csOf(el);
+  const mb = ecs ? parseFloat(ecs.marginBottom) || 0 : 0;
+  const mt = ecs ? parseFloat(ecs.marginTop) || 0 : 0;
   const h = (typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
-    ? VirtualList.rowLayoutHeight(box, { role: role, timeOverflowPx: timeOverflow, marginBottomPx: mb })
+    ? VirtualList.rowLayoutHeight(box, {
+      role: role,
+      timeOverflowPx: timeOverflow,
+      tabOverflowPx: tabOverflow,
+      marginBottomPx: mb,
+      marginTopPx: mt,
+    })
     : box;
   if (h > 0) applyRowHeight(el._vIndex, h);
 }
@@ -1808,7 +1826,6 @@ function attachTranscriptRow(index, opts) {
     msgsCanvas.appendChild(row.el);
     return row.el;
   }
-  if (row.role === 'turn-marker') return null;
   const o = opts || {};
   const lazy = o.lazy !== false;
   const el = buildMsg(row.role, row.text, row.when, {
@@ -7202,9 +7219,15 @@ function rematerializeMsg(el) {
   // is a common scrollHeight micro-oscillation under track pin.
   const settle = () => {
     if (!el.isConnected || el.classList.contains('virt-shell')) return;
+    // Measure the natural border-box. A leftover estimate/chrome minHeight
+    // floors the rect and then noteRowHeightChange stacks another 19px —
+    // page-up/down grew empty space inside the bubble.
+    const heldMin = el.style.minHeight;
+    el.style.minHeight = '';
     // 🎯T350: fractional measure — offsetHeight rounds to int, and a rounded
     // lock BELOW the natural height leaves material ≠ shell by the fraction.
     const nh = el.getBoundingClientRect().height;
+    if (heldMin && !(nh > 0)) el.style.minHeight = heldMin;
     const nw = msgsContentWidth();
     // 🎯T351: lock at the whole-pixel CEILING of the natural height (never
     // below it — T350 still holds). Scroll offsets are integer-quantized, so

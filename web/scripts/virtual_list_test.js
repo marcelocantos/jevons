@@ -540,8 +540,21 @@ test('T119.3 rowLayoutHeight reserves timestamp chrome; turn-markers do not', fu
   assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons', timeOverflowPx: 24 }), 292,
     'a taller overflow wins over the 19px reserve');
   assert.strictEqual(VL.rowLayoutHeight(13.2, { role: 'turn-marker' }), 13.2);
+  assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons', tabOverflowPx: 10, marginTopPx: 10 }), 297);
   assert.ok(VL.isParkedListElement('turn-marker'));
-  assert.ok(!VL.isParkedListElement('jevons'));
+  assert.ok(VL.isParkedListElement('jevons'), 'rebuild drops context chrome — park every row');
+});
+
+test('T119.3 remat must not stack chrome on an inflated minHeight box', function () {
+  // Natural box 268. A leftover estimate/chrome lock of 287 must not become
+  // the next prefix (287+19). Settle measures with minHeight cleared.
+  const natural = 268;
+  const inflated = VL.rowLayoutHeight(natural, { role: 'jevons' });
+  assert.strictEqual(inflated, 287);
+  const stacked = VL.rowLayoutHeight(inflated, { role: 'jevons' });
+  assert.ok(stacked > inflated, 'measuring a chrome-inflated box would stack');
+  assert.strictEqual(VL.rowLayoutHeight(natural, { role: 'jevons' }), 287,
+    'natural box + chrome is stable');
 });
 
 test('T119.3 index.html parks turn-markers and measures chrome into the prefix', function () {
@@ -549,9 +562,12 @@ test('T119.3 index.html parks turn-markers and measures chrome into the prefix',
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.indexOf('rowLayoutHeight') >= 0, 'live measure uses rowLayoutHeight');
-  assert.ok(html.indexOf('isParkedListElement') >= 0, 'detach parks turn-markers');
-  assert.ok(/if \(row\.role === 'turn-marker'\) return null/.test(html),
-    'attach never rebuilds a turn-marker via buildMsg');
+  assert.ok(html.indexOf('isParkedListElement') >= 0, 'detach parks real nodes');
+  assert.ok(/row\.el && !row\.el\.isConnected/.test(html),
+    'attach re-homes a parked node instead of buildMsg');
+  assert.ok(/el\.style\.minHeight = ''/.test(html) &&
+    /noteRowHeightChange/.test(html),
+    'remat settle clears minHeight before measuring');
   assert.ok(/#messages-canvas > \.turn-marker/.test(html),
     'canvas turn-markers are absolutely positioned list rows');
 });
@@ -1214,7 +1230,7 @@ test('index.html wires T350 fractional freeze + gated expansion pins', function 
     'virtualize read phase uses fractional rect height');
   assert.ok(/function dematerializeMsg\(el, knownHeight\)[\s\S]{0,800}getBoundingClientRect\(\)\.height/.test(html),
     'demat fallback measure is fractional');
-  assert.ok(/const settle = \(\) => \{[\s\S]{0,400}getBoundingClientRect\(\)\.height/.test(html),
+  assert.ok(/const settle = \(\) => \{[\s\S]{0,900}getBoundingClientRect\(\)\.height/.test(html),
     'remat settle measure is fractional');
   assert.ok(!/const nh = el\.offsetHeight/.test(html),
     'settle must not round via offsetHeight');
@@ -1309,7 +1325,7 @@ test('index.html wires T351 whole-pixel geometry', function () {
     'renderBody re-snaps after repaint');
   assert.ok(/function applyClipState\(d, clipped\)[\s\S]{0,900}scheduleRowSnap/.test(html),
     'clip toggle re-snaps');
-  assert.ok(/const settle = \(\) => \{[\s\S]{0,900}snappedRowLockPx/.test(html),
+  assert.ok(/const settle = \(\) => \{[\s\S]{0,1600}snappedRowLockPx/.test(html),
     'remat settle locks at the snapped ceiling');
   // Row-level margins must be whole pixels — margins escape the box snap.
   assert.ok(!/\.msg\.user, \.msg\.jevons \{ margin-bottom: 1\.2rem/.test(html),
@@ -1394,7 +1410,7 @@ test('index.html wires T363 anchor preservation on every height-writing pass', f
   assert.ok(/function flushRowSettles\(\)[\s\S]{0,600}withAnchorPreservedScroll/.test(html),
     'batched settle pass is anchored');
   assert.ok(/function queueRowSettle\(fn\)/.test(html) &&
-    /const settle = \(\) => \{[\s\S]{0,1400}queueRowSettle\(settle\);/.test(html),
+    /const settle = \(\) => \{[\s\S]{0,2000}queueRowSettle\(settle\);/.test(html),
     'per-row settle rAFs batch into one anchored flush');
   // Tracking pins to the live end — a second scrollTop writer would fight it.
   assert.ok(/function withAnchorPreservedScroll\(fn\)[\s\S]{0,400}isTracking\(\)/.test(html),
