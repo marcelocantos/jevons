@@ -186,7 +186,20 @@ func (e TurnEvidence) Positive() bool {
 // The send outcome is checked first and is NECESSARY — a refused or merely
 // queued send cannot have begun a turn — but passing it only earns the right
 // to look at the agent. Evidence about the agent decides.
+//
+// 🎯T429 — WITH ONE EXCEPTION, AND IT IS THE ONE THIS TARGET IS ABOUT. A send
+// error that merely failed to VERIFY a submission is not a refusal: claudia's
+// submit loop returns `turn not submitted: composer state=…` from its reading of
+// a captured frame, and the live specimens are payloads the receiver was already
+// working from. Letting that short-circuit the evidence here would tear down a
+// seat whose brief demonstrably landed — releaseUnbriefedSeat stops the process
+// AND removes the registry row — so an unverified submit gets the same treatment
+// as a clean one: the agent's own records decide, and their absence is still a
+// failure. A send that positively disproves delivery still short-circuits.
 func ConfirmTurnBegan(status string, sendErr error, ev TurnEvidence) error {
+	if sendErr != nil && !ClassifySendError(sendErr).DisprovesDelivery() && ev.Positive() {
+		return nil
+	}
 	if err := ConfirmSendBeganTurn(status, sendErr); err != nil {
 		return err
 	}
@@ -292,6 +305,17 @@ func (s *Server) watchAgentTurn(name string) turnWatch {
 // payload asks the watch to recognise THIS message in the transcript rather
 // than settling for evidence that the agent stirred (🎯T416).
 func (s *Server) watchAgentTurnFor(name, payload string) turnWatch {
+	return s.watchAgentTurnForWindow(name, payload, turnConfirmWindow())
+}
+
+// watchAgentTurnForWindow is watchAgentTurnFor with the wait named by the
+// caller. A caller that has ALREADY waited — jevons_event_push, which blocks on
+// the target's reply — wants the records read now rather than waited for again
+// (🎯T429 clause 5), and a window at or below zero makes the await a single
+// immediate scan. This is not a knob on the confirmation window that 🎯T416
+// clause 10 forbids widening: it only ever shortens, and the send path still
+// passes turnConfirmWindow().
+func (s *Server) watchAgentTurnForWindow(name, payload string, window time.Duration) turnWatch {
 	s.mu.Lock()
 	witness := s.observeTurnWitness
 	s.mu.Unlock()
@@ -304,7 +328,7 @@ func (s *Server) watchAgentTurnFor(name, payload string) turnWatch {
 			obs = proc
 		}
 	}
-	return observeTurnFor(obs, payload, turnConfirmWindow())
+	return observeTurnFor(obs, payload, window)
 }
 
 // observeTurn is the product watch for the spawn path: agent activity only.
@@ -467,10 +491,12 @@ func (s *Server) releaseUnbriefedSeat(name string, existed bool) bool {
 	if existed {
 		return false
 	}
-	// 🎯T435: the seat leaving the registry is accounted for.
+	// 🎯T435: the seat leaving the registry is accounted for. A seat retired
+	// here never began a turn, so its row vanishing is exactly the kind of
+	// diff a watcher would otherwise read as an agent lost mid-flight.
 	if _, err := s.RemovalAccount().Remove(s.registry, name, fleetlog.Removal{
 		Reason: fleetlog.ReasonUnbriefedSeat,
-		Detail: "opening brief never landed",
+		Detail: "retired a seat whose opening brief never landed (🎯T433)",
 	}); err != nil {
 		slog.Warn("unbriefed seat left registered after failed opening brief",
 			"component", compAgentLifecycle, "name", name, "err", err)

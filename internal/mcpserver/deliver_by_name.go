@@ -154,12 +154,18 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 
 	// 🎯T452: the destination this call actually resolved to, which is not
 	// always the name it was addressed by — the overseer arm answers for every
-	// name that resolves to the owner-chat seat.
+	// name that resolves to the owner-chat seat, and that resolution consults a
+	// session id. Everything below delivers into `dest`, so `dest` is what the
+	// payload's own identity header has to agree with.
 	overseerArm := s.isOverseerAgent(name)
 	dest := name
 	if overseerArm {
 		dest = s.overseerSeatName()
 	}
+	// A message whose header names someone else is not a message to retry. It
+	// would hand this seat another agent's name, parent and target, in the
+	// second person, through the one instrument 🎯T425 told every agent to
+	// trust without checking. Refusing is loud and delivers nothing.
 	if err := CheckBriefAddressing(dest, text); err != nil {
 		slog.Error("🎯T452 refused a misaddressed brief",
 			"component", "agent_send",
@@ -240,9 +246,11 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 	// a payload that appears is confirmed, and one that does not is reported
 	// unconfirmed rather than delivered — never as the defect, because a note
 	// legitimately waiting behind an owner turn looks identical from here.
-	// 🎯T428. Every notification source arrives here, so the channel is
-	// where a batch the overseer already holds is refused. Owner turns
-	// are exempt: the owner may say the same thing twice and mean it twice.
+
+	// 🎯T428. Every notification source — sentinel, RSI coach, fleet health,
+	// worker report notify, jevons_event_push — arrives here, so the channel
+	// is where a batch the overseer already holds is refused. Owner turns are
+	// exempt: the owner may say the same thing twice and mean it twice.
 	var ticket notifyReplayTicket
 	if origin != OriginOwner {
 		var dec notifyReplayDecision
@@ -267,6 +275,8 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 
 	watch := s.watchAgentTurnFor(name, text)
 	if err := deliver(text, origin); err != nil {
+		// The batch never reached the seam, so remembering it would refuse the
+		// retry that is the correct response to this failure.
 		ticket.Abandon()
 		slog.Warn("agent_send",
 			"component", "agent_send",
@@ -279,7 +289,14 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 	}
 
 	ev := watch()
+
+	// 🎯T428 seals on the RECEIVER's records, never on deliver returning nil:
+	// the seam accepting text is a statement about the notify queue. A user
+	// message carrying the payload, a queue record draining it into the running
+	// turn, or an enqueue record holding it behind one all say the overseer has
+	// it (🎯T416 / 🎯T429); anything else leaves the batch retryable.
 	ticket.Settle(ev.PayloadSeen || ev.PayloadEnteredTurn || ev.PayloadQueued)
+
 	outcome := ClassifySendOutcome(FlightUnknown, ev)
 	res := agentSendResult{
 		Status:  "sent",

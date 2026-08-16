@@ -16,6 +16,17 @@ import (
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
+// undeliverableQueueError is what a sender is told when the daemon could not
+// write the message to its own queue (🎯T418). It is an error rather than a
+// "queued" status on purpose: the whole value of holding a message is that
+// something holds it, and a queue that failed to accept it is holding nothing.
+func undeliverableQueueError(name string, err error) error {
+	return fmt.Errorf(
+		"%q has a turn in flight and the daemon could not hold this message for it (%w). "+
+			"NOT DELIVERED and NOT QUEUED — re-send it when that agent is idle, or with interrupt=true",
+		name, err)
+}
+
 // agentSendResult is the outcome of sendToAgent (🎯T111.1).
 type agentSendResult struct {
 	// Status: sent | queued | interrupted_sent | interrupted_queued | rehydrated_sent
@@ -38,29 +49,44 @@ func isPromptInFlight(err error) bool {
 	return agenterr.IsPromptBusy(err)
 }
 
-// enqueueAgentSend appends text for delivery after the current turn.
-// Returns total pending for name.
+// enqueueAgentSend appends text for delivery after the current turn and
+// returns the total pending for name.
+//
+// 🎯T418: the error is returned rather than logged, and every caller reports it
+// instead of answering "queued". A daemon that could not write the queue is not
+// holding the message, and "queued (N pending) … held by the daemon" is then a
+// claim about a store that does not contain it.
 func (s *Server) enqueueAgentSend(name, text string) (int, error) {
 	_, depth, err := s.sendQueue().Append(name, text, time.Now())
 	return depth, err
 }
 
-// dequeueAgentSend pops the oldest pending message, or "" if empty.
-func (s *Server) dequeueAgentSend(name string) string {
+// dequeueAgentSend pops the oldest pending message, or "" if empty. An
+// unreadable queue is reported as empty AND logged: the drain runs on an event,
+// with nobody to return an error to, so the alternative to logging is silence.
+func (s *Server) dequeueAgentSend(name string) sendq.Entry {
 	e, ok, err := s.sendQueue().PopFront(name)
-	if err != nil || !ok {
-		return ""
+	if err != nil {
+		slog.Error("agent send queue: unreadable; nothing drained",
+			"component", "agent_send", "name", name, "err", err)
+		return sendq.Entry{}
 	}
-	return e.Text
+	if !ok {
+		return sendq.Entry{}
+	}
+	return e
 }
 
-// pendingAgentSends returns queue depth for name.
+// pendingAgentSends returns queue depth for name. Zero over an unreadable queue
+// is a number this function cannot stand behind, so it says so in the log
+// rather than letting a status line read it as "nothing waiting".
 func (s *Server) pendingAgentSends(name string) int {
-	n, err := s.sendQueue().Depth(name)
+	depth, err := s.sendQueue().Depth(name)
 	if err != nil {
-		return 0
+		slog.Error("agent send queue: depth unreadable",
+			"component", "agent_send", "name", name, "err", err)
 	}
-	return n
+	return depth
 }
 
 // AgentDeliverResult is the public outcome of DeliverAgentMessage (🎯T275).
@@ -208,7 +234,14 @@ func logAgentSendOutcome(name string, res agentSendResult, rehydrated bool, outc
 //
 // interrupted distinguishes the two wire statuses for a begun turn; rehydrated
 // the two for a fresh process. Neither changes the decision — only its name.
-func (s *Server) reportSendOutcome(name string, outcome SendOutcome, flight TurnFlight, ev TurnEvidence, rehydrated, interrupted bool) (agentSendResult, error) {
+//
+// transportErr is the send call's own error where there was one, and it is
+// evidence about the CALL, never about the receiver (🎯T429). It is carried
+// through so the operator sees both accounts — what the harness claimed and what
+// the receiver's records showed — because the whole defect is the first being
+// reported as though it were the second.
+func (s *Server) reportSendOutcome(name string, outcome SendOutcome, flight TurnFlight, ev TurnEvidence, rehydrated, interrupted bool, transportErr error) (agentSendResult, error) {
+	claim := describeTransportClaim(transportErr)
 	switch outcome {
 	case OutcomeBegun:
 		msg := fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)
@@ -217,6 +250,21 @@ func (s *Server) reportSendOutcome(name string, outcome SendOutcome, flight Turn
 			msg = fmt.Sprintf("Interrupted in-flight turn on %q and sent the new message.", name)
 		case rehydrated:
 			msg += " (rehydrated after dead/stopped process)"
+		}
+		if claim != "" {
+			// The false negative, caught in the act and counted. This line is
+			// the only standing measurement of how often the harness condemns a
+			// delivery that happened, and it is what tells the claudia side
+			// (clause 3) whether its submit loop is getting better.
+			slog.Warn("🎯T429 transport claimed failure for a payload the receiver holds",
+				"component", "agent_send",
+				"name", name,
+				"transport_claim", claim,
+				"evidence", ev.Detail,
+			)
+			msg += fmt.Sprintf(
+				" (the send transport reported %q — a claim about its own pane capture, "+
+					"contradicted by %s)", claim, evidenceDetail(ev))
 		}
 		res := agentSendResult{Status: sentStatus(rehydrated, interrupted), Message: msg, Queued: s.pendingAgentSends(name)}
 		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
@@ -231,16 +279,35 @@ func (s *Server) reportSendOutcome(name string, outcome SendOutcome, flight Turn
 		// the caller must not read this as delivered. Not a defect either:
 		// after a restart the daemon has no record of a turn it never saw
 		// start, and a healthy send to a busy agent looks exactly like this.
+		msg := fmt.Sprintf(
+			"Message handed to %q but NOT confirmed as a turn: %s. "+
+				"This daemon has no record of whether %[1]q already had a turn running "+
+				"(that record does not survive a restart), so it cannot tell a message waiting "+
+				"behind a live turn from one left sitting in the composer.",
+			name, evidenceDetail(ev))
+		if claim != "" {
+			msg += fmt.Sprintf(
+				" The send transport reported %q — that is its reading of a terminal frame, "+
+					"not an observation of %[2]q, and the same reading has condemned payloads "+
+					"the receiver was already working from.", claim, name)
+		}
+		// 🎯T429 clause 4. What used to sit here was retry advice, and a retry
+		// on this verdict is precisely the wrong move: nine composer copies were
+		// stacked that way on 2026-08-10, each re-send behind a message that had
+		// in fact landed. An unknown is resolved by looking, not by sending
+		// again, so the instrument that can decide it is named instead.
+		msg += fmt.Sprintf(
+			" DO NOT re-send, and do not retry with interrupt=true, on this verdict — "+
+				"a re-send on a false negative stacks a second copy in %[1]q's composer. "+
+				"Decide it by reading %[1]q's own session records (jevons_transcript_read): "+
+				"a user message carrying the payload, or a queue-operation "+
+				"enqueue/dequeue/remove/popAll or queued_command attachment carrying it, "+
+				"means it was delivered. Absence at user-message level alone does not mean lost.",
+			name)
 		res := agentSendResult{
-			Status: "delivered_unconfirmed",
-			Message: fmt.Sprintf(
-				"Message handed to %q but NOT confirmed as a turn: %s. "+
-					"This daemon has no record of whether %[1]q already had a turn running "+
-					"(that record does not survive a restart), so it cannot tell a message waiting "+
-					"behind a live turn from one left sitting in the composer. Treat as undelivered "+
-					"until the agent responds; confirm by reading its transcript for the payload.",
-				name, evidenceDetail(ev)),
-			Queued: s.pendingAgentSends(name),
+			Status:  "delivered_unconfirmed",
+			Message: msg,
+			Queued:  s.pendingAgentSends(name),
 		}
 		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
 		return res, nil
@@ -267,14 +334,25 @@ func (s *Server) reportSendOutcome(name string, outcome SendOutcome, flight Turn
 			"outcome", string(outcome),
 			"flight", flight.String(),
 			"evidence", ev.Detail,
+			"transport_claim", claim,
 		)
+		// 🎯T429: this verdict is still reachable, and reaching it is the point.
+		// It is earned from a POSITIVE observation of the receiver — its session
+		// file was never created, or it was known idle and its transcript never
+		// took the payload — and not from the send call having returned an error.
+		// A fix that answered "unknown" everywhere would be the same defect
+		// pointing the other way.
+		how := "the send call succeeded"
+		if claim != "" {
+			how = fmt.Sprintf("the send transport reported %q, which agrees with what was observed", claim)
+		}
 		return agentSendResult{}, fmt.Errorf(
-			"message not submitted to %q: the send call succeeded and %s. "+
+			"message not submitted to %q: %s and %s. "+
 				"The payload was handed to an idle agent and never became a turn — "+
 				"pasted into the composer without a submit, not refused by the provider "+
 				"and not an empty reply. The text is in %[1]q's composer: re-sending will "+
 				"stack a second copy behind it",
-			name, evidenceDetail(ev))
+			name, how, evidenceDetail(ev))
 	}
 }
 
@@ -337,7 +415,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		darkStream := s.EnsureAgentEventsWired(name)
 		n, qerr := s.enqueueAgentSend(name, text)
 		if qerr != nil {
-			return agentSendResult{}, fmt.Errorf("NOT DELIVERED and NOT QUEUED: %w", qerr)
+			return agentSendResult{}, undeliverableQueueError(name, qerr)
 		}
 		msg := fmt.Sprintf(
 			"busy: %q has a turn in flight; message queued (%d pending) for delivery when it ends — "+
@@ -390,10 +468,22 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		}
 		ev := watch()
 		outcome := ClassifySendOutcome(flight, ev)
-		return s.reportSendOutcome(name, outcome, flight, ev, rehydrated, false)
+		return s.reportSendOutcome(name, outcome, flight, ev, rehydrated, false, nil)
 	}
 
 	if !isPromptInFlight(err) {
+		// 🎯T429: ask the error the narrow question first — does it DISPROVE
+		// delivery? A transport that could not verify a submission has not
+		// observed the receiver at all, and returning its claim as a failure is
+		// how a payload the receiver was already working from came back to the
+		// caller as `turn not submitted`. Where the payload may have landed, the
+		// same instrument the success path uses decides: the watch is already
+		// open, taken from a pre-send baseline, and it reads the RECEIVER.
+		if claim := ClassifySendError(err); !claim.DisprovesDelivery() && confirm == confirmHere {
+			ev := watch()
+			outcome := ClassifySendOutcome(flight, ev)
+			return s.reportSendOutcome(name, outcome, flight, ev, rehydrated, false, err)
+		}
 		// 🎯T237: structured class + owner-visible copy (not bare Internal error).
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
 		if !class.IsFailure() {
@@ -416,7 +506,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 			// Still queue so the nudge is not lost; surface both facts.
 			n, qerr := s.enqueueAgentSend(name, text)
 			if qerr != nil {
-				return agentSendResult{}, fmt.Errorf("NOT DELIVERED and NOT QUEUED: %w", qerr)
+				return agentSendResult{}, undeliverableQueueError(name, qerr)
 			}
 			res := agentSendResult{
 				Status: "interrupted_queued",
@@ -439,11 +529,19 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		if err2 := trySend(); err2 == nil {
 			ev := watch2()
 			outcome := ClassifySendOutcome(FlightIdle, ev)
-			return s.reportSendOutcome(name, outcome, FlightIdle, ev, rehydrated, true)
+			return s.reportSendOutcome(name, outcome, FlightIdle, ev, rehydrated, true, nil)
+		} else if !isPromptInFlight(err2) && !ClassifySendError(err2).DisprovesDelivery() {
+			// 🎯T429, on the interrupt arm: the same non-observation, and the
+			// same rule. An interrupt that succeeded leaves the agent known
+			// idle, so the strict verdict is available here — but it has to be
+			// earned from the receiver, not inherited from the transport.
+			ev := watch2()
+			outcome := ClassifySendOutcome(FlightIdle, ev)
+			return s.reportSendOutcome(name, outcome, FlightIdle, ev, rehydrated, true, err2)
 		} else if isPromptInFlight(err2) {
 			n, qerr := s.enqueueAgentSend(name, text)
 			if qerr != nil {
-				return agentSendResult{}, fmt.Errorf("NOT DELIVERED and NOT QUEUED: %w", qerr)
+				return agentSendResult{}, undeliverableQueueError(name, qerr)
 			}
 			res := agentSendResult{
 				Status: "interrupted_queued",
@@ -474,7 +572,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 
 	n, qerr := s.enqueueAgentSend(name, text)
 	if qerr != nil {
-		return agentSendResult{}, fmt.Errorf("NOT DELIVERED and NOT QUEUED: %w", qerr)
+		return agentSendResult{}, undeliverableQueueError(name, qerr)
 	}
 	res := agentSendResult{
 		Status: "queued",
@@ -518,20 +616,25 @@ func (s *Server) liveSender(name string) (agentSender, bool) {
 // drainAgentSendQueue delivers the next queued message after a terminal
 // stop. Called from the agent event sink (🎯T111.1).
 func (s *Server) drainAgentSendQueue(name string) {
-	entry, ok, err := s.sendQueue().PopFront(name)
-	if err != nil || !ok {
+	entry := s.dequeueAgentSend(name)
+	text := entry.Text
+	if text == "" {
 		return
 	}
-	text := entry.Text
 	proc, live := s.liveSender(name)
 	if !live {
-		// Put back at the head, keeping the acceptance age (🎯T418).
-		if perr := s.sendQueue().PushFront(name, entry); perr != nil {
-			slog.Error("agent send queue: process not alive AND the message could not be returned",
-				"component", "agent_send", "name", name, "err", perr)
-		} else {
-			slog.Warn("agent send queue: process not alive; re-queued", "name", name)
+		// Put back at the HEAD, keeping the age it was accepted with (🎯T418):
+		// appending it would put a message behind ones accepted after it, and
+		// re-stamping it would reset the age a stalled queue is visible in.
+		if err := s.sendQueue().PushFront(name, entry); err != nil {
+			slog.Error("agent send queue: process not alive AND the message could not be returned to the queue",
+				"component", "agent_send", "name", name, "err", err, "bytes", len(text))
+			s.notifyFleetHealth(fmt.Sprintf(
+				"UNDELIVERED: a queued message (%d bytes) for %q could not be delivered (no live process) and could not be "+
+					"written back to the daemon's queue (%v). It is not held anywhere — re-send it.", len(text), name, err))
+			return
 		}
+		slog.Warn("agent send queue: process not alive; re-queued", "name", name)
 		return
 	}
 	// The drain runs on a turn boundary, so the agent is idle by construction
@@ -540,18 +643,38 @@ func (s *Server) drainAgentSendQueue(name string) {
 	watch := s.watchAgentTurnFor(name, text)
 	if err := proc.Send(text); err != nil {
 		if isPromptInFlight(err) {
-			// Still busy (nested tool pause edge): put at front by re-queue.
-			_ = s.sendQueue().PushFront(name, sendq.Entry{Text: text, EnqueuedAt: time.Now()})
+			// Still busy (nested tool pause edge): put back at the front.
+			if perr := s.sendQueue().PushFront(name, entry); perr != nil {
+				slog.Error("agent send queue: agent still busy AND the message could not be returned to the queue",
+					"component", "agent_send", "name", name, "err", perr, "bytes", len(text))
+				s.notifyFleetHealth(fmt.Sprintf(
+					"UNDELIVERED: a queued message (%d bytes) for %q found it still busy and could not be written back to "+
+						"the daemon's queue (%v). It is not held anywhere — re-send it.", len(text), name, perr))
+			}
 			return
 		}
-		class := agenterr.Classify(err)
-		slog.Warn("agent send queue: drain send failed",
+		if ClassifySendError(err).DisprovesDelivery() {
+			class := agenterr.Classify(err)
+			slog.Warn("agent send queue: drain send failed",
+				"name", name,
+				"err", err,
+				"failure_class", class.String(),
+				"transient", class.IsTransient(),
+			)
+			return
+		}
+		// 🎯T429: the transport could not verify the submission. On the drain
+		// that is the most dangerous place to believe it — the message has
+		// already left the daemon's queue, so treating an unverified submit as a
+		// failure both loses the message from the queue and tells the fleet a
+		// delivery that happened did not. Fall through to the receiver's own
+		// records, which is what the rest of this function already reads.
+		slog.Warn("agent send queue: drain send unverified by transport; reading the receiver",
+			"component", "agent_send",
 			"name", name,
+			"claim", ClassifySendError(err).String(),
 			"err", err,
-			"failure_class", class.String(),
-			"transient", class.IsTransient(),
 		)
-		return
 	}
 	ev := watch()
 	if ClassifySendOutcome(FlightIdle, ev) != OutcomeBegun {
@@ -562,20 +685,13 @@ func (s *Server) drainAgentSendQueue(name string) {
 		// pending count, the payload's fate, and a fleet-health notice, so an
 		// undelivered queue is something an operator is told about rather than
 		// something they infer from an agent that never answers.
-		remaining := s.pendingAgentSends(name)
-		slog.Error("agent send queue: drained message not submitted",
-			"component", "agent_send",
-			"name", name,
-			"status", "not_submitted",
-			"evidence", ev.Detail,
-			"remaining", remaining,
-			"bytes", len(text),
-		)
-		s.notifyFleetHealth(fmt.Sprintf(
-			"Undelivered backlog on %q: a queued message (%d bytes) was pasted after its turn ended and never became a turn — %s. "+
-				"It is in that agent's composer, not lost, and %d more are still queued behind it. "+
-				"It has NOT been re-queued: that would deliver a duplicate once anything submits the first copy.",
-			name, len(text), evidenceDetail(ev), remaining))
+		//
+		// 🎯T447: which of the three things that reach here it actually is comes
+		// from what was read of the receiver, not from one sentence covering all
+		// of them. A payload the receiver's own queue records carry is WAITING,
+		// and saying "pasted and never became a turn" about it is how a message
+		// that had already landed was re-sent as a first delivery.
+		s.reportDrainedSendNotBegun(name, entry, ev, time.Now())
 		return
 	}
 	s.markAgentTurnBegan(name)

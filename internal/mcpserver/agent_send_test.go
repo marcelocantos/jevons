@@ -243,14 +243,16 @@ func TestDeliverToSenderHappyPath(t *testing.T) {
 
 func TestDrainAgentSendQueue(t *testing.T) {
 	s := &Server{}
-	s.enqueueAgentSend("po", "queued-msg")
+	if _, err := s.enqueueAgentSend("po", "queued-msg"); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
 	// Without registry, drain is a no-op for process but we still need Get.
 	// Manual drain via dequeue only.
 	got := s.dequeueAgentSend("po")
-	if got != "queued-msg" {
-		t.Fatalf("got %q", got)
+	if got.Text != "queued-msg" {
+		t.Fatalf("got %q", got.Text)
 	}
-	if s.dequeueAgentSend("po") != "" {
+	if s.dequeueAgentSend("po").Text != "" {
 		t.Fatal("expected empty")
 	}
 }

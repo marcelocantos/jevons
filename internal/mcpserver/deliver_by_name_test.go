@@ -152,8 +152,8 @@ func TestDeliverByNameBusyPeerQueuesNotDrops(t *testing.T) {
 	if res.Status != "queued" || res.Queued != 1 {
 		t.Fatalf("status=%q queued=%d want queued/1", res.Status, res.Queued)
 	}
-	if got := s.dequeueAgentSend("jevons-po"); got != "worker: blocked on review" {
-		t.Fatalf("queued text=%q — message was dropped", got)
+	if got := s.dequeueAgentSend("jevons-po"); got.Text != "worker: blocked on review" {
+		t.Fatalf("queued text=%q — message was dropped", got.Text)
 	}
 }
 
