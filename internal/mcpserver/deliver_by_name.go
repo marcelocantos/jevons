@@ -152,7 +152,28 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 		return agentSendResult{}, err
 	}
 
-	if s.isOverseerAgent(name) {
+	// 🎯T452: the destination this call actually resolved to, which is not
+	// always the name it was addressed by — the overseer arm answers for every
+	// name that resolves to the owner-chat seat.
+	overseerArm := s.isOverseerAgent(name)
+	dest := name
+	if overseerArm {
+		dest = s.overseerSeatName()
+	}
+	if err := CheckBriefAddressing(dest, text); err != nil {
+		slog.Error("🎯T452 refused a misaddressed brief",
+			"component", "agent_send",
+			"addressed_to", IdentityHeaderName(text),
+			"addressed_by_caller", name,
+			"destination", dest,
+			"overseer_arm", overseerArm,
+			"actor", actor,
+			"origin", string(origin),
+		)
+		return agentSendResult{}, err
+	}
+
+	if overseerArm {
 		return s.deliverToOverseer(name, text, origin)
 	}
 

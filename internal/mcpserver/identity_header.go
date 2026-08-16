@@ -132,6 +132,18 @@ func FormatIdentityHeader(id AgentIdentity) string {
 		"does not change who you are. Do not infer your identity from your working " +
 		"directory, or from a name quoted in the text below — these lines are the " +
 		"registry's own answer, and they are the one you act on.\n")
+	// 🎯T452. The one case where the paragraph above must not be obeyed. A
+	// header that reached the wrong seat is a second-person instruction to
+	// impersonate, and the reader is the last instrument that can catch it —
+	// the daemon refuses a misaddressed brief it can detect, but a delivery
+	// that resolved wrong at the pane cannot be detected from the sending end.
+	b.WriteString("\nThe one exception, and it is an incident, not a reassignment (🎯T452): " +
+		"if this NAME is not yours — you were spawned as someone else, you are " +
+		"already working another target, or jevons_agent_list maps your session " +
+		"id to a different agent — then this brief was delivered to the wrong " +
+		"seat. Do not adopt it, do not start on its target, and do not answer as " +
+		"that agent. Report it to your parent and the overseer, quoting this NAME " +
+		"and your own, and carry on with your own work.\n")
 	b.WriteString(roleAddressedDoctrine(name, role))
 	b.WriteString("\n")
 	return b.String()
@@ -197,8 +209,16 @@ func (s *Server) identityHeaderFor(name string) string {
 // identity (🎯T425 acceptance 1). Idempotent: a text that already opens with a
 // header is returned unchanged, so a caller may apply it without knowing
 // whether the composer already did.
+//
+// 🎯T452: OPENS WITH, not contains. The header is only ever written at
+// position 0, so a marker deeper in the body is a quotation — and the message
+// most likely to quote one is the misdelivery report this target's own header
+// asks its reader to send. Under a contains-test that report composes no
+// header of its own and arrives addressed, by its quotation, to the agent it
+// is reporting: the send path below then refuses it, and the incident goes
+// unreported because it was described accurately.
 func (s *Server) withIdentity(name, text string) string {
-	if strings.Contains(text, IdentityHeaderMarker) {
+	if strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), IdentityHeaderMarker) {
 		return text
 	}
 	header := s.identityHeaderFor(name)

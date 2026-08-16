@@ -746,17 +746,39 @@ func (s *Server) isOverseerAgent(name string) bool {
 	if name == "" {
 		return false
 	}
+	if strings.EqualFold(name, s.overseerName()) {
+		return true
+	}
 	if s.transcript != nil && s.transcript.GetID != nil && s.registry != nil {
 		sid := s.transcript.GetID()
 		if sid != "" {
 			if def := s.registry.Def(name); def != nil && def.SessionID == sid {
-				return true
+				if isOverseerSeatRow(*def) {
+					return true
+				}
+				// 🎯T452: a subordinate row that carries the overseer's
+				// session id is not the overseer seat. Treating it as one
+				// would deliver its brief into owner chat.
+				slog.Error("🎯T452 refused a session-id claim on the overseer seat",
+					"component", "agent_send",
+					"name", name,
+					"parent", def.Parent,
+					"purpose", def.Purpose,
+					"session_id", sid,
+				)
 			}
 		}
 	}
-	// 🎯T309.3: name resolution is case-insensitive so an agent addressing
-	// "Jevons" reaches the overseer arm rather than the registry arm.
-	return strings.EqualFold(name, s.overseerName())
+	return false
+}
+
+// isOverseerSeatRow reports whether a registry row could be the overseer:
+// explicit purpose=overseer, or a root row (no parent).
+func isOverseerSeatRow(d claudia.AgentDef) bool {
+	if strings.EqualFold(strings.TrimSpace(d.Purpose), claudia.PurposeOverseer) {
+		return true
+	}
+	return strings.TrimSpace(d.Parent) == ""
 }
 
 func (s *Server) overseerName() string {
