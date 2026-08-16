@@ -1741,6 +1741,11 @@ function applyRowHeight(index, newH) {
 function noteRowHeightChange(el) {
   if (!el || el._vIndex == null) return;
   if (el.classList && el.classList.contains('virt-shell')) return;
+  // Measure the NATURAL border-box. A leftover minHeight lock (estimate,
+  // previous extent, snap) floors the rect; adding chrome on that box is
+  // the gap ratchet — tight on reload, then growing while the page stays
+  // open. Clear the lock, measure, lock the natural box, store f(natural).
+  el.style.minHeight = '';
   const boxRect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
   const box = boxRect ? boxRect.height : el.offsetHeight;
   const row = transcriptRows[el._vIndex];
@@ -1773,14 +1778,39 @@ function noteRowHeightChange(el) {
     ? Math.max(mb, (typeof VirtualList !== 'undefined' && VirtualList.BUBBLE_BOTTOM_CHROME_PX)
       ? VirtualList.BUBBLE_BOTTOM_CHROME_PX : 19)
     : mb;
-  const h = (typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
-    ? VirtualList.rowLayoutHeight(box, {
+  const h = (typeof VirtualList !== 'undefined' && VirtualList.extentFromNaturalBox)
+    ? VirtualList.extentFromNaturalBox(box, {
       timeOverflowPx: timeOverflow,
       tabOverflowPx: tabOverflow,
       marginBottomPx: reserveBottom,
       marginTopPx: mt,
     })
-    : box;
+    : ((typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
+      ? VirtualList.rowLayoutHeight(box, {
+        timeOverflowPx: timeOverflow,
+        tabOverflowPx: tabOverflow,
+        marginBottomPx: reserveBottom,
+        marginTopPx: mt,
+      })
+      : box);
+  // Lock the NATURAL box, never the chromed extent. The cache that remat
+  // copies into minHeight must be that same natural or the next measure
+  // stacks chrome again.
+  const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
+    ? VirtualList.snappedRowLockPx(box)
+    : Math.ceil(box || 0);
+  if (lock > 0) el.style.minHeight = lock + 'px';
+  else el.style.minHeight = '';
+  if (box > 0 && typeof msgsContentWidth === 'function') {
+    const nw = msgsContentWidth();
+    if (nw > 0) {
+      const boxH = lock > 0 ? lock : box;
+      if (typeof VirtualList !== 'undefined' && VirtualList.recordSize) {
+        VirtualList.recordSize(virtSizeCache, msgVirtId(el), boxH, nw);
+      }
+      el._virtSize = { height: boxH, width: nw };
+    }
+  }
   if (h > 0) applyRowHeight(el._vIndex, h);
 }
 function registerTranscriptRow(role, text, when, opts) {
@@ -7325,33 +7355,9 @@ function rematerializeMsg(el) {
   // is a common scrollHeight micro-oscillation under track pin.
   const settle = () => {
     if (!el.isConnected || el.classList.contains('virt-shell')) return;
-    // Measure the natural border-box. A leftover estimate/chrome minHeight
-    // floors the rect and then noteRowHeightChange stacks another 19px —
-    // page-up/down grew empty space inside the bubble.
-    const heldMin = el.style.minHeight;
-    el.style.minHeight = '';
-    // 🎯T350: fractional measure — offsetHeight rounds to int, and a rounded
-    // lock BELOW the natural height leaves material ≠ shell by the fraction.
-    const nh = el.getBoundingClientRect().height;
-    if (heldMin && !(nh > 0)) el.style.minHeight = heldMin;
-    const nw = msgsContentWidth();
-    // 🎯T351: lock at the whole-pixel CEILING of the natural height (never
-    // below it — T350 still holds). Scroll offsets are integer-quantized, so
-    // fractional row boxes drift frac(total height) and phase-shift every
-    // integer pin by ±1px. The cache records the snapped BOX height so a
-    // later shell freeze equals the material box exactly, on the pixel grid.
-    const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
-      ? VirtualList.snappedRowLockPx(nh)
-      : Math.ceil(nh);
-    if (nh > 0 && nw > 0) {
-      const boxH = lock > 0 ? lock : nh;
-      if (typeof VirtualList !== 'undefined' && VirtualList.recordSize) {
-        VirtualList.recordSize(virtSizeCache, msgVirtId(el), boxH, nw);
-      }
-      el._virtSize = { height: boxH, width: nw };
-    }
-    if (lock > 0) el.style.minHeight = lock + 'px';
-    else el.style.minHeight = '';
+    // One assignment from the natural box. Do not lock then remeasure —
+    // that path fed the chromed extent back into rowLayoutHeight and
+    // the gaps grew until the next reload rebuilt from naturals.
     delete el._virtH;
     delete el._virtWasExpanded;
     if (typeof noteRowHeightChange === 'function') noteRowHeightChange(el);
@@ -7610,7 +7616,8 @@ function flushRowSnaps() {
   _rowSnapRaf = 0;
   const todo = [];
   _rowSnapSet.forEach((el) => {
-    if (el.isConnected && el.parentNode === msgs &&
+    if (el.isConnected &&
+        (el.parentNode === msgs || el.parentNode === msgsCanvas) &&
         !el.classList.contains('virt-shell') &&
         typeof el._streamRaw !== 'string') {
       todo.push(el);
@@ -7629,18 +7636,19 @@ function flushRowSnaps() {
     // the anchor.
     withAnchorPreservedScroll(function () {
       const prevLocks = todo.map((el) => el.style.minHeight);
-      for (const el of todo) {
-        if (el.style.minHeight) el.style.minHeight = '';
-      }
-      const naturals = todo.map((el) => el.getBoundingClientRect().height);
       for (let i = 0; i < todo.length; i++) {
         const el = todo[i];
-        const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
-          ? VirtualList.snappedRowLockPx(naturals[i])
-          : Math.ceil(naturals[i]);
-        const lockStr = lock > 0 ? lock + 'px' : '';
-        if (lockStr) el.style.minHeight = lockStr;
-        if (lockStr !== prevLocks[i]) lockChanged = true;
+        if (el._vIndex != null && typeof noteRowHeightChange === 'function') {
+          noteRowHeightChange(el);
+        } else {
+          if (el.style.minHeight) el.style.minHeight = '';
+          const natural = el.getBoundingClientRect().height;
+          const lock = (typeof VirtualList !== 'undefined' && VirtualList.snappedRowLockPx)
+            ? VirtualList.snappedRowLockPx(natural)
+            : Math.ceil(natural);
+          el.style.minHeight = lock > 0 ? lock + 'px' : '';
+        }
+        if (el.style.minHeight !== prevLocks[i]) lockChanged = true;
         if (_rowSnapRO && !el._rowSnapObserved) {
           _rowSnapRO.observe(el);
           el._rowSnapObserved = true;

@@ -1364,6 +1364,44 @@
     return h + Math.max(overflow, bottom) + Math.max(above, top);
   }
 
+  /**
+   * One assignment of list extent from a NATURAL border-box.
+   *
+   * The prefix-sum is a derived index of these extents, not a process
+   * that may be fed its own output. Remat, snap, and live measure must
+   * all pass the content box with the minHeight lock cleared. Passing
+   * a previous extent back in is the gap ratchet the owner sees after
+   * the page has been open a while (reload rebuilds from naturals and
+   * looks tight again).
+   */
+  function extentFromNaturalBox(naturalPx, opts) {
+    return rowLayoutHeight(naturalPx, opts);
+  }
+
+  /**
+   * Correct remat/settle cycle: lock stays at the natural box, extent
+   * is computed from that natural every time. N cycles equal 1 cycle.
+   * The stacked cycle (measure the chromed box, add chrome again) is
+   * what this function exists to fail in tests.
+   */
+  function rematExtentCycle(naturalPx, opts, times) {
+    const n = Math.max(1, times | 0);
+    let extent = 0;
+    for (let i = 0; i < n; i++) {
+      extent = extentFromNaturalBox(naturalPx, opts);
+    }
+    return extent;
+  }
+
+  function stackedExtentCycle(naturalPx, opts, times) {
+    const n = Math.max(1, times | 0);
+    let box = Number(naturalPx) || 0;
+    for (let i = 0; i < n; i++) {
+      box = rowLayoutHeight(box, opts);
+    }
+    return box;
+  }
+
   function isParkedListElement() {
     return true;
   }
@@ -1800,6 +1838,9 @@
     DEFAULT_ROW_GAP_PX: DEFAULT_ROW_GAP_PX,
     BUBBLE_BOTTOM_CHROME_PX: BUBBLE_BOTTOM_CHROME_PX,
     rowLayoutHeight: rowLayoutHeight,
+    extentFromNaturalBox: extentFromNaturalBox,
+    rematExtentCycle: rematExtentCycle,
+    stackedExtentCycle: stackedExtentCycle,
     isParkedListElement: isParkedListElement,
     createTranscriptLayout: createTranscriptLayout,
     rebuildPrefix: rebuildPrefix,

@@ -555,11 +555,14 @@ test('T119.4 rowLayoutHeight is measured extent, not a role table', function () 
 
 test('T119.3 remat must not stack chrome on an inflated minHeight box', function () {
   const natural = 268;
-  const inflated = VL.rowLayoutHeight(natural, { marginBottomPx: 19 });
+  const chrome = { marginBottomPx: 19 };
+  const inflated = VL.rowLayoutHeight(natural, chrome);
   assert.strictEqual(inflated, 287);
-  const stacked = VL.rowLayoutHeight(inflated, { marginBottomPx: 19 });
+  const stacked = VL.stackedExtentCycle(natural, chrome, 3);
   assert.ok(stacked > inflated, 'measuring a chrome-inflated box would stack');
-  assert.strictEqual(VL.rowLayoutHeight(natural, { marginBottomPx: 19 }), 287);
+  assert.strictEqual(VL.rematExtentCycle(natural, chrome, 1), 287);
+  assert.strictEqual(VL.rematExtentCycle(natural, chrome, 20), 287);
+  assert.strictEqual(VL.extentFromNaturalBox(natural, chrome), 287);
 });
 
 test('T119.4 planApply attach-set is exactly the rows in range; remove never reappears', function () {
@@ -605,6 +608,8 @@ test('T119.3 index.html parks turn-markers and measures chrome into the prefix',
   assert.ok(/el\.style\.minHeight = ''/.test(html) &&
     /noteRowHeightChange/.test(html),
     'remat settle clears minHeight before measuring');
+  assert.ok(/function noteRowHeightChange[\s\S]{0,900}el\.style\.minHeight = ''/.test(html),
+    'noteRowHeightChange itself clears the lock — it must not measure a chromed box');
   assert.ok(/#messages-canvas > \.turn-marker/.test(html),
     'canvas turn-markers are absolutely positioned list rows');
 });
@@ -1267,8 +1272,8 @@ test('index.html wires T350 fractional freeze + gated expansion pins', function 
     'virtualize read phase uses fractional rect height');
   assert.ok(/function dematerializeMsg\(el, knownHeight\)[\s\S]{0,800}getBoundingClientRect\(\)\.height/.test(html),
     'demat fallback measure is fractional');
-  assert.ok(/const settle = \(\) => \{[\s\S]{0,900}getBoundingClientRect\(\)\.height/.test(html),
-    'remat settle measure is fractional');
+  assert.ok(/function noteRowHeightChange[\s\S]{0,900}getBoundingClientRect\(\)[\s\S]{0,80}\.height/.test(html),
+    'row measure (used by remat settle) is fractional');
   assert.ok(!/const nh = el\.offsetHeight/.test(html),
     'settle must not round via offsetHeight');
   // Gated pins: refreshLatestExpansion / expandInViewNearEnd go through
@@ -1362,8 +1367,8 @@ test('index.html wires T351 whole-pixel geometry', function () {
     'renderBody re-snaps after repaint');
   assert.ok(/function applyClipState\(d, clipped\)[\s\S]{0,900}scheduleRowSnap/.test(html),
     'clip toggle re-snaps');
-  assert.ok(/const settle = \(\) => \{[\s\S]{0,1600}snappedRowLockPx/.test(html),
-    'remat settle locks at the snapped ceiling');
+  assert.ok(/function noteRowHeightChange[\s\S]{0,5000}snappedRowLockPx/.test(html),
+    'row measure locks at the snapped ceiling of the natural box');
   // Row-level margins must be whole pixels — margins escape the box snap.
   assert.ok(!/\.msg\.user, \.msg\.jevons \{ margin-bottom: 1\.2rem/.test(html),
     'bubble margin-bottom no longer fractional 1.2rem');
