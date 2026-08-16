@@ -512,44 +512,76 @@ test('T119 full data: progressive pages cover entire older range without scroll 
   assert.ok(typeof pages[0].scrollTop === 'undefined');
 });
 
-test('T119.3 attached shell cap is viewport-bounded, not journal-bounded', function () {
-  const cap = VL.maxAttachedShells(600, 72);
-  assert.ok(cap >= VL.MIN_ATTACHED_SHELLS, 'floor holds');
-  assert.ok(cap < 400, 'cap stays far below a 11k-turn journal, got ' + cap);
-  assert.ok(VL.shouldAttachHistoryPage(30, 20, cap), 'early hydrate still attaches');
-  assert.ok(!VL.shouldAttachHistoryPage(cap, 20, cap), 'overflow page stays detached');
-  assert.ok(!VL.shouldAttachHistoryPage(11000, 1, cap), 'a long journal never attaches another shell');
+test('T119.3 prefix layout: canvas height is the sum, no sibling shells', function () {
+  const L = VL.createTranscriptLayout({ gap: 8 });
+  assert.strictEqual(VL.layoutTotal(L), 0);
+  assert.strictEqual(VL.layoutPush(L, 100), 0);
+  assert.strictEqual(VL.layoutPush(L, 50), 1);
+  assert.strictEqual(VL.layoutPush(L, 200), 2);
+  assert.strictEqual(VL.layoutCount(L), 3);
+  assert.strictEqual(VL.layoutTop(L, 0), 0);
+  assert.strictEqual(VL.layoutTop(L, 1), 108);
+  assert.strictEqual(VL.layoutTop(L, 2), 166);
+  assert.strictEqual(VL.layoutTotal(L), 366);
+  const added = VL.layoutUnshiftMany(L, [40, 40]);
+  assert.strictEqual(added, 2);
+  assert.strictEqual(VL.layoutCount(L), 5);
+  assert.strictEqual(VL.layoutTop(L, 2), 40 + 8 + 40 + 8);
+  assert.strictEqual(VL.layoutTruncateFrom(L, 3), 2);
+  assert.strictEqual(VL.layoutCount(L), 3);
 });
 
-test('T119.3 detached records prepend oldest-first and spacer sums estimates', function () {
-  const newer = VL.recordsFromChunks([
-    { role: 'user', text: 'mid', timestamp: '2' },
-    { role: 'jevons', text: 'mid-a', timestamp: '3' },
-  ]);
-  const older = VL.recordsFromChunks([
-    { role: 'user', text: 'old', timestamp: '0' },
-  ]);
-  const held = VL.prependDetachedRecords(newer, older);
-  assert.strictEqual(held.length, 3);
-  assert.strictEqual(held[0].text, 'old');
-  assert.strictEqual(held[2].text, 'mid-a');
-  const px = VL.spacerPxForRecords(held);
-  assert.ok(px >= held[0].estHeight + held[1].estHeight + held[2].estHeight);
-  const step = VL.takeNewestDetached(held, 2);
-  assert.strictEqual(step.take.length, 2);
-  assert.strictEqual(step.take[0].text, 'mid');
-  assert.strictEqual(step.remain.length, 1);
-  assert.strictEqual(step.remain[0].text, 'old');
+test('T119.3 mid-list collapse/expand shifts only tops below and keeps viewport policy', function () {
+  const L = VL.createTranscriptLayout({ gap: 8 });
+  for (let i = 0; i < 10; i++) VL.layoutPush(L, 80);
+  const belowBefore = VL.layoutTop(L, 5);
+  const r = VL.layoutSetHeight(L, 3, 400);
+  assert.strictEqual(r.delta, 320);
+  assert.strictEqual(VL.layoutTop(L, 5), belowBefore + 320);
+  assert.strictEqual(VL.layoutTop(L, 3), VL.layoutTop(L, 2) + 80 + 8);
+  const above = VL.scrollAfterRowHeightChange({
+    delta: 320, rowTop: 0, oldHeight: 80, scrollTop: 300, clientHeight: 600,
+    totalHeight: VL.layoutTotal(L), tracking: false,
+  });
+  assert.strictEqual(above.reason, 'above');
+  assert.strictEqual(above.scrollTop, 620);
+  const hit = VL.scrollAfterRowHeightChange({
+    delta: 320, rowTop: 200, oldHeight: 80, scrollTop: 180, clientHeight: 600,
+    totalHeight: VL.layoutTotal(L), tracking: false,
+  });
+  assert.strictEqual(hit.reason, 'intersect');
+  assert.strictEqual(hit.scrollTop, 180, 'visible collapse grows/shrinks downward');
+  const pin = VL.scrollAfterRowHeightChange({
+    delta: 320, rowTop: 0, oldHeight: 80, scrollTop: 0, clientHeight: 600,
+    totalHeight: 2000, tracking: true,
+  });
+  assert.strictEqual(pin.reason, 'track');
+  assert.ok(pin.pin);
+  assert.strictEqual(pin.scrollTop, 2000);
 });
 
-test('T119.3 index.html caps hydrate insertBefore and keeps overflow off-DOM', function () {
+test('T119.3 collapseHeightChangeTrace: band stays bounded; mid-list expand is a prefix shift', function () {
+  const t = VL.collapseHeightChangeTrace({ n: 200, mid: 40 });
+  assert.ok(t.delta > 0, 'expand has a positive delta');
+  assert.ok(t.belowShiftedByDelta, 'row below mid moved by exactly delta');
+  assert.ok(t.endShiftedByDelta, 'live end moved by exactly delta');
+  assert.strictEqual(t.aboveReason, 'above');
+  assert.strictEqual(t.aboveScrollDelta, t.delta, 'T363: viewing below an expand keeps the ink still');
+  assert.ok(t.intersectKeepsScroll, 'owner-visible bubble grows in place');
+  assert.ok(t.trackPins, 'stick-to-bottom pins after mid-list grow');
+  assert.ok(t.attachedBounded, 'end-band attach count=' + t.attachedAtEnd + ' for n=' + t.n);
+  assert.ok(t.attachedAtEnd < 80, 'band is O(viewport), got ' + t.attachedAtEnd);
+});
+
+test('T119.3 index.html is an absolute canvas list, not a spacer of shells', function () {
   const fs = require('fs');
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(html.indexOf('shouldAttachHistoryPage') >= 0, 'loadEarlier consults the cap');
-  assert.ok(html.indexOf('detachedBefore') >= 0, 'overflow records live off-DOM');
-  assert.ok(html.indexOf('history-spacer-before') >= 0, 'one spacer stands in for detached rows');
-  assert.ok(html.indexOf('takeNewestDetached') >= 0, 'scroll-up attaches from the detached tail');
+  assert.ok(html.indexOf('messages-canvas') >= 0, 'canvas host exists');
+  assert.ok(html.indexOf('createTranscriptLayout') >= 0, 'product owns a prefix layout');
+  assert.ok(html.indexOf('scrollAfterRowHeightChange') >= 0, 'collapse/expand goes through height-delta policy');
+  assert.ok(html.indexOf('layoutAttachRange') >= 0, 'attach band comes from prefix, not offsetTop of 11k siblings');
+  assert.ok(html.indexOf('history-spacer-before') < 0, 'spacer model is gone');
 });
 
 test('T119 windowed content: material count << N while data count = N', function () {
@@ -1236,9 +1268,11 @@ test('index.html wires T351 whole-pixel geometry', function () {
     'scrollDown pinned check is fraction-tolerant');
   assert.ok(pinBody && /!force && pinnedNow/.test(pinBody[0]),
     'forced pins bypass the skip fast-path (post-snap correction)');
-  // Hydrate compensation is rect-exact.
-  assert.ok(/hydrateCompensatedScrollTop\(prevTop, anchorTopBefore, anchorTopAfter/.test(html),
-    'loadEarlier compensates via hydrateCompensatedScrollTop');
+  // Hydrate compensation is the prefix-total delta (canvas height), not a
+  // DOM scrollHeight walk of sibling shells.
+  assert.ok(/layoutTotal\(transcriptLayout\)/.test(html) &&
+    /msgs\.scrollTop = prevTop \+ Math\.max\(0, nextTotal - prevTotal\)/.test(html),
+    'loadEarlier compensates via prefix canvas growth');
   assert.ok(!/msgs\.scrollTop = prevTop \+ \(msgs\.scrollHeight - prevH\);/.test(html),
     'no bare integer-delta hydrate compensation remains');
   // Row snap seam: every appended row locks to the pixel grid; repaint and
@@ -1319,14 +1353,14 @@ test('index.html wires T363 anchor preservation on every height-writing pass', f
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(/function withAnchorPreservedScroll\(fn\)/.test(html),
     'withAnchorPreservedScroll exists');
-  assert.ok(/function pickTopAnchorEl\(scrollTop\)[\s\S]{0,700}offsetTop <= scrollTop/.test(html),
-    'anchor pick is a binary search on offsetTop (no O(n) rect scan per pass)');
+  assert.ok(/function pickTopAnchorEl\(scrollTop\)[\s\S]{0,900}pickScrollAnchorIndex/.test(html),
+    'anchor pick uses prefix tops (no O(n) offsetTop scan of sibling shells)');
   assert.ok(/withAnchorPreservedScroll[\s\S]{0,900}anchorPreservedScrollTop/.test(html),
     'compensation goes through the pure helper');
   // The four passes that change row heights. flushRowSnaps is the one that
   // actually swapped a lazy shell's estimated lock for its real height —
   // wrapping only virtualize/rematerialize left the stutter fully intact.
-  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,1400}withAnchorPreservedScroll/.test(html),
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,2400}withAnchorPreservedScroll/.test(html),
     'virtualize pass is anchored');
   assert.ok(/function flushRematerializeFrame\(\)[\s\S]{0,2600}withAnchorPreservedScroll/.test(html),
     'progressive rematerialize frame is anchored');
@@ -1424,24 +1458,14 @@ test('T119.2 measureBackfillTrace: jump-to-bottom does not re-measure prefix', f
   assert.ok(t.afterJumpToBottom.first > 0);
 });
 
-test('index.html wires T119.2 windowed measure; no O(N) offsetTop scan', function () {
+test('index.html wires T119.2/T119.3 prefix attach; no O(N) offsetTop scan', function () {
   const fs = require('fs');
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(html.indexOf('function virtualizeMeasureRange') >= 0,
-    'virtualizeMeasureRange helper present');
-  assert.ok(html.indexOf('function virtualizeRowHeight') >= 0,
-    'layout-free row height helper present');
-  assert.ok(html.indexOf('function pushOffWindowDematItems') >= 0,
-    'off-window demat uses cache/estimate, not layout');
-  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,5000}virtualizeMeasureRange/.test(html),
-    'virtualizeMessages uses the measure window');
-  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,5500}pushOffWindowDematItems/.test(html),
-    'off-window rows are class-scanned, not measured');
+  assert.ok(/function virtualizeMessages\(\)[\s\S]{0,5000}layoutAttachRange/.test(html),
+    'virtualizeMessages uses prefix attach range');
   assert.ok(html.indexOf('__measureBackfill') >= 0,
     'measure-count probe exposed for hermetic/UI oracles');
-  // The old O(N) read: for (let i = 0; i < children.length; i++) + offsetTop
-  // inside virtualizeMessages. Windowed loop is `i = first; i <= last`.
   const virtStart = html.indexOf('function virtualizeMessages()');
   assert.ok(virtStart >= 0);
   const virtEnd = html.indexOf('\nfunction dematerializeMsg', virtStart);
@@ -1450,7 +1474,10 @@ test('index.html wires T119.2 windowed measure; no O(N) offsetTop scan', functio
     'measure loop walks only the window');
   assert.ok(!/for \(let i = 0; i < children\.length; i\+\+\)[\s\S]{0,400}offsetTop/.test(virtBody),
     'virtualizeMessages must not offsetTop-scan every child');
-  // Near-end expand stops measuring once fully above the fold.
+  assert.ok(virtBody.indexOf('detachTranscriptRow') >= 0,
+    'off-band rows leave the DOM');
+  assert.ok(!/pushOffWindowDematItems\s*\(\s*items\s*,\s*liveShells\s*,\s*children/.test(virtBody),
+    'virtualizeMessages must not pass unbound children (live 2026-08-16 onerror)');
   const eiv = html.indexOf('function expandInViewNearEnd');
   const eivEnd = html.indexOf('\nfunction refreshLatestExpansion', eiv);
   const eivBody = html.slice(eiv, eivEnd > eiv ? eivEnd : eiv + 3000);

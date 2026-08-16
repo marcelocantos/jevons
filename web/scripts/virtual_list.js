@@ -1326,6 +1326,223 @@
     };
   }
 
+  // ── Absolute transcript layout (🎯T119.3) ──────────────────────────
+  // In-flow shells need siblings (or a spacer) to hold scrollHeight.
+  // Absolute rows do not: canvas height is the prefix total, each attached
+  // .msg is top:prefix[i]. A mid-list collapse/expand is a single height
+  // write + a prefix shift below it — the missing siblings are not a
+  // layout input. That is why this is not TanStack/Virtuoso/clusterize:
+  // those own scroll and do not know T106 clip, T363 above-fold remat,
+  // T341 pin hysteresis, or T347 replay.
+
+  const DEFAULT_ROW_GAP_PX = 8;
+
+  function createTranscriptLayout(opts) {
+    const o = opts || {};
+    const gap = o.gap != null ? Number(o.gap) : DEFAULT_ROW_GAP_PX;
+    return {
+      heights: [],
+      prefix: [0],
+      gap: Number.isFinite(gap) && gap >= 0 ? gap : DEFAULT_ROW_GAP_PX,
+    };
+  }
+
+  function rebuildPrefix(layout) {
+    const L = layout || createTranscriptLayout();
+    const n = L.heights.length;
+    const g = L.gap;
+    const prefix = new Array(n + 1);
+    prefix[0] = 0;
+    for (let i = 0; i < n; i++) {
+      const h = Number(L.heights[i]) || 0;
+      prefix[i + 1] = prefix[i] + (h > 0 ? h : 0) + (i < n - 1 ? g : 0);
+    }
+    L.prefix = prefix;
+    return L;
+  }
+
+  function layoutCount(layout) {
+    return layout && layout.heights ? layout.heights.length : 0;
+  }
+
+  function layoutTotal(layout) {
+    if (!layout || !layout.prefix || !layout.prefix.length) return 0;
+    return layout.prefix[layout.prefix.length - 1] || 0;
+  }
+
+  function layoutTop(layout, index) {
+    if (!layout || !layout.prefix) return 0;
+    const i = index | 0;
+    if (i < 0 || i >= layout.prefix.length) return 0;
+    return layout.prefix[i] || 0;
+  }
+
+  function layoutPush(layout, height) {
+    const L = layout || createTranscriptLayout();
+    const h = Number(height);
+    const rowH = Number.isFinite(h) && h > 0 ? h : 0;
+    const n = L.heights.length;
+    if (n === 0) {
+      L.heights.push(rowH);
+      L.prefix = [0, rowH];
+      return 0;
+    }
+    L.prefix[n] = (L.prefix[n] || 0) + L.gap;
+    L.heights.push(rowH);
+    L.prefix.push(L.prefix[n] + rowH);
+    return n;
+  }
+
+  function layoutUnshiftMany(layout, heights) {
+    const L = layout || createTranscriptLayout();
+    const add = Array.isArray(heights) ? heights : [];
+    if (!add.length) return 0;
+    const next = new Array(add.length);
+    for (let i = 0; i < add.length; i++) {
+      const h = Number(add[i]);
+      next[i] = Number.isFinite(h) && h > 0 ? h : 0;
+    }
+    L.heights = next.concat(L.heights);
+    rebuildPrefix(L);
+    return next.length;
+  }
+
+  function layoutTruncateFrom(layout, index) {
+    const L = layout || createTranscriptLayout();
+    const i = Math.max(0, index | 0);
+    if (i >= L.heights.length) return 0;
+    const removed = L.heights.length - i;
+    L.heights.length = i;
+    rebuildPrefix(L);
+    return removed;
+  }
+
+  function layoutSetHeight(layout, index, height) {
+    const L = layout || createTranscriptLayout();
+    const i = index | 0;
+    if (i < 0 || i >= L.heights.length) {
+      return { delta: 0, oldHeight: 0, newHeight: 0 };
+    }
+    const h = Number(height);
+    const next = Number.isFinite(h) && h > 0 ? h : 0;
+    const old = Number(L.heights[i]) || 0;
+    const delta = next - old;
+    if (delta === 0) return { delta: 0, oldHeight: old, newHeight: next };
+    L.heights[i] = next;
+    for (let p = i + 1; p < L.prefix.length; p++) L.prefix[p] += delta;
+    return { delta: delta, oldHeight: old, newHeight: next };
+  }
+
+  function layoutAttachRange(layout, scrollTop, clientHeight, buffer) {
+    const L = layout || createTranscriptLayout();
+    const n = L.heights.length;
+    if (!n) return { first: -1, last: -1, count: 0, probes: 0 };
+    const win = measureWindowBounds(scrollTop, clientHeight, buffer);
+    return findIntersectingIndexRange(n, function (i) {
+      return L.prefix[i];
+    }, win.top, win.bot);
+  }
+
+  /**
+   * Scroll policy when ONE row's height changes (collapse, expand, remat,
+   * stream). Siblings need not be in the DOM.
+   *
+   *   tracking            → pin to the new canvas end
+   *   row fully above     → scrollTop += delta (T363: text under the eyes stays)
+   *   row fully below     → no change
+   *   row intersects view → keep the row's TOP put; the bubble grows/shrinks
+   *                         downward (the T106 pocket / owner toggle case)
+   */
+  function scrollAfterRowHeightChange(opts) {
+    const o = opts || {};
+    const delta = Number(o.delta) || 0;
+    const st = Number(o.scrollTop) || 0;
+    const ch = Number(o.clientHeight) || 0;
+    const total = Number(o.totalHeight) || 0;
+    if (o.tracking) {
+      return { scrollTop: Math.max(0, total), pin: true, reason: 'track' };
+    }
+    const top = Number(o.rowTop) || 0;
+    const oldH = Number(o.oldHeight) || 0;
+    const bot = top + oldH;
+    if (bot <= st) {
+      return { scrollTop: Math.max(0, st + delta), pin: false, reason: 'above' };
+    }
+    if (top >= st + ch) {
+      return { scrollTop: st, pin: false, reason: 'below' };
+    }
+    return { scrollTop: st, pin: false, reason: 'intersect' };
+  }
+
+  /**
+   * Oracle: mid-list expand/collapse. Attached count stays a viewport band;
+   * prefix tops below the changed row shift by delta; scroll policy matches
+   * above / intersect / track. No sibling shells required.
+   */
+  function collapseHeightChangeTrace(opts) {
+    const o = opts || {};
+    const n = o.n > 0 ? o.n | 0 : 80;
+    const rowH = o.rowHeight > 0 ? Number(o.rowHeight) : 80;
+    const collapsedH = o.collapsedHeight > 0 ? Number(o.collapsedHeight) : 224;
+    const expandedH = o.expandedHeight > 0 ? Number(o.expandedHeight) : 900;
+    const mid = o.mid != null ? o.mid | 0 : 25;
+    const ch = o.clientHeight > 0 ? Number(o.clientHeight) : 600;
+    const buf = typeof o.buffer === 'number' ? o.buffer : DEFAULT_BUFFER;
+    const L = createTranscriptLayout({ gap: o.gap != null ? Number(o.gap) : DEFAULT_ROW_GAP_PX });
+    for (let i = 0; i < n; i++) layoutPush(L, i === mid ? collapsedH : rowH);
+    const midTopBefore = layoutTop(L, mid);
+    const belowTopBefore = layoutTop(L, mid + 1);
+    const endTopBefore = layoutTop(L, n - 1);
+
+    // Viewing a row well below mid (mid fully above the fold).
+    const viewBelow = midTopBefore + collapsedH + 40;
+    const grow = layoutSetHeight(L, mid, expandedH);
+    const belowTopAfter = layoutTop(L, mid + 1);
+    const endTopAfter = layoutTop(L, n - 1);
+    const adjAbove = scrollAfterRowHeightChange({
+      delta: grow.delta,
+      rowTop: midTopBefore,
+      oldHeight: collapsedH,
+      scrollTop: viewBelow,
+      clientHeight: ch,
+      totalHeight: layoutTotal(L),
+      tracking: false,
+    });
+    const adjIntersect = scrollAfterRowHeightChange({
+      delta: grow.delta,
+      rowTop: midTopBefore,
+      oldHeight: collapsedH,
+      scrollTop: Math.max(0, midTopBefore - 20),
+      clientHeight: ch,
+      totalHeight: layoutTotal(L),
+      tracking: false,
+    });
+    const adjTrack = scrollAfterRowHeightChange({
+      delta: grow.delta,
+      rowTop: midTopBefore,
+      oldHeight: collapsedH,
+      scrollTop: Math.max(0, layoutTotal(L) - ch),
+      clientHeight: ch,
+      totalHeight: layoutTotal(L),
+      tracking: true,
+    });
+    const bandAtEnd = layoutAttachRange(L, Math.max(0, layoutTotal(L) - ch), ch, buf);
+    return {
+      n: n,
+      delta: grow.delta,
+      belowShiftedByDelta: belowTopAfter - belowTopBefore === grow.delta,
+      endShiftedByDelta: endTopAfter - endTopBefore === grow.delta,
+      aboveScrollDelta: adjAbove.scrollTop - viewBelow,
+      aboveReason: adjAbove.reason,
+      intersectKeepsScroll: adjIntersect.reason === 'intersect' &&
+        adjIntersect.scrollTop === Math.max(0, midTopBefore - 20),
+      trackPins: adjTrack.pin === true && adjTrack.scrollTop === layoutTotal(L),
+      attachedAtEnd: bandAtEnd.count,
+      attachedBounded: bandAtEnd.count > 0 && bandAtEnd.count < n,
+      canvasHeight: layoutTotal(L),
+    };
+  }
+
   // Note: shouldPinScroll (above) calls finalPinScrollTop at runtime — both
   // are function declarations in this factory so hoisting is fine.
 
@@ -1438,5 +1655,20 @@
     frameBudgetExceeded: frameBudgetExceeded,
     planVirtualizePass: planVirtualizePass,
     virtualizePassTrace: virtualizePassTrace,
+
+    // 🎯T119.3: absolute-position transcript — prefix tops, no spacer.
+    DEFAULT_ROW_GAP_PX: DEFAULT_ROW_GAP_PX,
+    createTranscriptLayout: createTranscriptLayout,
+    rebuildPrefix: rebuildPrefix,
+    layoutCount: layoutCount,
+    layoutTotal: layoutTotal,
+    layoutTop: layoutTop,
+    layoutPush: layoutPush,
+    layoutUnshiftMany: layoutUnshiftMany,
+    layoutTruncateFrom: layoutTruncateFrom,
+    layoutSetHeight: layoutSetHeight,
+    layoutAttachRange: layoutAttachRange,
+    scrollAfterRowHeightChange: scrollAfterRowHeightChange,
+    collapseHeightChangeTrace: collapseHeightChangeTrace,
   };
 }));

@@ -45,6 +45,12 @@ function startServer() {
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => typeof window.addMsg === 'function' && typeof window.virtualizeMessages === 'function', null, { timeout: 10000 });
+    await page.evaluate(() => {
+      window.__virtOnErrors = [];
+      window.addEventListener('error', function (ev) {
+        window.__virtOnErrors.push(String((ev && ev.message) || ev));
+      });
+    });
 
     const stats = await page.evaluate(() => {
       const N = 80;
@@ -61,40 +67,44 @@ function startServer() {
       const cap = (window.VirtualList && window.VirtualList.DEMATERIALIZE_PER_FRAME) || 40;
       const passes = Math.ceil((2 * N) / cap) + 2;
       for (let p = 0; p < passes; p++) window.virtualizeMessages();
-      const msgs = [...document.querySelectorAll('#messages > .msg')];
-      const shells = msgs.filter(m => m.classList.contains('virt-shell'));
-      const heavy = msgs.filter(m => !m.classList.contains('virt-shell'));
-      // Bodies of shells should be empty.
-      const emptyBodies = shells.filter(m => m._body && m._body.innerHTML === '').length;
+      const attached = [...document.querySelectorAll('#messages-canvas > .msg')];
+      const rows = window.__transcriptRows || [];
       return {
-        total: msgs.length,
-        shells: shells.length,
-        heavy: heavy.length,
-        emptyBodies,
+        attached: attached.length,
+        records: rows.length,
+        heavy: attached.filter(m => !m.classList.contains('virt-shell')).length,
         hasVirtualList: typeof window.VirtualList !== 'undefined',
+        hasLayout: !!(window.VirtualList && window.VirtualList.layoutAttachRange),
+        onerrors: (window.__virtOnErrors || []).slice(),
       };
     });
 
     if (!stats.hasVirtualList) failures.push('VirtualList not loaded');
-    if (stats.total < 100) failures.push('expected many msgs, got ' + stats.total);
-    if (stats.shells < 20) failures.push('expected many virt-shells, got ' + stats.shells);
+    if (!stats.hasLayout) failures.push('TranscriptLayout not loaded');
+    if (stats.records < 100) failures.push('expected many records, got ' + stats.records);
+    if (stats.attached >= stats.records) failures.push('attached should be a viewport band, got ' + stats.attached + ' of ' + stats.records);
+    if (stats.attached > 80) failures.push('attached band too large: ' + stats.attached);
     if (stats.heavy > 40) failures.push('too many heavy nodes: ' + stats.heavy);
-    if (stats.emptyBodies !== stats.shells) failures.push('shells without empty bodies');
+    if (stats.onerrors && stats.onerrors.length) {
+      failures.push('window.onerror during virtualize: ' + JSON.stringify(stats.onerrors));
+    }
 
-    // Scroll to bottom: shells near top should remain dematerialised; bottom rematerialise.
+    // Scroll to bottom: last row attaches and is material; prefix stays off-DOM.
     const after = await page.evaluate(() => {
       const el = document.getElementById('messages');
       el.scrollTop = el.scrollHeight;
       window.virtualizeMessages();
-      const msgs = [...document.querySelectorAll('#messages > .msg')];
-      const last = msgs[msgs.length - 1];
+      const attached = [...document.querySelectorAll('#messages-canvas > .msg')];
+      const last = attached.sort((a, b) => (a._vIndex | 0) - (b._vIndex | 0)).pop();
+      const rows = window.__transcriptRows || [];
       return {
         lastShell: last && last.classList.contains('virt-shell'),
-        shells: msgs.filter(m => m.classList.contains('virt-shell')).length,
+        attached: attached.length,
+        records: rows.length,
       };
     });
     if (after.lastShell) failures.push('latest msg should be materialised at bottom');
-    if (after.shells < 10) failures.push('still expect off-screen shells at bottom, got ' + after.shells);
+    if (after.attached >= after.records) failures.push('bottom still must not attach the whole journal, got ' + after.attached);
 
     // Height change after collapse/expand must rematerialise in-view shells
     // without a user wheel (blank gap regression).
@@ -105,13 +115,13 @@ function startServer() {
       const prior = window.addMsg('jevons', tall);
       el.scrollTop = el.scrollHeight;
       window.virtualizeMessages();
-      const all = [...document.querySelectorAll('#messages > .msg')];
+      const all = [...document.querySelectorAll('#messages-canvas > .msg')];
       all.forEach((m, i) => {
         if (i < all.length - 3 && !m.classList.contains('virt-shell') && typeof window.dematerializeMsg === 'function') {
           if (m.offsetTop + m.offsetHeight < el.scrollTop - 20) window.dematerializeMsg(m);
         }
       });
-      const shellsBefore = document.querySelectorAll('#messages > .msg.virt-shell').length;
+      const shellsBefore = document.querySelectorAll('#messages-canvas > .msg.virt-shell').length;
       window.addMsg('user', 'new request that may push prior up');
       if (window.scrollDown) window.scrollDown();
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
@@ -121,7 +131,7 @@ function startServer() {
       const viewBot = viewTop + el.clientHeight;
       let blankInView = 0;
       let heavyInView = 0;
-      document.querySelectorAll('#messages > .msg').forEach((m) => {
+      document.querySelectorAll('#messages-canvas > .msg').forEach((m) => {
         const top = m.offsetTop;
         const bot = top + m.offsetHeight;
         if (bot < viewTop + 2 || top > viewBot - 2) return;
@@ -133,7 +143,7 @@ function startServer() {
         blankInView,
         heavyInView,
         shellsBefore,
-        shellsAfter: document.querySelectorAll('#messages > .msg.virt-shell').length,
+        shellsAfter: document.querySelectorAll('#messages-canvas > .msg.virt-shell').length,
         priorClipped: prior.classList.contains('msg-clipped'),
       };
     });
@@ -148,8 +158,9 @@ function startServer() {
     // Controlled free-scroll geometry (short viewport would pin-collapse tall on new msg).
     const t246Virt = await page.evaluate(async () => {
       const el = document.getElementById('messages');
-      // Clear for a short controlled transcript.
-      el.innerHTML = '';
+      // Clear for a short controlled transcript (keep the canvas host).
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      else el.innerHTML = '';
       if (window.enterTrackBottom) window.enterTrackBottom();
       const body = Array.from({ length: 25 }, (_, i) => 'T246 line ' + i + ' with padding text xx').join('\n\n');
       const msg = window.addMsg('jevons', body);
@@ -211,7 +222,12 @@ function startServer() {
       failures.push('T246: fully above fold still auto-expanded ' + JSON.stringify(t246Virt.off));
     }
 
-    console.log(JSON.stringify({ stats, after, afterCollapse, t246Virt, failures }, null, 2));
+    const leftoverErrors = await page.evaluate(() => (window.__virtOnErrors || []).slice());
+    if (leftoverErrors.length) {
+      failures.push('window.onerror leftover: ' + JSON.stringify(leftoverErrors));
+    }
+
+    console.log(JSON.stringify({ stats, after, afterCollapse, t246Virt, leftoverErrors, failures }, null, 2));
     if (failures.length) {
       console.error('FAIL', failures);
       process.exitCode = 1;
