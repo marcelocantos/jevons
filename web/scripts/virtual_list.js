@@ -1188,9 +1188,8 @@
     return { lock: lock, css: css, changed: css !== prev };
   }
 
-  // 🎯T484: a row whose current box is already the snap lock must not
-  // clear minHeight. Clearing forces a style+layout even when the write
-  // that follows is a no-op (Firefox profile: 11k sync reflows / 21s).
+  // 🎯T484/T486: true only when `boxPx` is the NATURAL box. Never pass a
+  // minHeight-held rect — that equality is how an oversized lock hides a shrink.
   function alreadySnappedLock(lockPx, boxPx) {
     const lock = Number(lockPx);
     const box = Number(boxPx);

@@ -1744,12 +1744,10 @@ function applyRowHeight(index, newH) {
 function noteRowHeightChange(el) {
   if (!el || el._vIndex == null) return;
   if (el.classList && el.classList.contains('virt-shell')) return;
-  const prevLockEarly = el.style.minHeight || '';
-  const prevPxEarly = parseFloat(prevLockEarly) || 0;
-  if (prevPxEarly > 0 && typeof VirtualList !== 'undefined' && VirtualList.alreadySnappedLock) {
-    const lockedBox = el.getBoundingClientRect ? el.getBoundingClientRect().height : el.offsetHeight;
-    if (VirtualList.alreadySnappedLock(prevPxEarly, lockedBox)) return;
-  }
+  // 🎯T486: do not early-return because the locked box equals minHeight —
+  // that equality is how an oversized lock hides a shrink. Always clear
+  // and measure the natural box (T482 still no-ops the write when the
+  // snap is unchanged).
   // Measure the NATURAL border-box. A leftover minHeight lock (estimate,
   // previous extent, snap) floors the rect; adding chrome on that box is
   // the gap ratchet — tight on reload, then growing while the page stays

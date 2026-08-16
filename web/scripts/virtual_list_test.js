@@ -1272,7 +1272,7 @@ test('index.html wires T350 fractional freeze + gated expansion pins', function 
     'virtualize read phase uses fractional rect height');
   assert.ok(/function dematerializeMsg\(el, knownHeight\)[\s\S]{0,800}getBoundingClientRect\(\)\.height/.test(html),
     'demat fallback measure is fractional');
-  assert.ok(/function noteRowHeightChange[\s\S]{0,900}getBoundingClientRect\(\)[\s\S]{0,80}\.height/.test(html),
+  assert.ok(/function noteRowHeightChange[\s\S]{0,2000}getBoundingClientRect\(\)[\s\S]{0,80}\.height/.test(html),
     'row measure (used by remat settle) is fractional');
   assert.ok(!/const nh = el\.offsetHeight/.test(html),
     'settle must not round via offsetHeight');
@@ -1325,7 +1325,7 @@ test('T351 hydrateCompensatedScrollTop is rect-exact with integer fallback', fun
   assert.strictEqual(VL.hydrateCompensatedScrollTop(100, undefined, undefined, 1000, 1000), 100);
 });
 
-test('T484 alreadySnappedLock is true when box matches the lock', function () {
+test('T484 alreadySnappedLock is true when the NATURAL box matches the lock', function () {
   assert.strictEqual(VL.alreadySnappedLock(55, 54.8), true);
   assert.strictEqual(VL.alreadySnappedLock(55, 55), true);
   assert.strictEqual(VL.alreadySnappedLock(55, 80), false, 'real grow must remesure');
@@ -1333,10 +1333,22 @@ test('T484 alreadySnappedLock is true when box matches the lock', function () {
   const fs = require('fs');
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(/function noteRowHeightChange[\s\S]{0,800}alreadySnappedLock/.test(html),
-    'noteRowHeightChange returns before clearing minHeight when already snapped');
   assert.ok(/look: 'classic'/.test(html), 'mermaid look is classic (no per-frame SVG animation)');
   assert.ok(/_mermaidCache/.test(html), 'remat reuses cached mermaid SVG');
+});
+
+test('T486 an oversized lock shrinks to the natural box', function () {
+  const shrink = VL.nextSnappedMinHeightCss('200px', 80);
+  assert.strictEqual(shrink.css, '80px');
+  assert.ok(shrink.changed, '200px lock over 80px natural must write');
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const fn = html.slice(html.indexOf('function noteRowHeightChange'),
+    html.indexOf('function registerTranscriptRow'));
+  assert.ok(fn.indexOf("el.style.minHeight = ''") >= 0, 'always clears to measure natural');
+  assert.ok(!/alreadySnappedLock\(prevPxEarly, lockedBox\)/.test(fn),
+    'must not treat a minHeight-held box as already snapped');
 });
 
 test('T482 second snap of the same natural does not rewrite minHeight', function () {
