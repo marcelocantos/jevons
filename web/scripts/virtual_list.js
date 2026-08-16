@@ -1458,6 +1458,15 @@
     return removed;
   }
 
+  function layoutRemoveAt(layout, index) {
+    const L = layout || createTranscriptLayout();
+    const i = index | 0;
+    if (i < 0 || i >= L.heights.length) return 0;
+    L.heights.splice(i, 1);
+    rebuildPrefix(L);
+    return 1;
+  }
+
   function layoutSetHeight(layout, index, height) {
     const L = layout || createTranscriptLayout();
     const i = index | 0;
@@ -1710,6 +1719,7 @@
     layoutPush: layoutPush,
     layoutUnshiftMany: layoutUnshiftMany,
     layoutTruncateFrom: layoutTruncateFrom,
+    layoutRemoveAt: layoutRemoveAt,
     layoutSetHeight: layoutSetHeight,
     layoutAttachRange: layoutAttachRange,
     scrollAfterRowHeightChange: scrollAfterRowHeightChange,

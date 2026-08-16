@@ -531,6 +531,18 @@ test('T119.3 prefix layout: canvas height is the sum, no sibling shells', functi
   assert.strictEqual(VL.layoutCount(L), 3);
 });
 
+test('T119.3 layoutRemoveAt drops one unused slot and closes the gap', function () {
+  const L = VL.createTranscriptLayout({ gap: 8 });
+  VL.layoutPush(L, 100);
+  VL.layoutPush(L, 20);
+  VL.layoutPush(L, 80);
+  assert.strictEqual(VL.layoutTop(L, 2), 136);
+  assert.strictEqual(VL.layoutRemoveAt(L, 1), 1);
+  assert.strictEqual(VL.layoutCount(L), 2);
+  assert.strictEqual(VL.layoutTop(L, 1), 108);
+  assert.strictEqual(VL.layoutTotal(L), 188);
+});
+
 test('T119.3 rowLayoutHeight reserves timestamp chrome; turn-markers do not', function () {
   assert.strictEqual(VL.BUBBLE_BOTTOM_CHROME_PX, 19);
   assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons' }), 287);
@@ -565,6 +577,11 @@ test('T119.3 index.html parks turn-markers and measures chrome into the prefix',
   assert.ok(html.indexOf('isParkedListElement') >= 0, 'detach parks real nodes');
   assert.ok(/row\.el && !row\.el\.isConnected/.test(html),
     'attach re-homes a parked node instead of buildMsg');
+  assert.ok(/if \(row\.role === 'turn-marker'\) return null/.test(html),
+    'attach never rebuilds an unused turn slot as .msg + clock');
+  assert.ok(/function removeTranscriptRow/.test(html) &&
+    /function closeTurn\(\)[\s\S]{0,500}removeTranscriptRow/.test(html),
+    'empty closeTurn deletes the unused slot from the list');
   assert.ok(/el\.style\.minHeight = ''/.test(html) &&
     /noteRowHeightChange/.test(html),
     'remat settle clears minHeight before measuring');

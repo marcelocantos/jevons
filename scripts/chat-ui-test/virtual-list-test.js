@@ -219,6 +219,28 @@ function startServer() {
         userH: marker.userH, userBox: marker.userBox, chrome: marker.chrome,
       }));
     }
+    const unused = await page.evaluate(() => {
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      window.addMsg('user', 'open a tool slot');
+      const before = (window.__transcriptRows || []).length;
+      if (typeof window.startTurn === 'function') window.startTurn();
+      const opened = (window.__transcriptRows || []).length;
+      if (typeof window.closeTurn === 'function') window.closeTurn();
+      const after = (window.__transcriptRows || []).length;
+      const ghosts = document.querySelectorAll('#messages-canvas > .msg.turn-marker').length;
+      const leftover = (window.__transcriptRows || []).filter((r) => r && r.role === 'turn-marker');
+      return { before, opened, after, ghosts, leftover: leftover.length };
+    });
+    if (unused.opened !== unused.before + 1) {
+      failures.push('startTurn should push one row ' + JSON.stringify(unused));
+    }
+    if (unused.after !== unused.before) {
+      failures.push('empty closeTurn must delete the unused slot ' + JSON.stringify(unused));
+    }
+    if (unused.ghosts > 0 || unused.leftover > 0) {
+      failures.push('unused tool slot left a .msg.turn-marker clock ' + JSON.stringify(unused));
+    }
+
     if (!marker.parkedSameNode || marker.probeIsMsgRebuild) {
       failures.push('page-up rebuilt the jevons bubble instead of parking it ' + JSON.stringify({
         parkedSameNode: marker.parkedSameNode, probeIsMsgRebuild: marker.probeIsMsgRebuild,
