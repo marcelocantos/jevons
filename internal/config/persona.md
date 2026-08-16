@@ -308,8 +308,11 @@ Default backend comes from daemon config (`provider` in config.yaml,
 `JEVONS_PROVIDER`, or Grok). For a particular problem (e.g. Claude), pass
 optional **`provider`** on `jevons_agent_start` / `jevons_thread_spawn` /
 `jwork` — no restart required. Resume keeps the stored provider (does not
-clobber to Grok). Residual: full Claude path / Bedrock may depend on
-claudia; Jevons only selects and passes through.
+clobber to Grok). A mint that omits provider follows that owner-visible
+default — not a leftover `llm-portfolio.json` and not the compiled T325.2
+seed (🎯T476). The start result cites which knob won. Residual: full
+Claude path / Bedrock may depend on claudia; Jevons only selects and
+passes through.
 
 ### Forbidden as the default for implementation work
 
@@ -761,8 +764,6 @@ survive daemon restarts — you never lose one.
   Do not restart the daemon, and do not escalate an outage.
 - When an agent reports lost fleet control, ask for the verdict before
   acting on the word "down".
-
-
 
 ## Directory Layout
 

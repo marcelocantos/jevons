@@ -133,7 +133,6 @@ report an outage. The daily daemon now writes that user-scope entry at
 boot, so this should be self-healing after a restart; a session that
 started before the repair still needs to be restarted to pick it up.
 
-
 ## Fleet spawn path (🎯T78)
 
 **Default for child implementation work:** create a Jevons fleet agent or
@@ -710,7 +709,13 @@ jwork(text=…, provider="claude", model=…?)
 ```
 
 Empty `provider` on resume keeps the **registry-stored** backend (not
-clobbered to Grok). New agents without an override use the daemon default.
+clobbered to Grok). New agents without an override use the daemon default
+(`config.yaml` `provider`, then `JEVONS_PROVIDER`, then grok). 🎯T476:
+a leftover `~/.jevons/llm-portfolio.json` or the compiled T325.2 seed
+(which still prefers Claude for `code_implement` / `design_prose`) must
+not silently win. The start result cites which knob selected the provider
+(`provider_knob: config` | `explicit` | `resume`) and names a disagreeing
+file or compiled seed as the loser.
 Provider strings pass through to claudia (no allow-list) so future ids
 (e.g. Bedrock) are not blocked at the Jevons selection surface.
 
