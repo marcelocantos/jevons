@@ -2762,14 +2762,8 @@ function handle(m) {
       setDegraded(true, errText);
       logChatConn('degraded', { ms: chatConnMs() });
     }
-    // 🎯T361: the 🎯T355 human-alert rung is its own degraded class. It is
-    // raised only on a LIVE frame — the alert is journaled, so replaying it
-    // on reconnect would re-raise a banner for a gap that may be long
-    // closed. A gap that still stands re-alerts on the next due tick.
-    if (typeof OwnerUX !== 'undefined' && OwnerUX.isOwnerDegradeAlert(errText) && !historyReplayActive) {
-      setOwnerDegraded(true, OwnerUX.ownerDegradeReason(errText));
-      logChatConn('owner_degraded', { ms: chatConnMs() });
-    }
+    // Historical type=error alerts are edges. The banner is a level
+    // (owner_ux on status / history_meta). Do not raise it from a journaled error.
     // Fall through so existing error UI (if any) still runs.
   }
   // 🎯T204 / T94: cockpit ready — clear degraded banner AND working chrome so
@@ -2784,7 +2778,14 @@ function handle(m) {
     // 🎯T361: owner-health UX coordination rides the level frame.
     if (typeof OwnerUX !== 'undefined') {
       if (OwnerUX.isYieldHydrateFrame(m)) yieldAndHydrate('ux_coordinate');
-      if (OwnerUX.isOwnerRecoveredFrame(m)) setOwnerDegraded(false);
+      const uxLevel = OwnerUX.ownerUXLevel ? OwnerUX.ownerUXLevel(m) : '';
+      if (uxLevel === 'degraded') {
+        setOwnerDegraded(true, OwnerUX.ownerDegradeReason(m.text || m.error) || 'unspecified');
+      } else if (uxLevel === 'ok') {
+        setOwnerDegraded(false);
+      } else if (OwnerUX.isOwnerRecoveredFrame(m)) {
+        setOwnerDegraded(false);
+      }
     }
     if (/overseer is back/i.test(stText)) {
       setDegraded(false);
@@ -2826,6 +2827,14 @@ function handle(m) {
   // infinite scroll is not a data throttle. Optional top sentinel remains
   // while pages are outstanding (does not gate the progressive fetch).
   if (typ === 'history_meta') {
+    if (typeof OwnerUX !== 'undefined' && OwnerUX.ownerUXLevel) {
+      const uxLevel = OwnerUX.ownerUXLevel(m);
+      if (uxLevel === 'degraded') {
+        setOwnerDegraded(true, OwnerUX.ownerDegradeReason(m.text) || 'unspecified');
+      } else if (uxLevel === 'ok') {
+        setOwnerDegraded(false);
+      }
+    }
     const wasSoft = softReconnectActive;
     softReconnectActive = false;
     _awaitingHistoryMeta = false; // 🎯T347: replay span is over — live pins OK

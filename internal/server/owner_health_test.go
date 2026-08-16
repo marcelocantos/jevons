@@ -368,16 +368,16 @@ func TestOwnerHealthEscalatesUnrecoveredGapToOwner(t *testing.T) {
 	}
 
 	alert, ok := frameMatching(drainFrames(frames), func(m map[string]any) bool {
-		if m["type"] != "error" {
+		if m["type"] != "status" || m["owner_ux"] != "degraded" {
 			return false
 		}
-		text, _ := m["error"].(string)
+		text, _ := m["text"].(string)
 		return strings.Contains(text, "owner interaction degraded")
 	})
 	if !ok {
 		t.Fatal("an unrecovered owner-interaction gap never reached the owner")
 	}
-	if text, _ := alert["error"].(string); !strings.Contains(text, "recovery steps") {
+	if text, _ := alert["text"].(string); !strings.Contains(text, "recovery steps") {
 		t.Errorf("alert = %q, want it to name the recovery attempts", text)
 	}
 

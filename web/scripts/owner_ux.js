@@ -66,6 +66,24 @@
    * Carried on a status frame with no state, so it cannot settle working
    * chrome mid-turn (🎯T260) on its way to clearing the banner.
    */
+  /**
+   * Current owner-UX level on a status frame. "degraded" / "ok" are
+   * levels; recovered is ok. Empty means this frame does not speak.
+   */
+  function ownerUXLevel(msg) {
+    const m = msg || {};
+    if (String(m.type || '') === 'history_meta') {
+      const u = String(m.owner_ux || '');
+      if (u === 'degraded' || u === 'ok') return u;
+      return '';
+    }
+    if (isOwnerRecoveredFrame(m)) return 'ok';
+    if (String(m.type || '') !== 'status') return '';
+    const u = String(m.owner_ux || '');
+    if (u === 'degraded' || u === 'ok') return u;
+    return '';
+  }
+
   function isOwnerRecoveredFrame(msg) {
     const m = msg || {};
     if (String(m.type || '') !== 'status') return false;
@@ -141,6 +159,7 @@
     isOwnerDegradeAlert: isOwnerDegradeAlert,
     ownerDegradeReason: ownerDegradeReason,
     isOwnerRecoveredFrame: isOwnerRecoveredFrame,
+    ownerUXLevel: ownerUXLevel,
     bannerText: bannerText,
     composerBlocked: composerBlocked,
     composerBlockedReason: composerBlockedReason,

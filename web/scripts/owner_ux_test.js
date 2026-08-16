@@ -102,10 +102,20 @@ test('index.html wires the three T361 halves', function () {
 
 // The alert is journaled; replaying it must not re-raise a banner for a gap
 // that may be long closed.
-test('sticky banner is raised on live frames only, not history replay', function () {
+test('owner_ux level: degraded raises, ok/recovered clears; journaled error is not a level', function () {
+  assert.strictEqual(UX.ownerUXLevel({ type: 'status', owner_ux: 'degraded', text: 'owner interaction degraded: x' }), 'degraded');
+  assert.strictEqual(UX.ownerUXLevel({ type: 'status', owner_ux: 'ok' }), 'ok');
+  assert.strictEqual(UX.ownerUXLevel({ type: 'status', ux: 'recovered', text: 'owner interaction recovered: x' }), 'ok');
+  assert.strictEqual(UX.ownerUXLevel({ type: 'history_meta', owner_ux: 'ok' }), 'ok');
+  assert.strictEqual(UX.ownerUXLevel({ type: 'error', error: 'owner interaction degraded: interaction_usable (ux_degraded)' }), '');
+});
+
+test('sticky banner follows owner_ux level, not journaled error edges', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(/isOwnerDegradeAlert\(errText\)\s*&&\s*!historyReplayActive/.test(html),
-    'degrade alert must be gated on live (non-replay) frames');
+  assert.ok(html.indexOf('ownerUXLevel') >= 0, 'hydrate/live apply owner_ux level');
+  assert.ok(/typ === 'error'[\s\S]{0,800}Do not raise it from a journaled error/.test(html) ||
+    html.indexOf('Do not raise it from a journaled error') >= 0,
+    'journaled type=error no longer raises the banner');
 });
 
 if (failed) {

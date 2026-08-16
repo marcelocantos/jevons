@@ -1234,7 +1234,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				"conn_id": connID, "replay_frames": frames, "replay_bytes": bytes, "replay_ms": replayMS,
 				// 🎯T355: this sample is also what the client will paint,
 				// so it is the chrome level the server has published.
-				"working": s.publishedWorkingLevel(),
+				"working":  s.publishedWorkingLevel(),
+				"owner_ux": s.ownerUXLevel(),
 			})
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			_ = conn.Write(writeCtx, websocket.MessageText, meta)

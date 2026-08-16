@@ -437,9 +437,10 @@ func (s *Server) publishOwnerRecovered(dim converge.OwnerDimension, reason strin
 
 	text := fmt.Sprintf("owner interaction recovered: %s (%s)", dim, reason)
 	payload, err := json.Marshal(map[string]any{
-		"type": "status",
-		"ux":   "recovered",
-		"text": text,
+		"type":     "status",
+		"ux":       "recovered",
+		"owner_ux": "ok",
+		"text":     text,
 	})
 	if err != nil {
 		slog.Error("owner health: marshal recovery frame", "err", err)
@@ -447,6 +448,18 @@ func (s *Server) publishOwnerRecovered(dim converge.OwnerDimension, reason strin
 	}
 	slog.Info("owner health: alerted gap recovered", "dimension", dim, "reason", reason)
 	s.broadcastChatLive(string(payload))
+}
+
+// ownerUXLevel is the current interaction banner level: degraded if a
+// UX gap is still open, otherwise ok. Connect snapshot uses this so
+// hydrate does not infer level from journaled edges.
+func (s *Server) ownerUXLevel() string {
+	for _, g := range s.OwnerHealthGaps() {
+		if g.Kind == converge.OwnerGapUXDegraded {
+			return "degraded"
+		}
+	}
+	return "ok"
 }
 
 // OwnerHealthGaps is the standing owner-interaction gap set (diagnostics).
@@ -594,13 +607,19 @@ func (a ownerActuator) overseerNoise(g converge.OwnerGap, now time.Time) error {
 func (a ownerActuator) humanAlert(g converge.OwnerGap, now time.Time) error {
 	text := fmt.Sprintf("owner interaction degraded: %s (%s) — unresolved for %s after %d recovery steps",
 		g.Dimension, g.Kind, g.Age(now).Round(time.Second), g.StepCount())
-	payload, err := json.Marshal(map[string]string{"type": "error", "error": text})
+	payload, err := json.Marshal(map[string]any{
+		"type":     "status",
+		"owner_ux": "degraded",
+		"text":     text,
+	})
 	if err != nil {
 		return fmt.Errorf("owner health: marshal alert: %w", err)
 	}
 	slog.Error("owner health: unrecovered gap surfaced to the owner",
 		"dimension", g.Dimension, "kind", g.Kind, "dwell", g.Age(now).String())
-	a.s.BroadcastChat(string(payload))
+	// Level, not a turn: live-only. Journaling this as type=error made
+	// every hydrate re-raise a banner after the gap had already closed.
+	a.s.broadcastChatLive(string(payload))
 	// 🎯T361: the client raises a sticky banner on this alert, so remember
 	// that this dimension owes the owner a recovery notice.
 	a.s.ownerMu.Lock()
