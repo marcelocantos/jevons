@@ -1390,6 +1390,12 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 	targets := DaemonRestartEventTargets(byParent, overseer, defaultPO)
 	allKids := FlattenWorkChildren(byParent)
 
+	// 🎯T418: do this BEFORE the blocking restart-notify sends. A live
+	// overseer turn held SweepHandovers past the isolate journey window.
+	s.SweepSendBacklogs()
+	s.SweepHandovers()
+	s.reportFleetMuteIfNeeded()
+
 	// 🎯T328: recover open owner instruction for overseer resume (chatlog I/O).
 	openIntent := LoadOpenOwnerIntent(stateDir, overseer)
 	if openIntent.Recoverable() {
@@ -1435,11 +1441,6 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 			"open_intent": openIntent.Recoverable(), "residual": openIntent.Residual,
 		})
 	}
-	// 🎯T418: isolate and headless daemons have no cockpit nudge. Recover
-	// accepted queues and pending handovers on the restart notify itself.
-	s.SweepSendBacklogs()
-	s.SweepHandovers()
-	s.reportFleetMuteIfNeeded()
 }
 
 // utf8RuneCount is a tiny local helper for NotifyDaemonRestarted logs.

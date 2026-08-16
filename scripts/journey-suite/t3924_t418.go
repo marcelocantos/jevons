@@ -349,9 +349,7 @@ func (s *suite) jT418HandoverMute() error {
 		"UNDELIVERED HANDOVER",
 		"pending handover surfaced",
 		"handover retry",
-		"handover sweep",
 		"handover classify",
-		"🎯T418 handover",
 	}
 	wait = time.Now().Add(45 * time.Second)
 	for time.Now().Before(wait) {
