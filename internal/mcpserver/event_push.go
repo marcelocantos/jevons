@@ -11,6 +11,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/butler"
 )
 
 // registerEventPushTools exposes 🎯T34 event-triggered push via MCP so
@@ -50,14 +51,34 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 		event = "unknown"
 		life["event"] = event
 	}
+	wire := butler.FormatEventPush(event, text)
+
+	// 🎯T428. This tool does not pass through deliverToOverseer, so the
+	// guard is applied here against the same ledger and the same wire
+	// bytes. Non-overseer targets are unaffected.
+	var ticket notifyReplayTicket
+	if s.isOverseerAgent(target) {
+		var dec notifyReplayDecision
+		ticket, dec = s.notifyReplays().Offer(wire)
+		if !dec.Admit {
+			life["suppressed_replay"] = dec.Reason
+			life["offers"] = dec.Offers
+			s.logLifecycle(compEventPush, "push", "ok", life)
+			return mcp.NewToolResultText(
+				describeReplaySuppression(target, dec, s.notifyReplays().Now())), nil
+		}
+	}
+
 	reply, err := s.butler.PushEvent(target, event, text)
 	if err != nil {
+		ticket.Abandon()
 		life["err"] = err.Error()
 		life["failure_class"] = agenterr.Classify(err).String()
 		s.logLifecycle(compEventPush, "push", "error", life)
 		// 🎯T283: same classification the owner chat path gets.
 		return toolFailure("event_push", target, err), nil
 	}
+	ticket.Settle(true)
 	if class, ownerMsg, ok := agenterr.ReplyFailure(reply); ok {
 		life["failure_class"] = class.String()
 		s.logLifecycle(compEventPush, "push", "error", life)

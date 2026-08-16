@@ -219,8 +219,34 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 	// a payload that appears is confirmed, and one that does not is reported
 	// unconfirmed rather than delivered — never as the defect, because a note
 	// legitimately waiting behind an owner turn looks identical from here.
+	// 🎯T428. Every notification source arrives here, so the channel is
+	// where a batch the overseer already holds is refused. Owner turns
+	// are exempt: the owner may say the same thing twice and mean it twice.
+	var ticket notifyReplayTicket
+	if origin != OriginOwner {
+		var dec notifyReplayDecision
+		ticket, dec = s.notifyReplays().Offer(text)
+		if !dec.Admit {
+			slog.Info("agent_send",
+				"component", "agent_send",
+				"name", name,
+				"origin", string(origin),
+				"status", StatusSuppressedReplay,
+				"digest", dec.Digest,
+				"offers", dec.Offers,
+				"delivered", dec.Delivered,
+				"reason", dec.Reason,
+			)
+			return agentSendResult{
+				Status:  StatusSuppressedReplay,
+				Message: describeReplaySuppression(name, dec, s.notifyReplays().Now()),
+			}, nil
+		}
+	}
+
 	watch := s.watchAgentTurnFor(name, text)
 	if err := deliver(text, origin); err != nil {
+		ticket.Abandon()
 		slog.Warn("agent_send",
 			"component", "agent_send",
 			"name", name,
@@ -232,6 +258,7 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 	}
 
 	ev := watch()
+	ticket.Settle(ev.PayloadSeen || ev.PayloadEnteredTurn || ev.PayloadQueued)
 	outcome := ClassifySendOutcome(FlightUnknown, ev)
 	res := agentSendResult{
 		Status:  "sent",

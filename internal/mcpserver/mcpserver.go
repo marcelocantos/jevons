@@ -78,6 +78,11 @@ type Server struct {
 	// overseer-addressed send reuses the owner chat journal and notify queue.
 	// Nil falls back to notifyJevon for agent-origin text (see deliverToOverseer).
 	overseerDeliver OverseerDeliverFunc
+	// notifyReplay remembers which notification batches the overseer already
+	// holds, so the one channel every source funnels through refuses to
+	// re-deliver byte-identical content (🎯T428). Nil until first use; see
+	// notifyReplays(), which is the only reader of this field.
+	notifyReplay *notifyReplayLedger
 	// resolveSender overrides fleet-agent process resolution on that same
 	// path. Nil — the product path — resolves via the registry. Test seam.
 	resolveSender senderResolver
