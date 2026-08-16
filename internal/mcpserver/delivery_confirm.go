@@ -99,6 +99,8 @@ func (s *Server) clearAgentTurnBegan(name string) {
 	// Outside the lock on purpose — the wiring mutex is never taken under mu
 	// (see attachAgentSink on lock order).
 	s.forgetAgentWiring(name)
+	// 🎯T392.4: so is the depth of the turn that seat was running.
+	s.forgetTurnDepth(name)
 }
 
 // deliverStartPrompt injects the optional jevons_agent_start prompt after

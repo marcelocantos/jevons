@@ -37,6 +37,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
+	"github.com/marcelocantos/jevons/internal/turndepth"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -252,6 +253,13 @@ type Server struct {
 	// idleNudgeSweep is set by StartIdleNudgeLoop for cockpit fleet health
 	// (dead-handle sweep only — no auto-continue ladder).
 	idleNudgeSweep func(postRestart bool)
+
+	// turnDepth counts how deep each agent's current turn has run, and
+	// turnDepthPolicy is the ceiling it is judged against (🎯T392.4).
+	// Guarded by mu; created on first use.
+	turnDepth          *turndepth.Counter
+	turnDepthPolicy    turndepth.Policy
+	turnDepthInterrupt func(string) error
 
 	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.
