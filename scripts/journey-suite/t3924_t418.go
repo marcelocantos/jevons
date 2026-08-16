@@ -14,10 +14,32 @@ import (
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
+func (s *suite) eventsPath() string {
+	return filepath.Join(s.stateDir, "logs", "events.jsonl")
+}
+
+func printMatching(label, blob string, needles ...string) {
+	fmt.Println("---", label, "---")
+	for _, line := range strings.Split(blob, "\n") {
+		for _, n := range needles {
+			if strings.Contains(line, n) {
+				fmt.Println(line)
+				break
+			}
+		}
+	}
+}
+
+func newTail(prev, now []byte) string {
+	if len(now) <= len(prev) {
+		return ""
+	}
+	return string(now[len(prev):])
+}
+
 // jT3924CheckpointResume is the 🎯T392.4 isolate journey: a worker that
 // crosses the depth ceiling is asked to checkpoint and then resumed in a
-// new turn; a below-ceiling control still completes. Interacts with a
-// live fleet agent (not a hermetic stub).
+// new turn; a below-ceiling control still completes.
 func (s *suite) jT3924CheckpointResume() error {
 	if err := portguard.RefuseDaily(s.port); err != nil {
 		return err
@@ -47,7 +69,6 @@ func (s *suite) jT3924CheckpointResume() error {
 		return fmt.Errorf("start: %w (%s)", err, trim(spawnOut, 80))
 	}
 
-	// Control: a below-ceiling turn still completes (no tools).
 	ctrl, err := s.mcpText("jevons_thread_direct", map[string]any{
 		"id": name, "text": "Reply with exactly PONG and do not call any tools.",
 	})
@@ -60,8 +81,8 @@ func (s *suite) jT3924CheckpointResume() error {
 	if strings.TrimSpace(ctrl) == "" {
 		return fmt.Errorf("control turn produced no reply")
 	}
+	fmt.Println("T392.4 control reply:", trim(ctrl, 240))
 
-	// Deep turn: several shell calls so the daemon sees tool_use progress.
 	deep := "You MUST use run_terminal_command four times in this turn: echo T3924-A, then echo T3924-B, then echo T3924-C, then echo T3924-D. Do not stop after the first call."
 	if _, err := s.mcpText("jevons_thread_direct", map[string]any{
 		"id": name, "text": deep,
@@ -74,13 +95,14 @@ func (s *suite) jT3924CheckpointResume() error {
 
 	deadline := time.Now().Add(2 * time.Minute)
 	var sawAsk, sawResume bool
+	var blob string
 	for time.Now().Before(deadline) {
 		body, _ := os.ReadFile(s.eventsPath())
-		text := string(body)
-		if strings.Contains(text, "checkpoint_asked") || strings.Contains(text, "checkpoint asked") {
+		blob = string(body)
+		if strings.Contains(blob, "checkpoint_asked") {
 			sawAsk = true
 		}
-		if strings.Contains(text, "checkpoint_resume") {
+		if strings.Contains(blob, "checkpoint_resume") {
 			sawResume = true
 		}
 		if sawAsk && sawResume {
@@ -88,28 +110,19 @@ func (s *suite) jT3924CheckpointResume() error {
 		}
 		time.Sleep(2 * time.Second)
 	}
+	printMatching("T392.4 eventlog", blob, "checkpoint_asked", "checkpoint_resume")
 	if !sawAsk {
-		// The agent may have finished in fewer than 4 tool calls. Drive
-		// the shipped observe path is hermetic; the journey still interacted
-		// with a live agent (start + two sends). Fail only if the agent
-		// never ran.
-		if err := s.MustAgentRunning(name); err != nil {
-			return fmt.Errorf("deep turn: no checkpoint_asked and agent is gone: %w", err)
-		}
-		return fmt.Errorf("deep turn produced no checkpoint_asked in %s (agent ran; ceiling may not have been reached)", s.eventsPath())
+		return fmt.Errorf("deep turn produced no checkpoint_asked in %s", s.eventsPath())
 	}
 	if !sawResume {
-		return fmt.Errorf("checkpoint asked but no checkpoint_resume — successor turn was not scheduled")
+		return fmt.Errorf("checkpoint asked but no checkpoint_resume")
 	}
+	fmt.Println("T392.4 observed checkpoint_asked and checkpoint_resume")
 	return nil
 }
 
-func (s *suite) eventsPath() string {
-	return filepath.Join(s.stateDir, "logs", "events.jsonl")
-}
-
-// jT418QueueBounce is the 🎯T418 isolate journey: an accepted queued send
-// survives a daemon bounce and is delivered or the sender is told.
+// jT418QueueBounce requires the second send to be queued, snapshots
+// logs, bounces, and asserts a NEW recover/undelivered/re-offer line.
 func (s *suite) jT418QueueBounce() error {
 	if err := portguard.RefuseDaily(s.port); err != nil {
 		return err
@@ -133,62 +146,74 @@ func (s *suite) jT418QueueBounce() error {
 		return fmt.Errorf("start: %w (%s)", err, trim(spawnOut, 80))
 	}
 
-	// Occupy the turn so the second send queues.
 	go func() {
 		_, _ = s.mcpText("jevons_thread_direct", map[string]any{
-			"id": name, "text": "Count slowly from 1 to 30 in your reply, then say DONE.",
+			"id": name, "text": "Count slowly from 1 to 40 in your reply, then say DONE. Do not finish early.",
 		})
 	}()
-	time.Sleep(1500 * time.Millisecond)
-	queued, err := s.mcpText("jevons_agent_send", map[string]any{
-		"name": name, "text": "QUEUED-TOKEN-T418-SURVIVE after the bounce.", "actor": "jevons",
-	})
-	if out := asOutage("queue send", err); out != nil {
-		return out
+
+	token := "QUEUED-TOKEN-T418-SURVIVE"
+	var queued string
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(800 * time.Millisecond)
+		out, err := s.mcpText("jevons_agent_send", map[string]any{
+			"name": name, "text": token + " after the bounce.", "actor": "jevons",
+		})
+		if asOutage("queue send", err) != nil {
+			return asOutage("queue send", err)
+		}
+		if err != nil {
+			// A busy in-flight send often returns queued as text, not err.
+			if strings.Contains(strings.ToLower(out+" "+err.Error()), "queued") {
+				queued = out + " " + err.Error()
+				break
+			}
+			continue
+		}
+		if strings.Contains(strings.ToLower(out), "queued") {
+			queued = out
+			break
+		}
 	}
-	if err != nil {
-		return fmt.Errorf("queue send: %w", err)
+	if queued == "" || !strings.Contains(strings.ToLower(queued), "queued") {
+		return fmt.Errorf("second send never queued (need queued, not sent/delivered): last=%s", trim(queued, 240))
 	}
-	low := strings.ToLower(queued)
-	if !strings.Contains(low, "queued") && !strings.Contains(low, "sent") && !strings.Contains(low, "delivered") {
-		return fmt.Errorf("second send was not accepted: %s", trim(queued, 200))
-	}
+	fmt.Println("T418 queued reply:", trim(queued, 240))
+
+	preEvents, _ := os.ReadFile(s.eventsPath())
+	preLogs, _ := os.ReadFile(s.logPath)
 
 	if err := s.bounceDrain(); err != nil {
 		return fmt.Errorf("bounce: %w", err)
 	}
 
-	// After bounce the durable queue must still exist or the payload
-	// must have been delivered / surfaced.
-	sendq := filepath.Join(s.stateDir, "sendq")
-	events, _ := os.ReadFile(s.eventsPath())
-	logs, _ := os.ReadFile(s.logPath)
-	blob := string(events) + "\n" + string(logs)
-	if strings.Contains(blob, "QUEUED-TOKEN-T418-SURVIVE") ||
-		strings.Contains(blob, "recovered a queued message") ||
-		strings.Contains(blob, "UNDELIVERED") {
-		return nil
+	needles := []string{
+		"recovered a queued message",
+		"UNDELIVERED",
+		"backlog sweep: re-offering",
+		"🎯T418 recovered",
 	}
-	if _, err := os.Stat(sendq); err == nil {
-		entries, _ := os.ReadDir(sendq)
-		if len(entries) > 0 {
-			return nil
+	wait := time.Now().Add(45 * time.Second)
+	for time.Now().Before(wait) {
+		ev, _ := os.ReadFile(s.eventsPath())
+		lg, _ := os.ReadFile(s.logPath)
+		delta := newTail(preEvents, ev) + "\n" + newTail(preLogs, lg)
+		for _, n := range needles {
+			if strings.Contains(delta, n) {
+				printMatching("T418 post-bounce NEW lines", delta, needles...)
+				fmt.Println("T418 bounce-survive-or-tell: saw", n)
+				return nil
+			}
 		}
+		time.Sleep(2 * time.Second)
 	}
-	// Agent may have drained it after restart — look at the transcript.
-	tr, _ := s.agentTranscriptHTTP(name)
-	if dump, _ := tr["text"].(string); strings.Contains(dump, "QUEUED-TOKEN-T418-SURVIVE") {
-		return nil
-	}
-	if raw, _ := tr["raw"].(string); strings.Contains(raw, "QUEUED-TOKEN-T418-SURVIVE") {
-		return nil
-	}
-	return fmt.Errorf("queued send vanished across bounce; no recover/undelivered/transcript evidence")
+	return fmt.Errorf("no NEW post-bounce recover/UNDELIVERED/re-offer line (pre-bounce token does not count)")
 }
 
-// jT418HandoverMute covers clause 5 (pending handover retried or surfaced)
-// and clause 6 (mute reported when nobody can press Enter). Interacts with
-// a live agent so the mute control has a real seat.
+// jT418HandoverMute plants a stale pending handover and a queued send,
+// then stops every registered agent so nobody can press Enter, and
+// asserts the daemon reports MUTE.
 func (s *suite) jT418HandoverMute() error {
 	if err := portguard.RefuseDaily(s.port); err != nil {
 		return err
@@ -203,7 +228,7 @@ func (s *suite) jT418HandoverMute() error {
 	}()
 
 	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
-		"id": name, "workdir": work, "description": "T418 handover-mute worker",
+		"id": name, "workdir": work, "description": "T418 mute fixture worker",
 	})
 	if out := asOutage("spawn", err); out != nil {
 		return out
@@ -222,29 +247,64 @@ func (s *suite) jT418HandoverMute() error {
 	}); err != nil {
 		return fmt.Errorf("plant pending: %w", err)
 	}
-	// Give the predecessor file a body so Usable is true.
 	if err := os.WriteFile(filepath.Join(work, "pred.jsonl"), []byte("{}\n"), 0o644); err != nil {
 		return err
 	}
 
-	if err := s.bounceDrain(); err != nil {
-		return fmt.Errorf("bounce: %w", err)
+	go func() {
+		_, _ = s.mcpText("jevons_thread_direct", map[string]any{
+			"id": name, "text": "Count slowly from 1 to 40 in your reply, then say DONE.",
+		})
+	}()
+	var queued string
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(800 * time.Millisecond)
+		out, err := s.mcpText("jevons_agent_send", map[string]any{
+			"name": name, "text": "MUTE-TOKEN-T418 queued while everyone is about to be stuck.", "actor": "jevons",
+		})
+		blob := strings.ToLower(out)
+		if err != nil {
+			blob += " " + strings.ToLower(err.Error())
+		}
+		if strings.Contains(blob, "queued") {
+			queued = out
+			if err != nil {
+				queued += " " + err.Error()
+			}
+			break
+		}
+	}
+	if queued == "" {
+		return fmt.Errorf("mute fixture never accepted a queued send")
+	}
+	fmt.Println("T418 mute queued reply:", trim(queued, 240))
+
+	preLogs, _ := os.ReadFile(s.logPath)
+	preEvents, _ := os.ReadFile(s.eventsPath())
+
+	agents, err := s.ListAgentsHTTP()
+	if err != nil {
+		return fmt.Errorf("list agents: %w", err)
+	}
+	if len(agents) == 0 {
+		return fmt.Errorf("mute fixture: no registered agents")
+	}
+	for _, a := range agents {
+		_, _ = s.AgentStop(a.Name)
 	}
 
-	deadline := time.Now().Add(45 * time.Second)
-	for time.Now().Before(deadline) {
-		logs, _ := os.ReadFile(s.logPath)
-		events, _ := os.ReadFile(s.eventsPath())
-		blob := string(logs) + string(events)
-		if strings.Contains(blob, "handover retry") ||
-			strings.Contains(blob, "handover retry") ||
-			strings.Contains(blob, "UNDELIVERED HANDOVER") ||
-			strings.Contains(blob, "pending handover surfaced") ||
-			strings.Contains(blob, "handover reaped") ||
-			strings.Contains(blob, "MUTE:") {
+	wait := time.Now().Add(30 * time.Second)
+	for time.Now().Before(wait) {
+		lg, _ := os.ReadFile(s.logPath)
+		ev, _ := os.ReadFile(s.eventsPath())
+		delta := newTail(preLogs, lg) + "\n" + newTail(preEvents, ev)
+		if strings.Contains(delta, "MUTE:") || strings.Contains(delta, "fleet mute") {
+			printMatching("T418 MUTE NEW lines", delta, "MUTE:", "fleet mute")
+			fmt.Println("T418 no-rescuer mute observed")
 			return nil
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
-	return fmt.Errorf("planted pending handover was not retried, surfaced, or reaped after bounce")
+	return fmt.Errorf("no MUTE report after stopping every registered agent with queued work")
 }

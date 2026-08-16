@@ -888,14 +888,15 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	// implementers silent for hours.
 	args.Server.mu.Lock()
 	args.Server.idleNudgeSweep = func(postRestart bool) {
+		// 🎯T418: mute from the stuck snapshot before SweepDeadAgents /
+		// recover relaunches a rescuer.
+		args.Server.SweepSendBacklogs()
+		args.Server.SweepHandovers()
+		args.Server.reportFleetMuteIfNeeded()
 		if reps := SweepDeadAgents(args.Server.registry, overseer, args.Server.fleetIntent()); len(reps) > 0 {
 			slog.Info("fleet health (cockpit/idle loop)", "report", FormatDeadAgentReport(reps), "post_restart", postRestart)
 		}
 		args.Server.runFleetRecoverSweep(postRestart)
-		// 🎯T418: re-offer a backlog whose turn boundary was consumed by the restart.
-		args.Server.SweepSendBacklogs()
-		args.Server.SweepHandovers()
-		args.Server.reportFleetMuteIfNeeded()
 		args.Server.TriggerIdlePressureSweep()
 	}
 	args.Server.mu.Unlock()
