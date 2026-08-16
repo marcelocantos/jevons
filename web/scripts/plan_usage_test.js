@@ -242,7 +242,7 @@ test('clause 2: an unavailable backend says so out loud, never a blank or a zero
   assert.ok(exhausted.text.indexOf('cl/s 0%') >= 0, 'control: ' + exhausted.text);
   assert.ok(z.text.indexOf('unavailable') < 0,
     'control: an exhausted plan is not an unavailable plan: ' + z.text);
-  assert.strictEqual(exhausted.className, 'plan-crit', 'control: an exhausted plan colours the line');
+  assert.strictEqual(exhausted.className, 'plan-hot', 'control: an exhausted plan colours the line red');
 });
 
 test('clause 2: a producer claiming available while publishing nothing is downgraded, with a reason', function () {
@@ -255,7 +255,7 @@ test('clause 2: a producer claiming available while publishing nothing is downgr
     'the downgrade must say why it happened: ' + view.title);
 });
 
-test('clause 2: Grok and Bedrock both occupy the bar as the word, never a number', function () {
+test('clause 2: Grok occupies the bar as the word when unpublished; idle Bedrock does not', function () {
   const bedrock = {
     provider: 'bedrock',
     status: 'unavailable',
@@ -277,15 +277,17 @@ test('clause 2: Grok and Bedrock both occupy the bar as the word, never a number
     }
   ]), NOW);
 
-  // Owner example shape: cl/s · cl/w · cx/w, plus the two unavailables.
+  // Owner example shape: cl/s · cl/w · cx/w, plus Grok as the word.
+  // 🎯T390.1: idle Bedrock is off the bar — it can never grow a reading.
   assert.ok(view.text.indexOf('cl/s 62%') >= 0, view.text);
   assert.ok(view.text.indexOf('cl/w 29%') >= 0, view.text);
   assert.ok(view.text.indexOf('cx/w 100%') >= 0, view.text);
   assert.ok(view.text.indexOf('gk unavailable') >= 0, view.text);
-  assert.ok(view.text.indexOf('bd unavailable') >= 0, view.text);
+  assert.ok(view.text.indexOf('bd unavailable') < 0, 'idle bedrock must not occupy the bar: ' + view.text);
   assert.ok(view.text.indexOf('grok') < 0, 'header uses the abbrev, not the full name: ' + view.text);
   assert.strictEqual(chipFor(view, 'gk').remainingPercent, null);
-  assert.strictEqual(chipFor(view, 'bd').remainingPercent, null);
+  assert.strictEqual(chipFor(view, 'bd'), null, 'no idle bedrock chip');
+  assert.ok(view.title.indexOf('bedrock') >= 0, 'hover still names bedrock: ' + view.title);
 });
 
 // ── clause 5c ───────────────────────────────────────────────────────────────
@@ -306,7 +308,13 @@ test('clause 5c: an aged reading is marked stale rather than shown as current', 
   // Staleness must not blank the reading: "we last saw 62% forty minutes ago"
   // beats showing nothing at all.
   assert.ok(rendersBothWindows(row), 'a stale reading is still rendered, with its age');
-  assert.strictEqual(view.className, 'plan-stale');
+  // Pace outranks stale for colour — an aged reading that is also burning
+  // hot should not go muted-grey and hide the spend signal. Staleness
+  // still rides the text, the group class, and the hover.
+  assert.ok(view.className === 'plan-stale' || view.className === 'plan-ahead' || view.className === 'plan-hot',
+    'stale or pace colour, not blank: ' + view.className);
+  assert.ok(groupFor(view, 'claude').className.indexOf('plan-stale') >= 0,
+    'the group still carries stale so the paint can fade it');
 
   // CONTROL: the identical reading inside the bound. Without this, a consumer
   // that marked everything stale would pass the assertions above and the flag
@@ -314,7 +322,8 @@ test('clause 5c: an aged reading is marked stale rather than shown as current', 
   const fresh = PU.formatPlanUsage(snapshot([claudeBackend()]), NOW);
   assert.strictEqual(rowFor(fresh, 'claude').stale, false, 'control: a 30s-old reading is not stale');
   assert.ok(fresh.text.indexOf('stale') < 0, 'control: ' + fresh.text);
-  assert.strictEqual(fresh.className, '', 'control: a fresh healthy reading colours nothing');
+  assert.ok(fresh.className !== 'plan-stale',
+    'control: a fresh reading must not be marked stale, got ' + fresh.className);
 });
 
 // ── surrounding honesty ─────────────────────────────────────────────────────
@@ -336,11 +345,12 @@ test('a daemon without plan usage hides the line; a query failure states itself'
   assert.ok(failed.text.indexOf('unavailable') >= 0, failed.text);
 });
 
-test('low and critical thresholds colour the line, and the tightest window wins', function () {
+test('low and critical thresholds colour the line when there is no time signal', function () {
+  // No resets_at — pace cannot run, so remaining-low still decides.
   const low = PU.formatPlanUsage(snapshot([claudeBackend({
     windows: [
-      { name: 'session', remaining_percent: 80, used_percent: 20, resets_at: iso(NOW + HOUR) },
-      { name: 'weekly', remaining_percent: PU.LOW_PERCENT - 1, used_percent: 86, resets_at: iso(NOW + 30 * HOUR) }
+      { name: 'session', remaining_percent: 80, used_percent: 20 },
+      { name: 'weekly', remaining_percent: PU.LOW_PERCENT - 1, used_percent: 86 }
     ]
   })]), NOW);
   assert.strictEqual(low.className, 'plan-low', 'the tightest window decides, not the first');
@@ -348,7 +358,7 @@ test('low and critical thresholds colour the line, and the tightest window wins'
   assert.strictEqual(chipFor(low, 'cl/w').className, 'plan-low');
 
   const crit = PU.formatPlanUsage(snapshot([claudeBackend({
-    windows: [{ name: 'session', remaining_percent: PU.CRITICAL_PERCENT - 1, resets_at: iso(NOW + HOUR) }]
+    windows: [{ name: 'session', remaining_percent: PU.CRITICAL_PERCENT - 1 }]
   })]), NOW);
   assert.strictEqual(crit.className, 'plan-crit');
 });
@@ -400,12 +410,15 @@ test('index.html mounts the plan bar in #status next to #theme-toggle, not the R
   assert.strictEqual(second, -1, 'exactly one #plan-ticker');
 });
 
-test('index.html never hides #plan-ticker pending a fetch, and styles compact bars', function () {
+test('index.html never hides #plan-ticker pending a fetch, and styles grouped bars', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(!/#plan-ticker\s*\{[^}]*display\s*:\s*none/.test(html),
     '#plan-ticker must not start as display:none (the pre-fix tree hid it)');
   assert.ok(html.indexOf('.plan-bar') >= 0, 'compact bar indicator CSS');
   assert.ok(html.indexOf('.plan-bar-fill') >= 0, 'bar fill for remaining %');
+  assert.ok(html.indexOf('.plan-tri') >= 0, 'time-remaining triangle CSS');
+  assert.ok(html.indexOf('.plan-box') >= 0, 'per-provider window box CSS');
+  assert.ok(html.indexOf('.plan-icon') >= 0, 'company-mark CSS');
   assert.ok(html.indexOf('display: none') < 0 || !/#plan-ticker\s*\{[^}]*display\s*:\s*none/.test(html));
   // The paint path must not re-hide the slot on a failed fetch.
   const paintBlock = html.slice(html.indexOf('function refreshPlanUsage'), html.indexOf('function refreshPlanUsage') + 1200);
@@ -418,3 +431,172 @@ test('web/embed.go embeds plan_usage.js so a released binary serves it', functio
   assert.ok(embed.indexOf('scripts/plan_usage.js') >= 0,
     'a module referenced by index.html and absent from the embed list is a 404 in a brew-installed daemon');
 });
+
+function groupFor(view, provider) {
+  const groups = view.groups || [];
+  for (let i = 0; i < groups.length; i++) {
+    if (groups[i].provider === provider) return groups[i];
+  }
+  return null;
+}
+
+function winFor(group, name) {
+  const wins = (group && group.windows) || [];
+  for (let i = 0; i < wins.length; i++) {
+    if (wins[i].name === name) return wins[i];
+  }
+  return null;
+}
+
+// ── 🎯T390.1 grouping, triangle, pace, grok, bedrock ────────────────────────
+
+test('T390.1: one group per provider, session then weekly, company mark not cl/cx text', function () {
+  const view = PU.formatPlanUsage(snapshot([
+    claudeBackend(),
+    {
+      provider: 'codex',
+      status: 'available',
+      fleet_agents: 0,
+      fetched_at: iso(NOW),
+      age_seconds: 0,
+      windows: [{ name: 'weekly', remaining_percent: 100, used_percent: 0, resets_at: iso(NOW + HOUR), limit_window_seconds: 7 * 24 * 3600 }]
+    }
+  ]), NOW);
+
+  assert.strictEqual(view.groups.length, 2, 'claude + codex groups');
+  const cl = groupFor(view, 'claude');
+  assert.ok(cl, 'claude group');
+  assert.strictEqual(cl.company, 'anthropic');
+  assert.strictEqual(cl.abbrev, 'cl');
+  assert.strictEqual(cl.windows.length, 2, 'session and weekly share one group');
+  assert.strictEqual(cl.windows[0].name, 'session');
+  assert.strictEqual(cl.windows[0].windowAbbrev, 's');
+  assert.strictEqual(cl.windows[1].name, 'weekly');
+  assert.strictEqual(cl.windows[1].windowAbbrev, 'w');
+  const cx = groupFor(view, 'codex');
+  assert.ok(cx, 'codex group');
+  assert.strictEqual(cx.company, 'openai');
+  assert.strictEqual(cx.windows.length, 1);
+  assert.strictEqual(cx.windows[0].windowAbbrev, 'w');
+
+  assert.strictEqual(PU.providerCompany('claude'), 'anthropic');
+  assert.strictEqual(PU.providerCompany('codex'), 'openai');
+  assert.strictEqual(PU.providerCompany('grok'), 'xai');
+  assert.strictEqual(PU.providerCompany('bedrock'), 'anthropic');
+});
+
+test('T390.1: triangle sits at remaining-time fraction; missing rollover invents nothing', function () {
+  // Claude session: 97 minutes of a 5h window remain → 97/300 = 32.333…%
+  const view = PU.formatPlanUsage(snapshot([claudeBackend()]), NOW);
+  const session = windowFor(rowFor(view, 'claude'), 'session');
+  assert.ok(Math.abs(session.remainingTimePercent - (97 / 300) * 100) < 0.01,
+    'session triangle at 97/300 of 5h, got ' + session.remainingTimePercent);
+  const weekly = windowFor(rowFor(view, 'claude'), 'weekly');
+  // 52h of 168h → 30.952…%
+  assert.ok(Math.abs(weekly.remainingTimePercent - (52 / 168) * 100) < 0.01,
+    'weekly triangle at 52/168 of 7d, got ' + weekly.remainingTimePercent);
+
+  const painted = groupFor(view, 'claude');
+  assert.strictEqual(winFor(painted, 'session').remainingTimePercent, session.remainingTimePercent);
+  assert.strictEqual(winFor(painted, 'weekly').remainingTimePercent, weekly.remainingTimePercent);
+
+  // CONTROL: no resets_at → no triangle, even with a known 5h default.
+  const bare = PU.formatPlanUsage(snapshot([claudeBackend({
+    windows: [{ name: 'session', remaining_percent: 50, used_percent: 50, limit_window_seconds: 5 * 3600 }]
+  })]), NOW);
+  const noTri = windowFor(rowFor(bare, 'claude'), 'session');
+  assert.strictEqual(noTri.remainingTimePercent, null, 'control: no rollover means no triangle');
+  assert.strictEqual(winFor(groupFor(bare, 'claude'), 'session').remainingTimePercent, null);
+});
+
+test('T390.1: unpublished duration still infers session=5h / weekly=7d', function () {
+  const w = PU.limitSecondsFor({ name: 'session' });
+  assert.strictEqual(w, PU.SESSION_LIMIT_SECONDS);
+  assert.strictEqual(PU.limitSecondsFor({ name: 'weekly' }), PU.WEEKLY_LIMIT_SECONDS);
+  assert.strictEqual(PU.limitSecondsFor({ name: 'session', limit_window_seconds: 3600 }), 3600,
+    'published duration wins over the default');
+  assert.strictEqual(PU.limitSecondsFor({ name: '3h' }), null,
+    'an unclassified window without a published length does not get a default');
+});
+
+test('T390.1: pace is green / orange / red at the 1.0 and 1.5 burn ratios', function () {
+  // used 50, elapsed 50 → burn 1.0 → ok
+  assert.strictEqual(PU.classifyPace(50, 50, 50), PU.PACE_OK, 'on pace is green');
+  // used 51, elapsed 50 → burn 1.02 → ahead
+  assert.strictEqual(PU.classifyPace(51, 49, 50), PU.PACE_AHEAD, 'just over 1.0 is orange');
+  // used 75, elapsed 50 → burn 1.5 → still ahead (strictly greater than 1.5 is hot)
+  assert.strictEqual(PU.classifyPace(75, 25, 50), PU.PACE_AHEAD, 'exactly 1.5 is orange, not red');
+  // used 76, elapsed 50 → burn 1.52 → hot
+  assert.strictEqual(PU.classifyPace(76, 24, 50), PU.PACE_HOT, 'over 1.5 is red');
+  // remaining 0 is always hot
+  assert.strictEqual(PU.classifyPace(100, 0, 40), PU.PACE_HOT, 'exhausted is red regardless of time');
+  // first 5% of elapsed does not flash
+  assert.strictEqual(PU.classifyPace(80, 20, 97), PU.PACE_OK, 'warmup: 3% elapsed must not flash red');
+  // no time signal
+  assert.strictEqual(PU.classifyPace(80, 20, null), '', 'no triangle → no pace colour');
+
+  // CONTROL: flip used and elapsed so the 1.5 assertion would fail if the
+  // threshold were wired backwards (remaining vs used).
+  assert.strictEqual(PU.classifyPace(24, 76, 50), PU.PACE_OK, 'control: under-spend is green, not hot');
+});
+
+test('T390.1: a published Grok weekly window is a real group, not the word unavailable', function () {
+  const grok = {
+    provider: 'grok',
+    status: 'available',
+    fleet_agents: 3,
+    fetched_at: iso(NOW),
+    age_seconds: 0,
+    windows: [{
+      name: 'weekly',
+      remaining_percent: 58,
+      used_percent: 42,
+      resets_at: iso(NOW + 3 * 24 * HOUR),
+      limit_window_seconds: 7 * 24 * 3600
+    }]
+  };
+  const view = PU.formatPlanUsage(snapshot([grok]), NOW);
+  assert.ok(view.text.indexOf('gk/w 58%') >= 0, view.text);
+  assert.ok(view.text.indexOf('unavailable') < 0, view.text);
+  const g = groupFor(view, 'grok');
+  assert.ok(g, 'grok group on the bar');
+  assert.strictEqual(g.company, 'xai');
+  assert.strictEqual(g.available, true);
+  assert.strictEqual(g.windows.length, 1);
+  assert.strictEqual(g.windows[0].remainingPercent, 58);
+  assert.ok(typeof g.windows[0].remainingTimePercent === 'number');
+});
+
+test('T390.1: idle Bedrock is hidden; a running Bedrock stays as the word', function () {
+  const idle = {
+    provider: 'bedrock',
+    status: 'unavailable',
+    reason: 'AWS Bedrock does not publish Claude-style session/weekly subscription remaining',
+    fleet_agents: 0,
+    fetched_at: iso(NOW),
+    age_seconds: 0
+  };
+  const hidden = PU.formatPlanUsage(snapshot([idle, claudeBackend()]), NOW);
+  assert.strictEqual(groupFor(hidden, 'bedrock'), null, 'idle bedrock group absent');
+  assert.ok(groupFor(hidden, 'claude'), 'claude still painted');
+  assert.ok(hidden.title.indexOf('bedrock') >= 0, 'hover still names it');
+  assert.strictEqual(PU.showOnBar(rowFor(hidden, 'bedrock')), false);
+
+  const running = PU.formatPlanUsage(snapshot([Object.assign({}, idle, { fleet_agents: 2 })]), NOW);
+  const g = groupFor(running, 'bedrock');
+  assert.ok(g, 'running bedrock occupies the bar so the owner can see why it has no bar');
+  assert.strictEqual(g.available, false);
+  assert.strictEqual(g.company, 'anthropic');
+  assert.ok(running.text.indexOf('bd unavailable') >= 0, running.text);
+});
+
+test('T390.1: paint uses groups, company icons, and a triangle, not cl/s chips', function () {
+  const src = fs.readFileSync(path.join(__dirname, 'plan_usage.js'), 'utf8');
+  assert.ok(src.indexOf('paintGroup') >= 0, 'paint walks groups');
+  assert.ok(src.indexOf('plan-tri') >= 0, 'paint emits a triangle');
+  assert.ok(src.indexOf('companyIconHtml') >= 0, 'paint uses the T287 mark');
+  assert.ok(src.indexOf('plan-box') >= 0, 'paint boxes a provider\'s windows');
+  assert.ok(src.indexOf("cl/s") < 0 || src.indexOf('key + ') >= 0,
+    'paint itself must not hardcode cl/s label chips as the visible form');
+});
+

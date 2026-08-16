@@ -25,6 +25,12 @@ import (
 func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.Server) *planusage.Reader {
 	reader := planusage.NewReader(planusage.ReaderArgs{
 		Load: mcpSrv.HarnessLoad,
+		// 🎯T390.1: SuperGrok weekly remaining lives on an undocumented
+		// billing surface. claudia keeps the library default off; the
+		// cockpit opts in so the owner sees a real Grok bar. A fetch or
+		// parse failure still comes back unavailable with a reason —
+		// never a fabricated percent.
+		GrokUnstableUsage: true,
 	})
 	srv.SetPlanUsageSource(func() any { return reader.Snapshot() })
 	go reader.Run(ctx)
@@ -33,6 +39,7 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		"api", "GET /api/plan-usage",
 		"refresh", planusage.DefaultRefresh,
 		"stale_after", planusage.DefaultStaleAfter,
+		"grok_usage", true,
 		"grok_opt_in_env", planusage.GrokUsageEnv,
 	)
 	return reader

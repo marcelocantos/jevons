@@ -1,23 +1,28 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// 🎯T390: the cockpit half of plan usage — how much of each backend's
-// subscription allowance is left, and when it rolls over. DOM-free so the
-// hermetic Node test drives it with fixture payloads.
+// 🎯T390 / 🎯T390.1: the cockpit half of plan usage — how much of each
+// backend's subscription allowance is left, when it rolls over, and
+// whether spend is outrunning the clock. DOM-free so the hermetic Node
+// test drives it with fixture payloads.
 //
-// The daemon serves the picture at GET /api/plan-usage; this turns it into
-// the header bar the owner reads without asking. One rule shapes every
-// branch below: a number that was never published is never rendered as a
-// number. A blank or a 0% reads as "you have nothing left", which is a
-// different and false statement from "nobody publishes this" — and Grok
-// SuperGrok, the fleet's own default backend, is permanently in the second
-// case. So an unavailable backend says the word out loud, with the
-// provider's reason, and 0% is reserved for a backend that really did
-// publish a zero.
+// The daemon serves the picture at GET /api/plan-usage; this turns it
+// into the header bar. One rule still shapes every branch: a number that
+// was never published is never rendered as a number. A blank or a 0%
+// reads as "you have nothing left", which is a different and false
+// statement from "nobody publishes this".
+//
+// 🎯T390.1 layout: one group per provider — T287 company mark, then a
+// boxed pair of session/weekly remaining bars. A triangle under each bar
+// sits at remaining-time fraction of the window. Bar and triangle go
+// orange when spend outstrips time (used/elapsed > 1), red when it
+// outstrips by a lot (used/elapsed > 1.5). Grok is a real weekly bar
+// when the billing surface answers. Bedrock stays off the bar unless a
+// fleet agent is running on it — AWS publishes no subscription remaining.
 //
 // Owner pin 2026-08-15: the bar lives in #status next to #theme-toggle,
-// always visible, compact `cl/s 65% · cl/w 22% · cx/w 100%`. A backend
-// that publishes remaining % is on the bar even with no agent running.
+// always visible. A backend that publishes remaining % is on the bar
+// even with no agent running.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -35,25 +40,40 @@
   const STATUS_AVAILABLE = 'available';
   const STATUS_UNAVAILABLE = 'unavailable';
 
-  // Remaining fractions at which a chip changes colour. A subscription
-  // window is hours long, so these are "start thinking" and "stop starting
-  // new work", not alarms.
+  // Remaining fractions at which a chip changes colour when there is no
+  // time signal to pace against. A subscription window is hours long, so
+  // these are "start thinking" and "stop starting new work", not alarms.
   const LOW_PERCENT = 15;
   const CRITICAL_PERCENT = 5;
+
+  // 🎯T390.1 pace: burn = used% / elapsed%. First 5% of a window does
+  // not flash — a single burst at the open of a 5-hour session is not a
+  // signal. "A lot" is 1.5× the expected spend rate (discussable).
+  const PACE_WARMUP_PERCENT = 5;
+  const PACE_AHEAD_RATIO = 1.0;
+  const PACE_HOT_RATIO = 1.5;
+
+  const PACE_OK = 'ok';
+  const PACE_AHEAD = 'ahead';
+  const PACE_HOT = 'hot';
 
   const CLASS_CRITICAL = 'plan-crit';
   const CLASS_LOW = 'plan-low';
   const CLASS_STALE = 'plan-stale';
   const CLASS_UNAVAIL = 'plan-unavail';
+  const CLASS_AHEAD = 'plan-ahead';
+  const CLASS_HOT = 'plan-hot';
 
   const MS_PER_SECOND = 1000;
   const SECONDS_PER_MINUTE = 60;
   const MINUTES_PER_HOUR = 60;
   const HOURS_PER_DAY = 24;
+  const SESSION_LIMIT_SECONDS = 5 * 60 * 60;
+  const WEEKLY_LIMIT_SECONDS = 7 * 24 * 60 * 60;
 
   const SEP_CHIP = ' · ';
 
-  // Compact provider / window labels for the header bar.
+  // Compact provider / window labels for the header text / hover.
   const PROVIDER_ABBREV = {
     claude: 'cl',
     codex: 'cx',
@@ -69,6 +89,18 @@
     codex: 1,
     grok: 2,
     bedrock: 3
+  };
+
+  // Same company map as model_prefix.js — claude and bedrock share the
+  // Anthropic splat; grok wears the Grok mark; codex wears OpenAI.
+  const PROVIDER_COMPANY = {
+    claude: 'anthropic',
+    anthropic: 'anthropic',
+    bedrock: 'anthropic',
+    grok: 'xai',
+    xai: 'xai',
+    codex: 'openai',
+    openai: 'openai'
   };
 
   /**
@@ -93,6 +125,13 @@
   }
 
   function pad2(n) { return n < 10 ? '0' + n : String(n); }
+
+  function clampPercent(v) {
+    if (typeof v !== 'number' || !isFinite(v)) return null;
+    if (v < 0) return 0;
+    if (v > 100) return 100;
+    return v;
+  }
 
   /**
    * percentText renders a published percentage. Returns null — never '0%',
@@ -133,11 +172,70 @@
     return Object.prototype.hasOwnProperty.call(PROVIDER_RANK, p) ? PROVIDER_RANK[p] : 50;
   }
 
+  function providerCompany(provider) {
+    const p = String(provider || '').toLowerCase();
+    return PROVIDER_COMPANY[p] || '';
+  }
+
+  /**
+   * limitSecondsFor is the window length used to place the time triangle.
+   * A published limit_window_seconds wins; session/weekly fall back to the
+   * product defaults (5h / 7d). Anything else without a published length
+   * returns null — no invented triangle.
+   */
+  function limitSecondsFor(w) {
+    if (w && typeof w.limit_window_seconds === 'number' && isFinite(w.limit_window_seconds) && w.limit_window_seconds > 0) {
+      return w.limit_window_seconds;
+    }
+    const n = String((w && w.name) || '').toLowerCase();
+    if (n === WINDOW_SESSION) return SESSION_LIMIT_SECONDS;
+    if (n === WINDOW_WEEKLY) return WEEKLY_LIMIT_SECONDS;
+    return null;
+  }
+
+  /**
+   * classifyPace compares token spend to elapsed time.
+   *
+   *   ok     used/elapsed ≤ 1 (on or behind the clock)
+   *   ahead  used/elapsed > 1 (spend outstrips time) → orange
+   *   hot    used/elapsed > 1.5, or remaining is 0   → red
+   *
+   * No time signal → empty string (caller falls back to remaining-low).
+   * First PACE_WARMUP_PERCENT of elapsed does not flash.
+   */
+  function classifyPace(usedPercent, remainingPercent, remainingTimePercent) {
+    if (typeof remainingPercent === 'number' && remainingPercent <= 0) return PACE_HOT;
+    if (typeof remainingTimePercent !== 'number' || !isFinite(remainingTimePercent)) return '';
+    const used = (typeof usedPercent === 'number' && isFinite(usedPercent))
+      ? usedPercent
+      : (typeof remainingPercent === 'number' ? 100 - remainingPercent : null);
+    if (used === null) return '';
+    const elapsed = 100 - remainingTimePercent;
+    if (elapsed < PACE_WARMUP_PERCENT) return PACE_OK;
+    const burn = used / elapsed;
+    if (burn > PACE_HOT_RATIO) return PACE_HOT;
+    if (burn > PACE_AHEAD_RATIO) return PACE_AHEAD;
+    return PACE_OK;
+  }
+
+  function paceClassName(pace) {
+    if (pace === PACE_HOT) return CLASS_HOT;
+    if (pace === PACE_AHEAD) return CLASS_AHEAD;
+    return '';
+  }
+
+  function chipClassForRemaining(remaining, stale) {
+    if (typeof remaining === 'number' && remaining <= CRITICAL_PERCENT) return CLASS_CRITICAL;
+    if (typeof remaining === 'number' && remaining <= LOW_PERCENT) return CLASS_LOW;
+    if (stale) return CLASS_STALE;
+    return '';
+  }
+
   /**
    * formatWindow turns one published allowance window into its rendered
    * parts. resets_at is optional even on an available window: a provider may
    * publish a percentage without a rollover, and half an answer is still an
-   * answer.
+   * answer. A missing rollover means no triangle — never an invented position.
    */
   function formatWindow(w, nowMs) {
     const remaining = (w && typeof w.remaining_percent === 'number') ? w.remaining_percent : null;
@@ -150,15 +248,26 @@
       usedText: percentText(used),
       resetsAt: (w && w.resets_at) || null,
       rollsInText: null,
-      rollsAtText: null
+      rollsAtText: null,
+      limitWindowSeconds: null,
+      remainingTimePercent: null,
+      pace: '',
+      paceClass: ''
     };
+    const limitSec = limitSecondsFor(w);
+    if (limitSec) out.limitWindowSeconds = limitSec;
     if (out.resetsAt) {
       const at = Date.parse(out.resetsAt);
       if (!isNaN(at)) {
         out.rollsInText = humanDuration((at - nowMs) / MS_PER_SECOND);
         out.rollsAtText = new Date(at).toLocaleString();
+        if (limitSec) {
+          out.remainingTimePercent = clampPercent(100 * ((at - nowMs) / MS_PER_SECOND) / limitSec);
+        }
       }
     }
+    out.pace = classifyPace(out.usedPercent, out.remainingPercent, out.remainingTimePercent);
+    out.paceClass = paceClassName(out.pace);
     return out;
   }
 
@@ -169,11 +278,16 @@
     return null;
   }
 
-  function chipClassForRemaining(remaining, stale) {
-    if (typeof remaining === 'number' && remaining <= CRITICAL_PERCENT) return CLASS_CRITICAL;
-    if (typeof remaining === 'number' && remaining <= LOW_PERCENT) return CLASS_LOW;
-    if (stale) return CLASS_STALE;
-    return '';
+  /**
+   * showOnBar: Bedrock is off the bar unless a fleet agent is running on
+   * it. AWS publishes no subscription remaining, and a permanent
+   * unavailable chip is noise the owner does not recognise as a backend.
+   * Every other publisher — including Grok when the billing surface is
+   * down — stays on the bar.
+   */
+  function showOnBar(row) {
+    if (row.provider === 'bedrock' && !row.available && !row.running) return false;
+    return true;
   }
 
   /**
@@ -185,6 +299,7 @@
   function formatBackend(b, nowMs) {
     const provider = String((b && b.provider) || '').toLowerCase();
     const abbrev = providerAbbrev(provider);
+    const company = providerCompany(provider);
     const windowsIn = Array.isArray(b && b.windows) ? b.windows : [];
     const available = !!(b && b.status === STATUS_AVAILABLE && windowsIn.length > 0);
     const stale = !!(b && b.stale);
@@ -193,6 +308,7 @@
     const row = {
       provider: provider,
       abbrev: abbrev,
+      company: company,
       status: available ? STATUS_AVAILABLE : STATUS_UNAVAILABLE,
       available: available,
       reason: (b && b.reason) || '',
@@ -205,6 +321,7 @@
       windows: [],
       chips: [],
       lowestRemaining: null,
+      hottestPace: '',
       className: '',
       text: ''
     };
@@ -212,14 +329,18 @@
     if (!available) {
       row.text = abbrev + ' ' + STATUS_UNAVAILABLE;
       row.detail = row.reason || 'no plan-remaining published';
+      row.className = CLASS_UNAVAIL;
       row.chips.push({
         key: abbrev,
         provider: provider,
         providerAbbrev: abbrev,
+        company: company,
         window: null,
         windowAbbrev: null,
         remainingPercent: null,
         remainingText: null,
+        remainingTimePercent: null,
+        pace: '',
         text: row.text,
         available: false,
         stale: stale,
@@ -247,29 +368,40 @@
       if (row.lowestRemaining === null || w.remainingPercent < row.lowestRemaining) {
         row.lowestRemaining = w.remainingPercent;
       }
+      if (w.pace === PACE_HOT) row.hottestPace = PACE_HOT;
+      else if (w.pace === PACE_AHEAD && row.hottestPace !== PACE_HOT) row.hottestPace = PACE_AHEAD;
       const wAbbrev = windowAbbrev(w.name);
       const key = abbrev + '/' + wAbbrev;
       let chipText = key + ' ' + w.remainingText;
       if (stale && row.ageText) chipText += ' stale';
+      const chipClass = w.paceClass || chipClassForRemaining(w.remainingPercent, stale);
       const chip = {
         key: key,
         provider: provider,
         providerAbbrev: abbrev,
+        company: company,
         window: w.name,
         windowAbbrev: wAbbrev,
         remainingPercent: w.remainingPercent,
         remainingText: w.remainingText,
+        remainingTimePercent: w.remainingTimePercent,
+        usedPercent: w.usedPercent,
+        pace: w.pace,
         text: chipText,
         available: true,
         stale: stale,
-        className: chipClassForRemaining(w.remainingPercent, stale)
+        className: chipClass
       };
       row.chips.push(chip);
       parts.push(chipText);
     }
 
     row.text = parts.join(SEP_CHIP);
-    if (row.lowestRemaining !== null && row.lowestRemaining <= CRITICAL_PERCENT) {
+    if (row.hottestPace === PACE_HOT) {
+      row.className = CLASS_HOT;
+    } else if (row.hottestPace === PACE_AHEAD) {
+      row.className = CLASS_AHEAD;
+    } else if (row.lowestRemaining !== null && row.lowestRemaining <= CRITICAL_PERCENT) {
       row.className = CLASS_CRITICAL;
     } else if (row.lowestRemaining !== null && row.lowestRemaining <= LOW_PERCENT) {
       row.className = CLASS_LOW;
@@ -285,14 +417,14 @@
    * @param {object|null|undefined} snap - the served payload
    * @param {number} [nowMs] - clock, injectable so the oracle is not timing-dependent
    * @returns {{visible:boolean, text?:string, className?:string, title?:string,
-   *            rows?:Array, others?:Array, chips?:Array, pending?:boolean}}
+   *            rows?:Array, others?:Array, chips?:Array, groups?:Array, pending?:boolean}}
    */
   function formatPlanUsage(snap, nowMs) {
     const now = (typeof nowMs === 'number') ? nowMs : Date.now();
 
     // A daemon without the plan-usage wiring is a daemon with nothing to say
     // here; hide rather than accuse it of an outage.
-    if (!snap || snap.disabled) return { visible: false, chips: [], rows: [], others: [] };
+    if (!snap || snap.disabled) return { visible: false, chips: [], rows: [], others: [], groups: [] };
 
     if (snap.error) {
       return {
@@ -302,7 +434,8 @@
         title: 'GET /api/plan-usage reported a whole-query failure (🎯T390)',
         rows: [],
         others: [],
-        chips: []
+        chips: [],
+        groups: []
       };
     }
 
@@ -315,30 +448,42 @@
         title: 'The daemon has wired plan usage but no backend has answered yet (🎯T390)',
         rows: [],
         others: [],
-        chips: []
+        chips: [],
+        groups: []
       };
     }
 
     const backends = Array.isArray(snap.backends) ? snap.backends : [];
-    if (backends.length === 0) return { visible: false, chips: [], rows: [], others: [] };
+    if (backends.length === 0) return { visible: false, chips: [], rows: [], others: [], groups: [] };
 
     const all = backends.map(function (b) { return formatBackend(b, now); });
     all.sort(function (a, b) { return providerRank(a.provider) - providerRank(b.provider); });
 
-    // Owner pin: every publisher is on the bar, running or not. Unavailable
-    // backends stay on the bar as the word, never a blank or a number.
+    // Owner pin: every publisher is on the bar, running or not — except
+    // idle Bedrock, which can never grow a bar. Unavailable backends that
+    // stay on the bar say the word, never a blank or a number.
     const chips = [];
+    const groups = [];
     for (let i = 0; i < all.length; i++) {
+      if (!showOnBar(all[i])) continue;
       for (let j = 0; j < all[i].chips.length; j++) chips.push(all[i].chips[j]);
+      groups.push(groupFromRow(all[i]));
     }
 
     const text = chips.map(function (c) { return c.text; }).join(SEP_CHIP);
 
     let className = '';
     for (let i = 0; i < all.length; i++) {
-      if (all[i].className === CLASS_CRITICAL) { className = CLASS_CRITICAL; break; }
-      if (all[i].className === CLASS_LOW) className = CLASS_LOW;
-      else if (all[i].className === CLASS_STALE && className === '') className = CLASS_STALE;
+      if (!showOnBar(all[i])) continue;
+      if (all[i].className === CLASS_HOT || all[i].className === CLASS_CRITICAL) {
+        className = all[i].className;
+        break;
+      }
+      if (all[i].className === CLASS_AHEAD || all[i].className === CLASS_LOW) {
+        if (className !== CLASS_AHEAD && className !== CLASS_LOW) className = all[i].className;
+      } else if (all[i].className === CLASS_STALE && className === '') {
+        className = CLASS_STALE;
+      }
     }
 
     return {
@@ -348,18 +493,57 @@
       title: titleFor(all, []),
       rows: all,
       others: [],
-      chips: chips
+      chips: chips,
+      groups: groups
+    };
+  }
+
+  function groupFromRow(row) {
+    const wins = [];
+    for (let i = 0; i < row.windows.length; i++) {
+      const w = row.windows[i];
+      if (w.remainingText === null) continue;
+      wins.push({
+        name: w.name,
+        windowAbbrev: windowAbbrev(w.name),
+        remainingPercent: w.remainingPercent,
+        remainingTimePercent: w.remainingTimePercent,
+        usedPercent: w.usedPercent,
+        pace: w.pace,
+        className: w.paceClass || chipClassForRemaining(w.remainingPercent, row.stale)
+      });
+    }
+    return {
+      provider: row.provider,
+      company: row.company,
+      abbrev: row.abbrev,
+      available: row.available,
+      stale: row.stale,
+      className: row.available ? (row.stale ? CLASS_STALE : '') : CLASS_UNAVAIL,
+      windows: wins
     };
   }
 
   /**
    * titleFor is the hover detail: the absolute rollover times the bar only
-   * has room to give as a percentage, and why each unavailable backend is
-   * unavailable.
+   * has room to give as a fill, why each unavailable backend is unavailable,
+   * and the spend-vs-time reading the triangle encodes.
    */
   function titleFor(rows, others) {
     const lines = [];
-    for (let i = 0; i < rows.length; i++) lines.push(describe(rows[i]));
+    const hidden = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (!showOnBar(rows[i])) {
+        hidden.push(rows[i]);
+        continue;
+      }
+      lines.push(describe(rows[i]));
+    }
+    if (hidden.length) {
+      lines.push('');
+      lines.push('Not on the bar (no subscription remaining):');
+      for (let i = 0; i < hidden.length; i++) lines.push(indent(describe(hidden[i]), '  '));
+    }
     if (others.length) {
       lines.push('');
       lines.push('Not currently running:');
@@ -383,6 +567,8 @@
       let bit = '  ' + w.name + ': ' + w.remainingText + ' remaining';
       if (w.usedText) bit += ' (' + w.usedText + ' used)';
       if (w.rollsAtText) bit += ', rolls over ' + w.rollsAtText;
+      if (w.pace === PACE_HOT) bit += ' — spend far ahead of time';
+      else if (w.pace === PACE_AHEAD) bit += ' — spend ahead of time';
       bits.push(bit);
     }
     let out = head + ':\n' + bits.join('\n');
@@ -392,73 +578,138 @@
     return out;
   }
 
+  function iconHtmlFor(group) {
+    if (!group || !group.company) return '';
+    let MP = null;
+    if (typeof ModelPrefix !== 'undefined') MP = ModelPrefix;
+    else if (typeof module === 'object' && module && module.exports) {
+      try { MP = require('./model_prefix.js'); } catch (e) { MP = null; }
+    }
+    if (MP && typeof MP.companyIconHtml === 'function') {
+      return MP.companyIconHtml(group.company);
+    }
+    return '';
+  }
+
   /**
-   * paintPlanUsage draws compact bar-chips into `el`. Never sets
+   * paintPlanUsage draws grouped provider boxes into `el`. Never sets
    * display:none — the header slot stays occupied.
    */
   function paintPlanUsage(el, view) {
     if (!el) return;
-    const v = view || { visible: false, chips: [], text: '' };
+    const v = view || { visible: false, chips: [], groups: [], text: '' };
     el.className = v.className || '';
     el.title = v.title || '';
     el.style.display = 'flex';
     while (el.firstChild) el.removeChild(el.firstChild);
 
-    const chips = Array.isArray(v.chips) ? v.chips : [];
     if (!v.visible) return;
 
-    if (chips.length === 0) {
+    const groups = Array.isArray(v.groups) ? v.groups : [];
+    if (groups.length === 0) {
       if (v.text) el.appendChild(el.ownerDocument.createTextNode(v.text));
       return;
     }
 
     const doc = el.ownerDocument;
-    for (let i = 0; i < chips.length; i++) {
-      if (i > 0) {
-        const sep = doc.createElement('span');
-        sep.className = 'plan-sep';
-        sep.textContent = '·';
-        sep.setAttribute('aria-hidden', 'true');
-        el.appendChild(sep);
-      }
-      el.appendChild(paintChip(doc, chips[i]));
+    for (let i = 0; i < groups.length; i++) {
+      el.appendChild(paintGroup(doc, groups[i]));
     }
   }
 
-  function paintChip(doc, c) {
+  function paintGroup(doc, g) {
     const el = doc.createElement('span');
-    el.className = 'plan-chip' + (c.className ? ' ' + c.className : '');
-    if (c.available && typeof c.remainingPercent === 'number' && isFinite(c.remainingPercent)) {
-      const bar = doc.createElement('span');
-      bar.className = 'plan-bar';
-      bar.setAttribute('aria-hidden', 'true');
-      const fill = doc.createElement('span');
-      fill.className = 'plan-bar-fill';
-      const pct = Math.max(0, Math.min(100, c.remainingPercent));
-      fill.style.width = pct + '%';
-      bar.appendChild(fill);
-      el.appendChild(bar);
+    el.className = 'plan-group' + (g.className ? ' ' + g.className : '');
+    el.setAttribute('data-provider', g.provider || '');
+    if (g.company) el.setAttribute('data-company', g.company);
+
+    const icon = doc.createElement('span');
+    icon.className = 'plan-icon';
+    const html = iconHtmlFor(g);
+    if (html) {
+      icon.innerHTML = html;
+    } else {
+      icon.textContent = g.abbrev || '';
     }
-    const label = doc.createElement('span');
-    label.className = 'plan-label';
-    label.textContent = c.text;
-    el.appendChild(label);
+    el.appendChild(icon);
+
+    if (!g.available || !g.windows || g.windows.length === 0) {
+      return el;
+    }
+
+    const box = doc.createElement('span');
+    box.className = 'plan-box';
+    for (let i = 0; i < g.windows.length; i++) {
+      box.appendChild(paintWindow(doc, g.windows[i]));
+    }
+    el.appendChild(box);
+    return el;
+  }
+
+  function paintWindow(doc, w) {
+    const el = doc.createElement('span');
+    el.className = 'plan-win' + (w.className ? ' ' + w.className : '');
+    if (w.pace) el.setAttribute('data-pace', w.pace);
+    if (w.name) el.setAttribute('data-window', w.name);
+
+    const track = doc.createElement('span');
+    track.className = 'plan-track';
+
+    const bar = doc.createElement('span');
+    bar.className = 'plan-bar';
+    bar.setAttribute('aria-hidden', 'true');
+    const fill = doc.createElement('span');
+    fill.className = 'plan-bar-fill';
+    if (typeof w.remainingPercent === 'number' && isFinite(w.remainingPercent)) {
+      const pct = Math.max(0, Math.min(100, w.remainingPercent));
+      fill.style.width = pct + '%';
+    }
+    bar.appendChild(fill);
+    track.appendChild(bar);
+
+    if (typeof w.remainingTimePercent === 'number' && isFinite(w.remainingTimePercent)) {
+      const tri = doc.createElement('span');
+      tri.className = 'plan-tri';
+      tri.setAttribute('aria-hidden', 'true');
+      tri.style.left = Math.max(0, Math.min(100, w.remainingTimePercent)) + '%';
+      track.appendChild(tri);
+    }
+
+    el.appendChild(track);
+
+    const lab = doc.createElement('span');
+    lab.className = 'plan-win-label';
+    lab.textContent = w.windowAbbrev || '';
+    el.appendChild(lab);
     return el;
   }
 
   return {
     formatPlanUsage: formatPlanUsage,
     formatBackend: formatBackend,
+    formatWindow: formatWindow,
     paintPlanUsage: paintPlanUsage,
     humanDuration: humanDuration,
     percentText: percentText,
     providerAbbrev: providerAbbrev,
+    providerCompany: providerCompany,
     windowAbbrev: windowAbbrev,
+    classifyPace: classifyPace,
+    limitSecondsFor: limitSecondsFor,
+    showOnBar: showOnBar,
     WINDOW_SESSION: WINDOW_SESSION,
     WINDOW_WEEKLY: WINDOW_WEEKLY,
     STATUS_AVAILABLE: STATUS_AVAILABLE,
     STATUS_UNAVAILABLE: STATUS_UNAVAILABLE,
     LOW_PERCENT: LOW_PERCENT,
-    CRITICAL_PERCENT: CRITICAL_PERCENT
+    CRITICAL_PERCENT: CRITICAL_PERCENT,
+    PACE_WARMUP_PERCENT: PACE_WARMUP_PERCENT,
+    PACE_AHEAD_RATIO: PACE_AHEAD_RATIO,
+    PACE_HOT_RATIO: PACE_HOT_RATIO,
+    PACE_OK: PACE_OK,
+    PACE_AHEAD: PACE_AHEAD,
+    PACE_HOT: PACE_HOT,
+    SESSION_LIMIT_SECONDS: SESSION_LIMIT_SECONDS,
+    WEEKLY_LIMIT_SECONDS: WEEKLY_LIMIT_SECONDS
   };
 }));

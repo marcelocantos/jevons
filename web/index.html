@@ -823,21 +823,40 @@ body.rhs-resizing-row { cursor: row-resize; }
 #cost-ticker { display: none; padding: 6px 16px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); letter-spacing: -0.02em; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #cost-ticker.cost-warn { color: var(--amber); }
 #cost-ticker.cost-kill { color: #fff; background: #b3261e; font-weight: 600; }
-/* 🎯T390 plan remaining: always-visible compact bars in #status, next to
-   the theme toggle. Never display:none — a missing fetch is not a reason
-   to hide the slot. */
-#plan-ticker { margin-left: auto; display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; }
+/* 🎯T390 / 🎯T390.1 plan remaining: always-visible grouped bars in #status,
+   next to the theme toggle. Never display:none — a missing fetch is not a
+   reason to hide the slot. One group per provider: T287 company mark +
+   boxed session/weekly remaining bars. Triangle under each bar is remaining
+   time; orange when spend outstrips time, red when it outstrips by a lot. */
+#plan-ticker { margin-left: auto; display: flex; align-items: flex-end; gap: 8px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; padding-top: 2px; }
+#plan-ticker .plan-group { display: inline-flex; align-items: flex-end; gap: 3px; flex-shrink: 0; }
+#plan-ticker .plan-icon { display: inline-flex; align-items: center; height: 12px; color: var(--text-muted); }
+#plan-ticker .plan-icon .model-icon { width: 11px; height: 11px; display: block; opacity: 0.85; }
+#plan-ticker .plan-icon .model-icon[data-mark="claude-splat"] { color: var(--anthropic-mark); }
+#plan-ticker .plan-box { display: inline-flex; align-items: flex-end; gap: 5px; padding: 2px 5px 1px; border: 1px solid var(--border-focus); border-radius: 3px; }
+#plan-ticker .plan-win { display: inline-flex; align-items: flex-end; gap: 2px; }
+#plan-ticker .plan-track { position: relative; display: inline-block; width: 36px; padding-bottom: 5px; flex-shrink: 0; }
+#plan-ticker .plan-bar { display: block; width: 100%; height: 6px; background: var(--surface-high); border: 1px solid var(--border); border-radius: 2px; overflow: hidden; }
+#plan-ticker .plan-bar-fill { display: block; height: 100%; background: var(--green); }
+#plan-ticker .plan-tri { position: absolute; bottom: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 4px solid var(--green); transform: translateX(-50%); pointer-events: none; }
+#plan-ticker .plan-win-label { font-size: 9px; line-height: 1; color: var(--text-muted); padding-bottom: 5px; }
+#plan-ticker .plan-win.plan-ahead .plan-bar-fill { background: var(--amber); }
+#plan-ticker .plan-win.plan-ahead .plan-tri { border-bottom-color: var(--amber); }
+#plan-ticker .plan-win.plan-hot .plan-bar-fill,
+#plan-ticker .plan-win.plan-crit .plan-bar-fill { background: var(--red); }
+#plan-ticker .plan-win.plan-hot .plan-tri,
+#plan-ticker .plan-win.plan-crit .plan-tri { border-bottom-color: var(--red); }
+#plan-ticker .plan-win.plan-low .plan-bar-fill { background: var(--amber); }
+#plan-ticker .plan-win.plan-low .plan-tri { border-bottom-color: var(--amber); }
+#plan-ticker .plan-group.plan-unavail { opacity: 0.4; }
+#plan-ticker .plan-group.plan-stale { opacity: 0.7; }
 #plan-ticker .plan-chip { display: inline-flex; align-items: center; gap: 4px; }
 #plan-ticker .plan-sep { color: var(--text-muted); user-select: none; }
-#plan-ticker .plan-bar { display: inline-block; width: 22px; height: 6px; background: var(--surface-high); border: 1px solid var(--border); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
-#plan-ticker .plan-bar-fill { display: block; height: 100%; background: var(--green); }
-#plan-ticker .plan-chip.plan-low .plan-bar-fill { background: var(--amber); }
-#plan-ticker .plan-chip.plan-crit .plan-bar-fill { background: var(--red); }
-#plan-ticker .plan-chip.plan-unavail { color: var(--text-muted); }
-#plan-ticker .plan-chip.plan-stale { color: var(--text-muted); font-style: italic; }
 #plan-ticker.plan-stale { color: var(--text-muted); }
-#plan-ticker.plan-low { color: var(--amber); }
-#plan-ticker.plan-crit { color: var(--red); }
+#plan-ticker.plan-low,
+#plan-ticker.plan-ahead { color: var(--amber); }
+#plan-ticker.plan-crit,
+#plan-ticker.plan-hot { color: var(--red); }
 
 /* Theme toggle */
 #theme-toggle { display: flex; gap: 2px; background: var(--surface-raised); border-radius: 5px; padding: 2px; flex-shrink: 0; }
@@ -6603,9 +6622,10 @@ setInterval(function () {
 }, 3000);
 refreshCost();
 
-// Subscription plan usage (🎯T390): compact remaining bars in #status,
-// next to #theme-toggle. Always visible. A publisher is painted even when
-// no agent of that provider is running; Grok/Bedrock say "unavailable".
+// Subscription plan usage (🎯T390 / 🎯T390.1): grouped remaining bars in
+// #status, next to #theme-toggle. Always visible. A publisher is painted
+// even when no agent of that provider is running; Grok is a real weekly
+// bar when the billing surface answers; idle Bedrock stays off the bar.
 //
 // Polled far more slowly than the cost ticker: a plan window is hours long,
 // and the daemon only re-reads the backends every few minutes anyway, so a

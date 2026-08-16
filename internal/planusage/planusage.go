@@ -20,10 +20,13 @@
 //     claudia already decided.
 //   - Unavailable is a first-class answer, never a zero. A backend that
 //     publishes nothing renders as "unavailable" with the provider's own
-//     reason attached. Grok SuperGrok has no public remaining API and
-//     Bedrock has no subscription window at all, so those two are permanently
-//     unavailable and must SAY so — a blank or a 0% would read as "you have
-//     nothing left", which is a different and false statement.
+//     reason attached. A blank or a 0% would read as "you have nothing
+//     left", which is a different and false statement. 🎯T390.1: jevonsd
+//     opts into claudia's undocumented Grok billing surface so SuperGrok
+//     weekly remaining is a real bar when the surface answers; a break
+//     degrades to unavailable with a reason, never a fabricated percent.
+//     Bedrock still has no subscription window and stays off the bar
+//     unless a fleet agent is running on it.
 //   - A cached reading that has aged out is marked stale rather than served
 //     as current. A number that was true forty minutes ago is not a lie, but
 //     presenting it as now is.
@@ -76,6 +79,12 @@ type Window struct {
 	UsedPercent *float64 `json:"used_percent,omitempty"`
 	// ResetsAt is the next rollover, when published.
 	ResetsAt *time.Time `json:"resets_at,omitempty"`
+	// LimitWindowSeconds is the provider's published window length, when
+	// known. The cockpit places the time triangle from (resets_at − now) /
+	// this duration (🎯T390.1). Omitted when the producer did not publish a
+	// length — the consumer may then infer session=5h / weekly=7d, but must
+	// not invent a triangle without a rollover.
+	LimitWindowSeconds *int64 `json:"limit_window_seconds,omitempty"`
 }
 
 // Backend is one provider's plan-usage picture.
@@ -139,10 +148,10 @@ func (s Snapshot) Backend(provider string) (Backend, bool) {
 	return Backend{}, false
 }
 
-// SupportedProviders are the backends claudia can be asked about. Grok and
-// Bedrock are included deliberately: their answer is "unavailable", and the
-// owner is entitled to see that stated rather than to wonder whether they
-// were forgotten.
+// SupportedProviders are the backends claudia can be asked about. Grok is
+// included because jevonsd opts into the undocumented billing surface
+// (🎯T390.1). Bedrock is included so a running Bedrock fleet still has a
+// named row; idle Bedrock stays off the cockpit bar.
 func SupportedProviders() []claudia.Provider {
 	return []claudia.Provider{
 		claudia.ProviderClaude,
@@ -211,10 +220,11 @@ func Convert(readings []claudia.PlanUsage, load map[string]int, now time.Time, s
 		}
 		for _, w := range r.Windows {
 			b.Windows = append(b.Windows, Window{
-				Name:             string(w.Name),
-				RemainingPercent: copyFloat(w.RemainingPercent),
-				UsedPercent:      copyFloat(w.UsedPercent),
-				ResetsAt:         copyTime(w.ResetsAt),
+				Name:               string(w.Name),
+				RemainingPercent:   copyFloat(w.RemainingPercent),
+				UsedPercent:        copyFloat(w.UsedPercent),
+				ResetsAt:           copyTime(w.ResetsAt),
+				LimitWindowSeconds: copyLimitSeconds(w.LimitWindow),
 			})
 		}
 		// A backend claiming available with nothing published is a producer
@@ -270,4 +280,18 @@ func copyTime(t *time.Time) *time.Time {
 	}
 	v := *t
 	return &v
+}
+
+// copyLimitSeconds publishes claudia's LimitWindow as whole seconds. A
+// duration that does not survive a 1s floor is treated as unpublished —
+// the cockpit must not place a triangle on a sub-second window.
+func copyLimitSeconds(d time.Duration) *int64 {
+	if d <= 0 {
+		return nil
+	}
+	sec := int64(d / time.Second)
+	if sec <= 0 {
+		return nil
+	}
+	return &sec
 }
