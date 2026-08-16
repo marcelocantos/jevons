@@ -13,6 +13,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // agentSendResult is the outcome of sendToAgent (🎯T111.1).
@@ -39,44 +40,27 @@ func isPromptInFlight(err error) bool {
 
 // enqueueAgentSend appends text for delivery after the current turn.
 // Returns total pending for name.
-func (s *Server) enqueueAgentSend(name, text string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.agentSendQ == nil {
-		s.agentSendQ = map[string][]string{}
-	}
-	s.agentSendQ[name] = append(s.agentSendQ[name], text)
-	return len(s.agentSendQ[name])
+func (s *Server) enqueueAgentSend(name, text string) (int, error) {
+	_, depth, err := s.sendQueue().Append(name, text, time.Now())
+	return depth, err
 }
 
 // dequeueAgentSend pops the oldest pending message, or "" if empty.
 func (s *Server) dequeueAgentSend(name string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.agentSendQ == nil {
+	e, ok, err := s.sendQueue().PopFront(name)
+	if err != nil || !ok {
 		return ""
 	}
-	q := s.agentSendQ[name]
-	if len(q) == 0 {
-		return ""
-	}
-	text := q[0]
-	if len(q) == 1 {
-		delete(s.agentSendQ, name)
-	} else {
-		s.agentSendQ[name] = q[1:]
-	}
-	return text
+	return e.Text
 }
 
 // pendingAgentSends returns queue depth for name.
 func (s *Server) pendingAgentSends(name string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.agentSendQ == nil {
+	n, err := s.sendQueue().Depth(name)
+	if err != nil {
 		return 0
 	}
-	return len(s.agentSendQ[name])
+	return n
 }
 
 // AgentDeliverResult is the public outcome of DeliverAgentMessage (🎯T275).
@@ -351,7 +335,10 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		// reporting a cheerful "queued" over a dark event stream is the exact
 		// silence that let six messages stack behind a compacted jevons-po.
 		darkStream := s.EnsureAgentEventsWired(name)
-		n := s.enqueueAgentSend(name, text)
+		n, qerr := s.enqueueAgentSend(name, text)
+		if qerr != nil {
+			return agentSendResult{}, fmt.Errorf("NOT DELIVERED and NOT QUEUED: %w", qerr)
+		}
 		msg := fmt.Sprintf(
 			"busy: %q has a turn in flight; message queued (%d pending) for delivery when it ends — "+
 				"held by the daemon, not pasted into the agent's composer. "+
@@ -427,7 +414,10 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 	if interrupt {
 		if ierr := proc.Interrupt(); ierr != nil {
 			// Still queue so the nudge is not lost; surface both facts.
-			n := s.enqueueAgentSend(name, text)
+			n, qerr := s.enqueueAgentSend(name, text)
+			if qerr != nil {
+				return agentSendResult{}, fmt.Errorf("NOT DELIVERED and NOT QUEUED: %w", qerr)
+			}
 			res := agentSendResult{
 				Status: "interrupted_queued",
 				Message: fmt.Sprintf(
@@ -451,7 +441,10 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 			outcome := ClassifySendOutcome(FlightIdle, ev)
 			return s.reportSendOutcome(name, outcome, FlightIdle, ev, rehydrated, true)
 		} else if isPromptInFlight(err2) {
-			n := s.enqueueAgentSend(name, text)
+			n, qerr := s.enqueueAgentSend(name, text)
+			if qerr != nil {
+				return agentSendResult{}, fmt.Errorf("NOT DELIVERED and NOT QUEUED: %w", qerr)
+			}
 			res := agentSendResult{
 				Status: "interrupted_queued",
 				Message: fmt.Sprintf(
@@ -479,7 +472,10 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		}
 	}
 
-	n := s.enqueueAgentSend(name, text)
+	n, qerr := s.enqueueAgentSend(name, text)
+	if qerr != nil {
+		return agentSendResult{}, fmt.Errorf("NOT DELIVERED and NOT QUEUED: %w", qerr)
+	}
 	res := agentSendResult{
 		Status: "queued",
 		Message: fmt.Sprintf(
@@ -522,15 +518,20 @@ func (s *Server) liveSender(name string) (agentSender, bool) {
 // drainAgentSendQueue delivers the next queued message after a terminal
 // stop. Called from the agent event sink (🎯T111.1).
 func (s *Server) drainAgentSendQueue(name string) {
-	text := s.dequeueAgentSend(name)
-	if text == "" {
+	entry, ok, err := s.sendQueue().PopFront(name)
+	if err != nil || !ok {
 		return
 	}
+	text := entry.Text
 	proc, live := s.liveSender(name)
 	if !live {
-		// Put back — process gone mid-queue; next send/rehydrate can retry.
-		s.enqueueAgentSend(name, text)
-		slog.Warn("agent send queue: process not alive; re-queued", "name", name)
+		// Put back at the head, keeping the acceptance age (🎯T418).
+		if perr := s.sendQueue().PushFront(name, entry); perr != nil {
+			slog.Error("agent send queue: process not alive AND the message could not be returned",
+				"component", "agent_send", "name", name, "err", perr)
+		} else {
+			slog.Warn("agent send queue: process not alive; re-queued", "name", name)
+		}
 		return
 	}
 	// The drain runs on a turn boundary, so the agent is idle by construction
@@ -540,12 +541,7 @@ func (s *Server) drainAgentSendQueue(name string) {
 	if err := proc.Send(text); err != nil {
 		if isPromptInFlight(err) {
 			// Still busy (nested tool pause edge): put at front by re-queue.
-			s.mu.Lock()
-			if s.agentSendQ == nil {
-				s.agentSendQ = map[string][]string{}
-			}
-			s.agentSendQ[name] = append([]string{text}, s.agentSendQ[name]...)
-			s.mu.Unlock()
+			_ = s.sendQueue().PushFront(name, sendq.Entry{Text: text, EnqueuedAt: time.Now()})
 			return
 		}
 		class := agenterr.Classify(err)

@@ -36,6 +36,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
+	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -147,8 +148,9 @@ type Server struct {
 	doitEng *doit.Engine
 
 	// agentSendQ is a per-agent FIFO of pending sends when the ACP session is
-	// busy (🎯T115). Guarded by mu. Nil until first enqueue.
-	agentSendQ map[string][]string
+	// busy (🎯T115), durable across a daemon restart once SetSendQueueDir has
+	// rooted it on disk (🎯T418). Nil until first use; see sendQueue().
+	agentSendQ *sendq.Store
 
 	// eventLogTail tails durable product logs (🎯T120). Nil = tool unregistered.
 	eventLogTail EventLogTailFunc

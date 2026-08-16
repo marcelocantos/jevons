@@ -892,6 +892,8 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 			slog.Info("fleet health (cockpit/idle loop)", "report", FormatDeadAgentReport(reps), "post_restart", postRestart)
 		}
 		args.Server.runFleetRecoverSweep(postRestart)
+		// 🎯T418: re-offer a backlog whose turn boundary was consumed by the restart.
+		args.Server.SweepSendBacklogs()
 		args.Server.TriggerIdlePressureSweep()
 	}
 	args.Server.mu.Unlock()

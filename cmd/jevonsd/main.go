@@ -608,6 +608,10 @@ func main() {
 	removals := srv.RemovalAccount()
 	mcpSrv.SetRemovalAccount(removals)
 
+	// 🎯T418: accepted messages live in state_dir/sendq so a restart
+	// between accept and deliver no longer eats them.
+	mcpSrv.SetSendQueueDir(cfg.StateDir)
+
 	// 🎯T414: the shared answer to "should this agent be running?", opened
 	// before any control can ask it. Durable and opened here rather than
 	// lazily, because a daemon restart is one of the three things that
