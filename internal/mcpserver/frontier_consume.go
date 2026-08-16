@@ -36,7 +36,10 @@ import (
 // deferred / not-urgent / later-device leaves (T22 voice class), T28-class
 // car/iPad/VoicelabKit device DSP (🎯T342), and T29-class generative-UI /
 // DEFERRED future-work ambition (🎯T343) with skip_deferred or owner-parked
-// unless force-engage / unattended-safe.
+// unless force-engage / unattended-safe. 🎯T449: park leaves the ledger
+// records as built-and-awaiting-the-owner's-verdict (owned_by the owner with
+// a landed-code reason), and leaves assigned to another driver — the only
+// park class that means the work is DONE rather than unstarted.
 // Anti-thrash:
 // durable per-target spawn ledger (backoff + max auto-spawns) so a worker that
 // finishes without achieving cannot churn the same leaf forever.
@@ -85,8 +88,15 @@ const (
 	FrontierReasonHighCostMobile       = "skip_high_cost_mobile"            // 🎯T337 mobile megawork
 	FrontierReasonParentActiveChildren = "skip_parent_with_active_children" // 🎯T338 T10 parent class
 	FrontierReasonHighInfra            = "skip_high_infra"                  // 🎯T338 sqlpipe/CGO/Peer
-	FrontierReasonDeferred             = "skip_deferred"                    // 🎯T339/T342/T343 not-urgent + device-voice + T29 ambition
-	FrontierReasonOwnerParked          = "owner-parked"                     // 🎯T339 explicit owner-parked
+	// FrontierReasonAwaitingOwnerVerdict parks a leaf whose code has landed
+	// and whose sole residue is the owner's taste verdict (🎯T449). Every
+	// other park reason describes work that has not started; this one is the
+	// opposite, and the owner reading a parked frontier has to be able to
+	// tell "finished, your turn" from "nobody has touched this".
+	FrontierReasonAwaitingOwnerVerdict = "park_awaiting_owner_verdict" // 🎯T449
+	FrontierReasonOwnedByOther         = "park_owned_by"               // 🎯T449 assigned to another driver
+	FrontierReasonDeferred             = "skip_deferred"               // 🎯T339/T342/T343 not-urgent + device-voice + T29 ambition
+	FrontierReasonOwnerParked          = "owner-parked"                // 🎯T339 explicit owner-parked
 	FrontierReasonCapacity             = "park_capacity"
 	FrontierReasonBackoff              = "park_backoff"
 	FrontierReasonMaxAutospawns        = "park_max_autospawns"
@@ -142,6 +152,22 @@ func FormatFrontierSpawnBrief(leaf targetfile.FrontierLeaf, parent string) strin
 	b.WriteString("Finish: commit SHA + green oracle evidence reported to your parent (or explicit accepted-risk). ")
 	b.WriteString("If the leaf turns out design-gated or needs the owner, report blocked with the reason instead of guessing.")
 	return b.String()
+}
+
+// frontierOwnerGateNote renders the park detail for an awaiting-owner-verdict
+// leaf (🎯T449): the recorded reason if the ledger has one, else the bare
+// fact of the assignment. Truncated, because the reason carries the whole
+// gated report and the park line lands in a log.
+func frontierOwnerGateNote(leaf poproactive.LeafObs) string {
+	const maxNote = 240
+	note := strings.TrimSpace(leaf.OwnedByReason)
+	if note == "" {
+		note = "assigned to " + strings.TrimSpace(leaf.OwnedBy) + "; awaiting owner verdict"
+	}
+	if len(note) > maxNote {
+		note = strings.TrimSpace(note[:maxNote]) + "…"
+	}
+	return note
 }
 
 // --- durable per-target spawn ledger (backoff / max across restarts) ---
@@ -247,7 +273,9 @@ type FrontierConsumeArgs struct {
 	SpawnHalted string
 	// FleetIntent is the deliberate fleet-wide intent (🎯T414). Anything but
 	// working parks every ready leaf: a ready leaf is a fact about the
-	// ledger, never a licence to start a worker.
+	// ledger, never a licence to start a worker. This is the control that
+	// spawned against 34 ready leaves it read as neglect while the fleet was
+	// parked under a provider block.
 	FleetIntent fleetintent.State
 	// MaxSpawnsPerCycle 0 → DefaultFrontierConsumeMaxSpawnsPerCycle.
 	MaxSpawnsPerCycle int
@@ -287,6 +315,19 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 		}
 		rep := FrontierConsumeReport{TargetID: id}
 		switch poproactive.ClassifyLeaf(leaf) {
+		case poproactive.LeafSkipAwaitingOwnerVerdict:
+			// Park, loudly: the leaf is finished and the ball is in the
+			// owner's court, so the reason carries the recorded claim
+			// rather than a bare code (🎯T449).
+			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonAwaitingOwnerVerdict
+			rep.Err = frontierOwnerGateNote(leaf)
+			out = append(out, rep)
+			continue
+		case poproactive.LeafSkipOwnedByOther:
+			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonOwnedByOther
+			rep.Err = "assigned to " + strings.TrimSpace(leaf.OwnedBy)
+			out = append(out, rep)
+			continue
 		case poproactive.LeafSkipDesign:
 			rep.Action, rep.Reason = FrontierConsumeSkip, FrontierReasonDesignGated
 			out = append(out, rep)
@@ -342,6 +383,7 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			continue
 		}
 		// Ready leaf: enforcement path.
+		//
 		// 🎯T414 first, ahead of the budget clamp: when both are set the
 		// intent is the more useful answer, because only the owner can lift
 		// it and the clamp will still be there when they do.
@@ -489,6 +531,8 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			Cost:           leaf.Cost,
 			SetAsideDeps:   leaf.SetAsideDeps,
 			ActiveChildren: leaf.ActiveChildren,
+			OwnedBy:        leaf.OwnedBy,
+			OwnedByReason:  leaf.OwnedByReason,
 			ForceEngage:    poproactive.IsForceEngageTag(leaf.Tags),
 			// 🎯T389: this sweep's ledger only — another repo's worker on the
 			// same id must not make this leaf look consumed.

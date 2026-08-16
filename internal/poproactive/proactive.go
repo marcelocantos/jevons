@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/ownergate"
 )
 
 // Mode is the product-owner pass decision for 🎯T325.1.
@@ -63,6 +64,15 @@ const (
 	// LeafSkipHighInfra: sqlpipe/CGO/Peer rebuild class (cost≥13 or markers)
 	// without unattended-safe / force-engage (🎯T338).
 	LeafSkipHighInfra
+	// LeafSkipAwaitingOwnerVerdict: the code has landed and gated and the
+	// ledger records that the only residue is the owner's taste verdict
+	// (🎯T449). Not unstarted work — parking it is what stops an implementer
+	// being spawned against something that is finished.
+	LeafSkipAwaitingOwnerVerdict
+	// LeafSkipOwnedByOther: the ledger assigns this target to a driver who is
+	// not the owner. Same field, different claim: someone else has it, so the
+	// unattended sweep is not the one to start work on it (🎯T449).
+	LeafSkipOwnedByOther
 	// LeafSkipDeferred: deferred / not-urgent / later-device product leaves
 	// that still look graph-ready (T22 "not urgent" class + T28 car/iPad
 	// voice DSP class + T29 generative-UI / DEFERRED future-work ambition).
@@ -92,6 +102,10 @@ func (k LeafKind) String() string {
 		return "skip_parent_with_active_children"
 	case LeafSkipHighInfra:
 		return "skip_high_infra"
+	case LeafSkipAwaitingOwnerVerdict:
+		return "skip_awaiting_owner_verdict"
+	case LeafSkipOwnedByOther:
+		return "skip_owned_by"
 	case LeafSkipDeferred:
 		return "skip_deferred"
 	default:
@@ -127,6 +141,12 @@ type LeafObs struct {
 	ActiveChildren []string
 	// Cost is the portfolio cost estimate (0 when unknown/omitted).
 	Cost float64
+	// OwnedBy / OwnedByReason are bullseye's ownership exclusion as recorded
+	// in the ledger (🎯T449). Owner-held with a landed-code record ⇒
+	// awaiting-owner-verdict; assigned to anyone else ⇒ someone else drives
+	// it. Both are read verbatim; nothing here infers doneness from prose.
+	OwnedBy       string
+	OwnedByReason string
 	// ForceEngage overrides set_aside-dep, high-cost-mobile, parent-with-
 	// active-children, high-infra, and deferred/not-urgent parks (owner/play
 	// residual; tag force-engage on the leaf).
@@ -351,6 +371,31 @@ func IsOwnerParkedTag(tags []string) bool {
 	return hasTag(tags, "owner-parked")
 }
 
+// IsAwaitingOwnerVerdictLeaf reports the 🎯T449 class: the ledger records
+// that this target's code has landed and gated, and the sole residue is the
+// owner's accept/reject. Delegates the vocabulary to internal/ownergate so
+// the reader and the writer cannot drift apart.
+//
+// A gate the owner has already ANSWERED is not this class — it returns to
+// normal handling, which is what lets work resume on a reject without waiting
+// for the assignment to be unwound first.
+func IsAwaitingOwnerVerdictLeaf(o LeafObs) bool {
+	return ownergate.IsAwaiting(o.OwnedBy, o.OwnedByReason, o.Context)
+}
+
+// IsOwnedByOtherLeaf reports a leaf the ledger assigns to a driver who is not
+// the owner (🎯T449).
+//
+// The owner is excluded deliberately, not incidentally. An owner assignment
+// whose gate has been ANSWERED is no longer awaiting anything, and if it fell
+// through to here it would park under a second reason instead of returning to
+// normal handling — the original bug with the roles swapped, and the exact
+// state a reject leaves behind while the assignment is being unwound.
+func IsOwnedByOtherLeaf(o LeafObs) bool {
+	owner := strings.TrimSpace(o.OwnedBy)
+	return owner != "" && !ownergate.IsOwnerHandle(owner) && !IsAwaitingOwnerVerdictLeaf(o)
+}
+
 // HasSetAsideDep is true when the leaf carries at least one set_aside dep.
 func HasSetAsideDep(o LeafObs) bool {
 	for _, d := range o.SetAsideDeps {
@@ -431,7 +476,8 @@ func IsHighInfraLeaf(tags []string, name, context string, cost float64, activeCh
 }
 
 // ClassifyLeaf assigns one leaf to ready vs skip for PO proactive / frontier
-// consume. Priority: closed > set_aside_dep > parent_active_children >
+// consume. Priority: closed > awaiting_owner_verdict > owned_by >
+// set_aside_dep > parent_active_children >
 // deferred (before design so "owner-parked" is not swallowed by the bare
 // "parked" design marker) > design > high_cost_mobile > high_infra >
 // blocked > engaged > ready.
@@ -444,6 +490,16 @@ func ClassifyLeaf(o LeafObs) LeafKind {
 		return LeafSkipClosed
 	}
 	force := o.ForceEngage || IsForceEngageTag(o.Tags)
+	// 🎯T449 ahead of every other skip: the other classes all describe work
+	// that has not started. This one describes work that is finished, and it
+	// is the only class where spawning wastes a worker on something already
+	// in the tree. Owner force_engage still overrides.
+	if !force && IsAwaitingOwnerVerdictLeaf(o) {
+		return LeafSkipAwaitingOwnerVerdict
+	}
+	if !force && IsOwnedByOtherLeaf(o) {
+		return LeafSkipOwnedByOther
+	}
 	if !force && HasSetAsideDep(o) {
 		return LeafSkipSetAsideDep
 	}
@@ -534,6 +590,12 @@ const ReasonFleetIntent = "fleet_intent"
 // ClassifyWithIntent is [Classify] under the 🎯T414 fleet intent: a PO
 // proactive pass with ready leaves still sleeps when the fleet is
 // deliberately not working.
+//
+// Sleep, not kick, is the right answer even though the leaves are genuinely
+// ready — readiness is a property of the ledger, and the ledger does not know
+// the provider is refusing work or that the owner stood the fleet down. The
+// leaves stay ready and the pass resumes the moment intent returns to
+// working; nothing is lost by declining, and 🎯T406 is what is lost by not.
 func ClassifyWithIntent(leaves []LeafObs, fleet fleetintent.State) Decision {
 	if d := fleetintent.AllowsFleet(fleet, fleetintent.ControlSpawn); !d.Allow {
 		return Decision{

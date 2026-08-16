@@ -42,17 +42,31 @@ type FrontierLeaf struct {
 	// ActiveChildren lists hierarchical descendants (id + ".") that are still
 	// identified|converging. Unattended consume parks the parent (🎯T338).
 	ActiveChildren []string
+	// OwnedBy / OwnedByReason carry bullseye's ownership exclusion verbatim
+	// (🎯T449). A target assigned to someone — the owner holding a taste gate
+	// over landed code, or another driver — is active and still graph-ready,
+	// so it belongs in this list; it is the consume classifier that must not
+	// spawn against it. Empty when the ledger records no assignment.
+	OwnedBy       string
+	OwnedByReason string
 }
 
 type frontierLedgerTarget struct {
-	Name       string   `yaml:"name"`
-	Status     string   `yaml:"status"`
-	DependsOn  []string `yaml:"depends_on"`
-	Context    string   `yaml:"context"`
-	Tags       []string `yaml:"tags"`
-	Acceptance []string `yaml:"acceptance"`
-	Cost       float64  `yaml:"cost"`
-	Value      float64  `yaml:"value"`
+	Name       string           `yaml:"name"`
+	Status     string           `yaml:"status"`
+	DependsOn  []string         `yaml:"depends_on"`
+	Context    string           `yaml:"context"`
+	Tags       []string         `yaml:"tags"`
+	Acceptance []string         `yaml:"acceptance"`
+	Cost       float64          `yaml:"cost"`
+	Value      float64          `yaml:"value"`
+	OwnedBy    *frontierOwnedBy `yaml:"owned_by"`
+}
+
+// frontierOwnedBy mirrors bullseye's ownership exclusion (🎯T449).
+type frontierOwnedBy struct {
+	Owner  string `yaml:"owner"`
+	Reason string `yaml:"reason"`
 }
 
 type frontierLedgerDoc struct {
@@ -131,7 +145,7 @@ func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
 				activeChildren = append(activeChildren, other)
 			}
 		}
-		leaves = append(leaves, FrontierLeaf{
+		leaf := FrontierLeaf{
 			ID:             id,
 			Name:           strings.TrimSpace(t.Name),
 			Context:        strings.TrimSpace(t.Context),
@@ -141,7 +155,12 @@ func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
 			Value:          t.Value,
 			SetAsideDeps:   setAsideDeps,
 			ActiveChildren: activeChildren,
-		})
+		}
+		if t.OwnedBy != nil {
+			leaf.OwnedBy = strings.TrimSpace(t.OwnedBy.Owner)
+			leaf.OwnedByReason = strings.TrimSpace(t.OwnedBy.Reason)
+		}
+		leaves = append(leaves, leaf)
 	}
 	sort.Slice(leaves, func(i, j int) bool {
 		return targetIDNaturalLess(leaves[i].ID, leaves[j].ID)
