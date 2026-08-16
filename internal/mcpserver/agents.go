@@ -136,11 +136,18 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		slog.Info(line)
 		s.notifyFleetHealth(line)
 	}
+	// 🎯T459: reap fleet panes the registry does not know about before
+	// we report the count the host is deciding against.
+	s.SweepOrphanPanes()
 	defs := s.registry.List()
 	notices := s.RemovalAccount().Recent(0)
 	if len(defs) == 0 {
+		body := "No agents registered."
+		if extra := s.FormatHostCostLines(0); extra != "" {
+			body += "\n" + extra
+		}
 		return mcp.NewToolResultText(fleetlog.PrependNotices(
-			PrependFleetHealth("No agents registered.", reps), notices)), nil
+			PrependFleetHealth(body, reps), notices)), nil
 	}
 
 	var b strings.Builder
@@ -167,6 +174,10 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	if hints := FormatFanOutHints(s.registry, s.overseerName()); hints != "" {
 		b.WriteString("\n")
 		b.WriteString(hints)
+	}
+	if extra := s.FormatHostCostLines(len(defs)); extra != "" {
+		b.WriteString("\n")
+		b.WriteString(extra)
 	}
 	return mcp.NewToolResultText(fleetlog.PrependNotices(
 		PrependFleetHealth(b.String(), reps), notices)), nil
@@ -243,6 +254,15 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	if blocked := s.checkResumeAllowed(name); blocked != nil {
 		s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
 			"name": name, "err": "resume_halted",
+		})
+		return blocked, nil
+	}
+	// 🎯T460: a new worker pane is load, not already-open Build work.
+	// Critical host pressure refuses the spawn with a reason the PO can
+	// read; owner seats and control-plane repair still pass.
+	if blocked := s.checkHostSpawnAllowed(purpose, name); blocked != nil {
+		s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
+			"name": name, "err": "host_saturated", "purpose": purpose,
 		})
 		return blocked, nil
 	}

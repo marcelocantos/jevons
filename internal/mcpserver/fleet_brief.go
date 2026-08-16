@@ -151,20 +151,24 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   parent=jevons-po — same operational cycle; do not wait for the owner.
 - Standing rule: kick off all non-design frontier work continuously.
 - Skip design-gated (🎯T112 / 🎯T67 / 🎯T29-class) and blocked targets until
-  unblocked or owner opens design. Residual: instructional.
+  unblocked or owner opens design. Host saturation (🎯T460) is also a
+  blocking condition: do not spawn when jevons_capacity_status reports
+  pressure critical. Residual: instructional.
 
 ## File→spawn same turn (🎯T193)
 - When a Build-plane target is filed (owner target: aside or mid-session),
   PO spawns a named worker under parent=jevons-po in the same turn as
   filing — not ledger-only. 🎯T130 files; 🎯T193 spawns.
 - Skip design-gated / blocked-on-human / parked-for-design / pure
-  documentation (docs-only may file without spawn). Related: 🎯T155.
+  documentation (docs-only may file without spawn) / host saturation
+  (🎯T460). Related: 🎯T155.
 - Residual: instructional; no daemon auto-spawn gate.
 
 ## PO proactive-until-empty-then-sleep (🎯T325.1)
 - When the product-scoped frontier has unblocked ready leaves, the PO
   continues spawn/brief (or equivalent kick) until empty or blocked —
-  not a single one-shot pass that leaves work stranded.
+  not a single one-shot pass that leaves work stranded. Host saturation
+  (🎯T460) is blocked: wait it out.
 - When the product frontier is empty (or only design-gated / blocked /
   parked / already-engaged leaves remain), the PO enters sleep/idle
   without perpetual create thrash or zombie open-mission heuristics that

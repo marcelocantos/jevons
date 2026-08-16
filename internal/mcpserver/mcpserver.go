@@ -33,6 +33,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/panecensus"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
@@ -287,6 +288,11 @@ type Server struct {
 	// remaining budget and concurrent load (🎯T359). Nil until
 	// SetCapacityGovernor — ambient loops then run ungated, as before.
 	capacityGov *capacity.Governor
+
+	// paneList / paneKill are the 🎯T459 census I/O seams. Nil uses tmux
+	// against the claudia fleet socket. Tests inject a fixture fleet.
+	paneList func() ([]panecensus.Pane, error)
+	paneKill func(id string) error
 }
 
 // TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).
@@ -296,6 +302,7 @@ func (s *Server) TriggerIdleNudgeSweep() {
 	if s == nil {
 		return
 	}
+	s.SweepOrphanPanes()
 	s.mu.Lock()
 	f := s.idleNudgeSweep
 	s.mu.Unlock()

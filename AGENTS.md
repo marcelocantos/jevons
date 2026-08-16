@@ -228,20 +228,22 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   **`parent=jevons-po`** in the same operational cycle — kick off all
   non-design frontier work continuously; do not wait for the owner.
   Skip design-gated (T112 / T67 / T29-class) and blocked targets until
-  unblocked or owner opens design. Instructional residual. Persona +
-  agents-guide + fleet standing brief.
+  unblocked or owner opens design. Host saturation (🎯T460) is also
+  blocking: do not spawn when capacity pressure is critical.
+  Instructional residual. Persona + agents-guide + fleet standing brief.
 - **File→spawn same turn (🎯T193):** when a **Build-plane** target is filed
   (owner `target:` aside / mid-session), **PO spawns a named worker** under
   **`parent=jevons-po`** in the **same turn** as filing — not ledger-only.
   T130 files; T193 spawns. Skip design-gated / blocked-on-human /
-  parked-for-design / pure documentation. Related: 🎯T155 continuous
-  frontier kick-off. Instructional residual. Persona + agents-guide +
-  fleet standing brief.
+  parked-for-design / pure documentation / host saturation (🎯T460).
+  Related: 🎯T155 continuous frontier kick-off. Instructional residual.
+  Persona + agents-guide + fleet standing brief.
 - **PO proactive-until-empty-then-sleep (🎯T325.1):** when the
   product-scoped frontier has unblocked ready leaves, the PO continues
   spawn/brief until empty or blocked — not a one-shot pass that strands
-  work. When empty (or only design-gated / blocked / parked /
-  already-engaged leaves remain), the PO sleeps/idles without open-mission
+  work. Host saturation (🎯T460) is blocked, same as a design gate.
+  When empty (or only design-gated / blocked / parked /
+  already-engaged / host-saturated leaves remain), the PO sleeps/idles without open-mission
   thrash; stays interruptible for owner/overseer directs. Pure helpers:
   `ClassifyPOProactive` / `ClassifyFrontierLeaf` /
   `POOpenMissionForProactive`. Design:

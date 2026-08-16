@@ -88,6 +88,11 @@ func (s *Server) handleCapacityStatus(_ context.Context, _ mcp.CallToolRequest) 
 		headroomText(st.Assessment.LoadHeadroom),
 		headroomText(st.Assessment.PlanHeadroom))
 	b.WriteString(hostLoadText(st.Snapshot))
+	if d := capacity.AdmitSpawn(capacity.SpawnWorker, st.Snapshot, st.Policy); !d.Admitted() {
+		fmt.Fprintf(&b, "  spawn: refuse new worker panes (%s) (🎯T460)\n", d.Reason)
+	} else {
+		b.WriteString("  spawn: new worker panes admitted (🎯T460)\n")
+	}
 	if st.Snapshot.PlanSource != "" {
 		fmt.Fprintf(&b, "  plan source: %s (🎯T390)\n", st.Snapshot.PlanSource)
 	}
