@@ -119,6 +119,16 @@ func Run(cfg Config) (Result, error) {
 	res.Recreated = recreated
 	cfg.logf("snapshot %s at %s (recreated=%v)", cfg.SnapDir, shortSHA(head), recreated)
 
+	// 🎯T473: a relative `replace` in go.mod resolves against the module root,
+	// which inside the snapshot is a different directory than in the clone.
+	// Say what the clone meant, and put the file back afterwards so the
+	// worktree stays clean and reusable. See replace.go.
+	restore, err := resolveLocalReplaces(cfg, cfg.SnapDir, cfg.RepoRoot)
+	if err != nil {
+		return res, err
+	}
+	defer restore()
+
 	src := filepath.Join(cfg.SnapDir, filepath.FromSlash(cfg.Artifact))
 
 	// Drop the previous artifact so make cannot decide it is already current.
