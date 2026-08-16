@@ -894,6 +894,8 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		args.Server.runFleetRecoverSweep(postRestart)
 		// 🎯T418: re-offer a backlog whose turn boundary was consumed by the restart.
 		args.Server.SweepSendBacklogs()
+		args.Server.SweepHandovers()
+		args.Server.reportFleetMuteIfNeeded()
 		args.Server.TriggerIdlePressureSweep()
 	}
 	args.Server.mu.Unlock()
@@ -1432,6 +1434,11 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 			"open_intent": openIntent.Recoverable(), "residual": openIntent.Residual,
 		})
 	}
+	// 🎯T418: isolate and headless daemons have no cockpit nudge. Recover
+	// accepted queues and pending handovers on the restart notify itself.
+	s.SweepSendBacklogs()
+	s.SweepHandovers()
+	s.reportFleetMuteIfNeeded()
 }
 
 // utf8RuneCount is a tiny local helper for NotifyDaemonRestarted logs.
