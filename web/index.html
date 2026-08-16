@@ -828,10 +828,10 @@ body.rhs-resizing-row { cursor: row-resize; }
    reason to hide the slot. One group per provider: T287 company mark +
    boxed session/weekly remaining bars. Triangle under each bar is remaining
    time; orange when spend outstrips time, red when it outstrips by a lot. */
-#plan-ticker { margin-left: auto; display: flex; align-items: flex-end; gap: 8px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; padding-top: 2px; }
-#plan-ticker .plan-group { display: inline-flex; align-items: flex-end; gap: 3px; flex-shrink: 0; }
-#plan-ticker .plan-icon { display: inline-flex; align-items: center; height: 12px; color: var(--text-muted); }
-#plan-ticker .plan-icon .model-icon { width: 11px; height: 11px; display: block; opacity: 0.85; }
+#plan-ticker { margin-left: auto; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; padding-top: 2px; }
+#plan-ticker .plan-group { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+#plan-ticker .plan-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); }
+#plan-ticker .plan-icon .model-icon { width: 17px; height: 17px; display: block; opacity: 0.85; }
 #plan-ticker .plan-icon .model-icon[data-mark="claude-splat"] { color: var(--anthropic-mark); }
 #plan-ticker .plan-box { display: inline-flex; align-items: flex-end; gap: 5px; padding: 2px 5px 1px; border: 1px solid var(--border-focus); border-radius: 3px; }
 #plan-ticker .plan-win { display: inline-flex; align-items: flex-end; gap: 2px; }

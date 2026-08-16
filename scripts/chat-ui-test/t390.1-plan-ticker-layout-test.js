@@ -258,6 +258,10 @@ function startServer() {
             trackLeft: tr ? tr.left : null
           };
         });
+        const icon = g.querySelector('.plan-icon .model-icon');
+        const box = g.querySelector('.plan-box');
+        const ir = icon ? icon.getBoundingClientRect() : null;
+        const br = box ? box.getBoundingClientRect() : null;
         out.groups.push({
           provider: g.getAttribute('data-provider'),
           company: g.getAttribute('data-company'),
@@ -265,7 +269,11 @@ function startServer() {
           right: r.right,
           width: r.width,
           height: r.height,
-          hasBox: !!g.querySelector('.plan-box'),
+          hasBox: !!box,
+          iconWidth: ir ? ir.width : 0,
+          iconHeight: ir ? ir.height : 0,
+          iconMid: ir ? ir.top + ir.height / 2 : null,
+          boxMid: br ? br.top + br.height / 2 : null,
           windows: wins
         });
         prev = { right: r.right, provider: g.getAttribute('data-provider') };
@@ -275,6 +283,15 @@ function startServer() {
 
     if (layout.overlaps.length) {
       failures.push('groups overlap: ' + JSON.stringify(layout.overlaps));
+    }
+
+    for (const g of layout.groups) {
+      if (g.iconWidth < 16 || g.iconHeight < 16) {
+        failures.push(g.provider + ' icon too small: ' + g.iconWidth + 'x' + g.iconHeight + ' (want ≥16, 50% up from 11)');
+      }
+      if (g.iconMid != null && g.boxMid != null && Math.abs(g.iconMid - g.boxMid) > 1.5) {
+        failures.push(g.provider + ' icon not vertically centred on box: iconMid=' + g.iconMid.toFixed(1) + ' boxMid=' + g.boxMid.toFixed(1));
+      }
     }
 
     const claude = layout.groups.find((g) => g.provider === 'claude');

@@ -419,6 +419,10 @@ test('index.html never hides #plan-ticker pending a fetch, and styles grouped ba
   assert.ok(html.indexOf('.plan-tri') >= 0, 'time-remaining triangle CSS');
   assert.ok(html.indexOf('.plan-box') >= 0, 'per-provider window box CSS');
   assert.ok(html.indexOf('.plan-icon') >= 0, 'company-mark CSS');
+  assert.ok(/#plan-ticker \.plan-icon \.model-icon\s*\{[^}]*width:\s*17px/.test(html),
+    'T287 marks on the ticker are 50% larger than the original 11px');
+  assert.ok(/#plan-ticker \.plan-group\s*\{[^}]*align-items:\s*center/.test(html),
+    'icons sit on the vertical centre of the window box, not the bar');
   assert.ok(html.indexOf('display: none') < 0 || !/#plan-ticker\s*\{[^}]*display\s*:\s*none/.test(html));
   // The paint path must not re-hide the slot on a failed fetch.
   const paintBlock = html.slice(html.indexOf('function refreshPlanUsage'), html.indexOf('function refreshPlanUsage') + 1200);
