@@ -18,6 +18,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -79,10 +80,23 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_stop",
-			mcp.WithDescription("Stop a running agent process only. The agent stays registered and can be started again (resume). Not the same as kill."),
+			mcp.WithDescription("Stop a running agent process and park it (🎯T414): the agent stays registered, and the park is a standing instruction that outlives the process — no delivery, restart, idle sweep or repair mission revives it until the park is lifted with jevons_fleet_intent state=working. Not the same as kill (which deregisters)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
+			mcp.WithString("actor", mcp.Description("Your agent name (who is parking it). Default: the overseer.")),
+			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it.")),
 		),
 		s.handleAgentStop,
+	)
+
+	s.mcpSrv.AddTool(
+		mcp.NewTool("jevons_fleet_intent",
+			mcp.WithDescription("Read or set the deliberate answer to \"should this agent be running?\" (🎯T414). Every fleet control — spawn, nudge, revive, repressure, repair mission, delivery start, worker-idle notification — reads this and declines when it says do not run, naming the intent. Observed process state alone never authorises a start. States: working, parked, blocked_provider, blocked_owner, reaped. Omit state to read the current intent; omit name to set the fleet-wide intent (a provider wall stands the whole fleet down)."),
+			mcp.WithString("name", mcp.Description("Agent name. Omit to read everything, or (with state) to set the FLEET-WIDE intent.")),
+			mcp.WithString("state", mcp.Description("working | parked | blocked_provider | blocked_owner | reaped. Omit to read.")),
+			mcp.WithString("actor", mcp.Description("Who is deciding (owner, overseer, a product path). Recorded with the intent.")),
+			mcp.WithString("reason", mcp.Description("Why — recorded so the cockpit can say what is holding an agent down, not merely that something is.")),
+		),
+		s.handleFleetIntent,
 	)
 
 	s.mcpSrv.AddTool(
@@ -115,7 +129,7 @@ func (s *Server) SetAgentEventHook(fn func(name string, ev claudia.Event)) {
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
 	// (and overseer notify), not only logs.
-	reps := SweepDeadAgents(s.registry, s.overseerName())
+	reps := SweepDeadAgents(s.registry, s.overseerName(), s.fleetIntent())
 	if len(reps) > 0 {
 		line := FormatDeadAgentReport(reps)
 		slog.Info(line)
@@ -227,6 +241,28 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 			"name": name, "err": "resume_halted",
 		})
 		return blocked, nil
+	}
+
+	// 🎯T414: a start is the control this target is named for, so it asks the
+	// same question as the rest — should this agent be running? A standing
+	// park or a provider wall declines it here, naming the intent, because
+	// otherwise every automated caller (frontier consume, PO proactive, the
+	// restart reattach) reaches a parked fleet through this one door.
+	//
+	// Reaped is the exception, and the distinction is the registry row rather
+	// than the name: resurrecting the row that was reaped is the 🎯T413 bug,
+	// while starting a fresh agent under a name the fleet once used is
+	// ordinary re-use.
+	rowExisted := s.registry != nil && s.registry.Def(name) != nil
+	if dec := s.AllowFleetControl(name, fleetintent.ControlSpawn); !dec.Allow {
+		if dec.Blocking != fleetintent.Reaped || rowExisted {
+			life["err"] = dec.Reason
+			s.logLifecycle(compAgentLifecycle, "start", "error", life)
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"refusing to start %q — %s (%s). Lift it with jevons_fleet_intent state=working before starting.",
+				name, fleetintent.Describe(dec.Blocking), dec.Reason)), nil
+		}
+		s.MarkAgentWorking(name, actor, "fresh start under a previously reaped name")
 	}
 
 	// Expand ~ in workdir.
@@ -610,8 +646,20 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 
 	s.registry.Stop(name)
-	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name})
-	return mcp.NewToolResultText(fmt.Sprintf("Agent %q stopped (still registered; start again to resume).", name)), nil
+	// 🎯T408 via 🎯T414: stopping without killing is an instruction, and the
+	// instruction is the part that used to evaporate. The process ends here;
+	// the park outlives it, the delivery that would restart the agent, and the
+	// daemon restart that would reattach it.
+	actor, _ := args["actor"].(string)
+	if strings.TrimSpace(actor) == "" {
+		actor = s.overseerName()
+	}
+	reason, _ := args["reason"].(string)
+	s.MarkAgentParked(name, actor, strings.TrimSpace(reason))
+	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name, "actor": actor})
+	return mcp.NewToolResultText(fmt.Sprintf(
+		"Agent %q stopped and parked (still registered; nothing revives it — not a delivery, not a restart, not the idle sweep — until the park is lifted with jevons_fleet_intent name=%q state=working).",
+		name, name)), nil
 }
 
 func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

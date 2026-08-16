@@ -31,6 +31,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
@@ -218,6 +219,12 @@ type Server struct {
 	recoverBin string
 	stateDir   string
 
+	// intent is the 🎯T414 fleet-intent store: the deliberate answer to
+	// "should this agent be running?", read by every control that spawns,
+	// nudges, revives, repressures, or repairs. Nil resolves to all-working,
+	// which is the pre-T414 behaviour. See fleet_intent.go.
+	intent *fleetintent.Store
+
 	// autoSpawnPaused is config frontier_consume.disabled (🎯T407). The
 	// sentinel reads this as daemon-held evidence the fleet cannot run —
 	// ready leaves are then a pause, not a spawn gap. Guarded by mu.
@@ -293,7 +300,7 @@ func (s *Server) SweepFleetHealth(overseerName string) {
 	if overseerName == "" {
 		overseerName = "jevons"
 	}
-	if reps := SweepDeadAgents(s.registry, overseerName); len(reps) > 0 {
+	if reps := SweepDeadAgents(s.registry, overseerName, s.fleetIntent()); len(reps) > 0 {
 		slog.Info("cockpit fleet health", "report", FormatDeadAgentReport(reps))
 	}
 }

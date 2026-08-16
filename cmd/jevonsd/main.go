@@ -604,6 +604,16 @@ func main() {
 		mcpSrv.SetEventJournal(elog)
 	}
 
+	// 🎯T414: the shared answer to "should this agent be running?", opened
+	// before any control can ask it. Durable and opened here rather than
+	// lazily, because a daemon restart is one of the three things that
+	// resurrected a deliberately parked fleet on 2026-08-10 — an intent the
+	// restart cannot read is an intent the restart overrides.
+	if err := mcpSrv.OpenFleetIntent(cfg.StateDir); err != nil {
+		slog.Error("fleet intent store failed", "err", err)
+		os.Exit(1)
+	}
+
 	// Butler: durable-thread orchestrator over the thread store, the
 	// session scanner (non-invasive observation), and the transcript
 	// reader (status derivation). Threads persist across restarts so the

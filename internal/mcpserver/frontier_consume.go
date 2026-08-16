@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/poproactive"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -92,6 +93,11 @@ const (
 	FrontierReasonPOMissing            = "park_po_unregistered"
 	FrontierReasonSpawnHalted          = "park_spawn_halted"
 	FrontierReasonSpawnFailed          = "park_spawn_failed"
+	// FrontierReasonFleetIntent parks every ready leaf because the fleet is
+	// deliberately not working (🎯T414). Distinct from park_spawn_halted,
+	// which is the budget clamp: an owner reading a parked frontier has to be
+	// able to tell "I stood this fleet down" from "the clamp tripped".
+	FrontierReasonFleetIntent = "park_fleet_intent"
 )
 
 // FrontierConsumeReport is one leaf's sweep outcome.
@@ -239,6 +245,10 @@ type FrontierConsumeArgs struct {
 	// SpawnHalted carries the budget-clamp refusal when non-empty (T36):
 	// every ready leaf parks with park_spawn_halted.
 	SpawnHalted string
+	// FleetIntent is the deliberate fleet-wide intent (🎯T414). Anything but
+	// working parks every ready leaf: a ready leaf is a fact about the
+	// ledger, never a licence to start a worker.
+	FleetIntent fleetintent.State
 	// MaxSpawnsPerCycle 0 → DefaultFrontierConsumeMaxSpawnsPerCycle.
 	MaxSpawnsPerCycle int
 	// MaxSpawnsPerTarget 0 → DefaultFrontierConsumeMaxSpawnsPerTarget.
@@ -332,6 +342,15 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			continue
 		}
 		// Ready leaf: enforcement path.
+		// 🎯T414 first, ahead of the budget clamp: when both are set the
+		// intent is the more useful answer, because only the owner can lift
+		// it and the clamp will still be there when they do.
+		if dec := fleetintent.AllowsFleet(args.FleetIntent, fleetintent.ControlSpawn); !dec.Allow {
+			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonFleetIntent
+			rep.Err = "fleet intent: " + fleetintent.Describe(dec.Blocking)
+			out = append(out, rep)
+			continue
+		}
 		if args.SpawnHalted != "" {
 			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonSpawnHalted
 			rep.Err = args.SpawnHalted
@@ -490,6 +509,7 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 		Now:                time.Now(),
 		PORegistered:       s.registry.Def(parentPO) != nil,
 		SpawnHalted:        spawnHalted,
+		FleetIntent:        s.fleetIntent().FleetState(),
 		MaxSpawnsPerCycle:  args.MaxSpawnsPerCycle,
 		MaxSpawnsPerTarget: args.MaxSpawnsPerTarget,
 		RespawnBackoff:     args.RespawnBackoff,

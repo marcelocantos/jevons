@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // agentSendResult is the outcome of sendToAgent (🎯T111.1).
@@ -137,7 +138,7 @@ func (s *Server) sendToAgentAs(actor, name, text string, interrupt bool) (agentS
 // but stopped/dead.
 func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 	if s.registry != nil {
-		if reps := SweepDeadAgents(s.registry, s.overseerName()); len(reps) > 0 {
+		if reps := SweepDeadAgents(s.registry, s.overseerName(), s.fleetIntent()); len(reps) > 0 {
 			line := FormatDeadAgentReport(reps)
 			slog.Info(line)
 			s.notifyFleetHealth(line)
@@ -150,6 +151,15 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 	}
 	if s.registry.Def(name) == nil {
 		return nil, false, fmt.Errorf("agent %q is not running", name)
+	}
+	// 🎯T414 / 🎯T408: not-running is a fact, never a licence. Everything
+	// below this point starts a process, and it used to run on the strength
+	// of the process being absent — which is how a deliberate stop failed to
+	// survive a delivery. A message to a stood-down agent is not itself
+	// authority to stand it back up; lifting the intent is.
+	if dec := s.AllowFleetControl(name, fleetintent.ControlDeliverStart); !dec.Allow {
+		return nil, false, fmt.Errorf("agent %q is not running and intent says it should not be: %s (%s) — lift the intent to resume",
+			name, fleetintent.Describe(dec.Blocking), dec.Reason)
 	}
 
 	// 🎯T409: the same lost-session recovery agent_start performs (🎯T313),

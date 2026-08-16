@@ -16,6 +16,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
 
@@ -98,8 +99,13 @@ const (
 // IdleNudgeObs is a pure snapshot — no I/O. Callers assemble from registry,
 // progress hub, and the nudge ledger.
 type IdleNudgeObs struct {
-	Name           string
-	Purpose        string // work | aside | overseer (empty = work)
+	Name    string
+	Purpose string // work | aside | overseer (empty = work)
+	// FleetIntent / Intent are the deliberate answers to "should this be
+	// running?" (🎯T414). Empty resolves to working, so an unstamped agent
+	// behaves exactly as it did before intent existed.
+	FleetIntent    fleetintent.State
+	Intent         fleetintent.State
 	ProcessRunning bool
 	DeliberateStop bool // stop without kill; residual: do not force-nudge
 	Phase          string
@@ -130,6 +136,13 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	}
 	if purpose == claudia.PurposeOverseer || purpose == claudia.PurposeAside {
 		return IdleNudgeSkip, "not_work_purpose"
+	}
+	// 🎯T414: intent outranks every observation below. A parked, blocked, or
+	// reaped agent is idle *on purpose*, and nudging it is the fault this
+	// classifier used to commit — it read "phase=idle, mission open" and had
+	// no way to ask whether the agent was supposed to be working at all.
+	if d := fleetintent.Allows(o.FleetIntent, o.Intent, fleetintent.ControlNudge); !d.Allow {
+		return IdleNudgeSkip, d.Reason
 	}
 	if o.LooksFinished {
 		return IdleNudgeSkip, "achieved_should_reap"
@@ -593,6 +606,10 @@ type IdleNudgeSweepArgs struct {
 	// PO/boss with no work children is standing idle) and T330 (PO/boss with
 	// engaged implementers is sleep-OK — no re-continue thrash).
 	Eligible func(d claudia.AgentDef) bool
+	// Intent is the deliberate fleet intent snapshot (🎯T414). The zero value
+	// is all-working, so a sweep assembled without one nudges exactly as it
+	// did before intent existed.
+	Intent fleetintent.Snapshot
 }
 
 // SweepIdleNudges classifies every registered agent and delivers nudges.
@@ -711,7 +728,7 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 	// 🎯T171: post-restart short resume only for open-mission implementers
 	// (not PO/boss, not missionless non-AutoStart). Periodic path unchanged.
 	if args.PostRestart {
-		if !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished) {
+		if !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished, args.Intent) {
 			hasMission = false
 		}
 	}
@@ -719,6 +736,8 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 	obs := IdleNudgeObs{
 		Name:           d.Name,
 		Purpose:        purpose,
+		FleetIntent:    args.Intent.FleetState(),
+		Intent:         args.Intent.AgentState(d.Name),
 		ProcessRunning: running,
 		DeliberateStop: deliberateStop,
 		Phase:          act.Phase,
@@ -733,7 +752,7 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 		PostRestart:    args.PostRestart,
 	}
 	action, reason := ClassifyIdleNudge(obs)
-	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished) {
+	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished, args.Intent) {
 		action, reason = IdleNudgeSkip, "not_open_mission_resume"
 	}
 	kind := ClassifyIdleNudgeKind(briefPresent)
@@ -869,7 +888,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	// implementers silent for hours.
 	args.Server.mu.Lock()
 	args.Server.idleNudgeSweep = func(postRestart bool) {
-		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
+		if reps := SweepDeadAgents(args.Server.registry, overseer, args.Server.fleetIntent()); len(reps) > 0 {
 			slog.Info("fleet health (cockpit/idle loop)", "report", FormatDeadAgentReport(reps), "post_restart", postRestart)
 		}
 		args.Server.runFleetRecoverSweep(postRestart)
@@ -897,7 +916,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		return
 	}
 	runIdlePressureLoop(ctx, interval, func() {
-		if reps := SweepDeadAgents(args.Server.registry, overseer); len(reps) > 0 {
+		if reps := SweepDeadAgents(args.Server.registry, overseer, args.Server.fleetIntent()); len(reps) > 0 {
 			slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
 		}
 		args.Server.TriggerIdlePressureSweep()
@@ -1050,6 +1069,7 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		DesignGated:        hooks.DesignGated,
 		LastTerminalReport: hooks.LooksSatisfied,
 		ProcessRunning:     deps.Running,
+		Intent:             s.fleetIntent(),
 		Eligible: func(d claudia.AgentDef) bool {
 			// 🎯T244: unbound PO/boss with no work children is standing idle.
 			// 🎯T330: PO/boss with engaged implementers is sleep-OK (no thrash).
@@ -1201,7 +1221,10 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 		return activity.Get(child).Phase
 	}
 	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, nil)
-	if !HasOpenMissionForIdle(*def, nil, workKids, engagedKids) {
+	openMission := HasOpenMissionForIdle(*def, nil, workKids, engagedKids)
+	intent := s.fleetIntent()
+	if !ShouldEmitWorkerIdle("working", "idle", def.Purpose, openMission,
+		intent.FleetState(), intent.AgentState(name)) {
 		return
 	}
 	overseer := s.overseerName()
@@ -1428,6 +1451,11 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 			}
 			s.fleetBriefed[name] = true
 		},
+		// 🎯T414: the restart reattach path is the first of the three
+		// resurrections of 2026-08-10 — the daemon came back, found workers
+		// with open missions and no process, and started them. Intent is the
+		// only thing here that can tell a crash from a park.
+		Intent: s.fleetIntent(),
 		// DesignGated / LooksFinished residual: no frontier probe on restart path.
 	})
 

@@ -120,12 +120,16 @@ func (s *Server) handleStaffOpsCycle(_ context.Context, req mcp.CallToolRequest)
 func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.ResourceSnapshot) {
 	var signals []staffops.Signal
 	resources := staffops.ResourceSnapshot{FrontierDepth: frontierDepth}
+	// 🎯T414: one read, stamped onto every signal this sample produces. A
+	// repair mission is an action on an agent, so it needs the same
+	// permission a spawn does.
+	intent := s.fleetIntent()
 
 	// Fleet sample.
 	if s.registry != nil {
 		overseer := s.overseerName()
 		// Dead-handle recovery (T85 mechanical floor).
-		reps := SweepDeadAgents(s.registry, overseer)
+		reps := SweepDeadAgents(s.registry, overseer, intent)
 		for _, r := range reps {
 			sig := staffops.Signal{
 				Kind:         "dead_agent",
@@ -133,6 +137,8 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 				Severity:     "high",
 				Mechanical:   true,
 				HarnessActed: r.Recovered,
+				FleetIntent:  intent.FleetState(),
+				Intent:       intent.AgentState(r.Name),
 				// Thin vertical: treat detection as grace already elapsed so
 				// unrecovered dead agents classify as repair (T219 spirit).
 				GraceElapsed: !r.Recovered,
@@ -184,11 +190,12 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 					sev = "critical"
 				}
 				signals = append(signals, staffops.Signal{
-					Kind:       "cost_alert",
-					Symptom:    "cost:" + a.Kind,
-					Severity:   sev,
-					Mechanical: false, // residual policy: cost thrash → root file path
-					Detail:     a.Detail,
+					Kind:        "cost_alert",
+					Symptom:     "cost:" + a.Kind,
+					Severity:    sev,
+					Mechanical:  false, // residual policy: cost thrash → root file path
+					FleetIntent: intent.FleetState(),
+					Detail:      a.Detail,
 				})
 			}
 		} else if err != nil {

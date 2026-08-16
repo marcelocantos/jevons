@@ -20,6 +20,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/poproactive"
 	"github.com/marcelocantos/jevons/internal/staffops"
 	"github.com/marcelocantos/jevons/internal/targetfile"
@@ -441,7 +442,16 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 	grace := DefaultSentinelMechanicalGrace
 	rt := s.ensureSentinelRuntime(args.MaxActionsPerHour)
 
-	in := staffops.ObserveInput{}
+	// 🎯T414: the intent snapshot travels with the sample, so every signal
+	// this tick builds carries the deliberate answer to "should this be
+	// running?" and staffops.Classify can decline a repair on it. Read once:
+	// a tick that changed its mind halfway through would classify two halves
+	// of one fleet against two different intents.
+	intent := s.fleetIntent()
+	in := staffops.ObserveInput{
+		FleetIntent: intent.FleetState(),
+		AgentIntent: map[string]fleetintent.State{},
+	}
 	resources := staffops.ResourceSnapshot{}
 
 	overseer := args.Overseer
@@ -488,7 +498,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 
 	// --- Fleet agents ---
 	if s.registry != nil {
-		reps := SweepDeadAgents(s.registry, overseer)
+		reps := SweepDeadAgents(s.registry, overseer, intent)
 		recovered := map[string]bool{}
 		dead := map[string]DeadAgentReport{}
 		for _, r := range reps {
@@ -518,6 +528,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 				Name:  d.Name,
 				Alive: alive,
 			}
+			in.AgentIntent[d.Name] = intent.AgentState(d.Name)
 			// Deliberate stop: not AutoStart and not alive and no dead handle recover path.
 			// Heuristic: purpose work, no process, Materialized but not AutoStart → stop OK.
 			if !alive && !d.AutoStart && d.Purpose != claudia.PurposeOverseer {

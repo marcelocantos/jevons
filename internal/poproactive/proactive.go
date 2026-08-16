@@ -10,6 +10,8 @@ package poproactive
 
 import (
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // Mode is the product-owner pass decision for 🎯T325.1.
@@ -525,6 +527,27 @@ func Classify(leaves []LeafObs) Decision {
 
 // ClassifyPOProactive is the doctrine-facing name for Classify (🎯T325.1).
 func ClassifyPOProactive(leaves []LeafObs) Decision { return Classify(leaves) }
+
+// ReasonFleetIntent is the stable Reason when 🎯T414 intent parks the pass.
+const ReasonFleetIntent = "fleet_intent"
+
+// ClassifyWithIntent is [Classify] under the 🎯T414 fleet intent: a PO
+// proactive pass with ready leaves still sleeps when the fleet is
+// deliberately not working.
+func ClassifyWithIntent(leaves []LeafObs, fleet fleetintent.State) Decision {
+	if d := fleetintent.AllowsFleet(fleet, fleetintent.ControlSpawn); !d.Allow {
+		return Decision{
+			Mode:   Sleep,
+			Reason: ReasonFleetIntent + "_" + string(d.Blocking),
+		}
+	}
+	return Classify(leaves)
+}
+
+// ShouldKeepKickingUnderIntent is [ShouldKeepKicking] with the 🎯T414 gate.
+func ShouldKeepKickingUnderIntent(leaves []LeafObs, fleet fleetintent.State) bool {
+	return ClassifyWithIntent(leaves, fleet).Mode == Kick
+}
 
 // ClassifyFrontierLeaf is the doctrine-facing name for ClassifyLeaf.
 func ClassifyFrontierLeaf(o LeafObs) LeafKind { return ClassifyLeaf(o) }

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // ObserveInput is a pure projection of product surfaces for one sentinel tick
@@ -15,11 +17,11 @@ import (
 // — not a second shadow state.
 type ObserveInput struct {
 	// Overseer usability (T204 surface).
-	OverseerAlive      bool
-	OverseerAttached   bool // chat stream wired; false when unknown is ok
-	OverseerStuckBusy  bool
-	OverseerHarnessOK  bool // cockpit already recovered this class
-	OverseerGraceDone  bool
+	OverseerAlive     bool
+	OverseerAttached  bool // chat stream wired; false when unknown is ok
+	OverseerStuckBusy bool
+	OverseerHarnessOK bool // cockpit already recovered this class
+	OverseerGraceDone bool
 	// Fleet agents (phases / dead / deliberate stop / idle residue).
 	Agents []AgentObs
 	// Eventlog anomaly counts in the recent window.
@@ -43,6 +45,27 @@ type ObserveInput struct {
 	FleetBlock FleetBlockObs
 	// Cost alerts already shaped as optional residual signals.
 	CostAlerts []CostObs
+	// FleetIntent and AgentIntent are the 🎯T414 deliberate states, carried
+	// here rather than on each observation shape because every signal this
+	// function emits needs them and only some of them are about an agent.
+	// Empty resolves to working, so a sample assembled without them builds
+	// exactly the signals it did before intent existed.
+	//
+	// This is the field the sentinel was missing on 2026-08-10: it sampled a
+	// deliberately parked fleet, saw 34 unattended-ready leaves and three
+	// stopped workers, and had nowhere to write down that not running was the
+	// point — so it built a frontier-stall signal and a repair mission out of
+	// a correctly idle fleet.
+	FleetIntent fleetintent.State
+	AgentIntent map[string]fleetintent.State
+}
+
+// agentIntent is the recorded intent for name (working when unrecorded).
+func (in ObserveInput) agentIntent(name string) fleetintent.State {
+	if in.AgentIntent == nil {
+		return fleetintent.Working
+	}
+	return fleetintent.Resolve(in.AgentIntent[name])
 }
 
 // POFanoutObs is one product-owner fan-out fault (🎯T380). Only faults belong
@@ -181,6 +204,7 @@ func BuildSignals(in ObserveInput) []Signal {
 				Symptom:        "stop:" + name,
 				Severity:       "low",
 				DeliberateStop: true,
+				Intent:         in.agentIntent(name),
 				Detail:         firstNonEmpty(a.Detail, "deliberate stop"),
 			})
 			continue
@@ -193,6 +217,7 @@ func BuildSignals(in ObserveInput) []Signal {
 				Mechanical:   true, // T85 / cockpit fleet health
 				HarnessActed: a.HarnessActed,
 				GraceElapsed: a.GraceElapsed,
+				Intent:       in.agentIntent(name),
 				Detail:       firstNonEmpty(a.Detail, "dead process handle"),
 			})
 			continue
@@ -205,6 +230,7 @@ func BuildSignals(in ObserveInput) []Signal {
 				Mechanical:   true, // T207 idle nudge owns first response
 				HarnessActed: a.HarnessActed,
 				GraceElapsed: a.GraceElapsed,
+				Intent:       in.agentIntent(name),
 				Detail: firstNonEmpty(a.Detail,
 					fmt.Sprintf("open-mission idle residue phase=%s", a.Phase)),
 			})
@@ -294,6 +320,7 @@ func BuildSignals(in ObserveInput) []Signal {
 				Symptom:    "po_stall:" + name,
 				Severity:   sev,
 				Mechanical: false,
+				Intent:     in.agentIntent(name),
 				Detail: firstNonEmpty(p.Detail,
 					fmt.Sprintf("%s: %s ready=%d", p.Verdict, p.Reason, p.ReadyCount)),
 			})
@@ -317,6 +344,14 @@ func BuildSignals(in ObserveInput) []Signal {
 			Mechanical: false,
 			Detail:     c.Detail,
 		})
+	}
+
+	// 🎯T414: the fleet-wide intent applies to every signal, including the
+	// ones with no agent in them. A frontier stall under a parked fleet is
+	// not a stall — the leaves are unattended because the fleet was stood
+	// down — and the cost alert that stood it down is not a thing to repair.
+	for i := range out {
+		out[i].FleetIntent = in.FleetIntent
 	}
 
 	return out

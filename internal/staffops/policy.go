@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // Action is the health-of-health classification for one signal or cycle.
@@ -63,6 +65,17 @@ type Signal struct {
 	// DeliberateStop is true when the agent was intentionally stopped (T90/T165
 	// spirit) — never thrash-interrupt.
 	DeliberateStop bool
+	// FleetIntent / Intent are the 🎯T414 deliberate states behind this
+	// signal. Empty resolves to working, so a signal assembled without them
+	// classifies exactly as it did before intent existed.
+	//
+	// DeliberateStop above was the closest this policy could previously come
+	// to asking the question, and it was per-signal and per-observation: the
+	// sentinel that issued a spawn mission against 34 ready leaves on
+	// 2026-08-10 had no field at all in which "the fleet is parked" could be
+	// written down.
+	FleetIntent fleetintent.State
+	Intent      fleetintent.State
 	// Detail is optional free text for the wire report (not used in policy).
 	Detail string
 }
@@ -237,6 +250,18 @@ func Classify(sig Signal) Decision {
 			Signal: sig,
 			Action: ActionIgnore,
 			Reason: "deliberate stop — do not thrash",
+		}
+	}
+	// 🎯T414: a repair mission is an action on an agent, so it needs the same
+	// permission as a spawn. Ignoring rather than repairing is the whole
+	// point — a parked agent is not a fault to fix, and prescribing an action
+	// no one can execute is how the sentinel burned an overseer judgement
+	// call every cycle.
+	if d := fleetintent.Allows(sig.FleetIntent, sig.Intent, fleetintent.ControlRepair); !d.Allow {
+		return Decision{
+			Signal: sig,
+			Action: ActionIgnore,
+			Reason: "intent says do not run — " + fleetintent.Describe(d.Blocking) + " (" + d.Reason + ")",
 		}
 	}
 

@@ -149,6 +149,7 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		s.logLifecycle(compAgentLifecycle, "reap_done", "error", fields)
 		return
 	}
+	s.MarkAgentReaped(name, "product:t165", reason)
 	s.logLifecycle(compAgentLifecycle, "reap_done", "ok",
 		reapDecisionFields(name, reason, report))
 	slog.Info("auto-reaped finished work agent", "agent", name, "reason", reason)

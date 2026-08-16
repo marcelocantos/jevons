@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
 
@@ -47,12 +48,15 @@ type WorkerIdleRef struct {
 // ShouldEmitWorkerIdle is the hermetic gate for enter-idle events.
 // nextPhase must be idle; prevPhase must have been working (real turn),
 // not seed-idle or empty (daemon boot seed is not an "enter idle" edge).
-func ShouldEmitWorkerIdle(prevPhase, nextPhase, purpose string, openMission bool) bool {
+func ShouldEmitWorkerIdle(prevPhase, nextPhase, purpose string, openMission bool, fleetIntent, intent fleetintent.State) bool {
 	purpose = strings.TrimSpace(purpose)
 	if purpose == "" {
 		purpose = claudia.PurposeWork
 	}
 	if purpose == claudia.PurposeOverseer || purpose == claudia.PurposeAside {
+		return false
+	}
+	if d := fleetintent.Allows(fleetIntent, intent, fleetintent.ControlNotifyIdle); !d.Allow {
 		return false
 	}
 	if !openMission {
@@ -194,8 +198,11 @@ func DaemonRestartEventTargets(byParent map[string][]WorkerIdleRef, overseer, de
 //
 // Open mission: purpose=work AND process running AND (AutoStart OR bound
 // target_id) AND not the durable PO/boss name heuristic.
-func EligibleOpenMissionResume(d claudia.AgentDef, running, deliberateStop, designGated, looksFinished bool) bool {
+func EligibleOpenMissionResume(d claudia.AgentDef, running, deliberateStop, designGated, looksFinished bool, intent fleetintent.Snapshot) bool {
 	if deliberateStop || designGated || looksFinished {
+		return false
+	}
+	if dec := intent.Allow(d.Name, fleetintent.ControlRevive); !dec.Allow {
 		return false
 	}
 	if !running {

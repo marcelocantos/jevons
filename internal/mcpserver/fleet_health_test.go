@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // fakeSweepReg drives hasProc&&!Alive without a real OS process (🎯T85).
@@ -46,19 +47,19 @@ func (f *fakeSweepReg) Stop(name string) {
 }
 
 func TestDeadRecoveryPlan(t *testing.T) {
-	d, r, c := deadRecoveryPlan(false, false, true)
+	d, r, c := deadRecoveryPlan(false, false, true, true)
 	if d || r || c {
 		t.Fatalf("nil proc: detect=%v recover=%v clear=%v", d, r, c)
 	}
-	d, r, c = deadRecoveryPlan(true, true, true)
+	d, r, c = deadRecoveryPlan(true, true, true, true)
 	if d || r || c {
 		t.Fatalf("alive: detect=%v recover=%v clear=%v", d, r, c)
 	}
-	d, r, c = deadRecoveryPlan(true, false, true)
+	d, r, c = deadRecoveryPlan(true, false, true, true)
 	if !d || !r || c {
 		t.Fatalf("autostart dead: detect=%v recover=%v clear=%v", d, r, c)
 	}
-	d, r, c = deadRecoveryPlan(true, false, false)
+	d, r, c = deadRecoveryPlan(true, false, false, true)
 	if !d || r || !c {
 		t.Fatalf("ephemeral dead: detect=%v recover=%v clear=%v", d, r, c)
 	}
@@ -75,7 +76,7 @@ func TestSweepDeadAgentsAutoStartRelaunch(t *testing.T) {
 		hasProc: map[string]bool{"durable": true, "jevons": true},
 		alive:   map[string]bool{"durable": false, "jevons": false},
 	}
-	reps := sweepDeadAgents(f, "jevons")
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
 	if len(reps) != 1 || reps[0].Name != "durable" {
 		t.Fatalf("reps=%+v want only durable", reps)
 	}
@@ -100,7 +101,7 @@ func TestSweepDeadAgentsEphemeralClearsHandle(t *testing.T) {
 		hasProc: map[string]bool{"worker": true},
 		alive:   map[string]bool{"worker": false},
 	}
-	reps := sweepDeadAgents(f, "jevons")
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
 	if len(reps) != 1 || reps[0].Name != "worker" || reps[0].Recovered {
 		t.Fatalf("reps=%+v", reps)
 	}
@@ -122,7 +123,7 @@ func TestSweepDeadAgentsLaunchFailThenStop(t *testing.T) {
 		alive:     map[string]bool{"durable": false},
 		launchErr: errors.New("spawn refused"),
 	}
-	reps := sweepDeadAgents(f, "jevons")
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
 	if len(reps) != 1 || reps[0].Recovered || !strings.Contains(reps[0].Error, "spawn refused") {
 		t.Fatalf("reps=%+v", reps)
 	}
@@ -146,7 +147,7 @@ func TestSweepDeadAgentsEmptyOnHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Never launched → Get nil → not a dead-handle detection.
-	reps := SweepDeadAgents(reg, "jevons")
+	reps := SweepDeadAgents(reg, "jevons", fleetintent.Snapshot{})
 	if len(reps) != 0 {
 		t.Fatalf("want no dead agents, got %+v", reps)
 	}
@@ -191,7 +192,7 @@ func TestSweepThenPrependIsCallerVisible(t *testing.T) {
 		hasProc: map[string]bool{"worker": true},
 		alive:   map[string]bool{"worker": false},
 	}
-	reps := sweepDeadAgents(f, "jevons")
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
 	out := PrependFleetHealth("worker stopped\n", reps)
 	if !strings.Contains(out, "worker:stopped") {
 		t.Fatalf("tool text missing recovery: %q", out)

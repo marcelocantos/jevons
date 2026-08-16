@@ -10,6 +10,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // DeadAgentReport is one silent-death finding (🎯T85).
@@ -17,13 +18,31 @@ type DeadAgentReport struct {
 	Name      string
 	Recovered bool
 	Error     string
+	// Declined names the 🎯T414 intent that stopped this sweep from reviving
+	// a dead handle (empty when intent allowed the recovery). The sweep still
+	// reports the agent: the owner should see that a process is gone, just
+	// not see the daemon start it again.
+	Declined string
 }
 
 // deadRecoveryPlan is the pure policy for a single agent (hermetic oracle).
 // hasProc && !alive ⇒ detect. autoStart ⇒ try recover (Launch); else clear handle.
-func deadRecoveryPlan(hasProc, alive, autoStart bool) (detect, tryRecover, clearHandle bool) {
+//
+// intentAllows is the 🎯T414 gate, and it is the whole difference between
+// this sweep recovering a crash and this sweep resurrecting a park. AutoStart
+// is a property of the *definition* — it says this agent is the kind that
+// gets launched by StartAll — so before intent existed the sweep read a
+// deliberately stopped AutoStart worker as a silent death every single pass.
+// That is one of the three resurrection paths of 2026-08-10.
+func deadRecoveryPlan(hasProc, alive, autoStart, intentAllows bool) (detect, tryRecover, clearHandle bool) {
 	if !hasProc || alive {
 		return false, false, false
+	}
+	if !intentAllows {
+		// Detected and reported, but neither revived nor cleared: clearing
+		// the handle is how a stopped row loses the evidence that its
+		// process died, and the owner asked for this one to be down.
+		return true, false, false
 	}
 	if autoStart {
 		return true, true, false // clear only if recover fails (caller)
@@ -78,15 +97,15 @@ func (c claudiaSweep) Stop(name string) {
 //
 // overseerName is never recovered here (owner chat overseer has its own path).
 // Returns every detected dead name; Recovered true when Launch succeeded.
-func SweepDeadAgents(reg *claudia.Registry, overseerName string) []DeadAgentReport {
+func SweepDeadAgents(reg *claudia.Registry, overseerName string, intent fleetintent.Snapshot) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
-	return sweepDeadAgents(claudiaSweep{reg}, overseerName)
+	return sweepDeadAgents(claudiaSweep{reg}, overseerName, intent)
 }
 
 // sweepDeadAgents is the testable implementation (real path + hermetic fakes).
-func sweepDeadAgents(reg fleetSweepReg, overseerName string) []DeadAgentReport {
+func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
@@ -96,11 +115,19 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string) []DeadAgentReport {
 			continue
 		}
 		hasProc, alive := reg.ProcState(d.Name)
-		detect, tryRecover, clearHandle := deadRecoveryPlan(hasProc, alive, d.AutoStart)
+		dec := intent.Allow(d.Name, fleetintent.ControlRevive)
+		detect, tryRecover, clearHandle := deadRecoveryPlan(hasProc, alive, d.AutoStart, dec.Allow)
 		if !detect {
 			continue
 		}
 		rep := DeadAgentReport{Name: d.Name}
+		if !dec.Allow {
+			rep.Declined = dec.Reason
+			slog.Info("fleet health: dead handle left alone — intent says do not run",
+				"name", d.Name, "intent", string(dec.Blocking), "reason", dec.Reason)
+			out = append(out, rep)
+			continue
+		}
 		if tryRecover {
 			if err := reg.Launch(d.Name); err != nil {
 				rep.Error = err.Error()

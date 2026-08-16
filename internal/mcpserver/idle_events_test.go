@@ -9,26 +9,28 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 func TestShouldEmitWorkerIdle(t *testing.T) {
 	t.Parallel()
-	if !ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, true) {
+	if !ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, true, "", "") {
 		t.Fatal("working→idle open mission should emit")
 	}
-	if ShouldEmitWorkerIdle("idle", "idle", claudia.PurposeWork, true) {
+	if ShouldEmitWorkerIdle("idle", "idle", claudia.PurposeWork, true, "", "") {
 		t.Fatal("seed/stay idle must not emit")
 	}
-	if ShouldEmitWorkerIdle("", "idle", claudia.PurposeWork, true) {
+	if ShouldEmitWorkerIdle("", "idle", claudia.PurposeWork, true, "", "") {
 		t.Fatal("empty→idle must not emit")
 	}
-	if ShouldEmitWorkerIdle("working", "working", claudia.PurposeWork, true) {
+	if ShouldEmitWorkerIdle("working", "working", claudia.PurposeWork, true, "", "") {
 		t.Fatal("still working must not emit")
 	}
-	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeAside, true) {
+	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeAside, true, "", "") {
 		t.Fatal("aside must not emit")
 	}
-	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, false) {
+	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, false, "", "") {
 		t.Fatal("no open mission must not emit")
 	}
 }
@@ -41,7 +43,7 @@ func TestHasOpenMissionForIdleUnboundPO(t *testing.T) {
 		t.Fatal("unbound PO with zero work children must not be open mission")
 	}
 	// Compose with ShouldEmitWorkerIdle (acceptance oracle).
-	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, HasOpenMissionForIdle(po, nil, 0, 0)) {
+	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, HasOpenMissionForIdle(po, nil, 0, 0), "", "") {
 		t.Fatal("ShouldEmitWorkerIdle must be false for unbound empty-children PO")
 	}
 	// Unengaged work children only (count>0, engaged=0): PO still open to reap/rebrief.
@@ -142,7 +144,7 @@ func TestIsEngagedWorkChildAndCount(t *testing.T) {
 	if HasOpenMissionForIdle(po, nil, total, engaged) {
 		t.Fatal("parent idle + engaged children must not be open mission")
 	}
-	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, HasOpenMissionForIdle(po, nil, total, engaged)) {
+	if ShouldEmitWorkerIdle("working", "idle", claudia.PurposeWork, HasOpenMissionForIdle(po, nil, total, engaged), "", "") {
 		t.Fatal("worker-idle must not fire for sleep-OK PO with engaged kids")
 	}
 }
@@ -260,43 +262,43 @@ func TestEligibleOpenMissionResume(t *testing.T) {
 	work := claudia.AgentDef{
 		Name: "jv-t171", Purpose: claudia.PurposeWork, AutoStart: true, TargetID: "T171",
 	}
-	if !EligibleOpenMissionResume(work, true, false, false, false) {
+	if !EligibleOpenMissionResume(work, true, false, false, false, fleetintent.Snapshot{}) {
 		t.Fatal("bound AutoStart work should be eligible")
 	}
 	// AutoStart only, no target_id
 	autoOnly := claudia.AgentDef{Name: "jv-orphan", Purpose: claudia.PurposeWork, AutoStart: true}
-	if !EligibleOpenMissionResume(autoOnly, true, false, false, false) {
+	if !EligibleOpenMissionResume(autoOnly, true, false, false, false, fleetintent.Snapshot{}) {
 		t.Fatal("AutoStart work without target still open-mission residual")
 	}
 	// bound target without AutoStart (running)
 	bound := claudia.AgentDef{Name: "jv-bound", Purpose: claudia.PurposeWork, TargetID: "T9"}
-	if !EligibleOpenMissionResume(bound, true, false, false, false) {
+	if !EligibleOpenMissionResume(bound, true, false, false, false, fleetintent.Snapshot{}) {
 		t.Fatal("bound target_id without AutoStart should be eligible when running")
 	}
 	// missionless non-AutoStart
 	missionless := claudia.AgentDef{Name: "jv-ephemeral", Purpose: claudia.PurposeWork, AutoStart: false}
-	if EligibleOpenMissionResume(missionless, true, false, false, false) {
+	if EligibleOpenMissionResume(missionless, true, false, false, false, fleetintent.Snapshot{}) {
 		t.Fatal("missionless non-AutoStart must not resume")
 	}
 	// PO/boss get path-1 events, not short resume
 	po := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork, AutoStart: true}
-	if EligibleOpenMissionResume(po, true, false, false, false) {
+	if EligibleOpenMissionResume(po, true, false, false, false, fleetintent.Snapshot{}) {
 		t.Fatal("PO must not get open-mission short resume")
 	}
 	aside := claudia.AgentDef{Name: "aside-1", Purpose: claudia.PurposeAside, AutoStart: true}
-	if EligibleOpenMissionResume(aside, true, false, false, false) {
+	if EligibleOpenMissionResume(aside, true, false, false, false, fleetintent.Snapshot{}) {
 		t.Fatal("aside must skip")
 	}
-	if EligibleOpenMissionResume(work, false, false, false, false) {
+	if EligibleOpenMissionResume(work, false, false, false, false, fleetintent.Snapshot{}) {
 		t.Fatal("not running must skip")
 	}
-	if EligibleOpenMissionResume(work, true, true, false, false) {
+	if EligibleOpenMissionResume(work, true, true, false, false, fleetintent.Snapshot{}) {
 		t.Fatal("deliberate stop must skip")
 	}
-	if EligibleOpenMissionResume(work, true, false, true, false) {
+	if EligibleOpenMissionResume(work, true, false, true, false, fleetintent.Snapshot{}) {
 		t.Fatal("design-gated must skip")
 	}
-	if EligibleOpenMissionResume(work, true, false, false, true) {
+	if EligibleOpenMissionResume(work, true, false, false, true, fleetintent.Snapshot{}) {
 		t.Fatal("looks-finished must skip")
 	}
 }

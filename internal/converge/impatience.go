@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/converge/attenuate"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // Rung is one step on the escalation ladder, ordered by loudness.
@@ -89,6 +90,24 @@ type Gap struct {
 	// Satisfied is T316's verdict. Satisfied gaps may still be passed in;
 	// the ladder uses them to clear noise and close the incident.
 	Satisfied bool
+	// FleetIntent / Intent are the 🎯T414 deliberate states. Empty resolves
+	// to working, so a gap set assembled without them ladders exactly as it
+	// did before intent existed.
+	//
+	// A gap under a non-working intent is not a gap: nothing is failing to
+	// happen that anyone wanted to happen. On 2026-08-10 this ladder fired
+	// repressure twice at each of three parked workers and then closed the
+	// incidents as cleared, which is the worst of both — it acted, and then
+	// it reported that the situation had resolved.
+	FleetIntent fleetintent.State
+	Intent      fleetintent.State
+}
+
+// Runnable reports whether this gap's intent says the agent should be
+// running. A gap whose intent declines is held, not fired at and not
+// silently satisfied.
+func (g Gap) Runnable() bool {
+	return fleetintent.Allows(g.FleetIntent, g.Intent, fleetintent.ControlRepressure).Allow
 }
 
 // ActionKind is what the caller must actuate for one Action.
@@ -201,6 +220,14 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 		}
 		present[g.Agent] = true
 		if g.Satisfied {
+			continue
+		}
+		// 🎯T414: intent declines the rung. Note that the gap stays present —
+		// a held gap must not read as a departure, because departure closes
+		// the incident and closing it says the situation resolved. Nothing
+		// resolved: the agent is parked, and the gap is exactly where it was
+		// when intent returns to working.
+		if !g.Runnable() {
 			continue
 		}
 		st, ok := l.agents[g.Agent]

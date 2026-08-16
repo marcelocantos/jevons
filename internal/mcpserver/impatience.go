@@ -250,6 +250,16 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 			gaps = append(gaps, g)
 		}
 	}
+	// 🎯T414: stamp every gap with the deliberate intent behind its agent.
+	// The ladder holds a gap whose intent declines rather than firing at it —
+	// and holds it *without* closing the incident, because a park resolves
+	// nothing. On 2026-08-10 this ladder repressured three parked workers
+	// twice each and then reported the incidents cleared.
+	intent := s.fleetIntent()
+	for i := range gaps {
+		gaps[i].FleetIntent = intent.FleetState()
+		gaps[i].Intent = intent.AgentState(gaps[i].Agent)
+	}
 
 	actions, closed := e.ladder.Reconcile(now, gaps)
 	pendingPostmortem := e.journal != nil && len(e.journal.Pending()) > 0
