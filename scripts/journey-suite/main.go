@@ -15,9 +15,9 @@
 //  3. cancel-and-send (interrupt mid-turn → replacement → terminal)
 //  4. reconnect sealed (second connect sees bounded sealed history)
 //  5. isolation (after teardown)
-//  6–11. orchestration: tool surface, overseer registry, two agents
-//       same workdir, thread spawn→direct→remove, worker shell tool (T97),
-//       worker transcript visible to inspect (T282)
+//     6–11. orchestration: tool surface, overseer registry, two agents
+//     same workdir, thread spawn→direct→remove, worker shell tool (T97),
+//     worker transcript visible to inspect (T282)
 //
 // -provider runs the entire isolate — overseer and every agent the
 // journeys spawn — on one backend (🎯T282), so `PROVIDER=claude` is the
@@ -75,6 +75,7 @@ type suite struct {
 	port      int
 	cmd       *exec.Cmd
 	logFile   *os.File
+	daemonEnv []string
 }
 
 func main() {
@@ -235,6 +236,9 @@ persona_notes: |
 	s.run("J13-overseer-migration", s.jOverseerMigration)
 	s.run("J14-bounce-resume", s.jBounceResume)
 	s.run("J15-switch-seed-shape", s.jSwitchSeedShape)
+	s.run("J16-t3924-checkpoint-resume", s.jT3924CheckpointResume)
+	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
+	s.run("J18-t418-handover-mute", s.jT418HandoverMute)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()

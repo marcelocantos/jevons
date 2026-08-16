@@ -27,6 +27,9 @@ func (s *suite) startDaemon() error {
 	)
 	cmd.Stdout = s.logFile
 	cmd.Stderr = s.logFile
+	if len(s.daemonEnv) > 0 {
+		cmd.Env = append(os.Environ(), s.daemonEnv...)
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
