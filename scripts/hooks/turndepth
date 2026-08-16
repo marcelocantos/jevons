@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Claude Code hook shim for the per-turn tool-call depth ceiling (🎯T392.4).
+#
+# Thin wrapper only: it locates bin/turndepth and execs it. All policy lives
+# in internal/turndepth, because a per-session counter shared by concurrent
+# processes is exactly what shell must not own.
+#
+# A missing binary degrades to a VISIBLE non-blocking error rather than a
+# silently disabled ceiling: exit 1 is reported, exit 2 is reserved for the
+# checkpoint ask, so tooling problems never refuse a tool call.
+set -uo pipefail
+
+root="${CLAUDE_PROJECT_DIR:-}"
+if [[ -z "$root" ]]; then
+    root="$(cd "$(dirname "$0")/../.." && pwd)"
+fi
+bin="$root/bin/turndepth"
+
+if [[ ! -x "$bin" ]]; then
+    printf 'turndepth: %s not built — per-turn depth ceiling INACTIVE. Run: make turndepth\n' \
+        "$bin" >&2
+    exit 1
+fi
+
+exec "$bin" "$@"
