@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/marcelocantos/jevons/internal/ctxcap"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
@@ -70,63 +69,39 @@ func TestComposeSeedUsesBriefNotTranscriptWalk(t *testing.T) {
 	migrate := handover.ComposeSeed(handover.Pending{
 		From: "claude", To: "grok", Kind: handover.KindMigrate, TranscriptPath: path,
 	})
-	compact := handover.ComposeSeed(handover.Pending{
+	if migrate == "" {
+		t.Fatal("migrate seed empty")
+	}
+	if n := handover.TokenCount(migrate); n > handover.MaxBriefTokens+200 {
+		t.Errorf("migrate seed tokens=%d over brief cap", n)
+	}
+	low := strings.ToLower(migrate)
+	for _, bad := range forbiddenReadPhrases() {
+		if strings.Contains(low, bad) {
+			t.Errorf("migrate seed still assigns a transcript walk (%q):\n%s", bad, migrate)
+		}
+	}
+	if strings.Contains(low, "restarted") {
+		t.Errorf("migrate seed still calls the switch a restart:\n%s", migrate)
+	}
+	if !strings.Contains(low, "provider switch") || !strings.Contains(migrate, "claude") || !strings.Contains(migrate, "grok") {
+		t.Errorf("migrate seed must name the provider switch:\n%s", migrate)
+	}
+	if !strings.Contains(low, "hard stop") && !strings.Contains(low, "opus") {
+		t.Errorf("migrate brief lost predecessor content:\n%s", migrate)
+	}
+
+	if got := handover.ComposeSeed(handover.Pending{
 		From: "grok", To: "grok", Kind: handover.KindCompact, TranscriptPath: path,
-	})
-
-	for name, seed := range map[string]string{"migrate": migrate, "compact": compact} {
-		if seed == "" {
-			t.Fatalf("%s seed empty", name)
-		}
-		if n := handover.TokenCount(seed); n > handover.MaxBriefTokens+200 {
-			// Wrapper text is small; the brief is the capped part. Whole
-			// seed must stay far under the 100k ceiling.
-			t.Errorf("%s seed tokens=%d want << ceiling", name, n)
-		}
-		if n := handover.TokenCount(seed); int64(n) > ctxcap.DefaultCeiling {
-			t.Errorf("%s first-turn seed %d exceeds ceiling %d", name, n, ctxcap.DefaultCeiling)
-		}
-		low := strings.ToLower(seed)
-		for _, bad := range forbiddenReadPhrases() {
-			if strings.Contains(low, bad) {
-				t.Errorf("%s seed still assigns a transcript walk (%q):\n%s", name, bad, seed)
-			}
-		}
-		if !strings.Contains(low, "lookup only") {
-			t.Errorf("%s seed must cite the path as lookup-only", name)
-		}
-		if !strings.Contains(seed, path) {
-			t.Errorf("%s seed dropped the citation path", name)
-		}
-		if !strings.Contains(low, "hard stop") && !strings.Contains(low, "migrate") && !strings.Contains(low, "opus") {
-			t.Errorf("%s brief lost predecessor content:\n%s", name, seed)
-		}
-	}
-
-	if strings.Contains(strings.ToLower(compact), "different agent backend") {
-		t.Errorf("compact seed claimed a backend change:\n%s", compact)
-	}
-	if strings.Contains(compact, "grok → grok") || strings.Contains(compact, "claude → grok") {
-		t.Errorf("compact seed named a provider pair:\n%s", compact)
-	}
-	if !strings.Contains(migrate, "claude") || !strings.Contains(migrate, "grok") {
-		t.Errorf("migrate seed must name the provider change:\n%s", migrate)
-	}
-	if !strings.Contains(strings.ToLower(migrate), "different agent backend") {
-		t.Errorf("migrate seed must still name the backend change:\n%s", migrate)
+	}); got != "" {
+		t.Fatalf("same-provider seed must be empty, got:\n%s", got)
 	}
 }
 
 func TestSameProviderNeverUsesMigrateStory(t *testing.T) {
 	path := predecessorFixture(t)
-	// A caller that labels grok→grok as migrate must still get compact copy.
-	seed := handover.SeedMessage("grok", "grok", path)
-	low := strings.ToLower(seed)
-	if strings.Contains(low, "different agent backend") {
-		t.Fatalf("same-provider SeedMessage used the migrate story:\n%s", seed)
-	}
-	if !strings.Contains(low, "context compact") && !strings.Contains(low, "same backend") {
-		t.Fatalf("same-provider seed is not the compact story:\n%s", seed)
+	if seed := handover.SeedMessage("grok", "grok", path); seed != "" {
+		t.Fatalf("same-provider SeedMessage must be empty, got:\n%s", seed)
 	}
 	if handover.ProviderSwitch("grok", "grok") {
 		t.Fatal("ProviderSwitch(grok, grok) is true")
@@ -140,15 +115,10 @@ func TestCompactOwnerVisibleIsSilent(t *testing.T) {
 	path := predecessorFixture(t)
 	compact := handover.Pending{From: "grok", To: "grok", Kind: handover.KindCompact, TranscriptPath: path}
 	if got := compact.OwnerVisible(); got != "" {
-		t.Fatalf("compact owner paint = %q, want empty (not reconstruction)", got)
+		t.Fatalf("same-provider owner paint = %q, want empty", got)
 	}
-	seed := compact.Seed()
-	if strings.Contains(strings.ToLower(seed), "start at the end") {
-		t.Fatal("compact seed still asks for reconstruction")
-	}
-	if !strings.Contains(strings.ToLower(seed), "one short sentence") &&
-		!strings.Contains(strings.ToLower(seed), "say nothing") {
-		t.Fatalf("compact seed does not constrain the owner-visible reply:\n%s", seed)
+	if seed := compact.Seed(); seed != "" {
+		t.Fatalf("same-provider seed must be empty, got:\n%s", seed)
 	}
 	migrate := handover.Pending{From: "claude", To: "grok", Kind: handover.KindMigrate, TranscriptPath: path}
 	if got := migrate.OwnerVisible(); !strings.Contains(got, "grok") || !strings.Contains(got, "claude") {
@@ -165,14 +135,15 @@ func TestAssignedReadAgainstFatFixtureExceedsCeiling(t *testing.T) {
 	// Mutation: restore the retired assignment and charge the full file
 	// as the first-turn context. That is what blew 105k today.
 	assigned := handover.AssignedReadAssignment + "\n" + string(raw)
-	if n := handover.TokenCount(assigned); int64(n) <= ctxcap.DefaultCeiling {
-		t.Fatalf("mutation control too thin: assigned-read tokens=%d want > %d", n, ctxcap.DefaultCeiling)
-	}
 	seed := handover.ComposeSeed(handover.Pending{
-		From: "grok", To: "grok", Kind: handover.KindCompact, TranscriptPath: path,
+		From: "claude", To: "grok", Kind: handover.KindMigrate, TranscriptPath: path,
 	})
-	if n := handover.TokenCount(seed); int64(n) > ctxcap.DefaultCeiling {
-		t.Fatalf("shipped seed tokens=%d still over the ceiling", n)
+	if seed == "" {
+		t.Fatal("migrate seed empty on fat predecessor")
+	}
+	if handover.TokenCount(seed) >= handover.TokenCount(assigned) {
+		t.Fatalf("shipped seed (%d) is not smaller than a transcript walk (%d)",
+			handover.TokenCount(seed), handover.TokenCount(assigned))
 	}
 	if n := handover.TokenCount(seed); n > handover.MaxBriefTokens+400 {
 		t.Fatalf("shipped seed tokens=%d over brief cap", n)
@@ -194,13 +165,7 @@ func TestCaptureVerificationSeeds(t *testing.T) {
 	migrate := handover.ComposeSeed(handover.Pending{
 		From: "claude", To: "grok", Kind: handover.KindMigrate, TranscriptPath: path,
 	})
-	compact := handover.ComposeSeed(handover.Pending{
-		From: "grok", To: "grok", Kind: handover.KindCompact, TranscriptPath: path,
-	})
 	if err := os.WriteFile(filepath.Join(dir, "seed-migrate.txt"), []byte(migrate), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "seed-compact.txt"), []byte(compact), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -212,10 +177,10 @@ func TestLooksLikeSeed(t *testing.T) {
 	})) {
 		t.Fatal("migrate seed not recognised as a seed")
 	}
-	if !handover.LooksLikeSeed(handover.ComposeSeed(handover.Pending{
+	if handover.ComposeSeed(handover.Pending{
 		From: "grok", To: "grok", Kind: handover.KindCompact, TranscriptPath: path,
-	})) {
-		t.Fatal("compact seed not recognised as a seed")
+	}) != "" {
+		t.Fatal("same-provider compose must not look like a migrate seed")
 	}
 	if handover.LooksLikeSeed("Migrate it.") {
 		t.Fatal("ordinary owner line classified as a seed")
