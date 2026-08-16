@@ -218,6 +218,11 @@ type Server struct {
 	recoverBin string
 	stateDir   string
 
+	// autoSpawnPaused is config frontier_consume.disabled (🎯T407). The
+	// sentinel reads this as daemon-held evidence the fleet cannot run —
+	// ready leaves are then a pause, not a spawn gap. Guarded by mu.
+	autoSpawnPaused bool
+
 	// wakeBatch coalesces machine-generated events into one digest per
 	// recipient (🎯T392.2). Debouncing above is per-worker and stops the
 	// same worker firing twice; this is per-recipient and stops four

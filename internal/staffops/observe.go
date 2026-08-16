@@ -36,6 +36,11 @@ type ObserveInput struct {
 	// internal/pofanout; staffops keeps the verdict as a string so the pure
 	// policy layer stays a leaf package.
 	POFanout []POFanoutObs
+	// FleetBlock is daemon-held evidence the fleet cannot run (🎯T407):
+	// auto-spawn paused, provider auth/quota. Empty means it can. Ready-
+	// leaf count is not this field — a blocked fleet can have many ready
+	// leaves, and that is not a spawn gap.
+	FleetBlock FleetBlockObs
 	// Cost alerts already shaped as optional residual signals.
 	CostAlerts []CostObs
 }
@@ -246,38 +251,53 @@ func BuildSignals(in ObserveInput) []Signal {
 		})
 	}
 
-	// Frontier stall (🎯T346): only unattended-ready depth, never raw graph depth.
-	if in.FrontierStalled && in.FrontierDepth > 0 {
+	// 🎯T407: a blocked fleet is not an unattended one. Ready leaves
+	// without workers are the expected shape of a pause or a provider
+	// wall — report the cause, never stall:frontier / po_stall file+PO.
+	if in.FleetBlock.Blocked() {
 		out = append(out, Signal{
-			Kind:       "frontier_stall",
-			Symptom:    "stall:frontier",
-			Severity:   "high",
-			Mechanical: false,
-			Detail: firstNonEmpty(in.FrontierDetail,
-				fmt.Sprintf("unattended-ready leaves=%d with no engaged work", in.FrontierDepth)),
+			Kind:         "fleet_blocked",
+			Symptom:      "blocked:" + in.FleetBlock.Cause,
+			Severity:     "high",
+			Mechanical:   true,
+			HarnessActed: true, // standing down is the correct act
+			Detail: firstNonEmpty(in.FleetBlock.Detail,
+				"fleet cannot run — "+in.FleetBlock.Cause),
 		})
-	}
+	} else {
+		// Frontier stall (🎯T346): only unattended-ready depth, never raw graph depth.
+		if in.FrontierStalled && in.FrontierDepth > 0 {
+			out = append(out, Signal{
+				Kind:       "frontier_stall",
+				Symptom:    "stall:frontier",
+				Severity:   "high",
+				Mechanical: false,
+				Detail: firstNonEmpty(in.FrontierDetail,
+					fmt.Sprintf("unattended-ready leaves=%d with no engaged work", in.FrontierDepth)),
+			})
+		}
 
-	// PO fan-out fault (🎯T380): idle PO on a frontier the ledger says is
-	// kickable. Non-mechanical — no harness path rehydrates intent, so this is
-	// a file+PO residual the overseer must see rather than ordinary idle.
-	for _, p := range in.POFanout {
-		name := strings.TrimSpace(p.Name)
-		if name == "" {
-			continue
+		// PO fan-out fault (🎯T380): idle PO on a frontier the ledger says is
+		// kickable. Non-mechanical — no harness path rehydrates intent, so this is
+		// a file+PO residual the overseer must see rather than ordinary idle.
+		for _, p := range in.POFanout {
+			name := strings.TrimSpace(p.Name)
+			if name == "" {
+				continue
+			}
+			sev := "high"
+			if strings.TrimSpace(p.Verdict) == POFanoutTurnNoFanout {
+				sev = "critical"
+			}
+			out = append(out, Signal{
+				Kind:       "po_fanout_stall",
+				Symptom:    "po_stall:" + name,
+				Severity:   sev,
+				Mechanical: false,
+				Detail: firstNonEmpty(p.Detail,
+					fmt.Sprintf("%s: %s ready=%d", p.Verdict, p.Reason, p.ReadyCount)),
+			})
 		}
-		sev := "high"
-		if strings.TrimSpace(p.Verdict) == POFanoutTurnNoFanout {
-			sev = "critical"
-		}
-		out = append(out, Signal{
-			Kind:       "po_fanout_stall",
-			Symptom:    "po_stall:" + name,
-			Severity:   sev,
-			Mechanical: false,
-			Detail: firstNonEmpty(p.Detail,
-				fmt.Sprintf("%s: %s ready=%d", p.Verdict, p.Reason, p.ReadyCount)),
-		})
 	}
 
 	// Cost residual.
@@ -312,7 +332,10 @@ type EventRow struct {
 	// Drill is true when the row carries an explicit synthetic marker
 	// (eventlog fields.drill truthy). Set by the harness projection.
 	Drill bool
-	TS    time.Time
+	// FailureClass is eventlog fields.failure_class (🎯T407): auth and
+	// rate_limit are fleet-run walls, not daemon_error residuals.
+	FailureClass string
+	TS           time.Time
 }
 
 // drillToken is the normalized source/component stamp used by synthetic RSI
@@ -398,6 +421,11 @@ func ClusterEventAnomalies(rows []EventRow, now time.Time, window time.Duration)
 		}
 		// Synthetic RSI drill stimulus is not a product anomaly (🎯T352).
 		if IsSyntheticDrillRow(r) {
+			continue
+		}
+		// Provider auth/quota walls are 🎯T407 fleet-run evidence, not
+		// daemon_error residuals that file+PO a spawn mission.
+		if providerBlockClass(r) != "" {
 			continue
 		}
 		msg := strings.ToLower(r.Msg + " " + r.Component + " " + r.Decision + " " + r.Level)

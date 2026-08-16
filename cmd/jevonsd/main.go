@@ -585,6 +585,10 @@ func main() {
 
 	// Wire registry and scanner into MCP server.
 	mcpSrv.SetRegistry(registry)
+	// 🎯T407: the sentinel must see the owner pause. frontier_consume.disabled
+	// already stops auto-spawn; without this stamp the stall alarm still
+	// tells the PO to spawn into that wall.
+	mcpSrv.SetAutoSpawnPaused(cfg.FrontierConsume.Disabled)
 	mcpSrv.SetScanner(scanner)
 	// ð¯T110 self-test packs â same in-process env as POST /api/self_test/run.
 	mcpSrv.SetSelfTestEnv(srv.SelfTestEnv)

@@ -47,7 +47,7 @@ const DefaultMechanicalGrace = 2 * time.Minute
 // Signal is one observed health-of-health sample (cockpit/fleet/event).
 type Signal struct {
 	// Kind is a coarse class: dead_agent, busy_storm, notify_queue,
-	// restart_thrash, frontier_stall, cost_alert, overseer_down,
+	// restart_thrash, frontier_stall, fleet_blocked, cost_alert, overseer_down,
 	// overseer_stuck, fleet_idle_residue, harness_recovered, deliberate_stop, …
 	Kind string
 	// Symptom is the cooldown fingerprint (stable id for "same symptom").
@@ -247,6 +247,21 @@ func Classify(sig Signal) Decision {
 	kind := strings.TrimSpace(sig.Kind)
 	if kind == "" && strings.TrimSpace(sig.Symptom) == "" {
 		return Decision{Signal: sig, Action: ActionIgnore, Reason: "empty signal"}
+	}
+
+	// 🎯T407: a blocked fleet is a report, never a spawn mission. This
+	// wins before residual file+PO so a high-severity fleet_blocked
+	// signal cannot be read as "unattended ready leaves".
+	if kind == "fleet_blocked" {
+		cause := strings.TrimPrefix(strings.TrimSpace(sig.Symptom), "blocked:")
+		if cause == "" {
+			cause = firstNonEmpty(sig.Detail, "blocked")
+		}
+		return Decision{
+			Signal: sig,
+			Action: ActionHarnessOK,
+			Reason: "fleet cannot run — " + cause + "; do not spawn",
+		}
 	}
 
 	// Healthy / recovered mechanical path.

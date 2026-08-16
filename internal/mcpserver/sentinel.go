@@ -54,6 +54,10 @@ type SentinelLoopArgs struct {
 	MaxActionsPerHour int
 	// DryRun never delivers or records budget/cooldown (tests / observe-only).
 	DryRun bool
+	// AutoSpawnPaused is config frontier_consume.disabled (🎯T407). When
+	// true, sample treats the fleet as unable to run and will not emit
+	// stall:frontier / po_stall file+PO. Combined with Server.AutoSpawnPaused.
+	AutoSpawnPaused bool
 	// Now optional clock.
 	Now func() time.Time
 	// ProcessRunning optionally overrides liveness for the PO fan-out read
@@ -125,6 +129,27 @@ func (s *Server) ensureSentinelRuntime(maxPerHour int) *sentinelRuntime {
 	return s.sentinel
 }
 
+// SetAutoSpawnPaused records config frontier_consume.disabled for 🎯T407.
+// The sentinel reads this each sample; a paused fleet is a block, not a stall.
+func (s *Server) SetAutoSpawnPaused(paused bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.autoSpawnPaused = paused
+	s.mu.Unlock()
+}
+
+// AutoSpawnPaused reports whether auto-spawn is deliberately paused.
+func (s *Server) AutoSpawnPaused() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.autoSpawnPaused
+}
+
 // registerSentinelTools exposes status + one-shot dry/live tick for 🎯T219.
 func (s *Server) registerSentinelTools() {
 	s.ensureSentinelRuntime(0)
@@ -150,8 +175,10 @@ func (s *Server) handleSentinelCycle(_ context.Context, req mcp.CallToolRequest)
 		act = v && !dryRun
 	}
 	res, actRes := s.runSentinelCycle(SentinelLoopArgs{
-		Server: s,
-		DryRun: !act,
+		Server:   s,
+		DryRun:   !act,
+		StateDir: s.stateDir,
+		Workdir:  s.workerWD,
 	})
 
 	rt := s.ensureSentinelRuntime(0)
@@ -550,24 +577,52 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 	s.mu.Lock()
 	tailFn := s.eventLogTail
 	s.mu.Unlock()
+	var eventRows []staffops.EventRow
 	if tailFn != nil {
 		evs, _, err := tailFn(eventlog.TailOptions{Limit: 200})
 		if err == nil {
-			rows := make([]staffops.EventRow, 0, len(evs))
+			eventRows = make([]staffops.EventRow, 0, len(evs))
 			for _, e := range evs {
-				rows = append(rows, eventRowFromEvent(e))
+				eventRows = append(eventRows, eventRowFromEvent(e))
 			}
-			in.Events = staffops.ClusterEventAnomalies(rows, now, window)
+			in.Events = staffops.ClusterEventAnomalies(eventRows, now, window)
 		}
 	} else if args.StateDir != "" {
 		// Direct file tail when tool seam not wired (daemon always has path).
 		path := eventlog.DefaultPath(args.StateDir)
 		if evs, err := eventlog.Tail(path, eventlog.TailOptions{Limit: 200}); err == nil {
-			rows := make([]staffops.EventRow, 0, len(evs))
+			eventRows = make([]staffops.EventRow, 0, len(evs))
 			for _, e := range evs {
-				rows = append(rows, eventRowFromEvent(e))
+				eventRows = append(eventRows, eventRowFromEvent(e))
 			}
-			in.Events = staffops.ClusterEventAnomalies(rows, now, window)
+			in.Events = staffops.ClusterEventAnomalies(eventRows, now, window)
+		}
+	}
+
+	// 🎯T407: can the fleet run? Pause and provider walls are daemon-held;
+	// ready-leaf count is not consulted here. Apply the same event window
+	// ClusterEventAnomalies uses — an old quota row must not keep the
+	// fleet blocked after the wall lifts.
+	cut := now.Add(-window)
+	recent := make([]staffops.EventRow, 0, len(eventRows))
+	for _, r := range eventRows {
+		if !r.TS.IsZero() && r.TS.Before(cut) {
+			continue
+		}
+		recent = append(recent, r)
+	}
+	block := staffops.ClassifyFleetRun(staffops.FleetRunEvidence{
+		AutoSpawnPaused:  args.AutoSpawnPaused || s.AutoSpawnPaused(),
+		ProviderFailures: staffops.CollectProviderFailures(recent),
+	})
+	in.FleetBlock = block.AsObs()
+	if !block.Runnable {
+		if resources.Note != "" {
+			resources.Note += "; "
+		}
+		resources.Note += "fleet blocked: " + block.Cause
+		if block.Detail != "" {
+			resources.Note += " (" + block.Detail + ")"
 		}
 	}
 
@@ -676,6 +731,9 @@ func eventRowFromEvent(e eventlog.Event) staffops.EventRow {
 		row.Drill = v
 	case string:
 		row.Drill = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if fc, ok := e.Fields["failure_class"].(string); ok {
+		row.FailureClass = strings.TrimSpace(fc)
 	}
 	if e.TS != "" {
 		if t, err := time.Parse(time.RFC3339Nano, e.TS); err == nil {
