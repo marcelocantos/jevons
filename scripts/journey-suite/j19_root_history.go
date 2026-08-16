@@ -25,8 +25,10 @@ import (
 const (
 	j19Prefix     = "ROOThist-"
 	j19SeedTurns  = 16
+	j19SlotTail   = 24
 	j19MinMarkers = 8
 	j19LiveToken  = "ROOThist-LIVE"
+	j19LastToken  = "ROOThist-15"
 )
 
 // j19RootHistoryPaint is the 🎯T491 / 🎯T493 / 🎯T494 oracle: seed
@@ -171,9 +173,9 @@ func assertJ19OCR(shot string) error {
 			hits++
 		}
 	}
-	if hits < 1 {
-		return fmt.Errorf("j19 OCR found no %s* token in viewport screenshot (🎯T493): lines=%d bytes=%d",
-			j19Prefix, len(ext.Lines), len(text))
+	if hits < 1 || !strings.Contains(text, j19LastToken) {
+		return fmt.Errorf("j19 OCR missing tail token %s (hits=%d lines=%d) — pin landed past the last owner turn",
+			j19LastToken, hits, len(ext.Lines))
 	}
 	fmt.Printf("j19 OCR: %d %s* token(s) in viewport screenshot\n", hits, j19Prefix)
 	return nil
@@ -218,6 +220,26 @@ func seedJ19Journal(path string, turns int) error {
 		b.Write(ub)
 		b.WriteByte('\n')
 		b.Write(ab)
+		b.WriteByte('\n')
+	}
+	// Trailing turn-slots (agent_note + system to close each slot). Daily
+	// empty pane is pin-to-bottom onto a stack of unmeasured 72px markers;
+	// 16 text turns alone never build that, so J19 stayed green.
+	for i := 0; i < j19SlotTail; i++ {
+		tsNote := base.Add(time.Duration(turns*2+i*2) * time.Second).Format(time.RFC3339)
+		tsSys := base.Add(time.Duration(turns*2+i*2+1) * time.Second).Format(time.RFC3339)
+		note, _ := json.Marshal(map[string]any{
+			"type":      "agent_note",
+			"timestamp": tsNote,
+			"text":      fmt.Sprintf("[Agent pad responded] slot %02d", i),
+		})
+		sys, _ := json.Marshal(map[string]any{
+			"type":      "system",
+			"timestamp": tsSys,
+		})
+		b.Write(note)
+		b.WriteByte('\n')
+		b.Write(sys)
 		b.WriteByte('\n')
 	}
 	if _, err := f.WriteString(b.String()); err != nil {

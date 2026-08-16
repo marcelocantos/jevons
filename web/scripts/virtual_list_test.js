@@ -22,6 +22,15 @@ function test(name, fn) {
 
 // ── Legacy T56 band helpers (still hold) ─────────────────────────────
 
+test('T494 turn-slot estimate is compact so a marker stack cannot fill the viewport', function () {
+  assert.ok(VL.TURN_SLOT_ESTIMATE_PX > 0, 'estimate exists');
+  assert.ok(VL.TURN_SLOT_ESTIMATE_PX <= 20, 'compact, not a bubble: ' + VL.TURN_SLOT_ESTIMATE_PX);
+  assert.ok(VL.TURN_SLOT_ESTIMATE_PX < VL.DEFAULT_ESTIMATE_HEIGHT,
+    'must be smaller than the 72px bubble placeholder');
+  assert.ok(VL.TURN_SLOT_ESTIMATE_PX * 24 < 800,
+    '24 trailing slots must not consume an 800px oracle viewport');
+});
+
 test('visibleIndices returns only near-viewport items', function () {
   const tops = [];
   for (let i = 0; i < 100; i++) tops.push({ top: i * 40, height: 40 });
@@ -1278,8 +1287,8 @@ test('index.html wires T350 fractional freeze + gated expansion pins', function 
     'settle must not round via offsetHeight');
   // Gated pins: refreshLatestExpansion / expandInViewNearEnd go through
   // pinToEndGated (shouldPinScroll), never a bare scrollTop=scrollHeight.
-  assert.ok(/function pinToEndGated\(\)[\s\S]{0,700}shouldPinScroll/.test(html),
-    'pinToEndGated exists and consults shouldPinScroll');
+  assert.ok(/function pinToEndGated\(\)[\s\S]{0,400}forcePinLastBubble/.test(html),
+    'pinToEndGated pins through forcePinLastBubble (🎯T494)');
   assert.ok(/function refreshLatestExpansion\(\)[\s\S]{0,2200}pinToEndGated\(\)/.test(html),
     'refreshLatestExpansion pins through the gate');
   const relBody = html.match(/function refreshLatestExpansion\(\)[\s\S]{0,2500}?\n\}/);
@@ -1291,6 +1300,21 @@ test('index.html wires T350 fractional freeze + gated expansion pins', function 
 });
 
 // ── 🎯T351: fractional content vs integer scroll ─────────────────────
+
+test('T494 pinScrollTopForLastBubble sits on the last owner turn, not the slot tail', function () {
+  const st = VL.pinScrollTopForLastBubble({
+    lastBubbleBottom: 3000,
+    clientHeight: 689,
+    scrollHeight: 4000,
+  });
+  assert.strictEqual(st, 3000 - 689);
+  const fallback = VL.pinScrollTopForLastBubble({
+    lastBubbleBottom: 0,
+    clientHeight: 689,
+    scrollHeight: 4000,
+  });
+  assert.strictEqual(fallback, 4000, 'no bubble → canvas end');
+});
 
 test('T351 pinWriteScrollTop over-assigns the full scrollHeight', function () {
   // Scroll offsets are integer-quantized; writing integer sh − ch leaves a
@@ -1386,15 +1410,13 @@ test('index.html wires T351 whole-pixel geometry', function () {
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   // Pin writes over-assign (clamp-exact); no site writes integer sh − ch.
-  assert.ok(/function pinToEndGated\(\)[\s\S]{0,900}pinWriteScrollTop/.test(html),
-    'pinToEndGated writes via pinWriteScrollTop');
-  assert.ok(/function endHistoryReplayAndPin\(reason\)[\s\S]{0,900}pinWriteScrollTop/.test(html),
-    'endHistoryReplayAndPin writes via pinWriteScrollTop');
+  assert.ok(/function pinToEndGated\(\)[\s\S]{0,400}forcePinLastBubble/.test(html),
+    'pinToEndGated pins to the last owner bubble (🎯T494)');
+  assert.ok(/function endHistoryReplayAndPin\(reason\)[\s\S]{0,1200}pinToLiveEnd/.test(html),
+    'endHistoryReplayAndPin pins to the last owner bubble, not the slot tail');
   const pinBody = html.match(/const pin = \(\) => \{[\s\S]{0,2200}?\n  \};/);
-  assert.ok(pinBody && /pinWriteScrollTop/.test(pinBody[0]),
-    'scrollDown pin writes via pinWriteScrollTop');
-  assert.ok(pinBody && /isPinnedAtEnd/.test(pinBody[0]),
-    'scrollDown pinned check is fraction-tolerant');
+  assert.ok(pinBody && /pinToLiveEnd/.test(pinBody[0]),
+    'scrollDown pin writes via pinToLiveEnd (last owner bubble, 🎯T494)');
   assert.ok(pinBody && /!force && pinnedNow/.test(pinBody[0]),
     'forced pins bypass the skip fast-path (post-snap correction)');
   // Hydrate compensation is the prefix-total delta (canvas height), not a

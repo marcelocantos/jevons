@@ -75,9 +75,8 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     }, null, { timeout: 25000 }).catch(() => {});
     await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 400)));
 
-    // Pin the tail so OCR/hit-test see the seeded last turns, not a
-    // blank band of a tall canvas (the T494 daily picture).
-    await page.evaluate(() => window.ViewportCensus.pinScrollBottom());
+    // Do not force scrollTop = scrollHeight — that is the T494 bug
+    // (lands in the turn-slot tail). Census the product's connect pin.
     await page.evaluate(() => new Promise((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(resolve));
     }));
@@ -131,7 +130,10 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     const emptyPane = !!census.emptyPane;
     const gatesFail = !!census.gatesFail;
     const viewportDrift = !census.viewportPinned;
-    const noVisibleSeed = !emptyPane && visibleMarkerN < 1 && census.visibleInScroller > 0;
+    const lastTok = PREFIX + String(EXPECT - 1).padStart(2, '0');
+    const lastVisible = (census.visibleMarkers || []).indexOf(lastTok) >= 0 ||
+      (census.visibleTexts || []).some(function (t) { return String(t).indexOf(lastTok) !== -1; });
+    const noVisibleSeed = !emptyPane && (visibleMarkerN < 1 || !lastVisible);
 
     const ok = !collapsed && !missingSeed && !emptyPane && !gatesFail &&
       !viewportDrift && !noVisibleSeed &&

@@ -29,6 +29,10 @@
 
   // Placeholder height before first materialize (lazy measure — no render-all).
   const DEFAULT_ESTIMATE_HEIGHT = 72;
+  // Compact ⋯ n steps marker. Using DEFAULT_ESTIMATE_HEIGHT (72) for an
+  // empty turn-slot stacks a viewport of blank space under the last
+  // owner turn and pin-to-bottom looks empty (🎯T494).
+  const TURN_SLOT_ESTIMATE_PX = 16;
   // Rough line height for text-based estimates (14px * 1.6 + padding slack).
   const ESTIMATE_LINE_PX = 24;
   const ESTIMATE_PAD_PX = 28;
@@ -1147,6 +1151,21 @@
     return Math.max(0, Number(scrollHeight) || 0);
   }
 
+  // After connect replay, the canvas may end in a stack of turn-slots
+  // (⋯ n steps). Pinning to scrollHeight lands in that stack and the
+  // last owner bubble sits above the viewport (🎯T494). Pin so the last
+  // user/assistant bottom is at the viewport bottom instead.
+  function pinScrollTopForLastBubble(opts) {
+    const o = opts || {};
+    const bubbleBottom = Number(o.lastBubbleBottom);
+    const clientH = Number(o.clientHeight) || 0;
+    const scrollH = Number(o.scrollHeight) || 0;
+    if (!(bubbleBottom > 0) || !Number.isFinite(bubbleBottom)) {
+      return pinWriteScrollTop(scrollH);
+    }
+    return Math.max(0, bubbleBottom - clientH);
+  }
+
   // 🎯T351: pinned-at-end check tolerant of fractional clamp. After an
   // over-assign pin, scrollTop = fractional max M while the integer target
   // sh − ch may differ by up to 1px in either direction — |st − target| < 0.5
@@ -1747,6 +1766,7 @@
   return {
     DEFAULT_BUFFER: DEFAULT_BUFFER,
     DEFAULT_ESTIMATE_HEIGHT: DEFAULT_ESTIMATE_HEIGHT,
+    TURN_SLOT_ESTIMATE_PX: TURN_SLOT_ESTIMATE_PX,
     SHELL_UNMEASURED: SHELL_UNMEASURED,
     SHELL_DEMATERIALIZED: SHELL_DEMATERIALIZED,
     SHELL_MATERIAL: SHELL_MATERIAL,
@@ -1781,6 +1801,7 @@
     afterMeasure: afterMeasure,
 
     estimateHeightFromText: estimateHeightFromText,
+    TURN_SLOT_ESTIMATE_PX: TURN_SLOT_ESTIMATE_PX,
     recentFirstMaterializePlan: recentFirstMaterializePlan,
     startupMaterializeBudget: startupMaterializeBudget,
     progressiveHistoryPages: progressiveHistoryPages,
@@ -1818,6 +1839,7 @@
     shouldSuppressPinDuringReplay: shouldSuppressPinDuringReplay,
     finalPinScrollTop: finalPinScrollTop,
     pinWriteScrollTop: pinWriteScrollTop,
+    pinScrollTopForLastBubble: pinScrollTopForLastBubble,
     PIN_AT_END_EPS_PX: PIN_AT_END_EPS_PX,
     isPinnedAtEnd: isPinnedAtEnd,
     hydrateCompensatedScrollTop: hydrateCompensatedScrollTop,

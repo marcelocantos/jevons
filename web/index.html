@@ -1734,8 +1734,8 @@ function applyRowHeight(index, newH) {
     tracking: typeof isTracking === 'function' && isTracking(),
   });
   if (!adj) return r;
-  if (adj.pin && typeof VirtualList.pinWriteScrollTop === 'function') {
-    msgs.scrollTop = VirtualList.pinWriteScrollTop(msgs.scrollHeight);
+  if (adj.pin) {
+    msgs.scrollTop = pinToLiveEnd();
   } else if (Math.abs((adj.scrollTop || 0) - msgs.scrollTop) >= 0.5) {
     msgs.scrollTop = adj.scrollTop;
   }
@@ -1834,9 +1834,12 @@ function noteRowHeightChange(el) {
 }
 function registerTranscriptRow(role, text, when, opts) {
   const o = opts || {};
-  const estBox = (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText)
-    ? VirtualList.estimateHeightFromText(text || '')
-    : 72;
+  const estBox = (role === 'turn-marker')
+    ? ((typeof VirtualList !== 'undefined' && VirtualList.TURN_SLOT_ESTIMATE_PX)
+      ? VirtualList.TURN_SLOT_ESTIMATE_PX : 16)
+    : ((typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText)
+      ? VirtualList.estimateHeightFromText(text || '')
+      : 72);
   const reserve = (role === 'user' || role === 'jevons')
     ? ((typeof VirtualList !== 'undefined' && VirtualList.BUBBLE_BOTTOM_CHROME_PX)
       ? VirtualList.BUBBLE_BOTTOM_CHROME_PX : 19)
@@ -1946,6 +1949,8 @@ function attachTranscriptRow(index, opts) {
     el._vIndex = i;
     msgsCanvas.appendChild(el);
     row.el = el;
+    const measured = el.offsetHeight || 0;
+    if (measured > 0 && typeof applyRowHeight === 'function') applyRowHeight(i, measured);
     return el;
   }
   const o = opts || {};
@@ -2424,6 +2429,42 @@ function armHistoryReplayIdleEnd() {
   }, ms);
 }
 
+function lastTranscriptBubbleBottom() {
+  if (typeof VirtualList === 'undefined' || !VirtualList.layoutTop) return 0;
+  for (let i = transcriptRows.length - 1; i >= 0; i--) {
+    const r = transcriptRows[i];
+    if (!r) continue;
+    if (r.kind === 'turn-slot' || r.role === 'turn-marker' || r.role === 'turn-slot') continue;
+    const role = r.role || '';
+    if (role !== 'user' && role !== 'jevons' && role !== 'assistant') continue;
+    const top = VirtualList.layoutTop(transcriptLayout, i);
+    const h = (transcriptLayout && transcriptLayout.heights && transcriptLayout.heights[i]) || 0;
+    const end = top + h;
+    if (end > 0) return end;
+  }
+  return 0;
+}
+
+function pinToLiveEnd() {
+  if (!msgs) return 0;
+  if (typeof VirtualList !== 'undefined' && VirtualList.pinScrollTopForLastBubble) {
+    return VirtualList.pinScrollTopForLastBubble({
+      lastBubbleBottom: lastTranscriptBubbleBottom(),
+      clientHeight: msgs.clientHeight,
+      scrollHeight: msgs.scrollHeight,
+    });
+  }
+  return (typeof VirtualList !== 'undefined' && VirtualList.pinWriteScrollTop)
+    ? VirtualList.pinWriteScrollTop(msgs.scrollHeight)
+    : msgs.scrollHeight;
+}
+
+function forcePinLastBubble() {
+  if (!msgs) return;
+  const want = pinToLiveEnd();
+  if (Math.abs((msgs.scrollTop || 0) - want) > 1) msgs.scrollTop = want;
+}
+
 function endHistoryReplayAndPin(reason) {
   if (!historyReplayActive) return;
   historyReplayActive = false;
@@ -2436,9 +2477,7 @@ function endHistoryReplayAndPin(reason) {
   try {
     // 🎯T351: over-assign — browser clamps to the exact FRACTIONAL end.
     // Integer sh − ch leaves a sub-pixel offset that drifts with content.
-    msgs.scrollTop = (typeof VirtualList !== 'undefined' && VirtualList.pinWriteScrollTop)
-      ? VirtualList.pinWriteScrollTop(msgs.scrollHeight)
-      : msgs.scrollHeight;
+    msgs.scrollTop = pinToLiveEnd();
     noteScrollMetrics();
   } finally {
     _pinningScroll = false;
@@ -2450,6 +2489,7 @@ function endHistoryReplayAndPin(reason) {
   if (latestRaf) { cancelAnimationFrame(latestRaf); latestRaf = 0; }
   refreshLatestExpansion();
   scheduleVirtualize();
+  forcePinLastBubble();
   updateJumpFab();
   // 🎯T21: replay finished — refresh Wispr continuation context from history.
   refreshWisprContext();
@@ -2907,6 +2947,7 @@ function handle(m) {
     // End chronological WS replay burst — one pin, then optional progressive hydrate.
     if (!wasSoft) endHistoryReplayAndPin('history_meta');
     else if (historyReplayActive) endHistoryReplayAndPin('history_meta');
+    forcePinLastBubble();
     // 🎯T324: client may cache lastFleetAgents; refresh on reconnect when a
     // cache already exists so launch/migrate/rehydrate truth repaints.
     if (wasSoft && Array.isArray(lastFleetAgents) && lastFleetAgents.length) {
@@ -5483,22 +5524,7 @@ function collapseAutoExpandedOffScreen() {
 // height changes (a bubble expanding is ≥ one 22.4px line) pass the gate.
 function pinToEndGated() {
   if (!isTracking() || historyReplayActive) return;
-  const sh = msgs.scrollHeight;
-  const ch = msgs.clientHeight;
-  const st = msgs.scrollTop;
-  if (typeof VirtualList !== 'undefined' && VirtualList.shouldPinScroll) {
-    // prev==next height: only the |scrollTop − end| ≥ threshold branch gates.
-    if (!VirtualList.shouldPinScroll({
-      prevScrollHeight: sh,
-      nextScrollHeight: sh,
-      clientHeight: ch,
-      scrollTop: st,
-    })) return;
-  }
-  // 🎯T351: over-assign — clamp-exact fractional end (see pinWriteScrollTop).
-  msgs.scrollTop = (typeof VirtualList !== 'undefined' && VirtualList.pinWriteScrollTop)
-    ? VirtualList.pinWriteScrollTop(sh)
-    : sh;
+  forcePinLastBubble();
 }
 
 // 🎯T261: when stick-to-bottom / post-history-pin lands near the transcript
@@ -7587,9 +7613,8 @@ function scrollDown(opts) {
     // sh − ch); the WRITE over-assigns so the browser clamps to the exact
     // fractional end — integer targets leave a sub-pixel offset that drifts
     // with frac(total height) and rasterizes as the residual ~1px jiggle.
-    const pinnedNow = (typeof VirtualList !== 'undefined' && VirtualList.isPinnedAtEnd)
-      ? VirtualList.isPinnedAtEnd(st, sh, ch)
-      : Math.abs(st - Math.max(0, sh - ch)) <= 1;
+    const want = pinToLiveEnd();
+    const pinnedNow = Math.abs(st - want) <= 1;
     // force always writes: the post-snap corrective pin (🎯T351) exists to
     // replace a pre-snap rounding that can sit a whole pixel off — the skip
     // fast-path would swallow exactly that correction.
@@ -7598,9 +7623,7 @@ function scrollDown(opts) {
       noteScrollMetrics();
       return;
     }
-    msgs.scrollTop = (typeof VirtualList !== 'undefined' && VirtualList.pinWriteScrollTop)
-      ? VirtualList.pinWriteScrollTop(sh)
-      : sh;
+    msgs.scrollTop = want;
     _lastPinScrollHeight = sh;
     if (typeof window.__layoutThrash === 'object' && window.__layoutThrash) {
       window.__layoutThrash.scrollDownPinned =
