@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
 
@@ -48,6 +49,13 @@ type WorkerIdleRef struct {
 // ShouldEmitWorkerIdle is the hermetic gate for enter-idle events.
 // nextPhase must be idle; prevPhase must have been working (real turn),
 // not seed-idle or empty (daemon boot seed is not an "enter idle" edge).
+//
+// fleetIntent / intent are the 🎯T414 deliberate states. The notification this
+// gate emits does not merely inform — it tells the parent to continue,
+// re-brief, or restart the worker — so it is a control, and 🎯T413 is what
+// happens when a control has no way to ask whether the agent is supposed to
+// be running: jv-t370-auto had already been reaped by the product, and the
+// notifier's stale fleet view instructed the PO to restart it anyway.
 func ShouldEmitWorkerIdle(prevPhase, nextPhase, purpose string, openMission bool, fleetIntent, intent fleetintent.State) bool {
 	purpose = strings.TrimSpace(purpose)
 	if purpose == "" {
@@ -198,6 +206,12 @@ func DaemonRestartEventTargets(byParent map[string][]WorkerIdleRef, overseer, de
 //
 // Open mission: purpose=work AND process running AND (AutoStart OR bound
 // target_id) AND not the durable PO/boss name heuristic.
+//
+// intent is the 🎯T414 snapshot. Note what this gate must keep doing: an
+// agent whose intent is working and whose process died is exactly the case
+// 🎯T171 short-resume and 🎯T208 outage re-pressure exist for, and intent must
+// not suppress it. Intent only declines when someone deliberately said this
+// agent should not be running.
 func EligibleOpenMissionResume(d claudia.AgentDef, running, deliberateStop, designGated, looksFinished bool, intent fleetintent.Snapshot) bool {
 	if deliberateStop || designGated || looksFinished {
 		return false
@@ -432,6 +446,73 @@ func (s *Server) SetWakeBatchWindow(d time.Duration) {
 	s.wakeBatch = wakebatch.New(d)
 }
 
+// NewLedgerMissionOpen builds the satisfaction seam the daemon installs as
+// IdlePressureHooks.MissionOpen: a target is still open work when the ledger
+// nearest an agent bound to it says so.
+//
+// It lives here rather than as a closure in main.go so the 🎯T451 oracle
+// exercises the shipped classifier instead of a copy of it — a fixture that
+// re-implements the rule it is checking proves only that the fixture agrees
+// with itself.
+//
+// Residual, deliberately: a target no registered agent is bound to, an
+// unreadable ledger, and an unknown row all stay open. Silence is the
+// dangerous answer here — it stops a real worker being nudged — so it is only
+// returned on a positive reading.
+func NewLedgerMissionOpen(list func() []claudia.AgentDef) func(targetID string) bool {
+	return func(targetID string) bool {
+		tid := strings.TrimSpace(strings.TrimPrefix(targetID, "🎯"))
+		if tid == "" || list == nil {
+			return true
+		}
+		for _, d := range list() {
+			if strings.TrimSpace(strings.TrimPrefix(d.TargetID, "🎯")) != tid {
+				continue
+			}
+			// 🎯T451: status alone cannot answer this. An owner-parked target
+			// keeps whatever status it had — 🎯T370 is `converging`, owned by
+			// marcelo, and no agent may finish it — so owner assignment closes
+			// the mission the same way `achieved` does.
+			return targetfile.MissionOpenFromCwd(d.WorkDir, tid)
+		}
+		return true
+	}
+}
+
+// FilterIdleEventsForLiveAgents drops worker-idle events whose subject has
+// left the registry between enqueue and delivery (🎯T451).
+//
+// An idle event is emitted the moment a worker's turn ends — which is the
+// same moment it delivers a terminal report, and 🎯T165 stops and Removes it
+// on the strength of that report. The event is then held for a batching
+// window (three minutes by default, 🎯T392.2), so the ordinary end of a
+// successful worker is a digest that names an agent the reader can no longer
+// find, send to, or stand down. bullseye-po was told four times about two such
+// agents; a stand-down send came back `agent "bs-t70-release-probe-ci" is not
+// running`.
+//
+// The cost is not the noise: the correct response to those lines is to do
+// nothing, and the event's own text tells the reader not to do nothing. So it
+// spends a coordinator turn to establish that nothing is wrong.
+//
+// present may be nil (no registry to ask), in which case nothing is dropped —
+// an event is only withheld on a positive answer that the agent is gone.
+// Non-agent event kinds pass through untouched.
+func FilterIdleEventsForLiveAgents(evs []wakebatch.Event, present func(name string) bool) []wakebatch.Event {
+	if present == nil {
+		return evs
+	}
+	out := evs[:0:0]
+	for _, ev := range evs {
+		if ev.Kind == eventWorkerIdle && strings.TrimSpace(ev.Subject) != "" &&
+			!present(ev.Subject) {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
 // FlushWakeBatches delivers every digest whose window has elapsed. Returns
 // how many recipients were woken — far fewer than the events they carry,
 // which is the entire point.
@@ -441,11 +522,34 @@ func (s *Server) SetWakeBatchWindow(d time.Duration) {
 // retry queue here would be machinery for events that regenerate on their
 // own.
 func (s *Server) FlushWakeBatches() int {
+	return s.flushWakeBatches(nil)
+}
+
+// flushWakeBatches is FlushWakeBatches with an injectable sender so the
+// 🎯T451 oracle can observe what a digest would have named without launching
+// agent processes. send nil = the live deliver path.
+func (s *Server) flushWakeBatches(send func(recipient, text string) error) int {
 	s.mu.Lock()
 	batcher := s.wakeBatch
 	s.mu.Unlock()
 	if batcher == nil {
 		return 0
+	}
+	if send == nil {
+		send = func(recipient, text string) error {
+			res, err := s.sendToAgent(recipient, formatIdleNudgeWire(eventWorkerIdle, text), false)
+			if err == nil {
+				slog.Info("wake digest sent", "recipient", recipient,
+					"status", res.Status, "queued", res.Queued)
+			}
+			return err
+		}
+	}
+	// 🎯T451: registry membership is re-read at delivery, not at enqueue. The
+	// window between them is exactly where an agent finishes and is reaped.
+	var present func(string) bool
+	if s.registry != nil {
+		present = func(name string) bool { return s.registry.Def(name) != nil }
 	}
 	now := time.Now()
 	s.mu.Lock()
@@ -459,11 +563,16 @@ func (s *Server) FlushWakeBatches() int {
 	woken := 0
 	for _, recipient := range due {
 		evs := pending[recipient]
+		if kept := FilterIdleEventsForLiveAgents(evs, present); len(kept) != len(evs) {
+			slog.Info("wake digest dropped events for deregistered agents",
+				"recipient", recipient, "dropped", len(evs)-len(kept), "kept", len(kept))
+			evs = kept
+		}
 		text := wakebatch.FormatDigest(evs)
 		if text == "" {
 			continue
 		}
-		res, err := s.sendToAgent(recipient, formatIdleNudgeWire(eventWorkerIdle, text), false)
+		err := send(recipient, text)
 		if err != nil {
 			slog.Warn("wake digest deliver failed",
 				"recipient", recipient, "events", len(evs), "err", err)
@@ -472,7 +581,7 @@ func (s *Server) FlushWakeBatches() int {
 		woken++
 		slog.Info("wake digest delivered",
 			"recipient", recipient, "events", len(evs),
-			"turns_saved", len(evs)-1, "status", res.Status, "queued", res.Queued)
+			"turns_saved", len(evs)-1)
 		s.logLifecycle(compIdleNudge, "wake_digest", "ok", map[string]any{
 			"recipient": recipient, "events": len(evs), "turns_saved": len(evs) - 1,
 		})

@@ -965,6 +965,39 @@ type IdlePressureHooks struct {
 	OnMaxed        func(rep IdleNudgeReport)
 }
 
+// missionOpenHook returns the installed satisfaction seam, or nil when no
+// ledger is wired (hermetic servers, daemons that never called
+// SetIdlePressureHooks). Nil keeps the conservative default: any bound target
+// counts as open.
+func (s *Server) missionOpenHook() func(targetID string) bool {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.idlePressureHooks.MissionOpen
+}
+
+// memoMissionOpen caches answers for the duration of one classification pass.
+// The live hook walks the registry and re-parses a bullseye.yaml per call, and
+// a single emit decision asks about the agent plus every child of its parent.
+// Staleness within one pass is not a risk worth an uncached read: a target
+// does not change hands mid-decision.
+func memoMissionOpen(f func(targetID string) bool) func(targetID string) bool {
+	if f == nil {
+		return nil
+	}
+	cache := map[string]bool{}
+	return func(targetID string) bool {
+		if v, ok := cache[targetID]; ok {
+			return v
+		}
+		v := f(targetID)
+		cache[targetID] = v
+		return v
+	}
+}
+
 // SetIdlePressureHooks installs the collaborator seams. Safe to call with a
 // zero value to clear them.
 func (s *Server) SetIdlePressureHooks(h IdlePressureHooks) {
@@ -1201,7 +1234,13 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 
 // emitWorkerIdleToParent fires worker-idle to the worker's parent PO when
 // policy allows (open mission, debounce). Fire-and-forget; queues if PO busy.
-func (s *Server) emitWorkerIdleToParent(name string) {
+//
+// prevPhase/nextPhase are the observed transition, passed through so the
+// decision goes through ShouldEmitWorkerIdle — which is where 🎯T414 intent is
+// read. This notification instructs the parent to continue, re-brief, or
+// restart the worker, so a parked, provider-blocked, or already-reaped agent
+// must not be named by it (🎯T413).
+func (s *Server) emitWorkerIdleToParent(name, prevPhase, nextPhase string) {
 	if s == nil || s.registry == nil || name == "" {
 		return
 	}
@@ -1222,11 +1261,23 @@ func (s *Server) emitWorkerIdleToParent(name string) {
 		}
 		return activity.Get(child).Phase
 	}
-	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, nil)
-	openMission := HasOpenMissionForIdle(*def, nil, workKids, engagedKids)
+	// 🎯T451: this path used to pass nil for MissionOpen, so the ledger was
+	// never consulted on the edge that actually generates the event — a worker
+	// bound to an achieved or owner-parked target still woke its PO every time
+	// its turn ended. The idle-pressure sweep has read the hook since 🎯T316;
+	// the two classifiers disagreeing about what "open mission" means is its
+	// own defect. Memoized because the hook re-reads and re-parses the ledger
+	// per call and the engaged-child count asks about every child.
+	missionOpen := memoMissionOpen(s.missionOpenHook())
+	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, missionOpen)
 	intent := s.fleetIntent()
-	if !ShouldEmitWorkerIdle("working", "idle", def.Purpose, openMission,
+	openMission := HasOpenMissionForIdle(*def, missionOpen, workKids, engagedKids)
+	if !ShouldEmitWorkerIdle(prevPhase, nextPhase, def.Purpose, openMission,
 		intent.FleetState(), intent.AgentState(name)) {
+		if d := intent.Allow(name, fleetintent.ControlNotifyIdle); !d.Allow {
+			slog.Info("worker-idle notification withheld — intent says do not run",
+				"agent", name, "intent", string(d.Blocking), "reason", d.Reason)
+		}
 		return
 	}
 	overseer := s.overseerName()

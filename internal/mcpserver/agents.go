@@ -952,9 +952,12 @@ func (s *Server) broadcastAgentEvent(name string, ev claudia.Event) {
 	tracker := s.idleActivity
 	s.mu.Unlock()
 	if tracker != nil {
-		_, _, enteredIdle := tracker.ObserveTransition(name, ev)
+		prevPhase, nextPhase, enteredIdle := tracker.ObserveTransition(name, ev)
 		if enteredIdle {
-			s.emitWorkerIdleToParent(name)
+			// 🎯T414: the transition travels with the call so the emitter can
+			// put the real edge through ShouldEmitWorkerIdle — the gate that
+			// reads intent — rather than asserting the edge it assumes.
+			s.emitWorkerIdleToParent(name, prevPhase, nextPhase)
 		}
 	}
 	if hook != nil {

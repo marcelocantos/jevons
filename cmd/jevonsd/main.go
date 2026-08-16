@@ -42,7 +42,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/supervise"
-	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/turndepth"
@@ -1033,26 +1032,11 @@ func main() {
 		Postmortem: server.NewPostmortemSink(srv), // ð¯T319: closed incident â root report
 		Overseer:   overseerName,
 	}))
-	// MissionOpen from the nearest bullseye ledger for each bound target
-	// (workdir of an engaged agent). Unknown ledger row stays open (residual).
+	// 🎯T451: MissionOpen from the nearest bullseye ledger for each bound
+	// target, including owner-assignment as a close (same as achieved).
+	// Unknown ledger row stays open (residual).
 	mcpSrv.SetIdlePressureHooks(mcpserver.IdlePressureHooks{
-		MissionOpen: func(targetID string) bool {
-			tid := strings.TrimSpace(strings.TrimPrefix(targetID, "ð¯"))
-			if tid == "" {
-				return true
-			}
-			for _, d := range registry.List() {
-				if strings.TrimSpace(strings.TrimPrefix(d.TargetID, "ð¯")) != tid {
-					continue
-				}
-				st, ok := targetfile.LoadTargetStatusFromCwd(d.WorkDir, tid)
-				if !ok {
-					return true
-				}
-				return targetfile.IsOpenStatus(st)
-			}
-			return true
-		},
+		MissionOpen: mcpserver.NewLedgerMissionOpen(registry.List),
 		// ð¯T415: convergence gave up. The notice inside is deterministic
 		// and depends on no agent; the recovery agent it also dispatches
 		// is allowed to fail, including failing to spawn.
