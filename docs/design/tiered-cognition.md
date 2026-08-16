@@ -1,6 +1,11 @@
 # Tiered cognition (🎯T403)
 
-**Status:** design direction. Nothing here is built. 🎯T392.8 is the cheap first test.
+**Status:** **superseded / parked.** Owner 2026-08-17: Claudia layered-agent
+work (T27) was backed out. Layers do not share a context window, so a
+non-LLM layer cannot correctly respond to a prompt. 🎯T403 and its children
+(and 🎯T392.8) are set aside. This note is historical.
+
+**Previous status:** design direction. Nothing here is built. 🎯T392.8 is the cheap first test.
 **Date:** 2026-08-10
 **Scope:** how an agent decides, and where the model sits inside that. Not a spend lever, though found while chasing one.
 **Delivery:** local master only. No PR/ship.

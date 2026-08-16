@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/claudia v0.21.1-0.20260810095354-b995fdd25ffe
+	github.com/marcelocantos/claudia v0.22.0
 	github.com/marcelocantos/doit v0.9.0
 	github.com/marcelocantos/pigeon v0.19.0
 	github.com/mark3labs/mcp-go v0.47.0
@@ -56,5 +56,5 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-// Local T34/T40 Claude adopt until this claudia is published.
+// Sibling checkout; require line is the published v0.22.0 pin.
 replace github.com/marcelocantos/claudia => ../claudia
