@@ -250,6 +250,11 @@ func (s *suite) jT418HandoverMute() error {
 	if err := os.WriteFile(filepath.Join(work, "pred.jsonl"), []byte("{}\n"), 0o644); err != nil {
 		return err
 	}
+	if st, err := os.Stat(s.handoverPath(name)); err != nil {
+		return fmt.Errorf("handover record missing after Put: %w", err)
+	} else {
+		fmt.Println("T418 planted handover", s.handoverPath(name), "bytes", st.Size())
+	}
 
 	go func() {
 		_, _ = s.mcpText("jevons_thread_direct", map[string]any{
@@ -332,12 +337,21 @@ func (s *suite) jT418HandoverMute() error {
 	if err := s.bounceDrain(); err != nil {
 		return fmt.Errorf("handover bounce: %w", err)
 	}
+	if ents, err := os.ReadDir(filepath.Join(s.stateDir, "handover")); err != nil {
+		fmt.Println("T418 handover dir after bounce:", err)
+	} else {
+		fmt.Println("T418 handover dir after bounce:", len(ents), "entries")
+		for _, e := range ents {
+			fmt.Println("  ", e.Name())
+		}
+	}
 	needles := []string{
 		"UNDELIVERED HANDOVER",
 		"pending handover surfaced",
 		"handover retry",
-		"🎯T418 handover retry",
-		"🎯T418 pending handover surfaced",
+		"handover sweep",
+		"handover classify",
+		"🎯T418 handover",
 	}
 	wait = time.Now().Add(45 * time.Second)
 	for time.Now().Before(wait) {

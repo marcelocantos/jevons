@@ -27,6 +27,7 @@ func (s *Server) SweepHandovers() {
 	}
 	led, ok := s.migrator.(handoverLedger)
 	if !ok || led == nil {
+		slog.Info("🎯T418 handover sweep skipped", "migrator_wired", s.migrator != nil)
 		return
 	}
 	pending, err := led.PendingHandovers()
@@ -34,11 +35,15 @@ func (s *Server) SweepHandovers() {
 		slog.Error("🎯T418 handover sweep: store unreadable", "err", err)
 		// List still returns the readable records alongside the error.
 	}
+	slog.Info("🎯T418 handover sweep", "pending", len(pending))
 	now := time.Now()
 	for _, p := range pending {
 		inReg := s.agentIsRegistered(p.Agent)
 		_, alive := s.liveSender(p.Agent)
 		act, reason := handover.ClassifyHandover(p, now, inReg, alive)
+		slog.Info("🎯T418 handover classify",
+			"agent", p.Agent, "action", string(act), "reason", reason,
+			"alive", alive, "registered", inReg)
 		switch act {
 		case handover.HandoverRetry:
 			if _, _, err := led.SeedSuccessor(p.Agent); err != nil {
