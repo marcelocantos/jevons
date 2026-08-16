@@ -77,6 +77,9 @@ func main() {
 		storeDir     string
 		quiet        bool
 		allowSuspect bool
+		clean        bool
+		commit       string
+		keep         bool
 	)
 	flag.StringVar(&name, "name", "", "label for this gate in the attestation")
 	flag.StringVar(&dir, "dir", "", "working directory for the command")
@@ -84,6 +87,12 @@ func main() {
 	flag.BoolVar(&quiet, "quiet", false, "print only the attestation line, not the command's output")
 	flag.BoolVar(&allowSuspect, "allow-suspect", false,
 		"exit with the command's own status even when its output contradicts a pass")
+	flag.BoolVar(&clean, "clean", false,
+		"run the command in a fresh checkout of the commit, not in the shared working tree (🎯T397)")
+	flag.StringVar(&commit, "commit", "",
+		"with -clean: the commit to verify (default HEAD)")
+	flag.BoolVar(&keep, "keep", false,
+		"with -clean: leave the checkout behind for inspection")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -102,6 +111,9 @@ func main() {
 		os.Exit(cmdSubcommand(args, storeDir))
 	}
 
+	if clean {
+		os.Exit(cmdRunClean(args, name, dir, commit, storeDir, quiet, allowSuspect, keep))
+	}
 	os.Exit(cmdRun(args, name, dir, storeDir, quiet, allowSuspect))
 }
 
@@ -212,6 +224,7 @@ func cmdSubcommand(args []string, storeDir string) int {
 func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   gate [flags] -- <command> [args...]   run a gate and attest its real status
+  gate -clean -- <command> [args...]    …in a fresh checkout of HEAD (🎯T397)
   gate last                             show the most recent run
   gate show <id>                        show one run
   gate check [report-path]              flag a finish report's false greens (stdin if no path)

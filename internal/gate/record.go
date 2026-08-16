@@ -65,6 +65,12 @@ type Record struct {
 	// needs in order to tell a mistyped subcommand from a deliberate gate.
 	Explicit bool `json:"explicit,omitempty"`
 
+	// Tree is which tree the command measured: a clean checkout of one commit,
+	// or a working tree with other people's uncommitted changes on top of it
+	// (🎯T397). Nil means the run predates the field or ran somewhere that is
+	// not a git work tree — "unknown", which no reader may treat as clean.
+	Tree *TreeProvenance `json:"tree,omitempty"`
+
 	Verdict   Verdict   `json:"verdict"`
 	Anomalies []Anomaly `json:"anomalies,omitempty"`
 
@@ -110,9 +116,16 @@ func (r *Record) Attestation() string {
 	if len(digest) > digestPrefix {
 		digest = digest[:digestPrefix]
 	}
-	return fmt.Sprintf("GATE %s exit=%s %s id=%s out=%s dur=%s",
+	line := fmt.Sprintf("GATE %s exit=%s %s id=%s out=%s dur=%s",
 		r.Name, r.Status(), r.Verdict, r.ID, digest,
 		r.Duration().Round(100*time.Millisecond))
+	// 🎯T397's token goes last, so a reader — or a regex — that predates it
+	// sees the line it always saw. An unknown provenance adds nothing rather
+	// than adding a word that could be mistaken for a claim about the tree.
+	if tok := r.Tree.Token(); tok != "" {
+		line += " " + tok
+	}
+	return line
 }
 
 // Summary is the multi-line form for a terminal: the attestation plus the
@@ -128,6 +141,9 @@ func (r *Record) Summary() string {
 	}
 	for _, a := range r.Anomalies {
 		fmt.Fprintf(&b, "\n  output contradicts a pass (%s): %s", a.Marker, a.Line)
+	}
+	if d := r.Tree.Describe(); d != "" {
+		fmt.Fprintf(&b, "\n  tree: %s", d)
 	}
 	if r.VoidReason != "" {
 		fmt.Fprintf(&b, "\n  voided: %s", r.VoidReason)

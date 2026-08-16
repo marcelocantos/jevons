@@ -37,6 +37,12 @@ const (
 	// FlagAttestationContradicted: the cited line disagrees with the stored
 	// record — the report says GREEN, the record says otherwise.
 	FlagAttestationContradicted FlagKind = "attestation_contradicted"
+	// FlagDirtyTreeGate: the report claims a commit and cites a green gate
+	// that the record says ran in a working tree carrying uncommitted changes.
+	// The gate passed; it just did not measure the commit being claimed. This
+	// is 🎯T397's shape, and the only thing separating it from a real green is
+	// which files happened to be lying around.
+	FlagDirtyTreeGate FlagKind = "dirty_tree_gate"
 )
 
 // CitationRole is what a finish report is doing with a gate it cites.
@@ -312,6 +318,10 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 					c.ID, rec.Status(), rec.Verdict, c.Status, c.Verdict),
 				Evidence: c.Raw,
 			})
+			continue
+		}
+		if f, ok := dirtyTreeFlag(text, rec, c); ok {
+			flags = append(flags, f)
 		}
 	}
 
@@ -363,6 +373,49 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 		})
 	}
 	return flags
+}
+
+// commitClaimRe matches a report naming the commit it landed: the word, then a
+// sha within a short distance of it. Requiring the word is what keeps this off
+// the hex that already lives in an attestation line (`out=6b1d9e4f2a01`).
+var commitClaimRe = regexp.MustCompile(
+	`(?i)\b(commit|committed|landed(?: as| in)?|sha)\b[^\n]{0,40}?\b[0-9a-f]{7,40}\b`)
+
+// dirtyTreeFlag reports a green gate that measured a tree other than the
+// commit the report claims (🎯T397).
+//
+// Three conditions, and each one is a deliberate narrowing:
+//
+//   - The record must SAY the tree was dirty. Absent provenance is unknown,
+//     which is every record written before the field existed, and vouching
+//     for the runs one knows least about is how a checker earns its silence.
+//   - The report must claim a commit. A gate cited without a landed sha is
+//     not making the claim this target is about — it is a reading of the
+//     tree, which is a legitimate thing to report and to say so.
+//   - The dirt must be non-zero, which is the same fact as Clean but stated
+//     where a future edit to either would have to notice the other.
+//
+// The flag is deliberately not phrased as a lie. The gate did pass; it just
+// answered a different question from the one the report puts to it, and the
+// remedy is one flag on the command line.
+func dirtyTreeFlag(report string, rec *Record, c CitedAttestation) (Flag, bool) {
+	t := rec.Tree
+	if t == nil || t.Clean || t.DirtyFiles == 0 {
+		return Flag{}, false
+	}
+	if !commitClaimRe.MatchString(report) {
+		return Flag{}, false
+	}
+	detail := fmt.Sprintf(
+		"gate %q ran in a working tree carrying %d uncommitted change(s) on top of %s, "+
+			"so it did not measure that commit on its own — a commit can be green there "+
+			"and red for a fresh clone, CI or a bisect (🎯T397). "+
+			"Re-run it as `bin/gate -clean -- <command>`",
+		c.Name, t.DirtyFiles, t.ShortCommit())
+	if len(t.DirtySample) > 0 {
+		detail += ", which was carrying " + strings.Join(t.DirtySample, ", ")
+	}
+	return Flag{Kind: FlagDirtyTreeGate, Detail: detail, Evidence: c.Raw}, true
 }
 
 // claimsGreenPass reports whether the report asserts a gate passed. Requires

@@ -175,9 +175,13 @@ func TestCitedAttestationCheckedAgainstStore(t *testing.T) {
 	})
 
 	t.Run("the real attestation checks out", func(t *testing.T) {
+		// Run outside a git work tree so provenance is unknown, not
+		// dirty: this case is "the cited record exists and agrees",
+		// not 🎯T397's dirty-tree-cited-for-a-commit flag.
 		green, err := Run(&RunArgs{
 			Command: []string{"sh", "-c", "exit 0"},
 			Name:    "make-test-go",
+			Dir:     t.TempDir(),
 			Store:   store,
 			Stdout:  io.Discard,
 			Stderr:  io.Discard,

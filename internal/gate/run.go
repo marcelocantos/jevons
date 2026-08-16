@@ -33,6 +33,9 @@ type RunArgs struct {
 	// Store persists the record and the captured log. Nil runs the gate
 	// without leaving evidence, which is only ever right in tests.
 	Store *Store
+	// SharedTree is the clone whose uncommitted state this run deliberately
+	// did not measure. RunClean sets it; nothing else should (🎯T397).
+	SharedTree *SharedTreeState
 	// Explicit says the caller asked for this run in the separated form
 	// (`gate -- cmd args`) rather than being handed an argv from somewhere
 	// looser. The CLI sets it because the allowlist leaves no other way to
@@ -76,6 +79,16 @@ func Run(args *RunArgs) (*Record, error) {
 		Explicit: args.Explicit,
 	}
 	rec.ID = newID(rec.Command, started)
+
+	// Which tree is being measured is read BEFORE the command runs, from the
+	// directory the command is about to be given — after it runs, the build
+	// output it left behind would read as uncommitted work of its own. A
+	// directory that is not a git work tree answers nil, which stays "unknown"
+	// and is never rounded up to clean (🎯T397).
+	rec.Tree = ProbeTree(args.Dir)
+	if rec.Tree != nil {
+		rec.Tree.Shared = args.SharedTree
+	}
 
 	// One buffer for both streams, guarded, so the captured log reads in the
 	// order a human saw it rather than as two interleaved halves.

@@ -86,6 +86,7 @@ func TestFalseGreenBannerChecksAttestationsAgainstTheStore(t *testing.T) {
 	rec, err := gate.Run(&gate.RunArgs{
 		Command: []string{"sh", "-c", "exit 0"},
 		Name:    "make-test-go",
+		Dir:     t.TempDir(),
 		Store:   store,
 		Stdout:  io.Discard,
 		Stderr:  io.Discard,
