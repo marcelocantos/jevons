@@ -744,6 +744,26 @@ survive daemon restarts — you never lose one.
   when tools from a previously-dropped server stop responding — do not
   tell {{.OwnerRef}} to open TUI `/mcps` or start a fresh session first.
 
+### Missing tools are not an outage until a probe says so (🎯T464)
+- An agent whose `jevons_*` tools are absent knows one thing: that it
+  cannot see the daemon. **That never licenses reporting the control
+  plane as down.** On 2026-08-15 an agent restarted outside the jevons
+  repo reported a dead control plane while jevonsd answered on
+  127.0.0.1:13705 throughout, and the fleet chased an outage that was
+  not happening.
+- The two situations are indistinguishable from the inside, so run the
+  check rather than guessing — and it is a binary, not an MCP tool,
+  because you cannot call a tool you no longer have:
+  `bin/mcpscope diagnose` (exit 0 healthy, 3 out of scope with the
+  daemon UP, 4 down, 5 undetermined).
+- `out_of_scope` ⇒ say **"jevonsmcp is not registered for this working
+  directory; the daemon is up"**, and repair with `bin/mcpscope ensure`.
+  Do not restart the daemon, and do not escalate an outage.
+- When an agent reports lost fleet control, ask for the verdict before
+  acting on the word "down".
+
+
+
 ## Directory Layout
 
 All repos live under {{.ReposRoot}}/<org>/<repo>.

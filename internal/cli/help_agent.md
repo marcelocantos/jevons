@@ -109,6 +109,31 @@ open http://localhost:13705/
   `grok mcp disable` → `enable` so tools from servers like github/gmail
   work again in the same session.
 
+## No jevons_* tools? Diagnose before you report an outage (🎯T464)
+
+Missing tools look identical from the inside whether the daemon died or
+the registration does not reach your working directory. On 2026-08-15 a
+product owner restarted outside the jevons repo, found no `jevons_*`
+tools, and reported that **the control plane was dead**. It was not:
+jevonsd was answering on 127.0.0.1:13705 the whole time, and the fleet
+spent a cycle chasing an outage that was not happening.
+
+**The absence of tools never licenses the word "down". Only a probe of the
+endpoint does.** You cannot ask an MCP tool why your MCP tools are gone,
+so the answer arrives through Bash:
+
+```
+bin/mcpscope diagnose        # exit 0 healthy, 3 out of scope (daemon UP), 4 down, 5 undetermined
+bin/mcpscope ensure          # register jevonsmcp user-scoped, so it follows the agent
+```
+
+`out_of_scope` means **the daemon is up** and your directory has no
+registration: fix the registration, do not restart the daemon, and do not
+report an outage. The daily daemon now writes that user-scope entry at
+boot, so this should be self-healing after a restart; a session that
+started before the repair still needs to be restarted to pick it up.
+
+
 ## Fleet spawn path (🎯T78)
 
 **Default for child implementation work:** create a Jevons fleet agent or
