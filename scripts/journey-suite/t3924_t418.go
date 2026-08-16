@@ -307,6 +307,7 @@ func (s *suite) jT418HandoverMute() error {
 	}
 
 	wait := time.Now().Add(30 * time.Second)
+	var sawMute bool
 	for time.Now().Before(wait) {
 		lg, _ := os.ReadFile(s.logPath)
 		ev, _ := os.ReadFile(s.eventsPath())
@@ -314,9 +315,43 @@ func (s *suite) jT418HandoverMute() error {
 		if strings.Contains(delta, "MUTE:") || strings.Contains(delta, "fleet mute") {
 			printMatching("T418 MUTE NEW lines", delta, "MUTE:", "fleet mute")
 			fmt.Println("T418 no-rescuer mute observed")
-			return nil
+			sawMute = true
+			break
 		}
 		time.Sleep(1 * time.Second)
 	}
-	return fmt.Errorf("no MUTE report after stopping every registered agent with queued work")
+	if !sawMute {
+		return fmt.Errorf("no MUTE report after stopping every registered agent with queued work")
+	}
+
+	// Drive SweepHandovers: bounce so NotifyDaemonRestarted retries or
+	// surfaces the planted stale pending. The Put above is unused unless
+	// we assert a NEW handover line after this bounce.
+	preHandoverLogs, _ := os.ReadFile(s.logPath)
+	preHandoverEvents, _ := os.ReadFile(s.eventsPath())
+	if err := s.bounceDrain(); err != nil {
+		return fmt.Errorf("handover bounce: %w", err)
+	}
+	needles := []string{
+		"UNDELIVERED HANDOVER",
+		"pending handover surfaced",
+		"handover retry",
+		"🎯T418 handover retry",
+		"🎯T418 pending handover surfaced",
+	}
+	wait = time.Now().Add(45 * time.Second)
+	for time.Now().Before(wait) {
+		lg, _ := os.ReadFile(s.logPath)
+		ev, _ := os.ReadFile(s.eventsPath())
+		delta := newTail(preHandoverLogs, lg) + "\n" + newTail(preHandoverEvents, ev)
+		for _, n := range needles {
+			if strings.Contains(delta, n) {
+				printMatching("T418 handover NEW lines", delta, needles...)
+				fmt.Println("T418 handover retried or surfaced:", n)
+				return nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("planted pending handover was not retried or surfaced after bounce (SweepHandovers never fired)")
 }
