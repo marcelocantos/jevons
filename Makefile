@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope runlock buildsnap recover detach jevons-watchdog gate
+all: jevonsd jevons-head treeguard commitscope runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -53,6 +53,18 @@ commitscope: bin/commitscope
 bin/commitscope: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/commitscope ./cmd/commitscope
+
+# Per-turn depth ceiling hook (🎯T392.4). The PreToolUse hook in
+# .claude/settings.json execs this on every tool call, so `make all` builds
+# it. A missing binary reports a visible non-blocking error and leaves the
+# ceiling INACTIVE rather than refusing anybody's tool call — the shim
+# reserves exit 2 for the checkpoint ask alone.
+.PHONY: turndepth
+turndepth: bin/turndepth
+
+bin/turndepth: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/turndepth ./cmd/turndepth
 
 # Restart serialiser (🎯T392.5). restart-daily-jevonsd re-execs itself under
 # this, so a missing binary means concurrent restarts race — which is how
@@ -99,6 +111,18 @@ bin/gate: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/gate ./cmd/gate
 
+# MCP scope diagnosis and repair (🎯T464). An agent whose jevons_* tools are
+# absent cannot call an MCP tool to ask why, so the answer has to arrive
+# through Bash: `bin/mcpscope diagnose` says whether the daemon is down or
+# this working directory is simply out of scope. Built by `make all` because
+# the fleet brief tells workers to run it before reporting an outage.
+.PHONY: mcpscope
+mcpscope: bin/mcpscope
+
+bin/mcpscope: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/mcpscope ./cmd/mcpscope
+
 # Daily-daemon supervisor (🎯T405). launchd runs this every 30s, outside every
 # process tree a restart tears down, and calls the restart script when the port
 # stays dead. `make watchdog-install` writes and loads the LaunchAgent.
@@ -118,6 +142,16 @@ watchdog-uninstall: bin/jevons-watchdog
 
 watchdog-status: bin/jevons-watchdog
 	@bin/jevons-watchdog -status
+
+# Test verdict harness (owner, 2026-08-11). Wraps `go test -json` and
+# reports pass/fail with counts instead of a transcript, so a failing
+# suite cannot hide in log noise and a piped exit code cannot be lost.
+.PHONY: gotest
+gotest: bin/gotest
+
+bin/gotest: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/gotest ./cmd/gotest
 
 # 🎯T254.2: builds the daily daemon from committed HEAD in a throwaway
 # worktree, so one worker's uncommitted edits cannot stop another rebuilding.
@@ -154,8 +188,20 @@ ios:
 	cd ios && xcodegen generate
 
 # ── Test ─────────────────────────────────────────────
-.PHONY: test test-go test-web test-ui
-test-go:
+# test-go reports a VERDICT, not a transcript (cmd/gotest). Bare
+# `go test ./...` emits thousands of legitimate log lines from passing
+# tests, and its failure signal is a few uppercase words scattered
+# through them — which a human scans for and an agent drowns in. Twice on
+# 2026-08-10 a failing suite was recorded as green here, because
+# `go test ./... | grep -v '^ok'` reports GREP's exit code, not the
+# tests'. gotest keeps the exit code, counts what ran, treats zero tests
+# and build failures as failures, and puts the transcript in a file.
+.PHONY: test test-go test-go-raw test-web test-ui
+test-go: bin/gotest
+	@bin/gotest ./...
+
+# Escape hatch when the transcript itself is what you need.
+test-go-raw:
 	go test ./...
 
 # Hermetic Node tests for chat working-indicator lifecycle (🎯T39)
@@ -237,6 +283,7 @@ test-ui:
 	node scripts/chat-ui-test/t361-owner-ux-test.js
 	node scripts/chat-ui-test/t309.1-conversation-widget-test.js
 	node scripts/chat-ui-test/t340-frontier-table-layout-test.js
+	node scripts/chat-ui-test/t390.1-plan-ticker-layout-test.js
 	node scripts/chat-ui-test/t366-composer-tab-cycle-test.js
 	node scripts/chat-ui-test/t374-no-onerror-test.js
 	node scripts/chat-ui-test/t374-module-gate-test.js
