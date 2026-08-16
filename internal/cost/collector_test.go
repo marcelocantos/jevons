@@ -145,7 +145,10 @@ func TestPricingFamilies(t *testing.T) {
 		"claude-sonnet-5":            3,
 		"claude-haiku-4-5-20251001":  1,
 		"claude-fable-5-unknown-fam": 15, // unknown → conservative (opus) rate
-		"grok-4.5-build":             15, // Grok fallback when ticks absent
+		// Grok fallback when ticks absent: xAI's published card, high tier
+		// (🎯T394). Was 15 — an Opus-rate guess, made when the card was
+		// believed not to exist.
+		"grok-4.5-build": 4,
 	} {
 		if got := EstimateCostUSD(model, u); math.Abs(got-want) > 1e-9 {
 			t.Fatalf("EstimateCostUSD(%s, 1MTok in) = %v, want %v", model, got, want)
@@ -164,7 +167,7 @@ func grokTurnCompleted(session, promptID, model string, ts time.Time, u Usage, t
 
 func TestParseGrokTurnCompleted(t *testing.T) {
 	u := Usage{Input: 1000, Output: 50, CacheRead: 800, CacheCreate: 0}
-	ticks := 1.5e9 // $1.50
+	ticks := 1.5e10 // $1.50 — ticks are 1e10 to the dollar (🎯T394)
 	line := grokTurnCompleted("sess-g", "prompt-1", "grok-4.5-build", testNow, u, ticks)
 	e := ParseLine([]byte(line), "fallback", testNow)
 	if e == nil {
@@ -290,12 +293,13 @@ func TestGrokBurnProducesNonZeroRate(t *testing.T) {
 	if snap.FleetUSDPerHour <= 0 {
 		t.Fatalf("fleet_usd_per_hour = %v; attributed burn must not stay zero", snap.FleetUSDPerHour)
 	}
-	// $3 in a 1h window → $3/hr.
-	if math.Abs(snap.GlobalUSDPerHour-3.0) > 1e-9 {
-		t.Fatalf("global_usd_per_hour = %v, want 3.0", snap.GlobalUSDPerHour)
+	// $0.30 in a 1h window → $0.30/hr. The synthetic ticks are unchanged;
+	// they decode to a tenth of what this asserted before (🎯T394).
+	if math.Abs(snap.GlobalUSDPerHour-0.3) > 1e-9 {
+		t.Fatalf("global_usd_per_hour = %v, want 0.3", snap.GlobalUSDPerHour)
 	}
-	if math.Abs(snap.FleetUSDPerHour-3.0) > 1e-9 {
-		t.Fatalf("fleet_usd_per_hour = %v, want 3.0", snap.FleetUSDPerHour)
+	if math.Abs(snap.FleetUSDPerHour-0.3) > 1e-9 {
+		t.Fatalf("fleet_usd_per_hour = %v, want 0.3", snap.FleetUSDPerHour)
 	}
 }
 

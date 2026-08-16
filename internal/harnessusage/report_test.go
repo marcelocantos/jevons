@@ -103,8 +103,9 @@ func TestCollectGrokFixture(t *testing.T) {
 	if r.Tokens.CacheRead != 48800 {
 		t.Fatalf("cache_read=%d", r.Tokens.CacheRead)
 	}
-	// costUsdTicks: 431800000 + 1500000000 = 1931800000 / 1e9 = 1.9318
-	want := 1.9318
+	// costUsdTicks: 431800000 + 1500000000 = 1931800000 / 1e10 = 0.19318
+	// (the divisor is 1e10, not the nano-dollars first assumed — 🎯T394).
+	want := 0.19318
 	if r.CostUSD == nil || math.Abs(*r.CostUSD-want) > 1e-9 {
 		t.Fatalf("cost=%v want %v", r.CostUSD, want)
 	}

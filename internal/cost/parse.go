@@ -11,10 +11,36 @@ import (
 )
 
 // costUsdTicksPerUSD is how Grok Build encodes provider cost in
-// updates.jsonl: costUsdTicks / 1e9 = USD. Observed on live sessions
-// (nano-dollar ticks); when present this is preferred over the fallback
-// rate table because it is the harness's own bill figure.
-const costUsdTicksPerUSD = 1e9
+// updates.jsonl. When present this is preferred over the fallback rate
+// table because it is the harness's own bill figure.
+//
+// The divisor is 1e10, not the 1e9 ("nano-dollars") this constant was
+// first written as (🎯T394). It is not a fitted parameter: at 1e10 the
+// ticks reproduce xAI's published grok-4.5 rate card as an exact
+// arithmetic identity. Card (https://docs.x.ai/docs/models, read
+// 2026-08-15), USD per million tokens:
+//
+//	prompt < 200k tokens:  input 2.00  cached input 0.30  output  6.00
+//	prompt >= 200k tokens: input 4.00  cached input 0.60  output 12.00
+//
+// Method: over every grok-4.5-build turn_completed frame on this host
+// with a single model call (n=1104 — one call so the frame's own token
+// counts are the whole bill), compute
+//
+//	(input-cachedRead)*input_rate + cachedRead*cached_rate + output*output_rate
+//
+// and compare to costUsdTicks/1e10. 1044 frames agree to within a
+// relative 1e-9; a further 51 agree exactly on the same card with cached
+// input at 0.50/1.00, xAI's rate before it dropped to 0.30/0.60 on
+// 2026-07-19. The remaining 9 differ only by a discrete non-token
+// surcharge — always an exact multiple of $0.005 — never by a token-rate
+// discrepancy. At 1e9 every one of those figures is 10x the published
+// card, which is why the T36 clamp read phantom burn and the owner
+// switched the meter off (budget.json, 2026-08-03).
+//
+// Pinned by TestT394GrokTicksDecodeMatchesPublishedRateCard over verbatim
+// frames, with a control that fails at the old divisor.
+const costUsdTicksPerUSD = 1e10
 
 // claudeLine is the subset of a Claude Code session-JSONL line that
 // matters for billing. Everything else on the line is ignored.
@@ -176,7 +202,14 @@ func parseGrokUpdate(line []byte, fallbackSession string, now time.Time) *Event 
 		}
 		e.CostUSD = *gu.CostUsdTicks / costUsdTicksPerUSD
 	} else {
-		e.CostUSD = EstimateCostUSD(e.Model, u)
+		// Grok's inputTokens is inclusive of cachedReadTokens, so the
+		// fresh-input count is the difference (🎯T394 — the published
+		// card reproduces a frame's bill only on that reading). The Event
+		// keeps the inclusive count, because Usage.Input is the context
+		// the call carried (🎯T392.6); only the estimate splits it.
+		fresh := u
+		fresh.Input = max(0, u.Input-u.CacheRead)
+		e.CostUSD = EstimateCostUSD(e.Model, fresh)
 	}
 	return e
 }
