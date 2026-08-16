@@ -14,11 +14,14 @@ import (
 )
 
 // stubGate returns one canned decision for every ask, and counts the asks.
+// asked carries the first ask so a caller can rendezvous with it rather than
+// poll against a deadline (🎯T400).
 type stubGate struct {
 	mu       sync.Mutex
 	decision capacity.Decision
 	asks     []string
 	released int
+	asked    chan struct{}
 }
 
 func (g *stubGate) Begin(class, name string) (capacity.Decision, func()) {
@@ -26,6 +29,12 @@ func (g *stubGate) Begin(class, name string) (capacity.Decision, func()) {
 	g.asks = append(g.asks, class+":"+name)
 	d := g.decision
 	g.mu.Unlock()
+	if g.asked != nil {
+		select {
+		case g.asked <- struct{}{}:
+		default:
+		}
+	}
 	d.Class, d.Name = capacity.NormalizeClass(class), name
 	return d, func() {
 		g.mu.Lock()
@@ -101,29 +110,48 @@ func testAuditor(t *testing.T, mut func(*Args)) (*Auditor, chan Assignment, stri
 
 // 🎯T359: a scheduled pass that capacity defers must not dispatch, and the
 // skip must be durable — a deferred audit cannot look like a clean one.
+//
+// The schedule is driven by an injected tick (🎯T400). The earlier shape —
+// a 20ms interval polled against a 3s deadline — asserted two things at
+// once: that a tick asks the gate, and that this machine gets round to it
+// within three seconds. Only the first is the subject, and the second is
+// false often enough under a loaded full-suite run to have made the standing
+// gate unbelievable. Here the tick is handed over by hand and every wait is
+// a blocking rendezvous, so the test has no wall-clock deadline left to lose.
 func TestScheduledCycleDefersUnderCapacityPressure(t *testing.T) {
-	gate := &stubGate{decision: capacity.Decision{
-		Verdict: capacity.VerdictDefer, Reason: capacity.ReasonCriticalOwnerOnly,
-		Detail: "only owner and Build work fits", Pressure: capacity.PressureCritical,
-	}}
+	gate := &stubGate{
+		decision: capacity.Decision{
+			Verdict: capacity.VerdictDefer, Reason: capacity.ReasonCriticalOwnerOnly,
+			Detail: "only owner and Build work fits", Pressure: capacity.PressureCritical,
+		},
+		asked: make(chan struct{}, 1),
+	}
+	ticks := make(chan time.Time)
 	auditor, seen, state := testAuditor(t, func(a *Args) {
 		a.Capacity = gate
-		a.Interval = 20 * time.Millisecond
+		a.Ticks = ticks
+		// Long enough that a real ticker could not fire during this test:
+		// if the injected source were ignored, the rendezvous below would
+		// hang rather than pass on a stray tick.
+		a.Interval = time.Hour
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go auditor.Run(ctx)
-	deadline := time.After(3 * time.Second)
-	for gate.askCount() == 0 {
-		select {
-		case <-deadline:
-			cancel()
-			t.Fatal("capacity gate was never asked — the schedule ran ungated")
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-	cancel()
+	defer cancel()
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); auditor.Run(ctx) }()
 
+	ticks <- time.Now() // returns once the schedule has taken the tick
+	<-gate.asked        // and once the tick has reached the capacity gate
+	cancel()
+	<-stopped // no further asks can land while the assertions read the stub
+
+	// One tick in, one ask out. Driving the cadence buys this: the polled
+	// version could only ever assert "at least one", because it had no idea
+	// how many ticks had gone by while it was waiting.
+	if n := gate.askCount(); n != 1 {
+		t.Fatalf("one tick must produce exactly one ask, got %d: %v", n, gate.asks)
+	}
 	if !gate.askedClass(capacity.ClassAudit) {
 		t.Fatalf("audit must ask under its own capacity class: %v", gate.asks)
 	}

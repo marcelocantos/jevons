@@ -42,6 +42,14 @@ type Args struct {
 	Capacity capacity.Gate
 	// Interval overrides config when non-zero at construction.
 	Interval time.Duration
+	// Ticks optionally replaces the schedule's real ticker, so a caller can
+	// drive the cadence itself instead of waiting on wall clock (🎯T400).
+	// A test asserting what the schedule *does* on a tick has no interest in
+	// when the tick arrives, and pairing a short Interval with a polled
+	// deadline makes it assert the machine is quiet as well: under load the
+	// deferral test failed on that second assertion, not on the first. Nil =
+	// real time, which is every production caller.
+	Ticks <-chan time.Time
 	// Now optional clock.
 	Now func() time.Time
 	// OnResult optional hook after each cycle.
@@ -172,19 +180,29 @@ func (a *Auditor) Run(ctx context.Context) {
 	}
 	// A full scan at boot would collide with every other start-up cost, so
 	// the first pass waits a settling delay rather than firing immediately.
-	first := time.NewTimer(min(interval, 10*time.Minute))
-	defer first.Stop()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// An injected tick source supplies both, since a caller driving the
+	// cadence is not waiting for the machine to settle either.
+	var firstC, tickC <-chan time.Time
+	var ticker *time.Ticker
+	if a.args.Ticks != nil {
+		tickC = a.args.Ticks
+	} else {
+		first := time.NewTimer(min(interval, 10*time.Minute))
+		defer first.Stop()
+		firstC = first.C
+		ticker = time.NewTicker(interval)
+		defer func() { ticker.Stop() }()
+		tickC = ticker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-first.C:
+		case <-firstC:
 			if cfg, err := a.Config(); err == nil && cfg.Enabled {
 				a.runSafe(ctx, "schedule_boot")
 			}
-		case <-ticker.C:
+		case <-tickC:
 			next, err := a.Config()
 			if err != nil {
 				slog.Warn("audit config reload failed", "err", err)
@@ -193,10 +211,11 @@ func (a *Auditor) Run(ctx context.Context) {
 			if !next.Enabled {
 				continue
 			}
-			if d := next.IntervalDuration(); d > 0 && d != interval {
+			if d := next.IntervalDuration(); ticker != nil && d > 0 && d != interval {
 				ticker.Stop()
 				interval = d
 				ticker = time.NewTicker(interval)
+				tickC = ticker.C
 			}
 			a.runSafe(ctx, "schedule")
 		}

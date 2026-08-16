@@ -25,6 +25,16 @@
 // 🎯T194 exists to prevent. Waiting costs a few seconds and the wrapped
 // script's own already-activated check (🎯T218) makes the second run a
 // no-op when the binary did not change.
+//
+// -timeout 0 waits indefinitely (🎯T400). A finite timeout answers "is the
+// holder wedged?", which is a question about the holder; a caller who only
+// wants mutual exclusion is asking a different question, and a deadline
+// makes its answer depend on how busy the machine happens to be. Under
+// enough load a healthy holder outlives any constant, and the waiter then
+// reports EX_TEMPFAIL for a lock that was working exactly as specified.
+// The daily restart keeps its finite default because there a wedged holder
+// is the real hazard; callers asserting serialisation ask for 0 and let
+// their own supervisor bound the wait.
 package main
 
 import (
@@ -46,7 +56,7 @@ func main() {
 func run(argv []string) int {
 	fs := flag.NewFlagSet("runlock", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	timeout := fs.Duration("timeout", 5*time.Minute, "how long to wait for the lock before giving up")
+	timeout := fs.Duration("timeout", 5*time.Minute, "how long to wait for the lock before giving up (0 = wait indefinitely)")
 	quiet := fs.Bool("quiet", false, "suppress the waiting notice")
 	if err := fs.Parse(argv); err != nil {
 		return 2
@@ -117,7 +127,8 @@ func run(argv []string) int {
 
 // acquire blocks until the lock is held or timeout elapses. Polling rather
 // than a blocking flock so the timeout is honoured on every platform and a
-// wedged holder cannot hang the caller forever.
+// wedged holder cannot hang the caller forever. timeout <= 0 waits without
+// a deadline: the caller wants serialisation, not promptness.
 func acquire(f *os.File, timeout time.Duration, quiet bool, path string) (time.Duration, error) {
 	start := time.Now()
 	notified := false
@@ -129,7 +140,7 @@ func acquire(f *os.File, timeout time.Duration, quiet bool, path string) (time.D
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
 			return time.Since(start), err
 		}
-		if time.Since(start) >= timeout {
+		if timeout > 0 && time.Since(start) >= timeout {
 			return time.Since(start), fmt.Errorf(
 				"timed out after %s waiting for %s — another run still holds it", timeout, path)
 		}
