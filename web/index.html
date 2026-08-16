@@ -3326,7 +3326,11 @@ function startTurn() {
     turnDetails.style.left = '0';
     turnDetails.style.right = '0';
   }
-  msgsCanvas.appendChild(turnDetails);
+  // 🎯T119.4: attach through apply, not a second append. virtualize parks
+  // and re-homes from the model; a fallback append is only for tests
+  // without the projector.
+  if (typeof virtualizeMessages === 'function') virtualizeMessages();
+  else if (msgsCanvas && !turnDetails.isConnected) msgsCanvas.appendChild(turnDetails);
   applyRowHeight(turnDetails._vIndex, Math.max(16, turnDetails.offsetHeight || 16));
   turnCount++;
   scrollDownThrottled();

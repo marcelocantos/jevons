@@ -17,6 +17,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/turnev"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
 
@@ -184,7 +185,8 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	}
 
 	// Post-restart wake: outstanding non-done workers get a resume brief
-	// without waiting the full idle threshold (T171 sibling).
+	// without waiting the full idle threshold (T171 sibling). That is a
+	// positive event (the bounce), not a negative phase reading.
 	if o.PostRestart {
 		return IdleNudgeNudge, "post_restart_wake"
 	}
@@ -193,19 +195,16 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	if threshold <= 0 {
 		threshold = DefaultIdleNudgeThreshold
 	}
-	// phase=idle | blocked | unknown (empty) with no progress long enough.
+	// 🎯T423: only a positive idle/blocked reading may nudge. Empty or
+	// unknown is a failure to observe — the 2026-08-10 misread.
 	switch phase {
-	case "idle", "blocked", "":
+	case "idle", "blocked":
 		if o.IdleFor >= threshold {
 			return IdleNudgeNudge, "idle_stuck"
 		}
 		return IdleNudgeSkip, IdleSkipBelowThreshold
 	default:
-		// Unknown phase strings: treat as idle-ish only when aged out.
-		if o.IdleFor >= threshold {
-			return IdleNudgeNudge, "idle_stuck"
-		}
-		return IdleNudgeSkip, IdleSkipBelowThreshold
+		return IdleNudgeSkip, "phase_unknown"
 	}
 }
 
@@ -636,6 +635,22 @@ func SweepIdleNudges(args IdleNudgeSweepArgs) []IdleNudgeReport {
 			continue // quiet skip for asides
 		}
 		out = append(out, rep)
+	}
+	// 🎯T423 clause 5: one derivation that would act on a fleet at once
+	// is a systemic misread — report, do not cull.
+	n := 0
+	for _, r := range out {
+		if r.Action == IdleNudgeNudge {
+			n++
+		}
+	}
+	if turnev.CapsSystemicActions(n, 0) {
+		for i := range out {
+			if out[i].Action == IdleNudgeNudge {
+				out[i].Action = IdleNudgeSkip
+				out[i].Reason = "systemic_read"
+			}
+		}
 	}
 	return out
 }

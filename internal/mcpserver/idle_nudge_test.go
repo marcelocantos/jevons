@@ -59,6 +59,23 @@ func TestClassifyIdleNudgeSkips(t *testing.T) {
 	}
 }
 
+func TestT423EmptyPhaseIsNotIdle(t *testing.T) {
+	t.Parallel()
+	o := IdleNudgeObs{
+		Name: "w", Purpose: claudia.PurposeWork, ProcessRunning: true,
+		Phase: "", IdleFor: 10 * time.Minute, HasOpenMission: true,
+	}
+	act, reason := ClassifyIdleNudge(o)
+	if act != IdleNudgeSkip || reason != "phase_unknown" {
+		t.Fatalf("empty phase: %s/%s — unknown must not nudge (🎯T423)", act, reason)
+	}
+	o.Phase = "phase_unknown"
+	act, reason = ClassifyIdleNudge(o)
+	if act != IdleNudgeSkip || reason != "phase_unknown" {
+		t.Fatalf("phase_unknown: %s/%s", act, reason)
+	}
+}
+
 func TestClassifyIdleNudgeIdleStuckAndPostRestart(t *testing.T) {
 	t.Parallel()
 	idle := IdleNudgeObs{
@@ -296,16 +313,16 @@ func TestSweepIdleNudgesPostRestartFullBriefThenContinue(t *testing.T) {
 
 	now := time.Unix(2000, 0)
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:          reg,
-		Activity:     activity,
-		Ledger:       ledger,
-		Push:         push,
-		Now:          now,
-		PostRestart:  true,
-		OverseerName: "jevons",
-		BriefPresent: func(name string) bool { return briefed[name] },
-		MarkBriefed:  func(name string) { briefed[name] = true },
-		DesignGated:  func(tid string) bool { return tid == "T29" },
+		Reg:            reg,
+		Activity:       activity,
+		Ledger:         ledger,
+		Push:           push,
+		Now:            now,
+		PostRestart:    true,
+		OverseerName:   "jevons",
+		BriefPresent:   func(name string) bool { return briefed[name] },
+		MarkBriefed:    func(name string) { briefed[name] = true },
+		DesignGated:    func(tid string) bool { return tid == "T29" },
 		ProcessRunning: func(name string) bool { return running[name] },
 	})
 
@@ -337,16 +354,16 @@ func TestSweepIdleNudgesPostRestartFullBriefThenContinue(t *testing.T) {
 	// Force idle again for second classification.
 	activity.by["jv-t207-idle"] = IdleActivity{Phase: "idle", Updated: later.Add(-10 * time.Minute)}
 	reps2 := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:          reg,
-		Activity:     activity,
-		Ledger:       ledger,
-		Push:         push,
-		Now:          later,
-		PostRestart:  false,
-		OverseerName: "jevons",
-		BriefPresent: func(name string) bool { return briefed[name] },
-		MarkBriefed:  func(name string) { briefed[name] = true },
-		DesignGated:  func(tid string) bool { return tid == "T29" },
+		Reg:            reg,
+		Activity:       activity,
+		Ledger:         ledger,
+		Push:           push,
+		Now:            later,
+		PostRestart:    false,
+		OverseerName:   "jevons",
+		BriefPresent:   func(name string) bool { return briefed[name] },
+		MarkBriefed:    func(name string) { briefed[name] = true },
+		DesignGated:    func(tid string) bool { return tid == "T29" },
 		ProcessRunning: func(name string) bool { return running[name] },
 	})
 	var w2 IdleNudgeReport
@@ -374,8 +391,8 @@ func TestSweepIdleNudgesPostRestartFullBriefThenContinue(t *testing.T) {
 	far := later.Add(2 * time.Hour)
 	reps3 := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg: reg, Activity: activity, Ledger: ledger, Push: push, Now: far,
-		OverseerName: "jevons",
-		BriefPresent: func(name string) bool { return true },
+		OverseerName:   "jevons",
+		BriefPresent:   func(name string) bool { return true },
 		ProcessRunning: func(name string) bool { return running[name] },
 	})
 	for _, r := range reps3 {

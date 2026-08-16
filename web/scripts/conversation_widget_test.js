@@ -604,6 +604,27 @@ test('displayFromEvents ignores lossless recorded envelopes', function () {
   assert.deepStrictEqual(lines.map(function (l) { return l.kind || l.role; }), ['user', 'assistant']);
 });
 
+test('T119.5 incremental fold equals full displayFromEvents replay', function () {
+  const tape = [
+    { type: 'user', message: { content: 'go' }, timestamp: 1 },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+    { type: 'assistant', message: { content: [], stop_reason: 'end_turn' } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Grep' }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'later' }] } },
+  ];
+  const fold = CW.newDisplayFold();
+  for (let i = 0; i < tape.length; i++) {
+    CW.foldDisplayEvent(fold, tape[i]);
+    const full = CW.displayFromEvents(tape.slice(0, i + 1));
+    assert.deepStrictEqual(
+      fold.out.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+      full.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+      'fold prefix ' + i
+    );
+  }
+});
+
 test('displayFromEvents is f(raw): 1 step is already ⋯ 1 step; consecutive tools coalesce', function () {
   const CE = require('./chat_events.js');
   const tape = [

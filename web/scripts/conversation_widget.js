@@ -625,23 +625,43 @@
    * or visible assistant row breaks the scope. Tools-only end_turn does
    * not. Residual: full replay (🎯T119.5 will fold).
    */
+  function newDisplayFold(CE) {
+    return {
+      CE: CE || loadChatEvents(),
+      out: [],
+      open: null,
+      silentById: Object.create(null),
+      segmentEdge: false,
+    };
+  }
+
   function displayFromEvents(events, CE) {
-    CE = CE || loadChatEvents();
-    var out = [];
-    var open = null;
-    var silentById = Object.create(null);
+    var st = newDisplayFold(CE);
+    var tape = Array.isArray(events) ? events : [];
+    for (var fi = 0; fi < tape.length; fi++) {
+      foldDisplayEvent(st, tape[fi]);
+    }
+    return st.out;
+  }
+
+  // Incremental f (🎯T119.5). fold(prefix) equals displayFromEvents(prefix).
+  function foldDisplayEvent(st, event) {
+    if (!st) return [];
+    var CE = st.CE;
+    var out = st.out;
+    var silentById = st.silentById;
     function closeOpen() {
-      open = null;
+      st.open = null;
     }
     function addTool(cls, text, ts) {
       var body = text == null ? '' : String(text);
       if (!body) return;
-      if (!open) {
-        open = { kind: 'turn-slot', role: 'turn-slot', items: [], text: '', when: ts };
-        out.push(open);
+      if (!st.open) {
+        st.open = { kind: 'turn-slot', role: 'turn-slot', items: [], text: '', when: ts };
+        out.push(st.open);
       }
-      open.items.push({ cls: cls || '', text: body });
-      open.text = turnSlotLabel(open.items);
+      st.open.items.push({ cls: cls || '', text: body });
+      st.open.text = turnSlotLabel(st.open.items);
     }
     function growAssistant(text, streamId, edge, ts) {
       var sid = streamId ? String(streamId) : '';
@@ -660,81 +680,76 @@
       if (sid) row._streamId = sid;
       out.push(row);
     }
-    var tape = Array.isArray(events) ? events : [];
-    var segmentEdge = false;
-    for (var ei = 0; ei < tape.length; ei++) {
-      var event = tape[ei];
-      if (!event || !CE) continue;
-      if (event.recorded === 'lossless') continue;
-      var ts = event.when != null ? event.when
-        : (event.timestamp ? new Date(event.timestamp).getTime() : undefined);
-      if (event.type === 'user') {
-        var utext = CE.userContentText ? CE.userContentText(event) : '';
-        if (!utext) continue;
-        if (CE.isProtocolControlFrameText && CE.isProtocolControlFrameText(utext)) continue;
-        closeOpen();
-        var urow = { role: 'user', text: utext };
-        if (ts != null) urow.when = ts;
-        if (CE.turnOriginOf) urow.origin = CE.turnOriginOf(event);
-        var last = out[out.length - 1];
-        if (last && last.role === 'user' && String(last.text || '').trim() === utext.trim()) continue;
-        out.push(urow);
-        continue;
-      }
-      if (event.type === 'agent_note') {
-        addTool('agent-note', event.text || '', ts);
-        continue;
-      }
-      if (event.type === 'tool_result' || event.type === 'result') {
-        segmentEdge = true;
-        var raw = event.message && event.message.content;
-        if (Array.isArray(raw)) {
-          for (var ri = 0; ri < raw.length; ri++) {
-            if (raw[ri] && raw[ri].type === 'tool_result') {
-              addTool('tool-result', summariseToolResult(raw[ri]), ts);
-            }
+    if (!event || !CE) return out;
+    if (event.recorded === 'lossless') return out;
+    var ts = event.when != null ? event.when
+      : (event.timestamp ? new Date(event.timestamp).getTime() : undefined);
+    if (event.type === 'user') {
+      var utext = CE.userContentText ? CE.userContentText(event) : '';
+      if (!utext) return out;
+      if (CE.isProtocolControlFrameText && CE.isProtocolControlFrameText(utext)) return out;
+      closeOpen();
+      var urow = { role: 'user', text: utext };
+      if (ts != null) urow.when = ts;
+      if (CE.turnOriginOf) urow.origin = CE.turnOriginOf(event);
+      var last = out[out.length - 1];
+      if (last && last.role === 'user' && String(last.text || '').trim() === utext.trim()) return out;
+      out.push(urow);
+      return out;
+    }
+    if (event.type === 'agent_note') {
+      addTool('agent-note', event.text || '', ts);
+      return out;
+    }
+    if (event.type === 'tool_result' || event.type === 'result') {
+      st.segmentEdge = true;
+      var raw = event.message && event.message.content;
+      if (Array.isArray(raw)) {
+        for (var ri = 0; ri < raw.length; ri++) {
+          if (raw[ri] && raw[ri].type === 'tool_result') {
+            addTool('tool-result', summariseToolResult(raw[ri]), ts);
           }
-        } else {
-          addTool('tool-result', summariseToolResult(event), ts);
         }
+      } else {
+        addTool('tool-result', summariseToolResult(event), ts);
+      }
+      return out;
+    }
+    if (event.type === 'system') {
+      closeOpen();
+      return out;
+    }
+    if (event.type !== 'assistant') return out;
+    var sid = CE.streamIdOf ? CE.streamIdOf(event) : String(event.stream_id || event.streamId || '');
+    var content = event.message && event.message.content;
+    if (!Array.isArray(content)) return out;
+    var emitted = false;
+    for (var i = 0; i < content.length; i++) {
+      var c = content[i];
+      if (!c) continue;
+      if (c.type === 'tool_use') {
+        st.segmentEdge = true;
+        addTool('tool-use', summariseToolUse(c), ts);
         continue;
       }
-      if (event.type === 'system') {
-        closeOpen();
+      if (c.type !== 'text' || !c.text) continue;
+      var alreadySilent = !!(sid && silentById[sid]);
+      var thisSilent = CE.isSilentAssistantText && CE.isSilentAssistantText(c.text);
+      if (alreadySilent || thisSilent) {
+        if (sid) silentById[sid] = true;
         continue;
       }
-      if (event.type !== 'assistant') continue;
-      var sid = CE.streamIdOf ? CE.streamIdOf(event) : String(event.stream_id || event.streamId || '');
-      var content = event.message && event.message.content;
-      if (!Array.isArray(content)) continue;
-      var emitted = false;
-      for (var i = 0; i < content.length; i++) {
-        var c = content[i];
-        if (!c) continue;
-        if (c.type === 'tool_use') {
-          segmentEdge = true;
-          addTool('tool-use', summariseToolUse(c), ts);
-          continue;
-        }
-        if (c.type !== 'text' || !c.text) continue;
-        var alreadySilent = !!(sid && silentById[sid]);
-        var thisSilent = CE.isSilentAssistantText && CE.isSilentAssistantText(c.text);
-        if (alreadySilent || thisSilent) {
-          if (sid) silentById[sid] = true;
-          continue;
-        }
-        closeOpen();
-        var edge = segmentEdge || emitted;
-        growAssistant(c.text, sid, edge, ts);
-        segmentEdge = false;
-        emitted = true;
-      }
-      if (CE.shouldClearWorking && CE.shouldClearWorking(event)) {
-        for (var si = out.length - 1; si >= 0; si--) {
-          if (out[si] && out[si]._stream && (!sid || out[si]._streamId === sid)) {
-            delete out[si]._stream;
-            break;
-          }
+      closeOpen();
+      var edge = st.segmentEdge || emitted;
+      growAssistant(c.text, sid, edge, ts);
+      st.segmentEdge = false;
+      emitted = true;
+    }
+    if (CE.shouldClearWorking && CE.shouldClearWorking(event)) {
+      for (var si = out.length - 1; si >= 0; si--) {
+        if (out[si] && out[si]._stream && (!sid || out[si]._streamId === sid)) {
+          delete out[si]._stream;
+          break;
         }
       }
     }
@@ -793,6 +808,7 @@
     var segmentEdge = false;
     var lines = [];
     var events = [];
+    var fold = newDisplayFold();
     var messagesEl = opts.messagesEl || null;
     var doc = opts.document || (typeof document !== 'undefined' ? document : null);
 
@@ -1208,7 +1224,8 @@
     function applyWireEvent(event) {
       if (event) events.push(event);
       var prev = lines;
-      lines = displayFromEvents(events);
+      if (event) foldDisplayEvent(fold, event);
+      lines = fold.out;
       syncDisplay(prev, lines);
     }
 
@@ -1827,6 +1844,8 @@
       return displayFromEvents(events);
     },
     displayFromEvents: displayFromEvents,
+    newDisplayFold: newDisplayFold,
+    foldDisplayEvent: foldDisplayEvent,
     createStreamJoin: createStreamJoin,
     turnSlotLabel: turnSlotLabel,
     shouldMintTurnSlot: shouldMintTurnSlot,
