@@ -416,6 +416,10 @@ test('index.html never hides #plan-ticker pending a fetch, and styles grouped ba
     '#plan-ticker must not start as display:none (the pre-fix tree hid it)');
   assert.ok(html.indexOf('.plan-bar') >= 0, 'compact bar indicator CSS');
   assert.ok(html.indexOf('.plan-bar-fill') >= 0, 'bar fill for remaining %');
+  assert.ok(/#plan-ticker \.plan-bar\s*\{[^}]*box-shadow:\s*inset/.test(html),
+    'bar stroke is inset, so fill % and triangle % share one rail');
+  assert.ok(!/#plan-ticker \.plan-bar\s*\{[^}]*\bborder:\s*1px/.test(html),
+    'a 1px border on .plan-bar splits the rail (fill 34px, triangle 36px)');
   assert.ok(html.indexOf('.plan-tri') >= 0, 'time-remaining triangle CSS');
   assert.ok(html.indexOf('.plan-box') >= 0, 'per-provider window box CSS');
   assert.ok(html.indexOf('.plan-icon') >= 0, 'company-mark CSS');

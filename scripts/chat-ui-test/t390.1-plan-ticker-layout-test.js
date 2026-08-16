@@ -238,24 +238,37 @@ function startServer() {
         }
         const wins = [...g.querySelectorAll('.plan-win')].map((w) => {
           const track = w.querySelector('.plan-track');
+          const bar = w.querySelector('.plan-bar');
           const fill = w.querySelector('.plan-bar-fill');
           const tri = w.querySelector('.plan-tri');
           const tr = track ? track.getBoundingClientRect() : null;
+          const br = bar ? bar.getBoundingClientRect() : null;
           const fr = fill ? fill.getBoundingClientRect() : null;
           const styleLeft = tri ? parseFloat(tri.style.left) : null;
+          const cs = bar ? getComputedStyle(bar) : null;
+          const bL = cs ? parseFloat(cs.borderLeftWidth) || 0 : 0;
+          const bR = cs ? parseFloat(cs.borderRightWidth) || 0 : 0;
+          const railLeft = br ? br.left + bL : null;
+          const railWidth = br ? br.width - bL - bR : 0;
           let triCenter = null;
-          if (tri && tr && tr.width > 0 && Number.isFinite(styleLeft)) {
-            triCenter = tr.left + (styleLeft / 100) * tr.width;
+          if (tri && railLeft != null && railWidth > 0 && Number.isFinite(styleLeft)) {
+            triCenter = railLeft + (styleLeft / 100) * railWidth;
           }
+          const fillFrac = (fr && railWidth > 0) ? (fr.right - railLeft) / railWidth * 100 : null;
+          const triFrac = (triCenter != null && railWidth > 0) ? (triCenter - railLeft) / railWidth * 100 : null;
           return {
             window: w.getAttribute('data-window'),
             pace: w.getAttribute('data-pace'),
             label: (w.querySelector('.plan-win-label') || {}).textContent || '',
             fillWidth: fr ? fr.width : 0,
             trackWidth: tr ? tr.width : 0,
+            railWidth: railWidth,
             styleLeft: styleLeft,
             triCenter: triCenter,
-            trackLeft: tr ? tr.left : null
+            fillRight: fr ? fr.right : null,
+            railLeft: railLeft,
+            fillFrac: fillFrac,
+            triFrac: triFrac
           };
         });
         const icon = g.querySelector('.plan-icon .model-icon');
@@ -291,6 +304,38 @@ function startServer() {
       }
       if (g.iconMid != null && g.boxMid != null && Math.abs(g.iconMid - g.boxMid) > 1.5) {
         failures.push(g.provider + ' icon not vertically centred on box: iconMid=' + g.iconMid.toFixed(1) + ' boxMid=' + g.boxMid.toFixed(1));
+      }
+    }
+
+    for (const g of layout.groups) {
+      const vg = painted.view.groups.find((x) => x.provider === g.provider);
+      if (!vg) continue;
+      for (const win of g.windows) {
+        const vw = vg.windows.find((x) => x.name === win.window);
+        if (!vw) continue;
+        if (typeof vw.remainingPercent === 'number' && typeof win.fillFrac === 'number') {
+          if (Math.abs(win.fillFrac - vw.remainingPercent) > 2) {
+            failures.push(g.provider + ' ' + win.window + ' fillFrac ' + win.fillFrac.toFixed(1) + ' != rem ' + vw.remainingPercent);
+          }
+        }
+        if (typeof vw.remainingTimePercent === 'number' && typeof win.triFrac === 'number') {
+          if (Math.abs(win.triFrac - vw.remainingTimePercent) > 2) {
+            failures.push(g.provider + ' ' + win.window + ' triFrac ' + win.triFrac.toFixed(1) + ' != time ' + vw.remainingTimePercent.toFixed(1));
+          }
+        }
+        // Visual order must match the numbers: leftover (fill past tip)
+        // only when remaining > remaining-time. 1px slack for subpixel.
+        if (win.fillRight != null && win.triCenter != null &&
+            typeof vw.remainingPercent === 'number' && typeof vw.remainingTimePercent === 'number') {
+          const fillPast = win.fillRight - win.triCenter;
+          const leftover = vw.remainingPercent - vw.remainingTimePercent;
+          if (leftover > 1 && fillPast < -1) {
+            failures.push(g.provider + ' ' + win.window + ' fill should sit right of tip (leftover ' + leftover.toFixed(1) + 'pp) but fillPast=' + fillPast.toFixed(2));
+          }
+          if (leftover < -1 && fillPast > 1) {
+            failures.push(g.provider + ' ' + win.window + ' fill should sit left of tip (overspend ' + leftover.toFixed(1) + 'pp) but fillPast=' + fillPast.toFixed(2) + ' — geometry/colour mismatch');
+          }
+        }
       }
     }
 
