@@ -1499,6 +1499,110 @@
     return !!latched;
   }
 
+  // Deterministic JSON for change detection (key order must not false-trigger).
+  function stableSerialize(v) {
+    if (v == null) return 'null';
+    var t = typeof v;
+    if (t === 'number' || t === 'boolean' || t === 'string') return JSON.stringify(v);
+    if (Array.isArray(v)) {
+      var items = [];
+      for (var i = 0; i < v.length; i++) items.push(stableSerialize(v[i]));
+      return '[' + items.join(',') + ']';
+    }
+    if (t === 'object') {
+      var keys = Object.keys(v).sort();
+      var parts = [];
+      for (var k = 0; k < keys.length; k++) {
+        parts.push(JSON.stringify(keys[k]) + ':' + stableSerialize(v[keys[k]]));
+      }
+      return '{' + parts.join(',') + '}';
+    }
+    return JSON.stringify(String(v));
+  }
+
+  // Fields formatTargetCardMarkdown / formatDepMinigraph actually paint.
+  // A new fetch with the same values must produce the same fingerprint.
+  function cardSourceFingerprint(row) {
+    if (!row || !row.id) return '';
+    return stableSerialize({
+      id: normalizeTargetID(row.id),
+      name: row.name != null ? String(row.name) : '',
+      status: row.status != null ? String(row.status) : '',
+      value: row.value,
+      cost: row.cost,
+      actual_cost: row.actual_cost != null ? row.actual_cost : row.actualCost,
+      tags: normalizeStringList(row.tags),
+      depends_on: normalizeDependents(
+        row.depends_on != null ? row.depends_on : row.dependsOn
+      ),
+      dependents: normalizeDependents(row.dependents),
+      acceptance: normalizeStringList(row.acceptance),
+      context: row.context != null ? String(row.context) : '',
+      attestation: row.attestation != null ? String(row.attestation) : '',
+      origin: row.origin != null ? String(row.origin) : '',
+      discovered: row.discovered != null ? String(row.discovered) : '',
+      achieved: row.achieved != null ? String(row.achieved) : '',
+      extra: normalizeExtra(row.extra),
+    });
+  }
+
+  // Table chrome + card sources. updated_at / fetch identity is not included.
+  function frontierPaintFingerprint(opts) {
+    var o = opts || {};
+    var rows = Array.isArray(o.rows) ? o.rows : [];
+    var painted = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      painted.push({
+        card: cardSourceFingerprint(r),
+        fanout: r.fanout,
+        engaged: !!r.engaged,
+        engaged_agents: Array.isArray(r.engaged_agents) ? r.engaged_agents.slice() : [],
+        kickoff_submitted: !!r.kickoff_submitted,
+      });
+    }
+    return stableSerialize({
+      available: !!o.available,
+      empty: !!o.empty,
+      error: o.error ? String(o.error) : '',
+      ledger: o.ledger ? String(o.ledger) : '',
+      ledgerKey: o.ledgerKey ? String(o.ledgerKey) : '',
+      highlightId: o.highlightId ? String(o.highlightId) : '',
+      rows: painted,
+    });
+  }
+
+  function shouldSkipUnchangedPaint(prevKey, nextKey) {
+    return !!(prevKey && nextKey && prevKey === nextKey);
+  }
+
+  // Drop cached hover cards whose source fingerprint no longer matches.
+  // A refetch of identical row data keeps the entry.
+  function expireCardCache(cache, rows) {
+    if (!cache || typeof cache !== 'object') return { expired: 0, kept: 0 };
+    var byId = Object.create(null);
+    var list = Array.isArray(rows) ? rows : [];
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i];
+      if (!r || !r.id) continue;
+      byId[normalizeTargetID(r.id)] = r;
+    }
+    var expired = 0;
+    var kept = 0;
+    Object.keys(cache).forEach(function (id) {
+      var row = byId[id];
+      var hit = cache[id];
+      var fp = row ? cardSourceFingerprint(row) : '';
+      if (!row || !hit || hit.fingerprint !== fp) {
+        delete cache[id];
+        expired++;
+      } else {
+        kept++;
+      }
+    });
+    return { expired: expired, kept: kept };
+  }
+
   // 🎯T253: Frontier tab follows selected agent workdir ledger.
   // Empty string → server uses configured primary / process cwd (no ?cwd=).
   // Overseer / missing agent / blank workdir → primary. Fleet PO/worker with
@@ -1707,6 +1811,11 @@
     playChromeMode: playChromeMode,
     playChromeSpec: playChromeSpec,
     shouldSkipRerenderWhileTipLatched: shouldSkipRerenderWhileTipLatched,
+    stableSerialize: stableSerialize,
+    cardSourceFingerprint: cardSourceFingerprint,
+    frontierPaintFingerprint: frontierPaintFingerprint,
+    shouldSkipUnchangedPaint: shouldSkipUnchangedPaint,
+    expireCardCache: expireCardCache,
     resolveFrontierCwd: resolveFrontierCwd,
     frontierAPIURL: frontierAPIURL,
     // 🎯T267 target-ask focus

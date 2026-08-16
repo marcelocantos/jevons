@@ -257,6 +257,34 @@ test('placeLeftOfPointerRect prefers left of cursor; flips when clipped (🎯T18
   assert.ok(topClamp.top >= 4, 'top clamped');
 });
 
+test('attach lazyContent fills on first hover, not at attach', function () {
+  const doc = mockDoc();
+  const host = mockEl('td');
+  host.ownerDocument = doc;
+  let calls = 0;
+  const tip = IT.attach(host, '', {
+    doc: doc,
+    mount: doc.body,
+    html: true,
+    ariaLabel: 'lazy card',
+    lazyContent: function () {
+      calls++;
+      return { html: '<p>built</p>' };
+    },
+    hitGroup: true,
+    clampSelectors: [],
+  });
+  assert.ok(tip);
+  assert.strictEqual(calls, 0, 'not built at attach');
+  assert.ok(!tip.innerHTML || tip.innerHTML.indexOf('built') < 0, 'empty until hover');
+  host.dispatch('pointerenter', { clientX: 40, clientY: 40 });
+  assert.strictEqual(calls, 1, 'built on first hover');
+  assert.ok(tip.innerHTML.indexOf('built') >= 0, 'html applied');
+  assert.strictEqual(IT.isVisible(tip), true, 'shown after fill');
+  host.dispatch('pointerenter', { clientX: 41, clientY: 41 });
+  assert.strictEqual(calls, 1, 'second enter does not rebuild');
+});
+
 test('attach html + left-of-pointer shows immediately with card class (🎯T181)', function () {
   const doc = mockDoc();
   const host = mockEl('td');

@@ -742,6 +742,9 @@
   // opts:
   //   doc, mount — document / mount node (tests inject mocks)
   //   html — when true, set innerHTML instead of textContent (rich cards)
+  //   lazyContent — function called once on first show. Return a string
+  //     (html or text per opts.html) or { html, text, ariaLabel, afterFill }.
+  //     Empty `text` is allowed when lazyContent is set (frontier cards).
   //   ariaLabel — plain string for aria-label
   //   placement — 'above-host' (default) | 'left-of-pointer' (🎯T181)
   //                | 'right-of-host' (🎯T326 chat hotspots: finger left, card right)
@@ -755,17 +758,19 @@
   //   tableEl / tableRect — optional table bounds for hermetic inject
   //   hitRect — optional pure inject for hermetic hit-rect tests
   function attach(host, text, opts) {
-    var label = tipTextOrEmpty(text);
-    if (!host || !label) return null;
     var o = opts || {};
+    var lazy = typeof o.lazyContent === 'function' ? o.lazyContent : null;
+    var label = tipTextOrEmpty(text);
+    if (!host || (!label && !lazy)) return null;
     var doc = o.doc || host.ownerDocument || (typeof document !== 'undefined' ? document : null);
     if (!doc || typeof doc.createElement !== 'function') return null;
 
     if (typeof host.removeAttribute === 'function') host.removeAttribute('title');
     else if ('title' in host) host.title = '';
 
-    var aria = tipTextOrEmpty(o.ariaLabel) || label.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    if (typeof host.setAttribute === 'function') {
+    var aria = tipTextOrEmpty(o.ariaLabel)
+      || (label ? label.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '');
+    if (aria && typeof host.setAttribute === 'function') {
       host.setAttribute('aria-label', aria);
     }
     if (host.classList && host.classList.add) host.classList.add(HOST_CLASS);
@@ -777,10 +782,9 @@
     var extra = tipTextOrEmpty(o.className);
     tip.className = TIP_CLASS + (extra ? (' ' + extra) : '');
     tip.setAttribute('role', 'tooltip');
-    if (o.html) {
-      tip.innerHTML = label;
-    } else {
-      tip.textContent = label;
+    if (label) {
+      if (o.html) tip.innerHTML = label;
+      else tip.textContent = label;
     }
     tip.style.display = 'none';
     tip.style.position = 'fixed';
@@ -1021,9 +1025,32 @@
       samplePointer(x, y);
     }
 
+    function fillLazy() {
+      if (!lazy || tip._instantTipFilled) return;
+      tip._instantTipFilled = true;
+      var c = null;
+      try { c = lazy(); } catch (_) { c = null; }
+      if (c == null) return;
+      if (typeof c === 'string') {
+        if (o.html) tip.innerHTML = c;
+        else tip.textContent = c;
+        return;
+      }
+      if (typeof c !== 'object') return;
+      if (c.html != null) tip.innerHTML = c.html;
+      else if (c.text != null) tip.textContent = c.text;
+      if (c.ariaLabel && typeof host.setAttribute === 'function') {
+        host.setAttribute('aria-label', c.ariaLabel);
+      }
+      if (typeof c.afterFill === 'function') {
+        try { c.afterFill(tip); } catch (_) { /* product hover must not throw */ }
+      }
+    }
+
     function onHostEnter(ev) {
       overHost = true;
       clearHideTimer();
+      fillLazy();
       if (SHOW_DELAY_MS > 0) return;
       showTip(tip, host, placeOpts(ev));
       recomputeHitRect();

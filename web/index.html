@@ -4495,9 +4495,10 @@ window.copyMermaidImage = copyMermaidImage;
 window.svgToPngBlob = svgToPngBlob;
 window.handleMermaidAction = handleMermaidAction;
 function renderMermaidIn(container) {
-  if (!container || !ensureMermaid()) return;
+  if (!container || !ensureMermaid()) return Promise.resolve();
   const msg = container.closest ? container.closest('.msg') : null;
   if (msg && !msg._mermaidCache) msg._mermaidCache = Object.create(null);
+  const jobs = [];
   container.querySelectorAll('code.language-mermaid').forEach(code => {
     const host = code.closest('pre') || code;
     const src = code.textContent;
@@ -4508,19 +4509,20 @@ function renderMermaidIn(container) {
       wrap.innerHTML = svg;
       attachMermaidToolbar(wrap, src);
       if (host.parentNode) host.replaceWith(wrap);
-      scrollDownThrottled();
+      if (msg) scrollDownThrottled();
     };
     if (cached) { paint(cached); return; }
     const id = 'mmd-' + (++mermaidSeq);
-    Promise.resolve().then(() => mermaid.render(id, src)).then(({ svg }) => {
+    jobs.push(Promise.resolve().then(() => mermaid.render(id, src)).then(({ svg }) => {
       if (msg) msg._mermaidCache[src] = svg;
       paint(svg);
     }).catch(() => {
       // Invalid diagram — leave the code block; sweep any temp render node
       // mermaid may have appended to <body> (id or 'd'+id).
       [id, 'd' + id].forEach(x => { const n = document.getElementById(x); if (n) n.remove(); });
-    });
+    }));
   });
+  return Promise.all(jobs);
 }
 // 🎯T145/T146: normalize smushed ``` fences before marked so prose:```lang\n
 // never fuses a real opening fence onto the preceding sentence; mid-prose
@@ -9397,6 +9399,8 @@ const frontierPaneEl = document.getElementById('frontier-pane');
 const frontierBodyEl = document.getElementById('frontier-body');
 const rhsTabMeta = document.getElementById('rhs-tab-meta');
 let frontierPollTimer = 0;
+let lastFrontierPaintKey = '';
+let frontierCardCache = Object.create(null);
 // 🎯T354: RSI coach judgment list (bare v1).
 const coachPaneEl = document.getElementById('coach-pane');
 const coachBodyEl = document.getElementById('coach-body');
@@ -10107,6 +10111,39 @@ function renderFrontierTable(model) {
     lastFrontierLedger = model.ledger ? String(model.ledger) : '';
     lastFrontierCwd = model.cwd ? String(model.cwd) : '';
   }
+  const agents = (model && model.agents) || frontierAgentsCache || [];
+  // 🎯T389: scope the merge to this ledger — the fleet spans several repos and
+  // target ids are per-ledger, so another repo's T19 worker must not mark this
+  // repo's T19 row engaged.
+  let rows = (typeof FrontierTable !== 'undefined' && FrontierTable.applyEngagement)
+    ? FrontierTable.applyEngagement(model.rows || [], agents, model.ledgerKey || '')
+    : (model.rows || []);
+  // 🎯T278: overlay optimistic kickoff-submitted; prune when engagement lands.
+  if (typeof FrontierTable !== 'undefined' && FrontierTable.applyKickoffSubmitted) {
+    if (typeof FrontierTable.pruneKickoffSubmitted === 'function') {
+      frontierKickoffSubmitted = FrontierTable.pruneKickoffSubmitted(
+        frontierKickoffSubmitted, rows);
+    }
+    rows = FrontierTable.applyKickoffSubmitted(rows, frontierKickoffSubmitted);
+  }
+  // 🎯T267: emphasize row matching frontierHighlightId (target-ask focus).
+  const highlightId = (typeof frontierHighlightId !== 'undefined' && frontierHighlightId)
+    ? frontierHighlightId
+    : '';
+  if (typeof FrontierTable !== 'undefined' && FrontierTable.expireCardCache) {
+    FrontierTable.expireCardCache(frontierCardCache, rows);
+  }
+  const paintKey = (typeof FrontierTable !== 'undefined' && FrontierTable.frontierPaintFingerprint)
+    ? FrontierTable.frontierPaintFingerprint({
+        available: !!(model && model.available),
+        empty: !!(model && model.empty),
+        error: (model && model.error) || '',
+        ledger: (model && model.ledger) || '',
+        ledgerKey: (model && model.ledgerKey) || '',
+        highlightId: highlightId,
+        rows: rows,
+      })
+    : '';
   // 🎯T230: never tear down a latched InstantTip (pointer over tip or host).
   // Quiet poll / frontier_changed used to removeChild every .instant-tip,
   // which felt like an idle auto-timeout while the mouse sat still on the card.
@@ -10115,6 +10152,12 @@ function renderFrontierTable(model) {
       && InstantTip.anyHoverLatched()) {
     return;
   }
+  // Identical painted data (not "we fetched again") → leave the table alone.
+  if (typeof FrontierTable !== 'undefined' && FrontierTable.shouldSkipUnchangedPaint
+      && FrontierTable.shouldSkipUnchangedPaint(lastFrontierPaintKey, paintKey)) {
+    return;
+  }
+  lastFrontierPaintKey = paintKey;
   // Drop previous fixed-layer tips (hosts are about to be destroyed).
   // Prefer InstantTip.discardDetachedTips so registry + sticky state stay consistent.
   if (typeof InstantTip !== 'undefined' && typeof InstantTip.discardDetachedTips === 'function') {
@@ -10160,25 +10203,6 @@ function renderFrontierTable(model) {
   table.id = 'frontier-table';
   table.setAttribute('aria-label', 'Bullseye frontier');
   const tbody = document.createElement('tbody');
-  const agents = (model && model.agents) || frontierAgentsCache || [];
-  // 🎯T389: scope the merge to this ledger — the fleet spans several repos and
-  // target ids are per-ledger, so another repo's T19 worker must not mark this
-  // repo's T19 row engaged.
-  let rows = (typeof FrontierTable !== 'undefined' && FrontierTable.applyEngagement)
-    ? FrontierTable.applyEngagement(model.rows || [], agents, model.ledgerKey || '')
-    : (model.rows || []);
-  // 🎯T278: overlay optimistic kickoff-submitted; prune when engagement lands.
-  if (typeof FrontierTable !== 'undefined' && FrontierTable.applyKickoffSubmitted) {
-    if (typeof FrontierTable.pruneKickoffSubmitted === 'function') {
-      frontierKickoffSubmitted = FrontierTable.pruneKickoffSubmitted(
-        frontierKickoffSubmitted, rows);
-    }
-    rows = FrontierTable.applyKickoffSubmitted(rows, frontierKickoffSubmitted);
-  }
-  // 🎯T267: emphasize row matching frontierHighlightId (target-ask focus).
-  const highlightId = (typeof frontierHighlightId !== 'undefined' && frontierHighlightId)
-    ? frontierHighlightId
-    : '';
   rows.forEach(function (row) {
     const tr = document.createElement('tr');
     const classes = [];
@@ -10215,25 +10239,15 @@ function renderFrontierTable(model) {
     name.textContent = (typeof FrontierTable !== 'undefined')
       ? FrontierTable.shortName(fullName, 72)
       : fullName;
-    // 🎯T181/T184: full semantic card on ID and name (markdown HTML + mermaid deps).
+    // 🎯T181/T184: rich card on ID+name. Build on first hover only; cache
+    // rendered HTML (incl. mermaid SVG) until that row's source data changes.
     if (typeof InstantTip !== 'undefined' && typeof FrontierTable !== 'undefined'
         && FrontierTable.formatTargetCardMarkdown) {
-      const md = FrontierTable.formatTargetCardMarkdown(row);
       const plain = FrontierTable.formatTargetCardPlain
         ? FrontierTable.formatTargetCardPlain(row)
-        : md;
-      if (md) {
-        let html = md;
-        // Markdown-bearing fields (acceptance/context/attestation + mermaid fence)
-        // via marked / parseAssistantMarkdown — not plain escaped text only.
-        if (typeof parseAssistantMarkdown === 'function') {
-          try { html = parseAssistantMarkdown(md); } catch (_) { html = md; }
-        } else if (typeof marked !== 'undefined' && marked.parse) {
-          try { html = marked.parse(md); } catch (_) { html = md; }
-        }
-        // 🎯T186/T231: sticky card; ONE hit rect = AABB(card ∪ id+name).
-        // Leave rect → dismiss immediately (HIDE_GRACE_MS=0). No bridge element.
-        // groupHosts = id+name of active row; clamp right edge left of table.
+        : '';
+      if (row.id) {
+        const cardRow = row;
         const cardOpts = {
           html: true,
           ariaLabel: plain,
@@ -10243,13 +10257,48 @@ function renderFrontierTable(model) {
           hitGroup: true,
           groupHosts: [id, name],
           clampSelectors: ['#frontier-table', '#frontier-body'],
+          lazyContent: function () {
+            const tid = FrontierTable.normalizeTargetID
+              ? FrontierTable.normalizeTargetID(cardRow.id)
+              : String(cardRow.id || '').replace(/^🎯/, '').trim();
+            const fp = FrontierTable.cardSourceFingerprint
+              ? FrontierTable.cardSourceFingerprint(cardRow)
+              : '';
+            const hit = tid ? frontierCardCache[tid] : null;
+            if (hit && hit.fingerprint === fp && typeof hit.html === 'string') {
+              return { html: hit.html, ariaLabel: hit.plain || plain };
+            }
+            const md = FrontierTable.formatTargetCardMarkdown(cardRow);
+            let html = md;
+            if (typeof parseAssistantMarkdown === 'function') {
+              try { html = parseAssistantMarkdown(md); } catch (_) { html = md; }
+            } else if (typeof marked !== 'undefined' && marked.parse) {
+              try { html = marked.parse(md); } catch (_) { html = md; }
+            }
+            return {
+              html: html,
+              ariaLabel: plain,
+              afterFill: function (tipEl) {
+                const done = (typeof renderMermaidIn === 'function')
+                  ? renderMermaidIn(tipEl)
+                  : Promise.resolve();
+                Promise.resolve(done).then(function () {
+                  if (!tid) return;
+                  if (FrontierTable.cardSourceFingerprint
+                      && FrontierTable.cardSourceFingerprint(cardRow) !== fp) {
+                    return;
+                  }
+                  frontierCardCache[tid] = {
+                    fingerprint: fp,
+                    html: tipEl.innerHTML,
+                    plain: plain,
+                  };
+                });
+              },
+            };
+          },
         };
-        // Single attach per row (id primary; name in groupHosts hit rect).
-        const tipCard = InstantTip.attach(id, html, cardOpts);
-        // 🎯T184: render mermaid minigraph inside card tips (same path as chat).
-        if (typeof renderMermaidIn === 'function' && tipCard) {
-          renderMermaidIn(tipCard);
-        }
+        InstantTip.attach(id, '', cardOpts);
       }
     } else if (fullName && typeof InstantTip !== 'undefined') {
       // Fallback: name-only tip when pure helpers unavailable.

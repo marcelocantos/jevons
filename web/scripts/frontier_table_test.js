@@ -506,11 +506,14 @@ test('T181 index.html rich card tip on id/name + InstantTip placement', function
 // 🎯T184: index wires mermaid render on card tips + mermaid CSS in tip.
 test('T184 index.html mermaid on target card + semantic payload fields', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const start = html.indexOf('// 🎯T173: headerless table');
+  const start = html.indexOf('function renderFrontierTable');
   assert.ok(start >= 0);
   const end = html.indexOf('function loadFrontier', start);
-  const region = html.slice(start, end > start ? end : start + 9000);
+  const region = html.slice(start, end > start ? end : start + 12000);
   assert.ok(region.indexOf('renderMermaidIn') >= 0, 'renderMermaidIn on tip: ' + region.slice(0, 200));
+  assert.ok(region.indexOf('lazyContent') >= 0, 'card built on hover, not at remount');
+  assert.ok(region.indexOf('frontierCardCache') >= 0, 'hover-card cache');
+  assert.ok(region.indexOf('shouldSkipUnchangedPaint') >= 0, 'skip remount when paint data unchanged');
   assert.ok(region.indexOf('parseAssistantMarkdown') >= 0, 'markdown path for card');
   assert.ok(region.indexOf('left-of-pointer') >= 0 || region.indexOf('PLACE_LEFT_OF_POINTER') >= 0,
     'placement retained');
@@ -521,6 +524,74 @@ test('T184 index.html mermaid on target card + semantic payload fields', functio
   const src = fs.readFileSync(path.join(__dirname, 'frontier_table.js'), 'utf8');
   assert.ok(src.indexOf('formatDepMinigraph') >= 0, 'formatDepMinigraph exported');
   assert.ok(src.indexOf('depends_on') >= 0, 'depends_on in client');
+});
+
+test('card fingerprint is stable; cache expires only on source change', function () {
+  const a = {
+    id: 'T184',
+    name: 'Hover cards',
+    status: 'Converging',
+    value: 8,
+    depends_on: [{ id: 'T181', name: 'Rich hover' }],
+    dependents: [],
+    acceptance: ['lazy mermaid'],
+    context: 'same',
+  };
+  const b = {
+    id: 'T184',
+    name: 'Hover cards',
+    status: 'Converging',
+    value: 8,
+    dependsOn: [{ id: 'T181', name: 'Rich hover' }],
+    dependents: [],
+    acceptance: ['lazy mermaid'],
+    context: 'same',
+  };
+  const fa = FT.cardSourceFingerprint(a);
+  const fb = FT.cardSourceFingerprint(b);
+  assert.ok(fa, 'fingerprint nonempty');
+  assert.strictEqual(fa, fb, 'key order / dependsOn alias must not change fingerprint');
+
+  const changed = Object.assign({}, a, { name: 'Renamed' });
+  assert.notStrictEqual(FT.cardSourceFingerprint(changed), fa, 'name change expires');
+
+  const cache = {
+    T184: { fingerprint: fa, html: '<div>cached</div>' },
+    T99: { fingerprint: 'stale', html: '<div>gone</div>' },
+  };
+  const sameFetch = FT.expireCardCache(cache, [b]);
+  assert.strictEqual(sameFetch.kept, 1, 'identical refetch keeps cache');
+  assert.strictEqual(sameFetch.expired, 1, 'missing T99 dropped');
+  assert.ok(cache.T184 && cache.T184.html === '<div>cached</div>', 'T184 kept');
+  assert.ok(!cache.T99, 'T99 gone');
+
+  const afterRename = FT.expireCardCache(cache, [changed]);
+  assert.strictEqual(afterRename.expired, 1, 'changed source drops cache');
+  assert.ok(!cache.T184, 'renamed row evicted');
+});
+
+test('unchanged paint fingerprint skips remount; fetch identity does not count', function () {
+  assert.strictEqual(FT.shouldSkipUnchangedPaint('', 'x'), false, 'first paint');
+  assert.strictEqual(FT.shouldSkipUnchangedPaint('a', 'a'), true);
+  assert.strictEqual(FT.shouldSkipUnchangedPaint('a', 'b'), false);
+
+  const rows = [{
+    id: 'T1', name: 'One', status: 'Converging', fanout: 0,
+    dependents: [], depends_on: [],
+  }];
+  const k1 = FT.frontierPaintFingerprint({
+    available: true, empty: false, ledger: '/x', rows: rows,
+  });
+  const k2 = FT.frontierPaintFingerprint({
+    available: true, empty: false, ledger: '/x', rows: rows,
+    updatedAt: 'later',
+  });
+  assert.strictEqual(k1, k2, 'updatedAt / extra fetch fields ignored');
+  const k3 = FT.frontierPaintFingerprint({
+    available: true, empty: false, ledger: '/x',
+    rows: [Object.assign({}, rows[0], { name: 'Two' })],
+  });
+  assert.notStrictEqual(k1, k3, 'row rename changes paint key');
 });
 
 // 🎯T182: pure kickoff request → jevons-po send path with target id/name brief.
