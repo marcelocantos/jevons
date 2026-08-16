@@ -531,6 +531,31 @@ test('T119.3 prefix layout: canvas height is the sum, no sibling shells', functi
   assert.strictEqual(VL.layoutCount(L), 3);
 });
 
+test('T119.3 rowLayoutHeight reserves timestamp chrome; turn-markers do not', function () {
+  assert.strictEqual(VL.BUBBLE_BOTTOM_CHROME_PX, 19);
+  assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons' }), 287);
+  assert.strictEqual(VL.rowLayoutHeight(220, { role: 'user' }), 239);
+  assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons', timeOverflowPx: 13 }), 287,
+    '19px margin covers a 13px timestamp');
+  assert.strictEqual(VL.rowLayoutHeight(268, { role: 'jevons', timeOverflowPx: 24 }), 292,
+    'a taller overflow wins over the 19px reserve');
+  assert.strictEqual(VL.rowLayoutHeight(13.2, { role: 'turn-marker' }), 13.2);
+  assert.ok(VL.isParkedListElement('turn-marker'));
+  assert.ok(!VL.isParkedListElement('jevons'));
+});
+
+test('T119.3 index.html parks turn-markers and measures chrome into the prefix', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('rowLayoutHeight') >= 0, 'live measure uses rowLayoutHeight');
+  assert.ok(html.indexOf('isParkedListElement') >= 0, 'detach parks turn-markers');
+  assert.ok(/if \(row\.role === 'turn-marker'\) return null/.test(html),
+    'attach never rebuilds a turn-marker via buildMsg');
+  assert.ok(/#messages-canvas > \.turn-marker/.test(html),
+    'canvas turn-markers are absolutely positioned list rows');
+});
+
 test('T119.3 mid-list collapse/expand shifts only tops below and keeps viewport policy', function () {
   const L = VL.createTranscriptLayout({ gap: 8 });
   for (let i = 0; i < 10; i++) VL.layoutPush(L, 80);

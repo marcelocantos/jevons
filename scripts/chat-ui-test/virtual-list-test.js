@@ -154,6 +154,65 @@ function startServer() {
       );
     }
 
+    // Turn-markers are list rows. Page-up must re-home the real node,
+    // not mint an empty .msg.turn-marker (the 72px whitespace + vanished
+    // "⋯ n steps"). Bubble height includes the outside timestamp chrome.
+    const marker = await page.evaluate(() => {
+      if (typeof window.resetTranscript === 'function') window.resetTranscript();
+      window.addMsg('jevons', 'before marker\n' + 'x'.repeat(40));
+      if (typeof window.startTurn === 'function') window.startTurn();
+      if (typeof window.addTurnItem === 'function') {
+        window.addTurnItem('tool-use', 'Read');
+        window.addTurnItem('tool-result', 'ok');
+      }
+      window.addMsg('user', 'after marker\n' + 'y'.repeat(40));
+      const el = document.getElementById('messages');
+      el.scrollTop = 0;
+      for (let p = 0; p < 8; p++) window.virtualizeMessages();
+      el.scrollTop = el.scrollHeight;
+      for (let p = 0; p < 8; p++) window.virtualizeMessages();
+      const rows = window.__transcriptRows || [];
+      const markers = rows.filter((r) => r && r.role === 'turn-marker');
+      const fake = document.querySelectorAll('#messages-canvas > .msg.turn-marker').length;
+      const real = [];
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r || r.role !== 'turn-marker') continue;
+        real.push({
+          hasEl: !!(r.el),
+          connected: !!(r.el && r.el.isConnected),
+          cls: r.el ? r.el.className : '',
+          label: r.el && r.el._label ? r.el._label.textContent : (r.text || ''),
+          storedH: window.__transcriptLayout.heights[i],
+        });
+      }
+      const user = rows.find((r) => r && r.role === 'user' && r.el && r.el.isConnected);
+      const ui = user ? user.el._vIndex : -1;
+      const userH = ui >= 0 ? window.__transcriptLayout.heights[ui] : 0;
+      const userBox = user && user.el ? user.el.getBoundingClientRect().height : 0;
+      return {
+        markerRows: markers.length,
+        fakeMsgMarkers: fake,
+        real: real,
+        userH: userH,
+        userBox: userBox,
+        chrome: window.VirtualList && window.VirtualList.BUBBLE_BOTTOM_CHROME_PX,
+      };
+    });
+    if (marker.markerRows < 1) failures.push('expected a turn-marker row, got ' + marker.markerRows);
+    if (marker.fakeMsgMarkers > 0) {
+      failures.push('page-up rebuilt turn-markers as .msg shells: ' + marker.fakeMsgMarkers);
+    }
+    if (!marker.real.some((r) => r.connected && /turn-marker/.test(r.cls) && !/\bmsg\b/.test(r.cls)
+        && /step/.test(r.label))) {
+      failures.push('real ⋯ n steps marker missing after page-up ' + JSON.stringify(marker.real));
+    }
+    if (marker.chrome && marker.userBox > 0 && marker.userH < marker.userBox + marker.chrome - 1) {
+      failures.push('user row height missing timestamp chrome ' + JSON.stringify({
+        userH: marker.userH, userBox: marker.userBox, chrome: marker.chrome,
+      }));
+    }
+
     // 🎯T246: stay material while partially on-screen; collapse/dematerialize only when fully above fold.
     // Controlled free-scroll geometry (short viewport would pin-collapse tall on new msg).
     const t246Virt = await page.evaluate(async () => {

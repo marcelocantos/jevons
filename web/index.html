@@ -111,6 +111,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #messages-canvas > .msg.status { left: 50%; transform: translateX(-50%); }
 #messages > .turn-marker,
 #messages > #messages-end { position: relative; }
+#messages-canvas > .turn-marker { position: absolute; left: 0; right: 0; }
 /* Absolute rows already skip off-band work; content-visibility:auto on an
    abs child of a tall canvas reports 0×0 rects and we detach the row the
    owner is looking at. Always visible. */
@@ -1694,14 +1695,36 @@ function applyRowHeight(index, newH) {
 }
 function noteRowHeightChange(el) {
   if (!el || el._vIndex == null) return;
-  const h = el.getBoundingClientRect ? el.getBoundingClientRect().height : el.offsetHeight;
+  const box = el.getBoundingClientRect ? el.getBoundingClientRect().height : el.offsetHeight;
+  const row = transcriptRows[el._vIndex];
+  const role = row ? row.role : (el.classList && el.classList.contains('user') ? 'user'
+    : (el.classList && el.classList.contains('turn-marker') ? 'turn-marker' : 'jevons'));
+  let timeOverflow = 0;
+  const time = el.querySelector && el.querySelector('.msg-time');
+  if (time && time.getBoundingClientRect && el.getBoundingClientRect) {
+    const cs = time.ownerDocument && time.ownerDocument.defaultView
+      && time.ownerDocument.defaultView.getComputedStyle
+      ? time.ownerDocument.defaultView.getComputedStyle(time) : null;
+    if (!cs || cs.display !== 'none') {
+      timeOverflow = Math.max(0, time.getBoundingClientRect().bottom - el.getBoundingClientRect().bottom);
+    }
+  }
+  const mb = (el.ownerDocument && el.ownerDocument.defaultView && el.ownerDocument.defaultView.getComputedStyle)
+    ? parseFloat(el.ownerDocument.defaultView.getComputedStyle(el).marginBottom) || 0
+    : 0;
+  const h = (typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
+    ? VirtualList.rowLayoutHeight(box, { role: role, timeOverflowPx: timeOverflow, marginBottomPx: mb })
+    : box;
   if (h > 0) applyRowHeight(el._vIndex, h);
 }
 function registerTranscriptRow(role, text, when, opts) {
   const o = opts || {};
-  const est = (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText)
+  const estBox = (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText)
     ? VirtualList.estimateHeightFromText(text || '')
     : 72;
+  const est = (typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
+    ? VirtualList.rowLayoutHeight(estBox, { role: role })
+    : estBox;
   const idx = (typeof VirtualList !== 'undefined' && VirtualList.layoutPush)
     ? VirtualList.layoutPush(transcriptLayout, est)
     : transcriptRows.length;
@@ -1726,11 +1749,14 @@ function prependTranscriptRecords(records) {
   const heights = [];
   for (let i = 0; i < list.length; i++) {
     const r = list[i];
-    heights.push(r && r.estHeight > 0
+    const box = r && r.estHeight > 0
       ? r.estHeight
       : ((typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText)
         ? VirtualList.estimateHeightFromText((r && r.text) || '')
-        : 72));
+        : 72);
+    heights.push((typeof VirtualList !== 'undefined' && VirtualList.rowLayoutHeight)
+      ? VirtualList.rowLayoutHeight(box, { role: r && r.role })
+      : box);
   }
   if (typeof VirtualList !== 'undefined' && VirtualList.layoutUnshiftMany) {
     VirtualList.layoutUnshiftMany(transcriptLayout, heights);
@@ -1772,6 +1798,17 @@ function attachTranscriptRow(index, opts) {
     row.el._vIndex = i;
     return row.el;
   }
+  // Parked nodes (turn-markers) are the real element — re-home, never
+  // rebuild via buildMsg (that minted empty .msg.turn-marker 72px shells).
+  if (row.el && !row.el.isConnected) {
+    if (typeof VirtualList !== 'undefined' && VirtualList.layoutTop) {
+      row.el.style.top = VirtualList.layoutTop(transcriptLayout, i) + 'px';
+    }
+    row.el._vIndex = i;
+    msgsCanvas.appendChild(row.el);
+    return row.el;
+  }
+  if (row.role === 'turn-marker') return null;
   const o = opts || {};
   const lazy = o.lazy !== false;
   const el = buildMsg(row.role, row.text, row.when, {
@@ -1802,6 +1839,10 @@ function detachTranscriptRow(index) {
   // Do not write height here — a 0×0 rect (or a clip) would shift the
   // prefix of every row below without T363 compensation.
   try { row.el.remove(); } catch (_) { /* isolated */ }
+  if (typeof VirtualList !== 'undefined' && VirtualList.isParkedListElement
+      && VirtualList.isParkedListElement(row.role)) {
+    return;
+  }
   row.el = null;
 }
 function truncateTranscriptFrom(index) {
@@ -3203,6 +3244,10 @@ function addTurnItem(cls, text) {
   turnItems.appendChild(d);
   const n = turnItems.children.length;
   turnDetails._label.textContent = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
+  if (turnDetails._vIndex != null && transcriptRows[turnDetails._vIndex]) {
+    transcriptRows[turnDetails._vIndex].text = turnDetails._label.textContent;
+  }
+  if (typeof noteRowHeightChange === 'function') noteRowHeightChange(turnDetails);
   // 🎯T71: mid-turn tool activity is the best ACP-available progress signal.
   if (cls === 'tool-use' || cls === 'tool-result') {
     const short = truncate(String(text || '').replace(/\s+/g, ' ').trim(), 48);

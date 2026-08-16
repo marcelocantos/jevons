@@ -1336,6 +1336,38 @@
   // T341 pin hysteresis, or T347 replay.
 
   const DEFAULT_ROW_GAP_PX = 8;
+  // Flex-era .msg.user/.msg.jevons margin-bottom: room for .msg-time
+  // (position:absolute; top:100%; margin-top:4px; ~10px type) plus a
+  // little air. Absolute rows ignore margin, so the prefix must own it.
+  const BUBBLE_BOTTOM_CHROME_PX = 19;
+
+  /**
+   * Layout height of one transcript row: border-box plus reserved
+   * bottom chrome. `.msg-time` sits outside the border box (top:100%),
+   * so a raw getBoundingClientRect().height lets the next row land on
+   * the timestamp. Turn-markers have no chrome.
+   */
+  function rowLayoutHeight(borderBoxHeight, opts) {
+    const box = Number(borderBoxHeight);
+    const h = Number.isFinite(box) && box > 0 ? box : 0;
+    const o = opts || {};
+    const role = o.role == null ? '' : String(o.role);
+    if (role === 'turn-marker' || role === 'status' || role === 'worker') {
+      return h;
+    }
+    const time = Number(o.timeOverflowPx);
+    const overflow = Number.isFinite(time) && time > 0 ? time : 0;
+    const mb = Number(o.marginBottomPx);
+    const chrome = Number.isFinite(mb) && mb > 0 ? mb : BUBBLE_BOTTOM_CHROME_PX;
+    if (role === 'user' || role === 'jevons' || role === '') {
+      return h + Math.max(overflow, chrome);
+    }
+    return h + overflow;
+  }
+
+  function isParkedListElement(role) {
+    return String(role || '') === 'turn-marker';
+  }
 
   function createTranscriptLayout(opts) {
     const o = opts || {};
@@ -1658,6 +1690,9 @@
 
     // 🎯T119.3: absolute-position transcript — prefix tops, no spacer.
     DEFAULT_ROW_GAP_PX: DEFAULT_ROW_GAP_PX,
+    BUBBLE_BOTTOM_CHROME_PX: BUBBLE_BOTTOM_CHROME_PX,
+    rowLayoutHeight: rowLayoutHeight,
+    isParkedListElement: isParkedListElement,
     createTranscriptLayout: createTranscriptLayout,
     rebuildPrefix: rebuildPrefix,
     layoutCount: layoutCount,
