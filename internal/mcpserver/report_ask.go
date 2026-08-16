@@ -185,6 +185,66 @@ var requestMarkers = []string{
 	"i need you to",
 }
 
+// 🎯T446: a report that MENTIONS asking is not asking.
+//
+// The 🎯T439 fix kept its own author alive. jv-t439-reap-request filed two
+// terminal reports declaring the mission over — commit SHA, three GREEN gate
+// ids — and the daemon skipped the reap on both: once on the report's own
+// description of the classifier it had just written ("a report that names an
+// input it is waiting on (brief resend, an answer, an unblock) is not a
+// finish"), once on the negation "I did not re-send anything". Neither hands
+// anything back to the parent, so both left a finished worker sitting in the
+// fleet list looking engaged — the 🎯T165 / 🎯T195 auto-deregister property
+// inverted for exactly the workers most likely to write about messaging.
+//
+// The guards below are the mirror of 🎯T439's own move: that target narrowed
+// the reap so an ask is not read as a finish, these narrow the ask so a mention
+// is not read as an ask. Each is pinned by one of the two real reports, and the
+// bias still favours keeping the agent — a phrase that survives all three
+// guards is one the worker wrote in its own voice, unnegated, in request
+// position.
+
+// bareVerbRequestMarkers are the request phrases that are also ordinary nouns
+// and gerunds: "a brief resend", "re-sending would stack a second copy". They
+// count as an ask only in request position — clause-initial (an imperative), or
+// after a cue that makes the clause a request. The rest of requestMarkers carry
+// their own grammar ("please send", "unblock me", "did not receive") and need
+// no such test.
+var bareVerbRequestMarkers = map[string]bool{
+	"resend":  true,
+	"re-send": true,
+}
+
+// requestCues make the clause they open a request, so a bare verb after one is
+// an ask rather than a mention.
+var requestCues = []string{
+	"please",
+	"kindly",
+	"can you",
+	"could you",
+	"would you",
+	"need you to",
+	"asking you to",
+	"i need",
+}
+
+// negationCues turn the clause they appear in into a statement that the ask was
+// NOT made. Scanned only within the marker's own clause: "I did not get
+// anything, please resend" is still a request, because the negation belongs to
+// the clause before the comma.
+var negationCues = []string{
+	"not",
+	"n't",
+	"never",
+	"without",
+	"neither",
+}
+
+// negationWindow bounds the backward scan for a negation cue. A cue further
+// back than this is in a different thought even when no punctuation separates
+// them.
+const negationWindow = 60
+
 // explicitIncompleteMarkers are outright statements of non-completion. They
 // outrank any completion word elsewhere in the same report: a worker that says
 // it has changed nothing has not finished, whatever else the prose contains.
@@ -261,12 +321,13 @@ func ClassifyReportAskDetail(report string) ReportAskFinding {
 	for _, class := range []struct {
 		class   ReportAskClass
 		markers []string
+		accept  func(lower, marker string, at int) bool
 	}{
-		{AskRequest, requestMarkers},
-		{AskExplicitIncomplete, explicitIncompleteMarkers},
-		{AskDecisionRequest, decisionRequestMarkers},
+		{AskRequest, requestMarkers, isRequestAsk},
+		{AskExplicitIncomplete, explicitIncompleteMarkers, nil},
+		{AskDecisionRequest, decisionRequestMarkers, nil},
 	} {
-		if m, i := firstMarker(lower, class.markers); i >= 0 {
+		if m, i := firstAcceptedMarker(lower, class.markers, class.accept); i >= 0 {
 			span, off := excerptAround(s, i, i+len(m))
 			return ReportAskFinding{Class: class.class, Marker: m, Span: span, Offset: off}
 		}
@@ -278,19 +339,116 @@ func ClassifyReportAskDetail(report string) ReportAskFinding {
 	return ReportAskFinding{Class: AskNone}
 }
 
+// firstAcceptedMarker returns the earliest occurrence of any marker that accept
+// admits, or ("", -1). A nil accept admits every occurrence, which is
+// firstMarker.
+//
+// A rejected occurrence never vetoes the report: the scan continues past it, so
+// "I did not re-send anything — please send the brief" still classifies on the
+// second phrase (🎯T446).
+func firstAcceptedMarker(lower string, markers []string, accept func(lower, marker string, at int) bool) (string, int) {
+	best, at := "", -1
+	for _, m := range markers {
+		for from := 0; from <= len(lower)-len(m); {
+			i := strings.Index(lower[from:], m)
+			if i < 0 {
+				break
+			}
+			i += from
+			if at >= 0 && i >= at {
+				break // a later occurrence of this marker cannot win
+			}
+			if accept == nil || accept(lower, m, i) {
+				best, at = m, i
+				break
+			}
+			from = i + 1
+		}
+	}
+	return best, at
+}
+
 // firstMarker returns the earliest of markers occurring in lower, so the span
 // points at the first thing the report said rather than at whichever phrase
 // happens to sit first in the list.
 func firstMarker(lower string, markers []string) (string, int) {
-	best, at := "", -1
-	for _, m := range markers {
-		i := strings.Index(lower, m)
-		if i < 0 || (at >= 0 && i >= at) {
-			continue
-		}
-		best, at = m, i
+	return firstAcceptedMarker(lower, markers, nil)
+}
+
+// isRequestAsk decides whether a request marker at `at` is the worker actually
+// asking for an input, rather than naming the phrase in passing (🎯T446).
+//
+// Three guards, each pinned by a real false positive:
+//   - the match is a whole phrase, not the head of a longer word, so the gerund
+//     in "re-sending would stack a second copy" is not the verb in "re-send it";
+//   - its own clause does not negate it, so "I did not re-send anything" is not
+//     a request to re-send;
+//   - a bare verb sits in request position — clause-initial or after a request
+//     cue — so "(brief resend, an answer, an unblock)" is vocabulary, not a
+//     demand.
+func isRequestAsk(lower, marker string, at int) bool {
+	if !wholePhraseAt(lower, marker, at) {
+		return false
 	}
-	return best, at
+	clause := clauseStart(lower, at)
+	if hasCueWord(lower[clause:at], negationCues) {
+		return false
+	}
+	if !bareVerbRequestMarkers[marker] {
+		return true
+	}
+	before := lower[clause:at]
+	return strings.TrimLeft(before, " \t*_`>-#") == "" || hasCueWord(before, requestCues)
+}
+
+// wholePhraseAt is true when the marker at `at` is not glued to a longer word on
+// either side. Hyphens count as word characters here, so "re-send" does not
+// match inside "re-sending" and "resend" does not match inside "resends".
+func wholePhraseAt(lower, marker string, at int) bool {
+	if at > 0 && isPhraseByte(lower[at-1]) {
+		return false
+	}
+	end := at + len(marker)
+	return end >= len(lower) || !isPhraseByte(lower[end])
+}
+
+func isPhraseByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '\''
+}
+
+// clauseStart is the offset of the start of the clause containing `at`, bounded
+// by negationWindow. Commas end a clause as firmly as full stops do here: in "I
+// did not get anything, please resend" the negation belongs to the clause
+// before the comma, and reading it as this clause's would reject a plain
+// request.
+func clauseStart(lower string, at int) int {
+	lo := at - negationWindow
+	if lo < 0 {
+		lo = 0
+	}
+	if i := strings.LastIndexAny(lower[lo:at], ".,;:!?\n()"); i >= 0 {
+		return lo + i + 1
+	}
+	return lo
+}
+
+// hasCueWord is true when s contains any cue as a whole word. Substring matching
+// would find "not" in "nothing" and "cannot".
+func hasCueWord(s string, cues []string) bool {
+	for _, cue := range cues {
+		for from := 0; from <= len(s)-len(cue); {
+			i := strings.Index(s[from:], cue)
+			if i < 0 {
+				break
+			}
+			i += from
+			if wholePhraseAt(s, cue, i) {
+				return true
+			}
+			from = i + 1
+		}
+	}
+	return false
 }
 
 // ReportAwaitsOverseer is true when the report needs an answer to continue, so
