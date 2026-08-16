@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 func TestClassifyIdleNudgeSkips(t *testing.T) {
@@ -56,6 +58,83 @@ func TestClassifyIdleNudgeSkips(t *testing.T) {
 				t.Fatalf("got %s/%s want %s/%s", act, reason, tc.action, tc.reason)
 			}
 		})
+	}
+}
+
+func TestT423SweepUsesDecoderNotACPIdle(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t423", WorkDir: dir, SessionID: "s1",
+		Purpose: claudia.PurposeWork, Materialized: true, AutoStart: true, TargetID: "T423",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	activity := NewIdleActivityTracker()
+	now := time.Unix(5000, 0)
+	activity.by = map[string]IdleActivity{
+		"jv-t423": {Phase: "idle", Updated: now.Add(-10 * time.Minute)},
+	}
+	var pushed int
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg: reg, Activity: activity, Now: now, OverseerName: "jevons",
+		SessionPhase: func(claudia.AgentDef) turnev.Phase { return turnev.PhaseWorking },
+		Push: func(target, event, text string) error {
+			pushed++
+			return nil
+		},
+		ProcessRunning: func(string) bool { return true },
+	})
+	if pushed != 0 {
+		t.Fatalf("decoder working still pushed %d; reps=%+v", pushed, reps)
+	}
+}
+
+func TestT423SystemicCapDoesNotPush(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		name := "jv-sys-" + string(rune('a'+i))
+		if err := reg.Register(claudia.AgentDef{
+			Name: name, WorkDir: dir, SessionID: "s" + name,
+			Purpose: claudia.PurposeWork, Materialized: true, AutoStart: true, TargetID: "T1",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Unix(6000, 0)
+	activity := NewIdleActivityTracker()
+	for _, d := range reg.List() {
+		activity.by[d.Name] = IdleActivity{Phase: "idle", Updated: now.Add(-10 * time.Minute)}
+	}
+	var pushed int
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg: reg, Activity: activity, Now: now, OverseerName: "jevons",
+		SessionPhase: func(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle },
+		Push: func(target, event, text string) error {
+			pushed++
+			return nil
+		},
+		ProcessRunning: func(string) bool { return true },
+	})
+	if pushed != 0 {
+		t.Fatalf("systemic pass pushed %d — cap must precede Push; reps=%+v", pushed, reps)
+	}
+	for _, r := range reps {
+		if r.Reason != "systemic_read" {
+			t.Fatalf("%s reason=%s want systemic_read", r.Name, r.Reason)
+		}
+		if r.Delivered {
+			t.Fatalf("%s delivered after cap", r.Name)
+		}
 	}
 }
 
@@ -361,6 +440,7 @@ func TestSweepIdleNudgesPostRestartFullBriefThenContinue(t *testing.T) {
 		Now:            later,
 		PostRestart:    false,
 		OverseerName:   "jevons",
+		SessionPhase:   func(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle },
 		BriefPresent:   func(name string) bool { return briefed[name] },
 		MarkBriefed:    func(name string) { briefed[name] = true },
 		DesignGated:    func(tid string) bool { return tid == "T29" },
@@ -432,6 +512,7 @@ func TestSweepIdleNudgesEmptyTargetIDWorkEligible(t *testing.T) {
 	var pushed int
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg: reg, Activity: activity, Now: now, OverseerName: "jevons",
+		SessionPhase: func(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle },
 		Push: func(target, event, text string) error {
 			pushed++
 			return nil

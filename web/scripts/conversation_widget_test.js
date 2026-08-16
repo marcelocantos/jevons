@@ -792,9 +792,15 @@ test('T119.6 startTurn twice leaves one canvas child', function () {
   alwaysMint(mutant);
   assert.strictEqual(mutant.children.length, 2, 'mutant must be the failure mode the oracle detects');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const start = html.match(/function startTurn\(\) \{[\s\S]*?\n\}/);
+  const start = html.match(/function startTurn\(\) \{[\s\S]*?\nfunction closeTurn/);
   assert.ok(start, 'startTurn exists');
   assert.ok(/isConnected/.test(start[0]), 'startTurn is idempotent while the slot is connected');
+  assert.ok(!/createElement/.test(start[0]),
+    'T119.4: startTurn must not mint DOM — apply/attachTranscriptRow is the only mint');
+  const close = html.match(/function closeTurn\(\) \{[\s\S]*?\nfunction formatAgentNote/);
+  assert.ok(close, 'closeTurn exists');
+  assert.ok(!/\.remove\(\)/.test(close[0]),
+    'T119.4: closeTurn must not destroy nodes — detach/apply does');
   const opt = html.match(/function paintOptimisticMainUser\([\s\S]*?\n\}/);
   assert.ok(opt, 'paintOptimisticMainUser exists');
   assert.ok(!/startTurn\(\)/.test(opt[0]),

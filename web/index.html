@@ -1928,9 +1928,26 @@ function attachTranscriptRow(index, opts) {
     msgsCanvas.appendChild(row.el);
     return row.el;
   }
-  // A turn-marker is only the real startTurn node. Never buildMsg it —
-  // that mints .msg.turn-marker + .msg-time ("now") for an unused slot.
-  if (row.kind === 'turn-slot' || row.role === 'turn-marker') return null;
+  // 🎯T119.4: apply is the only mint. A turn-slot is a compact marker,
+  // never buildMsg (.msg + clock).
+  if (row.kind === 'turn-slot' || row.role === 'turn-marker') {
+    const mint = (typeof ConversationWidget !== 'undefined' && ConversationWidget.createTurnMarkerEl)
+      ? ConversationWidget.createTurnMarkerEl
+      : null;
+    if (!mint || !document) return null;
+    const el = mint(document, { items: [], text: row.text || '' });
+    if (!el) return null;
+    el.style.position = 'absolute';
+    el.style.left = '0';
+    el.style.right = '0';
+    if (typeof VirtualList !== 'undefined' && VirtualList.layoutTop) {
+      el.style.top = VirtualList.layoutTop(transcriptLayout, i) + 'px';
+    }
+    el._vIndex = i;
+    msgsCanvas.appendChild(el);
+    row.el = el;
+    return el;
+  }
   const o = opts || {};
   const lazy = o.lazy !== false;
   const el = buildMsg(row.role, row.text, row.when, {
@@ -1970,11 +1987,8 @@ function detachTranscriptRow(index) {
 function removeTranscriptRow(index) {
   const i = index | 0;
   if (i < 0 || i >= transcriptRows.length) return;
-  const row = transcriptRows[i];
-  if (row && row.el) {
-    try { row.el.remove(); } catch (_) { /* isolated */ }
-    row.el = null;
-  }
+  // 🎯T119.4: detach (apply) then drop the model row. Do not remove() here.
+  detachTranscriptRow(i);
   if (typeof VirtualList !== 'undefined' && VirtualList.modelRemoveAt) {
     VirtualList.modelRemoveAt(transcriptModel, i);
   } else {
@@ -1985,7 +1999,8 @@ function removeTranscriptRow(index) {
     if (transcriptRows[k].el) transcriptRows[k].el._vIndex = k;
   }
   syncTranscriptCanvas();
-  positionAttachedFrom(i);
+  if (typeof virtualizeMessages === 'function') virtualizeMessages();
+  else positionAttachedFrom(i);
 }
 function truncateTranscriptFrom(index) {
   const i = Math.max(0, index | 0);
@@ -3303,35 +3318,21 @@ function sealAssistantStream(streamId) {
 }
 
 function startTurn() {
-  // 🎯T119.6: one open slot is one marker. paintOptimisticMainUser and
-  // onTurnSlotOpen both used to mint; a second append shared the first
-  // marker's prefix-sum top and stacked "⋯ n steps" labels.
+  // 🎯T119.6: one open slot is one marker.
   if (turnDetails && turnDetails.isConnected) return;
-  // A compact, non-expanding marker: a one-line label whose tool detail
-  // lives in a .turn-tip that only appears on hover.
-  turnDetails = document.createElement('div');
-  turnDetails.className = 'turn-marker';
-  const label = document.createElement('span');
-  turnDetails.appendChild(label);
-  turnItems = document.createElement('div');
-  turnItems.className = 'turn-tip';
-  turnDetails.appendChild(turnItems);
-  turnDetails._label = label;
+  // 🎯T119.4: mutate the model, then apply. attachTranscriptRow is the
+  // only mint.
   const row = registerTranscriptRow('turn-marker', '', Date.now(), {});
-  row.el = turnDetails;
-  turnDetails._vIndex = transcriptRows.length - 1;
-  if (typeof VirtualList !== 'undefined' && VirtualList.layoutTop) {
-    turnDetails.style.position = 'absolute';
-    turnDetails.style.top = VirtualList.layoutTop(transcriptLayout, turnDetails._vIndex) + 'px';
-    turnDetails.style.left = '0';
-    turnDetails.style.right = '0';
-  }
-  // 🎯T119.4: attach through apply, not a second append. virtualize parks
-  // and re-homes from the model; a fallback append is only for tests
-  // without the projector.
   if (typeof virtualizeMessages === 'function') virtualizeMessages();
-  else if (msgsCanvas && !turnDetails.isConnected) msgsCanvas.appendChild(turnDetails);
-  applyRowHeight(turnDetails._vIndex, Math.max(16, turnDetails.offsetHeight || 16));
+  else attachTranscriptRow(transcriptRows.length - 1, { lazy: false });
+  turnDetails = row.el;
+  turnItems = turnDetails && turnDetails._items;
+  if (turnDetails) {
+    turnDetails._vIndex = transcriptRows.length - 1;
+    if (typeof applyRowHeight === 'function') {
+      applyRowHeight(turnDetails._vIndex, Math.max(16, turnDetails.offsetHeight || 16));
+    }
+  }
   turnCount++;
   scrollDownThrottled();
 }
@@ -3341,12 +3342,9 @@ function closeTurn() {
   const n = turnItems ? turnItems.children.length : 0;
   if (n === 0) {
     const idx = turnDetails._vIndex;
-    try { turnDetails.remove(); } catch (_) { /* isolated */ }
-    // Unused slot — no tools fired. Delete the row. Leaving it in the
-    // list made attach rebuild it as .msg.turn-marker + a clock ("now").
+    // Unused slot — delete the row. apply/detach destroys the node.
     if (idx != null) removeTranscriptRow(idx);
   }
-  // else: leave the compact marker in place; hover reveals the detail.
   turnDetails = null;
   turnItems = null;
 }

@@ -599,9 +599,9 @@ test('T119.3 index.html parks turn-markers and measures chrome into the prefix',
   assert.ok(html.indexOf('isParkedListElement') >= 0, 'detach parks real nodes');
   assert.ok(/row\.el && !row\.el\.isConnected/.test(html),
     'attach re-homes a parked node instead of buildMsg');
-  assert.ok(/row\.kind === 'turn-slot'/.test(html) &&
-    /return null/.test(html.slice(html.indexOf("row.kind === 'turn-slot'"), html.indexOf("row.kind === 'turn-slot'") + 120)),
-    'attach never rebuilds an unused turn slot as .msg + clock');
+  const slotAttach = html.slice(html.indexOf("row.kind === 'turn-slot'"), html.indexOf("row.kind === 'turn-slot'") + 700);
+  assert.ok(/createTurnMarkerEl/.test(slotAttach) && !/buildMsg\(row\.role/.test(slotAttach),
+    'attach mints a turn-slot via createTurnMarkerEl, never buildMsg');
   assert.ok(/function removeTranscriptRow/.test(html) &&
     /function closeTurn\(\)[\s\S]{0,500}removeTranscriptRow/.test(html),
     'empty closeTurn deletes the unused slot from the list');

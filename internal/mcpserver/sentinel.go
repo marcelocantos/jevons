@@ -24,6 +24,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/poproactive"
 	"github.com/marcelocantos/jevons/internal/staffops"
 	"github.com/marcelocantos/jevons/internal/targetfile"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T219: durable background sentinel — observe→classify→act while jevonsd is up.
@@ -553,13 +554,13 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 					ao.Detail = r.Error
 				}
 			}
-			// Idle residue via activity tracker.
-			if s.idleActivity != nil && alive {
-				ph := s.idleActivity.Get(d.Name).Phase
-				ao.Phase = ph
+			// Idle residue via the 🎯T423 decoder, not ACP absence.
+			if alive {
+				decoded := ClassifyAgentSessionPhase(d, DefaultSessionRoots())
+				ao.Phase = decoded.String()
 				openMission := strings.TrimSpace(d.TargetID) != ""
 				ao.OpenMission = openMission
-				if (ph == "idle" || ph == "") && openMission {
+				if decoded == turnev.PhaseIdle && openMission {
 					ao.IdleResidue = true
 					sym := "idle:" + d.Name
 					rt.mu.Lock()

@@ -609,6 +609,10 @@ type IdleNudgeSweepArgs struct {
 	// is all-working, so a sweep assembled without one nudges exactly as it
 	// did before intent existed.
 	Intent fleetintent.Snapshot
+	// SessionPhase is the 🎯T423 reading: T422 decoder over the agent's
+	// current session. Nil uses ClassifyAgentSessionPhase against
+	// DefaultSessionRoots. Tests inject a fixture.
+	SessionPhase func(d claudia.AgentDef) turnev.Phase
 }
 
 // SweepIdleNudges classifies every registered agent and delivers nudges.
@@ -630,14 +634,14 @@ func SweepIdleNudges(args IdleNudgeSweepArgs) []IdleNudgeReport {
 		if d.Name == "" || d.Name == overseer {
 			continue
 		}
-		rep := evaluateAndMaybeNudge(d, args, now)
+		rep := classifyIdleNudgeFor(d, args, now)
 		if rep.Action == IdleNudgeSkip && rep.Reason == "not_work_purpose" {
 			continue // quiet skip for asides
 		}
 		out = append(out, rep)
 	}
-	// 🎯T423 clause 5: one derivation that would act on a fleet at once
-	// is a systemic misread — report, do not cull.
+	// 🎯T423 clause 5: classify the whole pass first. A fleet-wide idle
+	// reading is a systemic misread — one report, zero Push.
 	n := 0
 	for _, r := range out {
 		if r.Action == IdleNudgeNudge {
@@ -651,11 +655,30 @@ func SweepIdleNudges(args IdleNudgeSweepArgs) []IdleNudgeReport {
 				out[i].Reason = "systemic_read"
 			}
 		}
+		slog.Info("idle nudge systemic read — not delivering", "would_nudge", n)
+		return out
+	}
+	for i, r := range out {
+		if r.Action != IdleNudgeNudge {
+			continue
+		}
+		d := args.Reg.Def(r.Name)
+		if d == nil {
+			continue
+		}
+		out[i] = deliverIdleNudge(*d, args, now, r)
 	}
 	return out
 }
 
-func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time) IdleNudgeReport {
+func sessionPhaseOf(d claudia.AgentDef, args IdleNudgeSweepArgs) turnev.Phase {
+	if args.SessionPhase != nil {
+		return args.SessionPhase(d)
+	}
+	return ClassifyAgentSessionPhase(d, DefaultSessionRoots())
+}
+
+func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time) IdleNudgeReport {
 	if args.Eligible != nil && !args.Eligible(d) {
 		return IdleNudgeReport{
 			Name:        d.Name,
@@ -748,6 +771,15 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 		}
 	}
 
+	// 🎯T423: the decoder is the idle/working reading. ACP phase is not
+	// consulted for idle — unknown is not idle. Working from the tape
+	// outranks an ACP idle leftover.
+	decoded := sessionPhaseOf(d, args)
+	phase := decoded.String()
+	if decoded == turnev.PhaseUnknown && strings.EqualFold(act.Phase, "working") {
+		phase = "working"
+	}
+
 	obs := IdleNudgeObs{
 		Name:           d.Name,
 		Purpose:        purpose,
@@ -755,7 +787,7 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 		Intent:         args.Intent.AgentState(d.Name),
 		ProcessRunning: running,
 		DeliberateStop: deliberateStop,
-		Phase:          act.Phase,
+		Phase:          phase,
 		IdleFor:        idleFor,
 		HasOpenMission: hasMission,
 		DesignGated:    designGated,
@@ -771,20 +803,21 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 		action, reason = IdleNudgeSkip, "not_open_mission_resume"
 	}
 	kind := ClassifyIdleNudgeKind(briefPresent)
-	rep := IdleNudgeReport{
+	return IdleNudgeReport{
 		Name:        d.Name,
 		Action:      action,
 		Reason:      reason,
 		Kind:        kind,
 		PostRestart: args.PostRestart,
 	}
-	if action != IdleNudgeNudge {
-		return rep
-	}
+}
+
+func deliverIdleNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time, rep IdleNudgeReport) IdleNudgeReport {
 	if args.Push == nil {
 		rep.Error = "no_pusher"
 		return rep
 	}
+	targetID := strings.TrimSpace(d.TargetID)
 	acceptance := ""
 	if args.MissionAcceptance != nil && targetID != "" {
 		acceptance = args.MissionAcceptance(targetID)
@@ -793,20 +826,18 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 		Name:        d.Name,
 		TargetID:    targetID,
 		Acceptance:  acceptance,
-		Reason:      reason,
+		Reason:      rep.Reason,
 		PostRestart: args.PostRestart,
-		Kind:        kind,
+		Kind:        rep.Kind,
 	})
-	// Keep inject-once coherent: full_brief marks fleet briefed after send.
-	// (EnsureFleetBrief on agent_send also marks; we set after successful push.)
-	event := IdleNudgeEventSource(args.PostRestart, kind)
+	event := IdleNudgeEventSource(args.PostRestart, rep.Kind)
 	if err := args.Push(d.Name, event, text); err != nil {
 		rep.Error = err.Error()
 		slog.Warn("idle nudge deliver failed", "agent", d.Name, "err", err)
 		return rep
 	}
 	rep.Delivered = true
-	if kind == IdleNudgeKindFullBrief && args.MarkBriefed != nil {
+	if rep.Kind == IdleNudgeKindFullBrief && args.MarkBriefed != nil {
 		args.MarkBriefed(d.Name)
 	}
 	if args.Ledger != nil {
@@ -814,16 +845,11 @@ func evaluateAndMaybeNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time
 			slog.Warn("idle nudge ledger record failed", "agent", d.Name, "err", err)
 		}
 	}
-	// Reset idle clock only — do NOT claim phase=working. Fake "working"
-	// poisoned re-nudge forever when ACP never observed a real turn (live:
-	// post-nudge workers stayed phase=idle in UI but classifier skipped
-	// in_progress). Backoff/max already prevent thrash.
-	// Preserve T236 FailureClass; clear NeedsRecover via ClearRecover shape.
 	if args.Activity != nil {
 		args.Activity.ClearRecover(d.Name, now)
 	}
 	slog.Info("idle nudge delivered",
-		"agent", d.Name, "reason", reason, "kind", kind, "post_restart", args.PostRestart)
+		"agent", d.Name, "reason", rep.Reason, "kind", rep.Kind, "post_restart", args.PostRestart)
 	return rep
 }
 
