@@ -1,22 +1,24 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Playwright census for J19 (🎯T491). Opens the isolate cockpit and
-// asserts connect-replay paint: one virtual-list row per replayed owner
-// turn, unique _vIndex / prefix-sum tops. The daily collapse
-// (msgHistory full, __transcriptRows.length===1, every .msg at top:0)
-// is a fail. Never bind Universe A (:13705).
+// Playwright census for J19 (🎯T491 / 🎯T493 / 🎯T494).
+// Isolate cockpit only — never :13705, never the owner's journal.
+// Seeded ROOThist-* turns must survive connect replay AND render in the
+// pinned viewport: checkVisibility, centre hit-test, then a screenshot
+// for Vision OCR (applied by the Go journey).
 //
-//   node scripts/journey-suite/j19_paint.js --host 127.0.0.1:PORT --prefix ROOThist-
+//   node scripts/journey-suite/j19_paint.js --host 127.0.0.1:PORT \
+//        --prefix ROOThist- --screenshot /tmp/j19.png
 //
-// Exit 0 only when the painted list is not collapsed. Exit 2 on usage
-// / daily-port. Exit 1 on the product collapse (or a setup miss).
+// Exit 0 only when the model is not collapsed AND the pane is not empty
+// AND the T493 DOM gates pass. Exit 2 on usage / daily-port.
 
 'use strict';
 
 const path = require('path');
 const playwrightRoot = path.join(__dirname, '..', 'browser-loop-test', 'node_modules', 'playwright');
 const { chromium } = require(playwrightRoot);
+const VC = require(path.join(__dirname, '..', '..', 'web', 'scripts', 'viewport_census.js'));
 
 const DAILY_PORT = 13705;
 const argv = process.argv.slice(2);
@@ -31,6 +33,7 @@ const HOST = String(opt('host', '') || '');
 const PREFIX = String(opt('prefix', 'ROOThist-') || 'ROOThist-');
 const MIN_MARKERS = Math.max(1, parseInt(String(opt('min', '8')), 10) || 8);
 const EXPECT = Math.max(MIN_MARKERS, parseInt(String(opt('expect', String(MIN_MARKERS))), 10) || MIN_MARKERS);
+const SCREENSHOT = String(opt('screenshot', '') || '');
 
 function die(code, msg) {
   console.error(msg);
@@ -44,17 +47,23 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+  const context = await browser.newContext({
+    viewport: VC.ORACLE_VIEWPORT,
+    screen: VC.ORACLE_VIEWPORT,
+    deviceScaleFactor: VC.ORACLE_DPR,
+  });
+  const page = await context.newPage();
+  const censusPath = path.join(__dirname, '..', '..', 'web', 'scripts', 'viewport_census.js');
+  await page.addInitScript({ path: censusPath });
   const url = 'http://' + HOST + '/';
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForFunction(() => {
       return !!(document.getElementById('messages-canvas') &&
-        (typeof window.__transcriptRows !== 'undefined'));
+        (typeof window.__transcriptRows !== 'undefined') &&
+        window.ViewportCensus);
     }, null, { timeout: 20000 });
 
-    // Wait out connect replay + the 150ms idle pin, then a little more so
-    // a post-pin wipe (the daily collapse) has time to land before census.
     await page.waitForFunction(() => {
       const st = document.getElementById('status-text');
       const txt = st ? String(st.textContent || '') : '';
@@ -64,29 +73,20 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
       const attached = document.querySelectorAll('#messages-canvas > .msg').length;
       return !replay && !awaiting && (txt === 'connected' || rows > 0 || attached > 0);
     }, null, { timeout: 25000 }).catch(() => {});
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 800)));
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 400)));
+
+    // Pin the tail so OCR/hit-test see the seeded last turns, not a
+    // blank band of a tall canvas (the T494 daily picture).
+    await page.evaluate(() => window.ViewportCensus.pinScrollBottom());
+    await page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 200)));
 
     const census = await page.evaluate((prefix) => {
+      const base = window.ViewportCensus.collect({ prefix: prefix });
       const rows = Array.isArray(window.__transcriptRows) ? window.__transcriptRows : [];
-      const layout = window.__transcriptLayout || {};
       const attached = [...document.querySelectorAll('#messages-canvas > .msg')];
-      const users = [...document.querySelectorAll('#messages-canvas > .msg.user, #messages > .msg.user')];
-      const rowTexts = rows.map((r) => String((r && r.text) || ''));
-      const userTexts = users.map((el) => String((el.innerText || el.textContent || '')).trim());
-      const markers = [];
-      const seen = Object.create(null);
-      function note(text) {
-        const s = String(text || '');
-        const idx = s.indexOf(prefix);
-        if (idx < 0) return;
-        const tok = s.slice(idx).split(/\s/)[0];
-        if (!tok || seen[tok]) return;
-        seen[tok] = true;
-        markers.push(tok);
-      }
-      rowTexts.forEach(note);
-      userTexts.forEach(note);
-
       const vIndexes = attached.map((el) => (el._vIndex == null ? null : (el._vIndex | 0)));
       const tops = attached.map((el) => {
         const raw = el.style && el.style.top;
@@ -100,33 +100,27 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
         const t = tops[i];
         return (v === 0 || v == null) && Math.abs(t) < 1;
       }).length;
-      const canvas = document.getElementById('messages-canvas');
       const status = document.getElementById('status-text');
-      return {
+      return Object.assign({}, base, {
         status: status ? String(status.textContent || '') : '',
         historyReplayActive: !!window.historyReplayActive,
         awaitingHistoryMeta: !!window.awaitingHistoryMeta,
         transcriptRows: rows.length,
-        layoutHeights: Array.isArray(layout.heights) ? layout.heights.length : 0,
-        attached: attached.length,
-        userEls: users.length,
-        markers: markers,
         uniqueVIndex: uniqueV.length,
         uniqueTops: uniqueTops.length,
         stackedAt0: stackedAt0,
-        vIndexes: vIndexes.slice(0, 24),
-        tops: tops.slice(0, 24).map((t) => Math.round(t)),
-        canvasH: canvas ? canvas.offsetHeight : 0,
-        rowRoles: rows.map((r) => (r && r.role) || ''),
-      };
+        userEls: attached.filter((el) => el.classList.contains('user')).length,
+      });
     }, PREFIX);
 
-    const markerN = census.markers.length;
-    // Setup miss: the journal never reached the page. Collapse: some of
-    // the seeded turns painted (or a leftover bubble remains) but the
-    // virtual-list model did not keep one row per turn — the daily
-    // "history vanished" picture (🎯T491).
-    const missingSeed = markerN === 0 && census.userEls === 0 && census.transcriptRows === 0;
+    if (SCREENSHOT) {
+      const pane = page.locator('#messages');
+      await pane.screenshot({ path: SCREENSHOT });
+    }
+
+    const markerN = (census.modelMarkers || []).length;
+    const visibleMarkerN = (census.visibleMarkers || []).length;
+    const missingSeed = markerN === 0 && census.modelRows === 0;
     const collapsed = !missingSeed && (
       markerN < MIN_MARKERS ||
       census.transcriptRows < MIN_MARKERS ||
@@ -134,45 +128,76 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
       (census.uniqueTops <= 1 && census.attached > 1) ||
       (census.transcriptRows <= 1 && EXPECT > 1)
     );
-    const ok = !collapsed && !missingSeed &&
+    const emptyPane = !!census.emptyPane;
+    const gatesFail = !!census.gatesFail;
+    const viewportDrift = !census.viewportPinned;
+    const noVisibleSeed = !emptyPane && visibleMarkerN < 1 && census.visibleInScroller > 0;
+
+    const ok = !collapsed && !missingSeed && !emptyPane && !gatesFail &&
+      !viewportDrift && !noVisibleSeed &&
       census.transcriptRows >= MIN_MARKERS &&
       census.uniqueVIndex >= MIN_MARKERS &&
       census.uniqueTops >= MIN_MARKERS &&
-      markerN >= MIN_MARKERS;
+      markerN >= MIN_MARKERS &&
+      census.visibleInScroller >= 1 &&
+      census.visibleCheckOk >= 1 &&
+      census.visibleHitOk >= 1;
 
     const report = {
       host: HOST,
       prefix: PREFIX,
       min: MIN_MARKERS,
       expect: EXPECT,
+      screenshot: SCREENSHOT,
       ok: ok,
       collapsed: collapsed,
       missingSeed: missingSeed,
+      emptyPane: emptyPane,
+      gatesFail: gatesFail,
+      viewportDrift: viewportDrift,
       census: census,
     };
     console.log(JSON.stringify(report, null, 2));
 
+    if (viewportDrift) {
+      die(1, 'J19 viewport not pinned: inner=' + census.innerWidth + 'x' +
+        census.innerHeight + ' dpr=' + census.devicePixelRatio +
+        ' want ' + VC.ORACLE_VIEWPORT.width + 'x' + VC.ORACLE_VIEWPORT.height +
+        ' dpr=' + VC.ORACLE_DPR);
+    }
+    if (emptyPane) {
+      die(1,
+        'J19 empty pane (🎯T494): modelRows=' + census.modelRows +
+        ' visibleInScroller=0 attached=' + census.attached +
+        ' canvasH=' + census.canvasHeight +
+        ' scrollTop=' + census.scrollTop);
+    }
+    if (gatesFail) {
+      die(1,
+        'J19 visibility gates (🎯T493): visible=' + census.visibleInScroller +
+        ' checkVisibility=' + census.visibleCheckOk +
+        ' hitTest=' + census.visibleHitOk);
+    }
     if (collapsed) {
       die(1,
         'J19 paint collapse: transcriptRows=' + census.transcriptRows +
-        ' userEls=' + census.userEls +
-        ' attached=' + census.attached +
         ' uniqueVIndex=' + census.uniqueVIndex +
         ' uniqueTops=' + census.uniqueTops +
         ' stackedAt0=' + census.stackedAt0 +
         ' markers=' + markerN);
     }
     if (missingSeed) {
-      die(1,
-        'J19 setup: replay painted fewer than ' + MIN_MARKERS +
-        ' ' + PREFIX + '* markers (got ' + markerN +
-        ', userEls=' + census.userEls + ')');
+      die(1, 'J19 setup: isolate seed did not reach the model');
+    }
+    if (noVisibleSeed) {
+      die(1, 'J19 visible turns have no ' + PREFIX + '* token (got ' +
+        visibleMarkerN + ' visible markers, visibleInScroller=' +
+        census.visibleInScroller + ')');
     }
     if (!ok) {
       die(1,
         'J19 paint short: transcriptRows=' + census.transcriptRows +
-        ' uniqueVIndex=' + census.uniqueVIndex +
-        ' uniqueTops=' + census.uniqueTops +
+        ' visibleInScroller=' + census.visibleInScroller +
         ' markers=' + markerN);
     }
   } finally {

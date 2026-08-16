@@ -17,6 +17,8 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/imagetext"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
@@ -27,11 +29,11 @@ const (
 	j19LiveToken  = "ROOThist-LIVE"
 )
 
-// j19RootHistoryPaint is the 🎯T491 oracle: seed many distinct sealed
-// owner turns, drive one live overseer send, then open the isolate
-// cockpit and assert the virtual-list model did not collapse to one
-// leftover bubble stacked at top:0. Product is currently red — this
-// journey exists to demonstrate that error before the fix.
+// j19RootHistoryPaint is the 🎯T491 / 🎯T493 / 🎯T494 oracle: seed
+// distinct sealed owner turns into the *isolate* journal (never the
+// owner's daily history), hard-load the isolate cockpit, and assert
+// the replay both keeps one virtual-list row per turn and *renders*
+// those turns (checkVisibility + centre hit-test + Vision OCR).
 func (s *suite) j19RootHistoryPaint() error {
 	if err := portguard.RefuseDaily(s.port); err != nil {
 		return err
@@ -45,10 +47,12 @@ func (s *suite) j19RootHistoryPaint() error {
 		return fmt.Errorf("seed wrote %d %s* user turns, want %d (%s)", n, j19Prefix, j19SeedTurns, journal)
 	}
 
-	// Paint census FIRST. The daily collapse is a hard-connect replay
-	// bug; a live Grok hang must not hide it. Agent interaction follows
-	// so a green paint still satisfies 🎯T107.
-	paintErr := s.runJ19Paint()
+	// Paint census FIRST against the isolate seed only — never the
+	// owner's daily journal. A live Grok hang must not hide a blank
+	// pane. Agent interaction follows so a green paint still satisfies 🎯T107.
+	shot := filepath.Join(s.stateDir, "j19-messages.png")
+	paintErr := s.runJ19Paint(shot)
+	ocrErr := assertJ19OCR(shot)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -56,6 +60,9 @@ func (s *suite) j19RootHistoryPaint() error {
 	if err != nil {
 		if paintErr != nil {
 			return paintErr
+		}
+		if ocrErr != nil {
+			return ocrErr
 		}
 		if out := asOutage("j19 live dial", err); out != nil {
 			return out
@@ -66,6 +73,9 @@ func (s *suite) j19RootHistoryPaint() error {
 		conn.CloseNow()
 		if paintErr != nil {
 			return paintErr
+		}
+		if ocrErr != nil {
+			return ocrErr
 		}
 		return fmt.Errorf("pre-send replay drain: %w", err)
 	}
@@ -79,6 +89,9 @@ func (s *suite) j19RootHistoryPaint() error {
 	if paintErr != nil {
 		return paintErr
 	}
+	if ocrErr != nil {
+		return ocrErr
+	}
 	if sendErr != nil {
 		if out := asOutage("j19 live send", sendErr); out != nil {
 			return out
@@ -88,7 +101,7 @@ func (s *suite) j19RootHistoryPaint() error {
 	return nil
 }
 
-func (s *suite) runJ19Paint() error {
+func (s *suite) runJ19Paint(screenshot string) error {
 	script, err := j19PaintScript()
 	if err != nil {
 		return err
@@ -98,6 +111,7 @@ func (s *suite) runJ19Paint() error {
 		"--prefix", j19Prefix,
 		"--min", fmt.Sprint(j19MinMarkers),
 		"--expect", fmt.Sprint(j19SeedTurns),
+		"--screenshot", screenshot,
 	)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -118,11 +132,51 @@ func (s *suite) runJ19Paint() error {
 	if ee, ok := runErr.(*exec.ExitError); ok && ee.ExitCode() == 2 {
 		return fmt.Errorf("j19 paint harness: %s", trim(stderr.String(), 240))
 	}
+	if strings.Contains(out, `"emptyPane": true`) || strings.Contains(stderr.String(), "empty pane") {
+		return fmt.Errorf("connect replay painted no visible turns (🎯T494): %s",
+			trim(firstNonEmpty(stderr.String(), collapseSummary(out)), 400))
+	}
 	if strings.Contains(out, `"collapsed": true`) || strings.Contains(stderr.String(), "paint collapse") {
 		return fmt.Errorf("connect replay collapsed the painted list (🎯T491): %s",
 			trim(firstNonEmpty(stderr.String(), collapseSummary(out)), 400))
 	}
 	return fmt.Errorf("j19 paint: %w", runErr)
+}
+
+func assertJ19OCR(shot string) error {
+	if _, err := os.Stat(shot); err != nil {
+		return fmt.Errorf("j19 screenshot missing (%s): isolate paint did not write a viewport capture", shot)
+	}
+	if !imagetext.Available() {
+		return &outageError{
+			step:  "j19 ocr",
+			class: agenterr.ClassBackendUnavailable,
+			msg:   imagetext.UnavailableReason(),
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ext := imagetext.Extract(ctx, shot, "j19-messages")
+	if ext.Degraded {
+		return &outageError{
+			step:  "j19 ocr",
+			class: agenterr.ClassBackendUnavailable,
+			msg:   ext.Reason,
+		}
+	}
+	text := ext.Text()
+	hits := 0
+	for i := 0; i < j19SeedTurns; i++ {
+		if strings.Contains(text, fmt.Sprintf("%s%02d", j19Prefix, i)) {
+			hits++
+		}
+	}
+	if hits < 1 {
+		return fmt.Errorf("j19 OCR found no %s* token in viewport screenshot (🎯T493): lines=%d bytes=%d",
+			j19Prefix, len(ext.Lines), len(text))
+	}
+	fmt.Printf("j19 OCR: %d %s* token(s) in viewport screenshot\n", hits, j19Prefix)
+	return nil
 }
 
 func seedJ19Journal(path string, turns int) error {
