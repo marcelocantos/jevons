@@ -215,3 +215,22 @@ func CheckpointAsk(d Decision) string {
 			"the call and it will proceed.",
 		d.Calls, d.Ceiling)
 }
+
+// ShouldResumeAfterCheckpoint reports whether a turn that just ended
+// should be continued in a fresh turn. Asked and not interrupted: the
+// agent reached a checkpoint (or at least heard the ask) and we owe it
+// a successor sitting. An interrupt already cancelled the work; resuming
+// that would be 🎯T392.5's waste all over again.
+func ShouldResumeAfterCheckpoint(st State) bool {
+	return st.Requested && !st.Interrupted
+}
+
+// ResumePrompt is the first message of the successor turn. It must say
+// this is a continuation, not a cancellation, and that the ceiling is
+// reset so ordinary work is not taxed twice.
+func ResumePrompt(st State) string {
+	return fmt.Sprintf(
+		"🎯T392.4: your previous turn ended at a depth checkpoint after %d tool calls. "+
+			"Continue from where you left off. This is a new turn; the ceiling is reset.",
+		st.Calls)
+}

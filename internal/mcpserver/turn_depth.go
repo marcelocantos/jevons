@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/marcelocantos/claudia"
 
@@ -123,6 +124,9 @@ func (s *Server) observeTurnDepth(name string, ev claudia.Event) {
 				"agent", name, "calls", st.Calls, "ceiling", pol.EffectiveCeiling(),
 				"interrupted", st.Interrupted)
 		}
+		if turndepth.ShouldResumeAfterCheckpoint(st) {
+			s.scheduleCheckpointResume(name, st)
+		}
 		return
 	}
 
@@ -179,6 +183,42 @@ func (s *Server) observeTurnDepth(name string, ev claudia.Event) {
 // forgetTurnDepth drops an agent's turn record when it leaves the fleet, so
 // a long-lived daemon does not accumulate turns for names that no longer
 // exist.
+// SetTurnDepthResumer overrides how a checkpointed turn is continued.
+// Test seam; the product path sends ResumePrompt to the same agent.
+func (s *Server) SetTurnDepthResumer(fn func(name, prompt string)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.turnDepthResume = fn
+}
+
+func (s *Server) scheduleCheckpointResume(name string, st turndepth.State) {
+	if s == nil || name == "" {
+		return
+	}
+	prompt := turndepth.ResumePrompt(st)
+	s.mu.Lock()
+	fn := s.turnDepthResume
+	s.mu.Unlock()
+	s.logLifecycle(compTurnDepth, "checkpoint_resume", "ok", map[string]any{
+		"agent": name, "calls": st.Calls,
+	})
+	if fn != nil {
+		fn(name, prompt)
+		return
+	}
+	go s.sendCheckpointResume(name, prompt)
+}
+
+func (s *Server) sendCheckpointResume(name, prompt string) {
+	if s == nil || strings.TrimSpace(prompt) == "" {
+		return
+	}
+	s.sendDaemonComposed(name, prompt, false)
+}
+
 func (s *Server) forgetTurnDepth(name string) {
 	if s == nil {
 		return

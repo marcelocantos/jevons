@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -69,6 +70,37 @@ func TestT3924ArmedFallbackInterruptsOncePastGrace(t *testing.T) {
 	defer mu.Unlock()
 	if len(hits) != 1 || hits[0] != "jv-t392.4" {
 		t.Fatalf("interrupt hits = %v; want one cut of jv-t392.4", hits)
+	}
+}
+
+func TestT3924TerminalStopAfterAskSchedulesResume(t *testing.T) {
+	s := &Server{}
+	s.SetTurnDepthPolicy(turndepth.Policy{Ceiling: turndepth.MinCeiling, Grace: -1})
+	var gotName, gotPrompt string
+	s.SetTurnDepthResumer(func(name, prompt string) {
+		gotName, gotPrompt = name, prompt
+	})
+	for _, ev := range t3924Tool(turndepth.MinCeiling) {
+		s.observeTurnDepth("jv-t392.4", ev)
+	}
+	s.observeTurnDepth("jv-t392.4", claudia.Event{Type: "assistant", StopReason: "end_turn"})
+	if gotName != "jv-t392.4" {
+		t.Fatalf("resume name = %q", gotName)
+	}
+	if !strings.Contains(gotPrompt, "new turn") {
+		t.Fatalf("resume prompt = %q", gotPrompt)
+	}
+}
+
+func TestT3924BelowCeilingEndDoesNotResume(t *testing.T) {
+	s := &Server{}
+	s.SetTurnDepthPolicy(turndepth.Policy{Ceiling: turndepth.MinCeiling})
+	var resumed bool
+	s.SetTurnDepthResumer(func(string, string) { resumed = true })
+	s.observeTurnDepth("jv-t392.4", claudia.Event{Type: "progress", ProgressType: progressToolUse})
+	s.observeTurnDepth("jv-t392.4", claudia.Event{Type: "assistant", StopReason: "end_turn"})
+	if resumed {
+		t.Fatal("a below-ceiling turn must not be resumed")
 	}
 }
 

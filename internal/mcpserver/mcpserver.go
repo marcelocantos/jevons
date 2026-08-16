@@ -260,6 +260,7 @@ type Server struct {
 	turnDepth          *turndepth.Counter
 	turnDepthPolicy    turndepth.Policy
 	turnDepthInterrupt func(string) error
+	turnDepthResume    func(name, prompt string)
 
 	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.

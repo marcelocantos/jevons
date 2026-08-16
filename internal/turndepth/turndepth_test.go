@@ -3,7 +3,10 @@
 
 package turndepth
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // 🎯T392.4: the policy is the shipped ceiling. A turn at the floor is
 // asked to checkpoint; one below it is left alone; the interrupt
@@ -31,6 +34,25 @@ func TestT3924EvaluateAsksAtTheCeilingAndLeavesTheCommonBandAlone(t *testing.T) 
 	cut := armed.Evaluate(State{Agent: "jv", Calls: MinCeiling, Requested: true})
 	if cut.Action != ActionInterrupt {
 		t.Fatalf("armed fallback at ceiling+0 grace = %s; want interrupt", cut.Action)
+	}
+}
+
+func TestT3924ResumeAfterCheckpointNotAfterInterrupt(t *testing.T) {
+	t.Parallel()
+	if !ShouldResumeAfterCheckpoint(State{Requested: true, Calls: 8}) {
+		t.Fatal("a turn that heard the ask must be resumed")
+	}
+	if ShouldResumeAfterCheckpoint(State{Requested: true, Interrupted: true, Calls: 12}) {
+		t.Fatal("an interrupted turn must not be resumed — that is T392.5 waste")
+	}
+	if ShouldResumeAfterCheckpoint(State{Calls: 3}) {
+		t.Fatal("a below-ceiling turn must not get a resume prompt")
+	}
+	got := strings.ToLower(ResumePrompt(State{Calls: 8}))
+	for _, part := range []string{"checkpoint", "new turn", "ceiling is reset"} {
+		if !strings.Contains(got, part) {
+			t.Fatalf("resume prompt missing %q: %s", part, got)
+		}
 	}
 }
 
