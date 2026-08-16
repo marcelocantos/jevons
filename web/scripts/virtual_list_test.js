@@ -608,7 +608,7 @@ test('T119.3 index.html parks turn-markers and measures chrome into the prefix',
   assert.ok(/el\.style\.minHeight = ''/.test(html) &&
     /noteRowHeightChange/.test(html),
     'remat settle clears minHeight before measuring');
-  assert.ok(/function noteRowHeightChange[\s\S]{0,900}el\.style\.minHeight = ''/.test(html),
+  assert.ok(/function noteRowHeightChange[\s\S]{0,2000}el\.style\.minHeight = ''/.test(html),
     'noteRowHeightChange itself clears the lock — it must not measure a chromed box');
   assert.ok(/#messages-canvas > \.turn-marker/.test(html),
     'canvas turn-markers are absolutely positioned list rows');
@@ -1323,6 +1323,20 @@ test('T351 hydrateCompensatedScrollTop is rect-exact with integer fallback', fun
   assert.strictEqual(VL.hydrateCompensatedScrollTop(100, NaN, NaN, 1000, 1013), 113,
     'integer fallback when no anchor rect');
   assert.strictEqual(VL.hydrateCompensatedScrollTop(100, undefined, undefined, 1000, 1000), 100);
+});
+
+test('T484 alreadySnappedLock is true when box matches the lock', function () {
+  assert.strictEqual(VL.alreadySnappedLock(55, 54.8), true);
+  assert.strictEqual(VL.alreadySnappedLock(55, 55), true);
+  assert.strictEqual(VL.alreadySnappedLock(55, 80), false, 'real grow must remesure');
+  assert.strictEqual(VL.alreadySnappedLock(0, 54.8), false);
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(/function noteRowHeightChange[\s\S]{0,800}alreadySnappedLock/.test(html),
+    'noteRowHeightChange returns before clearing minHeight when already snapped');
+  assert.ok(/look: 'classic'/.test(html), 'mermaid look is classic (no per-frame SVG animation)');
+  assert.ok(/_mermaidCache/.test(html), 'remat reuses cached mermaid SVG');
 });
 
 test('T482 second snap of the same natural does not rewrite minHeight', function () {

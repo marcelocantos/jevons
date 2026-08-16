@@ -1744,6 +1744,12 @@ function applyRowHeight(index, newH) {
 function noteRowHeightChange(el) {
   if (!el || el._vIndex == null) return;
   if (el.classList && el.classList.contains('virt-shell')) return;
+  const prevLockEarly = el.style.minHeight || '';
+  const prevPxEarly = parseFloat(prevLockEarly) || 0;
+  if (prevPxEarly > 0 && typeof VirtualList !== 'undefined' && VirtualList.alreadySnappedLock) {
+    const lockedBox = el.getBoundingClientRect ? el.getBoundingClientRect().height : el.offsetHeight;
+    if (VirtualList.alreadySnappedLock(prevPxEarly, lockedBox)) return;
+  }
   // Measure the NATURAL border-box. A leftover minHeight lock (estimate,
   // previous extent, snap) floors the rect; adding chrome on that box is
   // the gap ratchet — tight on reload, then growing while the page stays
@@ -3552,7 +3558,14 @@ function ensureMermaid() {
     // suppressErrorRendering keeps mermaid from injecting its "Syntax error"
     // bomb graphic into the page when an agent emits an invalid diagram — we
     // degrade to the raw code block instead (🎯T59).
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, theme: dark ? 'dark' : 'default' });
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      suppressErrorRendering: true,
+      theme: dark ? 'dark' : 'default',
+      // 🎯T484: mermaid 11's default look animates SVG every frame.
+      look: 'classic',
+    });
     mermaidReady = true;
   }
   return window.mermaid;
@@ -4483,17 +4496,25 @@ window.svgToPngBlob = svgToPngBlob;
 window.handleMermaidAction = handleMermaidAction;
 function renderMermaidIn(container) {
   if (!container || !ensureMermaid()) return;
+  const msg = container.closest ? container.closest('.msg') : null;
+  if (msg && !msg._mermaidCache) msg._mermaidCache = Object.create(null);
   container.querySelectorAll('code.language-mermaid').forEach(code => {
     const host = code.closest('pre') || code;
     const src = code.textContent;
-    const id = 'mmd-' + (++mermaidSeq);
-    Promise.resolve().then(() => mermaid.render(id, src)).then(({ svg }) => {
+    const cached = msg && msg._mermaidCache[src];
+    const paint = function (svg) {
       const wrap = document.createElement('div');
       wrap.className = 'mermaid-diagram';
       wrap.innerHTML = svg;
       attachMermaidToolbar(wrap, src);
       if (host.parentNode) host.replaceWith(wrap);
-      scrollDownThrottled(); // async SVG height growth (🎯T30.2 / 🎯T59)
+      scrollDownThrottled();
+    };
+    if (cached) { paint(cached); return; }
+    const id = 'mmd-' + (++mermaidSeq);
+    Promise.resolve().then(() => mermaid.render(id, src)).then(({ svg }) => {
+      if (msg) msg._mermaidCache[src] = svg;
+      paint(svg);
     }).catch(() => {
       // Invalid diagram — leave the code block; sweep any temp render node
       // mermaid may have appended to <body> (id or 'd'+id).

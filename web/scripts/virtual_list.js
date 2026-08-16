@@ -1188,6 +1188,17 @@
     return { lock: lock, css: css, changed: css !== prev };
   }
 
+  // 🎯T484: a row whose current box is already the snap lock must not
+  // clear minHeight. Clearing forces a style+layout even when the write
+  // that follows is a no-op (Firefox profile: 11k sync reflows / 21s).
+  function alreadySnappedLock(lockPx, boxPx) {
+    const lock = Number(lockPx);
+    const box = Number(boxPx);
+    if (!Number.isFinite(lock) || lock <= 0) return false;
+    if (!Number.isFinite(box) || box <= 0) return false;
+    return Math.abs(box - lock) < 0.51;
+  }
+
   // ── Viewport anchoring (🎯T351 hydrate, 🎯T363 virtualize) ─────────
   // One rule covers both: when content ABOVE the viewport changes height,
   // scrollTop must move by the same amount or the text under the owner's
@@ -1813,6 +1824,7 @@
     hydrateCompensatedScrollTop: hydrateCompensatedScrollTop,
     snappedRowLockPx: snappedRowLockPx,
     nextSnappedMinHeightCss: nextSnappedMinHeightCss,
+    alreadySnappedLock: alreadySnappedLock,
 
     // 🎯T363: viewport anchoring for height changes above the scroll position.
     anchorPreservedScrollTop: anchorPreservedScrollTop,
