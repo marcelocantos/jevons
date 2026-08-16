@@ -14,7 +14,12 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var IMAGE_MARKER_RE = /\[image:\s*([a-f0-9]+)\]/gi;
+  var IMAGE_MARKER_RE = /\[image:\s*([a-f0-9]+)(?:\s+(\d+)x(\d+))?\]/gi;
+  // Half the old 240px max-height — thumbs are clickable, not readable.
+  var CHAT_THUMB_HEIGHT_PX = 120;
+  var CHAT_THUMB_MAX_WIDTH_PX = 320;
+  var CHAT_THUMB_DEFAULT_ASPECT = 4 / 3;
+  var sizeCache = Object.create(null);
 
   /**
    * Normalize a chat image id (hex string, lowercased).
@@ -51,6 +56,55 @@
    * @param {string|null|undefined} text
    * @returns {string[]}
    */
+  /**
+   * Display box for an in-bubble thumb. Height is the standard 120px
+   * except ultra-wide images that hit MAX_WIDTH (then height shrinks).
+   * Unknown aspect uses 4:3 so the <img> can carry width+height before load.
+   */
+  function thumbDisplaySize(naturalW, naturalH) {
+    var H = CHAT_THUMB_HEIGHT_PX;
+    var maxW = CHAT_THUMB_MAX_WIDTH_PX;
+    var nw = Number(naturalW);
+    var nh = Number(naturalH);
+    if (!(nw > 0) || !(nh > 0)) {
+      return { width: Math.round(H * CHAT_THUMB_DEFAULT_ASPECT), height: H };
+    }
+    var w = Math.round(H * nw / nh);
+    if (w < 1) w = 1;
+    if (w > maxW) {
+      var h = Math.round(maxW * nh / nw);
+      if (h < 1) h = 1;
+      return { width: maxW, height: h };
+    }
+    return { width: w, height: H };
+  }
+
+  function rememberSize(id, naturalW, naturalH) {
+    var n = normalizeImageId(id);
+    var nw = Number(naturalW);
+    var nh = Number(naturalH);
+    if (!n || !(nw > 0) || !(nh > 0)) return null;
+    sizeCache[n] = { width: nw, height: nh };
+    return sizeCache[n];
+  }
+
+  function lookupSize(id) {
+    var n = normalizeImageId(id);
+    return n ? (sizeCache[n] || null) : null;
+  }
+
+  function parseImageMarker(raw) {
+    var s = String(raw == null ? '' : raw);
+    var re = /\[image:\s*([a-f0-9]+)(?:\s+(\d+)x(\d+))?\]/i;
+    var m = re.exec(s);
+    if (!m) return null;
+    var id = normalizeImageId(m[1]);
+    var nw = m[2] ? parseInt(m[2], 10) : 0;
+    var nh = m[3] ? parseInt(m[3], 10) : 0;
+    if (nw > 0 && nh > 0) rememberSize(id, nw, nh);
+    return { id: id, width: nw || 0, height: nh || 0 };
+  }
+
   function extractImageIdsFromText(text) {
     var s = String(text == null ? '' : text);
     var out = [];
@@ -311,5 +365,11 @@
     goTo: goTo,
     handleKey: handleKey,
     resolveFromClick: resolveFromClick,
+    CHAT_THUMB_HEIGHT_PX: CHAT_THUMB_HEIGHT_PX,
+    CHAT_THUMB_MAX_WIDTH_PX: CHAT_THUMB_MAX_WIDTH_PX,
+    thumbDisplaySize: thumbDisplaySize,
+    rememberSize: rememberSize,
+    lookupSize: lookupSize,
+    parseImageMarker: parseImageMarker,
   };
 }));

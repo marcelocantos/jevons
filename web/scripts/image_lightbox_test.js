@@ -74,6 +74,45 @@ test('extractImageIdsFromText empty when no markers', () => {
   assert.deepStrictEqual(ImageLightbox.extractImageIdsFromText(null), []);
 });
 
+test('thumbDisplaySize is 120px tall with reserved 4:3 when unknown', () => {
+  assert.strictEqual(ImageLightbox.CHAT_THUMB_HEIGHT_PX, 120);
+  const unk = ImageLightbox.thumbDisplaySize(0, 0);
+  assert.strictEqual(unk.height, 120);
+  assert.strictEqual(unk.width, 160);
+  const shot = ImageLightbox.thumbDisplaySize(780, 1210);
+  assert.strictEqual(shot.height, 120);
+  assert.ok(shot.width < 120, 'tall screenshot is narrow at fixed height, got ' + shot.width);
+  const wide = ImageLightbox.thumbDisplaySize(3200, 800);
+  assert.strictEqual(wide.width, 320);
+  assert.ok(wide.height < 120, 'ultra-wide shrinks height, got ' + wide.height);
+  const square = ImageLightbox.thumbDisplaySize(800, 800);
+  assert.strictEqual(square.height, 120);
+  assert.strictEqual(square.width, 120);
+});
+
+test('rememberSize / parseImageMarker feed thumbDisplaySize', () => {
+  ImageLightbox.rememberSize('Aa11Bb22', 1920, 1080);
+  const got = ImageLightbox.lookupSize('aa11bb22');
+  assert.strictEqual(got.width, 1920);
+  assert.strictEqual(got.height, 1080);
+  const parsed = ImageLightbox.parseImageMarker('[image: cafe01 390x1210]');
+  assert.strictEqual(parsed.id, 'cafe01');
+  assert.strictEqual(parsed.width, 390);
+  assert.strictEqual(parsed.height, 1210);
+  const fromCache = ImageLightbox.thumbDisplaySize(
+    ImageLightbox.lookupSize('cafe01').width,
+    ImageLightbox.lookupSize('cafe01').height,
+  );
+  assert.strictEqual(fromCache.height, 120);
+  const bare = ImageLightbox.parseImageMarker('[image: deadbeefcafebabe]');
+  assert.strictEqual(bare.id, 'deadbeefcafebabe');
+  assert.strictEqual(bare.width, 0);
+  assert.deepStrictEqual(
+    ImageLightbox.extractImageIdsFromText('[image: cafe01 390x1210] and [image: aa11]'),
+    ['cafe01', 'aa11'],
+  );
+});
+
 test('siblingIdsFromImgs reads data-image-id', () => {
   const fake = [
     { getAttribute: (k) => (k === 'data-image-id' ? 'aa11' : null) },

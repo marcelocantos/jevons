@@ -5,6 +5,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -18,12 +19,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	// image/gif, image/jpeg, image/png register decoders via their imports above
 	// (jpeg/png also used for encode). GIF is decode-only here.
 	_ "image/gif"
 
 	"golang.org/x/image/draw"
+
+	"github.com/marcelocantos/jevons/internal/imagetext"
 )
 
 // ImageThumbMaxEdge is the longest side (px) for browser-delivered thumbs (🎯T224).
@@ -42,7 +46,65 @@ const ImageThumbJPEGQuality = 89
 const ImageThumbJPEGSizeFactor = 2
 
 // ImageMarkerPrefix is the journal/chat marker for a stored image (🎯T76/T224).
-const ImageMarkerPrefix = "[image: "
+// Defined from the imagetext constant so the marker this package writes and
+// the marker that package scans for cannot drift apart (🎯T403.7.1).
+const ImageMarkerPrefix = imagetext.MarkerPrefix
+
+// ImageExtractTimeout bounds text recognition of an uploaded image (🎯T403.7.1).
+//
+// Extraction runs before the upload responds, on purpose: the response hands
+// the client a marker it may put straight into a message, so the sidecar has to
+// exist by then or the first turn about the image is the one turn without its
+// text. Measured cost is ~0.6s for a dialog-sized image and ~2.6s for a
+// 3400x1800 screenshot; the timeout is well clear of both, and hitting it
+// degrades to image-only with the reason recorded rather than failing the
+// upload.
+const ImageExtractTimeout = 30 * time.Second
+
+// extractImageText recognises the text in an uploaded image and persists it
+// beside the image (🎯T403.7.1).
+//
+// A failure here is never fatal to the upload — the image is stored and
+// serveable either way — but it is always recorded, because the alternative to
+// a recorded failure is a model filling the silence with a description.
+func (s *Server) extractImageText(ctx context.Context, id, path string) imagetext.Extraction {
+	ctx, cancel := context.WithTimeout(ctx, ImageExtractTimeout)
+	defer cancel()
+	e := imagetext.Extract(ctx, path, id)
+	if err := imagetext.Save(s.imagesDir(), e); err != nil {
+		slog.Error("image text sidecar write failed", "id", id, "err", err)
+	}
+	slog.Info("image text extracted",
+		"id", id,
+		"source", e.Source,
+		"lines", len(e.Lines),
+		"tile_lines", e.TileLines(),
+		"degraded", e.Degraded,
+		"reason", e.Reason,
+		"ms", e.DurationMS,
+	)
+	return e
+}
+
+// imageTextLoader reads persisted extractions out of the images directory.
+func (s *Server) imageTextLoader() imagetext.Loader {
+	return imagetext.DirLoader(s.imagesDir())
+}
+
+// expandImageText appends the extracted text of every image the text refers to
+// (🎯T403.7.1). This is what a model receives instead of a description: the
+// marker stays where it is so clients still render the thumbnail, and the
+// deterministic reading of the image travels with it.
+//
+// Text with no markers is returned untouched, and so is a marker whose
+// extraction is missing or unreadable — this function never manufactures a
+// statement about an image.
+func (s *Server) expandImageText(text string) string {
+	if !strings.Contains(text, ImageMarkerPrefix) {
+		return text
+	}
+	return imagetext.Expand(text, s.imageTextLoader())
+}
 
 // registerImageRoutes mounts image upload/serve under /api/images (🎯T76/T224).
 // Full-res residual: GET /api/images/{id}
@@ -119,15 +181,30 @@ func (s *Server) handleImageUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("image uploaded", "id", id, "bytes", n, "path", path, "thumb", thumbOK)
 
+	// Natural size so the client can reserve the thumb box before decode.
+	natW, natH := imageFileBounds(path)
+
+	// Read the image with the OS recogniser and persist what it read, before
+	// the marker goes back to the client (🎯T403.7.1).
+	extraction := s.extractImageText(r.Context(), id, path)
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":        id,
 		"ext":       ext,
 		"url":       ImageFullURL(id),  // full-res residual
 		"thumb_url": ImageThumbURL(id), // browser default (🎯T224)
+		"width":     natW,
+		"height":    natH,
 		"path":      path,
 		// Marker the overseer / journal understand (🎯T76/T224).
 		"marker": ImageMarker(id),
+		// What the recogniser read, so a client can say so without guessing
+		// (🎯T403.7.1). Counts and provenance only — never a description.
+		"text_source":   extraction.Source,
+		"text_lines":    len(extraction.Lines),
+		"text_degraded": extraction.Degraded,
+		"text_reason":   extraction.Reason,
 	})
 }
 
@@ -389,6 +466,20 @@ func newImageID() (string, error) {
 // ImageMarker returns the journal text marker for a stored image id.
 func ImageMarker(id string) string {
 	return fmt.Sprintf("[image: %s]", id)
+}
+
+// imageFileBounds returns the natural pixel size, or 0,0 if unread.
+func imageFileBounds(path string) (int, int) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+	cfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
 }
 
 // ImageThumbURL is the browser-facing compact preview path (🎯T224).

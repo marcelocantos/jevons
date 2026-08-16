@@ -62,6 +62,9 @@ function startServer() {
         return { ok: false, reason: 'no thumb in html ' + html };
       }
       if (html.indexOf('blob:') >= 0) return { ok: false, reason: 'blob url in hydrate' };
+      if (img.getAttribute('width') !== '160' || img.getAttribute('height') !== '120') {
+        return { ok: false, reason: 'reserved box ' + img.getAttribute('width') + 'x' + img.getAttribute('height') };
+      }
       return { ok: true };
     });
     if (!ok.ok) {

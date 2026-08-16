@@ -184,6 +184,12 @@ func TestImageUploadJournalHydrateThumb(t *testing.T) {
 	if thumbURL != ImageThumbURL(id) {
 		t.Fatalf("thumb_url=%q want %q", thumbURL, ImageThumbURL(id))
 	}
+	if w, _ := resp["width"].(float64); w != 400 {
+		t.Fatalf("width=%v want 400", resp["width"])
+	}
+	if h, _ := resp["height"].(float64); h != 300 {
+		t.Fatalf("height=%v want 300", resp["height"])
+	}
 
 	// Thumb file on disk under images/thumbs/ (PNG or JPEG after 🎯T257 dual-encode).
 	thumbPath, _ := findThumbOnDisk(t, dir, id)
