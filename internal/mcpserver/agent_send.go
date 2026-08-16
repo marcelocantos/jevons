@@ -403,7 +403,11 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 	// daemon can neither see nor replay: it merges silently with later sends
 	// and dies with the pane at the next rotation or restart (🎯T418). The
 	// daemon's own queue drains on terminal stop, one message per turn.
-	if s.flightState(name) == FlightInFlight {
+	//
+	// 🎯T424: interrupt=true never takes this arm. The reading can be
+	// stale in both directions; the hatch must act on the process, not on
+	// the flag it exists to escape.
+	if !interrupt && s.flightState(name) == FlightInFlight {
 		// 🎯T426 clause 3: "in flight" is a claim this process wrote when it
 		// last saw a send begin, and it is only worth anything while the sink
 		// that would retract it is still attached. Attaching one HERE means it
@@ -503,21 +507,14 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 	// Busy path (🎯T111.1): interrupt then send, or queue for after turn.
 	if interrupt {
 		if ierr := proc.Interrupt(); ierr != nil {
-			// Still queue so the nudge is not lost; surface both facts.
-			n, qerr := s.enqueueAgentSend(name, text)
-			if qerr != nil {
-				return agentSendResult{}, undeliverableQueueError(name, qerr)
-			}
-			res := agentSendResult{
-				Status: "interrupted_queued",
-				Message: fmt.Sprintf(
-					"busy: prompt already in flight; interrupt failed (%v); message queued (%d pending) for delivery after the turn. "+
-						"Stuck recovery without kill: re-send with interrupt=true after a moment, or jevons_agent_stop then jevons_agent_start (resume session).",
-					ierr, n),
-				Queued: n,
-			}
-			logAgentSendResult(name, res, rehydrated)
-			return res, nil
+			// 🎯T424: interrupt never silently becomes a queue. The
+			// caller asked to cut the turn; failing that is an error,
+			// not a graceful enqueue. Do not advise interrupt=true —
+			// that is what they just did.
+			return agentSendResult{}, fmt.Errorf(
+				"interrupt failed for %q (%v) — message was not queued (🎯T424). "+
+					"The turn could not be cut; jevons_agent_stop then jevons_agent_start resumes the session.",
+				name, ierr)
 		}
 		// Brief yield so ACP can clear promptID after session/cancel.
 		time.Sleep(50 * time.Millisecond)
@@ -539,20 +536,14 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 			outcome := ClassifySendOutcome(FlightIdle, ev)
 			return s.reportSendOutcome(name, outcome, FlightIdle, ev, rehydrated, true, err2)
 		} else if isPromptInFlight(err2) {
-			n, qerr := s.enqueueAgentSend(name, text)
-			if qerr != nil {
-				return agentSendResult{}, undeliverableQueueError(name, qerr)
-			}
-			res := agentSendResult{
-				Status: "interrupted_queued",
-				Message: fmt.Sprintf(
-					"busy: interrupted %q but prompt still in flight; message queued (%d pending). "+
-						"Will deliver when the turn ends. Recovery without kill+remint: wait, or stop+start (resume).",
-					name, n),
-				Queued: n,
-			}
-			logAgentSendResult(name, res, rehydrated)
-			return res, nil
+			// 🎯T424: still busy after a successful Interrupt is a
+			// typed failure, not a queue increment. The 2026-08-10
+			// six-deep backlog was this arm adding to a queue that
+			// had stopped draining.
+			return agentSendResult{}, fmt.Errorf(
+				"interrupt of %q did not cut the turn (prompt still in flight) — message was not queued (🎯T424). "+
+					"The hatch could not open; jevons_agent_stop then jevons_agent_start resumes the session.",
+				name)
 		} else {
 			class, ownerMsg := agenterr.ClassifyAndFormat(err2)
 			if !class.IsFailure() {

@@ -200,19 +200,60 @@ func TestDeliverToSenderInterruptThenSend(t *testing.T) {
 	}
 }
 
+// TestDeliverToSenderInterruptStillBusyQueues used to pin T111.1's
+// "OR RE-QUEUES IF STILL BUSY" fallback — the hole 🎯T424 closes.
+// Revised, not deleted: interrupt=true must ERROR and must not enqueue.
 func TestDeliverToSenderInterruptStillBusyQueues(t *testing.T) {
 	s := &Server{}
-	// Interrupt does not clear inFlight — stuck ACP flag; must still queue.
+	// Interrupt does not clear inFlight — stuck ACP flag.
 	fs := &fakeSender{alive: true, inFlight: true, afterInterruptClears: false}
 	res, err := deliverToSender(s, "po", "nudge", true, fs, false)
+	if err == nil {
+		t.Fatalf("interrupt still queued: status=%q queued=%d — 🎯T424 forbids this", res.Status, res.Queued)
+	}
+	if !strings.Contains(err.Error(), "not queued") {
+		t.Fatalf("error %q does not say the message was not queued", err)
+	}
+	if strings.Contains(err.Error(), "interrupt=true") {
+		t.Fatalf("interrupt path advised interrupt=true: %q", err)
+	}
+	if res.Queued != 0 {
+		t.Fatalf("queued=%d want 0", res.Queued)
+	}
+}
+
+func TestT424InterruptOnStoppedQueueDoesNotEnqueue(t *testing.T) {
+	s := &Server{}
+	for i := 0; i < 6; i++ {
+		if _, err := s.enqueueAgentSend("po", fmt.Sprintf("m%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fs := &fakeSender{alive: true, inFlight: true, afterInterruptClears: false}
+	_, err := deliverToSender(s, "po", "seventh", true, fs, false)
+	if err == nil {
+		t.Fatal("interrupt added to a stuck queue")
+	}
+	if n := s.pendingAgentSends("po"); n != 6 {
+		t.Fatalf("queue grew to %d, want 6", n)
+	}
+}
+
+func TestT424InterruptIgnoresStaleInFlightAndDelivers(t *testing.T) {
+	s := &Server{}
+	s.noteTurnInFlight("po")
+	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, PayloadSeen: true}))
+	// Process is actually idle — the flag is the 2026-08-10 stale reading.
+	fs := &fakeSender{alive: true, inFlight: false}
+	res, err := deliverToSender(s, "po", "unstick", true, fs, false)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("stale in-flight + interrupt should deliver: %v", err)
 	}
-	if res.Status != "interrupted_queued" {
-		t.Fatalf("status=%q", res.Status)
+	if len(fs.sent) != 1 || fs.sent[0] != "unstick" {
+		t.Fatalf("sent=%v", fs.sent)
 	}
-	if res.Queued != 1 {
-		t.Fatalf("queued=%d", res.Queued)
+	if res.Status == "queued" || res.Queued > 0 {
+		t.Fatalf("interrupt queued behind a stale reading: %+v", res)
 	}
 }
 
