@@ -716,7 +716,8 @@
       return out;
     }
     if (event.type === 'system') {
-      closeOpen();
+      // System is not a display break. Closing here minted one host
+      // turn-slot per agent_note+system pair during replay (🎯T494.1).
       return out;
     }
     if (event.type !== 'assistant') return out;

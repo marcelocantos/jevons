@@ -1301,13 +1301,33 @@ test('index.html wires T350 fractional freeze + gated expansion pins', function 
 
 // ── 🎯T351: fractional content vs integer scroll ─────────────────────
 
-test('T494 pinScrollTopForLastBubble sits on the last owner turn, not the slot tail', function () {
-  const st = VL.pinScrollTopForLastBubble({
-    lastBubbleBottom: 3000,
-    clientHeight: 689,
-    scrollHeight: 4000,
-  });
-  assert.strictEqual(st, 3000 - 689);
+test('T494.1 shouldPinScroll uses the same liveEnd the pin writes', function () {
+  // Canvas-end pin: already there → no rewrite (wheel is not fought).
+  assert.strictEqual(VL.shouldPinScroll({
+    force: false,
+    prevScrollHeight: 4000,
+    nextScrollHeight: 4000,
+    clientHeight: 800,
+    scrollTop: 3200,
+    liveEnd: 3200,
+    threshold: 2,
+  }), false);
+  // Two bottoms: st at lastBubble, liveEnd at canvas end → would pin-fight.
+  assert.strictEqual(VL.shouldPinScroll({
+    force: false,
+    prevScrollHeight: 4000,
+    nextScrollHeight: 4000,
+    clientHeight: 800,
+    scrollTop: 3000,
+    liveEnd: 3200,
+    threshold: 2,
+  }), true);
+});
+
+test('T494 pinWriteScrollTop is the product live end (canvas end)', function () {
+  // Empty turn-slots must not invent a tail; labelled ⋯ n steps after
+  // the last bubble is real content and belongs in the live end.
+  assert.strictEqual(VL.pinWriteScrollTop(4000), 4000);
   const fallback = VL.pinScrollTopForLastBubble({
     lastBubbleBottom: 0,
     clientHeight: 689,
@@ -1416,7 +1436,7 @@ test('index.html wires T351 whole-pixel geometry', function () {
     'endHistoryReplayAndPin pins to the last owner bubble, not the slot tail');
   const pinBody = html.match(/const pin = \(\) => \{[\s\S]{0,2200}?\n  \};/);
   assert.ok(pinBody && /pinToLiveEnd/.test(pinBody[0]),
-    'scrollDown pin writes via pinToLiveEnd (last owner bubble, 🎯T494)');
+    'scrollDown pin writes via pinToLiveEnd (one live end, 🎯T494.1)');
   assert.ok(pinBody && /!force && pinnedNow/.test(pinBody[0]),
     'forced pins bypass the skip fast-path (post-snap correction)');
   // Hydrate compensation is the prefix-total delta (canvas height), not a

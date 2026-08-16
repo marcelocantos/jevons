@@ -170,7 +170,10 @@
     if (Math.abs(nextH - prevH) >= t) return true;
     const ch = Number(o.clientHeight) || 0;
     const st = Number(o.scrollTop) || 0;
-    const target = finalPinScrollTop(nextH, ch);
+    const live = o.liveEnd != null ? Number(o.liveEnd) : NaN;
+    const target = Number.isFinite(live)
+      ? live
+      : finalPinScrollTop(nextH, ch);
     return Math.abs(st - target) >= t;
   }
 

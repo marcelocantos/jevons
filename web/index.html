@@ -2447,17 +2447,16 @@ function lastTranscriptBubbleBottom() {
 
 function pinToLiveEnd() {
   if (!msgs) return 0;
-  if (typeof VirtualList !== 'undefined' && VirtualList.pinScrollTopForLastBubble) {
-    return VirtualList.pinScrollTopForLastBubble({
-      lastBubbleBottom: lastTranscriptBubbleBottom(),
-      clientHeight: msgs.clientHeight,
-      scrollHeight: msgs.scrollHeight,
-    });
-  }
+  // One live end: the canvas end. Empty turn-slots must not exist to
+  // invent a tail below the last owner bubble (🎯T494.1). A labelled
+  // ⋯ n steps marker after the last bubble is real content and stays
+  // in view. last-bubble pin was the T494 workaround for that tail.
   return (typeof VirtualList !== 'undefined' && VirtualList.pinWriteScrollTop)
     ? VirtualList.pinWriteScrollTop(msgs.scrollHeight)
     : msgs.scrollHeight;
 }
+window.pinToLiveEnd = pinToLiveEnd;
+window.lastTranscriptBubbleBottom = lastTranscriptBubbleBottom;
 
 function forcePinLastBubble() {
   if (!msgs) return;
@@ -3361,17 +3360,28 @@ function sealAssistantStream(streamId) {
 function startTurn() {
   // 🎯T119.6: one open slot is one marker.
   if (turnDetails && turnDetails.isConnected) return;
+  // Re-home a parked slot rather than minting another empty row.
+  // virtualizeMessages is a no-op during connect replay (T347); depending
+  // on it here leaked one unlabelled 16px slot per tool/note (🎯T494.1).
+  if (turnDetails && turnDetails._vIndex != null && transcriptRows[turnDetails._vIndex]) {
+    const parked = attachTranscriptRow(turnDetails._vIndex, { lazy: false });
+    if (parked) {
+      turnDetails = parked;
+      turnItems = parked._items;
+      return;
+    }
+  }
   // 🎯T119.4: mutate the model, then apply. attachTranscriptRow is the
-  // only mint.
+  // only mint — call it here, do not wait for virtualize.
   const row = registerTranscriptRow('turn-marker', '', Date.now(), {});
-  if (typeof virtualizeMessages === 'function') virtualizeMessages();
-  else attachTranscriptRow(transcriptRows.length - 1, { lazy: false });
-  turnDetails = row.el;
-  turnItems = turnDetails && turnDetails._items;
+  const el = attachTranscriptRow(transcriptRows.length - 1, { lazy: false });
+  turnDetails = el;
+  turnItems = el && el._items;
   if (turnDetails) {
     turnDetails._vIndex = transcriptRows.length - 1;
     if (typeof applyRowHeight === 'function') {
-      applyRowHeight(turnDetails._vIndex, Math.max(16, turnDetails.offsetHeight || 16));
+      const h = turnDetails.offsetHeight || 0;
+      if (h > 0) applyRowHeight(turnDetails._vIndex, h);
     }
   }
   turnCount++;
@@ -6835,6 +6845,8 @@ function distFromBottom() {
 function atBottom() {
   const room = msgs.scrollHeight - msgs.clientHeight;
   if (room <= 0) return true;
+  const want = typeof pinToLiveEnd === 'function' ? pinToLiveEnd() : (msgs.scrollHeight - msgs.clientHeight);
+  if (Math.abs((msgs.scrollTop || 0) - want) <= ENTER_BOTTOM_EPS_PX) return true;
   return distFromBottom() <= ENTER_BOTTOM_EPS_PX;
 }
 // Geometry may re-enter only after the user has left the ε band (or send/boot).
@@ -7585,6 +7597,7 @@ function scrollDown(opts) {
           nextScrollHeight: sh0,
           clientHeight: ch0,
           scrollTop: st0,
+          liveEnd: pinToLiveEnd(),
           threshold: thr,
         })
       : true;
@@ -7605,6 +7618,7 @@ function scrollDown(opts) {
           nextScrollHeight: sh,
           clientHeight: ch,
           scrollTop: st,
+          liveEnd: pinToLiveEnd(),
           threshold: thr,
         });
     if (!should) return;

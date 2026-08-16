@@ -58,6 +58,42 @@ test('emptyPaneFail: model rows with zero visible is a fail', function () {
   assert.strictEqual(VC.emptyPaneFail(0, 0), false, 'empty model is not the empty-pane bug');
 });
 
+test('T494.1 Latest on hard-reload is a fail', function () {
+  assert.strictEqual(VC.latestOnHardReloadFail({
+    fabHidden: false, followMode: 'track', atBottom: false,
+  }), true, 'owner screenshot: Latest visible after reload');
+  assert.strictEqual(VC.latestOnHardReloadFail({
+    fabHidden: true, followMode: 'track', atBottom: false,
+  }), true, 'tracking but not at live end');
+  assert.strictEqual(VC.latestOnHardReloadFail({
+    fabHidden: true, followMode: 'track', atBottom: true,
+  }), false);
+});
+
+test('T494.1 empty unlabelled slots are a desert', function () {
+  assert.strictEqual(VC.emptySlotDesertFail(255), true, 'daily 255 empty slots');
+  assert.strictEqual(VC.emptySlotDesertFail(1), true);
+  assert.strictEqual(VC.emptySlotDesertFail(0), false);
+});
+
+test('T494.1 packed pane needs two bubbles on the oracle viewport', function () {
+  assert.strictEqual(VC.packedPaneFail(1, 2), true, 'one leftover bubble');
+  assert.strictEqual(VC.packedPaneFail(0, 2), true);
+  assert.strictEqual(VC.packedPaneFail(3, 2), false);
+});
+
+test('T494.1 pin and canvas-end must agree', function () {
+  assert.strictEqual(VC.liveEndDisagreeFail(22366.6, 22585, 16), true, '218px tail');
+  assert.strictEqual(VC.liveEndDisagreeFail(22585, 22585, 16), false);
+  assert.strictEqual(VC.liveEndDisagreeFail(22580, 22585, 16), false, 'within Latest ε');
+  // T351 over-assign: write scrollHeight, engine clamps to sh − ch.
+  // Census must compare the clamped target, not the write.
+  const sh = 3252, ch = 689;
+  const write = sh;
+  const clamped = Math.min(write, sh - ch);
+  assert.strictEqual(VC.liveEndDisagreeFail(clamped, sh - ch, 16), false);
+});
+
 test('opacity-0 / covered / off-viewport are gate failures', function () {
   // These are the serialized shapes collect() produces; the hermetic
   // suite cannot call checkVisibility, so it asserts the predicates

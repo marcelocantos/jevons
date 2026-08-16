@@ -811,6 +811,24 @@ test('T372 index.html: no second grow-bubble implementation', function () {
     'live path must not remount via renderAgentInspect');
 });
 
+test('T494.1 agent_note + system pairs coalesce to one labelled slot', function () {
+  const stream = CW.createStreamJoin({});
+  stream.applyWireEvent({ type: 'user', message: { content: 'go' } });
+  stream.applyWireEvent({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'ack' }], stop_reason: 'end_turn' },
+  });
+  for (let i = 0; i < 20; i++) {
+    stream.applyWireEvent({ type: 'agent_note', text: '[Agent pad responded] slot ' + i });
+    stream.applyWireEvent({ type: 'system' });
+  }
+  const lines = stream.getLines();
+  const slots = lines.filter(function (l) { return l.kind === 'turn-slot'; });
+  assert.strictEqual(slots.length, 1, 'system must not open a new slot, got ' + slots.length);
+  assert.strictEqual(slots[0].items.length, 20);
+  assert.strictEqual(slots[0].text, '⋯ 20 steps');
+});
+
 test('T119.6 startTurn twice leaves one canvas child', function () {
   const CW = require('./conversation_widget.js');
   const canvas = { children: [] };
@@ -835,6 +853,10 @@ test('T119.6 startTurn twice leaves one canvas child', function () {
   const start = html.match(/function startTurn\(\) \{[\s\S]*?\nfunction closeTurn/);
   assert.ok(start, 'startTurn exists');
   assert.ok(/isConnected/.test(start[0]), 'startTurn is idempotent while the slot is connected');
+  assert.ok(/attachTranscriptRow/.test(start[0]),
+    'T494.1: startTurn attaches itself — virtualize is a no-op during replay');
+  assert.ok(!/virtualizeMessages\(\)/.test(start[0]),
+    'T494.1: startTurn must not depend on virtualizeMessages to set row.el');
   assert.ok(!/createElement/.test(start[0]),
     'T119.4: startTurn must not mint DOM — apply/attachTranscriptRow is the only mint');
   const close = html.match(/function closeTurn\(\) \{[\s\S]*?\nfunction formatAgentNote/);

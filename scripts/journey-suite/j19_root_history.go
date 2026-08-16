@@ -221,10 +221,32 @@ func seedJ19Journal(path string, turns int) error {
 		b.WriteByte('\n')
 		b.Write(ab)
 		b.WriteByte('\n')
+		// 🎯T494.1: daily paints a desert of empty slots BETWEEN owner
+		// turns (65 unlabelled markers after one jevons bubble). Seed
+		// that shape between the last two turns so J19 cannot go green
+		// on short text-only replay.
+		if i == turns-2 {
+			for n := 0; n < 20; n++ {
+				tsNote := base.Add(time.Duration(i*2+1)*time.Second + time.Duration(n+1)*time.Millisecond).Format(time.RFC3339)
+				tsSys := base.Add(time.Duration(i*2+1)*time.Second + time.Duration(n+1)*time.Millisecond + time.Microsecond).Format(time.RFC3339)
+				note, _ := json.Marshal(map[string]any{
+					"type":      "agent_note",
+					"timestamp": tsNote,
+					"text":      fmt.Sprintf("[Agent pad responded] mid %02d", n),
+				})
+				sys, _ := json.Marshal(map[string]any{
+					"type":      "system",
+					"timestamp": tsSys,
+				})
+				b.Write(note)
+				b.WriteByte('\n')
+				b.Write(sys)
+				b.WriteByte('\n')
+			}
+		}
 	}
-	// Trailing turn-slots (agent_note + system to close each slot). Daily
-	// empty pane is pin-to-bottom onto a stack of unmeasured 72px markers;
-	// 16 text turns alone never build that, so J19 stayed green.
+	// Trailing notes after the last owner turn. Must collapse to one
+	// labelled ⋯ n steps marker — not 24 blank 16px rows.
 	for i := 0; i < j19SlotTail; i++ {
 		tsNote := base.Add(time.Duration(turns*2+i*2) * time.Second).Format(time.RFC3339)
 		tsSys := base.Add(time.Duration(turns*2+i*2+1) * time.Second).Format(time.RFC3339)

@@ -60,6 +60,32 @@
     return (Number(modelRows) || 0) > 0 && (Number(visibleInScroller) || 0) === 0;
   }
 
+  // 🎯T494.1: Latest after a hard-reload means pin and atBottom disagree.
+  function latestOnHardReloadFail(opts) {
+    const o = opts || {};
+    if (o.fabHidden === false) return true;
+    if (o.followMode === 'track' && o.atBottom === false) return true;
+    return false;
+  }
+
+  // Unlabelled turn-slots reserve layout and paint nothing (the white desert).
+  function emptySlotDesertFail(emptySlots) {
+    return (Number(emptySlots) || 0) > 0;
+  }
+
+  // A 1280×800 oracle viewport with ≥2 seeded turns must show ≥2 bubbles.
+  function packedPaneFail(visibleBubbles, min) {
+    const need = min == null ? 2 : Number(min);
+    return (Number(visibleBubbles) || 0) < need;
+  }
+
+  // Pin target and canvas-end must be the same live end (ε = Latest band).
+  function liveEndDisagreeFail(pinWant, canvasEndPin, epsPx) {
+    const eps = epsPx == null ? 16 : Number(epsPx);
+    const e = Number.isFinite(eps) && eps >= 0 ? eps : 16;
+    return Math.abs((Number(pinWant) || 0) - (Number(canvasEndPin) || 0)) > e;
+  }
+
   function viewportPinned(innerW, innerH, dpr) {
     return innerW === ORACLE_VIEWPORT.width &&
       innerH === ORACLE_VIEWPORT.height &&
@@ -132,9 +158,43 @@
     const visibleInScroller = visible.length;
     const visibleCheckOk = visible.filter(function (v) { return v.checkVisibility; }).length;
     const visibleHitOk = visible.filter(function (v) { return v.hitOk; }).length;
+    const visibleBubbles = visible.filter(function (v) {
+      return v.role === 'user' || v.role === 'assistant';
+    }).length;
     const iw = typeof window !== 'undefined' ? window.innerWidth : 0;
     const ih = typeof window !== 'undefined' ? window.innerHeight : 0;
     const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 0;
+
+    let emptySlots = 0;
+    let labelledSlots = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      const kind = row.kind || row.role || '';
+      if (kind !== 'turn-slot' && kind !== 'turn-marker') continue;
+      if (String(row.text || '').trim()) labelledSlots++;
+      else emptySlots++;
+    }
+
+    const sh = scroller ? scroller.scrollHeight : 0;
+    const ch = scroller ? scroller.clientHeight : 0;
+    const st = scroller ? scroller.scrollTop : 0;
+    const canvasEndPin = Math.max(0, sh - ch);
+    // pinToLiveEnd over-assigns scrollHeight (T351); the engine clamps
+    // to sh − ch. Compare the clamped target to canvas-end, not the write.
+    const pinWrite = (typeof window !== 'undefined' && typeof window.pinToLiveEnd === 'function')
+      ? Number(window.pinToLiveEnd())
+      : canvasEndPin;
+    const pinWant = Number.isFinite(pinWrite)
+      ? Math.max(0, Math.min(pinWrite, canvasEndPin))
+      : canvasEndPin;
+    const followMode = (typeof window !== 'undefined' && window.followMode)
+      ? String(window.followMode)
+      : '';
+    const fab = typeof document !== 'undefined' ? document.getElementById('jump-bottom') : null;
+    const fabHidden = !fab || !!fab.hidden;
+    const distFromBottom = sh - ch - st;
+    const atBottom = ch <= 0 || distFromBottom <= 16 || Math.abs(st - pinWant) <= 16;
 
     return {
       innerWidth: iw,
@@ -146,15 +206,32 @@
       visibleInScroller: visibleInScroller,
       visibleCheckOk: visibleCheckOk,
       visibleHitOk: visibleHitOk,
+      visibleBubbles: visibleBubbles,
       visibleTexts: visible.map(function (v) { return v.text; }),
       modelMarkers: modelMarkers,
       visibleMarkers: visibleMarkers,
+      emptySlots: emptySlots,
+      labelledSlots: labelledSlots,
       emptyPane: emptyPaneFail(rows.length, visibleInScroller),
+      emptySlotDesert: emptySlotDesertFail(emptySlots),
+      packedPaneFail: packedPaneFail(visibleBubbles, 2),
+      latestOnHardReload: latestOnHardReloadFail({
+        fabHidden: fabHidden,
+        followMode: followMode,
+        atBottom: atBottom,
+      }),
+      liveEndDisagree: liveEndDisagreeFail(pinWant, canvasEndPin, 16),
       gatesFail: visibleInScroller > 0 &&
         (visibleCheckOk < visibleInScroller || visibleHitOk < visibleInScroller),
-      scrollTop: scroller ? scroller.scrollTop : 0,
-      scrollHeight: scroller ? scroller.scrollHeight : 0,
-      clientHeight: scroller ? scroller.clientHeight : 0,
+      followMode: followMode,
+      fabHidden: fabHidden,
+      atBottom: atBottom,
+      pinWant: pinWant,
+      canvasEndPin: canvasEndPin,
+      distFromBottom: distFromBottom,
+      scrollTop: st,
+      scrollHeight: sh,
+      clientHeight: ch,
       canvasHeight: canvas ? canvas.offsetHeight : 0,
     };
   }
@@ -174,6 +251,10 @@
     pointInRect: pointInRect,
     hitTestPasses: hitTestPasses,
     emptyPaneFail: emptyPaneFail,
+    latestOnHardReloadFail: latestOnHardReloadFail,
+    emptySlotDesertFail: emptySlotDesertFail,
+    packedPaneFail: packedPaneFail,
+    liveEndDisagreeFail: liveEndDisagreeFail,
     viewportPinned: viewportPinned,
     collect: collect,
     pinScrollBottom: pinScrollBottom,

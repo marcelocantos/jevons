@@ -134,16 +134,42 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     const lastVisible = (census.visibleMarkers || []).indexOf(lastTok) >= 0 ||
       (census.visibleTexts || []).some(function (t) { return String(t).indexOf(lastTok) !== -1; });
     const noVisibleSeed = !emptyPane && (visibleMarkerN < 1 || !lastVisible);
+    const latestFail = !!census.latestOnHardReload;
+    const desertFail = !!census.emptySlotDesert;
+    const packedFail = !!census.packedPaneFail;
+    const liveEndFail = !!census.liveEndDisagree;
+
+    // Programmatic stand-in for the stuck wheel: if we are tracking and
+    // not at canvas end, a scrollTop nudge must not snap back.
+    const wheel = await page.evaluate(async () => {
+      const msgs = document.getElementById('messages');
+      if (!msgs) return { skipped: true };
+      const before = msgs.scrollTop;
+      const dist = msgs.scrollHeight - msgs.clientHeight - before;
+      msgs.scrollTop = before + 80;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const after = msgs.scrollTop;
+      const tracking = typeof window.isTracking === 'function' && window.isTracking();
+      const snapped = tracking && dist > 20 && Math.abs(after - before) < 2;
+      // Restore the product pin so later OCR sees the live end.
+      if (typeof window.pinToLiveEnd === 'function') msgs.scrollTop = window.pinToLiveEnd();
+      else msgs.scrollTop = before;
+      return { before: before, after: after, dist: dist, tracking: tracking, snapped: snapped };
+    });
+    const wheelStuck = !!(wheel && wheel.snapped);
 
     const ok = !collapsed && !missingSeed && !emptyPane && !gatesFail &&
       !viewportDrift && !noVisibleSeed &&
+      !latestFail && !desertFail && !packedFail && !liveEndFail && !wheelStuck &&
       census.transcriptRows >= MIN_MARKERS &&
       census.uniqueVIndex >= MIN_MARKERS &&
       census.uniqueTops >= MIN_MARKERS &&
       markerN >= MIN_MARKERS &&
       census.visibleInScroller >= 1 &&
       census.visibleCheckOk >= 1 &&
-      census.visibleHitOk >= 1;
+      census.visibleHitOk >= 1 &&
+      (census.visibleBubbles || 0) >= 2 &&
+      census.fabHidden !== false;
 
     const report = {
       host: HOST,
@@ -157,6 +183,12 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
       emptyPane: emptyPane,
       gatesFail: gatesFail,
       viewportDrift: viewportDrift,
+      latestFail: latestFail,
+      desertFail: desertFail,
+      packedFail: packedFail,
+      liveEndFail: liveEndFail,
+      wheelStuck: wheelStuck,
+      wheel: wheel,
       census: census,
     };
     console.log(JSON.stringify(report, null, 2));
@@ -195,6 +227,27 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
       die(1, 'J19 visible turns have no ' + PREFIX + '* token (got ' +
         visibleMarkerN + ' visible markers, visibleInScroller=' +
         census.visibleInScroller + ')');
+    }
+    if (latestFail) {
+      die(1, 'J19 Latest visible after hard-reload (🎯T494.1): fabHidden=' +
+        census.fabHidden + ' follow=' + census.followMode +
+        ' atBottom=' + census.atBottom + ' dist=' + census.distFromBottom);
+    }
+    if (desertFail) {
+      die(1, 'J19 empty turn-slot desert (🎯T494.1): emptySlots=' +
+        census.emptySlots + ' labelledSlots=' + census.labelledSlots);
+    }
+    if (packedFail) {
+      die(1, 'J19 pane not packed (🎯T494.1): visibleBubbles=' +
+        census.visibleBubbles + ' visibleInScroller=' + census.visibleInScroller);
+    }
+    if (liveEndFail) {
+      die(1, 'J19 two bottoms (🎯T494.1): pinWant=' + census.pinWant +
+        ' canvasEnd=' + census.canvasEndPin);
+    }
+    if (wheelStuck) {
+      die(1, 'J19 wheel snap-back (🎯T494.1): st ' + wheel.before +
+        ' → ' + wheel.after + ' dist=' + wheel.dist);
     }
     if (!ok) {
       die(1,
