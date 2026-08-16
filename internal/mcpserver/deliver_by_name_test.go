@@ -139,20 +139,53 @@ func TestDeliverByNameUnregisteredPeerErrors(t *testing.T) {
 	}
 }
 
+func TestT3927RelayReportSkipsPOHop(t *testing.T) {
+	po := &fakeSender{alive: true}
+	s, inbox := chainServer(t, map[string]*fakeSender{"jevons-po": po})
+	text := "🎯T10 done. GATE abc GREEN. SHA deadbeef. tests pass."
+	if _, err := s.deliverByNameAs("jv-t10", "jevons-po", text, OriginAgent, false); err != nil {
+		t.Fatalf("relay send: %v", err)
+	}
+	if len(inbox.texts) != 1 || !strings.Contains(inbox.texts[0], "GATE abc") {
+		t.Fatalf("overseer inbox=%v — full report must skip the PO hop", inbox.texts)
+	}
+	if len(po.sent) != 1 || !strings.Contains(po.sent[0], "routed to overseer") {
+		t.Fatalf("PO inbox=%v want one record line", po.sent)
+	}
+	if strings.Contains(po.sent[0], "GATE abc") {
+		t.Fatal("PO received the full report — that is the hop this target removes")
+	}
+}
+
+func TestT3927OwnerDirectToPONotRerouted(t *testing.T) {
+	po := &fakeSender{alive: true}
+	s, inbox := chainServer(t, map[string]*fakeSender{"jevons-po": po})
+	text := "🎯T10 done. GATE abc GREEN. SHA deadbeef."
+	if _, err := s.deliverByName("jevons-po", text, OriginOwner, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(po.sent) != 1 || !strings.Contains(po.sent[0], "GATE abc") {
+		t.Fatalf("owner→PO must stay on the PO: %v", po.sent)
+	}
+	if len(inbox.texts) != 0 {
+		t.Fatalf("owner→PO leaked to overseer: %v", inbox.texts)
+	}
+}
+
 // Silent-drop case 2: a busy peer queues (🎯T111.1) — the message is retained
 // and the caller is told, rather than the send failing into nothing.
 func TestDeliverByNameBusyPeerQueuesNotDrops(t *testing.T) {
 	po := &fakeSender{alive: true, inFlight: true}
 	s, _ := chainServer(t, map[string]*fakeSender{"jevons-po": po})
 
-	res, err := s.deliverByName("jevons-po", "worker: blocked on review", OriginAgent, false)
+	res, err := s.deliverByName("jevons-po", "worker: still mid-slice, continue", OriginAgent, false)
 	if err != nil {
 		t.Fatalf("busy peer must not hard-fail: %v", err)
 	}
 	if res.Status != "queued" || res.Queued != 1 {
 		t.Fatalf("status=%q queued=%d want queued/1", res.Status, res.Queued)
 	}
-	if got := s.dequeueAgentSend("jevons-po"); got.Text != "worker: blocked on review" {
+	if got := s.dequeueAgentSend("jevons-po"); got.Text != "worker: still mid-slice, continue" {
 		t.Fatalf("queued text=%q — message was dropped", got.Text)
 	}
 }

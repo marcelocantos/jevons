@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/relayroute"
 )
 
 // 🎯T309.3: ONE deliver-by-name path for every agent in the fleet layer.
@@ -177,6 +179,24 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 			"origin", string(origin),
 		)
 		return agentSendResult{}, err
+	}
+
+	// 🎯T392.7: a worker report that needs no product judgement skips the
+	// PO hop. The PO still gets a one-line record. Owner directs to a PO
+	// are never rerouted.
+	if origin == OriginAgent && !overseerArm && isPOName(dest) &&
+		relayroute.Classify(text) == relayroute.RouteOverseer {
+		po := dest
+		reason := relayroute.Reason(text)
+		who := strings.TrimSpace(actor)
+		if who == "" {
+			who = "worker"
+		}
+		record := relayroute.RecordLine(who, reason)
+		if _, err := s.deliverByName(po, record, OriginAgent, false); err != nil {
+			slog.Info("T392.7 PO record undelivered", "po", po, "err", err)
+		}
+		return s.deliverToOverseer(s.overseerSeatName(), text, origin)
 	}
 
 	if overseerArm {
