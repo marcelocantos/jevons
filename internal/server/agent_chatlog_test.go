@@ -311,6 +311,62 @@ func TestMergeAgentTurns(t *testing.T) {
 	})
 }
 
+// 🎯T481: every provider event is a journal line, including types the
+// display mapper used to drop.
+func TestJournalRecordsEveryProviderEvent(t *testing.T) {
+	dir := t.TempDir()
+	s := New("test", dir)
+	const name = "jv-t481-tape"
+	tape := []claudia.Event{
+		{Type: "user", Text: "go"},
+		{Type: "progress", ProgressType: "tool_use", Raw: []byte(`{"update":{"sessionUpdate":"tool_call_update","title":"Bash"}}`)},
+		{Type: "progress", ProgressType: "tool_use", Raw: []byte(`{"update":{"sessionUpdate":"tool_call","title":"Read"}}`)},
+		{Type: "assistant", Text: "ok", StopReason: "end_turn"},
+		{Type: "system"},
+	}
+	for _, ev := range tape {
+		s.journalAgentEvent(name, ev)
+	}
+	path := filepath.Join(dir, agentChatLogDirName, name+".jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, ln := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(ln) != "" {
+			lines = append(lines, ln)
+		}
+	}
+	if len(lines) != len(tape) {
+		t.Fatalf("journal lines=%d want %d\n%s", len(lines), len(tape), data)
+	}
+	var lossless, mappedTool int
+	for _, ln := range lines {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(ln), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["recorded"] == "lossless" {
+			lossless++
+		}
+		msg, _ := m["message"].(map[string]any)
+		raw, _ := msg["content"].([]any)
+		for _, blk := range raw {
+			b, _ := blk.(map[string]any)
+			if b["type"] == "tool_use" && b["name"] == "Read" {
+				mappedTool++
+			}
+		}
+	}
+	if lossless < 1 {
+		t.Fatal("expected a lossless envelope for tool_call_update / bare system")
+	}
+	if mappedTool != 1 {
+		t.Fatalf("mapped tool_use Read count=%d", mappedTool)
+	}
+}
+
 // TestOverseerTranscriptUnaffectedByAgentJournal: main chat keeps its own
 // journal as the single record — no second copy through the agent path.
 func TestOverseerTranscriptUnaffectedByAgentJournal(t *testing.T) {

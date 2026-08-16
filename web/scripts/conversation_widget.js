@@ -649,6 +649,7 @@
     for (var ei = 0; ei < tape.length; ei++) {
       var event = tape[ei];
       if (!event || !CE) continue;
+      if (event.recorded === 'lossless') continue;
       var ts = event.when != null ? event.when
         : (event.timestamp ? new Date(event.timestamp).getTime() : undefined);
       if (event.type === 'user') {

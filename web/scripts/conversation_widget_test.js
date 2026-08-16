@@ -595,6 +595,15 @@ test('turn-slot coalesces tools across tools-only end_turn (not one strip per to
   assert.deepStrictEqual(kinds, ['user', 'turn-slot', 'assistant']);
 });
 
+test('displayFromEvents ignores lossless recorded envelopes', function () {
+  const lines = CW.displayFromEvents([
+    { type: 'user', message: { content: 'hi' } },
+    { type: 'progress', recorded: 'lossless', progress_type: 'tool_use', raw: { sessionUpdate: 'tool_call_update' } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'yo' }] } },
+  ]);
+  assert.deepStrictEqual(lines.map(function (l) { return l.kind || l.role; }), ['user', 'assistant']);
+});
+
 test('displayFromEvents is f(raw): 1 step is already ⋯ 1 step; consecutive tools coalesce', function () {
   const CE = require('./chat_events.js');
   const tape = [

@@ -335,12 +335,7 @@ func (s *Server) journalAgentEvent(name string, ev claudia.Event) {
 	}
 	event, ok := inspectLiveEvent(ev)
 	if !ok {
-		return
-	}
-	if ev.Type == "user" {
-		// Route through appendUser so the ACP echo of our own send is deduped.
-		s.agentJournalsFor().appendUser(name, ev.Text)
-		return
+		event = losslessEvent(ev)
 	}
 	line, err := json.Marshal(event)
 	if err != nil {

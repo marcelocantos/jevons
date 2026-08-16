@@ -308,13 +308,16 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 		s.mu.Unlock()
 
 		if silent {
+			// 🎯T481: record the body; do not broadcast it.
+			if ev.Text != "" {
+				s.persistChatLine(losslessLine(ev))
+			}
 			if ev.IsTerminalStop() {
 				if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
 					s.BroadcastChat(line)
 				}
 				s.clearOverseerStreamID()
 			}
-			// Body fragments: drop (not journaled).
 			s.HandleAgentEvent(ev)
 			return
 		}
@@ -368,6 +371,9 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 		if ev.Type == "assistant" {
 			s.noteOwnerVisibleText(ev.Text)
 		}
+	} else {
+		// 🎯T481: mapping failed — still persist the raw event.
+		s.persistChatLine(losslessLine(ev))
 	}
 	if ev.IsTerminalStop() {
 		s.clearOverseerStreamID()
@@ -1449,19 +1455,25 @@ func sendHistory(conn *websocket.Conn, ctx context.Context, path string) {
 // stream clients render is what a reconnect replays. An append failure
 // is loud — losing durability silently is the failure mode this exists
 // to kill — but does not block the live broadcast.
-func (s *Server) BroadcastChat(line string) {
+func (s *Server) persistChatLine(line string) {
+	if s == nil || strings.TrimSpace(line) == "" {
+		return
+	}
 	s.mu.Lock()
 	clog := s.chatLog
 	s.mu.Unlock()
-	if clog != nil {
-		if err := clog.Append(line); err != nil {
-			slog.Error("chat: DURABILITY FAILURE — chat log append failed", "err", err)
-		} else {
-			// 🎯T355: the owner's own echo reaching the journal is the
-			// observed half of send-landed — never inferred from the send.
-			s.noteChatJournaled(line)
-		}
+	if clog == nil {
+		return
 	}
+	if err := clog.Append(line); err != nil {
+		slog.Error("chat: DURABILITY FAILURE — chat log append failed", "err", err)
+		return
+	}
+	s.noteChatJournaled(line)
+}
+
+func (s *Server) BroadcastChat(line string) {
+	s.persistChatLine(line)
 	s.broadcastChatLive(line)
 	// 🎯T309.2: the same owner-visible line is also the overseer's live frame
 	// on the agent-addressed family, so inspect_subscribe works by name for the

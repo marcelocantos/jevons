@@ -32,6 +32,52 @@ const userTurnPrefix = "[user]\n"
 //
 // Returns ok=false when the event has nothing the UI should render
 // (e.g. empty progress, unknown noise).
+// losslessEvent is the journal form of a provider event that chatWireLine
+// or inspectLiveEvent would drop. Display ignores recorded=lossless.
+func losslessEvent(ev claudia.Event) map[string]any {
+	typ := ev.Type
+	if typ == "" {
+		typ = "unknown"
+	}
+	m := map[string]any{
+		"type":      typ,
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"recorded":  "lossless",
+	}
+	if ev.ProgressType != "" {
+		m["progress_type"] = ev.ProgressType
+	}
+	if ev.Text != "" {
+		m["text"] = ev.Text
+	}
+	if ev.StopReason != "" {
+		m["stop_reason"] = ev.StopReason
+	}
+	if ev.Model != "" {
+		m["model"] = ev.Model
+	}
+	if ev.IsError {
+		m["is_error"] = true
+	}
+	if len(ev.Raw) > 0 {
+		var raw any
+		if err := json.Unmarshal(ev.Raw, &raw); err == nil {
+			m["raw"] = raw
+		} else {
+			m["raw_text"] = string(ev.Raw)
+		}
+	}
+	return m
+}
+
+func losslessLine(ev claudia.Event) string {
+	b, err := json.Marshal(losslessEvent(ev))
+	if err != nil {
+		return `{"type":"unknown","recorded":"lossless"}`
+	}
+	return string(b)
+}
+
 func chatWireLine(ev claudia.Event) (line string, ok bool) {
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 
