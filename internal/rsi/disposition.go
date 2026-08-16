@@ -344,6 +344,24 @@ type Suppression struct {
 }
 
 // Suppressions returns the fingerprints the coach must not re-propose.
+//
+// 🎯T428 — A DISPOSITION IS AN ANSWER, AND AN ANSWERED JUDGMENT IS NOT NEWS.
+// Until this target, only `file` (always) and the achieved/set_aside outcomes
+// (after) suppressed anything, so `park`, `ignore_with_reason` and `act_other`
+// recorded the overseer's decision and changed nothing: the next cycle
+// re-proposed the identical fingerprint on the identical evidence. It was
+// observed doing exactly that — judgment 44c736552294ab9e02e8c3a01dcca666 was
+// re-delivered after the overseer had recorded disposition=act_other for it.
+// Asking a question, being answered, and asking it again is the same defect as
+// replaying a batch; the ledger holds the answer, so it is the ledger's job to
+// stop repeating the question.
+//
+// EVERY terminal disposition therefore suppresses, and all but `file` suppress
+// with After semantics rather than Always: evidence NEWER than the decision is
+// a changed situation and gets through on its own merits (Coach compares
+// c.LatestTS), while the same cluster restated is refused. `file` keeps Always
+// because an open target already tracks the gap — and RecordDelivered reopens
+// a filed entry when the coach does break through with newer evidence.
 func (s *DispositionStore) Suppressions(now time.Time) (map[string]Suppression, error) {
 	if s == nil {
 		return nil, fmt.Errorf("rsi dispositions: nil store")
@@ -361,6 +379,16 @@ func (s *DispositionStore) Suppressions(now time.Time) (map[string]Suppression, 
 			out[e.Fingerprint] = Suppression{After: e.OutcomeAt}
 		case e.Disposition == DispositionFile:
 			out[e.Fingerprint] = Suppression{Always: true}
+		case e.Disposition != "" && e.Disposition != DispositionPending:
+			// park / ignore_with_reason / act_other: decided, so silent until
+			// something newer than the decision arrives. DispositionAt is the
+			// bar; a zero value would suppress nothing, so fall back to the
+			// delivery time rather than leak the whole class back through.
+			at := e.DispositionAt
+			if at.IsZero() {
+				at = e.DeliveredAt
+			}
+			out[e.Fingerprint] = Suppression{After: at}
 		}
 	}
 	return out, nil
