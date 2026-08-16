@@ -82,15 +82,20 @@ func (c *Counter) EndTurn(agent string) State {
 
 // Depth reports the current turn's depth without disturbing it.
 func (c *Counter) Depth(agent string) int {
+	return c.State(agent).Calls
+}
+
+// State reports the current turn without disturbing it.
+func (c *Counter) State(agent string) State {
 	if c == nil {
-		return 0
+		return State{Agent: agent}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if st, ok := c.turns[agent]; ok {
-		return st.Calls
+		return *st
 	}
-	return 0
+	return State{Agent: agent}
 }
 
 // Forget drops an agent entirely — used when an agent leaves the fleet, so a
