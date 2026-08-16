@@ -613,6 +613,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    Top sentinel is optional residual while pages remain — not a data throttle.
    Overlay is out of flow so it does not perturb scroll-position math. */
 .history-sentinel { height: 1px; margin: 0; flex: 0 0 auto; }
+/* 🎯T119.3: one block stands in for detached older turns — not N shells. */
+.history-spacer-before { flex: 0 0 auto; pointer-events: none; margin: 0; padding: 0; }
 .history-loading { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 3px 12px; font-size: 11px; color: var(--text-dim); z-index: 5; pointer-events: none; }
@@ -5117,6 +5119,10 @@ let progressiveHistoryRunning = false;
 let historySentinel = null;
 let historyObserver = null;
 let historyLoadingEl = null;
+// 🎯T119.3: older turns the cap refused to insert. Oldest-first records
+// plus one spacer — not one .msg per turn.
+let detachedBefore = [];
+let historySpacerBefore = null;
 
 // 🎯T300: the "Loading earlier…" chrome is owner-facing, so only an
 // owner-triggered load-earlier may raise it. Connect hydrate, the progressive
@@ -5138,14 +5144,14 @@ function historyLoadingEvent(ev) {
 }
 
 function startProgressiveHistoryLoad() {
-  if (oldestIndex <= 0) { teardownHistorySentinel(); return; }
+  if (oldestIndex <= 0 && !detachedBefore.length) { teardownHistorySentinel(); return; }
   // Optional sentinel while pages remain (does not gate progressive fetch).
   setupHistorySentinel();
   progressiveLoadRemainingHistory();
 }
 
 function setupHistorySentinel() {
-  if (oldestIndex <= 0) { teardownHistorySentinel(); return; }
+  if (oldestIndex <= 0 && !detachedBefore.length) { teardownHistorySentinel(); return; }
   if (!historySentinel) {
     historySentinel = document.createElement('div');
     historySentinel.className = 'history-sentinel';
@@ -5157,7 +5163,12 @@ function setupHistorySentinel() {
       // 🎯T274: do not thrash earlier-history while large graph overlay is open.
       if (typeof isLargeGraphPanelOpen === 'function' && isLargeGraphPanelOpen()) return;
       // Residual: if progressive lag and owner is near top, nudge a page.
-      if (entries.some(e => e.isIntersecting)) loadEarlier();
+      // 🎯T119.3: prefer attaching already-fetched detached records over
+      // another insert of a page the cap already refused.
+      if (entries.some(e => e.isIntersecting)) {
+        if (detachedBefore.length) attachDetachedHistoryPage();
+        else loadEarlier();
+      }
     }, { root: msgs, rootMargin: '400px 0px 0px 0px', threshold: 0 });
     historyObserver.observe(historySentinel);
   }
@@ -5171,6 +5182,87 @@ function teardownHistorySentinel() {
   if (historySentinel) { historySentinel.remove(); historySentinel = null; }
 }
 function teardownInfiniteScroll() { teardownHistorySentinel(); }
+
+function attachedMsgCount() {
+  let n = 0;
+  if (!msgs) return 0;
+  for (let i = 0; i < msgs.children.length; i++) {
+    const el = msgs.children[i];
+    if (el.classList && el.classList.contains('msg')) n++;
+  }
+  return n;
+}
+
+function attachedShellCap() {
+  const ch = msgs ? msgs.clientHeight : 600;
+  return (typeof VirtualList !== 'undefined' && VirtualList.maxAttachedShells)
+    ? VirtualList.maxAttachedShells(ch)
+    : 64;
+}
+
+function ensureHistorySpacerBefore() {
+  if (historySpacerBefore && historySpacerBefore.isConnected) return historySpacerBefore;
+  historySpacerBefore = document.createElement('div');
+  historySpacerBefore.className = 'history-spacer-before';
+  historySpacerBefore.setAttribute('aria-hidden', 'true');
+  const after = historySentinel && historySentinel.nextSibling;
+  if (historySentinel) msgs.insertBefore(historySpacerBefore, after);
+  else msgs.insertBefore(historySpacerBefore, msgs.firstChild);
+  return historySpacerBefore;
+}
+
+function syncHistorySpacerBefore() {
+  const h = (typeof VirtualList !== 'undefined' && VirtualList.spacerPxForRecords)
+    ? VirtualList.spacerPxForRecords(detachedBefore)
+    : 0;
+  if (h <= 0) {
+    if (historySpacerBefore && historySpacerBefore.isConnected) {
+      historySpacerBefore.style.height = '0px';
+      historySpacerBefore.style.display = 'none';
+    }
+    return;
+  }
+  const el = ensureHistorySpacerBefore();
+  el.style.display = 'block';
+  el.style.height = h + 'px';
+}
+
+function stashDetachedHistoryChunks(chunks) {
+  const recs = (typeof VirtualList !== 'undefined' && VirtualList.recordsFromChunks)
+    ? VirtualList.recordsFromChunks(chunks)
+    : [];
+  detachedBefore = (typeof VirtualList !== 'undefined' && VirtualList.prependDetachedRecords)
+    ? VirtualList.prependDetachedRecords(detachedBefore, recs)
+    : recs.concat(detachedBefore);
+  syncHistorySpacerBefore();
+  setupHistorySentinel();
+}
+
+function attachDetachedHistoryPage() {
+  if (!detachedBefore.length || !msgs) return 0;
+  const cap = attachedShellCap();
+  const takeN = Math.min(40, Math.max(8, cap - attachedMsgCount()));
+  if (takeN <= 0) return 0;
+  const split = (typeof VirtualList !== 'undefined' && VirtualList.takeNewestDetached)
+    ? VirtualList.takeNewestDetached(detachedBefore, takeN)
+    : { take: detachedBefore.splice(-takeN), remain: detachedBefore };
+  detachedBefore = split.remain;
+  if (!split.take.length) return 0;
+  const frag = document.createDocumentFragment();
+  const nodes = [];
+  for (let i = 0; i < split.take.length; i++) {
+    const c = split.take[i];
+    const el = buildMsg(c.role, c.text, c.timestamp, { lazy: true, turnOrigin: c.origin });
+    nodes.push(el);
+    frag.appendChild(el);
+  }
+  const anchor = historySpacerBefore && historySpacerBefore.nextSibling;
+  msgs.insertBefore(frag, anchor || (historySentinel ? historySentinel.nextSibling : msgs.firstChild));
+  syncHistorySpacerBefore();
+  if (typeof scheduleVirtualize === 'function') scheduleVirtualize();
+  if (!detachedBefore.length && oldestIndex <= 0) teardownHistorySentinel();
+  return nodes.length;
+}
 
 // 🎯T259: min gap between progressive /api/history pages so large chatlogs
 // cannot peg a core with back-to-back full-file ReadRange (~every rAF).
@@ -5263,6 +5355,40 @@ async function loadEarlier(opts) {
     const prevH = msgs.scrollHeight, prevTop = msgs.scrollTop;
     // Lazy shells: full chunk data on the node; no paint until materialize.
     const lines = data.lines || [];
+    const cap = attachedShellCap();
+    const chunks = (typeof VirtualList !== 'undefined' && VirtualList.coalesceTranscriptFrames)
+      ? VirtualList.coalesceTranscriptFrames(lines)
+      : null;
+    const incoming = chunks ? chunks.length : lines.length;
+    // 🎯T119.3: once the attached-shell cap is hit, keep the page as
+    // records + spacer. insertBefore of every older chunk is what put
+    // 11k nodes in #messages and froze clicks after T119.2.
+    if (chunks && typeof VirtualList !== 'undefined' && VirtualList.shouldAttachHistoryPage &&
+        !VirtualList.shouldAttachHistoryPage(attachedMsgCount(), incoming, cap)) {
+      const spacerBeforeH = (typeof VirtualList !== 'undefined' && VirtualList.spacerPxForRecords)
+        ? VirtualList.spacerPxForRecords(detachedBefore) : 0;
+      stashDetachedHistoryChunks(chunks);
+      const spacerAfterH = (typeof VirtualList !== 'undefined' && VirtualList.spacerPxForRecords)
+        ? VirtualList.spacerPxForRecords(detachedBefore) : 0;
+      // Spacer grew ABOVE the viewport — keep the live end pinned.
+      msgs.scrollTop = prevTop + Math.max(0, spacerAfterH - spacerBeforeH);
+      oldestIndex = (data.start != null) ? data.start : 0;
+      hydratePageSeq++;
+      if (typeof jLog === 'function' && typeof DecisionLog !== 'undefined') {
+        const sample = hydratePageSeq === 1 ||
+          hydratePageSeq % HISTORY_PAGE_LOG_EVERY === 0 ||
+          oldestIndex <= 0;
+        jLog(sample ? 'info' : 'debug', DecisionLog.decisionMsg('history'), DecisionLog.formatHistoryDecision('hydrate_page', {
+          before: before,
+          after: oldestIndex,
+          lines: incoming,
+          detached: detachedBefore.length,
+          corr: pageCorr,
+        }));
+      }
+      if (oldestIndex <= 0 && !detachedBefore.length) teardownHistorySentinel();
+      return;
+    }
     const { frag, nodes } = renderFrames(lines, { lazy: true });
     const anchor = historySentinel ? historySentinel.nextSibling : msgs.firstChild;
     // 🎯T351: rect-exact compensation — the integer scrollHeight delta loses

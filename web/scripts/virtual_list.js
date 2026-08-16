@@ -354,6 +354,76 @@
   // T119: after recent-first hydrate, fetch remaining history into client
   // memory without requiring owner to scroll for data.
 
+  // 🎯T119.3: attached .msg count is bounded by the viewport band.
+  // T119 still keeps every chunk in a JS array; T119.2 windowed measure;
+  // this stops insertBefore of one shell per turn (the 11k-node freeze).
+  const MIN_ATTACHED_SHELLS = 64;
+  const ATTACHED_BAND_SCREENS = 3;
+
+  function maxAttachedShells(clientHeight, avgHeight) {
+    const ch = clientHeight > 0 ? Number(clientHeight) : 600;
+    const h = avgHeight > 0 ? Number(avgHeight) : DEFAULT_ESTIMATE_HEIGHT;
+    const byView = Math.ceil((ch * ATTACHED_BAND_SCREENS) / Math.max(1, h)) + 8;
+    return Math.max(MIN_ATTACHED_SHELLS, byView);
+  }
+
+  function shouldAttachHistoryPage(attachedCount, incomingCount, maxAttach) {
+    const have = Math.max(0, attachedCount | 0);
+    const inc = Math.max(0, incomingCount | 0);
+    const max = maxAttach > 0 ? maxAttach : MIN_ATTACHED_SHELLS;
+    return have + inc <= max;
+  }
+
+  // Hydrate pages walk backward, so each new page is older than what we
+  // already hold. Prepend incoming onto the detached (oldest-first) list.
+  function prependDetachedRecords(existing, incoming) {
+    const have = Array.isArray(existing) ? existing : [];
+    const add = Array.isArray(incoming) ? incoming : [];
+    if (!add.length) return have.slice();
+    if (!have.length) return add.slice();
+    return add.concat(have);
+  }
+
+  function spacerPxForRecords(records) {
+    let h = 0;
+    const list = Array.isArray(records) ? records : [];
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i];
+      if (!r) continue;
+      if (r.estHeight > 0) h += r.estHeight;
+      else h += estimateHeightFromText(r.text || '');
+    }
+    return h;
+  }
+
+  // Newest detached records sit at the end (just older than the DOM head).
+  function takeNewestDetached(records, n) {
+    const list = Array.isArray(records) ? records.slice() : [];
+    const count = Math.max(0, n | 0);
+    if (!count || !list.length) return { take: [], remain: list };
+    const split = Math.max(0, list.length - count);
+    return { take: list.slice(split), remain: list.slice(0, split) };
+  }
+
+  function recordsFromChunks(chunks, estimateFn) {
+    const est = typeof estimateFn === 'function' ? estimateFn : estimateHeightFromText;
+    const list = Array.isArray(chunks) ? chunks : [];
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (!c) continue;
+      const text = c.text == null ? '' : String(c.text);
+      out.push({
+        role: c.role,
+        text: text,
+        timestamp: c.timestamp,
+        origin: c.origin,
+        estHeight: est(text),
+      });
+    }
+    return out;
+  }
+
   function progressiveHistoryPages(oldestIndex, pageLimit) {
     const limit = pageLimit > 0 ? pageLimit : 200;
     let end = Math.max(0, oldestIndex | 0);
@@ -1299,6 +1369,14 @@
     recentFirstMaterializePlan: recentFirstMaterializePlan,
     startupMaterializeBudget: startupMaterializeBudget,
     progressiveHistoryPages: progressiveHistoryPages,
+    MIN_ATTACHED_SHELLS: MIN_ATTACHED_SHELLS,
+    ATTACHED_BAND_SCREENS: ATTACHED_BAND_SCREENS,
+    maxAttachedShells: maxAttachedShells,
+    shouldAttachHistoryPage: shouldAttachHistoryPage,
+    prependDetachedRecords: prependDetachedRecords,
+    spacerPxForRecords: spacerPxForRecords,
+    takeNewestDetached: takeNewestDetached,
+    recordsFromChunks: recordsFromChunks,
 
     coalesceTranscriptFrames: coalesceTranscriptFrames,
     extractAssistantText: extractAssistantText,

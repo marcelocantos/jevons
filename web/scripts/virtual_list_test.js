@@ -512,6 +512,46 @@ test('T119 full data: progressive pages cover entire older range without scroll 
   assert.ok(typeof pages[0].scrollTop === 'undefined');
 });
 
+test('T119.3 attached shell cap is viewport-bounded, not journal-bounded', function () {
+  const cap = VL.maxAttachedShells(600, 72);
+  assert.ok(cap >= VL.MIN_ATTACHED_SHELLS, 'floor holds');
+  assert.ok(cap < 400, 'cap stays far below a 11k-turn journal, got ' + cap);
+  assert.ok(VL.shouldAttachHistoryPage(30, 20, cap), 'early hydrate still attaches');
+  assert.ok(!VL.shouldAttachHistoryPage(cap, 20, cap), 'overflow page stays detached');
+  assert.ok(!VL.shouldAttachHistoryPage(11000, 1, cap), 'a long journal never attaches another shell');
+});
+
+test('T119.3 detached records prepend oldest-first and spacer sums estimates', function () {
+  const newer = VL.recordsFromChunks([
+    { role: 'user', text: 'mid', timestamp: '2' },
+    { role: 'jevons', text: 'mid-a', timestamp: '3' },
+  ]);
+  const older = VL.recordsFromChunks([
+    { role: 'user', text: 'old', timestamp: '0' },
+  ]);
+  const held = VL.prependDetachedRecords(newer, older);
+  assert.strictEqual(held.length, 3);
+  assert.strictEqual(held[0].text, 'old');
+  assert.strictEqual(held[2].text, 'mid-a');
+  const px = VL.spacerPxForRecords(held);
+  assert.ok(px >= held[0].estHeight + held[1].estHeight + held[2].estHeight);
+  const step = VL.takeNewestDetached(held, 2);
+  assert.strictEqual(step.take.length, 2);
+  assert.strictEqual(step.take[0].text, 'mid');
+  assert.strictEqual(step.remain.length, 1);
+  assert.strictEqual(step.remain[0].text, 'old');
+});
+
+test('T119.3 index.html caps hydrate insertBefore and keeps overflow off-DOM', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.indexOf('shouldAttachHistoryPage') >= 0, 'loadEarlier consults the cap');
+  assert.ok(html.indexOf('detachedBefore') >= 0, 'overflow records live off-DOM');
+  assert.ok(html.indexOf('history-spacer-before') >= 0, 'one spacer stands in for detached rows');
+  assert.ok(html.indexOf('takeNewestDetached') >= 0, 'scroll-up attaches from the detached tail');
+});
+
 test('T119 windowed content: material count << N while data count = N', function () {
   const n = 1000;
   const mat = VL.materialisedCount(n, 40, 500, 800);
