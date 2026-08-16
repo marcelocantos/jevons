@@ -127,12 +127,12 @@
   }
 
   // Composer placeholder for current focus (UI may call this).
-  // Main: clean base. Side: "[aside: short-title] Write a message to Jevons"
+  // Main: clean base. Side: "[aside: short-title] " + base.
   function composerPlaceholder(state, mainPlaceholder) {
-    const base = mainPlaceholder || 'Write a message to Jevons';
+    const base = mainPlaceholder || 'Message...';
     if (isMainFocus(state)) return base;
     const t = findThread(state, state && state.focusId);
-    return '[aside: ' + shortTitle(t && t.title) + '] Write a message to Jevons';
+    return '[aside: ' + shortTitle(t && t.title) + '] ' + base;
   }
 
   function emptyState() {

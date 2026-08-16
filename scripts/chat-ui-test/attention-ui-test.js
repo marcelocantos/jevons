@@ -65,7 +65,7 @@ function startStaticServer() {
       const focusChrome = /Focus:\s*main/i.test(body) || /Focus:\s*main/i.test(html);
       // Drive placeholder via AttentionThreads API (shipped module).
       const AT = window.AttentionThreads || AttentionThreads;
-      const mainPh = AT.composerPlaceholder(AT.emptyState(), 'Write a message to Jevons');
+      const mainPh = AT.composerPlaceholder(AT.emptyState(), 'Message...');
       let sideState = AT.emptyState();
       const cap = AT.handleComposer(sideState, 'aside: billing nit');
       // handleComposer may return new state
@@ -83,7 +83,7 @@ function startStaticServer() {
         const open = st2.threads.find(t => t.status !== 'parked') || st2.threads[0];
         if (open) st2 = Object.assign({}, st2, { focusId: open.id });
       }
-      const sidePh = AT.composerPlaceholder(st2, 'Write a message to Jevons');
+      const sidePh = AT.composerPlaceholder(st2, 'Message...');
       return {
         banned,
         focusChrome,
@@ -95,7 +95,7 @@ function startStaticServer() {
 
     if (snap.banned.length) failures.push('button-primary chrome present: ' + snap.banned.join(','));
     if (snap.focusChrome) failures.push('Focus: main chrome visible');
-    if (!/Write a message to Jevons/i.test(snap.mainPh) || /\[aside:/i.test(snap.mainPh)) {
+    if (snap.mainPh !== 'Message...' || /\[aside:/i.test(snap.mainPh)) {
       failures.push('main placeholder not clean: ' + JSON.stringify(snap.mainPh));
     }
     if (!/\[aside:/i.test(snap.sidePh)) {

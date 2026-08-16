@@ -341,8 +341,8 @@ test('index.html loads SendQueue and does not interrupt on plain busy send', fun
     'must not unconditionally interrupt when workingEl is set in send()'
   );
   assert.ok(
-    html.includes('Ctrl+Enter') || html.includes('Control+Enter'),
-    'placeholder or UI must document Ctrl+Enter interject'
+    /placeholder="Message\.\.\."/.test(html) || /MAIN_PLACEHOLDER = 'Message\.\.\.'/.test(html),
+    'composer placeholder stays Message... (chords are not inline help)'
   );
   assert.ok(html.includes('decideSend') || html.includes('shouldEnqueue'),
     'send path must consult queue policy');

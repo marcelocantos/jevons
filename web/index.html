@@ -1393,7 +1393,7 @@ body.rhs-resizing-row { cursor: row-resize; }
       <div id="composer-images" class="composer-images" aria-label="Attached images"></div>
       <label for="input" class="sr-only">Compose a message for Jevons.</label>
       <textarea id="input" name="prompt" rows="1"
-                placeholder="Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter force-sends draft or next queued, Shift+Enter for a new line. / focuses box when not typing."
+                placeholder="Message..."
                 title="Message box — / focuses here when focus is elsewhere (🎯T127); Tab / Shift+Tab switches to the sidebar message box when it is visible (🎯T366); ⌘⇧] / ⌘⇧[ cycle the fleet tree selection, landing here on the root overseer (🎯T370)"
                 aria-label="Compose a message for Jevons"
                 aria-multiline="true"
@@ -1851,7 +1851,7 @@ let attentionBarExpanded = false;
 // 🎯T135: last auto-route match is suggestion-only (never steals wire).
 // Stashed until the next user bubble echo so we can attach "Continue in: …".
 let lastRouteSuggestion = null;
-const MAIN_PLACEHOLDER = 'Write a message to Jevons. Enter to send, Ctrl+Enter to interject, Alt+Enter force-sends draft or next queued, Shift+Enter for a new line. / focuses box when not typing.';
+const MAIN_PLACEHOLDER = 'Message...';
 
 // 🎯T153: force focus back to main composer after pointer chrome actions.
 // Prefer ComposerFocus.focusComposer; fall back to #input.focus().
@@ -1953,9 +1953,9 @@ function updateComposerPlaceholder() {
     if (row && String(row.purpose || '').toLowerCase() === 'aside') {
       const title = row.description || row.name || 'aside';
       if (typeof AttentionThreads !== 'undefined' && AttentionThreads.shortTitle) {
-        input.placeholder = '[aside: ' + AttentionThreads.shortTitle(title) + '] Write a message to Jevons';
+        input.placeholder = '[aside: ' + AttentionThreads.shortTitle(title) + '] ' + MAIN_PLACEHOLDER;
       } else {
-        input.placeholder = '[aside: ' + title + '] Write a message to Jevons';
+        input.placeholder = '[aside: ' + title + '] ' + MAIN_PLACEHOLDER;
       }
       return;
     }

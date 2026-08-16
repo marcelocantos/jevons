@@ -553,12 +553,12 @@ test('T241 index.html wires Alt+Enter force_send / send_queue_now (not pop_last)
     'must pass queueLen into classifyEnterAction'
   );
   assert.ok(
-    /Ctrl\+Enter|Control\+Enter/.test(html) && /interrupt|interject/.test(html),
-    'UI must document Ctrl+Enter interject/immediate send'
+    /MAIN_PLACEHOLDER = 'Message\.\.\.'/.test(html) || /placeholder="Message\.\.\."/.test(html),
+    'composer placeholder is Message..., not a keybinding essay'
   );
   assert.ok(
-    /Alt\+Enter/.test(html) && /force-send|force.send|queued/i.test(html),
-    'UI must document Alt+Enter force-send (not empty-pops-last)'
+    !/Ctrl\+Enter to interject/.test(html) && !/Alt\+Enter force-sends/.test(html),
+    'placeholder must not advertise Enter chords (Firefox hijacks Ctrl+Enter; box grew from wrap)'
   );
   assert.ok(
     !/Alt\+Enter empty pops last/i.test(html),

@@ -353,8 +353,11 @@ async function allSends(page) {
     if (/pops last/i.test(ph)) {
       failures.push('placeholder still advertises pop last: ' + ph);
     }
-    if (!/force-send|queued/i.test(ph)) {
-      failures.push('placeholder missing force-send docs: ' + ph);
+    if (/force-send|Ctrl\+Enter|interject/i.test(ph)) {
+      failures.push('placeholder must not document chords: ' + ph);
+    }
+    if (!/^Message\.\.\.$/.test(ph.trim())) {
+      failures.push('placeholder should be Message..., got: ' + JSON.stringify(ph));
     }
   } catch (e) {
     failures.push(String(e && e.stack || e));

@@ -293,7 +293,7 @@ test('load/save via mock storage', function () {
 });
 
 test('composerPlaceholder: main is clean; side uses [aside: title] hint', function () {
-  const mainPh = 'Write a message to Jevons. Enter to send, Shift-Enter for a new line.';
+  const mainPh = 'Message...';
   assert.strictEqual(AT.composerPlaceholder(AT.emptyState(), mainPh), mainPh);
   assert.ok(AT.composerPlaceholder(AT.emptyState(), mainPh).indexOf('[main') === -1);
 
@@ -302,7 +302,7 @@ test('composerPlaceholder: main is clean; side uses [aside: title] hint', functi
   s = AT.pursue(s, id);
   const ph = AT.composerPlaceholder(s, mainPh);
   assert.ok(ph.indexOf('[aside: ') === 0);
-  assert.ok(ph.indexOf('] Write a message to Jevons') > 0);
+  assert.ok(ph.indexOf('] Message...') > 0);
   assert.ok(ph.indexOf('billing') > 0);
   assert.ok(ph.indexOf('[main') === -1);
 });
