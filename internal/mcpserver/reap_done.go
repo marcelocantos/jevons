@@ -28,12 +28,18 @@ import (
 // cut is not a finish however confidently the rest of it reads — see
 // ClassifyReportAsk. The veto is one-way on purpose: reaping is destructive and
 // irreversible, keeping is cheap, so ambiguity resolves toward keeping.
+//
+// 🎯T445: the ask classes are phrase lists, so the completion word cannot be
+// the whole positive case either — an ask worded outside every list must not
+// fall through to a reap. The claim has to arrive in a positive finish shape
+// (a bare claim clause, or a claim with oracle evidence or accepted-risk) —
+// see hasFinishShape.
 func LooksLikeFinishedWorkReport(report string) bool {
 	s := strings.ToLower(strings.TrimSpace(report))
 	if s == "" {
 		return false
 	}
-	if !hasCompletionClaim(s) {
+	if !hasFinishShape(s) {
 		return false
 	}
 	return !ReportAwaitsOverseer(report)
