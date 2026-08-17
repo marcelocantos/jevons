@@ -33,6 +33,7 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		GrokUnstableUsage: true,
 	})
 	srv.SetPlanUsageSource(func() any { return reader.Snapshot() })
+	mcpSrv.SetPlanUsageSource(func() planusage.Snapshot { return reader.Snapshot() })
 	go reader.Run(ctx)
 
 	slog.Info("plan usage ready (🎯T390)",

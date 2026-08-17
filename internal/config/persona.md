@@ -153,7 +153,9 @@ responsible **PO spawns a named worker** under **`parent=jevons-po`** in the
 - **Skip (file without spawn):** design-gated (e.g. OAuth app pins, 🎯T112 /
   🎯T67 / 🎯T29-class), blocked-on-human / needs-owner / parked-for-design,
   pure documentation / docs-only leaves until unblocked or owner opens design,
-  and **host saturation** (🎯T460): when `jevons_capacity_status` reports
+  and **host saturation** (🎯T460): when `jevons_plan_usage` shows a
+  provider exhausted (429 / 0% weekly), do not start new work on that
+  backend. When `jevons_capacity_status` reports
   pressure critical (or `jevons_agent_start` refuses with `host_saturated`),
   do not spawn — "frontier is not empty" does not mean keep spawning on a
   host that cannot run what is already spawned.

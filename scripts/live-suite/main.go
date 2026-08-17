@@ -148,6 +148,7 @@ func (s *suite) scenarioToolSurface() error {
 	for _, want := range []string{
 		"jevons_thread_adopt", "jevons_thread_list", "jevons_thread_direct",
 		"jevons_thread_spawn", "jevons_thread_remove", "jwork", "jevons_cost",
+		"jevons_plan_usage",
 		"jevons_agent_send",
 	} {
 		if !have[want] {

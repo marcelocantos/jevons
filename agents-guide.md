@@ -100,6 +100,10 @@ open http://localhost:13705/
   sessions (default Grok; other providers via spawn/`provider`).
 - **Cost**: `jevons_cost` — burn-rate snapshot (multi-harness when
   configured; Grok session tails remain the historical path).
+- **Plan remaining**: `jevons_plan_usage` — the header ticker (per-provider
+  session/weekly remaining, 429 as exhausted 0%). Distinct from burn
+  (`jevons_cost`) and admission (`jevons_capacity_status`). Use this to
+  decide where to put the next job.
 - **Workers**: `jwork` (sole ephemeral primitive — one self-contained
   task, runs to completion) and `jevons_agent_*` (named durable agents).
   The legacy `jevons_*_session` tools were removed (🎯T41).

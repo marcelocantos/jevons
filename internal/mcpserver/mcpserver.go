@@ -28,6 +28,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
@@ -106,6 +107,8 @@ type Server struct {
 	// so the HTTP server can maintain RHS progress chrome (🎯T118).
 	agentEventHook func(name string, ev claudia.Event)
 	costSnapshot   func() (*cost.Snapshot, error)
+	// planUsage is GET /api/plan-usage as an overseer tool (🎯T390.1.4).
+	planUsage func() planusage.Snapshot
 
 	// grokRun shells out to the Grok CLI for mid-session MCP reconnect (🎯T60).
 	// Nil uses defaultGrokRun (exec of grok on PATH). Tests inject a fake.
