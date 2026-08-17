@@ -631,6 +631,16 @@
     return followMode === 'free' || followMode === 'track' && !isAtBottom;
   }
 
+  // 🎯T494.1.2: the canvas is a child of #messages. Snapping it as a
+  // row locks min-height at the peak prefix; a later shrink leaves a
+  // void under the last turn.
+  function shouldSnapTranscriptRow(el, host, canvas) {
+    if (!el || el === canvas || el === host) return false;
+    if (el.id === 'messages-canvas') return false;
+    const parent = el.parentNode;
+    return parent === canvas || parent === host;
+  }
+
   function isJumpToBottomHotkey(key, mods) {
     const m = mods || {};
     if (key === 'End' && !m.altKey && !m.shiftKey) return true;
@@ -1825,6 +1835,7 @@
 
     jumpPolicy: jumpPolicy,
     shouldShowJumpFab: shouldShowJumpFab,
+    shouldSnapTranscriptRow: shouldSnapTranscriptRow,
     isJumpToBottomHotkey: isJumpToBottomHotkey,
 
     shouldInvalidateSizeCache: shouldInvalidateSizeCache,

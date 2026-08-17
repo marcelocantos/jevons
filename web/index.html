@@ -1701,6 +1701,9 @@ function syncTranscriptCanvas() {
   const h = (typeof VirtualList !== 'undefined' && VirtualList.layoutTotal)
     ? VirtualList.layoutTotal(transcriptLayout)
     : 0;
+  // A leftover min-height lock (canvas snapped as a row) holds the
+  // peak prefix after a shrink — the owner void (🎯T494.1.2).
+  if (msgsCanvas.style.minHeight) msgsCanvas.style.minHeight = '';
   msgsCanvas.style.height = Math.max(0, h) + 'px';
 }
 function positionAttachedFrom(fromIndex) {
@@ -7262,7 +7265,7 @@ function virtualizeMessages() {
     const viewRect = msgs.getBoundingClientRect();
     const keepFirst = ir ? ir.keepFirst : first;
     const keepLast = ir ? ir.keepLast : last;
-    if (ir && msgsCanvas) msgsCanvas.style.height = Math.max(0, ir.canvasH) + 'px';
+    if (ir && msgsCanvas) syncTranscriptCanvas();
     // Read visibility BEFORE any detach (T349: no interleaved write/read).
     const visibleKeep = {};
     const keepEls = [];
@@ -7704,6 +7707,11 @@ _rowSnapRO = (typeof ResizeObserver !== 'undefined')
   : null;
 function scheduleRowSnap(el) {
   if (!el || el.nodeType !== 1 || !el.classList) return;
+  if (typeof VirtualList !== 'undefined' && VirtualList.shouldSnapTranscriptRow) {
+    if (!VirtualList.shouldSnapTranscriptRow(el, msgs, msgsCanvas)) return;
+  } else if (el === msgsCanvas) {
+    return;
+  }
   _rowSnapSet.add(el);
   if (!_rowSnapRaf) _rowSnapRaf = requestAnimationFrame(flushRowSnaps);
 }
@@ -7711,8 +7719,18 @@ function flushRowSnaps() {
   _rowSnapRaf = 0;
   const todo = [];
   _rowSnapSet.forEach((el) => {
-    if (el.isConnected &&
-        (el.parentNode === msgs || el.parentNode === msgsCanvas) &&
+    if (el === msgsCanvas || (el && el.id === 'messages-canvas')) {
+      if (_rowSnapRO) {
+        try { _rowSnapRO.unobserve(el); } catch (_) { /* isolated */ }
+      }
+      el._rowSnapObserved = false;
+      if (el.style && el.style.minHeight) el.style.minHeight = '';
+      return;
+    }
+    const snapOk = (typeof VirtualList !== 'undefined' && VirtualList.shouldSnapTranscriptRow)
+      ? VirtualList.shouldSnapTranscriptRow(el, msgs, msgsCanvas)
+      : (el.parentNode === msgs || el.parentNode === msgsCanvas);
+    if (el.isConnected && snapOk &&
         !el.classList.contains('virt-shell') &&
         typeof el._streamRaw !== 'string') {
       todo.push(el);
@@ -7771,7 +7789,7 @@ if (typeof MutationObserver !== 'undefined') {
   new MutationObserver((muts) => {
     for (const m of muts) {
       for (const n of m.addedNodes) {
-        if (n.nodeType === 1) scheduleRowSnap(n);
+        if (n.nodeType === 1 && n !== msgsCanvas) scheduleRowSnap(n);
       }
     }
   }).observe(msgs, { childList: true });

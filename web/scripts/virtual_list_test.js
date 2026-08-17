@@ -801,6 +801,19 @@ test('T119 jump-to-bottom hotkey + FAB; no jump-to-top', function () {
   assert.strictEqual(VL.shouldShowJumpFab('track', true), false);
 });
 
+test('T494.1.2 shouldSnapTranscriptRow skips the canvas', function () {
+  const host = { id: 'messages' };
+  const canvas = { id: 'messages-canvas', parentNode: host };
+  const row = { id: '', parentNode: canvas, classList: { contains: function () { return true; } } };
+  const stray = { id: '', parentNode: host, classList: { contains: function () { return false; } } };
+  assert.strictEqual(VL.shouldSnapTranscriptRow(canvas, host, canvas), false);
+  assert.strictEqual(VL.shouldSnapTranscriptRow(host, host, canvas), false);
+  assert.strictEqual(VL.shouldSnapTranscriptRow(row, host, canvas), true);
+  assert.strictEqual(VL.shouldSnapTranscriptRow(stray, host, canvas), true,
+    'legacy #messages children (working chrome) still snap');
+  assert.strictEqual(VL.shouldSnapTranscriptRow(null, host, canvas), false);
+});
+
 // ── estimate for unmeasured shells ───────────────────────────────────
 
 test('T119 estimate height for unmeasured shells (lazy)', function () {
