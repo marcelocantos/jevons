@@ -351,6 +351,22 @@
    * Every other publisher — including Grok when the billing surface is
    * down — stays on the bar.
    */
+  function isExhaustedReason(reason) {
+    const s = String(reason || '').toLowerCase();
+    if (!s) return false;
+    return s.indexOf('429') >= 0 ||
+      s.indexOf('rate_limit') >= 0 ||
+      s.indexOf('rate-limit') >= 0 ||
+      s.indexOf('rate limited') >= 0;
+  }
+
+  function exhaustedZeroWindows() {
+    return [
+      { name: WINDOW_SESSION, remaining_percent: 0, used_percent: 100 },
+      { name: WINDOW_WEEKLY, remaining_percent: 0, used_percent: 100 }
+    ];
+  }
+
   function showOnBar(row) {
     if (row.provider === 'bedrock' && !row.available && !row.running) return false;
     return true;
@@ -366,8 +382,15 @@
     const provider = String((b && b.provider) || '').toLowerCase();
     const abbrev = providerAbbrev(provider);
     const company = providerCompany(provider);
-    const windowsIn = Array.isArray(b && b.windows) ? b.windows : [];
-    const available = !!(b && b.status === STATUS_AVAILABLE && windowsIn.length > 0);
+    let windowsIn = Array.isArray(b && b.windows) ? b.windows : [];
+    let available = !!(b && b.status === STATUS_AVAILABLE && windowsIn.length > 0);
+    // 🎯T390.1.3: Claude's usage API answers 429 rate_limit when the
+    // allowance is gone. That is exhausted (0% left), not "unpublished".
+    // Painting it as a bare icon looks like a failed render.
+    if (!available && isExhaustedReason(b && b.reason) && windowsIn.length === 0) {
+      available = true;
+      windowsIn = exhaustedZeroWindows();
+    }
     const stale = !!(b && b.stale);
     const ageSeconds = (b && typeof b.age_seconds === 'number') ? b.age_seconds : null;
 
@@ -712,7 +735,7 @@
     }
     el.appendChild(icon);
 
-    if (!g.available || !g.windows || g.windows.length === 0) {
+    if (!g.windows || g.windows.length === 0) {
       return el;
     }
 
@@ -777,6 +800,7 @@
     weeklyWaste: weeklyWaste,
     limitSecondsFor: limitSecondsFor,
     showOnBar: showOnBar,
+    isExhaustedReason: isExhaustedReason,
     WINDOW_SESSION: WINDOW_SESSION,
     WINDOW_WEEKLY: WINDOW_WEEKLY,
     STATUS_AVAILABLE: STATUS_AVAILABLE,

@@ -647,3 +647,81 @@ test('T390.1: paint uses groups, company icons, and a triangle, not cl/s chips',
     'paint itself must not hardcode cl/s label chips as the visible form');
 });
 
+test('T390.1.3: Claude 429 rate-limit is exhausted bars, not a collapsed icon', function () {
+  const view = PU.formatPlanUsage(snapshot([claudeBackend({
+    status: 'unavailable',
+    windows: [],
+    reason: 'Claude usage HTTP 429: {   "error": {     "type": "rate_limit_error",     "message": "Rate limited. Please try again later."   } }'
+  }), grokBackend()]), NOW);
+  const g = groupFor(view, 'claude');
+  assert.ok(g, 'exhausted Claude stays on the bar');
+  assert.strictEqual(g.available, true, '429 is a reading (zero left), not unpublished');
+  assert.strictEqual(g.windows.length, 2, 'session + weekly still exist');
+  assert.strictEqual(g.windows[0].remainingPercent, 0);
+  assert.strictEqual(g.windows[1].remainingPercent, 0);
+  assert.ok((g.className || '').indexOf('plan-unavail') < 0,
+    'must not fade like a failed render: ' + g.className);
+  const gk = groupFor(view, 'grok');
+  assert.strictEqual(gk.available, false, 'control: unpublished Grok is still unavailable');
+  assert.deepStrictEqual(gk.windows, [], 'control: unpublished Grok still has no invented bars');
+
+  const painted = paintGroups(view);
+  const cl = painted.find(function (p) { return p.provider === 'claude'; });
+  const gkP = painted.find(function (p) { return p.provider === 'grok'; });
+  assert.ok(cl && cl.hasBox, 'exhausted Claude keeps the plan-box border');
+  assert.strictEqual(cl.wins, 2, 'both tracks present at 0%');
+  assert.ok(gkP && !gkP.hasBox, 'control: unpublished Grok stays icon-only');
+});
+
+function paintGroups(view) {
+  const kids = [];
+  const el = {
+    className: '',
+    title: '',
+    style: {},
+    children: kids,
+    ownerDocument: null,
+    get firstChild() { return kids[0] || null; },
+    removeChild: function (c) {
+      const i = kids.indexOf(c);
+      if (i >= 0) kids.splice(i, 1);
+    },
+    appendChild: function (c) { kids.push(c); return c; }
+  };
+  function make(tag) {
+    const n = {
+      tagName: String(tag || ''),
+      className: '',
+      children: [],
+      style: {},
+      attrs: {},
+      textContent: '',
+      innerHTML: '',
+      ownerDocument: doc,
+      setAttribute: function (k, v) { this.attrs[k] = v; },
+      appendChild: function (c) { this.children.push(c); return c; }
+    };
+    return n;
+  }
+  const doc = {
+    createElement: make,
+    createTextNode: function (t) { return { textContent: String(t || '') }; }
+  };
+  el.ownerDocument = doc;
+  PU.paintPlanUsage(el, view);
+  return kids.map(function (g) {
+    const box = g.children.filter(function (c) {
+      return String(c.className || '').indexOf('plan-box') >= 0;
+    })[0];
+    const wins = box ? box.children.filter(function (c) {
+      return String(c.className || '').indexOf('plan-win') >= 0;
+    }) : [];
+    return {
+      provider: g.attrs && g.attrs['data-provider'],
+      hasBox: !!box,
+      wins: wins.length,
+      cls: g.className
+    };
+  });
+}
+
