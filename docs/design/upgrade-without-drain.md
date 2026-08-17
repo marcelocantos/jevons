@@ -93,5 +93,6 @@ process reattaches by `ConnectURL`/`ConnectPID` + `session_id`.
   user-scoped config MCP (🎯T58) so resume keeps tools.
 - **Intentional `Stop`/`StopAll`** still kills serve (clears connect
   endpoint). Only upgrade exit leaves processes alone.
-- **Claude/Codex** use their own durability (tmux / experimental); this
-  target is Grok process durability for the default fleet backend.
+- **Claude/Codex** use their own durability (tmux / Codex app-server
+  thread id as of claudia v0.23.0); this target is Grok process
+  durability for the default fleet backend.
