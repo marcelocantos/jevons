@@ -60,6 +60,54 @@ func TestWeeklyBandTable(t *testing.T) {
 	}
 }
 
+// TestT390_1_6_1EarlyWindowDamping: burn is damped (used+λ)/(elapsed+λ)
+// so a barely-started week is not painted hot. Claude's week-start
+// specimen (9% used, 5.6% elapsed, 91% remaining) had raw burn 1.6 —
+// just past the 5% warmup — and drove migrate-off from an almost-full
+// backend. A genuinely spent mid-week (80% used, 50% elapsed) stays hot.
+func TestT390_1_6_1EarlyWindowDamping(t *testing.T) {
+	th := DefaultThresholds()
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	lim := DefaultWeeklyWindowSeconds
+	pct := func(v float64) *float64 { return &v }
+	weeklyAt := func(rem, used, remTimePct float64) Backend {
+		resets := now.Add(time.Duration(remTimePct/100*float64(lim)) * time.Second)
+		return Backend{
+			Provider: "claude",
+			Status:   StatusAvailable,
+			Windows: []Window{{
+				Name: WindowWeekly, RemainingPercent: pct(rem), UsedPercent: pct(used),
+				ResetsAt: &resets, LimitWindowSeconds: &lim,
+			}},
+		}
+	}
+
+	weekStart := weeklyAt(91, 9, 94.4)
+	if got := WeeklyBandOf(weekStart, now, th); got != BandOK && got != BandAhead {
+		t.Fatalf("week start must be ok or ahead, got %s", got)
+	}
+	if MigrateOff(weekStart, now, th) {
+		t.Fatal("a 91%%-remaining week start must not migrate off")
+	}
+
+	midWeek := weeklyAt(20, 80, 50)
+	if got := WeeklyBandOf(midWeek, now, th); got != BandHot {
+		t.Fatalf("80%% used at 50%% elapsed is still hot, got %s", got)
+	}
+	if !MigrateOff(midWeek, now, th) {
+		t.Fatal("a genuinely spent mid-week still migrates off")
+	}
+
+	// Control: λ=0 restores the raw ratio and the week-start specimen is
+	// the old red cliff — the damping is the named threshold, not a
+	// side effect of some other vertex.
+	raw := th
+	raw.DampLambdaPercent = 0
+	if got := WeeklyBandOf(weekStart, now, raw); got != BandHot {
+		t.Fatalf("control: undamped week start was hot, got %s", got)
+	}
+}
+
 func TestPickPlanDestWasteThenLoad(t *testing.T) {
 	th := DefaultThresholds()
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)

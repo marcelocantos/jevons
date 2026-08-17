@@ -53,6 +53,15 @@
   const PACE_AHEAD_RATIO = 1.0;
   const PACE_HOT_RATIO = 1.5;
 
+  // 🎯T390.1.6.1 early-window damping: burn = (used+λ)/(elapsed+λ).
+  // Just past warmup the raw ratio is a tiny-sample artefact — 9% used
+  // at 5.6% elapsed is burn 1.6 and painted a barely-started week red.
+  // λ pulls small samples toward the neutral 1.0 without moving
+  // mid-window readings across the vertices (80/50 damps to 1.55,
+  // still hot; λ must stay below 10 or it stops being). Same formula
+  // and λ as Go WeeklyBandOf, served in the thresholds document.
+  const PACE_DAMP_LAMBDA = 5;
+
   // 🎯T390.1.1 weekly waste (owner pick C). Same 15 as remaining-low;
   // discussable. Continuation = leftover if pace does not change.
   // Locked = leftover even at a 1.5× sprint. Weekly only.
@@ -69,6 +78,7 @@
   let warmupElapsed = PACE_WARMUP_PERCENT;
   let lowRemaining = LOW_PERCENT;
   let criticalRemaining = CRITICAL_PERCENT;
+  let dampLambda = PACE_DAMP_LAMBDA;
 
   function applyThresholds(doc) {
     if (!doc || typeof doc !== 'object') return;
@@ -79,6 +89,7 @@
     if (typeof doc.warmup_elapsed_percent === 'number') warmupElapsed = doc.warmup_elapsed_percent;
     if (typeof doc.low_remaining_percent === 'number') lowRemaining = doc.low_remaining_percent;
     if (typeof doc.critical_remaining_percent === 'number') criticalRemaining = doc.critical_remaining_percent;
+    if (typeof doc.damp_lambda_percent === 'number') dampLambda = doc.damp_lambda_percent;
   }
 
   const PACE_OK = 'ok';
@@ -256,11 +267,14 @@
    * classifyPace compares token spend to elapsed time.
    *
    *   ok      on pace (or session under-spend — sessions do not waste)
-   *   ahead   used/elapsed > 1                         → orange
-   *   hot     used/elapsed > 1.5, or remaining is 0    → red
+   *   ahead   damped burn > 1                          → orange
+   *   hot     damped burn > 1.5, or remaining is 0     → red
    *   under   weekly continuation waste ≥ 15%          → blue
    *   locked  weekly locked waste ≥ 15%                → purple
    *
+   * Damped burn = (used+λ)/(elapsed+λ) (🎯T390.1.6.1) — early-window
+   * samples lean toward 1.0 instead of flashing red at week open.
+   * Waste arithmetic stays raw.
    * No time signal → empty string (caller falls back to remaining-low).
    * First PACE_WARMUP_PERCENT of elapsed does not flash.
    * windowName is required for under/locked; anything other than weekly
@@ -275,7 +289,8 @@
     if (used === null) return '';
     const elapsed = 100 - remainingTimePercent;
     if (elapsed < warmupElapsed) return PACE_OK;
-    const burn = used / elapsed;
+    const lambda = dampLambda < 0 ? 0 : dampLambda;
+    const burn = (used + lambda) / (elapsed + lambda);
     if (burn > hotRatio) return PACE_HOT;
     if (burn > aheadRatio) return PACE_AHEAD;
     const weekly = String(windowName || '').toLowerCase() === WINDOW_WEEKLY;

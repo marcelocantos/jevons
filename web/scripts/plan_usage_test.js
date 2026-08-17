@@ -531,14 +531,15 @@ test('T390.1: unpublished duration still infers session=5h / weekly=7d', functio
 });
 
 test('T390.1: pace is green / orange / red at the 1.0 and 1.5 burn ratios', function () {
-  // used 50, elapsed 50 → burn 1.0 → ok
+  // Burn is damped: (used+λ)/(elapsed+λ), λ=5 (🎯T390.1.6.1).
+  // used 50, elapsed 50 → damped 55/55 = 1.0 → ok
   assert.strictEqual(PU.classifyPace(50, 50, 50), PU.PACE_OK, 'on pace is green');
-  // used 51, elapsed 50 → burn 1.02 → ahead
+  // used 51, elapsed 50 → damped 56/55 ≈ 1.02 → ahead
   assert.strictEqual(PU.classifyPace(51, 49, 50), PU.PACE_AHEAD, 'just over 1.0 is orange');
-  // used 75, elapsed 50 → burn 1.5 → still ahead (strictly greater than 1.5 is hot)
-  assert.strictEqual(PU.classifyPace(75, 25, 50), PU.PACE_AHEAD, 'exactly 1.5 is orange, not red');
-  // used 76, elapsed 50 → burn 1.52 → hot
-  assert.strictEqual(PU.classifyPace(76, 24, 50), PU.PACE_HOT, 'over 1.5 is red');
+  // used 77.5, elapsed 50 → damped 82.5/55 = 1.5 → still ahead (strictly greater than 1.5 is hot)
+  assert.strictEqual(PU.classifyPace(77.5, 22.5, 50), PU.PACE_AHEAD, 'exactly 1.5 is orange, not red');
+  // used 78, elapsed 50 → damped 83/55 ≈ 1.509 → hot
+  assert.strictEqual(PU.classifyPace(78, 22, 50), PU.PACE_HOT, 'over 1.5 is red');
   // remaining 0 is always hot
   assert.strictEqual(PU.classifyPace(100, 0, 40), PU.PACE_HOT, 'exhausted is red regardless of time');
   // first 5% of elapsed does not flash
@@ -683,10 +684,29 @@ test('T390.1.3: Claude 429 rate-limit is exhausted bars, not a collapsed icon', 
 
 test('T390.1.6: applyThresholds moves the hot vertex', function () {
   const mid = PU.classifyPace(65, 35, 50);
-  assert.strictEqual(mid, PU.PACE_AHEAD, 'default 1.3 is ahead not hot');
+  assert.strictEqual(mid, PU.PACE_AHEAD, 'default damped 1.27 is ahead not hot');
   PU.applyThresholds({ hot_ratio: 1.2 });
-  assert.strictEqual(PU.classifyPace(65, 35, 50), PU.PACE_HOT, 'hot_ratio 1.2 makes 1.3 hot');
+  assert.strictEqual(PU.classifyPace(65, 35, 50), PU.PACE_HOT, 'hot_ratio 1.2 makes damped 1.27 hot');
   PU.applyThresholds({ hot_ratio: 1.5 });
+});
+
+test('T390.1.6.1: early-window burn is damped, week start is not hot', function () {
+  // Claude's week-start specimen: used 9%, elapsed 5.6% (remaining time
+  // 94.4%). Raw burn is 1.6 — this painted a 91%-remaining week red.
+  // Damped: (9+5)/(5.6+5) ≈ 1.32 → ahead at worst, never hot.
+  const weekStart = PU.classifyPace(9, 91, 94.4, 'weekly');
+  assert.ok(weekStart === PU.PACE_OK || weekStart === PU.PACE_AHEAD,
+    'week start must be ok or ahead, not ' + weekStart);
+  // Control: a genuinely spent mid-week is still hot — damped
+  // (80+5)/(50+5) ≈ 1.55 > 1.5.
+  assert.strictEqual(PU.classifyPace(80, 20, 50, 'weekly'), PU.PACE_HOT,
+    '80% used at 50% elapsed stays red');
+  // The λ rides the served thresholds document, not a JS-only constant:
+  // λ=0 restores the raw ratio and the week-start specimen goes hot.
+  PU.applyThresholds({ damp_lambda_percent: 0 });
+  assert.strictEqual(PU.classifyPace(9, 91, 94.4, 'weekly'), PU.PACE_HOT,
+    'control: undamped week start is the old red cliff');
+  PU.applyThresholds({ damp_lambda_percent: 5 });
 });
 
 test('T390.1.3: weekly bar chrome is bright red at rock bottom', function () {

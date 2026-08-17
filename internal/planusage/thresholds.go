@@ -14,10 +14,23 @@ type Thresholds struct {
 	WarmupElapsedPercent     float64 `json:"warmup_elapsed_percent"`
 	LowRemainingPercent      float64 `json:"low_remaining_percent"`
 	CriticalRemainingPercent float64 `json:"critical_remaining_percent"`
+
+	// DampLambdaPercent is the additive damping λ applied to both terms
+	// of the burn ratio: burn = (used% + λ) / (elapsed% + λ)
+	// (🎯T390.1.6.1). Early in a window the raw ratio is a tiny-sample
+	// artefact — 9% used at 5.6% elapsed is burn 1.6 and painted a
+	// barely-started week red, which then drove migrate-off from a
+	// backend with 91% remaining. λ pulls small samples toward the
+	// neutral 1.0 while leaving mid-window readings on their side of
+	// the vertices: 9/5.6 damps to 1.32 (ahead), 80/50 damps to 1.55
+	// (still hot). λ must stay below 10, or 80/50 crosses under the
+	// 1.5 hot vertex. Waste arithmetic (under/locked) stays raw.
+	DampLambdaPercent float64 `json:"damp_lambda_percent"`
 }
 
 // DefaultThresholds matches the vertices the cockpit already used
-// (ahead 1.0, hot 1.5, waste 15, warmup 5, remaining-low 15 / 5).
+// (ahead 1.0, hot 1.5, waste 15, warmup 5, remaining-low 15 / 5,
+// damp λ 5).
 func DefaultThresholds() Thresholds {
 	return Thresholds{
 		AheadRatio:               1.0,
@@ -27,6 +40,7 @@ func DefaultThresholds() Thresholds {
 		WarmupElapsedPercent:     5,
 		LowRemainingPercent:      15,
 		CriticalRemainingPercent: 5,
+		DampLambdaPercent:        5,
 	}
 }
 

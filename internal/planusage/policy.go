@@ -72,7 +72,7 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 	if elapsed <= 0 {
 		return BandOK
 	}
-	burn := *used / elapsed
+	burn := dampedBurn(*used, elapsed, th.DampLambdaPercent)
 	if burn > th.HotRatio {
 		return BandHot
 	}
@@ -214,6 +214,16 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds)
 		out = append(out, PlanAction{Name: a.Name, From: from, To: to, Reason: reason})
 	}
 	return out
+}
+
+// dampedBurn is used/elapsed with the additive damping λ on both terms
+// (🎯T390.1.6.1) — see Thresholds.DampLambdaPercent for why. The ticker's
+// classifyPace applies the same formula from the same served λ.
+func dampedBurn(used, elapsed, lambda float64) float64 {
+	if lambda < 0 {
+		lambda = 0
+	}
+	return (used + lambda) / (elapsed + lambda)
 }
 
 func usedPercent(w Window) *float64 {
