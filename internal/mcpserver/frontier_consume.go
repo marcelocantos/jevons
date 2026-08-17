@@ -518,6 +518,10 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 		slog.Warn("frontier consume: ledger load failed", "workdir", args.Workdir, "err", err)
 		return nil
 	}
+	// 🎯T499: recency bias — the per-cycle spawn slot goes to the newest
+	// ready leaf. Older ready leaves still sweep (park_capacity), so they
+	// stay ready and engage once newer work is consumed or engaged.
+	targetfile.OrderLeavesPreferRecent(leaves)
 
 	byID := make(map[string]targetfile.FrontierLeaf, len(leaves))
 	obs := make([]poproactive.LeafObs, 0, len(leaves))

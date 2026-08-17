@@ -49,6 +49,9 @@ type FrontierLeaf struct {
 	// spawn against it. Empty when the ledger records no assignment.
 	OwnedBy       string
 	OwnedByReason string
+	// Discovered is the ledger's filed date (ISO yyyy-mm-dd), "" when the
+	// ledger records none. Recency bias among ready leaves keys on it (🎯T499).
+	Discovered string
 }
 
 type frontierLedgerTarget struct {
@@ -61,6 +64,7 @@ type frontierLedgerTarget struct {
 	Cost       float64          `yaml:"cost"`
 	Value      float64          `yaml:"value"`
 	OwnedBy    *frontierOwnedBy `yaml:"owned_by"`
+	Discovered string           `yaml:"discovered"`
 }
 
 // frontierOwnedBy mirrors bullseye's ownership exclusion (🎯T449).
@@ -155,6 +159,7 @@ func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
 			Value:          t.Value,
 			SetAsideDeps:   setAsideDeps,
 			ActiveChildren: activeChildren,
+			Discovered:     strings.TrimSpace(t.Discovered),
 		}
 		if t.OwnedBy != nil {
 			leaf.OwnedBy = strings.TrimSpace(t.OwnedBy.Owner)
@@ -181,6 +186,25 @@ func LoadFrontierLeavesFromCwd(cwd string) ([]FrontierLeaf, string, error) {
 	}
 	leaves, err := FrontierLeaves(data)
 	return leaves, path, err
+}
+
+// OrderLeavesPreferRecent reorders leaves newest-first by ledger discovered
+// date (🎯T499): a leaf that has sat identified for a long time is lower
+// priority than a recently filed one. ISO yyyy-mm-dd dates compare
+// lexicographically; a missing date sorts oldest. Ties (same day, or both
+// undated) fall back to natural id descending, since ids are minted in
+// filing order — the residual total order among same-day filings is policy,
+// not doctrine. This is a bias among ready leaves, never a next-ticket queue
+// (🎯T262.1): callers still evaluate and report every leaf; order only
+// decides which ready leaf gets the per-cycle pick first.
+func OrderLeavesPreferRecent(leaves []FrontierLeaf) {
+	sort.SliceStable(leaves, func(i, j int) bool {
+		di, dj := leaves[i].Discovered, leaves[j].Discovered
+		if di != dj {
+			return di > dj
+		}
+		return targetIDNaturalLess(leaves[j].ID, leaves[i].ID)
+	})
 }
 
 // targetIDNaturalLess orders bullseye ids by alternating digit / non-digit
