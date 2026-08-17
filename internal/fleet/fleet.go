@@ -265,7 +265,8 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 }
 
 // Launch ensures a live, ready process for the thread. If the thread's
-// session already exists on disk, claudia resumes it (--resume); the
+// session already exists, claudia resumes it (Claude --resume, Grok
+// session/load, Codex app-server thread/resume as of v0.23.0). The
 // resume/summary menu is auto-cleared by claudia's readiness handshake
 // (T24). It populates t.SessionID with the live process's session so
 // the thread can be rehydrated later.
