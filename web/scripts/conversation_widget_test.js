@@ -734,6 +734,60 @@ test('T491 applyWireEvent paints every distinct user+assistant, not only the fir
   assert.strictEqual(lines.filter(function (l) { return l.role === 'user'; }).length, n);
 });
 
+// 🎯T496: a tool_use stop is not terminal, so the pre-tool assistant row
+// keeps _stream and the post-tool final text grows THAT row — which is no
+// longer the last display row (the turn-slot is). syncDisplay's equal-length
+// branch used to inspect only the last row and returned without painting,
+// so the overseer's final answer never reached the owner-visible bubble.
+test('T496 final text after tool_use paints into the owner-visible bubble', function () {
+  const bubbles = [];
+  const stream = CW.createStreamJoin({
+    addMsg: function (role, text) {
+      const el = { className: 'msg ' + role, _streamRaw: String(text || '') };
+      bubbles.push(el);
+      return el;
+    },
+    requestAnimationFrame: function (fn) { fn(); return 0; },
+  });
+  const sid = 'sid-t496';
+  stream.applyWireEvent({ type: 'user', message: { role: 'user', content: 'how is the fleet?' } });
+  stream.applyWireEvent({
+    type: 'assistant', stream_id: sid,
+    message: { content: [{ type: 'text', text: 'Checking the fleet' }] },
+  });
+  stream.applyWireEvent({
+    type: 'assistant', stream_id: sid,
+    message: { content: [{ type: 'text', text: ' now.' }] },
+  });
+  stream.applyWireEvent({
+    type: 'assistant', stream_id: sid,
+    message: { content: [{ type: 'tool_use', name: 'jevons_agent_list', input: {} }], stop_reason: 'tool_use' },
+  });
+  stream.applyWireEvent({
+    type: 'tool_result',
+    message: { content: [{ type: 'tool_result', content: 'ok' }] },
+  });
+  stream.applyWireEvent({
+    type: 'assistant', stream_id: sid,
+    message: { content: [{ type: 'text', text: 'FINAL-T496 the fleet is healthy.' }] },
+  });
+  stream.applyWireEvent({
+    type: 'assistant', stream_id: sid,
+    message: { content: [], stop_reason: 'end_turn' },
+  });
+  // Display model has the final text (fold is correct)…
+  const asst = stream.getLines().filter(function (l) {
+    return l && (l.role === 'assistant' || l.role === 'jevons');
+  });
+  assert.strictEqual(asst.length, 1, 'one assistant line, got ' + asst.length);
+  assert.ok(asst[0].text.indexOf('FINAL-T496') >= 0, 'fold has final text: ' + asst[0].text);
+  // …and so does the painted bubble (the owner-visible half — the bug).
+  const jb = bubbles.filter(function (b) { return b.className.indexOf('jevons') >= 0; });
+  assert.strictEqual(jb.length, 1, 'one jevons bubble, got ' + jb.length);
+  assert.ok(jb[0]._streamRaw.indexOf('FINAL-T496') >= 0,
+    'bubble carries post-tool final text, got: ' + jb[0]._streamRaw);
+});
+
 test('T372 Grok word-chunks are one assistant bubble (both densities)', function () {
   ['compact', 'comfortable'].forEach(function (density) {
     const dom = fakeDom(density);

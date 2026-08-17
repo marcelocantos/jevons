@@ -1206,12 +1206,19 @@
               paintTurnSlotEl(b);
             }
           }
-          return;
+          // No return: the fold can grow an assistant stream row that is
+          // no longer last (post-tool final text — 🎯T496) in the same
+          // apply that leaves the turn-slot as the last row.
         }
-        if (a && b && (b.role === 'assistant' || b.role === 'jevons') && a.text !== b.text) {
-          var target = resolveOpen(b._streamId || '');
+        for (var di = 0; di < next.length; di++) {
+          var p = prev[di];
+          var n = next[di];
+          if (!n || (n.role !== 'assistant' && n.role !== 'jevons')) continue;
+          if (p === n) continue; // aliased, not snapshotted ⇒ unchanged
+          if (p && p.text === n.text) continue;
+          var target = resolveOpen(n._streamId || '');
           if (target) {
-            target._streamRaw = b.text;
+            target._streamRaw = n.text;
             scheduleRender(target);
           }
         }
@@ -1224,20 +1231,27 @@
 
     // fold.out is mutated in place. Aliasing prev to that array makes
     // syncDisplay see equal lengths after the first row and skip paint
-    // (🎯T491: connect replay left one leftover bubble). Snapshot the
-    // previous length and the last row's identity *before* fold.
+    // (🎯T491: connect replay left one leftover bubble). Snapshot every
+    // row the fold can mutate *before* fold: the last row, and any
+    // still-open assistant stream row — post-tool final text grows a row
+    // that is no longer last (🎯T496).
     function snapshotDisplay(rows) {
       rows = rows || [];
       var copy = rows.slice();
-      if (!copy.length) return copy;
-      var last = copy[copy.length - 1];
-      copy[copy.length - 1] = {
-        kind: last.kind,
-        role: last.role,
-        text: last.text,
-        items: last.items ? last.items.slice() : undefined,
-        _streamId: last._streamId,
-      };
+      for (var i = 0; i < copy.length; i++) {
+        var r = copy[i];
+        if (!r) continue;
+        var streamRow = r._stream && (r.role === 'assistant' || r.role === 'jevons');
+        if (i !== copy.length - 1 && !streamRow) continue;
+        copy[i] = {
+          kind: r.kind,
+          role: r.role,
+          text: r.text,
+          items: r.items ? r.items.slice() : undefined,
+          _stream: r._stream,
+          _streamId: r._streamId,
+        };
+      }
       return copy;
     }
 
