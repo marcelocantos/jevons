@@ -6821,14 +6821,26 @@ function paintPlanUsageView(view) {
   }
   planPainted = true;
 }
+var planThresholdsLoaded = false;
 function refreshPlanUsage() {
   if (!planEl || typeof PlanUsage === 'undefined') return;
   if (!planPainted) paintPlanUsageView(PlanUsage.formatPlanUsage({ pending: true }));
-  fetch('/api/plan-usage').then(function (r) { return r.json(); }).then(function (p) {
-    paintPlanUsageView(PlanUsage.formatPlanUsage(p));
-  }).catch(function () {
-    paintPlanUsageView(PlanUsage.formatPlanUsage({ error: 'fetch failed' }));
-  });
+  function loadUsage() {
+    fetch('/api/plan-usage').then(function (r) { return r.json(); }).then(function (p) {
+      paintPlanUsageView(PlanUsage.formatPlanUsage(p));
+    }).catch(function () {
+      paintPlanUsageView(PlanUsage.formatPlanUsage({ error: 'fetch failed' }));
+    });
+  }
+  if (!planThresholdsLoaded && typeof PlanUsage.applyThresholds === 'function') {
+    fetch('/api/plan-usage/thresholds').then(function (r) { return r.json(); }).then(function (t) {
+      PlanUsage.applyThresholds(t);
+      planThresholdsLoaded = true;
+      loadUsage();
+    }).catch(function () { loadUsage(); });
+    return;
+  }
+  loadUsage();
 }
 setInterval(function () {
   if (typeof document !== 'undefined' && document.hidden) return;

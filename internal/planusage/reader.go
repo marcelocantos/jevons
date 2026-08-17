@@ -46,6 +46,10 @@ type ReaderArgs struct {
 	GrokUnstableUsage bool
 	// FetchTimeout bounds one round of provider calls. Zero uses 20s.
 	FetchTimeout time.Duration
+	// FixturePath, when set, makes Snapshot read that JSON file instead
+	// of the last fetch (isolate journeys, 🎯T390.1.5). Env
+	// JEVONS_PLAN_USAGE_FIXTURE is used when this is empty.
+	FixturePath string
 }
 
 // Reader keeps the last round of plan-usage readings and re-shapes them on
@@ -115,6 +119,22 @@ func (r *Reader) Refresh(ctx context.Context) error {
 
 // Snapshot re-shapes the cached readings as of now.
 func (r *Reader) Snapshot() Snapshot {
+	path := strings.TrimSpace(r.args.FixturePath)
+	if path == "" {
+		path = fixturePath()
+	}
+	if path != "" {
+		if snap, err := LoadSnapshotFile(path); err == nil {
+			if snap.At.IsZero() {
+				now := time.Now()
+				if r.args.Now != nil {
+					now = r.args.Now()
+				}
+				snap.At = now
+			}
+			return snap
+		}
+	}
 	now := r.args.Now()
 
 	r.mu.Lock()

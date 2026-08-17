@@ -15,6 +15,7 @@ const (
 	KnobConfig        = "config"
 	KnobPortfolioFile = "portfolio_file"
 	KnobCompiledSeed  = "compiled_seed"
+	KnobPlanDest      = "plan_dest"
 )
 
 // MintProviderArgs is the input to PickMintProvider.
@@ -32,6 +33,14 @@ type MintProviderArgs struct {
 	Portfolio RouteDecision
 	// PortfolioFromFile is true when state_dir/llm-portfolio.json loaded.
 	PortfolioFromFile bool
+	// PlanDefaultIneligible is true when the config default fails the
+	// daemon plan-usage mint threshold (🎯T390.1.5).
+	PlanDefaultIneligible bool
+	// PlanDest is PickPlanDest's choice when the default is ineligible.
+	PlanDest string
+	// PlanDestOK is false when every published dest fails the mint
+	// threshold — omit-provider mint must refuse, not land on a hot dest.
+	PlanDestOK bool
 }
 
 // MintProviderPick is the owner-visible mint provider decision (🎯T476).
@@ -68,6 +77,25 @@ func PickMintProvider(a MintProviderArgs) MintProviderPick {
 	cfg := strings.ToLower(strings.TrimSpace(a.ConfigProvider))
 	if cfg == "" {
 		cfg = HarnessGrok
+	}
+	if a.PlanDefaultIneligible {
+		if a.PlanDestOK && strings.TrimSpace(a.PlanDest) != "" {
+			pick := MintProviderPick{
+				Provider:       strings.ToLower(strings.TrimSpace(a.PlanDest)),
+				Knob:           KnobPlanDest,
+				LosingKnob:     KnobConfig,
+				LosingProvider: cfg,
+				TaskType:       a.Portfolio.TaskType,
+			}
+			return pick
+		}
+		return MintProviderPick{
+			Provider:       "",
+			Knob:           KnobPlanDest,
+			LosingKnob:     KnobConfig,
+			LosingProvider: cfg,
+			TaskType:       a.Portfolio.TaskType,
+		}
 	}
 	pick := MintProviderPick{Provider: cfg, Knob: KnobConfig, TaskType: a.Portfolio.TaskType}
 	pick.noteLoser(a)

@@ -390,6 +390,7 @@ test('index.html loads plan_usage.js, fetches the API, and paints chips', functi
   assert.ok(html.indexOf('formatPlanUsage') >= 0, 'must call formatPlanUsage');
   assert.ok(html.indexOf('paintPlanUsage') >= 0, 'must paint chips, not only set textContent');
   assert.ok(html.indexOf('/api/plan-usage') >= 0, 'must fetch the served payload');
+  assert.ok(html.indexOf('/api/plan-usage/thresholds') >= 0, 'must fetch T390.1.6 vertices once');
   assert.ok(html.indexOf('id="plan-ticker"') >= 0, 'must have somewhere to render it');
 });
 
@@ -678,6 +679,14 @@ test('T390.1.3: Claude 429 rate-limit is exhausted bars, not a collapsed icon', 
   assert.ok(liveW && String(liveW.className).indexOf(PU.CLASS_EXHAUSTED) < 0,
     'control: a live weekly is not rock-bottom: ' + liveW.className);
   assert.ok(gkP && !gkP.hasBox, 'control: unpublished Grok stays icon-only');
+});
+
+test('T390.1.6: applyThresholds moves the hot vertex', function () {
+  const mid = PU.classifyPace(65, 35, 50);
+  assert.strictEqual(mid, PU.PACE_AHEAD, 'default 1.3 is ahead not hot');
+  PU.applyThresholds({ hot_ratio: 1.2 });
+  assert.strictEqual(PU.classifyPace(65, 35, 50), PU.PACE_HOT, 'hot_ratio 1.2 makes 1.3 hot');
+  PU.applyThresholds({ hot_ratio: 1.5 });
 });
 
 test('T390.1.3: weekly bar chrome is bright red at rock bottom', function () {

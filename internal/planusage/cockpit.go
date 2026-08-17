@@ -77,8 +77,8 @@ func FormatCockpit(snap Snapshot) string {
 		fmt.Fprintf(&b, "  query failed: %s\n", view.Error)
 	}
 	var (
-		bestProv string
-		bestRem  = -1.0
+		bestProv  string
+		bestRem   = -1.0
 		exhausted []string
 	)
 	shown := 0

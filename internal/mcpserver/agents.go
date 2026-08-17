@@ -17,6 +17,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -471,6 +472,10 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		stored = string(def.Provider)
 	}
 	pick := s.mintProviderPick(providerArg, stored, existed, taskTypeArg, purpose)
+	if pick.Knob == cost.KnobPlanDest && strings.TrimSpace(pick.Provider) == "" {
+		return nil, existed, pick.Cite(), fmt.Errorf(
+			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")
+	}
 	def.Provider = claudia.Provider(pick.Provider)
 	routeNote := pick.Cite()
 

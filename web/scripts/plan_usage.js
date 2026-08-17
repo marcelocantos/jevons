@@ -59,6 +59,28 @@
   const PACE_UNDER_WASTE = 15;
   const PACE_LOCKED_WASTE = 15;
 
+  // 🎯T390.1.6: daemon-owned vertices. applyThresholds overwrites these
+  // from GET /api/plan-usage/thresholds (once). Defaults match Go
+  // DefaultThresholds so hermetic tests stay independent of a fetch.
+  let aheadRatio = PACE_AHEAD_RATIO;
+  let hotRatio = PACE_HOT_RATIO;
+  let underWaste = PACE_UNDER_WASTE;
+  let lockedWaste = PACE_LOCKED_WASTE;
+  let warmupElapsed = PACE_WARMUP_PERCENT;
+  let lowRemaining = LOW_PERCENT;
+  let criticalRemaining = CRITICAL_PERCENT;
+
+  function applyThresholds(doc) {
+    if (!doc || typeof doc !== 'object') return;
+    if (typeof doc.ahead_ratio === 'number') aheadRatio = doc.ahead_ratio;
+    if (typeof doc.hot_ratio === 'number') hotRatio = doc.hot_ratio;
+    if (typeof doc.under_waste_percent === 'number') underWaste = doc.under_waste_percent;
+    if (typeof doc.locked_waste_percent === 'number') lockedWaste = doc.locked_waste_percent;
+    if (typeof doc.warmup_elapsed_percent === 'number') warmupElapsed = doc.warmup_elapsed_percent;
+    if (typeof doc.low_remaining_percent === 'number') lowRemaining = doc.low_remaining_percent;
+    if (typeof doc.critical_remaining_percent === 'number') criticalRemaining = doc.critical_remaining_percent;
+  }
+
   const PACE_OK = 'ok';
   const PACE_AHEAD = 'ahead';
   const PACE_HOT = 'hot';
@@ -226,7 +248,7 @@
     if (used !== null && elapsed > 0) {
       continuation = Math.max(0, 100 - (used / elapsed) * 100);
     }
-    const locked = rem === null ? null : Math.max(0, rem - PACE_HOT_RATIO * remainingTimePercent);
+    const locked = rem === null ? null : Math.max(0, rem - hotRatio * remainingTimePercent);
     return { continuation: continuation, locked: locked };
   }
 
@@ -252,15 +274,15 @@
       : (typeof remainingPercent === 'number' ? 100 - remainingPercent : null);
     if (used === null) return '';
     const elapsed = 100 - remainingTimePercent;
-    if (elapsed < PACE_WARMUP_PERCENT) return PACE_OK;
+    if (elapsed < warmupElapsed) return PACE_OK;
     const burn = used / elapsed;
-    if (burn > PACE_HOT_RATIO) return PACE_HOT;
-    if (burn > PACE_AHEAD_RATIO) return PACE_AHEAD;
+    if (burn > hotRatio) return PACE_HOT;
+    if (burn > aheadRatio) return PACE_AHEAD;
     const weekly = String(windowName || '').toLowerCase() === WINDOW_WEEKLY;
     if (weekly) {
       const w = weeklyWaste(used, remainingPercent, remainingTimePercent);
-      if (w.locked !== null && w.locked >= PACE_LOCKED_WASTE) return PACE_LOCKED;
-      if (w.continuation !== null && w.continuation >= PACE_UNDER_WASTE) return PACE_UNDER;
+      if (w.locked !== null && w.locked >= lockedWaste) return PACE_LOCKED;
+      if (w.continuation !== null && w.continuation >= underWaste) return PACE_UNDER;
     }
     return PACE_OK;
   }
@@ -297,8 +319,8 @@
   }
 
   function chipClassForRemaining(remaining, stale) {
-    if (typeof remaining === 'number' && remaining <= CRITICAL_PERCENT) return CLASS_CRITICAL;
-    if (typeof remaining === 'number' && remaining <= LOW_PERCENT) return CLASS_LOW;
+    if (typeof remaining === 'number' && remaining <= criticalRemaining) return CLASS_CRITICAL;
+    if (typeof remaining === 'number' && remaining <= lowRemaining) return CLASS_LOW;
     if (stale) return CLASS_STALE;
     return '';
   }
@@ -810,6 +832,7 @@
     providerCompany: providerCompany,
     windowAbbrev: windowAbbrev,
     classifyPace: classifyPace,
+    applyThresholds: applyThresholds,
     weeklyWaste: weeklyWaste,
     limitSecondsFor: limitSecondsFor,
     showOnBar: showOnBar,

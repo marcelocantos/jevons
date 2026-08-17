@@ -139,6 +139,8 @@ type Server struct {
 	// planUsageSource returns the subscription plan-usage picture for
 	// GET /api/plan-usage (🎯T390). Nil until the reader is wired.
 	planUsageSource func() any
+	// planSweep runs the 🎯T390.1.5 hot/exhausted migrate-or-park actuator.
+	planSweep func() any
 
 	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
 	tokenLimiter *tokenRateLimiter
@@ -471,6 +473,8 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("GET /api/capacity", s.handleCapacity)    // 🎯T359: background admission
 	mux.HandleFunc("GET /api/plan-usage", s.handlePlanUsage) // 🎯T390: subscription plan remaining
+	mux.HandleFunc("GET /api/plan-usage/thresholds", s.handlePlanUsageThresholds)
+	mux.HandleFunc("POST /api/plan-usage/sweep", s.handlePlanUsageSweep)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("GET /api/logs", s.handleLogsTail)
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)

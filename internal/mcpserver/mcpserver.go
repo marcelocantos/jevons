@@ -28,13 +28,13 @@ import (
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
-	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/panecensus"
+	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
@@ -418,14 +418,53 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 	if s != nil {
 		fromFile = s.llmPortfolioFromFile
 	}
+	cfg := string(s.resolvedDefaultProvider())
+	var planInelig, destOK bool
+	var dest string
+	if _, cands, now, th, ok := s.planPolicyInputs(); ok {
+		for _, c := range cands {
+			if strings.EqualFold(c.Provider, cfg) {
+				planInelig = planusage.MintIneligible(c.Backend, now, th)
+				break
+			}
+		}
+		if planInelig {
+			dest, destOK = planusage.PickPlanDest(cands, now, th)
+		}
+	}
 	return cost.PickMintProvider(cost.MintProviderArgs{
-		ProviderArg:       providerArg,
-		Existed:           existed,
-		StoredProvider:    stored,
-		ConfigProvider:    string(s.resolvedDefaultProvider()),
-		Portfolio:         dec,
-		PortfolioFromFile: fromFile,
+		ProviderArg:           providerArg,
+		Existed:               existed,
+		StoredProvider:        stored,
+		ConfigProvider:        cfg,
+		Portfolio:             dec,
+		PortfolioFromFile:     fromFile,
+		PlanDefaultIneligible: planInelig,
+		PlanDest:              dest,
+		PlanDestOK:            destOK,
 	})
+}
+
+func (s *Server) planPolicyInputs() (planusage.Snapshot, []planusage.DestCand, time.Time, planusage.Thresholds, bool) {
+	th := planusage.DefaultThresholds()
+	now := time.Now()
+	if s == nil || s.planUsage == nil {
+		return planusage.Snapshot{}, nil, now, th, false
+	}
+	snap := s.planUsage()
+	if snap.Pending && len(snap.Backends) == 0 {
+		return snap, nil, now, th, false
+	}
+	if !snap.At.IsZero() {
+		now = snap.At
+	}
+	load := s.harnessLoadCounts()
+	var cands []planusage.DestCand
+	for _, be := range planusage.CockpitSnapshot(snap).Backends {
+		p := strings.ToLower(strings.TrimSpace(be.Provider))
+		cands = append(cands, planusage.DestCand{Provider: p, Backend: be, Load: load[p]})
+	}
+	return snap, cands, now, th, true
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable

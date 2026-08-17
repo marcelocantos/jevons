@@ -159,3 +159,42 @@ func TestLoadPortfolioOverrideMissingVsPresent(t *testing.T) {
 		t.Fatalf("loaded default=%q", p.DefaultProvider)
 	}
 }
+
+func TestPickMintProviderPlanDestWhenDefaultIneligible(t *testing.T) {
+	pick := PickMintProvider(MintProviderArgs{
+		ConfigProvider:        HarnessGrok,
+		PlanDefaultIneligible: true,
+		PlanDest:              HarnessClaude,
+		PlanDestOK:            true,
+	})
+	if pick.Provider != HarnessClaude || pick.Knob != KnobPlanDest {
+		t.Fatalf("want plan_dest claude, got %+v", pick)
+	}
+	if pick.LosingKnob != KnobConfig || pick.LosingProvider != HarnessGrok {
+		t.Fatalf("config should lose: %+v", pick)
+	}
+}
+
+func TestPickMintProviderPlanDestEmptyRefuses(t *testing.T) {
+	pick := PickMintProvider(MintProviderArgs{
+		ConfigProvider:        HarnessGrok,
+		PlanDefaultIneligible: true,
+		PlanDestOK:            false,
+	})
+	if pick.Provider != "" || pick.Knob != KnobPlanDest {
+		t.Fatalf("want empty dest refuse, got %+v", pick)
+	}
+}
+
+func TestPickMintProviderExplicitStillWinsWhenDefaultIneligible(t *testing.T) {
+	pick := PickMintProvider(MintProviderArgs{
+		ProviderArg:           HarnessGrok,
+		ConfigProvider:        HarnessGrok,
+		PlanDefaultIneligible: true,
+		PlanDest:              HarnessClaude,
+		PlanDestOK:            true,
+	})
+	if pick.Provider != HarnessGrok || pick.Knob != KnobExplicit {
+		t.Fatalf("explicit still wins: %+v", pick)
+	}
+}

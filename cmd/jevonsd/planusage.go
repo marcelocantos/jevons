@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -34,7 +35,20 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 	})
 	srv.SetPlanUsageSource(func() any { return reader.Snapshot() })
 	mcpSrv.SetPlanUsageSource(func() planusage.Snapshot { return reader.Snapshot() })
+	srv.SetPlanSweep(func() any { return mcpSrv.SweepPlanPolicy() })
 	go reader.Run(ctx)
+	go func() {
+		tick := time.NewTicker(planusage.DefaultRefresh)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				mcpSrv.SweepPlanPolicy()
+			}
+		}
+	}()
 
 	slog.Info("plan usage ready (🎯T390)",
 		"api", "GET /api/plan-usage",
