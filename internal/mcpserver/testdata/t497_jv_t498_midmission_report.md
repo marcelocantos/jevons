@@ -1,0 +1,1 @@
+Resuming 🎯T498 mid-mission: apply the direct-call fix at `web/index.html:1959`, verify, commit, gate on a clean worktree.Window invariant holds. Now check my diff is isolated, commit with explicit path (🎯T377), then gate in a clean worktree of the new commit.

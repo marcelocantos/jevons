@@ -65,6 +65,9 @@ const (
 	// AskTruncated: the report arrived visibly cut (🎯T388) — what it asked for
 	// may be in the missing middle, so its intent is unknown.
 	AskTruncated
+	// AskCheckpoint: a mid-mission checkpoint — the report declares itself one,
+	// or echoes the 🎯T392.4 depth-ceiling ask's own vocabulary (🎯T497).
+	AskCheckpoint
 )
 
 func (c ReportAskClass) String() string {
@@ -81,6 +84,8 @@ func (c ReportAskClass) String() string {
 		return "closing_question"
 	case AskTruncated:
 		return "truncated"
+	case AskCheckpoint:
+		return "checkpoint"
 	default:
 		return "unknown"
 	}
@@ -245,6 +250,45 @@ var negationCues = []string{
 // them.
 const negationWindow = 60
 
+// 🎯T497: a worker that checkpoints is complying, not finishing.
+//
+// The 🎯T392.4 depth ceiling tells an over-budget turn to "Reach a checkpoint
+// and END YOUR TURN" — write down where you are, state the next step, end the
+// turn, be resumed. jv-t496-owner-reply did exactly that: "Checkpoint — ending
+// this turn at the depth ceiling", next steps for the successor turn, "No
+// files modified yet; nothing to commit." The reap path read the progress
+// header "Done so far:" as a completion claim, found "commit" in the
+// next-steps prose, and deregistered the seat as finished_work with zero
+// commits. The ceiling and the reaper had opposite readings of the same
+// compliance, and the reaper's was destructive.
+//
+// Two signals, in the report's own voice:
+//   - a checkpoint DECLARATION: a line that IS the word — "Checkpoint —…",
+//     "Checkpoint:…", a bare CHECKPOINT banner. Prose that merely contains
+//     the word ("checkpoint reports now classify…") is a mention, and a
+//     finish report about checkpoint handling still reaps (the 🎯T446 lesson
+//     applied to this fix's own vocabulary);
+//   - a ceiling ECHO: present-tense turn-ending phrases lifted from the ask
+//     itself. These may appear anywhere — nobody writes "ending this turn"
+//     about somebody else's turn.
+var checkpointMarkers = []string{
+	"ending this turn",
+	"ending my turn",
+	"ending the turn",
+	"at the depth ceiling",
+	"hit the depth ceiling",
+	"reached the depth ceiling",
+	"depth-ceiling checkpoint",
+	"depth ceiling checkpoint",
+	"t392.4 depth ceiling",
+}
+
+// checkpointDelimiters are what may follow the word in a declaration line:
+// nothing, or a punctuation break. A letter would make it a longer word
+// ("checkpoints") and a space-plus-word would make it ordinary prose
+// ("Checkpoint handling fixed").
+var checkpointDelimiters = []string{":", "—", "–", "-", ".", ",", ";"}
+
 // explicitIncompleteMarkers are outright statements of non-completion. They
 // outrank any completion word elsewhere in the same report: a worker that says
 // it has changed nothing has not finished, whatever else the prose contains.
@@ -263,6 +307,10 @@ var explicitIncompleteMarkers = []string{
 	"not finished",
 	"not yet finished",
 	"nothing committed",
+	"nothing to commit",
+	"no files modified",
+	"status: in progress",
+	"still in progress",
 	"no commit yet",
 	"have not committed",
 	"haven't committed",
@@ -318,12 +366,19 @@ func ClassifyReportAskDetail(report string) ReportAskFinding {
 		return ReportAskFinding{Class: AskTruncated, Span: truncationSpan(s)}
 	}
 	lower := asciiLower(s)
+	// A checkpoint declaration outranks the marker classes: a report that names
+	// its own genre has answered the question the rest of this function is
+	// guessing at (🎯T497).
+	if f, ok := checkpointDeclaration(s, lower); ok {
+		return f
+	}
 	for _, class := range []struct {
 		class   ReportAskClass
 		markers []string
 		accept  func(lower, marker string, at int) bool
 	}{
 		{AskRequest, requestMarkers, isRequestAsk},
+		{AskCheckpoint, checkpointMarkers, nil},
 		{AskExplicitIncomplete, explicitIncompleteMarkers, nil},
 		{AskDecisionRequest, decisionRequestMarkers, nil},
 	} {
@@ -446,6 +501,50 @@ func hasCueWord(s string, cues []string) bool {
 				return true
 			}
 			from = i + 1
+		}
+	}
+	return false
+}
+
+// checkpointDeclaration finds a line that declares the report a checkpoint
+// (🎯T497): its decoration-stripped text is the word "checkpoint" alone, or the
+// word followed by a punctuation break — "Checkpoint — ending this turn…",
+// "Checkpoint: parser mapped", a bare CHECKPOINT banner. Line-initial position
+// plus the delimiter is what separates a declaration from a mention: prose that
+// contains the word mid-sentence, or uses it as an adjective ("checkpoint
+// reports"), never matches.
+func checkpointDeclaration(s, lower string) (ReportAskFinding, bool) {
+	const word = "checkpoint"
+	for start := 0; start < len(lower); {
+		end := strings.IndexByte(lower[start:], '\n')
+		if end < 0 {
+			end = len(lower)
+		} else {
+			end += start
+		}
+		line := lower[start:end]
+		at := start + len(line) - len(strings.TrimLeft(line, " \t*_`>-#"))
+		if strings.HasPrefix(lower[at:end], word) && isCheckpointDelimited(lower[at+len(word):end]) {
+			span, off := excerptAround(s, at, at+len(word))
+			return ReportAskFinding{Class: AskCheckpoint, Marker: word, Span: span, Offset: off}, true
+		}
+		start = end + 1
+	}
+	return ReportAskFinding{}, false
+}
+
+// isCheckpointDelimited is true when rest — the line after the word — starts
+// with a break rather than more word. Trailing emphasis is stripped first so
+// "**CHECKPOINT**" is still bare.
+func isCheckpointDelimited(rest string) bool {
+	rest = strings.TrimLeft(rest, " \t")
+	rest = strings.TrimRight(rest, " \t*_`~")
+	if rest == "" {
+		return true
+	}
+	for _, d := range checkpointDelimiters {
+		if strings.HasPrefix(rest, d) {
+			return true
 		}
 	}
 	return false

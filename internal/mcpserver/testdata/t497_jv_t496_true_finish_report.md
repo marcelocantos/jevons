@@ -1,0 +1,13 @@
+🎯T496 fix landed. Finish report:
+
+**Locus:** `web/scripts/conversation_widget.js` — `snapshotDisplay` (~line 1229) and `syncDisplay` (~line 1191). Root cause as diagnosed: a `tool_use` stop is not terminal, so the pre-tool assistant row keeps `_stream` and `foldDisplayEvent` grows *that* row with the post-tool final answer — but the turn-slot minted by the tool_use is the last display row, and `syncDisplay`'s equal-length branch inspected only the last row and returned without painting. The final reply existed in the display model and never reached the owner-visible bubble. Fix: `snapshotDisplay` now deep-copies every row the fold can mutate (last row + open assistant stream rows), and the equal-length branch diffs all assistant rows — repainting via `resolveOpen(row._streamId)` → `_streamRaw`/`scheduleRender` — instead of early-returning past the turn-slot.
+
+**Oracle:** new hermetic `T496 final text after tool_use paints into the owner-visible bubble` in `conversation_widget_test.js` (text deltas → tool_use → tool_result → final text → empty end_turn ⇒ `FINAL-T496` present in the painted bubble's `_streamRaw`). Confirmed **red before** the fix, green after — suite now 46/46.
+
+**GATE:** `GATE node exit=0 GREEN id=b64e2e0b out=964c1f5a02eb dur=100ms` (`bin/gate -- node web/scripts/conversation_widget_test.js`).
+
+**SHA:** `def9d2d24ff1b8cfe75d62218711bba8570f2694`, ancestor-of-HEAD verified (`git merge-base --is-ancestor` → OK), scope confirmed via `git show --stat`: only my two files. Local Build only per 🎯T104 — no push, no PR.
+
+**Hard-reload:** change is pure static web (widget JS, no server-side behaviour), so per 🎯T188 a hard reload of the cockpit picks it up; no daemon restart required.
+
+**Pre-existing master red, not mine — prompt-filing per 🎯T130:** `bin/gate -- make test-web` is RED on clean HEAD `31a50a71` (verified in a detached worktree with zero local changes): `agent_transcript_test.js:1889` — "T372 index.html calls the widget directly — no per-site fallback chain" fails with 1 guard-and-fork site remaining in `web/index.html`. This blocks the full `make test-web` gate for every worker (🎯T398 class). Proposed target: **"make test-web is green on a clean checkout of master"** — acceptance: `bin/gate -- make test-web` GREEN in a detached worktree of HEAD. PO should file and spawn; I did not fix it inline (out of my target's scope, and `index.html` is a T376-guarded hot file).
