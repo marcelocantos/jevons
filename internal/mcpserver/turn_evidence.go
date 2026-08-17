@@ -326,10 +326,46 @@ func (s *Server) watchAgentTurnForWindow(name, payload string, window time.Durat
 	if s.registry != nil {
 		if proc := s.registry.Get(name); proc != nil {
 			obs = proc
+			if def := s.registry.Def(name); def != nil && !providerKeepsClaudeTranscript(def.Provider) {
+				obs = liveStreamObserver{proc}
+			}
 		}
 	}
 	return observeTurnFor(obs, payload, window)
 }
+
+// providerKeepsClaudeTranscript reports whether this provider's backend
+// actually maintains the durable ~/.claude/projects JSONL the file header
+// calls a "durable-transcript backend". Only Claude-shaped agents do.
+//
+// 🎯T501 — claudia v0.23.0 nevertheless ADVERTISES a Claude-shaped
+// JSONLPath for every provider: Start precomputes SessionJSONLPath for
+// the session id before asking the backend, the codex and grok backends
+// leave agentStart.JSONLPath empty (codex has no file transcript at all;
+// grok's comment reads "Leave JSONLPath empty: Grok Session is not a
+// Claude JSONL transcript"), and the caller's `if start.JSONLPath != ""`
+// guard reads that emptiness as "no override" rather than as the claim it
+// was. So a codex-app-server agent reports a transcript path nothing will
+// ever write, this watch took the durable branch on it, and every codex
+// work-agent mint died at the 45s window as "no transcript was ever
+// created at ~/.claude/projects/….jsonl" → unbriefed_seat (T433) — while
+// the agent itself was live and its event stream was carrying the turn.
+//
+// The surface rule in the header stands: durable backends prove a turn
+// from transcript records, live-stream backends from session events. This
+// helper corrects which SURFACE the agent actually has, using the one
+// fact the registry holds and claudia's Agent does not expose. When
+// claudia stops advertising the phantom path, this collapses to a no-op:
+// JSONLPath()=="" already takes the live-stream branch.
+func providerKeepsClaudeTranscript(p claudia.Provider) bool {
+	return p == "" || p == claudia.ProviderClaude
+}
+
+// liveStreamObserver hides the vestigial Claude-shaped JSONLPath so the
+// watch treats the agent as the live-stream backend it is (🎯T501).
+type liveStreamObserver struct{ turnObserver }
+
+func (liveStreamObserver) JSONLPath() string { return "" }
 
 // observeTurn is the product watch for the spawn path: agent activity only.
 func observeTurn(obs turnObserver, window time.Duration) turnWatch {
