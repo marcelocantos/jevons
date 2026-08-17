@@ -142,6 +142,7 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     const desertFail = !!census.emptySlotDesert;
     const packedFail = !!census.packedPaneFail;
     const desertGapFail = !!census.desertGap;
+    const overlapFail = !!census.overlappingRects;
     const liveEndFail = !!census.liveEndDisagree;
 
     // Programmatic stand-in for the stuck wheel: if we are tracking and
@@ -246,6 +247,7 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     const ok = !collapsed && !missingSeed && !emptyPane && !gatesFail &&
       !viewportDrift && !noVisibleSeed &&
       !latestFail && !desertFail && !packedFail && !desertGapFail &&
+      !overlapFail &&
       !liveEndFail && !wheelStuck && !detourVoid &&
       census.transcriptRows >= MIN_MARKERS &&
       census.uniqueVIndex >= MIN_MARKERS &&
@@ -273,6 +275,7 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
       desertFail: desertFail,
       packedFail: packedFail,
       desertGapFail: desertGapFail,
+      overlapFail: overlapFail,
       liveEndFail: liveEndFail,
       wheelStuck: wheelStuck,
       wheel: wheel,
@@ -329,6 +332,10 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     if (packedFail) {
       die(1, 'J19 pane not packed (🎯T494.1): visibleBubbles=' +
         census.visibleBubbles + ' visibleInScroller=' + census.visibleInScroller);
+    }
+    if (overlapFail) {
+      die(1, 'J19 overlapping bubbles (🎯T119.7): maxInkGap=' +
+        census.maxInkGap + ' visibleBubbles=' + census.visibleBubbles);
     }
     if (desertGapFail) {
       die(1, 'J19 void between bubbles (🎯T494.1): maxInkGap=' +

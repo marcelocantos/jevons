@@ -1844,6 +1844,17 @@ function noteRowHeightChange(el) {
   if (h > 0) applyRowHeight(el._vIndex, h);
 }
 function registerTranscriptRow(role, text, when, opts) {
+  // 🎯T119.7: the previous live row may have grown in the DOM (or have a
+  // pending stream rAF) while the prefix still holds the first-line
+  // estimate. Flush and measure it before this row's top is assigned.
+  const prev = transcriptRows.length ? transcriptRows[transcriptRows.length - 1] : null;
+  if (prev && prev.el) {
+    if (typeof flushJevonsStreamFrame === 'function' && prev.el._renderRaf) {
+      flushJevonsStreamFrame(prev.el);
+    } else if (typeof noteRowHeightChange === 'function' && prev.el.isConnected) {
+      noteRowHeightChange(prev.el);
+    }
+  }
   const o = opts || {};
   const estBox = (role === 'turn-marker')
     ? ((typeof VirtualList !== 'undefined' && VirtualList.TURN_SLOT_ESTIMATE_PX)
@@ -3277,42 +3288,55 @@ function appendOrAddJevons(text, ts, opts) {
 // the growing markdown on every delta (O(n²) on replay of a turn that
 // streamed as many frames), it re-renders at most once per animation
 // frame from the accumulated _streamRaw (🎯T57).
-function scheduleJevonsRender(el) {
-  if (el._renderRaf) return;
-  el._renderRaf = requestAnimationFrame(() => {
-    el._renderRaf = 0;
-    // 🎯T347: a replay-lazy shell accumulates raw text without parsing —
-    // only its estimated height tracks the growing content. The post-pin
-    // band materialize (or virtualize's _streamRaw fast path once live)
-    // does the one real paint.
-    if (el.classList && el.classList.contains('virt-shell') &&
-        typeof el._streamRaw === 'string' && !el._smdSession) {
-      el._layoutText = el._streamRaw;
-      el._layoutRole = 'jevons';
-      if (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText) {
-        el.style.minHeight = VirtualList.estimateHeightFromText(el._streamRaw) + 'px';
-      }
-      if (!historyReplayActive) scheduleVirtualize();
-      return;
-    }
+// 🎯T119.7: stream paint must write the prefix in the same turn as the
+// box grows. A pending rAF leaves the next minted row sitting on the
+// short first-measure — the live overlap a reload then "fixes."
+function paintJevonsStreamFrame(el) {
+  if (!el) return;
+  if (el.classList && el.classList.contains('virt-shell') &&
+      typeof el._streamRaw === 'string' && !el._smdSession) {
     el._layoutText = el._streamRaw;
     el._layoutRole = 'jevons';
-    renderBody(el, 'jevons', el._streamRaw);
-    // 🎯T164: live stream only — paintBody no longer auto-closes (history-safe).
-    if (!historyReplayActive && typeof el._streamRaw === 'string') {
-      maybeCloseTargetAside(el._streamRaw);
+    let est = 0;
+    if (typeof VirtualList !== 'undefined' && VirtualList.estimateHeightFromText) {
+      est = VirtualList.estimateHeightFromText(el._streamRaw);
+      el.style.minHeight = est + 'px';
     }
-    // Streaming text is real progress — reset T94 idle stuck clock.
-    if (workingEl) armWorkingWatch();
-    // T66: stream may start short then measure tall while still latest —
-    // re-evaluate auto-expand so the sealed reply is not stuck collapsed.
-    scheduleLatestExpansion();
-    // Force layout then pin immediately (not only coalesced rAF) so each
-    // incremental paint's true scrollHeight is what stick-to-bottom uses.
-    if (isTracking()) {
-      void (el._body && el._body.offsetHeight);
-      scrollDown();
+    if (el._vIndex != null && typeof applyRowHeight === 'function' && est > 0) {
+      applyRowHeight(el._vIndex, est);
     }
+    if (!historyReplayActive) scheduleVirtualize();
+    return;
+  }
+  el._layoutText = el._streamRaw;
+  el._layoutRole = 'jevons';
+  renderBody(el, 'jevons', el._streamRaw);
+  if (!historyReplayActive && typeof el._streamRaw === 'string') {
+    maybeCloseTargetAside(el._streamRaw);
+  }
+  if (workingEl) armWorkingWatch();
+  scheduleLatestExpansion();
+  if (typeof noteRowHeightChange === 'function') noteRowHeightChange(el);
+  if (isTracking()) {
+    void (el._body && el._body.offsetHeight);
+    scrollDown();
+  }
+}
+
+function flushJevonsStreamFrame(el) {
+  if (!el) return;
+  if (el._renderRaf) {
+    cancelAnimationFrame(el._renderRaf);
+    el._renderRaf = 0;
+  }
+  paintJevonsStreamFrame(el);
+}
+
+function scheduleJevonsRender(el) {
+  if (!el || el._renderRaf) return;
+  el._renderRaf = requestAnimationFrame(() => {
+    el._renderRaf = 0;
+    paintJevonsStreamFrame(el);
   });
 }
 
@@ -3341,6 +3365,7 @@ function paintSealedJevons(el, raw, streamId) {
   el._expanded = true;
   el._autoExpanded = true;
   renderBody(el, 'jevons', raw);
+  if (typeof noteRowHeightChange === 'function') noteRowHeightChange(el);
   // 🎯T164: terminal seal of a live turn — run filed-marker close once more
   // (stream path may have already closed; idempotent when no open file-target).
   if (!historyReplayActive) {

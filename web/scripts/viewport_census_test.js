@@ -82,6 +82,17 @@ test('T494.1 packed pane needs two bubbles on the oracle viewport', function () 
   assert.strictEqual(VC.packedPaneFail(3, 2), false);
 });
 
+test('T119.7 overlappingRectsFail is a stale-prefix overlap', function () {
+  assert.strictEqual(VC.overlappingRectsFail([
+    { top: 100, bottom: 220 },
+    { top: 180, bottom: 280 },
+  ]), true, 'owner screenshot');
+  assert.strictEqual(VC.overlappingRectsFail([
+    { top: 100, bottom: 180 },
+    { top: 188, bottom: 260 },
+  ]), false);
+});
+
 test('T494.1 maxInkGap is the void between consecutive bubbles', function () {
   // Owner screenshot: leftover turn near the top, leftover turn near
   // the bottom, hundreds of px of empty canvas between them.

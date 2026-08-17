@@ -97,6 +97,17 @@
   // bubbles is "I took one look and something is horribly wrong."
   const DESERT_GAP_FRAC = 0.25;
   const DESERT_GAP_MIN_PX = 120;
+  // 🎯T119.7: two live bubbles whose boxes intersect (stale prefix).
+  function overlappingRectsFail(rects) {
+    const boxes = (rects || []).filter(function (r) {
+      return r && Number.isFinite(Number(r.top)) && Number.isFinite(Number(r.bottom));
+    }).slice().sort(function (a, b) { return Number(a.top) - Number(b.top); });
+    for (let i = 1; i < boxes.length; i++) {
+      if (Number(boxes[i].top) < Number(boxes[i - 1].bottom) - 0.5) return true;
+    }
+    return false;
+  }
+
   function desertGapFail(maxGap, clientHeight) {
     const ch = Number(clientHeight) || 0;
     const g = Number(maxGap) || 0;
@@ -296,6 +307,7 @@
       packedPaneFail: packedPaneFail(visibleBubbles, 2),
       maxInkGap: maxInkGap,
       desertGap: desertGapFail(maxInkGap, ch),
+      overlappingRects: overlappingRectsFail(bubbleRects),
       latestOnHardReload: latestOnHardReloadFail({
         fabHidden: fabHidden,
         followMode: followMode,
@@ -343,6 +355,7 @@
     emptySlotDesertFail: emptySlotDesertFail,
     packedPaneFail: packedPaneFail,
     maxInkGapPx: maxInkGapPx,
+    overlappingRectsFail: overlappingRectsFail,
     desertGapFail: desertGapFail,
     DESERT_GAP_FRAC: DESERT_GAP_FRAC,
     DESERT_GAP_MIN_PX: DESERT_GAP_MIN_PX,

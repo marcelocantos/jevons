@@ -801,6 +801,31 @@ test('T119 jump-to-bottom hotkey + FAB; no jump-to-top', function () {
   assert.strictEqual(VL.shouldShowJumpFab('track', true), false);
 });
 
+test('T119.7 growing row i moves the next row top', function () {
+  const L = VL.createTranscriptLayout();
+  VL.layoutPush(L, 80);
+  VL.layoutPush(L, 80);
+  assert.strictEqual(VL.layoutTop(L, 1), 80 + (L.gap || 0));
+  const top = VL.nextRowTopAfterGrow(L, 0, 240);
+  assert.ok(top >= 240, 'next top after grow must clear the new height, got ' + top);
+  assert.ok(VL.layoutTop(L, 1) >= VL.layoutTop(L, 0) + 240);
+});
+
+test('T119.7 stream paint writes the prefix (wiring)', function () {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(/function paintJevonsStreamFrame/.test(html), 'paintJevonsStreamFrame exists');
+  assert.ok(/function flushJevonsStreamFrame/.test(html), 'flush before mint');
+  const paint = html.match(/function paintJevonsStreamFrame\(el\) \{[\s\S]*?\nfunction flushJevonsStreamFrame/);
+  assert.ok(paint, 'paint body');
+  assert.ok(/noteRowHeightChange/.test(paint[0]), 'stream frame measures');
+  assert.ok(/function registerTranscriptRow[\s\S]{0,800}flushJevonsStreamFrame/.test(html),
+    'registerTranscriptRow flushes the previous stream paint');
+  assert.ok(/function paintSealedJevons[\s\S]{0,1200}noteRowHeightChange/.test(html),
+    'seal measures after the last markdown paint');
+});
+
 test('T494.1.2 shouldSnapTranscriptRow skips the canvas', function () {
   const host = { id: 'messages' };
   const canvas = { id: 'messages-canvas', parentNode: host };

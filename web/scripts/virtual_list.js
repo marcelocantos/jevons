@@ -1663,6 +1663,13 @@
     return { delta: delta, oldHeight: old, newHeight: next };
   }
 
+  // 🎯T119.7: after row i grows, the next row's top is the new bottom
+  // (plus the list's implicit gap, which lives inside the stored height).
+  function nextRowTopAfterGrow(layout, index, newHeight) {
+    layoutSetHeight(layout, index, newHeight);
+    return layoutTop(layout, (index | 0) + 1);
+  }
+
   function layoutAttachRange(layout, scrollTop, clientHeight, buffer) {
     const L = layout || createTranscriptLayout();
     const n = L.heights.length;
@@ -1910,6 +1917,7 @@
     layoutTruncateFrom: layoutTruncateFrom,
     layoutRemoveAt: layoutRemoveAt,
     layoutSetHeight: layoutSetHeight,
+    nextRowTopAfterGrow: nextRowTopAfterGrow,
     layoutAttachRange: layoutAttachRange,
     scrollAfterRowHeightChange: scrollAfterRowHeightChange,
     collapseHeightChangeTrace: collapseHeightChangeTrace,
