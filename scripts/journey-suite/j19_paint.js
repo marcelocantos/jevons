@@ -12,7 +12,9 @@
 //
 // Exit 0 only when the model is not collapsed AND the pane is not empty
 // AND the T493 DOM gates pass AND the T494.1 visual desert is absent
-// (Latest hidden, no empty slots, no void between bubbles).
+// (Latest hidden, no empty slots, no void between bubbles) AND a
+// scroll-up-then-down detour does not open a void under the last turn
+// (🎯T494.1.2).
 // Exit 2 on usage / daily-port.
 
 'use strict';
@@ -161,10 +163,90 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     });
     const wheelStuck = !!(wheel && wheel.snapped);
 
+    // 🎯T494.1.2: hard-reload lands; scroll up a little then down again
+    // must not open a void under the last turn. Intermittent is a fail
+    // — run the detour several times.
+    const DETOUR_N = 5;
+    const detours = [];
+    for (let d = 0; d < DETOUR_N; d++) {
+      const one = await page.evaluate(async () => {
+        const msgs = document.getElementById('messages');
+        if (!msgs) return { skipped: true };
+        const wait = function (ms) {
+          return new Promise(function (r) { setTimeout(r, ms); });
+        };
+        const frames = function () {
+          return new Promise(function (r) {
+            requestAnimationFrame(function () { requestAnimationFrame(r); });
+          });
+        };
+        function lastInk() {
+          const view = msgs.getBoundingClientRect();
+          let bottom = 0;
+          const sel = '#messages-canvas > .msg.user, #messages-canvas > .msg.jevons';
+          const nodes = msgs.querySelectorAll(sel);
+          for (let i = 0; i < nodes.length; i++) {
+            const r = nodes[i].getBoundingClientRect();
+            if (r.bottom > bottom) bottom = r.bottom;
+          }
+          return { viewBottom: view.bottom, inkBottom: bottom, inkVoid: view.bottom - bottom };
+        }
+        // Owner path: wheel up (Free), remat above the fold, then
+        // immediately roll back to the end — do not wait for settle.
+        // Late noteRowHeightChange then shrinks rows above the pin and
+        // the last turn rides up, leaving a void (🎯T494.1.2).
+        msgs.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+        // Daily reproduced the void on the first 200px lift with no
+        // wait before jumping back (🎯T494.1.2).
+        // 200px is enough on daily (tall unmeasured rows sit just
+        // above the fold). The isolate end-band is already rematted
+        // short turns — climb far enough to hit estimate-tall rows.
+        const lift = 200;
+        msgs.scrollTop = Math.max(0, msgs.scrollTop - lift);
+        if (typeof window.virtualizeMessages === 'function') window.virtualizeMessages();
+        await frames();
+        await wait(120);
+        if (typeof window.virtualizeMessages === 'function') window.virtualizeMessages();
+        await frames();
+        await wait(80);
+        msgs.dispatchEvent(new WheelEvent('wheel', { deltaY: 240, bubbles: true }));
+        msgs.scrollTop = msgs.scrollHeight;
+        await frames();
+        await wait(200);
+        if (typeof window.virtualizeMessages === 'function') window.virtualizeMessages();
+        await frames();
+        await wait(200);
+        const after = window.ViewportCensus
+          ? window.ViewportCensus.collect({ prefix: '' })
+          : {};
+        const ink = lastInk();
+        return {
+          voidBelowLast: after.voidBelowLast,
+          voidBelowLastFail: after.voidBelowLastFail,
+          canvasRatchetFail: after.canvasRatchetFail,
+          canvasRatchet: after.canvasRatchet,
+          canvasMinHeight: after.canvasMinHeight,
+          layoutTotal: after.layoutTotal,
+          lastContentBottom: after.lastContentBottom,
+          canvasHeight: after.canvasHeight,
+          inkVoid: ink.inkVoid,
+          scrollTop: after.scrollTop,
+          follow: after.followMode,
+        };
+      });
+      detours.push(one);
+    }
+    const VOID_VISIBLE = VC.VOID_BELOW_VISIBLE_PX || 120;
+    const detourVoid = detours.some(function (t) {
+      if (!t || t.skipped) return false;
+      if (t.voidBelowLastFail || t.canvasRatchetFail) return true;
+      return (Number(t.inkVoid) || 0) > VOID_VISIBLE;
+    });
+
     const ok = !collapsed && !missingSeed && !emptyPane && !gatesFail &&
       !viewportDrift && !noVisibleSeed &&
       !latestFail && !desertFail && !packedFail && !desertGapFail &&
-      !liveEndFail && !wheelStuck &&
+      !liveEndFail && !wheelStuck && !detourVoid &&
       census.transcriptRows >= MIN_MARKERS &&
       census.uniqueVIndex >= MIN_MARKERS &&
       census.uniqueTops >= MIN_MARKERS &&
@@ -194,6 +276,8 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
       liveEndFail: liveEndFail,
       wheelStuck: wheelStuck,
       wheel: wheel,
+      detourVoid: detourVoid,
+      detours: detours,
       census: census,
     };
     console.log(JSON.stringify(report, null, 2));
@@ -258,6 +342,16 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     if (wheelStuck) {
       die(1, 'J19 wheel snap-back (🎯T494.1): st ' + wheel.before +
         ' → ' + wheel.after + ' dist=' + wheel.dist);
+    }
+    if (detourVoid) {
+      const hit = detours.filter(function (t) {
+        return t && (t.voidBelowLastFail || t.canvasRatchetFail ||
+          (Number(t.inkVoid) || 0) > VOID_VISIBLE);
+      })[0] || {};
+      die(1, 'J19 void after scroll-up-then-down (🎯T494.1.2): voidBelow=' +
+        hit.voidBelowLast + ' inkVoid=' + hit.inkVoid +
+        ' ratchet=' + hit.canvasRatchet + ' minH=' + hit.canvasMinHeight +
+        ' layout=' + hit.layoutTotal);
     }
     if (!ok) {
       die(1,

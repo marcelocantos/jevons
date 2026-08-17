@@ -24,11 +24,11 @@ import (
 
 const (
 	j19Prefix     = "ROOThist-"
-	j19SeedTurns  = 16
+	j19SeedTurns  = 24
 	j19SlotTail   = 24
 	j19MinMarkers = 8
 	j19LiveToken  = "ROOThist-LIVE"
-	j19LastToken  = "ROOThist-15"
+	j19LastToken  = "ROOThist-23"
 )
 
 // j19RootHistoryPaint is the 🎯T491 / 🎯T493 / 🎯T494 oracle: seed
@@ -210,7 +210,7 @@ func seedJ19Journal(path string, turns int) error {
 			"message": map[string]any{
 				"role": "assistant",
 				"content": []any{
-					map[string]any{"type": "text", "text": "ack " + tok},
+					map[string]any{"type": "text", "text": j19AssistantBody(tok, i)},
 				},
 				"stop_reason": "end_turn",
 			},
@@ -221,28 +221,25 @@ func seedJ19Journal(path string, turns int) error {
 		b.WriteByte('\n')
 		b.Write(ab)
 		b.WriteByte('\n')
-		// 🎯T494.1: daily paints a desert of empty slots BETWEEN owner
-		// turns (65 unlabelled markers after one jevons bubble). Seed
-		// that shape between the last two turns so J19 cannot go green
-		// on short text-only replay.
-		if i == turns-2 {
-			for n := 0; n < 20; n++ {
-				tsNote := base.Add(time.Duration(i*2+1)*time.Second + time.Duration(n+1)*time.Millisecond).Format(time.RFC3339)
-				tsSys := base.Add(time.Duration(i*2+1)*time.Second + time.Duration(n+1)*time.Millisecond + time.Microsecond).Format(time.RFC3339)
-				note, _ := json.Marshal(map[string]any{
-					"type":      "agent_note",
-					"timestamp": tsNote,
-					"text":      fmt.Sprintf("[Agent pad responded] mid %02d", n),
-				})
-				sys, _ := json.Marshal(map[string]any{
-					"type":      "system",
-					"timestamp": tsSys,
-				})
-				b.Write(note)
-				b.WriteByte('\n')
-				b.Write(sys)
-				b.WriteByte('\n')
-			}
+		// Notes after every turn. Daily replay is a mix of bubbles and
+		// step-slots; a single mid-list burst is not enough for the
+		// scroll-up-then-down void (🎯T494.1.2).
+		for n := 0; n < 8; n++ {
+			tsNote := base.Add(time.Duration(i*2+1)*time.Second + time.Duration(n+1)*time.Millisecond).Format(time.RFC3339)
+			tsSys := base.Add(time.Duration(i*2+1)*time.Second + time.Duration(n+1)*time.Millisecond + time.Microsecond).Format(time.RFC3339)
+			note, _ := json.Marshal(map[string]any{
+				"type":      "agent_note",
+				"timestamp": tsNote,
+				"text":      fmt.Sprintf("[Agent pad responded] mid %02d/%02d", i, n),
+			})
+			sys, _ := json.Marshal(map[string]any{
+				"type":      "system",
+				"timestamp": tsSys,
+			})
+			b.Write(note)
+			b.WriteByte('\n')
+			b.Write(sys)
+			b.WriteByte('\n')
 		}
 	}
 	// Trailing notes after the last owner turn. Must collapse to one
@@ -268,6 +265,29 @@ func seedJ19Journal(path string, turns int) error {
 		return err
 	}
 	return f.Sync()
+}
+
+// Tall even-numbered replies so estimate≠real is large. Short seed
+// turns remat with almost no delta and J19 cannot see 🎯T494.1.2.
+func j19AssistantBody(tok string, i int) string {
+	// Near-end even turns are tall so connect auto-expands them (14rem
+	// clip). Scroll-up collapses them, prefix shrinks, canvas min-height
+	// keeps the expanded peak — the owner void (🎯T494.1.2).
+	if i != 18 && i != 20 {
+		return "ack " + tok
+	}
+	var b strings.Builder
+	b.WriteString("ack ")
+	b.WriteString(tok)
+	b.WriteString("\n\n")
+	for n := 0; n < 40; n++ {
+		b.WriteString("Estimate-vs-measure padding ")
+		b.WriteString(tok)
+		b.WriteByte(' ')
+		b.WriteString(fmt.Sprint(n))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func countJournalMarkers(path, prefix string) int {

@@ -104,6 +104,31 @@
     return g > cap;
   }
 
+  // 🎯T494.1.2: empty canvas under the last painted turn after a
+  // scroll-up-then-down. 16px is prefix noise; 120px is the owner's
+  // "inches of whitespace" picture. Journey uses the latter.
+  const VOID_BELOW_EPS_PX = 16;
+  const VOID_BELOW_VISIBLE_PX = DESERT_GAP_MIN_PX;
+  // Canvas min-height ratcheted past the prefix (🎯T494.1.2). The
+  // MutationObserver snaps #messages-canvas as if it were a row.
+  function canvasRatchetFail(canvasMinHeight, layoutTotal, epsPx) {
+    const minH = Number(canvasMinHeight) || 0;
+    const total = Number(layoutTotal) || 0;
+    const eps = epsPx == null ? VOID_BELOW_VISIBLE_PX : Number(epsPx);
+    const e = Number.isFinite(eps) && eps >= 0 ? eps : VOID_BELOW_VISIBLE_PX;
+    if (!(minH > 0) || !(total > 0)) return false;
+    return (minH - total) > e;
+  }
+
+  function voidBelowLastFail(lastContentBottom, canvasHeight, epsPx) {
+    const last = Number(lastContentBottom) || 0;
+    const canvas = Number(canvasHeight) || 0;
+    const eps = epsPx == null ? VOID_BELOW_VISIBLE_PX : Number(epsPx);
+    const e = Number.isFinite(eps) && eps >= 0 ? eps : VOID_BELOW_VISIBLE_PX;
+    if (!(last > 0) || !(canvas > 0)) return false;
+    return (canvas - last) > e;
+  }
+
   // Pin target and canvas-end must be the same live end (ε = Latest band).
   function liveEndDisagreeFail(pinWant, canvasEndPin, epsPx) {
     const eps = epsPx == null ? 16 : Number(epsPx);
@@ -225,6 +250,31 @@
     const distFromBottom = sh - ch - st;
     const atBottom = ch <= 0 || distFromBottom <= 16 || Math.abs(st - pinWant) <= 16;
 
+    let lastContentBottom = 0;
+    const VL = (typeof window !== 'undefined') ? window.VirtualList : null;
+    const layout = (typeof window !== 'undefined') ? window.__transcriptLayout : null;
+    if (VL && VL.layoutTop && layout && layout.heights) {
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row) continue;
+        const kind = row.kind || row.role || '';
+        const labelled = (kind === 'turn-slot' || kind === 'turn-marker')
+          && String(row.text || '').trim();
+        const bubble = kind === 'user' || kind === 'jevons' || kind === 'assistant';
+        if (!labelled && !bubble) continue;
+        const top = VL.layoutTop(layout, i);
+        const h = Number(layout.heights[i]) || 0;
+        const end = top + h;
+        if (end > lastContentBottom) lastContentBottom = end;
+      }
+    } else if (typeof window !== 'undefined' && typeof window.lastTranscriptBubbleBottom === 'function') {
+      lastContentBottom = Number(window.lastTranscriptBubbleBottom()) || 0;
+    }
+    const canvasH = canvas ? canvas.offsetHeight : 0;
+    const voidBelowLast = canvasH > 0 ? canvasH - lastContentBottom : 0;
+    const canvasMinHeight = canvas ? (parseFloat(canvas.style.minHeight) || 0) : 0;
+    const layoutTotal = (VL && VL.layoutTotal && layout) ? VL.layoutTotal(layout) : 0;
+
     return {
       innerWidth: iw,
       innerHeight: ih,
@@ -252,6 +302,13 @@
         atBottom: atBottom,
       }),
       liveEndDisagree: liveEndDisagreeFail(pinWant, canvasEndPin, 16),
+      lastContentBottom: lastContentBottom,
+      voidBelowLast: voidBelowLast,
+      voidBelowLastFail: voidBelowLastFail(lastContentBottom, canvasH, VOID_BELOW_VISIBLE_PX),
+      canvasMinHeight: canvasMinHeight,
+      layoutTotal: layoutTotal,
+      canvasRatchet: canvasMinHeight - layoutTotal,
+      canvasRatchetFail: canvasRatchetFail(canvasMinHeight, layoutTotal, VOID_BELOW_VISIBLE_PX),
       gatesFail: visibleInScroller > 0 &&
         (visibleCheckOk < visibleInScroller || visibleHitOk < visibleInScroller),
       followMode: followMode,
@@ -263,7 +320,7 @@
       scrollTop: st,
       scrollHeight: sh,
       clientHeight: ch,
-      canvasHeight: canvas ? canvas.offsetHeight : 0,
+      canvasHeight: canvasH,
     };
   }
 
@@ -289,6 +346,10 @@
     desertGapFail: desertGapFail,
     DESERT_GAP_FRAC: DESERT_GAP_FRAC,
     DESERT_GAP_MIN_PX: DESERT_GAP_MIN_PX,
+    voidBelowLastFail: voidBelowLastFail,
+    canvasRatchetFail: canvasRatchetFail,
+    VOID_BELOW_EPS_PX: VOID_BELOW_EPS_PX,
+    VOID_BELOW_VISIBLE_PX: VOID_BELOW_VISIBLE_PX,
     liveEndDisagreeFail: liveEndDisagreeFail,
     viewportPinned: viewportPinned,
     collect: collect,

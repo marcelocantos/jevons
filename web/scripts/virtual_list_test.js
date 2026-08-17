@@ -1449,6 +1449,16 @@ test('index.html wires T351 whole-pixel geometry', function () {
   // Row snap seam: every appended row locks to the pixel grid; repaint and
   // clip-toggle re-snap; settle locks at the snapped ceiling.
   assert.ok(/function flushRowSnaps\(\)/.test(html), 'flushRowSnaps exists');
+  // 🎯T494.1.2: #messages-canvas is a child of #messages. Snapping it as a
+  // row locks min-height at the peak prefix; a later shrink (collapse,
+  // remat) leaves the owner void under the last turn.
+  const flushBody = html.match(/function flushRowSnaps\(\) \{[\s\S]*?\n\/\/ Every appended/);
+  assert.ok(flushBody, 'flushRowSnaps body');
+  const snapsMsgsChildren = /parentNode === msgs/.test(flushBody[0]);
+  const skipsCanvas = /msgsCanvas|messages-canvas/.test(flushBody[0]) &&
+    /!== msgsCanvas|el === msgsCanvas|id !== ['"]messages-canvas['"]/.test(flushBody[0]);
+  assert.ok(!snapsMsgsChildren || skipsCanvas,
+    'flushRowSnaps must not lock min-height on #messages-canvas (🎯T494.1.2)');
   assert.ok(/new MutationObserver[\s\S]{0,300}scheduleRowSnap/.test(html),
     'appended rows snap via the MutationObserver seam');
   assert.ok(/function renderBody\(d, role, text\)[\s\S]{0,2600}scheduleRowSnap/.test(html),

@@ -101,6 +101,20 @@ test('T494.1 maxInkGap is the void between consecutive bubbles', function () {
   assert.strictEqual(VC.maxInkGapPx([{ top: 0, bottom: 80 }]), 0, 'one bubble is packedPane, not a gap');
 });
 
+test('T494.1.2 canvas min-height ratchet is a fail', function () {
+  assert.strictEqual(VC.canvasRatchetFail(17827, 17102, 120), true, 'daily after detour');
+  assert.strictEqual(VC.canvasRatchetFail(17102, 17102, 120), false);
+  assert.strictEqual(VC.canvasRatchetFail(0, 800, 120), false);
+});
+
+test('T494.1.2 void under the last turn is a fail', function () {
+  // Owner screenshot: last bubble in the upper half, inches of canvas below.
+  assert.strictEqual(VC.voidBelowLastFail(400, 1200, 120), true);
+  assert.strictEqual(VC.voidBelowLastFail(16989, 17040, 120), false, 'one compact ⋯ slot');
+  assert.strictEqual(VC.voidBelowLastFail(0, 800, 120), false, 'no content yet');
+  assert.strictEqual(VC.VOID_BELOW_VISIBLE_PX, 120);
+});
+
 test('T494.1 pin and canvas-end must agree', function () {
   assert.strictEqual(VC.liveEndDisagreeFail(22366.6, 22585, 16), true, '218px tail');
   assert.strictEqual(VC.liveEndDisagreeFail(22585, 22585, 16), false);
