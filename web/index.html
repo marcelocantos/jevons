@@ -1956,11 +1956,7 @@ function attachTranscriptRow(index, opts) {
   // 🎯T119.4: apply is the only mint. A turn-slot is a compact marker,
   // never buildMsg (.msg + clock).
   if (row.kind === 'turn-slot' || row.role === 'turn-marker') {
-    const mint = (typeof ConversationWidget !== 'undefined' && ConversationWidget.createTurnMarkerEl)
-      ? ConversationWidget.createTurnMarkerEl
-      : null;
-    if (!mint || !document) return null;
-    const el = mint(document, { items: [], text: row.text || '' });
+    const el = ConversationWidget.createTurnMarkerEl(document, { items: [], text: row.text || '' });
     if (!el) return null;
     el.style.position = 'absolute';
     el.style.left = '0';
