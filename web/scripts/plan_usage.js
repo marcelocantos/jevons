@@ -73,6 +73,7 @@
   const CLASS_HOT = 'plan-hot';
   const CLASS_UNDER = 'plan-under';
   const CLASS_LOCKED = 'plan-locked';
+  const CLASS_EXHAUSTED = 'plan-exhausted';
 
   const MS_PER_SECOND = 1000;
   const SECONDS_PER_MINUTE = 60;
@@ -281,6 +282,18 @@
     const a = rank[current] || 0;
     const b = rank[next] || 0;
     return b > a ? next : current;
+  }
+
+  function isRockBottomRemaining(remaining) {
+    return typeof remaining === 'number' && isFinite(remaining) && remaining <= 0;
+  }
+
+  function windowClassName(w, stale) {
+    const parts = [];
+    const paceOrRem = (w && w.pace) ? w.paceClass : chipClassForRemaining(w && w.remainingPercent, stale);
+    if (paceOrRem) parts.push(paceOrRem);
+    if (isRockBottomRemaining(w && w.remainingPercent)) parts.push(CLASS_EXHAUSTED);
+    return parts.join(' ');
   }
 
   function chipClassForRemaining(remaining, stale) {
@@ -607,7 +620,7 @@
         remainingTimePercent: w.remainingTimePercent,
         usedPercent: w.usedPercent,
         pace: w.pace,
-        className: w.pace ? w.paceClass : chipClassForRemaining(w.remainingPercent, row.stale)
+        className: windowClassName(w, row.stale)
       });
     }
     return {
@@ -801,6 +814,8 @@
     limitSecondsFor: limitSecondsFor,
     showOnBar: showOnBar,
     isExhaustedReason: isExhaustedReason,
+    isRockBottomRemaining: isRockBottomRemaining,
+    CLASS_EXHAUSTED: CLASS_EXHAUSTED,
     WINDOW_SESSION: WINDOW_SESSION,
     WINDOW_WEEKLY: WINDOW_WEEKLY,
     STATUS_AVAILABLE: STATUS_AVAILABLE,

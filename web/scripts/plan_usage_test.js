@@ -670,7 +670,24 @@ test('T390.1.3: Claude 429 rate-limit is exhausted bars, not a collapsed icon', 
   const gkP = painted.find(function (p) { return p.provider === 'grok'; });
   assert.ok(cl && cl.hasBox, 'exhausted Claude keeps the plan-box border');
   assert.strictEqual(cl.wins, 2, 'both tracks present at 0%');
+  const weekly = g.windows.filter(function (w) { return w.name === 'weekly'; })[0];
+  assert.ok(weekly && String(weekly.className).indexOf(PU.CLASS_EXHAUSTED) >= 0,
+    'weekly at 0% / 429 carries plan-exhausted: ' + (weekly && weekly.className));
+  const live = groupFor(PU.formatPlanUsage(snapshot([claudeBackend()]), NOW), 'claude');
+  const liveW = live.windows.filter(function (w) { return w.name === 'weekly'; })[0];
+  assert.ok(liveW && String(liveW.className).indexOf(PU.CLASS_EXHAUSTED) < 0,
+    'control: a live weekly is not rock-bottom: ' + liveW.className);
   assert.ok(gkP && !gkP.hasBox, 'control: unpublished Grok stays icon-only');
+});
+
+test('T390.1.3: weekly bar chrome is bright red at rock bottom', function () {
+  assert.strictEqual(PU.isRockBottomRemaining(0), true);
+  assert.strictEqual(PU.isRockBottomRemaining(0.4), false);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(/--plan-exhausted:/.test(html), 'named bright-red token');
+  assert.ok(/plan-win\.plan-exhausted \.plan-bar/.test(html),
+    'exhausted window restyles the bar border');
+  assert.ok(/var\(--plan-exhausted\)/.test(html), 'bar chrome uses the bright-red token');
 });
 
 function paintGroups(view) {
