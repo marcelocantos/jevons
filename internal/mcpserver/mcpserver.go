@@ -118,6 +118,14 @@ type Server struct {
 	// on first jevons_agent_send (🎯T104 under fan-out).
 	fleetBriefed map[string]bool
 
+	// spawnFailureNotified remembers, per target/worker, the exact spawn
+	// failure already surfaced to the product owner (🎯T433), so a leaf that
+	// keeps failing on every 10-minute sweep produces one actionable notice
+	// per distinct error rather than a drumbeat of identical ones. In-memory
+	// on purpose: a daemon restart re-notifying once is the right side of
+	// the trade. Guarded by mu; nil until first use.
+	spawnFailureNotified map[string]string
+
 	// agentTurnBegan tracks agents that have begun ≥1 confirmed turn in
 	// this daemon process (start prompt or successful send — 🎯T305).
 	// Distinct from registry Materialized (durable). Used so agent_list

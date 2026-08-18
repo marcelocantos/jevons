@@ -389,6 +389,11 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 			// engaged by a worker that never ran.
 			if s.releaseUnbriefedSeat(name, existed) {
 				life["seat_released"] = true
+				// 🎯T433: the tool error below reaches only the caller, and a
+				// caller LLM dropping it is how a mint died twice with nobody
+				// told. The seat's parent hears about the lost mint by name,
+				// with the error verbatim, on the durable send path.
+				s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
 			}
 			life["err"] = err.Error()
 			life["session_id"] = sessionDisplay(def.SessionID)
