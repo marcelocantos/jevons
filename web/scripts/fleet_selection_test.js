@@ -283,9 +283,16 @@ test('every background select marks itself auto; owner paths do not', function (
   const bg = html.match(/selectAgent\([^)]*\{\s*auto:\s*true\s*\}\)/g) || [];
   assert.ok(bg.length >= 2,
     'both the refresh tail and attention auto-activate must select as auto');
-  // Owner paths must not: the click handler is the canonical one.
-  assert.ok(/node\.onclick = \(\) => selectAgent\(d\.key\)/.test(html),
+  // Owner paths must not: bindFleetRow's name-click is the canonical one
+  // (🎯T285.2 wraps the handler so the icon can open the migrate menu, but
+  // the select itself stays a bare selectAgent(d.key) — never {auto:true}).
+  const bindAt = html.indexOf('function bindFleetRow');
+  assert.ok(bindAt >= 0, 'bindFleetRow missing');
+  const bind = html.slice(bindAt, bindAt + 1600);
+  assert.ok(/selectAgent\(d\.key\)/.test(bind),
     'a row click stays a bare selectAgent — owner input, hence pinned');
+  assert.ok(!/selectAgent\(d\.key\s*,/.test(bind),
+    'a row click must not pass {auto:true}');
 });
 
 test('selectAgent records who chose the selection', function () {
