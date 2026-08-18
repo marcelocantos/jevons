@@ -171,6 +171,18 @@ func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia
 	return cli.SelectAgentProvider(string(fromThread), stored, defaultProv)
 }
 
+// Codex Session defaults to read-only. Work agents must be able to
+// edit the tree (claudia 🎯T37); asides and other providers stay empty.
+func codexWorkSandbox(prov claudia.Provider, purpose string) string {
+	if prov != claudia.ProviderCodex {
+		return ""
+	}
+	if purpose != "" && purpose != claudia.PurposeWork {
+		return ""
+	}
+	return "workspace-write"
+}
+
 // ensureRegistered mints or backfills the registry row for a thread without
 // spawning a process. Dual-write half of Launch (🎯T114/T148) and hermetic
 // surface for 🎯T215 provider=claude Session stitch tests.
@@ -196,14 +208,15 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 		prov := providerForLaunch("", threadProv, f.defaultProvider)
 		// 🎯T324: session-truth model — pin or provider default for this SessionID.
 		if err := f.reg.Register(claudia.AgentDef{
-			Name:      t.ID,
-			WorkDir:   t.WorkDir,
-			Model:     cli.BindSessionModel(t.Model, prov),
-			Provider:  prov,
-			SessionID: sid,
-			AutoStart: true,
-			Parent:    t.Parent,
-			Purpose:   purpose,
+			Name:        t.ID,
+			WorkDir:     t.WorkDir,
+			Model:       cli.BindSessionModel(t.Model, prov),
+			Provider:    prov,
+			SessionID:   sid,
+			AutoStart:   true,
+			Parent:      t.Parent,
+			Purpose:     purpose,
+			SandboxMode: codexWorkSandbox(prov, purpose),
 		}); err != nil {
 			return fmt.Errorf("register agent %q: %w", t.ID, err)
 		}

@@ -15,6 +15,21 @@ import (
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
+func TestCodexWorkSandbox(t *testing.T) {
+	if got := codexWorkSandbox(claudia.ProviderCodex, claudia.PurposeWork); got != "workspace-write" {
+		t.Fatalf("work = %q", got)
+	}
+	if got := codexWorkSandbox(claudia.ProviderCodex, ""); got != "workspace-write" {
+		t.Fatalf("empty purpose (work default) = %q", got)
+	}
+	if got := codexWorkSandbox(claudia.ProviderCodex, claudia.PurposeAside); got != "" {
+		t.Fatalf("aside = %q", got)
+	}
+	if got := codexWorkSandbox(claudia.ProviderClaude, claudia.PurposeWork); got != "" {
+		t.Fatalf("claude = %q", got)
+	}
+}
+
 func TestProviderForLaunchNoClobber(t *testing.T) {
 	// Stored claude must not be forced to grok on re-launch.
 	got := providerForLaunch(claudia.ProviderClaude, "", claudia.ProviderGrok)
@@ -70,6 +85,39 @@ func TestRegisterProviderFromThread(t *testing.T) {
 	// Empty override keeps default when stored empty.
 	if got := providerForLaunch("", "", cli.DefaultProvider); got != cli.DefaultProvider {
 		t.Fatalf("empty → default: %q", got)
+	}
+}
+
+func TestEnsureRegisteredCodexWorkRequestsWritableSandbox(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := NewClaudia(reg)
+	th := &thread.Thread{
+		ID:       "jv-t37-codex",
+		WorkDir:  t.TempDir(),
+		Provider: string(claudia.ProviderCodex),
+		Purpose:  thread.PurposeWork,
+	}
+	if err := f.ensureRegistered(th); err != nil {
+		t.Fatalf("ensureRegistered: %v", err)
+	}
+	def := reg.Def(th.ID)
+	if def == nil || def.SandboxMode != "workspace-write" {
+		t.Fatalf("sandbox = %v, want workspace-write", def)
+	}
+	aside := &thread.Thread{
+		ID:       "aside-codex",
+		WorkDir:  t.TempDir(),
+		Provider: string(claudia.ProviderCodex),
+		Purpose:  thread.PurposeAside,
+	}
+	if err := f.ensureRegistered(aside); err != nil {
+		t.Fatalf("aside: %v", err)
+	}
+	if got := reg.Def(aside.ID).SandboxMode; got != "" {
+		t.Fatalf("aside sandbox = %q, want empty (read-only default)", got)
 	}
 }
 
