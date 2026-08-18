@@ -163,7 +163,7 @@ func TestLoadPortfolioOverrideMissingVsPresent(t *testing.T) {
 func TestPickMintProviderPlanDestWhenDefaultIneligible(t *testing.T) {
 	pick := PickMintProvider(MintProviderArgs{
 		ConfigProvider:        HarnessGrok,
-		PlanDefaultIneligible: true,
+		PlanFeedOK:            true,
 		PlanDest:              HarnessClaude,
 		PlanDestOK:            true,
 	})
@@ -178,7 +178,7 @@ func TestPickMintProviderPlanDestWhenDefaultIneligible(t *testing.T) {
 func TestPickMintProviderPlanDestEmptyRefuses(t *testing.T) {
 	pick := PickMintProvider(MintProviderArgs{
 		ConfigProvider:        HarnessGrok,
-		PlanDefaultIneligible: true,
+		PlanFeedOK:            true,
 		PlanDestOK:            false,
 	})
 	if pick.Provider != "" || pick.Knob != KnobPlanDest {
@@ -188,13 +188,53 @@ func TestPickMintProviderPlanDestEmptyRefuses(t *testing.T) {
 
 func TestPickMintProviderExplicitStillWinsWhenDefaultIneligible(t *testing.T) {
 	pick := PickMintProvider(MintProviderArgs{
-		ProviderArg:           HarnessGrok,
-		ConfigProvider:        HarnessGrok,
-		PlanDefaultIneligible: true,
-		PlanDest:              HarnessClaude,
-		PlanDestOK:            true,
+		ProviderArg:    HarnessGrok,
+		ConfigProvider: HarnessGrok,
+		PlanFeedOK:     true,
+		PlanDest:       HarnessClaude,
+		PlanDestOK:     true,
 	})
 	if pick.Provider != HarnessGrok || pick.Knob != KnobExplicit {
 		t.Fatalf("explicit still wins: %+v", pick)
+	}
+}
+
+// 🎯T495: usage-first — the plan feed's green pick beats the config
+// default even when the default is itself green; config is only a
+// tie-break, applied upstream in PickMintDest.
+func TestT495PlanPickBeatsGreenConfigDefault(t *testing.T) {
+	pick := PickMintProvider(MintProviderArgs{
+		ConfigProvider: HarnessGrok,
+		PlanFeedOK:     true,
+		PlanDest:       HarnessClaude,
+		PlanDestOK:     true,
+	})
+	if pick.Provider != HarnessClaude || pick.Knob != KnobPlanDest {
+		t.Fatalf("want plan_dest claude over green config grok, got %+v", pick)
+	}
+	if pick.LosingKnob != KnobConfig || pick.LosingProvider != HarnessGrok {
+		t.Fatalf("config should be the named loser: %+v", pick)
+	}
+}
+
+// 🎯T495: when the usage-first pick agrees with config (tie-break or
+// outright), the start result cites the config knob.
+func TestT495PlanPickAgreeingWithConfigCitesConfig(t *testing.T) {
+	pick := PickMintProvider(MintProviderArgs{
+		ConfigProvider: HarnessGrok,
+		PlanFeedOK:     true,
+		PlanDest:       HarnessGrok,
+		PlanDestOK:     true,
+	})
+	if pick.Provider != HarnessGrok || pick.Knob != KnobConfig {
+		t.Fatalf("want config grok, got %+v", pick)
+	}
+}
+
+// 🎯T495: with no plan feed at all, mint falls back to config (T476).
+func TestT495NoFeedFallsBackToConfig(t *testing.T) {
+	pick := PickMintProvider(MintProviderArgs{ConfigProvider: HarnessGrok})
+	if pick.Provider != HarnessGrok || pick.Knob != KnobConfig {
+		t.Fatalf("no feed must fall back to config: %+v", pick)
 	}
 }

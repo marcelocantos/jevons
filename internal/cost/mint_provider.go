@@ -33,10 +33,11 @@ type MintProviderArgs struct {
 	Portfolio RouteDecision
 	// PortfolioFromFile is true when state_dir/llm-portfolio.json loaded.
 	PortfolioFromFile bool
-	// PlanDefaultIneligible is true when the config default fails the
-	// daemon plan-usage mint threshold (🎯T390.1.5).
-	PlanDefaultIneligible bool
-	// PlanDest is PickPlanDest's choice when the default is ineligible.
+	// PlanFeedOK is true when the plan-usage feed produced candidates —
+	// omit-provider mint is then usage-first (🎯T495).
+	PlanFeedOK bool
+	// PlanDest is the usage-first pick among green providers (🎯T495,
+	// PickMintDest): highest remaining %, config only breaking green ties.
 	PlanDest string
 	// PlanDestOK is false when every published dest fails the mint
 	// threshold — omit-provider mint must refuse, not land on a hot dest.
@@ -54,10 +55,14 @@ type MintProviderPick struct {
 
 // PickMintProvider chooses the harness for a mint/resume.
 //
-// Precedence (🎯T476):
+// Precedence (🎯T476, usage-first per 🎯T495):
 //  1. non-empty ProviderArg → explicit
 //  2. resume with a stored provider → keep (never mid-flight reassign)
-//  3. mint that omits provider → config.yaml / daemon default
+//  3. mint that omits provider → the plan feed's usage-first green pick
+//     (PickMintDest: highest remaining %, config only breaking green
+//     ties); when no green exists the mint refuses rather than landing
+//     on an ineligible default
+//  4. config.yaml / daemon default only when the plan feed is silent
 //
 // A leftover llm-portfolio.json or the compiled DefaultPortfolio seed
 // (which still prefers Claude for code_implement / design_prose) must
@@ -78,23 +83,24 @@ func PickMintProvider(a MintProviderArgs) MintProviderPick {
 	if cfg == "" {
 		cfg = HarnessGrok
 	}
-	if a.PlanDefaultIneligible {
-		if a.PlanDestOK && strings.TrimSpace(a.PlanDest) != "" {
-			pick := MintProviderPick{
-				Provider:       strings.ToLower(strings.TrimSpace(a.PlanDest)),
+	if a.PlanFeedOK {
+		if !a.PlanDestOK {
+			return MintProviderPick{
+				Provider:       "",
 				Knob:           KnobPlanDest,
 				LosingKnob:     KnobConfig,
 				LosingProvider: cfg,
 				TaskType:       a.Portfolio.TaskType,
 			}
-			return pick
 		}
-		return MintProviderPick{
-			Provider:       "",
-			Knob:           KnobPlanDest,
-			LosingKnob:     KnobConfig,
-			LosingProvider: cfg,
-			TaskType:       a.Portfolio.TaskType,
+		if dest := strings.ToLower(strings.TrimSpace(a.PlanDest)); dest != "" && dest != cfg {
+			return MintProviderPick{
+				Provider:       dest,
+				Knob:           KnobPlanDest,
+				LosingKnob:     KnobConfig,
+				LosingProvider: cfg,
+				TaskType:       a.Portfolio.TaskType,
+			}
 		}
 	}
 	pick := MintProviderPick{Provider: cfg, Knob: KnobConfig, TaskType: a.Portfolio.TaskType}

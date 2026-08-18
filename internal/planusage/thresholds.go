@@ -15,6 +15,12 @@ type Thresholds struct {
 	LowRemainingPercent      float64 `json:"low_remaining_percent"`
 	CriticalRemainingPercent float64 `json:"critical_remaining_percent"`
 
+	// MintIndifferencePercent is the weekly remaining-% gap under which
+	// two green providers are an equally obvious omit-provider mint
+	// choice — only then does the config.yaml / JEVONS_PROVIDER
+	// preference break the tie (🎯T495).
+	MintIndifferencePercent float64 `json:"mint_indifference_percent"`
+
 	// DampLambdaPercent is the additive damping λ applied to both terms
 	// of the burn ratio: burn = (used% + λ) / (elapsed% + λ)
 	// (🎯T390.1.6.1). Early in a window the raw ratio is a tiny-sample
@@ -40,6 +46,7 @@ func DefaultThresholds() Thresholds {
 		WarmupElapsedPercent:     5,
 		LowRemainingPercent:      15,
 		CriticalRemainingPercent: 5,
+		MintIndifferencePercent:  10,
 		DampLambdaPercent:        5,
 	}
 }

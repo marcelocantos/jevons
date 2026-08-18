@@ -414,8 +414,10 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 	return cli.ResolveProvider("", s.defaultProvider)
 }
 
-// mintProviderPick is the 🎯T476 decision for stitchAgentStart: config.yaml
-// wins on omit-provider mint; leftover file / compiled seed are losers.
+// mintProviderPick is the 🎯T476 decision for stitchAgentStart, usage-first
+// per 🎯T495: the plan feed's green pick wins on omit-provider mint (config
+// only breaks ties among equally obvious greens, inside PickMintDest);
+// leftover file / compiled seed are losers.
 func (s *Server) mintProviderPick(providerArg, stored string, existed bool, taskTypeArg, purpose string) cost.MintProviderPick {
 	tt := strings.TrimSpace(taskTypeArg)
 	if tt == "" {
@@ -427,29 +429,23 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		fromFile = s.llmPortfolioFromFile
 	}
 	cfg := string(s.resolvedDefaultProvider())
-	var planInelig, destOK bool
+	var feedOK, destOK bool
 	var dest string
-	if _, cands, now, th, ok := s.planPolicyInputs(); ok {
-		for _, c := range cands {
-			if strings.EqualFold(c.Provider, cfg) {
-				planInelig = planusage.MintIneligible(c.Backend, now, th)
-				break
-			}
-		}
-		if planInelig {
-			dest, destOK = planusage.PickPlanDest(cands, now, th)
-		}
+	if _, cands, now, th, ok := s.planPolicyInputs(); ok && len(cands) > 0 {
+		feedOK = true
+		d := planusage.PickMintDest(cands, cfg, now, th)
+		dest, destOK = d.Provider, d.OK
 	}
 	return cost.PickMintProvider(cost.MintProviderArgs{
-		ProviderArg:           providerArg,
-		Existed:               existed,
-		StoredProvider:        stored,
-		ConfigProvider:        cfg,
-		Portfolio:             dec,
-		PortfolioFromFile:     fromFile,
-		PlanDefaultIneligible: planInelig,
-		PlanDest:              dest,
-		PlanDestOK:            destOK,
+		ProviderArg:       providerArg,
+		Existed:           existed,
+		StoredProvider:    stored,
+		ConfigProvider:    cfg,
+		Portfolio:         dec,
+		PortfolioFromFile: fromFile,
+		PlanFeedOK:        feedOK,
+		PlanDest:          dest,
+		PlanDestOK:        destOK,
 	})
 }
 
