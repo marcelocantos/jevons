@@ -35,6 +35,14 @@ function startStaticServer(agentsPayload) {
         res.end(JSON.stringify(agentsPayload()));
         return;
       }
+      if (u.pathname === '/api/migrate/options') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ providers: [
+          { provider: 'grok', band: 'ok', eligible: true, reason: 'Grok weekly on pace', models: ['grok-4.5', 'grok-4'] },
+          { provider: 'claude', band: 'ok', eligible: true, reason: 'Claude weekly on pace', models: ['claude-fable-5', 'claude-opus-5'] },
+        ] }));
+        return;
+      }
       if (u.pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ version: 'fleet-tree-test', ok: true }));
@@ -64,7 +72,7 @@ function startStaticServer(agentsPayload) {
     { name: 'alpha-worker', workdir: poRepo, parent: 'po', status: 'stopped', progress: 'stopped' },
     { name: 'po', workdir: poRepo, parent: 'jevons', status: 'running', provider: 'grok', model: 'grok-4.5' },
     // 🎯T115: root overseer state-dir home must not render as path chrome.
-    { name: 'jevons', workdir: '/Users/x/.jevons/jevons', parent: '', status: 'running', provider: 'grok' },
+    { name: 'jevons', workdir: '/Users/x/.jevons/jevons', parent: '', status: 'running', purpose: 'overseer', provider: 'grok', model: 'grok-4.5' },
     // 🎯T118: same-workdir leaf under po → progress secondary, not path.
     // 🎯T287: Anthropic worker — company icon + version subscript. 🎯T299 cut
     // the family initial; 🎯T302 restores it, so this row reads O4.8 again.
@@ -354,11 +362,78 @@ function startStaticServer(agentsPayload) {
     if (!xai || xai.company !== 'xai' || xai.sub !== '4.5' || !xai.hasIcon || !xai.beforeName) {
       failures.push('T287: Grok prefix (no leading G): ' + JSON.stringify(xai));
     }
-    // Provider known, model not → icon alone, no invented version.
-    const bare = await badgeOf('jevons');
-    if (!bare || bare.company !== 'xai' || bare.sub !== '' || !bare.hasIcon) {
-      failures.push('T287: unknown model must paint icon alone: ' + JSON.stringify(bare));
+    // 🎯T506: the owner-reported root badge is a visible native control with
+    // readable model text and an effective pointer target. Measure the real
+    // rendered boxes and centre hit-test; CSS source assertions alone do not
+    // establish any of these claims.
+    await page.locator('#agents .agent-node[data-agent="po"] .agent-name').click();
+    const rootBadge = page.locator('#agents .agent-node[data-agent="jevons"] .model-badge');
+    const rootGeometry = await rootBadge.evaluate((badge) => {
+      const rect = badge.getBoundingClientRect();
+      const sub = badge.querySelector('sub');
+      const centre = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const rgb = (value) => {
+        const m = String(value).match(/[\d.]+/g);
+        return m && m.length >= 3 ? m.slice(0, 3).map(Number) : [0, 0, 0];
+      };
+      const luminance = (colour) => {
+        const channels = rgb(colour).map((v) => {
+          const s = v / 255;
+          return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+      };
+      let ground = badge;
+      let background = 'rgb(255, 255, 255)';
+      while (ground) {
+        const candidate = getComputedStyle(ground).backgroundColor;
+        if (!/^rgba\([^)]*,\s*0(?:\.0+)?\)$/.test(candidate) && candidate !== 'transparent') {
+          background = candidate;
+          break;
+        }
+        ground = ground.parentElement;
+      }
+      const foreground = sub ? getComputedStyle(sub).color : 'rgb(0, 0, 0)';
+      const high = Math.max(luminance(foreground), luminance(background));
+      const low = Math.min(luminance(foreground), luminance(background));
+      return {
+        tag: badge.tagName,
+        aria: badge.getAttribute('aria-label') || '',
+        width: rect.width,
+        height: rect.height,
+        fontSize: sub ? parseFloat(getComputedStyle(sub).fontSize) : 0,
+        contrast: (high + 0.05) / (low + 0.05),
+        visible: typeof badge.checkVisibility === 'function'
+          ? badge.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+          : rect.width > 0 && rect.height > 0,
+        centreHitsBadge: centre === badge || badge.contains(centre),
+      };
+    });
+    if (rootGeometry.tag !== 'BUTTON' || !/Select provider and model for jevons/.test(rootGeometry.aria)
+        || rootGeometry.width < 32 || rootGeometry.height < 32 || rootGeometry.fontSize < 12
+        || rootGeometry.contrast < 4.5
+        || !rootGeometry.visible || !rootGeometry.centreHitsBadge) {
+      failures.push('T506: root model selector geometry/semantics: ' + JSON.stringify(rootGeometry));
     }
+
+    // Pointer and keyboard activation both open the actual provider/model
+    // table, and neither route may steal selection from the agent row.
+    await rootBadge.click();
+    await page.waitForSelector('#prov-menu', { state: 'visible' });
+    let selected = await page.locator('#agents .agent-node.selected').getAttribute('data-agent');
+    if (selected !== 'po') failures.push('T506: pointer activation selected ' + JSON.stringify(selected));
+    await page.keyboard.press('Escape');
+    await rootBadge.focus();
+    await rootBadge.press('Enter');
+    await page.waitForSelector('#prov-menu', { state: 'visible' });
+    selected = await page.locator('#agents .agent-node.selected').getAttribute('data-agent');
+    if (selected !== 'po') failures.push('T506: keyboard activation selected ' + JSON.stringify(selected));
+    const menuRows = await page.locator('#prov-menu .prov-menu-row').count();
+    if (menuRows < 2) failures.push('T506: provider/model menu has ' + menuRows + ' rows');
+    const artifactDir = path.join(__dirname, 'artifacts');
+    fs.mkdirSync(artifactDir, { recursive: true });
+    await page.screenshot({ path: path.join(artifactDir, 't506-model-selector.png') });
+    await page.keyboard.press('Escape');
     // No provider at all → no prefix chrome (row unchanged).
     const none = await badgeOf('alpha-worker');
     if (!none || none.company !== '' || none.hasIcon) {
@@ -441,5 +516,5 @@ function startStaticServer(agentsPayload) {
     for (const f of failures) console.error('  -', f);
     process.exit(1);
   }
-  console.log('ok - fleet tree hierarchy + stable sibling sort (T68); completeness; T71 working progress; T115 overseer/aside chrome; T118 progress secondary');
+  console.log('ok - fleet tree hierarchy; completeness; model prefix; T506 model-selector geometry + pointer/keyboard menu activation');
 })();

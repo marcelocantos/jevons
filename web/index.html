@@ -1338,10 +1338,13 @@ body.rhs-resizing-row { cursor: row-resize; }
    rather than floating beside its middle — that is what makes the negative
    `bottom` below read as a true subscript instead of a nudge. */
 .agent-node .model-badge {
-  display: inline-flex; align-items: flex-end; gap: 0; flex-shrink: 0;
-  margin-right: -4px; color: var(--text-muted); cursor: pointer;
+  all: unset; box-sizing: border-box;
+  display: inline-flex; align-items: flex-end; justify-content: center; gap: 0; flex-shrink: 0;
+  min-width: 32px; min-height: 32px; padding: 6px;
+  margin: -6px -4px -6px -6px; color: var(--text-dim); cursor: pointer;
 }
-.agent-node .model-badge .model-icon { width: 12px; height: 12px; display: block; opacity: 0.8; }
+.agent-node .model-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.agent-node .model-badge .model-icon { width: 16px; height: 16px; display: block; opacity: 0.9; }
 /* 🎯T302: Grok reads as a faded version of its own black mark — the muted row
    colour at the 0.8 above. Claude reads the same way in its own brand orange,
    same fade, same transparent ground. The colour is on the splat's strokes:
@@ -1351,12 +1354,12 @@ body.rhs-resizing-row { cursor: row-resize; }
 .agent-node .model-badge .model-icon[data-mark="claude-splat"] { color: var(--anthropic-mark); }
 /* 🎯T299: the subscript sits *below* the mark's baseline. flex-end already
    levels its box bottom with the icon's foot, so this relative offset drops it
-   the rest of the way — 0.25em of 9px ≈ 2.2px under the mark. Relative
-   positioning, so nothing reflows and the row keeps its height.
-   Not mono: at this size a mono digit run reads as a padded number. */
+   the rest of the way — 0.15em of 12px = 1.8px under the mark. Relative
+   positioning, so nothing reflows. Not mono: condensed mono digits read as a
+   padded number. 🎯T506 raises the visible label to normal small-text size. */
 .agent-node .model-badge sub {
-  position: relative; bottom: -0.25em; margin-left: -0.5px; font-size: 9px;
-  font-weight: 600; line-height: 1; letter-spacing: -0.04em; opacity: 0.9;
+  position: relative; bottom: -0.15em; margin-left: -0.5px; font-size: 12px;
+  font-weight: 600; line-height: 1; letter-spacing: -0.04em; opacity: 1;
 }
 /* 🎯T302: the family initial is back — the O in O5 is Opus, not a zero, and
    without it Opus 4.5 and Sonnet 4.5 painted the same badge. What settles the

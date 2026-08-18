@@ -331,11 +331,14 @@
     // '05' now the letter is back (🎯T302).
     const sub = (p.initial ? '<span class="model-family">' + escHtml(p.initial) + '</span>' : '')
       + escHtml(p.version);
-    return '<span class="model-badge" data-company="' + escHtml(p.company)
-      + '" title="' + escHtml(p.title) + '">'
+    const name = String(agent && agent.name || '').trim();
+    const aria = 'Select provider and model' + (name ? ' for ' + name : '')
+      + '. Current: ' + p.title;
+    return '<button type="button" class="model-badge" data-company="' + escHtml(p.company)
+      + '" title="' + escHtml(p.title) + '" aria-label="' + escHtml(aria) + '">'
       + companyIconHtml(p.company)
       + (sub ? '<sub>' + sub + '</sub>' : '')
-      + '</span>';
+      + '</button>';
   }
 
   return {

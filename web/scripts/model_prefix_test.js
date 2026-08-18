@@ -426,16 +426,32 @@ test('company comes from provider, falling back to the model id', function () {
 });
 
 test('owner examples paint icon + subscript label', function () {
-  const anth = MP.modelPrefixHtml({ provider: 'claude', model: 'claude-opus-4-8' });
+  const anth = MP.modelPrefixHtml({ name: 'jv-worker', provider: 'claude', model: 'claude-opus-4-8' });
   assert.ok(anth.indexOf('data-company="anthropic"') !== -1, anth);
   assert.ok(anth.indexOf('<sub><span class="model-family">O</span>4.8</sub>') !== -1, anth);
   assert.ok(anth.indexOf('<svg class="model-icon"') !== -1, anth);
+  assert.ok(anth.indexOf('<button type="button"') === 0, anth);
+  assert.ok(anth.indexOf('aria-label="Select provider and model for jv-worker.') !== -1, anth);
+  assert.ok(anth.endsWith('</button>'), anth);
 
   const grok = MP.modelPrefixHtml({ provider: 'grok', model: 'grok-4.5' });
   assert.ok(grok.indexOf('data-company="xai"') !== -1, grok);
   assert.ok(grok.indexOf('<sub>4.5</sub>') !== -1, grok);
   // No leading G — only one Grok flavour.
   assert.ok(grok.indexOf('G4.5') === -1, grok);
+});
+
+test('T506 badge CSS declares a readable label and minimum pointer target', function () {
+  const html = indexHtml();
+  const badge = /\.agent-node \.model-badge \{([^}]*)\}/.exec(html);
+  assert.ok(badge, '.model-badge rule missing');
+  assert.ok(/min-width:\s*32px/.test(badge[1]), 'badge lacks 32px minimum width');
+  assert.ok(/min-height:\s*32px/.test(badge[1]), 'badge lacks 32px minimum height');
+  const sub = /\.agent-node \.model-badge sub \{([^}]*)\}/.exec(html);
+  assert.ok(sub, '.model-badge sub rule missing');
+  assert.ok(/font-size:\s*12px/.test(sub[1]), 'model label is smaller than 12px');
+  assert.ok(/\.agent-node \.model-badge:focus-visible\s*\{[^}]*outline:/.test(html),
+    'keyboard focus indicator missing');
 });
 
 test('unknown model paints the icon alone — no invented version', function () {
@@ -670,17 +686,17 @@ test('the Claude mark is a glyph on transparent ground — no plate, no knock-ou
   });
 });
 
-// 🎯T302 is an Anthropic-only change. Grok keeps exactly what 🎯T299 gave it:
-// its own black mark, faded by the muted row colour — never tinted orange,
-// never given a family letter.
-test('Grok is untouched — muted row colour, no orange, no letter', function () {
+// 🎯T506 lifts the selector from barely-visible text-muted to readable
+// text-dim. Grok remains its own neutral mark — never tinted orange or given
+// a family letter.
+test('Grok uses readable neutral row colour, no orange, no letter', function () {
   const html = indexHtml();
   const badge = /\.agent-node \.model-badge \{([^}]*)\}/.exec(html);
   assert.ok(badge, '.model-badge rule missing');
   const colour = /(^|[;{\s])color:\s*([^;]+);/.exec(badge[1]);
   assert.ok(colour, 'badge declares no default colour: ' + badge[1].trim());
-  assert.strictEqual(colour[2].trim(), 'var(--text-muted)',
-    'the default mark colour is no longer the muted row colour: ' + colour[2].trim());
+  assert.strictEqual(colour[2].trim(), 'var(--text-dim)',
+    'the default selector colour is not the readable row colour: ' + colour[2].trim());
 
   // No rule tints the Grok mark, by data-mark or by company.
   cssRules().forEach(function (rule) {
