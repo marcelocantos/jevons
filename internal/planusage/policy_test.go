@@ -202,3 +202,35 @@ func TestPlanActionsMigrateToDest(t *testing.T) {
 		t.Fatalf("migrate grok → claude: %+v", acts)
 	}
 }
+
+func TestT517PlanActionsSkipsPOEvenWhenPurposeIsWork(t *testing.T) {
+	th := DefaultThresholds()
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	week := now.Add(3*24*time.Hour + 12*time.Hour)
+	lim := DefaultWeeklyWindowSeconds
+	pct := func(v float64) *float64 { return &v }
+	snap := Snapshot{Backends: []Backend{
+		{
+			Provider: "claude", Status: StatusAvailable,
+			Windows: []Window{{
+				Name: WindowWeekly, RemainingPercent: pct(0), UsedPercent: pct(100),
+				ResetsAt: &week, LimitWindowSeconds: &lim,
+			}},
+		},
+		{
+			Provider: "codex", Status: StatusAvailable,
+			Windows: []Window{{
+				Name: WindowWeekly, RemainingPercent: pct(80), UsedPercent: pct(20),
+				ResetsAt: &week, LimitWindowSeconds: &lim,
+			}},
+		},
+	}}
+	acts := PlanActions(snap, []AgentRef{
+		{Name: "jevons", Provider: "grok", Purpose: "overseer"},
+		{Name: "jevons-po", Provider: "claude", Purpose: "work", Parent: "jevons"},
+		{Name: "jv-t517-worker", Provider: "claude", Purpose: "work", Parent: "jevons-po"},
+	}, now, th)
+	if len(acts) != 1 || acts[0].Name != "jv-t517-worker" || acts[0].To != "codex" {
+		t.Fatalf("only the worker migrates claude→codex, got %+v", acts)
+	}
+}

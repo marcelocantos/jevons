@@ -28,6 +28,7 @@ type AgentRef struct {
 	Name     string
 	Provider string
 	Purpose  string
+	Parent   string
 }
 
 // PlanAction is one sweep decision: migrate to To, or park when To is empty.
@@ -174,6 +175,32 @@ func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool)
 	return best.prov, true
 }
 
+// OverseerNames is the set of agents whose Purpose is overseer.
+// Used with PlanMigrateExempt so a PO is identified by parentage, not name.
+func OverseerNames(agents []AgentRef) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range agents {
+		if strings.EqualFold(strings.TrimSpace(a.Purpose), "overseer") {
+			if n := strings.TrimSpace(a.Name); n != "" {
+				out[n] = true
+			}
+		}
+	}
+	return out
+}
+
+// PlanMigrateExempt is true for control-plane seats T390.1.5 must not
+// bounce (🎯T517): the overseer itself, and any agent whose Parent is an
+// overseer (stratum-1 product owners). purpose=work on a PO does not
+// enroll it. Workers parented to a PO stay eligible.
+func PlanMigrateExempt(a AgentRef, overseers map[string]bool) bool {
+	if strings.EqualFold(strings.TrimSpace(a.Purpose), "overseer") {
+		return true
+	}
+	parent := strings.TrimSpace(a.Parent)
+	return parent != "" && overseers[parent]
+}
+
 // PlanActions lists migrate/park steps for seats on hot or exhausted
 // providers. Overseer purpose is skipped. To is empty when dest is empty
 // (park).
@@ -194,9 +221,10 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds)
 		cands = append(cands, DestCand{Provider: p, Backend: be, Load: load[p]})
 	}
 	dest, destOK := PickPlanDest(cands, now, th)
+	overseers := OverseerNames(agents)
 	var out []PlanAction
 	for _, a := range agents {
-		if strings.EqualFold(strings.TrimSpace(a.Purpose), "overseer") {
+		if PlanMigrateExempt(a, overseers) {
 			continue
 		}
 		from := strings.ToLower(strings.TrimSpace(a.Provider))

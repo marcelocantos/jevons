@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
@@ -120,5 +121,42 @@ func TestSweepParksWhenDestEmpty(t *testing.T) {
 	}
 	if got := s.fleetIntent().AgentState("w1"); string(got) != string(fleetintent.Parked) {
 		t.Fatalf("intent=%q want parked", got)
+	}
+}
+
+func TestT517SweepSkipsPOAndDropsItsHandover(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("claude", 0, 100, now),
+			t39015Weekly("codex", 80, 20, now),
+		}}
+	})
+	for _, d := range []claudia.AgentDef{
+		{Name: "jevons", SessionID: "s-root", Purpose: claudia.PurposeOverseer, Provider: claudia.ProviderGrok},
+		{Name: "jevons-po", SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons", Provider: claudia.ProviderClaude},
+		{Name: "jv-t517-worker", SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po", Provider: claudia.ProviderClaude},
+	} {
+		if err := reg.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	led := &sweepLedger{pending: []handover.Pending{
+		{Agent: "jevons-po", TranscriptPath: "/po.jsonl"},
+		{Agent: "jv-t517-worker", TranscriptPath: "/w.jsonl"},
+	}}
+	s.migrator = led
+	acts := s.SweepPlanPolicy()
+	if len(acts) != 1 || acts[0].Name != "jv-t517-worker" || acts[0].To != "codex" {
+		t.Fatalf("want only worker migrate, got %+v", acts)
+	}
+	if len(led.cleared) != 1 || led.cleared[0] != "jevons-po" {
+		t.Fatalf("cleared = %v; want jevons-po handover dropped", led.cleared)
 	}
 }
