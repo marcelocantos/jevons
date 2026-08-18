@@ -77,6 +77,8 @@ function startStaticServer(agentsPayload) {
     // 🎯T287: Anthropic worker — company icon + version subscript. 🎯T299 cut
     // the family initial; 🎯T302 restores it, so this row reads O4.8 again.
     { name: 'mid-worker', workdir: poRepo, parent: 'po', status: 'running', phase: 'working', step: 'Bash: go test', progress: 'working · Bash: go test', provider: 'claude', model: 'claude-opus-4-8' },
+    // 🎯T508: Bedrock provider identity precedes the Claude vendor identity.
+    { name: 'bedrock-worker', workdir: poRepo, parent: 'po', status: 'running', progress: 'working', provider: 'bedrock', model: 'claude-opus-4-8' },
     // Aside-purpose row: 💡 title, no path element (description must not bleed).
     { name: 'att-billing', description: 'billing nit', purpose: 'aside', workdir: '/Users/x/.jevons/threads/att-billing', parent: 'jevons', status: 'running' },
     // 🎯T365: target-filing aside — same purpose, 🎯 chrome from aside_kind.
@@ -111,8 +113,8 @@ function startStaticServer(agentsPayload) {
       }));
     });
 
-    if (tree.length !== 7) {
-      failures.push(`expected 7 agent nodes (completeness), got ${tree.length}: ${JSON.stringify(tree)}`);
+    if (tree.length !== 8) {
+      failures.push(`expected 8 agent nodes (completeness), got ${tree.length}: ${JSON.stringify(tree)}`);
     }
     const names = tree.map(t => t.name);
     if (!names.includes('zeta-worker') || !names.includes('alpha-worker') || !names.includes('jevons') || !names.includes('att-billing')) {
@@ -123,9 +125,9 @@ function startStaticServer(agentsPayload) {
     if (roots.length !== 1 || roots[0].name !== 'jevons') {
       failures.push(`roots = ${JSON.stringify(roots)}, want single jevons`);
     }
-    // Under po: alpha, mid, zeta in locale name order.
+    // Under po: alpha, bedrock, mid, zeta in locale name order.
     const underPo = tree.filter(t => t.parent === 'po').map(t => t.name);
-    const wantSiblings = ['alpha-worker', 'mid-worker', 'zeta-worker'];
+    const wantSiblings = ['alpha-worker', 'bedrock-worker', 'mid-worker', 'zeta-worker'];
     if (JSON.stringify(underPo) !== JSON.stringify(wantSiblings)) {
       failures.push(`sibling order under po = ${JSON.stringify(underPo)}, want ${JSON.stringify(wantSiblings)}`);
     }
@@ -274,6 +276,51 @@ function startStaticServer(agentsPayload) {
     if (!anth || anth.company !== 'anthropic' || anth.sub !== 'O4.8' || !anth.hasIcon || !anth.beforeName) {
       failures.push('T302: Anthropic Opus prefix: ' + JSON.stringify(anth));
     }
+
+    // 🎯T508: real layout oracle for the exact order and visibility. The
+    // centre of each mark must hit itself, and the Bedrock mask must resolve
+    // to the tracked web asset rather than an invented inline substitute.
+    const bedrock = await page.evaluate(() => {
+      const node = document.querySelector('#agents .agent-node[data-agent="bedrock-worker"]');
+      const badge = node && node.querySelector('.model-badge');
+      const provider = badge && badge.querySelector('[data-mark="amazon-bedrock"]');
+      const vendor = badge && badge.querySelector('[data-mark="claude-splat"]');
+      const sub = badge && badge.querySelector('sub');
+      if (!provider || !vendor || !sub) return null;
+      const inspect = (el) => {
+        const rect = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return {
+          left: rect.left, right: rect.right, width: rect.width, height: rect.height,
+          visible: typeof el.checkVisibility === 'function'
+            ? el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+            : rect.width > 0 && rect.height > 0,
+          centreHit: hit === el || el.contains(hit),
+        };
+      };
+      return {
+        provider: inspect(provider), vendor: inspect(vendor), label: inspect(sub),
+        mask: getComputedStyle(provider).maskImage || getComputedStyle(provider).webkitMaskImage,
+        marks: [...badge.querySelectorAll('[data-mark]')].map(el => el.dataset.mark),
+      };
+    });
+    if (!bedrock || JSON.stringify(bedrock.marks) !== JSON.stringify(['amazon-bedrock', 'claude-splat'])
+        || !bedrock.provider.visible || !bedrock.vendor.visible
+        || !bedrock.provider.centreHit || !bedrock.vendor.centreHit
+        || bedrock.provider.width !== 16 || bedrock.provider.height !== 16
+        || bedrock.vendor.width !== 16 || bedrock.vendor.height !== 16
+        || !(bedrock.provider.right < bedrock.vendor.left)
+        // The existing subscript intentionally tucks 0.5px under the vendor
+        // mark; order is established by its left edge, not non-overlap.
+        || !(bedrock.vendor.left < bedrock.label.left)
+        || !/assets\/bedrock\.svg/.test(bedrock.mask || '')) {
+      failures.push('T508: Bedrock provider → vendor → label render: ' + JSON.stringify(bedrock));
+    }
+    const t508Dir = path.join(__dirname, 'artifacts');
+    fs.mkdirSync(t508Dir, { recursive: true });
+    await page.locator('#agents .agent-node[data-agent="bedrock-worker"]').screenshot({
+      path: path.join(t508Dir, 't508-bedrock-selector.png'),
+    });
 
     // 🎯T302: the restored initial only survives if it does not read as a
     // digit, and the mark only reads as Claude if it carries the brand orange.

@@ -355,6 +355,37 @@ test('openai wears the real ChatGPT mark from Wikimedia Commons', function () {
   assert.ok(badge.indexOf('data-mark="chatgpt"') !== -1, badge);
 });
 
+// 🎯T508: provider identity is additional chrome, not a replacement for the
+// vendor identity. Pin the supplied asset and the provider → vendor → label
+// order so a future company-map refactor cannot collapse Bedrock into Claude.
+test('bedrock paints the supplied provider mark before the vendor mark', function () {
+  const asset = fs.readFileSync(path.join(__dirname, '..', 'assets', 'bedrock.svg'), 'utf8').trim();
+  assert.strictEqual(
+    crypto.createHash('sha256').update(asset).digest('hex'),
+    'b07f07bb6b77a1ee83916430250dc9adfc799ec43fbc5932947af099bcfcb9f9',
+    'tracked Bedrock SVG differs from the owner-supplied asset');
+
+  const badge = MP.modelPrefixHtml({ provider: 'bedrock', model: 'claude-opus-4-8' });
+  const provider = badge.indexOf('data-mark="amazon-bedrock"');
+  const vendor = badge.indexOf('data-mark="claude-splat"');
+  const label = badge.indexOf('<sub>');
+  assert.ok(provider !== -1 && vendor !== -1 && label !== -1, badge);
+  assert.ok(provider < vendor && vendor < label, 'want provider → vendor → label: ' + badge);
+  assert.ok(/mask:\s*url\('assets\/bedrock\.svg'\)/.test(indexHtml()),
+    'Bedrock mark is not painted from the tracked asset');
+});
+
+test('bedrock provider mark is explicit and leaves other providers unchanged', function () {
+  assert.strictEqual(MP.providerIconHtml('bedrock').indexOf('amazon-bedrock') !== -1, true);
+  ['claude', 'grok', 'codex', '', 'amazon-bedrock'].forEach(function (provider) {
+    assert.strictEqual(MP.providerIconHtml(provider), '', provider);
+  });
+  const inferred = MP.modelPrefixHtml({ provider: 'claude', model: 'bedrock/claude-opus-4-8' });
+  assert.strictEqual(inferred.indexOf('amazon-bedrock'), -1, inferred);
+  const claude = MP.modelPrefixHtml({ provider: 'claude', model: 'claude-opus-4-8' });
+  assert.strictEqual((claude.match(/class="model-icon/g) || []).length, 1, claude);
+});
+
 test('no retired mark is ever painted again', function () {
   ['anthropic', 'xai', 'openai'].forEach(function (company) {
     const icon = MP.companyIconHtml(company);
@@ -677,7 +708,11 @@ test('the Claude mark is a glyph on transparent ground — no plate, no knock-ou
 
   // ...and none painted by CSS behind the badge or the mark.
   cssRules().filter(function (rule) {
-    return /model-badge|model-icon|claude-splat/.test(rule.sel);
+    // T508's separate Bedrock provider glyph is intentionally a monochrome
+    // SVG mask; its background-color paints the masked strokes, not a plate
+    // behind the Claude vendor mark this test protects.
+    return /model-badge|model-icon|claude-splat/.test(rule.sel)
+      && !/model-provider-icon/.test(rule.sel);
   }).forEach(function (rule) {
     assert.ok(!/(^|[;{\s])background(-color)?:/.test(rule.body),
       'badge CSS paints a plate behind the mark: ' + rule.sel + ' {' + rule.body.trim() + '}');

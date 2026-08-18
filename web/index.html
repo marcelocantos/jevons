@@ -1345,6 +1345,14 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 .agent-node .model-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .agent-node .model-badge .model-icon { width: 16px; height: 16px; display: block; opacity: 0.9; }
+/* 🎯T508: the provider mark is the exact owner-supplied Bedrock SVG. It sits
+   before the vendor glyph; the small one-sided gap leaves Claude attached to
+   its model subscript while keeping the two marks visually distinct. */
+.agent-node .model-badge .model-provider-icon[data-mark="amazon-bedrock"] {
+  flex: none; margin-right: 3px; background-color: currentColor;
+  -webkit-mask: url('assets/bedrock.svg') center / contain no-repeat;
+  mask: url('assets/bedrock.svg') center / contain no-repeat;
+}
 /* 🎯T302: Grok reads as a faded version of its own black mark — the muted row
    colour at the 0.8 above. Claude reads the same way in its own brand orange,
    same fade, same transparent ground. The colour is on the splat's strokes:

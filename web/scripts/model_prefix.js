@@ -289,6 +289,16 @@
       + icon.path + '</svg>';
   }
 
+  // 🎯T508: Bedrock is the provider, while Claude/Anthropic remains the model
+  // vendor. Keep those two identities separate and render the provider mark
+  // only from the stored provider — a Bedrock-looking model id is not enough.
+  // The mask points at the owner's supplied SVG, committed under web/assets.
+  function providerIconHtml(provider) {
+    if (norm(provider) !== 'bedrock') return '';
+    return '<span class="model-icon model-provider-icon" data-mark="amazon-bedrock"'
+      + ' title="Amazon Bedrock" aria-hidden="true"></span>';
+  }
+
   // True when the model id is empty, unrecognised, or sniffs as the same
   // company the badge mark names (🎯T323). Provider wins for the mark;
   // family/version only paint when the model belongs to that company —
@@ -336,6 +346,7 @@
       + '. Current: ' + p.title;
     return '<button type="button" class="model-badge" data-company="' + escHtml(p.company)
       + '" title="' + escHtml(p.title) + '" aria-label="' + escHtml(aria) + '">'
+      + providerIconHtml(agent && agent.provider)
       + companyIconHtml(p.company)
       + (sub ? '<sub>' + sub + '</sub>' : '')
       + '</button>';
@@ -350,6 +361,7 @@
     versionOf: versionOf,
     condenseModel: condenseModel,
     companyIconHtml: companyIconHtml,
+    providerIconHtml: providerIconHtml,
     modelPrefix: modelPrefix,
     modelPrefixHtml: modelPrefixHtml,
     COMPANY_LABEL: COMPANY_LABEL,
