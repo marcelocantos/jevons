@@ -1339,7 +1339,7 @@ body.rhs-resizing-row { cursor: row-resize; }
    `bottom` below read as a true subscript instead of a nudge. */
 .agent-node .model-badge {
   display: inline-flex; align-items: flex-end; gap: 0; flex-shrink: 0;
-  margin-right: -4px; color: var(--text-muted); cursor: default;
+  margin-right: -4px; color: var(--text-muted); cursor: pointer;
 }
 .agent-node .model-badge .model-icon { width: 12px; height: 12px; display: block; opacity: 0.8; }
 /* 🎯T302: Grok reads as a faded version of its own black mark — the muted row
@@ -1367,6 +1367,45 @@ body.rhs-resizing-row { cursor: row-resize; }
 .agent-node .model-badge sub .model-family {
   color: var(--accent); font-weight: 700; opacity: 1;
 }
+/* 🎯T285.2: "!" between provider icon and name. Orange = ahead (mint-
+   ineligible); red = hot/exhausted (migrate-off). Native title= is the
+   server reason — do not invent a client band. */
+.agent-node .prov-mark {
+  flex-shrink: 0; font-weight: 700; font-size: 12px; line-height: 1;
+  margin: 0 2px 0 4px; cursor: pointer; user-select: none;
+}
+.agent-node .prov-mark-ahead { color: var(--amber); }
+.agent-node .prov-mark-off { color: var(--red); }
+/* Borderless two-column provider/model table. No border-* class; lift is
+   shadow only so the acceptance grep and the pixels agree. */
+#prov-menu {
+  position: fixed; z-index: 210; padding: 4px 6px;
+  background: var(--surface-raised); box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  border-radius: 6px; border: none;
+}
+#prov-menu .prov-menu-table {
+  border-collapse: collapse; border-spacing: 0; background: transparent;
+  border: none;
+}
+#prov-menu .prov-menu-table td {
+  padding: 3px 6px; vertical-align: middle; background: transparent;
+  border: none;
+}
+#prov-menu .prov-cell-mark { width: 18px; }
+#prov-menu .prov-cell-mark .model-icon { width: 12px; height: 12px; display: block; opacity: 0.85; }
+#prov-menu .prov-cell-models { display: flex; flex-wrap: wrap; gap: 4px; }
+#prov-menu .prov-model {
+  font: inherit; font-size: 11px; font-weight: 600; line-height: 1.2;
+  padding: 2px 6px; color: var(--text); background: var(--surface-high);
+  cursor: pointer; border-radius: 4px; border: none;
+}
+#prov-menu .prov-model:hover:not(:disabled) { background: var(--accent-dim); }
+#prov-menu .prov-model:disabled,
+#prov-menu .prov-model.prov-disabled,
+#prov-menu .prov-menu-row.prov-disabled .prov-model {
+  opacity: 0.45; cursor: default;
+}
+#prov-menu .prov-model.prov-current { opacity: 0.7; cursor: default; }
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }
 /* 🎯T118: progress/status secondary shares path slot without mono path chrome. */
@@ -1599,6 +1638,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/aside_history.js"></script>
 <script src="scripts/fleet_row.js"></script>
 <script src="scripts/model_prefix.js"></script>
+<!-- 🎯T285.2: provider icon menu + "!" band mark; needs model_prefix. -->
+<script src="scripts/provider_menu.js"></script>
 <script src="scripts/fleet_paint.js"></script>
 <script src="scripts/fleet_cycle.js"></script>
 <!-- 🎯T383: sticky selection policy; must precede the fleet refresh tail. -->
@@ -6098,6 +6139,11 @@ function addWorkerMsg(msg) {
 
 // Agent tree
 let lastFleetAgents = []; // for 🎯T124 auto-select on new aside
+// 🎯T285.2: server weekly-band + model catalog for the tree "!" and icon menu.
+// Cached so a busy agents_changed burst does not re-fetch plan classification.
+let migrateOptions = { providers: [] };
+let migrateOptionsAt = 0;
+const MIGRATE_OPTIONS_TTL_MS = 60000;
 // Declared early: updateComposerPlaceholder / renderAttention / refreshAgents
 // touch this before the terminal block further down. A late `let` left it in
 // the TDZ, threw on boot (T136 path), skipped applyTheme + connect → dark
@@ -6361,6 +6407,20 @@ function scheduleFleetPaint(job) {
   });
 }
 
+function fetchMigrateOptions() {
+  const now = Date.now();
+  if (migrateOptionsAt && now - migrateOptionsAt < MIGRATE_OPTIONS_TTL_MS) {
+    return Promise.resolve(migrateOptions);
+  }
+  return fetch('/api/migrate/options').then(function (r) {
+    return r.ok ? r.json() : { providers: [] };
+  }).then(function (p) {
+    migrateOptions = (p && Array.isArray(p.providers)) ? p : { providers: [] };
+    migrateOptionsAt = Date.now();
+    return migrateOptions;
+  }).catch(function () { return migrateOptions; });
+}
+
 function refreshAgents() {
   if (typeof window.__layoutThrash === 'object' && window.__layoutThrash) {
     window.__layoutThrash.refreshAgents = (window.__layoutThrash.refreshAgents || 0) + 1;
@@ -6369,6 +6429,7 @@ function refreshAgents() {
   Promise.all([
     fetch('/api/agents').then(r => r.json()),
     fetch('/api/portfolios').then(r => r.ok ? r.json() : { portfolios: [] }).catch(function () { return { portfolios: [] }; }),
+    fetchMigrateOptions(),
   ]).then(function (pair) {
     const agents = Array.isArray(pair[0]) ? pair[0] : [];
     const portfolioPayload = pair[1];
@@ -6554,7 +6615,11 @@ function buildFleetDescriptors(byParent, parent, agentsByName, out) {
     const modelHtml = (!isPortfolio && typeof ModelPrefix !== 'undefined')
       ? ModelPrefix.modelPrefixHtml(a)
       : '';
-    let html = lead + modelHtml + '<span class="agent-name">'+escHtml(row.title)+'</span>';
+    // 🎯T285.2: "!" sits between the provider icon and the bare name.
+    const markHtml = (!isPortfolio && typeof ProviderMenu !== 'undefined')
+      ? ProviderMenu.markHtml(a, migrateOptions)
+      : '';
+    let html = lead + modelHtml + markHtml + '<span class="agent-name">'+escHtml(row.title)+'</span>';
     // Secondary line: path (T84) or progress/status (T118). Aside/portfolio have none.
     const secHtml = isPortfolio ? '' : (row.secondaryHtml || (row.showPath ? row.dirHtml : ''));
     const secKind = isPortfolio ? '' : (row.secondaryKind || (secHtml ? 'path' : ''));
@@ -6584,11 +6649,96 @@ function buildFleetDescriptors(byParent, parent, agentsByName, out) {
   return out;
 }
 
+// 🎯T285.2: icon-click menu. One open at a time; Escape / outside click close.
+let _provMenuEl = null;
+let _provMenuCloser = null;
+function closeProviderMenu() {
+  if (_provMenuEl && _provMenuEl.parentNode) _provMenuEl.parentNode.removeChild(_provMenuEl);
+  _provMenuEl = null;
+  if (_provMenuCloser) {
+    document.removeEventListener('mousedown', _provMenuCloser, true);
+    document.removeEventListener('keydown', _provMenuCloser, true);
+    _provMenuCloser = null;
+  }
+}
+function openProviderMenu(node, d) {
+  if (typeof ProviderMenu === 'undefined') return;
+  closeProviderMenu();
+  const agent = (lastFleetAgents || []).find(function (a) { return a && a.name === d.key; })
+    || { name: d.key };
+  const el = document.createElement('div');
+  el.id = 'prov-menu';
+  el.innerHTML = ProviderMenu.menuHtml(ProviderMenu.menuModel(migrateOptions, agent));
+  document.body.appendChild(el);
+  const anchor = node.querySelector('.model-badge') || node.querySelector('.prov-mark') || node;
+  const r = anchor.getBoundingClientRect();
+  let left = r.left;
+  let top = r.bottom + 4;
+  const mw = el.offsetWidth;
+  const mh = el.offsetHeight;
+  if (left + mw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - mw - 8);
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+  el.addEventListener('click', function (ev) {
+    const btn = ev.target && ev.target.closest ? ev.target.closest('button.prov-model') : null;
+    if (!btn || btn.disabled) return;
+    if (ev.preventDefault) ev.preventDefault();
+    if (ev.stopPropagation) ev.stopPropagation();
+    const req = ProviderMenu.migrateRequest(
+      agent, btn.getAttribute('data-provider') || '', btn.getAttribute('data-model') || '');
+    fetch(req.path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (t) { throw new Error(t || String(res.status)); });
+      }
+      closeProviderMenu();
+      migrateOptionsAt = 0;
+      if (typeof refreshAgents === 'function') refreshAgents();
+    }).catch(function (err) {
+      el.title = String(err && err.message ? err.message : err);
+    });
+  });
+  _provMenuCloser = function (ev) {
+    if (ev.type === 'keydown' && ev.key === 'Escape') {
+      closeProviderMenu();
+      return;
+    }
+    if (ev.type === 'mousedown' && _provMenuEl && !_provMenuEl.contains(ev.target)
+        && !(node && node.contains && node.contains(ev.target))) {
+      closeProviderMenu();
+    }
+  };
+  document.addEventListener('mousedown', _provMenuCloser, true);
+  document.addEventListener('keydown', _provMenuCloser, true);
+  _provMenuEl = el;
+}
+
 // Bind the per-row handlers. Called on rebuild, and again after a patch
 // rewrites a row's innerHTML (which destroys the dismiss button).
 function bindFleetRow(node, d) {
   if (d.selectable) {
-    node.onclick = () => selectAgent(d.key);
+    node.onclick = function (e) {
+      if (e && typeof ProviderMenu !== 'undefined') {
+        const chain = [];
+        let el = e.target;
+        while (el && el !== node.parentNode) {
+          chain.push(el.className || '');
+          if (el === node) break;
+          el = el.parentElement;
+        }
+        if (ProviderMenu.clickOpensMenu(chain)) {
+          if (e.preventDefault) e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
+          openProviderMenu(node, d);
+          return;
+        }
+      }
+      selectAgent(d.key);
+    };
   } else {
     node.onclick = null;
   }
@@ -6642,6 +6792,7 @@ function paintFleetTree(descs) {
   }
 
   // Shape changed (spawn / reap / reparent / reorder) — rebuild.
+  closeProviderMenu();
   agentsEl.innerHTML = '';
   _fleetNodes = new Array(descs.length);
   const containerFor = { '': agentsEl };

@@ -715,6 +715,8 @@ func main() {
 	fleetAdapter.SetLaunchHook(mcpSrv.NoteAgentLaunch)
 	mcpSrv.SetMigrator(fleetAdapter)
 	srv.SetOverseerMigrator(fleetAdapter)
+	// 🎯T285.2: thin HTTP migrate wrapper for non-overseer fleet seats.
+	srv.SetFleetMigrator(fleetAdapter)
 	srv.SetDefaultProvider(defaultProvider)
 	btlrCfg := butler.Config{
 		Store:        threadStore,

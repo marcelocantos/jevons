@@ -219,6 +219,7 @@ test-web:
 	node web/scripts/fleet_cycle_test.js
 	node web/scripts/fleet_selection_test.js
 	node web/scripts/model_prefix_test.js
+	node web/scripts/provider_menu_test.js
 	node web/scripts/portfolio_group_test.js
 	node web/scripts/virtual_list_test.js
 	node web/scripts/thread_route_test.js

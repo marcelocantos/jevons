@@ -51,11 +51,19 @@ func (s *Server) SetOverseerMigrator(m OverseerMigrator) {
 // replays to clients exactly as before. What changes is the agent behind
 // it, which starts a new conversation knowing only where to read.
 func (s *Server) MigrateOverseer(to claudia.Provider, force bool) (handover.Pending, error) {
+	return s.MigrateOverseerModel(to, "", force)
+}
+
+// MigrateOverseerModel is MigrateOverseer with an optional model pin for
+// the successor (🎯T285.2): the menu's model choice rides the same rotate,
+// written onto the rotated registry row before relaunch. Empty model keeps
+// the provider default binding.
+func (s *Server) MigrateOverseerModel(to claudia.Provider, model string, force bool) (handover.Pending, error) {
 	target := claudia.Provider(strings.TrimSpace(string(to)))
 	if target == "" {
 		return handover.Pending{}, fmt.Errorf("migrate overseer: target provider is required")
 	}
-	return s.rotateOverseer("migrate", func(mig OverseerMigrator, name string) (handover.Pending, error) {
+	return s.rotateOverseer("migrate", model, func(mig OverseerMigrator, name string) (handover.Pending, error) {
 		pending, err := mig.PrepareMigration(name, target, force)
 		if err != nil {
 			return pending, err
@@ -74,7 +82,10 @@ func (s *Server) CompactOverseer(force bool) (handover.Pending, error) {
 // Only the prepare step differs between a provider migration and a
 // context compaction; everything after the row is rotated is identical,
 // including the failure handling that keeps a half-rotation legible.
-func (s *Server) rotateOverseer(kind string,
+// model, when non-empty, is pinned onto the rotated row before relaunch
+// (🎯T285.2) — after prepare, because rotation rebinds the model to the
+// target provider's default and would silently erase an earlier pin.
+func (s *Server) rotateOverseer(kind, model string,
 	prepare func(OverseerMigrator, string) (handover.Pending, error)) (handover.Pending, error) {
 	s.mu.RLock()
 	reg := s.registry
@@ -92,6 +103,17 @@ func (s *Server) rotateOverseer(kind string,
 	pending, err := prepare(mig, name)
 	if err != nil {
 		return handover.Pending{}, err
+	}
+
+	if model = strings.TrimSpace(model); model != "" {
+		if def := reg.Def(name); def != nil && strings.TrimSpace(def.Model) != model {
+			next := *def
+			next.Model = model
+			if rerr := reg.Register(next); rerr != nil {
+				slog.Warn("overseer model pin not recorded; successor keeps provider default",
+					"model", model, "err", rerr)
+			}
+		}
 	}
 
 	// From here the row is already rotated, so failures must leave a
@@ -189,6 +211,7 @@ func (s *Server) ResumePendingHandover() {
 func (s *Server) handleOverseerMigrate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Provider string `json:"provider"`
+		Model    string `json:"model"`
 		Force    bool   `json:"force"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && r.ContentLength > 0 {
@@ -203,7 +226,7 @@ func (s *Server) handleOverseerMigrate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pending, err := s.MigrateOverseer(claudia.Provider(body.Provider), body.Force)
+	pending, err := s.MigrateOverseerModel(claudia.Provider(body.Provider), body.Model, body.Force)
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(http.StatusConflict)
