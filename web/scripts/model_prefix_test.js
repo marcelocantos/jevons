@@ -8,6 +8,7 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const MP = require('./model_prefix.js');
@@ -329,6 +330,29 @@ test('grok wears the real Grok mark from its app icon', function () {
   assert.ok(box[0] <= 68.09 && box[1] <= 74.42, 'viewBox clips the glyph: ' + vb[1]);
   assert.ok(box[0] + box[2] >= 443.91 && box[1] + box[3] >= 435.22,
     'viewBox clips the glyph: ' + vb[1]);
+});
+
+// 🎯T507: OpenAI retired the Codex-specific >_ cloud and this repo's
+// hand-built substitute. Pin the ChatGPT logo geometry from Wikimedia Commons
+// so a locally plausible approximation cannot silently replace it again.
+test('openai wears the real ChatGPT mark from Wikimedia Commons', function () {
+  const icon = MP.companyIconHtml('openai');
+  assert.ok(icon.indexOf('data-mark="chatgpt"') !== -1, icon);
+  assert.ok(icon.indexOf('viewBox="0 0 320 320"') !== -1, icon);
+  const d = /<path[^>]*\bd="([^"]+)"/.exec(icon);
+  assert.ok(d, 'no path data in the ChatGPT mark: ' + icon);
+  assert.strictEqual(d[1].length, 1655, 'ChatGPT path length drifted');
+  assert.strictEqual(
+    crypto.createHash('sha256').update(d[1]).digest('hex'),
+    '9499e7547042a397882e0d96308f4795ead582b2e8502e062f57bcbc783ce1bb',
+    'OpenAI path is not File:ChatGPT-Logo.svg');
+  assert.ok(!/<(circle|rect|ellipse|polygon|polyline)\b/.test(icon),
+    'mark carries a plate or cloud chrome: ' + icon);
+  assert.ok(/fill="currentColor"/.test(icon), 'mark ignores row colour: ' + icon);
+
+  const badge = MP.modelPrefixHtml({ provider: 'codex', model: 'gpt-5.6' });
+  assert.ok(badge.indexOf('data-company="openai"') !== -1, badge);
+  assert.ok(badge.indexOf('data-mark="chatgpt"') !== -1, badge);
 });
 
 test('no retired mark is ever painted again', function () {
