@@ -590,13 +590,6 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			s.logLifecycle(compFrontierConsume, "park", "ok", map[string]any{
 				"target_id": r.TargetID, "reason": r.Reason, "err": r.Err,
 			})
-			// 🎯T433: a spawn that failed is a leaf that lost its worker, and
-			// the lifecycle journal is not a notification — the owning PO
-			// hears about it by name, with the error verbatim, or the leaf
-			// reads as unattended-but-fine forever (the T383 instance).
-			if r.Reason == FrontierReasonSpawnFailed {
-				s.notifySpawnFailure(parentPO, r.TargetID, FrontierWorkerName(r.TargetID), r.Err)
-			}
 		}
 	}
 	if spawnedN > 0 || parkedN > 0 {
@@ -604,63 +597,6 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			"ledger", ledgerPath, "leaves", len(reps), "spawned", spawnedN, "parked", parkedN)
 	}
 	return reps
-}
-
-// FormatSpawnFailureNotice renders the PO-addressed account of a spawn whose
-// worker never received its brief (🎯T433): the leaf by id, the worker by
-// name, and the delivery error verbatim, plus what the daemon already did
-// about it — so the PO can act without first reconstructing the failure from
-// the lifecycle journal.
-//
-// Phrasing constraint: this text is delivered to a PO with OriginAgent, so it
-// must classify relayroute.RouteParent — "blocked on", "needs owner", and
-// done-with-oracle phrases would bounce it off the PO to the overseer with
-// only a record line left behind (🎯T392.7), which is precisely the silence
-// this notice exists to end. TestT433NoticeStaysOnThePO pins that. The error
-// text is quoted verbatim regardless; a pathological error that trips the
-// classifier still reaches the overseer in full, which is surfaced, not
-// silent — accepted residual.
-func FormatSpawnFailureNotice(targetID, worker, errText string) string {
-	tid := FormatTargetID(targetID)
-	if strings.TrimSpace(errText) == "" {
-		errText = "no error detail was recorded"
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "[spawn-failure 🎯T433] %s has no worker: auto-spawn of %s FAILED — %s. ",
-		tid, worker, strings.TrimSpace(errText))
-	fmt.Fprintf(&b, "No briefless seat was retained; the leaf is parked %s and the sweep will retry. ",
-		FrontierReasonSpawnFailed)
-	fmt.Fprintf(&b, "If this repeats, start a worker for %s by hand or investigate the spawn path.", tid)
-	return b.String()
-}
-
-// notifySpawnFailure surfaces one spawn failure to the owning product owner
-// through the single deliver-by-name path (🎯T433). Repeat failures with the
-// same error are surfaced once per daemon lifetime; a PO that could not be
-// reached at all falls back to the overseer via notifyFleetHealth, because
-// the one outcome this exists to prevent is the silent park.
-func (s *Server) notifySpawnFailure(po, targetID, worker, errText string) {
-	if s == nil || strings.TrimSpace(po) == "" {
-		return
-	}
-	key := targetID + "|" + worker
-	s.mu.Lock()
-	if s.spawnFailureNotified == nil {
-		s.spawnFailureNotified = map[string]string{}
-	}
-	if s.spawnFailureNotified[key] == errText {
-		s.mu.Unlock()
-		return
-	}
-	s.spawnFailureNotified[key] = errText
-	s.mu.Unlock()
-
-	msg := FormatSpawnFailureNotice(targetID, worker, errText)
-	if _, err := s.deliverByName(po, msg, OriginAgent, false); err != nil {
-		slog.Warn("spawn-failure notice undelivered to PO; escalating to overseer",
-			"component", compFrontierConsume, "po", po, "target", targetID, "err", err)
-		s.notifyFleetHealth(fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
-	}
 }
 
 // spawnFrontierWorker launches one auto-spawn worker through the same stitch

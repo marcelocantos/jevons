@@ -389,11 +389,6 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 			// engaged by a worker that never ran.
 			if s.releaseUnbriefedSeat(name, existed) {
 				life["seat_released"] = true
-				// 🎯T433: the tool error below reaches only the caller, and a
-				// caller LLM dropping it is how a mint died twice with nobody
-				// told. The seat's parent hears about the lost mint by name,
-				// with the error verbatim, on the durable send path.
-				s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
 			}
 			life["err"] = err.Error()
 			life["session_id"] = sessionDisplay(def.SessionID)
@@ -927,6 +922,21 @@ func (s *Server) notify(agentName, text string) {
 	// not running" and the content survived only because that worker happened
 	// to have committed its reasoning to a design doc.
 	handle := s.storeAgentReport(agentName, text)
+
+	// 🎯T502: a bare acknowledgement ("No response requested.") is a
+	// turn-boundary artefact, not a report — suppressing it here is a routing
+	// decision, not amnesia: it is stored above like any report, the idle
+	// signal still reaches the parent through the 🎯T207/T414 tracker, and
+	// anything with a finish shape, an ask, or a T392.7 direct-route class
+	// still escalates. See bareAckTurnReport.
+	if bareAckTurnReport(text) {
+		slog.Info("agent bare ack suppressed (not a report)",
+			"agent", agentName, "len", len(text), "report_id", handle.ReportID)
+		s.logLifecycle(compAgentLifecycle, "notify", "suppressed_bare_ack", map[string]any{
+			"agent": agentName, "report_id": handle.ReportID,
+		})
+		return
+	}
 
 	// Fit the report to the delivery bound. This used to be text[:1997]+"...",
 	// which lost the tail behind a marker indistinguishable from the author's

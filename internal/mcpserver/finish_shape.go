@@ -3,7 +3,12 @@
 
 package mcpserver
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/marcelocantos/jevons/internal/noopwedge"
+	"github.com/marcelocantos/jevons/internal/relayroute"
+)
 
 // 🎯T445: a finish is recognised by its own shape, not by the absence of a
 // recognised ask.
@@ -110,6 +115,37 @@ func bareClaimClause(clause string) bool {
 		}
 	}
 	return true
+}
+
+// bareAckTurnReport reports whether a turn's terminal text is a content-free
+// acknowledgement that should stay routine rather than reach the overseer
+// (🎯T502).
+//
+// Observed live twice on 2026-08-18: jv-t445-finish-guard and jv-t399-web-green
+// each ended a turn with the 22-byte "No response requested." and the notify
+// seam delivered it to the overseer as owner-decision traffic — the T392.7
+// content router only guards the fleet-send path, so nothing between the event
+// sink and the overseer ever read the text. The ack is a turn-boundary
+// artefact (🎯T402: the model's answer to a message that reads as
+// informational), not a report; escalating it spends an overseer turn on
+// nothing.
+//
+// Recognition reuses the classifiers that already exist, never a new phrase
+// list: noopwedge.IsBareAck (🎯T402's exact-match, length-bounded vocabulary —
+// an ack with a payload after it is a report, not an ack), hasFinishShape
+// (🎯T445 — a positive completion claim must go on to the overseer and the
+// reap), and relayroute.Classify (🎯T392.7 — a direct-route class such as
+// needs-owner or blocked-on keeps escalating). Only a text every one of those
+// declines is suppressed.
+func bareAckTurnReport(text string) bool {
+	if !noopwedge.IsBareAck(text) {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if hasFinishShape(lower) {
+		return false
+	}
+	return relayroute.Classify(text) != relayroute.RouteOverseer
 }
 
 func allDigits(s string) bool {
