@@ -190,6 +190,97 @@ func TestT459WarmPoolBoundIsStatedNotEmergent(t *testing.T) {
 	}
 }
 
+// Live 2026-08-18 daily-driver shape (🎯T514): registry holds jevons-po
+// plus the full Claude session UUID; the pane window is SessionWindowName
+// of that UUID; AgentName and the list-panes session-id field are empty.
+func t514LivePO() (Pane, map[string]bool) {
+	sid := "377bf9c3-6483-4f01-a642-fe5a3030248e"
+	p := Pane{Window: "claudia-377bf9c3", ID: "%2"}.WithFlight(FlightIdle)
+	names := map[string]bool{
+		"jevons-po": true,
+		sid:         true,
+	}
+	return p, names
+}
+
+func TestT514LiveClaudeSessionPaneIsNotAnOrphan(t *testing.T) {
+	p, names := t514LivePO()
+	r := Plan([]Pane{
+		p,
+		Pane{Window: "orphan-idle", ID: "%idle"}.WithFlight(FlightIdle),
+		Pane{Window: "claudia-deadbeef", ID: "%dead"}.WithFlight(FlightIdle),
+	}, names, DefaultWarmPoolMax)
+	got := reapIDs(r)
+	if got["%2"] {
+		t.Fatal("live Claude PO pane claudia-377bf9c3 was reaped — T514 identity miss")
+	}
+	if !got["%idle"] {
+		t.Fatal("unrelated idle orphan was kept")
+	}
+	if !got["%dead"] {
+		t.Fatal("leftover claudia-<hex> with no matching registry session was kept")
+	}
+	if r.Registered != 1 {
+		t.Fatalf("registered=%d, want 1 (the live PO)", r.Registered)
+	}
+}
+
+func TestT514ExactNameAndSessionIDStillMatch(t *testing.T) {
+	names := map[string]bool{"jevons-po": true, "377bf9c3-6483-4f01-a642-fe5a3030248e": true}
+	byName := Pane{Window: "jevons-po", ID: "%n", AgentName: "jevons-po"}.WithFlight(FlightIdle)
+	bySID := Pane{Window: "other", ID: "%s", SessionID: "377bf9c3-6483-4f01-a642-fe5a3030248e"}.WithFlight(FlightIdle)
+	r := Plan([]Pane{byName, bySID}, names, DefaultWarmPoolMax)
+	if n := len(r.Reap()); n != 0 {
+		t.Fatalf("pre-T514 exact matches were reaped: %+v", r.Reap())
+	}
+}
+
+func TestT514WarmPoolPrefixIsNotASessionWindow(t *testing.T) {
+	// claudia-pool-* must stay on the pool path even if a session id
+	// happens to start with "pool-".
+	names := map[string]bool{"pool-00000000-dead-beef-cafe-000000000000": true}
+	p := Pane{Window: "claudia-pool-0", ID: "%p0"}.WithFlight(FlightIdle)
+	r := Plan([]Pane{p}, names, 2)
+	if r.PoolKept != 1 || r.Registered != 0 {
+		t.Fatalf("pool pane classified registered=%d poolKept=%d, want 0/1", r.Registered, r.PoolKept)
+	}
+}
+
+func TestT514SessionWindowNameMatchesClaudia(t *testing.T) {
+	if got := SessionWindowName("377bf9c3-6483-4f01-a642-fe5a3030248e"); got != "claudia-377bf9c3" {
+		t.Fatalf("SessionWindowName = %q, want claudia-377bf9c3", got)
+	}
+	if got := SessionWindowName("short"); got != "claudia-short" {
+		t.Fatalf("SessionWindowName(short) = %q", got)
+	}
+	if got := SessionWindowName(""); got != "" {
+		t.Fatalf("SessionWindowName(empty) = %q", got)
+	}
+}
+
+// Mutant: exact Name()/SessionID only — the pre-T514 classifier. It
+// must reap the live PO so this test is detecting the identity hole.
+func TestT514MutationExactMatchOnlyKillsLivePO(t *testing.T) {
+	p, names := t514LivePO()
+	if exactMatchRegistered(p, names) {
+		t.Fatal("exact-match mutant already keeps the live PO — this test is not detecting the hole")
+	}
+	if !registered(p, names) {
+		t.Fatal("shipped registered() does not keep the live PO")
+	}
+}
+
+func exactMatchRegistered(p Pane, names map[string]bool) bool {
+	if names == nil {
+		return false
+	}
+	if names[p.Name()] {
+		return true
+	}
+	id := strings.TrimSpace(p.SessionID)
+	return id != "" && names[id]
+}
+
 func TestT459ParseListPanes(t *testing.T) {
 	raw := "claudia-anchor\tjv-a\t%3\t1234\tesc to interrupt\tjv-a\tsess-1\n" +
 		"claudia-anchor\torphan\t%4\t5678\t\t\t\n"

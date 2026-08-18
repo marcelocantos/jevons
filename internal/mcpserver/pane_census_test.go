@@ -92,6 +92,29 @@ func TestT459SweepReapsUnregisteredIdleOnly(t *testing.T) {
 	}
 }
 
+func TestT514SweepKeepsLiveClaudeSessionPane(t *testing.T) {
+	// Production call site (🎯T419): the 2026-08-18 daily-driver pane
+	// that SweepOrphanPanes reaped every ~10s.
+	sid := "377bf9c3-6483-4f01-a642-fe5a3030248e"
+	panes := []panecensus.Pane{
+		panecensus.Pane{Window: "claudia-377bf9c3", ID: "%2"}.WithFlight(panecensus.FlightIdle),
+		panecensus.Pane{Window: "orphan-idle", ID: "%idle"}.WithFlight(panecensus.FlightIdle),
+		panecensus.Pane{Window: "claudia-deadbeef", ID: "%dead"}.WithFlight(panecensus.FlightIdle),
+	}
+	s, killed := t459Server(t, []claudia.AgentDef{{Name: "jevons-po", SessionID: sid}}, panes)
+	n := s.SweepOrphanPanes()
+	got := map[string]bool{}
+	for _, id := range *killed {
+		got[id] = true
+	}
+	if got["%2"] {
+		t.Fatalf("SweepOrphanPanes reaped the live Claude PO pane; killed=%v", *killed)
+	}
+	if !got["%idle"] || !got["%dead"] {
+		t.Fatalf("expected leftover orphans reaped, killed=%v n=%d", *killed, n)
+	}
+}
+
 func TestT459AgentListNamesHostCost(t *testing.T) {
 	s, _ := t459Server(t, []claudia.AgentDef{{Name: "jv-live", SessionID: "s1"}}, nil)
 	res, err := s.handleAgentList(context.Background(), mcp.CallToolRequest{})

@@ -54,7 +54,9 @@ const (
 type Pane struct {
 	// Session is the tmux session name (typically claudia-anchor).
 	Session string
-	// Window is the tmux window name (agent name or claudia-pool-N).
+	// Window is the tmux window name. Claude Session windows are
+	// claudia-<first-8-of-session-id> (tmuxagent.SessionWindowName),
+	// not the registry agent name. Warm-pool windows are claudia-pool-*.
 	Window string
 	// ID is the tmux pane id ("%12").
 	ID string
@@ -205,6 +207,44 @@ func (p Pane) flight() Flight {
 	return p.Flight
 }
 
+// sessionWindowPrefix / sessionWindowIDLen match claudia
+// tmuxagent.SessionWindowName. That is the live identity of a Claude
+// Session pane: Start names the window claudia-<first-8>, and
+// WindowsForSession treats that name as belonging to the session even
+// when @claudia-session-id is not visible.
+const (
+	sessionWindowPrefix = "claudia-"
+	sessionWindowIDLen  = 8
+)
+
+// SessionWindowName is the tmux window name claudia Start uses for a
+// session. Duplicated from claudia/internal/tmuxagent so this package
+// stays a pure classifier (🎯T514).
+func SessionWindowName(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	if len(sessionID) > sessionWindowIDLen {
+		sessionID = sessionID[:sessionWindowIDLen]
+	}
+	return sessionWindowPrefix + sessionID
+}
+
+func looksLikeSessionID(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) <= sessionWindowIDLen {
+		return false
+	}
+	for i := 0; i < sessionWindowIDLen; i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 func registered(p Pane, names map[string]bool) bool {
 	if names == nil {
 		return false
@@ -215,11 +255,31 @@ func registered(p Pane, names map[string]bool) bool {
 	if id := strings.TrimSpace(p.SessionID); id != "" && names[id] {
 		return true
 	}
+	// list-panes #{@claudia-session-id} is a pane user option; claudia
+	// writes the id with set-option -w. The window name is then the
+	// only identity on the pane, and it is SessionWindowName(sid).
+	if p.IsPool() {
+		return false
+	}
+	win := strings.TrimSpace(p.Window)
+	if win == "" {
+		win = p.Name()
+	}
+	if !strings.HasPrefix(win, sessionWindowPrefix) {
+		return false
+	}
+	for key := range names {
+		if looksLikeSessionID(key) && SessionWindowName(key) == win {
+			return true
+		}
+	}
 	return false
 }
 
-// Plan classifies every pane. names is the live registry: agent names and,
-// optionally, session ids. A name that is not in names is unregistered.
+// Plan classifies every pane. names is the live registry: agent names and
+// session ids. A Claude Session window named claudia-<first-8-of-sid>
+// is registered when that sid is in names (🎯T514). A name that is not
+// in names and does not match a session window is unregistered.
 //
 // Warm-pool panes are counted separately and only the excess over
 // DefaultWarmPoolMax (or opts.WarmPoolMax) are reaped, idle ones first.
