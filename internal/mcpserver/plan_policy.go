@@ -64,6 +64,27 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	return acts
 }
 
+func (s *Server) planAgentIndex() (overseers map[string]bool, byName map[string]planusage.AgentRef) {
+	var agents []planusage.AgentRef
+	if s != nil && s.registry != nil {
+		for _, d := range s.registry.List() {
+			agents = append(agents, planusage.AgentRef{
+				Name:     d.Name,
+				Provider: string(d.Provider),
+				Purpose:  d.Purpose,
+				Parent:   d.Parent,
+			})
+		}
+	}
+	return planusage.OverseerNames(agents), func() map[string]planusage.AgentRef {
+		m := map[string]planusage.AgentRef{}
+		for _, a := range agents {
+			m[a.Name] = a
+		}
+		return m
+	}()
+}
+
 // dropExemptHandovers clears a pending claude→codex (or any) seed aimed
 // at a control-plane seat so T418 does not keep retrying a migrate the
 // policy is no longer allowed to start (🎯T517).

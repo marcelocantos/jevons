@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
 // handoverLedger is the extra migrator surface the 🎯T418 sweep needs.
@@ -37,7 +38,16 @@ func (s *Server) SweepHandovers() {
 	}
 	slog.Info("🎯T418 handover sweep", "pending", len(pending))
 	now := time.Now()
+	overseers, byName := s.planAgentIndex()
 	for _, p := range pending {
+		if ref, ok := byName[p.Agent]; ok && planusage.PlanMigrateExempt(ref, overseers) {
+			if err := led.ClearHandover(p.Agent); err != nil {
+				slog.Error("🎯T517 control-plane handover clear failed", "agent", p.Agent, "err", err)
+			} else {
+				slog.Info("🎯T517 handover reaped", "agent", p.Agent, "reason", "control-plane seat is not force-migrated")
+			}
+			continue
+		}
 		inReg := s.agentIsRegistered(p.Agent)
 		_, alive := s.liveSender(p.Agent)
 		act, reason := handover.ClassifyHandover(p, now, inReg, alive)

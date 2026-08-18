@@ -57,6 +57,38 @@ func TestT418SweepRetriesAlivePending(t *testing.T) {
 	}
 }
 
+func TestT517SweepHandoversDropsPOPending(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(dir + "/agents.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []claudia.AgentDef{
+		{Name: "jevons", SessionID: "s-root", Purpose: claudia.PurposeOverseer},
+		{Name: "jevons-po", SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons"},
+		{Name: "jv-w", SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po"},
+	} {
+		if err := reg.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	led := &sweepLedger{pending: []handover.Pending{
+		{Agent: "jevons-po", TranscriptPath: "/po.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
+		{Agent: "jv-w", TranscriptPath: "/w.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
+	}}
+	s := &Server{registry: reg, migrator: led}
+	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+		return &recordingSender{}, true, nil
+	})
+	s.SweepHandovers()
+	if len(led.cleared) != 1 || led.cleared[0] != "jevons-po" {
+		t.Fatalf("cleared = %v; want jevons-po only", led.cleared)
+	}
+	if len(led.seeded) != 1 || led.seeded[0] != "jv-w" {
+		t.Fatalf("seeded = %v; want worker retry", led.seeded)
+	}
+}
+
 func TestT418SweepReapsGoneAgent(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(dir + "/agents.json")
