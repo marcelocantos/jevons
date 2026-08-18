@@ -81,6 +81,16 @@ func dashIfEmpty(s string) string {
 	return s
 }
 
+// StatusDeadUnmaterialized is the fleet-wide status label for a seat whose
+// registry row claims a conversation that does not exist on disk (🎯T412):
+// the durable Materialized flag points at a session id with no transcript,
+// and no confirmed turn backs the claim. Such a seat is dead, not running —
+// agent_list, the RHS tree, and the sentinel snapshot all report it with
+// this label rather than nudging it forever. Defined here because both the
+// MCP layer and the web server derive it, and this package owns the
+// underlying predicate (SessionLost).
+const StatusDeadUnmaterialized = "dead_unmaterialized"
+
 // SessionLost reports whether def demands a resume that cannot succeed:
 // the row is Materialized (so Launch will pass RequireResume) but the
 // Claude transcript backing its session id is not on disk.

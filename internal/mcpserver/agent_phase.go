@@ -5,6 +5,8 @@ package mcpserver
 
 import (
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // 🎯T444 — A PHASE NOBODY LOOKED AT IS NOT "NEVER BRIEFED".
@@ -59,6 +61,19 @@ import (
 // a claim about what the agent has received, so it invites a look rather than
 // a re-brief.
 const AgentStatusPhaseUnknown = "phase_unknown"
+
+// AgentStatusDeadUnmaterialized is the row for a live seat whose registry
+// claims a conversation that is not on disk (🎯T412): Materialized=true — the
+// durable flag that alone makes T305 answer "running" — over a session id
+// with no transcript, and no confirmed turn in this daemon to back it up.
+//
+// On 2026-08-10 six such seats read "running" with phase=idle while none of
+// their session ids had a JSONL anywhere: the 🎯T409 recovery had minted
+// replacement sessions that never materialized, the impatience ladder
+// reported actions=7 errors=0 while nudging the void, and the sentinel
+// prescribed the same repair on every tick forever. "Running" must mean a
+// live conversation exists; this label is the honest answer when it does not.
+const AgentStatusDeadUnmaterialized = fleet.StatusDeadUnmaterialized
 
 // SessionEvidence is what an agent's durable session records say about whether
 // its CURRENT session has ever hosted a conversation. Three answers, because
@@ -128,17 +143,29 @@ func ReadSessionEvidence(provider claudia.Provider, sessionID, workDir string) S
 // things it actually knew and asserted anyway.
 func ClassifyAgentPhase(alive, turnBegan, materialized bool, ev SessionEvidence) string {
 	status := ClassifyAgentListStatus(alive, turnBegan, materialized)
-	if status != AgentStatusNeverBriefed {
-		return status
+	switch status {
+	case AgentStatusNeverBriefed:
+		switch ev {
+		case SessionEvidencePresent:
+			return AgentStatusRunning
+		case SessionEvidenceAbsent:
+			return AgentStatusNeverBriefed
+		default:
+			return AgentStatusPhaseUnknown
+		}
+	case AgentStatusRunning:
+		// 🎯T412: "running" resting on the durable Materialized flag alone,
+		// over a session whose records were located and are absent, is a dead
+		// seat — the flag outlived (or preceded) the conversation it claims.
+		// A confirmed in-process turn (turnBegan) keeps running: a session
+		// minted this instant legitimately has no JSONL yet. Evidence
+		// Unknown also keeps running — a failure to observe never
+		// manufactures a death (🎯T422 clause 5).
+		if !turnBegan && ev == SessionEvidenceAbsent {
+			return AgentStatusDeadUnmaterialized
+		}
 	}
-	switch ev {
-	case SessionEvidencePresent:
-		return AgentStatusRunning
-	case SessionEvidenceAbsent:
-		return AgentStatusNeverBriefed
-	default:
-		return AgentStatusPhaseUnknown
-	}
+	return status
 }
 
 // agentPhase derives the phase column for one registry row.

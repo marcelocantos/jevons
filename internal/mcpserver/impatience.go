@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/converge"
 	"github.com/marcelocantos/jevons/internal/converge/attenuate"
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // ImpatienceEngine is the daemon-side 🎯T317 ladder: a 🎯T316 reconcile set,
@@ -99,6 +100,21 @@ func (r *rePressureSink) RePressure(agent, mission string) error {
 	agent = strings.TrimSpace(agent)
 	if agent == "" {
 		return fmt.Errorf("repressure: empty agent")
+	}
+
+	// 🎯T412: a seat whose registry row claims a conversation that is not on
+	// disk is dead, and a nudge typed into it lands in a void. Refusing here
+	// makes the tick report the seat as a failure (actions counted with
+	// errors) instead of actions=N errors=0 forever — the 2026-08-10 shape,
+	// where seven nudges a tick went to six ghosts and the ladder read green.
+	// Fresh and rotated seats (Materialized=false) are not refused: a full
+	// re-brief is exactly their cure, and the T416 confirm machinery judges
+	// whether it landed.
+	if s.registry != nil && !s.agentHasTurnBegan(agent) {
+		if def := s.registry.Def(agent); def != nil && fleet.SessionLost(def) {
+			return fmt.Errorf("repressure refused: agent %q is %s — its session %s has no conversation on disk (🎯T412); recover or reap it rather than nudging",
+				agent, AgentStatusDeadUnmaterialized, def.SessionID)
+		}
 	}
 
 	briefPresent := false

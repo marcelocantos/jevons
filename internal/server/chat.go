@@ -889,6 +889,13 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		status := "stopped"
 		if proc := reg.Get(d.Name); proc != nil && proc.Alive() {
 			status = "running"
+			// 🎯T412: a live process whose registry row claims a conversation
+			// that is not on disk is a dead seat, not a running agent. The
+			// mint window is safe: an ACP working snapshot in the progress
+			// hub outranks this baseline (SetStatus never clobbers it).
+			if fleet.SessionLost(&d) {
+				status = fleet.StatusDeadUnmaterialized
+			}
 		}
 		purpose := d.Purpose
 		if purpose == "" {

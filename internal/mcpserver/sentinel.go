@@ -516,7 +516,11 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			}
 			proc := s.registry.Get(d.Name)
 			alive := proc != nil && proc.Alive()
-			if alive {
+			// 🎯T412: a live process over a session with no conversation on
+			// disk is a dead seat, not a running agent — excluded from the
+			// running count the sentinel plans against.
+			deadSeat := alive && s.agentPhase(d, alive) == AgentStatusDeadUnmaterialized
+			if alive && !deadSeat {
 				running++
 			} else {
 				stopped++

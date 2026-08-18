@@ -157,7 +157,9 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 			}
 			proc := s.registry.Get(d.Name)
 			alive := proc != nil && proc.Alive()
-			if alive {
+			// 🎯T412: dead-unmaterialized seats are excluded from running.
+			deadSeat := alive && s.agentPhase(d, alive) == AgentStatusDeadUnmaterialized
+			if alive && !deadSeat {
 				running++
 			} else {
 				stopped++

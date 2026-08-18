@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // AgentProgress is a glanceable per-agent activity snapshot for the RHS
@@ -263,6 +265,10 @@ func statusBaseline(status string) (phase, summary string) {
 		return "idle", "idle"
 	case "stopped":
 		return "idle", "stopped"
+	case fleet.StatusDeadUnmaterialized:
+		// 🎯T412: the seat's process is up but its claimed conversation does
+		// not exist on disk — glanceable chrome says dead, never idle.
+		return "idle", "dead (no conversation)"
 	default:
 		return "", ""
 	}
