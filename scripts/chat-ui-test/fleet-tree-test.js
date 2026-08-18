@@ -320,6 +320,9 @@ function startStaticServer(agentsPayload) {
     fs.mkdirSync(t508Dir, { recursive: true });
     // Capture the cockpit background too. A locator-only crop is transparent,
     // so dark-theme marks become white-on-white in ordinary image viewers.
+    // Pin light only for the artifact; geometry above was measured under the
+    // page's natural theme.
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
     await page.screenshot({ path: path.join(t508Dir, 't508-bedrock-selector.png') });
 
     // 🎯T302: the restored initial only survives if it does not read as a
