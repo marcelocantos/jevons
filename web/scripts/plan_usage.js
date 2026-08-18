@@ -40,6 +40,17 @@
   const STATUS_AVAILABLE = 'available';
   const STATUS_UNAVAILABLE = 'unavailable';
 
+  // Steady-state poll is slow: a plan window is hours long. While the
+  // header still says "waiting for the first reading", poll every 5s
+  // so a just-booted daemon is not stuck on that line for a minute.
+  const PLAN_POLL_MS = 60000;
+  const PLAN_POLL_PENDING_MS = 5000;
+
+  function planPollMs(view) {
+    if (view && view.pending) return PLAN_POLL_PENDING_MS;
+    return PLAN_POLL_MS;
+  }
+
   // Remaining fractions at which a chip changes colour when there is no
   // time signal to pace against. A subscription window is hours long, so
   // these are "start thinking" and "stop starting new work", not alarms.
@@ -838,6 +849,9 @@
 
   return {
     formatPlanUsage: formatPlanUsage,
+    planPollMs: planPollMs,
+    PLAN_POLL_MS: PLAN_POLL_MS,
+    PLAN_POLL_PENDING_MS: PLAN_POLL_PENDING_MS,
     formatBackend: formatBackend,
     formatWindow: formatWindow,
     paintPlanUsage: paintPlanUsage,

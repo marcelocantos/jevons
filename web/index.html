@@ -6966,14 +6966,16 @@ refreshCost();
 // even when no agent of that provider is running; Grok is a real weekly
 // bar when the billing surface answers; idle Bedrock stays off the bar.
 //
-// Polled far more slowly than the cost ticker: a plan window is hours long,
-// and the daemon only re-reads the backends every few minutes anyway, so a
-// faster poll would buy nothing but requests.
+// Polled far more slowly than the cost ticker once a reading exists: a
+// plan window is hours long, and the daemon only re-reads the backends
+// every few minutes. While "waiting for the first reading" is showing,
+// poll every 5s so a just-booted daemon is not stuck on that line.
 const planEl = document.getElementById('plan-ticker');
-const PLAN_POLL_MS = 60000;
+let lastPlanView = null;
 let planPainted = false;
 function paintPlanUsageView(view) {
   if (!planEl || typeof PlanUsage === 'undefined') return;
+  lastPlanView = view;
   if (typeof PlanUsage.paintPlanUsage === 'function') {
     PlanUsage.paintPlanUsage(planEl, view);
   } else {
@@ -7004,11 +7006,17 @@ function refreshPlanUsage() {
   }
   loadUsage();
 }
-setInterval(function () {
-  if (typeof document !== 'undefined' && document.hidden) return;
-  refreshPlanUsage();
-}, PLAN_POLL_MS);
+function schedulePlanUsage() {
+  const ms = (typeof PlanUsage !== 'undefined' && typeof PlanUsage.planPollMs === 'function')
+    ? PlanUsage.planPollMs(lastPlanView)
+    : 60000;
+  setTimeout(function () {
+    if (typeof document === 'undefined' || !document.hidden) refreshPlanUsage();
+    schedulePlanUsage();
+  }, ms);
+}
 refreshPlanUsage();
+schedulePlanUsage();
 
 // ── Latched stick-to-bottom (Track | Free) ────────────────────────────
 // Policy lives above the DOM. Mode is never re-derived from distance on
