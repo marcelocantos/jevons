@@ -26,6 +26,7 @@ type AgentInfo struct {
 	WorkDir string `json:"workdir"`
 	Parent  string `json:"parent"`
 	Status  string `json:"status"`
+	Phase   string `json:"phase,omitempty"`
 }
 
 // ListAgentsHTTP GETs /api/agents on the isolate.

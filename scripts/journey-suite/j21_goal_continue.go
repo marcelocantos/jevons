@@ -110,7 +110,12 @@ func (s *suite) goalContinueOneBackend(provider string) error {
 	}
 
 	deadline := time.Now().Add(turnTimeout + 30*time.Second)
-	var lastUsers int
+	var (
+		lastUsers  int
+		sawWorking bool
+		sawIdle    bool
+		lastPhase  string
+	)
 	for time.Now().Before(deadline) {
 		payload, err := s.agentTranscriptHTTP(name)
 		if err != nil {
@@ -122,9 +127,40 @@ func (s *suite) goalContinueOneBackend(provider string) error {
 			// Host issued the Goal continuation. Do not AgentSend.
 			return nil
 		}
+		// Codex (and any backend whose session is not a Claude JSONL)
+		// leaves /transcript empty. Phase still moves on the live
+		// event stream: working → idle → working is the second turn.
+		phase := s.agentPhase(name)
+		if phase != "" {
+			lastPhase = phase
+		}
+		switch phase {
+		case "working":
+			if sawIdle {
+				return nil
+			}
+			sawWorking = true
+		case "idle":
+			if sawWorking {
+				sawIdle = true
+			}
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("%s: first turn ended (or never started) and no host continuation (user turns=%d)", provider, lastUsers)
+	return fmt.Errorf("%s: first turn ended (or never started) and no host continuation (user turns=%d phase=%q)", provider, lastUsers, lastPhase)
+}
+
+func (s *suite) agentPhase(name string) string {
+	agents, err := s.ListAgentsHTTP()
+	if err != nil {
+		return ""
+	}
+	for _, a := range agents {
+		if a.Name == name {
+			return a.Phase
+		}
+	}
+	return ""
 }
 
 func countTranscriptRole(payload map[string]any, role string) int {
