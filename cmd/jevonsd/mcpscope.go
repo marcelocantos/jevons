@@ -8,9 +8,38 @@ import (
 	"log/slog"
 	"path/filepath"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/mcpscope"
 )
+
+// registerMCPEndpoints is the whole of what boot registers after the bind
+// (🎯T379: the URL is derived from the live listener, never the configured
+// port): the overseer's provider-scoped entry, then the Claude user-scope
+// fleet entry.
+//
+// It exists as a named step because its second half once did not run at all:
+// ensureFleetMCPUserScope was built for 🎯T464 with green tests and zero
+// callers, so for months the daily daemon never corrected user scope while
+// every mint outside the repo warned about a dead registration (🎯T503). The
+// tests attested the function, not the behaviour — the 🎯T419 failure shape
+// exactly. TestT503BootWiresRegisterMCPEndpoints now pins the call from
+// main(), and the behavioural oracles drive this function, the production
+// caller, rather than the helpers under it.
+func registerMCPEndpoints(cfg config.Config, host string, port int, provider claudia.Provider) {
+	registerMCPEndpointsAt(cfg, host, port, provider, mcpscope.ConfigPath())
+}
+
+// registerMCPEndpointsAt is registerMCPEndpoints with the Claude config path
+// as an argument, so the oracle can drive the production chain against a
+// fixture instead of the owner's real ~/.claude.json.
+func registerMCPEndpointsAt(cfg config.Config, host string, port int, provider claudia.Provider, claudeConfigPath string) {
+	if err := ensureOverseerMCPServer(cfg, host, port, provider); err != nil {
+		slog.Warn("could not register overseer MCP server — overseer may start toolless",
+			"provider", provider, "err", err)
+	}
+	ensureFleetMCPUserScope(cfg, host, port, claudeConfigPath)
+}
 
 // fleetMCPAction is what the user-scope ensure did, named so the oracle can
 // assert on the decision rather than on a log line.
@@ -49,8 +78,14 @@ const (
 // Grok, so a Grok worker under a Claude overseer keeps the mirror-image gap.
 // It did not cause the incident, and writing a TOML editor here would be a
 // bigger change than the one being fixed.
-func ensureFleetMCPUserScope(cfg config.Config, host string, port int) {
-	action, err := ensureFleetMCPUserScopeAt(cfg, host, port, mcpscope.ConfigPath())
+//
+// 🎯T503: the repair covers a STALE entry, not only an absent one —
+// mcpscope.EnsureUserScope replaces any value that differs from the live
+// served endpoint, under the same lock. That is what corrects a throwaway
+// port an unguarded writer once leaked into user scope (the observed
+// 127.0.0.1:54558 row) on the next daily boot.
+func ensureFleetMCPUserScope(cfg config.Config, host string, port int, configPath string) {
+	action, err := ensureFleetMCPUserScopeAt(cfg, host, port, configPath)
 	url := fleetMCPURL(host, port)
 	switch {
 	case err != nil:

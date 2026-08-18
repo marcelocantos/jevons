@@ -863,10 +863,9 @@ func main() {
 	// it never served, and every agent inheriting that entry waited on it
 	// forever. Deriving the URL from the live listener makes that drift
 	// unrepresentable, and also handles cfg.Port == 0 (kernel-assigned).
-	if err := ensureOverseerMCPServer(cfg, mcpHost, servedPort(ln.Addr()), jevonDef.Provider); err != nil {
-		slog.Warn("could not register overseer MCP server â overseer may start toolless",
-			"provider", jevonDef.Provider, "err", err)
-	}
+	// The same live-listener rule covers the Claude user-scope fleet
+	// registration (🎯T464/🎯T503) inside registerMCPEndpoints.
+	registerMCPEndpoints(cfg, mcpHost, servedPort(ln.Addr()), jevonDef.Provider)
 
 	if *enableTLS {
 		tlsHosts := []string{"localhost", "127.0.0.1", qr.LanIP()}
@@ -1388,12 +1387,21 @@ func ensureOverseerMCPServer(cfg config.Config, host string, port int, provider 
 // restarts (ð¯T58) instead of the old rotate-and-recap hack. Idempotent:
 // removes any prior entry (ignoring the not-found error) then re-adds the
 // current URL, so a changed port/bind is always reflected.
+// execMCPRegister runs one provider-CLI registration command. It is a seam
+// (T419): the T503 oracle drives the production ensure chain from
+// registerMCPEndpointsAt down, and stubs only this process boundary, so a
+// regressed guard in that chain shows up as a recorded exec in the test
+// instead of a write to the owner's real ~/.claude.json.
+var execMCPRegister = func(bin string, args ...string) ([]byte, error) {
+	return exec.Command(bin, args...).CombinedOutput()
+}
+
 func ensureGrokMCPServer(cfg config.Config, host string, port int) error {
 	name, url := overseerMCPServerSpec(cfg, host, port)
 	grok := grokBin()
 	args := grokMCPAddArgs(name, url)
-	_ = exec.Command(grok, "mcp", "remove", name).Run()
-	out, err := exec.Command(grok, args...).CombinedOutput()
+	_, _ = execMCPRegister(grok, "mcp", "remove", name)
+	out, err := execMCPRegister(grok, args...)
 	if err != nil {
 		return fmt.Errorf("grok mcp add %s %s: %w (%s)", name, url, err, strings.TrimSpace(string(out)))
 	}
@@ -1408,11 +1416,21 @@ func ensureGrokMCPServer(cfg config.Config, host string, port int) error {
 // Idempotent remove-then-add. Residual: live Claude overseer smoke is
 // class-3/owner-gated; hermetics cover kind routing + argv shape.
 func ensureClaudeMCPServer(cfg config.Config, host string, port int) error {
+	// Only the daily universe may write Claude USER scope. This exec path was
+	// the unguarded writer that leaked a throwaway served port into
+	// ~/.claude.json as jevonsmcp=127.0.0.1:54558 (dead the moment its daemon
+	// exited), which every Claude mint outside the repo then inherited and
+	// warned about (T503) - T379's silent dead registration, through the
+	// overseer ensure rather than the fleet one. State dir is the same honest
+	// discriminator ensureFleetMCPUserScopeAt uses.
+	if !isDailyStateDir(cfg.StateDir) {
+		return fmt.Errorf("refusing to write Claude user-scope MCP registration from non-daily state dir %s (T503/T379): a throwaway port must not outlive its daemon in ~/.claude.json; an isolate's Claude overseer starts toolless (declared residual)", cfg.StateDir)
+	}
 	name, url := overseerMCPServerSpec(cfg, host, port)
 	bin := claudeBin()
 	args := claudeMCPAddArgs(name, url)
-	_ = exec.Command(bin, "mcp", "remove", "-s", "user", name).Run()
-	out, err := exec.Command(bin, args...).CombinedOutput()
+	_, _ = execMCPRegister(bin, "mcp", "remove", "-s", "user", name)
+	out, err := execMCPRegister(bin, args...)
 	if err != nil {
 		return fmt.Errorf("claude mcp add %s %s: %w (%s)", name, url, err, strings.TrimSpace(string(out)))
 	}
