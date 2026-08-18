@@ -318,9 +318,9 @@ function startStaticServer(agentsPayload) {
     }
     const t508Dir = path.join(__dirname, 'artifacts');
     fs.mkdirSync(t508Dir, { recursive: true });
-    await page.locator('#agents .agent-node[data-agent="bedrock-worker"]').screenshot({
-      path: path.join(t508Dir, 't508-bedrock-selector.png'),
-    });
+    // Capture the cockpit background too. A locator-only crop is transparent,
+    // so dark-theme marks become white-on-white in ordinary image viewers.
+    await page.screenshot({ path: path.join(t508Dir, 't508-bedrock-selector.png') });
 
     // 🎯T302: the restored initial only survives if it does not read as a
     // digit, and the mark only reads as Claude if it carries the brand orange.
