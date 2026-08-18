@@ -15,11 +15,16 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/marcelocantos/jevons/internal/ownerqa"
 	"github.com/marcelocantos/jevons/internal/rsi"
 )
 
 // 🎯T328: post-restart resume of unfinished owner instructions.
 // 🎯T344: do not re-fire owner turns already answered with product evidence.
+// 🎯T477: an owner *question* is also closed by a topically-linked explanation
+// answer — "why did X" answered with "because Y" carries no SHA/PASS/achieve
+// marker, and before this every bounce re-fired the answered question as
+// owner-intent-resume.
 //
 // Durable source: state_dir/chatlog/<overseer>.jsonl (survives control-plane
 // bounce). On restart, when a recoverable open owner instruction is found,
@@ -175,6 +180,13 @@ func ExtractOpenOwnerIntent(turns []OwnerIntentTurn) OpenOwnerIntent {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 
+	// 🎯T477: a question is answered by explanation prose, not only by product
+	// evidence. Directives keep the stricter T344 contract — an explanation of
+	// why work is needed does not close a work order.
+	if OwnerQuestionAnsweredWithExplanation(last.Text, laterAnswers) {
+		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
+	}
+
 	src := strings.TrimSpace(last.Source)
 	if src == "" {
 		src = "owner_chat"
@@ -207,6 +219,75 @@ func OwnerIntentAnsweredWithProductEvidence(ownerText string, laterAssistant []s
 		}
 	}
 	return false
+}
+
+// OwnerQuestionAnsweredWithExplanation reports whether the owner turn is a
+// question that a later assistant excerpt answers with explanation prose on
+// the same topic (🎯T477). Questions only: ownerqa.IsQuestion is the gate, so
+// directives keep the T344 product-evidence contract. The answer must be
+// answer-shaped (explanatory substance, not a progress ack) and topically
+// linked, so "looking into it" and an unrelated explanation both leave the
+// question open — the cost of a false close is a lost resume, which is the
+// T328 regression class.
+func OwnerQuestionAnsweredWithExplanation(ownerText string, laterAssistant []string) bool {
+	ownerText = strings.TrimSpace(ownerText)
+	if ownerText == "" || !ownerqa.IsQuestion(ownerText) {
+		return false
+	}
+	for _, a := range laterAssistant {
+		a = strings.TrimSpace(a)
+		if a == "" || !openIntentAnswerShaped(a) {
+			continue
+		}
+		if openIntentTopicalLink(ownerText, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// openIntentExplanationConnectives mark prose as explaining a cause rather
+// than acknowledging work. Deliberately concrete: generic verbs would let
+// status chatter close a question.
+var openIntentExplanationConnectives = []string{
+	"because", "due to", "caused by", "the cause", "root cause", "the reason",
+	"reason is", "turns out", "loses to", "wins over", "takes precedence",
+	"overrides", "overridden", "shadowed by", "falls back", "comes from",
+	"leftover",
+}
+
+// openIntentProgressMarkers veto answer shape: a turn announcing that the
+// answer is being sought is not the answer.
+var openIntentProgressMarkers = []string{
+	"looking into", "investigating", "digging into", "working on",
+	"will report", "stand by", "one moment", "checking ",
+}
+
+// openIntentFileTokenRe matches a concrete file/knob citation — the
+// "citing knobs/files" half of an explanation answer.
+var openIntentFileTokenRe = regexp.MustCompile(`(?i)[\w./~-]+\.(go|yaml|yml|json|md|js|ts|html|css|sh|sql|txt|plist)\b`)
+
+// openIntentAnswerShaped reports whether assistant prose has the substance of
+// an explanation answer (🎯T477): an explanatory connective, or a concrete
+// file/knob citation without progress-marker framing. Short turns never
+// qualify — an answer that fits in an ack is an ack.
+func openIntentAnswerShaped(text string) bool {
+	t := strings.TrimSpace(text)
+	if utf8.RuneCountInString(t) < 40 {
+		return false
+	}
+	low := strings.ToLower(t)
+	for _, m := range openIntentProgressMarkers {
+		if strings.Contains(low, m) {
+			return false
+		}
+	}
+	for _, c := range openIntentExplanationConnectives {
+		if strings.Contains(low, c) {
+			return true
+		}
+	}
+	return openIntentFileTokenRe.MatchString(t)
 }
 
 // hasOpenIntentProductEvidence detects SHA / hermetic PASS / achieved-target
@@ -493,8 +574,12 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 				assts = kept
 			}
 		case "assistant":
-			// Only keep evidence-shaped excerpts (T344 disposition surface).
-			if !hasOpenIntentProductEvidence(text) && !openIntentEvidenceCandidate(text) {
+			// Keep evidence-shaped excerpts (T344 disposition surface) and
+			// answer-shaped explanation prose (🎯T477) — an explanation answer
+			// carries no SHA/PASS markers, and dropping it here re-fired the
+			// answered question no matter what extraction decided.
+			if !hasOpenIntentProductEvidence(text) && !openIntentEvidenceCandidate(text) &&
+				!openIntentAnswerShaped(text) {
 				continue
 			}
 			assts = append(assts, asst{
