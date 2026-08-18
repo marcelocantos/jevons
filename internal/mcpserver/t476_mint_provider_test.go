@@ -31,7 +31,7 @@ func TestStitchOmitProviderFollowsConfigNotCompiledSeed(t *testing.T) {
 
 	def, existed, note, err := s.stitchAgentStart(
 		"jv-t476-seed", t.TempDir(), "", "", "",
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func TestStitchOmitProviderFollowsConfigNotLeftoverFile(t *testing.T) {
 
 	def, _, note, err := s.stitchAgentStart(
 		"jv-t476-file", t.TempDir(), "", "", "",
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestStitchOmitProviderFollowsConfigNotLeftoverFile(t *testing.T) {
 	// Explicit argument still wins and is cited.
 	exp, _, note, err := s.stitchAgentStart(
 		"jv-t476-explicit", t.TempDir(), "", "claude", "",
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err != nil {
 		t.Fatal(err)

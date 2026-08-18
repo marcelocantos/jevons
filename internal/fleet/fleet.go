@@ -171,9 +171,10 @@ func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia
 	return cli.SelectAgentProvider(string(fromThread), stored, defaultProv)
 }
 
-// Codex Session defaults to read-only. Work agents must be able to
-// edit the tree (claudia 🎯T37); asides and other providers stay empty.
-func codexWorkSandbox(prov claudia.Provider, purpose string) string {
+// CodexWorkSandbox is the Session sandbox a mint should request.
+// Codex work agents need workspace-write (claudia 🎯T37); asides and
+// other providers stay empty so claudia's read-only default holds.
+func CodexWorkSandbox(prov claudia.Provider, purpose string) string {
 	if prov != claudia.ProviderCodex {
 		return ""
 	}
@@ -181,6 +182,27 @@ func codexWorkSandbox(prov claudia.Provider, purpose string) string {
 		return ""
 	}
 	return "workspace-write"
+}
+
+// WorkSessionGoal is the host-owned Session objective for a work mint
+// (claudia 🎯T39 / jevons 🎯T510). Asides and the overseer stay empty
+// so one Send stays one turn. Prompt wins; otherwise a bound target
+// or a standing work instruction.
+func WorkSessionGoal(purpose, targetID, prompt string, autoStart bool) string {
+	switch strings.TrimSpace(purpose) {
+	case claudia.PurposeAside, claudia.PurposeOverseer:
+		return ""
+	}
+	if !autoStart && strings.TrimSpace(targetID) == "" && strings.TrimSpace(prompt) == "" {
+		return ""
+	}
+	if p := strings.TrimSpace(prompt); p != "" {
+		return p
+	}
+	if id := strings.TrimSpace(targetID); id != "" {
+		return "Achieve 🎯" + id
+	}
+	return "Continue the assigned work until it is finished."
 }
 
 // ensureRegistered mints or backfills the registry row for a thread without
@@ -216,7 +238,8 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 			AutoStart:   true,
 			Parent:      t.Parent,
 			Purpose:     purpose,
-			SandboxMode: codexWorkSandbox(prov, purpose),
+			SandboxMode: CodexWorkSandbox(prov, purpose),
+			Goal:        WorkSessionGoal(purpose, "", t.Description, true),
 		}); err != nil {
 			return fmt.Errorf("register agent %q: %w", t.ID, err)
 		}

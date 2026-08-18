@@ -39,7 +39,7 @@ func TestStitchAgentStartBindsGrokDefaultModel(t *testing.T) {
 	// (🎯T476); keep the pin so this oracle stays about T324 model bind.
 	def, existed, _, err := s.stitchAgentStart(
 		"cold-grok", t.TempDir(), "", string(claudia.ProviderGrok), "",
-		"jevons-po", claudia.PurposeWork, "T324",
+		"jevons-po", claudia.PurposeWork, "T324", "",
 	)
 	if err != nil {
 		t.Fatalf("stitchAgentStart: %v", err)
@@ -56,7 +56,7 @@ func TestStitchAgentStartBindsGrokDefaultModel(t *testing.T) {
 	// Resume with empty pin keeps the bound default (not re-emptied).
 	again, existed, _, err := s.stitchAgentStart(
 		"cold-grok", def.WorkDir, "", "", "",
-		"jevons-po", claudia.PurposeWork, "T324",
+		"jevons-po", claudia.PurposeWork, "T324", "",
 	)
 	if err != nil || !existed {
 		t.Fatalf("resume: existed=%v err=%v", existed, err)
@@ -67,7 +67,7 @@ func TestStitchAgentStartBindsGrokDefaultModel(t *testing.T) {
 	// Explicit pin wins over default.
 	pinned, _, _, err := s.stitchAgentStart(
 		"pinned-grok", t.TempDir(), "grok-4.5-build", string(claudia.ProviderGrok), "",
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 
 	def, existed, _, err := s.stitchAgentStart(
 		name, workdir, "", string(claudia.ProviderClaude), "",
-		"jevons-po", claudia.PurposeWork, "T215",
+		"jevons-po", claudia.PurposeWork, "T215", "",
 	)
 	if err != nil {
 		t.Fatalf("stitchAgentStart mint: %v", err)
@@ -155,7 +155,7 @@ func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 	// Resume path: empty providerArg + daemon default Grok must keep claude.
 	resumed, existed, _, err := s.stitchAgentStart(
 		name, workdir, "", "", "", // no provider override
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err != nil {
 		t.Fatalf("stitchAgentStart resume: %v", err)
@@ -213,7 +213,7 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 
 	def, _, note, err := s.stitchAgentStart(
 		"jv-portfolio-worker", t.TempDir(), "", "", "",
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +233,7 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	// so they agree and no loser is named).
 	mech, _, note, err := s.stitchAgentStart(
 		"jv-mech-worker", t.TempDir(), "", "", "mechanical",
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +258,7 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	}
 	spread, _, note, err := s.stitchAgentStart(
 		"jv-spread-worker", t.TempDir(), "", "", "code_implement",
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err != nil {
 		t.Fatal(err)

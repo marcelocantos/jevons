@@ -337,7 +337,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		}
 	}
 
-	def, existed, routeNote, err := s.stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID)
+	def, existed, routeNote, err := s.stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID, prompt)
 	if err != nil {
 		life["err"] = err.Error()
 		life["existed"] = existed
@@ -451,7 +451,7 @@ func formatAgentStartResult(name, workdir, parent, purpose, targetID, provider, 
 // until a real Launch succeeds in claudia.
 //
 // routeNote always cites which knob selected the provider.
-func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID string) (*claudia.AgentDef, bool, string, error) {
+func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID, prompt string) (*claudia.AgentDef, bool, string, error) {
 	if s == nil || s.registry == nil {
 		return nil, false, "", fmt.Errorf("no agent registry")
 	}
@@ -505,6 +505,14 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if targetID != "" {
 		def.TargetID = targetID
 	}
+	// 🎯T510: host Goal is set on mint only. A remint / provider switch
+	// keeps the stored objective so claudia's Session loop continues.
+	if !existed {
+		def.Goal = fleet.WorkSessionGoal(def.Purpose, def.TargetID, prompt, def.AutoStart)
+		if def.SandboxMode == "" {
+			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose)
+		}
+	}
 	if err := s.registry.Register(*def); err != nil {
 		return nil, existed, "", err
 	}
@@ -515,13 +523,25 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 }
 
 // launchConfigFromDef is the Config handoff registry.Launch would pass into
-// claudia Start (Provider, SessionID, RequireResume←Materialized). Hermetic
-// tests assert this stitch without spawning a process (🎯T215).
+// claudia Start (Provider, SessionID, RequireResume←Materialized, Goal).
+// Hermetic tests assert this stitch without spawning a process (🎯T215 / 🎯T510).
 func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sessionID string, requireResume bool) {
+	cfg := startConfigFromDef(def)
+	return cfg.Provider, cfg.SessionID, cfg.RequireResume
+}
+
+func startConfigFromDef(def *claudia.AgentDef) claudia.Config {
 	if def == nil {
-		return "", "", false
+		return claudia.Config{}
 	}
-	return def.Provider, def.SessionID, def.Materialized
+	return claudia.Config{
+		Provider:      def.Provider,
+		SessionID:     def.SessionID,
+		RequireResume: def.Materialized,
+		Model:         def.Model,
+		Goal:          def.Goal,
+		SandboxMode:   def.SandboxMode,
+	}
 }
 
 // normalizeAgentTargetID strips 🎯 and whitespace for registry TargetID (🎯T198).

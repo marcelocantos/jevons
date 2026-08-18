@@ -93,6 +93,7 @@ every run today; live is the default truth.
 9. **J9-thread-spawn-direct** — spawn → direct short turn → remove
 10. **J10-worker-shell-tool** — worker runs `run_terminal_command` (T97 permission regression); marker file oracle
 11. **J6b-mcp-reconnect** — live `jevons_mcp_reconnect` (T60/T105.1)
+11b. **J21-goal-continue-all-backends** — work mint on Claude, Grok, and Codex; after the first terminal the host starts a second user turn with no `jevons_agent_send` (🎯T510). Missing CLI is OUTAGE, not skip-and-green.
 
 ### Teardown oracle
 12. **J5-isolation** — sandbox journal under temp state; journey MCP gone; daily MCP intact

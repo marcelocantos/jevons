@@ -670,7 +670,7 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	if name == "" || workdir == "" {
 		return fmt.Errorf("worker name and workdir required")
 	}
-	def, existed, _, err := s.stitchAgentStart(name, workdir, "", "", "", parent, "work", normalizeAgentTargetID(targetID))
+	def, existed, _, err := s.stitchAgentStart(name, workdir, "", "", "", parent, "work", normalizeAgentTargetID(targetID), brief)
 	if err != nil {
 		return fmt.Errorf("register: %w", err)
 	}

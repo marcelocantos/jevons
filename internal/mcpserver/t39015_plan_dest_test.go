@@ -44,7 +44,7 @@ func TestStitchOmitProviderUsesPlanDestWhenDefaultAhead(t *testing.T) {
 	})
 	def, _, note, err := s.stitchAgentStart(
 		"jv-t39015-dest", t.TempDir(), "", "", "",
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestStitchOmitProviderRefusesWhenDestEmpty(t *testing.T) {
 	})
 	_, _, _, err = s.stitchAgentStart(
 		"jv-t39015-refuse", t.TempDir(), "", "", "",
-		"jevons-po", claudia.PurposeWork, "",
+		"jevons-po", claudia.PurposeWork, "", "",
 	)
 	if err == nil || !strings.Contains(err.Error(), "plan dest empty") {
 		t.Fatalf("want dest-empty refuse, err=%v", err)

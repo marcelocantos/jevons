@@ -102,6 +102,26 @@ func TestPrepareMigrationPersistsPointerBeforeRotating(t *testing.T) {
 	}
 }
 
+func TestPrepareMigrationKeepsGoal(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e99"
+	f, _, _ := migrateFixture(t, oldSession, true)
+	def := f.reg.Def("jevons-po")
+	def.Goal = "Achieve 🎯T510"
+	if err := f.reg.Register(*def); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderCodex, false); err != nil {
+		t.Fatalf("PrepareMigration: %v", err)
+	}
+	got := f.reg.Def("jevons-po")
+	if got == nil || got.Goal != "Achieve 🎯T510" {
+		t.Fatalf("Goal after Grok→Codex remint = %+v", got)
+	}
+	if got.Provider != claudia.ProviderCodex {
+		t.Fatalf("provider = %q", got.Provider)
+	}
+}
+
 // 🎯T324: migrate claude→grok with prior model=fable never leaves fable under
 // grok — binding is rewritten to the new provider default (or empty when
 // none). Session-truth, not fail-closed sniff.

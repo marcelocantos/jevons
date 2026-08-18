@@ -17,7 +17,8 @@
 //  5. isolation (after teardown)
 //     6–11. orchestration: tool surface, overseer registry, two agents
 //     same workdir, thread spawn→direct→remove, worker shell tool (T97),
-//     worker transcript visible to inspect (T282)
+//     worker transcript visible to inspect (T282),
+//     J21 Goal continuation on Claude/Grok/Codex (T510)
 //
 // -provider runs the entire isolate — overseer and every agent the
 // journeys spawn — on one backend (🎯T282), so `PROVIDER=claude` is the
@@ -242,6 +243,7 @@ persona_notes: |
 	s.run("J18-t418-handover-mute", s.jT418HandoverMute)
 	s.run("J19-root-history-paint", s.j19RootHistoryPaint)
 	s.run("J20-plan-dest", s.j20PlanDest)
+	s.run("J21-goal-continue-all-backends", s.j21GoalContinuesAllBackends)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()

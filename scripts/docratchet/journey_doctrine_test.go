@@ -157,6 +157,7 @@ func TestJourneyInventoryRegistered(t *testing.T) {
 		"J10-worker-shell-tool",
 		"J19-root-history-paint",
 		"J20-plan-dest",
+		"J21-goal-continue-all-backends",
 	} {
 		if !strings.Contains(readme, id) {
 			t.Errorf("README inventory missing %s", id)
