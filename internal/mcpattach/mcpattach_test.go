@@ -69,7 +69,7 @@ func TestEnsureCorrectsStaleURL(t *testing.T) {
 	}
 }
 
-func TestSessionServersAppendsJevonsmcpAndKeepsDiscovered(t *testing.T) {
+func TestSessionServersIsHermeticJevonsOnly(t *testing.T) {
 	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
 	doc := map[string]any{
 		"mcpServers": map[string]any{
@@ -81,20 +81,8 @@ func TestSessionServersAppendsJevonsmcpAndKeepsDiscovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := SessionServers(a, claudia.ProviderClaude, "")
-	var names []string
-	var jevonsURL string
-	for _, s := range list {
-		names = append(names, s.Name)
-		if s.Name == "jevonsmcp" {
-			jevonsURL = s.URL
-		}
-	}
-	joined := strings.Join(names, ",")
-	if !strings.Contains(joined, "mnemo") {
-		t.Fatalf("discovered mnemo dropped: %v", names)
-	}
-	if jevonsURL != a.URL {
-		t.Fatalf("jevonsmcp url = %q", jevonsURL)
+	if len(list) != 1 || list[0].Name != "jevonsmcp" || list[0].URL != a.URL {
+		t.Fatalf("hermetic set = %+v; want only jevonsmcp (no LoadMCP inventory)", list)
 	}
 }
 
