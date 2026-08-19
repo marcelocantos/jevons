@@ -13,11 +13,18 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/upgrade"
+	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
 func (s *suite) startDaemon() error {
 	if s == nil {
 		return fmt.Errorf("start daemon: no suite")
+	}
+	// 🎯T526: refuse to start when the isolate port is already held.
+	// Otherwise a bind failure exits the child while waitReady adopts the
+	// foreign daemon and journey MCP mints into daily ~/.jevons.
+	if err := portguard.ErrIfPortHeld(s.port); err != nil {
+		return err
 	}
 	cmd := exec.Command(s.daemonBin,
 		"-config", s.cfgPath,
@@ -33,8 +40,15 @@ func (s *suite) startDaemon() error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
 	s.cmd = cmd
-	return waitReady(s.host, readyTimeout)
+	s.cmdWait = waitCh
+	if err := s.waitReadyOwned(readyTimeout); err != nil {
+		_ = s.signalStop(2 * time.Second)
+		return err
+	}
+	return nil
 }
 
 func (s *suite) signalStop(timeout time.Duration) error {
@@ -42,18 +56,67 @@ func (s *suite) signalStop(timeout time.Duration) error {
 		return nil
 	}
 	_ = s.cmd.Process.Signal(os.Interrupt)
-	done := make(chan error, 1)
-	go func() { done <- s.cmd.Wait() }()
+	waitCh := s.cmdWait
+	if waitCh == nil {
+		waitCh = make(chan error, 1)
+		cmd := s.cmd
+		go func() { waitCh <- cmd.Wait() }()
+	}
 	select {
-	case <-done:
+	case <-waitCh:
 		s.cmd = nil
+		s.cmdWait = nil
 		return nil
 	case <-time.After(timeout):
 		_ = s.cmd.Process.Kill()
-		<-done
+		<-waitCh
 		s.cmd = nil
+		s.cmdWait = nil
 		return fmt.Errorf("daemon did not exit after interrupt")
 	}
+}
+
+// waitReadyOwned is waitReady plus 🎯T526: ready only when OUR child is the
+// TCP listener. Foreign /health must not count — that is how J20 minted into
+// a leftover :13715 on daily ~/.jevons after "address already in use".
+func (s *suite) waitReadyOwned(d time.Duration) error {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return fmt.Errorf("wait ready: no daemon process")
+	}
+	ourPID := s.cmd.Process.Pid
+	deadline := time.Now().Add(d)
+	var last error
+	for time.Now().Before(deadline) {
+		if s.cmdWait != nil {
+			select {
+			case err := <-s.cmdWait:
+				s.cmd = nil
+				s.cmdWait = nil
+				if err == nil {
+					err = fmt.Errorf("exit 0")
+				}
+				return fmt.Errorf("daemon exited before ready (likely bind failure); refusing foreign listener on %s: %w", s.host, err)
+			default:
+			}
+		}
+		if err := portguard.ErrIfForeignListener(s.port, ourPID); err != nil {
+			return err
+		}
+		if pid, err := portguard.ListenPID(s.port); err == nil && pid == ourPID {
+			if err := probeReady(s.host); err == nil {
+				return nil
+			} else {
+				last = err
+			}
+		} else if err != nil {
+			last = err
+		}
+		time.Sleep(400 * time.Millisecond)
+	}
+	if last == nil {
+		last = fmt.Errorf("timeout")
+	}
+	return last
 }
 
 func (s *suite) bounceDrain() error {

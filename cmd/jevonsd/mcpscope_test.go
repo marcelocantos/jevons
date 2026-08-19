@@ -94,8 +94,8 @@ func TestT464DailyStateDirIsExact(t *testing.T) {
 		{"", false},
 	}
 	for _, c := range cases {
-		if got := isDailyStateDir(c.dir); got != c.want {
-			t.Errorf("isDailyStateDir(%q) = %v, want %v", c.dir, got, c.want)
+		if got := config.IsDailyStateDir(c.dir); got != c.want {
+			t.Errorf("IsDailyStateDir(%q) = %v, want %v", c.dir, got, c.want)
 		}
 	}
 }

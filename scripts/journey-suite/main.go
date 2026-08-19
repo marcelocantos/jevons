@@ -76,6 +76,9 @@ type suite struct {
 	workdir   string
 	port      int
 	cmd       *exec.Cmd
+	// cmdWait receives the result of cmd.Wait once; shared by startDaemon
+	// readiness and signalStop so we never double-Wait (🎯T526).
+	cmdWait   chan error
 	logFile   *os.File
 	daemonEnv []string
 }
@@ -622,34 +625,42 @@ func waitTurn(ctx context.Context, frames <-chan []byte, needle string, requireU
 	}
 }
 
+// probeReady reports whether host answers /health (and overseer running when
+// /api/agents is reachable). One shot — callers poll.
+func probeReady(host string) error {
+	resp, err := http.Get("http://" + host + "/health")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("health HTTP %d", resp.StatusCode)
+	}
+	ar, err := http.Get("http://" + host + "/api/agents")
+	if err != nil {
+		// health ok is enough to proceed; chat may still fail
+		return nil
+	}
+	var agents []struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
+	_ = json.NewDecoder(ar.Body).Decode(&agents)
+	ar.Body.Close()
+	for _, a := range agents {
+		if a.Name == overseerName && a.Status == "running" {
+			return nil
+		}
+	}
+	return fmt.Errorf("overseer not running yet: %v", agents)
+}
+
 func waitReady(host string, d time.Duration) error {
 	deadline := time.Now().Add(d)
 	var last error
 	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://" + host + "/health")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				// Also wait until overseer is running if agents API is up.
-				ar, err := http.Get("http://" + host + "/api/agents")
-				if err == nil {
-					var agents []struct {
-						Name   string `json:"name"`
-						Status string `json:"status"`
-					}
-					_ = json.NewDecoder(ar.Body).Decode(&agents)
-					ar.Body.Close()
-					for _, a := range agents {
-						if a.Name == overseerName && a.Status == "running" {
-							return nil
-						}
-					}
-					last = fmt.Errorf("overseer not running yet: %v", agents)
-				} else {
-					// health ok is enough to proceed; chat may still fail
-					return nil
-				}
-			}
+		if err := probeReady(host); err == nil {
+			return nil
 		} else {
 			last = err
 		}

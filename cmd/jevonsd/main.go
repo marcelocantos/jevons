@@ -162,6 +162,14 @@ func main() {
 	// ð¯T148: resolve once at boot (config â JEVONS_PROVIDER â grok).
 	defaultProvider := cli.ResolveProvider("", cfg.Provider)
 
+	// 🎯T526: journey default port must never share daily ~/.jevons.
+	// `jevonsd -port 13715 -workdir <repo>` otherwise loads the daily
+	// config and mints fixture agents into the owner's registry.
+	if err := config.RefuseJourneyDailyState(cfg.Port, cfg.StateDir); err != nil {
+		slog.Error("journey port isolation", "err", err)
+		os.Exit(1)
+	}
+
 	// Set up the overseer workdir with rendered persona instructions.
 	jevDir := cfg.OverseerDir()
 	if err := os.MkdirAll(jevDir, 0o755); err != nil {

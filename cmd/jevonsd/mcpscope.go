@@ -26,7 +26,7 @@ func fleetMCPAttach(cfg config.Config, host string, port int) mcpattach.Args {
 		Name: fleetMCPName(cfg),
 		URL:  mcpattach.HTTPURL(host, port),
 	}
-	if isDailyStateDir(cfg.StateDir) {
+	if config.IsDailyStateDir(cfg.StateDir) {
 		return a
 	}
 	dir := filepath.Join(cfg.StateDir, "mcp")
@@ -56,27 +56,6 @@ func fleetMCPName(cfg config.Config) string {
 		return mcpscope.ServerName
 	}
 	return cfg.MCPServerName
-}
-
-func isDailyStateDir(dir string) bool {
-	if dir == "" {
-		return false
-	}
-	want, err := filepath.Abs(config.Default().StateDir)
-	if err != nil {
-		return false
-	}
-	got, err := filepath.Abs(dir)
-	if err != nil {
-		return false
-	}
-	if resolved, err := filepath.EvalSymlinks(want); err == nil {
-		want = resolved
-	}
-	if resolved, err := filepath.EvalSymlinks(got); err == nil {
-		got = resolved
-	}
-	return got == want
 }
 
 // overseerMCPServerSpec is the name+URL advertised after bind (🎯T58/T379).
