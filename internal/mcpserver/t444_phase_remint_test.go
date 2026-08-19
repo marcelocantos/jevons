@@ -134,8 +134,10 @@ func TestT444UnlocatableRecordsAreUnknownNotNeverBriefed(t *testing.T) {
 }
 
 // Evidence is consulted ONLY where the 🎯T305 answer had run out of things it
-// knew. It never overrides a decided answer — in particular a stopped seat
-// stays stopped however much transcript it left behind.
+// knew, with one intentional demotion from 🎯T412: Materialized=true over a
+// located-and-absent transcript is dead_unmaterialized, not running. A stopped
+// seat stays stopped, and a confirmed in-process turn stays running, for every
+// evidence value.
 func TestT444EvidenceDoesNotOverrideDecidedPhases(t *testing.T) {
 	for _, ev := range []SessionEvidence{SessionEvidenceUnknown, SessionEvidenceAbsent, SessionEvidencePresent} {
 		if got := ClassifyAgentPhase(false, false, false, ev); got != AgentStatusStopped {
@@ -144,9 +146,19 @@ func TestT444EvidenceDoesNotOverrideDecidedPhases(t *testing.T) {
 		if got := ClassifyAgentPhase(true, true, false, ev); got != AgentStatusRunning {
 			t.Fatalf("process-local turn with evidence=%s: %s want running", ev, got)
 		}
+	}
+	// Materialized keeps running when evidence cannot prove absence (🎯T422:
+	// unknown never manufactures a death) or when the transcript is present.
+	for _, ev := range []SessionEvidence{SessionEvidenceUnknown, SessionEvidencePresent} {
 		if got := ClassifyAgentPhase(true, false, true, ev); got != AgentStatusRunning {
 			t.Fatalf("materialized with evidence=%s: %s want running", ev, got)
 		}
+	}
+	// 🎯T412 carve-out: the durable Materialized flag alone over an absent
+	// transcript is a dead seat — this is the one decided T305 answer evidence
+	// is allowed to demote.
+	if got := ClassifyAgentPhase(true, false, true, SessionEvidenceAbsent); got != AgentStatusDeadUnmaterialized {
+		t.Fatalf("materialized with evidence=absent: %s want %s", got, AgentStatusDeadUnmaterialized)
 	}
 }
 
