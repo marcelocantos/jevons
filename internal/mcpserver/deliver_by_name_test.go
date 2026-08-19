@@ -227,6 +227,41 @@ func TestT3927OwnerDirectToPONotRerouted(t *testing.T) {
 	}
 }
 
+// 🎯T515: daemon-composed PO traffic (worker-idle) opens with a 🎯T425
+// identity header whose role doctrine contains "oracle", while the idle body
+// contains "done". That pair must not classify as oracle_done and steal the
+// event off the PO — T451 open-mission emission depends on it.
+func TestT515DaemonIdleEventStaysOnPO(t *testing.T) {
+	po := &fakeSender{alive: true}
+	s, inbox := chainServer(t, map[string]*fakeSender{"jevons-po": po})
+	s.registry = newLineageRegistry(t, map[string]string{
+		"jevons-po": "jevons",
+		"jv-t515":   "jevons-po",
+	})
+
+	msg := s.withIdentity("jevons-po", formatIdleNudgeWire(eventWorkerIdle, FormatWorkerIdleText(WorkerIdleRef{
+		Name: "jv-t515", Parent: "jevons-po", TargetID: "T515", Purpose: "work", Phase: "idle",
+	})))
+	// Identity doctrine has "oracle"; idle body has "done". Together they
+	// would classify oracle_done unless the envelope is stripped / owner-
+	// surface actor is refused the T392.7 hop.
+	if got := relayroute.Classify(relayReportBody(msg)); got != relayroute.RouteParent {
+		t.Fatalf("stripped idle body classified %s, want parent", got)
+	}
+	if _, err := s.deliverByName("jevons-po", msg, OriginAgent, false); err != nil {
+		t.Fatalf("daemon idle deliver: %v", err)
+	}
+	if len(inbox.texts) != 0 {
+		t.Fatalf("idle event leaked to overseer: %v", inbox.texts)
+	}
+	if len(po.sent) != 1 || !strings.Contains(po.sent[0], "jv-t515") {
+		t.Fatalf("PO inbox=%v want the idle event", po.sent)
+	}
+	if strings.Contains(po.sent[0], "routed to overseer") {
+		t.Fatalf("idle event was turned into a T392.7 record: %q", po.sent[0])
+	}
+}
+
 // 🎯T515: first agent_send injects identity + standing brief (which itself
 // contains "needs-owner" / "class-3"). Classification and the PO record
 // summary must use the sender's report body, not the doctrine envelope —

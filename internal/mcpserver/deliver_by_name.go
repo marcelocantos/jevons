@@ -183,20 +183,20 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 
 	// The first MCP send can carry a daemon-authored identity + standing-brief
 	// envelope. Routing and its summary belong to the sender's report, not to
-	// doctrine that happens to contain phrases such as "needs-owner".
+	// doctrine that happens to contain phrases such as "needs-owner" / "oracle".
 	report := relayReportBody(text)
 
-	// 🎯T392.7: a worker report that needs no product judgement skips the
-	// PO hop. The PO still gets a one-line record. Owner directs to a PO
-	// are never rerouted.
+	// 🎯T392.7: a named worker report that needs no product judgement skips the
+	// PO hop. The PO still gets a one-line record. Owner directs and daemon-
+	// composed owner-surface traffic (empty actor) are never rerouted — those
+	// are not worker reports, and their identity doctrine alone can trip the
+	// keyword classifier (🎯T515).
+	who := strings.TrimSpace(actor)
 	if origin == OriginAgent && !overseerArm && isPOName(dest) &&
+		who != "" && who != ActorOwnerSurface &&
 		relayroute.Classify(report) == relayroute.RouteOverseer {
 		po := dest
 		reason := relayroute.Reason(report)
-		who := strings.TrimSpace(actor)
-		if who == "" {
-			who = "worker"
-		}
 		summary := relayroute.ReportSummary(report)
 		s.LogEvent("relayroute", relayroute.RouteOverseer.String(), map[string]any{
 			"msg":         fmt.Sprintf("worker report rerouted to overseer: %s (%s): %s", who, reason, summary),
@@ -241,11 +241,53 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 	return deliverToSenderWith(s, name, text, interrupt, proc, rehydrated, confirm)
 }
 
+// relayReportBody returns the sender's report for 🎯T392.7 classification and
+// the PO record summary. Daemon envelopes must not participate: the standing
+// brief and the 🎯T425 identity doctrine both contain classifier bait
+// ("needs-owner", "oracle", "done").
 func relayReportBody(text string) string {
 	if i := strings.Index(text, FleetStandingBrief); i >= 0 {
 		return text[i+len(FleetStandingBrief):]
 	}
-	return text
+	return stripLeadingIdentityEnvelope(text)
+}
+
+// identityDoctrineCloser is the last fixed sentence FormatIdentityHeader
+// writes before role-addressed doctrine. Everything after that doctrine is
+// the payload withIdentity appended.
+const identityDoctrineCloser = "carry on with your own work."
+
+func stripLeadingIdentityEnvelope(text string) string {
+	body := strings.TrimLeft(text, " \t\r\n")
+	if !strings.HasPrefix(body, IdentityHeaderMarker) {
+		return text
+	}
+	// Idle / recover wires put the event marker immediately after the header.
+	if i := strings.Index(body, "\n[event:"); i >= 0 {
+		return strings.TrimLeft(body[i+1:], " \t\r\n")
+	}
+	i := strings.Index(body, identityDoctrineCloser)
+	if i < 0 {
+		return text
+	}
+	rest := strings.TrimLeft(body[i+len(identityDoctrineCloser):], " \t\r\n")
+	if !strings.HasPrefix(rest, "You are ") {
+		return rest
+	}
+	lines := strings.Split(rest, "\n")
+	out := 1 // skip the "You are …" line
+	for out < len(lines) {
+		line := lines[out]
+		if line == "" {
+			out++
+			break
+		}
+		if !strings.HasPrefix(line, "- ") {
+			break
+		}
+		out++
+	}
+	return strings.Join(lines[out:], "\n")
 }
 
 // deliverToOverseer is the overseer arm of the single path. Delivery itself
