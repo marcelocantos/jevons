@@ -313,6 +313,16 @@ type Server struct {
 	// against the claudia fleet socket. Tests inject a fixture fleet.
 	paneList func() ([]panecensus.Pane, error)
 	paneKill func(id string) error
+
+	// drainRestartAt tracks 🎯T530 restart-to-drain schedules after a parent
+	// kill so fleet-health / live probes can apply RemintGraceWindow.
+	// Guarded by mu.
+	drainRestartAt map[string]time.Time
+
+	// drainLaunch, when set, replaces registry.Launch during 🎯T530
+	// restart-to-drain. Hermetic tests inject a stub that refuses without
+	// spawning a provider; nil uses the real registry Launch.
+	drainLaunch func(name string) (*claudia.Agent, error)
 }
 
 // TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).

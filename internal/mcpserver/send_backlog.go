@@ -194,6 +194,16 @@ func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, now time.Time) {
 	if age < StalledBacklogAfter {
 		return
 	}
+	// 🎯T530: a parent-kill drain restart is mid-flight — do not regenerate
+	// reaped_held solely from that kill while RemintGraceWindow holds.
+	if s.suppressHeldReapedDuringDrainRestart(b.Agent, now) {
+		slog.Info("🎯T530 suppressing reaped_held during drain restart grace",
+			"component", "agent_send",
+			"agent", b.Agent,
+			"queued", b.Depth,
+			"oldest_age", age.Round(time.Second).String())
+		return
+	}
 	rec, _ := LookupReapedRecord(s.fleetIntent(), b.Agent)
 	slog.Warn("🎯T401 backlog held for reaped agent",
 		"component", "agent_send",

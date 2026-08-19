@@ -828,12 +828,27 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	desc := s.registry.Descendants(name)
+	refuse, reason, restartNames := ClassifyKillHeldSendq(name, desc, s.pendingAgentSends)
+	if refuse {
+		life["err"] = reason
+		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
+		return mcp.NewToolResultError(reason), nil
+	}
+	held := s.snapshotHeldSeats(restartNames)
+	newParent := ""
+	if len(held) > 0 {
+		newParent = s.surviveDrainParent(name, actor)
+	}
 	if err := s.killSubtreeAndClearTurns(name); err != nil {
 		life["err"] = err.Error()
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", err)), nil
 	}
+	restarted := s.restartHeldSendqForDrain(held, newParent, actor)
 	life["descendants"] = len(desc)
+	if len(restarted) > 0 {
+		life["t530_restarted"] = restarted
+	}
 	s.logLifecycle(compAgentLifecycle, "kill", "ok", life)
 	msg := fmt.Sprintf(
 		"Agent %q killed by %q: process stopped and deregistered (will not auto-start; gone from agent list).",
@@ -841,6 +856,11 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	)
 	if len(desc) > 0 {
 		msg += fmt.Sprintf(" Also killed %d descendant(s): %s.", len(desc), strings.Join(desc, ", "))
+	}
+	if len(restarted) > 0 {
+		msg += fmt.Sprintf(
+			" 🎯T530 restarted %d held-sendq seat(s) for drain under %q: %s.",
+			len(restarted), newParent, strings.Join(restarted, ", "))
 	}
 	return mcp.NewToolResultText(msg), nil
 }
