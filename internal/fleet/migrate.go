@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -396,6 +397,15 @@ func (f *Claudia) handOffSeed(name string, pending handover.Pending) {
 			return
 		}
 	} else if err != nil {
+		// 🎯T519: a live-stream successor (Codex/Grok) with a phantom Claude
+		// JSONL leaves look() undecidable. "Turn already in flight" is not a
+		// failed seed and must not ERROR-spam every T418 sweep — leave the
+		// record pending and wait for the successor turn to end, then retry.
+		if agenterr.IsPromptBusy(err) {
+			slog.Info("handover seed deferred; successor turn in flight",
+				"name", name, "err", err)
+			return
+		}
 		slog.Error("handover hand-off failed; it stays pending for the next launch",
 			"name", name, "err", err)
 		return
@@ -426,6 +436,12 @@ func handoffFailure(why string, err error) error {
 // rather than treat "I could not look" as "it did not arrive". That distinction
 // is the same one TurnEvidence.Observed carries on the MCP side, and it exists
 // because an unmeasured send reported as a defect is itself a false accusation.
+//
+// 🎯T519 (same surface rule as 🎯T501's liveStreamObserver): Codex and Grok
+// backends advertise a Claude-shaped JSONLPath that nothing writes. A missing
+// file at that path is undecidable, not "never begun". Treating it as
+// born-stuck left claude→codex worker handovers pending and ERROR-spammed
+// every T418 sweep with "no transcript was ever created at …jsonl".
 func (f *Claudia) watchSeedArrival(name, seed string) func() (arrived bool, why string, decidable bool) {
 	undecidable := func() (bool, string, bool) { return false, "", false }
 	if f == nil {
@@ -436,6 +452,7 @@ func (f *Claudia) watchSeedArrival(name, seed string) func() (arrived bool, why 
 	if path == "" || needle == "" {
 		return undecidable
 	}
+	keepsClaude := f.successorKeepsClaudeTranscript(name)
 	baseline, had := turnev.Size(path)
 	return func() (bool, string, bool) {
 		fate := turnev.Scan(path, baseline, had, needle)
@@ -449,10 +466,34 @@ func (f *Claudia) watchSeedArrival(name, seed string) func() (arrived bool, why 
 			return true, fmt.Sprintf("the successor's transcript %s shows the seed enqueued behind a live turn", path), true
 		}
 		if turnev.Missing(path) {
+			if !keepsClaude {
+				return false, "", false
+			}
 			return false, fmt.Sprintf("no transcript was ever created at %s — the successor has never begun a turn", path), true
 		}
 		return false, fmt.Sprintf("transcript %s never gained the seed", path), true
 	}
+}
+
+// successorKeepsClaudeTranscript reports whether the successor's backend
+// actually maintains the durable ~/.claude/projects JSONL. Same rule as
+// mcpserver.providerKeepsClaudeTranscript (🎯T501 / 🎯T519).
+func (f *Claudia) successorKeepsClaudeTranscript(name string) bool {
+	if f == nil || f.reg == nil {
+		return true
+	}
+	def := f.reg.Def(name)
+	if def == nil {
+		return true
+	}
+	return providerKeepsClaudeTranscript(def.Provider)
+}
+
+// providerKeepsClaudeTranscript mirrors the T501 mint-path classifier: only
+// Claude-shaped agents keep a durable Claude JSONL; Codex and Grok are
+// live-stream surfaces.
+func providerKeepsClaudeTranscript(p claudia.Provider) bool {
+	return p == "" || p == claudia.ProviderClaude
 }
 
 // successorTranscript is where the successor records what it was told: the
