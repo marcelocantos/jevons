@@ -144,6 +144,19 @@ type Pending struct {
 	// Delivered records that the successor received its seed, so a
 	// migration resumed after a crash does not seed it twice.
 	Delivered bool `json:"delivered,omitempty"`
+
+	// Identity snapshot (🎯T474). Written at rotate time so a bare-thread
+	// Launch can rebuild the registry row when a concurrent reap (or any
+	// other Remove) deleted it between prepare and launch. Without these
+	// fields the MINT branch invents purpose=aside / empty workdir / a
+	// fresh uuid and discards the rotation's prepared successor.
+	Purpose      string `json:"purpose,omitempty"`
+	WorkDir      string `json:"workdir,omitempty"`
+	Parent       string `json:"parent,omitempty"`
+	Model        string `json:"model,omitempty"`
+	TargetID     string `json:"target_id,omitempty"`
+	Goal         string `json:"goal,omitempty"`
+	NewSessionID string `json:"new_session_id,omitempty"`
 }
 
 // EffectiveKind is compact whenever the providers do not differ.

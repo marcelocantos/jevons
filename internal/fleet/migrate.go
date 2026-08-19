@@ -142,8 +142,14 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 		def.SessionID == pending.CompactSessionID {
 		next := *def
 		next.SessionID = uuid.NewString()
+		pending.NewSessionID = next.SessionID
 		if err := f.reg.Register(next); err != nil {
 			return pending, fmt.Errorf("migrate %q: separate work session from compact: %w", name, err)
+		}
+		if f.handovers != nil {
+			if err := f.handovers.Put(pending); err != nil {
+				return pending, fmt.Errorf("migrate %q: persist rewritten work session: %w", name, err)
+			}
 		}
 	}
 	return pending, nil
@@ -179,8 +185,14 @@ func (f *Claudia) CompleteThinBrief(p handover.Pending) (handover.Pending, error
 		def.SessionID == p.CompactSessionID {
 		next := *def
 		next.SessionID = uuid.NewString()
+		p.NewSessionID = next.SessionID
 		if err := f.reg.Register(next); err != nil {
 			return p, fmt.Errorf("separate work session from compact: %w", err)
+		}
+		if f.handovers != nil {
+			if err := f.handovers.Put(p); err != nil {
+				return p, fmt.Errorf("persist rewritten work session: %w", err)
+			}
 		}
 	}
 	return p, nil
@@ -210,6 +222,18 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 			kind, name, oldSession)
 	}
 
+	// Choose the successor session id before persisting: if a concurrent
+	// reap Removes the row between Stop and Register, ensureRegistered's
+	// MINT branch must recover THIS id from the handover, not uuid.New()
+	// (🎯T474 — the jv-t444-phase-remint aside ghost).
+	nextSession := uuid.NewString()
+	var nextModel string
+	if target == def.Provider {
+		nextModel = cli.BindSessionModel(def.Model, target)
+	} else {
+		nextModel = cli.BindSessionModel("", target)
+	}
+
 	pending := handover.Pending{
 		Agent:          name,
 		From:           string(def.Provider),
@@ -217,9 +241,18 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 		Kind:           kind,
 		OldSessionID:   oldSession,
 		TranscriptPath: transcript,
+		// Identity rides the handover so a bare-thread re-mint cannot
+		// invent purpose=aside / empty workdir when the row is gone.
+		Purpose:      def.Purpose,
+		WorkDir:      def.WorkDir,
+		Parent:       def.Parent,
+		Model:        nextModel,
+		TargetID:     def.TargetID,
+		Goal:         def.Goal,
+		NewSessionID: nextSession,
 	}
 	// Persist BEFORE rotation: after it, nothing else knows where the
-	// predecessor's transcript is.
+	// predecessor's transcript is — or who the agent was (🎯T474).
 	if f.handovers != nil {
 		if err := f.handovers.Put(pending); err != nil {
 			return handover.Pending{}, fmt.Errorf("%s %q: %w", kind, name, err)
@@ -235,23 +268,9 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 
 	next := *def
 	next.Provider = target
-	next.SessionID = uuid.NewString()
+	next.SessionID = nextSession
+	next.Model = nextModel
 	next.Materialized = false // a fresh conversation, not a resume
-	// 🎯T324: session-truth binding is rewritten for the new SessionID.
-	// Never inherit the previous provider's pin (e.g. "fable" under Claude
-	// → Grok). Bind the target provider's default so cold agents get a
-	// condensable model, not a bare mark forever (T323 residual cleared
-	// the pin only; fail-closed sniff is not the product strategy).
-	// A cross-provider move must not inherit the old provider's pin (e.g.
-	// "fable" under Claude → Grok). A same-provider compaction must keep
-	// it: the agent is the same agent on the same backend, and silently
-	// re-defaulting its model would make a context rotation change what
-	// the agent is.
-	if target == def.Provider {
-		next.Model = cli.BindSessionModel(def.Model, target)
-	} else {
-		next.Model = cli.BindSessionModel("", target)
-	}
 	// def was snapshotted before Stop, which clears the serve endpoint on
 	// the registry's own copy. Re-registering the snapshot would re-persist
 	// a dead ConnectURL/PID and send the next Launch into a reattach that

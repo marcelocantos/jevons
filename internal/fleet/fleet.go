@@ -10,6 +10,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -259,6 +260,22 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 	// Ensure a registry def. Resume when SessionID is known; otherwise
 	// mint a placeholder id and let the provider replace it on session/new.
 	if f.reg.Def(t.ID) == nil {
+		// 🎯T474: a bare thread.Thread{ID:name} Launch after a concurrent
+		// reap deleted the rotated row must recover identity from the
+		// pending handover — not invent purpose=aside / fresh uuid.
+		if recovered, ok := f.mintFromPendingHandover(t.ID); ok {
+			if err := f.reg.Register(recovered); err != nil {
+				return fmt.Errorf("register recovered agent %q: %w", t.ID, err)
+			}
+			if t.SessionID == "" {
+				t.SessionID = recovered.SessionID
+			}
+			slog.Info("agent mint recovered from pending handover",
+				"name", t.ID, "purpose", recovered.Purpose,
+				"workdir", recovered.WorkDir, "parent", recovered.Parent,
+				"target_id", recovered.TargetID, "session", recovered.SessionID)
+			return nil
+		}
 		sid := t.SessionID
 		if sid == "" {
 			sid = uuid.New().String()
@@ -266,17 +283,18 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 		prov := providerForLaunch("", threadProv, f.defaultProvider)
 		// 🎯T324: session-truth model — pin or provider default for this SessionID.
 		if err := f.reg.Register(claudia.AgentDef{
-			Name:        t.ID,
-			WorkDir:     t.WorkDir,
-			Model:       cli.BindSessionModel(t.Model, prov),
-			Provider:    prov,
-			SessionID:   sid,
-			AutoStart:   true,
-			Parent:      t.Parent,
-			Purpose:     purpose,
-			SandboxMode: CodexWorkSandbox(prov, purpose),
-			Goal:        WorkSessionGoal(purpose, "", t.Description, true),
-			MCPServers:  f.SessionMCPServers(prov, t.WorkDir),
+			Name:         t.ID,
+			WorkDir:      t.WorkDir,
+			Model:        cli.BindSessionModel(t.Model, prov),
+			Provider:     prov,
+			SessionID:    sid,
+			AutoStart:    true,
+			Parent:       t.Parent,
+			Purpose:      purpose,
+			SandboxMode:  CodexWorkSandbox(prov, purpose),
+			Goal:         WorkSessionGoal(purpose, "", t.Description, true),
+			MCPServers:   f.SessionMCPServers(prov, t.WorkDir),
+			MCPExclusive: mcpattach.Exclusive,
 		}); err != nil {
 			return fmt.Errorf("register agent %q: %w", t.ID, err)
 		}

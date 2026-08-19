@@ -11,6 +11,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/handover"
 )
 
 // LooksLikeFinishedWorkReport is true when a terminal agent response claims
@@ -171,6 +172,17 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			"agent", name, "report_len", len(report))
 		return
 	}
+	// 🎯T474: reap_done must not Remove a name mid rotate→launch→seed.
+	// An undelivered handover holds the seat; removing it lets the next
+	// bare-thread Launch invent purpose=aside and discard the prepared
+	// successor session (the jv-t444-phase-remint ghost).
+	if s.rotationBlocksReap(name) {
+		fields := reapDecisionFields(name, "rotation_pending", report)
+		s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
+		slog.Info("T474 deferred finished-work reap while rotation pending",
+			"agent", name)
+		return
+	}
 	if report == "" {
 		return
 	}
@@ -238,4 +250,23 @@ func reapDecisionFields(name, reason, report string) map[string]any {
 		fields["report_offset"] = offset
 	}
 	return fields
+}
+
+// rotationBlocksReap is true when an undelivered handover for name is on
+// disk (🎯T474). The migrator may be unwired in hermetic tests — then
+// nothing blocks.
+func (s *Server) rotationBlocksReap(name string) bool {
+	if s == nil || name == "" {
+		return false
+	}
+	led, ok := s.migrator.(handoverLedger)
+	if !ok || led == nil {
+		return false
+	}
+	pending, err := led.PendingHandovers()
+	if err != nil && len(pending) == 0 {
+		return false
+	}
+	_, blocked := handover.FindBlockingRotation(pending, name)
+	return blocked
 }
