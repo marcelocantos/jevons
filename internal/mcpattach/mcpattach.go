@@ -1,9 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package mcpattach is how jevonsd puts a hermetic MCP set on every
-// Session: Config.MCPServers = [jevonsmcp HTTP]. That list is closed —
-// it does not LoadMCP user configs (🎯T525). Codex still needs
+// Package mcpattach is how jevonsd puts the MCP set on every Session:
+// LoadMCP (discovery) + append jevonsmcp, then Config.MCPServers.
+// The host passes that list; Grok/Claude/Codex must not also load the
+// owner's config.toml (claudia 🎯T40 hermetic set). Codex still needs
 // EnsureMCP because app-server thread/start has no MCP field.
 package mcpattach
 
@@ -61,21 +62,59 @@ func Ensure(a Args) error {
 	})
 }
 
-// SessionServers is the hermetic set for AgentDef.MCPServers: this
-// daemon's jevonsmcp HTTP endpoint only. User config.toml / claude.json
-// inventories stay off the Session (🎯T525). workDir is unused; the
-// signature keeps the fleet call site stable.
+// SessionServers is the list Jevons passes on AgentDef.MCPServers:
+// discovered system servers plus this daemon's jevonsmcp (replacing a
+// stale same-name URL). Grok must not also load ~/.grok/config.toml
+// (🎯T525). Isolates omit HTTP on Codex so Launch does not EnsureMCP
+// into the owner's ~/.codex/config.toml.
 func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia.MCPServer {
-	_ = workDir
-	if strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.URL) == "" {
-		return nil
+	inv, err := claudia.LoadMCP(loadArgs(a, workDir))
+	if err != nil || inv == nil {
+		inv = &claudia.MCPInventory{}
 	}
+	if name := strings.TrimSpace(a.Name); name != "" && strings.TrimSpace(a.URL) != "" {
+		inv.Servers = replaceOrAppend(inv.Servers, claudia.MCPServer{
+			Name: name, Type: "http", URL: a.URL,
+		})
+	}
+	list := inv.ForProvider(provider)
 	if a.Isolate && provider == claudia.ProviderCodex {
-		return nil
+		return stripHTTP(list)
 	}
-	return []claudia.MCPServer{{
-		Name: a.Name,
-		Type: "http",
-		URL:  a.URL,
-	}}
+	return list
+}
+
+func loadArgs(a Args, workDir string) *claudia.LoadMCPArgs {
+	explicit := a.ClaudeJSON != "" || a.GrokTOML != "" || a.CodexTOML != ""
+	if !explicit {
+		return &claudia.LoadMCPArgs{WorkDir: workDir}
+	}
+	return &claudia.LoadMCPArgs{
+		ClaudeJSON: a.ClaudeJSON,
+		GrokTOML:   a.GrokTOML,
+		CodexTOML:  a.CodexTOML,
+		WorkDir:    workDir,
+	}
+}
+
+func replaceOrAppend(list []claudia.MCPServer, mine claudia.MCPServer) []claudia.MCPServer {
+	out := append([]claudia.MCPServer(nil), list...)
+	for i, s := range out {
+		if s.Name == mine.Name {
+			out[i] = mine
+			return out
+		}
+	}
+	return append(out, mine)
+}
+
+func stripHTTP(list []claudia.MCPServer) []claudia.MCPServer {
+	var out []claudia.MCPServer
+	for _, s := range list {
+		if strings.TrimSpace(s.URL) != "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
