@@ -108,6 +108,12 @@ func (s *Server) observeTurnDepth(name string, ev claudia.Event) {
 
 	if ev.IsTerminalStop() {
 		st := counter.EndTurn(name)
+		// 🎯T471: latch before any early return so EndTurn's Requested
+		// flag still protects the seat from auto-reap after the counter
+		// forgets the turn.
+		if st.Requested {
+			s.noteCheckpointEnded(name)
+		}
 		if st.Calls == 0 {
 			return
 		}
@@ -225,6 +231,35 @@ func (s *Server) forgetTurnDepth(name string) {
 	}
 	s.mu.Lock()
 	c := s.turnDepth
+	delete(s.checkpointEnded, name)
 	s.mu.Unlock()
 	c.Forget(name)
+}
+
+// noteCheckpointEnded records that name's just-ended turn hit the 🎯T392.4
+// depth-ceiling ask. Consumed by maybeReapDoneWorkAgent (🎯T471).
+func (s *Server) noteCheckpointEnded(name string) {
+	if s == nil || name == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.checkpointEnded == nil {
+		s.checkpointEnded = map[string]bool{}
+	}
+	s.checkpointEnded[name] = true
+}
+
+// consumeCheckpointEnded reports and clears the 🎯T471 latch for name.
+func (s *Server) consumeCheckpointEnded(name string) bool {
+	if s == nil || name == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.checkpointEnded[name] {
+		return false
+	}
+	delete(s.checkpointEnded, name)
+	return true
 }

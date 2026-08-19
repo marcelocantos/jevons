@@ -275,6 +275,13 @@ type Server struct {
 	turnDepthPolicy    turndepth.Policy
 	turnDepthInterrupt func(string) error
 	turnDepthResume    func(name, prompt string)
+	// checkpointEnded latches that an agent's just-ended turn hit the
+	// 🎯T392.4 depth-ceiling ask (🎯T471). observeTurnDepth sets it from
+	// EndTurn's Requested flag before the counter forgets the turn;
+	// maybeReapDoneWorkAgent consumes it and refuses to auto-reap, so a
+	// checkpointed worker stays registered and resumable even when the
+	// report text looks like a finish. Guarded by mu; nil until first use.
+	checkpointEnded map[string]bool
 
 	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.

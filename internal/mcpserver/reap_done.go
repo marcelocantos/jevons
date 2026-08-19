@@ -151,8 +151,27 @@ func reapDoneRemoval(reason string) fleetlog.Removal {
 // maybeReapDoneWorkAgent runs after a terminal worker turn is notified to the
 // overseer: if the reply is a finished-work report (including imperfect bare
 // done — 🎯T195), leave the fleet (🎯T165).
+//
+// 🎯T471: a turn that ended because the 🎯T392.4 depth-ceiling ask told the
+// worker to checkpoint must not auto-reap, even when the report text looks
+// like a finish. EndTurn clears the counter's Requested flag before this
+// runs, so observeTurnDepth latches checkpointEnded; we consume it here and
+// KEEP the seat registered for resume. Ambiguity resolves toward keeping:
+// a stranded live agent is recoverable; a deregistered one with uncommitted
+// work in the shared tree is the 🎯T466 pile. A clear finish on a later turn
+// that did not hit the ceiling still reaps under 🎯T165 / 🎯T195.
 func (s *Server) maybeReapDoneWorkAgent(name, report string) {
-	if s == nil || s.registry == nil || name == "" || report == "" {
+	if s == nil || s.registry == nil || name == "" {
+		return
+	}
+	if s.consumeCheckpointEnded(name) {
+		fields := reapDecisionFields(name, "depth_ceiling_checkpoint", report)
+		s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
+		slog.Info("T471 kept agent after depth-ceiling checkpoint turn",
+			"agent", name, "report_len", len(report))
+		return
+	}
+	if report == "" {
 		return
 	}
 	ok, reason := ShouldAutoReapDoneWorkAgent(s.registry, name, report, s.isOverseerAgent)
