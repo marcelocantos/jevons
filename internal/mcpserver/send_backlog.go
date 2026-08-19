@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
@@ -221,11 +222,39 @@ func (s *Server) reapBacklogForMissingAgent(b sendq.Backlog, now time.Time) {
 // per sweep, because an alarm that fires for the normal state of the world is
 // not loud (🎯T426): a queue thirty seconds behind a working agent is a queue
 // doing its job.
+//
+// 🎯T527: when fleet intent says the agent should not be running (parked,
+// blocked, reaped), the notice names that stand-down and does NOT prescribe
+// interrupt=true — interrupting a deliberate park fights 🎯T414.
 func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string) {
 	age := b.OldestAge(now)
 	if age < StalledBacklogAfter {
 		return
 	}
+
+	// 🎯T527: deliver_start is the control that would revive a stopped seat to
+	// drain this queue. If intent declines it, the backlog is held on purpose —
+	// name the park, never prescribe interrupt (that fights 🎯T414).
+	dec := s.AllowFleetControl(b.Agent, fleetintent.ControlDeliverStart)
+	if !dec.Allow {
+		reason := "stood down: " + fleetintent.Describe(dec.Blocking)
+		slog.Warn("🎯T418 backlog stalled",
+			"component", "agent_send",
+			"agent", b.Agent,
+			"queued", b.Depth,
+			"oldest_age", age.Round(time.Second).String(),
+			"reason", reason,
+			"intent", dec.Reason)
+		s.notifyFleetHealth(fmt.Sprintf(
+			"Stalled backlog on %q: %d message(s) held by the daemon, the oldest waiting %s. "+
+				"Agent is stood down (%s; %s) — intentional stand-down; messages stay on disk until "+
+				"the park is lifted (jevons_fleet_intent name=%q state=working). "+
+				"No recovery action: a deliberate park is not a stuck turn.",
+			b.Agent, b.Depth, age.Round(time.Second),
+			fleetintent.Describe(dec.Blocking), dec.Reason, b.Agent))
+		return
+	}
+
 	slog.Warn("🎯T418 backlog stalled",
 		"component", "agent_send",
 		"agent", b.Agent,

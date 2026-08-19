@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // 🎯T418 clause 7 — the oracle for the durability half, and it is RED against
@@ -216,4 +219,72 @@ func containsLine(lines []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// 🎯T527 — a parked agent's held queue must not prescribe interrupt=true.
+// Sibling of T410/T414: the park is intentional stand-down, and interrupt
+// would fight it. Working + stalled in-flight still gets the existing advice.
+func TestT527ParkedStalledBacklogHasNoInterruptPrescription(t *testing.T) {
+	dir := t.TempDir()
+	const agent = "jevons-po"
+
+	s, _, up := t418Daemon(t, dir)
+	store, err := fleetintent.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(store)
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	if err := store.SetAgent(agent, fleetintent.Parked, "jevons", "open-objective thrash", now); err != nil {
+		t.Fatal(err)
+	}
+
+	// N queued messages, oldest well past the stall threshold; no live process
+	// (parked seats are stopped). Also leave a stale in-flight flag — the
+	// defect was diagnosing park as "turn still in flight".
+	for i := 0; i < 3; i++ {
+		if _, _, err := s.sendQueue().Append(agent, fmt.Sprintf("queued-%d", i), time.Now().Add(-3*time.Hour)); err != nil {
+			t.Fatalf("seed queue: %v", err)
+		}
+	}
+	s.noteTurnInFlight(agent)
+	s.SetSenderResolver(func(string) (agentSender, bool, error) { return nil, false, nil })
+
+	s.SweepSendBacklogs()
+
+	text := strings.Join(up.all(), "\n")
+	if !containsLine(up.all(), "Stalled backlog") {
+		t.Fatalf("parked stalled backlog raised no notice; overseer saw %q", text)
+	}
+	if strings.Contains(text, "interrupt=true") {
+		t.Fatalf("parked backlog prescribed interrupt=true — fights T414 park; overseer saw %q", text)
+	}
+	if !strings.Contains(text, "intentional stand-down") && !strings.Contains(text, "stood down") {
+		t.Fatalf("parked backlog did not name the park; overseer saw %q", text)
+	}
+	if depth := s.pendingAgentSends(agent); depth != 3 {
+		t.Fatalf("depth = %d; want 3 — park holds the queue, never drops it", depth)
+	}
+}
+
+func TestT527WorkingStalledInFlightStillPrescribesInterrupt(t *testing.T) {
+	s, _, up := t418Daemon(t, t.TempDir())
+	const agent = "jv-busy"
+	if _, _, err := s.sendQueue().Append(agent, "waiting", time.Now().Add(-3*time.Hour)); err != nil {
+		t.Fatalf("seed queue: %v", err)
+	}
+	s.noteTurnInFlight(agent)
+
+	s.SweepSendBacklogs()
+
+	text := strings.Join(up.all(), "\n")
+	if !containsLine(up.all(), "Stalled backlog") {
+		t.Fatalf("working stalled backlog raised no notice; overseer saw %q", text)
+	}
+	if !strings.Contains(text, "interrupt=true") {
+		t.Fatalf("working stalled in-flight lost the interrupt prescription; overseer saw %q", text)
+	}
+	if strings.Contains(text, "intentional stand-down") || strings.Contains(text, "stood down") {
+		t.Fatalf("working agent was described as stood down; overseer saw %q", text)
+	}
 }
