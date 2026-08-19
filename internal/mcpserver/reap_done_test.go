@@ -97,15 +97,23 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 		t.Fatal("worker still registered after done reap")
 	}
 
-	// agent_list omits the finished worker; PO + overseer stay.
+	// Live registry omits the finished worker; PO + overseer stay.
+	// 🎯T401 may still name the reaped seat under Finished-and-reaped
+	// (recoverable address) — that is not a live row.
+	if s.registry.Def("jv-t165-reap-done") != nil {
+		t.Fatal("reaped worker still in live registry")
+	}
 	listReq := mcp.CallToolRequest{}
 	listRes, err := s.handleAgentList(context.Background(), listReq)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := toolText(listRes)
-	if strings.Contains(out, "jv-t165-reap-done") {
-		t.Fatalf("agent_list still lists reaped worker:\n%s", out)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "jv-t165-reap-done") &&
+			!strings.Contains(out, "Finished-and-reaped") {
+			t.Fatalf("agent_list still lists reaped worker as a live seat:\n%s", out)
+		}
 	}
 	if !strings.Contains(out, "jevons-po") || !strings.Contains(out, "jevons") {
 		t.Fatalf("PO/overseer must remain in agent_list:\n%s", out)

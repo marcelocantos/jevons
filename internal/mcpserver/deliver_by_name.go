@@ -217,6 +217,15 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 		return s.deliverToOverseer(name, text, origin)
 	}
 
+	// 🎯T401: an auto-reaped name is still a reachable address. Detect it
+	// before ensureAgentProcess's bare "not running", hold the payload in
+	// sendq, and name the recovery call. Never-registered stays not-found.
+	if s.registry == nil || s.registry.Def(name) == nil {
+		if rec, ok := LookupReapedRecord(s.fleetIntent(), name); ok {
+			return s.holdSendForReaped(name, text, rec), nil
+		}
+	}
+
 	s.mu.Lock()
 	resolve := s.resolveSender
 	s.mu.Unlock()

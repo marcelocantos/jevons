@@ -163,6 +163,13 @@ func (s *Server) SweepSendBacklogs() {
 	for _, b := range backlogs {
 		switch {
 		case !s.agentIsRegistered(b.Agent):
+			// 🎯T401: a reaped seat is recoverable — gate feedback stays held
+			// until jevons_agent_start (or intent lift + start) recreates it.
+			// A never-registered / aged-out name still drops (T418 clause 5).
+			if _, ok := LookupReapedRecord(s.fleetIntent(), b.Agent); ok {
+				s.reportHeldReapedBacklog(b, now)
+				continue
+			}
 			s.reapBacklogForMissingAgent(b, now)
 		case s.flightState(b.Agent) == FlightInFlight:
 			s.reportStalledBacklog(b, now, "its turn is still in flight")
@@ -177,6 +184,28 @@ func (s *Server) SweepSendBacklogs() {
 			s.drainAgentSendQueue(b.Agent)
 		}
 	}
+}
+
+// reportHeldReapedBacklog names a queue held for a finished-and-reaped agent
+// (🎯T401). It does not drop the messages — that would erase gate feedback —
+// and it does not prescribe interrupt (that fights 🎯T414).
+func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, now time.Time) {
+	age := b.OldestAge(now)
+	if age < StalledBacklogAfter {
+		return
+	}
+	rec, _ := LookupReapedRecord(s.fleetIntent(), b.Agent)
+	slog.Warn("🎯T401 backlog held for reaped agent",
+		"component", "agent_send",
+		"agent", b.Agent,
+		"queued", b.Depth,
+		"oldest_age", age.Round(time.Second).String(),
+		"intent", rec.Describe())
+	s.notifyFleetHealth(fmt.Sprintf(
+		"Held backlog on reaped agent %q: %d message(s) waiting %s (%s). "+
+			"Recover with jevons_agent_start name=%q … — queued gate feedback drains on start. "+
+			"Do not interrupt; the seat is finished-and-reaped, not stuck mid-turn.",
+		b.Agent, b.Depth, age.Round(time.Second), rec.Describe(), b.Agent))
 }
 
 // agentIsRegistered reports whether the fleet still has a seat by this name.

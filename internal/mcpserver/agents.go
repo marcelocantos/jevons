@@ -47,7 +47,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_list",
-			mcp.WithDescription("List all registered agents and their status (running/stopped)."),
+			mcp.WithDescription("List all registered agents and their status (running/stopped). Also lists finished-and-reaped names as recoverable addresses (🎯T401) so a never-existed name is distinguishable from one the product auto-deregistered — learn the address is closed BEFORE composing gate feedback into a void."),
 		),
 		s.handleAgentList,
 	)
@@ -72,7 +72,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_send",
-			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text. If a prompt is already in flight, the message is queued for after the turn (not a dead-end). Pass interrupt=true to cancel the in-flight turn and send immediately (🎯T111.1 stuck recovery). Pass actor=your agent name so lineage authorization runs against the real caller (🎯T321)."),
+			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text. If a prompt is already in flight, the message is queued for after the turn (not a dead-end). Pass interrupt=true to cancel the in-flight turn and send immediately (🎯T111.1 stuck recovery). Pass actor=your agent name so lineage authorization runs against the real caller (🎯T321). An auto-reaped agent (🎯T401) is still a reachable address: the send reports reaped-with-reason, names the recovery call (jevons_agent_start under the same name), and holds the message in sendq — never a bare \"agent is not running\". A never-registered name remains an ordinary not-found."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is sending). Overseer uses the overseer name (usually 'jevons'). Required so lineage denial is enforceable per-caller (🎯T321).")),
@@ -145,6 +145,9 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	notices := s.RemovalAccount().Recent(0)
 	if len(defs) == 0 {
 		body := "No agents registered."
+		if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
+			body += "\n" + reaped
+		}
 		if extra := s.FormatHostCostLines(0); extra != "" {
 			body += "\n" + extra
 		}
@@ -176,6 +179,12 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	if hints := FormatFanOutHints(s.registry, s.overseerName()); hints != "" {
 		b.WriteString("\n")
 		b.WriteString(hints)
+	}
+	// 🎯T401: finished-and-reaped names stay visible as recoverable addresses
+	// so the gate learns the seat is closed BEFORE composing into a void.
+	if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
+		b.WriteString("\n")
+		b.WriteString(reaped)
 	}
 	if extra := s.FormatHostCostLines(len(defs)); extra != "" {
 		b.WriteString("\n")

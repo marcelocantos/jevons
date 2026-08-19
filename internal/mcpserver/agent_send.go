@@ -160,6 +160,15 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 		return proc, false, nil
 	}
 	if s.registry.Def(name) == nil {
+		// 🎯T401: prefer the reaped-with-reason signal over a bare not-running
+		// when the intent store still remembers the auto-deregistration.
+		// deliverByName holds the payload before this arm runs; other callers
+		// still get the informative decline rather than a blank not-running.
+		if rec, ok := LookupReapedRecord(s.fleetIntent(), name); ok {
+			return nil, false, fmt.Errorf(
+				"agent %q was auto-deregistered (reaped-with-reason): %s — recover with jevons_agent_start name=%s (or jevons_fleet_intent state=working then start); use jevons_agent_send to hold a message in sendq",
+				name, rec.Describe(), name)
+		}
 		return nil, false, fmt.Errorf("agent %q is not running", name)
 	}
 	// 🎯T414 / 🎯T408: not-running is a fact, never a licence. Everything
