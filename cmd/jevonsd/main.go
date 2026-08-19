@@ -859,7 +859,11 @@ func main() {
 	// jevonsmcp: Claudia EnsureMCP on Claude/Grok/Codex native configs,
 	// plus session-scoped MCPServers on the overseer row (claudia 🎯T40).
 	// After bind, served port only (🎯T379).
-	mcpAttach := registerMCPEndpoints(cfg, mcpHost, servedPort(ln.Addr()))
+	served := servedPort(ln.Addr())
+	mcpAttach := registerMCPEndpoints(cfg, mcpHost, served)
+	// 🎯T520: owner-map HTTP MCP → loopback proxy; OAuth refresh without
+	// the owner when a refresh token is stored. Mount before Serve.
+	_ = mountHTTPUpstreamProxy(mux, cfg, mcpHost, served, mcpAttach)
 	fleetAdapter.SetMCP(mcpAttach)
 	mcpSrv.SetMCP(mcpAttach)
 	jevonDef.MCPServers = mcpattach.SessionServers(mcpAttach, jevonDef.Provider, jevonDef.WorkDir)

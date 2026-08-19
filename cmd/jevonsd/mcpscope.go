@@ -5,11 +5,14 @@ package main
 
 import (
 	"log/slog"
+	"net/http"
 	"path/filepath"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/mcpscope"
+	"github.com/marcelocantos/jevons/internal/mcpup"
 )
 
 // registerMCPEndpoints puts jevonsmcp on every Session backend after bind
@@ -61,4 +64,57 @@ func fleetMCPName(cfg config.Config) string {
 // overseerMCPServerSpec is the name+URL advertised after bind (🎯T58/T379).
 func overseerMCPServerSpec(cfg config.Config, host string, port int) (name, url string) {
 	return fleetMCPName(cfg), mcpattach.HTTPURL(host, port)
+}
+
+// mountHTTPUpstreamProxy puts owner-map HTTP MCP behind jevonsd loopback
+// and reseeds durable OAuth tokens for silent refresh (🎯T520).
+func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, port int, attach mcpattach.Args) *mcpup.Host {
+	load := &claudia.LoadMCPArgs{WorkDir: cfg.WorkDir}
+	if attach.ClaudeJSON != "" || attach.GrokTOML != "" || attach.CodexTOML != "" {
+		load = &claudia.LoadMCPArgs{
+			ClaudeJSON: attach.ClaudeJSON,
+			GrokTOML:   attach.GrokTOML,
+			CodexTOML:  attach.CodexTOML,
+			WorkDir:    cfg.WorkDir,
+		}
+	}
+	inv, err := claudia.LoadMCP(load)
+	if err != nil {
+		slog.Warn("mcp upstream proxy: LoadMCP failed — HTTP owner-map not proxied", "err", err)
+		return nil
+	}
+	if inv == nil || len(inv.Servers) == 0 {
+		return nil
+	}
+	store, err := mcpup.OpenStore(mcpup.DefaultPath(cfg.StateDir))
+	if err != nil {
+		slog.Warn("mcp upstream proxy: token store open failed", "err", err)
+		store = nil
+	}
+	upstreams, err := mcpup.OpenUpstreamRegistry(mcpup.UpstreamRegistryPath(cfg.StateDir))
+	if err != nil {
+		slog.Warn("mcp upstream proxy: upstream registry open failed", "err", err)
+		upstreams = nil
+	}
+	skip := map[string]bool{fleetMCPName(cfg): true}
+	args := &mcpup.MountArgs{
+		PublicBase: mcpup.PublicBase(host, port),
+		Servers:    inv.Servers,
+		SkipNames:  skip,
+		Store:      store,
+		Upstreams:  upstreams,
+	}
+	if attach.ClaudeJSON != "" || attach.GrokTOML != "" || attach.CodexTOML != "" {
+		args.EnsureArgs = &claudia.EnsureMCPArgs{
+			ClaudeJSON: attach.ClaudeJSON,
+			GrokTOML:   attach.GrokTOML,
+			CodexTOML:  attach.CodexTOML,
+		}
+	}
+	h, err := mcpup.Mount(mux, args)
+	if err != nil {
+		slog.Warn("mcp upstream proxy: mount failed", "err", err)
+		return nil
+	}
+	return h
 }
