@@ -103,9 +103,44 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 	return BandOK
 }
 
+// SessionStatus is the session-window eligibility class (🎯T390.1.5.1).
+// Unlike WeeklyBand, session does not use leftover-vs-time pace ranking —
+// only remaining % and 429/rate_limit. An unpublished session is not a veto.
+type SessionStatus string
+
+const (
+	SessionOK          SessionStatus = "ok"
+	SessionLow         SessionStatus = "low"         // remaining ≤ LowRemainingPercent, > 0
+	SessionExhausted   SessionStatus = "exhausted"   // 0% remaining or 429
+	SessionUnpublished SessionStatus = "unpublished" // no session figure — not a veto
+)
+
+// SessionStatusOf classifies one backend's session window for mint/migrate
+// eligibility. Same snapshot numbers the ticker paints; no JS classifyPace.
+func SessionStatusOf(be Backend, th Thresholds) SessionStatus {
+	if IsExhaustedReason(be.Reason) {
+		return SessionExhausted
+	}
+	w, ok := be.Window(WindowSession)
+	if !ok || w.RemainingPercent == nil {
+		return SessionUnpublished
+	}
+	if *w.RemainingPercent <= 0 {
+		return SessionExhausted
+	}
+	if *w.RemainingPercent <= th.LowRemainingPercent {
+		return SessionLow
+	}
+	return SessionOK
+}
+
 // MintIneligible reports that omit-provider mint must not land here
-// (ahead, hot, or exhausted).
+// (weekly ahead/hot/exhausted, or session remaining-low / exhausted).
 func MintIneligible(be Backend, now time.Time, th Thresholds) bool {
+	switch SessionStatusOf(be, th) {
+	case SessionLow, SessionExhausted:
+		return true
+	}
 	switch WeeklyBandOf(be, now, th) {
 	case BandAhead, BandHot, BandExhausted:
 		return true
@@ -115,8 +150,12 @@ func MintIneligible(be Backend, now time.Time, th Thresholds) bool {
 }
 
 // MigrateOff reports that running seats on this provider must leave
-// (hot or exhausted).
+// (weekly hot/exhausted, or session 0%/429). Session remaining-low does
+// not bounce the fleet — that window is only a mint veto (🎯T390.1.5.1).
 func MigrateOff(be Backend, now time.Time, th Thresholds) bool {
+	if SessionStatusOf(be, th) == SessionExhausted {
+		return true
+	}
 	switch WeeklyBandOf(be, now, th) {
 	case BandHot, BandExhausted:
 		return true
@@ -125,8 +164,14 @@ func MigrateOff(be Backend, now time.Time, th Thresholds) bool {
 	}
 }
 
-// DestEligible reports a published weekly that may receive work.
+// DestEligible reports a published weekly that may receive work, and whose
+// session is not remaining-low or exhausted (🎯T390.1.5.1). Healthy weekly
+// with a dead session is ineligible until the session resets.
 func DestEligible(be Backend, now time.Time, th Thresholds) bool {
+	switch SessionStatusOf(be, th) {
+	case SessionLow, SessionExhausted:
+		return false
+	}
 	switch WeeklyBandOf(be, now, th) {
 	case BandOK, BandUnder, BandLocked:
 		return true
@@ -233,15 +278,32 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds)
 			continue
 		}
 		to := ""
-		reason := "weekly hot or exhausted"
+		reason := migrateOffReason(be, now, th)
 		if destOK && dest != from {
 			to = dest
 		} else {
-			reason = "weekly hot or exhausted; no eligible dest — park"
+			reason += "; no eligible dest — park"
 		}
 		out = append(out, PlanAction{Name: a.Name, From: from, To: to, Reason: reason})
 	}
 	return out
+}
+
+func migrateOffReason(be Backend, now time.Time, th Thresholds) string {
+	sess := SessionStatusOf(be, th) == SessionExhausted
+	week := false
+	switch WeeklyBandOf(be, now, th) {
+	case BandHot, BandExhausted:
+		week = true
+	}
+	switch {
+	case sess && week:
+		return "session or weekly exhausted"
+	case sess:
+		return "session exhausted"
+	default:
+		return "weekly hot or exhausted"
+	}
 }
 
 // dampedBurn is used/elapsed with the additive damping λ on both terms
