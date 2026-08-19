@@ -22,6 +22,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/briefaddr"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleet"
@@ -271,6 +272,24 @@ func emptyEndTurnWire(stopReason, streamID string) string {
 func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	// Any ACP traffic resets stuck-busy idle (🎯T204).
 	s.NoteOverseerProgress()
+
+	// 🎯T513: a user turn whose 🎯T425 identity header names a fleet agent is
+	// that agent's brief, misdelivered — the overseer chat is the wrong seat
+	// for it. 🎯T452 refuses these on the send path; this is the mirror-image
+	// check on arrival, the last point where the owner's chatlog can still be
+	// kept clean. Dropped loudly, with both names: never broadcast, never
+	// journaled. Bound to user-turn injects only — an assistant turn is the
+	// overseer's own prose, and IdentityHeaderName already reads the opening
+	// header block alone, so a report QUOTING a header still lands.
+	if ev.Type == "user" {
+		if text, _ := userTurnText(ev); text != "" {
+			if err := briefaddr.Check(s.overseerAgentName(), text); err != nil {
+				slog.Warn("chat: dropping wrong-seat brief from overseer wire (🎯T513)", "err", err)
+				s.HandleAgentEvent(ev)
+				return
+			}
+		}
+	}
 	// Normalise ACP/raw provider events into the stable chat wire
 	// shape the web UI understands (🎯T39). Raw ACP payloads have
 	// no type/message.content, so a pass-through leaves the

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/briefaddr"
 )
 
 // Identity header (🎯T425).
@@ -41,7 +42,8 @@ const (
 
 // IdentityHeaderMarker opens the header. Callers test for it to stay
 // idempotent: a message that already carries an identity never gets a second.
-const IdentityHeaderMarker = "[Who you are"
+// One definition, shared with every addressing check (🎯T452 / 🎯T513).
+const IdentityHeaderMarker = briefaddr.Marker
 
 // AgentIdentity is one registry row as its own subject needs to read it.
 type AgentIdentity struct {
