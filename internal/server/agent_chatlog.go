@@ -210,6 +210,17 @@ func (j *agentJournals) appendLine(name, line string) {
 	}
 }
 
+// clearLastUser drops the echo-dedupe latch for name so a later identical
+// owner send is recorded. Called when an assistant event journals.
+func (j *agentJournals) clearLastUser(name string) {
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	delete(j.lastUser, name)
+	j.mu.Unlock()
+}
+
 // turns replays the journal tail and projects it into the family's turn shape.
 // Uses ReplayTailSealed + overseerTurnsFromWire — the exact path the overseer's
 // chatlog transcript takes, so both sources agree on shape and on how streamed
@@ -333,6 +344,16 @@ func (s *Server) journalAgentEvent(name string, ev claudia.Event) {
 	if s == nil || strings.TrimSpace(name) == "" || s.isOverseerAgent(name) {
 		return
 	}
+	// 🎯T367.2 / 🎯T522: the ACP echo of a turn we journaled on the send path
+	// must not paint a second owner bubble. Fleet agents carry no
+	// userTurnPrefix marker (unlike the overseer wire), so the echo has to
+	// go through appendUser's lastUser latch instead of appendLine.
+	if ev.Type == "user" {
+		if text, prose := userTurnText(ev); prose && strings.TrimSpace(text) != "" {
+			s.agentJournalsFor().appendUser(name, text)
+			return
+		}
+	}
 	event, ok := inspectLiveEvent(ev)
 	if !ok {
 		event = losslessEvent(ev)
@@ -340,6 +361,12 @@ func (s *Server) journalAgentEvent(name string, ev claudia.Event) {
 	line, err := json.Marshal(event)
 	if err != nil {
 		return
+	}
+	// Release the echo latch once the turn's assistant reply lands, so a
+	// deliberate later send of the same text is journaled (Grok often never
+	// echoes, so the latch would otherwise stick until process death).
+	if ev.Type == "assistant" {
+		s.agentJournalsFor().clearLastUser(name)
 	}
 	s.agentJournalsFor().appendLine(name, string(line))
 }
