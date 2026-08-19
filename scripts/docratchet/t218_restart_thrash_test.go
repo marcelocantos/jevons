@@ -227,7 +227,18 @@ func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
 	cmd.Dir = e.root
 	// A bare PATH keeps `brew` out of reach: the real script would otherwise
 	// run `brew services stop jevons` and stop the owner's daily service.
-	cmd.Env = append(os.Environ(),
+	//
+	// 🎯T442: strip the restart-script control vars out of os.Environ before
+	// appending ours. The daily restart exports JEVONS_RESTART_DETACHED=1 and
+	// JEVONS_RESTART_LOCKED=1 into the daemon it starts; fleet agents (and
+	// therefore this test when run from one) inherit them. Left in place, the
+	// script believes it is already the locked detached child and skips both
+	// re-execs — four concurrent callers then race the port, which is exactly
+	// the thrash the oracle exists to catch, attributed to the machine instead
+	// of the tree. Filtering (not overwriting with "0") is required: a
+	// duplicate key in the environ slice is OS-dependent, and "set to 0" would
+	// still lose if the leaked "1" came later.
+	cmd.Env = append(scrubRestartControlEnv(os.Environ()),
 		// 🎯T442: the shim dir goes first so `date +%s` is the injected clock.
 		"PATH="+e.shimDir+":/usr/bin:/bin:/usr/sbin:/sbin",
 		"HOME="+e.home,
@@ -235,6 +246,7 @@ func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
 		"JEVONS_RESTART_WORKDIR="+e.root,
 		"JEVONS_RESTART_LOG="+filepath.Join(e.home, "daemon.log"),
 		"JEVONS_RESTART_WAIT_SEC=30",
+		"JEVONS_RESTART_STOP_WAIT_SEC=5",
 		"JEVONS_RESTART_SKIP_MAKE=1",
 		"JEVONS_RESTART_MIN_INTERVAL_SEC="+strconv.Itoa(minInterval),
 		"JEVONS_RESTART_LOCK_WAIT_SEC=90",
@@ -250,6 +262,26 @@ func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
 	)
 	b, err := cmd.CombinedOutput()
 	return string(b), err
+}
+
+// scrubRestartControlEnv drops the script's own re-exec / seam flags so a
+// caller whose process tree inherited them (daily daemon started under the
+// restart script) cannot make the oracle skip detach or the lock.
+func scrubRestartControlEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		switch key {
+		case "JEVONS_RESTART_LOCKED",
+			"JEVONS_RESTART_DETACHED",
+			"JEVONS_RESTART_NO_LOCK",
+			"JEVONS_RESTART_NO_DETACH",
+			"JEVONS_RESTART_FAULT":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // detachLogSeq names each run's detach log; the concurrency case below
@@ -499,11 +531,13 @@ func TestRestartThrashPolicy(t *testing.T) {
 			noops++
 		}
 	}
-	if restarts != 1 {
-		t.Errorf("%d of %d concurrent callers bounced the port; want exactly 1 (the rest must coalesce)", restarts, callers)
-	}
-	if noops != callers-1 {
-		t.Errorf("%d callers coalesced; want %d", noops, callers-1)
+	if restarts != 1 || noops != callers-1 {
+		var b strings.Builder
+		for i, o := range outs {
+			fmt.Fprintf(&b, "\n--- caller %d ---\n%s", i, o)
+		}
+		t.Errorf("%d of %d concurrent callers bounced; %d coalesced; want 1 bounce and %d coalesced:%s",
+			restarts, callers, noops, callers-1, b.String())
 	}
 	if got := e.variantServed(); got != "c" {
 		t.Errorf("after the coalesced restart, :%d serves variant %q, want %q", e.port, got, "c")
@@ -553,9 +587,38 @@ func TestRestartThrashPolicyDocumented(t *testing.T) {
 		"ONE-AT-A-TIME",
 		"WAIT, DON'T SKIP",
 		"🎯T194",
+		// 🎯T442: the daemon must not inherit the re-exec flags, or every
+		// agent it spawns skips the lock and races the port.
+		"unset JEVONS_RESTART_DETACHED JEVONS_RESTART_LOCKED",
 	} {
 		if !strings.Contains(body, m) {
 			t.Errorf("restart script missing thrash-policy marker %q", m)
+		}
+	}
+}
+
+// TestScrubRestartControlEnv is the hermetic half of the 🎯T442 env-leak
+// fix: a parent that exports the script's re-exec flags (the daily daemon
+// used to) must not be able to make the oracle skip detach or the lock.
+func TestScrubRestartControlEnv(t *testing.T) {
+	in := []string{
+		"PATH=/bin",
+		"JEVONS_RESTART_LOCKED=1",
+		"JEVONS_RESTART_DETACHED=1",
+		"JEVONS_RESTART_NO_LOCK=1",
+		"JEVONS_RESTART_NO_DETACH=1",
+		"JEVONS_RESTART_FAULT=after-kill",
+		"JEVONS_RESTART_PORT=13705",
+		"HOME=/tmp",
+	}
+	got := scrubRestartControlEnv(in)
+	want := []string{"PATH=/bin", "JEVONS_RESTART_PORT=13705", "HOME=/tmp"}
+	if len(got) != len(want) {
+		t.Fatalf("scrubbed %v; want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("scrubbed[%d]=%q; want %q (full %v)", i, got[i], want[i], got)
 		}
 	}
 }

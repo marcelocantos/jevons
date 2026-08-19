@@ -476,6 +476,16 @@ start_daemon_detached() {
 
   log "starting detached: $BIN -port $PORT -workdir $WORKDIR (log=$LOG)"
 
+  # 🎯T442: the script exports JEVONS_RESTART_DETACHED=1 / _LOCKED=1 into its
+  # own process before the re-execs that honour them. The daemon started here
+  # must not inherit those flags — every fleet agent it later spawns would
+  # then skip both re-execs when *it* invoked this script, racing the port
+  # with every concurrent caller. Clear them in this shell before nohup so
+  # the child environ is clean; the script's own later logic has already
+  # passed the re-exec gates.
+  unset JEVONS_RESTART_DETACHED JEVONS_RESTART_LOCKED
+  unset JEVONS_RESTART_NO_DETACH JEVONS_RESTART_NO_LOCK JEVONS_RESTART_FAULT
+
   if command -v setsid >/dev/null 2>&1; then
     # Linux: new session; still wrap with nohup for SIGHUP immunity.
     nohup setsid "$BIN" -port "$PORT" -workdir "$WORKDIR" \
