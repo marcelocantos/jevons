@@ -229,7 +229,9 @@ func FindCompletionClaim(report string) (marker, span string, offset int, ok boo
 	if at < 0 {
 		return "", "", 0, false
 	}
-	span, offset = excerptAround(report, at, at+len(best))
+	// 🎯T470: name the sentence that matched, not a 200-byte window around
+	// an offset — a wrong reap must be diagnosable from the log alone.
+	span, offset = matchedSentence(report, at, at+len(best))
 	return best, span, offset, true
 }
 

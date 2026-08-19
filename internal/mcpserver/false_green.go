@@ -16,11 +16,11 @@ import (
 // contradiction is decidable here, on the way past, and saying so costs one
 // banner. Two reports in one session nearly retired targets on such a green.
 //
-// This is a warning, not a block. Reaping and delivery are unchanged: the
-// report still reaches the overseer whole, with the flags in front of it, and
-// the overseer decides. A hard refusal would be the wrong trade — the
-// classifier is a heuristic, and an agent unable to report at all is a worse
-// failure than one whose report arrives annotated.
+// Delivery is unchanged: the report still reaches the overseer whole, with
+// the flags in front of it. Auto-reap is not (🎯T470): a report carrying any
+// false-green flag is never read as finished_work in the same pass — the
+// daemon must not hold both "evidence does not support the claim" and "the
+// claim is true". Overseer judgment of the annotated report remains separate.
 
 // gateStore is opened once for the daemon's lifetime. A store that cannot be
 // opened degrades to textual checking, which needs no disk: the flags that

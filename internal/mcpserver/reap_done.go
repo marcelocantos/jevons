@@ -102,6 +102,12 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if !LooksLikeFinishedWorkReport(report) {
 		return false, "not_finished_work_report"
 	}
+	// 🎯T470: a report the false-green check flagged is never auto-reaped as
+	// finished_work in the same pass — jv-t391 was flagged
+	// attestation_not_green and reaped finished_work 447ms later.
+	if flags := FalseGreenFlags(report); len(flags) > 0 {
+		return false, "false_green_" + string(flags[0].Kind)
+	}
 	def := reg.Def(name)
 	if def == nil {
 		return false, "not_registered"
@@ -159,6 +165,16 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped",
 				reapDecisionFields(name, reason, report))
 			slog.Info("T395 kept agent that asked rather than finished",
+				"agent", name, "reason", reason)
+		}
+		// 🎯T470: same visibility for a false-green veto — the daemon held
+		// that the evidence did not support the claim and must not also
+		// treat the claim as finished_work.
+		if strings.HasPrefix(reason, "false_green_") {
+			fields := reapDecisionFields(name, reason, report)
+			fields["false_green_flags"] = falseGreenKinds(FalseGreenFlags(report))
+			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
+			slog.Info("T470 kept agent whose finish report was false-green flagged",
 				"agent", name, "reason", reason)
 		}
 		return

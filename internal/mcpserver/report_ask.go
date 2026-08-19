@@ -292,6 +292,10 @@ var checkpointDelimiters = []string{":", "—", "–", "-", ".", ",", ";"}
 // explicitIncompleteMarkers are outright statements of non-completion. They
 // outrank any completion word elsewhere in the same report: a worker that says
 // it has changed nothing has not finished, whatever else the prose contains.
+//
+// 🎯T470: the jv-t390 / jv-t391 checkpoint incidents ended with explicit
+// non-completion ("nothing here is achieved" / "oracles are missing") while
+// still carrying a bare "complete" substring — those sentences must veto.
 var explicitIncompleteMarkers = []string{
 	"incomplete",
 	"unfinished",
@@ -312,6 +316,11 @@ var explicitIncompleteMarkers = []string{
 	"status: in progress",
 	"still in progress",
 	"no commit yet",
+	"no commit, no gate",
+	"no product evidence yet",
+	"nothing here is achieved",
+	"oracles are missing",
+	"oracles are the missing half",
 	"have not committed",
 	"haven't committed",
 	"nothing changed yet",
@@ -383,12 +392,13 @@ func ClassifyReportAskDetail(report string) ReportAskFinding {
 		{AskDecisionRequest, decisionRequestMarkers, nil},
 	} {
 		if m, i := firstAcceptedMarker(lower, class.markers, class.accept); i >= 0 {
-			span, off := excerptAround(s, i, i+len(m))
+			// 🎯T470: name the sentence that matched, not a 200-byte window.
+			span, off := matchedSentence(s, i, i+len(m))
 			return ReportAskFinding{Class: class.class, Marker: m, Span: span, Offset: off}
 		}
 	}
 	if i := closingQuestionIndex(s); i >= 0 {
-		span, off := excerptAround(s, i, len(s))
+		span, off := matchedSentence(s, i, len(s))
 		return ReportAskFinding{Class: AskClosingQuestion, Span: span, Offset: off}
 	}
 	return ReportAskFinding{Class: AskNone}
@@ -525,7 +535,7 @@ func checkpointDeclaration(s, lower string) (ReportAskFinding, bool) {
 		line := lower[start:end]
 		at := start + len(line) - len(strings.TrimLeft(line, " \t*_`>-#"))
 		if strings.HasPrefix(lower[at:end], word) && isCheckpointDelimited(lower[at+len(word):end]) {
-			span, off := excerptAround(s, at, at+len(word))
+			span, off := matchedSentence(s, at, at+len(word))
 			return ReportAskFinding{Class: AskCheckpoint, Marker: word, Span: span, Offset: off}, true
 		}
 		start = end + 1
@@ -600,16 +610,55 @@ func asciiLower(s string) string {
 	return string(b)
 }
 
-// reportSpanWindow bounds the excerpt recorded for a classifier decision: long
-// enough to read the sentence that fired, short enough to sit in a log line.
+// reportSpanWindow bounds the legacy clipped excerpt. Prefer matchedSentence
+// for reap/ask decision spans (🎯T470): a wrong reap must be diagnosable from
+// the sentence alone, not from a 200-byte window that cuts mid-clause.
 const reportSpanWindow = 200
+
+// matchedSentence returns the sentence (or newline-bounded clause) that
+// contains [start,end), plus its byte offset (🎯T470). Semicolons count as
+// breaks so "Implementation is complete; the oracles are missing" yields the
+// clause that actually carried the claim word.
+//
+// Diagnostic only — never load-bearing for the reap decision itself.
+func matchedSentence(report string, start, end int) (string, int) {
+	if start < 0 || end > len(report) || start > end {
+		return "", 0
+	}
+	lo := 0
+	if start > 0 {
+		if i := strings.LastIndexAny(report[:start], ".!?;\n"); i >= 0 {
+			lo = i + 1
+		}
+	}
+	hi := len(report)
+	if i := strings.IndexAny(report[end:], ".!?;\n"); i >= 0 {
+		hi = end + i + 1 // include the delimiter
+		if hi <= len(report) && report[hi-1] == '\n' {
+			hi-- // keep the sentence without its trailing newline
+		}
+	}
+	for lo < start && lo < hi && isASCIISpace(report[lo]) {
+		lo++
+	}
+	for hi > end && hi > lo && isASCIISpace(report[hi-1]) {
+		hi--
+	}
+	for lo > 0 && lo < len(report) && !utf8.RuneStart(report[lo]) {
+		lo--
+	}
+	for hi < len(report) && !utf8.RuneStart(report[hi]) {
+		hi++
+	}
+	return report[lo:hi], lo
+}
 
 // excerptAround returns the span of report a reader needs to see why the
 // classifier fired on [start,end): the enclosing line, clipped to
 // reportSpanWindow bytes around the match, plus its offset in report.
 //
-// The span is diagnostic, never load-bearing — a decision is never made from
-// it, so a clipped or empty span degrades the log entry and nothing else.
+// Prefer matchedSentence for new decision logging (🎯T470). Kept for callers
+// that still want a bounded window (truncation tails).
 func excerptAround(report string, start, end int) (string, int) {
 	if start < 0 || end > len(report) || start > end {
 		return "", 0

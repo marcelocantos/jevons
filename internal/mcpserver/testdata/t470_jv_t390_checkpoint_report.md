@@ -1,0 +1,13 @@
+**Checkpoint — 🎯T390 in progress, ending turn per the 🎯T392.4 depth ceiling.**
+
+What I established this turn:
+
+1. **claudia's API is confirmed and read** (`../claudia/plan_usage.go`, local `replace` in `go.mod` at `v0.21.1-0.20260810095354-b995fdd25ffe`): `QueryAllPlanUsage(ctx, *AllPlanUsageArgs) ([]PlanUsage, error)`, with `PlanUsage{Provider, Status (available|unavailable), Reason, Windows []PlanWindow{Name session|weekly, UsedPercent, RemainingPercent, ResetsAt, LimitWindow}, FetchedAt, PlanType}`. Test injection points that make clause 5 hermetic without network: `HTTPClient`, `ClaudeUsageURL`, `CodexUsageURL`, `CodexAuthPath`, `GrokBillingRaw`, `Now`.
+
+2. **One correction to the brief, from the source rather than the ledger text:** Grok is no longer flatly unavailable in claudia. `queryGrokPlanUsage` reads a **weekly** SuperGrok pool from the undocumented `cli-chat-proxy.grok.com/v1/billing` endpoint, **opt-in** behind `GrokUnstableUsage` / `CLAUDIA_GROK_USAGE=1`, and returns unavailable-with-reason when the opt-in is off, the token is missing, or the body is unparseable. So clause 2 for Grok must render "unavailable — opt-in surface disabled / undocumented endpoint" by default, and must render the real weekly window when the opt-in is on. Bedrock remains unconditionally unavailable with a reason. Fabricating a Grok number is still the failure; suppressing a number claudia actually publishes would be the opposite error.
+
+3. **Prior uncommitted work for this exact target already exists in the shared clone** — untracked: `internal/planusage/`, `cmd/jevonsd/planusage.go`, `internal/server/plan_usage_api.go` (its header comment already cites the `/api/cost` vs `/api/capacity` distinction as the target's crux). Nothing is committed yet; `git log -- internal/server/plan_usage_api.go` is empty.
+
+**Next step on resume (do this first, before writing any code):** read those three untracked paths and judge them against the six acceptance clauses rather than assuming they are mine or that they are complete — then extend rather than rewrite. Specifically to verify: whether the capacity subsystem actually consumes the same source (clause 4, the clause that closes the $0.00/hr accounting=unknown hole), whether staleness is modelled (clause 5's third case), and whether the cockpit renders it at all (clause 1 — no `web/` change is staged, so clause 1 is almost certainly still open). Then: hermetic oracle over fixture responses, `bin/gate -- make test-go`, a detached HEAD worktree run for the web half (🎯T398), `git commit --only` on my own paths (🎯T377), and detached `scripts/restart-daily-jevonsd.sh` plus a live probe (🎯T194).
+
+No commit, no gate, and no product evidence yet — nothing here is achieved.

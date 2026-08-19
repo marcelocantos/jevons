@@ -96,9 +96,12 @@ func TestT497CheckpointDoesNotReap(t *testing.T) {
 			wantAsk:  AskCheckpoint,
 		},
 		{
-			name: "genuine finish with SHA and GATE GREEN reaps",
+			// Cite oracle evidence without an invented GATE id: a fake id trips
+			// 🎯T386 attestation_unknown, and 🎯T470 refuses to reap any
+			// false-green-flagged report (even one that otherwise looks done).
+			name: "genuine finish with SHA and go test PASS reaps",
 			report: "🎯T496 done. Landed as commit 3f2c1a9 (ancestor of HEAD verified).\n" +
-				"GATE make-test-web exit=0 GREEN id=9f13c0a2 out=6b1d9e4f2a01 dur=42.1s\n" +
+				"go test ./internal/mcpserver -run T497 PASS\n" +
 				"Hermetic oracle covers the paint path both ways.",
 			wantReap: true,
 			wantAsk:  AskNone,

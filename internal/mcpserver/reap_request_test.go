@@ -241,8 +241,10 @@ func TestT439SpanLocatesTheDecision(t *testing.T) {
 		report[ask.Offset:ask.Offset+len(ask.Span)] != ask.Span {
 		t.Fatalf("span is not at offset %d in the report", ask.Offset)
 	}
-	if len(ask.Span) > reportSpanWindow+len(ask.Marker) {
-		t.Fatalf("span is %d bytes — too long for a log line", len(ask.Span))
+	// 🎯T470: decision spans are the matched sentence/clause, not a 200-byte
+	// window — a long sentence is still the right diagnostic unit.
+	if !strings.Contains(ask.Span, ask.Marker) {
+		t.Fatalf("span %q lost its marker %q", ask.Span, ask.Marker)
 	}
 
 	// The reap direction quotes the completion word instead.
