@@ -276,19 +276,30 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   ("refactor(web): T372 …") came to contain the whole of 🎯T370 —
   `git log --diff-filter=A -- web/scripts/fleet_cycle.js` still answers 29e69e8,
   and reverting T372 would silently revert T370. Commit as
-  `git commit --only <your paths>`, then confirm with `git show --stat HEAD`;
-  a worker-owned `GIT_INDEX_FILE` is equally sound. The `pre-commit` hook
-  (`scripts/hooks/pre-commit` → `internal/commitscope`) refuses the sweeping
-  forms — bare `git commit`, `-a`, `-i` — by reading which index git is
-  committing from, and names the paths that would have gone in. Deliberate
-  whole-index commits are `JEVONS_COMMIT_SCOPE=off git commit …`, never
-  `--no-verify` reflexively. `make` installs the hook (`bin/commitscope
-  --install`), since git never populates `.git/hooks` from the tree and a guard
-  waiting to be copied by hand is absent in the fresh clone that needs it; a
-  pre-commit hook this repo did not write is left alone and reported as
-  leaving the clone unguarded. Do **not** redirect `core.hooksPath` — that
-  would disable git-lfs's own hooks. Sibling: 🎯T376 (same root cause, working
-  tree rather than index).
+  `git commit --only <your paths>`, then confirm with `git show --stat HEAD`.
+  The `pre-commit` hook (`scripts/hooks/pre-commit` → `internal/commitscope`)
+  refuses the sweeping forms — bare `git commit`, `-a`, `-i` — by reading
+  which index git is committing from, and names the paths that would have
+  gone in. Deliberate whole-index commits are `JEVONS_COMMIT_SCOPE=off git
+  commit …`, never `--no-verify` reflexively. `make` installs the hook
+  (`bin/commitscope --install`), since git never populates `.git/hooks` from
+  the tree and a guard waiting to be copied by hand is absent in the fresh
+  clone that needs it; a pre-commit hook this repo did not write is left
+  alone and reported as leaving the clone unguarded. Do **not** redirect
+  `core.hooksPath` — that would disable git-lfs's own hooks. Sibling:
+  🎯T376 (same root cause, working tree rather than index).
+- **Private-index commits re-check HEAD (🎯T432):** when `git commit --only`
+  cannot — a shared hot file (Makefile, AGENTS.md) still holds another
+  worker's uncommitted hunks, so the work tree is not a safe stage source —
+  use `bin/commitbase` (`internal/commitbase`), not a hand-rolled
+  `GIT_INDEX_FILE` + `read-tree` + `commit-tree`. A tree seeded from an
+  older HEAD does not omit what landed in between; it deletes it
+  (e66e934 silently reverted 🎯T405). `git update-ref <ref> <new> <old>`
+  alone is not enough: it guards the ref move, not the tree's base. The
+  recipe records the seed SHA, stages only named paths and exact blobs,
+  re-checks HEAD before `commit-tree`, and refuses when it moved — naming
+  the paths that would be overwritten. Escape: `JEVONS_COMMIT_BASE=off`.
+  Sibling of 🎯T376 / 🎯T377.
 - **Run gates so the status survives (🎯T386 / 🎯T396):** a pipeline's exit
   status is the **last** command's, so `go test ./... | tail -20` reports
   tail's success — which is unconditional. That is how a suite that died on a

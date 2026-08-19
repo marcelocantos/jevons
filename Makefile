@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope attrib runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope
+all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -53,6 +53,17 @@ commitscope: bin/commitscope
 bin/commitscope: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/commitscope ./cmd/commitscope
+
+# Blessed private-index commit recipe (🎯T432). Use when `git commit --only`
+# cannot: a shared hot file still holds another worker's uncommitted hunks.
+# Seeds from HEAD, stages only named paths/blobs, re-checks HEAD before
+# commit-tree, refuses on staleness — update-ref CAS alone is not enough.
+.PHONY: commitbase
+commitbase: bin/commitbase
+
+bin/commitbase: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/commitbase ./cmd/commitbase
 
 # Stopped-worker attribution (🎯T466). Operator lists / recovers / discards
 # one agent's unfinished slice without transcript archaeology or a bulk
