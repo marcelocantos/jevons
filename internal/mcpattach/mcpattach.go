@@ -40,6 +40,20 @@ type Args struct {
 // user-scope maps. Isolates and daily both set AgentDef.MCPExclusive.
 const Exclusive = true
 
+// StampExclusive sets MCPExclusive on def. If a Grok connect-mode leftover
+// was minted before exclusive MCP, it returns true so the caller can drop
+// ConnectURL/PID (that serve has no GROK_HOME). Idempotent when already set.
+func StampExclusive(def *claudia.AgentDef) (dropGrokConnect bool) {
+	if def == nil {
+		return false
+	}
+	if def.MCPExclusive {
+		return false
+	}
+	def.MCPExclusive = Exclusive
+	return def.Provider == claudia.ProviderGrok && (def.ConnectURL != "" || def.ConnectPID != 0)
+}
+
 // HTTPURL is the streamable-HTTP endpoint agents dial. host must be a
 // concrete address (never "localhost"); port is the served port (🎯T379).
 func HTTPURL(host string, port int) string {

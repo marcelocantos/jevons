@@ -354,6 +354,10 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 			dirty = true
 		}
 	}
+	if !def.MCPExclusive {
+		def.MCPExclusive = mcpattach.Exclusive
+		dirty = true
+	}
 	if dirty {
 		if err := f.reg.Register(*def); err != nil {
 			return fmt.Errorf("update agent %q: %w", t.ID, err)

@@ -869,6 +869,7 @@ func main() {
 	fleetAdapter.SetMCP(mcpAttach)
 	mcpSrv.SetMCP(mcpAttach)
 	jevonDef.MCPServers = mcpattach.SessionServers(mcpAttach, jevonDef.Provider, jevonDef.WorkDir)
+	stampRegistryMCPExclusive(registry, jevonDef)
 	if err := registry.Register(*jevonDef); err != nil {
 		slog.Warn("could not persist overseer MCPServers", "err", err)
 	}

@@ -44,6 +44,30 @@ func TestEnsureRegisteredSetsMCPServersFromAttach(t *testing.T) {
 	if def.MCPServers[0].URL != "http://127.0.0.1:13705/mcp" {
 		t.Fatalf("url = %q", def.MCPServers[0].URL)
 	}
+	if !def.MCPExclusive {
+		t.Fatal("mint must set MCPExclusive")
+	}
+}
+
+func TestEnsureRegisteredBackfillsMCPExclusive(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-old", SessionID: "s1", Provider: claudia.ProviderGrok,
+		WorkDir: t.TempDir(), Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f := NewClaudia(reg)
+	if err := f.ensureRegistered(&thread.Thread{ID: "jv-old"}); err != nil {
+		t.Fatal(err)
+	}
+	def := reg.Def("jv-old")
+	if def == nil || !def.MCPExclusive {
+		t.Fatalf("backfill Exclusive: %+v", def)
+	}
 }
 
 func TestIsolateCodexMintOmitsHTTP(t *testing.T) {
