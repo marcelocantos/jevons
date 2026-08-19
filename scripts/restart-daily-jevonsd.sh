@@ -483,8 +483,15 @@ start_daemon_detached() {
   # with every concurrent caller. Clear them in this shell before nohup so
   # the child environ is clean; the script's own later logic has already
   # passed the re-exec gates.
+  #
+  # 🎯T529: same for JEVONS_RESTART_LOCK / LOCK_WAIT_SEC — LOCK_FILE and
+  # LOCK_WAIT_SEC were already snapshotted into locals above; leaving the
+  # env keys set would hand every fleet seat the fleet lock path, and
+  # TestRestartThrashPolicy (or a real bounce from an agent) would then
+  # contend on ambient state instead of its own fixture/default.
   unset JEVONS_RESTART_DETACHED JEVONS_RESTART_LOCKED
   unset JEVONS_RESTART_NO_DETACH JEVONS_RESTART_NO_LOCK JEVONS_RESTART_FAULT
+  unset JEVONS_RESTART_LOCK JEVONS_RESTART_LOCK_WAIT_SEC
 
   if command -v setsid >/dev/null 2>&1; then
     # Linux: new session; still wrap with nohup for SIGHUP immunity.

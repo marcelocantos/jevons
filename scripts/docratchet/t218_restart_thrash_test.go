@@ -264,15 +264,22 @@ func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
 	return string(b), err
 }
 
-// scrubRestartControlEnv drops the script's own re-exec / seam flags so a
-// caller whose process tree inherited them (daily daemon started under the
-// restart script) cannot make the oracle skip detach or the lock.
+// scrubRestartControlEnv drops the script's own re-exec / seam flags and
+// lock-path knobs so a caller whose process tree inherited them (daily
+// daemon started under the restart script) cannot make the oracle skip
+// detach/lock or share a fleet lock file.
+//
+// 🎯T529: JEVONS_RESTART_LOCK / LOCK_WAIT_SEC must be filtered too — appending
+// a fixture value after an inherited key is OS-dependent, so a fleet lock
+// path left in the slice can still win and make the thrash verdict ambient.
 func scrubRestartControlEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		key, _, _ := strings.Cut(kv, "=")
 		switch key {
 		case "JEVONS_RESTART_LOCKED",
+			"JEVONS_RESTART_LOCK",
+			"JEVONS_RESTART_LOCK_WAIT_SEC",
 			"JEVONS_RESTART_DETACHED",
 			"JEVONS_RESTART_NO_LOCK",
 			"JEVONS_RESTART_NO_DETACH",
@@ -590,6 +597,9 @@ func TestRestartThrashPolicyDocumented(t *testing.T) {
 		// 🎯T442: the daemon must not inherit the re-exec flags, or every
 		// agent it spawns skips the lock and races the port.
 		"unset JEVONS_RESTART_DETACHED JEVONS_RESTART_LOCKED",
+		// 🎯T529: lock-path knobs must not leak into the daemon either —
+		// an inherited fleet LOCK path makes thrash-window arithmetic ambient.
+		"unset JEVONS_RESTART_LOCK JEVONS_RESTART_LOCK_WAIT_SEC",
 	} {
 		if !strings.Contains(body, m) {
 			t.Errorf("restart script missing thrash-policy marker %q", m)
@@ -597,13 +607,16 @@ func TestRestartThrashPolicyDocumented(t *testing.T) {
 	}
 }
 
-// TestScrubRestartControlEnv is the hermetic half of the 🎯T442 env-leak
-// fix: a parent that exports the script's re-exec flags (the daily daemon
-// used to) must not be able to make the oracle skip detach or the lock.
+// TestScrubRestartControlEnv is the hermetic half of the 🎯T442/T529 env-leak
+// fix: a parent that exports the script's re-exec flags or a fleet
+// JEVONS_RESTART_LOCK* path (the daily daemon used to) must not be able to
+// make the oracle skip detach/lock or share the fleet lock file.
 func TestScrubRestartControlEnv(t *testing.T) {
 	in := []string{
 		"PATH=/bin",
 		"JEVONS_RESTART_LOCKED=1",
+		"JEVONS_RESTART_LOCK=/fleet/restart-daily.lock",
+		"JEVONS_RESTART_LOCK_WAIT_SEC=240",
 		"JEVONS_RESTART_DETACHED=1",
 		"JEVONS_RESTART_NO_LOCK=1",
 		"JEVONS_RESTART_NO_DETACH=1",
