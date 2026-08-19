@@ -252,18 +252,6 @@ func Classify(sig Signal) Decision {
 			Reason: "deliberate stop — do not thrash",
 		}
 	}
-	// 🎯T414: a repair mission is an action on an agent, so it needs the same
-	// permission as a spawn. Ignoring rather than repairing is the whole
-	// point — a parked agent is not a fault to fix, and prescribing an action
-	// no one can execute is how the sentinel burned an overseer judgement
-	// call every cycle.
-	if d := fleetintent.Allows(sig.FleetIntent, sig.Intent, fleetintent.ControlRepair); !d.Allow {
-		return Decision{
-			Signal: sig,
-			Action: ActionIgnore,
-			Reason: "intent says do not run — " + fleetintent.Describe(d.Blocking) + " (" + d.Reason + ")",
-		}
-	}
 
 	sev := strings.ToLower(strings.TrimSpace(sig.Severity))
 	if sev == "" {
@@ -286,6 +274,42 @@ func Classify(sig Signal) Decision {
 			Signal: sig,
 			Action: ActionHarnessOK,
 			Reason: "fleet cannot run — " + cause + "; do not spawn",
+		}
+	}
+
+	// 🎯T410: blocked-on-owner is a report to the owner, never a repair.
+	// Before the intent Allows check so the reason names the ask instead
+	// of a generic "intent says do not run".
+	if kind == "blocked_on_owner" {
+		return Decision{
+			Signal: sig,
+			Action: ActionHarnessOK,
+			Reason: "blocked on owner — surface ask, no repair",
+		}
+	}
+
+	// 🎯T410: finished-awaiting-gate → close the target (file+PO), never
+	// rehydrate/interrupt/nudge the worker. Before mechanical idle-residue
+	// repair so the same phase=idle observation does not fall through to
+	// ActionRepair.
+	if kind == "finished_awaiting_gate" {
+		return Decision{
+			Signal: sig,
+			Action: ActionFilePO,
+			Reason: "finished awaiting gate — close target, no worker nudge",
+		}
+	}
+
+	// 🎯T414: a repair mission is an action on an agent, so it needs the same
+	// permission as a spawn. Ignoring rather than repairing is the whole
+	// point — a parked agent is not a fault to fix, and prescribing an action
+	// no one can execute is how the sentinel burned an overseer judgement
+	// call every cycle.
+	if d := fleetintent.Allows(sig.FleetIntent, sig.Intent, fleetintent.ControlRepair); !d.Allow {
+		return Decision{
+			Signal: sig,
+			Action: ActionIgnore,
+			Reason: "intent says do not run — " + fleetintent.Describe(d.Blocking) + " (" + d.Reason + ")",
 		}
 	}
 
@@ -473,7 +497,13 @@ func FormatReport(res CycleResult, sentinel bool) string {
 		b.WriteString("File+PO candidates: ")
 		b.WriteString(strings.Join(res.FiledSymptoms, ", "))
 		b.WriteByte('\n')
-		if sentinel {
+		if onlyFinishedAwaitingGate(res) {
+			if sentinel {
+				b.WriteString("Act: deliver close-target mission to responsible PO; do not rehydrate/interrupt/nudge the worker (🎯T410).\n")
+			} else {
+				b.WriteString("Root: close/achieve the finished target; do not nudge the worker (🎯T410).\n")
+			}
+		} else if sentinel {
 			b.WriteString("Act: deliver mission to jevons-po (spawn-only) + file/brief residual; sentinel does not implement product code or open Ship.\n")
 		} else {
 			b.WriteString("Root: decide file/brief-PO/repair/ignore. Staff cycle does not implement product code or open Ship.\n")
@@ -484,10 +514,37 @@ func FormatReport(res CycleResult, sentinel bool) string {
 		} else {
 			b.WriteString("Root: consider bounded repair (rehydrate/interrupt/nudge). No product implement by staff.\n")
 		}
+	} else if hasBlockedOnOwner(res) {
+		b.WriteString("Root: surface blocked-on-owner ask to the owner — no repair (🎯T410).\n")
 	} else {
 		b.WriteString("Root: snapshot only — no file/repair action required this cycle.\n")
 	}
 	return b.String()
+}
+
+// onlyFinishedAwaitingGate reports whether every file+PO decision this cycle
+// is a 🎯T410 close-target (no spawn residual mixed in).
+func onlyFinishedAwaitingGate(res CycleResult) bool {
+	saw := false
+	for _, d := range res.Decisions {
+		if d.Action != ActionFilePO {
+			continue
+		}
+		if d.Signal.Kind != "finished_awaiting_gate" {
+			return false
+		}
+		saw = true
+	}
+	return saw
+}
+
+func hasBlockedOnOwner(res CycleResult) bool {
+	for _, d := range res.Decisions {
+		if d.Signal.Kind == "blocked_on_owner" {
+			return true
+		}
+	}
+	return false
 }
 
 // FormatResourceSnapshot is the resource section of the wire brief.
@@ -510,9 +567,15 @@ func FormatResourceSnapshot(r ResourceSnapshot) string {
 
 // FormatPOMission builds the jevons-po mission text for a file+PO decision.
 // PO is spawn-only (T125); sentinel never implements product code.
+// 🎯T410 close-target missions prescribe achieving/closing the leaf, not
+// spawning or nudging the finished worker.
 func FormatPOMission(res CycleResult) string {
 	var b strings.Builder
-	b.WriteString("[sentinel mission 🎯T219] Residual wrongness — file bullseye if missing, then spawn Build workers under parent=jevons-po (T125 spawn-only; no product implement by PO).\n")
+	if onlyFinishedAwaitingGate(res) {
+		b.WriteString("[sentinel mission 🎯T410] Worker finished; target still open — achieve/close the target. Do not rehydrate/interrupt/nudge the worker.\n")
+	} else {
+		b.WriteString("[sentinel mission 🎯T219] Residual wrongness — file bullseye if missing, then spawn Build workers under parent=jevons-po (T125 spawn-only; no product implement by PO).\n")
+	}
 	fmt.Fprintf(&b, "Primary: %s\n", res.Primary)
 	if len(res.FiledSymptoms) > 0 {
 		b.WriteString("Symptoms: ")
@@ -532,6 +595,10 @@ func FormatPOMission(res CycleResult) string {
 			fmt.Fprintf(&b, "  evidence: %s\n", d.Signal.Detail)
 		}
 	}
-	b.WriteString("Constraints: no Ship plane; local Build only unless owner opens Ship. Cite oracle evidence on finish.\n")
+	if onlyFinishedAwaitingGate(res) {
+		b.WriteString("Constraints: close/achieve only; no worker nudge; no Ship unless owner opens it.\n")
+	} else {
+		b.WriteString("Constraints: no Ship plane; local Build only unless owner opens Ship. Cite oracle evidence on finish.\n")
+	}
 	return b.String()
 }

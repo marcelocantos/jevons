@@ -576,6 +576,8 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 					ao.GraceElapsed = now.Sub(fs) >= grace
 					// HarnessActed unknown without nudge ledger — leave false until grace.
 					rt.mu.Unlock()
+					// 🎯T410: evidence the daemon already holds — not phase alone.
+					fillIdleResidueEvidence(&ao, d, args.StateDir, intent)
 				} else {
 					rt.mu.Lock()
 					delete(rt.firstSeen, "idle:"+d.Name)

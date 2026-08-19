@@ -143,6 +143,14 @@ type AgentObs struct {
 	HarnessActed   bool // dead-agent recover / idle nudge already acted
 	GraceElapsed   bool
 	Detail         string
+	// 🎯T410 evidence — daemon-held, not phase=idle alone. ClassifyIdleResidue
+	// names stalled vs finished-awaiting-gate vs blocked-on-owner from these.
+	BoundTarget          string
+	HasBoundCommits     bool
+	TargetLedgerStatus   string
+	ReportLooksFinished  bool
+	OwnerAskPresent      bool
+	IntentBlockedOwner   bool
 }
 
 // EventObs is one eventlog-shaped anomaly sample.
@@ -223,17 +231,53 @@ func BuildSignals(in ObserveInput) []Signal {
 			continue
 		}
 		if a.IdleResidue && a.OpenMission {
-			out = append(out, Signal{
-				Kind:         "fleet_idle_residue",
-				Symptom:      "idle:" + name,
-				Severity:     "medium",
-				Mechanical:   true, // T207 idle nudge owns first response
-				HarnessActed: a.HarnessActed,
-				GraceElapsed: a.GraceElapsed,
-				Intent:       in.agentIntent(name),
-				Detail: firstNonEmpty(a.Detail,
-					fmt.Sprintf("open-mission idle residue phase=%s", a.Phase)),
+			// 🎯T410: name the actual state from daemon-held evidence before
+			// prescribing repair. phase=idle alone is not enough.
+			intentBlocked := a.IntentBlockedOwner ||
+				in.agentIntent(name) == fleetintent.BlockedOwner
+			verdict := ClassifyIdleResidue(IdleResidueEvidence{
+				IdleResidue:         true,
+				OpenMission:         true,
+				BoundTarget:         a.BoundTarget,
+				HasBoundCommits:    a.HasBoundCommits,
+				TargetLedgerStatus:  a.TargetLedgerStatus,
+				ReportLooksFinished: a.ReportLooksFinished,
+				OwnerAskPresent:     a.OwnerAskPresent || intentBlocked,
+				IntentBlockedOwner:  intentBlocked,
 			})
+			detail := firstNonEmpty(a.Detail, verdict.Detail,
+				fmt.Sprintf("open-mission idle residue phase=%s", a.Phase))
+			switch verdict.Class {
+			case IdleResidueFinishedAwaitingGate:
+				out = append(out, Signal{
+					Kind:       "finished_awaiting_gate",
+					Symptom:    "finished:" + name,
+					Severity:   "medium",
+					Mechanical: false,
+					Intent:     in.agentIntent(name),
+					Detail:     detail,
+				})
+			case IdleResidueBlockedOnOwner:
+				out = append(out, Signal{
+					Kind:       "blocked_on_owner",
+					Symptom:    "owner_block:" + name,
+					Severity:   "medium",
+					Mechanical: false,
+					Intent:     in.agentIntent(name),
+					Detail:     detail,
+				})
+			default: // stalled (and any unexpected class)
+				out = append(out, Signal{
+					Kind:         "fleet_idle_residue",
+					Symptom:      "idle:" + name,
+					Severity:     "medium",
+					Mechanical:   true, // T207 idle nudge owns first response
+					HarnessActed: a.HarnessActed,
+					GraceElapsed: a.GraceElapsed,
+					Intent:       in.agentIntent(name),
+					Detail:       detail,
+				})
+			}
 		}
 	}
 
