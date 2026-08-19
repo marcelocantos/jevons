@@ -25,6 +25,10 @@ import (
 // answer — "why did X" answered with "because Y" carries no SHA/PASS/achieve
 // marker, and before this every bounce re-fired the answered question as
 // owner-intent-resume.
+// 🎯T512: an owner fleet directive (kill/stop/park/reap a named seat) is closed
+// by later ops evidence (killed/deregistered, gone from agent_list, fleet
+// intent reaped/parked) for that seat — ops directives have no code SHA, and
+// before this every bounce re-fired "Kill jevons-po" after the seat was gone.
 //
 // Durable source: state_dir/chatlog/<overseer>.jsonl (survives control-plane
 // bounce). On restart, when a recoverable open owner instruction is found,
@@ -33,7 +37,7 @@ import (
 //
 // Residual classes (no resume payload; daemon-restarted status path only):
 //   - no_chatlog / no_user_turns / only_harness / ack_only / no_recoverable_intent
-//   - answered_or_closed (T344: later assistant evidence closed the newest work)
+//   - answered_or_closed (T344/T477/T512: later assistant evidence closed the newest work)
 //   - session fully wiped (chatlog missing or empty after materialize loss)
 
 const (
@@ -93,8 +97,10 @@ type OwnerIntentTurn struct {
 // ExtractOpenOwnerIntent picks the most recent substantive owner instruction
 // from turns ordered oldest→newest. Skips harness injects, pure restart
 // re-nudges, and short acks. When a later assistant turn reports product
-// evidence for the same complaint, yields residual answered_or_closed (🎯T344).
-// Hermetic oracle surface for 🎯T328 + 🎯T344.
+// evidence for the same complaint, yields residual answered_or_closed (🎯T344);
+// explanation answers close questions (🎯T477); fleet ops evidence closes
+// kill/stop/park/reap directives (🎯T512). Hermetic oracle surface for
+// 🎯T328 + 🎯T344 + 🎯T477 + 🎯T512.
 func ExtractOpenOwnerIntent(turns []OwnerIntentTurn) OpenOwnerIntent {
 	if len(turns) == 0 {
 		return OpenOwnerIntent{Residual: ResidualNoUserTurns}
@@ -187,6 +193,12 @@ func ExtractOpenOwnerIntent(turns []OwnerIntentTurn) OpenOwnerIntent {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 
+	// 🎯T512: kill/stop/park/reap fleet directives close on ops evidence for the
+	// named seat (no SHA/PASS/achieve required).
+	if OwnerFleetDirectiveCompleted(last.Text, laterAnswers) {
+		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
+	}
+
 	src := strings.TrimSpace(last.Source)
 	if src == "" {
 		src = "owner_chat"
@@ -244,6 +256,329 @@ func OwnerQuestionAnsweredWithExplanation(ownerText string, laterAssistant []str
 		}
 	}
 	return false
+}
+
+// openIntentFleetDirectiveRe matches an owner kill/stop/park/reap directive
+// aimed at a named fleet seat (🎯T512). Captures the verb and the remainder
+// (agent name / "Jevons PO" / backtick name).
+var openIntentFleetDirectiveRe = regexp.MustCompile(`(?i)^\s*(?:please\s+)?(kill|stop|park|reap)\b(?:\s+(?:the|a|an))?\s+(.+?)\s*$`)
+
+// OwnerFleetDirectiveCompleted reports whether the owner turn is a fleet
+// kill/stop/park/reap directive that a later assistant excerpt completes with
+// ops evidence for the same named seat — killed/deregistered, gone from the
+// agent list, stopped+parked, or fleet intent reaped/parked — without needing
+// SHA/PASS/achieve markers (🎯T512). Unrelated seats and progress chatter leave
+// the directive open.
+func OwnerFleetDirectiveCompleted(ownerText string, laterAssistant []string) bool {
+	targets := ownerFleetDirectiveTargets(ownerText)
+	if len(targets) == 0 {
+		return false
+	}
+	for _, a := range laterAssistant {
+		a = strings.TrimSpace(a)
+		if a == "" || !openIntentFleetOpsEvidence(a) {
+			continue
+		}
+		if openIntentFleetOpsNamesTarget(a, targets) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownerFleetDirectiveTargets returns normalised agent names the owner asked
+// to kill/stop/park/reap. Empty when the turn is not a fleet directive or
+// names no seat (e.g. "kill all workers" without a concrete agent id).
+func ownerFleetDirectiveTargets(ownerText string) []string {
+	ownerText = strings.TrimSpace(ownerText)
+	if ownerText == "" {
+		return nil
+	}
+	m := openIntentFleetDirectiveRe.FindStringSubmatch(ownerText)
+	if m == nil {
+		return nil
+	}
+	rest := stripFleetDirectiveNoise(strings.TrimSpace(m[2]))
+	if rest == "" {
+		return nil
+	}
+	// Prefer backtick-quoted names when present.
+	var names []string
+	for _, q := range extractBacktickTokens(rest) {
+		if n := normalizeFleetAgentName(q); n != "" && looksLikeFleetAgentName(n) {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		if n := normalizeFleetAgentName(rest); n != "" && looksLikeFleetAgentName(n) {
+			names = append(names, n)
+		}
+	}
+	return uniqueStrings(names)
+}
+
+// stripFleetDirectiveNoise drops trailing filler so "Kill jevons-po please"
+// and "Kill the jevons-po agent now" still resolve to the seat name.
+func stripFleetDirectiveNoise(rest string) string {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return ""
+	}
+	noise := []string{
+		"from the fleet", "from fleet", "please", "now", "immediately",
+		"thanks", "thank you", "agent", "seat", "process",
+	}
+	for {
+		low := strings.ToLower(rest)
+		trimmed := false
+		for _, n := range noise {
+			if strings.HasSuffix(low, n) {
+				rest = strings.TrimSpace(rest[:len(rest)-len(n)])
+				rest = strings.TrimRight(rest, ".,!;:?")
+				trimmed = true
+				break
+			}
+		}
+		if !trimmed {
+			break
+		}
+	}
+	return strings.TrimSpace(rest)
+}
+
+func extractBacktickTokens(s string) []string {
+	var out []string
+	for {
+		i := strings.IndexByte(s, '`')
+		if i < 0 {
+			break
+		}
+		s = s[i+1:]
+		j := strings.IndexByte(s, '`')
+		if j < 0 {
+			break
+		}
+		tok := strings.TrimSpace(s[:j])
+		if tok != "" {
+			out = append(out, tok)
+		}
+		s = s[j+1:]
+	}
+	return out
+}
+
+// normalizeFleetAgentName maps owner spellings onto registry-style ids:
+// "Jevons PO" / "jevons_po" / "`jevons-po`" → "jevons-po".
+func normalizeFleetAgentName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.Trim(s, "`\"'")
+	s = strings.TrimRight(s, ".,!;:?")
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+			prevHyphen = false
+		case r == '-' || r == '_' || unicode.IsSpace(r):
+			if b.Len() > 0 && !prevHyphen {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	return out
+}
+
+// looksLikeFleetAgentName rejects bare plurals ("workers") and one-word
+// noise so "Kill all workers" does not close on coincidental chatter.
+func looksLikeFleetAgentName(n string) bool {
+	if n == "" || !strings.Contains(n, "-") {
+		return false
+	}
+	// Reject all-digit segments-only noise; require a letter somewhere.
+	hasLetter := false
+	for _, r := range n {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+			break
+		}
+	}
+	return hasLetter
+}
+
+func uniqueStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// openIntentFleetOpsEvidence detects kill/stop/park/reap completion prose
+// or tool payloads (🎯T512) — stricter than bare "working on the kill".
+func openIntentFleetOpsEvidence(text string) bool {
+	low := strings.ToLower(strings.TrimSpace(text))
+	if low == "" {
+		return false
+	}
+	// Progress chatter is not completion.
+	for _, m := range openIntentProgressMarkers {
+		if strings.Contains(low, m) {
+			return false
+		}
+	}
+	strong := []string{
+		"killed", "deregistered", "deregister",
+		"stopped and parked",
+		"already not registered",
+		"no longer in the registry",
+		"gone from the registry",
+		"removed from the fleet",
+		"removed from the registry",
+		"not on agent list",
+		"no longer appears in agent_list",
+		"no longer on agent_list",
+		"state=reaped", "state=parked",
+		`"state":"reaped"`, `"state":"parked"`,
+		`"state": "reaped"`, `"state": "parked"`,
+	}
+	for _, m := range strong {
+		if strings.Contains(low, m) {
+			return true
+		}
+	}
+	if strings.Contains(low, "fleet intent") &&
+		(strings.Contains(low, "reaped") || strings.Contains(low, "parked")) {
+		return true
+	}
+	if strings.Contains(low, "parked") &&
+		(strings.Contains(low, "still registered") || strings.Contains(low, "nothing revives")) {
+		return true
+	}
+	// Tool names that are themselves the completion act.
+	if strings.Contains(low, "agent_kill") || strings.Contains(low, "agent_stop") ||
+		(strings.Contains(low, "fleet_intent") &&
+			(strings.Contains(low, "reaped") || strings.Contains(low, "parked"))) {
+		return true
+	}
+	return false
+}
+
+func openIntentFleetOpsNamesTarget(answer string, targets []string) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	low := strings.ToLower(answer)
+	for _, t := range targets {
+		if t == "" {
+			continue
+		}
+		if strings.Contains(low, t) {
+			return true
+		}
+		spaced := strings.ReplaceAll(t, "-", " ")
+		if spaced != t && strings.Contains(low, spaced) {
+			return true
+		}
+	}
+	return false
+}
+
+func isOpenIntentFleetOpsTool(name string, input map[string]any) bool {
+	n := openIntentFleetOpsToolName(name, input)
+	if strings.Contains(n, "agent_kill") || strings.Contains(n, "agent_stop") {
+		return true
+	}
+	if strings.Contains(n, "fleet_intent") {
+		state := openIntentFleetOpsToolState(input)
+		return state == "reaped" || state == "parked"
+	}
+	return false
+}
+
+func openIntentFleetOpsToolName(name string, input map[string]any) string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if input != nil {
+		if tn, ok := input["tool_name"].(string); ok && strings.TrimSpace(tn) != "" {
+			n = strings.ToLower(strings.TrimSpace(tn))
+		}
+	}
+	return n
+}
+
+func openIntentFleetOpsToolState(input map[string]any) string {
+	if input == nil {
+		return ""
+	}
+	state, _ := input["state"].(string)
+	if state == "" {
+		if nested, ok := input["tool_input"].(map[string]any); ok {
+			state, _ = nested["state"].(string)
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(state))
+}
+
+// synthesizeOpenIntentFleetOpsTool builds a chatlog excerpt from a fleet-ops
+// tool_use so extraction can match both the completion act and the seat name
+// (🎯T512). Flat input alone often carries only `name=jevons-po`.
+func synthesizeOpenIntentFleetOpsTool(name string, input map[string]any, flat string) string {
+	tool := openIntentFleetOpsToolName(name, input)
+	state := openIntentFleetOpsToolState(input)
+	var parts []string
+	switch {
+	case strings.Contains(tool, "agent_kill"):
+		parts = append(parts, "agent_kill", "killed", "deregistered")
+	case strings.Contains(tool, "agent_stop"):
+		parts = append(parts, "agent_stop", "stopped and parked")
+	case strings.Contains(tool, "fleet_intent"):
+		parts = append(parts, "fleet_intent")
+		if state != "" {
+			parts = append(parts, "state="+state)
+		}
+	default:
+		if tool != "" {
+			parts = append(parts, tool)
+		}
+	}
+	if target := openIntentFleetOpsToolTarget(input); target != "" {
+		parts = append(parts, target)
+	}
+	flat = strings.TrimSpace(flat)
+	if flat != "" {
+		parts = append(parts, flat)
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func openIntentFleetOpsToolTarget(input map[string]any) string {
+	if input == nil {
+		return ""
+	}
+	for _, key := range []string{"name", "target", "agent"} {
+		if v, ok := input[key].(string); ok {
+			if n := normalizeFleetAgentName(v); n != "" {
+				return n
+			}
+		}
+	}
+	if nested, ok := input["tool_input"].(map[string]any); ok {
+		return openIntentFleetOpsToolTarget(nested)
+	}
+	return ""
 }
 
 // openIntentExplanationConnectives mark prose as explaining a cause rather
@@ -487,7 +822,8 @@ func ChatTurnsToOwnerIntentTurns(turns []rsi.ChatTurn) []OwnerIntentTurn {
 
 // LoadOpenOwnerIntent reads state_dir/chatlog/<overseer>.jsonl and extracts
 // recoverable open owner intent. Missing chatlog → residual no_chatlog.
-// Loads user turns plus evidence-shaped assistant excerpts for 🎯T344 disposition.
+// Loads user turns plus evidence-shaped assistant excerpts for 🎯T344 / 🎯T477 /
+// 🎯T512 disposition (product evidence, explanation answers, fleet ops).
 func LoadOpenOwnerIntent(stateDir, overseer string) OpenOwnerIntent {
 	stateDir = strings.TrimSpace(stateDir)
 	overseer = strings.TrimSpace(overseer)
@@ -574,12 +910,11 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 				assts = kept
 			}
 		case "assistant":
-			// Keep evidence-shaped excerpts (T344 disposition surface) and
-			// answer-shaped explanation prose (🎯T477) — an explanation answer
-			// carries no SHA/PASS markers, and dropping it here re-fired the
-			// answered question no matter what extraction decided.
+			// Keep evidence-shaped excerpts (T344), explanation answers (T477),
+			// and fleet-ops completion prose/tool payloads (T512). Dropping any
+			// of those re-fires an already-closed owner turn on every bounce.
 			if !hasOpenIntentProductEvidence(text) && !openIntentEvidenceCandidate(text) &&
-				!openIntentAnswerShaped(text) {
+				!openIntentAnswerShaped(text) && !openIntentFleetOpsEvidence(text) {
 				continue
 			}
 			assts = append(assts, asst{
@@ -750,16 +1085,28 @@ func extractOpenIntentAssistantContent(raw json.RawMessage) string {
 			}
 		case "tool_use":
 			// Flatten input object (and nested tool_input for use_tool MCP).
+			var toolName string
+			_ = json.Unmarshal(b["name"], &toolName)
 			var input map[string]any
 			if json.Unmarshal(b["input"], &input) != nil {
 				continue
 			}
 			flat := flattenOpenIntentToolInput(input)
-			if flat == "" {
+			if flat == "" && !isOpenIntentFleetOpsTool(toolName, input) {
 				continue
 			}
 			if hasOpenIntentProductEvidence(flat) || openIntentEvidenceCandidate(flat) {
 				chunks = append(chunks, flat)
+				continue
+			}
+			// 🎯T512: agent_kill / agent_stop / fleet_intent reaped|parked are
+			// themselves the completion act — keep a synthetic excerpt that
+			// carries the tool marker plus the target name (flat alone is just
+			// "jevons-po" and would not pass openIntentFleetOpsEvidence).
+			if isOpenIntentFleetOpsTool(toolName, input) {
+				if syn := synthesizeOpenIntentFleetOpsTool(toolName, input, flat); syn != "" {
+					chunks = append(chunks, syn)
+				}
 			}
 		}
 	}
@@ -949,12 +1296,17 @@ func isOpenIntentAckOnly(text string) bool {
 	if utf8.RuneCountInString(t) >= 48 {
 		return false
 	}
+	// 🎯T512: short fleet directives ("Kill jevons-po") are work orders, not acks.
+	if len(ownerFleetDirectiveTargets(t)) > 0 {
+		return false
+	}
 	low := strings.ToLower(t)
 	// Imperative / work markers even in short messages.
 	workHints := []string{
 		"fix ", "file ", "spawn", "shove", "write ", "update ", "implement",
 		"document", "add ", "remove ", "delete ", "restart", "deploy", "merge ",
 		"commit", "test ", "please ", "need you", "do this", "make sure",
+		"kill ", "stop ", "park ", "reap ",
 		"🎯", "target:",
 	}
 	for _, h := range workHints {
