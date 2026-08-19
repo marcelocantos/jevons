@@ -1438,7 +1438,9 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 	s.reportFleetMuteIfNeeded()
 
 	// 🎯T328: recover open owner instruction for overseer resume (chatlog I/O).
-	openIntent := LoadOpenOwnerIntent(stateDir, overseer)
+	// 🎯T528: ledgerCwd from workerWD so Goal TargetIDs already achieved
+	// yield answered_or_closed (no Continue / owner-intent-resume).
+	openIntent := LoadOpenOwnerIntentWithLedger(stateDir, overseer, s.workerWD)
 	if openIntent.Recoverable() {
 		slog.Info("open owner intent recovered for post-restart resume",
 			"overseer", overseer, "runes", utf8RuneCount(openIntent.Text),

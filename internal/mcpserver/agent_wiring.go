@@ -182,6 +182,9 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	}
 	token := proc.SubscribeEvents(s.agentEventSink(name))
 	s.wiredSinks[name] = wiredSink{proc: proc, token: token}
+	// 🎯T528: ledger GoalCompleteCheck so Continue stops when named
+	// TargetIDs are achieved even if the sink misses a turn.
+	s.wireSessionGoalCompleteCheck(name, proc)
 	return true
 }
 

@@ -538,6 +538,14 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose)
 		}
 	}
+	// 🎯T528: remint must not reopen Continue when the Goal's TargetIDs
+	// are already achieved in the ledger (clear durable Goal).
+	if strings.TrimSpace(def.Goal) != "" {
+		statuses := fleet.LoadGoalTargetStatuses(def.WorkDir, def.Goal)
+		if fleet.GoalMissionEvidencedComplete(def.Goal, statuses) {
+			def.Goal = ""
+		}
+	}
 	if s.mcp.URL != "" {
 		def.MCPServers = mcpattach.SessionServers(s.mcp, def.Provider, def.WorkDir)
 	}
@@ -567,7 +575,7 @@ func startConfigFromDef(def *claudia.AgentDef) claudia.Config {
 		SessionID:     def.SessionID,
 		RequireResume: def.Materialized,
 		Model:         def.Model,
-		Goal:          def.Goal,
+		Goal:          effectiveSessionGoal(def),
 		SandboxMode:   def.SandboxMode,
 		MCPServers:    def.MCPServers,
 	}
@@ -924,6 +932,9 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		if ev.IsTerminalStop() {
 			text := responseText.String()
 			responseText.Reset()
+			// 🎯T528: close Session Goal when ledger/GOAL_STATUS evidences
+			// complete — before Claudia's settle timer can inject Continue.
+			s.clearSessionGoalIfComplete(name, text)
 			// 🎯T416: the turn boundary the send path needs. This is the only
 			// place the daemon learns an agent is idle — it never infers it
 			// from a registry row or from having launched something, because a

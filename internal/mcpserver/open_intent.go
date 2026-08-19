@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/ownerqa"
 	"github.com/marcelocantos/jevons/internal/rsi"
 )
@@ -29,6 +30,9 @@ import (
 // by later ops evidence (killed/deregistered, gone from agent_list, fleet
 // intent reaped/parked) for that seat — ops directives have no code SHA, and
 // before this every bounce re-fired "Kill jevons-po" after the seat was gone.
+// 🎯T528: a Goal / open-objective naming TargetIDs is closed when every named
+// id is achieved (or set_aside) in the ledger — Session Goal Continue must
+// not re-inject "Continue the open objective" for that text.
 //
 // Durable source: state_dir/chatlog/<overseer>.jsonl (survives control-plane
 // bounce). On restart, when a recoverable open owner instruction is found,
@@ -37,7 +41,7 @@ import (
 //
 // Residual classes (no resume payload; daemon-restarted status path only):
 //   - no_chatlog / no_user_turns / only_harness / ack_only / no_recoverable_intent
-//   - answered_or_closed (T344/T477/T512: later assistant evidence closed the newest work)
+//   - answered_or_closed (T344/T477/T512/T528: later evidence or ledger close)
 //   - session fully wiped (chatlog missing or empty after materialize loss)
 
 const (
@@ -100,8 +104,17 @@ type OwnerIntentTurn struct {
 // evidence for the same complaint, yields residual answered_or_closed (🎯T344);
 // explanation answers close questions (🎯T477); fleet ops evidence closes
 // kill/stop/park/reap directives (🎯T512). Hermetic oracle surface for
-// 🎯T328 + 🎯T344 + 🎯T477 + 🎯T512.
+// 🎯T328 + 🎯T344 + 🎯T477 + 🎯T512. Ledger Goal close is
+// ExtractOpenOwnerIntentWithLedger (🎯T528).
 func ExtractOpenOwnerIntent(turns []OwnerIntentTurn) OpenOwnerIntent {
+	return ExtractOpenOwnerIntentWithLedger(turns, nil)
+}
+
+// ExtractOpenOwnerIntentWithLedger is ExtractOpenOwnerIntent plus 🎯T528:
+// when the newest owner turn names ≥1 TargetID and every named id is
+// achieved/set_aside in statusByID, residual is answered_or_closed and
+// Session Goal Continue must not re-inject for that Goal text.
+func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[string]string) OpenOwnerIntent {
 	if len(turns) == 0 {
 		return OpenOwnerIntent{Residual: ResidualNoUserTurns}
 	}
@@ -175,12 +188,22 @@ func ExtractOpenOwnerIntent(turns []OwnerIntentTurn) OpenOwnerIntent {
 	}
 	last := timeline[lastUserIdx].turn
 
+	// 🎯T528: Goal / open-objective naming TargetIDs closed when ledger
+	// shows every named id achieved (or set_aside).
+	if fleet.GoalMissionEvidencedComplete(last.Text, statusByID) {
+		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
+	}
+
 	// 🎯T344: later assistant product evidence for the same complaint → closed.
 	var laterAnswers []string
 	for i := lastUserIdx + 1; i < len(timeline); i++ {
 		if !timeline[i].user {
 			laterAnswers = append(laterAnswers, timeline[i].turn.Text)
 		}
+	}
+	// 🎯T528: GOAL_STATUS: complete with matching achieved/product evidence.
+	if ownerGoalStatusCompleteWithEvidence(last.Text, laterAnswers) {
+		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 	if OwnerIntentAnsweredWithProductEvidence(last.Text, laterAnswers) {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
@@ -208,6 +231,46 @@ func ExtractOpenOwnerIntent(turns []OwnerIntentTurn) OpenOwnerIntent {
 		Source: src,
 		TS:     last.TS,
 	}
+}
+
+// ownerGoalStatusCompleteWithEvidence reports whether a later assistant
+// excerpt closes a Goal/open-objective with an exact GOAL_STATUS: complete
+// line plus matching product evidence for the same topic (🎯T528).
+func ownerGoalStatusCompleteWithEvidence(ownerText string, laterAssistant []string) bool {
+	ownerText = strings.TrimSpace(ownerText)
+	if ownerText == "" {
+		return false
+	}
+	for _, a := range laterAssistant {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if _, ok := parseAssistantGoalStatus(a); !ok {
+			continue
+		}
+		if !hasOpenIntentProductEvidence(a) {
+			continue
+		}
+		if openIntentTopicalLink(ownerText, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseAssistantGoalStatus mirrors claudia.ParseGoalStatus without importing
+// the live Agent package into open-intent hermetics for a line scan.
+func parseAssistantGoalStatus(text string) (string, bool) {
+	for _, line := range strings.Split(text, "\n") {
+		switch strings.TrimSpace(line) {
+		case "GOAL_STATUS: complete":
+			return "GOAL_STATUS: complete", true
+		case "GOAL_STATUS: blocked":
+			return "GOAL_STATUS: blocked", true
+		}
+	}
+	return "", false
 }
 
 // OwnerIntentAnsweredWithProductEvidence reports whether any later assistant
@@ -825,6 +888,14 @@ func ChatTurnsToOwnerIntentTurns(turns []rsi.ChatTurn) []OwnerIntentTurn {
 // Loads user turns plus evidence-shaped assistant excerpts for 🎯T344 / 🎯T477 /
 // 🎯T512 disposition (product evidence, explanation answers, fleet ops).
 func LoadOpenOwnerIntent(stateDir, overseer string) OpenOwnerIntent {
+	return LoadOpenOwnerIntentWithLedger(stateDir, overseer, "")
+}
+
+// LoadOpenOwnerIntentWithLedger is LoadOpenOwnerIntent plus 🎯T528 ledger
+// Goal close: when ledgerCwd resolves a bullseye.yaml, TargetIDs named in
+// the newest owner turn that are all achieved/set_aside yield
+// answered_or_closed (no owner-intent-resume / Continue inject).
+func LoadOpenOwnerIntentWithLedger(stateDir, overseer, ledgerCwd string) OpenOwnerIntent {
 	stateDir = strings.TrimSpace(stateDir)
 	overseer = strings.TrimSpace(overseer)
 	if overseer == "" {
@@ -845,7 +916,24 @@ func LoadOpenOwnerIntent(stateDir, overseer string) OpenOwnerIntent {
 		}
 		return OpenOwnerIntent{Residual: ResidualNoUserTurns}
 	}
-	return ExtractOpenOwnerIntent(turns)
+	var status map[string]string
+	if cwd := strings.TrimSpace(ledgerCwd); cwd != "" {
+		// Probe the newest recoverable-shaped user text for TargetIDs; cheap
+		// enough to scan all user turns for named ids.
+		var goalParts []string
+		for _, t := range turns {
+			if strings.EqualFold(strings.TrimSpace(t.Role), "assistant") {
+				continue
+			}
+			if ids := fleet.GoalTargetIDs(t.Text); len(ids) > 0 {
+				goalParts = append(goalParts, t.Text)
+			}
+		}
+		if len(goalParts) > 0 {
+			status = fleet.LoadGoalTargetStatuses(cwd, strings.Join(goalParts, "\n"))
+		}
+	}
+	return ExtractOpenOwnerIntentWithLedger(turns, status)
 }
 
 // loadOpenIntentDialogue streams chatlog JSONL into user turns + evidence-shaped
