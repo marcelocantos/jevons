@@ -28,6 +28,7 @@ import "embed"
 //go:embed scripts/aside_history.js
 //go:embed scripts/fleet_row.js
 //go:embed scripts/model_prefix.js
+//go:embed scripts/provider_menu.js
 //go:embed scripts/fleet_paint.js
 //go:embed scripts/fleet_cycle.js
 //go:embed scripts/fleet_selection.js
