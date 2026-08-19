@@ -191,3 +191,60 @@ func TestGateCLICheckFlagsAFalseGreen(t *testing.T) {
 		t.Fatalf("gate check flagged an honest report: %v\n%s", err, out)
 	}
 }
+
+// 🎯T461: bin/gate last / show print KILLED rather than RED, and check refuses
+// citing that run as a pass.
+func TestGateCLIT461KilledVerdictOnLastShowCheck(t *testing.T) {
+	store := t.TempDir()
+
+	code, out := runGate(t, store, "-quiet", "--", "sh", "-c", "kill -9 $$")
+	if code == 0 {
+		t.Fatalf("gate exited 0 for a SIGKILL'd command\n%s", out)
+	}
+	if !strings.Contains(out, "KILLED") {
+		t.Fatalf("gate run did not attest KILLED:\n%s", out)
+	}
+	if strings.Contains(out, " RED") {
+		t.Fatalf("SIGKILL was reported as RED:\n%s", out)
+	}
+
+	code, out = runGate(t, store, "last")
+	if code == 0 {
+		t.Fatalf("gate last exited 0 for a killed run\n%s", out)
+	}
+	if !strings.Contains(out, "KILLED") {
+		t.Fatalf("gate last lost the killed verdict:\n%s", out)
+	}
+
+	// Pull the id out of the attestation for show.
+	id := ""
+	for _, part := range strings.Fields(out) {
+		if strings.HasPrefix(part, "id=") {
+			id = strings.TrimPrefix(part, "id=")
+			break
+		}
+	}
+	if id == "" {
+		t.Fatalf("no id in last output:\n%s", out)
+	}
+	code, out = runGate(t, store, "show", id)
+	if code == 0 {
+		t.Fatalf("gate show exited 0 for a killed run\n%s", out)
+	}
+	if !strings.Contains(out, "KILLED") {
+		t.Fatalf("gate show lost the killed verdict:\n%s", out)
+	}
+
+	report := "🎯T461 done, make test-go green.\n\n    GATE kill-shell exit=unknown KILLED id=" + id + " out=aaaaaaaaaaaa dur=0s\n"
+	cmd := exec.Command(gateBinary(t), "check")
+	cmd.Env = append(os.Environ(), gate.StoreDirEnv+"="+store)
+	cmd.Stdin = strings.NewReader(report)
+	checkOut, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("gate check exited 0 on a killed citation:\n%s", checkOut)
+	}
+	if !strings.Contains(string(checkOut), string(gate.FlagAttestationKilled)) &&
+		!strings.Contains(string(checkOut), "KILLED") {
+		t.Fatalf("gate check did not refuse the killed citation:\n%s", checkOut)
+	}
+}

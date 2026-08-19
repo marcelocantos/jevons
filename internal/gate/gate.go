@@ -42,6 +42,8 @@
 //     that cannot vouch for a status must say so (🎯T396 acceptance 3).
 //  3. The Record outlives the run and the shell. When the harness misreports
 //     a background command, `gate last` reads the truth off disk, in band.
+//  4. A host-killed run (SIGKILL / exit 137 / "[killed]") is KILLED, not RED
+//     and not GREEN — a shot process decided nothing (🎯T461).
 //
 // FlagFalseGreen closes the loop at report time: it reads a finish report and
 // flags a green claim whose own cited evidence contradicts it, or whose cited
@@ -80,10 +82,28 @@ const (
 	// not the same answer as "no such record": the run happened, it just does
 	// not attest what a reader would take it to attest.
 	VerdictVoid Verdict = "VOID"
+	// VerdictKilled: the host (or an operator) terminated the gate before the
+	// command decided anything — SIGKILL, exit 137 / OOM, or output that is
+	// only "[killed]" (🎯T461). Neither GREEN nor RED: a shot process is not
+	// a failing suite, and it is not a pass. Citable as neither.
+	VerdictKilled Verdict = "KILLED"
 )
 
 // IsGreen reports whether v may be cited as a pass. Exactly one verdict may.
 func (v Verdict) IsGreen() bool { return v == VerdictGreen }
+
+// IsKilled reports whether v names termination-by-signal. A killed run decided
+// nothing, so it is refused both as a pass and as failing evidence (🎯T461).
+func (v Verdict) IsKilled() bool { return v == VerdictKilled }
+
+// exitStatusSIGKILL is the shell / Linux OOM convention for a process the
+// kernel shot with SIGKILL (128 + 9). Distinct from a command that exited 1:
+// that control is what keeps "every nonzero → killed" from landing.
+const exitStatusSIGKILL = 128 + 9
+
+// killedOutputMarker is the whole-output shape observed when a session pane
+// dies under host pressure and leaves nothing but the harness's kill notice.
+const killedOutputMarker = "[killed]"
 
 // Anomaly is one contradiction found in a gate's own output.
 type Anomaly struct {
@@ -147,10 +167,37 @@ func trimLine(line string) string {
 	return s
 }
 
+// HostKill reports whether a wait status / captured output means the host
+// terminated the gate rather than the command deciding its own outcome
+// (🎯T461). Signalled deaths, the 137 SIGKILL convention, and a log that is
+// only "[killed]" are host-kills. A genuine exit 1 is not — that is the
+// over-broadness control: mapping every nonzero status to killed must fail it.
+func HostKill(signaled bool, statusKnown bool, status int, output string) bool {
+	if signaled {
+		return true
+	}
+	if statusKnown && status == exitStatusSIGKILL {
+		return true
+	}
+	return outputIsOnlyKilledMarker(output)
+}
+
+// outputIsOnlyKilledMarker reports the harness-only "[killed]" log: trimmed
+// content equals the marker and nothing else. Broader matches would reclassify
+// suites that merely print the word.
+func outputIsOnlyKilledMarker(output string) bool {
+	return strings.TrimSpace(output) == killedOutputMarker
+}
+
 // verdictFor derives the reportable verdict from the raw wait status and the
 // output. Kept separate from Run so the decision is testable without a
 // subprocess, and so there is exactly one place that can call something green.
-func verdictFor(statusKnown bool, status int, anomalies []Anomaly) Verdict {
+// hostKill is decided by HostKill before this runs; it wins over every other
+// reading because a shot process arrived at no status of its own.
+func verdictFor(statusKnown bool, status int, anomalies []Anomaly, hostKill bool) Verdict {
+	if hostKill {
+		return VerdictKilled
+	}
 	if !statusKnown {
 		return VerdictUnknown
 	}

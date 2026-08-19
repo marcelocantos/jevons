@@ -37,6 +37,10 @@ const (
 	// FlagAttestationContradicted: the cited line disagrees with the stored
 	// record — the report says GREEN, the record says otherwise.
 	FlagAttestationContradicted FlagKind = "attestation_contradicted"
+	// FlagAttestationKilled: the report cites a gate the host terminated
+	// (🎯T461). A killed run decided nothing, so it is refused both as a pass
+	// and as failing / falsification evidence — the T443 red-as-proof sibling.
+	FlagAttestationKilled FlagKind = "attestation_killed"
 	// FlagDirtyTreeGate: the report claims a commit and cites a green gate
 	// that the record says ran in a working tree carrying uncommitted changes.
 	// The gate passed; it just did not measure the commit being claimed. This
@@ -224,6 +228,12 @@ func falsificationRoles(lines []string) (exempt map[string]bool, framingLines ma
 			if c.Verdict.IsGreen() && c.StatusIsZero() {
 				continue
 			}
+			// 🎯T461: a host-killed run decided nothing. It is not a failing
+			// suite either, so falsification framing must not exempt it — that
+			// exemption is exactly the clause a lazy fix skips.
+			if c.Verdict.IsKilled() {
+				continue
+			}
 			if ClassifyCitation(window, c) != RoleFalsification {
 				continue
 			}
@@ -281,6 +291,19 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 	// Attestation checks first: a cited record is the strongest evidence
 	// available, and it is checkable rather than inferred.
 	for _, c := range cited {
+		if c.Verdict.IsKilled() {
+			// 🎯T461: refused in both directions — as a pass AND as failing
+			// evidence. No T443 exemption reaches here (see falsificationRoles).
+			flags = append(flags, Flag{
+				Kind: FlagAttestationKilled,
+				Detail: fmt.Sprintf(
+					"gate %q was terminated by the host (verdict KILLED, exit=%s); "+
+						"a killed run decided nothing and cannot be cited as a pass or as a failure",
+					c.Name, c.Status),
+				Evidence: c.Raw,
+			})
+			continue
+		}
 		if !c.Verdict.IsGreen() || !c.StatusIsZero() {
 			// 🎯T443: cited as proof that the oracle falsifies, not as a pass.
 			// The red is the result, and saying so is what was asked for.

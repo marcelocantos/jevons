@@ -112,20 +112,34 @@ func Run(args *RunArgs) (*Record, error) {
 
 	// The whole point of the package is here: the status comes from the
 	// process's own wait status, and anything that is not a clean exit code
-	// is recorded as unknown rather than rounded down to zero.
+	// is recorded as unknown rather than rounded down to zero. A host kill
+	// (🎯T461) is recorded as its own verdict rather than rounded to RED or
+	// UNKNOWN: the process did not decide anything.
+	var signaled bool
+	var signalName string
 	switch exitErr, isExit := errors.AsType[*exec.ExitError](runErr); {
 	case runErr == nil:
 		rec.ExitStatus, rec.StatusKnown = 0, true
-	case isExit && exitErr.ExitCode() >= 0:
+	case isExit && exitErr.Exited():
 		rec.ExitStatus, rec.StatusKnown = exitErr.ExitCode(), true
 	case isExit:
+		signaled, signalName = exitSignaled(exitErr)
 		rec.StatusKnown = false
-		rec.StatusNote = "process died without an exit code: " + exitErr.String()
+		if signaled {
+			rec.StatusNote = "process terminated by signal: " + signalName
+		} else {
+			rec.StatusNote = "process died without an exit code: " + exitErr.String()
+		}
 	default:
 		rec.StatusKnown = false
 		rec.StatusNote = "gate could not run the command: " + runErr.Error()
 	}
-	rec.Verdict = verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies)
+	outStr := string(out)
+	hostKill := HostKill(signaled, rec.StatusKnown, rec.ExitStatus, outStr)
+	if hostKill && rec.StatusNote == "" {
+		rec.StatusNote = hostKillNote(rec.StatusKnown, rec.ExitStatus, outStr)
+	}
+	rec.Verdict = verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill)
 
 	if args.Store != nil {
 		rec.OutputPath = args.Store.LogPath(rec.ID)
@@ -203,4 +217,33 @@ func sanitizeName(s string) string {
 func newID(argv []string, at time.Time) string {
 	seed := fmt.Sprintf("%s|%d|%d", strings.Join(argv, " "), at.UnixNano(), os.Getpid())
 	return digest([]byte(seed))[:8]
+}
+
+// exitSignaled reports whether err is a wait status from a signal rather than
+// a normal exit, and names the signal when it can. ExitCode < 0 is Go's
+// portable signal-death marker; the "signal: …" string is what os/exec prints.
+func exitSignaled(err *exec.ExitError) (bool, string) {
+	if err == nil || err.Exited() {
+		return false, ""
+	}
+	s := err.String()
+	if name, ok := strings.CutPrefix(s, "signal: "); ok {
+		return true, name
+	}
+	if err.ExitCode() < 0 {
+		return true, "unknown"
+	}
+	return false, ""
+}
+
+// hostKillNote explains a KILLED verdict when the signal path did not already
+// fill StatusNote (exit 137 and "[killed]"-only output).
+func hostKillNote(statusKnown bool, status int, output string) string {
+	if statusKnown && status == exitStatusSIGKILL {
+		return "process exited 137 (SIGKILL / OOM convention); terminated by the host, not by the suite"
+	}
+	if outputIsOnlyKilledMarker(output) {
+		return "output is only [killed]; the host terminated the run before it decided anything"
+	}
+	return "process terminated by the host before it decided anything"
 }

@@ -157,7 +157,7 @@ func (r *Record) Summary() string {
 // attestationRe parses the line back out of a finish report. Tolerant of
 // surrounding prose and markdown, strict about the fields.
 var attestationRe = regexp.MustCompile(
-	`GATE\s+(\S+)\s+exit=(\S+)\s+(GREEN|RED|SUSPECT|UNKNOWN|VOID)\s+id=([0-9a-zA-Z]+)`)
+	`GATE\s+(\S+)\s+exit=(\S+)\s+(GREEN|RED|SUSPECT|UNKNOWN|VOID|KILLED)\s+id=([0-9a-zA-Z]+)`)
 
 // Attestation is a claim found in a report: what the worker says a gate did.
 // Whether it is true is a question for the Store.
