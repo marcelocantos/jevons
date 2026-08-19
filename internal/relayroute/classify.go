@@ -15,6 +15,8 @@ import (
 	"strings"
 )
 
+const recordSummaryRuneLimit = 160
+
 // Route is where a worker report should land.
 type Route string
 
@@ -71,16 +73,32 @@ func oracleDone(s string) bool {
 	return oracle
 }
 
-// RecordLine is the one-line the PO still sees when the full report
-// skipped the hop.
-func RecordLine(agent, reason string) string {
+// ReportSummary returns a bounded, single-line excerpt for the PO record and
+// durable route event. It is deliberately mechanical: the full report still
+// goes to the overseer, while the PO gets enough content to identify it.
+func ReportSummary(report string) string {
+	summary := strings.Join(strings.Fields(report), " ")
+	if summary == "" {
+		return "empty report"
+	}
+	runes := []rune(summary)
+	if len(runes) <= recordSummaryRuneLimit {
+		return summary
+	}
+	return string(runes[:recordSummaryRuneLimit-1]) + "…"
+}
+
+// RecordLine is the one-line the PO still sees when the full report skipped
+// the hop. It identifies the reporting worker and carries a report summary.
+func RecordLine(agent, reason, summary string) string {
 	if strings.TrimSpace(agent) == "" {
 		agent = "worker"
 	}
 	if strings.TrimSpace(reason) == "" {
-		reason = Classify("").String()
+		reason = "unspecified"
 	}
-	return "[routed to overseer] " + agent + " report skipped the PO hop (" + reason + ") (🎯T392.7)"
+	summary = ReportSummary(summary)
+	return "[routed to overseer] " + agent + " report skipped the PO hop (" + reason + "): " + summary + " (🎯T392.7)"
 }
 
 func (r Route) String() string { return string(r) }

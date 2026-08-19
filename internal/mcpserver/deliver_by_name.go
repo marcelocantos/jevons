@@ -181,18 +181,32 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 		return agentSendResult{}, err
 	}
 
+	// The first MCP send can carry a daemon-authored identity + standing-brief
+	// envelope. Routing and its summary belong to the sender's report, not to
+	// doctrine that happens to contain phrases such as "needs-owner".
+	report := relayReportBody(text)
+
 	// 🎯T392.7: a worker report that needs no product judgement skips the
 	// PO hop. The PO still gets a one-line record. Owner directs to a PO
 	// are never rerouted.
 	if origin == OriginAgent && !overseerArm && isPOName(dest) &&
-		relayroute.Classify(text) == relayroute.RouteOverseer {
+		relayroute.Classify(report) == relayroute.RouteOverseer {
 		po := dest
-		reason := relayroute.Reason(text)
+		reason := relayroute.Reason(report)
 		who := strings.TrimSpace(actor)
 		if who == "" {
 			who = "worker"
 		}
-		record := relayroute.RecordLine(who, reason)
+		summary := relayroute.ReportSummary(report)
+		s.LogEvent("relayroute", relayroute.RouteOverseer.String(), map[string]any{
+			"msg":         fmt.Sprintf("worker report rerouted to overseer: %s (%s): %s", who, reason, summary),
+			"worker":      who,
+			"po":          po,
+			"route_class": relayroute.RouteOverseer.String(),
+			"reason":      reason,
+			"summary":     summary,
+		})
+		record := relayroute.RecordLine(who, reason, summary)
 		if _, err := s.deliverByName(po, record, OriginAgent, false); err != nil {
 			slog.Info("T392.7 PO record undelivered", "po", po, "err", err)
 		}
@@ -225,6 +239,13 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 		return agentSendResult{}, err
 	}
 	return deliverToSenderWith(s, name, text, interrupt, proc, rehydrated, confirm)
+}
+
+func relayReportBody(text string) string {
+	if i := strings.Index(text, FleetStandingBrief); i >= 0 {
+		return text[i+len(FleetStandingBrief):]
+	}
+	return text
 }
 
 // deliverToOverseer is the overseer arm of the single path. Delivery itself

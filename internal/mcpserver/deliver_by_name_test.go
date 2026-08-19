@@ -14,6 +14,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/relayroute"
 )
 
 // chainServer builds a Server whose fleet arm resolves to fake senders and
@@ -142,18 +144,71 @@ func TestDeliverByNameUnregisteredPeerErrors(t *testing.T) {
 func TestT3927RelayReportSkipsPOHop(t *testing.T) {
 	po := &fakeSender{alive: true}
 	s, inbox := chainServer(t, map[string]*fakeSender{"jevons-po": po})
-	text := "🎯T10 done. GATE abc GREEN. SHA deadbeef. tests pass."
-	if _, err := s.deliverByNameAs("jv-t10", "jevons-po", text, OriginAgent, false); err != nil {
+	s.registry = newLineageRegistry(t, map[string]string{
+		"jevons-po": "jevons",
+		"jv-t10":    "jevons-po",
+	})
+	logPath := filepath.Join(t.TempDir(), "logs", "events.jsonl")
+	journal, err := eventlog.Open(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = journal.Close() })
+	s.SetEventJournal(journal)
+
+	text := "Blocked: needs owner verdict on the provider spend cap before I can proceed.\nDetails stay with the overseer."
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":  "jevons-po",
+		"text":  text,
+		"actor": "jv-t10",
+	}
+	res, err := s.handleAgentSend(context.Background(), req)
+	if err != nil {
 		t.Fatalf("relay send: %v", err)
 	}
-	if len(inbox.texts) != 1 || !strings.Contains(inbox.texts[0], "GATE abc") {
+	if res.IsError {
+		t.Fatalf("relay send: %s", toolText(res))
+	}
+	if len(inbox.texts) != 1 || !strings.Contains(inbox.texts[0], text) {
 		t.Fatalf("overseer inbox=%v — full report must skip the PO hop", inbox.texts)
 	}
 	if len(po.sent) != 1 || !strings.Contains(po.sent[0], "routed to overseer") {
 		t.Fatalf("PO inbox=%v want one record line", po.sent)
 	}
-	if strings.Contains(po.sent[0], "GATE abc") {
-		t.Fatal("PO received the full report — that is the hop this target removes")
+	for _, want := range []string{"jv-t10", "needs_owner", "Blocked: needs owner verdict on the provider spend cap"} {
+		if !strings.Contains(po.sent[0], want) {
+			t.Errorf("PO record %q missing %q", po.sent[0], want)
+		}
+	}
+	if strings.Contains(po.sent[0], "\n") {
+		t.Fatalf("PO record is not one line: %q", po.sent[0])
+	}
+	if strings.Contains(po.sent[0], IdentityHeaderMarker) {
+		t.Fatalf("PO record summarized the delivery envelope, not the report: %q", po.sent[0])
+	}
+
+	events, err := eventlog.Tail(logPath, eventlog.TailOptions{
+		Component: "relayroute",
+		Decision:  "overseer",
+		Contains:  "jv-t10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("relayroute events=%d want 1", len(events))
+	}
+	ev := events[0]
+	for key, want := range map[string]string{
+		"worker":      "jv-t10",
+		"route_class": "overseer",
+		"reason":      "needs_owner",
+		"summary":     relayroute.ReportSummary(text),
+	} {
+		if got := ev.Fields[key]; got != want {
+			t.Errorf("event field %s=%v want %q", key, got, want)
+		}
 	}
 }
 
@@ -169,6 +224,103 @@ func TestT3927OwnerDirectToPONotRerouted(t *testing.T) {
 	}
 	if len(inbox.texts) != 0 {
 		t.Fatalf("owner→PO leaked to overseer: %v", inbox.texts)
+	}
+}
+
+// 🎯T515: first agent_send injects identity + standing brief (which itself
+// contains "needs-owner" / "class-3"). Classification and the PO record
+// summary must use the sender's report body, not the doctrine envelope —
+// otherwise every first hop to a PO is falsely direct-routed, and the record
+// line summarizes the brief instead of the report.
+func TestT515EnvelopeDoesNotFakeRouteOrPolluteSummary(t *testing.T) {
+	po := &fakeSender{alive: true}
+	s, inbox := chainServer(t, map[string]*fakeSender{"jevons-po": po})
+	s.registry = newLineageRegistry(t, map[string]string{
+		"jevons-po": "jevons",
+		"jv-t515":   "jevons-po",
+	})
+	logPath := filepath.Join(t.TempDir(), "logs", "events.jsonl")
+	journal, err := eventlog.Open(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = journal.Close() })
+	s.SetEventJournal(journal)
+
+	// Routine parent-bound report: must stay on the PO even though the
+	// injected standing brief mentions needs-owner.
+	routine := "slice landed; continuing on the remaining leaf."
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":  "jevons-po",
+		"text":  routine,
+		"actor": "jv-t515",
+	}
+	res, err := s.handleAgentSend(context.Background(), req)
+	if err != nil {
+		t.Fatalf("routine send: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("routine send: %s", toolText(res))
+	}
+	if len(inbox.texts) != 0 {
+		t.Fatalf("routine report leaked to overseer via brief phrases: %v", inbox.texts)
+	}
+	if len(po.sent) != 1 || !strings.Contains(po.sent[0], routine) {
+		t.Fatalf("PO inbox=%v want the routine report (with brief)", po.sent)
+	}
+
+	// Real needs_owner report on a subsequent send (brief already injected):
+	// record line + durable relayroute event must name the worker and summarize
+	// the report body, not the doctrine.
+	po.inFlight = false
+	s.noteTurnEnded("jevons-po")
+	po.sent = nil
+	inbox.texts = nil
+	report := "Blocked: needs owner verdict on the provider spend cap before I can proceed."
+	req.Params.Arguments = map[string]any{
+		"name":  "jevons-po",
+		"text":  report,
+		"actor": "jv-t515",
+	}
+	res, err = s.handleAgentSend(context.Background(), req)
+	if err != nil {
+		t.Fatalf("needs_owner send: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("needs_owner send: %s", toolText(res))
+	}
+	if len(inbox.texts) != 1 || !strings.Contains(inbox.texts[0], report) {
+		t.Fatalf("overseer inbox=%v want full needs_owner report", inbox.texts)
+	}
+	if len(po.sent) != 1 {
+		t.Fatalf("PO inbox=%v want one record line", po.sent)
+	}
+	for _, want := range []string{"jv-t515", "needs_owner", "Blocked: needs owner verdict on the provider spend cap"} {
+		if !strings.Contains(po.sent[0], want) {
+			t.Errorf("PO record %q missing %q", po.sent[0], want)
+		}
+	}
+	if strings.Contains(po.sent[0], IdentityHeaderMarker) || strings.Contains(po.sent[0], "Jevons fleet standing brief") {
+		t.Fatalf("PO record summarized the delivery envelope: %q", po.sent[0])
+	}
+	events, err := eventlog.Tail(logPath, eventlog.TailOptions{
+		Component: "relayroute",
+		Decision:  "overseer",
+		Contains:  "jv-t515",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("relayroute events=%d want 1", len(events))
+	}
+	ev := events[0]
+	if ev.Fields["worker"] != "jv-t515" || ev.Fields["route_class"] != "overseer" {
+		t.Fatalf("event fields=%v", ev.Fields)
+	}
+	if got := ev.Fields["summary"]; got != relayroute.ReportSummary(report) {
+		t.Fatalf("event summary=%v want %q", got, relayroute.ReportSummary(report))
 	}
 }
 
