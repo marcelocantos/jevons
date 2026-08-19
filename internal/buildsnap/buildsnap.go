@@ -128,6 +128,11 @@ func Run(cfg Config) (Result, error) {
 		return res, err
 	}
 	defer restore()
+	restoreWork, err := injectSiblingGoWork(cfg)
+	if err != nil {
+		return res, err
+	}
+	defer restoreWork()
 
 	src := filepath.Join(cfg.SnapDir, filepath.FromSlash(cfg.Artifact))
 
