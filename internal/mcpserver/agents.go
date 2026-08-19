@@ -382,27 +382,50 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	// 🎯T305 Failure A: optional start prompt must reach the pane and
 	// begin a turn, or start fails loudly (no silent outcome=ok).
 	prompt = strings.TrimSpace(prompt)
+	briefNote := ""
 	if prompt != "" {
 		if err := s.deliverStartPrompt(name, prompt); err != nil {
-			// Stop the process so agent_list does not report a phantom
-			// running/never_briefed seat as successful work, and (🎯T387)
-			// retire a row this call minted so the target is not left
-			// engaged by a worker that never ran.
-			if s.releaseUnbriefedSeat(name, existed) {
-				life["seat_released"] = true
-				// 🎯T433: the tool error below reaches only the caller, and a
-				// caller LLM dropping it is how a mint died twice with nobody
-				// told. The seat's parent hears about the lost mint by name,
-				// with the error verbatim, on the durable send path.
-				s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
+			released, kept := s.startBriefFailureTeardown(name, existed, err)
+			if kept {
+				// 🎯T518: queued / delivered_unconfirmed means the brief is
+				// HELD — by this daemon's queue or by the receiver — or the
+				// instrument could not decide. Neither is never-landed, and
+				// retiring the seat here is what removed jv-t515-relayrecord
+				// as unbriefed_seat seven minutes after a healthy queued
+				// start, destroying the very queue that would have finished
+				// the delivery. The seat stays; the caller is told the brief
+				// is pending and must not re-send it (🎯T416: a re-send on
+				// this verdict stacks a second copy).
+				life["brief_in_flight"] = true
+				life["brief_verdict"] = err.Error()
+				briefNote = fmt.Sprintf(
+					" Opening brief is IN FLIGHT, not yet confirmed as a turn: %v."+
+						" The daemon holds it for delivery at the next turn boundary."+
+						" Do NOT re-send it — a re-send stacks a second copy (🎯T416/🎯T518).",
+					err)
+				prompt = "" // the result must not claim prompt_delivered=true
+			} else {
+				// Stop the process so agent_list does not report a phantom
+				// running/never_briefed seat as successful work, and (🎯T387)
+				// retire a row this call minted so the target is not left
+				// engaged by a worker that never ran.
+				if released {
+					life["seat_released"] = true
+					// 🎯T433: the tool error below reaches only the caller, and a
+					// caller LLM dropping it is how a mint died twice with nobody
+					// told. The seat's parent hears about the lost mint by name,
+					// with the error verbatim, on the durable send path.
+					s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
+				}
+				life["err"] = err.Error()
+				life["session_id"] = sessionDisplay(def.SessionID)
+				s.logLifecycle(compAgentLifecycle, "start", "error", life)
+				return mcp.NewToolResultError(prefixRehydrate(rehydrated,
+					fmt.Sprintf("start failed: %v", err))), nil
 			}
-			life["err"] = err.Error()
-			life["session_id"] = sessionDisplay(def.SessionID)
-			s.logLifecycle(compAgentLifecycle, "start", "error", life)
-			return mcp.NewToolResultError(prefixRehydrate(rehydrated,
-				fmt.Sprintf("start failed: %v", err))), nil
+		} else {
+			life["prompt_delivered"] = true
 		}
-		life["prompt_delivered"] = true
 	}
 
 	life["session_id"] = sessionDisplay(def.SessionID)
@@ -416,6 +439,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 
 	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), def.TargetID,
 		string(def.Provider), sessionDisplay(def.SessionID), routeNote, prompt)
+	msg += briefNote
 	// 🎯T379: the agent has just inherited the provider's user-scoped MCP
 	// list. Any entry pointing at a port nothing serves will sit in "still
 	// connecting" forever, silently costing this agent those tools — so say

@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -103,9 +104,85 @@ func (s *Server) clearAgentTurnBegan(name string) {
 	s.forgetTurnDepth(name)
 }
 
+// 🎯T518 — queued / delivered_unconfirmed is a brief IN FLIGHT, not a brief
+// that never landed.
+//
+// The reap this distinction gates: agents.go and spawnFrontierWorker answer a
+// failed deliverStartPrompt with releaseUnbriefedSeat, which stops the process
+// AND removes the registry row as unbriefed_seat. That teardown is right for a
+// brief PROVEN to have gone nowhere (🎯T387's phantom seats: send reported
+// sent, the agent did nothing, no queue holds anything). It is wrong for the
+// two middle verdicts of the 🎯T416 contract:
+//
+//   - "queued": the daemon's own backlog (or the receiver's queue) HOLDS the
+//     brief and delivers it at the next turn boundary. Destroying the seat
+//     destroys the held brief with it — jv-t515-relayrecord was retired as
+//     unbriefed_seat on 2026-08-18T11:16Z seven minutes after a start whose
+//     brief sat exactly there, and the remint then raced the auto-spawn.
+//   - "delivered_unconfirmed": the instrument could not decide. 🎯T416 says
+//     treat it as undelivered FOR RE-SENDING; it has never meant proven-lost,
+//     and a teardown on an undecided verdict is the daemon inventing the one
+//     answer the instrument refused to give.
+//
+// The spawn still cannot claim prompt_delivered=true on these — the failure
+// stays loud — but the seat stays registered, where the queue drain and the
+// 🎯T418 sweep can finish the delivery. What still reaps is positive evidence
+// of no brief: a clean "sent" whose watch saw no user message and no queue
+// record (🎯T387), or a send error that disproves delivery.
+
+// briefInFlightError marks a deliverStartPrompt failure whose verdict was
+// queued / delivered_unconfirmed (🎯T518): the brief is held or undecided,
+// never proven absent, so the seat must not be retired as unbriefed_seat.
+type briefInFlightError struct {
+	status string
+	err    error
+}
+
+func (e *briefInFlightError) Error() string { return e.err.Error() }
+func (e *briefInFlightError) Unwrap() error { return e.err }
+
+// BriefInFlight reports whether err marks an in-flight opening brief (🎯T518).
+func BriefInFlight(err error) bool {
+	var b *briefInFlightError
+	return errors.As(err, &b)
+}
+
+// StartVerdictInFlight is the pure classifier: a clean send whose status is
+// one of the two middle answers of the 🎯T416 contract (plus the interrupt
+// variant of queued) means the brief is accepted or undecided — in flight.
+// A send error is never in flight here: ConfirmTurnBegan already accepts a
+// non-disproving error when the receiver's own records show the payload
+// (🎯T429), and an error without such evidence stays a reap.
+func StartVerdictInFlight(status string, sendErr error) bool {
+	if sendErr != nil {
+		return false
+	}
+	switch strings.TrimSpace(status) {
+	case "queued", "interrupted_queued", "delivered_unconfirmed":
+		return true
+	}
+	return false
+}
+
+// startBriefFailureTeardown applies the 🎯T518 fork after a failed
+// deliverStartPrompt: an in-flight verdict keeps the seat and reports
+// kept=true; anything else releases it (🎯T387) and reports whether a row
+// this call minted was retired. Both spawn call sites (jevons_agent_start
+// and spawnFrontierWorker) go through here so the fork is one testable unit.
+func (s *Server) startBriefFailureTeardown(name string, existed bool, err error) (released, kept bool) {
+	if BriefInFlight(err) {
+		return false, true
+	}
+	return s.releaseUnbriefedSeat(name, existed), false
+}
+
 // deliverStartPrompt injects the optional jevons_agent_start prompt after
 // Launch and requires confirmed turn begin (🎯T305 Failure A). Empty
 // prompt is a no-op (start-only seats stay never_briefed until first send).
+//
+// A failure that is really an in-flight brief (queued / delivered_unconfirmed)
+// comes back as a briefInFlightError (🎯T518): still an error — the turn has
+// not begun — but one the caller must answer by keeping the seat.
 func (s *Server) deliverStartPrompt(name, prompt string) error {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
@@ -158,6 +235,17 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 	// recognise.
 	res, err := s.deliverByNameConfirmedByCaller(name, text, OriginAgent, false)
 	if confErr := ConfirmTurnBegan(res.Status, err, watch()); confErr != nil {
+		// 🎯T518: the two middle verdicts mean the brief is HELD — by this
+		// daemon's queue or by the receiver — or the instrument could not
+		// decide. Neither is "never landed". clearAgentTurnBegan is skipped on
+		// purpose: it deletes the flight record the queued delivery drains
+		// through, and this seat has no false turn-began mark to remove (the
+		// queued arm never set one).
+		if StartVerdictInFlight(res.Status, err) {
+			return &briefInFlightError{status: res.Status, err: fmt.Errorf(
+				"start brief to %q in flight, not yet a turn (status=%s): %w",
+				name, res.Status, confErr)}
+		}
 		// deliverToSender marks turn-began off its own successful Send, which
 		// is the same send-call inference this target exists to remove. The
 		// spawn owns this agent's first turn, so it must not leave behind a

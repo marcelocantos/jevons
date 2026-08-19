@@ -680,12 +680,20 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	}
 	s.wireAgentEvents(name, proc)
 	if err := s.deliverStartPrompt(name, brief); err != nil {
+		if _, kept := s.startBriefFailureTeardown(name, existed, err); kept {
+			// 🎯T518: the brief is queued/undecided, not proven lost. The seat
+			// stands and the leaf counts as consumed; reaping here is what let
+			// remints race the sweep while the first brief sat in the queue.
+			slog.Info("frontier consume: worker spawned, brief in flight",
+				"worker", name, "target", targetID, "parent", parent,
+				"provider", def.Provider, "detail", err.Error())
+			return nil
+		}
 		// No silent phantom seat: stop the process so agent_list does not
 		// report an unbriefed worker as consumption (same as agent_start),
 		// and (🎯T387) release a row this sweep minted so the leaf stays
 		// unconsumed for the next pass rather than being permanently masked
-		// by a worker that never ran.
-		s.releaseUnbriefedSeat(name, existed)
+		// by a worker that never ran (teardown already released it above).
 		return err
 	}
 	slog.Info("frontier consume: worker auto-spawned",
