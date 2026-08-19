@@ -38,6 +38,9 @@ DerivedData/
 # Claude Code local settings. settings.json is TRACKED: it wires the shared-file
 # write guard (🎯T376), which is fleet policy rather than a local preference.
 /.claude/*
+
+# Claudia exclusive-MCP isolate home (GROK_HOME / CODEX_HOME under workdir)
+.claudia-mcp-home/
 !/.claude/settings.json
 sqlite_mcp_server.db
 
