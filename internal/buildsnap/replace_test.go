@@ -30,6 +30,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/worktreereap"
 )
 
 // The recipe stands in for the module loader: it reads the replacement path
@@ -99,6 +101,10 @@ func TestSnapshotReplaceIsUnresolvedWithoutRewrite(t *testing.T) {
 	snap := snapDir(t)
 
 	mustRun(t, root, "git", "worktree", "add", "--detach", "-q", snap, "HEAD")
+	// 🎯T440: stamp the owner so a killed run cannot leave an unmarked leak.
+	if err := worktreereap.Mark(&worktreereap.MarkArgs{Worktree: snap, Note: t.Name()}); err != nil {
+		t.Fatalf("mark worktree: %v", err)
+	}
 	defer func() { _, _ = run(t, root, "git", "worktree", "remove", "--force", snap) }()
 
 	out, err := run(t, snap, "make", "-C", snap, "bin/artifact")
