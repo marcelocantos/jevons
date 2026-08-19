@@ -218,6 +218,16 @@ func rotationAge(obs Observation) time.Duration {
 	return -1
 }
 
+// RotationAgeForNotice is the compaction-cadence age surfaced in a 🎯T417
+// unworkable notice. Zero means unknown/never — never "just now".
+func RotationAgeForNotice(obs Observation) time.Duration {
+	age := rotationAge(obs)
+	if age < 0 {
+		return 0
+	}
+	return age
+}
+
 // ApplyPersistedRotation stamps a durable last-rotation onto an
 // observation so a wiped in-memory map still holds (🎯T392.1.1).
 func ApplyPersistedRotation(obs Observation, since time.Duration, ok bool) Observation {

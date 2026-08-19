@@ -249,7 +249,7 @@ func logAgentSendOutcome(name string, res agentSendResult, rehydrated bool, outc
 // through so the operator sees both accounts — what the harness claimed and what
 // the receiver's records showed — because the whole defect is the first being
 // reported as though it were the second.
-func (s *Server) reportSendOutcome(name string, outcome SendOutcome, flight TurnFlight, ev TurnEvidence, rehydrated, interrupted bool, transportErr error) (agentSendResult, error) {
+func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, flight TurnFlight, ev TurnEvidence, rehydrated, interrupted bool, transportErr error) (agentSendResult, error) {
 	claim := describeTransportClaim(transportErr)
 	switch outcome {
 	case OutcomeBegun:
@@ -281,6 +281,8 @@ func (s *Server) reportSendOutcome(name string, outcome SendOutcome, flight Turn
 		// arriving rather than from the send call returning.
 		s.markAgentTurnBegan(name)
 		s.noteTurnInFlight(name)
+		// 🎯T417: durable delivery evidence survives later compaction.
+		s.recordDeliveryEvidence(name, payload, ev)
 		return res, nil
 
 	case OutcomeUnconfirmed:
@@ -480,8 +482,8 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 			return res, nil
 		}
 		ev := watch()
-		outcome := ClassifySendOutcome(flight, ev)
-		return s.reportSendOutcome(name, outcome, flight, ev, rehydrated, false, nil)
+		outcome := s.classifySend(name, text, flight, ev)
+		return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, false, nil)
 	}
 
 	if !isPromptInFlight(err) {
@@ -494,8 +496,8 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		// open, taken from a pre-send baseline, and it reads the RECEIVER.
 		if claim := ClassifySendError(err); !claim.DisprovesDelivery() && confirm == confirmHere {
 			ev := watch()
-			outcome := ClassifySendOutcome(flight, ev)
-			return s.reportSendOutcome(name, outcome, flight, ev, rehydrated, false, err)
+			outcome := s.classifySend(name, text, flight, ev)
+			return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, false, err)
 		}
 		// 🎯T237: structured class + owner-visible copy (not bare Internal error).
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
@@ -534,16 +536,16 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		watch2 := s.watchAgentTurnFor(name, text)
 		if err2 := trySend(); err2 == nil {
 			ev := watch2()
-			outcome := ClassifySendOutcome(FlightIdle, ev)
-			return s.reportSendOutcome(name, outcome, FlightIdle, ev, rehydrated, true, nil)
+			outcome := s.classifySend(name, text, FlightIdle, ev)
+			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, nil)
 		} else if !isPromptInFlight(err2) && !ClassifySendError(err2).DisprovesDelivery() {
 			// 🎯T429, on the interrupt arm: the same non-observation, and the
 			// same rule. An interrupt that succeeded leaves the agent known
 			// idle, so the strict verdict is available here — but it has to be
 			// earned from the receiver, not inherited from the transport.
 			ev := watch2()
-			outcome := ClassifySendOutcome(FlightIdle, ev)
-			return s.reportSendOutcome(name, outcome, FlightIdle, ev, rehydrated, true, err2)
+			outcome := s.classifySend(name, text, FlightIdle, ev)
+			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, err2)
 		} else if isPromptInFlight(err2) {
 			// 🎯T424: still busy after a successful Interrupt is a
 			// typed failure, not a queue increment. The 2026-08-10

@@ -758,11 +758,13 @@ func main() {
 
 	capGov := startCapacityGovernor(cfg, guard, plans, mcpSrv, srv)
 
-	// ð¯T392.1: bound the conversation every agent carries into a model
-	// call. Deliberately not gated by the capacity governor â this loop
-	// exists to *reduce* spend, so deferring it when budget is tight is
-	// exactly backwards.
-	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv, rotationStore)
+	// ð¯T392.1 / 🎯T417: bound the conversation every agent carries into a
+	// model call. Deliberately not gated by the capacity governor — this
+	// loop exists to *reduce* spend, so deferring it when budget is tight
+	// is exactly backwards. Remint is withdrawn (🎯T40.2); above-ceiling
+	// seats are reported unworkable once per spell, not recompacted.
+	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv, rotationStore,
+		mcpSrv.ReportContextUnworkable)
 
 	// 🎯T440: reap verification worktrees whose owner is gone, from outside
 	// the processes that create them — their own cleanup does not run when

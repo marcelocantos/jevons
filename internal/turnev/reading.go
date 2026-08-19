@@ -96,6 +96,23 @@ func (f Fate) Reading() Reading {
 	}
 }
 
+// ReadingFor is Reading with mid-turn honesty (🎯T417).
+//
+// When the receiver is still composing a reply, an absence in the scanned
+// region is NOT "lost" — it is the same shape as a payload that landed and
+// has not yet been flushed, or a queued_command that has not yet been
+// written. Treating that absence as ReadingLost is the false negative that
+// produced a phantom defect class on 2026-08-10 when the overseer read
+// claudia-po mid-turn. composing=true forces Undecided on an Unseen fate;
+// positive fates are unchanged.
+func ReadingFor(f Fate, composing bool) Reading {
+	r := f.Reading()
+	if composing && r == ReadingLost {
+		return ReadingUndecided
+	}
+	return r
+}
+
 // Held reports whether the receiver demonstrably has the message — delivered
 // or waiting. The predicate a sender needs before deciding it lost anything.
 func (r Reading) Held() bool { return r >= ReadingInFlight }

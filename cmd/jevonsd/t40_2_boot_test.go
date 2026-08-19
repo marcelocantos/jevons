@@ -37,4 +37,7 @@ func TestContextCeilingSourceDoesNotRemint(t *testing.T) {
 	if !strings.Contains(body, "not reminting") {
 		t.Fatal("ctxcap.go lost the observe-only log")
 	}
+	if !strings.Contains(body, "reporting unworkable") {
+		t.Fatal("ctxcap.go lost the 🎯T417 unworkable report path")
+	}
 }
