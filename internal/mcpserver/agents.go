@@ -104,7 +104,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevons_agent_kill",
-			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Idempotent: if the agent is already not registered (e.g. auto-reaped after a done report), returns success without error. Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred). 🎯T530: refuses kill of a seat that still holds daemon sendq (recovery seat before DRAINED/EMPTY); on parent kill, descendants with held sendq are automatically restarted for drain under the surviving parent so fleet-health reaped_held does not regenerate solely from the kill."),
+			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Idempotent: if the agent is already not registered (e.g. auto-reaped after a done report), returns success without error. Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister (subtree included)")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is requesting the kill). Overseer uses the overseer name (usually 'jevons').")),
 		),
@@ -828,29 +828,12 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	desc := s.registry.Descendants(name)
-	// 🎯T530: refuse leaf kill of a recovery seat still holding sendq; on
-	// parent kill, snapshot held descendants and restart them for drain
-	// under the surviving parent after the subtree is removed.
-	refuse, refuseReason, restartNames := ClassifyKillHeldSendq(name, desc, s.pendingAgentSends)
-	if refuse {
-		life["err"] = refuseReason
-		life["held_sendq"] = true
-		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
-		return mcp.NewToolResultError(refuseReason), nil
-	}
-	heldSnaps := s.snapshotHeldSeats(restartNames)
-	surviveParent := s.surviveDrainParent(name, actor)
 	if err := s.killSubtreeAndClearTurns(name); err != nil {
 		life["err"] = err.Error()
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", err)), nil
 	}
-	restarted := s.restartHeldSendqForDrain(heldSnaps, surviveParent, actor)
 	life["descendants"] = len(desc)
-	if len(restarted) > 0 {
-		life["drain_restarted"] = len(restarted)
-		life["drain_parent"] = surviveParent
-	}
 	s.logLifecycle(compAgentLifecycle, "kill", "ok", life)
 	msg := fmt.Sprintf(
 		"Agent %q killed by %q: process stopped and deregistered (will not auto-start; gone from agent list).",
@@ -858,11 +841,6 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	)
 	if len(desc) > 0 {
 		msg += fmt.Sprintf(" Also killed %d descendant(s): %s.", len(desc), strings.Join(desc, ", "))
-	}
-	if len(restarted) > 0 {
-		msg += fmt.Sprintf(
-			" 🎯T530: restarted %d held-sendq seat(s) for drain under %q: %s.",
-			len(restarted), surviveParent, strings.Join(restarted, ", "))
 	}
 	return mcp.NewToolResultText(msg), nil
 }
