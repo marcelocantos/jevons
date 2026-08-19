@@ -36,6 +36,10 @@ type Args struct {
 	Isolate bool
 }
 
+// Exclusive is Jevons's Session MCP policy: do not merge the owner's
+// user-scope maps. Isolates and daily both set AgentDef.MCPExclusive.
+const Exclusive = true
+
 // HTTPURL is the streamable-HTTP endpoint agents dial. host must be a
 // concrete address (never "localhost"); port is the served port (🎯T379).
 func HTTPURL(host string, port int) string {
