@@ -51,13 +51,13 @@ const (
 
 // CitationRole is what a finish report is doing with a gate it cites.
 //
-// The same record can play either part. A red run is a contradiction when it
-// is offered as a pass, and a *result* when it is offered as proof that an
-// oracle falsifies — the deliberate run against a tree with the work removed
-// that 🎯T31 and this package's own doctrine ask every worker to perform. The
-// record cannot tell those apart: they are the same run. Only the prose around
-// the citation says which, so the role is read from the report and the store is
-// never consulted (🎯T443).
+// The same record can play several parts. A red run is a contradiction when it
+// is offered as a pass, and a *result* when the report assigns it any other
+// honest role — proof that an oracle falsifies (🎯T443), evidence of inherited
+// breakage the worker disowns, or a defect the oracle caught and the worker
+// then fixed (🎯T472). The record cannot tell those apart: they are the same
+// run. Only the prose around the citation says which, so the role is read from
+// the report and the store is never consulted.
 type CitationRole string
 
 const (
@@ -72,6 +72,14 @@ const (
 	// acceptance criterion demanded, and a checker that flags the behaviour it
 	// asks for is a checker readers learn to skim past.
 	RoleFalsification CitationRole = "falsification"
+	// RoleInherited: the report cites the red as someone else's pre-existing
+	// breakage — "not mine", "before my commit", "pre-existing HEAD breakage".
+	// Bannering these was 🎯T472's first named case (jv-t390-plan-usage).
+	RoleInherited CitationRole = "inherited"
+	// RoleDefectCaught: the report cites the red as the oracle working — it
+	// caught a real defect, which the worker then fixed. Bannering these was
+	// 🎯T472's second named case (jv-t391-guard-all-paths).
+	RoleDefectCaught CitationRole = "defect_caught"
 )
 
 // Flag is one contradiction found in a finish report.
@@ -145,6 +153,30 @@ var removalFramingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
 // shown. "red" needs word boundaries or it matches the tail of "measured".
 var failureFramingRe = regexp.MustCompile(`(?i)\b(fail\w*|red|falsif\w*)\b`)
 
+// inheritedFramingRe matches a report disowning a red as someone else's
+// pre-existing breakage (🎯T472). Deliberately stronger than a bare "failing":
+// the worker has to say the breakage is not theirs.
+var inheritedFramingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
+	`\bpre-?existing\b`,
+	`\bHEAD breakage\b`,
+	`\bnot mine\b`,
+	`\bbefore my (commit|change|work)\b`,
+	`\bred at my parent\b`,
+	`\bat my parent\b`,
+	`\bis not T\d`,
+	`\bnot T\d+\b`,
+}, "|"))
+
+// defectCaughtFramingRe matches a report offering a red as proof the oracle
+// caught a real defect (🎯T472) — often followed by "fixed just now", but the
+// role is the catch, not the fix.
+var defectCaughtFramingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
+	`\bcaught a real defect\b`,
+	`\bcaught (a|the) (real )?(bug|defect|panic|regression)\b`,
+	`\bfirst (gate|test) run was red\b`,
+	`\boracle caught\b`,
+}, "|"))
+
 // contextRadius is how far from a citation's own line the framing that gives
 // it a role may sit. Two lines covers the shapes workers actually write — a
 // label above the attestation, the quoted failure below it — without letting
@@ -160,10 +192,10 @@ const contextRadius = 2
 // and a role that a worker can assert by choosing a name is not a check.
 func ClassifyCitation(window string, c CitedAttestation) CitationRole {
 	framing := strings.ToLower(strings.ReplaceAll(window, c.Raw, " "))
-	// A window that also calls this gate a pass is not describing a
-	// falsification run, whatever else it says. Refusing the exemption here is
-	// the safe direction: the cost is a banner on a confusingly worded honest
-	// report, and the alternative is a green laundered through the word "red".
+	// A window that also calls this gate a pass is not an honest non-pass role,
+	// whatever else it says. Refusing the exemption here is the safe direction:
+	// the cost is a banner on a confusingly worded honest report, and the
+	// alternative is a green laundered through the word "red".
 	for _, m := range greenClaimMarkers {
 		if strings.Contains(framing, m) {
 			return RoleClaimedPass
@@ -172,7 +204,24 @@ func ClassifyCitation(window string, c CitedAttestation) CitationRole {
 	if removalFramingRe.MatchString(framing) && failureFramingRe.MatchString(framing) {
 		return RoleFalsification
 	}
+	if inheritedFramingRe.MatchString(framing) {
+		return RoleInherited
+	}
+	if defectCaughtFramingRe.MatchString(framing) {
+		return RoleDefectCaught
+	}
 	return RoleClaimedPass
+}
+
+// isHonestNonPass reports whether role is one of the citations that must not
+// draw a FALSE-GREEN banner: the red is doing a job other than "my work passed".
+func isHonestNonPass(role CitationRole) bool {
+	switch role {
+	case RoleFalsification, RoleInherited, RoleDefectCaught:
+		return true
+	default:
+		return false
+	}
 }
 
 // citationWindow returns the line range whose prose gives the citation on line
@@ -197,8 +246,10 @@ func citationWindow(lines []string, isAttestation map[int]bool, i int) (start, e
 	return start, end
 }
 
-// falsificationRoles reports which cited attestations a report offers as proof
-// that an oracle falsifies, and which lines their framing occupies.
+// honestRedRoles reports which cited attestations a report offers in a role
+// other than "my work passed" — falsification proof (🎯T443), inherited
+// breakage, or a defect the oracle caught (🎯T472) — and which lines their
+// framing occupies.
 //
 // The line set matters as much as the citation set: the quoted failure that IS
 // the demonstration sits in the same neighbourhood as the citation, so flagging
@@ -208,7 +259,7 @@ func citationWindow(lines []string, isAttestation map[int]bool, i int) (start, e
 // Citations are located per line rather than searched for across the whole
 // report, so an attestation wrapped across a line break is simply never exempt
 // — the conservative answer, and the one that cannot be arranged deliberately.
-func falsificationRoles(lines []string) (exempt map[string]bool, framingLines map[int]bool) {
+func honestRedRoles(lines []string) (exempt map[string]bool, framingLines map[int]bool) {
 	isAttestation := make(map[int]bool, len(lines))
 	for i, ln := range lines {
 		if attestationRe.MatchString(ln) {
@@ -229,12 +280,12 @@ func falsificationRoles(lines []string) (exempt map[string]bool, framingLines ma
 				continue
 			}
 			// 🎯T461: a host-killed run decided nothing. It is not a failing
-			// suite either, so falsification framing must not exempt it — that
+			// suite either, so honest-red framing must not exempt it — that
 			// exemption is exactly the clause a lazy fix skips.
 			if c.Verdict.IsKilled() {
 				continue
 			}
-			if ClassifyCitation(window, c) != RoleFalsification {
+			if !isHonestNonPass(ClassifyCitation(window, c)) {
 				continue
 			}
 			exempt[c.Raw] = true
@@ -285,7 +336,7 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 	var flags []Flag
 	lines := strings.Split(text, "\n")
 	cited := ParseAttestations(text)
-	exempt, framingLines := falsificationRoles(lines)
+	exempt, framingLines := honestRedRoles(lines)
 	claimsGreen := claimsGreenPass(lower)
 
 	// Attestation checks first: a cited record is the strongest evidence
@@ -293,7 +344,7 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 	for _, c := range cited {
 		if c.Verdict.IsKilled() {
 			// 🎯T461: refused in both directions — as a pass AND as failing
-			// evidence. No T443 exemption reaches here (see falsificationRoles).
+			// evidence. No honest-red exemption reaches here (see honestRedRoles).
 			flags = append(flags, Flag{
 				Kind: FlagAttestationKilled,
 				Detail: fmt.Sprintf(
@@ -305,7 +356,7 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 			continue
 		}
 		if !c.Verdict.IsGreen() || !c.StatusIsZero() {
-			// 🎯T443: cited as proof that the oracle falsifies, not as a pass.
+			// 🎯T443 / 🎯T472: cited in an honest non-pass role, not as a pass.
 			// The red is the result, and saying so is what was asked for.
 			if exempt[c.Raw] {
 				continue
@@ -383,9 +434,9 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 			Evidence: strings.TrimSpace(m),
 		})
 	}
-	// 🎯T443: the failure quoted as the content of a falsification run is that
-	// run's result, not output arguing with a pass, so it is hidden from the
-	// scan. Everything outside those lines is scanned as before.
+	// 🎯T443 / 🎯T472: the failure quoted as the content of an honest red role
+	// is that run's result, not output arguing with a pass, so it is hidden
+	// from the scan. Everything outside those lines is scanned as before.
 	for _, a := range ScanOutput(blankLines(lines, framingLines)) {
 		flags = append(flags, Flag{
 			Kind: FlagOutputContradicts,

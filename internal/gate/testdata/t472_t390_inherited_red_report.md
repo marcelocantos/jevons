@@ -1,0 +1,15 @@
+Checkpoint reached. Committed and verified.
+
+**Commit `ca9587a`** — "feat(T390): jevons reads the plan usage claudia has been publishing all along". `git show --stat` confirms exactly five paths, nothing swept: `internal/planusage/{planusage,reader}.go`, `internal/server/plan_usage_api.go`, `cmd/jevonsd/planusage.go`, and `internal/server/server.go`. Reachable: `git merge-base --is-ancestor ca9587a HEAD` passes.
+
+The shared-index hazard was real and I worked around it rather than through it. `server.go` carried 🎯T435's `removals`/fleetlog hunks alongside mine, so a `git commit --only` would have swept them. I reconstructed HEAD's `server.go`, applied only my two hunks (the `planUsageSource` field and the `/api/plan-usage` route), and staged the blob through a worker-owned `GIT_INDEX_FILE` — the working tree was never touched, and T435's edits are still sitting uncommitted where their owner left them.
+
+**Gate evidence:**
+- `GATE go-build exit=0 GREEN id=6626ea42 tree=clean@ca9587a1ab4c` — my packages build from a detached worktree of HEAD.
+- `GATE go-build exit=1 RED id=8a0faca5 tree=clean@24f85c4c8494` — **`go build ./...` is red at my parent, before my commit exists.** `cmd/treeguard/main.go:64: assignment mismatch: 1 variable but env.Post returns 2 values`. Whoever landed `internal/treeguard/{command,coverage,journal}.go` changed `env.Post`'s arity without updating its caller. Identical error at my commit; I add nothing to it. **Master is red right now and it is not T390's** — worth routing to whoever owns treeguard.
+
+One correction to my own read of the tree: master advanced under me mid-turn, so my parent is `24f85c4` ("feat(T463): admission control reads the host, and 0 is not an unlimited cap"), not the `224618e` I started from.
+
+**What is done:** clause 3 (claudia is the single implementation — `Convert` only re-shapes `claudia.PlanUsage`, no vendor parsing here) and the honesty semantics clause 2 turns on: `unavailable` is a distinct value carrying the provider's reason, a backend claiming available with zero windows is downgraded rather than drawn as an empty row, and an aged reading is marked `Stale` with its age instead of served as current. Grok renders unavailable because SuperGrok publishes no remaining — I did not invent a number for it.
+
+**What is not done, and why I stopped here rather than claiming it:** clauses 1 and 2's cockpit render, clause 4's capacity consumer, and clause 5's hermetic oracle. The daemon wiring (`cmd/jevonsd/main.go:743`) and the capacity lever (`internal/mcpserver/capacity.go`'s `PlanRemaining`/`PlanHeadroom`) were entangled with sibling 🎯T463's uncommitted host-load hunks in the same files, which is why they are not in this commit. That entanglement has just cleared — T463 committed at `24f85c4` — so those files should now be separable on the next pass. No restart or live probe yet, so 🎯T194 is unsatisfied and nothing here is owner-visible: **in progress, not landed.**
