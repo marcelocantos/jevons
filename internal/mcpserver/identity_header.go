@@ -174,6 +174,9 @@ func roleAddressedDoctrine(name, role string) string {
 		b.WriteString("- 🎯T31 / 🎯T31.1 — you are the independent gate on completion. You " +
 			"did not do the work, so your acceptance is the one that counts: refuse a " +
 			"bare done that carries no oracle evidence and no accepted-risk language.\n")
+		b.WriteString("- 🎯T427 — at review, prove every cited evidence SHA is still " +
+			"reachable: git merge-base --is-ancestor <sha> HEAD. Amend-vulnerable is " +
+			"yaml-only + unpushed tip, not file count.\n")
 		b.WriteString("- 🎯T176 — a running worker is in progress, never live. Live / landed / " +
 			"shipped is for product evidence only.\n")
 	case RoleAside:
@@ -187,7 +190,9 @@ func roleAddressedDoctrine(name, role string) string {
 			"test and its green result, and/or the commit SHA that lands it) or explicit " +
 			"accepted-risk language. Bare done is refused.\n")
 		b.WriteString("- 🎯T427 — a SHA you cite as evidence is proven reachable before you " +
-			"send it: git merge-base --is-ancestor <sha> HEAD.\n")
+			"send it: git merge-base --is-ancestor <sha> HEAD. Amend-vulnerable is an " +
+			"unpushed tip that touches only bullseye.yaml — not file count; do not rest " +
+			"attestation on a yaml-only commit alone.\n")
 		b.WriteString("- 🎯T176 — say in progress until the product is owner-visible.\n")
 	}
 	return b.String()

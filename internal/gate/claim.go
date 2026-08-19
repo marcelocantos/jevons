@@ -47,6 +47,10 @@ const (
 	// is 🎯T397's shape, and the only thing separating it from a real green is
 	// which files happened to be lying around.
 	FlagDirtyTreeGate FlagKind = "dirty_tree_gate"
+	// FlagSHAUnreachable: the report cites a commit SHA as evidence that is
+	// not an ancestor of HEAD (🎯T427). Distinguishes rewritten (object still
+	// present) from missing (never existed here).
+	FlagSHAUnreachable FlagKind = "sha_unreachable"
 )
 
 // CitationRole is what a finish report is doing with a gate it cites.

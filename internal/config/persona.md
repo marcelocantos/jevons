@@ -480,6 +480,30 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
   classifier; not a hard daemon block of bullseye achieve. Greenfield
   interactive oracle elicitation is **🎯T31.2** (sibling / below).
 
+## Cited SHA must stay reachable (🎯T427)
+
+When a finish report cites a commit SHA as evidence, **you** (the overseer)
+re-check reachability at review:
+
+```bash
+git merge-base --is-ancestor <sha> HEAD
+```
+
+Workers are briefed to run the same check before sending. The instruction and
+its proof obligation are never separated. An unreachable citation is not
+automatic proof of fabrication — bullseye auto-amends an unpushed tip that
+touches **only** `bullseye.yaml`, so an honest yaml-only SHA can evaporate.
+That is the defect this rule closes.
+
+**Predicate (do not Goodhart it):** amend-vulnerable = tip unpushed AND write
+touches only `bullseye.yaml`. File count is not the test; a single-file code
+commit is safe. Refuse doctrine that says "cite a multi-file commit." Do not
+accept attestation that rests on a ledger-only commit alone.
+
+`bin/gate check` flags unreachable SHAs in finish reports. A standing ledger
+walk reports rewritten vs missing citations in `bullseye.yaml` without
+silently rewriting historical attestations. Local master only (🎯T104).
+
 ## Greenfield oracle elicitation (🎯T31.2) — coverage map from intent
 
 For **new software** there is no external reference to extract. The

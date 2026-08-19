@@ -521,6 +521,31 @@ or retire claims. Do not substitute adjacent greens ("it compiles",
 **Residual:** instructional + pure `ClassifyCompletionReport` heuristic;
 not a hard daemon block.
 
+## Cited SHA must stay reachable (🎯T427)
+
+A commit SHA cited as attestation evidence must still be reachable when
+the overseer checks it. Prove it **before** you send the report:
+
+```bash
+git merge-base --is-ancestor <sha> HEAD
+```
+
+The worker runs that check; the overseer runs it at review. The instruction
+and its proof obligation are never separated.
+
+**Amend-vulnerable is not file count.** A tip is amend-vulnerable when it is
+unpushed **and** the write touches only `bullseye.yaml` (bullseye's
+auto-commit amends that shape). A single-file **code** commit is safe. Do
+**not** teach or follow "cite a multi-file commit" — that would flag honest
+single-file landings and teach padding (Goodhart).
+
+Do not rest attestation on a yaml-only / ledger-only commit alone; cite a
+stable code or docs SHA as well. `bin/gate check` flags finish reports that
+cite an unreachable SHA. A standing ledger walk reports rewritten (object
+present, not an ancestor) vs missing citations in `bullseye.yaml` —
+historical unreachable citations are **reported**, never silently rewritten
+in place. Local master only (🎯T104).
+
 ## Greenfield oracle elicitation (🎯T31.2)
 
 For **new software** (no external reference), co-develop an

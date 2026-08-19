@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -31,6 +31,23 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   The overseer (who did not do the work) is the independent gate (rule 9).
 - Residual: instructional doctrine + pure classifier; not a hard daemon
   block.
+
+## Cited SHA must stay reachable (🎯T427)
+- Before you cite a commit SHA as evidence, prove it is still reachable:
+      git merge-base --is-ancestor <sha> HEAD
+  Run that check yourself; the overseer runs it again at review. The
+  instruction and its proof obligation are never separated.
+- Amend-vulnerable is NOT "single-file" / "cite a multi-file commit". A
+  commit is amend-vulnerable when the tip is unpushed AND the write
+  touches only bullseye.yaml (bullseye auto-amends that shape). A
+  single-file CODE commit is safe. Do not pad commits to look safe.
+- Do not rest attestation on a yaml-only (ledger-only) commit alone —
+  cite a stable code/docs SHA (or something else that is not
+  amend-vulnerable) as well.
+- bin/gate check flags finish reports that cite an unreachable SHA.
+  A standing ledger walk reports rewritten vs missing citations in
+  bullseye.yaml; historical unreachable citations are reported, never
+  silently rewritten in place.
 
 ## Run gates so the status survives (🎯T386 / 🎯T396)
 - Run every gate through the gate runner, and cite the line it prints:
@@ -203,6 +220,8 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 ## Report
 - When finished: report commit SHA(s) + test evidence to the overseer
   (or accepted-risk / class-3 residual). Bare done without either is refused.
+- Prove each cited SHA with git merge-base --is-ancestor <sha> HEAD
+  before sending (🎯T427). Local master only (🎯T104) — no PR autopilot.
 - Do not ambient-autopilot /push or gh pr create.
 - Finished work agents auto-deregister (stop+Remove) when the terminal
   report claims done — including imperfect bare done without oracle markers

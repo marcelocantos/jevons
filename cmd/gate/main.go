@@ -10,6 +10,7 @@
 //	bin/gate last                   # the most recent run's attestation
 //	bin/gate show <id>              # one run, with the reason it is not green
 //	bin/gate check report.md        # flag a finish report's false green
+//	bin/gate check report.json      # …same; JSON envelopes decode to text (🎯T468)
 //	bin/gate check < report.md      # …the same, from stdin
 //	bin/gate sweep [-void]          # records that attest nothing (🎯T441)
 //	bin/gate void <id> <reason>     # take one record out of the citable store
@@ -56,9 +57,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/gate"
+	"github.com/marcelocantos/jevons/internal/shaevidence"
 )
 
 // Exit codes for gate's own outcomes. A gate that ran keeps the command's
@@ -417,7 +422,7 @@ func cmdCheck(storeDir string, args []string) int {
 	if len(args) == 1 && args[0] != "-" {
 		read = func() ([]byte, error) { return os.ReadFile(args[0]) }
 	}
-	report, err := read()
+	raw, err := read()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gate check:", err)
 		return exitError
@@ -427,11 +432,49 @@ func cmdCheck(storeDir string, args []string) int {
 		fmt.Fprintln(os.Stderr, "gate check:", err)
 		return exitError
 	}
-	flags := gate.FlagFalseGreen(string(report), store.Lookup)
+	// 🎯T468: stored reports are JSON envelopes; scan the decoded text, not
+	// the escaped file bytes. Same decoder the daemon's report readers use.
+	body := agentreport.DecodeBody(raw)
+	flags := gate.FlagFalseGreen(body, store.Lookup)
+	// 🎯T427: a cited evidence SHA must still be an ancestor of HEAD. When
+	// check is running inside (or beside) a git repo, compose the reachability
+	// flags; offline / non-git callers keep the textual false-green set alone.
+	if root := gitRootNear(checkPath(args)); root != "" {
+		flags = append(flags, gate.FlagUnreachableSHAs(body, shaevidence.CheckInRepo(root, "HEAD"))...)
+	}
 	if len(flags) == 0 {
 		fmt.Println("no false-green flags")
 		return 0
 	}
 	fmt.Println(strings.TrimSpace(gate.Banner(flags)))
 	return exitFlagged
+}
+
+// checkPath is the report path named on the command line, or "" for stdin.
+func checkPath(args []string) string {
+	if len(args) == 1 && args[0] != "-" {
+		return args[0]
+	}
+	return ""
+}
+
+// gitRootNear returns the git toplevel containing path (or the process cwd
+// when path is empty). Empty when git is missing or the location is not a
+// work tree — callers then skip the 🎯T427 reachability check.
+func gitRootNear(path string) string {
+	dir := path
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return ""
+		}
+		dir = wd
+	} else if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
+		dir = filepath.Dir(dir)
+	}
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
