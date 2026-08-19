@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package mcpattach is how jevonsd puts the MCP set on every Session:
-// LoadMCP (discovery) + append jevonsmcp, then Config.MCPServers.
-// The host passes that list; Grok/Claude/Codex must not also load the
-// owner's config.toml (claudia 🎯T40 hermetic set). Codex still needs
-// EnsureMCP because app-server thread/start has no MCP field.
+// LoadMCP (discovery) + append jevonsmcp for Claude/Codex, then
+// Config.MCPServers. Grok is different (🎯T525): ACP session/new gets
+// only this daemon's HTTP jevonsmcp — Grok already attaches
+// ~/.grok/config.toml (T58), and re-sending that inventory in a
+// Claude-shaped ACP payload made session/new return Invalid params.
+// Codex still needs EnsureMCP because app-server thread/start has no
+// MCP field.
 package mcpattach
 
 import (
@@ -62,12 +65,14 @@ func Ensure(a Args) error {
 	})
 }
 
-// SessionServers is the list Jevons passes on AgentDef.MCPServers:
-// discovered system servers plus this daemon's jevonsmcp (replacing a
-// stale same-name URL). Grok must not also load ~/.grok/config.toml
-// (🎯T525). Isolates omit HTTP on Codex so Launch does not EnsureMCP
-// into the owner's ~/.codex/config.toml.
+// SessionServers is the list Jevons passes on AgentDef.MCPServers.
+// Claude (and Codex, subject to Isolate) get discovered system servers
+// plus this daemon's jevonsmcp. Grok gets only the live HTTP jevonsmcp
+// (🎯T525) — ~/.grok/config.toml already attaches on session/new.
 func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia.MCPServer {
+	if provider == claudia.ProviderGrok {
+		return grokSessionServers(a)
+	}
 	inv, err := claudia.LoadMCP(loadArgs(a, workDir))
 	if err != nil || inv == nil {
 		inv = &claudia.MCPInventory{}
@@ -82,6 +87,17 @@ func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia
 		return stripHTTP(list)
 	}
 	return list
+}
+
+func grokSessionServers(a Args) []claudia.MCPServer {
+	if strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.URL) == "" {
+		return nil
+	}
+	return []claudia.MCPServer{{
+		Name: a.Name,
+		Type: "http",
+		URL:  a.URL,
+	}}
 }
 
 func loadArgs(a Args, workDir string) *claudia.LoadMCPArgs {

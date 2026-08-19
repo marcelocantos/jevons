@@ -12,11 +12,13 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// TestT525GrokSessionServersAreHostPassed is the iterate oracle for
-// 🎯T525. Jevons LoadMCPs the inventory and passes it on the Session.
-// Grok must not also load ~/.grok/config.toml. The list includes
-// discovered Grok servers plus this daemon's live jevonsmcp URL.
-func TestT525GrokSessionServersAreHostPassed(t *testing.T) {
+// TestT525GrokSessionServersAreOnlyJevonsHTTP is the iterate oracle for
+// 🎯T525. Daily boot died on `acp session/new: Invalid params` after
+// SessionServers dumped Claude/Grok inventory onto the overseer ACP
+// mcpServers field. Grok already attaches ~/.grok/config.toml (T58).
+// The ACP list must be this daemon's HTTP jevonsmcp only — not
+// bullseye-as-command or other Claude-shaped stdio cousins.
+func TestT525GrokSessionServersAreOnlyJevonsHTTP(t *testing.T) {
 	dir := t.TempDir()
 	claude := filepath.Join(dir, "claude.json")
 	grok := filepath.Join(dir, "grok.toml")
@@ -39,6 +41,11 @@ func TestT525GrokSessionServersAreHostPassed(t *testing.T) {
 url = "http://127.0.0.1:7700/mcp"
 enabled = true
 
+[mcp_servers.bullseye]
+command = "/opt/homebrew/bin/mcpbridge"
+args = ["connect", "/tmp/bullseye.json"]
+enabled = true
+
 [mcp_servers.jevonsmcp]
 url = "http://127.0.0.1:54558/mcp"
 enabled = true
@@ -57,14 +64,21 @@ enabled = true
 		CodexTOML:  codex,
 	}
 	list := SessionServers(a, claudia.ProviderGrok, "")
+	if len(list) != 1 || list[0].Name != "jevonsmcp" || list[0].URL != a.URL || list[0].Type != "http" {
+		t.Fatalf("Grok SessionServers = %+v; want only jevonsmcp HTTP at the live URL (🎯T525)", list)
+	}
+
+	// Control: Claude Session still receives the full ForProvider list
+	// (discovered bullseye + live jevonsmcp), not the Grok-only set.
+	claudeList := SessionServers(a, claudia.ProviderClaude, "")
 	byName := map[string]claudia.MCPServer{}
-	for _, s := range list {
+	for _, s := range claudeList {
 		byName[s.Name] = s
 	}
-	if byName["jevonsmcp"].URL != a.URL {
-		t.Fatalf("jevonsmcp = %+v; want live URL %s", byName["jevonsmcp"], a.URL)
+	if byName["bullseye"].Command == "" {
+		t.Fatalf("Claude Session dropped bullseye: %+v", claudeList)
 	}
-	if byName["mnemo"].URL != "http://127.0.0.1:7700/mcp" {
-		t.Fatalf("discovered mnemo missing: %+v", list)
+	if byName["jevonsmcp"].URL != a.URL {
+		t.Fatalf("Claude jevonsmcp = %+v; want live URL %s", byName["jevonsmcp"], a.URL)
 	}
 }
