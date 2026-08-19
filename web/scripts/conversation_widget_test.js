@@ -883,13 +883,13 @@ test('T494.1 agent_note + system pairs coalesce to one labelled slot', function 
   assert.strictEqual(slots[0].text, '⋯ 20 steps');
 });
 
-test('T119.6 startTurn twice leaves one canvas child', function () {
+test('T119.6 ensureTurnSlot twice leaves one canvas child', function () {
   const CW = require('./conversation_widget.js');
   const canvas = { children: [] };
   let slot = CW.ensureTurnSlot(canvas, null);
   slot = CW.ensureTurnSlot(canvas, slot);
   slot = CW.ensureTurnSlot(canvas, slot);
-  assert.strictEqual(canvas.children.length, 1, 'second startTurn must not append');
+  assert.strictEqual(canvas.children.length, 1, 'second ensure must not append');
   assert.strictEqual(slot, canvas.children[0]);
   assert.strictEqual(CW.shouldMintTurnSlot(slot, true), false);
   assert.strictEqual(CW.shouldMintTurnSlot(null, false), true);
@@ -903,24 +903,106 @@ test('T119.6 startTurn twice leaves one canvas child', function () {
   alwaysMint(mutant);
   alwaysMint(mutant);
   assert.strictEqual(mutant.children.length, 2, 'mutant must be the failure mode the oracle detects');
+});
+
+// 🎯T119.8: host paints capsules from fold slot rows — no turnDetails/turnItems.
+test('T119.8 host has no parallel open-slot state; paints by slot.el', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const start = html.match(/function startTurn\(\) \{[\s\S]*?\nfunction closeTurn/);
-  assert.ok(start, 'startTurn exists');
-  assert.ok(/isConnected/.test(start[0]), 'startTurn is idempotent while the slot is connected');
-  assert.ok(/attachTranscriptRow/.test(start[0]),
-    'T494.1: startTurn attaches itself — virtualize is a no-op during replay');
-  assert.ok(!/virtualizeMessages\(\)/.test(start[0]),
-    'T494.1: startTurn must not depend on virtualizeMessages to set row.el');
-  assert.ok(!/createElement/.test(start[0]),
-    'T119.4: startTurn must not mint DOM — apply/attachTranscriptRow is the only mint');
-  const close = html.match(/function closeTurn\(\) \{[\s\S]*?\nfunction formatAgentNote/);
-  assert.ok(close, 'closeTurn exists');
-  assert.ok(!/\.remove\(\)/.test(close[0]),
-    'T119.4: closeTurn must not destroy nodes — detach/apply does');
+  assert.ok(!/\blet turnDetails\b/.test(html), 'no turnDetails open-slot state');
+  assert.ok(!/\blet turnItems\b/.test(html), 'no turnItems open-slot state');
+  assert.ok(!/function startTurn\(/.test(html), 'startTurn retired — openFoldTurnSlot owns mint');
+  assert.ok(!/function closeTurn\(/.test(html), 'closeTurn retired — cancelFoldTurnSlot is per-slot');
+  assert.ok(!/function addTurnItem\(/.test(html), 'addTurnItem retired — paintFoldTurnSlotItem is per-slot');
+  const open = html.match(/function openFoldTurnSlot\(slot\) \{[\s\S]*?\nfunction cancelFoldTurnSlot/);
+  assert.ok(open, 'openFoldTurnSlot exists');
+  assert.ok(/attachTranscriptRow/.test(open[0]),
+    'T494.1: open attaches itself — virtualize is a no-op during replay');
+  assert.ok(!/virtualizeMessages\(\)/.test(open[0]),
+    'T494.1: open must not depend on virtualizeMessages to set row.el');
+  assert.ok(!/createElement/.test(open[0]),
+    'T119.4: open must not mint DOM — apply/attachTranscriptRow is the only mint');
+  const cancel = html.match(/function cancelFoldTurnSlot\(slot\) \{[\s\S]*?\nfunction formatAgentNote/);
+  assert.ok(cancel, 'cancelFoldTurnSlot exists');
+  assert.ok(!/\.remove\(\)/.test(cancel[0]),
+    'T119.4: cancel must not destroy nodes — detach/apply does');
+  assert.ok(/removeTranscriptRow/.test(cancel[0]),
+    'empty cancel deletes the unused slot from the list');
+  assert.ok(/onTurnSlotItem:\s*function\s*\(\s*slot/.test(html),
+    'onTurnSlotItem receives the slot');
+  assert.ok(/paintFoldTurnSlotItem\(\s*slot/.test(html),
+    'onTurnSlotItem routes to THAT slot via paintFoldTurnSlotItem(slot, …)');
   const opt = html.match(/function paintOptimisticMainUser\([\s\S]*?\n\}/);
   assert.ok(opt, 'paintOptimisticMainUser exists');
-  assert.ok(!/startTurn\(\)/.test(opt[0]),
+  assert.ok(!/openFoldTurnSlot\(/.test(opt[0]) && !/startTurn\(/.test(opt[0]),
     'optimistic user paint must not pre-open a slot that onTurnSlotOpen will open');
+});
+
+test('T119.8 tape [user, tool, text, tool, tool] → two capsules (1 then 2)', function () {
+  const capsules = [];
+  function mintEl() {
+    const kids = [];
+    const el = {
+      isConnected: true,
+      _label: { textContent: '' },
+      _items: {
+        children: kids,
+        appendChild: function (d) { kids.push(d); },
+      },
+    };
+    capsules.push(el);
+    return el;
+  }
+  // Host-shaped hooks: always mint a NEW capsule per fold open; paint into slot.el.
+  const stream = CW.createStreamJoin({
+    onTurnSlotOpen: function (slot) {
+      slot.el = mintEl();
+    },
+    onTurnSlotItem: function (slot, cls, text) {
+      assert.ok(slot && slot.el, 'item routes to an opened slot.el');
+      slot.el._items.appendChild({ className: 'turn-item ' + cls, textContent: text });
+      const n = slot.el._items.children.length;
+      slot.el._label.textContent = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
+    },
+  });
+  const tape = [
+    { type: 'user', message: { content: 'go' }, timestamp: 1 },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'mid' }], stop_reason: 'end_turn' },
+    },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Grep' }] } },
+  ];
+  tape.forEach(function (ev) { stream.applyWireEvent(ev); });
+  const lines = stream.getLines();
+  const kinds = lines.map(function (l) { return l.kind || l.role; });
+  assert.deepStrictEqual(kinds, ['user', 'turn-slot', 'assistant', 'turn-slot']);
+  assert.strictEqual(capsules.length, 2, 'two fold slots → two capsules, got ' + capsules.length);
+  assert.strictEqual(capsules[0]._items.children.length, 1, 'first capsule is 1 step');
+  assert.strictEqual(capsules[1]._items.children.length, 2, 'second capsule is 2 steps');
+  assert.strictEqual(capsules[0]._label.textContent, '⋯ 1 step');
+  assert.strictEqual(capsules[1]._label.textContent, '⋯ 2 steps');
+  // Live fold and full replay agree.
+  const replayed = CW.displayFromEvents(tape);
+  assert.deepStrictEqual(
+    lines.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+    replayed.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+  );
+  // Control: consecutive tools with no visible row still coalesce.
+  const control = [];
+  const cstream = CW.createStreamJoin({
+    onTurnSlotOpen: function (slot) { slot.el = { id: control.length }; control.push(slot.el); },
+    onTurnSlotItem: function () {},
+  });
+  [
+    { type: 'user', message: { content: 'x' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'A' }] } },
+    { type: 'assistant', message: { content: [], stop_reason: 'end_turn' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'B' }] } },
+  ].forEach(function (ev) { cstream.applyWireEvent(ev); });
+  assert.strictEqual(control.length, 1, 'consecutive tools coalesce into one capsule');
+  assert.strictEqual(cstream.getLines().filter(function (l) { return l.kind === 'turn-slot'; })[0].items.length, 2);
 });
 
 test('T372 index.html: send click is the widget, not a second composer send', function () {

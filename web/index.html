@@ -1971,6 +1971,7 @@ function prependTranscriptRecords(records) {
     row.text = r.text;
     row.when = r.timestamp;
     row.origin = r.origin;
+    row.items = r.items;
     row.streamOpen = false;
     row.expanded = false;
     row.autoExpanded = false;
@@ -2008,7 +2009,10 @@ function attachTranscriptRow(index, opts) {
   // 🎯T119.4: apply is the only mint. A turn-slot is a compact marker,
   // never buildMsg (.msg + clock).
   if (row.kind === 'turn-slot' || row.role === 'turn-marker') {
-    const el = ConversationWidget.createTurnMarkerEl(document, { items: [], text: row.text || '' });
+    const el = ConversationWidget.createTurnMarkerEl(document, {
+      items: row.items || [],
+      text: row.text || '',
+    });
     if (!el) return null;
     el.style.position = 'absolute';
     el.style.left = '0';
@@ -2465,9 +2469,8 @@ function dismissFleetAside(id) {
   });
 }
 
-let turnDetails = null;
-let turnItems = null;
-let turnCount = 0;
+// 🎯T119.8: no parallel open-slot state. Capsules paint from fold
+// turn-slot rows via slot.el (onTurnSlotOpen / onTurnSlotItem).
 
 // ── History replay scroll suppress (reload + soft reconnect) ─────────
 // WS replays recent turns chronologically; stick-to-bottom per message
@@ -2826,7 +2829,7 @@ transport.onOpen = () => {
   dot.className = 'dot on';
   sTxt.textContent = 'connecting';
   sendBtn.disabled = false;
-  msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0; workingEl = null;
+  msgs.innerHTML = ''; workingEl = null;
   transcriptRows.length = 0;
   transcriptModel.seq = 0;
   if (typeof VirtualList !== 'undefined' && VirtualList.createTranscriptLayout) {
@@ -3144,7 +3147,6 @@ function handle(m) {
     }
     const n = m.turns || 0;
     if (n > 0 && userIdx.length >= n) {
-      closeTurn();
       truncateTranscriptFrom(userIdx[userIdx.length - n]);
       msgHistory = msgHistory.slice(0, Math.max(0, msgHistory.length - n));
       setEditingHighlight(null);
@@ -3195,10 +3197,8 @@ function handle(m) {
         if (workingEl) setWorking(false, undefined, { skipDrain: true });
         if (ownerWorkingChrome) ownerWorkingChrome.open = false;
         mainWorkingSuppressed = true;
-        closeTurn();
         return;
       }
-      closeTurn();
       const turnOrigin = (typeof ChatEvents !== 'undefined' && ChatEvents.turnOriginOf)
         ? ChatEvents.turnOriginOf(m) : 'owner';
       if (mainConversation && typeof mainConversation.applyWireEvent === 'function') {
@@ -3441,47 +3441,45 @@ function sealAssistantStream(streamId) {
   }
 }
 
-function startTurn() {
-  // 🎯T119.6: one open slot is one marker.
-  if (turnDetails && turnDetails.isConnected) return;
-  // Re-home a parked slot rather than minting another empty row.
-  // virtualizeMessages is a no-op during connect replay (T347); depending
-  // on it here leaked one unlabelled 16px slot per tool/note (🎯T494.1).
-  if (turnDetails && turnDetails._vIndex != null && transcriptRows[turnDetails._vIndex]) {
-    const parked = attachTranscriptRow(turnDetails._vIndex, { lazy: false });
-    if (parked) {
-      turnDetails = parked;
-      turnItems = parked._items;
-      return;
+// 🎯T119.8: paint each fold turn-slot row into ITS capsule (slot.el).
+// No host-global open capsule — a new fold slot after text/user is a
+// new marker at that position, never merged under the last owner message.
+function openFoldTurnSlot(slot) {
+  if (slot && slot.el && (slot.el.isConnected || slot.el._vIndex != null)) {
+    // Re-home a parked marker for this same fold row (T494.1).
+    if (!slot.el.isConnected && slot.el._vIndex != null
+        && transcriptRows[slot.el._vIndex]) {
+      const parked = attachTranscriptRow(slot.el._vIndex, { lazy: false });
+      if (parked) slot.el = parked;
     }
+    return slot.el;
   }
-  // 🎯T119.4: mutate the model, then apply. attachTranscriptRow is the
-  // only mint — call it here, do not wait for virtualize.
-  const row = registerTranscriptRow('turn-marker', '', Date.now(), {});
+  const when = (slot && slot.when != null) ? slot.when : Date.now();
+  const label = (slot && slot.text) || '';
+  const row = registerTranscriptRow('turn-marker', label, when, {});
+  // 🎯T119.4: attachTranscriptRow is the only mint. Mint an empty tip —
+  // onTurnSlotItem paints items; stashing items before attach would
+  // double-paint when paintNewDisplayRow then walks row.items.
   const el = attachTranscriptRow(transcriptRows.length - 1, { lazy: false });
-  turnDetails = el;
-  turnItems = el && el._items;
-  if (turnDetails) {
-    turnDetails._vIndex = transcriptRows.length - 1;
+  if (slot && slot.items) row.items = slot.items;
+  if (slot) slot.el = el;
+  if (el) {
+    el._vIndex = transcriptRows.length - 1;
     if (typeof applyRowHeight === 'function') {
-      const h = turnDetails.offsetHeight || 0;
-      if (h > 0) applyRowHeight(turnDetails._vIndex, h);
+      const h = el.offsetHeight || 0;
+      if (h > 0) applyRowHeight(el._vIndex, h);
     }
   }
-  turnCount++;
   scrollDownThrottled();
+  return el;
 }
 
-function closeTurn() {
-  if (!turnDetails) return;
-  const n = turnItems ? turnItems.children.length : 0;
-  if (n === 0) {
-    const idx = turnDetails._vIndex;
-    // Unused slot — delete the row. apply/detach destroys the node.
-    if (idx != null) removeTranscriptRow(idx);
-  }
-  turnDetails = null;
-  turnItems = null;
+function cancelFoldTurnSlot(slot) {
+  const el = slot && slot.el;
+  if (!el) return;
+  const n = el._items ? el._items.children.length : 0;
+  if (n === 0 && el._vIndex != null) removeTranscriptRow(el._vIndex);
+  if (slot) slot.el = null;
 }
 
 // formatAgentNote renders an injected notification as a compact activity
@@ -3493,18 +3491,23 @@ function formatAgentNote(text) {
   return truncate(text.replace(/\s+/g, ' ').trim(), 100);
 }
 
-function addTurnItem(cls, text) {
-  if (!turnItems) startTurn();
+function paintFoldTurnSlotItem(slot, cls, text) {
+  if (!slot) return;
+  if (!slot.el) openFoldTurnSlot(slot);
+  const el = slot.el;
+  if (!el || !el._items) return;
   const d = document.createElement('div');
   d.className = 'turn-item ' + cls;
   d.textContent = text;
-  turnItems.appendChild(d);
-  const n = turnItems.children.length;
-  turnDetails._label.textContent = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
-  if (turnDetails._vIndex != null && transcriptRows[turnDetails._vIndex]) {
-    transcriptRows[turnDetails._vIndex].text = turnDetails._label.textContent;
+  el._items.appendChild(d);
+  const n = el._items.children.length;
+  const label = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
+  if (el._label) el._label.textContent = label;
+  if (el._vIndex != null && transcriptRows[el._vIndex]) {
+    transcriptRows[el._vIndex].text = label;
+    if (slot.items) transcriptRows[el._vIndex].items = slot.items;
   }
-  if (typeof noteRowHeightChange === 'function') noteRowHeightChange(turnDetails);
+  if (typeof noteRowHeightChange === 'function') noteRowHeightChange(el);
   // 🎯T71: mid-turn tool activity is the best ACP-available progress signal.
   if (cls === 'tool-use' || cls === 'tool-result') {
     const short = truncate(String(text || '').replace(/\s+/g, ' ').trim(), 48);
@@ -8321,13 +8324,12 @@ function paintOptimisticMainUser(text) {
     : null;
   const plan = ChatEvents.planOptimisticMainUserPaint(existing, text, isAside);
   if (!plan || !plan.paint || !plan.text) return null;
-  try { closeTurn(); } catch (_) { /* isolated */ }
   const uEl = addMsg('user', plan.text, Date.now());
   if (!uEl) return null;
   uEl._optimisticSend = true;
   msgHistory.push({ text: plan.text, el: uEl });
-  // 🎯T119.6: do not pre-open a turn slot. onTurnSlotOpen opens one when
-  // the first tool arrives; a slot here became a second overlapping marker.
+  // 🎯T119.8 / T119.6: do not pre-open a turn slot. onTurnSlotOpen mints
+  // the capsule for that fold row when the first tool arrives.
   return uEl;
 }
 
@@ -9805,14 +9807,14 @@ let rhsBottomTab = (typeof FrontierTable !== 'undefined')
         return false;
       },
       onTurnSlotOpen: function (slot) {
-        startTurn();
-        if (slot && turnDetails) slot.el = turnDetails;
+        openFoldTurnSlot(slot);
       },
       onTurnSlotItem: function (slot, cls, text) {
-        addTurnItem(cls, text);
+        // Route to THAT slot row's capsule — never a host-global open slot.
+        paintFoldTurnSlotItem(slot, cls, text);
       },
-      onTurnSlotCancel: function () {
-        closeTurn();
+      onTurnSlotCancel: function (slot) {
+        cancelFoldTurnSlot(slot);
       },
       onStreamFrame: typeof scheduleJevonsRender === 'function' ? scheduleJevonsRender : undefined,
       onSeal: typeof paintSealedJevons === 'function' ? paintSealedJevons : undefined,

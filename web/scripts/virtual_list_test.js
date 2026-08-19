@@ -612,8 +612,8 @@ test('T119.3 index.html parks turn-markers and measures chrome into the prefix',
   assert.ok(/createTurnMarkerEl/.test(slotAttach) && !/buildMsg\(row\.role/.test(slotAttach),
     'attach mints a turn-slot via createTurnMarkerEl, never buildMsg');
   assert.ok(/function removeTranscriptRow/.test(html) &&
-    /function closeTurn\(\)[\s\S]{0,500}removeTranscriptRow/.test(html),
-    'empty closeTurn deletes the unused slot from the list');
+    /function cancelFoldTurnSlot\(slot\)[\s\S]{0,500}removeTranscriptRow/.test(html),
+    'empty cancelFoldTurnSlot deletes the unused slot from the list');
   assert.ok(/el\.style\.minHeight = ''/.test(html) &&
     /noteRowHeightChange/.test(html),
     'remat settle clears minHeight before measuring');
