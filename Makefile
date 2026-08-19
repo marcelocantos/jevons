@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope
+all: jevonsd jevons-head treeguard commitscope attrib runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -53,6 +53,17 @@ commitscope: bin/commitscope
 bin/commitscope: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/commitscope ./cmd/commitscope
+
+# Stopped-worker attribution (🎯T466). Operator lists / recovers / discards
+# one agent's unfinished slice without transcript archaeology or a bulk
+# checkout that destroys the other N-1. Built by `make all` so a fresh
+# clone has `bin/attrib` after `make`.
+.PHONY: attrib
+attrib: bin/attrib
+
+bin/attrib: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/attrib ./cmd/attrib
 
 # Per-turn depth ceiling hook (🎯T392.4). The PreToolUse hook in
 # .claude/settings.json execs this on every tool call, so `make all` builds

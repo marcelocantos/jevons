@@ -247,6 +247,31 @@ func TestT466DrainOnStopLeavesIndexClean(t *testing.T) {
 		t.Fatalf("drain record misattributed: %+v", d)
 	}
 
+	// ViaDrain touch records must land so attrib list can name the stopping
+	// agent for paths that reached the index without a hook observation.
+	store := &Store{Root: outRoot}
+	records, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("want 2 ViaDrain records, got %d: %+v", len(records), records)
+	}
+	for _, r := range records {
+		if r.Via != ViaDrain || r.Agent != "jv-worker" || r.Session != "s-worker" {
+			t.Fatalf("ViaDrain record mis-shaped: %+v", r)
+		}
+	}
+	dirty, err := DirtyPaths(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	att := Attribute(Resolve(records, nil), dirty)
+	slice, ok := att.Slice("jv-worker")
+	if !ok || len(slice.Paths(false)) != 2 {
+		t.Fatalf("drain must attribute the staged pile to the stopping agent: %+v", att)
+	}
+
 	// Idempotent: a second stop finds a clean index and records nothing.
 	if d2 := DrainOnStop(repo, "s-worker", "jv-worker"); d2 != nil {
 		t.Fatalf("second drain should be a no-op, got %+v", d2)

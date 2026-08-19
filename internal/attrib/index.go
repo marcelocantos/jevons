@@ -88,6 +88,26 @@ func DrainIndex(repoRoot, outRoot, session, agent, reason string, now time.Time)
 		return nil, err
 	}
 
+	// Attribute every drained path to the stopping agent before unstaging.
+	// Without this, a path that reached the index without a mutating-tool
+	// hook observation (e.g. `git add` of a hand edit) would leave the
+	// pile anonymous again — the ViaDrain class exists for exactly that
+	// case. Written before the unstage so a contended index.lock still
+	// leaves the attribution record even when the drain itself fails.
+	records := make([]Record, 0, len(staged))
+	for _, p := range staged {
+		records = append(records, Record{
+			Session: session,
+			Agent:   agent,
+			Path:    p,
+			At:      now.UTC(),
+			Via:     ViaDrain,
+		})
+	}
+	if err := (&Store{Root: outRoot}).Append(session, records); err != nil {
+		return drain, err
+	}
+
 	// Unstage by path rather than `git reset`, so a path git cannot unstage
 	// fails loudly on its own name instead of taking the whole index with it.
 	args := append([]string{"restore", "--staged", "--"}, staged...)
