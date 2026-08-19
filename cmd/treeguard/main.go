@@ -32,6 +32,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/attrib"
 	"github.com/marcelocantos/jevons/internal/treeguard"
 )
 
@@ -90,6 +91,16 @@ func main() {
 		// that is not the one that caused it (🎯T391).
 		if report != "" {
 			fmt.Fprint(os.Stderr, report)
+		}
+		// 🎯T466: the payload that policed the write now attributes it. Every
+		// mutating call feeds ~/.jevons/attrib, guarded path or not, so a
+		// stopped worker's leftovers stay answerable to a name. Best-effort:
+		// a worker must never lose a tool call because attribution could not
+		// be written, so a failure is reported and the exit stays 0.
+		if rels := env.RepoWrites(payload); len(rels) > 0 {
+			if err := attrib.Observe(payload.SessionID, "", payload.ToolName, rels, time.Now()); err != nil {
+				fmt.Fprintf(os.Stderr, "treeguard: attribution: %v\n", err)
+			}
 		}
 		// Best-effort housekeeping; a full disk must not block the fleet.
 		_ = env.Store.Prune(treeguard.ObservationTTL, time.Now())

@@ -12,6 +12,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/marcelocantos/jevons/internal/attrib"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 )
@@ -150,6 +151,7 @@ func (s *Server) MarkAgentParked(name, by, reason string) {
 	if err := s.SetAgentIntent(name, fleetintent.Parked, by, reason); err != nil {
 		slog.Warn("fleet intent park failed", "component", "fleet_intent", "name", name, "err", err)
 	}
+	s.drainSharedIndex(name)
 }
 
 // MarkAgentReaped stamps finished-and-reaped (🎯T165 / 🎯T195). 🎯T413 is the
@@ -162,6 +164,22 @@ func (s *Server) MarkAgentReaped(name, by, reason string) {
 	}
 	if err := s.SetAgentIntent(name, fleetintent.Reaped, by, reason); err != nil {
 		slog.Warn("fleet intent reap stamp failed", "component", "fleet_intent", "name", name, "err", err)
+	}
+	s.drainSharedIndex(name)
+}
+
+// drainSharedIndex rides the intent stamps because they are the one place
+// every deliberate stop already passes through (🎯T408/T165): an agent that
+// stops must leave the shared index empty, with whatever was staged saved
+// and attributed first (🎯T466). A name the registry no longer holds — a
+// reap stamped after removal — is a silent no-op; the drain in
+// fleet.Claudia.Remove ran while the definition still existed.
+func (s *Server) drainSharedIndex(name string) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	if def := s.registry.Def(name); def != nil {
+		attrib.DrainOnStop(def.WorkDir, def.SessionID, name)
 	}
 }
 

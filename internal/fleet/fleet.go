@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/attrib"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -446,6 +447,7 @@ func (f *Claudia) Alive(id string) bool {
 // definition (and session id) so a later Launch rehydrates it.
 func (f *Claudia) Stop(id string) {
 	f.reg.Stop(id)
+	f.drainOnStop(id)
 }
 
 // Remove stops the process and drops the registry definition entirely, so
@@ -453,6 +455,9 @@ func (f *Claudia) Stop(id string) {
 // intact (only jevons's ownership is dropped).
 func (f *Claudia) Remove(id string) {
 	f.reg.Stop(id)
+	// Drain while the definition still names a workdir; removals.Remove is
+	// about to drop it.
+	f.drainOnStop(id)
 	// 🎯T435: the drop is accounted for. A thread with no registry def
 	// (observe-only) is a normal no-op and not a registry diff, so the
 	// chokepoint emits nothing for it.
@@ -461,6 +466,19 @@ func (f *Claudia) Remove(id string) {
 		Detail: "thread removed by name",
 	}); err != nil {
 		return
+	}
+}
+
+// drainOnStop empties the shared index of the stopping agent's repo, saving
+// what it removed first (🎯T466): an entry left staged in a shared clone is a
+// pending contribution to whatever the next worker commits (🎯T457), so no
+// stop path may leave one behind.
+func (f *Claudia) drainOnStop(id string) {
+	if f == nil || f.reg == nil {
+		return
+	}
+	if d := f.reg.Def(id); d != nil {
+		attrib.DrainOnStop(d.WorkDir, d.SessionID, id)
 	}
 }
 

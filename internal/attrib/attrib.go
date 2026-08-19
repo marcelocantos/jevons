@@ -112,11 +112,23 @@ func (s *Store) Append(session string, records []Record) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	// A crash can tear the previous append mid-line, leaving no trailing
+	// newline; appending straight after would merge this record into the torn
+	// line and lose BOTH. One healing newline turns that into "one torn line
+	// skipped by Load", which is the degradation the format promises.
+	if info, err := f.Stat(); err == nil && info.Size() > 0 {
+		last := make([]byte, 1)
+		if _, err := f.ReadAt(last, info.Size()-1); err == nil && last[0] != '\n' {
+			if _, err := f.Write([]byte("\n")); err != nil {
+				return err
+			}
+		}
+	}
 	enc := json.NewEncoder(f)
 	for _, r := range records {
 		if r.Session == "" {
