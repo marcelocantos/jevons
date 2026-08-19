@@ -4,135 +4,82 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/jevons/internal/config"
+	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/mcpscope"
 )
 
-// fixtureConfig writes a ~/.claude.json in the shape the incident left it:
-// jevonsmcp under one project key and nowhere else.
-func fixtureConfig(t *testing.T) string {
+func attachFixtures(t *testing.T, name, url string) mcpattach.Args {
 	t.Helper()
-	doc := map[string]any{
-		"numStartups": 41,
-		"mcpServers": map[string]any{
-			"bullseye": map[string]any{"command": "/opt/homebrew/bin/mcpbridge"},
-		},
-		"projects": map[string]any{
-			"/Users/marcelo/work/github.com/marcelocantos/jevons": map[string]any{
-				"mcpServers": map[string]any{
-					mcpscope.ServerName: map[string]any{"type": "http", "url": mcpscope.DefaultEndpoint},
-				},
-			},
-		},
+	dir := t.TempDir()
+	return mcpattach.Args{
+		Name:       name,
+		URL:        url,
+		ClaudeJSON: filepath.Join(dir, "claude.json"),
+		GrokTOML:   filepath.Join(dir, "grok.toml"),
+		CodexTOML:  filepath.Join(dir, "codex.toml"),
 	}
-	data, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		t.Fatalf("encode fixture: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), ".claude.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	return path
 }
 
-// TestT464DailyDaemonRepairsUserScope is the plumbing half of 🎯T464 at the
-// wiring level: the daily daemon, on boot, leaves the registration reachable
-// from every working directory rather than from one repo.
-func TestT464DailyDaemonRepairsUserScope(t *testing.T) {
-	path := fixtureConfig(t)
-	cfg := config.Default() // daily state dir, daily MCP name
-
-	action, err := ensureFleetMCPUserScopeAt(cfg, "127.0.0.1", 13705, path)
+func TestT464DailyDaemonEnsuresAllThreeBackends(t *testing.T) {
+	cfg := config.Default()
+	a := attachFixtures(t, mcpscope.ServerName, mcpscope.DefaultEndpoint)
+	got := registerMCPEndpointsAt(cfg, "127.0.0.1", 13705, a)
+	raw, err := os.ReadFile(got.ClaudeJSON)
 	if err != nil {
-		t.Fatalf("ensure: %v", err)
+		t.Fatal(err)
 	}
-	if action != fleetMCPRepaired {
-		t.Fatalf("first boot against the incident config: got %q, want %q", action, fleetMCPRepaired)
+	if !strings.Contains(string(raw), "13705/mcp") {
+		t.Fatalf("claude config missing live url: %s", raw)
 	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	for _, cwd := range []string{
-		"/Users/marcelo/work/github.com/marcelocantos/claudia",
-		"/Users/marcelo/.jevons/jevons",
-		"/tmp",
-	} {
-		scope, entry, err := mcpscope.FindScope(data, mcpscope.ServerName, cwd)
+	for _, p := range []string{got.GrokTOML, got.CodexTOML} {
+		b, err := os.ReadFile(p)
 		if err != nil {
-			t.Fatalf("FindScope(%s): %v", cwd, err)
+			t.Fatal(err)
 		}
-		if scope != mcpscope.ScopeUser {
-			t.Errorf("after boot, a session in %s sees scope %q, want %q — this is the 🎯T464 failure", cwd, scope, mcpscope.ScopeUser)
+		if !strings.Contains(string(b), "13705/mcp") {
+			t.Fatalf("%s missing live url: %s", p, b)
 		}
-		if entry.URL != mcpscope.DefaultEndpoint {
-			t.Errorf("after boot, %s registers %q, want %q", cwd, entry.URL, mcpscope.DefaultEndpoint)
-		}
-	}
-
-	// Second boot must not rewrite a file the whole fleet reads (🎯T376).
-	action, err = ensureFleetMCPUserScopeAt(cfg, "127.0.0.1", 13705, path)
-	if err != nil {
-		t.Fatalf("second ensure: %v", err)
-	}
-	if action != fleetMCPCurrent {
-		t.Errorf("second boot: got %q, want %q — a correct config must not be rewritten", action, fleetMCPCurrent)
 	}
 }
 
-// TestT464IsolateNeverWritesTheDailyRegistration is the control that keeps the
-// fix from causing the fault it prevents. A journey isolate serves a throwaway
-// port; if it wrote user scope, every Claude agent in the fleet would inherit
-// a registration for a port that dies with the suite — 🎯T379's silent dead
-// registration, introduced by 🎯T464's own repair.
 func TestT464IsolateNeverWritesTheDailyRegistration(t *testing.T) {
-	path := fixtureConfig(t)
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read before: %v", err)
+	daily := attachFixtures(t, mcpscope.ServerName, mcpscope.DefaultEndpoint)
+	if err := mcpattach.Ensure(daily); err != nil {
+		t.Fatal(err)
 	}
+	before, _ := os.ReadFile(daily.ClaudeJSON)
 
 	isolate := config.Default()
-	isolate.StateDir = t.TempDir() // what the journey suite asserts about itself
+	isolate.StateDir = t.TempDir()
 	isolate.MCPServerName = "jevonsmcp-journey"
+	a := fleetMCPAttach(isolate, "127.0.0.1", 13799)
+	if !a.Isolate || a.ClaudeJSON == daily.ClaudeJSON {
+		t.Fatalf("isolate attach must use state_dir files, got %+v", a)
+	}
+	registerMCPEndpointsAt(isolate, "127.0.0.1", 13799, a)
 
-	action, err := ensureFleetMCPUserScopeAt(isolate, "127.0.0.1", 13799, path)
-	if err != nil {
-		t.Fatalf("ensure from isolate: %v", err)
-	}
-	if action != fleetMCPSkipped {
-		t.Fatalf("isolate on a throwaway port: got %q, want %q", action, fleetMCPSkipped)
-	}
-
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read after: %v", err)
-	}
+	after, _ := os.ReadFile(daily.ClaudeJSON)
 	if string(after) != string(before) {
-		t.Fatal("a journey isolate wrote the shared Claude config")
+		t.Fatal("a journey isolate wrote the daily Claude config")
 	}
-	if scope, _, _ := mcpscope.FindScope(after, "jevonsmcp-journey", "/anywhere"); scope != mcpscope.ScopeNone {
-		t.Errorf("isolate registered %q in user scope (%q); it would outlive the suite pointing at a dead port", "jevonsmcp-journey", scope)
+	iso, err := os.ReadFile(a.ClaudeJSON)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// The control: the same call from the daily state dir DOES write, so the
-	// assertion above is about the guard and not about a no-op function.
-	daily := config.Default()
-	if action, err := ensureFleetMCPUserScopeAt(daily, "127.0.0.1", 13705, path); err != nil || action != fleetMCPRepaired {
-		t.Fatalf("control: daily boot got %q (err %v), want %q", action, err, fleetMCPRepaired)
+	if !strings.Contains(string(iso), "jevonsmcp-journey") {
+		t.Fatalf("isolate should ensure its own name: %s", iso)
+	}
+	if strings.Contains(string(iso), "jevonsmcp-journey") && strings.Contains(string(after), "jevonsmcp-journey") {
+		t.Fatal("isolate name leaked into daily claude json")
 	}
 }
 
-// TestT464DailyStateDirIsExact pins the discriminator. A sibling or a
-// subdirectory of ~/.jevons is not the daily universe, and treating one as
-// daily would let a sandbox rewrite the fleet's registration.
 func TestT464DailyStateDirIsExact(t *testing.T) {
 	daily := config.Default().StateDir
 	cases := []struct {

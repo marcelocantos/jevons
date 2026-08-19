@@ -33,6 +33,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/panecensus"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/research"
@@ -183,6 +184,7 @@ type Server struct {
 	// when agent_start / thread_spawn / jwork omit provider (🎯T148).
 	// Empty means cli.ResolveProvider falls through to env / grok at use time.
 	defaultProvider string
+	mcp             mcpattach.Args
 
 	// llmPortfolio is the multi-provider task-type routing seed (🎯T325.2).
 	// Nil → cost.DefaultPortfolio(). Soft-cap overlays may come from budget.
@@ -350,6 +352,14 @@ func (s *Server) SweepFleetHealth(overseerName string) {
 // (cli.ResolveProvider("", cfg.Provider)); empty re-resolves from env at use.
 func (s *Server) SetDefaultProvider(provider string) {
 	s.defaultProvider = strings.TrimSpace(provider)
+}
+
+// SetMCP installs the live jevonsmcp attach used on every mint (claudia 🎯T40).
+func (s *Server) SetMCP(a mcpattach.Args) {
+	if s == nil {
+		return
+	}
+	s.mcp = a
 }
 
 // SetLLMPortfolio installs the multi-provider routing seed (🎯T325.2).

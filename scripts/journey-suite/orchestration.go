@@ -29,14 +29,13 @@ import (
 
 // jOverseerToolsAttached proves the overseer's own client can reach jevons
 // tools under the selected provider (🎯T282). J6 checks the producer side
-// (jevonsd serves the tools); this checks the consumer side, which is
-// provider-specific: Grok reads ~/.grok/config.toml, Claude needs
-// `claude mcp add -s user` (🎯T212). A Claude overseer that boots toolless
-// looks perfectly healthy until the owner asks it to do anything.
+// (jevonsd serves the tools); this checks the consumer side. Isolates
+// EnsureMCP into state_dir/mcp (claudia 🎯T40), then session-scoped
+// MCPServers attach the list. The live check is a tool-using turn.
 func (s *suite) jOverseerToolsAttached() error {
-	if !mcpListedFor(s.provider, mcpName) {
-		return fmt.Errorf("%s not registered with the %s CLI while the isolate runs — overseer would start toolless",
-			mcpName, mcpCLI(s.provider))
+	if !isolateMCPWritten(s.stateDir, mcpName) {
+		return fmt.Errorf("%s not written under %s/mcp — isolate EnsureMCP did not land",
+			mcpName, s.stateDir)
 	}
 
 	// And that the registration is live in the conversation, not just on

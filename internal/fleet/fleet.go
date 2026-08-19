@@ -21,6 +21,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -111,6 +112,11 @@ type Claudia struct {
 	// disappearance nobody can explain is read as an orphaning. Nil is safe
 	// — the removal still happens, it simply has no journal to reach.
 	removals *fleetlog.Account
+
+	// mcp is this daemon's jevonsmcp attach (claudia 🎯T40). Zero value
+	// leaves AgentDef.MCPServers empty — hermetic tests that never call
+	// SetMCP keep prior behaviour.
+	mcp mcpattach.Args
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from
@@ -163,6 +169,35 @@ func (f *Claudia) SetDefaultProvider(p claudia.Provider) {
 	if p != "" {
 		f.defaultProvider = p
 	}
+}
+
+// SetMCP installs the live jevonsmcp endpoint so every mint/Launch carries
+// discovered system servers plus this daemon's HTTP MCP (🎯T464 / claudia T40).
+func (f *Claudia) SetMCP(a mcpattach.Args) {
+	if f == nil {
+		return
+	}
+	f.mcp = a
+}
+
+// SessionMCPServers is the list a registry row should carry for provider.
+func (f *Claudia) SessionMCPServers(provider claudia.Provider, workDir string) []claudia.MCPServer {
+	if f == nil || strings.TrimSpace(f.mcp.URL) == "" {
+		return nil
+	}
+	return mcpattach.SessionServers(f.mcp, provider, workDir)
+}
+
+func mcpServersEqual(a, b []claudia.MCPServer) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].URL != b[i].URL || a[i].Type != b[i].Type {
+			return false
+		}
+	}
+	return true
 }
 
 // providerForLaunch picks the registry provider for a thread Launch.
@@ -240,6 +275,7 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 			Purpose:     purpose,
 			SandboxMode: CodexWorkSandbox(prov, purpose),
 			Goal:        WorkSessionGoal(purpose, "", t.Description, true),
+			MCPServers:  f.SessionMCPServers(prov, t.WorkDir),
 		}); err != nil {
 			return fmt.Errorf("register agent %q: %w", t.ID, err)
 		}
@@ -291,6 +327,13 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 	if def.Purpose == "" && threadPurpose != "" {
 		def.Purpose = threadPurpose
 		dirty = true
+	}
+	if f.mcp.URL != "" {
+		want := f.SessionMCPServers(def.Provider, def.WorkDir)
+		if !mcpServersEqual(def.MCPServers, want) {
+			def.MCPServers = want
+			dirty = true
+		}
 	}
 	if dirty {
 		if err := f.reg.Register(*def); err != nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/gate"
+	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
@@ -513,6 +514,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose)
 		}
 	}
+	if s.mcp.URL != "" {
+		def.MCPServers = mcpattach.SessionServers(s.mcp, def.Provider, def.WorkDir)
+	}
 	if err := s.registry.Register(*def); err != nil {
 		return nil, existed, "", err
 	}
@@ -541,6 +545,7 @@ func startConfigFromDef(def *claudia.AgentDef) claudia.Config {
 		Model:         def.Model,
 		Goal:          def.Goal,
 		SandboxMode:   def.SandboxMode,
+		MCPServers:    def.MCPServers,
 	}
 }
 

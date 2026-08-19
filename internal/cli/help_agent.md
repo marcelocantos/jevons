@@ -50,15 +50,12 @@ Same-machine browser use is the supported docs-only path today.
    + Jevon iOS QR scan (source under `ios/`; no App Store binary yet; full
    onboarding is 🎯T14). See README [Pair a device](README.md#pair-a-device)
    (🎯T156).
-6. **MCP attach**: on boot, jevonsd auto-registers its HTTP MCP into the
-   overseer's client config when possible. For an external MCP client
-   (e.g. Claude Code talking *to* jevons), after restarting that client:
-   ```bash
-   # Prefer 127.0.0.1 (loopback default, 🎯T6); name matches product default jevonsmcp.
-   claude mcp add -s user --transport http jevonsmcp http://127.0.0.1:13705/mcp
-   # Grok Build recovery (if auto-ensure did not stick):
-   #   grok mcp add --transport http jevonsmcp http://127.0.0.1:13705/mcp
-   ```
+6. **MCP attach**: on boot, jevonsd calls Claudia `EnsureMCP` so
+   `jevonsmcp` is on Claude, Grok, and Codex native configs (the
+   served URL, 🎯T379). Fleet mints also get `LoadMCP` + append on
+   `AgentDef.MCPServers`. Do not hand-roll `claude mcp add` /
+   `grok mcp add` for fleet seats. An external client talking *to*
+   jevons can still add the same URL if it is not a claudia Session.
 7. **Confirm tools** via `jevons_thread_list` or `jevons_cost`.
 
 ## Running manually
@@ -750,8 +747,8 @@ direct, shell tool, transcript inspect — end to end on Claude.
 
 What changes under Claude:
 
-- **Overseer MCP** is installed with `claude mcp add -s user` instead of
-  `~/.grok/config.toml` (🎯T212).
+- **Overseer MCP** is the same `EnsureMCP` write as Grok and Codex
+  (claudia 🎯T40). Restart jevonsd to refresh the served URL.
 - **Transcripts** are discovered under `~/.claude/projects` (🎯T213);
   `claude_projects:` in config points elsewhere if needed.
 - **`jevons_mcp_reconnect` does not apply** — `grok mcp disable/enable`

@@ -415,33 +415,18 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   static may hard-reload only (T188). Pure helper: `HasDailyPathEvidence`.
   Residual: instructional + pure classifier; not a hard achieve block.
   Persona + agents-guide + fleet standing brief.
-- **Fleet control follows the agent, not the directory (🎯T464):** Claude
-  resolves MCP servers per launch directory, and `jevonsmcp` had reached
-  `~/.claude.json` only under the jevons repo's project key — where a human
-  had once typed `claude mcp add`. Every Claude fleet agent started anywhere
-  else had no `jevons_*` tools at all, so on 2026-08-15 a PO restarted in
-  `…/claudia` reported that **the control plane was dead** while jevonsd
-  answered on 127.0.0.1:13705 throughout, and the fleet spent a cycle chasing
-  an outage that was not happening. Two halves, both in `internal/mcpscope`.
-  The plumbing: the daily daemon registers its served endpoint in **user
-  scope** at boot (`ensureFleetMCPUserScope`), which the existing overseer
-  ensure never did because it only covers the overseer's own provider and the
-  daily overseer is Grok. `~/.claude.json` is shared hot state, so the write
-  is 🎯T376-shaped and mitigated the same way: a single-key add, taken under a
-  lock, re-read inside it, and skipped entirely when the entry is already
-  correct — which in steady state is every boot. A journey isolate is barred
-  by state dir, since a throwaway port in user scope would be 🎯T379's dead
-  registration reintroduced by this fix. The expensive half is the diagnosis:
-  **the absence of tools never licenses the word "down" — only a probe of the
-  endpoint does**, so `Diagnose` separates `out_of_scope` (endpoint answered,
-  no registration reaches this cwd) from `down`, and an inconclusive dial
-  stays `unknown` rather than collapsing into an outage. It ships as
-  `bin/mcpscope diagnose` because an agent that has lost every `jevons_*`
-  tool cannot call one to ask why; Bash is the channel left. Oracles replay
-  the misdiagnosis with its own control (`internal/mcpscope`,
-  `cmd/jevonsd/mcpscope_test.go`). Residual: a Grok worker under a Claude
-  overseer keeps the mirror-image gap, and Claude Code itself does not take
-  the lock. Persona + agents-guide.
+- **Fleet control follows the agent, not the directory (🎯T464):** a
+  fleet seat must have `jevons_*` on every Session backend, not only
+  Claude user-scope in the jevons repo. Boot calls Claudia `EnsureMCP`
+  (name + served HTTP URL) so Claude, Grok, and Codex native configs
+  all carry `jevonsmcp`. Mints set `AgentDef.MCPServers` from
+  `LoadMCP` plus that same URL. Isolates write only under
+  `state_dir/mcp` (🎯T379). `bin/mcpscope diagnose` remains the
+  Bash-channel answer when tools are gone: `out_of_scope` vs `down`
+  vs `unknown`. Residual: Codex isolate sessions cannot take a
+  session-scoped MCP list (app-server has no field); daily Codex
+  seats get tools from `EnsureMCP` into `~/.codex/config.toml`.
+  Build uses `../go.work` until a published claudia pin includes T40.
 
 ## Project structure
 

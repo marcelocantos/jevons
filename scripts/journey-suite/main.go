@@ -189,8 +189,9 @@ persona_notes: |
 		_ = s.signalStop(5 * time.Second)
 		_ = logFile.Close()
 		// Remove journey MCP only — never touch the daily MCP name — and
-		// through the CLI that registered it (🎯T282: Claude registers via
-		// `claude mcp add -s user`, not ~/.grok/config.toml).
+		// through the CLI that an older daemon used (🎯T282). Current
+		// isolates write only state_dir/mcp; this reclaims a leaked
+		// user-scope journey name if one is still present.
 		mcpRemoveFor(provider, mcpName)
 		if started {
 			fmt.Println("stopped isolated jevonsd; removed MCP", mcpName)
