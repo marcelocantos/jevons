@@ -244,6 +244,7 @@ test-web:
 	node web/scripts/provider_menu_test.js
 	node web/scripts/portfolio_group_test.js
 	node web/scripts/virtual_list_test.js
+	node web/scripts/idle_monitor_test.js
 	node web/scripts/thread_route_test.js
 	node web/scripts/route_suggest_test.js
 	node web/scripts/layout_probe_test.js

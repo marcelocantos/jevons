@@ -893,6 +893,12 @@ body.rhs-resizing-row { cursor: row-resize; }
   background: var(--amber); color: #1a1a12; border-bottom: 1px solid var(--border);
 }
 #degraded-banner.visible { display: block; }
+/* 🎯T532: in-page idle-storm warn (snap/RO/longtask). Not Isolated Web Content %. */
+#idle-storm-banner {
+  display: none; flex-shrink: 0; padding: 8px 20px; font-size: 12px; font-weight: 500;
+  background: var(--amber); color: #1a1a12; border-bottom: 1px solid var(--border);
+}
+#idle-storm-banner.visible { display: block; }
 /* 🎯T248: fleet height is flex-basis from RhsLayout (default ~45%); min floor 60px */
 #agents { flex: 0 0 45%; overflow-y: auto; padding: 8px 12px; min-height: 60px; max-height: none; }
 /* 🎯T200: portfolio virtual nodes in fleet tree — folder lead, not status dot */
@@ -1479,6 +1485,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <body>
 <div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span><span id="voice-status"><span class="voice-dot"></span><span id="voice-status-text">listening</span></span><div id="plan-ticker" title="Plan remaining — hover for rollover and detail"></div><div id="theme-toggle"><button data-t="light" title="Light">&#9788;</button><button data-t="system" title="System" class="active">&#9680;</button><button data-t="dark" title="Dark">&#9790;</button></div></div>
 <div id="degraded-banner" role="status" aria-live="polite"></div>
+<div id="idle-storm-banner" role="status" aria-live="polite"></div>
 <div id="main">
   <!-- 🎯T309.1: main conversation widget host (comfortable density; VirtualList residual) -->
   <div id="chat-pane" class="conversation-widget density-comfortable" data-density="comfortable" data-agent-id="jevons">
@@ -1667,6 +1674,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/target_hotspot.js"></script>
 <script src="scripts/instant_tip.js"></script>
 <script src="scripts/virtual_list.js"></script>
+<script src="scripts/idle_monitor.js"></script>
 <script src="scripts/thread_route.js"></script>
 <script src="scripts/route_suggest.js"></script>
 <script src="scripts/composer_layout.js"></script>
@@ -7927,7 +7935,7 @@ function scrollDownThrottled() {
 // snaps them after the final paint).
 let _rowSnapSet = new Set();
 let _rowSnapRaf = 0;
-window.__idleSnapCensus = { snaps: 0, clears: 0, skips: 0, raf: 0, t0: Date.now() };
+window.__idleSnapCensus = { snaps: 0, clears: 0, skips: 0, raf: 0, t0: Date.now(), longtasks: 0 };
 function dumpIdleSnapCensus() {
   const c = window.__idleSnapCensus;
   if (!c) return c;
@@ -7938,6 +7946,7 @@ function dumpIdleSnapCensus() {
     clears: c.clears,
     skips: c.skips,
     raf: c.raf,
+    longtasks: c.longtasks || 0,
     snaps_per_s: ms > 0 ? +(c.snaps / (ms / 1000)).toFixed(2) : 0,
   };
   if (typeof jLog === 'function') {
@@ -7945,16 +7954,71 @@ function dumpIdleSnapCensus() {
   }
   return payload;
 }
-if (typeof setInterval === 'function') {
+function setIdleStormBanner(text) {
+  const el = document.getElementById('idle-storm-banner');
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('visible', !!text);
+}
+(function wireIdleStormMonitor() {
+  if (typeof IdleMonitor === 'undefined' || typeof setInterval !== 'function') return;
+  let snapWin = { count: 0, ms: Date.now() };
+  let rafWin = { count: 0, ms: Date.now() };
+  let longWin = { count: 0, ms: Date.now() };
+  let streak = 0;
+  let stormOn = false;
+  if (typeof PerformanceObserver === 'function') {
+    try {
+      const po = new PerformanceObserver(function (list) {
+        const n = (list.getEntries && list.getEntries().length) || 0;
+        if (n && window.__idleSnapCensus) window.__idleSnapCensus.longtasks += n;
+      });
+      po.observe({ type: 'longtask', buffered: true });
+    } catch (_) { /* Firefox: longtask may be unsupported */ }
+  }
+  const iv = (IdleMonitor.WINDOW_MS || 2000);
   setInterval(function () {
     const c = window.__idleSnapCensus;
-    if (!c || c.snaps < 1) return;
-    if (c._loggedSnaps === c.snaps && c._loggedClears === c.clears) return;
-    c._loggedSnaps = c.snaps;
-    c._loggedClears = c.clears;
-    dumpIdleSnapCensus();
-  }, 2000);
-}
+    if (!c) return;
+    const now = Date.now();
+    const snaps = IdleMonitor.tickWindow(snapWin, c.snaps, now);
+    snapWin = snaps.next;
+    const rafs = IdleMonitor.tickWindow(rafWin, c.raf, now);
+    rafWin = rafs.next;
+    const longs = IdleMonitor.tickWindow(longWin, c.longtasks || 0, now);
+    longWin = longs.next;
+    const streaming = typeof workingEl !== 'undefined' && !!workingEl;
+    const replaying = typeof historyReplayActive !== 'undefined' && !!historyReplayActive;
+    const classified = IdleMonitor.classifyIdleStorm({
+      snapsPerS: snaps.rate,
+      rafPerS: rafs.rate,
+      longtasks: longs.delta,
+      streaming: streaming,
+      replaying: replaying,
+    });
+    const hyst = IdleMonitor.stormHysteresis(streak, classified);
+    streak = hyst.streak;
+    const text = hyst.warn ? IdleMonitor.bannerText(classified) : '';
+    setIdleStormBanner(text);
+    if (hyst.warn && !stormOn) {
+      stormOn = true;
+      if (typeof jLog === 'function') {
+        jLog('warn', 'idle.storm', {
+          reason: classified.reason,
+          snaps_per_s: +snaps.rate.toFixed(2),
+          raf_per_s: +rafs.rate.toFixed(2),
+          longtasks: longs.delta,
+        });
+      }
+    }
+    if (!hyst.warn) stormOn = false;
+    if (c.snaps !== c._loggedSnaps || c.clears !== c._loggedClears) {
+      c._loggedSnaps = c.snaps;
+      c._loggedClears = c.clears;
+      dumpIdleSnapCensus();
+    }
+  }, iv);
+})();
 _rowSnapRO = (typeof ResizeObserver !== 'undefined')
   ? new ResizeObserver((entries) => {
       // Async growers (image load, mermaid render, font swap) re-snap.
