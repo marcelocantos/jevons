@@ -1230,6 +1230,21 @@
     return Math.abs(box - lock) < 0.51;
   }
 
+  // 🎯T532: skip the T486 clear-measure cycle when the locked box already
+  // matches the snap AND inner content has not shrunk. Inner is typically
+  // smaller than the lock (padding/time/tab chrome); comparing inner to
+  // lock would never skip. Oversized lock is inner shrinking vs last
+  // measure while minHeight holds the outer box.
+  function idleSnapShouldSkipClear(lockPx, lockedBoxPx, innerNowPx, innerPrevPx) {
+    if (!alreadySnappedLock(lockPx, lockedBoxPx)) return false;
+    const inner = Number(innerNowPx);
+    const prev = Number(innerPrevPx);
+    if (!Number.isFinite(inner) || inner <= 0) return false;
+    if (!Number.isFinite(prev) || prev <= 0) return false;
+    if (prev - inner > 0.51) return false;
+    return true;
+  }
+
   // ── Viewport anchoring (🎯T351 hydrate, 🎯T363 virtualize) ─────────
   // One rule covers both: when content ABOVE the viewport changes height,
   // scrollTop must move by the same amount or the text under the owner's
@@ -1867,6 +1882,7 @@
     snappedRowLockPx: snappedRowLockPx,
     nextSnappedMinHeightCss: nextSnappedMinHeightCss,
     alreadySnappedLock: alreadySnappedLock,
+    idleSnapShouldSkipClear: idleSnapShouldSkipClear,
 
     // 🎯T363: viewport anchoring for height changes above the scroll position.
     anchorPreservedScrollTop: anchorPreservedScrollTop,

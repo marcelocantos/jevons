@@ -1808,14 +1808,33 @@ function noteRowHeightChange(el) {
   if (!el || el._vIndex == null) return;
   if (el.classList && el.classList.contains('virt-shell')) return;
   // 🎯T486: do not early-return because the locked box equals minHeight —
-  // that equality is how an oversized lock hides a shrink. Always clear
-  // and measure the natural box (T482 still no-ops the write when the
-  // snap is unchanged).
+  // that equality is how an oversized lock hides a shrink. Clear and
+  // measure the natural box when inner content no longer fills the lock
+  // (T482 still no-ops the write when the snap is unchanged).
+  // 🎯T532: if the locked box already matches the snap AND inner content
+  // still fills it, skip the clear. Idle RO/rAF was the T486 clear every
+  // tick (forced layout) even when the write was a no-op.
+  const prevLock = el.style.minHeight || '';
+  const lockedBox = el.getBoundingClientRect ? el.getBoundingClientRect().height : el.offsetHeight;
+  const innerEl = el._body || (el.querySelector && el.querySelector('.msg-body'));
+  const innerH = innerEl && innerEl.getBoundingClientRect
+    ? innerEl.getBoundingClientRect().height
+    : lockedBox;
+  const prevPx = parseFloat(prevLock) || 0;
+  if (typeof VirtualList !== 'undefined' && VirtualList.idleSnapShouldSkipClear &&
+      VirtualList.idleSnapShouldSkipClear(prevPx, lockedBox, innerH, el._idleInnerH)) {
+    if (typeof window.__idleSnapCensus === 'object' && window.__idleSnapCensus) {
+      window.__idleSnapCensus.skips++;
+    }
+    return;
+  }
+  if (typeof window.__idleSnapCensus === 'object' && window.__idleSnapCensus) {
+    window.__idleSnapCensus.clears++;
+  }
   // Measure the NATURAL border-box. A leftover minHeight lock (estimate,
   // previous extent, snap) floors the rect; adding chrome on that box is
   // the gap ratchet — tight on reload, then growing while the page stays
   // open. Clear the lock, measure, lock the natural box, store f(natural).
-  const prevLock = el.style.minHeight || '';
   const ro = (typeof _rowSnapRO !== 'undefined') ? _rowSnapRO : null;
   const wasObserved = !!(ro && el._rowSnapObserved);
   if (wasObserved) {
@@ -1894,6 +1913,7 @@ function noteRowHeightChange(el) {
     }
   }
   if (h > 0) applyRowHeight(el._vIndex, h);
+  el._idleInnerH = innerH;
 }
 function registerTranscriptRow(role, text, when, opts) {
   // 🎯T119.7: the previous live row may have grown in the DOM (or have a
@@ -7907,6 +7927,34 @@ function scrollDownThrottled() {
 // snaps them after the final paint).
 let _rowSnapSet = new Set();
 let _rowSnapRaf = 0;
+window.__idleSnapCensus = { snaps: 0, clears: 0, skips: 0, raf: 0, t0: Date.now() };
+function dumpIdleSnapCensus() {
+  const c = window.__idleSnapCensus;
+  if (!c) return c;
+  const ms = Date.now() - (c.t0 || Date.now());
+  const payload = {
+    ms: ms,
+    snaps: c.snaps,
+    clears: c.clears,
+    skips: c.skips,
+    raf: c.raf,
+    snaps_per_s: ms > 0 ? +(c.snaps / (ms / 1000)).toFixed(2) : 0,
+  };
+  if (typeof jLog === 'function') {
+    jLog('info', 'idle.snap_census', payload);
+  }
+  return payload;
+}
+if (typeof setInterval === 'function') {
+  setInterval(function () {
+    const c = window.__idleSnapCensus;
+    if (!c || c.snaps < 1) return;
+    if (c._loggedSnaps === c.snaps && c._loggedClears === c.clears) return;
+    c._loggedSnaps = c.snaps;
+    c._loggedClears = c.clears;
+    dumpIdleSnapCensus();
+  }, 2000);
+}
 _rowSnapRO = (typeof ResizeObserver !== 'undefined')
   ? new ResizeObserver((entries) => {
       // Async growers (image load, mermaid render, font swap) re-snap.
@@ -7921,13 +7969,17 @@ _rowSnapRO = (typeof ResizeObserver !== 'undefined')
   : null;
 function scheduleRowSnap(el) {
   if (!el || el.nodeType !== 1 || !el.classList) return;
+  if (window.__idleSnapCensus) window.__idleSnapCensus.snaps++;
   if (typeof VirtualList !== 'undefined' && VirtualList.shouldSnapTranscriptRow) {
     if (!VirtualList.shouldSnapTranscriptRow(el, msgs, msgsCanvas)) return;
   } else if (el === msgsCanvas) {
     return;
   }
   _rowSnapSet.add(el);
-  if (!_rowSnapRaf) _rowSnapRaf = requestAnimationFrame(flushRowSnaps);
+  if (!_rowSnapRaf) {
+    if (window.__idleSnapCensus) window.__idleSnapCensus.raf++;
+    _rowSnapRaf = requestAnimationFrame(flushRowSnaps);
+  }
 }
 function flushRowSnaps() {
   _rowSnapRaf = 0;

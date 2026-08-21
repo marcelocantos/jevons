@@ -1419,6 +1419,29 @@ test('T484 alreadySnappedLock is true when the NATURAL box matches the lock', fu
   assert.ok(/_mermaidCache/.test(html), 'remat reuses cached mermaid SVG');
 });
 
+test('T532 idle already-snapped row skips the T486 clear', function () {
+  assert.strictEqual(VL.idleSnapShouldSkipClear(55, 55, 40, 40), true,
+    'locked box matches snap and inner unchanged — no idle clear');
+  assert.strictEqual(VL.idleSnapShouldSkipClear(55, 54.8, 40, 40), true);
+  assert.strictEqual(VL.idleSnapShouldSkipClear(200, 200, 80, 180), false,
+    'inner shrunk while lock holds the box — T486 must still clear');
+  assert.strictEqual(VL.idleSnapShouldSkipClear(55, 80, 80, 40), false,
+    'real grow (box > lock) must remesure');
+  assert.strictEqual(VL.idleSnapShouldSkipClear(55, 55, 40, 0), false,
+    'first measure has no previous inner — must clear');
+  assert.strictEqual(VL.idleSnapShouldSkipClear(0, 55, 40, 40), false);
+  assert.strictEqual(VL.idleSnapShouldSkipClear(55, 55, 0, 40), false);
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const fn = html.slice(html.indexOf('function noteRowHeightChange'),
+    html.indexOf('function registerTranscriptRow'));
+  assert.ok(/idleSnapShouldSkipClear/.test(fn),
+    'noteRowHeightChange consults idleSnapShouldSkipClear before clearing');
+  assert.ok(fn.indexOf("el.style.minHeight = ''") >= 0,
+    'T486 clear path remains for shrink');
+});
+
 test('T486 an oversized lock shrinks to the natural box', function () {
   const shrink = VL.nextSnappedMinHeightCss('200px', 80);
   assert.strictEqual(shrink.css, '80px');
