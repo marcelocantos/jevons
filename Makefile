@@ -304,6 +304,7 @@ test-ui:
 	node scripts/chat-ui-test/t289-paint-thrash-test.js
 	node scripts/chat-ui-test/t341-jiggle-thrash-test.js
 	node scripts/chat-ui-test/t351-fractional-pin-test.js
+	node scripts/chat-ui-test/t493-visibility-test.js
 	node scripts/chat-ui-test/t363-scroll-up-anchor-test.js
 	node scripts/chat-ui-test/t361-owner-ux-test.js
 	node scripts/chat-ui-test/t309.1-conversation-widget-test.js

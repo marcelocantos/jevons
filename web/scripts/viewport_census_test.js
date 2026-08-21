@@ -58,6 +58,35 @@ test('emptyPaneFail: model rows with zero visible is a fail', function () {
   assert.strictEqual(VC.emptyPaneFail(0, 0), false, 'empty model is not the empty-pane bug');
 });
 
+test('emptyOCRFail: empty OCR + non-empty model is an empty-pane fail', function () {
+  assert.strictEqual(VC.emptyOCRFail(24, ''), true, 'recogniser ran, found nothing');
+  assert.strictEqual(VC.emptyOCRFail(24, '   '), true, 'whitespace is empty');
+  assert.strictEqual(VC.emptyOCRFail(24, 'ROOThist-23'), false);
+  assert.strictEqual(VC.emptyOCRFail(0, ''), false, 'empty model is not the empty-pane bug');
+});
+
+test('VisibilityHelper is the named 🎯T493 DOM inspect', function () {
+  assert.strictEqual(typeof VC.VisibilityHelper.inspect, 'function');
+  assert.strictEqual(VC.VisibilityHelper.inspect, VC.inspect);
+  assert.strictEqual(VC.VisibilityHelper.domOnScreen, VC.domOnScreen);
+  assert.strictEqual(VC.domOnScreen({
+    checkVisibility: true, hitOk: true, inScroller: true,
+  }), true);
+  assert.strictEqual(VC.domOnScreen({
+    checkVisibility: false, hitOk: true, inScroller: true,
+  }), false, 'opacity-0 / visibility:hidden');
+  assert.strictEqual(VC.domOnScreen({
+    checkVisibility: true, hitOk: false, inScroller: true,
+  }), false, 'covered centre');
+  assert.strictEqual(VC.domOnScreen({
+    checkVisibility: true, hitOk: false, inScroller: false,
+  }), false, 'off-viewport');
+  const missing = VC.inspect(null, { left: 0, top: 0, right: 100, bottom: 80 });
+  assert.strictEqual(missing.checkVisibility, false);
+  assert.strictEqual(missing.hitOk, false);
+  assert.strictEqual(missing.inScroller, false);
+});
+
 test('T494.1 Latest on hard-reload is a fail', function () {
   assert.strictEqual(VC.latestOnHardReloadFail({
     fabHidden: false, followMode: 'track', atBottom: false,
@@ -126,6 +155,28 @@ test('T494.1.2 void under the last turn is a fail', function () {
   assert.strictEqual(VC.VOID_BELOW_VISIBLE_PX, 120);
 });
 
+test('T494.1 wheel-down from pin must not fight', function () {
+  // Already at canvas max: no-op is fine.
+  assert.strictEqual(VC.wheelDownFoughtFail(0, 3200, 3200, true), false);
+  assert.strictEqual(VC.wheelDownFoughtFail(8, 3200, 3200, true), false);
+  // Two bottoms (~218px tail): tracking snaps wheel-down back to the pin.
+  assert.strictEqual(VC.wheelDownFoughtFail(218, 22366, 22366, true), true, 'stuck wheel');
+  assert.strictEqual(VC.wheelDownFoughtFail(218, 22366, 22446, true), false, 'wheel-down grew');
+  assert.strictEqual(VC.wheelDownFoughtFail(218, 22366, 22366, false), false, 'free scroll is not a pin fight');
+});
+
+test('T494.1 wheel-up then down must not snap to pin with Latest visible', function () {
+  assert.strictEqual(VC.wheelRoundTripSnapFail({
+    pinSt: 22366, afterRound: 22366, dist: 218, fabHidden: false,
+  }), true, 'owner snap-back with Latest still showing');
+  assert.strictEqual(VC.wheelRoundTripSnapFail({
+    pinSt: 22585, afterRound: 22585, dist: 0, fabHidden: true,
+  }), false, 'already at live end');
+  assert.strictEqual(VC.wheelRoundTripSnapFail({
+    pinSt: 22366, afterRound: 22585, dist: 218, fabHidden: true,
+  }), false, 'reached canvas end, Latest gone');
+});
+
 test('T494.1 pin and canvas-end must agree', function () {
   assert.strictEqual(VC.liveEndDisagreeFail(22366.6, 22585, 16), true, '218px tail');
   assert.strictEqual(VC.liveEndDisagreeFail(22585, 22585, 16), false);
@@ -139,12 +190,15 @@ test('T494.1 pin and canvas-end must agree', function () {
 });
 
 test('opacity-0 / covered / off-viewport are gate failures', function () {
-  // These are the serialized shapes collect() produces; the hermetic
-  // suite cannot call checkVisibility, so it asserts the predicates
-  // that turn those API results into a fail.
+  // Serialized shapes VisibilityHelper.inspect produces. The real
+  // checkVisibility / elementFromPoint APIs are the Playwright unit
+  // (scripts/chat-ui-test/t493-visibility-test.js).
   assert.strictEqual(VC.hitTestPasses(null, 'msg', false), false, 'off-viewport centre → no hit');
   assert.strictEqual(VC.hitTestPasses('cover', 'msg', false), false, 'covered centre');
   assert.strictEqual(VC.emptyPaneFail(8, 0), true, 'all candidates opacity-0 / not intersecting');
+  assert.strictEqual(VC.domOnScreen({
+    checkVisibility: false, hitOk: true, inScroller: true,
+  }), false, 'opacity-0 still hittable, fails gate 1');
 });
 
 console.log('viewport_census_test: ' + passed + ' passed');

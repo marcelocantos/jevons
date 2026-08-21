@@ -167,6 +167,10 @@ func assertJ19OCR(shot string) error {
 		}
 	}
 	text := ext.Text()
+	if j19EmptyOCRFail(j19SeedTurns, text) {
+		return fmt.Errorf("j19 empty OCR + non-empty model is an empty-pane fail (🎯T493) lines=%d",
+			len(ext.Lines))
+	}
 	hits := 0
 	for i := 0; i < j19SeedTurns; i++ {
 		if strings.Contains(text, fmt.Sprintf("%s%02d", j19Prefix, i)) {
@@ -305,6 +309,12 @@ func countJournalMarkers(path, prefix string) int {
 		}
 	}
 	return n
+}
+
+// j19EmptyOCRFail is 🎯T493: empty OCR of a non-empty model is an empty
+// pane, never a green invented from the DOM. Degraded OCR is OUTAGE, not this.
+func j19EmptyOCRFail(modelRows int, ocrText string) bool {
+	return modelRows > 0 && strings.TrimSpace(ocrText) == ""
 }
 
 func j19PaintScript() (string, error) {

@@ -4,9 +4,9 @@
 // Viewport census for cockpit on-screen evidence (🎯T493).
 //
 // Three gates, all required: checkVisibility, centre hit-test (self or
-// descendant), Vision OCR of a pinned-viewport screenshot. This module is
-// the DOM half (1+2) plus the empty-pane predicate. OCR lives in
-// internal/imagetext and is applied by the journey after the screenshot.
+// descendant), Vision OCR of a pinned-viewport screenshot. VisibilityHelper
+// is the named DOM inspect (1+2). OCR lives in internal/imagetext and is
+// applied by the journey after the screenshot — a caption is not evidence.
 //
 // UMD so Playwright addInitScript and Node require() share one file.
 
@@ -54,10 +54,66 @@
     return !!contains;
   }
 
+  // inspect is the 🎯T493 DOM pair: checkVisibility (opacity + CSS
+  // visibility) and centre hit-test. inScroller is the pin, not a third
+  // gate — an off-viewport centre fails the hit-test because
+  // elementFromPoint returns null / chrome.
+  function inspect(el, scrollerRect) {
+    const empty = {
+      checkVisibility: false,
+      hitOk: false,
+      inScroller: false,
+      centre: { x: 0, y: 0 },
+      hitTag: '',
+      w: 0,
+      h: 0,
+      top: 0,
+      bottom: 0,
+      text: '',
+    };
+    if (!el || typeof el.getBoundingClientRect !== 'function') return empty;
+    const r = el.getBoundingClientRect();
+    const centre = boxCentre(r);
+    const vis = (typeof el.checkVisibility === 'function')
+      ? el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+      : (r.width > 0 && r.height > 0);
+    const hit = (typeof document !== 'undefined' && typeof document.elementFromPoint === 'function')
+      ? document.elementFromPoint(centre.x, centre.y)
+      : null;
+    const hitOk = hitTestPasses(hit, el, !!(hit && typeof el.contains === 'function' && el.contains(hit)));
+    return {
+      checkVisibility: !!vis,
+      hitOk: hitOk,
+      inScroller: pointInRect(centre, scrollerRect),
+      centre: centre,
+      hitTag: hit ? String(hit.tagName || '') : '',
+      w: r.width,
+      h: r.height,
+      top: r.top,
+      bottom: r.bottom,
+      text: String(el.innerText || el.textContent || '').trim().slice(0, 160),
+    };
+  }
+
+  function domOnScreen(g) {
+    return !!(g && g.checkVisibility && g.hitOk && g.inScroller);
+  }
+
+  const VisibilityHelper = {
+    inspect: inspect,
+    domOnScreen: domOnScreen,
+  };
+
   // modelRows > 0 with nothing in the scroller is the empty-pane fail
   // (🎯T494): the list claims history and the owner sees a blank.
   function emptyPaneFail(modelRows, visibleInScroller) {
     return (Number(modelRows) || 0) > 0 && (Number(visibleInScroller) || 0) === 0;
+  }
+
+  // Empty OCR of a non-empty model is the same empty pane, never a green
+  // invented from the DOM (🎯T493). Degraded OCR is OUTAGE, not this.
+  function emptyOCRFail(modelRows, ocrText) {
+    return (Number(modelRows) || 0) > 0 && String(ocrText || '').trim() === '';
   }
 
   // 🎯T494.1: Latest after a hard-reload means pin and atBottom disagree.
@@ -147,6 +203,27 @@
     return Math.abs((Number(pinWant) || 0) - (Number(canvasEndPin) || 0)) > e;
   }
 
+  // 🎯T494.1: wheel-down from the post-reload pin must not fight.
+  // Already at canvas max (dist ≤ 16): a no-op is fine.
+  // Else a wheel-down must increase scrollTop; tracking must not snap back.
+  const WHEEL_AT_END_PX = 16;
+  function wheelDownFoughtFail(dist, before, after, tracking) {
+    const d = Number(dist) || 0;
+    if (d <= WHEEL_AT_END_PX) return false;
+    const grew = (Number(after) || 0) - (Number(before) || 0);
+    return !!tracking && grew < 2;
+  }
+
+  // Wheel-up then wheel-down snapping back to the initial pin while Latest
+  // is visible is the two-bottoms fight (last-bubble pin vs canvas end).
+  function wheelRoundTripSnapFail(opts) {
+    const o = opts || {};
+    const dist = Number(o.dist) || 0;
+    if (dist <= WHEEL_AT_END_PX) return false;
+    if (o.fabHidden !== false) return false;
+    return Math.abs((Number(o.afterRound) || 0) - (Number(o.pinSt) || 0)) < 8;
+  }
+
   function viewportPinned(innerW, innerH, dpr) {
     return innerW === ORACLE_VIEWPORT.width &&
       innerH === ORACLE_VIEWPORT.height &&
@@ -184,30 +261,21 @@
     const visible = [];
     for (let i = 0; i < attached.length; i++) {
       const el = attached[i];
-      const r = el.getBoundingClientRect();
-      const centre = boxCentre(r);
-      if (!pointInRect(centre, scrollerRect)) continue;
-      const vis = (typeof el.checkVisibility === 'function')
-        ? el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
-        : (r.width > 0 && r.height > 0);
-      const hit = typeof document.elementFromPoint === 'function'
-        ? document.elementFromPoint(centre.x, centre.y)
-        : null;
-      const hitOk = hitTestPasses(hit, el, !!(hit && el.contains(hit)));
-      const text = String(el.innerText || el.textContent || '').trim();
+      const g = inspect(el, scrollerRect);
+      if (!g.inScroller) continue;
       let role = 'other';
       if (el.classList.contains('user')) role = 'user';
       else if (el.classList.contains('jevons') || el.classList.contains('assistant')) role = 'assistant';
       visible.push({
         role: role,
-        text: text.slice(0, 160),
-        checkVisibility: !!vis,
-        hitOk: hitOk,
-        hitTag: hit ? String(hit.tagName || '') : '',
-        w: r.width,
-        h: r.height,
-        top: r.top,
-        bottom: r.bottom,
+        text: g.text,
+        checkVisibility: g.checkVisibility,
+        hitOk: g.hitOk,
+        hitTag: g.hitTag,
+        w: g.w,
+        h: g.h,
+        top: g.top,
+        bottom: g.bottom,
       });
     }
 
@@ -350,7 +418,11 @@
     rectsIntersect: rectsIntersect,
     pointInRect: pointInRect,
     hitTestPasses: hitTestPasses,
+    inspect: inspect,
+    domOnScreen: domOnScreen,
+    VisibilityHelper: VisibilityHelper,
     emptyPaneFail: emptyPaneFail,
+    emptyOCRFail: emptyOCRFail,
     latestOnHardReloadFail: latestOnHardReloadFail,
     emptySlotDesertFail: emptySlotDesertFail,
     packedPaneFail: packedPaneFail,
@@ -364,6 +436,9 @@
     VOID_BELOW_EPS_PX: VOID_BELOW_EPS_PX,
     VOID_BELOW_VISIBLE_PX: VOID_BELOW_VISIBLE_PX,
     liveEndDisagreeFail: liveEndDisagreeFail,
+    wheelDownFoughtFail: wheelDownFoughtFail,
+    wheelRoundTripSnapFail: wheelRoundTripSnapFail,
+    WHEEL_AT_END_PX: WHEEL_AT_END_PX,
     viewportPinned: viewportPinned,
     collect: collect,
     pinScrollBottom: pinScrollBottom,

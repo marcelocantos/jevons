@@ -11816,9 +11816,11 @@ targets:
     achieved: 2026-08-17
   T493:
     name: Cockpit on-screen evidence is checkVisibility + centre hit-test + Vision OCR — not a model caption
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 2.0
+    attestation: 'VisibilityHelper is the named 🎯T493 DOM inspect (checkVisibility + centre hit-test); Vision OCR remains gate 3. Playwright unit scripts/chat-ui-test/t493-visibility-test.js: opacity-0 fails gate 1, covered/off-viewport fail gate 2, visible passes both, viewport pinned 1280x800 dpr 1. GATE aedd8e4c GREEN. Hermetic viewport_census_test GATE 7a42924a GREEN (emptyOCRFail + domOnScreen). J19 empty-OCR pane fail GATE e6797052 GREEN. imagetext fixture strings GATE 00b00c69 GREEN. Captions are not evidence. Residual: J19 journey still applies OCR on the isolate seed; degraded Vision is OUTAGE. Local master T104.'
     acceptance:
     - 'For each element that should be on-screen, all three fire: (1) element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) is true; (2) document.elementFromPoint at the element''s box centre returns that element or a descendant; (3) Vision OCR of a #messages viewport screenshot (internal/imagetext, macos-vision-accurate, whole + tile) contains the element''s distinctive text. A turn is on-screen only if all three hold.'
     - 'checkVisibility and the hit-test are required gates, not an optional autopsy. They do not replace OCR: a hittable, checkVisibility-true bubble with no contrast still fails (3).'
@@ -11835,6 +11837,7 @@ targets:
     - oracle
     origin: owner
     discovered: 2026-08-17
+    achieved: 2026-08-21
   T493.1:
     name: After visual cockpit work the agent answers in prose whether the screenshot looks like a normal transcript
     status: identified
