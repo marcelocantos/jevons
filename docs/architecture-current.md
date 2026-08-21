@@ -117,6 +117,18 @@ Server↔client event normalization stays in one layer:
 live frames carry chat-wire lines verbatim, so 🎯T240 silent-stream
 suppression and 🎯T223 stream ids are inherited, never re-implemented.
 
+**Typed fleet envelopes (🎯T509).** Load-bearing agent-to-agent messages
+open at line 1 with a fenced `jevons` block of `jevons:` slots wrapping
+English payload. Schema and enums live in `internal/envelope`. The
+daemon validates on `deliverByName` and `chat_wire`: a claimed
+load-bearing kind with missing slots is flagged, not silently passed.
+Existing classifiers (T31 oracle, T194 daily-path, T386 FALSE-GREEN,
+T176 status language) read envelope fields when present and fall back
+to prose only for unenveloped messages. Status-ping/ack chatter is
+deduped and rate-capped by kind. The cockpit (`web/scripts/jevons_envelope.js`)
+paints a compact header, not a raw fence dump. YAML front matter is not
+this format.
+
 ### One deliver path in the fleet layer (🎯T309.3)
 
 The **send** op above bottoms out in a single implementation,
@@ -153,10 +165,17 @@ paints an owner bubble — may be asserted only by the owner surface. MCP
 in the owner's voice. **Per-caller actor (🎯T321):** `jevons_agent_send`
 takes an explicit `actor` (same shape as `jevons_agent_kill`) and the MCP
 path calls `deliverByNameAs` with it, so `AuthorizeDeliver` is exercised
-against a named caller and denials log `actor` + `relation`. **Residual
-(impersonation):** the shared MCP HTTP transport still cannot
-cryptographically name the calling fleet agent (`transcript.GetID` is the
-overseer session); `actor` is self-attested, matching kill's trust model.
+against a named caller and denials log `actor` + `relation`. **Worker-report
+hop-skip (🎯T392.7 / 🎯T392.7.1):** a report-up to a PO whose body
+`relayroute.Classify` routes to the overseer (oracle-done, blocked-on,
+needs-owner) is delivered to the overseer, and the PO gets only a one-line
+record.
+Directs down do not hop-skip: `actor=jevons` → `name=jevons-po` stays on
+the PO even when the body mentions SHA/GATE/achieved. Owner-surface and
+empty actor stay never-rerouted (🎯T515). **Residual (impersonation):**
+the shared MCP HTTP transport still cannot cryptographically name the
+calling fleet agent (`transcript.GetID` is the overseer session); `actor`
+is self-attested, matching kill's trust model.
 
 `jevons_thread_direct` is **not** a residual deliver variant. It is the
 *synchronous* request/reply op: it subscribes to the agent's event stream

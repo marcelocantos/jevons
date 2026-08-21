@@ -4,8 +4,10 @@
 package mcpserver
 
 import (
+	"fmt"
 	"sync"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/gate"
 )
 
@@ -41,7 +43,46 @@ func FalseGreenFlags(report string) []gate.Flag {
 	if store := gateStore(); store != nil {
 		lookup = store.Lookup
 	}
-	return gate.FlagFalseGreen(report, lookup)
+	body := report
+	var flags []gate.Flag
+	if m, err := envelope.Parse(report); m != nil {
+		if m.Payload != "" {
+			body = m.Payload
+		}
+		if err == nil && m.GateID != "" && m.Verdict.IsPass() {
+			flags = append(flags, envelopeGateFlags(m.GateID, lookup)...)
+		}
+	}
+	return append(flags, gate.FlagFalseGreen(body, lookup)...)
+}
+
+func envelopeGateFlags(id string, lookup func(string) (*gate.Record, bool)) []gate.Flag {
+	if lookup == nil {
+		return nil
+	}
+	rec, ok := lookup(id)
+	if !ok || rec == nil {
+		return []gate.Flag{{
+			Kind:     gate.FlagAttestationUnknown,
+			Detail:   fmt.Sprintf("envelope gate-id %q has no record behind it", id),
+			Evidence: "jevons: oracle gate-id=" + id,
+		}}
+	}
+	if rec.Verdict.IsKilled() {
+		return []gate.Flag{{
+			Kind:     gate.FlagAttestationKilled,
+			Detail:   fmt.Sprintf("envelope gate-id %q was terminated (verdict KILLED)", id),
+			Evidence: rec.Attestation(),
+		}}
+	}
+	if !rec.Verdict.IsGreen() || rec.Status() != "0" {
+		return []gate.Flag{{
+			Kind:     gate.FlagAttestationNotGreen,
+			Detail:   fmt.Sprintf("envelope gate-id %q is verdict %s exit=%s, which is not a pass", id, rec.Verdict, rec.Status()),
+			Evidence: rec.Attestation(),
+		}}
+	}
+	return nil
 }
 
 // FalseGreenBanner is the note prepended to a flagged report on its way to

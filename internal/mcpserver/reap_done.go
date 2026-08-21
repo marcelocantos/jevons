@@ -10,6 +10,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
 )
@@ -36,6 +37,14 @@ import (
 // (a bare claim clause, or a claim with oracle evidence or accepted-risk) —
 // see hasFinishShape.
 func LooksLikeFinishedWorkReport(report string) bool {
+	if m, err := envelope.Parse(report); m != nil && err == nil {
+		switch m.Kind {
+		case envelope.KindFinishReport:
+			return !ReportAwaitsOverseer(report)
+		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindTargetFileRequest:
+			return false
+		}
+	}
 	s := strings.ToLower(strings.TrimSpace(report))
 	if s == "" {
 		return false

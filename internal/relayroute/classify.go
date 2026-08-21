@@ -13,6 +13,8 @@ package relayroute
 
 import (
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 const recordSummaryRuneLimit = 160
@@ -31,6 +33,21 @@ const (
 
 // Classify reads the report, not the agent's name.
 func Classify(report string) Route {
+	if m, err := envelope.Parse(report); m != nil && err == nil {
+		switch m.Kind {
+		case envelope.KindFinishReport:
+			if m.HasOracle() || m.HasRisk() {
+				return RouteOverseer
+			}
+		case envelope.KindEscalation, envelope.KindTargetFileRequest:
+			return RouteOverseer
+		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief:
+			return RouteParent
+		}
+		if m.Payload != "" {
+			report = m.Payload
+		}
+	}
 	s := strings.ToLower(strings.TrimSpace(report))
 	if s == "" {
 		return RouteParent
@@ -77,6 +94,11 @@ func oracleDone(s string) bool {
 // durable route event. It is deliberately mechanical: the full report still
 // goes to the overseer, while the PO gets enough content to identify it.
 func ReportSummary(report string) string {
+	if m, _ := envelope.Parse(report); m != nil {
+		if p := strings.TrimSpace(m.Payload); p != "" {
+			report = p
+		}
+	}
 	summary := strings.Join(strings.Fields(report), " ")
 	if summary == "" {
 		return "empty report"
@@ -105,6 +127,19 @@ func (r Route) String() string { return string(r) }
 
 // Reason is a stable token for logs and the PO record line.
 func Reason(report string) string {
+	if m, err := envelope.Parse(report); m != nil && err == nil {
+		switch m.Kind {
+		case envelope.KindFinishReport:
+			if m.HasOracle() || m.HasRisk() {
+				return "oracle_done"
+			}
+		case envelope.KindEscalation, envelope.KindTargetFileRequest:
+			return "needs_owner"
+		}
+		if m.Payload != "" {
+			report = m.Payload
+		}
+	}
 	s := strings.ToLower(strings.TrimSpace(report))
 	switch {
 	case needsOwner(s):

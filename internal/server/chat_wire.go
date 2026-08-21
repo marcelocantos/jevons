@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
 )
 
@@ -156,6 +157,10 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 					"raw", strings.TrimSpace(ev.Text),
 				)
 			}
+			envMsg, envErr := envelope.Parse(displayText)
+			if envMsg != nil && envErr != nil && envMsg.Kind.LoadBearing() {
+				displayText = envelope.Annotate(displayText, envErr)
+			}
 			msg := map[string]any{
 				"role": "assistant",
 				"content": []map[string]any{
@@ -172,6 +177,17 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 			}
 			if failClass.IsFailure() {
 				wire["failure_class"] = failClass.String()
+			}
+			if envMsg != nil {
+				wire["envelope"] = map[string]any{
+					"kind":    envMsg.Kind.String(),
+					"target":  envMsg.Target,
+					"verdict": envMsg.Verdict.String(),
+					"status":  envMsg.Status.String(),
+				}
+				if envErr != nil {
+					wire["envelope_error"] = envErr.Error()
+				}
 			}
 			b, err := json.Marshal(wire)
 			if err != nil {

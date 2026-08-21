@@ -30,6 +30,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -118,6 +119,10 @@ type Server struct {
 	// fleetBriefed tracks agents that already received FleetStandingBrief
 	// on first jevons_agent_send (🎯T104 under fan-out).
 	fleetBriefed map[string]bool
+
+	// envelopeChatter dedupes/rate-caps chatter-capped kinds (🎯T509).
+	// Lazy; guarded by mu.
+	envelopeChatter *envelope.Tracker
 
 	// spawnFailureNotified remembers, per target/worker, the exact spawn
 	// failure already surfaced to the product owner (🎯T433), so a leaf that
@@ -496,6 +501,24 @@ func (s *Server) planPolicyInputs() (planusage.Snapshot, []planusage.DestCand, t
 		cands = append(cands, planusage.DestCand{Provider: p, Backend: be, Load: load[p]})
 	}
 	return snap, cands, now, th, true
+}
+
+// providerDestEligible reports whether harness may receive minted work.
+// Unknown (no plan feed, or harness not in the snapshot) is true — same as
+// cost.MintModelArgs.CodexEligible (🎯T390.1.5).
+func (s *Server) providerDestEligible(harness string) bool {
+	_, cands, now, th, ok := s.planPolicyInputs()
+	if !ok {
+		return true
+	}
+	want := strings.ToLower(strings.TrimSpace(harness))
+	for _, c := range cands {
+		p := strings.ToLower(strings.TrimSpace(c.Provider))
+		if p == want {
+			return planusage.DestEligible(c.Backend, now, th)
+		}
+	}
+	return true
 }
 
 // New creates an MCP server providing the jevons tool surface. The durable

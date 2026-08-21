@@ -194,6 +194,8 @@ func roleAddressedDoctrine(name, role string) string {
 			"unpushed tip that touches only bullseye.yaml — not file count; do not rest " +
 			"attestation on a yaml-only commit alone.\n")
 		b.WriteString("- 🎯T176 — say in progress until the product is owner-visible.\n")
+		b.WriteString("- 🎯T509 — a terminal report MUST be a jevons finish-report envelope " +
+			"(fenced ```jevons, jevons: slots). Schema and enums: internal/envelope.\n")
 	}
 	return b.String()
 }

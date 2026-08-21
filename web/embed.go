@@ -56,6 +56,7 @@ import "embed"
 //go:embed scripts/working_progress.js
 //go:embed scripts/mermaid_actions.js
 //go:embed scripts/markdown_normalize.js
+//go:embed scripts/jevons_envelope.js
 //go:embed scripts/decision_matrix.js
 //go:embed scripts/link_safety.js
 //go:embed scripts/image_lightbox.js

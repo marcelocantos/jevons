@@ -273,6 +273,7 @@ test-web:
 	node web/scripts/target_hotspot_test.js
 	node web/scripts/mermaid_actions_test.js
 	node web/scripts/markdown_normalize_test.js
+	node web/scripts/jevons_envelope_test.js
 	node web/scripts/decision_matrix_test.js
 	node web/scripts/streaming_markdown_test.js
 	node web/scripts/cost_display_test.js
@@ -318,6 +319,7 @@ test-ui:
 	node scripts/chat-ui-test/t369-decision-matrix-test.js
 	node scripts/chat-ui-test/t368-image-prefix-route-test.js
 	node scripts/chat-ui-test/t381-agent-report-markdown-test.js
+	node scripts/chat-ui-test/t509-envelope-render-test.js
 
 .PHONY: test-ui-live
 test-ui-live:

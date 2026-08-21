@@ -232,6 +232,18 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    a table in normal flow refuses to shrink below its content width and
    pushes the whole transcript sideways instead. */
 .msg.user.agent-report .msg-body table { display: block; max-width: 100%; overflow-x: auto; }
+/* 🎯T509: compact envelope header — not a raw fence dump above the body. */
+.jevons-envelope {
+  display: flex; flex-wrap: wrap; gap: 0.35em 0.75em; align-items: baseline;
+  font-size: 12px; font-weight: 500; letter-spacing: 0.01em;
+  color: var(--text-dim); background: var(--surface-raised);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 10px; margin: 0 0 8px 0;
+}
+.jevons-envelope .env-kind { color: var(--text); font-weight: 600; }
+.jevons-envelope .env-verdict-GREEN { color: var(--ok, #4ade80); }
+.jevons-envelope .env-verdict-SUSPECT { color: var(--amber, #d4a017); }
+.jevons-envelope .env-verdict-RED { color: var(--accent); }
 /* The message currently being edited via up/down recall. Brighter bg +
    full-accent border (same 1px width → no reflow) + a box-shadow ring
    to "thicken" the border without shifting geometry. */
@@ -1689,6 +1701,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 <script src="scripts/working_progress.js"></script>
 <script src="scripts/mermaid_actions.js"></script>
 <script src="scripts/markdown_normalize.js"></script>
+<script src="scripts/jevons_envelope.js"></script>
 <script src="scripts/decision_matrix.js"></script>
 <script src="scripts/link_safety.js"></script>
 <script src="scripts/image_lightbox.js"></script>
@@ -4699,6 +4712,9 @@ function renderMermaidIn(container) {
 // ``` examples (no following newline) stay prose and do not open blocks.
 // 🎯T151: every rendered <a href> gets target=_blank + rel=noopener noreferrer.
 function parseAssistantMarkdown(text) {
+  if (typeof JevonsEnvelope !== 'undefined' && JevonsEnvelope.rewrite) {
+    text = JevonsEnvelope.rewrite(text);
+  }
   const raw = (typeof MarkdownNormalize !== 'undefined')
     ? MarkdownNormalize.ensureFenceNewlines(text)
     : text;
@@ -4961,6 +4977,9 @@ window.decorateDecisionMatrices = decorateDecisionMatrices;
 // Seal: destroy session + full marked (mermaid T59 + highlight T74).
 // Never product-default textContent for assistant stream bodies.
 function streamNormalize(text) {
+  if (typeof JevonsEnvelope !== 'undefined' && JevonsEnvelope.rewrite) {
+    text = JevonsEnvelope.rewrite(text);
+  }
   if (typeof MarkdownNormalize !== 'undefined' && MarkdownNormalize.ensureFenceNewlines) {
     return MarkdownNormalize.ensureFenceNewlines(text);
   }

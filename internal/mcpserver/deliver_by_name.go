@@ -140,6 +140,19 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 		return agentSendResult{}, fmt.Errorf("name and text are required")
 	}
 
+	// 🎯T509: validate load-bearing envelopes and cap chatter on the one
+	// deliver path every fleet message already travels.
+	if origin == OriginAgent {
+		var drop bool
+		text, drop = s.applyEnvelopeControls(actor, text)
+		if drop {
+			return agentSendResult{Status: "suppressed_chatter", Message: "duplicate or rate-capped envelope dropped"}, nil
+		}
+		if strings.TrimSpace(text) == "" {
+			return agentSendResult{}, fmt.Errorf("name and text are required")
+		}
+	}
+
 	rel, err := AuthorizeDeliver(s.registry, actor, name, origin, s.isOverseerAgent)
 	if err != nil {
 		slog.Warn("agent_send",

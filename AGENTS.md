@@ -129,6 +129,11 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
 - **Unified fleet (🎯T114):** aside is a kind of agent (purpose field);
   one deliver/send/push path by name for workers and asides; dual-write
   threads into the agent registry. Docs: persona + agents-guide.
+- **Fleet roles (🎯T511):** an agent is an instance spawned **as** a
+  **role** (type). Role files live in `internal/config/roles/` (owner
+  overlay `~/.jevons/roles/`); spawn takes `role=` (default `worker`).
+  Per-type doctrine (T125 / T129 / worker T31·T165·T195) is sourced
+  there — not as if-you-are-X prose in the shared fleet brief.
 - **Multi-slice fan-out (🎯T111.4):** PO/boss multi-slice missions
   `jevons_agent_start` children early (with parent lineage); solo is fine
   for single-agent tasks. Zero-children failure surfaces in agent_list.
@@ -200,6 +205,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   accepted**. Overseer is the independent gate (attestation ≠ execution).
   Instructional residual + pure classifier. Persona + agents-guide +
   fleet standing brief.
+- **Typed fleet envelopes (🎯T509):** load-bearing agent-to-agent
+  messages open at line 1 with a fenced `jevons` block of `jevons:`
+  slots (`jevons: kind finish-report`) wrapping English payload. Schema
+  and enums: `internal/envelope` — do not restate them. Worker terminal
+  reports MUST be a `finish-report` envelope. Unenveloped messages fall
+  back to prose heuristics. YAML front matter is not this format.
 - **Finished work auto-deregister (🎯T165 / 🎯T195):** when a **work**
   agent’s terminal report claims done — including imperfect bare done
   without oracle markers — the product **stop+Removes** it from the live

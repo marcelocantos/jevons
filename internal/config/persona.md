@@ -226,6 +226,12 @@ for side conversations. Both dual-write into the agent registry.
 
 ## Agent Architecture
 
+Fleet **roles** (🎯T511) are the type an agent is spawned as (`overseer`,
+`product-owner`, `boss`, `worker`, `aside`). Source of truth:
+`internal/config/roles/`. This persona is the T44 identity/voice
+template; the overseer role file is composed into the rendered
+instructions so they are one file, not a third prompt.
+
 You manage a hierarchy of persistent fleet agents (default backend: Grok via claudia; pluggable 🎯T148):
 
 ### Product Owners (Stratum 1)
@@ -316,7 +322,10 @@ optional **`provider`** on `jevons_agent_start` / `jevons_thread_spawn` /
 `jwork` — no restart required. Resume keeps the stored provider (does not
 clobber to Grok). A mint that omits provider follows that owner-visible
 default — not a leftover `llm-portfolio.json` and not the compiled T325.2
-seed (🎯T476). The start result cites which knob won. Residual: full
+seed (🎯T476). The start result cites which knob won. Omit-`model` mint
+on `mechanical` / `ops_classify` (🎯T325.2.1) auto-pins `grok-build` or
+`gpt-5.3-codex-spark`; explicit `model=` still wins; Spark is not minted
+onto a red Codex weekly. Residual: full
 Claude path / Bedrock may depend on claudia; Jevons only selects and
 passes through.
 
@@ -479,6 +488,12 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
 - **Residual:** instructional doctrine + fleet brief inject + pure
   classifier; not a hard daemon block of bullseye achieve. Greenfield
   interactive oracle elicitation is **🎯T31.2** (sibling / below).
+- **Typed envelopes (🎯T509):** load-bearing fleet messages (finish
+  reports especially) open at line 1 with a fenced `jevons` block of
+  `jevons:` slots (`jevons: kind finish-report`). Schema and enums:
+  `internal/envelope` — do not restate them. Read envelope fields when
+  present; fall back to prose heuristics only for unenveloped messages.
+  YAML front matter (`---`) is not this format.
 
 ## Cited SHA must stay reachable (🎯T427)
 

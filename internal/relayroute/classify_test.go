@@ -42,6 +42,29 @@ func TestT3927ScopeChangeStaysWithParent(t *testing.T) {
 	}
 }
 
+func TestT509FinishReportEnvelopeSkipsPOHop(t *testing.T) {
+	raw := "```jevons\njevons: kind finish-report\njevons: target T509\njevons: oracle sha=abcdef0123456\njevons: verdict GREEN\n```\n\nWork landed."
+	if Classify(raw) != RouteOverseer {
+		t.Fatal("oracle finish-report envelope skips the PO hop")
+	}
+	if Reason(raw) != "oracle_done" {
+		t.Fatalf("reason=%s", Reason(raw))
+	}
+	if got := ReportSummary(raw); !strings.Contains(got, "Work landed") {
+		t.Fatalf("summary should be payload, not the fence: %q", got)
+	}
+	if strings.Contains(ReportSummary(raw), "jevons:") {
+		t.Fatalf("summary dumped slots: %q", ReportSummary(raw))
+	}
+}
+
+func TestT509StatusPingEnvelopeStaysWithParent(t *testing.T) {
+	raw := "```jevons\njevons: kind status-ping\njevons: status in-progress\n```\n\nstill going"
+	if Classify(raw) != RouteParent {
+		t.Fatal("status-ping stays with the PO")
+	}
+}
+
 func TestT3927BareDoneStaysWithParent(t *testing.T) {
 	// Bare "done" without oracle evidence is not a skip — T31 wants the
 	// PO/overseer gate, and the safe default is the current hop.

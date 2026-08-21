@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // CompletionEvidenceClass is a hermetic classification of a finish report
@@ -91,14 +93,29 @@ var completionClaimMarkers = []string{
 }
 
 // HasOracleEvidence reports whether report contains executable-oracle
-// markers (tests/green/SHA). Pure string heuristic.
+// markers (tests/green/SHA). Envelope oracle slots win when present
+// (🎯T509); otherwise the prose heuristic.
 func HasOracleEvidence(report string) bool {
-	return hasOracleEvidence(strings.ToLower(report))
+	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasOracle() {
+		return true
+	}
+	return hasOracleEvidence(strings.ToLower(oracleScanBody(report)))
 }
 
 // HasAcceptedRisk reports explicit accepted-risk / class-3 residual language.
+// Envelope risk slots win when present (🎯T509).
 func HasAcceptedRisk(report string) bool {
-	return hasAcceptedRisk(strings.ToLower(report))
+	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasRisk() {
+		return true
+	}
+	return hasAcceptedRisk(strings.ToLower(oracleScanBody(report)))
+}
+
+func oracleScanBody(report string) string {
+	if m, _ := envelope.Parse(report); m != nil && m.Payload != "" {
+		return m.Payload
+	}
+	return report
 }
 
 // LooksLikeBareDone is true when the report claims completion without
@@ -115,8 +132,28 @@ func HasOracleOrRisk(report string) bool {
 }
 
 // ClassifyCompletionReport classifies a worker/PO finish report.
-// Priority: accepted-risk > oracle evidence > bare-done claim > no claim.
+// Priority: envelope fields (🎯T509) when present, else accepted-risk >
+// oracle evidence > bare-done claim > no claim.
 func ClassifyCompletionReport(report string) CompletionEvidenceClass {
+	if m, err := envelope.Parse(report); m != nil && err == nil {
+		switch m.Kind {
+		case envelope.KindFinishReport:
+			if m.HasRisk() {
+				return CompletionAcceptedRisk
+			}
+			if m.HasOracle() {
+				return CompletionOracleEvidence
+			}
+			return CompletionBareDone
+		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief:
+			return CompletionNoClaim
+		}
+		if m.Payload != "" {
+			report = m.Payload
+		}
+	} else if m != nil && m.Payload != "" {
+		report = m.Payload
+	}
 	s := strings.ToLower(strings.TrimSpace(report))
 	if s == "" {
 		return CompletionNoClaim
@@ -297,7 +334,10 @@ var hermeticOnlyMarkers = []string{
 // port / product route). Hermetic unit green alone is not enough.
 // Pure string heuristic — not a hard daemon block of bullseye achieve.
 func HasDailyPathEvidence(report string) bool {
-	s := strings.ToLower(strings.TrimSpace(report))
+	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasDaily() {
+		return true
+	}
+	s := strings.ToLower(strings.TrimSpace(oracleScanBody(report)))
 	if s == "" {
 		return false
 	}

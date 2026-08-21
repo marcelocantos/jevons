@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/noopwedge"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 )
@@ -138,6 +139,9 @@ func bareClaimClause(clause string) bool {
 // needs-owner or blocked-on keeps escalating). Only a text every one of those
 // declines is suppressed.
 func bareAckTurnReport(text string) bool {
+	if m, err := envelope.Parse(text); m != nil && err == nil && m.Kind == envelope.KindAck {
+		return true
+	}
 	if !noopwedge.IsBareAck(text) {
 		return false
 	}
