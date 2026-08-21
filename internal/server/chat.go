@@ -1336,44 +1336,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 
 		slog.Info("chat: received", "msg", msg)
-		// Echo the clean owner turn into the transcript as the single source
-		// of the owner bubble; the ACP echo of the same turn (which arrives
-		// prefixed) is dropped by chatWireLine to avoid a duplicate.
-		echo := chatUserEcho(msg)
-		// 🎯T355: open the owner-interaction episode before the echo, so
-		// send-landed is observed against this exact journal line.
-		s.NoteOwnerSend(msg, echo)
-		s.BroadcastChat(echo)
-		// Deliver to the overseer with the userTurnPrefix marker so the wire
-		// layer can tell owner turns from injected notifications, and the
-		// overseer can relay per the owner's instructions (🎯T63).
-		if err := s.SendToOverseer(userTurnPrefix + msg); err != nil {
-			// A refused/failed send must be visible on the wire, not just
-			// in the server log (🎯T49; live drill found "prompt already
-			// in flight" vanishing silently). Broadcast so every client —
-			// and the journal — records that this turn was not delivered.
-			// 🎯T237: structured failure_class + owner copy beyond bare Internal error.
-			class, ownerMsg := agenterr.ClassifyAndFormat(err)
-			if !class.IsFailure() {
-				ownerMsg = err.Error()
-			}
-			slog.Error("chat: send to overseer failed",
-				"err", err,
-				"failure_class", class.String(),
-				"transient", class.IsTransient(),
-			)
-			frame := map[string]string{
-				"type":  "error",
-				"error": "message not delivered: " + ownerMsg,
-			}
-			if class.IsFailure() {
-				frame["failure_class"] = class.String()
-			}
-			payload, _ := json.Marshal(frame)
-			s.BroadcastChat(string(payload))
-			// 🎯T355: a surfaced delivery failure is a *named* residual —
-			// the owner is owed no reply for a turn that never left.
-			s.NoteOwnerResidual("delivery_failed")
+		if _, err := s.sendToNamedAgentAs(s.overseerAgentName(), msg, sendOriginOwner); err != nil {
+			// Failure already journaled/broadcast inside sendToOverseerAsOwner.
+			_ = err
 		}
 	}
 }

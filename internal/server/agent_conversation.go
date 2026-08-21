@@ -5,18 +5,19 @@ package server
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // 🎯T309.2: ONE agent-addressed conversation family. Three operations —
 // transcript history, live subscribe, send — addressed uniformly by agent
 // name, with the overseer as just another addressable agent:
 //
-//	history: buildAgentTranscriptPayload(name)  (HTTP GET /api/agents/{name}/transcript,
-//	         wire inspect_subscribe history frame)
-//	live:    inspect subscribe + fanInspectLive(name, …); fleet events arrive via
-//	         DeliverInspectLive, overseer events via fanOverseerInspectLive
-//	send:    sendToNamedAgent(name, text) (HTTP POST /api/agents/{name}/send)
+//	history: ReplayTailSealed of the agent's journal (same as /ws/chat)
+//	live:    named chat-wire frames on /ws/chat
+//	send:    sendToNamedAgentAs(name, text, origin)
 //
 // Before this slice the overseer was refused by the inspect family (🎯T124
 // "overseer uses main chat") and could only be reached through the /ws/chat
@@ -302,43 +303,38 @@ func wireContentText(content json.RawMessage) string {
 	return b.String()
 }
 
-// fanOverseerInspectLive mirrors an owner-visible overseer chat line to
-// inspect subscribers watching the overseer by name, so live subscribe works
-// through the same agent_transcript frames the fleet uses. Called from
-// BroadcastChat, so it inherits the 🎯T240 silent-stream suppression and
-// 🎯T223 stream ids rather than duplicating that policy — normalization stays
-// in one layer (chat_wire.go), acceptance 4.
-func (s *Server) fanOverseerInspectLive(line string) {
-	if s == nil || strings.TrimSpace(line) == "" {
-		return
-	}
-	name := s.overseerAgentName()
-	if !s.inspectHasSubscribers(name) {
-		return
-	}
-	if !json.Valid([]byte(line)) {
-		return
-	}
-	payload, err := json.Marshal(map[string]any{
-		"type":  "agent_transcript",
-		"kind":  inspectKindLive,
-		"name":  name,
-		"event": json.RawMessage(line),
-	})
-	if err != nil {
-		return
-	}
-	s.fanInspectLive(name, string(payload))
-}
-
 // sendToOverseerAsOwner delivers an owner turn to the overseer through the
 // agent-addressed family with exactly the semantics of the /ws/chat wire:
 // journal + broadcast the clean owner bubble, then deliver the turn carrying
 // userTurnPrefix so the overseer can tell owner words from injected
 // notifications (🎯T63). This is what makes send non-exclusive to /ws/chat.
 func (s *Server) sendToOverseerAsOwner(text string) error {
-	s.BroadcastChat(chatUserEcho(text))
-	return s.SendToOverseer(userTurnPrefix + text)
+	echo := chatUserEcho(text)
+	s.NoteOwnerSend(text, echo)
+	s.BroadcastChat(echo)
+	if err := s.SendToOverseer(userTurnPrefix + text); err != nil {
+		class, ownerMsg := agenterr.ClassifyAndFormat(err)
+		if !class.IsFailure() {
+			ownerMsg = err.Error()
+		}
+		slog.Error("chat: send to overseer failed",
+			"err", err,
+			"failure_class", class.String(),
+			"transient", class.IsTransient(),
+		)
+		frame := map[string]string{
+			"type":  "error",
+			"error": "message not delivered: " + ownerMsg,
+		}
+		if class.IsFailure() {
+			frame["failure_class"] = class.String()
+		}
+		payload, _ := json.Marshal(frame)
+		s.BroadcastChat(string(payload))
+		s.NoteOwnerResidual("delivery_failed")
+		return err
+	}
+	return nil
 }
 
 // sendToOverseerAsAgent delivers an agent/system notification to the overseer

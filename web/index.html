@@ -2412,14 +2412,15 @@ function showAsideOpeningWorking(name, openingText) {
     _agentInspectLines = inspectLinesCopy(list);
   }
   _agentInspectFp = '';
-  if (typeof renderAgentInspect === 'function') {
-    renderAgentInspect({
-      title: name,
-      empty: !(_agentInspectLines && _agentInspectLines.length),
-      error: '',
-      lines: (_agentInspectLines || []).slice(),
-      working: true,
+  if (inspectConversation && inspectConversation.applyWireEvent && text) {
+    inspectConversation.applyWireEvent({
+      type: 'user',
+      name: name,
+      message: { content: text },
     });
+  }
+  if (inspectConversation && inspectConversation.setWorking) {
+    inspectConversation.setWorking(true);
   }
   if (typeof setRhsBottomTab === 'function') {
     try { setRhsBottomTab('transcript'); } catch (_) { /* residual */ }
@@ -2432,13 +2433,11 @@ function showAsideDeliverError(name, message) {
   _agentInspectWorking = false;
   const msg = String(message || 'aside start/deliver failed');
   _agentInspectFp = '';
-  if (typeof renderAgentInspect === 'function') {
-    renderAgentInspect({
-      title: name || selectedAgent || 'aside',
-      empty: true,
-      error: msg,
-      lines: [],
-      working: false,
+  if (inspectConversation && inspectConversation.applyWireEvent) {
+    inspectConversation.applyWireEvent({
+      type: 'agent_note',
+      name: name || selectedAgent,
+      text: msg,
     });
   }
   if (typeof setRhsBottomTab === 'function') {
@@ -6408,24 +6407,7 @@ function mergeModelWithAsideWire(model, name) {
 }
 
 function refreshAgentInspectAsideWireMerge() {
-  if (!selectedAgent || !agentInspectBody) return;
-  const wire = asideWireLinesFor(selectedAgent);
-  if (!wire.length) return;
-  // Prefer re-merge of current inspect lines + wire.
-  const cur = inspectLinesCopy(_agentInspectLines);
-  const merged = (typeof AttentionThreads !== 'undefined' &&
-      AttentionThreads.mergeInspectLinesWithAsideWire)
-    ? AttentionThreads.mergeInspectLinesWithAsideWire(cur, wire)
-    : wire.concat(cur);
-  _agentInspectLines = merged;
-  // Force re-paint (fingerprint will change when wire added).
-  _agentInspectFp = '';
-  renderAgentInspect({
-    title: selectedAgent,
-    empty: merged.length === 0,
-    error: '',
-    lines: merged,
-  });
+  // Journal replay is the conversation. Aside-wire cache is not a second hydrate.
 }
 
 function ingestAsideWiresFromHistoryLines(lines) {
@@ -10067,11 +10049,22 @@ let rhsBottomTab = (typeof FrontierTable !== 'undefined')
         showSidebarSendErr('Send failed: ' + String(err && err.message || err));
       },
       onAfterOptimistic: function (opt) {
-        // ConversationWidget.afterSendOptimistic / AT.afterSidebarSendOptimistic shape.
         _agentInspectLines = opt.lines;
         _agentInspectWorking = true;
         _agentInspectFp = '';
-        if (typeof renderAgentInspect === 'function') renderAgentInspect(opt.model);
+        if (inspectConversation && inspectConversation.applyWireEvent && opt && opt.lines) {
+          var last = opt.lines[opt.lines.length - 1];
+          if (last && last.role === 'user') {
+            inspectConversation.applyWireEvent({
+              type: 'user',
+              name: selectedAgent,
+              message: { content: last.text || '' },
+            });
+          }
+        }
+        if (inspectConversation && inspectConversation.setWorking) {
+          inspectConversation.setWorking(true);
+        }
       },
       onStagePending: function (name, text) {
         // 🎯T371: durable-in-memory owner turn before the transport runs.
