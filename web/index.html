@@ -3496,13 +3496,14 @@ function openFoldTurnSlot(slot) {
     return slot.el;
   }
   const when = (slot && slot.when != null) ? slot.when : Date.now();
-  const label = (slot && slot.text) || '';
+  const items = (slot && slot.items) || [];
+  // 🎯T119.10: do not stamp "⋯ 1 step" on an empty tip — label is items.
+  const label = items.length ? ((slot && slot.text) || '') : '';
   const row = registerTranscriptRow('turn-marker', label, when, {});
-  // 🎯T119.4: attachTranscriptRow is the only mint. Mint an empty tip —
-  // onTurnSlotItem paints items; stashing items before attach would
-  // double-paint when paintNewDisplayRow then walks row.items.
+  // Stash items before attach so createTurnMarkerEl paints the tip once.
+  // paintFoldTurnSlotItem reconciles from slot.items (idempotent).
+  row.items = items;
   const el = attachTranscriptRow(transcriptRows.length - 1, { lazy: false });
-  if (slot && slot.items) row.items = slot.items;
   if (slot) slot.el = el;
   if (el) {
     el._vIndex = transcriptRows.length - 1;
@@ -3537,23 +3538,24 @@ function paintFoldTurnSlotItem(slot, cls, text) {
   if (!slot.el) openFoldTurnSlot(slot);
   const el = slot.el;
   if (!el || !el._items) return;
-  const d = document.createElement('div');
-  d.className = 'turn-item ' + cls;
-  d.textContent = text;
-  el._items.appendChild(d);
-  const n = el._items.children.length;
-  const label = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
+  const items = slot.items || [];
+  // 🎯T119.10: tip + N are the fold slot, not a second DOM accumulator.
+  el._items.innerHTML = '';
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const d = document.createElement('div');
+    d.className = 'turn-item ' + ((it && it.cls) || cls || '');
+    d.textContent = (it && it.text) || text || '';
+    el._items.appendChild(d);
+  }
+  const n = items.length;
+  const label = n ? ('⋯ ' + n + (n === 1 ? ' step' : ' steps')) : '';
   if (el._label) el._label.textContent = label;
   if (el._vIndex != null && transcriptRows[el._vIndex]) {
     transcriptRows[el._vIndex].text = label;
-    if (slot.items) transcriptRows[el._vIndex].items = slot.items;
+    transcriptRows[el._vIndex].items = items;
   }
   if (typeof noteRowHeightChange === 'function') noteRowHeightChange(el);
-  // 🎯T71: mid-turn tool activity is the best ACP-available progress signal.
-  if (cls === 'tool-use' || cls === 'tool-result') {
-    const short = truncate(String(text || '').replace(/\s+/g, ' ').trim(), 48);
-    updateWorkingProgress(n + (n === 1 ? ' step' : ' steps') + (short ? ' · ' + short : ''));
-  }
   scrollDownThrottled();
 }
 
@@ -9951,6 +9953,13 @@ let rhsBottomTab = (typeof FrontierTable !== 'undefined')
       onTurnSlotCancel: function (slot) {
         cancelFoldTurnSlot(slot);
       },
+      onWorkingProgress: function (slot) {
+        // 🎯T119.10: strip N is fold item count, not el._items.children.
+        if (typeof ConversationWidget === 'undefined'
+            || typeof ConversationWidget.workingProgressFromSlot !== 'function') return;
+        const t = ConversationWidget.workingProgressFromSlot(slot);
+        if (t && typeof updateWorkingProgress === 'function') updateWorkingProgress(t);
+      },
       onStreamFrame: typeof scheduleJevonsRender === 'function' ? scheduleJevonsRender : undefined,
       onSeal: typeof paintSealedJevons === 'function' ? paintSealedJevons : undefined,
       ComposerKeys: typeof ComposerKeys !== 'undefined' ? ComposerKeys : undefined,
@@ -10333,6 +10342,15 @@ function resubscribeAgentInspect() {
 // minted one bubble per Grok word).
 function handleAgentTranscriptWire(m) {
   if (!m || !selectedAgent || m.name !== selectedAgent) return;
+  if (m.kind === 'reset') {
+    if (inspectConversation && typeof inspectConversation.reset === 'function') {
+      inspectConversation.reset();
+    }
+    _agentInspectLines = [];
+    _agentInspectFp = '';
+    if (agentInspectName) agentInspectName.textContent = selectedAgent || '';
+    return;
+  }
   if (m.kind === 'live' && m.event) {
     if (inspectConversation && typeof inspectConversation.applyWireEvent === 'function') {
       inspectConversation.applyWireEvent(m.event);
@@ -10358,32 +10376,6 @@ function handleAgentTranscriptWire(m) {
     }
     return;
   }
-  // kind=history (default): sealed turns — same model as former HTTP payload.
-  let model = (typeof AgentTranscript !== 'undefined')
-    ? AgentTranscript.paneModel(m.name || selectedAgent, m)
-    : { title: m.name || selectedAgent, lines: (m.turns) || [], empty: !(m.turns && m.turns.length), error: '' };
-  if (m.error && model.empty && !m.denied) {
-    model.error = '';
-  } else if (m.denied && m.error) {
-    model.error = m.error;
-  }
-  // 🎯T250: sidebar shows aside content even when process transcript is empty
-  // (register-only asides still route via overseer [attention:…] wire).
-  model = mergeModelWithAsideWire(model, m.name || selectedAgent);
-  // 🎯T371: this is the wholesale replace that used to delete owner bubbles.
-  // Sealed server turns still win; unsealed owner turns are re-applied.
-  model.lines = reconcileInspectPending(m.name || selectedAgent, model.lines);
-  model.empty = !(model.lines && model.lines.length);
-  _agentInspectLines = inspectLinesCopy(model.lines);
-  // History with assistant turns seals optimistic working chrome (🎯T263).
-  const hasAssistant = (_agentInspectLines || []).some(function (l) {
-    return l && (l.role === 'assistant' || l.role === 'jevons');
-  });
-  if (hasAssistant) _agentInspectWorking = false;
-  model.working = !!_agentInspectWorking && !hasAssistant;
-  renderAgentInspect(model);
-  document.querySelectorAll('.agent-node').forEach(n =>
-    n.classList.toggle('selected', n.dataset.agent === selectedAgent));
 }
 
 // 🎯T308: per-turn inspect policy lives in AgentTranscript (pure, hermetic).
@@ -10488,42 +10480,7 @@ function loadAgentTranscript(name, opts) {
     hideAgentInspect();
     return;
   }
-  const quiet = !!(opts && opts.quiet);
-  // Primary product path: re-subscribe on /ws/chat for sealed history push.
-  if (typeof transport !== 'undefined' && transport.send) {
-    subscribeAgentInspect(name);
-    return;
-  }
-  // Residual HTTP when no chat transport (export/debug / hermetic stubs).
-  fetch('/api/agents/' + encodeURIComponent(name) + '/transcript')
-    .then(function (r) {
-      if (!r.ok) return r.json().then(function (j) {
-        throw new Error((j && j.error) || ('HTTP ' + r.status));
-      });
-      return r.json();
-    })
-    .then(function (payload) {
-      const model = (typeof AgentTranscript !== 'undefined')
-        ? AgentTranscript.paneModel(name, payload)
-        : { title: name, lines: (payload && payload.turns) || [], empty: !(payload && payload.turns && payload.turns.length), error: '' };
-      if (payload && payload.error && model.empty) {
-        model.error = '';
-      }
-      // 🎯T371: same no-vanish invariant on the HTTP residual path.
-      model.lines = reconcileInspectPending(name, model.lines);
-      model.empty = !(model.lines && model.lines.length);
-      _agentInspectLines = inspectLinesCopy(model.lines);
-      renderAgentInspect(model);
-      document.querySelectorAll('.agent-node').forEach(n =>
-        n.classList.toggle('selected', n.dataset.agent === name));
-    })
-    .catch(function (err) {
-      if (quiet) return;
-      const model = (typeof AgentTranscript !== 'undefined')
-        ? AgentTranscript.paneModel(name, null, err)
-        : { title: name, lines: [], empty: true, error: String(err && err.message || err) };
-      renderAgentInspect(model);
-    });
+  subscribeAgentInspect(name);
 }
 
 function renderFrontierTable(model) {

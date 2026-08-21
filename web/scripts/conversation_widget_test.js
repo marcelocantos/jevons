@@ -504,21 +504,16 @@ test('T371 a failed send keeps the bubble and reports loudly (no vanish)', funct
   });
 });
 
-test('T371 index.html: every inspect line replace reconciles pending turns', function () {
+test('T371 index.html: inspect hydrate is applyWireEvent, not a history blob', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(html.indexOf('function reconcileInspectPending') >= 0,
-    'host defines the pending reconcile seam');
-
-  // History replace still reconciles. Live frames grow on the widget and
-  // only ack pending on user events (🎯T372 — remount is not grow).
   const wire = html.match(/function handleAgentTranscriptWire\([\s\S]*?\nfunction inspectSpecFor/);
   assert.ok(wire, 'handleAgentTranscriptWire present');
   assert.ok(wire[0].indexOf('applyWireEvent') >= 0,
-    'live frames grow via the widget, not a second painter');
-  assert.ok((wire[0].match(/reconcileInspectPending\(/g) || []).length >= 1,
-    'history replace still reconciles pending owner turns');
-
-  // Staging is wired into the mount, not reimplemented host-side (🎯T372).
+    'frames grow via the widget, not a second painter');
+  assert.ok(wire[0].indexOf("kind === 'reset'") >= 0 || wire[0].indexOf('kind === "reset"') >= 0,
+    'subscribe starts with a reset then sealed-tail live frames');
+  assert.ok(wire[0].indexOf('paneModel') < 0,
+    'history blob / paneModel dump is gone');
   assert.ok(html.indexOf('ConversationWidget.stagePendingOwnerTurn') >= 0,
     'staging uses the shared widget helper, not a sidebar-local stack');
   assert.ok(html.indexOf('onStagePending') >= 0, 'mount wires onStagePending');
@@ -1019,6 +1014,18 @@ test('T372 index.html: no second grow-bubble implementation', function () {
     'live path must not remount via renderAgentInspect');
 });
 
+test('inspect hydrate reset then applyWireEvent is the one ingest', function () {
+  const stream = CW.createStreamJoin({});
+  stream.applyWireEvent({ type: 'user', message: { content: 'old' } });
+  assert.ok(stream.getLines().length >= 1);
+  stream.reset();
+  assert.strictEqual(stream.getLines().length, 0);
+  stream.applyWireEvent({ type: 'user', message: { content: 'new' } });
+  const lines = stream.getLines();
+  assert.strictEqual(lines.filter(function (l) { return l.role === 'user'; }).length, 1);
+  assert.ok(String(lines[0].text || '').indexOf('new') >= 0);
+});
+
 test('T494.1 agent_note + system pairs coalesce to one labelled slot', function () {
   const stream = CW.createStreamJoin({});
   stream.applyWireEvent({ type: 'user', message: { content: 'go' } });
@@ -1035,6 +1042,56 @@ test('T494.1 agent_note + system pairs coalesce to one labelled slot', function 
   assert.strictEqual(slots.length, 1, 'system must not open a new slot, got ' + slots.length);
   assert.strictEqual(slots[0].items.length, 20);
   assert.strictEqual(slots[0].text, '⋯ 20 steps');
+});
+
+test('T494.1 tool_use + notes between owner turns are one labelled slot', function () {
+  // Host-shaped: virtualizeMessages is a no-op during replay, so open
+  // must attach itself (openFoldTurnSlot → attachTranscriptRow). Each
+  // note/tool that waited on virtualize minted an orphan empty row.
+  const rows = [];
+  function attach(slot) {
+    slot.el = {
+      isConnected: true,
+      _vIndex: rows.length,
+      _label: { textContent: '' },
+      _items: {
+        children: [],
+        appendChild: function (d) { this.children.push(d); },
+      },
+    };
+    rows.push({ kind: 'turn-slot', text: slot.text || '', el: slot.el });
+  }
+  const stream = CW.createStreamJoin({
+    onTurnSlotOpen: attach,
+    onTurnSlotItem: function (slot, cls, text) {
+      slot.el._items.appendChild({ cls: cls, text: text });
+      const n = slot.el._items.children.length;
+      slot.el._label.textContent = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
+      rows[slot.el._vIndex].text = slot.el._label.textContent;
+    },
+  });
+  stream.applyWireEvent({ type: 'user', message: { content: 'go' } });
+  stream.applyWireEvent({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'ack' }], stop_reason: 'end_turn' },
+  });
+  for (let i = 0; i < 12; i++) {
+    if (i % 3 === 0) {
+      stream.applyWireEvent({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'Read' }] },
+      });
+    }
+    stream.applyWireEvent({ type: 'agent_note', text: '[Agent pad responded] mix ' + i });
+    stream.applyWireEvent({ type: 'system' });
+  }
+  stream.applyWireEvent({ type: 'user', message: { content: 'next' } });
+  const slots = rows.filter(function (r) { return r.kind === 'turn-slot'; });
+  const empty = slots.filter(function (s) { return !String(s.text || '').trim(); });
+  assert.strictEqual(slots.length, 1, 'mix must be one slot, got ' + slots.length);
+  assert.strictEqual(empty.length, 0, 'no unlabelled desert rows');
+  assert.ok(slots[0].text.indexOf('⋯') === 0, 'labelled ⋯ n steps, got ' + slots[0].text);
+  assert.strictEqual(slots[0].el._items.children.length, 16, '4 tools + 12 notes');
 });
 
 test('T119.6 ensureTurnSlot twice leaves one canvas child', function () {
@@ -1157,6 +1214,250 @@ test('T119.8 tape [user, tool, text, tool, tool] → two capsules (1 then 2)', f
   ].forEach(function (ev) { cstream.applyWireEvent(ev); });
   assert.strictEqual(control.length, 1, 'consecutive tools coalesce into one capsule');
   assert.strictEqual(cstream.getLines().filter(function (l) { return l.kind === 'turn-slot'; })[0].items.length, 2);
+});
+
+function t1199Tool(name, sid) {
+  const ev = { type: 'assistant', message: { content: [{ type: 'tool_use', name: name }] } };
+  if (sid) ev.stream_id = sid;
+  return ev;
+}
+function t1199Text(text, sid, end) {
+  const msg = { content: [{ type: 'text', text: text }] };
+  if (end) msg.stop_reason = 'end_turn';
+  const ev = { type: 'assistant', message: msg };
+  if (sid) ev.stream_id = sid;
+  return ev;
+}
+function t1199Tools(n, prefix, sid) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(t1199Tool(prefix + i, sid));
+  return out;
+}
+// Owner 2026-08-21 (screenshot 8a9b04bd47b3e6e6): ⋯ 5 on ⋯ 5, then a
+// user bubble, then ⋯ 3 on ⋯ 3. Pre-tool _stream text + more tools after
+// a park is the closeOpen/growAssistant adjacency.
+function t1199OwnerReproTape() {
+  const a = 'sid-t119.9-a';
+  const b = 'sid-t119.9-b';
+  return [
+    { type: 'user', message: { content: 'first' }, timestamp: 1 },
+    t1199Text('checking the fleet', a),
+  ].concat(t1199Tools(5, 'A', a)).concat([
+    t1199Text('still working', a),
+  ]).concat(t1199Tools(5, 'B', a)).concat([
+    { type: 'user', message: { content: 'second' }, timestamp: 2 },
+    t1199Text('on it', b),
+  ]).concat(t1199Tools(3, 'C', b)).concat([
+    t1199Text('more', b),
+  ]).concat(t1199Tools(3, 'D', b));
+}
+function t1199Kinds(lines) {
+  return lines.map(function (l) { return l.kind || l.role; });
+}
+function t1199AdjacentSlots(lines) {
+  const hits = [];
+  for (let i = 1; i < lines.length; i++) {
+    const a = lines[i - 1].kind || lines[i - 1].role;
+    const b = lines[i].kind || lines[i].role;
+    if (a === 'turn-slot' && b === 'turn-slot') hits.push(i);
+  }
+  return hits;
+}
+
+test('T119.9 park-on-prior-stream then more tools is one slot, not two adjacent', function () {
+  const sid = 'sid-t119.9-park';
+  const tape = [
+    { type: 'user', message: { content: 'go' }, timestamp: 1 },
+    t1199Text('Checking.', sid),
+    t1199Tool('Read', sid),
+    t1199Tool('Grep', sid),
+    t1199Text('still going', sid), // parks on prior _stream; must not close the slot
+    t1199Tool('Bash', sid),
+    t1199Tool('Glob', sid),
+  ];
+  const fold = CW.newDisplayFold();
+  for (let i = 0; i < tape.length; i++) {
+    CW.foldDisplayEvent(fold, tape[i]);
+    const full = CW.displayFromEvents(tape.slice(0, i + 1));
+    assert.deepStrictEqual(
+      fold.out.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+      full.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+      'live fold prefix ' + i + ' must equal reload',
+    );
+  }
+  const kinds = t1199Kinds(fold.out);
+  assert.deepStrictEqual(kinds, ['user', 'assistant', 'turn-slot']);
+  assert.deepStrictEqual(t1199AdjacentSlots(fold.out), []);
+  assert.strictEqual(fold.out[2].items.length, 4, 'all four tools in one capsule');
+  assert.strictEqual(fold.out[2].text, '⋯ 4 steps');
+  assert.ok(String(fold.out[1].text).indexOf('still going') >= 0, 'parked text grew the earlier stream');
+});
+
+test('T119.9 owner repro 8a9b04bd47b3e6e6: one capsule per unbroken tool burst', function () {
+  const tape = t1199OwnerReproTape();
+  const capsules = [];
+  const stream = CW.createStreamJoin({
+    onTurnSlotOpen: function (slot) {
+      slot.el = { id: capsules.length, _label: { textContent: '' }, _items: { children: [] } };
+      capsules.push(slot.el);
+    },
+    onTurnSlotItem: function (slot, cls, text) {
+      slot.el._items.children.push({ cls: cls, text: text });
+      const n = slot.el._items.children.length;
+      slot.el._label.textContent = '⋯ ' + n + (n === 1 ? ' step' : ' steps');
+    },
+  });
+  tape.forEach(function (ev) { stream.applyWireEvent(ev); });
+  const lines = stream.getLines();
+  assert.deepStrictEqual(
+    t1199Kinds(lines),
+    ['user', 'assistant', 'turn-slot', 'user', 'assistant', 'turn-slot'],
+  );
+  assert.deepStrictEqual(t1199AdjacentSlots(lines), [], 'no two turn-slots adjacent');
+  const slots = lines.filter(function (l) { return l.kind === 'turn-slot'; });
+  assert.strictEqual(slots.length, 2, 'one capsule per owner turn');
+  assert.strictEqual(slots[0].items.length, 10, 'first burst coalesces 5+5');
+  assert.strictEqual(slots[0].text, '⋯ 10 steps');
+  assert.strictEqual(slots[1].items.length, 6, 'second burst coalesces 3+3');
+  assert.strictEqual(slots[1].text, '⋯ 6 steps');
+  assert.strictEqual(capsules.length, 2, 'live path minted two capsules, not four');
+  assert.strictEqual(capsules[0]._label.textContent, '⋯ 10 steps');
+  assert.strictEqual(capsules[1]._label.textContent, '⋯ 6 steps');
+  const replayed = CW.displayFromEvents(tape);
+  assert.deepStrictEqual(
+    lines.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+    replayed.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+    'reload of the same tape agrees with live',
+  );
+});
+
+// 🎯T119.10: owner tape 8f3d3c3cd0617018 / 4c81aaf12c8a338a — thinking + tools
+// + rewind/fleet-health notes. Live applyWireEvent must equal displayFromEvents.
+// Counting tool_use+tool_result as two live steps and one on hydrate is RED.
+function t11910OwnerTape() {
+  const sid = 'sid-t119.10';
+  return [
+    { type: 'agent_note', text: '[Fleet health] auto-spawned jv-t390.1.2-auto' },
+    {
+      type: 'user',
+      message: { content: 'Which target represents the work we discussed to perform regular entropy audits?' },
+      timestamp: 1,
+    },
+    {
+      type: 'agent_note',
+      text: '[Conversation rewound by the owner. The record below is the surviving context.]',
+    },
+    t1199Text("I'll look up the entropy-audit target in the ledger and report its current state.", sid),
+    t1199Tool('search_tool', sid),
+    t1199Tool('search_tool', sid),
+    t1199Text("Jevons MCP didn't show up in search, so I'll query it directly.", sid),
+    t1199Tool('search_tool', sid),
+    t1199Tool('grep', sid),
+    t1199Tool('grep', sid),
+    t1199Tool('grep', sid),
+    t1199Tool('search_tool', sid),
+    t1199Tool('search_tool', sid),
+  ];
+}
+
+test('T119.10 owner tape: live applyWireEvent equals displayFromEvents; no empty-tip 1-step', function () {
+  const tape = t11910OwnerTape();
+  const progress = [];
+  const capsules = [];
+  const stream = CW.createStreamJoin({
+    onTurnSlotOpen: function (slot) {
+      slot.el = {
+        id: capsules.length,
+        _label: { textContent: '' },
+        _items: { children: [], innerHTML: '' },
+      };
+      capsules.push(slot.el);
+    },
+    onTurnSlotItem: function (slot) {
+      // Host-shaped: N from fold items, not a children accumulator.
+      const n = (slot.items || []).length;
+      slot.el._label.textContent = n ? ('⋯ ' + n + (n === 1 ? ' step' : ' steps')) : '';
+      slot.el._items.children = (slot.items || []).slice();
+    },
+    onWorkingProgress: function (slot) {
+      progress.push(CW.workingProgressFromSlot(slot));
+    },
+  });
+  tape.forEach(function (ev) { stream.applyWireEvent(ev); });
+  const lines = stream.getLines();
+  const replayed = CW.displayFromEvents(tape);
+  assert.deepStrictEqual(
+    lines.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+    replayed.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+    'live applyWireEvent must agree with a hard-reload of the same tape',
+  );
+  assert.deepStrictEqual(
+    t1199Kinds(lines),
+    ['turn-slot', 'user', 'turn-slot', 'assistant', 'turn-slot'],
+  );
+  assert.deepStrictEqual(t1199AdjacentSlots(lines), [], 'tools after parked thinking text are one capsule');
+  const slots = lines.filter(function (l) { return l.kind === 'turn-slot'; });
+  assert.strictEqual(slots.length, 3, 'two note capsules + one tools capsule, got ' + slots.length);
+  assert.strictEqual(slots[0].items.length, 1, 'fleet-health note is reconstructible');
+  assert.ok(String(slots[0].items[0].text || '').trim(), 'fleet-health tip is not empty');
+  assert.strictEqual(slots[1].items.length, 1, 'rewind note is reconstructible');
+  assert.ok(String(slots[1].items[0].text || '').trim(), 'rewind tip is not empty');
+  assert.strictEqual(slots[2].items.length, 8, 'one capsule for the unbroken tool burst, not 2+6');
+  assert.strictEqual(slots[2].text, '⋯ 8 steps');
+  assert.strictEqual(capsules.length, 3, 'host minted one marker per fold slot');
+  assert.strictEqual(capsules[2]._label.textContent, '⋯ 8 steps');
+  assert.ok(progress.length, 'WorkingProgress fired from the fold');
+  assert.strictEqual(progress[progress.length - 1], CW.workingProgressFromSlot(slots[2]));
+  assert.ok(progress[progress.length - 1].indexOf('8 steps') === 0, progress[progress.length - 1]);
+});
+
+test('T119.10 tool_use+tool_result is one step live and on hydrate', function () {
+  const sid = 'sid-t119.10-result';
+  const liveTape = [
+    { type: 'user', message: { content: 'go' }, timestamp: 1 },
+    {
+      type: 'assistant', stream_id: sid,
+      message: { content: [{ type: 'tool_use', name: 'Read' }] },
+    },
+    { type: 'tool_result', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+    {
+      type: 'assistant', stream_id: sid,
+      message: { content: [{ type: 'tool_use', name: 'Grep' }] },
+    },
+    { type: 'tool_result', message: { content: [{ type: 'tool_result', content: 'hits' }] } },
+  ];
+  // Hydrate journal often drops tool_result — that must not change N.
+  const hydrateTape = liveTape.filter(function (ev) { return ev.type !== 'tool_result'; });
+  const live = CW.createStreamJoin({});
+  liveTape.forEach(function (ev) { live.applyWireEvent(ev); });
+  const liveSlots = live.getLines().filter(function (l) { return l.kind === 'turn-slot'; });
+  const hydra = CW.displayFromEvents(hydrateTape);
+  const hydraSlots = hydra.filter(function (l) { return l.kind === 'turn-slot'; });
+  assert.strictEqual(liveSlots.length, 1);
+  assert.strictEqual(hydraSlots.length, 1);
+  assert.strictEqual(liveSlots[0].items.length, 2, 'two tool_uses, results are not extra steps');
+  assert.strictEqual(hydraSlots[0].items.length, 2, 'hydrate of tool_use-only tape is the same N');
+  assert.strictEqual(liveSlots[0].text, '⋯ 2 steps');
+  assert.strictEqual(hydraSlots[0].text, '⋯ 2 steps');
+  assert.strictEqual(
+    CW.workingProgressFromSlot(liveSlots[0]),
+    CW.workingProgressFromSlot(hydraSlots[0]),
+  );
+});
+
+test('T119.10 host paints N from fold items, not DOM children', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const paint = html.match(/function paintFoldTurnSlotItem\(slot, cls, text\) \{[\s\S]*?\nfunction buildMsg/);
+  assert.ok(paint, 'paintFoldTurnSlotItem exists');
+  assert.ok(/slot\.items/.test(paint[0]), 'reconciles from fold items');
+  assert.ok(!/el\._items\.children\.length/.test(paint[0]),
+    'must not label from DOM children (live 2× hydrate N)');
+  assert.ok(!/updateWorkingProgress\(n \+/.test(paint[0]),
+    'WorkingProgress is not a children accumulator in paintFoldTurnSlotItem');
+  assert.ok(/onWorkingProgress:\s*function\s*\(\s*slot/.test(html),
+    'mount wires onWorkingProgress from the fold slot');
+  assert.ok(/workingProgressFromSlot\(slot\)/.test(html),
+    'strip N is ConversationWidget.workingProgressFromSlot');
 });
 
 test('T372 index.html: send click is the widget, not a second composer send', function () {

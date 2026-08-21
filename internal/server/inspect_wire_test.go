@@ -4,12 +4,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
@@ -156,6 +158,39 @@ func TestMarshalAgentTranscriptHistoryShape(t *testing.T) {
 	// Soft empty (no session file yet).
 	if m["empty"] != true {
 		t.Fatalf("want empty soft history, got %v", m)
+	}
+}
+
+type replayBuf struct{ frames []map[string]any }
+
+func (b *replayBuf) Write(ctx context.Context, typ websocket.MessageType, data []byte) error {
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	b.frames = append(b.frames, m)
+	return nil
+}
+
+func TestWriteInspectReplayResetThenLive(t *testing.T) {
+	s := New("test", t.TempDir())
+	buf := &replayBuf{}
+	if err := s.writeInspectReplay(context.Background(), buf, "jv-missing"); err != nil {
+		t.Fatal(err)
+	}
+	if len(buf.frames) < 1 {
+		t.Fatal("want reset frame")
+	}
+	if buf.frames[0]["kind"] != inspectKindReset {
+		t.Fatalf("first=%v", buf.frames[0])
+	}
+	if buf.frames[0]["name"] != "jv-missing" {
+		t.Fatalf("name=%v", buf.frames[0]["name"])
+	}
+	for i, f := range buf.frames[1:] {
+		if f["kind"] != inspectKindLive {
+			t.Fatalf("frame %d kind=%v want live", i+1, f["kind"])
+		}
 	}
 }
 

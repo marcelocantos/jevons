@@ -578,6 +578,25 @@
     return '⋯ ' + n + (n === 1 ? ' step' : ' steps');
   }
 
+  // 🎯T119.10: activity-strip N is the open fold slot's item count, never a
+  // second host accumulator (el._items.children.length resets on reload).
+  function workingProgressFromSlot(slot) {
+    var items = (slot && slot.items) || [];
+    var n = items.length;
+    if (!n) return '';
+    var last = '';
+    for (var i = n - 1; i >= 0; i--) {
+      var it = items[i];
+      if (it && (it.cls === 'tool-use' || it.cls === 'tool-result') && it.text) {
+        last = String(it.text);
+        break;
+      }
+    }
+    var short = last.replace(/\s+/g, ' ').trim();
+    if (short.length > 48) short = short.slice(0, 48);
+    return n + (n === 1 ? ' step' : ' steps') + (short ? ' · ' + short : '');
+  }
+
   // 🎯T119.6: a second startTurn while a slot is already on the canvas
   // must not mint. Mutation: always-create fails this.
   function shouldMintTurnSlot(existing, connected) {
@@ -622,8 +641,9 @@
   /**
    * Display model f(raw events). Consecutive tools with no other row
    * between them are one turn-slot (⋯ n steps, including n=1). A user
-   * or visible assistant row breaks the scope. Tools-only end_turn does
-   * not. Residual: full replay (🎯T119.5 will fold).
+   * or visible assistant row after the open slot breaks the scope.
+   * Parking on an earlier _stream (growAssistant skips turn-slots) is
+   * not a visible break (🎯T119.9). Tools-only end_turn does not break.
    */
   function newDisplayFold(CE) {
     return {
@@ -644,7 +664,6 @@
     return st.out;
   }
 
-
   function isOwnerUserBarrierText(text, CE) {
     if (text == null || !String(text).trim()) return false;
     if (CE && CE.isNonBoundaryUserText && CE.isNonBoundaryUserText(text)) return false;
@@ -661,11 +680,11 @@
     }
   }
 
-  // Scan backwards for an open assistant to grow (🎯T504).
-  // Turn-slots are not barriers (T496). T329 inject and protocol-control
-  // user rows are not barriers. A real owner user row is a scan barrier,
-  // and so is a sealed visible assistant — do not grow an older open
-  // stream past either.
+  // Scan backwards for an open assistant to grow (🎯T119.9 / 🎯T504).
+  // Turn-slots are not barriers (T496 park / T119.9). T329 inject and
+  // protocol-control user rows are not barriers. A real owner user row
+  // is a scan barrier, and so is a sealed visible assistant — do not
+  // grow an older open stream past either.
   function findGrowAssistantIndex(rows, streamId, CE) {
     var sid = streamId ? String(streamId) : '';
     var out = rows || [];
@@ -704,9 +723,19 @@
       st.open.items.push({ cls: cls || '', text: body });
       st.open.text = turnSlotLabel(st.open.items);
     }
+    function findOpenStreamIndex(streamId) {
+      return findGrowAssistantIndex(out, streamId, CE);
+    }
+    function openSlotIndex() {
+      if (!st.open) return -1;
+      for (var i = out.length - 1; i >= 0; i--) {
+        if (out[i] === st.open) return i;
+      }
+      return -1;
+    }
     function growAssistant(text, streamId, edge, ts) {
       var sid = streamId ? String(streamId) : '';
-      var idx = findGrowAssistantIndex(out, sid, CE);
+      var idx = findOpenStreamIndex(sid);
       if (idx >= 0) {
         var l = out[idx];
         l.text = edge
@@ -744,17 +773,10 @@
       return out;
     }
     if (event.type === 'tool_result' || event.type === 'result') {
+      // 🎯T119.10: a result completes a tool_use — it is not a second step.
+      // Live WS may carry tool_result while hydrate journals only tool_use.
+      // Counting both live and one on reload is the RED mutant.
       st.segmentEdge = true;
-      var raw = event.message && event.message.content;
-      if (Array.isArray(raw)) {
-        for (var ri = 0; ri < raw.length; ri++) {
-          if (raw[ri] && raw[ri].type === 'tool_result') {
-            addTool('tool-result', summariseToolResult(raw[ri]), ts);
-          }
-        }
-      } else {
-        addTool('tool-result', summariseToolResult(event), ts);
-      }
       return out;
     }
     if (event.type === 'system') {
@@ -782,7 +804,16 @@
         if (sid) silentById[sid] = true;
         continue;
       }
-      closeOpen();
+      // 🎯T119.9: close only when this text will appear AFTER the open
+      // slot (new tail row, or a stream that already sits after it).
+      // growAssistant skips turn-slots (T119.9 park) and T329 inject, but
+      // not an owner user or a sealed visible assistant (🎯T504). Closing
+      // a park mints a second capsule under the previous one.
+      var parkAt = findOpenStreamIndex(sid);
+      var openAt = openSlotIndex();
+      if (parkAt < 0 || (openAt >= 0 && parkAt > openAt)) {
+        closeOpen();
+      }
       var edge = st.segmentEdge || emitted;
       growAssistant(c.text, sid, edge, ts);
       st.segmentEdge = false;
@@ -812,7 +843,8 @@
     el._label = label;
     el._items = tip;
     var items = slot.items || [];
-    label.textContent = slot.text || turnSlotLabel(items);
+    // Empty items must not inherit a leftover "⋯ 1 step" label (🎯T119.10).
+    label.textContent = items.length ? (slot.text || turnSlotLabel(items)) : '';
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
       var d = doc.createElement('div');
@@ -1323,6 +1355,10 @@
         if (isOwnerUserBarrierText(liveText, liveCE)) sealJoinOnOwnerUser(liveText);
       }
       syncDisplay(prev, lines);
+      if (typeof opts.onWorkingProgress === 'function' && fold.open
+          && fold.open.items && fold.open.items.length) {
+        opts.onWorkingProgress(fold.open);
+      }
     }
 
     function setLines(next) {
@@ -1331,6 +1367,16 @@
 
     function getLines() {
       return lines.slice();
+    }
+
+    function reset() {
+      fold = newDisplayFold();
+      lines = [];
+      events = [];
+      clearHandles();
+      if (messagesEl && messagesEl.innerHTML !== undefined) {
+        messagesEl.innerHTML = '';
+      }
     }
 
     function setMessagesEl(el) {
@@ -1347,6 +1393,7 @@
       getOpenEl: function () { return openEl; },
       getLines: getLines,
       setLines: setLines,
+      reset: reset,
       setMessagesEl: setMessagesEl,
     };
   }
@@ -1443,6 +1490,7 @@
       onTurnSlotOpen: opts.onTurnSlotOpen,
       onTurnSlotItem: opts.onTurnSlotItem,
       onTurnSlotCancel: opts.onTurnSlotCancel,
+      onWorkingProgress: opts.onWorkingProgress,
       onClipToggle: opts.onClipToggle,
       onAfterClip: opts.onAfterClip,
       paintProbe: opts.paintProbe,
@@ -1700,6 +1748,14 @@
       _fp = '';
     }
 
+    function reset() {
+      if (stream && typeof stream.reset === 'function') stream.reset();
+      _lines = [];
+      _fp = '';
+      _working = false;
+      if (messagesEl) messagesEl.innerHTML = '';
+    }
+
     function getLines() {
       return _lines.slice();
     }
@@ -1874,6 +1930,7 @@
       draftStore: draftStore,
       renderModel: renderModel,
       invalidatePaint: invalidatePaint,
+      reset: reset,
       getLines: getLines,
       setLines: setLines,
       send: send,
@@ -1944,6 +2001,7 @@
     foldDisplayEvent: foldDisplayEvent,
     createStreamJoin: createStreamJoin,
     turnSlotLabel: turnSlotLabel,
+    workingProgressFromSlot: workingProgressFromSlot,
     shouldMintTurnSlot: shouldMintTurnSlot,
     ensureTurnSlot: ensureTurnSlot,
     createTurnMarkerEl: createTurnMarkerEl,

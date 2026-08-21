@@ -453,8 +453,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe)               // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T285
-	mux.HandleFunc("GET /api/agents/{name}/transcript", s.handleAgentTranscript)
-	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend) // 🎯T182: product agent_send proxy
+	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend)     // 🎯T182: product agent_send proxy
 	// 🎯T198: stop workers engaged on a frontier target (TargetID equality).
 	mux.HandleFunc("POST /api/agents/engagement/stop", s.handleEngagementStop)
 	mux.HandleFunc("POST /api/asides", s.handleCreateAside)                  // 🎯T136: register purpose=aside in fleet

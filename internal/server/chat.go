@@ -828,7 +828,7 @@ type agentInfo struct {
 	// ids are per-ledger: without this, claudia's 🎯T19 worker marks
 	// orthograph's 🎯T19 row engaged. Empty only when WorkDir is empty, and an
 	// empty key matches every ledger (unscoped, pre-T389 reading).
-	Ledger string `json:"ledger,omitempty"`
+	Ledger   string `json:"ledger,omitempty"`
 	Status   string `json:"status"`
 	Phase    string `json:"phase,omitempty"`
 	Step     string `json:"step,omitempty"`
@@ -1121,22 +1121,8 @@ func (s *Server) handleChatControlFrame(ctx context.Context, conn *websocket.Con
 		}
 		s.setInspectSub(ch, name)
 		slog.Info("chat: inspect subscribe", "name", name)
-		if line, ok := s.marshalAgentTranscriptHistory(name); ok {
-			writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			_ = conn.Write(writeCtx, websocket.MessageText, []byte(line))
-			cancel()
-		} else {
-			payload, _ := json.Marshal(map[string]any{
-				"type":  "agent_transcript",
-				"kind":  inspectKindHistory,
-				"name":  name,
-				"turns": []any{},
-				"empty": true,
-				"error": "agent not found",
-			})
-			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_ = conn.Write(writeCtx, websocket.MessageText, payload)
-			cancel()
+		if err := s.writeInspectReplay(ctx, conn, name); err != nil {
+			slog.Warn("chat: inspect replay failed", "name", name, "err", err)
 		}
 		return true
 	}

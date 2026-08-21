@@ -4,12 +4,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
 )
 
@@ -31,8 +34,15 @@ var errNoTranscriptReader = errors.New("transcript reader unavailable")
 // HTTP GET /api/agents/{name}/transcript remains for debug/export residual.
 
 const (
-	inspectKindHistory = "history"
+	inspectKindHistory = "history" // leftover name; history is now a live-frame replay
 	inspectKindLive    = "live"
+	inspectKindReset   = "reset"
+	// inspectHistoryTurns is the user-turn cap for an inspect history
+	// frame — the same bound main chat uses on /ws/chat replay (🎯T533).
+	inspectHistoryTurns = historyReplayTurns
+	// inspectHistoryMaxEvents caps the raw events tape so applyEventTape
+	// cannot freeze the tab on a 10k-event PO journal tail.
+	inspectHistoryMaxEvents = 400
 )
 
 // setInspectSub binds ch to name (one inspect target per chat listener).
@@ -112,6 +122,11 @@ func (s *Server) fanInspectLive(name, line string) {
 // ok=false when agent is missing (caller may send error frame). Soft-empty
 // (no session / read error / zero turns) still returns ok=true with empty turns.
 func (s *Server) buildAgentTranscriptPayload(name string) (payload map[string]any, ok bool) {
+	defer func() {
+		if ok {
+			clipInspectPayload(payload)
+		}
+	}()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, false
@@ -289,6 +304,194 @@ func (s *Server) marshalAgentTranscriptHistory(name string) (line string, ok boo
 		return "", false
 	}
 	return string(b), true
+}
+
+// writeInspectReplay hydrates inspect the same way /ws/chat hydrates main:
+// ReplayTailSealed, one chat-wire frame at a time, applied via applyWireEvent.
+type inspectWriter interface {
+	Write(ctx context.Context, typ websocket.MessageType, data []byte) error
+}
+
+func (s *Server) writeInspectReplay(ctx context.Context, conn inspectWriter, name string) error {
+	if s == nil || conn == nil {
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	reset, _ := json.Marshal(map[string]any{
+		"type": "agent_transcript",
+		"kind": inspectKindReset,
+		"name": name,
+	})
+	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err := conn.Write(wctx, websocket.MessageText, reset)
+	cancel()
+	if err != nil {
+		return err
+	}
+	writeLine := func(line string) error {
+		if echoedOwnerTurnLine(line) {
+			return nil
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			return nil
+		}
+		frame, err := json.Marshal(map[string]any{
+			"type":  "agent_transcript",
+			"kind":  inspectKindLive,
+			"name":  name,
+			"event": ev,
+		})
+		if err != nil {
+			return nil
+		}
+		wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return conn.Write(wctx, websocket.MessageText, frame)
+	}
+	if s.isOverseerAgent(name) {
+		s.mu.RLock()
+		clog := s.chatLog
+		s.mu.RUnlock()
+		if clog == nil {
+			return nil
+		}
+		_, _, err := clog.ReplayTailSealed(historyReplayTurns, writeLine)
+		return err
+	}
+	j := s.agentJournalsFor()
+	if j == nil {
+		return nil
+	}
+	path := j.path(name)
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	l := j.logFor(name)
+	if l == nil {
+		return nil
+	}
+	_, _, err = l.ReplayTailSealed(historyReplayTurns, writeLine)
+	return err
+}
+
+// clipInspectPayload tails turns/events so one history frame cannot be
+// the whole agent journal (🎯T533). Mutates payload in place.
+func clipInspectPayload(payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	if _, has := payload["turns"]; has {
+		turns := mapsFromAny(payload["turns"])
+		clipped, total, truncated := tailInspectTurns(turns, inspectHistoryTurns)
+		payload["turns"] = clipped
+		payload["history_turns"] = total
+		payload["history_shown"] = countUserTurns(clipped)
+		if truncated {
+			payload["truncated"] = true
+		}
+	}
+	if _, has := payload["events"]; has {
+		evs := mapsFromAny(payload["events"])
+		n := len(evs)
+		tailed := tailInspectEvents(evs, inspectHistoryTurns, inspectHistoryMaxEvents)
+		payload["events"] = tailed
+		if len(tailed) < n {
+			payload["truncated"] = true
+		}
+	}
+}
+
+// mapsFromAny coerces a JSON-decoded or in-process turns/events value
+// into []map[string]any so clipInspectPayload does not miss a []any tape.
+func mapsFromAny(v any) []map[string]any {
+	switch t := v.(type) {
+	case []map[string]any:
+		return t
+	case []any:
+		out := make([]map[string]any, 0, len(t))
+		for _, x := range t {
+			if m, ok := x.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func countUserTurns(turns []map[string]any) int {
+	n := 0
+	for _, t := range turns {
+		if t == nil {
+			continue
+		}
+		if role, _ := t["role"].(string); role == "user" {
+			n++
+		}
+	}
+	return n
+}
+
+func tailInspectTurns(turns []map[string]any, maxUser int) (out []map[string]any, totalUser int, truncated bool) {
+	totalUser = countUserTurns(turns)
+	if maxUser <= 0 || totalUser <= maxUser {
+		return turns, totalUser, false
+	}
+	need := maxUser
+	cut := 0
+	for i := len(turns) - 1; i >= 0; i-- {
+		t := turns[i]
+		if t == nil {
+			continue
+		}
+		if role, _ := t["role"].(string); role == "user" {
+			need--
+			if need == 0 {
+				cut = i
+				break
+			}
+		}
+	}
+	return turns[cut:], totalUser, true
+}
+
+func tailInspectEvents(evs []map[string]any, maxUser, maxEvents int) []map[string]any {
+	if len(evs) == 0 {
+		return evs
+	}
+	cut := 0
+	if maxUser > 0 {
+		need := maxUser
+		for i := len(evs) - 1; i >= 0; i-- {
+			e := evs[i]
+			if e == nil {
+				continue
+			}
+			t, _ := e["type"].(string)
+			if t == "" {
+				t, _ = e["role"].(string)
+			}
+			if t == "user" {
+				need--
+				if need == 0 {
+					cut = i
+					break
+				}
+			}
+		}
+	}
+	if maxEvents > 0 && len(evs)-cut > maxEvents {
+		cut = len(evs) - maxEvents
+	}
+	if cut <= 0 {
+		return evs
+	}
+	return evs[cut:]
 }
 
 // inspectLiveEvent maps a fleet ACP event into an inspect progressive event

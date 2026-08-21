@@ -68,8 +68,9 @@ func TestHandleAgentTranscriptNotFound(t *testing.T) {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
 	req := httptest.NewRequest(http.MethodGet, "/api/agents/missing/transcript", nil)
+	req.SetPathValue("name", "missing")
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, req)
+	s.handleAgentTranscript(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status=%d want 404", rr.Code)
 	}
@@ -96,8 +97,9 @@ func TestHandleAgentTranscriptEmptySession(t *testing.T) {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
 	req := httptest.NewRequest(http.MethodGet, "/api/agents/worker-x/transcript", nil)
+	req.SetPathValue("name", "worker-x")
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, req)
+	s.handleAgentTranscript(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
@@ -184,8 +186,9 @@ func TestHandleAgentTranscriptEmptyReasons(t *testing.T) {
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req.SetPathValue("name", tc.name)
 		rr := httptest.NewRecorder()
-		mux.ServeHTTP(rr, req)
+		s.handleAgentTranscript(rr, req)
 		if rr.Code != http.StatusOK {
 			t.Fatalf("%s: status=%d body=%s", tc.reason, rr.Code, rr.Body.String())
 		}
@@ -283,8 +286,9 @@ func TestHandleAgentTranscriptWithFixture(t *testing.T) {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
 	req := httptest.NewRequest(http.MethodGet, "/api/agents/aside-1/transcript", nil)
+	req.SetPathValue("name", "aside-1")
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, req)
+	s.handleAgentTranscript(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
@@ -357,8 +361,9 @@ func TestHandleAgentTranscriptClaudeProjectsOnly(t *testing.T) {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
 	req := httptest.NewRequest(http.MethodGet, "/api/agents/claude-worker/transcript", nil)
+	req.SetPathValue("name", "claude-worker")
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, req)
+	s.handleAgentTranscript(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
