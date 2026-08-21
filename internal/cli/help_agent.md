@@ -710,6 +710,31 @@ not only `go test` / hermetic greps. Pure static web may hard-reload only
 **Residual:** instructional + pure classifier; not a hard daemon block of
 bullseye achieve.
 
+## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
+
+After any change that can affect what the owner sees in `#messages`
+(pin, virtualize, replay, fold, slot mint, spacing), take a viewport
+screenshot and write a short visual verdict **before** claiming done or
+achieving:
+
+1. What ink is on screen.
+2. How much of the pane is empty.
+3. Whether Latest is showing.
+4. The sentence yes or no to "does this look like a normal chat transcript after a hard reload?"
+
+**A metric that is already green cannot be that verdict.**
+`visibleInScroller ≥ 1`, `modelRows = N`, and a screenshot-tool caption
+are not answers. One leftover bubble in a tall pane, Latest on a hard
+reload, or more empty canvas than bubbles is an **automatic no**.
+
+If the prose says **no** and a journey is green, the journey is a **false
+green** — fix the oracle in the same turn; daily is not a universe the
+test cannot see.
+
+Pure helpers: `HasVisualProseVerdict` / `LooksLikeMissingVisualVerdict`
+(`internal/mcpserver`). **Residual:** instructional + pure classifier;
+not a hard daemon block of bullseye achieve.
+
 ## Configuration
 
 | Path | Purpose |

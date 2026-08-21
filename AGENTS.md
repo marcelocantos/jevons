@@ -129,6 +129,11 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
 - **Unified fleet (🎯T114):** aside is a kind of agent (purpose field);
   one deliver/send/push path by name for workers and asides; dual-write
   threads into the agent registry. Docs: persona + agents-guide.
+- **Fleet roles (🎯T511):** an agent is an instance spawned **as** a
+  **role** (type). Role files live in `internal/config/roles/` (owner
+  overlay `~/.jevons/roles/`); spawn takes `role=` (default `worker`).
+  Per-type doctrine (T125 / T129 / worker T31·T165·T195) is sourced
+  there — not as if-you-are-X prose in the shared fleet brief.
 - **Multi-slice fan-out (🎯T111.4):** PO/boss multi-slice missions
   `jevons_agent_start` children early (with parent lineage); solo is fine
   for single-agent tasks. Zero-children failure surfaces in agent_list.
@@ -424,6 +429,22 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   work while a stale binary may still serve. Finish reports must cite
   daily-path evidence (restart success and/or live probe). Pure web
   static may hard-reload only (T188). Pure helper: `HasDailyPathEvidence`.
+  Residual: instructional + pure classifier; not a hard achieve block.
+  Persona + agents-guide + fleet standing brief.
+- **Visual cockpit finish is a prose look, not a green metric (🎯T493.1):**
+  after any change that can affect what the owner sees in `#messages`
+  (pin, virtualize, replay, fold, slot mint, spacing), take a viewport
+  screenshot and write a short visual verdict before claiming done or
+  achieving: what ink is on screen, how much of the pane is empty,
+  whether Latest is showing, and the sentence yes or no to "does this
+  look like a normal chat transcript after a hard reload?" A metric
+  that is already green cannot be that verdict. `visibleInScroller ≥ 1`,
+  `modelRows = N`, and a screenshot-tool caption are not answers. One
+  leftover bubble in a tall pane, Latest on a hard reload, or more
+  empty canvas than bubbles is an automatic no. If the prose says no
+  and a journey is green, the journey is a false green — fix the oracle
+  in the same turn; daily is not a universe the test cannot see. Pure
+  helpers: `HasVisualProseVerdict` / `LooksLikeMissingVisualVerdict`.
   Residual: instructional + pure classifier; not a hard achieve block.
   Persona + agents-guide + fleet standing brief.
 - **Fleet control follows the agent, not the directory (🎯T464):** a

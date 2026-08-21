@@ -7,7 +7,7 @@ import "strings"
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -84,6 +84,23 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   greps while a stale binary may still serve.
 - Pure static web-only may hard-reload only (🎯T188). Residual:
   instructional + pure HasDailyPathEvidence; not a hard achieve block.
+
+## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
+- After any change that can affect what the owner sees in #messages
+  (pin, virtualize, replay, fold, slot mint, spacing), take a viewport
+  screenshot and write a short visual verdict BEFORE claiming done or
+  achieving: what ink is on screen, how much of the pane is empty,
+  whether Latest is showing, and the sentence yes or no to "does this
+  look like a normal chat transcript after a hard reload?"
+- A metric that is already green cannot be that verdict.
+  visibleInScroller ≥ 1, modelRows = N, and a screenshot-tool caption
+  are not answers. One leftover bubble in a tall pane, Latest on a
+  hard reload, or more empty canvas than bubbles is an automatic no.
+- If the prose says no and a journey is green, the journey is a false
+  green — fix the oracle in the same turn; daily is not a universe the
+  test cannot see.
+- Residual: instructional + pure HasVisualProseVerdict /
+  LooksLikeMissingVisualVerdict; not a hard daemon block.
 
 ## Greenfield oracle elicitation (🎯T31.2)
 - For NEW software (no external reference), co-develop an oracle-coverage

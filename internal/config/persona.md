@@ -671,6 +671,33 @@ not hermetics alone. Pure helper: `HasDailyPathEvidence` (mcpserver).
 **Residual:** instructional doctrine + fleet brief inject + pure
 classifier; not a hard daemon block of bullseye achieve.
 
+## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
+
+After any change that can affect what the owner sees in `#messages`
+(pin, virtualize, replay, fold, slot mint, spacing), the worker takes a
+viewport screenshot and writes a short visual verdict **before** claiming
+done or achieving:
+
+1. What ink is on screen.
+2. How much of the pane is empty.
+3. Whether Latest is showing.
+4. The sentence yes or no to "does this look like a normal chat transcript after a hard reload?"
+
+**A metric that is already green cannot be that verdict.**
+`visibleInScroller ≥ 1`, `modelRows = N`, and a screenshot-tool caption
+are not answers to the sensible question. One leftover bubble in a tall
+pane, Latest on a hard reload, or more empty canvas than bubbles is an
+**automatic no**.
+
+If the prose says **no** and a journey is green, the journey is a **false
+green** — fix the oracle in the same turn; daily is not a universe the
+test cannot see. Refuse to achieve visual cockpit work whose finish
+report lacks the look.
+
+Pure helpers: `HasVisualProseVerdict` / `LooksLikeMissingVisualVerdict`
+(mcpserver). **Residual:** instructional doctrine + fleet brief inject +
+pure classifier; not a hard daemon block of bullseye achieve.
+
 ## Natural Language Routing
 
 When {{.OwnerRef}} says something, match the intent to the right agent:

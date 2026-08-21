@@ -160,3 +160,22 @@ func TestEnsureFleetBriefIdempotentWhenCallerIncluded(t *testing.T) {
 		t.Fatal("should mark briefed")
 	}
 }
+
+// 🎯T493.1: standing brief carries the visual-cockpit prose-look doctrine.
+func TestFleetStandingBriefVisualCockpitProseVerdict(t *testing.T) {
+	for _, want := range []string{
+		"Visual cockpit finish is a prose look, not a green metric",
+		"🎯T493.1",
+		"#messages",
+		"normal chat transcript after a hard reload",
+		"visibleInScroller",
+		"screenshot-tool caption",
+		"automatic no",
+		"HasVisualProseVerdict",
+		"LooksLikeMissingVisualVerdict",
+	} {
+		if !strings.Contains(FleetStandingBrief, want) {
+			t.Errorf("FleetStandingBrief missing T493.1 marker %q", want)
+		}
+	}
+}

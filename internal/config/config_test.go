@@ -460,6 +460,29 @@ func TestDefaultPersonaDailyPathAchieve(t *testing.T) {
 	}
 }
 
+// 🎯T493.1: visual cockpit finish reports a prose look, not a green metric.
+func TestDefaultPersonaVisualCockpitProseVerdict(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Visual cockpit finish is a prose look, not a green metric",
+		"T493.1",
+		"#messages",
+		"normal chat transcript after a hard reload",
+		"visibleInScroller",
+		"screenshot-tool caption",
+		"automatic no",
+		"HasVisualProseVerdict",
+		"LooksLikeMissingVisualVerdict",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T493.1 marker %q", want)
+		}
+	}
+}
+
 // 🎯T78/T104/T125/T129/T130/T155/T193/T176: agents-guide is the PO/worker product surface that inherits doctrine.
 func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 	// agents-guide.md is repo-root product docs consumed by PO/workers.
@@ -589,6 +612,16 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"live probe",
 		"HasDailyPathEvidence",
 		"hermetics alone",
+		// 🎯T493.1 visual cockpit prose verdict
+		"Visual cockpit finish is a prose look, not a green metric",
+		"T493.1",
+		"#messages",
+		"normal chat transcript after a hard reload",
+		"visibleInScroller",
+		"screenshot-tool caption",
+		"automatic no",
+		"HasVisualProseVerdict",
+		"LooksLikeMissingVisualVerdict",
 		// 🎯T197 worker names: literal dots
 		"Worker names: literal dots for hierarchical target ids",
 		"T197",
@@ -711,6 +744,16 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"live probe",
 		"HasDailyPathEvidence",
 		"stale binary",
+		// 🎯T493.1 visual cockpit prose verdict
+		"Visual cockpit finish is a prose look, not a green metric",
+		"T493.1",
+		"#messages",
+		"normal chat transcript after a hard reload",
+		"visibleInScroller",
+		"screenshot-tool caption",
+		"automatic no",
+		"HasVisualProseVerdict",
+		"LooksLikeMissingVisualVerdict",
 		// 🎯T197 worker names: literal dots
 		"Worker names literal dots",
 		"T197",
