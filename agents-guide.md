@@ -76,49 +76,6 @@ open http://localhost:13705/
 - **Sessions on disk**: provider-specific roots (e.g.
   `~/.grok/sessions/<encoded-cwd>/<session-id>/` plus
   `~/.grok/active_sessions.json`; Claude inspect discovery is 🎯T213).
-- **Role** (🎯T511): the **type** an agent is spawned as. `agent` is reserved
-  for instances. Role files are the source of truth for per-type doctrine
-  (PO spawn-only, overseer never parents product workers, worker
-  finish/terminal rules) — this guide does not restate those bodies.
-
-## Fleet roles (🎯T511)
-
-Claude Code has `.claude/agents/*.md`. Jevons equivalent: **role files**.
-
-| Layer | Path | Source label |
-|---|---|---|
-| Built-in (embed) | `internal/config/roles/*.md` | `built-in` |
-| Repo overlay | `<workdir>/internal/config/roles/` when present | `repo` |
-| Owner override | `~/.jevons/roles/*.md` | `owner-override` |
-
-**Resolution:** built-in, then repo, then owner-override (later wins). A
-malformed file is a **hard error** (file + field named) — never a silent
-reset. Adding or overriding a role takes effect without a daemon rebuild.
-
-**Shipped roles:** `overseer`, `product-owner`, `boss`, `worker`, `aside`.
-The first four (and `boss`, which also ships) cannot be deleted — only
-overridden. A role with live instances cannot be removed without
-`force=true`.
-
-**Stipulate at spawn:** `jevons_agent_start(..., role="worker")`. Omitted
-role defaults to **`worker`** for Build spawns. `purpose=aside` /
-`purpose=overseer` still map when `role` is omitted. The registry sidecar
-(`~/.jevons/agent_roles.json`) records the role; `jevons_agent_list`
-surfaces `role=`. Unknown role fails loud.
-
-**Instruction assembly** (first send / start prompt): universal fleet
-brief (rules true for every role) + role definition body + mission brief.
-
-**Manage:** `jevons_role_list`, `jevons_role_put` (write a validated
-file), `jevons_role_delete` (guarded). Agents may author a new role file;
-it is loaded on the next catalog read.
-
-**T44:** the overseer role file composes with `internal/config/persona.md`
-at persona render — one instruction file, not a third prompt. T44 stays
-achieved.
-
-**T509:** worker/boss role files note that finish-report envelopes land
-with T509; they do not invent a parallel syntax.
 
 ## Chat markdown (web UI)
 
@@ -788,8 +745,6 @@ not a hard daemon block of bullseye achieve.
 | `~/.jevons/usage.db` | Token-spend accounting |
 | `~/.jevons/budget.json` | Spend budgets / thresholds (optional). `disabled` opt-out; `accounting` = `list_price` (default, billable $) or `subscription` (SuperGrok: API-eq $ never enforces — 🎯T137) |
 | `~/.jevons/agents.json` | Agent registry |
-| `~/.jevons/roles/` | Owner-override fleet role files (🎯T511) |
-| `~/.jevons/agent_roles.json` | Agent→role bindings (🎯T511) |
 | `~/.grok/sessions/` | Grok session store |
 | `~/.jevons/jevons/AGENTS.md` | Generated overseer instructions |
 
@@ -805,7 +760,7 @@ not a hard daemon block of bullseye achieve.
 **Ad hoc** (per spawn — overseer/PO):
 
 ```text
-jevons_agent_start(name=…, workdir=…, role="worker", provider="claude", model=…?)
+jevons_agent_start(name=…, workdir=…, provider="claude", model=…?)
 jevons_thread_spawn(id=…, workdir=…, provider="claude", model=…?)
 jwork(text=…, provider="claude", model=…?)
 ```

@@ -129,11 +129,6 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
 - **Unified fleet (🎯T114):** aside is a kind of agent (purpose field);
   one deliver/send/push path by name for workers and asides; dual-write
   threads into the agent registry. Docs: persona + agents-guide.
-- **Fleet roles (🎯T511):** an agent is an instance spawned **as** a
-  **role** (type). Role files live in `internal/config/roles/` (owner
-  overlay `~/.jevons/roles/`); spawn takes `role=` (default `worker`).
-  Per-type doctrine (T125 / T129 / worker T31·T165·T195) is sourced
-  there — not as if-you-are-X prose in the shared fleet brief.
 - **Multi-slice fan-out (🎯T111.4):** PO/boss multi-slice missions
   `jevons_agent_start` children early (with parent lineage); solo is fine
   for single-agent tasks. Zero-children failure surfaces in agent_list.
