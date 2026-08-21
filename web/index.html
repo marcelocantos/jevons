@@ -10444,48 +10444,7 @@ function paintInspectBubbleBody(el, role, text, painted) {
   }
 }
 
-// 🎯T205: RHS inspect = main transcript microcosm — .msg + paintBody (not .ai-turn
-// log panel); stick/free scroll; fingerprint no-op when content unchanged.
-// 🎯T208: body re-paint only — never setRhsBottomTab. Transcript tab is set only
-// by selectAgent (owner picks fleet agent) or explicit Transcript tab click.
-// Quiet wire/refresh must leave Frontier alone while selection remains.
-// 🎯T209: primary delivery is WS agent_transcript; HTTP residual for refresh.
-// 🎯T309.1: renderAgentInspect is a widget mount host only — scroll container
-// + policy flags (lineSpec/paintBody) are params on the widget.
-function renderAgentInspect(model) {
-  if (!agentInspectEl || !agentInspectBody) return;
-  if (agentInspectName) agentInspectName.textContent = model.title || selectedAgent || '';
-  _agentInspectWorking = !!(model && model.working);
-  if (model && model.lines) {
-    _agentInspectLines = inspectLinesCopy(model.lines);
-  }
-  // 🎯T308/T221: per-turn policy still via inspectBubbleSpec (inspect-only user
-  // body policy + painted MD for user_query-shaped injects); host does not
-  // re-implement the bubble loop — ConversationWidget.renderModel + buildMsg.
-  if (!inspectConversation || typeof inspectConversation.renderModel !== 'function') {
-    // Widget required for product path — loud empty residual if mount failed.
-    agentInspectBody.innerHTML = '';
-    const err = document.createElement('div');
-    err.className = 'ai-err';
-    err.textContent = 'Conversation widget unavailable.';
-    agentInspectBody.appendChild(err);
-    return;
-  }
-  if (inspectConversation.setLines) inspectConversation.setLines(_agentInspectLines);
-  inspectConversation.renderModel(model || {});
-  if (typeof decorateBodyLinks === 'function') {
-    decorateBodyLinks(agentInspectBody);
-  }
-  const lines = (model && model.lines) || [];
-  const wantWorking = !!(model && model.working);
-  // 🎯T372: the host dedupes on exactly the fingerprint the widget dedupes on.
-  // The AgentTranscript copy this replaces ignored `when`, so the host could
-  // call a re-timestamped line set unchanged while the widget repainted it.
-  _agentInspectFp = ConversationWidget.linesFingerprint(lines, wantWorking);
-}
-
-// 🎯T209 residual: manual refresh re-issues inspect_subscribe (wire history),
-// optionally falling back to HTTP GET for debug when transport is down.
+// 🎯T209: refresh re-issues subscribe (sealed-tail replay + named live frames).
 function loadAgentTranscript(name, opts) {
   if (!name || !agentInspectEl) return;
   // Hard guard: never fetch/render overseer into RHS pane.

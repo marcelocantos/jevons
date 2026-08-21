@@ -217,18 +217,12 @@ test('T309.1 index.html: sidebar composer uses widget classify/send (not a secon
     'main host nodes present for comfortable adopt');
 });
 
-test('T309.1 index.html: renderAgentInspect is widget mount host', function () {
+test('T309.1 index.html: inspect paint is applyWireEvent, not renderAgentInspect', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const renderFn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(renderFn, 'renderAgentInspect present before loadAgentTranscript');
-  // Host delegates paint loop to widget when controller exists.
-  assert.ok(
-    renderFn[0].indexOf('renderModel') >= 0 ||
-    renderFn[0].indexOf('_inspectWidget') >= 0 ||
-    renderFn[0].indexOf('inspectConversation') >= 0 ||
-    renderFn[0].indexOf('ConversationWidget') >= 0,
-    'renderAgentInspect delegates to widget renderModel / controller',
-  );
+  assert.ok(html.indexOf('function renderAgentInspect') < 0,
+    'renderAgentInspect dump is gone');
+  assert.ok(html.indexOf('function handleNamedConversation') >= 0);
+  assert.ok(html.indexOf('function loadAgentTranscript') >= 0);
 });
 
 // ── 🎯T371: owner turns never vanish (main ↔ sidebar parity) ─────────

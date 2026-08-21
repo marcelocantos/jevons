@@ -27,7 +27,7 @@ function test(name, fn) {
 function inspectRenderSource() {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
-  const body = ['inspectSpecFor', 'paintInspectBubbleBody', 'renderAgentInspect']
+  const body = ['inspectSpecFor', 'paintInspectBubbleBody', 'handleNamedConversation']
     .map(function (name) {
       const m = html.match(new RegExp('\\nfunction ' + name + '\\([\\s\\S]*?\\n\\}\\n'));
       assert.ok(m, name + ' present in index.html');
@@ -200,10 +200,12 @@ test('index.html wires agent inspect pane + selectAgent transcript', function ()
 // Frontier stays active across refreshAgents + wire updates while selectedAgent set.
 test('T208 quiet inspect re-paint does not setRhsBottomTab transcript', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const renderFn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(renderFn, 'renderAgentInspect present before loadAgentTranscript');
-  assert.ok(!/setRhsBottomTab\s*\(/.test(renderFn[0]),
-    'renderAgentInspect must not call setRhsBottomTab (quiet poll steals Frontier)');
+  assert.ok(html.indexOf('function renderAgentInspect') < 0,
+    'renderAgentInspect dump is gone');
+  const loadFn = html.match(/function loadAgentTranscript\([\s\S]*?\nfunction /);
+  assert.ok(loadFn, 'loadAgentTranscript present');
+  assert.ok(!/setRhsBottomTab\s*\(/.test(loadFn[0]),
+    'loadAgentTranscript must not steal Frontier tab');
   // selectAgent still switches to Transcript on explicit owner pick.
   const selectFn = html.match(/function selectAgent\([\s\S]*?\nfunction hideAgentInspect/);
   assert.ok(selectFn, 'selectAgent present before hideAgentInspect');
@@ -298,7 +300,6 @@ test('T205 renderAgentInspect uses paintBody + .msg (not .ai-turn log panel)', f
   // Shared chrome: global .msg.jevons styles remain; inspect hosts .msg
   assert.ok(html.indexOf('.msg.jevons pre') >= 0, 'main .msg.jevons chrome still present');
   assert.ok(html.indexOf('createScrollFollow') >= 0, 'wires createScrollFollow');
-  assert.ok(html.indexOf('linesFingerprint') >= 0, 'poll fingerprint skip path');
 });
 
 test('T205 paintInspectLinesHTML: .msg chrome + bold/heading/fence + user path', function () {
@@ -744,8 +745,8 @@ test('T221 renderAgentInspect wires paintInspectLineBody for user (inspect-only)
   }, { parseAssistantMarkdown: s => '<p>' + String(s) + '</p>' });
   assert.strictEqual(inject.kind, 'bubble', 'owner user_query stays a bubble');
   assert.strictEqual(inject.painted.mode, 'html', 'MD-shaped user turn marks down (T221)');
-  assert.ok(body.indexOf('T221') >= 0 || body.indexOf('user_query') >= 0
-    || body.indexOf('inspect-only') >= 0,
+  assert.ok(html.indexOf('T221') >= 0 || html.indexOf('user_query') >= 0
+    || html.indexOf('inspect-only') >= 0,
     'T221 / inspect-only comment present');
   // Must not change main paintBody user → still renderUserText only.
   const paint = html.match(/function paintBody\([\s\S]*?\nfunction maybeCloseTargetAside/);
@@ -1518,10 +1519,10 @@ test('T265 index.html: merge preserves working; send opens working chrome', func
     html.indexOf('mergePaneModelWithLines') >= 0,
     'fallback path still preserves working');
   // Microcosm markers present (no recursive shell in inspect paint path).
-  const renderFn = html.match(/function renderAgentInspect\([\s\S]*?\nfunction loadAgentTranscript/);
-  assert.ok(renderFn, 'renderAgentInspect present');
-  assert.ok(renderFn[0].indexOf('id="agents"') < 0, 'render does not inject fleet tree');
-  assert.ok(renderFn[0].indexOf('frontier-table') < 0, 'render does not inject frontier');
+  const renderFn = html.match(/function handleNamedConversation\([\s\S]*?\nfunction /);
+  assert.ok(renderFn, 'handleNamedConversation present');
+  assert.ok(renderFn[0].indexOf('id="agents"') < 0, 'ingest does not inject fleet tree');
+  assert.ok(renderFn[0].indexOf('frontier-table') < 0, 'ingest does not inject frontier');
   assert.ok(html.indexOf('🎯T265') >= 0 || html.indexOf('T265') >= 0, 'T265 marker');
 });
 
