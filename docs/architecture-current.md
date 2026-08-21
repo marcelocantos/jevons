@@ -165,17 +165,10 @@ paints an owner bubble — may be asserted only by the owner surface. MCP
 in the owner's voice. **Per-caller actor (🎯T321):** `jevons_agent_send`
 takes an explicit `actor` (same shape as `jevons_agent_kill`) and the MCP
 path calls `deliverByNameAs` with it, so `AuthorizeDeliver` is exercised
-against a named caller and denials log `actor` + `relation`. **Worker-report
-hop-skip (🎯T392.7 / 🎯T392.7.1):** a report-up to a PO whose body
-`relayroute.Classify` routes to the overseer (oracle-done, blocked-on,
-needs-owner) is delivered to the overseer, and the PO gets only a one-line
-record.
-Directs down do not hop-skip: `actor=jevons` → `name=jevons-po` stays on
-the PO even when the body mentions SHA/GATE/achieved. Owner-surface and
-empty actor stay never-rerouted (🎯T515). **Residual (impersonation):**
-the shared MCP HTTP transport still cannot cryptographically name the
-calling fleet agent (`transcript.GetID` is the overseer session); `actor`
-is self-attested, matching kill's trust model.
+against a named caller and denials log `actor` + `relation`. **Residual
+(impersonation):** the shared MCP HTTP transport still cannot
+cryptographically name the calling fleet agent (`transcript.GetID` is the
+overseer session); `actor` is self-attested, matching kill's trust model.
 
 `jevons_thread_direct` is **not** a residual deliver variant. It is the
 *synchronous* request/reply op: it subscribes to the agent's event stream
