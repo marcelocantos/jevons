@@ -1349,6 +1349,11 @@
         if (isOwnerUserBarrierText(liveText, liveCE)) sealJoinOnOwnerUser(liveText);
       }
       syncDisplay(prev, lines);
+      var follow = opts.scrollFollow;
+      if (follow && follow.shouldPin && follow.shouldPin()
+          && follow.applyAfterUpdate) {
+        follow.applyAfterUpdate(messagesEl);
+      }
       if (typeof opts.onWorkingProgress === 'function' && fold.open
           && fold.open.items && fold.open.items.length) {
         opts.onWorkingProgress(fold.open);
@@ -1471,6 +1476,7 @@
     var stream = createStreamJoin({
       messagesEl: messagesEl,
       document: doc,
+      scrollFollow: scrollFollow,
       buildMsg: opts.buildMsg,
       addMsg: opts.addMsg,
       paintBody: opts.paintBody,
@@ -1948,6 +1954,10 @@
       applyWireEvent: function (event) {
         stream.applyWireEvent(event);
         _lines = stream.getLines();
+        if (scrollFollow && scrollFollow.shouldPin && scrollFollow.shouldPin()
+            && scrollFollow.applyAfterUpdate) {
+          scrollFollow.applyAfterUpdate(messagesEl);
+        }
       },
       clearStreamHandles: function (streamId) { stream.clearHandles(streamId); },
       getOpenStreamEl: function () { return stream.getOpenEl(); },

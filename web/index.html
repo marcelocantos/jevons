@@ -10369,6 +10369,8 @@ function handleConversationReset(m) {
   _agentInspectLines = [];
   _agentInspectFp = '';
   if (agentInspectName) agentInspectName.textContent = selectedAgent || '';
+  const f = typeof agentInspectFollow === 'function' ? agentInspectFollow() : null;
+  if (f && f.enterTrack) f.enterTrack();
 }
 
 function handleNamedConversation(m) {

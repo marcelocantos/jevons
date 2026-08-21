@@ -1012,6 +1012,22 @@ test('T372 index.html: no second grow-bubble implementation', function () {
     'live path must not remount via renderAgentInspect');
 });
 
+test('applyWireEvent pins to end when scrollFollow is tracking', function () {
+  let pinned = 0;
+  const follow = {
+    tracking: true,
+    shouldPin: function () { return this.tracking; },
+    applyAfterUpdate: function () { pinned++; },
+  };
+  const stream = CW.createStreamJoin({ scrollFollow: follow });
+  stream.applyWireEvent({ type: 'user', message: { content: 'hello from the bottom' } });
+  assert.ok(pinned >= 1, 'tracking ingest pins after each wire event');
+  follow.tracking = false;
+  const before = pinned;
+  stream.applyWireEvent({ type: 'user', message: { content: 'should not jump' } });
+  assert.strictEqual(pinned, before, 'free mode does not pin');
+});
+
 test('inspect hydrate reset then applyWireEvent is the one ingest', function () {
   const stream = CW.createStreamJoin({});
   stream.applyWireEvent({ type: 'user', message: { content: 'old' } });
