@@ -788,6 +788,160 @@ test('T496 final text after tool_use paints into the owner-visible bubble', func
     'bubble carries post-tool final text, got: ' + jb[0]._streamRaw);
 });
 
+// 🎯T504: owner user is a stream barrier. Same stream_id after the owner
+// bubble must mint a NEW assistant below, never grow the pre-user card.
+test('T504 owner user is a stream barrier: post-user text is a new bubble below', function () {
+  const leftover = 'Expected leftover mail…';
+  const owner = 'why did jevons PO start the workers as Fable.';
+  const reply = 'Checking how those workers were minted…';
+  const sid = 'sid-t504-fable';
+  const tape = [
+    { type: 'assistant', stream_id: sid, message: { content: [{ type: 'text', text: leftover }] } },
+    { type: 'user', message: { content: owner } },
+    { type: 'assistant', stream_id: sid, message: { content: [{ type: 'text', text: reply }] } },
+  ];
+  const bubbles = [];
+  const stream = CW.createStreamJoin({
+    addMsg: function (role, text) {
+      const el = { className: 'msg ' + role, _streamRaw: String(text || '') };
+      bubbles.push(el);
+      return el;
+    },
+    requestAnimationFrame: function (fn) { fn(); return 0; },
+  });
+  tape.forEach(function (ev) { stream.applyWireEvent(ev); });
+  const lines = stream.getLines();
+  const kinds = lines.map(function (l) { return l.kind || l.role; });
+  assert.deepStrictEqual(kinds, ['assistant', 'user', 'assistant']);
+  assert.strictEqual(lines[0].text, leftover, 'first bubble stays the leftover');
+  assert.ok(String(lines[0].text).indexOf(reply) < 0,
+    'post-user sentence is not in the first bubble: ' + lines[0].text);
+  assert.ok(!lines[0]._stream, 'owner user seals the pre-user stream');
+  assert.strictEqual(lines[1].text, owner);
+  assert.strictEqual(lines[2].text, reply);
+  const jb = bubbles.filter(function (b) { return b.className.indexOf('jevons') >= 0; });
+  const ub = bubbles.filter(function (b) { return b.className.indexOf('user') >= 0; });
+  assert.strictEqual(ub.length, 1, 'one owner bubble');
+  assert.strictEqual(jb.length, 2, 'two jevons bubbles (below-user is new), got ' + jb.length);
+  assert.ok(String(jb[0]._streamRaw).indexOf(reply) < 0,
+    'painted leftover must not include the reply: ' + jb[0]._streamRaw);
+  assert.ok(String(jb[1]._streamRaw).indexOf(reply) >= 0,
+    'reply paints in the second jevons bubble: ' + jb[1]._streamRaw);
+  // Incremental fold equals displayFromEvents of the same tape (reload).
+  const replayed = CW.displayFromEvents(tape);
+  assert.deepStrictEqual(
+    lines.map(function (l) { return { k: l.kind || l.role, t: l.text, s: !!l._stream }; }),
+    replayed.map(function (l) { return { k: l.kind || l.role, t: l.text, s: !!l._stream }; }),
+    'reload of the interleaved tape agrees with live',
+  );
+});
+
+test('T504 control: no owner user, same stream_id + mid-stream tool is one bubble (T496)', function () {
+  const sid = 'sid-t504-control';
+  const tape = [
+    { type: 'assistant', stream_id: sid, message: { content: [{ type: 'text', text: 'Checking the fleet' }] } },
+    {
+      type: 'assistant', stream_id: sid,
+      message: { content: [{ type: 'tool_use', name: 'jevons_agent_list' }], stop_reason: 'tool_use' },
+    },
+    { type: 'tool_result', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+    { type: 'assistant', stream_id: sid, message: { content: [{ type: 'text', text: 'FINAL-T504 the fleet is healthy.' }] } },
+  ];
+  const fold = CW.displayFromEvents(tape);
+  const asst = fold.filter(function (l) { return l && (l.role === 'assistant' || l.role === 'jevons'); });
+  assert.strictEqual(asst.length, 1, 'control is one assistant, got ' + asst.length);
+  assert.ok(asst[0].text.indexOf('Checking the fleet') >= 0);
+  assert.ok(asst[0].text.indexOf('FINAL-T504') >= 0, 'post-tool text grew the pre-tool bubble');
+  const kinds = fold.map(function (l) { return l.kind || l.role; });
+  assert.deepStrictEqual(kinds, ['assistant', 'turn-slot']);
+  const live = CW.newDisplayFold();
+  for (let i = 0; i < tape.length; i++) {
+    CW.foldDisplayEvent(live, tape[i]);
+    const full = CW.displayFromEvents(tape.slice(0, i + 1));
+    assert.deepStrictEqual(
+      live.out.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+      full.map(function (l) { return { k: l.kind || l.role, n: (l.items || []).length, t: l.text }; }),
+      'T504 control fold prefix ' + i,
+    );
+  }
+});
+
+test('T504 T329 inject is not a barrier and must not seal', function () {
+  const sid = 'sid-t504-inject';
+  const tape = [
+    { type: 'assistant', stream_id: sid, message: { content: [{ type: 'text', text: 'I will read the file.' }] } },
+    {
+      type: 'user',
+      message: {
+        content: '<system-reminder>\nBackground task "call-1" completed (exit code: 0).\n</system-reminder>',
+      },
+    },
+    { type: 'assistant', stream_id: sid, message: { content: [{ type: 'text', text: ' Then edit it.' }] } },
+  ];
+  const lines = CW.displayFromEvents(tape);
+  const asst = lines.filter(function (l) { return l && (l.role === 'assistant' || l.role === 'jevons'); });
+  assert.strictEqual(asst.length, 1, 'inject must not split, got ' + asst.length + ': ' +
+    JSON.stringify(lines.map(function (l) { return l.kind || l.role; })));
+  assert.ok(asst[0].text.indexOf('I will read the file.') >= 0);
+  assert.ok(asst[0].text.indexOf('Then edit it.') >= 0);
+  assert.ok(asst[0]._stream, 'T329 inject must not seal the open stream');
+  const users = lines.filter(function (l) { return l && l.role === 'user'; });
+  assert.strictEqual(users.length, 1);
+  const live = CW.createStreamJoin({});
+  tape.forEach(function (ev) { live.applyWireEvent(ev); });
+  const liveAsst = live.getLines().filter(function (l) {
+    return l && (l.role === 'assistant' || l.role === 'jevons');
+  });
+  assert.strictEqual(liveAsst.length, 1);
+  assert.ok(liveAsst[0]._stream, 'live inject must not seal');
+});
+
+test('T504 sealed visible assistant is a barrier for an older open stream', function () {
+  const tape = [
+    { type: 'assistant', stream_id: 's1', message: { content: [{ type: 'text', text: 'older still streaming' }] } },
+    {
+      type: 'assistant', stream_id: 's2',
+      message: { content: [{ type: 'text', text: 'later turn' }], stop_reason: 'end_turn' },
+    },
+    { type: 'assistant', stream_id: 's1', message: { content: [{ type: 'text', text: ' more older' }] } },
+  ];
+  const lines = CW.displayFromEvents(tape);
+  const asst = lines.filter(function (l) { return l && (l.role === 'assistant' || l.role === 'jevons'); });
+  assert.strictEqual(asst.length, 3, 'must not grow s1 past sealed s2, got ' + asst.length +
+    ' ' + JSON.stringify(asst.map(function (l) { return l.text; })));
+  assert.strictEqual(asst[0].text, 'older still streaming');
+  assert.strictEqual(asst[1].text, 'later turn');
+  assert.strictEqual(asst[2].text, ' more older');
+});
+
+test('T504 leftover appendUser seals so appendAssistant mints below', function () {
+  const leftover = 'Expected leftover mail…';
+  const owner = 'why did jevons PO start the workers as Fable.';
+  const reply = 'Checking how those workers were minted…';
+  const bubbles = [];
+  const stream = CW.createStreamJoin({
+    addMsg: function (role, text) {
+      const el = { className: 'msg ' + role, _streamRaw: String(text || '') };
+      bubbles.push(el);
+      return el;
+    },
+    requestAnimationFrame: function (fn) { fn(); return 0; },
+  });
+  stream.appendAssistant(leftover, 1, { streamId: 'sid-t504-join' });
+  stream.appendUser(owner, 2);
+  stream.appendAssistant(reply, 3, { streamId: 'sid-t504-join' });
+  const lines = stream.getLines();
+  assert.deepStrictEqual(lines.map(function (l) { return l.kind || l.role; }),
+    ['assistant', 'user', 'assistant']);
+  assert.strictEqual(lines[0].text, leftover);
+  assert.ok(String(lines[0].text).indexOf(reply) < 0);
+  assert.strictEqual(lines[2].text, reply);
+  const jb = bubbles.filter(function (b) { return b.className.indexOf('jevons') >= 0; });
+  assert.strictEqual(jb.length, 2, 'leftover join mints a new bubble below the user, got ' + jb.length);
+  assert.ok(String(jb[0]._streamRaw).indexOf(reply) < 0);
+  assert.ok(String(jb[1]._streamRaw).indexOf(reply) >= 0);
+});
+
 test('T372 Grok word-chunks are one assistant bubble (both densities)', function () {
   ['compact', 'comfortable'].forEach(function (density) {
     const dom = fakeDom(density);

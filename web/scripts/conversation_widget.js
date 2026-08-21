@@ -644,6 +644,47 @@
     return st.out;
   }
 
+
+  function isOwnerUserBarrierText(text, CE) {
+    if (text == null || !String(text).trim()) return false;
+    if (CE && CE.isNonBoundaryUserText && CE.isNonBoundaryUserText(text)) return false;
+    return true;
+  }
+
+  function sealOpenStreamFlags(rows) {
+    var out = rows || [];
+    for (var i = out.length - 1; i >= 0; i--) {
+      if (out[i] && out[i]._stream) {
+        delete out[i]._stream;
+        delete out[i]._streamId;
+      }
+    }
+  }
+
+  // Scan backwards for an open assistant to grow (🎯T504).
+  // Turn-slots are not barriers (T496). T329 inject and protocol-control
+  // user rows are not barriers. A real owner user row is a scan barrier,
+  // and so is a sealed visible assistant — do not grow an older open
+  // stream past either.
+  function findGrowAssistantIndex(rows, streamId, CE) {
+    var sid = streamId ? String(streamId) : '';
+    var out = rows || [];
+    for (var i = out.length - 1; i >= 0; i--) {
+      var l = out[i];
+      if (!l) continue;
+      if (l.kind === 'turn-slot' || l.role === 'turn-slot') continue;
+      if (l.role === 'user') {
+        if (CE && CE.isNonBoundaryUserText && CE.isNonBoundaryUserText(l.text)) continue;
+        return -1;
+      }
+      if (l.role !== 'assistant' && l.role !== 'jevons') continue;
+      if (!l._stream) return -1;
+      if (sid && l._streamId && l._streamId !== sid) continue;
+      return i;
+    }
+    return -1;
+  }
+
   // Incremental f (🎯T119.5). fold(prefix) equals displayFromEvents(prefix).
   function foldDisplayEvent(st, event) {
     if (!st) return [];
@@ -665,11 +706,9 @@
     }
     function growAssistant(text, streamId, edge, ts) {
       var sid = streamId ? String(streamId) : '';
-      for (var i = out.length - 1; i >= 0; i--) {
-        var l = out[i];
-        if (!l || (l.role !== 'assistant' && l.role !== 'jevons')) continue;
-        if (!l._stream) continue;
-        if (sid && l._streamId && l._streamId !== sid) continue;
+      var idx = findGrowAssistantIndex(out, sid, CE);
+      if (idx >= 0) {
+        var l = out[idx];
         l.text = edge
           ? (CE && CE.joinAssistantSegments ? CE.joinAssistantSegments(l.text, text) : (l.text + '\n\n' + text))
           : (CE && CE.appendAssistantStream ? CE.appendAssistantStream(l.text, text) : (l.text + text));
@@ -689,6 +728,9 @@
       if (!utext) return out;
       if (CE.isProtocolControlFrameText && CE.isProtocolControlFrameText(utext)) return out;
       closeOpen();
+      // 🎯T504: a real owner user seals open streams so later text cannot
+      // grow the bubble above this row. T329 inject is not a barrier.
+      if (isOwnerUserBarrierText(utext, CE)) sealOpenStreamFlags(out);
       var urow = { role: 'user', text: utext };
       if (ts != null) urow.when = ts;
       if (CE.turnOriginOf) urow.origin = CE.turnOriginOf(event);
@@ -964,14 +1006,22 @@
       }
     }
 
+    function sealJoinOnOwnerUser(text) {
+      if (!isOwnerUserBarrierText(text, loadChatEvents())) return;
+      var ids = Object.keys(byId);
+      for (var i = 0; i < ids.length; i++) sealAssistant(ids[i]);
+      if (openEl && typeof openEl._streamRaw === 'string') {
+        sealAssistant(openEl._streamId || '');
+      }
+      sealOpenStreamFlags(lines);
+    }
+
     function growLine(text, streamId, edge) {
       var sid = streamId ? String(streamId) : '';
-      for (var i = lines.length - 1; i >= 0; i--) {
-        var l = lines[i];
-        if (!l || (l.role !== 'assistant' && l.role !== 'jevons')) continue;
-        if (!l._stream) continue;
-        if (sid && l._streamId && l._streamId !== sid) continue;
-        var CE = loadChatEvents();
+      var CE = loadChatEvents();
+      var gi = findGrowAssistantIndex(lines, sid, CE);
+      if (gi >= 0) {
+        var l = lines[gi];
         l.text = edge
           ? (CE ? CE.joinAssistantSegments(l.text, text) : (l.text + '\n\n' + text))
           : (CE ? CE.appendAssistantStream(l.text, text) : (l.text + text));
@@ -1043,7 +1093,9 @@
       var edge = !!(appendOpts.segmentEdge);
       var CE = loadChatEvents();
       var target = resolveOpen(streamId);
-      if (target) {
+      // 🎯T504: leftover createStreamJoin callers must not grow a bubble
+      // above an owner user even if resolveOpen still finds its handle.
+      if (target && findGrowAssistantIndex(lines, streamId, CE) >= 0) {
         target._streamRaw = edge
           ? (CE ? CE.joinAssistantSegments(target._streamRaw, chunk) : (target._streamRaw + '\n\n' + chunk))
           : (CE ? CE.appendAssistantStream(target._streamRaw, chunk) : (target._streamRaw + chunk));
@@ -1072,6 +1124,9 @@
         ? opts.isDuplicateUser(last, body)
         : !!(last && last.role === 'user' && String(last.text || '').trim() === body.trim());
       if (dup) return null;
+      // 🎯T504: leftover path — seal open streams so resolveOpen cannot
+      // grow the pre-user bubble. T329 inject does not seal.
+      sealJoinOnOwnerUser(body);
       var row = { role: 'user', text: body };
       if (ts != null) row.when = ts;
       if (userOpts.origin) row.origin = userOpts.origin;
@@ -1260,6 +1315,13 @@
       var prev = snapshotDisplay(lines);
       if (event) foldDisplayEvent(fold, event);
       lines = fold.out;
+      if (event && event.type === 'user') {
+        var liveCE = loadChatEvents();
+        var liveText = (liveCE && liveCE.userContentText)
+          ? liveCE.userContentText(event)
+          : '';
+        if (isOwnerUserBarrierText(liveText, liveCE)) sealJoinOnOwnerUser(liveText);
+      }
       syncDisplay(prev, lines);
     }
 

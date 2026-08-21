@@ -12155,9 +12155,12 @@ targets:
     achieved: 2026-08-18
   T504:
     name: Owner chat renders replies after the message that provoked them — a user bubble is a stream barrier
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 3.0
+    achieved: 2026-08-21
+    attestation: 'foldDisplayEvent.growAssistant treats a real owner user as a stream barrier and seals open _stream flags (T329 inject is not a barrier; turn-slots still park per T496). Leftover createStreamJoin appendUser/resolveOpen follows the same rule. Hermetic conversation_widget T504 tapes: Fable interleave kinds [assistant, user, assistant] with the post-user sentence not in the first bubble; T496 control still one bubble; T329 inject does not seal; leftover appendUser mints below; incremental fold equals displayFromEvents. Local master T104. No Ship.'
     acceptance:
     - When the owner sends a message while an overseer turn/stream is open, later assistant text renders in a NEW assistant bubble BELOW that owner bubble — never merged into the previous assistant card above it.
     - Load-bearing site is foldDisplayEvent.growAssistant (applyWireEvent → T119.5 fold), not appendUser. A real owner user event in the fold seals open `_stream` flags and is a scan barrier; applyWireEvent/paintNewDisplayRow then mints a new assistant row below the user. appendUser/clearHandles/resolveOpen is the same rule for leftover createStreamJoin callers — implementing only that path leaves the daily cockpit broken.
@@ -12174,6 +12177,8 @@ targets:
       3) A naive 'any user row is a barrier' breaks T329 (system-reminder / inject nuggets sit between fragments of one turn). The fold must use isNonBoundaryUserText the same way applyLiveDisplayFrame does.
       4) Residual: the Fable answer was produced inside the same Grok ACP turn as the leftover T515 mail (owner send injected into an in-flight prompt). The fold split makes paint chronological; it does not create two model turns. Leftover tokens that arrive after the user send belong in the new below-user bubble. Provider-turn interrupt is not this target.
       Sibling: T119.8 (steps capsule host open-slot state) — same open-scope family, host layer.
+
+      Achieved 2026-08-21: foldDisplayEvent seals owner-user streams and stops the grow scan at that row (and at a sealed visible assistant). Leftover appendUser/clearHandles/resolveOpen same rule. Hermetic T504 conversation_widget tapes green. Journey exception: acceptance names the hermetic fold/applyWireEvent oracle because live ingest and history reload share f. Pure static web (T188 hard-reload).
     tags:
     - visual
     origin: owner
