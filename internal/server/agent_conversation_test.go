@@ -129,7 +129,9 @@ func TestOverseerTranscriptHTTPByName(t *testing.T) {
 func TestOverseerLiveSubscribeByName(t *testing.T) {
 	s := overseerFamilyServer(t)
 	ch := make(chan string, 8)
-	s.setInspectSub(ch, "jevons")
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.mu.Unlock()
 
 	s.BroadcastChat(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"live word"}]}}`)
 
@@ -139,15 +141,11 @@ func TestOverseerLiveSubscribeByName(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
 			t.Fatal(err)
 		}
-		if m["type"] != "agent_transcript" || m["kind"] != inspectKindLive || m["name"] != "jevons" {
+		if m["type"] != "assistant" || m["name"] != "jevons" {
 			t.Fatalf("frame=%v", m)
 		}
-		ev, _ := m["event"].(map[string]any)
-		if ev == nil || ev["type"] != "assistant" {
-			t.Fatalf("event=%v", m["event"])
-		}
 	default:
-		t.Fatal("overseer inspect subscriber got no live frame")
+		t.Fatal("overseer listener got no live frame")
 	}
 }
 

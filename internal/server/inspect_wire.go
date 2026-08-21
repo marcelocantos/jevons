@@ -318,8 +318,7 @@ func (s *Server) writeInspectReplay(ctx context.Context, conn inspectWriter, nam
 	}
 	name = strings.TrimSpace(name)
 	reset, _ := json.Marshal(map[string]any{
-		"type": "agent_transcript",
-		"kind": inspectKindReset,
+		"type": "conversation_reset",
 		"name": name,
 	})
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -332,22 +331,10 @@ func (s *Server) writeInspectReplay(ctx context.Context, conn inspectWriter, nam
 		if echoedOwnerTurnLine(line) {
 			return nil
 		}
-		var ev map[string]any
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			return nil
-		}
-		frame, err := json.Marshal(map[string]any{
-			"type":  "agent_transcript",
-			"kind":  inspectKindLive,
-			"name":  name,
-			"event": ev,
-		})
-		if err != nil {
-			return nil
-		}
+		frame := stampConversationName(line, name)
 		wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		return conn.Write(wctx, websocket.MessageText, frame)
+		return conn.Write(wctx, websocket.MessageText, []byte(frame))
 	}
 	if s.isOverseerAgent(name) {
 		s.mu.RLock()
@@ -594,19 +581,29 @@ func (s *Server) DeliverInspectLive(name string, ev claudia.Event) {
 		return
 	}
 	if event, ok := inspectLiveEvent(ev); ok {
-		payload, err := json.Marshal(map[string]any{
-			"type":  "agent_transcript",
-			"kind":  inspectKindLive,
-			"name":  name,
-			"event": event,
-		})
+		event["name"] = name
+		payload, err := json.Marshal(event)
 		if err == nil {
 			s.fanInspectLive(name, string(payload))
 		}
 	}
-	if ev.IsTerminalStop() {
-		if line, ok := s.marshalAgentTranscriptHistory(name); ok {
-			s.fanInspectLive(name, line)
-		}
+}
+
+// stampConversationName puts the addressee on a chat-wire line so one
+// /ws/chat multiplexes every agent. Missing/invalid JSON is left alone.
+func stampConversationName(line, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.TrimSpace(line) == "" {
+		return line
 	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		return line
+	}
+	m["name"] = name
+	b, err := json.Marshal(m)
+	if err != nil {
+		return line
+	}
+	return string(b)
 }

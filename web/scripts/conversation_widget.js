@@ -168,12 +168,6 @@
     if (!name) {
       return { ok: false, reason: 'no-selection' };
     }
-    var isOv = typeof opts.isOverseer === 'function'
-      ? opts.isOverseer
-      : function (n) { return String(n || '').toLowerCase() === 'jevons'; };
-    if (!opts.allowOverseer && isOv(name, opts.purpose)) {
-      return { ok: false, reason: 'overseer-main-only' };
-    }
     var body = String(text == null ? '' : text).trim();
     if (!body) {
       return { ok: false, reason: 'empty' };

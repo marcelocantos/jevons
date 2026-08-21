@@ -78,12 +78,8 @@ func TestDeliverInspectLiveFansToSubscriber(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
 			t.Fatal(err)
 		}
-		if m["type"] != "agent_transcript" || m["kind"] != inspectKindLive || m["name"] != "worker-a" {
+		if m["type"] != "assistant" || m["name"] != "worker-a" {
 			t.Fatalf("frame=%v", m)
-		}
-		ev, _ := m["event"].(map[string]any)
-		if ev["type"] != "assistant" {
-			t.Fatalf("event=%v", ev)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for inspect live frame")
@@ -100,11 +96,10 @@ func TestDeliverInspectLiveFansToSubscriber(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
 			t.Fatal(err)
 		}
-		ev, _ := m["event"].(map[string]any)
-		msg, _ := ev["message"].(map[string]any)
+		msg, _ := m["message"].(map[string]any)
 		raw, _ := msg["content"].([]any)
 		if len(raw) == 0 {
-			t.Fatalf("expected tool_use live event, got %v", ev)
+			t.Fatalf("expected tool_use live event, got %v", m)
 		}
 		blk, _ := raw[0].(map[string]any)
 		if blk["type"] != "tool_use" {
@@ -181,16 +176,11 @@ func TestWriteInspectReplayResetThenLive(t *testing.T) {
 	if len(buf.frames) < 1 {
 		t.Fatal("want reset frame")
 	}
-	if buf.frames[0]["kind"] != inspectKindReset {
+	if buf.frames[0]["type"] != "conversation_reset" {
 		t.Fatalf("first=%v", buf.frames[0])
 	}
 	if buf.frames[0]["name"] != "jv-missing" {
 		t.Fatalf("name=%v", buf.frames[0]["name"])
-	}
-	for i, f := range buf.frames[1:] {
-		if f["kind"] != inspectKindLive {
-			t.Fatalf("frame %d kind=%v want live", i+1, f["kind"])
-		}
 	}
 }
 

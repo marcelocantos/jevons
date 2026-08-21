@@ -104,6 +104,49 @@ test('paneModel maps turns; empty and error', function () {
   assert.ok(err.error.indexOf('no transcript') >= 0);
 });
 
+test('T533 paneModel tails a 200-user fixture; tool_use in the window still slots', function () {
+  assert.strictEqual(AT.inspectHistoryTurns, 30);
+  assert.strictEqual(AT.inspectHistoryMaxEvents, 400);
+  const events = [];
+  for (let i = 1; i <= 200; i++) {
+    events.push({ type: 'user', message: { content: 'u' + i }, timestamp: i });
+    if (i === 200) {
+      events.push({
+        type: 'assistant',
+        stream_id: 'sid-t533-' + i,
+        message: { content: [{ type: 'tool_use', name: 'Read' }] },
+      });
+    }
+    events.push({
+      type: 'assistant',
+      stream_id: 'sid-t533-' + i,
+      message: { content: [{ type: 'text', text: 'a' + i }], stop_reason: 'end_turn' },
+    });
+  }
+  const m = AT.paneModel('jevons-po', { name: 'jevons-po', events: events });
+  const users = m.lines.filter(function (l) { return l && l.role === 'user'; });
+  assert.ok(users.length <= AT.inspectHistoryTurns,
+    'user bubbles=' + users.length + ' want ≤' + AT.inspectHistoryTurns);
+  const painted = m.lines.filter(function (l) {
+    return l && (l.role === 'user' || l.role === 'assistant' || l.role === 'jevons');
+  });
+  assert.ok(painted.length < 200, 'must not paint 200 bubbles, got ' + painted.length);
+  const kinds = m.lines.map(function (l) { return l.kind || l.role; });
+  assert.ok(kinds.indexOf('turn-slot') >= 0, 'T494 slot in tailed window, got ' + kinds.join(','));
+});
+
+test('T533 paneModel tails turns when events are absent', function () {
+  const turns = [];
+  for (let i = 1; i <= 80; i++) {
+    turns.push({ role: 'user', text: 'u' + i });
+    turns.push({ role: 'assistant', text: 'a' + i });
+  }
+  const m = AT.paneModel('po', { name: 'po', turns: turns });
+  const users = m.lines.filter(function (l) { return l && l.role === 'user'; });
+  assert.ok(users.length <= AT.inspectHistoryTurns, 'user lines=' + users.length);
+  assert.strictEqual(users[0].text, 'u51');
+});
+
 test('paneModel applies events through applyEventTape (turn-slot survives reload)', function () {
   const m = AT.paneModel('jevons-po', {
     name: 'jevons-po',
@@ -169,7 +212,7 @@ test('T208 quiet inspect re-paint does not setRhsBottomTab transcript', function
       /setRhsBottomTab\([\s\S]*?['"]transcript['"]/.test(selectFn[0]),
     'selectAgent must set transcript tab on open inspect');
   // 🎯T209: body updates via agent_transcript wire; no quiet HTTP poll loop.
-  assert.ok(html.indexOf('handleAgentTranscriptWire') >= 0,
+  assert.ok(html.indexOf('handleNamedConversation') >= 0,
     'wire handler re-paints inspect without tab steal');
   assert.ok(!/setInterval\s*\(\s*function\s*\(\s*\)\s*\{\s*if\s*\(\s*selectedAgent\s*\)\s*loadAgentTranscript/.test(html),
     'no setInterval loadAgentTranscript poll while selected');
@@ -191,10 +234,9 @@ test('T209 inspect wire path: subscribe on select, no setInterval poll', functio
   const hideFn = html.match(/function hideAgentInspect\([\s\S]*?\nfunction /);
   assert.ok(hideFn && /unsubscribeAgentInspect/.test(hideFn[0]),
     'hide unsubscribes inspect');
-  assert.ok(html.indexOf("typ === 'agent_transcript'") >= 0 ||
-    html.indexOf('typ === "agent_transcript"') >= 0 ||
-    html.indexOf("=== 'agent_transcript'") >= 0,
-    'handle routes agent_transcript frames');
+  assert.ok(html.indexOf('handleNamedConversation') >= 0 &&
+    html.indexOf('isRootConversationName') >= 0,
+    'handle routes named conversation frames off the overseer pane');
   // No 4s transcript poll interval (product path).
   assert.ok(html.indexOf('agentTranscriptTimer') < 0,
     'agentTranscriptTimer poll removed');
@@ -1211,7 +1253,7 @@ test('T251 sidebarSendRequest targets selected agent send API', function () {
   assert.strictEqual(enc.url, '/api/agents/' + encodeURIComponent('jv-t27.2-config') + '/send');
   assert.strictEqual(AT.sidebarSendRequest(null, 'x').ok, false);
   assert.strictEqual(AT.sidebarSendRequest('att-x', '   ').reason, 'empty');
-  assert.strictEqual(AT.sidebarSendRequest('jevons', 'hi').reason, 'overseer-main-only');
+  assert.strictEqual(AT.sidebarSendRequest('jevons', 'hi').ok, true);
   assert.strictEqual(AT.agentSendPath('po'), '/api/agents/po/send');
   assert.strictEqual(AT.isSidebarDraftEmpty(''), true);
   assert.strictEqual(AT.isSidebarDraftEmpty('  \n'), true);
@@ -1265,7 +1307,7 @@ test('T251 index.html wires sidebar composer DOM + sendSidebarComposer path', fu
 
 test('T275 sidebarSendBlockMessage is loud for every block reason', function () {
   assert.ok(AT.sidebarSendBlockMessage('no-selection').indexOf('selected') >= 0);
-  assert.ok(AT.sidebarSendBlockMessage('overseer-main-only').indexOf('main chat') >= 0);
+
   assert.ok(AT.sidebarSendBlockMessage('empty').indexOf('empty') >= 0);
   assert.ok(AT.sidebarSendBlockMessage('observe-only').indexOf('observe-only') >= 0);
   assert.ok(AT.sidebarSendBlockMessage('').indexOf('silent') >= 0 ||

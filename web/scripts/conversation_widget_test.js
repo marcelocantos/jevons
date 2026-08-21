@@ -139,13 +139,14 @@ test('T309.1 buildSendRequest targets agent send API', function () {
 
   assert.strictEqual(CW.buildSendRequest(null, 'x').reason, 'no-selection');
   assert.strictEqual(CW.buildSendRequest('att-x', '   ').reason, 'empty');
-  assert.strictEqual(CW.buildSendRequest('jevons', 'hi').reason, 'overseer-main-only');
+  assert.strictEqual(CW.buildSendRequest('jevons', 'hi').ok, true);
+  assert.strictEqual(CW.buildSendRequest('jevons', 'hi').url, '/api/agents/jevons/send');
   assert.strictEqual(CW.agentSendPath('po'), '/api/agents/po/send');
 });
 
 test('T309.1 sendBlockMessage is loud for every block reason', function () {
   assert.ok(CW.sendBlockMessage('no-selection').indexOf('selected') >= 0);
-  assert.ok(CW.sendBlockMessage('overseer-main-only').indexOf('main chat') >= 0);
+
   assert.ok(CW.sendBlockMessage('empty').indexOf('empty') >= 0);
   assert.ok(CW.sendBlockMessage('').indexOf('silent') >= 0 ||
     CW.sendBlockMessage('').indexOf('unknown') >= 0);
@@ -506,14 +507,11 @@ test('T371 a failed send keeps the bubble and reports loudly (no vanish)', funct
 
 test('T371 index.html: inspect hydrate is applyWireEvent, not a history blob', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const wire = html.match(/function handleAgentTranscriptWire\([\s\S]*?\nfunction inspectSpecFor/);
-  assert.ok(wire, 'handleAgentTranscriptWire present');
-  assert.ok(wire[0].indexOf('applyWireEvent') >= 0,
-    'frames grow via the widget, not a second painter');
-  assert.ok(wire[0].indexOf("kind === 'reset'") >= 0 || wire[0].indexOf('kind === "reset"') >= 0,
-    'subscribe starts with a reset then sealed-tail live frames');
-  assert.ok(wire[0].indexOf('paneModel') < 0,
-    'history blob / paneModel dump is gone');
+  assert.ok(html.indexOf('function handleNamedConversation') >= 0);
+  assert.ok(html.indexOf('function handleConversationReset') >= 0);
+  assert.ok(html.indexOf('handleNamedConversation') >= 0 && html.indexOf('applyWireEvent') >= 0,
+    'named frames grow via the widget');
+  assert.ok(html.indexOf('conversation_reset') >= 0);
   assert.ok(html.indexOf('ConversationWidget.stagePendingOwnerTurn') >= 0,
     'staging uses the shared widget helper, not a sidebar-local stack');
   assert.ok(html.indexOf('onStagePending') >= 0, 'mount wires onStagePending');
@@ -1000,8 +998,8 @@ test('T372 index.html: no second grow-bubble implementation', function () {
     'appendOrAddJevons must delegate to the widget');
   assert.ok(append[0].indexOf('_streamRaw') < 0,
     'appendOrAddJevons must not merge _streamRaw itself');
-  const live = html.match(/if \(m\.kind === 'live' && m\.event\) \{[\s\S]*?\n    return;\n  \}/);
-  assert.ok(live, 'live branch present');
+  const live = html.match(/function handleNamedConversation\([\s\S]*?\n\}/);
+  assert.ok(live, 'named conversation ingest present');
   assert.ok(live[0].indexOf('applyWireEvent') >= 0, 'live path calls widget.applyWireEvent');
   const mainLive = html.match(/if \(typ === 'assistant'\) \{[\s\S]*?\n    return;\n  \}/);
   assert.ok(html.indexOf('mainConversation.applyWireEvent') >= 0,

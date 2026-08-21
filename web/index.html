@@ -3171,10 +3171,14 @@ function handle(m) {
     return;
   }
 
-  // 🎯T209: fleet inspect multiplex on /ws/chat (same wire class as main chat).
-  // Never paint into #messages — RHS pane only (T124 residual).
-  if (typ === 'agent_transcript') {
-    handleAgentTranscriptWire(m);
+  if (typ === 'conversation_reset') {
+    handleConversationReset(m);
+    return;
+  }
+  // Named non-root frames are the selected agent's conversation on the
+  // one /ws/chat — never paint them into the overseer pane.
+  if (m.name && !isRootConversationName(m.name)) {
+    handleNamedConversation(m);
     return;
   }
 
@@ -8522,7 +8526,15 @@ function submitWireText(t, opts) {
   }
   let ok = false;
   try {
-    ok = !!transport.send(t);
+    const dest = (typeof AgentTranscript !== 'undefined' && AgentTranscript.overseerName)
+      ? AgentTranscript.overseerName()
+      : 'jevons';
+    fetch('/api/agents/' + encodeURIComponent(dest) + '/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: t, origin: 'owner' }),
+    }).catch(function () { /* pending stage is the retry */ });
+    ok = true;
   } catch (_) {
     ok = false;
   }
@@ -10340,41 +10352,47 @@ function resubscribeAgentInspect() {
 // 🎯T372: live frames grow bubbles on the widget — they do not remount
 // via copyInspectLines / renderAgentInspect (T479: that drop of _stream
 // minted one bubble per Grok word).
-function handleAgentTranscriptWire(m) {
-  if (!m || !selectedAgent || m.name !== selectedAgent) return;
-  if (m.kind === 'reset') {
-    if (inspectConversation && typeof inspectConversation.reset === 'function') {
-      inspectConversation.reset();
-    }
-    _agentInspectLines = [];
-    _agentInspectFp = '';
-    if (agentInspectName) agentInspectName.textContent = selectedAgent || '';
-    return;
+function isRootConversationName(name) {
+  const n = String(name || '').trim();
+  if (!n) return true;
+  if (typeof AgentTranscript !== 'undefined' && AgentTranscript.isOverseer) {
+    return !!AgentTranscript.isOverseer(n);
   }
-  if (m.kind === 'live' && m.event) {
-    if (inspectConversation && typeof inspectConversation.applyWireEvent === 'function') {
-      inspectConversation.applyWireEvent(m.event);
-      _agentInspectLines = inspectConversation.getLines();
-    }
-    // 🎯T252: terminal assistant stop on aside ⇒ owner attention (user's turn).
-    const terminal = typeof AgentTranscript !== 'undefined' &&
-        AgentTranscript.liveFrameSignalsOwnerAttention &&
-        AgentTranscript.liveFrameSignalsOwnerAttention(m.event);
-    if (terminal) {
-      _agentInspectWorking = false;
-    }
-    if (m.event && m.event.type === 'user') {
-      const acked = ConversationWidget.ackPendingOwnerTurns(
-        _sidebarPending, selectedAgent, _agentInspectLines || []);
-      _sidebarPending = acked.state;
-    }
-    if (inspectConversation && inspectConversation.setWorking) {
-      inspectConversation.setWorking(!!_agentInspectWorking && !terminal);
-    }
-    if (terminal) {
-      markAsideNeedsAttention(m.name || selectedAgent);
-    }
-    return;
+  return n.toLowerCase() === 'jevons';
+}
+
+function handleConversationReset(m) {
+  if (!m || !selectedAgent || m.name !== selectedAgent) return;
+  if (inspectConversation && typeof inspectConversation.reset === 'function') {
+    inspectConversation.reset();
+  }
+  _agentInspectLines = [];
+  _agentInspectFp = '';
+  if (agentInspectName) agentInspectName.textContent = selectedAgent || '';
+}
+
+function handleNamedConversation(m) {
+  if (!m || !selectedAgent || m.name !== selectedAgent) return;
+  if (inspectConversation && typeof inspectConversation.applyWireEvent === 'function') {
+    inspectConversation.applyWireEvent(m);
+    _agentInspectLines = inspectConversation.getLines();
+  }
+  const terminal = typeof AgentTranscript !== 'undefined' &&
+      AgentTranscript.liveFrameSignalsOwnerAttention &&
+      AgentTranscript.liveFrameSignalsOwnerAttention(m);
+  if (terminal) {
+    _agentInspectWorking = false;
+  }
+  if (m.type === 'user') {
+    const acked = ConversationWidget.ackPendingOwnerTurns(
+      _sidebarPending, selectedAgent, _agentInspectLines || []);
+    _sidebarPending = acked.state;
+  }
+  if (inspectConversation && inspectConversation.setWorking) {
+    inspectConversation.setWorking(!!_agentInspectWorking && !terminal);
+  }
+  if (terminal) {
+    markAsideNeedsAttention(m.name || selectedAgent);
   }
 }
 

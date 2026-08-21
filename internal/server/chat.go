@@ -1111,10 +1111,10 @@ func (s *Server) handleChatControlFrame(ctx context.Context, conn *websocket.Con
 		}
 		s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
 		return true
-	case "inspect_subscribe", "inspect_unsubscribe":
+	case "inspect_subscribe", "inspect_unsubscribe", "subscribe", "unsubscribe":
 		// 🎯T209: RHS agent inspect multiplex on /ws/chat.
 		name := strings.TrimSpace(ctl.Name)
-		if ctl.Type == "inspect_unsubscribe" || name == "" {
+		if ctl.Type == "inspect_unsubscribe" || ctl.Type == "unsubscribe" || name == "" {
 			s.setInspectSub(ch, "")
 			slog.Info("chat: inspect unsubscribe")
 			return true
@@ -1487,11 +1487,7 @@ func (s *Server) persistChatLine(line string) {
 
 func (s *Server) BroadcastChat(line string) {
 	s.persistChatLine(line)
-	s.broadcastChatLive(line)
-	// 🎯T309.2: the same owner-visible line is also the overseer's live frame
-	// on the agent-addressed family, so inspect_subscribe works by name for the
-	// overseer exactly as it does for fleet agents.
-	s.fanOverseerInspectLive(line)
+	s.broadcastChatLive(stampConversationName(line, s.overseerAgentName()))
 }
 
 // broadcastChatLive fans a line out to connected clients WITHOUT
