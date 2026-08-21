@@ -279,9 +279,9 @@ before hard policy.
 |-----------|--------|-------------------|------------------|
 | Fleet CEO / interruptible root | Default daily harness (today: Grok) | Swap mid-flight without reattach story | Continuity + owner chat path |
 | Large multi-file code implement | Strong code model (Claude / GPT pro-max class as available) | Weak/cheap model on hard refactors | Quality bar T31 |
-| Hermetic oracle / greps / mechanical | Cheapest capable | Flagship models | Cost hygiene |
+| Hermetic oracle / greps / mechanical | Fast-cheap class (`grok-build` / `gpt-5.3-codex-spark`) | Flagship models | Cost hygiene (🎯T325.2.1) |
 | Design map / doctrine prose | Mid or flagship with long context | — | Coherence over thrash |
-| Sentinel / ops classify | Small/fast if policy pure; else mid | Flagship monologue | Bounded cycle |
+| Sentinel / ops classify | Fast-cheap class (same peers) | Flagship monologue | Bounded cycle (🎯T325.2.1) |
 | Journeys / live Grok path | Provider under test | Cross-provider flakiness | Oracle honesty |
 | Ideation / opportunity cost | Mid + tools (mnemo, calendar later) | Permanent ideation agent | Episodic triage |
 
@@ -302,8 +302,15 @@ table and not a leftover `~/.jevons/llm-portfolio.json`. The start
 result cites which knob won (`config` vs `explicit` vs leftover file).
 The compiled seed still prefers Claude for `code_implement` /
 `design_prose`; that preference is a named loser, not the mint selector.
-Never mid-flight reassign. Residual: live vendor quotas / billing APIs;
-owner-ratified prices; full marketplace OS.
+Never mid-flight reassign. **Fast-cheap pin (🎯T325.2.1):** `mechanical` /
+`ops_classify` (and nudge/ack/small-edit aliases) omit-`model` mints pin
+`gpt-5.3-codex-spark` on Codex or `grok-build` on Grok automatically.
+Explicit `model=` still wins. Spark is not minted onto a red Codex weekly
+(T390.1.5). A prompt over the model's context window (Spark 128k;
+`grok-build` 256k) escalates to the provider frontier, cited on the start
+note — not a silent downgrade of overseer/CEO/implementation turns.
+Residual: live vendor quotas / billing APIs; owner-ratified prices; full
+marketplace OS. Whether each CLI actually serves its fast model is class-3.
 
 ---
 

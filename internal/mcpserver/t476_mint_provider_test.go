@@ -120,7 +120,7 @@ func TestStartResultCitesProviderKnob(t *testing.T) {
 		Portfolio:         cost.RouteDecision{Provider: cost.HarnessClaude, TaskType: cost.TaskCodeImplement},
 		PortfolioFromFile: true,
 	})
-	msg := formatAgentStartResult("probe", "/tmp/w", "jevons-po", "work", "", "grok", "sess", pick.Cite(), "")
+	msg := formatAgentStartResult("probe", "/tmp/w", "jevons-po", "work", "", "grok", "", "sess", pick.Cite(), "")
 	if !strings.Contains(msg, "provider: grok") {
 		t.Fatalf("missing provider field: %q", msg)
 	}

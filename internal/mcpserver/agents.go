@@ -59,7 +59,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
 			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Empty = keep stored provider on resume; on mint follow config.yaml / daemon default (🎯T476). The start result cites which knob won (explicit vs config vs leftover portfolio file). 🎯T148.")),
-			mcp.WithString("task_type", mcp.Description("LLM portfolio task class (🎯T325.2): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. Recorded for capacity tables and loser-knob citation; omitted provider on mint follows config.yaml (🎯T476), not this class. Empty = derive from purpose (work→code_implement, aside→ideation, overseer→ceo).")),
+			mcp.WithString("task_type", mcp.Description("LLM portfolio task class (🎯T325.2 / T325.2.1): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. mechanical/ops_classify (and nudge/ack/small_edit aliases) auto-pin a fast-cheap model (Codex Spark or Grok grok-build) when model= is omitted. Recorded for capacity tables and loser-knob citation; omitted provider on mint follows config.yaml (🎯T476), not this class. Empty = derive from purpose (work→code_implement, aside→ideation, overseer→ceo).")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
@@ -447,7 +447,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	s.logLifecycle(compAgentLifecycle, "start", "ok", life)
 
 	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), def.TargetID,
-		string(def.Provider), sessionDisplay(def.SessionID), routeNote, prompt)
+		string(def.Provider), def.Model, sessionDisplay(def.SessionID), routeNote, prompt)
 	msg += briefNote
 	// 🎯T379: the agent has just inherited the provider's user-scoped MCP
 	// list. Any entry pointing at a port nothing serves will sit in "still
@@ -459,10 +459,13 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 
 // formatAgentStartResult is the owner-visible jevons_agent_start text.
 // 🎯T476: routeNote must already cite which knob selected the provider.
-func formatAgentStartResult(name, workdir, parent, purpose, targetID, provider, session, routeNote, prompt string) string {
+func formatAgentStartResult(name, workdir, parent, purpose, targetID, provider, model, session, routeNote, prompt string) string {
 	msg := fmt.Sprintf(
 		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, provider: %s",
 		name, session, workdir, parent, purpose, provider)
+	if strings.TrimSpace(model) != "" {
+		msg += fmt.Sprintf(", model: %s", model)
+	}
 	if targetID != "" {
 		msg += fmt.Sprintf(", target_id: %s", targetID)
 	}
@@ -518,11 +521,32 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	def.Provider = claudia.Provider(pick.Provider)
 	routeNote := pick.Cite()
 
-	// 🎯T324: session-truth model binding for this Launch/SessionID.
-	// Explicit pin from the tool arg wins; empty pin on mint (or empty
-	// stored model on resume) gets the provider default so cold Grok
-	// agents expose a condensable id, not a bare mark forever.
-	if pin := strings.TrimSpace(model); pin != "" {
+	// 🎯T324 + 🎯T325.2.1: session-truth model binding for this Launch.
+	// Explicit model= wins (T476). Fast-cheap task types auto-pin Spark /
+	// grok-build for the picked provider. Empty pin on other mints gets
+	// the provider default so cold Grok agents expose a condensable id.
+	storedModel := ""
+	if def != nil {
+		storedModel = def.Model
+	}
+	mp := cost.PickMintModel(cost.MintModelArgs{
+		ModelArg:      model,
+		Existed:       existed,
+		StoredModel:   storedModel,
+		Provider:      pick.Provider,
+		TaskType:      pick.TaskType,
+		PromptTokens:  cost.EstimatePromptTokens(prompt),
+		CodexEligible: s.providerDestEligible(cost.HarnessCodex),
+		Portfolio:     s.effectivePortfolio(),
+	})
+	if cite := mp.Cite(); cite != "" {
+		if routeNote != "" {
+			routeNote += ", " + cite
+		} else {
+			routeNote = cite
+		}
+	}
+	if pin := strings.TrimSpace(mp.Model); pin != "" {
 		def.Model = pin
 	} else if !existed || strings.TrimSpace(def.Model) == "" {
 		def.Model = cli.BindSessionModel("", def.Provider)

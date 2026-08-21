@@ -24,13 +24,35 @@ import (
 
 // Task-type identifiers (seed from docs/design/life-and-work-org-map.md §5.2).
 const (
-	TaskCEO            = "ceo"             // fleet CEO / interruptible root
-	TaskCodeImplement  = "code_implement"  // large multi-file code implement
-	TaskMechanical     = "mechanical"      // hermetic oracle / greps / mechanical
-	TaskDesignProse    = "design_prose"    // design map / doctrine prose
-	TaskOpsClassify    = "ops_classify"    // sentinel / ops classify
-	TaskJourneyGrok    = "journey_grok"    // journeys / live Grok path
-	TaskIdeation       = "ideation"        // ideation / opportunity cost
+	TaskCEO           = "ceo"            // fleet CEO / interruptible root
+	TaskCodeImplement = "code_implement" // large multi-file code implement
+	TaskMechanical    = "mechanical"     // hermetic oracle / greps / mechanical
+	TaskDesignProse   = "design_prose"   // design map / doctrine prose
+	TaskOpsClassify   = "ops_classify"   // sentinel / ops classify
+	TaskJourneyGrok   = "journey_grok"   // journeys / live Grok path
+	TaskIdeation      = "ideation"       // ideation / opportunity cost
+)
+
+// Model class identifiers (🎯T325.2.1).
+const (
+	// ClassFastCheap is Spark-class: short-context / high-iteration work.
+	// Implementation, long-context, and overseer-CEO turns are not in this class.
+	ClassFastCheap = "fast_cheap"
+)
+
+// Fast-cheap model ids, verified live 2026-08-21 — do not invent slugs.
+const (
+	// ModelCodexSpark is OpenAI Codex Spark (developers.openai.com/codex/models).
+	// 128k context, text-only research preview.
+	ModelCodexSpark   = "gpt-5.3-codex-spark"
+	ContextCodexSpark = 128_000
+	// ModelGrokFast is the Grok CLI fast-tier peer. Live `grok models` lists
+	// only grok-4.6 / grok-4.5; grok-build is the CLI's documented fast coding
+	// id (`/model grok-build`, fork_secondary_model) matching xAI grok-build-0.1
+	// (256k) at docs.x.ai/docs/models. grok-code-fast-1 is an API alias of that
+	// same model, not a Grok CLI catalog entry.
+	ModelGrokFast   = "grok-build"
+	ContextGrokFast = 256_000
 )
 
 // Harness provider ids (claudia backends). GPT class maps to "codex".
@@ -47,8 +69,13 @@ type TaskRoute struct {
 	// Secondary is fallback when Prefer is at soft cap or empty.
 	Secondary []string `json:"secondary,omitempty"`
 	// Model is an optional preferred model pin for this task type
-	// (empty = leave to provider default / caller pin).
+	// (empty = leave to provider default / caller pin). A per-provider
+	// Models entry wins for the picked harness.
 	Model string `json:"model,omitempty"`
+	// Models maps harness provider id → model pin (🎯T325.2.1).
+	Models map[string]string `json:"models,omitempty"`
+	// Class is an optional model-class tag (e.g. ClassFastCheap).
+	Class string `json:"class,omitempty"`
 }
 
 // Portfolio is the multi-provider load/token routing seed.
@@ -100,20 +127,30 @@ func DefaultPortfolio() *Portfolio {
 				Prefer:    []string{HarnessClaude, HarnessCodex},
 				Secondary: []string{HarnessGrok},
 			},
-			// Cheapest capable for mechanical work.
+			// Fast-cheap (🎯T325.2.1): Spark + Grok fast peer; not flagship.
 			TaskMechanical: {
 				Prefer:    []string{HarnessGrok},
 				Secondary: []string{HarnessClaude, HarnessCodex},
+				Class:     ClassFastCheap,
+				Models: map[string]string{
+					HarnessGrok:  ModelGrokFast,
+					HarnessCodex: ModelCodexSpark,
+				},
 			},
 			// Coherence over thrash for design/doctrine.
 			TaskDesignProse: {
 				Prefer:    []string{HarnessClaude, HarnessGrok},
 				Secondary: []string{HarnessCodex},
 			},
-			// Bounded ops: small/fast when pure policy.
+			// Bounded ops: fast-cheap class (nudge / ack / classify).
 			TaskOpsClassify: {
 				Prefer:    []string{HarnessGrok},
 				Secondary: []string{HarnessClaude},
+				Class:     ClassFastCheap,
+				Models: map[string]string{
+					HarnessGrok:  ModelGrokFast,
+					HarnessCodex: ModelCodexSpark,
+				},
 			},
 			// Oracle honesty: provider under test (Grok path).
 			TaskJourneyGrok: {
@@ -138,7 +175,8 @@ func NormalizeTaskType(raw string) string {
 	case TaskCodeImplement, "", "work", "implement", "build", "code",
 		"code-implement", "multi_file", "refactor":
 		return TaskCodeImplement
-	case TaskMechanical, "oracle", "grep", "hermetic", "mechanical_oracle":
+	case TaskMechanical, "oracle", "grep", "hermetic", "mechanical_oracle",
+		"nudge", "ack", "small_edit", "small-edit", "targeted_edit", "targeted-edit":
 		return TaskMechanical
 	case TaskDesignProse, "design", "doctrine", "prose", "design_map":
 		return TaskDesignProse
@@ -243,7 +281,7 @@ func (p *Portfolio) Route(taskType string, load LoadCounts) RouteDecision {
 			}
 			return RouteDecision{
 				Provider: prov,
-				Model:    strings.TrimSpace(route.Model),
+				Model:    route.modelFor(prov),
 				TaskType: tt,
 				Reason:   reason,
 				CapHit:   capHit,
@@ -260,7 +298,7 @@ func (p *Portfolio) Route(taskType string, load LoadCounts) RouteDecision {
 		if !p.atCap(prov, load) {
 			return RouteDecision{
 				Provider: prov,
-				Model:    strings.TrimSpace(route.Model),
+				Model:    route.modelFor(prov),
 				TaskType: tt,
 				Reason:   "soft_cap_spread",
 				CapHit:   true,
@@ -287,7 +325,7 @@ func (p *Portfolio) Route(taskType string, load LoadCounts) RouteDecision {
 	if best != "" {
 		return RouteDecision{
 			Provider: best,
-			Model:    strings.TrimSpace(route.Model),
+			Model:    route.modelFor(best),
 			TaskType: tt,
 			Reason:   "soft_cap_spread",
 			CapHit:   true,
@@ -297,10 +335,75 @@ func (p *Portfolio) Route(taskType string, load LoadCounts) RouteDecision {
 	// 4) Default.
 	return RouteDecision{
 		Provider: defProv,
-		Model:    strings.TrimSpace(route.Model),
+		Model:    route.modelFor(defProv),
 		TaskType: tt,
 		Reason:   "default",
 	}
+}
+
+func (r TaskRoute) modelFor(provider string) string {
+	p := strings.ToLower(strings.TrimSpace(provider))
+	if r.Models != nil {
+		if m := strings.TrimSpace(r.Models[p]); m != "" {
+			return m
+		}
+	}
+	return strings.TrimSpace(r.Model)
+}
+
+// IsFastCheapTask reports whether the (normalized) task type is in the
+// Spark-class set: mechanical, ops_classify, and their aliases.
+func IsFastCheapTask(taskType string) bool {
+	switch NormalizeTaskType(taskType) {
+	case TaskMechanical, TaskOpsClassify:
+		return true
+	default:
+		return false
+	}
+}
+
+// FastCheapPeer is the compiled fast-cheap model for a harness, empty
+// when that provider has no Spark-class peer (Claude has none).
+func FastCheapPeer(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case HarnessGrok:
+		return ModelGrokFast
+	case HarnessCodex:
+		return ModelCodexSpark
+	default:
+		return ""
+	}
+}
+
+// ModelContextWindow is the hard ineligibility ceiling in tokens for a
+// known fast-cheap (or alias) model. 0 means unknown — not a hard block.
+func ModelContextWindow(model string) int {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case ModelCodexSpark:
+		return ContextCodexSpark
+	case ModelGrokFast, "grok-build-0.1", "grok-code-fast", "grok-code-fast-1":
+		return ContextGrokFast
+	default:
+		return 0
+	}
+}
+
+// FastCheapModel resolves the pin for a fast-cheap task on provider.
+// A portfolio Models/Model entry for that harness wins; else the compiled peer.
+func FastCheapModel(p *Portfolio, taskType, provider string) string {
+	if !IsFastCheapTask(taskType) {
+		return ""
+	}
+	prov := strings.ToLower(strings.TrimSpace(provider))
+	tt := NormalizeTaskType(taskType)
+	if p != nil && p.Routes != nil {
+		if r, ok := p.Routes[tt]; ok {
+			if m := r.modelFor(prov); m != "" {
+				return m
+			}
+		}
+	}
+	return FastCheapPeer(prov)
 }
 
 // MergeSoftCaps returns a copy of p with soft caps overlaid from overrides
@@ -341,11 +444,19 @@ func (p *Portfolio) clone() *Portfolio {
 		SoftCaps:        make(map[string]int, len(p.SoftCaps)),
 	}
 	for k, v := range p.Routes {
-		out.Routes[k] = TaskRoute{
+		copied := TaskRoute{
 			Prefer:    append([]string(nil), v.Prefer...),
 			Secondary: append([]string(nil), v.Secondary...),
 			Model:     v.Model,
+			Class:     v.Class,
 		}
+		if len(v.Models) > 0 {
+			copied.Models = make(map[string]string, len(v.Models))
+			for pk, pm := range v.Models {
+				copied.Models[pk] = pm
+			}
+		}
+		out.Routes[k] = copied
 	}
 	for k, v := range p.SoftCaps {
 		out.SoftCaps[k] = v

@@ -129,6 +129,12 @@ func TestNormalizeTaskTypeAndPurpose(t *testing.T) {
 	if TaskTypeFromPurpose("work") != TaskCodeImplement {
 		t.Fatal("purpose work")
 	}
+	if NormalizeTaskType("nudge") != TaskMechanical {
+		t.Fatal("nudge alias")
+	}
+	if NormalizeTaskType("ack") != TaskMechanical {
+		t.Fatal("ack alias")
+	}
 }
 
 func TestLoadPortfolioFileMissingAndMalformed(t *testing.T) {
