@@ -481,30 +481,6 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 	})
 }
 
-// providerDestEligible is true when provider may receive omit-model
-// fast-cheap pins (🎯T390.1.5). No plan feed, or a dest the feed does
-// not publish, is not proven red.
-func (s *Server) providerDestEligible(provider string) bool {
-	prov := strings.ToLower(strings.TrimSpace(provider))
-	if prov == "" {
-		return true
-	}
-	_, cands, now, th, ok := s.planPolicyInputs()
-	if !ok || len(cands) == 0 {
-		return true
-	}
-	for _, c := range cands {
-		p := strings.ToLower(strings.TrimSpace(c.Provider))
-		if p == "" {
-			p = strings.ToLower(strings.TrimSpace(c.Backend.Provider))
-		}
-		if p == prov {
-			return planusage.DestEligible(c.Backend, now, th)
-		}
-	}
-	return true
-}
-
 func (s *Server) planPolicyInputs() (planusage.Snapshot, []planusage.DestCand, time.Time, planusage.Thresholds, bool) {
 	th := planusage.DefaultThresholds()
 	now := time.Now()
