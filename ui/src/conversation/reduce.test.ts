@@ -44,8 +44,55 @@ describe('applyConversationEvent', () => {
       v: 1, ch: 'transcript:jevons', t: 'frame', body: { id: 'new' },
     });
     s = applyConversationEvent(s, {
-      v: 1, ch: 'transcript:jevons', t: 'page', body: { lines: [{ id: 'old' }] },
+      v: 1, ch: 'transcript:jevons', t: 'meta', body: { start: 20, older: 20, total: 21 },
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'page',
+      body: { lines: [{ id: 'old' }], start: 10, older: 10, total: 21 },
     });
     expect(s.frames.map((f) => (f as { id: string }).id)).toEqual(['old', 'new']);
+    expect(s.meta?.start).toBe(10);
+    expect(s.meta?.older).toBe(10);
+  });
+
+  it('two pages do not duplicate and meta.start advances', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame', body: { id: 'tail' },
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'meta', body: { start: 20, older: 20, total: 22 },
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'page',
+      body: { lines: [{ id: 'mid' }], start: 10, older: 10, total: 22 },
+    });
+    const afterFirst = s.frames.map((f) => (f as { id: string }).id);
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'page',
+      body: { lines: [{ id: 'mid' }], start: 10, older: 10, total: 22 },
+    });
+    expect(s.frames.map((f) => (f as { id: string }).id)).toEqual(afterFirst);
+    expect(s.meta?.start).toBe(10);
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'page',
+      body: { lines: [{ id: 'head' }], start: 0, older: 0, total: 22 },
+    });
+    expect(s.frames.map((f) => (f as { id: string }).id)).toEqual(['head', 'mid', 'tail']);
+    expect(s.meta?.start).toBe(0);
+    expect(s.meta?.older).toBe(0);
+  });
+
+  it('empty page lines clear older so paging stops', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'meta', body: { start: 5, older: 5, total: 5 },
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'page',
+      body: { lines: [], start: 0, total: 5 },
+    });
+    expect(s.meta?.older).toBe(0);
+    expect(s.frames).toHaveLength(0);
   });
 });

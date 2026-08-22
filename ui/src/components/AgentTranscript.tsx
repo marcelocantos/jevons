@@ -5,6 +5,7 @@ import { useRef, useEffect, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ConversationMeta } from '../conversation/useConversation';
 import { clipClassName, shouldClip } from '../conversation/clip';
+import { shouldRequestPage } from '../conversation/page';
 
 function frameText(frame: unknown): string {
   if (!frame || typeof frame !== 'object') return '';
@@ -44,6 +45,8 @@ export function AgentTranscript(props: {
   const parentRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
   const pinnedHydrate = useRef(false);
+  const pagingRef = useRef(false);
+  const pageStartRef = useRef(props.meta?.start);
   const count = props.frames.length;
   const virtualizer = useVirtualizer({
     count,
@@ -55,6 +58,7 @@ export function AgentTranscript(props: {
   useEffect(() => {
     pinnedHydrate.current = false;
     followRef.current = true;
+    pagingRef.current = false;
   }, [props.name]);
 
   useEffect(() => {
@@ -72,16 +76,32 @@ export function AgentTranscript(props: {
   }, [props.ready, count, virtualizer]);
 
   useEffect(() => {
+    if (pageStartRef.current !== props.meta?.start) {
+      pageStartRef.current = props.meta?.start;
+      pagingRef.current = false;
+    }
+  }, [props.meta?.start]);
+
+  useEffect(() => {
     const el = parentRef.current;
-    if (!el || !props.onPageOlder || !props.meta?.older) return;
+    if (!el || !props.onPageOlder) return;
     const onScroll = () => {
       const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       followRef.current = fromBottom < 80;
-      if (el.scrollTop < 48) props.onPageOlder?.();
+      if (
+        shouldRequestPage({
+          scrollTop: el.scrollTop,
+          older: props.meta?.older,
+          inFlight: pagingRef.current,
+        })
+      ) {
+        pagingRef.current = true;
+        props.onPageOlder?.();
+      }
     };
     el.addEventListener('scroll', onScroll);
     return () => el.removeEventListener('scroll', onScroll);
-  }, [props.meta?.older, props.onPageOlder]);
+  }, [props.meta?.older, props.meta?.start, props.onPageOlder]);
 
   return (
     <div className="agent-transcript" ref={parentRef}>

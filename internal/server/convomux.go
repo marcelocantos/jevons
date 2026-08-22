@@ -322,6 +322,18 @@ func (s *Server) writeMuxReplay(ctx context.Context, conn muxConn, name string) 
 	return nil
 }
 
+func muxPageBody(start, total int, lines []json.RawMessage) map[string]any {
+	if lines == nil {
+		lines = []json.RawMessage{}
+	}
+	older := start
+	if len(lines) == 0 {
+		older = 0
+		start = 0
+	}
+	return map[string]any{"start": start, "older": older, "total": total, "lines": lines}
+}
+
 func (s *Server) writeMuxPage(ctx context.Context, conn muxConn, name string, end, limit int) {
 	if limit <= 0 || limit > 2000 {
 		limit = 200
@@ -332,7 +344,7 @@ func (s *Server) writeMuxPage(ctx context.Context, conn muxConn, name string, en
 		clog := s.chatLog
 		s.mu.RUnlock()
 		if clog == nil {
-			s.muxWrite(ctx, conn, ch, "page", map[string]any{"start": 0, "total": 0, "lines": []any{}})
+			s.muxWrite(ctx, conn, ch, "page", muxPageBody(0, 0, nil))
 			return
 		}
 		lines, total, err := clog.ReadRange(end-limit, end)
@@ -347,19 +359,17 @@ func (s *Server) writeMuxPage(ctx context.Context, conn muxConn, name string, en
 			}
 			out = append(out, json.RawMessage(stampConversationName(ln, name)))
 		}
-		s.muxWrite(ctx, conn, ch, "page", map[string]any{
-			"start": end - len(lines), "total": total, "lines": out,
-		})
+		s.muxWrite(ctx, conn, ch, "page", muxPageBody(end-len(lines), total, out))
 		return
 	}
 	j := s.agentJournalsFor()
 	if j == nil {
-		s.muxWrite(ctx, conn, ch, "page", map[string]any{"start": 0, "total": 0, "lines": []any{}})
+		s.muxWrite(ctx, conn, ch, "page", muxPageBody(0, 0, nil))
 		return
 	}
 	l := j.logFor(name)
 	if l == nil {
-		s.muxWrite(ctx, conn, ch, "page", map[string]any{"start": 0, "total": 0, "lines": []any{}})
+		s.muxWrite(ctx, conn, ch, "page", muxPageBody(0, 0, nil))
 		return
 	}
 	lines, total, err := l.ReadRange(end-limit, end)
@@ -374,7 +384,5 @@ func (s *Server) writeMuxPage(ctx context.Context, conn muxConn, name string, en
 		}
 		out = append(out, json.RawMessage(stampConversationName(ln, name)))
 	}
-	s.muxWrite(ctx, conn, ch, "page", map[string]any{
-		"start": end - len(lines), "total": total, "lines": out,
-	})
+	s.muxWrite(ctx, conn, ch, "page", muxPageBody(end-len(lines), total, out))
 }

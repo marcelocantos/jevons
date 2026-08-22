@@ -35,6 +35,18 @@ func TestEncodeMuxEnvelope(t *testing.T) {
 	}
 }
 
+func TestMuxPageBodyEmptyClearsOlder(t *testing.T) {
+	got := muxPageBody(12, 40, nil)
+	if got["older"] != 0 || got["start"] != 0 {
+		t.Fatalf("empty page must stop paging: %+v", got)
+	}
+	lines := []json.RawMessage{json.RawMessage(`{"type":"user"}`)}
+	got = muxPageBody(10, 40, lines)
+	if got["older"] != 10 || got["start"] != 10 {
+		t.Fatalf("non-empty page must publish start/older: %+v", got)
+	}
+}
+
 func TestMuxHubFansOnlyWatchers(t *testing.T) {
 	h := newMuxHub()
 	a := &muxSession{send: make(chan []byte, 4), transcripts: map[string]struct{}{"jevons": {}}}

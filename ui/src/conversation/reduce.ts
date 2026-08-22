@@ -35,9 +35,31 @@ export function applyConversationEvent(
     return { ...state, meta: (env.body || {}) as ConversationMeta, ready: true };
   }
   if (env.t === 'page') {
-    const body = env.body as { lines?: unknown[] };
-    const lines = Array.isArray(body?.lines) ? body.lines : [];
-    return { ...state, frames: [...lines, ...state.frames] };
+    const body = (env.body || {}) as {
+      lines?: unknown[];
+      start?: number;
+      older?: number;
+      total?: number;
+    };
+    const lines = Array.isArray(body.lines) ? body.lines : [];
+    const start =
+      typeof body.start === 'number'
+        ? body.start
+        : typeof body.older === 'number'
+          ? body.older
+          : 0;
+    const total = typeof body.total === 'number' ? body.total : state.meta?.total;
+    const older = lines.length === 0 || start <= 0 ? 0 : (typeof body.older === 'number' ? body.older : start);
+    const sameWindow =
+      !!state.meta &&
+      typeof state.meta.start === 'number' &&
+      state.meta.start === start &&
+      lines.length > 0;
+    return {
+      ...state,
+      frames: sameWindow ? state.frames : [...lines, ...state.frames],
+      meta: { ...(state.meta || {}), start, total, older },
+    };
   }
   if (env.t === 'error') {
     const body = env.body as { error?: string };
