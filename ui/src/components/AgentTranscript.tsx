@@ -138,11 +138,7 @@ function ClippedBubble(props: {
     >
       <div className="bubble-role">{props.kind === 'steps' ? '' : props.kind}</div>
       {props.kind === 'assistant' ? (
-        <div
-          className="bubble-body msg-body md"
-          ref={bodyRef}
-          dangerouslySetInnerHTML={{ __html: marked.parse(props.text, { async: false }) as string }}
-        />
+        <MarkdownBody text={props.text} bodyRef={bodyRef} />
       ) : (
         <div className="bubble-body msg-body" ref={bodyRef}>
           {props.text}
@@ -151,11 +147,28 @@ function ClippedBubble(props: {
       {tall ? (
         <button
           type="button"
+          tabIndex={-1}
           className="msg-expand-tab"
           aria-label={expanded ? 'collapse' : 'expand'}
           onClick={() => setExpanded((v) => !v)}
         />
       ) : null}
     </div>
+  );
+}
+
+function MarkdownBody(props: { text: string; bodyRef: React.RefObject<HTMLDivElement | null> }) {
+  const html = marked.parse(props.text, { async: false }) as string;
+  useEffect(() => {
+    const el = props.bodyRef.current;
+    if (!el) return;
+    el.querySelectorAll('a').forEach((a) => a.setAttribute('tabindex', '-1'));
+  }, [html, props.bodyRef]);
+  return (
+    <div
+      className="bubble-body msg-body md"
+      ref={props.bodyRef}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   );
 }

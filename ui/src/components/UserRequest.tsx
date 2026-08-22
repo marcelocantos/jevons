@@ -21,6 +21,7 @@ export function UserRequest(props: {
   return (
     <form className="user-request" onSubmit={submit}>
       <textarea
+        data-composer={props.name === 'jevons' ? 'main' : 'sidebar'}
         value={text}
         onChange={(e) => setDraft(props.name, e.target.value)}
         placeholder="Message"

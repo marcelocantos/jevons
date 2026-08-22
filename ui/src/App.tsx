@@ -19,6 +19,7 @@ import { FrontierTable, type FrontierRow } from './components/FrontierTable';
 import { PlanUsageBar } from './components/PlanUsageBar';
 import { applyTheme, persistTheme, readThemePref, type ThemePref } from './theme';
 import { clampRhsWidth, persistRhsWidth, readRhsWidth } from './layout/rhsWidth';
+import { useCockpitKeys } from './keys/useCockpitKeys';
 
 const queryClient = new QueryClient();
 
@@ -64,6 +65,7 @@ declare module '@tanstack/react-router' {
 function Cockpit() {
   const mux = getMux();
   const { agent, tab } = indexRoute.useSearch();
+  useCockpitKeys({ sidebarComposerVisible: tab === 'transcript' });
   const navigate = useNavigate({ from: indexRoute.fullPath });
   const agentsQ = useQuery({
     queryKey: ['agents'],
