@@ -1461,11 +1461,12 @@ func (s *Server) BroadcastChat(line string) {
 // too would double-trim replayed views).
 func (s *Server) broadcastChatLive(line string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, ch := range s.chatListeners {
 		select {
 		case ch <- line:
 		default:
 		}
 	}
+	s.mu.Unlock()
+	s.muxFanTranscript(s.overseerAgentName(), line)
 }

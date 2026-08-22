@@ -226,6 +226,14 @@ test-go: bin/gotest
 test-go-raw:
 	go test ./...
 
+# React cockpit (🎯T537.1). Daily GET / is still web/index.html (T505).
+.PHONY: ui-dev test-ui-react
+ui-dev:
+	cd ui && npm run dev
+
+test-ui-react:
+	cd ui && npm test
+
 # Hermetic Node tests for chat working-indicator lifecycle (🎯T39)
 # and attention-thread model (🎯T65).
 test-web:
@@ -280,6 +288,7 @@ test-web:
 	node web/scripts/plan_usage_test.js
 	node web/scripts/link_safety_test.js
 	node web/scripts/image_lightbox_test.js
+	@if [ -d ui/node_modules ]; then cd ui && npm test; else echo "skip test-ui-react (no ui/node_modules)"; fi
 
 # Playwright perceptual chat UI (hermetic mocked WS; needs playwright
 # from scripts/browser-loop-test). Live: make test-ui-live.
@@ -292,11 +301,14 @@ test-ui:
 	node scripts/chat-ui-test/batch-t109-test.js
 	node scripts/chat-ui-test/infinite-scroll-test.js
 	node scripts/chat-ui-test/replay-scroll-test.js
+	node scripts/chat-ui-test/t494.1.1-replay-mix-test.js
 	node scripts/chat-ui-test/mermaid-test.js
 	node scripts/chat-ui-test/t280-frontier-graph-test.js
 	node scripts/chat-ui-test/t294-frontier-graph-test.js
 	node scripts/chat-ui-test/agent-note-test.js
 	node scripts/chat-ui-test/t159-seal-test.js
+	node scripts/chat-ui-test/t119.9-adjacent-steps-test.js
+	node scripts/chat-ui-test/t119.10-steps-test.js
 	node scripts/chat-ui-test/virtual-list-test.js
 	node scripts/chat-ui-test/image-paste-test.js
 	node scripts/chat-ui-test/image-lightbox-test.js

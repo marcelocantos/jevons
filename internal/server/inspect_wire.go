@@ -283,6 +283,7 @@ func (s *Server) DeliverInspectLive(name string, ev claudia.Event) {
 		payload, err := json.Marshal(event)
 		if err == nil {
 			s.fanInspectLive(name, string(payload))
+			s.muxFanTranscript(name, string(payload))
 		}
 	}
 }
