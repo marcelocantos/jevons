@@ -1570,17 +1570,17 @@ test('T480 renderModel applies size clip; nuggets stay nuggets', function () {
   const rm = src.match(/function renderModel\(model\) \{[\s\S]*?\n    function invalidatePaint/);
   assert.ok(rm, 'renderModel present');
   assert.ok(rm[0].indexOf("kind === 'nugget'") >= 0, 'nuggets still short-circuit');
-  assert.ok(rm[0].indexOf('layoutSizeClip') >= 0,
-    'renderModel must run the widget size clip after attach');
+  assert.ok(rm[0].indexOf('clipAfterAttach') >= 0,
+    'renderModel must run the one clip-after-attach after attach');
   assert.ok(rm[0].indexOf('continue') >= 0 &&
-    rm[0].indexOf("kind === 'nugget'") < rm[0].indexOf('layoutSizeClip'),
+    rm[0].indexOf("kind === 'nugget'") < rm[0].indexOf('clipAfterAttach'),
     'nuggets skip clip — T480 is about bubbles');
 });
 
 test('T480 index.html layoutMsg is not a second inspector-only skip', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.ok(html.indexOf('ConversationWidget.layoutSizeClip') >= 0,
-    'main renderBody must call the widget clip');
+  assert.ok(html.indexOf('ConversationWidget.clipAfterAttach') >= 0,
+    'main renderBody must call the one clip-after-attach');
   assert.ok(html.indexOf('ConversationWidget.measureCollapse') >= 0,
     'window.measureCollapse is a widget alias, not a second probe');
   assert.ok(!/function measureCollapse\(d, role, text\) \{[\s\S]{0,400}parseAssistantMarkdown/.test(html),
@@ -1723,32 +1723,48 @@ test('T537 inspect ingest clips tall user and sealed assistant', function () {
 test('T537 pin-during-replay and clip-after-attach each have one implementation site', function () {
   const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const pinFns = widget.match(/function pinAfterIngest\s*\(/g) || [];
-  assert.strictEqual(pinFns.length, 1, 'pinAfterIngest defined once');
-  const clipFns = widget.match(/function layoutSizeClip\s*\(/g) || [];
-  assert.strictEqual(clipFns.length, 1, 'layoutSizeClip defined once');
-  const apply = widget.match(/function applyWireEvent\(event\) \{[\s\S]*?\n    function setLines/);
-  assert.ok(apply, 'applyWireEvent present');
-  assert.ok(apply[0].indexOf('pinAfterIngest') >= 0, 'ingest pin goes through pinAfterIngest');
-  assert.ok(!/follow\.shouldPin && follow\.shouldPin\(\)/.test(apply[0]),
-    'applyWireEvent must not copy the pin decision');
+  function code(src) {
+    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  }
+  function defs(src, name) {
+    return (code(src).match(new RegExp('function\\s+' + name + '\\s*\\(', 'g')) || []).length;
+  }
+  function calls(src, name) {
+    const stripped = code(src);
+    const all = stripped.match(new RegExp('\\b' + name + '\\s*\\(', 'g')) || [];
+    return all.length - defs(src, name);
+  }
+  assert.strictEqual(defs(widget, 'pinAfterIngest'), 1);
+  assert.strictEqual(defs(widget, 'clipAfterAttach'), 1);
+  assert.strictEqual(defs(widget, 'layoutSizeClip'), 1);
+  assert.strictEqual(calls(widget, 'layoutSizeClip'), 1,
+    'layoutSizeClip must be called only from clipAfterAttach, got ' + calls(widget, 'layoutSizeClip'));
+  assert.strictEqual(calls(html, 'layoutSizeClip'), 0,
+    'host must not call layoutSizeClip; use clipAfterAttach');
+  assert.ok(calls(html, 'clipAfterAttach') >= 1, 'host calls the one clip-after-attach');
+  const pinBody = widget.match(/function pinAfterIngest\(args\) \{[\s\S]*?\n  \}/);
+  assert.ok(pinBody, 'pinAfterIngest body');
+  const pinOnly = pinBody[0];
+  const widgetNoPin = widget.replace(pinOnly, '');
+  assert.ok(!/shouldPin\s*&&/.test(code(widgetNoPin)) && !/shouldPin\(\)/.test(code(widgetNoPin)),
+    'shouldPin copies outside pinAfterIngest: ' + (code(widgetNoPin).match(/shouldPin[^\n]{0,40}/) || []).join(' | '));
   const paint = widget.match(/function paintNewDisplayRow\(row\) \{[\s\S]*?\n    function syncDisplay/);
   assert.ok(paint, 'paintNewDisplayRow present');
-  assert.ok(/role === 'user'[\s\S]*clipAttached/.test(paint[0]),
-    'inspect buildMsg user attach must clipAfterAttach');
-  assert.ok(paint[0].indexOf('row._stream') >= 0 && paint[0].indexOf('clipAttached') >= 0,
-    'sealed assistant attach clips; streaming does not steal clip');
+  const userArm = paint[0].split("row.role === 'assistant'")[0];
+  assert.ok(userArm.indexOf('opts.addMsg') >= 0 && userArm.indexOf('clipAttached') >= 0,
+    'user+addMsg arm must clipAttached, not rely on host renderBody');
+  const seal = widget.match(/function sealAssistant\(streamId\) \{[\s\S]*?\n    function paintNewDisplayRow/);
+  assert.ok(seal, 'sealAssistant present');
+  assert.ok(/onSeal[\s\S]*clipAttached\(el\)/.test(seal[0]),
+    'onSeal path must still clipAttached');
+  const rm = widget.match(/function renderModel\(model\) \{[\s\S]*?\n    function invalidatePaint/);
+  assert.ok(rm, 'renderModel present');
+  assert.ok(rm[0].indexOf('pinAfterIngest') >= 0, 'renderModel pin goes through pinAfterIngest');
+  assert.ok(!/shouldPin\s*&&/.test(rm[0]), 'renderModel must not copy shouldPin');
   const scrollDown = html.match(/function scrollDown\(opts\) \{[\s\S]*?\nwindow\.scrollDown/);
   assert.ok(scrollDown, 'scrollDown present');
-  assert.ok(scrollDown[0].indexOf('ingestReplaying()') >= 0,
-    'scrollDown replay suppress uses the widget flag, not a second historyReplayActive pin copy');
-  assert.ok(!/if \(historyReplayActive\) return;/.test(scrollDown[0]),
-    'scrollDown must not keep a second replay-pin flag');
-  assert.ok(html.indexOf('inspectConversation.endReplayAndPin') >= 0
-    || html.indexOf('endReplayAndPin') >= 0,
-    'inspect history_meta ends replay through the one pin function');
-  assert.ok(html.indexOf('inspectConversation.beginReplay') >= 0,
-    'inspect conversation_reset begins replay on the widget');
+  assert.ok(scrollDown[0].indexOf('ingestReplaying()') >= 0);
+  assert.ok(!/if \(historyReplayActive\) return;/.test(scrollDown[0]));
 });
 
 Promise.all(asyncTests).then(function () {

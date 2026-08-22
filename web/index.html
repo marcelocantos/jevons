@@ -5479,23 +5479,15 @@ function renderBody(d, role, text) {
   d._layoutText = text;
   d._fullRole = role;
   // Live stream (🎯T30.2 / T150): always paint full progressive body.
-  // No collapse measure mid-stream — keeps scrollHeight monotonic.
+  // Clip skip for _streamRaw lives in clipAfterAttach / layoutSizeClip.
   if (typeof d._streamRaw === 'string') {
     paintBody(d, role, text);
-    clearClipChrome(d);
-    d._fullText = null;
-    d._expanded = true;
-    d._autoExpanded = true;
     watchStreamBubble(d);
-    // 🎯T266: defer context chrome until stream seals (stable label).
-    return;
+  } else {
+    paintBody(d, role, text);
+    syncTargetContextChrome(d, { role: role, text: text });
   }
-  // Always paint FULL content (🎯T106). Clip is CSS-only when collapsed.
-  paintBody(d, role, text);
-  // 🎯T266: top-edge repo/PO chrome on target-related owner asks.
-  syncTargetContextChrome(d, { role: role, text: text });
-  // 🎯T480: one measure+clip — ConversationWidget, not an inspect skip.
-  ConversationWidget.layoutSizeClip(d, {
+  ConversationWidget.clipAfterAttach(d, {
     container: msgs,
     onToggle: function () {
       if (typeof noteRowHeightChange === 'function') noteRowHeightChange(d);

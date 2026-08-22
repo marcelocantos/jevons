@@ -566,6 +566,16 @@
     return m;
   }
 
+  /**
+   * Clip-after-attach (🎯T537): the ONE post-attach clip call. layoutSizeClip
+   * is the primitive; product ingest must not call it except through here.
+   */
+  function clipAfterAttach(el, opts) {
+    if (!el) return el;
+    layoutSizeClip(el, opts || {});
+    return el;
+  }
+
   function turnSlotLabel(items) {
     var n = items && items.length ? items.length : 0;
     if (!n) return '';
@@ -975,9 +985,7 @@
     }
 
     function clipAttached(el) {
-      if (!el) return el;
-      layoutSizeClip(el, clipOpts());
-      return el;
+      return clipAfterAttach(el, clipOpts());
     }
 
     function rehome(el) {
@@ -1238,10 +1246,8 @@
           } else {
             el._body.textContent = raw;
           }
-          // Host onSeal (main renderBody) applies the same clip. Inspect
-          // has no onSeal — clip here after the default paint.
-          clipAttached(el);
         }
+        clipAttached(el);
       }
       markLineSealed(sid);
       clearHandles(sid || undefined);
@@ -1266,17 +1272,16 @@
         return;
       }
       if (row.role === 'user') {
+        var uel = null;
         if (typeof opts.onUser === 'function') {
-          opts.onUser(row.text, row.when, { origin: row.origin });
+          uel = opts.onUser(row.text, row.when, { origin: row.origin });
         } else if (typeof opts.addMsg === 'function') {
-          opts.addMsg('user', row.text, row.when, { turnOrigin: row.origin });
+          uel = opts.addMsg('user', row.text, row.when, { turnOrigin: row.origin });
         } else if (typeof opts.buildMsg === 'function' && messagesEl) {
-          var uel = opts.buildMsg('user', row.text, row.when, { timeIfKnown: !!opts.timeIfKnown });
-          if (uel) {
-            messagesEl.appendChild(uel);
-            clipAttached(uel);
-          }
+          uel = opts.buildMsg('user', row.text, row.when, { timeIfKnown: !!opts.timeIfKnown });
+          if (uel) messagesEl.appendChild(uel);
         }
+        clipAttached(uel);
         return;
       }
       if (row.role === 'assistant' || row.role === 'jevons') {
@@ -1750,7 +1755,7 @@
           });
           if (el) {
             messagesEl.appendChild(el);
-            layoutSizeClip(el, sizeClipOpts());
+            clipAfterAttach(el, sizeClipOpts());
           }
         } else {
           // Minimal fallback when buildMsg is not injected (hermetic only).
@@ -1766,7 +1771,7 @@
           d._layoutText = spec.text || '';
           d.appendChild(body);
           messagesEl.appendChild(d);
-          layoutSizeClip(d, sizeClipOpts());
+          clipAfterAttach(d, sizeClipOpts());
         }
       }
 
@@ -1792,13 +1797,11 @@
       }
 
       _fp = fp;
-      if (scrollFollow && scrollFollow.applyAfterUpdate) {
-        scrollFollow.applyAfterUpdate(messagesEl, prevTop);
-        if (scrollFollow.shouldPin && scrollFollow.shouldPin()) {
-          // rAF pin is host responsibility if needed; sync path here.
-          scrollFollow.applyAfterUpdate(messagesEl);
-        }
-      }
+      pinAfterIngest({
+        replaying: stream && stream.isReplaying && stream.isReplaying(),
+        scrollFollow: scrollFollow,
+        el: messagesEl,
+      });
     }
 
     function invalidatePaint() {
@@ -2077,5 +2080,6 @@
     updateExpandTab: updateExpandTab,
     ensureExpandToggle: ensureExpandToggle,
     layoutSizeClip: layoutSizeClip,
+    clipAfterAttach: clipAfterAttach,
   };
 }));
