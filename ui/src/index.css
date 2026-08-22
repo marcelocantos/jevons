@@ -23,10 +23,19 @@ html, body, #root {
 }
 
 .cockpit-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border);
   font-weight: 600;
 }
+.plan-usage { display: flex; gap: 0.5rem; font-weight: 400; font-size: 0.8rem; }
+.plan-usage.pending { color: var(--muted); }
+.plan-chip { display: flex; gap: 0.25rem; color: var(--muted); }
+.plan-pct { color: var(--text); }
+.agent-purpose { margin-left: 0.4rem; color: var(--muted); font-size: 0.75rem; }
 
 .cockpit-body {
   display: grid;

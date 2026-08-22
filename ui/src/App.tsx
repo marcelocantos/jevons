@@ -15,6 +15,7 @@ import { AgentInteraction } from './components/AgentInteraction';
 import { AgentTree, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
 import { FrontierTable, type FrontierRow } from './components/FrontierTable';
+import { PlanUsageBar } from './components/PlanUsageBar';
 
 const queryClient = new QueryClient();
 
@@ -69,9 +70,11 @@ function Cockpit() {
       const data = await r.json();
       const list = Array.isArray(data) ? data : [];
       return list
-        .map((a: { name?: string; purpose?: string }) => ({
+        .map((a: { name?: string; purpose?: string; parent?: string; status?: string }) => ({
           name: a.name || '',
           purpose: a.purpose,
+          parent: a.parent,
+          status: a.status,
         }))
         .filter((a: AgentRow) => a.name);
     },
@@ -98,7 +101,10 @@ function Cockpit() {
 
   return (
     <div className="cockpit">
-      <header className="cockpit-bar">Jevons</header>
+      <header className="cockpit-bar">
+        <span>Jevons</span>
+        <PlanUsageBar />
+      </header>
       <div className="cockpit-body">
         <AgentInteraction mux={mux} name="jevons" title="Root" />
         <aside className="cockpit-rhs">
