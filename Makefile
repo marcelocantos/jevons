@@ -206,7 +206,7 @@ init:
 
 # ── iOS app ─────────────────────────────────────────
 .PHONY: ios
-ios: ui-build
+ios:
 	cd ios && xcodegen generate
 
 # ── Test ─────────────────────────────────────────────

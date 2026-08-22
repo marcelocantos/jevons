@@ -614,14 +614,6 @@ else
   [[ -x "$BIN" ]] || die "no binary at $BIN"
 fi
 
-# 🎯T537.2: GET / serves ui/dist, not web/index.html. The SPA is not
-# go:embed (T360). Build it from the live tree. Fail closed: a missing
-# dist would fall through to vanilla, which is no longer the product.
-if [[ -f "$ROOT/ui/package.json" ]]; then
-  log "rebuild: ui/dist (React cockpit)"
-  (cd "$ROOT/ui" && npm run build) || die "ui/dist build failed — refusing vanilla index.html"
-fi
-
 # 🎯T218: the build is now current, so we can ask the only question that
 # matters — is this binary already serving? Answering it *before* killing
 # anything is what turns five bounces into one.

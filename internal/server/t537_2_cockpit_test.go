@@ -12,11 +12,9 @@ import (
 	"testing"
 )
 
-// Journey-or-exception (🎯T537.2): no new Universe-B journey this slice.
-// Machine check: GET / is the React document when ui/dist exists. Live
-// owner-chat soak is the daily :13705 probe after restart (T505 cutover).
+// 🎯T505: a sibling ui/dist must not steal GET / until explicit cutover.
 
-func TestT537_2ReactDistBeatsVanillaIndex(t *testing.T) {
+func TestT505VanillaBeatsUncutoverReactDist(t *testing.T) {
 	root := t.TempDir()
 	webDir := filepath.Join(root, "web")
 	dist := filepath.Join(root, "ui", "dist")
@@ -44,10 +42,10 @@ func TestT537_2ReactDistBeatsVanillaIndex(t *testing.T) {
 		t.Fatalf("status=%d", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "VANILLA_COCKPIT") {
-		t.Fatalf("GET / served vanilla index.html:\n%s", body)
+	if !strings.Contains(body, "VANILLA_COCKPIT") {
+		t.Fatalf("GET / must stay vanilla until owner cutover, got:\n%s", body)
 	}
-	if !strings.Contains(body, `id="root"`) || !strings.Contains(body, "REACT_COCKPIT") {
-		t.Fatalf("GET / is not the React cockpit:\n%s", body)
+	if strings.Contains(body, "REACT_COCKPIT") {
+		t.Fatalf("half-written React dist stole GET /:\n%s", body)
 	}
 }

@@ -46,13 +46,9 @@ func NewDevServer(dir string) *DevServer {
 // serve the UI standalone (🎯T53; brew installs ship no repo checkout).
 // Returns the DevServer when disk mode is active, nil in embedded mode.
 func RegisterUIRoutes(mux *http.ServeMux, dir string) *DevServer {
-	// 🎯T537.2: product document is the Vite React build (ui/dist), sibling
-	// of the legacy web/ dir. Vanilla web/index.html is not served when the
-	// SPA exists.
-	if dist := reactDistDir(dir); dist != "" {
-		slog.Info("serving React cockpit", "dir", dist)
-		return registerReactSPA(mux, dist)
-	}
+	// 🎯T505 / T537.1: daily GET / is web/index.html until an explicit
+	// owner cutover. ui/dist exists for Vite :5173; serving it at / while
+	// the React cockpit is a skeleton is a half-written swap.
 	if st, err := os.Stat(filepath.Join(dir, "index.html")); err == nil && !st.IsDir() {
 		ds := NewDevServer(dir)
 		ds.RegisterRoutes(mux)
