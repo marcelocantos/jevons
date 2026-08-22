@@ -1098,8 +1098,8 @@ test('index.html wires historyReplayActive suppress on scrollDown', function () 
   assert.ok(html.indexOf('beginHistoryReplay') >= 0);
   assert.ok(html.indexOf('endHistoryReplayAndPin') >= 0);
   assert.ok(html.indexOf('historyReplayActive') >= 0);
-  assert.ok(/function scrollDown\([^)]*\)[\s\S]{0,400}historyReplayActive/.test(html),
-    'scrollDown checks historyReplayActive');
+  assert.ok(/function scrollDown\([^)]*\)[\s\S]{0,400}ingestReplaying\(\)/.test(html),
+    'scrollDown pin-during-replay uses widget isReplaying, not a second historyReplayActive copy');
   assert.ok(html.indexOf("endHistoryReplayAndPin('history_meta')") >= 0 ||
     html.indexOf('endHistoryReplayAndPin("history_meta")') >= 0 ||
     html.indexOf("endHistoryReplayAndPin('history_meta')") >= 0);

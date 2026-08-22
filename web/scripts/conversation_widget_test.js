@@ -1653,6 +1653,104 @@ test('T480 renderModel clips a tall bubble and leaves a short one alone', functi
   assert.ok(bubbles[2]._expandBtn, 'tall assistant has tab');
 });
 
+test('T537 replay burst records 0 pins then barrier records 1', function () {
+  let pins = 0;
+  const follow = {
+    shouldPin: function () { return true; },
+    applyAfterUpdate: function () { pins++; },
+  };
+  const stream = CW.createStreamJoin({ scrollFollow: follow });
+  stream.beginReplay();
+  stream.applyWireEvent({ type: 'user', message: { content: 'one' } });
+  stream.applyWireEvent({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'ack' }], stop_reason: 'end_turn' },
+  });
+  stream.applyWireEvent({ type: 'user', message: { content: 'two' } });
+  assert.strictEqual(pins, 0, 'replay burst must not pin');
+  const n = stream.endReplayAndPin();
+  assert.strictEqual(n, 1, 'endReplayAndPin returns 1');
+  assert.strictEqual(pins, 1, 'exactly one pin after barrier');
+  stream.applyWireEvent({ type: 'user', message: { content: 'live' } });
+  assert.strictEqual(pins, 2, 'live ingest pins again after replay');
+});
+
+test('T537 inspect ingest clips tall user and sealed assistant', function () {
+  const messagesEl = fakeEl('agent-inspect-body');
+  function buildMsg(role, text) {
+    const r = role === 'assistant' ? 'jevons' : role;
+    const el = fakeBubble({ role: r, text: text, fullH: 400 });
+    el.isConnected = false;
+    return el;
+  }
+  const origAppend = messagesEl.appendChild;
+  messagesEl.appendChild = function (n) {
+    origAppend.call(this, n);
+    if (n) n.isConnected = true;
+    return n;
+  };
+  const stream = CW.createStreamJoin({
+    messagesEl: messagesEl,
+    document: { createElement: function (t) { return fakeEl(t); } },
+    buildMsg: buildMsg,
+  });
+  stream.applyWireEvent({
+    type: 'user',
+    message: { content: [{ type: 'text', text: 'WALL\n'.repeat(40) }] },
+  });
+  stream.applyWireEvent({
+    type: 'assistant',
+    message: {
+      content: [{ type: 'text', text: '### reply\n' + '- item\n'.repeat(20) }],
+      stop_reason: 'end_turn',
+    },
+  });
+  const kids = messagesEl.children.filter(function (c) {
+    return c.classList && c.classList.contains('msg');
+  });
+  assert.ok(kids.length >= 2, 'user + assistant attached, got ' + kids.length);
+  const user = kids.find(function (c) { return c.classList.contains('user'); });
+  const asst = kids.find(function (c) { return c.classList.contains('jevons'); });
+  assert.ok(user, 'user bubble attached via buildMsg ingest');
+  assert.ok(asst, 'sealed assistant attached via buildMsg ingest');
+  assert.ok(user.classList.contains('msg-clipped'), 'tall user clipped on inspect ingest');
+  assert.ok(user._expandBtn, 'tall user pocket tab on inspect ingest');
+  assert.ok(asst.classList.contains('msg-clipped'), 'tall sealed assistant clipped on inspect ingest');
+  assert.ok(asst._expandBtn, 'tall sealed assistant pocket tab');
+  assert.ok(typeof asst._streamRaw !== 'string', 'sealed assistant is not left streaming');
+});
+
+test('T537 pin-during-replay and clip-after-attach each have one implementation site', function () {
+  const widget = fs.readFileSync(path.join(__dirname, 'conversation_widget.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const pinFns = widget.match(/function pinAfterIngest\s*\(/g) || [];
+  assert.strictEqual(pinFns.length, 1, 'pinAfterIngest defined once');
+  const clipFns = widget.match(/function layoutSizeClip\s*\(/g) || [];
+  assert.strictEqual(clipFns.length, 1, 'layoutSizeClip defined once');
+  const apply = widget.match(/function applyWireEvent\(event\) \{[\s\S]*?\n    function setLines/);
+  assert.ok(apply, 'applyWireEvent present');
+  assert.ok(apply[0].indexOf('pinAfterIngest') >= 0, 'ingest pin goes through pinAfterIngest');
+  assert.ok(!/follow\.shouldPin && follow\.shouldPin\(\)/.test(apply[0]),
+    'applyWireEvent must not copy the pin decision');
+  const paint = widget.match(/function paintNewDisplayRow\(row\) \{[\s\S]*?\n    function syncDisplay/);
+  assert.ok(paint, 'paintNewDisplayRow present');
+  assert.ok(/role === 'user'[\s\S]*clipAttached/.test(paint[0]),
+    'inspect buildMsg user attach must clipAfterAttach');
+  assert.ok(paint[0].indexOf('row._stream') >= 0 && paint[0].indexOf('clipAttached') >= 0,
+    'sealed assistant attach clips; streaming does not steal clip');
+  const scrollDown = html.match(/function scrollDown\(opts\) \{[\s\S]*?\nwindow\.scrollDown/);
+  assert.ok(scrollDown, 'scrollDown present');
+  assert.ok(scrollDown[0].indexOf('ingestReplaying()') >= 0,
+    'scrollDown replay suppress uses the widget flag, not a second historyReplayActive pin copy');
+  assert.ok(!/if \(historyReplayActive\) return;/.test(scrollDown[0]),
+    'scrollDown must not keep a second replay-pin flag');
+  assert.ok(html.indexOf('inspectConversation.endReplayAndPin') >= 0
+    || html.indexOf('endReplayAndPin') >= 0,
+    'inspect history_meta ends replay through the one pin function');
+  assert.ok(html.indexOf('inspectConversation.beginReplay') >= 0,
+    'inspect conversation_reset begins replay on the widget');
+});
+
 Promise.all(asyncTests).then(function () {
   console.log('PASS conversation_widget_test (' + passed + ' tests)');
 });

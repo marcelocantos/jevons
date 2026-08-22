@@ -216,6 +216,13 @@ func TestWriteInspectReplayResetThenLive(t *testing.T) {
 	if buf.frames[0]["name"] != "jv-missing" {
 		t.Fatalf("name=%v", buf.frames[0]["name"])
 	}
+	last := buf.frames[len(buf.frames)-1]
+	if last["type"] != "history_meta" {
+		t.Fatalf("replay-end barrier=%v want history_meta", last)
+	}
+	if last["name"] != "jv-missing" {
+		t.Fatalf("history_meta name=%v", last["name"])
+	}
 }
 
 func TestSetInspectSubReplaceAndClear(t *testing.T) {

@@ -850,6 +850,24 @@
   }
 
   /**
+   * Pin-during-replay (🎯T537): the ONE ingest pin decision. Replay burst
+   * writes 0; after the barrier, callers set replaying false and this
+   * writes at most 1. Host injects must not copy the replaying check.
+   * @returns {number} 1 if a pin write ran, else 0
+   */
+  function pinAfterIngest(args) {
+    args = args || {};
+    if (args.replaying) return 0;
+    var follow = args.scrollFollow;
+    if (!follow) return 0;
+    if (follow.shouldPin && follow.shouldPin() && follow.applyAfterUpdate) {
+      follow.applyAfterUpdate(args.el);
+      return 1;
+    }
+    return 0;
+  }
+
+  /**
    * One grow-one-bubble join (🎯T372). Both surfaces call this — not a
    * helper shared by two painters. Join identity is stream_id / openEl +
    * _streamRaw. Grok word-chunks (Plan / remaining / is / …) stay one bubble.
@@ -880,6 +898,8 @@
     var fold = newDisplayFold();
     var messagesEl = opts.messagesEl || null;
     var doc = opts.document || (typeof document !== 'undefined' ? document : null);
+    var replaying = false;
+    var turnSlot = null;
 
     function paintTurnSlotEl(slot) {
       if (!slot || !slot.el) return;
@@ -1252,20 +1272,37 @@
           opts.addMsg('user', row.text, row.when, { turnOrigin: row.origin });
         } else if (typeof opts.buildMsg === 'function' && messagesEl) {
           var uel = opts.buildMsg('user', row.text, row.when, { timeIfKnown: !!opts.timeIfKnown });
-          if (uel) messagesEl.appendChild(uel);
+          if (uel) {
+            messagesEl.appendChild(uel);
+            clipAttached(uel);
+          }
         }
         return;
       }
       if (row.role === 'assistant' || row.role === 'jevons') {
-        var bel = mintBubble(row.text, row.when);
-        if (bel) {
-          bel._streamRaw = row.text;
-          if (row._streamId) {
-            bel._streamId = row._streamId;
-            byId[row._streamId] = bel;
+        if (row._stream) {
+          var bel = mintBubble(row.text, row.when);
+          if (bel) {
+            bel._streamRaw = row.text;
+            if (row._streamId) {
+              bel._streamId = row._streamId;
+              byId[row._streamId] = bel;
+            }
+            openEl = bel;
           }
-          openEl = bel;
+          return;
         }
+        var sealed = null;
+        if (typeof opts.addMsg === 'function') {
+          sealed = opts.addMsg('jevons', row.text, row.when, {});
+        } else if (typeof opts.buildMsg === 'function' && messagesEl) {
+          sealed = opts.buildMsg('jevons', row.text, row.when, { timeIfKnown: !!opts.timeIfKnown });
+          if (sealed) messagesEl.appendChild(sealed);
+        } else {
+          sealed = mintBubble(row.text, row.when);
+        }
+        if (sealed && typeof sealed._streamRaw === 'string') delete sealed._streamRaw;
+        clipAttached(sealed);
       }
     }
 
@@ -1349,11 +1386,11 @@
         if (isOwnerUserBarrierText(liveText, liveCE)) sealJoinOnOwnerUser(liveText);
       }
       syncDisplay(prev, lines);
-      var follow = opts.scrollFollow;
-      if (follow && follow.shouldPin && follow.shouldPin()
-          && follow.applyAfterUpdate) {
-        follow.applyAfterUpdate(messagesEl);
-      }
+      pinAfterIngest({
+        replaying: replaying,
+        scrollFollow: opts.scrollFollow,
+        el: messagesEl,
+      });
       if (typeof opts.onWorkingProgress === 'function' && fold.open
           && fold.open.items && fold.open.items.length) {
         opts.onWorkingProgress(fold.open);
@@ -1378,6 +1415,23 @@
       }
     }
 
+    function beginReplay() {
+      replaying = true;
+    }
+
+    function endReplayAndPin() {
+      replaying = false;
+      return pinAfterIngest({
+        replaying: false,
+        scrollFollow: opts.scrollFollow,
+        el: messagesEl,
+      });
+    }
+
+    function isReplaying() {
+      return !!replaying;
+    }
+
     function setMessagesEl(el) {
       messagesEl = el || null;
     }
@@ -1387,6 +1441,9 @@
       appendUser: appendUser,
       sealAssistant: sealAssistant,
       applyWireEvent: applyWireEvent,
+      beginReplay: beginReplay,
+      endReplayAndPin: endReplayAndPin,
+      isReplaying: isReplaying,
       resolveOpen: resolveOpen,
       clearHandles: clearHandles,
       getOpenEl: function () { return openEl; },
@@ -1954,11 +2011,10 @@
       applyWireEvent: function (event) {
         stream.applyWireEvent(event);
         _lines = stream.getLines();
-        if (scrollFollow && scrollFollow.shouldPin && scrollFollow.shouldPin()
-            && scrollFollow.applyAfterUpdate) {
-          scrollFollow.applyAfterUpdate(messagesEl);
-        }
       },
+      beginReplay: function () { stream.beginReplay(); },
+      endReplayAndPin: function () { return stream.endReplayAndPin(); },
+      isReplaying: function () { return stream.isReplaying(); },
       clearStreamHandles: function (streamId) { stream.clearHandles(streamId); },
       getOpenStreamEl: function () { return stream.getOpenEl(); },
       setWorking: function (want) {
@@ -2004,6 +2060,7 @@
     newDisplayFold: newDisplayFold,
     foldDisplayEvent: foldDisplayEvent,
     createStreamJoin: createStreamJoin,
+    pinAfterIngest: pinAfterIngest,
     turnSlotLabel: turnSlotLabel,
     workingProgressFromSlot: workingProgressFromSlot,
     shouldMintTurnSlot: shouldMintTurnSlot,

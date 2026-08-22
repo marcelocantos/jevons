@@ -137,33 +137,46 @@ func (s *Server) writeInspectReplay(ctx context.Context, conn inspectWriter, nam
 		defer cancel()
 		return conn.Write(wctx, websocket.MessageText, []byte(frame))
 	}
+	var start, total int
 	if s.isOverseerAgent(name) {
 		s.mu.RLock()
 		clog := s.chatLog
 		s.mu.RUnlock()
-		if clog == nil {
-			return nil
+		if clog != nil {
+			var rerr error
+			start, total, rerr = clog.ReplayTailSealed(historyReplayTurns, writeLine)
+			if rerr != nil {
+				return rerr
+			}
 		}
-		_, _, err := clog.ReplayTailSealed(historyReplayTurns, writeLine)
-		return err
+	} else {
+		j := s.agentJournalsFor()
+		if j != nil {
+			path := j.path(name)
+			if path != "" {
+				if _, sterr := os.Stat(path); sterr == nil {
+					if l := j.logFor(name); l != nil {
+						var rerr error
+						start, total, rerr = l.ReplayTailSealed(historyReplayTurns, writeLine)
+						if rerr != nil {
+							return rerr
+						}
+					}
+				}
+			}
+		}
 	}
-	j := s.agentJournalsFor()
-	if j == nil {
-		return nil
-	}
-	path := j.path(name)
-	if path == "" {
-		return nil
-	}
-	if _, err := os.Stat(path); err != nil {
-		return nil
-	}
-	l := j.logFor(name)
-	if l == nil {
-		return nil
-	}
-	_, _, err = l.ReplayTailSealed(historyReplayTurns, writeLine)
-	return err
+	// Same replay-end barrier main chat emits after ReplayTailSealed (🎯T537).
+	meta, _ := json.Marshal(map[string]any{
+		"type":  "history_meta",
+		"name":  name,
+		"older": start,
+		"total": total,
+		"start": start,
+	})
+	wctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return conn.Write(wctx, websocket.MessageText, meta)
 }
 
 // inspectLiveEvent maps a fleet ACP event into an inspect progressive event
