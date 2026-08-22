@@ -3,12 +3,13 @@
 
 /** Lifted display fold: notes, ⋯ n steps, prose. Not a second hydrate. */
 
-export type DisplayKind = 'user' | 'assistant' | 'note' | 'steps';
+export type DisplayKind = 'user' | 'assistant' | 'steps';
 
 export type DisplayRow = {
   kind: DisplayKind;
   text: string;
   steps?: number;
+  when?: number;
 };
 
 function asRec(frame: unknown): Record<string, unknown> {
@@ -40,6 +41,45 @@ export function proseText(frame: unknown): string {
     .join('');
 }
 
+/** Strip journal echo markers so owner text matches the live bubble (🎯T537.1.2). */
+export function normalizeOwnerEchoText(text: string): string {
+  let t = String(text ?? '').trim();
+  if (!t) return '';
+  if (t.startsWith('[user]\n')) t = t.slice('[user]\n'.length).trim();
+  else if (/^\[user\]\s+/.test(t)) t = t.replace(/^\[user\]\s+/, '').trim();
+  for (let i = 0; i < 3; i++) {
+    const m = t.match(/^\s*<user_query(?:\s[^>]*)?>\s*([\s\S]*?)\s*<\/user_query>\s*$/i);
+    if (!m) break;
+    t = String(m[1] || '').trim();
+  }
+  return t;
+}
+
+function isProtocolControlFrameText(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 2 || t[0] !== '{' || t[t.length - 1] !== '}') return false;
+  try {
+    const obj = JSON.parse(t) as { type?: unknown };
+    return !!obj && typeof obj === 'object' && !Array.isArray(obj) && typeof obj.type === 'string' && obj.type.trim() !== '';
+  } catch {
+    return false;
+  }
+}
+
+function isNonBoundaryUserText(text: string): boolean {
+  const raw = String(text ?? '');
+  if (!raw.trim()) return false;
+  if (isProtocolControlFrameText(raw)) return true;
+  const display = normalizeOwnerEchoText(raw);
+  const trimmed = display.replace(/^\s+/, '');
+  if (/<system-reminder[\s>]/i.test(raw) || /<\/system-reminder>/i.test(raw)) return true;
+  if (trimmed.indexOf('[Jevons fleet standing brief') === 0 || /Jevons fleet standing brief/.test(display)) return true;
+  if (/^\[event:\s*[^\]]+\]/i.test(trimmed)) return true;
+  if (trimmed.indexOf('[Daemon restart') === 0) return true;
+  if (/^Background task\b/i.test(trimmed)) return true;
+  return false;
+}
+
 export function isAgentNote(frame: unknown): boolean {
   return asRec(frame).type === 'agent_note';
 }
@@ -66,33 +106,48 @@ export function stepsLabel(n: number): string {
   return '⋯ ' + n + (n === 1 ? ' step' : ' steps');
 }
 
+function frameWhen(frame: unknown): number | undefined {
+  const f = asRec(frame);
+  if (typeof f.when === 'number' && Number.isFinite(f.when)) return f.when;
+  if (typeof f.timestamp === 'number' && Number.isFinite(f.timestamp)) {
+    return f.timestamp < 1e11 ? Math.round(f.timestamp * 1000) : f.timestamp;
+  }
+  return undefined;
+}
+
 export function displayRows(frames: unknown[]): DisplayRow[] {
   const out: DisplayRow[] = [];
   let run = 0;
+  let runWhen: number | undefined;
   const flush = () => {
     if (!run) return;
-    out.push({ kind: 'steps', text: stepsLabel(run), steps: run });
+    out.push({ kind: 'steps', text: stepsLabel(run), steps: run, when: runWhen });
     run = 0;
+    runWhen = undefined;
   };
   for (const f of frames) {
-    if (isAgentNote(f)) {
-      flush();
-      out.push({ kind: 'note', text: proseText(f) });
-      continue;
-    }
-    if (isToolOnly(f)) {
+    const when = frameWhen(f);
+    // Old foldDisplayEvent: agent_note is a turn-slot item, not a painted note.
+    if (isAgentNote(f) || isToolOnly(f)) {
       run += 1;
+      if (when != null) runWhen = when;
       continue;
     }
     if (isUserFrame(f)) {
+      const raw = proseText(f);
+      if (isNonBoundaryUserText(raw)) continue;
+      const text = normalizeOwnerEchoText(raw);
+      if (!text) continue;
+      const last = out[out.length - 1];
+      if (last && last.kind === 'user' && normalizeOwnerEchoText(last.text) === text) continue;
       flush();
-      out.push({ kind: 'user', text: proseText(f) });
+      out.push({ kind: 'user', text, when });
       continue;
     }
     const t = proseText(f).trim();
     if (!t) continue;
     flush();
-    out.push({ kind: 'assistant', text: t });
+    out.push({ kind: 'assistant', text: t, when });
   }
   flush();
   return out;

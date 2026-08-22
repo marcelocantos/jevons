@@ -17,12 +17,61 @@ describe('displayRows', () => {
     expect(rows[1].text).toBe('⋯ 2 steps');
   });
 
-  it('renders agent_note as note, not assistant', () => {
+  it('folds agent_note into ⋯ n steps, not a note row', () => {
     const rows = displayRows([
-      { type: 'agent_note', text: 'jv-t1: landed abc' },
+      { type: 'agent_note', text: '[Fleet health] stalled' },
+      { type: 'agent_note', text: '[Who you are]' },
       { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
     ]);
-    expect(rows.map((r) => r.kind)).toEqual(['note', 'assistant']);
-    expect(rows[0].text).toBe('jv-t1: landed abc');
+    expect(rows.map((r) => r.kind)).toEqual(['steps', 'assistant']);
+    expect(rows[0].text).toBe('⋯ 2 steps');
+  });
+
+  it('owner echo with [user] marker does not paint a second bubble (🎯T537.1.2)', () => {
+    const rows = displayRows([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: "What's running right now?" }] } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: "[user]\nWhat's running right now?" }] } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: "[user]\nWhat's running right now?" }] } },
+    ]);
+    expect(rows.filter((r) => r.kind === 'user')).toEqual([
+      { kind: 'user', text: "What's running right now?", when: undefined },
+    ]);
+  });
+
+  it('owner echo wrapped in user_query paints once (🎯T537.1.2)', () => {
+    const rows = displayRows([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hello' }] } },
+      {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text: '[user]\n<user_query>\nhello\n</user_query>' }] },
+      },
+    ]);
+    expect(rows.filter((r) => r.kind === 'user')).toEqual([
+      { kind: 'user', text: 'hello', when: undefined },
+    ]);
+  });
+
+  it('one coalesced assistant frame is one row, not one pill per token (🎯T537.1.1)', () => {
+    const rows = displayRows([
+      {
+        type: 'assistant',
+        stream_id: 's1',
+        message: { content: [{ type: 'text', text: 'Yes. I have this message' }] },
+      },
+    ]);
+    expect(rows).toEqual([
+      { kind: 'assistant', text: 'Yes. I have this message', when: undefined },
+    ]);
+  });
+
+  it('coalesces agent_note with tool_use into one capsule', () => {
+    const rows = displayRows([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } },
+      { type: 'agent_note', text: '[Fleet health] stalled' },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } },
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(['user', 'steps', 'assistant']);
+    expect(rows[1].text).toBe('⋯ 2 steps');
   });
 });

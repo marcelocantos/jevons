@@ -1,7 +1,18 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import type { MuxEnvelope } from '../mux/protocol';
+import type { MuxEnvelope, MuxType } from '../mux/protocol';
+
+export type ConversationEvent = Omit<MuxEnvelope, 't'> & {
+  t: MuxType | 'batch';
+};
+import {
+  applyTranscriptFrame,
+  emptyStream,
+  offsetStream,
+  reduceTranscriptBodies,
+  type StreamJoin,
+} from './stream';
 
 export type ConversationMeta = {
   older?: number;
@@ -14,6 +25,7 @@ export type ConversationState = {
   meta: ConversationMeta | null;
   error: string | null;
   ready: boolean;
+  stream: StreamJoin;
 };
 
 export const emptyConversation = (): ConversationState => ({
@@ -21,15 +33,23 @@ export const emptyConversation = (): ConversationState => ({
   meta: null,
   error: null,
   ready: false,
+  stream: emptyStream(),
 });
 
 export function applyConversationEvent(
   state: ConversationState,
-  env: MuxEnvelope,
+  env: ConversationEvent,
 ): ConversationState {
   if (env.t === 'reset') return emptyConversation();
+  if (env.t === 'batch') {
+    const body = (env.body || {}) as { frames?: unknown[] };
+    const lines = Array.isArray(body.frames) ? body.frames : [];
+    const next = reduceTranscriptBodies(lines);
+    return { ...state, frames: next.frames, stream: next.stream };
+  }
   if (env.t === 'frame') {
-    return { ...state, frames: [...state.frames, env.body] };
+    const next = applyTranscriptFrame(state.frames, state.stream, env.body);
+    return { ...state, frames: next.frames, stream: next.stream };
   }
   if (env.t === 'meta') {
     return { ...state, meta: (env.body || {}) as ConversationMeta, ready: true };
@@ -55,9 +75,17 @@ export function applyConversationEvent(
       typeof state.meta.start === 'number' &&
       state.meta.start === start &&
       lines.length > 0;
+    if (sameWindow) {
+      return {
+        ...state,
+        meta: { ...(state.meta || {}), start, total, older },
+      };
+    }
+    const olderFrames = reduceTranscriptBodies(lines);
     return {
       ...state,
-      frames: sameWindow ? state.frames : [...lines, ...state.frames],
+      frames: [...olderFrames.frames, ...state.frames],
+      stream: offsetStream(state.stream, olderFrames.frames.length),
       meta: { ...(state.meta || {}), start, total, older },
     };
   }
