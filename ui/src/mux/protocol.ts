@@ -11,7 +11,8 @@ export type MuxType =
   | 'meta'
   | 'page'
   | 'send'
-  | 'error';
+  | 'error'
+  | 'reset';
 
 export type MuxEnvelope = {
   v: number;

@@ -9,9 +9,15 @@ export class MuxClient {
   private ws: WebSocket | null = null;
   private readonly handlers = new Map<string, Set<MuxHandler>>();
   private readonly pending: string[] = [];
+  private readonly watched = new Set<string>();
   private generation = 0;
+  private reconnectTimer = 0;
+  private everOpened = false;
+  private readonly url: string;
 
-  constructor(private readonly url: string) {}
+  constructor(url: string) {
+    this.url = url;
+  }
 
   connect(): void {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
@@ -23,12 +29,25 @@ export class MuxClient {
     ws.onopen = () => {
       if (gen !== this.generation) return;
       for (const msg of this.pending.splice(0)) ws.send(msg);
+      if (this.everOpened) {
+        for (const name of this.watched) {
+          this.dispatch({ v: 1, ch: transcriptChannel(name), t: 'reset' });
+          ws.send(encodeMux(transcriptChannel(name), 'open'));
+        }
+      }
+      this.everOpened = true;
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string') return;
       const env = decodeMux(ev.data);
       if (!env) return;
       this.dispatch(env);
+    };
+    ws.onclose = () => {
+      if (gen !== this.generation) return;
+      this.ws = null;
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = window.setTimeout(() => this.connect(), 500);
     };
   }
 
@@ -46,10 +65,12 @@ export class MuxClient {
   }
 
   openTranscript(name: string): void {
+    this.watched.add(name);
     this.send(encodeMux(transcriptChannel(name), 'open'));
   }
 
   closeTranscript(name: string): void {
+    this.watched.delete(name);
     this.send(encodeMux(transcriptChannel(name), 'close'));
   }
 

@@ -1,22 +1,28 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState, type FormEvent } from 'react';
+import { type FormEvent } from 'react';
+import { useDrafts } from '../store/drafts';
 
-export function UserRequest(props: { onSend: (text: string) => void; disabled?: boolean }) {
-  const [text, setText] = useState('');
+export function UserRequest(props: {
+  name: string;
+  onSend: (text: string) => void;
+  disabled?: boolean;
+}) {
+  const text = useDrafts((s) => s.drafts[props.name] || '');
+  const setDraft = useDrafts((s) => s.setDraft);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const t = text.trim();
     if (!t) return;
     props.onSend(t);
-    setText('');
+    setDraft(props.name, '');
   };
   return (
     <form className="user-request" onSubmit={submit}>
       <textarea
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => setDraft(props.name, e.target.value)}
         placeholder="Message"
         rows={3}
         onKeyDown={(e) => {

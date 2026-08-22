@@ -163,5 +163,17 @@ html, body, #root {
   font-size: 0.85rem;
 }
 
+.frontier-wrap { position: relative; overflow: auto; flex: 1; }
+.target-hover-card {
+  position: absolute;
+  right: 0.5rem;
+  top: 2rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  max-width: 16rem;
+  z-index: 5;
+}
+.target-hover-id { color: var(--accent); font-size: 0.75rem; }
 .muted { color: var(--muted); padding: 0.75rem; }
 .agent-error { color: #f87171; padding: 0.35rem 0.75rem; }

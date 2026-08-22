@@ -37,9 +37,12 @@ export function AgentTranscript(props: {
   name: string;
   frames: unknown[];
   meta: ConversationMeta | null;
+  ready?: boolean;
   onPageOlder?: () => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const followRef = useRef(true);
+  const pinnedHydrate = useRef(false);
   const count = props.frames.length;
   const virtualizer = useVirtualizer({
     count,
@@ -49,14 +52,30 @@ export function AgentTranscript(props: {
   });
 
   useEffect(() => {
-    if (count === 0) return;
-    virtualizer.scrollToIndex(count - 1, { align: 'end' });
-  }, [count, virtualizer]);
+    pinnedHydrate.current = false;
+    followRef.current = true;
+  }, [props.name]);
+
+  useEffect(() => {
+    if (!props.ready || count === 0) return;
+    if (!pinnedHydrate.current) {
+      pinnedHydrate.current = true;
+      const id = requestAnimationFrame(() => {
+        virtualizer.scrollToIndex(count - 1, { align: 'end' });
+      });
+      return () => cancelAnimationFrame(id);
+    }
+    if (followRef.current) {
+      virtualizer.scrollToIndex(count - 1, { align: 'end' });
+    }
+  }, [props.ready, count, virtualizer]);
 
   useEffect(() => {
     const el = parentRef.current;
     if (!el || !props.onPageOlder || !props.meta?.older) return;
     const onScroll = () => {
+      const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      followRef.current = fromBottom < 80;
       if (el.scrollTop < 48) props.onPageOlder?.();
     };
     el.addEventListener('scroll', onScroll);

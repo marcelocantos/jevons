@@ -15,6 +15,7 @@ export function AgentInteraction(props: { mux: MuxClient | null; name: string; t
         name={props.name}
         frames={conv.frames}
         meta={conv.meta}
+        ready={conv.ready}
         onPageOlder={
           conv.meta?.older
             ? () => conv.page(conv.meta!.start ?? conv.meta!.older ?? 0, 200)
@@ -22,7 +23,7 @@ export function AgentInteraction(props: { mux: MuxClient | null; name: string; t
         }
       />
       {conv.error ? <div className="agent-error">{conv.error}</div> : null}
-      <UserRequest onSend={(t) => conv.send(t)} />
+      <UserRequest name={props.name} onSend={(t) => conv.send(t)} />
     </section>
   );
 }
