@@ -209,12 +209,31 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		var env muxEnvelope
-		if err := json.Unmarshal(data, &env); err != nil {
-			continue
-		}
-		s.handleMuxEnvelope(ctx, conn, sess, env)
+		s.handleMuxRaw(ctx, conn, sess, data)
 	}
+}
+
+// handleMuxRaw consumes one client→server mux frame. Vanilla chat ping
+// ({"type":"ping"}) is accepted on this socket too (🎯T537.2.1): React's
+// daily driver talks /ws/mux, not /ws/chat, and owner_health heartbeat
+// must still tick.
+func (s *Server) handleMuxRaw(ctx context.Context, conn muxConn, sess *muxSession, data []byte) {
+	msg := strings.TrimSpace(string(data))
+	if msg == `{"type":"ping"}` {
+		s.NoteOwnerUIHeartbeat()
+		if conn == nil {
+			return
+		}
+		wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_ = conn.Write(wctx, websocket.MessageText, []byte(`{"type":"pong"}`))
+		cancel()
+		return
+	}
+	var env muxEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return
+	}
+	s.handleMuxEnvelope(ctx, conn, sess, env)
 }
 
 type muxConn interface {
