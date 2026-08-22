@@ -1,0 +1,30 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+import { describe, expect, it } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+function walk(dir: string, acc: string[] = []): string[] {
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    if (ent.name === 'node_modules' || ent.name === 'dist') continue;
+    const p = join(dir, ent.name);
+    if (ent.isDirectory()) walk(p, acc);
+    else if (/\.(ts|tsx|js|jsx)$/.test(ent.name)) acc.push(p);
+  }
+  return acc;
+}
+
+describe('T537.2 product path', () => {
+  it('ui/ does not call inspect_subscribe', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const hits: string[] = [];
+    for (const file of walk(join(root, 'src'))) {
+      if (file.includes('.test.')) continue;
+      const text = readFileSync(file, 'utf8');
+      if (text.includes('inspect_subscribe')) hits.push(file);
+    }
+    expect(hits, 'inspect_subscribe is the old sidebar hydrate').toEqual([]);
+  });
+});

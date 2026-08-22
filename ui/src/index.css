@@ -87,6 +87,29 @@ html, body, #root {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.msg {
+  position: relative;
+}
+.msg.msg-clipped > .msg-body {
+  max-height: 14rem;
+  overflow: hidden;
+}
+.msg-expand-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 1.05rem;
+  padding: 0;
+  position: absolute;
+  left: 50%;
+  bottom: -1px;
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px 4px 0 0;
+  color: var(--muted);
+}
 
 .user-request {
   display: flex;

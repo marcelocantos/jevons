@@ -206,7 +206,7 @@ init:
 
 # ── iOS app ─────────────────────────────────────────
 .PHONY: ios
-ios:
+ios: ui-build
 	cd ios && xcodegen generate
 
 # ── Test ─────────────────────────────────────────────
@@ -227,9 +227,12 @@ test-go-raw:
 	go test ./...
 
 # React cockpit (🎯T537.1). Daily GET / is still web/index.html (T505).
-.PHONY: ui-dev test-ui-react
+.PHONY: ui-dev ui-build test-ui-react
 ui-dev:
 	cd ui && npm run dev
+
+ui-build:
+	cd ui && npm run build
 
 test-ui-react:
 	cd ui && npm test

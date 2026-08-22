@@ -1,9 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ConversationMeta } from '../conversation/useConversation';
+import { clipClassName, shouldClip } from '../conversation/clip';
 
 function frameText(frame: unknown): string {
   if (!frame || typeof frame !== 'object') return '';
@@ -95,25 +96,63 @@ export function AgentTranscript(props: {
           const frame = props.frames[item.index];
           const role = frameRole(frame);
           return (
-            <div
+            <ClippedBubble
               key={item.key}
-              data-index={item.index}
-              ref={virtualizer.measureElement}
-              className={`bubble bubble-${role}`}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                transform: `translateY(${item.start}px)`,
-              }}
-            >
-              <div className="bubble-role">{role}</div>
-              <div className="bubble-body">{frameText(frame)}</div>
-            </div>
+              index={item.index}
+              role={role}
+              text={frameText(frame)}
+              start={item.start}
+              measureRef={virtualizer.measureElement}
+            />
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function ClippedBubble(props: {
+  index: number;
+  role: string;
+  text: string;
+  start: number;
+  measureRef: (el: Element | null) => void;
+}) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [fullH, setFullH] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setFullH(el.scrollHeight);
+  }, [props.text]);
+  const tall = shouldClip(fullH);
+  const cls = expanded ? `bubble bubble-${props.role} msg` : clipClassName(`bubble bubble-${props.role} msg`, fullH);
+  return (
+    <div
+      data-index={props.index}
+      ref={props.measureRef}
+      className={cls}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        transform: `translateY(${props.start}px)`,
+      }}
+    >
+      <div className="bubble-role">{props.role}</div>
+      <div className="bubble-body msg-body" ref={bodyRef}>
+        {props.text}
+      </div>
+      {tall ? (
+        <button
+          type="button"
+          className="msg-expand-tab"
+          aria-label={expanded ? 'collapse' : 'expand'}
+          onClick={() => setExpanded((v) => !v)}
+        />
+      ) : null}
     </div>
   );
 }

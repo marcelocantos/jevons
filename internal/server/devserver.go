@@ -28,9 +28,9 @@ type DevServer struct {
 	dir     string
 	handler http.Handler
 
-	mu            sync.Mutex
-	reloadChs     []chan struct{}
-	reloadTimer   *time.Timer // 🎯T144 debounce
+	mu          sync.Mutex
+	reloadChs   []chan struct{}
+	reloadTimer *time.Timer // 🎯T144 debounce
 }
 
 // NewDevServer creates a dev server for the given directory.
@@ -46,6 +46,13 @@ func NewDevServer(dir string) *DevServer {
 // serve the UI standalone (🎯T53; brew installs ship no repo checkout).
 // Returns the DevServer when disk mode is active, nil in embedded mode.
 func RegisterUIRoutes(mux *http.ServeMux, dir string) *DevServer {
+	// 🎯T537.2: product document is the Vite React build (ui/dist), sibling
+	// of the legacy web/ dir. Vanilla web/index.html is not served when the
+	// SPA exists.
+	if dist := reactDistDir(dir); dist != "" {
+		slog.Info("serving React cockpit", "dir", dist)
+		return registerReactSPA(mux, dist)
+	}
 	if st, err := os.Stat(filepath.Join(dir, "index.html")); err == nil && !st.IsDir() {
 		ds := NewDevServer(dir)
 		ds.RegisterRoutes(mux)
@@ -121,6 +128,51 @@ func (ds *DevServer) RegisterRoutes(mux *http.ServeMux) {
 		noCache(w)
 		scripts.ServeHTTP(w, r)
 	}))
+}
+
+func reactDistDir(webDir string) string {
+	webDir = filepath.Clean(webDir)
+	candidates := []string{
+		filepath.Join(filepath.Dir(webDir), "ui", "dist"),
+		filepath.Join(webDir, "..", "ui", "dist"),
+	}
+	seen := map[string]bool{}
+	for _, d := range candidates {
+		d = filepath.Clean(d)
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		st, err := os.Stat(filepath.Join(d, "index.html"))
+		if err == nil && !st.IsDir() {
+			return d
+		}
+	}
+	return ""
+}
+
+func registerReactSPA(mux *http.ServeMux, dist string) *DevServer {
+	ds := NewDevServer(dist)
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		noCache(w)
+		raw, err := os.ReadFile(filepath.Join(dist, "index.html"))
+		if err != nil {
+			slog.Error("react cockpit index.html unreadable", "dir", dist, "err", err)
+			http.Error(w, "react cockpit unreadable: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(raw)
+	})
+	file := http.FileServer(http.Dir(dist))
+	for _, p := range []string{"/assets/", "/favicon.svg", "/icons.svg"} {
+		mux.Handle("GET "+p, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			noCache(w)
+			file.ServeHTTP(w, r)
+		}))
+	}
+	mux.HandleFunc("GET /ws/reload", ds.handleReload)
+	return ds
 }
 
 func noCache(w http.ResponseWriter) {
