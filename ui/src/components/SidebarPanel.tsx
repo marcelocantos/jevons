@@ -3,7 +3,13 @@
 
 import type { ReactNode } from 'react';
 
-export type SidebarTab = 'transcript' | 'frontier' | 'more';
+export type SidebarTab = 'frontier' | 'transcript' | 'coach';
+
+const TABS: { id: SidebarTab; label: string }[] = [
+  { id: 'frontier', label: 'Frontier' },
+  { id: 'transcript', label: 'Transcript' },
+  { id: 'coach', label: 'Coach' },
+];
 
 export function SidebarPanel(props: {
   tab: SidebarTab;
@@ -12,15 +18,17 @@ export function SidebarPanel(props: {
 }) {
   return (
     <div className="sidebar-panel">
-      <div className="sidebar-tabs">
-        {(['transcript', 'frontier', 'more'] as SidebarTab[]).map((t) => (
+      <div className="sidebar-tabs" role="tablist">
+        {TABS.map((t) => (
           <button
-            key={t}
+            key={t.id}
             type="button"
-            className={props.tab === t ? 'selected' : ''}
-            onClick={() => props.onTab(t)}
+            role="tab"
+            className={props.tab === t.id ? 'selected' : ''}
+            aria-selected={props.tab === t.id}
+            onClick={() => props.onTab(t.id)}
           >
-            {t}
+            {t.label}
           </button>
         ))}
       </div>

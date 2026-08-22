@@ -1,39 +1,13 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { marked } from 'marked';
 import type { ConversationMeta } from '../conversation/useConversation';
 import { clipClassName, shouldClip } from '../conversation/clip';
 import { shouldRequestPage } from '../conversation/page';
-
-function frameText(frame: unknown): string {
-  if (!frame || typeof frame !== 'object') return '';
-  const f = frame as Record<string, unknown>;
-  const msg = f.message as Record<string, unknown> | undefined;
-  const content = msg?.content ?? f.text ?? f.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((b) => {
-        if (b && typeof b === 'object' && 'text' in (b as object)) {
-          return String((b as { text?: string }).text || '');
-        }
-        return '';
-      })
-      .join('');
-  }
-  return JSON.stringify(frame);
-}
-
-function frameRole(frame: unknown): string {
-  if (!frame || typeof frame !== 'object') return 'unknown';
-  const f = frame as Record<string, unknown>;
-  if (typeof f.type === 'string') return f.type;
-  const msg = f.message as Record<string, unknown> | undefined;
-  if (typeof msg?.role === 'string') return msg.role;
-  return 'unknown';
-}
+import { displayRows, type DisplayKind } from '../conversation/display';
 
 export function AgentTranscript(props: {
   name: string;
@@ -47,7 +21,8 @@ export function AgentTranscript(props: {
   const pinnedHydrate = useRef(false);
   const pagingRef = useRef(false);
   const pageStartRef = useRef(props.meta?.start);
-  const count = props.frames.length;
+  const rows = useMemo(() => displayRows(props.frames), [props.frames]);
+  const count = rows.length;
   const virtualizer = useVirtualizer({
     count,
     getScrollElement: () => parentRef.current,
@@ -113,14 +88,13 @@ export function AgentTranscript(props: {
         }}
       >
         {virtualizer.getVirtualItems().map((item) => {
-          const frame = props.frames[item.index];
-          const role = frameRole(frame);
+          const row = rows[item.index];
           return (
             <ClippedBubble
               key={item.key}
               index={item.index}
-              role={role}
-              text={frameText(frame)}
+              kind={row.kind}
+              text={row.text}
               start={item.start}
               measureRef={virtualizer.measureElement}
             />
@@ -133,7 +107,7 @@ export function AgentTranscript(props: {
 
 function ClippedBubble(props: {
   index: number;
-  role: string;
+  kind: DisplayKind;
   text: string;
   start: number;
   measureRef: (el: Element | null) => void;
@@ -147,7 +121,8 @@ function ClippedBubble(props: {
     setFullH(el.scrollHeight);
   }, [props.text]);
   const tall = shouldClip(fullH);
-  const cls = expanded ? `bubble bubble-${props.role} msg` : clipClassName(`bubble bubble-${props.role} msg`, fullH);
+  const base = `bubble bubble-${props.kind} msg`;
+  const cls = expanded || props.kind === 'steps' ? base : clipClassName(base, fullH);
   return (
     <div
       data-index={props.index}
@@ -161,10 +136,18 @@ function ClippedBubble(props: {
         transform: `translateY(${props.start}px)`,
       }}
     >
-      <div className="bubble-role">{props.role}</div>
-      <div className="bubble-body msg-body" ref={bodyRef}>
-        {props.text}
-      </div>
+      <div className="bubble-role">{props.kind === 'steps' ? '' : props.kind}</div>
+      {props.kind === 'assistant' ? (
+        <div
+          className="bubble-body msg-body md"
+          ref={bodyRef}
+          dangerouslySetInnerHTML={{ __html: marked.parse(props.text, { async: false }) as string }}
+        />
+      ) : (
+        <div className="bubble-body msg-body" ref={bodyRef}>
+          {props.text}
+        </div>
+      )}
       {tall ? (
         <button
           type="button"

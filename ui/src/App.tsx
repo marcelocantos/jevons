@@ -1,6 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import {
   Outlet,
@@ -16,6 +17,8 @@ import { AgentTree, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
 import { FrontierTable, type FrontierRow } from './components/FrontierTable';
 import { PlanUsageBar } from './components/PlanUsageBar';
+import { applyTheme, persistTheme, readThemePref, type ThemePref } from './theme';
+import { clampRhsWidth, persistRhsWidth, readRhsWidth } from './layout/rhsWidth';
 
 const queryClient = new QueryClient();
 
@@ -34,7 +37,7 @@ function parseSearch(raw: Record<string, unknown>): Search {
   const agent =
     typeof raw.agent === 'string' && raw.agent.trim() ? raw.agent.trim() : 'jevons-po';
   const tab: SidebarTab =
-    raw.tab === 'frontier' || raw.tab === 'more' ? raw.tab : 'transcript';
+    raw.tab === 'transcript' || raw.tab === 'coach' ? raw.tab : 'frontier';
   return { agent, tab };
 }
 
@@ -98,15 +101,76 @@ function Cockpit() {
   });
   const agents =
     agentsQ.data && agentsQ.data.length ? agentsQ.data : [{ name: 'jevons' }, { name: 'jevons-po' }];
+  const [theme, setTheme] = useState<ThemePref>('system');
+  const [rhsW, setRhsW] = useState(360);
+  const rhsWRef = useRef(360);
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+  rhsWRef.current = rhsW;
+
+  useEffect(() => {
+    const pref = readThemePref();
+    setTheme(pref);
+    applyTheme(pref);
+    setRhsW(readRhsWidth(window.innerWidth));
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const next = clampRhsWidth(d.startW - (e.clientX - d.startX), window.innerWidth);
+      setRhsW(next);
+    };
+    const onUp = () => {
+      if (!dragRef.current) return;
+      persistRhsWidth(rhsWRef.current);
+      dragRef.current = null;
+      document.body.classList.remove('rhs-resizing');
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
 
   return (
-    <div className="cockpit">
+    <div className="cockpit" style={{ ['--rhs-width' as string]: rhsW + 'px' }}>
       <header className="cockpit-bar">
         <span>Jevons</span>
         <PlanUsageBar />
+        <div id="theme-toggle" className="theme-toggle">
+          {(['system', 'light', 'dark'] as ThemePref[]).map((p) => (
+            <button
+              key={p}
+              type="button"
+              data-t={p}
+              className={theme === p ? 'active' : ''}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                persistTheme(p);
+                setTheme(p);
+              }}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       </header>
       <div className="cockpit-body">
         <AgentInteraction mux={mux} name="jevons" title="Root" />
+        <div
+          className="rhs-width-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar width"
+          tabIndex={0}
+          onMouseDown={(e) => {
+            dragRef.current = { startX: e.clientX, startW: rhsW };
+            document.body.classList.add('rhs-resizing');
+          }}
+        />
         <aside className="cockpit-rhs">
           <AgentTree
             agents={agents}
@@ -117,12 +181,12 @@ function Cockpit() {
             tab={tab}
             onTab={(next) => navigate({ search: { agent, tab: next } })}
           >
-            {tab === 'transcript' ? (
-              <AgentInteraction mux={mux} name={agent} title={agent} />
-            ) : tab === 'frontier' ? (
+            {tab === 'frontier' ? (
               <FrontierTable rows={frontierQ.data || []} />
+            ) : tab === 'transcript' ? (
+              <AgentInteraction mux={mux} name={agent} title={agent} />
             ) : (
-              <p className="muted">More chrome ports next.</p>
+              <p className="muted">Coach judgments port next.</p>
             )}
           </SidebarPanel>
         </aside>

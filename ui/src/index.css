@@ -1,14 +1,28 @@
-:root {
+:root, [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #111318;
-  --panel: #1a1d24;
-  --border: #2e303a;
-  --text: #e8e6ef;
-  --muted: #9ca3af;
-  --accent: #c084fc;
-  font-family: system-ui, 'Segoe UI', sans-serif;
+  --bg: #1a0e0e;
+  --panel: #261515;
+  --border: rgba(255,180,180,0.12);
+  --text: #f0e8e8;
+  --muted: #b4a0a0;
+  --accent: #ef4444;
+  --heading: #fff5f5;
+  --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --rhs-width: 22rem;
+  font-family: var(--sans);
   background: var(--bg);
   color: var(--text);
+}
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f8f8fa;
+  --panel: #ffffff;
+  --border: rgba(0,0,0,0.08);
+  --text: #2c2c34;
+  --muted: #6e6e7a;
+  --accent: #6d5dd3;
+  --heading: #1a1a22;
 }
 
 html, body, #root {
@@ -39,10 +53,29 @@ html, body, #root {
 
 .cockpit-body {
   display: grid;
-  grid-template-columns: 1fr 22rem;
+  grid-template-columns: 1fr 6px var(--rhs-width);
   min-height: 0;
   flex: 1;
 }
+.rhs-width-handle {
+  cursor: col-resize;
+  background: var(--border);
+}
+.rhs-width-handle:hover,
+body.rhs-resizing .rhs-width-handle {
+  background: var(--accent);
+}
+body.rhs-resizing { cursor: col-resize; user-select: none; }
+.theme-toggle { display: flex; gap: 0.25rem; font-weight: 400; }
+.theme-toggle button {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.75rem;
+}
+.theme-toggle button.active { color: var(--text); border-color: var(--accent); }
 
 .cockpit-rhs {
   display: flex;
@@ -87,6 +120,17 @@ html, body, #root {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.bubble-body.md { white-space: normal; }
+.bubble-body.md p { margin: 0.4em 0; }
+.bubble-body.md pre {
+  font-family: var(--mono);
+  overflow: auto;
+  background: var(--panel);
+  padding: 0.5rem;
+  border-radius: 6px;
+}
+.bubble-note { opacity: 0.85; font-size: 0.9rem; }
+.bubble-steps { color: var(--muted); font-family: var(--mono); font-size: 0.85rem; }
 .msg {
   position: relative;
 }

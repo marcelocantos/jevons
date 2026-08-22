@@ -29,6 +29,14 @@ describe('T537.2 product path', () => {
     expect(hits, 'inspect_subscribe is the old sidebar hydrate').toEqual([]);
   });
 
+  it('default sidebar tab is Frontier then Transcript', () => {
+    const panel = readFileSync(join(root, 'src/components/SidebarPanel.tsx'), 'utf8');
+    const fi = panel.indexOf("id: 'frontier'");
+    const ti = panel.indexOf("id: 'transcript'");
+    expect(fi).toBeGreaterThanOrEqual(0);
+    expect(ti).toBeGreaterThan(fi);
+  });
+
   it('ui/ does not import web/', () => {
     const hits: string[] = [];
     for (const file of walk(join(root, 'src'))) {
