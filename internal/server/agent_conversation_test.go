@@ -48,79 +48,24 @@ func overseerFamilyServer(t *testing.T) *Server {
 func TestOverseerTranscriptThroughAgentFamily(t *testing.T) {
 	s := overseerFamilyServer(t)
 
-	payload, ok := s.buildAgentTranscriptPayload("jevons")
-	if !ok {
-		t.Fatal("overseer must be addressable by name")
+	frames := inspectReplay(t, s, "jevons")
+	if len(frames) < 1 || frames[0]["type"] != "conversation_reset" {
+		t.Fatalf("want conversation_reset, got %v", frames)
 	}
-	if payload["empty"] == true {
-		t.Fatalf("want real turns, got %v", payload)
+	rows := replayRoleRows(frames)
+	if !containsRow(rows, "user: ship the widget") {
+		t.Fatalf("user missing: %v", rows)
 	}
-	turns, _ := payload["turns"].([]map[string]any)
-	if len(turns) != 3 {
-		t.Fatalf("want user+assistant+note rows, got %v", payload["turns"])
+	if !containsRow(rows, "assistant: on it") {
+		t.Fatalf("assistant missing (tool_use must not leak as prose): %v", rows)
 	}
-	if turns[0]["role"] != "user" || turns[0]["text"] != "ship the widget" {
-		t.Fatalf("user row=%v", turns[0])
+	if !containsRow(rows, "agent_note: jv-t309-worker: landed abc123") {
+		t.Fatalf("note missing: %v", rows)
 	}
-	// Same shape as a fleet transcript row: turn_number/role/text.
-	if turns[0]["turn_number"] != 1 {
-		t.Fatalf("turn_number=%v", turns[0]["turn_number"])
-	}
-	if turns[1]["role"] != "assistant" || turns[1]["text"] != "on it" {
-		t.Fatalf("assistant row=%v (tool_use must not leak as prose)", turns[1])
-	}
-	events, _ := payload["events"].([]map[string]any)
-	if len(events) < 3 {
-		t.Fatalf("want wire events including tool_use, got %v", payload["events"])
-	}
-	var sawTool bool
-	for _, ev := range events {
-		if ev["type"] != "assistant" {
-			continue
+	for _, m := range frames {
+		if m["type"] == "agent_transcript" {
+			t.Fatalf("dump envelope must not appear: %v", m)
 		}
-		msg, _ := ev["message"].(map[string]any)
-		raw, _ := msg["content"].([]any)
-		for _, blk := range raw {
-			m, _ := blk.(map[string]any)
-			if m["type"] == "tool_use" && m["name"] == "Bash" {
-				sawTool = true
-			}
-		}
-	}
-	if !sawTool {
-		t.Fatalf("history events must carry tool_use for applyEventTape, got %v", events)
-	}
-	if turns[2]["role"] != "agent_note" {
-		t.Fatalf("note row=%v", turns[2])
-	}
-}
-
-// The HTTP member of the family serves the overseer like any other agent.
-func TestOverseerTranscriptHTTPByName(t *testing.T) {
-	s := overseerFamilyServer(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/agents/jevons/transcript", nil)
-	req.SetPathValue("name", "jevons")
-	rec := httptest.NewRecorder()
-	s.handleAgentTranscript(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var body struct {
-		Name   string           `json:"name"`
-		Source string           `json:"source"`
-		Empty  bool             `json:"empty"`
-		Turns  []map[string]any `json:"turns"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.Name != "jevons" || body.Source != conversationSourceChatlog {
-		t.Fatalf("body=%+v", body)
-	}
-	if body.Empty || len(body.Turns) == 0 {
-		t.Fatalf("want overseer turns over HTTP, got %+v", body)
 	}
 }
 
@@ -235,25 +180,12 @@ func TestOverseerSendByNameAgentOrigin(t *testing.T) {
 	}
 }
 
-// Root and another name share the same HTTP handlers (not a second product).
-func TestNamedAgentsShareTranscriptAndSendHandlers(t *testing.T) {
+// Root and another name share the same send handler (not a second product).
+func TestNamedAgentsShareSendHandler(t *testing.T) {
 	s := overseerFamilyServer(t)
 	s.notifySender = func(string) error { return nil }
 
 	for _, name := range []string{"jevons", "jevons-po"} {
-		tr := httptest.NewRequest(http.MethodGet, "/api/agents/"+name+"/transcript", nil)
-		tr.SetPathValue("name", name)
-		trec := httptest.NewRecorder()
-		s.handleAgentTranscript(trec, tr)
-		if name == "jevons" && trec.Code != http.StatusOK {
-			t.Fatalf("%s transcript status=%d body=%s", name, trec.Code, trec.Body.String())
-		}
-		// jevons-po may be 404 (not registered) — still the same handler.
-		if trec.Code != http.StatusOK && trec.Code != http.StatusNotFound &&
-			trec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("%s transcript unexpected status=%d body=%s", name, trec.Code, trec.Body.String())
-		}
-
 		sr := httptest.NewRequest(http.MethodPost, "/api/agents/"+name+"/send",
 			strings.NewReader(`{"text":"ping"}`))
 		sr.SetPathValue("name", name)

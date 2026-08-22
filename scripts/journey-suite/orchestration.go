@@ -527,10 +527,8 @@ func (s *suite) jWorkerShellTool() error {
 }
 
 // jWorkerTranscriptVisible is the 🎯T282 inspect oracle: after a worker has
-// taken a real turn, the RHS inspect path must be able to load its
-// transcript. Session stores differ per provider (Grok sessions tree vs
-// Claude projects tree, 🎯T213), and a discovery path wired to one of them
-// leaves the other's workers showing an empty pane.
+// taken a real turn, the product inspect record (the jevons agent journal)
+// must have turns. Provider session trees are not a second hydrate.
 func (s *suite) jWorkerTranscriptVisible() error {
 	id := fmt.Sprintf("orch-tx-%d", time.Now().Unix()%100000)
 	work := filepath.Join(s.stateDir, "transcript-work")
@@ -553,7 +551,7 @@ func (s *suite) jWorkerTranscriptVisible() error {
 		return fmt.Errorf("direct: %w", err)
 	}
 
-	// The transcript lands via the provider's own store, so poll briefly
+	// The inspect record is the jevons agent journal, so poll briefly
 	// rather than assuming it is flushed the instant the turn returns.
 	deadline := time.Now().Add(20 * time.Second)
 	var lastReason string

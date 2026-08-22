@@ -223,6 +223,9 @@ test('T309.1 index.html: inspect paint is applyWireEvent, not renderAgentInspect
     'renderAgentInspect dump is gone');
   assert.ok(html.indexOf('function handleNamedConversation') >= 0);
   assert.ok(html.indexOf('function loadAgentTranscript') >= 0);
+  assert.ok(html.indexOf('conversation_reset') >= 0);
+  assert.ok(!/fetch\([^)]*\/transcript/.test(html),
+    'inspect must not fetch GET /api/agents/{name}/transcript');
 });
 
 // ── 🎯T371: owner turns never vanish (main ↔ sidebar parity) ─────────

@@ -72,25 +72,6 @@ func (f *sidebarFixture) send(t *testing.T, text string) *httptest.ResponseRecor
 	return rr
 }
 
-// turnTexts flattens a transcript payload into "role: text" rows.
-func turnTexts(t *testing.T, payload map[string]any) []string {
-	t.Helper()
-	raw, ok := payload["turns"].([]map[string]any)
-	if !ok {
-		if anyTurns, isAny := payload["turns"].([]any); isAny && len(anyTurns) == 0 {
-			return nil
-		}
-		t.Fatalf("turns has unexpected type %T", payload["turns"])
-	}
-	out := make([]string, 0, len(raw))
-	for _, turn := range raw {
-		role, _ := turn["role"].(string)
-		text, _ := turn["text"].(string)
-		out = append(out, role+": "+text)
-	}
-	return out
-}
-
 func containsRow(rows []string, want string) bool {
 	for _, r := range rows {
 		if r == want {
@@ -134,28 +115,18 @@ func TestSidebarConversationSurvivesDaemonRestart(t *testing.T) {
 
 	// --- daemon life 2: brand-new Server and Registry over the same state ---
 	restarted := newSidebarFixture(t, dir, name, "sess-t367-probe")
-	payload, ok := restarted.srv.buildAgentTranscriptPayload(name)
-	if !ok {
-		t.Fatal("agent not found after restart")
-	}
-	if payload["empty"] == true {
-		t.Fatalf("sidebar history empty after restart: %+v", payload)
-	}
-	rows := turnTexts(t, payload)
+	frames := inspectReplay(t, restarted.srv, name)
+	rows := replayRoleRows(frames)
 	if !containsRow(rows, "user: "+ownerMsg) {
 		t.Fatalf("owner message lost across restart: %v", rows)
 	}
 	if !containsRow(rows, "assistant: "+reply) {
 		t.Fatalf("agent reply lost across restart: %v", rows)
 	}
-	if payload["source"] != conversationSourceAgentJournal {
-		t.Fatalf("source=%v want %s", payload["source"], conversationSourceAgentJournal)
-	}
 
-	// Hard-reload arm: inspect_subscribe rebuilds from the same call, and a
-	// second rebuild is stable (no client state, no drift).
-	again, _ := restarted.srv.buildAgentTranscriptPayload(name)
-	if got := strings.Join(turnTexts(t, again), "|"); got != strings.Join(rows, "|") {
+	// Hard-reload arm: writeInspectReplay rebuilds from the same journal.
+	again := inspectReplay(t, restarted.srv, name)
+	if got := strings.Join(replayRoleRows(again), "|"); got != strings.Join(rows, "|") {
 		t.Fatalf("reload rebuild drifted:\n%s\n%s", got, strings.Join(rows, "|"))
 	}
 }
@@ -175,12 +146,9 @@ func TestSidebarMessageJournaledBeforeDelivery(t *testing.T) {
 		t.Fatalf("expected delivery failure, got 200: %s", rr.Body.String())
 	}
 
-	payload, ok := f.srv.buildAgentTranscriptPayload(name)
-	if !ok {
-		t.Fatal("agent not found")
-	}
-	if !containsRow(turnTexts(t, payload), "user: "+ownerMsg) {
-		t.Fatalf("failed send dropped the owner turn: %+v", payload["turns"])
+	rows := replayRoleRows(inspectReplay(t, f.srv, name))
+	if !containsRow(rows, "user: "+ownerMsg) {
+		t.Fatalf("failed send dropped the owner turn: %v", rows)
 	}
 }
 
@@ -198,8 +166,7 @@ func TestSidebarJournalDedupesProviderEcho(t *testing.T) {
 	// Provider echoes the prompt back as a user event.
 	f.srv.DeliverInspectLive(name, claudia.Event{Type: "user", Text: ownerMsg})
 
-	payload, _ := f.srv.buildAgentTranscriptPayload(name)
-	rows := turnTexts(t, payload)
+	rows := replayRoleRows(inspectReplay(t, f.srv, name))
 	n := 0
 	for _, r := range rows {
 		if r == "user: "+ownerMsg {
@@ -230,85 +197,6 @@ func TestAgentJournalFileName(t *testing.T) {
 			t.Errorf("agentJournalFileName(%q)=%q want %q", in, got, want)
 		}
 	}
-}
-
-// TestMergeAgentTurns pins the overlay rule: the sidebar shows the union of the
-// provider session and the jevons journal, never the intersection.
-func TestMergeAgentTurns(t *testing.T) {
-	turn := func(n int, role, text string) map[string]any {
-		return map[string]any{"turn_number": n, "role": role, "text": text}
-	}
-	texts := func(ts []map[string]any) string {
-		var b strings.Builder
-		for i, x := range ts {
-			if i > 0 {
-				b.WriteString("|")
-			}
-			b.WriteString(x["role"].(string) + ":" + x["text"].(string))
-		}
-		return b.String()
-	}
-
-	t.Run("no journal keeps session verbatim", func(t *testing.T) {
-		session := []map[string]any{turn(1, "user", "a"), turn(1, "assistant", "b")}
-		got, used := mergeAgentTurns(session, nil)
-		if used || texts(got) != "user:a|assistant:b" {
-			t.Fatalf("got=%q used=%v", texts(got), used)
-		}
-	})
-
-	t.Run("session gone falls back to journal", func(t *testing.T) {
-		journal := []map[string]any{turn(1, "user", "a"), turn(1, "assistant", "b")}
-		got, used := mergeAgentTurns(nil, journal)
-		if !used || texts(got) != "user:a|assistant:b" {
-			t.Fatalf("got=%q used=%v", texts(got), used)
-		}
-	})
-
-	t.Run("unflushed tail appends after session", func(t *testing.T) {
-		session := []map[string]any{turn(1, "user", "a"), turn(1, "assistant", "b")}
-		journal := []map[string]any{turn(1, "user", "a"), turn(1, "assistant", "b"), turn(2, "user", "c")}
-		got, used := mergeAgentTurns(session, journal)
-		if !used || texts(got) != "user:a|assistant:b|user:c" {
-			t.Fatalf("got=%q used=%v", texts(got), used)
-		}
-		// Renumbered from 1 at each user boundary.
-		if got[2]["turn_number"] != 2 {
-			t.Fatalf("turn_number=%v want 2", got[2]["turn_number"])
-		}
-	})
-
-	t.Run("journal newer than a pre-existing session appends whole", func(t *testing.T) {
-		// Agent existed before the journal did: session holds the old turns,
-		// the journal only the new one. Nothing overlaps.
-		session := []map[string]any{turn(1, "user", "old"), turn(1, "assistant", "older reply")}
-		journal := []map[string]any{turn(1, "user", "new")}
-		got, used := mergeAgentTurns(session, journal)
-		if !used || texts(got) != "user:old|assistant:older reply|user:new" {
-			t.Fatalf("got=%q used=%v", texts(got), used)
-		}
-	})
-
-	t.Run("rotated session shorter than journal uses journal whole", func(t *testing.T) {
-		journal := []map[string]any{
-			turn(1, "user", "a"), turn(1, "assistant", "b"),
-			turn(2, "user", "c"), turn(2, "assistant", "d"),
-		}
-		session := []map[string]any{turn(1, "user", "c"), turn(1, "assistant", "d")}
-		got, used := mergeAgentTurns(session, journal)
-		if !used || texts(got) != "user:a|assistant:b|user:c|assistant:d" {
-			t.Fatalf("got=%q used=%v", texts(got), used)
-		}
-	})
-
-	t.Run("session already complete adds nothing", func(t *testing.T) {
-		session := []map[string]any{turn(1, "user", "a"), turn(1, "assistant", "b")}
-		journal := []map[string]any{turn(1, "user", "a")}
-		got, used := mergeAgentTurns(session, journal)
-		if used || texts(got) != "user:a|assistant:b" {
-			t.Fatalf("got=%q used=%v", texts(got), used)
-		}
-	})
 }
 
 // 🎯T481: every provider event is a journal line, including types the
@@ -383,13 +271,8 @@ func TestOverseerTranscriptUnaffectedByAgentJournal(t *testing.T) {
 // deregistration is not erasure.
 //
 // The vanish this closes: a fleet aside is stopped and reaped (🎯T165), or is
-// removed between the pane painting and its next rehydrate. buildAgentTranscriptPayload
-// used to return ok=false for any name missing from the registry — BEFORE
-// reading the journal — so the wire pushed {"error":"agent not found","turns":[]}
-// and the client applied that empty model over the pane, deleting owner turns
-// that were sitting durably on disk the whole time (the att-msln9k27 /
-// "Discuss T364" class). Send already rehydrates a stopped agent; display now
-// matches it.
+// removed between the pane painting and its next rehydrate. writeInspectReplay
+// still replays the journal for a name missing from the registry.
 func TestDeregisteredAgentStillServesJournal(t *testing.T) {
 	dir := t.TempDir()
 	const name = "att-t371-deregistered"
@@ -421,30 +304,19 @@ func TestDeregisteredAgentStillServesJournal(t *testing.T) {
 	srv.SetRegistry(reg)
 	srv.SetTranscriptReader(transcript.NewReader(filepath.Join(dir, "sessions")))
 
-	payload, ok := srv.buildAgentTranscriptPayload(name)
-	if !ok {
-		t.Fatal("deregistered agent with a journal must still serve its conversation")
-	}
-	rows := turnTexts(t, payload)
+	frames := inspectReplay(t, srv, name)
+	rows := replayRoleRows(frames)
 	if !containsRow(rows, "user: "+ownerMsg) {
 		t.Fatalf("owner turn lost after deregistration: %v", rows)
 	}
 	if !containsRow(rows, "assistant: "+reply) {
 		t.Fatalf("agent reply lost after deregistration: %v", rows)
 	}
-	if empty, _ := payload["empty"].(bool); empty {
-		t.Fatal("payload reported empty while carrying journal turns")
-	}
-	if unreg, _ := payload["unregistered"].(bool); !unreg {
-		t.Fatal("payload must mark the agent unregistered so the UI can say so")
-	}
-	if src, _ := payload["source"].(string); src != conversationSourceAgentJournal {
-		t.Fatalf("source=%q want %q", src, conversationSourceAgentJournal)
-	}
 
-	// A genuinely unknown name (no registry entry, no journal) is still
-	// not-found — this must not become a catch-all that invents panes.
-	if _, ok := srv.buildAgentTranscriptPayload("att-never-existed"); ok {
-		t.Fatal("unknown name with no journal must remain not-found")
+	// A genuinely unknown name (no registry entry, no journal) hydrates
+	// as conversation_reset with no turns — not a dump "not found" blob.
+	unknown := inspectReplay(t, srv, "att-never-existed")
+	if replayUserCount(unknown) != 0 {
+		t.Fatalf("unknown name invented turns: %v", replayRoleRows(unknown))
 	}
 }

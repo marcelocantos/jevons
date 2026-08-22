@@ -184,11 +184,13 @@ test('index.html wires agent inspect pane + selectAgent transcript', function ()
   assert.ok(html.indexOf('agent-inspect') >= 0 || html.indexOf('id="agent-transcript"') >= 0,
     'transcript pane host');
   assert.ok(html.indexOf('scripts/agent_transcript.js') >= 0, 'script tag');
-  // 🎯T209: primary path is inspect_subscribe on /ws/chat; HTTP residual OK.
+  // 🎯T209: primary path is inspect_subscribe on /ws/chat. Dump HTTP is gone.
   assert.ok(html.indexOf('inspect_subscribe') >= 0 || html.indexOf('subscribeAgentInspect') >= 0,
     'inspect subscribe wire path');
-  assert.ok(html.indexOf('/api/agents/') >= 0 && html.indexOf('transcript') >= 0,
-    'HTTP transcript residual for debug/export');
+  assert.ok(html.indexOf('/api/agents/') >= 0 && html.indexOf('/send') >= 0,
+    'named send HTTP remains');
+  assert.ok(!/\/api\/agents\/[^'"\s]+\/transcript/.test(html),
+    'GET /api/agents/{name}/transcript dump must not be a product path');
   assert.ok(html.indexOf('pickAutoSelect') >= 0 || html.indexOf('AgentTranscript.pickAutoSelect') >= 0,
     'auto-select on new aside');
   // Must not dump fleet monologue into #messages as the select path.

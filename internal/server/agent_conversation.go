@@ -12,51 +12,18 @@ import (
 )
 
 // 🎯T309.2: ONE agent-addressed conversation family. Three operations —
-// transcript history, live subscribe, send — addressed uniformly by agent
-// name, with the overseer as just another addressable agent:
+// hydrate, live subscribe, send — addressed uniformly by agent name, with
+// the overseer as just another addressable agent:
 //
-//	history: ReplayTailSealed of the agent's journal (same as /ws/chat)
+//	history: writeInspectReplay (ReplayTailSealed named chat-wire)
 //	live:    named chat-wire frames on /ws/chat
 //	send:    sendToNamedAgentAs(name, text, origin)
 //
-// Before this slice the overseer was refused by the inspect family (🎯T124
-// "overseer uses main chat") and could only be reached through the /ws/chat
-// owner wire, so three conversation operations existed that no agent-addressed
-// call could perform. They now all resolve by name.
-//
-// TRANSPORT RESIDUAL (documented asymmetry, acceptance 2). What remains
-// overseer-specific is transport and durability, not conversation capability:
-//
-//   - The overseer's durable record is the owner chat journal (chatlog), not a
-//     provider session JSONL, so its turns are read from there. Both sources
-//     project into the SAME turn shape ({turn_number, role, text}); the payload
-//     names its origin in "source" (chatlog | session).
-//   - GET /api/history + the /ws/chat replay-on-connect remain as the main
-//     chat's paging/transport shim. They are a COMPAT SHIM over the same
-//     journal, retained until the transport cutover in 🎯T10.6 (and the UI
-//     cutover in 🎯T309.1) moves main chat onto the agent-addressed family.
-//     No conversation operation is exclusive to them.
-//   - A /ws/chat client subscribed to the overseer receives both the main chat
-//     line and the agent_transcript live frame for the same event; de-duping
-//     belongs to the single widget in 🎯T309.1.
-//   - Conversation CONTROL ops (rewind, interrupt) sit outside this family on
-//     both sides — the overseer's ride /ws/chat control frames, fleet agents'
-//     ride MCP (jevons_transcript_rewind, jevons_agent_stop) and
-//     POST /api/agents/engagement/stop. Unifying control is not this slice.
-//
-// Full write-up: docs/architecture-current.md § The conversation surface.
-const (
-	// conversationSourceSession marks turns read from a provider session
-	// transcript (fleet agents).
-	conversationSourceSession = "session"
-	// conversationSourceChatlog marks turns read from the owner chat journal
-	// (the overseer's durable conversation record).
-	conversationSourceChatlog = "chatlog"
-)
+// GET /api/history is the main chat's paging shim (load-earlier), not a
+// second inspect dump. There is no GET /api/agents/{name}/transcript.
 
-// overseerTranscriptMaxTurns caps how many recent overseer turns the family
-// materialises in one history payload. The owner journal runs to 100k+ lines;
-// older turns page through the /api/history compat shim (🎯T57) until 🎯T10.6.
+// overseerTranscriptMaxTurns caps journal.turns projection (not inspect
+// hydrate — inspect uses historyReplayTurns via writeInspectReplay).
 const overseerTranscriptMaxTurns = 200
 
 // overseerAgentName resolves the configured overseer registry name (🎯T44),
@@ -81,84 +48,6 @@ func (s *Server) isOverseerAgent(name string) bool {
 		return false
 	}
 	return strings.EqualFold(name, s.overseerAgentName())
-}
-
-// buildOverseerTranscriptPayload serves the overseer's conversation history
-// through the agent-addressed family, replacing the 🎯T124 refusal. Turns come
-// from the owner chat journal in the same shape fleet transcripts use, so a
-// caller addressing "jevons" gets a transcript exactly like any other agent.
-func (s *Server) buildOverseerTranscriptPayload(name string) map[string]any {
-	s.mu.RLock()
-	clog := s.chatLog
-	reg := s.registry
-	s.mu.RUnlock()
-
-	base := map[string]any{
-		"type":    "agent_transcript",
-		"kind":    inspectKindHistory,
-		"name":    name,
-		"purpose": "overseer",
-		"source":  conversationSourceChatlog,
-	}
-	if reg != nil {
-		for _, d := range reg.List() {
-			if strings.EqualFold(d.Name, name) {
-				base["session_id"] = d.SessionID
-				base["workdir"] = d.WorkDir
-				if d.Purpose != "" {
-					base["purpose"] = d.Purpose
-				}
-				break
-			}
-		}
-	}
-	if clog == nil {
-		s.logTranscriptEmpty(emptyReasonNoSession, name, "", "")
-		base["turns"] = []any{}
-		base["empty"] = true
-		base["empty_reason"] = emptyReasonNoSession
-		base["note"] = "no chat journal open"
-		return base
-	}
-
-	var lines []string
-	start, total, err := clog.ReplayTailSealed(overseerTranscriptMaxTurns, func(line string) error {
-		lines = append(lines, line)
-		return nil
-	})
-	var raw []string
-	if _, _, rerr := clog.ReplayTailRaw(overseerTranscriptMaxTurns, func(line string) error {
-		raw = append(raw, line)
-		return nil
-	}); rerr != nil {
-		raw = nil
-	}
-	if err != nil {
-		s.logTranscriptEmpty(emptyReasonReadError, name, "", err.Error())
-		base["turns"] = []any{}
-		base["empty"] = true
-		base["empty_reason"] = emptyReasonReadError
-		base["error"] = err.Error()
-		return base
-	}
-
-	turns := overseerTurnsFromWire(lines)
-	base["turns"] = turns
-	if len(raw) > 0 {
-		base["events"] = wireEventsFromLines(raw)
-	} else {
-		base["events"] = wireEventsFromLines(lines)
-	}
-	base["empty"] = len(turns) == 0
-	// Paging parity with the /api/history compat shim: journal line indices,
-	// not turn indices — a client fetching earlier windows uses these.
-	base["start"] = start
-	base["total"] = total
-	if len(turns) == 0 {
-		s.logTranscriptEmpty(emptyReasonZeroTurns, name, "", "")
-		base["empty_reason"] = emptyReasonZeroTurns
-	}
-	return base
 }
 
 // overseerTurnsFromWire projects owner chat journal lines (chat wire frames)

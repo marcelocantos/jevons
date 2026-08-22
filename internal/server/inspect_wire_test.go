@@ -6,14 +6,12 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/transcript"
 )
 
 func TestInspectLiveEventUserAndAssistant(t *testing.T) {
@@ -118,44 +116,6 @@ func TestDeliverInspectLiveFansToSubscriber(t *testing.T) {
 	}
 }
 
-func TestMarshalAgentTranscriptHistoryShape(t *testing.T) {
-	dir := t.TempDir()
-	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Register(claudia.AgentDef{
-		Name:      "worker-x",
-		WorkDir:   dir,
-		SessionID: "019fc2aa-bbbb-7ccc-8ddd-eeeeeeeeeeee",
-		Purpose:   claudia.PurposeWork,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	s := New("test", dir)
-	s.SetRegistry(reg)
-	s.SetTranscriptReader(transcript.NewReader(filepath.Join(dir, "sessions")))
-
-	line, ok := s.marshalAgentTranscriptHistory("worker-x")
-	if !ok {
-		t.Fatal("expected ok")
-	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(line), &m); err != nil {
-		t.Fatal(err)
-	}
-	if m["type"] != "agent_transcript" || m["kind"] != inspectKindHistory {
-		t.Fatalf("envelope=%v", m)
-	}
-	if m["name"] != "worker-x" {
-		t.Fatalf("name=%v", m["name"])
-	}
-	// Soft empty (no session file yet).
-	if m["empty"] != true {
-		t.Fatalf("want empty soft history, got %v", m)
-	}
-}
-
 type replayBuf struct{ frames []map[string]any }
 
 func (b *replayBuf) Write(ctx context.Context, typ websocket.MessageType, data []byte) error {
@@ -165,6 +125,80 @@ func (b *replayBuf) Write(ctx context.Context, typ websocket.MessageType, data [
 	}
 	b.frames = append(b.frames, m)
 	return nil
+}
+
+func inspectReplay(t *testing.T, s *Server, name string) []map[string]any {
+	t.Helper()
+	buf := &replayBuf{}
+	if err := s.writeInspectReplay(context.Background(), buf, name); err != nil {
+		t.Fatal(err)
+	}
+	return buf.frames
+}
+
+func replayRoleRows(frames []map[string]any) []string {
+	var out []string
+	for _, m := range frames {
+		typ, _ := m["type"].(string)
+		switch typ {
+		case "conversation_reset":
+			continue
+		case "agent_note":
+			text, _ := m["text"].(string)
+			out = append(out, "agent_note: "+text)
+		case "user", "assistant":
+			msg, _ := m["message"].(map[string]any)
+			text := ""
+			if msg != nil {
+				text = userBlockText(msg["content"])
+			}
+			if text == "" {
+				continue
+			}
+			out = append(out, typ+": "+text)
+		}
+	}
+	return out
+}
+
+func replayUserCount(frames []map[string]any) int {
+	n := 0
+	for _, m := range frames {
+		if m["type"] == "user" {
+			n++
+		}
+	}
+	return n
+}
+
+func replayHasToolUse(frames []map[string]any, name string) bool {
+	for _, m := range frames {
+		if m["type"] != "assistant" {
+			continue
+		}
+		msg, _ := m["message"].(map[string]any)
+		if msg == nil {
+			continue
+		}
+		raw, _ := msg["content"].([]any)
+		if len(raw) == 0 {
+			if blocks, ok := msg["content"].([]map[string]any); ok {
+				for _, blk := range blocks {
+					if blk["type"] == "tool_use" && (name == "" || blk["name"] == name) {
+						return true
+					}
+				}
+			}
+			continue
+		}
+		for _, blk := range raw {
+			b, _ := blk.(map[string]any)
+			if b["type"] == "tool_use" && (name == "" || b["name"] == name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestWriteInspectReplayResetThenLive(t *testing.T) {
@@ -204,21 +238,25 @@ func TestSetInspectSubReplaceAndClear(t *testing.T) {
 	}
 }
 
-// 🎯T309.2: the overseer is addressable on the agent family — the former
-// 🎯T124 refusal ("overseer uses main chat") is gone, and the name resolves to
-// a real transcript payload sourced from the owner chat journal.
+// 🎯T309.2: the overseer is addressable on the inspect family — writeInspectReplay
+// of "jevons" is conversation_reset + chatlog frames, not a dump refusal.
 func TestOverseerInspectHistoryNotDenied(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.overseerName = "jevons"
-	payload, ok := s.buildAgentTranscriptPayload("jevons")
-	if !ok {
-		t.Fatal("ok")
+	frames := inspectReplay(t, s, "jevons")
+	if len(frames) < 1 || frames[0]["type"] != "conversation_reset" {
+		t.Fatalf("want conversation_reset, got %v", frames)
 	}
-	if _, denied := payload["denied"]; denied {
-		t.Fatalf("overseer must not be refused by the family: %v", payload)
+	if frames[0]["name"] != "jevons" {
+		t.Fatalf("name=%v", frames[0]["name"])
 	}
-	if payload["source"] != conversationSourceChatlog {
-		t.Fatalf("source=%v, want %q", payload["source"], conversationSourceChatlog)
+	for _, m := range frames {
+		if _, denied := m["denied"]; denied {
+			t.Fatalf("overseer must not be refused: %v", m)
+		}
+		if m["type"] == "agent_transcript" {
+			t.Fatalf("dump envelope must not appear: %v", m)
+		}
 	}
 }
 

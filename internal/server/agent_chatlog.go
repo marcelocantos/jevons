@@ -44,9 +44,8 @@ import (
 //   - DeliverInspectLive: every agent event, journaled before the subscriber
 //     fan-out, the mirror of BroadcastChat's journal append.
 //
-// Read point: buildAgentTranscriptPayload merges journal turns over session
-// turns (mergeAgentTurns), so rehydrate needs neither a live process nor a
-// readable provider store.
+// Read point: writeInspectReplay (ReplayTailSealed named chat-wire). The
+// provider session is not a second hydrate.
 
 const (
 	// agentChatLogDirName holds one journal per agent under the state dir.
@@ -54,9 +53,6 @@ const (
 	// agentJournalMaxTurns caps how many recent turns one history payload
 	// materialises — the same bound the overseer path uses.
 	agentJournalMaxTurns = overseerTranscriptMaxTurns
-	// conversationSourceAgentJournal marks turns whose base is the
-	// jevons-owned per-agent journal rather than the provider session.
-	conversationSourceAgentJournal = "agent_journal"
 )
 
 // agentJournals owns the lazily-opened per-agent journals. Its own mutex keeps
@@ -276,7 +272,8 @@ func (j *agentJournals) events(name string) ([]map[string]any, error) {
 		return nil, nil
 	}
 	var lines []string
-	if _, _, err := l.ReplayTailRaw(agentJournalMaxTurns, func(line string) error {
+	// 🎯T533: replay the same user-turn window main chat uses.
+	if _, _, err := l.ReplayTailRaw(inspectHistoryTurns, func(line string) error {
 		lines = append(lines, line)
 		return nil
 	}); err != nil {
@@ -387,103 +384,4 @@ func (s *Server) CloseAgentJournals() {
 	j.closeAll()
 }
 
-// --- Pure merge -------------------------------------------------------------
 
-// turnKey identifies a turn by what the owner actually sees, so the same
-// exchange recorded by both the provider session and the jevons journal
-// collapses to one row.
-func turnKey(t map[string]any) string {
-	role, _ := t["role"].(string)
-	text, _ := t["text"].(string)
-	return role + "\x00" + strings.TrimSpace(text)
-}
-
-// renumberTurns rewrites turn_number so the merged list numbers turns from 1
-// at each user boundary, matching what both sources produce alone.
-func renumberTurns(turns []map[string]any) []map[string]any {
-	out := make([]map[string]any, 0, len(turns))
-	n := 0
-	for _, t := range turns {
-		if t == nil {
-			continue
-		}
-		if role, _ := t["role"].(string); role == "user" {
-			n++
-		}
-		if n == 0 {
-			n = 1
-		}
-		cp := make(map[string]any, len(t)+1)
-		for k, v := range t {
-			cp[k] = v
-		}
-		cp["turn_number"] = n
-		out = append(out, cp)
-	}
-	return out
-}
-
-// mergeAgentTurns overlays the jevons-owned journal onto the provider session
-// transcript so the sidebar shows the union, never the intersection.
-//
-// The journal is append-only and opened at a point in time, so its content can
-// only ever overlap the session's TAIL — it never holds turns older than its
-// first entry. Three cases follow from that:
-//
-//	session empty            → the journal is the whole record (provider store
-//	                           missing, rotated, or never flushed).
-//	journal ⊇ session        → the journal is the fuller record; use it whole
-//	                           (a rotated session that kept only recent turns).
-//	otherwise                → session first, then the journal turns that come
-//	                           after its last overlap with the session (the
-//	                           un-flushed tail — typically the owner's message
-//	                           sent seconds before a reload or daemon bounce).
-//
-// Returns the merged turns and whether the journal contributed anything.
-func mergeAgentTurns(sessionTurns, journalTurns []map[string]any) (merged []map[string]any, journalUsed bool) {
-	if len(journalTurns) == 0 {
-		return sessionTurns, false
-	}
-	if len(sessionTurns) == 0 {
-		return renumberTurns(journalTurns), true
-	}
-
-	inSession := make(map[string]bool, len(sessionTurns))
-	for _, t := range sessionTurns {
-		inSession[turnKey(t)] = true
-	}
-
-	// Journal a superset of the session → it is the better base.
-	superset := len(journalTurns) >= len(sessionTurns)
-	if superset {
-		inJournal := make(map[string]bool, len(journalTurns))
-		for _, t := range journalTurns {
-			inJournal[turnKey(t)] = true
-		}
-		for _, t := range sessionTurns {
-			if !inJournal[turnKey(t)] {
-				superset = false
-				break
-			}
-		}
-	}
-	if superset {
-		return renumberTurns(journalTurns), true
-	}
-
-	// Append only what follows the journal's last overlap with the session.
-	lastOverlap := -1
-	for i, t := range journalTurns {
-		if inSession[turnKey(t)] {
-			lastOverlap = i
-		}
-	}
-	tail := journalTurns[lastOverlap+1:]
-	if len(tail) == 0 {
-		return sessionTurns, false
-	}
-	out := make([]map[string]any, 0, len(sessionTurns)+len(tail))
-	out = append(out, sessionTurns...)
-	out = append(out, tail...)
-	return renumberTurns(out), true
-}

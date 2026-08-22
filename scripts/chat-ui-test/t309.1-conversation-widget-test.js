@@ -52,14 +52,8 @@ function startStaticServer() {
         return;
       }
       if (u.pathname.startsWith('/api/agents/') && u.pathname.endsWith('/transcript')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          name: 'jv-t309.1-worker',
-          turns: [
-            { role: 'user', text: 'hello worker', when: Date.now() - 5000 },
-            { role: 'assistant', text: 'hi from worker', when: Date.now() - 4000 },
-          ],
-        }));
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'gone' }));
         return;
       }
       const rel = u.pathname === '/' ? '/index.html' : u.pathname;
@@ -220,14 +214,23 @@ function startStaticServer() {
           w: el.clientWidth || 0,
         };
       }
-      if (typeof renderAgentInspect === 'function') {
-        renderAgentInspect({
-          title: 'jv-t309.1-worker',
-          lines: [
-            { role: 'user', text: 'Short.', when: Date.now() - 3000 },
-            { role: 'user', text: wall, when: Date.now() - 2000 },
-            { role: 'assistant', text: tallAsst, when: Date.now() - 1000 },
-          ],
+      if (inspectConversation && inspectConversation.reset) inspectConversation.reset();
+      if (inspectConversation && inspectConversation.applyWireEvent) {
+        inspectConversation.applyWireEvent({
+          type: 'user', timestamp: Date.now() - 3000,
+          message: { role: 'user', content: [{ type: 'text', text: 'Short.' }] },
+        });
+        inspectConversation.applyWireEvent({
+          type: 'user', timestamp: Date.now() - 2000,
+          message: { role: 'user', content: [{ type: 'text', text: wall }] },
+        });
+        inspectConversation.applyWireEvent({
+          type: 'assistant', timestamp: Date.now() - 1000,
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: tallAsst }],
+            stop_reason: 'end_turn',
+          },
         });
       }
       const body = document.getElementById('agent-inspect-body');
@@ -235,6 +238,7 @@ function startStaticServer() {
         return c.classList && c.classList.contains('msg');
       }) : [];
       return {
+        inspectHasApply: !!(inspectConversation && typeof inspectConversation.applyWireEvent === 'function'),
         inspectHasRender: typeof renderAgentInspect === 'function',
         sideCount: sideMsgs.length,
         sideNuggets: body ? body.querySelectorAll('.inject-nugget').length : -1,
@@ -244,7 +248,8 @@ function startStaticServer() {
         sideAsst: snap(sideMsgs[2]),
       };
     });
-    if (!t480Side.inspectHasRender) failures.push('T480: renderAgentInspect not on page');
+    if (t480Side.inspectHasRender) failures.push('T480: renderAgentInspect dump must stay gone');
+    if (!t480Side.inspectHasApply) failures.push('T480: inspectConversation.applyWireEvent missing');
     if (t480Side.sideCount !== 3) {
       failures.push('T480 inspect expected 3 bubbles, got ' + t480Side.sideCount);
     }

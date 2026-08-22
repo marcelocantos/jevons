@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -49,24 +51,43 @@ func (s *suite) ListAgentsHTTP() ([]AgentInfo, error) {
 // listAgentsHTTP is a legacy alias used by existing journeys.
 func (s *suite) listAgentsHTTP() ([]AgentInfo, error) { return s.ListAgentsHTTP() }
 
-// agentTranscriptHTTP GETs one agent's transcript payload — the same
-// provider-aware discovery the RHS inspect pane depends on (🎯T124/🎯T213).
-// A soft-empty response is a normal 200 carrying empty_reason, so the
-// caller inspects the payload rather than the status code.
+// agentTranscriptHTTP reads the product inspect record: the jevons
+// per-agent journal. GET /api/agents/{name}/transcript is gone.
 func (s *suite) agentTranscriptHTTP(name string) (map[string]any, error) {
-	resp, err := http.Get("http://" + s.host + "/api/agents/" + name + "/transcript")
+	path := filepath.Join(s.stateDir, "agent-chatlogs", name+".jsonl")
+	b, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]any{"turns": []any{}, "empty": true, "journal": path}, nil
+		}
 		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("/api/agents/%s/transcript HTTP %d", name, resp.StatusCode)
+	var turns []any
+	for _, ln := range strings.Split(string(b), "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(ln), &ev); err != nil {
+			continue
+		}
+		typ, _ := ev["type"].(string)
+		if typ == "user" || typ == "assistant" || typ == "agent_note" {
+			role := typ
+			if msg, ok := ev["message"].(map[string]any); ok {
+				if r, _ := msg["role"].(string); r != "" {
+					role = r
+				}
+			}
+			turns = append(turns, map[string]any{"role": role, "raw": ev})
+		}
 	}
-	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, err
-	}
-	return payload, nil
+	return map[string]any{
+		"turns":   turns,
+		"empty":   len(turns) == 0,
+		"journal": string(b),
+	}, nil
 }
 
 // ── MCP steps ─────────────────────────────────────────────────────────
