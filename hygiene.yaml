@@ -1,0 +1,488 @@
+# hygiene.yaml — declared, drift-validated hygiene posture for jevons.
+# Schema reference: the `hygiene` skill (~/.claude/skills/hygiene/SKILL.md).
+# Validate with `/hygiene`; aggregate the fleet with `/hygiene fleet`. Sibling
+# to bullseye.yaml: bullseye tracks aspirational state ("achieve X"); hygiene
+# tracks steady-state ("we maintain X").
+#
+# Honest init (2026-08-22): floors are the held tier this tree already reaches.
+# Gaps sit above the floor in the aspires band. CI is Go (plus the T398
+# clean-checkout `make test-web` ratchet inside `go test ./...`); it does not
+# run Playwright or Universe-B journeys. Do not read this file as a promise
+# to add scanners, a test matrix, or SECURITY.md.
+
+schema_version: 1
+
+repo: jevons
+aspires: 3
+floors:            # per-dimension held-tier ratchet; below floor => DRIFT
+  correctness: 1   # CI runs go test; product net (test-ui / journeys) is not in CI
+  security: 2      # go.sum pin + Actions read-only token; no scanners
+  quality: 2       # go vet in CI; no gofmt/staticcheck gate
+  deps: 2          # go.sum committed; no Dependabot / vuln watch
+  release: 2       # CI-built 3-arch tarballs + Homebrew tap
+  governance: 2    # Apache-2.0 + squash-only; no SECURITY.md / CODEOWNERS
+  build: 2         # go.mod pin + CI build; no -j MAKEFLAGS
+  docs: 2          # architecture-current + docratchet in go test
+  perf: 0          # no benchmark suite
+  vcs: 2           # committed pre-commit (commitscope); LFS attr for a jar
+  agent: 2         # AGENTS.md / CLAUDE.md / bullseye / --help-agent
+
+tiers:
+  1: baseline    # LICENSE + README + .gitignore; tests build & run
+  2: maintained  # platform matrix, examples run, lint/format, release+governance
+  3: hardened    # formal specs, security scanning, signed releases, fuzzing, perf
+
+items:
+
+  # ============================== CORRECTNESS =============================
+  - id: correctness.tests
+    dim: correctness
+    desc: go test ./... (sqlite FTS5/preupdate tags) on every push/PR
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 1
+    evidence: {ci_step: {workflow: ci.yml, name: Test}}
+
+  - id: correctness.test-go
+    dim: correctness
+    desc: Local Go suite is a Makefile target (make test-go)
+    state: present
+    cadence: continuous
+    enforce: blocking
+    tier: 1
+    evidence: {make_target: test-go}
+
+  - id: correctness.web-hermetic
+    dim: correctness
+    desc: Node hermetics exist (make test-web) and T398 ratchets them on a clean HEAD checkout
+    state: present
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {file: {path: scripts/docratchet/t398_clean_checkout_web_test.go}}
+
+  - id: correctness.product-net
+    dim: correctness
+    desc: Declared product net is make test (go + web + Playwright + journeys)
+    state: present
+    cadence: continuous
+    enforce: warning
+    tier: 2
+    evidence: {make_target: test}
+
+  - id: correctness.release-multitarget
+    dim: correctness
+    desc: Release builds darwin-arm64, linux-amd64, linux-arm64
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence: {ci_job: release.yml#build}
+
+  - id: correctness.ci-playwright
+    dim: correctness
+    desc: Playwright UI suite (make test-ui) runs in GitHub Actions
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 2
+    reason: >-
+      CI is go build/vet/test only (plus T398's nested make test-web).
+      make test-ui is local; Playwright is not a CI job. ENT-004.
+    evidence: {absent: {ci_step: {workflow: ci.yml, name: Playwright}}}
+
+  - id: correctness.journeys-in-ci
+    dim: correctness
+    desc: Universe-B journeys (make test-journey) run in GitHub Actions
+    state: skipped
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: >-
+      Journeys need a signed-in provider CLI and a throwaway daemon;
+      GitHub has neither. Missing provider is OUTAGE, not skip-and-green.
+      Local `make test-journey` remains the owner-visible net.
+    evidence: {absent: {ci_job: ci.yml#journey}}
+
+  - id: correctness.race
+    dim: correctness
+    desc: go test -race in CI
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: CI Test step is `go test` without -race.
+    evidence: {absent: {ci_step: {workflow: ci.yml, name: Race}}}
+
+  - id: correctness.fuzzing
+    dim: correctness
+    desc: Fuzz harnesses over wire parsers / MCP input
+    state: planned
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: No fuzz target or go-fuzz/native fuzz files in tree.
+    evidence: {absent: {make_target: fuzz}}
+
+  - id: correctness.windows-ci
+    dim: correctness
+    desc: Windows CI job
+    state: skipped
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: >-
+      Primary release matrix is macOS arm64, Linux x86_64, Linux arm64.
+      Windows is a conventions.md secondary and is not built or tested here.
+    evidence: {absent: {ci_job: ci.yml#windows}}
+
+  - id: correctness.ios-ci
+    dim: correctness
+    desc: iOS thin-client CI (xcodebuild / XCTest)
+    state: skipped
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: >-
+      ios/Jevon is a WKWebView wrapper over the web UI; no XCTest suite in
+      tree. make ios only regenerates the Xcode project via xcodegen.
+    evidence: {absent: {ci_job: ci.yml#ios}}
+
+  # =========================== SECURITY / SUPPLY ==========================
+  - id: security.dep-pinning
+    dim: security
+    desc: go.sum committed — reproducible, pinned module graph
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: go.sum}}
+
+  - id: security.actions-perms
+    dim: security
+    desc: CI workflow default token is contents:read (least privilege)
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: .github/workflows/ci.yml, matches: '(?m)^permissions:'}}
+
+  - id: security.secret-scan
+    dim: security
+    desc: Secret scanning (gitleaks) in pre-commit and/or CI
+    state: planned
+    cadence: continuous
+    enforce: blocking
+    tier: 3
+    reason: No gitleaks config or CI invoke; relying on review + gitignore of .env.
+    evidence: {absent: {scanner: {tool: gitleaks}}}
+
+  - id: security.dep-vuln-scan
+    dim: security
+    desc: govulncheck (or OSV) over the locked Go modules
+    state: planned
+    cadence: periodic:30d
+    enforce: warning
+    tier: 3
+    reason: go.sum is pinned but no automated vulnerability scan runs against it.
+    evidence: {absent: {scanner: {tool: govulncheck}}}
+
+  - id: security.sast-codeql
+    dim: security
+    desc: CodeQL (or gosec) static analysis
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: No CodeQL/gosec workflow; go vet is the only static gate.
+    evidence: {absent: {ci_job: ci.yml#codeql}}
+
+  - id: security.signed-releases
+    dim: security
+    desc: Release artifacts carry provenance / are signed (cosign/sigstore)
+    state: planned
+    cadence: per-release
+    enforce: informational
+    tier: 3
+    reason: release.yml uploads tarballs via gh release upload; no signing step.
+    evidence: {absent: {ci_step: {workflow: release.yml, name: Sign}}}
+
+  # ============================== CODE QUALITY ============================
+  - id: quality.vet
+    dim: quality
+    desc: go vet ./... in CI
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_step: {workflow: ci.yml, name: Vet}}
+
+  - id: quality.format
+    dim: quality
+    desc: Sources are gofmt-clean, enforced in CI
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: No gofmt --check (or gofumpt) step in ci.yml; formatting is by-hand.
+    evidence: {absent: {ci_step: {workflow: ci.yml, name: Format}}}
+
+  - id: quality.staticcheck
+    dim: quality
+    desc: staticcheck or golangci-lint in CI
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: Host has the binaries; they are not invoked in CI or a Makefile target.
+    evidence: {absent: {scanner: {tool: golangci-lint}}}
+
+  # =========================== DEPENDENCY HEALTH ==========================
+  - id: deps.lockfile
+    dim: deps
+    desc: go.sum is the lockfile for the module graph
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: go.sum}}
+
+  - id: deps.dependabot
+    dim: deps
+    desc: Dependabot (or equivalent) opens PRs for Go/Action bumps
+    state: planned
+    cadence: periodic:7d
+    enforce: informational
+    tier: 3
+    reason: No .github/dependabot.yml; module bumps are manual.
+    evidence: {absent: {file: {path: .github/dependabot.yml}}}
+
+  # ========================== RELEASE & VERSIONING =======================
+  - id: release.ci-built
+    dim: release
+    desc: Release binaries are built by CI across the three primary triples, never locally
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence: {ci_job: release.yml#build}
+
+  - id: release.homebrew
+    dim: release
+    desc: Published to the Homebrew tap on release
+    state: present
+    cadence: per-release
+    enforce: informational
+    tier: 2
+    evidence: {ci_job: release.yml#homebrew}
+
+  - id: release.tag-ldflags
+    dim: release
+    desc: Release ldflags stamp internal/cli.Version from the git tag
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence:
+      {file: {path: .github/workflows/release.yml, matches: 'internal/cli.Version'}}
+
+  - id: release.changelog
+    dim: release
+    desc: A maintained CHANGELOG records user-visible changes per release
+    state: planned
+    cadence: per-release
+    enforce: warning
+    tier: 3
+    reason: History lives in git + GitHub release notes; no curated CHANGELOG.md.
+    evidence: {absent: {file: {path: CHANGELOG.md}}}
+
+  # ============================ GOVERNANCE / META ========================
+  - id: governance.license
+    dim: governance
+    desc: Apache-2.0 LICENSE present
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: LICENSE, matches: 'Apache License'}}
+
+  - id: governance.readme
+    dim: governance
+    desc: README present and current
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: README.md}}
+
+  - id: governance.gitignore
+    dim: governance
+    desc: .gitignore covers build artifacts, IDE/OS files, .env, generated state
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: .gitignore}}
+
+  - id: governance.squash-only
+    dim: governance
+    desc: Repo is squash-merge only, with delete-branch-on-merge
+    state: enforced
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 2
+    evidence: {gh_setting: {key: allow_merge_commit, equals: false}}
+
+  - id: governance.security-md
+    dim: governance
+    desc: SECURITY.md documents the vulnerability-disclosure process
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 3
+    reason: Public repo without a published disclosure policy yet.
+    evidence: {absent: {file: {path: SECURITY.md}}}
+
+  - id: governance.codeowners
+    dim: governance
+    desc: CODEOWNERS for review routing
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 3
+    reason: Single-owner repo; no CODEOWNERS file.
+    evidence: {absent: {file: {path: CODEOWNERS}}}
+
+  # ================================= BUILD ===============================
+  - id: build.go-version-pin
+    dim: build
+    desc: Go toolchain version pinned in go.mod
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: go.mod, matches: '(?m)^go 1\.'}}
+
+  - id: build.ci
+    dim: build
+    desc: CI compiles the module (go build ./...)
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_step: {workflow: ci.yml, name: Build}}
+
+  - id: build.makefile
+    dim: build
+    desc: Makefile is the build orchestration (jevonsd, guards, tests)
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 1
+    evidence: {file: {path: Makefile}}
+
+  # ============================ DOCUMENTATION ============================
+  - id: docs.architecture-current
+    dim: docs
+    desc: docs/architecture-current.md is the living system description (🎯T42)
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: docs/architecture-current.md}}
+
+  - id: docs.docratchet
+    dim: docs
+    desc: scripts/docratchet hermetic phrase/inventory checks ride go test ./...
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {file: {path: scripts/docratchet/t360_clean_checkout_test.go}}
+
+  - id: docs.md-links
+    dim: docs
+    desc: Internal markdown links resolve (no dead cross-references)
+    state: planned
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: No check-md-links (or equivalent) Makefile target.
+    evidence: {absent: {make_target: check-md-links}}
+
+  # ============================== PERFORMANCE ===========================
+  - id: perf.benchmarks
+    dim: perf
+    desc: Benchmark suite exists and is runnable
+    state: planned
+    cadence: per-release
+    enforce: informational
+    tier: 3
+    reason: No make bench / testdata benchmarks; make spend is cost accounting, not perf.
+    evidence: {absent: {make_target: bench}}
+
+  # ============================== VCS / HISTORY =========================
+  - id: vcs.pre-commit-hook
+    dim: vcs
+    desc: Committed git pre-commit hook (commitscope / 🎯T377) gates shared-index commits
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: scripts/hooks/pre-commit}}
+
+  - id: vcs.gitattributes
+    dim: vcs
+    desc: .gitattributes present (LFS filter on formal/tla2tools.jar)
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: .gitattributes}}
+
+  # =================== AGENT-READINESS / ONBOARDING ====================
+  - id: agent.claude-md
+    dim: agent
+    desc: CLAUDE.md present (imports AGENTS.md)
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: CLAUDE.md}}
+
+  - id: agent.agents-md
+    dim: agent
+    desc: AGENTS.md is the shared project instruction file
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: AGENTS.md}}
+
+  - id: agent.bullseye
+    dim: agent
+    desc: bullseye.yaml present (convergence targets discoverable)
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: bullseye.yaml}}
+
+  - id: agent.help-agent
+    dim: agent
+    desc: jevonsd exposes --help-agent (embedded agents-guide.md)
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: cmd/jevonsd/main.go, matches: 'help-agent'}}
+
+  - id: agent.agents-guide
+    dim: agent
+    desc: agents-guide.md is the committed fleet/agent guide (mirrored into the binary)
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: agents-guide.md}}
