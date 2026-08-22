@@ -12,9 +12,9 @@ import (
 	"testing"
 )
 
-// 🎯T505: a sibling ui/dist must not steal GET / until explicit cutover.
+// 🎯T537.2: when ui/dist exists it is GET /. Vanilla is not the product document.
 
-func TestT505VanillaBeatsUncutoverReactDist(t *testing.T) {
+func TestT537_2ReactDistBeatsVanillaIndex(t *testing.T) {
 	root := t.TempDir()
 	webDir := filepath.Join(root, "web")
 	dist := filepath.Join(root, "ui", "dist")
@@ -42,10 +42,10 @@ func TestT505VanillaBeatsUncutoverReactDist(t *testing.T) {
 		t.Fatalf("status=%d", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "VANILLA_COCKPIT") {
-		t.Fatalf("GET / must stay vanilla until owner cutover, got:\n%s", body)
+	if strings.Contains(body, "VANILLA_COCKPIT") {
+		t.Fatalf("GET / served vanilla index.html:\n%s", body)
 	}
-	if strings.Contains(body, "REACT_COCKPIT") {
-		t.Fatalf("half-written React dist stole GET /:\n%s", body)
+	if !strings.Contains(body, `id="root"`) || !strings.Contains(body, "REACT_COCKPIT") {
+		t.Fatalf("GET / is not the React cockpit:\n%s", body)
 	}
 }

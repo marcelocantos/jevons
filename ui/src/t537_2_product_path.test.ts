@@ -17,8 +17,9 @@ function walk(dir: string, acc: string[] = []): string[] {
 }
 
 describe('T537.2 product path', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+
   it('ui/ does not call inspect_subscribe', () => {
-    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
     const hits: string[] = [];
     for (const file of walk(join(root, 'src'))) {
       if (file.includes('.test.')) continue;
@@ -26,5 +27,17 @@ describe('T537.2 product path', () => {
       if (text.includes('inspect_subscribe')) hits.push(file);
     }
     expect(hits, 'inspect_subscribe is the old sidebar hydrate').toEqual([]);
+  });
+
+  it('ui/ does not import web/', () => {
+    const hits: string[] = [];
+    for (const file of walk(join(root, 'src'))) {
+      if (file.includes('.test.')) continue;
+      const text = readFileSync(file, 'utf8');
+      if (/from\s+['"][^'"]*web\//.test(text) || /require\(\s*['"][^'"]*web\//.test(text)) {
+        hits.push(file);
+      }
+    }
+    expect(hits, 'new UI must not link the old web/ tree').toEqual([]);
   });
 });
