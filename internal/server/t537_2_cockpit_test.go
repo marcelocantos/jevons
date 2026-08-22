@@ -36,16 +36,21 @@ func TestT537_2ReactDistBeatsVanillaIndex(t *testing.T) {
 	if ds := RegisterUIRoutes(mux, webDir); ds == nil {
 		t.Fatal("expected disk SPA server")
 	}
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d", rec.Code)
+	rootRec := httptest.NewRecorder()
+	mux.ServeHTTP(rootRec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(rootRec.Body.String(), "VANILLA_COCKPIT") {
+		t.Fatalf("GET / must be vanilla for screenshots, got:\n%s", rootRec.Body.String())
 	}
-	body := rec.Body.String()
+	appRec := httptest.NewRecorder()
+	mux.ServeHTTP(appRec, httptest.NewRequest(http.MethodGet, "/app/", nil))
+	if appRec.Code != http.StatusOK {
+		t.Fatalf("/app/ status=%d", appRec.Code)
+	}
+	body := appRec.Body.String()
 	if strings.Contains(body, "VANILLA_COCKPIT") {
-		t.Fatalf("GET / served vanilla index.html:\n%s", body)
+		t.Fatalf("GET /app/ served vanilla:\n%s", body)
 	}
 	if !strings.Contains(body, `id="root"`) || !strings.Contains(body, "REACT_COCKPIT") {
-		t.Fatalf("GET / is not the React cockpit:\n%s", body)
+		t.Fatalf("GET /app/ is not the React cockpit:\n%s", body)
 	}
 }

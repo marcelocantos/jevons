@@ -46,14 +46,20 @@ func NewDevServer(dir string) *DevServer {
 // serve the UI standalone (🎯T53; brew installs ship no repo checkout).
 // Returns the DevServer when disk mode is active, nil in embedded mode.
 func RegisterUIRoutes(mux *http.ServeMux, dir string) *DevServer {
-	// 🎯T537.2 explicit cutover: product document is ui/dist when present.
-	if dist := reactDistDir(dir); dist != "" {
-		slog.Info("serving React cockpit", "dir", dist)
-		return registerReactSPA(mux, dist)
-	}
+	// Comparison mode (owner 2026-08-22): vanilla stays at GET / so
+	// screenshots of the old cockpit still work. React, when built, is at
+	// GET /app/ (and Vite :5173). T537.2 cutover of GET / waits on visual
+	// parity, not a second half-swap.
+	var ds *DevServer
 	if st, err := os.Stat(filepath.Join(dir, "index.html")); err == nil && !st.IsDir() {
-		ds := NewDevServer(dir)
+		ds = NewDevServer(dir)
 		ds.RegisterRoutes(mux)
+	}
+	if dist := reactDistDir(dir); dist != "" {
+		slog.Info("serving React cockpit at /app/", "dir", dist)
+		registerReactAppPrefix(mux, dist)
+	}
+	if ds != nil {
 		return ds
 	}
 	slog.Info("serving embedded web UI (no on-disk web/)", "checked", dir)
@@ -147,6 +153,32 @@ func reactDistDir(webDir string) string {
 		}
 	}
 	return ""
+}
+
+func registerReactAppPrefix(mux *http.ServeMux, dist string) {
+	serveIndex := func(w http.ResponseWriter, r *http.Request) {
+		noCache(w)
+		raw, err := os.ReadFile(filepath.Join(dist, "index.html"))
+		if err != nil {
+			http.Error(w, "react cockpit unreadable: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(raw)
+	}
+	mux.HandleFunc("GET /app/{$}", serveIndex)
+	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/app/", http.StatusTemporaryRedirect)
+	})
+	file := http.StripPrefix("/app/", http.FileServer(http.Dir(dist)))
+	mux.Handle("GET /app/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		noCache(w)
+		file.ServeHTTP(w, r)
+	}))
+	mux.HandleFunc("GET /app/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
+		noCache(w)
+		file.ServeHTTP(w, r)
+	})
 }
 
 func registerReactSPA(mux *http.ServeMux, dist string) *DevServer {
