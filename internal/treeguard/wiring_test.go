@@ -48,9 +48,11 @@ func TestGuardHookIsWiredInProjectSettings(t *testing.T) {
 		t.Fatalf("%s is not valid JSON: %v", settingsPath, err)
 	}
 
-	// Pre must cover every tool that can replace file content; Post must also
-	// cover Read, because Read is what establishes a session's base.
-	wantPre := []string{"Write", "Edit", "MultiEdit"}
+	// Pre must cover every tool that can replace file content, including Bash
+	// (🎯T391: sed -i / redirection / git checkout never reach Write). Post
+	// must also cover Read, because Read is what establishes a session's base,
+	// and Bash so an allowed shell write is journalled for the sweep.
+	wantPre := []string{"Write", "Edit", "MultiEdit", "Bash"}
 	wantPost := append([]string{"Read"}, wantPre...)
 	for event, wantTools := range map[string][]string{
 		"PreToolUse":  wantPre,
@@ -131,4 +133,29 @@ func TestMakeAllBuildsTheGuardBinary(t *testing.T) {
 		}
 	}
 	t.Error("Makefile has no all: target")
+}
+
+// TestGuardSweepIsWiredInPreCommit is the provider-independent half of 🎯T391:
+// a worker under grok/claudia inherits no PreToolUse hook, so the only boundary
+// every provider crosses is git pre-commit. An unwired sweep leaves that class
+// silently unprotected — the defect the target names.
+func TestGuardSweepIsWiredInPreCommit(t *testing.T) {
+	root := repoRoot(t)
+	const preCommit = "scripts/hooks/pre-commit"
+	raw, err := os.ReadFile(filepath.Join(root, preCommit))
+	if err != nil {
+		t.Fatalf("%s missing — the write-guard sweep has nowhere to run: %v", preCommit, err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "treeguard") || !strings.Contains(body, "sweep") {
+		t.Errorf("%s does not invoke treeguard sweep; non-Claude providers get silent absence", preCommit)
+	}
+	if !strings.Contains(body, "🎯T391") {
+		t.Errorf("%s does not name 🎯T391, so a later edit can drop the sweep without a marker to catch it", preCommit)
+	}
+	// The commit must still be owned by commitscope refusal codes; a sweep that
+	// exits non-zero and aborts every commit would be worse than no sweep.
+	if strings.Contains(body, "exec \"$tg\"") || strings.Contains(body, "exec $tg") {
+		t.Errorf("%s execs treeguard and would inherit its exit into the commit gate", preCommit)
+	}
 }
