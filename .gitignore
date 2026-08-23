@@ -24,6 +24,11 @@ Thumbs.db
 .env
 .env.local
 
+# React cockpit (🎯T537.1 / T540) — source is tracked; install/build output is not.
+# Dist is not go:embed (T360); daily GET / still serves web/index.html until T540.2.
+/ui/node_modules/
+/ui/dist/
+
 # NOTE: //go:embed inputs must stay tracked (🎯T360) — a gitignored embed
 # input makes a pristine clone fail `go build ./...` before any `make` run.
 # internal/cli/help_agent.md is a committed mirror of agents-guide.md, kept

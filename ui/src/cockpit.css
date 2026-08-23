@@ -1,0 +1,1492 @@
+/* Lifted from web/index.html <style> — one chrome family. Do not import web/. */
+html, body, #root { margin: 0; height: 100%; }
+#root { display: flex; flex-direction: column; }
+:root, [data-theme="dark"] {
+  /* Red theme — tuned for in-car visibility. Backgrounds are lifted
+     from near-black so panels are distinguishable; text is brighter
+     for contrast at arm's length in daylight. Accent is a saturated
+     red, with red-tinted surfaces and borders to carry the theme. */
+  --bg: #1a0e0e;
+  --surface: #261515;
+  --surface-raised: #311c1c;
+  --surface-high: #3d2424;
+  --border: rgba(255,180,180,0.12);
+  --border-focus: rgba(248,113,113,0.45);
+  --text: #f0e8e8;
+  --text-dim: #b4a0a0;
+  --text-muted: #806868;
+  --accent: #ef4444;
+  --accent-dim: rgba(239,68,68,0.18);
+  --user-bg: rgba(239,68,68,0.16);
+  --user-border: rgba(239,68,68,0.4);
+  --user-bg-editing: rgba(239,68,68,0.30);
+  --green: #4ade80;
+  --red: #ef4444;
+  --amber: #fbbf24;
+  --plan-under: #60a5fa;
+  --plan-locked: #c084fc;
+  --plan-exhausted: #ff1a1a;
+  --heading: #fff5f5;
+  --strong: #ffffff;
+  --dot-on-glow: rgba(74,222,128,0.5);
+  --dot-off-glow: rgba(239,68,68,0.5);
+  --agent-dot-glow: rgba(74,222,128,0.4);
+  /* 🎯T302: Claude's brand orange, from the `hex` of the same Simple Icons
+     record that supplies the splat path in web/scripts/model_prefix.js —
+     https://github.com/simple-icons/simple-icons (icon "Claude", hex D97757).
+     One value for both palettes: it reads on the light ground and the dark
+     red one alike. Not overridden in [data-theme="light"] on purpose. */
+  --anthropic-mark: #d97757;
+  --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --radius: 10px;
+}
+
+[data-theme="light"] {
+  --bg: #f8f8fa;
+  --surface: #ffffff;
+  --surface-raised: #f0f0f4;
+  --surface-high: #e4e4ea;
+  --border: rgba(0,0,0,0.08);
+  --border-focus: rgba(0,0,0,0.18);
+  --text: #2c2c34;
+  --text-dim: #6e6e7a;
+  --text-muted: #a0a0aa;
+  --accent: #6d5dd3;
+  --accent-dim: rgba(109,93,211,0.1);
+  --user-bg: rgba(109,93,211,0.08);
+  --user-border: rgba(109,93,211,0.2);
+  --user-bg-editing: rgba(109,93,211,0.18);
+  --green: #10b981;
+  --red: #ef4444;
+  --amber: #d97706;
+  --plan-under: #2563eb;
+  --plan-locked: #7c3aed;
+  --plan-exhausted: #e10600;
+  --heading: #1a1a22;
+  --strong: #1a1a22;
+  --dot-on-glow: rgba(16,185,129,0.3);
+  --dot-off-glow: rgba(239,68,68,0.2);
+  --agent-dot-glow: rgba(16,185,129,0.25);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--sans); background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; font-size: 14px; letter-spacing: -0.01em; -webkit-font-smoothing: antialiased; }
+
+/* Status bar */
+#status { padding: 6px 20px; font-size: 11px; font-weight: 500; color: var(--text-dim); background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; align-items: center; gap: 8px; letter-spacing: 0.02em; text-transform: uppercase; }
+.dot { width: 6px; height: 6px; border-radius: 50%; }
+.dot.on { background: var(--green); box-shadow: 0 0 6px var(--dot-on-glow); }
+.dot.off { background: var(--red); box-shadow: 0 0 6px var(--dot-off-glow); }
+
+#main { flex: 1; display: flex; overflow: hidden; }
+
+/* Chat pane — messages flex:1 min-height:0 so composer growth shrinks the
+   transcript instead of covering the latest reply (🎯T70 / T70.1). */
+#chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+/* overflow-anchor:none — browser scroll-anchoring fights follow-scroll when
+   a long markdown bubble is re-parsed every stream frame (🎯T30.2).
+   flex-shrink:0 on children — default flex-shrink:1 lets tall .msg items
+   compress inside the scroller so scrollHeight under-reports and stick-to-
+   bottom pins to a false mid-bubble "bottom" while tokens still arrive. */
+/* 🎯T341: scrollbar-gutter:stable — overflow on/off must not shift #messages
+   content width (classic ~1px / gutter jiggle when height oscillates near fold). */
+#messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 24px 20px; display: block; position: relative; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; scrollbar-gutter: stable; }
+/* 🎯T119.3: one canvas holds scrollHeight; attached .msg are absolutely
+   positioned at prefix-sum tops. Missing siblings are not a layout input —
+   mid-list collapse/expand is a height write, not a flex reflow of 11k nodes. */
+#messages-canvas { position: relative; width: 100%; }
+#messages-canvas > .msg { position: absolute; box-sizing: border-box; }
+#messages-canvas > .msg.user { right: 0; left: auto; }
+#messages-canvas > .msg.jevons { left: 0; right: auto; }
+#messages-canvas > .msg.worker,
+#messages-canvas > .msg.status { left: 50%; transform: translateX(-50%); }
+#messages > .turn-marker,
+#messages > #messages-end { position: relative; }
+#messages-canvas > .turn-marker { position: absolute; left: 0; right: 0; }
+/* Absolute rows already skip off-band work; content-visibility:auto on an
+   abs child of a tall canvas reports 0×0 rects and we detach the row the
+   owner is looking at. Always visible. */
+#messages-canvas > .msg { content-visibility: visible; }
+#messages-canvas > .msg.virt-shell { content-visibility: visible; }
+#messages-canvas > .msg.virt-shell > * { display: none !important; }
+.composer-images { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 6px; }
+.composer-images:empty { display: none; }
+.composer-images .img-chip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.composer-images .img-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.composer-images .img-chip button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff; font-size: 11px; line-height: 18px; cursor: pointer; padding: 0; }
+.msg .chat-img {
+  display: block; margin: 6px 0; border-radius: 8px; cursor: zoom-in;
+  height: 120px; width: auto; max-width: 100%; object-fit: contain;
+  vertical-align: top; background: var(--surface);
+}
+.msg.user .chat-img { border: 1px solid var(--user-border); }
+.msg.jevons .chat-img { border: 1px solid var(--border); }
+/* 🎯T258: in-page full-res image lightbox + multi-id carousel */
+#img-lightbox {
+  position: fixed; inset: 0; z-index: 12000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.82);
+  padding: 24px;
+}
+#img-lightbox[hidden] { display: none !important; }
+#img-lightbox .ilb-stage {
+  position: relative; max-width: min(96vw, 1200px); max-height: 90vh;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+#img-lightbox .ilb-img {
+  max-width: 96vw; max-height: 78vh; object-fit: contain;
+  border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.45);
+  background: var(--surface);
+}
+#img-lightbox .ilb-chrome {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+}
+#img-lightbox .ilb-chrome button {
+  border: 1px solid var(--border); background: var(--surface-raised); color: var(--text);
+  border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+}
+#img-lightbox .ilb-chrome button:hover { border-color: var(--border-focus); }
+#img-lightbox .ilb-chrome button:disabled { opacity: 0.4; cursor: default; }
+#img-lightbox .ilb-counter { font-size: 12px; color: var(--text-dim); min-width: 4em; text-align: center; }
+#img-lightbox .ilb-thumbs { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; max-width: 96vw; }
+#img-lightbox .ilb-thumbs button {
+  width: 48px; height: 48px; padding: 0; border-radius: 6px; overflow: hidden;
+  border: 2px solid transparent; background: var(--surface-high); cursor: pointer;
+}
+#img-lightbox .ilb-thumbs button.active { border-color: var(--accent); }
+#img-lightbox .ilb-thumbs img { width: 100%; height: 100%; object-fit: cover; display: block; }
+#messages::-webkit-scrollbar { width: 6px; }
+#messages::-webkit-scrollbar-track { background: transparent; }
+#messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
+
+.msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; position: relative; }
+/* 🎯T381: no bubble content may push the transcript sideways. `anywhere` (not
+   `break-word`) is required: it also shrinks the intrinsic min-content width,
+   so an unbroken 400-character path or a bare URL in an agent report wraps
+   instead of widening the flex row. Long lines wrap in the bubble; #messages
+   never grows a horizontal scrollbar. */
+.msg > .msg-body { min-width: 0; overflow-wrap: anywhere; }
+/* User/assistant: reserve space under the border for outside timestamp (+ pocket tab when tall). */
+/* 🎯T351: whole-pixel row margins. Margins sit OUTSIDE the border-box, so
+   the row min-height snap cannot absorb them; 1.2rem = 19.2px added a 0.2px
+   fraction to total height per bubble, phase-shifting every integer scroll
+   pin (~1px random text jiggle). 19px is visually identical. */
+.msg.user, .msg.jevons { margin-bottom: 19px; }
+.msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: normal; word-wrap: break-word; }
+.msg.user .msg-body { white-space: pre-wrap; }
+.msg.user .msg-body blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 0.4em 0; color: var(--text-dim); white-space: pre-wrap; }
+.msg.user .msg-body p { margin: 0.35em 0; }
+.msg.user .msg-body p:first-child { margin-top: 0; }
+.msg.user .msg-body p:last-child { margin-bottom: 0; }
+/* 🎯T381: an agent/system report arrives on the user-turn wire but is NOT
+   owner input — it is a document, so it gets the markdown chrome the jevons
+   bubble has. Deliberately a separate block rather than more selectors on the
+   .msg.jevons rules: the two roles share a renderer, not a layout, and the
+   report keeps the owner-side bubble it is delivered in. pre-wrap must go —
+   marked already emitted block structure, so preserving the source newlines
+   on top of it double-spaces every paragraph. */
+.msg.user.agent-report .msg-body { white-space: normal; }
+.msg.user.agent-report .msg-body p { margin: 0.5em 0; }
+.msg.user.agent-report .msg-body h1,
+.msg.user.agent-report .msg-body h2,
+.msg.user.agent-report .msg-body h3 { margin: 0.6em 0 0.3em; line-height: 1.3; }
+.msg.user.agent-report .msg-body h1 { font-size: 1.25em; }
+.msg.user.agent-report .msg-body h2 { font-size: 1.15em; }
+.msg.user.agent-report .msg-body h3 { font-size: 1.05em; }
+.msg.user.agent-report .msg-body ul,
+.msg.user.agent-report .msg-body ol { margin: 0.4em 0; padding-left: 1.4em; }
+.msg.user.agent-report .msg-body code {
+  background: var(--surface-raised); padding: 2px 6px; border-radius: 4px;
+  font-family: var(--mono); font-size: 0.88em; color: var(--accent);
+}
+.msg.user.agent-report .msg-body pre {
+  background: var(--surface); border: 1px solid var(--border);
+  padding: 12px 14px; border-radius: 8px; margin: 0.6em 0;
+  max-width: 100%; overflow-x: auto;
+}
+.msg.user.agent-report .msg-body pre code { background: none; padding: 0; color: var(--text); }
+.msg.user.agent-report .msg-body table {
+  border-collapse: collapse; margin: 0.5em 0; font-size: 0.9em;
+}
+.msg.user.agent-report .msg-body th,
+.msg.user.agent-report .msg-body td {
+  border: 1px solid var(--border); padding: 4px 10px; text-align: left;
+}
+/* 🎯T381: a report's own table or code block scrolls INSIDE the bubble.
+   display:block is what lets a wide table become its own scroll port —
+   a table in normal flow refuses to shrink below its content width and
+   pushes the whole transcript sideways instead. */
+.msg.user.agent-report .msg-body table { display: block; max-width: 100%; overflow-x: auto; }
+/* 🎯T509: compact envelope header — not a raw fence dump above the body. */
+.jevons-envelope {
+  display: flex; flex-wrap: wrap; gap: 0.35em 0.75em; align-items: baseline;
+  font-size: 12px; font-weight: 500; letter-spacing: 0.01em;
+  color: var(--text-dim); background: var(--surface-raised);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 10px; margin: 0 0 8px 0;
+}
+.jevons-envelope .env-kind { color: var(--text); font-weight: 600; }
+.jevons-envelope .env-verdict-GREEN { color: var(--ok, #4ade80); }
+.jevons-envelope .env-verdict-SUSPECT { color: var(--amber, #d4a017); }
+.jevons-envelope .env-verdict-RED { color: var(--accent); }
+/* The message currently being edited via up/down recall. Brighter bg +
+   full-accent border (same 1px width → no reflow) + a box-shadow ring
+   to "thicken" the border without shifting geometry. */
+.msg.user.editing { background: var(--user-bg-editing); border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+/* 🎯T106: assistant talk bubble — same geometry family as user, border only (no fill). */
+.msg.jevons { align-self: flex-start; background: transparent; color: var(--text); border: 1px solid var(--border); white-space: normal; word-wrap: break-word; }
+
+/* Markdown in agent responses */
+.msg.jevons p { margin: 0.5em 0; }
+.msg.jevons p:first-child { margin-top: 0; }
+.msg.jevons p:last-child { margin-bottom: 0; }
+.msg.jevons code { background: var(--surface-raised); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.88em; color: var(--accent); }
+.msg.jevons pre { background: var(--surface); border: 1px solid var(--border); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0.6em 0; }
+.msg.jevons pre code { background: none; padding: 0; color: var(--text); }
+/* Mermaid diagrams (🎯T59) + open/copy toolbar (🎯T83.1). Do not force
+   bubble scaling — svg max-width:100% only; large graphs open in the panel. */
+.msg.jevons .mermaid-diagram { margin: 0.6em 0; overflow-x: auto; text-align: center; position: relative; }
+.msg.jevons .mermaid-diagram svg { max-width: 100%; height: auto; }
+.msg.jevons .mermaid-diagram .mermaid-toolbar {
+  display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;
+  margin: 0 0 6px; opacity: 0.72;
+}
+.msg.jevons .mermaid-diagram:hover .mermaid-toolbar,
+.msg.jevons .mermaid-diagram:focus-within .mermaid-toolbar { opacity: 1; }
+.msg.jevons .mermaid-diagram .mermaid-toolbar button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+  line-height: 1.3;
+}
+.msg.jevons .mermaid-diagram .mermaid-toolbar button:hover {
+  border-color: var(--border-focus); color: var(--text); background: var(--surface-raised);
+}
+.msg.jevons .mermaid-diagram .mermaid-toolbar button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+/* Durable graph viz panel — bottom-right chrome for project graphs (🎯T83),
+   not only ad-hoc chat mermaid (🎯T83.1). Reuses #mermaid-viz-panel. */
+#mermaid-viz-panel {
+  display: none; position: fixed; right: 16px; bottom: 16px; z-index: 40;
+  width: min(560px, calc(100vw - 32px)); height: min(460px, calc(100vh - 48px));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); flex-direction: column; overflow: hidden;
+}
+#mermaid-viz-panel.open { display: flex; }
+/* 🎯T185: Frontier Graph — ~90% viewport overlay of unachieved dependency graph */
+#mermaid-viz-panel.mvp-large {
+  left: 50%; top: 50%; right: auto; bottom: auto;
+  transform: translate(-50%, -50%);
+  width: 90vw; height: 90vh;
+  max-width: none; max-height: none;
+  z-index: 60;
+  border-radius: 12px;
+}
+#mermaid-viz-panel .mvp-header {
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); background: var(--surface-raised); flex-shrink: 0;
+}
+#mermaid-viz-panel .mvp-title { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; min-width: 72px; }
+#mermaid-viz-panel .mvp-header button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+}
+#mermaid-viz-panel .mvp-header button:hover { color: var(--text); border-color: var(--border-focus); }
+#mermaid-viz-panel .mvp-body {
+  flex: 1; min-height: 0; overflow: auto; padding: 12px; text-align: center;
+}
+#mermaid-viz-panel .mvp-body svg { max-width: 100%; height: auto; }
+/* 🎯T268: single-graph scale-to-fill — expand SVG to pane (not shrink-only). */
+#mermaid-viz-panel .mvp-body.mvp-scale-fill {
+  display: flex;
+  overflow: auto;
+}
+/* 🎯T294: centre with auto margins, not align/justify — flex centring clips the
+   leading edge once the graph is held at the legibility floor and overflows. */
+#mermaid-viz-panel .mvp-body.mvp-scale-fill svg {
+  max-width: none;
+  max-height: none;
+  height: auto;
+  flex-shrink: 0;
+  margin: auto;
+}
+/* 🎯T190/T276: multi-diagram pack host. T276 places blocks absolutely after
+   pack+scale; relative body is the composite coordinate space. */
+#mermaid-viz-panel .mvp-body.mvp-pack {
+  position: relative;
+  display: block;
+  text-align: left;
+  overflow: auto;
+}
+#mermaid-viz-panel .mvp-body.mvp-pack.mvp-pack-scaled {
+  /* Composite sized by fitMermaidPackToPane (displayW×displayH). */
+  overflow: auto;
+}
+#mermaid-viz-panel .mvp-pack-block {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  background: var(--surface-raised);
+  overflow: hidden;
+  min-width: 0;
+  box-sizing: border-box;
+}
+#mermaid-viz-panel .mvp-pack-block .mvp-pack-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+#mermaid-viz-panel .mvp-pack-block svg {
+  max-width: none;
+  max-height: none;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+#mermaid-viz-panel .mvp-status {
+  font-size: 11px; color: var(--text-muted); padding: 0 10px 8px; flex-shrink: 0;
+}
+#mermaid-viz-panel .mvp-empty { text-align: left; color: var(--text-dim); max-width: 36em; margin: 0 auto; }
+#mermaid-viz-panel .mvp-empty-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-empty-body { font-size: 12px; line-height: 1.45; margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-empty-hint { font-size: 11px; color: var(--text-muted); margin: 0; }
+/* 🎯T196: product fetch failure (404/5xx/network) — not the empty paste shell */
+#mermaid-viz-panel .mvp-error { text-align: left; color: var(--text-dim); max-width: 36em; margin: 0 auto; }
+#mermaid-viz-panel .mvp-error-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-error-body { font-size: 12px; line-height: 1.45; margin: 0 0 8px; }
+#mermaid-viz-panel .mvp-error-hint { font-size: 11px; color: var(--text-muted); margin: 0; }
+#mermaid-viz-panel .mvp-paste-wrap {
+  display: none; flex-direction: column; gap: 6px; padding: 8px 10px;
+  border-top: 1px solid var(--border); flex-shrink: 0; background: var(--surface-raised);
+}
+#mermaid-viz-panel .mvp-paste-wrap.open { display: flex; }
+#mermaid-viz-panel .mvp-paste-wrap label { font-size: 11px; color: var(--text-muted); text-align: left; }
+#mermaid-viz-panel #mvp-paste {
+  width: 100%; min-height: 72px; max-height: 140px; resize: vertical;
+  font: inherit; font-family: var(--mono); font-size: 11px; line-height: 1.35;
+  color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px; box-sizing: border-box;
+}
+#mermaid-viz-panel #mvp-paste:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Agents chrome: open durable viz without going through chat (🎯T83). */
+#activity-header.agents-header {
+  display: flex; align-items: center; gap: 8px; justify-content: space-between;
+}
+#activity-header.agents-header .ah-label { flex: 1; }
+#open-viz-btn,
+#aside-history-btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  font: inherit; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+}
+#open-viz-btn:hover,
+#aside-history-btn:hover,
+#aside-history-btn[aria-expanded="true"] {
+  color: var(--text); border-color: var(--border-focus); background: var(--surface-raised);
+}
+/* 🎯T270: closed-aside history pane (durable archive, not live 💡 rows) */
+#aside-history-panel {
+  display: none;
+  flex-direction: column;
+  max-height: 40%;
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  overflow: hidden;
+}
+#aside-history-panel.open { display: flex; }
+#aside-history-panel .aside-history-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; font-size: 11px; color: var(--text-muted);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#aside-history-panel .aside-history-head .ah-hist-label { flex: 1; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+#aside-history-close {
+  border: none; background: transparent; color: var(--text-muted);
+  font: inherit; font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 6px;
+}
+#aside-history-close:hover { color: var(--text); }
+#aside-history-body {
+  overflow-y: auto; padding: 6px 8px 10px; min-height: 0; flex: 1;
+  font-size: 12px;
+}
+.aside-history-empty { color: var(--text-dim); padding: 8px 4px; font-size: 12px; }
+.aside-history-list { list-style: none; margin: 0; padding: 0; }
+.aside-history-row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 5px 6px; border-radius: 5px; margin: 2px 0;
+}
+.aside-history-row:hover { background: var(--surface-raised); }
+.aside-history-kind {
+  flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  text-transform: uppercase; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--border); color: var(--text-muted);
+}
+.aside-history-row.aside-hist-target .aside-history-kind {
+  color: var(--amber, #d4a017); border-color: var(--amber, #d4a017);
+}
+.aside-history-row.aside-hist-side .aside-history-kind,
+.aside-history-row.aside-hist-capture .aside-history-kind {
+  color: var(--accent, #6cb6ff); border-color: var(--border-focus, #4a6fa5);
+}
+.aside-history-title { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg.jevons ul, .msg.jevons ol { padding-left: 1.5em; margin: 0.5em 0; }
+.msg.jevons li { margin: 0.2em 0; }
+.msg.jevons h1, .msg.jevons h2, .msg.jevons h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: var(--heading); }
+.msg.jevons h1 { font-size: 1.1em; }
+.msg.jevons h2 { font-size: 1.05em; }
+.msg.jevons h3 { font-size: 1em; }
+.msg.jevons blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 0.5em 0; color: var(--text-dim); }
+.msg.jevons table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.9em; }
+.msg.jevons th, .msg.jevons td { border: 1px solid var(--border); padding: 6px 10px; }
+.msg.jevons th { background: var(--surface); font-weight: 500; }
+.msg.jevons strong { color: var(--strong); font-weight: 600; }
+.msg.jevons a { color: var(--accent); text-decoration: none; }
+.msg.jevons a:hover { text-decoration: underline; }
+
+/* 🎯T369: bounded owner choice matrices render as a selectable card instead of
+   a markdown table the owner has to answer in prose. The source table is kept
+   (hidden behind "Table") — the card is a lens on it, never a replacement that
+   loses information. */
+.decision-matrix {
+  margin: 0.6em 0; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); overflow: hidden;
+}
+.decision-matrix .dm-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-raised);
+}
+.decision-matrix .dm-badge {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-dim); border-radius: 4px; padding: 2px 6px;
+}
+.decision-matrix .dm-title { font-weight: 600; color: var(--strong); font-size: 0.95em; min-width: 0; }
+.decision-matrix .dm-options { display: flex; flex-direction: column; }
+.decision-matrix .dm-option {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left;
+  padding: 9px 12px; border: none; border-top: 1px solid var(--border);
+  background: transparent; color: var(--text); font: inherit; cursor: pointer;
+  transition: background 0.12s;
+}
+.decision-matrix .dm-options .dm-option:first-child { border-top: none; }
+.decision-matrix .dm-option:hover { background: var(--surface-raised); }
+.decision-matrix .dm-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.decision-matrix .dm-option[aria-checked="true"] { background: var(--accent-dim); }
+.decision-matrix .dm-key {
+  flex: 0 0 auto; min-width: 1.4em; height: 1.4em; display: inline-flex;
+  align-items: center; justify-content: center; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--bg);
+  font-family: var(--mono); font-size: 0.8em; font-weight: 700; color: var(--text-dim);
+}
+.decision-matrix .dm-option[aria-checked="true"] .dm-key {
+  border-color: var(--accent); background: var(--accent); color: #fff;
+}
+.decision-matrix .dm-main { min-width: 0; flex: 1 1 auto; }
+.decision-matrix .dm-label { display: block; font-weight: 600; color: var(--strong); }
+.decision-matrix .dm-cells {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 3px;
+  font-size: 0.85em; color: var(--text-dim);
+}
+.decision-matrix .dm-cell-name { text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.85em; opacity: 0.75; margin-right: 4px; }
+.decision-matrix .dm-rec {
+  flex: 0 0 auto; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 1px 5px; white-space: nowrap;
+}
+.decision-matrix .dm-foot {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-top: 1px solid var(--border); background: var(--surface-raised);
+}
+.decision-matrix .dm-status { flex: 1 1 auto; min-width: 0; font-size: 0.85em; color: var(--text-dim); }
+.decision-matrix .dm-foot button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-dim);
+  font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 5px; cursor: pointer;
+}
+.decision-matrix .dm-foot button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.decision-matrix .dm-foot button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.decision-matrix .dm-send { color: var(--accent); border-color: var(--accent) !important; }
+.decision-matrix .dm-send:disabled { opacity: 0.45; cursor: default; color: var(--text-dim); border-color: var(--border) !important; }
+.decision-matrix .dm-raw { padding: 0 12px 8px; }
+.decision-matrix .dm-raw table { margin: 8px 0 0; }
+
+/* Oversized content (🎯T106): full marked/HTML always mounted; collapse is
+   CSS max-height + overflow:hidden on .msg-body (clip), never truncated
+   re-parse. --collapsed-max-height must match COLLAPSED_MAX_HEIGHT in JS.
+   Pocket polish: clipped bubble = content slotted into a dark pocket;
+   fade/tab/time are border-chrome, not in-flow competitors. */
+:root {
+  --collapsed-max-height: 14rem;
+  --expand-tab-height: 1.05rem;
+  --expand-tab-clearance: 0.35rem; /* air above tab when expanded (🎯T166) */
+  --context-tab-height: 1.15rem; /* 🎯T266 top-edge target-context chrome */
+}
+/* Collapsed: border butts clipped content (time lives outside). */
+.msg.msg-clipped { padding-bottom: 0; }
+.msg.msg-clipped > .msg-body {
+  max-height: var(--collapsed-max-height);
+  overflow: hidden;
+}
+/* 🎯T166: expanded tall bubbles (tab present, not clipped) reserve bottom
+   padding so the last text line clears the inside-edge collapse tab.
+   Collapsed stays padding-bottom:0 above; short bubbles never get a tab. */
+.msg:has(> .msg-expand-tab):not(.msg-clipped) {
+  padding-bottom: calc(var(--expand-tab-height) + var(--expand-tab-clearance));
+}
+/* Pocket scrim: fade-to-dark flush to inner bottom of border (not to page bg).
+   Height matches bubble corner radius so scrim stays a short edge cue.
+   Max opacity ~half of prior 0.45 so the edge cue stays soft. */
+.msg-clip-fade {
+  display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--radius);
+  margin: 0;
+  pointer-events: none;
+  z-index: 1;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.22));
+}
+.msg.msg-clipped > .msg-clip-fade { display: block; }
+/* Bottom-edge pocket tab: tongue into pocket from inner bottom border (not hang-off).
+   z-index above .msg-clip-fade for both .msg.user and .msg.jevons (tab must paint over scrim). */
+.msg-expand-tab {
+  display: flex; align-items: center; justify-content: center;
+  width: 2.25rem; height: var(--expand-tab-height); padding: 0;
+  position: absolute; left: 50%; bottom: -1px; /* 1px into border; bulk sits inside */
+  transform: translateX(-50%);
+  margin: 0;
+  border: 1px solid var(--border); border-bottom: none;
+  border-radius: 7px 7px 0 0; background: var(--bg);
+  color: var(--text-dim); font: inherit; font-size: 11px; line-height: 1;
+  cursor: pointer; opacity: 0.92; z-index: 3;
+}
+.msg-expand-tab:hover { opacity: 1; color: var(--text); border-color: var(--border-focus); }
+.msg-expand-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.msg.user .msg-expand-tab {
+  background: var(--bg); border-color: var(--user-border); color: var(--text-dim);
+  z-index: 3;
+}
+.msg.jevons .msg-expand-tab {
+  background: var(--bg); border-color: var(--border);
+  z-index: 3;
+}
+.msg-expand-tab .chev { display: block; font-size: 13px; line-height: 1; }
+
+/* 🎯T266/T273: top-edge speaker/context tab on target-related owner asks.
+   T273: speaker-omit = pure overseer/Jevons only; context chrome always paints
+   (incl. jevons-po as owning PO); non-overseer speaker = bold purple 〈agent〉 (no ·).
+   Coordinates with T267 (PO select + frontier highlight) via shared TargetContextChrome. */
+.msg.msg-has-context-tab { margin-top: 10px; } /* 🎯T351: was 0.65rem = 10.4px — fractional row margin escapes the box snap */
+.msg-context-tab {
+  display: inline-flex; align-items: center; gap: 0;
+  max-width: calc(100% - 20px);
+  height: var(--context-tab-height);
+  padding: 0 8px;
+  position: absolute; left: 10px; top: -1px;
+  transform: translateY(-50%);
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font: inherit; font-size: 10px; font-weight: 600; line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 3;
+  opacity: 0.95;
+}
+.msg.jevons .msg-context-tab { background: var(--surface-raised); border-color: var(--border); }
+.msg.user .msg-context-tab { background: var(--bg); border-color: var(--user-border); }
+/* 🎯T273: non-overseer speaker byline — bold purple 〈agent〉 */
+.msg-context-tab .ctx-speaker {
+  color: var(--accent);
+  font-weight: 700;
+}
+/* 🎯T266 context chrome (product · owning-PO) — kept for jevons-po context path */
+.msg-context-tab .ctx-repo { color: var(--accent); font-weight: 700; }
+.msg-context-tab .ctx-sep { opacity: 0.55; margin: 0 0.15em; }
+.msg-context-tab .ctx-po { color: var(--text-dim); font-weight: 500; }
+
+/* 🎯T135: opt-in route switch under a user bubble (match suggestion only). */
+.msg.user .route-switch {
+  display: block; margin-top: 6px; margin-left: auto; text-align: right;
+  padding: 2px 0; background: none; border: none;
+  color: var(--accent); font: inherit; font-size: 12px; cursor: pointer;
+  opacity: 0.88; max-width: 100%;
+}
+.msg.user .route-switch:hover { opacity: 1; text-decoration: underline; }
+.msg.user .route-switch:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px;
+}
+.msg.user .route-switch[disabled] { opacity: 0.5; cursor: default; text-decoration: none; }
+
+/* History hydrate (🎯T57 API + 🎯T119 progressive full-data):
+   WS still replays recent turns; remaining durable log is fetched into
+   client memory without requiring scroll (progressive /api/history).
+   Top sentinel is optional residual while pages remain — not a data throttle.
+   Overlay is out of flow so it does not perturb scroll-position math. */
+.history-sentinel { height: 1px; margin: 0; pointer-events: none; }
+.history-loading { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 3px 12px; font-size: 11px; color: var(--text-dim); z-index: 5; pointer-events: none; }
+
+/* 🎯T119: jump-to-bottom affordance when free-scrolling (no jump-to-top). */
+#jump-bottom {
+  position: absolute; right: 20px; bottom: 96px; z-index: 6;
+  border: 1px solid var(--border); background: var(--surface-raised); color: var(--text);
+  border-radius: 20px; padding: 6px 12px; font: inherit; font-size: 12px; font-weight: 500;
+  cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.25); opacity: 0.92;
+}
+#jump-bottom:hover { opacity: 1; border-color: var(--border-focus); }
+#jump-bottom[hidden] { display: none !important; }
+
+/* Worker notes — out-of-band system messages from a delegated agent.
+   Centred, dim, collapsible. Distinct from both user (right) and
+   jevons (left) so the user can't mistake them for either side of
+   the conversation. 🎯T23. */
+.msg.worker { align-self: center; max-width: 78%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: var(--text-dim); margin: 6px auto; }
+.msg.worker[open] { padding-bottom: 10px; }
+.msg.worker summary { cursor: pointer; list-style: none; font-weight: 500; display: flex; gap: 8px; align-items: baseline; }
+.msg.worker summary::-webkit-details-marker { display: none; }
+.msg.worker summary::before { content: '▸'; color: var(--text-muted); font-size: 10px; transition: transform 0.15s; }
+.msg.worker[open] summary::before { transform: rotate(90deg); }
+.msg.worker .worker-agent { color: var(--accent); }
+.msg.worker .worker-kind { color: var(--text-muted); font-size: 11px; }
+.msg.worker .worker-task { color: var(--text-muted); font-family: var(--mono); font-size: 10px; margin-left: auto; }
+.msg.worker .worker-body { white-space: pre-wrap; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--text); max-height: 40vh; overflow-y: auto; }
+.msg.worker.worker-failed { border-color: var(--red); }
+.msg.worker.worker-failed .worker-kind { color: var(--red); }
+
+/* Transient status notice — e.g., "didn't catch that" when an
+   utterance fails to transcribe. Quieter than worker notes and
+   doesn't carry a header/badge. */
+.msg.status { align-self: center; max-width: 70%; background: transparent; border: none; padding: 4px 12px; font-size: 11px; color: var(--text-muted); font-style: italic; text-align: center; margin: 4px auto; }
+
+/* Visually hidden but accessible to screen readers and STT tools
+   that read surrounding context to infer dictation style. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* 🎯T65 quiet attention stack — prefix-first; no command buttons / focus chrome */
+/* 🎯T134: single-row bar + overflow chip; no unbounded multi-row wall */
+#attention-bar { display: none; flex-direction: row; flex-wrap: nowrap; gap: 6px; align-items: center; padding: 6px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); max-height: 2.4rem; overflow: hidden; }
+#attention-bar.visible { display: flex; }
+#attention-bar.attn-expanded { flex-wrap: wrap; max-height: none; overflow: visible; }
+#attention-stack { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; min-height: 0; flex: 1; min-width: 0; overflow: hidden; }
+#attention-bar.attn-expanded #attention-stack { flex-wrap: wrap; overflow: visible; }
+#attention-actions { display: flex; flex-shrink: 0; gap: 4px; align-items: center; }
+.attn-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--text-dim); font-size: 11px; font-weight: 500; cursor: pointer; line-height: 1.3; flex-shrink: 0; }
+.attn-chip:hover { border-color: var(--border-focus); color: var(--text); }
+.attn-chip.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.attn-chip.parked { opacity: 0.72; font-style: italic; }
+.attn-chip.main-chip { border-style: dashed; }
+.attn-chip.attn-overflow { border-style: dashed; opacity: 0.9; color: var(--text-muted); }
+.attn-chip.attn-action { border-style: solid; font-size: 10px; color: var(--text-muted); }
+.attn-chip.attn-action:hover { color: var(--text); border-color: var(--border-focus); }
+.attn-chip .attn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
+.attn-chip .attn-status { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+
+/* 🎯T113 send queue strip — Grok-like, just above the composer */
+#send-queue { display: none; flex-direction: column; gap: 4px; padding: 8px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); }
+#send-queue.visible { display: flex; }
+.send-queue-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-raised); font-size: 12px; line-height: 1.35; color: var(--text-dim); }
+.send-queue-item.focused { border-color: var(--accent); background: var(--accent-dim); color: var(--text); }
+.send-queue-item .sq-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-queue-item .sq-actions { display: flex; gap: 4px; flex-shrink: 0; margin-left: auto; }
+.send-queue-item .sq-actions button { border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 11px; font-family: var(--sans); padding: 2px 8px; border-radius: 5px; cursor: pointer; line-height: 1.3; }
+.send-queue-item .sq-actions button:hover { border-color: var(--border-focus); color: var(--text); }
+.send-queue-item .sq-actions button.sq-send-now { color: var(--accent); border-color: rgba(239,68,68,0.35); }
+.send-queue-item .sq-actions button.sq-send-now:hover { background: var(--accent-dim); }
+
+/* Input bar */
+#input-bar { display: flex; gap: 10px; align-items: flex-end; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)) 20px; background: var(--surface); border-top: 1px solid var(--border);
+  /* One-line control height, derived from the input's own metrics
+     (1 line at line-height 1.45 × its 14px font, + 11px×2 padding +
+     1px×2 border). The input and the send button both pin to this, so
+     they are the same height by construction and can't drift apart. */
+  --control-h: calc(1.45 * 14px + 24px); }
+/* Textarea (not <input>) so Wispr Flow and other STT tools detect a
+   document-style input and produce full punctuated sentences. */
+/* 🎯T123: empty/single-line min-height pins to --control-h (same as #send).
+   No multi-line default min-height (T69-era scroll workaround removed).
+   autoGrow expands while typing; overflow hidden until max (🎯T69 scrollbar),
+   then .composer-scroll. Cap 28vh so growth does not eat the latest reply
+   (🎯T70.1). */
+#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: var(--control-h); max-height: 28vh; overflow-y: hidden; }
+#input.composer-scroll { overflow-y: auto; }
+/* Fade the placeholder well below entered text so it's obviously a
+   prompt, not typed content. Lower opacity blends it toward the input
+   background — darker in dark mode, lighter in light mode. */
+#input::placeholder { color: var(--text-muted); opacity: 0.45; }
+#input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+#send { min-height: var(--control-h); padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
+#send:hover { opacity: 0.85; }
+#send:disabled { opacity: 0.3; cursor: not-allowed; }
+#voice-btn { padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 16px; cursor: pointer; transition: all 0.15s; line-height: 1; position: relative; }
+#voice-btn:hover { border-color: var(--accent); color: var(--accent); }
+#voice-btn.active { background: var(--red); color: #fff; border-color: var(--red); box-shadow: 0 0 12px rgba(248,113,113,0.5); animation: pulse 1.5s ease-in-out infinite; }
+#voice-btn.connecting { background: var(--amber); color: #fff; border-color: var(--amber); animation: pulse 1.5s ease-in-out infinite; cursor: wait; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 4px 0 rgba(248,113,113,0.4); } 50% { box-shadow: 0 0 12px 4px rgba(248,113,113,0.15); } }
+#voice-status { display: none; align-items: center; gap: 5px; margin-left: 8px; font-size: 11px; }
+#voice-status.on { display: flex; color: var(--red); }
+#voice-status .voice-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: voice-blink 1s ease-in-out infinite; }
+@keyframes voice-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+.voice-indicator { font-size: 11px; color: var(--text-muted); padding: 4px 4px; align-self: center; font-style: italic; }
+/* "Working" indicator — order:1000 keeps it visually pinned below all
+   messages regardless of DOM insertion order while a turn is in flight.
+   messages-end (follow sentinel) uses order:1001 so true bottom stays last. */
+.working-indicator { order: 1000; align-self: flex-start; display: flex; align-items: center; gap: 7px; padding: 8px 4px; color: var(--text-muted); font-size: 13px; font-style: italic; }
+#messages-end { order: 1001; }
+.working-indicator .work-dots { display: inline-flex; gap: 4px; }
+.working-indicator .work-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: work-bounce 1.2s ease-in-out infinite; }
+.working-indicator .work-dots span:nth-child(2) { animation-delay: 0.16s; }
+.working-indicator .work-dots span:nth-child(3) { animation-delay: 0.32s; }
+@keyframes work-bounce { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+
+/* Collapsible turn details */
+/* Compact tool-activity marker — it does NOT expand; its detail is shown
+   as a hover tooltip. One small line, so it takes minimal vertical space. */
+.turn-marker { align-self: flex-start; position: relative; font-family: var(--mono); font-size: 11px; color: var(--text-muted); letter-spacing: -0.02em; user-select: none; cursor: default; line-height: 1.2; margin: 0; }
+.turn-marker:hover { color: var(--text-dim); }
+/* 🎯T122: tip must not inherit the narrow marker's shrink-to-fit width.
+   max-content + high min/max → wide single-line chrome; wrap only past max. */
+.turn-tip {
+  display: none; position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 30;
+  width: max-content; min-width: 320px; max-width: min(720px, 92vw);
+  max-height: 50vh; overflow-x: hidden; overflow-y: auto;
+  background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+}
+.turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
+/* Timestamp outside the bubble, slightly under the border (not in the pocket). */
+.msg-time {
+  position: absolute; top: 100%; left: 2px; right: auto;
+  margin-top: 4px; padding-top: 0;
+  font-size: 10px; color: var(--text-muted); font-family: var(--mono);
+  letter-spacing: -0.02em; user-select: none; line-height: 1; cursor: default;
+  z-index: 1;
+}
+.msg.user .msg-time { left: auto; right: 2px; text-align: right; }
+/* 🎯T84: GitHub mark for compacted github.com workdirs */
+.agent-dir .gh-icon { display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; opacity: 0.85; }
+.agent-node .agent-dir { display: inline-flex; align-items: center; gap: 2px; }
+/* 🎯T122: do not break-word early; soft-wrap only at tip max-width. */
+.turn-item {
+  font-family: var(--mono); font-size: 11px; padding: 2px 0; letter-spacing: -0.02em;
+  line-height: 1.35; max-width: 100%;
+  white-space: pre-wrap; word-break: normal; overflow-wrap: break-word;
+}
+.turn-item.tool-use { color: var(--amber); }
+.turn-item.tool-result { color: var(--text-dim); }
+.turn-item.agent-note { color: var(--text-dim); }
+
+/* Right pane: agents — width is drag-resizable (🎯T248); default 420px */
+#activity-pane {
+  width: 420px; flex-shrink: 0; display: flex; flex-direction: column;
+  background: var(--surface); border-left: 1px solid var(--border);
+  position: relative; min-width: 0;
+}
+/* 🎯T248: vertical drag handle on chat | sidebar border */
+#rhs-width-handle {
+  position: absolute; left: -3px; top: 0; bottom: 0; width: 6px;
+  cursor: col-resize; z-index: 6; touch-action: none;
+  background: transparent;
+}
+#rhs-width-handle:hover,
+#rhs-width-handle:focus-visible,
+body.rhs-resizing-col #rhs-width-handle {
+  background: var(--accent-dim);
+}
+#rhs-width-handle.disabled { cursor: default; pointer-events: none; }
+/* 🎯T248: fleet tree + frontier/transcript share a resizable column */
+#rhs-split {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#rhs-split-handle {
+  flex: 0 0 6px; cursor: row-resize; touch-action: none;
+  background: transparent; border-top: 1px solid var(--border);
+  position: relative; z-index: 5;
+}
+#rhs-split-handle:hover,
+#rhs-split-handle:focus-visible,
+body.rhs-resizing-row #rhs-split-handle {
+  background: var(--accent-dim);
+}
+#rhs-split-handle.disabled { cursor: default; pointer-events: none; }
+body.rhs-resizing { user-select: none; cursor: inherit; }
+body.rhs-resizing-col { cursor: col-resize; }
+body.rhs-resizing-row { cursor: row-resize; }
+#activity-header { padding: 10px 16px; font-size: 10px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.08em; }
+#cost-ticker { display: none; padding: 6px 16px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); letter-spacing: -0.02em; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#cost-ticker.cost-warn { color: var(--amber); }
+#cost-ticker.cost-kill { color: #fff; background: #b3261e; font-weight: 600; }
+/* 🎯T390 / 🎯T390.1 plan remaining: always-visible grouped bars in #status,
+   next to the theme toggle. Never display:none — a missing fetch is not a
+   reason to hide the slot. One group per provider: T287 company mark +
+   boxed session/weekly remaining bars. Triangle under each bar is remaining
+   time; orange when spend outstrips time, red when it outstrips by a lot.
+   Weekly only (🎯T390.1.1): blue = on track to leave ≥15% unused,
+   purple = ≥15% already unrecoverable even at 1.5×. */
+#plan-ticker { margin-left: auto; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; padding-top: 2px; }
+#plan-ticker .plan-group { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+#plan-ticker .plan-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); }
+#plan-ticker .plan-icon .model-icon { width: 17px; height: 17px; display: block; opacity: 0.85; }
+#plan-ticker .plan-icon .model-icon[data-mark="claude-splat"] { color: var(--anthropic-mark); }
+#plan-ticker .plan-box { display: inline-flex; align-items: flex-end; gap: 5px; padding: 2px 5px 1px; border: 1px solid var(--border-focus); border-radius: 3px; }
+#plan-ticker .plan-win { display: inline-flex; align-items: flex-end; gap: 2px; }
+#plan-ticker .plan-track { position: relative; display: inline-block; width: 36px; padding-bottom: 5px; flex-shrink: 0; }
+/* No border on the bar: fill % and triangle % must share one rail. A 1px
+   border made fill a % of 34px and the triangle a % of 36px, so a weekly
+   bar sitting just over 1.0 burn still *looked* like leftover (fill right
+   of the tip) while painting orange. Inset stroke keeps the edge. */
+#plan-ticker .plan-bar { display: block; width: 100%; height: 6px; background: var(--surface-high); box-shadow: inset 0 0 0 1px var(--border); border-radius: 2px; overflow: hidden; }
+#plan-ticker .plan-bar-fill { display: block; height: 100%; background: var(--green); }
+#plan-ticker .plan-tri { position: absolute; bottom: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 4px solid var(--green); transform: translateX(-50%); pointer-events: none; }
+#plan-ticker .plan-win-label { font-size: 9px; line-height: 1; color: var(--text-muted); padding-bottom: 5px; }
+#plan-ticker .plan-win.plan-ahead .plan-bar-fill { background: var(--amber); }
+#plan-ticker .plan-win.plan-ahead .plan-tri { border-bottom-color: var(--amber); }
+#plan-ticker .plan-win.plan-hot .plan-bar-fill,
+#plan-ticker .plan-win.plan-crit .plan-bar-fill { background: var(--red); }
+#plan-ticker .plan-win.plan-hot .plan-tri,
+#plan-ticker .plan-win.plan-crit .plan-tri { border-bottom-color: var(--red); }
+#plan-ticker .plan-win.plan-under .plan-bar-fill { background: var(--plan-under); }
+#plan-ticker .plan-win.plan-under .plan-tri { border-bottom-color: var(--plan-under); }
+#plan-ticker .plan-win.plan-locked .plan-bar-fill { background: var(--plan-locked); }
+#plan-ticker .plan-win.plan-locked .plan-tri { border-bottom-color: var(--plan-locked); }
+#plan-ticker .plan-win.plan-low .plan-bar-fill { background: var(--amber); }
+#plan-ticker .plan-win.plan-low .plan-tri { border-bottom-color: var(--amber); }
+/* 🎯T390.1.3: rock bottom (published 0% or 429) — bright red bar chrome,
+   weekly and session, every provider. Fill is already empty so the
+   inset stroke is the signal. */
+#plan-ticker .plan-win.plan-exhausted .plan-bar {
+  box-shadow: inset 0 0 0 1px var(--plan-exhausted);
+}
+#plan-ticker .plan-group.plan-unavail { opacity: 0.4; }
+#plan-ticker .plan-group.plan-stale { opacity: 0.7; }
+#plan-ticker .plan-chip { display: inline-flex; align-items: center; gap: 4px; }
+#plan-ticker .plan-sep { color: var(--text-muted); user-select: none; }
+#plan-ticker.plan-stale { color: var(--text-muted); }
+#plan-ticker.plan-low,
+#plan-ticker.plan-ahead { color: var(--amber); }
+#plan-ticker.plan-crit,
+#plan-ticker.plan-hot { color: var(--red); }
+#plan-ticker.plan-under { color: var(--plan-under); }
+#plan-ticker.plan-locked { color: var(--plan-locked); }
+
+/* Theme toggle */
+#theme-toggle { display: flex; gap: 2px; background: var(--surface-raised); border-radius: 5px; padding: 2px; flex-shrink: 0; }
+#theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
+#theme-toggle button:hover { color: var(--text-dim); }
+#theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
+/* 🎯T138: stable degraded cockpit banner (overseer down / budget pause) */
+#degraded-banner {
+  display: none; flex-shrink: 0; padding: 8px 20px; font-size: 12px; font-weight: 500;
+  background: var(--amber); color: #1a1a12; border-bottom: 1px solid var(--border);
+}
+#degraded-banner.visible { display: block; }
+/* 🎯T532: in-page idle-storm warn (snap/RO/longtask). Not Isolated Web Content %. */
+#idle-storm-banner {
+  display: none; flex-shrink: 0; padding: 8px 20px; font-size: 12px; font-weight: 500;
+  background: var(--amber); color: #1a1a12; border-bottom: 1px solid var(--border);
+}
+#idle-storm-banner.visible { display: block; }
+/* 🎯T248: fleet height is flex-basis from RhsLayout (default ~45%); min floor 60px */
+#agents { flex: 0 0 45%; overflow-y: auto; padding: 8px 12px; min-height: 60px; max-height: none; }
+/* 🎯T200: portfolio virtual nodes in fleet tree — folder lead, not status dot */
+.agent-node.agent-portfolio { cursor: default; }
+.agent-node.agent-portfolio .agent-name {
+  color: var(--text-dim); font-weight: 600; font-size: 12px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.agent-node .agent-folder {
+  flex-shrink: 0; width: 14px; text-align: center; font-size: 12px; line-height: 1;
+  opacity: 0.9;
+}
+/* 🎯T131: RHS bottom — tabbed Frontier | Transcript (T124 coexist)
+   🎯T248: vertical share vs #agents is drag-resized (no fixed max-height 55%) */
+#rhs-bottom {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 140px; max-height: none;
+  min-width: 0; /* 🎯T174: flex child must shrink so frontier table cannot expand pane */
+  background: var(--bg);
+}
+#rhs-bottom-tabs {
+  display: flex; align-items: center; gap: 0; flex-shrink: 0;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 0 4px;
+}
+#rhs-bottom-tabs button {
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 11px; font-weight: 600; font-family: var(--sans);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+#rhs-bottom-tabs button:hover { color: var(--text-dim); }
+#rhs-bottom-tabs button.active {
+  color: var(--text); border-bottom-color: var(--accent);
+}
+#rhs-bottom-tabs .rhs-tab-meta {
+  margin-left: auto; font-size: 10px; color: var(--text-muted);
+  font-family: var(--mono); padding-right: 8px; max-width: 40%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rhs-tab-pane { display: none; flex-direction: column; flex: 1; min-height: 0; }
+.rhs-tab-pane.active { display: flex; }
+/* 🎯T124: fleet transcript inspect — never main chat */
+#agent-inspect { flex: 1; min-height: 0; }
+#agent-inspect-header {
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+  font-size: 11px; font-weight: 600; color: var(--text-dim);
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0;
+}
+#agent-inspect-header .ai-name { color: var(--text); text-transform: none; letter-spacing: 0; font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#agent-inspect-header button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-muted);
+  font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: var(--sans);
+}
+#agent-inspect-header button:hover { color: var(--text); border-color: var(--border-focus); }
+/* 🎯T205: inspect is main transcript in microcosm — .msg chrome + paintBody;
+   overflow-anchor:none + stick/free (not unconditional pin). No .ai-turn CSS fork. */
+#agent-inspect-body {
+  flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+  font-size: 13px; line-height: 1.5;
+  scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent;
+}
+#agent-inspect-body > * { flex-shrink: 0; }
+#agent-inspect-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px 4px; }
+#agent-inspect-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; margin-bottom: 8px; }
+/* Shared .msg / .msg-body chrome (global rules). Narrow pane: full width OK. */
+#agent-inspect-body > .msg { max-width: 100%; }
+/* 🎯T167: per-turn .msg must not nest vertical scroll traps. */
+#agent-inspect-body > .msg .msg-body { overflow-y: visible; max-height: none; }
+/* 🎯T480: T106 size clip still applies — overflow:hidden is a clip, not a
+   nested scroll trap. More specific than the T167 unclip so a tall Transcript
+   bubble actually pockets. */
+#agent-inspect-body > .msg.msg-clipped > .msg-body {
+  max-height: var(--collapsed-max-height);
+  overflow: hidden;
+}
+/* 🎯T233: harness injects as compact ⋯ nuggets (family of main-chat turn-marker). */
+#agent-inspect-body > .turn-marker { margin: 4px 0 2px; }
+#agent-inspect-body > .turn-marker.inject-nugget {
+  align-self: flex-start; margin: 2px 0;
+}
+#agent-inspect-body > .turn-marker.inject-nugget .inject-label {
+  font-family: var(--mono); font-size: 11px;
+}
+/* 🎯T309.1: conversation widget — compact density is styling only (not a second
+   composer implementation). #agent-inspect-* ids adopted by ConversationWidget.mount. */
+/* 🎯T251: dedicated sidebar Transcript composer — independent of main #input */
+#agent-inspect-composer,
+.conversation-widget.density-compact .cw-composer {
+  display: none; flex-shrink: 0; gap: 8px; align-items: flex-end;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)) 10px;
+  border-top: 1px solid var(--border); background: var(--surface);
+  --ai-control-h: calc(1.4 * 12px + 16px);
+}
+#agent-inspect-composer.visible,
+.conversation-widget.density-compact .cw-composer.visible { display: flex; }
+#agent-inspect-composer.disabled,
+.conversation-widget.density-compact .cw-composer.disabled { opacity: 0.55; }
+#agent-inspect-input,
+.conversation-widget.density-compact .cw-composer textarea {
+  flex: 1; min-width: 0; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-size: 12px; font-family: var(--sans); outline: none; resize: none;
+  line-height: 1.4; min-height: var(--ai-control-h); max-height: 22vh;
+  overflow-y: hidden;
+}
+#agent-inspect-input:focus,
+.conversation-widget.density-compact .cw-composer textarea:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim);
+}
+#agent-inspect-input::placeholder,
+.conversation-widget.density-compact .cw-composer textarea::placeholder {
+  color: var(--text-muted); opacity: 0.5;
+}
+#agent-inspect-send,
+.conversation-widget.density-compact .cw-composer button {
+  min-height: var(--ai-control-h); padding: 7px 12px; border-radius: 6px; border: none;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 600;
+  font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; flex-shrink: 0;
+}
+#agent-inspect-send:hover,
+.conversation-widget.density-compact .cw-composer button:hover { opacity: 0.85; }
+#agent-inspect-send:disabled,
+.conversation-widget.density-compact .cw-composer button:disabled {
+  opacity: 0.3; cursor: not-allowed;
+}
+/* 🎯T131 / 🎯T173 / 🎯T174: frontier table — headerless; constrained to pane; name ellipsizes */
+#frontier-pane { flex: 1; min-height: 0; min-width: 0; }
+#frontier-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 4px 12px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#frontier-toolbar button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-muted);
+  font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: var(--sans);
+}
+#frontier-toolbar button:hover { color: var(--text); border-color: var(--border-focus); }
+#frontier-body {
+  flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 0;
+  font-size: 11px;
+}
+#frontier-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px; }
+#frontier-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; padding: 8px 12px; }
+/* 🎯T354: RSI coach judgment list — same pane chrome as the frontier tab. */
+#coach-pane { flex: 1; min-height: 0; min-width: 0; }
+#coach-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 4px 12px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#coach-counts { flex: 1; min-width: 0; font-size: 10px; color: var(--text-muted); }
+#coach-toolbar button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-muted);
+  font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: var(--sans);
+}
+#coach-toolbar button:hover { color: var(--text); border-color: var(--border-focus); }
+#coach-body {
+  flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto;
+  font-size: 11px; font-family: var(--sans);
+}
+#coach-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px; }
+#coach-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; padding: 8px 12px; }
+.coach-row { padding: 6px 12px; border-bottom: 1px solid var(--border); min-width: 0; }
+.coach-row:hover { background: var(--surface-raised); }
+.coach-row-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.coach-title {
+  flex: 1; min-width: 0; color: var(--text); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.coach-chip {
+  flex-shrink: 0; font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); color: var(--text-muted);
+}
+/* Pending is the state that wants the owner's eye: it is the only loud chip. */
+.coach-chip.coach-pending { color: var(--amber, #d4a017); border-color: var(--amber, #d4a017); }
+.coach-sev { flex-shrink: 0; font-size: 9px; color: var(--text-muted); }
+.coach-sev.coach-sev-high { color: var(--amber, #d4a017); }
+.coach-obs { color: var(--text-dim); margin-top: 2px; line-height: 1.35; overflow-wrap: anywhere; }
+.coach-meta { color: var(--text-muted); font-size: 10px; margin-top: 2px; overflow-wrap: anywhere; }
+.coach-detail { color: var(--text-dim); font-size: 10px; margin-top: 2px; overflow-wrap: anywhere; }
+/* max-width:100% + name ellipsis: long names do not grow past #frontier-body */
+/* 🎯T340: table-layout:auto so chrome cols size to content (fixed + ch/rem clips
+   T254.1 under border-box, or leaves T331 chasms). Name width:100% claims remainder. */
+#frontier-table {
+  width: 100%; max-width: 100%; border-collapse: collapse; font-family: var(--sans);
+  table-layout: auto;
+}
+/* 🎯T340: shared horizontal pad on every td → uniform text-to-text gutters.
+   Pad-sum hermetics alone are theatre when chrome col width >> content; shared
+   4px half-pads make id↔name / name↔status / status↔fanout the same order. */
+#frontier-table td {
+  padding: 5px 4px 4px 4px; border-bottom: 1px solid var(--border);
+  color: var(--text); vertical-align: middle;
+  height: 26px; line-height: 16px;
+}
+#frontier-table tr:hover td { background: var(--surface-raised); }
+/* 🎯T340: size .ft-id to content — NO ellipsis clip.
+   T332 7ch max-width:9ch + overflow:hidden + text-overflow:ellipsis under
+   global border-box ate padding into the ch box and truncated 🎯T254.1.
+   white-space:nowrap + no fixed width → column is content-min under auto layout. */
+#frontier-table .ft-id {
+  font-family: var(--mono); font-size: 11px; color: var(--accent);
+  white-space: nowrap; font-weight: 500; line-height: 16px;
+  width: 1%;
+  max-width: none;
+  overflow: visible;
+  /* left edge inset only; H gutter shares the 4px from #frontier-table td */
+  padding-left: 8px;
+  min-width: 77px;
+}
+/* Name takes remainder; max-width:0 + width:100% is the auto-table fill trick. */
+#frontier-table .ft-name {
+  width: 100%;
+  max-width: 0;
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 🎯T340: status + fan content-min chrome — not fixed rem chasm / glue */
+#frontier-table .ft-status {
+  font-size: 10px; color: var(--text-dim); white-space: nowrap;
+  width: 1%;
+}
+#frontier-table .ft-fanout {
+  font-family: var(--mono); font-size: 10px; color: var(--text-muted);
+  text-align: right; white-space: nowrap;
+  width: 1%;
+}
+#frontier-table .ft-fanout.ft-fanout-empty {
+  color: transparent;
+}
+/* 🎯T182: far-right play control → POST /api/agents/{po}/send */
+/* 🎯T198: engaged row → stop glyph; free stay play */
+#frontier-table .ft-play {
+  width: 1%;
+  padding-left: 4px; padding-right: 8px;
+  text-align: center; white-space: nowrap;
+}
+#frontier-table .ft-play-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin: 0; padding: 0 4px; line-height: 16px; height: 16px;
+  /* Medium product green (token --green: dark #4ade80 / light #10b981). */
+  font-size: 11px; color: var(--green);
+  background: transparent; border: none; border-radius: 4px;
+  cursor: pointer;
+}
+#frontier-table .ft-play-btn:hover {
+  background: var(--surface-raised); color: var(--green);
+}
+#frontier-table .ft-play-btn:disabled {
+  opacity: 0.45; cursor: default;
+}
+#frontier-table .ft-play-btn.ft-stop-btn {
+  color: var(--amber, #d4a017);
+}
+/* 🎯T278: immediate kickoff-submitted spinner (before PO reply / engage) */
+#frontier-table .ft-play-btn.ft-submitted-btn {
+  color: var(--accent);
+  opacity: 1;
+  cursor: default;
+}
+#frontier-table .ft-play-btn.ft-submitted-btn .ft-spin {
+  display: inline-block;
+  width: 10px; height: 10px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: ft-kickoff-spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+@keyframes ft-kickoff-spin {
+  to { transform: rotate(360deg); }
+}
+#frontier-table tr.ft-engaged td {
+  color: var(--text-dim);
+}
+#frontier-table tr.ft-engaged .ft-id {
+  opacity: 0.92;
+}
+/* 🎯T267: target-ask focus — emphasized Frontier row (selected/visible) */
+#frontier-table tr.ft-highlight td {
+  background: var(--surface-raised);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+#frontier-table tr.ft-highlight .ft-id {
+  font-weight: 700;
+  color: var(--accent);
+}
+#frontier-table tr.ft-highlight.ft-engaged td {
+  color: var(--text);
+}
+
+/* 🎯T175: instant custom tips (fixed layer; 0ms show — not native title=) */
+/* 🎯T186: sticky hover — tip receives pointer events while shown */
+/* 🎯T231: ONE hit rect = AABB(card ∪ id+name); leave → dismiss grace=0. No bridge. */
+.instant-tip {
+  display: none;
+  position: fixed;
+  z-index: 200;
+  max-width: min(360px, 90vw);
+  padding: 5px 9px;
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.32);
+  /* pre-line: multi-line fanout tips (T179) keep newlines; HTML cards use block tags */
+  white-space: pre-line;
+  word-break: normal;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+.instant-tip.instant-tip-show {
+  display: block;
+  pointer-events: auto;
+}
+.instant-tip-hit {
+  display: none;
+  position: fixed;
+  z-index: 198;
+  pointer-events: none;
+  background: transparent;
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+/* 🎯T181/T184: rich target card (markdown HTML + mermaid); scrollable, left-of-pointer */
+/* 🎯T186: sticky scroll + right edge clamped left of #frontier-table */
+.instant-tip.instant-tip-card {
+  max-width: min(480px, 94vw);
+  max-height: min(75vh, 560px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+}
+.instant-tip.instant-tip-card p { margin: 0 0 0.45em; }
+.instant-tip.instant-tip-card p:last-child { margin-bottom: 0; }
+.instant-tip.instant-tip-card ul,
+.instant-tip.instant-tip-card ol {
+  margin: 0.25em 0 0.45em 1.1em;
+  padding: 0;
+}
+.instant-tip.instant-tip-card li { margin: 0.15em 0; }
+.instant-tip.instant-tip-card strong { color: var(--strong); font-weight: 600; }
+.instant-tip.instant-tip-card h1,
+.instant-tip.instant-tip-card h2,
+.instant-tip.instant-tip-card h3 {
+  font-size: 12px; font-weight: 600; color: var(--heading);
+  margin: 0 0 0.35em;
+}
+.instant-tip.instant-tip-card pre {
+  margin: 0.35em 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  font-size: 11px;
+  background: var(--surface-sunken, rgba(0,0,0,0.06));
+  border-radius: 4px;
+}
+.instant-tip.instant-tip-card code { font-family: var(--mono); font-size: 11px; }
+.instant-tip.instant-tip-card .mermaid-diagram {
+  margin: 0.4em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.instant-tip.instant-tip-card .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+/* Compact tip: hide chat-style mermaid toolbar (cards are sticky/scrollable — T186). */
+.instant-tip.instant-tip-card .mermaid-diagram .mermaid-toolbar { display: none; }
+/* 🎯T326: chat 🎯Tn hotspot finger (smaller, left of card) + shared card tip */
+.target-hotspot,
+.target-hotspot-finger {
+  display: inline;
+  cursor: default;
+  color: var(--accent, #7aa2f7);
+  font-weight: 600;
+  font-size: 0.92em; /* smaller finger than surrounding body */
+  border-bottom: 1px dotted color-mix(in srgb, var(--accent, #7aa2f7) 55%, transparent);
+  white-space: nowrap;
+}
+.target-hotspot:hover,
+.target-hotspot:focus {
+  color: var(--strong, #c0caf5);
+  border-bottom-style: solid;
+  outline: none;
+}
+/* Shared card chrome: small left finger pointing at the hotspot (card opens right). */
+.instant-tip.instant-tip-card.target-card-tip {
+  /* slightly tighter than frontier cards — finger is the small host span */
+  max-width: min(440px, 92vw);
+}
+.instant-tip.instant-tip-card.target-card-tip::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 12px;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-right: 6px solid var(--border);
+  pointer-events: none;
+}
+.instant-tip.instant-tip-card.target-card-tip {
+  position: fixed; /* keep fixed from .instant-tip; absolute finger anchors here */
+}
+#frontier-table .ft-status,
+#frontier-table .ft-fanout,
+#frontier-table .ft-name,
+#frontier-table .ft-id {
+  cursor: default;
+}
+#frontier-table .ft-play { cursor: default; }
+
+#workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
+.worker-row { padding: 5px 6px; border-radius: 5px; margin-bottom: 2px; border: 1px solid transparent; }
+.worker-row:hover { background: var(--surface-raised); }
+.worker-row .wr-head { display: flex; align-items: center; gap: 6px; }
+.worker-row .wr-id { font-family: var(--mono); font-size: 11px; color: var(--text); }
+.worker-row .wr-status { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.worker-row .wr-status.running { color: var(--green); }
+.worker-row .wr-status.completed { color: var(--text-dim); }
+.worker-row .wr-status.failed, .worker-row .wr-status.denied { color: var(--red, #f87171); }
+.worker-row .wr-task { color: var(--text-dim); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worker-row .wr-meta { color: var(--text-muted); font-size: 10px; font-family: var(--mono); margin-top: 2px; }
+.worker-row .wr-out { color: var(--text-muted); font-size: 10px; margin-top: 2px; max-height: 3.2em; overflow: hidden; }
+.agent-node { padding: 6px 8px; border-radius: 6px; margin-bottom: 1px; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
+.agent-node:hover { background: var(--surface-raised); }
+.agent-node .agent-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.agent-node .agent-dot.running { background: var(--green); box-shadow: 0 0 4px var(--agent-dot-glow); }
+.agent-node .agent-dot.stopped { background: var(--text-muted); }
+/* 🎯T287: provider company icon + extremely condensed model subscript,
+   painted between the status dot and the bare agent name. The row gap is 8px;
+   the negative margin pulls the badge tight against the name it labels. */
+/* 🎯T296: icon and subscript are one compact word, not two spaced pieces —
+   no flex gap, and the subscript is pulled back onto the mark's right edge.
+   🎯T299: flex-end, not center, so the version hangs off the mark's foot
+   rather than floating beside its middle — that is what makes the negative
+   `bottom` below read as a true subscript instead of a nudge. */
+.agent-node .model-badge {
+  all: unset; box-sizing: border-box;
+  display: inline-flex; align-items: flex-end; justify-content: center; gap: 0; flex-shrink: 0;
+  min-width: 32px; min-height: 32px; padding: 6px;
+  margin: -6px -4px -6px -6px; color: var(--text-dim); cursor: pointer;
+}
+.agent-node .model-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.agent-node .model-badge .model-icon { width: 16px; height: 16px; display: block; opacity: 0.9; }
+/* 🎯T508: the provider mark is the exact owner-supplied Bedrock SVG. It sits
+   before the vendor glyph; the small one-sided gap leaves Claude attached to
+   its model subscript while keeping the two marks visually distinct. */
+.agent-node .model-badge .model-provider-icon[data-mark="amazon-bedrock"] {
+  flex: none; margin-right: 3px; background-color: currentColor;
+  -webkit-mask: url('assets/bedrock.svg') center / contain no-repeat;
+  mask: url('assets/bedrock.svg') center / contain no-repeat;
+}
+/* 🎯T302: Grok reads as a faded version of its own black mark — the muted row
+   colour at the 0.8 above. Claude reads the same way in its own brand orange,
+   same fade, same transparent ground. The colour is on the splat's strokes:
+   there is no plate, tile, or knock-out, so the vendor's orange-field lockup
+   is inverted here and the badge stays a glyph on nothing. Keyed on data-mark
+   so no other company is tinted. */
+.agent-node .model-badge .model-icon[data-mark="claude-splat"] { color: var(--text-dim); }
+/* 🎯T299: the subscript sits *below* the mark's baseline. flex-end already
+   levels its box bottom with the icon's foot, so this relative offset drops it
+   the rest of the way — 0.15em of 12px = 1.8px under the mark. Relative
+   positioning, so nothing reflows. Not mono: condensed mono digits read as a
+   padded number. 🎯T506 raises the visible label to normal small-text size. */
+.agent-node .model-badge sub {
+  position: relative; bottom: -0.15em; margin-left: -0.5px; font-size: 12px;
+  font-weight: 600; line-height: 1; letter-spacing: -0.04em; opacity: 1;
+}
+/* 🎯T302: the family initial is back — the O in O5 is Opus, not a zero, and
+   without it Opus 4.5 and Sonnet 4.5 painted the same badge. What settles the
+   O/0 reading is styling, not deletion: bolder than the digits and carrying
+   --accent, the same token the frontier table gives target ids, so the letter
+   tracks the palette (purple on light, red on the in-car dark) and reads as a
+   letter beside plain muted numerals. */
+.agent-node .model-badge sub .model-family {
+  color: var(--accent); font-weight: 700; opacity: 1;
+}
+/* 🎯T285.2: "!" between provider icon and name. Orange = ahead (mint-
+   ineligible); red = hot/exhausted (migrate-off). Native title= is the
+   server reason — do not invent a client band. */
+.agent-node .prov-mark {
+  flex-shrink: 0; font-weight: 700; font-size: 12px; line-height: 1;
+  margin: 0 2px 0 4px; cursor: pointer; user-select: none;
+}
+.agent-node .prov-mark-ahead { color: var(--amber); }
+.agent-node .prov-mark-off { color: var(--red); }
+/* Borderless two-column provider/model table. No border-* class; lift is
+   shadow only so the acceptance grep and the pixels agree. */
+#prov-menu {
+  position: fixed; z-index: 210; padding: 4px 6px;
+  background: var(--surface-raised); box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  border-radius: 6px; border: none;
+}
+#prov-menu .prov-menu-table {
+  border-collapse: collapse; border-spacing: 0; background: transparent;
+  border: none;
+}
+#prov-menu .prov-menu-table td {
+  padding: 3px 6px; vertical-align: middle; background: transparent;
+  border: none;
+}
+#prov-menu .prov-cell-mark { width: 18px; }
+#prov-menu .prov-cell-mark .model-icon { width: 12px; height: 12px; display: block; opacity: 0.85; }
+#prov-menu .prov-cell-models { display: flex; flex-wrap: wrap; gap: 4px; }
+#prov-menu .prov-model {
+  font: inherit; font-size: 11px; font-weight: 600; line-height: 1.2;
+  padding: 2px 6px; color: var(--text); background: var(--surface-high);
+  cursor: pointer; border-radius: 4px; border: none;
+}
+#prov-menu .prov-model:hover:not(:disabled) { background: var(--accent-dim); }
+#prov-menu .prov-model:disabled,
+#prov-menu .prov-model.prov-disabled,
+#prov-menu .prov-menu-row.prov-disabled .prov-model {
+  opacity: 0.45; cursor: default;
+}
+#prov-menu .prov-model.prov-current { opacity: 0.7; cursor: default; }
+.agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }
+/* 🎯T118: progress/status secondary shares path slot without mono path chrome. */
+.agent-node .agent-dir.agent-progress,
+.agent-node .agent-dir.agent-status {
+  font-family: inherit;
+  letter-spacing: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-node .agent-dir.agent-progress { color: var(--text-muted); }
+.agent-node .agent-dir.agent-status { color: var(--text-muted); opacity: 0.85; }
+/* 🎯T115: aside rows — icon title, no path column (description must not bleed into path area).
+   🎯T365: the icon is kind-dependent (data-aside-kind=target → 🎯, else 💡). */
+.agent-node.agent-aside .agent-name { color: var(--amber, #d4a017); font-weight: 500; }
+.agent-node.agent-aside .agent-dir { display: none; }
+/* 🎯T269: hover/focus-only dismiss × on the right of purpose=aside rows */
+.agent-node .agent-dismiss {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+.agent-node.agent-aside:hover .agent-dismiss,
+.agent-node.agent-aside:focus-within .agent-dismiss,
+.agent-node .agent-dismiss:focus {
+  opacity: 1;
+}
+.agent-node .agent-dismiss:hover,
+.agent-node .agent-dismiss:focus {
+  background: var(--surface-raised);
+  color: var(--text);
+  outline: none;
+}
+.agent-node .agent-dismiss:focus-visible {
+  outline: 1px solid var(--accent, #6b9fff);
+  outline-offset: 1px;
+}
+.attn-chip.attn-aside .attn-title { color: var(--amber, #d4a017); }
+.agent-children { padding-left: 14px; border-left: 1px solid var(--border); margin-left: 10px; }
+
+/* Terminal viewer removed from product UI (🎯T73) — vestigial Claude/tmux panel.
+   Keep nodes selectable for future use without opening black chrome. */
+.agent-node { cursor: default; }
+.agent-node.selected { background: var(--accent-dim); }
+
+/* PNG fixture: timestamp on the border; 5/15 pad is the same 20px box as
+   live 10/16 but puts first-line glyphs on golden y=45 without a transform
+   compositor layer. */
+html[data-pixel-fixture] .msg-time { margin-top: 0; }
+html[data-pixel-fixture] .msg { padding: 5px 16px 15px; }
+html[data-pixel-fixture] #frontier-table .ft-id { transform: translateY(1px); }
+html[data-pixel-fixture] #frontier-table .ft-name { transform: translate(-2px, 1px); }
+html[data-pixel-fixture] #frontier-table .ft-status,
+html[data-pixel-fixture] #frontier-table .ft-fanout,
+html[data-pixel-fixture] #frontier-table .ft-play { transform: translateY(1px); }
+

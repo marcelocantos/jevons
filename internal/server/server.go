@@ -247,6 +247,10 @@ type Server struct {
 	inspectByCh  map[chan string]string
 	inspectChans map[string]map[chan string]struct{}
 
+	// mux is the 🎯T537.1 conversation multiplex hub (/ws/mux). Independent
+	// of /ws/chat until the owner cutover (T505).
+	mux *muxHub
+
 	// defaultProvider is the daemon-wide claudia backend for new asides
 	// and other registry mint paths on this server (🎯T148).
 	defaultProvider claudia.Provider
@@ -362,6 +366,7 @@ func New(version, stateDir string) *Server {
 		chatListeners: make([]chan string, 0),
 		inspectByCh:   make(map[chan string]string),
 		inspectChans:  make(map[string]map[chan string]struct{}),
+		mux:           newMuxHub(),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
 		historyGate:   newHistoryHydrateGate(maxHistoryHydrateConcurrent),
 		agentProgress: NewAgentProgressHub(),
@@ -477,6 +482,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
+	mux.HandleFunc("/ws/mux", s.handleMux) // 🎯T537.1 one conversation API
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("/ws/provider", s.handleProviderFeed)         // 🎯T27.5 feed channel
 	mux.HandleFunc("GET /api/providers", s.handleProviders)      // 🎯T27.3/T27.5 observability
