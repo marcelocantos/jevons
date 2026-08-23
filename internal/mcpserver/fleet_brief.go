@@ -55,7 +55,9 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Scout terminals are "jevons: kind scout-report" carrying the 🎯T536.1
   ledger plus fog-known / fog-unknown / fog-blindspot — NOT a
   finish-report. A scout with no implementation commits must not be
-  reaped as product-done (🎯T165/🎯T195).
+  reaped as product-done (🎯T165/🎯T195). FogMap.NeedsReslice is true
+  when blindspots remain — re-slice (another scout pass / narrower
+  leaves) before implement; do not guess through hidden map.
 - The implementer spawn-brief may inherit the scout ledger
   (envelope.InheritLedger). Decision tables live on the ledger, not
   only in chat.

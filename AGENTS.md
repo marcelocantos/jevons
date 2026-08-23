@@ -217,10 +217,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `scout-report` envelope carrying the T536.1 ledger plus
   `fog-known` / `fog-unknown` / `fog-blindspot` — not a product-done
   `finish-report` (T165 must not reap a scout with no implementation
-  commits). The implementer spawn-brief may inherit that ledger
-  (`envelope.InheritLedger`). Design-gated / parked-for-design /
-  T31.2 fuzzy / host saturation (T460) still block punching through
-  into implementation. Schema: `internal/envelope`.
+  commits). Blindspots set `FogMap.NeedsReslice` — re-slice before
+  implement rather than guess through hidden map. The implementer
+  spawn-brief may inherit that ledger (`envelope.InheritLedger`).
+  Design-gated / parked-for-design / T31.2 fuzzy / host saturation
+  (T460) still block punching through into implementation. Schema:
+  `internal/envelope`.
 - **Finished work auto-deregister (🎯T165 / 🎯T195):** when a **work**
   agent’s terminal report claims done — including imperfect bare done
   without oracle markers — the product **stop+Removes** it from the live

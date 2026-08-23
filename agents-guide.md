@@ -675,9 +675,11 @@ jevons: fog-blindspot "non-trivial threshold"
 ```
 
 The implementer brief uses `phase implement` and may inherit the scout
-ledger (`envelope.InheritLedger`). Design-gated / parked-for-design /
-T31.2 fuzzy / host saturation (T460) still block advancing into
-implementation — scout does not punch through those gates.
+ledger (`envelope.InheritLedger`). A non-empty `fog-blindspot` sets
+`FogMap.NeedsReslice` — re-slice (another scout pass / narrower leaves)
+before implement; do not guess through hidden map. Design-gated /
+parked-for-design / T31.2 fuzzy / host saturation (T460) still block
+advancing into implementation — scout does not punch through those gates.
 
 English rationale follows the closing fence. Unenveloped messages still
 fall back to prose heuristics. YAML front matter (`---`) is not this

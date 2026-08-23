@@ -19,6 +19,14 @@ func (f FogMap) HasFog() bool {
 	return len(f.Known) > 0 || len(f.Unknown) > 0 || len(f.Blindspot) > 0
 }
 
+// NeedsReslice is true when blindspots remain: the territory hid more map
+// than this scout pass covered, so the mission must re-slice (another
+// scout cycle or narrower leaves) rather than punch into implement with
+// a silent guess (🎯T536.3).
+func (f FogMap) NeedsReslice() bool {
+	return len(f.Blindspot) > 0
+}
+
 // Fog returns a copy of the message fog map.
 func (m *Message) Fog() FogMap {
 	if m == nil {

@@ -49,7 +49,7 @@ func TestT5363SchemaOwnsScoutVocabulary(t *testing.T) {
 		}
 	}
 	fog := readRepo(t, "internal/envelope/fog.go")
-	for _, want := range []string{"InheritLedger", "MayImplementAfterScout", "FogMap", "fog-known"} {
+	for _, want := range []string{"InheritLedger", "MayImplementAfterScout", "FogMap", "NeedsReslice", "fog-known"} {
 		// fog-known is slot name in parse.go, not fog.go — check parse for slots.
 		if want == "fog-known" {
 			continue

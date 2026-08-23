@@ -164,3 +164,32 @@ func TestParsePhaseAliases(t *testing.T) {
 		t.Fatal("plan is not a phase — not T254.3 steps")
 	}
 }
+
+func TestFogBlindspotForcesReslice(t *testing.T) {
+	clear := FogMap{Known: []string{"T509"}, Unknown: []string{"auto-spawn?"}}
+	if clear.NeedsReslice() {
+		t.Fatal("known+unknown without blindspot must not force re-slice")
+	}
+	hidden := FogMap{Blindspot: []string{"non-trivial threshold hides more map"}}
+	if !hidden.NeedsReslice() {
+		t.Fatal("blindspot must force re-slice before implement")
+	}
+	// Scout report with blindspot: inherit ledger still works, but
+	// Fog().NeedsReslice signals the PO to carve another scout leaf.
+	scout := &Message{
+		Kind:         KindScoutReport,
+		Target:       "T536.3",
+		SilentLedger: SilentLedgerRanked,
+		Decisions: []SilentDecision{
+			{Confidence: 0.4, Choice: "re-slice before implement", Why: "blindspot remains"},
+		},
+		FogBlindspot: []string{"mandatory-scout threshold"},
+	}
+	if !scout.Fog().NeedsReslice() {
+		t.Fatal("scout fog with blindspot NeedsReslice")
+	}
+	brief := InheritLedger(scout, "")
+	if brief == nil || !brief.Fog().NeedsReslice() {
+		t.Fatal("inherited brief must carry blindspot so implementer sees re-slice signal")
+	}
+}
