@@ -450,11 +450,12 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 // per 🎯T495: the plan feed's green pick wins on omit-provider mint (config
 // only breaks ties among equally obvious greens, inside PickMintDest);
 // leftover file / compiled seed are losers.
-func (s *Server) mintProviderPick(providerArg, stored string, existed bool, taskTypeArg, purpose string) cost.MintProviderPick {
-	tt := strings.TrimSpace(taskTypeArg)
-	if tt == "" {
-		tt = cost.TaskTypeFromPurpose(purpose)
-	}
+//
+// 🎯T475: omit-task_type derivation uses the agent name so product-owner
+// seats (suffix -po) get ceo even when purpose=work — they must not
+// inherit work→code_implement→Claude/Opus.
+func (s *Server) mintProviderPick(providerArg, stored string, existed bool, taskTypeArg, purpose, name string) cost.MintProviderPick {
+	tt := cost.TaskTypeForMint(name, purpose, taskTypeArg)
 	dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
 	fromFile := false
 	if s != nil {

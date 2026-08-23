@@ -124,10 +124,14 @@ func (p *MintProviderPick) noteLoser(a MintProviderArgs) {
 	}
 }
 
-// Cite is the start-result fragment that names the winning knob
-// and, when they disagree, the leftover file or compiled seed that lost.
+// Cite is the start-result fragment that names the winning knob,
+// the portfolio task class (🎯T475), and — when they disagree — the
+// leftover file or compiled seed that lost.
 func (p MintProviderPick) Cite() string {
 	s := "provider_knob: " + p.Knob
+	if tt := strings.TrimSpace(p.TaskType); tt != "" {
+		s += ", task_type: " + tt
+	}
 	if p.LosingKnob == "" || p.LosingProvider == "" {
 		return s
 	}

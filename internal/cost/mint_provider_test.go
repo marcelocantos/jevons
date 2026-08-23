@@ -128,8 +128,12 @@ func TestPickMintProviderAgreeingPortfolioNamesConfigOnly(t *testing.T) {
 	if pick.Provider != HarnessGrok || pick.Knob != KnobConfig || pick.LosingKnob != "" {
 		t.Fatalf("agreeing pick: %+v", pick)
 	}
-	if pick.Cite() != "provider_knob: config" {
-		t.Fatalf("cite=%q", pick.Cite())
+	cite := pick.Cite()
+	if !strings.Contains(cite, "provider_knob: config") {
+		t.Fatalf("cite=%q", cite)
+	}
+	if !strings.Contains(cite, "task_type: code_implement") {
+		t.Fatalf("cite missing task_type: %q", cite)
 	}
 }
 

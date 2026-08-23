@@ -135,6 +135,24 @@ func TestNormalizeTaskTypeAndPurpose(t *testing.T) {
 	if NormalizeTaskType("ack") != TaskMechanical {
 		t.Fatal("ack alias")
 	}
+	if NormalizeTaskType("product-owner") != TaskCEO {
+		t.Fatal("product-owner alias")
+	}
+	if TaskTypeFromRole("product-owner", "work") != TaskCEO {
+		t.Fatal("role product-owner")
+	}
+	if TaskTypeFromRole("worker", "work") != TaskCodeImplement {
+		t.Fatal("role worker")
+	}
+	if TaskTypeForMint("jevons-po", "work", "") != TaskCEO {
+		t.Fatal("PO name mint → ceo")
+	}
+	if TaskTypeForMint("jv-t475-worker", "work", "") != TaskCodeImplement {
+		t.Fatal("worker name mint → code_implement")
+	}
+	if TaskTypeForMint("jevons-po", "work", "code_implement") != TaskCodeImplement {
+		t.Fatal("explicit task_type wins")
+	}
 }
 
 func TestLoadPortfolioFileMissingAndMalformed(t *testing.T) {

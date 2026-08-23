@@ -170,7 +170,8 @@ func DefaultPortfolio() *Portfolio {
 func NormalizeTaskType(raw string) string {
 	s := strings.ToLower(strings.TrimSpace(raw))
 	switch s {
-	case TaskCEO, "overseer", "root", "fleet_ceo":
+	case TaskCEO, "overseer", "root", "fleet_ceo",
+		"product-owner", "product_owner", "po":
 		return TaskCEO
 	case TaskCodeImplement, "", "work", "implement", "build", "code",
 		"code-implement", "multi_file", "refactor":
@@ -203,6 +204,49 @@ func TaskTypeFromPurpose(purpose string) string {
 	default:
 		return TaskCodeImplement
 	}
+}
+
+// TaskTypeFromRole maps a role id (plus purpose fallback) to the
+// portfolio task class when task_type is omitted on mint (🎯T475).
+//
+// Product owners keep purpose=work for sandbox/UI, but must not inherit
+// work→code_implement→Claude/Opus. Overseer → ceo; aside → ideation;
+// implementer workers/bosses stay code_implement.
+func TaskTypeFromRole(role, purpose string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "product-owner", "overseer":
+		return TaskCEO
+	case "aside":
+		return TaskIdeation
+	case "worker", "boss":
+		return TaskCodeImplement
+	}
+	return TaskTypeFromPurpose(purpose)
+}
+
+// TaskTypeForMint derives the portfolio task class for an omit-task_type
+// mint (🎯T475). Explicit taskTypeArg wins. Otherwise a product-owner
+// name (suffix -po / _po) maps to ceo even when purpose=work; other
+// seats fall back to TaskTypeFromPurpose.
+func TaskTypeForMint(name, purpose, taskTypeArg string) string {
+	if tt := strings.TrimSpace(taskTypeArg); tt != "" {
+		return NormalizeTaskType(tt)
+	}
+	if isProductOwnerName(name) {
+		return TaskCEO
+	}
+	return TaskTypeFromPurpose(purpose)
+}
+
+func isProductOwnerName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return false
+	}
+	if strings.HasSuffix(n, "-po") || strings.HasSuffix(n, "_po") {
+		return true
+	}
+	return n == "po" || strings.Contains(n, "-po-")
 }
 
 // Count is the load for provider (0 if unknown).

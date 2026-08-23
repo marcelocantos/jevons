@@ -59,7 +59,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
 			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Empty = keep stored provider on resume; on mint follow config.yaml / daemon default (🎯T476). The start result cites which knob won (explicit vs config vs leftover portfolio file). 🎯T148.")),
-			mcp.WithString("task_type", mcp.Description("LLM portfolio task class (🎯T325.2 / T325.2.1): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. mechanical/ops_classify (and nudge/ack/small_edit aliases) auto-pin a fast-cheap model (Codex Spark or Grok grok-build) when model= is omitted. Recorded for capacity tables and loser-knob citation; omitted provider on mint follows config.yaml (🎯T476), not this class. Empty = derive from purpose (work→code_implement, aside→ideation, overseer→ceo).")),
+			mcp.WithString("task_type", mcp.Description("LLM portfolio task class (🎯T325.2 / T325.2.1 / T475): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. mechanical/ops_classify (and nudge/ack/small_edit aliases) auto-pin a fast-cheap model (Codex Spark or Grok grok-build) when model= is omitted. Recorded for capacity tables and loser-knob citation; omitted provider on mint follows config.yaml (🎯T476), not this class. Empty = derive from name/purpose (product-owner name→ceo, work→code_implement, aside→ideation, overseer→ceo).")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
@@ -513,7 +513,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if def != nil {
 		stored = string(def.Provider)
 	}
-	pick := s.mintProviderPick(providerArg, stored, existed, taskTypeArg, purpose)
+	pick := s.mintProviderPick(providerArg, stored, existed, taskTypeArg, purpose, name)
 	if pick.Knob == cost.KnobPlanDest && strings.TrimSpace(pick.Provider) == "" {
 		return nil, existed, pick.Cite(), fmt.Errorf(
 			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")
