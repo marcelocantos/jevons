@@ -31,6 +31,11 @@ const (
 	// KindTargetFileRequest asks the parent/overseer to file a bullseye
 	// target (🎯T130 ceremony).
 	KindTargetFileRequest Kind = "target-file-request"
+	// KindScoutReport is a fog-of-war scout handoff (🎯T536.3). It carries
+	// the silent-decision ledger and known/unknown/blindspot map but is
+	// not a product-done finish — T165/T195 must not reap it as finished
+	// work when there are no implementation commits.
+	KindScoutReport Kind = "scout-report"
 )
 
 // allKinds is the canonical list. Instruction files must not grow a parallel
@@ -42,6 +47,7 @@ var allKinds = []Kind{
 	KindEscalation,
 	KindAck,
 	KindTargetFileRequest,
+	KindScoutReport,
 }
 
 // AllKinds returns every known kind in definition order.
@@ -64,7 +70,7 @@ func (k Kind) String() string { return string(k) }
 // rather than travelling as loose prose.
 func (k Kind) LoadBearing() bool {
 	switch k {
-	case KindFinishReport, KindSpawnBrief, KindEscalation, KindTargetFileRequest:
+	case KindFinishReport, KindSpawnBrief, KindEscalation, KindTargetFileRequest, KindScoutReport:
 		return true
 	default:
 		return false

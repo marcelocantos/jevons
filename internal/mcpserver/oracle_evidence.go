@@ -165,7 +165,7 @@ func ClassifyCompletionReport(report string) CompletionEvidenceClass {
 					return CompletionOracleEvidence
 				}
 			}
-		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief:
+		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindScoutReport:
 			if err == nil {
 				return CompletionNoClaim
 			}

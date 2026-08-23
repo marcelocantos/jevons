@@ -41,7 +41,9 @@ func Classify(report string) Route {
 			}
 		case envelope.KindEscalation, envelope.KindTargetFileRequest:
 			return RouteOverseer
-		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief:
+		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindScoutReport:
+			// 🎯T536.3: scout handoff stays with the parent so they can
+			// re-slice / spawn the implementer with an inherited ledger.
 			return RouteParent
 		}
 		if m.Payload != "" {

@@ -41,7 +41,8 @@ func LooksLikeFinishedWorkReport(report string) bool {
 		switch m.Kind {
 		case envelope.KindFinishReport:
 			return !ReportAwaitsOverseer(report)
-		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindTargetFileRequest:
+		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindTargetFileRequest, envelope.KindScoutReport, envelope.KindEscalation:
+			// 🎯T536.3: scout-report is a fog handoff, not product-done.
 			return false
 		}
 	}

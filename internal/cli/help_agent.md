@@ -604,10 +604,10 @@ accepted-risk is also refused (🎯T31.1).
 ## Typed fleet envelopes (🎯T509)
 
 Load-bearing agent-to-agent messages (spawn-brief, finish-report,
-status-ping, escalation, ack, target-file-request) open at line 1 with
-a fenced `jevons` block. Schema and enums live in `internal/envelope`
-— this file does not restate them. Worker terminal reports **MUST** be
-a `finish-report` envelope:
+status-ping, escalation, ack, target-file-request, scout-report) open
+at line 1 with a fenced `jevons` block. Schema and enums live in
+`internal/envelope` — this file does not restate them. Worker terminal
+**product-done** reports **MUST** be a `finish-report` envelope:
 
 ```jevons
 jevons: kind finish-report
@@ -637,6 +637,29 @@ this rule is that the artifact exists and the independent gate can read it
 (`envelope.ReadSilentLedger`). Worker/boss doctrine requires the ledger on
 terminal reports (role files when 🎯T511 lands; until then agents-guide +
 fleet standing brief).
+
+### Fog-of-war scout (🎯T536.3)
+
+Non-trivial Build work is scouted before implement. A scout spawn-brief
+carries `phase scout`; the scout terminal is a `scout-report` (not a
+product-done `finish-report`) so T165 does not reap a seat that only
+mapped territory:
+
+```jevons
+jevons: kind scout-report
+jevons: target T536.3
+jevons: phase scout
+jevons: silent-ledger ranked
+jevons: silent-decision confidence=0.4 choice="scout-report kind" why="not product-done"
+jevons: fog-known "T509 envelopes"
+jevons: fog-unknown "auto-spawn always scouts?"
+jevons: fog-blindspot "non-trivial threshold"
+```
+
+The implementer brief uses `phase implement` and may inherit the scout
+ledger (`envelope.InheritLedger`). Design-gated / parked-for-design /
+T31.2 fuzzy / host saturation (T460) still block advancing into
+implementation — scout does not punch through those gates.
 
 English rationale follows the closing fence. Unenveloped messages still
 fall back to prose heuristics. YAML front matter (`---`) is not this

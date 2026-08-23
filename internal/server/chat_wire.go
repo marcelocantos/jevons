@@ -185,6 +185,9 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 					"verdict": envMsg.Verdict.String(),
 					"status":  envMsg.Status.String(),
 				}
+				if envMsg.Phase != envelope.PhaseNone {
+					wireEnv["phase"] = envMsg.Phase.String()
+				}
 				if envMsg.HasSilentLedger() {
 					wireEnv["silent_ledger"] = envMsg.SilentLedger.String()
 				}

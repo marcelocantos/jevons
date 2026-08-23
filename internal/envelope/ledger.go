@@ -77,19 +77,26 @@ func ReadSilentLedger(text string) (state SilentLedgerState, decisions []SilentD
 	return m.SilentLedger, m.SilentDecisions(), true
 }
 
-// MissingSilentLedger reports whether a finish-report claims done
-// (oracle or risk slots) without an explicit silent-ledger.
+// MissingSilentLedger reports whether a finish-report or scout-report
+// claims a load-bearing terminal without an explicit silent-ledger.
 func MissingSilentLedger(m *Message) bool {
-	if m == nil || m.Kind != KindFinishReport {
+	if m == nil {
 		return false
 	}
-	if m.HasSilentLedger() {
+	switch m.Kind {
+	case KindFinishReport:
+		if m.HasSilentLedger() {
+			return false
+		}
+		// Claimed-done shape: target plus oracle/risk, or any finish-report
+		// that already failed Validate for other reasons still needs the
+		// ledger when it looks like a terminal claim.
+		return m.HasOracle() || m.HasRisk() || strings.TrimSpace(m.Target) != ""
+	case KindScoutReport:
+		return !m.HasSilentLedger() && strings.TrimSpace(m.Target) != ""
+	default:
 		return false
 	}
-	// Claimed-done shape: target plus oracle/risk, or any finish-report
-	// that already failed Validate for other reasons still needs the
-	// ledger when it looks like a terminal claim.
-	return m.HasOracle() || m.HasRisk() || strings.TrimSpace(m.Target) != ""
 }
 
 func parseSilentLedger(raw string) (SilentLedgerState, error) {

@@ -490,6 +490,13 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
   first). A green oracle with a missing ledger is flagged, not complete.
   Read `envelope.ReadSilentLedger` rather than the implementation diff.
   Quality of decisions is judgment; presence of the artifact is the gate.
+- **Fog-of-war scout (🎯T536.3):** non-trivial Build work is scouted
+  before implement. Spawn-briefs carry `phase scout|implement`; a scout
+  terminal is `kind scout-report` (ledger + fog-known/unknown/blindspot),
+  not a product-done finish-report. Implementer briefs may inherit the
+  scout ledger via `envelope.InheritLedger`. Skip rules still hold —
+  design-gated, parked-for-design, T31.2 fuzzy, host saturation (T460) —
+  scout does not punch through those into implementation.
 
 ## Cited SHA must stay reachable (🎯T427)
 

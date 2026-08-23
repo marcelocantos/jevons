@@ -44,6 +44,21 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Quality of the decisions is judgment; this rule is that the artifact
   exists.
 
+## Fog-of-war scout before implement (🎯T536.3)
+- Non-trivial Build missions run a scout pass first: spawn-brief with
+  "jevons: phase scout" (or a dedicated scout seat), then implement with
+  "jevons: phase implement".
+- Scout terminals are "jevons: kind scout-report" carrying the T536.1
+  ledger plus fog-known / fog-unknown / fog-blindspot — NOT a
+  finish-report. A scout with no implementation commits must not be
+  reaped as product-done (T165/T195).
+- The implementer spawn-brief may inherit the scout ledger
+  (envelope.InheritLedger). Decision tables live on the ledger, not
+  only in chat.
+- Skip rules still hold: design-gated, parked-for-design, T31.2 fuzzy
+  regions, host saturation (T460). Scout does not punch through those
+  into implementation. Not T254.3 plan steps; not a next-ticket queue.
+
 ## Cited SHA must stay reachable (🎯T427)
 - Before you cite a commit SHA as evidence, prove it is still reachable:
       git merge-base --is-ancestor <sha> HEAD

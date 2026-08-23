@@ -29,23 +29,31 @@ func Validate(m *Message) error {
 			return fmt.Errorf("finish-report requires oracle (sha or gate-id) or risk")
 		}
 		// 🎯T536.1: silent-decision ledger is present or explicitly empty.
-		if !m.HasSilentLedger() {
-			return fmt.Errorf("finish-report requires silent-ledger (none|ranked)")
+		if err := validateSilentLedger(m); err != nil {
+			return err
 		}
-		if m.SilentLedger == SilentLedgerRanked {
-			if len(m.Decisions) == 0 {
-				return fmt.Errorf("silent-ledger ranked requires at least one silent-decision")
-			}
-			if !decisionsLeastConfidentFirst(m.Decisions) {
-				return fmt.Errorf("silent-decision list must be least-confident first")
-			}
+	case KindScoutReport:
+		// 🎯T536.3: scout handoff needs target + ledger; no oracle required
+		// (scout may have zero implementation commits).
+		if strings.TrimSpace(m.Target) == "" {
+			return fmt.Errorf("scout-report requires target")
 		}
-		if m.SilentLedger == SilentLedgerEmpty && len(m.Decisions) > 0 {
-			return fmt.Errorf("silent-ledger none must not carry silent-decision slots")
+		if m.Phase != PhaseNone && !m.Phase.IsScout() {
+			return fmt.Errorf("scout-report phase must be scout (or omitted)")
+		}
+		if err := validateSilentLedger(m); err != nil {
+			return err
 		}
 	case KindSpawnBrief:
 		if strings.TrimSpace(m.Target) == "" {
 			return fmt.Errorf("spawn-brief requires target")
+		}
+		// Inherited pre-build ledger is optional; when present it must be
+		// well-formed (🎯T536.3 implementer inherits scout decisions).
+		if m.HasSilentLedger() {
+			if err := validateSilentLedger(m); err != nil {
+				return err
+			}
 		}
 	case KindStatusPing:
 		if m.Status == ProgressNone {
@@ -61,6 +69,27 @@ func Validate(m *Message) error {
 		}
 	case KindAck:
 		// kind alone is enough
+	}
+	return nil
+}
+
+func validateSilentLedger(m *Message) error {
+	if m == nil {
+		return nil
+	}
+	if !m.HasSilentLedger() {
+		return fmt.Errorf("requires silent-ledger (none|ranked)")
+	}
+	if m.SilentLedger == SilentLedgerRanked {
+		if len(m.Decisions) == 0 {
+			return fmt.Errorf("silent-ledger ranked requires at least one silent-decision")
+		}
+		if !decisionsLeastConfidentFirst(m.Decisions) {
+			return fmt.Errorf("silent-decision list must be least-confident first")
+		}
+	}
+	if m.SilentLedger == SilentLedgerEmpty && len(m.Decisions) > 0 {
+		return fmt.Errorf("silent-ledger none must not carry silent-decision slots")
 	}
 	return nil
 }

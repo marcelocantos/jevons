@@ -179,3 +179,23 @@ func TestFleetStandingBriefVisualCockpitProseVerdict(t *testing.T) {
 		}
 	}
 }
+
+// 🎯T536.3: standing brief carries fog-of-war scout doctrine.
+func TestFleetStandingBriefFogOfWarScout(t *testing.T) {
+	for _, want := range []string{
+		"Fog-of-war scout before implement",
+		"🎯T536.3",
+		"phase scout",
+		"scout-report",
+		"fog-known",
+		"InheritLedger",
+		"design-gated",
+		"parked-for-design",
+		"T460",
+	} {
+		if !strings.Contains(FleetStandingBrief, want) {
+			t.Errorf("FleetStandingBrief missing T536.3 marker %q", want)
+		}
+	}
+}
+

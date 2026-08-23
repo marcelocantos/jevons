@@ -22,7 +22,7 @@ func TestAllKindsAreParseableAndUnique(t *testing.T) {
 	}
 	want := []Kind{
 		KindSpawnBrief, KindFinishReport, KindStatusPing,
-		KindEscalation, KindAck, KindTargetFileRequest,
+		KindEscalation, KindAck, KindTargetFileRequest, KindScoutReport,
 	}
 	if len(AllKinds()) != len(want) {
 		t.Fatalf("AllKinds len=%d want %d — update instruction ratchets when kinds change", len(AllKinds()), len(want))
@@ -59,6 +59,9 @@ func TestVocabularyParse(t *testing.T) {
 func TestLoadBearingAndChatterSets(t *testing.T) {
 	if !KindFinishReport.LoadBearing() || KindAck.LoadBearing() {
 		t.Fatal("finish-report is load-bearing; ack is not")
+	}
+	if !KindScoutReport.LoadBearing() {
+		t.Fatal("scout-report is load-bearing")
 	}
 	if !KindStatusPing.ChatterCapped() || KindFinishReport.ChatterCapped() {
 		t.Fatal("status-ping is chatter-capped; finish-report is not")

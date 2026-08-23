@@ -32,11 +32,18 @@ type Message struct {
 	Verdict Verdict
 	Status  Progress
 	Name    string // target-file-request title, optional elsewhere
+	// Phase is the mission phase (scout|implement) — 🎯T536.3.
+	Phase Phase
 	// SilentLedger is the 🎯T536.1 silent-decision ledger state.
 	SilentLedger SilentLedgerState
 	// Decisions is the ranked silent-decision list (least-confident first)
 	// when SilentLedger is SilentLedgerRanked.
 	Decisions []SilentDecision
+	// FogKnown / FogUnknown / FogBlindspot are the 🎯T536.3 fog-of-war
+	// sweep slots (repeatable).
+	FogKnown     []string
+	FogUnknown   []string
+	FogBlindspot []string
 	// Extra holds unknown jevons: keys so a newer emitter is not refused.
 	Extra   map[string]string
 	Payload string
@@ -90,7 +97,9 @@ func (m *Message) SlotsFingerprint() string {
 		"verdict=" + string(m.Verdict),
 		"status=" + string(m.Status),
 		"name=" + m.Name,
+		"phase=" + string(m.Phase),
 		ledgerFingerprint(m),
+		fogFingerprint(m),
 	}, "\n")
 }
 
@@ -294,6 +303,12 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 		msg.Status = p
 	case "name":
 		msg.Name = strings.TrimSpace(value)
+	case "phase", "mission-phase", "mission_phase":
+		p, ok := ParsePhase(value)
+		if !ok {
+			return fmt.Errorf("unknown phase %q (want scout|implement)", value)
+		}
+		msg.Phase = p
 	case "silent-ledger", "silent_ledger", "ledger":
 		st, err := parseSilentLedger(value)
 		if err != nil {
@@ -308,6 +323,18 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 		msg.Decisions = append(msg.Decisions, d)
 		if msg.SilentLedger == SilentLedgerAbsent {
 			msg.SilentLedger = SilentLedgerRanked
+		}
+	case "fog-known", "fog_known":
+		if v := strings.TrimSpace(value); v != "" {
+			msg.FogKnown = append(msg.FogKnown, unquoteSlot(v))
+		}
+	case "fog-unknown", "fog_unknown":
+		if v := strings.TrimSpace(value); v != "" {
+			msg.FogUnknown = append(msg.FogUnknown, unquoteSlot(v))
+		}
+	case "fog-blindspot", "fog_blindspot", "blindspot":
+		if v := strings.TrimSpace(value); v != "" {
+			msg.FogBlindspot = append(msg.FogBlindspot, unquoteSlot(v))
 		}
 	default:
 		msg.Extra[key] = value
@@ -393,6 +420,7 @@ func Format(m *Message) string {
 	writeSlot(&b, "verdict", string(m.Verdict))
 	writeSlot(&b, "status", string(m.Status))
 	writeSlot(&b, "name", m.Name)
+	writeSlot(&b, "phase", string(m.Phase))
 	switch m.SilentLedger {
 	case SilentLedgerEmpty:
 		writeSlot(&b, "silent-ledger", "none")
@@ -401,6 +429,15 @@ func Format(m *Message) string {
 		for _, d := range m.Decisions {
 			writeSlot(&b, "silent-decision", formatSilentDecision(d))
 		}
+	}
+	for _, s := range m.FogKnown {
+		writeSlot(&b, "fog-known", quoteIfNeeded(s))
+	}
+	for _, s := range m.FogUnknown {
+		writeSlot(&b, "fog-unknown", quoteIfNeeded(s))
+	}
+	for _, s := range m.FogBlindspot {
+		writeSlot(&b, "fog-blindspot", quoteIfNeeded(s))
 	}
 	b.WriteString("```\n")
 	if p := strings.TrimLeft(m.Payload, "\n"); p != "" {

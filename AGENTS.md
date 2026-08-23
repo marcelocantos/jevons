@@ -211,6 +211,16 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   (least-confident first). A green oracle with a missing ledger is
   flagged, not complete. Gate helper: `envelope.ReadSilentLedger`.
   Instruction↔schema drift is ratcheted (docratchet).
+- **Fog-of-war scout before implement (🎯T536.3):** non-trivial Build
+  missions run a scout pass first (`jevons: phase scout` on the
+  spawn-brief, or a dedicated scout seat). The scout ends with a
+  `scout-report` envelope carrying the T536.1 ledger plus
+  `fog-known` / `fog-unknown` / `fog-blindspot` — not a product-done
+  `finish-report` (T165 must not reap a scout with no implementation
+  commits). The implementer spawn-brief may inherit that ledger
+  (`envelope.InheritLedger`). Design-gated / parked-for-design /
+  T31.2 fuzzy / host saturation (T460) still block punching through
+  into implementation. Schema: `internal/envelope`.
 - **Finished work auto-deregister (🎯T165 / 🎯T195):** when a **work**
   agent’s terminal report claims done — including imperfect bare done
   without oracle markers — the product **stop+Removes** it from the live
