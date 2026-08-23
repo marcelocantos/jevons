@@ -85,7 +85,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 		mcp.NewTool("jevons_agent_stop",
 			mcp.WithDescription("Stop a running agent process and park it (🎯T414): the agent stays registered, and the park is a standing instruction that outlives the process — no delivery, restart, idle sweep or repair mission revives it until the park is lifted with jevons_fleet_intent state=working. Not the same as kill (which deregisters)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
-			mcp.WithString("actor", mcp.Description("Your agent name (who is parking it). Default: the overseer.")),
+			mcp.WithString("actor", mcp.Description("Your agent name (who is parking it). Default: the overseer. actor=overseer aliases to the registered overseer seat (usually 'jevons'; 🎯T535).")),
 			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it.")),
 		),
 		s.handleAgentStop,
@@ -106,7 +106,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 		mcp.NewTool("jevons_agent_kill",
 			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Idempotent: if the agent is already not registered (e.g. auto-reaped after a done report), returns success without error. Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister (subtree included)")),
-			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is requesting the kill). Overseer uses the overseer name (usually 'jevons').")),
+			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is requesting the kill). Overseer uses the overseer name (usually 'jevons'); actor=overseer aliases to the registered overseer seat (🎯T535).")),
 		),
 		s.handleAgentKill,
 	)
@@ -777,9 +777,11 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	// the park outlives it, the delivery that would restart the agent, and the
 	// daemon restart that would reattach it.
 	actor, _ := args["actor"].(string)
-	if strings.TrimSpace(actor) == "" {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
 		actor = s.overseerName()
 	}
+	actor = s.resolveLifecycleActor(actor)
 	reason, _ := args["reason"].(string)
 	s.MarkAgentParked(name, actor, strings.TrimSpace(reason))
 	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name, "actor": actor})
@@ -811,6 +813,7 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 	// Default actor for the overseer only when identity is proven via session;
 	// POs/bosses must always pass actor explicitly.
+	actor = strings.TrimSpace(actor)
 	if actor == "" && s.transcript != nil && s.transcript.GetID != nil {
 		sid := s.transcript.GetID()
 		for _, d := range s.registry.List() {
@@ -822,8 +825,10 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		if actor == "" {
 			actor = s.overseerName()
 		}
-		life["actor"] = actor
 	}
+	// 🎯T535: role word "overseer" → registered overseer seat (usually jevons).
+	actor = s.resolveLifecycleActor(actor)
+	life["actor"] = actor
 	// Idempotent kill (🎯T229): desired state is "not registered". After
 	// T165/T195 auto-reap, PO/overseer hygiene kills race the reaper and used
 	// to log lifecycle_error for every double-kill. Already-gone is success.
@@ -934,6 +939,21 @@ func isOverseerSeatRow(d claudia.AgentDef) bool {
 func (s *Server) overseerName() string {
 	// Conventional default; config overseer_name is almost always "jevons".
 	return "jevons"
+}
+
+// resolveLifecycleActor maps lifecycle-tool actor aliases onto registered
+// seats (🎯T535). The role word "overseer" is not a registry name — entropy
+// swarm teardown passed actor=overseer and got "not a registered agent".
+// Unknown names are left alone so canKill / stop authorization still refuses.
+func (s *Server) resolveLifecycleActor(actor string) string {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return actor
+	}
+	if strings.EqualFold(actor, RoleOverseer) {
+		return s.overseerSeatName()
+	}
+	return actor
 }
 
 // wireAgentEvents sets up the event handler for an agent process.
