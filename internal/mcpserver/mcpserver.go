@@ -579,6 +579,8 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 // visibility here is the only way to diagnose tool-wiring gaps (🎯T50).
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/mcp", mcpRequestLogger(s.transport, &s.toolsListCount))
+	// 🎯T406: owner-visible fleet intent / hard-block snapshot.
+	mux.HandleFunc("GET /api/fleet-intent", s.handleFleetIntentHTTP)
 }
 
 // ToolsListCount reports how many MCP tools/list requests have been

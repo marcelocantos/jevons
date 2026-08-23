@@ -273,6 +273,15 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	// Any ACP traffic resets stuck-busy idle (🎯T204).
 	s.NoteOverseerProgress()
 
+	// 🎯T406: transport-level provider refusals on the overseer wire enter
+	// (or leave alone) the fleet hard-block. Authored prose never fires —
+	// ClassifyFrom(SourceAuthored) is ClassNone (🎯T455).
+	if ev.Type == "assistant" && ev.Text != "" {
+		if class := agenterr.ClassifyFrom(assistantTextSource(ev), ev.Text); class.IsFailure() {
+			s.observeProviderFailure(class, ev.Text)
+		}
+	}
+
 	// 🎯T513: a user turn whose 🎯T425 identity header names a fleet agent is
 	// that agent's brief, misdelivered — the overseer chat is the wrong seat
 	// for it. 🎯T452 refuses these on the send path; this is the mirror-image

@@ -187,11 +187,12 @@ func TestJworkFailureCleanRun(t *testing.T) {
 // toolFailure passes non-provider errors through verbatim so existing callers
 // and their assertions keep working.
 func TestToolFailurePreservesNonProviderErrors(t *testing.T) {
-	res := toolFailure("test", "w1", fmt.Errorf("id and text are required"))
+	s := &Server{}
+	res := s.toolFailure("test", "w1", fmt.Errorf("id and text are required"))
 	if !res.IsError || toolText(res) != "id and text are required" {
 		t.Fatalf("got %q", toolText(res))
 	}
-	if toolFailure("test", "w1", nil) != nil {
+	if s.toolFailure("test", "w1", nil) != nil {
 		t.Error("nil error must yield no result")
 	}
 }

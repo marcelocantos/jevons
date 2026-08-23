@@ -77,13 +77,18 @@ func ClassifyText(msg string) Class {
 		return ClassNone
 	}
 
-	// Auth first — "unauthorized" before generic "error".
-	if containsAny(low, authMarkers...) {
+	// Auth first — "unauthorized" before generic "error". Account/key walls
+	// that Classify would otherwise miss (revoked, suspended) also land here
+	// so 🎯T406 HardBlock sees ClassAuth rather than ClassNone.
+	if containsAny(low, authMarkers...) || isAccountWall(low) {
 		return ClassAuth
 	}
 
-	// Rate limit.
-	if containsAny(low, rateLimitMarkers...) {
+	// Rate limit — including account-level spend/billing walls (🎯T406).
+	// ClassifyText maps spend walls to rate_limit so 🎯T407's auth/rate_limit
+	// cluster still sees them; HardBlock then distinguishes spend from a
+	// transient 429.
+	if containsAny(low, rateLimitMarkers...) || isSpendWall(low) {
 		return ClassRateLimit
 	}
 

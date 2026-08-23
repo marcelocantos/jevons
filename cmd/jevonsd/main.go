@@ -632,6 +632,10 @@ func main() {
 		slog.Error("fleet intent store failed", "err", err)
 		os.Exit(1)
 	}
+	// 🎯T406: HTTP/chat surfaces observe provider refusals into the same
+	// fleet-intent store so a spend wall stands the fleet down and a
+	// successful call clears it.
+	srv.SetProviderHardBlockHooks(mcpSrv.ObserveProviderFailure, mcpSrv.ObserveProviderOK)
 
 	// Butler: durable-thread orchestrator over the thread store, the
 	// session scanner (non-invasive observation), and the transcript

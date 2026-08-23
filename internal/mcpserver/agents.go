@@ -752,7 +752,7 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	if err != nil {
 		// 🎯T283: deliverToSender already formats send failures; this also
 		// classifies the rehydrate/launch arm, which reaches the provider too.
-		return toolFailure("agent_send", name, err), nil
+		return s.toolFailure("agent_send", name, err), nil
 	}
 	msg := result.Message
 	if injected {

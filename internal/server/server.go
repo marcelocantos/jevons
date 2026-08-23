@@ -24,6 +24,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
@@ -144,6 +145,11 @@ type Server struct {
 	planUsageWaitReady func(ctx context.Context) error
 	// planSweep runs the 🎯T390.1.5 hot/exhausted migrate-or-park actuator.
 	planSweep func() any
+	// providerHardBlock observes classified provider refusals / successes so
+	// the MCP fleet-intent store can enter or clear blocked_provider (🎯T406).
+	// Wired from main to mcpserver.ObserveProviderFailure / ObserveProviderOK.
+	onProviderFailure func(class agenterr.Class, raw string)
+	onProviderOK      func()
 	// fleetMigrator backs POST /api/agents/migrate — the owner's manual
 	// per-seat provider/model switch from the fleet tree (🎯T285.2).
 	fleetMigrator FleetMigrator
@@ -268,6 +274,29 @@ func (s *Server) SetActivityHook(f func()) { s.activityHook = f }
 // SetCostSource registers the provider of the live cost snapshot served
 // at GET /api/cost.
 func (s *Server) SetCostSource(f func() any) { s.costSource = f }
+
+// SetProviderHardBlockHooks wires 🎯T406 observation from the HTTP/chat
+// surfaces into the fleet-intent store (MCP side). Nil hooks are no-ops.
+func (s *Server) SetProviderHardBlockHooks(onFailure func(agenterr.Class, string), onOK func()) {
+	s.onProviderFailure = onFailure
+	s.onProviderOK = onOK
+}
+
+// observeProviderFailure forwards a classified refusal to the hard-block hook.
+func (s *Server) observeProviderFailure(class agenterr.Class, raw string) {
+	if s == nil || s.onProviderFailure == nil || !class.IsFailure() {
+		return
+	}
+	s.onProviderFailure(class, raw)
+}
+
+// observeProviderOK forwards evidence the provider accepted a call.
+func (s *Server) observeProviderOK() {
+	if s == nil || s.onProviderOK == nil {
+		return
+	}
+	s.onProviderOK()
+}
 
 // Credentials returns the server-side pairing credential store.
 func (s *Server) Credentials() *CredentialStore { return s.creds }

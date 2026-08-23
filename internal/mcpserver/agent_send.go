@@ -283,6 +283,8 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 		s.noteTurnInFlight(name)
 		// 🎯T417: durable delivery evidence survives later compaction.
 		s.recordDeliveryEvidence(name, payload, ev)
+		// 🎯T406: a begun turn is evidence the provider accepted the call.
+		s.ObserveProviderOK()
 		return res, nil
 
 	case OutcomeUnconfirmed:
@@ -512,6 +514,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 			"transient", class.IsTransient(),
 			"err", err.Error(),
 		)
+		s.ObserveProviderFailure(class, err.Error())
 		return agentSendResult{}, fmt.Errorf("send failed: %s", ownerMsg)
 	}
 
@@ -568,6 +571,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 				"transient", class.IsTransient(),
 				"err", err2.Error(),
 			)
+			s.ObserveProviderFailure(class, err2.Error())
 			return agentSendResult{}, fmt.Errorf("send after interrupt failed: %s", ownerMsg)
 		}
 	}

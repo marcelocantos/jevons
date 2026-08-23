@@ -108,7 +108,7 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 		life["failure_class"] = agenterr.Classify(err).String()
 		s.logLifecycle(compEventPush, "push", "error", life)
 		// 🎯T283: same classification the owner chat path gets.
-		return toolFailure("event_push", target, err), nil
+		return s.toolFailure("event_push", target, err), nil
 	}
 
 	// The receiver answered this push, which is as direct as arrival evidence
@@ -117,9 +117,10 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	if class, ownerMsg, ok := agenterr.ReplyFailure(reply); ok {
 		life["failure_class"] = class.String()
 		s.logLifecycle(compEventPush, "push", "error", life)
-		logProviderFailure("event_push", target, class, reply)
+		s.logProviderFailure("event_push", target, class, reply)
 		return mcp.NewToolResultError(ownerMsg), nil
 	}
+	s.ObserveProviderOK()
 	s.logLifecycle(compEventPush, "push", "ok", life)
 	return mcp.NewToolResultText(fmt.Sprintf("Pushed event %q to %q.\n\n%s", event, target, reply)), nil
 }

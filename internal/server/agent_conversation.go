@@ -211,6 +211,7 @@ func (s *Server) sendToOverseerAsOwner(text string) error {
 			"failure_class", class.String(),
 			"transient", class.IsTransient(),
 		)
+		s.observeProviderFailure(class, err.Error())
 		frame := map[string]string{
 			"type":  "error",
 			"error": "message not delivered: " + ownerMsg,
@@ -223,6 +224,7 @@ func (s *Server) sendToOverseerAsOwner(text string) error {
 		s.NoteOwnerResidual("delivery_failed")
 		return err
 	}
+	s.observeProviderOK()
 	return nil
 }
 

@@ -196,7 +196,7 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			})
 		}
 		if dispatchClass.IsFailure() {
-			logProviderFailure("jwork", workerID, dispatchClass, err.Error())
+			s.logProviderFailure("jwork", workerID, dispatchClass, err.Error())
 			return mcp.NewToolResultError("worker dispatch failed: " + dispatchMsg), nil
 		}
 		return mcp.NewToolResultError(fmt.Sprintf("worker dispatch failed: %v", err)), nil
@@ -267,7 +267,7 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 
 	failClass, failMsg := jworkFailure(errClass, errRaw, result)
 	if failClass.IsFailure() {
-		logProviderFailure("jwork", workerID, failClass, failMsg)
+		s.logProviderFailure("jwork", workerID, failClass, failMsg)
 		if s.workers != nil {
 			_ = s.workers.Finish(workers.FinishArgs{
 				ID: workerID, Status: workers.StatusFailed,
@@ -292,6 +292,8 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if result == "" {
 		result = "Worker finished (no output)."
 	}
+
+	s.ObserveProviderOK()
 
 	slog.Info("jwork: worker complete",
 		"worker", workerID,
@@ -322,14 +324,14 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	// 🎯T283: a run that hit provider errors but still produced output carries
 	// the class so the caller can tell a clean run from a recovered one.
 	return mcp.NewToolResultStructured(map[string]any{
-		"result":         truncated,
-		"worker_id":      workerID,
-		"status":         workers.StatusCompleted,
-		"failure_class":  errClass.String(),
-		"transient":      errClass.IsTransient(),
-		"input_tokens":   inputTok,
-		"output_tokens":  outputTok,
-		"cost_usd":       costUSD,
+		"result":        truncated,
+		"worker_id":     workerID,
+		"status":        workers.StatusCompleted,
+		"failure_class": errClass.String(),
+		"transient":     errClass.IsTransient(),
+		"input_tokens":  inputTok,
+		"output_tokens": outputTok,
+		"cost_usd":      costUSD,
 		"policy": map[string]any{
 			"decision":  policy.Decision,
 			"level":     policy.Level,

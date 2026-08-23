@@ -268,11 +268,11 @@ func (s *Server) handleThreadDirect(_ context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		// 🎯T283: an outage here reads as backend_unavailable, not as a bare
 		// "Internal error" the caller would blame on its own prompt or tools.
-		return toolFailure("thread_direct", id, err), nil
+		return s.toolFailure("thread_direct", id, err), nil
 	}
 	// Grok ACP delivers provider failures as the assistant turn, so a
 	// successful direct can still carry nothing but the outage (🎯T283).
-	if fail := replyFailure("thread_direct", id, reply); fail != nil {
+	if fail := s.replyFailure("thread_direct", id, reply); fail != nil {
 		return fail, nil
 	}
 	return mcp.NewToolResultText(reply), nil
