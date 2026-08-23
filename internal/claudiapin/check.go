@@ -8,6 +8,7 @@ package claudiapin
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,7 +42,7 @@ type RequiredCommit struct {
 // Report is the daily-path pin check result.
 type Report struct {
 	PinVersion      string   // go.mod require version (e.g. v0.24.0)
-	PinSHA          string   // resolved commit in sibling (full), empty if unknown
+	PinSHA          string   // resolved commit (sibling tag and/or module-cache Origin.Hash)
 	SiblingRoot     string   // absolute path to sibling checkout, if found
 	SiblingHEAD     string   // sibling HEAD full SHA
 	Missing         []string // "short subject" lines on sibling not in pin
@@ -53,8 +54,11 @@ type Report struct {
 // DecisionSeam is the recorded T448 policy under local-master (T104) + no Ship.
 const DecisionSeam = "go.mod pins last published claudia release; daily path consumes local-master via ../go.work + buildsnap sibling inject — not a committed replace"
 
-// Check reads go.mod at repoRoot and, when a sibling claudia checkout
-// exists, names the pin SHA and any sibling commits the pin is missing.
+// Check reads go.mod at repoRoot and names the pin SHA. When a sibling
+// claudia checkout is reachable (adjacent dir, or adjacent to the primary
+// git worktree — so bin/gate -clean still finds it), it also names sibling
+// commits the pin is missing and hard-fails on required ancestry gaps.
+// Without a sibling, PinSHA falls back to the module-cache Origin.Hash.
 func Check(repoRoot string) (Report, error) {
 	var r Report
 	r.Decision = DecisionSeam
@@ -69,15 +73,29 @@ func Check(repoRoot string) (Report, error) {
 		return r, fmt.Errorf("go.mod has no require %s", ModulePath)
 	}
 
-	sib := filepath.Join(filepath.Dir(repoRoot), "claudia")
-	if _, err := os.Stat(filepath.Join(sib, "go.mod")); err != nil {
-		r.Loud = fmt.Sprintf("claudia pin=%s — no sibling checkout at %s; cannot name pin SHA or missing commits", r.PinVersion, sib)
+	sib := findSibling(repoRoot)
+	if sib == "" {
+		if sha := pinSHAFromModCache(r.PinVersion); sha != "" {
+			r.PinSHA = sha
+			r.Loud = fmt.Sprintf(
+				"claudia pin=%s sha=%s — no sibling checkout beside %s (or primary worktree); missing-commit delta not computed (T448)",
+				r.PinVersion, short(sha), repoRoot,
+			)
+			return r, nil
+		}
+		r.Loud = fmt.Sprintf(
+			"claudia pin=%s — no sibling checkout and no module-cache Origin.Hash; cannot name pin SHA or missing commits",
+			r.PinVersion,
+		)
 		return r, nil
 	}
 	r.SiblingRoot = sib
 
 	pinSHA, err := git(sib, "rev-parse", r.PinVersion)
 	if err != nil {
+		if sha := pinSHAFromModCache(r.PinVersion); sha != "" {
+			r.PinSHA = sha
+		}
 		r.Loud = fmt.Sprintf("claudia pin=%s — sibling at %s cannot rev-parse pin ref (%v)", r.PinVersion, sib, err)
 		return r, nil
 	}
@@ -121,6 +139,73 @@ func Check(repoRoot string) (Report, error) {
 		)
 	}
 	return r, nil
+}
+
+// findSibling returns an absolute path to a claudia checkout usable for
+// pin/ref ancestry. bin/gate -clean runs in an ephemeral worktree whose
+// parent dir is not the monorepo sibling layout — so we also look beside
+// the primary worktree of this git clone.
+func findSibling(repoRoot string) string {
+	seen := map[string]bool{}
+	var cands []string
+	add := func(p string) {
+		p = filepath.Clean(p)
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		cands = append(cands, p)
+	}
+	add(filepath.Join(filepath.Dir(repoRoot), "claudia"))
+	if primary := primaryWorktree(repoRoot); primary != "" {
+		add(filepath.Join(filepath.Dir(primary), "claudia"))
+	}
+	for _, sib := range cands {
+		if _, err := os.Stat(filepath.Join(sib, "go.mod")); err == nil {
+			return sib
+		}
+	}
+	return ""
+}
+
+// primaryWorktree returns the first worktree path from git worktree list
+// (the main checkout). Empty when repoRoot is not a git work tree.
+func primaryWorktree(repoRoot string) string {
+	out, err := git(repoRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, "worktree "); ok {
+			return rest
+		}
+	}
+	return ""
+}
+
+// pinSHAFromModCache reads Origin.Hash from the module download .info for
+// the pinned version (GOWORK-independent). Empty when the cache entry is
+// missing or has no Origin.
+func pinSHAFromModCache(version string) string {
+	gopath, err := exec.Command("go", "env", "GOMODCACHE").Output()
+	if err != nil {
+		return ""
+	}
+	infoPath := filepath.Join(strings.TrimSpace(string(gopath)), "cache", "download",
+		"github.com", "marcelocantos", "claudia", "@v", version+".info")
+	raw, err := os.ReadFile(infoPath)
+	if err != nil {
+		return ""
+	}
+	var info struct {
+		Origin *struct {
+			Hash string `json:"Hash"`
+		} `json:"Origin"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil || info.Origin == nil {
+		return ""
+	}
+	return strings.TrimSpace(info.Origin.Hash)
 }
 
 // RequireVersion returns the claudia version from a go.mod body.

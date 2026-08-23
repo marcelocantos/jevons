@@ -111,7 +111,11 @@ func TestCheckNoSiblingIsLoudNotFatal(t *testing.T) {
 	if r.Loud == "" {
 		t.Fatal("expected loud note without sibling")
 	}
+	if r.SiblingRoot != "" {
+		t.Fatalf("temp dir must not discover a sibling, got %s", r.SiblingRoot)
+	}
 	if claudiapin.HardFail(r) {
 		t.Fatal("no-sibling must not HardFail on required ancestry")
 	}
+	// PinSHA may still resolve from module-cache Origin.Hash (clean/CI path).
 }

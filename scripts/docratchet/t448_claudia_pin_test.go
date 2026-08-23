@@ -70,7 +70,7 @@ func TestT448PinContainsT28AndDailyCheckIsWired(t *testing.T) {
 			r.PinVersion, r.MissingRequired, claudiapin.FormatHuman(r))
 	}
 	if r.PinSHA == "" {
-		t.Fatal("expected pin SHA resolved via sibling claudia checkout")
+		t.Fatal("expected pin SHA resolved via sibling checkout or module-cache Origin.Hash")
 	}
 	// T28 content marker in the published module cache (squash-safe).
 	modCache, err := exec.Command("go", "env", "GOMODCACHE").Output()
