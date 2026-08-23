@@ -10,13 +10,14 @@ import (
 
 func validFinish() *Message {
 	return &Message{
-		Kind:    KindFinishReport,
-		Target:  "T509",
-		SHA:     "abcdef0123456",
-		GateID:  "9f13c0a2",
-		Verdict: VerdictGreen,
-		Status:  ProgressInProgress,
-		Payload: "Work landed. SHA abcdef0123456.",
+		Kind:         KindFinishReport,
+		Target:       "T509",
+		SHA:          "abcdef0123456",
+		GateID:       "9f13c0a2",
+		Verdict:      VerdictGreen,
+		Status:       ProgressInProgress,
+		SilentLedger: SilentLedgerEmpty,
+		Payload:      "Work landed. SHA abcdef0123456.",
 	}
 }
 

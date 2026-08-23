@@ -14,11 +14,12 @@ import (
 
 func TestT509ChatWireAttachesValidEnvelope(t *testing.T) {
 	text := envelope.Format(&envelope.Message{
-		Kind:    envelope.KindFinishReport,
-		Target:  "T509",
-		SHA:     "abcdef0123456",
-		Verdict: envelope.VerdictGreen,
-		Payload: "Landed.",
+		Kind:         envelope.KindFinishReport,
+		Target:       "T509",
+		SHA:          "abcdef0123456",
+		Verdict:      envelope.VerdictGreen,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      "Landed.",
 	})
 	line, ok := chatWireLine(claudia.Event{Type: "assistant", Text: text})
 	if !ok {

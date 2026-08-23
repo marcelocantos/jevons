@@ -43,7 +43,7 @@ func TestT3927ScopeChangeStaysWithParent(t *testing.T) {
 }
 
 func TestT509FinishReportEnvelopeSkipsPOHop(t *testing.T) {
-	raw := "```jevons\njevons: kind finish-report\njevons: target T509\njevons: oracle sha=abcdef0123456\njevons: verdict GREEN\n```\n\nWork landed."
+	raw := "```jevons\njevons: kind finish-report\njevons: target T509\njevons: oracle sha=abcdef0123456\njevons: verdict GREEN\njevons: silent-ledger none\n```\n\nWork landed."
 	if Classify(raw) != RouteOverseer {
 		t.Fatal("oracle finish-report envelope skips the PO hop")
 	}

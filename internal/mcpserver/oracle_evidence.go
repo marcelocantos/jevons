@@ -26,6 +26,9 @@ const (
 	CompletionAcceptedRisk
 	// CompletionNoClaim: no completion claim and no evidence (neutral).
 	CompletionNoClaim
+	// CompletionMissingSilentLedger: finish-report has oracle/risk but no
+	// explicit silent-decision ledger (🎯T536.1) — flagged, not complete.
+	CompletionMissingSilentLedger
 )
 
 func (c CompletionEvidenceClass) String() string {
@@ -38,6 +41,8 @@ func (c CompletionEvidenceClass) String() string {
 		return "accepted_risk"
 	case CompletionNoClaim:
 		return "no_claim"
+	case CompletionMissingSilentLedger:
+		return "missing_silent_ledger"
 	default:
 		return "unknown"
 	}
@@ -132,27 +137,42 @@ func HasOracleOrRisk(report string) bool {
 }
 
 // ClassifyCompletionReport classifies a worker/PO finish report.
-// Priority: envelope fields (🎯T509) when present, else accepted-risk >
-// oracle evidence > bare-done claim > no claim.
+// Priority: envelope fields (🎯T509 / 🎯T536.1) when present, else
+// accepted-risk > oracle evidence > bare-done claim > no claim.
 func ClassifyCompletionReport(report string) CompletionEvidenceClass {
-	if m, err := envelope.Parse(report); m != nil && err == nil {
+	if m, err := envelope.Parse(report); m != nil {
 		switch m.Kind {
 		case envelope.KindFinishReport:
-			if m.HasRisk() {
-				return CompletionAcceptedRisk
+			if envelope.MissingSilentLedger(m) {
+				return CompletionMissingSilentLedger
 			}
-			if m.HasOracle() {
-				return CompletionOracleEvidence
+			if err == nil {
+				if m.HasRisk() {
+					return CompletionAcceptedRisk
+				}
+				if m.HasOracle() {
+					return CompletionOracleEvidence
+				}
+				return CompletionBareDone
 			}
-			return CompletionBareDone
+			// Other malformation with a ledger still present: do not treat
+			// payload prose as a complete oracle finish.
+			if m.HasSilentLedger() {
+				if m.HasRisk() {
+					return CompletionAcceptedRisk
+				}
+				if m.HasOracle() {
+					return CompletionOracleEvidence
+				}
+			}
 		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief:
-			return CompletionNoClaim
+			if err == nil {
+				return CompletionNoClaim
+			}
 		}
 		if m.Payload != "" {
 			report = m.Payload
 		}
-	} else if m != nil && m.Payload != "" {
-		report = m.Payload
 	}
 	s := strings.ToLower(strings.TrimSpace(report))
 	if s == "" {
@@ -170,6 +190,13 @@ func ClassifyCompletionReport(report string) CompletionEvidenceClass {
 		return CompletionBareDone
 	}
 	return CompletionNoClaim
+}
+
+// LooksLikeMissingSilentLedger is true when a finish-report claims done
+// with oracle/risk slots but carries no explicit silent-decision ledger
+// (🎯T536.1).
+func LooksLikeMissingSilentLedger(report string) bool {
+	return ClassifyCompletionReport(report) == CompletionMissingSilentLedger
 }
 
 func hasOracleEvidence(lower string) bool {

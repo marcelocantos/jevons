@@ -206,6 +206,11 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   and enums: `internal/envelope` — do not restate them. Worker terminal
   reports MUST be a `finish-report` envelope. Unenveloped messages fall
   back to prose heuristics. YAML front matter is not this format.
+- **Silent-decision ledger (🎯T536.1):** finish-reports carry
+  `silent-ledger none` or a ranked `silent-decision` list
+  (least-confident first). A green oracle with a missing ledger is
+  flagged, not complete. Gate helper: `envelope.ReadSilentLedger`.
+  Instruction↔schema drift is ratcheted (docratchet).
 - **Finished work auto-deregister (🎯T165 / 🎯T195):** when a **work**
   agent’s terminal report claims done — including imperfect bare done
   without oracle markers — the product **stop+Removes** it from the live

@@ -32,6 +32,11 @@ type Message struct {
 	Verdict Verdict
 	Status  Progress
 	Name    string // target-file-request title, optional elsewhere
+	// SilentLedger is the 🎯T536.1 silent-decision ledger state.
+	SilentLedger SilentLedgerState
+	// Decisions is the ranked silent-decision list (least-confident first)
+	// when SilentLedger is SilentLedgerRanked.
+	Decisions []SilentDecision
 	// Extra holds unknown jevons: keys so a newer emitter is not refused.
 	Extra   map[string]string
 	Payload string
@@ -85,6 +90,7 @@ func (m *Message) SlotsFingerprint() string {
 		"verdict=" + string(m.Verdict),
 		"status=" + string(m.Status),
 		"name=" + m.Name,
+		ledgerFingerprint(m),
 	}, "\n")
 }
 
@@ -288,6 +294,21 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 		msg.Status = p
 	case "name":
 		msg.Name = strings.TrimSpace(value)
+	case "silent-ledger", "silent_ledger", "ledger":
+		st, err := parseSilentLedger(value)
+		if err != nil {
+			return err
+		}
+		msg.SilentLedger = st
+	case "silent-decision", "silent_decision", "decision":
+		d, err := parseSilentDecision(value)
+		if err != nil {
+			return err
+		}
+		msg.Decisions = append(msg.Decisions, d)
+		if msg.SilentLedger == SilentLedgerAbsent {
+			msg.SilentLedger = SilentLedgerRanked
+		}
 	default:
 		msg.Extra[key] = value
 	}
@@ -372,6 +393,15 @@ func Format(m *Message) string {
 	writeSlot(&b, "verdict", string(m.Verdict))
 	writeSlot(&b, "status", string(m.Status))
 	writeSlot(&b, "name", m.Name)
+	switch m.SilentLedger {
+	case SilentLedgerEmpty:
+		writeSlot(&b, "silent-ledger", "none")
+	case SilentLedgerRanked:
+		writeSlot(&b, "silent-ledger", "ranked")
+		for _, d := range m.Decisions {
+			writeSlot(&b, "silent-decision", formatSilentDecision(d))
+		}
+	}
 	b.WriteString("```\n")
 	if p := strings.TrimLeft(m.Payload, "\n"); p != "" {
 		b.WriteByte('\n')

@@ -485,6 +485,11 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
   `internal/envelope` — do not restate them. Read envelope fields when
   present; fall back to prose heuristics only for unenveloped messages.
   YAML front matter (`---`) is not this format.
+- **Silent-decision ledger (🎯T536.1):** finish-reports must carry
+  `silent-ledger none` or ranked `silent-decision` slots (least-confident
+  first). A green oracle with a missing ledger is flagged, not complete.
+  Read `envelope.ReadSilentLedger` rather than the implementation diff.
+  Quality of decisions is judgment; presence of the artifact is the gate.
 
 ## Cited SHA must stay reachable (🎯T427)
 

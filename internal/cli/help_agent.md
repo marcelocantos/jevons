@@ -615,7 +615,28 @@ jevons: target T509
 jevons: oracle sha=… gate-id=…
 jevons: verdict GREEN
 jevons: status in-progress
+jevons: silent-ledger none
 ```
+
+Or, when the brief was silent on material choices, a ranked ledger
+(least-confident first) — 🎯T536.1:
+
+```jevons
+jevons: kind finish-report
+jevons: target T536.1
+jevons: oracle sha=… gate-id=…
+jevons: verdict GREEN
+jevons: silent-ledger ranked
+jevons: silent-decision confidence=0.2 choice="optimistic concurrency" why="spec silent on locking"
+jevons: silent-decision confidence=0.5 choice=shared-sqlite-table why="no isolation guidance"
+```
+
+A green oracle with a **missing** silent-ledger (and no explicit `none`)
+is flagged, not treated as complete. Quality of the decisions is judgment;
+this rule is that the artifact exists and the independent gate can read it
+(`envelope.ReadSilentLedger`). Worker/boss doctrine requires the ledger on
+terminal reports (role files when 🎯T511 lands; until then agents-guide +
+fleet standing brief).
 
 English rationale follows the closing fence. Unenveloped messages still
 fall back to prose heuristics. YAML front matter (`---`) is not this

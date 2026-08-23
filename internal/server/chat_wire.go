@@ -179,12 +179,16 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 				wire["failure_class"] = failClass.String()
 			}
 			if envMsg != nil {
-				wire["envelope"] = map[string]any{
+				wireEnv := map[string]any{
 					"kind":    envMsg.Kind.String(),
 					"target":  envMsg.Target,
 					"verdict": envMsg.Verdict.String(),
 					"status":  envMsg.Status.String(),
 				}
+				if envMsg.HasSilentLedger() {
+					wireEnv["silent_ledger"] = envMsg.SilentLedger.String()
+				}
+				wire["envelope"] = wireEnv
 				if envErr != nil {
 					wire["envelope_error"] = envErr.Error()
 				}

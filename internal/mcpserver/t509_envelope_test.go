@@ -13,13 +13,14 @@ import (
 
 func t509Finish(payload string) string {
 	return envelope.Format(&envelope.Message{
-		Kind:    envelope.KindFinishReport,
-		Target:  "T509",
-		SHA:     "abcdef0123456",
-		GateID:  "9f13c0a2",
-		Verdict: envelope.VerdictGreen,
-		Status:  envelope.ProgressInProgress,
-		Payload: payload,
+		Kind:         envelope.KindFinishReport,
+		Target:       "T509",
+		SHA:          "abcdef0123456",
+		GateID:       "9f13c0a2",
+		Verdict:      envelope.VerdictGreen,
+		Status:       envelope.ProgressInProgress,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      payload,
 	})
 }
 
@@ -38,10 +39,11 @@ func TestT509ValidFinishReportIsOracleEvidence(t *testing.T) {
 
 func TestT509FinishReportRiskField(t *testing.T) {
 	raw := envelope.Format(&envelope.Message{
-		Kind:    envelope.KindFinishReport,
-		Target:  "T509",
-		Risk:    envelope.RiskClass3,
-		Payload: "Done.",
+		Kind:         envelope.KindFinishReport,
+		Target:       "T509",
+		Risk:         envelope.RiskClass3,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      "Done.",
 	})
 	if ClassifyCompletionReport(raw) != CompletionAcceptedRisk {
 		t.Fatalf("class=%s", ClassifyCompletionReport(raw))
@@ -87,11 +89,12 @@ func TestT509StatusPingDoesNotReap(t *testing.T) {
 
 func TestT509DailyFieldWinsOverHermeticPayload(t *testing.T) {
 	raw := envelope.Format(&envelope.Message{
-		Kind:    envelope.KindFinishReport,
-		Target:  "T509",
-		SHA:     "abcdef0123456",
-		Daily:   "restart-daily",
-		Payload: "go test ./internal/envelope PASS",
+		Kind:         envelope.KindFinishReport,
+		Target:       "T509",
+		SHA:          "abcdef0123456",
+		Daily:        "restart-daily",
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      "go test ./internal/envelope PASS",
 	})
 	if !HasDailyPathEvidence(raw) {
 		t.Fatal("daily slot must count as T194 evidence")

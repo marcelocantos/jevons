@@ -32,6 +32,18 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Residual: instructional doctrine + pure classifier; not a hard daemon
   block.
 
+## Silent-decision ledger (🎯T536.1)
+- Terminal finish-report envelopes MUST carry a silent-decision ledger:
+  "jevons: silent-ledger none" when the brief was not silent on anything
+  material, OR "jevons: silent-ledger ranked" plus one or more
+  "jevons: silent-decision confidence=N choice=... why=..." lines,
+  least-confident first.
+- A green oracle with a missing ledger (no explicit none) is flagged —
+  not treated as complete. Schema: internal/envelope. The independent
+  gate reads the ledger (ReadSilentLedger), not the implementation diff.
+- Quality of the decisions is judgment; this rule is that the artifact
+  exists.
+
 ## Cited SHA must stay reachable (🎯T427)
 - Before you cite a commit SHA as evidence, prove it is still reachable:
       git merge-base --is-ancestor <sha> HEAD
