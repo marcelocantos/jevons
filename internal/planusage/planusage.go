@@ -148,16 +148,17 @@ func (s Snapshot) Backend(provider string) (Backend, bool) {
 	return Backend{}, false
 }
 
-// SupportedProviders are the backends claudia can be asked about. Grok is
-// included because jevonsd opts into the undocumented billing surface
-// (🎯T390.1). Bedrock is included so a running Bedrock fleet still has a
-// named row; idle Bedrock stays off the cockpit bar.
+// SupportedProviders are the backends claudia can be asked about. Grok and
+// Cursor are included because jevonsd opts into their undocumented billing
+// surfaces (🎯T390.1 / claudia v0.26). Bedrock is included so a running
+// Bedrock fleet still has a named row; idle Bedrock stays off the cockpit bar.
 func SupportedProviders() []claudia.Provider {
 	return []claudia.Provider{
 		claudia.ProviderClaude,
 		claudia.ProviderCodex,
 		claudia.ProviderGrok,
 		claudia.ProviderBedrock,
+		claudia.ProviderCursor,
 	}
 }
 

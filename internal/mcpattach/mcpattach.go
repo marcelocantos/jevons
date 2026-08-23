@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package mcpattach is how jevonsd puts the MCP set on every Session:
-// LoadMCP (discovery) + append jevonsmcp for Claude/Codex, then
+// LoadMCP (discovery) + append jevonsmcp for Claude/Codex/Cursor, then
 // Config.MCPServers. Grok is different (🎯T525): ACP session/new gets
 // only this daemon's HTTP jevonsmcp — Grok already attaches
 // ~/.grok/config.toml (T58), and re-sending that inventory in a
 // Claude-shaped ACP payload made session/new return Invalid params.
 // Codex still needs EnsureMCP because app-server thread/start has no
-// MCP field.
+// MCP field. Cursor (claudia v0.26) uses ~/.cursor/mcp.json; exclusive
+// mode writes project .cursor/mcp.json instead of rewriting HOME.
 package mcpattach
 
 import (
@@ -26,10 +27,11 @@ type Args struct {
 	Name string
 	URL  string
 	// Path overrides. Empty means the production user-scope files.
-	// Isolates and tests must set all three.
+	// Isolates and tests must set all four (Claude/Grok/Codex/Cursor).
 	ClaudeJSON string
 	GrokTOML   string
 	CodexTOML  string
+	CursorJSON string
 	// Isolate is true for a throwaway universe: SessionServers omits
 	// HTTP entries on Codex so claudia.Launch does not EnsureMCP into
 	// the owner's ~/.codex/config.toml.
@@ -66,7 +68,7 @@ func Ensure(a Args) error {
 	if strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.URL) == "" {
 		return fmt.Errorf("mcpattach: name and url required")
 	}
-	for _, p := range []string{a.ClaudeJSON, a.GrokTOML, a.CodexTOML} {
+	for _, p := range []string{a.ClaudeJSON, a.GrokTOML, a.CodexTOML, a.CursorJSON} {
 		if p == "" {
 			continue
 		}
@@ -80,13 +82,14 @@ func Ensure(a Args) error {
 		ClaudeJSON: a.ClaudeJSON,
 		GrokTOML:   a.GrokTOML,
 		CodexTOML:  a.CodexTOML,
+		CursorJSON: a.CursorJSON,
 	})
 }
 
 // SessionServers is the list Jevons passes on AgentDef.MCPServers.
-// Claude (and Codex, subject to Isolate) get discovered system servers
-// plus this daemon's jevonsmcp. Grok gets only the live HTTP jevonsmcp
-// (🎯T525) — ~/.grok/config.toml already attaches on session/new.
+// Claude/Cursor (and Codex, subject to Isolate) get discovered system
+// servers plus this daemon's jevonsmcp. Grok gets only the live HTTP
+// jevonsmcp (🎯T525) — ~/.grok/config.toml already attaches on session/new.
 func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia.MCPServer {
 	if provider == claudia.ProviderGrok {
 		return grokSessionServers(a)
@@ -119,7 +122,7 @@ func grokSessionServers(a Args) []claudia.MCPServer {
 }
 
 func loadArgs(a Args, workDir string) *claudia.LoadMCPArgs {
-	explicit := a.ClaudeJSON != "" || a.GrokTOML != "" || a.CodexTOML != ""
+	explicit := a.ClaudeJSON != "" || a.GrokTOML != "" || a.CodexTOML != "" || a.CursorJSON != ""
 	if !explicit {
 		return &claudia.LoadMCPArgs{WorkDir: workDir}
 	}
@@ -127,6 +130,7 @@ func loadArgs(a Args, workDir string) *claudia.LoadMCPArgs {
 		ClaudeJSON: a.ClaudeJSON,
 		GrokTOML:   a.GrokTOML,
 		CodexTOML:  a.CodexTOML,
+		CursorJSON: a.CursorJSON,
 		WorkDir:    workDir,
 	}
 }

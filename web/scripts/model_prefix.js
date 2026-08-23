@@ -66,6 +66,7 @@
     xai: XAI,
     codex: OPENAI,
     openai: OPENAI,
+    cursor: 'cursor',
   };
 
   // Model families the version hangs off. 🎯T312 adds Anthropic's fable line:
@@ -133,6 +134,7 @@
     anthropic: 'Anthropic',
     xai: 'xAI',
     openai: 'OpenAI',
+    cursor: 'Cursor',
   };
 
   // A numeric segment this long is a release date (20260514), not a version.

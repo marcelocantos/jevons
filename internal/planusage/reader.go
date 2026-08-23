@@ -20,6 +20,11 @@ import (
 // silently fails to apply looks identical to a backend that publishes nothing.
 const GrokUsageEnv = "CLAUDIA_GROK_USAGE"
 
+// CursorUsageEnv is claudia's opt-in for the undocumented Cursor dashboard
+// usage surface (CLAUDIA_CURSOR_USAGE). Same detach/inherit rationale as
+// GrokUsageEnv.
+const CursorUsageEnv = "CLAUDIA_CURSOR_USAGE"
+
 // FetchFunc is the producer seam: one round of readings, one per backend.
 // The real implementation is claudia.QueryAllPlanUsage; the oracle supplies
 // fixtures. Nothing else in this package knows an endpoint exists.
@@ -44,6 +49,8 @@ type ReaderArgs struct {
 	Now func() time.Time
 	// GrokUnstableUsage opts into claudia's undocumented Grok billing read.
 	GrokUnstableUsage bool
+	// CursorUnstableUsage opts into claudia's undocumented Cursor usage read.
+	CursorUnstableUsage bool
 	// FetchTimeout bounds one round of provider calls. Zero uses 20s.
 	FetchTimeout time.Duration
 	// FixturePath, when set, makes Snapshot read that JSON file instead
@@ -67,16 +74,23 @@ type Reader struct {
 	readings []claudia.PlanUsage
 	fetched  bool
 	lastErr  string
+
+	// ready is closed on the first successful Refresh so GET /api/plan-usage
+	// can long-poll until the first batch lands instead of returning pending.
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 // NewReader builds a Reader. It does not fetch — call Refresh or Run.
 func NewReader(args ReaderArgs) *Reader {
 	if args.Fetch == nil {
 		grok := args.GrokUnstableUsage || os.Getenv(GrokUsageEnv) == "1"
+		cursor := args.CursorUnstableUsage || os.Getenv(CursorUsageEnv) == "1"
 		args.Fetch = func(ctx context.Context) ([]claudia.PlanUsage, error) {
 			return claudia.QueryAllPlanUsage(ctx, &claudia.AllPlanUsageArgs{
-				Providers:         SupportedProviders(),
-				GrokUnstableUsage: grok,
+				Providers:           SupportedProviders(),
+				GrokUnstableUsage:   grok,
+				CursorUnstableUsage: cursor,
 			})
 		}
 	}
@@ -92,7 +106,7 @@ func NewReader(args ReaderArgs) *Reader {
 	if args.FetchTimeout <= 0 {
 		args.FetchTimeout = 20 * time.Second
 	}
-	return &Reader{args: args}
+	return &Reader{args: args, ready: make(chan struct{})}
 }
 
 // Refresh performs one round of readings and replaces the cache.
@@ -114,6 +128,7 @@ func (r *Reader) Refresh(ctx context.Context) error {
 	r.readings = readings
 	r.fetched = true
 	r.lastErr = ""
+	r.readyOnce.Do(func() { close(r.ready) })
 	return nil
 }
 
@@ -158,6 +173,26 @@ func (r *Reader) Snapshot() Snapshot {
 		snap.Error = lastErr
 	}
 	return snap
+}
+
+// WaitReady blocks until the first successful Refresh completes, or until
+// ctx is done. It is the long-poll seam for GET /api/plan-usage: when the
+// snapshot is still Pending, the handler waits here instead of returning an
+// empty "waiting for the first reading" payload on every short poll.
+//
+// Already-ready and fixture-backed snapshots return immediately. A whole-
+// query failure does not unblock — only a successful fetch does — so a
+// caller that times out still sees Pending and can retry.
+func (r *Reader) WaitReady(ctx context.Context) error {
+	if !r.Snapshot().Pending {
+		return nil
+	}
+	select {
+	case <-r.ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Run refreshes immediately and then on the poll interval until ctx ends.

@@ -32,8 +32,13 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		// parse failure still comes back unavailable with a reason —
 		// never a fabricated percent.
 		GrokUnstableUsage: true,
+		// claudia v0.26: Cursor period usage is the same shape of opt-in
+		// (undocumented dashboard RPC). Cockpit opts in so a Cursor seat
+		// paints a real bar; failure stays unavailable with a reason.
+		CursorUnstableUsage: true,
 	})
 	srv.SetPlanUsageSource(func() any { return reader.Snapshot() })
+	srv.SetPlanUsageWaitReady(reader.WaitReady)
 	mcpSrv.SetPlanUsageSource(func() planusage.Snapshot { return reader.Snapshot() })
 	srv.SetPlanSweep(func() any { return mcpSrv.SweepPlanPolicy() })
 	go reader.Run(ctx)
@@ -56,6 +61,8 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		"stale_after", planusage.DefaultStaleAfter,
 		"grok_usage", true,
 		"grok_opt_in_env", planusage.GrokUsageEnv,
+		"cursor_usage", true,
+		"cursor_opt_in_env", planusage.CursorUsageEnv,
 	)
 	return reader
 }

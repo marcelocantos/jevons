@@ -23,10 +23,11 @@ func attachFixtures(t *testing.T, name, url string) mcpattach.Args {
 		ClaudeJSON: filepath.Join(dir, "claude.json"),
 		GrokTOML:   filepath.Join(dir, "grok.toml"),
 		CodexTOML:  filepath.Join(dir, "codex.toml"),
+		CursorJSON: filepath.Join(dir, "cursor.json"),
 	}
 }
 
-func TestT464DailyDaemonEnsuresAllThreeBackends(t *testing.T) {
+func TestT464DailyDaemonEnsuresAllFourBackends(t *testing.T) {
 	cfg := config.Default()
 	a := attachFixtures(t, mcpscope.ServerName, mcpscope.DefaultEndpoint)
 	got := registerMCPEndpointsAt(cfg, "127.0.0.1", 13705, a)
@@ -37,7 +38,7 @@ func TestT464DailyDaemonEnsuresAllThreeBackends(t *testing.T) {
 	if !strings.Contains(string(raw), "13705/mcp") {
 		t.Fatalf("claude config missing live url: %s", raw)
 	}
-	for _, p := range []string{got.GrokTOML, got.CodexTOML} {
+	for _, p := range []string{got.GrokTOML, got.CodexTOML, got.CursorJSON} {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatal(err)

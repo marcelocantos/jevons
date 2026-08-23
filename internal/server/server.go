@@ -139,6 +139,9 @@ type Server struct {
 	// planUsageSource returns the subscription plan-usage picture for
 	// GET /api/plan-usage (🎯T390). Nil until the reader is wired.
 	planUsageSource func() any
+	// planUsageWaitReady blocks until the first plan-usage batch has landed
+	// (or ctx ends). Nil means handlePlanUsage returns pending immediately.
+	planUsageWaitReady func(ctx context.Context) error
 	// planSweep runs the 🎯T390.1.5 hot/exhausted migrate-or-park actuator.
 	planSweep func() any
 	// fleetMigrator backs POST /api/agents/migrate — the owner's manual

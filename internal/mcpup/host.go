@@ -116,6 +116,7 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 			ea.ClaudeJSON = args.EnsureArgs.ClaudeJSON
 			ea.GrokTOML = args.EnsureArgs.GrokTOML
 			ea.CodexTOML = args.EnsureArgs.CodexTOML
+			ea.CursorJSON = args.EnsureArgs.CursorJSON
 			ea.Providers = args.EnsureArgs.Providers
 		}
 		if err := ensure(&ea); err != nil {

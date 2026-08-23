@@ -42,6 +42,7 @@ func incidentAttach(t *testing.T) mcpattach.Args {
 		ClaudeJSON: claude,
 		GrokTOML:   filepath.Join(dir, "grok.toml"),
 		CodexTOML:  filepath.Join(dir, "codex.toml"),
+		CursorJSON: filepath.Join(dir, "cursor.json"),
 	}
 }
 
@@ -63,7 +64,7 @@ func TestT503DailyBootCorrectsStaleUserScope(t *testing.T) {
 	if scope != mcpscope.ScopeUser || entry.URL != mcpscope.DefaultEndpoint {
 		t.Fatalf("scope=%q url=%q", scope, entry.URL)
 	}
-	for _, p := range []string{a.GrokTOML, a.CodexTOML} {
+	for _, p := range []string{a.GrokTOML, a.CodexTOML, a.CursorJSON} {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatal(err)

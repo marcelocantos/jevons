@@ -127,6 +127,7 @@ test('provider and window abbreviations match the owner pin', function () {
   assert.strictEqual(PU.providerAbbrev('codex'), 'cx');
   assert.strictEqual(PU.providerAbbrev('grok'), 'gk');
   assert.strictEqual(PU.providerAbbrev('bedrock'), 'bd');
+  assert.strictEqual(PU.providerAbbrev('cursor'), 'cu');
   assert.strictEqual(PU.windowAbbrev('session'), 's');
   assert.strictEqual(PU.windowAbbrev('weekly'), 'w');
 });
@@ -339,7 +340,7 @@ test('a daemon without plan usage hides the line; a query failure states itself'
   assert.ok(pending.text.indexOf('waiting') >= 0,
     'before the first fetch, say so — distinct from every backend being unavailable: ' + pending.text);
   assert.strictEqual(PU.planPollMs(pending), PU.PLAN_POLL_PENDING_MS,
-    'waiting for the first reading polls every 5s');
+    'pending retry interval is 5s (after long-poll timeout)');
   assert.strictEqual(PU.PLAN_POLL_PENDING_MS, 5000);
   assert.strictEqual(PU.planPollMs(PU.formatPlanUsage(snapshot([claudeBackend()]), NOW)), PU.PLAN_POLL_MS,
     'a real reading goes back to the slow poll');
@@ -399,7 +400,7 @@ test('index.html loads plan_usage.js, fetches the API, and paints chips', functi
   assert.ok(html.indexOf('/api/plan-usage/thresholds') >= 0, 'must fetch T390.1.6 vertices once');
   assert.ok(html.indexOf('id="plan-ticker"') >= 0, 'must have somewhere to render it');
   assert.ok(html.indexOf('planPollMs') >= 0, 'must pace the poll from the painted view');
-  assert.ok(html.indexOf('schedulePlanUsage') >= 0, 'must reschedule so pending uses 5s');
+  assert.ok(html.indexOf('schedulePlanUsage') >= 0, 'must reschedule so a timed-out pending long-poll retries at 5s');
 });
 
 test('index.html mounts the plan bar in #status next to #theme-toggle, not the RHS', function () {

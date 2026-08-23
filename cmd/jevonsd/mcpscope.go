@@ -17,9 +17,9 @@ import (
 
 // registerMCPEndpoints puts jevonsmcp on every Session backend after bind
 // (🎯T379: URL from the live listener). Claudia EnsureMCP writes Claude,
-// Grok, and Codex native configs; LoadMCP+append is the session list.
-// Isolates write only under state_dir/mcp so they cannot leak a throwaway
-// port into the owner's user-scope files.
+// Grok, Codex, and Cursor native configs; LoadMCP+append is the session
+// list. Isolates write only under state_dir/mcp so they cannot leak a
+// throwaway port into the owner's user-scope files.
 func registerMCPEndpoints(cfg config.Config, host string, port int) mcpattach.Args {
 	return registerMCPEndpointsAt(cfg, host, port, fleetMCPAttach(cfg, host, port))
 }
@@ -36,6 +36,7 @@ func fleetMCPAttach(cfg config.Config, host string, port int) mcpattach.Args {
 	a.ClaudeJSON = filepath.Join(dir, "claude.json")
 	a.GrokTOML = filepath.Join(dir, "grok.toml")
 	a.CodexTOML = filepath.Join(dir, "codex.toml")
+	a.CursorJSON = filepath.Join(dir, "cursor.json")
 	a.Isolate = true
 	return a
 }
@@ -49,7 +50,7 @@ func registerMCPEndpointsAt(cfg config.Config, host string, port int, a mcpattac
 			"name", a.Name, "url", a.URL, "err", err)
 		return a
 	}
-	slog.Info("jevonsmcp ensured on Claude, Grok, and Codex configs",
+	slog.Info("jevonsmcp ensured on Claude, Grok, Codex, and Cursor configs",
 		"name", a.Name, "url", a.URL, "isolate", a.Isolate)
 	return a
 }
@@ -70,11 +71,12 @@ func overseerMCPServerSpec(cfg config.Config, host string, port int) (name, url 
 // and reseeds durable OAuth tokens for silent refresh (🎯T520).
 func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, port int, attach mcpattach.Args) *mcpup.Host {
 	load := &claudia.LoadMCPArgs{WorkDir: cfg.WorkDir}
-	if attach.ClaudeJSON != "" || attach.GrokTOML != "" || attach.CodexTOML != "" {
+	if attach.ClaudeJSON != "" || attach.GrokTOML != "" || attach.CodexTOML != "" || attach.CursorJSON != "" {
 		load = &claudia.LoadMCPArgs{
 			ClaudeJSON: attach.ClaudeJSON,
 			GrokTOML:   attach.GrokTOML,
 			CodexTOML:  attach.CodexTOML,
+			CursorJSON: attach.CursorJSON,
 			WorkDir:    cfg.WorkDir,
 		}
 	}
@@ -104,11 +106,12 @@ func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, 
 		Store:      store,
 		Upstreams:  upstreams,
 	}
-	if attach.ClaudeJSON != "" || attach.GrokTOML != "" || attach.CodexTOML != "" {
+	if attach.ClaudeJSON != "" || attach.GrokTOML != "" || attach.CodexTOML != "" || attach.CursorJSON != "" {
 		args.EnsureArgs = &claudia.EnsureMCPArgs{
 			ClaudeJSON: attach.ClaudeJSON,
 			GrokTOML:   attach.GrokTOML,
 			CodexTOML:  attach.CodexTOML,
+			CursorJSON: attach.CursorJSON,
 		}
 	}
 	h, err := mcpup.Mount(mux, args)

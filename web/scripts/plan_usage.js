@@ -40,9 +40,11 @@
   const STATUS_AVAILABLE = 'available';
   const STATUS_UNAVAILABLE = 'unavailable';
 
-  // Steady-state poll is slow: a plan window is hours long. While the
-  // header still says "waiting for the first reading", poll every 5s
-  // so a just-booted daemon is not stuck on that line for a minute.
+  // Steady-state poll is slow: a plan window is hours long. GET
+  // /api/plan-usage long-polls while the first batch is still pending, so
+  // the "waiting" paint is usually replaced when that request returns.
+  // PLAN_POLL_PENDING_MS is only the retry gap after a long-poll times out
+  // still pending — not a busy-poll for the first reading itself.
   const PLAN_POLL_MS = 60000;
   const PLAN_POLL_PENDING_MS = 5000;
 
@@ -133,7 +135,8 @@
     claude: 'cl',
     codex: 'cx',
     grok: 'gk',
-    bedrock: 'bd'
+    bedrock: 'bd',
+    cursor: 'cu'
   };
   const WINDOW_ABBREV = {
     session: 's',
@@ -143,11 +146,13 @@
     claude: 0,
     codex: 1,
     grok: 2,
-    bedrock: 3
+    bedrock: 3,
+    cursor: 4
   };
 
   // Same company map as model_prefix.js — claude and bedrock share the
-  // Anthropic splat; grok wears the Grok mark; codex wears OpenAI.
+  // Anthropic splat; grok wears the Grok mark; codex wears OpenAI;
+  // cursor is its own mark (abbrev when no icon is wired).
   const PROVIDER_COMPANY = {
     claude: 'anthropic',
     anthropic: 'anthropic',
@@ -155,7 +160,8 @@
     grok: 'xai',
     xai: 'xai',
     codex: 'openai',
-    openai: 'openai'
+    openai: 'openai',
+    cursor: 'cursor'
   };
 
   /**
