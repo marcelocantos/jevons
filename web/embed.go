@@ -65,4 +65,5 @@ import "embed"
 //go:embed scripts/cost_display.js
 //go:embed scripts/plan_usage.js
 //go:embed scripts/tool_tooltip.js
+//go:embed scripts/idle_monitor.js
 var FS embed.FS

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/worktreereap"
 )
 
 // 🎯T467: provenance describes the tree the command ran in, not the launcher.
@@ -24,6 +26,9 @@ func twoTrees(t *testing.T) (dirty, clean, head string) {
 	scratch := t.TempDir()
 	clean = filepath.Join(scratch, "clean")
 	fixtureGit(t, dirty, "worktree", "add", "--detach", clean, "HEAD")
+	if err := worktreereap.Mark(&worktreereap.MarkArgs{Worktree: clean, Note: t.Name()}); err != nil {
+		t.Fatalf("mark worktree: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = runGit(dirty, "worktree", "remove", "--force", clean)
 		_, _ = runGit(dirty, "worktree", "prune")
