@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope
+all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope claudiapin
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -183,6 +183,14 @@ buildsnap: bin/buildsnap
 bin/buildsnap: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/buildsnap ./cmd/buildsnap
+
+# 🎯T448: daily-path claudia pin check — names pin SHA + sibling commits missing.
+.PHONY: claudiapin
+claudiapin: bin/claudiapin
+
+bin/claudiapin: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/claudiapin ./cmd/claudiapin
 
 .PHONY: macos-head
 macos-head:

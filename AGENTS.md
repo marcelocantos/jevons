@@ -460,6 +460,15 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   session-scoped MCP list (app-server has no field); daily Codex
   seats get tools from `EnsureMCP` into `~/.codex/config.toml`.
   Build uses `../go.work` until a published claudia pin includes T40.
+- **Claudia pin seam (🎯T448):** `go.mod` pins the last *published*
+  claudia release. Local-master claudia (🎯T104) is consumed via
+  `../go.work` and buildsnap's snapshot sibling inject — not a committed
+  `replace` in `go.mod` (that breaks pristine clones and T254.2
+  snapshots). `bin/claudiapin` runs on the daily restart path: it names
+  the pin SHA and any sibling commits the pin is missing, and hard-fails
+  when required fleet commits (T28 send-submit, squash `a27d3fd` of
+  `2017074`/`aa71680`) are absent from the pin. Ship/push of claudia is
+  opt-in; until then the sibling path is the documented seam.
 
 ## Project structure
 

@@ -148,6 +148,7 @@ RUNLOCK="$ROOT/bin/runlock"
 # 🎯T254.2: the daemon is compiled from a detached worktree at HEAD, not from
 # the shared clone. Kept between runs so the Go build cache stays warm.
 BUILDSNAP="$ROOT/bin/buildsnap"
+CLAUDIAPIN="$ROOT/bin/claudiapin"
 SNAP_DIR="${JEVONS_RESTART_SNAP_DIR:-$HOME/.jevons/build-snapshot}"
 
 # 🎯T405 SELF-DETACH: re-exec into our own session before anything else,
@@ -612,6 +613,25 @@ if [[ "$SKIP_MAKE" != "1" ]]; then
 else
   log "skip make (JEVONS_RESTART_SKIP_MAKE=1)"
   [[ -x "$BIN" ]] || die "no binary at $BIN"
+fi
+
+# 🎯T448: prove the go.mod claudia pin against the sibling checkout.
+# Names the pin SHA and any sibling commits the pin is missing. Hard-fails
+# (die) when a required fleet commit (T28 send-submit) is absent from the
+# pin; LOUD-warns when the sibling is merely ahead of a sufficient pin
+# (daily still builds via ../go.work + buildsnap sibling inject).
+if [[ ! -x "$CLAUDIAPIN" ]]; then
+  (cd "$ROOT" && go build -o "$CLAUDIAPIN" ./cmd/claudiapin) || \
+    die "cannot build $CLAUDIAPIN — refusing a silent claudia pin"
+fi
+log "🎯T448 claudia pin check:"
+pin_rc=0
+pin_out="$("$CLAUDIAPIN" "$ROOT" 2>&1)" || pin_rc=$?
+printf '%s\n' "$pin_out" | while IFS= read -r line; do log "  $line"; done
+if [[ "$pin_rc" -eq 2 ]]; then
+  die "🎯T448 claudia pin missing required fleet commits — bump go.mod pin (see bin/claudiapin)"
+elif [[ "$pin_rc" -ne 0 ]]; then
+  die "🎯T448 claudiapin exited $pin_rc"
 fi
 
 # 🎯T218: the build is now current, so we can ask the only question that

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/claudiapin"
 )
 
 // Minimum published claudia the fleet's Goal ingest (🎯T510) needs.
@@ -45,11 +47,62 @@ func TestT448ClaudiaPinResolvesWithoutGoWork(t *testing.T) {
 	if got != pin {
 		t.Fatalf("GOWORK=off resolved %s, go.mod pin is %s", got, pin)
 	}
-	if strings.Contains(dir, filepath.Join("github.com", "marcelocantos", "claudia") ) && !strings.Contains(dir, "@") {
+	if strings.Contains(dir, filepath.Join("github.com", "marcelocantos", "claudia")) && !strings.Contains(dir, "@") {
 		t.Fatalf("GOWORK=off still using the sibling checkout %s — pin did not resolve to the module cache", dir)
 	}
 	if !strings.Contains(dir, "@"+pin) {
 		t.Fatalf("GOWORK=off Dir = %s, want module cache @%s", dir, pin)
+	}
+}
+
+// TestT448PinContainsT28AndDailyCheckIsWired is the load-bearing T448
+// ratchet: the published pin contains the T28 send-submit squash, the
+// seam decision is recorded, and restart-daily invokes bin/claudiapin.
+func TestT448PinContainsT28AndDailyCheckIsWired(t *testing.T) {
+	root := repoRoot(t)
+
+	r, err := claudiapin.Check(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claudiapin.HardFail(r) {
+		t.Fatalf("pin %s missing required fleet commits: %v\n%s",
+			r.PinVersion, r.MissingRequired, claudiapin.FormatHuman(r))
+	}
+	if r.PinSHA == "" {
+		t.Fatal("expected pin SHA resolved via sibling claudia checkout")
+	}
+	// T28 content marker in the published module cache (squash-safe).
+	modCache, err := exec.Command("go", "env", "GOMODCACHE").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := filepath.Join(strings.TrimSpace(string(modCache)),
+		"github.com", "marcelocantos", "claudia@"+r.PinVersion,
+		"internal", "tmuxagent", "send.go")
+	body, err := os.ReadFile(send)
+	if err != nil {
+		t.Fatalf("read pin send.go: %v", err)
+	}
+	if !strings.Contains(string(body), "composerHoldsUnsubmitted") {
+		t.Fatalf("pin %s send.go lacks composerHoldsUnsubmitted (T28)", r.PinVersion)
+	}
+
+	agents := readRepo(t, "AGENTS.md")
+	for _, want := range []string{"🎯T448", "bin/claudiapin", "go.work", "a27d3fd"} {
+		if !strings.Contains(agents, want) {
+			t.Fatalf("AGENTS.md missing T448 seam marker %q", want)
+		}
+	}
+	restart := readRepo(t, "scripts/restart-daily-jevonsd.sh")
+	for _, want := range []string{"CLAUDIAPIN", "bin/claudiapin", "🎯T448"} {
+		if !strings.Contains(restart, want) {
+			t.Fatalf("restart-daily missing %q", want)
+		}
+	}
+	makeBody := readRepo(t, "Makefile")
+	if !strings.Contains(makeBody, "bin/claudiapin") {
+		t.Fatal("Makefile missing bin/claudiapin")
 	}
 }
 
