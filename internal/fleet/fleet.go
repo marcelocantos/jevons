@@ -211,7 +211,11 @@ func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia
 // CodexWorkSandbox is the Session sandbox a mint should request.
 // Codex work agents need workspace-write (claudia 🎯T37); asides and
 // other providers stay empty so claudia's read-only default holds.
-func CodexWorkSandbox(prov claudia.Provider, purpose string) string {
+// role=auditor is always read-only (🎯T536.2) even when purpose=work.
+func CodexWorkSandbox(prov claudia.Provider, purpose, role string) string {
+	if strings.EqualFold(strings.TrimSpace(role), "auditor") {
+		return ""
+	}
 	if prov != claudia.ProviderCodex {
 		return ""
 	}
@@ -291,7 +295,7 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 			AutoStart:    true,
 			Parent:       t.Parent,
 			Purpose:      purpose,
-			SandboxMode:  CodexWorkSandbox(prov, purpose),
+			SandboxMode:  CodexWorkSandbox(prov, purpose, ""),
 			Goal:         WorkSessionGoal(purpose, "", t.Description, true),
 			MCPServers:   f.SessionMCPServers(prov, t.WorkDir),
 			MCPExclusive: mcpattach.Exclusive,

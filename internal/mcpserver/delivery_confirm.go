@@ -192,7 +192,16 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 	if s.fleetBriefed == nil {
 		s.fleetBriefed = map[string]bool{}
 	}
-	text, injected := EnsureFleetBrief(s.fleetBriefed, name, prompt)
+	roleBody := ""
+	if s.registry != nil {
+		if d := s.registry.Def(name); d != nil {
+			roleName := s.roleDisplay(*d)
+			if def, err := s.resolveRoleDef(roleName); err == nil {
+				roleBody = def.Body
+			}
+		}
+	}
+	text, injected := EnsureFleetBriefWithRole(s.fleetBriefed, name, prompt, roleBody)
 	s.mu.Unlock()
 	if injected {
 		// Same inject-once as first agent_send so start-with-prompt does

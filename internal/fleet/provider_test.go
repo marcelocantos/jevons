@@ -16,17 +16,20 @@ import (
 )
 
 func TestCodexWorkSandbox(t *testing.T) {
-	if got := CodexWorkSandbox(claudia.ProviderCodex, claudia.PurposeWork); got != "workspace-write" {
+	if got := CodexWorkSandbox(claudia.ProviderCodex, claudia.PurposeWork, ""); got != "workspace-write" {
 		t.Fatalf("work = %q", got)
 	}
-	if got := CodexWorkSandbox(claudia.ProviderCodex, ""); got != "workspace-write" {
+	if got := CodexWorkSandbox(claudia.ProviderCodex, "", ""); got != "workspace-write" {
 		t.Fatalf("empty purpose (work default) = %q", got)
 	}
-	if got := CodexWorkSandbox(claudia.ProviderCodex, claudia.PurposeAside); got != "" {
+	if got := CodexWorkSandbox(claudia.ProviderCodex, claudia.PurposeAside, ""); got != "" {
 		t.Fatalf("aside = %q", got)
 	}
-	if got := CodexWorkSandbox(claudia.ProviderClaude, claudia.PurposeWork); got != "" {
+	if got := CodexWorkSandbox(claudia.ProviderClaude, claudia.PurposeWork, ""); got != "" {
 		t.Fatalf("claude = %q", got)
+	}
+	if got := CodexWorkSandbox(claudia.ProviderCodex, claudia.PurposeWork, "auditor"); got != "" {
+		t.Fatalf("auditor must be read-only, got %q", got)
 	}
 }
 

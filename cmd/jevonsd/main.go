@@ -632,6 +632,11 @@ func main() {
 		slog.Error("fleet intent store failed", "err", err)
 		os.Exit(1)
 	}
+	// 🎯T536.2: agent-name → role assignments (sidecar; inspectable via agent_list).
+	if err := mcpSrv.OpenRoleAssignments(cfg.StateDir); err != nil {
+		slog.Error("role assignments store failed", "err", err)
+		os.Exit(1)
+	}
 	// 🎯T406: HTTP/chat surfaces observe provider refusals into the same
 	// fleet-intent store so a spend wall stands the fleet down and a
 	// successful call clears it.

@@ -23,6 +23,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
+	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
@@ -63,6 +64,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
+			mcp.WithString("role", mcp.Description("Declarative fleet role (🎯T511 / 🎯T536.2): worker (default for Build), auditor (read-only ledger challenger), product-owner, boss, aside, overseer. Registry records the role; built-ins cannot be deleted. Empty → default from purpose/name.")),
 			mcp.WithString("target_id", mcp.Description("Optional bullseye target id this agent is engaged on (e.g. T10.2). Written to registry as target_id for Frontier engagement overlay (🎯T198). Empty = not mission-bound.")),
 			mcp.WithBoolean("force_engage", mcp.Description("If true, allow a second work agent on an already-engaged or closed target (deliberate override 🎯T222). Default false.")),
 			mcp.WithString("prompt", mcp.Description("Optional opening brief delivered after Launch. Confirmed turn-begin required — empty pane / unsubmitted paste fails the tool loudly (🎯T305). Prefer this over start-then-send for unattended spawns.")),
@@ -171,8 +173,8 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if purpose == "" {
 			purpose = claudia.PurposeWork
 		}
-		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s parent=%-12s %s (session: %s)\n",
-			d.Name, status, purpose, parent, d.WorkDir, sessionDisplay(d.SessionID))
+		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s role=%-14s parent=%-12s %s (session: %s)\n",
+			d.Name, status, purpose, s.roleDisplay(d), parent, d.WorkDir, sessionDisplay(d.SessionID))
 	}
 	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
 	// missions should have fan-out — visible without only RHS eyeballing.
@@ -218,6 +220,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	actor, _ := args["actor"].(string)
 	parent, _ := args["parent"].(string)
 	purpose, _ := args["purpose"].(string)
+	roleArg, _ := args["role"].(string)
 	targetID, _ := args["target_id"].(string)
 	prompt, _ := args["prompt"].(string)
 	// Aliases: text / brief for start prompt (🎯T305).
@@ -337,6 +340,20 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	life["purpose"] = purpose
 
+	// 🎯T511 / 🎯T536.2: resolve declarative role (explicit or purpose/name default).
+	roleName := strings.TrimSpace(strings.ToLower(roleArg))
+	if roleName == "" {
+		roleName = roles.DefaultForPurpose(purpose, name)
+	}
+	resolved, err := s.resolveRoleDef(roleName)
+	if err != nil {
+		life["err"] = err.Error()
+		life["role"] = roleName
+		s.logLifecycle(compAgentLifecycle, "start", "error", life)
+		return mcp.NewToolResultError(fmt.Sprintf("role: %v", err)), nil
+	}
+	life["role"] = resolved.Name
+
 	// 🎯T222: work + target_id → no second implementer; closed targets refused.
 	if purpose == claudia.PurposeWork && targetID != "" {
 		if msg := s.refuseEngagedOrClosedTarget(name, workdir, targetID, forceEngage); msg != "" {
@@ -347,7 +364,13 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		}
 	}
 
+	s.mu.Lock()
+	s.pendingSpawnRole = resolved.Name
+	s.mu.Unlock()
 	def, existed, routeNote, err := s.stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID, prompt)
+	s.mu.Lock()
+	s.pendingSpawnRole = ""
+	s.mu.Unlock()
 	if err != nil {
 		life["err"] = err.Error()
 		life["existed"] = existed
@@ -439,6 +462,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 
 	life["session_id"] = sessionDisplay(def.SessionID)
 	life["purpose"] = def.Purpose
+	life["role"] = def.Role
 	life["parent"] = def.Parent
 	life["provider"] = string(def.Provider)
 	if def.TargetID != "" {
@@ -446,7 +470,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	s.logLifecycle(compAgentLifecycle, "start", "ok", life)
 
-	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), def.TargetID,
+	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), def.Role, def.TargetID,
 		string(def.Provider), def.Model, sessionDisplay(def.SessionID), routeNote, prompt)
 	msg += briefNote
 	// 🎯T379: the agent has just inherited the provider's user-scoped MCP
@@ -459,10 +483,10 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 
 // formatAgentStartResult is the owner-visible jevons_agent_start text.
 // 🎯T476: routeNote must already cite which knob selected the provider.
-func formatAgentStartResult(name, workdir, parent, purpose, targetID, provider, model, session, routeNote, prompt string) string {
+func formatAgentStartResult(name, workdir, parent, purpose, role, targetID, provider, model, session, routeNote, prompt string) string {
 	msg := fmt.Sprintf(
-		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, provider: %s",
-		name, session, workdir, parent, purpose, provider)
+		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, role: %s, provider: %s",
+		name, session, workdir, parent, purpose, role, provider)
 	if strings.TrimSpace(model) != "" {
 		msg += fmt.Sprintf(", model: %s", model)
 	}
@@ -491,6 +515,12 @@ func formatAgentStartResult(name, workdir, parent, purpose, targetID, provider, 
 func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID, prompt string) (*claudia.AgentDef, bool, string, error) {
 	if s == nil || s.registry == nil {
 		return nil, false, "", fmt.Errorf("no agent registry")
+	}
+	s.mu.Lock()
+	role := strings.TrimSpace(s.pendingSpawnRole)
+	s.mu.Unlock()
+	if role == "" {
+		role = roles.DefaultForPurpose(purpose, name)
 	}
 	existed := s.registry.Def(name) != nil
 	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
@@ -559,6 +589,13 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if !existed || def.Purpose == "" {
 		def.Purpose = purpose
 	}
+	// 🎯T511 / 🎯T536.2: role on mint; explicit pending role rebinds.
+	if !existed || def.Role == "" || (role != "" && role != def.Role) {
+		def.Role = role
+	}
+	if def.Role == "" {
+		def.Role = roles.DefaultForPurpose(def.Purpose, name)
+	}
 	// 🎯T198: target_id on mint, or when caller supplies a non-empty id (rebind).
 	if targetID != "" {
 		def.TargetID = targetID
@@ -568,8 +605,11 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if !existed {
 		def.Goal = fleet.WorkSessionGoal(def.Purpose, def.TargetID, prompt, def.AutoStart)
 		if def.SandboxMode == "" {
-			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose)
+			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose, def.Role)
 		}
+	} else if roles.Normalize(def.Role) == roles.Auditor {
+		// Auditor stays read-only even on remint.
+		def.SandboxMode = ""
 	}
 	// 🎯T528: remint must not reopen Continue when the Goal's TargetIDs
 	// are already achieved in the ledger (clear durable Goal).
@@ -586,6 +626,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if err := s.registry.Register(*def); err != nil {
 		return nil, existed, "", err
 	}
+	_ = s.recordAgentRole(name, def.Role)
 	if d := s.registry.Def(name); d != nil {
 		def = d
 	}
@@ -736,7 +777,16 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	if s.fleetBriefed == nil {
 		s.fleetBriefed = map[string]bool{}
 	}
-	text, injected := EnsureFleetBrief(s.fleetBriefed, name, text)
+	roleBody := ""
+	if s.registry != nil {
+		if d := s.registry.Def(name); d != nil {
+			roleName := s.roleDisplay(*d)
+			if def, err := s.resolveRoleDef(roleName); err == nil {
+				roleBody = def.Body
+			}
+		}
+	}
+	text, injected := EnsureFleetBriefWithRole(s.fleetBriefed, name, text, roleBody)
 	s.mu.Unlock()
 	if injected {
 		// 🎯T425: the brief is the daemon's own prose and it is almost entirely
@@ -867,6 +917,10 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		life["err"] = err.Error()
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", err)), nil
+	}
+	s.clearAgentRole(name)
+	for _, d := range desc {
+		s.clearAgentRole(d)
 	}
 	restarted := s.restartHeldSendqForDrain(held, newParent, actor)
 	life["descendants"] = len(desc)

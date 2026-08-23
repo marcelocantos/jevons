@@ -3,7 +3,11 @@
 
 package mcpserver
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/marcelocantos/jevons/internal/roles"
+)
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
@@ -48,16 +52,16 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Non-trivial Build missions run a scout pass first: spawn-brief with
   "jevons: phase scout" (or a dedicated scout seat), then implement with
   "jevons: phase implement".
-- Scout terminals are "jevons: kind scout-report" carrying the T536.1
+- Scout terminals are "jevons: kind scout-report" carrying the 🎯T536.1
   ledger plus fog-known / fog-unknown / fog-blindspot — NOT a
   finish-report. A scout with no implementation commits must not be
-  reaped as product-done (T165/T195).
+  reaped as product-done (🎯T165/🎯T195).
 - The implementer spawn-brief may inherit the scout ledger
   (envelope.InheritLedger). Decision tables live on the ledger, not
   only in chat.
-- Skip rules still hold: design-gated, parked-for-design, T31.2 fuzzy
-  regions, host saturation (T460). Scout does not punch through those
-  into implementation. Not T254.3 plan steps; not a next-ticket queue.
+- Skip rules still hold: design-gated, parked-for-design, 🎯T31.2 fuzzy
+  regions, host saturation (🎯T460). Scout does not punch through those
+  into implementation. Not 🎯T254.3 plan steps; not a next-ticket queue.
 
 ## Cited SHA must stay reachable (🎯T427)
 - Before you cite a commit SHA as evidence, prove it is still reachable:
@@ -113,12 +117,12 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   instructional + pure HasDailyPathEvidence; not a hard achieve block.
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
-- After any change that can affect what the owner sees in #messages
-  (pin, virtualize, replay, fold, slot mint, spacing), take a viewport
-  screenshot and write a short visual verdict BEFORE claiming done or
-  achieving: what ink is on screen, how much of the pane is empty,
-  whether Latest is showing, and the sentence yes or no to "does this
-  look like a normal chat transcript after a hard reload?"
+- After any change that can affect what the owner sees in #messages /
+  the React transcript pane in ui/ (🎯T540) — pin, virtualize, replay,
+  fold, slot mint, spacing — take a viewport screenshot and write a short
+  visual verdict BEFORE claiming done or achieving: what ink is on
+  screen, how much of the pane is empty, whether Latest is showing, and
+  the sentence yes or no to "does this look like a normal chat transcript after a hard reload?"
 - A metric that is already green cannot be that verdict.
   visibleInScroller ≥ 1, modelRows = N, and a screenshot-tool caption
   are not answers. One leftover bubble in a tall pane, Latest on a
@@ -128,6 +132,12 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   test cannot see.
 - Residual: instructional + pure HasVisualProseVerdict /
   LooksLikeMissingVisualVerdict; not a hard daemon block.
+
+## Cockpit UI path (🎯T540)
+- Product owner-visible UI work lands in ui/ (Vite + React). web/ is
+  deprecated reference-only — parity oracle, not the place to ship
+  features. Daily :13705 may still serve vanilla until cutover (🎯T505 /
+  🎯T540.2). make ui-dev → :5173.
 
 ## Greenfield oracle elicitation (🎯T31.2)
 - For NEW software (no external reference), co-develop an oracle-coverage
@@ -280,6 +290,13 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 // EnsureFleetBrief prefixes text with FleetStandingBrief when this is the
 // first send to name in this process. already maps agent name → briefed.
 func EnsureFleetBrief(already map[string]bool, name, text string) (out string, injected bool) {
+	return EnsureFleetBriefWithRole(already, name, text, "")
+}
+
+// EnsureFleetBriefWithRole is EnsureFleetBrief plus optional role doctrine
+// between the universal standing brief and the mission text (🎯T511 /
+// 🎯T536.2). roleBody empty keeps the pre-role shape.
+func EnsureFleetBriefWithRole(already map[string]bool, name, text, roleBody string) (out string, injected bool) {
 	if already == nil {
 		return text, false
 	}
@@ -292,5 +309,8 @@ func EnsureFleetBrief(already map[string]bool, name, text string) (out string, i
 		return text, false
 	}
 	already[name] = true
-	return FleetStandingBrief + text, true
+	if strings.TrimSpace(roleBody) == "" {
+		return FleetStandingBrief + text, true
+	}
+	return roles.Assemble(FleetStandingBrief, roleBody, text), true
 }

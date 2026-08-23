@@ -9,6 +9,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/briefaddr"
+	"github.com/marcelocantos/jevons/internal/roles"
 )
 
 // Identity header (🎯T425).
@@ -38,6 +39,7 @@ const (
 	RoleProductOwner = "product owner"
 	RoleWork         = "work agent"
 	RoleAside        = "aside"
+	RoleAuditor      = "auditor"
 )
 
 // IdentityHeaderMarker opens the header. Callers test for it to stay
@@ -57,13 +59,26 @@ type AgentIdentity struct {
 
 // DeriveAgentRole answers which role doctrine binds this recipient.
 //
-// purpose=overseer and purpose=aside are authoritative when set. Otherwise the
+// Explicit AgentDef.Role (🎯T511 / 🎯T536.2) wins when set. Otherwise
+// purpose=overseer and purpose=aside are authoritative. Otherwise the
 // name decides: a registry that stores purpose=work for every PO cannot
 // distinguish the stratum, and isPOName is the same heuristic the staff-ops
 // idle count already trusts. Residual: an agent named without the -po suffix
 // that is nevertheless a product owner reads as a work agent (🎯T200 path
 // portfolios are the richer answer, and are not wired here).
-func DeriveAgentRole(name, purpose string) string {
+func DeriveAgentRole(name, purpose, role string) string {
+	switch roles.Normalize(role) {
+	case roles.Auditor:
+		return RoleAuditor
+	case roles.ProductOwner:
+		return RoleProductOwner
+	case roles.Overseer:
+		return RoleOverseer
+	case roles.Aside:
+		return RoleAside
+	case roles.Worker, roles.Boss:
+		return RoleWork
+	}
 	switch strings.TrimSpace(strings.ToLower(purpose)) {
 	case claudia.PurposeOverseer:
 		return RoleOverseer
@@ -80,7 +95,7 @@ func DeriveAgentRole(name, purpose string) string {
 func IdentityFromDef(d claudia.AgentDef) AgentIdentity {
 	return AgentIdentity{
 		Name:     strings.TrimSpace(d.Name),
-		Role:     DeriveAgentRole(d.Name, d.Purpose),
+		Role:     DeriveAgentRole(d.Name, d.Purpose, d.Role),
 		Purpose:  strings.TrimSpace(d.Purpose),
 		Parent:   strings.TrimSpace(d.Parent),
 		WorkDir:  strings.TrimSpace(d.WorkDir),
@@ -105,7 +120,7 @@ func FormatIdentityHeader(id AgentIdentity) string {
 	}
 	role := strings.TrimSpace(id.Role)
 	if role == "" {
-		role = DeriveAgentRole(name, id.Purpose)
+		role = DeriveAgentRole(name, id.Purpose, "")
 	}
 
 	var b strings.Builder
@@ -182,6 +197,13 @@ func roleAddressedDoctrine(name, role string) string {
 	case RoleAside:
 		fmt.Fprintf(&b, "\nYou are %s, an aside — a side-chat participant, not a Build worker. "+
 			"Answer in place; do not spawn workers or commit product changes.\n", name)
+	case RoleAuditor:
+		fmt.Fprintf(&b, "\nYou are %s, an auditor (🎯T536.2). These bind YOU:\n", name)
+		b.WriteString("- You are not the implementer of the work under review. Do not write or " +
+			"patch that product code; do not fix to make the report look clean.\n")
+		b.WriteString("- Challenge the silent-decision ledger (🎯T536.1 / ReadSilentLedger), not " +
+			"the implementation diff as the primary surface.\n")
+		b.WriteString("- Report findings up. Do not file bullseye — root/PO decide.\n")
 	default:
 		fmt.Fprintf(&b, "\nYou are %s, a work agent. These bind YOU:\n", name)
 		b.WriteString("- 🎯T125 is NOT yours — it binds product owners. You are the executor: " +

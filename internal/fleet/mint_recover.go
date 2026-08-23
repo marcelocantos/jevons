@@ -56,7 +56,7 @@ func agentDefFromPending(p handover.Pending) claudia.AgentDef {
 		Parent:       p.Parent,
 		Purpose:      purpose,
 		TargetID:     p.TargetID,
-		SandboxMode:  CodexWorkSandbox(prov, purpose),
+		SandboxMode:  CodexWorkSandbox(prov, purpose, ""),
 		Goal:         goal,
 		MCPExclusive: mcpattach.Exclusive,
 		Materialized: false,

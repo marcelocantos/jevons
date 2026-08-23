@@ -373,7 +373,7 @@ func TestT425DeriveAgentRole(t *testing.T) {
 		// naming heuristic.
 		{"weird-po", claudia.PurposeOverseer, RoleOverseer},
 	} {
-		if got := DeriveAgentRole(tc.name, tc.purpose); got != tc.want {
+		if got := DeriveAgentRole(tc.name, tc.purpose, ""); got != tc.want {
 			t.Errorf("DeriveAgentRole(%q, %q) = %q, want %q", tc.name, tc.purpose, got, tc.want)
 		}
 	}

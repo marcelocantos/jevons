@@ -635,8 +635,26 @@ A green oracle with a **missing** silent-ledger (and no explicit `none`)
 is flagged, not treated as complete. Quality of the decisions is judgment;
 this rule is that the artifact exists and the independent gate can read it
 (`envelope.ReadSilentLedger`). Worker/boss doctrine requires the ledger on
-terminal reports (role files when 🎯T511 lands; until then agents-guide +
-fleet standing brief).
+terminal reports (role files under `internal/roles/builtin/` when spawned
+with a role; otherwise agents-guide + fleet standing brief).
+
+## Auditor role (🎯T536.2)
+
+Spawn a read-only challenger of the silent-decision ledger:
+
+```
+jevons_agent_start name=… workdir=… role=auditor parent=jevons-po …
+```
+
+Built-in role files live in `internal/roles/` (`builtin/auditor.md` and
+siblings). Owner overrides: `~/.jevons/roles/` (or `$JEVONS_ROLES_DIR`).
+Override wins; built-ins cannot be deleted. The registry records
+`role=` (AgentDef + `state_dir/agent_roles.json`); `jevons_agent_list`
+surfaces it. Instruction assembly is universal fleet brief + role body +
+mission — auditor doctrine is in the role file, not as if-you-are-X in the
+shared brief. Residual: hard daemon git-write block may follow; first slice
+is role + doctrine + a different seat from the implementer.
+
 
 ### Fog-of-war scout (🎯T536.3)
 
@@ -776,10 +794,10 @@ bullseye achieve.
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 
-After any change that can affect what the owner sees in `#messages`
-(pin, virtualize, replay, fold, slot mint, spacing), take a viewport
-screenshot and write a short visual verdict **before** claiming done or
-achieving:
+After any change that can affect what the owner sees in `#messages` / the
+React transcript pane in **`ui/`** (pin, virtualize, replay, fold, slot
+mint, spacing) — the product cockpit (🎯T540) — take a viewport screenshot
+and write a short visual verdict **before** claiming done or achieving:
 
 1. What ink is on screen.
 2. How much of the pane is empty.
@@ -798,6 +816,14 @@ test cannot see.
 Pure helpers: `HasVisualProseVerdict` / `LooksLikeMissingVisualVerdict`
 (`internal/mcpserver`). **Residual:** instructional + pure classifier;
 not a hard daemon block of bullseye achieve.
+
+## Cockpit UI path (🎯T540) — hard doctrine
+
+Product owner-visible UI work lands in **`ui/`** (Vite + React). **`web/`
+is deprecated reference-only** — use it to judge parity, not to ship new
+behaviour. Daily `:13705` may still serve vanilla until cutover (🎯T505 /
+🎯T540.2); that is not licence to edit vanilla for features. Run React with
+`make ui-dev` (`:5173`).
 
 ## Configuration
 
