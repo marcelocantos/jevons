@@ -107,6 +107,7 @@
   // this against the sources and fails if a module drifts out of the rule
   // without an entry here.
   var NAME_EXCEPTIONS = {
+    clock: 'JevonsClock',
     jlog: 'jLog',
     owner_ux: 'OwnerUX',
     rsi_dispositions: 'RSIDispositions',
