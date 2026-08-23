@@ -85,7 +85,9 @@ func Run(args *RunArgs) (*Record, error) {
 	// output it left behind would read as uncommitted work of its own. A
 	// directory that is not a git work tree answers nil, which stays "unknown"
 	// and is never rounded up to clean (🎯T397).
-	rec.Tree = ProbeTree(args.Dir)
+	if dir, ok := ResolveMeasuredDir(args.Command, args.Dir); ok {
+		rec.Tree = ProbeTree(dir)
+	}
 	if rec.Tree != nil {
 		rec.Tree.Shared = args.SharedTree
 	}

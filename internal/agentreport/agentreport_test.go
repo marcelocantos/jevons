@@ -4,6 +4,8 @@
 package agentreport
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -245,6 +247,25 @@ func TestStoreRefusesUnsafeAgentNames(t *testing.T) {
 	// 🎯T197 names with literal dots are legitimate and must work.
 	if _, err := Save(dir, "jv-t27.2-config", "text", time.Now()); err != nil {
 		t.Errorf("Save rejected a legitimate dotted worker name: %v", err)
+	}
+}
+
+func TestDecodeBodyEnvelopeVsPlainText(t *testing.T) {
+	dir := t.TempDir()
+	text := "GATE t380-prefix-red exit=1 RED id=7ff7f677\n"
+	rec, err := Save(dir, "jv-t380-auto", text, time.Date(2026, 8, 14, 22, 43, 15, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, DirName, "jv-t380-auto", rec.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if DecodeBody(raw) != text {
+		t.Fatalf("envelope: got %q want %q", DecodeBody(raw), text)
+	}
+	if DecodeBody([]byte(text)) != text {
+		t.Fatal("plain text must pass through")
 	}
 }
 

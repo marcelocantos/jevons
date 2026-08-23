@@ -213,6 +213,17 @@ func Load(stateDir, agent, id string) (Record, error) {
 	return rec, nil
 }
 
+// DecodeBody returns the report text to scan (🎯T468). Stored reports are
+// JSON Record envelopes; scanning the file bytes matches escaped `\n` and
+// disagrees with the daemon. Plain-text input is returned unchanged.
+func DecodeBody(raw []byte) string {
+	var rec Record
+	if err := json.Unmarshal(raw, &rec); err == nil && rec.Text != "" {
+		return rec.Text
+	}
+	return string(raw)
+}
+
 // Latest returns an agent's most recent report. It does not consult the
 // registry, so it answers for an agent that has already deregistered —
 // acceptance 2 of 🎯T388.
