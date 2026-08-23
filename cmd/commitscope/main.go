@@ -1,16 +1,17 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Command commitscope is the pre-commit half of the shared-index guard
-// (🎯T377). It reads which index git is committing from, asks
-// internal/commitscope whether that index can contain paths this worker
-// never named, and refuses the commit when it can.
+// Command commitscope is the pre-commit guard for shared-index sweeps
+// (🎯T377) and stale private-index commits (🎯T457). It reads which index
+// git is committing from, asks internal/commitscope whether that commit
+// can silently misattribute or revert another worker's paths, and refuses
+// when it can.
 //
 // Exit status is the hook contract:
 //
 //	0  commit may proceed
 //	1  the guard itself could not run (never blocks work silently)
-//	2  refused — the commit would sweep the shared index
+//	2  refused — shared-index sweep or stale private-index base
 //
 // git treats any non-zero as a refusal; the split exists so a broken guard
 // is distinguishable from a working one at a glance.
@@ -53,10 +54,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "commitscope: cannot read the staged set: %v\n", err)
 		os.Exit(exitBroken)
 	}
+	indexFile := os.Getenv("GIT_INDEX_FILE")
+	var overwrite []string
+	if commitscope.Classify(indexFile) == commitscope.PrivateIndex && len(staged) > 0 {
+		overwrite, err = overwritePaths(staged)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "commitscope: cannot check private-index staleness: %v\n", err)
+			os.Exit(exitBroken)
+		}
+	}
 	v := commitscope.Decide(&commitscope.Request{
-		IndexFile: os.Getenv("GIT_INDEX_FILE"),
-		Staged:    staged,
-		Disabled:  commitscope.OffValue(os.Getenv(commitscope.DisableEnv)),
+		IndexFile:      indexFile,
+		Staged:         staged,
+		Disabled:       commitscope.OffValue(os.Getenv(commitscope.DisableEnv)),
+		OverwritePaths: overwrite,
+		BaseDisabled:   commitscope.OffValue(os.Getenv(commitscope.BaseDisableEnv)),
 	})
 	if !v.Refused {
 		os.Exit(exitAllow)
@@ -112,6 +124,30 @@ func stagedPaths() ([]string, error) {
 		return run("git", "ls-files", "--cached", "-z")
 	}
 	return run("git", "diff", "--cached", "--name-only", "-z")
+}
+
+// overwritePaths returns staged paths whose work tree still matches HEAD.
+// That is the 🎯T457 signature: the private index differs from HEAD on a
+// path the worker did not edit in the work tree — so the commit would
+// silently revert whatever landed since the read-tree that seeded it.
+// Intentional edits (work tree ≠ HEAD) are left alone.
+func overwritePaths(staged []string) ([]string, error) {
+	var out []string
+	for _, p := range staged {
+		cmd := exec.Command("git", "diff", "--quiet", "HEAD", "--", p)
+		err := cmd.Run()
+		if err == nil {
+			// Work tree matches HEAD → commit would overwrite landed content.
+			out = append(out, p)
+			continue
+		}
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+			// Work tree differs from HEAD — worker's own edit.
+			continue
+		}
+		return nil, fmt.Errorf("git diff --quiet HEAD -- %s: %w", p, err)
+	}
+	return out, nil
 }
 
 func run(name string, args ...string) ([]string, error) {

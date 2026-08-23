@@ -54,7 +54,15 @@ func TestDecideRefusesOnlyWhatCanMisattribute(t *testing.T) {
 		{"bare commit with foreign hunks staged", Request{IndexFile: "", Staged: staged}, true},
 		{"commit -a", Request{IndexFile: ".git/index.lock", Staged: staged}, true},
 		{"commit --only", Request{IndexFile: "/r/.git/next-index-9.lock", Staged: staged}, false},
-		{"private index", Request{IndexFile: "/r/.git/index-w", Staged: staged}, false},
+		{"private index, fresh seed", Request{IndexFile: "/r/.git/index-w", Staged: staged}, false},
+		{"private index, stale overwrite", Request{
+			IndexFile: "/r/.git/index-w", Staged: staged,
+			OverwritePaths: []string{"cmd/detach/main.go"},
+		}, true},
+		{"private index stale but base-disabled", Request{
+			IndexFile: "/r/.git/index-w", Staged: staged,
+			OverwritePaths: []string{"cmd/detach/main.go"}, BaseDisabled: true,
+		}, false},
 		{"nothing staged cannot misattribute", Request{IndexFile: "", Staged: nil}, false},
 		{"explicitly disabled", Request{IndexFile: "", Staged: staged, Disabled: true}, false},
 	} {
@@ -67,6 +75,32 @@ func TestDecideRefusesOnlyWhatCanMisattribute(t *testing.T) {
 				t.Errorf("allowed commit still produced a message: %q", v.Message)
 			}
 		})
+	}
+}
+
+// TestStaleRefusalNamesOverwritePaths pins the 🎯T457 message contract.
+func TestStaleRefusalNamesOverwritePaths(t *testing.T) {
+	v := Decide(&Request{
+		IndexFile:      "/r/.git/index-jv-t457",
+		Staged:         []string{"gate/runner.go", "cmd/detach/main.go"},
+		OverwritePaths: []string{"cmd/detach/main.go"},
+	})
+	if !v.Refused {
+		t.Fatal("stale private-index commit was allowed")
+	}
+	for _, want := range []string{
+		"🎯T457",
+		"cmd/detach/main.go",
+		"re-read-tree",
+		BaseDisableEnv,
+		"commitbase",
+	} {
+		if !strings.Contains(v.Message, want) {
+			t.Errorf("stale refusal omits %q:\n%s", want, v.Message)
+		}
+	}
+	if strings.Contains(v.Message, "🎯T377") {
+		t.Errorf("stale refusal misattributes to the shared-index guard:\n%s", v.Message)
 	}
 }
 

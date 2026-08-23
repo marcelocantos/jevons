@@ -129,6 +129,11 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
 - **Unified fleet (🎯T114):** aside is a kind of agent (purpose field);
   one deliver/send/push path by name for workers and asides; dual-write
   threads into the agent registry. Docs: persona + agents-guide.
+- **Fleet roles (🎯T511):** an agent is an instance spawned **as** a
+  **role** (type). Role files live in `internal/config/roles/` (owner
+  overlay `~/.jevons/roles/`); spawn takes `role=` (default `worker`).
+  Per-type doctrine (T125 / T129 / worker T31·T165·T195) is sourced
+  there — not as if-you-are-X prose in the shared fleet brief.
 - **Multi-slice fan-out (🎯T111.4):** PO/boss multi-slice missions
   `jevons_agent_start` children early (with parent lineage); solo is fine
   for single-agent tasks. Zero-children failure surfaces in agent_list.
@@ -294,18 +299,22 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   alone and reported as leaving the clone unguarded. Do **not** redirect
   `core.hooksPath` — that would disable git-lfs's own hooks. Sibling:
   🎯T376 (same root cause, working tree rather than index).
-- **Private-index commits re-check HEAD (🎯T432):** when `git commit --only`
-  cannot — a shared hot file (Makefile, AGENTS.md) still holds another
-  worker's uncommitted hunks, so the work tree is not a safe stage source —
-  use `bin/commitbase` (`internal/commitbase`), not a hand-rolled
-  `GIT_INDEX_FILE` + `read-tree` + `commit-tree`. A tree seeded from an
-  older HEAD does not omit what landed in between; it deletes it
-  (e66e934 silently reverted 🎯T405). `git update-ref <ref> <new> <old>`
-  alone is not enough: it guards the ref move, not the tree's base. The
-  recipe records the seed SHA, stages only named paths and exact blobs,
-  re-checks HEAD before `commit-tree`, and refuses when it moved — naming
-  the paths that would be overwritten. Escape: `JEVONS_COMMIT_BASE=off`.
-  Sibling of 🎯T376 / 🎯T377.
+- **Private-index commits re-check HEAD (🎯T432 / 🎯T457):** when
+  `git commit --only` cannot — a shared hot file (Makefile, AGENTS.md)
+  still holds another worker's uncommitted hunks, so the work tree is not
+  a safe stage source — use `bin/commitbase` (`internal/commitbase`), not
+  a hand-rolled `GIT_INDEX_FILE` + `read-tree` + `commit-tree`. A tree
+  seeded from an older HEAD does not omit what landed in between; it
+  deletes it (e66e934 silently reverted 🎯T405). `git update-ref <ref>
+  <new> <old>` alone is not enough: it guards the ref move, not the
+  tree's base. The recipe records the seed SHA, stages only named paths
+  and exact blobs, re-checks HEAD before `commit-tree`, and refuses when
+  it moved — naming the paths that would be overwritten. Escape:
+  `JEVONS_COMMIT_BASE=off`. **🎯T457** is the pre-commit half: a raw
+  `GIT_INDEX_FILE=… git commit` through `bin/commitscope` also refuses
+  when the private index would overwrite paths the work tree still holds
+  at HEAD (stale seed), names those paths, and says to re-read-tree and
+  re-apply — same escape. Sibling of 🎯T376 / 🎯T377.
 - **Run gates so the status survives (🎯T386 / 🎯T396):** a pipeline's exit
   status is the **last** command's, so `go test ./... | tail -20` reports
   tail's success — which is unconditional. That is how a suite that died on a

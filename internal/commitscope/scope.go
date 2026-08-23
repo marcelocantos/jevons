@@ -84,11 +84,16 @@ func (k IndexKind) String() string {
 // content from state other workers can write.
 func (k IndexKind) Sweeps() bool { return k == SharedIndex || k == SharedLock }
 
-// DisableEnv turns the guard off for one command. The owner committing by
-// hand in a quiet tree is a single actor and does not need it; `--no-verify`
-// works too. Named rather than silent so that a disabled guard is a
-// deliberate act that shows up in the command line.
+// DisableEnv turns the shared-index sweep guard off for one command. The
+// owner committing by hand in a quiet tree is a single actor and does not
+// need it; `--no-verify` works too. Named rather than silent so that a
+// disabled guard is a deliberate act that shows up in the command line.
 const DisableEnv = "JEVONS_COMMIT_SCOPE"
+
+// BaseDisableEnv turns the private-index HEAD-staleness check off (🎯T457).
+// Same spelling as commitbase.DisableEnv so one escape covers the blessed
+// recipe and the raw GIT_INDEX_FILE=… git commit path.
+const BaseDisableEnv = "JEVONS_COMMIT_BASE"
 
 // nextIndexPrefix is how git names the temporary index it builds for a
 // pathspec-scoped commit (builtin/commit.c writes "next-index-%d").
@@ -128,8 +133,15 @@ type Request struct {
 	// Staged is the set of paths the commit would contain, read from the
 	// effective index — not from the shared one.
 	Staged []string
-	// Disabled is DisableEnv set to an off value.
+	// Disabled is DisableEnv set to an off value (shared-index sweep).
 	Disabled bool
+	// OverwritePaths are staged paths whose work tree still matches HEAD —
+	// the signature of a private index seeded from an older HEAD that would
+	// silently revert what landed in between (🎯T457). Empty for shared /
+	// scoped commits; the hook only computes this for PrivateIndex.
+	OverwritePaths []string
+	// BaseDisabled is BaseDisableEnv set to an off value (staleness escape).
+	BaseDisabled bool
 }
 
 // Verdict is the decision plus the text the worker sees.
@@ -146,24 +158,31 @@ type Verdict struct {
 // way is enough.
 const MaxNamed = 20
 
-// Decide applies the rule. A commit is refused when it would carry staged
-// paths out of an index other workers can write into.
+// Decide applies the rules. A commit is refused when:
 //
-// Two cases pass that might look like they should not. An empty staged set
-// cannot misattribute anything (git will reject the commit itself, or it is
-// an `--amend` of the message alone). And a disabled guard passes by
-// construction — the point of the escape hatch is that it is explicit.
+//   - it would carry staged paths out of an index other workers can write
+//     into (🎯T377 shared-index sweep), or
+//   - it is built from a private index whose tree would overwrite paths the
+//     work tree still holds at HEAD — HEAD moved since the read-tree that
+//     seeded that index (🎯T457).
+//
+// An empty staged set cannot misattribute anything. Explicit DisableEnv /
+// BaseDisableEnv escapes pass by construction.
 func Decide(req *Request) Verdict {
 	kind := Classify(req.IndexFile)
-	switch {
-	case req.Disabled:
-		return Verdict{Kind: kind}
-	case len(req.Staged) == 0:
-		return Verdict{Kind: kind}
-	case !kind.Sweeps():
+	if req.Disabled {
 		return Verdict{Kind: kind}
 	}
-	return Verdict{Refused: true, Kind: kind, Message: refusal(kind, req.Staged)}
+	if len(req.Staged) == 0 {
+		return Verdict{Kind: kind}
+	}
+	if kind.Sweeps() {
+		return Verdict{Refused: true, Kind: kind, Message: refusal(kind, req.Staged)}
+	}
+	if kind == PrivateIndex && !req.BaseDisabled && len(req.OverwritePaths) > 0 {
+		return Verdict{Refused: true, Kind: kind, Message: staleRefusal(req.OverwritePaths)}
+	}
+	return Verdict{Kind: kind}
 }
 
 // howBuilt names the command that produced each sweeping index, so the
@@ -194,6 +213,26 @@ func refusal(kind IndexKind, staged []string) string {
 	b.WriteString("then confirm with:\n")
 	b.WriteString("  git show --stat HEAD\n\n")
 	fmt.Fprintf(&b, "Deliberate whole-index commit (single-actor tree): %s=off git commit …\n", DisableEnv)
+	return b.String()
+}
+
+func staleRefusal(overwrite []string) string {
+	var b strings.Builder
+	b.WriteString("commitscope: refusing private-index commit — HEAD moved since read-tree (🎯T457).\n\n")
+	b.WriteString("A tree built from the older seed does not omit what landed in between —\n")
+	b.WriteString("it DELETES / REVERTS it. The work tree still holds the newer HEAD content\n")
+	b.WriteString("for these paths, but the private index would overwrite them:\n")
+	for i, p := range overwrite {
+		if i == MaxNamed {
+			fmt.Fprintf(&b, "  … and %d more\n", len(overwrite)-MaxNamed)
+			break
+		}
+		fmt.Fprintf(&b, "  %s\n", p)
+	}
+	b.WriteString("\nRecover:\n")
+	b.WriteString("  re-read-tree from current HEAD, re-apply your paths, commit again.\n")
+	b.WriteString("  Prefer bin/commitbase (🎯T432) — it records the seed and refuses for you.\n\n")
+	fmt.Fprintf(&b, "Deliberate stale-base commit (you mean to revert): %s=off GIT_INDEX_FILE=… git commit …\n", BaseDisableEnv)
 	return b.String()
 }
 

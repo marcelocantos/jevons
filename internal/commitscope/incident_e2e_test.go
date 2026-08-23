@@ -114,8 +114,8 @@ func TestEveryWholeIndexCommitFormIsRefused(t *testing.T) {
 }
 
 // TestPrivateIndexCommitIsAllowed. The other sanctioned mechanism: a worker
-// that owns its index cannot pick up anyone else's staging, so the guard
-// must not stand in its way.
+// that owns its index cannot pick up anyone else's staging, so the shared-
+// index guard must not stand in its way — when HEAD has not moved.
 func TestPrivateIndexCommitIsAllowed(t *testing.T) {
 	repo := newGuardedRepo(t)
 	repo.stageAs(t, "worker A", workerAPath, "A's work")
@@ -137,6 +137,98 @@ func TestPrivateIndexCommitIsAllowed(t *testing.T) {
 	stat := repo.showStat(t, "HEAD")
 	if !strings.Contains(stat, workerBPath) || strings.Contains(stat, workerAPath) {
 		t.Errorf("private-index commit did not contain exactly worker B's file:\n%s", stat)
+	}
+}
+
+// TestPrivateIndexStaleBaseIsRefused is the 🎯T457 oracle: seed a private
+// index from HEAD, land a second commit on a different path, then attempt
+// the private-index commit — refused, and the interloper survives.
+func TestPrivateIndexStaleBaseIsRefused(t *testing.T) {
+	repo := newGuardedRepo(t)
+	repo.write(t, workerBPath, "B's own change")
+
+	private := filepath.Join(repo.dir, ".git", "index-jv-t457")
+	privEnv := []string{"GIT_INDEX_FILE=" + private}
+	if out, err := repo.gitEnv(t, privEnv, "read-tree", "HEAD"); err != nil {
+		t.Fatalf("read-tree: %v\n%s", err, out)
+	}
+	if out, err := repo.gitEnv(t, privEnv, "update-index", "--add", "--", workerBPath); err != nil {
+		t.Fatalf("stage B: %v\n%s", err, out)
+	}
+
+	// Interloper lands on a path the private index still holds at the old
+	// blob — the d9e14ae / e66e934 window.
+	repo.write(t, workerAPath, "interloper landed this (🎯T405)")
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "add", workerAPath); err != nil {
+		t.Fatalf("interloper add: %v\n%s", err, out)
+	}
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "commit", "-m", "interloper"); err != nil {
+		t.Fatalf("interloper commit: %v\n%s", err, out)
+	}
+	interloper := repo.head(t)
+
+	out, err := repo.gitEnv(t, privEnv, "commit", "-m", "B from stale private index")
+	if err == nil {
+		t.Fatalf("stale private-index commit succeeded; HEAD now:\n%s", repo.showStat(t, "HEAD"))
+	}
+	if !strings.Contains(out, "🎯T457") {
+		t.Errorf("refusal is not attributable to the T457 guard:\n%s", out)
+	}
+	if !strings.Contains(out, workerAPath) {
+		t.Errorf("refusal does not name the overwritten path %q:\n%s", workerAPath, out)
+	}
+	if !strings.Contains(out, "re-read-tree") {
+		t.Errorf("refusal does not say to re-read-tree:\n%s", out)
+	}
+	if got := repo.head(t); got != interloper {
+		t.Errorf("HEAD moved despite refusal: got %s want %s", got, interloper)
+	}
+	// Interloper content must still be what HEAD carries.
+	blob, err := repo.git(t, "show", "HEAD:"+workerAPath)
+	if err != nil {
+		t.Fatalf("show interloper blob: %v\n%s", err, blob)
+	}
+	if !strings.Contains(blob, "interloper landed") {
+		t.Errorf("interloper content missing from HEAD after refusal:\n%s", blob)
+	}
+}
+
+// TestPrivateIndexStaleBaseControlReverts is the RED control: with the
+// staleness escape on, the same private-index commit lands and the
+// interloper path reverts — proving the guard, not git, is what stops it.
+func TestPrivateIndexStaleBaseControlReverts(t *testing.T) {
+	repo := newGuardedRepo(t)
+	repo.write(t, workerBPath, "B's own change")
+
+	private := filepath.Join(repo.dir, ".git", "index-jv-t457-red")
+	privEnv := []string{"GIT_INDEX_FILE=" + private, "JEVONS_COMMIT_BASE=off"}
+	if out, err := repo.gitEnv(t, privEnv, "read-tree", "HEAD"); err != nil {
+		t.Fatalf("read-tree: %v\n%s", err, out)
+	}
+	if out, err := repo.gitEnv(t, privEnv, "update-index", "--add", "--", workerBPath); err != nil {
+		t.Fatalf("stage B: %v\n%s", err, out)
+	}
+
+	repo.write(t, workerAPath, "interloper landed this (🎯T405)")
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "add", workerAPath); err != nil {
+		t.Fatalf("interloper add: %v\n%s", err, out)
+	}
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "commit", "-m", "interloper"); err != nil {
+		t.Fatalf("interloper commit: %v\n%s", err, out)
+	}
+
+	if out, err := repo.gitEnv(t, privEnv, "commit", "-m", "B from stale private index (control)"); err != nil {
+		t.Fatalf("control commit was refused (escape should allow it):\n%s", out)
+	}
+	blob, err := repo.git(t, "show", "HEAD:"+workerAPath)
+	if err != nil {
+		t.Fatalf("show after control: %v\n%s", err, blob)
+	}
+	if strings.Contains(blob, "interloper landed") {
+		t.Fatalf("control unexpectedly preserved interloper — red oracle broken:\n%s", blob)
+	}
+	if !strings.Contains(repo.showStat(t, "HEAD"), workerBPath) {
+		t.Errorf("control lost worker B's own path:\n%s", repo.showStat(t, "HEAD"))
 	}
 }
 
