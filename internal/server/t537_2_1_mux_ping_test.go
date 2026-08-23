@@ -17,7 +17,7 @@ func TestMuxPingNotesOwnerUIHeartbeat(t *testing.T) {
 	s.ownerMu.Unlock()
 
 	buf := &replayBuf{}
-	sess := &muxSession{send: make(chan []byte, 1), transcripts: map[string]struct{}{}}
+	sess := &muxSession{send: make(chan []byte, 1), transcripts: map[string]*muxWatch{}}
 	s.handleMuxRaw(t.Context(), buf, sess, []byte(`{"type":"ping"}`))
 
 	s.ownerMu.Lock()

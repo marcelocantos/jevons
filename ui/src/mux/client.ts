@@ -41,7 +41,7 @@ export class MuxClient {
       if (this.everOpened) {
         for (const name of this.watched) {
           this.dispatch({ v: 1, ch: transcriptChannel(name), t: 'reset' });
-          ws.send(encodeMux(transcriptChannel(name), 'open'));
+          ws.send(encodeMux(transcriptChannel(name), 'open', { lo: -30, hi: 0 }));
         }
       }
       this.everOpened = true;
@@ -100,9 +100,9 @@ export class MuxClient {
     };
   }
 
-  openTranscript(name: string): void {
+  openTranscript(name: string, win?: { lo: number; hi: number }): void {
     this.watched.add(name);
-    this.send(encodeMux(transcriptChannel(name), 'open'));
+    this.send(encodeMux(transcriptChannel(name), 'open', win ?? { lo: -30, hi: 0 }));
   }
 
   closeTranscript(name: string): void {
@@ -110,8 +110,18 @@ export class MuxClient {
     this.send(encodeMux(transcriptChannel(name), 'close'));
   }
 
-  pageTranscript(name: string, end: number, limit: number): void {
-    this.send(encodeMux(transcriptChannel(name), 'page', { end, limit }));
+  windowTranscript(name: string, win: { lo: number; hi: number }): void {
+    this.send(encodeMux(transcriptChannel(name), 'window', win));
+  }
+
+  pageTranscript(
+    name: string,
+    spec: number | { before?: string; limit?: number; end?: number },
+    limit?: number,
+  ): void {
+    const body =
+      typeof spec === 'number' ? { end: spec, limit: limit ?? 50 } : spec;
+    this.send(encodeMux(transcriptChannel(name), 'page', body));
   }
 
   sendTranscript(name: string, text: string): void {

@@ -12,6 +12,15 @@
 # IDE
 .vscode/
 .idea/
+.cursor/
+
+# Local scratch (screenshots, machine MCP map) — not product
+/leftover-*.png
+/jevons-root-chat.png
+/old-cockpit-1440x900.png
+/old-cockpit-a11y.md
+/mcp.claudia.json
+/node_modules/
 *.swp
 *.swo
 *~

@@ -838,9 +838,10 @@ survive daemon restarts — you never lose one.
   because you cannot call a tool you no longer have:
   `bin/mcpscope diagnose` (exit 0 healthy, 3 out of scope with the
   daemon UP, 4 down, 5 undetermined).
-- `out_of_scope` ⇒ say **"jevonsmcp is not registered for this working
-  directory; the daemon is up"**, and repair with `bin/mcpscope ensure`.
-  Do not restart the daemon, and do not escalate an outage.
+- `out_of_scope` ⇒ say **"this seat was not minted with jevonsmcp on
+  AgentDef.MCPServers; the daemon is up"**, and repair by re-spawning
+  under `jevons-po`. Do not write `~/.claude.json`. Do not restart the
+  daemon, and do not escalate an outage.
 - When an agent reports lost fleet control, ask for the verdict before
   acting on the word "down".
 

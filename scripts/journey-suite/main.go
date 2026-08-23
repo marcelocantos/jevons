@@ -193,7 +193,7 @@ persona_notes: |
 		_ = logFile.Close()
 		// Remove journey MCP only — never touch the daily MCP name — and
 		// through the CLI that an older daemon used (🎯T282). Current
-		// isolates write only state_dir/mcp; this reclaims a leaked
+		// isolates do not write provider configs; this reclaims a leaked
 		// user-scope journey name if one is still present.
 		mcpRemoveFor(provider, mcpName)
 		if started {
@@ -207,13 +207,10 @@ persona_notes: |
 	}
 	// 🎯T379: registered, not deferred, and registered BEFORE the daemon is
 	// started rather than after. A defer covers the happy path only — fatal()
-	// exits without unwinding and a signal does not unwind at all, and both of
-	// those leak the MCP registration. Ordering matters for the same reason:
-	// the daemon writes the user-scoped `jevonsmcp-journey` entry during its
-	// own boot, so a Ctrl-C landing between Start and this registration would
-	// leak exactly the entry this target exists to stop leaking. Teardown that
-	// runs before the process exists is harmless: stop skips a nil Process and
-	// the removal is a no-op (or reclaims a previous run's stale entry).
+	// exits without unwinding and a signal does not unwind at all. Teardown
+	// that runs before the process exists is harmless: stop skips a nil
+	// Process and the removal is a no-op (or reclaims a previous run's stale
+	// user-scope journey name).
 	cleanups.Add(stop)
 	catchSignals()
 

@@ -466,17 +466,19 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Residual: instructional + pure classifier; not a hard achieve block.
   Persona + agents-guide + fleet standing brief.
 - **Fleet control follows the agent, not the directory (🎯T464):** a
-  fleet seat must have `jevons_*` on every Session backend, not only
-  Claude user-scope in the jevons repo. Boot calls Claudia `EnsureMCP`
-  (name + served HTTP URL) so Claude, Grok, and Codex native configs
-  all carry `jevonsmcp`. Mints set `AgentDef.MCPServers` from
-  `LoadMCP` plus that same URL. Isolates write only under
-  `state_dir/mcp` (🎯T379). `bin/mcpscope diagnose` remains the
+  fleet seat must have `jevons_*` because **Claudia mint/Launch** sets
+  `AgentDef.MCPServers` (LoadMCP + this daemon's HTTP URL; T520
+  loopbacks stamped on that list), not because
+  `~/.claude.json` / `~/.cursor/mcp.json` / `~/.codex` / `~/.grok`
+  contain `jevonsmcp`. Daily boot **must not** write those HOME files;
+  it scrubs leftover `jevonsmcp` keys. Isolates do not write
+  `state_dir/mcp` either — `SessionServers` is enough. Isolate LoadMCP
+  paths point at missing fixture files so a journey does not inherit
+  the owner's map (🎯T379). `bin/mcpscope diagnose` remains the
   Bash-channel answer when tools are gone: `out_of_scope` vs `down`
-  vs `unknown`. Residual: Codex isolate sessions cannot take a
-  session-scoped MCP list (app-server has no field); daily Codex
-  seats get tools from `EnsureMCP` into `~/.codex/config.toml`.
-  Build uses `../go.work` until a published claudia pin includes T40.
+  vs `unknown`.   Residual: Codex exclusive writes `CODEX_HOME` from
+  `MCPServers` (app-server has no thread/start MCP field).
+  Published pin is claudia v0.27.0 (hermetic Session MCP; no EnsureMCP).
 - **Claudia pin seam (🎯T448):** `go.mod` pins the last *published*
   claudia release. Local-master claudia (🎯T104) is consumed via
   `../go.work` and buildsnap's snapshot sibling inject — not a committed

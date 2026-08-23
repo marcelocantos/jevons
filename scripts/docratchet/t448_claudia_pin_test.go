@@ -13,10 +13,11 @@ import (
 	"github.com/marcelocantos/jevons/internal/claudiapin"
 )
 
-// Minimum published claudia the fleet's Goal ingest (🎯T510) needs.
-// ../go.work will hide a stale pin during local builds; this test
-// reads go.mod and resolves with GOWORK=off (🎯T448).
-const minClaudiaPin = "v0.24.0"
+// Minimum published claudia the fleet's hermetic Session MCP path needs
+// (EnsureMCP removed; Config.MCPServers only). ../go.work will hide a
+// stale pin during local builds; this test reads go.mod and resolves
+// with GOWORK=off (🎯T448).
+const minClaudiaPin = "v0.27.0"
 
 func TestT448ClaudiaPinResolvesWithoutGoWork(t *testing.T) {
 	root := repoRoot(t)

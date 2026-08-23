@@ -27,31 +27,36 @@ func attachFixtures(t *testing.T, name, url string) mcpattach.Args {
 	}
 }
 
-func TestT464DailyDaemonEnsuresAllFourBackends(t *testing.T) {
+func TestT464DailyDaemonDoesNotWriteProviderConfigs(t *testing.T) {
 	cfg := config.Default()
 	a := attachFixtures(t, mcpscope.ServerName, mcpscope.DefaultEndpoint)
+	if err := os.WriteFile(a.ClaudeJSON, []byte(`{"mcpServers":{"jevonsmcp":{"url":"http://127.0.0.1:13705/mcp"},"bullseye":{"command":"x"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	got := registerMCPEndpointsAt(cfg, "127.0.0.1", 13705, a)
 	raw, err := os.ReadFile(got.ClaudeJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "13705/mcp") {
-		t.Fatalf("claude config missing live url: %s", raw)
+	if strings.Contains(string(raw), "jevonsmcp") {
+		t.Fatalf("daily boot left jevonsmcp in user-scope: %s", raw)
+	}
+	if !strings.Contains(string(raw), "bullseye") {
+		t.Fatalf("daily scrub dropped an unrelated server: %s", raw)
 	}
 	for _, p := range []string{got.GrokTOML, got.CodexTOML, got.CursorJSON} {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(b), "13705/mcp") {
-			t.Fatalf("%s missing live url: %s", p, b)
+		if _, err := os.Stat(p); err == nil {
+			b, _ := os.ReadFile(p)
+			if strings.Contains(string(b), "jevonsmcp") {
+				t.Fatalf("%s still has jevonsmcp: %s", p, b)
+			}
 		}
 	}
 }
 
 func TestT464IsolateNeverWritesTheDailyRegistration(t *testing.T) {
 	daily := attachFixtures(t, mcpscope.ServerName, mcpscope.DefaultEndpoint)
-	if err := mcpattach.Ensure(daily); err != nil {
+	if err := os.WriteFile(daily.ClaudeJSON, []byte(`{"mcpServers":{"jevonsmcp":{"url":"http://127.0.0.1:13705/mcp"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(daily.ClaudeJSON)
@@ -69,15 +74,12 @@ func TestT464IsolateNeverWritesTheDailyRegistration(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatal("a journey isolate wrote the daily Claude config")
 	}
-	iso, err := os.ReadFile(a.ClaudeJSON)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(a.ClaudeJSON); err == nil {
+		t.Fatal("isolate boot must not write state_dir/mcp")
 	}
-	if !strings.Contains(string(iso), "jevonsmcp-journey") {
-		t.Fatalf("isolate should ensure its own name: %s", iso)
-	}
-	if strings.Contains(string(iso), "jevonsmcp-journey") && strings.Contains(string(after), "jevonsmcp-journey") {
-		t.Fatal("isolate name leaked into daily claude json")
+	list := mcpattach.SessionServers(a, "claude", "")
+	if len(list) != 1 || list[0].Name != "jevonsmcp-journey" {
+		t.Fatalf("isolate SessionServers = %+v", list)
 	}
 }
 

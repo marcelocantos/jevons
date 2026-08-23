@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useRef, useState } from 'react';
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import {
   Outlet,
   RouterProvider,
@@ -28,6 +28,7 @@ import {
   stylesForState,
   type RhsLayoutState,
 } from './layout/rhsLayout';
+import { mergeAgentChrome } from './plan/modelPrefix';
 import { useCockpitKeys } from './keys/useCockpitKeys';
 import {
   pixelFixtureActive,
@@ -82,23 +83,39 @@ function Cockpit() {
   const { agent, tab } = indexRoute.useSearch();
   useCockpitKeys({ sidebarComposerVisible: tab === 'transcript' });
   const navigate = useNavigate({ from: indexRoute.fullPath });
+  const lastAgentsRef = useRef<AgentRow[]>([]);
   const agentsQ = useQuery({
     queryKey: ['agents'],
     queryFn: async () => {
       const r = await fetch('/api/agents');
-      if (!r.ok) return [] as AgentRow[];
+      if (!r.ok) return lastAgentsRef.current;
       const data = await r.json();
       const list = Array.isArray(data) ? data : [];
-      return list
-        .map((a: { name?: string; purpose?: string; parent?: string; status?: string; provider?: string }) => ({
+      const rows = list
+        .map((a: {
+          name?: string;
+          purpose?: string;
+          parent?: string;
+          status?: string;
+          provider?: string;
+          model?: string;
+          workdir?: string;
+        }) => ({
           name: a.name || '',
           purpose: a.purpose,
           parent: a.parent,
           status: a.status,
           provider: a.provider,
+          model: a.model,
+          workdir: a.workdir,
         }))
         .filter((a: AgentRow) => a.name);
+      const merged = mergeAgentChrome(lastAgentsRef.current, rows);
+      lastAgentsRef.current = merged;
+      return merged;
     },
+    placeholderData: keepPreviousData,
+    staleTime: 4_000,
     refetchInterval: 5000,
   });
   const frontierQ = useQuery({

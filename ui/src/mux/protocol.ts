@@ -10,9 +10,18 @@ export type MuxType =
   | 'frame'
   | 'meta'
   | 'page'
+  | 'window'
   | 'send'
   | 'error'
   | 'reset';
+
+export type MuxWindow = { lo: number; hi: number };
+
+export type MuxPage = {
+  before?: string;
+  limit?: number;
+  end?: number;
+};
 
 export type MuxEnvelope = {
   v: number;

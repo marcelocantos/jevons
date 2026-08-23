@@ -14,15 +14,15 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/muxwin"
 )
 
-// Conversation mux (🎯T537.1): one WebSocket, independent channels.
-// Legacy /ws/chat is unchanged until the owner cutover (T505).
-//
-// Envelope: {"v":1,"ch":"transcript:jevons-po","t":"open|frame|meta|page|send|close|hello|error","body":{...}}
-//
-// Channel "transcript:{name}" is the only conversation API. Root, PO, and
-// workers open the same channel kind. Live frames and page-older use it too.
+// Conversation mux (🎯T537.1 / T537.1.3): one WebSocket, one windowed
+// CQRS stream per transcript:{name}. Client submits a coalesced [lo, hi)
+// plus halo; the server delivers the missing slice and then streams every
+// in-window change until the client submits a new window. Hi=0 is exclusive
+// EOF (following). Legacy /ws/chat is unchanged until T505.
 
 const muxVersion = 1
 
@@ -33,19 +33,30 @@ type muxEnvelope struct {
 	Body json.RawMessage `json:"body,omitempty"`
 }
 
+type muxWatch struct {
+	visible    muxwin.Resolved
+	sub        muxwin.Resolved
+	subscribed bool
+	sent       map[string]struct{}
+}
+
 type muxHub struct {
-	mu    sync.Mutex
-	conns map[*muxSession]struct{}
+	mu     sync.Mutex
+	conns  map[*muxSession]struct{}
+	events map[string][]muxwin.Event
 }
 
 type muxSession struct {
 	send        chan []byte
 	mu          sync.Mutex
-	transcripts map[string]struct{}
+	transcripts map[string]*muxWatch
 }
 
 func newMuxHub() *muxHub {
-	return &muxHub{conns: make(map[*muxSession]struct{})}
+	return &muxHub{
+		conns:  make(map[*muxSession]struct{}),
+		events: make(map[string][]muxwin.Event),
+	}
 }
 
 func transcriptChannel(name string) string {
@@ -98,13 +109,46 @@ func (h *muxHub) remove(sess *muxSession) {
 	h.mu.Unlock()
 }
 
-func (sess *muxSession) watch(name string) {
-	sess.mu.Lock()
-	if sess.transcripts == nil {
-		sess.transcripts = make(map[string]struct{})
+func (h *muxHub) replaceEvents(name string, evs []muxwin.Event) {
+	if h == nil {
+		return
 	}
-	sess.transcripts[name] = struct{}{}
-	sess.mu.Unlock()
+	h.mu.Lock()
+	if h.events == nil {
+		h.events = make(map[string][]muxwin.Event)
+	}
+	h.events[name] = evs
+	h.mu.Unlock()
+}
+
+func (h *muxHub) eventsFor(name string) []muxwin.Event {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.events[name]
+}
+
+func (sess *muxSession) ensure(name string) *muxWatch {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.transcripts == nil {
+		sess.transcripts = make(map[string]*muxWatch)
+	}
+	w := sess.transcripts[name]
+	if w == nil {
+		w = &muxWatch{
+			visible: muxwin.Resolved{Lo: 1, Hi: 0, Following: true},
+			sent:    make(map[string]struct{}),
+		}
+		sess.transcripts[name] = w
+	}
+	return w
+}
+
+func (sess *muxSession) watch(name string) {
+	sess.ensure(name)
 }
 
 func (sess *muxSession) unwatch(name string) {
@@ -120,6 +164,12 @@ func (sess *muxSession) watching(name string) bool {
 	return ok
 }
 
+func (sess *muxSession) watchGet(name string) *muxWatch {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.transcripts[name]
+}
+
 func (sess *muxSession) enqueue(payload []byte) {
 	if sess == nil {
 		return
@@ -130,23 +180,73 @@ func (sess *muxSession) enqueue(payload []byte) {
 	}
 }
 
+func muxEventBody(ev muxwin.Event, op, text string) map[string]any {
+	m := map[string]any{
+		"id":    ev.ID,
+		"index": ev.Index,
+		"op":    op,
+		"type":  ev.Type,
+		"event": json.RawMessage(ev.Body),
+	}
+	if ev.TS != "" {
+		m["timestamp"] = ev.TS
+	}
+	if text != "" {
+		m["text"] = text
+	}
+	return m
+}
+
+func muxWindowMeta(r muxwin.Resolved, n int) map[string]any {
+	older := 0
+	if r.Lo > 1 {
+		older = r.Lo
+	}
+	hi := r.Hi
+	if r.Following {
+		hi = 0
+	}
+	return map[string]any{
+		"lo": r.Lo, "hi": hi, "n": n, "following": r.Following,
+		"start": r.Lo, "older": older, "total": n,
+	}
+}
+
 func (h *muxHub) fanTranscript(name, frameJSON string) {
 	if h == nil || name == "" || strings.TrimSpace(frameJSON) == "" {
 		return
 	}
-	var body any
-	if err := json.Unmarshal([]byte(frameJSON), &body); err != nil {
-		body = map[string]any{"raw": frameJSON}
-	}
-	payload, err := encodeMux(transcriptChannel(name), "frame", body)
-	if err != nil {
-		return
-	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for sess := range h.conns {
-		if sess.watching(name) {
+	if h.events == nil {
+		h.events = make(map[string][]muxwin.Event)
+	}
+	next, folds := muxwin.ApplyLiveAll(h.events[name], frameJSON)
+	if len(folds) == 0 {
+		return
+	}
+	h.events[name] = next
+	for _, fold := range folds {
+		changed, op := fold.Event, fold.Op
+		payload, err := encodeMux(transcriptChannel(name), "frame", muxEventBody(changed, op, ""))
+		if err != nil {
+			return
+		}
+		for sess := range h.conns {
+			w := sess.watchGet(name)
+			if w == nil || !w.subscribed || !muxwin.Contains(w.sub, changed.Index) {
+				continue
+			}
+			if op == "put" {
+				if _, ok := w.sent[changed.ID]; ok {
+					continue
+				}
+			}
 			sess.enqueue(payload)
+			if w.sent == nil {
+				w.sent = make(map[string]struct{})
+			}
+			w.sent[changed.ID] = struct{}{}
 		}
 	}
 }
@@ -170,7 +270,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 
 	sess := &muxSession{
 		send:        make(chan []byte, 256),
-		transcripts: make(map[string]struct{}),
+		transcripts: make(map[string]*muxWatch),
 	}
 	if s.mux == nil {
 		s.mux = newMuxHub()
@@ -248,9 +348,23 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			s.muxWrite(ctx, conn, env.Ch, "error", map[string]any{"error": "unknown channel"})
 			return
 		}
-		sess.watch(name)
-		if err := s.writeMuxReplay(ctx, conn, name); err != nil {
-			slog.Warn("mux: replay failed", "name", name, "err", err)
+		sess.ensure(name)
+		lo, hi := muxOpenWindow(env.Body)
+		if err := s.writeMuxWindow(ctx, conn, sess, name, lo, hi, true); err != nil {
+			slog.Warn("mux: window failed", "name", name, "err", err)
+		}
+	case "window":
+		if !isTranscript {
+			return
+		}
+		var body struct {
+			Lo int `json:"lo"`
+			Hi int `json:"hi"`
+		}
+		_ = json.Unmarshal(env.Body, &body)
+		sess.ensure(name)
+		if err := s.writeMuxWindow(ctx, conn, sess, name, body.Lo, body.Hi, false); err != nil {
+			slog.Warn("mux: window failed", "name", name, "err", err)
 		}
 	case "close":
 		if isTranscript {
@@ -261,11 +375,21 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			return
 		}
 		var body struct {
-			End   int `json:"end"`
-			Limit int `json:"limit"`
+			Before string `json:"before"`
+			Limit  int    `json:"limit"`
+			End    int    `json:"end"`
 		}
 		_ = json.Unmarshal(env.Body, &body)
-		s.writeMuxPage(ctx, conn, name, body.End, body.Limit)
+		if body.Before != "" {
+			s.writeMuxPageBefore(ctx, conn, sess, name, body.Before, body.Limit)
+			return
+		}
+		// Legacy end/limit: exclusive coalesced index, not raw journal.
+		lo := body.End - body.Limit
+		if lo < 1 {
+			lo = 1
+		}
+		s.writeMuxWindow(ctx, conn, sess, name, lo, body.End, false)
 	case "send":
 		if !isTranscript {
 			return
@@ -284,6 +408,27 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 	}
 }
 
+func muxOpenWindow(raw json.RawMessage) (lo, hi int) {
+	lo, hi = -muxwin.DefaultFollow, 0
+	if len(raw) == 0 {
+		return lo, hi
+	}
+	var body struct {
+		Lo *int `json:"lo"`
+		Hi *int `json:"hi"`
+	}
+	if json.Unmarshal(raw, &body) != nil {
+		return lo, hi
+	}
+	if body.Lo != nil {
+		lo = *body.Lo
+	}
+	if body.Hi != nil {
+		hi = *body.Hi
+	}
+	return lo, hi
+}
+
 func (s *Server) muxWrite(ctx context.Context, conn muxConn, ch, t string, body any) {
 	payload, err := encodeMux(ch, t, body)
 	if err != nil {
@@ -294,51 +439,154 @@ func (s *Server) muxWrite(ctx context.Context, conn muxConn, ch, t string, body 
 	_ = conn.Write(wctx, websocket.MessageText, payload)
 }
 
-func (s *Server) writeMuxReplay(ctx context.Context, conn muxConn, name string) error {
-	ch := transcriptChannel(name)
-	writeLine := func(line string) error {
-		if echoedOwnerTurnLine(line) {
-			return nil
+// First-paint journal read. A full Replay of the daily overseer log
+// (~87MB / 350k lines) is what made the first screen wait on fold+index.
+// Grow only when the tail does not yet hold DefaultFollow events.
+const muxFirstPaintBytesMax = 8 << 20
+
+// muxCoalesced returns the coalesced transcript. A filled hub cache is
+// reused so page/window do not rebuild the journal on every PageUp.
+// force rebuilds from disk (first open / empty cache) via a byte tail
+// from EOF — not a full Replay.
+func (s *Server) muxCoalesced(name string, force bool) []muxwin.Event {
+	if s.mux != nil && !force {
+		if evs := s.mux.eventsFor(name); len(evs) > 0 {
+			return evs
 		}
-		frame := stampConversationName(line, name)
-		var body any
-		if err := json.Unmarshal([]byte(frame), &body); err != nil {
-			body = map[string]any{"raw": frame}
-		}
-		s.muxWrite(ctx, conn, ch, "frame", body)
-		return nil
 	}
-	var start, total int
+	bytes := chatlog.DefaultTailBytes
+	var events []muxwin.Event
+	for {
+		lines, truncated := s.muxJournalTail(name, bytes)
+		events = muxwin.EventsFromLines(lines)
+		if !truncated || len(events) >= muxwin.DefaultFollow || bytes >= muxFirstPaintBytesMax {
+			break
+		}
+		bytes *= 2
+		if bytes > muxFirstPaintBytesMax {
+			bytes = muxFirstPaintBytesMax
+		}
+	}
+	if s.mux != nil {
+		s.mux.replaceEvents(name, events)
+	}
+	return events
+}
+
+func (s *Server) muxJournalTail(name string, maxBytes int) (lines []string, truncated bool) {
+	collect := func(l *chatlog.Log) (lines []string, truncated bool) {
+		if l == nil {
+			return nil, false
+		}
+		raw, truncated, err := l.TailBytes(maxBytes)
+		if err != nil {
+			return nil, truncated
+		}
+		for _, line := range raw {
+			if echoedOwnerTurnLine(line) {
+				continue
+			}
+			lines = append(lines, stampConversationName(line, name))
+		}
+		return lines, truncated
+	}
 	if s.isOverseerAgent(name) {
 		s.mu.RLock()
 		clog := s.chatLog
 		s.mu.RUnlock()
-		if clog != nil {
-			var err error
-			start, total, err = clog.ReplayTailSealed(historyReplayTurns, writeLine)
-			if err != nil {
-				return err
+		return collect(clog)
+	}
+	j := s.agentJournalsFor()
+	if j == nil {
+		return nil, false
+	}
+	return collect(j.logFor(name))
+}
+
+func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSession, name string, lo, hi int, refresh bool) error {
+	ch := transcriptChannel(name)
+	events := s.muxCoalesced(name, refresh)
+	resolved, err := muxwin.Resolve(lo, hi, len(events))
+	if err != nil {
+		s.muxWrite(ctx, conn, ch, "error", map[string]any{"error": err.Error()})
+		return err
+	}
+	sub := muxwin.Subscribe(resolved, muxwin.KindsOf(events), muxwin.HaloProse)
+	var watch *muxWatch
+	if sess != nil {
+		watch = sess.ensure(name)
+		watch.visible = resolved
+		watch.sub = sub
+		watch.subscribed = true
+	}
+	var have map[int]struct{}
+	if watch != nil {
+		have = muxwin.HaveFromIDs(events, watch.sent)
+	}
+	for _, ev := range muxwin.Slice(events, muxwin.Need(sub, len(events), have)) {
+		s.muxWrite(ctx, conn, ch, "frame", muxEventBody(ev, "put", ""))
+		if watch != nil {
+			if watch.sent == nil {
+				watch.sent = make(map[string]struct{})
 			}
-		}
-	} else {
-		j := s.agentJournalsFor()
-		if j != nil {
-			path := j.path(name)
-			if path != "" {
-				if l := j.logFor(name); l != nil {
-					var err error
-					start, total, err = l.ReplayTailSealed(historyReplayTurns, writeLine)
-					if err != nil {
-						return err
-					}
-				}
-			}
+			watch.sent[ev.ID] = struct{}{}
 		}
 	}
-	s.muxWrite(ctx, conn, ch, "meta", map[string]any{
-		"older": start, "total": total, "start": start,
-	})
+	s.muxWrite(ctx, conn, ch, "meta", muxWindowMeta(sub, len(events)))
 	return nil
+}
+
+func (s *Server) writeMuxReplay(ctx context.Context, conn muxConn, name string) error {
+	return s.writeMuxWindow(ctx, conn, nil, name, -muxwin.DefaultFollow, 0, true)
+}
+
+func (s *Server) writeMuxPageBefore(ctx context.Context, conn muxConn, sess *muxSession, name, before string, limit int) {
+	ch := transcriptChannel(name)
+	events := s.muxCoalesced(name, false)
+	var watch *muxWatch
+	var have map[int]struct{}
+	if sess != nil {
+		watch = sess.ensure(name)
+		have = muxwin.HaveFromIDs(events, watch.sent)
+	}
+	page, err := muxwin.BeforeUnsent(events, before, limit, have)
+	if err != nil {
+		s.muxWrite(ctx, conn, ch, "error", map[string]any{"error": err.Error()})
+		return
+	}
+	// Page is a fetch of older unsent events, not a new CQRS window.
+	// The last open/window subscription keeps streaming as-is.
+	sub := page
+	out := muxwin.Slice(events, muxwin.Need(sub, len(events), have))
+	lines := make([]json.RawMessage, 0, len(out))
+	for _, ev := range out {
+		s.muxWrite(ctx, conn, ch, "frame", muxEventBody(ev, "put", ""))
+		if watch != nil {
+			if watch.sent == nil {
+				watch.sent = make(map[string]struct{})
+			}
+			watch.sent[ev.ID] = struct{}{}
+		}
+		lines = append(lines, json.RawMessage(mustJSON(muxEventBody(ev, "put", ""))))
+	}
+	older := 0
+	if sub.Lo > 1 {
+		older = sub.Lo
+	}
+	following := watch != nil && watch.sub.Following
+	s.muxWrite(ctx, conn, ch, "page", map[string]any{
+		"start": sub.Lo, "older": older, "total": len(events),
+		"lo": sub.Lo, "hi": sub.Hi, "n": len(events), "following": following,
+		"lines": lines,
+	})
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
 }
 
 func muxPageBody(start, total int, lines []json.RawMessage) map[string]any {
@@ -354,54 +602,9 @@ func muxPageBody(start, total int, lines []json.RawMessage) map[string]any {
 }
 
 func (s *Server) writeMuxPage(ctx context.Context, conn muxConn, name string, end, limit int) {
-	if limit <= 0 || limit > 2000 {
-		limit = 200
+	lo := end - limit
+	if lo < 1 {
+		lo = 1
 	}
-	ch := transcriptChannel(name)
-	if s.isOverseerAgent(name) {
-		s.mu.RLock()
-		clog := s.chatLog
-		s.mu.RUnlock()
-		if clog == nil {
-			s.muxWrite(ctx, conn, ch, "page", muxPageBody(0, 0, nil))
-			return
-		}
-		lines, total, err := clog.ReadRange(end-limit, end)
-		if err != nil {
-			s.muxWrite(ctx, conn, ch, "error", map[string]any{"error": "history read failed"})
-			return
-		}
-		out := make([]json.RawMessage, 0, len(lines))
-		for _, ln := range lines {
-			if echoedOwnerTurnLine(ln) {
-				continue
-			}
-			out = append(out, json.RawMessage(stampConversationName(ln, name)))
-		}
-		s.muxWrite(ctx, conn, ch, "page", muxPageBody(end-len(lines), total, out))
-		return
-	}
-	j := s.agentJournalsFor()
-	if j == nil {
-		s.muxWrite(ctx, conn, ch, "page", muxPageBody(0, 0, nil))
-		return
-	}
-	l := j.logFor(name)
-	if l == nil {
-		s.muxWrite(ctx, conn, ch, "page", muxPageBody(0, 0, nil))
-		return
-	}
-	lines, total, err := l.ReadRange(end-limit, end)
-	if err != nil {
-		s.muxWrite(ctx, conn, ch, "error", map[string]any{"error": "history read failed"})
-		return
-	}
-	out := make([]json.RawMessage, 0, len(lines))
-	for _, ln := range lines {
-		if echoedOwnerTurnLine(ln) {
-			continue
-		}
-		out = append(out, json.RawMessage(stampConversationName(ln, name)))
-	}
-	s.muxWrite(ctx, conn, ch, "page", muxPageBody(end-len(lines), total, out))
+	_ = s.writeMuxWindow(ctx, conn, nil, name, lo, end, false)
 }

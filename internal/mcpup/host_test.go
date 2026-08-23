@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -43,14 +42,12 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMountAdvertisesLoopbackAndEnsures(t *testing.T) {
+func TestMountAdvertisesLoopback(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"ok":true}`)
 	}))
 	t.Cleanup(up.Close)
 
-	var ensured []claudia.EnsureMCPArgs
-	var mu sync.Mutex
 	mux := http.NewServeMux()
 	h, err := Mount(mux, &MountArgs{
 		PublicBase: "http://127.0.0.1:13705",
@@ -60,27 +57,16 @@ func TestMountAdvertisesLoopbackAndEnsures(t *testing.T) {
 			{Name: "jevonsmcp", URL: "http://127.0.0.1:13705/mcp"},
 		},
 		SkipNames: map[string]bool{"jevonsmcp": true},
-		Ensure: func(args *claudia.EnsureMCPArgs) error {
-			mu.Lock()
-			ensured = append(ensured, *args)
-			mu.Unlock()
-			return nil
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	adv := h.Proxy.Advertised()
+	adv := h.Advertised()
 	if len(adv) != 1 || adv[0].Name != "atlassian" {
 		t.Fatalf("Advertised = %+v", adv)
 	}
 	if adv[0].URL != "http://127.0.0.1:13705/upstream/atlassian" {
 		t.Fatalf("advertised URL = %q", adv[0].URL)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(ensured) != 1 || ensured[0].URL != adv[0].URL {
-		t.Fatalf("ensured = %+v", ensured)
 	}
 
 	rec := httptest.NewRecorder()
@@ -142,7 +128,6 @@ func TestMountReseedsStoredToken(t *testing.T) {
 		PublicBase: "http://127.0.0.1:9",
 		Servers:    []claudia.MCPServer{{Name: "atlassian", URL: up.URL}},
 		Store:      store,
-		Ensure:     func(*claudia.EnsureMCPArgs) error { return nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +208,6 @@ func TestMountRefreshOnExpiredAccessNoAuthorize(t *testing.T) {
 		PublicBase: "http://127.0.0.1:9",
 		Servers:    []claudia.MCPServer{{Name: "atlassian", URL: up.URL}},
 		Store:      store,
-		Ensure:     func(*claudia.EnsureMCPArgs) error { return nil },
 		Probe: func(ctx context.Context, rawURL string) (*claudia.MCPProbe, error) {
 			return &claudia.MCPProbe{Kind: claudia.MCPAuthOAuth, URL: rawURL, Status: 401, ResourceMetadata: "http://example/.well-known"}, nil
 		},
@@ -300,7 +284,6 @@ func TestMountFailedRefreshInvokesAuthorize(t *testing.T) {
 		PublicBase: "http://127.0.0.1:9",
 		Servers:    []claudia.MCPServer{{Name: "atlassian", URL: up.URL}},
 		Store:      store,
-		Ensure:     func(*claudia.EnsureMCPArgs) error { return nil },
 		Probe: func(ctx context.Context, rawURL string) (*claudia.MCPProbe, error) {
 			return &claudia.MCPProbe{Kind: claudia.MCPAuthOAuth, URL: rawURL, Status: 401, ResourceMetadata: "http://example/.well-known"}, nil
 		},

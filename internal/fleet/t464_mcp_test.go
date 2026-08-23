@@ -70,7 +70,7 @@ func TestEnsureRegisteredBackfillsMCPExclusive(t *testing.T) {
 	}
 }
 
-func TestIsolateCodexMintOmitsHTTP(t *testing.T) {
+func TestIsolateCodexMintKeepsJevonsmcp(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestIsolateCodexMintOmitsHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	def := reg.Def(th.ID)
-	if def == nil || len(def.MCPServers) != 0 {
-		t.Fatalf("isolate Codex MCPServers = %+v; want empty", def.MCPServers)
+	if def == nil || len(def.MCPServers) != 1 || def.MCPServers[0].Name != "jevonsmcp-journey" {
+		t.Fatalf("isolate Codex MCPServers = %+v; want journey HTTP jevonsmcp", def.MCPServers)
 	}
 }

@@ -191,15 +191,7 @@ func (f *Claudia) SessionMCPServers(provider claudia.Provider, workDir string) [
 }
 
 func mcpServersEqual(a, b []claudia.MCPServer) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].Name != b[i].Name || a[i].URL != b[i].URL || a[i].Type != b[i].Type {
-			return false
-		}
-	}
-	return true
+	return mcpattach.ServersEqual(a, b)
 }
 
 // providerForLaunch picks the registry provider for a thread Launch.

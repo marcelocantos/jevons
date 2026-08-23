@@ -198,4 +198,3 @@ func TestFleetStandingBriefFogOfWarScout(t *testing.T) {
 		}
 	}
 }
-

@@ -174,6 +174,45 @@ func WriteEnsure(configPath, server string, entry Entry) (changed bool, err erro
 	return true, nil
 }
 
+// WriteRemove deletes server from the user-scope `mcpServers` map of the
+// Claude (or Cursor-shaped) JSON config. Same lock + re-read as WriteEnsure.
+func WriteRemove(configPath, server string) (changed bool, err error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read %s: %w", configPath, err)
+	}
+	if _, changed, err := RemoveUserScope(data, server); err != nil {
+		return false, err
+	} else if !changed {
+		return false, nil
+	}
+
+	unlock, err := lockFile(configPath + ".jevons-lock")
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+
+	fresh, err := os.ReadFile(configPath)
+	if err != nil {
+		return false, fmt.Errorf("re-read %s: %w", configPath, err)
+	}
+	out, changed, err := RemoveUserScope(fresh, server)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := writeAtomic(configPath, out); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // lockFile takes an exclusive advisory lock and returns its release. The
 // lock lives beside the config rather than on it, so that a stale lock can
 // be removed without anyone being tempted to remove the config.

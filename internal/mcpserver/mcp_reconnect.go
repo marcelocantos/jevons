@@ -67,8 +67,8 @@ func mcpReconnectUnsupported(provider claudia.Provider) (string, bool) {
 	case claudia.ProviderClaude:
 		return "mcp reconnect is a Grok control plane (`grok mcp disable/enable`); " +
 			"the overseer provider is claude, which has no live disable/enable — " +
-			"re-attach with /mcp in the session, or restart jevonsd to re-run the " +
-			"user-scoped EnsureMCP (claudia 🎯T40)", false
+			"re-attach with /mcp in the session, or re-mint so AgentDef.MCPServers " +
+			"carries jevonsmcp (claudia 🎯T40)", false
 	default:
 		return fmt.Sprintf("mcp reconnect is a Grok control plane (`grok mcp disable/enable`); "+
 			"the overseer provider is %s, which jevonsd cannot cycle — restart jevonsd "+

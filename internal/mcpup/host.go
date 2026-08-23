@@ -29,9 +29,9 @@ type MountArgs struct {
 	SkipNames map[string]bool
 	// Store holds durable tokens. Nil means memory-only (tests).
 	Store *Store
-	// Upstreams remembers real remote URLs after EnsureMCP rewrites
-	// provider configs to loopback. Nil skips resolve (tests with
-	// fresh remote URLs only).
+	// Upstreams remembers real remote URLs when a leftover HOME
+	// inventory still lists a loopback from an older EnsureMCP write.
+	// Nil skips resolve (tests with fresh remote URLs only).
 	Upstreams *UpstreamRegistry
 	// Client / OpenURL / Probe / Authorize / Refresh are passed to
 	// Claudia. Production leaves them nil; hermetic tests inject stubs
@@ -41,10 +41,6 @@ type MountArgs struct {
 	Probe     func(ctx context.Context, rawURL string) (*claudia.MCPProbe, error)
 	Authorize func(ctx context.Context, args *claudia.AuthorizeMCPArgs) (*claudia.MCPToken, error)
 	Refresh   func(ctx context.Context, args *claudia.RefreshMCPArgs) (*claudia.MCPToken, error)
-	// Ensure writes one advertised loopback registration. Nil uses
-	// claudia.EnsureMCP. Isolates pass fixture paths via EnsureArgs.
-	Ensure     func(args *claudia.EnsureMCPArgs) error
-	EnsureArgs *claudia.EnsureMCPArgs // path overrides only; Name/URL filled per server
 }
 
 // Host is the mounted proxy plus its token store.
@@ -54,8 +50,8 @@ type Host struct {
 }
 
 // Mount builds a Claudia MCPProxy for HTTP owner-map servers, reseeds
-// stored tokens, registers Prefix on mux, and EnsureMCPs advertised
-// loopback URLs so Session backends never dial upstream directly (🎯T520).
+// stored tokens, and registers Prefix on mux. Advertised() is the
+// loopback list SessionServers stamps onto AgentDef.MCPServers (🎯T520).
 func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 	if mux == nil || args == nil {
 		return nil, fmt.Errorf("mcpup: mux and args required")
@@ -105,28 +101,18 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 		}
 	}
 	mux.Handle(Prefix+"/", proxy)
-
-	ensure := args.Ensure
-	if ensure == nil {
-		ensure = claudia.EnsureMCP
-	}
 	for _, adv := range proxy.Advertised() {
-		ea := claudia.EnsureMCPArgs{Name: adv.Name, URL: adv.URL}
-		if args.EnsureArgs != nil {
-			ea.ClaudeJSON = args.EnsureArgs.ClaudeJSON
-			ea.GrokTOML = args.EnsureArgs.GrokTOML
-			ea.CodexTOML = args.EnsureArgs.CodexTOML
-			ea.CursorJSON = args.EnsureArgs.CursorJSON
-			ea.Providers = args.EnsureArgs.Providers
-		}
-		if err := ensure(&ea); err != nil {
-			slog.Warn("could not ensure proxied MCP loopback URL",
-				"name", adv.Name, "url", adv.URL, "err", err)
-			continue
-		}
 		slog.Info("HTTP MCP proxied via loopback", "name", adv.Name, "url", adv.URL)
 	}
 	return h, nil
+}
+
+// Advertised is the loopback name+URL list seats should carry (🎯T520).
+func (h *Host) Advertised() []claudia.MCPServer {
+	if h == nil || h.Proxy == nil {
+		return nil
+	}
+	return h.Proxy.Advertised()
 }
 
 func filterHTTP(servers []claudia.MCPServer, skip map[string]bool) []claudia.MCPServer {

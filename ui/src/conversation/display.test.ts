@@ -5,6 +5,42 @@ import { describe, expect, it } from 'vitest';
 import { displayRows, stepsLabel } from './display';
 
 describe('displayRows', () => {
+  it('nested MCP tool_input shows the real tool name, not a key dump (🎯T116)', () => {
+    const rows = displayRows([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'use_tool',
+              input: { tool_name: 'search_tool', tool_input: { limit: 3, query: 'jevonsmcp agent list' } },
+            },
+          ],
+        },
+      },
+    ]);
+    expect(rows[0].items?.[0]?.text).toBe('use_tool: search_tool: jevonsmcp agent list');
+  });
+
+  it('generic MCP: tool label yields to nested tool_name (🎯T63)', () => {
+    const rows = displayRows([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'MCP: tool',
+              input: { tool_name: 'jevons_agent_list', tool_input: { query: 'running' } },
+            },
+          ],
+        },
+      },
+    ]);
+    expect(rows[0].items?.[0]?.text).toBe('jevons_agent_list: running');
+  });
+
   it('coalesces tool_use into ⋯ n steps, not assistant bubbles', () => {
     const rows = displayRows([
       { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } },
@@ -77,6 +113,42 @@ describe('displayRows', () => {
     expect(rows).toEqual([
       { kind: 'assistant', text: 'Yes. I have this message', when: undefined },
     ]);
+  });
+
+  it('mixed text+tool_use on one frame still counts every tool (🎯T119.10)', () => {
+    const rows = displayRows([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'Checking.' },
+            { type: 'tool_use', name: 'Read', input: { path: 'a' } },
+            { type: 'tool_use', name: 'Grep', input: { path: 'x' } },
+          ],
+        },
+      },
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(['assistant', 'steps']);
+    expect(rows[0].text).toBe('Checking.');
+    expect(rows[1].text).toBe('⋯ 2 steps');
+    expect(rows[1].items).toEqual([
+      { cls: 'tool-use', text: 'Read: a' },
+      { cls: 'tool-use', text: 'Grep: x' },
+    ]);
+  });
+
+  it('tool_use + tool_result is one step live and on hydrate (🎯T119.10)', () => {
+    const tape = [
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+      { type: 'tool_result', tool_use_id: '1', content: 'ok' },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Grep' }] } },
+      { type: 'tool_result', tool_use_id: '2', content: 'ok' },
+      { type: 'progress', recorded: 'lossless', progress_type: 'tool_use' },
+    ];
+    const rows = displayRows(tape);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe('steps');
+    expect(rows[0].text).toBe('⋯ 2 steps');
   });
 
   it('coalesces agent_note with tool_use into one capsule', () => {

@@ -1471,6 +1471,20 @@ test('T119.10 host paints N from fold items, not DOM children', function () {
     'strip N is ConversationWidget.workingProgressFromSlot');
 });
 
+test('T119.10 updateWorkingProgress stores fold N before chrome opens', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const fn = html.match(/function updateWorkingProgress\(text\) \{[\s\S]*?\n\}/);
+  assert.ok(fn, 'updateWorkingProgress exists');
+  assert.ok(/workingProgress\s*=\s*text/.test(fn[0]), 'stores workingProgress');
+  assert.ok(/if\s*\(\s*mainWorkingSuppressed\s*\)\s*return/.test(fn[0]),
+    'aside suppress still gates');
+  const storeAt = fn[0].indexOf('workingProgress = text');
+  const guardAt = fn[0].indexOf('if (!workingEl)');
+  assert.ok(storeAt >= 0 && guardAt >= 0 && storeAt < guardAt,
+    'store-before-open: workingProgress assigned before !workingEl return');
+});
+
+
 test('T372 index.html: send click is the widget, not a second composer send', function () {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(!/sendBtn\.addEventListener\(\s*['"]click['"]\s*,\s*send\s*\)/.test(html),

@@ -15,8 +15,9 @@ import (
 )
 
 // UpstreamRegistry remembers the real remote URL for each proxied
-// server. EnsureMCP rewrites provider configs to loopback, so the next
-// LoadMCP would otherwise feed the proxy its own PublicURL (🎯T520).
+// server. A leftover HOME inventory may still list a loopback from an
+// older EnsureMCP write; Resolve puts the remote back so the proxy
+// does not dial itself (🎯T520).
 type UpstreamRegistry struct {
 	path string
 

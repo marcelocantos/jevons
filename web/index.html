@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- DEPRECATED REFERENCE (🎯T540): product UI is ui/. Do not land features here. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -6964,7 +6965,7 @@ document.addEventListener('visibilitychange', function () {
   try { refreshAgents(); } catch (_) {}
   try { refreshWorkers(); } catch (_) {}
   try { refreshCost(); } catch (_) {}
-  try { refreshPlanUsage(); } catch (_) {}
+  try { refreshPlanUsage({ force: true }); } catch (_) {}
 });
 
 // Live token-burn ticker (🎯T137): hidden when disabled; subscription
@@ -7006,11 +7007,15 @@ refreshCost();
 //
 // Polled far more slowly than the cost ticker once a reading exists: a
 // plan window is hours long, and the daemon only re-reads the backends
-// every few minutes. While "waiting for the first reading" is showing,
-// poll every 5s so a just-booted daemon is not stuck on that line.
+// every few minutes. GET /api/plan-usage long-polls until the first batch
+// lands; the 5s pending interval is only the retry after that wait times out.
+// Never stack a second /api/plan-usage while one is in flight — the pending
+// timer would otherwise open overlapping 30s long-polls.
 const planEl = document.getElementById('plan-ticker');
 let lastPlanView = null;
 let planPainted = false;
+var planUsageCtrl = null;
+var planUsageTimer = null;
 function paintPlanUsageView(view) {
   if (!planEl || typeof PlanUsage === 'undefined') return;
   lastPlanView = view;
@@ -7024,14 +7029,24 @@ function paintPlanUsageView(view) {
   planPainted = true;
 }
 var planThresholdsLoaded = false;
-function refreshPlanUsage() {
+function refreshPlanUsage(opts) {
   if (!planEl || typeof PlanUsage === 'undefined') return;
   if (!planPainted) paintPlanUsageView(PlanUsage.formatPlanUsage({ pending: true }));
+  var force = opts && opts.force;
   function loadUsage() {
-    fetch('/api/plan-usage').then(function (r) { return r.json(); }).then(function (p) {
+    if (planUsageCtrl) {
+      if (!force) return;
+      planUsageCtrl.abort();
+    }
+    planUsageCtrl = new AbortController();
+    var signal = planUsageCtrl.signal;
+    fetch('/api/plan-usage', { signal: signal }).then(function (r) { return r.json(); }).then(function (p) {
       paintPlanUsageView(PlanUsage.formatPlanUsage(p));
-    }).catch(function () {
+    }).catch(function (err) {
+      if (err && err.name === 'AbortError') return;
       paintPlanUsageView(PlanUsage.formatPlanUsage({ error: 'fetch failed' }));
+    }).finally(function () {
+      if (planUsageCtrl && planUsageCtrl.signal === signal) planUsageCtrl = null;
     });
   }
   if (!planThresholdsLoaded && typeof PlanUsage.applyThresholds === 'function') {
@@ -7045,11 +7060,22 @@ function refreshPlanUsage() {
   loadUsage();
 }
 function schedulePlanUsage() {
+  if (planUsageTimer) clearTimeout(planUsageTimer);
   const ms = (typeof PlanUsage !== 'undefined' && typeof PlanUsage.planPollMs === 'function')
     ? PlanUsage.planPollMs(lastPlanView)
     : 60000;
-  setTimeout(function () {
-    if (typeof document === 'undefined' || !document.hidden) refreshPlanUsage();
+  planUsageTimer = setTimeout(function () {
+    planUsageTimer = null;
+    if (typeof document !== 'undefined' && document.hidden) {
+      schedulePlanUsage();
+      return;
+    }
+    // A pending long-poll is still waiting — do not open another.
+    if (planUsageCtrl) {
+      planUsageTimer = setTimeout(schedulePlanUsage, 1000);
+      return;
+    }
+    refreshPlanUsage();
     schedulePlanUsage();
   }, ms);
 }
@@ -9235,13 +9261,32 @@ function onWorkingStuck() {
 // (disconnect / offline). Normal seal drains FIFO (🎯T113).
 // opts.level: true when paint comes from T272 level sample (not send edge).
 // opts.force: open even when mainWorkingSuppressed (reserved; unused in product).
+function foldWorkingProgressText() {
+  // 🎯T119.10: strip N is the open fold slot item count.
+  if (typeof ConversationWidget === 'undefined'
+      || typeof ConversationWidget.workingProgressFromSlot !== 'function') return '';
+  if (!mainConversation || typeof mainConversation.getLines !== 'function') return '';
+  const lines = mainConversation.getLines();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (l && (l.kind === 'turn-slot' || l.role === 'turn-slot') && l.items && l.items.length) {
+      return ConversationWidget.workingProgressFromSlot(l) || '';
+    }
+  }
+  return '';
+}
 function setWorking(on, progress, opts) {
   if (on) {
     // 🎯T327: aside-routed turns own attention — do not open main chrome.
     if (mainWorkingSuppressed && !(opts && opts.force)) {
       return;
     }
-    if (typeof progress === 'string') workingProgress = progress;
+    if (typeof progress === 'string') {
+      workingProgress = progress;
+    } else if (!workingProgress) {
+      // Hydrate / level-sample open after fold progress was stored or missed.
+      workingProgress = foldWorkingProgressText() || '';
+    }
     // Fresh owner-send: new chrome flags. Re-arm while open keeps flags
     // (tools-only end_turn + agent_note path — 🎯T260). Level re-arm after
     // reload also opens chrome without requiring a client send edge (T272).
@@ -9300,10 +9345,14 @@ function applyWorkingLevelSample(sample) {
   }
 }
 window.applyWorkingLevelSample = applyWorkingLevelSample;
+window.setWorking = setWorking;
 function updateWorkingProgress(text) {
   // 🎯T327: never bind step/fleet progress into main while aside owns the turn.
-  if (!workingEl || mainWorkingSuppressed) return;
+  if (mainWorkingSuppressed) return;
+  // 🎯T119.10: store fold N even before chrome opens (hydrate replay /
+  // level-sample open later). Dropping here left strip empty on reload.
   workingProgress = text || '';
+  if (!workingEl) return;
   workingEl.innerHTML = workingLabelHTML();
   // Real mid-turn signal — reset idle clock so long healthy turns stay armed.
   armWorkingWatch();

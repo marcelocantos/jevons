@@ -281,10 +281,9 @@ jevonsd stores its data in `~/.jevons/`:
 | `chatlog/<overseer>.jsonl` | Durable append-only conversation journal — replayed on reconnect so no conversation is ever lost |
 | `jevons/` | Jevons working directory and generated instructions |
 
-On startup jevonsd also registers its MCP endpoint user-scoped in
-`~/.grok/config.toml` (an `[mcp_servers.<mcp_server_name>]` entry) so the
-overseer's management tools attach when the Grok CLI resumes its session
-across restarts.
+On startup jevonsd stamps `jevonsmcp` on each seat's `AgentDef.MCPServers`.
+It does not write provider HOME configs (`~/.grok/config.toml`,
+`~/.claude.json`, and the rest).
 
 ## Agent integration
 

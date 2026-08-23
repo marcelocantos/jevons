@@ -64,6 +64,12 @@ func (l *Log) Append(line string) error {
 	return nil
 }
 
+// DefaultTailBytes is enough raw journal for a first-paint window
+// (last ~30 coalesced events plus halo) without scanning an 87MB daily
+// log. ReplayTail still snapshots the whole file to find turn starts —
+// do not use it for mux hydrate.
+const DefaultTailBytes = 1 << 20
+
 // Replay streams every complete line to fn in order. A final partial
 // line (a crash mid-append) is skipped — prior completed turns are the
 // durable record. fn returning an error stops the replay and is
@@ -95,6 +101,67 @@ func (l *Log) Replay(fn func(line string) error) error {
 		if err := fn(line); err != nil {
 			return err
 		}
+	}
+}
+
+// TailBytes returns complete lines from the last maxBytes of the file.
+// It seeks from EOF — it does not scan or allocate the prefix. A seek
+// that lands mid-line discards that torn line. truncated is true when
+// the file is larger than the window (older lines exist). maxBytes <= 0
+// uses DefaultTailBytes. A torn final append (no trailing newline) is
+// skipped, same as Replay.
+func (l *Log) TailBytes(maxBytes int) (lines []string, truncated bool, err error) {
+	if l == nil {
+		return nil, false, nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultTailBytes
+	}
+	f, err := os.Open(l.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("chatlog: tail open: %w", err)
+	}
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return nil, false, fmt.Errorf("chatlog: tail stat: %w", err)
+	}
+	size := st.Size()
+	var off int64
+	if size > int64(maxBytes) {
+		off = size - int64(maxBytes)
+		truncated = true
+	}
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return nil, truncated, fmt.Errorf("chatlog: tail seek: %w", err)
+	}
+
+	r := bufio.NewReaderSize(f, 1<<20)
+	if off > 0 {
+		if _, err := r.ReadString('\n'); err != nil {
+			if err == io.EOF {
+				return nil, truncated, nil
+			}
+			return nil, truncated, fmt.Errorf("chatlog: tail skip: %w", err)
+		}
+	}
+	for {
+		line, err := r.ReadString('\n')
+		if err == io.EOF {
+			return lines, truncated, nil
+		}
+		if err != nil {
+			return lines, truncated, fmt.Errorf("chatlog: tail read: %w", err)
+		}
+		line = line[:len(line)-1]
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
 	}
 }
 

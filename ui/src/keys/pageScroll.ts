@@ -22,3 +22,20 @@ export function pageScrollDelta(key: string, clientHeight: number): number {
   if (key === 'PageDown') return step;
   return 0;
 }
+
+/** Near the oldest loaded row — request another page (T537.2 / T336). */
+export const PAGE_OLDER_PX = 48;
+
+/** Scroll the live transcript pane. PageUp leaves follow-the-end (T336 / T537.2.8). */
+export function applyTranscriptPageKey(key: string, from: Element | null): boolean {
+  const pane = transcriptPane(from);
+  if (!pane) return false;
+  const dy = pageScrollDelta(key, pane.clientHeight);
+  if (!dy) return false;
+  if (key === 'PageUp') pane.dispatchEvent(new Event('jevons-leave-track'));
+  pane.scrollBy(0, dy);
+  if (key === 'PageUp' && pane.scrollTop < PAGE_OLDER_PX) {
+    pane.dispatchEvent(new Event('jevons-page-older'));
+  }
+  return true;
+}

@@ -66,6 +66,28 @@ func TestToolCallDetailFromClaudiaPreservedParams(t *testing.T) {
 	}
 }
 
+func TestParseToolCallGenericTitlePrefersProgrammaticName(t *testing.T) {
+	raw := []byte(`{
+		"sessionId":"s1",
+		"update":{
+			"sessionUpdate":"tool_call",
+			"toolCallId":"call_1",
+			"title":"MCP: tool",
+			"name":"jevons_agent_list",
+			"kind":"other",
+			"rawInput":{"query":"running"}
+		}
+	}`)
+	call := parseToolCall(raw)
+	if call.DisplayName() != "jevons_agent_list" {
+		t.Fatalf("DisplayName=%q want jevons_agent_list", call.DisplayName())
+	}
+	line, ok := chatWireLine(claudia.Event{Type: "progress", ProgressType: "tool_use", Raw: raw})
+	if !ok || !strings.Contains(line, "jevons_agent_list") || !strings.Contains(line, "call_1") {
+		t.Fatalf("wire should persist real name + id: ok=%v line=%s", ok, line)
+	}
+}
+
 func TestChatWireLineGrokACPShapes(t *testing.T) {
 	// These Raws mirror what claudia's grok_acp.go puts on Event.Raw —
 	// session/update params for chunks, bare stopReason for prompt end.

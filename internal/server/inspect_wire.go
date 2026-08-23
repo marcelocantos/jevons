@@ -105,6 +105,7 @@ func (s *Server) fanInspectLive(name, line string) {
 			// Drop if slow client; history resync on terminal covers gaps.
 		}
 	}
+	s.muxFanTranscript(name, line)
 }
 
 // writeInspectReplay hydrates inspect the same way /ws/chat hydrates main:

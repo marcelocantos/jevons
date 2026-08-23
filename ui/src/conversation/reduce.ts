@@ -18,6 +18,10 @@ export type ConversationMeta = {
   older?: number;
   total?: number;
   start?: number;
+  lo?: number;
+  hi?: number;
+  n?: number;
+  following?: boolean;
 };
 
 export type ConversationState = {
@@ -36,6 +40,98 @@ export const emptyConversation = (): ConversationState => ({
   stream: emptyStream(),
 });
 
+function rec(v: unknown): Record<string, unknown> {
+  return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+}
+
+/** 🎯T537.1.3 framed event: identity + 1-based coalesced index. */
+export function isWindowEvent(body: unknown): boolean {
+  const o = rec(body);
+  return typeof o.id === 'string' && typeof o.index === 'number';
+}
+
+function attachWindow(event: unknown, win: Record<string, unknown>): Record<string, unknown> {
+  return { ...rec(event), id: win.id, index: win.index };
+}
+
+function windowPayload(body: unknown): unknown {
+  const o = rec(body);
+  if (o.event != null) return attachWindow(o.event, o);
+  return o;
+}
+
+function findId(frames: unknown[], id: string): number {
+  return frames.findIndex((f) => rec(f).id === id);
+}
+
+function appendTextToFrame(frame: unknown, text: string): unknown {
+  const f = rec(frame);
+  const msg = rec(f.message);
+  const content = msg.content;
+  if (typeof content === 'string') {
+    return { ...f, message: { ...msg, content: content + text } };
+  }
+  if (Array.isArray(content)) {
+    let joined = false;
+    const next = content.map((b) => {
+      const blk = rec(b);
+      if (joined || (blk.type !== 'text' && blk.type !== 'output_text')) return b;
+      joined = true;
+      return { ...blk, text: String(blk.text || '') + text };
+    });
+    if (!joined) next.push({ type: 'text', text });
+    return { ...f, message: { ...msg, content: next } };
+  }
+  return { ...f, message: { ...msg, content: [{ type: 'text', text }] } };
+}
+
+function sortByIndex(frames: unknown[]): unknown[] {
+  return frames.slice().sort((a, b) => {
+    const ia = rec(a).index;
+    const ib = rec(b).index;
+    const na = typeof ia === 'number' ? ia : 0;
+    const nb = typeof ib === 'number' ? ib : 0;
+    return na - nb;
+  });
+}
+
+export function applyWindowBody(state: ConversationState, body: unknown): ConversationState {
+  const o = rec(body);
+  const id = String(o.id);
+  const op = o.op === 'append' ? 'append' : 'put';
+  if (op === 'append') {
+    const idx = findId(state.frames, id);
+    if (idx >= 0) {
+      const frames = state.frames.slice();
+      const text = typeof o.text === 'string' ? o.text : '';
+      if (text) {
+        frames[idx] = { ...rec(appendTextToFrame(frames[idx], text)), id, index: o.index };
+      } else if (o.event != null) {
+        frames[idx] = windowPayload(o);
+      }
+      return { ...state, frames: sortByIndex(frames) };
+    }
+  }
+  const payload = windowPayload(o);
+  const idx = findId(state.frames, id);
+  const frames = state.frames.slice();
+  if (idx >= 0) frames[idx] = payload;
+  else frames.push(payload);
+  return { ...state, frames: sortByIndex(frames) };
+}
+
+function applyWindowBodies(state: ConversationState, bodies: unknown[]): ConversationState {
+  let next = state;
+  for (const b of bodies) {
+    if (isWindowEvent(b)) next = applyWindowBody(next, b);
+    else {
+      const folded = applyTranscriptFrame(next.frames, next.stream, b);
+      next = { ...next, frames: folded.frames, stream: folded.stream };
+    }
+  }
+  return next;
+}
+
 export function applyConversationEvent(
   state: ConversationState,
   env: ConversationEvent,
@@ -44,10 +140,16 @@ export function applyConversationEvent(
   if (env.t === 'batch') {
     const body = (env.body || {}) as { frames?: unknown[] };
     const lines = Array.isArray(body.frames) ? body.frames : [];
+    if (lines.some(isWindowEvent)) {
+      return applyWindowBodies(state, lines);
+    }
     const next = reduceTranscriptBodies(lines);
     return { ...state, frames: next.frames, stream: next.stream };
   }
   if (env.t === 'frame') {
+    if (isWindowEvent(env.body)) {
+      return applyWindowBody(state, env.body);
+    }
     const next = applyTranscriptFrame(state.frames, state.stream, env.body);
     return { ...state, frames: next.frames, stream: next.stream };
   }
@@ -60,6 +162,10 @@ export function applyConversationEvent(
       start?: number;
       older?: number;
       total?: number;
+      lo?: number;
+      hi?: number;
+      n?: number;
+      following?: boolean;
     };
     const lines = Array.isArray(body.lines) ? body.lines : [];
     const start =
@@ -69,7 +175,9 @@ export function applyConversationEvent(
           ? body.older
           : 0;
     const total = typeof body.total === 'number' ? body.total : state.meta?.total;
-    const older = lines.length === 0 || start <= 0 ? 0 : (typeof body.older === 'number' ? body.older : start);
+    // Empty lines means "already have this slice" (Need filtered), not EOF.
+    // EOF is start <= 1.
+    const older = start <= 1 ? 0 : (typeof body.older === 'number' ? body.older : start);
     const sameWindow =
       !!state.meta &&
       typeof state.meta.start === 'number' &&
@@ -78,7 +186,14 @@ export function applyConversationEvent(
     if (sameWindow) {
       return {
         ...state,
-        meta: { ...(state.meta || {}), start, total, older },
+        meta: { ...(state.meta || {}), start, total, older, lo: body.lo, hi: body.hi, n: body.n, following: body.following },
+      };
+    }
+    if (lines.some(isWindowEvent)) {
+      const next = applyWindowBodies(state, lines);
+      return {
+        ...next,
+        meta: { ...(next.meta || {}), start, total, older, lo: body.lo, hi: body.hi, n: body.n, following: body.following === true },
       };
     }
     const olderFrames = reduceTranscriptBodies(lines);

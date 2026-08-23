@@ -30,16 +30,8 @@ import (
 // jOverseerToolsAttached proves the overseer's own client can reach jevons
 // tools under the selected provider (🎯T282). J6 checks the producer side
 // (jevonsd serves the tools); this checks the consumer side. Isolates
-// EnsureMCP into state_dir/mcp (claudia 🎯T40), then session-scoped
-// MCPServers attach the list. The live check is a tool-using turn.
+// attach via AgentDef.MCPServers only — they do not write state_dir/mcp.
 func (s *suite) jOverseerToolsAttached() error {
-	if !isolateMCPWritten(s.stateDir, mcpName) {
-		return fmt.Errorf("%s not written under %s/mcp — isolate EnsureMCP did not land",
-			mcpName, s.stateDir)
-	}
-
-	// And that the registration is live in the conversation, not just on
-	// disk: ask the overseer to use a jevons tool and report what it saw.
 	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 	defer cancel()
 	conn, frames, err := dialChat(ctx, s.host)

@@ -18,3 +18,8 @@ export function clipClassName(base: string, fullH: number, collapsedH?: number):
   if (!shouldClip(fullH, collapsedH)) return base;
   return base ? `${base} msg-clipped` : 'msg-clipped';
 }
+
+/** Vanilla pocket-tab glyphs (U+25B4 ▴ / U+25BE ▾). */
+export function expandTabChevron(expanded: boolean): string {
+  return expanded ? '\u25B4' : '\u25BE';
+}

@@ -278,6 +278,39 @@ func TestT464EnsurePreservesEverythingElse(t *testing.T) {
 // TestT464EnsureIsANoOpWhenAlreadyCorrect matters because the file is hot:
 // a repair that rewrote it on every call would take the lock, and the risk
 // that comes with it, for nothing.
+func TestRemoveUserScopeDropsOnlyThatKey(t *testing.T) {
+	seed, _, err := EnsureUserScope(incidentConfig(t), ServerName, HTTPEntry(DefaultEndpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, changed, err := RemoveUserScope(seed, ServerName)
+	if err != nil {
+		t.Fatalf("RemoveUserScope: %v", err)
+	}
+	if !changed {
+		t.Fatal("want changed")
+	}
+	scope, _, err := FindScope(after, ServerName, "/anywhere")
+	if err != nil || scope != ScopeNone {
+		t.Fatalf("after remove scope=%q err=%v", scope, err)
+	}
+	again, changed, err := RemoveUserScope(after, ServerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("second remove must be a no-op")
+	}
+	var now map[string]any
+	if err := json.Unmarshal(again, &now); err != nil {
+		t.Fatal(err)
+	}
+	servers := now["mcpServers"].(map[string]any)
+	if _, ok := servers["bullseye"]; !ok {
+		t.Fatal("remove dropped bullseye")
+	}
+}
+
 func TestT464EnsureIsANoOpWhenAlreadyCorrect(t *testing.T) {
 	fixed, _, err := EnsureUserScope(incidentConfig(t), ServerName, HTTPEntry(DefaultEndpoint))
 	if err != nil {

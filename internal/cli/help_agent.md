@@ -50,12 +50,14 @@ Same-machine browser use is the supported docs-only path today.
    + Jevon iOS QR scan (source under `ios/`; no App Store binary yet; full
    onboarding is 🎯T14). See README [Pair a device](README.md#pair-a-device)
    (🎯T156).
-6. **MCP attach**: on boot, jevonsd calls Claudia `EnsureMCP` so
-   `jevonsmcp` is on Claude, Grok, and Codex native configs (the
-   served URL, 🎯T379). Fleet mints also get `LoadMCP` + append on
-   `AgentDef.MCPServers`. Do not hand-roll `claude mcp add` /
-   `grok mcp add` for fleet seats. An external client talking *to*
-   jevons can still add the same URL if it is not a claudia Session.
+6. **MCP attach**: fleet seats get `jevonsmcp` on `AgentDef.MCPServers`
+   at Claudia mint/Launch (served URL, 🎯T379; T520 owner-map HTTP uses
+   the same list). Daily and isolate boot do **not** write
+   `~/.claude.json`, `~/.cursor/mcp.json`, `~/.codex/config.toml`,
+   `~/.grok/config.toml`, or isolate `state_dir/mcp`. Do not hand-roll
+   `claude mcp add` / `grok mcp add` for fleet seats. An external client
+   talking *to* jevons can still add the same URL if it is not a
+   claudia Session.
 7. **Confirm tools** via `jevons_thread_list` or `jevons_cost`.
 
 ## Running manually
@@ -125,14 +127,12 @@ so the answer arrives through Bash:
 
 ```
 bin/mcpscope diagnose        # exit 0 healthy, 3 out of scope (daemon UP), 4 down, 5 undetermined
-bin/mcpscope ensure          # register jevonsmcp user-scoped, so it follows the agent
 ```
 
-`out_of_scope` means **the daemon is up** and your directory has no
-registration: fix the registration, do not restart the daemon, and do not
-report an outage. The daily daemon now writes that user-scope entry at
-boot, so this should be self-healing after a restart; a session that
-started before the repair still needs to be restarted to pick it up.
+`out_of_scope` means **the daemon is up** and this seat was not minted
+with `AgentDef.MCPServers`: re-spawn under `jevons-po`, do not write
+HOME provider configs, do not restart the daemon, and do not report an
+outage.
 
 ## Fleet spawn path (🎯T78)
 
@@ -889,14 +889,15 @@ direct, shell tool, transcript inspect — end to end on Claude.
 
 What changes under Claude:
 
-- **Overseer MCP** is the same `EnsureMCP` write as Grok and Codex
-  (claudia 🎯T40). Restart jevonsd to refresh the served URL.
+- **Overseer MCP** is `AgentDef.MCPServers` on the registry row
+  (claudia 🎯T40), same as Grok and Codex. Restart jevonsd to refresh
+  the served URL on the next mint/re-register — not a HOME config write.
 - **Transcripts** are discovered under `~/.claude/projects` (🎯T213);
   `claude_projects:` in config points elsewhere if needed.
 - **`jevons_mcp_reconnect` does not apply** — `grok mcp disable/enable`
   is a Grok control plane. With Claude selected the tool says so rather
   than cycling a config the overseer never reads. Re-attach with `/mcp`
-  in-session, or restart jevonsd to re-run the user-scoped install.
+  in-session, or re-mint so `AgentDef.MCPServers` is restamped.
 - **Agents launch as tmux sessions.** jevonsd therefore drops the
   enclosing agent session's identity from its own environment at boot
   and reconciles claudia's long-lived tmux server, which otherwise hands

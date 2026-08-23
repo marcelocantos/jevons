@@ -401,6 +401,9 @@ test('index.html loads plan_usage.js, fetches the API, and paints chips', functi
   assert.ok(html.indexOf('id="plan-ticker"') >= 0, 'must have somewhere to render it');
   assert.ok(html.indexOf('planPollMs') >= 0, 'must pace the poll from the painted view');
   assert.ok(html.indexOf('schedulePlanUsage') >= 0, 'must reschedule so a timed-out pending long-poll retries at 5s');
+  assert.ok(html.indexOf('planUsageCtrl') >= 0, 'must track the in-flight plan-usage fetch');
+  assert.ok(html.indexOf('AbortController') >= 0, 'must abort on forced refresh rather than stack long-polls');
+  assert.ok(html.indexOf('if (planUsageCtrl)') >= 0, 'must not open a second poll while one is waiting');
 });
 
 test('index.html mounts the plan bar in #status next to #theme-toggle, not the RHS', function () {
@@ -503,6 +506,68 @@ test('T390.1: one group per provider, session then weekly, company mark not cl/c
   assert.strictEqual(PU.providerCompany('codex'), 'openai');
   assert.strictEqual(PU.providerCompany('grok'), 'xai');
   assert.strictEqual(PU.providerCompany('bedrock'), 'anthropic');
+  assert.strictEqual(PU.providerCompany('cursor'), 'cursor');
+});
+
+test('cursor group maps to Cursor company and paints the mark, not cu', function () {
+  const MP = require('./model_prefix.js');
+  const icon = MP.companyIconHtml('cursor');
+  assert.ok(icon.indexOf('data-mark="cursor"') >= 0, icon);
+  assert.ok(icon.indexOf('<svg') >= 0, icon);
+  assert.ok(icon.indexOf('fill="currentColor"') >= 0, icon);
+
+  const view = PU.formatPlanUsage(snapshot([{
+    provider: 'cursor',
+    status: 'available',
+    fleet_agents: 1,
+    fetched_at: iso(NOW),
+    age_seconds: 0,
+    windows: [{ name: 'weekly', remaining_percent: 97, used_percent: 3, resets_at: iso(NOW + 7 * 24 * HOUR) }]
+  }]), NOW);
+  const g = groupFor(view, 'cursor');
+  assert.ok(g, 'cursor group');
+  assert.strictEqual(g.company, 'cursor');
+  assert.strictEqual(g.abbrev, 'cu');
+  assert.strictEqual(g.available, true);
+
+  // paintPlanUsage prefers ModelPrefix.companyIconHtml over the abbrev fallback.
+  const kids = [];
+  const el = {
+    className: '', title: '', style: {}, children: kids,
+    get firstChild() { return kids[0] || null; },
+    removeChild: function (c) { const i = kids.indexOf(c); if (i >= 0) kids.splice(i, 1); },
+    appendChild: function (c) { kids.push(c); return c; },
+    ownerDocument: null
+  };
+  function make(tag) {
+    return {
+      tagName: String(tag || ''), className: '', children: [], style: {}, attrs: {},
+      textContent: '', innerHTML: '', ownerDocument: doc,
+      setAttribute: function (k, v) { this.attrs[k] = v; },
+      appendChild: function (c) { this.children.push(c); return c; }
+    };
+  }
+  const doc = {
+    createElement: make,
+    createTextNode: function (t) { return { textContent: String(t || '') }; }
+  };
+  el.ownerDocument = doc;
+  const prev = global.ModelPrefix;
+  global.ModelPrefix = MP;
+  try {
+    PU.paintPlanUsage(el, view);
+  } finally {
+    if (prev === undefined) delete global.ModelPrefix;
+    else global.ModelPrefix = prev;
+  }
+  const group = kids[0];
+  assert.ok(group, 'painted cursor group');
+  assert.strictEqual(group.attrs['data-provider'], 'cursor');
+  const iconSlot = group.children[0];
+  assert.ok(iconSlot && String(iconSlot.className).indexOf('plan-icon') >= 0, 'icon slot');
+  assert.ok(String(iconSlot.innerHTML).indexOf('data-mark="cursor"') >= 0,
+    'must paint the Cursor SVG, not fall back to abbrev: ' + iconSlot.innerHTML);
+  assert.strictEqual(iconSlot.textContent, '', 'abbrev text is only the no-mark fallback');
 });
 
 test('T390.1: triangle sits at remaining-time fraction; missing rollover invents nothing', function () {

@@ -3,7 +3,7 @@
 
 import { useEffect } from 'react';
 import { planComposerTabCycle } from './composerTab';
-import { pageScrollDelta } from './pageScroll';
+import { applyTranscriptPageKey } from './pageScroll';
 
 function composerKind(el: Element | null): 'main' | 'sidebar' | 'other' {
   if (!el) return 'other';
@@ -12,16 +12,6 @@ function composerKind(el: Element | null): 'main' | 'sidebar' | 'other' {
   const kind = box.getAttribute('data-composer');
   if (kind === 'main' || kind === 'sidebar') return kind;
   return 'other';
-}
-
-function transcriptNear(el: Element | null): HTMLElement | null {
-  if (el) {
-    const wrap = el.closest('.agent-interaction');
-    const pane = wrap?.querySelector('.agent-transcript');
-    if (pane instanceof HTMLElement) return pane;
-  }
-  const main = document.querySelector('.cockpit-body > .agent-interaction .agent-transcript');
-  return main instanceof HTMLElement ? main : null;
 }
 
 export function useCockpitKeys(opts: { sidebarComposerVisible: boolean }): void {
@@ -41,14 +31,8 @@ export function useCockpitKeys(opts: { sidebarComposerVisible: boolean }): void 
         if (next instanceof HTMLElement) next.focus();
         return;
       }
-      const delta = pageScrollDelta(e.key, 0);
-      if (!delta && e.key !== 'PageUp' && e.key !== 'PageDown') return;
-      const pane = transcriptNear(document.activeElement);
-      if (!pane) return;
-      const dy = pageScrollDelta(e.key, pane.clientHeight);
-      if (!dy) return;
-      e.preventDefault();
-      pane.scrollBy(0, dy);
+      if (e.key !== 'PageUp' && e.key !== 'PageDown') return;
+      if (applyTranscriptPageKey(e.key, document.activeElement)) e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

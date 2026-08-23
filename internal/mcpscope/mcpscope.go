@@ -357,6 +357,39 @@ func EnsureUserScope(cfg []byte, name string, entry Entry) (out []byte, changed 
 	return append(out, '\n'), true, nil
 }
 
+// RemoveUserScope returns cfg with name deleted from the top-level
+// `mcpServers` map. Same raw-document discipline as EnsureUserScope:
+// only that one key moves. changed is false when the name is already
+// absent — do not write.
+func RemoveUserScope(cfg []byte, name string) (out []byte, changed bool, err error) {
+	var doc claudeDoc
+	if err := json.Unmarshal(cfg, &doc); err != nil {
+		return nil, false, fmt.Errorf("parse claude config: %w", err)
+	}
+	raw, ok := doc["mcpServers"]
+	if !ok {
+		return cfg, false, nil
+	}
+	var servers serverMap
+	if err := json.Unmarshal(raw, &servers); err != nil {
+		return nil, false, fmt.Errorf("parse user mcpServers: %w", err)
+	}
+	if _, ok := servers[name]; !ok {
+		return cfg, false, nil
+	}
+	delete(servers, name)
+	encoded, err := json.Marshal(servers)
+	if err != nil {
+		return nil, false, fmt.Errorf("encode mcpServers: %w", err)
+	}
+	doc["mcpServers"] = encoded
+	out, err = json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, false, fmt.Errorf("encode claude config: %w", err)
+	}
+	return append(out, '\n'), true, nil
+}
+
 // equivalentJSON compares two encoded values by structure rather than bytes,
 // so a registration that differs only in key order or whitespace is not
 // rewritten — which would mean taking the lock on the hot file for nothing.

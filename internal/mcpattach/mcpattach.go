@@ -3,39 +3,41 @@
 
 // Package mcpattach is how jevonsd puts the MCP set on every Session:
 // LoadMCP (discovery) + append jevonsmcp for Claude/Codex/Cursor, then
-// Config.MCPServers. Grok is different (🎯T525): ACP session/new gets
-// only this daemon's HTTP jevonsmcp — Grok already attaches
-// ~/.grok/config.toml (T58), and re-sending that inventory in a
+// AgentDef.MCPServers. Grok is different (🎯T525): ACP session/new gets
+// only this daemon's HTTP jevonsmcp — re-sending the full inventory in a
 // Claude-shaped ACP payload made session/new return Invalid params.
-// Codex still needs EnsureMCP because app-server thread/start has no
-// MCP field. Cursor (claudia v0.26) uses ~/.cursor/mcp.json; exclusive
-// mode writes project .cursor/mcp.json instead of rewriting HOME.
+// Codex exclusive Launch writes CODEX_HOME from MCPServers (app-server
+// thread/start has no MCP field). Claudia v0.27+ has no EnsureMCP.
 package mcpattach
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/marcelocantos/claudia"
 )
 
 // Args names this daemon's HTTP MCP endpoint and, optionally, isolate
-// fixture paths so Ensure/Load never touch the daily user files (🎯T379).
+// fixture paths so LoadMCP never reads the owner's HOME maps (🎯T379).
 type Args struct {
 	Name string
 	URL  string
-	// Path overrides. Empty means the production user-scope files.
-	// Isolates and tests must set all four (Claude/Grok/Codex/Cursor).
+	// Path overrides. Empty means the production user-scope files
+	// (LoadMCP discovery + daily Scrub). Isolates point these at
+	// state_dir/mcp so a journey does not inherit the owner map —
+	// the files themselves are not written.
 	ClaudeJSON string
 	GrokTOML   string
 	CodexTOML  string
 	CursorJSON string
-	// Isolate is true for a throwaway universe: SessionServers omits
-	// HTTP entries on Codex so claudia.Launch does not EnsureMCP into
-	// the owner's ~/.codex/config.toml.
+	// Isolate is a throwaway universe: skip HOME scrub; LoadMCP uses
+	// the fixture paths (missing is empty). Seats still get
+	// SessionServers, including Codex HTTP jevonsmcp.
 	Isolate bool
+	// Proxied is the T520 loopback list from mcpup.Mount.Advertised.
+	// SessionServers rewrites matching HTTP URLs so seats dial
+	// jevonsd, not the remote.
+	Proxied []claudia.MCPServer
 }
 
 // Exclusive is Jevons's Session MCP policy: do not merge the owner's
@@ -62,34 +64,10 @@ func HTTPURL(host string, port int) string {
 	return fmt.Sprintf("http://%s:%d/mcp", host, port)
 }
 
-// Ensure writes Name+URL into each Session provider's own config via
-// claudia.EnsureMCP. Isolates/tests pass fixture paths.
-func Ensure(a Args) error {
-	if strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.URL) == "" {
-		return fmt.Errorf("mcpattach: name and url required")
-	}
-	for _, p := range []string{a.ClaudeJSON, a.GrokTOML, a.CodexTOML, a.CursorJSON} {
-		if p == "" {
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-			return fmt.Errorf("mcpattach: mkdir %s: %w", filepath.Dir(p), err)
-		}
-	}
-	return claudia.EnsureMCP(&claudia.EnsureMCPArgs{
-		Name:       a.Name,
-		URL:        a.URL,
-		ClaudeJSON: a.ClaudeJSON,
-		GrokTOML:   a.GrokTOML,
-		CodexTOML:  a.CodexTOML,
-		CursorJSON: a.CursorJSON,
-	})
-}
-
 // SessionServers is the list Jevons passes on AgentDef.MCPServers.
-// Claude/Cursor (and Codex, subject to Isolate) get discovered system
-// servers plus this daemon's jevonsmcp. Grok gets only the live HTTP
-// jevonsmcp (🎯T525) — ~/.grok/config.toml already attaches on session/new.
+// Claude/Cursor/Codex get discovered system servers plus this daemon's
+// jevonsmcp, with T520 loopbacks applied from Proxied. Grok gets only
+// the live HTTP jevonsmcp (🎯T525).
 func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia.MCPServer {
 	if provider == claudia.ProviderGrok {
 		return grokSessionServers(a)
@@ -103,11 +81,7 @@ func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia
 			Name: name, Type: "http", URL: a.URL,
 		})
 	}
-	list := inv.ForProvider(provider)
-	if a.Isolate && provider == claudia.ProviderCodex {
-		return stripHTTP(list)
-	}
-	return list
+	return applyProxied(inv.ForProvider(provider), a.Proxied)
 }
 
 func grokSessionServers(a Args) []claudia.MCPServer {
@@ -146,13 +120,43 @@ func replaceOrAppend(list []claudia.MCPServer, mine claudia.MCPServer) []claudia
 	return append(out, mine)
 }
 
-func stripHTTP(list []claudia.MCPServer) []claudia.MCPServer {
-	var out []claudia.MCPServer
-	for _, s := range list {
-		if strings.TrimSpace(s.URL) != "" {
+func applyProxied(list []claudia.MCPServer, proxied []claudia.MCPServer) []claudia.MCPServer {
+	if len(proxied) == 0 {
+		return list
+	}
+	byName := make(map[string]string, len(proxied))
+	for _, p := range proxied {
+		if p.Name == "" || strings.TrimSpace(p.URL) == "" {
 			continue
 		}
-		out = append(out, s)
+		byName[p.Name] = p.URL
+	}
+	if len(byName) == 0 {
+		return list
+	}
+	out := append([]claudia.MCPServer(nil), list...)
+	for i, s := range out {
+		url, ok := byName[s.Name]
+		if !ok {
+			continue
+		}
+		out[i].URL = url
+		if out[i].Type == "" {
+			out[i].Type = "http"
+		}
 	}
 	return out
+}
+
+// ServersEqual reports whether two MCP lists match on name, URL, and type.
+func ServersEqual(a, b []claudia.MCPServer) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].URL != b[i].URL || a[i].Type != b[i].Type {
+			return false
+		}
+	}
+	return true
 }

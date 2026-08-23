@@ -190,9 +190,10 @@ func main() {
 		}
 	}
 
-	// Overseer MCP is EnsureMCP'd after bind (claudia 🎯T40; URL from the
-	// live listener, 🎯T379). Concrete bind address, never "localhost"
-	// (🎯T6: loopback is 127.0.0.1; localhost may resolve to ::1).
+	// Overseer MCP URL is bound after listen (claudia 🎯T40; 🎯T379).
+	// Concrete bind address, never "localhost" (🎯T6: loopback is
+	// 127.0.0.1; localhost may resolve to ::1). Daily never writes that
+	// URL into provider HOME configs — only AgentDef.MCPServers.
 	mcpHost := cfg.BindAddr
 	if mcpHost == "" || mcpHost == "0.0.0.0" || mcpHost == "::" {
 		mcpHost = "127.0.0.1"
@@ -867,18 +868,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// jevonsmcp: Claudia EnsureMCP on Claude/Grok/Codex native configs,
-	// plus session-scoped MCPServers on the overseer row (claudia 🎯T40).
-	// After bind, served port only (🎯T379).
+	// jevonsmcp: session-scoped MCPServers on the overseer row and every
+	// later mint (claudia 🎯T40). After bind, served port only (🎯T379).
+	// Daily boot scrubs leftover user-scope entries; it does not write them.
 	served := servedPort(ln.Addr())
 	mcpAttach := registerMCPEndpoints(cfg, mcpHost, served)
 	// 🎯T520: owner-map HTTP MCP → loopback proxy; OAuth refresh without
-	// the owner when a refresh token is stored. Mount before Serve.
-	_ = mountHTTPUpstreamProxy(mux, cfg, mcpHost, served, mcpAttach)
+	// the owner when a refresh token is stored. Advertised URLs go on
+	// MCPServers — Mount does not rewrite provider configs.
+	if up := mountHTTPUpstreamProxy(mux, cfg, mcpHost, served, mcpAttach); up != nil {
+		mcpAttach.Proxied = up.Advertised()
+	}
 	fleetAdapter.SetMCP(mcpAttach)
 	mcpSrv.SetMCP(mcpAttach)
 	jevonDef.MCPServers = mcpattach.SessionServers(mcpAttach, jevonDef.Provider, jevonDef.WorkDir)
 	stampRegistryMCPExclusive(registry, jevonDef)
+	stampRegistrySessionMCP(registry, mcpAttach, jevonDef)
 	if err := registry.Register(*jevonDef); err != nil {
 		slog.Warn("could not persist overseer MCPServers", "err", err)
 	}

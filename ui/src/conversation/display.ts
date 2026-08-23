@@ -1,6 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { isGenericToolName, summariseInput } from './toolSummary';
+
 /** Lifted display fold: notes, ⋯ n steps, prose. Not a second hydrate. */
 
 export type DisplayKind = 'user' | 'assistant' | 'steps';
@@ -94,12 +96,13 @@ export function isUserFrame(frame: unknown): boolean {
 }
 
 export function isToolOnly(frame: unknown): boolean {
+  const f = asRec(frame);
+  if (f.type === 'tool_result' || f.type === 'result') return false;
   const bs = blocks(frame);
   if (!bs.length) {
-    const t = asRec(frame).type;
-    return t === 'tool_use' || t === 'tool_result';
+    return f.type === 'tool_use';
   }
-  const tools = bs.filter((b) => b.type === 'tool_use' || b.type === 'tool_result');
+  const tools = bs.filter((b) => b.type === 'tool_use');
   const text = bs.filter((b) => (b.type === 'text' || b.type === 'output_text') && String(b.text || '').trim());
   return tools.length > 0 && text.length === 0;
 }
@@ -109,35 +112,30 @@ export function stepsLabel(n: number): string {
   return '⋯ ' + n + (n === 1 ? ' step' : ' steps');
 }
 
-function gist(input: unknown): string {
-  if (input == null) return '';
-  if (typeof input === 'string') return input.replace(/\s+/g, ' ').trim().slice(0, 60);
-  if (typeof input !== 'object') return String(input);
-  const o = input as Record<string, unknown>;
-  for (const k of ['query', 'path', 'command', 'title', 'name', 'text', 'url']) {
-    const v = o[k];
-    if (typeof v === 'string' && v.trim()) return v.replace(/\s+/g, ' ').trim().slice(0, 60);
-  }
-  return '';
-}
-
 export function summariseToolUse(c: Record<string, unknown>): string {
   const name = typeof c.name === 'string' && c.name.trim() ? c.name : 'tool';
-  const extra = gist(c.input);
+  const extra = summariseInput(c.input);
+  if (isGenericToolName(name)) return extra || name;
   return extra ? name + ': ' + extra : name;
 }
 
-export function stepItem(frame: unknown): StepItem | null {
+export function stepItems(frame: unknown): StepItem[] {
   if (isAgentNote(frame)) {
     const t = String(asRec(frame).text || '').trim();
-    return t ? { cls: 'agent-note', text: t } : null;
+    return t ? [{ cls: 'agent-note', text: t }] : [];
   }
   const f = asRec(frame);
-  if (f.type === 'tool_use') return { cls: 'tool-use', text: summariseToolUse(f) };
+  if (f.type === 'tool_result' || f.type === 'result') return [];
+  if (f.type === 'tool_use') return [{ cls: 'tool-use', text: summariseToolUse(f) }];
+  const out: StepItem[] = [];
   for (const b of blocks(frame)) {
-    if (b.type === 'tool_use') return { cls: 'tool-use', text: summariseToolUse(b) };
+    if (b.type === 'tool_use') out.push({ cls: 'tool-use', text: summariseToolUse(b) });
   }
-  return null;
+  return out;
+}
+
+export function stepItem(frame: unknown): StepItem | null {
+  return stepItems(frame)[0] ?? null;
 }
 
 function frameWhen(frame: unknown): number | undefined {
@@ -168,13 +166,20 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
     runWhen = undefined;
   };
   for (const f of frames) {
+    const rec = asRec(f);
+    if (rec.recorded === 'lossless') continue;
+    if (rec.type === 'tool_result' || rec.type === 'result' || rec.type === 'progress' || rec.type === 'system') {
+      continue;
+    }
     const when = frameWhen(f);
-    // Old foldDisplayEvent: agent_note is a turn-slot item, not a painted note.
-    if (isAgentNote(f) || isToolOnly(f)) {
-      const it = stepItem(f);
-      if (it) runItems.push(it);
+    const addStep = (it: StepItem) => {
+      runItems.push(it);
       run += 1;
       if (when != null) runWhen = when;
+    };
+    // Old foldDisplayEvent: agent_note is a turn-slot item, not a painted note.
+    if (isAgentNote(f)) {
+      for (const it of stepItems(f)) addStep(it);
       continue;
     }
     if (isUserFrame(f)) {
@@ -186,6 +191,27 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
       if (last && last.kind === 'user' && normalizeOwnerEchoText(last.text) === text) continue;
       flush();
       out.push({ kind: 'user', text, when });
+      continue;
+    }
+    // Walk content in order so a mixed text+tool_use frame reports every
+    // tool (🎯T119.10). tool_result is not a second step.
+    const bs = blocks(f);
+    if (bs.length) {
+      for (const b of bs) {
+        if (b.type === 'tool_use') {
+          addStep({ cls: 'tool-use', text: summariseToolUse(b) });
+          continue;
+        }
+        if (b.type !== 'text' && b.type !== 'output_text') continue;
+        const t = String(b.text || '').trim();
+        if (!t) continue;
+        flush();
+        out.push({ kind: 'assistant', text: t, when });
+      }
+      continue;
+    }
+    if (rec.type === 'tool_use') {
+      addStep({ cls: 'tool-use', text: summariseToolUse(rec) });
       continue;
     }
     const t = proseText(f).trim();

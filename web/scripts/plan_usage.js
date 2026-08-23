@@ -152,7 +152,7 @@
 
   // Same company map as model_prefix.js — claude and bedrock share the
   // Anthropic splat; grok wears the Grok mark; codex wears OpenAI;
-  // cursor is its own mark (abbrev when no icon is wired).
+  // cursor wears the Cursor mark.
   const PROVIDER_COMPANY = {
     claude: 'anthropic',
     anthropic: 'anthropic',

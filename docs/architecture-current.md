@@ -25,15 +25,18 @@ surfaces, the MCP tools the CEO drives, durable state, and cost governance.
     QUIC relay)          └── cost clamp-down (usage.db, budget.json)
 ```
 
-- **`cmd/jevonsd`** — the daemon. HTTP/WS server, dev-mode web serving,
+- **`cmd/jevonsd`** — the daemon. HTTP/WS server, web/React asset serving,
   mTLS device provisioning, cost wiring, CLI flags.
-- **`web/`** — the canonical UI. Self-contained chat client (markdown,
-  xterm.js terminal viewer, agent status), served by jevonsd. Transport is
-  abstracted (`web/scripts/transport.js`): WebSocket in the browser, a
-  native bridge inside the iOS WKWebView.
+- **`ui/`** — the **product** cockpit (Vite + React 19, 🎯T540). Dev on
+  `:5173` (`make ui-dev`) proxies to daily jevonsd. This is where owner-
+  visible UI work lands.
+- **`web/`** — **deprecated reference** vanilla cockpit. Still what daily
+  `GET /` may serve until cutover (🎯T505 / 🎯T540.2). Keep for parity
+  oracles; do not grow product behaviour here.
 - **`ios/Jevon`** — thin client: wraps the bundled web UI in a WKWebView
   and routes transport over a paired [pigeon](https://github.com/marcelocantos/pigeon)
-  QUIC relay (QR pairing artifact → credentials; 🎯T14.1).
+  QUIC relay (QR pairing artifact → credentials; 🎯T14.1). Residual until
+  the thin client points at the React surface after cutover.
 - **[claudia](https://github.com/marcelocantos/claudia)** — the agent
   harness library: process spawn, Grok ACP (session/new, session/load,
   session/prompt), Task one-shots, tmux-backed fleets, the agent registry.
@@ -73,7 +76,12 @@ The durable-thread path is the only agent lifecycle (🎯T41 removed the
 legacy manager/session MCP generation). The CEO drives everything through
 the in-process **MCP server** (`internal/mcpserver`, `jevons_*` tools +
 `jwork`); the tool list and stability grades are in
-[../STABILITY.md](../STABILITY.md).
+[../STABILITY.md](../STABILITY.md). `jevonsmcp` is attached on seats
+Jevons creates via Claudia (`AgentDef.MCPServers`). It is not written
+into provider HOME configs (`~/.claude.json`, `~/.cursor/mcp.json`,
+`~/.codex/config.toml`, `~/.grok/config.toml`) and isolates do not
+write `state_dir/mcp` either. Owner-map HTTP MCP is proxied on
+loopback; those URLs are stamped on the same `MCPServers` list (🎯T520).
 
 ## The conversation surface (🎯T309.2)
 
@@ -96,6 +104,19 @@ origin; the payload names that origin in `source`:
 - `chatlog` — the owner chat journal, which is the overseer's durable
   conversation record. Addressing the overseer by name returns its turns
   from there; the 🎯T124 refusal ("overseer uses main chat") is gone.
+
+**React mux (🎯T537.1 / T537.1.3).** The product cockpit talks `/ws/mux`.
+Each `transcript:{name}` channel is one windowed CQRS stream: the client
+names a half-open coalesced window (`[lo, hi)`; `0` is exclusive EOF;
+negatives only when following). Dual addressing: opaque event `id` for
+identity/append/dedup, dense 1-based `index` for windows. The server
+delivers coalesced events the client does not have (connect is `[-30, 0)`
+plus a 100-prose halo) and live token appends on the same channel.
+First paint reads a byte tail from EOF and folds only that — it does
+not Replay the whole journal to mint dense indexes. Page-up is
+`before` + `limit` within the loaded tail, not a guessed id range.
+Leaving live freezes the window so EOF growth does not slide the view.
+Vanilla `/ws/chat` stays a compat shim until cutover (🎯T505).
 
 **Transport residual** — what remains overseer-specific is transport and
 durability, not capability:

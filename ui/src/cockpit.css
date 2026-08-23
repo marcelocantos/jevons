@@ -574,7 +574,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   background: var(--bg); border-color: var(--border);
   z-index: 3;
 }
-.msg-expand-tab .chev { display: block; font-size: 13px; line-height: 1; }
+.msg-expand-tab .chev {
+  display: block;
+  font-size: 20px;
+  line-height: 1;
+  margin: -3px 0 0;
+}
 
 /* 🎯T266/T273: top-edge speaker/context tab on target-related owner asks.
    T273: speaker-omit = pure overseer/Jevons only; context chrome always paints
@@ -750,8 +755,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* Collapsible turn details */
 /* Compact tool-activity marker — it does NOT expand; its detail is shown
    as a hover tooltip. One small line, so it takes minimal vertical space. */
-.turn-marker { align-self: flex-start; position: relative; font-family: var(--mono); font-size: 11px; color: var(--text-muted); letter-spacing: -0.02em; user-select: none; cursor: default; line-height: 1.2; margin: 0; }
-.turn-marker:hover { color: var(--text-dim); }
+.turn-marker { align-self: flex-start; position: relative; font-family: var(--mono); font-size: 11px; color: var(--text-muted); letter-spacing: -0.02em; user-select: none; line-height: 1.2; margin: 0; pointer-events: none; }
+.turn-label { position: relative; display: inline-block; width: fit-content; max-width: 100%; pointer-events: auto; cursor: default; }
+.turn-label:hover { color: var(--text-dim); }
 /* 🎯T122: tip must not inherit the narrow marker's shrink-to-fit width.
    max-content + high min/max → wide single-line chrome; wrap only past max. */
 .turn-tip {
@@ -761,7 +767,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px;
   padding: 8px 12px; box-shadow: 0 8px 28px rgba(0,0,0,0.35);
 }
-.turn-marker:hover .turn-tip { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
+.turn-label:hover .turn-tip { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
 /* Timestamp outside the bubble, slightly under the border (not in the pocket). */
 .msg-time {
   position: absolute; top: 100%; left: 2px; right: auto;
@@ -837,6 +843,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); }
 #plan-ticker .plan-icon .model-icon { width: 17px; height: 17px; display: block; opacity: 0.85; }
 #plan-ticker .plan-icon .model-icon[data-mark="claude-splat"] { color: var(--anthropic-mark); }
+#plan-ticker .plan-icon .model-icon[data-mark="cursor"] { color: var(--text-muted); }
 #plan-ticker .plan-box { display: inline-flex; align-items: flex-end; gap: 5px; padding: 2px 5px 1px; border: 1px solid var(--border-focus); border-radius: 3px; }
 #plan-ticker .plan-win { display: inline-flex; align-items: flex-end; gap: 2px; }
 #plan-ticker .plan-track { position: relative; display: inline-block; width: 36px; padding-bottom: 5px; flex-shrink: 0; }
@@ -1363,7 +1370,8 @@ body.rhs-resizing-row { cursor: row-resize; }
    there is no plate, tile, or knock-out, so the vendor's orange-field lockup
    is inverted here and the badge stays a glyph on nothing. Keyed on data-mark
    so no other company is tinted. */
-.agent-node .model-badge .model-icon[data-mark="claude-splat"] { color: var(--text-dim); }
+.agent-node .model-badge .model-icon[data-mark="claude-splat"],
+.agent-node .model-badge .model-icon[data-mark="cursor"] { color: var(--text-dim); }
 /* 🎯T299: the subscript sits *below* the mark's baseline. flex-end already
    levels its box bottom with the icon's foot, so this relative offset drops it
    the rest of the way — 0.15em of 12px = 1.8px under the mark. Relative

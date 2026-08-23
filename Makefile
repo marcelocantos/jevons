@@ -234,8 +234,37 @@ test-go: bin/gotest
 test-go-raw:
 	go test ./...
 
+# React cockpit (🎯T540). Product UI path; daily GET / may still be web/ until T540.2.
+.PHONY: ui-dev ui-build test-ui-react ui-daemon-install ui-daemon-stop ui-daemon-status
+ui-dev:
+	cd ui && npm run dev
+
+ui-build:
+	cd ui && npm run build
+
+# Vite as a LaunchAgent (not a Grok background task). Same class as jevonsd.
+UI_DAEMON_LABEL := com.marcelocantos.jevons-ui
+UI_DAEMON_PLIST := $(HOME)/Library/LaunchAgents/$(UI_DAEMON_LABEL).plist
+ui-daemon-install:
+	@mkdir -p $(HOME)/.jevons $(HOME)/Library/LaunchAgents
+	@python3 -c "import os,pathlib; home=os.path.expanduser('~'); root=os.getcwd(); open(os.path.join(home,'Library/LaunchAgents','com.marcelocantos.jevons-ui.plist'),'w').write('''<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\\n<plist version=\"1.0\"><dict><key>Label</key><string>com.marcelocantos.jevons-ui</string><key>WorkingDirectory</key><string>%s/ui</string><key>ProgramArguments</key><array><string>/opt/homebrew/bin/npm</string><string>run</string><string>dev</string></array><key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin</string></dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>%s/.jevons/ui-dev.log</string><key>StandardErrorPath</key><string>%s/.jevons/ui-dev.log</string></dict></plist>\\n'''%(root,home,home))"
+	-launchctl bootout gui/$$(id -u)/$(UI_DAEMON_LABEL)
+	launchctl bootstrap gui/$$(id -u) $(UI_DAEMON_PLIST)
+	launchctl enable gui/$$(id -u)/$(UI_DAEMON_LABEL)
+	launchctl kickstart -k gui/$$(id -u)/$(UI_DAEMON_LABEL)
+
+ui-daemon-stop:
+	-launchctl bootout gui/$$(id -u)/$(UI_DAEMON_LABEL)
+
+ui-daemon-status:
+	launchctl print gui/$$(id -u)/$(UI_DAEMON_LABEL) | head -20
+
+test-ui-react:
+	@if [ -d ui/node_modules ]; then cd ui && npm test; else echo "skip test-ui-react (no ui/node_modules)"; fi
+
 # Hermetic Node tests for chat working-indicator lifecycle (🎯T39)
-# and attention-thread model (🎯T65).
+# and attention-thread model (🎯T65).  Reference vanilla (🎯T540) — prefer
+# porting failures into ui/ rather than growing web/.
 test-web:
 	node web/scripts/boot_sentinel_test.js
 	node web/scripts/module_gate_test.js

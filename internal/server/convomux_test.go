@@ -5,7 +5,13 @@ package server
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/muxwin"
 )
 
 func TestParseTranscriptChannel(t *testing.T) {
@@ -49,8 +55,19 @@ func TestMuxPageBodyEmptyClearsOlder(t *testing.T) {
 
 func TestMuxHubFansOnlyWatchers(t *testing.T) {
 	h := newMuxHub()
-	a := &muxSession{send: make(chan []byte, 4), transcripts: map[string]struct{}{"jevons": {}}}
-	b := &muxSession{send: make(chan []byte, 4), transcripts: map[string]struct{}{"jevons-po": {}}}
+	follow := &muxWatch{
+		visible:    muxwin.Resolved{Lo: 1, Hi: 0, Following: true},
+		sub:        muxwin.Resolved{Lo: 1, Hi: 0, Following: true},
+		subscribed: true,
+		sent:       map[string]struct{}{},
+	}
+	a := &muxSession{send: make(chan []byte, 4), transcripts: map[string]*muxWatch{"jevons": follow}}
+	b := &muxSession{send: make(chan []byte, 4), transcripts: map[string]*muxWatch{"jevons-po": {
+		visible:    muxwin.Resolved{Lo: 1, Hi: 0, Following: true},
+		sub:        muxwin.Resolved{Lo: 1, Hi: 0, Following: true},
+		subscribed: true,
+		sent:       map[string]struct{}{},
+	}}}
 	h.add(a)
 	h.add(b)
 	h.fanTranscript("jevons", `{"type":"user","message":{"content":"hi"}}`)
@@ -62,6 +79,17 @@ func TestMuxHubFansOnlyWatchers(t *testing.T) {
 		}
 		if env.T != "frame" || env.Ch != "transcript:jevons" {
 			t.Fatalf("a got %+v", env)
+		}
+		var body struct {
+			ID    string `json:"id"`
+			Index int    `json:"index"`
+			Op    string `json:"op"`
+		}
+		if err := json.Unmarshal(env.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.ID != "e:1" || body.Index != 1 || body.Op != "put" {
+			t.Fatalf("body=%+v", body)
 		}
 	default:
 		t.Fatal("watcher a got nothing")
@@ -100,4 +128,290 @@ func TestWriteMuxReplayEmptyThenMeta(t *testing.T) {
 			t.Fatalf("mux must not send inspect conversation_reset: %v", m)
 		}
 	}
+}
+
+func TestMuxWindowSealedReplayLiveAppendAndBefore(t *testing.T) {
+	dir := t.TempDir()
+	clog, err := chatlog.Open(filepath.Join(dir, "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clog.Close() })
+	for i := 0; i < 110; i++ {
+		if err := clog.Append(`{"type":"user","message":{"content":[{"type":"text","text":"pad"}]}}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := []string{
+		`{"type":"user","message":{"content":[{"type":"text","text":"u0"}]}}`,
+		`{"type":"user","message":{"content":[{"type":"text","text":"u1"}]}}`,
+		`{"type":"assistant","stream_id":"s1","message":{"content":[{"type":"text","text":"Hel"}]}}`,
+		`{"type":"assistant","stream_id":"s1","message":{"content":[{"type":"text","text":"lo"}]}}`,
+		`{"type":"assistant","stream_id":"s1","message":{"stop_reason":"end_turn"}}`,
+		`{"type":"user","message":{"content":[{"type":"text","text":"u2"}]}}`,
+		`{"type":"assistant","stream_id":"s2","message":{"content":[{"type":"text","text":"Hi"}]}}`,
+	}
+	for _, ln := range lines {
+		if err := clog.Append(ln); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := New("test", dir)
+	s.overseerName = "jevons"
+	s.SetChatLog(clog)
+	s.mux = newMuxHub()
+
+	sess := &muxSession{send: make(chan []byte, 32), transcripts: map[string]*muxWatch{}}
+	s.mux.add(sess)
+	buf := &replayBuf{}
+	if err := s.writeMuxWindow(t.Context(), buf, sess, "jevons", -2, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	var lastMeta map[string]any
+	for _, m := range buf.frames {
+		if m["t"] == "meta" {
+			lastMeta, _ = m["body"].(map[string]any)
+			continue
+		}
+		if m["t"] != "frame" {
+			continue
+		}
+		body, _ := m["body"].(map[string]any)
+		id, _ := body["id"].(string)
+		if id != "" {
+			ids = append(ids, id)
+		}
+		if id == "e:113" {
+			ev, _ := body["event"].(map[string]any)
+			if ev == nil {
+				raw, _ := json.Marshal(body["event"])
+				_ = json.Unmarshal(raw, &ev)
+			}
+			if proseFromEvent(ev) != "Hello" {
+				t.Fatalf("e:113 should be sealed Hello, got %q body=%v", proseFromEvent(ev), body["event"])
+			}
+		}
+	}
+	if lastMeta == nil || lastMeta["following"] != true {
+		t.Fatalf("meta=%v", lastMeta)
+	}
+	if !containsAll(ids, "e:113", "e:114", "e:115") {
+		t.Fatalf("connect delivery %s missing Hello/u2/Hi", stringsJoin(ids))
+	}
+	if containsAll(ids, "e:1") {
+		t.Fatal("halo 100 must not deliver the oldest pad on a 115-event log")
+	}
+	oldest := ids[0]
+
+	// Live append while following.
+	s.mux.fanTranscript("jevons", `{"type":"assistant","stream_id":"s2","message":{"content":[{"type":"text","text":" there"}]}}`)
+	select {
+	case got := <-sess.send:
+		var env muxEnvelope
+		if err := json.Unmarshal(got, &env); err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			ID string `json:"id"`
+			Op string `json:"op"`
+		}
+		_ = json.Unmarshal(env.Body, &body)
+		if body.ID != "e:115" || body.Op != "append" {
+			t.Fatalf("live=%+v raw=%s", body, got)
+		}
+	default:
+		t.Fatal("following session should get live append")
+	}
+
+	// Freeze, then a new EOF user must not fan — it is outside [lo, n+1).
+	// In-window appends to the frozen range still stream (CQRS until a new window).
+	w := sess.ensure("jevons")
+	w.visible = muxwin.Freeze(w.visible, 115)
+	w.sub = muxwin.Freeze(w.sub, 115)
+	s.mux.fanTranscript("jevons", `{"type":"assistant","stream_id":"s2","message":{"content":[{"type":"text","text":"!"}]}}`)
+	select {
+	case got := <-sess.send:
+		if !strings.Contains(string(got), `"op":"append"`) {
+			t.Fatalf("frozen window must still stream in-range append: %s", got)
+		}
+	default:
+		t.Fatal("frozen window missed in-range append")
+	}
+	s.mux.fanTranscript("jevons", `{"type":"user","message":{"content":[{"type":"text","text":"u3"}]}}`)
+	select {
+	case got := <-sess.send:
+		t.Fatalf("frozen session got EOF: %s", got)
+	default:
+	}
+
+	pageBuf := &replayBuf{}
+	s.writeMuxPageBefore(t.Context(), pageBuf, sess, "jevons", oldest, 2)
+	var pageIDs []string
+	for _, m := range pageBuf.frames {
+		if m["t"] != "frame" {
+			continue
+		}
+		body, _ := m["body"].(map[string]any)
+		if id, _ := body["id"].(string); id != "" {
+			pageIDs = append(pageIDs, id)
+		}
+	}
+	if len(pageIDs) == 0 {
+		t.Fatalf("page before %s delivered nothing", oldest)
+	}
+	if containsAll(pageIDs, oldest) {
+		t.Fatalf("page before %s must not re-send the cursor: %v", oldest, pageIDs)
+	}
+}
+
+func TestMuxPageBeforeKeepsFollowingLiveFan(t *testing.T) {
+	dir := t.TempDir()
+	clog, err := chatlog.Open(filepath.Join(dir, "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clog.Close() })
+	for i := 0; i < 8; i++ {
+		if err := clog.Append(`{"type":"user","message":{"content":[{"type":"text","text":"pad"}]}}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := New("test", dir)
+	s.overseerName = "jevons"
+	s.SetChatLog(clog)
+	s.mux = newMuxHub()
+	sess := &muxSession{send: make(chan []byte, 16), transcripts: map[string]*muxWatch{}}
+	s.mux.add(sess)
+	buf := &replayBuf{}
+	if err := s.writeMuxWindow(t.Context(), buf, sess, "jevons", -3, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	w := sess.ensure("jevons")
+	if !w.visible.Following {
+		t.Fatal("open must follow")
+	}
+	var firstID string
+	for _, m := range buf.frames {
+		if m["t"] != "frame" {
+			continue
+		}
+		body, _ := m["body"].(map[string]any)
+		if id, _ := body["id"].(string); id != "" {
+			firstID = id
+			break
+		}
+	}
+	if firstID == "" {
+		t.Fatal("no window frame")
+	}
+	pageBuf := &replayBuf{}
+	s.writeMuxPageBefore(t.Context(), pageBuf, sess, "jevons", firstID, 2)
+	if !sess.ensure("jevons").visible.Following {
+		t.Fatal("page-older must not freeze a following window")
+	}
+	var pageMeta map[string]any
+	for _, m := range pageBuf.frames {
+		if m["t"] == "page" {
+			pageMeta, _ = m["body"].(map[string]any)
+		}
+	}
+	if pageMeta == nil || pageMeta["following"] != true {
+		t.Fatalf("page meta must keep following: %v", pageMeta)
+	}
+	s.mux.fanTranscript("jevons", `{"type":"user","message":{"content":[{"type":"text","text":"live-after-page"}]}}`)
+	select {
+	case got := <-sess.send:
+		if !strings.Contains(string(got), "live-after-page") && !strings.Contains(string(got), `"op":"put"`) {
+			t.Fatalf("live fan after page: %s", got)
+		}
+	default:
+		t.Fatal("following session got no live user after page-older")
+	}
+}
+
+func proseFromEvent(ev map[string]any) string {
+	if ev == nil {
+		return ""
+	}
+	msg, _ := ev["message"].(map[string]any)
+	if msg == nil {
+		return ""
+	}
+	switch c := msg["content"].(type) {
+	case string:
+		return c
+	case []any:
+		var s string
+		for _, raw := range c {
+			b, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if tx, ok := b["text"].(string); ok {
+				s += tx
+			}
+		}
+		return s
+	default:
+		return ""
+	}
+}
+
+func stringsJoin(ids []string) string {
+	b, _ := json.Marshal(ids)
+	return string(b)
+}
+
+func TestMuxCoalescedFirstPaintFoldsTailOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	var b strings.Builder
+	b.WriteString(`{"type":"user","message":{"content":[{"type":"text","text":"HEADMARKER"}]}}` + "\n")
+	pad := `{"type":"user","message":{"content":[{"type":"text","text":"` + strings.Repeat("p", 160) + `"}]}}` + "\n"
+	for b.Len() < 3<<20 {
+		b.WriteString(pad)
+	}
+	b.WriteString(`{"type":"user","message":{"content":[{"type":"text","text":"TAILMARKER"}]}}` + "\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clog, err := chatlog.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clog.Close() })
+	s := New("test", dir)
+	s.overseerName = "jevons"
+	s.SetChatLog(clog)
+	s.mux = newMuxHub()
+
+	evs := s.muxCoalesced("jevons", true)
+	if len(evs) == 0 {
+		t.Fatal("empty fold")
+	}
+	if len(evs) > 20000 {
+		t.Fatalf("first paint folded the whole journal: n=%d", len(evs))
+	}
+	if !strings.Contains(string(evs[len(evs)-1].Body), "TAILMARKER") {
+		t.Fatalf("tail missing: %s", evs[len(evs)-1].Body)
+	}
+	for _, ev := range evs {
+		if strings.Contains(string(ev.Body), "HEADMARKER") {
+			t.Fatal("first paint included journal prefix")
+		}
+	}
+}
+
+func containsAll(have []string, want ...string) bool {
+	set := map[string]bool{}
+	for _, h := range have {
+		set[h] = true
+	}
+	for _, w := range want {
+		if !set[w] {
+			return false
+		}
+	}
+	return true
 }

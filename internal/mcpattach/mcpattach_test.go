@@ -25,47 +25,31 @@ func fixtureArgs(t *testing.T, name, url string) Args {
 	}
 }
 
-func TestEnsureWritesAllThreeAndIsIdempotent(t *testing.T) {
-	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
-	if err := Ensure(a); err != nil {
-		t.Fatal(err)
+func writeNamedHTTP(t *testing.T, a Args, name, url string) {
+	t.Helper()
+	doc := map[string]any{
+		"mcpServers": map[string]any{
+			name: map[string]any{"type": "http", "url": url},
+		},
 	}
-	if err := Ensure(a); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(a.ClaudeJSON)
+	raw, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "127.0.0.1:13705/mcp") {
-		t.Fatalf("claude json missing url: %s", raw)
+	if err := os.WriteFile(a.ClaudeJSON, raw, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	for _, p := range []string{a.GrokTOML, a.CodexTOML} {
-		b, err := os.ReadFile(p)
-		if err != nil {
+	if a.CursorJSON != "" {
+		if err := os.WriteFile(a.CursorJSON, raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(b), "127.0.0.1:13705/mcp") {
-			t.Fatalf("%s missing url: %s", p, b)
-		}
 	}
-}
-
-func TestEnsureCorrectsStaleURL(t *testing.T) {
-	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:54558/mcp")
-	if err := Ensure(a); err != nil {
+	toml := "[mcp_servers." + name + "]\nurl = \"" + url + "\"\n"
+	if err := os.WriteFile(a.GrokTOML, []byte(toml), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a.URL = "http://127.0.0.1:13705/mcp"
-	if err := Ensure(a); err != nil {
+	if err := os.WriteFile(a.CodexTOML, []byte(toml), 0o600); err != nil {
 		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(a.ClaudeJSON)
-	if strings.Contains(string(raw), "54558") {
-		t.Fatalf("stale port survived: %s", raw)
-	}
-	if !strings.Contains(string(raw), "13705") {
-		t.Fatalf("live port missing: %s", raw)
 	}
 }
 
@@ -115,18 +99,61 @@ func TestSessionServersReplacesStaleJevonsmcp(t *testing.T) {
 	}
 }
 
-func TestIsolateCodexSessionOmitsHTTP(t *testing.T) {
+func TestIsolateCodexSessionKeepsHTTP(t *testing.T) {
 	a := fixtureArgs(t, "jevonsmcp-journey", "http://127.0.0.1:13715/mcp")
 	a.Isolate = true
-	if err := Ensure(a); err != nil {
-		t.Fatal(err)
-	}
-	if got := SessionServers(a, claudia.ProviderCodex, ""); len(got) != 0 {
-		t.Fatalf("isolate Codex SessionServers = %+v; want empty so Launch does not write ~/.codex", got)
+	got := SessionServers(a, claudia.ProviderCodex, "")
+	if len(got) != 1 || got[0].Name != "jevonsmcp-journey" || got[0].URL != a.URL {
+		t.Fatalf("isolate Codex SessionServers = %+v; want journey HTTP jevonsmcp", got)
 	}
 	claude := SessionServers(a, claudia.ProviderClaude, "")
 	if len(claude) != 1 || claude[0].Name != "jevonsmcp-journey" {
 		t.Fatalf("isolate Claude should still carry the journey server: %+v", claude)
+	}
+}
+
+func TestSessionServersRewritesProxiedHTTP(t *testing.T) {
+	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
+	doc := map[string]any{
+		"mcpServers": map[string]any{
+			"atlassian": map[string]any{"type": "http", "url": "https://mcp.atlassian.com/v1/mcp"},
+		},
+	}
+	raw, _ := json.Marshal(doc)
+	if err := os.WriteFile(a.ClaudeJSON, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.Proxied = []claudia.MCPServer{{
+		Name: "atlassian", Type: "http", URL: "http://127.0.0.1:13705/upstream/atlassian",
+	}}
+	list := SessionServers(a, claudia.ProviderClaude, "")
+	byName := map[string]claudia.MCPServer{}
+	for _, s := range list {
+		byName[s.Name] = s
+	}
+	if byName["atlassian"].URL != "http://127.0.0.1:13705/upstream/atlassian" {
+		t.Fatalf("proxied atlassian = %+v", byName["atlassian"])
+	}
+	if byName["jevonsmcp"].URL != a.URL {
+		t.Fatalf("jevonsmcp = %+v", byName["jevonsmcp"])
+	}
+}
+
+func TestScrubRemovesJSONAndTOML(t *testing.T) {
+	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
+	a.CursorJSON = filepath.Join(filepath.Dir(a.ClaudeJSON), "cursor.json")
+	writeNamedHTTP(t, a, a.Name, a.URL)
+	if err := Scrub(a); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{a.ClaudeJSON, a.GrokTOML, a.CodexTOML, a.CursorJSON} {
+		b, err := os.ReadFile(p)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "jevonsmcp") {
+			t.Fatalf("%s still has jevonsmcp: %s", p, b)
+		}
 	}
 }
 

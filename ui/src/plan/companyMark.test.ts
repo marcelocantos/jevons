@@ -9,6 +9,7 @@ describe('plan company marks', () => {
     expect(companyOfProvider('claude')).toBe('anthropic');
     expect(companyOfProvider('grok')).toBe('xai');
     expect(companyOfProvider('codex')).toBe('openai');
+    expect(companyOfProvider('cursor')).toBe('cursor');
   });
 
   it('abbreviates windows as s / w', () => {

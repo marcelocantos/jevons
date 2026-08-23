@@ -4,39 +4,17 @@
 package main
 
 import (
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/marcelocantos/claudia"
 )
 
-// isolateMCPWritten reports whether EnsureMCP wrote name into the isolate
-// state_dir/mcp files (not the owner's ~/.grok or ~/.claude.json).
-func isolateMCPWritten(stateDir, name string) bool {
-	dir := filepath.Join(stateDir, "mcp")
-	for _, p := range []string{
-		filepath.Join(dir, "claude.json"),
-		filepath.Join(dir, "grok.toml"),
-		filepath.Join(dir, "codex.toml"),
-	} {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(b), name) {
-			return true
-		}
-	}
-	return false
-}
-
 // Provider-aware user-scoped MCP inspection for the journey isolate (🎯T282).
 //
-// Isolates write jevonsmcp-journey only under state_dir/mcp (claudia
-// EnsureMCP). This CLI list/remove is leftover cleanup if an older daemon
-// leaked the journey name into the owner's user-scope files.
+// Isolates attach jevonsmcp-journey on AgentDef.MCPServers only. This CLI
+// list/remove is leftover cleanup if an older daemon leaked the journey
+// name into the owner's user-scope files.
 
 // mcpCLI returns the CLI binary name that owns user-scoped MCP registration
 // for a provider, or "" when the provider has no known install path

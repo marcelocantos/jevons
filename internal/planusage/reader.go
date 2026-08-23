@@ -87,10 +87,17 @@ func NewReader(args ReaderArgs) *Reader {
 		grok := args.GrokUnstableUsage || os.Getenv(GrokUsageEnv) == "1"
 		cursor := args.CursorUnstableUsage || os.Getenv(CursorUsageEnv) == "1"
 		args.Fetch = func(ctx context.Context) ([]claudia.PlanUsage, error) {
+			tok := strings.TrimSpace(os.Getenv(CursorAPIKeyEnv))
+			if tok == "" {
+				if t, err := loadCursorAccessToken(""); err == nil {
+					tok = t
+				}
+			}
 			return claudia.QueryAllPlanUsage(ctx, &claudia.AllPlanUsageArgs{
 				Providers:           SupportedProviders(),
 				GrokUnstableUsage:   grok,
 				CursorUnstableUsage: cursor,
+				CursorAccessToken:   tok,
 			})
 		}
 	}

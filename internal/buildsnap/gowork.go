@@ -12,7 +12,8 @@ import (
 // injectSiblingGoWork writes a snapshot go.work that replaces claudia
 // with the org-sibling checkout, when one exists next to the clone.
 //
-// Local claudia upgrades (EnsureMCP, T40) are not always published.
+// Local claudia upgrades ahead of the published pin are not always
+// in go.mod.
 // ../go.work hides that in the shared clone; the 🎯T254.2 snapshot is a
 // worktree of jevons HEAD alone and GOWORK=off's pin cannot see them.
 // A snapshot-only go.work with an absolute replace is the T473 shape

@@ -176,4 +176,60 @@ func TestReplayTailAndReadRange(t *testing.T) {
 	}
 }
 
+func TestTailBytesSkipsPrefixAndTornLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j.jsonl")
+	var b strings.Builder
+	b.WriteString(`{"type":"user","message":{"content":"HEAD"}}` + "\n")
+	pad := `{"type":"user","message":{"content":"` + strings.Repeat("x", 180) + `"}}` + "\n"
+	for b.Len() < 3<<20 {
+		b.WriteString(pad)
+	}
+	b.WriteString(`{"type":"user","message":{"content":"TAIL"}}` + "\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	lines, truncated, err := l.TailBytes(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated {
+		t.Fatal("3MB file with 1MB window must report truncated")
+	}
+	if len(lines) == 0 {
+		t.Fatal("empty tail")
+	}
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, "HEAD") {
+		t.Fatal("prefix leaked into TailBytes")
+	}
+	if !strings.Contains(joined[len(joined)-80:], "TAIL") {
+		t.Fatalf("missing TAIL: last=%q", lines[len(lines)-1])
+	}
+	for _, ln := range lines {
+		if !strings.HasPrefix(ln, "{") {
+			t.Fatalf("torn line survived skip: %q", ln[:min(40, len(ln))])
+		}
+	}
+
+	small := filepath.Join(t.TempDir(), "small.jsonl")
+	if err := os.WriteFile(small, []byte("{\"type\":\"user\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(small)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, trunc, err := s.TailBytes(1 << 20)
+	if err != nil || trunc || len(got) != 1 {
+		t.Fatalf("small: n=%d trunc=%v err=%v", len(got), trunc, err)
+	}
+}
+
 func itoa(i int) string { return string(rune('0' + i)) }

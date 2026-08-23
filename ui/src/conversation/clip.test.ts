@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { clipClassName, shouldClip } from './clip';
+import { clipClassName, expandTabChevron, shouldClip } from './clip';
 
 describe('shouldClip', () => {
   it('clips a tall user wall and leaves a short bubble', () => {
@@ -17,5 +17,12 @@ describe('clipClassName', () => {
   it('adds msg-clipped only when tall', () => {
     expect(clipClassName('bubble bubble-user', 400)).toContain('msg-clipped');
     expect(clipClassName('bubble bubble-user', 80)).toBe('bubble bubble-user');
+  });
+});
+
+describe('expandTabChevron', () => {
+  it('matches the vanilla pocket-tab glyphs', () => {
+    expect(expandTabChevron(false)).toBe('\u25BE');
+    expect(expandTabChevron(true)).toBe('\u25B4');
   });
 });

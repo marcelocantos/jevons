@@ -10,7 +10,7 @@
 // the only channel left, so the answer has to arrive through it.
 //
 //	bin/mcpscope diagnose    # what is wrong, in a sentence, and an exit code
-//	bin/mcpscope ensure      # register jevonsmcp user-scoped so it follows the agent
+//	bin/mcpscope ensure      # refused: jevonsmcp is session-scoped, not user-scope
 package main
 
 import (
@@ -18,7 +18,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/marcelocantos/jevons/internal/mcpscope"
 )
@@ -62,11 +61,9 @@ func usage() {
       situations this session is in. Exit 0 healthy, 3 out of scope (daemon
       UP), 4 down, 5 undetermined.
 
-  mcpscope ensure [-server NAME] [-endpoint URL] [-n]
-      Register the server in the user scope of ~/.claude.json, so fleet
-      control follows the agent instead of the directory it started in.
-      Does not write when the entry is already correct. -n reports what it
-      would do.
+  mcpscope ensure
+      Refused. jevonsmcp is attached on Claudia-created seats
+      (AgentDef.MCPServers), never written into ~/.claude.json.
 `)
 }
 
@@ -103,7 +100,7 @@ func diagnose(argv []string) int {
 			for _, dir := range d.LocalDirs {
 				fmt.Printf("  %s\n", dir)
 			}
-			fmt.Printf("\nFix: mcpscope ensure -server %s -endpoint %s\n", *server, *endpoint)
+			fmt.Printf("\nFix: re-mint this seat under jevons-po so AgentDef.MCPServers carries %s; do not write ~/.claude.json\n", *server)
 		}
 	}
 	switch {
@@ -126,49 +123,7 @@ func plural(n int) string {
 }
 
 func ensure(argv []string) int {
-	fs := flag.NewFlagSet("ensure", flag.ExitOnError)
-	server := fs.String("server", mcpscope.ServerName, "MCP server name to register")
-	endpoint := fs.String("endpoint", mcpscope.DefaultEndpoint, "endpoint the server is served on")
-	dry := fs.Bool("n", false, "report what would change without writing")
-	_ = fs.Parse(argv)
-
-	configPath := mcpscope.ConfigPath()
-	if configPath == "" {
-		fmt.Fprintf(os.Stderr, "mcpscope: %v\n", mcpscope.ErrNoConfigPath)
-		return exitUnknown
-	}
-	entry := mcpscope.HTTPEntry(strings.TrimSpace(*endpoint))
-
-	if *dry {
-		data, err := os.ReadFile(configPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "mcpscope: read %s: %v\n", configPath, err)
-			return exitUnknown
-		}
-		_, changed, err := mcpscope.EnsureUserScope(data, *server, entry)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "mcpscope: %v\n", err)
-			return exitUnknown
-		}
-		if changed {
-			fmt.Printf("would register %s = %s in the user scope of %s\n", *server, entry.URL, configPath)
-		} else {
-			fmt.Printf("%s is already registered as %s in the user scope of %s\n", *server, entry.URL, configPath)
-		}
-		return exitHealthy
-	}
-
-	changed, err := mcpscope.WriteEnsure(configPath, *server, entry)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mcpscope: %v\n", err)
-		return exitUnknown
-	}
-	if changed {
-		fmt.Printf("registered %s = %s in the user scope of %s — restart a session to pick it up\n",
-			*server, entry.URL, configPath)
-	} else {
-		fmt.Printf("%s already registered as %s in the user scope of %s; nothing written\n",
-			*server, entry.URL, configPath)
-	}
-	return exitHealthy
+	_ = flag.NewFlagSet("ensure", flag.ContinueOnError).Parse(argv)
+	fmt.Fprint(os.Stderr, "mcpscope ensure: refused — jevonsmcp must not land in ~/.claude.json (or other provider HOME configs).\nIt is attached on seats jevons creates via Claudia (AgentDef.MCPServers).\nRe-mint the agent under jevons-po if tools are missing.\n")
+	return exitUsage
 }

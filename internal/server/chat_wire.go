@@ -247,13 +247,23 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		if ev.ProgressType == "" {
 			return "", false
 		}
-		name, input := toolCallDetail(ev.Raw)
+		call := parseToolCall(ev.Raw)
+		if call.SessionUpdate != "tool_call" {
+			return "", false
+		}
+		name := call.DisplayName()
 		if name == "" {
 			return "", false
 		}
 		tu := map[string]any{"type": "tool_use", "name": name}
-		if len(input) > 0 {
-			tu["input"] = input
+		if call.ID != "" {
+			tu["id"] = call.ID
+		}
+		if call.Kind != "" && call.Kind != "other" {
+			tu["kind"] = call.Kind
+		}
+		if len(call.Input) > 0 {
+			tu["input"] = call.Input
 		}
 		b, err := json.Marshal(map[string]any{
 			"type":      "assistant",
@@ -484,41 +494,101 @@ func chatUserEchoAs(text, origin string) string {
 	return string(b)
 }
 
+// toolCall is one ACP tool_call / tool_call_update (🎯T63 / T64).
+type toolCall struct {
+	SessionUpdate string
+	Title         string
+	Name          string
+	ID            string
+	Kind          string
+	Input         map[string]any
+}
+
+func (c toolCall) DisplayName() string {
+	if !genericToolTitle(c.Title) {
+		return c.Title
+	}
+	if c.Name != "" && !genericToolTitle(c.Name) {
+		return c.Name
+	}
+	if c.Input != nil {
+		if tn, _ := c.Input["tool_name"].(string); strings.TrimSpace(tn) != "" {
+			return strings.TrimSpace(tn)
+		}
+		if n, _ := c.Input["name"].(string); strings.TrimSpace(n) != "" && !genericToolTitle(n) {
+			return strings.TrimSpace(n)
+		}
+	}
+	if strings.TrimSpace(c.Title) != "" {
+		return strings.TrimSpace(c.Title)
+	}
+	return strings.TrimSpace(c.Name)
+}
+
+func genericToolTitle(s string) bool {
+	t := strings.ToLower(strings.Join(strings.Fields(s), " "))
+	return t == "" || t == "tool" || t == "tool_use" || t == "mcp: tool" || t == "mcp:tool"
+}
+
 // toolCallDetail pulls the human tool name and input args out of an ACP
 // tool_call session/update (carried verbatim in a progress event's Raw).
 // Returns an empty name for tool_call_update status frames and anything
 // without a title, so the caller emits exactly one activity row per call
 // instead of a stack of indistinguishable "tool_use:" rows (🎯T63).
 func toolCallDetail(raw []byte) (name string, input map[string]any) {
-	// claudia re-marshals the ACP update into Event.Raw (update at top level
-	// or nested). Prefer title + rawInput/arguments when present (🎯T64).
+	call := parseToolCall(raw)
+	if call.SessionUpdate != "tool_call" {
+		return "", nil
+	}
+	return call.DisplayName(), call.Input
+}
+
+// parseToolCall reads title / name / rawInput / toolCallId from an ACP
+// session/update (top-level or nested). tool_call_update is returned so
+// a later merge can fill a generic "MCP: tool" row (🎯T64).
+func parseToolCall(raw []byte) toolCall {
 	var probe struct {
 		SessionUpdate string          `json:"sessionUpdate"`
 		Title         string          `json:"title"`
+		Name          string          `json:"name"`
+		ToolCallID    string          `json:"toolCallId"`
+		Kind          string          `json:"kind"`
 		RawInput      json.RawMessage `json:"rawInput"`
 		Arguments     json.RawMessage `json:"arguments"`
 		Update        struct {
 			SessionUpdate string          `json:"sessionUpdate"`
 			Title         string          `json:"title"`
+			Name          string          `json:"name"`
+			ToolCallID    string          `json:"toolCallId"`
+			Kind          string          `json:"kind"`
 			RawInput      json.RawMessage `json:"rawInput"`
 			Arguments     json.RawMessage `json:"arguments"`
 		} `json:"update"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
-		return "", nil
+		return toolCall{}
 	}
 	su := probe.Update.SessionUpdate
 	if su == "" {
 		su = probe.SessionUpdate
 	}
-	if su != "tool_call" {
-		return "", nil
+	title := probe.Update.Title
+	if title == "" {
+		title = probe.Title
 	}
-	name = probe.Update.Title
+	name := probe.Update.Name
 	if name == "" {
-		name = probe.Title
+		name = probe.Name
 	}
-	input = decodeToolInput(probe.Update.RawInput)
+	id := probe.Update.ToolCallID
+	if id == "" {
+		id = probe.ToolCallID
+	}
+	kind := probe.Update.Kind
+	if kind == "" {
+		kind = probe.Kind
+	}
+	input := decodeToolInput(probe.Update.RawInput)
 	if input == nil {
 		input = decodeToolInput(probe.Update.Arguments)
 	}
@@ -528,7 +598,14 @@ func toolCallDetail(raw []byte) (name string, input map[string]any) {
 	if input == nil {
 		input = decodeToolInput(probe.Arguments)
 	}
-	return name, input
+	return toolCall{
+		SessionUpdate: su,
+		Title:         title,
+		Name:          name,
+		ID:            id,
+		Kind:          kind,
+		Input:         input,
+	}
 }
 
 func decodeToolInput(raw json.RawMessage) map[string]any {

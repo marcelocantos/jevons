@@ -46,7 +46,7 @@ func incidentAttach(t *testing.T) mcpattach.Args {
 	}
 }
 
-func TestT503DailyBootCorrectsStaleUserScope(t *testing.T) {
+func TestT503DailyBootScrubsUserScope(t *testing.T) {
 	cfg := config.Default()
 	a := incidentAttach(t)
 	registerMCPEndpointsAt(cfg, "127.0.0.1", 13705, a)
@@ -54,39 +54,30 @@ func TestT503DailyBootCorrectsStaleUserScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "54558") {
-		t.Fatalf("stale throwaway port survived daily EnsureMCP: %s", data)
+	if strings.Contains(string(data), "54558") || strings.Contains(string(data), mcpscope.ServerName) {
+		t.Fatalf("stale jevonsmcp survived daily scrub: %s", data)
 	}
-	scope, entry, err := mcpscope.FindScope(data, mcpscope.ServerName, "/anywhere")
+	scope, _, err := mcpscope.FindScope(data, mcpscope.ServerName, "/anywhere")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scope != mcpscope.ScopeUser || entry.URL != mcpscope.DefaultEndpoint {
-		t.Fatalf("scope=%q url=%q", scope, entry.URL)
+	if scope != mcpscope.ScopeNone {
+		t.Fatalf("scope=%q want none", scope)
 	}
-	for _, p := range []string{a.GrokTOML, a.CodexTOML, a.CursorJSON} {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(b), "13705/mcp") {
-			t.Fatalf("%s missing live url: %s", p, b)
-		}
+	if !strings.Contains(string(data), "bullseye") {
+		t.Fatalf("scrub dropped unrelated server: %s", data)
 	}
 
 	before, _ := os.ReadFile(a.ClaudeJSON)
 	registerMCPEndpointsAt(cfg, "127.0.0.1", 13705, a)
 	after, _ := os.ReadFile(a.ClaudeJSON)
 	if string(before) != string(after) {
-		t.Error("second daily boot rewrote an already-correct config")
+		t.Error("second daily boot rewrote an already-clean config")
 	}
 }
 
 func TestT503IsolateBootNeverTouchesUserScope(t *testing.T) {
 	daily := incidentAttach(t)
-	if err := mcpattach.Ensure(daily); err != nil {
-		t.Fatal(err)
-	}
 	before, _ := os.ReadFile(daily.ClaudeJSON)
 
 	isolate := config.Default()
@@ -99,8 +90,8 @@ func TestT503IsolateBootNeverTouchesUserScope(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatal("an isolate boot wrote the shared Claude config (🎯T503/🎯T379)")
 	}
-	if _, err := os.Stat(a.ClaudeJSON); err != nil {
-		t.Fatalf("isolate should have written its own config: %v", err)
+	if _, err := os.Stat(a.ClaudeJSON); err == nil {
+		t.Fatal("isolate boot must not write state_dir/mcp")
 	}
 }
 

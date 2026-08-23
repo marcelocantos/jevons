@@ -11,4 +11,27 @@ describe('shouldRequestPage', () => {
     expect(shouldRequestPage({ scrollTop: 80, older: 20, inFlight: false })).toBe(false);
     expect(shouldRequestPage({ scrollTop: 0, older: 0, inFlight: false })).toBe(false);
   });
+
+  it('does not page the live tail when following or the pane is short', () => {
+    expect(shouldRequestPage({ scrollTop: 0, older: 20, inFlight: false, following: true })).toBe(false);
+    expect(
+      shouldRequestPage({
+        scrollTop: 0,
+        older: 20,
+        inFlight: false,
+        scrollHeight: 400,
+        clientHeight: 689,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRequestPage({
+        scrollTop: 10,
+        older: 20,
+        inFlight: false,
+        following: false,
+        scrollHeight: 4000,
+        clientHeight: 689,
+      }),
+    ).toBe(true);
+  });
 });

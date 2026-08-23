@@ -15,11 +15,10 @@ import (
 	"github.com/marcelocantos/jevons/internal/mcpup"
 )
 
-// registerMCPEndpoints puts jevonsmcp on every Session backend after bind
-// (🎯T379: URL from the live listener). Claudia EnsureMCP writes Claude,
-// Grok, Codex, and Cursor native configs; LoadMCP+append is the session
-// list. Isolates write only under state_dir/mcp so they cannot leak a
-// throwaway port into the owner's user-scope files.
+// registerMCPEndpoints stamps the live jevonsmcp URL for Claudia mints
+// (🎯T379: served port). Neither daily nor isolate boot writes provider
+// configs — seats get AgentDef.MCPServers at create. Isolates point
+// LoadMCP at state_dir/mcp (usually missing) so they do not inherit HOME.
 func registerMCPEndpoints(cfg config.Config, host string, port int) mcpattach.Args {
 	return registerMCPEndpointsAt(cfg, host, port, fleetMCPAttach(cfg, host, port))
 }
@@ -45,13 +44,18 @@ func registerMCPEndpointsAt(cfg config.Config, host string, port int, a mcpattac
 	if a.Name == "" {
 		a = fleetMCPAttach(cfg, host, port)
 	}
-	if err := mcpattach.Ensure(a); err != nil {
-		slog.Warn("could not ensure jevonsmcp on provider configs — agents may start without jevons tools",
-			"name", a.Name, "url", a.URL, "err", err)
+	if a.Isolate {
+		slog.Info("isolate jevonsmcp is session-scoped; no provider config write",
+			"name", a.Name, "url", a.URL)
 		return a
 	}
-	slog.Info("jevonsmcp ensured on Claude, Grok, Codex, and Cursor configs",
-		"name", a.Name, "url", a.URL, "isolate", a.Isolate)
+	if err := mcpattach.Scrub(a); err != nil {
+		slog.Warn("could not scrub jevonsmcp from user-scope provider configs",
+			"name", a.Name, "err", err)
+	} else {
+		slog.Info("jevonsmcp is session-scoped; user-scope provider configs scrubbed",
+			"name", a.Name, "url", a.URL)
+	}
 	return a
 }
 
@@ -105,14 +109,6 @@ func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, 
 		SkipNames:  skip,
 		Store:      store,
 		Upstreams:  upstreams,
-	}
-	if attach.ClaudeJSON != "" || attach.GrokTOML != "" || attach.CodexTOML != "" || attach.CursorJSON != "" {
-		args.EnsureArgs = &claudia.EnsureMCPArgs{
-			ClaudeJSON: attach.ClaudeJSON,
-			GrokTOML:   attach.GrokTOML,
-			CodexTOML:  attach.CodexTOML,
-			CursorJSON: attach.CursorJSON,
-		}
 	}
 	h, err := mcpup.Mount(mux, args)
 	if err != nil {

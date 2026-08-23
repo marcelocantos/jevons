@@ -387,7 +387,7 @@ test('bedrock provider mark is explicit and leaves other providers unchanged', f
 });
 
 test('no retired mark is ever painted again', function () {
-  ['anthropic', 'xai', 'openai'].forEach(function (company) {
+  ['anthropic', 'xai', 'openai', 'cursor'].forEach(function (company) {
     const icon = MP.companyIconHtml(company);
     Object.keys(RETIRED_MARKS).forEach(function (why) {
       assert.ok(icon.indexOf(RETIRED_MARKS[why]) === -1,
@@ -395,7 +395,7 @@ test('no retired mark is ever painted again', function () {
     });
   });
   // Each company reads as a different row at a glance.
-  const marks = ['anthropic', 'xai', 'openai'].map(MP.companyIconHtml);
+  const marks = ['anthropic', 'xai', 'openai', 'cursor'].map(MP.companyIconHtml);
   assert.strictEqual(new Set(marks).size, marks.length, 'two companies share a mark');
 });
 
