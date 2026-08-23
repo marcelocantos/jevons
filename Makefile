@@ -289,9 +289,22 @@ test-web:
 	node web/scripts/link_safety_test.js
 	node web/scripts/image_lightbox_test.js
 
-# Playwright perceptual chat UI (hermetic mocked WS; needs playwright
-# from scripts/browser-loop-test). Live: make test-ui-live.
-test-ui:
+# Playwright perceptual chat UI (hermetic mocked WS). node_modules under
+# scripts/browser-loop-test is gitignored (🎯T438), so a clean checkout of
+# HEAD has no playwright until this install runs — same family as 🎯T360 /
+# 🎯T398. Prefer not vendoring; make installs when absent.
+PLAYWRIGHT_MOD := scripts/browser-loop-test/node_modules/playwright
+
+.PHONY: playwright-deps
+playwright-deps: $(PLAYWRIGHT_MOD)
+
+$(PLAYWRIGHT_MOD): scripts/browser-loop-test/package.json scripts/browser-loop-test/package-lock.json
+	cd scripts/browser-loop-test && npm ci
+	@test -d $@ || (echo "npm ci did not install playwright at $@" >&2; exit 1)
+
+# Live: make test-ui-live.
+.PHONY: test-ui
+test-ui: playwright-deps
 	node scripts/chat-ui-test/test.js
 	node scripts/chat-ui-test/collapse-test.js
 	node scripts/chat-ui-test/stream-scroll-test.js
@@ -330,7 +343,7 @@ test-ui:
 	node scripts/chat-ui-test/t509-envelope-render-test.js
 
 .PHONY: test-ui-live
-test-ui-live:
+test-ui-live: playwright-deps
 	node scripts/chat-ui-test/test.js --live
 
 # Live scenario suite (🎯T51): drives a RUNNING jevonsd through the
