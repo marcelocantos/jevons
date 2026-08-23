@@ -354,6 +354,17 @@ type IdleActivity struct {
 	NeedsRecover bool
 	// TerminalEmpty is true when the last terminal stop had empty text.
 	TerminalEmpty bool
+	// RefusalHold is true after a refusal-only terminal until a substantive
+	// turn clears it (🎯T454). Impatience must not treat phase=working under
+	// a hold as satisfaction.
+	RefusalHold bool
+	// LastTerminal is the most recent end_turn text (bounded), for turn-kind
+	// classification on the impatience observe path.
+	LastTerminal string
+	// SubstantivePulse is a one-shot: set when a substantive terminal clears
+	// a refusal hold (or arrives otherwise). observeForImpatience consumes
+	// it so a completed turn can satisfy even though phase is already idle.
+	SubstantivePulse bool
 }
 
 // IdleActivityTracker records ACP-derived phase for the idle-nudge sweep.
@@ -402,11 +413,14 @@ func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (
 	// Preserve T236 recover latches across mid-turn working updates;
 	// NoteTerminalOutcome sets them on end_turn; ClearRecover clears.
 	next := IdleActivity{
-		Phase:         phase,
-		Updated:       t.clock(),
-		FailureClass:  prev.FailureClass,
-		NeedsRecover:  prev.NeedsRecover,
-		TerminalEmpty: prev.TerminalEmpty,
+		Phase:            phase,
+		Updated:          t.clock(),
+		FailureClass:     prev.FailureClass,
+		NeedsRecover:     prev.NeedsRecover,
+		TerminalEmpty:    prev.TerminalEmpty,
+		RefusalHold:      prev.RefusalHold,
+		LastTerminal:     prev.LastTerminal,
+		SubstantivePulse: prev.SubstantivePulse,
 	}
 	// Fresh working progress clears stale recover latch only when we see
 	// real tool/assistant activity after a prior recover cycle was delivered

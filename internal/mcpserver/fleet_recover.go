@@ -451,6 +451,10 @@ func FormatFleetRecoverSummary(reps []FleetRecoverReport) string {
 // NoteTerminalOutcome records structured failure class + recover need after
 // an end_turn (or equivalent). Pure class via agenterr (T237); no prose scrape
 // in the recovery decision path beyond ClassifyText fixtures.
+//
+// 🎯T454: also latches RefusalHold from whole-turn classification so the
+// impatience ladder cannot close on a spend-limit / auth wall as if the
+// agent had resumed work.
 func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	if t == nil || name == "" {
 		return
@@ -461,6 +465,7 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	// Empty terminal always needs recover for open-mission (caller filters).
 	// Transient / unknown failures need recover; auth/client fail closed.
 	needs := empty || fleetRecoverWorthy(class)
+	kind := agenterr.ClassifyTurnOutput(text)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -473,7 +478,41 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	prev.FailureClass = class
 	prev.TerminalEmpty = empty
 	prev.NeedsRecover = needs
+	prev.LastTerminal = truncate(text, 400)
+	switch kind {
+	case agenterr.TurnRefusalOnly:
+		prev.RefusalHold = true
+	case agenterr.TurnSubstantive:
+		prev.RefusalHold = false
+		prev.SubstantivePulse = true
+	}
+	// TurnEmpty leaves RefusalHold unchanged — an empty terminal after a
+	// wall is not evidence the account recovered.
 	t.by[name] = prev
+}
+
+// ConsumeTurnPulses returns and clears the one-shot substantive pulse for
+// name (🎯T454). Safe under the tracker lock.
+func (t *IdleActivityTracker) ConsumeTurnPulses(name string) (substantive bool) {
+	if t == nil || name == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	prev, ok := t.by[name]
+	if !ok || !prev.SubstantivePulse {
+		return false
+	}
+	prev.SubstantivePulse = false
+	t.by[name] = prev
+	return true
+}
+
+func truncateTerminal(s string, n int) string {
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // ClearRecover clears the recover latch after a successful deliver.

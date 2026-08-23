@@ -93,6 +93,20 @@ type Observation struct {
 	// DeliberateStop / DesignGated scope the agent out rather than satisfy it.
 	DeliberateStop bool
 	DesignGated    bool
+
+	// RefusalHold is true while the agent's last completed turn was a
+	// provider refusal-only output (🎯T454). Phase=working under a hold is
+	// not satisfaction — the account may be thrashing against a wall, not
+	// the agent resuming its mission.
+	RefusalHold bool
+	// SubstantiveTurn is true when this tick observed a completed turn that
+	// produced real agent work (🎯T454). That closes even if phase has
+	// already flipped back to idle at end_turn.
+	SubstantiveTurn bool
+	// ProviderResume is true when satisfaction is observed because the
+	// provider began accepting calls again after a refusal wall — not
+	// because the agent produced mission work (🎯T454 clause 2).
+	ProviderResume bool
 }
 
 const purposeWork = "work"
@@ -124,7 +138,28 @@ func ClassifyObservation(o Observation) (Condition, GapKind, string) {
 	if !o.MissionOpen {
 		return ConditionOutOfScope, "", "no_open_mission"
 	}
+	// 🎯T454: a substantive completed turn satisfies even at end_turn idle.
+	if o.SubstantiveTurn {
+		if o.ProviderResume {
+			return ConditionSatisfied, "", "provider_resumed_service"
+		}
+		return ConditionSatisfied, "", "substantive_turn"
+	}
+	// 🎯T454: refusal-only hold — phase=working is not satisfaction.
+	if o.RefusalHold {
+		switch {
+		case o.ClaimsDone:
+			return ConditionGap, GapKindUnverifiedDone, "claims_done_without_evidence"
+		case !o.ProcessRunning:
+			return ConditionGap, GapKindDeadHandle, "process_gone_mission_open"
+		default:
+			return ConditionGap, GapKindIdle, "refusal_only_turn"
+		}
+	}
 	if strings.EqualFold(strings.TrimSpace(o.Phase), "working") {
+		if o.ProviderResume {
+			return ConditionSatisfied, "", "provider_resumed_service"
+		}
 		return ConditionSatisfied, "", "working_on_open_mission"
 	}
 	switch {

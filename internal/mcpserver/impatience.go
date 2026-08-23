@@ -15,6 +15,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/converge"
 	"github.com/marcelocantos/jevons/internal/converge/attenuate"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
 // ImpatienceEngine is the daemon-side 🎯T317 ladder: a 🎯T316 reconcile set,
@@ -227,6 +228,7 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 
 	defs := s.registry.List()
 	present := make(map[string]bool, len(defs))
+	refusalBy := make(map[string]bool, len(defs))
 	var outcomes []converge.Outcome
 	for _, d := range defs {
 		if d.Name == "" || d.Name == overseer {
@@ -234,9 +236,12 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 		}
 		present[d.Name] = true
 		obs := s.observeForImpatience(d, hooks, deps, now, defs)
+		refusalBy[d.Name] = obs.RefusalHold
 		out := e.set.Reconcile(obs, now)
 		outcomes = append(outcomes, out)
-		if strings.EqualFold(strings.TrimSpace(obs.Phase), "working") {
+		// 🎯T454: phase=working under a refusal hold is not progress — it is
+		// the agent thrashing against a wall.
+		if strings.EqualFold(strings.TrimSpace(obs.Phase), "working") && !obs.RefusalHold {
 			e.ladder.ObserveProgress(d.Name, attenuate.SignalTargetWorking, now)
 		}
 	}
@@ -275,6 +280,11 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 	for i := range gaps {
 		gaps[i].FleetIntent = intent.FleetState()
 		gaps[i].Intent = intent.AgentState(gaps[i].Agent)
+		// 🎯T454: suppress rungs while turns are refusal-only, or while the
+		// fleet is under a provider wall (T406) — either signal is enough.
+		if refusalBy[gaps[i].Agent] || gaps[i].FleetIntent == fleetintent.BlockedProvider {
+			gaps[i].RefusalOnly = true
+		}
 	}
 
 	actions, closed := e.ladder.Reconcile(now, gaps)
@@ -368,11 +378,18 @@ func (s *Server) observeForImpatience(
 	deliberateStop := !running && !d.AutoStart
 
 	phase := ""
+	refusalHold := false
+	substantivePulse := false
 	s.mu.Lock()
 	if s.idleActivity != nil {
-		phase = s.idleActivity.Get(d.Name).Phase
+		act := s.idleActivity.Get(d.Name)
+		phase = act.Phase
+		refusalHold = act.RefusalHold
 	}
 	s.mu.Unlock()
+	if s.idleActivity != nil {
+		substantivePulse = s.idleActivity.ConsumeTurnPulses(d.Name)
+	}
 
 	targetID := strings.TrimSpace(d.TargetID)
 	missionOpen := false
@@ -415,15 +432,17 @@ func (s *Server) observeForImpatience(
 
 	_ = now // reserved for future idle-age observation fields
 	return converge.Observation{
-		Name:           d.Name,
-		Purpose:        purpose,
-		Phase:          phase,
-		ProcessRunning: running,
-		TargetID:       targetID,
-		MissionOpen:    missionOpen,
-		MissionClosed:  missionClosed,
-		DeliberateStop: deliberateStop,
-		DesignGated:    designGated,
-		ClaimsDone:     claimsDone,
+		Name:            d.Name,
+		Purpose:         purpose,
+		Phase:           phase,
+		ProcessRunning:  running,
+		TargetID:        targetID,
+		MissionOpen:     missionOpen,
+		MissionClosed:   missionClosed,
+		DeliberateStop:  deliberateStop,
+		DesignGated:     designGated,
+		ClaimsDone:      claimsDone,
+		RefusalHold:     refusalHold && !substantivePulse,
+		SubstantiveTurn: substantivePulse,
 	}
 }

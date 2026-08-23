@@ -35,19 +35,28 @@ type CloseCause int
 const (
 	// ClosedBySatisfaction: the gap was still in the reconcile set and
 	// 🎯T316 returned a satisfaction verdict — the agent is working on its
-	// open mission.
+	// open mission (or produced a substantive turn).
 	ClosedBySatisfaction CloseCause = iota
 	// ClosedByDeparture: the gap left the reconcile set entirely — mission
 	// closed or reaped, or the agent is gone. Equally satisfying, different
 	// story to tell.
 	ClosedByDeparture
+	// ClosedByProviderResume: the provider began accepting calls again after
+	// a refusal wall (🎯T454). Distinct from the agent resuming mission work
+	// — a false all-clear of the second kind is how the 2026-08-15 spend-
+	// limit outage withdrew human alerts for agents that were still blocked.
+	ClosedByProviderResume
 )
 
 func (c CloseCause) String() string {
-	if c == ClosedByDeparture {
+	switch c {
+	case ClosedByDeparture:
 		return "departed"
+	case ClosedByProviderResume:
+		return "provider_resume"
+	default:
+		return "satisfied"
 	}
-	return "satisfied"
 }
 
 // Postmortem is one owner-visible report, ready to deliver as root.
@@ -186,10 +195,14 @@ func RenderDigest(pms []Postmortem) string {
 }
 
 func clearedLine(inc Incident) string {
-	if inc.Cause == ClosedByDeparture {
+	switch inc.Cause {
+	case ClosedByDeparture:
 		return "mission closed or reaped — the gap left the reconcile set"
+	case ClosedByProviderResume:
+		return "provider began accepting calls again — not evidence the agent resumed its mission"
+	default:
+		return "agent returned to working on its open mission"
 	}
-	return "agent returned to working on its open mission"
 }
 
 // summarizeRungs collapses repeats: "re-pressure ×3, overseer-noise".

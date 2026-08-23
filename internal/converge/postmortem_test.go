@@ -103,6 +103,7 @@ func TestPostmortemFiresOnEveryResolutionPathway(t *testing.T) {
 	}{
 		{"satisfied", ClosedBySatisfaction, "returned to working"},
 		{"departed", ClosedByDeparture, "closed or reaped"},
+		{"provider_resume", ClosedByProviderResume, "provider began accepting"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			j := NewPostmortemJournal()

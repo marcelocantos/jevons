@@ -283,10 +283,15 @@ func (o Outcome) LadderView() (Gap, bool) {
 	if o.Resolution != ResolutionSatisfied {
 		return Gap{}, false
 	}
+	cause := ClosedBySatisfaction
+	if o.Reason == "provider_resumed_service" {
+		cause = ClosedByProviderResume
+	}
 	return Gap{
 		Agent:     o.Gap.Agent,
 		Mission:   o.Gap.Mission,
 		Since:     o.Gap.OpenedAt,
 		Satisfied: true,
+		Cause:     cause,
 	}, true
 }

@@ -101,6 +101,15 @@ type Gap struct {
 	// it reported that the situation had resolved.
 	FleetIntent fleetintent.State
 	Intent      fleetintent.State
+
+	// RefusalOnly is 🎯T454: the agent's turns are producing only provider
+	// refusals. The ladder holds the incident open and suppresses further
+	// rungs (composes with 🎯T406 blocked_provider rather than duplicating
+	// it — either signal is enough to stop spending failed API calls).
+	RefusalOnly bool
+	// Cause is set on a Satisfied gap when the close reason is known
+	// (🎯T454 clause 2). Zero means ClosedBySatisfaction.
+	Cause CloseCause
 }
 
 // Runnable reports whether this gap's intent says the agent should be
@@ -230,6 +239,12 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 		if !g.Runnable() {
 			continue
 		}
+		// 🎯T454: refusal-only turns — stop climbing. Repressure / overseer
+		// noise / human-alert against a wall burn failed API calls and then
+		// false-clear when the account recovers.
+		if g.RefusalOnly {
+			continue
+		}
 		st, ok := l.agents[g.Agent]
 		if !ok {
 			st = &agentState{since: g.Since, lastFire: map[Rung]time.Time{}}
@@ -283,7 +298,7 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 		if len(st.rungs) > 0 {
 			cause := ClosedByDeparture
 			if satisfiedIn(set, agent) {
-				cause = ClosedBySatisfaction
+				cause = closeCauseIn(set, agent)
 			}
 			closed = append(closed, Incident{
 				Agent:    agent,
@@ -349,6 +364,20 @@ func satisfiedIn(set []Gap, agent string) bool {
 		}
 	}
 	return false
+}
+
+// closeCauseIn returns the Satisfied gap's Cause. ProviderResume is the only
+// non-default stamp; everything else that satisfiedIn reports is agent work.
+func closeCauseIn(set []Gap, agent string) CloseCause {
+	for _, g := range set {
+		if g.Agent == agent && g.Satisfied {
+			if g.Cause == ClosedByProviderResume {
+				return ClosedByProviderResume
+			}
+			return ClosedBySatisfaction
+		}
+	}
+	return ClosedBySatisfaction
 }
 
 func reasonFor(r Rung) string {
