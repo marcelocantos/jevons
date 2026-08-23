@@ -225,6 +225,15 @@ func seedJ19Journal(path string, turns int) error {
 		b.WriteByte('\n')
 		b.Write(ab)
 		b.WriteByte('\n')
+		// Daily last-30 replay includes tool_use between owner turns
+		// (🎯T494.1.1). A text-only seed is a failed oracle.
+		tool, _ := json.Marshal(map[string]any{
+			"type": "tool_use",
+			"name": "Read",
+			"id":   fmt.Sprintf("j19-tool-%02d", i),
+		})
+		b.Write(tool)
+		b.WriteByte('\n')
 		// Notes after every turn. Daily replay is a mix of bubbles and
 		// step-slots; a single mid-list burst is not enough for the
 		// scroll-up-then-down void (🎯T494.1.2).
@@ -292,6 +301,47 @@ func j19AssistantBody(tok string, i int) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+type j19SeedMix struct {
+	User, Assistant, AgentNote, System, ToolUse int
+	NotesBetweenTurns, ToolsBetweenTurns        int
+}
+
+func classifyJ19Seed(body []byte) j19SeedMix {
+	var mix j19SeedMix
+	phase := "start"
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var d struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal([]byte(line), &d)
+		switch d.Type {
+		case "user":
+			mix.User++
+			phase = "in-turn"
+		case "assistant":
+			mix.Assistant++
+			phase = "between"
+		case "agent_note":
+			mix.AgentNote++
+			if phase == "between" {
+				mix.NotesBetweenTurns++
+			}
+		case "system":
+			mix.System++
+		case "tool_use":
+			mix.ToolUse++
+			if phase == "between" {
+				mix.ToolsBetweenTurns++
+			}
+		}
+	}
+	return mix
 }
 
 func countJournalMarkers(path, prefix string) int {
