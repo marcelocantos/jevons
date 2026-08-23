@@ -41,9 +41,6 @@ func TestT5362SpawnAuditorRecordsRoleAndAssemblesDoctrine(t *testing.T) {
 	if existed {
 		t.Fatal("expected mint")
 	}
-	if def.Role != roles.Auditor {
-		t.Fatalf("AgentDef.Role=%q", def.Role)
-	}
 	if got := s.roleDisplay(*def); got != roles.Auditor {
 		t.Fatalf("roleDisplay=%q", got)
 	}
@@ -73,11 +70,7 @@ func TestT5362SpawnAuditorRecordsRoleAndAssemblesDoctrine(t *testing.T) {
 		t.Fatal("FleetStandingBrief must not carry auditor if-you-are doctrine")
 	}
 
-	id := IdentityFromDef(*def)
-	if id.Role != RoleAuditor {
-		t.Fatalf("identity role=%q", id.Role)
-	}
-	hdr := FormatIdentityHeader(id)
+	hdr := s.identityHeaderFor(def.Name)
 	if !strings.Contains(hdr, "auditor") || !strings.Contains(hdr, "silent-decision ledger") {
 		t.Fatalf("auditor identity header:\n%s", hdr)
 	}

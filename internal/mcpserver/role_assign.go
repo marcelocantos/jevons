@@ -79,10 +79,8 @@ func (s *Server) resolveRoleDef(role string) (roles.Def, error) {
 }
 
 // roleDisplay is the agent_list role= column (🎯T536.2).
+// Role is recorded in agent_roles.json — not AgentDef (published pin has no Role).
 func (s *Server) roleDisplay(d claudia.AgentDef) string {
-	if r := strings.TrimSpace(d.Role); r != "" {
-		return roles.Normalize(r)
-	}
 	return s.agentRole(d.Name, d.Purpose)
 }
 

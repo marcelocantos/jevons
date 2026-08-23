@@ -38,6 +38,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/panecensus"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/research"
+	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -257,6 +258,15 @@ type Server struct {
 	// nudges, revives, repressures, or repairs. Nil resolves to all-working,
 	// which is the pre-T414 behaviour. See fleet_intent.go.
 	intent *fleetintent.Store
+
+	// roleAssignments records agent-name → role (🎯T511 / 🎯T536.2). Nil
+	// means role is derived only from purpose/name heuristics / AgentDef.Role.
+	roleAssignments *roles.Assignments
+	// roleCat resolves role definition files (builtin + overlays).
+	roleCat roles.Catalog
+	// pendingSpawnRole is set by handleAgentStart before stitchAgentStart so
+	// hermetic callers of the 9-arg stitch keep compiling (role defaults inside).
+	pendingSpawnRole string
 
 	// autoSpawnPaused is config frontier_consume.disabled (🎯T407). The
 	// sentinel reads this as daemon-held evidence the fleet cannot run —

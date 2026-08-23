@@ -59,13 +59,13 @@ type AgentIdentity struct {
 
 // DeriveAgentRole answers which role doctrine binds this recipient.
 //
-// Explicit AgentDef.Role (🎯T511 / 🎯T536.2) wins when set. Otherwise
-// purpose=overseer and purpose=aside are authoritative. Otherwise the
-// name decides: a registry that stores purpose=work for every PO cannot
-// distinguish the stratum, and isPOName is the same heuristic the staff-ops
-// idle count already trusts. Residual: an agent named without the -po suffix
-// that is nevertheless a product owner reads as a work agent (🎯T200 path
-// portfolios are the richer answer, and are not wired here).
+// Explicit role (from agent_roles.json / spawn role=, 🎯T511 / 🎯T536.2) wins
+// when set. Otherwise purpose=overseer and purpose=aside are authoritative.
+// Otherwise the name decides: a registry that stores purpose=work for every PO
+// cannot distinguish the stratum, and isPOName is the same heuristic the
+// staff-ops idle count already trusts. Residual: an agent named without the
+// -po suffix that is nevertheless a product owner reads as a work agent
+// (🎯T200 path portfolios are the richer answer, and are not wired here).
 func DeriveAgentRole(name, purpose, role string) string {
 	switch roles.Normalize(role) {
 	case roles.Auditor:
@@ -92,10 +92,12 @@ func DeriveAgentRole(name, purpose, role string) string {
 }
 
 // IdentityFromDef reads the header's inputs off a registry row.
+// Role doctrine uses purpose/name heuristics here; identityHeaderFor overlays
+// the recorded spawn role from agent_roles.json when present.
 func IdentityFromDef(d claudia.AgentDef) AgentIdentity {
 	return AgentIdentity{
 		Name:     strings.TrimSpace(d.Name),
-		Role:     DeriveAgentRole(d.Name, d.Purpose, d.Role),
+		Role:     DeriveAgentRole(d.Name, d.Purpose, ""),
 		Purpose:  strings.TrimSpace(d.Purpose),
 		Parent:   strings.TrimSpace(d.Parent),
 		WorkDir:  strings.TrimSpace(d.WorkDir),
@@ -233,7 +235,11 @@ func (s *Server) identityHeaderFor(name string) string {
 	if d == nil {
 		return ""
 	}
-	return FormatIdentityHeader(IdentityFromDef(*d))
+	id := IdentityFromDef(*d)
+	if r := s.agentRole(d.Name, d.Purpose); r != "" {
+		id.Role = DeriveAgentRole(d.Name, d.Purpose, r)
+	}
+	return FormatIdentityHeader(id)
 }
 
 // withIdentity prefixes a daemon-composed message with the recipient's own

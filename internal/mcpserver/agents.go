@@ -462,7 +462,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 
 	life["session_id"] = sessionDisplay(def.SessionID)
 	life["purpose"] = def.Purpose
-	life["role"] = def.Role
+	life["role"] = s.roleDisplay(*def)
 	life["parent"] = def.Parent
 	life["provider"] = string(def.Provider)
 	if def.TargetID != "" {
@@ -470,7 +470,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 	s.logLifecycle(compAgentLifecycle, "start", "ok", life)
 
-	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), def.Role, def.TargetID,
+	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), s.roleDisplay(*def), def.TargetID,
 		string(def.Provider), def.Model, sessionDisplay(def.SessionID), routeNote, prompt)
 	msg += briefNote
 	// 🎯T379: the agent has just inherited the provider's user-scoped MCP
@@ -589,12 +589,10 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if !existed || def.Purpose == "" {
 		def.Purpose = purpose
 	}
-	// 🎯T511 / 🎯T536.2: role on mint; explicit pending role rebinds.
-	if !existed || def.Role == "" || (role != "" && role != def.Role) {
-		def.Role = role
-	}
-	if def.Role == "" {
-		def.Role = roles.DefaultForPurpose(def.Purpose, name)
+	// 🎯T511 / 🎯T536.2: role lives in agent_roles.json (not AgentDef — published
+	// claudia pin has no Role field). pendingSpawnRole carries the mint choice.
+	if role == "" {
+		role = roles.DefaultForPurpose(def.Purpose, name)
 	}
 	// 🎯T198: target_id on mint, or when caller supplies a non-empty id (rebind).
 	if targetID != "" {
@@ -605,9 +603,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if !existed {
 		def.Goal = fleet.WorkSessionGoal(def.Purpose, def.TargetID, prompt, def.AutoStart)
 		if def.SandboxMode == "" {
-			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose, def.Role)
+			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose, role)
 		}
-	} else if roles.Normalize(def.Role) == roles.Auditor {
+	} else if roles.Normalize(role) == roles.Auditor {
 		// Auditor stays read-only even on remint.
 		def.SandboxMode = ""
 	}
@@ -626,7 +624,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if err := s.registry.Register(*def); err != nil {
 		return nil, existed, "", err
 	}
-	_ = s.recordAgentRole(name, def.Role)
+	_ = s.recordAgentRole(name, role)
 	if d := s.registry.Def(name); d != nil {
 		def = d
 	}
