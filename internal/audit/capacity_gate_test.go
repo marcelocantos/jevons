@@ -16,18 +16,23 @@ import (
 // stubGate returns one canned decision for every ask, and counts the asks.
 // asked carries the first ask so a caller can rendezvous with it rather than
 // poll against a deadline (🎯T400).
+//
+// skipRelease makes Begin return a no-op release so a control can prove
+// waitForRelease fails when the product never frees the slot (🎯T462).
 type stubGate struct {
-	mu       sync.Mutex
-	decision capacity.Decision
-	asks     []string
-	released int
-	asked    chan struct{}
+	mu          sync.Mutex
+	decision    capacity.Decision
+	asks        []string
+	released    int
+	asked       chan struct{}
+	skipRelease bool
 }
 
 func (g *stubGate) Begin(class, name string) (capacity.Decision, func()) {
 	g.mu.Lock()
 	g.asks = append(g.asks, class+":"+name)
 	d := g.decision
+	skip := g.skipRelease
 	g.mu.Unlock()
 	if g.asked != nil {
 		select {
@@ -36,6 +41,9 @@ func (g *stubGate) Begin(class, name string) (capacity.Decision, func()) {
 		}
 	}
 	d.Class, d.Name = capacity.NormalizeClass(class), name
+	if skip {
+		return d, func() {}
+	}
 	return d, func() {
 		g.mu.Lock()
 		g.released++
@@ -64,6 +72,23 @@ func (g *stubGate) askedClass(class capacity.Class) bool {
 		}
 	}
 	return false
+}
+
+// waitForRelease parks until the stub's release runs, or returns false when
+// the deadline passes with released still zero. 🎯T462: the product path
+// waits here after cancel instead of asserting releaseCount in the same
+// breath as the ask rendezvous — Begin signals asked before it has even
+// returned the release func, so an immediate assert races the auditor
+// goroutine. The control (skipRelease) must still time out.
+func waitForRelease(g *stubGate, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if g.releaseCount() > 0 {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return g.releaseCount() > 0
 }
 
 // fixtureReport is a well-formed auditor answer with one critical finding.
@@ -118,6 +143,12 @@ func testAuditor(t *testing.T, mut func(*Args)) (*Auditor, chan Assignment, stri
 // false often enough under a loaded full-suite run to have made the standing
 // gate unbelievable. Here the tick is handed over by hand and every wait is
 // a blocking rendezvous, so the test has no wall-clock deadline left to lose.
+//
+// 🎯T462: after cancel, wait for the deferred release rather than reading
+// releaseCount in the same breath as the ask. Begin signals asked before it
+// returns the release func; runSafe's defer release() is already correct —
+// only the oracle races. The control below proves waitForRelease is not a
+// no-op: a stub that never frees the slot still fails the wait.
 func TestScheduledCycleDefersUnderCapacityPressure(t *testing.T) {
 	gate := &stubGate{
 		decision: capacity.Decision{
@@ -144,6 +175,12 @@ func TestScheduledCycleDefersUnderCapacityPressure(t *testing.T) {
 	ticks <- time.Now() // returns once the schedule has taken the tick
 	<-gate.asked        // and once the tick has reached the capacity gate
 	cancel()
+	// Wait for the slot release before reading the stub. <-stopped alone is
+	// not the subject here: the ask channel fires inside Begin, before the
+	// release closure exists for runSafe to defer.
+	if !waitForRelease(gate, 2*time.Second) {
+		t.Fatal("a deferred ask must still release its slot")
+	}
 	<-stopped // no further asks can land while the assertions read the stub
 
 	// One tick in, one ask out. Driving the cadence buys this: the polled
@@ -160,9 +197,6 @@ func TestScheduledCycleDefersUnderCapacityPressure(t *testing.T) {
 		t.Fatalf("deferred cycle dispatched anyway: %+v", a.Reason)
 	default:
 	}
-	if gate.releaseCount() == 0 {
-		t.Fatal("a deferred ask must still release its slot")
-	}
 
 	st, err := LoadState(state)
 	if err != nil {
@@ -170,6 +204,27 @@ func TestScheduledCycleDefersUnderCapacityPressure(t *testing.T) {
 	}
 	if !strings.Contains(st.LastSkipReason, capacity.ReasonCriticalOwnerOnly) {
 		t.Fatalf("deferral must be durable in state, got %q", st.LastSkipReason)
+	}
+}
+
+// 🎯T462 control: waitForRelease must fail when the release is never called.
+// If this ever goes green, the wait became a no-op and the product path's
+// release assert would pass even when the slot leaked.
+func TestWaitForReleaseFailsWhenReleaseNeverCalled(t *testing.T) {
+	gate := &stubGate{
+		decision: capacity.Decision{
+			Verdict: capacity.VerdictDefer, Reason: capacity.ReasonCriticalOwnerOnly,
+			Detail: "only owner and Build work fits", Pressure: capacity.PressureCritical,
+		},
+		skipRelease: true,
+	}
+	_, release := gate.Begin(string(capacity.ClassAudit), "control")
+	release() // deliberately a no-op — skipRelease
+	if waitForRelease(gate, 50*time.Millisecond) {
+		t.Fatal("waitForRelease returned true when release was never called")
+	}
+	if gate.releaseCount() != 0 {
+		t.Fatalf("control stub must leave released at 0, got %d", gate.releaseCount())
 	}
 }
 
