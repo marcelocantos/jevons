@@ -12,7 +12,12 @@ import { renderUserTextWithImages } from '../composer/images';
 import { relTime } from '../relTime';
 import { normalizeDensity, type Density } from '../density';
 import { COMFORTABLE_ROW_GAP_PX, DEFAULT_ROW_GAP_PX, measureTranscriptRow } from '../transcript/rowLayout';
-import { distanceFromEnd, pinWriteScrollTop, shouldHoldFollow } from '../transcript/followPin';
+import { distanceFromEnd, followAfterScroll, pinWriteScrollTop } from '../transcript/followPin';
+import {
+  HYDRATE_OVERSCAN_MAX,
+  measuredSuffixFromEnd,
+  nextHydrateOverscan,
+} from '../transcript/hydrateOverscan';
 import { pixelFixtureRowTop } from '../visual/oldCockpitFixture';
 
 export function AgentTranscript(props: {
@@ -34,7 +39,11 @@ export function AgentTranscript(props: {
   const pagingRef = useRef(false);
   const wasReadyRef = useRef(false);
   const lastHeightRef = useRef(0);
+  const hydrateSettled = useRef(false);
+  const lastTotalRef = useRef(0);
+  const lastCountRef = useRef(0);
   const pageStartRef = useRef(props.meta?.start);
+  const [overscan, setOverscan] = useState(HYDRATE_OVERSCAN_MAX);
   const setFollow = (next: boolean) => {
     if (followRef.current === next) return;
     followRef.current = next;
@@ -42,11 +51,12 @@ export function AgentTranscript(props: {
   };
   const rows = useMemo(() => displayRows(props.frames), [props.frames]);
   const count = rows.length;
+  const estimate = density === 'compact' ? 48 : 72;
   const virtualizer = useVirtualizer({
     count,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => (density === 'compact' ? 48 : 72),
-    overscan: 12,
+    estimateSize: () => estimate,
+    overscan,
     gap: density === 'comfortable' ? COMFORTABLE_ROW_GAP_PX : DEFAULT_ROW_GAP_PX,
     measureElement: (el) => measureTranscriptRow(el),
   });
@@ -57,6 +67,11 @@ export function AgentTranscript(props: {
     pinningRef.current = false;
     pagingRef.current = false;
     wasReadyRef.current = false;
+    hydrateSettled.current = false;
+    lastHeightRef.current = 0;
+    lastTotalRef.current = 0;
+    lastCountRef.current = 0;
+    setOverscan(HYDRATE_OVERSCAN_MAX);
   }, [props.name]);
 
   useLayoutEffect(() => {
@@ -77,11 +92,12 @@ export function AgentTranscript(props: {
         return;
       }
       el.scrollTop = pinWriteScrollTop(el.scrollHeight);
+      lastHeightRef.current = el.scrollHeight;
     };
     pin();
     const id = requestAnimationFrame(() => {
       pin();
-      pinningRef.current = false;
+      if (hydrateSettled.current) pinningRef.current = false;
     });
     pinnedHydrate.current = true;
     return () => {
@@ -89,6 +105,42 @@ export function AgentTranscript(props: {
       pinningRef.current = false;
     };
   }, [props.ready, count, totalSize, props.name, virtualizer]);
+
+  useLayoutEffect(() => {
+    if (!props.ready || count === 0) return;
+    if (count > lastCountRef.current && lastCountRef.current > 0) {
+      hydrateSettled.current = false;
+    }
+    lastCountRef.current = count;
+    if (totalSize !== lastTotalRef.current) {
+      if (hydrateSettled.current && totalSize < lastTotalRef.current) {
+        hydrateSettled.current = false;
+      }
+      lastTotalRef.current = totalSize;
+    }
+    if (hydrateSettled.current) return;
+    const el = parentRef.current;
+    const measured = new Map<number, number>();
+    virtualizer.itemSizeCache.forEach((size, key) => {
+      const idx = typeof key === 'number' ? key : Number(key);
+      if (Number.isFinite(idx)) measured.set(idx, size);
+    });
+    const suffix = measuredSuffixFromEnd(measured, count);
+    const next = nextHydrateOverscan({
+      clientHeight: el?.clientHeight || 0,
+      count,
+      current: overscan,
+      measuredFromEndPx: suffix.px,
+      estimate,
+      suffixComplete: suffix.complete,
+    });
+    if (next.settled) {
+      hydrateSettled.current = true;
+      if (overscan !== next.overscan) setOverscan(next.overscan);
+      return;
+    }
+    if (next.overscan !== overscan) setOverscan(next.overscan);
+  }, [props.ready, count, totalSize, overscan, estimate, virtualizer]);
 
   useEffect(() => {
     pageStartRef.current = props.meta?.start;
@@ -115,16 +167,23 @@ export function AgentTranscript(props: {
     };
     const onScroll = () => {
       const fromBottom = distanceFromEnd(el.scrollTop, el.scrollHeight, el.clientHeight);
-      followRef.current = shouldHoldFollow({
+      const next = followAfterScroll({
         fromBottom,
         pinning: pinningRef.current,
+        wasFollowing: followRef.current,
+        prevHeight: lastHeightRef.current,
+        scrollHeight: el.scrollHeight,
       });
+      lastHeightRef.current = next.height;
+      setFollow(next.follow);
       requestOlder();
     };
     el.addEventListener('scroll', onScroll);
     const leave = () => {
       followRef.current = false;
-      props.onLeaveLive?.();
+      // PageUp must not freeze the mux window. leaveLive re-subscribes
+      // the same range with a second HaloProse and prepends older rows,
+      // so one PageDown cannot return to the live end (🎯T494.1.3).
     };
     el.addEventListener('jevons-leave-track', leave);
     el.addEventListener('jevons-page-older', requestOlder);
@@ -192,10 +251,11 @@ function ClippedBubble(props: {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [fullH, setFullH] = useState(0);
   const [expanded, setExpanded] = useState(false);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
-    setFullH(el.scrollHeight);
+    const h = el.scrollHeight;
+    setFullH((prev) => (prev === h ? prev : h));
   }, [props.text]);
   const tall = props.kind !== 'steps' && shouldClip(fullH);
   const pos = {

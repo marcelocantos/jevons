@@ -17,6 +17,27 @@ export function pinWriteScrollTop(scrollHeight: number): number {
 
 export const FOLLOW_END_PX = 80;
 
+/** Scroll-handler decision: measure growth after hydrate is not a user leave. */
+export function followAfterScroll(o: {
+  fromBottom: number;
+  pinning: boolean;
+  wasFollowing: boolean;
+  prevHeight: number;
+  scrollHeight: number;
+}): { follow: boolean; height: number } {
+  const sh = Number(o.scrollHeight) || 0;
+  const prev = Number(o.prevHeight) || 0;
+  return {
+    follow: shouldHoldFollow({
+      fromBottom: o.fromBottom,
+      pinning: o.pinning,
+      wasFollowing: o.wasFollowing,
+      heightGrew: prev > 0 && sh > prev,
+    }),
+    height: sh,
+  };
+}
+
 /**
  * Whether a scroll event should rewrite follow. Programmatic pin writes
  * must not drop track: the first pin uses estimated row heights, then

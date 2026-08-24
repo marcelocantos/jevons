@@ -37,6 +37,21 @@ describe('T537.2 product path', () => {
     expect(ti).toBeGreaterThan(fi);
   });
 
+  it('reload pin keeps follow across measure growth and hydrates a PageUp band (🎯T494.1.3)', () => {
+    const paint = readFileSync(join(root, 'src/components/AgentTranscript.tsx'), 'utf8');
+    expect(paint).toMatch(/followAfterScroll/);
+    expect(paint).toMatch(/nextHydrateOverscan/);
+    expect(paint).toMatch(/measuredSuffixFromEnd/);
+    expect(paint).toMatch(/HYDRATE_OVERSCAN_MAX/);
+    const hydrate = readFileSync(join(root, 'src/transcript/hydrateOverscan.ts'), 'utf8');
+    expect(hydrate).toMatch(/function standingOverscan/);
+    expect(paint).toMatch(/hydrateSettled/);
+    expect(paint).toMatch(/second HaloProse/);
+    const pin = readFileSync(join(root, 'src/transcript/followPin.ts'), 'utf8');
+    expect(pin).toMatch(/heightGrew/);
+    expect(pin).toMatch(/function followAfterScroll/);
+  });
+
   it('ui/ does not import web/', () => {
     const hits: string[] = [];
     for (const file of walk(join(root, 'src'))) {

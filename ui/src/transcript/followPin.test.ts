@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   distanceFromEnd,
+  followAfterScroll,
   pinWriteScrollTop,
   shouldHoldFollow,
 } from './followPin';
@@ -32,6 +33,34 @@ describe('followPin', () => {
     expect(
       shouldHoldFollow({ fromBottom, pinning: false, wasFollowing: false, heightGrew: true }),
     ).toBe(false);
+  });
+
+  it('followAfterScroll keeps track when height grows after hydrate (🎯T494.1.3)', () => {
+    const grew = followAfterScroll({
+      fromBottom: 480,
+      pinning: false,
+      wasFollowing: true,
+      prevHeight: 2000,
+      scrollHeight: 2800,
+    });
+    expect(grew.follow).toBe(true);
+    expect(grew.height).toBe(2800);
+    const userLeft = followAfterScroll({
+      fromBottom: 480,
+      pinning: false,
+      wasFollowing: true,
+      prevHeight: 2800,
+      scrollHeight: 2800,
+    });
+    expect(userLeft.follow).toBe(false);
+    const firstPaint = followAfterScroll({
+      fromBottom: 480,
+      pinning: false,
+      wasFollowing: true,
+      prevHeight: 0,
+      scrollHeight: 2800,
+    });
+    expect(firstPaint.follow).toBe(false);
   });
 
   it('distanceFromEnd is zero when pinned at integer max', () => {
