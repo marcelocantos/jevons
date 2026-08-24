@@ -1,8 +1,13 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { shouldPaintMainUserText } from './asideWire';
+import { turnOriginOf, type TurnOrigin } from './paint';
 import { isSealedAssistant } from './stream';
 import { isGenericToolName, summariseInput } from './toolSummary';
+import { isNonBoundaryUserText, normalizeOwnerEchoText } from './userText';
+
+export { isNonBoundaryUserText, isProtocolControlFrameText, normalizeOwnerEchoText } from './userText';
 
 /** Lifted display fold: notes, ⋯ n steps, prose. Not a second hydrate. */
 
@@ -40,6 +45,8 @@ export type DisplayRow = {
   when?: number;
   /** Assistant only: incremental smd until a terminal stop_reason. */
   sealed?: boolean;
+  /** User only: wire provenance (🎯T381). Unmarked is owner. */
+  origin?: TurnOrigin;
   /** Diagnostic only: consecutive identical nacks (🎯T545.3). */
   count?: number;
 };
@@ -73,19 +80,6 @@ export function proseText(frame: unknown): string {
     .join('');
 }
 
-/** Strip journal echo markers so owner text matches the live bubble (🎯T537.1.2). */
-export function normalizeOwnerEchoText(text: string): string {
-  let t = String(text ?? '').trim();
-  if (!t) return '';
-  if (t.startsWith('[user]\n')) t = t.slice('[user]\n'.length).trim();
-  else if (/^\[user\]\s+/.test(t)) t = t.replace(/^\[user\]\s+/, '').trim();
-  for (let i = 0; i < 3; i++) {
-    const m = t.match(/^\s*<user_query(?:\s[^>]*)?>\s*([\s\S]*?)\s*<\/user_query>\s*$/i);
-    if (!m) break;
-    t = String(m[1] || '').trim();
-  }
-  return t;
-}
 
 /** True when a user echo matching `pending` arrived at or after `afterIndex`. */
 export function shouldAckPendingSend(
@@ -104,28 +98,19 @@ export function shouldAckPendingSend(
   return false;
 }
 
-function isProtocolControlFrameText(text: string): boolean {
-  const t = text.trim();
-  if (t.length < 2 || t[0] !== '{' || t[t.length - 1] !== '}') return false;
-  try {
-    const obj = JSON.parse(t) as { type?: unknown };
-    return !!obj && typeof obj === 'object' && !Array.isArray(obj) && typeof obj.type === 'string' && obj.type.trim() !== '';
-  } catch {
-    return false;
-  }
-}
+const SILENT_PREFIX = '[silent]';
 
-function isNonBoundaryUserText(text: string): boolean {
-  const raw = String(text ?? '');
-  if (!raw.trim()) return false;
-  if (isProtocolControlFrameText(raw)) return true;
-  const display = normalizeOwnerEchoText(raw);
-  const trimmed = display.replace(/^\s+/, '');
-  if (/<system-reminder[\s>]/i.test(raw) || /<\/system-reminder>/i.test(raw)) return true;
-  if (trimmed.indexOf('[Jevons fleet standing brief') === 0 || /Jevons fleet standing brief/.test(display)) return true;
-  if (/^\[event:\s*[^\]]+\]/i.test(trimmed)) return true;
-  if (trimmed.indexOf('[Daemon restart') === 0) return true;
-  if (/^Background task\b/i.test(trimmed)) return true;
+/** Owner-filterable ops reply (🎯T238 / T240 / T245). Port of web ChatEvents.isSilentAssistantText. */
+export function isSilentAssistantText(text: string): boolean {
+  const t = String(text ?? '').trim();
+  if (!t) return false;
+  const lower = t.toLowerCase();
+  const pref = SILENT_PREFIX.toLowerCase();
+  if (lower.startsWith(pref)) return true;
+  const head = t.length > 80 ? t.slice(0, 80) : t;
+  for (const line of head.split('\n')) {
+    if (line.trim().toLowerCase().startsWith(pref)) return true;
+  }
   return false;
 }
 
@@ -242,13 +227,14 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
     }
     if (isUserFrame(f)) {
       const raw = proseText(f);
+      if (!shouldPaintMainUserText(raw)) continue;
       if (isNonBoundaryUserText(raw)) continue;
       const text = normalizeOwnerEchoText(raw);
       if (!text) continue;
       const last = out[out.length - 1];
       if (last && last.kind === 'user' && normalizeOwnerEchoText(last.text) === text) continue;
       flush();
-      out.push({ kind: 'user', text, when });
+      out.push({ kind: 'user', text, when, origin: turnOriginOf(f) });
       continue;
     }
     // Walk content in order so a mixed text+tool_use frame reports every
@@ -262,7 +248,7 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
         }
         if (b.type !== 'text' && b.type !== 'output_text') continue;
         const t = String(b.text || '').trim();
-        if (!t) continue;
+        if (!t || isSilentAssistantText(t)) continue;
         flush();
         out.push({ kind: 'assistant', text: t, when, sealed: isSealedAssistant(f) });
       }
@@ -273,7 +259,7 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
       continue;
     }
     const t = proseText(f).trim();
-    if (!t) continue;
+    if (!t || isSilentAssistantText(t)) continue;
     flush();
     out.push({ kind: 'assistant', text: t, when, sealed: isSealedAssistant(f) });
   }

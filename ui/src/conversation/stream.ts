@@ -1,6 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { isOwnerUserBarrierFrame } from './userText';
+
 /** Grok ACP token join — same rules as web/scripts/chat_events.js (🎯T537.1.1). */
 
 const TERMINAL_STOPS = new Set(['end_turn', 'stop_sequence', 'max_tokens']);
@@ -150,7 +152,11 @@ export function applyTranscriptFrame(
   }
 
   if (type !== 'assistant') {
-    return { frames: [...frames, body], stream };
+    // 🎯T504: a real owner user seals open streams so later same-sid
+    // text cannot grow the bubble above this row. T329 inject / protocol
+    // frames are not barriers.
+    const next = isOwnerUserBarrierFrame(body) ? emptyStream() : stream;
+    return { frames: [...frames, body], stream: next };
   }
 
   const sid = streamIdOf(m);

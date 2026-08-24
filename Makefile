@@ -396,7 +396,7 @@ test-journey: jevonsd
 	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER))
 
 # Full product net (🎯T492): hermetic layers first, then Universe-B journeys.
-test: test-go test-web test-ui test-journey
+test: test-go test-web test-ui test-ui-react test-journey
 
 # ── Fleet spend (🎯T392.6) ──────────────────────────
 # Decomposes spend into the levers that act on it:

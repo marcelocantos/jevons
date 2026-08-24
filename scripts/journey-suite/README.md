@@ -82,7 +82,7 @@ every run today; live is the default truth.
 2. **J2-chat-round-trip** — idle send → terminal
 3. **J3-cancel-and-send** — long turn → interrupt → settle → replacement → terminal
 4. **J4-reconnect-sealed** — seed turn → reconnect → bounded replay + sandbox journal only
-4b. **J19-root-history-paint** — seed ≥12 distinct sealed owner turns into the isolate journal (not the owner's history) → Playwright census of `__transcriptRows` plus T493 gates (`checkVisibility`, centre hit-test, Vision OCR of a pinned 1280×800 viewport). Empty pane with model rows is a fail (🎯T494).
+4b. **J19-root-history-paint** — seed ≥12 distinct sealed owner turns into the isolate journal (not the owner's history) → hard-load the **React** cockpit (`ui` Vite :5173-style proxy against the isolate; residual until 🎯T540.2 if isolate `GET /` is still vanilla) → Playwright census of the React transcript plus T493 gates (`checkVisibility`, centre hit-test, Vision OCR of a pinned 1280×800 viewport). Empty pane with model rows is a fail (🎯T494). Portguard still refuses `:13705`.
 4c. **J20-plan-dest** — fixture weekly remaining (not live vendor) → omit-provider mint refuses when dest empty; sweep parks an explicit-hot worker (🎯T390.1.5). Overseer chat turn proves isolate agent interaction.
 
 ### Orchestration (MCP-direct on the isolate)

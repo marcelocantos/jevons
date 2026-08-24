@@ -4,12 +4,20 @@
 import { useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ConversationMeta } from '../conversation/useConversation';
-import { clipClassName, expandTabChevron, shouldClip } from '../conversation/clip';
+import {
+  clipClassName,
+  expandTabChevron,
+  isNearTranscriptEnd,
+  lastMessageRowIndex,
+  nextAutoExpanded,
+  paintedClipHeight,
+  shouldClip,
+} from '../conversation/clip';
 import { shouldRequestPage } from '../conversation/page';
 import { displayRows, type DisplayKind, type StepItem } from '../conversation/display';
 import { parseAssistantMarkdown } from '../conversation/markdown';
+import { paintUserHTML, userBubbleClass, type TurnOrigin } from '../conversation/paint';
 import { StreamingMarkdownBody } from '../conversation/StreamingMarkdownBody';
-import { renderUserTextWithImages } from '../composer/images';
 import { relTime } from '../relTime';
 import { normalizeDensity, type Density } from '../density';
 import { COMFORTABLE_ROW_GAP_PX, DEFAULT_ROW_GAP_PX, measureTranscriptRow } from '../transcript/rowLayout';
@@ -52,6 +60,7 @@ export function AgentTranscript(props: {
   };
   const rows = useMemo(() => displayRows(props.frames), [props.frames]);
   const count = rows.length;
+  const latestMsg = useMemo(() => lastMessageRowIndex(rows.map((r) => r.kind)), [rows]);
   const estimate = density === 'compact' ? 48 : 72;
   const virtualizer = useVirtualizer({
     count,
@@ -195,6 +204,12 @@ export function AgentTranscript(props: {
     };
   }, [props.meta?.older, props.meta?.start, props.onPageOlder, props.onLeaveLive]);
 
+  const scroller = parentRef.current;
+  const scrollTop = scroller?.scrollTop ?? 0;
+  const clientHeight = scroller?.clientHeight ?? 0;
+  const scrollHeight = scroller?.scrollHeight ?? totalSize;
+  const nearEnd = isNearTranscriptEnd(scrollTop, scrollHeight, clientHeight);
+  const historyReplayActive = !props.ready || !hydrateSettled.current;
   const bodyId = density === 'compact' ? 'agent-inspect-body' : 'messages';
   return (
     <div id={bodyId} ref={parentRef}>
@@ -220,6 +235,11 @@ export function AgentTranscript(props: {
               sealed={row.sealed === true}
               start={pixelFixtureRowTop(item.start, item.index, density)}
               measureRef={virtualizer.measureElement}
+              isLatest={item.index === latestMsg}
+              nearEnd={nearEnd}
+              historyReplayActive={historyReplayActive}
+              scrollTop={scrollTop}
+              clientHeight={clientHeight}
             />
           );
         })}
@@ -248,6 +268,7 @@ function ClippedBubble(props: {
   items?: StepItem[];
   when?: number;
   sealed?: boolean;
+  origin?: TurnOrigin;
   start: number;
   measureRef?: (el: Element | null) => void;
 }) {
@@ -337,7 +358,11 @@ function ClippedBubble(props: {
           aria-expanded={expanded}
           aria-label={expanded ? 'Collapse' : 'Expand'}
           title={expanded ? 'Collapse' : 'Expand'}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => {
+            setUserToggled(true);
+            setAutoExpanded(false);
+            setExpanded((v) => !v);
+          }}
         >
           <span className="chev" aria-hidden="true">
             {expandTabChevron(expanded)}

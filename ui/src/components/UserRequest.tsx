@@ -12,6 +12,7 @@ import {
   type ClipboardLike,
   type PendingImage,
 } from '../composer/images';
+import { tidyDictationInsert } from '../composer/wispr';
 
 export function UserRequest(props: {
   name: string;
@@ -56,7 +57,19 @@ export function UserRequest(props: {
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (attachFromTransfer(e.clipboardData)) e.preventDefault();
+    if (attachFromTransfer(e.clipboardData)) {
+      e.preventDefault();
+      return;
+    }
+    const clip = (e.clipboardData && e.clipboardData.getData('text')) || '';
+    if (!clip) return;
+    const el = e.currentTarget;
+    const isBulkEmpty = el.value.length === 0 || (el.selectionStart === 0 && el.selectionEnd === el.value.length);
+    if (!isBulkEmpty) return;
+    const tidy = tidyDictationInsert(clip);
+    if (tidy === clip) return;
+    e.preventDefault();
+    setDraft(props.name, tidy);
   };
 
   const onDragOver = (e: DragEvent) => {

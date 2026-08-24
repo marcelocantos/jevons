@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect } from 'react';
+import { tryFocusComposer } from './composerFocus';
 import { planComposerTabCycle } from './composerTab';
 import { applyTranscriptPageKey } from './pageScroll';
 
@@ -29,6 +30,12 @@ export function useCockpitKeys(opts: { sidebarComposerVisible: boolean }): void 
           : 'textarea[data-composer="sidebar"]';
         const next = document.querySelector(sel);
         if (next instanceof HTMLElement) next.focus();
+        return;
+      }
+      const main = document.querySelector('textarea[data-composer="main"]');
+      const focus = tryFocusComposer(e, main instanceof HTMLElement ? main : null, document.activeElement);
+      if (focus.didFocus) {
+        e.preventDefault();
         return;
       }
       if (e.key !== 'PageUp' && e.key !== 'PageDown') return;

@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-/** Two-stop Tab cycle: main composer ↔ sidebar composer (T366). */
+/** Two-stop Tab cycle: main composer ↔ sidebar composer (T366 / T547). */
 
 export type TabPlan = {
   target: 'main' | 'sidebar' | null;
@@ -9,13 +9,27 @@ export type TabPlan = {
   reason: string;
 };
 
-export function isComposerTabChord(key: string, mods: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean }): boolean {
-  if (key !== 'Tab') return false;
+/** Chrome that Tab must never land on (T153 / T547). */
+export const COMPOSER_TAB_CHROME = [
+  'theme-toggle',
+  'send',
+  'voice-btn',
+  'jump-bottom',
+  'rhs-width-handle',
+  'rhs-split-handle',
+] as const;
+
+export function isComposerTabChord(
+  key: string,
+  mods: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; code?: string },
+): boolean {
+  const code = mods.code != null ? String(mods.code) : '';
+  if (key !== 'Tab' && code !== 'Tab') return false;
   return !(mods.metaKey || mods.ctrlKey || mods.altKey);
 }
 
 export function planComposerTabCycle(
-  ev: { key: string; metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean },
+  ev: { key: string; metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; code?: string },
   ctx: {
     active: 'main' | 'sidebar' | 'other';
     sidebarVisible: boolean;
@@ -24,7 +38,11 @@ export function planComposerTabCycle(
   const none = (reason: string): TabPlan => ({ target: null, preventDefault: false, reason });
   if (!isComposerTabChord(ev.key, ev)) return none('not-tab');
   if (ctx.active === 'main') {
-    if (!ctx.sidebarVisible) return none('sidebar-unavailable');
+    // T547: already in a composer — claim Tab even when the partner is
+    // hidden, so document order cannot walk theme/send/voice/jump/resize.
+    if (!ctx.sidebarVisible) {
+      return { target: 'main', preventDefault: true, reason: 'stay-main' };
+    }
     return { target: 'sidebar', preventDefault: true, reason: 'to-sidebar' };
   }
   if (ctx.active === 'sidebar') {
