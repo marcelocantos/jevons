@@ -616,8 +616,8 @@ test('T390.1: pace is green / orange / red at the 1.0 and 1.5 burn ratios', func
   assert.strictEqual(PU.classifyPace(78, 22, 50), PU.PACE_HOT, 'over 1.5 is red');
   // remaining 0 is always hot
   assert.strictEqual(PU.classifyPace(100, 0, 40), PU.PACE_HOT, 'exhausted is red regardless of time');
-  // first 5% of elapsed does not flash
-  assert.strictEqual(PU.classifyPace(80, 20, 97), PU.PACE_OK, 'warmup: 3% elapsed must not flash red');
+  // No elapsed cutoff: 80% used at 3% elapsed damps to 85/8 ≈ 10.6, still hot.
+  assert.strictEqual(PU.classifyPace(80, 20, 97), PU.PACE_HOT, 'spent-early week is hot, not forced green');
   // no time signal
   assert.strictEqual(PU.classifyPace(80, 20, null), '', 'no triangle → no pace colour');
 
@@ -641,9 +641,10 @@ test('T390.1.1: weekly continuation is blue, locked is purple, session is exempt
   const late = PU.weeklyWaste(0, 100, 50);
   assert.ok(late.locked >= PU.PACE_LOCKED_WASTE, late);
 
-  // Warmup: 3% elapsed, 0 used. Do not flash.
-  assert.strictEqual(PU.classifyPace(0, 100, 97, 'weekly'), PU.PACE_OK,
-    'first 5% of the week does not paint waste');
+  // No elapsed cutoff: idle at 3% elapsed is continuation waste, not
+  // forced green. (Locked is still 0 — 100 − 1.5×97 < 0.)
+  assert.strictEqual(PU.classifyPace(0, 100, 97, 'weekly'), PU.PACE_UNDER,
+    'idle weekly at 3% elapsed is blue, not a warmup hide');
 
   // Session with the same numbers stays green — a dead session is not a waste.
   assert.strictEqual(PU.classifyPace(0, 100, 50, 'session'), PU.PACE_OK,
@@ -781,6 +782,14 @@ test('T390.1.6.1: early-window burn is damped, week start is not hot', function 
   assert.strictEqual(PU.classifyPace(9, 91, 94.4, 'weekly'), PU.PACE_HOT,
     'control: undamped week start is the old red cliff');
   PU.applyThresholds({ damp_lambda_percent: 5 });
+});
+
+test('T390.1.6.2: no hard cutoff — Codex spent-early week is hot', function () {
+  // Live 2026-08-24: used 26%, remaining 74%, elapsed ~4.9%.
+  // Damped (26+5)/(4.9+5) ≈ 3.13 > 1.5 → hot. A 5% warmup return-ok
+  // would have painted this green.
+  assert.strictEqual(PU.classifyPace(26, 74, 95.1, 'weekly'), PU.PACE_HOT,
+    'Codex 26% used with ~95% of the week left is hot');
 });
 
 test('T390.1.3: weekly bar chrome is bright red at rock bottom', function () {

@@ -7,10 +7,13 @@ package planusage
 // ticker paints from this document plus the live snapshot. Mint and
 // migrate use the same numbers. They are not imported from JS.
 type Thresholds struct {
-	AheadRatio               float64 `json:"ahead_ratio"`
-	HotRatio                 float64 `json:"hot_ratio"`
-	UnderWastePercent        float64 `json:"under_waste_percent"`
-	LockedWastePercent       float64 `json:"locked_waste_percent"`
+	AheadRatio         float64 `json:"ahead_ratio"`
+	HotRatio           float64 `json:"hot_ratio"`
+	UnderWastePercent  float64 `json:"under_waste_percent"`
+	LockedWastePercent float64 `json:"locked_waste_percent"`
+	// WarmupElapsedPercent is served for document compat. Colour and
+	// WeeklyBandOf do not short-circuit on it (🎯T390.1.6.2) — damping
+	// is the only early-window ease.
 	WarmupElapsedPercent     float64 `json:"warmup_elapsed_percent"`
 	LowRemainingPercent      float64 `json:"low_remaining_percent"`
 	CriticalRemainingPercent float64 `json:"critical_remaining_percent"`
@@ -35,8 +38,9 @@ type Thresholds struct {
 }
 
 // DefaultThresholds matches the vertices the cockpit already used
-// (ahead 1.0, hot 1.5, waste 15, warmup 5, remaining-low 15 / 5,
-// damp λ 5).
+// (ahead 1.0, hot 1.5, waste 15, remaining-low 15 / 5, damp λ 5).
+// warmup_elapsed_percent stays in the document at 5 but is unused
+// by WeeklyBandOf / classifyPace.
 func DefaultThresholds() Thresholds {
 	return Thresholds{
 		AheadRatio:               1.0,

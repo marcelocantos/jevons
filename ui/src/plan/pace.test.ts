@@ -30,7 +30,7 @@ describe('classifyPace (🎯T390.1)', () => {
     expect(classifyPace(77.5, 22.5, 50)).toBe(PACE_AHEAD);
     expect(classifyPace(78, 22, 50)).toBe(PACE_HOT);
     expect(classifyPace(100, 0, 40)).toBe(PACE_HOT);
-    expect(classifyPace(80, 20, 97)).toBe(PACE_OK);
+    expect(classifyPace(80, 20, 97)).toBe(PACE_HOT);
     expect(classifyPace(80, 20, null)).toBe('');
     expect(classifyPace(24, 76, 50)).toBe(PACE_OK);
   });
@@ -42,7 +42,7 @@ describe('classifyPace (🎯T390.1)', () => {
     expect(early.locked ?? 0).toBeLessThan(PACE_LOCKED_WASTE);
 
     expect(classifyPace(0, 100, 50, 'weekly')).toBe(PACE_LOCKED);
-    expect(classifyPace(0, 100, 97, 'weekly')).toBe(PACE_OK);
+    expect(classifyPace(0, 100, 97, 'weekly')).toBe(PACE_UNDER);
     expect(classifyPace(0, 100, 50, 'session')).toBe(PACE_OK);
     expect(classifyPace(87, 13, 12, 'weekly')).toBe(PACE_OK);
     expect(classifyPace(80, 20, 60, 'weekly')).toBe(PACE_HOT);
@@ -62,6 +62,10 @@ describe('classifyPace (🎯T390.1)', () => {
     applyThresholds({ damp_lambda_percent: 0 });
     expect(classifyPace(9, 91, 94.4, 'weekly')).toBe(PACE_HOT);
     expect(classifyPace(80, 20, 50, 'weekly')).toBe(PACE_HOT);
+  });
+
+  it('has no elapsed cutoff: Codex spent-early week is hot', () => {
+    expect(classifyPace(26, 74, 95.1, 'weekly')).toBe(PACE_HOT);
   });
 });
 

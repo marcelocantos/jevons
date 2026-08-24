@@ -20,6 +20,7 @@ export const CLASS_UNDER = 'plan-under';
 export const CLASS_LOCKED = 'plan-locked';
 export const CLASS_EXHAUSTED = 'plan-exhausted';
 
+/** Served document only; classifyPace does not short-circuit on it (🎯T390.1.6.2). */
 export const PACE_WARMUP_PERCENT = 5;
 export const PACE_AHEAD_RATIO = 1.0;
 export const PACE_HOT_RATIO = 1.5;
@@ -44,7 +45,6 @@ let aheadRatio = PACE_AHEAD_RATIO;
 let hotRatio = PACE_HOT_RATIO;
 let underWaste = PACE_UNDER_WASTE;
 let lockedWaste = PACE_LOCKED_WASTE;
-let warmupElapsed = PACE_WARMUP_PERCENT;
 let lowRemaining = LOW_PERCENT;
 let criticalRemaining = CRITICAL_PERCENT;
 let dampLambda = PACE_DAMP_LAMBDA;
@@ -55,7 +55,6 @@ export function applyThresholds(doc: ThresholdsDoc | null | undefined): void {
   if (typeof doc.hot_ratio === 'number') hotRatio = doc.hot_ratio;
   if (typeof doc.under_waste_percent === 'number') underWaste = doc.under_waste_percent;
   if (typeof doc.locked_waste_percent === 'number') lockedWaste = doc.locked_waste_percent;
-  if (typeof doc.warmup_elapsed_percent === 'number') warmupElapsed = doc.warmup_elapsed_percent;
   if (typeof doc.low_remaining_percent === 'number') lowRemaining = doc.low_remaining_percent;
   if (typeof doc.critical_remaining_percent === 'number') criticalRemaining = doc.critical_remaining_percent;
   if (typeof doc.damp_lambda_percent === 'number') dampLambda = doc.damp_lambda_percent;
@@ -67,7 +66,6 @@ export function resetThresholds(): void {
     hot_ratio: PACE_HOT_RATIO,
     under_waste_percent: PACE_UNDER_WASTE,
     locked_waste_percent: PACE_LOCKED_WASTE,
-    warmup_elapsed_percent: PACE_WARMUP_PERCENT,
     low_remaining_percent: LOW_PERCENT,
     critical_remaining_percent: CRITICAL_PERCENT,
     damp_lambda_percent: PACE_DAMP_LAMBDA,
@@ -117,7 +115,7 @@ export function classifyPace(
         : null;
   if (used === null) return '';
   const elapsed = 100 - remainingTime;
-  if (elapsed < warmupElapsed) return PACE_OK;
+  // No elapsed cutoff (🎯T390.1.6.2) — λ eases early-window extremes.
   const lambda = dampLambda < 0 ? 0 : dampLambda;
   const burn = (used + lambda) / (elapsed + lambda);
   if (burn > hotRatio) return PACE_HOT;

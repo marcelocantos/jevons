@@ -108,6 +108,46 @@ func TestT390_1_6_1EarlyWindowDamping(t *testing.T) {
 	}
 }
 
+// TestT390_1_6_2NoElapsedCutoff: λ eases the early-window ratio; there
+// is no return-ok below a warmup percent. Codex 2026-08-24 (26% used,
+// ~4.9% elapsed) is hot. 80% used at 3% elapsed is still hot. Idle at
+// 3% elapsed is under (waste), not forced green.
+func TestT390_1_6_2NoElapsedCutoff(t *testing.T) {
+	th := DefaultThresholds()
+	now := time.Date(2026, 8, 24, 8, 56, 0, 0, time.UTC)
+	lim := DefaultWeeklyWindowSeconds
+	pct := func(v float64) *float64 { return &v }
+	weeklyAt := func(rem, used, remTimePct float64) Backend {
+		resets := now.Add(time.Duration(remTimePct/100*float64(lim)) * time.Second)
+		return Backend{
+			Provider: "codex",
+			Status:   StatusAvailable,
+			Windows: []Window{{
+				Name: WindowWeekly, RemainingPercent: pct(rem), UsedPercent: pct(used),
+				ResetsAt: &resets, LimitWindowSeconds: &lim,
+			}},
+		}
+	}
+
+	codex := weeklyAt(74, 26, 95.1)
+	if got := WeeklyBandOf(codex, now, th); got != BandHot {
+		t.Fatalf("Codex 26%% used at ~4.9%% elapsed must be hot, got %s", got)
+	}
+	if !MigrateOff(codex, now, th) {
+		t.Fatal("spent-early Codex week still migrates off")
+	}
+
+	spentEarly := weeklyAt(20, 80, 97)
+	if got := WeeklyBandOf(spentEarly, now, th); got != BandHot {
+		t.Fatalf("80%% used at 3%% elapsed must be hot, got %s", got)
+	}
+
+	idleEarly := weeklyAt(100, 0, 97)
+	if got := WeeklyBandOf(idleEarly, now, th); got != BandUnder {
+		t.Fatalf("idle weekly at 3%% elapsed is under, not a warmup hide, got %s", got)
+	}
+}
+
 func TestPickPlanDestWasteThenLoad(t *testing.T) {
 	th := DefaultThresholds()
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)

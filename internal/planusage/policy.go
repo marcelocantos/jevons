@@ -67,12 +67,8 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 		return BandOK
 	}
 	elapsed := 100 - rtp
-	if elapsed < th.WarmupElapsedPercent {
-		return BandOK
-	}
-	if elapsed <= 0 {
-		return BandOK
-	}
+	// No elapsed cutoff (🎯T390.1.6.2). λ on both terms eases the
+	// early-window ratio; elapsed 0 is (used+λ)/λ.
 	burn := dampedBurn(*used, elapsed, th.DampLambdaPercent)
 	if burn > th.HotRatio {
 		return BandHot
