@@ -595,14 +595,7 @@ func (f *Claudia) launchThrowawayCompact(p handover.Pending) (string, string, er
 	}
 	sid := uuid.NewString()
 	temp := "jv-compact-" + sid[:8]
-	tempDef := *def
-	tempDef.Name = temp
-	tempDef.SessionID = sid
-	tempDef.Provider = claudia.Provider(p.To)
-	tempDef.Materialized = false
-	tempDef.AutoStart = false
-	tempDef.ConnectURL = ""
-	tempDef.ConnectPID = 0
+	tempDef := throwawayCompactDef(*def, temp, sid, claudia.Provider(p.To))
 	if err := f.reg.Register(tempDef); err != nil {
 		return "", "", err
 	}
@@ -624,4 +617,20 @@ func (f *Claudia) launchThrowawayCompact(p handover.Pending) (string, string, er
 		return sid, "", err
 	}
 	return sid, strings.TrimSpace(text), nil
+}
+
+func throwawayCompactDef(source claudia.AgentDef, name, sessionID string, provider claudia.Provider) claudia.AgentDef {
+	source.Name = name
+	source.SessionID = sessionID
+	source.Provider = provider
+	// This row exists only long enough to ask for one compact brief. Keep it
+	// outside every work-seat policy (plan migration, recovery, idle nudges)
+	// and never make it look engaged on the predecessor's target (🎯T543).
+	source.Purpose = claudia.PurposeAside
+	source.TargetID = ""
+	source.Materialized = false
+	source.AutoStart = false
+	source.ConnectURL = ""
+	source.ConnectPID = 0
+	return source
 }

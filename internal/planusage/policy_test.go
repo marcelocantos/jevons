@@ -234,3 +234,34 @@ func TestT517PlanActionsSkipsPOEvenWhenPurposeIsWork(t *testing.T) {
 		t.Fatalf("only the worker migrates claude→codex, got %+v", acts)
 	}
 }
+
+func TestT543PlanActionsSkipsAsideCompactSeat(t *testing.T) {
+	th := DefaultThresholds()
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	week := now.Add(3*24*time.Hour + 12*time.Hour)
+	lim := DefaultWeeklyWindowSeconds
+	pct := func(v float64) *float64 { return &v }
+	snap := Snapshot{Backends: []Backend{
+		{
+			Provider: "grok", Status: StatusAvailable,
+			Windows: []Window{{
+				Name: WindowWeekly, RemainingPercent: pct(0), UsedPercent: pct(100),
+				ResetsAt: &week, LimitWindowSeconds: &lim,
+			}},
+		},
+		{
+			Provider: "codex", Status: StatusAvailable,
+			Windows: []Window{{
+				Name: WindowWeekly, RemainingPercent: pct(80), UsedPercent: pct(20),
+				ResetsAt: &week, LimitWindowSeconds: &lim,
+			}},
+		},
+	}}
+	acts := PlanActions(snap, []AgentRef{
+		{Name: "jv-t543-worker", Provider: "grok", Purpose: "work", Parent: "jevons-po"},
+		{Name: "jv-compact-deadbeef", Provider: "grok", Purpose: "aside", Parent: "jevons-po"},
+	}, now, th)
+	if len(acts) != 1 || acts[0].Name != "jv-t543-worker" {
+		t.Fatalf("compact aside must be invisible to PlanActions, got %+v", acts)
+	}
+}

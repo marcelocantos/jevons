@@ -247,8 +247,8 @@ func PlanMigrateExempt(a AgentRef, overseers map[string]bool) bool {
 }
 
 // PlanActions lists migrate/park steps for seats on hot or exhausted
-// providers. Overseer purpose is skipped. To is empty when dest is empty
-// (park).
+// providers. Overseer purpose and aside seats are skipped (🎯T517, 🎯T543).
+// To is empty when dest is empty (park).
 func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds) []PlanAction {
 	view := CockpitSnapshot(snap)
 	byProv := map[string]Backend{}
@@ -269,6 +269,9 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds)
 	overseers := OverseerNames(agents)
 	var out []PlanAction
 	for _, a := range agents {
+		if strings.EqualFold(strings.TrimSpace(a.Purpose), "aside") {
+			continue
+		}
 		if PlanMigrateExempt(a, overseers) {
 			continue
 		}

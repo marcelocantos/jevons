@@ -54,6 +54,52 @@ func migrateFixture(t *testing.T, sessionID string, withTranscript bool) (*Claud
 	return f, store, transcript
 }
 
+func TestT543ThrowawayCompactIsNotAWorkSeat(t *testing.T) {
+	got := throwawayCompactDef(claudia.AgentDef{
+		Name: "worker", Purpose: claudia.PurposeWork, TargetID: "T543",
+		AutoStart: true, Materialized: true, ConnectURL: "http://old", ConnectPID: 42,
+	}, "jv-compact-12345678", "compact-session", claudia.ProviderCodex)
+	if got.Purpose == claudia.PurposeWork || got.Purpose != claudia.PurposeAside {
+		t.Fatalf("purpose=%q; want aside, never work", got.Purpose)
+	}
+	if got.TargetID != "" {
+		t.Fatalf("target_id=%q; want empty", got.TargetID)
+	}
+	if got.AutoStart || got.Materialized || got.ConnectURL != "" || got.ConnectPID != 0 {
+		t.Fatalf("throwaway retained work lifecycle state: %+v", got)
+	}
+}
+
+func TestT543CompleteThinBriefMintsCompactOnce(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e54"
+	f, _, _ := migrateFixture(t, oldSession, false)
+	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderCodex, true)
+	if err != nil {
+		t.Fatalf("PrepareMigration: %v", err)
+	}
+	if !handover.DistillTooThin(pending.Brief) && !handover.DistillTooThin(handover.Distill(pending.TranscriptPath)) {
+		t.Fatalf("fixture is not DistillTooThin: source=%q brief=%q", pending.BriefSource, pending.Brief)
+	}
+	mints := 0
+	f.compactBrief = func(handover.Pending) (string, string, error) {
+		mints++
+		return "compact-sess-t543", "in flight: T543 still open", nil
+	}
+	if _, err := f.CompleteThinBrief(pending); err != nil {
+		t.Fatalf("CompleteThinBrief: %v", err)
+	}
+	saved, ok, err := f.PendingHandover("jevons-po")
+	if err != nil || !ok {
+		t.Fatalf("pending missing: ok=%v err=%v", ok, err)
+	}
+	if _, err := f.CompleteThinBrief(saved); err != nil {
+		t.Fatalf("second CompleteThinBrief: %v", err)
+	}
+	if mints != 1 {
+		t.Fatalf("compact mints=%d; DistillTooThin must launch throwaway compact once", mints)
+	}
+}
+
 // TestPrepareMigrationPersistsPointerBeforeRotating is the ordering
 // oracle for 🎯T285: rotation overwrites the session id, so unless the
 // transcript pointer is already on disk the successor can never be told
