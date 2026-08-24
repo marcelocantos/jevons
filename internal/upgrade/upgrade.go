@@ -33,7 +33,9 @@ type Mode int
 const (
 	// ModeNormal stops agents on exit (historical behaviour).
 	ModeNormal Mode = iota
-	// ModeUpgrade leaves agent processes alone and records handles.
+	// ModeUpgrade leaves adoptable agent processes alone (Grok
+	// connect-mode, Claude tmux) and records handles. Cursor ACP
+	// stdio children are stopped separately (🎯T541.1).
 	ModeUpgrade
 )
 

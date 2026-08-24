@@ -34,6 +34,14 @@ func TestPlanCockpitLaunchWhenDown(t *testing.T) {
 	}
 }
 
+func TestPlanCockpitGiveUpWhenResumeDenied(t *testing.T) {
+	t.Parallel()
+	p := planCockpit(cockpitObs{Registered: true, ProcAlive: false, ResumeDenied: true}, 0, 8, 0)
+	if p != cockpitGiveUp {
+		t.Fatalf("phase=%v want GiveUp (must not relaunch a fail-closed Cursor store)", p)
+	}
+}
+
 func TestPlanCockpitGiveUpAfterMaxAttempts(t *testing.T) {
 	t.Parallel()
 	p := planCockpit(cockpitObs{Registered: true, ProcAlive: false, ChatAttached: false}, 8, 8, 0)

@@ -938,6 +938,12 @@ func main() {
 			}
 			return
 		}
+		// Cursor ACP stdio cannot be adopted. Stop those seats here so
+		// SIGHUP does not leave orphans that the successor then stacks
+		// (🎯T541.1). Grok connect-mode / Claude tmux stay for reattach.
+		if n := upgrade.StopNonAdoptable(registry); n > 0 {
+			slog.Info("upgrade exit: stopped non-adoptable agents", "n", n)
+		}
 		handles := upgrade.FromRegistry(registry)
 		snap := upgrade.BuildSnapshot(handles, os.Getpid())
 		path := upgrade.SnapshotPath(cfg.StateDir)
@@ -1007,7 +1013,7 @@ func main() {
 		// provider-aware diagnosis (ð¯T54, ð¯T214 J4) â do not blame a missing
 		// Grok CLI when the overseer provider is Claude/other. Cockpit
 		// converge (ð¯T204) keeps retrying Launch+attach.
-		reason := overseerUnavailableReason(jevonDef.Provider)
+		reason := overseerDownReason(jevonDef.Provider, registry.ResumeDenied(cfg.OverseerName))
 		slog.Error("OVERSEER NOT RUNNING â chat cannot respond until this is fixed",
 			"overseer", cfg.OverseerName, "provider", jevonDef.Provider, "likely_cause", reason)
 		srv.SetOverseerDownReason(reason)
@@ -1424,6 +1430,11 @@ func diagnoseOverseerUnavailable(provider claudia.Provider, binOnPath bool, cand
 	case claudia.ProviderBedrock:
 		return "the Bedrock agent failed to start â check AWS credentials/region and see the " +
 			"jevonsd log (overseer provider is bedrock; this is not a Grok CLI issue)"
+	case claudia.ProviderCursor:
+		if binOnPath {
+			return "the Cursor agent failed to start — session/load of the existing conversation failed or the ACP child died; see the jevonsd log (overseer provider is cursor; this is not a Grok CLI issue)"
+		}
+		return "the Cursor agent CLI is not installed (or not on PATH) — install Cursor agent (`cursor-agent` / `agent`), authenticate, then restart jevonsd (overseer provider is cursor; this is not a Grok CLI issue)"
 	default:
 		// Grok (default fleet) and unknown providers: Grok-oriented copy.
 		if binOnPath {
@@ -1438,6 +1449,15 @@ func diagnoseOverseerUnavailable(provider claudia.Provider, binOnPath bool, cand
 			"(`grok login`, or set XAI_API_KEY), then restart jevonsd. The default overseer " +
 			"provider is Grok; set provider=claude (or config/env) only when that backend is ready"
 	}
+}
+
+// overseerDownReason is the owner-facing down copy (🎯T541.1). A latched
+// session/load refuse is the cause; the CLI probe is only the fallback.
+func overseerDownReason(provider claudia.Provider, resumeDenied error) string {
+	if resumeDenied != nil {
+		return "overseer session exists but could not be loaded; refusing to mint a replacement: " + resumeDenied.Error()
+	}
+	return overseerUnavailableReason(provider)
 }
 
 // overseerUnavailableReason probes the host for the selected overseer
@@ -1458,6 +1478,14 @@ func overseerUnavailableReason(provider claudia.Provider) string {
 		_, err := exec.LookPath("codex")
 		return diagnoseOverseerUnavailable(provider, err == nil, "")
 	case claudia.ProviderBedrock:
+		return diagnoseOverseerUnavailable(provider, false, "")
+	case claudia.ProviderCursor:
+		if _, err := exec.LookPath("cursor-agent"); err == nil {
+			return diagnoseOverseerUnavailable(provider, true, "")
+		}
+		if _, err := exec.LookPath("agent"); err == nil {
+			return diagnoseOverseerUnavailable(provider, true, "")
+		}
 		return diagnoseOverseerUnavailable(provider, false, "")
 	default:
 		if _, err := exec.LookPath("grok"); err == nil {

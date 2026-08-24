@@ -3,13 +3,67 @@
 
 package upgrade
 
-import "github.com/marcelocantos/claudia"
+import (
+	"strings"
+
+	"github.com/marcelocantos/claudia"
+)
 
 func processReattachable(h Handle) bool {
+	// Cursor ACP records a child PID but the transport is stdio — a
+	// leftover PID is not adoptable (🎯T541.1). Only Grok connect-mode
+	// (URL+PID) and Claude tmux windows survive a coordinator death.
 	if h.ConnectURL != "" && h.PID > 0 {
 		return true
 	}
-	return h.TmuxWindowID != ""
+	return tmuxAdoptableWindow(h.TmuxWindowID)
+}
+
+// tmuxAdoptableWindow is a real tmux window/pane id (@N / %N).
+// Codex/Cursor stamp WindowID as "codex-app-server-…" / "cursor-acp-…";
+// copying that into TmuxWindowID made processReattachable true, so
+// SIGHUP skipped Stop and the exclusive home never flushed (🎯T545.1.2).
+func tmuxAdoptableWindow(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	if id[0] != '@' && id[0] != '%' {
+		return false
+	}
+	if len(id) < 2 {
+		return false
+	}
+	for _, r := range id[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// adoptiveTmuxWindowID copies a live WindowID into the handle only when
+// it is a tmux id. ACP labels stay off TmuxWindowID so snapshots cannot
+// revive the skip-Stop hole.
+func adoptiveTmuxWindowID(id string) string {
+	if tmuxAdoptableWindow(id) {
+		return strings.TrimSpace(id)
+	}
+	return ""
+}
+
+// ShouldStopOnUpgrade is true when the seat cannot be adopted after
+// SIGHUP: leave Grok connect-mode and Claude tmux alone; stop Cursor
+// (and any other stdio-owned handle) so the successor does not stack
+// a second client on the same store.db.
+func ShouldStopOnUpgrade(h Handle, hasProc bool) bool {
+	if processReattachable(h) {
+		return false
+	}
+	if hasProc {
+		return true
+	}
+	return strings.EqualFold(h.Provider, "cursor") && h.SessionID != ""
 }
 
 // FromRegistry builds upgrade handles from a live claudia registry.
@@ -42,7 +96,7 @@ func FromRegistry(reg *claudia.Registry) []Handle {
 			if p := proc.PID(); p > 0 {
 				h.PID = p
 			}
-			if w := proc.WindowID(); w != "" {
+			if w := adoptiveTmuxWindowID(proc.WindowID()); w != "" {
 				h.TmuxWindowID = w
 			}
 		}

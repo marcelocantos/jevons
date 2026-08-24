@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -171,6 +172,18 @@ func TestDiagnoseOverseerUnavailableProviderAware(t *testing.T) {
 		t.Fatalf("bedrock text: %q", got)
 	}
 
+	// Cursor must not fall through to the Grok default (🎯T541.1 / 🎯T214).
+	got = diagnoseOverseerUnavailable(claudia.ProviderCursor, true, "")
+	if strings.Contains(got, "grok login") || strings.Contains(got, "XAI_API_KEY") || strings.Contains(got, "install Grok") {
+		t.Fatalf("cursor present must not blame Grok: %q", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "cursor") {
+		t.Fatalf("cursor text: %q", got)
+	}
+	if !strings.Contains(got, "not a Grok CLI issue") {
+		t.Fatalf("cursor should disclaim Grok: %q", got)
+	}
+
 	// Grok missing: historical first-run copy still mentions Grok install.
 	got = diagnoseOverseerUnavailable(claudia.ProviderGrok, false, "")
 	if !strings.Contains(got, "Grok CLI is not installed") {
@@ -181,5 +194,23 @@ func TestDiagnoseOverseerUnavailableProviderAware(t *testing.T) {
 	got = diagnoseOverseerUnavailable(claudia.ProviderGrok, false, "/opt/homebrew/bin/grok")
 	if !strings.Contains(got, "/opt/homebrew/bin/grok") {
 		t.Fatalf("grok candidate path: %q", got)
+	}
+}
+
+func TestOverseerDownReasonPrefersResumeDenied(t *testing.T) {
+	loadErr := errors.New("acp session/load 0beb2254: connection closed (existing conversation; refusing to mint a replacement session)")
+	got := overseerDownReason(claudia.ProviderCursor, loadErr)
+	if !strings.Contains(got, "refusing to mint a replacement") {
+		t.Fatalf("want fail-loud load copy, got %q", got)
+	}
+	if !strings.Contains(got, "0beb2254") {
+		t.Fatalf("want the session id in the down reason, got %q", got)
+	}
+	if strings.Contains(got, "grok login") || strings.Contains(got, "XAI_API_KEY") {
+		t.Fatalf("resume-denied must not blame Grok: %q", got)
+	}
+	fallback := overseerDownReason(claudia.ProviderCursor, nil)
+	if strings.Contains(fallback, "grok login") || strings.Contains(fallback, "Grok CLI is not installed") {
+		t.Fatalf("cursor fallback must not be Grok copy: %q", fallback)
 	}
 }

@@ -132,6 +132,92 @@ func TestConsumeSnapshot(t *testing.T) {
 	}
 }
 
+func TestProcessReattachableCursorPIDOnly(t *testing.T) {
+	if processReattachable(Handle{Provider: "cursor", PID: 39004, SessionID: "s"}) {
+		t.Fatal("Cursor stdio PID must not count as adoptable (🎯T541.1)")
+	}
+	if !processReattachable(Handle{PID: 1, ConnectURL: "ws://127.0.0.1/x"}) {
+		t.Fatal("Grok URL+PID must stay adoptable")
+	}
+}
+
+func TestProcessReattachableACPWindowIDIsNotTmux(t *testing.T) {
+	codex := Handle{Provider: "codex", SessionID: "01a0320f", TmuxWindowID: "codex-app-server-01a0320f"}
+	if processReattachable(codex) {
+		t.Fatal("Codex ACP WindowID must not count as a tmux adopt (🎯T545.1.2)")
+	}
+	if !ShouldStopOnUpgrade(codex, true) {
+		t.Fatal("live Codex seat must stop on upgrade exit so exclusive home can flush")
+	}
+	cursor := Handle{Provider: "cursor", SessionID: "0beb", TmuxWindowID: "cursor-acp-0beb"}
+	if processReattachable(cursor) {
+		t.Fatal("Cursor ACP WindowID must not count as a tmux adopt (🎯T541.1)")
+	}
+	if !ShouldStopOnUpgrade(cursor, true) {
+		t.Fatal("live Cursor seat with ACP WindowID must still stop")
+	}
+	if adoptiveTmuxWindowID("codex-app-server-01a0320f") != "" {
+		t.Fatal("ACP label must not be copied onto TmuxWindowID")
+	}
+	if adoptiveTmuxWindowID("@12") != "@12" {
+		t.Fatal("Claude @N must stay a tmux adopt")
+	}
+	if !tmuxAdoptableWindow("%3") {
+		t.Fatal("tmux pane %N must stay a tmux adopt")
+	}
+	if tmuxAdoptableWindow("@") || tmuxAdoptableWindow("@x") {
+		t.Fatal("truncated or non-numeric @ id is not tmux")
+	}
+}
+
+func TestShouldStopOnUpgrade(t *testing.T) {
+	cursor := Handle{Provider: "cursor", SessionID: "0beb", PID: 27606}
+	if !ShouldStopOnUpgrade(cursor, true) {
+		t.Fatal("live Cursor seat must stop on upgrade exit")
+	}
+	if !ShouldStopOnUpgrade(cursor, false) {
+		t.Fatal("Cursor leftover with session must stop/reap on upgrade exit")
+	}
+	grok := Handle{Provider: "grok", SessionID: "g", PID: 9, ConnectURL: "ws://127.0.0.1/x"}
+	if ShouldStopOnUpgrade(grok, true) {
+		t.Fatal("Grok connect-mode must survive upgrade exit")
+	}
+	claude := Handle{Provider: "", SessionID: "c", TmuxWindowID: "@3"}
+	if ShouldStopOnUpgrade(claude, true) {
+		t.Fatal("Claude tmux must survive upgrade exit")
+	}
+}
+
+func TestStopNonAdoptableStopsCursorLeavesGrok(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons", WorkDir: t.TempDir(), SessionID: "sid-cursor",
+		Provider: claudia.ProviderCursor, ConnectPID: 42424242, AutoStart: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "worker", WorkDir: t.TempDir(), SessionID: "sid-grok",
+		Provider: claudia.ProviderGrok, ConnectURL: "ws://127.0.0.1:9/ws",
+		ConnectPID: 4242, AutoStart: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	n := StopNonAdoptable(reg)
+	if n != 1 {
+		t.Fatalf("stopped %d, want 1 (cursor only)", n)
+	}
+	if d := reg.Def("jevons"); d != nil && d.ConnectPID != 0 {
+		t.Fatalf("cursor ConnectPID still %d after stop", d.ConnectPID)
+	}
+	if d := reg.Def("worker"); d == nil || d.ConnectPID != 4242 || d.ConnectURL == "" {
+		t.Fatal("grok connect endpoint must survive")
+	}
+}
+
 func TestPlanReattachConnectMode(t *testing.T) {
 	plan := PlanReattach(&Snapshot{
 		Agents: []Handle{{

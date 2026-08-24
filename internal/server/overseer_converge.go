@@ -69,6 +69,9 @@ type cockpitObs struct {
 	SinceProgress time.Duration
 	// QueueDepth is pending notify/owner notes not yet delivered.
 	QueueDepth int
+	// ResumeDenied is a latched Cursor session/load fail-closed
+	// (🎯T541.1). Further Launch attempts would stack store.db writers.
+	ResumeDenied bool
 }
 
 // planCockpit is the hermetic policy (oracle for 🎯T204).
@@ -82,6 +85,9 @@ func planCockpit(o cockpitObs, attempts, maxAttempts int, stuckTimeout time.Dura
 		stuckTimeout = DefaultStuckBusyTimeout
 	}
 	if !o.Registered {
+		return cockpitGiveUp
+	}
+	if o.ResumeDenied {
 		return cockpitGiveUp
 	}
 	if !o.ProcAlive {
@@ -164,6 +170,9 @@ func (s *Server) ObserveCockpit() cockpitObs {
 		return o
 	}
 	o.Registered = true
+	if err := reg.ResumeDenied(name); err != nil {
+		o.ResumeDenied = true
+	}
 	proc := reg.Get(name)
 	if proc != nil && proc.Alive() {
 		o.ProcAlive = true
@@ -220,6 +229,17 @@ func (s *Server) EnsureOverseer(state *cockpitState) error {
 		state.mu.Unlock()
 		if !obs.Registered {
 			reason = "overseer is not registered in the agent registry"
+		} else if obs.ResumeDenied {
+			reason = "overseer session exists but could not be loaded; refusing to mint a replacement"
+			s.mu.RLock()
+			reg := s.registry
+			name := s.overseerName
+			s.mu.RUnlock()
+			if reg != nil {
+				if err := reg.ResumeDenied(name); err != nil {
+					reason = reason + ": " + err.Error()
+				}
+			}
 		}
 		s.SetOverseerDownReason(reason)
 		return fmt.Errorf("cockpit: %s", reason)
@@ -354,13 +374,16 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 	}
 
 	agent, err := fleet.LaunchRecovering(reg, name)
-	if err != nil {
+	if err != nil && !claudia.IsCursorResumeDenied(err) {
 		_ = reg.Register(clearConnectEndpoint(cleared))
 		agent, err = fleet.LaunchRecovering(reg, name)
 	}
 	if err != nil {
 		state.mu.Lock()
 		state.attempts++
+		if claudia.IsCursorResumeDenied(err) {
+			state.attempts = DefaultCockpitMaxAttempts
+		}
 		state.lastErr = err.Error()
 		n := state.attempts
 		state.mu.Unlock()
