@@ -58,3 +58,18 @@ func TestT418ClassifyHandoverUnknownAgeIsNotWait(t *testing.T) {
 		t.Fatalf("no created_at = %s; want surface, not wait on a zero clock", got)
 	}
 }
+
+func TestT542ClassifyHandoverReapsColdEmptyTranscript(t *testing.T) {
+	now := time.Now()
+	for _, path := range []string{"", "   "} {
+		p := handover.Pending{
+			Agent: "jv-t542", From: "codex", To: "claude",
+			TranscriptPath: path,
+			CreatedAt:      now.UTC().Add(-time.Hour).Format(time.RFC3339),
+		}
+		got, reason := handover.ClassifyHandover(p, now, true, true)
+		if got != handover.HandoverReap {
+			t.Fatalf("COLD path %q = %s (%s); want reap, not surface", path, got, reason)
+		}
+	}
+}

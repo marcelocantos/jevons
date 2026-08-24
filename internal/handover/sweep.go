@@ -26,6 +26,11 @@ const (
 // with an owner and a clock: retry when a live process can take the
 // seed, surface when nobody will launch, reap when the seat is gone
 // or the seed already landed.
+//
+// 🎯T542: a COLD record (empty TranscriptPath / !Usable) cannot seed a
+// successor. Surfacing it as UNDELIVERED HANDOVER after a restart is
+// how a force-cold Codex→Claude migrate became a standing fleet-health
+// alert. Reap it; do not retry and do not surface.
 func ClassifyHandover(p Pending, now time.Time, inRegistry, alive bool) (HandoverAction, string) {
 	age, hasAge := p.Age(now)
 	ageNote := p.DescribeAge(now)
@@ -35,7 +40,7 @@ func ClassifyHandover(p Pending, now time.Time, inRegistry, alive bool) (Handove
 	case !inRegistry:
 		return HandoverReap, fmt.Sprintf("agent left the registry (%s)", ageNote)
 	case !p.Usable():
-		return HandoverSurface, fmt.Sprintf("record cannot seed a successor (%s)", ageNote)
+		return HandoverReap, fmt.Sprintf("COLD — record cannot seed a successor (%s)", ageNote)
 	case alive:
 		return HandoverRetry, "live process can take the seed"
 	case !hasAge:

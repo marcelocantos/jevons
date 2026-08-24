@@ -5,9 +5,11 @@ package mcpserver
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
@@ -35,16 +37,41 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		}
 	}
 	s.dropExemptHandovers(agents)
+	pending := s.pendingPlanHandovers()
 	acts := planusage.PlanActions(snap, agents, now, th)
-	for _, a := range acts {
+	for i, a := range acts {
+		if a.To != "" && !s.planDestAllowed(a.To) {
+			slog.Info("🎯T542 plan dest refused by owner-provider pin",
+				"name", a.Name, "to", a.To, "pin", s.resolvedDefaultProvider())
+			a.To = ""
+			a.Reason += "; dest refused by owner-provider pin — park"
+			acts[i] = a
+		}
 		if a.To != "" && s.migrator != nil {
-			pending, err := s.migrator.PrepareMigration(a.Name, claudia.Provider(a.To), true)
+			// PrepareMigration persists the handover before CompleteThinBrief.
+			// If launch then fails, the next policy tick must leave that durable
+			// handover alone: completing it again can mint another throwaway
+			// compact session every refresh (🎯T543). A COLD leftover is not
+			// "already pending" — reap it rather than skip (🎯T542).
+			if p, ok := pending[a.Name]; ok {
+				if !p.Usable() {
+					s.abortColdPlanMigrate(a, "pending record is COLD")
+					continue
+				}
+				slog.Info("plan policy migration already pending", "name", a.Name, "to", a.To)
+				continue
+			}
+			prepared, err := s.migrator.PrepareMigration(a.Name, claudia.Provider(a.To), true)
 			if err != nil {
 				slog.Warn("plan policy migrate prepare failed", "name", a.Name, "to", a.To, "err", err)
 				s.MarkAgentParked(a.Name, "jevons", a.Reason+": migrate failed, parked")
 				continue
 			}
-			if _, err := s.migrator.CompleteThinBrief(pending); err != nil {
+			if !prepared.Usable() {
+				s.abortColdPlanMigrate(a, "prepare returned COLD (no predecessor transcript)")
+				continue
+			}
+			if _, err := s.migrator.CompleteThinBrief(prepared); err != nil {
 				slog.Warn("plan policy migrate brief failed", "name", a.Name, "err", err)
 			}
 			if err := s.migrator.Launch(&thread.Thread{ID: a.Name}); err != nil {
@@ -62,6 +89,50 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		slog.Info("plan policy parked", "name", a.Name, "from", a.From)
 	}
 	return acts
+}
+
+// planDestAllowed reports whether plan-usage migrate may land on dest.
+// A standing no-Claude / owner-provider pin (config.yaml provider /
+// SetDefaultProvider) is not overwritten by picking Claude just because
+// another backend is hot (🎯T542).
+func (s *Server) planDestAllowed(dest string) bool {
+	d := strings.ToLower(strings.TrimSpace(dest))
+	if d == "" || d != "claude" {
+		return true
+	}
+	pin := strings.ToLower(string(s.resolvedDefaultProvider()))
+	return pin == "claude"
+}
+
+// abortColdPlanMigrate drops a COLD handover and parks the seat so the
+// record cannot survive a restart as UNDELIVERED HANDOVER (🎯T542).
+func (s *Server) abortColdPlanMigrate(a planusage.PlanAction, why string) {
+	if led, ok := s.migrator.(handoverLedger); ok && led != nil {
+		if err := led.ClearHandover(a.Name); err != nil {
+			slog.Warn("🎯T542 COLD handover clear failed", "name", a.Name, "err", err)
+		}
+	}
+	slog.Info("🎯T542 COLD plan migrate aborted", "name", a.Name, "to", a.To, "reason", why)
+	s.MarkAgentParked(a.Name, "jevons", a.Reason+": "+why)
+	if s.registry != nil {
+		s.registry.Stop(a.Name)
+	}
+}
+
+func (s *Server) pendingPlanHandovers() map[string]handover.Pending {
+	byAgent := map[string]handover.Pending{}
+	led, ok := s.migrator.(handoverLedger)
+	if !ok || led == nil {
+		return byAgent
+	}
+	pending, err := led.PendingHandovers()
+	if err != nil {
+		slog.Warn("plan policy pending handovers partially unreadable", "err", err)
+	}
+	for _, p := range pending {
+		byAgent[p.Agent] = p
+	}
+	return byAgent
 }
 
 func (s *Server) planAgentIndex() (overseers map[string]bool, byName map[string]planusage.AgentRef) {

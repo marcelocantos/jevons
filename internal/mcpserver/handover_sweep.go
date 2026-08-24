@@ -62,6 +62,16 @@ func (s *Server) SweepHandovers() {
 				slog.Info("🎯T418 handover retry", "agent", p.Agent, "reason", reason)
 			}
 		case handover.HandoverSurface:
+			if !p.Usable() {
+				// 🎯T542 defence: ClassifyHandover already reaps COLD
+				// records; never surface one that cannot seed.
+				if err := led.ClearHandover(p.Agent); err != nil {
+					slog.Error("🎯T542 COLD handover reap failed", "agent", p.Agent, "err", err)
+				} else {
+					slog.Info("🎯T542 handover reaped", "agent", p.Agent, "reason", "COLD — will not surface")
+				}
+				break
+			}
 			s.surfacePendingHandover(p, reason, now)
 		case handover.HandoverReap:
 			if err := led.ClearHandover(p.Agent); err != nil {

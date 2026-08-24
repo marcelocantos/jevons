@@ -174,6 +174,8 @@ func (p Pending) EffectiveKind() string {
 }
 
 // Usable reports whether this record can still seed a successor.
+// Empty TranscriptPath is COLD (🎯T542): there is no predecessor to
+// hand over, so the sweep must reap rather than surface the record.
 func (p Pending) Usable() bool {
 	return !p.Delivered && strings.TrimSpace(p.TranscriptPath) != ""
 }
