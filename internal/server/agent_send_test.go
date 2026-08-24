@@ -62,6 +62,22 @@ func TestHandleAgentSendRequiresText(t *testing.T) {
 	}
 }
 
+func TestHandleAgentSendOverseerDownNacks(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/jevons/send",
+		strings.NewReader(`{"text":"should nack"}`))
+	req.SetPathValue("name", "jevons")
+	rr := httptest.NewRecorder()
+	s.handleAgentSend(rr, req)
+	if rr.Code == http.StatusOK {
+		t.Fatalf("down overseer reported delivered: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "overseer not running") {
+		t.Fatalf("nack must name the down overseer: %s", rr.Body.String())
+	}
+}
+
 func TestHandleAgentSendNotRegistered(t *testing.T) {
 	s := New("test", t.TempDir())
 	// No hook, no registry → not available / not registered path.

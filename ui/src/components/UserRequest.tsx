@@ -41,7 +41,9 @@ export function UserRequest(props: {
     props.onSend(payload);
     pending.forEach((img) => revokeObjectUrl(img.objectUrl));
     setPending([]);
-    setDraft(props.name, '');
+    // 🎯T545.3: keep the sent text until the transcript echoes a user row.
+    // Failed send leaves composer + Send enabled for retry.
+    if (payload !== raw) setDraft(props.name, payload);
   };
 
   const attachFromTransfer = (data: ClipboardLike | null | undefined): boolean => {

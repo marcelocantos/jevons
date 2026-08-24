@@ -78,6 +78,8 @@ type Server struct {
 	transport *server.StreamableHTTPServer
 
 	toolsListCount int64
+	// toolCallObserver sees every HTTP tools/call name+args (🎯T64.2).
+	toolCallObserver func(name string, args map[string]any)
 
 	mu sync.Mutex
 	// startMu serializes Launch/wire on jevons_agent_start. It must be
@@ -131,6 +133,10 @@ type Server struct {
 	// fleetBriefed tracks agents that already received FleetStandingBrief
 	// on first jevons_agent_send (🎯T104 under fan-out).
 	fleetBriefed map[string]bool
+	// bounceRemint names seats whose session_id changed on this boot's
+	// reattach (🎯T545.1). Those seats must not receive full_brief /
+	// fleet_recover unstick — empty-goal blocked is bounce failure.
+	bounceRemint map[string]bool
 
 	// envelopeChatter dedupes/rate-caps chatter-capped kinds (🎯T509).
 	// Lazy; guarded by mu.
@@ -405,6 +411,33 @@ func (s *Server) SetMCP(a mcpattach.Args) {
 	s.mcp = a
 }
 
+// NoteBounceRemint records seats whose session_id changed on this boot
+// (🎯T545.1). Post-restart full_brief and fleet_recover unstick skip them.
+func (s *Server) NoteBounceRemint(names []string) {
+	if s == nil || len(names) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.bounceRemint == nil {
+		s.bounceRemint = map[string]bool{}
+	}
+	for _, n := range names {
+		if n != "" {
+			s.bounceRemint[n] = true
+		}
+	}
+}
+
+func (s *Server) bounceReminted(name string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bounceRemint != nil && s.bounceRemint[name]
+}
+
 // SetLLMPortfolio installs the multi-provider routing seed (🎯T325.2).
 // Nil clears to DefaultPortfolio at route time. Marks the seed as
 // compiled (not a leftover file).
@@ -599,9 +632,18 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 // silently (a server that never connects just means "no tools"), so
 // visibility here is the only way to diagnose tool-wiring gaps (🎯T50).
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
-	mux.Handle("/mcp", mcpRequestLogger(s.transport, &s.toolsListCount))
+	mux.Handle("/mcp", s.mcpRequestLogger())
 	// 🎯T406: owner-visible fleet intent / hard-block snapshot.
 	mux.HandleFunc("GET /api/fleet-intent", s.handleFleetIntentHTTP)
+}
+
+// SetToolCallObserver is notified on every JSON-RPC tools/call this
+// server handles (🎯T64.2). Nil is a no-op.
+func (s *Server) SetToolCallObserver(fn func(name string, args map[string]any)) {
+	if s == nil {
+		return
+	}
+	s.toolCallObserver = fn
 }
 
 // ToolsListCount reports how many MCP tools/list requests have been
@@ -609,11 +651,13 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 // attach our tools?" (🎯T50: the Grok CLI drops servers silently).
 func (s *Server) ToolsListCount() int64 { return atomic.LoadInt64(&s.toolsListCount) }
 
-func mcpRequestLogger(next http.Handler, toolsList *int64) http.Handler {
+func (s *Server) mcpRequestLogger() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var method string
+		var body []byte
 		if r.Body != nil {
-			body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			var err error
+			body, err = io.ReadAll(io.LimitReader(r.Body, 1<<20))
 			if err == nil {
 				r.Body = io.NopCloser(bytes.NewReader(body))
 				var m struct {
@@ -624,11 +668,37 @@ func mcpRequestLogger(next http.Handler, toolsList *int64) http.Handler {
 			}
 		}
 		if method == "tools/list" {
-			atomic.AddInt64(toolsList, 1)
+			atomic.AddInt64(&s.toolsListCount, 1)
+		}
+		if method == "tools/call" {
+			if name, args := parseToolsCall(body); name != "" && s.toolCallObserver != nil {
+				s.toolCallObserver(name, args)
+			}
 		}
 		slog.Debug("mcp request", "http", r.Method, "rpc", method, "ua", r.UserAgent())
-		next.ServeHTTP(w, r)
+		s.transport.ServeHTTP(w, r)
 	})
+}
+
+func parseToolsCall(body []byte) (name string, args map[string]any) {
+	var req struct {
+		Method string `json:"method"`
+		Params struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(body, &req) != nil || req.Method != "tools/call" {
+		return "", nil
+	}
+	name = strings.TrimSpace(req.Params.Name)
+	if len(req.Params.Arguments) > 0 && string(req.Params.Arguments) != "null" {
+		var m map[string]any
+		if json.Unmarshal(req.Params.Arguments, &m) == nil && len(m) > 0 {
+			args = m
+		}
+	}
+	return name, args
 }
 
 // SetBudgetGuards wires the cost enforcer's AllowSpawn / AllowResume into

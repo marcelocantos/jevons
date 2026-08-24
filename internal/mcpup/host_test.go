@@ -305,3 +305,43 @@ func TestMountFailedRefreshInvokesAuthorize(t *testing.T) {
 		t.Fatalf("Authorize hits = %d, want 1 (failed refresh → browser)", authorizeHits.Load())
 	}
 }
+
+func TestToolsCallObserverReportsServerPrefixedName(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(up.Close)
+
+	var gotName string
+	var gotArgs map[string]any
+	mux := http.NewServeMux()
+	_, err := Mount(mux, &MountArgs{
+		PublicBase: "http://127.0.0.1:13705",
+		Servers:    []claudia.MCPServer{{Name: "gmail", URL: up.URL}},
+		OnToolsCall: func(name string, args map[string]any) {
+			gotName = name
+			gotArgs = args
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_threads","arguments":{"q":"invoice"}}}`
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/upstream/gmail", strings.NewReader(body)))
+	if gotName != "gmail: search_threads" {
+		t.Fatalf("name=%q", gotName)
+	}
+	if gotArgs["q"] != "invoice" {
+		t.Fatalf("args=%v", gotArgs)
+	}
+}
+
+func TestStampLabel(t *testing.T) {
+	if got := stampLabel("gmail", "search_threads"); got != "gmail: search_threads" {
+		t.Fatalf("got %q", got)
+	}
+	if got := stampLabel("gmail", "gmail_search_threads"); got != "gmail_search_threads" {
+		t.Fatalf("got %q", got)
+	}
+}

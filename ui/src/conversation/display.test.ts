@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { displayRows, stepsLabel } from './display';
+import { diagnosticLabel, displayRows, shouldAckPendingSend, stepsLabel } from './display';
 
 describe('displayRows', () => {
   it('nested MCP tool_input shows the real tool name, not a key dump (🎯T116)', () => {
@@ -111,7 +111,7 @@ describe('displayRows', () => {
       },
     ]);
     expect(rows).toEqual([
-      { kind: 'assistant', text: 'Yes. I have this message', when: undefined },
+      { kind: 'assistant', text: 'Yes. I have this message', when: undefined, sealed: false },
     ]);
   });
 
@@ -160,5 +160,60 @@ describe('displayRows', () => {
     ]);
     expect(rows.map((r) => r.kind)).toEqual(['user', 'steps', 'assistant']);
     expect(rows[1].text).toBe('⋯ 2 steps');
+  });
+
+  it('terminal stop_reason seals only that assistant (🎯T64.4)', () => {
+    const rows = displayRows([
+      {
+        type: 'assistant',
+        stream_id: 'a',
+        message: { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' },
+      },
+      {
+        type: 'assistant',
+        stream_id: 'b',
+        message: { content: [{ type: 'text', text: 'live' }] },
+      },
+    ]);
+    expect(rows.map((r) => [r.kind, r.sealed, r.text])).toEqual([
+      ['assistant', true, 'done'],
+      ['assistant', false, 'live'],
+    ]);
+  });
+
+  it('send_error is a left diagnostic, not a bubble; identical consecutive nacks coalesce (🎯T545.3)', () => {
+    const rows = displayRows([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } },
+      { type: 'send_error', text: 'overseer is not running' },
+      { type: 'send_error', text: 'overseer is not running' },
+      { type: 'send_error', text: 'overseer is not running' },
+      { type: 'send_error', text: 'channel closed' },
+    ]);
+    expect(rows.map((r) => r.kind + ':' + r.text)).toEqual([
+      'user:hi',
+      'diagnostic:' + diagnosticLabel('overseer is not running', 3),
+      'diagnostic:channel closed',
+    ]);
+    expect(rows[1].text).toBe('overseer is not running · ×3');
+  });
+
+  it('pending send acks only a user echo that arrived after send, not a nack or older bubble (🎯T545.3)', () => {
+    const pending = 'hello';
+    const prior = { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hello' }] } };
+    const nack = { type: 'send_error', text: 'overseer is not running' };
+    const echo = { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hello' }] } };
+    expect(shouldAckPendingSend(pending, [prior, nack], 1)).toBe(false);
+    expect(shouldAckPendingSend(pending, [prior], 1)).toBe(false);
+    expect(shouldAckPendingSend(pending, [prior, echo], 1)).toBe(true);
+    expect(shouldAckPendingSend(pending, [prior, { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'other' }] } }], 1)).toBe(false);
+  });
+
+  it('unsealed assistant stays unsealed after a later steps row (🎯T64.4)', () => {
+    const rows = displayRows([
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Checking.' }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+    ]);
+    expect(rows[0]).toMatchObject({ kind: 'assistant', text: 'Checking.', sealed: false });
+    expect(rows[1].kind).toBe('steps');
   });
 });

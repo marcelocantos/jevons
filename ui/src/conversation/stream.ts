@@ -56,8 +56,13 @@ function stopReason(m: unknown): string {
   return typeof r === 'string' ? r : '';
 }
 
+/** Terminal stop on the frame — any unsealed assistant keeps a stream session. */
+export function isSealedAssistant(m: unknown): boolean {
+  return TERMINAL_STOPS.has(stopReason(m));
+}
+
 export function isTerminalAssistant(m: unknown): boolean {
-  return rec(m).type === 'assistant' && TERMINAL_STOPS.has(stopReason(m));
+  return rec(m).type === 'assistant' && isSealedAssistant(m);
 }
 
 function contentBlocks(m: unknown): Record<string, unknown>[] {

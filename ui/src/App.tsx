@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { keepPreviousData, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import {
   Outlet,
@@ -12,6 +12,8 @@ import {
   useNavigate,
 } from '@tanstack/react-router';
 import { MuxClient, muxUrl } from './mux/client';
+import { degradedBannerText } from './conversation/degraded';
+import type { ConversationMeta } from './conversation/reduce';
 import { AgentInteraction } from './components/AgentInteraction';
 import { AgentTree, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
@@ -84,6 +86,10 @@ function Cockpit() {
   useCockpitKeys({ sidebarComposerVisible: tab === 'transcript' });
   const navigate = useNavigate({ from: indexRoute.fullPath });
   const lastAgentsRef = useRef<AgentRow[]>([]);
+  const [degraded, setDegraded] = useState('');
+  const onJevonsMeta = useCallback((meta: ConversationMeta | null) => {
+    setDegraded(degradedBannerText(meta));
+  }, []);
   const agentsQ = useQuery({
     queryKey: ['agents'],
     queryFn: async () => {
@@ -97,6 +103,10 @@ function Cockpit() {
           purpose?: string;
           parent?: string;
           status?: string;
+          running?: boolean;
+          phase?: string;
+          step?: string;
+          progress?: string;
           provider?: string;
           model?: string;
           workdir?: string;
@@ -105,6 +115,10 @@ function Cockpit() {
           purpose: a.purpose,
           parent: a.parent,
           status: a.status,
+          running: a.running,
+          phase: a.phase,
+          step: a.step,
+          progress: a.progress,
           provider: a.provider,
           model: a.model,
           workdir: a.workdir,
@@ -237,10 +251,12 @@ function Cockpit() {
           ))}
         </div>
       </div>
-      <div id="degraded-banner" role="status" aria-live="polite" />
+      <div id="degraded-banner" className={degraded ? 'visible' : undefined} role="status" aria-live="polite">
+        {degraded}
+      </div>
       <div id="idle-storm-banner" role="status" aria-live="polite" />
       <div id="main" ref={mainRef}>
-        <AgentInteraction mux={mux} name="jevons" title="Root" density="comfortable" />
+        <AgentInteraction mux={mux} name="jevons" title="Root" density="comfortable" onMeta={onJevonsMeta} />
         <div id="activity-pane" style={{ width: layoutStyles.sidebarWidthPx, flexShrink: 0 }}>
           <div
             id="rhs-width-handle"

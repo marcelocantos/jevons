@@ -1,8 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { useEffect } from 'react';
 import { MuxClient } from '../mux/client';
-import { useConversation } from '../conversation/useConversation';
+import { useConversation, type ConversationMeta } from '../conversation/useConversation';
 import { normalizeDensity, type Density } from '../density';
 import { AgentTranscript } from './AgentTranscript';
 import { UserRequest } from './UserRequest';
@@ -13,9 +14,13 @@ export function AgentInteraction(props: {
   name: string;
   title?: string;
   density?: Density;
+  onMeta?: (meta: ConversationMeta | null) => void;
 }) {
   const density = normalizeDensity(props.density);
   const conv = useConversation(props.mux, props.name);
+  useEffect(() => {
+    props.onMeta?.(conv.meta);
+  }, [conv.meta, props.onMeta]);
   const comfortable = density === 'comfortable';
   return (
     <div
@@ -55,7 +60,6 @@ export function AgentInteraction(props: {
           <div id="send-queue" aria-label="Queued follow-ups" role="list" />
         </>
       ) : null}
-      {conv.error ? <div className="ai-err">{conv.error}</div> : null}
       <UserRequest
         name={props.name}
         density={density}

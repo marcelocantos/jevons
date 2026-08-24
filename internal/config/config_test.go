@@ -126,6 +126,8 @@ func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 		"same turn",
 		"jevons_target_file",
 		"bullseye_commit",
+		"T546",
+		"StrReplace",
 		"T92",
 		"T129",
 		"One-off flukes",
@@ -525,6 +527,8 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"we should always",
 		"jevons_target_file",
 		"bullseye_commit",
+		"T546",
+		"StrReplace",
 		"T92",
 		// 🎯T262.1 frontier = ready set
 		"Frontier = ready set",
@@ -665,6 +669,8 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"we should always",
 		"jevons_target_file",
 		"bullseye_commit",
+		"T546",
+		"StrReplace",
 		"T92",
 		"same turn",
 		// 🎯T262.1 frontier = ready set

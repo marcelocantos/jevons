@@ -1,4 +1,3 @@
-/* Chrome lives in cockpit.css (lifted old family, density as a param). */
 :root, [data-theme="dark"] {
   color-scheme: dark;
   --bg: #1a0e0e;
@@ -6,12 +5,8 @@
   --border: rgba(255,180,180,0.12);
   --text: #f0e8e8;
   --muted: #b4a0a0;
-  --text-dim: #b4a0a0;
   --accent: #ef4444;
   --heading: #fff5f5;
-  --user-bg: rgba(239,68,68,0.16);
-  --user-border: rgba(239,68,68,0.4);
-  --radius: 10px;
   --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --rhs-width: 22rem;
@@ -26,11 +21,8 @@
   --border: rgba(0,0,0,0.08);
   --text: #2c2c34;
   --muted: #6e6e7a;
-  --text-dim: #6e6e7a;
   --accent: #6d5dd3;
   --heading: #1a1a22;
-  --user-bg: rgba(109,93,211,0.08);
-  --user-border: rgba(109,93,211,0.2);
 }
 
 html, body, #root {
@@ -53,8 +45,12 @@ html, body, #root {
   border-bottom: 1px solid var(--border);
   font-weight: 600;
 }
-.plan-usage { display: flex; gap: 0.5rem; font-weight: 400; font-size: 0.8rem; }
+.plan-usage { display: flex; align-items: center; gap: 0.75rem; font-weight: 400; font-size: 0.8rem; }
 .plan-usage.pending { color: var(--muted); }
+.plan-group { display: inline-flex; align-items: center; gap: 0.35rem; }
+.plan-icon { display: inline-flex; color: var(--muted); }
+.plan-icon .model-icon { width: 14px; height: 14px; display: block; opacity: 0.85; }
+.plan-icon .model-icon[data-mark="claude-splat"] { color: #d97757; }
 .plan-chip { display: flex; gap: 0.25rem; color: var(--muted); }
 .plan-pct { color: var(--text); }
 .agent-purpose { margin-left: 0.4rem; color: var(--muted); font-size: 0.75rem; }
@@ -110,62 +106,38 @@ body.rhs-resizing { cursor: col-resize; user-select: none; }
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 24px 20px;
-  position: relative;
+  padding: 0.5rem;
 }
 
-/* One bubble family. Density is a param on AgentInteraction, not a second stylesheet. */
-.msg {
-  max-width: 85%;
-  padding: 10px 16px;
-  border-radius: var(--radius);
-  line-height: 1.6;
-  font-size: 14px;
-  position: relative;
-  box-sizing: border-box;
+.bubble {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
 }
-.msg > .msg-body { min-width: 0; overflow-wrap: anywhere; }
-.msg.user, .msg.jevons { margin-bottom: 19px; }
-.msg.user {
-  margin-left: auto;
-  background: var(--user-bg);
-  color: var(--text);
-  border: 1px solid var(--user-border);
+
+.bubble-role {
+  font-size: 0.7rem;
+  color: var(--accent);
+  text-transform: uppercase;
 }
-.msg.user .msg-body { white-space: pre-wrap; }
-.msg.jevons {
-  margin-right: auto;
-  background: transparent;
-  border: 1px solid var(--border);
+
+.bubble-body {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
-.msg.jevons .msg-body.md { white-space: normal; }
-.msg.jevons .msg-body.md p { margin: 0.4em 0; }
-.msg.jevons .msg-body.md pre {
+.bubble-body.md { white-space: normal; }
+.bubble-body.md p { margin: 0.4em 0; }
+.bubble-body.md pre {
   font-family: var(--mono);
   overflow: auto;
   background: var(--panel);
   padding: 0.5rem;
   border-radius: 6px;
 }
-.msg.turn-marker {
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 12px;
-  margin: 4px 0 2px;
+.bubble-note { opacity: 0.85; font-size: 0.9rem; }
+.bubble-steps { color: var(--muted); font-family: var(--mono); font-size: 0.85rem; }
+.msg {
+  position: relative;
 }
-[data-density="compact"] .agent-transcript { padding: 8px 10px; }
-[data-density="compact"] .msg {
-  max-width: 100%;
-  padding: 7px 10px;
-  font-size: 12px;
-}
-[data-density="compact"] .msg.user,
-[data-density="compact"] .msg.jevons { margin-bottom: 10px; }
-[data-density="comfortable"] .agent-interaction-head { display: none; }
 .msg.msg-clipped > .msg-body {
   max-height: 14rem;
   overflow: hidden;

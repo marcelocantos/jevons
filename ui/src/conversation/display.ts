@@ -1,11 +1,34 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { isSealedAssistant } from './stream';
 import { isGenericToolName, summariseInput } from './toolSummary';
 
 /** Lifted display fold: notes, ⋯ n steps, prose. Not a second hydrate. */
 
-export type DisplayKind = 'user' | 'assistant' | 'steps';
+export type DisplayKind = 'user' | 'assistant' | 'steps' | 'diagnostic';
+
+/** Client-only mux send nack (🎯T545.3). Not a journaled event. */
+export const SEND_ERROR_TYPE = 'send_error';
+
+export function isSendErrorFrame(frame: unknown): boolean {
+  return asRec(frame).type === SEND_ERROR_TYPE;
+}
+
+export function diagnosticLabel(text: string, count: number): string {
+  const t = String(text ?? '').trim();
+  if (!t) return '';
+  return count > 1 ? t + ' · ×' + count : t;
+}
+
+function diagnosticBase(row: DisplayRow): string {
+  const n = row.count || 1;
+  if (n > 1) {
+    const suffix = ' · ×' + n;
+    if (row.text.endsWith(suffix)) return row.text.slice(0, -suffix.length);
+  }
+  return row.text;
+}
 
 export type StepItem = { cls: string; text: string };
 
@@ -15,6 +38,10 @@ export type DisplayRow = {
   steps?: number;
   items?: StepItem[];
   when?: number;
+  /** Assistant only: incremental smd until a terminal stop_reason. */
+  sealed?: boolean;
+  /** Diagnostic only: consecutive identical nacks (🎯T545.3). */
+  count?: number;
 };
 
 function asRec(frame: unknown): Record<string, unknown> {
@@ -58,6 +85,23 @@ export function normalizeOwnerEchoText(text: string): string {
     t = String(m[1] || '').trim();
   }
   return t;
+}
+
+/** True when a user echo matching `pending` arrived at or after `afterIndex`. */
+export function shouldAckPendingSend(
+  pending: string | null | undefined,
+  frames: unknown[],
+  afterIndex = 0,
+): boolean {
+  const want = normalizeOwnerEchoText(String(pending ?? ''));
+  if (!want) return false;
+  const start = Number.isFinite(afterIndex) && afterIndex > 0 ? afterIndex : 0;
+  for (let i = frames.length - 1; i >= start; i--) {
+    const f = frames[i];
+    if (isSendErrorFrame(f)) continue;
+    if (isUserFrame(f)) return normalizeOwnerEchoText(proseText(f)) === want;
+  }
+  return false;
 }
 
 function isProtocolControlFrameText(text: string): boolean {
@@ -172,6 +216,20 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
       continue;
     }
     const when = frameWhen(f);
+    if (isSendErrorFrame(f)) {
+      const text = String(rec.text || '').trim();
+      if (!text) continue;
+      flush();
+      const last = out[out.length - 1];
+      if (last && last.kind === 'diagnostic' && diagnosticBase(last) === text) {
+        const n = (last.count || 1) + 1;
+        last.count = n;
+        last.text = diagnosticLabel(text, n);
+        continue;
+      }
+      out.push({ kind: 'diagnostic', text, count: 1, when });
+      continue;
+    }
     const addStep = (it: StepItem) => {
       runItems.push(it);
       run += 1;
@@ -206,7 +264,7 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
         const t = String(b.text || '').trim();
         if (!t) continue;
         flush();
-        out.push({ kind: 'assistant', text: t, when });
+        out.push({ kind: 'assistant', text: t, when, sealed: isSealedAssistant(f) });
       }
       continue;
     }
@@ -217,7 +275,7 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
     const t = proseText(f).trim();
     if (!t) continue;
     flush();
-    out.push({ kind: 'assistant', text: t, when });
+    out.push({ kind: 'assistant', text: t, when, sealed: isSealedAssistant(f) });
   }
   flush();
   return out;

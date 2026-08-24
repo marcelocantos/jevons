@@ -99,6 +99,8 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"we should always",
 		"jevons_target_file",
 		"bullseye_commit",
+		"🎯T546",
+		"StrReplace",
 		"🎯T92",
 		// 🎯T176 status language
 		"Status language: in progress vs live",

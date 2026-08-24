@@ -349,6 +349,7 @@ func (s *Server) broadcastCockpitReady(text string) {
 	// deliberately NOT given a residual here — a relaunch mid-turn is exactly
 	// the case the requeue actuator exists to re-inject.
 	s.noteChromePublished(false)
+	s.muxFanOverseerLevel()
 }
 
 func (s *Server) cockpitLaunch(state *cockpitState) error {

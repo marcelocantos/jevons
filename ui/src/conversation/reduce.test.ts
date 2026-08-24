@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
+import { displayRows } from './display';
 import { applyConversationEvent, emptyConversation } from './reduce';
 
 describe('applyConversationEvent', () => {
@@ -131,6 +132,78 @@ describe('applyConversationEvent', () => {
     expect(s.frames).toHaveLength(2);
   });
 
+  it('first assistant put is visible before later tokens append (🎯T64.3)', () => {
+    const asst = (id: string, index: number, text: string, op: 'put' | 'append') => ({
+      id,
+      index,
+      op,
+      type: 'assistant',
+      ...(op === 'put'
+        ? { event: { type: 'assistant', message: { content: [{ type: 'text', text }] } } }
+        : { text }),
+    });
+    const tool = (id: string, index: number, name: string) => ({
+      id,
+      index,
+      op: 'put' as const,
+      type: 'tool_use',
+      event: { type: 'tool_use', name },
+    });
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame', body: asst('e:10', 10, 'Checking.', 'put'),
+    });
+    expect(displayRows(s.frames).map((r) => r.kind + ':' + r.text)).toEqual(['assistant:Checking.']);
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame', body: tool('e:11', 11, 'Read'),
+    });
+    expect(displayRows(s.frames).map((r) => r.kind)).toEqual(['assistant', 'steps']);
+    expect(displayRows(s.frames)[0].text).toBe('Checking.');
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame', body: asst('e:10', 10, ' Yes.', 'append'),
+    });
+    const rows = displayRows(s.frames);
+    expect(rows.map((r) => r.kind)).toEqual(['assistant', 'steps']);
+    expect(rows[0].text).toBe('Checking. Yes.');
+    expect(rows[0].sealed).toBe(false);
+  });
+
+  it('mux append copies terminal stop_reason onto the growing frame (🎯T64.4)', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1,
+      ch: 'transcript:jevons',
+      t: 'frame',
+      body: {
+        id: 'e:1',
+        index: 1,
+        op: 'put',
+        type: 'assistant',
+        event: { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi' }] } },
+      },
+    });
+    s = applyConversationEvent(s, {
+      v: 1,
+      ch: 'transcript:jevons',
+      t: 'frame',
+      body: {
+        id: 'e:1',
+        index: 1,
+        op: 'append',
+        type: 'assistant',
+        text: ' there',
+        event: {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'Hi there' }], stop_reason: 'end_turn' },
+        },
+      },
+    });
+    const rows = displayRows(s.frames);
+    expect(rows).toEqual([
+      { kind: 'assistant', text: 'Hi there', when: undefined, sealed: true },
+    ]);
+  });
+
   it('window put+append+before stays in journal order (🎯T537.1.3)', () => {
     const put = (id: string, index: number, type: string, text: string) => ({
       id,
@@ -256,6 +329,21 @@ describe('applyConversationEvent', () => {
     const last = s.frames[1] as { type?: string; message?: { content?: string } };
     expect(last.type).toBe('user');
     expect(last.message?.content).toBe('It is still in the tree.');
+  });
+
+  it('mux error is a send_error frame, not latched chrome state (🎯T545.3)', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'error', body: { error: 'overseer is not running' },
+    });
+    expect(s.error).toBeNull();
+    expect(s.frames).toEqual([{ type: 'send_error', text: 'overseer is not running' }]);
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'error', body: { error: 'overseer is not running' },
+    });
+    expect(s.error).toBeNull();
+    expect(s.frames).toHaveLength(2);
+    expect(displayRows(s.frames).map((r) => r.text)).toEqual(['overseer is not running · ×2']);
   });
 
   it('empty page lines are not EOF unless start is the journal head', () => {

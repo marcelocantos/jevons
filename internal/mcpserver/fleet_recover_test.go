@@ -127,3 +127,17 @@ func TestClassifyFleetRecoverSkipsNonWork(t *testing.T) {
 		t.Fatalf("%s/%s", act, reason)
 	}
 }
+
+func TestClassifyFleetRecoverSkipsBounceRemint(t *testing.T) {
+	t.Parallel()
+	o := FleetRecoverObs{
+		Name: "jv-t543-compact-once", Purpose: claudia.PurposeWork,
+		ProcessRunning: true, HasOpenMission: true, PromptInFlight: true,
+		SinceProgress: 2 * time.Minute, StuckTimeout: 90 * time.Second,
+		Phase: "working", SessionReminted: true,
+	}
+	act, reason := ClassifyFleetRecover(o)
+	if act != FleetRecoverSkip || reason != "bounce_remint" {
+		t.Fatalf("got %s/%s want skip/bounce_remint", act, reason)
+	}
+}

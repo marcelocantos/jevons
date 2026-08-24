@@ -104,6 +104,17 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #messages > .turn-marker,
 #messages > #messages-end { position: relative; }
 #messages-canvas > .turn-marker { position: absolute; left: 0; right: 0; }
+/* 🎯T545.3: send nack is a left-aligned transcript diagnostic, not a bubble. */
+#messages-canvas > .send-diag { position: absolute; left: 0; right: auto; }
+.send-diag {
+  max-width: min(72ch, 92%);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--red);
+  text-align: left;
+  padding: 2px 0;
+  white-space: pre-wrap;
+}
 /* Absolute rows already skip off-band work; content-visibility:auto on an
    abs child of a tall canvas reports 0×0 rects and we detach the row the
    owner is looking at. Always visible. */
@@ -969,6 +980,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 #agent-inspect-body > * { flex-shrink: 0; }
 #agent-inspect-body .ai-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px 4px; }
 #agent-inspect-body .ai-err { color: var(--amber, #d4a017); font-size: 11px; margin-bottom: 8px; }
+#agent-inspect-body .send-diag { margin: 2px 0; }
 /* Shared .msg / .msg-body chrome (global rules). Narrow pane: full width OK. */
 #agent-inspect-body > .msg { max-width: 100%; }
 /* 🎯T167: per-turn .msg must not nest vertical scroll traps. */

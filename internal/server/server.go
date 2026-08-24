@@ -334,8 +334,9 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 // the cause instead of a silent, unresponsive chat (🎯T54).
 func (s *Server) SetOverseerDownReason(reason string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.overseerDownReason = reason
+	s.mu.Unlock()
+	s.muxFanOverseerLevel()
 }
 
 // OverseerDownReason returns the last legible overseer-down explanation.

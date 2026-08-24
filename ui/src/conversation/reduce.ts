@@ -22,6 +22,9 @@ export type ConversationMeta = {
   hi?: number;
   n?: number;
   following?: boolean;
+  working?: boolean;
+  owner_ux?: string;
+  overseer_down?: string;
 };
 
 export type ConversationState = {
@@ -62,6 +65,20 @@ function windowPayload(body: unknown): unknown {
 
 function findId(frames: unknown[], id: string): number {
   return frames.findIndex((f) => rec(f).id === id);
+}
+
+function eventMessage(body: unknown): Record<string, unknown> {
+  return rec(rec(rec(body).event).message);
+}
+
+/** Mux append sends the full event alongside the token; copy terminal stop. */
+function withStopFromWindow(frame: unknown, body: unknown): unknown {
+  const msg = eventMessage(body);
+  const stop = msg.stop_reason ?? msg.stopReason;
+  if (typeof stop !== 'string' || !stop) return frame;
+  const f = rec(frame);
+  const fmsg = rec(f.message);
+  return { ...f, message: { ...fmsg, stop_reason: stop } };
 }
 
 function appendTextToFrame(frame: unknown, text: string): unknown {
@@ -105,7 +122,11 @@ export function applyWindowBody(state: ConversationState, body: unknown): Conver
       const frames = state.frames.slice();
       const text = typeof o.text === 'string' ? o.text : '';
       if (text) {
-        frames[idx] = { ...rec(appendTextToFrame(frames[idx], text)), id, index: o.index };
+        frames[idx] = {
+          ...rec(withStopFromWindow(appendTextToFrame(frames[idx], text), o)),
+          id,
+          index: o.index,
+        };
       } else if (o.event != null) {
         frames[idx] = windowPayload(o);
       }
@@ -206,7 +227,12 @@ export function applyConversationEvent(
   }
   if (env.t === 'error') {
     const body = env.body as { error?: string };
-    return { ...state, error: body?.error || 'error' };
+    const text = String(body?.error || 'error').trim() || 'error';
+    return {
+      ...state,
+      error: null,
+      frames: [...state.frames, { type: 'send_error', text }],
+    };
   }
   return state;
 }

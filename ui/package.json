@@ -17,6 +17,7 @@
     "marked": "^18.0.10",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "streaming-markdown": "^0.2.15",
     "zustand": "^5.0.15"
   },
   "devDependencies": {

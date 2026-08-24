@@ -4,8 +4,11 @@
 package mcpup
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -41,6 +44,8 @@ type MountArgs struct {
 	Probe     func(ctx context.Context, rawURL string) (*claudia.MCPProbe, error)
 	Authorize func(ctx context.Context, args *claudia.AuthorizeMCPArgs) (*claudia.MCPToken, error)
 	Refresh   func(ctx context.Context, args *claudia.RefreshMCPArgs) (*claudia.MCPToken, error)
+	// OnToolsCall sees proxied JSON-RPC tools/call names (🎯T64.2).
+	OnToolsCall func(name string, args map[string]any)
 }
 
 // Host is the mounted proxy plus its token store.
@@ -100,7 +105,11 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 			}
 		}
 	}
-	mux.Handle(Prefix+"/", proxy)
+	var handler http.Handler = proxy
+	if args.OnToolsCall != nil {
+		handler = toolsCallObserver(proxy, Prefix, args.OnToolsCall)
+	}
+	mux.Handle(Prefix+"/", handler)
 	for _, adv := range proxy.Advertised() {
 		slog.Info("HTTP MCP proxied via loopback", "name", adv.Name, "url", adv.URL)
 	}
@@ -113,6 +122,63 @@ func (h *Host) Advertised() []claudia.MCPServer {
 		return nil
 	}
 	return h.Proxy.Advertised()
+}
+
+func toolsCallObserver(next http.Handler, prefix string, observe func(name string, args map[string]any)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && observe != nil {
+			body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			if err == nil {
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				if tool, args := parseToolsCall(body); tool != "" {
+					observe(stampLabel(upstreamServerName(r.URL.Path, prefix), tool), args)
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func parseToolsCall(body []byte) (name string, args map[string]any) {
+	var req struct {
+		Method string `json:"method"`
+		Params struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(body, &req) != nil || req.Method != "tools/call" {
+		return "", nil
+	}
+	name = strings.TrimSpace(req.Params.Name)
+	if len(req.Params.Arguments) > 0 && string(req.Params.Arguments) != "null" {
+		var m map[string]any
+		if json.Unmarshal(req.Params.Arguments, &m) == nil && len(m) > 0 {
+			args = m
+		}
+	}
+	return name, args
+}
+
+func upstreamServerName(path, prefix string) string {
+	path = strings.TrimPrefix(path, prefix)
+	path = strings.TrimPrefix(path, "/")
+	name, _, _ := strings.Cut(path, "/")
+	if name == "" || strings.Contains(name, "..") {
+		return ""
+	}
+	return name
+}
+
+func stampLabel(server, tool string) string {
+	tool = strings.TrimSpace(tool)
+	if server == "" {
+		return tool
+	}
+	if strings.Contains(strings.ToLower(tool), strings.ToLower(server)) {
+		return tool
+	}
+	return server + ": " + tool
 }
 
 func filterHTTP(servers []claudia.MCPServer, skip map[string]bool) []claudia.MCPServer {

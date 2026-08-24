@@ -171,9 +171,12 @@ func BeforeUnsent(events []Event, id string, limit int, have map[int]struct{}) (
 }
 
 // LiveFold is one event minted or updated by a single journal line.
+// Text is the token delta on assistant append/put so the client can
+// grow the bubble without waiting for a later full-body replace.
 type LiveFold struct {
 	Event Event
 	Op    string
+	Text  string
 }
 
 // ApplyLive folds one raw journal line into a coalesced stream and
@@ -239,14 +242,14 @@ func foldLine(dst []Event, line string, open, byID map[string]int) (next []Event
 		if text != "" || stop != "" {
 			if i, ok := openAssistant(next, sid, open); ok {
 				next[i] = appendAssistant(next[i], text, stop, h.Timestamp)
-				folds = append(folds, LiveFold{Event: next[i], Op: "append"})
+				folds = append(folds, LiveFold{Event: next[i], Op: "append", Text: text})
 				if stop != "" && open != nil {
 					delete(open, sid)
 				}
 			} else {
 				ev := assistantTextEvent(len(next)+1, sid, text, stop, h.Timestamp)
 				next = append(next, ev)
-				folds = append(folds, LiveFold{Event: ev, Op: "put"})
+				folds = append(folds, LiveFold{Event: ev, Op: "put", Text: text})
 				if open != nil && stop == "" {
 					open[sid] = len(next) - 1
 				}
@@ -268,9 +271,70 @@ func foldLine(dst []Event, line string, open, byID map[string]int) (next []Event
 	return append(next, ev), []LiveFold{{Event: ev, Op: "put"}}
 }
 
+// ToolStamp is a real MCP tools/call name+args to pair onto a generic
+// KindSteps row (Cursor ACP title is often the useless "MCP: tool").
+type ToolStamp struct {
+	Name  string
+	Input map[string]any
+}
+
+// HasGenericSteps reports an unmatched "MCP: tool" (or other generic) step.
+func HasGenericSteps(evs []Event) bool {
+	_, ok := oldestGenericSteps(evs)
+	return ok
+}
+
+// ApplyStamps pairs stamps onto the oldest generic KindSteps, FIFO.
+// Leftover stamps had no generic row yet.
+func ApplyStamps(prev []Event, stamps []ToolStamp) (next []Event, folds []LiveFold, applied, rest []ToolStamp) {
+	next = prev
+	for i, st := range stamps {
+		n, f := applyStamp(next, st)
+		if len(f) == 0 {
+			return next, folds, applied, stamps[i:]
+		}
+		next = n
+		folds = append(folds, f...)
+		applied = append(applied, st)
+	}
+	return next, folds, applied, nil
+}
+
+func applyStamp(prev []Event, st ToolStamp) ([]Event, []LiveFold) {
+	name := strings.TrimSpace(st.Name)
+	if name == "" || genericToolName(name) {
+		return prev, nil
+	}
+	i, ok := oldestGenericSteps(prev)
+	if !ok {
+		return prev, nil
+	}
+	prev = cloneEvents(prev)
+	prev[i] = enrichToolUse(prev[i], name, st.Input)
+	return prev, []LiveFold{{Event: prev[i], Op: "append"}}
+}
+
+func oldestGenericSteps(evs []Event) (int, bool) {
+	for i, e := range evs {
+		if e.Kind == KindSteps && genericToolName(eventToolName(e)) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func eventToolName(ev Event) string {
+	var h struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(ev.Body, &h)
+	return strings.TrimSpace(h.Name)
+}
+
 // mergeProgress applies a lossless ACP tool_call_update onto an existing
 // KindSteps row (same toolCallId). Status-only updates do not mint a
-// second step (🎯T63).
+// second step (🎯T63). Cursor MCP rows often have no id — pair onto the
+// oldest generic "MCP: tool" step (🎯T64.2).
 func mergeProgress(prev []Event, line string, byID map[string]int) ([]Event, []LiveFold) {
 	var wrap struct {
 		Raw json.RawMessage `json:"raw"`
@@ -319,7 +383,7 @@ func mergeProgress(prev []Event, line string, byID map[string]int) ([]Event, []L
 	if input == nil {
 		input = decodeJSONObject(probe.Arguments)
 	}
-	if id == "" || (genericToolName(title) && genericToolName(name) && len(input) == 0) {
+	if genericToolName(title) && genericToolName(name) && len(input) == 0 {
 		return prev, nil
 	}
 	label := title
@@ -331,21 +395,29 @@ func mergeProgress(prev []Event, line string, byID map[string]int) ([]Event, []L
 			label = strings.TrimSpace(tn)
 		}
 	}
-	if byID != nil {
-		i, ok := byID[id]
-		if !ok || i < 0 || i >= len(prev) {
-			return prev, nil
-		}
-		prev[i] = enrichToolUse(prev[i], label, input)
-		return prev, []LiveFold{{Event: prev[i], Op: "append"}}
+	if genericToolName(label) && len(input) == 0 {
+		return prev, nil
 	}
-	for i := len(prev) - 1; i >= 0; i-- {
-		if prev[i].Kind != KindSteps {
-			continue
+	if id != "" {
+		if byID != nil {
+			if i, ok := byID[id]; ok && i >= 0 && i < len(prev) {
+				prev[i] = enrichToolUse(prev[i], label, input)
+				return prev, []LiveFold{{Event: prev[i], Op: "append"}}
+			}
+		} else {
+			for i := len(prev) - 1; i >= 0; i-- {
+				if prev[i].Kind != KindSteps {
+					continue
+				}
+				if eventToolID(prev[i]) != id {
+					continue
+				}
+				prev[i] = enrichToolUse(prev[i], label, input)
+				return prev, []LiveFold{{Event: prev[i], Op: "append"}}
+			}
 		}
-		if eventToolID(prev[i]) != id {
-			continue
-		}
+	}
+	if i, ok := oldestGenericSteps(prev); ok {
 		prev[i] = enrichToolUse(prev[i], label, input)
 		return prev, []LiveFold{{Event: prev[i], Op: "append"}}
 	}

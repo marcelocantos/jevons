@@ -50,7 +50,7 @@ func TestGuardHookIsWiredInProjectSettings(t *testing.T) {
 
 	// Pre must cover every tool that can replace file content; Post must also
 	// cover Read, because Read is what establishes a session's base.
-	wantPre := []string{"Write", "Edit", "MultiEdit"}
+	wantPre := []string{"Write", "Edit", "MultiEdit", "StrReplace"}
 	wantPost := append([]string{"Read"}, wantPre...)
 	for event, wantTools := range map[string][]string{
 		"PreToolUse":  wantPre,

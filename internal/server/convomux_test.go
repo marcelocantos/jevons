@@ -41,6 +41,67 @@ func TestEncodeMuxEnvelope(t *testing.T) {
 	}
 }
 
+func TestOverseerDownSampleAndMuxMeta(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	if got := s.overseerDownSample(); got != "the overseer is not running" {
+		t.Fatalf("no proc: %q", got)
+	}
+	s.SetOverseerDownReason("session/load failed")
+	if got := s.overseerDownSample(); got != "session/load failed" {
+		t.Fatalf("reason: %q", got)
+	}
+	meta := s.muxTranscriptMeta(muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 0)
+	if meta["overseer_down"] != "session/load failed" {
+		t.Fatalf("meta=%+v", meta)
+	}
+	if _, ok := meta["owner_ux"]; !ok {
+		t.Fatalf("missing owner_ux: %+v", meta)
+	}
+	s.SetOverseerDownReason("")
+	// Still down: no Alive process.
+	if got := s.overseerDownSample(); got != "the overseer is not running" {
+		t.Fatalf("cleared reason but no proc: %q", got)
+	}
+}
+
+func TestMuxHubFanMetaReachesWatchers(t *testing.T) {
+	h := newMuxHub()
+	a := &muxSession{send: make(chan []byte, 2), transcripts: map[string]*muxWatch{"jevons": {
+		subscribed: true,
+	}}}
+	b := &muxSession{send: make(chan []byte, 2), transcripts: map[string]*muxWatch{"jevons-po": {
+		subscribed: true,
+	}}}
+	h.add(a)
+	h.add(b)
+	h.fanMeta("jevons", map[string]any{"overseer_down": "the overseer is not running"})
+	select {
+	case got := <-a.send:
+		var env muxEnvelope
+		if err := json.Unmarshal(got, &env); err != nil {
+			t.Fatal(err)
+		}
+		if env.T != "meta" || env.Ch != "transcript:jevons" {
+			t.Fatalf("env=%+v", env)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(env.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["overseer_down"] != "the overseer is not running" {
+			t.Fatalf("body=%+v", body)
+		}
+	default:
+		t.Fatal("expected meta on jevons watcher")
+	}
+	select {
+	case <-b.send:
+		t.Fatal("po watcher must not get overseer meta")
+	default:
+	}
+}
+
 func TestMuxPageBodyEmptyClearsOlder(t *testing.T) {
 	got := muxPageBody(12, 40, nil)
 	if got["older"] != 0 || got["start"] != 0 {
@@ -213,11 +274,12 @@ func TestMuxWindowSealedReplayLiveAppendAndBefore(t *testing.T) {
 			t.Fatal(err)
 		}
 		var body struct {
-			ID string `json:"id"`
-			Op string `json:"op"`
+			ID   string `json:"id"`
+			Op   string `json:"op"`
+			Text string `json:"text"`
 		}
 		_ = json.Unmarshal(env.Body, &body)
-		if body.ID != "e:115" || body.Op != "append" {
+		if body.ID != "e:115" || body.Op != "append" || body.Text != " there" {
 			t.Fatalf("live=%+v raw=%s", body, got)
 		}
 	default:

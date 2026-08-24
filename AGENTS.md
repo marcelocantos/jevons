@@ -160,6 +160,9 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   "we should always…" in chat. Ceremony: `jevons_target_file` and/or
   bullseye MCP (`bullseye_commit` track). Related: 🎯T92 ambient RSI,
   🎯T129 hierarchy. Residual: one-off flukes may skip filing.
+  **Ledger file is tool-only (🎯T546):** do not Read/Write/Edit/StrReplace
+  `bullseye.yaml`; mutating calls on that path are refused (including
+  Cursor `StrReplace`). The banner comment is not a gate.
 - **Ambient RSI coach (🎯T243 / T92):** harness coach drip-reads owner main
   chat (priority), eventlog, and session transcripts; posts **judgments** to
   the overseer (`jevons_rsi_coach_cycle` / configure / status). Overseer alone

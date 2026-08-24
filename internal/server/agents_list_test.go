@@ -183,3 +183,58 @@ func TestListFleetAgentsProgressFields(t *testing.T) {
 		t.Fatalf("po should have status baseline progress: %+v", byName["po"])
 	}
 }
+
+// 🎯T545.5: running is Alive(); a missing process is not a live worker.
+func TestListFleetAgentsRunningIsAlive(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := reg.Register(claudia.AgentDef{Name: "jv-dead", WorkDir: dir, SessionID: "s", Provider: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	got := listFleetAgents(reg)
+	if len(got) != 1 {
+		t.Fatalf("len=%d", len(got))
+	}
+	if got[0].Running {
+		t.Fatalf("no process: running=true %#v", got[0])
+	}
+	if got[0].Status == "running" {
+		t.Fatalf("no process: status=%q", got[0].Status)
+	}
+}
+
+// 🎯T545.5: GOAL_STATUS blocked is phase=blocked, not working, even if we lie about running.
+func TestListFleetAgentsBlockedGoalIsNotWorking(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := reg.Register(claudia.AgentDef{Name: "jv-blocked", WorkDir: dir, SessionID: "s", Provider: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	hub := NewAgentProgressHub()
+	if !hub.Observe("jv-blocked", claudia.Event{
+		Type: "assistant",
+		Text: "empty goal\nGOAL_STATUS: blocked",
+	}) {
+		t.Fatal("observe blocked")
+	}
+	got := listFleetAgentsNotifying(reg, nil, hub, nil)
+	if len(got) != 1 {
+		t.Fatalf("len=%d", len(got))
+	}
+	a := got[0]
+	if a.Running {
+		t.Fatalf("no process must not be running: %#v", a)
+	}
+	if a.Phase != "blocked" || a.Progress != "blocked" {
+		t.Fatalf("phase=%q progress=%q want blocked", a.Phase, a.Progress)
+	}
+	if strings.Contains(strings.ToLower(a.Progress), "working") || a.Phase == "working" {
+		t.Fatalf("blocked painted as working: %#v", a)
+	}
+}

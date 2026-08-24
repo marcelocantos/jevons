@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -92,6 +93,62 @@ func TestHandleTargetFileAlwaysAllocatesNewID(t *testing.T) {
 	}
 	if strings.Contains(text, "no new id allocated") || strings.Contains(text, "Attached to existing") {
 		t.Fatalf("must not attach: %q", text)
+	}
+}
+
+// 🎯T546 acceptance 3: the refuse must not break the blessed writers.
+func TestBullseyeCommitAndTargetFileStillSucceed(t *testing.T) {
+	if _, err := exec.LookPath("bullseye"); err != nil {
+		t.Skip("bullseye not on PATH")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	repo := t.TempDir()
+	gitInit(t, repo)
+	open := exec.Command("bullseye", "open", "--cwd", repo, "--location", "in_repo")
+	if out, err := open.CombinedOutput(); err != nil {
+		t.Fatalf("bullseye open: %v\n%s", err, out)
+	}
+	track := exec.Command("bullseye", "commit", "--op", "track",
+		"--cwd", repo,
+		"--name", "T546 hermetic: bullseye commit still writes",
+		"--acceptance", "CLI track succeeds on a fixture ledger")
+	out, err := track.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bullseye commit --op track: %v\n%s", err, out)
+	}
+	text := string(out)
+	if !strings.Contains(text, "ids:") && !strings.Contains(text, "ok: true") {
+		t.Fatalf("track output unexpected:\n%s", text)
+	}
+
+	s := New(t.TempDir(), nil, nil)
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"cwd":        repo,
+		"name":       "T546 hermetic: jevons_target_file still files",
+		"acceptance": "MCP track path still allocates an id",
+	}
+	res, err := s.handleTargetFile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := targetFileToolText(res)
+	if !strings.Contains(got, "__TARGET_FILED__:") {
+		t.Fatalf("jevons_target_file failed:\n%s", got)
+	}
+	if strings.Contains(got, "bullseye commit failed") {
+		t.Fatalf("jevons_target_file could not run bullseye:\n%s", got)
+	}
+}
+
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "-c", "init.defaultBranch=master", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
 	}
 }
 

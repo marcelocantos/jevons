@@ -482,6 +482,7 @@ func main() {
 
 	srv.RegisterRoutes(mux)
 	mcpSrv.RegisterRoutes(mux)
+	mcpSrv.SetToolCallObserver(srv.ObserveMCPToolCall)
 	if devSrv != nil {
 		go func() {
 			if err := devSrv.Watch(); err != nil {
@@ -876,7 +877,7 @@ func main() {
 	// 🎯T520: owner-map HTTP MCP → loopback proxy; OAuth refresh without
 	// the owner when a refresh token is stored. Advertised URLs go on
 	// MCPServers — Mount does not rewrite provider configs.
-	if up := mountHTTPUpstreamProxy(mux, cfg, mcpHost, served, mcpAttach); up != nil {
+	if up := mountHTTPUpstreamProxy(mux, cfg, mcpHost, served, mcpAttach, srv.ObserveMCPToolCall); up != nil {
 		mcpAttach.Proxied = up.Advertised()
 	}
 	fleetAdapter.SetMCP(mcpAttach)
@@ -915,7 +916,11 @@ func main() {
 	// not reaped. Upgrade handoff is consumed so a later drain start
 	// is not mistaken for an upgrade — it no longer chooses the start
 	// method.
-	upgrade.ReattachFleet(registry)
+	if reminted := upgrade.ReattachFleet(registry); len(reminted) > 0 {
+		slog.Error("bounce reminted session_ids — skipping full_brief on those seats",
+			"agents", reminted)
+		mcpSrv.NoteBounceRemint(reminted)
+	}
 	if upgradeSnap != nil {
 		if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
 			slog.Warn("could not consume upgrade handoff", "err", err)
@@ -1010,11 +1015,13 @@ func main() {
 	} else {
 		// The overseer did not launch (StartAll logged "auto-start failed"),
 		// so the chat cannot respond. Fail LOUD and legible with
-		// provider-aware diagnosis (ð¯T54, ð¯T214 J4) â do not blame a missing
-		// Grok CLI when the overseer provider is Claude/other. Cockpit
-		// converge (ð¯T204) keeps retrying Launch+attach.
+		// provider-aware diagnosis (🎯T54, 🎯T214 J4) — do not blame a missing
+		// Grok CLI when the overseer provider is Claude/Cursor/other.
+		// A Cursor session/load fail-closed is the real cause (🎯T545.2),
+		// not a missing Grok binary. Cockpit converge (🎯T204) keeps
+		// retrying Launch+attach unless ResumeDenied is latched.
 		reason := overseerDownReason(jevonDef.Provider, registry.ResumeDenied(cfg.OverseerName))
-		slog.Error("OVERSEER NOT RUNNING â chat cannot respond until this is fixed",
+		slog.Error("OVERSEER NOT RUNNING — chat cannot respond until this is fixed",
 			"overseer", cfg.OverseerName, "provider", jevonDef.Provider, "likely_cause", reason)
 		srv.SetOverseerDownReason(reason)
 	}
@@ -1428,7 +1435,7 @@ func diagnoseOverseerUnavailable(provider claudia.Provider, binOnPath bool, cand
 		return "the Codex CLI is not installed (or not on PATH) â install Codex, authenticate, " +
 			"then restart jevonsd (overseer provider is codex; this is not a Grok CLI issue)"
 	case claudia.ProviderBedrock:
-		return "the Bedrock agent failed to start â check AWS credentials/region and see the " +
+		return "the Bedrock agent failed to start — check AWS credentials/region and see the " +
 			"jevonsd log (overseer provider is bedrock; this is not a Grok CLI issue)"
 	case claudia.ProviderCursor:
 		if binOnPath {
@@ -1451,7 +1458,7 @@ func diagnoseOverseerUnavailable(provider claudia.Provider, binOnPath bool, cand
 	}
 }
 
-// overseerDownReason is the owner-facing down copy (🎯T541.1). A latched
+// overseerDownReason is the owner-facing down copy (🎯T545). A latched
 // session/load refuse is the cause; the CLI probe is only the fallback.
 func overseerDownReason(provider claudia.Provider, resumeDenied error) string {
 	if resumeDenied != nil {
@@ -1461,7 +1468,7 @@ func overseerDownReason(provider claudia.Provider, resumeDenied error) string {
 }
 
 // overseerUnavailableReason probes the host for the selected overseer
-// provider's CLI and returns a legible, actionable explanation (ð¯T54, ð¯T214).
+// provider's CLI and returns a legible, actionable explanation (🎯T54, 🎯T214).
 func overseerUnavailableReason(provider claudia.Provider) string {
 	switch provider {
 	case claudia.ProviderClaude:

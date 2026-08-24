@@ -73,7 +73,7 @@ func overseerMCPServerSpec(cfg config.Config, host string, port int) (name, url 
 
 // mountHTTPUpstreamProxy puts owner-map HTTP MCP behind jevonsd loopback
 // and reseeds durable OAuth tokens for silent refresh (🎯T520).
-func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, port int, attach mcpattach.Args) *mcpup.Host {
+func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, port int, attach mcpattach.Args, onToolsCall func(name string, args map[string]any)) *mcpup.Host {
 	load := &claudia.LoadMCPArgs{WorkDir: cfg.WorkDir}
 	if attach.ClaudeJSON != "" || attach.GrokTOML != "" || attach.CodexTOML != "" || attach.CursorJSON != "" {
 		load = &claudia.LoadMCPArgs{
@@ -109,6 +109,7 @@ func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, 
 		SkipNames:  skip,
 		Store:      store,
 		Upstreams:  upstreams,
+		OnToolsCall: onToolsCall,
 	}
 	h, err := mcpup.Mount(mux, args)
 	if err != nil {

@@ -5,6 +5,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -198,6 +199,13 @@ func wireContentText(content json.RawMessage) string {
 // userTurnPrefix so the overseer can tell owner words from injected
 // notifications (🎯T63). This is what makes send non-exclusive to /ws/chat.
 func (s *Server) sendToOverseerAsOwner(text string) error {
+	// 🎯T545: a down overseer is a nack, not a silent enqueue that the
+	// HTTP/mux path reports as "sent". Composer keeps the text; no
+	// optimistic owner bubble.
+	proc := s.CurrentProcess()
+	if proc == nil || !proc.Alive() {
+		return fmt.Errorf("overseer not running")
+	}
 	echo := chatUserEcho(text)
 	s.NoteOwnerSend(text, echo)
 	s.BroadcastChat(echo)

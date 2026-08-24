@@ -117,6 +117,9 @@ func (r *rePressureSink) RePressure(agent, mission string) error {
 				agent, AgentStatusDeadUnmaterialized, def.SessionID)
 		}
 	}
+	if s.bounceReminted(agent) {
+		return fmt.Errorf("repressure refused: agent %q reminted on bounce (🎯T545.1) — empty-goal blocked is bounce failure, not a new mission", agent)
+	}
 
 	briefPresent := false
 	s.mu.Lock()

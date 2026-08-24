@@ -5,6 +5,7 @@ package treeguard
 // refactor cannot quietly turn a denial into a silent allow.
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -151,6 +152,83 @@ func TestDetectLostAdditionsCapsOutput(t *testing.T) {
 	got := DetectLostAdditions(nil, []byte(disk.String()), nil)
 	if len(got) != MaxAtRisk {
 		t.Fatalf("len(AtRisk) = %d, want %d", len(got), MaxAtRisk)
+	}
+}
+
+func TestDecideDeniesBullseyeYAMLEvenWhenFresh(t *testing.T) {
+	onDisk := []byte("schema_version: 5\ntargets: {}\n")
+	got := Decide(&DecideArgs{
+		Tool:            "StrReplace",
+		RelPath:         "bullseye.yaml",
+		OnDisk:          onDisk,
+		Observed:        &Observation{Path: "bullseye.yaml", Hash: HashBytes(onDisk)},
+		ObservedContent: onDisk,
+		Proposed:        []byte("schema_version: 5\ntargets: {T1: {}}\n"),
+	})
+	if got.Verdict != Deny || got.Reason != "ledger-tool-only" {
+		t.Fatalf("Decide = %+v, want Deny/ledger-tool-only", got)
+	}
+	if !strings.Contains(got.Message, "bullseye") || !strings.Contains(got.Message, "T546") {
+		t.Fatalf("refusal must name the bullseye tool: %q", got.Message)
+	}
+	write := Decide(&DecideArgs{
+		Tool:     "Write",
+		RelPath:  "docs/nested/bullseye.yaml",
+		OnDisk:   onDisk,
+		Observed: &Observation{Path: "docs/nested/bullseye.yaml", Hash: HashBytes(onDisk)},
+	})
+	if write.Verdict != Deny || write.Reason != "ledger-tool-only" {
+		t.Fatalf("nested ledger Write = %+v, want Deny/ledger-tool-only", write)
+	}
+}
+
+func TestIsLedgerPath(t *testing.T) {
+	if !IsLedgerPath("bullseye.yaml") || !IsLedgerPath("foo/Bullseye.yaml") {
+		t.Fatal("ledger path not detected")
+	}
+	if IsLedgerPath("web/index.html") || IsLedgerPath("bullseye.md") {
+		t.Fatal("non-ledger path flagged")
+	}
+}
+
+func TestDecideDeniesBashRedirectToLedger(t *testing.T) {
+	onDisk := []byte("schema_version: 5\ntargets: {}\n")
+	got := Decide(&DecideArgs{
+		Tool:     ToolBash,
+		Form:     FormRedirect,
+		RelPath:  "bullseye.yaml",
+		OnDisk:   onDisk,
+		Observed: &Observation{Path: "bullseye.yaml", Hash: HashBytes(onDisk)},
+	})
+	if got.Verdict != Deny || got.Reason != "ledger-tool-only" {
+		t.Fatalf("Decide = %+v, want Deny/ledger-tool-only", got)
+	}
+}
+
+func TestPreDeniesStrReplaceOfLedger(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "bullseye.yaml")
+	onDisk := []byte("schema_version: 5\ntargets: {}\n")
+	if err := os.WriteFile(path, onDisk, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := &Env{
+		Store:    &Store{Root: t.TempDir()},
+		RepoRoot: root,
+		Guarded:  DefaultGuardedPaths,
+		Now:      time.Now,
+	}
+	p := &Payload{SessionID: "t546", CWD: root, ToolName: "StrReplace"}
+	p.ToolInput.FilePath = path
+	got, err := env.Pre(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Verdict != Deny || got.Reason != "ledger-tool-only" {
+		t.Fatalf("Pre = %+v, want Deny/ledger-tool-only", got)
+	}
+	if !strings.Contains(got.Message, "jevons_target_file") || !strings.Contains(got.Message, "T546") {
+		t.Fatalf("hook refuse must name the bullseye tool: %q", got.Message)
 	}
 }
 

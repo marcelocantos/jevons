@@ -839,6 +839,8 @@ type agentInfo struct {
 	// empty key matches every ledger (unscoped, pre-T389 reading).
 	Ledger   string `json:"ledger,omitempty"`
 	Status   string `json:"status"`
+	// Running is process Alive() — not registry presence or last-known Launch (🎯T545.5).
+	Running  bool   `json:"running"`
 	Phase    string `json:"phase,omitempty"`
 	Step     string `json:"step,omitempty"`
 	Progress string `json:"progress,omitempty"`
@@ -882,6 +884,9 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 		if proc == nil || proc.Alive() {
 			continue
 		}
+		if reg.ResumeDenied(d.Name) != nil {
+			continue
+		}
 		if d.AutoStart {
 			if _, err := reg.Launch(d.Name); err != nil {
 				reg.Stop(d.Name)
@@ -915,7 +920,9 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 	ledgerOf := make(map[string]string, len(defs))
 	for _, d := range defs {
 		status := "stopped"
+		running := false
 		if proc := reg.Get(d.Name); proc != nil && proc.Alive() {
+			running = true
 			status = "running"
 			// 🎯T412: a live process whose registry row claims a conversation
 			// that is not on disk is a dead seat, not a running agent. The
@@ -950,6 +957,7 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			TargetID:    strings.TrimSpace(d.TargetID),
 			Ledger:      ledger,
 			Status:      status,
+			Running:     running,
 			Provider:    strings.TrimSpace(string(d.Provider)),
 		}
 		// 🎯T365: target filings and idea/capture asides share purpose=aside;

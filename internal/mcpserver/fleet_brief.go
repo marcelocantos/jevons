@@ -36,35 +36,6 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Residual: instructional doctrine + pure classifier; not a hard daemon
   block.
 
-## Silent-decision ledger (🎯T536.1)
-- Terminal finish-report envelopes MUST carry a silent-decision ledger:
-  "jevons: silent-ledger none" when the brief was not silent on anything
-  material, OR "jevons: silent-ledger ranked" plus one or more
-  "jevons: silent-decision confidence=N choice=... why=..." lines,
-  least-confident first.
-- A green oracle with a missing ledger (no explicit none) is flagged —
-  not treated as complete. Schema: internal/envelope. The independent
-  gate reads the ledger (ReadSilentLedger), not the implementation diff.
-- Quality of the decisions is judgment; this rule is that the artifact
-  exists.
-
-## Fog-of-war scout before implement (🎯T536.3)
-- Non-trivial Build missions run a scout pass first: spawn-brief with
-  "jevons: phase scout" (or a dedicated scout seat), then implement with
-  "jevons: phase implement".
-- Scout terminals are "jevons: kind scout-report" carrying the 🎯T536.1
-  ledger plus fog-known / fog-unknown / fog-blindspot — NOT a
-  finish-report. A scout with no implementation commits must not be
-  reaped as product-done (🎯T165/🎯T195). FogMap.NeedsReslice is true
-  when blindspots remain — re-slice (another scout pass / narrower
-  leaves) before implement; do not guess through hidden map.
-- The implementer spawn-brief may inherit the scout ledger
-  (envelope.InheritLedger). Decision tables live on the ledger, not
-  only in chat.
-- Skip rules still hold: design-gated, parked-for-design, 🎯T31.2 fuzzy
-  regions, host saturation (🎯T460). Scout does not punch through those
-  into implementation. Not 🎯T254.3 plan steps; not a next-ticket queue.
-
 ## Cited SHA must stay reachable (🎯T427)
 - Before you cite a commit SHA as evidence, prove it is still reachable:
       git merge-base --is-ancestor <sha> HEAD
@@ -271,6 +242,11 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   file or prompt-file a bullseye target (name + acceptance) in the same turn
   — not only "standing rule" / "going forward" / "from now on" / "we should always…"
   in chat. Ceremony: jevons_target_file and/or bullseye_commit track.
+- Ledger file is tool-only (🎯T546): do not Read/Write/Edit/StrReplace
+  bullseye.yaml. File, status, achieve, query via those tools. Mutating
+  calls on that path are refused (including Cursor StrReplace). Residual:
+  Grep of a target id; owner/human editors; the bullseye process writes
+  the file. The banner comment is not a gate.
 - Related: ambient RSI 🎯T92, hierarchy 🎯T129. Residual: one-off flukes may skip.
 
 ## Report

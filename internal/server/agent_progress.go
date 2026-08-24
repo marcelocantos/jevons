@@ -292,12 +292,18 @@ func progressFromEvent(ev claudia.Event) (AgentProgress, bool) {
 		}, true
 
 	case ev.IsTerminalStop():
+		if goalStatusBlocked(ev) {
+			return AgentProgress{Phase: "blocked", Summary: "blocked"}, true
+		}
 		return AgentProgress{
 			Phase:   "idle",
 			Summary: "idle",
 		}, true
 
 	case ev.Type == "assistant":
+		if goalStatusBlocked(ev) {
+			return AgentProgress{Phase: "blocked", Summary: "blocked"}, true
+		}
 		// Mid-turn stream / tool_use pause without terminal stop → working.
 		return AgentProgress{
 			Phase:   "working",
@@ -313,6 +319,16 @@ func progressFromEvent(ev claudia.Event) (AgentProgress, bool) {
 	default:
 		return AgentProgress{}, false
 	}
+}
+
+func goalStatusBlocked(ev claudia.Event) bool {
+	if strings.Contains(ev.Text, "GOAL_STATUS: blocked") {
+		return true
+	}
+	if len(ev.Raw) > 0 && strings.Contains(string(ev.Raw), "GOAL_STATUS: blocked") {
+		return true
+	}
+	return false
 }
 
 func composeProgressSummary(phase, step string) string {

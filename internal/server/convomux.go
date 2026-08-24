@@ -44,6 +44,7 @@ type muxHub struct {
 	mu     sync.Mutex
 	conns  map[*muxSession]struct{}
 	events map[string][]muxwin.Event
+	stamps map[string][]muxwin.ToolStamp
 }
 
 type muxSession struct {
@@ -170,13 +171,15 @@ func (sess *muxSession) watchGet(name string) *muxWatch {
 	return sess.transcripts[name]
 }
 
-func (sess *muxSession) enqueue(payload []byte) {
+func (sess *muxSession) enqueue(payload []byte) bool {
 	if sess == nil {
-		return
+		return false
 	}
 	select {
 	case sess.send <- payload:
+		return true
 	default:
+		return false
 	}
 }
 
@@ -212,9 +215,81 @@ func muxWindowMeta(r muxwin.Resolved, n int) map[string]any {
 	}
 }
 
-func (h *muxHub) fanTranscript(name, frameJSON string) {
-	if h == nil || name == "" || strings.TrimSpace(frameJSON) == "" {
+func (s *Server) muxTranscriptMeta(r muxwin.Resolved, n int) map[string]any {
+	m := muxWindowMeta(r, n)
+	if s == nil {
+		return m
+	}
+	m["working"] = s.publishedWorkingLevel()
+	m["owner_ux"] = s.ownerUXLevel()
+	m["overseer_down"] = s.overseerDownSample()
+	return m
+}
+
+func (s *Server) overseerDownSample() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	reason := strings.TrimSpace(s.overseerDownReason)
+	proc := s.proc
+	name := s.overseerName
+	reg := s.registry
+	s.mu.RUnlock()
+	alive := proc != nil && proc.Alive()
+	if !alive && reg != nil && name != "" {
+		if p := reg.Get(name); p != nil && p.Alive() {
+			alive = true
+		}
+	}
+	if alive && reason == "" {
+		return ""
+	}
+	if reason == "" {
+		return "the overseer is not running"
+	}
+	return reason
+}
+
+func (h *muxHub) fanMeta(name string, body map[string]any) {
+	if h == nil || name == "" || body == nil {
 		return
+	}
+	payload, err := encodeMux(transcriptChannel(name), "meta", body)
+	if err != nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for sess := range h.conns {
+		w := sess.watchGet(name)
+		if w == nil || !w.subscribed {
+			continue
+		}
+		sess.enqueue(payload)
+	}
+}
+
+func (s *Server) muxFanOverseerLevel() {
+	if s == nil || s.mux == nil {
+		return
+	}
+	s.mu.RLock()
+	name := s.overseerName
+	s.mu.RUnlock()
+	if name == "" {
+		name = "jevons"
+	}
+	s.mux.fanMeta(name, map[string]any{
+		"working":       s.publishedWorkingLevel(),
+		"owner_ux":      s.ownerUXLevel(),
+		"overseer_down": s.overseerDownSample(),
+	})
+}
+
+func (h *muxHub) fanTranscript(name, frameJSON string) (applied []muxwin.ToolStamp) {
+	if h == nil || name == "" || strings.TrimSpace(frameJSON) == "" {
+		return nil
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -222,13 +297,25 @@ func (h *muxHub) fanTranscript(name, frameJSON string) {
 		h.events = make(map[string][]muxwin.Event)
 	}
 	next, folds := muxwin.ApplyLiveAll(h.events[name], frameJSON)
+	var extra []muxwin.LiveFold
+	if len(h.stamps[name]) > 0 {
+		var rest []muxwin.ToolStamp
+		next, extra, applied, rest = muxwin.ApplyStamps(next, h.stamps[name])
+		h.stamps[name] = rest
+		folds = append(folds, extra...)
+	}
 	if len(folds) == 0 {
-		return
+		return applied
 	}
 	h.events[name] = next
+	h.fanFoldsLocked(name, folds)
+	return applied
+}
+
+func (h *muxHub) fanFoldsLocked(name string, folds []muxwin.LiveFold) {
 	for _, fold := range folds {
 		changed, op := fold.Event, fold.Op
-		payload, err := encodeMux(transcriptChannel(name), "frame", muxEventBody(changed, op, ""))
+		payload, err := encodeMux(transcriptChannel(name), "frame", muxEventBody(changed, op, fold.Text))
 		if err != nil {
 			return
 		}
@@ -242,7 +329,9 @@ func (h *muxHub) fanTranscript(name, frameJSON string) {
 					continue
 				}
 			}
-			sess.enqueue(payload)
+			if !sess.enqueue(payload) {
+				continue
+			}
 			if w.sent == nil {
 				w.sent = make(map[string]struct{})
 			}
@@ -251,11 +340,42 @@ func (h *muxHub) fanTranscript(name, frameJSON string) {
 	}
 }
 
+func (h *muxHub) applyStampNow(name string, st muxwin.ToolStamp) bool {
+	if h == nil || name == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	next, folds, applied, _ := muxwin.ApplyStamps(h.events[name], []muxwin.ToolStamp{st})
+	if len(applied) == 0 {
+		return false
+	}
+	h.events[name] = next
+	h.fanFoldsLocked(name, folds)
+	return true
+}
+
+func (h *muxHub) queueToolStamp(name string, st muxwin.ToolStamp) {
+	if h == nil || name == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stamps == nil {
+		h.stamps = make(map[string][]muxwin.ToolStamp)
+	}
+	h.stamps[name] = append(h.stamps[name], st)
+}
+
 func (s *Server) muxFanTranscript(name, frameJSON string) {
 	if s == nil || s.mux == nil {
 		return
 	}
-	s.mux.fanTranscript(name, frameJSON)
+	for _, st := range s.mux.fanTranscript(name, frameJSON) {
+		if line := chatToolStampLine(st.Name, st.Input); line != "" {
+			s.persistChatLine(line)
+		}
+	}
 }
 
 func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
@@ -532,7 +652,7 @@ func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSess
 			watch.sent[ev.ID] = struct{}{}
 		}
 	}
-	s.muxWrite(ctx, conn, ch, "meta", muxWindowMeta(sub, len(events)))
+		s.muxWrite(ctx, conn, ch, "meta", s.muxTranscriptMeta(sub, len(events)))
 	return nil
 }
 

@@ -125,6 +125,8 @@ If you catch yourself saying (or meaning any of):
 
 Use **`jevons_target_file`** (cwd + name + acceptance) and/or bullseye MCP (`bullseye_commit` op=track / file tools). Owner path remains the `target:` aside. Propose a 🎯 with acceptance and file (or prompt-file) in that turn. Harness coach path: **`jevons_rsi_coach_cycle`** (judgments to you); you file when warranted. Residual mint: **`jevons_rsi_cycle`** only when explicitly enabled.
 
+**Ledger file is tool-only (🎯T546):** do **not** Read, Write, Edit, or StrReplace `bullseye.yaml`. File, status, achieve, and query go through those tools only. A mutating tool call on that path is refused (including Cursor `StrReplace`). Residual: Grep of a target id; owner/human editors; the bullseye process is the writer. The banner comment is not a gate.
+
 ### Residual
 
 One-off flukes may skip filing; judgment allowed. Do not mint noise targets for transient one-shots.

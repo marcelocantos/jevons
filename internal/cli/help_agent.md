@@ -474,6 +474,12 @@ op=track / file tools). Related: ambient RSI coach **🎯T243** (judgments →
 overseer; not direct mint), residual **🎯T92**, hierarchy **🎯T129**.
 **Residual:** one-off flukes may skip filing; judgment allowed.
 
+**Ledger file is tool-only (🎯T546):** do **not** Read, Write, Edit, or
+StrReplace `bullseye.yaml`. File / status / achieve / query via the tools
+above. A mutating call on that path is refused (Cursor `StrReplace`
+included). Residual: Grep of a target id; owner/human editors; the
+bullseye process writes the file. The banner comment is not a gate.
+
 **Retrospective coach mine (🎯T353):** the coach does not only wait for new
 appends. On a slow cadence (default 6h, 7d window) it makes a **bounded pass
 over history** — git repair churn and reverts, the eventlog tail, owner chat,

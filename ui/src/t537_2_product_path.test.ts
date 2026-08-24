@@ -37,6 +37,29 @@ describe('T537.2 product path', () => {
     expect(ti).toBeGreaterThan(fi);
   });
 
+  it('mux send nack is a transcript diagnostic, not chrome or an optimistic user bubble (🎯T545.3)', () => {
+    const reduce = readFileSync(join(root, 'src/conversation/reduce.ts'), 'utf8');
+    expect(reduce).toMatch(/type:\s*['"]send_error['"]/);
+    expect(reduce).toMatch(/error:\s*null/);
+    const send = readFileSync(join(root, 'src/conversation/useConversation.ts'), 'utf8');
+    expect(send).toMatch(/pendingSendRef/);
+    expect(send).not.toMatch(/turn_origin:\s*['"]owner['"]/);
+    const chrome = readFileSync(join(root, 'src/components/AgentInteraction.tsx'), 'utf8');
+    expect(chrome).not.toMatch(/className=["']ai-err["']/);
+    const paint = readFileSync(join(root, 'src/components/AgentTranscript.tsx'), 'utf8');
+    expect(paint).toMatch(/kind === ['"]diagnostic['"]/);
+    expect(paint).toMatch(/send-diag/);
+  });
+
+  it('standing overseer-down banner is sourced from transcript meta, not a racing mux subscribe (🎯T545.6)', () => {
+    const app = readFileSync(join(root, 'src/App.tsx'), 'utf8');
+    expect(app).toMatch(/onMeta=\{onJevonsMeta\}/);
+    expect(app).toMatch(/degradedBannerText\(meta\)/);
+    expect(app).not.toMatch(/env\.t !== ['"]meta['"]/);
+    const interaction = readFileSync(join(root, 'src/components/AgentInteraction.tsx'), 'utf8');
+    expect(interaction).toMatch(/props\.onMeta\?\.\(conv\.meta\)/);
+  });
+
   it('reload pin keeps follow across measure growth and hydrates a PageUp band (🎯T494.1.3)', () => {
     const paint = readFileSync(join(root, 'src/components/AgentTranscript.tsx'), 'utf8');
     expect(paint).toMatch(/followAfterScroll/);
@@ -50,6 +73,13 @@ describe('T537.2 product path', () => {
     const pin = readFileSync(join(root, 'src/transcript/followPin.ts'), 'utf8');
     expect(pin).toMatch(/heightGrew/);
     expect(pin).toMatch(/function followAfterScroll/);
+  });
+
+  it('unsealed assistant uses StreamingMarkdownBody, not marked-every-token (🎯T64.4)', () => {
+    const src = readFileSync(join(root, 'src/components/AgentTranscript.tsx'), 'utf8');
+    expect(src).toMatch(/StreamingMarkdownBody/);
+    expect(src).toMatch(/props\.sealed/);
+    expect(src).not.toMatch(/textContent\s*=/);
   });
 
   it('ui/ does not import web/', () => {

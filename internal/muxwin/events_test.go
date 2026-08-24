@@ -135,6 +135,17 @@ func TestEventsFromLinesKeepsAssistantToolUseAsSteps(t *testing.T) {
 	}
 }
 
+func TestApplyLiveAllCarriesTokenDeltaOnAppend(t *testing.T) {
+	evs := EventsFromLines([]string{tok("s1", "Checking.", "")})
+	next, folds := ApplyLiveAll(evs, tok("s1", " Yes.", ""))
+	if len(folds) != 1 || folds[0].Op != "append" || folds[0].Text != " Yes." {
+		t.Fatalf("folds=%+v want append delta", folds)
+	}
+	if prose(next[0]) != "Checking. Yes." {
+		t.Fatalf("joined=%q", prose(next[0]))
+	}
+}
+
 func TestApplyLiveProgressUpdateEnrichesGenericMCPTool(t *testing.T) {
 	first := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"MCP: tool","id":"call_1"}]}}`
 	evs := EventsFromLines([]string{first})
@@ -150,6 +161,55 @@ func TestApplyLiveProgressUpdateEnrichesGenericMCPTool(t *testing.T) {
 	_ = json.Unmarshal(next[0].Body, &m)
 	if m["name"] != "jevons_agent_list" {
 		t.Fatalf("name=%v want jevons_agent_list body=%s", m["name"], next[0].Body)
+	}
+}
+
+func TestApplyLiveProgressStampPairsOldestGenericWithoutID(t *testing.T) {
+	evs := EventsFromLines([]string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"MCP: tool"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"MCP: tool"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"grep"}]}}`,
+	})
+	stamp := `{"type":"progress","progress_type":"tool_use","raw":{"update":{"sessionUpdate":"tool_call_update","title":"jevons_agent_list","rawInput":{"query":"running"}}}}`
+	next, folds := ApplyLiveAll(evs, stamp)
+	if len(folds) != 1 || folds[0].Op != "append" {
+		t.Fatalf("folds=%+v want one append onto oldest generic", folds)
+	}
+	var a, b, c map[string]any
+	_ = json.Unmarshal(next[0].Body, &a)
+	_ = json.Unmarshal(next[1].Body, &b)
+	_ = json.Unmarshal(next[2].Body, &c)
+	if a["name"] != "jevons_agent_list" {
+		t.Fatalf("oldest generic=%v want jevons_agent_list", a["name"])
+	}
+	if b["name"] != "MCP: tool" {
+		t.Fatalf("second generic must wait for the next stamp: %v", b["name"])
+	}
+	if c["name"] != "grep" {
+		t.Fatalf("named native tool mutated: %v", c["name"])
+	}
+	next, _ = ApplyLiveAll(next, `{"type":"progress","progress_type":"tool_use","raw":{"update":{"sessionUpdate":"tool_call_update","title":"jevons_plan_usage"}}}`)
+	_ = json.Unmarshal(next[1].Body, &b)
+	if b["name"] != "jevons_plan_usage" {
+		t.Fatalf("second stamp=%v want jevons_plan_usage", b["name"])
+	}
+}
+
+func TestApplyStampsFIFOAndLeftover(t *testing.T) {
+	evs := EventsFromLines([]string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"MCP: tool"}]}}`,
+	})
+	next, folds, applied, rest := ApplyStamps(evs, []ToolStamp{
+		{Name: "jevons_agent_list", Input: map[string]any{"query": "running"}},
+		{Name: "jevons_plan_usage"},
+	})
+	if len(folds) != 1 || len(applied) != 1 || len(rest) != 1 || rest[0].Name != "jevons_plan_usage" {
+		t.Fatalf("applied=%v rest=%v folds=%d", applied, rest, len(folds))
+	}
+	var m map[string]any
+	_ = json.Unmarshal(next[0].Body, &m)
+	if m["name"] != "jevons_agent_list" {
+		t.Fatalf("name=%v", m["name"])
 	}
 }
 

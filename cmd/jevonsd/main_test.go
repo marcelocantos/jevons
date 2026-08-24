@@ -172,7 +172,7 @@ func TestDiagnoseOverseerUnavailableProviderAware(t *testing.T) {
 		t.Fatalf("bedrock text: %q", got)
 	}
 
-	// Cursor must not fall through to the Grok default (🎯T541.1 / 🎯T214).
+	// Cursor must not fall through to the Grok default (🎯T545 / 🎯T214).
 	got = diagnoseOverseerUnavailable(claudia.ProviderCursor, true, "")
 	if strings.Contains(got, "grok login") || strings.Contains(got, "XAI_API_KEY") || strings.Contains(got, "install Grok") {
 		t.Fatalf("cursor present must not blame Grok: %q", got)

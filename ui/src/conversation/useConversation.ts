@@ -7,6 +7,19 @@ import { transcriptChannel } from '../mux/protocol';
 import { applyConversationEvent, emptyConversation, type ConversationEvent } from './reduce';
 import type { MuxEnvelope } from '../mux/protocol';
 import { pixelFixtureActive, pixelFixtureFrames } from '../visual/oldCockpitFixture';
+import { normalizeOwnerEchoText, shouldAckPendingSend } from './display';
+import { useDrafts } from '../store/drafts';
+
+type PendingSend = { text: string; at: number };
+
+function clearDraftIfEchoed(name: string, pending: PendingSend | null, frames: unknown[]): boolean {
+  if (!pending || !shouldAckPendingSend(pending.text, frames, pending.at)) return false;
+  const cur = useDrafts.getState().drafts[name] || '';
+  if (normalizeOwnerEchoText(cur) === normalizeOwnerEchoText(pending.text)) {
+    useDrafts.getState().setDraft(name, '');
+  }
+  return true;
+}
 
 export type { ConversationMeta } from './reduce';
 
@@ -21,11 +34,13 @@ export function useConversation(mux: MuxClient | null, name: string) {
   const fixture = pixelFixtureActive() && name === 'jevons';
 
   const frozenRef = useRef(false);
+  const pendingSendRef = useRef<PendingSend | null>(null);
 
   useEffect(() => {
     if (fixture) return;
     if (!mux || !name) return;
     frozenRef.current = false;
+    pendingSendRef.current = null;
     dispatch({ v: 1, ch: transcriptChannel(name), t: 'reset' });
     const ch = transcriptChannel(name);
     let buffer: unknown[] = [];
@@ -46,12 +61,25 @@ export function useConversation(mux: MuxClient | null, name: string) {
         const frames = buffer;
         buffer = [];
         if (frames.length) {
-          dispatch({ v: 1, ch, t: 'batch', body: { frames } } as ConversationEvent);
+          const batch = { v: 1, ch, t: 'batch', body: { frames } } as ConversationEvent;
+          const next = applyConversationEvent(stateRef.current, batch);
+          stateRef.current = next;
+          dispatch(batch);
         }
+        const afterMeta = applyConversationEvent(stateRef.current, env);
+        stateRef.current = afterMeta;
         dispatch(env);
+        if (clearDraftIfEchoed(name, pendingSendRef.current, afterMeta.frames)) {
+          pendingSendRef.current = null;
+        }
         return;
       }
+      const next = applyConversationEvent(stateRef.current, env);
+      stateRef.current = next;
       dispatch(env);
+      if (clearDraftIfEchoed(name, pendingSendRef.current, next.frames)) {
+        pendingSendRef.current = null;
+      }
     });
     mux.openTranscript(name, { lo: -30, hi: 0 });
     return () => {
@@ -89,16 +117,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
       const t = String(text || '').trim();
       if (!t) return;
       if (frozenRef.current) rejoinLive();
-      dispatch({
-        v: 1,
-        ch: transcriptChannel(name),
-        t: 'frame',
-        body: {
-          type: 'user',
-          turn_origin: 'owner',
-          message: { role: 'user', content: t },
-        },
-      });
+      pendingSendRef.current = { text: t, at: stateRef.current.frames.length };
       mux?.sendTranscript(name, t);
     },
     page: (end: number, limit: number) => mux?.pageTranscript(name, end, limit),

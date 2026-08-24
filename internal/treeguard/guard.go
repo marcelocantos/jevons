@@ -56,7 +56,7 @@ var DefaultGuardedPaths = []string{
 // MutatingTools are the tool names whose calls replace file content and can
 // therefore drop another worker's lines. Read is guarded too, but only as an
 // observation source (see ObservingTools).
-var MutatingTools = []string{"Write", "Edit", "MultiEdit", "NotebookEdit"}
+var MutatingTools = []string{"Write", "Edit", "MultiEdit", "NotebookEdit", "StrReplace"}
 
 // ToolBash is the tool whose payload carries a shell command rather than a
 // file path. It is not in MutatingTools because whether it mutates anything is
@@ -142,6 +142,18 @@ func Decide(args *DecideArgs) Decision {
 	// every other tool the name alone decides.
 	if args.Form == "" && !slices.Contains(MutatingTools, args.Tool) {
 		return Decision{Verdict: Allow, Reason: "tool-not-mutating"}
+	}
+	// Ledger refuse is independent of the T376 guarded set: a
+	// JEVONS_TREEGUARD_PATHS override must not re-open bullseye.yaml.
+	if IsLedgerPath(args.RelPath) {
+		return Decision{
+			Verdict: Deny,
+			Reason:  "ledger-tool-only",
+			Message: "refusing " + args.what() + " to " + args.RelPath +
+				" — agents must not edit bullseye.yaml. File, status, achieve," +
+				" and query go through jevons_target_file or bullseye MCP/CLI" +
+				" (`bullseye commit` / `bullseye query`). 🎯T546",
+		}
 	}
 	guarded := args.Guarded
 	if guarded == nil {
@@ -244,6 +256,12 @@ func IsGuarded(rel string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// IsLedgerPath reports whether rel is the intent ledger. Mutating tools
+// on this path are refused (🎯T546) — use bullseye tools instead.
+func IsLedgerPath(rel string) bool {
+	return strings.EqualFold(path.Base(filepath.ToSlash(rel)), "bullseye.yaml")
 }
 
 // HashBytes is the content identity used for compare-and-swap.

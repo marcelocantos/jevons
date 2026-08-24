@@ -530,6 +530,40 @@ func genericToolTitle(s string) bool {
 	return t == "" || t == "tool" || t == "tool_use" || t == "mcp: tool" || t == "mcp:tool"
 }
 
+// cleanMCPToolName strips a server prefix Cursor sometimes adds
+// (jevonsmcp__jevons_agent_list → jevons_agent_list).
+func cleanMCPToolName(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "__"); i >= 0 && i < len(s)-2 {
+		s = strings.TrimSpace(s[i+2:])
+	}
+	return s
+}
+
+// chatToolStampLine is the durable pair for a real MCP tools/call onto a
+// generic "MCP: tool" KindSteps row (🎯T64.2). No toolCallId — Cursor's
+// assistant tool_use often has none.
+func chatToolStampLine(name string, input map[string]any) string {
+	name = cleanMCPToolName(name)
+	if name == "" || genericToolTitle(name) {
+		return ""
+	}
+	upd := map[string]any{"sessionUpdate": "tool_call_update", "title": name}
+	if len(input) > 0 {
+		upd["rawInput"] = input
+	}
+	b, err := json.Marshal(map[string]any{
+		"type":          "progress",
+		"progress_type": "tool_use",
+		"timestamp":     time.Now().UTC().Format(time.RFC3339Nano),
+		"raw":           map[string]any{"update": upd},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 // toolCallDetail pulls the human tool name and input args out of an ACP
 // tool_call session/update (carried verbatim in a progress event's Raw).
 // Returns an empty name for tool_call_update status frames and anything

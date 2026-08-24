@@ -93,6 +93,8 @@ type FleetRecoverObs struct {
 	EverRecovered  bool
 	MaxRecovers    int // 0 → DefaultFleetRecoverMax
 	Backoffs       []time.Duration
+	// SessionReminted: this boot minted a new session_id (🎯T545.1).
+	SessionReminted bool
 }
 
 // ClassifyFleetRecover decides skip | unstick | rebrief | maxed for one agent.
@@ -104,6 +106,9 @@ func ClassifyFleetRecover(o FleetRecoverObs) (FleetRecoverAction, string) {
 	}
 	if purpose == claudia.PurposeOverseer || purpose == claudia.PurposeAside {
 		return FleetRecoverSkip, "not_work_purpose"
+	}
+	if o.SessionReminted {
+		return FleetRecoverSkip, "bounce_remint"
 	}
 	if o.LooksFinished {
 		return FleetRecoverSkip, "achieved_should_reap"
@@ -217,13 +222,16 @@ type FleetRecoverSweepArgs struct {
 	// PromptInFlight: name → in flight. Nil → reg.Get(name).PromptInFlight().
 	PromptInFlight func(name string) bool
 	// ProcessRunning optional override for hermetic tests.
-	ProcessRunning func(name string) bool
-	BriefPresent   func(name string) bool
-	MarkBriefed    func(name string)
-	DesignGated    func(targetID string) bool
-	MissionOpen    func(targetID string) bool
+	ProcessRunning     func(name string) bool
+	BriefPresent       func(name string) bool
+	MarkBriefed        func(name string)
+	DesignGated        func(targetID string) bool
+	MissionOpen        func(targetID string) bool
 	LastTerminalReport func(name string) string
 	MissionAcceptance  func(targetID string) string
+	// SessionReminted is optional: name → this boot reminted session_id
+	// (🎯T545.1). Nil = no remints.
+	SessionReminted func(name string) bool
 }
 
 // SweepFleetRecover classifies every registered work agent and unsticks /
@@ -343,6 +351,7 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		SinceLastRecov:  sinceRecov,
 		EverRecovered:   ever,
 		Backoffs:        DefaultFleetRecoverBackoffs,
+		SessionReminted: args.SessionReminted != nil && args.SessionReminted(d.Name),
 	}
 	action, reason := ClassifyFleetRecover(obs)
 	kind := ClassifyIdleNudgeKind(briefPresent)

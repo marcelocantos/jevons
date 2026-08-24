@@ -1,11 +1,14 @@
-# React cockpit (🎯T537.1)
+# React cockpit (🎯T540 / 🎯T540.1)
 
-Vite + React 19. Daily `GET /` is still `web/index.html` until an explicit
-owner cutover (🎯T505).
+Vite + React 19 — **product** owner cockpit. Vanilla `web/` is deprecated
+reference-only; port parity gaps here, do not patch vanilla for features.
+
+Daily `GET /` may still serve `web/index.html` until cutover (🎯T505 /
+🎯T540.2). Until then:
 
 ```bash
-make ui-dev    # http://localhost:5173  proxies /api and /ws to :13705
-cd ui && npm test
+make ui-dev    # http://127.0.0.1:5173  proxies /api and /ws to :13705
+make test-ui-react   # or: cd ui && npm test
 ```
 
 One conversation API: WebSocket `/ws/mux`, channel `transcript:{name}`.

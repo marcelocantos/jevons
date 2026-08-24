@@ -175,6 +175,13 @@ func TestClassifyIdleNudgeIdleStuckAndPostRestart(t *testing.T) {
 	if act != IdleNudgeNudge || reason != "post_restart_wake" {
 		t.Fatalf("post-restart: %s/%s", act, reason)
 	}
+
+	// 🎯T545.1: reminted empty seat is bounce failure, not a full_brief wake.
+	pr.SessionReminted = true
+	act, reason = ClassifyIdleNudge(pr)
+	if act != IdleNudgeSkip || reason != "bounce_remint" {
+		t.Fatalf("reminted post-restart: %s/%s", act, reason)
+	}
 }
 
 // 🎯T207 owner pin: never-briefed → full_brief; briefed → continue.
@@ -485,6 +492,59 @@ func TestSweepIdleNudgesPostRestartFullBriefThenContinue(t *testing.T) {
 	// Claiming "working" without ACP evidence poisoned live re-nudge.
 	if ph := activity.Get("jv-t207-idle").Phase; ph != "idle" {
 		t.Fatalf("post-nudge activity phase=%q want idle (not fake working)", ph)
+	}
+}
+
+func TestSweepIdleNudgesPostRestartSkipsRemintedFullBrief(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t543-compact-once", WorkDir: dir, SessionID: "01a030f5",
+		Purpose: claudia.PurposeWork, Parent: "jevons-po",
+		Provider: claudia.ProviderCodex, AutoStart: true, TargetID: "T543",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	activity := NewIdleActivityTracker()
+	activity.now = func() time.Time { return time.Unix(2000, 0) }
+	activity.SeedRunning("jv-t543-compact-once")
+	var pushed int
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg:          reg,
+		Activity:     activity,
+		Push:         func(target, event, text string) error { pushed++; return nil },
+		Now:          time.Unix(2000, 0),
+		PostRestart:  true,
+		OverseerName: "jevons",
+		SessionReminted: func(name string) bool {
+			return name == "jv-t543-compact-once"
+		},
+		ProcessRunning: func(name string) bool { return name == "jv-t543-compact-once" },
+	})
+	if pushed != 0 {
+		t.Fatalf("full_brief delivered to reminted seat; pushed=%d", pushed)
+	}
+	for _, r := range reps {
+		if r.Name == "jv-t543-compact-once" && (r.Delivered || r.Reason != "bounce_remint") {
+			t.Fatalf("report=%+v want skip bounce_remint", r)
+		}
+	}
+}
+
+func TestNoteBounceRemint(t *testing.T) {
+	s := &Server{}
+	if s.bounceReminted("jv-t543-compact-once") {
+		t.Fatal("empty server reminted")
+	}
+	s.NoteBounceRemint([]string{"jv-t543-compact-once", ""})
+	if !s.bounceReminted("jv-t543-compact-once") {
+		t.Fatal("NoteBounceRemint did not record name")
+	}
+	if s.bounceReminted("other") {
+		t.Fatal("unrelated name reminted")
 	}
 }
 

@@ -107,6 +107,25 @@ func TestAgentProgressSetStatusBaseline(t *testing.T) {
 	}
 }
 
+func TestAgentProgressGOALStatusBlocked(t *testing.T) {
+	h := NewAgentProgressHub()
+	if !h.Observe("jv-t543", claudia.Event{
+		Type: "assistant",
+		Text: "The goal is empty.\nGOAL_STATUS: blocked",
+	}) {
+		t.Fatal("blocked observe")
+	}
+	got := h.Get("jv-t543")
+	if got.Phase != "blocked" || got.Summary != "blocked" {
+		t.Fatalf("got %+v", got)
+	}
+	h.SetStatus("jv-t543", "running")
+	got = h.Get("jv-t543")
+	if got.Phase != "blocked" {
+		t.Fatalf("running baseline clobbered blocked: %+v", got)
+	}
+}
+
 // 🎯T211: statusBaseline never emits bare "running" as glanceable progress.
 func TestStatusBaselineRunningIsIdle(t *testing.T) {
 	phase, summary := statusBaseline("running")

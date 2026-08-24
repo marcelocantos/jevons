@@ -4,12 +4,17 @@
 import { CompanyMark } from '../plan/companyMark';
 import { modelPrefix } from '../plan/modelPrefix';
 import { pixelFixtureActive } from '../visual/oldCockpitFixture';
+import { agentDotState, fleetSecondary } from '../fleet/rowModel';
 
 export type AgentRow = {
   name: string;
   purpose?: string;
   parent?: string;
   status?: string;
+  running?: boolean;
+  phase?: string;
+  step?: string;
+  progress?: string;
   provider?: string;
   model?: string;
   workdir?: string;
@@ -106,12 +111,24 @@ function githubDir(workdir?: string) {
   );
 }
 
+function Secondary(props: { node: AgentNode; parentWorkdir?: string }) {
+  const sec = fleetSecondary(props.node, {
+    parentWorkdir: props.parentWorkdir,
+    hasChildren: props.node.children.length > 0,
+  });
+  if (!sec.kind || !sec.text) return null;
+  if (sec.kind === 'path') return githubDir(props.node.workdir);
+  return <span className={'agent-dir agent-' + sec.kind}>{sec.text}</span>;
+}
+
 function Row(props: {
   node: AgentNode;
   depth: number;
   selected: string;
   onSelect: (name: string) => void;
+  parentWorkdir?: string;
 }) {
+  const dot = agentDotState(props.node);
   return (
     <>
       <div
@@ -129,21 +146,23 @@ function Row(props: {
             📁
           </span>
         ) : (
-          <span
-            className={
-              'agent-dot ' +
-              (props.node.status === 'stopped' || props.node.status === 'dead' ? 'stopped' : 'running')
-            }
-          />
+          <span className={'agent-dot ' + dot} />
         )}
         {props.node.purpose !== 'portfolio' ? <ModelBadge node={props.node} /> : null}
         <span className="agent-name">{props.node.name}</span>
-        {githubDir(props.node.workdir)}
+        <Secondary node={props.node} parentWorkdir={props.parentWorkdir} />
       </div>
       {props.node.children.length ? (
         <div className="agent-children">
           {props.node.children.map((c) => (
-            <Row key={c.name} node={c} depth={props.depth + 1} selected={props.selected} onSelect={props.onSelect} />
+            <Row
+              key={c.name}
+              node={c}
+              depth={props.depth + 1}
+              selected={props.selected}
+              onSelect={props.onSelect}
+              parentWorkdir={props.node.workdir}
+            />
           ))}
         </div>
       ) : null}

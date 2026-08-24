@@ -8,6 +8,7 @@ import { clipClassName, expandTabChevron, shouldClip } from '../conversation/cli
 import { shouldRequestPage } from '../conversation/page';
 import { displayRows, type DisplayKind, type StepItem } from '../conversation/display';
 import { parseAssistantMarkdown } from '../conversation/markdown';
+import { StreamingMarkdownBody } from '../conversation/StreamingMarkdownBody';
 import { renderUserTextWithImages } from '../composer/images';
 import { relTime } from '../relTime';
 import { normalizeDensity, type Density } from '../density';
@@ -216,6 +217,7 @@ export function AgentTranscript(props: {
               text={row.text}
               items={row.items}
               when={row.when}
+              sealed={row.sealed === true}
               start={pixelFixtureRowTop(item.start, item.index, density)}
               measureRef={virtualizer.measureElement}
             />
@@ -245,6 +247,7 @@ function ClippedBubble(props: {
   text: string;
   items?: StepItem[];
   when?: number;
+  sealed?: boolean;
   start: number;
   measureRef?: (el: Element | null) => void;
 }) {
@@ -262,6 +265,19 @@ function ClippedBubble(props: {
     position: 'absolute' as const,
     top: props.start,
   };
+  if (props.kind === 'diagnostic') {
+    return (
+      <div
+        data-index={props.index}
+        data-kind="diagnostic"
+        ref={props.measureRef}
+        className="send-diag"
+        style={{ ...pos, left: 0, right: 'auto' }}
+      >
+        {props.text}
+      </div>
+    );
+  }
   if (props.kind === 'steps') {
     return (
       <div
@@ -300,7 +316,11 @@ function ClippedBubble(props: {
       }}
     >
       {props.kind === 'assistant' ? (
-        <MarkdownBody text={props.text} bodyRef={bodyRef} />
+        props.sealed ? (
+          <MarkdownBody text={props.text} bodyRef={bodyRef} />
+        ) : (
+          <StreamingMarkdownBody text={props.text} bodyRef={bodyRef} />
+        )
       ) : (
         <UserBody text={props.text} bodyRef={bodyRef} />
       )}
