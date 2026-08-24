@@ -79,8 +79,19 @@ type Server struct {
 
 	toolsListCount int64
 
-	mu          sync.Mutex
-	notifyJevon NotifyFunc
+	mu sync.Mutex
+	// startMu serializes Launch/wire on jevons_agent_start. It must be
+	// released before any ACP prompt delivery (🎯T541): holding it across
+	// session/prompt confirmation hangs MCP so agent_list/send/kill/event_push
+	// time out. Never take startMu under mu.
+	startMu sync.Mutex
+	// launchAgentFn overrides registry.Launch (hermetic 🎯T541).
+	launchAgentFn func(name string) (*claudia.Agent, error)
+	// cursorSubmit / cursorObserve / cursorMaterializeWait are 🎯T541 seams.
+	cursorSubmit          func(name, text string) error
+	cursorObserve         func(name string) (store, bound bool)
+	cursorMaterializeWait time.Duration
+	notifyJevon           NotifyFunc
 	// overseerDeliver is the overseer arm of the single deliver-by-name path
 	// (🎯T309.3). Wired from main to server.DeliverToOverseerAs so an
 	// overseer-addressed send reuses the owner chat journal and notify queue.

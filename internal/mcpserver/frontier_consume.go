@@ -665,7 +665,9 @@ func (s *Server) notifySpawnFailure(po, targetID, worker, errText string) {
 
 // spawnFrontierWorker launches one auto-spawn worker through the same stitch
 // path as jevons_agent_start (provider routing, T222 gate already cleared by
-// the sweep's engagement check, confirmed opening brief per 🎯T305).
+// the sweep's engagement check). Cursor ACP (🎯T541) starts then sends the
+// brief without holding startMu; other providers still confirm the opening
+// brief on start (🎯T305).
 func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief string) error {
 	if name == "" || workdir == "" {
 		return fmt.Errorf("worker name and workdir required")
@@ -674,11 +676,29 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	if err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
-	proc, err := s.registry.Launch(name)
+	s.startMu.Lock()
+	proc, err := s.launchAgent(name)
 	if err != nil {
+		s.startMu.Unlock()
 		return fmt.Errorf("launch: %w", err)
 	}
 	s.wireAgentEvents(name, proc)
+	s.startMu.Unlock()
+	if deferStartPrompt(def.Provider) {
+		if _, err := s.finishCursorStart(name, existed, brief); err != nil {
+			if _, kept := s.startBriefFailureTeardown(name, existed, err); kept {
+				slog.Info("frontier consume: worker spawned, brief in flight",
+					"worker", name, "target", targetID, "parent", parent,
+					"provider", def.Provider, "detail", err.Error())
+				return nil
+			}
+			return err
+		}
+		slog.Info("frontier consume: worker auto-spawned",
+			"worker", name, "target", targetID, "parent", parent,
+			"provider", def.Provider, "session", sessionDisplay(def.SessionID))
+		return nil
+	}
 	if err := s.deliverStartPrompt(name, brief); err != nil {
 		if _, kept := s.startBriefFailureTeardown(name, existed, err); kept {
 			// 🎯T518: the brief is queued/undecided, not proven lost. The seat

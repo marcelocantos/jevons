@@ -188,10 +188,8 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 	if prompt == "" {
 		return nil
 	}
-	s.mu.Lock()
-	if s.fleetBriefed == nil {
-		s.fleetBriefed = map[string]bool{}
-	}
+	// roleDisplay takes s.mu — resolve the role body first, then lock
+	// only for fleetBriefed (same deadlock as 🎯T541 composeStartBrief).
 	roleBody := ""
 	if s.registry != nil {
 		if d := s.registry.Def(name); d != nil {
@@ -200,6 +198,10 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 				roleBody = def.Body
 			}
 		}
+	}
+	s.mu.Lock()
+	if s.fleetBriefed == nil {
+		s.fleetBriefed = map[string]bool{}
 	}
 	text, injected := EnsureFleetBriefWithRole(s.fleetBriefed, name, prompt, roleBody)
 	s.mu.Unlock()

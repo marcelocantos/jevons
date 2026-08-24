@@ -67,7 +67,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("role", mcp.Description("Declarative fleet role (🎯T511 / 🎯T536.2): worker (default for Build), auditor (read-only ledger challenger), product-owner, boss, aside, overseer. Registry records the role; built-ins cannot be deleted. Empty → default from purpose/name.")),
 			mcp.WithString("target_id", mcp.Description("Optional bullseye target id this agent is engaged on (e.g. T10.2). Written to registry as target_id for Frontier engagement overlay (🎯T198). Empty = not mission-bound.")),
 			mcp.WithBoolean("force_engage", mcp.Description("If true, allow a second work agent on an already-engaged or closed target (deliberate override 🎯T222). Default false.")),
-			mcp.WithString("prompt", mcp.Description("Optional opening brief delivered after Launch. Confirmed turn-begin required — empty pane / unsubmitted paste fails the tool loudly (🎯T305). Prefer this over start-then-send for unattended spawns.")),
+			mcp.WithString("prompt", mcp.Description("Optional opening brief delivered after Launch. Cursor ACP (🎯T541) starts without the prompt, releases the start mutex, then sends the brief — confirmed turn-begin is not waited on the start RPC (that hang blocked agent_list/send/kill). Other providers still require confirmed turn-begin (🎯T305).")),
 		),
 		s.handleAgentStart,
 	)
@@ -399,8 +399,10 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		}
 	}
 
-	proc, err := s.registry.Launch(name)
+	s.startMu.Lock()
+	proc, err := s.launchAgent(name)
 	if err != nil {
+		s.startMu.Unlock()
 		life["err"] = err.Error()
 		life["session_id"] = sessionDisplay(def.SessionID)
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
@@ -410,12 +412,46 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 
 	// Wire events: broadcast to web UI and notify Jevon on agent responses.
 	s.wireAgentEvents(name, proc)
+	s.startMu.Unlock()
 
-	// 🎯T305 Failure A: optional start prompt must reach the pane and
-	// begin a turn, or start fails loudly (no silent outcome=ok).
+	// 🎯T541: Cursor ACP remints must not wait for prompt confirmation
+	// while anything that serializes MCP start is held. Start, unlock,
+	// then send the brief (the live workaround that must be product).
 	prompt = strings.TrimSpace(prompt)
 	briefNote := ""
-	if prompt != "" {
+	if deferStartPrompt(def.Provider) {
+		note, ferr := s.finishCursorStart(name, existed, prompt)
+		if ferr != nil {
+			if released, kept := s.startBriefFailureTeardown(name, existed, ferr); kept {
+				life["brief_in_flight"] = true
+				life["brief_verdict"] = ferr.Error()
+				briefNote = fmt.Sprintf(
+					" Opening brief is IN FLIGHT, not yet confirmed as a turn: %v."+
+						" The daemon holds it for delivery at the next turn boundary."+
+						" Do NOT re-send it — a re-send stacks a second copy (🎯T416/🎯T518).",
+					ferr)
+				prompt = ""
+			} else {
+				if released {
+					life["seat_released"] = true
+					s.notifySpawnFailure(def.Parent, def.TargetID, name, ferr.Error())
+				}
+				life["err"] = ferr.Error()
+				life["session_id"] = sessionDisplay(def.SessionID)
+				s.logLifecycle(compAgentLifecycle, "start", "error", life)
+				return mcp.NewToolResultError(prefixRehydrate(rehydrated,
+					fmt.Sprintf("start failed: %v", ferr))), nil
+			}
+		} else {
+			briefNote = note
+			if prompt != "" {
+				life["prompt_queued_after_launch"] = true
+			}
+			prompt = "" // do not claim prompt_delivered=true on the start RPC
+		}
+	} else if prompt != "" {
+		// 🎯T305 Failure A: optional start prompt must reach the pane and
+		// begin a turn, or start fails loudly (no silent outcome=ok).
 		if err := s.deliverStartPrompt(name, prompt); err != nil {
 			released, kept := s.startBriefFailureTeardown(name, existed, err)
 			if kept {
