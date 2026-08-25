@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/muxwin"
+	"github.com/marcelocantos/jevons/internal/statedb"
 )
 
 func TestParseTranscriptChannel(t *testing.T) {
@@ -623,6 +624,159 @@ func muxMetaOlder(m map[string]any) int {
 		return 0
 	}
 	switch v := m["older"].(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+func TestMuxPageBeforeReadsAbsoluteIndexesFromStateDB(t *testing.T) {
+	db, err := statedb.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var rows []statedb.Event
+	for i := 1; i <= 80; i++ {
+		body := `{"type":"user","message":{"content":[{"type":"text","text":"m` + itoa(i) + `"}]}}`
+		if i == 1 {
+			body = `{"type":"user","message":{"content":[{"type":"text","text":"HEADMARKER"}]}}`
+		}
+		if i == 80 {
+			body = `{"type":"user","message":{"content":[{"type":"text","text":"TAILMARKER"}]}}`
+		}
+		rows = append(rows, statedb.Event{
+			Index: i, ID: "e:" + itoa(i), Type: "user", Kind: 1, Body: body,
+		})
+	}
+	if err := db.ReplaceAll("jevons", rows); err != nil {
+		t.Fatal(err)
+	}
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	s.SetStateDB(db)
+
+	evs := s.muxCoalesced("jevons", true)
+	if len(evs) == 0 {
+		t.Fatal("empty first paint")
+	}
+	if evs[0].Index != evs[len(evs)-1].Index-len(evs)+1 {
+		t.Fatalf("suffix indexes not absolute: first=%d last=%d n=%d", evs[0].Index, evs[len(evs)-1].Index, len(evs))
+	}
+	if evs[len(evs)-1].Index != 80 {
+		t.Fatalf("last index=%d", evs[len(evs)-1].Index)
+	}
+	for _, ev := range evs {
+		if strings.Contains(string(ev.Body), "HEADMARKER") {
+			t.Fatal("first paint included journal prefix")
+		}
+	}
+
+	buf := &replayBuf{}
+	if err := s.writeMuxWindow(t.Context(), buf, nil, "jevons", -muxwin.DefaultFollow, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	var lastMeta map[string]any
+	var oldest string
+	for _, m := range buf.frames {
+		if m["t"] == "frame" {
+			body, _ := m["body"].(map[string]any)
+			if id, _ := body["id"].(string); id != "" && oldest == "" {
+				oldest = id
+			}
+		}
+		if m["t"] == "meta" {
+			lastMeta, _ = m["body"].(map[string]any)
+		}
+	}
+	if muxMetaN(lastMeta) != 80 {
+		t.Fatalf("meta n want 80 got %+v", lastMeta)
+	}
+	if muxMetaOlder(lastMeta) == 0 {
+		t.Fatalf("older must stay >0 when n>follow: %+v", lastMeta)
+	}
+
+	pageBuf := &replayBuf{}
+	s.writeMuxPageBefore(t.Context(), pageBuf, nil, "jevons", oldest, 50)
+	seenHead := false
+	var indexes []int
+	for _, m := range pageBuf.frames {
+		if m["t"] != "frame" {
+			continue
+		}
+		body, _ := m["body"].(map[string]any)
+		raw, _ := body["event"].(string)
+		if raw == "" {
+			if ev, ok := body["event"].(map[string]any); ok {
+				b, _ := json.Marshal(ev)
+				raw = string(b)
+			}
+		}
+		if strings.Contains(raw, "HEADMARKER") {
+			seenHead = true
+		}
+		if idx, ok := body["index"].(float64); ok {
+			indexes = append(indexes, int(idx))
+		}
+	}
+	if !seenHead {
+		t.Fatal("page-up from statedb never reached index 1")
+	}
+	if len(indexes) == 0 || indexes[0] >= evs[0].Index {
+		t.Fatalf("page indexes must be older than first-paint start %d: %v", evs[0].Index, indexes)
+	}
+}
+
+func TestImportJSONLOnceThenPersist(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chatlog", "jevons.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"user","message":{"content":[{"type":"text","text":"one"}]}}` + "\n" +
+		`{"type":"user","message":{"content":[{"type":"text","text":"two"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clog, err := chatlog.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clog.Close() })
+	db, err := statedb.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	s := New("test", dir)
+	s.overseerName = "jevons"
+	s.SetChatLog(clog)
+	s.SetStateDB(db)
+	s.ImportTranscripts()
+	n, err := db.N("jevons")
+	if err != nil || n != 2 {
+		t.Fatalf("import n=%d err=%v", n, err)
+	}
+	s.ImportTranscripts()
+	n, _ = db.N("jevons")
+	if n != 2 {
+		t.Fatalf("second import re-folded: n=%d", n)
+	}
+	s.persistChatLine(`{"type":"user","message":{"content":[{"type":"text","text":"three"}]}}`)
+	n, _ = db.N("jevons")
+	if n != 3 {
+		t.Fatalf("persist n=%d", n)
+	}
+}
+
+func muxMetaN(m map[string]any) int {
+	if m == nil {
+		return 0
+	}
+	switch v := m["n"].(type) {
 	case int:
 		return v
 	case float64:

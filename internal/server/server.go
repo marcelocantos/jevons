@@ -33,6 +33,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/secauditor"
+	"github.com/marcelocantos/jevons/internal/statedb"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -123,6 +124,9 @@ type Server struct {
 	registry       *claudia.Registry
 	chatListeners  []chan string
 	chatLog        *chatlog.Log // durable conversation record (🎯T30.1)
+	// stateDB is the product SQLite store (🎯T548): coalesced transcripts
+	// and the fleet agent tree. Nil in tests that still drive mux from JSONL.
+	stateDB *statedb.Store
 	// agentJournals is the per-agent arm of the same durability mechanism
 	// (🎯T367): one chatlog.Log per fleet agent / aside, so sidebar
 	// conversations survive reload and daemon restart exactly as main chat

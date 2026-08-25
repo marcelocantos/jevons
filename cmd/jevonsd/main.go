@@ -42,6 +42,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/server"
+	"github.com/marcelocantos/jevons/internal/statedb"
 	"github.com/marcelocantos/jevons/internal/supervise"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -233,6 +234,13 @@ func main() {
 		os.Exit(1)
 	}
 	srv.SetChatLog(clog)
+	productDB, err := statedb.Open(statedb.DefaultPath(cfg.StateDir))
+	if err != nil {
+		slog.Error("cannot open product state db", "err", err)
+		os.Exit(1)
+	}
+	srv.SetStateDB(productDB)
+	srv.ImportTranscripts()
 	// ð¯T124 / ð¯T213: RHS fleet transcript inspect reads Grok + Claude stores.
 	srv.SetTranscriptReader(transcript.NewReaderRoots(sessionRoots))
 	// ð¯T293 / ð¯T311: the RHS badge names the model an agent is RUNNING. Live

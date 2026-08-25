@@ -103,14 +103,38 @@ function appendTextToFrame(frame: unknown, text: string): unknown {
   return { ...f, message: { ...msg, content: [{ type: 'text', text }] } };
 }
 
-function sortByIndex(frames: unknown[]): unknown[] {
-  return frames.slice().sort((a, b) => {
-    const ia = rec(a).index;
-    const ib = rec(b).index;
-    const na = typeof ia === 'number' ? ia : 0;
-    const nb = typeof ib === 'number' ? ib : 0;
-    return na - nb;
-  });
+function frameIndex(frame: unknown): number {
+  const i = rec(frame).index;
+  return typeof i === 'number' ? i : 0;
+}
+
+function findIndexSlot(frames: unknown[], index: number): number {
+  if (typeof index !== 'number') return -1;
+  return frames.findIndex((f) => rec(f).index === index);
+}
+
+/** Occupied slots stay in index order. Virtualizer count is occupied length, not n. */
+function putOccupied(frames: unknown[], payload: unknown): unknown[] {
+  const next = rec(payload);
+  const id = typeof next.id === 'string' ? next.id : '';
+  const index = typeof next.index === 'number' ? next.index : 0;
+  let at = id ? findId(frames, id) : -1;
+  if (at < 0 && index) at = findIndexSlot(frames, index);
+  if (at >= 0) {
+    const out = frames.slice();
+    out[at] = payload;
+    return out;
+  }
+  const out = frames.slice();
+  let lo = 0;
+  let hi = out.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (frameIndex(out[mid]) < index) lo = mid + 1;
+    else hi = mid;
+  }
+  out.splice(lo, 0, payload);
+  return out;
 }
 
 export function applyWindowBody(state: ConversationState, body: unknown): ConversationState {
@@ -120,26 +144,25 @@ export function applyWindowBody(state: ConversationState, body: unknown): Conver
   if (op === 'append') {
     const idx = findId(state.frames, id);
     if (idx >= 0) {
-      const frames = state.frames.slice();
       const text = typeof o.text === 'string' ? o.text : '';
+      let payload: unknown;
       if (text) {
-        frames[idx] = {
-          ...rec(withStopFromWindow(appendTextToFrame(frames[idx], text), o)),
+        payload = {
+          ...rec(withStopFromWindow(appendTextToFrame(state.frames[idx], text), o)),
           id,
           index: o.index,
         };
       } else if (o.event != null) {
-        frames[idx] = windowPayload(o);
+        payload = windowPayload(o);
+      } else {
+        return state;
       }
-      return { ...state, frames: sortByIndex(frames) };
+      const frames = state.frames.slice();
+      frames[idx] = payload;
+      return { ...state, frames };
     }
   }
-  const payload = windowPayload(o);
-  const idx = findId(state.frames, id);
-  const frames = state.frames.slice();
-  if (idx >= 0) frames[idx] = payload;
-  else frames.push(payload);
-  return { ...state, frames: sortByIndex(frames) };
+  return { ...state, frames: putOccupied(state.frames, windowPayload(o)) };
 }
 
 function applyWindowBodies(state: ConversationState, bodies: unknown[]): ConversationState {
@@ -215,6 +238,13 @@ export function applyConversationEvent(
         : typeof body.older === 'number'
           ? body.older
           : start;
+    if (lines.some(isWindowEvent)) {
+      const next = applyWindowBodies(state, lines);
+      return {
+        ...next,
+        meta: { ...(next.meta || {}), start, total, older, lo: body.lo, hi: body.hi, n: body.n, following: body.following === true, truncated },
+      };
+    }
     const sameWindow =
       !!state.meta &&
       typeof state.meta.start === 'number' &&
@@ -224,13 +254,6 @@ export function applyConversationEvent(
       return {
         ...state,
         meta: { ...(state.meta || {}), start, total, older, lo: body.lo, hi: body.hi, n: body.n, following: body.following, truncated },
-      };
-    }
-    if (lines.some(isWindowEvent)) {
-      const next = applyWindowBodies(state, lines);
-      return {
-        ...next,
-        meta: { ...(next.meta || {}), start, total, older, lo: body.lo, hi: body.hi, n: body.n, following: body.following === true, truncated },
       };
     }
     const olderFrames = reduceTranscriptBodies(lines);

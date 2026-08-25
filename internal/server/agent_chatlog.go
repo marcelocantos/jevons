@@ -161,30 +161,33 @@ func (j *agentJournals) appendUser(name, text string) {
 // appendUserAs journals the turn with its provenance (🎯T381), so a report an
 // agent sent into this conversation replays as a document rather than as the
 // owner's literal keystrokes.
-func (j *agentJournals) appendUserAs(name, text, origin string) {
+func (j *agentJournals) appendUserAs(name, text, origin string) (line string, ok bool) {
 	text = strings.TrimSpace(text)
 	if j == nil || text == "" {
-		return
+		return "", false
 	}
 	l := j.logFor(name)
 	if l == nil {
-		return
+		return "", false
 	}
 	j.mu.Lock()
 	if j.lastUser[name] == text {
 		j.mu.Unlock()
-		return
+		return "", false
 	}
 	j.lastUser[name] = text
 	j.mu.Unlock()
-	if err := l.Append(chatUserEchoAs(text, origin)); err != nil {
+	line = chatUserEchoAs(text, origin)
+	if err := l.Append(line); err != nil {
 		slog.Warn("agent_chatlog_append_failed",
 			"component", "agent_chatlog",
 			"name", name,
 			"role", "user",
 			"err", err.Error(),
 		)
+		return line, false
 	}
+	return line, true
 }
 
 // appendLine journals a pre-built wire line (assistant frames).
@@ -331,7 +334,9 @@ func (s *Server) journalAgentUserTurnAs(name, text, origin string) {
 		// copy here would double-paint main chat's own history.
 		return
 	}
-	s.agentJournalsFor().appendUserAs(name, text, origin)
+	if line, ok := s.agentJournalsFor().appendUserAs(name, text, origin); ok {
+		s.muxFanTranscript(name, line)
+	}
 }
 
 // journalAgentEvent records one agent event in that agent's durable journal.
@@ -366,6 +371,7 @@ func (s *Server) journalAgentEvent(name string, ev claudia.Event) {
 		s.agentJournalsFor().clearLastUser(name)
 	}
 	s.agentJournalsFor().appendLine(name, string(line))
+	s.muxFanTranscript(name, string(line))
 }
 
 // agentJournalTurns returns the durable journal turns for name.
@@ -383,5 +389,3 @@ func (s *Server) CloseAgentJournals() {
 	s.mu.RUnlock()
 	j.closeAll()
 }
-
-

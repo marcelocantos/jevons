@@ -48,6 +48,9 @@ type muxHub struct {
 	tailBytes map[string]int
 	truncated map[string]bool
 	stamps    map[string][]muxwin.ToolStamp
+	// journalN is the absolute coalesced length (statedb MAX(idx)).
+	// Zero means "use len(events)" — the JSONL-tail fallback.
+	journalN map[string]int
 }
 
 type muxSession struct {
@@ -120,6 +123,10 @@ func (h *muxHub) replaceEvents(name string, evs []muxwin.Event) {
 }
 
 func (h *muxHub) replaceCache(name string, evs []muxwin.Event, bytes int, truncated bool) {
+	h.replaceCacheN(name, evs, bytes, truncated, 0)
+}
+
+func (h *muxHub) replaceCacheN(name string, evs []muxwin.Event, bytes int, truncated bool, n int) {
 	if h == nil {
 		return
 	}
@@ -133,9 +140,15 @@ func (h *muxHub) replaceCache(name string, evs []muxwin.Event, bytes int, trunca
 	if h.truncated == nil {
 		h.truncated = make(map[string]bool)
 	}
+	if h.journalN == nil {
+		h.journalN = make(map[string]int)
+	}
 	h.events[name] = evs
 	h.tailBytes[name] = bytes
 	h.truncated[name] = truncated
+	if n > 0 {
+		h.journalN[name] = n
+	}
 	h.mu.Unlock()
 }
 
@@ -155,6 +168,29 @@ func (h *muxHub) eventsFor(name string) []muxwin.Event {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.events[name]
+}
+
+func (h *muxHub) absoluteN(name string) int {
+	if h == nil {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.journalN[name]
+}
+
+func (h *muxHub) noteAbsoluteN(name string, n int) {
+	if h == nil || n < 1 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.journalN == nil {
+		h.journalN = make(map[string]int)
+	}
+	if n > h.journalN[name] {
+		h.journalN[name] = n
+	}
 }
 
 func (sess *muxSession) ensure(name string) *muxWatch {
@@ -322,8 +358,19 @@ func (s *Server) muxFanOverseerLevel() {
 }
 
 func (h *muxHub) fanTranscript(name, frameJSON string) (applied []muxwin.ToolStamp) {
+	folds, applied := h.applyLine(name, frameJSON)
+	if len(folds) == 0 {
+		return applied
+	}
+	h.mu.Lock()
+	h.fanFoldsLocked(name, folds)
+	h.mu.Unlock()
+	return applied
+}
+
+func (h *muxHub) applyLine(name, frameJSON string) (folds []muxwin.LiveFold, applied []muxwin.ToolStamp) {
 	if h == nil || name == "" || strings.TrimSpace(frameJSON) == "" {
-		return nil
+		return nil, nil
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -339,11 +386,21 @@ func (h *muxHub) fanTranscript(name, frameJSON string) (applied []muxwin.ToolSta
 		folds = append(folds, extra...)
 	}
 	if len(folds) == 0 {
-		return applied
+		return nil, applied
 	}
 	h.events[name] = next
-	h.fanFoldsLocked(name, folds)
-	return applied
+	if h.journalN == nil {
+		h.journalN = make(map[string]int)
+	}
+	if n := h.journalN[name]; n > 0 {
+		for _, f := range folds {
+			if f.Event.Index > n {
+				n = f.Event.Index
+			}
+		}
+		h.journalN[name] = n
+	}
+	return folds, applied
 }
 
 func (h *muxHub) fanFoldsLocked(name string, folds []muxwin.LiveFold) {
@@ -374,19 +431,19 @@ func (h *muxHub) fanFoldsLocked(name string, folds []muxwin.LiveFold) {
 	}
 }
 
-func (h *muxHub) applyStampNow(name string, st muxwin.ToolStamp) bool {
+func (h *muxHub) applyStampNow(name string, st muxwin.ToolStamp) (folds []muxwin.LiveFold, ok bool) {
 	if h == nil || name == "" {
-		return false
+		return nil, false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	next, folds, applied, _ := muxwin.ApplyStamps(h.events[name], []muxwin.ToolStamp{st})
 	if len(applied) == 0 {
-		return false
+		return nil, false
 	}
 	h.events[name] = next
 	h.fanFoldsLocked(name, folds)
-	return true
+	return folds, true
 }
 
 func (h *muxHub) queueToolStamp(name string, st muxwin.ToolStamp) {
@@ -405,11 +462,34 @@ func (s *Server) muxFanTranscript(name, frameJSON string) {
 	if s == nil || s.mux == nil {
 		return
 	}
-	for _, st := range s.mux.fanTranscript(name, frameJSON) {
+	s.muxEnsureLive(name)
+	folds, stamps := s.mux.applyLine(name, frameJSON)
+	s.statedbUpsertFolds(name, folds)
+	if len(folds) > 0 {
+		s.mux.mu.Lock()
+		s.mux.fanFoldsLocked(name, folds)
+		s.mux.mu.Unlock()
+	}
+	for _, st := range stamps {
 		if line := chatToolStampLine(st.Name, st.Input); line != "" {
-			s.persistChatLine(line)
+			s.persistChatJSONL(line)
 		}
 	}
+}
+
+// muxEnsureLive seeds the hub cache from statedb so ApplyLive continues
+// absolute indexes instead of restarting at 1.
+func (s *Server) muxEnsureLive(name string) {
+	if s == nil || s.mux == nil {
+		return
+	}
+	if evs := s.mux.eventsFor(name); len(evs) > 0 {
+		return
+	}
+	if s.stateStore() == nil {
+		return
+	}
+	_ = s.muxCoalesced(name, false)
 }
 
 func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
@@ -627,13 +707,17 @@ func (s *Server) muxTruncated(name string) bool {
 
 // muxCoalesced returns the coalesced transcript. A filled hub cache is
 // reused so page/window do not rebuild the journal on every PageUp.
-// force rebuilds from disk (first open / empty cache) via a byte tail
-// from EOF — not a full Replay.
+// When statedb has rows, the cache is the live suffix and indexes are
+// journal-absolute (🎯T548.2). Otherwise force rebuilds from a JSONL
+// byte tail — not a full Replay.
 func (s *Server) muxCoalesced(name string, force bool) []muxwin.Event {
 	if s.mux != nil && !force {
 		if evs := s.mux.eventsFor(name); len(evs) > 0 {
 			return evs
 		}
+	}
+	if evs, ok := s.muxCoalescedFromDB(name); ok {
+		return evs
 	}
 	bytes := s.muxTailStartBytes()
 	capBytes := s.muxFirstPaintCap()
@@ -655,6 +739,59 @@ func (s *Server) muxCoalesced(name string, force bool) []muxwin.Event {
 		s.mux.replaceCache(name, events, bytes, truncated)
 	}
 	return events
+}
+
+func (s *Server) muxCoalescedFromDB(name string) ([]muxwin.Event, bool) {
+	db := s.stateStore()
+	if db == nil {
+		return nil, false
+	}
+	n := s.statedbN(name)
+	if n == 0 {
+		s.importJSONL(name, s.muxJSONLPath(name))
+		n = s.statedbN(name)
+	}
+	if n == 0 {
+		return nil, false
+	}
+	lo := n - muxwin.DefaultFollow + 1
+	if lo < 1 {
+		lo = 1
+	}
+	events := s.statedbRange(name, lo, n+1)
+	if s.mux != nil {
+		s.mux.replaceCacheN(name, events, 0, lo > 1, n)
+	}
+	return events, true
+}
+
+func (s *Server) muxJSONLPath(name string) string {
+	if s.isOverseerAgent(name) {
+		s.mu.RLock()
+		clog := s.chatLog
+		s.mu.RUnlock()
+		if clog != nil {
+			return clog.Path()
+		}
+		return ""
+	}
+	j := s.agentJournalsFor()
+	if j == nil {
+		return ""
+	}
+	return j.path(name)
+}
+
+func (s *Server) muxAbsoluteN(name string, events []muxwin.Event) int {
+	if s.mux != nil {
+		if n := s.mux.absoluteN(name); n > 0 {
+			return n
+		}
+	}
+	if n := s.statedbN(name); n > 0 {
+		return n
+	}
+	return len(events)
 }
 
 func (s *Server) muxJournalTail(name string, maxBytes int) (lines []string, truncated bool) {
@@ -690,12 +827,18 @@ func (s *Server) muxJournalTail(name string, maxBytes int) (lines []string, trun
 func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSession, name string, lo, hi int, refresh bool) error {
 	ch := transcriptChannel(name)
 	events := s.muxCoalesced(name, refresh)
-	resolved, err := muxwin.Resolve(lo, hi, len(events))
+	n := s.muxAbsoluteN(name, events)
+	resolved, err := muxwin.Resolve(lo, hi, n)
 	if err != nil {
 		s.muxWrite(ctx, conn, ch, "error", map[string]any{"error": err.Error()})
 		return err
 	}
-	sub := muxwin.Subscribe(resolved, muxwin.KindsOf(events), muxwin.HaloProse)
+	// Absolute n: do not walk a cache-relative halo (that is what made
+	// first-paint claim older=0 at cache index 1). Page-up fetches more.
+	sub := resolved
+	if s.mux == nil || s.mux.absoluteN(name) == 0 {
+		sub = muxwin.Subscribe(resolved, muxwin.KindsOf(events), muxwin.HaloProse)
+	}
 	var watch *muxWatch
 	if sess != nil {
 		watch = sess.ensure(name)
@@ -707,7 +850,9 @@ func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSess
 	if watch != nil {
 		have = muxwin.HaveFromIDs(events, watch.sent)
 	}
-	for _, ev := range muxwin.Slice(events, muxwin.Need(sub, len(events), have)) {
+	need := muxwin.Need(sub, n, have)
+	out := s.muxEventsAt(name, events, need)
+	for _, ev := range out {
 		s.muxWrite(ctx, conn, ch, "frame", muxEventBody(ev, "put", ""))
 		if watch != nil {
 			if watch.sent == nil {
@@ -716,8 +861,19 @@ func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSess
 			watch.sent[ev.ID] = struct{}{}
 		}
 	}
-		s.muxWrite(ctx, conn, ch, "meta", s.muxTranscriptMeta(sub, len(events), s.muxTruncated(name)))
+	s.muxWrite(ctx, conn, ch, "meta", s.muxTranscriptMeta(sub, n, s.muxTruncated(name)))
 	return nil
+}
+
+func (s *Server) muxEventsAt(name string, cache []muxwin.Event, idxs []int) []muxwin.Event {
+	if len(idxs) == 0 {
+		return nil
+	}
+	if s.mux != nil && s.mux.absoluteN(name) > 0 {
+		lo, hi := idxs[0], idxs[len(idxs)-1]+1
+		return s.statedbRange(name, lo, hi)
+	}
+	return muxwin.Slice(cache, idxs)
 }
 
 func (s *Server) writeMuxReplay(ctx context.Context, conn muxConn, name string) error {
@@ -726,7 +882,15 @@ func (s *Server) writeMuxReplay(ctx context.Context, conn muxConn, name string) 
 
 func (s *Server) writeMuxPageBefore(ctx context.Context, conn muxConn, sess *muxSession, name, before string, limit int) {
 	ch := transcriptChannel(name)
+	if s.mux != nil && s.mux.absoluteN(name) > 0 {
+		s.writeMuxPageBeforeDB(ctx, conn, sess, name, before, limit)
+		return
+	}
 	events := s.muxCoalesced(name, false)
+	if s.mux != nil && s.mux.absoluteN(name) > 0 {
+		s.writeMuxPageBeforeDB(ctx, conn, sess, name, before, limit)
+		return
+	}
 	var watch *muxWatch
 	var have map[int]struct{}
 	if sess != nil {
@@ -763,6 +927,64 @@ func (s *Server) writeMuxPageBefore(ctx context.Context, conn muxConn, sess *mux
 		}
 		out = muxwin.Slice(events, muxwin.Need(page, len(events), have))
 	}
+	s.writeMuxPageEnvelope(ctx, conn, sess, name, page, out, len(events), s.muxTruncated(name))
+}
+
+func (s *Server) writeMuxPageBeforeDB(ctx context.Context, conn muxConn, sess *muxSession, name, before string, limit int) {
+	if limit <= 0 {
+		limit = 50
+	}
+	n := s.muxAbsoluteN(name, nil)
+	idx := muxBeforeIndex(before)
+	if idx < 1 {
+		events := s.mux.eventsFor(name)
+		idx = muxwinIndexOfID(events, before)
+	}
+	if idx < 1 {
+		s.muxWrite(ctx, conn, transcriptChannel(name), "error", map[string]any{"error": "muxwin: unknown before id " + before})
+		return
+	}
+	out := s.statedbBefore(name, idx, limit)
+	lo := 1
+	if len(out) > 0 {
+		lo = out[0].Index
+	} else if idx > 1 {
+		lo = idx
+	}
+	page := muxwin.Resolved{Lo: lo, Hi: idx, Following: false}
+	s.writeMuxPageEnvelope(ctx, conn, sess, name, page, out, n, lo > 1)
+}
+
+func muxBeforeIndex(id string) int {
+	id = strings.TrimSpace(id)
+	if !strings.HasPrefix(id, "e:") {
+		return 0
+	}
+	n := 0
+	for _, r := range id[2:] {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}
+
+func muxwinIndexOfID(events []muxwin.Event, id string) int {
+	for _, e := range events {
+		if e.ID == id {
+			return e.Index
+		}
+	}
+	return 0
+}
+
+func (s *Server) writeMuxPageEnvelope(ctx context.Context, conn muxConn, sess *muxSession, name string, page muxwin.Resolved, out []muxwin.Event, n int, truncated bool) {
+	ch := transcriptChannel(name)
+	var watch *muxWatch
+	if sess != nil {
+		watch = sess.ensure(name)
+	}
 	lines := make([]json.RawMessage, 0, len(out))
 	for _, ev := range out {
 		s.muxWrite(ctx, conn, ch, "frame", muxEventBody(ev, "put", ""))
@@ -774,7 +996,6 @@ func (s *Server) writeMuxPageBefore(ctx context.Context, conn muxConn, sess *mux
 		}
 		lines = append(lines, json.RawMessage(mustJSON(muxEventBody(ev, "put", ""))))
 	}
-	truncated := s.muxTruncated(name)
 	older := 0
 	if page.Lo > 1 {
 		older = page.Lo
@@ -786,8 +1007,8 @@ func (s *Server) writeMuxPageBefore(ctx context.Context, conn muxConn, sess *mux
 	}
 	following := watch != nil && watch.sub.Following
 	body := map[string]any{
-		"start": page.Lo, "older": older, "total": len(events),
-		"lo": page.Lo, "hi": page.Hi, "n": len(events), "following": following,
+		"start": page.Lo, "older": older, "total": n,
+		"lo": page.Lo, "hi": page.Hi, "n": n, "following": following,
 		"lines": lines,
 	}
 	if truncated {

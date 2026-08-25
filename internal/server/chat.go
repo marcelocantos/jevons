@@ -771,13 +771,15 @@ func (s *Server) RewindOverseer(n int) error {
 // SetRegistry attaches the agent registry for the /api/agents endpoint.
 func (s *Server) SetRegistry(reg *claudia.Registry) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.registry = reg
+	s.mu.Unlock()
+	s.projectAgents()
 }
 
 // NotifyAgentsChanged pushes a non-journaled live frame so the RHS fleet
 // panel refreshes without waiting on poll (🎯T82). Safe from any goroutine.
 func (s *Server) NotifyAgentsChanged() {
+	s.projectAgents()
 	payload, err := json.Marshal(map[string]any{"type": "agents_changed"})
 	if err != nil {
 		return
@@ -837,8 +839,8 @@ type agentInfo struct {
 	// ids are per-ledger: without this, claudia's 🎯T19 worker marks
 	// orthograph's 🎯T19 row engaged. Empty only when WorkDir is empty, and an
 	// empty key matches every ledger (unscoped, pre-T389 reading).
-	Ledger   string `json:"ledger,omitempty"`
-	Status   string `json:"status"`
+	Ledger string `json:"ledger,omitempty"`
+	Status string `json:"status"`
 	// Running is process Alive() — not registry presence or last-known Launch (🎯T545.5).
 	Running  bool   `json:"running"`
 	Phase    string `json:"phase,omitempty"`
@@ -1454,6 +1456,14 @@ func (s *Server) persistChatLine(line string) {
 	if s == nil || strings.TrimSpace(line) == "" {
 		return
 	}
+	s.persistChatJSONL(line)
+	s.muxFanTranscript(s.overseerAgentName(), line)
+}
+
+func (s *Server) persistChatJSONL(line string) {
+	if s == nil || strings.TrimSpace(line) == "" {
+		return
+	}
 	s.mu.Lock()
 	clog := s.chatLog
 	s.mu.Unlock()
@@ -1486,5 +1496,4 @@ func (s *Server) broadcastChatLive(line string) {
 		default:
 		}
 	}
-	s.muxFanTranscript(s.overseerAgentName(), line)
 }

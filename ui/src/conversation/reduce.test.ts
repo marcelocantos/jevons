@@ -379,6 +379,39 @@ describe('applyConversationEvent', () => {
     expect(s.meta?.owner_ux).toBe('ok');
   });
 
+  it('pages older events into absolute slots without interleaving first-paint (🎯T548.3)', () => {
+    const put = (index: number, text: string) => ({
+      id: `e:${index}`,
+      index,
+      op: 'put' as const,
+      type: 'user',
+      event: { type: 'user', message: { content: [{ type: 'text', text }] } },
+    });
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1,
+      ch: 'transcript:jevons',
+      t: 'batch',
+      body: { frames: [put(98, 't98'), put(99, 't99'), put(100, 't100')] },
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'meta',
+      body: { start: 98, older: 98, total: 100, n: 100 },
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'page',
+      body: {
+        lines: [put(96, 't96'), put(97, 't97')],
+        start: 96, older: 96, total: 100, n: 100,
+      },
+    });
+    expect(s.frames.map((f) => (f as { id: string }).id)).toEqual([
+      'e:96', 'e:97', 'e:98', 'e:99', 'e:100',
+    ]);
+    expect(s.frames).toHaveLength(5);
+    expect(s.meta?.n).toBe(100);
+  });
+
   it('keeps paging when start is cache-head but the journal is still truncated (🎯T494.1.4)', () => {
     let s = emptyConversation();
     s = applyConversationEvent(s, {
