@@ -176,7 +176,14 @@ export function applyConversationEvent(
     return { ...state, frames: next.frames, stream: next.stream };
   }
   if (env.t === 'meta') {
-    return { ...state, meta: (env.body || {}) as ConversationMeta, ready: true };
+    // Working-level fans are partial ({working, owner_ux, overseer_down}).
+    // Replacing the window meta drops older/truncated and PageUp dies
+    // after the first-paint halo (🎯T494.1.4).
+    return {
+      ...state,
+      meta: { ...(state.meta || {}), ...((env.body || {}) as ConversationMeta) },
+      ready: true,
+    };
   }
   if (env.t === 'page') {
     const body = (env.body || {}) as {

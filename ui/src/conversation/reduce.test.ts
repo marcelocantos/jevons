@@ -363,6 +363,22 @@ describe('applyConversationEvent', () => {
     expect(s.meta?.older).toBe(0);
   });
 
+  it('partial working-level meta does not wipe older/truncated (🎯T494.1.4)', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'meta',
+      body: { start: 1, older: 2, total: 240, truncated: true, following: true },
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'meta',
+      body: { working: false, owner_ux: 'ok', overseer_down: '' },
+    });
+    expect(s.meta?.older).toBe(2);
+    expect(s.meta?.truncated).toBe(true);
+    expect(s.meta?.total).toBe(240);
+    expect(s.meta?.owner_ux).toBe('ok');
+  });
+
   it('keeps paging when start is cache-head but the journal is still truncated (🎯T494.1.4)', () => {
     let s = emptyConversation();
     s = applyConversationEvent(s, {
