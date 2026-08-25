@@ -25,6 +25,7 @@ export type ConversationMeta = {
   working?: boolean;
   owner_ux?: string;
   overseer_down?: string;
+  truncated?: boolean;
 };
 
 export type ConversationState = {
@@ -187,6 +188,7 @@ export function applyConversationEvent(
       hi?: number;
       n?: number;
       following?: boolean;
+      truncated?: boolean;
     };
     const lines = Array.isArray(body.lines) ? body.lines : [];
     const start =
@@ -196,9 +198,16 @@ export function applyConversationEvent(
           ? body.older
           : 0;
     const total = typeof body.total === 'number' ? body.total : state.meta?.total;
+    const truncated = body.truncated === true;
     // Empty lines means "already have this slice" (Need filtered), not EOF.
-    // EOF is start <= 1.
-    const older = start <= 1 ? 0 : (typeof body.older === 'number' ? body.older : start);
+    // EOF is start <= 1 only when the journal is no longer truncated
+    // (🎯T494.1.4 first-paint tail is not the journal head).
+    const older =
+      start <= 1 && !truncated
+        ? 0
+        : typeof body.older === 'number'
+          ? body.older
+          : start;
     const sameWindow =
       !!state.meta &&
       typeof state.meta.start === 'number' &&
@@ -207,14 +216,14 @@ export function applyConversationEvent(
     if (sameWindow) {
       return {
         ...state,
-        meta: { ...(state.meta || {}), start, total, older, lo: body.lo, hi: body.hi, n: body.n, following: body.following },
+        meta: { ...(state.meta || {}), start, total, older, lo: body.lo, hi: body.hi, n: body.n, following: body.following, truncated },
       };
     }
     if (lines.some(isWindowEvent)) {
       const next = applyWindowBodies(state, lines);
       return {
         ...next,
-        meta: { ...(next.meta || {}), start, total, older, lo: body.lo, hi: body.hi, n: body.n, following: body.following === true },
+        meta: { ...(next.meta || {}), start, total, older, lo: body.lo, hi: body.hi, n: body.n, following: body.following === true, truncated },
       };
     }
     const olderFrames = reduceTranscriptBodies(lines);
@@ -222,7 +231,7 @@ export function applyConversationEvent(
       ...state,
       frames: [...olderFrames.frames, ...state.frames],
       stream: offsetStream(state.stream, olderFrames.frames.length),
-      meta: { ...(state.meta || {}), start, total, older },
+      meta: { ...(state.meta || {}), start, total, older, truncated },
     };
   }
   if (env.t === 'error') {

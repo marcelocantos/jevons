@@ -45,7 +45,7 @@ export function AgentInteraction(props: {
         frames={conv.frames}
         meta={conv.meta}
         ready={conv.ready}
-        onPageOlder={conv.meta?.older ? () => conv.pageOlder(50) : undefined}
+        onPageOlder={() => conv.pageOlder(50)}
         onLeaveLive={conv.leaveLive}
       />
       {comfortable ? (

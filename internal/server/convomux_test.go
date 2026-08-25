@@ -51,7 +51,7 @@ func TestOverseerDownSampleAndMuxMeta(t *testing.T) {
 	if got := s.overseerDownSample(); got != "session/load failed" {
 		t.Fatalf("reason: %q", got)
 	}
-	meta := s.muxTranscriptMeta(muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 0)
+	meta := s.muxTranscriptMeta(muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 0, false)
 	if meta["overseer_down"] != "session/load failed" {
 		t.Fatalf("meta=%+v", meta)
 	}
@@ -476,4 +476,158 @@ func containsAll(have []string, want ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestMuxWindowMetaTruncatedKeepsOlder(t *testing.T) {
+	m := muxWindowMeta(muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 40, true)
+	if older, _ := m["older"].(int); older == 0 {
+		t.Fatalf("truncated cache-start must keep older: %+v", m)
+	}
+	if m["truncated"] != true {
+		t.Fatalf("truncated flag: %+v", m)
+	}
+	m = muxWindowMeta(muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 40, false)
+	if older, _ := m["older"].(int); older != 0 {
+		t.Fatalf("real journal start must clear older: %+v", m)
+	}
+}
+
+func TestStitchMuxOlderPreservesSuffixIDs(t *testing.T) {
+	prev := []muxwin.Event{
+		{ID: "e:1", Index: 1, Type: "user", Body: json.RawMessage(`{"t":1}`)},
+		{ID: "e:2", Index: 2, Type: "user", Body: json.RawMessage(`{"t":2}`)},
+	}
+	full := []muxwin.Event{
+		{ID: "e:1", Index: 1, Type: "user", Body: json.RawMessage(`{"t":0}`)},
+		{ID: "e:2", Index: 2, Type: "user", Body: json.RawMessage(`{"t":1}`)},
+		{ID: "e:3", Index: 3, Type: "user", Body: json.RawMessage(`{"t":2}`)},
+	}
+	got := stitchMuxOlder(prev, full)
+	if len(got) != 3 {
+		t.Fatalf("n=%d", len(got))
+	}
+	if got[1].ID != "e:1" || got[2].ID != "e:2" {
+		t.Fatalf("suffix ids must stay e:1/e:2, got %s %s", got[1].ID, got[2].ID)
+	}
+	if got[0].ID == "e:1" {
+		t.Fatal("new older event must not reuse e:1")
+	}
+	if got[0].Index != 1 || got[1].Index != 2 || got[2].Index != 3 {
+		t.Fatalf("indices=%d,%d,%d", got[0].Index, got[1].Index, got[2].Index)
+	}
+}
+
+func TestMuxPageBeforeGrowsTruncatedTail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	var b strings.Builder
+	b.WriteString(`{"type":"user","message":{"content":[{"type":"text","text":"HEADMARKER"}]}}` + "\n")
+	pad := `{"type":"user","message":{"content":[{"type":"text","text":"` + strings.Repeat("p", 120) + `"}]}}` + "\n"
+	for b.Len() < 6000 {
+		b.WriteString(pad)
+	}
+	b.WriteString(`{"type":"user","message":{"content":[{"type":"text","text":"TAILMARKER"}]}}` + "\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clog, err := chatlog.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clog.Close() })
+	s := New("test", dir)
+	s.overseerName = "jevons"
+	s.muxTailBytes = 400
+	s.SetChatLog(clog)
+	s.mux = newMuxHub()
+
+	evs := s.muxCoalesced("jevons", true)
+	if len(evs) == 0 {
+		t.Fatal("empty first paint")
+	}
+	for _, ev := range evs {
+		if strings.Contains(string(ev.Body), "HEADMARKER") {
+			t.Fatal("first paint included journal prefix")
+		}
+	}
+	if !s.muxTruncated("jevons") {
+		t.Fatal("tiny tail of a 6k journal must be truncated")
+	}
+
+	buf := &replayBuf{}
+	if err := s.writeMuxWindow(t.Context(), buf, nil, "jevons", -muxwin.DefaultFollow, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	var oldest string
+	var lastMeta map[string]any
+	for _, m := range buf.frames {
+		if m["t"] == "frame" {
+			body, _ := m["body"].(map[string]any)
+			if id, _ := body["id"].(string); id != "" && oldest == "" {
+				oldest = id
+			}
+		}
+		if m["t"] == "meta" {
+			lastMeta, _ = m["body"].(map[string]any)
+		}
+	}
+	if oldest == "" {
+		t.Fatal("no delivered frame")
+	}
+	if muxMetaOlder(lastMeta) == 0 {
+		t.Fatalf("truncated journal must keep older>0 at cache start: %+v", lastMeta)
+	}
+
+	seenHead := false
+	before := oldest
+	for i := 0; i < 16 && !seenHead; i++ {
+		pageBuf := &replayBuf{}
+		s.writeMuxPageBefore(t.Context(), pageBuf, nil, "jevons", before, 50)
+		var pageOlder int
+		var firstNew string
+		for _, m := range pageBuf.frames {
+			if m["t"] == "frame" {
+				body, _ := m["body"].(map[string]any)
+				raw, _ := body["event"].(string)
+				if raw == "" {
+					if ev, ok := body["event"].(map[string]any); ok {
+						b, _ := json.Marshal(ev)
+						raw = string(b)
+					}
+				}
+				if strings.Contains(raw, "HEADMARKER") {
+					seenHead = true
+				}
+				if id, _ := body["id"].(string); id != "" && firstNew == "" {
+					firstNew = id
+				}
+			}
+			if m["t"] == "page" {
+				body, _ := m["body"].(map[string]any)
+				pageOlder = muxMetaOlder(body)
+			}
+		}
+		if firstNew != "" {
+			before = firstNew
+		} else if pageOlder == 0 {
+			break
+		}
+	}
+	if !seenHead {
+		t.Fatal("page-up never reached the journal prefix past the first-paint tail")
+	}
+}
+
+func muxMetaOlder(m map[string]any) int {
+	if m == nil {
+		return 0
+	}
+	switch v := m["older"].(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
 }

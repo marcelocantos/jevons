@@ -362,4 +362,18 @@ describe('applyConversationEvent', () => {
     });
     expect(s.meta?.older).toBe(0);
   });
+
+  it('keeps paging when start is cache-head but the journal is still truncated (🎯T494.1.4)', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'meta', body: { start: 1, older: 2, total: 40, truncated: true },
+    });
+    expect(s.meta?.older).toBe(2);
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'page',
+      body: { lines: [{ id: 'e:o:1' }], start: 1, older: 2, total: 80, truncated: true },
+    });
+    expect(s.meta?.older).toBe(2);
+    expect(s.meta?.truncated).toBe(true);
+  });
 });

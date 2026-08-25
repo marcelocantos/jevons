@@ -250,6 +250,9 @@ type Server struct {
 	// mux is the 🎯T537.1 conversation multiplex hub (/ws/mux). Independent
 	// of /ws/chat until the owner cutover (T505).
 	mux *muxHub
+	// muxTailBytes overrides chatlog.DefaultTailBytes for mux first-paint
+	// (🎯T494.1.4 tests). Zero means the production default.
+	muxTailBytes int
 
 	// defaultProvider is the daemon-wide claudia backend for new asides
 	// and other registry mint paths on this server (🎯T148).

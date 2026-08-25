@@ -123,8 +123,12 @@ export function useConversation(mux: MuxClient | null, name: string) {
     page: (end: number, limit: number) => mux?.pageTranscript(name, end, limit),
     pageOlder: (limit = 50) => {
       const first = rec(stateRef.current.frames[0]);
-      if (typeof first.id === 'string') {
+      if (typeof first.id === 'string' && first.id) {
         mux?.pageTranscript(name, { before: first.id, limit });
+        return;
+      }
+      if (typeof first.index === 'number') {
+        mux?.pageTranscript(name, { before: `e:${first.index}`, limit });
       }
     },
     leaveLive: () => {

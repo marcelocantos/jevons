@@ -155,7 +155,7 @@ export function AgentTranscript(props: {
   useEffect(() => {
     pageStartRef.current = props.meta?.start;
     pagingRef.current = false;
-  }, [props.meta?.start, props.meta?.older]);
+  }, [props.meta?.start, props.meta?.older, props.meta?.total, props.meta?.n, count]);
 
   useEffect(() => {
     const el = parentRef.current;
@@ -165,6 +165,7 @@ export function AgentTranscript(props: {
         shouldRequestPage({
           scrollTop: el.scrollTop,
           older: props.meta?.older,
+          truncated: props.meta?.truncated,
           inFlight: pagingRef.current,
           following: props.meta?.following !== false && followRef.current,
           scrollHeight: el.scrollHeight,
@@ -202,7 +203,7 @@ export function AgentTranscript(props: {
       el.removeEventListener('jevons-leave-track', leave);
       el.removeEventListener('jevons-page-older', requestOlder);
     };
-  }, [props.meta?.older, props.meta?.start, props.onPageOlder, props.onLeaveLive]);
+  }, [props.meta?.older, props.meta?.start, props.meta?.truncated, props.onPageOlder, props.onLeaveLive]);
 
   const scroller = parentRef.current;
   const scrollTop = scroller?.scrollTop ?? 0;

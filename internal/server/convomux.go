@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -41,10 +42,12 @@ type muxWatch struct {
 }
 
 type muxHub struct {
-	mu     sync.Mutex
-	conns  map[*muxSession]struct{}
-	events map[string][]muxwin.Event
-	stamps map[string][]muxwin.ToolStamp
+	mu        sync.Mutex
+	conns     map[*muxSession]struct{}
+	events    map[string][]muxwin.Event
+	tailBytes map[string]int
+	truncated map[string]bool
+	stamps    map[string][]muxwin.ToolStamp
 }
 
 type muxSession struct {
@@ -55,8 +58,10 @@ type muxSession struct {
 
 func newMuxHub() *muxHub {
 	return &muxHub{
-		conns:  make(map[*muxSession]struct{}),
-		events: make(map[string][]muxwin.Event),
+		conns:     make(map[*muxSession]struct{}),
+		events:    make(map[string][]muxwin.Event),
+		tailBytes: make(map[string]int),
+		truncated: make(map[string]bool),
 	}
 }
 
@@ -111,6 +116,10 @@ func (h *muxHub) remove(sess *muxSession) {
 }
 
 func (h *muxHub) replaceEvents(name string, evs []muxwin.Event) {
+	h.replaceCache(name, evs, 0, false)
+}
+
+func (h *muxHub) replaceCache(name string, evs []muxwin.Event, bytes int, truncated bool) {
 	if h == nil {
 		return
 	}
@@ -118,8 +127,25 @@ func (h *muxHub) replaceEvents(name string, evs []muxwin.Event) {
 	if h.events == nil {
 		h.events = make(map[string][]muxwin.Event)
 	}
+	if h.tailBytes == nil {
+		h.tailBytes = make(map[string]int)
+	}
+	if h.truncated == nil {
+		h.truncated = make(map[string]bool)
+	}
 	h.events[name] = evs
+	h.tailBytes[name] = bytes
+	h.truncated[name] = truncated
 	h.mu.Unlock()
+}
+
+func (h *muxHub) tailState(name string) (bytes int, truncated bool) {
+	if h == nil {
+		return 0, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.tailBytes[name], h.truncated[name]
 }
 
 func (h *muxHub) eventsFor(name string) []muxwin.Event {
@@ -200,23 +226,31 @@ func muxEventBody(ev muxwin.Event, op, text string) map[string]any {
 	return m
 }
 
-func muxWindowMeta(r muxwin.Resolved, n int) map[string]any {
+func muxWindowMeta(r muxwin.Resolved, n int, truncated bool) map[string]any {
 	older := 0
 	if r.Lo > 1 {
 		older = r.Lo
+	} else if truncated {
+		// Cache starts at 1, but older journal bytes still exist on disk
+		// (🎯T494.1.4). older=0 here is what made PageUp stop at ~10 screens.
+		older = 2
 	}
 	hi := r.Hi
 	if r.Following {
 		hi = 0
 	}
-	return map[string]any{
+	m := map[string]any{
 		"lo": r.Lo, "hi": hi, "n": n, "following": r.Following,
 		"start": r.Lo, "older": older, "total": n,
 	}
+	if truncated {
+		m["truncated"] = true
+	}
+	return m
 }
 
-func (s *Server) muxTranscriptMeta(r muxwin.Resolved, n int) map[string]any {
-	m := muxWindowMeta(r, n)
+func (s *Server) muxTranscriptMeta(r muxwin.Resolved, n int, truncated bool) map[string]any {
+	m := muxWindowMeta(r, n, truncated)
 	if s == nil {
 		return m
 	}
@@ -564,6 +598,33 @@ func (s *Server) muxWrite(ctx context.Context, conn muxConn, ch, t string, body 
 // Grow only when the tail does not yet hold DefaultFollow events.
 const muxFirstPaintBytesMax = 8 << 20
 
+// muxPageGrowBytesMax is how far one session will walk backward from
+// EOF on PageUp (🎯T494.1.4). Doubles per empty page. Residual: the
+// rest of an 87MB journal past this cap is still on disk.
+const muxPageGrowBytesMax = 32 << 20
+
+func (s *Server) muxTailStartBytes() int {
+	if s != nil && s.muxTailBytes > 0 {
+		return s.muxTailBytes
+	}
+	return chatlog.DefaultTailBytes
+}
+
+func (s *Server) muxFirstPaintCap() int {
+	if s != nil && s.muxTailBytes > 0 {
+		return s.muxTailBytes
+	}
+	return muxFirstPaintBytesMax
+}
+
+func (s *Server) muxTruncated(name string) bool {
+	if s == nil || s.mux == nil {
+		return false
+	}
+	_, truncated := s.mux.tailState(name)
+	return truncated
+}
+
 // muxCoalesced returns the coalesced transcript. A filled hub cache is
 // reused so page/window do not rebuild the journal on every PageUp.
 // force rebuilds from disk (first open / empty cache) via a byte tail
@@ -574,21 +635,24 @@ func (s *Server) muxCoalesced(name string, force bool) []muxwin.Event {
 			return evs
 		}
 	}
-	bytes := chatlog.DefaultTailBytes
+	bytes := s.muxTailStartBytes()
+	capBytes := s.muxFirstPaintCap()
 	var events []muxwin.Event
+	var truncated bool
 	for {
-		lines, truncated := s.muxJournalTail(name, bytes)
+		var lines []string
+		lines, truncated = s.muxJournalTail(name, bytes)
 		events = muxwin.EventsFromLines(lines)
-		if !truncated || len(events) >= muxwin.DefaultFollow || bytes >= muxFirstPaintBytesMax {
+		if !truncated || len(events) >= muxwin.DefaultFollow || bytes >= capBytes {
 			break
 		}
 		bytes *= 2
-		if bytes > muxFirstPaintBytesMax {
-			bytes = muxFirstPaintBytesMax
+		if bytes > capBytes {
+			bytes = capBytes
 		}
 	}
 	if s.mux != nil {
-		s.mux.replaceEvents(name, events)
+		s.mux.replaceCache(name, events, bytes, truncated)
 	}
 	return events
 }
@@ -652,7 +716,7 @@ func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSess
 			watch.sent[ev.ID] = struct{}{}
 		}
 	}
-		s.muxWrite(ctx, conn, ch, "meta", s.muxTranscriptMeta(sub, len(events)))
+		s.muxWrite(ctx, conn, ch, "meta", s.muxTranscriptMeta(sub, len(events), s.muxTruncated(name)))
 	return nil
 }
 
@@ -670,14 +734,35 @@ func (s *Server) writeMuxPageBefore(ctx context.Context, conn muxConn, sess *mux
 		have = muxwin.HaveFromIDs(events, watch.sent)
 	}
 	page, err := muxwin.BeforeUnsent(events, before, limit, have)
+	if err != nil && s.muxTruncated(name) && s.muxGrowOlder(name) {
+		events = s.muxCoalesced(name, false)
+		if watch != nil {
+			have = muxwin.HaveFromIDs(events, watch.sent)
+		}
+		page, err = muxwin.BeforeUnsent(events, before, limit, have)
+	}
 	if err != nil {
 		s.muxWrite(ctx, conn, ch, "error", map[string]any{"error": err.Error()})
 		return
 	}
 	// Page is a fetch of older unsent events, not a new CQRS window.
 	// The last open/window subscription keeps streaming as-is.
-	sub := page
-	out := muxwin.Slice(events, muxwin.Need(sub, len(events), have))
+	out := muxwin.Slice(events, muxwin.Need(page, len(events), have))
+	for len(out) == 0 && s.muxTruncated(name) {
+		if !s.muxGrowOlder(name) {
+			break
+		}
+		events = s.muxCoalesced(name, false)
+		if watch != nil {
+			have = muxwin.HaveFromIDs(events, watch.sent)
+		}
+		var growErr error
+		page, growErr = muxwin.BeforeUnsent(events, before, limit, have)
+		if growErr != nil {
+			break
+		}
+		out = muxwin.Slice(events, muxwin.Need(page, len(events), have))
+	}
 	lines := make([]json.RawMessage, 0, len(out))
 	for _, ev := range out {
 		s.muxWrite(ctx, conn, ch, "frame", muxEventBody(ev, "put", ""))
@@ -689,16 +774,26 @@ func (s *Server) writeMuxPageBefore(ctx context.Context, conn muxConn, sess *mux
 		}
 		lines = append(lines, json.RawMessage(mustJSON(muxEventBody(ev, "put", ""))))
 	}
+	truncated := s.muxTruncated(name)
 	older := 0
-	if sub.Lo > 1 {
-		older = sub.Lo
+	if page.Lo > 1 {
+		older = page.Lo
+	} else if truncated {
+		older = 2
+	}
+	if len(out) == 0 && !truncated {
+		older = 0
 	}
 	following := watch != nil && watch.sub.Following
-	s.muxWrite(ctx, conn, ch, "page", map[string]any{
-		"start": sub.Lo, "older": older, "total": len(events),
-		"lo": sub.Lo, "hi": sub.Hi, "n": len(events), "following": following,
+	body := map[string]any{
+		"start": page.Lo, "older": older, "total": len(events),
+		"lo": page.Lo, "hi": page.Hi, "n": len(events), "following": following,
 		"lines": lines,
-	})
+	}
+	if truncated {
+		body["truncated"] = true
+	}
+	s.muxWrite(ctx, conn, ch, "page", body)
 }
 
 func mustJSON(v any) []byte {
@@ -727,4 +822,120 @@ func (s *Server) writeMuxPage(ctx context.Context, conn muxConn, name string, en
 		lo = 1
 	}
 	_ = s.writeMuxWindow(ctx, conn, nil, name, lo, end, false)
+}
+
+func (s *Server) muxPageGrowCap() int {
+	if s != nil && s.muxTailBytes > 0 {
+		capBytes := s.muxTailBytes * 64
+		if capBytes < 1<<20 {
+			capBytes = 1 << 20
+		}
+		return capBytes
+	}
+	return muxPageGrowBytesMax
+}
+
+// muxGrowOlder doubles the byte tail and stitches newly visible older
+// events onto the cache, keeping already-sent event IDs stable so the
+// client's before cursor still resolves (🎯T494.1.4).
+func (s *Server) muxGrowOlder(name string) bool {
+	if s == nil || s.mux == nil {
+		return false
+	}
+	curBytes, truncated := s.mux.tailState(name)
+	if !truncated {
+		return false
+	}
+	start := s.muxTailStartBytes()
+	if curBytes < start {
+		curBytes = start
+	}
+	next := curBytes * 2
+	if next < start*2 {
+		next = start * 2
+	}
+	capBytes := s.muxPageGrowCap()
+	if next > capBytes {
+		next = capBytes
+	}
+	if next <= curBytes {
+		return false
+	}
+	prev := s.mux.eventsFor(name)
+	prevLen := len(prev)
+	lines, stillTrunc := s.muxJournalTail(name, next)
+	full := muxwin.EventsFromLines(lines)
+	grown := stitchMuxOlder(prev, full)
+	s.mux.replaceCache(name, grown, next, stillTrunc)
+	return len(grown) > prevLen || next > curBytes
+}
+
+func sameMuxEvent(a, b muxwin.Event) bool {
+	if a.Type != b.Type {
+		return false
+	}
+	if a.TS != "" && b.TS != "" && a.TS != b.TS {
+		return false
+	}
+	return string(a.Body) == string(b.Body)
+}
+
+func nextGrownIDBase(prev []muxwin.Event) int {
+	max := 0
+	for _, e := range prev {
+		var n int
+		if _, err := fmt.Sscanf(e.ID, "e:o:%d", &n); err == nil && n > max {
+			max = n
+		}
+	}
+	return max + 1
+}
+
+func stitchMuxOlder(prev, full []muxwin.Event) []muxwin.Event {
+	if len(prev) == 0 {
+		return full
+	}
+	if len(full) == 0 {
+		return prev
+	}
+	cut := -1
+	anchor := prev[0]
+	for i := range full {
+		if sameMuxEvent(full[i], anchor) {
+			cut = i
+			break
+		}
+	}
+	if cut < 0 {
+		// Fold may have rewritten the old start (torn first line).
+		// Match a suffix from EOF.
+		n, m := len(prev), len(full)
+		if m < n {
+			return full
+		}
+		cut = m - n
+		for i := 0; i < n; i++ {
+			if !sameMuxEvent(prev[i], full[cut+i]) {
+				return full
+			}
+		}
+	}
+	if cut == 0 {
+		return prev
+	}
+	older := make([]muxwin.Event, cut)
+	copy(older, full[:cut])
+	base := nextGrownIDBase(prev)
+	out := make([]muxwin.Event, 0, cut+len(prev))
+	for i := range older {
+		older[i].Index = i + 1
+		older[i].ID = fmt.Sprintf("e:o:%d", base+i)
+		out = append(out, older[i])
+	}
+	for i := range prev {
+		ev := prev[i]
+		ev.Index = cut + i + 1
+		out = append(out, ev)
+	}
+	return out
 }

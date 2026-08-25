@@ -10,6 +10,7 @@ describe('shouldRequestPage', () => {
     expect(shouldRequestPage({ scrollTop: 10, older: 20, inFlight: true })).toBe(false);
     expect(shouldRequestPage({ scrollTop: 80, older: 20, inFlight: false })).toBe(false);
     expect(shouldRequestPage({ scrollTop: 0, older: 0, inFlight: false })).toBe(false);
+    expect(shouldRequestPage({ scrollTop: 10, older: 0, truncated: true, inFlight: false })).toBe(true);
   });
 
   it('does not page the live tail when following or the pane is short', () => {

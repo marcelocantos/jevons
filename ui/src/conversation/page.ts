@@ -7,13 +7,14 @@ export const PAGE_TOP_PX = 48;
 export function shouldRequestPage(o: {
   scrollTop: number;
   older?: number;
+  truncated?: boolean;
   inFlight: boolean;
   following?: boolean;
   scrollHeight?: number;
   clientHeight?: number;
 }): boolean {
   if (o.inFlight) return false;
-  if (!o.older) return false;
+  if (!o.older && !o.truncated) return false;
   // Live tail: scrollTop is 0 when the window is shorter than the pane.
   // That is the bottom, not history-top — paging here freezes mux follow.
   if (o.following) return false;

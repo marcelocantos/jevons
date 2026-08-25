@@ -12077,6 +12077,26 @@ targets:
     origin: manual
     discovered: 2026-08-24
     achieved: 2026-08-24
+  T494.1.4:
+    name: PageUp walks past the mux first-paint tail to older journal bytes
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - First-paint of a journal larger than the mux tail cap still omits the journal prefix (HEAD).
+    - Connect/page meta.older stays > 0 while TailBytes reports truncated, even when the subscribed halo starts at cache index 1.
+    - page-before the oldest delivered id grows the tail and returns events that were not in the first-paint cache.
+    - A page that reaches the real journal start (not truncated) reports older=0.
+    - 'Hermetic: TestMuxPageBeforeGrowsTruncatedTail + client reduce keeps older when truncated && start===1. Residual: one session cache grows in doubles up to 32MB — full 87MB coalesce on first paint stays refused.'
+    context: 'Owner 2026-08-25 on the React mux transcript: PageUp walks about 10 screens then stops. Cause: muxCoalesced first-paint is chatlog.DefaultTailBytes (1MB, grow-to 8MB only to collect DefaultFollow=30 events). HaloProse=100 / HaloMaxExtra=200 then walk to cache index 1, muxWindowMeta sets older=0, and AgentInteraction drops onPageOlder. writeMuxPageBefore uses the same cache — BeforeUnsent cannot see lines that were never tailed. Daily overseer journal is ~87MB; the missing history is on disk, not gone. Do not full-Replay that log on connect (empty-transcript / multi-GB hydrate). PageUp must grow the tail and keep older honest while truncated.'
+    tags:
+    - product
+    - mux
+    - chat
+    - ux
+    - web
+    origin: owner
+    discovered: 2026-08-25
   T495:
     name: Omit-provider mint is usage-first; config preference is only a green-provider tie-break
     status: achieved
