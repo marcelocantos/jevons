@@ -1456,8 +1456,21 @@ func (s *Server) persistChatLine(line string) {
 	if s == nil || strings.TrimSpace(line) == "" {
 		return
 	}
+	name := s.overseerAgentName()
+	// 🎯T548.2: after statedb has rows, SQLite is the mux source of
+	// truth. JSONL is import-once history, not a second live log.
+	if s.stateStore() != nil {
+		if s.mux == nil {
+			s.mux = newMuxHub()
+		}
+		s.muxFanTranscript(name, line)
+		if s.statedbN(name) == 0 {
+			s.persistChatJSONL(line)
+		}
+		return
+	}
 	s.persistChatJSONL(line)
-	s.muxFanTranscript(s.overseerAgentName(), line)
+	s.muxFanTranscript(name, line)
 }
 
 func (s *Server) persistChatJSONL(line string) {

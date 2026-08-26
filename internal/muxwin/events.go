@@ -9,8 +9,9 @@ import (
 	"strings"
 )
 
-// DefaultFollow is the connect visible window: last N coalesced events
-// ([-N, 0)), not raw journal lines.
+// DefaultFollow is the connect visible window: last N *user turns*
+// when statedb is the source (vanilla historyReplayTurns), else last N
+// coalesced events on the JSONL-tail fallback ([-N, 0)).
 const DefaultFollow = 30
 
 // Event is one coalesced transcript event. ID is identity (append/dedup);
@@ -60,6 +61,21 @@ func EventsFromLines(lines []string) []Event {
 		out, _ = foldLine(out, ln, open, tools)
 	}
 	return out
+}
+
+// nextIndex is the next 1-based coalesced index after prev.
+// The hub cache is often a statedb suffix (absolute indexes 9970..10000
+// with len=30). Minting len(prev)+1 there produces index 31, which a
+// following window [9971, 0) drops — owner send journals and the React
+// composer never sees the echo.
+func nextIndex(prev []Event) int {
+	if len(prev) == 0 {
+		return 1
+	}
+	if i := prev[len(prev)-1].Index; i >= 1 {
+		return i + 1
+	}
+	return 1
 }
 
 func parseEvent(line string, index int) Event {
@@ -220,7 +236,7 @@ func foldLine(dst []Event, line string, open, byID map[string]int) (next []Event
 		} `json:"message"`
 	}
 	if err := json.Unmarshal([]byte(line), &h); err != nil {
-		ev := parseEvent(line, len(dst)+1)
+		ev := parseEvent(line, nextIndex(dst))
 		return append(dst, ev), []LiveFold{{Event: ev, Op: "put"}}
 	}
 	if h.Type == "progress" {
@@ -247,7 +263,7 @@ func foldLine(dst []Event, line string, open, byID map[string]int) (next []Event
 					delete(open, sid)
 				}
 			} else {
-				ev := assistantTextEvent(len(next)+1, sid, text, stop, h.Timestamp)
+				ev := assistantTextEvent(nextIndex(next), sid, text, stop, h.Timestamp)
 				next = append(next, ev)
 				folds = append(folds, LiveFold{Event: ev, Op: "put", Text: text})
 				if open != nil && stop == "" {
@@ -256,7 +272,7 @@ func foldLine(dst []Event, line string, open, byID map[string]int) (next []Event
 			}
 		}
 		for _, blk := range blocks {
-			ev := toolUseEvent(len(next)+1, blk, h.Timestamp)
+			ev := toolUseEvent(nextIndex(next), blk, h.Timestamp)
 			next = append(next, ev)
 			folds = append(folds, LiveFold{Event: ev, Op: "put"})
 			if byID != nil {
@@ -267,7 +283,7 @@ func foldLine(dst []Event, line string, open, byID map[string]int) (next []Event
 		}
 		return next, folds
 	}
-	ev := parseEvent(line, len(next)+1)
+	ev := parseEvent(line, nextIndex(next))
 	return append(next, ev), []LiveFold{{Event: ev, Op: "put"}}
 }
 

@@ -14,6 +14,7 @@ export class MuxClient {
   private readonly handlers = new Map<string, Set<MuxHandler>>();
   private readonly pending: string[] = [];
   private readonly watched = new Set<string>();
+  private readonly watchRefs = new Map<string, number>();
   private generation = 0;
   private reconnectTimer = 0;
   private heartbeatTimer = 0;
@@ -101,11 +102,21 @@ export class MuxClient {
   }
 
   openTranscript(name: string, win?: { lo: number; hi: number }): void {
+    const n = (this.watchRefs.get(name) || 0) + 1;
+    this.watchRefs.set(name, n);
     this.watched.add(name);
-    this.send(encodeMux(transcriptChannel(name), 'open', win ?? { lo: -30, hi: 0 }));
+    if (n === 1) {
+      this.send(encodeMux(transcriptChannel(name), 'open', win ?? { lo: -30, hi: 0 }));
+    }
   }
 
   closeTranscript(name: string): void {
+    const n = (this.watchRefs.get(name) || 1) - 1;
+    if (n > 0) {
+      this.watchRefs.set(name, n);
+      return;
+    }
+    this.watchRefs.delete(name);
     this.watched.delete(name);
     this.send(encodeMux(transcriptChannel(name), 'close'));
   }

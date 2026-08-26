@@ -82,6 +82,19 @@ func (s *Server) statedbUpsertFolds(name string, folds []muxwin.LiveFold) {
 	}
 }
 
+func (s *Server) statedbTailStart(name string, userTurns int) int {
+	db := s.stateStore()
+	if db == nil || userTurns <= 0 {
+		return 0
+	}
+	lo, err := db.TailStart(name, userTurns)
+	if err != nil {
+		slog.Error("statedb: tail-start failed", "agent", name, "err", err)
+		return 0
+	}
+	return lo
+}
+
 func (s *Server) statedbN(name string) int {
 	db := s.stateStore()
 	if db == nil {

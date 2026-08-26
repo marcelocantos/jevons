@@ -30,6 +30,44 @@ type Watermark struct {
 	ImportedAt string
 }
 
+// TailStart is the 1-based idx of the oldest event in the last userTurns
+// user rows. Vanilla /ws/chat first-paint is historyReplayTurns (30)
+// sealed turns, not 30 raw events (🎯T548.2 / T57). No user rows → last
+// userTurns events, or 1 when the journal is shorter.
+func (s *Store) TailStart(agent string, userTurns int) (int, error) {
+	if s == nil {
+		return 1, nil
+	}
+	n, err := s.N(agent)
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return 1, nil
+	}
+	if userTurns <= 0 {
+		return n, nil
+	}
+	var lo sql.NullInt64
+	err = s.db.QueryRow(`
+		SELECT MIN(idx) FROM (
+			SELECT idx FROM transcript_events
+			WHERE agent = ? AND typ = 'user'
+			ORDER BY idx DESC LIMIT ?
+		)`, agent, userTurns).Scan(&lo)
+	if err != nil {
+		return 0, fmt.Errorf("statedb: tail-start: %w", err)
+	}
+	if lo.Valid {
+		return int(lo.Int64), nil
+	}
+	start := n - userTurns + 1
+	if start < 1 {
+		start = 1
+	}
+	return start, nil
+}
+
 // N is the journal-absolute length: MAX(idx), or 0 when empty.
 func (s *Store) N(agent string) (int, error) {
 	if s == nil {

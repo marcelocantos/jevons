@@ -19,6 +19,44 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
+func TestTailStartCountsUserTurns(t *testing.T) {
+	s := testStore(t)
+	var evs []Event
+	idx := 1
+	for i := 0; i < 10; i++ {
+		evs = append(evs,
+			Event{Index: idx, ID: "u:" + itoa(i), Type: "user", Kind: 1, Body: `{"type":"user"}`},
+			Event{Index: idx + 1, ID: "a:" + itoa(i), Type: "assistant", Kind: 2, Body: `{"type":"assistant"}`},
+			Event{Index: idx + 2, ID: "t:" + itoa(i), Type: "tool_use", Kind: 3, Body: `{"type":"tool_use"}`},
+		)
+		idx += 3
+	}
+	if err := s.Upsert("jevons", evs); err != nil {
+		t.Fatal(err)
+	}
+	// 10 user turns, 30 events. Last 3 user turns start at user #8 → idx 22.
+	lo, err := s.TailStart("jevons", 3)
+	if err != nil || lo != 22 {
+		t.Fatalf("TailStart(3)=%d err=%v want 22", lo, err)
+	}
+	if got, _ := s.TailStart("jevons", 30); got != 1 {
+		t.Fatalf("short journal TailStart(30)=%d want 1", got)
+	}
+	if got, _ := s.TailStart("missing", 30); got != 1 {
+		t.Fatalf("empty TailStart=%d", got)
+	}
+}
+
+func itoa(i int) string {
+	if i < 0 {
+		return "0"
+	}
+	if i < 10 {
+		return string(rune('0' + i))
+	}
+	return string(rune('0'+i/10)) + string(rune('0'+i%10))
+}
+
 func TestOpenMigrateInsertCountRange(t *testing.T) {
 	s := testStore(t)
 	if err := s.Upsert("jevons", []Event{

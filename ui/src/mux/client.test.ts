@@ -55,6 +55,21 @@ function connectClient(): { client: MuxClient; ws: FakeWebSocket } {
   return { client, ws };
 }
 
+describe('MuxClient transcript watch refcount', () => {
+  it('does not close a shared transcript until the last subscriber leaves', () => {
+    const { client, ws } = connectClient();
+    client.openTranscript('jevons');
+    client.openTranscript('jevons');
+    const opens = ws.sent.filter((s) => s.includes('"t":"open"'));
+    expect(opens).toHaveLength(1);
+    client.closeTranscript('jevons');
+    expect(ws.sent.some((s) => s.includes('"t":"close"'))).toBe(false);
+    client.closeTranscript('jevons');
+    expect(ws.sent.filter((s) => s.includes('"t":"close"'))).toHaveLength(1);
+    client.close();
+  });
+});
+
 describe('MuxClient heartbeat (T537.2.1)', () => {
   it('sends the vanilla chat ping on open and every heartbeat interval', () => {
     const { client, ws } = connectClient();

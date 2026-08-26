@@ -730,6 +730,62 @@ func TestMuxPageBeforeReadsAbsoluteIndexesFromStateDB(t *testing.T) {
 	}
 }
 
+func TestMuxFirstPaintIsUserTurnsNotEvents(t *testing.T) {
+	db, err := statedb.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var rows []statedb.Event
+	idx := 1
+	for i := 0; i < 40; i++ {
+		rows = append(rows,
+			statedb.Event{Index: idx, ID: "u:" + itoa(i), Type: "user", Kind: 1, Body: `{"type":"user"}`},
+			statedb.Event{Index: idx + 1, ID: "a:" + itoa(i), Type: "assistant", Kind: 2, Body: `{"type":"assistant"}`},
+			statedb.Event{Index: idx + 2, ID: "t:" + itoa(i), Type: "tool_use", Kind: 3, Body: `{"type":"tool_use"}`},
+		)
+		idx += 3
+	}
+	if err := db.ReplaceAll("jevons", rows); err != nil {
+		t.Fatal(err)
+	}
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	s.SetStateDB(db)
+
+	evs := s.muxCoalesced("jevons", true)
+	users := 0
+	for _, ev := range evs {
+		if ev.Type == "user" {
+			users++
+		}
+	}
+	if users != muxwin.DefaultFollow {
+		t.Fatalf("first paint user turns=%d want %d (events=%d first_idx=%d)", users, muxwin.DefaultFollow, len(evs), evs[0].Index)
+	}
+	if evs[0].Index == evs[len(evs)-1].Index-muxwin.DefaultFollow+1 {
+		t.Fatal("first paint is still last-N events, not last-N user turns")
+	}
+
+	buf := &replayBuf{}
+	if err := s.writeMuxWindow(t.Context(), buf, nil, "jevons", -muxwin.DefaultFollow, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	var sentUsers int
+	for _, m := range buf.frames {
+		if m["t"] != "frame" {
+			continue
+		}
+		body, _ := m["body"].(map[string]any)
+		if typ, _ := body["type"].(string); typ == "user" {
+			sentUsers++
+		}
+	}
+	if sentUsers != muxwin.DefaultFollow {
+		t.Fatalf("wired first paint user turns=%d want %d", sentUsers, muxwin.DefaultFollow)
+	}
+}
+
 func TestImportJSONLOnceThenPersist(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "chatlog", "jevons.jsonl")
@@ -769,6 +825,67 @@ func TestImportJSONLOnceThenPersist(t *testing.T) {
 	n, _ = db.N("jevons")
 	if n != 3 {
 		t.Fatalf("persist n=%d", n)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(raw), "\n") != 2 {
+		t.Fatalf("dual-wrote JSONL after import: %q", raw)
+	}
+	if err := os.WriteFile(path, append(raw, []byte(`{"type":"user","message":{"content":[{"type":"text","text":"ghost"}]}}`+"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	evs := s.muxCoalesced("jevons", true)
+	for _, ev := range evs {
+		if strings.Contains(string(ev.Body), "ghost") {
+			t.Fatal("mux read JSONL after import")
+		}
+	}
+	if last := evs[len(evs)-1]; !strings.Contains(string(last.Body), "three") || last.Index != 3 {
+		t.Fatalf("persist row=%+v", last)
+	}
+	older := s.statedbBefore("jevons", 3, 50)
+	if len(older) != 2 || older[0].Index != 1 || older[1].Index != 2 {
+		t.Fatalf("page by index=%+v", older)
+	}
+}
+
+func TestMuxFanLiveUserOnAbsoluteSuffix(t *testing.T) {
+	h := newMuxHub()
+	evs := make([]muxwin.Event, 0, 30)
+	for i := 51; i <= 80; i++ {
+		evs = append(evs, muxwin.Event{ID: "e:" + itoa(i), Index: i, Type: "user", Kind: muxwin.KindUser})
+	}
+	h.replaceCacheN("jevons", evs, 0, true, 80)
+	sess := &muxSession{
+		send: make(chan []byte, 8),
+		transcripts: map[string]*muxWatch{"jevons": {
+			subscribed: true,
+			visible:    muxwin.Resolved{Lo: 51, Hi: 0, Following: true},
+			sub:        muxwin.Resolved{Lo: 51, Hi: 0, Following: true},
+			sent:       map[string]struct{}{},
+		}},
+	}
+	h.add(sess)
+	folds, _ := h.applyLine("jevons", `{"type":"user","message":{"content":[{"type":"text","text":"ping-send-check"}]}}`)
+	if len(folds) != 1 || folds[0].Event.Index != 81 {
+		idx := 0
+		if len(folds) > 0 {
+			idx = folds[0].Event.Index
+		}
+		t.Fatalf("live index=%d folds=%d want 81 (cache-relative mint is dropped by [51,0))", idx, len(folds))
+	}
+	h.mu.Lock()
+	h.fanFoldsLocked("jevons", folds)
+	h.mu.Unlock()
+	select {
+	case payload := <-sess.send:
+		if !strings.Contains(string(payload), "ping-send-check") {
+			t.Fatalf("payload %s", payload)
+		}
+	default:
+		t.Fatal("following watcher missed live user echo on statedb suffix")
 	}
 }
 

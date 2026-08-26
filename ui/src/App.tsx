@@ -86,7 +86,7 @@ declare module '@tanstack/react-router' {
 function Cockpit() {
   const mux = getMux();
   const { agent, tab } = indexRoute.useSearch();
-  useCockpitKeys({ sidebarComposerVisible: tab === 'transcript' });
+  useCockpitKeys({ sidebarComposerVisible: tab === 'transcript' && agent !== 'jevons' });
   const navigate = useNavigate({ from: indexRoute.fullPath });
   const lastAgentsRef = useRef<AgentRow[]>([]);
   const [degraded, setDegraded] = useState('');
@@ -315,7 +315,24 @@ function Cockpit() {
                 setGraphNonce((n) => n + 1);
               }}
               transcript={
-                <AgentInteraction mux={mux} name={agent} title={agent} density="compact" />
+                agent === 'jevons' ? (
+                  <div
+                    id="agent-inspect"
+                    className="rhs-tab-pane conversation-widget density-compact"
+                    data-density="compact"
+                    data-agent-id="jevons"
+                  >
+                    <div id="agent-inspect-header">
+                      <span className="ai-label">Transcript</span>
+                      <span className="ai-name" id="agent-inspect-name">
+                        jevons
+                      </span>
+                    </div>
+                    <p className="ai-empty">Root transcript is the main pane.</p>
+                  </div>
+                ) : (
+                  <AgentInteraction mux={mux} name={agent} title={agent} density="compact" />
+                )
               }
             >
               <FrontierTable rows={frontierRows} />

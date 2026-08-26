@@ -471,7 +471,7 @@ func (s *Server) muxFanTranscript(name, frameJSON string) {
 		s.mux.mu.Unlock()
 	}
 	for _, st := range stamps {
-		if line := chatToolStampLine(st.Name, st.Input); line != "" {
+		if line := chatToolStampLine(st.Name, st.Input); line != "" && s.statedbN(name) == 0 {
 			s.persistChatJSONL(line)
 		}
 	}
@@ -636,9 +636,26 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 		if text == "" {
 			return
 		}
-		if _, err := s.sendToNamedAgentAs(name, text, sendOriginOwner); err != nil {
-			s.muxWrite(ctx, conn, env.Ch, "error", map[string]any{"error": err.Error()})
+		// A send is a request to see the echo: unfreeze this session's
+		// watch so a statedb-suffix following window still Contains the
+		// new absolute index. Do not block the mux read loop on ACP
+		// prompt-in-flight (that wedged heartbeats and the next send).
+		if sess != nil {
+			if w := sess.watchGet(name); w != nil {
+				sess.mu.Lock()
+				w.visible.Following = true
+				w.visible.Hi = 0
+				w.sub.Following = true
+				w.sub.Hi = 0
+				sess.mu.Unlock()
+			}
 		}
+		ch := env.Ch
+		go func() {
+			if _, err := s.sendToNamedAgentAs(name, text, sendOriginOwner); err != nil {
+				s.muxWrite(context.Background(), conn, ch, "error", map[string]any{"error": err.Error()})
+			}
+		}()
 	}
 }
 
@@ -754,9 +771,12 @@ func (s *Server) muxCoalescedFromDB(name string) ([]muxwin.Event, bool) {
 	if n == 0 {
 		return nil, false
 	}
-	lo := n - muxwin.DefaultFollow + 1
+	lo := s.statedbTailStart(name, muxwin.DefaultFollow)
 	if lo < 1 {
-		lo = 1
+		lo = n - muxwin.DefaultFollow + 1
+		if lo < 1 {
+			lo = 1
+		}
 	}
 	events := s.statedbRange(name, lo, n+1)
 	if s.mux != nil {
@@ -826,6 +846,14 @@ func (s *Server) muxJournalTail(name string, maxBytes int) (lines []string, trun
 
 func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSession, name string, lo, hi int, refresh bool) error {
 	ch := transcriptChannel(name)
+	// Vanilla first-paint is historyReplayTurns user turns (🎯T57).
+	// Negative following lo used to mean last-N *events*; with statedb
+	// that is a handful of tool/step rows and an empty-looking pane.
+	if hi == 0 && lo < 0 {
+		if start := s.statedbTailStart(name, -lo); start > 0 {
+			lo = start
+		}
+	}
 	events := s.muxCoalesced(name, refresh)
 	n := s.muxAbsoluteN(name, events)
 	resolved, err := muxwin.Resolve(lo, hi, n)

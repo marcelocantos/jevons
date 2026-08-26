@@ -56,6 +56,28 @@ func toolAsst(name string) string {
 	return string(b)
 }
 
+func TestApplyLiveAllContinuesAbsoluteIndexOnSuffix(t *testing.T) {
+	// statedb first-paint is a suffix: 30 events whose indexes are
+	// journal-absolute, not 1..len. A cache-relative mint (31) is
+	// outside a following window [9971, 0) and the owner echo never
+	// reaches the React composer.
+	prev := []Event{{ID: "e:10000", Index: 10000, Kind: KindAssistant, Type: "assistant"}}
+	next, folds := ApplyLiveAll(prev, user("ping-send-check"))
+	if len(next) != 2 || len(folds) != 1 {
+		t.Fatalf("n=%d folds=%d", len(next), len(folds))
+	}
+	if folds[0].Event.Index != 10001 {
+		t.Fatalf("live index=%d want 10001 (cache-relative mint drops the echo)", folds[0].Event.Index)
+	}
+	win := Resolved{Lo: 9971, Hi: 0, Following: true}
+	if !Contains(win, folds[0].Event.Index) {
+		t.Fatal("following suffix window must contain the live user echo")
+	}
+	if Contains(win, 31) {
+		t.Fatal("control: cache-relative 31 must stay out of [9971, 0)")
+	}
+}
+
 func TestEventsFromLinesSealsTokensKeepsUserAndTools(t *testing.T) {
 	lines := []string{
 		user("u0"),
