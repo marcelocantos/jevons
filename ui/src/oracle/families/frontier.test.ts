@@ -333,6 +333,7 @@ describeOracle(family('frontier'), () => {
     ];
     const ask = 'Needs owner decision on 🎯T184 — accept the card layout?';
     expect(extractTargetIDs(ask)).toEqual(['T184']);
+    expect(extractTargetIDs('see t540.3 and 🎯T540.3')).toEqual(['T540.3']);
     expect(looksLikeTargetAsk(ask)).toBe(true);
     const m = chromeModel({ text: ask, role: 'assistant', agents });
     expect(m.show).toBe(true);

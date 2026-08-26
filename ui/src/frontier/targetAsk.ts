@@ -10,7 +10,13 @@
 // T267: a live target-ask selects the owning PO and highlights the row.
 
 import { DEFAULT_PLAY_PO, isProductOwnerName, resolvePlayPO, type PlayAgent } from './play';
-import { normalizeTargetID } from './table';
+import { normalizeTargetID as normalizeRowID } from './table';
+
+/** Vanilla parity: strips 🎯 and upper-cases the leading `t` (`t540.3` → `T540.3`). */
+function normalizeTargetID(raw?: string): string {
+  const s = normalizeRowID(raw);
+  return /^t\d/.test(s) ? 'T' + s.slice(1) : s;
+}
 
 export const SPEAKER_LT = '〈';
 export const SPEAKER_GT = '〉';
