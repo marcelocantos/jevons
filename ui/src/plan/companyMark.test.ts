@@ -12,8 +12,9 @@ describe('plan company marks', () => {
     expect(companyOfProvider('cursor')).toBe('cursor');
   });
 
-  it('abbreviates windows as s / w', () => {
+  it('abbreviates windows as s / w / m', () => {
     expect(windowAbbrev('session')).toBe('s');
     expect(windowAbbrev('weekly')).toBe('w');
+    expect(windowAbbrev('monthly')).toBe('m');
   });
 });

@@ -51,7 +51,7 @@ func PickMintDest(cands []DestCand, configPref string, now time.Time, th Thresho
 			continue
 		}
 		var rem *float64
-		if w, ok := c.Backend.Window(WindowWeekly); ok && w.RemainingPercent != nil {
+		if w, ok := c.Backend.PrimaryAllowanceWindow(); ok && w.RemainingPercent != nil {
 			r := *w.RemainingPercent
 			rem = &r
 		}

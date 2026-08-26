@@ -121,7 +121,8 @@ export function classifyPace(
   if (burn > hotRatio) return PACE_HOT;
   if (burn > aheadRatio) return PACE_AHEAD;
   const weekly = String(windowName || '').toLowerCase() === 'weekly';
-  if (weekly) {
+  const monthly = String(windowName || '').toLowerCase() === 'monthly';
+  if (weekly || monthly) {
     const w = weeklyWaste(used, remainingPercent, remainingTime);
     if (w.locked !== null && w.locked >= lockedWaste) return PACE_LOCKED;
     if (w.continuation !== null && w.continuation >= underWaste) return PACE_UNDER;

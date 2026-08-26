@@ -57,6 +57,8 @@ const (
 const (
 	WindowSession = "session"
 	WindowWeekly  = "weekly"
+	// WindowMonthly is the billing-cycle allowance (Cursor included usage).
+	WindowMonthly = "monthly"
 )
 
 // DefaultStaleAfter is how old a reading may be before it is served as stale.
@@ -220,13 +222,14 @@ func Convert(readings []claudia.PlanUsage, load map[string]int, now time.Time, s
 			b.Status = StatusUnavailable
 		}
 		for _, w := range r.Windows {
-			b.Windows = append(b.Windows, Window{
+			win := Window{
 				Name:               string(w.Name),
 				RemainingPercent:   copyFloat(w.RemainingPercent),
 				UsedPercent:        copyFloat(w.UsedPercent),
 				ResetsAt:           copyTime(w.ResetsAt),
 				LimitWindowSeconds: copyLimitSeconds(w.LimitWindow),
-			})
+			}
+			b.Windows = append(b.Windows, normalizeWindowLabel(provider, win))
 		}
 		// A backend claiming available with nothing published is a producer
 		// bug; report it as unavailable rather than render an empty row that

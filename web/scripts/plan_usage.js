@@ -37,6 +37,7 @@
   // map two vocabularies.
   const WINDOW_SESSION = 'session';
   const WINDOW_WEEKLY = 'weekly';
+  const WINDOW_MONTHLY = 'monthly';
   const STATUS_AVAILABLE = 'available';
   const STATUS_UNAVAILABLE = 'unavailable';
 
@@ -124,6 +125,7 @@
   const HOURS_PER_DAY = 24;
   const SESSION_LIMIT_SECONDS = 5 * 60 * 60;
   const WEEKLY_LIMIT_SECONDS = 7 * 24 * 60 * 60;
+  const MONTHLY_LIMIT_SECONDS = 30 * 24 * 60 * 60;
 
   const SEP_CHIP = ' · ';
 
@@ -137,7 +139,8 @@
   };
   const WINDOW_ABBREV = {
     session: 's',
-    weekly: 'w'
+    weekly: 'w',
+    monthly: 'm'
   };
   const PROVIDER_RANK = {
     claude: 0,
@@ -216,7 +219,7 @@
   }
 
   /**
-   * windowAbbrev is the one-letter window token: s / w.
+   * windowAbbrev is the one-letter window token: s / w / m.
    */
   function windowAbbrev(name) {
     const n = String(name || '').toLowerCase();
@@ -248,6 +251,7 @@
     const n = String((w && w.name) || '').toLowerCase();
     if (n === WINDOW_SESSION) return SESSION_LIMIT_SECONDS;
     if (n === WINDOW_WEEKLY) return WEEKLY_LIMIT_SECONDS;
+    if (n === WINDOW_MONTHLY) return MONTHLY_LIMIT_SECONDS;
     return null;
   }
 
@@ -307,7 +311,8 @@
     if (burn > hotRatio) return PACE_HOT;
     if (burn > aheadRatio) return PACE_AHEAD;
     const weekly = String(windowName || '').toLowerCase() === WINDOW_WEEKLY;
-    if (weekly) {
+    const monthly = String(windowName || '').toLowerCase() === WINDOW_MONTHLY;
+    if (weekly || monthly) {
       const w = weeklyWaste(used, remainingPercent, remainingTimePercent);
       if (w.locked !== null && w.locked >= lockedWaste) return PACE_LOCKED;
       if (w.continuation !== null && w.continuation >= underWaste) return PACE_UNDER;
@@ -390,7 +395,9 @@
         }
       }
     }
-    if (String(out.name || '').toLowerCase() === WINDOW_WEEKLY && out.remainingTimePercent !== null) {
+    if ((String(out.name || '').toLowerCase() === WINDOW_WEEKLY ||
+         String(out.name || '').toLowerCase() === WINDOW_MONTHLY) &&
+        out.remainingTimePercent !== null) {
       const waste = weeklyWaste(out.usedPercent, out.remainingPercent, out.remainingTimePercent);
       out.continuationWaste = waste.continuation;
       out.lockedWaste = waste.locked;
@@ -506,10 +513,14 @@
     const ordered = [];
     const session = pickWindow(windowsIn, WINDOW_SESSION);
     const weekly = pickWindow(windowsIn, WINDOW_WEEKLY);
+    const monthly = pickWindow(windowsIn, WINDOW_MONTHLY);
     if (session) ordered.push(session);
     if (weekly) ordered.push(weekly);
+    if (monthly) ordered.push(monthly);
     for (let i = 0; i < windowsIn.length; i++) {
-      if (windowsIn[i] !== session && windowsIn[i] !== weekly) ordered.push(windowsIn[i]);
+      if (windowsIn[i] !== session && windowsIn[i] !== weekly && windowsIn[i] !== monthly) {
+        ordered.push(windowsIn[i]);
+      }
     }
 
     const parts = [];

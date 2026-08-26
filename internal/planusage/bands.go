@@ -39,19 +39,20 @@ func bandReason(be Backend, band WeeklyBand, now time.Time, th Thresholds) strin
 	switch band {
 	case BandExhausted:
 		if IsExhaustedReason(be.Reason) {
-			return name + " weekly exhausted — provider reports rate-limited"
+			return name + " plan allowance exhausted — provider reports rate-limited"
 		}
-		return name + " weekly exhausted — 0% remaining"
+		return name + " plan allowance exhausted — 0% remaining"
 	case BandUnpublished:
 		if strings.TrimSpace(be.Reason) != "" {
 			return name + " — " + oneLine(be.Reason)
 		}
-		return name + " — no weekly window published"
+		return name + " — no plan window published"
 	}
-	w, ok := be.Window(WindowWeekly)
+	w, ok := be.PrimaryAllowanceWindow()
 	if !ok {
-		return name + " — no weekly window published"
+		return name + " — no plan window published"
 	}
+	winLabel := allowanceWindowLabel(w)
 	used := usedPercent(w)
 	rtp, hasTime := remainingTimePercent(w, now)
 	burn := ""
@@ -68,15 +69,15 @@ func bandReason(be Backend, band WeeklyBand, now time.Time, th Thresholds) strin
 	detail := joinNonEmpty(burn, remaining)
 	switch band {
 	case BandHot:
-		return withDetail(name+" weekly hot", detail)
+		return withDetail(name+" "+winLabel+" hot", detail)
 	case BandAhead:
-		return withDetail(name+" weekly ahead of pace", detail)
+		return withDetail(name+" "+winLabel+" ahead of pace", detail)
 	case BandUnder:
-		return withDetail(name+" weekly under pace", detail)
+		return withDetail(name+" "+winLabel+" under pace", detail)
 	case BandLocked:
-		return withDetail(name+" weekly surplus locked in", detail)
+		return withDetail(name+" "+winLabel+" surplus locked in", detail)
 	default:
-		return withDetail(name+" weekly on pace", detail)
+		return withDetail(name+" "+winLabel+" on pace", detail)
 	}
 }
 

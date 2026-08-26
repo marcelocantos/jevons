@@ -130,6 +130,7 @@ test('provider and window abbreviations match the owner pin', function () {
   assert.strictEqual(PU.providerAbbrev('cursor'), 'cu');
   assert.strictEqual(PU.windowAbbrev('session'), 's');
   assert.strictEqual(PU.windowAbbrev('weekly'), 'w');
+  assert.strictEqual(PU.windowAbbrev('monthly'), 'm');
 });
 
 // ── clause 1 ────────────────────────────────────────────────────────────────
@@ -522,15 +523,16 @@ test('cursor group maps to Cursor company and paints the mark, not cu', function
     fleet_agents: 1,
     fetched_at: iso(NOW),
     age_seconds: 0,
-    windows: [{ name: 'weekly', remaining_percent: 97, used_percent: 3, resets_at: iso(NOW + 7 * 24 * HOUR) }]
+    windows: [{ name: 'monthly', remaining_percent: 97, used_percent: 3, resets_at: iso(NOW + 19 * 24 * HOUR), limit_window_seconds: 31 * 24 * HOUR }]
   }]), NOW);
   const g = groupFor(view, 'cursor');
   assert.ok(g, 'cursor group');
   assert.strictEqual(g.company, 'cursor');
   assert.strictEqual(g.abbrev, 'cu');
   assert.strictEqual(g.available, true);
-
-  // paintPlanUsage prefers ModelPrefix.companyIconHtml over the abbrev fallback.
+  const monthlyWin = windowFor(g, 'monthly');
+  assert.ok(monthlyWin, 'cursor monthly window');
+  assert.strictEqual(monthlyWin.windowAbbrev, 'm');
   const kids = [];
   const el = {
     className: '', title: '', style: {}, children: kids,
@@ -568,6 +570,44 @@ test('cursor group maps to Cursor company and paints the mark, not cu', function
   assert.ok(String(iconSlot.innerHTML).indexOf('data-mark="cursor"') >= 0,
     'must paint the Cursor SVG, not fall back to abbrev: ' + iconSlot.innerHTML);
   assert.strictEqual(iconSlot.textContent, '', 'abbrev text is only the no-mark fallback');
+});
+
+test('T550: cursor monthly window abbrev is m; 7d stays w', function () {
+  assert.strictEqual(PU.windowAbbrev('monthly'), 'm');
+  const view = PU.formatPlanUsage(snapshot([{
+    provider: 'cursor',
+    status: 'available',
+    fleet_agents: 1,
+    fetched_at: iso(NOW),
+    age_seconds: 0,
+    windows: [{
+      name: 'monthly',
+      remaining_percent: 84,
+      used_percent: 16,
+      resets_at: iso(NOW + 19 * 24 * HOUR),
+      limit_window_seconds: 31 * 24 * HOUR
+    }]
+  }]), NOW);
+  const row = rowFor(view, 'cursor');
+  const win = windowFor(row, 'monthly');
+  assert.ok(win, 'monthly window');
+  assert.strictEqual(win.name, 'monthly');
+  assert.strictEqual(PU.windowAbbrev(win.name), 'm');
+
+  const codex = PU.formatPlanUsage(snapshot([{
+    provider: 'codex',
+    status: 'available',
+    fetched_at: iso(NOW),
+    windows: [{
+      name: 'weekly',
+      remaining_percent: 50,
+      resets_at: iso(NOW + 3 * 24 * HOUR),
+      limit_window_seconds: 7 * 24 * HOUR
+    }]
+  }]), NOW);
+  const codexWin = windowFor(rowFor(codex, 'codex'), 'weekly');
+  assert.ok(codexWin);
+  assert.strictEqual(PU.windowAbbrev(codexWin.name), 'w');
 });
 
 test('T390.1: triangle sits at remaining-time fraction; missing rollover invents nothing', function () {

@@ -54,7 +54,7 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 	if !be.Available() {
 		return BandUnpublished
 	}
-	w, ok := be.Window(WindowWeekly)
+	w, ok := be.PrimaryAllowanceWindow()
 	if !ok {
 		return BandUnpublished
 	}
@@ -335,6 +335,8 @@ func remainingTimePercent(w Window, now time.Time) (float64, bool) {
 		lim = *w.LimitWindowSeconds
 	} else if w.Name == WindowWeekly {
 		lim = DefaultWeeklyWindowSeconds
+	} else if w.Name == WindowMonthly {
+		lim = DefaultMonthlyWindowSeconds
 	} else if w.Name == WindowSession {
 		lim = DefaultSessionWindowSeconds
 	} else {

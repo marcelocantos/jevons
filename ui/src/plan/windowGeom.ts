@@ -4,6 +4,7 @@
 /** Same window lengths plan_usage.js uses when the API omits limit_window_seconds. */
 export const SESSION_LIMIT_SECONDS = 5 * 60 * 60;
 export const WEEKLY_LIMIT_SECONDS = 7 * 24 * 60 * 60;
+export const MONTHLY_LIMIT_SECONDS = 30 * 24 * 60 * 60;
 
 export type PlanWindow = {
   name?: string;
@@ -27,6 +28,7 @@ export function limitSecondsFor(w: PlanWindow): number | null {
   const n = String(w.name || '').toLowerCase();
   if (n === 'session') return SESSION_LIMIT_SECONDS;
   if (n === 'weekly') return WEEKLY_LIMIT_SECONDS;
+  if (n === 'monthly') return MONTHLY_LIMIT_SECONDS;
   return null;
 }
 

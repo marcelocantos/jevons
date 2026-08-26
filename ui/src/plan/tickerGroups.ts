@@ -97,7 +97,8 @@ function exhaustedZeroWindows(): PlanWindow[] {
 
 function orderWindows(wins: PlanWindow[]): PlanWindow[] {
   return wins.slice().sort((a, b) => {
-    const rank = (n: string) => (n === 'session' ? 0 : n === 'weekly' ? 1 : 2);
+    const rank = (n: string) =>
+      n === 'session' ? 0 : n === 'weekly' ? 1 : n === 'monthly' ? 2 : 3;
     return rank(String(a.name || '')) - rank(String(b.name || ''));
   });
 }

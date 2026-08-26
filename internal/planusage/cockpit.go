@@ -91,7 +91,7 @@ func FormatCockpit(snap Snapshot) string {
 		if IsExhaustedReason(be.Reason) || backendRockBottom(be) {
 			exhausted = append(exhausted, be.Provider)
 		}
-		if w, ok := be.Window(WindowWeekly); ok && w.RemainingPercent != nil {
+		if w, ok := be.PrimaryAllowanceWindow(); ok && w.RemainingPercent != nil {
 			if *w.RemainingPercent > bestRem {
 				bestRem = *w.RemainingPercent
 				bestProv = be.Provider
