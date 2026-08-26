@@ -3,6 +3,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import '../composer/ensureLocalStorage';
 
 export const useDrafts = create<{
   drafts: Record<string, string>;

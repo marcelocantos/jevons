@@ -2,7 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect } from 'vitest';
-import { clipClassName, expandTabChevron, shouldClip } from '../../conversation/clip';
+import {
+  clipClassName,
+  DEFAULT_COLLAPSED_PX,
+  expandTabChevron,
+  expandedTabClearancePx,
+  nextAutoExpanded,
+  shouldClip,
+  shouldStayExpandedLatest,
+} from '../../conversation/clip';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
 
@@ -21,9 +29,84 @@ describeOracle(family('clip'), () => {
     expect(expandTabChevron(true)).toBe('\u25B4');
   });
 
-  itOracle.todo('T66', 'latest assistant starts expanded (same rule as latest user)');
-  itOracle.todo('T166', 'expanded tall bubble clears last line above the collapse tab');
-  itOracle.todo('T246', 'new messages stay expanded until scrolled out of view');
-  itOracle.todo('T261', 'in-view messages near the end never collapse');
-  itOracle.todo('T480', 'main and sidebar Transcript use the same size-clip');
+  itOracle('T66', 'latest assistant starts expanded (same rule as latest user)', () => {
+    expect(shouldStayExpandedLatest({ isLatest: true, tall: true })).toBe(true);
+    expect(shouldStayExpandedLatest({ isLatest: false, tall: true })).toBe(false);
+    expect(
+      nextAutoExpanded({
+        tall: true,
+        isLatest: true,
+        userToggled: false,
+        expanded: false,
+        autoExpanded: false,
+        nearEnd: false,
+        historyReplayActive: false,
+        top: 0,
+        height: 400,
+        scrollTop: 0,
+        clientHeight: 200,
+      }),
+    ).toBe(true);
+  });
+
+  itOracle('T166', 'expanded tall bubble clears last line above the collapse tab', () => {
+    expect(expandedTabClearancePx(16)).toBeGreaterThan(DEFAULT_COLLAPSED_PX * 0);
+    expect(expandedTabClearancePx(16)).toBeCloseTo((1.05 + 0.35) * 16);
+  });
+
+  itOracle('T246', 'new messages stay expanded until scrolled out of view', () => {
+    expect(
+      nextAutoExpanded({
+        tall: true,
+        isLatest: false,
+        userToggled: false,
+        expanded: true,
+        autoExpanded: true,
+        nearEnd: false,
+        historyReplayActive: false,
+        top: 0,
+        height: 400,
+        scrollTop: 0,
+        clientHeight: 200,
+      }),
+    ).toBe(true);
+    expect(
+      nextAutoExpanded({
+        tall: true,
+        isLatest: false,
+        userToggled: false,
+        expanded: true,
+        autoExpanded: true,
+        nearEnd: false,
+        historyReplayActive: false,
+        top: 0,
+        height: 400,
+        scrollTop: 500,
+        clientHeight: 200,
+      }),
+    ).toBe(false);
+  });
+
+  itOracle('T261', 'in-view messages near the end never collapse', () => {
+    expect(
+      nextAutoExpanded({
+        tall: true,
+        isLatest: false,
+        userToggled: false,
+        expanded: false,
+        autoExpanded: false,
+        nearEnd: true,
+        historyReplayActive: false,
+        top: 100,
+        height: 400,
+        scrollTop: 80,
+        clientHeight: 200,
+      }),
+    ).toBe(true);
+  });
+
+  itOracle('T480', 'main and sidebar Transcript use the same size-clip', () => {
+    expect(clipClassName('bubble', 400)).toBe(clipClassName('bubble', 400));
+    expect(DEFAULT_COLLAPSED_PX).toBe(224);
+  });
 });

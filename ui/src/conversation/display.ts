@@ -104,6 +104,17 @@ export function shouldAckPendingSend(
   return false;
 }
 
+/** Owner-filterable overseer ops replies (🎯T238 / T240 / T245). */
+export function isSilentAssistantText(text: string): boolean {
+  const t = String(text ?? '').trim();
+  if (!t) return false;
+  const pref = '[silent]';
+  const lower = t.toLowerCase();
+  if (lower.startsWith(pref)) return true;
+  const head = t.length > 80 ? t.slice(0, 80) : t;
+  return head.split('\n').some((line) => line.trim().toLowerCase().startsWith(pref));
+}
+
 function isProtocolControlFrameText(text: string): boolean {
   const t = text.trim();
   if (t.length < 2 || t[0] !== '{' || t[t.length - 1] !== '}') return false;
@@ -212,7 +223,13 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
   for (const f of frames) {
     const rec = asRec(f);
     if (rec.recorded === 'lossless') continue;
-    if (rec.type === 'tool_result' || rec.type === 'result' || rec.type === 'progress' || rec.type === 'system') {
+    if (
+      rec.type === 'tool_result' ||
+      rec.type === 'result' ||
+      rec.type === 'progress' ||
+      rec.type === 'system' ||
+      rec.type === 'ux_state'
+    ) {
       continue;
     }
     const when = frameWhen(f);
@@ -262,7 +279,7 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
         }
         if (b.type !== 'text' && b.type !== 'output_text') continue;
         const t = String(b.text || '').trim();
-        if (!t) continue;
+        if (!t || isSilentAssistantText(t)) continue;
         flush();
         out.push({ kind: 'assistant', text: t, when, sealed: isSealedAssistant(f) });
       }
@@ -273,7 +290,7 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
       continue;
     }
     const t = proseText(f).trim();
-    if (!t) continue;
+    if (!t || isSilentAssistantText(t)) continue;
     flush();
     out.push({ kind: 'assistant', text: t, when, sealed: isSealedAssistant(f) });
   }

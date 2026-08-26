@@ -19,15 +19,15 @@ describeOracle(family('transcript-geom'), () => {
     expect(pinWriteScrollTop(0)).toBe(0);
   });
 
-  itOracle.todo('T30.2', 'in-flight follow-scroll stays pinned to the true bottom until seal');
-  itOracle.todo('T56', 'only on-screen messages are in the DOM');
-  itOracle.todo('T119', 'history is windowed, recent-first, whole-chunk');
-  itOracle.todo('T119.1', 'reload/reconnect does not scroll-parade to the live end');
-  itOracle.todo('T119.3', 'absolute-position virtual list: O(viewport) nodes');
-  itOracle.todo('T341', 'main chat text does not jiggle from pin/reflow thrash');
-  itOracle.todo('T347', 'reload paints end-first and only materializes viewport plus a few rows');
-  itOracle.todo('T363', 'scroll-up preserves viewport when older content prepends');
-  itOracle.todo('T491', 'connect replay is one virtual-list row per owner turn');
-  itOracle.todo('T494', 'connect shows the replay tail in the viewport, not an empty pane');
-  itOracle.todo('T494.1.2', 'layout is a function of transcript and width, not scroll history');
+  itOracle.skip('T56', 'only on-screen messages are in the DOM', 'census exception: React owns reconciliation');
+  itOracle.skip('T30.2', 'in-flight follow-scroll stays pinned to the true bottom until seal', 'journey is the arbiter (J19)');
+  itOracle.skip('T119', 'history is windowed, recent-first, whole-chunk', 'journey is the arbiter (J19)');
+  itOracle.skip('T119.1', 'reload/reconnect does not scroll-parade to the live end', 'journey is the arbiter (J19)');
+  itOracle.skip('T119.3', 'absolute-position virtual list: O(viewport) nodes', 'census exception family: React owns reconciliation');
+  itOracle.skip('T341', 'main chat text does not jiggle from pin/reflow thrash', 'named residual: pixel-identical chrome');
+  itOracle.skip('T347', 'reload paints end-first and only materializes viewport plus a few rows', 'journey is the arbiter (J19)');
+  itOracle.skip('T363', 'scroll-up preserves viewport when older content prepends', 'journey is the arbiter (J19)');
+  itOracle.skip('T491', 'connect replay is one virtual-list row per owner turn', 'journey is the arbiter (J19)');
+  itOracle.skip('T494', 'connect shows the replay tail in the viewport, not an empty pane', 'journey is the arbiter (J19)');
+  itOracle.skip('T494.1.2', 'layout is a function of transcript and width, not scroll history', 'named residual: pixel-identical chrome');
 });
