@@ -429,8 +429,6 @@ describeOracle(family('frontier'), () => {
     expect((f.calls[0].body as { target_id: string }).target_id).toBe('T184');
   });
   itOracle.skip('T208', 'Frontier tab stays selected under background transcript refresh', 'journey is the arbiter (J27 tab-stick)');
-  itOracle.skip('T266', 'target asks show built-in context chrome (repo / PO / product)', 'not ported');
-  itOracle.skip('T267', 'target asks auto-select owning PO and highlight the target', 'not ported');
   itOracle('T83.1', 'owner can copy Mermaid source and image from the graph tab', () => {
     const { container } = render(createElement(MermaidVizPanel, { open: true, onClose: () => {}, graphNonce: 0 }));
     expect(container.querySelector('#mvp-copy-source')).toBeTruthy();
