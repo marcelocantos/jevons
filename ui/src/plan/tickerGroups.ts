@@ -137,14 +137,27 @@ export function tickerGroups(snap: PlanSnapshot | undefined): TickerGroup[] {
   return out;
 }
 
-export function tickerTitle(groups: TickerGroup[]): string {
-  const lines = ['Plan remaining — hover for rollover and detail'];
+/** InstantTip body (🎯T175 / T390): remaining + rollover, not a native title=. */
+export function tickerTipBody(groups: TickerGroup[]): string {
+  const lines = ['Plan remaining'];
   for (const g of groups) {
     if (!g.available) {
-      lines.push(
-        `${g.provider}: unavailable — ${g.reason || 'no plan-remaining published'}`,
-      );
+      lines.push(`${g.provider}: unavailable — ${g.reason || 'no plan-remaining published'}`);
+      continue;
+    }
+    for (const w of g.windows) {
+      const rem =
+        typeof w.remaining_percent === 'number'
+          ? `${Math.round(w.remaining_percent)}% remaining`
+          : 'remaining unknown';
+      const roll = w.resets_at ? ` · rollover ${w.resets_at}` : '';
+      lines.push(`${g.provider} ${w.name || 'window'}: ${rem}${roll}`);
     }
   }
   return lines.join('\n');
+}
+
+/** @deprecated use tickerTipBody — kept so existing imports compile. */
+export function tickerTitle(groups: TickerGroup[]): string {
+  return tickerTipBody(groups);
 }

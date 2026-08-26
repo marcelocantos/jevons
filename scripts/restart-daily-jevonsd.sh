@@ -441,6 +441,29 @@ kill_port_listeners() {
   fi
 }
 
+ensure_vanilla_ui_agent() {
+  # 🎯T540.4: vanilla is its own LaunchAgent. After a daily bounce the
+  # in-process sidecar is gone (-vanilla-port 0); load/kickstart the
+  # UI-only job so :13706 comes back without a second full daemon.
+  if [[ "$PORT" != "$DAILY_PORT" ]]; then
+    return 0
+  fi
+  local label="com.marcelocantos.jevons-ui-vanilla"
+  local plist="$HOME/Library/LaunchAgents/${label}.plist"
+  local domain="gui/$(id -u)"
+  if [[ ! -f "$plist" ]]; then
+    log "vanilla UI LaunchAgent plist absent; :13706 stays off until make ui-daemon-install"
+    return 0
+  fi
+  if launchctl print "${domain}/${label}" >/dev/null 2>&1; then
+    log "kickstart $label (vanilla :13706)"
+    launchctl kickstart -k "${domain}/${label}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  log "bootstrap $label (vanilla :13706)"
+  launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || true
+}
+
 stop_brew_jevons() {
   # Cellar launchd KeepAlive will reclaim :13705 if brew service is loaded.
   # Stop it whenever brew is present so repo bin/jevonsd owns the daily port.
@@ -475,7 +498,7 @@ start_daemon_detached() {
     die "binary not executable: $BIN"
   fi
 
-  log "starting detached: $BIN -port $PORT -workdir $WORKDIR (log=$LOG)"
+  log "starting detached: $BIN -port $PORT -vanilla-port 0 -workdir $WORKDIR (log=$LOG)"
 
   # 🎯T442: the script exports JEVONS_RESTART_DETACHED=1 / _LOCKED=1 into its
   # own process before the re-execs that honour them. The daemon started here
@@ -496,12 +519,12 @@ start_daemon_detached() {
 
   if command -v setsid >/dev/null 2>&1; then
     # Linux: new session; still wrap with nohup for SIGHUP immunity.
-    nohup setsid "$BIN" -port "$PORT" -workdir "$WORKDIR" \
+    nohup setsid "$BIN" -port "$PORT" -vanilla-port 0 -workdir "$WORKDIR" \
       </dev/null >>"$LOG" 2>&1 &
   else
     # macOS (no setsid in stock userland): nohup + background is enough
     # for agent death survival when the *script* was also invoked under nohup.
-    nohup "$BIN" -port "$PORT" -workdir "$WORKDIR" \
+    nohup "$BIN" -port "$PORT" -vanilla-port 0 -workdir "$WORKDIR" \
       </dev/null >>"$LOG" 2>&1 &
   fi
   local pid=$!
@@ -569,7 +592,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T218 wait out the ${MIN_INTERVAL_SEC}s thrash window rather than skip a changed binary"
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
   log "[dry-run] would: 🎯T392.5 SIGHUP listeners on :$PORT (upgrade exit — in-flight agent turns survive), SIGKILL only if the port is still held after ${STOP_WAIT_SEC}s"
-  log "[dry-run] would: nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG"
+  log "[dry-run] would: nohup/setsid start $BIN -port $PORT -vanilla-port 0 -workdir $WORKDIR >>$LOG"
   log "[dry-run] would: wait for /health 200 and /api/frontier non-404"
   log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-daily-jevonsd.sh >>\$HOME/.jevons/restart-daily.log 2>&1 &"
   exit 0
@@ -701,6 +724,7 @@ fi
 start_daemon_detached
 wait_until_serving
 record_active_identity
+ensure_vanilla_ui_agent
 
 log "OK: daily jevonsd serving on :$PORT (workdir=$WORKDIR)"
 # 🎯T218: stamp successful restart to open the next thrash window.

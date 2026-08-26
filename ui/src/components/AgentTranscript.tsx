@@ -18,6 +18,7 @@ import { displayRows, type DisplayKind, type StepItem } from '../conversation/di
 import { parseAssistantMarkdown } from '../conversation/markdown';
 import { preloadMermaid, renderMermaidIn } from '../conversation/mermaidPaint';
 import { paintUserHTML, userBubbleClass, type TurnOrigin } from '../conversation/paint';
+import { TargetHotspotTips } from './TargetHotspotTips';
 import { StreamingMarkdownBody } from '../conversation/StreamingMarkdownBody';
 import { relTime } from '../relTime';
 import { normalizeDensity, type Density } from '../density';
@@ -416,7 +417,10 @@ function MarkdownBody(props: { text: string; bodyRef: React.RefObject<HTMLDivEle
     void renderMermaidIn(el);
   }, [html, props.bodyRef]);
   return (
-    <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={{ __html: html }} />
+    <>
+      <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={{ __html: html }} />
+      <TargetHotspotTips containerRef={props.bodyRef} html={html} />
+    </>
   );
 }
 
@@ -427,6 +431,9 @@ function UserBody(props: {
 }) {
   const html = paintUserHTML(props.text, props.origin);
   return (
-    <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={{ __html: html }} />
+    <>
+      <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={{ __html: html }} />
+      <TargetHotspotTips containerRef={props.bodyRef} html={html} />
+    </>
   );
 }

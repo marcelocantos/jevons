@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // ReactDistReady reports whether dir looks like a Vite `ui/dist` tree
@@ -34,17 +33,10 @@ func RegisterReactUIRoutes(mux *http.ServeMux, dist string) {
 		noCache(w)
 		files.ServeHTTP(w, r)
 	}))
-	// Vite also emits root files (favicon.svg). API/WS routes registered
-	// after this win on more-specific patterns.
-	mux.HandleFunc("GET /{file}", func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("file")
-		if name == "" || strings.Contains(name, "/") {
-			http.NotFound(w, r)
-			return
-		}
-		p := filepath.Join(dist, name)
-		st, err := os.Stat(p)
-		if err != nil || st.IsDir() {
+	// Named root assets only — GET /{file} conflicts with /mcp (Go ServeMux).
+	mux.HandleFunc("GET /favicon.svg", func(w http.ResponseWriter, r *http.Request) {
+		p := filepath.Join(dist, "favicon.svg")
+		if st, err := os.Stat(p); err != nil || st.IsDir() {
 			http.NotFound(w, r)
 			return
 		}

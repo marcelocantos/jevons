@@ -27,7 +27,7 @@ func RefuseDaily(p int) error {
 		return fmt.Errorf("refusing port %d (daily-driver); use %d or -port 0", DailyPort, DefaultPort)
 	}
 	if p == config.DailyVanillaPort {
-		return fmt.Errorf("refusing port %d (daily vanilla sidecar); use %d or -port 0", config.DailyVanillaPort, DefaultPort)
+		return fmt.Errorf("refusing port %d (daily vanilla sidecar LaunchAgent); use %d or -port 0", config.DailyVanillaPort, DefaultPort)
 	}
 	return nil
 }

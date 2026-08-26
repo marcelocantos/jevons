@@ -7,7 +7,8 @@ import { now } from '../clock';
 import { CompanyMark, companyOfProvider, windowAbbrev } from '../plan/companyMark';
 import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
 import { applyThresholds, formatWindow } from '../plan/pace';
-import { tickerGroups, tickerTitle, type PlanSnapshot } from '../plan/tickerGroups';
+import { InstantTip } from './InstantTip';
+import { tickerGroups, tickerTipBody, type PlanSnapshot } from '../plan/tickerGroups';
 import { pixelFixtureActive, pixelFixturePlanUsage } from '../visual/oldCockpitFixture';
 
 /** Vanilla: 60s once a reading exists; 5s only after a pending long-poll times out. */
@@ -52,59 +53,61 @@ export function PlanUsageBar() {
   const snap = holdLastPlanSnapshot(last.current, incoming);
   last.current = snap;
   const groups = tickerGroups(snap);
-  if (!groups.length) {
-    return (
-      <div id="plan-ticker" title="Plan remaining — hover for rollover and detail">
-        <span className="plan-chip">{!fixture && q.data?.pending ? 'plan usage: waiting for the first reading' : ''}</span>
-      </div>
-    );
-  }
-  return (
-    <div id="plan-ticker" title={tickerTitle(groups)}>
-      {groups.map((g) => (
-        <span
-          key={g.provider}
-          className={
-            'plan-group' +
-            (g.available ? '' : ' plan-unavail') +
-            (g.stale ? ' plan-stale' : '')
-          }
-          data-provider={g.provider}
-          data-company={companyOfProvider(g.provider)}
-        >
-          <span className="plan-icon">
-            <CompanyMark provider={g.provider} />
-          </span>
-          {g.windows.length ? (
-            <span className="plan-box">
-              {g.windows.map((w) => {
-                const painted = formatWindow(w, now());
-                const rem = Number(w.remaining_percent) || 0;
-                const t = painted.remainingTimePercent;
-                const cls = painted.className;
-                return (
-                  <span
-                    key={`${g.provider}-${w.name}`}
-                    className={'plan-win' + (cls ? ' ' + cls : '')}
-                    data-pace={painted.pace || undefined}
-                    data-window={w.name}
-                  >
-                    <span className="plan-track">
-                      <span className="plan-bar" aria-hidden="true">
-                        <span className="plan-bar-fill" style={{ width: rem + '%' }} />
-                      </span>
-                      {t != null ? (
-                        <span className="plan-tri" aria-hidden="true" style={{ left: t + '%' }} />
-                      ) : null}
-                    </span>
-                    <span className="plan-win-label">{windowAbbrev(w.name || '')}</span>
-                  </span>
-                );
-              })}
-            </span>
-          ) : null}
+  const tip = tickerTipBody(groups);
+  const inner = !groups.length ? (
+    <span className="plan-chip">{!fixture && q.data?.pending ? 'plan usage: waiting for the first reading' : ''}</span>
+  ) : (
+    groups.map((g) => (
+      <span
+        key={g.provider}
+        className={
+          'plan-group' +
+          (g.available ? '' : ' plan-unavail') +
+          (g.stale ? ' plan-stale' : '')
+        }
+        data-provider={g.provider}
+        data-company={companyOfProvider(g.provider)}
+      >
+        <span className="plan-icon">
+          <CompanyMark provider={g.provider} />
         </span>
-      ))}
-    </div>
+        {g.windows.length ? (
+          <span className="plan-box">
+            {g.windows.map((w) => {
+              const painted = formatWindow(w, now());
+              const rem = Number(w.remaining_percent) || 0;
+              const t = painted.remainingTimePercent;
+              const cls = painted.className;
+              return (
+                <span
+                  key={`${g.provider}-${w.name}`}
+                  className={'plan-win' + (cls ? ' ' + cls : '')}
+                  data-pace={painted.pace || undefined}
+                  data-window={w.name}
+                >
+                  <span className="plan-track">
+                    <span className="plan-bar" aria-hidden="true">
+                      <span className="plan-bar-fill" style={{ width: rem + '%' }} />
+                    </span>
+                    {t != null ? (
+                      <span className="plan-tri" aria-hidden="true" style={{ left: t + '%' }} />
+                    ) : null}
+                  </span>
+                  <span className="plan-win-label">{windowAbbrev(w.name || '')}</span>
+                </span>
+              );
+            })}
+          </span>
+        ) : null}
+      </span>
+    ))
+  );
+  return (
+    <InstantTip
+      id="plan-ticker"
+      content={<pre className="plan-tip-body" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{tip}</pre>}
+    >
+      {inner}
+    </InstantTip>
   );
 }

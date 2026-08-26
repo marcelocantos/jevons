@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
+import { TargetHotspotTips } from '../components/TargetHotspotTips';
 import { ensureFenceNewlines, parseAssistantMarkdown } from './markdown';
 import { renderMermaidIn } from './mermaidPaint';
 import { createSession, type StreamSession } from './streamingMarkdown';
@@ -39,5 +40,10 @@ export function StreamingMarkdownBody(props: {
     };
   }, []);
 
-  return <div className="msg-body" ref={setRoot} />;
+  return (
+    <>
+      <div className="msg-body" ref={setRoot} />
+      <TargetHotspotTips containerRef={rootRef} html={props.text} />
+    </>
+  );
 }

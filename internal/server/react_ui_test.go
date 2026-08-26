@@ -70,6 +70,8 @@ func TestRegisterReactUIRoutesServesRootAndAssets(t *testing.T) {
 	if recF.Code != http.StatusOK {
 		t.Fatalf("GET /favicon.svg = %d", recF.Code)
 	}
+	// /mcp must still be registerable (GET /{file} conflict took daily down).
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {})
 }
 
 func TestRegisterProductUIRoutesDailyRequiresDist(t *testing.T) {

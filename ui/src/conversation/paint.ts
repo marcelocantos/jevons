@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { renderUserTextWithImages } from '../composer/images';
+import { linkifyTargetText } from '../frontier/targetHotspot';
 import { parseAssistantMarkdown } from './markdown';
 
 /** Wire provenance (🎯T381). Unmarked is the owner — verbatim is the safe default. */
 export type TurnOrigin = 'owner' | 'agent';
 
-const TARGET_TOKEN_RE = /(?:🎯\s*)?(T\d+(?:\.\d+)*)\b/g;
+export { linkifyTargetText } from '../frontier/targetHotspot';
 
 /**
  * Classify a wire event by who spoke it. Anything unmarked is the owner so
@@ -32,33 +33,6 @@ export function bubblePaintsMarkdown(role: string, origin: TurnOrigin): boolean 
 
 export function userBubbleClass(origin: TurnOrigin): string {
   return origin === 'agent' ? 'agent-report' : '';
-}
-
-function escapeText(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function escapeAttr(s: string): string {
-  return escapeText(s).replace(/"/g, '&quot;');
-}
-
-/** Owner / product HTML: 🎯T22 → .target-hotspot (vanilla T326 text path). */
-export function linkifyTargetText(text: string): string {
-  const s = String(text ?? '');
-  if (!s) return s;
-  TARGET_TOKEN_RE.lastIndex = 0;
-  return s.replace(TARGET_TOKEN_RE, (full, id: string) => {
-    const tid = String(id || '').replace(/^t/, 'T');
-    if (!tid) return full;
-    const label = '🎯' + tid;
-    return (
-      '<span class="target-hotspot target-hotspot-finger" data-target-id="' +
-      escapeAttr(tid) +
-      '" role="button" tabindex="0">' +
-      escapeText(label) +
-      '</span>'
-    );
-  });
 }
 
 /**

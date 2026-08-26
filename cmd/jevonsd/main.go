@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -47,6 +48,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/turndepth"
+	"github.com/marcelocantos/jevons/internal/uidaemon"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -59,7 +61,11 @@ import (
 func main() {
 	configPath := flag.String("config", "", "config file (default ~/.jevons/config.yaml; missing file = built-in defaults)")
 	port := flag.Int("port", 13705, "listen port")
-	vanillaPort := flag.Int("vanilla-port", config.DailyVanillaPort, "daily vanilla web/ sidecar (0 = off; only when -port is the daily bind)")
+	vanillaPort := flag.Int("vanilla-port", 0, "opt-in same-process vanilla sidecar (0 = off; 🎯T540.4 LaunchAgent owns :13706)")
+	uiMode := flag.String("ui", "", "empty=full daemon; vanilla=UI-only reference; probe=React surface check (🎯T540.4)")
+	upstream := flag.String("upstream", "127.0.0.1:13705", "vanilla UI-only reverse-proxy target")
+	installUIAgents := flag.Bool("install-ui-agents", false, "write and load the two daily UI LaunchAgents, then exit")
+	uninstallUIAgents := flag.Bool("uninstall-ui-agents", false, "unload the daily UI LaunchAgents, then exit")
 	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 â loopback only; remote devices use the pigeon relay)")
 	relayURL := flag.String("relay", "", "relay URL to register with (e.g. https://carrier-pigeon.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
@@ -108,6 +114,27 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: logLevel,
 	})))
+
+	if *installUIAgents {
+		runInstallUIAgents()
+	}
+	if *uninstallUIAgents {
+		if err := uidaemon.Uninstall(); err != nil {
+			slog.Error("uninstall UI LaunchAgents", "err", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	switch strings.TrimSpace(*uiMode) {
+	case "probe":
+		runUIProbe()
+	case "vanilla":
+		runVanillaUI(*port, *bindAddr, *upstream)
+	case "", "full":
+	default:
+		slog.Error("unknown -ui", "ui", *uiMode)
+		os.Exit(2)
+	}
 
 	// ð¯T282: drop any enclosing agent session's identity before anything
 	// spawns. Started from inside a Claude Code session (make run,
@@ -1410,9 +1437,79 @@ func repoSibling(bin string, elem ...string) string {
 	return dir
 }
 
+func runInstallUIAgents() {
+	bin, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		slog.Error("ui agents: binary path", "err", err)
+		os.Exit(1)
+	}
+	pathEnv, _ := supervise.AgentPATH(exec.LookPath, supervise.RestartTools)
+	spec := uidaemon.Spec{
+		Binary:   bin,
+		StateDir: config.Default().StateDir,
+		PathEnv:  pathEnv,
+	}
+	if err := uidaemon.Install(spec); err != nil {
+		slog.Error("install UI LaunchAgents", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("installed UI LaunchAgents (🎯T540.4)",
+		"react", uidaemon.ReactLabel,
+		"vanilla", uidaemon.VanillaLabel)
+	os.Exit(0)
+}
+
+func runUIProbe() {
+	got := uidaemon.ProbeReact(nil, uidaemon.DailyReactURL())
+	if got.OK {
+		slog.Info("React surface ok (🎯T540.4)", "status", got.Status)
+		os.Exit(0)
+	}
+	slog.Error("React surface failed — invoking restart-daily", "reason", got.Reason)
+	script := repoSibling(os.Args[0], "scripts", "restart-daily-jevonsd.sh")
+	cmd := exec.Command(script)
+	cmd.Dir = repoSibling(os.Args[0])
+	if err := cmd.Start(); err != nil {
+		slog.Error("could not invoke restart-daily", "err", err, "script", script)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+func runVanillaUI(port int, bind, upstream string) {
+	if port == 0 || port == config.DailyPort {
+		port = config.DailyVanillaPort
+	}
+	if bind == "" {
+		bind = "127.0.0.1"
+	}
+	if !strings.Contains(upstream, "://") {
+		upstream = "http://" + upstream
+	}
+	u, err := url.Parse(upstream)
+	if err != nil {
+		slog.Error("vanilla UI upstream", "err", err)
+		os.Exit(1)
+	}
+	webDir := repoSibling(os.Args[0], "web")
+	mux := server.VanillaReferenceMux(webDir, u)
+	addr := fmt.Sprintf("%s:%d", bind, port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		slog.Error("vanilla UI listen", "addr", addr, "err", err)
+		os.Exit(1)
+	}
+	slog.Info("vanilla reference UI (🎯T540.4)", "addr", addr, "upstream", u.String(), "web", webDir)
+	if err := http.Serve(ln, server.GuardCrossSite(mux)); err != nil {
+		slog.Error("vanilla UI failed", "err", err)
+		os.Exit(1)
+	}
+}
+
 // startDailyVanillaSidecar serves the frozen web/ reference on a second
-// port of the same process (🎯T540.2). Bind failure is non-fatal: React
-// on DailyPort is the product path.
+// port of the same process (opt-in; 🎯T540.4 LaunchAgent is the standing
+// vanilla path). Bind failure is non-fatal: React on DailyPort is the
+// product path.
 func startDailyVanillaSidecar(srv *server.Server, mcpSrv *mcpserver.Server, webDir, bind string, port int, enableTLS bool) *http.Server {
 	if port == config.DailyPort {
 		slog.Error("vanilla sidecar port equals daily React port; sidecar disabled", "port", port)

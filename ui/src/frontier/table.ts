@@ -14,10 +14,15 @@ export type FrontierRow = {
   name: string;
   status?: string;
   fanout?: number;
+  value?: number;
+  cost?: number;
   acceptance?: string[];
   context?: string;
   tags?: string[];
+  depends_on?: Array<FrontierDependent | string>;
   dependents?: Array<FrontierDependent | string>;
+  attestation?: string;
+  extra?: Record<string, unknown>;
 };
 
 export type FanoutCell = { text: string; title: string; visible: boolean };
@@ -116,6 +121,52 @@ export function shortName(name: string, maxLen = 48): string {
   return n.slice(0, maxLen - 1) + '…';
 }
 
+export function mermaidNodeId(id: string): string {
+  let safe = String(id || '')
+    .trim()
+    .replace(/[^A-Za-z0-9_]/g, '_');
+  if (!safe) return 'node';
+  if (!/^[A-Za-z_]/.test(safe)) safe = 'n_' + safe;
+  return safe;
+}
+
+function mermaidLabel(id: string, name?: string): string {
+  let label = String(id || '').trim() || '?';
+  let n = name != null ? String(name).trim() : '';
+  if (n) {
+    if (n.length > 28) n = n.slice(0, 27) + '…';
+    label = label + ' · ' + n;
+  }
+  return label.replace(/"/g, "'").replace(/\n/g, ' ');
+}
+
+/** Focus + incoming dependents + outgoing depends_on (🎯T184). */
+export function formatDepMinigraph(row?: Partial<FrontierRow> | null): string {
+  if (!row || !row.id) return '';
+  const focusId = String(row.id).trim();
+  const focusNode = mermaidNodeId(focusId);
+  const depsOn = normalizeDependents(row.depends_on);
+  const dependents = normalizeDependents(row.dependents);
+  const lines = [
+    '```mermaid',
+    'graph LR',
+    '  ' + focusNode + '["' + mermaidLabel(focusId, row.name) + '"]',
+    '  style ' + focusNode + ' stroke-width:2px',
+  ];
+  const declared: Record<string, boolean> = { [focusNode]: true };
+  const ensureNode = (rel: FrontierDependent): string => {
+    const nid = mermaidNodeId(rel.id);
+    if (declared[nid]) return nid;
+    declared[nid] = true;
+    lines.push('  ' + nid + '["' + mermaidLabel(rel.id, rel.name) + '"]');
+    return nid;
+  };
+  for (const d of dependents) lines.push('  ' + ensureNode(d) + ' --> ' + focusNode);
+  for (const d of depsOn) lines.push('  ' + focusNode + ' --> ' + ensureNode(d));
+  lines.push('```');
+  return lines.join('\n');
+}
+
 export function formatTargetCardMarkdown(row?: Partial<FrontierRow> | null): string {
   if (!row || !row.id) return '';
   const id = String(row.id).trim();
@@ -125,9 +176,25 @@ export function formatTargetCardMarkdown(row?: Partial<FrontierRow> | null): str
   if (st) {
     lines.push('', '**Status:** ' + st);
   }
+  const val = row.value != null && Number.isFinite(row.value) ? String(row.value) : '';
+  const cost = row.cost != null && Number.isFinite(row.cost) ? String(row.cost) : '';
+  if (val || cost) {
+    const metrics = [
+      val ? 'value ' + val : '',
+      cost ? 'cost ' + cost : '',
+    ].filter(Boolean);
+    lines.push('', '**Value / cost:** ' + metrics.join(' · '));
+  }
   const tags = normalizeStringList(row.tags);
   if (tags.length > 0) {
     lines.push('', '**Tags:** ' + tags.join(', '));
+  }
+  const depsOn = normalizeDependents(row.depends_on);
+  if (depsOn.length > 0) {
+    lines.push('', '**Depends on** (' + depsOn.length + ')');
+    for (const d of depsOn) {
+      lines.push(d.name ? '- ' + d.id + ' — ' + d.name : '- ' + d.id);
+    }
   }
   const deps = normalizeDependents(row.dependents);
   if (deps.length > 0) {
@@ -144,6 +211,22 @@ export function formatTargetCardMarkdown(row?: Partial<FrontierRow> | null): str
   const ctx = row.context != null ? String(row.context).trim() : '';
   if (ctx) {
     lines.push('', '**Context**', ctx.split(/\n\s*\n/)[0].trim());
+  }
+  const att = row.attestation != null ? String(row.attestation).trim() : '';
+  if (att) {
+    lines.push('', '**Attestation**', att);
+  }
+  const extra = row.extra && typeof row.extra === 'object' ? row.extra : null;
+  if (extra) {
+    const keys = Object.keys(extra).sort();
+    if (keys.length) {
+      lines.push('', '**Other fields**');
+      for (const k of keys) lines.push('- **' + k + ':** ' + String(extra[k]));
+    }
+  }
+  const graph = formatDepMinigraph(row);
+  if (graph) {
+    lines.push('', '**Dependencies**', graph);
   }
   return lines.join('\n');
 }
@@ -168,9 +251,11 @@ export function cardSourceFingerprint(row?: Partial<FrontierRow> | null): string
     name: row.name != null ? String(row.name) : '',
     status: row.status != null ? String(row.status) : '',
     tags: normalizeStringList(row.tags),
+    depends_on: normalizeDependents(row.depends_on),
     dependents: normalizeDependents(row.dependents),
     acceptance: normalizeStringList(row.acceptance),
     context: row.context != null ? String(row.context) : '',
+    attestation: row.attestation != null ? String(row.attestation) : '',
   });
 }
 

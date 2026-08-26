@@ -28,14 +28,16 @@ surfaces, the MCP tools the CEO drives, durable state, and cost governance.
 - **`cmd/jevonsd`** — the daemon. HTTP/WS server, web/React asset serving,
   mTLS device provisioning, cost wiring, CLI flags.
 - **`ui/`** — the **product** cockpit (Vite + React 19, 🎯T540). Daily
-  `:13705` `GET /` serves `ui/dist` (🎯T540.2). Vite HMR on `:5173`
-  (`make ui-dev`) still proxies `/api` `/ws` to daily. This is where
-  owner-visible UI work lands.
-- **`web/`** — **deprecated reference** vanilla cockpit on `:13706`
-  (same daemon, same API/WS). Keep for parity oracles; do not grow
-  product behaviour here. Not deleted (separate target). Dist is not
-  `go:embed` (🎯T360); brew/pristine without `make ui-build` cannot
-  serve daily React.
+  `:13705` `GET /` serves `ui/dist` (🎯T540.2). Supervised by LaunchAgent
+  `com.marcelocantos.jevons-ui` (StartInterval probe — not KeepAlive
+  jevonsd; 🎯T540.4 / T405). `make ui-dev` is opt-in HMR, not a standing
+  agent. This is where owner-visible UI work lands.
+- **`web/`** — **deprecated reference** vanilla cockpit on `:13706`,
+  KeepAlive LaunchAgent `com.marcelocantos.jevons-ui-vanilla` (UI-only:
+  static `web/` + reverse-proxy to `:13705`; no second `~/.jevons`
+  writer). Keep for parity oracles; do not grow product behaviour here.
+  Not deleted (separate target). Dist is not `go:embed` (🎯T360);
+  brew/pristine without `make ui-build` cannot serve daily React.
 - **`ios/Jevon`** — thin client: wraps the daily URL in a WKWebView
   and routes transport over a paired [pigeon](https://github.com/marcelocantos/pigeon)
   QUIC relay (QR pairing artifact → credentials; 🎯T14.1). Daily

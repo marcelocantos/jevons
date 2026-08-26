@@ -27,9 +27,9 @@ make ios          # Regenerate the iOS Xcode project (xcodegen)
 
 ```bash
 make run          # Build and run jevonsd (or: brew services start jevons)
-open http://localhost:13705/   # Daily React cockpit (🎯T540.2)
-open http://localhost:13706/   # Vanilla web/ reference sidecar
-make ui-dev && open http://127.0.0.1:5173/   # Vite HMR against daily
+open http://localhost:13705/   # Daily React (LaunchAgent com.marcelocantos.jevons-ui)
+open http://localhost:13706/   # Vanilla reference (LaunchAgent com.marcelocantos.jevons-ui-vanilla)
+make ui-dev                    # opt-in Vite HMR; not a standing agent
 ```
 
 Product owner-visible UI work lands in `ui/` (Vite + React). `web/` is

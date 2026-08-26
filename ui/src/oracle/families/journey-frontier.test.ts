@@ -12,11 +12,14 @@ const suiteDir = join(dirname(fileURLToPath(import.meta.url)), '../../../../scri
 const src = ['chrome_journeys.go', 'react_paint.js'].map((n) => readFileSync(join(suiteDir, n), 'utf8')).join('\n');
 
 describeOracle(family('journey-frontier'), () => {
-  itOracle(['T131', 'T173', 'T185'], 'J27 requires Frontier tab, headerless table, and Graph opening a large panel', () => {
+  itOracle(['T131', 'T173', 'T175', 'T181', 'T184', 'T185', 'T186', 'T231', 'T271'], 'J27 drives Frontier hover card plus Graph panel', () => {
     expect(src).toMatch(/jFrontierChrome/);
     expect(src).toMatch(/rhs-tab-frontier/);
     expect(src).toMatch(/headerless/);
     expect(src).toMatch(/T185/);
     expect(src).toMatch(/frontier-graph/);
+    expect(src).toMatch(/instant-tip-show/);
+    expect(src).toMatch(/mouse\.move/);
+    expect(src).toMatch(/T271/);
   });
 });

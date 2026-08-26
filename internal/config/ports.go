@@ -12,8 +12,9 @@ import (
 // this port serves the React cockpit from ui/dist.
 const DailyPort = 13705
 
-// DailyVanillaPort is the same-process vanilla web/ sidecar on daily
-// (🎯T540.2). Reference-only; journeys must not bind or adopt it.
+// DailyVanillaPort is the vanilla web/ LaunchAgent (🎯T540.4).
+// Reference-only; journeys must not bind or adopt it. The in-process
+// sidecar is opt-in (`-vanilla-port`) so it cannot fight the agent.
 const DailyVanillaPort = 13706
 
 // JourneyPort is the default Universe B isolate bind (🎯T79 / 🎯T526).

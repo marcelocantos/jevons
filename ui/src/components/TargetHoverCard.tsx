@@ -1,15 +1,16 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-export function TargetHoverCard(props: { markdown: string; visible: boolean; id?: string; name?: string }) {
-  if (!props.visible) return null;
-  return (
-    <aside className="target-hover-card instant-tip instant-tip-card">
-      <div className="target-hover-id">{props.id || ''}</div>
-      {props.name ? <div>{props.name}</div> : null}
-      <div className="target-hover-md" style={{ whiteSpace: 'pre-wrap' }}>
-        {props.markdown}
-      </div>
-    </aside>
-  );
+import { useLayoutEffect, useRef } from 'react';
+import { parseAssistantMarkdown } from '../conversation/markdown';
+import { renderMermaidIn } from '../conversation/mermaidPaint';
+
+/** Inner body of a frontier InstantTip card (🎯T181 / T184): HTML + mermaid SVG. */
+export function TargetHoverCard(props: { markdown: string; id?: string; name?: string }) {
+  const html = parseAssistantMarkdown(props.markdown);
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    void renderMermaidIn(ref.current);
+  }, [html]);
+  return <div className="target-hover-md" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />;
 }

@@ -11,44 +11,56 @@ import {
   type FrontierRow,
   type HoverCardCache,
 } from '../frontier/table';
+import { InstantTip } from './InstantTip';
 import { TargetHoverCard } from './TargetHoverCard';
 
 export type { FrontierRow };
 
+function FanCell(props: { row: FrontierRow }) {
+  const fan = formatFanout(props.row.fanout, props.row.id, props.row.dependents);
+  return <td className={fan.visible ? 'ft-fanout' : 'ft-fanout ft-fanout-empty'}>{fan.text}</td>;
+}
+
+function FrontierRowView(props: { row: FrontierRow; cache: HoverCardCache }) {
+  const [nameEl, setNameEl] = useState<HTMLTableCellElement | null>(null);
+  const md = hoverCardMarkdown(props.cache, props.row);
+  return (
+    <tr>
+      <td className="ft-id">
+        <InstantTip
+          groupHosts={() => [nameEl]}
+          clampSelectors={['#frontier-table', '#frontier-body']}
+          content={<TargetHoverCard markdown={md} id={props.row.id} name={props.row.name} />}
+        >
+          {'🎯' + props.row.id}
+        </InstantTip>
+      </td>
+      <td className="ft-name" ref={setNameEl}>
+        {shortName(props.row.name, 72)}
+      </td>
+      <td className="ft-status">{formatStatus(props.row.status)}</td>
+      <FanCell row={props.row} />
+      <td className="ft-play">
+        <button type="button" className="ft-play-btn" aria-label="start">
+          {'\u25B6'}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
 export function FrontierTable(props: { rows: FrontierRow[] }) {
-  const [hover, setHover] = useState<FrontierRow | null>(null);
   const cacheRef = useRef<HoverCardCache>({});
   useEffect(() => {
     expireCardCache(cacheRef.current, props.rows);
   }, [props.rows]);
-  const card = hover ? hoverCardMarkdown(cacheRef.current, hover) : '';
   return (
-    <>
-      <table id="frontier-table" aria-label="Bullseye frontier">
-        <tbody>
-          {props.rows.map((r) => {
-            const fan = formatFanout(r.fanout, r.id, r.dependents);
-            return (
-              <tr
-                key={r.id}
-                onMouseEnter={() => setHover(r)}
-                onMouseLeave={() => setHover(null)}
-              >
-                <td className="ft-id has-instant-tip">{'🎯' + r.id}</td>
-                <td className="ft-name has-instant-tip">{shortName(r.name, 72)}</td>
-                <td className="ft-status has-instant-tip">{formatStatus(r.status)}</td>
-                <td className={fan.visible ? 'ft-fanout has-instant-tip' : 'ft-fanout ft-fanout-empty'}>
-                  {fan.text}
-                </td>
-                <td className="ft-play">
-                  <button type="button" className="ft-play-btn" aria-label="start">{'\u25B6'}</button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <TargetHoverCard markdown={card} visible={!!hover} />
-    </>
+    <table id="frontier-table" aria-label="Bullseye frontier">
+      <tbody>
+        {props.rows.map((r) => (
+          <FrontierRowView key={r.id} row={r} cache={cacheRef.current} />
+        ))}
+      </tbody>
+    </table>
   );
 }

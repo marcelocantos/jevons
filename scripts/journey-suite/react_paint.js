@@ -154,8 +154,11 @@ async function scenarioFoldMd(page) {
   if (rawFence) fail('T59', 'mermaid source leaked as text — renderer did not draw the diagram');
 }
 
+const TINY_PNG_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
 async function scenarioComposer(page) {
-  // T126 Home/End, T123 empty height vs send, T478 one-control-tall after send.
+  // T126 Home/End, T123 empty height vs send, T76 clipboard paste → chip / [image:].
   await requireIds(page, ['input', 'send', 'input-bar'], 'T123');
   const box = page.locator('#input');
   await box.click();
@@ -189,6 +192,23 @@ async function scenarioComposer(page) {
     fail('T123', 'empty composer height must match the send button (vanilla one-control-tall); input=' + empty.input + ' send=' + empty.send);
   }
   void heights;
+  const pasted = await page.evaluate((b64) => {
+    const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const file = new File([bin], 't76.png', { type: 'image/png' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    const el = document.getElementById('input');
+    if (!el) return 'no-input';
+    const ev = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'clipboardData', { value: dt });
+    el.dispatchEvent(ev);
+    return 'dispatched';
+  }, TINY_PNG_B64);
+  if (pasted !== 'dispatched') fail('T76', 'could not dispatch image paste on #input');
+  const chip = await page.waitForFunction(() => {
+    return !!document.querySelector('#composer-images img, #composer-images .img-chip');
+  }, null, { timeout: 15000 }).then(() => true).catch(() => false);
+  if (!chip) fail('T76', 'pasted image must become a composer chip (POST /api/images → #composer-images)');
 }
 
 async function scenarioFleet(page) {
@@ -237,6 +257,31 @@ async function scenarioFrontier(page) {
   await page.locator('#frontier-graph').click();
   const graph = await page.locator('#mermaid-viz-panel').count();
   if (graph < 1) fail('T185', 'Graph control must open #mermaid-viz-panel (vanilla near-full-page graph)');
+  const host = page.locator('#frontier-table .ft-id [data-instant-tip-host], #frontier-table .ft-id').first();
+  if ((await host.count()) < 1) fail('T181', 'Frontier table has no ID cell to hover');
+  await host.hover();
+  const tip = page.locator('.instant-tip-show');
+  const shown = await tip.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
+  if (!shown) fail('T175', 'ID hover must show InstantTip (.instant-tip-show), not a native title=');
+  const body = await tip.innerText();
+  if (!/Status|Acceptance|🎯|Dependencies|mermaid/i.test(body)) {
+    fail('T181', 'hover card must be a rich markdown target card; saw ' + JSON.stringify(body.slice(0, 160)));
+  }
+  const hostBox = await host.boundingBox();
+  const tipBox = await tip.boundingBox();
+  if (!hostBox || !tipBox) fail('T271', 'host and card must have boxes so the corridor can be crossed');
+  const gapX = tipBox.x + tipBox.width < hostBox.x
+    ? (tipBox.x + tipBox.width + hostBox.x) / 2
+    : hostBox.x + hostBox.width < tipBox.x
+      ? (hostBox.x + hostBox.width + tipBox.x) / 2
+      : hostBox.x + hostBox.width / 2;
+  const gapY = hostBox.y + hostBox.height / 2;
+  await page.mouse.move(gapX, gapY, { steps: 8 });
+  const still = await page.locator('.instant-tip-show').count();
+  if (still < 1) fail('T271', 'card must stay open while the pointer crosses the host→card corridor');
+  await page.mouse.move(gapX, Math.max(4, hostBox.y - 48), { steps: 6 });
+  const gone = await page.locator('.instant-tip-show').count();
+  if (gone > 0) fail('T271', 'card must dismiss immediately when the pointer leaves the row band vertically');
 }
 
 async function scenarioTicker(page) {
@@ -250,6 +295,15 @@ async function scenarioTicker(page) {
   await requireIds(page, ['rhs-width-handle'], 'T248');
   const handle = await page.locator('#rhs-width-handle').boundingBox();
   if (!handle) fail('T248', 'owner must be able to drag-resize RHS width (#rhs-width-handle)');
+  const title = await ticker.getAttribute('title');
+  if (title) fail('T175', '#plan-ticker must not use a native title=; InstantTip is the hover');
+  await ticker.hover();
+  const tipOk = await page.locator('.instant-tip-show').waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
+  if (!tipOk) fail('T175', 'plan-usage hover must show InstantTip overlay, not native title');
+  const tipText = await page.locator('.instant-tip-show').innerText();
+  if (!/remaining|rollover/i.test(tipText)) {
+    fail('T390', 'InstantTip must name remaining / rollover; saw ' + JSON.stringify(tipText.slice(0, 160)));
+  }
 }
 
 (async () => {

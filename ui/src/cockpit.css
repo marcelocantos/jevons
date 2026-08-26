@@ -1209,7 +1209,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 
 /* 🎯T175: instant custom tips (fixed layer; 0ms show — not native title=) */
 /* 🎯T186: sticky hover — tip receives pointer events while shown */
-/* 🎯T231: ONE hit rect = AABB(card ∪ id+name); leave → dismiss grace=0. No bridge. */
+/* 🎯T271: hit region = card ∪ hosts ∪ horizontal corridor; leave → dismiss grace=0. */
 .instant-tip {
   display: none;
   position: fixed;

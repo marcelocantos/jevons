@@ -18,6 +18,7 @@ import { AgentInteraction } from './components/AgentInteraction';
 import { AgentTree, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
 import { FrontierTable, type FrontierRow } from './components/FrontierTable';
+import { FrontierRowsContext } from './frontier/rows';
 import { PlanUsageBar } from './components/PlanUsageBar';
 import { MermaidVizPanel } from './components/MermaidVizPanel';
 import { applyTheme, persistTheme, readThemePref, type ThemePref } from './theme';
@@ -148,7 +149,6 @@ function Cockpit() {
         status: t.status,
       }));
     },
-    enabled: tab === 'frontier',
     refetchInterval: 8000,
   });
   const fixture = pixelFixtureActive();
@@ -226,7 +226,7 @@ function Cockpit() {
   }, []);
 
   return (
-    <>
+    <FrontierRowsContext.Provider value={frontierRows}>
       <div id="status">
         <span className={connected ? 'dot on' : 'dot off'} id="dot" />
         <span id="status-text">{connected ? 'connected' : 'connecting'}</span>
@@ -333,7 +333,7 @@ function Cockpit() {
         </div>
       </div>
       <MermaidVizPanel open={graphOpen} graphNonce={graphNonce} onClose={() => setGraphOpen(false)} />
-    </>
+    </FrontierRowsContext.Provider>
   );
 }
 

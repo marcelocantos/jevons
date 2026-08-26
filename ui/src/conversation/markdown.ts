@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { marked } from 'marked';
+import { linkifyTargetIDsInHTML } from '../frontier/targetHotspot';
 
 const SMUSHED_OPEN_FENCE = /([^\n\r])(```[a-zA-Z0-9_+-]*)(?=\r?\n)/g;
 
@@ -20,5 +21,6 @@ export function ensureFenceNewlines(text: string | null | undefined): string {
  */
 export function parseAssistantMarkdown(text: string): string {
   const raw = ensureFenceNewlines(text);
-  return marked.parse(raw == null ? '' : raw, { async: false }) as string;
+  const html = marked.parse(raw == null ? '' : raw, { async: false }) as string;
+  return linkifyTargetIDsInHTML(html);
 }

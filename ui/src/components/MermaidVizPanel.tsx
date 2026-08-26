@@ -57,6 +57,15 @@ export function MermaidVizPanel(props: { open: boolean; onClose: () => void; gra
     void renderMermaidIn(body);
   }, [props.open, bodyHtml]);
 
+  useEffect(() => {
+    if (!props.open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') props.onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [props.open, props.onClose]);
+
   return (
     <div
       id="mermaid-viz-panel"
