@@ -21,6 +21,7 @@ import { paintUserHTML, userBubbleClass, type TurnOrigin } from '../conversation
 import { TargetHotspotTips } from './TargetHotspotTips';
 import { StreamingMarkdownBody } from '../conversation/StreamingMarkdownBody';
 import { relTime } from '../relTime';
+import { absTimeTitle } from '../absTime';
 import { normalizeDensity, type Density } from '../density';
 import { COMFORTABLE_ROW_GAP_PX, DEFAULT_ROW_GAP_PX, measureTranscriptRow } from '../transcript/rowLayout';
 import { distanceFromEnd, followAfterScroll, pinWriteScrollTop } from '../transcript/followPin';
@@ -381,7 +382,7 @@ function ClippedBubble(props: {
         <UserBody text={props.text} origin={props.origin || 'owner'} bodyRef={bodyRef} />
       )}
       {props.when != null ? (
-        <div className="msg-time" data-ts={props.when}>
+        <div className="msg-time" data-ts={props.when} title={absTimeTitle(props.when)}>
           {relTime(props.when)}
         </div>
       ) : null}

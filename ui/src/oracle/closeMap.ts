@@ -54,7 +54,7 @@ export const CLOSE: readonly CloseAssignment[] = [
   { id: 'T87', pocket: 'transcript', kind: 'skip', reason: 'mention-only covers-list — classified to transcript pocket; J19 live fail does not name this id yet' },
   { id: 'T88', pocket: 'composer', kind: 'skip', reason: 'mention-only covers-list — classified to composer pocket; J24 live fail does not name this id yet' },
   { id: 'T89', pocket: 'transcript', kind: 'skip', reason: 'mention-only covers-list — classified to transcript pocket; J19 live fail does not name this id yet' },
-  { id: 'T91', pocket: 'transcript', kind: 'skip', reason: 'not ported: relTime is always-visible, not InstantTip' },
+  { id: 'T91', pocket: 'transcript', kind: 'hermetic', reason: 'passing hermetic itOracle in family file' },
   { id: 'T93', pocket: 'aside', kind: 'skip', reason: 'mention-only covers-list — classified to aside pocket; J26 live fail does not name this id yet' },
   { id: 'T94', pocket: 'transcript', kind: 'skip', reason: 'mention-only covers-list — classified to transcript pocket; J19 live fail does not name this id yet' },
   { id: 'T95', pocket: 'aside', kind: 'skip', reason: 'mention-only covers-list — classified to aside pocket; J26 live fail does not name this id yet' },

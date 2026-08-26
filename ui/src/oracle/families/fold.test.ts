@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { absTimeTitle } from '../../absTime';
 import { displayRows, isSilentAssistantText, stepsLabel } from '../../conversation/display';
 import { isSealedAssistant } from '../../conversation/stream';
 import { family } from '../catalog';
@@ -101,7 +105,15 @@ describeOracle(family('fold'), () => {
     expect(rows[1]).toMatchObject({ kind: 'assistant', text: 'done', sealed: true });
   });
 
-  itOracle.skip('T91', 'each transcript item shows an accurate timestamp on hover', 'not ported: relTime is always-visible, not InstantTip');
+  itOracle('T91', 'each transcript item shows an accurate timestamp on hover', () => {
+    const ms = Date.UTC(2026, 7, 26, 13, 41, 59);
+    const want = new Date(ms).toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    expect(absTimeTitle(ms)).toBe(want);
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../components/AgentTranscript.tsx'), 'utf8');
+    expect(src).toMatch(/className="msg-time"[^>]*title=\{absTimeTitle\(props\.when\)\}/);
+  });
   itOracle.skip('T122', 'activity-strip tooltips wrap instead of overflowing', 'not ported: InstantTip-class hover');
   itOracle.skip('T233', 'compacted activity nuggets expose hover detail', 'not ported: InstantTip-class hover');
 });
