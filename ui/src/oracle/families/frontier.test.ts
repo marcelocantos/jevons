@@ -8,6 +8,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FrontierTable } from '../../components/FrontierTable';
+import { ClippedBubble } from '../../components/AgentTranscript';
+import { SPEAKER_GT, SPEAKER_LT, chromeModel, extractTargetIDs, looksLikeTargetAsk, planTargetAskFocus } from '../../frontier/targetAsk';
+import { TargetAskContext } from '../../frontier/targetAskContext';
 import { HIDE_GRACE_MS, nativeTitleForbidden } from '../../components/InstantTip';
 import { MermaidVizPanel } from '../../components/MermaidVizPanel';
 import { TargetHotspotTips } from '../../components/TargetHotspotTips';
@@ -320,6 +323,79 @@ describeOracle(family('frontier'), () => {
     fireEvent.click(container.querySelector('.ft-play-btn')!);
     expect(f.calls[0].url).toBe('/api/agents/squz-po/send');
     expect(playKickoffRequest({ ...sample, engaged: true, engaged_agents: ['x'] }).blocked).toBe(true);
+  });
+
+  itOracle('T266', 'target-ask Jevons bubble carries a repo context tab; owner bubbles never do', () => {
+    const agents = [
+      { name: 'jevons', purpose: 'overseer' },
+      { name: 'jevons-po', purpose: 'po', workdir: '/Users/x/work/github.com/marcelocantos/jevons' },
+      { name: 'jv-t184-card', purpose: 'work', parent: 'jevons-po', target_id: 'T184', workdir: '/Users/x/work/github.com/marcelocantos/jevons' },
+    ];
+    const ask = 'Needs owner decision on 🎯T184 — accept the card layout?';
+    expect(extractTargetIDs(ask)).toEqual(['T184']);
+    expect(looksLikeTargetAsk(ask)).toBe(true);
+    const m = chromeModel({ text: ask, role: 'assistant', agents });
+    expect(m.show).toBe(true);
+    expect(m.repo).toBe('marcelocantos/jevons');
+    expect(m.po).toBe('jevons-po');
+    // T314: the tab is repo chrome alone — no "· PO" tail, no synthesized speaker.
+    expect(m.label).toBe('marcelocantos/jevons');
+    expect(m.speakerText).toBe('');
+    expect(chromeModel({ text: ask, role: 'assistant', agents, author: 'jv-t184-card' }).label).toBe(SPEAKER_LT + 'jv-t184-card' + SPEAKER_GT + ' marcelocantos/jevons');
+    // T306: owner-authored never paints, even with ids, cues and ambient workdir.
+    expect(chromeModel({ text: ask, role: 'user', agents, workdir: agents[1].workdir, force: true }).show).toBe(false);
+    // Painted path: sealed Jevons bubble → .msg-context-tab inside .msg-has-context-tab.
+    const bubble = (kind: 'assistant' | 'user', text: string) =>
+      createElement(
+        TargetAskContext.Provider,
+        { value: { agents, selectedAgent: 'jevons-po' } },
+        createElement(ClippedBubble, { index: 0, kind, text, start: 0, sealed: true, when: 1 }),
+      );
+    const { container } = render(bubble('assistant', ask));
+    const tab = container.querySelector<HTMLElement>('.msg.msg-has-context-tab .msg-context-tab')!;
+    expect(tab).toBeTruthy();
+    expect(tab.dataset.targetId).toBe('T184');
+    expect(tab.dataset.repo).toBe('marcelocantos/jevons');
+    expect(tab.querySelector('.ctx-context')!.textContent).toBe('marcelocantos/jevons');
+    expect(tab.querySelector('.ctx-speaker')).toBeNull();
+    const owner = render(bubble('user', ask));
+    expect(owner.container.querySelector('.msg-context-tab')).toBeNull();
+    const plain = render(bubble('assistant', 'Landed the card; tests green.'));
+    expect(plain.container.querySelector('.msg-context-tab')).toBeNull();
+  });
+
+  itOracle('T267', 'live target-ask selects the owning PO and highlights the Frontier row', () => {
+    const agents = [
+      { name: 'jevons', purpose: 'overseer' },
+      { name: 'squz-po', purpose: 'po', parent: 'jevons' },
+      { name: 'sq-worker', purpose: 'work', parent: 'squz-po', target_id: 'T184' },
+    ];
+    const plan = planTargetAskFocus({ text: 'Decision packet for 🎯T184 — needs owner.', agents });
+    expect(plan).toEqual({ targetId: 'T184', highlightId: 'T184', po: 'squz-po', tab: 'frontier', selectPO: true });
+    expect(planTargetAskFocus({ text: '__TARGET_ASK__:T27.2|minicades-po' })!.po).toBe('minicades-po');
+    expect(planTargetAskFocus({ text: 'Mentions 🎯T184 in passing.' })).toBeNull();
+    expect(planTargetAskFocus({ text: 'needs owner on 🎯T999', agents })!.po).toBe('jevons-po');
+    // Host hook fires once for the latest sealed live bubble, never during replay.
+    const fired: string[] = [];
+    const host = { agents, selectedAgent: 'jevons-po', onTargetAsk: (t: string) => fired.push(t) };
+    const el = (extra: object) =>
+      createElement(
+        TargetAskContext.Provider,
+        { value: host },
+        createElement(ClippedBubble, { index: 0, kind: 'assistant', text: 'needs owner on 🎯T184', start: 0, sealed: true, isLatest: true, ...extra }),
+      );
+    render(el({ historyReplayActive: true }));
+    expect(fired).toEqual([]);
+    const live = render(el({ historyReplayActive: false }));
+    live.rerender(el({ historyReplayActive: false }));
+    expect(fired).toEqual(['needs owner on 🎯T184']);
+    // Frontier row emphasis + a11y/data hooks the vanilla journey reads.
+    const { container } = render(createElement(FrontierTable, { rows: [sample, { ...sample, id: 'T181', name: 'Other' }], highlightId: '🎯T184' }));
+    const hl = container.querySelectorAll('tr.ft-highlight');
+    expect(hl.length).toBe(1);
+    expect(hl[0].getAttribute('data-target-id')).toBe('T184');
+    expect(hl[0].getAttribute('data-frontier-highlight')).toBe('1');
+    expect(hl[0].getAttribute('aria-selected')).toBe('true');
   });
 
   itOracle('T278', 'play kickoff shows spinning submitted chrome immediately', () => {

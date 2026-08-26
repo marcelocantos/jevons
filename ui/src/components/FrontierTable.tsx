@@ -25,6 +25,7 @@ import {
   type PlayRow,
 } from '../frontier/play';
 import { InstantTip } from './InstantTip';
+import { rowMatchesHighlight } from '../frontier/targetAsk';
 import { TargetHoverCard } from './TargetHoverCard';
 
 export type { FrontierRow };
@@ -69,14 +70,30 @@ function FrontierRowView(props: {
   cache: HoverCardCache;
   agents: PlayAgent[];
   selectedAgent: string;
+  highlighted: boolean;
   onPlay: (row: PlayRow) => void;
   onStop: (row: PlayRow) => void;
 }) {
   const [nameEl, setNameEl] = useState<HTMLTableCellElement | null>(null);
   const md = hoverCardMarkdown(props.cache, props.row);
   const engaged = props.row.engaged ? props.row.engaged_agents || [] : [];
+  // 🎯T267: the target-ask row is emphasized and scrolled into view.
+  const trRef = useRef<HTMLTableRowElement>(null);
+  useEffect(() => {
+    if (!props.highlighted) return;
+    const el = trRef.current;
+    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+  }, [props.highlighted]);
+  const trClass = [engaged.length ? 'ft-engaged' : '', props.highlighted ? 'ft-highlight' : ''].filter(Boolean).join(' ');
   return (
-    <tr className={engaged.length ? 'ft-engaged' : undefined} data-engaged-agents={engaged.length ? engaged.join(',') : undefined}>
+    <tr
+      ref={trRef}
+      className={trClass || undefined}
+      data-target-id={props.row.id}
+      data-engaged-agents={engaged.length ? engaged.join(',') : undefined}
+      data-frontier-highlight={props.highlighted ? '1' : undefined}
+      aria-selected={props.highlighted ? true : undefined}
+    >
       <td className="ft-id">
         <InstantTip
           groupHosts={() => [nameEl]}
@@ -100,6 +117,8 @@ export function FrontierTable(props: {
   rows: FrontierRow[];
   agents?: PlayAgent[];
   selectedAgent?: string;
+  /** 🎯T267: target id to emphasize (target-ask focus). */
+  highlightId?: string;
   ledgerKey?: string;
   fetcher?: FrontierFetch;
   onNotice?: (text: string) => void;
@@ -165,6 +184,7 @@ export function FrontierTable(props: {
             cache={cacheRef.current}
             agents={agents}
             selectedAgent={selectedAgent}
+            highlighted={rowMatchesHighlight(r.id, props.highlightId)}
             onPlay={onPlay}
             onStop={onStop}
           />

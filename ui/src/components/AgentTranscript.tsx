@@ -4,6 +4,8 @@
 import { useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ConversationMeta } from '../conversation/useConversation';
+import { chromeModel } from '../frontier/targetAsk';
+import { selectedWorkdir, useTargetAskHost } from '../frontier/targetAskContext';
 import {
   clipClassName,
   expandTabChevron,
@@ -296,7 +298,7 @@ export function AgentTranscript(props: {
   );
 }
 
-function ClippedBubble(props: {
+export function ClippedBubble(props: {
   index: number;
   kind: DisplayKind;
   text: string;
@@ -306,6 +308,8 @@ function ClippedBubble(props: {
   origin?: TurnOrigin;
   start: number;
   measureRef?: (el: Element | null) => void;
+  isLatest?: boolean;
+  historyReplayActive?: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [fullH, setFullH] = useState(0);
@@ -316,6 +320,26 @@ function ClippedBubble(props: {
     const h = el.scrollHeight;
     setFullH((prev) => (prev === h ? prev : h));
   }, [props.text]);
+  // 🎯T266: speaker/context tab on a sealed Jevons target-ask (T306: never on
+  // an owner bubble; streaming bubbles wait for the seal, as vanilla does).
+  const askHost = useTargetAskHost();
+  const chromeSealed = props.kind === 'assistant' && props.sealed === true;
+  const chrome = useMemo(
+    () =>
+      chromeSealed
+        ? chromeModel({ text: props.text, role: 'assistant', agents: askHost.agents, workdir: selectedWorkdir(askHost) })
+        : null,
+    [chromeSealed, props.text, askHost],
+  );
+  // 🎯T267: a live sealed ask selects the owning PO + highlights the row.
+  // History/soft-reconnect replay must not steal fleet selection.
+  const onTargetAsk = askHost.onTargetAsk;
+  const askFired = useRef(false);
+  useEffect(() => {
+    if (!chromeSealed || !props.isLatest || props.historyReplayActive || askFired.current) return;
+    askFired.current = true;
+    onTargetAsk?.(props.text);
+  }, [chromeSealed, props.isLatest, props.historyReplayActive, props.text, onTargetAsk]);
   const tall = props.kind !== 'steps' && shouldClip(fullH);
   const pos = {
     position: 'absolute' as const,
@@ -358,7 +382,8 @@ function ClippedBubble(props: {
   }
   const roleClass = props.kind === 'user' ? 'user' : 'jevons';
   const originClass = props.kind === 'user' ? userBubbleClass(props.origin || 'owner') : '';
-  const base = ['msg', roleClass, originClass].filter(Boolean).join(' ');
+  const hasChrome = !!(chrome && chrome.show);
+  const base = ['msg', roleClass, originClass, hasChrome ? 'msg-has-context-tab' : ''].filter(Boolean).join(' ');
   const cls = expanded ? base : clipClassName(base, fullH);
   return (
     <div
@@ -381,6 +406,26 @@ function ClippedBubble(props: {
       ) : (
         <UserBody text={props.text} origin={props.origin || 'owner'} bodyRef={bodyRef} />
       )}
+      {hasChrome && chrome ? (
+        <div
+          className="msg-context-tab"
+          role="note"
+          title={chrome.title || chrome.label}
+          aria-label={chrome.title || chrome.label || 'Target context'}
+          data-target-id={chrome.targetId || undefined}
+          data-repo={chrome.repo || undefined}
+          data-po={chrome.po || undefined}
+          data-product={chrome.product || undefined}
+        >
+          {chrome.speakerText ? <span className="ctx-speaker">{chrome.speakerText}</span> : null}
+          {chrome.speakerText && chrome.contextText ? (
+            <span className="ctx-gap" aria-hidden="true">
+              {'\u00a0'}
+            </span>
+          ) : null}
+          {chrome.contextText ? <span className="ctx-context">{chrome.contextText}</span> : null}
+        </div>
+      ) : null}
       {props.when != null ? (
         <div className="msg-time" data-ts={props.when} title={absTimeTitle(props.when)}>
           {relTime(props.when)}
