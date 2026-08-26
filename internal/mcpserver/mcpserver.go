@@ -85,10 +85,15 @@ type Server struct {
 	// startMu serializes Launch/wire on jevons_agent_start. It must be
 	// released before any ACP prompt delivery (🎯T541): holding it across
 	// session/prompt confirmation hangs MCP so agent_list/send/kill/event_push
-	// time out. Never take startMu under mu.
+	// time out. Launch itself is also deadline-bounded (🎯T541.2) so a hung
+	// session/load cannot hold this mutex for minutes and deafen the PO.
+	// Never take startMu under mu.
 	startMu sync.Mutex
 	// launchAgentFn overrides registry.Launch (hermetic 🎯T541).
 	launchAgentFn func(name string) (*claudia.Agent, error)
+	// launchDeadline overrides defaultLaunchDeadline (🎯T541.2). Tests set a
+	// short value so a hung Launch cannot sit for the product timeout.
+	launchDeadline time.Duration
 	// cursorSubmit / cursorObserve / cursorMaterializeWait are 🎯T541 seams.
 	cursorSubmit          func(name, text string) error
 	cursorObserve         func(name string) (store, bound bool)

@@ -677,7 +677,7 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 		return fmt.Errorf("register: %w", err)
 	}
 	s.startMu.Lock()
-	proc, err := s.launchAgent(name)
+	proc, err := s.launchAgentBounded(context.Background(), name)
 	if err != nil {
 		s.startMu.Unlock()
 		return fmt.Errorf("launch: %w", err)

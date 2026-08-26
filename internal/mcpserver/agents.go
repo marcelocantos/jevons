@@ -210,7 +210,7 @@ func (s *Server) notifyFleetHealth(line string) {
 	}
 }
 
-func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	workdir, _ := args["workdir"].(string)
@@ -400,7 +400,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 	}
 
 	s.startMu.Lock()
-	proc, err := s.launchAgent(name)
+	proc, err := s.launchAgentBounded(ctx, name)
 	if err != nil {
 		s.startMu.Unlock()
 		life["err"] = err.Error()

@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -27,6 +28,12 @@ const cursorRemintSeed = "[jevons] materialize ACP session"
 
 const defaultCursorMaterializeWait = 2 * time.Second
 
+// defaultLaunchDeadline is the hard cap on registry.Launch while startMu
+// is held. Cursor session/load that will ever succeed does so in seconds;
+// a remint that sits on "existing conversation; refusing to mint" must
+// return an MCP error so the PO turn can finish (🎯T541.2).
+const defaultLaunchDeadline = 30 * time.Second
+
 // deferStartPrompt reports whether this provider must use start-then-send
 // instead of waiting for turn confirmation on the start RPC.
 func deferStartPrompt(p claudia.Provider) bool {
@@ -48,6 +55,44 @@ func (s *Server) launchAgent(name string) (*claudia.Agent, error) {
 		return nil, fmt.Errorf("no agent registry")
 	}
 	return s.registry.Launch(name)
+}
+
+func (s *Server) launchWait() time.Duration {
+	if s != nil && s.launchDeadline > 0 {
+		return s.launchDeadline
+	}
+	return defaultLaunchDeadline
+}
+
+// launchAgentBounded runs Launch under a hard deadline so a hung
+// session/load cannot hold startMu (and the MCP tools/call) forever.
+// The in-flight Launch goroutine is abandoned on timeout — leftover
+// cursor-agent adopt is 🎯T541.1, not this target.
+func (s *Server) launchAgentBounded(ctx context.Context, name string) (*claudia.Agent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	wait := s.launchWait()
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+
+	type outcome struct {
+		proc *claudia.Agent
+		err  error
+	}
+	ch := make(chan outcome, 1)
+	go func() {
+		proc, err := s.launchAgent(name)
+		ch <- outcome{proc, err}
+	}()
+	select {
+	case out := <-ch:
+		return out.proc, out.err
+	case <-ctx.Done():
+		slog.Warn("agent launch deadline",
+			"name", name, "deadline", wait, "err", ctx.Err())
+		return nil, fmt.Errorf("launch timed out after %s (ACP session/load hung) — start mutex released (🎯T541.2)", wait)
+	}
 }
 
 // startMutexHeld reports whether startMu is currently locked. Tests use
@@ -121,10 +166,9 @@ func (s *Server) composeStartBrief(name, prompt string) string {
 	if s == nil {
 		return strings.TrimSpace(prompt)
 	}
-	s.mu.Lock()
-	if s.fleetBriefed == nil {
-		s.fleetBriefed = map[string]bool{}
-	}
+	// roleDisplay / withIdentity take s.mu — do not hold it across them
+	// (that deadlock hung TestT541FinishCursorStartReapsMetaOnly and
+	// deafens jevons-po on a successful Cursor remint).
 	roleBody := ""
 	if s.registry != nil {
 		if d := s.registry.Def(name); d != nil {
@@ -133,6 +177,10 @@ func (s *Server) composeStartBrief(name, prompt string) string {
 				roleBody = def.Body
 			}
 		}
+	}
+	s.mu.Lock()
+	if s.fleetBriefed == nil {
+		s.fleetBriefed = map[string]bool{}
 	}
 	text, _ := EnsureFleetBriefWithRole(s.fleetBriefed, name, prompt, roleBody)
 	s.mu.Unlock()
