@@ -3,12 +3,14 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { renderMermaidIn } from '../conversation/mermaidPaint';
+import { copyImageStatus, copyMermaidImage, copyMermaidSource, svgMarkupFrom } from '../conversation/mermaidClipboard';
 
 /** Vanilla #mermaid-viz-panel (🎯T83 / T185). Graph opens the unachieved ledger. */
 
 export function MermaidVizPanel(props: { open: boolean; onClose: () => void; graphNonce: number }) {
   const [status, setStatus] = useState('');
   const [bodyHtml, setBodyHtml] = useState('');
+  const [src, setSrc] = useState('');
 
   const loadGraph = useCallback(async () => {
     setStatus('Loading unachieved dependency graph…');
@@ -31,6 +33,7 @@ export function MermaidVizPanel(props: { open: boolean; onClose: () => void; gra
         const j = JSON.parse(text) as { mermaid?: string; source?: string };
         src = String(j.mermaid || j.source || '');
       }
+      setSrc(src);
       const fence = src.includes('```') ? src : '```mermaid\n' + src + '\n```';
       const marked = await import('../conversation/markdown');
       setBodyHtml(marked.parseAssistantMarkdown(fence));
@@ -45,6 +48,23 @@ export function MermaidVizPanel(props: { open: boolean; onClose: () => void; gra
       );
     }
   }, []);
+
+  const onCopySource = useCallback(async () => {
+    try {
+      await copyMermaidSource(src);
+      setStatus('Source copied');
+    } catch (err) {
+      setStatus('Copy failed: ' + String(err instanceof Error ? err.message : err));
+    }
+  }, [src]);
+  const onCopyImage = useCallback(async () => {
+    try {
+      const r = await copyMermaidImage(src, svgMarkupFrom(document.getElementById('mvp-body')));
+      setStatus(copyImageStatus(r.mode));
+    } catch (err) {
+      setStatus('Copy failed: ' + String(err instanceof Error ? err.message : err));
+    }
+  }, [src]);
 
   useEffect(() => {
     if (!props.open || !props.graphNonce) return;
@@ -79,6 +99,13 @@ export function MermaidVizPanel(props: { open: boolean; onClose: () => void; gra
         <span className="mvp-title" id="mvp-title">
           Unachieved graph
         </span>
+        {/* 🎯T83.1: copy source / image controls */}
+        <button type="button" id="mvp-copy-source" className="mermaid-action" data-action="copy-source" title="Copy Mermaid source" disabled={!src} onClick={onCopySource}>
+          Copy source
+        </button>
+        <button type="button" id="mvp-copy-image" className="mermaid-action" data-action="copy-image" title="Copy diagram image (PNG + source when supported)" disabled={!src} onClick={onCopyImage}>
+          Copy image
+        </button>
         <button type="button" id="mvp-close" title="Close panel" onClick={props.onClose}>
           Close
         </button>

@@ -49,7 +49,7 @@ export const CLOSE: readonly CloseAssignment[] = [
   { id: 'T81', pocket: 'fleet', kind: 'skip', reason: 'mention-only covers-list — classified to fleet pocket; J25 live fail does not name this id yet' },
   { id: 'T82', pocket: 'fleet', kind: 'skip', reason: 'mention-only covers-list — classified to fleet pocket; J25 live fail does not name this id yet' },
   { id: 'T83', pocket: 'ticker', kind: 'skip', reason: 'mention-only covers-list — classified to ticker pocket; J28 live fail does not name this id yet' },
-  { id: 'T83.1', pocket: 'ticker', kind: 'skip', reason: 'not ported: copy Mermaid source/image' },
+  { id: 'T83.1', pocket: 'ticker', kind: 'hermetic', reason: 'passing hermetic itOracle in family file' },
   { id: 'T84', pocket: 'fleet', kind: 'skip', reason: 'mention-only covers-list — classified to fleet pocket; J25 live fail does not name this id yet' },
   { id: 'T87', pocket: 'transcript', kind: 'skip', reason: 'mention-only covers-list — classified to transcript pocket; J19 live fail does not name this id yet' },
   { id: 'T88', pocket: 'composer', kind: 'skip', reason: 'mention-only covers-list — classified to composer pocket; J24 live fail does not name this id yet' },
