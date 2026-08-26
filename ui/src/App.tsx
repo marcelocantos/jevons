@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import {
   Outlet,
@@ -34,6 +34,8 @@ import {
   type RhsLayoutState,
 } from './layout/rhsLayout';
 import { mergeAgentChrome } from './plan/modelPrefix';
+import { planTargetAskFocus } from './frontier/targetAsk';
+import { TargetAskContext, type TargetAskHost } from './frontier/targetAskContext';
 import { useCockpitKeys } from './keys/useCockpitKeys';
 import {
   pixelFixtureActive,
@@ -162,6 +164,21 @@ function Cockpit() {
       ? agentsQ.data
       : [{ name: 'jevons' }, { name: 'jevons-po' }];
   const frontierRows = fixture ? pixelFixtureFrontier() : frontierQ.data || [];
+  // 🎯T267: live target-ask → select owning PO (T253 rebinds Frontier) + highlight row.
+  const [frontierHighlightId, setFrontierHighlightId] = useState('');
+  const askHost = useMemo<TargetAskHost>(
+    () => ({
+      agents,
+      selectedAgent: fixture ? '' : agent,
+      onTargetAsk: (text: string) => {
+        const plan = planTargetAskFocus({ text, agents, selectedAgent: agent });
+        if (!plan) return;
+        setFrontierHighlightId(plan.highlightId);
+        navigate({ search: { agent: plan.po, tab: plan.tab } });
+      },
+    }),
+    [agents, agent, fixture, navigate],
+  );
   const [theme, setTheme] = useState<ThemePref>('system');
   const [layout, setLayout] = useState<RhsLayoutState>(() => {
     if (typeof window === 'undefined') {
@@ -226,6 +243,7 @@ function Cockpit() {
 
   return (
     <FrontierRowsContext.Provider value={frontierRows}>
+    <TargetAskContext.Provider value={askHost}>
       <div id="status">
         <span className={connected ? 'dot on' : 'dot off'} id="dot" />
         <span id="status-text">{connected ? 'connected' : 'connecting'}</span>
@@ -339,7 +357,7 @@ function Cockpit() {
                 )
               }
             >
-              <FrontierTable rows={frontierRows} agents={agents} selectedAgent={fixture ? '' : agent} />
+              <FrontierTable rows={frontierRows} agents={agents} selectedAgent={fixture ? '' : agent} highlightId={frontierHighlightId} />
             </SidebarPanel>
           </div>
           <div id="activity-header" style={{ marginTop: 0 }}>
@@ -349,6 +367,7 @@ function Cockpit() {
         </div>
       </div>
       <MermaidVizPanel open={graphOpen} graphNonce={graphNonce} onClose={() => setGraphOpen(false)} />
+    </TargetAskContext.Provider>
     </FrontierRowsContext.Provider>
   );
 }
