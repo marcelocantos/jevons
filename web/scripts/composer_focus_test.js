@@ -380,33 +380,39 @@ test('T366: Shift+Tab is the documented reverse — also toggles the pair', func
   assert.strictEqual(fwd.target, 'sidebar');
 });
 
-test('T366: hidden sidebar composer does not claim Tab (no trap)', function () {
+test('T549: hidden sidebar composer claims Tab and stays on main (no chrome walk)', function () {
   // Composer wrapper without `visible` = collapsed / no agent selected.
   const ctx = visibleCtx({ sidebarComposerEl: mkWrap(['cw-composer']) });
   const r = CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
-  assert.strictEqual(r.target, null);
-  assert.strictEqual(r.didFocus, false);
-  assert.strictEqual(r.preventDefault, false, 'must leave normal focus order alone');
-  assert.strictEqual(r.reason, 'sidebar-unavailable');
+  assert.strictEqual(r.target, 'main');
+  assert.strictEqual(r.didFocus, true);
+  assert.strictEqual(r.preventDefault, true, 'must not leave Tab to document order');
+  assert.strictEqual(r.reason, 'stay-main');
+  assert.strictEqual(ctx.mainEl.focused, 1);
   assert.strictEqual(ctx.sidebarEl.focused, 0);
 });
 
-test('T366: inactive Transcript pane does not claim Tab', function () {
+test('T549: inactive Transcript pane claims Tab and stays on main', function () {
   const ctx = visibleCtx({ sidebarPaneEl: mkWrap(['rhs-tab-pane']) });
   const r = CF.applyComposerTabCycle({ key: 'Tab' }, ctx);
-  assert.strictEqual(r.target, null);
-  assert.strictEqual(r.preventDefault, false);
+  assert.strictEqual(r.target, 'main');
+  assert.strictEqual(r.preventDefault, true);
+  assert.strictEqual(r.reason, 'stay-main');
 });
 
-test('T366: disabled or missing sidebar input does not claim Tab', function () {
+test('T549: disabled or missing sidebar input stays on main when Tab from main', function () {
   const disabled = visibleCtx();
   disabled.sidebarEl.disabled = true;
-  assert.strictEqual(CF.applyComposerTabCycle({ key: 'Tab' }, disabled).target, null);
+  const dis = CF.applyComposerTabCycle({ key: 'Tab' }, disabled);
+  assert.strictEqual(dis.target, 'main');
+  assert.strictEqual(dis.preventDefault, true);
+  assert.strictEqual(dis.reason, 'stay-main');
 
   const absent = visibleCtx({ sidebarEl: null });
   const r = CF.applyComposerTabCycle({ key: 'Tab' }, absent);
-  assert.strictEqual(r.target, null);
-  assert.strictEqual(r.preventDefault, false);
+  assert.strictEqual(r.target, 'main');
+  assert.strictEqual(r.preventDefault, true);
+  assert.strictEqual(r.reason, 'stay-main');
 });
 
 test('T366: focus outside both boxes is left to the browser', function () {

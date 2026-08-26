@@ -22,7 +22,7 @@ describe('planComposerTabCycle', () => {
     expect(p.target).toBeNull();
   });
 
-  it('claims Tab and stays on main when sidebar composer is hidden (T547)', () => {
+  it('claims Tab and stays on main when sidebar composer is hidden (T549)', () => {
     const p = planComposerTabCycle({ key: 'Tab' }, { active: 'main', sidebarVisible: false });
     expect(p.preventDefault).toBe(true);
     expect(p.target).toBe('main');

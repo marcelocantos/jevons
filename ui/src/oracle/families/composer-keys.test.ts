@@ -24,7 +24,7 @@ describeOracle(family('composer-keys'), () => {
     expect(p.target).toBeNull();
   });
 
-  itOracle('T547', 'Tab never advances to theme/send/voice/jump/resize when sidebar composer is hidden', () => {
+  itOracle('T549', 'Tab never advances to theme/send/voice/jump/resize when sidebar composer is hidden', () => {
     const stay = planComposerTabCycle({ key: 'Tab' }, { active: 'main', sidebarVisible: false });
     expect(stay.preventDefault).toBe(true);
     expect(stay.target).toBe('main');

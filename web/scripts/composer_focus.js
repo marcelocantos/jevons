@@ -13,9 +13,10 @@
 // document keydown + focusComposer() call sites in index.html.
 // 🎯T153: aggressive return-to-composer after pointer chrome (send, expand
 // tab, route-switch, aside dismiss) — separate from the `/` hotkey.
-// 🎯T366: Tab cycles the two message boxes (main #input ↔ sidebar
+// 🎯T366 / 🎯T549: Tab cycles the two message boxes (main #input ↔ sidebar
 // #agent-inspect-input) when the sidebar composer is visible; when it is
-// hidden the chord is not claimed, so normal focus order is untouched.
+// hidden Tab is still claimed on the main box so document order cannot walk
+// theme/send/voice/jump/resize chrome (T547 residual).
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -132,18 +133,17 @@
   // forward and reverse land on the same partner, so the reverse chord is
   // the documented way back rather than a third state.
   //
-  // The cycle is claimed only when focus already sits in one of the two
-  // message boxes AND the partner can take focus. Anywhere else — and any
-  // time the sidebar composer is hidden, collapsed, or disabled — the plan
-  // is null and the caller leaves the browser's own focus order alone. That
-  // is what keeps a missing sidebar from trapping Tab.
+  // The cycle is claimed whenever focus already sits in one of the two message
+  // boxes. When the sidebar partner is not focusable, Tab on the main box
+  // stays on main (preventDefault) so chrome is never walked. Focus outside
+  // both boxes is left to the browser.
 
   const TAB_CYCLE_HINT = 'Tab switches between the main and sidebar message boxes';
   const TAB_CYCLE_DOC =
     'With the sidebar Transcript composer visible, Tab moves focus from the main ' +
     'message box to the sidebar message box; Tab (or Shift+Tab) moves it back. ' +
-    'When the sidebar composer is hidden the chord is not claimed and Tab keeps ' +
-    'its normal document focus order.';
+    'When the sidebar composer is hidden, Tab on the main box stays there and ' +
+    'does not advance to cockpit chrome.';
 
   // Tab with no Meta/Ctrl/Alt. Shift is allowed (documented reverse).
   function isComposerTabChord(key, mods) {
@@ -214,7 +214,11 @@
       });
 
     if (main && active === main) {
-      if (!sideOk) return none('sidebar-unavailable');
+      // T549: already in main — claim Tab even when the sidebar partner is
+      // hidden, so document order cannot walk theme/send/voice/jump/resize.
+      if (!sideOk) {
+        return { target: 'main', focusEl: main, preventDefault: true, reason: 'stay-main' };
+      }
       return { target: 'sidebar', focusEl: side, preventDefault: true, reason: 'to-sidebar' };
     }
     if (side && active === side) {

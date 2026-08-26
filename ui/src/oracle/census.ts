@@ -282,6 +282,7 @@ export const CENSUS: readonly CensusRow[] = [
   { id: "T363", kind: "visible", surface: "transcript", name: "Transcript scroll-up preserves viewport when older content prepends (no jump/stutter)", journeys: ["connect"], families: ["fold", "transcript-geom"] },
   { id: "T365", kind: "visible", surface: "aside", name: "Target asides show 🎯 chrome (not 💡 light bulb)", journeys: ["aside"], families: ["aside-sidebar"] },
   { id: "T366", kind: "visible", surface: "composer", name: "Tab cycles focus between main and sidebar composers when sidebar visible", journeys: ["composer"], families: ["composer-keys", "composer-chrome"] },
+  { id: "T549", kind: "visible", surface: "composer", name: "Tab never walks cockpit chrome — only the two message boxes", journeys: ["composer"], families: ["composer-keys", "composer-chrome"] },
   { id: "T367", kind: "visible", surface: "aside", name: "Sidebar messages persist across reload and daemon reboot like main chat", journeys: ["aside"], families: ["aside-sidebar"] },
   { id: "T368", kind: "visible", surface: "composer", name: "Composer prefix commands still open when message starts with image markers", journeys: ["composer"], families: ["composer-keys", "composer-chrome"] },
   { id: "T369", kind: "visible", surface: "transcript", name: "Structured design-choice UX in chat (not raw markdown tables)", journeys: ["connect"], families: ["fold", "transcript-geom"] },
