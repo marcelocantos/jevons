@@ -264,8 +264,35 @@ async function scenarioFrontier(page) {
   const shown = await tip.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
   if (!shown) fail('T175', 'ID hover must show InstantTip (.instant-tip-show), not a native title=');
   const body = await tip.innerText();
-  if (!/Status|Acceptance|🎯|Dependencies|mermaid/i.test(body)) {
-    fail('T181', 'hover card must be a rich markdown target card; saw ' + JSON.stringify(body.slice(0, 160)));
+  const frontier = await page.evaluate(async () => {
+    const r = await fetch('/api/frontier');
+    if (!r.ok) return [];
+    const data = await r.json();
+    return Array.isArray(data.targets) ? data.targets : [];
+  });
+  const hostText = ((await host.innerText()) || '').replace(/^🎯/, '').trim();
+  const row = (frontier || []).find((t) => String((t && t.id) || '') === hostText) || {};
+  const required = [];
+  if (row.status) required.push('Status');
+  if (row.value != null || row.cost != null) required.push('Value / cost');
+  if (Array.isArray(row.tags) && row.tags.length) required.push('Tags');
+  if (Array.isArray(row.depends_on) && row.depends_on.length) required.push('Depends on');
+  if (Array.isArray(row.dependents) && row.dependents.length) required.push('Dependents');
+  if (Array.isArray(row.acceptance) && row.acceptance.length) required.push('Acceptance');
+  const missing = required.filter((sec) => body.indexOf(sec) < 0);
+  if (missing.length || !/Status|🎯/.test(body)) {
+    fail(
+      'T181',
+      'hover card must paint T184 semantic sections from the API row (missing ' +
+        JSON.stringify(missing) +
+        '); saw ' +
+        JSON.stringify(body.slice(0, 240)),
+    );
+  }
+  if (required.some((s) => s === 'Value / cost' || s === 'Tags' || s === 'Acceptance')) {
+    if (!/Value \/ cost|Tags|Depends on|Acceptance/.test(body)) {
+      fail('T181', 'Status+Dependencies+🎯 alone is not a rich card; saw ' + JSON.stringify(body.slice(0, 160)));
+    }
   }
   const hostBox = await host.boundingBox();
   const tipBox = await tip.boundingBox();

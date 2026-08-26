@@ -103,6 +103,17 @@ describe('pre-React UI census', () => {
     expect(missing).toEqual([]);
   });
 
+  it('hover-card content oracles bind toFrontierRows, not a richer fixture than the mapper', () => {
+    const frontier = readFileSync(join(here, 'families/frontier.test.ts'), 'utf8');
+    for (const id of ['T181', 'T184', 'T326', 'T168']) {
+      expect(frontier, id + ' must call toFrontierRows').toMatch(/toFrontierRows/);
+      expect(frontier, id + ' must appear as an itOracle').toMatch(new RegExp("itOracle\\(('" + id + "'|\\[[^\\]]*" + id + ')'));
+    }
+    const app = readFileSync(join(here, '../App.tsx'), 'utf8');
+    expect(app).toMatch(/toFrontierRows/);
+    expect(app).not.toMatch(/id: t\.id \|\| ''/);
+  });
+
   it('catalog still has a families/ file per row', () => {
     const files = new Set(readdirSync(join(here, 'families')));
     for (const f of CATALOG) {

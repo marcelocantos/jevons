@@ -96,6 +96,60 @@ function normalizeStringList(raw: unknown): string[] {
   return raw.map((x) => String(x ?? '').trim()).filter(Boolean);
 }
 
+function asFiniteNumber(v: unknown): number | undefined {
+  if (v == null || v === '') return undefined;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function extraRecord(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  return raw as Record<string, unknown>;
+}
+
+/** Product GET /api/frontier → rows. App.tsx must not map to {id,name,status} only (🎯T540.6). */
+export function toFrontierRow(raw: unknown): FrontierRow | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const t = raw as Record<string, unknown>;
+  const id = String(t.id ?? '').trim();
+  if (!id) return null;
+  const row: FrontierRow = {
+    id,
+    name: String(t.name ?? ''),
+  };
+  if (t.status != null) row.status = String(t.status);
+  const fanout = asFiniteNumber(t.fanout);
+  if (fanout != null) row.fanout = fanout;
+  const value = asFiniteNumber(t.value);
+  if (value != null) row.value = value;
+  const cost = asFiniteNumber(t.cost);
+  if (cost != null) row.cost = cost;
+  if (Array.isArray(t.acceptance)) row.acceptance = normalizeStringList(t.acceptance);
+  if (t.context != null) row.context = String(t.context);
+  if (Array.isArray(t.tags)) row.tags = normalizeStringList(t.tags);
+  if (Array.isArray(t.depends_on)) row.depends_on = t.depends_on as FrontierRow['depends_on'];
+  if (Array.isArray(t.dependents)) row.dependents = t.dependents as FrontierRow['dependents'];
+  if (t.attestation != null) row.attestation = String(t.attestation);
+  const extra = extraRecord(t.extra);
+  if (extra) row.extra = extra;
+  return row;
+}
+
+export function toFrontierRows(data: unknown): FrontierRow[] {
+  let list: unknown[] = [];
+  if (Array.isArray(data)) list = data;
+  else if (data && typeof data === 'object') {
+    const targets = (data as { targets?: unknown }).targets;
+    if (Array.isArray(targets)) list = targets;
+  }
+  const out: FrontierRow[] = [];
+  for (const t of list) {
+    const row = toFrontierRow(t);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
 export function formatFanout(
   n?: number,
   id?: string,

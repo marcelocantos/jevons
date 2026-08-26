@@ -16,6 +16,15 @@ happens to exist. Do not accept a renamed class, a `data-*` stand-in, a
 stub control, or a missing pocket because "that is what React ships
 today."
 
+Referent for *paint* is frozen vanilla on `:13706`. Referent for *data*
+is the live API payload (`GET /api/frontier`, plan-usage, agents). A
+passing `itOracle('Tid')` is not T540.3 coverage. API-backed chrome
+(frontier card, chat T326 hotspots) must go through a named product
+function the oracle imports (`toFrontierRows`). Source-grep of
+`parseAssistantMarkdown` is not enough. Journey family files that only
+`expect(src).toMatch(...)` are mention-only — skip them with
+"journey is the arbiter" and let the live `fail('Tid')` be the arbiter.
+
 These tests are a **gap map**, not a regression net. The premise is that
 the React migration is incomplete and in places incorrect. A red suite
 that names the retired contract is the product. A green suite that only

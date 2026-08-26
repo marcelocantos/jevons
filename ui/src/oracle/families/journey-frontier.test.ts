@@ -1,25 +1,13 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
 
-const suiteDir = join(dirname(fileURLToPath(import.meta.url)), '../../../../scripts/journey-suite');
-const src = ['chrome_journeys.go', 'react_paint.js'].map((n) => readFileSync(join(suiteDir, n), 'utf8')).join('\n');
-
 describeOracle(family('journey-frontier'), () => {
-  itOracle(['T131', 'T173', 'T175', 'T181', 'T184', 'T185', 'T186', 'T231', 'T271'], 'J27 drives Frontier hover card plus Graph panel', () => {
-    expect(src).toMatch(/jFrontierChrome/);
-    expect(src).toMatch(/rhs-tab-frontier/);
-    expect(src).toMatch(/headerless/);
-    expect(src).toMatch(/T185/);
-    expect(src).toMatch(/frontier-graph/);
-    expect(src).toMatch(/instant-tip-show/);
-    expect(src).toMatch(/mouse\.move/);
-    expect(src).toMatch(/T271/);
-  });
+  itOracle.skip(
+    ['T131', 'T173', 'T175', 'T181', 'T184', 'T185', 'T186', 'T231', 'T271'],
+    'J27 drives Frontier hover card plus Graph panel',
+    'journey is the arbiter (J27 live fail) — source-grep of react_paint.js is mention-only',
+  );
 });

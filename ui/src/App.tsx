@@ -19,6 +19,7 @@ import { AgentTree, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
 import { FrontierTable, type FrontierRow } from './components/FrontierTable';
 import { FrontierRowsContext } from './frontier/rows';
+import { toFrontierRows } from './frontier/table';
 import { PlanUsageBar } from './components/PlanUsageBar';
 import { MermaidVizPanel } from './components/MermaidVizPanel';
 import { applyTheme, persistTheme, readThemePref, type ThemePref } from './theme';
@@ -141,13 +142,7 @@ function Cockpit() {
     queryFn: async () => {
       const r = await fetch('/api/frontier');
       if (!r.ok) return [] as FrontierRow[];
-      const data = await r.json();
-      const targets = Array.isArray(data?.targets) ? data.targets : [];
-      return targets.map((t: { id?: string; name?: string; status?: string }) => ({
-        id: t.id || '',
-        name: t.name || '',
-        status: t.status,
-      }));
+      return toFrontierRows(await r.json());
     },
     refetchInterval: 8000,
   });

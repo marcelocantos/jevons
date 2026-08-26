@@ -21,6 +21,7 @@ import {
   formatStatus,
   formatTargetCardMarkdown,
   hoverCardMarkdown,
+  toFrontierRows,
   type FrontierRow,
   type HoverCardCache,
 } from '../../frontier/table';
@@ -41,6 +42,40 @@ const sample: FrontierRow = {
   attestation: 'SHA abc1234 + green oracles',
   extra: { owner: 'jevons-po' },
 };
+
+/** GET /api/frontier shape — T181/T184/T326 must paint through toFrontierRows, not this object directly. */
+const apiFrontierPayload = {
+  targets: [
+    {
+      id: sample.id,
+      name: sample.name,
+      status: sample.status,
+      value: sample.value,
+      cost: sample.cost,
+      acceptance: sample.acceptance,
+      context: sample.context,
+      tags: sample.tags,
+      depends_on: sample.depends_on,
+      dependents: sample.dependents,
+      attestation: sample.attestation,
+      extra: sample.extra,
+    },
+  ],
+};
+
+function cardSectionsFromMapper(data: unknown = apiFrontierPayload): { rows: FrontierRow[]; md: string } {
+  const rows = toFrontierRows(data);
+  return { rows, md: formatTargetCardMarkdown(rows[0]) };
+}
+
+function expectFullSemanticCard(text: string): void {
+  expect(text).toMatch(/Status/);
+  expect(text).toMatch(/Value \/ cost/);
+  expect(text).toMatch(/Tags/);
+  expect(text).toMatch(/Depends on/);
+  expect(text).toMatch(/Dependents/);
+  expect(text).toMatch(/Acceptance/);
+}
 
 function shownTips(container: HTMLElement): Element[] {
   return [...container.querySelectorAll('.instant-tip-show')];
@@ -101,27 +136,32 @@ describeOracle(family('frontier'), () => {
   });
 
   itOracle('T181', 'ID/name hover is a rich markdown target card', () => {
-    const { container } = render(createElement(FrontierTable, { rows: [sample] }));
+    const { rows, md } = cardSectionsFromMapper();
+    expectFullSemanticCard(md);
+    const { container } = render(createElement(FrontierTable, { rows }));
     const idCell = container.querySelector('.ft-id [data-instant-tip-host]');
     expect(idCell).toBeTruthy();
     expect(nativeTitleForbidden(container.querySelector('.ft-id'))).toBe(true);
     fireEvent.pointerEnter(idCell!);
     const tip = container.querySelector('.instant-tip-show');
-    expect(tip?.textContent || '').toMatch(/Status/);
-    expect(tip?.textContent || '').toMatch(/Acceptance/);
+    expectFullSemanticCard(tip?.textContent || '');
     expect(tip?.textContent || '').toMatch(/T184/);
   });
 
   itOracle('T184', 'hover card is a full semantic card with mermaid minigraph', () => {
-    const md = formatTargetCardMarkdown(sample);
-    expect(md).toMatch(/\*\*Status:\*\*/);
-    expect(md).toMatch(/Value \/ cost/);
+    const { rows, md } = cardSectionsFromMapper();
+    expectFullSemanticCard(md);
     expect(md).toMatch(/```mermaid/);
     expect(md).toMatch(/graph LR/);
-    expect(formatDepMinigraph(sample)).toMatch(/T184|T184_/);
-    const { container } = render(createElement(FrontierTable, { rows: [sample] }));
-    fireEvent.pointerEnter(container.querySelector('.ft-name')!);
+    expect(formatDepMinigraph(rows[0])).toMatch(/T184|T184_/);
+    const stripped = toFrontierRows({
+      targets: [{ id: 'T184', name: sample.name, status: sample.status }],
+    });
+    expect(formatTargetCardMarkdown(stripped[0])).not.toMatch(/Value \/ cost/);
+    const { container } = render(createElement(FrontierTable, { rows }));
+    fireEvent.pointerEnter(container.querySelector('.ft-id [data-instant-tip-host]')!);
     const tip = container.querySelector('.instant-tip-show');
+    expectFullSemanticCard(tip?.textContent || '');
     expect(tip?.querySelector('strong, p, em')).toBeTruthy();
     expect(tip?.querySelector('.language-mermaid, .mermaid-diagram, code')).toBeTruthy();
     expect(tip?.textContent || '').toMatch(/Dependencies|T181|mermaid|graph LR/);
@@ -181,13 +221,14 @@ describeOracle(family('frontier'), () => {
   itOracle('T326', 'chat 🎯Tn hotspots use the same InstantTip frontier-card chrome', () => {
     expect(linkifyTargetIDsInHTML('<p>see 🎯T184</p>')).toMatch(/target-hotspot/);
     expect(linkifyTargetIDsInHTML('<code>T184</code>')).not.toMatch(/target-hotspot/);
-    const { container } = render(createElement(HotspotProbe, { text: 'see 🎯T184 please', rows: [sample] }));
+    const { rows } = cardSectionsFromMapper();
+    const { container } = render(createElement(HotspotProbe, { text: 'see 🎯T184 please', rows }));
     const spot = container.querySelector('.target-hotspot');
     expect(spot).toBeTruthy();
     fireEvent.pointerEnter(spot!);
     const tip = container.querySelector('.instant-tip-show');
     expect(tip).toBeTruthy();
-    expect(tip?.textContent || '').toMatch(/T184|Acceptance|Status/);
+    expectFullSemanticCard(tip?.textContent || '');
   });
 
   itOracle('T189', 'Escape closes the Frontier Graph panel', () => {
@@ -248,5 +289,10 @@ describeOracle(family('frontier'), () => {
       'utf8',
     );
     expect(app).toMatch(/fetch\('\/api\/frontier'\)/);
+    expect(app).toMatch(/toFrontierRows/);
+    expect(app).not.toMatch(/id: t\.id \|\| ''/);
+    expect(toFrontierRows({ targets: [{ id: 'T168', name: 'x', status: 'identified', acceptance: ['wired'] }] })[0].acceptance).toEqual([
+      'wired',
+    ]);
   });
 });
