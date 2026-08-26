@@ -37,27 +37,27 @@ func (s *Server) ResearchAgent() *research.Agent {
 }
 
 func (s *Server) registerResearchTools() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_research_cycle",
 			mcp.WithDescription("Run one ambient research cycle now (🎯T356). context: explore recent work across repos, the frontier, the eventlog and sessions. feed: poll subscribed news feeds and fold new items in. Findings land in durable versioned notes — prior conclusions are superseded explicitly, never overwritten. A cycle that finds nothing new writes no revision and sends no brief."),
 			mcp.WithString("mode", mcp.Description("context (default) | feed | both")),
 		),
 		s.handleResearchCycle,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_research_list",
 			mcp.WithDescription("List durable research notes (🎯T356): topic, revision count, last update, and the markdown path for each. This is the listable surface for root/PO — read one with jevons_research_read."),
 		),
 		s.handleResearchList,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_research_read",
 			mcp.WithDescription("Read one research note (🎯T356) as markdown: current findings with provenance, superseded conclusions, and revision history."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Note id or topic from jevons_research_list (e.g. repo-jevons or repo/jevons)")),
 		),
 		s.handleResearchRead,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_research_configure",
 			mcp.WithDescription("Retune the ambient research cycle (🎯T356): cadence, lookback, delivery budget, and feed subscriptions. Feeds are explicit — the agent fetches exactly the subscribed URLs and never crawls out of them; a host outside allowed_hosts is never fetched."),
 			mcp.WithBoolean("enabled", mcp.Description("Enable or disable the standing cycle.")),
@@ -84,7 +84,7 @@ func (s *Server) registerResearchTools() {
 		),
 		s.handleResearchConfigure,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_research_status",
 			mcp.WithDescription("Show the ambient research cycle's config, run record, note count, and per-feed poll cursors (🎯T356)."),
 		),

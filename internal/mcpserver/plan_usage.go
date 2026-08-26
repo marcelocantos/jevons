@@ -19,7 +19,7 @@ func (s *Server) SetPlanUsageSource(snapshot func() planusage.Snapshot) {
 	if snapshot == nil {
 		return
 	}
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_plan_usage",
 			mcp.WithDescription("Subscription remaining as painted in the cockpit header ticker (🎯T390 / T390.1.4): per-provider session and weekly remaining percent, 429/rate_limit as exhausted 0% (not unpublished), unpublished Grok as unavailable with the reason, idle Bedrock omitted. Use this to decide where to put the next job. Distinct from jevons_cost (USD burn) and jevons_capacity_status (admission)."),
 		),

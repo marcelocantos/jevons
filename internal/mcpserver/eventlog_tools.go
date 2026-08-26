@@ -64,7 +64,7 @@ func (s *Server) LogEvent(component, decision string, fields map[string]any) {
 }
 
 func (s *Server) registerEventLogTools() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_logs_tail",
 			mcp.WithDescription("Tail durable product event logs under state_dir/logs/events.jsonl (browser decisions + lifecycle). Newest first. Use component/decision filters (e.g. component=thread_route, decision=match). Logs first — not DevTools-only (🎯T120)."),
 			mcp.WithNumber("limit", mcp.Description("Max events (default 100, max 2000)")),

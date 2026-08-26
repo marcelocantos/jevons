@@ -25,7 +25,7 @@ func (s *Server) SetButler(b *butler.Butler) {
 	s.registerTargetFileTool()
 	s.registerOwnerGateTool()
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_thread_adopt",
 			mcp.WithDescription("Adopt an existing Grok Build session in ONE call: auto-names the thread after the session's repo, registers it, and TAKES IT OVER by default. Pass session_id only. If still open in another terminal, take-over is refused. Pass observe_only:true to watch without taking over."),
 			mcp.WithString("session_id", mcp.Required(), mcp.Description("Grok session id to adopt")),
@@ -37,7 +37,7 @@ func (s *Server) SetButler(b *butler.Butler) {
 		s.handleThreadAdopt,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_thread_remove",
 			mcp.WithDescription("Remove a thread: stop and deregister any owned process (the underlying Grok session on disk is left intact) and drop the record."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID to remove")),
@@ -45,14 +45,14 @@ func (s *Server) SetButler(b *butler.Butler) {
 		s.handleThreadRemove,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_thread_list",
 			mcp.WithDescription("List all threads (adopted and spawned) with their derived status: active/working/blocked/done/idle plus a recent-activity summary."),
 		),
 		s.handleThreadList,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_thread_status",
 			mcp.WithDescription("Get the current status and recent-activity summary of a single thread, derived on demand from its transcript."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID")),
@@ -60,7 +60,7 @@ func (s *Server) SetButler(b *butler.Butler) {
 		s.handleThreadStatus,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_thread_spawn",
 			mcp.WithDescription("Spawn a new durable thread the butler owns end-to-end (claudia backend: default from config/env). Idle process is stopped and rehydrated on demand. Records fleet parent lineage (actor/parent, default overseer) so /api/agents nests correctly (🎯T111.3). Optional provider selects the backend ad hoc (🎯T148)."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Unique thread handle (e.g. 'tern-po', 'maze-rebuild')")),
@@ -74,7 +74,7 @@ func (s *Server) SetButler(b *butler.Butler) {
 		s.handleThreadSpawn,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_thread_takeover",
 			mcp.WithDescription("Take over an adopted (observe-only) thread so Jevons owns and can direct it. Refuses if another process still holds the session. The session id is preserved."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID (an adopted thread)")),
@@ -82,7 +82,7 @@ func (s *Server) SetButler(b *butler.Butler) {
 		s.handleThreadTakeover,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_thread_direct",
 			mcp.WithDescription("Direct a thread: deliver a message and return its reply. If the thread's process was stopped or aged out, it is transparently rehydrated first; if it cannot be reached, a distinct error is returned (never a silent timeout). Observe-only adopted threads must be taken over before they can be directed."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Thread ID")),

@@ -36,7 +36,7 @@ func (s *Server) SetWritExecutor(ex writconf.Executor, bin string, available boo
 
 // registerWritSecurityTools adds jevons_writ_exec + status (🎯T335).
 func (s *Server) registerWritSecurityTools() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_writ_exec",
 			mcp.WithDescription(
 				"Run a high-risk command under writ declared-intent confinement "+
@@ -52,7 +52,7 @@ func (s *Server) registerWritSecurityTools() {
 		),
 		s.handleWritExec,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_security_status",
 			mcp.WithDescription("Standing security auditor + writ confinement status (🎯T335)."),
 		),

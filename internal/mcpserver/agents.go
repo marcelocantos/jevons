@@ -46,14 +46,14 @@ type NotifyFunc func(text string)
 func (s *Server) SetRegistry(registry *claudia.Registry) {
 	s.registry = registry
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_agent_list",
 			mcp.WithDescription("List all registered agents and their status (running/stopped). Also lists finished-and-reaped names as recoverable addresses (🎯T401) so a never-existed name is distinguishable from one the product auto-deregistered — learn the address is closed BEFORE composing gate feedback into a void."),
 		),
 		s.handleAgentList,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_agent_start",
 			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). When provider is omitted on mint, the owner-visible default (config.yaml provider, then JEVONS_PROVIDER, then grok) wins — a leftover llm-portfolio.json or the compiled T325.2 seed must not silently override it (🎯T476). The start result cites which knob selected the provider. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
@@ -72,7 +72,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 		s.handleAgentStart,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_agent_send",
 			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text. If a prompt is already in flight, the message is queued for after the turn (not a dead-end). Pass interrupt=true to cancel the in-flight turn and send immediately (🎯T111.1 stuck recovery). Pass actor=your agent name so lineage authorization runs against the real caller (🎯T321). An auto-reaped agent (🎯T401) is still a reachable address: the send reports reaped-with-reason, names the recovery call (jevons_agent_start under the same name), and holds the message in sendq — never a bare \"agent is not running\". A never-registered name remains an ordinary not-found."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
@@ -83,7 +83,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 		s.handleAgentSend,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_agent_stop",
 			mcp.WithDescription("Stop a running agent process and park it (🎯T414): the agent stays registered, and the park is a standing instruction that outlives the process — no delivery, restart, idle sweep or repair mission revives it until the park is lifted with jevons_fleet_intent state=working. Not the same as kill (which deregisters)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
@@ -93,7 +93,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 		s.handleAgentStop,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_fleet_intent",
 			mcp.WithDescription("Read or set the deliberate answer to \"should this agent be running?\" (🎯T414). Every fleet control — spawn, nudge, revive, repressure, repair mission, delivery start, worker-idle notification — reads this and declines when it says do not run, naming the intent. Observed process state alone never authorises a start. States: working, parked, blocked_provider, blocked_owner, reaped. Omit state to read the current intent; omit name to set the fleet-wide intent (a provider wall stands the whole fleet down)."),
 			mcp.WithString("name", mcp.Description("Agent name. Omit to read everything, or (with state) to set the FLEET-WIDE intent.")),
@@ -104,7 +104,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 		s.handleFleetIntent,
 	)
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_agent_kill",
 			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Idempotent: if the agent is already not registered (e.g. auto-reaped after a done report), returns success without error. Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister (subtree included)")),
@@ -807,10 +807,7 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 
 	// 🎯T104 under fan-out: first send carries standing local-delivery brief.
-	s.mu.Lock()
-	if s.fleetBriefed == nil {
-		s.fleetBriefed = map[string]bool{}
-	}
+	// roleDisplay takes s.mu — resolve the role body first (🎯T541.3).
 	roleBody := ""
 	if s.registry != nil {
 		if d := s.registry.Def(name); d != nil {
@@ -819,6 +816,10 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 				roleBody = def.Body
 			}
 		}
+	}
+	s.mu.Lock()
+	if s.fleetBriefed == nil {
+		s.fleetBriefed = map[string]bool{}
 	}
 	text, injected := EnsureFleetBriefWithRole(s.fleetBriefed, name, text, roleBody)
 	s.mu.Unlock()

@@ -39,7 +39,7 @@ func (s *Server) Auditor() *audit.Auditor {
 }
 
 func (s *Server) registerAuditTools() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_audit_cycle",
 			mcp.WithDescription("Run one bounded full-scan audit now (🎯T357): scope product code, skills trees, and agent prompts, hand the manifest to the advanced-tier auditor, and fold the findings into durable residue. A pass is bounded by scope caps, a wall-clock timeout, and a cycles-per-day cost guard. Findings land as a durable report plus residue — new and reopened criticals notify the overseer in the same cycle."),
 			mcp.WithBoolean("force", mcp.Description("Bypass the min-gap and cycles-per-day cost guards for this run.")),
@@ -47,13 +47,13 @@ func (s *Server) registerAuditTools() {
 		),
 		s.handleAuditCycle,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_audit_status",
 			mcp.WithDescription("Show the audit cycle's config (model pin, scope roots, bounds), its run record, and the outstanding residue by severity (🎯T357)."),
 		),
 		s.handleAuditStatus,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_audit_residue",
 			mcp.WithDescription("Read the durable audit residue (🎯T357), or record the overseer's handling of one finding. With no fingerprint: list outstanding findings, newest activity last. With fingerprint + disposition: mark it filed (with target_id), ignore_with_reason (reason required), accepted, or pending. Residue is the memory that turns repeated passes into a converging list rather than re-reported noise."),
 			mcp.WithString("fingerprint", mcp.Description("Finding fingerprint from a notice or listing. Omit to list.")),
@@ -64,14 +64,14 @@ func (s *Server) registerAuditTools() {
 		),
 		s.handleAuditResidue,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_audit_report",
 			mcp.WithDescription("Read one durable audit report artifact (🎯T357): the findings a single pass produced, with the model, the scopes covered, and any scope truncation. Omit id for the most recent report."),
 			mcp.WithString("id", mcp.Description("Report id (e.g. 20260809T031500Z). Omit for the latest.")),
 		),
 		s.handleAuditReport,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_audit_configure",
 			mcp.WithDescription("Retune the periodic full-scan auditor (🎯T357): cadence, the advanced-tier model pin, scope roots, pass bounds, and notification policy. The model pin is durable config, not a hardcoded call site — audits deliberately run on an advanced tier."),
 			mcp.WithBoolean("enabled", mcp.Description("Enable or disable the standing schedule (manual cycles still run).")),

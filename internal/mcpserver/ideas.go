@@ -35,7 +35,7 @@ func (s *Server) SetIdeaStateDir(stateDir string) {
 }
 
 func (s *Server) registerIdeaTools() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_idea_capture",
 			mcp.WithDescription("Capture an owner spark into the durable idea ledger (🎯T325.3) so it does not evaporate in scrollback. Returns the idea id and disposition (inbox/hold). Use after capture:/idea: or mid-chat ideation; triage later with jevons_idea_triage. List with jevons_idea_list."),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Spark body to retain")),
@@ -45,14 +45,14 @@ func (s *Server) registerIdeaTools() {
 		),
 		s.handleIdeaCapture,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_idea_list",
 			mcp.WithDescription("List durable captured ideas (🎯T325.3 listable surface). Optional disposition filter: inbox|file|park|hold|drop."),
 			mcp.WithString("disposition", mcp.Description("Optional filter (inbox|file|park|hold|drop)")),
 		),
 		s.handleIdeaList,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_idea_triage",
 			mcp.WithDescription("Triage a captured idea (🎯T325.3): product-shaped→file (+ then jevons_target_file + T193 if Build); needs-owner/design→park; life-domain parked→hold; rare noise→drop. Does not auto-file bullseye — file disposition is a ceremony marker; call jevons_target_file yourself for product leaves."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Idea id from capture/list")),

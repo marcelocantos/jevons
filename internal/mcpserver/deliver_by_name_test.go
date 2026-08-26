@@ -155,6 +155,7 @@ func TestT3927RelayReportSkipsPOHop(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = journal.Close() })
 	s.SetEventJournal(journal)
+	s.fleetBriefed = map[string]bool{"jevons-po": true}
 
 	text := "Blocked: needs owner verdict on the provider spend cap before I can proceed.\nDetails stay with the overseer."
 	req := mcp.CallToolRequest{}

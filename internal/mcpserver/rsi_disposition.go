@@ -18,7 +18,7 @@ import (
 // record what the overseer decided for each coach judgment, list the ledger,
 // and report rates so mute spam / zero-disposition are visible.
 func (s *Server) registerRSIDispositionTool() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_rsi_disposition",
 			mcp.WithDescription("RSI coach judgment dispositions (🎯T333). action=record stores the overseer's decision for a judgment fingerprint (file|park|ignore_with_reason|act_other; file needs target_id — prefer jevons_target_file with fingerprint=, which records automatically). action=list shows the ledger; action=metrics reports filed/parked/ignored/pending rates over a window. Outcomes (achieve/set_aside) sync automatically and suppress re-propose without new evidence."),
 			mcp.WithString("action", mcp.Description("record | list | metrics (default list)")),

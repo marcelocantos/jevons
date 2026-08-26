@@ -520,7 +520,9 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 
 	// Busy path (🎯T111.1): interrupt then send, or queue for after turn.
 	if interrupt {
-		if ierr := proc.Interrupt(); ierr != nil {
+		ierr := proc.Interrupt()
+		s.cancelMCPFlights(name)
+		if ierr != nil {
 			// 🎯T424: interrupt never silently becomes a queue. The
 			// caller asked to cut the turn; failing that is an error,
 			// not a graceful enqueue. Do not advise interrupt=true —

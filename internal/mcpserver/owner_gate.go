@@ -34,7 +34,7 @@ import (
 // a commit SHA, a 🎯T386 GATE id, or a named green oracle. The refusal is the
 // product, not a nicety.
 func (s *Server) registerOwnerGateTool() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_owner_gate",
 			mcp.WithDescription("Record — or answer — the 🎯T449 awaiting-owner-verdict state on a bullseye target: the code has LANDED and gated, and the sole remaining acceptance residue is a class-3 owner taste verdict (hard-reload accept/reject). op=record assigns the target to the owner with a structured, evidence-bearing reason, so frontier-consume parks instead of spawning an implementer against finished work and every other reader sees \"built, your turn\" rather than \"untouched\". Call it as the accepting PO, at the moment you accept the gated report — never later, and never for work that has not landed. op=answer records the owner's accept/reject and clears the assignment so the leaf returns to normal handling (accept → go achieve it; reject → resume from the landed commit, do not restart from scratch). Requires the bullseye CLI on PATH."),
 			mcp.WithString("cwd", mcp.Required(), mcp.Description("Repo directory containing bullseye.yaml (or a parent to discover from)")),

@@ -37,7 +37,7 @@ func (s *Server) RSICoach() *rsi.Coach {
 }
 
 func (s *Server) registerRSICoachTools() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_rsi_coach_cycle",
 			mcp.WithDescription("Run one RSI coach cycle now: drip (🎯T243) reads new appends since the cursor; retro (🎯T353) makes a bounded pass over history — git commits, eventlog tail, owner chat, session transcripts — within the configured lookback. Coach never files bullseye — overseer alone decides file/alert/brief PO/ignore."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, form judgments and return wire text without delivering to overseer.")),
@@ -45,7 +45,7 @@ func (s *Server) registerRSICoachTools() {
 		),
 		s.handleRSICoachCycle,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_rsi_coach_configure",
 			mcp.WithDescription("Retune the RSI coach (🎯T243 bi-directional SI). Overseer updates system prompt and/or runtime dials: enabled, interval_sec, rate_cap, min_count, focus_filters. Alert fatigue is a dial, not a hard veto."),
 			mcp.WithBoolean("enabled", mcp.Description("Enable or disable schedule delivery.")),
@@ -68,7 +68,7 @@ func (s *Server) registerRSICoachTools() {
 		),
 		s.handleRSICoachConfigure,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_rsi_coach_status",
 			mcp.WithDescription("Show RSI coach config, cursor drip offsets, disposition metrics, and system prompt summary (🎯T243/🎯T333)."),
 		),

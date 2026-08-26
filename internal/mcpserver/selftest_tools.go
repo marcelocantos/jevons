@@ -25,7 +25,7 @@ func (s *Server) SetSelfTestEnv(fn SelfTestEnvFunc) {
 
 func (s *Server) registerSelfTestTools() {
 	// Tool names match acceptance (self_test.run / list).
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("self_test.run",
 			mcp.WithDescription("Run a self-test pack (🎯T110). Accepts pack id (or 'all') and site live|drill|ci. Returns the shared report schema; grade is derived from measurements only."),
 			mcp.WithString("pack", mcp.Description("Pack id (health-L1, composer-growth-L2, agents-parent-L1) or 'all'. Default all.")),
@@ -33,7 +33,7 @@ func (s *Server) registerSelfTestTools() {
 		),
 		s.handleSelfTestRun,
 	)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("self_test.list",
 			mcp.WithDescription("List registered self-test packs with class and allowed sites (🎯T110)."),
 		),

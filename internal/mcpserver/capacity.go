@@ -27,7 +27,7 @@ func (s *Server) SetCapacityGovernor(g *capacity.Governor) {
 	if g == nil {
 		return
 	}
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_capacity_status",
 			mcp.WithDescription("Show background-work admission control (🎯T359): current capacity pressure, remaining headroom by dimension (cost / tokens / load), which background classes are running, and what each class would be granted right now. Owner turns and open Build missions always outrank ambient background (research, audits, coach, sentinel extras). Use this to explain why an ambient cycle did not run."),
 		),

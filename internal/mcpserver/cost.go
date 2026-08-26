@@ -20,7 +20,7 @@ import (
 func (s *Server) SetCostMonitor(snapshot func() (*cost.Snapshot, error)) {
 	s.costSnapshot = snapshot
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_cost",
 			mcp.WithDescription("What is burning tokens right now: rolling USD/hr burn-rate globally, for the jevons fleet, and per worker; today's spend and end-of-day projection; per-session burn (hottest first); and any tripped runaway signals (rate ceilings, session-count bound, orphan sessions, projected/hard-ceiling overspend). Use this to answer cost questions instead of manual ps/lsof."),
 		),

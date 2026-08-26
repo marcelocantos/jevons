@@ -26,7 +26,7 @@ type grokRunFunc func(ctx context.Context, args ...string) (string, error)
 // plane is a disable→enable cycle via `grok mcp`, which Grok documents as
 // live-toggling servers without a session rotate or TUI hop.
 func (s *Server) registerMCPReconnect() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_mcp_reconnect",
 			mcp.WithDescription(
 				"Reconnect dropped MCP servers mid-session without leaving chat or rotating the session. "+

@@ -25,7 +25,7 @@ func (s *Server) SetRSILoop(loop *rsi.Loop) {
 }
 
 func (s *Server) registerRSITools() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_rsi_cycle",
 			mcp.WithDescription("RESIDUAL (🎯T92 mint): run one direct bullseye-mint cycle. Product path is jevons_rsi_coach_cycle (🎯T243) — coach posts judgments to overseer; overseer alone files. This tool files only when the residual mint loop is configured (JEVONS_RSI_MINT/DEEPER). Prefer coach for ambient RSI."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, extract+dedupe only — do not file targets (advisory; loop DryRun owns filing).")),

@@ -14,7 +14,7 @@ import (
 // namespaced ("{provider}__{name}") and attributed; this is the ToolSink
 // half, kept structural so internal/provider never imports this package.
 func (s *Server) AddProviderTool(t mcp.Tool, h func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)) {
-	s.mcpSrv.AddTool(t, h)
+	s.addTool(t, h)
 }
 
 // RemoveProviderTools withdraws aggregated provider tools when their

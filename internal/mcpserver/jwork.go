@@ -39,7 +39,7 @@ var headingPattern = regexp.MustCompile(`^(#{1,6})\s+(.+)$`)
 
 // registerJwork adds the jwork MCP tool to the server.
 func (s *Server) registerJwork() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jwork",
 			mcp.WithDescription(
 				"Dispatch a task to an on-demand Grok Build worker. "+

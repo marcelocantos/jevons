@@ -32,7 +32,7 @@ type Migrator interface {
 func (s *Server) SetMigrator(m Migrator) { s.migrator = m }
 
 func (s *Server) registerAgentMigrate() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_agent_migrate",
 			mcp.WithDescription(
 				"Move an existing agent to a different backend (claudia provider id: grok, claude, …) "+

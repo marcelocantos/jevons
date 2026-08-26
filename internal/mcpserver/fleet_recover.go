@@ -95,6 +95,12 @@ type FleetRecoverObs struct {
 	Backoffs       []time.Duration
 	// SessionReminted: this boot minted a new session_id (🎯T545.1).
 	SessionReminted bool
+	// SpawnClass: PO / overseer — hung MCP is a control-plane outage (🎯T254.5.2).
+	SpawnClass bool
+	// SameToolID / SameToolSince: one tool_call_id in progress; heartbeats
+	// that keep SinceProgress fresh must not hide this.
+	SameToolID    string
+	SameToolSince time.Duration
 }
 
 // ClassifyFleetRecover decides skip | unstick | rebrief | maxed for one agent.
@@ -158,6 +164,11 @@ func ClassifyFleetRecover(o FleetRecoverObs) (FleetRecoverAction, string) {
 	// Healthy long tool turns keep SinceProgress fresh via heartbeats.
 	if o.PromptInFlight && since >= stuckTO {
 		return FleetRecoverUnstick, "stuck_busy"
+	}
+	// 1b) Spawn-class seat on the same tool_call_id past timeout — ACP
+	// progress events are not health (🎯T254.5.2).
+	if o.SpawnClass && o.PromptInFlight && o.SameToolID != "" && o.SameToolSince >= stuckTO {
+		return FleetRecoverUnstick, "stuck_busy_same_tool"
 	}
 
 	// 2) Terminal failure / empty end_turn → re-brief without owner continue.
@@ -330,6 +341,10 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		briefPresent = args.BriefPresent(d.Name)
 	}
 
+	sameToolSince := time.Duration(0)
+	if !act.ToolCallSince.IsZero() {
+		sameToolSince = now.Sub(act.ToolCallSince)
+	}
 	obs := FleetRecoverObs{
 		Name:            d.Name,
 		Purpose:         purpose,
@@ -351,6 +366,9 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		SinceLastRecov:  sinceRecov,
 		EverRecovered:   ever,
 		Backoffs:        DefaultFleetRecoverBackoffs,
+		SpawnClass:      isSpawnClassSeat(d.Name, purpose),
+		SameToolID:      act.ToolCallID,
+		SameToolSince:   sameToolSince,
 		SessionReminted: args.SessionReminted != nil && args.SessionReminted(d.Name),
 	}
 	action, reason := ClassifyFleetRecover(obs)
@@ -484,6 +502,8 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	prev := t.by[name]
 	prev.Phase = "idle"
 	prev.Updated = t.clock()
+	prev.ToolCallID = ""
+	prev.ToolCallSince = time.Time{}
 	prev.FailureClass = class
 	prev.TerminalEmpty = empty
 	prev.NeedsRecover = needs

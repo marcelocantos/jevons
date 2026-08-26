@@ -80,7 +80,7 @@ func (s *Server) registerAgentReportTools() {
 	if s.mcpSrv == nil {
 		return
 	}
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_agent_report_read",
 			mcp.WithDescription("Read an agent's stored turn report in full (🎯T388). Every report an agent delivers is stored before delivery, so this works AFTER the agent auto-deregisters on its terminal report. Compose with 🎯T401: jevons_agent_send to a reaped agent reports reaped-with-reason and holds gate feedback in sendq rather than answering bare \"not running\"; this tool is the read path for the stored report itself. Use it when a delivered report carries the [⚠️ REPORT TRUNCATED] marker, or when you need one part of a report again: the bytes come from the store, so the agent never re-derives (and so cannot rewrite) what it already said. Omit report_id for the latest report; omit section for the whole text; pass list=true to see what is stored."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name, e.g. jv-t372-auto")),

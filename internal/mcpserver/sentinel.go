@@ -155,7 +155,7 @@ func (s *Server) AutoSpawnPaused() bool {
 // registerSentinelTools exposes status + one-shot dry/live tick for 🎯T219.
 func (s *Server) registerSentinelTools() {
 	s.ensureSentinelRuntime(0)
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_sentinel_cycle",
 			mcp.WithDescription("Run one durable-sentinel observe→classify→act cycle (🎯T219). Samples overseer/fleet/eventlog/frontier product surfaces, pure-classifies harness-ok|repair|file+PO|ignore (grace, cooldown, max actions/hour), then control-plane repair and/or mission to jevons-po. Continuous loop runs while jevonsd is up; this tool is the same policy for dry_run/status. No product implement; no Ship."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, classify only — no repair, no deliver, no budget/cooldown update.")),

@@ -372,6 +372,10 @@ type IdleActivity struct {
 	// a refusal hold (or arrives otherwise). observeForImpatience consumes
 	// it so a completed turn can satisfy even though phase is already idle.
 	SubstantivePulse bool
+	// ToolCallID is the in-flight ACP tool_call_id when known (🎯T254.5.2).
+	// Same-id heartbeats do not reset ToolCallSince.
+	ToolCallID    string
+	ToolCallSince time.Time
 }
 
 // IdleActivityTracker records ACP-derived phase for the idle-nudge sweep.
@@ -417,17 +421,31 @@ func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (
 	prev := t.by[name]
 	prevPhase = prev.Phase
 	nextPhase = phase
+	now := t.clock()
+	toolID := toolCallIDFromEvent(ev)
+	toolSince := prev.ToolCallSince
+	if toolID != "" && toolID != prev.ToolCallID {
+		toolSince = now
+	} else if toolID == "" && phase == "idle" {
+		toolSince = time.Time{}
+	} else if toolID == "" {
+		toolID = prev.ToolCallID
+	}
 	// Preserve T236 recover latches across mid-turn working updates;
 	// NoteTerminalOutcome sets them on end_turn; ClearRecover clears.
+	// Updated still refreshes (worker heartbeats); ToolCallSince does not
+	// when the id is unchanged (🎯T254.5.2).
 	next := IdleActivity{
 		Phase:            phase,
-		Updated:          t.clock(),
+		Updated:          now,
 		FailureClass:     prev.FailureClass,
 		NeedsRecover:     prev.NeedsRecover,
 		TerminalEmpty:    prev.TerminalEmpty,
 		RefusalHold:      prev.RefusalHold,
 		LastTerminal:     prev.LastTerminal,
 		SubstantivePulse: prev.SubstantivePulse,
+		ToolCallID:       toolID,
+		ToolCallSince:    toolSince,
 	}
 	// Fresh working progress clears stale recover latch only when we see
 	// real tool/assistant activity after a prior recover cycle was delivered
@@ -476,6 +494,44 @@ func idlePhaseFromEvent(ev claudia.Event) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// toolCallIDFromEvent pulls ACP toolCallId / tool_call_id out of Raw
+// (Cursor progress updates do not promote it onto Event).
+func toolCallIDFromEvent(ev claudia.Event) string {
+	if len(ev.Raw) == 0 {
+		return ""
+	}
+	var walk func(any) string
+	walk = func(v any) string {
+		switch t := v.(type) {
+		case map[string]any:
+			for _, k := range []string{"toolCallId", "tool_call_id"} {
+				if s, ok := t[k].(string); ok {
+					if id := strings.TrimSpace(s); id != "" {
+						return id
+					}
+				}
+			}
+			for _, child := range t {
+				if s := walk(child); s != "" {
+					return s
+				}
+			}
+		case []any:
+			for _, child := range t {
+				if s := walk(child); s != "" {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+	var root any
+	if json.Unmarshal(ev.Raw, &root) != nil {
+		return ""
+	}
+	return walk(root)
 }
 
 // --- durable nudge ledger (backoff/max across restarts) ---
@@ -1245,9 +1301,12 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	interruptFn := func(name string) error {
 		proc := s.registry.Get(name)
 		if proc == nil || !proc.Alive() {
+			s.cancelMCPFlights(name)
 			return fmt.Errorf("not running")
 		}
-		return proc.Interrupt()
+		err := proc.Interrupt()
+		s.cancelMCPFlights(name)
+		return err
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{

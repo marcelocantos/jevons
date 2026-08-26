@@ -26,7 +26,7 @@ import (
 func (s *Server) SetScanner(scanner *discovery.Scanner) {
 	s.scanner = scanner
 
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_active_work",
 			mcp.WithDescription("Show a unified dashboard of active work across all repos. Cross-references recent Claude Code sessions, dirty working trees, and open PRs to produce a ranked view of where work is happening."),
 			mcp.WithNumber("hours", mcp.Description("How far back to look for recent sessions (default 72)")),

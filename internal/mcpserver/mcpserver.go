@@ -94,6 +94,12 @@ type Server struct {
 	// launchDeadline overrides defaultLaunchDeadline (🎯T541.2). Tests set a
 	// short value so a hung Launch cannot sit for the product timeout.
 	launchDeadline time.Duration
+	// toolDeadline overrides tools/call bounds (🎯T254.5.1). Tests set a
+	// short value so a hung handler cannot sit for the product timeout.
+	toolDeadline time.Duration
+	mcpFlightMu  sync.Mutex
+	mcpFlightSeq uint64
+	mcpFlights   map[string][]mcpFlight
 	// cursorSubmit / cursorObserve / cursorMaterializeWait are 🎯T541 seams.
 	cursorSubmit          func(name, text string) error
 	cursorObserve         func(name string) (store, bound bool)
@@ -596,7 +602,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.mcpSrv = mcpSrv
 
 	if s.screenshot != nil {
-		mcpSrv.AddTool(
+		s.addTool(
 			mcp.NewTool("jevons_screenshot",
 				mcp.WithDescription("Take a screenshot of the connected mobile client's current screen. Returns the file path of the saved PNG image."),
 			),
@@ -605,14 +611,14 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	}
 
 	if s.transcript != nil {
-		mcpSrv.AddTool(
+		s.addTool(
 			mcp.NewTool("jevons_transcript_read",
 				mcp.WithDescription("Read a conversation transcript. With agent=<name>, returns THAT agent's transcript only (registry session_id) — never substitutes the caller's/overseer transcript (🎯T304). Omit agent to read the active overseer/Jevon session. Returns turns with role and text."),
 				mcp.WithString("agent", mcp.Description("Fleet agent name whose transcript to read (e.g. jv-t300-loading-earlier). Required for supervision of workers; omit for the active overseer session.")),
 			),
 			s.handleTranscriptRead,
 		)
-		mcpSrv.AddTool(
+		s.addTool(
 			mcp.NewTool("jevons_transcript_rewind",
 				mcp.WithDescription("Rewind the Jevon conversation to keep only the first N turns. A turn is a user message + assistant response. Set turns to 0 for a complete reset. The next message will start a fresh conversation."),
 				mcp.WithNumber("turns", mcp.Required(), mcp.Description("Number of turns to keep (0 = reset)")),

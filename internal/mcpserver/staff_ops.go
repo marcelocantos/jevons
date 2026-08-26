@@ -37,7 +37,7 @@ func (s *Server) registerStaffOpsTools() {
 			},
 		}
 	}
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_staff_ops_cycle",
 			mcp.WithDescription("Run one bounded staff ops cycle (🎯T325.4): sample health-of-health (fleet/dead agents, cost alerts) + compact resource snapshot (sessions, burn, agent counts, idle PO heuristic), classify harness-ok|repair|file+PO|ignore with cooldown on re-file, deliver compact brief to root overseer. Not permanent monologue; does not implement product code or open Ship. Continuous sentinel is jevons_sentinel_cycle (🎯T219)."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, build classification and wire text without delivering to overseer and without updating cooldown.")),

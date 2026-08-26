@@ -22,7 +22,7 @@ import (
 // (target: asides). Runs `bullseye commit --op track` in a repo cwd.
 // 🎯T226: always allocates a new id (near-dup file attach removed; no silent attach).
 func (s *Server) registerTargetFileTool() {
-	s.mcpSrv.AddTool(
+	s.addTool(
 		mcp.NewTool("jevons_target_file",
 			mcp.WithDescription("File a bullseye target in a repo ledger (light path for owner target: asides — 🎯T93/T95). Requires bullseye CLI on PATH. Always allocates a new 🎯 id (🎯T226: no near-duplicate attach). After success, confirm the id to the owner; the UI auto-closes the filing aside when it sees the confirmation marker. For filings that answer an RSI coach judgment, pass fingerprint= (from the judgment wire text) + evidence=: the 🎯T333 quality bar then applies (no bare phrase-friction leaves; concrete acceptance + evidence pointer required) and the disposition is recorded automatically."),
 			mcp.WithString("cwd", mcp.Required(), mcp.Description("Repo directory containing bullseye.yaml (or parent to discover)")),
