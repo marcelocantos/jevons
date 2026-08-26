@@ -8,7 +8,7 @@
 #
 # Steps:
 #   0. re-exec into our own session (🎯T405 SELF-DETACH below)
-#   1. make / rebuild bin/jevonsd
+#   1. make / rebuild bin/jevonsd and ui/dist (🎯T540.2 daily GET / is React)
 #   2. decide whether a restart is needed at all (🎯T218 thrash policy below)
 #   3. brew services stop jevons (so Cellar KeepAlive cannot reclaim :13705)
 #   4. SIGHUP listeners on the daily port — 🎯T40 upgrade exit, so agent
@@ -610,9 +610,24 @@ if [[ "$SKIP_MAKE" != "1" ]]; then
     -target bin/jevons-watchdog -artifact bin/jevons-watchdog \
     -dest "$ROOT/bin/jevons-watchdog" ||
     log "WARNING: the watchdog did not rebuild — the daemon is coming up supervised by whatever build is on disk"
+
+  # 🎯T540.2: daily GET / serves ui/dist from disk (not go:embed — T360).
+  # Built from the shared tree so the owner sees current React; T505
+  # residual is that a dirty ui/ can land on :13705. Dist is read per
+  # request, so a successful build here updates GET / even when T218
+  # then no-ops the daemon bounce.
+  log "rebuild: ui/dist for daily React GET / (🎯T540.2; vite bundle, not tsc)"
+  if (cd "$ROOT/ui" && npx vite build); then
+    log "ui/dist rebuilt"
+  elif [[ -f "$ROOT/ui/dist/index.html" ]]; then
+    log "WARNING: ui-build failed; keeping existing ui/dist"
+  else
+    die "ui-build failed and no ui/dist — daily GET / cannot serve React (🎯T540.2)"
+  fi
 else
   log "skip make (JEVONS_RESTART_SKIP_MAKE=1)"
   [[ -x "$BIN" ]] || die "no binary at $BIN"
+  [[ -f "$ROOT/ui/dist/index.html" ]] || die "no ui/dist — daily GET / cannot serve React (🎯T540.2); run make ui-build"
 fi
 
 # 🎯T448: prove the go.mod claudia pin against the sibling checkout.

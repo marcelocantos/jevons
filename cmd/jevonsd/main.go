@@ -59,6 +59,7 @@ import (
 func main() {
 	configPath := flag.String("config", "", "config file (default ~/.jevons/config.yaml; missing file = built-in defaults)")
 	port := flag.Int("port", 13705, "listen port")
+	vanillaPort := flag.Int("vanilla-port", config.DailyVanillaPort, "daily vanilla web/ sidecar (0 = off; only when -port is the daily bind)")
 	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 â loopback only; remote devices use the pigeon relay)")
 	relayURL := flag.String("relay", "", "relay URL to register with (e.g. https://carrier-pigeon.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
@@ -168,6 +169,10 @@ func main() {
 	// config and mints fixture agents into the owner's registry.
 	if err := config.RefuseJourneyDailyState(cfg.Port, cfg.StateDir); err != nil {
 		slog.Error("journey port isolation", "err", err)
+		os.Exit(1)
+	}
+	if err := config.RefuseVanillaPortAsPrimary(cfg.Port); err != nil {
+		slog.Error("vanilla sidecar port", "err", err)
 		os.Exit(1)
 	}
 
@@ -479,14 +484,16 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Dev server: serve web/ from disk with hot reload.
-	// Registered first â GET / is a catch-all fallback;
-	// more specific routes registered after take precedence.
-	webDir := filepath.Join(filepath.Dir(os.Args[0]), "..", "web")
-	if abs, err := filepath.Abs(webDir); err == nil {
-		webDir = abs
+	// 🎯T540.2: daily GET / is the React build (ui/dist). Vanilla web/
+	// stays on the sidecar port. Routes register first so GET / is the
+	// document fallback; API/WS registered after take precedence.
+	webDir := repoSibling(os.Args[0], "web")
+	reactDir := repoSibling(os.Args[0], "ui", "dist")
+	devSrv, err := server.RegisterProductUIRoutes(mux, reactDir, webDir, cfg.Port == config.DailyPort)
+	if err != nil {
+		slog.Error("product UI", "err", err)
+		os.Exit(1)
 	}
-	devSrv := server.RegisterUIRoutes(mux, webDir)
 
 	srv.RegisterRoutes(mux)
 	mcpSrv.RegisterRoutes(mux)
@@ -869,6 +876,7 @@ func main() {
 		handler = server.ClientCertMiddleware(handler, "/health", "/api/provision")
 	}
 	httpSrv := &http.Server{Addr: listenAddr, Handler: handler}
+	var vanillaHTTP *http.Server
 
 	// Start HTTP server before agents so the MCP endpoint is reachable.
 	ln, err := net.Listen("tcp", listenAddr)
@@ -917,6 +925,10 @@ func main() {
 			slog.Error("server failed", "err", err)
 		}
 	}()
+
+	if cfg.Port == config.DailyPort && *vanillaPort != 0 {
+		vanillaHTTP = startDailyVanillaSidecar(srv, mcpSrv, webDir, cfg.BindAddr, *vanillaPort, *enableTLS)
+	}
 
 	// Now start agents — MCP server is reachable.
 	// 🎯T40.2: every return adopts leftover processes, then resumes
@@ -1172,6 +1184,9 @@ func main() {
 			"stop_agents", mode.StopAgents())
 		cancel()
 		httpSrv.Close()
+		if vanillaHTTP != nil {
+			vanillaHTTP.Close()
+		}
 	}()
 
 	slog.Info("jevonsd starting", "addr", listenAddr, "version", cli.Version,
@@ -1385,6 +1400,55 @@ func grokBin() string {
 // the only honest source for the advertised URL: cfg.Port may be 0
 // (ephemeral, resolved by the kernel) and, until the bind succeeds, may be a
 // port another process holds.
+// repoSibling resolves <bin>/../<elem...> (daily bin/jevonsd → repo tree).
+func repoSibling(bin string, elem ...string) string {
+	parts := append([]string{filepath.Dir(bin), ".."}, elem...)
+	dir := filepath.Join(parts...)
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return dir
+}
+
+// startDailyVanillaSidecar serves the frozen web/ reference on a second
+// port of the same process (🎯T540.2). Bind failure is non-fatal: React
+// on DailyPort is the product path.
+func startDailyVanillaSidecar(srv *server.Server, mcpSrv *mcpserver.Server, webDir, bind string, port int, enableTLS bool) *http.Server {
+	if port == config.DailyPort {
+		slog.Error("vanilla sidecar port equals daily React port; sidecar disabled", "port", port)
+		return nil
+	}
+	mux := http.NewServeMux()
+	dev := server.RegisterUIRoutes(mux, webDir)
+	srv.RegisterRoutes(mux)
+	mcpSrv.RegisterRoutes(mux)
+	if dev != nil {
+		go func() {
+			if err := dev.Watch(); err != nil {
+				slog.Error("vanilla sidecar watch failed", "err", err)
+			}
+		}()
+	}
+	addr := fmt.Sprintf("%s:%d", bind, port)
+	var handler http.Handler = server.GuardCrossSite(mux)
+	if enableTLS {
+		handler = server.ClientCertMiddleware(handler, "/health", "/api/provision")
+	}
+	httpSrv := &http.Server{Addr: addr, Handler: handler}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		slog.Error("vanilla sidecar listen failed — daily React still serves", "addr", addr, "err", err)
+		return nil
+	}
+	go func() {
+		if err := httpSrv.Serve(ln); err != http.ErrServerClosed {
+			slog.Error("vanilla sidecar failed", "err", err)
+		}
+	}()
+	slog.Info("vanilla reference cockpit (🎯T540.2 sidecar)", "addr", addr)
+	return httpSrv
+}
+
 func servedPort(addr net.Addr) int {
 	if tcp, ok := addr.(*net.TCPAddr); ok {
 		return tcp.Port

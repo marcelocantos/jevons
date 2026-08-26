@@ -20,11 +20,14 @@ const DailyPort = config.DailyPort
 // DefaultPort is the default Universe B isolate bind.
 const DefaultPort = config.JourneyPort
 
-// RefuseDaily returns an error when p is DailyPort so the journey suite
-// never binds the owner stream.
+// RefuseDaily returns an error when p is the daily React port or the
+// daily vanilla sidecar so the journey suite never binds the owner stream.
 func RefuseDaily(p int) error {
 	if p == DailyPort {
 		return fmt.Errorf("refusing port %d (daily-driver); use %d or -port 0", DailyPort, DefaultPort)
+	}
+	if p == config.DailyVanillaPort {
+		return fmt.Errorf("refusing port %d (daily vanilla sidecar); use %d or -port 0", config.DailyVanillaPort, DefaultPort)
 	}
 	return nil
 }

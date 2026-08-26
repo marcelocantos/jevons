@@ -835,9 +835,10 @@ not a hard daemon block of bullseye achieve.
 
 Product owner-visible UI work lands in **`ui/`** (Vite + React). **`web/`
 is deprecated reference-only** — use it to judge parity, not to ship new
-behaviour. Daily `:13705` may still serve vanilla until cutover (🎯T505 /
-🎯T540.2); that is not licence to edit vanilla for features. Run React with
-`make ui-dev` (`:5173`).
+behaviour. Daily `:13705` serves the React build; vanilla `web/` is the
+`:13706` sidecar (🎯T540.2). That is not licence to edit vanilla for
+features. Vite HMR remains `make ui-dev` (`:5173`). T505 residual: daily
+serves whatever `ui/dist` the last `make ui-build` wrote.
 
 ## Configuration
 

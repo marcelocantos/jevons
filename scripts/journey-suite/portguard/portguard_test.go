@@ -27,6 +27,12 @@ func TestRefuseDaily(t *testing.T) {
 		}
 	}
 
+	if err := RefuseDaily(13706); err == nil {
+		t.Fatal("RefuseDaily(13706) = nil, want error (vanilla sidecar)")
+	} else if !strings.Contains(err.Error(), "sidecar") {
+		t.Errorf("13706 error %q missing sidecar", err)
+	}
+
 	for _, p := range []int{DefaultPort, 0, 13716} {
 		if err := RefuseDaily(p); err != nil {
 			t.Errorf("RefuseDaily(%d) = %v, want nil", p, err)

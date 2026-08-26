@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Playwright census for J19 (🎯T491 / 🎯T493 / 🎯T494) against the
-// React cockpit (🎯T540.1.12). Isolate GET / may still be vanilla until
-// 🎯T540.2 — Go starts a :5173-style Vite proxy and passes that host.
+// React cockpit (🎯T540.1.12). After 🎯T540.2 isolate GET / is React
+// when ui/dist exists; otherwise Go starts a :5173-style Vite proxy.
 // Never :13705, never the owner's journal.
 //
 //   node scripts/journey-suite/j19_paint.js --host 127.0.0.1:PORT \

@@ -19,11 +19,10 @@ import (
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
-// Residual until 🎯T540.2: isolate GET / may still serve vanilla web/.
-// J19 must not hard-load that surface. startJ19ReactSurface either
-// uses isolate GET / once it is React, or a :5173-style Vite proxy
-// against the isolate (ephemeral port, never :13705). Do not add a
-// second connect-tail journey.
+// 🎯T540.2: isolate GET / is React when ui/dist exists. Without a
+// dist, startJ19ReactSurface starts a :5173-style Vite proxy against
+// the isolate (ephemeral port, never :13705). Dual-path residual.
+// Do not add a second connect-tail journey.
 
 type j19ReactSurface struct {
 	host string // host:port Playwright loads (React)
@@ -51,8 +50,8 @@ func (s *suite) startJ19ReactSurface() (*j19ReactSurface, error) {
 	if !j19HTMLIsVanilla(body) {
 		return &j19ReactSurface{host: s.host, via: "isolate"}, nil
 	}
-	// Residual 🎯T540.2: isolate GET / is still vanilla. Load React
-	// through a Vite proxy aimed at this isolate, not daily :13705.
+	// 🎯T540.2 dual-path residual: isolate GET / has no ui/dist.
+	// Load React through a Vite proxy aimed at this isolate, not daily.
 	return startJ19ViteProxy(s.host)
 }
 
@@ -149,7 +148,7 @@ func startJ19ViteProxy(isolateHost string) (*j19ReactSurface, error) {
 		surf.stop()
 		return nil, fmt.Errorf("j19 react proxy ready: %w", err)
 	}
-	fmt.Printf("j19 React surface via=%s host=%s isolate=%s (residual T540.2: isolate GET / still vanilla)\n",
+	fmt.Printf("j19 React surface via=%s host=%s isolate=%s (T540.2 dual-path: isolate GET / had no ui/dist)\n",
 		surf.via, surf.host, isolateHost)
 	return surf, nil
 }

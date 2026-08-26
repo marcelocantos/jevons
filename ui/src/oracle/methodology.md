@@ -31,8 +31,9 @@ describes the current tree is a false green.
 A journey **must interact with an agent** (🎯T107). Seeding a journal and
 hard-loading the isolate cockpit counts. Grepping `ui/src` does not.
 
-Until T540.2, isolate `GET /` may still be vanilla. UI journeys load
-React via the shared Vite-proxy helper (never `:13705`). Residual named.
+After T540.2, isolate `GET /` is React when `ui/dist` exists; otherwise
+the shared Vite-proxy helper loads React (never `:13705`). Dual-path
+residual named.
 
 Journey-or-hermetic: a named hermetic is enough when the vertex is a
 pure function of frames/keys. Journeys are the arbiter for connect,

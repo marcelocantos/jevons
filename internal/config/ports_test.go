@@ -56,4 +56,26 @@ func TestRefuseJourneyDailyState(t *testing.T) {
 	if JourneyPort == DailyPort {
 		t.Fatal("JourneyPort must not equal DailyPort")
 	}
+	if DailyVanillaPort == DailyPort || DailyVanillaPort == JourneyPort {
+		t.Fatal("DailyVanillaPort must be distinct from DailyPort and JourneyPort")
+	}
+}
+
+func TestRefuseVanillaPortAsPrimary(t *testing.T) {
+	if err := RefuseVanillaPortAsPrimary(DailyVanillaPort); err == nil {
+		t.Fatal("DailyVanillaPort as primary must refuse")
+	} else {
+		msg := err.Error()
+		for _, want := range []string{"13706", "sidecar", "13705"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("error %q missing %q", msg, want)
+			}
+		}
+	}
+	if err := RefuseVanillaPortAsPrimary(DailyPort); err != nil {
+		t.Fatalf("DailyPort as primary must allow: %v", err)
+	}
+	if err := RefuseVanillaPortAsPrimary(JourneyPort); err != nil {
+		t.Fatalf("JourneyPort as primary must allow: %v", err)
+	}
 }

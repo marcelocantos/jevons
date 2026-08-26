@@ -1,9 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// 🎯T540.1.12 J19 React load path. Isolate GET / may still be vanilla
-// until 🎯T540.2; this is the :5173-style Vite proxy pointed at the
-// isolate (never :13705). Loaded via ui/node_modules/.bin/vite --config.
+// 🎯T540.1.12 J19 React load path. After 🎯T540.2 isolate GET / is
+// React when ui/dist exists; this :5173-style Vite proxy is the
+// dual-path residual (never :13705). Loaded via ui/node_modules/.bin/vite --config.
 
 import { createRequire } from 'node:module';
 import path from 'node:path';

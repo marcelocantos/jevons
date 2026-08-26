@@ -27,14 +27,14 @@ make ios          # Regenerate the iOS Xcode project (xcodegen)
 
 ```bash
 make run          # Build and run jevonsd (or: brew services start jevons)
-open http://localhost:13705/   # Daily cockpit (vanilla web/ until T540.2 cutover)
-make ui-dev && open http://127.0.0.1:5173/   # Product React cockpit (🎯T540)
+open http://localhost:13705/   # Daily React cockpit (🎯T540.2)
+open http://localhost:13706/   # Vanilla web/ reference sidecar
+make ui-dev && open http://127.0.0.1:5173/   # Vite HMR against daily
 ```
 
 Product owner-visible UI work lands in `ui/` (Vite + React). `web/` is
-deprecated reference-only — use it to judge parity, not to ship new
-behaviour. Daily `:13705` may still serve vanilla until cutover; that is
-not licence to grow vanilla.
+deprecated reference-only on `:13706` — use it to judge parity, not to
+ship new behaviour. Daily `:13705` serves the React build (`ui/dist`).
 
 ## Test
 

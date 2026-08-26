@@ -2,6 +2,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Daily :13705 GET / serves ui/dist (🎯T540.2). This Vite server is HMR
+// and the journey dual-path residual when an isolate has no dist.
 export default defineConfig({
   plugins: [react()],
   base: './',

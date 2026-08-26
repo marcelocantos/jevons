@@ -234,13 +234,15 @@ test-go: bin/gotest
 test-go-raw:
 	go test ./...
 
-# React cockpit (🎯T540). Product UI path; daily GET / may still be web/ until T540.2.
+# React cockpit (🎯T540). Daily :13705 GET / serves ui/dist (T540.2).
 .PHONY: ui-dev ui-build test-ui-react ui-daemon-install ui-daemon-stop ui-daemon-status
 ui-dev:
 	cd ui && npm run dev
 
+# Vite bundle for daily GET / (🎯T540.2). tsc -b stays on `npm run build`
+# / `npm test`; a red typecheck must not block the serve path.
 ui-build:
-	cd ui && npm run build
+	cd ui && npx vite build
 
 # Vite as a LaunchAgent (not a Grok background task). Same class as jevonsd.
 UI_DAEMON_LABEL := com.marcelocantos.jevons-ui

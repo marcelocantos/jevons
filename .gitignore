@@ -34,7 +34,7 @@ Thumbs.db
 .env.local
 
 # React cockpit (🎯T537.1 / T540) — source is tracked; install/build output is not.
-# Dist is not go:embed (T360); daily GET / still serves web/index.html until T540.2.
+# Dist is not go:embed (T360); daily GET / serves ui/dist from disk (T540.2).
 /ui/node_modules/
 /ui/dist/
 

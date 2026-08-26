@@ -3,11 +3,12 @@
 Vite + React 19 — **product** owner cockpit. Vanilla `web/` is deprecated
 reference-only; port parity gaps here, do not patch vanilla for features.
 
-Daily `GET /` may still serve `web/index.html` until cutover (🎯T505 /
-🎯T540.2). Until then:
+Daily `:13705` `GET /` serves this build (`make ui-build` → `ui/dist`).
+Vanilla `web/` remains on `:13706`. Vite HMR:
 
 ```bash
 make ui-dev    # http://127.0.0.1:5173  proxies /api and /ws to :13705
+make ui-build  # writes ui/dist for daily GET /
 make test-ui-react   # or: cd ui && npm test
 ```
 

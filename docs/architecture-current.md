@@ -27,16 +27,19 @@ surfaces, the MCP tools the CEO drives, durable state, and cost governance.
 
 - **`cmd/jevonsd`** — the daemon. HTTP/WS server, web/React asset serving,
   mTLS device provisioning, cost wiring, CLI flags.
-- **`ui/`** — the **product** cockpit (Vite + React 19, 🎯T540). Dev on
-  `:5173` (`make ui-dev`) proxies to daily jevonsd. This is where owner-
-  visible UI work lands.
-- **`web/`** — **deprecated reference** vanilla cockpit. Still what daily
-  `GET /` may serve until cutover (🎯T505 / 🎯T540.2). Keep for parity
-  oracles; do not grow product behaviour here.
-- **`ios/Jevon`** — thin client: wraps the bundled web UI in a WKWebView
+- **`ui/`** — the **product** cockpit (Vite + React 19, 🎯T540). Daily
+  `:13705` `GET /` serves `ui/dist` (🎯T540.2). Vite HMR on `:5173`
+  (`make ui-dev`) still proxies `/api` `/ws` to daily. This is where
+  owner-visible UI work lands.
+- **`web/`** — **deprecated reference** vanilla cockpit on `:13706`
+  (same daemon, same API/WS). Keep for parity oracles; do not grow
+  product behaviour here. Not deleted (separate target). Dist is not
+  `go:embed` (🎯T360); brew/pristine without `make ui-build` cannot
+  serve daily React.
+- **`ios/Jevon`** — thin client: wraps the daily URL in a WKWebView
   and routes transport over a paired [pigeon](https://github.com/marcelocantos/pigeon)
-  QUIC relay (QR pairing artifact → credentials; 🎯T14.1). Residual until
-  the thin client points at the React surface after cutover.
+  QUIC relay (QR pairing artifact → credentials; 🎯T14.1). Daily
+  `:13705` is React after cutover.
 - **[claudia](https://github.com/marcelocantos/claudia)** — the agent
   harness library: process spawn, Grok ACP (session/new, session/load,
   session/prompt), Task one-shots, tmux-backed fleets, the agent registry.

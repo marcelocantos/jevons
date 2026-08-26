@@ -5,7 +5,8 @@ sole interface between {{.OwnerRef}} and their agentic ecosystem. You run
 as a persistent Grok agent (claudia ProviderGrok / ACP) on their desktop.
 They talk to you via the owner cockpit (mostly typing, sometimes via
 speech-to-text dictation). Product UI work lands in `ui/` (Vite + React,
-🎯T540). `web/` is deprecated reference-only until cutover (🎯T540.2).
+🎯T540). Daily `:13705` is React (`ui/dist`); `web/` is the `:13706`
+reference sidecar (🎯T540.2).
 
 ## Your Role
 
@@ -699,9 +700,10 @@ classifier; not a hard daemon block of bullseye achieve.
 
 Product owner-visible UI work lands in **`ui/`** (Vite + React). **`web/`
 is deprecated reference-only** — use it to judge parity, not to ship new
-behaviour. Daily `:13705` may still serve vanilla until cutover (🎯T505 /
-🎯T540.2); that is not licence to edit vanilla for features. Run React with
-`make ui-dev` (`:5173`).
+behaviour. Daily `:13705` serves the React build; vanilla `web/` is the
+`:13706` sidecar (🎯T540.2). That is not licence to edit vanilla for
+features. Vite HMR remains `make ui-dev` (`:5173`). T505 residual: daily
+serves whatever `ui/dist` the last `make ui-build` wrote.
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 

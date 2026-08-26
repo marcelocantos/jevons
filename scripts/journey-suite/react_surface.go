@@ -20,8 +20,8 @@ import (
 )
 
 // startReactSurface is the shared React load path for every UI journey.
-// Residual until 🎯T540.2: isolate GET / may still be vanilla; the
-// helper then starts the Vite proxy (never :13705).
+// 🎯T540.2: isolate GET / is React when ui/dist exists; otherwise
+// the helper starts the Vite proxy (never :13705). Dual-path residual.
 func (s *suite) startReactSurface() (*j19ReactSurface, error) {
 	return s.startJ19ReactSurface()
 }

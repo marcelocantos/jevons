@@ -109,8 +109,9 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 ## Cockpit UI path (🎯T540)
 - Product owner-visible UI work lands in ui/ (Vite + React). web/ is
   deprecated reference-only — parity oracle, not the place to ship
-  features. Daily :13705 may still serve vanilla until cutover (🎯T505 /
-  🎯T540.2). make ui-dev → :5173.
+  features. Daily :13705 serves React (ui/dist); vanilla web/ is the
+  :13706 sidecar (🎯T540.2). make ui-dev → :5173 HMR. T505 residual:
+  daily serves the last make ui-build.
 
 ## Greenfield oracle elicitation (🎯T31.2)
 - For NEW software (no external reference), co-develop an oracle-coverage
