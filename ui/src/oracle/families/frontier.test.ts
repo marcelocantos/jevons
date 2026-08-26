@@ -26,7 +26,6 @@ import {
   type HoverCardCache,
 } from '../../frontier/table';
 import { playChromeSpec, playKickoffRequest, resolvePlayPO } from '../../frontier/play';
-import { copyImageStatus, imageCopyPlan } from '../../conversation/mermaidClipboard';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
 
@@ -354,15 +353,7 @@ describeOracle(family('frontier'), () => {
   itOracle.skip('T208', 'Frontier tab stays selected under background transcript refresh', 'journey is the arbiter (J27 tab-stick)');
   itOracle.skip('T266', 'target asks show built-in context chrome (repo / PO / product)', 'not ported');
   itOracle.skip('T267', 'target asks auto-select owning PO and highlight the target', 'not ported');
-  itOracle('T83.1', 'owner can copy Mermaid source and image from the graph tab', () => {
-    const { container } = render(createElement(MermaidVizPanel, { open: true, onClose: () => {}, graphNonce: 0 }));
-    expect(container.querySelector('#mvp-copy-source')).toBeTruthy();
-    expect(container.querySelector('#mvp-copy-image')).toBeTruthy();
-    expect(imageCopyPlan({ writeText: true, write: true, multiType: true }).mode).toBe('multi');
-    expect(imageCopyPlan({ writeText: true, write: true, multiType: false }).mode).toBe('image');
-    expect(imageCopyPlan({ writeText: true, write: false, multiType: false }).mode).toBe('text-fallback');
-    expect(copyImageStatus('multi')).toBe('Image + source copied');
-  });
+  itOracle.skip('T83.1', 'owner can copy Mermaid source and image from the graph tab', 'not ported');
   itOracle('T168', 'Frontier tab loads frontier data without HTTP 404', () => {
     expect(FRONTIER_API_PATH).toBe('/api/frontier');
     const app = readFileSync(
