@@ -4,7 +4,7 @@
 import { createElement, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render } from '@testing-library/react';
-import { afterEach, expect } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 import { PlanUsageBar } from '../../components/PlanUsageBar';
 import { nativeTitleForbidden } from '../../components/InstantTip';
 import { classifyPace, PACE_AHEAD, PACE_HOT, PACE_OK } from '../../plan/pace';
@@ -79,6 +79,40 @@ describeOracle(family('plan-ticker'), () => {
     expect(groups[0]?.available).toBe(true);
     expect(groups[0]?.windows.map((w) => w.name)).toEqual(['session', 'weekly']);
     expect(groups[0]?.windows.map((w) => w.remaining_percent)).toEqual([0, 0]);
+  });
+
+  it('T550: cursor monthly window in tickerGroups; codex 7d stays weekly', () => {
+    const cursor = tickerGroups({
+      backends: [
+        {
+          provider: 'cursor',
+          status: 'available',
+          windows: [
+            {
+              name: 'monthly',
+              remaining_percent: 84,
+              used_percent: 16,
+              resets_at: '2026-09-14T00:00:00Z',
+              limit_window_seconds: 31 * 24 * 3600,
+            },
+          ],
+        },
+      ],
+    });
+    expect(cursor[0]?.windows.map((w) => w.name)).toEqual(['monthly']);
+    expect(tickerTipBody(cursor)).toMatch(/84% remaining/);
+    expect(tickerTipBody(cursor)).toMatch(/rollover/);
+
+    const codex = tickerGroups({
+      backends: [
+        {
+          provider: 'codex',
+          status: 'available',
+          windows: [{ name: 'weekly', remaining_percent: 50, resets_at: '2026-08-29T00:00:00Z' }],
+        },
+      ],
+    });
+    expect(codex[0]?.windows[0]?.name).toBe('weekly');
   });
 
   itOracle('T117', 'cost ticker is honest or absent — no invented zero rates', () => {
