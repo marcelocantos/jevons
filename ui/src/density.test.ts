@@ -26,10 +26,13 @@ describe('density', () => {
   });
 
   it('bubble chrome is one family parameterized by data-density', () => {
-    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.css'), 'utf8');
-    const userRules = css.match(/\.msg\.user\s*\{/g) || [];
-    expect(userRules.length, 'one .msg.user rule, compact is [data-density]').toBe(1);
-    expect(css).toMatch(/\[data-density=['"]compact['"]\]/);
+    const root = dirname(fileURLToPath(import.meta.url));
+    const css = readFileSync(join(root, 'cockpit.css'), 'utf8');
+    const widget = readFileSync(join(root, 'components/AgentInteraction.tsx'), 'utf8');
+    const userRules = css.match(/(?:^|\n)\.msg\.user\s*\{/g) || [];
+    expect(userRules.length, 'one .msg.user rule, compact is data-density').toBe(1);
+    expect(css).toMatch(/\.density-compact|\[data-density=['"]compact['"]\]/);
+    expect(widget).toMatch(/data-density=\{density\}/);
     expect(css).not.toMatch(/sidebar-bubble|inspect-msg|rhs-msg/);
   });
 });

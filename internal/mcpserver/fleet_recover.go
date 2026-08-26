@@ -222,11 +222,11 @@ type FleetRecoverSweepArgs struct {
 	// PromptInFlight: name → in flight. Nil → reg.Get(name).PromptInFlight().
 	PromptInFlight func(name string) bool
 	// ProcessRunning optional override for hermetic tests.
-	ProcessRunning     func(name string) bool
-	BriefPresent       func(name string) bool
-	MarkBriefed        func(name string)
-	DesignGated        func(targetID string) bool
-	MissionOpen        func(targetID string) bool
+	ProcessRunning func(name string) bool
+	BriefPresent   func(name string) bool
+	MarkBriefed    func(name string)
+	DesignGated    func(targetID string) bool
+	MissionOpen    func(targetID string) bool
 	LastTerminalReport func(name string) string
 	MissionAcceptance  func(targetID string) string
 	// SessionReminted is optional: name → this boot reminted session_id

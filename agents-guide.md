@@ -480,6 +480,12 @@ above. A mutating call on that path is refused (Cursor `StrReplace`
 included). Residual: Grep of a target id; owner/human editors; the
 bullseye process writes the file. The banner comment is not a gate.
 
+**Dotted families are umbrellas:** `child_of` / `id: T540.3` under T540
+appends the child to the parent's `depends_on`. The parent is not
+retireable and is not frontier-ready until every direct child is
+terminal. Prefer `child_of` or `split aggregate`. Graph `expand:
+children` is display-only — that is not an edge.
+
 **Retrospective coach mine (🎯T353):** the coach does not only wait for new
 appends. On a slow cadence (default 6h, 7d window) it makes a **bounded pass
 over history** — git repair churn and reverts, the eventlog tail, owner chat,

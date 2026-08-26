@@ -10,9 +10,9 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const DAILY_PORT = 13705;
-const isolate = String(process.env.J19_ISOLATE || '').trim();
+const isolate = String(process.env.REACT_ISOLATE || process.env.J19_ISOLATE || '').trim();
 if (!isolate) {
-  throw new Error('j19_vite.config: J19_ISOLATE (isolate host:port) is required');
+  throw new Error('j19_vite.config: REACT_ISOLATE or J19_ISOLATE (isolate host:port) is required');
 }
 if (isolate.indexOf(':' + DAILY_PORT) !== -1 || isolate === String(DAILY_PORT)) {
   throw new Error('j19_vite.config: refuses daily port ' + DAILY_PORT + ' (Universe A)');

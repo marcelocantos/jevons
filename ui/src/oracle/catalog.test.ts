@@ -20,10 +20,11 @@ describe('oracle catalog', () => {
     }
   });
 
-  it('hermetic families outnumber journeys', () => {
+  it('hermetic families remain; journeys cover the chrome pack', () => {
     const hermetic = CATALOG.filter((f) => f.layer === 'hermetic');
     const journey = CATALOG.filter((f) => f.layer === 'journey');
     expect(hermetic.length).toBeGreaterThanOrEqual(8);
-    expect(journey.length).toBeLessThanOrEqual(2);
+    expect(journey.length).toBeGreaterThanOrEqual(8);
+    expect(journey.length).toBeLessThanOrEqual(12);
   });
 });

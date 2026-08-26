@@ -16,6 +16,7 @@ import {
 import { shouldRequestPage } from '../conversation/page';
 import { displayRows, type DisplayKind, type StepItem } from '../conversation/display';
 import { parseAssistantMarkdown } from '../conversation/markdown';
+import { preloadMermaid, renderMermaidIn } from '../conversation/mermaidPaint';
 import { paintUserHTML, userBubbleClass, type TurnOrigin } from '../conversation/paint';
 import { StreamingMarkdownBody } from '../conversation/StreamingMarkdownBody';
 import { relTime } from '../relTime';
@@ -83,6 +84,15 @@ export function AgentTranscript(props: {
     lastCountRef.current = 0;
     setOverscan(HYDRATE_OVERSCAN_MAX);
   }, [props.name]);
+
+  useEffect(() => {
+    if (props.followEpoch == null) return;
+    followRef.current = true;
+    pinningRef.current = true;
+    props.onFollowChange?.(true);
+    const el = parentRef.current;
+    if (el) el.scrollTop = pinWriteScrollTop(el.scrollHeight);
+  }, [props.followEpoch, props.onFollowChange]);
 
   useLayoutEffect(() => {
     if (props.ready && !wasReadyRef.current) followRef.current = true;
@@ -212,6 +222,27 @@ export function AgentTranscript(props: {
   const nearEnd = isNearTranscriptEnd(scrollTop, scrollHeight, clientHeight);
   const historyReplayActive = !props.ready || !hydrateSettled.current;
   const bodyId = density === 'compact' ? 'agent-inspect-body' : 'messages';
+  useEffect(() => {
+    preloadMermaid();
+    let cancelled = false;
+    const paint = () => {
+      if (!cancelled) void renderMermaidIn(parentRef.current);
+    };
+    paint();
+    const raf = requestAnimationFrame(paint);
+    const el = parentRef.current;
+    const obs =
+      el &&
+      new MutationObserver(() => {
+        if (el.querySelector('code.language-mermaid')) paint();
+      });
+    obs?.observe(el, { subtree: true, childList: true });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      obs?.disconnect();
+    };
+  }, [rows, totalSize]);
   return (
     <div id={bodyId} ref={parentRef}>
       {density === 'comfortable' ? <div className="history-sentinel" /> : null}
@@ -233,6 +264,7 @@ export function AgentTranscript(props: {
               text={row.text}
               items={row.items}
               when={row.when}
+              origin={row.origin}
               sealed={row.sealed === true}
               start={pixelFixtureRowTop(item.start, item.index, density)}
               measureRef={virtualizer.measureElement}
@@ -323,7 +355,8 @@ function ClippedBubble(props: {
     );
   }
   const roleClass = props.kind === 'user' ? 'user' : 'jevons';
-  const base = `msg ${roleClass}`;
+  const originClass = props.kind === 'user' ? userBubbleClass(props.origin || 'owner') : '';
+  const base = ['msg', roleClass, originClass].filter(Boolean).join(' ');
   const cls = expanded ? base : clipClassName(base, fullH);
   return (
     <div
@@ -344,7 +377,7 @@ function ClippedBubble(props: {
           <StreamingMarkdownBody text={props.text} bodyRef={bodyRef} />
         )
       ) : (
-        <UserBody text={props.text} bodyRef={bodyRef} />
+        <UserBody text={props.text} origin={props.origin || 'owner'} bodyRef={bodyRef} />
       )}
       {props.when != null ? (
         <div className="msg-time" data-ts={props.when}>
@@ -380,14 +413,19 @@ function MarkdownBody(props: { text: string; bodyRef: React.RefObject<HTMLDivEle
     const el = props.bodyRef.current;
     if (!el) return;
     el.querySelectorAll('a').forEach((a) => a.setAttribute('tabindex', '-1'));
+    void renderMermaidIn(el);
   }, [html, props.bodyRef]);
   return (
     <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={{ __html: html }} />
   );
 }
 
-function UserBody(props: { text: string; bodyRef: React.RefObject<HTMLDivElement | null> }) {
-  const html = renderUserTextWithImages(props.text);
+function UserBody(props: {
+  text: string;
+  origin: TurnOrigin;
+  bodyRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const html = paintUserHTML(props.text, props.origin);
   return (
     <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={{ __html: html }} />
   );

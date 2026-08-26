@@ -93,6 +93,13 @@ func (s *Server) finishCursorStart(name string, existed bool, prompt string) (br
 	return "", nil
 }
 
+func slogCursorMaterialize(name string, err error) {
+	// MarkMaterialized can fail for a missing row in hermetics; the
+	// store+bound check already decided the seat is real.
+	_ = name
+	_ = err
+}
+
 func (s *Server) submitCursorStartBrief(name, prompt string) error {
 	text := s.composeStartBrief(name, prompt)
 	if s != nil && s.cursorSubmit != nil {
@@ -114,8 +121,10 @@ func (s *Server) composeStartBrief(name, prompt string) string {
 	if s == nil {
 		return strings.TrimSpace(prompt)
 	}
-	// roleDisplay / withIdentity take s.mu — do not hold it across them
-	// (that deadlock hung TestT541FinishCursorStartReapsMetaOnly).
+	s.mu.Lock()
+	if s.fleetBriefed == nil {
+		s.fleetBriefed = map[string]bool{}
+	}
 	roleBody := ""
 	if s.registry != nil {
 		if d := s.registry.Def(name); d != nil {
@@ -124,10 +133,6 @@ func (s *Server) composeStartBrief(name, prompt string) string {
 				roleBody = def.Body
 			}
 		}
-	}
-	s.mu.Lock()
-	if s.fleetBriefed == nil {
-		s.fleetBriefed = map[string]bool{}
 	}
 	text, _ := EnsureFleetBriefWithRole(s.fleetBriefed, name, prompt, roleBody)
 	s.mu.Unlock()

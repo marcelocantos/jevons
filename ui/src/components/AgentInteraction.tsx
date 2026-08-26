@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { MuxClient } from '../mux/client';
 import { useConversation, type ConversationMeta } from '../conversation/useConversation';
 import { normalizeDensity, type Density } from '../density';
@@ -18,9 +18,14 @@ export function AgentInteraction(props: {
 }) {
   const density = normalizeDensity(props.density);
   const conv = useConversation(props.mux, props.name);
+  const [following, setFollowing] = useState(true);
+  const [followEpoch, setFollowEpoch] = useState(0);
   useEffect(() => {
     props.onMeta?.(conv.meta);
   }, [conv.meta, props.onMeta]);
+  useEffect(() => {
+    setFollowing(true);
+  }, [props.name]);
   const comfortable = density === 'comfortable';
   return (
     <div
@@ -47,10 +52,22 @@ export function AgentInteraction(props: {
         ready={conv.ready}
         onPageOlder={() => conv.pageOlder(50)}
         onLeaveLive={conv.leaveLive}
+        followEpoch={followEpoch}
+        onFollowChange={setFollowing}
       />
       {comfortable ? (
         <>
-          <button type="button" id="jump-bottom" hidden title="Jump to latest (End / ⌘↓)">
+          <button
+            type="button"
+            id="jump-bottom"
+            hidden={following}
+            title="Jump to latest (End / ⌘↓)"
+            onClick={() => {
+              conv.rejoinLive();
+              setFollowing(true);
+              setFollowEpoch((n) => n + 1);
+            }}
+          >
             ↓ Latest
           </button>
           <div id="attention-bar" aria-label="Attention asides" hidden>

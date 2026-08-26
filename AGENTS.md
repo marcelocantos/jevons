@@ -27,10 +27,14 @@ make ios          # Regenerate the iOS Xcode project (xcodegen)
 
 ```bash
 make run          # Build and run jevonsd (or: brew services start jevons)
-open http://localhost:13705/   # Canonical web UI
+open http://localhost:13705/   # Daily cockpit (vanilla web/ until T540.2 cutover)
+make ui-dev && open http://127.0.0.1:5173/   # Product React cockpit (🎯T540)
 ```
 
-Dev mode serves `web/` from disk with hot reload.
+Product owner-visible UI work lands in `ui/` (Vite + React). `web/` is
+deprecated reference-only — use it to judge parity, not to ship new
+behaviour. Daily `:13705` may still serve vanilla until cutover; that is
+not licence to grow vanilla.
 
 ## Test
 
@@ -163,6 +167,10 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   **Ledger file is tool-only (🎯T546):** do not Read/Write/Edit/StrReplace
   `bullseye.yaml`; mutating calls on that path are refused (including
   Cursor `StrReplace`). The banner comment is not a gate.
+  **Dotted families are umbrellas:** `child_of` / `T540.3` under `T540`
+  is a `depends_on` edge, not a display prefix. Do not treat a parent as
+  retireable or frontier-ready while dotted children are open. Prefer
+  `child_of` or `split aggregate`. Graph `expand: children` is display-only.
 - **Ambient RSI coach (🎯T243 / T92):** harness coach drip-reads owner main
   chat (priority), eventlog, and session transcripts; posts **judgments** to
   the overseer (`jevons_rsi_coach_cycle` / configure / status). Overseer alone
@@ -500,7 +508,8 @@ jevons/
 ├── cmd/jevonsd/          # Coordinator daemon entry point
 ├── internal/             # server, butler, thread, fleet, mcpserver,
 │                         # cost, auth, discovery, transcript, cli
-├── web/                  # Canonical web UI (served by jevonsd)
+├── ui/                   # Product cockpit (Vite + React, 🎯T540)
+├── web/                  # Deprecated reference vanilla cockpit
 ├── ios/Jevon/            # iOS thin client (WKWebView + pigeon)
 ├── scripts/              # journey-suite, chat-smoke, chat-ui-test, …
 ├── docs/                 # charter, architecture-current, design docs

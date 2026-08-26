@@ -172,9 +172,9 @@ func TestDecideDeniesBullseyeYAMLEvenWhenFresh(t *testing.T) {
 		t.Fatalf("refusal must name the bullseye tool: %q", got.Message)
 	}
 	write := Decide(&DecideArgs{
-		Tool:     "Write",
-		RelPath:  "docs/nested/bullseye.yaml",
-		OnDisk:   onDisk,
+		Tool:    "Write",
+		RelPath: "docs/nested/bullseye.yaml",
+		OnDisk:  onDisk,
 		Observed: &Observation{Path: "docs/nested/bullseye.yaml", Hash: HashBytes(onDisk)},
 	})
 	if write.Verdict != Deny || write.Reason != "ledger-tool-only" {
@@ -194,10 +194,10 @@ func TestIsLedgerPath(t *testing.T) {
 func TestDecideDeniesBashRedirectToLedger(t *testing.T) {
 	onDisk := []byte("schema_version: 5\ntargets: {}\n")
 	got := Decide(&DecideArgs{
-		Tool:     ToolBash,
-		Form:     FormRedirect,
-		RelPath:  "bullseye.yaml",
-		OnDisk:   onDisk,
+		Tool:    ToolBash,
+		Form:    FormRedirect,
+		RelPath: "bullseye.yaml",
+		OnDisk:  onDisk,
 		Observed: &Observation{Path: "bullseye.yaml", Hash: HashBytes(onDisk)},
 	})
 	if got.Verdict != Deny || got.Reason != "ledger-tool-only" {

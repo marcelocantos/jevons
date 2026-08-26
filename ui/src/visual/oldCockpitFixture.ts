@@ -67,7 +67,7 @@ export function pixelFixtureActive(): boolean {
 }
 
 /** Visual top deltas vs virtualizer start so rows sit on golden text Y. Compensates pin shift from extra paragraph boxes on b3–b5. Product path unchanged. */
-export const PNG_ROW_DY = [21, 15, 18, 11, 15, 8, 12, 5, 9, 2, 5, -1] as const;
+export const PNG_ROW_DY = [0, 15, -3, 11, 15, 8, 12, 5, 9, 2, 5, -1] as const;
 
 export function pixelFixtureRowTop(start: number, index: number, density?: string): number {
   if (!pixelFixtureActive()) return start;

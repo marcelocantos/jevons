@@ -33,14 +33,12 @@ const (
 
 // j19RootHistoryPaint is the 🎯T491 / 🎯T493 / 🎯T494 oracle: seed
 // distinct sealed owner turns into the *isolate* journal (never the
-// owner's daily history), hard-load the React cockpit, and assert
+// owner's daily history), hard-load the isolate cockpit, and assert
 // the replay both keeps one virtual-list row per turn and *renders*
 // those turns (checkVisibility + centre hit-test + Vision OCR).
-// 🎯T540.1.12 journey-connect: retarget this hard-load at the React
-// surface (ui build or :5173-style Vite proxy against the isolate) —
-// do not add a second connect-tail journey.
-// Residual until 🎯T540.2: isolate GET / may still be vanilla web/;
-// startJ19ReactSurface then serves ui/ via the Vite proxy.
+// 🎯T540.1 journey-connect: retarget this hard-load at the React
+// surface (ui build or :5173 proxy) — do not add a second connect-tail
+// journey. Residual until T540.2: isolate GET / may still be vanilla.
 func (s *suite) j19RootHistoryPaint() error {
 	if err := portguard.RefuseDaily(s.port); err != nil {
 		return err
@@ -57,14 +55,8 @@ func (s *suite) j19RootHistoryPaint() error {
 	// Paint census FIRST against the isolate seed only — never the
 	// owner's daily journal. A live Grok hang must not hide a blank
 	// pane. Agent interaction follows so a green paint still satisfies 🎯T107.
-	surface, err := s.startJ19ReactSurface()
-	if err != nil {
-		return err
-	}
-	defer surface.stop()
-
 	shot := filepath.Join(s.stateDir, "j19-messages.png")
-	paintErr := s.runJ19Paint(shot, surface.host)
+	paintErr := s.runJ19Paint(shot)
 	ocrErr := assertJ19OCR(shot)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -114,16 +106,13 @@ func (s *suite) j19RootHistoryPaint() error {
 	return nil
 }
 
-func (s *suite) runJ19Paint(screenshot, uiHost string) error {
-	if err := refuseDailyHost(uiHost); err != nil {
-		return err
-	}
+func (s *suite) runJ19Paint(screenshot string) error {
 	script, err := j19PaintScript()
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command("node", script,
-		"--host", uiHost,
+		"--host", s.host,
 		"--prefix", j19Prefix,
 		"--min", fmt.Sprint(j19MinMarkers),
 		"--expect", fmt.Sprint(j19SeedTurns),

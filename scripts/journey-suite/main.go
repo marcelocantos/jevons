@@ -88,7 +88,7 @@ func main() {
 	keep := flag.Bool("keep", false, "keep sandbox state dir after run (for debugging)")
 	bin := flag.String("bin", "", "path to jevonsd (default: bin/jevonsd or PATH)")
 	only := flag.String("only", "",
-		"run only journeys whose name contains this substring (e.g. J10)")
+		"run only journeys whose name contains a comma-separated substring (e.g. J10 or J19,J22)")
 	providerFlag := flag.String("provider", "",
 		"agent backend for the whole isolate (claudia provider id: grok, claude, …; empty = JEVONS_PROVIDER, else grok)")
 	flag.Parse()
@@ -243,6 +243,13 @@ persona_notes: |
 	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
 	s.run("J18-t418-handover-mute", s.jT418HandoverMute)
 	s.run("J19-root-history-paint", s.j19RootHistoryPaint)
+	s.run("J22-send-once", s.jSendOnce)
+	s.run("J23-fold-md", s.jFoldMd)
+	s.run("J24-composer", s.jComposerChrome)
+	s.run("J25-fleet-sidebar", s.jFleetSidebar)
+	s.run("J26-aside", s.jAsideChrome)
+	s.run("J27-frontier", s.jFrontierChrome)
+	s.run("J28-ticker-chrome", s.jTickerChrome)
 	s.run("J20-plan-dest", s.j20PlanDest)
 	s.run("J21-goal-continue-all-backends", s.j21GoalContinuesAllBackends)
 
@@ -299,6 +306,16 @@ func assertIsolation(provider claudia.Provider, hadDailyMCP bool, stateDir strin
 	return nil
 }
 
+func journeyNameMatches(name, only string) bool {
+	for _, p := range strings.Split(only, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" && strings.Contains(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func homeDir() string {
 	h, err := os.UserHomeDir()
 	if err != nil {
@@ -308,7 +325,7 @@ func homeDir() string {
 }
 
 func (s *suite) run(name string, fn func() error) {
-	if s.only != "" && !strings.Contains(name, s.only) {
+	if s.only != "" && !journeyNameMatches(name, s.only) {
 		return
 	}
 	start := time.Now()

@@ -14,6 +14,7 @@ const TABS: { id: SidebarTab; label: string }[] = [
 export function SidebarPanel(props: {
   tab: SidebarTab;
   onTab: (tab: SidebarTab) => void;
+  onGraph?: () => void;
   readyCount?: number;
   transcript?: ReactNode;
   children: ReactNode;
@@ -45,7 +46,7 @@ export function SidebarPanel(props: {
         role="tabpanel"
       >
         <div id="frontier-toolbar">
-          <button type="button" id="frontier-graph">
+          <button type="button" id="frontier-graph" title="Open unachieved dependency graph (~90% view)" onClick={props.onGraph}>
             Graph
           </button>
           <button type="button" id="frontier-refresh">

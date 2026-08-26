@@ -134,7 +134,7 @@ func startJ19ViteProxy(isolateHost string) (*j19ReactSurface, error) {
 		"--strictPort",
 	)
 	cmd.Dir = uiRoot
-	cmd.Env = append(os.Environ(), "J19_ISOLATE="+isolateHost)
+	cmd.Env = append(os.Environ(), "J19_ISOLATE="+isolateHost, "REACT_ISOLATE="+isolateHost)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

@@ -10,6 +10,10 @@ import { applyThresholds, formatWindow } from '../plan/pace';
 import { tickerGroups, tickerTitle, type PlanSnapshot } from '../plan/tickerGroups';
 import { pixelFixtureActive, pixelFixturePlanUsage } from '../visual/oldCockpitFixture';
 
+/** Vanilla: 60s once a reading exists; 5s only after a pending long-poll times out. */
+export const PLAN_POLL_MS = 60_000;
+export const PLAN_POLL_PENDING_MS = 5_000;
+
 function hasNumericRemaining(snap: PlanSnapshot | undefined): boolean {
   return tickerGroups(snap).some((g) => g.windows.some((w) => typeof w.remaining_percent === 'number'));
 }
@@ -31,14 +35,17 @@ export function PlanUsageBar() {
   const q = useQuery({
     queryKey: ['plan-usage'],
     enabled: !fixture,
-    queryFn: async () => {
-      const r = await fetch('/api/plan-usage');
+    queryFn: async ({ signal }) => {
+      const r = await fetch('/api/plan-usage', { signal });
       if (!r.ok) throw new Error(String(r.status));
       return (await r.json()) as PlanSnapshot;
     },
     placeholderData: keepPreviousData,
     staleTime: 30_000,
-    refetchInterval: (query) => (hasNumericRemaining(query.state.data) ? 60_000 : 5_000),
+    refetchInterval: (query) => {
+      if (query.state.fetchStatus === 'fetching') return false;
+      return hasNumericRemaining(query.state.data) ? PLAN_POLL_MS : PLAN_POLL_PENDING_MS;
+    },
   });
   const last = useRef<PlanSnapshot | undefined>(undefined);
   const incoming = fixture ? pixelFixturePlanUsage() : q.data;

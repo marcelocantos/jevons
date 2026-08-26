@@ -3,6 +3,7 @@
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { ensureFenceNewlines, parseAssistantMarkdown } from './markdown';
+import { renderMermaidIn } from './mermaidPaint';
 import { createSession, type StreamSession } from './streamingMarkdown';
 
 /** Live unsealed assistant: incremental smd, not marked-every-token. */
@@ -28,6 +29,7 @@ export function StreamingMarkdownBody(props: {
       return;
     }
     session.writeFull(props.text, ensureFenceNewlines);
+    void renderMermaidIn(el);
   }, [props.text]);
 
   useEffect(() => {

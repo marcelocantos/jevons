@@ -84,6 +84,7 @@ every run today; live is the default truth.
 4. **J4-reconnect-sealed** — seed turn → reconnect → bounded replay + sandbox journal only
 4b. **J19-root-history-paint** — seed ≥12 distinct sealed owner turns into the isolate journal (not the owner's history) → hard-load the **React** cockpit (`ui` Vite :5173-style proxy against the isolate; residual until 🎯T540.2 if isolate `GET /` is still vanilla) → Playwright census of the React transcript plus T493 gates (`checkVisibility`, centre hit-test, Vision OCR of a pinned 1280×800 viewport). Empty pane with model rows is a fail (🎯T494). Portguard still refuses `:13705`.
 4c. **J20-plan-dest** — fixture weekly remaining (not live vendor) → omit-provider mint refuses when dest empty; sweep parks an explicit-hot worker (🎯T390.1.5). Overseer chat turn proves isolate agent interaction.
+4d. **J22–J28 chrome pack** (🎯T540.1 census) — React Vite-proxy journeys that re-prove retired owner-visible contracts (send-once, fold/mermaid/silent, composer Home/End, fleet tree, aside `target:`, frontier table+Graph, plan ticker). Referent is the ledger + vanilla chrome (`#input`, `.msg.user`, `.msg-clipped`), not today’s React tree. A miss is a gap, not a reason to relax the check. Shared helper: `react_surface.go` + `react_paint.js`.
 
 ### Orchestration (MCP-direct on the isolate)
 5. **J6-mcp-tool-surface** — agent + thread tools registered

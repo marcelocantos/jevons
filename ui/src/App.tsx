@@ -19,6 +19,7 @@ import { AgentTree, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
 import { FrontierTable, type FrontierRow } from './components/FrontierTable';
 import { PlanUsageBar } from './components/PlanUsageBar';
+import { MermaidVizPanel } from './components/MermaidVizPanel';
 import { applyTheme, persistTheme, readThemePref, type ThemePref } from './theme';
 import {
   DEFAULT_FLEET_FRACTION,
@@ -87,6 +88,8 @@ function Cockpit() {
   const navigate = useNavigate({ from: indexRoute.fullPath });
   const lastAgentsRef = useRef<AgentRow[]>([]);
   const [degraded, setDegraded] = useState('');
+  const [graphOpen, setGraphOpen] = useState(false);
+  const [graphNonce, setGraphNonce] = useState(0);
   const onJevonsMeta = useCallback((meta: ConversationMeta | null) => {
     setDegraded(degradedBannerText(meta));
   }, []);
@@ -312,6 +315,10 @@ function Cockpit() {
               tab={tab}
               readyCount={fixture ? PIXEL_FIXTURE_READY : frontierRows.length}
               onTab={(next) => navigate({ search: { agent, tab: next } })}
+              onGraph={() => {
+                setGraphOpen(true);
+                setGraphNonce((n) => n + 1);
+              }}
               transcript={
                 <AgentInteraction mux={mux} name={agent} title={agent} density="compact" />
               }
@@ -325,6 +332,7 @@ function Cockpit() {
           <div id="workers" title="jwork workers" />
         </div>
       </div>
+      <MermaidVizPanel open={graphOpen} graphNonce={graphNonce} onClose={() => setGraphOpen(false)} />
     </>
   );
 }

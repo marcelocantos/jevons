@@ -7,10 +7,10 @@ package planusage
 // ticker paints from this document plus the live snapshot. Mint and
 // migrate use the same numbers. They are not imported from JS.
 type Thresholds struct {
-	AheadRatio         float64 `json:"ahead_ratio"`
-	HotRatio           float64 `json:"hot_ratio"`
-	UnderWastePercent  float64 `json:"under_waste_percent"`
-	LockedWastePercent float64 `json:"locked_waste_percent"`
+	AheadRatio               float64 `json:"ahead_ratio"`
+	HotRatio                 float64 `json:"hot_ratio"`
+	UnderWastePercent        float64 `json:"under_waste_percent"`
+	LockedWastePercent       float64 `json:"locked_waste_percent"`
 	// WarmupElapsedPercent is served for document compat. Colour and
 	// WeeklyBandOf do not short-circuit on it (🎯T390.1.6.2) — damping
 	// is the only early-window ease.

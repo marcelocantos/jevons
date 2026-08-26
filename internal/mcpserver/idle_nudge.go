@@ -127,9 +127,9 @@ type IdleNudgeObs struct {
 	// session_id for the seat (🎯T545.1). Empty-goal blocked is bounce
 	// failure — do not full_brief / unstick as if it were the same worker.
 	SessionReminted bool
-	IdleThreshold   time.Duration // 0 → DefaultIdleNudgeThreshold
-	MaxNudges       int           // 0 → DefaultIdleNudgeMax
-	Backoffs        []time.Duration
+	IdleThreshold  time.Duration // 0 → DefaultIdleNudgeThreshold
+	MaxNudges      int           // 0 → DefaultIdleNudgeMax
+	Backoffs       []time.Duration
 }
 
 // ClassifyIdleNudge decides skip | nudge | maxed for one agent.
@@ -805,20 +805,20 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	}
 
 	obs := IdleNudgeObs{
-		Name:            d.Name,
-		Purpose:         purpose,
-		FleetIntent:     args.Intent.FleetState(),
-		Intent:          args.Intent.AgentState(d.Name),
-		ProcessRunning:  running,
-		DeliberateStop:  deliberateStop,
-		Phase:           phase,
-		IdleFor:         idleFor,
-		HasOpenMission:  hasMission,
-		DesignGated:     designGated,
-		LooksFinished:   looksFinished,
-		BriefPresent:    briefPresent,
-		NudgeCount:      count,
-		SinceLastNudge:  since,
+		Name:           d.Name,
+		Purpose:        purpose,
+		FleetIntent:    args.Intent.FleetState(),
+		Intent:         args.Intent.AgentState(d.Name),
+		ProcessRunning: running,
+		DeliberateStop: deliberateStop,
+		Phase:          phase,
+		IdleFor:        idleFor,
+		HasOpenMission: hasMission,
+		DesignGated:    designGated,
+		LooksFinished:  looksFinished,
+		BriefPresent:   briefPresent,
+		NudgeCount:     count,
+		SinceLastNudge: since,
 		EverNudged:      ever,
 		PostRestart:     args.PostRestart,
 		SessionReminted: args.SessionReminted != nil && args.SessionReminted(d.Name),
@@ -1149,10 +1149,10 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 
 	defs := s.registry.List()
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:             s.registry,
-		Activity:        activity,
-		Ledger:          ledger,
-		Push:            push,
+		Reg:          s.registry,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
 		Now:             now,
 		PostRestart:     false,
 		OverseerName:    overseer,
@@ -1251,11 +1251,11 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{
-		Reg:             s.registry,
-		Activity:        activity,
-		Ledger:          ledger,
-		Push:            push,
-		Interrupt:       interruptFn,
+		Reg:          s.registry,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
+		Interrupt:    interruptFn,
 		Now:             time.Now(),
 		OverseerName:    overseer,
 		StuckTimeout:    DefaultFleetStuckTimeout,
@@ -1563,10 +1563,10 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 	}
 
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:             s.registry,
-		Activity:        activity,
-		Ledger:          ledger,
-		Push:            push,
+		Reg:          s.registry,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
 		Now:             time.Now(),
 		PostRestart:     true,
 		OverseerName:    overseer,
