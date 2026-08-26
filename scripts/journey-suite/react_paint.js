@@ -257,6 +257,16 @@ async function scenarioFrontier(page) {
   await page.locator('#frontier-graph').click();
   const graph = await page.locator('#mermaid-viz-panel').count();
   if (graph < 1) fail('T185', 'Graph control must open #mermaid-viz-panel (vanilla near-full-page graph)');
+  const panelOpen = await page.locator('#mermaid-viz-panel.open.mvp-large').count();
+  if (panelOpen < 1) {
+    fail('T185', 'Graph control must open #mermaid-viz-panel (vanilla near-full-page graph)');
+  }
+  // T181/T175 hover the table — dismiss the ~90% overlay so the RHS stays reachable.
+  await page.locator('#mvp-close').click();
+  await page.waitForFunction(() => {
+    const p = document.getElementById('mermaid-viz-panel');
+    return p && !p.classList.contains('open');
+  }, null, { timeout: 8000 });
   const host = page.locator('#frontier-table .ft-id [data-instant-tip-host], #frontier-table .ft-id').first();
   if ((await host.count()) < 1) fail('T181', 'Frontier table has no ID cell to hover');
   await host.hover();
@@ -306,7 +316,9 @@ async function scenarioFrontier(page) {
   await page.mouse.move(gapX, gapY, { steps: 8 });
   const still = await page.locator('.instant-tip-show').count();
   if (still < 1) fail('T271', 'card must stay open while the pointer crosses the host→card corridor');
-  await page.mouse.move(gapX, Math.max(4, hostBox.y - 48), { steps: 6 });
+  // Vertical leave: table X (not corridor X) above the row band — matches instant_tip_test T271.
+  const tableX = hostBox.x + hostBox.width / 2;
+  await page.mouse.move(tableX, Math.max(4, hostBox.y - 48), { steps: 6 });
   const gone = await page.locator('.instant-tip-show').count();
   if (gone > 0) fail('T271', 'card must dismiss immediately when the pointer leaves the row band vertically');
 }
