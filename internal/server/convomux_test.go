@@ -493,32 +493,7 @@ func TestMuxWindowMetaTruncatedKeepsOlder(t *testing.T) {
 	}
 }
 
-func TestStitchMuxOlderPreservesSuffixIDs(t *testing.T) {
-	prev := []muxwin.Event{
-		{ID: "e:1", Index: 1, Type: "user", Body: json.RawMessage(`{"t":1}`)},
-		{ID: "e:2", Index: 2, Type: "user", Body: json.RawMessage(`{"t":2}`)},
-	}
-	full := []muxwin.Event{
-		{ID: "e:1", Index: 1, Type: "user", Body: json.RawMessage(`{"t":0}`)},
-		{ID: "e:2", Index: 2, Type: "user", Body: json.RawMessage(`{"t":1}`)},
-		{ID: "e:3", Index: 3, Type: "user", Body: json.RawMessage(`{"t":2}`)},
-	}
-	got := stitchMuxOlder(prev, full)
-	if len(got) != 3 {
-		t.Fatalf("n=%d", len(got))
-	}
-	if got[1].ID != "e:1" || got[2].ID != "e:2" {
-		t.Fatalf("suffix ids must stay e:1/e:2, got %s %s", got[1].ID, got[2].ID)
-	}
-	if got[0].ID == "e:1" {
-		t.Fatal("new older event must not reuse e:1")
-	}
-	if got[0].Index != 1 || got[1].Index != 2 || got[2].Index != 3 {
-		t.Fatalf("indices=%d,%d,%d", got[0].Index, got[1].Index, got[2].Index)
-	}
-}
-
-func TestMuxPageBeforeGrowsTruncatedTail(t *testing.T) {
+func TestMuxPageBeforeDoesNotRenumberSentIndexes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	var b strings.Builder
@@ -554,68 +529,57 @@ func TestMuxPageBeforeGrowsTruncatedTail(t *testing.T) {
 	if !s.muxTruncated("jevons") {
 		t.Fatal("tiny tail of a 6k journal must be truncated")
 	}
+	want := make(map[string]int, len(evs))
+	for _, ev := range evs {
+		want[ev.ID] = ev.Index
+	}
 
 	buf := &replayBuf{}
 	if err := s.writeMuxWindow(t.Context(), buf, nil, "jevons", -muxwin.DefaultFollow, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	var oldest string
-	var lastMeta map[string]any
 	for _, m := range buf.frames {
-		if m["t"] == "frame" {
-			body, _ := m["body"].(map[string]any)
-			if id, _ := body["id"].(string); id != "" && oldest == "" {
-				oldest = id
-			}
+		if m["t"] != "frame" {
+			continue
 		}
-		if m["t"] == "meta" {
-			lastMeta, _ = m["body"].(map[string]any)
+		body, _ := m["body"].(map[string]any)
+		if id, _ := body["id"].(string); id != "" && oldest == "" {
+			oldest = id
 		}
 	}
 	if oldest == "" {
 		t.Fatal("no delivered frame")
 	}
-	if muxMetaOlder(lastMeta) == 0 {
-		t.Fatalf("truncated journal must keep older>0 at cache start: %+v", lastMeta)
+
+	pageBuf := &replayBuf{}
+	s.writeMuxPageBefore(t.Context(), pageBuf, nil, "jevons", oldest, 50)
+	for _, m := range pageBuf.frames {
+		if m["t"] != "frame" {
+			continue
+		}
+		body, _ := m["body"].(map[string]any)
+		raw, _ := body["event"].(string)
+		if raw == "" {
+			if ev, ok := body["event"].(map[string]any); ok {
+				b, _ := json.Marshal(ev)
+				raw = string(b)
+			}
+		}
+		if strings.Contains(raw, "HEADMARKER") {
+			t.Fatal("JSONL fallback must not grow/renumber to reach journal prefix")
+		}
+		id, _ := body["id"].(string)
+		if strings.HasPrefix(id, "e:o:") {
+			t.Fatalf("grown id %s is stitchMuxOlder residue", id)
+		}
 	}
 
-	seenHead := false
-	before := oldest
-	for i := 0; i < 16 && !seenHead; i++ {
-		pageBuf := &replayBuf{}
-		s.writeMuxPageBefore(t.Context(), pageBuf, nil, "jevons", before, 50)
-		var pageOlder int
-		var firstNew string
-		for _, m := range pageBuf.frames {
-			if m["t"] == "frame" {
-				body, _ := m["body"].(map[string]any)
-				raw, _ := body["event"].(string)
-				if raw == "" {
-					if ev, ok := body["event"].(map[string]any); ok {
-						b, _ := json.Marshal(ev)
-						raw = string(b)
-					}
-				}
-				if strings.Contains(raw, "HEADMARKER") {
-					seenHead = true
-				}
-				if id, _ := body["id"].(string); id != "" && firstNew == "" {
-					firstNew = id
-				}
-			}
-			if m["t"] == "page" {
-				body, _ := m["body"].(map[string]any)
-				pageOlder = muxMetaOlder(body)
-			}
+	after := s.mux.eventsFor("jevons")
+	for _, ev := range after {
+		if idx, ok := want[ev.ID]; ok && ev.Index != idx {
+			t.Fatalf("sent id %s reindexed %d → %d", ev.ID, idx, ev.Index)
 		}
-		if firstNew != "" {
-			before = firstNew
-		} else if pageOlder == 0 {
-			break
-		}
-	}
-	if !seenHead {
-		t.Fatal("page-up never reached the journal prefix past the first-paint tail")
 	}
 }
 

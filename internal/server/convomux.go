@@ -6,7 +6,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -695,11 +694,6 @@ func (s *Server) muxWrite(ctx context.Context, conn muxConn, ch, t string, body 
 // Grow only when the tail does not yet hold DefaultFollow events.
 const muxFirstPaintBytesMax = 8 << 20
 
-// muxPageGrowBytesMax is how far one session will walk backward from
-// EOF on PageUp (🎯T494.1.4). Doubles per empty page. Residual: the
-// rest of an 87MB journal past this cap is still on disk.
-const muxPageGrowBytesMax = 32 << 20
-
 func (s *Server) muxTailStartBytes() int {
 	if s != nil && s.muxTailBytes > 0 {
 		return s.muxTailBytes
@@ -914,47 +908,21 @@ func (s *Server) writeMuxPageBefore(ctx context.Context, conn muxConn, sess *mux
 		s.writeMuxPageBeforeDB(ctx, conn, sess, name, before, limit)
 		return
 	}
+	// JSONL fallback pages the current cache only. Growing the tail and
+	// stitching older events would renumber already-sent indexes
+	// (🎯T548.3). Product path is statedb absolute n/index.
 	events := s.muxCoalesced(name, false)
-	if s.mux != nil && s.mux.absoluteN(name) > 0 {
-		s.writeMuxPageBeforeDB(ctx, conn, sess, name, before, limit)
-		return
-	}
-	var watch *muxWatch
 	var have map[int]struct{}
 	if sess != nil {
-		watch = sess.ensure(name)
+		watch := sess.ensure(name)
 		have = muxwin.HaveFromIDs(events, watch.sent)
 	}
 	page, err := muxwin.BeforeUnsent(events, before, limit, have)
-	if err != nil && s.muxTruncated(name) && s.muxGrowOlder(name) {
-		events = s.muxCoalesced(name, false)
-		if watch != nil {
-			have = muxwin.HaveFromIDs(events, watch.sent)
-		}
-		page, err = muxwin.BeforeUnsent(events, before, limit, have)
-	}
 	if err != nil {
 		s.muxWrite(ctx, conn, ch, "error", map[string]any{"error": err.Error()})
 		return
 	}
-	// Page is a fetch of older unsent events, not a new CQRS window.
-	// The last open/window subscription keeps streaming as-is.
 	out := muxwin.Slice(events, muxwin.Need(page, len(events), have))
-	for len(out) == 0 && s.muxTruncated(name) {
-		if !s.muxGrowOlder(name) {
-			break
-		}
-		events = s.muxCoalesced(name, false)
-		if watch != nil {
-			have = muxwin.HaveFromIDs(events, watch.sent)
-		}
-		var growErr error
-		page, growErr = muxwin.BeforeUnsent(events, before, limit, have)
-		if growErr != nil {
-			break
-		}
-		out = muxwin.Slice(events, muxwin.Need(page, len(events), have))
-	}
 	s.writeMuxPageEnvelope(ctx, conn, sess, name, page, out, len(events), s.muxTruncated(name))
 }
 
@@ -1071,120 +1039,4 @@ func (s *Server) writeMuxPage(ctx context.Context, conn muxConn, name string, en
 		lo = 1
 	}
 	_ = s.writeMuxWindow(ctx, conn, nil, name, lo, end, false)
-}
-
-func (s *Server) muxPageGrowCap() int {
-	if s != nil && s.muxTailBytes > 0 {
-		capBytes := s.muxTailBytes * 64
-		if capBytes < 1<<20 {
-			capBytes = 1 << 20
-		}
-		return capBytes
-	}
-	return muxPageGrowBytesMax
-}
-
-// muxGrowOlder doubles the byte tail and stitches newly visible older
-// events onto the cache, keeping already-sent event IDs stable so the
-// client's before cursor still resolves (🎯T494.1.4).
-func (s *Server) muxGrowOlder(name string) bool {
-	if s == nil || s.mux == nil {
-		return false
-	}
-	curBytes, truncated := s.mux.tailState(name)
-	if !truncated {
-		return false
-	}
-	start := s.muxTailStartBytes()
-	if curBytes < start {
-		curBytes = start
-	}
-	next := curBytes * 2
-	if next < start*2 {
-		next = start * 2
-	}
-	capBytes := s.muxPageGrowCap()
-	if next > capBytes {
-		next = capBytes
-	}
-	if next <= curBytes {
-		return false
-	}
-	prev := s.mux.eventsFor(name)
-	prevLen := len(prev)
-	lines, stillTrunc := s.muxJournalTail(name, next)
-	full := muxwin.EventsFromLines(lines)
-	grown := stitchMuxOlder(prev, full)
-	s.mux.replaceCache(name, grown, next, stillTrunc)
-	return len(grown) > prevLen || next > curBytes
-}
-
-func sameMuxEvent(a, b muxwin.Event) bool {
-	if a.Type != b.Type {
-		return false
-	}
-	if a.TS != "" && b.TS != "" && a.TS != b.TS {
-		return false
-	}
-	return string(a.Body) == string(b.Body)
-}
-
-func nextGrownIDBase(prev []muxwin.Event) int {
-	max := 0
-	for _, e := range prev {
-		var n int
-		if _, err := fmt.Sscanf(e.ID, "e:o:%d", &n); err == nil && n > max {
-			max = n
-		}
-	}
-	return max + 1
-}
-
-func stitchMuxOlder(prev, full []muxwin.Event) []muxwin.Event {
-	if len(prev) == 0 {
-		return full
-	}
-	if len(full) == 0 {
-		return prev
-	}
-	cut := -1
-	anchor := prev[0]
-	for i := range full {
-		if sameMuxEvent(full[i], anchor) {
-			cut = i
-			break
-		}
-	}
-	if cut < 0 {
-		// Fold may have rewritten the old start (torn first line).
-		// Match a suffix from EOF.
-		n, m := len(prev), len(full)
-		if m < n {
-			return full
-		}
-		cut = m - n
-		for i := 0; i < n; i++ {
-			if !sameMuxEvent(prev[i], full[cut+i]) {
-				return full
-			}
-		}
-	}
-	if cut == 0 {
-		return prev
-	}
-	older := make([]muxwin.Event, cut)
-	copy(older, full[:cut])
-	base := nextGrownIDBase(prev)
-	out := make([]muxwin.Event, 0, cut+len(prev))
-	for i := range older {
-		older[i].Index = i + 1
-		older[i].ID = fmt.Sprintf("e:o:%d", base+i)
-		out = append(out, older[i])
-	}
-	for i := range prev {
-		ev := prev[i]
-		ev.Index = cut + i + 1
-		out = append(out, ev)
-	}
-	return out
 }
