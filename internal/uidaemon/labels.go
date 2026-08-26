@@ -13,8 +13,8 @@ import (
 )
 
 // ReactLabel is the launchd job that supervises the React daily surface.
-// It must not KeepAlive jevonsd — that is the brew reclaim hazard 🎯T405
-// already refused. The job is a StartInterval probe.
+// It must not KeepAlive jevonsd — that job is com.marcelocantos.jevonsd
+// (🎯T553.3). This label is a StartInterval document probe only.
 const ReactLabel = "com.marcelocantos.jevons-ui"
 
 // VanillaLabel is the KeepAlive UI-only vanilla reference on DailyVanillaPort.

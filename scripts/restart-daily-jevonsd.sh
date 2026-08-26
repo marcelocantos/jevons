@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# 🎯T191 — rebuild + restart the daily jevonsd on :13705.
+# 🎯T191 / 🎯T553 — rebuild + activate the daily jevonsd on :13705.
+# Workers do not auto-invoke this (🎯T553.2). Prefer KeepAlive
+# com.marcelocantos.jevonsd as the process owner (🎯T553.3).
 #
 # Purpose: overseer/PO/worker bounce after daemon-path Build without asking
 # the owner to restart by hand (🎯T188). Session death must not cancel the
@@ -488,6 +490,29 @@ stop_brew_jevons() {
   fi
 }
 
+# 🎯T553.3: if KeepAlive owns jevonsd, SIGHUP is enough — launchd
+# relaunches the binary. Bootstrap the job when the plist exists but
+# launchd is not holding it (first adopt after write-only install).
+# Fall back to nohup only when no plist has been written yet.
+start_or_adopt_daemon() {
+  local label="com.marcelocantos.jevonsd"
+  local plist="$HOME/Library/LaunchAgents/${label}.plist"
+  local domain="gui/$(id -u)"
+  if [[ -f "$plist" ]]; then
+    if launchctl print "${domain}/${label}" >/dev/null 2>&1; then
+      log "🎯T553.3 KeepAlive $label already loaded; kickstart after SIGHUP"
+      launchctl kickstart -k "${domain}/${label}" >/dev/null 2>&1 || true
+    else
+      log "🎯T553.3 bootstrap KeepAlive $label (port is free)"
+      launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || \
+        die "could not bootstrap $label from $plist"
+    fi
+    return 0
+  fi
+  log "KeepAlive plist absent; nohup-start (legacy until make jevonsd-install)"
+  start_daemon_detached
+}
+
 start_daemon_detached() {
   # Detach so SIGHUP/SIGTERM to this script (or its parent agent) does not
   # kill the new jevonsd. Prefer setsid when present; always nohup.
@@ -592,7 +617,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T218 wait out the ${MIN_INTERVAL_SEC}s thrash window rather than skip a changed binary"
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
   log "[dry-run] would: 🎯T392.5 SIGHUP listeners on :$PORT (upgrade exit — in-flight agent turns survive), SIGKILL only if the port is still held after ${STOP_WAIT_SEC}s"
-  log "[dry-run] would: nohup/setsid start $BIN -port $PORT -vanilla-port 0 -workdir $WORKDIR >>$LOG"
+  log "[dry-run] would: 🎯T553.3 bootstrap/kickstart com.marcelocantos.jevonsd if the KeepAlive plist exists, else nohup/setsid start $BIN -port $PORT -vanilla-port 0 -workdir $WORKDIR >>$LOG"
   log "[dry-run] would: wait for /health 200 and /api/frontier non-404"
   log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-daily-jevonsd.sh >>\$HOME/.jevons/restart-daily.log 2>&1 &"
   exit 0
@@ -634,18 +659,36 @@ if [[ "$SKIP_MAKE" != "1" ]]; then
     -dest "$ROOT/bin/jevons-watchdog" ||
     log "WARNING: the watchdog did not rebuild — the daemon is coming up supervised by whatever build is on disk"
 
-  # 🎯T540.2: daily GET / serves ui/dist from disk (not go:embed — T360).
-  # Built from the shared tree so the owner sees current React; T505
-  # residual is that a dirty ui/ can land on :13705. Dist is read per
-  # request, so a successful build here updates GET / even when T218
-  # then no-ops the daemon bounce.
-  log "rebuild: ui/dist for daily React GET / (🎯T540.2; vite bundle, not tsc)"
-  if (cd "$ROOT/ui" && npx vite build); then
-    log "ui/dist rebuilt"
-  elif [[ -f "$ROOT/ui/dist/index.html" ]]; then
-    log "WARNING: ui-build failed; keeping existing ui/dist"
+  # 🎯T553.1 / T505: ui/dist from committed HEAD in the same snapshot,
+  # never the shared clone. A dirty ui/src throw must not execute on
+  # :13705. node_modules is linked from the clone (not source WIP).
+  log "rebuild: ui/dist from committed HEAD snapshot (🎯T553.1; vite bundle, not tsc)"
+  snap_ui="$SNAP_DIR/ui"
+  if [[ ! -d "$snap_ui" ]]; then
+    if [[ -f "$ROOT/ui/dist/index.html" ]]; then
+      log "WARNING: snapshot has no ui/; keeping existing ui/dist"
+    else
+      die "snapshot has no ui/ and no ui/dist — daily GET / cannot serve React"
+    fi
   else
-    die "ui-build failed and no ui/dist — daily GET / cannot serve React (🎯T540.2)"
+    if [[ -d "$ROOT/ui/node_modules" && ! -e "$snap_ui/node_modules" ]]; then
+      ln -s "$ROOT/ui/node_modules" "$snap_ui/node_modules" || \
+        log "WARNING: could not link ui/node_modules into snapshot"
+    fi
+    if (cd "$snap_ui" && npx vite build); then
+      mkdir -p "$ROOT/ui/dist"
+      if command -v rsync >/dev/null 2>&1; then
+        rsync -a --delete "$snap_ui/dist/" "$ROOT/ui/dist/"
+      else
+        rm -rf "$ROOT/ui/dist"
+        cp -R "$snap_ui/dist" "$ROOT/ui/dist"
+      fi
+      log "ui/dist installed from snapshot HEAD"
+    elif [[ -f "$ROOT/ui/dist/index.html" ]]; then
+      log "WARNING: snapshot ui-build failed; keeping existing ui/dist"
+    else
+      die "snapshot ui-build failed and no ui/dist — daily GET / cannot serve React (🎯T540.2)"
+    fi
   fi
 else
   log "skip make (JEVONS_RESTART_SKIP_MAKE=1)"
@@ -721,7 +764,7 @@ if [[ "${JEVONS_RESTART_FAULT:-}" == "after-kill" ]]; then
   kill -9 $$
 fi
 
-start_daemon_detached
+start_or_adopt_daemon
 wait_until_serving
 record_active_identity
 ensure_vanilla_ui_agent

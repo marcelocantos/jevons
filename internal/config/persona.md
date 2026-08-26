@@ -592,45 +592,43 @@ into continuous origin delivery after a PO opens remotes.
    in plain language, redirect integrators to local only — do not keep
    shipping remotes "for consistency."
 
-## Daemon rebuild + restart (🎯T188 / 🎯T191) — hard rule
+## Daemon activation (🎯T188 / 🎯T191 / 🎯T553) — hard rule
 
-After any **daemon-path** Build (changes the running `jevonsd` binary or
-server-side behaviour), rebuild and restart the daily daemon **without
-asking the owner**. The owner never restarts by hand. Pure static
+The owner never restarts by hand (🎯T188). A committed script exists so
+an overseer or owner-requested activation can bounce without the owner
+typing brew/kill (🎯T191).
+
+**Workers do not invoke `restart-daily-jevonsd` after every daemon-path
+land (🎯T553.2).** Activation is owner ask, overseer-on-request, or
+launchd KeepAlive — not the implementer's done ritual.
+
+Daily `:13705` serves **committed HEAD** (daemon via buildsnap; `ui/dist`
+from the same snapshot) until worktrees exist (🎯T505 / 🎯T553.1 /
+🎯T254.2). Shared-clone disk WIP is not the daily page. Pure static
 web-only changes may hard-reload only.
 
-**Do not claim a daemon-path fix is done** until the restart script has
-succeeded (or a proven zero-downtime upgrade path completed). Session
-drop on restart is accepted residual until 🎯T40 / 🎯T171 make it
-invisible.
-
-**How (🎯T191):** invoke the committed script **detached** so overseer/PO
-session death does not cancel the bounce:
+If you *are* activating (owner asked, or you are applying HEAD), invoke
+**detached** so session death does not cancel it:
 
 ```bash
 nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
 ```
 
-Blessed path is always `nohup` (or `setsid`) + background. The script
-itself starts `bin/jevonsd` under nohup/setsid so the daemon outlives the
-script.
+The script rebuilds HEAD, stops brew KeepAlive (Cellar must not reclaim
+`:13705`), SIGHUPs the listener (🎯T40 / 🎯T392.5), and waits until
+`/health` serves. Prefer launchd KeepAlive **`com.marcelocantos.jevonsd`**
+as the process owner (🎯T553.3) rather than nohup-start.
 
-**Supervision — the restart is no longer a trapeze act (🎯T405).** Two
-things changed after the 2026-08-10 outage, in which a worker's restart
+**Supervision (🎯T405 / 🎯T553.3).** On 2026-08-10 a worker's restart
 killed the daemon, the daemon's shutdown stopped that worker, and the
 script died with it five seconds before the step that starts the
-replacement. First, the script **re-execs itself into its own session**
-through `bin/detach` before doing anything, so invoking it wrongly can no
-longer cause an outage — the blessed `nohup` invoke stays preferred
-because it also stops the caller *blocking* on the bounce, but
-correctness no longer depends on anyone remembering it. Second, the
-launchd job **`com.marcelocantos.jevons-watchdog`** probes the daily port
-every 30s from outside every process tree a restart tears down, and
-restarts through this same script when the port stays dead past a grace
-window — so a bounce that fails for any *other* reason is recovered
-without the owner too. Install with `make watchdog-install`, inspect with
-`make watchdog-status`. A recovered outage is recorded to disk and
-reported into owner chat by the daemon once it is serving again.
+replacement — the fleet stayed down until the owner noticed. The
+standing fix is **launchd KeepAlive on `jevonsd` itself** (`own session`
+via `bin/detach` still wraps an upgrade bounce). Install with
+`make jevonsd-install`. The probe-and-invoke job
+**`com.marcelocantos.jevons-watchdog`** (`make watchdog-install`) is
+**not** the standing supervisor — it must not call the fat script when
+KeepAlive owns the process.
 
 ## Run gates so the status survives (🎯T386 / 🎯T396) — hard rule
 
@@ -675,26 +673,26 @@ Pure helpers: `gate.FlagFalseGreen` / `gate.Banner` (`internal/gate`).
 detection is textual and narrow on purpose (a checker that flags honest
 reports gets skimmed past, which launders the next real false green).
 
-## Achieve reports need activated daily path (🎯T194) — hard rule
+## Owner-visible claims are observed (🎯T552 / 🎯T553.2) — was 🎯T194
 
 A target whose **product path is served by daily jevonsd** (HTTP API,
-compiled server behaviour, non-static) is **not achieved** until:
+compiled server, non-static) is **not achieved on hermetics alone**.
+**Hermetic unit green is necessary, not sufficient** — a **stale binary**
+still serving is a real failure.
 
-1. **Detached** `scripts/restart-daily-jevonsd.sh` succeeds (or a proven
-   zero-downtime upgrade path completes), **and**
-2. A **live probe** of the product path is green (e.g. `curl` non-404 /
-   expected JSON on `:13705`).
+The test is **observation of the running surface** (composer, transcript,
+tree, a **live probe** / curl of the path the owner hits) — 🎯T552.
+Restart-script success, HEAD snapshot, and GATE lines are how a change
+gets into a process that does not load the working tree. They are **not**
+the oracle. Do not claim owner-visible behaviour from hermetics alone.
 
-**Hermetic unit green is necessary, not sufficient.** Finishing with only
-`go test` / `make test` / hermetic greps while a **stale binary** still
-serves the daily port is a false fixed claim (owner-wasted time). Pure
-static web-only may hard-reload only (🎯T188 residual).
+`HasDailyPathEvidence` remains a seam classifier for reports that cite
+activation (`restart-daily-jevonsd` / live probe). It is **not an achieve gate**.
+A finish report that only cites restart-daily / GATE / HEAD
+snapshot without saying what was seen is not sufficient.
 
-**Finish reports for daemon/API work must cite daily-path evidence** —
-restart-daily success and/or live probe (HTTP status / body marker) —
-not hermetics alone. Pure helper: `HasDailyPathEvidence` (mcpserver).
-**Residual:** instructional doctrine + fleet brief inject + pure
-classifier; not a hard daemon block of bullseye achieve.
+**Residual:** instructional + classifiers; not a hard daemon block of
+bullseye achieve. Pure static web-only may hard-reload only (🎯T188).
 
 ## Cockpit UI path (🎯T540)
 
@@ -704,8 +702,8 @@ behaviour. Daily `:13705` serves the React build (LaunchAgent
 `com.marcelocantos.jevons-ui`); vanilla `web/` is the `:13706`
 LaunchAgent `com.marcelocantos.jevons-ui-vanilla` (🎯T540.4). That is
 not licence to edit vanilla for features. `make ui-dev` is opt-in HMR,
-not a standing agent. T505 residual: daily serves whatever `ui/dist`
-the last `make ui-build` wrote.
+not a standing agent. T505 / T553.1: daily `ui/dist` is built from
+committed HEAD, not the shared-clone working tree.
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 

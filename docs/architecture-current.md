@@ -28,10 +28,11 @@ surfaces, the MCP tools the CEO drives, durable state, and cost governance.
 - **`cmd/jevonsd`** — the daemon. HTTP/WS server, web/React asset serving,
   mTLS device provisioning, cost wiring, CLI flags.
 - **`ui/`** — the **product** cockpit (Vite + React 19, 🎯T540). Daily
-  `:13705` `GET /` serves `ui/dist` (🎯T540.2). Supervised by LaunchAgent
-  `com.marcelocantos.jevons-ui` (StartInterval probe — not KeepAlive
-  jevonsd; 🎯T540.4 / T405). `make ui-dev` is opt-in HMR, not a standing
-  agent. This is where owner-visible UI work lands.
+  `:13705` `GET /` serves `ui/dist` built from committed HEAD (🎯T540.2 /
+  T553.1). Process owner is launchd KeepAlive `com.marcelocantos.jevonsd`
+  (🎯T553.3). React document probe is LaunchAgent `com.marcelocantos.jevons-ui`
+  (StartInterval — not a second jevonsd; 🎯T540.4). `make ui-dev` is opt-in
+  HMR, not a standing agent. This is where owner-visible UI work lands.
 - **`web/`** — **deprecated reference** vanilla cockpit on `:13706`,
   KeepAlive LaunchAgent `com.marcelocantos.jevons-ui-vanilla` (UI-only:
   static `web/` + reverse-proxy to `:13705`; no second `~/.jevons`

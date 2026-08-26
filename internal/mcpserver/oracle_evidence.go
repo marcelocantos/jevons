@@ -355,11 +355,10 @@ var hermeticOnlyMarkers = []string{
 	"node web/scripts",
 }
 
-// HasDailyPathEvidence reports whether a finish report cites activated
-// daily-path product evidence for daemon/API work (🎯T194): detached
-// restart-daily success and/or a live probe (curl / HTTP status / daily
-// port / product route). Hermetic unit green alone is not enough.
-// Pure string heuristic — not a hard daemon block of bullseye achieve.
+// HasDailyPathEvidence reports whether a finish report cites activation
+// of the daily path (restart-daily, curl, :13705, …). 🎯T552 / 🎯T553.2:
+// this is a seam classifier, not an achieve gate. Observation of the
+// running surface is the test. Pure string heuristic.
 func HasDailyPathEvidence(report string) bool {
 	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasDaily() {
 		return true

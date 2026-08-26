@@ -16,8 +16,9 @@ import (
 )
 
 // ReactPlistXML is the StartInterval React-surface probe. KeepAlive is
-// deliberately absent — a KeepAlive jevonsd fights restart-daily SIGHUP
-// the same way brew services did (🎯T405).
+// deliberately absent here: the process owner is com.marcelocantos.jevonsd
+// (🎯T553.3), not this probe. A second KeepAlive jevonsd would fight
+// SIGHUP the same way brew services did (🎯T405).
 func ReactPlistXML(spec Spec) string {
 	log := filepath.Join(spec.StateDir, "ui-react-probe.log")
 	args := []string{spec.Binary, "-ui", "probe"}

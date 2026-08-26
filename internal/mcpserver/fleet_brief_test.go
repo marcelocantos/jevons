@@ -113,8 +113,10 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"hard-reloadable UI",
 		"proven API",
 		"daily path",
-		// 🎯T194 daily-path achieve evidence
-		"Achieve reports need activated daily path",
+		// 🎯T552 / T553.2 owner-visible observation (was T194)
+		"Owner-visible claims are observed",
+		"🎯T552",
+		"🎯T553.2",
 		"🎯T194",
 		"necessary not sufficient",
 		"restart-daily-jevonsd.sh",

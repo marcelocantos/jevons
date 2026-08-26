@@ -447,7 +447,9 @@ func TestDefaultPersonaDailyPathAchieve(t *testing.T) {
 		t.Fatalf("Persona: %v", err)
 	}
 	for _, want := range []string{
-		"Achieve reports need activated daily path",
+		"Owner-visible claims are observed",
+		"T552",
+		"T553.2",
 		"T194",
 		"necessary, not sufficient",
 		"restart-daily-jevonsd",
@@ -455,9 +457,10 @@ func TestDefaultPersonaDailyPathAchieve(t *testing.T) {
 		"stale binary",
 		"HasDailyPathEvidence",
 		"Hermetic unit green",
+		"not an achieve gate",
 	} {
 		if !strings.Contains(p, want) {
-			t.Errorf("default persona missing T194 marker %q", want)
+			t.Errorf("default persona missing T552/T553.2 marker %q", want)
 		}
 	}
 }
@@ -608,8 +611,10 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"hard-reloadable UI",
 		"proven API",
 		"daily path",
-		// 🎯T194 daily-path achieve
-		"Achieve reports need activated daily path",
+		// 🎯T552 / T553.2 owner-visible observation (was T194)
+		"Owner-visible claims are observed",
+		"T552",
+		"T553.2",
 		"T194",
 		"necessary not sufficient",
 		"restart-daily-jevonsd",
@@ -742,8 +747,10 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"hard-reloadable UI",
 		"proven API",
 		"daily path",
-		// 🎯T194 daily-path achieve
-		"Achieve reports need activated daily path",
+		// 🎯T552 / T553.2 owner-visible observation (was T194)
+		"Owner-visible claims are observed",
+		"T552",
+		"T553.2",
 		"T194",
 		"necessary not sufficient",
 		"restart-daily-jevonsd",

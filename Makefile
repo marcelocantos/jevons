@@ -145,9 +145,10 @@ bin/mcpscope: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/mcpscope ./cmd/mcpscope
 
-# Daily-daemon supervisor (🎯T405). launchd runs this every 30s, outside every
-# process tree a restart tears down, and calls the restart script when the port
-# stays dead. `make watchdog-install` writes and loads the LaunchAgent.
+# Daily-daemon supervisor (🎯T405 / 🎯T553.3). KeepAlive on jevonsd is the
+# standing owner (`make jevonsd-install`). The interval watchdog that
+# called restart-daily is legacy; keep the binary for oracles until T553.3
+# retires it. `make watchdog-install` still exists but is not the product path.
 .PHONY: jevons-watchdog
 jevons-watchdog: bin/jevons-watchdog
 
@@ -164,6 +165,17 @@ watchdog-uninstall: bin/jevons-watchdog
 
 watchdog-status: bin/jevons-watchdog
 	@bin/jevons-watchdog -status
+
+JEVONSD_LABEL := com.marcelocantos.jevonsd
+.PHONY: jevonsd-install jevonsd-uninstall jevonsd-status
+jevonsd-install: bin/jevonsd
+	bin/jevonsd -install-daemon-agent
+
+jevonsd-uninstall: bin/jevonsd
+	bin/jevonsd -uninstall-daemon-agent
+
+jevonsd-status:
+	-launchctl print gui/$$(id -u)/$(JEVONSD_LABEL) | head -20
 
 # Test verdict harness (owner, 2026-08-11). Wraps `go test -json` and
 # reports pass/fail with counts instead of a transcript, so a failing

@@ -66,6 +66,8 @@ func main() {
 	upstream := flag.String("upstream", "127.0.0.1:13705", "vanilla UI-only reverse-proxy target")
 	installUIAgents := flag.Bool("install-ui-agents", false, "write and load the two daily UI LaunchAgents, then exit")
 	uninstallUIAgents := flag.Bool("uninstall-ui-agents", false, "unload the daily UI LaunchAgents, then exit")
+	installDaemonAgent := flag.Bool("install-daemon-agent", false, "write the daily jevonsd KeepAlive LaunchAgent (🎯T553.3), then exit")
+	uninstallDaemonAgent := flag.Bool("uninstall-daemon-agent", false, "unload the daily jevonsd KeepAlive LaunchAgent, then exit")
 	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 â loopback only; remote devices use the pigeon relay)")
 	relayURL := flag.String("relay", "", "relay URL to register with (e.g. https://carrier-pigeon.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
@@ -117,6 +119,18 @@ func main() {
 
 	if *installUIAgents {
 		runInstallUIAgents()
+	}
+	if *installDaemonAgent {
+		runInstallDaemonAgent()
+	}
+	if *uninstallDaemonAgent {
+		if err := supervise.UnloadAgent(supervise.DaemonLabel); err != nil {
+			slog.Error("uninstall daemon KeepAlive", "err", err)
+			os.Exit(1)
+		}
+		home, _ := os.UserHomeDir()
+		_ = os.Remove(supervise.DaemonPlistPath(home))
+		os.Exit(0)
 	}
 	if *uninstallUIAgents {
 		if err := uidaemon.Uninstall(); err != nil {
@@ -1437,6 +1451,62 @@ func repoSibling(bin string, elem ...string) string {
 	return dir
 }
 
+func runInstallDaemonAgent() {
+	bin, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		slog.Error("daemon agent: binary path", "err", err)
+		os.Exit(1)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		slog.Error("daemon agent: home", "err", err)
+		os.Exit(1)
+	}
+	pathEnv, _ := supervise.AgentPATH(exec.LookPath, supervise.RestartTools)
+	spec := supervise.DaemonSpec{
+		Binary:   bin,
+		Workdir:  repoSibling(bin),
+		Port:     config.DailyPort,
+		StateDir: config.Default().StateDir,
+		PathEnv:  pathEnv,
+		LogPath:  supervise.DaemonLogPath(config.Default().StateDir),
+	}
+	path := supervise.DaemonPlistPath(home)
+	if err := supervise.WriteDaemonPlist(path, spec); err != nil {
+		slog.Error("write daemon KeepAlive plist", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("wrote daemon KeepAlive plist", "path", path, "label", supervise.DaemonLabel)
+
+	if supervise.DaemonOwnsProcess() {
+		slog.Info("KeepAlive already loaded", "label", supervise.DaemonLabel)
+		os.Exit(0)
+	}
+	// Bootstrapping while a nohup daemon holds :13705 starts a second
+	// process that fail-to-bind and KeepAlive-loops. Write-only; the
+	// restart script bootstraps after SIGHUP frees the port.
+	if dailyPortHeld(spec.Port) {
+		slog.Info("port is held; not bootstrapping KeepAlive — bounce to adopt",
+			"port", spec.Port, "plist", path)
+		os.Exit(0)
+	}
+	if err := supervise.LoadAgent(path, supervise.DaemonLabel); err != nil {
+		slog.Error("load daemon KeepAlive", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("loaded daemon KeepAlive (🎯T553.3)", "label", supervise.DaemonLabel)
+	os.Exit(0)
+}
+
+func dailyPortHeld(port int) bool {
+	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
 func runInstallUIAgents() {
 	bin, err := filepath.Abs(os.Args[0])
 	if err != nil {
@@ -1465,15 +1535,17 @@ func runUIProbe() {
 		slog.Info("React surface ok (🎯T540.4)", "status", got.Status)
 		os.Exit(0)
 	}
-	slog.Error("React surface failed — invoking restart-daily", "reason", got.Reason)
-	script := repoSibling(os.Args[0], "scripts", "restart-daily-jevonsd.sh")
-	cmd := exec.Command(script)
-	cmd.Dir = repoSibling(os.Args[0])
-	if err := cmd.Start(); err != nil {
-		slog.Error("could not invoke restart-daily", "err", err, "script", script)
-		os.Exit(1)
+	slog.Error("React surface failed", "reason", got.Reason)
+	// 🎯T553.3: kick KeepAlive; do not invoke the fat restart script.
+	if supervise.DaemonOwnsProcess() {
+		if err := supervise.KickstartAgent(supervise.DaemonLabel); err != nil {
+			slog.Error("KeepAlive kickstart failed", "err", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
-	os.Exit(0)
+	slog.Error("React surface failed and KeepAlive is not loaded — not invoking restart-daily (🎯T553.2)")
+	os.Exit(1)
 }
 
 func runVanillaUI(port int, bind, upstream string) {

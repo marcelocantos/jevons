@@ -149,6 +149,18 @@ func probe(port int) bool {
 // binary that was serving five minutes ago will serve now. A worker who
 // wants their newer build activated calls the restart script itself.
 func restart(repo string, port int) string {
+	// 🎯T553.3: KeepAlive on jevonsd is the standing supervisor. Calling
+	// the fat script here races launchd and recreates the bounce ceremony.
+	if supervise.DaemonOwnsProcess() {
+		logf("KeepAlive %s owns the daemon; not invoking restart-daily", supervise.DaemonLabel)
+		if err := supervise.KickstartAgent(supervise.DaemonLabel); err != nil {
+			return fmt.Sprintf("KeepAlive kickstart failed: %v", err)
+		}
+		if !probe(port) {
+			return "KeepAlive kickstart ran but the port is still not serving."
+		}
+		return ""
+	}
 	script := filepath.Join(repo, "scripts", "restart-daily-jevonsd.sh")
 	if _, err := os.Stat(script); err != nil {
 		return fmt.Sprintf("no restart script at %s (%v)", script, err)

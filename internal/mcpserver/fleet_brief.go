@@ -11,7 +11,7 @@ import (
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -77,17 +77,16 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   cited evidence contradicts the pass you claim. Fabricating a GATE line is
   flagged: the id is looked up, and an id with no record behind it says so.
 
-## Achieve reports need activated daily path (🎯T194)
+## Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194)
 - Daemon/API product (HTTP API, compiled server, non-static) is **not
   achieved on hermetics alone**. Hermetic unit green is necessary not sufficient.
-- Not achieved until **detached** scripts/restart-daily-jevonsd.sh
-  succeeds (or proven zero-downtime upgrade) **and** a **live probe** of
-  the product path is green (e.g. curl non-404 on the daily port).
-- Finish reports for daemon/API work must cite **daily-path evidence**
-  (restart-daily success and/or live probe) — not only go test / hermetic
-  greps while a stale binary may still serve.
-- Pure static web-only may hard-reload only (🎯T188). Residual:
-  instructional + pure HasDailyPathEvidence; not a hard achieve block.
+- A stale binary still serving is a real failure. The test is observation
+  of the running surface (composer, transcript, a **live probe** of the
+  owner path) — not restart-daily-jevonsd.sh / GATE / HEAD snapshot.
+- Workers do not invoke restart-daily after every land (🎯T553.2).
+- HasDailyPathEvidence is a seam classifier, not an achieve gate.
+  hermetics alone do not close an owner-visible claim.
+- Pure static web-only may hard-reload only (🎯T188).
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 - After any change that can affect what the owner sees in #messages /
@@ -112,8 +111,8 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   features. Daily :13705 serves React (ui/dist, LaunchAgent
   com.marcelocantos.jevons-ui); vanilla web/ is :13706 LaunchAgent
   com.marcelocantos.jevons-ui-vanilla (🎯T540.4). make ui-dev is opt-in
-  HMR, not a standing agent. T505 residual: daily serves the last
-  make ui-build.
+  HMR, not a standing agent. 🎯T505 / 🎯T553.1: daily ui/dist is built
+  from committed HEAD, not the shared clone.
 
 ## Greenfield oracle elicitation (🎯T31.2)
 - For NEW software (no external reference), co-develop an oracle-coverage

@@ -366,6 +366,12 @@ func SaveAgentState(dir string, st AgentState) error {
 // being read. The window is bounded and short; the gap this exists to
 // catch lasted five days.
 func WatchAgentLoop(ctx context.Context, p AgentPaths, cfg AgentConfig, every time.Duration, notify Notifier) {
+	// 🎯T553.3: launchd KeepAlive owns jevonsd. Reinstalling the
+	// probe-that-calls-restart-daily would undo the peel.
+	if SkipWatchdogSupervise() {
+		slog.Info("supervise: KeepAlive owns jevonsd; not reinstating the watchdog", "label", DaemonLabel)
+		return
+	}
 	if every <= 0 {
 		every = time.Minute
 	}

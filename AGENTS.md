@@ -363,42 +363,27 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   proven API on the daily path). Lab/test uses of "live" (journeys,
   `test-ui-live`) stay technical jargon. Persona Communication Style +
   agents-guide + fleet standing brief.
-- **Daemon rebuild + restart (🎯T188 / 🎯T191):** after any Build that
-  changes the running `jevonsd` binary or server-side behaviour, rebuild
-  and restart the daily daemon without asking the owner. Owner never
-  restarts by hand. Do not claim a daemon-path fix done until restart
-  succeeds. Invoke **detached**:
-  `nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &`
-  Detached is still the blessed invoke because it stops the caller
-  blocking on the bounce — since 🎯T405 it is no longer what makes the
-  bounce survive. Script path: `scripts/restart-daily-jevonsd.sh`. Pure
-  static web-only may hard-reload only. Residual: session drop until
-  T40/T171. Persona + agents-guide.
-- **The restart is supervised (🎯T405):** on 2026-08-10 a worker's restart
-  killed the daemon, the daemon's shutdown stopped that worker, and the
-  script died with it five seconds before the step that starts the
-  replacement — the fleet stayed down until the owner opened the cockpit
-  and found it dead. The script had documented that exact hazard since its
-  first version, as an instruction to callers (*invoke me detached*), and a
-  correctness property that depends on every caller remembering a
-  convention is not a property. So the script now **re-execs itself into
-  its own session** through `bin/detach` before doing anything: being
-  invoked wrongly cannot cause an outage. The deeper finding was that
-  nothing watched the result at all — thrash policy (T218), lock
-  serialisation (T392.5) and HEAD build snapshots (T254.2) are elaborate
-  about restarting and silent about whether anything is serving
-  afterwards. The launchd job **`com.marcelocantos.jevons-watchdog`**
-  (`make watchdog-install`, `make watchdog-status`) probes the port every
-  30s from outside every process tree a restart tears down, restarts
-  through the same script once an outage outlives the grace window, paces
-  its attempts and never gives up. An outage the owner hears about twice:
-  out of band while it is down, and in owner chat once the daemon is back
-  to report it — the watchdog cannot write a chat line into a daemon that
-  is not running, so the recovery is recorded to disk and the daemon
-  reports it on the way up (`internal/supervise`). Oracles kill a real
-  restart mid-bounce and SIGKILL a real foreground caller's process group
-  (`cmd/jevons-watchdog/oracle_test.go`, with a control that shows the
-  test still detects the regression). Persona + agents-guide.
+- **Daemon activation (🎯T188 / 🎯T191 / 🎯T553):** owner never restarts
+  by hand. A script exists for owner-ask / overseer activation
+  (`nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &`).
+  **Workers do not invoke it after every daemon-path land (T553.2).**
+  Daily `:13705` serves committed HEAD until worktrees exist (T505 /
+  T553.1). Observation of the running surface is the test (T552), not
+  script success. Prefer launchd KeepAlive `com.marcelocantos.jevonsd`
+  (`make jevonsd-install`). Script path: `scripts/restart-daily-jevonsd.sh`.
+  Pure static web-only may hard-reload only.
+- **The process is supervised (🎯T405 / 🎯T553.3):** on 2026-08-10 a
+  worker's restart killed the daemon, the script died with its invoker
+  (own session was still a convention), and the fleet stayed down. The
+  standing supervisor is launchd KeepAlive **`com.marcelocantos.jevonsd`**
+  (`make jevonsd-install`): if the process dies, launchd relaunches the
+  same binary without calling the fat script. An upgrade bounce still
+  re-execs through `bin/detach` into its own session. The interval job
+  **`com.marcelocantos.jevons-watchdog`** (`make watchdog-install`,
+  `make watchdog-status`) is **not** the product path — it must not
+  invoke restart-daily when KeepAlive owns the process. Residual:
+  Cellar `brew services jevons` must stay stopped so it cannot reclaim
+  `:13705`.
 - **Nothing was responsible for the supervisor (🎯T405, second half):** the
   watchdog was installed on 2026-08-10 at 20:48 and launchd stopped holding
   the job fourteen minutes later. The plist stayed on disk looking perfectly
@@ -449,17 +434,15 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   cold repo on launchd's own PATH (fails closed, owner told why) and on the
   PATH the installer writes (restarts a throwaway daemon) — each is the
   other's control: `cmd/jevons-watchdog/t434_toolchain_test.go`.
-- **Achieve reports need activated daily path (🎯T194):** a target whose
-  product path is served by daily jevonsd (HTTP API, compiled server,
-  non-static) is **not achieved** until detached `restart-daily-jevonsd`
-  succeeds (or proven zero-downtime upgrade) **and** a live probe of the
-  product path is green (e.g. curl non-404). Hermetic unit green is
-  **necessary not sufficient** — hermetics alone do not close daemon/API
-  work while a stale binary may still serve. Finish reports must cite
-  daily-path evidence (restart success and/or live probe). Pure web
-  static may hard-reload only (T188). Pure helper: `HasDailyPathEvidence`.
-  Residual: instructional + pure classifier; not a hard achieve block.
-  Persona + agents-guide + fleet standing brief.
+- **Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194):**
+  a target whose product path is served by daily jevonsd is **not
+  achieved on hermetics alone**. Hermetic unit green is **necessary not sufficient**
+  — a stale binary still serving is a real failure. The
+  test is observation of the running surface (composer, transcript, a
+  live probe of the owner path), not restart-daily / GATE / HEAD
+  snapshot. `HasDailyPathEvidence` is a seam classifier, not an achieve gate.
+  Pure web static may hard-reload only (T188). Persona +
+  agents-guide + fleet standing brief.
 - **Visual cockpit finish is a prose look, not a green metric (🎯T493.1):**
   after any change that can affect what the owner sees in `#messages`
   (pin, virtualize, replay, fold, slot mint, spacing), take a viewport

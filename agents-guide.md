@@ -710,41 +710,33 @@ Do **not** re-expand a local merge order into continuous origin/PR
 shipping because a PO already opened remotes. Remote delivery only when
 the owner **explicitly** asks to ship/push/PR.
 
-## Daemon rebuild + restart (🎯T188 / 🎯T191)
+## Daemon activation (🎯T188 / 🎯T191 / 🎯T553)
 
-After any **daemon-path** Build (binary or server-side behaviour), rebuild
-and restart daily `jevonsd` without asking the owner. Owner never restarts
-by hand. Do not report the fix done until the restart succeeds.
+The owner never restarts by hand. A committed script exists for owner-ask
+or overseer activation. **Workers do not invoke it after every
+daemon-path land (🎯T553.2).** Daily `:13705` serves committed HEAD until
+worktrees exist (🎯T505 / 🎯T553.1). Observation is the test (🎯T552),
+not script success.
 
-**BLESSED INVOKE** (survive agent/overseer death — 🎯T191):
+**BLESSED INVOKE** (when you *are* activating — 🎯T191):
 
 ```bash
 nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
 ```
 
-The script: re-exec into its own session (🎯T405) → `make` →
-`brew services stop jevons` → kill `:13705` → `nohup`/`setsid` start
-`$REPO/bin/jevonsd` with workdir → wait `/health` + `/api/frontier`
-non-404 → exit 0 only when serving. Pure static web-only changes may
-hard-reload only. Residual: session drop until 🎯T40/🎯T171.
+The script: re-exec into its own session (🎯T405) → HEAD snapshot build
+→ `brew services stop jevons` → SIGHUP `:13705` → prefer launchd
+KeepAlive **`com.marcelocantos.jevonsd`** (`make jevonsd-install`) else
+`nohup`/`setsid` start → wait `/health` + `/api/frontier` non-404.
+Pure static web-only may hard-reload only.
 
-**Supervision (🎯T405).** On 2026-08-10 a worker's restart killed the
-daemon, the daemon's shutdown stopped that worker, and the script died
-with it five seconds before the step that starts the replacement — the
-fleet stayed down until the owner noticed. Two things now stop that. The
-script **re-execs itself through `bin/detach` into its own session**
-before doing anything, so being invoked wrongly cannot cause an outage:
-the hazard was documented here as an instruction to callers from the
-first version, and a correctness property that depends on every caller
-remembering a convention is not a property. And the launchd job
-**`com.marcelocantos.jevons-watchdog`** probes the port every 30s from
-outside every process tree a restart tears down, restarting through this
-same script when it stays dead past a grace window, pacing its attempts
-and never giving up. `make watchdog-install` / `make watchdog-status`.
-A recovered outage reaches the owner twice: out of band while it is
-down, and in owner chat once the daemon is back to report it. The
-blessed invoke above is still preferred — it stops the caller *blocking*
-on the bounce — it is just no longer what makes the bounce survive.
+**Supervision (🎯T405 / 🎯T553.3).** On 2026-08-10 a worker's restart
+killed the daemon and the script died with its invoker. The standing
+supervisor is KeepAlive on `jevonsd` itself. The interval job
+**`com.marcelocantos.jevons-watchdog`** (`make watchdog-install` /
+`make watchdog-status`) is not the product path and must not call the
+fat script when KeepAlive owns the process. An upgrade bounce still
+re-execs through `bin/detach` into its own session.
 
 ## Run gates so the status survives (🎯T386 / 🎯T396)
 
@@ -786,25 +778,16 @@ and an id with no record behind it says so. Pure helpers:
 
 **Residual:** the banner marks a report, it does not block delivery.
 
-## Achieve reports need activated daily path (🎯T194)
+## Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194)
 
-Daemon/API product is **not achieved on hermetics alone**. When the
-product path is served by daily `jevonsd` (HTTP API, compiled server,
-non-static):
-
-1. Detached `scripts/restart-daily-jevonsd.sh` must succeed (or proven
-   zero-downtime upgrade), **and**
-2. A **live probe** of the product path must be green (e.g. `curl`
-   non-404 / expected body on the daily port).
-
-**Hermetic unit green is necessary not sufficient.** Do not retire or
-claim fixed while a stale binary may still serve. Finish reports must
-cite **daily-path evidence** (restart-daily success and/or live probe),
-not only `go test` / hermetic greps. Pure static web may hard-reload only
-(🎯T188). Pure helper: `HasDailyPathEvidence` (`internal/mcpserver`).
-
-**Residual:** instructional + pure classifier; not a hard daemon block of
-bullseye achieve.
+Daemon/API product is **not achieved on hermetics alone**. **Hermetic
+unit green is necessary not sufficient.** A stale binary still serving
+is a real failure. The test is observation of the running surface
+(composer, transcript, a **live probe** of the owner path) — not
+`restart-daily-jevonsd` / GATE / HEAD snapshot. `HasDailyPathEvidence`
+(`internal/mcpserver`) is a seam classifier, not an achieve gate.
+hermetics alone do not close an owner-visible claim. Pure static web may
+hard-reload only (🎯T188).
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 
