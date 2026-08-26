@@ -25,6 +25,8 @@ import {
   type FrontierRow,
   type HoverCardCache,
 } from '../../frontier/table';
+import { playChromeSpec, playKickoffRequest, resolvePlayPO } from '../../frontier/play';
+import { copyImageStatus, imageCopyPlan } from '../../conversation/mermaidClipboard';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
 
@@ -274,14 +276,93 @@ describeOracle(family('frontier'), () => {
   itOracle.skip('T177', 'Frontier columns do not overlap', 'named residual: pixel-identical chrome (with T340)');
   itOracle.skip('T331', 'hierarchical ids fit without ellipsis; id↔name gap is tight', 'named residual: pixel-identical chrome (with T340)');
   itOracle.skip('T332', 'column gutters are roughly even', 'named residual: pixel-identical chrome (with T340)');
-  itOracle.skip('T182', 'each row has a play control that asks the PO to start that target', 'not ported: ft-play-btn is dead chrome');
-  itOracle.skip('T255', 'play kickoff targets the selected agent’s PO', 'not ported: depends on T182');
-  itOracle.skip('T278', 'play kickoff shows spinning submitted chrome immediately', 'not ported: depends on T182');
-  itOracle.skip('T198', 'engaged rows show Stop, not a bullseye status rewrite', 'not ported: no engagement rows');
+  const playAgents = [
+    { name: 'jevons', purpose: 'overseer' },
+    { name: 'jevons-po', purpose: 'po', parent: 'jevons' },
+    { name: 'squz-po', purpose: 'po', parent: 'jevons' },
+    { name: 'jv-t184-card', purpose: 'work', parent: 'jevons-po', target_id: 'T184' },
+    { name: 'sq-worker', purpose: 'work', parent: 'squz-po' },
+  ];
+  function fakeFetch() {
+    const calls: { url: string; body: unknown }[] = [];
+    let resolve!: (r: { ok: boolean; status: number }) => void;
+    const pending = new Promise<{ ok: boolean; status: number }>((res) => (resolve = res));
+    const fetcher = (url: string, init: { body: string }) => {
+      calls.push({ url, body: JSON.parse(init.body) });
+      return pending;
+    };
+    return { calls, fetcher, resolve };
+  }
+
+  itOracle('T182', 'each row has a play control that asks the PO to start that target', () => {
+    const f = fakeFetch();
+    const { container } = render(createElement(FrontierTable, { rows: [sample], fetcher: f.fetcher }));
+    const btn = container.querySelector<HTMLButtonElement>('.ft-play-btn')!;
+    expect(btn.getAttribute('aria-label')).toBe('Start work on 🎯T184');
+    expect(btn.title).toBe('Start work via jevons-po');
+    fireEvent.click(btn);
+    expect(f.calls.length).toBe(1);
+    expect(f.calls[0].url).toBe('/api/agents/jevons-po/send');
+    const text = (f.calls[0].body as { text: string }).text;
+    expect(text).toContain('Start work on frontier target 🎯T184');
+    expect(text).toContain('target_id=T184');
+    expect(text).toContain('Card shows acceptance list');
+  });
+
+  itOracle('T255', 'play kickoff targets the selected agent’s PO', () => {
+    expect(resolvePlayPO({ agents: playAgents, selectedAgent: 'sq-worker' })).toBe('squz-po');
+    expect(resolvePlayPO({ agents: playAgents, selectedAgent: 'jevons' })).toBe('jevons-po');
+    expect(resolvePlayPO({ agents: playAgents, selectedAgent: 'squz-po' })).toBe('squz-po');
+    const f = fakeFetch();
+    const { container } = render(
+      createElement(FrontierTable, { rows: [{ ...sample, id: 'T181' }], agents: playAgents, selectedAgent: 'sq-worker', fetcher: f.fetcher }),
+    );
+    fireEvent.click(container.querySelector('.ft-play-btn')!);
+    expect(f.calls[0].url).toBe('/api/agents/squz-po/send');
+    expect(playKickoffRequest({ ...sample, engaged: true, engaged_agents: ['x'] }).blocked).toBe(true);
+  });
+
+  itOracle('T278', 'play kickoff shows spinning submitted chrome immediately', () => {
+    const f = fakeFetch();
+    const { container } = render(createElement(FrontierTable, { rows: [sample], fetcher: f.fetcher }));
+    fireEvent.click(container.querySelector('.ft-play-btn')!);
+    const btn = container.querySelector<HTMLButtonElement>('.ft-play-btn')!;
+    expect(btn.classList.contains('ft-submitted-btn')).toBe(true);
+    expect(btn.disabled).toBe(true);
+    expect(btn.querySelector('.ft-spin')).toBeTruthy();
+    expect(playChromeSpec({ ...sample, kickoff_submitted: true }).mode).toBe('submitted');
+  });
+
+  itOracle('T198', 'engaged rows show Stop, not a bullseye status rewrite', () => {
+    const free: FrontierRow = { ...sample, id: 'T181', name: 'Free row' };
+    const f = fakeFetch();
+    const { container } = render(
+      createElement(FrontierTable, { rows: [sample, free], agents: playAgents, fetcher: f.fetcher }),
+    );
+    const rows = container.querySelectorAll('tr');
+    // engaged row sinks below free rows and carries its agents
+    expect(rows[0].classList.contains('ft-engaged')).toBe(false);
+    expect(rows[1].classList.contains('ft-engaged')).toBe(true);
+    expect(rows[1].getAttribute('data-engaged-agents')).toBe('jv-t184-card');
+    expect(rows[1].querySelector('.ft-status')!.textContent).toBe(formatStatus('converging'));
+    const stop = rows[1].querySelector<HTMLButtonElement>('.ft-stop-btn')!;
+    expect(stop.getAttribute('aria-label')).toBe('Stop work on 🎯T184');
+    fireEvent.click(stop);
+    expect(f.calls[0].url).toBe('/api/agents/engagement/stop');
+    expect((f.calls[0].body as { target_id: string }).target_id).toBe('T184');
+  });
   itOracle.skip('T208', 'Frontier tab stays selected under background transcript refresh', 'journey is the arbiter (J27 tab-stick)');
   itOracle.skip('T266', 'target asks show built-in context chrome (repo / PO / product)', 'not ported');
   itOracle.skip('T267', 'target asks auto-select owning PO and highlight the target', 'not ported');
-  itOracle.skip('T83.1', 'owner can copy Mermaid source and image from the graph tab', 'not ported');
+  itOracle('T83.1', 'owner can copy Mermaid source and image from the graph tab', () => {
+    const { container } = render(createElement(MermaidVizPanel, { open: true, onClose: () => {}, graphNonce: 0 }));
+    expect(container.querySelector('#mvp-copy-source')).toBeTruthy();
+    expect(container.querySelector('#mvp-copy-image')).toBeTruthy();
+    expect(imageCopyPlan({ writeText: true, write: true, multiType: true }).mode).toBe('multi');
+    expect(imageCopyPlan({ writeText: true, write: true, multiType: false }).mode).toBe('image');
+    expect(imageCopyPlan({ writeText: true, write: false, multiType: false }).mode).toBe('text-fallback');
+    expect(copyImageStatus('multi')).toBe('Image + source copied');
+  });
   itOracle('T168', 'Frontier tab loads frontier data without HTTP 404', () => {
     expect(FRONTIER_API_PATH).toBe('/api/frontier');
     const app = readFileSync(

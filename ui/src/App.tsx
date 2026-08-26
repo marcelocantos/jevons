@@ -115,6 +115,8 @@ function Cockpit() {
           provider?: string;
           model?: string;
           workdir?: string;
+          target_id?: string;
+          ledger?: string;
         }) => ({
           name: a.name || '',
           purpose: a.purpose,
@@ -127,6 +129,8 @@ function Cockpit() {
           provider: a.provider,
           model: a.model,
           workdir: a.workdir,
+          target_id: a.target_id,
+          ledger: a.ledger,
         }))
         .filter((a: AgentRow) => a.name);
       const merged = mergeAgentChrome(lastAgentsRef.current, rows);
@@ -335,7 +339,7 @@ function Cockpit() {
                 )
               }
             >
-              <FrontierTable rows={frontierRows} />
+              <FrontierTable rows={frontierRows} agents={agents} selectedAgent={fixture ? '' : agent} />
             </SidebarPanel>
           </div>
           <div id="activity-header" style={{ marginTop: 0 }}>
