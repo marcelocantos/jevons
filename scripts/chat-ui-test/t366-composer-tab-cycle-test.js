@@ -1,10 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Playwright real-render smoke for 🎯T366: Tab cycles the two message boxes
-// (main #input ↔ sidebar #agent-inspect-input) when the sidebar composer is
-// visible, and does not trap focus when it is hidden. Hermetic static server
-// + mocked agents; no live daemon.
+// Playwright real-render smoke for 🎯T366 / 🎯T549: Tab cycles the two message
+// boxes (main #input ↔ sidebar #agent-inspect-input) when the sidebar composer
+// is visible; when hidden, Tab stays on main and is claimed so chrome is not
+// walked. Hermetic static server + mocked agents; no live daemon.
 //
 // Policy itself is unit-covered in web/scripts/composer_focus_test.js — this
 // test exists because focus and preventDefault are browser behaviour, not
@@ -148,7 +148,7 @@ function startStaticServer() {
         + JSON.stringify(claimed));
     }
 
-    // ── Sidebar hidden: Tab must not trap on a missing control ──
+    // ── Sidebar hidden: Tab claims and stays on main (T549) ──
     await page.evaluate(() => { window.__t366 = []; });
     const hidden = await page.evaluate((worker) => {
       selectAgent(worker); // toggle selection off → composer hidden
@@ -167,13 +167,13 @@ function startStaticServer() {
     if (afterHidden === 'agent-inspect-input') {
       failures.push('Tab focused the hidden sidebar composer');
     }
-    if (afterHidden === 'input') {
-      failures.push('Tab trapped focus on #input instead of moving on naturally');
+    if (afterHidden !== 'input') {
+      failures.push('Tab from main with hidden sidebar must stay on #input, got "' + afterHidden + '"');
     }
-    const unclaimed = await page.evaluate(() => window.__t366.slice());
-    if (!unclaimed.length || unclaimed.some((r) => r.prevented)) {
-      failures.push('Tab must stay native when the sidebar is hidden: '
-        + JSON.stringify(unclaimed));
+    const claimedHidden = await page.evaluate(() => window.__t366.slice());
+    if (!claimedHidden.length || claimedHidden.some((r) => !r.prevented)) {
+      failures.push('Tab must be claimed (defaultPrevented) when sidebar is hidden (T549): '
+        + JSON.stringify(claimedHidden));
     }
 
     if (failures.length) {
@@ -181,7 +181,7 @@ function startStaticServer() {
       failures.forEach((f) => console.error('  -', f));
       process.exitCode = 1;
     } else {
-      console.log('PASS t366-composer-tab-cycle-test (main↔sidebar cycle; no trap when hidden)');
+      console.log('PASS t366-composer-tab-cycle-test (main↔sidebar cycle; T549 stay-main when hidden)');
     }
   } catch (e) {
     console.error('FAIL t366-composer-tab-cycle-test', e && e.stack || e);
