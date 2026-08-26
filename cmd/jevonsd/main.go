@@ -121,7 +121,7 @@ func main() {
 		runInstallUIAgents()
 	}
 	if *installDaemonAgent {
-		runInstallDaemonAgent()
+		runInstallDaemonAgent(*workDir)
 	}
 	if *uninstallDaemonAgent {
 		if err := supervise.UnloadAgent(supervise.DaemonLabel); err != nil {
@@ -1451,21 +1451,23 @@ func repoSibling(bin string, elem ...string) string {
 	return dir
 }
 
-func runInstallDaemonAgent() {
-	bin, err := filepath.Abs(os.Args[0])
-	if err != nil {
-		slog.Error("daemon agent: binary path", "err", err)
-		os.Exit(1)
-	}
+func runInstallDaemonAgent(workdir string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		slog.Error("daemon agent: home", "err", err)
 		os.Exit(1)
 	}
+	wd, _ := os.Getwd()
+	repo, err := supervise.DailyRepoRoot(workdir, wd, supervise.RepoRoot())
+	if err != nil {
+		slog.Error("daemon agent: locate repo", "err", err)
+		os.Exit(1)
+	}
+	bin := supervise.DailyDaemonBinary(repo)
 	pathEnv, _ := supervise.AgentPATH(exec.LookPath, supervise.RestartTools)
 	spec := supervise.DaemonSpec{
 		Binary:   bin,
-		Workdir:  repoSibling(bin),
+		Workdir:  repo,
 		Port:     config.DailyPort,
 		StateDir: config.Default().StateDir,
 		PathEnv:  pathEnv,

@@ -499,6 +499,11 @@ start_or_adopt_daemon() {
   local plist="$HOME/Library/LaunchAgents/${label}.plist"
   local domain="gui/$(id -u)"
   if [[ -f "$plist" ]]; then
+    if ! grep -q "$ROOT/bin/jevonsd" "$plist"; then
+      log "KeepAlive plist does not point at $ROOT/bin/jevonsd — refusing to bootstrap a wrong job; nohup-start"
+      start_daemon_detached
+      return 0
+    fi
     if launchctl print "${domain}/${label}" >/dev/null 2>&1; then
       log "🎯T553.3 KeepAlive $label already loaded; kickstart after SIGHUP"
       launchctl kickstart -k "${domain}/${label}" >/dev/null 2>&1 || true

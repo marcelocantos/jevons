@@ -56,6 +56,15 @@ func TestDaemonPlistPath(t *testing.T) {
 	}
 }
 
+func TestDailyRepoRootRejectsSlash(t *testing.T) {
+	if _, err := supervise.DailyRepoRoot("/"); err == nil {
+		t.Fatal("DailyRepoRoot(/) must refuse — that is the /tmp-binary trap")
+	}
+	if _, err := supervise.DailyRepoRoot(""); err == nil {
+		t.Fatal("DailyRepoRoot empty must refuse")
+	}
+}
+
 func TestWriteDaemonPlist(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "LaunchAgents", supervise.DaemonLabel+".plist")

@@ -36,6 +36,7 @@ func TestT553KeepAliveOwnsDaemon(t *testing.T) {
 		"com.marcelocantos.jevonsd",
 		"start_or_adopt_daemon",
 		"KeepAlive",
+		"refusing to bootstrap a wrong job",
 	} {
 		if !strings.Contains(body, m) {
 			t.Errorf("restart script missing T553.3 marker %q", m)

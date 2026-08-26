@@ -119,3 +119,31 @@ func KickstartAgent(label string) error {
 func SkipWatchdogSupervise() bool {
 	return DaemonOwnsProcess()
 }
+
+// DailyRepoRoot is the clone that holds bin/jevonsd and the restart
+// script. Candidates whose absolute path is "/" are skipped: a temp
+// binary at /tmp/jevonsd has grandparent /, and installing KeepAlive
+// from that path is how the first T553.3 adopt pointed launchd at
+// /tmp/jevonsd-peel with workdir / and crash-looped daily.
+func DailyRepoRoot(candidates ...string) (string, error) {
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		abs, err := filepath.Abs(c)
+		if err != nil || abs == "/" {
+			continue
+		}
+		bin := filepath.Join(abs, "bin", "jevonsd")
+		script := filepath.Join(abs, "scripts", "restart-daily-jevonsd.sh")
+		if executableFile(bin) && fileExists(script) {
+			return abs, nil
+		}
+	}
+	return "", fmt.Errorf("supervise: no daily repo among %v", candidates)
+}
+
+// DailyDaemonBinary is <repo>/bin/jevonsd.
+func DailyDaemonBinary(repo string) string {
+	return filepath.Join(repo, "bin", "jevonsd")
+}
