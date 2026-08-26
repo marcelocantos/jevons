@@ -33,6 +33,10 @@ import (
 // 🎯T528: a Goal / open-objective naming TargetIDs is closed when every named
 // id is achieved (or set_aside) in the ledger — Session Goal Continue must
 // not re-inject "Continue the open objective" for that text.
+// 🎯T551: marked send/delivery probes (ping-send-check,
+// http-send-probe-do-not-treat-as-owner-intent, …) are never recoverable
+// open owner work — probes are intentionally labelled, not answered by
+// T344/T477 closure.
 //
 // Durable source: state_dir/chatlog/<overseer>.jsonl (survives control-plane
 // bounce). On restart, when a recoverable open owner instruction is found,
@@ -65,6 +69,9 @@ const (
 	// ResidualAnsweredOrClosed: newest substantive owner turn already has a
 	// later overseer/assistant answer with product evidence (🎯T344).
 	ResidualAnsweredOrClosed = "answered_or_closed"
+	// ResidualNotSubstantive: newest owner-side turn is a marked send/delivery
+	// probe, not real work (🎯T551).
+	ResidualNotSubstantive = "not_substantive"
 )
 
 // openIntentTargetIDRe matches 🎯T12 / T12 / T12.3 style target ids.
@@ -126,6 +133,7 @@ func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[st
 	}
 	var timeline []kept
 	var sawHarnessOnly bool
+	var sawProbeOnly bool
 	var sawAckOnly bool
 	var sawAnyUser bool
 
@@ -149,6 +157,10 @@ func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[st
 		sawAnyUser = true
 		if isOpenIntentHarness(text) {
 			sawHarnessOnly = true
+			continue
+		}
+		if isOpenIntentSendProbe(text) {
+			sawProbeOnly = true
 			continue
 		}
 		if isOpenIntentRestartNudge(text) {
@@ -180,6 +192,8 @@ func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[st
 		switch {
 		case sawAckOnly:
 			return OpenOwnerIntent{Residual: ResidualAckOnly}
+		case sawProbeOnly:
+			return OpenOwnerIntent{Residual: ResidualNotSubstantive}
 		case sawHarnessOnly:
 			return OpenOwnerIntent{Residual: ResidualOnlyHarness}
 		default:
@@ -1291,6 +1305,33 @@ func FormatOverseerOpenIntentResume(intent OpenOwnerIntent, parent string, worke
 	b.WriteString("\nDual path (🎯T171): open-mission workers also get short resume separately.\n")
 	b.WriteString("When the open instruction is fully done, report evidence; otherwise keep working.\n")
 	return b.String()
+}
+
+// isOpenIntentSendProbe reports marked send/delivery diagnostic lines that
+// must never become recoverable open owner work (🎯T551). Probes carry an
+// explicit label (do-not-treat-as-owner-intent) or a hyphenated slug token
+// (*-send-check, *-send-probe*) with no interior spaces — not owner prose
+// that merely mentions send-probe in a sentence.
+func isOpenIntentSendProbe(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
+	}
+	low := strings.ToLower(t)
+	if strings.Contains(low, "do-not-treat-as-owner-intent") {
+		return true
+	}
+	// Slug-shaped diagnostics: single token, no owner prose spaces.
+	if strings.ContainsAny(low, " \t\n") {
+		return false
+	}
+	if strings.HasSuffix(low, "-send-check") {
+		return true
+	}
+	if strings.Contains(low, "send-probe") {
+		return true
+	}
+	return false
 }
 
 // isOpenIntentHarness matches harness/system injects that are not owner work.
