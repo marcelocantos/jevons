@@ -267,6 +267,7 @@ export function AgentTranscript(props: {
               kind={row.kind}
               text={row.text}
               items={row.items}
+              inject={row.inject}
               when={row.when}
               origin={row.origin}
               sealed={row.sealed === true}
@@ -303,6 +304,7 @@ export function ClippedBubble(props: {
   kind: DisplayKind;
   text: string;
   items?: StepItem[];
+  inject?: string;
   when?: number;
   sealed?: boolean;
   origin?: TurnOrigin;
@@ -364,10 +366,11 @@ export function ClippedBubble(props: {
         data-index={props.index}
         data-kind="steps"
         ref={props.measureRef}
-        className="turn-marker"
+        className={props.inject ? 'turn-marker inject-nugget' : 'turn-marker'}
+        data-inject={props.inject || undefined}
         style={{ ...pos, left: 0, right: 0 }}
       >
-        <span className="turn-label">
+        <span className={props.inject ? 'turn-label inject-label' : 'turn-label'}>
           {props.text}
           <div className="turn-tip">
             {(props.items || []).map((it, i) => (

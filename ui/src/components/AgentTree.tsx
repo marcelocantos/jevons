@@ -4,7 +4,7 @@
 import { CompanyMark } from '../plan/companyMark';
 import { modelPrefix } from '../plan/modelPrefix';
 import { pixelFixtureActive } from '../visual/oldCockpitFixture';
-import { agentDotState, fleetSecondary } from '../fleet/rowModel';
+import { agentDotState, fleetSecondary, isAsidePurpose } from '../fleet/rowModel';
 
 export type AgentRow = {
   name: string;
@@ -18,6 +18,8 @@ export type AgentRow = {
   provider?: string;
   model?: string;
   workdir?: string;
+  target_id?: string;
+  ledger?: string;
 };
 
 export type AgentNode = AgentRow & { children: AgentNode[] };
@@ -126,15 +128,19 @@ function Row(props: {
   depth: number;
   selected: string;
   onSelect: (name: string) => void;
+  onDismiss?: (name: string) => void;
   parentWorkdir?: string;
 }) {
   const dot = agentDotState(props.node);
+  // 🎯T269: hover-gated dismiss × only on purpose=aside rows (not work/PO/portfolio).
+  const isAside = props.node.purpose !== 'portfolio' && isAsidePurpose(props.node.purpose);
   return (
     <>
       <div
         className={
           'agent-node' +
           (props.node.purpose === 'portfolio' ? ' agent-portfolio' : '') +
+          (isAside ? ' agent-aside' : '') +
           (props.node.name === props.selected ? ' selected' : '')
         }
         onClick={() => {
@@ -151,6 +157,23 @@ function Row(props: {
         {props.node.purpose !== 'portfolio' ? <ModelBadge node={props.node} /> : null}
         <span className="agent-name">{props.node.name}</span>
         <Secondary node={props.node} parentWorkdir={props.parentWorkdir} />
+        {isAside ? (
+          <button
+            type="button"
+            className="agent-dismiss"
+            data-agent-dismiss={props.node.name}
+            aria-label={'Dismiss aside ' + props.node.name}
+            title="Dismiss"
+            onClick={(e) => {
+              // × → DELETE /api/asides; never selects the row.
+              e.preventDefault();
+              e.stopPropagation();
+              props.onDismiss?.(props.node.name);
+            }}
+          >
+            ×
+          </button>
+        ) : null}
       </div>
       {props.node.children.length ? (
         <div className="agent-children">
@@ -161,6 +184,7 @@ function Row(props: {
               depth={props.depth + 1}
               selected={props.selected}
               onSelect={props.onSelect}
+              onDismiss={props.onDismiss}
               parentWorkdir={props.node.workdir}
             />
           ))}
@@ -174,12 +198,20 @@ export function AgentTree(props: {
   agents: AgentRow[];
   selected: string;
   onSelect: (name: string) => void;
+  onDismiss?: (name: string) => void;
 }) {
   const roots = buildAgentForest(props.agents);
   return (
     <>
       {roots.map((n) => (
-        <Row key={n.name} node={n} depth={0} selected={props.selected} onSelect={props.onSelect} />
+        <Row
+          key={n.name}
+          node={n}
+          depth={0}
+          selected={props.selected}
+          onSelect={props.onSelect}
+          onDismiss={props.onDismiss}
+        />
       ))}
     </>
   );

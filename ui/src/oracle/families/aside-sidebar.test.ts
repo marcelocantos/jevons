@@ -5,6 +5,10 @@ import { expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createElement } from 'react';
+import { fireEvent, render } from '@testing-library/react';
+import { AgentTree } from '../../components/AgentTree';
+import { isAsidePurpose } from '../../fleet/rowModel';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
 
@@ -36,5 +40,35 @@ describeOracle(family('aside-sidebar'), () => {
   itOracle.skip('T251', 'sidebar transcript has its own composer and send UX', 'journey is the arbiter (J26)');
   itOracle.skip('T265', 'aside Transcript is a microcosm of main — same look, no nested sidebar', 'journey is the arbiter (J26)');
   itOracle.skip('T367', 'sidebar messages persist across reload and daemon reboot', 'journey is the arbiter (J26 persist residual)');
-  itOracle.skip('T269', 'aside hover-× dismisses the chip', 'not ported: InstantTip-class hover dismiss');
+  itOracle('T269', 'aside rows carry a hover-gated × that dismisses without selecting', () => {
+    expect(isAsidePurpose('aside')).toBe(true);
+    expect(isAsidePurpose('File-Target')).toBe(true);
+    expect(isAsidePurpose('work')).toBe(false);
+    expect(isAsidePurpose(undefined)).toBe(false);
+    const selected: string[] = [];
+    const dismissed: string[] = [];
+    const { container } = render(
+      createElement(AgentTree, {
+        agents: [
+          { name: 'jevons', purpose: 'overseer' },
+          { name: 'jevons-po', purpose: 'po', parent: 'jevons' },
+          { name: 'jv-t1-work', purpose: 'work', parent: 'jevons-po' },
+          { name: 'aside-1', purpose: 'aside', parent: 'jevons' },
+        ],
+        selected: '',
+        onSelect: (n: string) => selected.push(n),
+        onDismiss: (n: string) => dismissed.push(n),
+      }),
+    );
+    const xs = [...container.querySelectorAll<HTMLButtonElement>('.agent-dismiss')];
+    expect(xs.map((b) => b.dataset.agentDismiss)).toEqual(['aside-1']);
+    expect(container.querySelectorAll('.agent-node.agent-aside').length).toBe(1);
+    // Hover-only is CSS: hidden until the aside row is hovered/focused.
+    const css = readFileSync(join(root, 'cockpit.css'), 'utf8');
+    expect(css).toMatch(/\.agent-node \.agent-dismiss \{[^}]*opacity: 0/);
+    expect(css).toMatch(/\.agent-node\.agent-aside:hover \.agent-dismiss/);
+    fireEvent.click(xs[0]);
+    expect(dismissed).toEqual(['aside-1']);
+    expect(selected).toEqual([]);
+  });
 });

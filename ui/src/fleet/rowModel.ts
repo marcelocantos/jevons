@@ -184,3 +184,10 @@ export function agentDotState(agent: FleetAgent): 'running' | 'stopped' {
   if (st === 'running') return 'running';
   return 'stopped';
 }
+
+/** 🎯T269: purpose values that are asides (vanilla fleet_row.js ASIDE_PURPOSES). */
+const ASIDE_PURPOSES = new Set(['aside', 'side', 'side-chat', 'file-target']);
+
+export function isAsidePurpose(purpose: unknown): boolean {
+  return ASIDE_PURPOSES.has(String(purpose == null ? '' : purpose).trim().toLowerCase());
+}

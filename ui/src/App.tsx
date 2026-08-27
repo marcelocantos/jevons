@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { keepPreviousData, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Outlet,
   RouterProvider,
@@ -97,6 +97,21 @@ function Cockpit() {
   const onJevonsMeta = useCallback((meta: ConversationMeta | null) => {
     setDegraded(degradedBannerText(meta));
   }, []);
+  const queryClient = useQueryClient();
+  // 🎯T269: × on an aside row → DELETE /api/asides/<name>. 404 = already gone
+  // (idempotent); refreshing the agents query is the owner-visible truth (T164).
+  const dismissFleetAside = useCallback(
+    async (name: string) => {
+      if (!name) return;
+      const r = await fetch('/api/asides/' + encodeURIComponent(name), { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) {
+        throw new Error((await r.text()) || 'aside dismiss HTTP ' + r.status);
+      }
+      lastAgentsRef.current = lastAgentsRef.current.filter((a) => a.name !== name);
+      await queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
+    [queryClient],
+  );
   const agentsQ = useQuery({
     queryKey: ['agents'],
     queryFn: async () => {
@@ -314,6 +329,7 @@ function Cockpit() {
                 agents={agents}
                 selected={fixture ? '' : agent}
                 onSelect={(name) => navigate({ search: { agent: name, tab } })}
+                onDismiss={(name) => void dismissFleetAside(name)}
               />
             </div>
             <div

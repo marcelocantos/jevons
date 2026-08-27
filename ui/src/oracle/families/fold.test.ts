@@ -6,7 +6,19 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { absTimeTitle } from '../../absTime';
+import { createElement } from 'react';
+import { render } from '@testing-library/react';
+import { ClippedBubble } from '../../components/AgentTranscript';
 import { displayRows, isSilentAssistantText, stepsLabel } from '../../conversation/display';
+import { classifyInjectUserText } from '../../conversation/inject';
+import {
+  TOOL_ITEM_FORBIDDEN_WORD_BREAK,
+  TOOL_ITEM_WHITE_SPACE,
+  TOOL_ITEM_WORD_BREAK,
+  TOOL_TIP_MAX_WIDTH_CSS,
+  TOOL_TIP_MIN_WIDTH_CSS,
+  typicalSummaryIsSingleLine,
+} from '../../transcript/toolTooltip';
 import { isSealedAssistant } from '../../conversation/stream';
 import { family } from '../catalog';
 import { assistantProse, assistantTool, silentAssistant, userTurn } from '../fixtures';
@@ -114,6 +126,71 @@ describeOracle(family('fold'), () => {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../components/AgentTranscript.tsx'), 'utf8');
     expect(src).toMatch(/className="msg-time"[^>]*title=\{absTimeTitle\(props\.when\)\}/);
   });
-  itOracle.skip('T122', 'activity-strip tooltips wrap instead of overflowing', 'not ported: InstantTip-class hover');
-  itOracle.skip('T233', 'compacted activity nuggets expose hover detail', 'not ported: InstantTip-class hover');
+  itOracle('T122', 'activity-strip tooltip is wide single-line chrome; wraps only past max-width', () => {
+    // Policy: typical T116 summaries fit one line; the CSS is the shipped half.
+    expect(typicalSummaryIsSingleLine('Bash: go test ./... (exit 0)')).toBe(true);
+    expect(typicalSummaryIsSingleLine('x'.repeat(60))).toBe(true);
+    expect(typicalSummaryIsSingleLine('x'.repeat(400))).toBe(false);
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../cockpit.css'), 'utf8');
+    const tip = css.match(/\.turn-tip \{([^}]*)\}/)?.[1] ?? '';
+    expect(tip).toContain('width: max-content');
+    expect(tip).toContain('min-width: ' + TOOL_TIP_MIN_WIDTH_CSS);
+    expect(tip).toContain('max-width: ' + TOOL_TIP_MAX_WIDTH_CSS);
+    expect(css).toMatch(/\.turn-label:hover \.turn-tip \{ display: flex/);
+    const item = css.match(/\.turn-item \{([^}]*)\}/)?.[1] ?? '';
+    expect(item).toContain('white-space: ' + TOOL_ITEM_WHITE_SPACE);
+    expect(item).toContain('word-break: ' + TOOL_ITEM_WORD_BREAK);
+    expect(item).not.toContain('word-break: ' + TOOL_ITEM_FORBIDDEN_WORD_BREAK);
+    // The marker renders every step into the hover tip.
+    const { container } = render(
+      createElement(ClippedBubble, {
+        index: 0,
+        kind: 'steps',
+        text: '3 steps',
+        items: [
+          { cls: 'tool-use', text: 'Read ui/src/App.tsx' },
+          { cls: 'tool-use', text: 'Bash: go test ./...' },
+          { cls: 'tool-result', text: 'ok' },
+        ],
+        start: 0,
+      }),
+    );
+    const marker = container.querySelector('.turn-marker')!;
+    expect(marker.classList.contains('inject-nugget')).toBe(false);
+    const items = [...container.querySelectorAll('.turn-label .turn-tip .turn-item')].map((e) => e.textContent);
+    expect(items).toEqual(['Read ui/src/App.tsx', 'Bash: go test ./...', 'ok']);
+    expect(container.querySelector('.turn-item.tool-use')).toBeTruthy();
+  });
+
+  itOracle('T233', 'harness injects fold to ⋯ nuggets with hover detail, not owner bubbles', () => {
+    expect(classifyInjectUserText('hello there')).toBeNull();
+    expect(classifyInjectUserText('<system-reminder>\nBe brief.\n</system-reminder>')).toEqual({
+      injectKind: 'system-reminder',
+      label: '⋯ system',
+      detail: 'Be brief.',
+    });
+    expect(classifyInjectUserText('[Jevons fleet standing brief v3]\nrules')?.label).toBe('⋯ brief');
+    expect(classifyInjectUserText('[event: worker-idle] continue')?.label).toBe('⋯ worker-idle');
+    expect(classifyInjectUserText('[Daemon restart at 10:00]')?.injectKind).toBe('daemon');
+    const rows = displayRows([
+      userTurn('owner prose'),
+      userTurn('<system-reminder>injected rule</system-reminder>'),
+      assistantProse('reply'),
+    ]);
+    const nug = rows.find((r) => r.inject);
+    expect(nug).toBeTruthy();
+    expect(nug!.kind).toBe('steps');
+    expect(nug!.text).toBe('⋯ system');
+    expect(nug!.items).toEqual([{ cls: 'inject-detail', text: 'injected rule' }]);
+    expect(rows.filter((r) => r.kind === 'user').map((r) => r.text)).toEqual(['owner prose']);
+    const { container } = render(
+      createElement(ClippedBubble, { index: 1, kind: 'steps', text: nug!.text, items: nug!.items, inject: nug!.inject, start: 0 }),
+    );
+    const marker = container.querySelector('.turn-marker.inject-nugget')!;
+    expect(marker).toBeTruthy();
+    expect(marker.getAttribute('data-inject')).toBe('system-reminder');
+    expect(container.querySelector('.turn-label.inject-label')?.firstChild?.textContent).toBe('⋯ system');
+    expect(container.querySelector('.turn-tip .turn-item.inject-detail')?.textContent).toBe('injected rule');
+    expect(container.querySelector('.msg.user')).toBeNull();
+  });
 });

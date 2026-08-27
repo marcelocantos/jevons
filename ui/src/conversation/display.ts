@@ -1,6 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { classifyInjectUserText } from './inject';
 import { isSealedAssistant } from './stream';
 import { isGenericToolName, summariseInput } from './toolSummary';
 
@@ -36,6 +37,8 @@ export type DisplayRow = {
   kind: DisplayKind;
   text: string;
   steps?: number;
+  /** 🎯T233: harness inject nugget kind (row is a steps-family turn-marker). */
+  inject?: string;
   items?: StepItem[];
   when?: number;
   /** Assistant only: incremental smd until a terminal stop_reason. */
@@ -259,6 +262,13 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
     }
     if (isUserFrame(f)) {
       const raw = proseText(f);
+      // 🎯T233: harness injects fold to a compact ⋯ nugget with hover detail.
+      const nug = classifyInjectUserText(raw);
+      if (nug) {
+        flush();
+        out.push({ kind: 'steps', text: nug.label, steps: 0, inject: nug.injectKind, items: [{ cls: 'inject-detail', text: nug.detail }], when });
+        continue;
+      }
       if (isNonBoundaryUserText(raw)) continue;
       const text = normalizeOwnerEchoText(raw);
       if (!text) continue;
