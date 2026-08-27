@@ -174,6 +174,24 @@ export function shouldStayExpandedLatest(opts: {
   return !!o.isLatest && !!o.tall;
 }
 
+export type ClipUIState = {
+  expanded: boolean;
+  userToggled: boolean;
+  autoExpanded: boolean;
+};
+
+export const EMPTY_CLIP_UI: ClipUIState = {
+  expanded: false,
+  userToggled: false,
+  autoExpanded: false,
+};
+
+/** Stable enough to survive virtualizer remount; paging may still miss. */
+export function clipRowKey(row: { kind: string; when?: number; text: string }): string {
+  const text = String(row.text ?? '');
+  return `${row.kind}:${row.when ?? 0}:${text.length}:${text.slice(0, 96)}`;
+}
+
 export type ClipExpandInput = {
   tall: boolean;
   isLatest: boolean;

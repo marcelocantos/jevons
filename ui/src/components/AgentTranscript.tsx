@@ -8,12 +8,14 @@ import { chromeModel } from '../frontier/targetAsk';
 import { selectedWorkdir, useTargetAskHost } from '../frontier/targetAskContext';
 import {
   clipClassName,
+  clipRowKey,
   expandTabChevron,
   isNearTranscriptEnd,
   lastMessageRowIndex,
   nextAutoExpanded,
   paintedClipHeight,
   shouldClip,
+  type ClipUIState,
 } from '../conversation/clip';
 import { shouldRequestPage } from '../conversation/page';
 import { displayRows, type DisplayKind, type StepItem } from '../conversation/display';
@@ -26,7 +28,12 @@ import { relTime } from '../relTime';
 import { absTimeTitle } from '../absTime';
 import { normalizeDensity, type Density } from '../density';
 import { COMFORTABLE_ROW_GAP_PX, DEFAULT_ROW_GAP_PX, measureTranscriptRow } from '../transcript/rowLayout';
-import { distanceFromEnd, followAfterScroll, pinWriteScrollTop } from '../transcript/followPin';
+import {
+  distanceFromEnd,
+  followAfterScroll,
+  pinWriteScrollTop,
+  shouldAbortPinForMidList,
+} from '../transcript/followPin';
 import {
   HYDRATE_OVERSCAN_MAX,
   measuredSuffixFromEnd,
@@ -63,6 +70,7 @@ export function AgentTranscript(props: {
     followRef.current = next;
     props.onFollowChange?.(next);
   };
+  const clipPersist = useRef(new Map<string, ClipUIState>());
   const rows = useMemo(() => displayRows(props.frames), [props.frames]);
   const count = rows.length;
   const latestMsg = useMemo(() => lastMessageRowIndex(rows.map((r) => r.kind)), [rows]);
@@ -87,6 +95,7 @@ export function AgentTranscript(props: {
     lastTotalRef.current = 0;
     lastCountRef.current = 0;
     setOverscan(HYDRATE_OVERSCAN_MAX);
+    clipPersist.current = new Map();
   }, [props.name]);
 
   useEffect(() => {
@@ -108,6 +117,18 @@ export function AgentTranscript(props: {
     const el = parentRef.current;
     if (!el || !props.ready || count === 0) return;
     if (!followRef.current) return;
+    // Expand/collapse after hydrate must not yank mid-list (🎯T556).
+    // First paint is scrollTop=0 on a tall canvas — that is not a leave (🎯T558).
+    if (
+      shouldAbortPinForMidList({
+        scrollTop: el.scrollTop,
+        fromBottom: distanceFromEnd(el.scrollTop, el.scrollHeight, el.clientHeight),
+        clientHeight: el.clientHeight,
+      })
+    ) {
+      followRef.current = false;
+      return;
+    }
     pinningRef.current = true;
     virtualizer.scrollToIndex(count - 1, { align: 'end' });
     const pin = () => {
@@ -198,6 +219,7 @@ export function AgentTranscript(props: {
         wasFollowing: followRef.current,
         prevHeight: lastHeightRef.current,
         scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
       });
       lastHeightRef.current = next.height;
       setFollow(next.follow);
@@ -278,6 +300,8 @@ export function AgentTranscript(props: {
               historyReplayActive={historyReplayActive}
               scrollTop={scrollTop}
               clientHeight={clientHeight}
+              clipKey={clipRowKey(row)}
+              clipPersist={clipPersist.current}
             />
           );
         })}
@@ -311,17 +335,70 @@ export function ClippedBubble(props: {
   start: number;
   measureRef?: (el: Element | null) => void;
   isLatest?: boolean;
+  nearEnd?: boolean;
   historyReplayActive?: boolean;
+  scrollTop?: number;
+  clientHeight?: number;
+  clipKey?: string;
+  clipPersist?: Map<string, ClipUIState>;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
+  const seeded = props.clipKey ? props.clipPersist?.get(props.clipKey) : undefined;
   const [fullH, setFullH] = useState(0);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => !!seeded?.expanded);
+  const [userToggled, setUserToggled] = useState(() => !!seeded?.userToggled);
+  const [autoExpanded, setAutoExpanded] = useState(() => !!seeded?.autoExpanded);
+  const userToggledRef = useRef(!!seeded?.userToggled);
+  const persistClip = (next: ClipUIState) => {
+    if (props.clipKey && props.clipPersist) props.clipPersist.set(props.clipKey, next);
+  };
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
     const h = el.scrollHeight;
     setFullH((prev) => (prev === h ? prev : h));
   }, [props.text]);
+  const tall = props.kind !== 'steps' && shouldClip(fullH);
+  useLayoutEffect(() => {
+    // Manual pocket-tab wins; read the ref so a stale effect cannot recollapse
+    // the same instance one frame after click (🎯T556).
+    if (userToggledRef.current) {
+      persistClip({ expanded, userToggled: true, autoExpanded: false });
+      return;
+    }
+    const next = nextAutoExpanded({
+      tall,
+      isLatest: !!props.isLatest,
+      userToggled,
+      expanded,
+      autoExpanded,
+      nearEnd: !!props.nearEnd,
+      historyReplayActive: !!props.historyReplayActive,
+      top: props.start,
+      height: paintedClipHeight(fullH, expanded),
+      scrollTop: props.scrollTop ?? 0,
+      clientHeight: props.clientHeight ?? 0,
+    });
+    if (next === expanded) {
+      persistClip({ expanded, userToggled, autoExpanded });
+      return;
+    }
+    setExpanded(next);
+    setAutoExpanded(next);
+    persistClip({ expanded: next, userToggled: false, autoExpanded: next });
+  }, [
+    tall,
+    fullH,
+    expanded,
+    autoExpanded,
+    userToggled,
+    props.isLatest,
+    props.nearEnd,
+    props.historyReplayActive,
+    props.start,
+    props.scrollTop,
+    props.clientHeight,
+  ]);
   // 🎯T266: speaker/context tab on a sealed Jevons target-ask (T306: never on
   // an owner bubble; streaming bubbles wait for the seal, as vanilla does).
   const askHost = useTargetAskHost();
@@ -342,7 +419,6 @@ export function ClippedBubble(props: {
     askFired.current = true;
     onTargetAsk?.(props.text);
   }, [chromeSealed, props.isLatest, props.historyReplayActive, props.text, onTargetAsk]);
-  const tall = props.kind !== 'steps' && shouldClip(fullH);
   const pos = {
     position: 'absolute' as const,
     top: props.start,
@@ -443,9 +519,14 @@ export function ClippedBubble(props: {
           aria-label={expanded ? 'Collapse' : 'Expand'}
           title={expanded ? 'Collapse' : 'Expand'}
           onClick={() => {
+            userToggledRef.current = true;
             setUserToggled(true);
             setAutoExpanded(false);
-            setExpanded((v) => !v);
+            setExpanded((v) => {
+              const next = !v;
+              persistClip({ expanded: next, userToggled: true, autoExpanded: false });
+              return next;
+            });
           }}
         >
           <span className="chev" aria-hidden="true">

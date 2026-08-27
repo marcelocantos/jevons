@@ -6,6 +6,7 @@ import {
   distanceFromEnd,
   followAfterScroll,
   pinWriteScrollTop,
+  shouldAbortPinForMidList,
   shouldHoldFollow,
 } from './followPin';
 
@@ -20,6 +21,40 @@ describe('followPin', () => {
     expect(shouldHoldFollow({ fromBottom, pinning: true })).toBe(true);
     expect(shouldHoldFollow({ fromBottom, pinning: false })).toBe(false);
     expect(shouldHoldFollow({ fromBottom: 12, pinning: false })).toBe(true);
+    expect(shouldHoldFollow({ fromBottom, pinning: true, clientHeight: 720 })).toBe(true);
+    // First paint: prevHeight 0, canvas already tall (🎯T558).
+    expect(
+      shouldHoldFollow({
+        fromBottom: 4000,
+        pinning: true,
+        clientHeight: 720,
+        prevHeight: 0,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHoldFollow({
+        fromBottom: 4000,
+        pinning: true,
+        clientHeight: 720,
+        prevHeight: 12000,
+        heightGrew: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHoldFollow({
+        fromBottom: 4000,
+        pinning: true,
+        clientHeight: 720,
+        prevHeight: 12000,
+        heightGrew: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('aborts mid-list re-pin after the first pin write, not on scrollTop=0 (🎯T556 / T558)', () => {
+    expect(shouldAbortPinForMidList({ scrollTop: 0, fromBottom: 4000, clientHeight: 720 })).toBe(false);
+    expect(shouldAbortPinForMidList({ scrollTop: 30000, fromBottom: 4000, clientHeight: 720 })).toBe(true);
+    expect(shouldAbortPinForMidList({ scrollTop: 30000, fromBottom: 12, clientHeight: 720 })).toBe(false);
   });
 
   it('keeps follow when the transcript grew under a tracking viewport', () => {
@@ -61,6 +96,15 @@ describe('followPin', () => {
       scrollHeight: 2800,
     });
     expect(firstPaint.follow).toBe(false);
+    const reloadTall = followAfterScroll({
+      fromBottom: 8000,
+      pinning: true,
+      wasFollowing: true,
+      prevHeight: 0,
+      scrollHeight: 12000,
+      clientHeight: 720,
+    });
+    expect(reloadTall.follow).toBe(true);
   });
 
   it('distanceFromEnd is zero when pinned at integer max', () => {

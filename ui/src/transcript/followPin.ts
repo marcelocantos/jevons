@@ -24,6 +24,7 @@ export function followAfterScroll(o: {
   wasFollowing: boolean;
   prevHeight: number;
   scrollHeight: number;
+  clientHeight?: number;
 }): { follow: boolean; height: number } {
   const sh = Number(o.scrollHeight) || 0;
   const prev = Number(o.prevHeight) || 0;
@@ -33,9 +34,25 @@ export function followAfterScroll(o: {
       pinning: o.pinning,
       wasFollowing: o.wasFollowing,
       heightGrew: prev > 0 && sh > prev,
+      clientHeight: o.clientHeight,
+      prevHeight: prev,
     }),
     height: sh,
   };
+}
+
+/**
+ * Re-pin abort for a mid-list viewport (🎯T556). First paint is scrollTop=0
+ * on a tall canvas — the caller must not treat that as a leave (🎯T558).
+ */
+export function shouldAbortPinForMidList(opts: {
+  fromBottom: number;
+  clientHeight: number;
+  scrollTop?: number;
+}): boolean {
+  if ((Number(opts.scrollTop) || 0) <= 0) return false;
+  const ch = Number(opts.clientHeight) || 0;
+  return ch > 0 && (Number(opts.fromBottom) || 0) > ch;
 }
 
 /**
@@ -51,7 +68,17 @@ export function shouldHoldFollow(opts: {
   /** Prefix grew (hydrate remat / live append). Not a user leave. */
   heightGrew?: boolean;
   wasFollowing?: boolean;
+  clientHeight?: number;
+  prevHeight?: number;
 }): boolean {
+  const from = Number(opts.fromBottom) || 0;
+  const ch = Number(opts.clientHeight) || 0;
+  const midList = ch > 0 && from > ch;
+  const established = (Number(opts.prevHeight) || 0) > 0;
+  // User moved more than one viewport from the end. Hydrate measure
+  // growth is heightGrew (and often still pinning). First paint has
+  // prevHeight 0 — do not treat an unpinned canvas as a leave (🎯T558).
+  if (midList && established && !(opts.pinning && opts.heightGrew)) return false;
   if (opts.pinning) return true;
   // Measure growth moves the live end away from the current scrollTop.
   // That looks like a leave if we only read fromBottom (often ⅓–⅔ pane).

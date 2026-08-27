@@ -1,7 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { createElement } from 'react';
+import { fireEvent, render } from '@testing-library/react';
 import { expect } from 'vitest';
+import { ClippedBubble } from '../../components/AgentTranscript';
 import {
   clipClassName,
   DEFAULT_COLLAPSED_PX,
@@ -14,12 +17,87 @@ import {
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
 
+function withTallMsgBody<T>(fn: () => T): T {
+  const proto = HTMLElement.prototype as unknown as { scrollHeight: number };
+  const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+  Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+    configurable: true,
+    get() {
+      if ((this as HTMLElement).classList?.contains('msg-body')) return 400;
+      return desc && desc.get ? desc.get.call(this) : 0;
+    },
+  });
+  try {
+    return fn();
+  } finally {
+    if (desc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', desc);
+    else delete proto.scrollHeight;
+  }
+}
+
 describeOracle(family('clip'), () => {
   itOracle(['T55', 'T77'], 'tall content clips; short does not', () => {
     expect(shouldClip(400)).toBe(true);
     expect(shouldClip(100)).toBe(false);
     expect(shouldClip(224)).toBe(false);
     expect(shouldClip(226)).toBe(true);
+  });
+
+  itOracle(['T55', 'T556'], 'pocket tab click expands a clipped bubble and click again collapses', () => {
+    withTallMsgBody(() => {
+      const { container } = render(
+        createElement(ClippedBubble, {
+          index: 0,
+          kind: 'assistant',
+          text: 'tall line\n'.repeat(40),
+          start: 0,
+          sealed: true,
+          isLatest: false,
+          nearEnd: false,
+          historyReplayActive: false,
+          scrollTop: 0,
+          clientHeight: 200,
+        }),
+      );
+      const msg = container.querySelector('.msg')!;
+      const btn = container.querySelector<HTMLButtonElement>('.msg-expand-tab')!;
+      expect(msg).toBeTruthy();
+      expect(btn).toBeTruthy();
+      expect(msg.classList.contains('msg-clipped')).toBe(true);
+      expect(btn.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(btn);
+      expect(msg.classList.contains('msg-clipped')).toBe(false);
+      expect(btn.getAttribute('aria-expanded')).toBe('true');
+      expect(btn.getAttribute('aria-label')).toBe('Collapse');
+      fireEvent.click(btn);
+      expect(msg.classList.contains('msg-clipped')).toBe(true);
+      expect(btn.getAttribute('aria-expanded')).toBe('false');
+      expect(btn.getAttribute('aria-label')).toBe('Expand');
+    });
+  });
+
+  itOracle(['T77', 'T556'], 'manual expand survives a rerender that would auto-collapse', () => {
+    withTallMsgBody(() => {
+      const props = {
+        index: 0,
+        kind: 'assistant' as const,
+        text: 'tall line\n'.repeat(40),
+        start: 0,
+        sealed: true,
+        isLatest: false,
+        nearEnd: false,
+        historyReplayActive: false,
+        scrollTop: 0,
+        clientHeight: 200,
+      };
+      const { container, rerender } = render(createElement(ClippedBubble, props));
+      const btn = container.querySelector<HTMLButtonElement>('.msg-expand-tab')!;
+      fireEvent.click(btn);
+      expect(container.querySelector('.msg')!.classList.contains('msg-clipped')).toBe(false);
+      rerender(createElement(ClippedBubble, { ...props, scrollTop: 8000, clientHeight: 200 }));
+      expect(container.querySelector('.msg')!.classList.contains('msg-clipped')).toBe(false);
+      expect(btn.getAttribute('aria-expanded')).toBe('true');
+    });
   });
 
   itOracle('T106', 'clipped class and pocket-tab chevrons match vanilla glyphs', () => {
