@@ -1015,7 +1015,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		args.Server.SweepSendBacklogs()
 		args.Server.SweepHandovers()
 		args.Server.reportFleetMuteIfNeeded()
-		if reps := SweepDeadAgents(args.Server.registry, overseer, args.Server.fleetIntent()); len(reps) > 0 {
+		if reps := SweepDeadAgents(args.Server.registry, args.Server.RemovalAccount(), overseer, args.Server.fleetIntent()); len(reps) > 0 {
 			slog.Info("fleet health (cockpit/idle loop)", "report", FormatDeadAgentReport(reps), "post_restart", postRestart)
 		}
 		args.Server.runFleetRecoverSweep(postRestart)
@@ -1043,7 +1043,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		return
 	}
 	runIdlePressureLoop(ctx, interval, func() {
-		if reps := SweepDeadAgents(args.Server.registry, overseer, args.Server.fleetIntent()); len(reps) > 0 {
+		if reps := SweepDeadAgents(args.Server.registry, args.Server.RemovalAccount(), overseer, args.Server.fleetIntent()); len(reps) > 0 {
 			slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
 		}
 		args.Server.TriggerIdlePressureSweep()

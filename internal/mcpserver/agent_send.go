@@ -148,7 +148,7 @@ func (s *Server) sendToAgentAs(actor, name, text string, interrupt bool) (agentS
 // but stopped/dead.
 func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 	if s.registry != nil {
-		if reps := SweepDeadAgents(s.registry, s.overseerName(), s.fleetIntent()); len(reps) > 0 {
+		if reps := SweepDeadAgents(s.registry, s.RemovalAccount(), s.overseerName(), s.fleetIntent()); len(reps) > 0 {
 			line := FormatDeadAgentReport(reps)
 			slog.Info(line)
 			s.notifyFleetHealth(line)
