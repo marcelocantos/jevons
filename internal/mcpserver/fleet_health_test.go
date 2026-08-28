@@ -48,7 +48,7 @@ func (f *fakeSweepReg) Stop(name string) {
 	f.alive[name] = false
 }
 
-func (f *fakeSweepReg) Remove(name string) error {
+func (f *fakeSweepReg) RemoveDeadSeat(name string) error {
 	f.removes = append(f.removes, name)
 	if f.removeErr != nil {
 		return f.removeErr
@@ -275,10 +275,12 @@ func TestSweepThenPrependIsCallerVisible(t *testing.T) {
 	}
 	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
 	out := PrependFleetHealth("worker stopped\n", reps)
-	if !strings.Contains(out, "worker:stopped") {
-		t.Fatalf("tool text missing recovery: %q", out)
+	// 🎯T544: a dead work seat (purpose unset reads as work) is removed,
+	// not stopped, and the caller sees that outcome by name.
+	if !strings.Contains(out, "worker:removed") {
+		t.Fatalf("tool text missing removal: %q", out)
 	}
-	if len(f.stops) != 1 {
-		t.Fatal("side effect Stop required")
+	if len(f.defs) != 0 {
+		t.Fatal("side effect Remove required: row must leave the registry")
 	}
 }

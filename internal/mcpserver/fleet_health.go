@@ -73,8 +73,8 @@ type fleetSweepReg interface {
 	ProcState(name string) (hasProc, alive bool)
 	Launch(name string) error
 	Stop(name string)
-	// Remove drops the row entirely (🎯T544 dead work seat).
-	Remove(name string) error
+	// RemoveDeadSeat drops the row entirely (🎯T544 dead work seat).
+	RemoveDeadSeat(name string) error
 }
 
 // claudiaSweep adapts *claudia.Registry to fleetSweepReg. account may be
@@ -111,7 +111,7 @@ func (c claudiaSweep) Stop(name string) {
 	c.reg.Stop(name)
 }
 
-func (c claudiaSweep) Remove(name string) error {
+func (c claudiaSweep) RemoveDeadSeat(name string) error {
 	c.reg.Stop(name)
 	_, err := c.account.Remove(c.reg, name, fleetlog.Removal{
 		Reason: fleetlog.ReasonDeadSeat,
@@ -171,7 +171,7 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.
 				slog.Info("fleet health: re-launched dead AutoStart agent", "name", d.Name)
 			}
 		} else if remove {
-			if err := reg.Remove(d.Name); err != nil {
+			if err := reg.RemoveDeadSeat(d.Name); err != nil {
 				rep.Error = err.Error()
 				reg.Stop(d.Name)
 				slog.Warn("fleet health: dead work seat removal failed; handle cleared",
