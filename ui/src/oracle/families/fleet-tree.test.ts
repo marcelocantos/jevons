@@ -58,6 +58,20 @@ describeOracle(family('fleet-tree'), () => {
     expect(mergeAgentChrome(prev, next)[0].provider).toBe('cursor');
   });
 
+  itOracle('T544', 'a dead work seat the server removed leaves no row on refresh', () => {
+    // The feed is the source of truth: once the silent-death sweep removes a
+    // dead work seat, the next /api/agents omits it and the tree must not
+    // keep a "stopped" row from the previous merge.
+    const prev = [
+      { name: 'jevons-po', provider: 'grok', model: 'grok-4.5', status: 'running' },
+      { name: 'jv-t544-worker', provider: 'claude', model: 'claude-fable-5', status: 'stopped' },
+    ];
+    const next = [{ name: 'jevons-po', provider: '', model: '', status: 'running' }];
+    const merged = mergeAgentChrome(prev, next);
+    expect(merged.map((a) => a.name)).toEqual(['jevons-po']);
+    expect(merged.find((a) => a.name === 'jv-t544-worker')).toBeUndefined();
+  });
+
   itOracle('T508', 'Bedrock selectors show the Amazon mark before the vendor mark', () => {
     expect(companyOfProvider('bedrock')).toBe('anthropic');
   });

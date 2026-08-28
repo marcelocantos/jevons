@@ -134,7 +134,7 @@ func (s *Server) SetAgentEventHook(fn func(name string, ev claudia.Event)) {
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
 	// (and overseer notify), not only logs.
-	reps := SweepDeadAgents(s.registry, s.overseerName(), s.fleetIntent())
+	reps := SweepDeadAgents(s.registry, s.RemovalAccount(), s.overseerName(), s.fleetIntent())
 	if len(reps) > 0 {
 		line := FormatDeadAgentReport(reps)
 		slog.Info(line)

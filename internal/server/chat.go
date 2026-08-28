@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -867,14 +868,14 @@ type agentInfo struct {
 // recovery runs, NotifyAgentsChanged pushes a live frame so the UI refreshes
 // immediately (not only on the next poll).
 func listFleetAgents(reg *claudia.Registry) []agentInfo {
-	return listFleetAgentsNotifying(reg, nil, nil, nil)
+	return listFleetAgentsNotifying(reg, nil, nil, nil, nil)
 }
 
 // listFleetAgentsNotifying is the same feed with an optional notify hook for
 // recovery events (server wires agents_changed). Used by hermetic tests with
 // notify=nil. progress may be nil (no ACP snapshots); models may be nil (no
 // session-log lookup — rows then carry only what the live hub saw).
-func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []string), progress *AgentProgressHub, models *fleetModelResolver) []agentInfo {
+func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, onRecovered func(names []string), progress *AgentProgressHub, models *fleetModelResolver) []agentInfo {
 	if reg == nil {
 		return []agentInfo{}
 	}
@@ -895,6 +896,19 @@ func listFleetAgentsNotifying(reg *claudia.Registry, onRecovered func(names []st
 			} else {
 				recovered = append(recovered, d.Name)
 			}
+		} else if fleet.DeadSeatRemovable(d.Purpose) {
+			// 🎯T544: a dead work seat leaves the tree instead of lingering as
+			// a "stopped" row. Stop first so the dead handle is not left
+			// dangling should the accounted removal refuse.
+			reg.Stop(d.Name)
+			if _, err := account.Remove(reg, d.Name, fleetlog.Removal{
+				Reason: fleetlog.ReasonDeadSeat,
+				Detail: "work seat's process exited without a terminal report (🎯T544)",
+			}); err != nil {
+				slog.Warn("fleet feed: dead work seat removal failed; handle cleared",
+					"name", d.Name, "err", err)
+			}
+			recovered = append(recovered, d.Name) // row gone → surface the diff
 		} else {
 			reg.Stop(d.Name)
 			recovered = append(recovered, d.Name) // cleared → stopped, still surface
@@ -1049,7 +1063,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]agentInfo{})
 		return
 	}
-	agents := listFleetAgentsNotifying(reg, func(names []string) {
+	agents := listFleetAgentsNotifying(reg, s.RemovalAccount(), func(names []string) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
 	}, s.agentProgress, models)

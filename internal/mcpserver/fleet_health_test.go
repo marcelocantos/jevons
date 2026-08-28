@@ -20,7 +20,9 @@ type fakeSweepReg struct {
 	alive     map[string]bool
 	launches  []string
 	stops     []string
+	removes   []string
 	launchErr error
+	removeErr error
 }
 
 func (f *fakeSweepReg) List() []claudia.AgentDef { return f.defs }
@@ -46,22 +48,100 @@ func (f *fakeSweepReg) Stop(name string) {
 	f.alive[name] = false
 }
 
+func (f *fakeSweepReg) Remove(name string) error {
+	f.removes = append(f.removes, name)
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	f.hasProc[name] = false
+	f.alive[name] = false
+	kept := f.defs[:0]
+	for _, d := range f.defs {
+		if d.Name != name {
+			kept = append(kept, d)
+		}
+	}
+	f.defs = kept
+	return nil
+}
+
 func TestDeadRecoveryPlan(t *testing.T) {
-	d, r, c := deadRecoveryPlan(false, false, true, true)
-	if d || r || c {
-		t.Fatalf("nil proc: detect=%v recover=%v clear=%v", d, r, c)
+	d, r, c, rm := deadRecoveryPlan(false, false, true, true, claudia.PurposeWork)
+	if d || r || c || rm {
+		t.Fatalf("nil proc: detect=%v recover=%v clear=%v remove=%v", d, r, c, rm)
 	}
-	d, r, c = deadRecoveryPlan(true, true, true, true)
-	if d || r || c {
-		t.Fatalf("alive: detect=%v recover=%v clear=%v", d, r, c)
+	d, r, c, rm = deadRecoveryPlan(true, true, true, true, claudia.PurposeWork)
+	if d || r || c || rm {
+		t.Fatalf("alive: detect=%v recover=%v clear=%v remove=%v", d, r, c, rm)
 	}
-	d, r, c = deadRecoveryPlan(true, false, true, true)
-	if !d || !r || c {
-		t.Fatalf("autostart dead: detect=%v recover=%v clear=%v", d, r, c)
+	d, r, c, rm = deadRecoveryPlan(true, false, true, true, claudia.PurposeWork)
+	if !d || !r || c || rm {
+		t.Fatalf("autostart dead: detect=%v recover=%v clear=%v remove=%v", d, r, c, rm)
 	}
-	d, r, c = deadRecoveryPlan(true, false, false, true)
-	if !d || r || !c {
-		t.Fatalf("ephemeral dead: detect=%v recover=%v clear=%v", d, r, c)
+	// 🎯T544: a dead work seat (purpose work or unset) is removed, not stopped.
+	for _, purpose := range []string{claudia.PurposeWork, ""} {
+		d, r, c, rm = deadRecoveryPlan(true, false, false, true, purpose)
+		if !d || r || c || !rm {
+			t.Fatalf("work dead purpose=%q: detect=%v recover=%v clear=%v remove=%v", purpose, d, r, c, rm)
+		}
+	}
+	// Asides and product owners keep the clear-handle path.
+	for _, purpose := range []string{claudia.PurposeAside, "product-owner"} {
+		d, r, c, rm = deadRecoveryPlan(true, false, false, true, purpose)
+		if !d || r || !c || rm {
+			t.Fatalf("ephemeral dead purpose=%q: detect=%v recover=%v clear=%v remove=%v", purpose, d, r, c, rm)
+		}
+	}
+	// Intent says stay down: neither cleared nor removed.
+	d, r, c, rm = deadRecoveryPlan(true, false, false, false, claudia.PurposeWork)
+	if !d || r || c || rm {
+		t.Fatalf("intent-declined dead: detect=%v recover=%v clear=%v remove=%v", d, r, c, rm)
+	}
+}
+
+// 🎯T544: a dead non-AutoStart work seat leaves the registry — Remove is
+// called, List omits it, and nothing Stops or Launches it in its place.
+func TestSweepDeadAgentsWorkSeatRemoved(t *testing.T) {
+	f := &fakeSweepReg{
+		defs:    []claudia.AgentDef{{Name: "jv-t544-worker", Purpose: claudia.PurposeWork}},
+		hasProc: map[string]bool{"jv-t544-worker": true},
+		alive:   map[string]bool{"jv-t544-worker": false},
+	}
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
+	if len(reps) != 1 || reps[0].Name != "jv-t544-worker" || !reps[0].Removed || reps[0].Recovered {
+		t.Fatalf("reps=%+v want removed", reps)
+	}
+	if len(f.removes) != 1 || f.removes[0] != "jv-t544-worker" {
+		t.Fatalf("removes=%v want [jv-t544-worker]", f.removes)
+	}
+	if len(f.stops) != 0 || len(f.launches) != 0 {
+		t.Fatalf("stops=%v launches=%v want none", f.stops, f.launches)
+	}
+	for _, d := range f.List() {
+		if d.Name == "jv-t544-worker" {
+			t.Fatal("dead work seat still listed after sweep")
+		}
+	}
+	if !strings.Contains(FormatDeadAgentReport(reps), "jv-t544-worker:removed") {
+		t.Fatalf("report=%q", FormatDeadAgentReport(reps))
+	}
+}
+
+// 🎯T544: when removal refuses, the handle is still cleared and the error
+// surfaces, so a failed removal never leaves a zombie "running" hope.
+func TestSweepDeadAgentsWorkSeatRemoveFailClearsHandle(t *testing.T) {
+	f := &fakeSweepReg{
+		defs:      []claudia.AgentDef{{Name: "worker"}},
+		hasProc:   map[string]bool{"worker": true},
+		alive:     map[string]bool{"worker": false},
+		removeErr: errors.New("registry locked"),
+	}
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
+	if len(reps) != 1 || reps[0].Removed || !strings.Contains(reps[0].Error, "registry locked") {
+		t.Fatalf("reps=%+v", reps)
+	}
+	if len(f.stops) != 1 || f.stops[0] != "worker" {
+		t.Fatalf("stops=%v want [worker]", f.stops)
 	}
 }
 
@@ -96,8 +176,9 @@ func TestSweepDeadAgentsAutoStartRelaunch(t *testing.T) {
 }
 
 func TestSweepDeadAgentsEphemeralClearsHandle(t *testing.T) {
+	// Aside seats keep the clear-handle path; work seats are 🎯T544 removed.
 	f := &fakeSweepReg{
-		defs:    []claudia.AgentDef{{Name: "worker", AutoStart: false}},
+		defs:    []claudia.AgentDef{{Name: "worker", AutoStart: false, Purpose: claudia.PurposeAside}},
 		hasProc: map[string]bool{"worker": true},
 		alive:   map[string]bool{"worker": false},
 	}
@@ -147,7 +228,7 @@ func TestSweepDeadAgentsEmptyOnHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Never launched → Get nil → not a dead-handle detection.
-	reps := SweepDeadAgents(reg, "jevons", fleetintent.Snapshot{})
+	reps := SweepDeadAgents(reg, nil, "jevons", fleetintent.Snapshot{})
 	if len(reps) != 0 {
 		t.Fatalf("want no dead agents, got %+v", reps)
 	}

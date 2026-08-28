@@ -60,6 +60,11 @@ const (
 	ReasonUnbriefedSeat = "unbriefed_seat"
 	// ReasonThreadRemove is a thread/agent dropped by name on request.
 	ReasonThreadRemove = "thread_remove"
+	// ReasonDeadSeat is the silent-death sweep dropping a work seat whose
+	// process exited without a terminal report (🎯T544). A dead work agent is
+	// not a parked one: keeping it as a "stopped" row is a zombie in the
+	// fleet tree, so the sweep removes it instead of clearing the handle.
+	ReasonDeadSeat = "dead_seat"
 	// ReasonExpire and ReasonRotationDrop have no caller today. They are part
 	// of the vocabulary so a future path that needs them takes a name from
 	// this list instead of inventing a silent removal.

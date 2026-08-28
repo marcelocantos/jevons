@@ -176,7 +176,7 @@ func (s *Server) handleListPortfolios(w http.ResponseWriter, r *http.Request) {
 
 	var agents []agentInfo
 	if reg != nil {
-		agents = listFleetAgentsNotifying(reg, nil, progress, models)
+		agents = listFleetAgentsNotifying(reg, s.RemovalAccount(), nil, progress, models)
 	} else {
 		agents = []agentInfo{}
 	}

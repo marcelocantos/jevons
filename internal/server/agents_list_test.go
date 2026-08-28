@@ -165,7 +165,7 @@ func TestListFleetAgentsProgressFields(t *testing.T) {
 	if !changed {
 		t.Fatal("observe should change")
 	}
-	got := listFleetAgentsNotifying(reg, nil, hub, nil)
+	got := listFleetAgentsNotifying(reg, nil, nil, hub, nil)
 	byName := map[string]agentInfo{}
 	for _, a := range got {
 		byName[a.Name] = a
@@ -223,7 +223,7 @@ func TestListFleetAgentsBlockedGoalIsNotWorking(t *testing.T) {
 	}) {
 		t.Fatal("observe blocked")
 	}
-	got := listFleetAgentsNotifying(reg, nil, hub, nil)
+	got := listFleetAgentsNotifying(reg, nil, nil, hub, nil)
 	if len(got) != 1 {
 		t.Fatalf("len=%d", len(got))
 	}
