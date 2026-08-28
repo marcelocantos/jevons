@@ -85,7 +85,7 @@ describe('displayRows', () => {
       { type: 'user', message: { role: 'user', content: [{ type: 'text', text: "[user]\nWhat's running right now?" }] } },
     ]);
     expect(rows.filter((r) => r.kind === 'user')).toEqual([
-      { kind: 'user', text: "What's running right now?", when: undefined },
+      { kind: 'user', text: "What's running right now?", when: undefined, origin: 'owner' },
     ]);
   });
 
@@ -98,7 +98,7 @@ describe('displayRows', () => {
       },
     ]);
     expect(rows.filter((r) => r.kind === 'user')).toEqual([
-      { kind: 'user', text: 'hello', when: undefined },
+      { kind: 'user', text: 'hello', when: undefined, origin: 'owner' },
     ]);
   });
 

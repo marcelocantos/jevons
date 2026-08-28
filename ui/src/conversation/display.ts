@@ -3,6 +3,7 @@
 
 import { classifyInjectUserText } from './inject';
 import { isSealedAssistant } from './stream';
+import { turnOriginOf, type TurnOrigin } from './paint';
 import { isGenericToolName, summariseInput } from './toolSummary';
 
 /** Lifted display fold: notes, ⋯ n steps, prose. Not a second hydrate. */
@@ -45,6 +46,8 @@ export type DisplayRow = {
   sealed?: boolean;
   /** Diagnostic only: consecutive identical nacks (🎯T545.3). */
   count?: number;
+  /** User only: provenance for body paint (🎯T221 / T381). */
+  origin?: TurnOrigin;
 };
 
 function asRec(frame: unknown): Record<string, unknown> {
@@ -205,7 +208,25 @@ function frameWhen(frame: unknown): number | undefined {
   return undefined;
 }
 
-export function displayRows(frames: unknown[]): DisplayRow[] {
+/**
+ * 🎯T221: a fleet inject arrives as role=user wrapped in <user_query>…</user_query>
+ * (event push / overseer inject); the wrapper is provenance, so the bubble paints
+ * markdown like any agent-origin turn. An unwrapped owner turn stays literal (T381).
+ */
+export function isWrappedInjectUserText(raw: string): boolean {
+  return /^\s*<user_query(?:\s[^>]*)?>[\s\S]*<\/user_query>\s*$/i.test(String(raw ?? ''));
+}
+
+export function userTurnOrigin(frame: unknown, raw: string, inspect = false): TurnOrigin {
+  if (turnOriginOf(frame) === 'agent') return 'agent';
+  // Main chat: the owner's own echo is also user_query-wrapped (🎯T537.1.2), so the
+  // wrapper is provenance only on the RHS inspect surface (vanilla T221 was inspect-only).
+  return inspect && isWrappedInjectUserText(raw) ? 'agent' : 'owner';
+}
+
+export type DisplayRowsOpts = { inspect?: boolean };
+
+export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayRow[] {
   const out: DisplayRow[] = [];
   let run = 0;
   let runItems: StepItem[] = [];
@@ -275,7 +296,7 @@ export function displayRows(frames: unknown[]): DisplayRow[] {
       const last = out[out.length - 1];
       if (last && last.kind === 'user' && normalizeOwnerEchoText(last.text) === text) continue;
       flush();
-      out.push({ kind: 'user', text, when });
+      out.push({ kind: 'user', text, when, origin: userTurnOrigin(f, raw, !!opts?.inspect) });
       continue;
     }
     // Walk content in order so a mixed text+tool_use frame reports every

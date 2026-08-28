@@ -71,7 +71,7 @@ export function AgentTranscript(props: {
     props.onFollowChange?.(next);
   };
   const clipPersist = useRef(new Map<string, ClipUIState>());
-  const rows = useMemo(() => displayRows(props.frames), [props.frames]);
+  const rows = useMemo(() => displayRows(props.frames, { inspect: density === 'compact' }), [props.frames, density]);
   const count = rows.length;
   const latestMsg = useMemo(() => lastMessageRowIndex(rows.map((r) => r.kind)), [rows]);
   const estimate = density === 'compact' ? 48 : 72;

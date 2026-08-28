@@ -683,7 +683,6 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.worker .worker-agent { color: var(--accent); }
 .msg.worker .worker-kind { color: var(--text-muted); font-size: 11px; }
 .msg.worker .worker-task { color: var(--text-muted); font-family: var(--mono); font-size: 10px; margin-left: auto; }
-.msg.worker .worker-body { white-space: pre-wrap; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--text); max-height: 40vh; overflow-y: auto; }
 .msg.worker.worker-failed { border-color: var(--red); }
 .msg.worker.worker-failed .worker-kind { color: var(--red); }
 
