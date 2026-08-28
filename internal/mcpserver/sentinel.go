@@ -499,7 +499,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 
 	// --- Fleet agents ---
 	if s.registry != nil {
-		reps := SweepDeadAgents(s.registry, overseer, intent)
+		reps := SweepDeadAgents(s.registry, s.RemovalAccount(), overseer, intent)
 		recovered := map[string]bool{}
 		dead := map[string]DeadAgentReport{}
 		for _, r := range reps {

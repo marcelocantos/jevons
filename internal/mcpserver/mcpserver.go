@@ -402,7 +402,7 @@ func (s *Server) SweepFleetHealth(overseerName string) {
 	if overseerName == "" {
 		overseerName = "jevons"
 	}
-	if reps := SweepDeadAgents(s.registry, overseerName, s.fleetIntent()); len(reps) > 0 {
+	if reps := SweepDeadAgents(s.registry, s.RemovalAccount(), overseerName, s.fleetIntent()); len(reps) > 0 {
 		slog.Info("cockpit fleet health", "report", FormatDeadAgentReport(reps))
 	}
 }

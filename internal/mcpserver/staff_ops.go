@@ -129,7 +129,7 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 	if s.registry != nil {
 		overseer := s.overseerName()
 		// Dead-handle recovery (T85 mechanical floor).
-		reps := SweepDeadAgents(s.registry, overseer, intent)
+		reps := SweepDeadAgents(s.registry, s.RemovalAccount(), overseer, intent)
 		for _, r := range reps {
 			sig := staffops.Signal{
 				Kind:         "dead_agent",
