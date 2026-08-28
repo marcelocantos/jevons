@@ -130,9 +130,13 @@ function installMockWebSocket({ tokens }) {
         return;
       }
       if (data.startsWith('{')) return; // control frames
+      this._turn(data);
+    }
+    // One owner-shaped turn: user echo, then a streamed multi-token reply.
+    _turn(text) {
       this._emit({
         type: 'user',
-        message: { role: 'user', content: data },
+        message: { role: 'user', content: text },
       });
       // Stream tokens with delays so appendOrAddJevons runs per chunk.
       let i = 0;
@@ -170,6 +174,31 @@ function installMockWebSocket({ tokens }) {
     }
   }
   window.WebSocket = MockWebSocket;
+
+  // Since 50328854 (one owner-send path) the composer submits over
+  // POST /api/agents/<overseer>/send, not the chat socket — the socket only
+  // carries the echo and the reply. Mirror that: accept the POST and run
+  // the turn on the chat socket, so the hermetic path exercises the shipped
+  // submit route rather than a socket-only contract the product no longer
+  // uses (🎯T557).
+  const realFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    if (method === 'POST' && /\/api\/agents\/[^/]+\/send$/.test(url)) {
+      let text = '';
+      try { text = JSON.parse(init && init.body || '{}').text || ''; } catch (_) { /* fall through */ }
+      const socks = window.__mockSockets || [];
+      const chat = socks.filter(s => String(s.url).indexOf('/ws/chat') !== -1).pop();
+      window.__lastChatSend = text;
+      if (chat && text) setTimeout(() => chat._turn(text), 0);
+      return Promise.resolve(new Response('{"ok":true}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    }
+    return realFetch(input, init);
+  };
 }
 
 async function assertChatPercept(page, { expectFull, label }) {
