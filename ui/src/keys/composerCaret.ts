@@ -74,6 +74,37 @@ export function selectionAfterHomeEnd(
   return { start: bounds.end, end: bounds.end };
 }
 
+export type HomeEndKeyEvent = {
+  key: string;
+  altKey?: boolean;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  preventDefault: () => void;
+  stopPropagation?: () => void;
+};
+
+/** Apply field Home/End to a textarea. Returns true when the chord was ours. */
+export function applyComposerHomeEnd(
+  el: Pick<HTMLTextAreaElement, 'value' | 'selectionStart' | 'selectionEnd' | 'setSelectionRange'>,
+  e: HomeEndKeyEvent,
+  opts?: SeedCaretOpts,
+): boolean {
+  const next = selectionAfterHomeEnd(
+    e.key,
+    el.value,
+    el.selectionStart ?? 0,
+    el.selectionEnd ?? 0,
+    e,
+    opts,
+  );
+  if (!next) return false;
+  e.preventDefault();
+  if (e.stopPropagation) e.stopPropagation();
+  el.setSelectionRange(next.start, next.end);
+  return true;
+}
+
 export function shouldAllowJumpToBottom(
   key: string,
   mods: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean },

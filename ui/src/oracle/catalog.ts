@@ -56,14 +56,14 @@ export const CATALOG: readonly OracleFamily[] = [
     title: 'Composer chords — Tab, Home/End, Alt+Enter, Ctrl+Enter, queue',
     file: 'composer-keys.test.ts',
     layer: 'hermetic',
-    covers: covers('composer-keys', ['T113', 'T126', 'T127', 'T132', 'T153', 'T235', 'T241', 'T307', 'T366', 'T547', 'T549']),
+    covers: covers('composer-keys', ['T113', 'T126', 'T127', 'T132', 'T149', 'T153', 'T235', 'T241', 'T307', 'T366', 'T540.3.1', 'T547', 'T549']),
   },
   {
     id: 'composer-chrome',
     title: 'Composer chrome — height, persist, images, Wispr, empty after send',
     file: 'composer-chrome.test.ts',
     layer: 'hermetic',
-    covers: covers('composer-chrome', ['T70', 'T70.1', 'T76', 'T80', 'T123', 'T154', 'T183', 'T368', 'T478']),
+    covers: covers('composer-chrome', ['T123', 'T154', 'T183', 'T228', 'T239', 'T368', 'T478', 'T70', 'T70.1', 'T76', 'T80']),
   },
   {
     id: 'transcript-geom',

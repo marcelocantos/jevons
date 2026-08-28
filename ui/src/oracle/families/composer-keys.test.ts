@@ -1,13 +1,23 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { expect } from 'vitest';
+import '../../composer/ensureLocalStorage';
+import { createElement } from 'react';
+import { fireEvent, render } from '@testing-library/react';
+import { afterEach, expect } from 'vitest';
 import { decideSend } from '../../composer/sendQueue';
+import { UserRequest } from '../../components/UserRequest';
 import { classifyEnterAction } from '../../keys/composerEnter';
+import { applyComposerHomeEnd, selectionAfterHomeEnd } from '../../keys/composerCaret';
 import { shouldFocusComposer } from '../../keys/composerFocus';
 import { planComposerTabCycle } from '../../keys/composerTab';
+import { useDrafts } from '../../store/drafts';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
+
+afterEach(() => {
+  useDrafts.setState({ drafts: {} });
+});
 
 describeOracle(family('composer-keys'), () => {
   itOracle('T366', 'Tab cycles main ↔ sidebar when the sidebar composer is visible', () => {
@@ -63,6 +73,31 @@ describeOracle(family('composer-keys'), () => {
     'Alt+Enter empty/seed-only pops last owner message into the draft',
     'React Enter policy is T241 force_send/queue, not pop_last',
   );
-  itOracle.skip('T126', 'Home and End move the caret to start and end of the composer field', 'journey is the arbiter (J24)');
-  itOracle.skip('T307', 'Home/End are field edges; Cmd/Ctrl+Left/Right stay word chords', 'journey is the arbiter (J24 Home/End)');
+  itOracle(['T126', 'T149', 'T540.3.1'], 'Home and End move the caret to start and end of the composer field', () => {
+    useDrafts.getState().setDraft('jevons', 'alpha bravo charlie');
+    const { container } = render(createElement(UserRequest, { name: 'jevons', onSend: () => {} }));
+    const box = container.querySelector('#input') as HTMLTextAreaElement;
+    expect(box).toBeTruthy();
+    box.setSelectionRange(8, 8);
+    fireEvent.keyDown(box, { key: 'Home' });
+    expect(box.selectionStart).toBe(0);
+    expect(box.selectionEnd).toBe(0);
+    fireEvent.keyDown(box, { key: 'End' });
+    expect(box.selectionStart).toBe(box.value.length);
+    expect(box.selectionEnd).toBe(box.value.length);
+    box.setSelectionRange(6, 6);
+    fireEvent.keyDown(box, { key: 'Home', shiftKey: true });
+    expect(box.selectionStart).toBe(0);
+    expect(box.selectionEnd).toBe(6);
+  });
+
+  itOracle('T307', 'Home/End are field edges; Cmd/Ctrl+Left/Right stay native line/word chords', () => {
+    const draft = 'alpha\nbravo charlie';
+    expect(selectionAfterHomeEnd('Home', draft, 10, 10, {})).toEqual({ start: 0, end: 0 });
+    expect(selectionAfterHomeEnd('End', draft, 1, 1, {})).toEqual({ start: draft.length, end: draft.length });
+    expect(selectionAfterHomeEnd('ArrowLeft', draft, 10, 10, { metaKey: true })).toBeNull();
+    expect(selectionAfterHomeEnd('ArrowRight', draft, 10, 10, { ctrlKey: true })).toBeNull();
+    const el = { value: draft, selectionStart: 10, selectionEnd: 10, setSelectionRange: () => {} };
+    expect(applyComposerHomeEnd(el, { key: 'ArrowLeft', metaKey: true, preventDefault: () => {} })).toBe(false);
+  });
 });

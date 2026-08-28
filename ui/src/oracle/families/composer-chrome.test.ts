@@ -91,6 +91,33 @@ describeOracle(family('composer-chrome'), () => {
     expect(deserialize(serialize(again)).items[0]?.text).toBe('follow up');
   });
 
+  itOracle('T228', 'Enter and Send both deliver a non-empty draft — never a silent drop', () => {
+    const onSend = vi.fn();
+    const r = render(createElement(UserRequest, { name: 'jevons', onSend }));
+    const ta = r.container.querySelector('textarea#input') as HTMLTextAreaElement;
+    const btn = r.container.querySelector('button#send') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    fireEvent.change(ta, { target: { value: 'ship it' } });
+    expect(btn.disabled).toBe(false);
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('ship it');
+    fireEvent.click(btn);
+    expect(onSend).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(ta, { key: 'Enter', shiftKey: true });
+    expect(onSend).toHaveBeenCalledTimes(2);
+  });
+
+  itOracle('T239', 'a typed draft survives unmount and remount of the composer', () => {
+    const first = render(createElement(UserRequest, { name: 'jevons', onSend: vi.fn() }));
+    const ta = first.container.querySelector('textarea#input') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'half-written thought' } });
+    first.unmount();
+    expect(JSON.parse(localStorage.getItem('jevons-drafts') || '{}').state?.drafts?.jevons).toBe('half-written thought');
+    const again = render(createElement(UserRequest, { name: 'jevons', onSend: vi.fn() }));
+    const ta2 = again.container.querySelector('textarea#input') as HTMLTextAreaElement;
+    expect(ta2.value).toBe('half-written thought');
+  });
+
   itOracle.skip('T70', 'composer growth keeps the latest assistant reply readable', 'named residual: pixel-identical chrome');
   itOracle.skip('T70.1', 'composer growth does not cover the latest assistant response', 'named residual: pixel-identical chrome');
   itOracle.skip('T123', 'empty composer height matches the send button', 'journey is the arbiter (J24)');

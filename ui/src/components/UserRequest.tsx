@@ -12,6 +12,7 @@ import {
   type ClipboardLike,
   type PendingImage,
 } from '../composer/images';
+import { applyComposerHomeEnd } from '../keys/composerCaret';
 
 export function UserRequest(props: {
   name: string;
@@ -110,6 +111,7 @@ export function UserRequest(props: {
         rows={1}
         onPaste={onPaste}
         onKeyDown={(e) => {
+          if (applyComposerHomeEnd(e.currentTarget, e)) return;
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             submit(e);
