@@ -1,6 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { fireEvent, render } from '@testing-library/react';
 import { expect } from 'vitest';
@@ -105,6 +108,16 @@ describeOracle(family('clip'), () => {
     expect(clipClassName('bubble bubble-user', 80)).toBe('bubble bubble-user');
     expect(expandTabChevron(false)).toBe('\u25BE');
     expect(expandTabChevron(true)).toBe('\u25B4');
+  });
+
+  itOracle(['T106', 'T559'], 'clipped pocket is an inset cavity + body mask, not a type scrim', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../cockpit.css'), 'utf8');
+    const clipped = css.match(/\.msg\.msg-clipped\s*\{[^}]+\}/);
+    const body = css.match(/\.msg\.msg-clipped\s*>\s*\.msg-body\s*\{[^}]+\}/);
+    expect(clipped?.[0]).toMatch(/box-shadow:\s*inset/);
+    expect(body?.[0]).toMatch(/mask-image:\s*linear-gradient\(to bottom/);
+    expect(body?.[0]).toMatch(/transparent/);
+    expect(css).not.toMatch(/\.msg\.msg-clipped\s*>\s*\.msg-body\s*\{[^}]*rgba\(\s*0\s*,\s*0\s*,\s*0/);
   });
 
   itOracle('T66', 'latest assistant starts expanded (same rule as latest user)', () => {

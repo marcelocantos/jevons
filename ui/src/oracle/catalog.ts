@@ -42,7 +42,7 @@ export const CATALOG: readonly OracleFamily[] = [
     title: 'Collapse pocket — size clip, latest expanded, same rule both panes',
     file: 'clip.test.ts',
     layer: 'hermetic',
-    covers: covers('clip', ['T55', 'T66', 'T77', 'T106', 'T166', 'T246', 'T261', 'T480', 'T556']),
+    covers: covers('clip', ['T55', 'T66', 'T77', 'T106', 'T166', 'T246', 'T261', 'T480', 'T556', 'T559']),
   },
   {
     id: 'markdown',

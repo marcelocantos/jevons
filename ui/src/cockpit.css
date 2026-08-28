@@ -533,11 +533,22 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   --expand-tab-clearance: 0.35rem; /* air above tab when expanded (🎯T166) */
   --context-tab-height: 1.15rem; /* 🎯T266 top-edge target-context chrome */
 }
-/* Collapsed: border butts clipped content (time lives outside). */
-.msg.msg-clipped { padding-bottom: 0; }
+/* Collapsed: border butts clipped content (time lives outside).
+   Pocket is a lip in front of the content (🎯T559): inset cavity on the
+   box, body mask so glyphs lose coverage behind the flap — not a black
+   film painted on the type. */
+.msg.msg-clipped {
+  padding-bottom: 0;
+  box-shadow: inset 0 -12px 20px -6px rgba(0, 0, 0, 0.25);
+}
+/* Border-only assistant needs a floor so the mask reveals the pocket, not
+   the scrolling pane (dissolve-to-page). Same token as the chat ground. */
+.msg.jevons.msg-clipped { background: var(--bg); }
 .msg.msg-clipped > .msg-body {
   max-height: var(--collapsed-max-height);
   overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 1.25rem), transparent);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 1.25rem), transparent);
 }
 /* 🎯T166: expanded tall bubbles (tab present, not clipped) reserve bottom
    padding so the last text line clears the inside-edge collapse tab.
@@ -545,9 +556,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg:has(> .msg-expand-tab):not(.msg-clipped) {
   padding-bottom: calc(var(--expand-tab-height) + var(--expand-tab-clearance));
 }
-/* Pocket scrim: fade-to-dark flush to inner bottom of border (not to page bg).
-   Height matches bubble corner radius so scrim stays a short edge cue.
-   Max opacity ~half of prior 0.45 so the edge cue stays soft. */
+/* Vanilla leftover: React does not mount .msg-clip-fade (🎯T559 lip-in-front). */
 .msg-clip-fade {
   display: none;
   position: absolute;
@@ -991,6 +1000,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 #agent-inspect-body > .msg.msg-clipped > .msg-body {
   max-height: var(--collapsed-max-height);
   overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 1.25rem), transparent);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 1.25rem), transparent);
 }
 /* 🎯T233: harness injects as compact ⋯ nuggets (family of main-chat turn-marker). */
 #agent-inspect-body > .turn-marker { margin: 4px 0 2px; }
