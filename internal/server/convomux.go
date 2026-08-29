@@ -290,6 +290,7 @@ func (s *Server) muxTranscriptMeta(r muxwin.Resolved, n int, truncated bool) map
 		return m
 	}
 	m["working"] = s.publishedWorkingLevel()
+	m["phase"] = s.OverseerPhase() // 🎯T555.1 tail of the stream, not a second SoT
 	m["owner_ux"] = s.ownerUXLevel()
 	m["overseer_down"] = s.overseerDownSample()
 	return m

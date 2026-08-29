@@ -173,11 +173,7 @@ func TestOverseerSendByNameAgentOrigin(t *testing.T) {
 	if len(delivered) != 1 || strings.HasPrefix(delivered[0], userTurnPrefix) {
 		t.Fatalf("delivered=%v, want unmarked notification", delivered)
 	}
-	select {
-	case line := <-ch:
-		t.Fatalf("agent-origin send must not paint an owner bubble: %s", line)
-	default:
-	}
+	drainPhaseFrames(t, ch) // 🎯T555.1 fleet-chew chrome is not an owner bubble
 }
 
 // Root and another name share the same send handler (not a second product).
@@ -280,11 +276,7 @@ func TestDeliverToOverseerAsCarriesOrigin(t *testing.T) {
 	if len(delivered) != 1 || strings.HasPrefix(delivered[0], userTurnPrefix) {
 		t.Fatalf("delivered=%v, want unmarked notification", delivered)
 	}
-	select {
-	case line := <-ch:
-		t.Fatalf("agent-origin deliver must not paint an owner bubble: %s", line)
-	default:
-	}
+	drainPhaseFrames(t, ch) // 🎯T555.1 fleet-chew chrome is not an owner bubble
 
 	// Owner origin: owner marker + owner bubble.
 	if err := s.DeliverToOverseerAs("owner words", sendOriginOwner); err != nil {

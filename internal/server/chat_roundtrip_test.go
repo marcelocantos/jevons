@@ -104,6 +104,10 @@ func TestChatWireRoundTripOverWebSocket(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %d: %v (got so far %v)", i, err, got)
 		}
+		if isPhaseFrame(string(data)) {
+			i-- // 🎯T555.1 phase chrome interleaved on the wire, not a bubble
+			continue
+		}
 		var m map[string]any
 		if err := json.Unmarshal(data, &m); err != nil {
 			t.Fatalf("json %d: %v raw=%s", i, err, data)
@@ -203,6 +207,9 @@ func TestMultiChunkStreamWire(t *testing.T) {
 	for len(lines) < len(tokens)+1 {
 		select {
 		case l := <-ch:
+			if isPhaseFrame(l) {
+				continue // 🎯T555.1 phase chrome, not a bubble
+			}
 			lines = append(lines, l)
 		case <-deadline:
 			t.Fatalf("timeout; got %d lines want %d", len(lines), len(tokens)+1)

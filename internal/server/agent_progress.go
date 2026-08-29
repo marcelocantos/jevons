@@ -277,8 +277,12 @@ func statusBaseline(status string) (phase, summary string) {
 // progressFromEvent maps a claudia event to a progress snapshot.
 // ok=false means the event carries no useful progress signal.
 func progressFromEvent(ev claudia.Event) (AgentProgress, bool) {
-	switch {
-	case ev.Type == "progress" && ev.ProgressType != "":
+	// 🎯T555.1: one mapper with the overseer chrome; the hub projects the
+	// closed enum onto working | idle (| blocked).
+	if goalStatusBlocked(ev) && (ev.IsTerminalStop() || ev.Type == "assistant") {
+		return AgentProgress{Phase: "blocked", Summary: "blocked"}, true
+	}
+	if ev.Type == "progress" && ev.ProgressType != "" {
 		// Same filter as chat_wire: only initiating tool_call rows.
 		title, _ := toolCallDetail(ev.Raw)
 		if title == "" {
@@ -290,35 +294,13 @@ func progressFromEvent(ev claudia.Event) (AgentProgress, bool) {
 			Step:    step,
 			Summary: composeProgressSummary("working", step),
 		}, true
-
-	case ev.IsTerminalStop():
-		if goalStatusBlocked(ev) {
-			return AgentProgress{Phase: "blocked", Summary: "blocked"}, true
-		}
-		return AgentProgress{
-			Phase:   "idle",
-			Summary: "idle",
-		}, true
-
-	case ev.Type == "assistant":
-		if goalStatusBlocked(ev) {
-			return AgentProgress{Phase: "blocked", Summary: "blocked"}, true
-		}
-		// Mid-turn stream / tool_use pause without terminal stop → working.
-		return AgentProgress{
-			Phase:   "working",
-			Summary: "working",
-		}, true
-
-	case ev.Type == "user":
-		return AgentProgress{
-			Phase:   "working",
-			Summary: "working",
-		}, true
-
-	default:
+	}
+	p, ok := phaseFromEvent(ev)
+	if !ok {
 		return AgentProgress{}, false
 	}
+	phase := hubPhase(p.Phase)
+	return AgentProgress{Phase: phase, Summary: composeProgressSummary(phase, "")}, true
 }
 
 func goalStatusBlocked(ev claudia.Event) bool {

@@ -408,6 +408,11 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 		s.clearOverseerStreamID()
 	}
 	s.HandleAgentEvent(ev)
+	// 🎯T555.1: interleave the phase reduce on the same stream, same clock,
+	// after the bubble frame it describes so the message stays line-first.
+	if p, ok := phaseFromEvent(ev); ok {
+		s.setOverseerPhase(p)
+	}
 }
 
 // overseerWorkingLevel reports whether an owner-visible overseer turn is
@@ -607,6 +612,9 @@ func (s *Server) drainOverseerNotes() {
 		// the server-ack half of send-landed.
 		s.NoteOwnerDelivered()
 	}
+	// 🎯T555.1: the batch owns the session now — accepted + correspondent
+	// before the first ACP update, so the bar does not wait for it.
+	s.beginOverseerPhase(correspondentForBatch(batch, ownerBatch))
 	slog.Info("notify_queue",
 		"component", "notify_queue",
 		"decision", "drain",
@@ -1405,6 +1413,7 @@ func (s *Server) settleCancel() {
 	if payload, err := json.Marshal(frame); err == nil {
 		s.BroadcastChat(string(payload))
 	}
+	s.setOverseerPhase(PhaseSample{Phase: PhaseIdle}) // 🎯T555.1 after the settle frame
 	s.Broadcast(frame)
 	// Notes deferred while the turn held the session can go out now.
 	s.drainOverseerNotes()

@@ -59,17 +59,17 @@ func TestAttachOverseerIdempotentNoDoubleBroadcast(t *testing.T) {
 	for len(lines) < 3 {
 		select {
 		case l := <-ch:
+			if isPhaseFrame(l) {
+				continue // 🎯T555.1 phase chrome, not a bubble
+			}
 			lines = append(lines, l)
 		case <-deadline:
 			t.Fatalf("timeout waiting for 3 wire lines; got %d: %v", len(lines), lines)
 		}
 	}
 	// No extras.
-	select {
-	case extra := <-ch:
-		t.Fatalf("extra wire line after double AttachOverseer: %s", extra)
-	case <-time.After(50 * time.Millisecond):
-	}
+	time.Sleep(50 * time.Millisecond)
+	drainPhaseFrames(t, ch) // any extra bubble line is a double broadcast
 
 	if len(lines) != 3 {
 		t.Fatalf("wire lines=%d want 3 (one per event, not doubled)", len(lines))

@@ -188,6 +188,11 @@ type Server struct {
 	notifyDraining    bool
 	notifySender      func(string) error
 	overseerOwnerTurn bool
+	// overseerPhase is the current reduce of the interleaved turn-state
+	// stream (🎯T555.1); overseerCorrespondent is the in-flight notify batch
+	// stamped onto non-idle samples.
+	overseerPhase         PhaseSample
+	overseerCorrespondent []string
 
 	// ownerHealth is the 🎯T355 owner-interaction level truth and standing
 	// gap set (send-landed, chrome-truthful, reply-or-residual, usable

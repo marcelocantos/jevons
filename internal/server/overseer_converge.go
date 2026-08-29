@@ -290,6 +290,7 @@ func (s *Server) cockpitUnstickBusy(state *cockpitState, obs cockpitObs) error {
 	escalate := n >= 3
 	state.mu.Unlock()
 
+	s.markOverseerStuck() // 🎯T555.1 jevons-minted stuck frame
 	slog.Warn("cockpit: stuck-busy detected; recovering",
 		"name", name,
 		"since_progress", obs.SinceProgress.String(),

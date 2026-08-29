@@ -306,6 +306,9 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 	for len(lines) < 2 {
 		select {
 		case l := <-ch:
+			if isPhaseFrame(l) {
+				continue
+			}
 			lines = append(lines, l)
 		case <-deadline:
 			t.Fatalf("timeout waiting for wire lines; got %v", lines)
@@ -567,6 +570,9 @@ func TestDeliverOverseerEventVisibleStreamEmptyEndTurnSealedBodyNonEmpty(t *test
 	for len(lines) < 4 {
 		select {
 		case l := <-ch:
+			if isPhaseFrame(l) {
+				continue
+			}
 			lines = append(lines, l)
 		case <-deadline:
 			t.Fatalf("timeout; lines=%v", lines)
@@ -1022,6 +1028,30 @@ func TestIsRPCErrorFrame(t *testing.T) {
 	for _, tc := range cases {
 		if got := isRPCErrorFrame([]byte(tc.raw)); got != tc.want {
 			t.Errorf("isRPCErrorFrame(%s)=%v want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// isPhaseFrame reports a 🎯T555.1 turn-state progress frame. It carries no
+// message body and neither client paints it as a bubble, so bubble-shape
+// assertions skip it and see what the clients paint.
+func isPhaseFrame(l string) bool {
+	var m map[string]any
+	return json.Unmarshal([]byte(l), &m) == nil && m["type"] == "progress" && m["phase"] != nil
+}
+
+// drainPhaseFrames consumes any phase chrome already fanned onto ch so a
+// "no bubble" assertion is about bubbles.
+func drainPhaseFrames(t *testing.T, ch chan string) {
+	t.Helper()
+	for {
+		select {
+		case l := <-ch:
+			if !isPhaseFrame(l) {
+				t.Fatalf("unexpected wire line: %s", l)
+			}
+		default:
+			return
 		}
 	}
 }
