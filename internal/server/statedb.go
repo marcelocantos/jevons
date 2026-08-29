@@ -95,6 +95,19 @@ func (s *Server) statedbTailStart(name string, userTurns int) int {
 	return lo
 }
 
+func (s *Server) statedbTailStartForPaint(name string, userTurns int) int {
+	db := s.stateStore()
+	if db == nil || userTurns <= 0 {
+		return 0
+	}
+	lo, err := db.TailStartForPaint(name, userTurns, 0)
+	if err != nil {
+		slog.Error("statedb: tail-start-for-paint failed", "agent", name, "err", err)
+		return 0
+	}
+	return lo
+}
+
 func (s *Server) statedbN(name string) int {
 	db := s.stateStore()
 	if db == nil {
@@ -126,7 +139,7 @@ func (s *Server) statedbBefore(name string, before, limit int) []muxwin.Event {
 	if db == nil {
 		return nil
 	}
-	rows, err := db.Before(name, before, limit)
+	rows, err := db.BeforeProse(name, before, limit)
 	if err != nil {
 		slog.Error("statedb: before failed", "agent", name, "err", err)
 		return nil

@@ -5,7 +5,6 @@ package statedb
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 )
 
@@ -73,57 +72,13 @@ func contentProse(content json.RawMessage) string {
 	return strings.TrimSpace(strings.Join(parts, ""))
 }
 
-// PruneDuplicateAssistantProse drops later assistant rows whose extracted
-// prose exactly matches an earlier one. User / tool / other rows stay.
-// Indexes are not rewritten — holes are allowed (Count < N).
-func (s *Store) PruneDuplicateAssistantProse(agent string) (int, error) {
-	if s == nil || strings.TrimSpace(agent) == "" {
-		return 0, nil
+func isProseEvent(ev Event) bool {
+	switch ev.Type {
+	case "user":
+		return true
+	case "assistant":
+		return AssistantProse(ev.Type, ev.Body) != ""
+	default:
+		return false
 	}
-	rows, err := s.Range(agent, 1, 1<<30)
-	if err != nil {
-		return 0, err
-	}
-	seen := map[string]int{}
-	var drop []int
-	for _, ev := range rows {
-		if ev.Type != "assistant" {
-			continue
-		}
-		text := AssistantProse(ev.Type, ev.Body)
-		if text == "" {
-			continue
-		}
-		if _, ok := seen[text]; ok {
-			drop = append(drop, ev.Index)
-			continue
-		}
-		seen[text] = ev.Index
-	}
-	if len(drop) == 0 {
-		return 0, nil
-	}
-	if err := s.deleteIndexes(agent, drop); err != nil {
-		return 0, err
-	}
-	return len(drop), nil
-}
-
-func (s *Store) deleteIndexes(agent string, idxs []int) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	stmt, err := tx.Prepare(`DELETE FROM transcript_events WHERE agent = ? AND idx = ?`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, idx := range idxs {
-		if _, err := stmt.Exec(agent, idx); err != nil {
-			return fmt.Errorf("statedb: delete idx=%d: %w", idx, err)
-		}
-	}
-	return tx.Commit()
 }

@@ -68,6 +68,109 @@ func (s *Store) TailStart(agent string, userTurns int) (int, error) {
 	return start, nil
 }
 
+// minPaintAssistants is how many nonempty assistant bubbles first-paint
+// should try to include when older prose exists further back. Keep-first
+// journal deletes (and tool deserts) can leave the last N user turns with
+// almost no painted replies — the owner sees four bubbles and no history.
+const minPaintAssistants = 12
+
+// tailPaintUserCap bounds how far TailStartForPaint may walk back.
+const tailPaintUserCap = 240
+
+// beforeProseRawCap bounds how many raw rows BeforeProse will scan to
+// satisfy a prose quota (tool-only deserts).
+const beforeProseRawCap = 800
+
+// TailStartForPaint is TailStart, then walks further back when the
+// recent window has almost no assistant prose but older prose exists.
+// Journals with no assistant text at all stay at the user-turn tail.
+func (s *Store) TailStartForPaint(agent string, userTurns, minAssistants int) (int, error) {
+	if minAssistants <= 0 {
+		minAssistants = minPaintAssistants
+	}
+	lo, err := s.TailStart(agent, userTurns)
+	if err != nil {
+		return lo, err
+	}
+	n, err := s.N(agent)
+	if err != nil || n == 0 {
+		return lo, err
+	}
+	have, err := s.countAssistantProse(agent, lo, n+1)
+	if err != nil || have >= minAssistants {
+		return lo, err
+	}
+	older, err := s.countAssistantProse(agent, 1, lo)
+	if err != nil || older == 0 {
+		return lo, err
+	}
+	for extra := userTurns + 30; extra <= tailPaintUserCap; extra += 30 {
+		next, err := s.TailStart(agent, extra)
+		if err != nil {
+			return lo, err
+		}
+		if next >= lo {
+			break
+		}
+		lo = next
+		have, err = s.countAssistantProse(agent, lo, n+1)
+		if err != nil || have >= minAssistants || lo <= 1 {
+			return lo, err
+		}
+	}
+	return lo, nil
+}
+
+func (s *Store) countAssistantProse(agent string, lo, hi int) (int, error) {
+	rows, err := s.Range(agent, lo, hi)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, ev := range rows {
+		if AssistantProse(ev.Type, ev.Body) != "" {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// BeforeProse is Before, but keeps scanning through tool-only rows until
+// `limit` user / nonempty-assistant events are in the page (or the raw
+// cap / journal head). One PageUp must be able to reach real chat after
+// a tool desert, not return 50 tool_use rows and look empty.
+func (s *Store) BeforeProse(agent string, before, limit int) ([]Event, error) {
+	if s == nil || before < 2 || limit <= 0 {
+		return nil, nil
+	}
+	var out []Event
+	prose := 0
+	cur := before
+	for prose < limit && cur > 1 && len(out) < beforeProseRawCap {
+		batch, err := s.Before(agent, cur, 80)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		out = append(batch, out...)
+		for _, ev := range batch {
+			if isProseEvent(ev) {
+				prose++
+			}
+		}
+		cur = batch[0].Index
+		if cur < 2 {
+			break
+		}
+	}
+	if len(out) > beforeProseRawCap {
+		out = out[len(out)-beforeProseRawCap:]
+	}
+	return out, nil
+}
+
 // N is the journal-absolute length: MAX(idx), or 0 when empty.
 func (s *Store) N(agent string) (int, error) {
 	if s == nil {

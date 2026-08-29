@@ -759,14 +759,6 @@ func (s *Server) muxCoalescedFromDB(name string) ([]muxwin.Event, bool) {
 	if db == nil {
 		return nil, false
 	}
-	// 🎯T569 store half: collapse exact-duplicate assistant prose before
-	// the hub cache is seeded so a hard-reload does not wall the transcript.
-	// Paint still hides leftovers; this is the journal cleanup.
-	if removed, err := db.PruneDuplicateAssistantProse(name); err != nil {
-		slog.Warn("statedb: prune duplicate assistant prose", "agent", name, "err", err)
-	} else if removed > 0 {
-		slog.Info("statedb: pruned duplicate assistant prose", "agent", name, "removed", removed)
-	}
 	n := s.statedbN(name)
 	if n == 0 {
 		s.importJSONL(name, s.muxJSONLPath(name))
@@ -775,7 +767,7 @@ func (s *Server) muxCoalescedFromDB(name string) ([]muxwin.Event, bool) {
 	if n == 0 {
 		return nil, false
 	}
-	lo := s.statedbTailStart(name, muxwin.DefaultFollow)
+	lo := s.statedbTailStartForPaint(name, muxwin.DefaultFollow)
 	if lo < 1 {
 		lo = n - muxwin.DefaultFollow + 1
 		if lo < 1 {

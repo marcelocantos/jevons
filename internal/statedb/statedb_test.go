@@ -183,43 +183,98 @@ func TestAgentUpsertGetListReplace(t *testing.T) {
 	}
 }
 
-func TestPruneDuplicateAssistantProseKeepsFirst(t *testing.T) {
+func TestTailStartForPaintExtendsWhenRecentAssistantsWereStripped(t *testing.T) {
 	s := testStore(t)
-	long := `{"message":{"content":[{"text":"Reproduced: jevons_agent_send routes to my own transcript.\n\nMarcelo — two things need you:"}]}}`
-	short := `{"message":{"content":[{"text":"Nothing new to relay."}]}}`
-	if err := s.Upsert("jevons", []Event{
-		{Index: 1, ID: "u:1", Type: "user", Body: `{"type":"user"}`},
-		{Index: 2, ID: "a:1", Type: "assistant", Body: long},
-		{Index: 3, ID: "t:1", Type: "tool_use", Body: `{"type":"tool_use"}`},
-		{Index: 4, ID: "a:2", Type: "assistant", Body: short},
-		{Index: 5, ID: "a:3", Type: "assistant", Body: long},
-		{Index: 6, ID: "a:4", Type: "assistant", Body: short},
-		{Index: 7, ID: "a:5", Type: "assistant", Body: long},
-	}); err != nil {
+	long := `{"message":{"content":[{"text":"older unique reply that belongs in history"}]}}`
+	var evs []Event
+	idx := 1
+	// Older conversation: real assistant prose.
+	for i := 0; i < 8; i++ {
+		evs = append(evs,
+			Event{Index: idx, ID: "ou:" + itoa(i), Type: "user", Body: `{"type":"user"}`},
+			Event{Index: idx + 1, ID: "oa:" + itoa(i), Type: "assistant", Body: long},
+		)
+		idx += 2
+	}
+	// Recent tail: 30 user injects + tools, almost no assistant prose
+	// (the keep-first prune shape that gutted first-paint).
+	for i := 0; i < 30; i++ {
+		evs = append(evs,
+			Event{Index: idx, ID: "u:" + itoa(i), Type: "user", Body: `{"type":"user"}`},
+			Event{Index: idx + 1, ID: "t:" + itoa(i), Type: "tool_use", Body: `{"type":"tool_use"}`},
+		)
+		idx += 2
+	}
+	if err := s.Upsert("jevons", evs); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := s.PruneDuplicateAssistantProse("jevons")
-	if err != nil || removed != 3 {
-		t.Fatalf("removed=%d err=%v want 3", removed, err)
-	}
-	got, err := s.Range("jevons", 1, 8)
+	plain, err := s.TailStart("jevons", 30)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var types []string
+	lo, err := s.TailStartForPaint("jevons", 30, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lo >= plain {
+		t.Fatalf("TailStartForPaint=%d did not walk back past TailStart=%d", lo, plain)
+	}
+	got, err := s.Range("jevons", lo, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assistants int
 	for _, ev := range got {
-		types = append(types, ev.Type)
+		if AssistantProse(ev.Type, ev.Body) != "" {
+			assistants++
+		}
 	}
-	want := []string{"user", "assistant", "tool_use", "assistant"}
-	if len(types) != 4 || types[0] != want[0] || types[1] != want[1] || types[2] != want[2] || types[3] != want[3] {
-		t.Fatalf("remaining types=%v want %v", types, want)
+	if assistants < 6 {
+		t.Fatalf("painted window assistants=%d want >=6 (lo=%d)", assistants, lo)
 	}
-	if AssistantProse(got[1].Type, got[1].Body) == "" || AssistantProse(got[3].Type, got[3].Body) == "" {
-		t.Fatal("kept assistant rows lost their prose")
+}
+
+func TestTailStartForPaintDoesNotWidenWhenThereIsNoOlderProse(t *testing.T) {
+	s := testStore(t)
+	var evs []Event
+	for i := 1; i <= 40; i++ {
+		evs = append(evs, Event{Index: i, ID: "u:" + itoa(i), Type: "user", Body: `{"type":"user"}`})
 	}
-	c, _ := s.Count("jevons")
-	n, _ := s.N("jevons")
-	if c != 4 || n != 4 {
-		t.Fatalf("count=%d n=%d want 4/4", c, n)
+	if err := s.Upsert("jevons", evs); err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := s.TailStart("jevons", 30)
+	lo, err := s.TailStartForPaint("jevons", 30, 6)
+	if err != nil || lo != plain {
+		t.Fatalf("lo=%d err=%v want %d (no older assistant prose)", lo, err, plain)
+	}
+}
+
+func TestBeforeProseSkipsAToolDesert(t *testing.T) {
+	s := testStore(t)
+	long := `{"message":{"content":[{"text":"history bubble"}]}}`
+	var evs []Event
+	evs = append(evs,
+		Event{Index: 1, ID: "u0", Type: "user", Body: `{"type":"user"}`},
+		Event{Index: 2, ID: "a0", Type: "assistant", Body: long},
+	)
+	for i := 3; i <= 80; i++ {
+		evs = append(evs, Event{Index: i, ID: "t:" + itoa(i), Type: "tool_use", Body: `{"type":"tool_use"}`})
+	}
+	if err := s.Upsert("jevons", evs); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.BeforeProse("jevons", 81, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saw bool
+	for _, ev := range got {
+		if AssistantProse(ev.Type, ev.Body) != "" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("BeforeProse stayed in the tool desert: %d rows", len(got))
 	}
 }
