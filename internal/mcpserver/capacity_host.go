@@ -24,6 +24,8 @@ func applyHostLoad(snap *capacity.Snapshot, s hostload.Sample) {
 	snap.HostCores = s.Cores
 	snap.HostSwapUsedBytes = s.SwapUsedBytes
 	snap.HostSwapTotalBytes = s.SwapTotalBytes
+	snap.HostMemoryFreePercent = s.MemoryFreePercent
+	snap.HostMemoryPressure = s.MemoryPressure
 	snap.HostSource = s.Source
 	if s.Err != "" {
 		snap.HostSource = s.Source + " (" + s.Err + ")"
@@ -41,8 +43,14 @@ func hostLoadText(snap capacity.Snapshot) string {
 	}
 	s := fmt.Sprintf("  host: load1=%.1f on %d cores (%.1f× per core)",
 		snap.HostLoad1, snap.HostCores, snap.HostLoad1/float64(snap.HostCores))
+	if snap.HostMemoryPressure != "" {
+		s += fmt.Sprintf(", memory %d%% free, pressure %s (🎯T573)", snap.HostMemoryFreePercent, snap.HostMemoryPressure)
+	}
 	if snap.HostSwapTotalBytes > 0 {
-		s += fmt.Sprintf(", swap %.1fG of %.1fG (%.0f%%)",
+		if snap.HostMemoryPressure != "" {
+			s += ", advisory"
+		}
+		s += fmt.Sprintf(" swap %.1fG of %.1fG (%.0f%%)",
 			float64(snap.HostSwapUsedBytes)/(1<<30), float64(snap.HostSwapTotalBytes)/(1<<30),
 			float64(snap.HostSwapUsedBytes)/float64(snap.HostSwapTotalBytes)*100)
 	}

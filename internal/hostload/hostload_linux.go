@@ -28,10 +28,46 @@ func readPlatform() Sample {
 	data, err = os.ReadFile("/proc/meminfo")
 	if err != nil {
 		s.Err = strings.TrimSpace(s.Err + " /proc/meminfo: " + err.Error())
-	} else if used, total, ok := parseProcMeminfoSwap(string(data)); ok {
-		s.SwapUsedBytes, s.SwapTotalBytes = used, total
+	} else {
+		if used, total, ok := parseProcMeminfoSwap(string(data)); ok {
+			s.SwapUsedBytes, s.SwapTotalBytes = used, total
+		}
+		if pct, ok := parseProcMeminfoFreePercent(string(data)); ok {
+			s.MemoryFreePercent, s.MemoryPressure = pct, PressureNormal
+		}
 	}
 	return s
+}
+
+// parseProcMeminfoFreePercent derives MemAvailable/MemTotal as a percentage,
+// the linux analogue of kern.memorystatus_level (🎯T573).
+func parseProcMeminfoFreePercent(s string) (int, bool) {
+	var totalKB, availKB int64
+	var haveTotal, haveAvail bool
+	for _, line := range strings.Split(s, "\n") {
+		key, value, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		fields := strings.Fields(value)
+		if len(fields) == 0 {
+			continue
+		}
+		n, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch key {
+		case "MemTotal":
+			totalKB, haveTotal = n, true
+		case "MemAvailable":
+			availKB, haveAvail = n, true
+		}
+	}
+	if !haveTotal || !haveAvail || totalKB <= 0 {
+		return 0, false
+	}
+	return int(min(max(availKB*100/totalKB, 0), 100)), true
 }
 
 // parseProcLoadAvg reads "0.42 0.31 0.28 1/512 12345".

@@ -217,6 +217,13 @@ type Snapshot struct {
 	// is unknown (or a host with no swap), not a full one.
 	HostSwapUsedBytes  int64 `json:"host_swap_used_bytes,omitempty"`
 	HostSwapTotalBytes int64 `json:"host_swap_total_bytes,omitempty"`
+	// HostMemoryFreePercent / HostMemoryPressure are the kernel's own memory
+	// reading (🎯T573): free memory 0..100 (darwin kern.memorystatus_level)
+	// and the pressure verdict ("normal"/"warn"/"critical"). An empty
+	// pressure means unread, and then swap occupancy is the fallback grind
+	// reading; when it is read, swap is advisory only.
+	HostMemoryFreePercent int    `json:"host_memory_free_percent,omitempty"`
+	HostMemoryPressure    string `json:"host_memory_pressure,omitempty"`
 	// HostSource names how the reading was obtained ("darwin sysctl"), so a
 	// surprising number can be traced to its origin.
 	HostSource string `json:"host_source,omitempty"`

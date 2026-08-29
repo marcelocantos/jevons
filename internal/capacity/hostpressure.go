@@ -41,6 +41,18 @@ const (
 	// kernel starts killing whatever is compiling.
 	DefaultSwapCriticalFraction = 0.90
 
+	// DefaultMemoryFreeCriticalPercent is the kernel free-memory level at or
+	// below which the host is out of memory (🎯T573). Free memory scales
+	// linearly into headroom above it. macOS's own memorystatus daemon starts
+	// killing at a level in the low teens; 20 leaves a margin for the panes
+	// already minted to finish their work.
+	DefaultMemoryFreeCriticalPercent = 20.0
+
+	// Kernel memory-pressure verdicts as carried in Snapshot.HostMemoryPressure.
+	MemoryPressureNormal   = "normal"
+	MemoryPressureWarn     = "warn"
+	MemoryPressureCritical = "critical"
+
 	// DefaultProviderCapFallback is the concurrency cap applied to a provider
 	// whose published soft cap is 0 or missing.
 	//
@@ -93,9 +105,46 @@ func inferredFloor(h float64, pol *Policy) float64 {
 	return max(h, floor)
 }
 
-// memoryGrindHeadroom is swap occupancy that risks the kernel paging or
+// memoryGrindHeadroom is memory occupancy that risks the kernel paging or
 // killing the fleet (🎯T566.2). Load-average is not this signal.
+//
+// The reading is the kernel's own free-memory level and pressure verdict
+// (🎯T573). Swap occupancy used to be the reading, and on 2026-08-29 it
+// refused every pane for over an hour on a 137 GB host at 75% free: Apple
+// Silicon never shrinks a swapfile after pressure subsides, so a full swap is
+// a scar of past pressure, not present pressure. When the kernel level is
+// read, swap is advisory text only and never a halt. Swap remains the
+// fallback reading on a host that publishes no memory level.
 func memoryGrindHeadroom(snap Snapshot, pol *Policy) (float64, string) {
+	if snap.HostMemoryPressure == "" {
+		return swapGrindHeadroom(snap, pol)
+	}
+	limit := pol.MemoryFreeCriticalPercent
+	if limit <= 0 {
+		limit = DefaultMemoryFreeCriticalPercent
+	}
+	free := float64(snap.HostMemoryFreePercent)
+	h := clampFraction((free - limit) / (100 - limit))
+	switch snap.HostMemoryPressure {
+	case MemoryPressureCritical:
+		h = 0
+	case MemoryPressureWarn:
+		// The kernel is already compressing: elevated (below the degrade
+		// line) but not a halt — that verdict belongs to critical.
+		h = min(h, pol.OwnerReserveFraction)
+	}
+	reason := fmt.Sprintf("memory grind: host memory %.0f%% free, kernel pressure %s (critical at %.0f%% free)",
+		free, snap.HostMemoryPressure, limit)
+	if snap.HostSwapTotalBytes > 0 {
+		reason += fmt.Sprintf("; swap %.1fG of %.1fG is advisory only (🎯T573)",
+			gib(snap.HostSwapUsedBytes), gib(snap.HostSwapTotalBytes))
+	}
+	return h, reason + " (🎯T566.2)"
+}
+
+// swapGrindHeadroom is the pre-🎯T573 reading, kept for hosts with no kernel
+// memory level.
+func swapGrindHeadroom(snap Snapshot, pol *Policy) (float64, string) {
 	if snap.HostSwapTotalBytes <= 0 {
 		return unknownHeadroom, ""
 	}
@@ -105,7 +154,7 @@ func memoryGrindHeadroom(snap Snapshot, pol *Policy) (float64, string) {
 	}
 	used := float64(snap.HostSwapUsedBytes) / float64(snap.HostSwapTotalBytes)
 	h := clampFraction((limit - used) / limit)
-	reason := fmt.Sprintf("memory grind: host swap %.1f%% occupied (%.1fG of %.1fG, critical at %.0f%%) (🎯T566.2)",
+	reason := fmt.Sprintf("memory grind: host swap %.1f%% occupied (%.1fG of %.1fG, critical at %.0f%%; no kernel memory level read) (🎯T566.2)",
 		used*100, gib(snap.HostSwapUsedBytes), gib(snap.HostSwapTotalBytes), limit*100)
 	return h, reason
 }

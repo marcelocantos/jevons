@@ -51,6 +51,10 @@ type Policy struct {
 	// host is treated as out of memory. 0 falls back to
 	// DefaultSwapCriticalFraction.
 	SwapCriticalFraction float64 `json:"swap_critical_fraction,omitempty"`
+	// MemoryFreeCriticalPercent is the kernel free-memory percentage at or
+	// below which the host is out of memory (🎯T573). 0 falls back to
+	// DefaultMemoryFreeCriticalPercent.
+	MemoryFreeCriticalPercent float64 `json:"memory_free_critical_percent,omitempty"`
 	// ProviderCapFallback is the concurrency cap for a provider that publishes
 	// no soft cap. 0 in a cap table means unpublished, never unlimited
 	// (🎯T463); 0 here falls back to DefaultProviderCapFallback.
@@ -89,6 +93,7 @@ func DefaultPolicy() *Policy {
 		DegradeFraction:           0.40,
 		LoadPerCoreCritical:       DefaultLoadPerCoreCritical,
 		SwapCriticalFraction:      DefaultSwapCriticalFraction,
+		MemoryFreeCriticalPercent: DefaultMemoryFreeCriticalPercent,
 		ProviderCapFallback:       DefaultProviderCapFallback,
 		MaxConcurrentBackground:   3,
 		MaxPerClass:               map[Class]int{},
@@ -130,8 +135,9 @@ type Assessment struct {
 	// bound (🎯T566.2). Same number as LoadHeadroom: that field stayed the
 	// seat dimension; the name is the owner-facing halt signal.
 	SeatHeadroom float64 `json:"seat_headroom"`
-	// MemoryHeadroom is RAM/swap occupancy that risks kernel paging/killing
-	// (🎯T566.2). Swap is the shipped reading (🎯T463); unread is unknown.
+	// MemoryHeadroom is RAM occupancy that risks kernel paging/killing
+	// (🎯T566.2). Kernel free-memory level is the shipped reading (🎯T573);
+	// swap occupancy is the fallback when that is unread (🎯T463).
 	MemoryHeadroom float64 `json:"memory_headroom"`
 	// LoadAverageHeadroom is run-queue length per core. Ambient may glance
 	// at it; it is not a Build-stop or PO-sleep signal (🎯T566.1).
@@ -182,15 +188,15 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 		pol = DefaultPolicy()
 	}
 	a := Assessment{
-		CostHeadroom:  unknownHeadroom,
-		TokenHeadroom: unknownHeadroom,
+		CostHeadroom:        unknownHeadroom,
+		TokenHeadroom:       unknownHeadroom,
 		LoadHeadroom:        unknownHeadroom,
 		SeatHeadroom:        unknownHeadroom,
 		MemoryHeadroom:      unknownHeadroom,
 		LoadAverageHeadroom: unknownHeadroom,
 		HostHeadroom:        unknownHeadroom,
 		PlanHeadroom:        unknownHeadroom,
-		Headroom:      1,
+		Headroom:            1,
 	}
 
 	if snap.Billable {

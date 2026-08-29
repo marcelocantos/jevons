@@ -43,6 +43,16 @@ type Sample struct {
 	// means unknown (or a host with no swap configured), not a full swap.
 	SwapUsedBytes  int64 `json:"swap_used_bytes,omitempty"`
 	SwapTotalBytes int64 `json:"swap_total_bytes,omitempty"`
+	// MemoryFreePercent is the kernel's own free-memory figure (darwin
+	// kern.memorystatus_level; linux MemAvailable/MemTotal), 0..100. It is
+	// the memory-grind reading (🎯T573): on Apple Silicon swap occupancy is a
+	// scar that never heals — swapfiles do not shrink after pressure subsides
+	// — so a 137 GB host at 75% free was refused every pane at "swap 92%".
+	// MemoryPressure is the kernel's pressure level ("normal", "warn",
+	// "critical"); empty means the memory reading is unknown, since a real 0%
+	// free is indistinguishable from unread otherwise.
+	MemoryFreePercent int    `json:"memory_free_percent,omitempty"`
+	MemoryPressure    string `json:"memory_pressure,omitempty"`
 	// Source names how the reading was obtained ("darwin sysctl",
 	// "linux procfs"), so a surprising number can be traced.
 	Source string `json:"source,omitempty"`
@@ -58,6 +68,16 @@ func (s Sample) Known() bool { return s.Load1 > 0 && s.Cores > 0 }
 
 // SwapKnown reports whether the sample carries a usable swap reading.
 func (s Sample) SwapKnown() bool { return s.SwapTotalBytes > 0 }
+
+// MemoryKnown reports whether the sample carries a usable memory-level reading.
+func (s Sample) MemoryKnown() bool { return s.MemoryPressure != "" }
+
+// Kernel memory pressure levels, as MemoryPressure values.
+const (
+	PressureNormal   = "normal"
+	PressureWarn     = "warn"
+	PressureCritical = "critical"
+)
 
 // Read takes one reading. It is the platform-dispatched entry point; the
 // per-OS implementations live in hostload_<goos>.go.

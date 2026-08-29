@@ -87,6 +87,7 @@ func (s *Server) handleCapacityStatus(_ context.Context, _ mcp.CallToolRequest) 
 		headroomText(st.Assessment.TokenHeadroom),
 		headroomText(st.Assessment.LoadHeadroom),
 		headroomText(st.Assessment.PlanHeadroom))
+	fmt.Fprintf(&b, "  memory grind: headroom %s (🎯T573)\n", headroomText(st.Assessment.MemoryHeadroom))
 	b.WriteString(hostLoadText(st.Snapshot))
 	if d := capacity.AdmitSpawn(capacity.SpawnWorker, st.Snapshot, st.Policy); !d.Admitted() {
 		fmt.Fprintf(&b, "  spawn: refuse new worker panes (%s) (🎯T460)\n", d.Reason)

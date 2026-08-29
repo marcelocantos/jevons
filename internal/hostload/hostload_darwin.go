@@ -41,7 +41,39 @@ func readPlatform() Sample {
 	} else {
 		s.Err = strings.TrimSpace(s.Err + " vm.swapusage: unparsable " + strings.TrimSpace(string(out)))
 	}
+
+	// kern.memorystatus_level is the free-memory percentage the kernel's own
+	// memorystatus daemon acts on; kern.memorystatus_vm_pressure_level is its
+	// pressure verdict (1 normal, 2 warn, 4 critical) (🎯T573).
+	out, err = exec.Command(sysctlBin, "-n", "kern.memorystatus_level").Output()
+	if err != nil {
+		s.Err = strings.TrimSpace(s.Err + " kern.memorystatus_level: " + err.Error())
+	} else if lvl, err := strconv.Atoi(strings.TrimSpace(string(out))); err != nil || lvl < 0 || lvl > 100 {
+		s.Err = strings.TrimSpace(s.Err + " kern.memorystatus_level: unparsable " + strings.TrimSpace(string(out)))
+	} else {
+		s.MemoryFreePercent = lvl
+		s.MemoryPressure = PressureNormal
+	}
+	out, err = exec.Command(sysctlBin, "-n", "kern.memorystatus_vm_pressure_level").Output()
+	if err == nil {
+		if p, ok := parseVMPressureLevel(string(out)); ok {
+			s.MemoryPressure = p
+		}
+	}
 	return s
+}
+
+// parseVMPressureLevel maps kern.memorystatus_vm_pressure_level to a name.
+func parseVMPressureLevel(s string) (string, bool) {
+	switch strings.TrimSpace(s) {
+	case "1":
+		return PressureNormal, true
+	case "2":
+		return PressureWarn, true
+	case "4":
+		return PressureCritical, true
+	}
+	return "", false
 }
 
 // parseLoadAvgSysctl reads "{ 55.29 48.63 43.29 }" as produced by
