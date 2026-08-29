@@ -253,6 +253,9 @@ func (s *Server) beginOverseerPhase(correspondent []string) {
 // markOverseerStuck is the jevons-minted stuck frame: in flight past the
 // watchdog with no new ACP progress.
 func (s *Server) markOverseerStuck() {
+	s.mu.Lock()
+	s.overseerOutageOpen = true // 🎯T567: a stuck frame opens an outage
+	s.mu.Unlock()
 	s.setOverseerPhase(PhaseSample{Phase: PhaseStuck})
 }
 

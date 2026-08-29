@@ -75,6 +75,13 @@ type Server struct {
 	// handover (🎯T285); guarded by mu.
 	handoverSeeding    bool
 	overseerDownReason string // legible cause when the overseer isn't running (🎯T54); guarded by mu
+	// overseerOutageOpen is set when a degraded/down/stuck state has been
+	// broadcast and cleared by the one "overseer is back" that answers it
+	// (🎯T567). Keyed on the outage, not the reconcile tick. Guarded by mu.
+	overseerOutageOpen bool
+	// hostLoad reads the host's 1-minute load average and core count for
+	// the load-aware stuck-busy watchdog (🎯T567); nil = unknown (scale 1).
+	hostLoad func() (load1 float64, cores int)
 	ca                 *auth.CA
 
 	mu        sync.RWMutex
@@ -347,8 +354,19 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 func (s *Server) SetOverseerDownReason(reason string) {
 	s.mu.Lock()
 	s.overseerDownReason = reason
+	if reason != "" {
+		s.overseerOutageOpen = true
+	}
 	s.mu.Unlock()
 	s.muxFanOverseerLevel()
+}
+
+// SetHostLoadSource wires the host load reader used to stretch the
+// stuck-busy watchdog under load (🎯T567).
+func (s *Server) SetHostLoadSource(f func() (load1 float64, cores int)) {
+	s.mu.Lock()
+	s.hostLoad = f
+	s.mu.Unlock()
 }
 
 // OverseerDownReason returns the last legible overseer-down explanation.

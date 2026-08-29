@@ -49,6 +49,7 @@ func TestBroadcastCockpitReadyDoesNotJournalStatus(t *testing.T) {
 	s.mu.Unlock()
 
 	s.BroadcastChat(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}`)
+	s.SetOverseerDownReason("overseer down") // 🎯T567: chrome answers an outage
 	s.broadcastCockpitReady("overseer is back")
 	s.BroadcastChat(`{"type":"status","text":"overseer is back"}`)
 

@@ -144,21 +144,28 @@ func (s *Server) waitForOverseer(ctx context.Context, conn *websocket.Conn) *cla
 		}
 	}()
 
+	// 🎯T567: "overseer is back" answers a down state this client saw —
+	// a tick that found the process dead, or a down error we wrote it.
+	// A reconnect that finds the overseer already alive attaches silently.
+	sawDown := false
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
 			if cur := s.CurrentProcess(); cur != nil && cur.Alive() {
-				slog.Info("chat: overseer recovered; attaching live stream")
-				payload, _ := json.Marshal(map[string]string{
-					"type": "status", "text": "overseer is back",
-				})
-				wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-				_ = conn.Write(wctx, websocket.MessageText, payload)
-				cancel()
+				slog.Info("chat: overseer recovered; attaching live stream", "announce", sawDown)
+				if sawDown {
+					payload, _ := json.Marshal(map[string]string{
+						"type": "status", "text": "overseer is back",
+					})
+					wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+					_ = conn.Write(wctx, websocket.MessageText, payload)
+					cancel()
+				}
 				return cur
 			}
+			sawDown = true
 		case rr := <-reads:
 			if rr.err != nil {
 				return nil
@@ -185,6 +192,7 @@ func (s *Server) waitForOverseer(ctx context.Context, conn *websocket.Conn) *cla
 			wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			_ = conn.Write(wctx, websocket.MessageText, payload)
 			cancel()
+			sawDown = true
 		}
 	}
 }

@@ -4,6 +4,7 @@
 package server
 
 import (
+	"github.com/marcelocantos/jevons/internal/capacity"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -203,7 +204,7 @@ func (s *Server) EnsureOverseer(state *cockpitState) error {
 	attempts := state.attempts
 	state.mu.Unlock()
 
-	phase := planCockpit(obs, attempts, DefaultCockpitMaxAttempts, DefaultStuckBusyTimeout)
+	phase := planCockpit(obs, attempts, DefaultCockpitMaxAttempts, s.stuckBusyTimeout())
 	state.mu.Lock()
 	state.lastPhase = phase
 	state.mu.Unlock()
@@ -332,20 +333,52 @@ func (s *Server) cockpitUnstickBusy(state *cockpitState, obs cockpitObs) error {
 	return nil
 }
 
+// stuckBusyTimeout is DefaultStuckBusyTimeout stretched by host load
+// (🎯T567): a seat that is slow because the box is at 3×/core is not
+// stuck, and interrupting it only to re-attach is what spammed the
+// owner with "overseer is back".
+func (s *Server) stuckBusyTimeout() time.Duration {
+	s.mu.RLock()
+	f := s.hostLoad
+	s.mu.RUnlock()
+	if f == nil {
+		return DefaultStuckBusyTimeout
+	}
+	load1, cores := f()
+	return time.Duration(float64(DefaultStuckBusyTimeout) * capacity.StuckBusyScale(load1, cores))
+}
+
+// closeOverseerOutage reports whether an outage was open and closes it
+// (🎯T567). The caller emits recovery chrome only on true.
+func (s *Server) closeOverseerOutage() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	open := s.overseerOutageOpen
+	s.overseerOutageOpen = false
+	return open
+}
+
 // broadcastCockpitReady tells clients to clear degraded + working chrome
 // and accept sends again (🎯T204 / T94 client half).
+//
+// 🎯T567: the "overseer is back" line answers an outage, not a reconcile
+// tick. A re-attach with no degraded/down/stuck state broadcast since
+// the last recovery emits nothing — across a daemon bounce the converge
+// loop re-attaches on every tick and each one used to print a line.
 func (s *Server) broadcastCockpitReady(text string) {
 	if text == "" {
 		text = "overseer is back"
 	}
-	// Wire shape used by web: type=status text=… (overseer is back regex)
-	// and state=idle for thinking indicator. Live-only — not a journaled
-	// turn (🎯T555.5 / T355).
-	payload, err := json.Marshal(map[string]string{"type": "status", "text": text})
-	if err == nil {
-		s.broadcastChatLive(stampConversationName(string(payload), s.overseerAgentName()))
+	if s.closeOverseerOutage() {
+		// Wire shape used by web: type=status text=… (overseer is back regex)
+		// and state=idle for thinking indicator. Live-only — not a journaled
+		// turn (🎯T555.5 / T355).
+		payload, err := json.Marshal(map[string]string{"type": "status", "text": text})
+		if err == nil {
+			s.broadcastChatLive(stampConversationName(string(payload), s.overseerAgentName()))
+		}
+		s.Broadcast(map[string]any{"type": "status", "state": "idle", "text": text})
 	}
-	s.Broadcast(map[string]any{"type": "status", "state": "idle", "text": text})
 	s.NoteOverseerProgress()
 	// 🎯T355: recovery chrome is idle chrome. The owner's unanswered turn is
 	// deliberately NOT given a residual here — a relaunch mid-turn is exactly
