@@ -18,6 +18,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/ownerqa"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // 🎯T328: post-restart resume of unfinished owner instructions.
@@ -37,6 +38,14 @@ import (
 // http-send-probe-do-not-treat-as-owner-intent, …) are never recoverable
 // open owner work — probes are intentionally labelled, not answered by
 // T344/T477 closure.
+// 🎯T568: an owner instruction is closed once (a) a later substantive
+// overseer reply appears in the owner chatlog after the instruction's
+// observed timestamp, or (b) an overseer reply names a TargetID that is
+// achieved/set_aside in the ledger. A bare ack does not close. The live
+// miss was the 2026-08-26 "Cursor monthly cycle?" question: answered and
+// landed as 🎯T550, then re-issued as MANDATORY open work on every bounce
+// because T528 only closes IDs named in the *owner* text and T477 dropped
+// the reply at load (not explanation-shaped).
 //
 // Durable source: state_dir/chatlog/<overseer>.jsonl (survives control-plane
 // bounce). On restart, when a recoverable open owner instruction is found,
@@ -45,7 +54,8 @@ import (
 //
 // Residual classes (no resume payload; daemon-restarted status path only):
 //   - no_chatlog / no_user_turns / only_harness / ack_only / no_recoverable_intent
-//   - answered_or_closed (T344/T477/T512/T528: later evidence or ledger close)
+//   - answered_or_closed (T344/T477/T512/T528/T568: later evidence, substantive
+//     reply, or ledger close)
 //   - session fully wiped (chatlog missing or empty after materialize loss)
 
 const (
@@ -117,10 +127,10 @@ func ExtractOpenOwnerIntent(turns []OwnerIntentTurn) OpenOwnerIntent {
 	return ExtractOpenOwnerIntentWithLedger(turns, nil)
 }
 
-// ExtractOpenOwnerIntentWithLedger is ExtractOpenOwnerIntent plus 🎯T528:
-// when the newest owner turn names ≥1 TargetID and every named id is
-// achieved/set_aside in statusByID, residual is answered_or_closed and
-// Session Goal Continue must not re-inject for that Goal text.
+// ExtractOpenOwnerIntentWithLedger is ExtractOpenOwnerIntent plus 🎯T528
+// (owner-named TargetIDs all achieved/set_aside) and 🎯T568 (later
+// substantive overseer reply, or a later reply that names a ledger-closed
+// TargetID — even when the owner text named none).
 func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[string]string) OpenOwnerIntent {
 	if len(turns) == 0 {
 		return OpenOwnerIntent{Residual: ResidualNoUserTurns}
@@ -208,12 +218,19 @@ func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[st
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 
-	// 🎯T344: later assistant product evidence for the same complaint → closed.
+	// 🎯T344 / T477 / T512 / T568: later assistant turns after this instruction.
+	// When both timestamps are known, require the reply to be strictly after
+	// the instruction's observed time (🎯T568).
 	var laterAnswers []string
 	for i := lastUserIdx + 1; i < len(timeline); i++ {
-		if !timeline[i].user {
-			laterAnswers = append(laterAnswers, timeline[i].turn.Text)
+		if timeline[i].user {
+			continue
 		}
+		a := timeline[i].turn
+		if !last.TS.IsZero() && !a.TS.IsZero() && !a.TS.After(last.TS) {
+			continue
+		}
+		laterAnswers = append(laterAnswers, a.Text)
 	}
 	// 🎯T528: GOAL_STATUS: complete with matching achieved/product evidence.
 	if ownerGoalStatusCompleteWithEvidence(last.Text, laterAnswers) {
@@ -224,8 +241,8 @@ func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[st
 	}
 
 	// 🎯T477: a question is answered by explanation prose, not only by product
-	// evidence. Directives keep the stricter T344 contract — an explanation of
-	// why work is needed does not close a work order.
+	// evidence. T568 then closes any later substantive reply (non-fleet);
+	// fleet kill/stop/park/reap keep T512's same-seat ops contract.
 	if OwnerQuestionAnsweredWithExplanation(last.Text, laterAnswers) {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
@@ -233,6 +250,20 @@ func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[st
 	// 🎯T512: kill/stop/park/reap fleet directives close on ops evidence for the
 	// named seat (no SHA/PASS/achieve required).
 	if OwnerFleetDirectiveCompleted(last.Text, laterAnswers) {
+		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
+	}
+
+	// 🎯T568: later substantive overseer reply (not a bare ack) closes, and a
+	// reply that names a ledger-closed TargetID closes even when the owner
+	// instruction named none (Cursor-monthly / 🎯T550).
+	// Fleet kill/stop/park/reap keep the T512 same-seat ops contract — an
+	// unrelated-seat completion is a later substantive turn but must not
+	// close the named directive (t512_kill_resume_test.go unrelated-seat).
+	if len(ownerFleetDirectiveTargets(last.Text)) == 0 &&
+		ownerIntentClosedByLaterSubstantiveReply(laterAnswers) {
+		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
+	}
+	if ownerIntentReplyNamesClosedTarget(laterAnswers, statusByID) {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 
@@ -330,6 +361,38 @@ func OwnerQuestionAnsweredWithExplanation(ownerText string, laterAssistant []str
 		}
 		if openIntentTopicalLink(ownerText, a) {
 			return true
+		}
+	}
+	return false
+}
+
+// ownerIntentClosedByLaterSubstantiveReply reports whether any later overseer
+// excerpt is a real reply rather than a bare ack / progress chatter (🎯T568).
+func ownerIntentClosedByLaterSubstantiveReply(laterAssistant []string) bool {
+	for _, a := range laterAssistant {
+		if openIntentSubstantiveReply(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownerIntentReplyNamesClosedTarget reports whether a later overseer excerpt
+// names a TargetID that is achieved or set_aside in statusByID (🎯T568). The
+// owner instruction need not name the id — that was the T550 miss versus T528.
+func ownerIntentReplyNamesClosedTarget(laterAssistant []string, statusByID map[string]string) bool {
+	if len(statusByID) == 0 {
+		return false
+	}
+	for _, a := range laterAssistant {
+		for id := range openIntentTargetIDs(a) {
+			st, ok := statusByID[id]
+			if !ok {
+				st, ok = statusByID[strings.ToLower(id)]
+			}
+			if ok && targetfile.IsClosedStatus(st) {
+				return true
+			}
 		}
 	}
 	return false
@@ -702,6 +765,26 @@ func openIntentAnswerShaped(text string) bool {
 	return openIntentFileTokenRe.MatchString(t)
 }
 
+// openIntentSubstantiveReply reports a later overseer turn with enough
+// substance to count as a reply (🎯T568). Bare acks and progress chatter
+// ("looking into it") stay open — T512's kill-without-evidence tape.
+func openIntentSubstantiveReply(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" || utf8.RuneCountInString(t) < 40 {
+		return false
+	}
+	if isOpenIntentAckOnly(t) {
+		return false
+	}
+	low := strings.ToLower(t)
+	for _, m := range openIntentProgressMarkers {
+		if strings.Contains(low, m) {
+			return false
+		}
+	}
+	return true
+}
+
 // hasOpenIntentProductEvidence detects SHA / hermetic PASS / achieved-target
 // product evidence in an assistant excerpt (stricter than bare chatter).
 func hasOpenIntentProductEvidence(text string) bool {
@@ -899,8 +982,9 @@ func ChatTurnsToOwnerIntentTurns(turns []rsi.ChatTurn) []OwnerIntentTurn {
 
 // LoadOpenOwnerIntent reads state_dir/chatlog/<overseer>.jsonl and extracts
 // recoverable open owner intent. Missing chatlog → residual no_chatlog.
-// Loads user turns plus evidence-shaped assistant excerpts for 🎯T344 / 🎯T477 /
-// 🎯T512 disposition (product evidence, explanation answers, fleet ops).
+// Loads user turns plus assistant excerpts for 🎯T344 / 🎯T477 / 🎯T512 / 🎯T568
+// disposition (product evidence, explanation answers, fleet ops, later
+// substantive replies, TargetID-naming turns).
 func LoadOpenOwnerIntent(stateDir, overseer string) OpenOwnerIntent {
 	return LoadOpenOwnerIntentWithLedger(stateDir, overseer, "")
 }
@@ -932,13 +1016,10 @@ func LoadOpenOwnerIntentWithLedger(stateDir, overseer, ledgerCwd string) OpenOwn
 	}
 	var status map[string]string
 	if cwd := strings.TrimSpace(ledgerCwd); cwd != "" {
-		// Probe the newest recoverable-shaped user text for TargetIDs; cheap
-		// enough to scan all user turns for named ids.
+		// Scan user *and* assistant turns: 🎯T568 closes when a later reply
+		// names a ledger-closed TargetID the owner text never mentioned.
 		var goalParts []string
 		for _, t := range turns {
-			if strings.EqualFold(strings.TrimSpace(t.Role), "assistant") {
-				continue
-			}
 			if ids := fleet.GoalTargetIDs(t.Text); len(ids) > 0 {
 				goalParts = append(goalParts, t.Text)
 			}
@@ -950,9 +1031,10 @@ func LoadOpenOwnerIntentWithLedger(stateDir, overseer, ledgerCwd string) OpenOwn
 	return ExtractOpenOwnerIntentWithLedger(turns, status)
 }
 
-// loadOpenIntentDialogue streams chatlog JSONL into user turns + evidence-shaped
-// assistant excerpts (text and tool_use attestation/send bodies). Caps user
-// lookback and assistant evidence count so assistant-heavy logs stay bounded.
+// loadOpenIntentDialogue streams chatlog JSONL into user turns + assistant
+// excerpts kept for close disposition (text and tool_use attestation/send
+// bodies). Caps user lookback and assistant count so assistant-heavy logs
+// stay bounded.
 func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerIntentTurn, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
@@ -1013,10 +1095,11 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 			}
 		case "assistant":
 			// Keep evidence-shaped excerpts (T344), explanation answers (T477),
-			// and fleet-ops completion prose/tool payloads (T512). Dropping any
-			// of those re-fires an already-closed owner turn on every bounce.
-			if !hasOpenIntentProductEvidence(text) && !openIntentEvidenceCandidate(text) &&
-				!openIntentAnswerShaped(text) && !openIntentFleetOpsEvidence(text) {
+			// fleet-ops completion (T512), later substantive replies (T568),
+			// and TargetID-naming turns so a ledger-closed id in a short
+			// "Filed 🎯T550" reply still reaches extraction. Dropping any of
+			// those re-fires an already-closed owner turn on every bounce.
+			if !keepOpenIntentAssistant(text) {
 				continue
 			}
 			assts = append(assts, asst{
@@ -1063,6 +1146,25 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 		ai++
 	}
 	return out, nil
+}
+
+// keepOpenIntentAssistant reports whether an assistant chatlog excerpt must
+// be retained for close disposition (🎯T344 / T477 / T512 / T568).
+func keepOpenIntentAssistant(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	if hasOpenIntentProductEvidence(text) || openIntentEvidenceCandidate(text) {
+		return true
+	}
+	if openIntentAnswerShaped(text) || openIntentFleetOpsEvidence(text) {
+		return true
+	}
+	if openIntentSubstantiveReply(text) {
+		return true
+	}
+	return openIntentTargetIDRe.MatchString(text)
 }
 
 // openIntentEvidenceCandidate is a cheaper pre-filter before full product

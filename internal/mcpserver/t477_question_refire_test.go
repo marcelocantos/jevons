@@ -68,8 +68,9 @@ func TestT477ProgressChatterDoesNotCloseQuestion(t *testing.T) {
 
 func TestT477DirectiveStillNeedsProductEvidence(t *testing.T) {
 	t.Parallel()
-	// T477 relaxes closure for questions only. A directive answered with an
-	// explanation but no product evidence keeps the T344 contract: recover.
+	// T477's explanation-close is still questions-only. 🎯T568 then closes any
+	// later *substantive* overseer reply (this explanation is one). A directive
+	// whose later turn is only progress chatter still recovers — see T512:61.
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
@@ -81,8 +82,14 @@ func TestT477DirectiveStillNeedsProductEvidence(t *testing.T) {
 		},
 	}
 	got := ExtractOpenOwnerIntent(turns)
-	if !got.Recoverable() {
-		t.Fatalf("directive without product evidence must recover, residual=%q", got.Residual)
+	if got.Recoverable() {
+		t.Fatalf("T568: later substantive reply must close the directive, got text=%q residual=%q", got.Text, got.Residual)
+	}
+	if got.Residual != ResidualAnsweredOrClosed {
+		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)
+	}
+	if OwnerQuestionAnsweredWithExplanation(turns[0].Text, []string{turns[1].Text}) {
+		t.Fatal("T477 helper must still refuse a directive (not a question)")
 	}
 }
 
@@ -118,21 +125,24 @@ func TestT477ReAskOfAnsweredQuestionStillRecovers(t *testing.T) {
 
 func TestT477UnrelatedExplanationDoesNotCloseQuestion(t *testing.T) {
 	t.Parallel()
-	// Topical link is required: an explanation about something else entirely
-	// leaves the question open.
-	turns := []OwnerIntentTurn{
-		{
-			Role: "user",
-			Text: "Why did jevons-po mint on Opus 5?",
-		},
-		{
-			Role: "assistant",
-			Text: "Because the watchdog plist carries its own PATH snapshot, the restart script rebuilds bin/detach from committed HEAD before re-execing.",
-		},
+	// T477 topical link still required on the helper: an explanation about
+	// something else is not an answer to *this* question. 🎯T568 then closes
+	// resume anyway — a later substantive overseer turn after the newest
+	// instruction means the instruction is not unfinished open work.
+	owner := "Why did jevons-po mint on Opus 5?"
+	reply := "Because the watchdog plist carries its own PATH snapshot, the restart script rebuilds bin/detach from committed HEAD before re-execing."
+	if OwnerQuestionAnsweredWithExplanation(owner, []string{reply}) {
+		t.Fatal("T477 helper must still require a topical link")
 	}
-	got := ExtractOpenOwnerIntent(turns)
-	if !got.Recoverable() {
-		t.Fatalf("unrelated explanation must not close the question, residual=%q", got.Residual)
+	got := ExtractOpenOwnerIntent([]OwnerIntentTurn{
+		{Role: "user", Text: owner},
+		{Role: "assistant", Text: reply},
+	})
+	if got.Recoverable() {
+		t.Fatalf("T568: later substantive reply must close resume, residual=%q", got.Residual)
+	}
+	if got.Residual != ResidualAnsweredOrClosed {
+		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)
 	}
 }
 
