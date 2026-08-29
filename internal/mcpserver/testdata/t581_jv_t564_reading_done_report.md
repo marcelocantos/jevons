@@ -1,0 +1,1 @@
+Status: reading done, no tool hung; implementing now — config default flip (`context_ceiling_enabled` opt-in), governor wiring, oracle, docs.Code + oracle green. Now docs (persona, agents-guide, fleet brief) — the T561 section keeps the kill+start helper but stops teaching the ceiling as default trigger.No response requested.

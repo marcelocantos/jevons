@@ -245,6 +245,14 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		// 🎯T577: a checkpoint that the T165 path used to reap is kept;
 		// name it so a skipped reap is attributable as that save, not
 		// as a generic ask.
+		// 🎯T581: a local done-word ("reading done; implementing now") is
+		// a sub-step, not a finish — log the save so it is attributable.
+		if reason == "not_finished_work_report" && allCompletionClaimsLocal(strings.ToLower(report)) {
+			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped",
+				reapDecisionFields(name, "local_done_clause", report))
+			slog.Info("T581 kept agent whose done-word was a local clause, not a finish",
+				"agent", name)
+		}
 		if strings.HasPrefix(reason, "awaits_overseer_checkpoint") ||
 			(strings.HasPrefix(reason, "awaits_overseer_") && hasForwardLookingPlan(report)) {
 			slog.Info("T577 kept agent whose report was a checkpoint, not a finish",

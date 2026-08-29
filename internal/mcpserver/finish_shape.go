@@ -71,6 +71,11 @@ func hasFinishShape(lower string) bool {
 	if !hasCompletionClaim(lower) {
 		return false
 	}
+	// 🎯T581: "reading done; implementing now" is a sub-step closing, not a
+	// finish, however much oracle vocabulary the rest of the turn carries.
+	if allCompletionClaimsLocal(lower) {
+		return false
+	}
 	if hasAcceptedRisk(lower) || hasOracleEvidence(lower) {
 		return true
 	}
