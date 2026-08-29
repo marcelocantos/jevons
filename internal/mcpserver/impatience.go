@@ -383,11 +383,13 @@ func (s *Server) observeForImpatience(
 	phase := ""
 	refusalHold := false
 	substantivePulse := false
+	waitingOnGate := false
 	s.mu.Lock()
 	if s.idleActivity != nil {
 		act := s.idleActivity.Get(d.Name)
 		phase = act.Phase
 		refusalHold = act.RefusalHold
+		waitingOnGate = DeclaresBlockingGateWait(act.LastTerminal)
 	}
 	s.mu.Unlock()
 	if s.idleActivity != nil {
@@ -447,5 +449,6 @@ func (s *Server) observeForImpatience(
 		ClaimsDone:      claimsDone,
 		RefusalHold:     refusalHold && !substantivePulse,
 		SubstantiveTurn: substantivePulse,
+		WaitingOnGate:   waitingOnGate,
 	}
 }

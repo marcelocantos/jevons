@@ -103,6 +103,10 @@ type Observation struct {
 	// produced real agent work (🎯T454). That closes even if phase has
 	// already flipped back to idle at end_turn.
 	SubstantiveTurn bool
+	// WaitingOnGate is true when the agent's last completed turn declares a
+	// blocking wait on a tracked background gate (🎯T565). The wait is the
+	// work; re-pressuring it only produces another identical wait turn.
+	WaitingOnGate bool
 	// ProviderResume is true when satisfaction is observed because the
 	// provider began accepting calls again after a refusal wall — not
 	// because the agent produced mission work (🎯T454 clause 2).
@@ -144,6 +148,10 @@ func ClassifyObservation(o Observation) (Condition, GapKind, string) {
 			return ConditionSatisfied, "", "provider_resumed_service"
 		}
 		return ConditionSatisfied, "", "substantive_turn"
+	}
+	// 🎯T565: a declared wait on a gate is progress in flight, not a gap.
+	if o.WaitingOnGate && o.ProcessRunning {
+		return ConditionSatisfied, "", "waiting_on_tracked_gate"
 	}
 	// 🎯T454: refusal-only hold — phase=working is not satisfaction.
 	if o.RefusalHold {

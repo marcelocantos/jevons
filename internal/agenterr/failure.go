@@ -17,6 +17,7 @@ import (
 //   - rate_limit: 429 / quota / throttle
 //   - auth: 401 / 403 / API key / unauthorized
 //   - client_bug: local config, wire, session, bad request
+//   - startup_stall: ready timeout over startup notices only, no composer (🎯T565)
 //   - unknown: classified as failure but not mapped
 //   - none: empty / not a failure signal (including busy)
 type Class string
@@ -77,6 +78,13 @@ func ClassifyText(msg string) Class {
 		return ClassNone
 	}
 
+	// 🎯T565: a launch that timed out on startup output alone, before any
+	// composer. Checked ahead of the marker lists because the frame quotes
+	// "Permission deny rule", which authMarkers would read as a 403.
+	if IsStartupStall(s) {
+		return ClassStartupStall
+	}
+
 	// Auth first — "unauthorized" before generic "error". Account/key walls
 	// that Classify would otherwise miss (revoked, suspended) also land here
 	// so 🎯T406 HardBlock sees ClassAuth rather than ClassNone.
@@ -123,7 +131,7 @@ func ClassifyMessage(msg string) Class {
 // ClassUnknown is re-pressure-worthy residual (T236).
 func TransientBackend(c Class) bool {
 	switch c {
-	case ClassBackendUnavailable, ClassRateLimit, ClassUnknown:
+	case ClassBackendUnavailable, ClassRateLimit, ClassUnknown, ClassStartupStall:
 		return true
 	default:
 		return false
@@ -152,6 +160,21 @@ func OwnerCopy(class Class, raw string) string {
 	case ClassClientBug:
 		return "Local client/session error (client_bug). Fix config, session, or wire state; not a cloud outage. " +
 			detailSuffix(raw)
+	case ClassStartupStall:
+		switch namedReadyReason(raw) {
+		case "rc_connecting":
+			return "Agent CLI stalled on remote-control handshake (startup_stall / rc_connecting): /rc connecting is transient — not a cloud outage, not a wire bug; the seat is retried. Last frame: " +
+				truncate(LastFrame(raw), 400)
+		case "splash":
+			return "Agent CLI stalled on startup (startup_stall / splash): the composer ghost placeholder was still drawn within the ready timeout — not a cloud outage; the seat is retried. Last frame: " +
+				truncate(LastFrame(raw), 400)
+		case "no_composer":
+			return "Agent CLI stalled on startup (startup_stall / no_composer): no idle input box within the ready timeout — not a cloud outage; the seat is retried. Last frame: " +
+				truncate(LastFrame(raw), 400)
+		default:
+			return "Agent CLI stalled on startup (startup_stall): it printed its settings notices but never drew the composer within the ready timeout — not a cloud outage, not a wire bug; the seat is retried. Last frame: " +
+				truncate(LastFrame(raw), 400)
+		}
 	case ClassUnknown:
 		return "Provider failure (unknown). Class not pinned from the error string; see detail. " +
 			detailSuffix(raw)

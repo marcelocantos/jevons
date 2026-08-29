@@ -177,6 +177,25 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 	if overseerArm {
 		dest = s.overseerSeatName()
 	}
+	// 🎯T565: the receiver this call resolved to must be the one it was
+	// addressed to. The overseer arm answers for the overseer's own name (in
+	// any case) and nothing else; a name that resolved to the owner-chat seat
+	// under some other spelling would deliver into the overseer's transcript
+	// while reporting the addressed name — the 2026-08-29 misroute, seen from
+	// the other side. Refusing is loud and delivers nothing.
+	if overseerArm && !strings.EqualFold(dest, name) {
+		slog.Error("🎯T565 receiver resolved to a different seat than addressed",
+			"component", "agent_send",
+			"addressed", name,
+			"resolved", dest,
+			"actor", actor,
+			"origin", string(origin),
+		)
+		return agentSendResult{}, fmt.Errorf(
+			"receiver mismatch: jevons_agent_send addressed %q but delivery resolved to the overseer seat %q — "+
+				"NOT delivered anywhere; address the overseer by its own name or the agent by its registered name (🎯T565)",
+			name, dest)
+	}
 	// A message whose header names someone else is not a message to retry. It
 	// would hand this seat another agent's name, parent and target, in the
 	// second person, through the one instrument 🎯T425 told every agent to
@@ -204,9 +223,16 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 	// composed owner-surface traffic (empty actor) are never rerouted — those
 	// are not worker reports, and their identity doctrine alone can trip the
 	// keyword classifier (🎯T515).
+	//
+	// 🎯T565: the reroute is for a WORKER reporting up. The overseer directing
+	// its PO by name is not a report, whatever phrases the direct contains —
+	// on 2026-08-29 `name=jevons-po actor=jevons` classified as needs-owner
+	// and was delivered into the overseer's own transcript, twice. The PO
+	// speaking to itself is not a report either.
 	who := strings.TrimSpace(actor)
 	if origin == OriginAgent && !overseerArm && isPOName(dest) &&
 		who != "" && who != ActorOwnerSurface &&
+		!s.isOverseerAgent(who) && !strings.EqualFold(who, dest) &&
 		relayroute.Classify(report) == relayroute.RouteOverseer {
 		po := dest
 		reason := relayroute.Reason(report)
@@ -223,7 +249,17 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 		if _, err := s.deliverByName(po, record, OriginAgent, false); err != nil {
 			slog.Info("T392.7 PO record undelivered", "po", po, "err", err)
 		}
-		return s.deliverToOverseer(s.overseerSeatName(), text, origin)
+		seat := s.overseerSeatName()
+		res, err := s.deliverToOverseer(seat, text, origin)
+		if err != nil {
+			return res, err
+		}
+		// 🎯T565: the result line names the receiver that was observed, which
+		// here is deliberately not the addressed name.
+		res.Message = fmt.Sprintf(
+			"rerouted (🎯T392.7 %s): receiver is overseer %q, not %q as addressed; %q was handed a one-line record. %s",
+			reason, seat, po, po, res.Message)
+		return res, nil
 	}
 
 	if overseerArm {

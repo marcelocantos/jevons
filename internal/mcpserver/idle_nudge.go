@@ -84,7 +84,45 @@ const (
 	IdleSkipBackoff = "backoff"
 	// IdleSkipBelowThreshold: still idle, not yet aged past the threshold.
 	IdleSkipBelowThreshold = "idle_below_threshold"
+	// IdleSkipWaitingOnGate: the last turn declared a blocking wait on a
+	// tracked background gate (🎯T565) — the idle is the wait.
+	IdleSkipWaitingOnGate = "waiting_on_gate"
 )
+
+// gateWaitVerbs and gateWaitObjects together recognise a turn whose text
+// says the agent is deliberately waiting on a gate it already started: a
+// verb of waiting near a name for the gate. Both halves are required so a
+// report that merely mentions `bin/gate` in passing does not park the agent.
+var (
+	gateWaitVerbs   = []string{"waiting on", "waiting for", "blocked on", "blocking wait", "wait on", "until it finishes", "until it completes", "still running"}
+	gateWaitObjects = []string{"bin/gate", "gate ", "gate run", "background gate", "test-go", "test-journey", "make test", "go test", "ci run", "background task", "run_in_background", "task notification", "task-notification"}
+)
+
+// DeclaresBlockingGateWait reports whether a completed turn's text says the
+// agent is waiting on a tracked background gate rather than idle for want of
+// direction (🎯T565). Pure; the caller supplies the last terminal text.
+func DeclaresBlockingGateWait(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+	verb := false
+	for _, v := range gateWaitVerbs {
+		if strings.Contains(t, v) {
+			verb = true
+			break
+		}
+	}
+	if !verb {
+		return false
+	}
+	for _, o := range gateWaitObjects {
+		if strings.Contains(t, o) {
+			return true
+		}
+	}
+	return false
+}
 
 // IdleNudgeKind is the payload shape once ClassifyIdleNudge returns nudge.
 // Owner pin 🎯T207: first pass is brief-or-verify (full standing + mission
@@ -127,9 +165,14 @@ type IdleNudgeObs struct {
 	// session_id for the seat (🎯T545.1). Empty-goal blocked is bounce
 	// failure — do not full_brief / unstick as if it were the same worker.
 	SessionReminted bool
-	IdleThreshold  time.Duration // 0 → DefaultIdleNudgeThreshold
-	MaxNudges      int           // 0 → DefaultIdleNudgeMax
-	Backoffs       []time.Duration
+	// WaitingOnGate is true when the agent's last completed turn declares a
+	// blocking wait on a tracked background gate (🎯T565). An idle phase
+	// under that declaration is the wait, not a stall: nudging it produced
+	// six identical "still waiting" turns in forty seconds (jv-t555.1).
+	WaitingOnGate bool
+	IdleThreshold time.Duration // 0 → DefaultIdleNudgeThreshold
+	MaxNudges     int           // 0 → DefaultIdleNudgeMax
+	Backoffs      []time.Duration
 }
 
 // ClassifyIdleNudge decides skip | nudge | maxed for one agent.
@@ -173,6 +216,9 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	phase := strings.ToLower(strings.TrimSpace(o.Phase))
 	if phase == "working" {
 		return IdleNudgeSkip, IdleSkipInProgress
+	}
+	if o.WaitingOnGate {
+		return IdleNudgeSkip, IdleSkipWaitingOnGate
 	}
 
 	max := o.MaxNudges
@@ -861,23 +907,24 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	}
 
 	obs := IdleNudgeObs{
-		Name:           d.Name,
-		Purpose:        purpose,
-		FleetIntent:    args.Intent.FleetState(),
-		Intent:         args.Intent.AgentState(d.Name),
-		ProcessRunning: running,
-		DeliberateStop: deliberateStop,
-		Phase:          phase,
-		IdleFor:        idleFor,
-		HasOpenMission: hasMission,
-		DesignGated:    designGated,
-		LooksFinished:  looksFinished,
-		BriefPresent:   briefPresent,
-		NudgeCount:     count,
-		SinceLastNudge: since,
+		Name:            d.Name,
+		Purpose:         purpose,
+		FleetIntent:     args.Intent.FleetState(),
+		Intent:          args.Intent.AgentState(d.Name),
+		ProcessRunning:  running,
+		DeliberateStop:  deliberateStop,
+		Phase:           phase,
+		IdleFor:         idleFor,
+		HasOpenMission:  hasMission,
+		DesignGated:     designGated,
+		LooksFinished:   looksFinished,
+		BriefPresent:    briefPresent,
+		NudgeCount:      count,
+		SinceLastNudge:  since,
 		EverNudged:      ever,
 		PostRestart:     args.PostRestart,
 		SessionReminted: args.SessionReminted != nil && args.SessionReminted(d.Name),
+		WaitingOnGate:   DeclaresBlockingGateWait(act.LastTerminal),
 	}
 	action, reason := ClassifyIdleNudge(obs)
 	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished, args.Intent) {
@@ -1205,10 +1252,10 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 
 	defs := s.registry.List()
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:          s.registry,
-		Activity:     activity,
-		Ledger:       ledger,
-		Push:         push,
+		Reg:             s.registry,
+		Activity:        activity,
+		Ledger:          ledger,
+		Push:            push,
 		Now:             now,
 		PostRestart:     false,
 		OverseerName:    overseer,
@@ -1310,11 +1357,11 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{
-		Reg:          s.registry,
-		Activity:     activity,
-		Ledger:       ledger,
-		Push:         push,
-		Interrupt:    interruptFn,
+		Reg:             s.registry,
+		Activity:        activity,
+		Ledger:          ledger,
+		Push:            push,
+		Interrupt:       interruptFn,
 		Now:             time.Now(),
 		OverseerName:    overseer,
 		StuckTimeout:    DefaultFleetStuckTimeout,
@@ -1622,10 +1669,10 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 	}
 
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:          s.registry,
-		Activity:     activity,
-		Ledger:       ledger,
-		Push:         push,
+		Reg:             s.registry,
+		Activity:        activity,
+		Ledger:          ledger,
+		Push:            push,
 		Now:             time.Now(),
 		PostRestart:     true,
 		OverseerName:    overseer,
