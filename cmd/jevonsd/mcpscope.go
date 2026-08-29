@@ -7,12 +7,15 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/mcpscope"
 	"github.com/marcelocantos/jevons/internal/mcpup"
+	"github.com/marcelocantos/jevons/internal/server"
 )
 
 // registerMCPEndpoints stamps the live jevonsmcp URL for Claudia mints
@@ -73,7 +76,7 @@ func overseerMCPServerSpec(cfg config.Config, host string, port int) (name, url 
 
 // mountHTTPUpstreamProxy puts owner-map HTTP MCP behind jevonsd loopback
 // and reseeds durable OAuth tokens for silent refresh (🎯T520).
-func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, port int, attach mcpattach.Args, onToolsCall func(name string, args map[string]any)) *mcpup.Host {
+func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, watcher *config.Watcher, srv *server.Server, host string, port int, attach mcpattach.Args, onToolsCall func(name string, args map[string]any)) *mcpup.Host {
 	load := &claudia.LoadMCPArgs{WorkDir: cfg.WorkDir}
 	if attach.ClaudeJSON != "" || attach.GrokTOML != "" || attach.CodexTOML != "" || attach.CursorJSON != "" {
 		load = &claudia.LoadMCPArgs{
@@ -89,6 +92,7 @@ func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, 
 		slog.Warn("mcp upstream proxy: LoadMCP failed — HTTP owner-map not proxied", "err", err)
 		return nil
 	}
+	watchMCPOwnerMap(watcher, load, inv, srv)
 	if inv == nil || len(inv.Servers) == 0 {
 		return nil
 	}
@@ -104,11 +108,11 @@ func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, 
 	}
 	skip := map[string]bool{fleetMCPName(cfg): true}
 	args := &mcpup.MountArgs{
-		PublicBase: mcpup.PublicBase(host, port),
-		Servers:    inv.Servers,
-		SkipNames:  skip,
-		Store:      store,
-		Upstreams:  upstreams,
+		PublicBase:  mcpup.PublicBase(host, port),
+		Servers:     inv.Servers,
+		SkipNames:   skip,
+		Store:       store,
+		Upstreams:   upstreams,
 		OnToolsCall: onToolsCall,
 	}
 	h, err := mcpup.Mount(mux, args)
@@ -117,4 +121,56 @@ func mountHTTPUpstreamProxy(mux *http.ServeMux, cfg config.Config, host string, 
 		return nil
 	}
 	return h
+}
+
+// mcpOwnerMapElement names the bounce-required element for the owner's MCP
+// map (🎯T574): the upstream proxy mounts on the HTTP mux at boot and every
+// seat is minted with the map, so a changed map has no clean in-place rejig.
+const mcpOwnerMapElement = "mcp owner map"
+
+// mcpMapFingerprint reduces an inventory to what the daemon actually uses —
+// name, transport, endpoint or command — so the owner's ~/.claude.json,
+// which Claude Code rewrites for its own state many times an hour, only
+// counts as a config change when the MCP servers in it change.
+func mcpMapFingerprint(inv *claudia.MCPInventory) string {
+	if inv == nil {
+		return ""
+	}
+	rows := make([]string, 0, len(inv.Servers))
+	for _, s := range inv.Servers {
+		rows = append(rows, s.Name+"\x00"+s.Type+"\x00"+s.URL+"\x00"+s.Command+"\x00"+strings.Join(s.Args, " "))
+	}
+	sort.Strings(rows)
+	return strings.Join(rows, "\n")
+}
+
+// watchMCPOwnerMap registers every file LoadMCP read (🎯T574 mcpscope
+// family). A change to the server set after boot is bounce-required; a
+// rewrite that leaves the servers alone is not a change at all.
+func watchMCPOwnerMap(watcher *config.Watcher, load *claudia.LoadMCPArgs, boot *claudia.MCPInventory, srv *server.Server) {
+	if watcher == nil || boot == nil {
+		return
+	}
+	bootFP := mcpMapFingerprint(boot)
+	for _, src := range boot.Sources {
+		path := src
+		if _, err := config.Watch(watcher, &config.WatchArgs[string]{
+			Path: path,
+			Load: func(string) (string, error) {
+				inv, err := claudia.LoadMCP(load)
+				if err != nil {
+					return "", err
+				}
+				return mcpMapFingerprint(inv), nil
+			},
+			Fallback: bootFP,
+			OnChange: func(fp string) {
+				if fp != bootFP {
+					bounceForConfig(srv, path, []string{mcpOwnerMapElement})
+				}
+			},
+		}); err != nil {
+			slog.Warn("mcp owner map watch: initial load failed", "path", path, "err", err)
+		}
+	}
 }

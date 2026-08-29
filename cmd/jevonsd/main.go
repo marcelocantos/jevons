@@ -987,7 +987,7 @@ func main() {
 	// 🎯T520: owner-map HTTP MCP → loopback proxy; OAuth refresh without
 	// the owner when a refresh token is stored. Advertised URLs go on
 	// MCPServers — Mount does not rewrite provider configs.
-	if up := mountHTTPUpstreamProxy(mux, cfg, mcpHost, served, mcpAttach, srv.ObserveMCPToolCall); up != nil {
+	if up := mountHTTPUpstreamProxy(mux, cfg, watcher, srv, mcpHost, served, mcpAttach, srv.ObserveMCPToolCall); up != nil {
 		mcpAttach.Proxied = up.Advertised()
 	}
 	fleetAdapter.SetMCP(mcpAttach)

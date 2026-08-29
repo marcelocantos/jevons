@@ -29,6 +29,7 @@ its mtime or size moving.
 | `config.yaml` | `portfolios`, `providers` (via `ConfigManager.Reload`) | identity, bind/port, state paths, default provider/models, persona file |
 | `llm-portfolio.json` | all — routing seed re-seeded | — |
 | `rsi/coach_config.json` | all — the coach re-reads per cycle by design | — |
+| owner MCP map | — | server set (see below) |
 
 ## Bounce-required elements self-bounce (🎯T392.5 path)
 
@@ -55,6 +56,7 @@ batching edits. A malformed edit is last-good + warning, never a bounce.
 | `config.yaml` | `provider`, `model`, `overseer_model` | the overseer seat is minted with them (🎯T148) |
 | `config.yaml` | `mcp_server_name`, `persona_file` | overseer MCP registration and persona template are rendered at boot |
 | `budget.json` | `disabled` | decides whether the collector/enforcer exist at all |
+| owner MCP map (`~/.claude.json`, `~/.grok/config.toml`, `~/.codex/config.toml`, `~/.cursor/mcp.json`; isolates `state_dir/mcp/*`) | `mcp owner map` — the server set only | the upstream proxy mounts on the HTTP mux at boot and every seat is minted with the map; a rewrite that leaves the servers alone (Claude Code's own state writes) is not a change |
 
 Everything else in those files, and every other family, is hot.
 `config.RestartOnlyDiff` is the code-side list; this table is the doc

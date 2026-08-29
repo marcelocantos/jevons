@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/cost"
@@ -174,4 +176,29 @@ func TestT574CoachConfigIsHot(t *testing.T) {
 	if err != nil || got.Overseer != "edited" {
 		t.Fatalf("coach config = %+v err=%v, want overseer edited", got, err)
 	}
+}
+
+// mcpscope owner map: the element is bounce-required, but only a change to
+// the servers themselves counts — Claude Code rewrites ~/.claude.json for
+// its own state constantly, and that must never bounce the daemon.
+func TestT574MCPOwnerMapFingerprintIgnoresNonServerRewrites(t *testing.T) {
+	a := &claudia.MCPInventory{Servers: []claudia.MCPServer{{Name: "b", Type: "http", URL: "http://x"}, {Name: "a", Type: "stdio", Command: "c"}}}
+	b := &claudia.MCPInventory{Servers: []claudia.MCPServer{{Name: "a", Type: "stdio", Command: "c"}, {Name: "b", Type: "http", URL: "http://x"}}, Source: "other", Sources: []string{"other"}}
+	if mcpMapFingerprint(a) != mcpMapFingerprint(b) {
+		t.Fatal("same servers in a different order / from a different source must fingerprint equal")
+	}
+	c := &claudia.MCPInventory{Servers: []claudia.MCPServer{{Name: "a", Type: "stdio", Command: "c"}, {Name: "b", Type: "http", URL: "http://y"}}}
+	if mcpMapFingerprint(a) == mcpMapFingerprint(c) {
+		t.Fatal("a changed endpoint must change the fingerprint")
+	}
+}
+
+// A bounce-required element under a disarmed daemon (isolate, test) raises
+// the request — owner notice, eventlog — and does not signal the process.
+func TestT574BounceRequestIsRaisedNotTakenWhenDisarmed(t *testing.T) {
+	configBounceArmed = false
+	t.Setenv(configBounceEnv, "0")
+	// Not signalling ourselves is the whole test: a SIGHUP here would end
+	// the test binary through the harness's default handler.
+	bounceForConfig(nil, "/x/config.yaml", []string{"port"})
 }
