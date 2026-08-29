@@ -153,7 +153,8 @@ func TestT530ParentKillRestartsHeldSendqForDrain(t *testing.T) {
 	}
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "jevons-po", "actor": "jevons"}
+	// 🎯T560: T530 drain restart applies to seats that leave — the explicit subtree kill.
+	req.Params.Arguments = map[string]any{"name": "jevons-po", "actor": "jevons", "subtree": true}
 	res, err := s.handleAgentKill(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +248,8 @@ func TestT530ParentKillWithoutHeldSendqStillDeregisters(t *testing.T) {
 	t530RegisterTree(t, s, dir)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "jevons-po", "actor": "jevons"}
+	// 🎯T560: T530 drain restart applies to seats that leave — the explicit subtree kill.
+	req.Params.Arguments = map[string]any{"name": "jevons-po", "actor": "jevons", "subtree": true}
 	res, err := s.handleAgentKill(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +283,8 @@ func TestT530ParentKillWithOwnSendqStillRestartsHeldChild(t *testing.T) {
 	}
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "jevons-po", "actor": "jevons"}
+	// 🎯T560: T530 drain restart applies to seats that leave — the explicit subtree kill.
+	req.Params.Arguments = map[string]any{"name": "jevons-po", "actor": "jevons", "subtree": true}
 	res, err := s.handleAgentKill(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)

@@ -93,7 +93,8 @@ func TestAgentKillOverseerMayKillAny(t *testing.T) {
 	reg := regWithTree(t)
 	s := &Server{registry: reg}
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "po", "actor": "jevons"}
+	// 🎯T560: descendants leave only on an explicit subtree kill.
+	req.Params.Arguments = map[string]any{"name": "po", "actor": "jevons", "subtree": true}
 	res, err := s.handleAgentKill(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +143,8 @@ func TestAgentKillCascadesDescendants(t *testing.T) {
 	}
 	s := &Server{registry: reg}
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "po", "actor": "jevons"}
+	// 🎯T560: cascade is the explicit subtree=true form.
+	req.Params.Arguments = map[string]any{"name": "po", "actor": "jevons", "subtree": true}
 	res, err := s.handleAgentKill(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)

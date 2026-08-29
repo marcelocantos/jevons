@@ -106,8 +106,9 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.addTool(
 		mcp.NewTool("jevons_agent_kill",
-			mcp.WithDescription("Kill an agent and its descendant subtree: stop processes and remove from the fleet registry. Distinct from stop (pause only). Idempotent: if the agent is already not registered (e.g. auto-reaped after a done report), returns success without error. Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister (subtree included)")),
+			mcp.WithDescription("Kill an agent: stop its process and remove it from the fleet registry. Descendants are PRESERVED by default (🎯T560: a PO remint must not take its in-progress workers; their parent link is restored when the same name is re-registered). Pass subtree=true to also kill every descendant. Distinct from stop (pause only). Idempotent: if the agent is already not registered (e.g. auto-reaped after a done report), returns success without error. Authorization: only an ancestor of the target (or the overseer) may kill; peers and reverse lineage are denied. Pass actor=your agent name. Cannot kill the overseer. Cross-tree kill via common-ancestor escalation is not direct (deferred)."),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister")),
+			mcp.WithBoolean("subtree", mcp.Description("If true, also kill and deregister every descendant. Default false = descendants stay registered under this name (🎯T560).")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is requesting the kill). Overseer uses the overseer name (usually 'jevons').")),
 		),
 		s.handleAgentKill,
@@ -881,7 +882,8 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	actor, _ := args["actor"].(string)
-	life := map[string]any{"name": name, "actor": actor}
+	subtree, _ := args["subtree"].(bool)
+	life := map[string]any{"name": name, "actor": actor, "subtree": subtree}
 	if name == "" {
 		s.logLifecycle(compAgentLifecycle, "kill", "error", map[string]any{
 			"err": "name is required",
@@ -936,8 +938,15 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	desc := s.registry.Descendants(name)
-	refuse, reason, restartNames := ClassifyKillHeldSendq(name, desc, s.pendingAgentSends)
+	allDesc := s.registry.Descendants(name)
+	plan := PlanKill(name, allDesc, subtree)
+	desc := plan.Removed
+	// Refusal looks at every descendant (a PO with its own sendq is still a
+	// remintable parent); T530 drain restarts apply only to seats that leave.
+	refuse, reason, restartNames := ClassifyKillHeldSendq(name, allDesc, s.pendingAgentSends)
+	if !subtree {
+		restartNames = nil
+	}
 	if refuse {
 		life["err"] = reason
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
@@ -948,10 +957,18 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	if len(held) > 0 {
 		newParent = s.surviveDrainParent(name, actor)
 	}
-	if err := s.killSubtreeAndClearTurns(name); err != nil {
-		life["err"] = err.Error()
+	// 🎯T560: descendants leave only on an explicit subtree kill; the default
+	// removes the one seat and leaves its workers registered under its name.
+	var killErr error
+	if subtree {
+		killErr = s.killSubtreeAndClearTurns(name)
+	} else {
+		killErr = s.killRootAndClearTurns(name)
+	}
+	if killErr != nil {
+		life["err"] = killErr.Error()
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
-		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", killErr)), nil
 	}
 	s.clearAgentRole(name)
 	for _, d := range desc {
@@ -959,6 +976,7 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 	restarted := s.restartHeldSendqForDrain(held, newParent, actor)
 	life["descendants"] = len(desc)
+	life["preserved"] = len(plan.Preserved)
 	if len(restarted) > 0 {
 		life["t530_restarted"] = restarted
 	}
@@ -969,6 +987,11 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	)
 	if len(desc) > 0 {
 		msg += fmt.Sprintf(" Also killed %d descendant(s): %s.", len(desc), strings.Join(desc, ", "))
+	}
+	if len(plan.Preserved) > 0 {
+		msg += fmt.Sprintf(
+			" Preserved %d descendant(s) still registered under parent %q (🎯T560; re-register that name to restore lineage, or pass subtree=true to kill them): %s.",
+			len(plan.Preserved), name, strings.Join(plan.Preserved, ", "))
 	}
 	if len(restarted) > 0 {
 		msg += fmt.Sprintf(
