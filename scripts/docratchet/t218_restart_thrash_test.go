@@ -53,8 +53,12 @@ var variant = "a"
 func main() {
 	port := flag.Int("port", 0, "")
 	workdir := flag.String("workdir", "", "")
+	// The script starts the daemon with -vanilla-port too; an unknown flag
+	// is a parse error and the fixture would die before binding anything.
+	vanillaPort := flag.Int("vanilla-port", 0, "")
 	flag.Parse()
 	_ = *workdir
+	_ = *vanillaPort
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "{\"status\":\"ok\",\"variant\":%q}", variant)
 	})
@@ -136,6 +140,21 @@ func newThrashEnv(t *testing.T) *thrashEnv {
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// 🎯T540.2: the script refuses to bring :PORT up without a React bundle
+	// to serve. The fixture daemon serves nothing of the sort, but the check
+	// runs before it starts, so the fixture needs the file to exist at all.
+	if err := os.MkdirAll(filepath.Join(root, "ui", "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ui", "dist", "index.html"), []byte("<!doctype html>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 🎯T448: bin/claudiapin exits non-zero when go.mod names no claudia
+	// pin at all, which would kill the fixture run before it starts.
+	if err := os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module fixture\n\ngo 1.26\n\nrequire github.com/marcelocantos/claudia v0.24.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	body, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/restart-daily-jevonsd.sh"))
 	if err != nil {
 		t.Fatalf("read script: %v", err)
@@ -153,7 +172,10 @@ func newThrashEnv(t *testing.T) *thrashEnv {
 	// concurrent caller through and quietly turn the coalescing assertions
 	// below into no-ops, and a stub detach would drop the property that the
 	// bounce outlives its caller.
-	for _, helper := range []string{"runlock", "detach"} {
+	// 🎯T448 claudiapin dies on a silent pin; 🎯T580 buildident answers the
+	// source identity. Both run with the script's bare PATH, which has no
+	// `go` to build them on the fly, so the fixture supplies them.
+	for _, helper := range []string{"runlock", "detach", "claudiapin", "buildident"} {
 		build := exec.Command("go", "build", "-o",
 			filepath.Join(root, "bin", helper),
 			filepath.Join(repoRoot(t), "cmd", helper))
@@ -205,6 +227,10 @@ func (e *thrashEnv) build(variant string) {
 		"-ldflags", "-X main.variant="+variant,
 		"-o", out, ".")
 	cmd.Dir = e.srcDir
+	// 🎯T580: t.TempDir() hands out siblings under one parent, and that is
+	// where the workspace fixture writes its go.work — which would otherwise
+	// govern this build and fail it for a module it never heard of.
+	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if b, err := cmd.CombinedOutput(); err != nil {
 		e.t.Fatalf("build fake daemon %q: %v\n%s", variant, err, b)
 	}

@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope claudiapin
+all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope claudiapin buildident
 
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
@@ -195,6 +195,16 @@ buildsnap: bin/buildsnap
 bin/buildsnap: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/buildsnap ./cmd/buildsnap
+
+# 🎯T580: source identity of a build — this repo's HEAD/dirty plus every
+# go.work sibling's — so the restart can tell "already activated" from a
+# build whose only change came from claudia.
+.PHONY: buildident
+buildident: bin/buildident
+
+bin/buildident: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/buildident ./cmd/buildident
 
 # 🎯T448: daily-path claudia pin check — names pin SHA + sibling commits missing.
 .PHONY: claudiapin

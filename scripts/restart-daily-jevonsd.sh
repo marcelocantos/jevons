@@ -151,6 +151,10 @@ RUNLOCK="$ROOT/bin/runlock"
 # the shared clone. Kept between runs so the Go build cache stays warm.
 BUILDSNAP="$ROOT/bin/buildsnap"
 CLAUDIAPIN="$ROOT/bin/claudiapin"
+# 🎯T580: the identity of the *sources* the daemon was built from — this
+# repo's HEAD/dirty plus every go.work sibling's. The binary hash alone
+# called a claudia-only fix "already activated" on 2026-08-29.
+BUILDIDENT="$ROOT/bin/buildident"
 SNAP_DIR="${JEVONS_RESTART_SNAP_DIR:-$HOME/.jevons/build-snapshot}"
 
 # 🎯T405 SELF-DETACH: re-exec into our own session before anything else,
@@ -328,6 +332,36 @@ running_sha() {
     return 0
   fi
   printf '%s' "$recorded_sha"
+}
+
+running_ident() {
+  # 🎯T580: the source identity recorded for the daemon holding :$PORT
+  # (third field of the active stamp), or empty when we cannot prove it.
+  # Same pid discipline as running_sha: a stamp whose pid no longer owns
+  # the port says nothing about what serves.
+  [[ -f "$ACTIVE_FILE" ]] || return 0
+  local recorded_pid recorded_ident listeners
+  recorded_pid="$(awk '{print $1}' "$ACTIVE_FILE" 2>/dev/null || true)"
+  recorded_ident="$(awk '{print $3}' "$ACTIVE_FILE" 2>/dev/null || true)"
+  [[ -n "$recorded_pid" && -n "$recorded_ident" ]] || return 0
+  listeners="$(list_listen_pids)"
+  [[ -n "$listeners" ]] || return 0
+  if [[ "$(echo "$listeners" | tr -d '[:space:]')" != "$recorded_pid" ]]; then
+    return 0
+  fi
+  printf '%s' "$recorded_ident"
+}
+
+source_identity() {
+  # Bare hex identity from bin/buildident, or empty. Empty degrades this
+  # run to the binary hash alone — narrower, and logged as such — never a
+  # hard failure: a pristine clone, a snapshot worktree and the hermetic
+  # fixtures all legitimately have no workspace and sometimes no toolchain.
+  if [[ ! -x "$BUILDIDENT" ]]; then
+    command -v go >/dev/null 2>&1 || return 0
+    (cd "$ROOT" && go build -o "$BUILDIDENT" ./cmd/buildident) >/dev/null 2>&1 || return 0
+  fi
+  "$BUILDIDENT" -root "$ROOT" -id 2>/dev/null | head -n1
 }
 
 await_min_interval() {
@@ -571,13 +605,17 @@ record_active_identity() {
   # `setsid` forks when the caller is already a process-group leader, which
   # would make $! a wrapper that no longer exists. The process actually
   # holding :$PORT is the only pid worth recording.
-  local sha listeners
+  local sha listeners ident
   sha="$(binary_sha "$BIN" || true)"
   listeners="$(list_listen_pids | tr -d '[:space:]')"
+  # 🎯T580: third field is the source identity this build came from, so the
+  # next caller can see a sibling-only change the hash cannot show. Absent
+  # when it could not be computed — never faked, and read back as "unknown".
+  ident="${WANT_IDENT:-}"
   if [[ -n "$sha" && -n "$listeners" ]]; then
     mkdir -p "$(dirname "$ACTIVE_FILE")" 2>/dev/null || true
-    printf '%s %s\n' "$listeners" "$sha" >"$ACTIVE_FILE" 2>/dev/null || true
-    log "🎯T218 active: pid=$listeners sha=${sha:0:12}…"
+    printf '%s %s %s\n' "$listeners" "$sha" "$ident" >"$ACTIVE_FILE" 2>/dev/null || true
+    log "🎯T218 active: pid=$listeners sha=${sha:0:12}… 🎯T580 ident=${ident:0:12}${ident:+…}"
   else
     # Unknown identity → the next caller restarts. Correct, just not
     # thrash-free; never let a missing hash or pid fake activation.
@@ -725,13 +763,43 @@ fi
 # anything is what turns five bounces into one.
 WANT_SHA="$(binary_sha "$BIN" || true)"
 
+# 🎯T580: what the binary hash cannot see. jevons consumes local-master
+# claudia through ../go.work (🎯T448), so a sibling commit changes what is
+# built while this tree — and, in the 2026-08-29 incident, the compiled
+# binary's hash — reports nothing moved: a rebuilt daemon carrying claudia
+# f8869fe was declared "already activated" and the pre-fix process kept
+# serving until someone passed --force. The identity covers this repo's
+# HEAD and dirty state plus every workspace sibling's.
+WANT_IDENT="$(source_identity || true)"
+if [[ -n "$WANT_IDENT" ]]; then
+  log "🎯T580 source identity: ${WANT_IDENT:0:12}…"
+  if [[ -x "$BUILDIDENT" ]]; then
+    "$BUILDIDENT" -root "$ROOT" 2>/dev/null | while IFS= read -r line; do log "  $line"; done
+  fi
+else
+  log "🎯T580 source identity unavailable; this run compares the binary hash only, so a sibling-only change may read as unchanged"
+fi
+
 already_activated() {
-  # True when the daemon holding :$PORT runs WANT_SHA and answers /health.
+  # True when the daemon holding :$PORT runs WANT_SHA, was built from the
+  # same sources, and answers /health.
   [[ "$FORCE" -eq 0 ]] || return 1
   [[ -n "$WANT_SHA" ]] || return 1
-  local have
+  local have have_ident
   have="$(running_sha)"
   [[ -n "$have" && "$have" == "$WANT_SHA" ]] || return 1
+  if [[ -n "$WANT_IDENT" ]]; then
+    # 🎯T580: an identity we can compute and cannot match is a bounce.
+    # Unknown on either side degrades to the hash comparison above rather
+    # than inventing agreement — but it is said out loud.
+    have_ident="$(running_ident)"
+    if [[ -z "$have_ident" ]]; then
+      log "🎯T580 the serving daemon predates source-identity stamping; comparing the binary hash only"
+    elif [[ "$have_ident" != "$WANT_IDENT" ]]; then
+      log "🎯T580 same binary hash, different sources (serving ${have_ident:0:12}… want ${WANT_IDENT:0:12}…); restarting"
+      return 1
+    fi
+  fi
   [[ "$(http_code "http://127.0.0.1:${PORT}/health")" == "200" ]] || return 1
   return 0
 }
