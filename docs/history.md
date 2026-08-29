@@ -59,7 +59,7 @@ shipped on day two.
 The name lasted four days. On 2026-03-04 (`43eb04a2`) the project
 became *jevon* and the coordinator persona *Jevon*, after Jevons'
 paradox — the README joke that became the mission statement: *keep an
-eye on your AI bill*. The plural arrived in April when `jevond` became
+eye on your AI bill*. The final `s` — William Stanley Jevons, spelled properly at last — arrived in April when `jevond` became
 `jevonsd` and the tools became `jevons_*`.
 
 March was the highest-tempo *human* month of the whole project — 22
