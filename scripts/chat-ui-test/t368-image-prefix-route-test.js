@@ -120,9 +120,22 @@ function installMockWebSocket() {
       window.__chatSends = window.__chatSends || [];
       window.__chatSends.push(data);
       if (typeof data !== 'string') return;
-      if (data === '{"type":"ping"}') { this._emit({ type: 'pong' }); return; }
-      if (data.startsWith('{')) return;
-      this._emit({ type: 'user', message: { role: 'user', content: data } });
+      if (data.startsWith('{')) {
+        let o = null;
+        try { o = JSON.parse(data); } catch (_) { return; }
+        if (!o || typeof o !== 'object') return;
+        if (o.type === 'ping') { this._emit({ type: 'pong' }); return; }
+        if (o.type === 'rewind' || o.type === 'interrupt' || o.type === 'ux_state') return;
+        const text = (typeof o.content === 'string' && o.content)
+          || (typeof o.text === 'string' && o.text)
+          || '';
+        if (text) this._ownerTurn(text);
+        return;
+      }
+      this._ownerTurn(data);
+    }
+    _ownerTurn(text) {
+      this._emit({ type: 'user', message: { role: 'user', content: text } });
       this._emit({ type: 'result', subtype: 'success' });
     }
     close() {
@@ -134,6 +147,28 @@ function installMockWebSocket() {
     }
   }
   window.WebSocket = MockWebSocket;
+
+  // Owner submit is POST /api/agents/<n>/send (🎯T557); record wire text for
+  // the oracle and echo on the chat socket.
+  const realFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    if (method === 'POST' && /\/api\/agents\/[^/]+\/send$/.test(url)) {
+      let text = '';
+      try { text = JSON.parse(init && init.body || '{}').text || ''; } catch (_) { /* fall through */ }
+      window.__chatSends = window.__chatSends || [];
+      if (text) window.__chatSends.push(text);
+      const socks = window.__mockSockets || [];
+      const chat = socks.filter((s) => String(s.url).indexOf('/ws/chat') !== -1).pop();
+      if (chat && text) setTimeout(() => chat._ownerTurn(text), 0);
+      return Promise.resolve(new Response('{"ok":true}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    }
+    return realFetch(input, init);
+  };
 }
 
 // Real paste of a real PNG through the product's paste listener.

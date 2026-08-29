@@ -125,11 +125,20 @@ function installMockWebSocket({ tokens }) {
     send(data) {
       window.__lastChatSend = data;
       if (typeof data !== 'string') return;
-      if (data === '{"type":"ping"}') {
-        this._emit({ type: 'pong' });
+      // JSON frames: ping/rewind/interrupt/ux_state stay control; content/text
+      // payloads still run a turn (legacy WS submit + remint hardening 🎯T557).
+      if (data.startsWith('{')) {
+        let o = null;
+        try { o = JSON.parse(data); } catch (_) { return; }
+        if (!o || typeof o !== 'object') return;
+        if (o.type === 'ping') { this._emit({ type: 'pong' }); return; }
+        if (o.type === 'rewind' || o.type === 'interrupt' || o.type === 'ux_state') return;
+        const text = (typeof o.content === 'string' && o.content)
+          || (typeof o.text === 'string' && o.text)
+          || '';
+        if (text) this._turn(text);
         return;
       }
-      if (data.startsWith('{')) return; // control frames
       this._turn(data);
     }
     // One owner-shaped turn: user echo, then a streamed multi-token reply.

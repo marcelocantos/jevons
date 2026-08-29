@@ -92,16 +92,27 @@ function installMockWebSocket() {
       window.__chatSends.push(data);
       window.__lastChatSend = data;
       if (typeof data !== 'string') return;
-      if (data === '{"type":"ping"}') {
-        this._emit({ type: 'pong' });
+      if (data.startsWith('{')) {
+        let o = null;
+        try { o = JSON.parse(data); } catch (_) { return; }
+        if (!o || typeof o !== 'object') return;
+        if (o.type === 'ping') { this._emit({ type: 'pong' }); return; }
+        // interrupt / rewind / ux_state stay control (recorded above).
+        if (o.type === 'rewind' || o.type === 'interrupt' || o.type === 'ux_state') return;
+        const text = (typeof o.content === 'string' && o.content)
+          || (typeof o.text === 'string' && o.text)
+          || '';
+        if (text) this._ownerTurn(text);
         return;
       }
-      if (data.startsWith('{')) return; // interrupt / control
+      this._ownerTurn(data);
+    }
+    // Partial assistant only — leave workingEl up (busy) for Alt+Enter branches.
+    _ownerTurn(text) {
       this._emit({
         type: 'user',
-        message: { role: 'user', content: data },
+        message: { role: 'user', content: text },
       });
-      // Partial assistant content only — leave workingEl up (busy).
       this._emit({
         type: 'assistant',
         message: {
@@ -121,6 +132,30 @@ function installMockWebSocket() {
     }
   }
   window.WebSocket = MockWebSocket;
+
+  // Since 50328854 owner text is POST /api/agents/<n>/send; interrupt still
+  // rides the socket. Mirror the shipped route so __chatSends sees the text
+  // (🎯T557 / same cause as test.js).
+  const realFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    if (method === 'POST' && /\/api\/agents\/[^/]+\/send$/.test(url)) {
+      let text = '';
+      try { text = JSON.parse(init && init.body || '{}').text || ''; } catch (_) { /* fall through */ }
+      window.__chatSends = window.__chatSends || [];
+      if (text) window.__chatSends.push(text);
+      window.__lastChatSend = text;
+      const socks = window.__mockSockets || [];
+      const chat = socks.filter((s) => String(s.url).indexOf('/ws/chat') !== -1).pop();
+      if (chat && text) setTimeout(() => chat._ownerTurn(text), 0);
+      return Promise.resolve(new Response('{"ok":true}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    }
+    return realFetch(input, init);
+  };
 }
 
 async function queueRowCount(page) {
