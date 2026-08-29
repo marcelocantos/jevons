@@ -379,6 +379,32 @@ describe('applyConversationEvent', () => {
     expect(s.meta?.owner_ux).toBe('ok');
   });
 
+  it('reduces interleaved progress.phase into meta (🎯T555.2)', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'meta',
+      body: { start: 1, older: 0, total: 1, phase: { phase: 'idle' } },
+    });
+    expect((s.meta?.phase as { phase?: string })?.phase).toBe('idle');
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame',
+      body: { type: 'progress', phase: 'accepted', working: true },
+    });
+    expect((s.meta?.phase as { phase?: string })?.phase).toBe('accepted');
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame',
+      body: { type: 'progress', phase: 'tool', step: 'Read', correspondent: ['jevons-po'] },
+    });
+    expect(s.meta?.phase).toEqual({ phase: 'tool', step: 'Read', correspondent: ['jevons-po'] });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame',
+      body: { type: 'progress', phase: 'idle', working: false },
+    });
+    expect((s.meta?.phase as { phase?: string })?.phase).toBe('idle');
+    expect(s.meta?.correspondent).toBeUndefined();
+    expect(displayRows(s.frames).some((r) => r.kind === 'assistant')).toBe(false);
+  });
+
   it('pages older events into absolute slots without interleaving first-paint (🎯T548.3)', () => {
     const put = (index: number, text: string) => ({
       id: `e:${index}`,

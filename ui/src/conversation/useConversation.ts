@@ -5,6 +5,7 @@ import { useEffect, useReducer, useRef } from 'react';
 import { MuxClient } from '../mux/client';
 import { transcriptChannel } from '../mux/protocol';
 import { applyConversationEvent, emptyConversation, type ConversationEvent } from './reduce';
+import { optimisticReceived } from './overseerPhase';
 import type { MuxEnvelope } from '../mux/protocol';
 import { pixelFixtureActive, pixelFixtureFrames } from '../visual/oldCockpitFixture';
 import { normalizeOwnerEchoText, shouldAckPendingSend } from './display';
@@ -118,6 +119,18 @@ export function useConversation(mux: MuxClient | null, name: string) {
       if (!t) return;
       if (frozenRef.current) rejoinLive();
       pendingSendRef.current = { text: t, at: stateRef.current.frames.length };
+      // Optimistic received on send; the next interleaved progress/meta frame wins (🎯T555.2).
+      if (name === 'jevons') {
+        const env = {
+          v: 1,
+          ch: transcriptChannel(name),
+          t: 'meta',
+          body: { phase: optimisticReceived() },
+        } as ConversationEvent;
+        const next = applyConversationEvent(stateRef.current, env);
+        stateRef.current = next;
+        dispatch(env);
+      }
       mux?.sendTranscript(name, t);
     },
     page: (end: number, limit: number) => mux?.pageTranscript(name, end, limit),

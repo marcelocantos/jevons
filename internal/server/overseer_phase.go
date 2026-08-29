@@ -25,9 +25,7 @@ const (
 	PhaseStuck      = "stuck"
 )
 
-// Claudia ProgressType values the mapper understands. tool_use is what
-// claudia emits today; thought / plan / prompt_accepted / permission are the
-// 🎯T555.3 / claudia 🎯T50 uplift and are unreachable until it lands.
+// Claudia ProgressType values the mapper understands (claudia 🎯T50).
 const (
 	progressTypeToolUse        = "tool_use"
 	progressTypeThought        = "thought"
@@ -60,30 +58,38 @@ func (p PhaseSample) Working() bool {
 // AgentProgressHub. ok=false means the event carries no phase signal
 // (the reduce keeps its previous sample).
 func phaseFromEvent(ev claudia.Event) (PhaseSample, bool) {
+	tokens := ev.Usage.OutputTokens
 	switch {
 	case ev.Type == "progress" && ev.ProgressType != "":
 		switch ev.ProgressType {
 		case progressTypeThought:
-			return PhaseSample{Phase: PhaseThinking}, true
+			return PhaseSample{Phase: PhaseThinking, Tokens: tokens}, true
 		case progressTypePlan:
 			// Plan refines thinking; chrome may ignore the body.
-			return PhaseSample{Phase: PhaseThinking}, true
+			return PhaseSample{Phase: PhaseThinking, Tokens: tokens}, true
 		case progressTypePromptAccepted:
-			return PhaseSample{Phase: PhaseAccepted}, true
+			return PhaseSample{Phase: PhaseAccepted, Tokens: tokens}, true
 		case progressTypePermission:
-			return PhaseSample{Phase: PhasePermission}, true
+			return PhaseSample{Phase: PhasePermission, Tokens: tokens}, true
 		}
-		call := parseToolCall(ev.Raw)
-		if call.SessionUpdate == "tool_call_update" && toolCallTerminal(ev.Raw) {
+		if toolStatusTerminal(ev.ToolStatus) || (ev.ToolStatus == "" && toolCallTerminal(ev.Raw)) {
 			// A finished tool is not a new phase: the stream stays wherever
 			// the next chunk puts it. Keep the current sample.
 			return PhaseSample{}, false
 		}
-		s := PhaseSample{Phase: PhaseTool}
-		// A real title is the phase copy (🎯T71); "MCP: tool" stays bare
-		// tool — never invent a name the provider never wrote (🎯T64.2).
-		if name := call.DisplayName(); name != "" && !genericToolTitle(name) {
-			s.Step = oneLineProgress(name, 40)
+		s := PhaseSample{Phase: PhaseTool, Tokens: tokens}
+		// Prefer Claudia T50.3 ToolTitle; fall back to Raw only when empty.
+		// "MCP: tool" stays bare tool — never invent a name (🎯T64.2).
+		title := strings.TrimSpace(ev.ToolTitle)
+		if title != "" && !genericToolTitle(title) {
+			s.Step = oneLineProgress(title, 40)
+			return s, true
+		}
+		if title == "" {
+			call := parseToolCall(ev.Raw)
+			if name := call.DisplayName(); name != "" && !genericToolTitle(name) {
+				s.Step = oneLineProgress(name, 40)
+			}
 		}
 		return s, true
 
@@ -94,9 +100,7 @@ func phaseFromEvent(ev claudia.Event) (PhaseSample, bool) {
 		return PhaseSample{Phase: PhaseIdle}, true
 
 	case ev.Type == "assistant":
-		s := PhaseSample{Phase: PhaseStreaming}
-		s.Tokens = ev.Usage.OutputTokens
-		return s, true
+		return PhaseSample{Phase: PhaseStreaming, Tokens: tokens}, true
 
 	case ev.Type == "user":
 		// The provider echoing the prompt back: in flight, nothing yet.
@@ -105,6 +109,14 @@ func phaseFromEvent(ev claudia.Event) (PhaseSample, bool) {
 	default:
 		return PhaseSample{}, false
 	}
+}
+
+func toolStatusTerminal(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "failed", "cancelled", "canceled":
+		return true
+	}
+	return false
 }
 
 // toolCallTerminal reports whether a tool_call_update carries a finished
@@ -122,15 +134,11 @@ func toolCallTerminal(raw []byte) bool {
 	if err := json.Unmarshal(raw, &u); err != nil {
 		return false
 	}
-	st := strings.ToLower(u.Update.Status)
+	st := u.Update.Status
 	if st == "" {
-		st = strings.ToLower(u.Status)
+		st = u.Status
 	}
-	switch st {
-	case "completed", "failed", "cancelled", "canceled":
-		return true
-	}
-	return false
+	return toolStatusTerminal(st)
 }
 
 // hubPhase projects the closed enum onto AgentProgressHub's coarser
@@ -229,6 +237,7 @@ func (s *Server) setOverseerPhase(next PhaseSample) {
 	if line := phaseWireLine(next); line != "" {
 		s.broadcastChatLive(stampConversationName(line, s.overseerAgentName()))
 	}
+	s.muxFanOverseerLevel() // React /ws/mux reduces the same sample (🎯T555.2)
 }
 
 // beginOverseerPhase stamps a freshly drained batch: accepted plus its

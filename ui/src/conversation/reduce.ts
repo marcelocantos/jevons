@@ -13,6 +13,11 @@ import {
   reduceTranscriptBodies,
   type StreamJoin,
 } from './stream';
+import {
+  mergePhaseMeta,
+  phaseSampleFromUnknown,
+  type OverseerPhaseSample,
+} from './overseerPhase';
 
 export type ConversationMeta = {
   older?: number;
@@ -26,6 +31,11 @@ export type ConversationMeta = {
   owner_ux?: string;
   overseer_down?: string;
   truncated?: boolean;
+  /** 🎯T555.2: latest overseer phase sample (progress frame or history_meta). */
+  phase?: OverseerPhaseSample | string;
+  step?: string;
+  tokens?: number;
+  correspondent?: string[];
 };
 
 export type ConversationState = {
@@ -165,6 +175,16 @@ export function applyWindowBody(state: ConversationState, body: unknown): Conver
   return { ...state, frames: putOccupied(state.frames, windowPayload(o)) };
 }
 
+function applyPhaseFromBody(state: ConversationState, body: unknown): ConversationState {
+  const sample =
+    phaseSampleFromUnknown(body) || phaseSampleFromUnknown(rec(body).event);
+  if (!sample) return state;
+  return {
+    ...state,
+    meta: mergePhaseMeta(state.meta as Record<string, unknown> | null, sample) as ConversationMeta,
+  };
+}
+
 function applyWindowBodies(state: ConversationState, bodies: unknown[]): ConversationState {
   let next = state;
   for (const b of bodies) {
@@ -173,6 +193,7 @@ function applyWindowBodies(state: ConversationState, bodies: unknown[]): Convers
       const folded = applyTranscriptFrame(next.frames, next.stream, b);
       next = { ...next, frames: folded.frames, stream: folded.stream };
     }
+    next = applyPhaseFromBody(next, b);
   }
   return next;
 }
@@ -189,24 +210,30 @@ export function applyConversationEvent(
       return applyWindowBodies(state, lines);
     }
     const next = reduceTranscriptBodies(lines);
-    return { ...state, frames: next.frames, stream: next.stream };
+    let out: ConversationState = { ...state, frames: next.frames, stream: next.stream };
+    for (const line of lines) out = applyPhaseFromBody(out, line);
+    return out;
   }
   if (env.t === 'frame') {
     if (isWindowEvent(env.body)) {
-      return applyWindowBody(state, env.body);
+      return applyPhaseFromBody(applyWindowBody(state, env.body), env.body);
     }
     const next = applyTranscriptFrame(state.frames, state.stream, env.body);
-    return { ...state, frames: next.frames, stream: next.stream };
+    return applyPhaseFromBody(
+      { ...state, frames: next.frames, stream: next.stream },
+      env.body,
+    );
   }
   if (env.t === 'meta') {
     // Working-level fans are partial ({working, owner_ux, overseer_down}).
     // Replacing the window meta drops older/truncated and PageUp dies
     // after the first-paint halo (🎯T494.1.4).
-    return {
+    const merged = {
       ...state,
       meta: { ...(state.meta || {}), ...((env.body || {}) as ConversationMeta) },
       ready: true,
     };
+    return applyPhaseFromBody(merged, env.body);
   }
   if (env.t === 'page') {
     const body = (env.body || {}) as {

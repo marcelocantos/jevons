@@ -14,6 +14,7 @@ import {
 import { MuxClient, muxUrl } from './mux/client';
 import { degradedBannerText } from './conversation/degraded';
 import type { ConversationMeta } from './conversation/reduce';
+import { statusBarText } from './conversation/overseerPhase';
 import { AgentInteraction } from './components/AgentInteraction';
 import { AgentTree, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
@@ -92,9 +93,11 @@ function Cockpit() {
   const navigate = useNavigate({ from: indexRoute.fullPath });
   const lastAgentsRef = useRef<AgentRow[]>([]);
   const [degraded, setDegraded] = useState('');
+  const [jevonsMeta, setJevonsMeta] = useState<ConversationMeta | null>(null);
   const [graphOpen, setGraphOpen] = useState(false);
   const [graphNonce, setGraphNonce] = useState(0);
   const onJevonsMeta = useCallback((meta: ConversationMeta | null) => {
+    setJevonsMeta(meta);
     setDegraded(degradedBannerText(meta));
   }, []);
   const queryClient = useQueryClient();
@@ -261,7 +264,7 @@ function Cockpit() {
     <TargetAskContext.Provider value={askHost}>
       <div id="status">
         <span className={connected ? 'dot on' : 'dot off'} id="dot" />
-        <span id="status-text">{connected ? 'connected' : 'connecting'}</span>
+        <span id="status-text">{statusBarText(connected, jevonsMeta)}</span>
         <span id="voice-status">
           <span className="voice-dot" />
           <span id="voice-status-text">listening</span>

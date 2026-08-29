@@ -252,7 +252,8 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
       rec.type === 'result' ||
       rec.type === 'progress' ||
       rec.type === 'system' ||
-      rec.type === 'ux_state'
+      rec.type === 'ux_state' ||
+      rec.type === 'status' // 🎯T555.5: recovery chrome, never unsealed assistant
     ) {
       continue;
     }

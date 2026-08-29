@@ -10,6 +10,8 @@ import { createElement } from 'react';
 import { render } from '@testing-library/react';
 import { ClippedBubble } from '../../components/AgentTranscript';
 import { displayRows, isSilentAssistantText, stepsLabel } from '../../conversation/display';
+import { applyConversationEvent, emptyConversation } from '../../conversation/reduce';
+import { formatOverseerStatus, statusBarText } from '../../conversation/overseerPhase';
 import { classifyInjectUserText } from '../../conversation/inject';
 import {
   TOOL_ITEM_FORBIDDEN_WORD_BREAK,
@@ -192,5 +194,50 @@ describeOracle(family('fold'), () => {
     expect(container.querySelector('.turn-label.inject-label')?.firstChild?.textContent).toBe('⋯ system');
     expect(container.querySelector('.turn-tip .turn-item.inject-detail')?.textContent).toBe('injected rule');
     expect(container.querySelector('.msg.user')).toBeNull();
+  });
+
+  itOracle('T39', 'after a sealed overseer turn #status paints idle, not Jevons is working', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame',
+      body: { type: 'progress', phase: 'streaming' },
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame',
+      body: { type: 'progress', phase: 'idle', working: false },
+    });
+    expect(statusBarText(true, s.meta)).toBe('idle');
+    expect(statusBarText(true, s.meta)).not.toMatch(/Jevons is/i);
+    expect(displayRows(s.frames).some((r) => /Jevons is working/i.test(r.text))).toBe(false);
+  });
+
+  itOracle('T71', 'in-flight #status paints the ACP phase word, not Jevons is working', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame',
+      body: { type: 'progress', phase: 'tool', step: 'Read' },
+    });
+    expect(statusBarText(true, s.meta)).toBe('Read');
+    expect(formatOverseerStatus({ phase: 'thinking' })).toBe('thinking');
+    expect(statusBarText(true, s.meta)).not.toMatch(/Jevons is working/i);
+  });
+
+  itOracle('T202', 'mid-turn #status updates in place; correspondent does not accumulate', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame',
+      body: { type: 'progress', phase: 'thinking', correspondent: ['jevons-po'] },
+    });
+    expect(statusBarText(true, s.meta)).toBe('thinking · jevons-po');
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame',
+      body: { type: 'progress', phase: 'streaming', correspondent: ['jevons-po', 'jv-t555'] },
+    });
+    expect(statusBarText(true, s.meta)).toBe('writing · jevons-po, jv-t555');
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame',
+      body: { type: 'progress', phase: 'idle' },
+    });
+    expect(statusBarText(true, s.meta)).toBe('idle');
   });
 });

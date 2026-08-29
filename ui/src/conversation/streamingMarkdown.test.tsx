@@ -34,6 +34,14 @@ describe('createSession', () => {
     expect(session!.written).toBe(12);
     expect(root.textContent).toMatch(/Hello world/);
   });
+
+  it('writeFull of a finished string includes the last glyph (🎯T555.5)', () => {
+    const root = document.createElement('div');
+    const session = createSession(root);
+    expect(session).not.toBeNull();
+    session!.writeFull('overseer is back');
+    expect(root.textContent).toBe('overseer is back');
+  });
 });
 
 function StreamProbe(props: { text: string }) {

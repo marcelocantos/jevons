@@ -66,14 +66,15 @@ export function createSession(rootEl: HTMLElement): StreamSession | null {
       if (ended || !parser) return;
       const text = normalizeText(raw, normalizeFn);
       if (text === lastNormalized) return;
-      if (lastNormalized && text.startsWith(lastNormalized)) {
-        const delta = text.slice(lastNormalized.length);
-        if (delta) smd.parser_write(parser, delta);
-        lastNormalized = text;
-        return;
-      }
+      // Full rewrite + parser_end: smd holds the last glyph in pending
+      // until end (🎯T555.5). A prefix-delta write without end paints
+      // “overseer is bac”. Restarting each write keeps the last character
+      // in the DOM for a finished string; live streams re-parse the prefix.
       start();
-      if (text && parser) smd.parser_write(parser, text);
+      if (text && parser) {
+        smd.parser_write(parser, text);
+        smd.parser_end(parser);
+      }
       lastNormalized = text;
     },
     end() {

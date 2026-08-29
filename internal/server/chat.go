@@ -1479,6 +1479,11 @@ func (s *Server) persistChatLine(line string) {
 	if s == nil || strings.TrimSpace(line) == "" {
 		return
 	}
+	// 🎯T555.5 / T355: type=status is recovery/level chrome, not a turn.
+	// Journaling it replays “overseer is back” as assistant prose.
+	if isEphemeralChatStatusLine(line) {
+		return
+	}
 	name := s.overseerAgentName()
 	// 🎯T548.2: after statedb has rows, SQLite is the mux source of
 	// truth. JSONL is import-once history, not a second live log.
@@ -1496,8 +1501,23 @@ func (s *Server) persistChatLine(line string) {
 	s.muxFanTranscript(name, line)
 }
 
+// isEphemeralChatStatusLine reports type=status recovery/level chrome
+// (🎯T555.5). Those frames are live-only; they are not turns.
+func isEphemeralChatStatusLine(line string) bool {
+	var m struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &m); err != nil {
+		return false
+	}
+	return m.Type == "status"
+}
+
 func (s *Server) persistChatJSONL(line string) {
 	if s == nil || strings.TrimSpace(line) == "" {
+		return
+	}
+	if isEphemeralChatStatusLine(line) {
 		return
 	}
 	s.mu.Lock()

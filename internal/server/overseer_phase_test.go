@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/muxwin"
 )
 
 // phaseCapture subscribes a listener and decodes every progress frame the
@@ -174,5 +175,92 @@ func TestT555_1MapperSharedWithHub(t *testing.T) {
 	}
 	if _, ok := phaseFromEvent(claudia.Event{Type: "system"}); ok {
 		t.Fatal("system event must carry no phase")
+	}
+}
+
+func TestT555_3MapperConsumesTypedProgressAndUsage(t *testing.T) {
+	p, ok := phaseFromEvent(claudia.Event{Type: "progress", ProgressType: progressTypeThought})
+	if !ok || p.Phase != PhaseThinking {
+		t.Fatalf("thought: %+v ok=%v", p, ok)
+	}
+	p, ok = phaseFromEvent(claudia.Event{Type: "progress", ProgressType: progressTypePromptAccepted})
+	if !ok || p.Phase != PhaseAccepted {
+		t.Fatalf("prompt_accepted: %+v ok=%v", p, ok)
+	}
+	p, ok = phaseFromEvent(claudia.Event{Type: "progress", ProgressType: progressTypePermission})
+	if !ok || p.Phase != PhasePermission {
+		t.Fatalf("permission: %+v ok=%v", p, ok)
+	}
+	p, ok = phaseFromEvent(claudia.Event{
+		Type: "assistant",
+		Text: "hi",
+		Usage: claudia.Usage{OutputTokens: 9},
+	})
+	if !ok || p.Phase != PhaseStreaming || p.Tokens != 9 {
+		t.Fatalf("usage tokens: %+v ok=%v", p, ok)
+	}
+	// Promoted ToolTitle wins; do not scrape Raw when it is set (🎯T555.3).
+	p, ok = phaseFromEvent(claudia.Event{
+		Type:         "progress",
+		ProgressType: progressTypeToolUse,
+		ToolTitle:    "Read",
+		Raw:          []byte(`{"update":{"sessionUpdate":"tool_call","title":"stale-raw"}}`),
+	})
+	if !ok || p.Phase != PhaseTool || p.Step != "Read" {
+		t.Fatalf("ToolTitle consume: %+v ok=%v", p, ok)
+	}
+	// Generic MCP: tool title stays bare tool (🎯T64.2).
+	p, ok = phaseFromEvent(claudia.Event{
+		Type:         "progress",
+		ProgressType: progressTypeToolUse,
+		ToolTitle:    "MCP: tool",
+	})
+	if !ok || p.Phase != PhaseTool || p.Step != "" {
+		t.Fatalf("generic tool title must stay bare tool: %+v ok=%v", p, ok)
+	}
+	p, ok = phaseFromEvent(claudia.Event{
+		Type:         "progress",
+		ProgressType: progressTypeToolUse,
+		ToolStatus:   "completed",
+		ToolTitle:    "Read",
+	})
+	if ok {
+		t.Fatalf("terminal ToolStatus must not mint a phase: %+v", p)
+	}
+}
+
+func TestT555_2MuxMetaAndFanCarryPhaseSample(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	meta := s.muxTranscriptMeta(muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 0, false)
+	p, ok := meta["phase"].(PhaseSample)
+	if !ok || p.Phase != PhaseIdle {
+		t.Fatalf("reload snapshot phase = %#v", meta["phase"])
+	}
+	h := newMuxHub()
+	sess := &muxSession{send: make(chan []byte, 4), transcripts: map[string]*muxWatch{"jevons": {subscribed: true}}}
+	h.add(sess)
+	s.mux = h
+	s.beginOverseerPhase([]string{"jevons-po"})
+	select {
+	case raw := <-sess.send:
+		var env muxEnvelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			t.Fatal(err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(env.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		phase, _ := body["phase"].(map[string]any)
+		if phase["phase"] != PhaseAccepted {
+			t.Fatalf("live mux fan phase = %#v", body["phase"])
+		}
+		corr, _ := phase["correspondent"].([]any)
+		if len(corr) != 1 || corr[0] != "jevons-po" {
+			t.Fatalf("correspondent = %#v", phase["correspondent"])
+		}
+	default:
+		t.Fatal("mux fan did not publish phase")
 	}
 }

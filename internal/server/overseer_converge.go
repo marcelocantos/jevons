@@ -339,10 +339,11 @@ func (s *Server) broadcastCockpitReady(text string) {
 		text = "overseer is back"
 	}
 	// Wire shape used by web: type=status text=… (overseer is back regex)
-	// and state=idle for thinking indicator.
+	// and state=idle for thinking indicator. Live-only — not a journaled
+	// turn (🎯T555.5 / T355).
 	payload, err := json.Marshal(map[string]string{"type": "status", "text": text})
 	if err == nil {
-		s.BroadcastChat(string(payload))
+		s.broadcastChatLive(stampConversationName(string(payload), s.overseerAgentName()))
 	}
 	s.Broadcast(map[string]any{"type": "status", "state": "idle", "text": text})
 	s.NoteOverseerProgress()

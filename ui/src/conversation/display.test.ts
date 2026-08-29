@@ -216,4 +216,18 @@ describe('displayRows', () => {
     expect(rows[0]).toMatchObject({ kind: 'assistant', text: 'Checking.', sealed: false });
     expect(rows[1].kind).toBe('steps');
   });
+
+  it('type=status is chrome, not an unsealed assistant (🎯T555.5)', () => {
+    const rows = displayRows([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } },
+      { type: 'status', text: 'overseer is back' },
+      { type: 'status', state: 'idle', text: 'overseer is back' },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' },
+      },
+    ]);
+    expect(rows.map((r) => r.kind + ':' + r.text)).toEqual(['user:hi', 'assistant:ok']);
+    expect(rows.some((r) => String(r.text).includes('overseer'))).toBe(false);
+  });
 });

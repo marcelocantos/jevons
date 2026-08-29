@@ -1,5 +1,10 @@
 # ACP / Claudia progress signals for in-flight chat status (🎯T71)
 
+**Supersession:** the 2026-08 audit below is the **vanilla T71** snapshot.
+Thinking-vs-acting is no longer “not on the wire” — both Grok docs and
+Cursor emit `agent_thought_chunk`; Claudia drops it. The current contract
+is [overseer-turn-state.md](overseer-turn-state.md) (owner accept residual).
+
 Audit of what the overseer chat path can surface mid-turn, and what the
 UI uses today. Grounded in shipped wire + claudia event mapping
 (`internal/server/chat_wire.go`, `web/index.html` handle path).

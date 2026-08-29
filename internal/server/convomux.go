@@ -354,6 +354,7 @@ func (s *Server) muxFanOverseerLevel() {
 		"working":       s.publishedWorkingLevel(),
 		"owner_ux":      s.ownerUXLevel(),
 		"overseer_down": s.overseerDownSample(),
+		"phase":         s.OverseerPhase(), // 🎯T555.2 same sample as /ws/chat progress frames
 	})
 }
 
