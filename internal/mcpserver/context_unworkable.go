@@ -34,6 +34,11 @@ func (s *Server) ReportContextUnworkable(agent, parent, text string) {
 		resolved = defaultProductPOName
 	}
 
+	// 🎯T561: say how to remint before the supervisor reaches for migrate.
+	if plan, ok := s.contextRemintPlan(agent, false); ok {
+		text = strings.TrimRight(text, "\n") + "\n" + plan.Advice(agent) + "\n"
+	}
+
 	targets := []string{}
 	seen := map[string]bool{}
 	add := func(name string) {

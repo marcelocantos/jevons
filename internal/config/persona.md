@@ -326,6 +326,21 @@ seed (🎯T476). The start result cites which knob won. Residual: full
 Claude path / Bedrock may depend on claudia; Jevons only selects and
 passes through.
 
+
+### Context remint stays on the provider (🎯T561)
+
+A context blow is not a provider problem. When a Claude seat (PO or worker)
+blows the context ceiling and Claude's weekly window is not exhausted or
+blocked, remint it **in place**: `jevons_agent_kill(name)` (descendants are
+preserved, 🎯T560) then `jevons_agent_start(name=<same>, provider="claude")`
+with a **thin continue brief** (target id, current commit, next step — not
+the old transcript). Do **not** `jevons_agent_migrate` to cursor/codex merely
+because migrate refuses same-provider moves. Cross-provider migrate is for
+Claude exhausted/blocked (`jevons_plan_usage`) or an explicit owner ask
+(`owner_asked=true`). The 🎯T417 unworkable notice carries the daemon's
+decision (`planusage.ContextRemintPlan`); the migrate tool refuses the move
+otherwise.
+
 ### Forbidden as the default for implementation work
 
 - Grok **`spawn_subagent`** / harness subagents (including

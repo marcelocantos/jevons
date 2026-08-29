@@ -43,28 +43,38 @@ func (s *Server) registerAgentMigrate() {
 					"never the work session) (🎯T285 / 🎯T285.1). The owner-visible chat log is untouched. "+
 					"Refuses when the predecessor's transcript cannot be found — pass force=true to "+
 					"switch cold on purpose. Same-provider is refused (that is a resume, not a migrate). "+
-					"Use this instead of stopping and re-creating an agent, which starts it with no history at all."),
+					"Use this instead of stopping and re-creating an agent, which starts it with no history at all. "+
+					"A CONTEXT BLOW is not a migrate reason (🎯T561): while the seat's own provider still has weekly "+
+					"remaining, remint it in place — jevons_agent_kill then jevons_agent_start with the same name, "+
+					"same provider, and a thin continue brief. This tool refuses that move unless the provider is "+
+					"exhausted/blocked or owner_asked=true."),
 			mcp.WithString("name", mcp.Required(),
 				mcp.Description("Agent to migrate (registry name, e.g. jevons-po)")),
 			mcp.WithString("provider", mcp.Required(),
 				mcp.Description("Target backend: claudia provider id (grok, claude, …)")),
 			mcp.WithBoolean("force",
 				mcp.Description("Switch even when no predecessor transcript is found — a deliberate cold start")),
+			mcp.WithBoolean("owner_asked",
+				mcp.Description("The owner explicitly asked for this cross-provider move (🎯T561); without it a seat whose provider still has weekly remaining is kept on that provider")),
 		),
 		s.handleAgentMigrate,
 	)
 }
 
 func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if s.migrator == nil {
-		return mcp.NewToolResultError("agent migration is not available (no fleet migrator wired)"), nil
-	}
 	args := req.GetArguments()
 	name := strings.TrimSpace(fmt.Sprint(args["name"]))
 	target := strings.TrimSpace(fmt.Sprint(args["provider"]))
 	force, _ := args["force"].(bool)
+	ownerAsked, _ := args["owner_asked"].(bool)
 	if name == "" || target == "" {
 		return mcp.NewToolResultError("name and provider are required"), nil
+	}
+	if msg := s.refuseContextRemintMigrate(name, target, ownerAsked); msg != "" {
+		return mcp.NewToolResultError(msg), nil
+	}
+	if s.migrator == nil {
+		return mcp.NewToolResultError("agent migration is not available (no fleet migrator wired)"), nil
 	}
 
 	// The overseer is attached to owner chat by the HTTP server, not by the

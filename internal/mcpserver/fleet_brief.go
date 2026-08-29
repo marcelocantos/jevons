@@ -251,6 +251,16 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   the file. The banner comment is not a gate.
 - Related: ambient RSI 🎯T92, hierarchy 🎯T129. Residual: one-off flukes may skip.
 
+## Context remint stays on the provider (🎯T561)
+- A context blow is not a provider problem. Claude seat over the ceiling
+  with Claude weekly NOT exhausted/blocked → jevons_agent_kill(name) then
+  jevons_agent_start(name=<same>, provider="claude") with a thin continue
+  brief. Do not jevons_agent_migrate to cursor/codex just because migrate
+  needs a different provider; the tool refuses that move.
+- Cross-provider migrate only when Claude is exhausted/blocked
+  (jevons_plan_usage) or the owner asks (owner_asked=true). The 🎯T417
+  unworkable notice says which applies.
+
 ## Report
 - When finished: report commit SHA(s) + test evidence to the overseer
   (or accepted-risk / class-3 residual). Bare done without either is refused.

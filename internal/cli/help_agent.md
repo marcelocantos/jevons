@@ -866,6 +866,20 @@ file or compiled seed as the loser.
 Provider strings pass through to claudia (no allow-list) so future ids
 (e.g. Bedrock) are not blocked at the Jevons selection surface.
 
+
+### Context remint stays on the provider (🎯T561)
+
+When a Claude seat blows the context ceiling and Claude weekly remaining is
+non-exhausted, remint via kill+start: `jevons_agent_kill(name)` (workers
+preserved, 🎯T560) then `jevons_agent_start(name=<same>, provider="claude")`
+with a thin continue brief. Do not `jevons_agent_migrate` to cursor/codex
+merely because migrate needs a different provider. Cross-provider migrate is
+allowed only when Claude is exhausted/blocked (`MigrateOff`: weekly
+hot/exhausted or session 429/0%) or the owner asks (`owner_asked=true`); the
+tool refuses it otherwise and names the kill+start recipe. The 🎯T417
+unworkable notice carries the same advice. Pure helper:
+`planusage.ContextRemintPlan` (unknown plan feed = stay, not migrate).
+
 ### Running the whole fleet on Claude (🎯T282)
 
 One setting moves everything — overseer, POs, workers, asides, jwork
