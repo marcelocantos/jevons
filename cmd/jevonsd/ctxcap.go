@@ -43,7 +43,8 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 	rotations *handover.RotationStore, report UnworkableReporter) {
 	pol := ctxcap.Policy{
 		Ceiling:  cfg.ContextCeilingTokens,
-		Disabled: cfg.ContextCeilingDisabled,
+		// 🎯T564: enforcement is opt-in; the product default observes only.
+		Disabled: !cfg.ContextCeilingEnforced(),
 	}
 	obs := ctxcap.Observer{Roots: roots}
 	lastCompaction := map[string]time.Time{}

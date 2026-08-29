@@ -52,14 +52,19 @@ type Config struct {
 	Model         string `yaml:"model"`          // default worker model ("" = provider default)
 	OverseerModel string `yaml:"overseer_model"` // "" = same as Model
 
-	// ContextCeilingTokens bounds the conversation any agent carries into
-	// a model call (🎯T392.1). Every call resends the whole conversation,
-	// so a session's cost is quadratic in its length and fleet spend is
-	// linear in how long agents run before compacting. 0 = the ctxcap
+	// ContextCeilingTokens is the per-seat context bar the 🎯T392.1
+	// governor judges against WHEN enforcement is opted in. 0 = the ctxcap
 	// default (100k); see internal/ctxcap for why that number.
 	ContextCeilingTokens int64 `yaml:"context_ceiling_tokens"`
-	// ContextCeilingDisabled stops enforcement but keeps observation, so
-	// the spend report still shows what the ceiling would have done.
+	// ContextCeilingEnabled opts a deployment back into per-seat ceiling
+	// enforcement (hold / 🎯T417 unworkable notices). The product default
+	// is OFF (🎯T564, owner 2026-08-29): models manage their own windows;
+	// burn is governed across seats (capacity / plan, 🎯T359), not by
+	// marking one seat unworkable for its size.
+	ContextCeilingEnabled bool `yaml:"context_ceiling_enabled"`
+	// ContextCeilingDisabled is the older explicit off switch; it still
+	// wins over ContextCeilingEnabled. Observation continues either way so
+	// the spend report can show what a ceiling would have done.
 	ContextCeilingDisabled bool `yaml:"context_ceiling_disabled"`
 
 	StateDir    string `yaml:"state_dir"`    // jevons state (registry, threads, usage.db, …)
@@ -530,6 +535,13 @@ func (c Config) OwnerRef() string {
 
 // OverseerDir is the overseer agent's workdir (holds its generated
 // AGENTS.md and .mcp.json).
+// ContextCeilingEnforced reports whether the per-seat context ceiling
+// governor acts on what it observes (🎯T564: off unless opted in, and
+// context_ceiling_disabled always wins).
+func (c Config) ContextCeilingEnforced() bool {
+	return c.ContextCeilingEnabled && !c.ContextCeilingDisabled
+}
+
 func (c Config) OverseerDir() string { return filepath.Join(c.StateDir, c.OverseerName) }
 
 // Persona renders the overseer's instructions: the built-in template

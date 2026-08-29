@@ -252,7 +252,10 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Related: ambient RSI 🎯T92, hierarchy 🎯T129. Residual: one-off flukes may skip.
 
 ## Context remint stays on the provider (🎯T561)
-- A context blow is not a provider problem. Claude seat over the ceiling
+- No per-seat context ceiling by default (🎯T564): models manage their own
+  windows; burn is governed across seats (🎯T359). Context size alone is
+  not a remint trigger — remint only a stuck/dead seat or on owner ask.
+- A context blow is not a provider problem. Claude seat that must be reminted
   with Claude weekly NOT exhausted/blocked → jevons_agent_kill(name) then
   jevons_agent_start(name=<same>, provider="claude") with a thin continue
   brief. Do not jevons_agent_migrate to cursor/codex just because migrate

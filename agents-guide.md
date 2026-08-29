@@ -869,8 +869,12 @@ Provider strings pass through to claudia (no allow-list) so future ids
 
 ### Context remint stays on the provider (🎯T561)
 
-When a Claude seat blows the context ceiling and Claude weekly remaining is
-non-exhausted, remint via kill+start: `jevons_agent_kill(name)` (workers
+There is no per-seat context ceiling by default (🎯T564): models manage
+their own windows and burn is governed across seats (🎯T359), so context
+size alone is not a remint trigger. Enforcement is opt-in via
+`context_ceiling_enabled: true` (`context_ceiling_disabled` still wins).
+When a Claude seat must be reminted (stuck, dead, owner ask) and Claude
+weekly remaining is non-exhausted, remint via kill+start: `jevons_agent_kill(name)` (workers
 preserved, 🎯T560) then `jevons_agent_start(name=<same>, provider="claude")`
 with a thin continue brief. Do not `jevons_agent_migrate` to cursor/codex
 merely because migrate needs a different provider. Cross-provider migrate is

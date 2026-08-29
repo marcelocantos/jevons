@@ -329,8 +329,15 @@ passes through.
 
 ### Context remint stays on the provider (🎯T561)
 
+**No per-seat context ceiling (🎯T564, owner 2026-08-29):** models manage
+their own context windows; burn is governed across seats (capacity / plan,
+🎯T359), not within one. The daemon no longer holds a seat or reports it
+unworkable for its size by default (`context_ceiling_enabled` is opt-in),
+so "over the ceiling" is **not** a standing reason to remint. Remint only
+when a seat is genuinely stuck or dead, or the owner asks.
+
 A context blow is not a provider problem. When a Claude seat (PO or worker)
-blows the context ceiling and Claude's weekly window is not exhausted or
+must be reminted and Claude's weekly window is not exhausted or
 blocked, remint it **in place**: `jevons_agent_kill(name)` (descendants are
 preserved, 🎯T560) then `jevons_agent_start(name=<same>, provider="claude")`
 with a **thin continue brief** (target id, current commit, next step — not
