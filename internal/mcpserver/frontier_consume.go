@@ -10,11 +10,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/keepgoing"
 	"github.com/marcelocantos/jevons/internal/poproactive"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -283,6 +285,9 @@ type FrontierConsumeArgs struct {
 	MaxSpawnsPerTarget int
 	// RespawnBackoff 0 → DefaultFrontierConsumeRespawnBackoff.
 	RespawnBackoff time.Duration
+	// Seats are registered implementers (🎯T566.3): a stopped seat on a
+	// ready leaf remints before a new spawn for a different leaf.
+	Seats []keepgoing.Seat
 }
 
 // SweepFrontierConsume evaluates every leaf and auto-spawns up to the
@@ -308,7 +313,33 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 
 	var out []FrontierConsumeReport
 	spawned := 0
+	remintName := map[string]string{}
+	var readyIDs []string
 	for _, leaf := range args.Leaves {
+		if poproactive.ClassifyLeaf(leaf) == poproactive.LeafReady {
+			readyIDs = append(readyIDs, strings.TrimSpace(leaf.ID))
+		}
+	}
+	plan := keepgoing.Plan(readyIDs, args.Seats)
+	priority := map[string]int{}
+	for i, a := range plan {
+		priority[a.TargetID] = i
+		if a.Kind == keepgoing.KindReanimate && a.SeatName != "" {
+			remintName[a.TargetID] = a.SeatName
+		}
+	}
+	leaves := append([]poproactive.LeafObs(nil), args.Leaves...)
+	if len(priority) > 0 {
+		sort.SliceStable(leaves, func(i, j int) bool {
+			pi, iok := priority[strings.TrimSpace(leaves[i].ID)]
+			pj, jok := priority[strings.TrimSpace(leaves[j].ID)]
+			if iok && jok {
+				return pi < pj
+			}
+			return iok && !jok
+		})
+	}
+	for _, leaf := range leaves {
 		id := strings.TrimSpace(leaf.ID)
 		if id == "" {
 			continue
@@ -421,6 +452,9 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			continue
 		}
 		worker := FrontierWorkerName(id)
+		if name := remintName[id]; name != "" {
+			worker = name
+		}
 		if args.Spawn == nil {
 			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonSpawnFailed
 			rep.Err = "no spawner"
@@ -540,7 +574,7 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			ForceEngage:    poproactive.IsForceEngageTag(leaf.Tags),
 			// 🎯T389: this sweep's ledger only — another repo's worker on the
 			// same id must not make this leaf look consumed.
-			AlreadyEngaged: len(workAgentsEngagedOnTarget(s.registry, leaf.ID, args.Workdir, "")) > 0,
+			AlreadyEngaged: len(workAgentsBoundOnTarget(s.registry, leaf.ID, args.Workdir, "")) > 0,
 		})
 	}
 
@@ -561,6 +595,7 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 		MaxSpawnsPerCycle:  args.MaxSpawnsPerCycle,
 		MaxSpawnsPerTarget: args.MaxSpawnsPerTarget,
 		RespawnBackoff:     args.RespawnBackoff,
+		Seats:              keepgoingSeats(s.registry, args.Workdir),
 		Spawn: func(leaf poproactive.LeafObs, workerName string) error {
 			if args.Spawn != nil {
 				return args.Spawn(byID[leaf.ID], workerName, parentPO)

@@ -304,6 +304,9 @@ const (
 	ReasonClassSlots        = "class_saturated"
 	ReasonTokenReserve      = "token_reserve"
 	ReasonHostSaturated     = "host_saturated"
+	ReasonMemoryGrind       = "memory_grind"
+	ReasonSeatCount         = "seat_count"
+	ReasonAmbientLoad       = "ambient_load"
 	ReasonPreempted         = "preempted_for_capacity"
 )
 

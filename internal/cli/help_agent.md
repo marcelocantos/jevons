@@ -325,12 +325,10 @@ fleet worker** under **`parent=jevons-po`** in the **same operational cycle**
   new unattended leaves get a worker **immediately**.
 - Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
 - **Skip:** design-gated (🎯T112 / 🎯T67 / 🎯T29-class) and blocked targets stay
-  unspawned until unblocked or owner opens design. **Host saturation
-  (🎯T460)** is also a blocking condition: do not spawn when
-  `jevons_capacity_status` reports pressure critical (or
-  `jevons_agent_start` refuses with `host_saturated`). "Frontier is not
-  empty" does not mean keep spawning on a host that cannot run what is
-  already spawned.
+  unspawned until unblocked or owner opens design. Load-average is not a
+  sleep or spawn-stop (🎯T566.1). Halt on **memory grind** or
+  **seat-count runaway** (🎯T566.2); remint stopped implementers before a
+  new pane (🎯T566.3).
 - **Related:** 🎯T193 file→spawn same turn (owner-filed and mid-session Build).
 - **Residual:** instructional; no daemon auto-spawn unless later enforced.
 
@@ -348,7 +346,9 @@ unless the target is design-gated or parked.
 - Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
 - **Skip (file without spawn):** design-gated (e.g. OAuth app pins, 🎯T112 /
   🎯T67 / 🎯T29-class), blocked-on-human / needs-owner / parked-for-design,
-  pure documentation / docs-only, and host saturation (🎯T460).
+  pure documentation / docs-only. Load-average is not a skip (🎯T566.1).
+  Memory grind and seat-count runaway (🎯T566.2) refuse a new pane;
+  remint existing seats first (🎯T566.3).
 - **Related:** 🎯T155 continuous unattended frontier kick-off.
 - **Residual:** instructional; no daemon auto-spawn unless later enforced.
 
@@ -360,9 +360,9 @@ thrash when empty; stay interruptible.
 
 - **Kick while ready:** unblocked ready leaves (not design-gated /
   needs-owner / design-discussion / parked-for-design / blocked /
-  already-engaged / host-saturated 🎯T460) ⇒ continue spawn/brief
+  already-engaged) ⇒ continue spawn/brief
   until empty or blocked — not a one-shot pass that strands work.
-  Complements 🎯T155. Host saturation is blocked: wait it out.
+  Complements 🎯T155. Load-average is not a sleep gate (🎯T566.1).
 - **Sleep when empty:** empty frontier, or only gated/blocked/parked/
   already-engaged leaves ⇒ sleep/idle without perpetual create thrash or
   zombie open-mission re-spawn noise (compose 🎯T244).

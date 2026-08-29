@@ -59,20 +59,20 @@ func TestT463HostSaturationDefersBackground(t *testing.T) {
 	if a.Pressure == PressureNormal {
 		t.Fatalf("melted host assessed as pressure normal: %+v", a)
 	}
-	if a.LoadHeadroom > 0 {
-		t.Errorf("load headroom %v, want <= 0 at load %.0f on %d cores", a.LoadHeadroom, meltedLoad1, meltedCores)
+	if a.MemoryHeadroom > 0 {
+		t.Errorf("memory headroom %v, want <= 0 (swap grind, 🎯T566.2)", a.MemoryHeadroom)
 	}
 	if a.HostHeadroom > 0 {
 		t.Errorf("host headroom %v, want <= 0", a.HostHeadroom)
 	}
 	var named bool
 	for _, r := range a.Reasons {
-		if strings.Contains(r, "host load average") {
+		if strings.Contains(r, "memory grind") || strings.Contains(r, "swap") {
 			named = true
 		}
 	}
 	if !named {
-		t.Errorf("no reason names the host reading: %q", a.Reasons)
+		t.Errorf("no reason names the memory-grind reading: %q", a.Reasons)
 	}
 
 	// A background class asking for a cycle is deferred, and the machine token

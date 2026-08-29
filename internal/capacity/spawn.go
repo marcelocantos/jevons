@@ -46,11 +46,11 @@ func ClassifySpawnKind(purpose, name string) SpawnKind {
 }
 
 // BlocksUnattendedSpawn reports whether T155 / T193 / T325.1 must stop
-// kicking. Critical host pressure is a blocking condition: "frontier is
-// not empty" does not mean keep spawning on a host that cannot run what
-// is already spawned (🎯T460 §3).
+// kicking. Memory grind and seat-count runaway are the halt signals;
+// load-average is not (🎯T566.1 / T566.2). T36 spawn-halt is checked
+// separately in AdmitSpawn.
 func BlocksUnattendedSpawn(a Assessment) bool {
-	return a.Pressure == PressureCritical
+	return memoryGrindBlocks(a) || seatCountBlocks(a)
 }
 
 // AdmitSpawn decides whether jevons_agent_start may mint a new process
@@ -80,9 +80,14 @@ func AdmitSpawn(kind SpawnKind, snap Snapshot, pol *Policy) Decision {
 		return d
 	default:
 		d.Class = ClassBuildMission
-		if BlocksUnattendedSpawn(a) {
-			d.Verdict, d.Reason = VerdictDefer, deferReason(a, ReasonHostSaturated)
-			d.Detail = "host pressure critical; refusing a new worker pane (🎯T460): " + joinReasons(a.Reasons)
+		if memoryGrindBlocks(a) {
+			d.Verdict, d.Reason = VerdictDefer, ReasonMemoryGrind
+			d.Detail = "memory grind; refusing a new worker pane (🎯T566.2): " + joinReasons(a.Reasons)
+			return d
+		}
+		if seatCountBlocks(a) {
+			d.Verdict, d.Reason = VerdictDefer, ReasonSeatCount
+			d.Detail = "seat-count runaway; refusing a new worker pane (🎯T566.2): " + joinReasons(a.Reasons)
 			return d
 		}
 		if snap.SpawnHalted {

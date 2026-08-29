@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/keepgoing"
 	"github.com/marcelocantos/jevons/internal/poproactive"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -49,6 +50,29 @@ func TestSweepFrontierConsumeSpawnsReadyLeaf(t *testing.T) {
 	}
 	if gotLeaf != "T500" || gotWorker != "jv-t500-auto" || r.Worker != gotWorker {
 		t.Fatalf("spawned leaf=%q worker=%q rep=%q", gotLeaf, gotWorker, r.Worker)
+	}
+}
+
+func TestT566_3SweepRemintsStoppedSeatBeforeNewSpawn(t *testing.T) {
+	var got []string
+	reps := SweepFrontierConsume(FrontierConsumeArgs{
+		Leaves: []poproactive.LeafObs{
+			{ID: "T2", Name: "Unengaged new leaf"},
+			{ID: "T1", Name: "Stopped implementer leaf"},
+		},
+		Seats: []keepgoing.Seat{
+			{Name: "jv-t1-auto", TargetID: "T1", Running: false},
+		},
+		Now:               frontierNow(),
+		PORegistered:      true,
+		MaxSpawnsPerCycle: 1,
+		Spawn: func(_ poproactive.LeafObs, workerName string) error {
+			got = append(got, workerName)
+			return nil
+		},
+	})
+	if len(got) != 1 || got[0] != "jv-t1-auto" {
+		t.Fatalf("want remint jv-t1-auto first, got %v reps=%+v", got, reps)
 	}
 }
 

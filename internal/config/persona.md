@@ -159,12 +159,11 @@ responsible **PO spawns a named worker** under **`parent=jevons-po`** in the
 - **Skip (file without spawn):** design-gated (e.g. OAuth app pins, 🎯T112 /
   🎯T67 / 🎯T29-class), blocked-on-human / needs-owner / parked-for-design,
   pure documentation / docs-only leaves until unblocked or owner opens design,
-  and **host saturation** (🎯T460): when `jevons_plan_usage` shows a
-  provider exhausted (429 / 0% weekly), do not start new work on that
-  backend. When `jevons_capacity_status` reports
-  pressure critical (or `jevons_agent_start` refuses with `host_saturated`),
-  do not spawn — "frontier is not empty" does not mean keep spawning on a
-  host that cannot run what is already spawned.
+  and **memory grind / seat-count** (🎯T566): when `jevons_capacity_status`
+  reports memory_grind or seat_count (or `jevons_agent_start` refuses with
+  those reasons), do not mint a new pane — remint existing seats first.
+  Load-average is not a file→spawn skip. A provider exhausted on
+  `jevons_plan_usage` (429 / 0% weekly) still skips that backend.
 - **Residual:** instructional doctrine + brief inject; no daemon auto-spawn
   gate unless a later target adds enforcement.
 
@@ -446,9 +445,11 @@ frontier review.
 - **Skip (stay unspawned):** design-gated leaves (🎯T112 / 🎯T67 / 🎯T29-class),
   blocked targets, anything tagged or contextualized as needs-owner /
   design-discussion / parked-for-design — until unblocked or the owner
-  opens design — and **host saturation** (🎯T460): pressure critical is a
-  blocking condition; do not keep kicking while the host cannot run what
-  is already spawned.
+  opens design. Load-average is not a sleep or spawn-stop (🎯T566.1).
+  Halt signals are **memory grind** and **seat-count runaway** (🎯T566.2):
+  do not keep kicking while swap/RAM occupancy risks the kernel or live
+  seats are a fork-bomb. Reanimate stopped implementers before a new pane
+  (🎯T566.3).
 - **Related:** 🎯T193 file→spawn same turn (owner-filed and mid-session
   Build filings — not ledger-only).
 - **Residual:** instructional doctrine + brief inject; no daemon auto-spawn
@@ -461,12 +462,14 @@ ready work, then **sleep** when it does not — without open-mission thrash.
 
 - **Kick while ready:** when the product-scoped frontier has unblocked
   ready leaves (not design-gated / needs-owner / design-discussion /
-  parked-for-design / blocked / already-engaged / host-saturated 🎯T460),
+  parked-for-design / blocked / already-engaged),
   the PO continues spawn/brief until empty or blocked — **not** a single
   one-shot pass that leaves work stranded. Complements 🎯T155 continuous
-  kick-off. Host saturation is blocked, same as a design gate: wait it out.
+  kick-off. Load-average is not a sleep gate (🎯T566.1). Memory grind and
+  seat-count runaway halt new panes; remint stopped seats first (🎯T566.3).
 - **Sleep when empty:** when the frontier is empty, or only gated /
-  blocked / parked / already-engaged leaves remain, the PO enters
+  blocked / parked / already-engaged leaves remain (load-average does
+  not count as empty), the PO enters
   sleep/idle without perpetual create thrash or zombie open-mission
   heuristics that re-spawn noise (compose 🎯T244 unbound PO + zero work
   children = not open mission).

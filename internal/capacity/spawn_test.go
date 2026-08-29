@@ -3,7 +3,10 @@
 
 package capacity
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // 🎯T460 §4: the 2026-08-15 numbers classify critical and refuse a heavy
 // spawn; the idle-host control admits. An over-broad fix that refuses
@@ -13,8 +16,8 @@ func TestT460MeltedHostRefusesWorkerSpawn(t *testing.T) {
 	if d.Admitted() {
 		t.Fatalf("worker spawn admitted on melted host: %+v", d)
 	}
-	if d.Reason != ReasonHostSaturated {
-		t.Errorf("reason %q, want %q", d.Reason, ReasonHostSaturated)
+	if d.Reason != ReasonMemoryGrind {
+		t.Errorf("reason %q, want %q", d.Reason, ReasonMemoryGrind)
 	}
 	a := Assess(meltedHost(), DefaultPolicy())
 	if a.Pressure != PressureCritical {
@@ -102,5 +105,100 @@ func TestT460GovernorUsesLiveSnapshot(t *testing.T) {
 	g = NewGovernor(GovernorArgs{Snapshot: idleHost})
 	if d := g.AdmitSpawn(SpawnWorker, "jv-heavy"); !d.Admitted() {
 		t.Fatalf("governor refused worker on idle snapshot: %+v", d)
+	}
+}
+
+// 🎯T566.1: the 2026-08-15 load (247–304 on 16 cores) with comfortable
+// RAM/swap and a legal seat count admits a worker. Load is not a Build-stop.
+func TestT566_1HighLoadComfortableMemoryAdmitsWorker(t *testing.T) {
+	for _, load := range []float64{247, 304} {
+		snap := Snapshot{
+			HostLoad1:          load,
+			HostCores:          meltedCores,
+			HostSwapUsedBytes:  idleSwapUsed,
+			HostSwapTotalBytes: meltedSwapTotal,
+			ActiveSessions:     3,
+			MaxSessions:        48,
+		}
+		d := AdmitSpawn(SpawnWorker, snap, DefaultPolicy())
+		if !d.Admitted() {
+			t.Fatalf("load %.0f refused a worker: %+v", load, d)
+		}
+		a := Assess(snap, DefaultPolicy())
+		if BlocksUnattendedSpawn(a) {
+			t.Fatalf("load %.0f blocked unattended spawn: %+v", load, a)
+		}
+		if MemoryGrindBlocks(a) || SeatCountBlocks(a) {
+			t.Fatalf("load %.0f fired a halt signal: memory=%v seats=%v", load, a.MemoryHeadroom, a.SeatHeadroom)
+		}
+	}
+}
+
+func TestT566_2HighLoadFiresNeitherHaltSignal(t *testing.T) {
+	snap := Snapshot{
+		HostLoad1:          304,
+		HostCores:          meltedCores,
+		HostSwapUsedBytes:  idleSwapUsed,
+		HostSwapTotalBytes: meltedSwapTotal,
+		ActiveSessions:     2,
+		MaxSessions:        24,
+	}
+	a := Assess(snap, DefaultPolicy())
+	if MemoryGrindBlocks(a) {
+		t.Fatalf("high load fired memory grind: %+v", a)
+	}
+	if SeatCountBlocks(a) {
+		t.Fatalf("high load fired seat-count: %+v", a)
+	}
+	if d := Admit(Request{Class: ClassResearch, Degradable: true}, snap, DefaultPolicy()); d.Verdict != VerdictDefer {
+		t.Fatalf("ambient should still glance at load, got %+v", d)
+	}
+	if d := Admit(Request{Class: ClassResearch, Degradable: true}, snap, DefaultPolicy()); d.Reason != ReasonAmbientLoad {
+		t.Fatalf("ambient reason %q, want %q", d.Reason, ReasonAmbientLoad)
+	}
+}
+
+func TestT566_2MemoryGrindAndSeatCountAreSeparate(t *testing.T) {
+	mem := Snapshot{
+		HostLoad1:          6.5,
+		HostCores:          meltedCores,
+		HostSwapUsedBytes:  meltedSwapUsed,
+		HostSwapTotalBytes: meltedSwapTotal,
+	}
+	a := Assess(mem, DefaultPolicy())
+	if !MemoryGrindBlocks(a) {
+		t.Fatalf("swap-critical must be memory grind: %+v", a)
+	}
+	if SeatCountBlocks(a) {
+		t.Fatalf("swap-critical must not be seat-count: %+v", a)
+	}
+	if d := AdmitSpawn(SpawnWorker, mem, DefaultPolicy()); d.Admitted() || d.Reason != ReasonMemoryGrind {
+		t.Fatalf("memory grind spawn: %+v", d)
+	}
+	var namedMem bool
+	for _, r := range a.Reasons {
+		if strings.Contains(r, "memory grind") {
+			namedMem = true
+		}
+	}
+	if !namedMem {
+		t.Fatalf("memory grind reason missing: %q", a.Reasons)
+	}
+
+	seats := Snapshot{
+		HostLoad1:      6.5,
+		HostCores:      meltedCores,
+		ActiveSessions: 48,
+		MaxSessions:    48,
+	}
+	a = Assess(seats, DefaultPolicy())
+	if MemoryGrindBlocks(a) {
+		t.Fatalf("full seats must not be memory grind: %+v", a)
+	}
+	if !SeatCountBlocks(a) {
+		t.Fatalf("full seats must be seat-count: %+v", a)
+	}
+	if d := AdmitSpawn(SpawnWorker, seats, DefaultPolicy()); d.Admitted() || d.Reason != ReasonSeatCount {
+		t.Fatalf("seat-count spawn: %+v", d)
 	}
 }

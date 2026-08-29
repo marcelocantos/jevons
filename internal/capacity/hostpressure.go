@@ -93,38 +93,65 @@ func inferredFloor(h float64, pol *Policy) float64 {
 	return max(h, floor)
 }
 
-// hostHeadroom is the fraction of host capacity left, and the sentence
-// explaining the reading. It returns unknownHeadroom when the snapshot carries
-// no host reading at all — unknown and fine are different statements, and
-// rendering the first as the second is the whole failure being fixed here.
-func hostHeadroom(snap Snapshot, pol *Policy) (float64, string) {
-	h, reason := unknownHeadroom, ""
-
-	if snap.HostLoad1 > 0 && snap.HostCores > 0 {
-		limit := pol.LoadPerCoreCritical
-		if limit <= 0 {
-			limit = DefaultLoadPerCoreCritical
-		}
-		perCore := snap.HostLoad1 / float64(snap.HostCores)
-		h = clampFraction(1 - perCore/limit)
-		reason = fmt.Sprintf("host load average %.1f on %d cores is %.1f× per core (critical at %.1f×) (🎯T463)",
-			snap.HostLoad1, snap.HostCores, perCore, limit)
+// memoryGrindHeadroom is swap occupancy that risks the kernel paging or
+// killing the fleet (🎯T566.2). Load-average is not this signal.
+func memoryGrindHeadroom(snap Snapshot, pol *Policy) (float64, string) {
+	if snap.HostSwapTotalBytes <= 0 {
+		return unknownHeadroom, ""
 	}
-
-	if snap.HostSwapTotalBytes > 0 {
-		limit := pol.SwapCriticalFraction
-		if limit <= 0 {
-			limit = DefaultSwapCriticalFraction
-		}
-		used := float64(snap.HostSwapUsedBytes) / float64(snap.HostSwapTotalBytes)
-		swap := clampFraction((limit - used) / limit)
-		if h == unknownHeadroom || swap < h {
-			h = swap
-			reason = fmt.Sprintf("host swap %.1f%% occupied (%.1fG of %.1fG, critical at %.0f%%) (🎯T463)",
-				used*100, gib(snap.HostSwapUsedBytes), gib(snap.HostSwapTotalBytes), limit*100)
-		}
+	limit := pol.SwapCriticalFraction
+	if limit <= 0 {
+		limit = DefaultSwapCriticalFraction
 	}
+	used := float64(snap.HostSwapUsedBytes) / float64(snap.HostSwapTotalBytes)
+	h := clampFraction((limit - used) / limit)
+	reason := fmt.Sprintf("memory grind: host swap %.1f%% occupied (%.1fG of %.1fG, critical at %.0f%%) (🎯T566.2)",
+		used*100, gib(snap.HostSwapUsedBytes), gib(snap.HostSwapTotalBytes), limit*100)
 	return h, reason
+}
+
+// loadAverageHeadroom is run-queue length per core. Ambient may glance;
+// AdmitSpawn must not (🎯T566.1).
+func loadAverageHeadroom(snap Snapshot, pol *Policy) (float64, string) {
+	if snap.HostLoad1 <= 0 || snap.HostCores <= 0 {
+		return unknownHeadroom, ""
+	}
+	limit := pol.LoadPerCoreCritical
+	if limit <= 0 {
+		limit = DefaultLoadPerCoreCritical
+	}
+	perCore := snap.HostLoad1 / float64(snap.HostCores)
+	h := clampFraction(1 - perCore/limit)
+	reason := fmt.Sprintf("host load average %.1f on %d cores is %.1f per core (ambient glance; not a Build-stop) (T566.1)",
+		snap.HostLoad1, snap.HostCores, perCore)
+	return h, reason
+}
+
+// hostHeadroom is the memory-grind reading (swap). Load-average used to
+// fold in here; that made high load look like a melted host (🎯T566.1).
+func hostHeadroom(snap Snapshot, pol *Policy) (float64, string) {
+	return memoryGrindHeadroom(snap, pol)
+}
+
+// MemoryGrindBlocks reports the T566.2 memory-grind halt.
+func MemoryGrindBlocks(a Assessment) bool { return memoryGrindBlocks(a) }
+
+func memoryGrindBlocks(a Assessment) bool {
+	return a.MemoryHeadroom != unknownHeadroom && a.MemoryHeadroom <= 0
+}
+
+// SeatCountBlocks reports the T566.2 seat-count / fork-bomb halt.
+func SeatCountBlocks(a Assessment) bool { return seatCountBlocks(a) }
+
+func seatCountBlocks(a Assessment) bool {
+	return a.SeatHeadroom != unknownHeadroom && a.SeatHeadroom <= 0
+}
+
+func seatCountReason(snap Snapshot, a Assessment) string {
+	if snap.MaxSessions > 0 {
+		return fmt.Sprintf("seat-count runaway: %d live sessions of %d (🎯T566.2)", snap.ActiveSessions, snap.MaxSessions)
+	}
+	return fmt.Sprintf("seat-count runaway: provider or session cap exhausted (headroom %.0f%%) (🎯T566.2)", a.SeatHeadroom*100)
 }
 
 // hostBound reports whether the host is the dimension that decided the

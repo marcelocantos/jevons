@@ -126,11 +126,18 @@ type Assessment struct {
 	CostHeadroom  float64 `json:"cost_headroom"`
 	TokenHeadroom float64 `json:"token_headroom"`
 	LoadHeadroom  float64 `json:"load_headroom"`
-	// HostHeadroom is what the host itself has left — run-queue length per
-	// core and swap occupancy (🎯T463) — or -1 when nothing read it. It is
-	// folded into LoadHeadroom rather than kept beside it, because "load" is
-	// the dimension a saturated host saturates; reported separately so a
-	// pinned host can be told apart from a pinned provider cap.
+	// SeatHeadroom is live registered+process seats vs the session/provider
+	// bound (🎯T566.2). Same number as LoadHeadroom: that field stayed the
+	// seat dimension; the name is the owner-facing halt signal.
+	SeatHeadroom float64 `json:"seat_headroom"`
+	// MemoryHeadroom is RAM/swap occupancy that risks kernel paging/killing
+	// (🎯T566.2). Swap is the shipped reading (🎯T463); unread is unknown.
+	MemoryHeadroom float64 `json:"memory_headroom"`
+	// LoadAverageHeadroom is run-queue length per core. Ambient may glance
+	// at it; it is not a Build-stop or PO-sleep signal (🎯T566.1).
+	LoadAverageHeadroom float64 `json:"load_average_headroom"`
+	// HostHeadroom is memory grind (swap), not load-average. Kept so a
+	// pinned host can be told apart from a pinned provider cap (🎯T463/T566).
 	HostHeadroom float64 `json:"host_headroom"`
 	// PlanHeadroom is the fraction of the tightest subscription plan window
 	// still available on a backend the fleet is running on (🎯T390).
@@ -177,9 +184,12 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 	a := Assessment{
 		CostHeadroom:  unknownHeadroom,
 		TokenHeadroom: unknownHeadroom,
-		LoadHeadroom:  unknownHeadroom,
-		HostHeadroom:  unknownHeadroom,
-		PlanHeadroom:  unknownHeadroom,
+		LoadHeadroom:        unknownHeadroom,
+		SeatHeadroom:        unknownHeadroom,
+		MemoryHeadroom:      unknownHeadroom,
+		LoadAverageHeadroom: unknownHeadroom,
+		HostHeadroom:        unknownHeadroom,
+		PlanHeadroom:        unknownHeadroom,
 		Headroom:      1,
 	}
 
@@ -220,15 +230,18 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 		}
 	}
 
-	// The host is a load dimension too, and the one that actually runs out
-	// first under fan-out (🎯T463): fold it into load headroom so the 🎯T359
-	// ladder decides, and keep the separate figure for tracing.
-	hostH, hostReason := hostHeadroom(snap, pol)
-	if hostH != unknownHeadroom {
-		a.HostHeadroom = hostH
-		if a.LoadHeadroom == unknownHeadroom || hostH < a.LoadHeadroom {
-			a.LoadHeadroom = hostH
-		}
+	// Seats (sessions + provider caps) stay LoadHeadroom. Memory grind is
+	// its own halt signal; load-average is informational for ambient only
+	// (🎯T566.1 / T566.2). Do not fold load-average into Headroom.
+	a.SeatHeadroom = a.LoadHeadroom
+	memH, memReason := memoryGrindHeadroom(snap, pol)
+	if memH != unknownHeadroom {
+		a.MemoryHeadroom = memH
+		a.HostHeadroom = memH
+	}
+	loadAvgH, loadAvgReason := loadAverageHeadroom(snap, pol)
+	if loadAvgH != unknownHeadroom {
+		a.LoadAverageHeadroom = loadAvgH
 	}
 
 	// Subscription plan remaining (🎯T390). Unlike USD it is published by the
@@ -239,7 +252,7 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 	}
 
 	known := false
-	for _, h := range []float64{a.CostHeadroom, a.TokenHeadroom, a.LoadHeadroom, a.PlanHeadroom} {
+	for _, h := range []float64{a.CostHeadroom, a.TokenHeadroom, a.LoadHeadroom, a.PlanHeadroom, a.MemoryHeadroom} {
 		if h == unknownHeadroom {
 			continue
 		}
@@ -270,11 +283,18 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 		a.Reasons = append(a.Reasons, fmt.Sprintf("headroom %.0f%% is below the %.0f%% degrade line",
 			a.Headroom*100, pol.DegradeFraction*100))
 	}
-	// Name the host reading when it is what bound, so a deferral says "load
-	// average 247 on 16 cores" rather than a bare percentage that reads like a
-	// budget figure (🎯T463).
-	if a.Pressure > PressureNormal && hostBound(a) && hostReason != "" {
-		a.Reasons = append(a.Reasons, hostReason)
+	// Name the halt signal that bound: memory grind or seat-count, never
+	// load-average as a Build-stop (🎯T566.2).
+	if a.Pressure > PressureNormal && memoryGrindBlocks(a) && memReason != "" {
+		a.Reasons = append(a.Reasons, memReason)
+	}
+	if a.Pressure > PressureNormal && seatCountBlocks(a) {
+		a.Reasons = append(a.Reasons, seatCountReason(snap, a))
+	}
+	// Ambient glance: name load-average without making it a halt reason.
+	if loadAvgReason != "" && a.LoadAverageHeadroom != unknownHeadroom &&
+		a.LoadAverageHeadroom < pol.DegradeFraction {
+		a.Reasons = append(a.Reasons, loadAvgReason)
 	}
 	// Name the plan window when it is what bound, so the owner reads "claude
 	// session is down to 12%" rather than a bare percentage he cannot trace.
@@ -400,6 +420,15 @@ func decide(req Request, snap Snapshot, pol *Policy, a Assessment,
 		if !loadBearing {
 			d.Verdict, d.Reason = VerdictDefer, deferReason(a, ReasonTightLoadBearing)
 			d.Detail = "capacity tight: " + joinReasons(a.Reasons) + "; load-bearing background only"
+			return d
+		}
+	}
+
+	// 🎯T566.1: load-average may still defer ambient; it never refuses Build.
+	if req.Class.Background() && !loadBearing && a.LoadAverageHeadroom != unknownHeadroom {
+		if a.LoadAverageHeadroom <= 0 || a.LoadAverageHeadroom < pol.OwnerReserveFraction {
+			d.Verdict, d.Reason = VerdictDefer, ReasonAmbientLoad
+			d.Detail = "ambient glance: load-average is high; Build spawn is not blocked (🎯T566.1)"
 			return d
 		}
 	}
