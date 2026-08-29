@@ -14,6 +14,7 @@ export function AgentInteraction(props: {
   name: string;
   title?: string;
   density?: Density;
+  paneActive?: boolean;
   onMeta?: (meta: ConversationMeta | null) => void;
 }) {
   const density = normalizeDensity(props.density);
@@ -31,7 +32,9 @@ export function AgentInteraction(props: {
     <div
       id={comfortable ? 'chat-pane' : 'agent-inspect'}
       className={
-        (comfortable ? 'conversation-widget density-' + density : 'rhs-tab-pane conversation-widget density-' + density)
+        comfortable
+          ? 'conversation-widget density-' + density
+          : 'rhs-tab-pane conversation-widget density-' + density + (props.paneActive ? ' active' : '')
       }
       data-density={density}
       data-agent-id={props.name}

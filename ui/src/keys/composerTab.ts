@@ -28,6 +28,29 @@ export function isComposerTabChord(
   return !(mods.metaKey || mods.ctrlKey || mods.altKey);
 }
 
+/**
+ * True when the sidebar Transcript composer is a real Tab-cycle stop.
+ * A `.rhs-tab-pane` without `.active` is `display:none` — focusing it
+ * steals the caret from the visible main box (T549 / T571).
+ */
+export function isSidebarComposerFocusable(
+  root: Pick<ParentNode, 'querySelector'> | null | undefined,
+): boolean {
+  if (!root || typeof root.querySelector !== 'function') return false;
+  const side = root.querySelector('textarea[data-composer="sidebar"]');
+  if (!(side instanceof HTMLTextAreaElement)) return false;
+  if (side.disabled || side.hidden) return false;
+  const pane = side.closest('#agent-inspect, .rhs-tab-pane');
+  if (!pane || (pane instanceof HTMLElement && pane.hidden)) return false;
+  if (!pane.classList.contains('active')) return false;
+  const wrap = side.closest('#agent-inspect-composer');
+  if (wrap) {
+    if (wrap instanceof HTMLElement && wrap.hidden) return false;
+    if (!wrap.classList.contains('visible')) return false;
+  }
+  return true;
+}
+
 export function planComposerTabCycle(
   ev: { key: string; metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; code?: string },
   ctx: {

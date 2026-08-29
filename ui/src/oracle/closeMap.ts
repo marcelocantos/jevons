@@ -251,6 +251,7 @@ export const CLOSE: readonly CloseAssignment[] = [
   { id: 'T507', pocket: 'fleet', kind: 'hermetic', reason: 'passing hermetic itOracle in family file' },
   { id: 'T508', pocket: 'fleet', kind: 'hermetic', reason: 'passing hermetic itOracle in family file' },
   { id: 'T549', pocket: 'composer', kind: 'hermetic', reason: 'passing hermetic itOracle in family file' },
+  { id: 'T571', pocket: 'composer', kind: 'hermetic', reason: 'passing hermetic itOracle in family file' },
   { id: 'T513', pocket: 'transcript', kind: 'skip', reason: 'mention-only covers-list — classified to transcript pocket; J22 live fail does not name this id yet' },
 ];
 

@@ -38,6 +38,7 @@ import { mergeAgentChrome } from './plan/modelPrefix';
 import { planTargetAskFocus } from './frontier/targetAsk';
 import { TargetAskContext, type TargetAskHost } from './frontier/targetAskContext';
 import { useCockpitKeys } from './keys/useCockpitKeys';
+import { focusMainComposer } from './keys/composerFocus';
 import {
   pixelFixtureActive,
   pixelFixtureAgents,
@@ -89,7 +90,7 @@ declare module '@tanstack/react-router' {
 function Cockpit() {
   const mux = getMux();
   const { agent, tab } = indexRoute.useSearch();
-  useCockpitKeys({ sidebarComposerVisible: tab === 'transcript' && agent !== 'jevons' });
+  useCockpitKeys();
   const navigate = useNavigate({ from: indexRoute.fullPath });
   const lastAgentsRef = useRef<AgentRow[]>([]);
   const [degraded, setDegraded] = useState('');
@@ -112,6 +113,7 @@ function Cockpit() {
       }
       lastAgentsRef.current = lastAgentsRef.current.filter((a) => a.name !== name);
       await queryClient.invalidateQueries({ queryKey: ['agents'] });
+      focusMainComposer();
     },
     [queryClient],
   );
@@ -350,7 +352,10 @@ function Cockpit() {
             <SidebarPanel
               tab={tab}
               readyCount={fixture ? PIXEL_FIXTURE_READY : frontierRows.length}
-              onTab={(next) => navigate({ search: { agent, tab: next } })}
+              onTab={(next) => {
+                navigate({ search: { agent, tab: next } });
+                queueMicrotask(() => focusMainComposer());
+              }}
               onGraph={() => {
                 setGraphOpen(true);
                 setGraphNonce((n) => n + 1);
@@ -359,7 +364,10 @@ function Cockpit() {
                 agent === 'jevons' ? (
                   <div
                     id="agent-inspect"
-                    className="rhs-tab-pane conversation-widget density-compact"
+                    className={
+                      'rhs-tab-pane conversation-widget density-compact' +
+                      (tab === 'transcript' ? ' active' : '')
+                    }
                     data-density="compact"
                     data-agent-id="jevons"
                   >
@@ -372,7 +380,13 @@ function Cockpit() {
                     <p className="ai-empty">Root transcript is the main pane.</p>
                   </div>
                 ) : (
-                  <AgentInteraction mux={mux} name={agent} title={agent} density="compact" />
+                  <AgentInteraction
+                    mux={mux}
+                    name={agent}
+                    title={agent}
+                    density="compact"
+                    paneActive={tab === 'transcript'}
+                  />
                 )
               }
             >

@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useState } from 'react';
+import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useRef, useState } from 'react';
 import { useDrafts } from '../store/drafts';
 import { normalizeDensity, type Density } from '../density';
 import {
@@ -25,6 +25,7 @@ export function UserRequest(props: {
   const raw = useDrafts((s) => s.drafts[props.name] || '');
   const setDraft = useDrafts((s) => s.setDraft);
   const [pending, setPending] = useState<PendingImage[]>([]);
+  const boxRef = useRef<HTMLTextAreaElement>(null);
   const canSend = raw.trim().length > 0 || pending.length > 0;
 
   useEffect(() => {
@@ -45,6 +46,8 @@ export function UserRequest(props: {
     // 🎯T545.3: keep the sent text until the transcript echoes a user row.
     // Failed send leaves composer + Send enabled for retry.
     if (payload !== raw) setDraft(props.name, payload);
+    // 🎯T153: send returns focus so the next Tab stays on the box (T571).
+    queueMicrotask(() => boxRef.current?.focus());
   };
 
   const attachFromTransfer = (data: ClipboardLike | null | undefined): boolean => {
@@ -103,7 +106,8 @@ export function UserRequest(props: {
       )}
       <textarea
         id={boxId}
-        data-composer={props.name === 'jevons' ? 'main' : 'sidebar'}
+        ref={boxRef}
+        data-composer={compact ? 'sidebar' : 'main'}
         value={raw}
         onChange={(e) => setDraft(props.name, e.target.value)}
         placeholder={compact ? 'Message this agent…' : 'Message...'}
@@ -130,6 +134,7 @@ export function UserRequest(props: {
         id={sendId}
         type="button"
         disabled={props.disabled === true ? true : props.disabled === false ? false : !canSend}
+        onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => submit(e as unknown as FormEvent)}
       >
         Send

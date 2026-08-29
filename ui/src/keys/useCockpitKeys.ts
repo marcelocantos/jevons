@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect } from 'react';
-import { planComposerTabCycle } from './composerTab';
+import { tryFocusComposer } from './composerFocus';
+import { isSidebarComposerFocusable, planComposerTabCycle } from './composerTab';
 import { applyTranscriptPageKey } from './pageScroll';
 
 function composerKind(el: Element | null): 'main' | 'sidebar' | 'other' {
@@ -14,13 +15,13 @@ function composerKind(el: Element | null): 'main' | 'sidebar' | 'other' {
   return 'other';
 }
 
-export function useCockpitKeys(opts: { sidebarComposerVisible: boolean }): void {
+export function useCockpitKeys(): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const active = composerKind(document.activeElement);
       const plan = planComposerTabCycle(e, {
         active,
-        sidebarVisible: opts.sidebarComposerVisible,
+        sidebarVisible: isSidebarComposerFocusable(document),
       });
       if (plan.preventDefault && plan.target) {
         e.preventDefault();
@@ -31,10 +32,17 @@ export function useCockpitKeys(opts: { sidebarComposerVisible: boolean }): void 
         if (next instanceof HTMLElement) next.focus();
         return;
       }
+      const main = document.querySelector('textarea[data-composer="main"]');
+      const slash = tryFocusComposer(e, main instanceof HTMLElement ? main : null, document.activeElement);
+      if (slash.didFocus) {
+        e.preventDefault();
+        return;
+      }
       if (e.key !== 'PageUp' && e.key !== 'PageDown') return;
       if (applyTranscriptPageKey(e.key, document.activeElement)) e.preventDefault();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [opts.sidebarComposerVisible]);
+    // Capture so Tab is claimed before document-order chrome (T549 / T571).
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
 }

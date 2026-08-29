@@ -68,7 +68,7 @@ describeOracle(family('aside-sidebar'), () => {
   });
 
   itOracle('T371', 'aside and main composers share one send/display path', () => {
-    expect(userReq).toMatch(/data-composer=\{props\.name === 'jevons' \? 'main' : 'sidebar'\}/);
+    expect(userReq).toMatch(/data-composer=\{compact \? 'sidebar' : 'main'\}/);
     expect((app.match(/<AgentInteraction\b/g) || []).length).toBeGreaterThanOrEqual(2);
   });
 

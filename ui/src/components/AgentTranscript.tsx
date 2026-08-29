@@ -27,6 +27,7 @@ import { StreamingMarkdownBody } from '../conversation/StreamingMarkdownBody';
 import { relTime } from '../relTime';
 import { absTimeTitle } from '../absTime';
 import { normalizeDensity, type Density } from '../density';
+import { focusMainComposer } from '../keys/composerFocus';
 import { COMFORTABLE_ROW_GAP_PX, DEFAULT_ROW_GAP_PX, measureTranscriptRow } from '../transcript/rowLayout';
 import {
   distanceFromEnd,
@@ -518,6 +519,7 @@ export function ClippedBubble(props: {
           aria-expanded={expanded}
           aria-label={expanded ? 'Collapse' : 'Expand'}
           title={expanded ? 'Collapse' : 'Expand'}
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
             userToggledRef.current = true;
             setUserToggled(true);
@@ -527,6 +529,7 @@ export function ClippedBubble(props: {
               persistClip({ expanded: next, userToggled: true, autoExpanded: false });
               return next;
             });
+            focusMainComposer();
           }}
         >
           <span className="chev" aria-hidden="true">

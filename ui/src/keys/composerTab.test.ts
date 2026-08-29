@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { planComposerTabCycle } from './composerTab';
+import { isSidebarComposerFocusable, planComposerTabCycle } from './composerTab';
 
 describe('planComposerTabCycle', () => {
   it('Tab from main goes to sidebar when visible', () => {
@@ -27,5 +27,15 @@ describe('planComposerTabCycle', () => {
     expect(p.preventDefault).toBe(true);
     expect(p.target).toBe('main');
     expect(p.reason).toBe('stay-main');
+  });
+
+  it('sidebar composer is not a cycle stop when the inspect pane lacks .active (T571)', () => {
+    document.body.innerHTML =
+      '<div id="agent-inspect" class="rhs-tab-pane">' +
+      '<textarea data-composer="sidebar" id="agent-inspect-input"></textarea></div>';
+    expect(isSidebarComposerFocusable(document)).toBe(false);
+    document.getElementById('agent-inspect')!.classList.add('active');
+    expect(isSidebarComposerFocusable(document)).toBe(true);
+    document.body.innerHTML = '';
   });
 });

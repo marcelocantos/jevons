@@ -10,7 +10,10 @@ import { UserRequest } from '../../components/UserRequest';
 import { classifyEnterAction } from '../../keys/composerEnter';
 import { applyComposerHomeEnd, selectionAfterHomeEnd } from '../../keys/composerCaret';
 import { shouldFocusComposer } from '../../keys/composerFocus';
-import { planComposerTabCycle } from '../../keys/composerTab';
+import { isSidebarComposerFocusable, planComposerTabCycle } from '../../keys/composerTab';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { useDrafts } from '../../store/drafts';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
@@ -28,10 +31,36 @@ describeOracle(family('composer-keys'), () => {
     expect(toMain.preventDefault).toBe(true);
   });
 
-  itOracle('T153', 'Tab does not walk chrome when focus is not in a composer', () => {
-    const p = planComposerTabCycle({ key: 'Tab' }, { active: 'other', sidebarVisible: true });
-    expect(p.preventDefault).toBe(false);
-    expect(p.target).toBeNull();
+  itOracle('T153', 'Send returns focus to the composer so Tab stays locked on the box', () => {
+    const { container } = render(createElement(UserRequest, { name: 'jevons', onSend: () => {} }));
+    const box = container.querySelector('#input') as HTMLTextAreaElement;
+    const send = container.querySelector('#send') as HTMLButtonElement;
+    expect(box).toBeTruthy();
+    fireEvent.change(box, { target: { value: 'lock me' } });
+    box.focus();
+    fireEvent.mouseDown(send);
+    fireEvent.click(send);
+    expect(document.activeElement).toBe(box);
+  });
+
+  itOracle('T571', 'Tab stays on main unless the sidebar Transcript pane is actually on screen', () => {
+    const hidden = planComposerTabCycle({ key: 'Tab' }, { active: 'main', sidebarVisible: false });
+    expect(hidden).toEqual({ target: 'main', preventDefault: true, reason: 'stay-main' });
+    const shown = planComposerTabCycle({ key: 'Tab' }, { active: 'main', sidebarVisible: true });
+    expect(shown.target).toBe('sidebar');
+    expect(shown.preventDefault).toBe(true);
+    document.body.innerHTML =
+      '<div id="agent-inspect" class="rhs-tab-pane">' +
+      '<div id="agent-inspect-composer" class="visible">' +
+      '<textarea data-composer="sidebar"></textarea></div></div>';
+    expect(isSidebarComposerFocusable(document)).toBe(false);
+    document.getElementById('agent-inspect')!.classList.add('active');
+    expect(isSidebarComposerFocusable(document)).toBe(true);
+    document.body.innerHTML = '';
+    const here = dirname(fileURLToPath(import.meta.url));
+    const app = readFileSync(join(here, '../../App.tsx'), 'utf8');
+    expect(app).toMatch(/paneActive=\{tab === 'transcript'\}/);
+    expect(app).toMatch(/useCockpitKeys\(\)/);
   });
 
   itOracle('T549', 'Tab never advances to theme/send/voice/jump/resize when sidebar composer is hidden', () => {

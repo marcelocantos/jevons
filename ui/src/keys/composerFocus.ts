@@ -87,3 +87,17 @@ export function focusComposer(composerEl: { focus: () => void } | null): { didFo
   composerEl.focus();
   return { didFocus: true, reason: 'focused' };
 }
+
+/** T153: force the main request box after pointer chrome. */
+export function focusMainComposer(
+  root: Pick<ParentNode, 'querySelector'> | null | undefined = typeof document !== 'undefined' ? document : null,
+): { didFocus: boolean; reason: string } {
+  if (!root || typeof root.querySelector !== 'function') {
+    return { didFocus: false, reason: 'no-composer' };
+  }
+  const el = root.querySelector('textarea[data-composer="main"]');
+  if (!(el instanceof HTMLElement)) {
+    return { didFocus: false, reason: 'no-composer' };
+  }
+  return focusComposer(el);
+}
