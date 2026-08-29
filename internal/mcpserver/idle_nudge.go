@@ -422,6 +422,12 @@ type IdleActivity struct {
 	// Same-id heartbeats do not reset ToolCallSince.
 	ToolCallID    string
 	ToolCallSince time.Time
+	// RateLimitStrikes counts consecutive rate_limit terminal failures
+	// since this seat last produced a non-rate-limited terminal or had
+	// its model switched (🎯T585). A delivered re-brief does NOT reset it:
+	// delivering to an exhausted model is exactly the move that fails, so
+	// counting deliveries as progress would keep the seat looping forever.
+	RateLimitStrikes int
 }
 
 // IdleActivityTracker records ACP-derived phase for the idle-nudge sweep.
@@ -492,6 +498,7 @@ func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (
 		SubstantivePulse: prev.SubstantivePulse,
 		ToolCallID:       toolID,
 		ToolCallSince:    toolSince,
+		RateLimitStrikes: prev.RateLimitStrikes,
 	}
 	// Fresh working progress clears stale recover latch only when we see
 	// real tool/assistant activity after a prior recover cycle was delivered
@@ -1366,6 +1373,19 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 		OverseerName:    overseer,
 		StuckTimeout:    DefaultFleetStuckTimeout,
 		SessionReminted: s.bounceReminted,
+		// 🎯T585: an exhausted model is moved down its ladder rather than
+		// re-briefed forever. Asserted rather than added to Migrator so
+		// existing implementors (and test fakes) stay valid; a migrator
+		// that cannot pin reports that instead of silently doing nothing.
+		SwitchModel: func(name, model string) error {
+			pinner, ok := s.migrator.(interface {
+				PinModel(name, model string) error
+			})
+			if !ok || pinner == nil {
+				return fmt.Errorf("switch %q to %s: migrator cannot pin models", name, model)
+			}
+			return pinner.PinModel(name, model)
+		},
 		BriefPresent: func(name string) bool {
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -1391,6 +1411,7 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 				"kind":          string(r.Kind),
 				"interrupted":   r.Interrupted,
 				"post_restart":  postRestart,
+				"model":         r.Model,
 			})
 		} else if r.Error != "" {
 			s.logLifecycle(compFleetRecover, string(r.Action), "error", map[string]any{

@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/modelladder"
 )
 
 // 🎯T236: after provider outage or failed turns, re-pressure open-mission
@@ -59,7 +60,21 @@ const (
 	FleetRecoverUnstick FleetRecoverAction = "unstick" // interrupt + re-brief
 	FleetRecoverRebrief FleetRecoverAction = "rebrief" // deliver continue/brief only
 	FleetRecoverMaxed   FleetRecoverAction = "maxed"
+	// FleetRecoverFallback moves the seat to the next model on its
+	// provider's ladder. Re-pressure cannot answer an exhausted quota
+	// (🎯T585): the brief lands on a model with nothing left to spend, so
+	// rebrief loops until the ledger refills — hours, in the 2026-08-30
+	// case, with every cycle logged as a recovery that recovered nothing.
+	FleetRecoverFallback FleetRecoverAction = "fallback_model"
 )
+
+// FallbackAfterStrikes is how many consecutive rate_limit terminal
+// failures a seat takes before its model is swapped. Not zero: a 429 from
+// a busy backend is also ClassRateLimit and clears on its own, and
+// swapping a seat's model on one transient refusal would downgrade the
+// whole fleet during a blip. Not large either — each strike costs a
+// backoff interval of doing nothing.
+const FallbackAfterStrikes = 2
 
 // FleetRecoverObs is a pure snapshot — no I/O.
 type FleetRecoverObs struct {
@@ -101,6 +116,16 @@ type FleetRecoverObs struct {
 	// that keep SinceProgress fresh must not hide this.
 	SameToolID    string
 	SameToolSince time.Duration
+	// Model is the seat's currently pinned model ("" = provider default,
+	// which has no ladder position and so cannot fall back).
+	Model string
+	// RateLimitStrikes counts consecutive rate_limit terminal failures
+	// since this seat last delivered or changed model.
+	RateLimitStrikes int
+	// FallbackModel is the next rung from modelladder.Next for this
+	// seat's provider and model; "" when there is nowhere to fall back
+	// to, in which case the classifier must not pretend there is.
+	FallbackModel string
 }
 
 // ClassifyFleetRecover decides skip | unstick | rebrief | maxed for one agent.
@@ -178,6 +203,17 @@ func ClassifyFleetRecover(o FleetRecoverObs) (FleetRecoverAction, string) {
 		if o.TerminalEmpty {
 			return FleetRecoverRebrief, "terminal_empty"
 		}
+		// An exhausted quota is not a transient backend. Re-pressure is
+		// the right answer for a 429 and the wrong one for a weekly
+		// limit, and both arrive as ClassRateLimit — so try re-pressure
+		// first and swap the model once it has demonstrably not worked
+		// (🎯T585).
+		if o.FailureClass == agenterr.ClassRateLimit &&
+			o.RateLimitStrikes >= FallbackAfterStrikes &&
+			strings.TrimSpace(o.FallbackModel) != "" {
+			return FleetRecoverFallback, "rate_limit_exhausted:" +
+				strings.TrimSpace(o.Model) + "→" + strings.TrimSpace(o.FallbackModel)
+		}
 		if fleetRecoverWorthy(o.FailureClass) {
 			return FleetRecoverRebrief, "terminal_failure:" + string(o.FailureClass)
 		}
@@ -211,6 +247,9 @@ type FleetRecoverReport struct {
 	Delivered    bool
 	Interrupted  bool
 	Error        string
+	// Model is the model this seat was moved to on a fallback_model
+	// action; empty for every other action.
+	Model string
 }
 
 // FleetRecoverPusher delivers a resume brief (production: sendToAgent path).
@@ -233,16 +272,21 @@ type FleetRecoverSweepArgs struct {
 	// PromptInFlight: name → in flight. Nil → reg.Get(name).PromptInFlight().
 	PromptInFlight func(name string) bool
 	// ProcessRunning optional override for hermetic tests.
-	ProcessRunning func(name string) bool
-	BriefPresent   func(name string) bool
-	MarkBriefed    func(name string)
-	DesignGated    func(targetID string) bool
-	MissionOpen    func(targetID string) bool
+	ProcessRunning     func(name string) bool
+	BriefPresent       func(name string) bool
+	MarkBriefed        func(name string)
+	DesignGated        func(targetID string) bool
+	MissionOpen        func(targetID string) bool
 	LastTerminalReport func(name string) string
 	MissionAcceptance  func(targetID string) string
 	// SessionReminted is optional: name → this boot reminted session_id
 	// (🎯T545.1). Nil = no remints.
 	SessionReminted func(name string) bool
+	// SwitchModel moves a seat to a different model on the same provider
+	// (🎯T585). Nil disables the fallback ladder: the classifier still
+	// says fallback_model, and the report says why nothing happened,
+	// rather than silently degrading to another useless re-brief.
+	SwitchModel func(name, model string) error
 }
 
 // SweepFleetRecover classifies every registered work agent and unsticks /
@@ -346,30 +390,33 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		sameToolSince = now.Sub(act.ToolCallSince)
 	}
 	obs := FleetRecoverObs{
-		Name:            d.Name,
-		Purpose:         purpose,
-		ProcessRunning:  running,
-		DeliberateStop:  deliberateStop,
-		HasOpenMission:  hasMission,
-		DesignGated:     designGated,
-		LooksFinished:   looksFinished,
-		PromptInFlight:  inFlight,
-		SinceProgress:   since,
-		NeverProgressed: never,
-		Phase:           act.Phase,
-		FailureClass:    act.FailureClass,
-		NeedsRecover:    act.NeedsRecover,
-		TerminalEmpty:   act.TerminalEmpty,
-		StuckTimeout:    args.StuckTimeout,
-		BriefPresent:    briefPresent,
-		RecoverCount:    count,
-		SinceLastRecov:  sinceRecov,
-		EverRecovered:   ever,
-		Backoffs:        DefaultFleetRecoverBackoffs,
-		SpawnClass:      isSpawnClassSeat(d.Name, purpose),
-		SameToolID:      act.ToolCallID,
-		SameToolSince:   sameToolSince,
-		SessionReminted: args.SessionReminted != nil && args.SessionReminted(d.Name),
+		Name:             d.Name,
+		Purpose:          purpose,
+		ProcessRunning:   running,
+		DeliberateStop:   deliberateStop,
+		HasOpenMission:   hasMission,
+		DesignGated:      designGated,
+		LooksFinished:    looksFinished,
+		PromptInFlight:   inFlight,
+		SinceProgress:    since,
+		NeverProgressed:  never,
+		Phase:            act.Phase,
+		FailureClass:     act.FailureClass,
+		NeedsRecover:     act.NeedsRecover,
+		TerminalEmpty:    act.TerminalEmpty,
+		StuckTimeout:     args.StuckTimeout,
+		BriefPresent:     briefPresent,
+		RecoverCount:     count,
+		SinceLastRecov:   sinceRecov,
+		EverRecovered:    ever,
+		Backoffs:         DefaultFleetRecoverBackoffs,
+		SpawnClass:       isSpawnClassSeat(d.Name, purpose),
+		SameToolID:       act.ToolCallID,
+		SameToolSince:    sameToolSince,
+		SessionReminted:  args.SessionReminted != nil && args.SessionReminted(d.Name),
+		Model:            strings.TrimSpace(d.Model),
+		RateLimitStrikes: act.RateLimitStrikes,
+		FallbackModel:    modelladder.Next(string(d.Provider), d.Model),
 	}
 	action, reason := ClassifyFleetRecover(obs)
 	kind := ClassifyIdleNudgeKind(briefPresent)
@@ -379,6 +426,9 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		Reason:       reason,
 		Kind:         kind,
 		FailureClass: act.FailureClass,
+	}
+	if action == FleetRecoverFallback {
+		return switchSeatModel(d, args, obs, rep, reason, now)
 	}
 	if action != FleetRecoverUnstick && action != FleetRecoverRebrief {
 		return rep
@@ -457,6 +507,49 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	return rep
 }
 
+// switchSeatModel executes a fallback_model decision: move the seat onto
+// the next rung and reset the strike count, so the next failure is judged
+// on the new model rather than the old one's history (🎯T585).
+//
+// The switch is recorded in the recover ledger like any other recovery, so
+// the existing backoff bounds how fast a seat can walk down its ladder —
+// without that, a provider-wide outage that reads as rate_limit would
+// march every seat to the bottom rung in one sweep.
+func switchSeatModel(d claudia.AgentDef, args FleetRecoverSweepArgs,
+	obs FleetRecoverObs, rep FleetRecoverReport, reason string, now time.Time) FleetRecoverReport {
+	if args.SwitchModel == nil {
+		rep.Error = "no_model_switcher"
+		return rep
+	}
+	if err := args.SwitchModel(d.Name, obs.FallbackModel); err != nil {
+		rep.Error = err.Error()
+		slog.Warn("fleet recover model fallback failed",
+			"agent", d.Name, "from", obs.Model, "to", obs.FallbackModel, "err", err)
+		return rep
+	}
+	rep.Delivered = true
+	rep.Model = obs.FallbackModel
+	if args.Activity != nil {
+		args.Activity.NoteModelSwitched(d.Name, now)
+	}
+	if args.Ledger != nil {
+		if err := args.Ledger.Record(d.Name, now); err != nil {
+			slog.Warn("fleet recover ledger record failed", "agent", d.Name, "err", err)
+		}
+	}
+	// WARN, not INFO: the fleet just spent capability to stay alive, and
+	// the owner is the one who decides whether that trade is acceptable.
+	slog.Warn("fleet recover switched model — the old one could not answer",
+		"agent", d.Name,
+		"from", obs.Model,
+		"to", obs.FallbackModel,
+		"provider", string(d.Provider),
+		"strikes", obs.RateLimitStrikes,
+		"reason", reason,
+	)
+	return rep
+}
+
 // FormatFleetRecoverSummary is a one-line log/oracle summary.
 func FormatFleetRecoverSummary(reps []FleetRecoverReport) string {
 	var delivered, skipped, failed int
@@ -505,6 +598,13 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	prev.ToolCallID = ""
 	prev.ToolCallSince = time.Time{}
 	prev.FailureClass = class
+	if class == agenterr.ClassRateLimit {
+		prev.RateLimitStrikes++
+	} else if !empty {
+		// A terminal that got far enough to say something other than
+		// "rate limited" proves the model can still answer.
+		prev.RateLimitStrikes = 0
+	}
 	prev.TerminalEmpty = empty
 	prev.NeedsRecover = needs
 	prev.LastTerminal = truncate(text, 400)
@@ -542,6 +642,30 @@ func truncateTerminal(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// NoteModelSwitched resets the rate-limit strike count after a seat's
+// model changed (🎯T585): the strikes were evidence about the OLD model,
+// and carrying them over would swap the new one on its first hiccup.
+func (t *IdleActivityTracker) NoteModelSwitched(name string, at time.Time) {
+	if t == nil || name == "" {
+		return
+	}
+	if at.IsZero() {
+		at = t.clock()
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.by == nil {
+		t.by = make(map[string]IdleActivity)
+	}
+	prev := t.by[name]
+	prev.Phase = "idle"
+	prev.Updated = at
+	prev.RateLimitStrikes = 0
+	prev.NeedsRecover = false
+	prev.FailureClass = agenterr.ClassNone
+	t.by[name] = prev
 }
 
 // ClearRecover clears the recover latch after a successful deliver.
