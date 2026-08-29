@@ -72,6 +72,45 @@ func (s *Server) MigrateOverseerModel(to claudia.Provider, model string, force b
 	})
 }
 
+// PinOverseerModel switches the overseer to a different model on the SAME
+// provider. A pin is not a migrate and not a remint (🎯T40.2): the session
+// is untouched, nothing is rotated and no handover is gathered — the only
+// thing that changes is the --model the relaunch binds.
+//
+// The fleet route has always been able to do this (handleAgentMigrateHTTP
+// pins when the provider matches). The overseer route could not, because
+// MigrateOverseerModel asks PrepareMigration first and that refuses
+// same-provider, so the model pin — applied after prepare — was
+// unreachable. On 2026-08-30 that made the one seat the owner most needed
+// to move, when its model's weekly quota ran out, the one seat that could
+// not be moved (🎯T585).
+//
+// The relaunch still goes through rotateOverseer's tail: the overseer is
+// attached to owner chat by the HTTP server, so stopping it without the
+// re-attach leaves the cockpit talking to a dead process.
+func (s *Server) PinOverseerModel(model string) (handover.Pending, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return handover.Pending{}, fmt.Errorf("pin overseer model: model is required")
+	}
+	s.mu.RLock()
+	reg := s.registry
+	name := s.overseerName
+	s.mu.RUnlock()
+	if reg == nil {
+		return handover.Pending{}, fmt.Errorf("pin overseer model: no registry")
+	}
+	if def := reg.Def(name); def != nil && strings.TrimSpace(def.Model) == model {
+		return handover.Pending{}, fmt.Errorf("pin overseer model: %q is already on %s", name, model)
+	}
+	return s.rotateOverseer("pin", model, func(_ OverseerMigrator, n string) (handover.Pending, error) {
+		// No rotation: the session survives. Stop the process so the
+		// relaunch binds the new --model to that same session.
+		reg.Stop(n)
+		return handover.Pending{}, nil
+	})
+}
+
 // CompactOverseer is withdrawn (🎯T40.2). Same-provider remint is not a
 // product operation: a restart resumes the session, a migrate is explicit.
 func (s *Server) CompactOverseer(force bool) (handover.Pending, error) {
@@ -226,7 +265,18 @@ func (s *Server) handleOverseerMigrate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pending, err := s.MigrateOverseerModel(claudia.Provider(body.Provider), body.Model, body.Force)
+	// Same provider + a different model is a pin, not a migration — the
+	// same asymmetry the fleet route resolves (🎯T585). Without this the
+	// call dies in PrepareMigration as "already on <provider>".
+	var (
+		pending handover.Pending
+		err     error
+	)
+	if s.overseerOnProvider(body.Provider) && strings.TrimSpace(body.Model) != "" {
+		pending, err = s.PinOverseerModel(body.Model)
+	} else {
+		pending, err = s.MigrateOverseerModel(claudia.Provider(body.Provider), body.Model, body.Force)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(http.StatusConflict)
@@ -243,4 +293,22 @@ func (s *Server) handleOverseerMigrate(w http.ResponseWriter, r *http.Request) {
 		"transcript": pending.TranscriptPath,
 		"detail":     pending.Describe(),
 	})
+}
+
+// overseerOnProvider reports whether the overseer's registry row already
+// names this provider, so the caller can pin rather than rotate.
+func (s *Server) overseerOnProvider(provider string) bool {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return false
+	}
+	s.mu.RLock()
+	reg := s.registry
+	name := s.overseerName
+	s.mu.RUnlock()
+	if reg == nil {
+		return false
+	}
+	def := reg.Def(name)
+	return def != nil && strings.EqualFold(strings.TrimSpace(string(def.Provider)), provider)
 }
