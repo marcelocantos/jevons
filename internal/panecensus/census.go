@@ -101,6 +101,41 @@ func (p Pane) IsPool() bool {
 	return strings.HasPrefix(n, "claudia-pool-") || strings.HasPrefix(p.Window, "claudia-pool-")
 }
 
+// AnchorSessionName is the detached session claudia holds open on the
+// fleet tmux server so the server survives every agent window dying.
+// Duplicated from claudia/internal/tmuxagent (anchorSessionName) for the
+// same reason SessionWindowName is: this package stays dependency-free.
+const AnchorSessionName = "claudia-anchor"
+
+// anchorShells are the window names tmux gives the anchor session's
+// placeholder pane — it runs the user's login shell and nothing else.
+var anchorShells = map[string]bool{
+	"zsh": true, "-zsh": true, "bash": true, "-bash": true,
+	"sh": true, "-sh": true, "fish": true, "-fish": true,
+}
+
+// IsAnchor reports the anchor session's placeholder pane: the bare
+// login shell in claudia-anchor that carries no agent name and no
+// session id.
+//
+// 🎯T579: this pane has no registry entry and never has an in-flight
+// turn, so the plain orphan rule reaped it — 330 times in one day. It
+// is the pane claudia's whole server-lifetime design rests on: kill it
+// when it is the session's last window and the session goes, and with
+// the last session the server goes, and the next spawn fails with
+// "no server running on <claudia socket>" against a socket that was
+// never wrong. Eight fleet-health recoveries died that way on
+// 2026-08-29. The anchor is infrastructure, not an orphan.
+func (p Pane) IsAnchor() bool {
+	if strings.TrimSpace(p.Session) != AnchorSessionName {
+		return false
+	}
+	if strings.TrimSpace(p.AgentName) != "" || strings.TrimSpace(p.SessionID) != "" {
+		return false
+	}
+	return anchorShells[strings.TrimSpace(p.Window)]
+}
+
 // Action is what the census decides to do with one pane.
 type Action string
 
@@ -114,6 +149,9 @@ const (
 	ActionKeepPool Action = "keep_pool"
 	// ActionReap: no registry entry and no in-flight turn.
 	ActionReap Action = "reap"
+	// ActionKeepAnchor: the claudia-anchor placeholder pane, which
+	// holds the fleet tmux server open (🎯T579).
+	ActionKeepAnchor Action = "keep_anchor"
 )
 
 // Decision is one pane's fate, with a reason the eventlog can name.
@@ -337,6 +375,12 @@ func Plan(panes []Pane, names map[string]bool, warmPoolMax int) Report {
 	for _, it := range rest {
 		p := it.p
 		d := Decision{Pane: p}
+		if p.IsAnchor() {
+			d.Action = ActionKeepAnchor
+			d.Reason = "claudia-anchor placeholder holds the fleet tmux server open (🎯T579)"
+			decisions[it.i] = d
+			continue
+		}
 		if registered(p, names) {
 			d.Action = ActionKeep
 			d.Reason = "live registry entry"

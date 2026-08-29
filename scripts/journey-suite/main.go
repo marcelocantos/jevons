@@ -252,6 +252,7 @@ persona_notes: |
 	s.run("J28-ticker-chrome", s.jTickerChrome)
 	s.run("J20-plan-dest", s.j20PlanDest)
 	s.run("J21-goal-continue-all-backends", s.j21GoalContinuesAllBackends)
+	s.run("J29-tmux-anchor-spawn", s.j29TmuxAnchorSpawn)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()
