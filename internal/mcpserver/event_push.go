@@ -64,6 +64,11 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	// target is about the channel the whole fleet reports into.
 	var ticket notifyReplayTicket
 	if s.isOverseerAgent(target) {
+		if held, reason := s.batchAlreadyHeld(target, wire); held {
+			life["suppressed_replay"] = reason
+			s.logLifecycle(compEventPush, "push", "ok", life)
+			return mcp.NewToolResultText(describeHeldBatch(target, reason)), nil
+		}
 		var dec notifyReplayDecision
 		ticket, dec = s.notifyReplays().Offer(wire)
 		if !dec.Admit {
@@ -96,7 +101,11 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 		}
 		ev := watch()
 		// 🎯T428 seals on the receiver's records, not on this tool's silence.
-		ticket.Settle(ev.PayloadSeen || ev.PayloadEnteredTurn || ev.PayloadQueued)
+		confirmed := ev.PayloadSeen || ev.PayloadEnteredTurn || ev.PayloadQueued
+		ticket.Settle(confirmed)
+		if confirmed {
+			s.recordDeliveryEvidence(target, wire, ev)
+		}
 		res := s.reportPushDeliveryUnjudged(target, event, ev, err, timedOut)
 		s.logLifecycle(compEventPush, "push", "ok", life)
 		return res, nil
@@ -114,6 +123,10 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	// The receiver answered this push, which is as direct as arrival evidence
 	// gets: it read the batch and replied to it.
 	ticket.Settle(true)
+	s.recordDeliveryEvidence(target, wire, TurnEvidence{
+		PayloadSeen: true,
+		Detail:      "receiver answered this push",
+	})
 	if class, ownerMsg, ok := agenterr.ReplyFailure(reply); ok {
 		life["failure_class"] = class.String()
 		s.logLifecycle(compEventPush, "push", "error", life)

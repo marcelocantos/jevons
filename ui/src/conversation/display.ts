@@ -67,6 +67,14 @@ function blocks(frame: unknown): Record<string, unknown>[] {
   return [];
 }
 
+/** Prose block: typed text/output_text, or typeless `{text}` (daily statedb). */
+export function isProseBlock(b: Record<string, unknown>): boolean {
+  if (b.type === 'tool_use' || b.type === 'tool_result') return false;
+  const t = String(b.text || '').trim();
+  if (!t) return false;
+  return !b.type || b.type === 'text' || b.type === 'output_text';
+}
+
 export function proseText(frame: unknown): string {
   const f = asRec(frame);
   if (typeof f.text === 'string' && f.text && f.type === 'agent_note') return f.text;
@@ -74,7 +82,7 @@ export function proseText(frame: unknown): string {
   const content = msg?.content ?? f.content ?? f.text;
   if (typeof content === 'string') return content;
   return blocks(frame)
-    .filter((b) => b.type === 'text' || b.type === 'output_text')
+    .filter((b) => isProseBlock(b))
     .map((b) => String(b.text || ''))
     .join('');
 }
@@ -164,7 +172,7 @@ export function isToolOnly(frame: unknown): boolean {
     return f.type === 'tool_use';
   }
   const tools = bs.filter((b) => b.type === 'tool_use');
-  const text = bs.filter((b) => (b.type === 'text' || b.type === 'output_text') && String(b.text || '').trim());
+  const text = bs.filter((b) => isProseBlock(b));
   return tools.length > 0 && text.length === 0;
 }
 
@@ -225,6 +233,23 @@ export function userTurnOrigin(frame: unknown, raw: string, inspect = false): Tu
 }
 
 export type DisplayRowsOpts = { inspect?: boolean };
+
+/** 🎯T569: identical assistant prose is one bubble, even after later steps. */
+function alreadyPaintedAssistant(out: DisplayRow[], text: string): boolean {
+  return out.some((r) => r.kind === 'assistant' && r.text === text);
+}
+
+function pushAssistant(
+  out: DisplayRow[],
+  flush: () => void,
+  text: string,
+  when: number | undefined,
+  sealed: boolean,
+): void {
+  if (alreadyPaintedAssistant(out, text)) return;
+  flush();
+  out.push({ kind: 'assistant', text, when, sealed });
+}
 
 export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayRow[] {
   const out: DisplayRow[] = [];
@@ -309,11 +334,10 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
           addStep({ cls: 'tool-use', text: summariseToolUse(b) });
           continue;
         }
-        if (b.type !== 'text' && b.type !== 'output_text') continue;
+        if (!isProseBlock(b)) continue;
         const t = String(b.text || '').trim();
         if (!t || isSilentAssistantText(t)) continue;
-        flush();
-        out.push({ kind: 'assistant', text: t, when, sealed: isSealedAssistant(f) });
+        pushAssistant(out, flush, t, when, isSealedAssistant(f));
       }
       continue;
     }
@@ -323,8 +347,7 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
     }
     const t = proseText(f).trim();
     if (!t || isSilentAssistantText(t)) continue;
-    flush();
-    out.push({ kind: 'assistant', text: t, when, sealed: isSealedAssistant(f) });
+    pushAssistant(out, flush, t, when, isSealedAssistant(f));
   }
   flush();
   return out;

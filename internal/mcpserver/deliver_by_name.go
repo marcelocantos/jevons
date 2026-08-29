@@ -352,12 +352,28 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 	// unconfirmed rather than delivered — never as the defect, because a note
 	// legitimately waiting behind an owner turn looks identical from here.
 
-	// 🎯T428. Every notification source — sentinel, RSI coach, fleet health,
-	// worker report notify, jevons_event_push — arrives here, so the channel
-	// is where a batch the overseer already holds is refused. Owner turns are
-	// exempt: the owner may say the same thing twice and mean it twice.
+	// 🎯T428 / 🎯T568. Every notification source — sentinel, RSI coach, fleet
+	// health, worker report notify, jevons_event_push — arrives here, so the
+	// channel is where a batch the overseer already holds is refused. Owner
+	// turns are exempt: the owner may say the same thing twice and mean it
+	// twice. T428's in-memory ledger dies with the process; T568 consults
+	// durable evidence (and the overseer journal) so a bounce cannot re-push
+	// a batch that already landed.
 	var ticket notifyReplayTicket
 	if origin != OriginOwner {
+		if held, reason := s.batchAlreadyHeld(name, text); held {
+			slog.Info("agent_send",
+				"component", "agent_send",
+				"name", name,
+				"origin", string(origin),
+				"status", StatusSuppressedReplay,
+				"reason", reason,
+			)
+			return agentSendResult{
+				Status:  StatusSuppressedReplay,
+				Message: describeHeldBatch(name, reason),
+			}, nil
+		}
 		var dec notifyReplayDecision
 		ticket, dec = s.notifyReplays().Offer(text)
 		if !dec.Admit {
@@ -400,7 +416,11 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 	// message carrying the payload, a queue record draining it into the running
 	// turn, or an enqueue record holding it behind one all say the overseer has
 	// it (🎯T416 / 🎯T429); anything else leaves the batch retryable.
-	ticket.Settle(ev.PayloadSeen || ev.PayloadEnteredTurn || ev.PayloadQueued)
+	confirmed := ev.PayloadSeen || ev.PayloadEnteredTurn || ev.PayloadQueued
+	ticket.Settle(confirmed)
+	if confirmed {
+		s.recordDeliveryEvidence(name, text, ev)
+	}
 
 	outcome := ClassifySendOutcome(FlightUnknown, ev)
 	res := agentSendResult{

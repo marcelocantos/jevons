@@ -65,7 +65,11 @@ export function isWindowEvent(body: unknown): boolean {
 }
 
 function attachWindow(event: unknown, win: Record<string, unknown>): Record<string, unknown> {
-  return { ...rec(event), id: win.id, index: win.index };
+  const ev = rec(event);
+  const out: Record<string, unknown> = { ...ev, id: win.id, index: win.index };
+  // Statedb bodies often omit type; the mux wrapper carries ev.Type.
+  if (out.type == null && typeof win.type === 'string') out.type = win.type;
+  return out;
 }
 
 function windowPayload(body: unknown): unknown {

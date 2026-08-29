@@ -182,3 +182,44 @@ func TestAgentUpsertGetListReplace(t *testing.T) {
 		t.Fatal("reaped agent still projected")
 	}
 }
+
+func TestPruneDuplicateAssistantProseKeepsFirst(t *testing.T) {
+	s := testStore(t)
+	long := `{"message":{"content":[{"text":"Reproduced: jevons_agent_send routes to my own transcript.\n\nMarcelo — two things need you:"}]}}`
+	short := `{"message":{"content":[{"text":"Nothing new to relay."}]}}`
+	if err := s.Upsert("jevons", []Event{
+		{Index: 1, ID: "u:1", Type: "user", Body: `{"type":"user"}`},
+		{Index: 2, ID: "a:1", Type: "assistant", Body: long},
+		{Index: 3, ID: "t:1", Type: "tool_use", Body: `{"type":"tool_use"}`},
+		{Index: 4, ID: "a:2", Type: "assistant", Body: short},
+		{Index: 5, ID: "a:3", Type: "assistant", Body: long},
+		{Index: 6, ID: "a:4", Type: "assistant", Body: short},
+		{Index: 7, ID: "a:5", Type: "assistant", Body: long},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := s.PruneDuplicateAssistantProse("jevons")
+	if err != nil || removed != 3 {
+		t.Fatalf("removed=%d err=%v want 3", removed, err)
+	}
+	got, err := s.Range("jevons", 1, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var types []string
+	for _, ev := range got {
+		types = append(types, ev.Type)
+	}
+	want := []string{"user", "assistant", "tool_use", "assistant"}
+	if len(types) != 4 || types[0] != want[0] || types[1] != want[1] || types[2] != want[2] || types[3] != want[3] {
+		t.Fatalf("remaining types=%v want %v", types, want)
+	}
+	if AssistantProse(got[1].Type, got[1].Body) == "" || AssistantProse(got[3].Type, got[3].Body) == "" {
+		t.Fatal("kept assistant rows lost their prose")
+	}
+	c, _ := s.Count("jevons")
+	n, _ := s.N("jevons")
+	if c != 4 || n != 4 {
+		t.Fatalf("count=%d n=%d want 4/4", c, n)
+	}
+}

@@ -132,6 +132,24 @@ describe('applyConversationEvent', () => {
     expect(s.frames).toHaveLength(2);
   });
 
+  it('mux wrapper type lands on a typeless statedb body (🎯T569)', () => {
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1,
+      ch: 'transcript:jevons',
+      t: 'frame',
+      body: {
+        id: 'e:25237',
+        index: 25237,
+        op: 'put',
+        type: 'assistant',
+        event: { message: { content: [{ text: 'Marcelo — two things need you:' }] } },
+      },
+    });
+    expect(s.frames[0]).toMatchObject({ type: 'assistant' });
+    expect(displayRows(s.frames).map((r) => r.text)).toEqual(['Marcelo — two things need you:']);
+  });
+
   it('first assistant put is visible before later tokens append (🎯T64.3)', () => {
     const asst = (id: string, index: number, text: string, op: 'put' | 'append') => ({
       id,

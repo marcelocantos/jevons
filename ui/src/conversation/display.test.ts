@@ -217,6 +217,40 @@ describe('displayRows', () => {
     expect(rows[1].kind).toBe('steps');
   });
 
+  it('identical assistant prose paints once across later steps and shorts (🎯T569)', () => {
+    const long =
+      'Reproduced: `jevons_agent_send name=jevons-po` routes to my own transcript every time, and jevons-po is wedged.\n\nMarcelo — two things need you:';
+    const frames: unknown[] = [
+      { type: 'assistant', message: { content: [{ type: 'text', text: long }, { type: 'tool_use', name: 'Read' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: long }], stop_reason: 'end_turn' } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Nothing new to relay.' }], stop_reason: 'end_turn' } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: long }], stop_reason: 'end_turn' } },
+    ];
+    const rows = displayRows(frames);
+    const assistant = rows.filter((r) => r.kind === 'assistant').map((r) => r.text);
+    expect(assistant).toEqual([long, 'Nothing new to relay.']);
+    expect(rows.filter((r) => r.kind === 'steps').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('statedb typeless text blocks still collapse (🎯T569)', () => {
+    const long =
+      'Reproduced: `jevons_agent_send name=jevons-po` routes to my own transcript every time, and jevons-po is wedged.\n\nMarcelo — two things need you:';
+    // Daily jevons.db rows look like this: no frame.type, no block.type.
+    const frames: unknown[] = [
+      { message: { content: [{ text: long }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } },
+      { message: { content: [{ text: 'Nothing new to relay.' }] } },
+      { message: { content: [{ text: long }] } },
+    ];
+    const rows = displayRows(frames);
+    expect(rows.filter((r) => r.kind === 'assistant').map((r) => r.text)).toEqual([
+      long,
+      'Nothing new to relay.',
+    ]);
+  });
+
   it('type=status is chrome, not an unsealed assistant (🎯T555.5)', () => {
     const rows = displayRows([
       { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } },
