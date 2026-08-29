@@ -247,7 +247,7 @@ test-go-raw:
 	go test ./...
 
 # React cockpit (🎯T540). Daily :13705 GET / serves ui/dist (T540.2).
-.PHONY: ui-dev ui-build test-ui-react ui-daemon-install ui-daemon-stop ui-daemon-status
+.PHONY: ui-dev ui-build test-ui-react ui-deps ui-daemon-install ui-daemon-stop ui-daemon-status
 ui-dev:
 	cd ui && npm run dev
 
@@ -270,8 +270,21 @@ ui-daemon-status:
 	-launchctl print gui/$$(id -u)/$(UI_DAEMON_LABEL) | head -20
 	-launchctl print gui/$$(id -u)/$(UI_VANILLA_LABEL) | head -20
 
-test-ui-react:
-	@if [ -d ui/node_modules ]; then cd ui && npm test; else echo "skip test-ui-react (no ui/node_modules)"; fi
+# ui/node_modules is gitignored, so a clean checkout of HEAD (bin/gate -clean,
+# CI, a fresh clone) has no vitest until this install runs. 🎯T563: the old
+# "skip when absent" branch returned 0 in ~100ms and let gate -clean print
+# GREEN over a suite that never ran. Install when absent; never skip-and-green.
+UI_VITEST_MOD := ui/node_modules/vitest
+
+.PHONY: ui-deps
+ui-deps: $(UI_VITEST_MOD)
+
+$(UI_VITEST_MOD): ui/package.json ui/package-lock.json
+	cd ui && npm ci
+	@test -d $@ || (echo "npm ci did not install vitest at $@" >&2; exit 1)
+
+test-ui-react: ui-deps
+	cd ui && npm test
 
 # Hermetic Node tests for chat working-indicator lifecycle (🎯T39)
 # and attention-thread model (🎯T65).  Reference vanilla (🎯T540) — prefer
