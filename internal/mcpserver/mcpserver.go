@@ -230,6 +230,9 @@ type Server struct {
 	llmPortfolioFromFile bool
 	// providerSoftCaps overlays portfolio soft caps (from budget.json).
 	providerSoftCaps map[string]int
+	// portfolioMu guards llmPortfolio / llmPortfolioFromFile /
+	// providerSoftCaps, which the 🎯T574 watcher swaps at runtime.
+	portfolioMu sync.RWMutex
 
 	// rsiLoop is the residual phrase/eventlog mint path (🎯T92; opt-in product residual).
 	// Nil until SetRSILoop; jevons_rsi_cycle requires it. Product path is rsiCoach (🎯T243).
@@ -462,8 +465,21 @@ func (s *Server) SetLLMPortfolioSource(p *cost.Portfolio, fromFile bool) {
 	if s == nil {
 		return
 	}
+	s.portfolioMu.Lock()
+	defer s.portfolioMu.Unlock()
 	s.llmPortfolio = p
 	s.llmPortfolioFromFile = fromFile && p != nil
+}
+
+// llmPortfolioSource reads the seed under portfolioMu (🎯T574: the watcher
+// swaps it from its own goroutine).
+func (s *Server) llmPortfolioSource() (*cost.Portfolio, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.portfolioMu.RLock()
+	defer s.portfolioMu.RUnlock()
+	return s.llmPortfolio, s.llmPortfolioFromFile
 }
 
 // SetProviderSoftCaps overlays session soft caps from budget.json
@@ -472,16 +488,23 @@ func (s *Server) SetProviderSoftCaps(caps map[string]int) {
 	if s == nil {
 		return
 	}
+	s.portfolioMu.Lock()
+	defer s.portfolioMu.Unlock()
 	s.providerSoftCaps = caps
 }
 
 // effectivePortfolio returns the routing seed with soft-cap overlays applied.
 func (s *Server) effectivePortfolio() *cost.Portfolio {
 	base := cost.DefaultPortfolio()
-	if s != nil && s.llmPortfolio != nil {
+	if s == nil {
+		return base
+	}
+	s.portfolioMu.RLock()
+	defer s.portfolioMu.RUnlock()
+	if s.llmPortfolio != nil {
 		base = s.llmPortfolio
 	}
-	if s != nil && len(s.providerSoftCaps) > 0 {
+	if len(s.providerSoftCaps) > 0 {
 		return base.MergeSoftCaps(s.providerSoftCaps)
 	}
 	return base
@@ -522,10 +545,7 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 func (s *Server) mintProviderPick(providerArg, stored string, existed bool, taskTypeArg, purpose, name string) cost.MintProviderPick {
 	tt := cost.TaskTypeForMint(name, purpose, taskTypeArg)
 	dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
-	fromFile := false
-	if s != nil {
-		fromFile = s.llmPortfolioFromFile
-	}
+	_, fromFile := s.llmPortfolioSource()
 	cfg := string(s.resolvedDefaultProvider())
 	var feedOK, destOK bool
 	var dest string

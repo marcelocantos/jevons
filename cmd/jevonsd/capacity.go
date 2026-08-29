@@ -30,26 +30,30 @@ const capacityEventComponent = "capacity"
 // supply the per-provider load headroom. With no cost spine (usage.db
 // unavailable, or budget.json disabled) admission degrades to slot-based
 // bounds — which is still better than every loop running blind.
-func startCapacityGovernor(cfg config.Config, guard *costGuard, plans *planusage.Reader, mcpSrv *mcpserver.Server, srv *server.Server) *capacity.Governor {
+func startCapacityGovernor(cfg config.Config, watcher *config.Watcher, guard *costGuard, plans *planusage.Reader, mcpSrv *mcpserver.Server, srv *server.Server) *capacity.Governor {
 	path := capacity.ConfigPath(cfg.StateDir)
-	pol, err := capacity.LoadPolicy(path)
-	if err != nil {
-		slog.Error("capacity: bad capacity.json — using defaults", "err", err, "path", path)
-		pol = capacity.DefaultPolicy()
-	}
 	// Leave the owner a durable retune surface on first boot, the same way
 	// the research and coach cycles do.
 	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-		if err := pol.Save(path); err != nil {
+		if err := capacity.DefaultPolicy().Save(path); err != nil {
 			slog.Warn("capacity: could not write default policy", "err", err, "path", path)
 		}
 	}
+	// 🎯T574: capacity.json is hot. The governor takes a policy func, so an
+	// edit lands in jevons_capacity_status within one poll and no bounce.
+	policy, err := config.Watch(watcher, &config.WatchArgs[*capacity.Policy]{
+		Path: path, Load: capacity.LoadPolicy, Fallback: capacity.DefaultPolicy(),
+	})
+	if err != nil {
+		slog.Error("capacity: bad capacity.json — using defaults", "err", err, "path", path)
+	}
+	pol := policy.Get()
 
 	args := mcpserver.CapacitySnapshotArgs{
 		OwnerActive:      srv.OwnerTurnInFlight,
 		ProviderLoad:     mcpSrv.HarnessLoad,
 		ProviderSoftCaps: mcpSrv.EffectiveProviderSoftCaps,
-		DailyTokens:      func() int64 { return pol.DailyTokenBudget },
+		DailyTokens:      func() int64 { return policy.Get().DailyTokenBudget },
 		// The host itself, cached so a status call and an ambient tick in the
 		// same second share one sysctl (🎯T463).
 		HostLoad: hostload.Cached(0),
@@ -75,7 +79,7 @@ func startCapacityGovernor(cfg config.Config, guard *costGuard, plans *planusage
 
 	gov := capacity.NewGovernor(capacity.GovernorArgs{
 		Snapshot: func() capacity.Snapshot { return mcpserver.CapacitySnapshot(args) },
-		Policy:   func() *capacity.Policy { return pol },
+		Policy:   policy.Get,
 		Notify: func(text string) {
 			// Sticky, not chatty: the governor latches, so this fires once
 			// when background parks and once when it resumes.

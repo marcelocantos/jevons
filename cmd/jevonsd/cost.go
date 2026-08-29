@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/marcelocantos/claudia"
@@ -38,13 +39,29 @@ type costGuard struct {
 // nil (with a logged warning) rather than failing the daemon if the
 // usage DB can't open — cost monitoring is important but must not be a
 // single point of failure for the whole cockpit.
-func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server) *costGuard {
+func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watcher, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server) *costGuard {
 	budgetPath := filepath.Join(jc.StateDir, "budget.json")
-	cfg, err := cost.LoadBudgetConfig(budgetPath)
+	// 🎯T574: budget.json is hot — limits, protected workers, and the
+	// accounting mode swap in ≤5 s. The configured overseer is always
+	// protected, whatever the file says: killing the CEO's own brain is
+	// never an acceptable enforcement outcome. `disabled` decides whether
+	// the collector/enforcer exist at all, so flipping it forces a bounce.
+	var bootDisabled bool
+	budget, err := config.Watch(watcher, &config.WatchArgs[*cost.BudgetConfig]{
+		Path:     budgetPath,
+		Load:     budgetLoader(jc.OverseerName),
+		Fallback: cost.DefaultBudgetConfig(),
+		OnChange: func(c *cost.BudgetConfig) {
+			if c.Disabled != bootDisabled {
+				bounceForConfig(srv, budgetPath, []string{"disabled"})
+			}
+		},
+	})
 	if err != nil {
 		slog.Error("cost: bad budget.json — using defaults", "err", err, "path", budgetPath)
-		cfg = cost.DefaultBudgetConfig()
 	}
+	cfg := budget.Get()
+	bootDisabled = cfg.Disabled
 	// Owner opt-out via budget.json (🎯T137): no collector/enforcer, but
 	// /api/cost still reports disabled so the UI hides $ honestly.
 	if cfg.Disabled {
@@ -70,18 +87,7 @@ func startCostGuard(ctx context.Context, jc config.Config, registry *claudia.Reg
 		slog.Error("cost: usage db unavailable — clamp-down disabled", "err", err)
 		return nil
 	}
-	// The configured overseer must always be protected — killing the CEO's
-	// own brain is never an acceptable enforcement outcome.
-	protected := false
-	for _, w := range cfg.ProtectedWorkers {
-		if w == jc.OverseerName {
-			protected = true
-		}
-	}
-	if !protected {
-		cfg.ProtectedWorkers = append(cfg.ProtectedWorkers, jc.OverseerName)
-	}
-	config := func() *cost.BudgetConfig { return cfg }
+	config := budget.Get
 
 	// Attribution: a session id maps to a jevons worker when the registry
 	// owns it; otherwise it is unattributed (foreign, or a lost orphan).
@@ -252,4 +258,19 @@ func (a *fleetActions) KillSwitch() error {
 	err := a.killswitch.Kill()
 	_ = a.StopFleet()
 	return err
+}
+
+// budgetLoader reads budget.json with the overseer pinned into
+// protected_workers, whatever the file says.
+func budgetLoader(overseer string) func(path string) (*cost.BudgetConfig, error) {
+	return func(path string) (*cost.BudgetConfig, error) {
+		c, err := cost.LoadBudgetConfig(path)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(c.ProtectedWorkers, overseer) {
+			c.ProtectedWorkers = append(c.ProtectedWorkers, overseer)
+		}
+		return c, nil
+	}
 }
