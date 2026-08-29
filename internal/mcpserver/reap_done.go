@@ -36,11 +36,21 @@ import (
 // fall through to a reap. The claim has to arrive in a positive finish shape
 // (a bare claim clause, or a claim with oracle evidence or accepted-risk) —
 // see hasFinishShape.
+func typedFinishReport(report string) bool {
+	m, err := envelope.Parse(report)
+	return m != nil && err == nil && m.Kind == envelope.KindFinishReport
+}
+
 func LooksLikeFinishedWorkReport(report string) bool {
 	if m, err := envelope.Parse(report); m != nil && err == nil {
 		switch m.Kind {
 		case envelope.KindFinishReport:
-			return !ReportAwaitsOverseer(report)
+			// 🎯T577: a typed finish-report is terminal even when the
+			// payload still names a next step or echoes a checkpoint.
+			// Unenveloped remaining-work prose is kept below; a
+			// mis-enveloped checkpoint still reaps and the PO is
+			// notified to respawn.
+			return true
 		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindTargetFileRequest, envelope.KindScoutReport, envelope.KindEscalation:
 			// 🎯T536.3: scout-report is a fog handoff, not product-done.
 			return false
@@ -51,6 +61,9 @@ func LooksLikeFinishedWorkReport(report string) bool {
 		return false
 	}
 	if !hasFinishShape(s) {
+		return false
+	}
+	if hasForwardLookingPlan(report) {
 		return false
 	}
 	return !ReportAwaitsOverseer(report)
@@ -107,8 +120,14 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	// 🎯T395 before the generic no-claim case: a report that asks for a decision
 	// is the opposite of a completion claim, and the lifecycle log should say so
 	// rather than lumping it in with ordinary mid-turn chatter.
-	if ask := ClassifyReportAsk(report); ask != AskNone {
-		return false, "awaits_overseer_" + ask.String()
+	//
+	// 🎯T577: a typed finish-report envelope is terminal even when the
+	// payload still names remaining work. The ask veto stays for
+	// unenveloped prose; the envelope path reaps and notifies the PO.
+	if !typedFinishReport(report) {
+		if ask := ClassifyReportAsk(report); ask != AskNone {
+			return false, "awaits_overseer_" + ask.String()
+		}
 	}
 	if !LooksLikeFinishedWorkReport(report) {
 		return false, "not_finished_work_report"
@@ -196,6 +215,11 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	if report == "" {
 		return
 	}
+	var parent, targetID string
+	if def := s.registry.Def(name); def != nil {
+		parent = def.Parent
+		targetID = def.TargetID
+	}
 	ok, reason := ShouldAutoReapDoneWorkAgent(s.registry, name, report, s.isOverseerAgent)
 	if !ok {
 		// 🎯T395 near-miss: the report carried completion language and would
@@ -218,6 +242,14 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			slog.Info("T470 kept agent whose finish report was false-green flagged",
 				"agent", name, "reason", reason)
 		}
+		// 🎯T577: a checkpoint that the T165 path used to reap is kept;
+		// name it so a skipped reap is attributable as that save, not
+		// as a generic ask.
+		if strings.HasPrefix(reason, "awaits_overseer_checkpoint") ||
+			(strings.HasPrefix(reason, "awaits_overseer_") && hasForwardLookingPlan(report)) {
+			slog.Info("T577 kept agent whose report was a checkpoint, not a finish",
+				"agent", name, "reason", reason)
+		}
 		return
 	}
 	if err := killSubtree(s.registry, s.RemovalAccount(), name, reapDoneRemoval(reason)); err != nil {
@@ -230,6 +262,46 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	s.logLifecycle(compAgentLifecycle, "reap_done", "ok",
 		reapDecisionFields(name, reason, report))
 	slog.Info("auto-reaped finished work agent", "agent", name, "reason", reason)
+	// 🎯T577: a typed finish-report still reaps, even when the payload
+	// names remaining work. That seat's target must not go ledger-only —
+	// tell the PO to respawn.
+	if hasForwardLookingPlan(report) {
+		s.notifyPORespawnAfterCheckpointReap(parent, name, targetID)
+	}
+}
+
+// FormatCheckpointReapRespawnNotice is the PO-facing 🎯T577 recovery: a
+// worker was deregistered on a report that still named remaining work, so
+// the leaf is not product-closed and needs a new seat. Phrased to stay on
+// the PO (🎯T392.7 / 🎯T433): no oracle-done / needs-owner / blocked-on
+// vocabulary.
+func FormatCheckpointReapRespawnNotice(targetID, worker string) string {
+	tid := FormatTargetID(targetID)
+	if tid == "" {
+		tid = "the open leaf"
+	}
+	w := strings.TrimSpace(worker)
+	if w == "" {
+		w = "worker"
+	}
+	return fmt.Sprintf("[checkpoint-reap 🎯T577] %s worker %s was deregistered on a report that still names remaining work. Respawn a worker for %s; the leaf is not product-closed.",
+		tid, w, tid)
+}
+
+func (s *Server) notifyPORespawnAfterCheckpointReap(parent, worker, targetID string) {
+	if s == nil || strings.TrimSpace(worker) == "" {
+		return
+	}
+	po := strings.TrimSpace(parent)
+	if po == "" {
+		po = "jevons-po"
+	}
+	msg := FormatCheckpointReapRespawnNotice(targetID, worker)
+	if _, err := s.deliverByName(po, msg, OriginAgent, false); err != nil {
+		slog.Warn("T577 checkpoint-reap respawn notice undelivered to PO; escalating to overseer",
+			"po", po, "worker", worker, "target", targetID, "err", err)
+		s.notifyFleetHealth(fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
+	}
 }
 
 // reapDecisionFields is the lifecycle-log evidence for a reap decision (🎯T439):

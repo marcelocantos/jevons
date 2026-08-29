@@ -275,19 +275,38 @@ var checkpointMarkers = []string{
 	"ending this turn",
 	"ending my turn",
 	"ending the turn",
+	"ending the turn here",
 	"at the depth ceiling",
 	"hit the depth ceiling",
 	"reached the depth ceiling",
 	"depth-ceiling checkpoint",
 	"depth ceiling checkpoint",
 	"t392.4 depth ceiling",
+	"turn-depth ceiling",
 }
 
 // checkpointDelimiters are what may follow the word in a declaration line:
 // nothing, or a punctuation break. A letter would make it a longer word
 // ("checkpoints") and a space-plus-word would make it ordinary prose
 // ("Checkpoint handling fixed").
-var checkpointDelimiters = []string{":", "—", "–", "-", ".", ",", ";"}
+//
+// "(" is 🎯T577: jv-t568-intent-closed wrote "Checkpoint (turn-depth ceiling)"
+// jammed after a period with no newline, and the parenthetical is the
+// declaration's punctuation, not more word.
+var checkpointDelimiters = []string{":", "—", "–", "-", ".", ",", ";", "("}
+
+// forwardLookingPlanMarkers are remaining-work phrases that mean the report
+// is a checkpoint, not a finish (🎯T577). Distinct from a line-initial
+// "Checkpoint" declaration: these may appear anywhere. The word "checkpoint"
+// itself stays declaration-only so a genuine finish ABOUT checkpoint
+// handling still reaps (🎯T446 / 🎯T497 mention).
+var forwardLookingPlanMarkers = []string{
+	"next step",
+	"i'll resume",
+	"i will resume",
+	"turn-depth ceiling",
+	"ending the turn here",
+}
 
 // explicitIncompleteMarkers are outright statements of non-completion. They
 // outrank any completion word elsewhere in the same report: a worker that says
@@ -328,6 +347,9 @@ var explicitIncompleteMarkers = []string{
 	"still working",
 	"work remains",
 	"mid-mission",
+	"next step",
+	"i'll resume",
+	"i will resume",
 }
 
 // closingQuestionTailLines is how many trailing non-empty lines count as the
@@ -540,7 +562,60 @@ func checkpointDeclaration(s, lower string) (ReportAskFinding, bool) {
 		}
 		start = end + 1
 	}
+	// 🎯T577: jv-t568 jammed the declaration after a period with no
+	// newline ("them.Checkpoint (turn-depth ceiling)"). Line-initial
+	// scan misses that; a sentence boundary plus the same delimiter
+	// test is still a declaration, not a mid-clause mention.
+	return jammedCheckpointDeclaration(s, lower)
+}
+
+// jammedCheckpointDeclaration is a 🎯T577 widening of checkpointDeclaration:
+// the word sits immediately after `.` `!` `?` (optional space/decoration)
+// rather than at the start of a line.
+func jammedCheckpointDeclaration(s, lower string) (ReportAskFinding, bool) {
+	const word = "checkpoint"
+	for from := 0; from+len(word) <= len(lower); {
+		i := strings.Index(lower[from:], word)
+		if i < 0 {
+			return ReportAskFinding{}, false
+		}
+		i += from
+		j := i
+		for j > 0 && strings.ContainsRune(" \t*_`>-#", rune(lower[j-1])) {
+			j--
+		}
+		if j > 0 {
+			switch lower[j-1] {
+			case '.', '!', '?':
+				end := strings.IndexByte(lower[i:], '\n')
+				if end < 0 {
+					end = len(lower)
+				} else {
+					end += i
+				}
+				if isCheckpointDelimited(lower[i+len(word) : end]) {
+					span, off := matchedSentence(s, i, i+len(word))
+					return ReportAskFinding{Class: AskCheckpoint, Marker: word, Span: span, Offset: off}, true
+				}
+			}
+		}
+		from = i + 1
+	}
 	return ReportAskFinding{}, false
+}
+
+// hasForwardLookingPlan is true when unenveloped prose still names remaining
+// work (🎯T577). A typed finish-report envelope is terminal even when its
+// payload contains these phrases — that path notifies the PO to respawn
+// rather than keeping the seat.
+func hasForwardLookingPlan(report string) bool {
+	lower := asciiLower(report)
+	for _, m := range forwardLookingPlanMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // isCheckpointDelimited is true when rest — the line after the word — starts

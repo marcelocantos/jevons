@@ -45,7 +45,7 @@ func TestT470IncidentReportsAreNotFinishedWork(t *testing.T) {
 			name:    "jv-t391-guard-all-paths 20260815T062936Z-8e58ef45",
 			file:    "t470_jv_t391_checkpoint_report.md",
 			min:     2000,
-			wantAsk: AskExplicitIncomplete,
+			wantAsk: AskCheckpoint, // 🎯T577: jammed "init.**Checkpoint —" is a declaration
 			deny:    "oracles are missing",
 		},
 	}
