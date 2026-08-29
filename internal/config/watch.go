@@ -150,16 +150,18 @@ type WatchArgs[T any] struct {
 	// Fallback is installed when the very first Load fails, so the daemon
 	// boots on defaults rather than on a zero value. Optional.
 	Fallback T
-	// OnChange runs after every successful load that replaced the value,
-	// including the first, so consumers that copy rather than call Get can
-	// re-derive. Optional.
+	// OnChange runs after a successful load on a successive poll — not the
+	// first load, which only seeds Hot. Consumers that copy rather than
+	// call Get must apply Get() after Watch returns. Optional.
 	OnChange func(T)
 }
 
 // Watch registers a file and returns its Hot handle. The first load happens
 // synchronously so the caller has a value before it wires consumers; the
 // returned error is that first load's, for the caller to log. Later loads
-// are the Watcher's.
+// are the Watcher's. OnChange is not invoked for the first load: that pass
+// seeds the baseline. A bounce-required consumer that diffs in OnChange
+// therefore cannot treat boot as a change against zero defaults.
 func Watch[T any](w *Watcher, args *WatchArgs[T]) (*Hot[T], error) {
 	h := &Hot[T]{}
 	f := &watched{path: args.Path}
@@ -185,9 +187,10 @@ func Watch[T any](w *Watcher, args *WatchArgs[T]) (*Hot[T], error) {
 	if first != nil {
 		h.set(args.Fallback)
 		f.badRev = true
-	} else if f.changed != nil {
-		f.changed()
 	}
+	// First load seeds Hot only. Firing OnChange here is what made a
+	// populated config.yaml/budget.json look like a restart-only change
+	// against zero defaults and SIGHUP the daemon one second after boot.
 	w.mu.Lock()
 	w.files = append(w.files, f)
 	w.mu.Unlock()

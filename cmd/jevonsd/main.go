@@ -384,7 +384,12 @@ func main() {
 	// models) cannot be rejigged in a running process, so a change to one
 	// of them forces a bounce through the supervised restart path rather
 	// than sitting ignored until someone remembers to restart.
-	if _, err := config.Watch(watcher, &config.WatchArgs[config.Config]{
+	// fileBaseline is the first on-disk load, not the flag-overlaid boot
+	// cfg: RestartOnlyDiff against cfg would see --workdir (and friends)
+	// as a change the moment Watch fired OnChange. First load seeds this
+	// and does not bounce; only a successive-load diff does.
+	var fileBaseline config.Config
+	cfgHot, err := config.Watch(watcher, &config.WatchArgs[config.Config]{
 		Path: cfgPath, Load: config.Load, Fallback: cfg,
 		OnChange: func(next config.Config) {
 			srv.SetPortfolios(next.Portfolios)
@@ -393,12 +398,17 @@ func main() {
 					slog.Error("provider config reload failed", "path", cfgPath, "err", err)
 				}
 			}
-			if fields := config.RestartOnlyDiff(cfg, next); len(fields) > 0 {
+			if fields := config.RestartOnlyDiff(fileBaseline, next); len(fields) > 0 {
 				bounceForConfig(srv, cfgPath, fields)
 			}
+			fileBaseline = next
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		slog.Error("config.yaml watch: initial load failed — using boot config", "path", cfgPath, "err", err)
+	}
+	if cfgHot != nil {
+		fileBaseline = cfgHot.Get()
 	}
 
 	// ð¯T8.3 execution safety (doit Engine: L1/L2/L3, audit, capabilities).
@@ -776,55 +786,68 @@ func main() {
 		pf     *cost.Portfolio
 		loaded bool
 	}
-	if _, err := config.Watch(watcher, &config.WatchArgs[portfolioFile]{
+	applyPortfolio := func(v portfolioFile) {
+		mcpSrv.SetLLMPortfolioSource(v.pf, v.loaded)
+		if !v.loaded {
+			slog.Info("llm portfolio compiled seed",
+				"default_provider", v.pf.DefaultProvider,
+				"winning_knob", cost.KnobConfig)
+			return
+		}
+		if note := cost.DescribeConfigPortfolioDisagreement(string(defaultProvider), v.pf, true); note != "" {
+			slog.Warn("llm portfolio override disagrees with config.yaml — omit-provider mint follows config",
+				"path", portfolioPath,
+				"winning_knob", cost.KnobConfig,
+				"config_provider", defaultProvider,
+				"losing_knob", cost.KnobPortfolioFile,
+				"portfolio_default", v.pf.DefaultProvider,
+				"portfolio_work_mint", cost.WorkMintPortfolioProvider(v.pf),
+				"cite", note)
+		} else {
+			slog.Info("llm portfolio routing seed", "path", portfolioPath,
+				"default_provider", v.pf.DefaultProvider,
+				"winning_knob", cost.KnobConfig)
+		}
+	}
+	pfHot, err := config.Watch(watcher, &config.WatchArgs[portfolioFile]{
 		Path: portfolioPath,
 		Load: func(path string) (portfolioFile, error) {
 			pf, loaded, err := cost.LoadPortfolioOverride(path)
 			return portfolioFile{pf: pf, loaded: loaded}, err
 		},
 		Fallback: portfolioFile{pf: cost.DefaultPortfolio()},
-		OnChange: func(v portfolioFile) {
-			mcpSrv.SetLLMPortfolioSource(v.pf, v.loaded)
-			if !v.loaded {
-				slog.Info("llm portfolio compiled seed",
-					"default_provider", v.pf.DefaultProvider,
-					"winning_knob", cost.KnobConfig)
-				return
-			}
-			if note := cost.DescribeConfigPortfolioDisagreement(string(defaultProvider), v.pf, true); note != "" {
-				slog.Warn("llm portfolio override disagrees with config.yaml — omit-provider mint follows config",
-					"path", portfolioPath,
-					"winning_knob", cost.KnobConfig,
-					"config_provider", defaultProvider,
-					"losing_knob", cost.KnobPortfolioFile,
-					"portfolio_default", v.pf.DefaultProvider,
-					"portfolio_work_mint", cost.WorkMintPortfolioProvider(v.pf),
-					"cite", note)
-			} else {
-				slog.Info("llm portfolio routing seed", "path", portfolioPath,
-					"default_provider", v.pf.DefaultProvider,
-					"winning_knob", cost.KnobConfig)
-			}
-		},
-	}); err != nil {
+		OnChange: applyPortfolio,
+	})
+	if err != nil {
 		slog.Error("llm portfolio override unreadable — using compiled seed",
 			"path", portfolioPath, "err", err)
+	}
+	if pfHot != nil {
+		applyPortfolio(pfHot.Get())
 	}
 	// 🎯T325.2: multi-provider portfolio soft-cap overlays from budget.json
 	// (session counts only; independent of cost disabled / subscription USD).
 	// 🎯T574: hot — its own budget.json reader so soft caps follow the file
 	// whether or not the cost guard is enabled.
-	if _, err := config.Watch(watcher, &config.WatchArgs[*cost.BudgetConfig]{
+	applySoftCaps := func(bcfg *cost.BudgetConfig) {
+		if bcfg == nil {
+			return
+		}
+		mcpSrv.SetProviderSoftCaps(bcfg.ProviderSoftCaps)
+		if len(bcfg.ProviderSoftCaps) > 0 {
+			slog.Info("llm portfolio soft caps from budget", "caps", bcfg.ProviderSoftCaps)
+		}
+	}
+	capsHot, err := config.Watch(watcher, &config.WatchArgs[*cost.BudgetConfig]{
 		Path: filepath.Join(cfg.StateDir, "budget.json"), Load: cost.LoadBudgetConfig,
 		Fallback: cost.DefaultBudgetConfig(),
-		OnChange: func(bcfg *cost.BudgetConfig) {
-			mcpSrv.SetProviderSoftCaps(bcfg.ProviderSoftCaps)
-			if len(bcfg.ProviderSoftCaps) > 0 {
-				slog.Info("llm portfolio soft caps from budget", "caps", bcfg.ProviderSoftCaps)
-			}
-		},
-	}); err != nil {
+		OnChange: applySoftCaps,
+	})
+	if err != nil {
 		slog.Error("budget.json unreadable for soft caps — using compiled defaults", "err", err)
+	}
+	if capsHot != nil {
+		applySoftCaps(capsHot.Get())
 	}
 	// ð¯T285: jevons_agent_migrate moves an agent between backends and
 	// hands the successor its predecessor's transcript.

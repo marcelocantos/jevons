@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,7 +110,7 @@ func TestT574ConfigYAMLIsHotAndNamesRestartOnlyFields(t *testing.T) {
 	}
 	t574write(t, path, "portfolios:\n  - id: personal\n    name: Personal\n    members: [github.com/marcelocantos]\n")
 	w.Poll()
-	if n := len(seen); n != 2 || len(seen[1].Portfolios) != 1 || seen[1].Portfolios[0].ID != "personal" {
+	if n := len(seen); n != 1 || len(seen[0].Portfolios) != 1 || seen[0].Portfolios[0].ID != "personal" {
 		t.Fatalf("portfolio edit not applied: %+v", seen)
 	}
 	if fields := config.RestartOnlyDiff(boot.Get(), seen[0]); len(fields) != 0 {
@@ -190,6 +191,79 @@ func TestT574MCPOwnerMapFingerprintIgnoresNonServerRewrites(t *testing.T) {
 	c := &claudia.MCPInventory{Servers: []claudia.MCPServer{{Name: "a", Type: "stdio", Command: "c"}, {Name: "b", Type: "http", URL: "http://y"}}}
 	if mcpMapFingerprint(a) == mcpMapFingerprint(c) {
 		t.Fatal("a changed endpoint must change the fingerprint")
+	}
+}
+
+// A populated config.yaml (workdir set) and budget.json (disabled=true)
+// seed the baseline on first load: Watch + unchanged Polls raise zero
+// bounce requests. A later restart-only edit still names the field.
+func TestT574PopulatedBootRaisesZeroRestartOnlyChange(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	budgetPath := filepath.Join(dir, "budget.json")
+	t574write(t, cfgPath, "workdir: /populated/work\nport: 13705\n")
+	t574write(t, budgetPath, `{"disabled": true, "daily_budget_usd": 1}`)
+
+	var bounces []string
+	note := func(path string, fields []string) {
+		bounces = append(bounces, filepath.Base(path)+":"+strings.Join(fields, ","))
+	}
+
+	w := config.NewWatcher(nil)
+	boot := config.Default()
+	fileBaseline := boot
+	hot, err := config.Watch(w, &config.WatchArgs[config.Config]{
+		Path: cfgPath, Load: config.Load, Fallback: boot,
+		OnChange: func(next config.Config) {
+			if fields := config.RestartOnlyDiff(fileBaseline, next); len(fields) > 0 {
+				note(cfgPath, fields)
+			}
+			fileBaseline = next
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileBaseline = hot.Get()
+
+	var bootDisabled bool
+	budget, err := config.Watch(w, &config.WatchArgs[*cost.BudgetConfig]{
+		Path: budgetPath, Load: budgetLoader("jevons"), Fallback: cost.DefaultBudgetConfig(),
+		OnChange: func(c *cost.BudgetConfig) {
+			if c != nil && c.Disabled != bootDisabled {
+				note(budgetPath, []string{"disabled"})
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := budget.Get(); c != nil {
+		bootDisabled = c.Disabled
+	}
+
+	w.Poll()
+	w.Poll()
+	if len(bounces) != 0 {
+		t.Fatalf("populated boot bounced: %v", bounces)
+	}
+	if !bootDisabled {
+		t.Fatal("baseline disabled must come from the file, not zero defaults")
+	}
+	if fileBaseline.WorkDir != "/populated/work" {
+		t.Fatalf("baseline workdir = %q, want /populated/work", fileBaseline.WorkDir)
+	}
+
+	t574write(t, cfgPath, "workdir: /other\nport: 13705\n")
+	w.Poll()
+	if len(bounces) != 1 || !strings.Contains(bounces[0], "workdir") {
+		t.Fatalf("successive workdir edit should bounce, got %v", bounces)
+	}
+
+	t574write(t, budgetPath, `{"disabled": false, "daily_budget_usd": 1}`)
+	w.Poll()
+	if len(bounces) != 2 || !strings.Contains(bounces[1], "disabled") {
+		t.Fatalf("successive disabled flip should bounce, got %v", bounces)
 	}
 }
 

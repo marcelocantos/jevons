@@ -46,13 +46,16 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 	// protected, whatever the file says: killing the CEO's own brain is
 	// never an acceptable enforcement outcome. `disabled` decides whether
 	// the collector/enforcer exist at all, so flipping it forces a bounce.
+	// bootDisabled is seeded from the first load AFTER Watch returns.
+	// OnChange does not fire for that first load (🎯T574: first load
+	// seeds the baseline); a later flip of `disabled` still bounces.
 	var bootDisabled bool
 	budget, err := config.Watch(watcher, &config.WatchArgs[*cost.BudgetConfig]{
 		Path:     budgetPath,
 		Load:     budgetLoader(jc.OverseerName),
 		Fallback: cost.DefaultBudgetConfig(),
 		OnChange: func(c *cost.BudgetConfig) {
-			if c.Disabled != bootDisabled {
+			if c != nil && c.Disabled != bootDisabled {
 				bounceForConfig(srv, budgetPath, []string{"disabled"})
 			}
 		},
@@ -61,7 +64,9 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		slog.Error("cost: bad budget.json — using defaults", "err", err, "path", budgetPath)
 	}
 	cfg := budget.Get()
-	bootDisabled = cfg.Disabled
+	if cfg != nil {
+		bootDisabled = cfg.Disabled
+	}
 	// Owner opt-out via budget.json (🎯T137): no collector/enforcer, but
 	// /api/cost still reports disabled so the UI hides $ honestly.
 	if cfg.Disabled {

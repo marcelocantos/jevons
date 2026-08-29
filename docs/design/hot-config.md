@@ -11,6 +11,10 @@ its mtime or size moving.
 - **Last-good stands.** A file that fails to parse never replaces the
   current value. The failure is logged with the path once per bad
   revision (not once per poll); the next good write heals it.
+- **First load seeds the baseline.** `Watch` installs Hot on the first
+  read and does not fire `OnChange`. Bounce-required diffs compare
+  successive on-disk loads, never the first load against zero defaults
+  (a populated `config.yaml`/`budget.json` at boot is not a change).
 - **Missing is a value.** Deleting a file is a change back to the
   loader's defaults, not a silent hold — the jevons loaders all return
   defaults for `ENOENT`.

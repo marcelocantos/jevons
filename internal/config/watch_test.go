@@ -75,10 +75,10 @@ func TestT574WatchSwapsOnWriteAndKeepsLastGoodOnGarbage(t *testing.T) {
 	if got := h.Get().Limit; got != 9 {
 		t.Fatalf("after repair: want 9, got %d", got)
 	}
-	// OnChange fires for the prime and each successful swap, never for the
-	// garbage revision.
-	if len(changes) != 3 || changes[0] != 1 || changes[1] != 7 || changes[2] != 9 {
-		t.Fatalf("OnChange sequence = %v, want [1 7 9]", changes)
+	// OnChange fires for each successful swap after the prime, never for
+	// the first load (that only seeds Hot) and never for the garbage revision.
+	if len(changes) != 2 || changes[0] != 7 || changes[1] != 9 {
+		t.Fatalf("OnChange sequence = %v, want [7 9]", changes)
 	}
 
 	// Deleting the file is a change back to defaults, not a silent hold.
@@ -107,6 +107,37 @@ func TestT574WatchFirstLoadFailureInstallsFallback(t *testing.T) {
 	w.Poll()
 	if got := h.Get().Limit; got != 3 {
 		t.Fatalf("heal: want 3, got %d", got)
+	}
+}
+
+// A populated file at registration seeds Hot and does not fire OnChange;
+// Poll with no mtime/size move stays quiet; a later write fires once.
+func TestT574WatchFirstLoadSeedsWithoutOnChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "knob.json")
+	os.WriteFile(path, []byte(`{"limit": 4}`), 0o644)
+	w := NewWatcher(nil)
+	var changes []int
+	h, err := Watch(w, &WatchArgs[knob]{Path: path, Load: loadKnob,
+		OnChange: func(k knob) { changes = append(changes, k.Limit) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.Get().Limit; got != 4 {
+		t.Fatalf("first load: want 4, got %d", got)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("first load must not fire OnChange, got %v", changes)
+	}
+	w.Poll()
+	w.Poll()
+	if len(changes) != 0 {
+		t.Fatalf("unchanged polls must not fire OnChange, got %v", changes)
+	}
+	os.WriteFile(path, []byte(`{"limit": 8}`), 0o644)
+	bump(t, path)
+	w.Poll()
+	if len(changes) != 1 || changes[0] != 8 {
+		t.Fatalf("successive write OnChange = %v, want [8]", changes)
 	}
 }
 
