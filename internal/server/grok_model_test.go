@@ -184,7 +184,7 @@ func TestListFleetAgentsResolvesGrokModel(t *testing.T) {
 	}
 
 	byName := map[string]agentInfo{}
-	for _, a := range listFleetAgentsNotifying(reg, nil, nil, grokOnlyModels(sessions)) {
+	for _, a := range listFleetAgentsNotifying(reg, nil, nil, nil, grokOnlyModels(sessions)) {
 		byName[a.Name] = a
 	}
 	if got := byName["grokker"].Model; got != "grok-4.5-build" {
@@ -219,14 +219,14 @@ func TestListFleetAgentsPrefersSessionLogOverPinnedGrokModel(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	agents := listFleetAgentsNotifying(reg, nil, nil, grokOnlyModels(sessions))
+	agents := listFleetAgentsNotifying(reg, nil, nil, nil, grokOnlyModels(sessions))
 	if len(agents) != 1 || agents[0].Model != "grok-4.5-build" {
 		t.Fatalf("agents=%+v want the running grok-4.5-build, not the grok-4 pin", agents)
 	}
 
 	// With no session log yet, the pin is all there is — better than a blank
 	// badge on a live agent, and it yields the moment a turn is written.
-	agents = listFleetAgentsNotifying(reg, nil, nil, grokOnlyModels(t.TempDir()))
+	agents = listFleetAgentsNotifying(reg, nil, nil, nil, grokOnlyModels(t.TempDir()))
 	if len(agents) != 1 || agents[0].Model != "grok-4" {
 		t.Fatalf("agents=%+v want the pin as the pre-observation placeholder", agents)
 	}
