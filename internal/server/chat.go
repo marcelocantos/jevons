@@ -1499,9 +1499,22 @@ func (s *Server) persistChatLine(line string) {
 		if s.mux == nil {
 			s.mux = newMuxHub()
 		}
-		s.muxFanTranscript(name, line)
+		durable := s.muxFanTranscript(name, line)
 		if s.statedbN(name) == 0 {
+			// Import-once history: the JSONL is still the durable store
+			// until statedb has rows, and it notes durability itself.
 			s.persistChatJSONL(line)
+			return
+		}
+		// 🎯T593: SQLite is the durable store now, so it is what
+		// send-landed must be observed against. Before this, durability
+		// was only ever recorded on the JSONL append — a path 🎯T548.2
+		// stopped taking — so sendJournaled could never become true,
+		// every owner turn aged into the not_durable_in_chatlog gap, and
+		// owner-health re-injected it. The owner saw one question reach
+		// the overseer again and again while the cockpit sat at idle.
+		if durable {
+			s.noteChatJournaled(line)
 		}
 		return
 	}

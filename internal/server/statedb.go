@@ -65,10 +65,15 @@ func rowsToMuxEvents(rows []statedb.Event) []muxwin.Event {
 	return out
 }
 
-func (s *Server) statedbUpsertFolds(name string, folds []muxwin.LiveFold) {
+// statedbUpsertFolds writes folds to the durable store. It reports
+// whether the line is durable afterwards, because owner-health may only
+// call a send landed once the write actually worked — the same standard
+// the JSONL path already held itself to by checking Append's error
+// (🎯T593). Nothing to write is vacuously durable.
+func (s *Server) statedbUpsertFolds(name string, folds []muxwin.LiveFold) bool {
 	db := s.stateStore()
 	if db == nil || len(folds) == 0 {
-		return
+		return db != nil
 	}
 	rows := make([]statedb.Event, 0, len(folds))
 	for _, f := range folds {
@@ -78,8 +83,10 @@ func (s *Server) statedbUpsertFolds(name string, folds []muxwin.LiveFold) {
 		rows = append(rows, muxEventToRow(f.Event))
 	}
 	if err := db.Upsert(name, rows); err != nil {
-		slog.Error("statedb: upsert transcript failed", "agent", name, "err", err)
+		slog.Error("statedb: DURABILITY FAILURE — upsert transcript failed", "agent", name, "err", err)
+		return false
 	}
+	return true
 }
 
 func (s *Server) statedbTailStart(name string, userTurns int) int {

@@ -527,13 +527,15 @@ func (h *muxHub) queueToolStamp(name string, st muxwin.ToolStamp) {
 	h.stamps[name] = append(h.stamps[name], st)
 }
 
-func (s *Server) muxFanTranscript(name, frameJSON string) {
+// muxFanTranscript folds a line into the live window and persists it.
+// It reports whether the line reached the durable store (🎯T593).
+func (s *Server) muxFanTranscript(name, frameJSON string) bool {
 	if s == nil || s.mux == nil {
-		return
+		return false
 	}
 	s.muxEnsureLive(name)
 	folds, stamps := s.mux.applyLine(name, frameJSON)
-	s.statedbUpsertFolds(name, folds)
+	durable := s.statedbUpsertFolds(name, folds)
 	if len(folds) > 0 {
 		s.mux.mu.Lock()
 		s.mux.fanFoldsLocked(name, folds)
@@ -544,6 +546,7 @@ func (s *Server) muxFanTranscript(name, frameJSON string) {
 			s.persistChatJSONL(line)
 		}
 	}
+	return durable
 }
 
 // muxEnsureLive seeds the hub cache from statedb so ApplyLive continues
