@@ -138,6 +138,49 @@ export function tickerGroups(snap: PlanSnapshot | undefined): TickerGroup[] {
   return out;
 }
 
+/**
+ * formatRolloverLocal renders a rollover instant in the viewer's own
+ * timezone, to the minute (🎯T588).
+ *
+ * The tooltip used to interpolate the server's ISO string raw —
+ * "rollover 2026-08-31T00:52:28Z" — so every glance cost the owner a
+ * mental timezone conversion, and it carried seconds on a value that
+ * moves once a day or once a week.
+ *
+ * An unreadable instant yields '', and the caller drops the clause
+ * entirely. Never the raw string as a fallback (that is the bug being
+ * fixed) and never a substituted time: a wrong rollover is worse than no
+ * rollover, because the owner would plan around it.
+ *
+ * timeZone is injectable so the oracle can pin a zone; production passes
+ * nothing and gets the runtime's. Locale is fixed at en-GB rather than
+ * the runtime's so the shape stays '31 Aug 10:52' wherever it renders —
+ * the zone must follow the viewer, the wording need not.
+ */
+export function formatRolloverLocal(
+  iso: string | null | undefined,
+  timeZone?: string,
+): string {
+  if (!iso) return '';
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+      .format(at)
+      .replace(',', '');
+  } catch {
+    // An invalid timeZone must not take the whole tooltip down with it.
+    return '';
+  }
+}
+
 /** InstantTip body (🎯T175 / T390): remaining + rollover, not a native title=. */
 export function tickerTipBody(groups: TickerGroup[]): string {
   const lines = ['Plan remaining'];
@@ -151,7 +194,8 @@ export function tickerTipBody(groups: TickerGroup[]): string {
         typeof w.remaining_percent === 'number'
           ? `${Math.round(w.remaining_percent)}% remaining`
           : 'remaining unknown';
-      const roll = w.resets_at ? ` · rollover ${w.resets_at}` : '';
+      const at = formatRolloverLocal(w.resets_at);
+      const roll = at ? ` · rollover ${at}` : '';
       lines.push(`${g.provider} ${w.name || 'window'}: ${rem}${roll}`);
     }
   }
