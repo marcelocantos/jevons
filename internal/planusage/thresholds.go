@@ -7,10 +7,10 @@ package planusage
 // ticker paints from this document plus the live snapshot. Mint and
 // migrate use the same numbers. They are not imported from JS.
 type Thresholds struct {
-	AheadRatio               float64 `json:"ahead_ratio"`
-	HotRatio                 float64 `json:"hot_ratio"`
-	UnderWastePercent        float64 `json:"under_waste_percent"`
-	LockedWastePercent       float64 `json:"locked_waste_percent"`
+	AheadRatio         float64 `json:"ahead_ratio"`
+	HotRatio           float64 `json:"hot_ratio"`
+	UnderWastePercent  float64 `json:"under_waste_percent"`
+	LockedWastePercent float64 `json:"locked_waste_percent"`
 	// WarmupElapsedPercent is served for document compat. Colour and
 	// WeeklyBandOf do not short-circuit on it (🎯T390.1.6.2) — damping
 	// is the only early-window ease.
@@ -35,6 +35,25 @@ type Thresholds struct {
 	// (still hot). λ must stay below 10, or 80/50 crosses under the
 	// 1.5 hot vertex. Waste arithmetic (under/locked) stays raw.
 	DampLambdaPercent float64 `json:"damp_lambda_percent"`
+
+	// AheadMarginPercent is the percentage-point margin a window must
+	// overspend by before any burning-fast verdict (ahead or hot) is
+	// reachable: used% - elapsed% must exceed it (🎯T591).
+	//
+	// Damping alone cannot do this. (used+λ)/(elapsed+λ) approaches 1
+	// from above and never crosses it, so with AheadRatio at exactly 1.0
+	// ANY overspend at all — including one made entirely of rounding —
+	// paints the window amber, however large λ is. On 2026-08-31 claude's
+	// week read used 1% against elapsed 0.38% and went amber seven
+	// minutes into a seven-day window: providers publish used as whole
+	// percentage points, so the numerator's quantum was larger than the
+	// denominator's value.
+	//
+	// A margin is the right shape because the noise is absolute, not
+	// proportional. 2pp keeps both vertices the damping comment cites:
+	// 9% at 5.6% elapsed overspends by 3.4pp and stays ahead, 80/50 by
+	// 30pp and stays hot.
+	AheadMarginPercent float64 `json:"ahead_margin_percent"`
 }
 
 // DefaultThresholds matches the vertices the cockpit already used
@@ -52,6 +71,7 @@ func DefaultThresholds() Thresholds {
 		CriticalRemainingPercent: 5,
 		MintIndifferencePercent:  10,
 		DampLambdaPercent:        5,
+		AheadMarginPercent:       2,
 	}
 }
 

@@ -27,6 +27,17 @@ export const PACE_HOT_RATIO = 1.5;
 export const PACE_UNDER_WASTE = 15;
 export const PACE_LOCKED_WASTE = 15;
 export const PACE_DAMP_LAMBDA = 5;
+/**
+ * Percentage-point margin a window must overspend by before any
+ * burning-fast verdict is reachable (🎯T591). Mirrors
+ * planusage.Thresholds.AheadMarginPercent — the daemon owns the number,
+ * this is the paint side of the same document.
+ *
+ * Damping cannot serve this purpose: (used+λ)/(elapsed+λ) approaches 1
+ * from above and never crosses it, so at ahead_ratio 1.0 any overspend
+ * at all — rounding included — is amber, for every λ.
+ */
+export const PACE_AHEAD_MARGIN = 2;
 export const LOW_PERCENT = 15;
 export const CRITICAL_PERCENT = 5;
 
@@ -39,6 +50,7 @@ export type ThresholdsDoc = {
   low_remaining_percent?: number;
   critical_remaining_percent?: number;
   damp_lambda_percent?: number;
+  ahead_margin_percent?: number;
 };
 
 let aheadRatio = PACE_AHEAD_RATIO;
@@ -48,6 +60,7 @@ let lockedWaste = PACE_LOCKED_WASTE;
 let lowRemaining = LOW_PERCENT;
 let criticalRemaining = CRITICAL_PERCENT;
 let dampLambda = PACE_DAMP_LAMBDA;
+let aheadMargin = PACE_AHEAD_MARGIN;
 
 export function applyThresholds(doc: ThresholdsDoc | null | undefined): void {
   if (!doc || typeof doc !== 'object') return;
@@ -58,6 +71,7 @@ export function applyThresholds(doc: ThresholdsDoc | null | undefined): void {
   if (typeof doc.low_remaining_percent === 'number') lowRemaining = doc.low_remaining_percent;
   if (typeof doc.critical_remaining_percent === 'number') criticalRemaining = doc.critical_remaining_percent;
   if (typeof doc.damp_lambda_percent === 'number') dampLambda = doc.damp_lambda_percent;
+  if (typeof doc.ahead_margin_percent === 'number') aheadMargin = doc.ahead_margin_percent;
 }
 
 export function resetThresholds(): void {
@@ -69,6 +83,7 @@ export function resetThresholds(): void {
     low_remaining_percent: LOW_PERCENT,
     critical_remaining_percent: CRITICAL_PERCENT,
     damp_lambda_percent: PACE_DAMP_LAMBDA,
+    ahead_margin_percent: PACE_AHEAD_MARGIN,
   });
 }
 
@@ -117,9 +132,14 @@ export function classifyPace(
   const elapsed = 100 - remainingTime;
   // No elapsed cutoff (🎯T390.1.6.2) — λ eases early-window extremes.
   const lambda = dampLambda < 0 ? 0 : dampLambda;
-  const burn = (used + lambda) / (elapsed + lambda);
-  if (burn > hotRatio) return PACE_HOT;
-  if (burn > aheadRatio) return PACE_AHEAD;
+  // A burning-fast verdict needs real overspend, not a rounding step
+  // (🎯T591): providers publish used as whole percentage points, so
+  // early in a window the numerator's quantum can exceed elapsed itself.
+  if (used - elapsed > aheadMargin) {
+    const burn = (used + lambda) / (elapsed + lambda);
+    if (burn > hotRatio) return PACE_HOT;
+    if (burn > aheadRatio) return PACE_AHEAD;
+  }
   const weekly = String(windowName || '').toLowerCase() === 'weekly';
   const monthly = String(windowName || '').toLowerCase() === 'monthly';
   if (weekly || monthly) {

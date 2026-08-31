@@ -26,7 +26,12 @@ afterEach(() => {
 describe('classifyPace (🎯T390.1)', () => {
   it('is green / orange / red at the 1.0 and 1.5 damped burn ratios', () => {
     expect(classifyPace(50, 50, 50)).toBe(PACE_OK);
-    expect(classifyPace(51, 49, 50)).toBe(PACE_AHEAD);
+    // 🎯T591 moved this vertex on purpose. 51% used at 50% elapsed is a
+    // 1pp overspend — a damped burn of 1.018, i.e. microscopically past
+    // parity — and painting that amber made the ticker twitch on noise.
+    // Amber now needs overspend past the 2pp margin as well as the ratio.
+    expect(classifyPace(51, 49, 50)).toBe(PACE_OK);
+    expect(classifyPace(53, 47, 50)).toBe(PACE_AHEAD);
     expect(classifyPace(77.5, 22.5, 50)).toBe(PACE_AHEAD);
     expect(classifyPace(78, 22, 50)).toBe(PACE_HOT);
     expect(classifyPace(100, 0, 40)).toBe(PACE_HOT);

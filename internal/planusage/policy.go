@@ -69,12 +69,17 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 	elapsed := 100 - rtp
 	// No elapsed cutoff (🎯T390.1.6.2). λ on both terms eases the
 	// early-window ratio; elapsed 0 is (used+λ)/λ.
-	burn := dampedBurn(*used, elapsed, th.DampLambdaPercent)
-	if burn > th.HotRatio {
-		return BandHot
-	}
-	if burn > th.AheadRatio {
-		return BandAhead
+	// A burning-fast verdict needs real overspend, not a rounding step
+	// (🎯T591). Below the margin the window falls through to the waste
+	// bands, which is where a barely-started window belongs.
+	if *used-elapsed > th.AheadMarginPercent {
+		burn := dampedBurn(*used, elapsed, th.DampLambdaPercent)
+		if burn > th.HotRatio {
+			return BandHot
+		}
+		if burn > th.AheadRatio {
+			return BandAhead
+		}
 	}
 	locked := 0.0
 	if w.RemainingPercent != nil {
