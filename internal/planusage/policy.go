@@ -72,7 +72,7 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 	// A burning-fast verdict needs real overspend, not a rounding step
 	// (🎯T591). Below the margin the window falls through to the waste
 	// bands, which is where a barely-started window belongs.
-	if *used-elapsed > th.AheadMarginPercent {
+	if burningFastReachable(*used, elapsed, th) {
 		burn := dampedBurn(*used, elapsed, th.DampLambdaPercent)
 		if burn > th.HotRatio {
 			return BandHot
@@ -356,4 +356,20 @@ func remainingTimePercent(w Window, now time.Time) (float64, bool) {
 		pct = 100
 	}
 	return pct, true
+}
+
+// burningFastReachable gates the ahead / hot verdicts (🎯T591, 🎯T595).
+//
+// Two independent ways to be over-confident about a window, so two guards:
+// the overspend must be real rather than a rounding step (T591), and
+// enough of the window must have passed for a rate to mean anything
+// (T595) — unless the absolute spend is already alarming on its own, which
+// keeps a genuine early blowout red.
+func burningFastReachable(used, elapsed float64, th Thresholds) bool {
+	if used-elapsed <= th.AheadMarginPercent {
+		return false
+	}
+	warmup := th.WarmupElapsedPercent
+	early := th.EarlyAlarmUsedPercent
+	return elapsed >= warmup || (early > 0 && used >= early)
 }

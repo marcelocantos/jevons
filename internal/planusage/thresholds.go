@@ -11,10 +11,22 @@ type Thresholds struct {
 	HotRatio           float64 `json:"hot_ratio"`
 	UnderWastePercent  float64 `json:"under_waste_percent"`
 	LockedWastePercent float64 `json:"locked_waste_percent"`
-	// WarmupElapsedPercent is served for document compat. Colour and
-	// WeeklyBandOf do not short-circuit on it (🎯T390.1.6.2) — damping
-	// is the only early-window ease.
+	// WarmupElapsedPercent is how much of a window must have passed
+	// before a burning-fast verdict is believable at all (🎯T595).
+	//
+	// It was inert from 🎯T390.1.6.2 until 🎯T595 — published, parsed, and
+	// read by nothing — on the theory that damping alone eased the early
+	// window. It does not. As elapsed approaches 0 the damped burn
+	// collapses to 1 + used/λ, which contains no rate at all: with λ=5,
+	// "hot" simply means used ≥ 2.5pp, whenever that happens. On
+	// 2026-08-31 claude's week was painted red at 94% remaining, 2.13%
+	// into the window, because 6% used damps to 1.544.
+	//
+	// EarlyAlarmUsedPercent is the escape hatch, so warmup cannot mute a
+	// genuine emergency: spend that much of a window before warmup and the
+	// verdict lands anyway.
 	WarmupElapsedPercent     float64 `json:"warmup_elapsed_percent"`
+	EarlyAlarmUsedPercent    float64 `json:"early_alarm_used_percent"`
 	LowRemainingPercent      float64 `json:"low_remaining_percent"`
 	CriticalRemainingPercent float64 `json:"critical_remaining_percent"`
 
@@ -58,8 +70,7 @@ type Thresholds struct {
 
 // DefaultThresholds matches the vertices the cockpit already used
 // (ahead 1.0, hot 1.5, waste 15, remaining-low 15 / 5, damp λ 5).
-// warmup_elapsed_percent stays in the document at 5 but is unused
-// by WeeklyBandOf / classifyPace.
+// warmup_elapsed_percent is 5 and load-bearing again since 🎯T595.
 func DefaultThresholds() Thresholds {
 	return Thresholds{
 		AheadRatio:               1.0,
@@ -67,6 +78,7 @@ func DefaultThresholds() Thresholds {
 		UnderWastePercent:        15,
 		LockedWastePercent:       15,
 		WarmupElapsedPercent:     5,
+		EarlyAlarmUsedPercent:    25,
 		LowRemainingPercent:      15,
 		CriticalRemainingPercent: 5,
 		MintIndifferencePercent:  10,

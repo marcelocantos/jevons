@@ -31,13 +31,41 @@ describe('a burning-fast verdict needs real overspend', () => {
 
   it('turns amber once overspend clears the margin, not before', () => {
     // Same elapsed, walking used across the 2pp margin.
-    expect(classifyPace(2, 98, 99, 'weekly')).not.toBe(PACE_AHEAD); // 1.0pp
-    expect(classifyPace(3, 97, 99, 'weekly')).not.toBe(PACE_AHEAD); // 2.0pp: the
-    // gate is strictly greater, so sitting exactly on the margin is not over it
-    expect(classifyPace(4, 96, 99, 'weekly')).toBe(PACE_AHEAD); // 3.0pp
+    // remainingTime 90 → elapsed 10, past the 🎯T595 warmup, so the margin
+    // is what decides these rather than the warmup gate.
+    expect(classifyPace(11, 89, 90, 'weekly')).not.toBe(PACE_AHEAD); // 1.0pp
+    expect(classifyPace(12, 88, 90, 'weekly')).not.toBe(PACE_AHEAD); // 2.0pp:
+    // strictly greater, so sitting exactly on the margin is not over it
+    expect(classifyPace(13, 87, 90, 'weekly')).toBe(PACE_AHEAD); // 3.0pp
   });
 
   it('an exhausted window is still hot regardless of margin', () => {
     expect(classifyPace(100, 0, 99, 'weekly')).toBe(PACE_HOT);
+  });
+});
+
+// 🎯T595. As elapsed approaches 0 the damped burn collapses to 1 + used/λ,
+// so with λ=5 "hot" meant nothing more than used ≥ 2.5pp — no rate in it at
+// all. Claude's week was painted red at 94% remaining, 2.13% into it.
+describe('a rate needs enough window to mean anything', () => {
+  it('leaves the live red case green', () => {
+    // The 2026-08-31 reading: used 6, elapsed 2.13, damped burn 1.544.
+    expect(classifyPace(6, 94, 97.87, 'weekly')).not.toBe(PACE_HOT);
+    expect(classifyPace(6, 94, 97.87, 'weekly')).not.toBe(PACE_AHEAD);
+  });
+
+  it('does not mute a genuine early blowout', () => {
+    // An eighth of the week gone in the first hours is alarming on its own
+    // and must survive the warmup gate.
+    expect(classifyPace(30, 70, 98, 'weekly')).toBe(PACE_HOT);
+  });
+
+  it('still holds the vertices the damping comment cites', () => {
+    expect(classifyPace(9, 91, 94.4, 'weekly')).toBe(PACE_AHEAD); // elapsed 5.6
+    expect(classifyPace(80, 20, 50, 'weekly')).toBe(PACE_HOT);
+  });
+
+  it('an exhausted window is red however early it is', () => {
+    expect(classifyPace(100, 0, 99.9, 'weekly')).toBe(PACE_HOT);
   });
 });
