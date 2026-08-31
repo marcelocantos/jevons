@@ -266,8 +266,18 @@ ui-dev:
 ui-build:
 	cd ui && npx vite build
 
-# Daily UI LaunchAgents (🎯T540.4): React probe on :13705, vanilla UI-only
-# on :13706. Vite :5173 is not a standing job — make ui-dev is opt-in HMR.
+# Daily/dev servers (🎯T540.4 / vellum supervisor/ shape): tracked
+# supervisor/*.ini with @REPO@, rendered into Homebrew supervisor.d.
+# Vite :5173 is not a standing program — make ui-dev is opt-in HMR.
+# jevonsd-install (launchd KeepAlive) remains until SUPERVISOR_TAKEOVER=1.
+.PHONY: supervisor-install supervisor-status
+supervisor-install: bin/jevonsd
+	supervisor/install.sh
+
+supervisor-status:
+	-supervisorctl status jevonsd jevons-vanilla
+
+# Daily UI LaunchAgents (legacy 🎯T540.4 path). Prefer make supervisor-install.
 UI_DAEMON_LABEL := com.marcelocantos.jevons-ui
 UI_VANILLA_LABEL := com.marcelocantos.jevons-ui-vanilla
 ui-daemon-install: bin/jevonsd
@@ -409,6 +419,17 @@ test-ui: playwright-deps
 test-ui-live: playwright-deps
 	node scripts/chat-ui-test/test.js --live
 
+# Does the cockpit tell the truth (🎯T603)? Compares what the UI paints
+# against /api/agents + /api/plan-usage AND against the live tmux server —
+# three independent sources — and fails when they disagree. Written after
+# the fleet panel showed seven agents "running" while tmux held none at
+# all (🎯T602): every unit suite was green throughout, because no hermetic
+# test can see a registry that has drifted from reality.
+# Attaches to a RUNNING daemon; exits 2 (OUTAGE) when there is none.
+.PHONY: test-cockpit-truth
+test-cockpit-truth: playwright-deps
+	node scripts/cockpit-truth/check.cjs
+
 # Live scenario suite (🎯T51): drives a RUNNING jevonsd through the
 # owner flows. Deterministic tier only by default; see scripts/live-suite
 # flags for the overseer/spawn/restart/rewind scenarios.
@@ -466,5 +487,19 @@ bullseye: bin/gate
 	@go build ./... && echo "✓ build"
 	@bin/gate -name bullseye-test -- go test ./... && echo "✓ tests"
 	@go vet ./... && echo "✓ vet"
-	@test -z "$$(git status --porcelain)" && echo "✓ clean" || \
-	 (echo "✗ dirty tree"; git status --short; exit 1)
+	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
+	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
+	else \
+	  echo ""; \
+	  echo "================================================================"; \
+	  echo "⚠  DIRTY WORKING TREE"; \
+	  echo ""; \
+	  echo "Warning only — invariants still pass (exit 0)."; \
+	  echo "Look at the files below before starting a new target."; \
+	  echo "Leftover work from a different objective → park it in a commit first."; \
+	  echo "This session's WIP on the recommended target → continue."; \
+	  echo "================================================================"; \
+	  echo "$$dirty"; \
+	  echo "================================================================"; \
+	  echo ""; \
+	fi

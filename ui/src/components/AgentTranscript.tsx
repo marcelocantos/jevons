@@ -61,6 +61,7 @@ export function AgentTranscript(props: {
   const pagingRef = useRef(false);
   const wasReadyRef = useRef(false);
   const lastHeightRef = useRef(0);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const hydrateSettled = useRef(false);
   const lastTotalRef = useRef(0);
   const lastCountRef = useRef(0);
@@ -155,6 +156,40 @@ export function AgentTranscript(props: {
       pinningRef.current = false;
     };
   }, [props.ready, count, totalSize, props.name, virtualizer]);
+
+  // 🎯T603: the pin above runs when totalSize changes, but a row that
+  // re-measures AFTER it lands leaves a residual gap that nothing closes —
+  // no further growth arrives, so no further pin runs, and the transcript
+  // sits a bubble or two off the end indefinitely.
+  //
+  // Measured live: a re-fold grew the canvas 2117px while the pin followed
+  // only 1772 of it (rows 93 -> 91), leaving fromBottom=345 that never
+  // recovered. Follow was correctly RETAINED — this is not 🎯T587's detach —
+  // so the fix is to finish the scroll, not to re-decide the leave.
+  //
+  // A ResizeObserver on the canvas sees the late settle that the render
+  // pass cannot: it fires on the measurement itself rather than on a React
+  // update. Guarded by followRef so it never fights the owner, and by
+  // distanceFromEnd so a settled view does no work.
+  useEffect(() => {
+    const el = parentRef.current;
+    // Held by ref, not by id: the id is dropped in compact density, so a
+    // querySelector would attach the observer to nothing in exactly the
+    // mode the owner uses for a dense fleet transcript.
+    const canvas = canvasRef.current;
+    if (!el || !canvas || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (!followRef.current || pagingRef.current) return;
+      const gap = distanceFromEnd(el.scrollTop, el.scrollHeight, el.clientHeight);
+      if (gap <= 0) return;
+      pinningRef.current = true;
+      el.scrollTop = pinWriteScrollTop(el.scrollHeight);
+      lastHeightRef.current = el.scrollHeight;
+      pinningRef.current = false;
+    });
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, [props.name]);
 
   useLayoutEffect(() => {
     if (!props.ready || count === 0) return;
@@ -278,6 +313,7 @@ export function AgentTranscript(props: {
     <div id={bodyId} ref={parentRef}>
       {density === 'comfortable' ? <div className="history-sentinel" /> : null}
       <div
+        ref={canvasRef}
         id={density === 'compact' ? undefined : 'messages-canvas'}
         style={{
           height: virtualizer.getTotalSize(),
