@@ -4,10 +4,10 @@
 package server
 
 import (
-	"github.com/marcelocantos/jevons/internal/capacity"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/capacity"
 	"log/slog"
 	"sync"
 	"time"
@@ -70,6 +70,12 @@ type cockpitObs struct {
 	SinceProgress time.Duration
 	// QueueDepth is pending notify/owner notes not yet delivered.
 	QueueDepth int
+	// PaneWorking is the pane's own account of itself: a frame showing a
+	// turn in progress (🎯T601). Events arriving is not the only evidence
+	// of work — a long tool call or plain model thinking emits none — so
+	// silence alone must not convict. False when the pane cannot be read,
+	// which keeps a genuinely dead session convictable.
+	PaneWorking bool
 	// ResumeDenied is a latched Cursor session/load fail-closed
 	// (🎯T541.1). Further Launch attempts would stack store.db writers.
 	ResumeDenied bool
@@ -101,7 +107,15 @@ func planCockpit(o cockpitObs, attempts, maxAttempts int, stuckTimeout time.Dura
 		return cockpitAttach
 	}
 	// Turn-usable: stuck busy with no progress → unstick before declaring OK.
-	if o.SinceProgress >= stuckTimeout && (o.PromptInFlight || o.Waiting || o.QueueDepth > 0) {
+	//
+	// 🎯T601: "no events for a while" is not "no work". The overseer was
+	// declared stuck at since_progress=7m14s while its pane read
+	// "Calling jevonsmcp… ✽ Orbiting… esc to interrupt", and the
+	// recovery that followed interrupted real work. A pane that says it
+	// is working is progress; only silence the pane does not contradict
+	// convicts.
+	if o.SinceProgress >= stuckTimeout && !o.PaneWorking &&
+		(o.PromptInFlight || o.Waiting || o.QueueDepth > 0) {
 		return cockpitUnstickBusy
 	}
 	return cockpitOK
@@ -178,6 +192,19 @@ func (s *Server) ObserveCockpit() cockpitObs {
 	if proc != nil && proc.Alive() {
 		o.ProcAlive = true
 		o.PromptInFlight = proc.PromptInFlight()
+		// 🎯T601: ask the pane, not only the event stream — but only
+		// where the answer IS the pane. For a tmux Claude session
+		// PromptInFlight is now read from the frame (claudia
+		// claudeAgentOps), so a long tool call or plain thinking still
+		// reports work with no ACP event in minutes.
+		//
+		// Not for ACP providers. There PromptInFlight means "the client
+		// says a prompt is outstanding", which is exactly the condition a
+		// wedge also satisfies; treating it as evidence of work would
+		// make the stuck-busy case 🎯T204 exists for unconvictable.
+		if def := reg.Def(name); def != nil && def.Provider == claudia.ProviderClaude {
+			o.PaneWorking = o.PromptInFlight
+		}
 	}
 	if chat != nil && chat.Alive() && proc != nil && chat == proc {
 		o.ChatAttached = true

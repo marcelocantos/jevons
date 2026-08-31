@@ -54,7 +54,10 @@ func TestLongPollIsCappedAndOptional(t *testing.T) {
 	if took := time.Since(start); took > 2*jobPollMax {
 		t.Fatalf("await honoured an hour-long wait (%s); the cap is the point", took)
 	}
+	// Let the cancelled job finish writing its record before the temp dir
+	// is torn down: the persist happens on the job's own goroutine.
 	r.cancel(j.ID)
+	r.await(j, jobPollMax)
 }
 
 // A job that ignores its context could not be stopped; the whole reason
