@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T315: the daemon re-pressures open-mission phase=idle workers itself.
@@ -55,8 +56,13 @@ func TestIdlePressureSweepDeliversWithoutOverseerTurn(t *testing.T) {
 
 	var pushed []struct{ target, event, text string }
 	reps := s.idlePressureSweep(idlePressureDeps{
-		Now:     now,
-		Running: func(name string) bool { return name == "jv-t315-pressure" },
+		Now: now,
+		// The fixture's seats have no session files behind their ids, so
+		// the 🎯T423 on-disk reading is unknown and the sweep would skip
+		// them before reaching the decision under test. The tracker
+		// already says this seat is idle; say so at the phase seam too.
+		SessionPhase: func(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle },
+		Running:      func(name string) bool { return name == "jv-t315-pressure" },
 		Push: func(target, event, text string) error {
 			pushed = append(pushed, struct{ target, event, text string }{target, event, text})
 			return nil
@@ -99,7 +105,7 @@ func TestIdlePressureSweepBackoffThenMaxed(t *testing.T) {
 	pushes := 0
 	push := func(target, event, text string) error { pushes++; return nil }
 
-	s.idlePressureSweep(idlePressureDeps{Now: now, Running: running, Push: push})
+	s.idlePressureSweep(idlePressureDeps{Now: now, Running: running, Push: push, SessionPhase: idlePhase})
 	if pushes != 1 {
 		t.Fatalf("first sweep pushes=%d want 1", pushes)
 	}
@@ -107,7 +113,7 @@ func TestIdlePressureSweepBackoffThenMaxed(t *testing.T) {
 	// Still idle a few seconds later: backoff must suppress the re-send.
 	soon := now.Add(10 * time.Second)
 	activity.by["jv-t315-pressure"] = IdleActivity{Phase: "idle", Updated: now.Add(-time.Hour)}
-	reps := s.idlePressureSweep(idlePressureDeps{Now: soon, Running: running, Push: push})
+	reps := s.idlePressureSweep(idlePressureDeps{Now: soon, Running: running, Push: push, SessionPhase: idlePhase})
 	if pushes != 1 {
 		t.Fatalf("backoff sweep pushes=%d want 1 (no thrash)", pushes)
 	}
@@ -117,7 +123,7 @@ func TestIdlePressureSweepBackoffThenMaxed(t *testing.T) {
 
 	// Past the first backoff, pressure resumes.
 	later := now.Add(3 * time.Minute)
-	reps = s.idlePressureSweep(idlePressureDeps{Now: later, Running: running, Push: push})
+	reps = s.idlePressureSweep(idlePressureDeps{Now: later, Running: running, Push: push, SessionPhase: idlePhase})
 	if pushes != 2 {
 		t.Fatalf("post-backoff pushes=%d want 2", pushes)
 	}
@@ -139,7 +145,7 @@ func TestIdlePressureSweepBackoffThenMaxed(t *testing.T) {
 	})
 	far := later.Add(2 * time.Hour)
 	activity.by["jv-t315-pressure"] = IdleActivity{Phase: "idle", Updated: far.Add(-time.Hour)}
-	reps = s.idlePressureSweep(idlePressureDeps{Now: far, Running: running, Push: push})
+	reps = s.idlePressureSweep(idlePressureDeps{Now: far, Running: running, Push: push, SessionPhase: idlePhase})
 	if pushes != 2 {
 		t.Fatalf("maxed sweep pushes=%d want 2 (no infinite ladder)", pushes)
 	}
@@ -162,9 +168,14 @@ func TestIdlePressureSweepRespectsMissionOpenHook(t *testing.T) {
 
 	pushes := 0
 	reps := s.idlePressureSweep(idlePressureDeps{
-		Now:     now,
-		Running: func(name string) bool { return true },
-		Push:    func(target, event, text string) error { pushes++; return nil },
+		Now: now,
+		// The fixture's seats have no session files behind their ids, so
+		// the 🎯T423 on-disk reading is unknown and the sweep would skip
+		// them before reaching the decision under test. The tracker
+		// already says this seat is idle; say so at the phase seam too.
+		SessionPhase: func(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle },
+		Running:      func(name string) bool { return true },
+		Push:         func(target, event, text string) error { pushes++; return nil },
 	})
 	if pushes != 0 {
 		t.Fatalf("closed mission must not be re-pressured (pushes=%d)", pushes)
@@ -235,9 +246,14 @@ func TestIdlePressureSweepSkipsUnboundPOWithoutChildren(t *testing.T) {
 
 	pushes := 0
 	reps := s.idlePressureSweep(idlePressureDeps{
-		Now:     now,
-		Running: func(name string) bool { return true },
-		Push:    func(target, event, text string) error { pushes++; return nil },
+		Now: now,
+		// The fixture's seats have no session files behind their ids, so
+		// the 🎯T423 on-disk reading is unknown and the sweep would skip
+		// them before reaching the decision under test. The tracker
+		// already says this seat is idle; say so at the phase seam too.
+		SessionPhase: func(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle },
+		Running:      func(name string) bool { return true },
+		Push:         func(target, event, text string) error { pushes++; return nil },
 	})
 	if pushes != 0 {
 		t.Fatalf("childless unbound PO must not be re-pressured (pushes=%d)", pushes)
@@ -306,3 +322,9 @@ func TestIdlePressureSweepSkipsPOWithEngagedChildren(t *testing.T) {
 		}
 	}
 }
+
+// idlePhase is the 🎯T423 reading these sweep tests need: the fixture's
+// seats have no session files behind their ids, so the on-disk classifier
+// returns unknown and the sweep skips them before reaching the decision
+// under test. The activity tracker already calls this seat idle.
+func idlePhase(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle }

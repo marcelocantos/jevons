@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/converge"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // recordingHuman is a hermetic HumanSink.
@@ -237,8 +238,13 @@ func TestIdlePressureSweepWithoutEngineKeepsT315Path(t *testing.T) {
 	s, _ := pressureFixture(t, now)
 	pushes := 0
 	s.idlePressureSweep(idlePressureDeps{
-		Now:     now,
-		Running: func(name string) bool { return name == "jv-t315-pressure" },
+		Now: now,
+		// The fixture's seats have no session files behind their ids, so
+		// the 🎯T423 on-disk reading is unknown and the sweep would skip
+		// them before reaching the decision under test. The tracker
+		// already says this seat is idle; say so at the phase seam too.
+		SessionPhase: func(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle },
+		Running:      func(name string) bool { return name == "jv-t315-pressure" },
 		Push: func(target, event, text string) error {
 			pushes++
 			return nil

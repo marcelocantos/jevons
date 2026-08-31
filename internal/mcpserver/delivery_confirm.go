@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -67,11 +68,29 @@ func (s *Server) markAgentTurnBegan(name string) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.agentTurnBegan == nil {
 		s.agentTurnBegan = map[string]bool{}
 	}
 	s.agentTurnBegan[name] = true
+	reg := s.registry
+	s.mu.Unlock()
+
+	// 🎯T409: a turn that has begun is host attestation that the session is
+	// real, so it promotes Materialized — the flag recovery reads to decide
+	// whether a seat can be resumed rather than re-minted.
+	//
+	// Called unconditionally on purpose. MarkMaterialized itself refuses a
+	// Claude row with no durable JSONL behind it ("cannot mark materialized
+	// without session JSONL"), and that judgment belongs to the registry,
+	// which owns the evidence — a provider check here would be a second
+	// copy of it, free to drift. The error is expected for exactly that
+	// case and is not a failure of this path.
+	if reg != nil {
+		if err := reg.MarkMaterialized(name); err != nil {
+			slog.Debug("turn began did not promote materialized",
+				"agent", name, "err", err)
+		}
+	}
 }
 
 // agentHasTurnBegan reports process-local turn evidence for name.

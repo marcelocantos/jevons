@@ -79,9 +79,19 @@ func TestT435AgentListNamesTheReapThatEmptiedTheRow(t *testing.T) {
 	}
 	// Clause 3: a designed teardown reads as one. The surface must not offer
 	// the orphaning vocabulary for a row that left by decision.
+	//
+	// Scoped to the removals block on purpose. 🎯T459 later added a census
+	// line that always prints "N reapable orphans" — a fleet-wide count,
+	// not a description of this row — and a bare substring ban over the
+	// whole output turned that into a permanent red. The claim was always
+	// about how the removal is NARRATED, so that is what it reads.
+	removals := removalsBlock(out)
+	if removals == "" {
+		t.Fatalf("no removals block to judge:\n%s", out)
+	}
 	for _, never := range []string{"silent removal", "orphan"} {
-		if strings.Contains(strings.ToLower(out), never) {
-			t.Fatalf("designed teardown must not read as %q:\n%s", never, out)
+		if strings.Contains(strings.ToLower(removals), never) {
+			t.Fatalf("designed teardown must not read as %q:\n%s", never, removals)
 		}
 	}
 }
@@ -117,4 +127,29 @@ func TestT435AgentListWithNoRemovalsIsUnchanged(t *testing.T) {
 	if !strings.Contains(out, "jv-t420-recovery-oracle") {
 		t.Fatalf("live worker missing from agent_list:\n%s", out)
 	}
+}
+
+// removalsBlock returns the "Recent fleet removals" section of an agent_list
+// rendering — the header and the rows under it, up to the first blank line.
+// Empty when the listing has no such section.
+func removalsBlock(out string) string {
+	lines := strings.Split(out, "\n")
+	start := -1
+	for i, ln := range lines {
+		if strings.Contains(ln, "Recent fleet removals") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "" {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[start:end], "\n")
 }

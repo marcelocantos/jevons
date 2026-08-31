@@ -1194,6 +1194,17 @@ type idlePressureDeps struct {
 	Now     time.Time
 	Push    IdleNudgePusher
 	Running func(name string) bool
+	// SessionPhase overrides the 🎯T423 phase reading, the way Push and
+	// Running override delivery and liveness. Nil keeps the on-disk
+	// classification, so the daemon is unchanged.
+	//
+	// Without this seam a test could not reach the nudge decision at all:
+	// the sweep skips any seat whose phase it cannot read, and a fixture
+	// registering session ids with no files behind them classifies every
+	// seat unknown. Three T315/T317 tests went red that way when the gate
+	// landed — they were asserting on a push that the phase check had
+	// already declined, several layers above them.
+	SessionPhase func(d claudia.AgentDef) turnev.Phase
 }
 
 // TriggerIdlePressureSweep runs one periodic open-mission idle re-pressure
@@ -1260,6 +1271,7 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 	defs := s.registry.List()
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg:             s.registry,
+		SessionPhase:    deps.SessionPhase,
 		Activity:        activity,
 		Ledger:          ledger,
 		Push:            push,

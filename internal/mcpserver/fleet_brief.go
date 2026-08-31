@@ -17,7 +17,12 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 ## Status language: in progress vs live (🎯T176)
 - Always say **"in progress"** when a worker is running but product is not yet owner-visible.
 - Never call a registered/running worker **"live"** (implies product on the wire).
-- **"Live" / "landed" / "shipped"** only with product evidence: commit SHA + hard-reloadable UI, or proven API on the daily path.
+- **"Live" / "landed" / "shipped"** only with product evidence: commit SHA + hard-reloadable UI, or proven API on the development or released surface.
+
+## Environments: development vs released (🎯T572)
+- **development** = this machine's running jevonsd (:13705 / ~/.jevons).
+- **released** = Homebrew / shipped.
+- Do not mint a third environment. restart-daily-jevonsd.sh is a legacy filename; speech is "restart the development daemon".
 
 ## Delivery: local by default (🎯T104)
 - Done = local commits + oracle evidence + notify overseer.
@@ -100,18 +105,18 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   are not answers. One leftover bubble in a tall pane, Latest on a
   hard reload, or more empty canvas than bubbles is an automatic no.
 - If the prose says no and a journey is green, the journey is a false
-  green — fix the oracle in the same turn; daily is not a universe the
-  test cannot see.
+  green — fix the oracle in the same turn; the running cockpit is not a
+  universe the test cannot see.
 - Residual: instructional + pure HasVisualProseVerdict /
   LooksLikeMissingVisualVerdict; not a hard daemon block.
 
 ## Cockpit UI path (🎯T540)
 - Product owner-visible UI work lands in ui/ (Vite + React). web/ is
   deprecated reference-only — parity oracle, not the place to ship
-  features. Daily :13705 serves React (ui/dist, LaunchAgent
+  features. Development :13705 serves React (ui/dist, LaunchAgent
   com.marcelocantos.jevons-ui); vanilla web/ is :13706 LaunchAgent
   com.marcelocantos.jevons-ui-vanilla (🎯T540.4). make ui-dev is opt-in
-  HMR, not a standing agent. 🎯T505 / 🎯T553.1: daily ui/dist is built
+  HMR, not a standing agent. 🎯T505 / 🎯T553.1: development ui/dist is built
   from committed HEAD, not the shared clone.
 
 ## Greenfield oracle elicitation (🎯T31.2)
@@ -234,7 +239,7 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   (silent-ledger + fog-known / fog-unknown / fog-blindspot), not a
   product-done finish-report. Implementer briefs may inherit the scout
   ledger via envelope.InheritLedger.
-- Design-gated, parked-for-design, T31.2 fuzzy, host saturation (T460)
+- Design-gated, parked-for-design, 🎯T31.2 fuzzy, host saturation (🎯T460)
   still block punching through into implementation.
 
 ## PO never implements (🎯T125)
