@@ -11,8 +11,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/butler"
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -212,7 +213,23 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultError("parent cannot equal thread id"), nil
 	}
 
-	provider := string(cli.SelectAgentProvider(str(args["provider"]), "", s.resolvedDefaultProvider()))
+	// 🎯T583: thread_spawn is a mint like agent_start — an omitted provider
+	// goes through the same claude-first knob, not the bare config default.
+	stored := ""
+	existed := false
+	if s.registry != nil {
+		if d := s.registry.Def(id); d != nil {
+			stored, existed = string(d.Provider), true
+		}
+	}
+	pick := s.mintProviderPick(strings.TrimSpace(str(args["provider"])), stored, existed, "", string(claudia.PurposeWork), id)
+	if strings.TrimSpace(pick.Provider) == "" {
+		life["err"] = "plan dest empty"
+		s.logLifecycle(compThread, "spawn", "error", life)
+		return mcp.NewToolResultError(
+			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5) — " + pick.Cite()), nil
+	}
+	provider := pick.Provider
 	th, err := s.butler.Spawn(butler.SpawnArgs{
 		ID:          id,
 		WorkDir:     workdir,
@@ -235,11 +252,13 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 		}
 	}
 	life["provider"] = provider
+	life["provider_knob"] = pick.Cite()
 	life["session_id"] = short(th.SessionID)
 	life["purpose"] = th.Purpose
 	s.logLifecycle(compThread, "spawn", "ok", life)
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Spawned thread %q (session %s) in %s (parent: %s).", th.ID, short(th.SessionID), th.WorkDir, parent)), nil
+		"Spawned thread %q (session %s) in %s (parent: %s). provider: %s (%s)",
+		th.ID, short(th.SessionID), th.WorkDir, parent, provider, pick.Cite())), nil
 }
 
 func (s *Server) handleThreadTakeover(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

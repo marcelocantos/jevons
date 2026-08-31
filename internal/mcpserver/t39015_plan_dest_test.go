@@ -37,10 +37,14 @@ func TestStitchOmitProviderUsesPlanDestWhenDefaultAhead(t *testing.T) {
 	s.SetRegistry(reg)
 	s.SetDefaultProvider(string(claudia.ProviderGrok))
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	// 🎯T583: Claude is deliberately absent from this feed. When Claude is
+	// published with headroom the claude-first knob decides and plan_dest
+	// never runs; the usage-first question this test asks only arises
+	// among the other backends.
 	s.SetPlanUsageSource(func() planusage.Snapshot {
 		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
 			t39015Weekly("grok", 45, 55, now),
-			t39015Weekly("claude", 80, 20, now),
+			t39015Weekly("codex", 80, 20, now),
 		}}
 	})
 	def, _, note, err := s.stitchAgentStart(
@@ -50,8 +54,8 @@ func TestStitchOmitProviderUsesPlanDestWhenDefaultAhead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderClaude {
-		t.Fatalf("omit mint dest=%q want claude (grok ahead)", def.Provider)
+	if def.Provider != claudia.ProviderCodex {
+		t.Fatalf("omit mint dest=%q want codex (grok ahead)", def.Provider)
 	}
 	if !strings.Contains(note, "plan_dest") {
 		t.Fatalf("note should cite plan_dest: %q", note)
