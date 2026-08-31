@@ -1084,8 +1084,28 @@ test('T279 index.html: optimistic paint + soft-reconnect retain wired', () => {
   assert.ok(html.includes('retainPendingOwnerTurnsVisible'), 'must retain after soft reconnect');
   assert.ok(html.includes('planOptimisticMainUserPaint'), 'must use pure paint plan');
   assert.ok(html.includes('planRepaintAfterSoftReconnect'), 'must use pure repaint plan');
+  // Read the FUNCTION BODY, not a byte window. The old form was
+  // /submitWireText[\s\S]{0,800}paintOptimisticMainUser/, which anchored on
+  // the first `submitWireText` in the file -- a call site 900+ bytes above
+  // the paintOptimisticMainUser *definition* -- so an unrelated helper
+  // landing between them (isChatWireOpen) pushed it 131 bytes over the
+  // window and failed the assertion while the call it checks for was
+  // present and correct. A proximity heuristic measures the layout of the
+  // file; the claim is about the code.
+  const bodyOf = (name) => {
+    const at = html.indexOf('function ' + name + '(');
+    if (at < 0) return '';
+    let depth = 0, started = false;
+    for (let i = at; i < html.length; i++) {
+      if (html[i] === '{') { depth++; started = true; }
+      else if (html[i] === '}') { depth--; if (started && depth === 0) return html.slice(at, i + 1); }
+    }
+    return '';
+  };
+  const submitBody = bodyOf('submitWireText');
+  assert.ok(submitBody, 'submitWireText must be a declared function');
   assert.ok(
-    /submitWireText[\s\S]{0,800}paintOptimisticMainUser/.test(html),
+    submitBody.includes('paintOptimisticMainUser('),
     'submitWireText must call paintOptimisticMainUser after accept',
   );
   assert.ok(
