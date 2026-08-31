@@ -33,11 +33,83 @@ type muxEnvelope struct {
 	Body json.RawMessage `json:"body,omitempty"`
 }
 
+// muxWatch is one connection's view of one transcript. Two goroutines
+// reach it: the hub's live fan-out (under muxHub.mu) and the socket's own
+// replay/paging handler (no hub lock, because it does network writes and
+// must not hold the hub while it blocks). They both touch `sent`, and on
+// 2026-08-31 that killed the daemon outright — `fatal error: concurrent
+// map writes` in writeMuxWindow, on the owner's daily path, triggered by
+// nothing more exotic than a reconnect landing while the fleet was
+// talking.
+//
+// So the struct carries its own lock rather than borrowing the hub's:
+// replay can hold it for the microsecond it takes to record an id and
+// release it before writing to the socket.
 type muxWatch struct {
+	mu         sync.Mutex
 	visible    muxwin.Resolved
 	sub        muxwin.Resolved
 	subscribed bool
 	sent       map[string]struct{}
+}
+
+// subscribeTo records what this connection is watching.
+func (w *muxWatch) subscribeTo(visible, sub muxwin.Resolved) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.visible, w.sub, w.subscribed = visible, sub, true
+	w.mu.Unlock()
+}
+
+// window reports the subscription the fan-out should test against.
+func (w *muxWatch) window() (sub muxwin.Resolved, subscribed bool) {
+	if w == nil {
+		return muxwin.Resolved{}, false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.sub, w.subscribed
+}
+
+// alreadySent reports whether this connection has had that event as a put.
+func (w *muxWatch) alreadySent(id string) bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, ok := w.sent[id]
+	return ok
+}
+
+// markSent records an event as delivered to this connection.
+func (w *muxWatch) markSent(id string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.sent == nil {
+		w.sent = make(map[string]struct{})
+	}
+	w.sent[id] = struct{}{}
+	w.mu.Unlock()
+}
+
+// sentSnapshot copies the delivered set. HaveFromIDs ranges over it, which
+// is exactly as unsafe as writing it while the hub fans out.
+func (w *muxWatch) sentSnapshot() map[string]struct{} {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make(map[string]struct{}, len(w.sent))
+	for id := range w.sent {
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 type muxHub struct {
@@ -333,7 +405,7 @@ func (h *muxHub) fanMeta(name string, body map[string]any) {
 	defer h.mu.Unlock()
 	for sess := range h.conns {
 		w := sess.watchGet(name)
-		if w == nil || !w.subscribed {
+		if _, subscribed := w.window(); w == nil || !subscribed {
 			continue
 		}
 		sess.enqueue(payload)
@@ -413,21 +485,17 @@ func (h *muxHub) fanFoldsLocked(name string, folds []muxwin.LiveFold) {
 		}
 		for sess := range h.conns {
 			w := sess.watchGet(name)
-			if w == nil || !w.subscribed || !muxwin.Contains(w.sub, changed.Index) {
+			sub, subscribed := w.window()
+			if w == nil || !subscribed || !muxwin.Contains(sub, changed.Index) {
 				continue
 			}
-			if op == "put" {
-				if _, ok := w.sent[changed.ID]; ok {
-					continue
-				}
+			if op == "put" && w.alreadySent(changed.ID) {
+				continue
 			}
 			if !sess.enqueue(payload) {
 				continue
 			}
-			if w.sent == nil {
-				w.sent = make(map[string]struct{})
-			}
-			w.sent[changed.ID] = struct{}{}
+			w.markSent(changed.ID)
 		}
 	}
 }
@@ -866,24 +934,17 @@ func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSess
 	var watch *muxWatch
 	if sess != nil {
 		watch = sess.ensure(name)
-		watch.visible = resolved
-		watch.sub = sub
-		watch.subscribed = true
+		watch.subscribeTo(resolved, sub)
 	}
 	var have map[int]struct{}
 	if watch != nil {
-		have = muxwin.HaveFromIDs(events, watch.sent)
+		have = muxwin.HaveFromIDs(events, watch.sentSnapshot())
 	}
 	need := muxwin.Need(sub, n, have)
 	out := s.muxEventsAt(name, events, need)
 	for _, ev := range out {
 		s.muxWrite(ctx, conn, ch, "frame", muxEventBody(ev, "put", ""))
-		if watch != nil {
-			if watch.sent == nil {
-				watch.sent = make(map[string]struct{})
-			}
-			watch.sent[ev.ID] = struct{}{}
-		}
+		watch.markSent(ev.ID)
 	}
 	s.muxWrite(ctx, conn, ch, "meta", s.muxTranscriptMeta(sub, n, s.muxTruncated(name)))
 	return nil
