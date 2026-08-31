@@ -9,6 +9,9 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/capacity"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/pofanout"
 	"github.com/marcelocantos/jevons/internal/poproactive"
 	"github.com/marcelocantos/jevons/internal/staffops"
@@ -67,6 +70,15 @@ func (s *Server) samplePOFanout(rt *sentinelRuntime, leaves []poproactive.LeafOb
 	defs := s.registry.List()
 	wantLedger := targetfile.LedgerKey(workdir)
 
+	// 🎯T586: what the PO would run into if it did try to mint. Both readings
+	// are the fleet's own gates — the same governor jevons_agent_start asks
+	// and the same plan-usage policy the mint destination is picked from — so
+	// a PO declining under either is obeying the product, not sitting silent.
+	// Sampled once per cycle: they are properties of the host and the
+	// provider, not of any one product owner.
+	spawnRefused, spawnReason, spawnDetail := s.poFanoutSpawnGate()
+	providerBlockedFleet, providerReason, providerDetail := s.poFanoutProviderGate()
+
 	var observed []poFanoutObserved
 	for _, d := range defs {
 		name := strings.TrimSpace(d.Name)
@@ -89,10 +101,26 @@ func (s *Server) samplePOFanout(rt *sentinelRuntime, leaves []poproactive.LeafOb
 		children := liveWorkChildren(defs, name, running)
 
 		po := pofanout.POObs{
-			Name:             name,
-			Alive:            alive,
-			Phase:            phase,
-			LiveWorkChildren: children,
+			Name:               name,
+			Alive:              alive,
+			Phase:              phase,
+			LiveWorkChildren:   children,
+			SpawnRefused:       spawnRefused,
+			SpawnRefusedReason: spawnReason,
+			SpawnRefusedDetail: spawnDetail,
+			ProviderBlocked:    providerBlockedFleet,
+			ProviderReason:     providerReason,
+			ProviderDetail:     providerDetail,
+		}
+		// A per-agent 🎯T406 park on this PO blocks its own spawns even when
+		// the fleet as a whole is willing.
+		if !po.ProviderBlocked {
+			if dec := s.AllowFleetControl(name, fleetintent.ControlSpawn); !dec.Allow &&
+				dec.Blocking == fleetintent.BlockedProvider {
+				po.ProviderBlocked = true
+				po.ProviderReason = dec.Reason
+				po.ProviderDetail = fleetintent.Describe(dec.Blocking)
+			}
 		}
 		po.TurnEnded, po.NewChildrenThisTurn, po.GraceElapsed = s.trackPOFanoutTurn(rt, name, phase, alive, children, now, grace)
 		observed = append(observed, poFanoutObserved{obs: po, workdir: d.WorkDir, targetID: d.TargetID})
@@ -222,4 +250,46 @@ func liveWorkChildren(defs []claudia.AgentDef, name string, running func(string)
 		}
 	}
 	return n
+}
+
+// poFanoutSpawnGate asks the capacity governor the same question
+// jevons_agent_start asks before it mints a worker pane (🎯T460 / 🎯T566.2).
+// A refusal means the PO could not have spawned even had it wanted to, so its
+// idleness is obedience rather than a fan-out fault (🎯T586).
+//
+// A missing governor is unknown, not refused: the sentinel keeps its pre-🎯T586
+// reading rather than falling silent on every fleet with no governor wired.
+func (s *Server) poFanoutSpawnGate() (refused bool, reason, detail string) {
+	gov := s.CapacityGovernor()
+	if gov == nil {
+		return false, "", ""
+	}
+	d := gov.AdmitSpawn(capacity.SpawnWorker, "po_fanout_probe")
+	if d.Admitted() {
+		return false, "", ""
+	}
+	return true, string(d.Reason), d.Detail
+}
+
+// poFanoutProviderGate reports whether the provider would refuse the work a
+// spawn would carry: 🎯T406 fleet intent standing at blocked_provider, or plan
+// usage with no eligible mint destination left (every backend low, exhausted
+// or spend-limited). Unknown — no plan feed yet — is not blocked, for the same
+// reason providerDestEligible fails open (🎯T390.1.5).
+func (s *Server) poFanoutProviderGate() (blocked bool, reason, detail string) {
+	// AllowSpawn is the fleet-level read: a pane that does not exist yet has no
+	// agent row of its own to consult.
+	if dec := s.fleetIntent().AllowSpawn(); !dec.Allow &&
+		dec.Blocking == fleetintent.BlockedProvider {
+		return true, dec.Reason, fleetintent.Describe(dec.Blocking)
+	}
+	_, cands, now, th, ok := s.planPolicyInputs()
+	if !ok || len(cands) == 0 {
+		return false, "", ""
+	}
+	if _, picked := planusage.PickPlanDest(cands, now, th); picked {
+		return false, "", ""
+	}
+	return true, "no_eligible_plan_dest",
+		"every backend is low, exhausted or spend-limited in plan usage (🎯T390)"
 }

@@ -4,6 +4,7 @@
 package pofanout
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -190,5 +191,117 @@ func TestDetailCapsReadyIDs(t *testing.T) {
 	}
 	if strings.Contains(res.Detail, "T9") {
 		t.Fatalf("detail cited past the cap: %q", res.Detail)
+	}
+}
+
+// 🎯T586 tape one: the 2026-08-29 shape. Thirty-three genuinely ready leaves,
+// a fleet already at six live seats so the governor refuses a new pane, and a
+// provider that has hit its spend limit. The PO was correctly declining to
+// mint, and the sentinel must not call that stalled.
+func TestCapacityAndSpendBlockedPOIsNotStalled(t *testing.T) {
+	t.Parallel()
+	var leaves []poproactive.LeafObs
+	for i := range 33 {
+		leaves = append(leaves, readyLeaf(fmt.Sprintf("T%d", 500+i)))
+	}
+
+	po := idlePO()
+	po.LiveWorkChildren = 4
+	po.SpawnRefused = true
+	po.SpawnRefusedReason = "seat_count"
+	po.SpawnRefusedDetail = "seat-count runaway; refusing a new worker pane (🎯T566.2)"
+	po.ProviderBlocked = true
+	po.ProviderReason = "spend_limit"
+	po.ProviderDetail = "fable weekly allowance exhausted"
+
+	res := Classify(po, leaves)
+	if res.Fault() {
+		t.Fatalf("blocked PO surfaced as a fault: verdict=%s detail=%s", res.Verdict, res.Detail)
+	}
+	if res.Verdict != VerdictProviderExhausted {
+		t.Fatalf("verdict=%s want %s", res.Verdict, VerdictProviderExhausted)
+	}
+	if res.Blocker != BlockerProviderExhausted {
+		t.Fatalf("blocker=%q want %q", res.Blocker, BlockerProviderExhausted)
+	}
+	if res.Reason == "idle_on_ready_leaves" {
+		t.Fatal("reason must name the true blocker, not idle_on_ready_leaves")
+	}
+	if !strings.Contains(res.Detail, "blocker=provider_exhausted") {
+		t.Fatalf("detail must carry the blocker: %q", res.Detail)
+	}
+	if !strings.Contains(res.Detail, "ready=33") {
+		t.Fatalf("detail must still report the engageable count: %q", res.Detail)
+	}
+
+	// The same PO with the provider healthy is still host-refused, and the
+	// verdict then names the host rather than the provider.
+	po.ProviderBlocked, po.ProviderReason, po.ProviderDetail = false, "", ""
+	res = Classify(po, leaves)
+	if res.Fault() || res.Verdict != VerdictCapacityRefused {
+		t.Fatalf("host-refused PO: verdict=%s fault=%v want capacity_refused/false", res.Verdict, res.Fault())
+	}
+	if res.Blocker != BlockerCapacityRefused || res.Reason != "seat_count" {
+		t.Fatalf("blocker=%q reason=%q want capacity_refused/seat_count", res.Blocker, res.Reason)
+	}
+	if !strings.Contains(res.Detail, "🎯T566.2") {
+		t.Fatalf("detail must carry the governor's own evidence: %q", res.Detail)
+	}
+}
+
+// 🎯T586 tape one, turn arm: a turn whose whole purpose was fleet repair ended
+// with zero new children while the host refused panes. That is not
+// turn_no_fanout either — the earlier 08:11 / 08:31 false alarms.
+func TestBlockedTurnWithZeroChildrenIsNotTurnNoFanout(t *testing.T) {
+	t.Parallel()
+	po := idlePO()
+	po.TurnEnded = true
+	po.NewChildrenThisTurn = 0
+	po.SpawnRefused = true
+	po.SpawnRefusedReason = "memory_grind"
+
+	res := Classify(po, []poproactive.LeafObs{readyLeaf("T500")})
+	if res.Fault() {
+		t.Fatalf("repair turn under a host refusal is not a fan-out fault: verdict=%s", res.Verdict)
+	}
+	if res.Verdict != VerdictCapacityRefused || res.Reason != "memory_grind" {
+		t.Fatalf("verdict=%s reason=%q want capacity_refused/memory_grind", res.Verdict, res.Reason)
+	}
+}
+
+// 🎯T586 tape two, the control: a genuinely idle PO with admitting capacity, a
+// willing provider and one ungated leaf is still stalled. An over-broad fix
+// that silences the sentinel fails here.
+func TestIdlePOWithCapacityAndOneUngatedLeafIsStillStalled(t *testing.T) {
+	t.Parallel()
+	res := Classify(idlePO(), []poproactive.LeafObs{readyLeaf("T500")})
+	if !res.Fault() || res.Verdict != VerdictStalled {
+		t.Fatalf("verdict=%s fault=%v want stalled/true", res.Verdict, res.Fault())
+	}
+	if res.Reason != "idle_on_ready_leaves" {
+		t.Fatalf("reason=%q want idle_on_ready_leaves", res.Reason)
+	}
+	if res.Blocker != "" {
+		t.Fatalf("blocker=%q want empty — nothing was in this PO's way", res.Blocker)
+	}
+}
+
+// 🎯T586: an all-gated frontier names all_gated as its blocker, so the
+// overseer reads one vocabulary across the three legitimate reasons.
+func TestGatedFrontierNamesAllGatedBlocker(t *testing.T) {
+	t.Parallel()
+	leaves := []poproactive.LeafObs{
+		{ID: "T112", Name: "design-gated hub", Tags: []string{"design-gated"}},
+	}
+	res := Classify(idlePO(), leaves)
+	if res.Blocker != BlockerAllGated {
+		t.Fatalf("blocker=%q want %q", res.Blocker, BlockerAllGated)
+	}
+	if res.Fault() {
+		t.Fatal("all-gated frontier is sleep, not a fault")
+	}
+	// An empty frontier has no leaves to gate, so it names no blocker.
+	if got := Classify(idlePO(), nil); got.Blocker != "" {
+		t.Fatalf("empty frontier blocker=%q want empty", got.Blocker)
 	}
 }

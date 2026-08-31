@@ -48,6 +48,15 @@ const (
 	// VerdictWithinGrace: idle on ready leaves, but not yet past the grace
 	// bound. Between two turns a PO is briefly idle; that is not a fault.
 	VerdictWithinGrace Verdict = "within_grace"
+	// VerdictCapacityRefused: the frontier holds ready leaves, but the host
+	// would refuse the pane the PO would have to mint — memory grind or
+	// seat-count runaway (🎯T566.2), or the 🎯T36 spawn halt. Declining to
+	// spawn into a refusal is correct behaviour, not silence (🎯T586).
+	VerdictCapacityRefused Verdict = "capacity_refused"
+	// VerdictProviderExhausted: the provider will not take the work — a spend
+	// limit, an exhausted allowance, or 🎯T406 blocked_provider intent. The
+	// leaves stay ready and the pass resumes when the provider does (🎯T586).
+	VerdictProviderExhausted Verdict = "provider_exhausted"
 	// VerdictStalled: FAULT — idle past grace while the product-scoped
 	// frontier holds ready, unengaged, non-gated leaves.
 	VerdictStalled Verdict = "stalled"
@@ -89,7 +98,37 @@ type POObs struct {
 	TurnEnded bool
 	// NewChildrenThisTurn is how many work children appeared across that turn.
 	NewChildrenThisTurn int
+	// SpawnRefused is true when the host would refuse a new worker pane right
+	// now: capacity.AdmitSpawn(SpawnWorker) does not admit (🎯T566.2 memory
+	// grind / seat count, 🎯T36 spawn halt). A PO that declines to mint into
+	// that refusal is obeying the governor, so it is not stalled (🎯T586).
+	SpawnRefused bool
+	// SpawnRefusedReason is the governor's own reason code (reporting).
+	SpawnRefusedReason string
+	// SpawnRefusedDetail is the governor's human line (reporting).
+	SpawnRefusedDetail string
+	// ProviderBlocked is true when the provider refuses fleet work: a spend
+	// limit or exhausted allowance from plan usage, seats reporting a
+	// spend-limit refusal, or 🎯T406 blocked_provider fleet intent.
+	ProviderBlocked bool
+	// ProviderReason is the stable code for why (reporting).
+	ProviderReason string
+	// ProviderDetail is the human line (reporting).
+	ProviderDetail string
 }
+
+// Blocker codes name the true reason a PO with a non-empty frontier is
+// correctly not spawning (🎯T586). An empty Blocker means nothing was in the
+// PO's way — which is what makes silence a fault.
+const (
+	// BlockerAllGated: every leaf on the frontier is design-gated,
+	// needs-owner, parked, blocked or already engaged.
+	BlockerAllGated = "all_gated"
+	// BlockerCapacityRefused: the host would refuse the pane.
+	BlockerCapacityRefused = "capacity_refused"
+	// BlockerProviderExhausted: the provider would refuse the work.
+	BlockerProviderExhausted = "provider_exhausted"
+)
 
 // Result is the reading of one PO.
 type Result struct {
@@ -101,6 +140,10 @@ type Result struct {
 	// ReadyIDs are the ready, unengaged, non-gated leaves the PO is leaving
 	// stranded (empty unless the frontier has any).
 	ReadyIDs []string
+	// Blocker names the true obstacle when the PO is legitimately not
+	// spawning: all_gated | capacity_refused | provider_exhausted, or empty
+	// when nothing blocked it (🎯T586).
+	Blocker string
 	// Detail is the compact human line for the signal / eventlog.
 	Detail string
 }
@@ -142,6 +185,21 @@ func Classify(po POObs, leaves []poproactive.LeafObs) Result {
 		// 🎯T325.1 sleep, straight from the ledger: empty_frontier or
 		// only_gated_or_engaged.
 		res.Verdict, res.Reason = VerdictSleepOK, decision.Reason
+		if decision.Reason == "only_gated_or_engaged" {
+			res.Blocker = BlockerAllGated
+		}
+	case po.ProviderBlocked:
+		// 🎯T586: the leaves are ready and the provider will not take them.
+		// Checked ahead of the host gate because a spend limit outlives a
+		// load spike, and ahead of grace because naming the true blocker
+		// beats waiting to accuse.
+		res.Verdict, res.Blocker = VerdictProviderExhausted, BlockerProviderExhausted
+		res.Reason = reasonOr(po.ProviderReason, "provider_refuses_work")
+	case po.SpawnRefused:
+		// 🎯T586: the governor would refuse the pane this PO would mint, so
+		// not minting it is obedience (🎯T566.2 / 🎯T36), not silence.
+		res.Verdict, res.Blocker = VerdictCapacityRefused, BlockerCapacityRefused
+		res.Reason = reasonOr(po.SpawnRefusedReason, "host_refuses_new_pane")
 	case !po.GraceElapsed:
 		res.Verdict, res.Reason = VerdictWithinGrace, "ready_leaves_within_grace"
 	case po.TurnEnded:
@@ -152,6 +210,15 @@ func Classify(po POObs, leaves []poproactive.LeafObs) Result {
 
 	res.Detail = FormatDetail(po, res)
 	return res
+}
+
+// reasonOr returns the observed reason code, or fallback when the caller had
+// none to give. A blocker without a reason still names its class.
+func reasonOr(reason, fallback string) string {
+	if r := strings.TrimSpace(reason); r != "" {
+		return r
+	}
+	return fallback
 }
 
 // ClassifyAll reads every PO against the same product-scoped frontier.
@@ -190,6 +257,12 @@ func FormatDetail(po POObs, res Result) string {
 	if po.TurnEnded {
 		fmt.Fprintf(&b, " turn_ended=true new_children=%d", po.NewChildrenThisTurn)
 	}
+	if res.Blocker != "" {
+		fmt.Fprintf(&b, " blocker=%s", res.Blocker)
+	}
+	if d := strings.TrimSpace(blockerDetail(po, res)); d != "" {
+		fmt.Fprintf(&b, " (%s)", d)
+	}
 	if n := len(res.ReadyIDs); n > 0 {
 		ids := res.ReadyIDs
 		suffix := ""
@@ -200,6 +273,19 @@ func FormatDetail(po POObs, res Result) string {
 		fmt.Fprintf(&b, " ready=%d [%s%s]", n, strings.Join(ids, ","), suffix)
 	}
 	return b.String()
+}
+
+// blockerDetail is the observed evidence behind a blocker, so the eventlog
+// line says which governor or provider reading produced it.
+func blockerDetail(po POObs, res Result) string {
+	switch res.Blocker {
+	case BlockerCapacityRefused:
+		return po.SpawnRefusedDetail
+	case BlockerProviderExhausted:
+		return po.ProviderDetail
+	default:
+		return ""
+	}
 }
 
 func phaseOrUnknown(phase string) string {
