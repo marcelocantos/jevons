@@ -248,9 +248,25 @@ ios:
 # `go test ./... | grep -v '^ok'` reports GREP's exit code, not the
 # tests'. gotest keeps the exit code, counts what ran, treats zero tests
 # and build failures as failures, and puts the transcript in a file.
+# How many cores the test suites may take. This machine has 16 and the
+# suite will happily use all of them -- docratchet alone builds whole
+# repos in parallel worktrees and was measured at ~1286% CPU, which makes
+# the machine unusable for whoever is sitting at it. Leave some behind.
+# Override per-run: make test-go TEST_CPUS=16
+TEST_CPUS ?= 8
+export GOMAXPROCS = $(TEST_CPUS)
+
+# GOMAXPROCS alone is not enough for the suites that SHELL OUT to builds.
+# It caps threads inside one process, but docratchet runs `go build` in
+# throwaway worktrees, and each of those children is its own scheduler --
+# so N test binaries x a full build each still saturates the box. -p caps
+# how many package binaries run at once, which is the multiplier that
+# actually hurts. Kept well under TEST_CPUS for that reason.
+TEST_PKG_PAR ?= 4
+
 .PHONY: test test-go test-go-raw test-web test-ui
 test-go: bin/gotest
-	@bin/gotest ./...
+	@bin/gotest -p $(TEST_PKG_PAR) ./...
 
 # Escape hatch when the transcript itself is what you need.
 test-go-raw:
@@ -485,7 +501,7 @@ spend-baseline:
 .PHONY: bullseye
 bullseye: bin/gate
 	@go build ./... && echo "✓ build"
-	@bin/gate -name bullseye-test -- go test ./... && echo "✓ tests"
+	@bin/gate -name bullseye-test -- go test -timeout 20m ./... && echo "✓ tests"
 	@go vet ./... && echo "✓ vet"
 	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
 	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \

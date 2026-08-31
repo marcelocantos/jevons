@@ -80,8 +80,24 @@ func TestMakeTestRunsJourneys(t *testing.T) {
 	mk := readRepo(t, "Makefile")
 	// The default `test` recipe must invoke test-journey. A comment is
 	// not enough — the dependency line is the gate.
-	if !strings.Contains(mk, "test: test-go test-web test-ui test-journey") {
-		t.Fatal("Makefile `test` must run test-journey (🎯T492); a gate's dependency is not a reason to omit the gate")
+	//
+	// Read as membership, not as an exact sequence. Matching the whole
+	// prerequisite list meant that ADDING a gate broke the ratchet:
+	// test-ui-react joined the line and this failed, claiming journeys had
+	// been dropped when they were still right there. A guard that fails
+	// when the thing it guards is strengthened trains people to ignore it.
+	var testLine string
+	for _, ln := range strings.Split(mk, "\n") {
+		if strings.HasPrefix(ln, "test:") {
+			testLine = ln
+			break
+		}
+	}
+	if testLine == "" {
+		t.Fatal("Makefile has no `test` target")
+	}
+	if !strings.Contains(testLine, "test-journey") {
+		t.Fatalf("Makefile `test` must run test-journey (🎯T492); a gate's dependency is not a reason to omit the gate:\n%s", testLine)
 	}
 	agents := readRepo(t, "AGENTS.md")
 	for _, want := range []string{

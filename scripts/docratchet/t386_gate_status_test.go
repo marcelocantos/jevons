@@ -98,10 +98,35 @@ func TestBullseyeGateRunsUnderTheGateRunner(t *testing.T) {
 	if !strings.Contains(recipe, "bin/gate") {
 		t.Errorf("make bullseye does not run its test step under bin/gate (🎯T386):\n%s", recipe)
 	}
-	for _, banned := range []string{"| tail", "| head", "| grep"} {
-		if strings.Contains(recipe, banned) {
-			t.Errorf("make bullseye pipes a gate through %q — the status becomes that command's (🎯T386):\n%s",
-				banned, recipe)
+	// Judged per line, and only for lines that actually RUN something whose
+	// status is the verdict. The ban used to read the whole recipe, so
+	//
+	//	dirty=$(git status --porcelain | grep -vE 'bullseye\.yaml$')
+	//
+	// tripped it: a filter feeding a shell variable, not a gate wearing a
+	// mask. A ratchet that cries wolf over a legitimate pipe is one nobody
+	// reads, and this one sat red long enough that the genuinely broken
+	// packages beside it went unnoticed too.
+	for _, line := range strings.Split(recipe, "\n") {
+		if !runsAGate(line) {
+			continue
+		}
+		for _, banned := range []string{"| tail", "| head", "| grep"} {
+			if strings.Contains(line, banned) {
+				t.Errorf("make bullseye pipes a gate through %q — the status becomes that command's (🎯T386):\n%s",
+					banned, line)
+			}
 		}
 	}
+}
+
+// runsAGate reports whether a recipe line executes something whose exit
+// status is the verdict — the only kind of line a trailing pipe can falsify.
+func runsAGate(line string) bool {
+	for _, cmd := range []string{"go test", "go build", "go vet", "bin/gate", "make test"} {
+		if strings.Contains(line, cmd) {
+			return true
+		}
+	}
+	return false
 }

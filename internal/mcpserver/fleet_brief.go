@@ -233,6 +233,18 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Residual: instructional doctrine + pure classifier; hard daemon sleep
   gate may follow.
 
+## Silent-decision ledger (🎯T536.1)
+- Terminal finish-report envelopes MUST carry a silent-decision ledger:
+  "jevons: silent-ledger none" when the brief was not silent on anything
+  material, OR "jevons: silent-ledger ranked" plus one or more
+  "jevons: silent-decision confidence=N choice=... why=..." lines,
+  least-confident first.
+- A green oracle with a missing ledger (no explicit none) is flagged —
+  not treated as complete. Schema: internal/envelope. The independent
+  gate reads the ledger (ReadSilentLedger), not the implementation diff.
+- Quality of the decisions is judgment; this rule is that the artifact
+  exists.
+
 ## Fog-of-war scout before implement (🎯T536.3)
 - Non-trivial Build work is scouted before implement. Spawn-briefs carry
   phase scout or phase implement; a scout terminal is kind scout-report

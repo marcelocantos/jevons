@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -162,13 +163,24 @@ func TestT450StaleBinaryMutationFails(t *testing.T) {
 		{`start_daemon_detached`, `true # 🎯T450 mutant: skip start_daemon_detached`},
 		{`wait_until_serving`, `true # 🎯T450 mutant: skip wait_until_serving`},
 	} {
-		// Bare call sites in main only — not the function definitions.
-		oldCall := "\n" + pair[0] + "\n"
-		newCall := "\n" + pair[1] + "\n"
-		if !strings.Contains(mutated, oldCall) {
+		// Call sites in main only — never the function definitions, which
+		// end in "() {" and so cannot match a line that is nothing but the
+		// name.
+		//
+		// Indentation-tolerant on purpose. This used to require a call at
+		// column zero, and when the script grew a conditional around the
+		// start ("  start_daemon_detached" inside an if), the mutation
+		// could no longer find it -- and a mutation test that cannot mutate
+		// reports a failure to locate, not a surviving mutant. Which is at
+		// least honest, but it sat red long enough to hide the packages
+		// failing beside it.
+		re := regexp.MustCompile(`(?m)^([ \t]*)` + regexp.QuoteMeta(pair[0]) + `[ \t]*$`)
+		loc := re.FindStringSubmatchIndex(mutated)
+		if loc == nil {
 			t.Fatalf("cannot locate call site %q to mutate", pair[0])
 		}
-		mutated = strings.Replace(mutated, oldCall, newCall, 1)
+		indent := mutated[loc[2]:loc[3]]
+		mutated = mutated[:loc[0]] + indent + pair[1] + mutated[loc[1]:]
 	}
 	mutated = strings.Replace(mutated,
 		`log "OK: daily jevonsd serving on :$PORT (workdir=$WORKDIR)"`,

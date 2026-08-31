@@ -3,7 +3,7 @@
 
 // gotest runs `go test` and reports a verdict instead of a transcript.
 //
-//	gotest [-timeout 20m] [packages...]      # default ./...
+//	gotest [-timeout 20m] [-p n] [packages...]   # default ./...
 //
 // Why this exists: `go test ./...` emits thousands of lines of legitimate
 // log output from passing tests, and the failure signal is a handful of
@@ -67,6 +67,12 @@ type result struct {
 
 func run(argv []string) int {
 	timeout := "20m"
+	// -p bounds how many package test binaries run at once. GOMAXPROCS
+	// alone does not: it caps threads within one process, and suites that
+	// shell out to `go build` (docratchet builds whole repos in throwaway
+	// worktrees) give each child its own scheduler, so N binaries x a full
+	// build each still saturates the machine. Empty leaves go's default.
+	par := ""
 	var pkgs []string
 	for i := 0; i < len(argv); i++ {
 		switch argv[i] {
@@ -75,8 +81,13 @@ func run(argv []string) int {
 				i++
 				timeout = argv[i]
 			}
+		case "-p":
+			if i+1 < len(argv) {
+				i++
+				par = argv[i]
+			}
 		case "-h", "--help":
-			fmt.Fprintln(os.Stderr, "usage: gotest [-timeout d] [packages...]")
+			fmt.Fprintln(os.Stderr, "usage: gotest [-timeout d] [-p n] [packages...]")
 			return 2
 		default:
 			pkgs = append(pkgs, argv[i])
@@ -95,7 +106,11 @@ func run(argv []string) int {
 	defer f.Close()
 
 	res := &result{Packages: map[string]bool{}, transcript: f}
-	args := append([]string{"test", "-json", "-timeout", timeout}, pkgs...)
+	args := []string{"test", "-json", "-timeout", timeout}
+	if par != "" {
+		args = append(args, "-p", par)
+	}
+	args = append(args, pkgs...)
 	cmd := exec.Command("go", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
