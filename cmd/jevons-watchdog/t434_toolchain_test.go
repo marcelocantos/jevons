@@ -78,6 +78,36 @@ func newColdRepo(t *testing.T, r *rig) string {
 		[]byte("module coldjevons\n\ngo 1.26\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The script proves the claudia pin against the sibling checkout
+	// (🎯T448) and refuses to continue if it cannot even build the checker.
+	// A scratch `module coldjevons` has no claudia pin to prove and cannot
+	// build cmd/claudiapin anyway -- it imports internal/claudiapin, unlike
+	// detach and runlock, which import nothing from this module and are
+	// copyable for exactly that reason.
+	//
+	// The script skips the build when the binary is already there, so the
+	// cold repo supplies a stub, the same way this package supplies a stub
+	// daemon. The pin check has its own oracles; this test is about the
+	// PATH the installer writes (🎯T434), and it should fail for PATH
+	// reasons or not at all.
+	if err := os.WriteFile(filepath.Join(root, "bin", "claudiapin"),
+		[]byte("#!/bin/sh\necho 'stub claudiapin: pin check not exercised in the cold-PATH test'\nexit 0\n"),
+		0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A real deployed repo always has a built bundle, and the script
+	// refuses without one: "no ui/dist — daily GET / cannot serve React"
+	// (🎯T540.2). That guard is right and stays load-bearing; this test is
+	// about the PATH the installer writes (🎯T434), so give the cold repo
+	// what a real one has rather than teaching the script an exception.
+	if err := os.MkdirAll(filepath.Join(root, "ui", "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ui", "dist", "index.html"),
+		[]byte("<!doctype html><title>cold</title>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Something for the restart to start. The watchdog skips the rebuild
 	// when a binary exists, which is the case the outage happens in:

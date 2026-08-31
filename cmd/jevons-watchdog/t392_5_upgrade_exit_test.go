@@ -244,13 +244,14 @@ func t3925BuildStubDaemon(t *testing.T, dir, agent, state string) string {
 	prog := fmt.Sprintf(`package main
 
 import (
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -260,9 +261,28 @@ const (
 )
 
 func main() {
-	port := flag.Int("port", 0, "")
-	flag.String("workdir", "", "")
-	flag.Parse()
+	// Not flag.Parse: the real jevonsd accepts flags this stub has never
+	// heard of, and the restart script passes them (-vanilla-port, 🎯T540.4).
+	// Failing closed on an unknown flag is right for a daemon and wrong for
+	// a double -- it turned one added flag into six red tests that said only
+	// "never became ready". Take the port, ignore the rest.
+	port := new(int)
+	for i, a := range os.Args[1:] {
+		v := ""
+		switch {
+		case strings.HasPrefix(a, "-port="), strings.HasPrefix(a, "--port="):
+			v = a[strings.Index(a, "=")+1:]
+		case a == "-port", a == "--port":
+			if i+2 <= len(os.Args)-1 {
+				v = os.Args[i+2]
+			}
+		}
+		if v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				*port = n
+			}
+		}
+	}
 
 	// The turn in flight. Setpgid puts it outside this process's group,
 	// exactly as jevonsd's detached `+"`grok agent serve`"+` children are, so

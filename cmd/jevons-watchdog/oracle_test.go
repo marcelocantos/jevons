@@ -151,6 +151,16 @@ func (r *rig) restart(extraEnv ...string) error {
 	cmd.Env = r.env(extraEnv...)
 	out, err := cmd.CombinedOutput()
 	r.t.Logf("restart script: %v\n%s", err, t405Tail(string(out), 15))
+	if err != nil {
+		// The script's own output only says the daemon never became
+		// ready; WHY it never became ready is in the daemon log it was
+		// told to write, and without this a failure here is opaque.
+		if b, rerr := os.ReadFile(filepath.Join(r.dir, "daemon.log")); rerr == nil {
+			r.t.Logf("daemon.log:\n%s", t405Tail(string(b), 25))
+		} else {
+			r.t.Logf("daemon.log unreadable: %v", rerr)
+		}
+	}
 	return err
 }
 
@@ -483,16 +493,36 @@ func t405BuildStubDaemon(t *testing.T, dir string) string {
 	const prog = `package main
 
 import (
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 )
 
 func main() {
-	port := flag.Int("port", 0, "")
-	flag.String("workdir", "", "")
-	flag.Parse()
+	// Not flag.Parse: the real jevonsd accepts flags this stub has never
+	// heard of, and the restart script passes them (-vanilla-port, 🎯T540.4).
+	// Failing closed on an unknown flag is right for a daemon and wrong for
+	// a double -- it turned one added flag into six red tests that said only
+	// "never became ready". Take the port, ignore the rest.
+	port := new(int)
+	for i, a := range os.Args[1:] {
+		v := ""
+		switch {
+		case strings.HasPrefix(a, "-port="), strings.HasPrefix(a, "--port="):
+			v = a[strings.Index(a, "=")+1:]
+		case a == "-port", a == "--port":
+			if i+2 <= len(os.Args)-1 {
+				v = os.Args[i+2]
+			}
+		}
+		if v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				*port = n
+			}
+		}
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("/api/frontier", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "[]") })
