@@ -77,7 +77,7 @@ func TestHandleRSICoachConfigureAndStatus(t *testing.T) {
 	s.SetRSICoach(coach)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"wait_seconds": 5.0, 
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0,
 		"rate_cap":      float64(1),
 		"system_prompt": "custom coach prompt for tests",
 		"focus_filters": "owner_chat,stuck",
