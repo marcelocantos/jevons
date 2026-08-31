@@ -55,6 +55,23 @@ type Policy struct {
 	// below which the host is out of memory (🎯T573). 0 falls back to
 	// DefaultMemoryFreeCriticalPercent.
 	MemoryFreeCriticalPercent float64 `json:"memory_free_critical_percent,omitempty"`
+	// MemoryGateOff removes memory from the assessment altogether: the
+	// dimension reports unknown, so it neither halts a spawn nor pulls the
+	// overall headroom down, exactly as an unreadable host would.
+	//
+	// This exists for diagnosis, not for tuning. A threshold can only be
+	// moved, and moving one still leaves memory in the causal picture —
+	// including the kernel-critical branch of memoryGrindHeadroom, which no
+	// threshold reaches. When the owner is chasing a fault memory is merely
+	// correlated with (2026-08-31: fleet panes dying minutes after launch on
+	// a host whose full swap was a scar of earlier pressure), the question
+	// worth answering is whether the fault survives memory being taken out
+	// of the system entirely.
+	//
+	// Leaving it on is a real risk: 🎯T566.2 exists because a grinding host
+	// takes the fleet down with it, and with this set nothing refuses a pane
+	// for memory. It is meant to be turned back off.
+	MemoryGateOff bool `json:"memory_gate_off,omitempty"`
 	// ProviderCapFallback is the concurrency cap for a provider that publishes
 	// no soft cap. 0 in a cap table means unpublished, never unlimited
 	// (🎯T463); 0 here falls back to DefaultProviderCapFallback.

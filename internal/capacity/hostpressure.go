@@ -116,6 +116,13 @@ func inferredFloor(h float64, pol *Policy) float64 {
 // read, swap is advisory text only and never a halt. Swap remains the
 // fallback reading on a host that publishes no memory level.
 func memoryGrindHeadroom(snap Snapshot, pol *Policy) (float64, string) {
+	if pol != nil && pol.MemoryGateOff {
+		// Unknown, not "fine": the same verdict a host publishing no memory
+		// reading gets. Assess skips unknown dimensions, so memory stops
+		// halting spawns AND stops moving the overall headroom — which is
+		// what makes it eliminated rather than merely relaxed.
+		return unknownHeadroom, ""
+	}
 	if snap.HostMemoryPressure == "" {
 		return swapGrindHeadroom(snap, pol)
 	}
