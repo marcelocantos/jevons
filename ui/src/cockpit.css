@@ -1535,6 +1535,18 @@ html[data-pixel-fixture] #frontier-table .ft-fanout,
 html[data-pixel-fixture] #frontier-table .ft-play { transform: translateY(1px); }
 
 
+/* 🎯T588.1: the provider mark is a column head, not a picture. CompanyMark
+   carries no intrinsic size, and an unsized svg in a table cell expands to
+   fill the column — the first render put ~150px marks across the card and
+   pushed cursor off the right edge. Size it here, where the context knows
+   how big a column head should be. */
+.plan-tip-table .model-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
 /* 🎯T588.1 plan-usage tooltip grid. Column heads carry the provider mark;
    claude spans two (session, week). Numbers are tabular so a column of
    percentages lines up on the decimal the eye expects. */
