@@ -1503,7 +1503,7 @@ func (s *Server) persistChatLine(line string) {
 		if s.statedbN(name) == 0 {
 			// Import-once history: the JSONL is still the durable store
 			// until statedb has rows, and it notes durability itself.
-			s.persistChatJSONL(line)
+			s.observeChatTurnGap(line, s.persistChatJSONL(line))
 			return
 		}
 		// 🎯T593: SQLite is the durable store now, so it is what
@@ -1516,9 +1516,13 @@ func (s *Server) persistChatLine(line string) {
 		if durable {
 			s.noteChatJournaled(line)
 		}
+		// 🎯T592: the turn-gap alarm re-arms only on what the store
+		// actually recorded — a turn whose append failed is the defect,
+		// never a reset.
+		s.observeChatTurnGap(line, durable)
 		return
 	}
-	s.persistChatJSONL(line)
+	s.observeChatTurnGap(line, s.persistChatJSONL(line))
 	s.muxFanTranscript(name, line)
 }
 
@@ -1534,24 +1538,28 @@ func isEphemeralChatStatusLine(line string) bool {
 	return m.Type == "status"
 }
 
-func (s *Server) persistChatJSONL(line string) {
+// persistChatJSONL appends one line to the JSONL chat log and reports
+// whether the append actually landed (🎯T592: durability is the append's
+// result, not the attempt).
+func (s *Server) persistChatJSONL(line string) bool {
 	if s == nil || strings.TrimSpace(line) == "" {
-		return
+		return false
 	}
 	if isEphemeralChatStatusLine(line) {
-		return
+		return false
 	}
 	s.mu.Lock()
 	clog := s.chatLog
 	s.mu.Unlock()
 	if clog == nil {
-		return
+		return false
 	}
 	if err := clog.Append(line); err != nil {
 		slog.Error("chat: DURABILITY FAILURE — chat log append failed", "err", err)
-		return
+		return false
 	}
 	s.noteChatJournaled(line)
+	return true
 }
 
 func (s *Server) BroadcastChat(line string) {

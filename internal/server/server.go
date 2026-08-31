@@ -82,7 +82,7 @@ type Server struct {
 	// hostLoad reads the host's 1-minute load average and core count for
 	// the load-aware stuck-busy watchdog (🎯T567); nil = unknown (scale 1).
 	hostLoad func() (load1 float64, cores int)
-	ca                 *auth.CA
+	ca       *auth.CA
 
 	mu        sync.RWMutex
 	remoteSeq int
@@ -208,6 +208,12 @@ type Server struct {
 	// held across a broadcast or an enqueue.
 	ownerMu     sync.Mutex
 	ownerHealth ownerHealthState
+
+	// turnGap is the 🎯T592 alarm for a chatlog recording frames but no
+	// owner or overseer turns. turnGapOnce builds it lazily so a
+	// zero-value Server (tests, fixtures) needs no constructor.
+	turnGapOnce sync.Once
+	turnGap     *chatTurnGap
 
 	// agentsWatchCancel stops the 🎯T82 registry file watcher (if any).
 	agentsWatchCancel context.CancelFunc

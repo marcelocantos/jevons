@@ -18,6 +18,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/ownerqa"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/statedb"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
@@ -82,7 +83,38 @@ const (
 	// ResidualNotSubstantive: newest owner-side turn is a marked send/delivery
 	// probe, not real work (🎯T551).
 	ResidualNotSubstantive = "not_substantive"
+	// ResidualStaleChatlog: the chatlog is still being written — progress
+	// frames keep arriving — but its newest turn is far older than its
+	// newest frame, so the store has stopped recording turns and the
+	// "newest owner instruction" it can offer is not the newest one
+	// (🎯T592).
+	ResidualStaleChatlog = "stale_chatlog"
 )
+
+// OpenIntentStaleWindow is how far the newest journaled turn may lag the
+// newest frame in the same chatlog before the store is degraded. A live
+// conversation journals a turn far more often than hourly; an hour of
+// frames with no turn behind them is the 🎯T592 defect, not a quiet day.
+//
+// The live shape: on 2026-08-31 state_dir/chatlog/jevons.jsonl held
+// 5,343 progress frames written after its last type=user record of
+// 2026-08-26T08:44. Sourcing a MANDATORY resume from that file re-issued
+// a five-day-old Cursor-cycle instruction after every daemon bounce. A
+// degraded store yields a residual instead: no resume is better than a
+// confidently wrong one.
+const OpenIntentStaleWindow = time.Hour
+
+// ChatlogDegraded reports whether a chatlog whose newest turn is
+// newestTurn and whose newest frame of any kind is newestFrame has
+// stopped recording turns (🎯T592). Zero times are unknown, never
+// degraded — an empty or turn-only store is handled by the other
+// residual classes.
+func ChatlogDegraded(newestTurn, newestFrame time.Time) bool {
+	if newestTurn.IsZero() || newestFrame.IsZero() {
+		return false
+	}
+	return newestFrame.Sub(newestTurn) > OpenIntentStaleWindow
+}
 
 // openIntentTargetIDRe matches 🎯T12 / T12 / T12.3 style target ids.
 var openIntentTargetIDRe = regexp.MustCompile(`(?i)(?:🎯)?T\d+(?:\.\d+)*`)
@@ -980,8 +1012,10 @@ func ChatTurnsToOwnerIntentTurns(turns []rsi.ChatTurn) []OwnerIntentTurn {
 	return out
 }
 
-// LoadOpenOwnerIntent reads state_dir/chatlog/<overseer>.jsonl and extracts
-// recoverable open owner intent. Missing chatlog → residual no_chatlog.
+// LoadOpenOwnerIntent extracts recoverable open owner intent from the
+// overseer transcript — the product statedb when it has rows (🎯T592 /
+// 🎯T548.2), else state_dir/chatlog/<overseer>.jsonl. Missing both →
+// residual no_chatlog.
 // Loads user turns plus assistant excerpts for 🎯T344 / 🎯T477 / 🎯T512 / 🎯T568
 // disposition (product evidence, explanation answers, fleet ops, later
 // substantive replies, TargetID-naming turns).
@@ -1002,12 +1036,31 @@ func LoadOpenOwnerIntentWithLedger(stateDir, overseer, ledgerCwd string) OpenOwn
 	if stateDir == "" {
 		return OpenOwnerIntent{Residual: ResidualNoChatlog}
 	}
+	// 🎯T592 / 🎯T548.2: statedb is where turns live once it has rows —
+	// the chatlog JSONL froze at its last pre-SQLite record, and sourcing
+	// a MANDATORY resume from it re-issued a five-day-old instruction
+	// after every daemon bounce. The JSONL is fallback only (isolates,
+	// pre-statedb state dirs).
 	path := filepath.Join(stateDir, "chatlog", overseer+".jsonl")
-	turns, err := loadOpenIntentDialogue(path, DefaultOpenIntentLookback, DefaultOpenIntentAssistantCap)
-	if err != nil {
-		return OpenOwnerIntent{Residual: ResidualNoChatlog}
+	turns, newestFrame, fromDB := loadOpenIntentDialogueStateDB(stateDir, overseer, DefaultOpenIntentLookback, DefaultOpenIntentAssistantCap)
+	if !fromDB {
+		var err error
+		turns, newestFrame, err = loadOpenIntentDialogue(path, DefaultOpenIntentLookback, DefaultOpenIntentAssistantCap)
+		if err != nil {
+			return OpenOwnerIntent{Residual: ResidualNoChatlog}
+		}
+	}
+	// 🎯T592: a store still taking frames but no longer recording turns
+	// cannot say what the newest owner instruction is, so it does not
+	// source a MANDATORY resume.
+	if ChatlogDegraded(newestOpenIntentTurnTS(turns), newestFrame) {
+		return OpenOwnerIntent{Residual: ResidualStaleChatlog}
 	}
 	if len(turns) == 0 {
+		if fromDB {
+			// The store exists and has rows, just no owner turns.
+			return OpenOwnerIntent{Residual: ResidualNoUserTurns}
+		}
 		// Distinguish missing file vs empty / assistant-only.
 		if _, statErr := os.Stat(path); statErr != nil {
 			return OpenOwnerIntent{Residual: ResidualNoChatlog}
@@ -1035,9 +1088,10 @@ func LoadOpenOwnerIntentWithLedger(stateDir, overseer, ledgerCwd string) OpenOwn
 // excerpts kept for close disposition (text and tool_use attestation/send
 // bodies). Caps user lookback and assistant count so assistant-heavy logs
 // stay bounded.
-func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerIntentTurn, error) {
+func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerIntentTurn, time.Time, error) {
+	var newestFrame time.Time
 	if strings.TrimSpace(path) == "" {
-		return nil, nil
+		return nil, newestFrame, nil
 	}
 	if maxUser <= 0 {
 		maxUser = DefaultOpenIntentLookback
@@ -1048,11 +1102,89 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, newestFrame, nil
 		}
-		return nil, err
+		return nil, newestFrame, err
 	}
 	defer f.Close()
+
+	var scanErr error
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	turns, folded := foldOpenIntentDialogue(func(yield func(string) bool) {
+		for sc.Scan() {
+			if !yield(sc.Text()) {
+				return
+			}
+		}
+		scanErr = sc.Err()
+	}, maxUser, maxAssistant)
+	if scanErr != nil {
+		return nil, folded, scanErr
+	}
+	return turns, folded, nil
+}
+
+// loadOpenIntentDialogueStateDB reads the overseer dialogue from the
+// product statedb (🎯T592). Since 🎯T548.2 SQLite holds the live turns;
+// ok=false — missing db file, open failure, or no rows for the overseer —
+// means the caller falls back to the JSONL import-once history. The db
+// file must already exist: this path never mints a store into a state
+// dir that has none.
+func loadOpenIntentDialogueStateDB(stateDir, overseer string, maxUser, maxAssistant int) ([]OwnerIntentTurn, time.Time, bool) {
+	dbPath := statedb.DefaultPath(stateDir)
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, time.Time{}, false
+	}
+	db, err := statedb.Open(dbPath)
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	defer db.Close()
+	n, err := db.N(overseer)
+	if err != nil || n == 0 {
+		return nil, time.Time{}, false
+	}
+	if maxUser <= 0 {
+		maxUser = DefaultOpenIntentLookback
+	}
+	lo, err := db.TailStart(overseer, maxUser)
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	rows, err := db.Range(overseer, lo, n+1)
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	turns, newestFrame := foldOpenIntentDialogue(func(yield func(string) bool) {
+		for _, r := range rows {
+			if !yield(r.Body) {
+				return
+			}
+		}
+	}, maxUser, maxAssistant)
+	// The ts column is authoritative for staleness even when a body
+	// carries no timestamp field of its own.
+	for _, r := range rows {
+		if ts := parseOpenIntentTS(r.TS); ts.After(newestFrame) {
+			newestFrame = ts
+		}
+	}
+	return turns, newestFrame, true
+}
+
+// foldOpenIntentDialogue folds a stream of chat event lines — chatlog
+// JSONL lines or statedb body columns, which are the same shape — into
+// user turns + kept assistant excerpts, plus the newest frame timestamp
+// of any type for 🎯T592 staleness.
+func foldOpenIntentDialogue(lines func(yield func(string) bool), maxUser, maxAssistant int) ([]OwnerIntentTurn, time.Time) {
+	var newestFrame time.Time
+	if maxUser <= 0 {
+		maxUser = DefaultOpenIntentLookback
+	}
+	if maxAssistant <= 0 {
+		maxAssistant = DefaultOpenIntentAssistantCap
+	}
 
 	var users []OwnerIntentTurn
 	// Assistants kept after the oldest retained user (ring by user count).
@@ -1062,16 +1194,21 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 	}
 	var assts []asst
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
+	lines(func(raw string) bool {
+		line := strings.TrimSpace(raw)
 		if line == "" {
-			continue
+			return true
+		}
+		// 🎯T592: every frame counts for staleness, including the
+		// progress/tool chrome extraction skips. A store that is still
+		// being appended to but has stopped recording turns is the
+		// defect; a store nobody writes at all is merely old.
+		if ts := openIntentFrameTS(line); ts.After(newestFrame) {
+			newestFrame = ts
 		}
 		role, text, ts, ok := parseOpenIntentChatlogLine(line)
 		if !ok || text == "" {
-			continue
+			return true
 		}
 		switch role {
 		case "user":
@@ -1100,7 +1237,7 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 			// "Filed 🎯T550" reply still reaches extraction. Dropping any of
 			// those re-fires an already-closed owner turn on every bounce.
 			if !keepOpenIntentAssistant(text) {
-				continue
+				return true
 			}
 			assts = append(assts, asst{
 				turn: OwnerIntentTurn{
@@ -1113,12 +1250,10 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 				assts = assts[len(assts)-maxAssistant:]
 			}
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return nil, err
-	}
+		return true
+	})
 	if len(users) == 0 {
-		return nil, nil
+		return nil, newestFrame
 	}
 
 	// Merge users + assistants into oldest→newest timeline by user index.
@@ -1145,7 +1280,36 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 		}
 		ai++
 	}
-	return out, nil
+	return out, newestFrame
+}
+
+// openIntentFrameTS reads the timestamp off any chatlog line, whatever
+// its type (🎯T592 staleness). Extraction proper skips progress frames;
+// staleness is exactly the question of how far they run past the last
+// turn.
+func openIntentFrameTS(line string) time.Time {
+	var d struct {
+		Timestamp string `json:"timestamp"`
+	}
+	if json.Unmarshal([]byte(line), &d) != nil || d.Timestamp == "" {
+		return time.Time{}
+	}
+	return parseOpenIntentTS(d.Timestamp)
+}
+
+// parseOpenIntentTS parses an RFC3339(Nano) timestamp string; zero when
+// empty or malformed.
+func parseOpenIntentTS(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // keepOpenIntentAssistant reports whether an assistant chatlog excerpt must
@@ -1569,4 +1733,16 @@ func truncateRunes(s string, max int) string {
 	}
 	runes := []rune(s)
 	return string(runes[:max]) + "…"
+}
+
+// newestOpenIntentTurnTS is the newest timestamp across recovered turns
+// of either role (🎯T592).
+func newestOpenIntentTurnTS(turns []OwnerIntentTurn) time.Time {
+	var newest time.Time
+	for _, t := range turns {
+		if t.TS.After(newest) {
+			newest = t.TS
+		}
+	}
+	return newest
 }
