@@ -108,6 +108,7 @@ export function PlanUsageBar() {
     <InstantTip
       id="plan-ticker"
       cardClassName="plan-tip-card"
+      placement="below-host"
       content={tip}
     >
       {inner}

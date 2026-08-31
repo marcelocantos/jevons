@@ -11,6 +11,7 @@
  */
 
 import { now } from '../clock';
+import { formatWindow } from './pace';
 import { CompanyMark, companyOfProvider } from './companyMark';
 import { formatRolloverLocal } from './tickerGroups';
 import type { PlanWindow, TickerGroup } from './tickerGroups';
@@ -135,11 +136,26 @@ export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; tim
   }
   const cols = header.flatMap((h) => h.columns);
   const multi = (h: TipHeaderGroup) => h.columns.length > 1;
-  const row = (label: string, cell: (c: TipColumn) => string) => (
+  // The available figure carries the same pace class the bar's fill does,
+  // so the number and the bar above it say the same thing in the same
+  // colour (🎯T588.2). Reusing formatWindow rather than re-deriving the
+  // class is the point: two sources would drift and the tooltip would
+  // quietly disagree with the bar it describes.
+  const paceClass = (c: TipColumn) => formatWindow(c.window, nowMs).className || '';
+  const row = (
+    label: string,
+    cell: (c: TipColumn) => string,
+    cls?: (c: TipColumn) => string,
+  ) => (
     <tr>
       <th scope="row">{label}</th>
       {cols.map((c) => (
-        <td key={`${c.provider}:${c.label}`} data-provider={c.provider} data-window={c.label}>
+        <td
+          key={`${c.provider}:${c.label}`}
+          className={cls ? cls(c) : undefined}
+          data-provider={c.provider}
+          data-window={c.label}
+        >
           {cell(c)}
         </td>
       ))}
@@ -176,9 +192,13 @@ export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; tim
           </tr>
         </thead>
         <tbody>
-          {row('tokens left', (c) => pct(c.window.remaining_percent))}
+          {row(
+            'available',
+            (c) => pct(c.window.remaining_percent),
+            (c) => ('plan-avail ' + paceClass(c)).trim(),
+          )}
           {row('time left', (c) => timeLeft(c.window, nowMs))}
-          {row('tokens used', (c) => pct(c.window.used_percent))}
+          {row('consumed', (c) => pct(c.window.used_percent))}
           {row('rollover', (c) => rolloverCell(c.window.resets_at, nowMs, props.timeZone))}
         </tbody>
       </table>

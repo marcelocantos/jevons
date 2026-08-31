@@ -58,7 +58,7 @@ describeOracle(family('plan-ticker'), () => {
     // rollover, so assert the information — label, an actual percentage,
     // and the rollover row — rather than the old sentence's wording.
     const text = tip?.textContent || '';
-    expect(text).toMatch(/tokens left/i);
+    expect(text).toMatch(/available/i);
     expect(text).toMatch(/\d+%/);
     expect(text).toMatch(/rollover/i);
   });

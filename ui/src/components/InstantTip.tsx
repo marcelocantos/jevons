@@ -14,7 +14,7 @@ export { HIDE_GRACE_MS };
 /** Product-wide singleton (🎯T203): one InstantTip panel visible. */
 let openCloser: (() => void) | null = null;
 
-export type InstantTipPlacement = 'left-of-host' | 'right-of-host';
+export type InstantTipPlacement = 'left-of-host' | 'right-of-host' | 'below-host';
 
 /**
  * 🎯T271: hit region = card ∪ hosts ∪ horizontal corridor. HIDE_GRACE_MS=0.
@@ -87,7 +87,7 @@ export function InstantTip(props: {
     const card = cardRef.current;
     if (!host || !card) return;
     let clampRight: number | null = null;
-    if (props.placement !== 'right-of-host' && props.clampSelectors && typeof document !== 'undefined') {
+    if (props.placement === 'left-of-host' && props.clampSelectors && typeof document !== 'undefined') {
       for (const sel of props.clampSelectors) {
         const el = document.querySelector(sel);
         if (el) {

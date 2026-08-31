@@ -14,6 +14,7 @@ import {
   windowLabel,
 } from './tipTable';
 import type { TickerGroup } from './tickerGroups';
+import { formatWindow } from './pace';
 
 const NOW = Date.parse('2026-08-31T00:00:00Z');
 const hoursOut = (h: number) => new Date(NOW + h * 3600_000).toISOString();
@@ -88,7 +89,7 @@ describe('plan tooltip table (🎯T588.1)', () => {
   it('paints one row per measure, one column per window', () => {
     const { container } = render(<PlanTipTable groups={FLEET} nowMs={NOW} timeZone="UTC" />);
     const rowLabels = [...container.querySelectorAll('th[scope="row"]')].map((e) => e.textContent);
-    expect(rowLabels).toEqual(['tokens left', 'time left', 'tokens used', 'rollover']);
+    expect(rowLabels).toEqual(['available', 'time left', 'consumed', 'rollover']);
     const firstRow = [...container.querySelectorAll('tbody tr')][0];
     expect([...firstRow.querySelectorAll('td')].map((e) => e.textContent)).toEqual(['76%', '25%', '85%']);
     // The single-window provider's mark spans both header rows, so the
@@ -102,5 +103,31 @@ describe('plan tooltip table (🎯T588.1)', () => {
       <PlanTipTable groups={[{ provider: 'bedrock', available: false, reason: 'x', windows: [] }] as unknown as TickerGroup[]} nowMs={NOW} />,
     );
     expect(container.textContent).toMatch(/bedrock: unavailable/);
+  });
+});
+
+// 🎯T588.2: the available figure must carry the bar's own pace class, or
+// the number and the bar above it can disagree about the same window.
+describe('available wears the bar colour (🎯T588.2)', () => {
+  it('puts the pace class on the available cell only', () => {
+    const hot = [
+      {
+        provider: 'claude',
+        available: true,
+        windows: [{ name: 'weekly', remaining_percent: 2, used_percent: 98, resets_at: hoursOut(3) }],
+      },
+    ] as unknown as TickerGroup[];
+    const { container } = render(<PlanTipTable groups={hot} nowMs={NOW} timeZone="UTC" />);
+    const avail = container.querySelector('td.plan-avail');
+    expect(avail).toBeTruthy();
+    expect(avail?.textContent).toBe('2%');
+    // The cell's class is whatever the bar would paint for this window —
+    // asserted against pace.ts itself rather than a hardcoded name, so the
+    // test pins the wiring (they cannot drift apart) without freezing the
+    // threshold policy that decides which colour it is.
+    const expected = formatWindow(hot[0].windows[0], NOW).className;
+    expect(avail?.className).toBe(('plan-avail ' + expected).trim());
+    // Only the available row is marked; consumed and rollover stay plain.
+    expect(container.querySelectorAll('td.plan-avail')).toHaveLength(1);
   });
 });

@@ -119,7 +119,7 @@ export function shouldDismissOutsideHitParts(
   return !pointInHitParts(x, y, parts);
 }
 
-export type CardPlacement = 'left-of-host' | 'right-of-host';
+export type CardPlacement = 'left-of-host' | 'right-of-host' | 'below-host';
 
 export type PlaceCardResult = {
   left: number;
@@ -150,6 +150,23 @@ export function placeCardRect(args: {
   const hx = host ? host.left : 0;
   const hy = host ? (host.top + host.bottom) / 2 : 0;
   const placement = args.placement || 'left-of-host';
+
+  if (placement === 'below-host') {
+    // Under the host, right edges flush (🎯T588.2). The plan tip is a grid
+    // whose columns line up with the bars it describes, so hanging it off
+    // to one side breaks the correspondence the owner is reading.
+    let left = (host ? host.right : hx) - tw;
+    let top = (host ? host.bottom : hy) + gap;
+    if (vw > 0 && left + tw > vw - pad) left = vw - pad - tw;
+    if (left < pad) left = pad;
+    if (vh > 0 && top + th > vh - pad) {
+      // No room below: sit above rather than run off the bottom.
+      const above = (host ? host.top : hy) - gap - th;
+      top = above >= pad ? above : Math.max(pad, vh - pad - th);
+    }
+    if (top < pad) top = pad;
+    return { left: Math.round(left), top: Math.round(top), side: 'left' };
+  }
 
   if (placement === 'right-of-host') {
     let side: 'left' | 'right' = 'right';

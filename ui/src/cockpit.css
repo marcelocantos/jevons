@@ -875,8 +875,10 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-group { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 #plan-ticker .plan-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); }
 #plan-ticker .plan-icon .model-icon { width: 17px; height: 17px; display: block; opacity: 0.85; }
-#plan-ticker .plan-icon .model-icon[data-mark="claude-splat"] { color: var(--anthropic-mark); }
-#plan-ticker .plan-icon .model-icon[data-mark="cursor"] { color: var(--text-muted); }
+/* 🎯T588.3: the claude mark is grey like every other vendor mark here.
+   It carried --anthropic-mark and was the only coloured icon in the UI. */
+#plan-ticker .plan-icon .model-icon[data-mark="cursor"],
+#plan-ticker .plan-icon .model-icon[data-mark="claude-splat"] { color: var(--text-muted); }
 #plan-ticker .plan-box { display: inline-flex; align-items: flex-end; gap: 5px; padding: 2px 5px 1px; border: 1px solid var(--border-focus); border-radius: 3px; }
 #plan-ticker .plan-win { display: inline-flex; align-items: flex-end; gap: 2px; }
 #plan-ticker .plan-track { position: relative; display: inline-block; width: 36px; padding-bottom: 5px; flex-shrink: 0; }
@@ -1544,6 +1546,20 @@ html[data-pixel-fixture] #frontier-table .ft-play { transform: translateY(1px); 
   max-width: min(720px, 94vw);
   white-space: normal;
 }
+
+/* 🎯T588.2: the available figure wears the same colour as the bar fill it
+   describes, and only that figure is bold — the row the owner scans first.
+   Colours are read from the same variables #plan-ticker paints the fill
+   with, so the two cannot drift apart. */
+.plan-tip-table td.plan-avail {
+  font-weight: 700;
+  color: var(--green);
+}
+.plan-tip-table td.plan-avail.plan-ahead { color: var(--amber); }
+.plan-tip-table td.plan-avail.plan-hot,
+.plan-tip-table td.plan-avail.plan-crit { color: var(--red); }
+.plan-tip-table td.plan-avail.plan-under { color: var(--plan-under); }
+.plan-tip-table td.plan-avail.plan-locked { color: var(--plan-locked); }
 
 /* 🎯T588.1: the provider mark is a column head, not a picture. CompanyMark
    carries no intrinsic size, and an unsized svg in a table cell expands to
