@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -79,6 +80,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is sending). Overseer uses the overseer name (usually 'jevons'). Required so lineage denial is enforceable per-caller (🎯T321).")),
 			mcp.WithBoolean("interrupt", mcp.Description("If true and a prompt is in flight, interrupt that turn then send (stuck recovery without kill). Default false = queue for after the turn.")),
+			mcp.WithBoolean("force_rebrief", mcp.Description("🎯T597: a full re-brief (spawn-brief envelope, or >1KB opening-brief prose) to a seat with recent activity (stored report / workdir touch) is refused, because re-briefing a working seat restarts its mission and can discard uncommitted work. Pass true only when you are sure the seat needs its brief again.")),
 		),
 		s.handleAgentSend,
 	)
@@ -414,6 +416,8 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	// Wire events: broadcast to web UI and notify Jevon on agent responses.
 	s.wireAgentEvents(name, proc)
 	s.startMu.Unlock()
+	// 🎯T597: record the (re-)mint so seat-activity baselines measure from it.
+	s.noteSeatMinted(name)
 
 	// 🎯T541: Cursor ACP remints must not wait for prompt confirmation
 	// while anything that serializes MCP start is held. Start, unlock,
@@ -781,9 +785,17 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	text, _ := args["text"].(string)
 	actor, _ := args["actor"].(string)
 	interrupt, _ := args["interrupt"].(bool)
+	forceRebrief, _ := args["force_rebrief"].(bool)
 
 	if name == "" || text == "" {
 		return mcp.NewToolResultError("name and text are required"), nil
+	}
+
+	// 🎯T597: a full re-brief to a seat with recent activity is refused
+	// before any injection or delivery — a working seat re-briefed starts
+	// over and can discard uncommitted work.
+	if refusal := s.checkRebriefRefusal(name, text, forceRebrief, time.Now()); refusal != "" {
+		return mcp.NewToolResultError(refusal), nil
 	}
 
 	// 🎯T321: name the caller so AuthorizeDeliver runs against a real actor

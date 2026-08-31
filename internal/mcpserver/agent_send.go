@@ -203,6 +203,7 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 		return nil, false, fmt.Errorf("agent %q is not running and rehydrate failed: %v", name, err)
 	}
 	s.wireAgentEvents(name, p2)
+	s.noteSeatMinted(name) // 🎯T597: rehydrate is a (re-)mint for activity baselines
 	slog.Info("agent send rehydrated dead/stopped process", "name", name)
 	return p2, true, nil
 }

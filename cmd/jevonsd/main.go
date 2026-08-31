@@ -443,6 +443,20 @@ func main() {
 			tr := transcript.NewReaderRoots(sessionRoots)
 			return tr.Truncate(sessionID, keepTurns)
 		},
+		// 🎯T597: name the paths a not-found is a claim about.
+		Locate: func(sessionID string) (string, []string) {
+			var searched []string
+			if sessionRoots.GrokSessions != "" {
+				if p := discovery.ChatHistoryPath(sessionRoots.GrokSessions, sessionID); p != "" {
+					searched = append(searched, p)
+				}
+			}
+			if sessionRoots.ClaudeProjects != "" {
+				searched = append(searched,
+					filepath.Join(sessionRoots.ClaudeProjects, "*", sessionID+".jsonl"))
+			}
+			return discovery.TranscriptPath(sessionRoots, sessionID), searched
+		},
 		GetID: func() string {
 			if proc := registry.Get(cfg.OverseerName); proc != nil {
 				return proc.SessionID()

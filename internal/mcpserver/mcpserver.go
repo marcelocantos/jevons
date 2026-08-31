@@ -56,6 +56,10 @@ type TranscriptOps struct {
 	Read     func(sessionID string) ([]map[string]any, error)
 	Truncate func(sessionID string, keepTurns int) error
 	GetID    func() string // current Jevon claude session ID (from claudia registry)
+	// Locate answers where Read would look for sessionID: the resolved path
+	// ("" when absent) and every candidate location searched. 🎯T597: a
+	// not-found must name the paths it is a claim about.
+	Locate func(sessionID string) (path string, searched []string)
 }
 
 // Server wraps an MCP server that provides worker management tools.
@@ -80,6 +84,13 @@ type Server struct {
 	toolsListCount int64
 	// toolCallObserver sees every HTTP tools/call name+args (🎯T64.2).
 	toolCallObserver func(name string, args map[string]any)
+
+	// bootAt is when this Server was created — the "last daemon restart"
+	// baseline the 🎯T597 briefless-seat check reasons against.
+	bootAt time.Time
+	// seatMintedAt records, under mu, when this daemon (re-)minted each
+	// seat's session (🎯T597). Absent name ⇒ minted before the last restart.
+	seatMintedAt map[string]time.Time
 
 	mu sync.Mutex
 	// startMu serializes Launch/wire on jevons_agent_start. It must be
@@ -634,6 +645,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 		workerWD:   workerWD,
 		screenshot: screenshot,
 		transcript: transcript,
+		bootAt:     time.Now(),
 	}
 
 	mcpSrv := server.NewMCPServer("jevons", "1.0.0")
@@ -845,10 +857,17 @@ func (s *Server) handleTranscriptRead(_ context.Context, req mcp.CallToolRequest
 	turns, err := s.transcript.Read(sessionID)
 	if err != nil {
 		if agentName != "" {
-			// Named agent: surface not-found/empty explicitly; never retry GetID.
-			return mcp.NewToolResultError(fmt.Sprintf(
-				"agent %q transcript not found (session %s): %v",
-				agentName, sessionDisplay(sessionID), err)), nil
+			// 🎯T597: never a bare not-found that reads as born-stuck. The
+			// verdict names the paths searched, the restart context, and the
+			// seat-activity evidence; an ACTIVE seat is a text result, not an
+			// error, because error-shape is what pattern-matched to
+			// "never begun a turn" in the 2026-08-31 incident (🎯T304 still
+			// holds: no substitution of another session).
+			msg, active := s.transcriptNotFoundVerdict(agentName, sessionID, err)
+			if active {
+				return mcp.NewToolResultText(msg), nil
+			}
+			return mcp.NewToolResultError(msg), nil
 		}
 		return mcp.NewToolResultError(fmt.Sprintf("read failed: %v", err)), nil
 	}
