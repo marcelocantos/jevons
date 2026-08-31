@@ -4,6 +4,7 @@
 package planusage
 
 import (
+	"math"
 	"strings"
 	"time"
 )
@@ -67,41 +68,9 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 		return BandOK
 	}
 	elapsed := 100 - rtp
-	// No elapsed cutoff (🎯T390.1.6.2). λ on both terms eases the
-	// early-window ratio; elapsed 0 is (used+λ)/λ.
-	// A burning-fast verdict needs real overspend, not a rounding step
-	// (🎯T591). Below the margin the window falls through to the waste
-	// bands, which is where a barely-started window belongs.
-	if burningFastReachable(*used, elapsed, th) {
-		burn := dampedBurn(*used, elapsed, th.DampLambdaPercent)
-		if burn > th.HotRatio {
-			return BandHot
-		}
-		if burn > th.AheadRatio {
-			return BandAhead
-		}
-	}
-	locked := 0.0
-	if w.RemainingPercent != nil {
-		locked = *w.RemainingPercent - th.HotRatio*rtp
-		if locked < 0 {
-			locked = 0
-		}
-	}
-	if locked >= th.LockedWastePercent {
-		return BandLocked
-	}
-	cont := 0.0
-	if elapsed > 0 {
-		cont = 100 - (*used/elapsed)*100
-		if cont < 0 {
-			cont = 0
-		}
-	}
-	if cont >= th.UnderWastePercent {
-		return BandUnder
-	}
-	return BandOK
+	// 🎯T596: colour answers "how much must we change what we are doing",
+	// not "where do we end up if nothing changes".
+	return BandOfPressure(Pressure(*used, elapsed, th), th)
 }
 
 // SessionStatus is the session-window eligibility class (🎯T390.1.5.1).
@@ -185,9 +154,9 @@ func DestEligible(be Backend, now time.Time, th Thresholds) bool {
 // least Load. ok is false when no dest is eligible.
 func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool) {
 	type scored struct {
-		prov string
-		rank int
-		load int
+		prov     string
+		pressure float64
+		load     int
 	}
 	var best *scored
 	for _, c := range cands {
@@ -195,22 +164,31 @@ func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool)
 			continue
 		}
 		b := WeeklyBandOf(c.Backend, now, th)
-		rank := 3
-		switch b {
-		case BandLocked:
-			rank = 1
-		case BandUnder:
-			rank = 2
-		case BandOK:
-			rank = 3
-		default:
-			continue
+		if b == BandHot || b == BandAhead {
+			continue // burning too fast is never a destination
 		}
-		s := scored{prov: strings.ToLower(strings.TrimSpace(c.Provider)), rank: rank, load: c.Load}
+		// Rank by headroom, not by which colour the band happens to be
+		// (🎯T596). Routing and colour answer different questions: colour
+		// asks how hard the owner must correct, and under the pressure
+		// model it deliberately stays quiet about small deviations, since
+		// leaving allowance unspent is the cheaper failure. Routing asks
+		// which backend has the most slack — and 16% behind pace is still
+		// more slack than dead level, whether or not it is worth a colour.
+		// Ranking on the band identity made those two move together, so
+		// widening the waste vertex silently changed where work went.
+		s := scored{
+			prov:     strings.ToLower(strings.TrimSpace(c.Provider)),
+			pressure: destPressure(c.Backend, now, th),
+			load:     c.Load,
+		}
 		if s.prov == "" {
 			s.prov = strings.ToLower(strings.TrimSpace(c.Backend.Provider))
 		}
-		if best == nil || s.rank < best.rank || (s.rank == best.rank && s.load < best.load) {
+		// A meaningful headroom gap decides it; otherwise load breaks the
+		// tie, so two comparable backends still balance by load rather
+		// than by a rounding difference in pressure.
+		if best == nil || s.pressure < best.pressure-destPressureIndifference ||
+			(s.pressure <= best.pressure+destPressureIndifference && s.load < best.load) {
 			cp := s
 			best = &cp
 		}
@@ -372,4 +350,106 @@ func burningFastReachable(used, elapsed float64, th Thresholds) bool {
 	warmup := th.WarmupElapsedPercent
 	early := th.EarlyAlarmUsedPercent
 	return elapsed >= warmup || (early > 0 && used >= early)
+}
+
+// Pressure is the log of the correction this window demands: how far the
+// rate we appear to be running sits from the rate that lands exactly on
+// 100% used at rollover (🎯T596).
+//
+//	current  ≈ (used + λ) / (elapsed + λ)     rate so far, in nominal units
+//	required =  remaining / timeLeft          rate that finishes exactly level
+//	pressure =  ln(current / required)
+//
+// Positive means burning too fast — the allowance runs out early. Negative
+// means the opposite failure the owner cares about equally: time runs out
+// with allowance unspent. Zero is on track, whatever has happened so far.
+//
+// The prior λ shrinks the current-rate estimate toward nominal, and its
+// strength scales with the time left rather than being a constant. Early
+// in a window a deviation is both weak evidence (a tiny sample: a
+// five-minute fan-out sprint is not a policy) and cheap to correct (the
+// runway is long); late it is strong evidence and cannot be corrected.
+// Those two move together, which is why one decaying prior does both jobs
+// instead of the constant λ plus the T591 margin plus the T595 warmup —
+// three patches on a statistic that was measuring the wrong thing.
+//
+// Being a ratio of two well-conditioned quantities, this is stable at the
+// start of a window, where used/elapsed divides one near-zero number by
+// another and produced the red bar on a 94%-remaining week.
+func Pressure(used, elapsed float64, th Thresholds) float64 {
+	remaining := 100 - used
+	timeLeft := 100 - elapsed
+	if timeLeft <= 0 {
+		timeLeft = 0.0001 // the last instant, not a division by zero
+	}
+	if remaining <= 0 {
+		return math.Inf(1) // spent: no correction can fix it
+	}
+	// Zero means "unset, use the default", consistent with every other
+	// vertex here and robust to a config that omits the key. The cost is
+	// that zero cannot express "no prior at all"; pass a negligible k for
+	// that (a test isolating the prior's effect is the only caller that
+	// wants it).
+	k := th.ShrinkPriorK
+	if k <= 0 {
+		k = DefaultShrinkPriorK
+	}
+	lambda := k * (timeLeft / 100)
+	current := (used + lambda) / (elapsed + lambda)
+	required := remaining / timeLeft
+	return math.Log(current / required)
+}
+
+// BandOfPressure maps pressure onto the owner-visible bands (🎯T596).
+// The scale is deliberately asymmetric: running dry costs more than
+// leaving allowance unspent, so the waste side is given more room before
+// it says anything.
+func BandOfPressure(p float64, th Thresholds) WeeklyBand {
+	red, amber := th.PanicRedLn, th.PanicAmberLn
+	locked, under := th.WasteLockedLn, th.WasteUnderLn
+	if red <= 0 {
+		red = DefaultPanicRedLn
+	}
+	if amber <= 0 {
+		amber = DefaultPanicAmberLn
+	}
+	if locked >= 0 {
+		locked = DefaultWasteLockedLn
+	}
+	if under >= 0 {
+		under = DefaultWasteUnderLn
+	}
+	switch {
+	case p >= red:
+		return BandHot
+	case p >= amber:
+		return BandAhead
+	case p <= locked:
+		return BandLocked
+	case p <= under:
+		return BandUnder
+	default:
+		return BandOK
+	}
+}
+
+// destPressureIndifference is the headroom gap below which two backends
+// are treated as equivalent and load decides. Without it, routing would
+// chase noise in the pressure estimate.
+const destPressureIndifference = 0.05
+
+// destPressure is the window pressure used for routing: lower means more
+// headroom. A backend with no usable weekly window sorts as level rather
+// than as maximally attractive, so missing data never wins a race.
+func destPressure(be Backend, now time.Time, th Thresholds) float64 {
+	w, ok := be.PrimaryAllowanceWindow()
+	if !ok {
+		return 0
+	}
+	used := usedPercent(w)
+	rtp, hasTime := remainingTimePercent(w, now)
+	if used == nil || !hasTime {
+		return 0
+	}
+	return Pressure(*used, 100-rtp, th)
 }

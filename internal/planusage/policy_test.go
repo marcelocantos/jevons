@@ -15,6 +15,20 @@ func TestWeeklyBandTable(t *testing.T) {
 	lim := DefaultWeeklyWindowSeconds
 
 	pct := func(v float64) *float64 { return &v }
+	// Same shape as weekly, with the remaining-time fraction spelled out
+	// so a specimen can sit anywhere in the window rather than only at the
+	// halfway mark.
+	weeklyAtElapsed := func(rem, used, remTimePct float64) Backend {
+		resets := now.Add(time.Duration(remTimePct / 100 * float64(lim)) * time.Second)
+		return Backend{
+			Provider: "grok",
+			Status:   StatusAvailable,
+			Windows: []Window{{
+				Name: WindowWeekly, RemainingPercent: pct(rem), UsedPercent: pct(used),
+				ResetsAt: &resets, LimitWindowSeconds: &lim,
+			}},
+		}
+	}
 	weekly := func(rem, used float64) Backend {
 		return Backend{
 			Provider: "grok",
@@ -26,14 +40,33 @@ func TestWeeklyBandTable(t *testing.T) {
 		}
 	}
 
-	if got := WeeklyBandOf(weekly(45, 55), now, th); got != BandAhead {
-		t.Fatalf("burn 1.1 → ahead, got %s", got)
+	// 🎯T596 moved this vertex deliberately. Burn 1.1 — 55% used at 50%
+	// elapsed — is a 10% overspend with half the window still to run, and
+	// the owner's instruction was explicit: "Dipping microscopically below
+	// 1 shouldn't trigger orange." Under the pressure model it reads 0.17,
+	// inside the 0.25 amber vertex, because a deviation that small this
+	// early demands no correction worth a colour.
+	if got := WeeklyBandOf(weekly(45, 55), now, th); got != BandOK {
+		t.Fatalf("burn 1.1 at mid-window → ok, got %s", got)
 	}
-	if MintIneligible(weekly(45, 55), now, th) != true {
+	// Ahead still exists, and is still reached — by a window that actually
+	// demands a correction: 70% used at 50% elapsed reads 0.76.
+	if got := WeeklyBandOf(weekly(30, 70), now, th); got != BandAhead {
+		t.Fatalf("burn 1.4 → ahead, got %s", got)
+	}
+	// These ride the ahead band, so they move to the specimen that is now
+	// in it. The claims are unchanged: ahead stops new seats being minted
+	// but does not evict the ones already there.
+	if MintIneligible(weekly(30, 70), now, th) != true {
 		t.Fatal("ahead is mint-ineligible")
 	}
-	if MigrateOff(weekly(45, 55), now, th) {
+	if MigrateOff(weekly(30, 70), now, th) {
 		t.Fatal("ahead is not migrate-off")
+	}
+	// And the specimen that fell back to ok is now freely mintable — the
+	// point of giving a 10% overspend no colour is that it costs nothing.
+	if MintIneligible(weekly(45, 55), now, th) {
+		t.Fatal("burn 1.1 is ok, and ok mints")
 	}
 
 	if got := WeeklyBandOf(weekly(20, 80), now, th); got != BandHot {
@@ -54,9 +87,17 @@ func TestWeeklyBandTable(t *testing.T) {
 		t.Fatalf("429 → exhausted, got %s", got)
 	}
 
-	// leftover 16% at 1:1 pace: used 42, rem 58, elapsed 50 → cont = 16
-	if got := WeeklyBandOf(weekly(58, 42), now, th); got != BandUnder {
-		t.Fatalf("continuation waste 16 → under, got %s", got)
+	// 🎯T596 widened the waste vertex deliberately, for the same reason it
+	// widened the panic one: 42% used at 50% elapsed is 16% behind pace
+	// and needs no correction worth a colour. It reads -0.32, inside the
+	// -0.60 vertex.
+	if got := WeeklyBandOf(weekly(58, 42), now, th); got != BandOK {
+		t.Fatalf("16%% behind pace mid-window → ok, got %s", got)
+	}
+	// Waste still speaks when the runway makes it real: 40% used with 30%
+	// of the week left reads -1.15, and that allowance will not be spent.
+	if got := WeeklyBandOf(weeklyAtElapsed(60, 40, 30), now, th); got != BandUnder {
+		t.Fatalf("40%% used with 30%% left → under, got %s", got)
 	}
 }
 
@@ -98,13 +139,37 @@ func TestT390_1_6_1EarlyWindowDamping(t *testing.T) {
 		t.Fatal("a genuinely spent mid-week still migrates off")
 	}
 
-	// Control: λ=0 restores the raw ratio and the week-start specimen is
-	// the old red cliff — the damping is the named threshold, not a
-	// side effect of some other vertex.
+	// Control: the easing must be the named threshold rather than a side
+	// effect of some other vertex.
+	//
+	// 🎯T596 changed what this control can honestly assert. Under the old
+	// burn ratio, λ=0 restored a raw statistic that painted the week start
+	// red, so removing the knob produced a cliff. The pressure model has
+	// no such cliff to restore: `required` is computed from the actual
+	// runway, so a 91%-remaining window with 94% of its time left is on
+	// track by construction, prior or no prior. Asserting BandHot here
+	// would be asserting a behaviour the model never produces.
+	//
+	// What IS load-bearing, and what this now pins: the prior strictly
+	// lowers the pressure of a barely-started window. Remove it and the
+	// same specimen reads higher — that is the easing, measured directly
+	// rather than inferred from a band that happens to move.
+	// Not 0: zero means "unset, use the default" for every vertex in this
+	// package, so it cannot express "no prior". A negligible k can.
 	raw := th
-	raw.DampLambdaPercent = 0
-	if got := WeeklyBandOf(weekStart, now, raw); got != BandHot {
-		t.Fatalf("control: undamped week start was hot, got %s", got)
+	raw.ShrinkPriorK = 1e-9
+	eased := Pressure(9, 100-94.4, th)
+	unshrunk := Pressure(9, 100-94.4, raw)
+	if !(unshrunk > eased) {
+		t.Fatalf("control: the prior did not ease the week start (eased=%.3f unshrunk=%.3f)",
+			eased, unshrunk)
+	}
+	// And it is the early window it eases, not everything: a spent
+	// mid-week is hot with or without the prior, so the knob cannot be
+	// used to hide a genuine overspend.
+	rawMid := WeeklyBandOf(midWeek, now, raw)
+	if rawMid != BandHot {
+		t.Fatalf("control: spent mid-week must stay hot without the prior, got %s", rawMid)
 	}
 }
 
@@ -129,22 +194,52 @@ func TestT390_1_6_2NoElapsedCutoff(t *testing.T) {
 		}
 	}
 
+	// 🎯T596 moved this specimen deliberately, and it is the one the owner
+	// pointed at: "It makes no sense for it to be red at this point."
+	// Codex 26% used at 4.9% elapsed is a real overspend, but with 95% of
+	// the window left it is also trivially correctable — five quiet hours
+	// undo it. Pressure reads 0.65: amber, not red. The same conduct
+	// sustained climbs on its own as the runway shortens, which is the
+	// whole point of scaling the prior by time left.
 	codex := weeklyAt(74, 26, 95.1)
-	if got := WeeklyBandOf(codex, now, th); got != BandHot {
-		t.Fatalf("Codex 26%% used at ~4.9%% elapsed must be hot, got %s", got)
+	if got := WeeklyBandOf(codex, now, th); got != BandAhead {
+		t.Fatalf("Codex 26%% used at ~4.9%% elapsed is ahead, not red: got %s", got)
 	}
-	if !MigrateOff(codex, now, th) {
-		t.Fatal("spent-early Codex week still migrates off")
+	// 🎯T596: an ahead window is not evicted. Overspending early is a
+	// thing to watch, not a thing to flee — the correction is available
+	// for as long as the runway is long, and moving seats off a backend
+	// that still has 74% of its allowance is the more expensive mistake.
+	if MigrateOff(codex, now, th) {
+		t.Fatal("an early overspend with three quarters left must not evict seats")
 	}
 
+	// Eviction rides the hot band, so the claim moves to the specimen
+	// that genuinely earns it: 80% of the allowance gone in 3% of the
+	// window is not correctable by easing off.
 	spentEarly := weeklyAt(20, 80, 97)
 	if got := WeeklyBandOf(spentEarly, now, th); got != BandHot {
 		t.Fatalf("80%% used at 3%% elapsed must be hot, got %s", got)
 	}
+	if !MigrateOff(spentEarly, now, th) {
+		t.Fatal("a genuinely spent-early week still migrates off")
+	}
 
+	// 🎯T596 answers the warmup question differently, and better. The old
+	// model had to prove it was not hiding early windows behind a warmup
+	// cutoff, so it called an idle week-start "waste" — but an untouched
+	// window with 97% of its time left is not wasting anything yet; there
+	// is nothing to correct, and saying otherwise is the same false alarm
+	// in the opposite direction.
 	idleEarly := weeklyAt(100, 0, 97)
-	if got := WeeklyBandOf(idleEarly, now, th); got != BandUnder {
-		t.Fatalf("idle weekly at 3%% elapsed is under, not a warmup hide, got %s", got)
+	if got := WeeklyBandOf(idleEarly, now, th); got != BandOK {
+		t.Fatalf("an untouched week start has nothing wrong with it, got %s", got)
+	}
+	// The claim that matters is that waste is not hidden, only timed: the
+	// same idle backend speaks up once the runway is short enough for the
+	// allowance to go unspent.
+	idleLate := weeklyAt(100, 0, 60)
+	if got := WeeklyBandOf(idleLate, now, th); got != BandUnder {
+		t.Fatalf("idle with 60%% of the week left is under, got %s", got)
 	}
 }
 

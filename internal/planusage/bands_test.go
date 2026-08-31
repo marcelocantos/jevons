@@ -40,7 +40,9 @@ func TestT285_2WeeklyBandDetail(t *testing.T) {
 		}
 	}
 
-	ahead := WeeklyBandDetail(weekly(45, 55), now, th)
+	// 🎯T596: burn 1.1 no longer earns a colour, so the ahead specimen is
+	// one that genuinely demands a correction — 70% used at 50% elapsed.
+	ahead := WeeklyBandDetail(weekly(30, 70), now, th)
 	if ahead.Band != BandAhead || ahead.Eligible {
 		t.Fatalf("ahead: band=%s eligible=%v", ahead.Band, ahead.Eligible)
 	}

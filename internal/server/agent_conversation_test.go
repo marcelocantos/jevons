@@ -5,6 +5,7 @@ package server
 
 import (
 	"encoding/json"
+	"github.com/marcelocantos/claudia"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -25,6 +26,13 @@ func overseerFamilyServer(t *testing.T) *Server {
 	dir := t.TempDir()
 	s := New("test", dir)
 	s.overseerName = "jevons"
+	// 🎯T545 gates owner sends on a live overseer process: a down overseer
+	// is a nack, not a silent enqueue. These tests are about what a send
+	// DOES once it lands, so they need an overseer that is up. The stub
+	// keeps them on the product's own Send path rather than a parallel
+	// one — a zero &claudia.Agent{} reports not-alive, which is what left
+	// four of these red on master from c256d71a onward.
+	s.SetProcess(claudia.NewStubAgent(nil))
 	clog, err := chatlog.Open(filepath.Join(dir, "chatlog", "jevons.jsonl"))
 	if err != nil {
 		t.Fatalf("chatlog.Open: %v", err)

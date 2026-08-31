@@ -66,7 +66,39 @@ type Thresholds struct {
 	// 9% at 5.6% elapsed overspends by 3.4pp and stays ahead, 80/50 by
 	// 30pp and stays hot.
 	AheadMarginPercent float64 `json:"ahead_margin_percent"`
+
+	// 🎯T596 pressure model. Colour answers how large a correction the
+	// window demands, not where the current rate would land.
+	//
+	// ShrinkPriorK is the strength of the prior that pulls the
+	// current-rate estimate toward nominal, scaled by the time left. A
+	// fan-out sprint in a window's first minutes is not a policy, and it
+	// is also trivially correctable; both facts argue for discounting it,
+	// and both stop applying as the deadline nears.
+	ShrinkPriorK float64 `json:"shrink_prior_k,omitempty"`
+	// PanicAmberLn / PanicRedLn are ln(current/required) vertices for
+	// burning too fast.
+	PanicAmberLn float64 `json:"panic_amber_ln,omitempty"`
+	PanicRedLn   float64 `json:"panic_red_ln,omitempty"`
+	// WasteUnderLn / WasteLockedLn are the same for the opposite failure,
+	// and are deliberately further out: running dry costs more than
+	// leaving allowance unspent, so waste gets more room before it speaks.
+	WasteUnderLn  float64 `json:"waste_under_ln,omitempty"`
+	WasteLockedLn float64 `json:"waste_locked_ln,omitempty"`
 }
+
+// 🎯T596 defaults, calibrated against real windows: a five-minute fan-out
+// sprint reads 0.10; identical conduct sustained reads 0.16 on day 2, 0.40
+// on day 4, 1.02 on day 6 — same behaviour, rising alarm as the runway
+// shortens. 80/50 reads 1.27; a window 2% from dry with 5% of its time
+// left reads 0.95, which the old statistic scored 1.03 and painted green.
+const (
+	DefaultShrinkPriorK  = 40.0
+	DefaultPanicAmberLn  = 0.25
+	DefaultPanicRedLn    = 0.85
+	DefaultWasteUnderLn  = -0.60
+	DefaultWasteLockedLn = -2.00
+)
 
 // DefaultThresholds matches the vertices the cockpit already used
 // (ahead 1.0, hot 1.5, waste 15, remaining-low 15 / 5, damp λ 5).
@@ -84,6 +116,11 @@ func DefaultThresholds() Thresholds {
 		MintIndifferencePercent:  10,
 		DampLambdaPercent:        5,
 		AheadMarginPercent:       2,
+		ShrinkPriorK:             DefaultShrinkPriorK,
+		PanicAmberLn:             DefaultPanicAmberLn,
+		PanicRedLn:               DefaultPanicRedLn,
+		WasteUnderLn:             DefaultWasteUnderLn,
+		WasteLockedLn:            DefaultWasteLockedLn,
 	}
 }
 

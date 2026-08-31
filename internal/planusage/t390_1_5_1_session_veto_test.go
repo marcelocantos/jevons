@@ -177,4 +177,3 @@ func TestT390_1_5_1UnpublishedSessionNotVeto(t *testing.T) {
 		t.Fatal("unpublished session is neither mint-ineligible nor migrate-off")
 	}
 }
-
