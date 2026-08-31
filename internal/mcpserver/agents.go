@@ -168,6 +168,13 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		// 🎯T444: and the seat's own session records break the tie, because
 		// both of the other inputs go stale across a backend re-mint.
 		status := s.agentPhase(d, alive)
+		// 🎯T599: a seat whose held sendq cannot be delivered is PINNED, not
+		// ordinary running/idle — nothing else tells a caller the seat cannot
+		// be moved by its parent.
+		pin, pinned := s.sendqPinFor(d.Name)
+		if pinned {
+			status = "PINNED"
+		}
 		parent := d.Parent
 		if parent == "" {
 			parent = "-"
@@ -178,6 +185,9 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		}
 		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s role=%-14s parent=%-12s %s (session: %s)\n",
 			d.Name, status, purpose, s.roleDisplay(d), parent, d.WorkDir, sessionDisplay(d.SessionID))
+		if pinned {
+			fmt.Fprintf(&b, "  ^ %s\n", FormatSendqPinLine(d.Name, pin))
+		}
 	}
 	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
 	// missions should have fan-out — visible without only RHS eyeballing.
@@ -961,6 +971,22 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	if !subtree {
 		restartNames = nil
 	}
+	// 🎯T599: the T530 hold yields to overseer authority. An undeliverable
+	// held message must never make a seat unkillable by the one caller who
+	// can rule it undeliverable — the held messages are discarded, with one
+	// eventlog record naming the count and the reason.
+	discarded := 0
+	if refuse && s.isOverseerAgent(actor) {
+		n, derr := s.discardHeldSendqForOverseerKill(name, actor)
+		if derr != nil {
+			msg := fmt.Sprintf("kill by overseer could not discard held sendq for %q: %v", name, derr)
+			life["err"] = msg
+			s.logLifecycle(compAgentLifecycle, "kill", "error", life)
+			return mcp.NewToolResultError(msg), nil
+		}
+		discarded = n
+		refuse = false
+	}
 	if refuse {
 		life["err"] = reason
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
@@ -985,8 +1011,10 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(fmt.Sprintf("kill failed: %v", killErr)), nil
 	}
 	s.clearAgentRole(name)
+	s.clearSendqPin(name)
 	for _, d := range desc {
 		s.clearAgentRole(d)
+		s.clearSendqPin(d)
 	}
 	restarted := s.restartHeldSendqForDrain(held, newParent, actor)
 	life["descendants"] = len(desc)
@@ -999,6 +1027,11 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		"Agent %q killed by %q: process stopped and deregistered (will not auto-start; gone from agent list).",
 		name, actor,
 	)
+	if discarded > 0 {
+		msg += fmt.Sprintf(
+			" Discarded %d held sendq message(s) undelivered (overseer kill overrides the 🎯T530 hold; 🎯T599).",
+			discarded)
+	}
 	if len(desc) > 0 {
 		msg += fmt.Sprintf(" Also killed %d descendant(s): %s.", len(desc), strings.Join(desc, ", "))
 	}

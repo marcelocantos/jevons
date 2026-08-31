@@ -392,6 +392,13 @@ type Server struct {
 	// restart-to-drain. Hermetic tests inject a stub that refuses without
 	// spawning a provider; nil uses the real registry Launch.
 	drainLaunch func(name string) (*claudia.Agent, error)
+
+	// sendqPin / sendqPinFails track seats whose held sendq cannot be
+	// delivered (🎯T599): the pin names the blocking message for
+	// agent_list / fleet health, and the fail counts decide when repeated
+	// delivery failure of one entry becomes a pin. Guarded by mu.
+	sendqPin      map[string]SendqPin
+	sendqPinFails map[string]sendqEntryFails
 }
 
 // TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).

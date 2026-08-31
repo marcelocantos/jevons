@@ -644,6 +644,9 @@ func (s *Server) drainAgentSendQueue(name string) {
 			return
 		}
 		slog.Warn("agent send queue: process not alive; re-queued", "name", name)
+		// 🎯T599: the same entry failing delivery repeatedly pins the seat —
+		// agent_list says PINNED instead of ordinary running/idle.
+		s.noteSendqDeliveryFailure(name, entry, "no live process at drain")
 		return
 	}
 	// The drain runs on a turn boundary, so the agent is idle by construction
@@ -705,5 +708,7 @@ func (s *Server) drainAgentSendQueue(name string) {
 	}
 	s.markAgentTurnBegan(name)
 	s.noteTurnInFlight(name)
+	// 🎯T599: a delivered message un-pins the seat — the queue is moving.
+	s.clearSendqPin(name)
 	slog.Info("agent send queue: drained one message", "name", name, "remaining", s.pendingAgentSends(name))
 }

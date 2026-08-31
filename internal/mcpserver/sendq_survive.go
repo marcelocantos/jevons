@@ -75,7 +75,9 @@ func ClassifyKillHeldSendq(target string, descendants []string, depthOf func(str
 		n := depthOf(target)
 		return true, fmt.Sprintf(
 			"refusing to kill %q — daemon sendq still holds %d message(s) (recovery seat before DRAINED/EMPTY; 🎯T530). "+
-				"Wait for the drain to finish, or jevons_agent_send will keep holding until a start drains it.",
+				"Drain path: wait for the drain to finish, or jevons_agent_start(name=%[1]q) delivers the held message(s) at the "+
+				"next turn boundary. Override: when a held message must NOT be delivered, an overseer kill discards the held "+
+				"messages and always succeeds (🎯T599) — escalate to the overseer.",
 			target, n), nil
 	}
 	return false, "", nil
@@ -337,4 +339,3 @@ func (s *Server) suppressHeldReapedDuringDrainRestart(name string, now time.Time
 	}
 	return now.Sub(at) <= RemintGraceWindow
 }
-
