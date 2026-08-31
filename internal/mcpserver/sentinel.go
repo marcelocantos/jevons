@@ -157,6 +157,7 @@ func (s *Server) registerSentinelTools() {
 	s.ensureSentinelRuntime(0)
 	s.addTool(
 		mcp.NewTool("jevons_sentinel_cycle",
+			withJobWait(),
 			mcp.WithDescription("Run one durable-sentinel observe→classify→act cycle (🎯T219). Samples overseer/fleet/eventlog/frontier product surfaces, pure-classifies harness-ok|repair|file+PO|ignore (grace, cooldown, max actions/hour), then control-plane repair and/or mission to jevons-po. Continuous loop runs while jevonsd is up; this tool is the same policy for dry_run/status. No product implement; no Ship."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, classify only — no repair, no deliver, no budget/cooldown update.")),
 			mcp.WithBoolean("act", mcp.Description("If true (default when dry_run=false), perform repair/file+PO act. When false with dry_run=false, still updates cooldown only if act would file.")),
@@ -175,6 +176,18 @@ func (s *Server) handleSentinelCycle(_ context.Context, req mcp.CallToolRequest)
 	act := !dryRun
 	if v, ok := args["act"].(bool); ok {
 		act = v && !dryRun
+	}
+	// 🎯T600: a sentinel pass files targets and can deliver to the PO.
+	// Argument parsing above is immediate; the pass gets a handle.
+	return mcp.NewToolResultText(s.dispatchJobWaiting("jevons_sentinel_cycle", s.mcpCallerOf(req), jobWaitArg(req),
+		func(ctx context.Context) (string, error) {
+			return s.runSentinelCycleJob(ctx, act)
+		})), nil
+}
+
+func (s *Server) runSentinelCycleJob(ctx context.Context, act bool) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	res, actRes := s.runSentinelCycle(SentinelLoopArgs{
 		Server:   s,
@@ -206,7 +219,7 @@ func (s *Server) handleSentinelCycle(_ context.Context, req mcp.CallToolRequest)
 	}
 	b.WriteByte('\n')
 	b.WriteString(res.WireText)
-	return mcp.NewToolResultText(b.String()), nil
+	return b.String(), nil
 }
 
 // StartSentinelLoop runs continuous observe→classify→act until ctx is done.

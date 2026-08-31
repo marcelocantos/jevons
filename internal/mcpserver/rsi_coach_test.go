@@ -46,7 +46,7 @@ func TestHandleRSICoachCycle(t *testing.T) {
 	s.SetRSICoach(coach)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{}
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0}
 	res, err := s.handleRSICoachCycle(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -77,11 +77,11 @@ func TestHandleRSICoachConfigureAndStatus(t *testing.T) {
 	s.SetRSICoach(coach)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{
-		"rate_cap":       float64(1),
-		"system_prompt":  "custom coach prompt for tests",
-		"focus_filters":  "owner_chat,stuck",
-		"updated_by":     "jevons",
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0, 
+		"rate_cap":      float64(1),
+		"system_prompt": "custom coach prompt for tests",
+		"focus_filters": "owner_chat,stuck",
+		"updated_by":    "jevons",
 	}
 	res, err := s.handleRSICoachConfigure(context.Background(), req)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestHandleRSICoachConfigureAndStatus(t *testing.T) {
 func TestHandleRSICoachNotConfigured(t *testing.T) {
 	s := New(t.TempDir(), nil, nil)
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{}
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0}
 	res, err := s.handleRSICoachCycle(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestHandleRSICoachCycleRetroMode(t *testing.T) {
 	s.SetRSICoach(coach)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"mode": "retro"}
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0, "mode": "retro"}
 	res, err := s.handleRSICoachCycle(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)

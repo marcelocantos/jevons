@@ -130,7 +130,7 @@ func auditCallErr(t *testing.T, fn func(context.Context, mcp.CallToolRequest) (*
 func TestAuditCycleCoversAllScopesAndLeavesArtifacts(t *testing.T) {
 	s, deliverer := newAuditTestServer(t)
 
-	text := auditCall(t, s.handleAuditCycle, map[string]any{"force": true})
+	text := auditCall(t, s.handleAuditCycle, map[string]any{"wait_seconds": 5.0, "force": true})
 	for _, want := range []string{"code", "skills", "prompts"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("a full scan must cover %s: %s", want, text)
@@ -178,8 +178,8 @@ func TestAuditCycleCoversAllScopesAndLeavesArtifacts(t *testing.T) {
 func TestAuditResidueConvergesAcrossPasses(t *testing.T) {
 	s, deliverer := newAuditTestServer(t, auditFixtureReport, auditFixtureReport, auditCleanReport)
 
-	auditCall(t, s.handleAuditCycle, map[string]any{"force": true})
-	second := auditCall(t, s.handleAuditCycle, map[string]any{"force": true})
+	auditCall(t, s.handleAuditCycle, map[string]any{"wait_seconds": 5.0, "force": true})
+	second := auditCall(t, s.handleAuditCycle, map[string]any{"wait_seconds": 5.0, "force": true})
 	if !strings.Contains(second, "new=0") {
 		t.Fatalf("a repeat pass mints no new residue: %s", second)
 	}
@@ -191,7 +191,7 @@ func TestAuditResidueConvergesAcrossPasses(t *testing.T) {
 		t.Fatalf("standing finding re-alerted: %d notices", len(deliverer.notices))
 	}
 
-	third := auditCall(t, s.handleAuditCycle, map[string]any{"force": true})
+	third := auditCall(t, s.handleAuditCycle, map[string]any{"wait_seconds": 5.0, "force": true})
 	if !strings.Contains(third, "resolved=2") || !strings.Contains(third, "open_total=0") {
 		t.Fatalf("a covering clean pass resolves prior residue: %s", third)
 	}
@@ -201,7 +201,7 @@ func TestAuditResidueConvergesAcrossPasses(t *testing.T) {
 // ignore_with_reason refuses to be silent about why.
 func TestAuditResidueDisposition(t *testing.T) {
 	s, _ := newAuditTestServer(t)
-	auditCall(t, s.handleAuditCycle, map[string]any{"force": true})
+	auditCall(t, s.handleAuditCycle, map[string]any{"wait_seconds": 5.0, "force": true})
 
 	listing := auditCall(t, s.handleAuditResidue, map[string]any{})
 	if !strings.Contains(listing, "disposition: pending") {
@@ -279,9 +279,9 @@ func TestAuditConfigureRetunesDurably(t *testing.T) {
 // is refused rather than run.
 func TestAuditCycleRespectsCostGuard(t *testing.T) {
 	s, _ := newAuditTestServer(t)
-	auditCall(t, s.handleAuditCycle, map[string]any{"force": true})
+	auditCall(t, s.handleAuditCycle, map[string]any{"wait_seconds": 5.0, "force": true})
 
-	guarded := auditCall(t, s.handleAuditCycle, map[string]any{})
+	guarded := auditCall(t, s.handleAuditCycle, map[string]any{"wait_seconds": 5.0})
 	if !strings.Contains(guarded, "skipped") || !strings.Contains(guarded, "min cycle gap") {
 		t.Fatalf("an unforced repeat inside the gap must be skipped: %s", guarded)
 	}

@@ -20,7 +20,7 @@ func TestStaffOpsCycleDryRunHealthy(t *testing.T) {
 	s := New("/tmp", nil, nil)
 	// Cost monitor optional.
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"dry_run": true}
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0, "dry_run": true}
 	res, err := s.handleStaffOpsCycle(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestStaffOpsCycleCostAlertClassifiesFilePO(t *testing.T) {
 	s.SetNotify(func(text string) { delivered = append(delivered, text) })
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"dry_run": false}
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0, "dry_run": false}
 	res, err := s.handleStaffOpsCycle(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestStaffOpsCycleCooldownDryRunNoDeliver(t *testing.T) {
 	s.SetNotify(func(text string) { delivered = append(delivered, text) })
 
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"dry_run": true}
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0, "dry_run": true}
 	if _, err := s.handleStaffOpsCycle(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestStaffOpsCycleCooldownDryRunNoDeliver(t *testing.T) {
 		t.Fatalf("dry_run delivered: %v", delivered)
 	}
 	// Cooldown not marked: live cycle should still file.
-	req.Params.Arguments = map[string]any{"dry_run": false}
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0, "dry_run": false}
 	res, err := s.handleStaffOpsCycle(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -126,12 +126,12 @@ func TestStaffOpsCycleCooldownDryRunNoDeliver(t *testing.T) {
 
 func TestIsPOName(t *testing.T) {
 	cases := map[string]bool{
-		"jevons-po":     true,
-		"tern-po":       true,
-		"worker-a":      false,
-		"jv-t99-impl":   false,
-		"minicades_po":  true,
-		"":              false,
+		"jevons-po":    true,
+		"tern-po":      true,
+		"worker-a":     false,
+		"jv-t99-impl":  false,
+		"minicades_po": true,
+		"":             false,
 	}
 	for name, want := range cases {
 		if got := isPOName(name); got != want {

@@ -22,7 +22,7 @@ import (
 func TestSentinelCycleDryRunHealthy(t *testing.T) {
 	s := New("/tmp", nil, nil)
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"dry_run": true}
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0, "dry_run": true}
 	res, err := s.handleSentinelCycle(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestSentinelRepairTriggersControlPlane(t *testing.T) {
 func TestStaffOpsStillWorksAfterSentinelRegister(t *testing.T) {
 	s := New("/tmp", nil, nil)
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"dry_run": true}
+	req.Params.Arguments = map[string]any{"wait_seconds": 5.0, "dry_run": true}
 	res, err := s.handleStaffOpsCycle(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)

@@ -39,6 +39,7 @@ func (s *Server) RSICoach() *rsi.Coach {
 func (s *Server) registerRSICoachTools() {
 	s.addTool(
 		mcp.NewTool("jevons_rsi_coach_cycle",
+			withJobWait(),
 			mcp.WithDescription("Run one RSI coach cycle now: drip (🎯T243) reads new appends since the cursor; retro (🎯T353) makes a bounded pass over history — git commits, eventlog tail, owner chat, session transcripts — within the configured lookback. Coach never files bullseye — overseer alone decides file/alert/brief PO/ignore."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, form judgments and return wire text without delivering to overseer.")),
 			mcp.WithString("mode", mcp.Description("drip (default) | retro | both. retro runs the bounded retrospective history pass (🎯T353).")),
@@ -97,12 +98,29 @@ func (s *Server) handleRSICoachCycle(_ context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("unknown mode %q (want drip | retro | both)", mode)), nil
 	}
 
+	// 🎯T600: retro walks git history, the eventlog and session
+	// transcripts. Argument errors above are immediate; the pass gets a
+	// handle.
+	return mcp.NewToolResultText(s.dispatchJobWaiting("jevons_rsi_coach_cycle", s.mcpCallerOf(req), jobWaitArg(req),
+		func(ctx context.Context) (string, error) {
+			return s.runRSICoachCycle(ctx, mode, dryHint)
+		})), nil
+}
+
+func (s *Server) runRSICoachCycle(ctx context.Context, mode string, dryHint bool) (string, error) {
+	coach := s.RSICoach()
+	if coach == nil {
+		return "", fmt.Errorf("rsi coach not configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	var res rsi.CoachCycleResult
 	if mode == "drip" || mode == "both" {
 		r, err := coach.RunOnce("mcp")
 		if err != nil {
 			s.logLifecycle("rsi_coach", "cycle", "error", map[string]any{"err": err.Error(), "mode": mode})
-			return mcp.NewToolResultError(fmt.Sprintf("rsi coach cycle failed: %v", err)), nil
+			return "", fmt.Errorf("rsi coach cycle failed: %w", err)
 		}
 		res = r
 	}
@@ -110,7 +128,7 @@ func (s *Server) handleRSICoachCycle(_ context.Context, req mcp.CallToolRequest)
 		r, err := coach.RunRetroOnce("mcp")
 		if err != nil {
 			s.logLifecycle("rsi_coach", "retro_cycle", "error", map[string]any{"err": err.Error()})
-			return mcp.NewToolResultError(fmt.Sprintf("rsi coach retro cycle failed: %v", err)), nil
+			return "", fmt.Errorf("rsi coach retro cycle failed: %w", err)
 		}
 		res.Judgments = append(res.Judgments, r.Judgments...)
 		res.Delivered = append(res.Delivered, r.Delivered...)
@@ -154,7 +172,7 @@ func (s *Server) handleRSICoachCycle(_ context.Context, req mcp.CallToolRequest)
 		b.WriteString(res.WireTexts[0])
 		b.WriteByte('\n')
 	}
-	return mcp.NewToolResultText(b.String()), nil
+	return b.String(), nil
 }
 
 func (s *Server) handleRSICoachConfigure(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

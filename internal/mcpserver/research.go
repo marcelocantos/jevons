@@ -39,6 +39,7 @@ func (s *Server) ResearchAgent() *research.Agent {
 func (s *Server) registerResearchTools() {
 	s.addTool(
 		mcp.NewTool("jevons_research_cycle",
+			withJobWait(),
 			mcp.WithDescription("Run one ambient research cycle now (🎯T356). context: explore recent work across repos, the frontier, the eventlog and sessions. feed: poll subscribed news feeds and fold new items in. Findings land in durable versioned notes — prior conclusions are superseded explicitly, never overwritten. A cycle that finds nothing new writes no revision and sends no brief."),
 			mcp.WithString("mode", mcp.Description("context (default) | feed | both")),
 		),
@@ -92,7 +93,7 @@ func (s *Server) registerResearchTools() {
 	)
 }
 
-func (s *Server) handleResearchCycle(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleResearchCycle(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	agent := s.ResearchAgent()
 	if agent == nil {
 		return mcp.NewToolResultError("research agent not configured"), nil
@@ -106,7 +107,19 @@ func (s *Server) handleResearchCycle(ctx context.Context, req mcp.CallToolReques
 	default:
 		return mcp.NewToolResultError(fmt.Sprintf("unknown mode %q (want context | feed | both)", mode)), nil
 	}
+	// 🎯T600: a research pass is minutes of model work. Argument errors
+	// above are immediate; the pass itself gets a handle.
+	return mcp.NewToolResultText(s.dispatchJobWaiting("jevons_research_cycle", s.mcpCallerOf(req), jobWaitArg(req),
+		func(ctx context.Context) (string, error) {
+			return s.runResearchCycle(ctx, mode)
+		})), nil
+}
 
+func (s *Server) runResearchCycle(ctx context.Context, mode string) (string, error) {
+	agent := s.ResearchAgent()
+	if agent == nil {
+		return "", fmt.Errorf("research agent not configured")
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Research cycle (🎯T356) mode=%s\n", mode)
 	changed := 0
@@ -114,7 +127,7 @@ func (s *Server) handleResearchCycle(ctx context.Context, req mcp.CallToolReques
 		res, err := agent.RunOnce("mcp")
 		if err != nil {
 			s.logLifecycle("research", "cycle", "error", map[string]any{"err": err.Error(), "mode": mode})
-			return mcp.NewToolResultError(fmt.Sprintf("research cycle failed: %v", err)), nil
+			return "", fmt.Errorf("research cycle failed: %w", err)
 		}
 		changed += writeResearchCycle(&b, res)
 	}
@@ -122,7 +135,7 @@ func (s *Server) handleResearchCycle(ctx context.Context, req mcp.CallToolReques
 		poll, err := agent.PollFeeds(ctx, "mcp")
 		if err != nil {
 			s.logLifecycle("research", "feed_cycle", "error", map[string]any{"err": err.Error()})
-			return mcp.NewToolResultError(fmt.Sprintf("research feed poll failed: %v", err)), nil
+			return "", fmt.Errorf("research feed poll failed: %w", err)
 		}
 		fmt.Fprintf(&b, "  feeds polled: %d\n", poll.Polled)
 		for _, res := range poll.Cycles {
@@ -136,7 +149,7 @@ func (s *Server) handleResearchCycle(ctx context.Context, req mcp.CallToolReques
 		b.WriteString("  nothing new — notes unchanged, no brief sent.\n")
 	}
 	s.logLifecycle("research", "cycle", "ok", map[string]any{"mode": mode, "changed": changed})
-	return mcp.NewToolResultText(b.String()), nil
+	return b.String(), nil
 }
 
 func writeResearchCycle(b *strings.Builder, res research.CycleResult) int {

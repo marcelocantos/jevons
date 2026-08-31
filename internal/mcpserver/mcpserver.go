@@ -88,6 +88,9 @@ type Server struct {
 	// time out. Launch itself is also deadline-bounded (🎯T541.2) so a hung
 	// session/load cannot hold this mutex for minutes and deafen the PO.
 	// Never take startMu under mu.
+	// jobs holds background work started by tools that must not block (🎯T600).
+	jobs *jobRegistry
+
 	startMu sync.Mutex
 	// launchAgentFn overrides registry.Launch (hermetic 🎯T541).
 	launchAgentFn func(name string) (*claudia.Agent, error)
@@ -662,6 +665,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 		)
 	}
 
+	s.registerJobTools() // 🎯T600 handles for work that takes time
 	s.registerJwork()
 	s.registerMCPReconnect()
 	s.registerAgentMigrate()

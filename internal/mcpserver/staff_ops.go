@@ -39,6 +39,7 @@ func (s *Server) registerStaffOpsTools() {
 	}
 	s.addTool(
 		mcp.NewTool("jevons_staff_ops_cycle",
+			withJobWait(),
 			mcp.WithDescription("Run one bounded staff ops cycle (🎯T325.4): sample health-of-health (fleet/dead agents, cost alerts) + compact resource snapshot (sessions, burn, agent counts, idle PO heuristic), classify harness-ok|repair|file+PO|ignore with cooldown on re-file, deliver compact brief to root overseer. Not permanent monologue; does not implement product code or open Ship. Continuous sentinel is jevons_sentinel_cycle (🎯T219)."),
 			mcp.WithBoolean("dry_run", mcp.Description("If true, build classification and wire text without delivering to overseer and without updating cooldown.")),
 			mcp.WithNumber("frontier_depth", mcp.Description("Optional frontier leaf count when caller already knows it (default 0 = unknown/not sampled).")),
@@ -80,6 +81,19 @@ func (s *Server) handleStaffOpsCycle(_ context.Context, req mcp.CallToolRequest)
 		s.mu.Unlock()
 	}
 
+	// 🎯T600: sampling plus deliver is unbounded work (it can send to the
+	// overseer). Argument parsing above is immediate; the rest gets a handle.
+	return mcp.NewToolResultText(s.dispatchJobWaiting("jevons_staff_ops_cycle", s.mcpCallerOf(req), jobWaitArg(req),
+		func(ctx context.Context) (string, error) {
+			return s.runStaffOpsCycle(ctx, st, overseer, signals, resources, dryRun)
+		})), nil
+}
+
+func (s *Server) runStaffOpsCycle(ctx context.Context, st *staffOpsState, overseer string,
+	signals []staffops.Signal, resources staffops.ResourceSnapshot, dryRun bool) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	st.mu.Lock()
 	res := staffops.RunCycle(staffops.CycleArgs{
 		Signals:   signals,
@@ -96,7 +110,7 @@ func (s *Server) handleStaffOpsCycle(_ context.Context, req mcp.CallToolRequest)
 			s.logLifecycle("staff_ops", "cycle", "error", map[string]any{
 				"err": err.Error(), "primary": string(res.Primary),
 			})
-			return mcp.NewToolResultError(fmt.Sprintf("staff ops cycle: classify ok but deliver failed: %v\n\n%s", err, res.WireText)), nil
+			return "", fmt.Errorf("staff ops cycle: classify ok but deliver failed: %w\n\n%s", err, res.WireText)
 		}
 		delivered = true
 	}
@@ -113,7 +127,7 @@ func (s *Server) handleStaffOpsCycle(_ context.Context, req mcp.CallToolRequest)
 	fmt.Fprintf(&b, "Staff ops cycle: primary=%s signals=%d filed=%d dry_run=%v delivered=%v\n\n",
 		res.Primary, len(res.Decisions), len(res.FiledSymptoms), dryRun, delivered)
 	b.WriteString(res.WireText)
-	return mcp.NewToolResultText(b.String()), nil
+	return b.String(), nil
 }
 
 // sampleStaffOps builds pure inputs from registry + cost monitor (no product implement).

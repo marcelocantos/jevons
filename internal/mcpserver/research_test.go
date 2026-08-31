@@ -60,7 +60,7 @@ func researchCall(t *testing.T, fn func(context.Context, mcp.CallToolRequest) (*
 func TestResearchCycleListReadMCP(t *testing.T) {
 	s, _ := newResearchTestServer(t)
 
-	text := researchCall(t, s.handleResearchCycle, map[string]any{"mode": "context"})
+	text := researchCall(t, s.handleResearchCycle, map[string]any{"wait_seconds": 5.0, "mode": "context"})
 	if !strings.Contains(text, "context/frontier rev 1") {
 		t.Fatalf("cycle should report the new note revision: %s", text)
 	}
@@ -76,7 +76,7 @@ func TestResearchCycleListReadMCP(t *testing.T) {
 	}
 
 	// A second identical cycle finds nothing new and says so.
-	quiet := researchCall(t, s.handleResearchCycle, map[string]any{"mode": "context"})
+	quiet := researchCall(t, s.handleResearchCycle, map[string]any{"wait_seconds": 5.0, "mode": "context"})
 	if !strings.Contains(quiet, "nothing new") {
 		t.Fatalf("unchanged context should report quiet: %s", quiet)
 	}
@@ -140,7 +140,7 @@ func TestResearchConfigureSubscribesFeedAndReportsStatus(t *testing.T) {
 	}
 
 	// Feed poll with no reachable fixture must degrade to a skip, not an error.
-	poll := researchCall(t, s.handleResearchCycle, map[string]any{"mode": "feed"})
+	poll := researchCall(t, s.handleResearchCycle, map[string]any{"wait_seconds": 5.0, "mode": "feed"})
 	if !strings.Contains(poll, "feeds polled: 1") || !strings.Contains(poll, "skipped:") {
 		t.Fatalf("unreachable feed should be reported as a skip: %s", poll)
 	}

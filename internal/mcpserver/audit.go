@@ -41,6 +41,7 @@ func (s *Server) Auditor() *audit.Auditor {
 func (s *Server) registerAuditTools() {
 	s.addTool(
 		mcp.NewTool("jevons_audit_cycle",
+			withJobWait(),
 			mcp.WithDescription("Run one bounded full-scan audit now (🎯T357): scope product code, skills trees, and agent prompts, hand the manifest to the advanced-tier auditor, and fold the findings into durable residue. A pass is bounded by scope caps, a wall-clock timeout, and a cycles-per-day cost guard. Findings land as a durable report plus residue — new and reopened criticals notify the overseer in the same cycle."),
 			mcp.WithBoolean("force", mcp.Description("Bypass the min-gap and cycles-per-day cost guards for this run.")),
 			mcp.WithString("reason", mcp.Description("Trigger label recorded on the report (default mcp).")),
@@ -103,7 +104,7 @@ func (s *Server) registerAuditTools() {
 	)
 }
 
-func (s *Server) handleAuditCycle(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAuditCycle(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	auditor := s.Auditor()
 	if auditor == nil {
 		return mcp.NewToolResultError("auditor not configured"), nil
@@ -115,24 +116,30 @@ func (s *Server) handleAuditCycle(ctx context.Context, req mcp.CallToolRequest) 
 		reason = "mcp"
 	}
 
-	res, err := auditor.RunOnce(ctx, reason, force)
-	if err != nil {
-		s.logLifecycle("audit", "cycle", "error", map[string]any{"err": err.Error(), "reason": reason})
-		// A failed pass is still durable evidence: report the artifact id so
-		// a broken auditor cannot read as "nothing to report".
-		if res.ReportID != "" {
-			return mcp.NewToolResultError(fmt.Sprintf("audit cycle failed: %v (report %s)", err, res.ReportID)), nil
-		}
-		return mcp.NewToolResultError(fmt.Sprintf("audit cycle failed: %v", err)), nil
-	}
-	s.logLifecycle("audit", "cycle", "ok", map[string]any{
-		"reason":   reason,
-		"report":   res.ReportID,
-		"findings": len(res.Report.Findings),
-		"open":     res.Merge.OpenTotal,
-		"notified": res.Notified,
-	})
-	return mcp.NewToolResultText(formatAuditCycle(res)), nil
+	// 🎯T600: an audit pass is model work measured in minutes. Configuration
+	// errors are immediate above; the pass gets a handle.
+	return mcp.NewToolResultText(s.dispatchJobWaiting("jevons_audit_cycle", s.mcpCallerOf(req), jobWaitArg(req),
+		func(ctx context.Context) (string, error) {
+			res, err := auditor.RunOnce(ctx, reason, force)
+			if err != nil {
+				s.logLifecycle("audit", "cycle", "error", map[string]any{"err": err.Error(), "reason": reason})
+				// A failed pass is still durable evidence: report the
+				// artifact id so a broken auditor cannot read as
+				// "nothing to report".
+				if res.ReportID != "" {
+					return "", fmt.Errorf("audit cycle failed: %w (report %s)", err, res.ReportID)
+				}
+				return "", fmt.Errorf("audit cycle failed: %w", err)
+			}
+			s.logLifecycle("audit", "cycle", "ok", map[string]any{
+				"reason":   reason,
+				"report":   res.ReportID,
+				"findings": len(res.Report.Findings),
+				"open":     res.Merge.OpenTotal,
+				"notified": res.Notified,
+			})
+			return formatAuditCycle(res), nil
+		})), nil
 }
 
 func formatAuditCycle(res audit.CycleResult) string {
