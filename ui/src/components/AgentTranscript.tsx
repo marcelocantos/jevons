@@ -125,6 +125,10 @@ export function AgentTranscript(props: {
         scrollTop: el.scrollTop,
         fromBottom: distanceFromEnd(el.scrollTop, el.scrollHeight, el.clientHeight),
         clientHeight: el.clientHeight,
+        // Growth since the last pin is what separates "a tall report
+        // landed under us" from "the owner scrolled up" (🎯T587).
+        scrollHeight: el.scrollHeight,
+        prevHeight: lastHeightRef.current,
       })
     ) {
       followRef.current = false;
