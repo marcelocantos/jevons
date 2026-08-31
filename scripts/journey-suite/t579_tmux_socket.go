@@ -47,10 +47,17 @@ func (s *suite) j29TmuxAnchorSpawn() error {
 	}
 
 	restoreEnv := append([]string(nil), s.daemonEnv...)
-	s.daemonEnv = append(s.daemonEnv,
-		"CLAUDIA_TMUX_SOCKET="+sock,
-		"TMUX_TMPDIR="+emptyTmux,
-	)
+	// TMUX / TMUX_PANE are cleared as well as TMUX_TMPDIR pointed at an
+	// empty directory: this suite is itself usually run from inside a
+	// claudia tmux pane, and tmux reads $TMUX in preference to
+	// everything else — leaving it set would let an un-socketed call
+	// reach the very server the journey is proving nobody relies on.
+	noDefaultTmux := []string{
+		"TMUX_TMPDIR=" + emptyTmux,
+		"TMUX=",
+		"TMUX_PANE=",
+	}
+	s.daemonEnv = append(append(s.daemonEnv, "CLAUDIA_TMUX_SOCKET="+sock), noDefaultTmux...)
 	defer func() {
 		_, _ = s.MCPToolCall("jevons_agent_kill", map[string]any{
 			"name": "jv-t579-j29a", "actor": "jevons",
@@ -69,7 +76,13 @@ func (s *suite) j29TmuxAnchorSpawn() error {
 
 	// No default tmux server exists under TMUX_TMPDIR, and none is
 	// created: every tmux call the spawn path makes must carry -S.
-	if err := exec.Command("tmux", "list-sessions").Run(); err == nil {
+	// The check runs under the daemon's TMUX_TMPDIR, not this
+	// process's — the journey harness inherits the owner's own
+	// environment, and asking about the owner's default server says
+	// nothing about what the daemon can reach.
+	probe := exec.Command("tmux", "list-sessions")
+	probe.Env = append(os.Environ(), noDefaultTmux...)
+	if err := probe.Run(); err == nil {
 		return fmt.Errorf("a default tmux server is reachable under %s — the journey's premise is broken", emptyTmux)
 	}
 
