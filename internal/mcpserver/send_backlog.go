@@ -159,21 +159,25 @@ func (s *Server) SweepSendBacklogs() {
 			"component", "agent_send", "dir", q.Dir(), "err", err)
 		return
 	}
-	now := time.Now()
+	now := s.sweepClock()
 	for _, b := range backlogs {
 		switch {
 		case !s.agentIsRegistered(b.Agent):
 			// 🎯T401: a reaped seat is recoverable — gate feedback stays held
 			// until jevons_agent_start (or intent lift + start) recreates it.
 			// A never-registered / aged-out name still drops (T418 clause 5).
-			if _, ok := LookupReapedRecord(s.fleetIntent(), b.Agent); ok {
-				s.reportHeldReapedBacklog(b, now)
+			if rec, ok := LookupReapedRecord(s.fleetIntent(), b.Agent); ok {
+				s.reportHeldReapedBacklog(b, rec, now)
 				continue
 			}
 			s.reapBacklogForMissingAgent(b, now)
 		case s.flightState(b.Agent) == FlightInFlight:
+			// A name that is registered again is a live seat: a later hold
+			// under it deserves its own notice (🎯T582).
+			s.forgetReapedBacklogNotice(b.Agent)
 			s.reportStalledBacklog(b, now, "its turn is still in flight")
 		default:
+			s.forgetReapedBacklogNotice(b.Agent)
 			if _, live := s.liveSender(b.Agent); !live {
 				s.reportStalledBacklog(b, now, "it has no live process to deliver to")
 				continue
@@ -189,7 +193,7 @@ func (s *Server) SweepSendBacklogs() {
 // reportHeldReapedBacklog names a queue held for a finished-and-reaped agent
 // (🎯T401). It does not drop the messages — that would erase gate feedback —
 // and it does not prescribe interrupt (that fights 🎯T414).
-func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, now time.Time) {
+func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record, now time.Time) {
 	age := b.OldestAge(now)
 	if age < StalledBacklogAfter {
 		return
@@ -204,7 +208,14 @@ func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, now time.Time) {
 			"oldest_age", age.Round(time.Second).String())
 		return
 	}
-	rec, _ := LookupReapedRecord(s.fleetIntent(), b.Agent)
+	// 🎯T582: a seat reaped on finish is not coming back for this. Route the
+	// hold to its parent (or drop gate feedback about the achieved target with
+	// one eventlog record) and tell the overseer once, rather than advising
+	// jevons_agent_start on a finished seat every sweep.
+	if age >= heldReapedRouteAfter && reapRoutable(rec) {
+		s.routeHeldReapedBacklog(b, rec, now)
+		return
+	}
 	slog.Warn("🎯T401 backlog held for reaped agent",
 		"component", "agent_send",
 		"agent", b.Agent,
@@ -306,4 +317,24 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 			"confirm from ITS transcript (terminal assistant message + turn_duration, file not growing) and then "+
 			"jevons_agent_send with interrupt=true.",
 		b.Agent, b.Depth, age.Round(time.Second), why))
+}
+
+// sweepClock is the sweep's now. Injectable so a ten-minute run of the sweep
+// is a test that costs no wall time (🎯T582); the daemon leaves it nil.
+func (s *Server) sweepClock() time.Time {
+	s.mu.Lock()
+	fn := s.sweepNow
+	s.mu.Unlock()
+	if fn == nil {
+		return time.Now()
+	}
+	return fn()
+}
+
+// SetSweepClock injects the backlog sweep's clock. Test-only seam: the daemon
+// never calls it, and nothing else in the server reads it.
+func (s *Server) SetSweepClock(fn func() time.Time) {
+	s.mu.Lock()
+	s.sweepNow = fn
+	s.mu.Unlock()
 }

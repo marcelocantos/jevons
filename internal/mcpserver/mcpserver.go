@@ -200,6 +200,15 @@ type Server struct {
 	// rooted it on disk (🎯T418). Nil until first use; see sendQueue().
 	agentSendQ *sendq.Store
 
+	// heldReapedNoticed remembers which reaped seats the overseer has already
+	// been told about (🎯T582). The sweep is a timer; without this the same
+	// finished seat produced a fleet-health alert every thirty seconds.
+	heldReapedNoticed map[string]bool
+
+	// sweepNow is the backlog sweep's clock, injectable so a ten-minute
+	// simulated run costs no wall time (🎯T582). Nil = time.Now.
+	sweepNow func() time.Time
+
 	// eventLogTail tails durable product logs (🎯T120). Nil = tool unregistered.
 	eventLogTail EventLogTailFunc
 	// eventLogger dual-writes server lifecycle events via HTTP Server.LogEvent
@@ -534,7 +543,7 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 	return cli.ResolveProvider("", s.defaultProvider)
 }
 
-// mintProviderPick is the 🎯T476 decision for stitchAgentStart, usage-first
+// mintProviderPick is the 🎯T476 decision for stitchAgentStart, claude-first
 // per 🎯T495: the plan feed's green pick wins on omit-provider mint (config
 // only breaks ties among equally obvious greens, inside PickMintDest);
 // leftover file / compiled seed are losers.
@@ -549,10 +558,14 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 	cfg := string(s.resolvedDefaultProvider())
 	var feedOK, destOK bool
 	var dest string
+	var claudeFirst planusage.ClaudeFirstDecision
 	if _, cands, now, th, ok := s.planPolicyInputs(); ok && len(cands) > 0 {
 		feedOK = true
 		d := planusage.PickMintDest(cands, cfg, now, th)
 		dest, destOK = d.Provider, d.OK
+		// 🎯T583: the owner rule outranks usage-first — an omit-provider
+		// mint lands on Claude whenever Claude has plan headroom.
+		claudeFirst = planusage.ClaudeFirst(cands, now, th)
 	}
 	return cost.PickMintProvider(cost.MintProviderArgs{
 		ProviderArg:       providerArg,
@@ -564,6 +577,8 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		PlanFeedOK:        feedOK,
 		PlanDest:          dest,
 		PlanDestOK:        destOK,
+		ClaudeFirstOK:     claudeFirst.OK,
+		ClaudeHeadroom:    claudeFirst.Headroom,
 	})
 }
 
