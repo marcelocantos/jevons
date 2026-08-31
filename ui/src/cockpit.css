@@ -764,6 +764,20 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    messages regardless of DOM insertion order while a turn is in flight.
    messages-end (follow sentinel) uses order:1001 so true bottom stays last. */
 .working-indicator { order: 1000; align-self: flex-start; display: flex; align-items: center; gap: 7px; padding: 8px 4px; color: var(--text-muted); font-size: 13px; font-style: italic; }
+/* 🎯T575: phase word in the vanilla glance slot — between transcript and composer,
+   13px italic, not the 11px uppercase top #status strip. */
+#overseer-phase.working-indicator {
+  order: unset;
+  flex-shrink: 0;
+  align-self: stretch;
+  padding: 4px 20px 8px;
+  margin: 0;
+  background: var(--bg);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+#overseer-phase #status-text { text-transform: none; letter-spacing: 0; }
 #messages-end { order: 1001; }
 .working-indicator .work-dots { display: inline-flex; gap: 4px; }
 .working-indicator .work-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: work-bounce 1.2s ease-in-out infinite; }
@@ -1520,3 +1534,51 @@ html[data-pixel-fixture] #frontier-table .ft-status,
 html[data-pixel-fixture] #frontier-table .ft-fanout,
 html[data-pixel-fixture] #frontier-table .ft-play { transform: translateY(1px); }
 
+
+/* 🎯T588.1 plan-usage tooltip grid. Column heads carry the provider mark;
+   claude spans two (session, week). Numbers are tabular so a column of
+   percentages lines up on the decimal the eye expects. */
+.plan-tip-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.plan-tip-table th,
+.plan-tip-table td {
+  padding: 2px 8px;
+  text-align: right;
+  white-space: nowrap;
+}
+.plan-tip-table th[scope='row'] {
+  text-align: left;
+  font-weight: 400;
+  opacity: 0.75;
+  padding-right: 12px;
+}
+.plan-tip-table thead th {
+  text-align: center;
+  border-bottom: 1px solid currentColor;
+  border-left: 1px solid currentColor;
+  font-weight: 500;
+}
+.plan-tip-table thead th[colspan] .model-icon {
+  vertical-align: middle;
+}
+.plan-tip-table tbody td {
+  border-left: 1px solid currentColor;
+}
+.plan-tip-table thead th,
+.plan-tip-table tbody td {
+  border-color: color-mix(in srgb, currentColor 22%, transparent);
+}
+.plan-tip-win {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.plan-tip-notes,
+.plan-tip-empty {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.8;
+  white-space: pre-wrap;
+}

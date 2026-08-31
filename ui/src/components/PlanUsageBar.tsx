@@ -8,7 +8,8 @@ import { CompanyMark, companyOfProvider, windowAbbrev } from '../plan/companyMar
 import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
 import { applyThresholds, formatWindow } from '../plan/pace';
 import { InstantTip } from './InstantTip';
-import { tickerGroups, tickerTipBody, type PlanSnapshot } from '../plan/tickerGroups';
+import { tickerGroups, type PlanSnapshot } from '../plan/tickerGroups';
+import { PlanTipTable } from '../plan/tipTable';
 import { pixelFixtureActive, pixelFixturePlanUsage } from '../visual/oldCockpitFixture';
 
 /** Vanilla: 60s once a reading exists; 5s only after a pending long-poll times out. */
@@ -53,7 +54,8 @@ export function PlanUsageBar() {
   const snap = holdLastPlanSnapshot(last.current, incoming);
   last.current = snap;
   const groups = tickerGroups(snap);
-  const tip = tickerTipBody(groups);
+  // 🎯T588.1: a grid, so comparing two providers is a glance along a row.
+  const tip = <PlanTipTable groups={groups} nowMs={now()} />;
   const inner = !groups.length ? (
     <span className="plan-chip">{!fixture && q.data?.pending ? 'plan usage: waiting for the first reading' : ''}</span>
   ) : (
@@ -105,7 +107,7 @@ export function PlanUsageBar() {
   return (
     <InstantTip
       id="plan-ticker"
-      content={<pre className="plan-tip-body" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{tip}</pre>}
+      content={tip}
     >
       {inner}
     </InstantTip>

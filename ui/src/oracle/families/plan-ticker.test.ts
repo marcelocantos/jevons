@@ -52,8 +52,15 @@ describeOracle(family('plan-ticker'), () => {
     fireEvent.pointerEnter(host!);
     const tip = container.querySelector('.instant-tip-show');
     expect(tip).toBeTruthy();
-    expect(tip?.textContent || '').toMatch(/remaining/i);
-    expect(tip?.textContent || '').toMatch(/rollover/i);
+    // 🎯T588.1 turned the hover into a grid, so the measure is a row
+    // label ("tokens left") rather than the word "remaining". T390's
+    // acceptance is that the owner can SEE percent-remaining and the next
+    // rollover, so assert the information — label, an actual percentage,
+    // and the rollover row — rather than the old sentence's wording.
+    const text = tip?.textContent || '';
+    expect(text).toMatch(/tokens left/i);
+    expect(text).toMatch(/\d+%/);
+    expect(text).toMatch(/rollover/i);
   });
 
   itOracle('T175', 'plan-usage hover is InstantTip-class, not a delayed native title=', () => {
