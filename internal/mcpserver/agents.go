@@ -641,6 +641,8 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def.Goal = fleet.WorkSessionGoal(def.Purpose, def.TargetID, prompt, def.AutoStart)
 		if def.SandboxMode == "" {
 			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose, role)
+			def.SandboxWritableRoots, def.SandboxNetworkAccess =
+				fleet.CodexWorkSandboxTuning(def.Provider, def.Purpose, role)
 		}
 	} else if roles.Normalize(role) == roles.Auditor {
 		// Auditor stays read-only even on remint.

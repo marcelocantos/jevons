@@ -10,6 +10,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/gate"
 	"log/slog"
 	"strings"
 	"sync"
@@ -204,6 +205,46 @@ func providerForLaunch(stored, fromThread, defaultProv claudia.Provider) claudia
 // Codex work agents need workspace-write (claudia 🎯T37); asides and
 // other providers stay empty so claudia's read-only default holds.
 // role=auditor is always read-only (🎯T536.2) even when purpose=work.
+// CodexWorkSandboxTuning is what a Codex work seat needs on top of the
+// sandbox mode so it can do the job the project asks of it (🎯T598).
+//
+// workspace-write alone gives a seat an empty writable-root list and no
+// network, which is exactly enough to edit files and not enough to prove
+// anything: bin/gate records its verdict under ~/.jevons/gates,
+// deliberately outside the tree so a gate cannot be edited by the work it
+// judges (🎯T386), and the journey and UI oracles bind loopback ports.
+// A seat without these comes up looking healthy and fails at its first
+// gate — which is how 🎯T557.1 stalled twice.
+//
+// Only work seats, and only Codex. Nothing here grants danger-full-access.
+func CodexWorkSandboxTuning(prov claudia.Provider, purpose, role string) (writableRoots []string, networkAccess bool) {
+	if CodexWorkSandbox(prov, purpose, role) == "" {
+		return nil, false
+	}
+	roots := []string{gate.DefaultStoreRoot()}
+	return roots, true
+}
+
+// CodexWorkSandboxRefusal names why a Codex work seat must not start,
+// or "" when it may (🎯T598). A seat that cannot obtain the access its
+// mission requires is refused at spawn with a reason, rather than
+// started into a first gate it can never pass.
+func CodexWorkSandboxRefusal(prov claudia.Provider, purpose, role string) string {
+	if CodexWorkSandbox(prov, purpose, role) == "" {
+		return ""
+	}
+	roots, network := CodexWorkSandboxTuning(prov, purpose, role)
+	if !network {
+		return "codex work seat: loopback access unavailable — journey and UI oracles cannot bind"
+	}
+	for _, r := range roots {
+		if strings.TrimSpace(r) == "" {
+			return "codex work seat: gate store root is unknown — bin/gate could not record a verdict"
+		}
+	}
+	return ""
+}
+
 func CodexWorkSandbox(prov claudia.Provider, purpose, role string) string {
 	if strings.EqualFold(strings.TrimSpace(role), "auditor") {
 		return ""
@@ -279,18 +320,20 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 		prov := providerForLaunch("", threadProv, f.defaultProvider)
 		// 🎯T324: session-truth model — pin or provider default for this SessionID.
 		if err := f.reg.Register(claudia.AgentDef{
-			Name:         t.ID,
-			WorkDir:      t.WorkDir,
-			Model:        cli.BindSessionModel(t.Model, prov),
-			Provider:     prov,
-			SessionID:    sid,
-			AutoStart:    true,
-			Parent:       t.Parent,
-			Purpose:      purpose,
-			SandboxMode:  CodexWorkSandbox(prov, purpose, ""),
-			Goal:         WorkSessionGoal(purpose, "", t.Description, true),
-			MCPServers:   f.SessionMCPServers(prov, t.WorkDir),
-			MCPExclusive: mcpattach.Exclusive,
+			Name:                 t.ID,
+			WorkDir:              t.WorkDir,
+			Model:                cli.BindSessionModel(t.Model, prov),
+			Provider:             prov,
+			SessionID:            sid,
+			AutoStart:            true,
+			Parent:               t.Parent,
+			Purpose:              purpose,
+			SandboxMode:          CodexWorkSandbox(prov, purpose, ""),
+			SandboxWritableRoots: codexRoots(prov, purpose),
+			SandboxNetworkAccess: codexNetwork(prov, purpose),
+			Goal:                 WorkSessionGoal(purpose, "", t.Description, true),
+			MCPServers:           f.SessionMCPServers(prov, t.WorkDir),
+			MCPExclusive:         mcpattach.Exclusive,
 		}); err != nil {
 			return fmt.Errorf("register agent %q: %w", t.ID, err)
 		}
@@ -546,4 +589,17 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 		return "", fmt.Errorf("deliver turn to agent %q: %w", id, err)
 	}
 	return reply, nil
+}
+
+// codexRoots / codexNetwork are the AgentDef-shaped halves of
+// CodexWorkSandboxTuning (🎯T598), so every mint path that sets
+// SandboxMode sets the dimensions with it and none can drift.
+func codexRoots(prov claudia.Provider, purpose string) []string {
+	roots, _ := CodexWorkSandboxTuning(prov, purpose, "")
+	return roots
+}
+
+func codexNetwork(prov claudia.Provider, purpose string) bool {
+	_, network := CodexWorkSandboxTuning(prov, purpose, "")
+	return network
 }

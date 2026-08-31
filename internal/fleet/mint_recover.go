@@ -47,18 +47,20 @@ func agentDefFromPending(p handover.Pending) claudia.AgentDef {
 		goal = WorkSessionGoal(purpose, p.TargetID, "", true)
 	}
 	return claudia.AgentDef{
-		Name:         p.Agent,
-		WorkDir:      p.WorkDir,
-		Model:        model,
-		Provider:     prov,
-		SessionID:    p.NewSessionID,
-		AutoStart:    true,
-		Parent:       p.Parent,
-		Purpose:      purpose,
-		TargetID:     p.TargetID,
-		SandboxMode:  CodexWorkSandbox(prov, purpose, ""),
-		Goal:         goal,
-		MCPExclusive: mcpattach.Exclusive,
-		Materialized: false,
+		Name:                 p.Agent,
+		WorkDir:              p.WorkDir,
+		Model:                model,
+		Provider:             prov,
+		SessionID:            p.NewSessionID,
+		AutoStart:            true,
+		Parent:               p.Parent,
+		Purpose:              purpose,
+		TargetID:             p.TargetID,
+		SandboxMode:          CodexWorkSandbox(prov, purpose, ""),
+		SandboxWritableRoots: codexRoots(prov, purpose),
+		SandboxNetworkAccess: codexNetwork(prov, purpose),
+		Goal:                 goal,
+		MCPExclusive:         mcpattach.Exclusive,
+		Materialized:         false,
 	}
 }
