@@ -107,6 +107,7 @@ export function PlanUsageBar() {
   return (
     <InstantTip
       id="plan-ticker"
+      cardClassName="plan-tip-card"
       content={tip}
     >
       {inner}

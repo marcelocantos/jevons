@@ -1535,6 +1535,16 @@ html[data-pixel-fixture] #frontier-table .ft-fanout,
 html[data-pixel-fixture] #frontier-table .ft-play { transform: translateY(1px); }
 
 
+/* 🎯T588.1: the default tip is sized for a sentence, and a six-column grid
+   is not a sentence — at the shared cap the cursor column fell off the right
+   edge while every assertion about the table still passed. The plan tip gets
+   its own cap, and normal white-space: the shared pre-line rule exists for
+   text tips that keep their newlines, and inside a table it only adds gaps. */
+.instant-tip.plan-tip-card {
+  max-width: min(720px, 94vw);
+  white-space: normal;
+}
+
 /* 🎯T588.1: the provider mark is a column head, not a picture. CompanyMark
    carries no intrinsic size, and an unsized svg in a table cell expands to
    fill the column — the first render put ~150px marks across the card and
