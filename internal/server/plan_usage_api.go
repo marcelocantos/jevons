@@ -65,8 +65,29 @@ func (s *Server) handlePlanUsage(w http.ResponseWriter, r *http.Request) {
 			snap = again
 		}
 	}
-	if err := json.NewEncoder(w).Encode(snap); err != nil {
+	// 🎯T610: serve the daemon's verdict, not just the numbers behind it.
+	// The cockpit used to classify for itself and drifted a whole model
+	// behind; a band on the wire leaves it nothing to re-derive.
+	if err := json.NewEncoder(w).Encode(planUsageWithBands(snap, time.Now())); err != nil {
 		slog.Warn("encode plan usage snapshot", "err", err)
+	}
+}
+
+// planUsageWithBands decorates whatever shape the source handed back. The
+// source is an any-typed seam, so both the value and pointer cases are real;
+// anything else is passed through untouched rather than dropped.
+func planUsageWithBands(snap any, now time.Time) any {
+	th := planusage.DefaultThresholds()
+	switch v := snap.(type) {
+	case planusage.Snapshot:
+		return planusage.WithBands(v, now, th)
+	case *planusage.Snapshot:
+		if v == nil {
+			return snap
+		}
+		return planusage.WithBands(*v, now, th)
+	default:
+		return snap
 	}
 }
 

@@ -59,6 +59,16 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 	if !ok {
 		return BandUnpublished
 	}
+	return BandOfWindow(w, now, th)
+}
+
+// BandOfWindow classifies a single window at now.
+//
+// Split out of WeeklyBandOf so the same verdict can be attached to every
+// window the API serves (🎯T610), rather than only to the backend's primary
+// one. One rule, one implementation, reached from both paths — the whole
+// point of serving the band is that nothing downstream re-derives it.
+func BandOfWindow(w Window, now time.Time, th Thresholds) WeeklyBand {
 	if w.RemainingPercent != nil && *w.RemainingPercent <= 0 {
 		return BandExhausted
 	}

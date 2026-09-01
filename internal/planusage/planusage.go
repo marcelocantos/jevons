@@ -87,6 +87,21 @@ type Window struct {
 	// length — the consumer may then infer session=5h / weekly=7d, but must
 	// not invent a triangle without a rollover.
 	LimitWindowSeconds *int64 `json:"limit_window_seconds,omitempty"`
+	// Band is the daemon's own verdict for this window — "hot", "ahead",
+	// "ok", "under", "locked", "exhausted" — filled at serve time by
+	// WithBands (🎯T610).
+	//
+	// It is served because the alternative is the cockpit deciding for
+	// itself, which is what it used to do: this payload carried only raw
+	// numbers, so ui/src/plan/pace.ts held a second copy of the model, and
+	// when 🎯T596 replaced the ratio bands with the pressure model the
+	// browser kept the old one. The ticker painted a window red that the
+	// daemon did not consider hot, so the migrate-off actuator correctly
+	// never fired while the bar said it should have.
+	//
+	// Empty when the window carries no usable numbers, which is a real
+	// state and not the same as "ok".
+	Band string `json:"band,omitempty"`
 }
 
 // Backend is one provider's plan-usage picture.
