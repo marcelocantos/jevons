@@ -6,6 +6,7 @@ import { MuxClient } from '../mux/client';
 import { useConversation, type ConversationMeta } from '../conversation/useConversation';
 import { normalizeDensity, type Density } from '../density';
 import { AgentTranscript } from './AgentTranscript';
+import { OverseerPhaseStrip } from './OverseerPhaseStrip';
 import { UserRequest } from './UserRequest';
 import { pixelFixtureActive } from '../visual/oldCockpitFixture';
 
@@ -15,6 +16,7 @@ export function AgentInteraction(props: {
   title?: string;
   density?: Density;
   paneActive?: boolean;
+  connected?: boolean;
   onMeta?: (meta: ConversationMeta | null) => void;
 }) {
   const density = normalizeDensity(props.density);
@@ -78,6 +80,7 @@ export function AgentInteraction(props: {
             <div id="attention-actions" aria-label="Attention aside actions" />
           </div>
           <div id="send-queue" aria-label="Queued follow-ups" role="list" />
+          <OverseerPhaseStrip connected={props.connected ?? true} meta={conv.meta} />
         </>
       ) : null}
       <UserRequest

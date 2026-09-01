@@ -63,7 +63,7 @@ export const CATALOG: readonly OracleFamily[] = [
     title: 'Composer chrome — height, persist, images, Wispr, empty after send',
     file: 'composer-chrome.test.ts',
     layer: 'hermetic',
-    covers: covers('composer-chrome', ['T123', 'T154', 'T183', 'T228', 'T239', 'T368', 'T478', 'T70', 'T70.1', 'T76', 'T80']),
+    covers: covers('composer-chrome', ['T123', 'T154', 'T183', 'T228', 'T239', 'T368', 'T478', 'T70', 'T70.1', 'T76', 'T80', 'T575']),
   },
   {
     id: 'transcript-geom',

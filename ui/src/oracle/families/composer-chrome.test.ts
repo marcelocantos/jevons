@@ -8,10 +8,14 @@ import { afterEach, expect, vi } from 'vitest';
 import { composeSendText, filesFromTransfer, parsePrefixAfterImages } from '../../composer/images';
 import { deserialize, load, save, serialize } from '../../composer/sendQueue';
 import { tidyDictationInsert } from '../../composer/wispr';
+import { OverseerPhaseStrip } from '../../components/OverseerPhaseStrip';
 import { UserRequest } from '../../components/UserRequest';
 import { useDrafts } from '../../store/drafts';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 afterEach(() => {
   useDrafts.setState({ drafts: {} });
@@ -116,6 +120,35 @@ describeOracle(family('composer-chrome'), () => {
     const again = render(createElement(UserRequest, { name: 'jevons', onSend: vi.fn() }));
     const ta2 = again.container.querySelector('textarea#input') as HTMLTextAreaElement;
     expect(ta2.value).toBe('half-written thought');
+  });
+
+  itOracle('T575', 'overseer phase word sits between the transcript and the composer', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const interaction = readFileSync(join(here, '../../components/AgentInteraction.tsx'), 'utf8');
+    const app = readFileSync(join(here, '../../App.tsx'), 'utf8');
+    const transcriptIdx = interaction.indexOf('<AgentTranscript');
+    const phaseIdx = interaction.indexOf('<OverseerPhaseStrip');
+    const composerIdx = interaction.indexOf('<UserRequest');
+    expect(transcriptIdx).toBeGreaterThanOrEqual(0);
+    expect(phaseIdx).toBeGreaterThan(transcriptIdx);
+    expect(composerIdx).toBeGreaterThan(phaseIdx);
+    expect(interaction).toMatch(/comfortable \? \(/);
+    expect(app).not.toMatch(/id=["']status-text["']/);
+    expect(app).toMatch(/connected=\{connected\}/);
+
+    const idle = render(createElement(OverseerPhaseStrip, { connected: true, meta: { phase: { phase: 'idle' } } }));
+    expect(idle.container.querySelector('#overseer-phase')).toBeTruthy();
+    expect(idle.container.querySelector('#status-text')?.textContent).toBe('idle');
+    expect(idle.container.querySelector('.work-dots')).toBeNull();
+    idle.unmount();
+
+    const busy = render(
+      createElement(OverseerPhaseStrip, { connected: true, meta: { phase: { phase: 'thinking' } } }),
+    );
+    expect(busy.container.querySelector('#status-text')?.textContent).toBe('thinking');
+    expect(busy.container.querySelector('.work-dots')).toBeTruthy();
+    expect(busy.container.querySelector('#overseer-phase')?.className).toMatch(/\bbusy\b/);
+    busy.unmount();
   });
 
   itOracle.skip('T70', 'composer growth keeps the latest assistant reply readable', 'named residual: pixel-identical chrome');

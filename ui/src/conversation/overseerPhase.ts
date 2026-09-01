@@ -91,7 +91,7 @@ export function formatOverseerStatus(sample: OverseerPhaseSample | null | undefi
   return word.replace(/^\s*Jevons\s*(is|:)\s*/i, '').trim() || PHASE_IDLE;
 }
 
-/** #status-text: WS connecting vs painted phase, including idle. */
+/** Composer-gap #status-text (🎯T575): WS connecting vs painted phase, including idle. */
 export function statusBarText(
   connected: boolean,
   meta: unknown,
