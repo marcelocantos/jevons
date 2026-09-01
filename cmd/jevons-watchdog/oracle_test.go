@@ -73,6 +73,21 @@ func newRig(t *testing.T) *rig {
 	t405Build(t, root, filepath.Join(root, "bin", "detach"), "./cmd/detach")
 	t405Build(t, root, filepath.Join(root, "bin", "runlock"), "./cmd/runlock")
 	r.writeBlurterShim()
+	// With SKIP_MAKE=1 the script still refuses to bounce a root with no
+	// ui/dist (🎯T540.2). The daemon here is a stub that never serves it,
+	// so a placeholder satisfies the check in a clean checkout — where
+	// ui/dist, a build artifact, does not exist — without touching a real
+	// one where it does.
+	uiIndex := filepath.Join(root, "ui", "dist", "index.html")
+	if _, err := os.Stat(uiIndex); os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Dir(uiIndex), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(uiIndex, []byte("<!doctype html><!-- t405 test stub -->\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Remove(uiIndex) })
+	}
 
 	// Whatever a test leaves listening is ours and must not outlive it.
 	t.Cleanup(r.killDaemon)

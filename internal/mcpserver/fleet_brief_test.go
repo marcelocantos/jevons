@@ -112,7 +112,8 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"shipped",
 		"hard-reloadable UI",
 		"proven API",
-		"daily path",
+		"development or released",
+		"🎯T572",
 		// 🎯T552 / T553.2 owner-visible observation (was T194)
 		"Owner-visible claims are observed",
 		"🎯T552",
