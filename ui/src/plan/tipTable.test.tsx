@@ -49,7 +49,7 @@ describe('plan tooltip table (🎯T588.1)', () => {
     // is ambiguous — which Tuesday? — so the date replaces it.
     expect(rolloverCell(hoursOut(14), NOW, 'UTC')).toBe('Mon 14:00');
     expect(rolloverCell(hoursOut(24 * 6 + 8), NOW, 'UTC')).toBe('Sun 08:00');
-    expect(rolloverCell(hoursOut(24 * 8), NOW, 'UTC')).toBe('8 Sept 00:00');
+    expect(rolloverCell(hoursOut(24 * 8), NOW, 'UTC')).toBe('8 Sep 00:00');
   });
 
   it('renders the rollover in the viewer zone, not UTC', () => {

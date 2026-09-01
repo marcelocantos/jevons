@@ -139,6 +139,22 @@ export function tickerGroups(snap: PlanSnapshot | undefined): TickerGroup[] {
 }
 
 /**
+ * formatInstantParts formats and forces three-letter month names.
+ *
+ * en-GB renders September as 'Sept' and every other month as three
+ * letters, so a column of dates comes out ragged (🎯T611). Trimming
+ * the month token is safe where the year is absent and the date is days
+ * away: 'Sep' cannot be read as any other month.
+ */
+export function formatInstantParts(at: Date, opts: Intl.DateTimeFormatOptions): string {
+  return new Intl.DateTimeFormat('en-GB', opts)
+    .formatToParts(at)
+    .map((part) => (part.type === 'month' ? part.value.slice(0, 3) : part.value))
+    .join('')
+    .replace(',', '');
+}
+
+/**
  * formatRolloverLocal renders a rollover instant in the viewer's own
  * timezone, to the minute (🎯T588).
  *
@@ -165,16 +181,14 @@ export function formatRolloverLocal(
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return '';
   try {
-    return new Intl.DateTimeFormat('en-GB', {
+    return formatInstantParts(at, {
       timeZone,
       day: '2-digit',
       month: 'short',
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
-    })
-      .format(at)
-      .replace(',', '');
+    });
   } catch {
     // An invalid timeZone must not take the whole tooltip down with it.
     return '';

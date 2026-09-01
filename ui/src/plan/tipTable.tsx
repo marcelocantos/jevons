@@ -13,7 +13,7 @@
 import { now } from '../clock';
 import { formatWindow } from './pace';
 import { CompanyMark, companyOfProvider } from './companyMark';
-import { formatRolloverLocal } from './tickerGroups';
+import { formatInstantParts, formatRolloverLocal } from './tickerGroups';
 import type { PlanWindow, TickerGroup } from './tickerGroups';
 
 const SECONDS_PER_MINUTE = 60;
@@ -114,7 +114,7 @@ export function rolloverCell(
     ? { timeZone, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }
     : { timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false };
   try {
-    return new Intl.DateTimeFormat('en-GB', opts).format(at).replace(',', '');
+    return formatInstantParts(at, opts);
   } catch {
     return '—';
   }
