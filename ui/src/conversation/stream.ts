@@ -3,6 +3,8 @@
 
 /** Grok ACP token join — same rules as web/scripts/chat_events.js (🎯T537.1.1). */
 
+import { isOwnerUserBarrierFrame } from './userText';
+
 const TERMINAL_STOPS = new Set(['end_turn', 'stop_sequence', 'max_tokens']);
 
 export type StreamJoin = {
@@ -150,6 +152,13 @@ export function applyTranscriptFrame(
   }
 
   if (type !== 'assistant') {
+    // 🎯T504: a real owner user seals every open assistant stream AND drops
+    // its stream_id → bubble mapping, so a same-stream continuation paints a
+    // new bubble below the user instead of growing the pre-user row. T329
+    // inject / T362 protocol frames are not barriers.
+    if (isOwnerUserBarrierFrame(body)) {
+      return { frames: [...frames, body], stream: emptyStream() };
+    }
     return { frames: [...frames, body], stream };
   }
 

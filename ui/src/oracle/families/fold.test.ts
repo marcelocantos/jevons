@@ -48,11 +48,39 @@ describeOracle(family('fold'), () => {
     expect(rows[0].items?.[0]?.text).toBe('use_tool: search_tool: jevonsmcp agent list');
   });
 
-  itOracle('T504', 'user then assistant is two rows — user is a stream barrier', () => {
-    const rows = displayRows([userTurn('go'), assistantProse('ok')]);
-    expect(rows.map((r) => r.kind)).toEqual(['user', 'assistant']);
-    expect(rows[0].text).toBe('go');
-    expect(rows[1].text).toBe('ok');
+  itOracle('T504', 'owner user is a stream barrier — same stream_id continues BELOW, not into the pre-user bubble', () => {
+    // Open (non-terminal) assistant stream → owner user → same-stream
+    // continuation. The continuation must be a NEW bubble below the user,
+    // never concatenated into the row above the question (🎯T540.7.1).
+    const streaming = (text: string): unknown => ({
+      type: 'assistant',
+      stream_id: 's1',
+      message: { role: 'assistant', content: [{ type: 'text', text }] },
+    });
+    const tape = [streaming('leftover reply'), userTurn('a question'), streaming('the answer')];
+
+    // Live mux append path: one frame event at a time.
+    let state = emptyConversation();
+    for (const b of tape) state = applyConversationEvent(state, { t: 'frame', body: b });
+    const live = displayRows(state.frames);
+    expect(live.map((r) => r.kind)).toEqual(['assistant', 'user', 'assistant']);
+    expect(live.map((r) => r.text)).toEqual(['leftover reply', 'a question', 'the answer']);
+
+    // History reload of the same journal folds to the same order.
+    const reload = displayRows(
+      applyConversationEvent(emptyConversation(), { t: 'batch', body: { frames: tape } }).frames,
+    );
+    expect(reload.map((r) => r.kind)).toEqual(['assistant', 'user', 'assistant']);
+    expect(reload.map((r) => r.text)).toEqual(['leftover reply', 'a question', 'the answer']);
+
+    // T329 inject / system-reminder is NOT a barrier: the same stream keeps
+    // joining across it into one bubble.
+    let inj = emptyConversation();
+    for (const b of [streaming('a'), userTurn('<system-reminder>tick</system-reminder>'), streaming('b')]) {
+      inj = applyConversationEvent(inj, { t: 'frame', body: b });
+    }
+    const injRows = displayRows(inj.frames).filter((r) => r.kind === 'assistant');
+    expect(injRows.map((r) => r.text)).toEqual(['ab']);
   });
 
   itOracle('T23', 'user / assistant / worker roles stay visually distinct', () => {
