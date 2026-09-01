@@ -50,6 +50,27 @@ export const PACE_DAMP_LAMBDA = 5;
  * at all — rounding included — is amber, for every λ.
  */
 export const PACE_AHEAD_MARGIN = 2;
+
+/**
+ * 🎯T596 pressure model. The daemon owns these numbers
+ * (internal/planusage/thresholds.go); this file is the paint side of the
+ * same document and must not re-derive them.
+ *
+ *   lambda   = k * (timeLeft / 100)
+ *   current  = (used + lambda) / (elapsed + lambda)
+ *   required = remaining / timeLeft
+ *   pressure = ln(current / required)
+ *
+ * Colour answers how large a correction the window demands, not where the
+ * current rate would land. The prior scales with time left because early
+ * deviation is both weak evidence and cheap to correct, and those stop
+ * being true together.
+ */
+export const PACE_SHRINK_PRIOR_K = 40;
+export const PACE_PANIC_AMBER_LN = 0.25;
+export const PACE_PANIC_RED_LN = 0.85;
+export const PACE_WASTE_UNDER_LN = -0.6;
+export const PACE_WASTE_LOCKED_LN = -2;
 export const LOW_PERCENT = 15;
 export const CRITICAL_PERCENT = 5;
 
@@ -64,6 +85,11 @@ export type ThresholdsDoc = {
   damp_lambda_percent?: number;
   ahead_margin_percent?: number;
   early_alarm_used_percent?: number;
+  shrink_prior_k?: number;
+  panic_amber_ln?: number;
+  panic_red_ln?: number;
+  waste_under_ln?: number;
+  waste_locked_ln?: number;
 };
 
 let aheadRatio = PACE_AHEAD_RATIO;
@@ -76,6 +102,29 @@ let dampLambda = PACE_DAMP_LAMBDA;
 let aheadMargin = PACE_AHEAD_MARGIN;
 let warmupElapsed = PACE_WARMUP_PERCENT;
 let earlyAlarmUsed = PACE_EARLY_ALARM_USED;
+let shrinkPriorK = PACE_SHRINK_PRIOR_K;
+let panicAmberLn = PACE_PANIC_AMBER_LN;
+let panicRedLn = PACE_PANIC_RED_LN;
+let wasteUnderLn = PACE_WASTE_UNDER_LN;
+let wasteLockedLn = PACE_WASTE_LOCKED_LN;
+
+/**
+ * Every key this file knows how to honour. A served threshold outside this
+ * set is REPORTED rather than dropped: silent swallowing is exactly how
+ * 🎯T596 hid for a day — the daemon published shrink_prior_k and four other
+ * vertices, applyThresholds ignored them without a word, and the ticker went
+ * on painting the superseded ratio bands while the daemon used the new ones.
+ */
+const KNOWN_THRESHOLD_KEYS = new Set([
+  'ahead_ratio', 'hot_ratio', 'under_waste_percent', 'locked_waste_percent',
+  'low_remaining_percent', 'critical_remaining_percent', 'damp_lambda_percent',
+  'ahead_margin_percent', 'warmup_elapsed_percent', 'early_alarm_used_percent',
+  'shrink_prior_k', 'panic_amber_ln', 'panic_red_ln', 'waste_under_ln',
+  'waste_locked_ln',
+]);
+
+/** Unrecognised keys seen since load, for tests and for the console notice. */
+export const unknownThresholdKeys: string[] = [];
 
 export function applyThresholds(doc: ThresholdsDoc | null | undefined): void {
   if (!doc || typeof doc !== 'object') return;
@@ -89,6 +138,20 @@ export function applyThresholds(doc: ThresholdsDoc | null | undefined): void {
   if (typeof doc.ahead_margin_percent === 'number') aheadMargin = doc.ahead_margin_percent;
   if (typeof doc.warmup_elapsed_percent === 'number') warmupElapsed = doc.warmup_elapsed_percent;
   if (typeof doc.early_alarm_used_percent === 'number') earlyAlarmUsed = doc.early_alarm_used_percent;
+  if (typeof doc.shrink_prior_k === 'number') shrinkPriorK = doc.shrink_prior_k;
+  if (typeof doc.panic_amber_ln === 'number') panicAmberLn = doc.panic_amber_ln;
+  if (typeof doc.panic_red_ln === 'number') panicRedLn = doc.panic_red_ln;
+  if (typeof doc.waste_under_ln === 'number') wasteUnderLn = doc.waste_under_ln;
+  if (typeof doc.waste_locked_ln === 'number') wasteLockedLn = doc.waste_locked_ln;
+  for (const k of Object.keys(doc)) {
+    if (KNOWN_THRESHOLD_KEYS.has(k) || unknownThresholdKeys.includes(k)) continue;
+    unknownThresholdKeys.push(k);
+    // Non-fatal by design: a browser that cannot read a new vertex should
+    // keep painting, but never silently.
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('plan thresholds: unrecognised key "' + k + '" — the daemon knows a vertex this cockpit does not (🎯T610)');
+    }
+  }
 }
 
 export function resetThresholds(): void {
@@ -103,7 +166,13 @@ export function resetThresholds(): void {
     ahead_margin_percent: PACE_AHEAD_MARGIN,
     warmup_elapsed_percent: PACE_WARMUP_PERCENT,
     early_alarm_used_percent: PACE_EARLY_ALARM_USED,
+    shrink_prior_k: PACE_SHRINK_PRIOR_K,
+    panic_amber_ln: PACE_PANIC_AMBER_LN,
+    panic_red_ln: PACE_PANIC_RED_LN,
+    waste_under_ln: PACE_WASTE_UNDER_LN,
+    waste_locked_ln: PACE_WASTE_LOCKED_LN,
   });
+  unknownThresholdKeys.length = 0;
 }
 
 export function weeklyWaste(
@@ -213,7 +282,60 @@ export function windowClassName(w: FormattedWindow | null | undefined, stale?: b
   return parts.join(' ');
 }
 
-export type PaceWindow = GeomWindow & { used_percent?: number | null };
+export type PaceWindow = GeomWindow & {
+  used_percent?: number | null;
+  /** The daemon's own verdict for this window (🎯T610). Authoritative. */
+  band?: string | null;
+};
+
+/**
+ * Bands the daemon can send, mapped to what this cockpit paints.
+ * "exhausted" paints as hot; the spent-to-zero case additionally picks up
+ * CLASS_EXHAUSTED from isRockBottomRemaining, so the two are not redundant.
+ */
+const SERVED_BAND: Record<string, string> = {
+  hot: PACE_HOT,
+  ahead: PACE_AHEAD,
+  ok: PACE_OK,
+  under: PACE_UNDER,
+  locked: PACE_LOCKED,
+  exhausted: PACE_HOT,
+};
+
+/** Served bands this build did not recognise, for tests and the notice. */
+export const unknownServedBands: string[] = [];
+
+/**
+ * The verdict for one window: what the daemon said, or — only when it said
+ * nothing — what this cockpit works out for itself.
+ *
+ * 🎯T610. The fallback exists for a payload without the field (an older
+ * daemon, or a window with no usable numbers), NOT as a parallel model. The
+ * cockpit used to classify every window itself, and when 🎯T596 replaced the
+ * ratio bands with the pressure model in Go, this file kept the old rule:
+ * claude weekly at 39% used / 18.5% elapsed is ratio 2.11, which the old
+ * model paints red, against pressure +0.63, which is amber. The bar showed
+ * red while the daemon did not consider it hot, so migrate-off correctly
+ * never fired and the product looked like it was ignoring its own alarm.
+ */
+export function paceOfWindow(w: PaceWindow, nowMs: number): string {
+  const served = typeof w.band === 'string' ? w.band.trim() : '';
+  if (served) {
+    const mapped = SERVED_BAND[served];
+    if (mapped !== undefined) return mapped;
+    // A band this build cannot paint is reported, never silently swallowed:
+    // silence is exactly how the last drift hid for a day.
+    if (!unknownServedBands.includes(served)) {
+      unknownServedBands.push(served);
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn('plan usage: daemon sent band "' + served + '" this cockpit cannot paint (🎯T610)');
+      }
+    }
+  }
+  const remaining = typeof w.remaining_percent === 'number' ? w.remaining_percent : null;
+  const used = typeof w.used_percent === 'number' ? w.used_percent : null;
+  return classifyPace(used, remaining, remainingTimePercent(w, nowMs), w.name);
+}
 
 export function formatWindow(w: PaceWindow, nowMs: number): FormattedWindow & {
   remainingTimePercent: number | null;
@@ -222,7 +344,7 @@ export function formatWindow(w: PaceWindow, nowMs: number): FormattedWindow & {
   const remaining = typeof w.remaining_percent === 'number' ? w.remaining_percent : null;
   const used = typeof w.used_percent === 'number' ? w.used_percent : null;
   const remainingTime = remainingTimePercent(w, nowMs);
-  const pace = classifyPace(used, remaining, remainingTime, w.name);
+  const pace = paceOfWindow(w, nowMs);
   const paceClass = paceClassName(pace);
   const formatted = { pace, paceClass, remainingPercent: remaining };
   return {
