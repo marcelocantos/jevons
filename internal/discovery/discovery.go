@@ -29,6 +29,9 @@ import (
 type Roots struct {
 	// GrokSessions is typically ~/.grok/sessions.
 	GrokSessions string
+	// GrokHomeSessions are extra Grok session trees from exclusive-MCP
+	// GROK_HOME dirs (typically <tmp>/claudia-mcp-grok-*/sessions). 🎯T619.
+	GrokHomeSessions []string
 	// ClaudeProjects is typically ~/.claude/projects (not ~/.claude).
 	ClaudeProjects string
 }
@@ -394,6 +397,38 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// exclusiveGrokHomePrefix is the MkdirTemp pattern claudia uses for
+// MCPExclusive Grok (prepareExclusiveGrokHome).
+const exclusiveGrokHomePrefix = "claudia-mcp-grok-"
+
+// ExclusiveGrokSessionRoots lists <tmp>/claudia-mcp-grok-*/sessions dirs
+// that exist. Product wiring (SetModelSessionRoots) unions these with
+// cfg.SessionsDir so exclusive-MCP seats are visible to the fleet badge
+// (🎯T619). Tests plant extras via Roots.GrokHomeSessions instead of
+// globbing the live temp dir.
+func ExclusiveGrokSessionRoots() []string {
+	return exclusiveGrokSessionRoots(os.TempDir())
+}
+
+func exclusiveGrokSessionRoots(tmp string) []string {
+	if tmp == "" {
+		return nil
+	}
+	matches, err := filepath.Glob(filepath.Join(tmp, exclusiveGrokHomePrefix+"*"))
+	if err != nil {
+		return nil
+	}
+	var roots []string
+	for _, home := range matches {
+		sess := filepath.Join(home, "sessions")
+		if fi, err := os.Stat(sess); err == nil && fi.IsDir() {
+			roots = append(roots, sess)
+		}
+	}
+	sort.Strings(roots)
+	return roots
 }
 
 // SessionPath returns the Grok session directory under baseDir, or "".

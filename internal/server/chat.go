@@ -1021,11 +1021,11 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 				info.Model = ""
 			}
 		}
-		// Nothing observed live — either the provider names no model in its
-		// frames (Grok, 🎯T293) or this daemon has not seen a turn yet, which
-		// is every agent right after a restart. The harness's own session log
-		// says what the process actually ran, so it seeds the badge at attach
-		// instead of leaving a live agent blank (🎯T311).
+		// Nothing observed live — the daemon has not seen a turn yet (every
+		// agent right after a restart), or the frame named no model. The
+		// harness's own session log says what the process actually ran, so it
+		// seeds the badge at attach instead of leaving a live agent blank
+		// (🎯T311). Grok exclusive-MCP logs live under GROK_HOME (🎯T619).
 		if info.Model == "" {
 			info.Model = models.Model(d.Provider, d.WorkDir, d.SessionID)
 		}

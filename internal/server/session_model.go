@@ -3,19 +3,21 @@
 
 package server
 
-// The fleet badge names the model an agent is RUNNING (🎯T311). Live wire
-// frames are the freshest evidence of that, but they only exist while the
+// The fleet badge names the model an agent is RUNNING (🎯T311 / 🎯T619). Live
+// wire frames are the freshest evidence of that, but they only exist while the
 // daemon that saw them is alive: after a restart the progress hub is empty,
 // and an idle agent may not speak again for hours — the badge stayed blank
 // for exactly that long, or worse, fell back to a launch pin the process had
 // already moved off.
 //
 // Both harnesses write the model they actually ran into their own session
-// log, so the log is the seed the hub lacks. Grok has needed this since
-// 🎯T293 (its ACP frames name no model at all); T311 generalizes the same
-// machinery to Claude, whose JSONL carries message.model on every assistant
-// turn. The two differ only in where the log lives and how a model id is
-// spelled inside it, which is what pathFor and parse supply.
+// log, so the log is the seed the hub lacks. Grok ACP frames carry
+// _meta.modelId (🎯T619); the session log still re-seeds across a restart
+// (summary.json current_model_id, then turn_completed modelUsage). T311
+// generalizes the same machinery to Claude, whose JSONL carries
+// message.model on every assistant turn. The two differ only in where the
+// log lives and how a model id is spelled inside it, which is what pathFor
+// and parse supply.
 
 import (
 	"bytes"
@@ -152,8 +154,7 @@ func readSessionTail(path string, size int64) []byte {
 
 // fleetModelResolver answers "what is this agent running?" for any provider by
 // reading that provider's own session log (🎯T311). It is the seed the
-// progress hub cannot provide across a daemon restart, and the only source at
-// all for a provider that names no model on the wire.
+// progress hub cannot provide across a daemon restart.
 type fleetModelResolver struct {
 	grok   *sessionModelResolver
 	claude *sessionModelResolver
@@ -163,7 +164,7 @@ type fleetModelResolver struct {
 // Either root may be empty; the corresponding provider then answers "".
 func newFleetModelResolver(roots discovery.Roots) *fleetModelResolver {
 	return &fleetModelResolver{
-		grok:   newGrokModelResolver(roots.GrokSessions),
+		grok:   newGrokModelResolver(roots.GrokSessions, roots.GrokHomeSessions...),
 		claude: newClaudeModelResolver(roots.ClaudeProjects),
 	}
 }
@@ -185,12 +186,16 @@ func (f *fleetModelResolver) Model(provider claudia.Provider, workDir, sessionID
 }
 
 // SetModelSessionRoots attaches the session roots the fleet badge reads
-// running models from (🎯T293 Grok, 🎯T311 Claude). Without it, rows fall back
-// to the live hub alone and go blank across a daemon restart.
+// running models from (🎯T619 Grok including exclusive GROK_HOME, 🎯T311
+// Claude). Without it, rows fall back to the live hub alone and go blank
+// across a daemon restart.
 func (s *Server) SetModelSessionRoots(roots discovery.Roots) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if roots.GrokSessions == "" && roots.ClaudeProjects == "" {
+	homes := append([]string{}, roots.GrokHomeSessions...)
+	homes = append(homes, discovery.ExclusiveGrokSessionRoots()...)
+	roots.GrokHomeSessions = homes
+	if roots.GrokSessions == "" && roots.ClaudeProjects == "" && len(roots.GrokHomeSessions) == 0 {
 		s.fleetModels = nil
 		return
 	}

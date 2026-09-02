@@ -11,6 +11,26 @@ import (
 	"testing"
 )
 
+func TestExclusiveGrokSessionRoots(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "claudia-mcp-grok-testhome")
+	sess := filepath.Join(home, "sessions")
+	if err := os.MkdirAll(sess, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A temp sibling without sessions/ must not appear.
+	if err := os.MkdirAll(filepath.Join(tmp, "claudia-mcp-grok-empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := exclusiveGrokSessionRoots(tmp)
+	if len(got) != 1 || got[0] != sess {
+		t.Fatalf("exclusiveGrokSessionRoots = %v want [%s]", got, sess)
+	}
+	if exclusiveGrokSessionRoots(t.TempDir()) != nil {
+		t.Fatal("empty tmp must yield no exclusive homes")
+	}
+}
+
 func TestIsUUID(t *testing.T) {
 	if !IsUUID("019f4f4b-945a-7a23-ba4c-51a0c26e0fbc") {
 		t.Fatal("expected grok-style session id to pass")

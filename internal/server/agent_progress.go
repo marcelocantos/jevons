@@ -188,9 +188,10 @@ func (h *AgentProgressHub) Observe(name string, ev claudia.Event) bool {
 }
 
 // modelFromEvent extracts the model id an assistant frame reports (🎯T287).
-// Claude Code JSONL carries it at message.model; other shapes may put a bare
-// top-level "model". Empty when the frame names none — the caller keeps the
-// last known model rather than forgetting it.
+// Claude Code JSONL carries it at message.model; Grok ACP params carry
+// update._meta.modelId (🎯T619); other shapes may put a bare top-level
+// "model". Empty when the frame names none — the caller keeps the last
+// known model rather than forgetting it.
 //
 // "<synthetic>" frames (API error notices, cancellations — clustered around
 // daemon restarts) name no real model and must not poison the sticky
@@ -206,6 +207,14 @@ func modelFromEvent(ev claudia.Event) string {
 		Message struct {
 			Model string `json:"model"`
 		} `json:"message"`
+		Meta *struct {
+			ModelID string `json:"modelId"`
+		} `json:"_meta"`
+		Update struct {
+			Meta *struct {
+				ModelID string `json:"modelId"`
+			} `json:"_meta"`
+		} `json:"update"`
 	}
 	if err := json.Unmarshal(ev.Raw, &line); err != nil {
 		return ""
@@ -213,6 +222,12 @@ func modelFromEvent(ev claudia.Event) string {
 	m := strings.TrimSpace(line.Message.Model)
 	if m == "" {
 		m = strings.TrimSpace(line.Model)
+	}
+	if m == "" && line.Update.Meta != nil {
+		m = strings.TrimSpace(line.Update.Meta.ModelID)
+	}
+	if m == "" && line.Meta != nil {
+		m = strings.TrimSpace(line.Meta.ModelID)
 	}
 	if m == syntheticModel {
 		return ""

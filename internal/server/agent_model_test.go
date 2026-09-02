@@ -38,6 +38,12 @@ func TestModelFromEvent(t *testing.T) {
 		// the session-log parser has treated it since 🎯T311.
 		{"synthetic message.model", `{"type":"assistant","message":{"model":"<synthetic>"}}`, ""},
 		{"synthetic top-level", `{"type":"assistant","model":"<synthetic>"}`, ""},
+		// 🎯T619: Grok ACP user_message_chunk params (Event.Raw) name the model
+		// at update._meta.modelId. T293 "names no model on the wire" is stale.
+		{"grok update._meta.modelId", `{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"},"_meta":{"modelId":"grok-4.6","promptIndex":0}}}`, "grok-4.6"},
+		{"grok params-level _meta.modelId", `{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk"},"_meta":{"modelId":"grok-4.6"}}`, "grok-4.6"},
+		{"message.model beats grok _meta", `{"message":{"model":"claude-opus-4-8"},"update":{"_meta":{"modelId":"grok-4.6"}}}`, "claude-opus-4-8"},
+		{"synthetic _meta.modelId", `{"update":{"_meta":{"modelId":"<synthetic>"}}}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -46,6 +52,17 @@ func TestModelFromEvent(t *testing.T) {
 				t.Fatalf("modelFromEvent(%s) = %q, want %q", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAgentProgressLearnsGrokMetaModelID(t *testing.T) {
+	hub := NewAgentProgressHub()
+	raw := []byte(`{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","_meta":{"modelId":"grok-4.6"}}}`)
+	if !hub.Observe("w", claudia.Event{Type: "user", Raw: raw}) {
+		t.Fatal("Grok _meta.modelId frame should change the snapshot")
+	}
+	if got := hub.Get("w").Model; got != "grok-4.6" {
+		t.Fatalf("model=%q want grok-4.6 from update._meta.modelId", got)
 	}
 }
 

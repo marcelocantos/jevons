@@ -22,6 +22,16 @@ func grokTurnLine(model string) string {
 		`"outputTokens":5,"costUsdTicks":1000,"modelUsage":{"` + model + `":{"inputTokens":10}}}}}}`
 }
 
+func grokMetaLine(model string) string {
+	return `{"timestamp":1785673000,"method":"_x.ai/session/update","params":{"sessionId":"s1",` +
+		`"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"},` +
+		`"_meta":{"modelId":"` + model + `","promptIndex":0}}}}`
+}
+
+func grokSummaryJSON(model string) string {
+	return `{"current_model_id":"` + model + `","agent_name":"grok-build-plan"}`
+}
+
 func TestGrokModelFromTail(t *testing.T) {
 	chatter := `{"method":"_x.ai/session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}`
 
@@ -36,6 +46,8 @@ func TestGrokModelFromTail(t *testing.T) {
 		{"turn among chatter", chatter + "\n" + grokTurnLine("grok-4.5-build") + "\n" + chatter, "grok-4.5-build"},
 		{"empty", "", ""},
 		{"corrupt line is skipped", `{"turn_completed" "modelUsage" broken`, ""},
+		{"_meta.modelId when no billed turn", grokMetaLine("grok-4.6"), "grok-4.6"},
+		{"modelUsage beats later _meta.modelId", grokTurnLine("grok-4.6-build") + "\n" + grokMetaLine("grok-4"), "grok-4.6-build"},
 	}
 	for _, tt := range tests {
 		if got := grokModelFromTail([]byte(tt.data)); got != tt.want {
@@ -229,5 +241,107 @@ func TestListFleetAgentsPrefersSessionLogOverPinnedGrokModel(t *testing.T) {
 	agents = listFleetAgentsNotifying(reg, nil, nil, nil, grokOnlyModels(t.TempDir()))
 	if len(agents) != 1 || agents[0].Model != "grok-4" {
 		t.Fatalf("agents=%+v want the pin as the pre-observation placeholder", agents)
+	}
+}
+
+// writeGrokHomeSession plants GROK_HOME/sessions/<bucket>/<id>/{summary,updates}.
+func writeGrokHomeSession(t *testing.T, grokHome, workDir, sessionID, summary, updates string) {
+	t.Helper()
+	dir := filepath.Join(grokHome, "sessions", discovery.EncodeCWDBucket(workDir), sessionID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if summary != "" {
+		if err := os.WriteFile(filepath.Join(dir, "summary.json"), []byte(summary), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if updates != "" {
+		if err := os.WriteFile(filepath.Join(dir, "updates.jsonl"), []byte(updates), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func grokHomeModels(grokHome string) *fleetModelResolver {
+	return newFleetModelResolver(discovery.Roots{
+		GrokHomeSessions: []string{filepath.Join(grokHome, "sessions")},
+	})
+}
+
+// 🎯T619: exclusive-MCP seats write under GROK_HOME, not cfg.SessionsDir.
+// A planted current_model_id beats a disagreeing launch pin.
+func TestListFleetAgentsPrefersGROKHomeSummaryOverPinnedGrokModel(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	work := t.TempDir()
+	writeGrokHomeSession(t, home, work, testGrokSessionID, grokSummaryJSON("grok-4.6"), "")
+	if err := reg.Register(claudia.AgentDef{
+		Name: "exclusive", WorkDir: work, SessionID: testGrokSessionID,
+		Provider: claudia.ProviderGrok, Model: "grok-4.5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// cfg.SessionsDir is a different empty tree — the session is only in GROK_HOME.
+	models := newFleetModelResolver(discovery.Roots{
+		GrokSessions:     t.TempDir(),
+		GrokHomeSessions: []string{filepath.Join(home, "sessions")},
+	})
+	agents := listFleetAgentsNotifying(reg, nil, nil, nil, models)
+	if len(agents) != 1 || agents[0].Model != "grok-4.6" {
+		t.Fatalf("agents=%+v want GROK_HOME current_model_id grok-4.6, not the grok-4.5 pin", agents)
+	}
+
+	// Pin stands in when the exclusive home has no evidence yet.
+	agents = listFleetAgentsNotifying(reg, nil, nil, nil, grokHomeModels(t.TempDir()))
+	if len(agents) != 1 || agents[0].Model != "grok-4.5" {
+		t.Fatalf("agents=%+v want the pin as the pre-observation placeholder", agents)
+	}
+}
+
+func TestGrokModelFromEvidencePrefersSummaryCurrentModelID(t *testing.T) {
+	got := grokModelFromEvidence([]byte(grokSummaryJSON("grok-4.6")))
+	if got != "grok-4.6" {
+		t.Fatalf("summary = %q want grok-4.6", got)
+	}
+	got = grokModelFromEvidence([]byte(grokTurnLine("grok-4.6-build") + "\n"))
+	if got != "grok-4.6-build" {
+		t.Fatalf("usage tail = %q want grok-4.6-build", got)
+	}
+}
+
+func TestGrokEvidencePathNewestMtimeWins(t *testing.T) {
+	work := t.TempDir()
+	oldHome := t.TempDir()
+	newHome := t.TempDir()
+	writeGrokHomeSession(t, oldHome, work, testGrokSessionID, grokSummaryJSON("grok-4.5"), "")
+	writeGrokHomeSession(t, newHome, work, testGrokSessionID, grokSummaryJSON("grok-4.6"), "")
+
+	oldSum := filepath.Join(oldHome, "sessions", discovery.EncodeCWDBucket(work), testGrokSessionID, "summary.json")
+	newSum := filepath.Join(newHome, "sessions", discovery.EncodeCWDBucket(work), testGrokSessionID, "summary.json")
+	oldTime := time.Now().Add(-time.Hour)
+	newTime := time.Now()
+	if err := os.Chtimes(oldSum, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newSum, newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
+
+	roots := []string{
+		filepath.Join(oldHome, "sessions"),
+		filepath.Join(newHome, "sessions"),
+	}
+	got := grokEvidencePath(roots, work, testGrokSessionID)
+	if got != newSum {
+		t.Fatalf("evidence path = %q want newest %q", got, newSum)
+	}
+	r := newGrokModelResolver("", roots...)
+	if model := r.Model(work, testGrokSessionID); model != "grok-4.6" {
+		t.Fatalf("Model = %q want grok-4.6 from newest exclusive home", model)
 	}
 }

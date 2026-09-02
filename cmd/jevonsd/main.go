@@ -294,10 +294,11 @@ func main() {
 	srv.ImportTranscripts()
 	// ð¯T124 / ð¯T213: RHS fleet transcript inspect reads Grok + Claude stores.
 	srv.SetTranscriptReader(transcript.NewReaderRoots(sessionRoots))
-	// ð¯T293 / ð¯T311: the RHS badge names the model an agent is RUNNING. Live
+	// 🎯T619 / 🎯T311: the RHS badge names the model an agent is RUNNING. Live
 	// frames are the freshest source, but the hub they feed dies with the
-	// daemon â so each provider's own session log (Grok turn_completed usage,
-	// Claude message.model) re-seeds it at attach.
+	// daemon — so each provider's own session log (Grok summary
+	// current_model_id / turn_completed usage / GROK_HOME, Claude
+	// message.model) re-seeds it at attach.
 	srv.SetModelSessionRoots(sessionRoots)
 
 	// Durable decision/lifecycle journal (ð¯T120): browser + server events

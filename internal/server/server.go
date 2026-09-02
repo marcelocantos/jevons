@@ -246,9 +246,9 @@ type Server struct {
 	automations func() []provider.AutomationStatus
 
 	// fleetModels resolves the model an agent is running from its provider's
-	// own session log: the only source for Grok, which names none on the wire
-	// (🎯T293), and the seed that survives a daemon restart for every provider
-	// (🎯T311). Nil until SetModelSessionRoots; rows then rely on the live hub.
+	// own session log: the seed that survives a daemon restart (🎯T311) and
+	// the Grok exclusive-MCP GROK_HOME tree (🎯T619). Nil until
+	// SetModelSessionRoots; rows then rely on the live hub.
 	fleetModels *fleetModelResolver
 
 	// eventLog is the durable decision/lifecycle journal (🎯T120):
