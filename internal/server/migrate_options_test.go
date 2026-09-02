@@ -112,8 +112,8 @@ func TestT285_2MigrateOptionsPayload(t *testing.T) {
 	if !strings.Contains(grok.Reason, "hot") {
 		t.Fatalf("grok reason = %q", grok.Reason)
 	}
-	if len(grok.Models) == 0 || grok.Models[0] != "grok-4.5" {
-		t.Fatalf("grok models = %v (want best first grok-4.5)", grok.Models)
+	if len(grok.Models) == 0 || grok.Models[0] != "grok-4.6" {
+		t.Fatalf("grok models = %v (want best first grok-4.6)", grok.Models)
 	}
 
 	cl := byProv["claude"]

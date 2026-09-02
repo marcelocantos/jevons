@@ -15,16 +15,16 @@ import (
 // wins; otherwise the backend's documented default is written so cold
 // agents (Grok ACP names no model on the wire until turn_completed) never
 // sit forever on a mark-only badge. These tokens are condensable by the
-// web helper (grok-4.5 → "4.5"); session logs may later refine to a
-// billing id (grok-4.5-build) with the same condensed label.
+// web helper (grok-4.6 → "4.6"); session logs may later refine to a
+// billing id (grok-4.6-build) with the same condensed label.
 //
 // Empty means "no known default" — Claude often reports message.model on
 // the first assistant frame, so leaving the pin empty is fine until a
 // session log or observation fills it.
 
 // DefaultGrokModel is the Grok CLI default for new sessions (see
-// ~/.grok config [models].default / user guide). Condenses to "4.5".
-const DefaultGrokModel = "grok-4.5"
+// ~/.grok config [models].default / user guide). Condenses to "4.6".
+const DefaultGrokModel = "grok-4.6"
 
 // DefaultModelForProvider returns the condensable model id bound when an
 // agent is launched on provider with an empty pin. Empty when the

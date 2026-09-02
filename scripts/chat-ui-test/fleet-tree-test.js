@@ -38,7 +38,7 @@ function startStaticServer(agentsPayload) {
       if (u.pathname === '/api/migrate/options') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ providers: [
-          { provider: 'grok', band: 'ok', eligible: true, reason: 'Grok weekly on pace', models: ['grok-4.5', 'grok-4'] },
+          { provider: 'grok', band: 'ok', eligible: true, reason: 'Grok weekly on pace', models: ['grok-4.6', 'grok-4.5', 'grok-4'] },
           { provider: 'claude', band: 'ok', eligible: true, reason: 'Claude weekly on pace', models: ['claude-fable-5', 'claude-opus-5'] },
         ] }));
         return;

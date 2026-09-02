@@ -13,6 +13,9 @@ func TestNextWalksDownTheLadder(t *testing.T) {
 	if got := Next("claude", "claude-opus-5"); got != "claude-sonnet-5" {
 		t.Fatalf("opus falls back to %q", got)
 	}
+	if got := Next("grok", "grok-4.6"); got != "grok-4.5" {
+		t.Fatalf("grok-4.6 falls back to %q, want grok-4.5", got)
+	}
 	if got := Next("grok", "grok-4.5"); got != "grok-4" {
 		t.Fatalf("grok-4.5 falls back to %q", got)
 	}

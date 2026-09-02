@@ -10,6 +10,9 @@ import (
 )
 
 func TestDefaultModelForProvider(t *testing.T) {
+	if DefaultGrokModel != "grok-4.6" {
+		t.Fatalf("DefaultGrokModel=%q want grok-4.6 (🎯T618)", DefaultGrokModel)
+	}
 	if got := DefaultModelForProvider(claudia.ProviderGrok); got != DefaultGrokModel {
 		t.Fatalf("grok default=%q want %q", got, DefaultGrokModel)
 	}

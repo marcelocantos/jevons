@@ -55,7 +55,7 @@ func (s *Server) SetFleetMigrator(m FleetMigrator) {
 // row — its only entry is the provider default (empty model id).
 var providerModelCatalog = map[string][]string{
 	"claude": {"claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"},
-	"grok":   {"grok-4.5", "grok-4"},
+	"grok":   {"grok-4.6", "grok-4.5", "grok-4"},
 }
 
 // migrateProviderOption is one provider row of the menu payload.

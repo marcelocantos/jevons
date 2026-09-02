@@ -23,7 +23,7 @@ import "strings"
 // most capable; falling back always moves right.
 var ladders = map[string][]string{
 	"claude": {"claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"},
-	"grok":   {"grok-4.5", "grok-4"},
+	"grok":   {"grok-4.6", "grok-4.5", "grok-4"},
 }
 
 // Next returns the model to fall back to when `model` on `provider` is

@@ -35,7 +35,7 @@ const OPTIONS = {
     {
       provider: 'grok', band: 'hot', eligible: false,
       reason: 'Grok weekly hot — burn 2.5×, 15% remaining',
-      models: ['grok-4.5', 'grok-4'],
+      models: ['grok-4.6', 'grok-4.5', 'grok-4'],
     },
     {
       provider: 'claude', band: 'ok', eligible: true, reason: 'Claude weekly on pace',
