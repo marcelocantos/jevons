@@ -80,6 +80,15 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 		}
 	}
 
+	// 🎯T620: a turn already known in flight is the same busy class as
+	// jevons_agent_send — hold the event wire on sendq for the next turn
+	// boundary. Hitting the provider here is how 2026-09-02 came back as
+	// `grok acp: prompt already in flight` with the payload nowhere.
+	if s.flightState(target) == FlightInFlight {
+		_ = s.EnsureAgentEventsWired(target)
+		return s.queueBusyEventPush(target, event, wire, life, ticket)
+	}
+
 	// 🎯T429 clause 5 — TIMEOUT IS NOT ABSENCE. The observation is opened here,
 	// before the push, so the receiver's records are read against a pre-push
 	// baseline. Window zero: by the time this is awaited the push has already
@@ -89,6 +98,10 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 
 	reply, err, timedOut := s.pushEventBounded(target, event, text)
 	switch {
+	case isPromptInFlight(err):
+		// Flight state was stale or never written; the provider still said
+		// busy. Queue the same wire the idle path would have sent.
+		return s.queueBusyEventPush(target, event, wire, life, ticket)
 	case timedOut, err != nil && !ClassifySendError(err).DisprovesDelivery():
 		// The push did not come back with an answer inside the window, or came
 		// back with an error that is a failure to OBSERVE rather than evidence
@@ -136,6 +149,31 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	s.ObserveProviderOK()
 	s.logLifecycle(compEventPush, "push", "ok", life)
 	return mcp.NewToolResultText(fmt.Sprintf("Pushed event %q to %q.\n\n%s", event, target, reply)), nil
+}
+
+// queueBusyEventPush holds an event-push on sendq for the next turn boundary
+// (🎯T620). Same busy class as jevons_agent_send: queued, never a delivery
+// error whose text is grok acp: prompt already in flight. The queued bytes
+// are the FormatEventPush wire, so drain delivers what idle PushEvent would
+// have sent.
+func (s *Server) queueBusyEventPush(target, event, wire string, life map[string]any, ticket notifyReplayTicket) (*mcp.CallToolResult, error) {
+	n, qerr := s.enqueueAgentSend(target, wire)
+	if qerr != nil {
+		ticket.Abandon()
+		life["err"] = qerr.Error()
+		s.logLifecycle(compEventPush, "push", "error", life)
+		return s.toolFailure("event_push", target, undeliverableQueueError(target, qerr)), nil
+	}
+	// The batch is held (sendq), so a same-bytes retry must not stack a
+	// second copy the way a toolFailure retry did on 2026-09-02.
+	ticket.Settle(true)
+	life["status"] = "queued"
+	life["queued"] = n
+	s.logLifecycle(compEventPush, "push", "ok", life)
+	return mcp.NewToolResultText(fmt.Sprintf(
+		"queued: %q has a turn in flight; event %q held (%d pending) for delivery when the current turn ends — "+
+			"held by the daemon, not pasted into the agent's composer. Not a delivery error.",
+		target, event, n)), nil
 }
 
 // 🎯T429 clause 5 — WHY THIS TOOL HAS A CLOCK OF ITS OWN.
