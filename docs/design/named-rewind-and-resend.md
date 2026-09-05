@@ -335,3 +335,16 @@ Grok experiment completed J2 and J5 (`13e0866b`), but preceded the stricter
 stream-identity reader and is not evidence for that final reader. Negative
 controls cover stale/agent echoes, generic replies, missing terminals, token
 mentions, interleaved streams, truncation, and cancellation.
+
+The final strict-reader experiment (`65bfe098`, clean `10fd31e58eb9`) completed
+J2 on Grok, but the combined gate stayed red: J4 still checked the retired JSONL
+journal. Canonical SQLite already held its seed request and complete reply.
+J4 now requires a fresh exact seed reply, that same exchange in the bounded
+reconnect replay, another fresh exact reply through the replacement socket,
+and the seed exchange in the read-only canonical store. Blank-but-live replay
+cannot pass. Each live exchange gets its own turn budget. Recorded-history
+checks start at the exact seed owner boundary, so failures in earlier history
+do not taint the fresh exchange. A missing database, another agent's exchange,
+an owner echo without an answer, or a stale answer fails persistence checking.
+J3 is still a generic cancellation smoke, not an exact-reply or cancellation
+ordering guarantee; its success must not be presented as the latter.

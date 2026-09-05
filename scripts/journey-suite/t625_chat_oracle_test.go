@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestT625ExactReplyRejectsUnrelatedEvidence(t *testing.T) {
@@ -75,6 +76,44 @@ func TestT625ExactReplyRejectsUnrelatedEvidence(t *testing.T) {
 				t.Fatalf("exact reply: err=%v wantOK=%v", err, tc.wantOK)
 			}
 		})
+	}
+}
+
+func TestT625ReconnectRequiresBoundedActualReplay(t *testing.T) {
+	const prompt, reply = "Reply with exactly: fresh-token", "fresh-token"
+	user := []byte(`{"type":"user","turn_origin":"owner","message":{"content":"Reply with exactly: fresh-token"}}`)
+	answer := []byte(`{"type":"assistant","stream_id":"s","message":{"content":"fresh-token","stop_reason":"end_turn"}}`)
+	for _, tc := range []struct {
+		name   string
+		frames [][]byte
+		wantOK bool
+	}{
+		{"empty but live connection", nil, false},
+		{"seed owner without reply", [][]byte{user}, false},
+		{"seed reply without owner", [][]byte{answer}, false},
+		{"seed exchange", [][]byte{user, answer}, true},
+		{"historical failure before seed", [][]byte{[]byte(`{"type":"error","error":"old timeout"}`), user, answer}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frames := make(chan []byte, len(tc.frames))
+			for _, body := range tc.frames {
+				frames <- body
+			}
+			replay, err := collectReplay(context.Background(), frames, time.Millisecond, maxReplayFrames)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := assertRecordedOwnerReply(replay, prompt, reply); (err == nil) != tc.wantOK {
+				t.Fatalf("recorded exchange err=%v wantOK=%v", err, tc.wantOK)
+			}
+		})
+	}
+	frames := make(chan []byte, maxReplayFrames+1)
+	for range maxReplayFrames + 1 {
+		frames <- user
+	}
+	if _, err := collectReplay(context.Background(), frames, time.Second, maxReplayFrames); err == nil {
+		t.Fatal("unbounded replay accepted")
 	}
 }
 

@@ -466,16 +466,21 @@ func (s *suite) jReconnectSealed() error {
 		conn1.CloseNow()
 		return err
 	}
-	seed := "Reply with exactly: journey-seed"
+	seedToken := "journey-seed-" + uuid.NewString()
+	seed := "Reply with exactly: " + seedToken
 	if err := conn1.Write(ctx, websocket.MessageText, []byte(seed)); err != nil {
 		conn1.CloseNow()
 		return err
 	}
-	if _, _, _, err := waitTurn(ctx, frames1, "journey-seed", false); err != nil {
+	if err := waitExactReply(ctx, frames1, seed, seedToken); err != nil {
 		conn1.CloseNow()
 		return fmt.Errorf("seed turn: %w", err)
 	}
 	conn1.CloseNow()
+	cancel()
+	// Each real agent exchange retains the suite's full turn budget.
+	ctx, cancel = context.WithTimeout(context.Background(), turnTimeout)
+	defer cancel()
 
 	// Reconnect — sealed window must stay small.
 	conn2, frames2, err := dialChat(ctx, s.host)
@@ -483,20 +488,31 @@ func (s *suite) jReconnectSealed() error {
 		return err
 	}
 	defer conn2.CloseNow()
-	n2, err := drainReplay(frames2, 900*time.Millisecond)
+	replay, err := collectReplay(ctx, frames2, 900*time.Millisecond, maxReplayFrames)
+	if err != nil {
+		return fmt.Errorf("reconnect replay (first connect %d frames): %w", n1, err)
+	}
+	if err := assertRecordedOwnerReply(replay, seed, seedToken); err != nil {
+		return fmt.Errorf("reconnect did not replay the seed exchange: %w", err)
+	}
+	// A small replay alone can also be an empty, dead socket. Require a
+	// new request-specific agent reply through the replacement connection.
+	reconnectToken := "journey-reconnect-" + uuid.NewString()
+	prompt := "Reply with exactly: " + reconnectToken
+	if err := conn2.Write(ctx, websocket.MessageText, []byte(prompt)); err != nil {
+		return err
+	}
+	if err := waitExactReply(ctx, frames2, prompt, reconnectToken); err != nil {
+		return fmt.Errorf("reconnected owner turn: %w", err)
+	}
+	if err := assertStoredOwnerRoundTrip(s.stateDir, seed, seedToken); err != nil {
+		return fmt.Errorf("canonical seed history: %w", err)
+	}
+	logs, err := os.ReadFile(s.logPath)
 	if err != nil {
 		return err
 	}
-	if n2 > maxReplayFrames {
-		return fmt.Errorf("reconnect replayed %d frames (first connect %d); unsealed or wrong isolate?", n2, n1)
-	}
-	// Journal should exist only under sandbox state.
-	journal := filepath.Join(s.stateDir, "chatlog", overseerName+".jsonl")
-	if st, err := os.Stat(journal); err != nil || st.Size() == 0 {
-		return fmt.Errorf("sandbox journal missing: %s (%v)", journal, err)
-	}
-	// Daily-driver journal path must not be required (and we never opened it).
-	return nil
+	return queueJourneyProvider(logs, overseerName, string(s.provider))
 }
 
 // ── wire helpers ─────────────────────────────────────────────────────
@@ -537,6 +553,26 @@ func drainReplay(frames <-chan []byte, quiet time.Duration) (int, error) {
 			n++
 		case <-time.After(quiet):
 			return n, nil
+		}
+	}
+}
+
+func collectReplay(ctx context.Context, frames <-chan []byte, quiet time.Duration, limit int) ([][]byte, error) {
+	var replay [][]byte
+	for {
+		select {
+		case body, ok := <-frames:
+			if !ok {
+				return nil, fmt.Errorf("connection closed during replay")
+			}
+			replay = append(replay, body)
+			if len(replay) > limit {
+				return nil, fmt.Errorf("replay exceeded %d frames", limit)
+			}
+		case <-time.After(quiet):
+			return replay, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
 }
@@ -734,6 +770,32 @@ func waitExactReply(ctx context.Context, frames <-chan []byte, prompt, expected 
 			return fmt.Errorf("exact owner reply (echo=%v): %w", sawOwner, ctx.Err())
 		}
 	}
+}
+
+// Recorded history can contain failures from older turns. Start at the exact
+// fresh owner boundary; an earlier error is not an error in this exchange.
+func assertRecordedOwnerReply(bodies [][]byte, prompt, reply string) error {
+	start := -1
+	for i, body := range bodies {
+		var event map[string]any
+		if json.Unmarshal(body, &event) != nil || event["type"] != "user" || event["turn_origin"] == "agent" {
+			continue
+		}
+		msg, _ := event["message"].(map[string]any)
+		if journeyContentText(msg["content"]) == prompt {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return fmt.Errorf("fresh owner request missing from recorded history")
+	}
+	frames := make(chan []byte, len(bodies)-start)
+	for _, body := range bodies[start:] {
+		frames <- body
+	}
+	close(frames)
+	return waitExactReply(context.Background(), frames, prompt, reply)
 }
 
 // probeReady reports whether host answers /health (and overseer running when
