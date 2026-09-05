@@ -29,3 +29,31 @@ func assertIsolateTranscript(stateDir string) error {
 	}
 	return nil
 }
+
+// Inspect actual canonical rows rather than the retired JSONL file or a
+// generic row count. Opening read-only cannot manufacture missing evidence.
+func assertStoredOwnerRoundTrip(stateDir, prompt, reply string) error {
+	uri := url.URL{Scheme: "file", Path: statedb.DefaultPath(stateDir), RawQuery: "mode=ro"}
+	db, err := sql.Open("sqlite", uri.String())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT body FROM transcript_events WHERE agent = ? ORDER BY idx", overseerName)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var bodies [][]byte
+	for rows.Next() {
+		var body string
+		if err := rows.Scan(&body); err != nil {
+			return err
+		}
+		bodies = append(bodies, []byte(body))
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return assertRecordedOwnerReply(bodies, prompt, reply)
+}

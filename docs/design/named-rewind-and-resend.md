@@ -25,9 +25,15 @@ callback to a provider operation.** It says that rewind is unavailable and refus
 primary submission in recall mode. Recall controls were integrated locally at
 `6526637ba45a` and activated in development; this does not complete T562 or enable
 provider rewind. The clean-tree gate `ac6f8813` passed the real Grok
-send/reload/recall/cancel slice, without exercising rewind. The final manual
-Firefox check remains pending because the host was locked. Paging beyond loaded
-owner history, queue traversal, and durable recall/attachment recovery remain open.
+send/reload/recall/cancel slice, without exercising rewind. A separate headless
+Chromium observation of development `:13705` passed main and sidebar Alt-Up,
+selected-turn highlighting, Escape draft restoration and Alt-Down draft
+restoration (`36e4744e`, 2026-09-06), without sending a message. This observes
+the running surface, not the dirty checkout recorded in that gate's metadata.
+The preceding attempt timed out waiting for the sidebar selection (`ef58704c`);
+the successful retry does not explain that intermittent failure. Native Firefox
+key handling remains unverified. Paging beyond loaded owner history, queue
+traversal, and durable recall/attachment recovery remain open.
 
 ## Why the old rewind handler cannot be connected
 
@@ -310,3 +316,88 @@ Go net also passed 3,210 tests with four skips (`c6a8b2ed`), run on the same cod
 before its commit; that gate truthfully records a dirty tree and does not claim
 to measure the preceding HEAD alone. The earlier combined J2/J17/J5 gate stays
 red; a focused green does not erase the owner-chat timeout.
+
+## Exact owner-chat round trip
+
+J2 and J4 use the canonical `/ws/mux` connection and `transcript:jevons`
+open/send envelopes used by React. Each sends a fresh UUID request and requires
+an exact, completed assistant reply after its matching owner echo, with the
+selected provider observed in the named runtime launch. The reader checks full
+coalesced event snapshots; it never concatenates snapshots or mixes a text
+fragment with another row's terminal. Both row-ID-to-index and index-to-row-ID
+identity stay stable. A row that preceded the owner request, a completed row
+rewritten later, an agent-origin echo, and a truncated requested reply cannot
+pass. Unrelated completed rows cannot substitute for the requested result.
+
+J4 requires its seed exchange in the actual bounded replay, another fresh reply
+through the replacement connection, and the seed exchange in the read-only
+canonical SQLite store. The replay boundary is complete tail-window metadata
+(`n/lo/hi/following`), not an arbitrary quiet period or an interleaved live
+status update. A later live answer cannot repair a missing replayed exchange.
+Each real exchange gets its own turn budget. Recorded-store checks start at the
+fresh seed owner boundary, so older failures do not taint that exchange.
+
+The typed-owner regression exposed the original false negative: the product
+emits typed text blocks, but the old journey only recognized strings. Its
+baseline-compatible control failed on old code (`3c2f318d`). Subsequent strict
+legacy `/ws/chat` experiments passed exact replies but failed replay on both
+Grok (`5ade09d8`) and Cursor (`43f7f569`), because that endpoint replays obsolete
+JSONL. This migration repairs the test's product-path selection; it does not
+restore the obsolete transport. The first canonical Grok J2/J4/J5 run passed
+(`33a9ecfe`) before the final metadata and reverse-identity guards; it is not
+completion evidence for the final reader.
+
+These are real-provider wire journeys, not React-rendering or native-browser
+key evidence. React's hydration currently accepts any meta, including partial
+live status updates; the independent wire reader's complete-window boundary
+does not certify that behavior. J3 remains a generic legacy cancellation smoke,
+not an exact-reply or cancellation-ordering guarantee. T625 also remains open
+for tools-attached/directed-work, bounce/resume, and remaining provider coverage.
+
+## Budget-notice recursion found by the canonical journey
+
+The clean mux candidate `13ab69ff831e` passed helper race tests and a fresh
+daemon build (`e8d3237a`), then Grok J2/J4/J5 (`1a32fb33`). Cursor J2 passed,
+but J4's next seed echoed at index 3 and received no reply in 90 seconds
+(`8211056b`, red). Its store retained the request; its log had a preceding
+budget warning and no second notification-queue enqueue. A later identical
+Cursor run passed (`fcd76d52`, only ledger dirty), so retry success did not
+explain or resolve the failure.
+
+Source tracing and a deterministic regression establish a recursive lock:
+`Enforcer.Act` owns the budget mutex while delivering its warning; the agent
+notice reaches `SendToOverseer`, whose unconditional activity hook calls
+`Enforcer.Heartbeat` and reacquires that same mutex. Subsequent owner sends
+block after their journal echo and before queueing. Both the recursion and
+incorrect system-as-owner activity fail on the preceding code (`add318f0`).
+Attribution of the original Cursor timeout remains inferred: no goroutine dump
+was captured from that isolate.
+
+The T623.1 correction invokes the activity hook only for owner-marked turns.
+It preserves normal owner contact while excluding budget, worker, and system
+notices. Focused owner/notification race regressions pass (`981a5aca`). An
+initial corrected-code run failed a fixture expectation because the real
+enforcer prefixes the notice with `budget: `; that expectation was corrected,
+without changing product formatting. Automatic owner retries still count as
+owner-marked contact, and budget delivery remains synchronous; this correction
+does not claim to solve either broader concern.
+
+Journey exception for the exact warning trigger: the deterministic
+cross-component test uses the real enforcer and the production notification
+and heartbeat methods to decide the recursive-lock property without relying
+on incidental provider spend to trigger a warning. Fresh real-provider
+canonical send/reconnect journeys verify integration separately; a passing run
+without a warning is not presented as proof it exercised that trigger.
+
+The broader server race run remains red (`40f130e4`) for a separate existing
+`handleRemote` disconnect-log map race. Baseline `8ef4b57e` reproduces it in
+unchanged server source. It is tracked separately, not repaired in this slice.
+
+Clean fixed revision `88658538446c` passed server, cost and journey tests,
+focused owner/notification race tests and a fresh daemon build (`9eb268d3`).
+Real selected/effective Grok (`38541088`) and Cursor (`e79ec4ea`) then both
+passed J2, J4 and J5: exact reply, actual seed replay, a fresh reply through the
+replacement socket, canonical seed persistence and completed isolate teardown.
+The broader remote-provider race remains T604.1 in the shared target ledger.
+Development activation and observation remain separate from these isolate
+results; T623.1 has not been achieved on this evidence alone.

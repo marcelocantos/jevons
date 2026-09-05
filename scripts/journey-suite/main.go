@@ -11,9 +11,9 @@
 //
 // Journeys (live agent backend; owner chat + MCP orchestration):
 //  1. health
-//  2. chat round-trip (idle send → terminal)
+//  2. canonical mux round-trip (fresh owner send → exact terminal reply)
 //  3. cancel-and-send (interrupt mid-turn → replacement → terminal)
-//  4. reconnect sealed (second connect sees bounded sealed history)
+//  4. canonical mux reconnect (bounded replayed exchange → fresh reply)
 //  5. isolation (after teardown)
 //     6–11. orchestration: tool surface, overseer registry, two agents
 //     same workdir, thread spawn→direct→remove, worker shell tool (T97),
@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cli"
@@ -381,39 +382,28 @@ func (s *suite) jHealth() error {
 func (s *suite) jChatRoundTrip() error {
 	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 	defer cancel()
-	conn, frames, err := dialChat(ctx, s.host)
+	conn, frames, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
 		return err
 	}
 	defer conn.CloseNow()
-	n, err := drainReplay(frames, 800*time.Millisecond)
+	_, err = collectOwnerMuxReplay(ctx, frames)
 	if err != nil {
 		return err
 	}
-	if n > maxReplayFrames {
-		return fmt.Errorf("fresh isolate replayed %d frames; want ≤%d (sealed)", n, maxReplayFrames)
-	}
-	token := fmt.Sprintf("journey-ping-%d", time.Now().Unix()%100000)
+	token := "journey-ping-" + uuid.NewString()
 	prompt := "Reply with exactly: " + token
-	if err := conn.Write(ctx, websocket.MessageText, []byte(prompt)); err != nil {
+	if err := writeOwnerMux(ctx, conn, "send", map[string]string{"text": prompt}); err != nil {
 		return err
 	}
-	gotUser, text, terminal, err := waitTurn(ctx, frames, token, true)
+	if err := waitOwnerMuxReply(ctx, frames, prompt, token); err != nil {
+		return err
+	}
+	logs, err := os.ReadFile(s.logPath)
 	if err != nil {
 		return err
 	}
-	if !gotUser {
-		return fmt.Errorf("no user echo")
-	}
-	if !terminal {
-		return fmt.Errorf("no terminal")
-	}
-	// Prefer exact token; accept any completed turn (tool-only models).
-	if text != "" && !strings.Contains(text, token) && !strings.Contains(strings.ToLower(text), "journey") {
-		// Non-fatal if model paraphrases; require non-empty OR tool terminal already ok
-		_ = text
-	}
-	return nil
+	return queueJourneyProvider(logs, overseerName, string(s.provider))
 }
 
 func (s *suite) jCancelAndSend() error {
@@ -464,52 +454,72 @@ func (s *suite) jReconnectSealed() error {
 	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 	defer cancel()
 	// Seed one turn.
-	conn1, frames1, err := dialChat(ctx, s.host)
+	conn1, frames1, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
 		return err
 	}
-	n1, err := drainReplay(frames1, 800*time.Millisecond)
+	initial, err := collectOwnerMuxReplay(ctx, frames1)
 	if err != nil {
 		conn1.CloseNow()
 		return err
 	}
-	seed := "Reply with exactly: journey-seed"
-	if err := conn1.Write(ctx, websocket.MessageText, []byte(seed)); err != nil {
+	seedToken := "journey-seed-" + uuid.NewString()
+	seed := "Reply with exactly: " + seedToken
+	if err := writeOwnerMux(ctx, conn1, "send", map[string]string{"text": seed}); err != nil {
 		conn1.CloseNow()
 		return err
 	}
-	if _, _, _, err := waitTurn(ctx, frames1, "journey-seed", false); err != nil {
+	if err := waitOwnerMuxReply(ctx, frames1, seed, seedToken); err != nil {
 		conn1.CloseNow()
 		return fmt.Errorf("seed turn: %w", err)
 	}
 	conn1.CloseNow()
+	cancel()
+	// Each real agent exchange retains the suite's full turn budget.
+	ctx, cancel = context.WithTimeout(context.Background(), turnTimeout)
+	defer cancel()
 
 	// Reconnect — sealed window must stay small.
-	conn2, frames2, err := dialChat(ctx, s.host)
+	conn2, frames2, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
 		return err
 	}
 	defer conn2.CloseNow()
-	n2, err := drainReplay(frames2, 900*time.Millisecond)
+	replay, err := collectOwnerMuxReplay(ctx, frames2)
+	if err != nil {
+		return fmt.Errorf("reconnect replay (first connect %d frames): %w", len(initial), err)
+	}
+	if err := assertOwnerMuxReplay(replay, seed, seedToken); err != nil {
+		return fmt.Errorf("reconnect did not replay the seed exchange: %w", err)
+	}
+	// A small replay alone can also be an empty, dead socket. Require a
+	// new request-specific agent reply through the replacement connection.
+	reconnectToken := "journey-reconnect-" + uuid.NewString()
+	prompt := "Reply with exactly: " + reconnectToken
+	if err := writeOwnerMux(ctx, conn2, "send", map[string]string{"text": prompt}); err != nil {
+		return err
+	}
+	if err := waitOwnerMuxReply(ctx, frames2, prompt, reconnectToken); err != nil {
+		return fmt.Errorf("reconnected owner turn: %w", err)
+	}
+	if err := assertStoredOwnerRoundTrip(s.stateDir, seed, seedToken); err != nil {
+		return fmt.Errorf("canonical seed history: %w", err)
+	}
+	logs, err := os.ReadFile(s.logPath)
 	if err != nil {
 		return err
 	}
-	if n2 > maxReplayFrames {
-		return fmt.Errorf("reconnect replayed %d frames (first connect %d); unsealed or wrong isolate?", n2, n1)
-	}
-	// Journal should exist only under sandbox state.
-	journal := filepath.Join(s.stateDir, "chatlog", overseerName+".jsonl")
-	if st, err := os.Stat(journal); err != nil || st.Size() == 0 {
-		return fmt.Errorf("sandbox journal missing: %s (%v)", journal, err)
-	}
-	// Daily-driver journal path must not be required (and we never opened it).
-	return nil
+	return queueJourneyProvider(logs, overseerName, string(s.provider))
 }
 
 // ── wire helpers ─────────────────────────────────────────────────────
 
 func dialChat(ctx context.Context, host string) (*websocket.Conn, <-chan []byte, error) {
-	conn, _, err := websocket.Dial(ctx, "ws://"+host+"/ws/chat", nil)
+	return dialJourneySocket(ctx, "ws://"+host+"/ws/chat")
+}
+
+func dialJourneySocket(ctx context.Context, url string) (*websocket.Conn, <-chan []byte, error) {
+	conn, _, err := websocket.Dial(ctx, url, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -522,7 +532,12 @@ func dialChat(ctx context.Context, host string) (*websocket.Conn, <-chan []byte,
 				close(ch)
 				return
 			}
-			ch <- data
+			select {
+			case ch <- data:
+			case <-ctx.Done():
+				close(ch)
+				return
+			}
 		}
 	}()
 	return conn, ch, nil
@@ -624,12 +639,10 @@ func waitTurn(ctx context.Context, frames <-chan []byte, needle string, requireU
 				return gotUser, asst.String(), terminal, fmt.Errorf("wire error: %v", m["error"])
 			}
 			msg, _ := m["message"].(map[string]any)
-			if typ == "user" {
-				if s, ok := msg["content"].(string); ok {
-					if needle == "" || strings.Contains(s, needle) || strings.Contains(s, "Reply with exactly") {
-						gotUser = true
-						asst.Reset()
-					}
+			if typ == "user" && m["turn_origin"] != "agent" {
+				if text := journeyContentText(msg["content"]); text != "" && (needle == "" || strings.Contains(text, needle)) {
+					gotUser = true
+					asst.Reset()
 				}
 			}
 			if typ == "assistant" && (gotUser || !requireUser) {
@@ -637,17 +650,11 @@ func waitTurn(ctx context.Context, frames <-chan []byte, needle string, requireU
 					gotUser = true // allow tool-only without strict user match
 				}
 				stop, _ := msg["stop_reason"].(string)
-				if content, ok := msg["content"].([]any); ok {
-					for _, c := range content {
-						cm, _ := c.(map[string]any)
-						if cm["type"] == "text" {
-							if t, _ := cm["text"].(string); t != "" {
-								asst.WriteString(t)
-							}
-						}
-					}
+				asst.WriteString(journeyContentText(msg["content"]))
+				if stop == "max_tokens" {
+					return gotUser, asst.String(), false, fmt.Errorf("assistant reply truncated at max_tokens")
 				}
-				if stop == "end_turn" || stop == "stop_sequence" || stop == "max_tokens" {
+				if stop == "end_turn" || stop == "stop_sequence" {
 					if gotUser || !requireUser {
 						return gotUser, asst.String(), true, nil
 					}
@@ -659,6 +666,117 @@ func waitTurn(ctx context.Context, frames <-chan []byte, needle string, requireU
 			return gotUser, asst.String(), false, ctx.Err()
 		}
 	}
+}
+
+// Read the public wire forms independently of the product normalizer, so a
+// regression in that normalizer cannot silently rewrite the oracle too.
+func journeyContentText(content any) string {
+	if text, ok := content.(string); ok {
+		return text
+	}
+	var text strings.Builder
+	if blocks, ok := content.([]any); ok {
+		for _, block := range blocks {
+			b, _ := block.(map[string]any)
+			if b["type"] == "text" {
+				if value, ok := b["text"].(string); ok {
+					text.WriteString(value)
+				}
+			}
+		}
+	}
+	return text.String()
+}
+
+// A restart notice can finish after the requested owner echo. Require the
+// request's own exact reply; do not count that unrelated terminal as success,
+// or concatenate its text with the next turn. The caller's deadline bounds
+// the entire operation, including time spent on unrelated activity.
+func waitExactReply(ctx context.Context, frames <-chan []byte, prompt, expected string) error {
+	sawOwner := false
+	streams := make(map[string]string)
+	ended := make(map[string]bool)
+	for {
+		select {
+		case data, ok := <-frames:
+			if !ok {
+				return fmt.Errorf("exact owner reply: connection closed (echo=%v)", sawOwner)
+			}
+			var event map[string]any
+			if json.Unmarshal(data, &event) != nil {
+				continue
+			}
+			if event["type"] == "error" {
+				return fmt.Errorf("exact owner reply: wire error: %v", event["error"])
+			}
+			msg, _ := event["message"].(map[string]any)
+			text := journeyContentText(msg["content"])
+			if event["type"] == "user" && event["turn_origin"] != "agent" && text == prompt {
+				sawOwner = true
+			}
+			if event["type"] != "assistant" || !sawOwner {
+				continue
+			}
+			// Current shipped owner output stamps every assistant fragment.
+			// Falling back to adjacency would let another stream's terminal
+			// certify this reply, so missing identity fails visibly here.
+			id, _ := event["stream_id"].(string)
+			if id == "" {
+				return fmt.Errorf("exact owner reply: assistant frame lacks stream_id")
+			}
+			if ended[id] {
+				continue
+			}
+			streams[id] += text
+			stop, _ := msg["stop_reason"].(string)
+			if stop != "end_turn" && stop != "stop_sequence" && stop != "max_tokens" {
+				continue
+			}
+			ended[id] = true
+			reply := streams[id]
+			delete(streams, id)
+			if outage := replyOutage("owner reply", reply); outage != nil {
+				return outage
+			}
+			if stop == "max_tokens" {
+				if strings.Contains(reply, expected) {
+					return fmt.Errorf("exact owner reply: requested stream was truncated at max_tokens")
+				}
+				continue
+			}
+			if strings.TrimSpace(reply) == expected {
+				return nil
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("exact owner reply (echo=%v): %w", sawOwner, ctx.Err())
+		}
+	}
+}
+
+// Recorded history can contain failures from older turns. Start at the exact
+// fresh owner boundary; an earlier error is not an error in this exchange.
+func assertRecordedOwnerReply(bodies [][]byte, prompt, reply string) error {
+	start := -1
+	for i, body := range bodies {
+		var event map[string]any
+		if json.Unmarshal(body, &event) != nil || event["type"] != "user" || event["turn_origin"] == "agent" {
+			continue
+		}
+		msg, _ := event["message"].(map[string]any)
+		if journeyContentText(msg["content"]) == prompt {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return fmt.Errorf("fresh owner request missing from recorded history")
+	}
+	frames := make(chan []byte, len(bodies)-start)
+	for _, body := range bodies[start:] {
+		frames <- body
+	}
+	close(frames)
+	return waitExactReply(context.Background(), frames, prompt, reply)
 }
 
 // probeReady reports whether host answers /health (and overseer running when
